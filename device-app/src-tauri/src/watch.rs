@@ -44,7 +44,7 @@ pub fn spawn_watch(cli: &dyn Cli, send: impl Fn(Event) + Send + 'static) -> io::
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli::{HarnessCli, Invocation};
+    use crate::cli::{HarnessCli, find_cli};
     use crate::testing::Fake;
     use crate::types::{DialStatus, Event, MemoryLog};
     use std::io;
@@ -136,9 +136,9 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_cli_that_is_gone_is_an_error() {
-        let fake = Fake::new();
-        let program = fake.program().with_file_name("missing");
-        let cli = HarnessCli::new(Invocation { program, prefix: vec![], env: vec![] }, Arc::new(MemoryLog::default()));
+        let home = tempfile::tempdir().unwrap();
+        let missing = home.path().join("harness");
+        let cli = HarnessCli::new(find_cli(home.path(), None, Some(&missing)).unwrap(), Arc::new(MemoryLog::default()));
         let error = spawn_watch(&cli, |_| {}).err().expect("no CLI there");
         assert_eq!(error.kind(), io::ErrorKind::NotFound);
     }

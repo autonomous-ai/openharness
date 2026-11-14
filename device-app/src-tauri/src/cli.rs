@@ -42,6 +42,16 @@ pub struct Invocation {
     pub program: PathBuf,
     pub prefix: Vec<OsString>,
     pub env: Vec<(OsString, OsString)>,
+    /// Where it was found, so a `HarnessCli` can look there again.
+    from: Lookup,
+}
+
+/// What `find_cli` looks with.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Lookup {
+    home: PathBuf,
+    path_var: Option<OsString>,
+    over: Option<PathBuf>,
 }
 
 /// The desktop app's order: `over`, then the managed runtime with its `cli.js`, then `~/.local/bin/harness`, then a
@@ -53,7 +63,12 @@ pub fn find_cli(home: &Path, path_var: Option<&OsStr>, over: Option<&Path>) -> O
     };
     let locale =
         ["LC_ALL", "LC_CTYPE", "LANG"].into_iter().find_map(|name| env::var_os(name).filter(|value| !value.is_empty()));
-    Some(Invocation { program, prefix, env: child_env(home, path_var, locale.as_deref()) })
+    let from = Lookup {
+        home: home.to_path_buf(),
+        path_var: path_var.map(OsStr::to_os_string),
+        over: over.map(Path::to_path_buf),
+    };
+    Some(Invocation { program, prefix, env: child_env(home, path_var, locale.as_deref()), from })
 }
 
 fn installed(home: &Path, path_var: Option<&OsStr>) -> Option<(PathBuf, Vec<OsString>)> {
@@ -132,27 +147,32 @@ pub trait Cli: Send + Sync {
     fn spawn(&self, args: &[&str]) -> io::Result<Child>;
 }
 
-/// The CLI `find_cli` found. Each run and each child writes one log line when it ends.
+/// The CLI `find_cli` found, looked for again the same way at each run and spawn: the CLI's updater repoints
+/// `current-node` while the app runs, and the Node it named goes. Each run and each child writes one log line when it
+/// ends.
 pub struct HarnessCli {
-    invocation: Invocation,
+    from: Lookup,
     log: Arc<dyn Log>,
 }
 
 impl HarnessCli {
     pub fn new(invocation: Invocation, log: Arc<dyn Log>) -> Self {
-        HarnessCli { invocation, log }
+        HarnessCli { from: invocation.from, log }
     }
 
-    fn command(&self, args: &[&str]) -> Command {
-        let mut command = Command::new(&self.invocation.program);
-        command.args(&self.invocation.prefix).args(args).envs(self.invocation.env.iter().cloned());
-        command
+    /// NotFound when the CLI has gone since, as when it was never there.
+    fn command(&self, args: &[&str]) -> io::Result<Command> {
+        let Lookup { home, path_var, over } = &self.from;
+        let invocation = find_cli(home, path_var.as_deref(), over.as_deref()).ok_or(io::ErrorKind::NotFound)?;
+        let mut command = Command::new(&invocation.program);
+        command.args(&invocation.prefix).args(args).envs(invocation.env);
+        Ok(command)
     }
 }
 
 impl Cli for HarnessCli {
     fn run(&self, args: &[&str], deadline: Duration) -> io::Result<Output> {
-        let output = run(self.command(args), deadline)?;
+        let output = run(self.command(args)?, deadline)?;
         let name = name(args);
         self.log.line(&if output.timed_out {
             format!("{name}: timed out after {} s", deadline.as_secs_f64())
@@ -163,7 +183,7 @@ impl Cli for HarnessCli {
     }
 
     fn spawn(&self, args: &[&str]) -> io::Result<Child> {
-        Child::start(self.command(args), name(args), self.log.clone())
+        Child::start(self.command(args)?, name(args), self.log.clone())
     }
 }
 

@@ -1,7 +1,8 @@
 //! What the tests share: the fake CLI.
 
-use crate::cli::{HarnessCli, Invocation};
+use crate::cli::{HarnessCli, find_cli};
 use crate::types::MemoryLog;
+use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -60,8 +61,11 @@ impl Fake {
         self.log.clone()
     }
 
+    /// The script as the override, with the test's own PATH, where the script's tools are.
     pub fn cli(&self) -> HarnessCli {
-        HarnessCli::new(Invocation { program: self.program(), prefix: vec![], env: vec![] }, self.log.clone())
+        let path_var = env::var_os("PATH");
+        let invocation = find_cli(self.folder.path(), path_var.as_deref(), Some(&self.program())).unwrap();
+        HarnessCli::new(invocation, self.log.clone())
     }
 
     fn file(&self, name: &str) -> PathBuf {
