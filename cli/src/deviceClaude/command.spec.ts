@@ -8,7 +8,7 @@ import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { unixSocketPath } from '../lib/localSocket.js'
 import { DEVICE_USAGE, runDeviceCommand, type DeviceDeps } from './command.js'
 import type { ClaudeRun } from './plugin.js'
@@ -16,7 +16,6 @@ import type { ClaudeRun } from './plugin.js'
 const SRC = fileURLToPath(new URL('..', import.meta.url))
 /** Names the daemon's socket only: the daemon here listens on a socket in a throwaway folder. */
 const PORT = 4998
-const ALLOW = '{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}'
 
 const cleanup: Array<() => unknown> = []
 afterEach(async () => {
@@ -84,17 +83,39 @@ describe('harness device claude', () => {
     expect(await device(['claude', 'link', '--json'], { platform: 'win32' })).toEqual({ code: 1, out: [], err: [] })
   })
 
-  it('approve reads stdin and prints the decision', async () => {
+  // The daemon, or anything that holds its socket, may answer allow: the client reads no answer and prints nothing, so the
+  // prompt is always the app's.
+  it('asked tells the daemon, prints nothing and exits 0 even when the daemon answers allow', async () => {
     const dataDir = folder()
+    const bodies: string[] = []
     const server = createServer((req, res) => {
-      req.resume()
-      req.on('end', () => { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"decision":"allow"}') })
+      let body = ''
+      req.setEncoding('utf8')
+      req.on('data', (chunk: string) => { body += chunk })
+      req.on('end', () => {
+        bodies.push(body)
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end('{"decision":"allow","hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}')
+      })
     })
+    server.on('connection', (socket) => { socket.on('error', () => {}) })
     cleanup.push(() => new Promise<void>((resolve) => { server.closeAllConnections(); server.close(() => resolve()) }))
     await new Promise<void>((resolve) => { server.listen(unixSocketPath(dataDir, PORT)!, resolve) })
     const stdin = chunks(JSON.stringify({ session_id: 'sess-1', cwd: '/repo', tool_name: 'Bash', tool_input: { command: 'npm test' } }))
-    expect(await device(['claude', 'approve'], { dataDir, stdin, claude: () => { throw new Error('approve never looks for claude') } }))
-      .toEqual({ code: 0, out: [ALLOW], err: [] })
+    expect(await device(['claude', 'asked'], { dataDir, stdin, claude: () => { throw new Error('asked never looks for claude') } }))
+      .toEqual({ code: 0, out: [], err: [] })
+    await vi.waitFor(() => expect(bodies.map((body) => JSON.parse(body)))
+      .toEqual([{ engine: 'claude', sessionId: 'sess-1', event: 'asked', tool: 'Bash', summary: 'npm test', cwd: '/repo' }]))
+  })
+
+  it('asked with no daemon prints nothing and exits 0', async () => {
+    const stdin = chunks(JSON.stringify({ session_id: 'sess-1', tool_name: 'Bash', tool_input: { command: 'npm test' } }))
+    expect(await device(['claude', 'asked'], { stdin })).toEqual({ code: 0, out: [], err: [] })
+  })
+
+  it('approve is gone: the usage, and exit 1', async () => {
+    const stdin = chunks(JSON.stringify({ session_id: 'sess-1', tool_name: 'Bash', tool_input: { command: 'npm test' } }))
+    expect(await device(['claude', 'approve'], { stdin })).toEqual({ code: 1, out: [], err: [DEVICE_USAGE] })
   })
 
   it('an unknown subcommand prints the usage and exits 1', async () => {
@@ -103,15 +124,15 @@ describe('harness device claude', () => {
     }
   })
 
-  it('DEVICE_USAGE names status, enable and disable, and neither approve nor link', () => {
+  it('DEVICE_USAGE names status, enable and disable, and neither asked nor link, and claims no answering', () => {
     for (const word of ['status', 'enable', 'disable']) expect(DEVICE_USAGE).toContain(`harness device claude ${word}`)
-    expect(DEVICE_USAGE).not.toMatch(/approve|link/)
+    expect(DEVICE_USAGE).not.toMatch(/asked|approve|link|answers/)
   })
 
   it('no file under core/, services/ or cable/ imports deviceClaude/', () => {
     const importsDevice = /(?:from|import\s*\()\s*['"][^'"]*deviceClaude\//
     // The pattern catches a static and a dynamic import, or an empty list would prove nothing.
-    expect(["import { runApprove } from '../deviceClaude/approve.js'", "await import('../deviceClaude/plugin.js')"].every((line) => importsDevice.test(line))).toBe(true)
+    expect(["import { runAsked } from '../deviceClaude/asked.js'", "await import('../deviceClaude/plugin.js')"].every((line) => importsDevice.test(line))).toBe(true)
     const importers = ['core', 'services', 'cable'].flatMap((dir) =>
       readdirSync(join(SRC, dir), { recursive: true, encoding: 'utf8' })
         .filter((name) => name.endsWith('.ts'))
