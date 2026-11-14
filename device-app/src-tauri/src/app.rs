@@ -1,5 +1,399 @@
 //! The app's rules: a pure reducer from an event to the effects it asks for.
 
+use crate::keepalive::{Keep, KeepAlive};
+use crate::model::{due, menu, menu_log};
+use crate::types::{
+    Action, AppState, CliState, Effect, Event, LoginEvent, MenuAction, MenuItem, Phase, Saved, Screen, View,
+};
+
+/// The menu reads the account and Claude Code again at most this often.
+const READ_EVERY_SECS: u64 = 60;
+
+pub struct App {
+    state: AppState,
+    keep: KeepAlive,
+    /// The last menu sent.
+    menu: Vec<MenuItem>,
+    /// What the window shows; None while it is hidden.
+    window: Option<View>,
+    /// The sign-in that runs, as its screen draws it.
+    login: Option<View>,
+    /// The Claude Code change that runs: on or off.
+    setting: Option<bool>,
+    /// Whether the account and Claude Code answered since the CLI was found; None once the first screen is chosen.
+    first_answers: Option<(bool, bool)>,
+    /// The last time an event told, for the keep-alive.
+    now: u64,
+    last_read: u64,
+    /// The desktop app ran at the last tick.
+    desktop_running: bool,
+}
+
+impl App {
+    pub fn new(saved: Saved, cli_found: bool, desktop_installed: bool, now: u64) -> (App, Vec<Effect>) {
+        let keep = KeepAlive::new();
+        let state = AppState {
+            cli: CliState::Removed,
+            daemon: keep.daemon(),
+            dial: None,
+            signed_in: None,
+            claude: None,
+            desktop_installed,
+            saved,
+        };
+        let mut app = App {
+            state,
+            keep,
+            menu: Vec::new(),
+            window: None,
+            login: None,
+            setting: None,
+            first_answers: None,
+            now,
+            last_read: now,
+            desktop_running: false,
+        };
+        let mut effects = Vec::new();
+        // A CLI seen once and gone now was removed on purpose: it stays Removed, never installed on its own.
+        if cli_found {
+            app.found(&mut effects);
+            effects.push(Effect::SpawnWatch);
+        } else if !saved.cli_seen {
+            app.install(&mut effects);
+        }
+        if !saved.login_item {
+            effects.push(Effect::RegisterLoginItem);
+        }
+        app.send_menu(&mut effects);
+        (app, effects)
+    }
+
+    pub fn handle(&mut self, event: Event) -> Vec<Effect> {
+        let mut effects = Vec::new();
+        self.apply(event, &mut effects);
+        self.send_menu(&mut effects);
+        effects
+    }
+
+    pub fn view(&self) -> Option<View> {
+        self.window.clone()
+    }
+
+    fn apply(&mut self, event: Event, effects: &mut Vec<Effect>) {
+        match event {
+            Event::Tick { now, desktop_running } => {
+                self.now = now;
+                match self.state.cli {
+                    CliState::Found => {
+                        // Once each time the desktop app starts running, not on every tick.
+                        if desktop_running && !self.desktop_running {
+                            effects.push(Effect::Log("keep-alive: the desktop app runs; not starting".into()));
+                        }
+                        effects.extend(self.keep.tick(now, desktop_running).map(|keep| match keep {
+                            Keep::SpawnWatch => Effect::SpawnWatch,
+                            Keep::RunStart => Effect::RunStart,
+                        }));
+                    }
+                    // A CLI installed by hand is found again; an install that runs is waited for.
+                    CliState::Removed | CliState::InstallFailed => effects.push(Effect::FindCli),
+                    CliState::Installing => {}
+                }
+                self.desktop_running = desktop_running;
+            }
+            Event::MenuOpened { now, desktop_installed } => {
+                self.now = now;
+                self.state.desktop_installed = desktop_installed;
+                // abs_diff: a clock set back reads again too.
+                if self.state.cli == CliState::Found && now.abs_diff(self.last_read) >= READ_EVERY_SECS {
+                    self.read(effects);
+                }
+            }
+            Event::Cli(true) if matches!(self.state.cli, CliState::Removed | CliState::InstallFailed) => {
+                self.found(effects);
+                effects.push(Effect::SpawnWatch);
+            }
+            // Gone (`harness uninstall`): what ran on it ends, and nothing it said is known any more.
+            Event::Cli(false) if self.state.cli == CliState::Found => {
+                self.state.cli = CliState::Removed;
+                effects.push(Effect::StopWatch);
+                if self.login.take().is_some() {
+                    effects.push(Effect::CancelLogin);
+                }
+                self.setting = None;
+                self.state.signed_in = None;
+                self.state.claude = None;
+                self.first_answers = None;
+                if self.window.is_some() {
+                    self.show(None, effects);
+                }
+            }
+            Event::Cli(_) => {}
+            Event::WatchLine(status) => {
+                self.keep.watch_line();
+                self.state.dial = Some(status);
+            }
+            Event::WatchExit(code) => {
+                self.keep.watch_exit(code, self.now);
+                self.state.dial = None;
+            }
+            Event::StartDone { ok } => {
+                self.keep.start_done(ok);
+                effects.push(Effect::SpawnWatch);
+            }
+            // The runner found a CLI after it. The window stays on Install until the first screen is chosen.
+            Event::InstallDone(Ok(())) => {
+                self.found(effects);
+                self.keep.start_begun(self.now);
+                effects.push(Effect::RunStart);
+            }
+            Event::InstallDone(Err(lines)) => {
+                self.state.cli = CliState::InstallFailed;
+                // Decision 1: a closed window stays closed, and the menu offers Install.
+                if self.showing(Screen::Install) {
+                    self.show(Some(screen_at(Screen::Install, Phase::Failed, lines)), effects);
+                }
+            }
+            // A read that failed keeps the last answer.
+            Event::Auth(answer) => {
+                self.state.signed_in = answer.or(self.state.signed_in);
+                if let Some((auth, _)) = &mut self.first_answers {
+                    *auth = true;
+                }
+                self.first_screen(effects);
+            }
+            Event::Claude(status) => {
+                self.state.claude = status;
+                if let Some((_, claude)) = &mut self.first_answers {
+                    *claude = true;
+                }
+                self.first_screen(effects);
+            }
+            Event::Login(event) => self.login_event(event, effects),
+            Event::ClaudeSet(result) => {
+                // A change that no longer runs (its CLI went away) answers late: nothing reads it.
+                let Some(on) = self.setting.take() else { return };
+                match result {
+                    Ok(()) => {
+                        effects.push(Effect::ReadClaude);
+                        // Every turn-on is the window's: the menu's Turn on… opens it.
+                        if on {
+                            self.remember(|saved| saved.asked_claude = true, effects);
+                            if self.showing(Screen::Claude) {
+                                self.next(effects);
+                            }
+                        }
+                    }
+                    // A failed turn-off shows nothing: the runner logged it.
+                    Err(text) => {
+                        if on && self.showing(Screen::Claude) {
+                            self.show(Some(screen_at(Screen::Claude, Phase::Failed, vec![text])), effects);
+                        }
+                    }
+                }
+            }
+            // A failure is tried again at the next start.
+            Event::LoginItem(registered) => {
+                if registered {
+                    self.remember(|saved| saved.login_item = true, effects);
+                }
+            }
+            Event::Menu(action) => match action {
+                MenuAction::Install => {
+                    if matches!(self.state.cli, CliState::Removed | CliState::InstallFailed) {
+                        self.install(effects);
+                    }
+                }
+                MenuAction::SignIn => self.show(Some(self.view_of(Screen::SignIn)), effects),
+                MenuAction::ClaudeOn => self.show(Some(self.view_of(Screen::Claude)), effects),
+                MenuAction::ClaudeOff => {
+                    self.set_claude(false, effects);
+                }
+                MenuAction::OpenHarness => effects.push(Effect::OpenDesktop),
+                MenuAction::Quit => effects.extend([Effect::StopWatch, Effect::Quit]),
+            },
+            Event::Act(action) => self.act(action, effects),
+            // Decision 2: closing answers an offer, and never stops what runs.
+            Event::WindowClosed => {
+                match self.window.as_ref().map(|shown| (shown.screen, shown.phase)) {
+                    Some((Screen::SignIn, _)) => self.remember(|saved| saved.asked_sign_in = true, effects),
+                    Some((Screen::Claude, Phase::Offer | Phase::Failed)) => {
+                        self.remember(|saved| saved.asked_claude = true, effects)
+                    }
+                    _ => {}
+                }
+                self.show(None, effects);
+            }
+        }
+    }
+
+    /// Only a button the window shows does something, so a second click on one that started a run does nothing.
+    fn act(&mut self, action: Action, effects: &mut Vec<Effect>) {
+        let Some(shown) = &self.window else { return };
+        match (shown.screen, shown.phase, action) {
+            (Screen::Install, Phase::Failed, Action::Retry) => self.install(effects),
+            (Screen::SignIn, Phase::Offer, Action::SignIn) | (Screen::SignIn, Phase::Failed, Action::Retry) => {
+                let working = screen_at(Screen::SignIn, Phase::Working, Vec::new());
+                self.login = Some(working.clone());
+                effects.push(Effect::RunLogin);
+                self.show(Some(working), effects);
+            }
+            (Screen::SignIn, Phase::Offer, Action::Later) => {
+                self.remember(|saved| saved.asked_sign_in = true, effects);
+                self.next(effects);
+            }
+            (Screen::SignIn, Phase::Working | Phase::Browser, Action::Cancel) => {
+                self.login = None;
+                effects.push(Effect::CancelLogin);
+                self.show(Some(screen_at(Screen::SignIn, Phase::Offer, Vec::new())), effects);
+            }
+            (Screen::Claude, Phase::Offer, Action::TurnOn) | (Screen::Claude, Phase::Failed, Action::Retry) => {
+                if self.set_claude(true, effects) {
+                    self.show(Some(screen_at(Screen::Claude, Phase::Working, Vec::new())), effects);
+                }
+            }
+            (Screen::Claude, Phase::Offer, Action::NotNow) => {
+                self.remember(|saved| saved.asked_claude = true, effects);
+                self.next(effects);
+            }
+            _ => {}
+        }
+    }
+
+    fn login_event(&mut self, event: LoginEvent, effects: &mut Vec<Effect>) {
+        // A sign-in that was cancelled or went with its CLI answers late: nothing reads it.
+        let Some(login) = &mut self.login else { return };
+        match event {
+            LoginEvent::AuthorizeUrl(url) => {
+                effects.push(Effect::OpenUrl(url));
+                login.phase = Phase::Browser;
+                login.lines.clear();
+                self.redraw(Screen::SignIn, effects);
+            }
+            LoginEvent::Waiting(text) => {
+                login.lines = vec![text];
+                self.redraw(Screen::SignIn, effects);
+            }
+            LoginEvent::Done(Ok(())) => {
+                self.login = None;
+                self.state.signed_in = Some(true);
+                self.remember(|saved| saved.asked_sign_in = true, effects);
+                effects.push(Effect::ReadAuth);
+                if self.showing(Screen::SignIn) {
+                    self.next(effects);
+                }
+            }
+            LoginEvent::Done(Err(text)) => {
+                self.login = None;
+                if self.showing(Screen::SignIn) {
+                    self.show(Some(screen_at(Screen::SignIn, Phase::Failed, vec![text])), effects);
+                }
+            }
+        }
+    }
+
+    /// A CLI is here, as at start: the caller watches the daemon or starts it.
+    fn found(&mut self, effects: &mut Vec<Effect>) {
+        self.state.cli = CliState::Found;
+        self.remember(|saved| saved.cli_seen = true, effects);
+        self.keep = KeepAlive::new();
+        self.first_answers = Some((false, false));
+        self.read(effects);
+    }
+
+    fn install(&mut self, effects: &mut Vec<Effect>) {
+        self.state.cli = CliState::Installing;
+        effects.push(Effect::RunInstall);
+        self.show(Some(self.view_of(Screen::Install)), effects);
+    }
+
+    fn read(&mut self, effects: &mut Vec<Effect>) {
+        effects.extend([Effect::ReadAuth, Effect::ReadClaude]);
+        self.last_read = self.now;
+    }
+
+    /// One change at a time: a click while one runs does nothing.
+    fn set_claude(&mut self, on: bool, effects: &mut Vec<Effect>) -> bool {
+        if self.setting.is_some() {
+            return false;
+        }
+        self.setting = Some(on);
+        effects.push(Effect::SetClaude(on));
+        true
+    }
+
+    /// Once the account and Claude Code have both answered, the window shows the screen that is due. A window that
+    /// shows another screen keeps it; the Install screen gives way, as its install has finished.
+    fn first_screen(&mut self, effects: &mut Vec<Effect>) {
+        if self.first_answers != Some((true, true)) {
+            return;
+        }
+        self.first_answers = None;
+        if self.window.as_ref().is_some_and(|shown| shown.screen != Screen::Install) {
+            return;
+        }
+        let view = due(&self.state).map(|screen| self.view_of(screen));
+        if view != self.window {
+            self.show(view, effects);
+        }
+    }
+
+    /// A screen ended: the next one due, or no window.
+    fn next(&mut self, effects: &mut Vec<Effect>) {
+        let view = due(&self.state).map(|screen| self.view_of(screen));
+        self.show(view, effects);
+    }
+
+    /// The screen as it stands: what runs shows its progress, else the offer.
+    fn view_of(&self, screen: Screen) -> View {
+        match screen {
+            Screen::Install => screen_at(screen, Phase::Working, Vec::new()),
+            Screen::SignIn => self.login.clone().unwrap_or_else(|| screen_at(screen, Phase::Offer, Vec::new())),
+            Screen::Claude if self.setting == Some(true) => screen_at(screen, Phase::Working, Vec::new()),
+            Screen::Claude => screen_at(screen, Phase::Offer, Vec::new()),
+        }
+    }
+
+    /// A run that moved on is drawn only in a window that shows it: a closed window stays closed.
+    fn redraw(&mut self, screen: Screen, effects: &mut Vec<Effect>) {
+        if self.showing(screen) {
+            self.show(Some(self.view_of(screen)), effects);
+        }
+    }
+
+    fn showing(&self, screen: Screen) -> bool {
+        self.window.as_ref().is_some_and(|shown| shown.screen == screen)
+    }
+
+    fn show(&mut self, view: Option<View>, effects: &mut Vec<Effect>) {
+        self.window = view.clone();
+        effects.push(Effect::Show(view));
+    }
+
+    /// Saves only what changed.
+    fn remember(&mut self, change: impl FnOnce(&mut Saved), effects: &mut Vec<Effect>) {
+        let before = self.state.saved;
+        change(&mut self.state.saved);
+        if self.state.saved != before {
+            effects.push(Effect::Save(self.state.saved));
+        }
+    }
+
+    /// Every event ends here: a menu that changed is sent, and logged.
+    fn send_menu(&mut self, effects: &mut Vec<Effect>) {
+        self.state.daemon = self.keep.daemon();
+        let items = menu(&self.state);
+        if items != self.menu {
+            effects.push(Effect::Menu(items.clone()));
+            effects.push(Effect::Log(format!("menu: {}", menu_log(&items))));
+            self.menu = items;
+        }
+    }
+}
+
+fn screen_at(screen: Screen, phase: Phase, lines: Vec<String>) -> View {
+    View { screen, phase, lines }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
