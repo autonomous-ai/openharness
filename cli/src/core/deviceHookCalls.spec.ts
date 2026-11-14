@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   createDeviceHookCalls, parseApproval, parseInboxPoll,
   type ApprovalDecision, type ApprovalRequest, type DeviceHookPort, type InboxAnswer, type InboxPoll,
@@ -292,6 +292,42 @@ describe('createDeviceHookCalls: inbox', () => {
     const answers = texts.map((_text, i) => calls.onInbox({ sessionId: `s${i}` }, live()))
     texts.forEach((text, i) => polls[i].resolve({ text } as InboxAnswer))
     expect(await Promise.all(answers)).toEqual([{}, {}, {}, {}, { text: 'x'.repeat(2000) }])
+  })
+})
+
+describe('createDeviceHookCalls: counts', () => {
+  afterEach(() => { vi.useRealTimers() })
+
+  // Counts only, as the paneless events' line (core/observedHook.ts): a forged or flooding hook is seen, and what it said is not.
+  it('logs refused calls and calls over the bounds once a minute, with no id or content; no dial is not counted', async () => {
+    vi.useFakeTimers()
+    const log = vi.fn()
+    const { port } = fakeDevices()
+    let ready = false
+    let n = 0
+    const calls = createDeviceHookCalls({ ready: () => ready, devices: () => port, newId: () => `id-${++n}`, log })
+    expect(await calls.onApproval(approval, live())).toBe('none')
+    expect(await calls.onInbox({ sessionId: 's1' }, live())).toBe('off')
+    vi.advanceTimersByTime(60_000)
+    expect(log).not.toHaveBeenCalled()
+
+    ready = true
+    expect(await calls.onApproval({ ...approval, sessionId: 'secret-session', tool: '' }, live())).toBe('invalid')
+    expect(await calls.onInbox({ sessionId: 'secret\nsession' }, live())).toBe('invalid')
+    for (let i = 0; i < 4; i += 1) void calls.onApproval(approval, live())
+    expect(await calls.onApproval(approval, live())).toBe('none')
+    for (let i = 0; i < 64; i += 1) void calls.onInbox({ sessionId: `poll-${i}` }, live())
+    expect(await calls.onInbox({ sessionId: 'poll-64' }, live())).toBe('off')
+    expect(log).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(60_000)
+    expect(log.mock.calls).toEqual([['[devices] dial hook calls in the last minute: 2 refused, 2 over the bound']])
+    vi.advanceTimersByTime(120_000)
+    expect(log).toHaveBeenCalledTimes(1)
+
+    expect(await calls.onInbox(null, live())).toBe('invalid')
+    vi.advanceTimersByTime(60_000)
+    expect(log.mock.calls[1]).toEqual(['[devices] dial hook calls in the last minute: 1 refused, 0 over the bound'])
+    expect(JSON.stringify(log.mock.calls)).not.toMatch(/secret|s1|poll-|id-|Bash|npm/)
   })
 })
 
