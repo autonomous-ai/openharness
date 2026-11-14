@@ -67,8 +67,28 @@ export interface ObservedHookDeps {
   log?: (line: string) => void
 }
 
-/** How often the counts of refused and dropped events are logged, at most: a flood is one line a minute. */
+/** How often counts of refused and dropped calls are logged, at most: a flood is one line a minute. */
 const REPORT_MS = 60_000
+
+/**
+ * Counts of calls refused or dropped, logged as one line a minute at most. Counts only, never a session or a path: what
+ * was lost is seen, and what it said stays out of the log.
+ */
+export function minuteCounts<K extends string>(kinds: readonly K[], line: (counts: Readonly<Record<K, number>>) => string, log: (line: string) => void) {
+  const counts = Object.fromEntries(kinds.map((kind) => [kind, 0])) as Record<K, number>
+  let report: ReturnType<typeof setTimeout> | null = null
+  return (kind: K): void => {
+    counts[kind] += 1
+    if (report) return
+    report = setTimeout(() => {
+      log(line(counts))
+      for (const each of kinds) counts[each] = 0
+      report = null
+    }, REPORT_MS)
+    // A count waiting to be logged never keeps the daemon from exiting.
+    report.unref?.()
+  }
+}
 
 export function createObservedHook(deps: ObservedHookDeps) {
   const buckets = new Map<string, { tokens: number; at: number }>()
@@ -89,22 +109,10 @@ export function createObservedHook(deps: ObservedHookDeps) {
     return true
   }
 
-  // Counts only, never a session or a path: what was lost is seen, and what it said stays out of the log.
-  const log = deps.log ?? console.warn
-  const lost = { invalid: 0, dropped: 0 }
-  let report: ReturnType<typeof setTimeout> | null = null
+  const tally = minuteCounts(['invalid', 'dropped'] as const,
+    (lost) => `[devices] paneless hook events in the last minute: ${lost.invalid} refused, ${lost.dropped} dropped`, deps.log ?? console.warn)
   const count = (result: 'invalid' | 'dropped'): typeof result => {
-    lost[result] += 1
-    if (!report) {
-      report = setTimeout(() => {
-        log(`[devices] paneless hook events in the last minute: ${lost.invalid} refused, ${lost.dropped} dropped`)
-        lost.invalid = 0
-        lost.dropped = 0
-        report = null
-      }, REPORT_MS)
-      // A count waiting to be logged never keeps the daemon from exiting.
-      report.unref?.()
-    }
+    tally(result)
     return result
   }
 
