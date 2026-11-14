@@ -178,10 +178,12 @@ open.
 35 s ago (the mod opens the next at once), or when it has an Orca terminal handle. A transcript for it goes:
 
 1. Refused when the session has ended ("<name> did not answer."). Idle or working, the words go on: the mod's
-   `$.prompt.submit` waits for the turn to end before it starts the next, and Claude Code and Codex queue what is typed
-   into their running TUI. Through Orca, an agent waiting on a permission prompt is refused ("<name> is waiting for your
+   `$.prompt.submit` waits for the turn to end before it starts the next, and Claude Code queues what is typed into its
+   running TUI. Through Orca, an agent waiting on a permission prompt is refused ("<name> is waiting for your
    answer in {Host}."): text and Enter typed then would answer the prompt itself (a leading digit can even pick "don't
-   ask again"), and the dial never approves anything; Harness's own path refuses the same case. The mod's route has no
+   ask again"), and the dial never approves anything; Harness's own path refuses the same case. Only Claude Code's hooks
+   say a prompt opened, so through Orca any other engine is refused while it works ("<name> is busy. Say it when it is
+   done."): Codex's approval overlay takes `y` or Enter as an approval, and no hook of it tells. The mod's route has no
    such risk and delivers in every state.
 2. To the mod when its session has a poll open, or opens one within 5 s: the text is the answer to that poll, and that is
    "sent" (the mod sends no acknowledgement). No poll in 5 s: "<name> did not answer."
@@ -194,9 +196,10 @@ dial shows the existing `voice.transcript` or `voice.error`.
 
 ### Orca actions (`cli/src/cable/hosts/orca.ts`)
 
-- **The handle.** `ORCA_TERMINAL_HANDLE` joins the hook's hint allowlist (`cli/hook/notify.mjs`): the only new name.
-  `ORCA_PANE_KEY` is not needed: the handle is what the CLI takes. Wave 0 dropped `ORCA_APP_VERSION`, so the allowlist
-  has 9 names, and the core's `MAX_HINTS` (`cli/src/core/observedHook.ts`) equals it: 9. A test holds the two equal, so
+- **The handle.** `ORCA_TERMINAL_HANDLE` joins the hook's hint allowlist (`cli/hook/notify.mjs`).
+  `ORCA_PANE_KEY` is not needed: the handle is what the CLI takes. Wave 0 dropped `ORCA_APP_VERSION`, and the Claude
+  app's `CLAUDE_CODE_HOST_SESSION_ID` joined after the dial check, so the allowlist has 10 names, and the core's
+  `MAX_HINTS` (`cli/src/core/observedHook.ts`) equals it: 10. A test holds the two equal, so
   no hint is cut when every one is set and the core takes no more than an honest hook can send.
 - **Per agent.** `ObservedSource` reads the hints on every event, not only when it first creates the agent, and keeps the
   handle when it matches `^term_[0-9a-f-]{36}$`. Its `capabilities(agent)` becomes per agent: `s` always, `v` and `f` as
@@ -244,13 +247,14 @@ Windows.
   nothing and exits 0 whatever the daemon answers, `{"decision":"allow"}` included; nothing sent with no socket; the
   posted body never carries `ORCA_PAIRING_CODE`, `ORCA_AGENT_SESSION_SPAWN_TOKEN` or any other environment variable.
 - `notify.mjs`: `ORCA_TERMINAL_HANDLE` is posted; `ORCA_PAIRING_CODE` and `ORCA_AGENT_SESSION_SPAWN_TOKEN` are never
-  posted, with both set; all 9 allowlisted hints set at once reach the devices uncut; the core takes 9 and refuses 10.
+  posted, with both set; all 10 allowlisted hints set at once reach the devices uncut; the core takes 10 and refuses 11.
 - Core: `asked` with its bounded `tool` and `summary`; the inbox route's bounds, 503 at once with no device (the
   process is not started), `inbox.gone`, the fallbacks; 100% per file (`npm run test:core`).
 - Waiting: `asked` gives the agent `needs-you` and "<summary> · answer in {Host}" in place of wave 0's line; the next
   event of that session clears it, another session's does not; no `question` frame is sent and no `answer` or
   `answer.reviewed` frame can approve anything; the summary reaches no backend request, router candidate or log line.
-- Voice: delivered to a working agent (not refused); refused once the session ended; the mod route when a poll is open or opens within 5 s; the Orca route
+- Voice: delivered to a working Claude Code (not refused), never typed into a working Codex in Orca; refused once the
+  session ended; the mod route when a poll is open or opens within 5 s; the Orca route
   otherwise; `sendTurn` reaches `source.send` for an agent outside Harness; `v` and `f` per agent, following the poll
   and the handle (read on every event).
 - Orca actions against a fake `orca`: the arguments, no shell, the timeout, the handle check, the toast on failure; a

@@ -80,7 +80,7 @@ export interface ObservedActions {
   canOpen(target: OpenTarget): boolean
   /** A tap: the agent's pane, then its app (open.ts). */
   open(agentId: string, target: OpenTarget): Promise<boolean>
-  count(what: 'mod' | 'orca' | 'waiting' | 'pending' | 'too-long' | 'no-answer'): void
+  count(what: 'mod' | 'orca' | 'waiting' | 'busy' | 'pending' | 'too-long' | 'no-answer'): void
 }
 
 interface Entry {
@@ -141,13 +141,12 @@ export class ObservedSource implements HostSource {
   /**
    * The dial's words for the agent, idle or working, as a Harness agent's are (lib/sessionInput.ts): to its mod, else typed
    * into its Orca terminal, and nothing is queued here. The mod's `$.prompt.submit` starts them once the turn is over, and
-   * Claude Code and Codex queue what is typed into their running TUI (engines/<engine>/submissionPolicy.ts
-   * `typesWhileBusy`).
+   * Claude Code queues what is typed into its running TUI (engines/claude/submissionPolicy.ts `typesWhileBusy`).
    */
   async send(agent: HostAgent, text: string): Promise<SendResult> {
     const e = this.entries.get(agent.id)
     const actions = this.deps.actions
-    const refuse = (what: 'waiting' | 'pending' | 'too-long' | 'no-answer', reason: string): SendResult => {
+    const refuse = (what: 'waiting' | 'busy' | 'pending' | 'too-long' | 'no-answer', reason: string): SendResult => {
       actions?.count(what)
       return { ok: false, reason }
     }
@@ -171,6 +170,9 @@ export class ObservedSource implements HostSource {
     // A prompt open in the terminal takes what is typed as its answer: Enter there would allow what the dial only shows,
     // as the core never types into a Harness pane that shows one (lib/messageHolds.ts `permission_open`).
     if (e.agent.state === 'needs-you') return refuse('waiting', `${name} is waiting for your answer in ${hostDisplayName(e.agent.host)}.`)
+    // Only Claude Code's hooks say a prompt opened (its Notification, the plugin's asked). Codex's approval overlay, which
+    // takes `y` or Enter as an approval, and any other engine's prompt are never heard of: their working turn may show one.
+    if (e.agent.state === 'working' && e.agent.engine !== 'claude') return refuse('busy', `${name} is busy. Say it when it is done.`)
     if (!await actions.orcaSend(handle, text)) return noAnswer()
     actions.count('orca')
     return { ok: true }

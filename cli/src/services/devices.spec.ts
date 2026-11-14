@@ -1545,20 +1545,25 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     expect(logs.filter((line) => line.includes(SESSION) || line.includes('sess-1'))).toEqual([])
   })
 
-  it('no log line carries the command, a path, the transcript, a session id or a handle', async () => {
-    const { port } = startHere()
+  it('no log line or backend request carries the command, a prompt\'s summary, a path, the transcript, a session id or a handle', async () => {
+    const { core, port } = startHere()
     port.observed(hook('session-start', { engine: 'codex', sessionId: 'cx-1', hostHints: { ORCA_TERMINAL_HANDLE: HANDLE } }))
     attach(port)
     await host().sendTurn(CODEX, 'run the tests')
     await host().openAgent(CODEX)
-    // Working, the words go on, as a Harness agent's do; waiting on a prompt in its terminal, they are not typed there.
+    // Working, Codex may show an approval no hook tells of: the words are not typed there, nor while it waits on a prompt.
     port.observed(hook('turn-start', { engine: 'codex', sessionId: 'cx-1', hostHints: { ORCA_TERMINAL_HANDLE: HANDLE } }))
-    expect(await host().sendTurn(CODEX, 'run the tests')).toEqual({ ok: true })
+    expect(await host().sendTurn(CODEX, 'run the tests')).toMatchObject({ ok: false, message: 'api is busy. Say it when it is done.' })
     port.observed(hook('needs-input', { engine: 'codex', sessionId: 'cx-1', hostHints: { ORCA_TERMINAL_HANDLE: HANDLE } }))
     expect(await host().sendTurn(CODEX, 'run the tests')).toMatchObject({ ok: false, message: 'api is waiting for your answer in Terminal.' })
-    expect(said()).toEqual(['[device] voice · orca', '[device] voice · orca', '[device] voice · waiting'])
-    const secrets = ['/work', '/t/', 'run the tests', 'sess-1', 'cx-1', HANDLE]
+    // A Claude Code prompt's summary shows on the dial alone.
+    port.observed(hook('turn-start'))
+    port.observed({ engine: 'claude', sessionId: 'sess-1', event: 'asked', tool: 'Bash', summary: 'deploy --secret-flag' })
+    expect(await host().activityText(observedAgentId('claude', 'sess-1'))).toMatch(/^deploy --secret-flag · answer in /)
+    expect(said()).toEqual(['[device] voice · orca', '[device] voice · busy', '[device] voice · waiting'])
+    const secrets = ['/work', '/t/', 'run the tests', 'deploy --secret-flag', 'sess-1', 'cx-1', HANDLE]
     expect(logs.filter((line) => secrets.some((secret) => line.includes(secret)))).toEqual([])
+    expect(JSON.stringify(vi.mocked(core.account.backend).mock.calls)).not.toMatch(/secret-flag|sess-1|cx-1/)
   })
 
   it('an inbox part that throws answers { off: true }', async () => {
