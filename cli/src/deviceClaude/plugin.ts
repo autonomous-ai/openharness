@@ -26,7 +26,7 @@ export interface ClaudeStatus {
 
 export type ClaudeResult = { ok: true } | { ok: false; error: string }
 
-/** The marketplace add and the install fetch the repository; an update pulls what changed, and the rest is local. */
+/** The marketplace add, its update and the install fetch the repository; every other call only reads or writes local settings. */
 const FETCH_MS = 60_000
 const LOCAL_MS = 15_000
 /** `claude plugin list --json` grows with every installed plugin; past this the output is not ours to read. */
@@ -106,7 +106,7 @@ export async function claudeEnable(deps: ClaudeDeps): Promise<ClaudeResult> {
   const install = () => change(run, ['plugin', 'install', PLUGIN_ID, '--scope', 'user'], FETCH_MS)
   let failed = await install()
   // A clone made before harness-device was in the marketplace does not list it: pulled once, the install is tried again.
-  if (failed && cloned) failed = await change(run, ['plugin', 'marketplace', 'update', MARKETPLACE], LOCAL_MS) ?? await install()
+  if (failed && cloned) failed = await change(run, ['plugin', 'marketplace', 'update', MARKETPLACE], FETCH_MS) ?? await install()
   return failed ?? { ok: true }
 }
 
