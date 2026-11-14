@@ -2407,6 +2407,67 @@ describe('hook notify: a session outside a pane', () => {
     expect(Buffer.byteLength(JSON.stringify(requests[0].body))).toBeLessThan(4096)
   })
 
+  // Claude Code types another session's message in as a prompt that starts so; the devices must not move the dial for it.
+  it('a prompt another session sent posts turn-start with relayed: true, and never the prompt', async () => {
+    const { port, requests } = await collect()
+    await runHook({ port, input: {
+      hook_event_name: 'UserPromptSubmit', session_id: 'sess-1', cwd: '/w',
+      prompt: '<cross-session-message from="a1">prompt-secret</cross-session-message>',
+    } })
+    expect(requests).toHaveLength(1)
+    expect(requests[0].body).toMatchObject({ event: 'turn-start', relayed: true })
+    expect(JSON.stringify(requests[0].body)).not.toMatch(/cross-session|prompt-secret/)
+  })
+
+  it('leading whitespace before it is still relayed', async () => {
+    const { port, requests } = await collect()
+    await runHook({ port, input: {
+      hook_event_name: 'UserPromptSubmit', session_id: 'sess-1', prompt: '\n \t<cross-session-message from="a1">x',
+    } })
+    expect(requests).toHaveLength(1)
+    expect(requests[0].body).toMatchObject({ event: 'turn-start', relayed: true })
+  })
+
+  it.each([
+    ['typed', { prompt: 'hi' }],
+    ['quoting one', { prompt: 'see <cross-session-message from="a1">' }],
+    ['another tag', { prompt: '<cross-session-messages>' }],
+    ['an object', { prompt: { text: '<cross-session-message from="a1">' } }],
+    ['no prompt', {}],
+  ])('a %s prompt posts no relayed', async (_name, prompt) => {
+    const { port, requests } = await collect()
+    await runHook({ port, input: { hook_event_name: 'UserPromptSubmit', session_id: 'sess-1', ...prompt } })
+    expect(requests).toHaveLength(1)
+    expect(requests[0].body.event).toBe('turn-start')
+    expect(requests[0].body).not.toHaveProperty('relayed')
+  })
+
+  it.each([
+    ['cursor', 'beforeSubmitPrompt', [], { hook_event_name: 'beforeSubmitPrompt', session_id: 'sess-1' }],
+    ['copilot', 'userPromptSubmitted', ['--copilot-event', 'userPromptSubmitted'], { sessionId: 'sess-1' }],
+    ['claude', 'Stop', [], { hook_event_name: 'Stop', session_id: 'sess-1' }],
+  ] as const)('only UserPromptSubmit says it: %s %s posts no relayed', async (engine, _name, args, payload) => {
+    const { port, requests } = await collect()
+    await runHook({ port, engine, args: [...args], input: { ...payload, prompt: '<cross-session-message from="a1">x' } })
+    expect(requests).toHaveLength(1)
+    expect(requests[0].body).not.toHaveProperty('relayed')
+  })
+
+  it('a relayed body with every field at its bound keeps relayed and is under 4096 bytes', async () => {
+    const { port, requests } = await collect()
+    const hints = Object.fromEntries(HINTS.map((name) => [name, 'h'.repeat(64)]))
+    const path = `/${'d'.repeat(1023)}`
+    await runHook({ port, env: hints, input: {
+      hook_event_name: 'UserPromptSubmit', session_id: 's'.repeat(128), cwd: path, transcript_path: path,
+      prompt: '<cross-session-message from="a1">x',
+    } })
+    expect(requests).toHaveLength(1)
+    expect(requests[0].body).toMatchObject({
+      sessionId: 's'.repeat(128), event: 'turn-start', relayed: true, cwd: path, transcriptPath: path, hostHints: hints,
+    })
+    expect(Buffer.byteLength(JSON.stringify(requests[0].body))).toBeLessThan(4096)
+  })
+
   // Which Orca build it is says nothing about where the session runs.
   it('never sends ORCA_APP_VERSION', async () => {
     const { port, requests } = await collect()
