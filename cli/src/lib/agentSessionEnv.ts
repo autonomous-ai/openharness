@@ -1,6 +1,7 @@
 /**
  * The variables a coding agent sets in the shells it runs commands in, naming its own session: Claude Code's
  * CLAUDECODE, session id and messaging socket and token, Codex's thread id and sandbox, and the AI_AGENT others set.
+ * And every ORCA_* an Orca terminal has, whatever runs in it.
  *
  * They belong to that one session. An agent that installs Harness and runs `harness start` from its shell started a
  * daemon with them all (found 2026-10-11: the core of a daemon restarted from a Claude Code session had four), and a
@@ -21,7 +22,10 @@ const AGENT_SESSION_VARIABLES: ReadonlySet<string> = new Set([
 
 /** Whether [name] names an agent's own session, never for a daemon or a pane it makes. */
 export function isAgentSessionVariable(name: string): boolean {
-  return AGENT_SESSION_VARIABLES.has(name)
+  // Orca sets some thirty ORCA_* in each terminal it opens (1.4.256): that terminal's handle, pane and tab, and secrets,
+  // its pairing code and its hook, launch and spawn tokens. All are that terminal's or its session's, none a setting the
+  // person chose, and a pane that kept them would be that terminal to an engine's hook. A prefix: Orca adds names as it goes.
+  return AGENT_SESSION_VARIABLES.has(name) || name.startsWith('ORCA_')
 }
 
 /** Takes every agent session variable out of [env], this process's own by default. Says which it took. */
