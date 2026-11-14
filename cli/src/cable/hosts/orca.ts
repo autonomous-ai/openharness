@@ -68,7 +68,8 @@ export function createOrcaActions(deps: OrcaDeps): { send(handle: string, text: 
     async send(handle, text) {
       if (text === '' || text.length > MAX_TEXT) return false
       const line = text.replace(CONTROL, ' ')
-      return alone(handle, (orca) => exitsZero(orca, ['terminal', 'send', '--terminal', handle, '--text', line, '--enter', '--wait-submit', '5', '--json']))
+      // Joined to its flag: orca reads a separate argument that starts with -- as the next flag, not as the text.
+      return alone(handle, (orca) => exitsZero(orca, ['terminal', 'send', '--terminal', handle, `--text=${line}`, '--enter', '--wait-submit', '5', '--json']))
     },
     open(handle) {
       return alone(handle, async (orca) => {
