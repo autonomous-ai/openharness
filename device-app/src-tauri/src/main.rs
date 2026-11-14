@@ -119,16 +119,24 @@ fn start(handle: &AppHandle, events: Sender<Event>, queue: Receiver<Event>) -> t
     let looping = handle.clone();
     thread::spawn(move || run_loop(&looping, &log, app, &runner, first, queue));
 
+    #[cfg(target_os = "macos")]
     let ticking = handle.clone();
     thread::spawn(move || {
         loop {
             thread::sleep(TICK);
             let events = events.clone();
             // AppKit's running applications are read on the main thread.
+            #[cfg(target_os = "macos")]
             let sent = ticking.run_on_main_thread(move || {
                 let desktop_running = SystemDesktopApp.running();
                 let _ = events.send(Event::Tick { now: SystemClock.now(), desktop_running });
             });
+            // Elsewhere it is a scan of every process: here, never on the main thread, where it would hold the tray.
+            #[cfg(not(target_os = "macos"))]
+            let sent = {
+                let desktop_running = SystemDesktopApp.running();
+                events.send(Event::Tick { now: SystemClock.now(), desktop_running })
+            };
             if sent.is_err() {
                 return;
             }
