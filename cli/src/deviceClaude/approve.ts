@@ -8,7 +8,6 @@
  * ORCA_AGENT_SESSION_SPAWN_TOKEN in the same environment. This file runs only in the `harness` command's own process,
  * and spells the three decisions itself rather than importing the core's.
  */
-import { loadOrCreateHookToken } from '../lib/hookAuth.js'
 import { daemonFetch, localSocketRoute } from '../lib/localTransport.js'
 
 type Decision = 'allow' | 'deny' | 'none'
@@ -128,17 +127,16 @@ export async function runApprove(deps: ApproveDeps): Promise<0> {
  */
 export function daemonPost(dataDir: string, port: number): (body: ApprovalBody) => Promise<Decision> {
   return async (body) => {
+    // Only over the socket does the filesystem say the answer is the daemon's. Over the port, an account holding it
+    // while the daemon restarts could answer allow (audit H1), so a folder too long for a socket sends nothing, and the
+    // daemon logs why (hookServer.ts).
+    if (!localSocketRoute(dataDir, port)) return 'none'
     const stop = new AbortController()
     const timer = setTimeout(() => stop.abort(), WAIT_MS)
     try {
-      // As hook/notify.mjs: over the socket the filesystem says who calls. A folder too long for one leaves only the
-      // port, and there the hook-only token goes, never the credential: whoever holds the port while the daemon
-      // restarts hears it (audit H1). The daemon makes the token as it starts, so this reads it; before any daemon has
-      // run, the one made here is the one the daemon then reads.
-      const headers: Record<string, string> = localSocketRoute(dataDir, port) ? {} : { 'X-Harness-Hook-Token': loadOrCreateHookToken(dataDir) }
       const response = await daemonFetch(dataDir, port)(`http://127.0.0.1:${port}/api/hook/approval`, {
         method: 'POST', signal: stop.signal,
-        headers: { 'Content-Type': 'application/json', ...headers },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       })
       const decision = (await response.json() as { decision?: unknown } | null)?.decision
