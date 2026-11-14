@@ -17,12 +17,11 @@ pub enum Status {
 }
 
 /// Registers the item only when it is not registered: one the person turned off reads RequiresApproval, and is never
-/// turned on again over their choice.
+/// turned on again over their choice. macOS can say NotFound of a main app's service it has never registered.
 pub fn register_from(status: Status, register: impl FnOnce() -> Result<(), String>) -> Result<(), String> {
     match status {
-        Status::NotRegistered => register(),
+        Status::NotRegistered | Status::NotFound => register(),
         Status::Enabled | Status::RequiresApproval => Ok(()),
-        Status::NotFound => Err("Login item not found.".into()),
     }
 }
 
