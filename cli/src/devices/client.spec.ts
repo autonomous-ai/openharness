@@ -575,6 +575,16 @@ describe('harness hardware watch: the app in front', () => {
     expect(await unlisted.done).toBe(0)
     expect(apps(unlisted)).toEqual(['none'])
   })
+  it('a tell under way that outlasts the 2 s holds the exit no longer, and no none follows it after the exit', async () => {
+    const held = heldListener()
+    const run = watch({ tell: held.tell })
+    front(run, 'com.mitchellh.ghostty')
+    run.stdin.emit('end')
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(await run.done).toBe(0)
+    await held.answer(true)
+    expect(apps(run)).toEqual(['ghostty'])
+  })
   it('a listener that never answers the none holds the exit 2 s at most, and the none is not tried again', async () => {
     const held = heldListener()
     const run = watch({ tell: held.tell })
