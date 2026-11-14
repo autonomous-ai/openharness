@@ -1,5 +1,5 @@
 // How the wheel's rows are composed: the local row, and the fleet's rows around it.
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { DaemonCableHost, cableEventFor, cableStepFor, type CableHostWiring } from './cableHost.js'
 import { FleetError, type FleetMachine, type MachineFleet } from './machineFleet.js'
@@ -1054,6 +1054,72 @@ describe('the dial that shows one app at a time', () => {
     const next = await host.listAgentSnapshot({ apps: true })
     expect(next).toMatchObject({ total: 3, apps: { shown: 'terminal' } })
     expect(ids(next)).toEqual(['t1', 't2', 't3'])
+  })
+
+  // Only a list read with no window updates the rings, so a settle or a pick between reads counts the agents there now.
+  describe('decided on the agents there now, not those of the last read', () => {
+    const ghostty3 = (): HostAgent[] => [agent('g1', 'ghostty'), agent('g2', 'ghostty'), agent('g3', 'ghostty')]
+    const settle = (): void => {
+      vi.advanceTimersByTime(FRONT_SETTLE_MS)
+    }
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    })
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    it('an app whose first agents start in front while a window is open is shown when it closes', async () => {
+      const agents = ghostty3()
+      const appSwitched = vi.fn()
+      const host = setup(agents, { appSwitched })
+      expect(await shown(host)).toBe('ghostty')
+      onTab(host, [])
+      agents.push(agent('v1', 'vscode'), agent('v2', 'vscode'))
+      host.front('vscode')
+      settle()
+      host.setSwarms(null)
+      expect(await shown(host)).toBe('vscode')
+      expect(appSwitched.mock.calls).toEqual([['front']])
+    })
+
+    it('the same across an unplug and a replug', async () => {
+      const agents = ghostty3()
+      const appSwitched = vi.fn()
+      const host = setup(agents, { appSwitched })
+      host.onDialAttached()
+      expect(await shown(host)).toBe('ghostty')
+      host.onDialGone()
+      agents.push(agent('v1', 'vscode'), agent('v2', 'vscode'))
+      host.front('vscode')
+      settle()
+      host.onDialAttached()
+      expect(await shown(host)).toBe('vscode')
+      expect(appSwitched.mock.calls).toEqual([['front']])
+    })
+
+    it('an app in front whose agents ended since the last read is not shown, and nothing switches twice', async () => {
+      const agents = five()
+      const appSwitched = vi.fn()
+      const host = setup(agents, { appSwitched })
+      expect(await shown(host)).toBe('ghostty')
+      agents.splice(0, agents.length, ...agents.filter((a) => a.app !== 'vscode'))
+      host.front('vscode')
+      settle()
+      expect(await shown(host)).toBe('ghostty')
+      expect(appSwitched).not.toHaveBeenCalled()
+    })
+
+    it('a pick of an app whose last agent ended since the last read is ignored, and the ring stays', async () => {
+      const agents = five()
+      const appSwitched = vi.fn()
+      const host = setup(agents, { appSwitched })
+      expect(await shown(host)).toBe('ghostty')
+      agents.splice(0, agents.length, ...agents.filter((a) => a.app !== 'vscode'))
+      expect(host.pickApp('vscode')).toBe('ignored')
+      expect(ids(await host.listAgentSnapshot({ apps: true }))).toEqual(['g1', 'g2', 'g3'])
+      expect(appSwitched).not.toHaveBeenCalled()
+    })
   })
 })
 
