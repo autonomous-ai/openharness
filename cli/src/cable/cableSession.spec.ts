@@ -4151,6 +4151,8 @@ describe('what the dial cannot do for an agent', () => {
         expect(read()[1]).toMatchObject({ ok: true, id, submitted: false })
       }
       expect(port.sent.find((m) => m.t === 'answer.receipt' && m.agentId === 'a1')).toMatchObject({ error: 'Answer it in Orca.' })
+      // The plain answer says the same as the reviewed one: no update makes the dial answer it.
+      expect(toasts(port)).toEqual([{ t: 'toast', text: 'Answer it in Orca.' }])
       expect(host.answer).not.toHaveBeenCalled()
       expect(answerReviewed).not.toHaveBeenCalled()
       expect(transcribe).not.toHaveBeenCalled()
