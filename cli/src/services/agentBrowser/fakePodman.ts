@@ -14,7 +14,7 @@ const fakes = new Map<string, { removed: boolean; running: Set<ChildProcess> }>(
 /**
  * node:child_process for a spec that starts fakes, installed with
  * `vi.mock('node:child_process', async (real) => (await import('./fakePodman.js')).trackingFakes(await real()))`.
- * Each child that runs a fake, directly or as a shell's `$0` (the tie's, ./tied.ts, and the stdin relay's), is kept
+ * Each child that runs a fake, directly or as a shell's `$0` (the tie's, lib/tied.ts, and the stdin relay's), is kept
  * until it exits, so `remove` waits for it; a removed fake is never started again, as a podman that is gone. A spec's
  * service went on restarting a browser after the spec ended, and its teardown deleted the fake's folder under a running
  * fake (CI, 2026-11-10).

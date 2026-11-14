@@ -5,9 +5,10 @@
  * The protocol is the one engines/codex/nativeControl.ts speaks over the proxy, framed here as the stdio transport
  * frames it: one JSON object per line, `{ id, method, params }` requests with no `jsonrpc` field (Codex 0.166).
  */
-import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from 'node:child_process'
+import type { ChildProcess } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import { engineBin } from './engineBin.js'
+import { spawnTied } from './tied.js'
 import { ownProcessGroup } from './windows/noWindow.js'
 import { windowsEngineArgv } from './windows/launch.js'
 import { VERSION } from '../version.js'
@@ -21,7 +22,7 @@ export type CodexRateLimits =
 export interface CodexRateLimitsOptions {
   /** A profile's CODEX_HOME; without it the child inherits the daemon's own environment unchanged. */
   codexHome?: string
-  spawn?: (command: string, args: string[], options: SpawnOptions) => ChildProcess
+  spawn?: typeof spawnTied
   timeoutMs?: number
   codexPath?: string
 }
@@ -42,7 +43,7 @@ export function readCodexRateLimits(options: CodexRateLimitsOptions = {}): Promi
   return read
 }
 
-function readOnce({ codexHome, spawn = nodeSpawn, timeoutMs = 10_000, codexPath = engineBin('codex') }: CodexRateLimitsOptions): Promise<CodexRateLimits> {
+function readOnce({ codexHome, spawn = spawnTied, timeoutMs = 10_000, codexPath = engineBin('codex') }: CodexRateLimitsOptions): Promise<CodexRateLimits> {
   return new Promise(resolve => {
     const env = codexHome ? { ...process.env, CODEX_HOME: codexHome } : process.env
     let child: ChildProcess

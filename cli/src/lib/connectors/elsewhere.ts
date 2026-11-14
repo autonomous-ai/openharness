@@ -8,10 +8,10 @@
  * - Codex: `codex plugin list --json` says whether the plugin is installed; the Google grant lives in ChatGPT and
  *   is asked for the first time Codex uses it, so "installed" is all this computer can know.
  */
-import { execFile } from 'node:child_process'
 import { homedir } from 'node:os'
 import { resolveBinaryOnPath } from '../binaryOnPath.js'
 import { loginShellEnvironment } from '../loginShellEnv.js'
+import { execFileTied } from '../tied.js'
 import { ConnectorError } from './store.js'
 
 export type Via = 'claude' | 'codex'
@@ -133,14 +133,13 @@ export function engineBinary(name: Via, env: NodeJS.ProcessEnv = process.env): s
   return resolveBinaryOnPath(name, { PATH: loginShellEnvironment().PATH }) ?? resolveBinaryOnPath(name, env)
 }
 
-const run: Run = (command, args, timeoutMs) => new Promise((resolve, reject) => {
+// Tied: a read runs up to 5 minutes, and each crash of the connections' service left one running.
+// From the home folder: `claude mcp list` also checks the servers of the folder it runs in.
+// Its stdin is ended: neither `claude mcp list` nor `codex plugin list/add/remove` reads it (codex-rs/cli/src/plugin_cmd.rs).
+const run: Run = async (command, args, timeoutMs) => {
   const env = { ...process.env, ...loginShellEnvironment(), NO_COLOR: '1' }
-  // From the home folder: `claude mcp list` also checks the servers of the folder it runs in.
-  execFile(command, args, { cwd: homedir(), env, timeout: timeoutMs, maxBuffer: 4 << 20 }, (error, stdout) => {
-    if (error) reject(error)
-    else resolve(String(stdout))
-  })
-})
+  return (await execFileTied(command, args, { cwd: homedir(), env, timeout: timeoutMs, maxBuffer: 4 << 20 })).stdout
+}
 
 /** The claude.ai connectors `claude mcp list` printed, by name. */
 export function claudeConnectors(listing: string): Record<string, ViaState> {

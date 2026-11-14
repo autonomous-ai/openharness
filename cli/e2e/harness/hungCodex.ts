@@ -26,19 +26,22 @@ export function writeHungCodex(daemon: IsolatedDaemon): void {
   writeFileSync(join(daemon.root, 'bin', 'codex'), [shebang, HANG, ...engine].join('\n'), { mode: 0o755 })
 }
 
-/** Asks [daemon] for its rate limits and returns the two rows of the read's process group, its leader first. The read is
- *  never answered: `usage_read` answers once the read settles, and this Codex never ends. */
+/** Asks [daemon] for its rate limits and returns the three rows of the read's process group: its leader, the tie's
+ *  watcher (lib/tied.ts: the leader's child, which shares its argv) and the hung child. The read is never answered:
+ *  `usage_read` answers once the read settles, and this Codex never ends. */
 export async function hungRateLimitRead(daemon: IsolatedDaemon): Promise<ProcessRow[]> {
   await until('the usage service to connect', () => daemon.log().includes('[services] usage connected') || null, 30_000, 100)
   const client = await LocalClient.connect(daemon)
   try {
     client.send('usage_read', { requestId: 'hung-read' })
     const command = `${join(daemon.root, 'bin', 'codex')} app-server`
-    return await until('the rate-limit read\'s Codex and its child', () => {
+    return await until('the rate-limit read\'s Codex, its watcher and its child', () => {
       const table = processTable()
       const leader = table.find((row) => row.pid === row.pgid && row.command.includes(command))
-      const group = leader ? table.filter((row) => row.pgid === leader.pgid) : []
-      return group.length === 2 ? [leader!, ...group.filter((row) => row !== leader)] : null
+      const rest = leader ? table.filter((row) => row.pgid === leader.pgid && row !== leader) : []
+      const watcher = rest.find((row) => row.command.includes(command))
+      const child = rest.find((row) => row !== watcher)
+      return rest.length === 2 && watcher && child ? [leader!, watcher, child] : null
     }, 60_000, 100)
   } finally {
     client.close()

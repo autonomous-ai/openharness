@@ -2,11 +2,12 @@
  * Models picker and started with the app that holds them, the rule the Model Manager reads as START WITH:
  * that app downloaded the file and is known to load it, where Grid's engine can be older and refuse a new
  * architecture. Grid's llama.cpp starts one only when its app is not installed here. */
-import { execFile, spawn } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { closeSync, openSync } from 'node:fs'
 import { mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import { processExists } from './processLiveness.js'
+import { execFileTied, type TiedExecError } from './tied.js'
 
 export type AppEngine = 'ollama' | 'lm-studio' | 'llama.cpp'
 export const APP_LABEL: Record<AppEngine, string> = { ollama: 'Ollama', 'lm-studio': 'LM Studio', 'llama.cpp': 'llama.cpp' }
@@ -40,10 +41,12 @@ export interface AppEngineRecord {
 }
 
 type Exec = (file: string, args: string[], options?: { env?: NodeJS.ProcessEnv; timeout?: number }) => Promise<{ ok: boolean; stdout: string; stderr: string }>
-const exec: Exec = (file, args, options = {}) => new Promise(resolve => {
-  execFile(file, args, { env: options.env, timeout: options.timeout ?? 60_000, maxBuffer: 16 * 1024 * 1024 },
-    (error, stdout, stderr) => resolve({ ok: !error, stdout: String(stdout), stderr: String(stderr) }))
-})
+// Tied, as each crash of the models service left a scan or an `lms` command running. Its stdin is now ended: none
+// of them reads it (fleet's `models --json` scans the disk, `lms` is given its model and `-y`, `ps` never reads it).
+const exec: Exec = (file, args, options = {}) =>
+  execFileTied(file, args, { env: options.env, timeout: options.timeout ?? 60_000, maxBuffer: 16 * 1024 * 1024 }).then(
+    ({ stdout, stderr }) => ({ ok: true, stdout, stderr }),
+    (error: TiedExecError) => ({ ok: false, stdout: error.stdout, stderr: error.stderr }))
 
 const obj = (v: unknown): Record<string, any> => v && typeof v === 'object' && !Array.isArray(v) ? v : {}
 const rows = (v: unknown): Record<string, any>[] => Array.isArray(v) ? v.map(obj) : []

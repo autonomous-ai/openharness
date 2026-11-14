@@ -1,15 +1,14 @@
 /**
  * The one way the agent browser runs Podman: where it is, whether it can run a browser, and every call to it, each
- * with a timeout, started without a window (docs/windows-rules.md, rule 1) and ended with this process (./tied.ts).
+ * with a timeout, started without a window (docs/windows-rules.md, rule 1) and ended with this process (lib/tied.ts).
  * Harness runs `podman` only, never `docker`.
  */
 import type { ChildProcess } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import type { Readable } from 'node:stream'
 import { oneShotParentEnv } from '../../lib/loginShellEnv.js'
 import { resolveViaLoginShell } from '../../lib/tmuxOnPath.js'
 import { ownProcessGroup } from '../../lib/windows/noWindow.js'
-import { spawnTied } from './tied.js'
+import { execFileTied, spawnTied, type TiedExecError } from '../../lib/tied.js'
 
 export class PodmanError extends Error {
   /** A call that exited with an error: all it printed, stdout then stderr. A build's RUN steps print to stdout. */
@@ -59,7 +58,7 @@ export const OUTPUT_LIMIT = 64 * MiB
 // trap is set first and `ended` looked at once podman is started, so a timeout before then still ends it. The shell
 // exits only after waiting for both (`wait` again after the trap): a run that failed on its timeout left podman
 // unreaped behind it, and a spec's teardown deleted the fake's folder under it (CI, 2026-11-10). The tie's SIGTERM
-// (./tied.ts) reaches this shell too, and its trap ends podman.
+// (lib/tied.ts) reaches this shell too, and its trap ends podman.
 const STDIN_RELAY = `trap 'ended=1; kill $! 2>/dev/null' TERM; exec 3<&0; cat <&3 | "$0" "$@" 3<&- & [ -z "$ended" ] || kill $!; wait $!; s=$?; until wait; do :; done; exit $s`
 
 /** Where Podman's own installers put it, for a daemon whose login shell does not have it on PATH yet. */
@@ -114,50 +113,20 @@ export function createPodman(deps: {
     // macOS and Linux. `cat` relays the data into a pipe the shell makes. Windows' stdio is already a named pipe.
     const relay = opts.stdin !== undefined && platform !== 'win32'
     const [command, commandArgs] = relay ? ['/bin/sh', ['-c', STDIN_RELAY, file, ...onConnection(args)]] : [file, onConnection(args)]
-    return await new Promise((done, fail) => {
+    try {
       // The daemon was started by launchd or systemd, not a shell: the login shell's environment is what the
       // person's own `podman` sees (its machine connections, its helpers on PATH). In this process's group, as
       // under execFile, which never applied a group of its own.
-      const child = spawnTied(command, commandArgs, { env: oneShotParentEnv(), windowsHide: true, platform })
-      // The first reason to end the call names its failure.
-      let ended: string | undefined
-      // Its pipes go first, then the command: something it started (a helper `machine start` leaves) may still hold
-      // them, and the call must not wait on it.
-      const end = (why: string) => {
-        ended ??= why
-        child.stdout!.destroy()
-        child.stderr!.destroy()
-        child.kill()
+      return await execFileTied(command, commandArgs,
+        { env: oneShotParentEnv(), windowsHide: true, platform, timeout: timeoutMs, maxBuffer: outputLimit, input: opts.stdin })
+    } catch (error) {
+      const failed = error as TiedExecError
+      if (failed.killed) {
+        const why = failed.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' ? `printed more than ${outputLimit / MiB} MiB` : `timed out after ${timeoutMs} ms`
+        throw new PodmanError('podman_failed', `podman ${args[0]} ${why}`)
       }
-      const timer = setTimeout(() => end(`timed out after ${timeoutMs} ms`), timeoutMs)
-      // Bytes, decoded once: a character of several bytes can fall across two reads.
-      const collect = (stream: Readable) => {
-        const chunks: Buffer[] = []
-        let bytes = 0
-        stream.on('data', (chunk: Buffer) => {
-          bytes += chunk.length
-          if (bytes > outputLimit) end(`printed more than ${outputLimit / MiB} MiB`)
-          else chunks.push(chunk)
-        })
-        return () => Buffer.concat(chunks).toString('utf8')
-      }
-      const stdout = collect(child.stdout!)
-      const stderr = collect(child.stderr!)
-      const settle = (code: number | null) => {
-        clearTimeout(timer)
-        if (ended) return fail(new PodmanError('podman_failed', `podman ${args[0]} ${ended}`))
-        const out = stdout()
-        const err = stderr()
-        if (code === 0) return done({ stdout: out, stderr: err })
-        fail(new PodmanError('podman_failed', `podman ${args[0]} failed: ${err.trim().slice(-MESSAGE_LIMIT)}`, `${out.trimEnd()}\n${err.trimEnd()}`.trim()))
-      }
-      // Once all its output is read. An error is a command that could not be started; unheard, it would crash this
-      // process.
-      child.once('close', settle)
-      child.once('error', () => settle(null))
-      // Always closed, so a command that reads stdin never waits on it.
-      child.stdin!.end(opts.stdin)
-    })
+      throw new PodmanError('podman_failed', `podman ${args[0]} failed: ${failed.stderr.trim().slice(-MESSAGE_LIMIT)}`, `${failed.stdout.trimEnd()}\n${failed.stderr.trimEnd()}`.trim())
+    }
   }
 
   async function readInfo(): Promise<{ version: string; memTotal: number }> {

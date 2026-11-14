@@ -8,7 +8,7 @@
  * manifest's own id — which we cannot know until the clone exists. A manifest that fails to parse
  * leaves nothing behind.
  */
-import { execFile, spawn } from 'node:child_process'
+import { execFile } from 'node:child_process'
 import { existsSync, lstatSync, mkdirSync, realpathSync, renameSync, rmSync, symlinkSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path'
@@ -24,6 +24,7 @@ import { resolveDshCommand } from './materialize.js'
 import { DSH_SHELL_UNAVAILABLE, dshShellAvailable, runDshCommand } from './shell.js'
 import { lockDsh, dshBusy } from './lock.js'
 import { removePath } from '../lib/removePath.js'
+import { spawnTied } from '../lib/tied.js'
 import { insideGitCheckout } from '../lib/gitProject.js'
 import { INSTALL_GIT_FOR_WINDOWS } from '../lib/windows/gitBash.js'
 
@@ -263,7 +264,8 @@ type GitResult = { ok: true } | { ok: false; detail: string; noGit?: true }
 
 function streamGit(args: string[], onLine: ((line: string) => void) | undefined): Promise<GitResult> {
   return new Promise((resolve) => {
-    const child = spawn('git', args, { stdio: ['ignore', 'ignore', 'pipe'], env: { ...process.env, ...GIT_ENV } })
+    // Tied: a clone can run for minutes, and each crash of its service left it running, past the timeout that died too.
+    const child = spawnTied('git', args, { stdio: ['ignore', 'ignore', 'pipe'], env: { ...process.env, ...GIT_ENV } })
     const tail: string[] = []
     let rest = ''
     let timedOut = false

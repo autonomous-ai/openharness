@@ -411,27 +411,25 @@ describe('createPodman', () => {
     expect([file, args, opts.detached, opts.windowsHide]).toEqual([fake.path, ['events'], undefined, true])
   })
 
-  it('a podman removed after it was found ends its stream as a failed command does, with no spawn error', async () => {
+  it('a podman removed after it was found ends its stream with the spawn\'s own error, as before the tie', async () => {
     const podman = createPodman({ resolve: async () => join(dirname(fake.path), 'removed'), platform: 'linux' })
     await podman.path()
     const child = podman.spawn(['events'])
     const errors: Error[] = []
     child.on('error', error => errors.push(error))
     const code = await new Promise<number | null>(done => child.once('close', done))
-    expect(errors).toEqual([])
-    // The shell's own exit: 127 from dash ("not found"), 126 from bash as sh on macOS.
-    expect([126, 127]).toContain(code)
+    expect(errors.map(error => (error as NodeJS.ErrnoException).code)).toEqual(['ENOENT'])
+    expect(code).toBeLessThan(0)
   })
 
-  it('a podman removed after it was found is a failed call, in the shell\'s own words', async () => {
-    const error = await failure(createPodman({ resolve: async () => join(dirname(fake.path), 'removed'), platform: 'linux' }).run(['ps']))
-    expect(error.state).toBe('podman_failed')
-    expect(error.message).toMatch(/^podman ps failed: [^]*removed[^]*(not found|No such file)/)
-  })
-
-  it('a podman that cannot be started at all, as on Windows where no shell starts it, is the same failed call', async () => {
-    const error = await failure(createPodman({ resolve: async () => join(dirname(fake.path), 'removed'), platform: 'win32' }).run(['ps']))
+  it.each(['linux', 'win32'] as const)('a podman removed after it was found is a failed call (%s)', async (platform) => {
+    const error = await failure(createPodman({ resolve: async () => join(dirname(fake.path), 'removed'), platform }).run(['ps']))
     expect([error.state, error.message, error.output]).toEqual(['podman_failed', 'podman ps failed: ', ''])
+  })
+
+  it('a call spawn refuses outright (a NUL in an argument) is a failed call', async () => {
+    const error = await failure(found('linux').run(['ps', '\0']))
+    expect([error.state, error.message]).toEqual(['podman_failed', 'podman ps failed: '])
   })
 
   it('without podman, run and spawn are needs_setup', async () => {
