@@ -2993,6 +2993,8 @@ export class CableSession {
   }
   /** A connected device that wants `turn.stats`: the token reads are only worth doing for one. */
   get wantsStats(): boolean { return this.statsTurn && this.isConnected }
+  /** A connected dial that says `appFilter`: only its reads should drive the app filter's choices. */
+  get wantsApps(): boolean { return this.appFilter && this.isConnected }
   /** The turn's test and commit counts, for a `stats: 'turn-v1'` device; nothing when none were seen. */
   async turnStats(agentId: string, stats: TurnStatsFields): Promise<void> {
     if (!this.statsTurn || !Object.keys(stats).length) return
