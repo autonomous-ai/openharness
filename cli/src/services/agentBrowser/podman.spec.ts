@@ -324,15 +324,16 @@ describe('createPodman', () => {
     const slow = await failure(found('linux').run(['secret', 'create', 's1', '-'], { stdin: 'pw', timeoutMs: 2_000 }))
     expect(slow.message).toBe('podman secret timed out after 2000 ms')
     // Once run() has failed, the relay's shell and its podman are gone with it, not left running or unreaped behind it.
+    // Looked at as it fails, never polled: the shell is reaped before `close`, and it reaps its podman before it exits.
     const shell = vi.mocked(spawn).mock.results[0]!.value as ChildProcess
-    await gone(fake.pids().at(-1)!, shell.pid!)
+    expect([fake.pids().at(-1)!, shell.pid!].filter(alive)).toEqual([])
   })
 
   it('a run with stdin ends only after its podman and cat have', async () => {
     fake.reply('secret create', { stdout: 'abc123\n' })
     await found('linux').run(['secret', 'create', 's1', '-'], { stdin: 'pw' })
     const shell = vi.mocked(spawn).mock.results[0]!.value as ChildProcess
-    await gone(fake.pids().at(-1)!, shell.pid!)
+    expect([fake.pids().at(-1)!, shell.pid!].filter(alive)).toEqual([])
   })
 
   it('a failed or slow run is a named PodmanError', async () => {
