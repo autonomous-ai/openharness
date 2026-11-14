@@ -239,9 +239,10 @@ export class ObservedSource implements HostSource {
         a.lastAnswer = undefined
         break
       case 'needs-input':
-        // A notice to a finished turn is stale. One to an idle agent is not: the hook hears a prompt only
-        // (hook/notify.mjs), and an agent the open scan found reads idle until its next hook, though its turn may run.
-        if (a.state !== 'done' && a.state !== 'error') this.setState(entry, 'needs-you', now)
+        // In every state: the hook hears a prompt only (hook/notify.mjs, never the idle notice), and one can open in any.
+        // An agent the open scan found reads idle until its next hook though its turn may run, the quota's resume asks
+        // after its turn stopped, and a turn another Stop hook keeps going asks after its Stop.
+        this.setState(entry, 'needs-you', now)
         break
       case 'turn-error':
         this.setState(entry, 'error', now)
