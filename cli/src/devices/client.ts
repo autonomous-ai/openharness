@@ -133,6 +133,8 @@ export function runDialWatch(argv: string[], deps: DialWatchDeps): Promise<numbe
       owed = false
       void tell({ type: 'front', app }).then(taken => {
         telling = false
+        // A watch that has ended waits on nothing.
+        if (settled) return
         if (taken) told = app
         gap = setTimeout(() => {
           gap = undefined
