@@ -245,7 +245,8 @@ mod tests {
             property32(&conn, root, supported, AtomEnum::ATOM, 1024).contains(&active)
         });
         let (tell, told) = mpsc::channel();
-        X11Front { log: Arc::new(crate::types::MemoryLog::default()) }.start(Box::new(move |value| {
+        // Through the app's own door, so a Linux build that gets another source fails here.
+        crate::front::system(Arc::new(crate::types::MemoryLog::default())).start(Box::new(move |value| {
             let _ = tell.send(value);
         }));
 
