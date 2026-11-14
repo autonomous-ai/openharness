@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
@@ -102,6 +102,14 @@ describe.runIf(process.platform === 'win32')('one Windows PowerShell 5.1 for a s
     const lines = (await session.run("1..20000 | ForEach-Object { \"line $_ \" + ('y' * 60) }")).stdout.split('\r\n')
     expect(lines).toHaveLength(20000)
     expect(lines.at(-1)).toBe(`line 20000 ${'y'.repeat(60)}`)
+  })
+
+  // Run, its runspace would stop at the exit with status 0, and a case could pass on a script that never got that far.
+  it('refuses a script with an exit statement before it runs any of it, and answers the next call', async () => {
+    const ran = join(scratch, 'ran.txt')
+    await expect(session.run(`[IO.File]::WriteAllText('${ran}', 'ran'); exit 3`)).rejects.toThrow('a script with an exit statement is refused here')
+    expect(existsSync(ran)).toBe(false)
+    expect((await session.run("'next'")).stdout).toBe('next')
   })
 
   it('fails a call that passes its timeout, naming it, ends that host, and answers the next call from a new one', async () => {
