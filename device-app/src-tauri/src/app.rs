@@ -831,6 +831,33 @@ mod tests {
     }
 
     #[test]
+    fn the_first_status_line_after_a_start_reads_again() {
+        let reads = |effects: &[Effect]| has(effects, &Effect::ReadAuth) && has(effects, &Effect::ReadClaude);
+        let line = || {
+            Event::WatchLine(DialStatus { attached: false, fw: None, hw: None, board: None, updating: None, problem: None })
+        };
+
+        // The reads after an install ran beside the start, while the daemon may have been down.
+        let mut app = fresh();
+        app.handle(Event::InstallDone(Ok(())));
+        answer(&mut app, false, None);
+        app.handle(Event::StartDone { ok: true });
+        assert!(reads(&app.handle(line())));
+        assert!(!reads(&app.handle(line())));
+
+        let mut app = found();
+        app.handle(Event::WatchExit(Some(3)));
+        app.handle(tick(B + 5));
+        app.handle(Event::WatchExit(Some(3)));
+        assert!(has(&app.handle(tick(B + 10)), &Effect::RunStart));
+        app.handle(Event::StartDone { ok: true });
+        assert!(reads(&app.handle(line())));
+
+        // A watch that connects with no start before it reads nothing.
+        assert!(!reads(&found().handle(line())));
+    }
+
+    #[test]
     fn a_dial_line_changes_the_menu_and_the_log() {
         let mut app = found();
         let line = DialStatus {
