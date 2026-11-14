@@ -133,6 +133,14 @@ describe('createDeviceHookCalls: approvals', () => {
     expect(calls.open()).toEqual({ approvals: 0, polls: 0 })
   })
 
+  it('a port that throws at once is none, and holds no place', async () => {
+    const { calls, port } = setup()
+    vi.mocked(port.approval).mockImplementation(() => { throw new Error('devices gone') })
+    for (let i = 0; i < 5; i += 1) expect(await calls.onApproval(approval, live())).toBe('none')
+    expect(port.approval).toHaveBeenCalledTimes(5)
+    expect(calls.open()).toEqual({ approvals: 0, polls: 0 })
+  })
+
   it('the 5th open approval of a session and the 17th in all are none at once; a closed one frees its place', async () => {
     const { calls, port, approvals } = setup()
     const first = calls.onApproval(approval, live())
