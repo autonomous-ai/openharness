@@ -268,8 +268,8 @@ Windows.
 - Core: `asked` with its bounded `tool` and `summary`; the inbox route's bounds, 503 at once with no device (the
   process is not started), `inbox.gone`, the fallbacks; 100% per file (`npm run test:core`).
 - Waiting: `asked` gives the agent `needs-you` and "<summary> · answer in {Host}" in place of wave 0's line; the next
-  event of that session clears it, another session's does not; no `question` frame is sent and no `answer` or
-  `answer.reviewed` frame can approve anything; the summary reaches no backend request, router candidate or log line.
+  event of that session clears it, another session's does not; a display-only `question` frame (`shown:` id) is sent and
+  closed with the wait, and no `answer` or `answer.reviewed` frame can approve anything; the summary reaches no backend request, router candidate or log line.
 - Voice: a working Claude Code with the mod gets it through the mod; a working or waiting agent with no mod (Claude Code
   without the plugin, Codex) is told busy or waiting and nothing is typed; an idle agent of any engine gets it through
   Orca; refused once the session ended; the mod route when a poll is open or opens within 5 s; the Orca route
@@ -283,7 +283,7 @@ Windows.
 - End to end: the real daemon, a fake dial, and the real `harness device claude asked` fed a `PermissionRequest` input:
   the client exits at once with no output; the dial gets the waiting line; a later Stop clears it; no dial → nothing.
 
-**On a dial** (Diego's Mac and his real Claude Code, after wave 0 merges; the CLI from this branch with
+**On a dial** (Diego's Mac and his real Claude Code, wave 0 being on main (#4290); the CLI from this branch with
 `make install-cli`, the plugin enabled with `harness device claude enable`; afterwards the release CLI is put back,
 `harness device claude disable` runs and the folder marketplace is removed. The dial is asked for from the orchestrator
 first. The voice checks 4-6 run against a daemon on the staging env file (`HARNESS_ENV_FILE`), never production.)

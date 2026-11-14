@@ -1,5 +1,16 @@
 # The dial answers and talks to agents outside Harness — Implementation Plan
 
+> **Changed after this plan (2026-11-14), read first.** The spec's "Changed after the dial check" replaces the
+> approvals this plan built: the dial only shows a waiting permission prompt (observed event `asked`, a display-only
+> `question` frame with a `shown:` id) and never answers one, so `/api/hook/approval`, `Approvals`, the Allow/Deny card,
+> `terminalOnly` and `deviceClaude/approve.ts` (now `asked.ts`) are gone; voice to a working agent goes through the mod
+> only, Orca typing only to a known-idle agent; a tap opens the agent's app and focuses its pane (`cable/hosts/open.ts`)
+> and moves the dial to its face; `disable` takes effect at once. Main then deleted the Swarm, Super Tabs and Buddies
+> (#4279, #4281, #4303-#4305): this plan's `swarmSay` guard (Risk 5, Task 8) and `onCoreConnected` wiring (Risk 2,
+> Task 9) were dropped in the rebase (held calls end on `onCoreGone`), the `device` command is a static import (no
+> `'swarm'` case to copy), and wave 0 is on main (#4290). Tasks 6, 11 and 16 below describe the replaced approval design;
+> the spec and the code are the reference.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use diegodev phase 3 to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** With Claude Code running in Orca, Ghostty or any terminal and the `harness-device` plugin enabled, a person at the round dial can allow or deny a waiting permission prompt, say the next prompt to an idle agent, and tap an agent in Orca to bring its terminal forward. The terminal stays usable: whoever answers first wins.
