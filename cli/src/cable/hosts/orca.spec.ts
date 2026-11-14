@@ -50,24 +50,24 @@ describe('Orca actions', () => {
     const fake = fakeOrca()
     const orca = createOrcaActions({ ...orcaDeps(), onPath: () => fake.file })
     expect(await orca.send(HANDLE, 'fix the login bug')).toBe(true)
-    expect(fake.argv()).toEqual(['terminal', 'send', '--terminal', HANDLE, '--text', 'fix the login bug', '--enter', '--wait-submit', '5', '--json'])
+    expect(fake.argv()).toEqual(['terminal', 'send', '--terminal', HANDLE, '--text=fix the login bug', '--enter', '--wait-submit', '5', '--json'])
   })
 
-  it('a text with quotes, $( ) and a leading -- reaches orca unchanged as the value of --text', async () => {
+  it('a text with quotes, $( ) and a leading -- reaches orca unchanged inside --text=, where orca never reads it as a flag', async () => {
     const fake = fakeOrca()
     const marker = join(dir, 'ran')
     const text = `-- it's "quoted" $(touch ${marker}) \`touch ${marker}\` ; touch ${marker} | touch ${marker}`
     const orca = createOrcaActions({ ...orcaDeps(), onPath: () => fake.file })
     expect(await orca.send(HANDLE, text)).toBe(true)
-    expect(fake.argv()).toHaveLength(10)
-    expect(fake.argv()[5]).toBe(text)
+    expect(fake.argv()).toHaveLength(9)
+    expect(fake.argv()[4]).toBe(`--text=${text}`)
     expect(existsSync(marker)).toBe(false)
   })
 
   it('a transcript with a newline or a control character is typed as one line', async () => {
     const { calls, orca } = recorder()
     expect(await orca.send(HANDLE, 'first line\nsecond\r\tthird\u001b[2J\u007f\u009bend\u0000')).toBe(true)
-    expect(calls[0].args[5]).toBe('first line second  third [2J  end ')
+    expect(calls[0].args[4]).toBe('--text=first line second  third [2J  end ')
   })
 
   it('open switches, then brings Orca forward on macOS only', async () => {
