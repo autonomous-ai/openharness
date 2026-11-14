@@ -7,13 +7,16 @@
  * held it, about 7% of a core around the clock.
  */
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
-import { existsSync, rmSync } from 'node:fs'
+import { chmodSync, existsSync, readdirSync, rmSync } from 'node:fs'
+import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { ownProcessGroup } from '../src/lib/windows/noWindow.js'
 import { alive, processTable } from '../src/testing/spawnedRuns.js'
+import { LocalClient } from './harness/client.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
+import { hungRateLimitRead, writeHungCodex } from './harness/hungCodex.js'
 
-interface Started { root: string; master: number; core: number; socket: string }
+interface Started { root: string; master: number; core: number; socket: string; escaped: number[]; readOnly: string }
 
 /** The master [pid] and the service processes it runs (`harnessd-<process>`): the short-lived probes they start
  *  (`lsof`, `ps`) are left out, as their pids can go to strangers while the test waits. */
@@ -37,6 +40,7 @@ describe('a daemon under test', () => {
     for (const pid of watched) if (alive(pid)) { try { process.kill(pid, 'SIGKILL') } catch { /* gone */ } }
     if (started) {
       try { execFileSync('tmux', ['-S', started.socket, 'kill-server'], { stdio: 'ignore', timeout: 5_000 }) } catch { /* gone */ }
+      try { chmodSync(started.readOnly, 0o755) } catch { /* gone */ }
       rmSync(started.root, { recursive: true, force: true })
     }
     worker = undefined
@@ -52,6 +56,58 @@ describe('a daemon under test', () => {
       await other.close()
       return other.env.HARNESS_CONNECTIONS_PORT
     }))).toBe('4321')
+  })
+
+  // What asked, on 2026-11-14: models' process (`harnessd-models`), at each of its starts in swarmV4Journey.e2e.ts on the real
+  // backend, once the Swarm's grid was listed. The Swarm's pass (superTabs/swarmGrids.ts) sends `grid_swarm_sync`, which sets
+  // grid up first: installCli, the managed grid's manifest, then grid's public installer when there is still no `grid`.
+  it('asks no grid manifest and runs no grid installer beyond the machine', async () => {
+    daemon = await IsolatedDaemon.create()
+    expect(daemon.env.ADAPTER_GRID_RUNTIME_METADATA_URL).toBe('http://127.0.0.1:9/grid.json')
+    expect(daemon.env.DISABLE_GRID_INSTALL).toBe('true')
+    // A test's own still stands (update.e2e.ts, harness/fleet.ts). Never started: it only shows whose word wins.
+    const own = await IsolatedDaemon.create({ env: { ADAPTER_GRID_RUNTIME_METADATA_URL: 'http://127.0.0.1:1/own.json', DISABLE_GRID_INSTALL: 'false' } })
+    await own.close()
+    expect(own.env.ADAPTER_GRID_RUNTIME_METADATA_URL).toBe('http://127.0.0.1:1/own.json')
+    expect(own.env.DISABLE_GRID_INSTALL).toBe('false')
+    await daemon.start()
+    const client = await LocalClient.connect(daemon)
+    // The owner's computer keeping a Swarm's grid, as the Swarm's pass asks it: answered once grid's set-up gave up.
+    expect(await client.request('grid_swarm_sync', { grid: 'swarm-0123456789ab', members: [] }, 60_000)).toMatchObject({ ready: false })
+    client.close()
+    expect(daemon.log()).not.toContain('installing the Harness grid runtime')
+    expect(daemon.log()).not.toMatch(/grid installer (exited|finished)|installed `grid` to/)
+    expect(readdirSync(daemon.env.ADAPTER_RUNTIME_DIR!).filter((name) => name.startsWith('grid-'))).toEqual([])
+    // Where grid's installer would put it: under the test's home (lib/gridInstall.ts GRID_INSTALL_DIR).
+    expect(existsSync(join(daemon.env.HOME!, '.local', 'bin', 'grid'))).toBe(false)
+  })
+
+  it('ends what left its process groups: a Codex rate-limit read cut by the close', async () => {
+    const d = daemon = await IsolatedDaemon.create()
+    writeHungCodex(d)
+    await d.start()
+    const group = await hungRateLimitRead(d)
+    watched = group.map((row) => row.pid)
+    // Its child names nothing of the root: only its group reaches it.
+    expect(group.filter((row) => !row.command.includes(`${d.root}/`))).toHaveLength(1)
+    await d.close()
+    daemon = undefined
+    expect(watched.filter(alive), 'the read\'s Codex and its child').toEqual([])
+    expect(processTable().filter((row) => row.command.includes(`${d.root}/`)).map((row) => row.command)).toEqual([])
+    expect(existsSync(d.root)).toBe(false)
+  })
+
+  it('leaves a shared root to the daemon that owns it, and ends alone a process of the test\'s own that names it', async () => {
+    const owner = daemon = await IsolatedDaemon.create()
+    // In this worker's own process group, as a test's `tmux -S <root>/…` call is.
+    const named = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1 << 30)', join(owner.root, 'named')], { stdio: 'ignore' })
+    watched = [named.pid!]
+    await (await IsolatedDaemon.create({ beside: owner })).close()
+    expect(alive(named.pid!), 'after the close of the daemon beside it').toBe(true)
+    await owner.close()
+    daemon = undefined
+    // Ended, and this worker, in the same group, is still here to say so.
+    expect(alive(named.pid!), 'after its owner\'s close').toBe(false)
   })
 
   it.each<[string, 'exits' | 'waits', (child: ChildProcess) => void]>([
@@ -70,7 +126,8 @@ describe('a daemon under test', () => {
     started = await until('the worker\'s daemon', () => out.includes('\n') ? JSON.parse(out.split('\n')[0]) as Started : null, 120_000, 100)
     const tmux = tmuxServer(started.socket)
     expect(tmux, 'the daemon\'s tmux server').not.toBeNull()
-    watched = [...new Set([...daemonProcesses(started.master), started.core, tmux!])]
+    expect(started.escaped, 'the hung read\'s Codex and its child').toHaveLength(2)
+    watched = [...new Set([...daemonProcesses(started.master), started.core, tmux!, ...started.escaped])]
     expect(watched.length, 'master, core, edge and tmux at the least').toBeGreaterThanOrEqual(4)
     end(child)
     await until('every process of the daemon to be gone', () => watched.every((pid) => !alive(pid)) || null, 40_000, 100)

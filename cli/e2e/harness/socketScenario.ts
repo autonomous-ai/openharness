@@ -28,7 +28,7 @@ import { b64e, newIdentity, type Identity } from '../../src/lib/e2ee/core.js'
 import { RelaySessionCrypto } from '../../src/lib/e2ee/relayClient.js'
 import { IsolatedDaemon, until } from './daemon.js'
 import { writeE2ee } from './fleet.js'
-import { account, startRealBackend, type Account, type RealBackend } from './realBackend.js'
+import { account, startRealBackend, stopAll, type Account, type RealBackend } from './realBackend.js'
 import { SocketMeter, type MeterReport, type SocketRecord } from './socketMeter.js'
 
 /** desktop/lib/ws/ws_conn.dart `reconnectDelay`: a window doubling from 1 s to 30 s, the wait in its second half. */
@@ -299,6 +299,6 @@ export async function runSocketScenario(options: { durationMs: number; log?: (li
       backendLog: backend.logPath,
     }
   } finally {
-    for (const stop of stops.reverse()) await Promise.resolve(stop()).catch(() => {})
+    await stopAll([], stops)
   }
 }

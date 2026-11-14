@@ -23,6 +23,8 @@ import { daemonEnvironment } from '../../src/testing/daemonEnvironment.js'
 import { GH_FORBIDDEN_STUB } from '../../src/testing/ghStub.js'
 import { readAdoptedHomes } from '../../src/engines/kit/homeAdoption.js'
 import { ownProcessGroup } from '../../src/lib/windows/noWindow.js'
+import { endRootProcesses } from '../../src/testing/rootProcesses.js'
+import { assertSocketPathFits } from '../../src/testing/socketPathRoom.js'
 import { alive } from '../../src/testing/spawnedRuns.js'
 import { forgetGroup, forgetTmux, leaderGone, watchGroup, watchTmux } from './reaper.js'
 
@@ -89,7 +91,8 @@ export interface DaemonOptions {
    *  the checkout's source. */
   scriptPath?: string
   /** Keep the daemon's data folder here instead of under the throwaway root (a test volume). The fake
-   *  engines read their hook credential from it, so it is set for them too. */
+   *  engines read their hook credential from it, so it is set for them too. Its socket path is never measured:
+   *  where it sits is the test's subject (noSocket.e2e.ts passes one too long on purpose). */
   dataDir?: string
   /** Run beside this daemon, as a dev daemon runs beside the release one on one computer: its home, its
    *  tmux server, the engines' transcript folders and the projects, with a data folder, port and engines
@@ -263,7 +266,23 @@ export class IsolatedDaemon {
     const dirs = {
       home: join(root, 'home'), data: options.dataDir ?? join(own, beside ? 'd' : 'data'), runtime: join(own, 'runtime'), auth: join(own, 'auth'),
       bin: join(own, 'bin'), dsh: join(own, 'dsh'), claudeProjects: join(root, 'claude', 'projects'), codexHome: join(root, 'codex'),
-      projects: join(root, 'projects'),
+      projects: join(root, 'projects'), tmp: join(own, 't'),
+    }
+    // A data folder the harness gives a daemon under a TMPDIR too long for its socket falls back to one under the
+    // test's home, as long, and the test failed later with `EINVAL connect` and no word of why: refused here, before
+    // anything is made in the root. A test's own data folder is not measured: where it sits is that test's subject
+    // (noSocket.e2e.ts passes one too long on purpose).
+    if (options.dataDir === undefined) {
+      try {
+        assertSocketPathFits(join(dirs.data, `daemon-${port}.sock`))
+      } catch (error) {
+        // A daemon beside another made nothing yet, and the root it shares is the other's.
+        if (!beside) {
+          await tmux.close()
+          forgetTmux(tmux.socket)
+        }
+        throw error
+      }
     }
     for (const dir of Object.values(dirs)) await mkdir(dir, { recursive: true })
     // A zsh user as most are, with a .zshrc of their own (empty: nothing of anyone's). With none, the zsh
@@ -299,6 +318,10 @@ export class IsolatedDaemon {
       // A bridge port of its own: on 51793, the developer's daemon's, one daemon under test left running took the
       // port from it, and another asked `lsof` every 5.5 s which account held it (2026-11-11).
       HARNESS_CONNECTIONS_PORT: '0',
+      // Its temporary folder, and its children's: an agent in its pane took the worker's, and every screenshot of
+      // `harness browser` (1 MiB) outlived its test there. One letter: the daemon puts no socket here, and tmux has its
+      // own (TMUX_TMPDIR), but a child's socket in it must fit too.
+      TMPDIR: dirs.tmp,
       ADAPTER_DATA_DIR: dirs.data,
       ADAPTER_RUNTIME_DIR: dirs.runtime,
       ADAPTER_COMPUTER_ID: 'e2e-computer-0000-0000-000000000001',
@@ -313,6 +336,12 @@ export class IsolatedDaemon {
       // Signed out, and nothing reaches beyond the machine.
       BACKEND_WS_URL: 'ws://127.0.0.1:9',
       WEB_URL: 'http://127.0.0.1:9',
+      // Nor grid's release server: removed roots on one Mac kept a 19 MB runtime/grid-0.3.63-darwin-arm64 each, from
+      // swarmV4Journey.e2e.ts, whose Swarm grid sends models a `grid_swarm_sync` at each of its starts, and grid's set-up
+      // (services/models.ts installCli) installs the managed grid. With no manifest to read, installCli goes on to
+      // grid's public installer: that is switched off too.
+      ADAPTER_GRID_RUNTIME_METADATA_URL: 'http://127.0.0.1:9/grid.json',
+      DISABLE_GRID_INSTALL: 'true',
       // Claude Code's and Codex's hooks, installed as on a person's computer, into this home and CODEX_HOME
       // (assertHooksContained), and run by the fake engines. Every other engine's installer writes into
       // folders these tests have no engine for.
@@ -542,11 +571,20 @@ export class IsolatedDaemon {
       forgetGroup(leader.pid!)
     }
     this.groups.clear()
-    // A daemon beside another shares its tmux server: that one closes it.
+    // A daemon beside another shares its tmux server and its root: that one closes them.
+    let left: string[] = []
     if (!this.options.beside) {
+      // The server names the root on its own command line: stopped first, its panes with it, so the sweep meets only
+      // what left the daemon's groups.
+      await this.tmux.run('kill-server').catch(() => { /* already gone */ })
+      // The census of 2026-11-14 found 14 fake `codex app-server` pairs outliving their runs: a Codex rate-limit read
+      // runs in a process group of its own (lib/codexRateLimits.ts), out of reach of the daemon's groups. Ended before
+      // the root is removed, so nothing that names it writes into it as it goes.
+      left = await endRootProcesses(this.root)
       await this.tmux.close()
       forgetTmux(this.tmux.socket)
     }
     if (escaped) throw escaped
+    if (left.length) throw new Error(`a daemon under test left processes that would not end (root ${this.root}): ${left.join('; ')}`)
   }
 }

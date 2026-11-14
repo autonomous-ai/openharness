@@ -30,6 +30,35 @@ export interface RealBackend {
   stop(): Promise<void>
 }
 
+/** A backend that stopped answering held its test until Vitest's 180 s limit, with no word of which call. */
+export const BACKEND_API_TIMEOUT_MS = 30_000
+
+/** One call to the test backend as `a`: its status and its body parsed, or null for a body that is not JSON. The limit
+ *  covers reading the body too: a backend that sent its headers and then stalled is no answer either. */
+export async function backendApi(url: string, a: Account, path: string, method = 'GET', body?: unknown,
+  ms = BACKEND_API_TIMEOUT_MS): Promise<{ status: number; body: any }> {
+  const signal = AbortSignal.timeout(ms)
+  try {
+    const r = await fetch(`${url}${path}`, { method, signal, headers: { authorization: `Bearer ${a.token}`,
+      'x-autonomous-env': 'prod', ...(body ? { 'content-type': 'application/json' } : {}) },
+      body: body ? JSON.stringify(body) : undefined })
+    return { status: r.status, body: await r.json().catch((error: unknown) => { if (signal.aborted) throw error; return null }) }
+  } catch (error) {
+    if (!signal.aborted) throw error
+    throw new Error(`the test backend did not answer ${method} ${path} within ${ms} ms`, { cause: error })
+  }
+}
+
+/** backend.stop(): closes every daemon, then stops every service, the last started first, and then throws what a close
+ *  could not do. A root left behind or a process that would not end was swallowed here and seen by no one. */
+export async function stopAll(daemons: Array<Pick<IsolatedDaemon, 'close'>>, stops: Array<() => unknown>): Promise<void> {
+  const failed: unknown[] = []
+  for (const d of daemons) await d.close().catch((error: unknown) => { failed.push(error) })
+  // One that throws, at once or later, still lets the others stop: Mongo and Redis come last.
+  for (const s of [...stops].reverse()) await (async () => s())().catch(() => {})
+  if (failed.length) throw new AggregateError(failed, `${failed.length} daemon(s) under test did not close: ${failed.map(String).join('; ')}`)
+}
+
 async function freePort(): Promise<number> {
   const s = netServer().listen(0, '127.0.0.1')
   await once(s, 'listening')
@@ -58,7 +87,7 @@ export async function startRealBackend(accounts: Account[], log: (line: string) 
     return await boot(accounts, log, stops)
   } catch (error) {
     // The handle is never returned on a failed start, so nobody else can stop what already runs.
-    for (const s of stops.reverse()) await Promise.resolve(s()).catch(() => {})
+    await stopAll([], stops)
     throw error
   }
 }
@@ -135,16 +164,8 @@ async function boot(accounts: Account[], log: (line: string) => void, stops: Arr
   log(`backend ${Date.now() - t}ms`)
   const backend: RealBackend = {
     url, wsUrl: `ws://127.0.0.1:${port}`, logPath,
-    async api(a, path, method = 'GET', body) {
-      const r = await fetch(`${url}${path}`, { method, headers: { authorization: `Bearer ${a.token}`,
-        'x-autonomous-env': 'prod', ...(body ? { 'content-type': 'application/json' } : {}) },
-        body: body ? JSON.stringify(body) : undefined })
-      return { status: r.status, body: await r.json().catch(() => null) }
-    },
-    async stop() {
-      for (const d of owned.get(backend) ?? []) await d.close().catch(() => {})
-      for (const s of stops.reverse()) await Promise.resolve(s()).catch(() => {})
-    },
+    api: (a, path, method, body) => backendApi(url, a, path, method, body),
+    stop: () => stopAll(owned.get(backend) ?? [], stops),
   }
   owned.set(backend, [])
   return backend

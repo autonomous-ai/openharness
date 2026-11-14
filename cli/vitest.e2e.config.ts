@@ -15,6 +15,9 @@ import { defineConfig } from 'vitest/config'
  *
  * `E2E_ARTIFACTS_DIR=<folder>` keeps the whole log of every daemon a failing test ran there, as files
  * (e2e/harness/artifacts.ts); CI uploads them.
+ *
+ * A TMPDIR too long for a daemon's Unix socket stops the run before any test, and before the bundle is built
+ * (e2e/harness/socketRoom.ts): run with a shorter one, for example `TMPDIR=/tmp`.
  */
 const workers = Math.max(1, Number(process.env.E2E_WORKERS ?? 1) || 1)
 
@@ -22,7 +25,7 @@ export default defineConfig({
   test: {
     environment: 'node',
     setupFiles: ['./vitest.setup.ts', './e2e/harness/artifacts.ts'],
-    globalSetup: ['./e2e/harness/bundle.ts'],
+    globalSetup: ['./e2e/harness/socketRoom.ts', './e2e/harness/bundle.ts'],
     include: ['e2e/**/*.e2e.ts'],
     testTimeout: 180_000,
     hookTimeout: 180_000,
