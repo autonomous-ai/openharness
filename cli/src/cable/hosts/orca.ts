@@ -27,7 +27,11 @@ export interface OrcaDeps {
 export function orcaDeps(): OrcaDeps {
   return {
     run: (file, args, timeoutMs) => new Promise((resolve) => {
-      execFile(file, args, { timeout: timeoutMs }, (error) => {
+      // The timeout's kill waits for the process to exit: one deaf to SIGTERM, or stuck where even SIGKILL waits, kept the
+      // call and its terminal's one-command slot open for good. The deadline answers by itself.
+      const deadline = setTimeout(() => resolve({ code: null }), timeoutMs)
+      execFile(file, args, { timeout: timeoutMs, killSignal: 'SIGKILL' }, (error) => {
+        clearTimeout(deadline)
         // A number is the exit code; a timeout's kill or a binary that could not start has none.
         resolve({ code: error === null ? 0 : typeof error.code === 'number' ? error.code : null })
       })
