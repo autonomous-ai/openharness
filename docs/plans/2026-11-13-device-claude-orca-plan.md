@@ -72,7 +72,7 @@ This branch stacks on `feat/device-without-the-app` at `9bffc37cbb`: wave 0's Ta
   - "Denied from the Harness device." (the hook's deny message)
   - "Claude Code 2.1.287 or later is needed." (`enable` when unsupported)
 - **The hook's client** reads at most 256 KB of stdin, always exits 0, and prints exactly `{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}`, the same with `"behavior":"deny","message":"Denied from the Harness device."`, or nothing.
-- **Voice** (the spec's Voice step 1). An ended session is refused. The mod takes it in every state (`$.prompt.submit` queues it for after the turn). Typing through Orca goes only to an `idle` agent: with no mod, a `working` one is told busy and a `needs-you` one waiting. The dial never answers a prompt. An agent has `v` when its session has a poll open or one closed under 35 s ago, or when it has an Orca handle. A transcript waits at most 5 s for a poll. Text is at most 2000 characters.
+- **Voice** (the spec's Voice step 1). An ended session is refused. The mod takes it in every state (`$.prompt.submit` queues it for after the turn). Typing through Orca goes only to an idle agent (`idle`, `done` or `error`): with no mod, a `working` one is told busy and a `needs-you` one waiting. A prompt's notice makes an agent `needs-you` in every state, and the open scan lists a Claude Code or Codex session in a turn as `working`. The dial never answers a prompt. An agent has `v` when its session has a poll open or one closed under 35 s ago, or when it has an Orca handle. A transcript waits at most 5 s for a poll. Text is at most 2000 characters.
 - **Orca.** Handle `^term_[0-9a-f-]{36}$`. `orca` on `PATH`, else `/Applications/Orca.app/Contents/Resources/bin/orca` on macOS. `execFile`, no shell, 10 s, one command at a time per handle. No polling of Orca.
 - **Hints.** The allowlist has 10 names, and both caps are 10 (`notify.mjs`, `MAX_HINTS` in `core/observedHook.ts`).
 - **With a window open nothing changes:** approvals answer `none` and observed agents take no voice. A Harness-pane session keeps the pane path: its approval is `none`.
@@ -313,7 +313,7 @@ This branch stacks on `feat/device-without-the-app` at `9bffc37cbb`: wave 0's Ta
     1. Over 2000 characters → `{ ok: false, reason: 'Too long. Say it shorter.' }`.
     2. An ended session → "<name> did not answer."
     3. A `claude` session with `modReady` → `toMod`, in every state; true is `{ ok: true }`.
-    4. A handle, only while `idle` → `orcaSend`; true is `{ ok: true }`. With no mod, `working` → "<name> is busy. Say it when it is done." and `needs-you` → "<name> is waiting for your answer in {Host}."
+    4. A handle, only while `idle`, `done` or `error` → `orcaSend`; true is `{ ok: true }`. With no mod, `working` → "<name> is busy. Say it when it is done." and `needs-you` → "<name> is waiting for your answer in {Host}."
     5. Otherwise "<name> did not answer."
     Each outcome is counted; nothing is queued.
   - `focus(agent): Promise<boolean>` — `orcaOpen(handle)`, or false with no handle.
