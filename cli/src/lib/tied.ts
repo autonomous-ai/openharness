@@ -76,6 +76,95 @@ export function spawnTied(
   return child
 }
 
+export interface TiedExecOptions {
+  cwd?: string
+  env?: NodeJS.ProcessEnv
+  /** Milliseconds; none when 0 or left out, as execFile. */
+  timeout?: number
+  /** What ends the command at its timeout or past maxBuffer: SIGTERM unless said. */
+  killSignal?: NodeJS.Signals
+  /** Bytes, for stdout and for stderr each: 1024 * 1024 unless said, execFile's own default. */
+  maxBuffer?: number
+  /** Written to the command's stdin, which is always ended. */
+  input?: string
+  windowsHide?: boolean
+  platform?: NodeJS.Platform
+}
+
+/** Shaped as execFile's error. */
+export interface TiedExecError extends Error {
+  /** The exit code; null when a signal ended it; spawn's own (`'ENOENT'`) when it could not start;
+   *  `'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'` past maxBuffer. */
+  code: number | string | null
+  /** This call ended it: its timeout, or maxBuffer. */
+  killed: boolean
+  signal: NodeJS.Signals | null
+  stdout: string
+  stderr: string
+  /** `file` and `args`, joined by spaces. */
+  cmd: string
+}
+
+/**
+ * `execFile`, tied: a caller's timeouts, output limits and error handling read as they did under `execFile`, and a
+ * crash of its service no longer leaves the command running. The agent browser's `podman.run` loop, moved here so
+ * every service has one, not a copy each.
+ */
+export function execFileTied(
+  file: string,
+  args: readonly string[],
+  { timeout = 0, killSignal = 'SIGTERM', maxBuffer = 1024 * 1024, input, ...options }: TiedExecOptions = {},
+): Promise<{ stdout: string; stderr: string }> {
+  const cmd = [file, ...args].join(' ')
+  return new Promise((done, fail) => {
+    const child = spawnTied(file, args, options)
+    // The first reason this call ends the command names its failure.
+    let ended: 'timeout' | 'stdout' | 'stderr' | undefined
+    // Its pipes go first, then the command, as execFile does: something it started (a git credential helper, an `lms`
+    // daemon, the VM `podman machine start` leaves) may still hold them, and the call must not wait on it.
+    const end = (why: NonNullable<typeof ended>) => {
+      ended ??= why
+      child.stdout!.destroy()
+      child.stderr!.destroy()
+      child.kill(killSignal)
+    }
+    const timer = timeout > 0 ? setTimeout(() => end('timeout'), timeout) : undefined
+    // Bytes, counted per stream and decoded once: a character of several bytes can fall across two reads.
+    const collect = (stream: 'stdout' | 'stderr') => {
+      const chunks: Buffer[] = []
+      let bytes = 0
+      child[stream]!.on('data', (chunk: Buffer) => {
+        bytes += chunk.length
+        if (bytes > maxBuffer) end(stream)
+        else chunks.push(chunk)
+      })
+      return () => Buffer.concat(chunks).toString('utf8')
+    }
+    const stdout = collect('stdout')
+    const stderr = collect('stderr')
+    // Once all its output is read.
+    child.once('close', (code: number | null, signal: NodeJS.Signals | null) => {
+      clearTimeout(timer)
+      const out = stdout()
+      const err = stderr()
+      if (code === 0 && !ended) return done({ stdout: out, stderr: err })
+      const overflowed = ended === 'stdout' || ended === 'stderr'
+      fail(Object.assign(new Error(overflowed ? `${ended} maxBuffer length exceeded` : `Command failed: ${cmd}\n${err}`), {
+        code: overflowed ? 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' : code, killed: ended !== undefined, signal, stdout: out, stderr: err, cmd,
+      }))
+    })
+    // A command that could not be started, with spawn's own code: unheard, it would crash this process. Its `close`
+    // follows, and finds the call settled.
+    child.once('error', (error) => {
+      clearTimeout(timer)
+      fail(Object.assign(error, { cmd, killed: false, signal: null, stdout: '', stderr: '' }))
+    })
+    // Always ended, so a command that reads stdin never waits on it. One that exits before reading it all leaves the
+    // write to fail (EPIPE), which is not the call's failure.
+    child.stdin!.on('error', () => {}).end(input)
+  })
+}
+
 /** Whether exec would find the file and the cwd: a path is looked at from the cwd, as exec sees it after the chdir. */
 function startable(file: string, { cwd, env }: TiedOptions): boolean {
   if (cwd !== undefined && !isDirectory(cwd)) return false
