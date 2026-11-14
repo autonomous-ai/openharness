@@ -5,6 +5,7 @@ import { localCredentialHeaders } from '../lib/localCredential.js'
 import { daemonFetch, openLocalWs } from '../lib/localTransport.js'
 import type { ClientSocket } from '../lib/clientSocket.js'
 import { deviceSettingsPatchSchema } from '../lib/harnessDevices.js'
+import { frontAppId } from '../cable/hosts/frontApp.js'
 
 export interface DevicesClientDeps {
   port: number
@@ -58,7 +59,13 @@ export const DEVICES_USAGE = `harness hardware — your Harness hardware across 
 Offline computers never receive queued changes. A write is complete only when confirmed.`
 
 export interface DialWatchDeps extends Pick<DevicesClientDeps, 'port' | 'dataDir' | 'machineId' | 'connect'> {
-  stdin: { on(event: 'end' | 'close', listener: () => void): unknown; resume(): unknown; pause(): unknown }
+  /** The Harness Device app writes on it a `{"front":"<bundle id or exe name>"}` line each time the app in front changes. */
+  stdin: {
+    on(event: 'end' | 'close', listener: () => void): unknown
+    on(event: 'data', listener: (chunk: Buffer | string) => void): unknown
+    resume(): unknown
+    pause(): unknown
+  }
   print(line: string): void
   /** stderr: stdout carries only the app's NDJSON. */
   printError(line: string): void
@@ -67,6 +74,23 @@ export interface DialWatchDeps extends Pick<DevicesClientDeps, 'port' | 'dataDir
 const NOT_RUNNING = 'Harness is not running on this computer. Run: harness start'
 const CLOSED = 'The connection to Harness on this computer closed.'
 const DIAL_FIELDS = ['fw', 'hw', 'board', 'updating', 'problem'] as const
+// The app cuts the value to 128 characters, under 1 KiB as a JSON line even escaped: a longer line is no front line.
+const FRONT_LINE_MAX = 1024
+
+/** One call per line of at most [max] bytes; a longer line is dropped whole, its start included. */
+function lines(max: number, line: (text: string) => void): (chunk: Buffer | string) => void {
+  let pending = Buffer.alloc(0), dropping = false
+  return chunk => {
+    let rest = Buffer.concat([pending, typeof chunk === 'string' ? Buffer.from(chunk) : chunk])
+    for (let end = rest.indexOf('\n'); end !== -1; end = rest.indexOf('\n')) {
+      if (!dropping && end <= max) line(rest.subarray(0, end).toString())
+      dropping = false
+      rest = rest.subarray(end + 1)
+    }
+    dropping ||= rest.length > max
+    pending = dropping ? Buffer.alloc(0) : rest
+  }
+}
 
 /** A dial_status reduced to what the menu-bar app shows, so a settings change alone prints nothing. */
 export function dialWatchLine(payload: unknown): string {
@@ -88,6 +112,13 @@ export function runDialWatch(argv: string[], deps: DialWatchDeps): Promise<numbe
   return new Promise(resolve => {
     let socket: ClientSocket | undefined
     let settled = false, last: string | undefined
+    // The app in front as an app id, held until a daemon that takes it is connected: the raw name stops in this process.
+    let front: string | undefined, sentFront: string | undefined, frontTaken = false
+    const sendFront = (): void => {
+      if (!frontTaken || front === undefined || front === sentFront) return
+      sentFront = front
+      socket!.send(JSON.stringify({ type: 'dial_front', payload: { app: front } }))
+    }
     const finish = (code: number, why?: string): void => {
       if (settled) return
       settled = true
@@ -102,6 +133,14 @@ export function runDialWatch(argv: string[], deps: DialWatchDeps): Promise<numbe
     // The app spawns this with a stdin pipe, so a killed app never leaves a tool connection open for ever.
     deps.stdin.on('end', () => finish(0))
     deps.stdin.on('close', () => finish(0))
+    deps.stdin.on('data', lines(FRONT_LINE_MAX, line => {
+      if (settled) return
+      let value: unknown
+      try { value = (JSON.parse(line) as { front?: unknown } | null)?.front } catch { return }
+      if (typeof value !== 'string') return
+      front = frontAppId(value)
+      sendFront()
+    }))
     deps.stdin.resume()
     deps.machineId().then(machineId => {
       if (settled) return
@@ -118,7 +157,10 @@ export function runDialWatch(argv: string[], deps: DialWatchDeps): Promise<numbe
         if (frame?.type === 'connected') {
           clearTimeout(deadline)
           const features = (frame.payload as { features?: unknown } | undefined)?.features
-          if (Array.isArray(features) && features.includes('dial-watch')) return
+          if (Array.isArray(features) && features.includes('dial-watch')) {
+            frontTaken = features.includes('dial-front')
+            return sendFront()
+          }
           deps.print(JSON.stringify({ error: 'The Harness daemon on this computer is older than this command. Run: harness start --restart' }))
           return finish(4)
         }
