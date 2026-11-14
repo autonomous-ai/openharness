@@ -15,6 +15,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
+import { FakeBackend, type FakeMachine } from './harness/fakeBackend.js'
 import type { FakeDial } from './harness/fakeDial.js'
 import { InOrca } from './harness/inOrca.js'
 
@@ -33,22 +34,28 @@ const CLI_ENTRY = process.env.E2E_BUNDLE_PATH ? [process.env.E2E_BUNDLE_PATH] : 
 const ORCA = 'com.stablyai.orca'
 const CLAUDE_APP = 'com.anthropic.claudefordesktop'
 const RELAYED = '<cross-session-message from="b">hi</cross-session-message>'
+/** The machine a daemon signs in as, to hear its dial's words: the daemon asks its backend for each transcript. */
+const ME: FakeMachine = { machineId: 'd1'.repeat(16), computerId: 'e2e-pane-follow-computer', name: 'Fixture', token: 'e2e-pane-follow-token' }
 
 describe('the dial and the apps follow each other', () => {
   let daemon: IsolatedDaemon | undefined
   let desk: Desk | undefined
+  let backend: FakeBackend | undefined
   const children: ChildProcess[] = []
   afterEach(async () => {
     for (const child of children.splice(0)) if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
     await desk?.close()
     await daemon?.close()
+    await backend?.close()
     daemon = undefined
     desk = undefined
+    backend = undefined
   })
 
-  /** A daemon of its own, the fake `orca` in its `bin` before it starts, and the dial on the desk shown its first list. */
-  const fresh = async () => {
-    const d = await IsolatedDaemon.create({ env: { CABLE_DISABLE: 'false' } })
+  /** A daemon of its own, the fake `orca` in its `bin` before it starts, and the dial on the desk shown its first list.
+   *  [env] and [before], run on the created daemon before it starts, are a case's own. */
+  const fresh = async ({ env = {}, before }: { env?: Record<string, string>; before?: (d: IsolatedDaemon) => void } = {}) => {
+    const d = await IsolatedDaemon.create({ env: { CABLE_DISABLE: 'false', ...env } })
     daemon = d
     const file = join(d.root, 'dials.json')
     d.env.HARNESSD_TEST_DIAL_PORT = file
@@ -59,6 +66,7 @@ describe('the dial and the apps follow each other', () => {
     const exitFile = join(d.root, 'orca-exit')
     writeFileSync(join(d.root, 'bin', 'orca'), fakeOrca(runsDir, exitFile), { mode: 0o755 })
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-200).join('\n')}`) })
+    before?.(d)
     await d.start()
     const dial = await desk.plug('E2E-A', 'e2:e0:00:00:00:0a')
     await dial.next((m) => m.t === 'agents.end', 45_000, 'the first list')
@@ -219,5 +227,71 @@ describe('the dial and the apps follow each other', () => {
     for (const secret of [ORCA, a.handle, b.handle, a.claude.sessionId, b.claude.sessionId, 'run the tests', 'cross-session', '>hi<']) {
       expect(log).not.toContain(secret)
     }
+  })
+
+  it('the turn of a prompt the dial spoke does not move the dial, and the next typed prompt does', async () => {
+    const relay = await FakeBackend.start()
+    backend = relay
+    relay.addMachine(ME)
+    relay.speech = 'run the spoken tests'
+    const { d, dial, runs } = await fresh({
+      env: { BACKEND_WS_URL: relay.wsUrl, WEB_URL: relay.httpUrl, ADAPTER_COMPUTER_ID: ME.computerId },
+      // Signed in as ME: the session `harness login` leaves, which the core reads at start.
+      before: (d) => writeFileSync(join(d.root, 'auth', 'session.json'), JSON.stringify({ version: 1, accessToken: ME.token,
+        autonomousEnv: 'prod', computerId: ME.computerId, machineId: ME.machineId,
+        expiresAt: Date.now() + 30 * 24 * 3600_000, updatedAt: Date.now(), signInEpoch: 'e2e',
+      }), { mode: 0o600 }),
+    })
+    const a = inOrca(d, 'a')
+    const b = inOrca(d, 'b')
+    const switchesTo = (handle: string): number => runs().filter((run) => run.args === `terminal switch --terminal ${handle} --json`).length
+    const moved = (): number => d.log().split('\n').filter((line) => line.includes('[device] prompt · moved')).length
+
+    // 1. The dial on B, by hand.
+    await listed(dial, a.claude, b.claude)
+    dial.send({ t: 'focus', agentId: b.claude.id })
+    await until("B's switch", () => switchesTo(b.handle) === 1, 30_000, 50)
+
+    // 2. Orca settled in front: A's typed prompt moves the dial. Then its turn ends: Orca's route types only at an idle prompt.
+    front(d, ORCA)
+    await typedUntilMoved(dial, a.claude)
+    // The tile it centred, reported as the firmware does: the daemon drops the dial's turns until it hears it (750 ms).
+    dial.send({ t: 'focus', agentId: a.claude.id })
+    let since = dial.messages.length
+    await a.claude.hook('Stop')
+    await dial.next((m) => m.t === 'turn.done' && m.agentId === a.claude.id, 30_000, "A's turn done", since)
+
+    // 3. The dial speaks to A: the fake backend transcribes, the fake orca types it at A's prompt.
+    since = dial.messages.length
+    dial.send({ t: 'voice.begin', agentId: a.claude.id, uploadId: 'spoken-1', sr: 16_000, lang: 'en' })
+    dial.audio(Buffer.alloc(3_200, 1))
+    dial.send({ t: 'voice.end', uploadId: 'spoken-1' })
+    const heard = await dial.next((m) => m.t === 'voice.transcript' || m.t === 'voice.error', 45_000, 'the transcript', since)
+    expect(heard).toMatchObject({ t: 'voice.transcript', text: 'run the spoken tests', agentId: a.claude.id })
+    expect(relay.seen.filter((line) => line.startsWith('POST /api/voice/stt'))).toEqual(['POST /api/voice/stt?lang=en'])
+    expect(runs().filter((run) => run.args.startsWith('terminal send')).map((run) => run.args))
+      .toEqual([`terminal send --terminal ${a.handle} --text=run the spoken tests --enter --wait-submit 5 --json`])
+    await said(d, '[device] voice · orca')
+
+    // 4. The dial on B again, by hand.
+    dial.send({ t: 'focus', agentId: b.claude.id })
+    await until("B's second switch", () => switchesTo(b.handle) === 2, 30_000, 50)
+    since = dial.messages.length
+
+    // 5. The turn Orca's typing starts is the dial's: the dial stays on B.
+    await a.claude.hook('UserPromptSubmit', { prompt: 'run the spoken tests' })
+    await said(d, '[device] prompt · skipped · dial prompt')
+    expect(dial.messages.slice(since).filter((m) => m.t === 'focus' && m.agentId === a.claude.id)).toEqual([])
+    expect(moved()).toBe(1)
+
+    // 6. The next prompt typed at A is the person's: the dial moves to it again.
+    await a.claude.hook('Stop')
+    await a.claude.hook('UserPromptSubmit', { prompt: 'and again' })
+    await dial.next((m) => m.t === 'focus' && m.agentId === a.claude.id, 30_000, "A's focus", since)
+    await until('a second move in the log', () => moved() === 2, 30_000, 50)
+
+    // 7. No word of it, no handle and no session id in the daemon's log.
+    const log = d.log()
+    for (const secret of ['spoken tests', a.handle, b.handle, a.claude.sessionId, b.claude.sessionId]) expect(log).not.toContain(secret)
   })
 })
