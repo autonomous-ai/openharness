@@ -97,6 +97,9 @@ interface Entry {
   asked?: string
   generation?: string
   endAt?: number
+  /** A hook said its turn ended, and none since said one began or asks: no scan or transcript reads the turn of an engine
+   *  other than Claude Code and Codex, so its idle is known only from this. */
+  idleKnown?: boolean
   /** The read of the last answer, waiting out the grace. */
   answerTimer?: ReturnType<typeof setTimeout>
 }
@@ -172,10 +175,15 @@ export class ObservedSource implements HostSource {
     if (e.agent.state === 'needs-you') return refuse('waiting', `${name} is waiting for your answer in ${hostDisplayName(e.agent.host)}.`)
     // A working turn may show a prompt not yet heard of: Codex's approval overlay, which takes `y` or Enter, has no hook, and
     // Claude Code's comes a few hundred ms after its prompt opens.
-    if (e.agent.state === 'working') return refuse('busy', `${name} is busy. Say it when it is done.`)
+    if (e.agent.state === 'working' || !this.idleKnown(e)) return refuse('busy', `${name} is busy. Say it when it is done.`)
     if (!await actions.orcaSend(handle, text)) return noAnswer()
     actions.count('orca')
     return { ok: true }
+  }
+
+  /** Claude Code's and Codex's idle is their turn state, as the scan and checkWorking read it; another engine's, a hook's. */
+  private idleKnown(e: Entry): boolean {
+    return e.agent.engine === 'claude' || e.agent.engine === 'codex' || !!e.idleKnown
   }
 
   /** Still listed, and its session has not ended. */
@@ -234,6 +242,7 @@ export class ObservedSource implements HostSource {
         break
       case 'turn-start':
         this.setState(entry, 'working', now)
+        entry.idleKnown = false
         a.unseenDone = false
         // The last turn's answer is not this one's: cleared, the same answer at this turn's end is a change the dial hears.
         a.lastAnswer = undefined
@@ -243,12 +252,15 @@ export class ObservedSource implements HostSource {
         // An agent the open scan found reads idle until its next hook though its turn may run, the quota's resume asks
         // after its turn stopped, and a turn another Stop hook keeps going asks after its Stop.
         this.setState(entry, 'needs-you', now)
+        entry.idleKnown = false
         break
       case 'turn-error':
         this.setState(entry, 'error', now)
+        entry.idleKnown = true
         break
       case 'turn-stop':
         this.setState(entry, 'done', now)
+        entry.idleKnown = true
         a.unseenDone = true
         clearTimeout(entry.answerTimer)
         entry.answerTimer = setTimeout(() => { void this.readAnswer(entry) }, ANSWER_GRACE_MS)
