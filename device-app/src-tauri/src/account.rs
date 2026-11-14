@@ -329,6 +329,38 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn cancel_and_the_deadline_let_the_cli_end_by_itself() {
+        // On SIGTERM `harness login` takes its code back and exits, and its spawn lock's exit hook runs.
+        let fake = Fake::new();
+        fake.script("login --json", &["@term", URL, "@wait never"]);
+        let (send, events) = channel();
+        let sign_in = login(&fake.cli(), fake.log(), send).unwrap();
+        assert_eq!(events.recv_timeout(WAIT), Ok(AuthorizeUrl("https://id.example/a?state=S".into())));
+        sign_in.cancel();
+        assert_eq!(all(&events), Vec::new());
+        assert_eq!(fake.ends(), ["login --json"]);
+        assert!(logged(&fake, "harness login --json: exit 1"), "{:?}", fake.log().lines());
+        // The deadline counts from the spawn, and a fake that took all of it to start has no trap yet: the deadline
+        // doubles until the URL, printed once the trap is set, came first.
+        let mut deadline = SHORT;
+        loop {
+            let fake = Fake::new();
+            fake.script("login --json", &["@term", URL, "@wait never"]);
+            let (send, events) = channel();
+            let _login = login_within(&fake.cli(), fake.log(), send, deadline, WAIT).unwrap();
+            let events = all(&events);
+            assert_eq!(events.last(), Some(&failed(NO_RESULT)));
+            if events.len() == 2 {
+                assert_eq!(fake.ends(), ["login --json"]);
+                return;
+            }
+            deadline *= 2;
+            assert!(deadline < Duration::from_secs(10), "the fake never started in time");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn no_result_in_time_ends_it() {
         let fake = Fake::new();
         fake.script("login --json", &[URL, "@hang"]);

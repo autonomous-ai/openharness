@@ -8,6 +8,7 @@
 #   @hang       waits for ever, in this same process
 #   @exit N     exits N
 #   @driver     from here on, stdin closing prints harness login --json's CANCELLED result and exits 1
+#   @term       from here on, SIGTERM does the same, as harness login --json does while it waits
 # A run that ends by itself appends its arguments to ends.log; a killed one leaves no line.
 
 dir=${FAKE_HARNESS:-$(dirname "$0")/fake}
@@ -52,6 +53,7 @@ while IFS= read -r line <&4 || [ -n "$line" ]; do
       # Holds neither output pipe, so the run's output ends with the script.
       (while read -r unused; do :; done <&3; kill -USR1 $$) >/dev/null 2>&1 &
       watcher=$! ;;
+    @term) trap cancelled TERM ;;
     *) printf '%s\n' "$line" ;;
   esac
 done 4<"$script"
