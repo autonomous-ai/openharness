@@ -419,6 +419,7 @@ export class CableFleet {
   syncSwarms(...args: Parameters<Surface['syncSwarms']>) { return this.send('syncSwarms', ...args) }
   syncMachines(...args: Parameters<Surface['syncMachines']>) { return this.send('syncMachines', ...args) }
   followApp(...args: Parameters<Surface['followApp']>) { return this.send('followApp', ...args) }
+  followPrompt(...args: Parameters<Surface['followPrompt']>) { return this.send('followPrompt', ...args) }
   replaceNotifications(...args: Parameters<Surface['replaceNotifications']>) { return this.send('replaceNotifications', ...args) }
   agentSeen(...args: Parameters<Surface['agentSeen']>) { return this.send('agentSeen', ...args) }
   question(...args: Parameters<Surface['question']>) { return this.send('question', ...args) }

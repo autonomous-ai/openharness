@@ -372,6 +372,8 @@ export interface CableHost {
   swipeSwitches?(agentId: string): boolean
   /** How a hand's turn to such an agent ended: the dial rested on it for SWIPE_REST_MS, or left it first. */
   swipeEnded?(agentId: string, how: 'rest' | 'superseded'): void
+  /** What a person's prompt did to this dial: turned it to the agent, or found no tile for it on the ring it walks. */
+  promptFollowed?(outcome: 'moved' | 'no-tile'): void
   focus(agentId: string): void
   /**
    * "Put this one in front of me" — a NOTIFICATION was tapped.
@@ -2513,12 +2515,17 @@ export class CableSession {
     })
   }
 
-  /** `ring` false: only the app list, which a pick the host ignored is answered with. */
-  private async syncAgentsNow(force: boolean, ring = true): Promise<void> {
-    const snapshot = this.host.listAgentSnapshot ? await this.host.listAgentSnapshot({ apps: this.appFilter }) : {
+  /** The list this dial is sent: the shown app's ring for a dial that says `appFilter`, the single ring for one that does
+   *  not, the tab's with a window. */
+  private async agentSnapshot() {
+    return this.host.listAgentSnapshot ? await this.host.listAgentSnapshot({ apps: this.appFilter }) : {
       agents: await this.host.listAgents(), tab: this.host.activeSwarm(), total: this.host.agentTotal(),
     }
-    const { agents, tab, total, view, apps } = snapshot
+  }
+
+  /** `ring` false: only the app list, which a pick the host ignored is answered with. */
+  private async syncAgentsNow(force: boolean, ring = true): Promise<void> {
+    const { agents, tab, total, view, apps } = await this.agentSnapshot()
     // WHETHER there is a window is in the key, not WHICH tab: an empty tab after the window shut sends the
     // same zero rows and draws a different screen, so that flip has to push. The tab's id does not — the
     // dial names the tab from the `swarms` frame — and keying on it made every tab switch push twice,
@@ -3276,6 +3283,24 @@ export class CableSession {
     })
     await Promise.all([focused, selected])
   }
+
+  /**
+   * A person's prompt in the app in front: the dial turns to its agent the way it follows the window, through followApp,
+   * so the move keeps its queue, its list before its focus and its echo guard (no swipe rest starts from the echo).
+   *
+   * Only a dial whose ring holds the agent moves. One that walks another app's ring (a pick on the dial), a window's tab
+   * or a second dial's other ring keeps its place and its record: a focus it has no tile for would land on nothing.
+   */
+  async followPrompt(agentId: string): Promise<void> {
+    if (!this.isConnected) return
+    // Already there: a stuck engine repeating its event costs no list read.
+    if (agentId === this.desiredFocus && !this.appFocusUnsent) return
+    const { agents } = await this.agentSnapshot()
+    if (!agents.some((a) => a.id === agentId)) return this.host.promptFollowed?.('no-tile')
+    this.host.promptFollowed?.('moved')
+    await this.followApp(this.host.localMachine().id, agentId)
+  }
+
   async toast(text: string): Promise<void> {
     await this.send({ t: 'toast', text })
   }
