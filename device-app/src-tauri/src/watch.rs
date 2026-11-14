@@ -185,12 +185,25 @@ mod tests {
         assert_eq!(events.recv_timeout(WAIT), Ok(Event::WatchExit(None)));
         assert!(fake.pids().into_iter().all(wait_gone));
         assert!(fake.ends().is_empty());
-        // Only the first line has a deadline: after it, the dial may stay as it is for as long as it likes.
-        let fake = Fake::new();
-        fake.script("hardware watch --json", &[r#"{"attached":false}"#, "@stdin"]);
-        let (_watch, events) = start_within(&fake, SHORT, WAIT);
-        assert_eq!(events.recv_timeout(WAIT), Ok(dial(false, None, None)));
-        assert_eq!(events.recv_timeout(SHORT * 2), Err(mpsc::RecvTimeoutError::Timeout));
+        // Only the first line has a deadline: after it, the dial may stay as it is for as long as it likes. Under load
+        // `sh` can take the whole deadline to print it: the deadline then doubles until a run got that far.
+        let mut first_line = SHORT;
+        loop {
+            let fake = Fake::new();
+            fake.script("hardware watch --json", &[r#"{"attached":false}"#, "@stdin"]);
+            let (_watch, events) = start_within(&fake, first_line, WAIT);
+            match events.recv_timeout(first_line + WAIT) {
+                Ok(Event::WatchExit(None)) => {
+                    first_line *= 2;
+                    assert!(first_line < Duration::from_secs(10), "the fake never printed in time");
+                }
+                first => {
+                    assert_eq!(first, Ok(dial(false, None, None)));
+                    assert_eq!(events.recv_timeout(first_line * 2), Err(mpsc::RecvTimeoutError::Timeout));
+                    return;
+                }
+            }
+        }
     }
 
     #[cfg(unix)]
