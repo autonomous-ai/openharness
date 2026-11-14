@@ -143,6 +143,21 @@ describe('harness hardware watch', () => {
     later.socket.emit('close', 1000, '')
     expect(await later.done).toBe(3)
   })
+  it('exits 3 when the daemon does not answer in 10 s', async () => {
+    vi.useFakeTimers()
+    try {
+      const silent = watch()
+      await opened(silent.socket)
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(await Promise.race([silent.done, 'waiting'])).toBe(3)
+      expect(silent.socket.close).toHaveBeenCalled()
+      const answered = watch()
+      await opened(answered.socket)
+      connected(answered.socket, ['dial-watch'])
+      await vi.advanceTimersByTimeAsync(60_000)
+      await stillRunning(answered)
+    } finally { vi.useRealTimers() }
+  })
   it('asks for the dial as a tool', async () => {
     const run = watch()
     await opened(run.socket)
