@@ -115,7 +115,8 @@ Red first: a spec of the check (a long folder fails with that message; the defau
 ## Out of scope
 
 - Product changes. The real `podman events` outliving a crashed agent-browser process is a proposal to the PM.
-- Leftovers of the unit suite in TMPDIR (`grid-credential-*`, `adapter-test-*`), which are not the end-to-end harness's.
+- Other unit-suite leftovers in TMPDIR (`grid-credential-*`). The three `adapter-test-*` folders `cli/vitest.setup.ts`
+  makes for every file, end-to-end ones included, are in scope (Task 9): the setup removes them when the file ends.
 
 ## Verification
 
