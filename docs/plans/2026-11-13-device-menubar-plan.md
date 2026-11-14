@@ -1813,7 +1813,7 @@ shots are reported as not taken and the gallery's frames stand for them; the Mac
 | 2 | The real app against the fake CLI: `HARNESS_DEVICE_CLI="$PWD/device-app/src-tauri/tests/fake-harness" "$APP"`, once per row of the table below | this Mac, isolated | each row's menu, word for word, and each screen; no `curl` line in any run but the install row; `$T/open.log` holds only what the rows say |
 | 3 | The real app against a real CLI built from this branch (steps below) | this Mac, isolated, port 28473 | the menu follows a real daemon: `No dial`, then `Starting Harness` after a stop, and back; the guards hold; Quit leaves the daemon running |
 | 4 | `harness hardware watch --json` against that daemon (steps below) | this Mac, isolated | `{"attached":false}`; exit 3 when the daemon stops; exit 0 when stdin closes |
-| 5 | The gallery: `cd device-app/ui && npm run gallery && open gallery.html` | this Mac | 20 frames (10 states, light and dark), each 420 × 320, text readable, nothing clipped; the tray icon on a light and a dark bar. Screenshot the page |
+| 5 | The gallery: `cd device-app/ui && npm run gallery && open gallery.html` | this Mac | 22 frames (11 states, light and dark, one of them a focused primary button), each 420 × 320, text readable, nothing clipped; the tray icon on a light and a dark bar. Screenshot the page |
 | 6 | The end-to-end spec (Task 22), its local gate: `cd cli && npm ci && E2E_BUNDLE=1 npm run test:e2e -- e2e/hardwareWatch.e2e.ts` | this Mac; the spec's own isolation: a real daemon from this branch's bundle under a throwaway home, data folder, port and tmux server (`e2e/harness/daemon.ts`), no dial, the backend at `127.0.0.1:9` | 3 tests pass: `{"attached":false}` is printed, exit 3 when the daemon stops, exit 0 when stdin closes. Quote Vitest's summary; at the end `lsof -nP -iTCP:18473 -sTCP:LISTEN -t` still prints the person's daemon's pid |
 
 **Check 2, row by row.** Each script is a file in `$T/fake` named by the arguments joined with `_`. Unless a row
@@ -1876,9 +1876,10 @@ line                                    # {"attached":false}
 harness stop; wait $W; echo "exit=$?"   # exit=3: the daemon went away
 harness hardware watch --json < "$T/in"; echo "exit=$?"   # exit=3 at once: no daemon
 harness start; : > "$T/watch.out"
-harness hardware watch --json < "$T/in" > "$T/watch.out" & W=$!
-line                                    # {"attached":false}
-exec 3>&-; wait $W; echo "exit=$?"      # exit=0: its stdin closed
+# An anonymous pipe, as the app spawns it: on macOS Node does not see a fifo's last writer close (Node 22.21.1).
+python3 -c 'import subprocess,sys,time,os; p=subprocess.Popen(["harness","hardware","watch","--json"],stdin=subprocess.PIPE,stdout=open(sys.argv[1],"w"))
+while os.path.getsize(sys.argv[1])==0: time.sleep(0.2)
+p.stdin.close(); print("exit=%d" % p.wait())' "$T/watch.out"   # exit=0: its stdin closed
 harness hardware watch nonsense; echo "exit=$?"   # the usage, exit=1
 ```
 
