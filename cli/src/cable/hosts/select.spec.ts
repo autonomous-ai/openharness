@@ -87,6 +87,27 @@ describe('DialRing', () => {
     expect(ids(ring.select([observed, ...busy, harness, agent('n', { lastActivityAt: 250 })]).rows)).toEqual([...ids(busy), 'h', 'n'])
   })
 
+  it('a full ring: an agent with no known activity keeps its entry time while it stays, and gets a new one when it comes back', () => {
+    const observed = agent('o', { host: 'observed', lastActivityAt: 150 })
+    const busy = row(14).map(working)
+    const harness = agent('h', { host: 'harness' })
+    const newcomer = agent('n', { lastActivityAt: 250 })
+    const pass = (leaves: boolean) => {
+      let now = 100
+      const ring = new DialRing(() => now)
+      ring.select([observed, ...busy, harness])
+      now = 160
+      if (leaves) ring.select([observed, ...busy])
+      ring.select([observed, ...busy, harness])
+      now = 300
+      return ids(ring.select([observed, ...busy, harness, newcomer]).rows)
+    }
+    // It stayed since 100, before o's last activity at 150: it is the one idle the longest.
+    expect(pass(false)).toEqual(['o', ...ids(busy), 'n'])
+    // It ended and came back at 160, after o's last activity: o goes.
+    expect(pass(true)).toEqual([...ids(busy), 'h', 'n'])
+  })
+
   it('a full ring: an agent seen before stays outside until it needs the person', () => {
     const ring = new DialRing()
     const list = row(17)
