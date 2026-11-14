@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest'
-import { FRONT_APPS } from '../../core/dialFront.js'
 import { FRONT_NONE, frontAppId } from './frontApp.js'
 import { APP_IDS, detectApp } from './hostDetect.js'
 
@@ -54,8 +53,10 @@ describe('frontAppId', () => {
     for (const [value] of [...BUNDLES, ...EXES]) expect(frontAppId(value)).not.toMatch(/^other$/i)
   })
 
-  it('every id the table can give is in FRONT_APPS, and FRONT_APPS is APP_IDS and FRONT_NONE', () => {
-    for (const [value] of [...BUNDLES, ...EXES]) expect(FRONT_APPS.has(frontAppId(value))).toBe(true)
-    expect([...FRONT_APPS].sort()).toEqual([...APP_IDS, FRONT_NONE].sort())
+  it('every id the table can give is an app id or none', () => {
+    for (const [value] of [...BUNDLES, ...EXES]) {
+      const id = frontAppId(value)
+      expect(APP_IDS.includes(id) || id === FRONT_NONE).toBe(true)
+    }
   })
 })

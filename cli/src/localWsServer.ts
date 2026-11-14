@@ -27,7 +27,7 @@ const DAEMON_PLATE = 'daemon_plate'
 export const LOCAL_WS_PATH = '/api/local-ws'
 export const LOCAL_WS_PROTOCOL_VERSION = 1
 /** What a tool (`harness new`, `harness hardware watch`) may ask of this daemon that an older one would silently ignore. */
-const LOCAL_TOOL_FEATURES = ['openclaw-local', 'dial-watch', 'dial-front'] as const
+const LOCAL_TOOL_FEATURES = ['openclaw-local', 'dial-watch'] as const
 
 const LOCAL_IDLE_DEADLINE_MS = 40_000
 // The `ws` library enforces this on EVERY message on this socket, JSON or binary — so it has to
@@ -126,9 +126,6 @@ export interface LocalWsServerOptions {
    * arrives as an ordinary `dial_status` — which is also what corrects a window whose change was refused.
    */
   onDialSettings?: (id: string, patch: Record<string, unknown>) => void
-  /** A gate for one tool connection that asked to watch the dial, taken when it selects: its `dial_front` frames (the
-   *  app in front on this computer) go through it, and through nothing else (core/dialFront.ts). */
-  dialFront?: () => (payload: unknown) => void
   /** Questions still waiting on the user, as the `commander_question` frames that announced them. A window
    *  that connects after one was asked is handed them, so a terminal opened late still sees who is blocked. */
   openQuestions?: () => Frame[]
@@ -398,8 +395,6 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
     let chain = Promise.resolve()
     /** Set when this connection is one of the core's services, not a window. */
     let serviceLink: { receive(frame: Frame): void; receiveBinary(bytes: Uint8Array): void; closed(): void } | null = null
-    /** This connection's `dial_front` gate: only a tool on this machine that asked to watch the dial has one. */
-    let front: ((payload: unknown) => void) | undefined
 
     const sink: LocalClientSink = {
       sendFrame: (frame) => {
@@ -476,7 +471,6 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
         }
         selected = true
         windowSinks.set(connId, sink)
-        if (watch.includes('dial')) front = options.dialFront?.()
         sink.sendFrame({
           type: 'connected',
           payload: {
@@ -830,13 +824,6 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
             && (parsed.payload as Record<string, unknown>).watch !== true) {
             options.onAppFocus?.(boundMachineId, agentId)
           }
-        }
-
-        // The app in front on this computer, from a dial watch. Private: consumed here whoever sent it, and never
-        // dispatched or relayed. Only a gate this connection was given sees it; what it may say is that gate's.
-        if (parsed?.type === 'dial_front') {
-          front?.(parsed.payload)
-          return
         }
 
         // A device on THIS desk, named by the fleet's id. Like app_focus it is answered here and never

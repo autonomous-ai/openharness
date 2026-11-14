@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest'
-import { FRONT_APPS } from '../../core/dialFront.js'
 import { APP_IDS, appDisplayName, detectApp, detectHost, hostDisplayName, UNKNOWN_APP } from './hostDetect.js'
 
 describe('detectHost', () => {
@@ -111,9 +110,5 @@ describe('detectApp', () => {
     const others = APP_IDS.filter((id) => id !== 'terminal' && id !== 'terminal-app')
     expect(others).toHaveLength(13)
     for (const id of others) expect(appDisplayName(id)).toBe(hostDisplayName(id))
-  })
-
-  it("the core's front words are the app ids and none, so the two cannot drift", () => {
-    expect([...FRONT_APPS].sort()).toEqual([...APP_IDS, 'none'].sort())
   })
 })

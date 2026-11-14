@@ -23,8 +23,7 @@ function devicesPort() {
   const calls: Array<[string, unknown[]]> = []
   const record = (name: string) => (...args: unknown[]) => { calls.push([name, args]) }
   const port = {
-    card: record('card'), observed: (...args: unknown[]) => { calls.push(['observed', args]); return true },
-    front: (...args: unknown[]) => { calls.push(['front', args]); return true }, desk: record('desk'), swarms: record('swarms'), unread: record('unread'), appFocus: record('appFocus'),
+    card: record('card'), observed: (...args: unknown[]) => { calls.push(['observed', args]); return true }, desk: record('desk'), swarms: record('swarms'), unread: record('unread'), appFocus: record('appFocus'),
     seen: record('seen'), settings: record('settings'), windowFocus: record('windowFocus'), windowReply: record('windowReply'),
     voiceReply: record('voiceReply'), windowGone: record('windowGone'), scroll: record('scroll'), engines: record('engines'),
     commanders: record('commanders'),
@@ -375,18 +374,6 @@ describe('what the core tells the devices, reaching their port', () => {
       hostHints: { TERM_PROGRAM: 'ghostty' }, at: 7 }
     f.event({ ...event, kind: 'observed' })
     expect(f.calls).toEqual([['observed', [event]]])
-  })
-
-  it('a front event reaches the port', () => {
-    const f = setup()
-    f.event({ kind: 'front', app: 'vscode' })
-    expect(f.calls).toEqual([['front', ['vscode']]])
-  })
-
-  it('a front that is not a string reaches it as \'\'', () => {
-    const f = setup()
-    for (const app of [7, null, { id: 'vscode' }, undefined]) f.event({ kind: 'front', app })
-    expect(f.calls).toEqual(Array(4).fill(['front', ['']]))
   })
 
   // The mod's poll, told when its client went first (core/deviceHookCalls.ts): the poll ends. No approval is held to end.

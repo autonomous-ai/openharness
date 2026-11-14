@@ -1601,7 +1601,7 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
       const { port } = start({ faults: ['fleet'] })
       await twoApps(port)
       const pushed = calls('syncAgents').length
-      expect(port.front('vscode')).toBe(true)
+      host().front('vscode')
       await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS - 1)
       expect(calls('syncAgents')).toHaveLength(pushed)
       expect((await host().listAgentSnapshot({ apps: true })).apps?.shown).toBe('ghostty')
@@ -1618,7 +1618,7 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
       await twoApps(port)
       port.swarms({ active: 't1', swarms: [], tiles: [] })
       const tab = await host().listAgentSnapshot({ apps: true })
-      port.front('vscode')
+      host().front('vscode')
       await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
       // The dial holds the window's tab, with no apps, as before.
       expect(tab.apps).toBeUndefined()
@@ -1640,7 +1640,7 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
       const printed = vi.spyOn(console, 'log')
       await twoApps(port)
       for (const app of ['ghostty', 'none', 'vscode']) {
-        port.front(app)
+        host().front(app)
         await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
       }
       // The dial's own frame: the list it picks from names the app shown.
@@ -1661,20 +1661,6 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
       expect(made.filter((args) => front.test(JSON.stringify(args)))).toEqual([])
       expect(made.filter((args) => args.includes('none'))).toEqual([])
       expect(logs.filter((line) => front.test(line))).toEqual([])
-    })
-
-    it('the inline port takes a front too', async () => {
-      vi.useFakeTimers()
-      // As core/main.ts starts the devices in the core's own process: through the service host, which guards the port.
-      const ports = emptyPorts()
-      createServiceHost(ports, { log: () => {} }).start('devices', (core, started) => startDevices(core, started, {
-        logsDir: join(dataDir, 'logs'), cableDisabled: true, faults: new Set(['fleet']), log: () => {}, onExit: vi.fn(), orca,
-      }), fakeCore({ dataDir }), DEVICES_FALLBACKS, DEVICES_REQUESTS)
-      const port = ports.devices!
-      await twoApps(port)
-      expect(port.front('vscode')).toBe(true)
-      await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
-      expect((await host().listAgentSnapshot({ apps: true })).apps?.shown).toBe('vscode')
     })
 
     it('an app that empties as a dial reads the list is pushed after that read, never from inside it', async () => {

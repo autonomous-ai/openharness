@@ -224,8 +224,6 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
     card: ({ frame }) => port.card(object(frame)),
     // Checked and bounded by the core before it was sent (core/observedHook.ts), and kept nowhere there.
     observed: ({ kind: _kind, ...event }) => port.observed(event as unknown as Parameters<DevicesPort['observed']>[0]),
-    // One of the ids the core let through (core/dialFront.ts).
-    front: ({ app }) => port.front(text(app)),
     desk: ({ agentIds, foreground }) => port.desk(strings(agentIds), foreground !== false),
     swarms: ({ swarms }) => port.swarms(swarms && typeof swarms === 'object' ? swarms as AppSwarms : null),
     unread: ({ items }) => port.unread(Array.isArray(items) ? items as UnreadNotification[] : []),
