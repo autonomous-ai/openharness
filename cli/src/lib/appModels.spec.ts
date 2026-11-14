@@ -1,5 +1,11 @@
-import { describe, expect, it } from 'vitest'
-import { APP_CONTEXT, appContext, appEngineOps, cacheName, llamaServerArgs, lmsKey, scanAppModels } from './appModels.js'
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { fakeAppEngine, type FakeAppEngine, type FakeEngineStart } from './__fixtures__/fakeAppEngine.js'
+import { APP_CONTEXT, appContext, appEngineOps, AppStartError, cacheName, llamaServerArgs, lmsKey, scanAppModels,
+  type AppEngineOps, type AppEngineRecord, type AppModel } from './appModels.js'
+import { processExists } from './processLiveness.js'
 
 const GiB = 1024 ** 3
 const grid = { kind: 'llama.cpp', path: '/home/me/.grid/bin/llama-server', version: 'version: 10369', note: "Grid's own engine" }
@@ -178,5 +184,80 @@ describe('llama-server for a model', () => {
     const args = llamaServerArgs({ ref: '/m/gemma-4-E2B-it-Q4_K_M.gguf', name: 'gemma-4-E2B-it-Q4_K_M' }, 131072, 41001)
     expect(args).toEqual(['-m', '/m/gemma-4-E2B-it-Q4_K_M.gguf', '--alias', 'gemma-4-E2B-it-Q4_K_M', '--ctx-size', '131072', '--parallel', '1',
       '-ngl', '999', '--host', '127.0.0.1', '--port', '41001'])
+  })
+})
+
+// A port picked here and freed for the engine could be taken by any process before the engine bound it. The engine
+// picks its own (port 0) and says which in its log; these run a fake that does what Ollama 0.32.6 and llama.cpp 9550 do.
+describe.skipIf(process.platform === 'win32')('an engine started on a port it picks itself', () => {
+  const ops = appEngineOps({ PATH: process.env.PATH })
+  const ollama = (binary: string): AppModel =>
+    ({ id: 'app:ollama:qwen3:8b', name: 'qwen3:8b', app: 'ollama', engine: 'ollama', ref: 'qwen3:8b', binary, sizeBytes: GiB })
+  const llama = (binary: string): AppModel =>
+    ({ id: 'app:llama.cpp:tiny Q4.gguf', name: 'tiny Q4', app: 'llama.cpp', engine: 'llama.cpp', ref: '/m/tiny Q4.gguf', binary, sizeBytes: GiB })
+  const record = (model: AppModel, started: Awaited<ReturnType<AppEngineOps['start']>>): AppEngineRecord =>
+    ({ spec: 1, modelId: model.id, grid: 'g', name: model.name, ...started })
+  const fakes: FakeAppEngine[] = []
+  const fake = (...args: Parameters<typeof fakeAppEngine>) => { const made = fakeAppEngine(...args); fakes.push(made); return made }
+  let logs: string
+  beforeEach(() => { logs = mkdtempSync(join(tmpdir(), 'app-logs-')) })
+  afterEach(() => { for (const made of fakes.splice(0)) made.dispose(); rmSync(logs, { recursive: true, force: true }) })
+
+  it.each([
+    ['ollama', ollama, 'ollama-qwen3%3A8b.log', (start: FakeEngineStart) => start.host, '127.0.0.1:0'],
+    ['llama.cpp', llama, 'llama-tiny%20Q4.log', (start: FakeEngineStart) => start.argv.slice(-2).join(' '), '--port 0'],
+  ] as const)('starts %s on port 0 and records the port the engine says it bound', async (kind, model, log, asked, zero) => {
+    const engine = fake(kind), mine = model(engine.binary)
+    const started = await ops.start(mine, 65536, logs)
+    const [seen] = engine.starts()
+    expect(asked(seen)).toBe(zero)
+    expect(seen.port).toBeGreaterThan(0)
+    expect(started).toMatchObject({ engine: kind, port: seen.port, pid: seen.pid })
+    expect(readdirSync(logs)).toEqual([log])
+    expect(await ops.alive(record(mine, started))).toBe(true)
+    await ops.stop(record(mine, started))
+    expect(processExists(seen.pid)).toBe(false)
+  })
+
+  it("empties a model's log at each start, so the port read is this run's", async () => {
+    const engine = fake('ollama'), mine = ollama(engine.binary)
+    await ops.stop(record(mine, await ops.start(mine, 65536, logs)))
+    const again = await ops.start(mine, 65536, logs)
+    expect(again.port).toBe(engine.starts()[1].port)
+    expect(readFileSync(join(logs, 'ollama-qwen3%3A8b.log'), 'utf8').match(/Listening on/g)).toHaveLength(1)
+    await ops.stop(record(mine, again))
+  })
+
+  it.each([
+    ['ollama', ollama, 'Ollama could not start. Try again.'],
+    ['llama.cpp', llama, 'llama.cpp could not load the model. Try again.'],
+  ] as const)('says %s could not start, at once, when it exits before naming a port', async (kind, model, message) => {
+    const began = Date.now()
+    const error = await ops.start(model(fake(kind, 'exits').binary), 65536, logs).catch((thrown: unknown) => thrown)
+    expect(error).toBeInstanceOf(AppStartError)
+    expect((error as Error).message).toBe(message)
+    expect(Date.now() - began).toBeLessThan(10_000)
+  })
+
+  it('stops a llama.cpp too old to say its port, and says to update it', async () => {
+    const engine = fake('llama.cpp', 'port-zero')
+    const error = await ops.start(llama(engine.binary), 65536, logs).catch((thrown: unknown) => thrown)
+    expect(error).toBeInstanceOf(AppStartError)
+    expect((error as Error).message).toBe('Update llama.cpp to build 4240 or newer, then try again.')
+    await vi.waitFor(() => expect(processExists(engine.starts()[0].pid)).toBe(false))
+  })
+
+  it('reads the whole port from a line that arrives in two writes', async () => {
+    const engine = fake('ollama', 'split-line'), mine = ollama(engine.binary)
+    const started = await ops.start(mine, 65536, logs)
+    expect(started.port).toBe(engine.starts()[0].port)
+    await ops.stop(record(mine, started))
+  })
+
+  it('does not take the line llama.cpp printed before loading for its port', async () => {
+    const engine = fake('llama.cpp', 'early-line'), mine = llama(engine.binary)
+    const started = await ops.start(mine, 65536, logs)
+    expect(started.port).toBe(engine.starts()[0].port)
+    await ops.stop(record(mine, started))
   })
 })
