@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 // PATH, and nothing of the developer's own (a throwaway HOME, fake launchers).
 const repo = fileURLToPath(new URL('../..', import.meta.url))
 const pluginRoot = join(repo, 'plugins', 'harness-device')
-const HOOK = join(pluginRoot, 'hooks', 'approve')
+const HOOK = join(pluginRoot, 'hooks', 'asked')
 const json = (...path: string[]) => JSON.parse(readFileSync(join(...path), 'utf8'))
 const INPUT = JSON.stringify({
   session_id: 's-1',
@@ -52,11 +52,22 @@ describe('the harness-device plugin', () => {
     expect(json(pluginRoot, '.claude-plugin', 'plugin.json').name).toBe('harness-device')
   })
 
-  it('hooks.json holds one PermissionRequest command hook for every tool, at "${CLAUDE_PLUGIN_ROOT}/hooks/approve", with a 330 s timeout', () => {
+  // The dial only shows a waiting prompt: no description may promise an answer from it.
+  it('plugin.json and the marketplace say the dial shows a waiting prompt, and promise no answer from it', () => {
+    const marketplace = json(repo, '.claude-plugin', 'marketplace.json') as { plugins: { name: string; description: string }[] }
+    const descriptions = [json(pluginRoot, '.claude-plugin', 'plugin.json').description as string,
+      marketplace.plugins.find((plugin) => plugin.name === 'harness-device')!.description]
+    for (const description of descriptions) {
+      expect(description).toMatch(/waiting/i)
+      expect(description).not.toMatch(/allow|deny|approv|answers/i)
+    }
+  })
+
+  it('hooks.json holds one PermissionRequest command hook for every tool, at "${CLAUDE_PLUGIN_ROOT}/hooks/asked", with a 5 s timeout', () => {
     const { hooks } = json(pluginRoot, 'hooks', 'hooks.json') as { hooks: Record<string, unknown> }
     expect(hooks).toEqual({
       PermissionRequest: [
-        { matcher: '*', hooks: [{ type: 'command', command: '"${CLAUDE_PLUGIN_ROOT}/hooks/approve"', timeout: 330 }] },
+        { matcher: '*', hooks: [{ type: 'command', command: '"${CLAUDE_PLUGIN_ROOT}/hooks/asked"', timeout: 5 }] },
       ],
     })
   })
@@ -75,7 +86,7 @@ describe('the harness-device plugin', () => {
     expect(json(pluginRoot, 'hooks', 'hooks.json').modules).toEqual(['./device.js'])
   })
 
-  it('hooks/approve is executable and starts with #!/bin/sh', () => {
+  it('hooks/asked is executable and starts with #!/bin/sh', () => {
     expect(statSync(HOOK).mode & 0o111).toBe(0o111)
     expect(readFileSync(HOOK, 'utf8').startsWith('#!/bin/sh\n')).toBe(true)
   })
@@ -87,20 +98,29 @@ describe('the harness-device plugin', () => {
     expect(result.stderr).toBe('')
   })
 
-  it('it runs ~/.local/bin/harness first, with device claude approve and the stdin it was given', () => {
+  it('it runs ~/.local/bin/harness first, with device claude asked and the stdin it was given', () => {
     const home = tempDir()
     const bin = tempDir()
     const local = join(home, 'rec-local')
     const onPath = join(home, 'rec-path')
-    fakeLauncher(join(home, '.local', 'bin', 'harness'), local, '{"decided":true}', 3)
+    fakeLauncher(join(home, '.local', 'bin', 'harness'), local)
     fakeLauncher(join(bin, 'harness'), onPath)
     const result = runHook(home, `${bin}:/usr/bin:/bin`)
-    expect(readFileSync(`${local}.argv`, 'utf8')).toBe('device\nclaude\napprove\n')
+    expect(readFileSync(`${local}.argv`, 'utf8')).toBe('device\nclaude\nasked\n')
     expect(readFileSync(`${local}.stdin`, 'utf8')).toBe(INPUT)
     expect(existsSync(`${onPath}.argv`)).toBe(false)
-    // The hook execs the launcher: its stdout and exit code are what Claude Code reads.
-    expect(result.stdout).toBe('{"decided":true}')
-    expect(result.status).toBe(3)
+    expect(result).toMatchObject({ status: 0, stdout: '', stderr: '' })
+  })
+
+  // What a PermissionRequest hook prints is Claude Code's decision, and its exit code 2 a deny: a launcher of any version,
+  // or anything in its place, must never decide the prompt.
+  it('a launcher that prints a decision and fails: the hook prints nothing and exits 0', () => {
+    const home = tempDir()
+    const allow = '{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}'
+    for (const code of [0, 2, 3]) {
+      fakeLauncher(join(home, '.local', 'bin', 'harness'), join(home, 'rec'), allow, code)
+      expect(runHook(home, '/usr/bin:/bin'), `exit ${code}`).toMatchObject({ status: 0, stdout: '', stderr: '' })
+    }
   })
 
   it('with none in ~/.local/bin it runs the one on PATH', () => {
@@ -113,14 +133,15 @@ describe('the harness-device plugin', () => {
     fakeLauncher(join(bin, 'harness'), onPath)
     const result = runHook(home, `${bin}:/usr/bin:/bin`)
     expect(result.status).toBe(0)
-    expect(readFileSync(`${onPath}.argv`, 'utf8')).toBe('device\nclaude\napprove\n')
+    expect(readFileSync(`${onPath}.argv`, 'utf8')).toBe('device\nclaude\nasked\n')
     expect(readFileSync(`${onPath}.stdin`, 'utf8')).toBe(INPUT)
   })
 
-  it('the README names harness device claude disable, and says no auto-approve and no always allow', () => {
+  it('the README names harness device claude disable, and says the dial never answers a prompt or approves anything', () => {
     const readme = readFileSync(join(pluginRoot, 'README.md'), 'utf8')
     expect(readme).toContain('harness device claude disable')
-    expect(readme).toMatch(/no auto-approve/i)
-    expect(readme).toMatch(/no "always allow"/i)
+    expect(readme).toMatch(/never answers a prompt/i)
+    expect(readme).toMatch(/approves nothing/i)
+    expect(readme).not.toMatch(/Allow or Deny|allow or deny/)
   })
 })
