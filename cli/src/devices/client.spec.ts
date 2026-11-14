@@ -449,6 +449,21 @@ describe('harness hardware watch: the app in front', () => {
     expect(apps(during)).toEqual(['ghostty', 'ghostty'])
     await stillRunning(during)
   })
+  it('the same attached status again (a new devices process) tells the app in front again', async () => {
+    const run = watch()
+    await opened(run.socket)
+    connected(run.socket, ['dial-watch'])
+    front(run, 'com.mitchellh.ghostty')
+    dial(run.socket, { attached: true, fw: '0.0.95' })
+    await turn()
+    expect(apps(run)).toEqual(['ghostty', 'ghostty'])
+    // The devices process restarted under a dial still attached: the core kept its status, and the new one's reads the same.
+    dial(run.socket, { attached: true, fw: '0.0.95' })
+    await turn()
+    expect(apps(run)).toEqual(['ghostty', 'ghostty', 'ghostty'])
+    expect(run.printed).toEqual(['{"attached":true,"fw":"0.0.95"}'])
+    await stillRunning(run)
+  })
   it('two changes while a tell is under way: the newest is told when it ends, the one between is skipped', async () => {
     const held = heldListener()
     const run = watch({ tell: held.tell })
