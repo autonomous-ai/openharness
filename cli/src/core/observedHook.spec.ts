@@ -16,8 +16,8 @@ describe('parseObservedHook', () => {
       .toEqual({ engine: 'codex', sessionId: 's', event: 'session-start', callerPid: 1, hostHints: {} })
   })
 
-  it('takes 10 hint keys', () => {
-    const hostHints = Object.fromEntries(Array.from({ length: 10 }, (_, i) => [`K${i}`, 'v'.repeat(64)]))
+  it('takes 9 hint keys', () => {
+    const hostHints = Object.fromEntries(Array.from({ length: 9 }, (_, i) => [`K${i}`, 'v'.repeat(64)]))
     expect(parseObservedHook({ ...full, hostHints })).toEqual({ ...full, hostHints })
   })
 
@@ -33,7 +33,7 @@ describe('parseObservedHook', () => {
     ['a cwd of 1025 chars', { cwd: 'x'.repeat(1025) }],
     ['a transcriptPath of 1025 chars', { transcriptPath: 'x'.repeat(1025) }],
     ['a control character in cwd', { cwd: '/work\n/app' }],
-    ['11 hint keys', { hostHints: Object.fromEntries(Array.from({ length: 11 }, (_, i) => [`K${i}`, 'v'])) }],
+    ['10 hint keys', { hostHints: Object.fromEntries(Array.from({ length: 10 }, (_, i) => [`K${i}`, 'v'])) }],
     ['a 65-char hint value', { hostHints: { TERM_PROGRAM: 'x'.repeat(65) } }],
     ['a non-string hint value', { hostHints: { TERM_PROGRAM: 3 } }],
     ['hostHints that is an array', { hostHints: ['a'] }],
