@@ -121,6 +121,19 @@ describe('spawnTied', () => {
     expect(said.out.split('\0').slice(0, -1)).toEqual(odd)
   })
 
+  it.skipIf(windows)('the command holds no copy of the tie, on any fd: only what a plain spawn would give it', async () => {
+    // A copy left in the command is held by all it starts (a helper `podman machine start` leaves), and `close` waits
+    // for them.
+    const fds = async (child: ChildProcess) => {
+      onTestFinished(() => { child.kill('SIGKILL') })
+      const said = output(child)
+      expect(await closed(child)).toEqual([0, null])
+      return said.out.split('\n').filter(Boolean).map(Number).sort((a, b) => a - b)
+    }
+    const plain = await fds(spawn('/bin/ls', ['/dev/fd/'], { env: process.env }))
+    expect(await fds(spawnTied('/bin/ls', ['/dev/fd/'], { env: process.env }))).toEqual(plain)
+  })
+
   it.skipIf(windows)('a command ended at once, before the shell has become it, still closes and leaves no watcher', async () => {
     const child = node(FOREVER, { detached: true })
     child.kill()
