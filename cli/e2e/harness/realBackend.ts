@@ -156,8 +156,12 @@ async function boot(accounts: Account[], log: (line: string) => void, stops: Arr
     url, wsUrl: `ws://127.0.0.1:${port}`, logPath,
     api: (a, path, method, body) => backendApi(url, a, path, method, body),
     async stop() {
-      for (const d of owned.get(backend) ?? []) await d.close().catch(() => {})
+      // Every daemon is closed, then what a close could not do is thrown: a root left behind or a process that would
+      // not end was swallowed here and seen by no one.
+      const failed: unknown[] = []
+      for (const d of owned.get(backend) ?? []) await d.close().catch((error: unknown) => { failed.push(error) })
       for (const s of stops.reverse()) await Promise.resolve(s()).catch(() => {})
+      if (failed.length) throw new AggregateError(failed, `${failed.length} daemon(s) under test did not close: ${failed.map(String).join('; ')}`)
     },
   }
   owned.set(backend, [])

@@ -113,6 +113,7 @@ Checked at `b79d017c41`.
 | `cli/e2e/leftBehind.e2e.ts` | the close's tests (6), the worker's (7), grid's (8) | 6, 7, 8 |
 | `cli/e2e/harness/reaperProcess.mjs`, `abandonedWorker.ts` | the reaper sweeps a root before removing it, and removes a folder made read-only in it | 7 |
 | `cli/vitest.setup.ts`, `cli/src/testing/vitestSetupFolders.spec.ts` | the setup removes the home, data and runtime folders it made when the file ends; the spec, new | 9 |
+| `cli/e2e/harness/daemon.ts`, `cli/e2e/agentBrowser.e2e.ts`, `cli/e2e/harness/realBackend.ts` | a daemon's TMPDIR is in its root, and the screenshot test's check; `backend.stop()` throws the closes that failed | 10 |
 
 ## Review Focus
 
@@ -932,6 +933,70 @@ ls -d /private/tmp/claude-502/hyg-t9/adapter-test-* 2>/dev/null                 
 ```bash
 git add cli/vitest.setup.ts docs/plans/2026-11-14-e2e-harness-hygiene-plan.md
 git commit -m "e2e: vitest.setup.ts removes the home, data and runtime folders it made when the file ends"
+```
+
+---
+
+### Task 10: A daemon's temporary folder is in its root, and a failed close is seen
+
+**Depends on:** nothing. **Effort:** high.
+
+`e2e/agentBrowser.e2e.ts` left `$TMPDIR/browser/shot-<time>.jpg` (1 MiB) in the worker's TMPDIR, outside any root: a
+plain agent's pane inherits the daemon's TMPDIR, the worker's, and `harness browser screenshot` writes to
+`$TMPDIR/browser` (`cli/src/agentClient/browserOutput.ts`). The daemon under test gets `TMPDIR=<own>/t` instead (its
+root, or for a daemon `beside` another its own `b<n>` folder), before the test's own env, which still wins. What it and
+its children put in a temporary folder goes with the root.
+
+No daemon-side Unix socket is made under TMPDIR: the daemon's is in its data folder (`lib/localSocket.ts`), the
+bridge's in the connectors' vault (`lib/connectors/agents.ts`), the master and its core and services talk over an
+`ipc` channel (`harnessd/master.ts`), and tmux has `TMUX_TMPDIR` (`src/testing/isolatedTmux.ts`). So the socket-room
+check is unchanged: `<root>/data/daemon-65535.sock` stays the longest (92 bytes under a default macOS TMPDIR of 56), and
+the one-letter `t` leaves a child 25 bytes for a socket there.
+
+`backend.stop()` (`cli/e2e/harness/realBackend.ts`) closed every daemon with `.catch(() => {})`: a root that could not
+be removed, or processes that would not end, were seen by no one. It closes every daemon, stops the services as before,
+then throws an `AggregateError` naming each close that failed. No red test: the function is built inside the real
+backend's boot, out of reach of `realBackendApi.spec.ts` without one.
+
+**Files:**
+- Modify: `cli/e2e/agentBrowser.e2e.ts` (the plain agent's screenshot)
+- Modify: `cli/e2e/harness/daemon.ts` (`create`: `dirs.tmp`, `TMPDIR`)
+- Modify: `cli/e2e/harness/realBackend.ts` (`stop`)
+
+- [ ] **Step 1: Write the failing check**
+
+After the plain agent's screenshot in `agentBrowser.e2e.ts`:
+
+```ts
+expect(path.startsWith(`${d.root}/`), path).toBe(true)
+expect(existsSync(join(tmpdir(), 'browser', basename(path)))).toBe(false)
+```
+
+- [ ] **Step 2: Run it to see it fail**
+
+Run: `cd cli && TMPDIR=/private/tmp/claude-502/hyg-t10/ caffeinate -i npx vitest run --config vitest.e2e.config.ts e2e/agentBrowser.e2e.ts -t "a plain agent"`
+Expected: 1 failed, the shot in `/private/tmp/claude-502/hyg-t10/browser/`.
+Commit the check alone: `e2e: an agent's screenshot stays in its daemon's root, none in the worker's TMPDIR (red)`.
+
+- [ ] **Step 3: The daemon's TMPDIR, and `stop`**
+
+`dirs.tmp = join(own, 't')`, made with the others, and `TMPDIR: dirs.tmp` in the daemon's environment before
+`...options.env`. In `stop`, each close's error is kept, and thrown once the services are stopped.
+
+- [ ] **Step 4: Run the checks**
+
+```bash
+cd cli
+TMPDIR=/private/tmp/claude-502/hyg-t10/ caffeinate -i npx vitest run --config vitest.e2e.config.ts e2e/agentBrowser.e2e.ts   # 6 passed
+TMPDIR=/private/tmp/claude-502/hyg-t10/ caffeinate -i npx vitest run --config vitest.e2e.config.ts e2e/noSocket.e2e.ts e2e/masterIpcExit.e2e.ts   # 3 passed
+ls /private/tmp/claude-502/hyg-t10/browser 2>/dev/null                                                       # prints nothing
+```
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add cli/e2e/harness/daemon.ts cli/e2e/harness/realBackend.ts docs/plans/2026-11-14-e2e-harness-hygiene-plan.md
+git commit -m "e2e: a daemon under test keeps its temporary folder in its root, and backend.stop() throws the closes that failed"
 ```
 
 ---

@@ -266,7 +266,7 @@ export class IsolatedDaemon {
     const dirs = {
       home: join(root, 'home'), data: options.dataDir ?? join(own, beside ? 'd' : 'data'), runtime: join(own, 'runtime'), auth: join(own, 'auth'),
       bin: join(own, 'bin'), dsh: join(own, 'dsh'), claudeProjects: join(root, 'claude', 'projects'), codexHome: join(root, 'codex'),
-      projects: join(root, 'projects'),
+      projects: join(root, 'projects'), tmp: join(own, 't'),
     }
     // A data folder the harness gives a daemon under a TMPDIR too long for its socket falls back to one under the
     // test's home, as long, and the test failed later with `EINVAL connect` and no word of why: refused here, before
@@ -318,6 +318,10 @@ export class IsolatedDaemon {
       // A bridge port of its own: on 51793, the developer's daemon's, one daemon under test left running took the
       // port from it, and another asked `lsof` every 5.5 s which account held it (2026-11-11).
       HARNESS_CONNECTIONS_PORT: '0',
+      // Its temporary folder, and its children's: an agent in its pane took the worker's, and every screenshot of
+      // `harness browser` (1 MiB) outlived its test there. One letter: the daemon puts no socket here, and tmux has its
+      // own (TMUX_TMPDIR), but a child's socket in it must fit too.
+      TMPDIR: dirs.tmp,
       ADAPTER_DATA_DIR: dirs.data,
       ADAPTER_RUNTIME_DIR: dirs.runtime,
       ADAPTER_COMPUTER_ID: 'e2e-computer-0000-0000-000000000001',
