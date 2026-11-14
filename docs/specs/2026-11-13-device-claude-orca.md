@@ -112,6 +112,11 @@ Claude Code or Codex in an Orca terminal (hint ORCA_TERMINAL_HANDLE from the wav
 - Posts `{ sessionId, tool, summary, cwd }` to `/api/hook/approval` with the CLI's own client for the daemon's local
   socket (the TypeScript transport under `cli/src/lib/` the other CLI commands use, not `notify.mjs`, which is a
   standalone script), and waits up to 5 minutes.
+- **Approvals need the Unix socket; without it the original prompt handles it** (PM, 2026-11-14). Over the TCP port
+  nothing proves the answer came from the daemon: another account holding the port while the daemon restarts could
+  answer `allow`. So where no socket path fits (the data folder and home both too long), the client posts nothing,
+  creates no hook token and gives no decision. The daemon logs once, with no command or path, that dial approvals are
+  off because it has no Unix socket, so the person can see why the dial gets none.
 - Prints `{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}` for `allow`,
   the same with `"deny"` and the message "Denied from the Harness device." for `deny`, and nothing for `none`. Always
   exits 0: any error, a daemon that is not running, or a timeout is no decision, and the terminal's prompt decides.
