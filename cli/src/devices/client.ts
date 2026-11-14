@@ -83,6 +83,8 @@ const FRONT_LINE_MAX = 1024
 // each answer, the listener has heard the tell before by then: a burst of changes (focus following the mouse) stays
 // within its ten, and the newest is not the one refused.
 const TELL_GAP_MS = 100
+// tellDevices' own bound, held by the watch too, so an app that quits waits no longer on a listener that does not answer.
+const QUIT_TELL_MS = 2_000
 
 /** One call per line of at most [max] bytes; a longer line is dropped whole, its start included. */
 function lines(max: number, line: (text: string) => void): (chunk: Buffer | string) => void {
@@ -122,6 +124,8 @@ export function runDialWatch(argv: string[], deps: DialWatchDeps): Promise<numbe
     // The app in front as an app id (the raw name stops in this process), the last one the devices' listener took, and
     // whether the current one is owed to it whatever it took before: a dial that attaches may come with a new devices process.
     let front: string | undefined, told: string | undefined, owed = false, telling = false
+    // The tell under way, and whether any app (not none) was ever sent: only then do the devices have one to forget.
+    let under: Promise<boolean> | undefined, sentApp = false
     let gap: ReturnType<typeof setTimeout> | undefined
     const tell = deps.tell ?? (message => tellDevices(deps.dataDir ?? env.ADAPTER_DATA_DIR, message))
     // One tell at a time, so the listener hears them in order and the newest last; the ones between are skipped. Each is
@@ -131,7 +135,9 @@ export function runDialWatch(argv: string[], deps: DialWatchDeps): Promise<numbe
       const app = front
       telling = true
       owed = false
-      void tell({ type: 'front', app }).then(taken => {
+      sentApp ||= app !== 'none'
+      under = tell({ type: 'front', app })
+      void under.then(taken => {
         telling = false
         // A watch that has ended waits on nothing.
         if (settled) return
@@ -143,7 +149,7 @@ export function runDialWatch(argv: string[], deps: DialWatchDeps): Promise<numbe
         }, TELL_GAP_MS)
       })
     }
-    const finish = (code: number, why?: string): void => {
+    const finish = (code: number, why?: string, last?: Promise<unknown>): void => {
       if (settled) return
       settled = true
       if (why) deps.printError(why)
@@ -151,13 +157,25 @@ export function runDialWatch(argv: string[], deps: DialWatchDeps): Promise<numbe
       clearTimeout(gap)
       deps.stdin.pause()
       try { socket?.close() } catch { /* already closed */ }
-      resolve(code)
+      if (!last) return resolve(code)
+      let bound: ReturnType<typeof setTimeout> | undefined
+      void Promise.race([last, new Promise(done => { bound = setTimeout(done, QUIT_TELL_MS) })]).then(() => {
+        clearTimeout(bound)
+        resolve(code)
+      })
+    }
+    // The Device app quit: the devices would otherwise go on following the last app it saw in front. One try, after the
+    // tell under way so the listener hears none last.
+    const quit = (): void => {
+      if (settled || !sentApp) return finish(0)
+      const none = (): Promise<boolean> => tell({ type: 'front', app: 'none' })
+      finish(0, undefined, telling && under ? under.then(none) : none())
     }
     // A daemon that takes the socket and never answers would otherwise keep the app's probe waiting for ever.
     const deadline = setTimeout(() => finish(3, CLOSED), 10_000)
     // The app spawns this with a stdin pipe, so a killed app never leaves a tool connection open for ever.
-    deps.stdin.on('end', () => finish(0))
-    deps.stdin.on('close', () => finish(0))
+    deps.stdin.on('end', quit)
+    deps.stdin.on('close', quit)
     deps.stdin.on('data', lines(FRONT_LINE_MAX, line => {
       if (settled) return
       let value: unknown

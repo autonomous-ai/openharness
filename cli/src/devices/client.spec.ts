@@ -455,7 +455,9 @@ describe('harness hardware watch: the app in front', () => {
     expect(apps(during)).toEqual(['ghostty', 'ghostty'])
     await held.answer(true)
     expect(apps(during)).toEqual(['ghostty', 'ghostty'])
-    await stillRunning(during)
+    during.stdin.emit('end')
+    await held.answer(true)
+    expect(await during.done).toBe(0)
   })
   it('the same attached status again (a new devices process) tells the app in front again', async () => {
     const run = watch()
