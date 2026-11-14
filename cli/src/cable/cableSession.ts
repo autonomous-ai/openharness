@@ -2278,9 +2278,9 @@ export class CableSession {
     const generation = this.voiceGeneration
     const uploadId = this.voiceUploadId
     const current = () => generation === this.voiceGeneration
-    const reply = (message: Message) => {
+    const reply = (message: Message, logged = `"${String(message.message)}"`) => {
       // Every way a turn ends in an error is logged, with the words the dial shows: several ended silently (Diego, 2026-11-04).
-      if (message.t === 'voice.error' && current()) this.log(`cable: voice → error "${String(message.message)}"`)
+      if (message.t === 'voice.error' && current()) this.log(`cable: voice → error ${logged}`)
       return current() ? this.send({ ...message, ...(uploadId ? { uploadId } : {}) }) : Promise.resolve(false)
     }
     this.voice = null
@@ -2543,9 +2543,11 @@ export class CableSession {
     try {
       const submitted = await this.host.sendTurn(agentId, text)
       if (submitted && !submitted.ok) {
+        // Another app's words name its agent by the folder it runs in, which no log line carries: only the app is logged.
         await reply({ t: 'voice.error', message: submitted.message ?? (carried
           ? 'Could not reach that harness. Your carried text is still here.'
-          : 'Could not reach that harness. Check its connection and try again.') })
+          : 'Could not reach that harness. Check its connection and try again.') },
+        this.outsideHarness(agentId) ? `(refused in ${this.hostName(agentId)})` : undefined)
         return
       }
     } catch (_) {
