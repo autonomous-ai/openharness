@@ -184,7 +184,6 @@ impl Shared {
         match spawned {
             Ok(started) => *watch = Some(started),
             Err(error) => {
-                self.doors.log.line(&format!("harness hardware watch --json: could not start: {error}"));
                 // A CLI that went away is removed. One that is there and cannot run is a watch that ended: the
                 // keep-alive tries it again in its own time, where a removed CLI is found again at every tick.
                 self.answer(if error.kind() == io::ErrorKind::NotFound {
@@ -207,8 +206,7 @@ impl Shared {
         let send = self.send.clone();
         match account::login(&*cli, self.doors.log.clone(), move |event| send(event)) {
             Ok(started) => *login = Some(started),
-            Err(error) => {
-                self.doors.log.line(&format!("sign-in: could not start: {error}"));
+            Err(_) => {
                 self.answer(Event::Login(LoginEvent::Done(Err(NO_RESULT.into()))));
             }
         }
