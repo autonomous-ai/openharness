@@ -79,7 +79,7 @@ async function endRootProcesses(root) {
 }
 
 /**
- * [root] and everything in it, as isolatedTmux's close removes it (src/testing/isolatedTmux.ts): a recursive removal cannot
+ * [root] and everything in it, as isolatedTmux's close removes it (src/testing/removeRoot.ts): a recursive removal cannot
  * unlink in a read-only folder, and the managed grid's install makes its bin/ one (lib/runtimeInstall.ts), so a removal that
  * fails makes the root's folders writable by their owner and is tried once more. What that one cannot remove is logged.
  */

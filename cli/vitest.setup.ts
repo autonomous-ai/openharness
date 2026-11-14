@@ -12,9 +12,10 @@
  * fake the spec put on PATH. `src/config/envIsolation.spec.ts` pins both.
  */
 import { afterAll, vi } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { removeRoot } from './src/testing/removeRoot.js'
 
 // npm test injects its installation prefix. A child zsh login shell can source nvm,
 // which prints a prefix-conflict warning into fixture stdout. This made unchanged
@@ -47,8 +48,10 @@ const data = process.env.ADAPTER_DATA_DIR = mkdtempSync(join(tmpdir(), 'adapter-
 const runtime = process.env.ADAPTER_RUNTIME_DIR = mkdtempSync(join(tmpdir(), 'adapter-test-runtime-'))
 // This runs again for the next file, with folders of its own, so these go when this file ends, passed or failed: the
 // end-to-end suite has no run folder to take them (vitest.tmpdir.ts), and every file left three in $TMPDIR. Registered
-// before any of the file's own, this runs after them all, once its afterAll has closed the daemons that used them.
-afterAll(() => { for (const folder of [home, data, runtime]) rmSync(folder, { recursive: true, force: true }) })
+// before any of the file's own, this runs after them all, once its afterAll has closed the daemons that used them. With
+// the test roots' own removal: specs install runtimes into this runtime folder, and the managed grid's leaves a read-only
+// bin/; a zsh in a test's tmux pane writes its history into ZDOTDIR, the data folder, as it exits.
+afterAll(async () => { for (const folder of [home, data, runtime]) await removeRoot(folder) })
 // Real zsh subprocesses must not load a developer's prompts, plugins, updates,
 // or nvm configuration. Shell-startup tests supply their own ZDOTDIR fixture.
 process.env.ZDOTDIR = process.env.ADAPTER_DATA_DIR
