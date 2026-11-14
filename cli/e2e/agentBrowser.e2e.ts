@@ -14,7 +14,8 @@
 import { execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { basename, join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { browserAssetsHash } from '../src/services/agentBrowser/assets.js'
 import { imageTag } from '../src/services/agentBrowser/image.js'
@@ -248,6 +249,9 @@ describe('the agent browser on the real daemon', () => {
     const path = shot.out.trim()
     expect(path).toMatch(/\/browser\/shot-\d{8}-\d{6}-\d{3}\.jpg$/)
     expect(readFileSync(path).equals(SHOT)).toBe(true)
+    // In the daemon's root, which goes with the test: the agent's TMPDIR is the daemon's, and none is left in the worker's.
+    expect(path.startsWith(`${d.root}/`), path).toBe(true)
+    expect(existsSync(join(tmpdir(), 'browser', basename(path)))).toBe(false)
     // The panel's size, at 1:1: Chrome's window is the panel's, held only to the browser's screen (#4141, which left
     // this line asking for the smallest window it took away; nightly e2e on main failed it since).
     expect(await client.request('agent_browser_window', { agentId: agent.id, width: 800, height: 500 }, 30_000)).toMatchObject({ width: 800, height: 500 })
