@@ -214,11 +214,14 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // The dial's voice reaches them through their mod's long poll (Claude Code's), idle or working, or typed into their Orca
   // terminal when idle, and a tap brings its app forward, on its own pane where the app has a way in that asks for no new permission
   // (docs/specs/2026-11-13-device-claude-orca.md).
+  /** The part timers still to fire: the devices stopping cancels them, as a part with no stop of its own cannot. */
+  const pending = new Set<ReturnType<typeof setTimeout>>()
   /** A timer of one part, its run guarded as a notice into that part is, and never what keeps the process up. */
   const timerIn = (name: string) => (ms: number, run: () => void): (() => void) => {
-    const timer = setTimeout(() => part.call(name, run), ms)
+    const timer = setTimeout(() => { pending.delete(timer); part.call(name, run) }, ms)
     timer.unref()
-    return () => clearTimeout(timer)
+    pending.add(timer)
+    return () => { pending.delete(timer); clearTimeout(timer) }
   }
   const inbox = new Inbox({ now: monotonic, after: timerIn('inbox') })
   const apps = deps.orca ?? orcaDeps()
@@ -321,6 +324,20 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // started; a member that fails answers "unavailable", and the host routes this computer by itself.
     fleet: () => fleet,
     pets: () => pets,
+    // The app a dial that says appFilter shows (cable/hosts/appFilter.ts). Each line is a measure, read from the log as the
+    // notify tally is: a cause, never the app or an agent.
+    appSwitched: (cause) => {
+      log(`[device] app filter: switched · ${cause}`)
+      // After the list read that found it (an app emptying is found inside one), never from within it: the new ring goes
+      // to every dial, and its agents mid-turn, which the dial has heard nothing of, are told again.
+      queueMicrotask(() => {
+        part.call('dial', () => cable.syncAgents())
+        part.call('dial', remind)
+      })
+    },
+    appPicked: () => log('[device] app filter: picker'),
+    // The settle of the app in front: a filter that throws costs the devices nothing, and the devices stopping cancels it.
+    appTimer: timerIn('dial'),
   })
   // What the dial lists with no window: this computer's harness agents, and the ones outside a pane unless switched off.
   cableHost.setRegistry(new HostRegistry(observed ? [cableHost.harness, observed] : [cableHost.harness]))
@@ -578,12 +595,15 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     timer.unref()
     endings.set(agentId, timer)
   }
-  /** Each observed agent mid-turn that the dial lists (sixteen at most of the fifty), told again: the dial forgets a turn it
-   *  hears nothing of for 25 s, and one that just came, or whose window just closed, has heard nothing of it yet. */
+  /** Each observed agent mid-turn that a dial lists (sixteen at most of the fifty in each list), told again: the dial forgets
+   *  a turn it hears nothing of for 25 s, and one that just came, whose window just closed, or whose app the dial was just
+   *  turned to, has heard nothing of it yet. Both lists a dial can hold: the one ring, and the shown app's for a dial that
+   *  says appFilter. */
   const remind = async (): Promise<void> => {
     const mid = (observed?.list() ?? []).filter(busy)
     if (!mid.length || windowOpen) return
-    const listed = new Set((await cableHost.listAgentSnapshot()).agents.map((agent) => agent.id))
+    const lists = await Promise.all([cableHost.listAgentSnapshot(), cableHost.listAgentSnapshot({ apps: true })])
+    const listed = new Set(lists.flatMap((list) => list.agents.map((agent) => agent.id)))
     for (const agent of mid) if (listed.has(agent.id)) tell(started(agent))
   }
   /** The scan and the reminders, for an attached dial alone. */
@@ -752,6 +772,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       for (const agentId of [...replies.keys()]) endReplies(agentId, false)   // no timer may fire into a stopped cable
       for (const timer of timers) clearInterval(timer)
       for (const timer of endings.values()) clearTimeout(timer)
+      for (const timer of pending) clearTimeout(timer)
       endHookCalls()
       dialAttached(false)
       await cable.stop()
