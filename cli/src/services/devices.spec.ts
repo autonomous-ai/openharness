@@ -54,6 +54,7 @@ vi.mock('../cable/cableFleet.js', async (real) => {
     syncSwarms = recorder('syncSwarms')
     syncMachines = recorder('syncMachines')
     followApp = recorder('followApp')
+    followPrompt = recorder('followPrompt')
     replaceNotifications = recorder('replaceNotifications')
     agentSeen = recorder('agentSeen')
     question = recorder('question')
@@ -2051,7 +2052,9 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     port.observed(hook('turn-start'))
     port.observed({ engine: 'claude', sessionId: 'sess-1', event: 'asked', tool: 'Bash', summary: 'deploy --secret-flag' })
     expect(await host().activityText(observedAgentId('claude', 'sess-1'))).toMatch(/^deploy --secret-flag · answer in /)
-    expect(said()).toEqual(['[device] voice · orca', '[device] voice · busy', '[device] voice · waiting'])
+    // Each turn's start is counted too (dial-pane-follow): the dial's own, then a person's with no app in front.
+    expect(said()).toEqual(['[device] voice · orca', '[device] prompt · skipped · dial prompt', '[device] voice · busy',
+      '[device] voice · waiting', '[device] prompt · skipped · not in front'])
     const secrets = ['/work', '/t/', 'run the tests', 'deploy --secret-flag', 'sess-1', 'cx-1', HANDLE]
     expect(logs.filter((line) => secrets.some((secret) => line.includes(secret)))).toEqual([])
     expect(JSON.stringify(vi.mocked(core.account.backend).mock.calls)).not.toMatch(/secret-flag|sess-1|cx-1/)
@@ -2096,5 +2099,185 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     expect(await poll).toEqual({})
     expect(await words).toMatchObject({ ok: false, message: 'api did not answer.' })
     expect(vi.getTimerCount()).toBe(0)
+  })
+})
+
+describe('a person\'s prompt in the app in front turns the dial (docs/specs/2026-11-14-dial-pane-follow.md)', () => {
+  const ID = observedAgentId('claude', 'sess-1')
+  const CODEX = observedAgentId('codex', 'cx-1')
+  const HANDLE = 'term_0123abcd-0000-4000-8000-0123456789ab'
+  /** Claude Code in an Orca terminal, as its hook says. */
+  const hook = (event: ObservedHookEvent['event'], over: Partial<ObservedHookEvent> = {}): ObservedHookEvent => ({
+    engine: 'claude', sessionId: 'sess-1', event, cwd: '/work/api', callerPid: 4242, transcriptPath: '/t/sess-1.jsonl',
+    hostHints: { ORCA_AGENT_SESSION_ID: 'orca-1', ORCA_TERMINAL_HANDLE: HANDLE }, ...over,
+  })
+  const host = () => seen.dial as unknown as DaemonCableHost
+  /** A dial on the cable with no window, the agent in Orca listed, and `app` settled in front when one is named. `front`
+   *  tells the devices' own listener the app in front, as `harness hardware watch` does. */
+  const dialWith = async (app?: string) => {
+    vi.useFakeTimers()
+    const listener = fakeListener()
+    const started = start({ faults: ['fleet'], listen: listener.listen })
+    const front = (app: string) => { expect(listener.front(app)).toBeUndefined() }
+    started.port.observed(hook('session-start'))
+    seen.host.watching!(true)
+    started.port.swarms(null)
+    if (app) {
+      front(app)
+      await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+    }
+    return { ...started, front }
+  }
+  /** The dial's words taken by the mod's held poll: the session's next turn is theirs. */
+  const spokenByMod = async (port: DevicesPort) => {
+    const poll = port.inboxPoll({ pollId: 'p1', sessionId: 'sess-1' })
+    expect(await host().sendTurn(ID, 'run the tests')).toEqual({ ok: true })
+    expect(await poll).toEqual({ text: 'run the tests' })
+  }
+  const asked = () => calls('followPrompt')
+  const prompts = () => logs.filter((line) => line.startsWith('[device] prompt'))
+  const unlinked = (off: boolean) => { (seen.cable as unknown as { connected: boolean }).connected = !off }
+
+  it('a person\'s prompt with its app in front asks the dials to follow it', async () => {
+    const { port } = await dialWith('orca')
+    port.observed(hook('turn-start'))
+    expect(seen.cable.calls).toContainEqual(['followPrompt', [ID]])
+    expect(asked()).toEqual([[ID]])
+    // What the dials make of it is theirs to count.
+    expect(prompts()).toEqual([])
+  })
+
+  it('a relayed prompt asks nothing and is counted', async () => {
+    const { port } = await dialWith('orca')
+    port.observed(hook('turn-start', { relayed: true }))
+    expect(asked()).toEqual([])
+    expect(prompts()).toEqual(['[device] prompt · skipped · relayed'])
+  })
+
+  it('the turn of a prompt the dial delivered asks nothing, by the mod and by Orca, and the next prompt asks again', async () => {
+    const { port } = await dialWith('orca')
+    await spokenByMod(port)
+    port.observed(hook('turn-start'))
+    expect(asked()).toEqual([])
+    port.observed(hook('turn-stop'))
+    port.observed(hook('turn-start'))
+    expect(asked()).toEqual([[ID]])
+    // Codex has no mod: the dial's words are typed into its Orca terminal.
+    const codex = { engine: 'codex' as const, sessionId: 'cx-1' }
+    port.observed(hook('session-start', codex))
+    expect(await host().sendTurn(CODEX, 'run the tests')).toEqual({ ok: true })
+    expect(orcaRuns.map(([, args]) => args.slice(0, 2))).toEqual([['terminal', 'send']])
+    port.observed(hook('turn-start', codex))
+    expect(asked()).toEqual([[ID]])
+    port.observed(hook('turn-stop', codex))
+    port.observed(hook('turn-start', codex))
+    expect(asked()).toEqual([[ID], [CODEX]])
+    expect(prompts()).toEqual(Array(2).fill('[device] prompt · skipped · dial prompt'))
+  })
+
+  it('another app in front, none in front, and no front known ask nothing: not in front', async () => {
+    const { port, front } = await dialWith()
+    port.observed(hook('turn-start'))
+    for (const app of ['ghostty', 'none']) {
+      front(app)
+      await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+      port.observed(hook('turn-start'))
+    }
+    expect(asked()).toEqual([])
+    expect(prompts()).toEqual(Array(3).fill('[device] prompt · skipped · not in front'))
+  })
+
+  it('a front that has not stayed 1 s is not yet in front', async () => {
+    const { port, front } = await dialWith()
+    front('orca')
+    await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS - 1)
+    port.observed(hook('turn-start'))
+    expect(asked()).toEqual([])
+    expect(prompts()).toEqual(['[device] prompt · skipped · not in front'])
+    await vi.advanceTimersByTimeAsync(1)
+    port.observed(hook('turn-start'))
+    expect(asked()).toEqual([[ID]])
+  })
+
+  it('a pick on the dial does not change which app is in front', async () => {
+    const { port, front } = await dialWith()
+    port.observed(hook('session-start', { sessionId: 'g-1', hostHints: { TERM_PROGRAM: 'ghostty' } }))
+    // The dial's list of apps, read: Orca and Ghostty each hold one agent.
+    await host().listAgentSnapshot({ apps: true })
+    front('orca')
+    await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+    expect(host().pickApp('ghostty')).toBe('switched')
+    expect((await host().listAgentSnapshot({ apps: true })).apps?.shown).toBe('ghostty')
+    port.observed(hook('turn-start'))
+    expect(asked()).toEqual([[ID]])
+  })
+
+  it('a prompt in the Claude app, with the Claude app in front, asks the dials to follow it', async () => {
+    const { port } = await dialWith('claude')
+    port.observed(hook('turn-start', { sessionId: 'desk-1', hostHints: { __CFBundleIdentifier: 'com.anthropic.claudefordesktop' } }))
+    expect(asked()).toEqual([[observedAgentId('claude', 'desk-1')]])
+    // Orca is not in front.
+    port.observed(hook('turn-start'))
+    expect(asked()).toHaveLength(1)
+    expect(prompts()).toEqual(['[device] prompt · skipped · not in front'])
+  })
+
+  it('the dial\'s answer is counted: moved, and no tile', () => {
+    start({ faults: ['fleet'] })
+    seen.host.promptFollowed!('moved')
+    seen.host.promptFollowed!('no-tile')
+    expect(prompts()).toEqual(['[device] prompt · moved', '[device] prompt · skipped · no tile'])
+  })
+
+  it('with no dial linked nothing is asked or counted, and the dial\'s prompt is still used up', async () => {
+    const { port } = await dialWith('orca')
+    await spokenByMod(port)
+    unlinked(true)
+    port.observed(hook('turn-start'))
+    port.observed(hook('turn-start', { relayed: true }))
+    unlinked(false)
+    // The dial's prompt went with the turn it started while no dial was linked: this one is a person's.
+    port.observed(hook('turn-start'))
+    expect(asked()).toEqual([[ID]])
+    unlinked(true)
+    port.observed(hook('turn-start'))
+    expect(asked()).toEqual([[ID]])
+    expect(prompts()).toEqual([])
+  })
+
+  it('with the observed source switched off nothing is asked', async () => {
+    const switched = env as { HARNESS_DEVICE_OBSERVED: boolean }
+    switched.HARNESS_DEVICE_OBSERVED = false
+    onTestFinished(() => { switched.HARNESS_DEVICE_OBSERVED = true })
+    const { port } = await dialWith('orca')
+    port.observed(hook('turn-start'))
+    expect(asked()).toEqual([])
+    expect(prompts()).toEqual([])
+  })
+
+  it('no prompt line names an app, an agent or a session', async () => {
+    const { port, front } = await dialWith('orca')
+    port.observed(hook('turn-start', { relayed: true }))
+    await spokenByMod(port)
+    port.observed(hook('turn-start'))
+    port.observed(hook('turn-start'))
+    seen.host.promptFollowed!('moved')
+    seen.host.promptFollowed!('no-tile')
+    front('ghostty')
+    await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+    port.observed(hook('turn-start'))
+    const reasons = ['relayed', 'dial prompt', 'not in front', 'no tile'].map((why) => `[device] prompt · skipped · ${why}`)
+    expect([...prompts()].sort()).toEqual(['[device] prompt · moved', ...reasons].sort())
+    expect(logs.filter((line) => [ID, 'sess-1', 'orca-1', HANDLE].some((secret) => line.includes(secret)))).toEqual([])
+  })
+
+  it('a follow that throws is logged and the devices keep running', async () => {
+    const { port } = await dialWith('orca')
+    vi.spyOn(seen.cable as unknown as { followPrompt: (agentId: string) => Promise<void> }, 'followPrompt')
+      .mockRejectedValueOnce(new Error('dial unplugged'))
+    port.observed(hook('turn-start'))
+    await vi.waitFor(() => expect(logs).toContain('[devices] dial failed · dial unplugged'))
+    port.observed(hook('turn-start'))
+    expect(asked()).toEqual([[ID]])
   })
 })
