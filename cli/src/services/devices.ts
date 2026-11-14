@@ -719,16 +719,19 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   })
   cableHost.setApprovals(approvals)
   // Each part guarded as the fleet is: one that throws, or did not start, answers as with no dial, so the terminal's prompt
-  // decides and the mod waits a minute.
+  // decides and the mod waits a minute. One switched off ends what it holds: the `gone` that would have closed it is
+  // swallowed from then on.
   const { approval, approvalGone, inboxPoll, inboxGone } = DEVICES_FALLBACKS
-  const approvalCalls = part.start('approvals', (): Pick<DeviceHookPort, 'approval' | 'approvalGone'> => ({
+  const approvalCalls = part.start('approvals', (): Pick<DeviceHookPort, 'approval' | 'approvalGone'> & { stop(): void } => ({
     approval: (request) => approvals.request(request),
     approvalGone: (id) => approvals.gone(id),
-  }), { approval, approvalGone })
-  const inboxCalls = part.start('inbox', (): Pick<DeviceHookPort, 'inboxPoll' | 'inboxGone'> => ({
+    stop: () => approvals.closeAll(),
+  }), { approval, approvalGone, stop: undefined })
+  const inboxCalls = part.start('inbox', (): Pick<DeviceHookPort, 'inboxPoll' | 'inboxGone'> & { stop(): void } => ({
     inboxPoll: ({ pollId, sessionId }) => inbox.poll(pollId, sessionId),
     inboxGone: (pollId) => inbox.gone(pollId),
-  }), { inboxPoll, inboxGone })
+    stop: () => inbox.closeAll(),
+  }), { inboxPoll, inboxGone, stop: undefined })
   /** Every card and poll held for the core's calls: that core went, or the devices stop. */
   const endHookCalls = (): void => {
     part.call('approvals', () => approvals.closeAll())
