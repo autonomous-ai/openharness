@@ -592,9 +592,9 @@ export class DaemonCableHost implements CableHost {
    *
    * Four answers, and each is a state the dial draws:
    *   - no window, and the devices have a registry → this computer's agents (Harness and any other app or
-   *                                          terminal) in a fixed ring of at most sixteen (hosts/select.ts): an
-   *                                          agent keeps its place whatever its state does, with
-   *                                          `host`, `caps` and `view: 'machine'`; `total` is every agent here.
+   *                                          terminal) with `host`, `caps` and `view: 'machine'`, in a fixed
+   *                                          ring of at most sixteen where an agent keeps its place whatever its
+   *                                          state does (hosts/select.ts); `total` is every agent here.
    *   - no window and no registry          → `[]`; the dial shows "Run OpenHarness on your computer".
    *   - a window with an empty tab         → `[]`; the dial shows "Nothing on this tab".
    *   - a window with panes                → those agents, in tile order; a tile whose machine dropped out
