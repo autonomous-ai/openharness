@@ -1123,6 +1123,8 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     readers.known.set('sess-9', 'terminal')
     readers.owners.set('sess-9', { engine: 'codex', pid: 77 })
     readers.rows.set('sess-9', { cwd: '/work/web', transcriptPath: null })
+    // Between turns: a turn found running would be read every 3 s until it ends, which is not this scan.
+    readers.working.set('sess-9', false)
     await vi.advanceTimersByTimeAsync(120_000)
     expect(readers.scans).toBe(0)
     seen.host.watching!(true)

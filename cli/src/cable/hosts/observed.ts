@@ -354,7 +354,7 @@ export class ObservedSource implements HostSource {
     this.emit()
   }
 
-  /** Adds the sessions found open in a terminal or app, as idle, until their next hook event. One look at a time. */
+  /** Adds the sessions found open in a terminal or app, idle or in a turn, until their next hook event. One look at a time. */
   scanOpen(): Promise<void> {
     this.scanning ??= this.scanOnce().finally(() => { this.scanning = null })
     return this.scanning
@@ -378,8 +378,14 @@ export class ObservedSource implements HostSource {
       // folder) or to name it by. A hook may also have told of it while the rows were read.
       const row = rows.get(sessionId)
       if (!row || this.entries.has(observedAgentId(engine, sessionId))) continue
-      const entry = this.entry(engine, sessionId, now, { cwd: row.cwd, transcriptPath: row.transcriptPath, pid: owners.get(sessionId)!.pid })
-      if (entry) changed = true
+      const owner = owners.get(sessionId)!
+      const entry = this.entry(engine, sessionId, now, { cwd: row.cwd, transcriptPath: row.transcriptPath, pid: owner.pid })
+      if (!entry) continue
+      changed = true
+      // A turn it is in when found reads working, as checkWorking reads it, which ends it once its owner reads idle: listed
+      // idle, its compaction's SessionStart (which moves no state) would give a running turn a handle to type into.
+      if ((engine === 'claude' || engine === 'codex') && await this.deps.openSessions.busy(owner)
+        && entry.agent.state === 'idle' && this.live(entry)) this.setState(entry, 'working', this.deps.now())
     }
     if (changed) this.emit()
   }

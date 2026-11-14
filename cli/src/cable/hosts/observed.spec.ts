@@ -387,25 +387,30 @@ describe('ObservedSource codex and open sessions', () => {
     expect(src.list()[0].state).toBe('working')
   })
 
-  it('scanOpen adds terminal/app sessions as idle and skips harness-owned ones', async () => {
-    const { src, open, owners, externals } = setup()
+  it('scanOpen adds terminal/app sessions, working while their owner reads busy, and skips harness-owned ones', async () => {
+    const { src, open, owners, working, externals } = setup()
     open.set('a', 'terminal')
     open.set('b', 'app')
     open.set('c', 'harness')
     open.set('d', 'maybe')
+    open.set('e', 'terminal')
     owners.set('a', { pid: 11, engine: 'claude' })
     owners.set('b', { pid: 12, engine: 'codex' })
     owners.set('c', { pid: 13, engine: 'claude' })
     owners.set('d', { pid: 14, engine: 'claude' })
+    owners.set('e', { pid: 15, engine: 'grok' })
     externals.set('a', { cwd: '/x/alpha', transcriptPath: '/t/a.jsonl' })
     externals.set('b', { cwd: '/x/beta', transcriptPath: null })
     externals.set('c', { cwd: '/x/gamma', transcriptPath: '/t/c.jsonl' })
     externals.set('d', { cwd: '/x/delta', transcriptPath: '/t/d.jsonl' })
+    externals.set('e', { cwd: '/x/eps', transcriptPath: null })
+    working.set('a', false)
     await src.scanOpen()
     const list = src.list()
-    expect(list.map((a) => a.sessionId).sort()).toEqual(['a', 'b', 'd'])
+    expect(list.map((a) => a.sessionId).sort()).toEqual(['a', 'b', 'd', 'e'])
     expect(list.find((a) => a.sessionId === 'a')).toMatchObject({ state: 'idle', name: 'alpha', callerPid: 11, cwd: '/x/alpha' })
-    expect(list.every((a) => a.state === 'idle')).toBe(true)
+    // Only Claude Code's and Codex's turns are read (checkWorking ends them): another engine's stays idle.
+    expect(Object.fromEntries(list.map((a) => [a.sessionId, a.state]))).toEqual({ a: 'idle', b: 'working', d: 'working', e: 'idle' })
   })
 
   it('scanOpen looks afresh, so the scan when a dial attaches lists an agent already running', async () => {
