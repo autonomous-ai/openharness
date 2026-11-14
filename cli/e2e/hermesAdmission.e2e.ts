@@ -22,8 +22,7 @@ afterEach(async () => { client?.close(); await daemon?.close(); client = undefin
 afterAll(() => { if (scratch) rmSync(scratch, { recursive: true, force: true }) })
 
 it.each(['missing', 'stalled'] as const)('keeps Hermes admission pending and core ready with %s optional code, then recovers the complete store pool', async mode => {
-  const text = readFileSync(bundle, 'utf8')
-  const lean = readLeanBundle(Buffer.from(text))!
+  const lean = readLeanBundle(readFileSync(bundle))!
   const files = Object.fromEntries([...lean.files].map(([name, value]) => [name, value.toString('utf8')]))
   const chunks = Object.keys(files).filter(name => name.startsWith('core-inProcess-') && files[name]!.includes('HermesReader'))
   expect(chunks).toHaveLength(1)
