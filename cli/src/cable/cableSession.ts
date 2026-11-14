@@ -631,6 +631,8 @@ export class CableSession {
 
   /** What the dial was last told the agent list is. Empty = it has been told nothing. */
   private lastAgentsKey = ''
+  /** The ids of the last `agents.begin`..`agents.end` push: the ring the dial holds, which restores follow. */
+  private lastRing: string[] = []
   /** What the dial was last told the app list is: the shown app and each app's counts. Empty = none. */
   private lastAppsKey = ''
   /** When the agent list last went down the cable, by performance.now(): the machine list's pacing, which a wall clock set
@@ -1025,6 +1027,7 @@ export class CableSession {
     this.expectedAppFocusEchoUntil = 0
     // A new port is a new dial until proven otherwise; tell it everything.
     this.lastAgentsKey = ''
+    this.lastRing = []
     this.lastAppsKey = ''
     this.lastMachinesKey = ''
     this.resetCapabilities()
@@ -1070,6 +1073,7 @@ export class CableSession {
     this.expectedAppFocusEcho = ''
     this.expectedAppFocusEchoUntil = 0
     this.lastAgentsKey = ''
+    this.lastRing = []
     this.lastAppsKey = ''
     this.lastMachinesKey = ''
     this.resetCapabilities()
@@ -2549,6 +2553,7 @@ export class CableSession {
     // how the dial tells "the app is shut" from "this tab is empty" when both send zero agents. `view`:
     // with no window, rows that are this computer's agents rather than nothing.
     await this.send({ t: 'agents.end', total, tab, ...(view ? { view } : {}) })
+    this.lastRing = agents.map((a) => a.id)
 
     // The list just changed shape under the dial, so say again which agent both screens are on.
     //
@@ -2606,15 +2611,15 @@ export class CableSession {
     // desk: a click from a local agent to a remote one took 1.5 s, of which 0.7 s was this loop waiting
     // on the first `agent_recent` while the dial sat on the old tile.
     const rows: Array<{ id: string; past: Array<{ recap: string; text: string; fullText?: string }> }> = []
-    // The ring the dial holds: a filtering dial's shown app can have agents the single ring of 16 cut.
-    const agents = this.host.listAgentSnapshot
-      ? (await this.host.listAgentSnapshot({ apps: this.appFilter })).agents : await this.host.listAgents()
-    for (const a of agents) {
+    // The ring last sent, not a fresh read: the read runs the app filter, which can switch the shown app, and an agent
+    // marked restored before the dial holds its tile would never get its recaps. One left out is restored by the push
+    // that puts it in the ring.
+    for (const id of this.lastRing) {
       // Marked as it is ASKED FOR, not as it is sent: the answer is a cloud round trip, and a tick
       // arriving mid-loop would otherwise start a second walk over the same agents.
-      if (this.restored.has(a.id)) continue
-      this.restored.add(a.id)
-      rows.push({ id: a.id, past: await this.host.recentSummaries(a.id) })
+      if (this.restored.has(id)) continue
+      this.restored.add(id)
+      rows.push({ id, past: await this.host.recentSummaries(id) })
     }
     if (!rows.length) return
     return this.queued(async () => {
