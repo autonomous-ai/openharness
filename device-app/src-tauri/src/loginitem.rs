@@ -75,7 +75,8 @@ mod tests {
         assert_eq!(from(Status::Enabled), (Ok(()), 0));
         // An item the person turned off stays off, also after the app's state file is lost.
         assert_eq!(from(Status::RequiresApproval), (Ok(()), 0));
-        assert_eq!(from(Status::NotFound), (Err("Login item not found.".into()), 0));
+        // What macOS says of a main app's service it has never registered.
+        assert_eq!(from(Status::NotFound), (Ok(()), 1));
     }
 
     #[cfg(not(target_os = "macos"))]
