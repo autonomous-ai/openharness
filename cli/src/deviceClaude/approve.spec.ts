@@ -245,6 +245,24 @@ describe('runApprove', () => {
     ])
     expect(JSON.stringify(daemon.bodies)).not.toContain('sk-live')
   })
+
+  // The core refuses a cwd it cannot hold (core/deviceHookCalls.ts), and the card with it: the request goes without one.
+  it.each([
+    ['of 1025 characters', `/${'d'.repeat(1024)}`],
+    ['with a newline', '/repo\n/other'],
+    ['with a tab', '/repo\tx'],
+  ])('a cwd %s is left out, and the request is still posted', async (_case, cwd) => {
+    const daemon = recording()
+    expect(await approve(chunks(hookInput({ cwd })), daemon.post)).toEqual({ code: 0, out: [ALLOW] })
+    expect(daemon.bodies).toStrictEqual([{ sessionId: 'sess-1', tool: 'Bash', summary: 'npm test' }])
+  })
+
+  it('a cwd of 1024 characters is posted', async () => {
+    const daemon = recording()
+    const cwd = `/${'d'.repeat(1023)}`
+    await approve(chunks(hookInput({ cwd })), daemon.post)
+    expect(daemon.bodies).toStrictEqual([{ ...BODY, cwd }])
+  })
 })
 
 describe('daemonPost', () => {
