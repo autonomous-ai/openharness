@@ -2056,6 +2056,22 @@ describe('a hook\'s approvals, the mod\'s voice and Orca, for agents outside a p
     expect(logs).toEqual(expect.arrayContaining(['[devices] approvals did not start · injected fault: approvals · the devices run without it']))
   })
 
+  it('an approvals or inbox part the guard switches off closes its open card and poll', async () => {
+    const { port } = startHere({ faults: ['approvals.approvalGone', 'inbox.inboxGone'] })
+    attach(port)
+    const decision = port.approval(REQUEST)
+    await vi.waitFor(() => expect(calls('question')).toHaveLength(1))
+    const poll = port.inboxPoll({ pollId: 'p1', sessionId: 'sess-2' })
+    // Five failures in a minute switch a part off: the terminal's answer it swallows would have closed the card.
+    for (let i = 0; i < 5; i++) { port.approvalGone('r1'); port.inboxGone('p1') }
+    expect(logs).toEqual(expect.arrayContaining([
+      expect.stringMatching(/^\[devices\] approvals switched off/), expect.stringMatching(/^\[devices\] inbox switched off/),
+    ]))
+    await vi.waitFor(() => expect(calls('questionClose')).toEqual([[ID, 'approval:r1']]))
+    expect(await decision).toBe('none')
+    expect(await poll).toEqual({})
+  })
+
   it('stop ends every approval, poll and timer', async () => {
     vi.useFakeTimers()
     const { port } = startHere()
