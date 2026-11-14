@@ -1577,7 +1577,9 @@ export class CableSession {
             if (typeof v === 'string') flat[k] = v
           }
           if (this.lacks(agentId, 'a')) {
-            await this.toast(`This agent is in ${this.hostName(agentId)}. Answering it from the device comes in an update.`)
+            // A shown question is answered in its app for good, as the reviewed path says: no update changes that.
+            await this.toast(requestId.startsWith(SHOWN_ONLY_PREFIX) ? `Answer it in ${this.hostName(agentId)}.`
+              : `This agent is in ${this.hostName(agentId)}. Answering it from the device comes in an update.`)
             return
           }
           // Its agent may have gone from the list since: the id alone says nothing here answers it.
