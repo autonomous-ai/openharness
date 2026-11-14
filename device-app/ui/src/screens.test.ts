@@ -132,11 +132,17 @@ describe('screens', () => {
     expect(text()).toContain(outside)
   })
 
-  it('the first button has the focus', async () => {
+  it('the primary button has the focus, and no other', async () => {
     await mount(at('sign_in', 'offer'))
     expect(document.activeElement?.textContent).toBe('Sign in')
 
     push(at('claude', 'offer'))
     expect(document.activeElement?.textContent).toBe('Turn on')
+
+    // The window comes up while the person types in the browser: Return must not cancel the sign-in.
+    push(at('sign_in', 'working'))
+    expect(document.activeElement?.textContent).not.toBe('Cancel')
+    push(at('sign_in', 'browser', ['Harness is finishing an update']))
+    expect(document.activeElement?.textContent).not.toBe('Cancel')
   })
 })
