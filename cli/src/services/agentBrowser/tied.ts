@@ -29,7 +29,8 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import type { Writable } from 'node:stream'
 
-const TIED = '{ read -r _ <&3 || kill $$; } </dev/null >/dev/null 2>&1 & exec "$0" "$@" 3<&-'
+// fd 3 is closed on its own line: bash (macOS's sh) keeps a saved copy of a redirected fd across `exec cmd 3<&-`.
+const TIED = '{ read -r _ <&3 || kill $$; } </dev/null >/dev/null 2>&1 & exec 3<&-; exec "$0" "$@"'
 
 export function spawnTied(
   file: string,

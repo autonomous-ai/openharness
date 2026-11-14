@@ -31,7 +31,7 @@ authority; its decisions are not reopened here.
 ## Global Constraints
 
 - The shell line, verbatim, run as `/bin/sh -c '<line>' file args…` with a fourth stdio pipe:
-  `{ read -r _ <&3 || kill $$; } </dev/null >/dev/null 2>&1 & exec "$0" "$@" 3<&-`
+  `{ read -r _ <&3 || kill $$; } </dev/null >/dev/null 2>&1 & exec 3<&-; exec "$0" "$@"`
 - `podman.run`'s messages, verbatim: `podman <cmd> timed out after <ms> ms`; `podman <cmd> printed more than 64 MiB`;
   `podman <cmd> failed: <the last 2000 characters of stderr>`. Each of the three stays `podman_failed`. Its limits
   stay 30 000 ms (5 000 for `info`, 10 minutes for `machine start`) and 64 MiB. `STDIN_RELAY`'s text does not change.
