@@ -1,24 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import {
-  createDeviceHookCalls, parseApproval, parseInboxPoll,
-  type ApprovalDecision, type ApprovalRequest, type DeviceHookPort, type InboxAnswer, type InboxPoll,
-} from './deviceHookCalls.js'
-
-const approval = { sessionId: 's1', tool: 'Bash', summary: 'npm test', cwd: '/work/app' }
+import { createDeviceHookCalls, parseInboxPoll, type DeviceHookPort, type InboxAnswer, type InboxPoll } from './deviceHookCalls.js'
 
 /** A devices port whose answers the test gives, one pending call per request. */
 function fakeDevices() {
-  const approvals: Array<{ request: ApprovalRequest; resolve(d: ApprovalDecision): void; reject(e: Error): void }> = []
   const polls: Array<{ poll: InboxPoll; resolve(a: InboxAnswer): void; reject(e: Error): void }> = []
   const port: DeviceHookPort = {
-    approval: vi.fn((request: ApprovalRequest) =>
-      new Promise<ApprovalDecision>((resolve, reject) => { approvals.push({ request, resolve, reject }) })),
-    approvalGone: vi.fn(),
     inboxPoll: vi.fn((poll: InboxPoll) =>
       new Promise<InboxAnswer>((resolve, reject) => { polls.push({ poll, resolve, reject }) })),
     inboxGone: vi.fn(),
   }
-  return { port, approvals, polls }
+  return { port, polls }
 }
 
 function setup() {
@@ -32,168 +23,18 @@ const live = () => new AbortController().signal
 /** Lets every settled promise run its callbacks, with no timer. */
 const flush = () => new Promise((resolve) => setImmediate(resolve))
 
-describe('parseApproval', () => {
-  it('parses an approval', () => {
-    expect(parseApproval({ ...approval, tool_input: { content: 'secret' } })).toEqual(approval)
-    expect(parseApproval({ sessionId: 's1', tool: 'Bash', summary: '' })).toEqual({ sessionId: 's1', tool: 'Bash', summary: '' })
-  })
-
-  it('takes terminalOnly true or false, and keeps it', () => {
-    expect(parseApproval({ ...approval, terminalOnly: true })).toStrictEqual({ ...approval, terminalOnly: true })
-    expect(parseApproval({ ...approval, terminalOnly: false })).toStrictEqual({ ...approval, terminalOnly: false })
-  })
-
-  it('takes a 200-byte summary of multi-byte characters', () => {
-    const summary = 'é'.repeat(100)
-    expect(parseApproval({ ...approval, summary })).toEqual({ ...approval, summary })
-  })
-
-  it.each([
-    ['a missing sessionId', { sessionId: undefined }],
-    ['an empty sessionId', { sessionId: '' }],
-    ['a sessionId of 129 characters', { sessionId: 'x'.repeat(129) }],
-    ['a missing tool', { tool: undefined }],
-    ['an empty tool', { tool: '' }],
-    ['a tool of 65 characters', { tool: 'x'.repeat(65) }],
-    ['a missing summary', { summary: undefined }],
-    ['a summary of 201 bytes', { summary: `${'é'.repeat(100)}x` }],
-    ['a cwd of 1025 characters', { cwd: 'x'.repeat(1025) }],
-    ['a control character in sessionId', { sessionId: 's\u00001' }],
-    ['a control character in tool', { tool: 'Ba\tsh' }],
-    ['a control character in summary', { summary: 'npm\ntest' }],
-    ['a control character in cwd', { cwd: '/work\u007f/app' }],
-    ['a non-string sessionId', { sessionId: 1 }],
-    ['a non-string tool', { tool: null }],
-    ['a non-string summary', { summary: { text: 'npm test' } }],
-    ['a non-string cwd', { cwd: 5 }],
-    ['a terminalOnly that is a string', { terminalOnly: 'true' }],
-    ['a terminalOnly that is a number', { terminalOnly: 1 }],
-    ['a terminalOnly that is null', { terminalOnly: null }],
-  ])('rejects %s', (_name, patch) => {
-    expect(parseApproval({ ...approval, ...patch })).toBeNull()
-  })
-
-  it('rejects a body that is not an object', () => {
-    for (const body of [null, 'x', 7, ['s1']]) expect(parseApproval(body)).toBeNull()
-  })
-})
-
 describe('parseInboxPoll', () => {
   it('parses a poll, and keeps only its session', () => {
     expect(parseInboxPoll({ sessionId: 's1', text: 'x' })).toEqual({ sessionId: 's1' })
   })
 })
 
-describe('createDeviceHookCalls: approvals', () => {
-  it('answers invalid to a bad body, and calls nothing', async () => {
-    const { calls, port } = setup()
-    expect(await calls.onApproval({ ...approval, tool: '' }, live())).toBe('invalid')
-    expect(port.approval).not.toHaveBeenCalled()
-  })
-
-  it('answers none at once and calls nothing when not ready', async () => {
-    const { port } = fakeDevices()
-    const devices = vi.fn(() => port)
-    const notReady = createDeviceHookCalls({ ready: () => false, devices, newId: () => 'id' })
-    expect(await notReady.onApproval(approval, live())).toBe('none')
-    expect(devices).not.toHaveBeenCalled()
-    const noPort = createDeviceHookCalls({ ready: () => true, devices: () => undefined, newId: () => 'id' })
-    expect(await noPort.onApproval(approval, live())).toBe('none')
-    expect(port.approval).not.toHaveBeenCalled()
-    expect(notReady.open()).toEqual({ approvals: 0, polls: 0 })
-  })
-
-  it('forwards with a new id and answers the devices\' decision', async () => {
-    const { calls, port, approvals } = setup()
-    const first = calls.onApproval(approval, live())
-    const second = calls.onApproval({ sessionId: 's2', tool: 'Write', summary: 'src/a.ts' }, live())
-    expect(port.approval).toHaveBeenNthCalledWith(1, { id: 'id-1', ...approval })
-    expect(port.approval).toHaveBeenNthCalledWith(2, { id: 'id-2', sessionId: 's2', tool: 'Write', summary: 'src/a.ts' })
-    approvals[0].resolve('allow')
-    approvals[1].resolve('deny')
-    expect(await first).toBe('allow')
-    expect(await second).toBe('deny')
-  })
-
-  it('forwards terminalOnly typed, and answers invalid to one that is not a boolean', async () => {
-    const { calls, port, approvals } = setup()
-    const answer = calls.onApproval({ ...approval, terminalOnly: true }, live())
-    expect(port.approval).toHaveBeenCalledWith({ id: 'id-1', ...approval, terminalOnly: true })
-    approvals[0].resolve('none')
-    expect(await answer).toBe('none')
-    expect(await calls.onApproval({ ...approval, terminalOnly: 'yes' }, live())).toBe('invalid')
-    expect(port.approval).toHaveBeenCalledTimes(1)
-  })
-
-  it('a call that rejects is none', async () => {
-    const { calls, approvals } = setup()
-    const answer = calls.onApproval(approval, live())
-    approvals[0].reject(new Error('devices gone'))
-    expect(await answer).toBe('none')
-    expect(calls.open()).toEqual({ approvals: 0, polls: 0 })
-  })
-
-  it('a port that throws at once is none, and holds no place', async () => {
-    const { calls, port } = setup()
-    vi.mocked(port.approval).mockImplementation(() => { throw new Error('devices gone') })
-    for (let i = 0; i < 5; i += 1) expect(await calls.onApproval(approval, live())).toBe('none')
-    expect(port.approval).toHaveBeenCalledTimes(5)
-    expect(calls.open()).toEqual({ approvals: 0, polls: 0 })
-  })
-
-  it('the 5th open approval of a session and the 17th in all are none at once; a closed one frees its place', async () => {
-    const { calls, port, approvals } = setup()
-    const first = calls.onApproval(approval, live())
-    for (let i = 1; i < 4; i += 1) void calls.onApproval(approval, live())
-    expect(await calls.onApproval(approval, live())).toBe('none')
-    expect(port.approval).toHaveBeenCalledTimes(4)
-
-    approvals[0].resolve('allow')
-    expect(await first).toBe('allow')
-    void calls.onApproval(approval, live())
-    expect(port.approval).toHaveBeenCalledTimes(5)
-
-    for (const sessionId of ['s2', 's3', 's4']) {
-      for (let i = 0; i < 4; i += 1) void calls.onApproval({ ...approval, sessionId }, live())
-    }
-    expect(calls.open().approvals).toBe(16)
-    expect(await calls.onApproval({ ...approval, sessionId: 's5' }, live())).toBe('none')
-    expect(port.approval).toHaveBeenCalledTimes(17)
-  })
-
-  it('the client going first tells approvalGone once, and its late answer is dropped', async () => {
-    const { calls, port, approvals } = setup()
-    const client = new AbortController()
-    const answer = calls.onApproval(approval, client.signal)
-    client.abort()
-    expect(await answer).toBe('none')
-    expect(port.approvalGone).toHaveBeenCalledTimes(1)
-    expect(port.approvalGone).toHaveBeenCalledWith('id-1')
-    expect(calls.open()).toEqual({ approvals: 0, polls: 0 })
-
-    approvals[0].resolve('allow')
-    await flush()
-    expect(port.approvalGone).toHaveBeenCalledTimes(1)
-    expect(calls.open()).toEqual({ approvals: 0, polls: 0 })
-  })
-
-  it('a client that goes after the answer tells nothing', async () => {
-    const { calls, port, approvals } = setup()
-    const client = new AbortController()
-    const answer = calls.onApproval(approval, client.signal)
-    approvals[0].resolve('deny')
-    expect(await answer).toBe('deny')
-    client.abort()
-    expect(port.approvalGone).not.toHaveBeenCalled()
-  })
-
-  it('a client already gone is none, and nothing is forwarded', async () => {
-    const { calls, port } = setup()
-    const client = new AbortController()
-    client.abort()
-    expect(await calls.onApproval(approval, client.signal)).toBe('none')
-    expect(port.approval).not.toHaveBeenCalled()
-    expect(port.approvalGone).not.toHaveBeenCalled()
+// The dial only shows a waiting prompt (docs/specs/2026-11-13-device-claude-orca.md): the core holds no approval for it.
+describe('createDeviceHookCalls: no approvals', () => {
+  it('has the inbox alone, and holds no approval', () => {
+    const { calls } = setup()
+    expect(Object.keys(calls).sort()).toEqual(['onInbox', 'open'])
+    expect(calls.open()).toStrictEqual({ polls: 0 })
   })
 })
 
@@ -291,7 +132,7 @@ describe('createDeviceHookCalls: inbox', () => {
     polls[1].reject(new Error('devices gone'))
     expect(await off).toBe('off')
     expect(await failed).toBe('off')
-    expect(calls.open()).toEqual({ approvals: 0, polls: 0 })
+    expect(calls.open()).toEqual({ polls: 0 })
   })
 
   it('a text over 2000 characters or not a string is {}', async () => {
@@ -314,48 +155,42 @@ describe('createDeviceHookCalls: counts', () => {
     let ready = false
     let n = 0
     const calls = createDeviceHookCalls({ ready: () => ready, devices: () => port, newId: () => `id-${++n}`, log })
-    expect(await calls.onApproval(approval, live())).toBe('none')
     expect(await calls.onInbox({ sessionId: 's1' }, live())).toBe('off')
     vi.advanceTimersByTime(60_000)
     expect(log).not.toHaveBeenCalled()
 
     ready = true
-    expect(await calls.onApproval({ ...approval, sessionId: 'secret-session', tool: '' }, live())).toBe('invalid')
     expect(await calls.onInbox({ sessionId: 'secret\nsession' }, live())).toBe('invalid')
-    for (let i = 0; i < 4; i += 1) void calls.onApproval(approval, live())
-    expect(await calls.onApproval(approval, live())).toBe('none')
+    expect(await calls.onInbox({ sessionId: 'secret-session'.repeat(10) }, live())).toBe('invalid')
     for (let i = 0; i < 64; i += 1) void calls.onInbox({ sessionId: `poll-${i}` }, live())
     expect(await calls.onInbox({ sessionId: 'poll-64' }, live())).toBe('off')
     expect(log).not.toHaveBeenCalled()
     vi.advanceTimersByTime(60_000)
-    expect(log.mock.calls).toEqual([['[devices] dial hook calls in the last minute: 2 refused, 2 over the bound']])
+    expect(log.mock.calls).toEqual([['[devices] dial hook calls in the last minute: 2 refused, 1 over the bound']])
     vi.advanceTimersByTime(120_000)
     expect(log).toHaveBeenCalledTimes(1)
 
     expect(await calls.onInbox(null, live())).toBe('invalid')
     vi.advanceTimersByTime(60_000)
     expect(log.mock.calls[1]).toEqual(['[devices] dial hook calls in the last minute: 1 refused, 0 over the bound'])
-    expect(JSON.stringify(log.mock.calls)).not.toMatch(/secret|s1|poll-|id-|Bash|npm/)
+    expect(JSON.stringify(log.mock.calls)).not.toMatch(/secret|s1|poll-|id-/)
   })
 })
 
 describe('createDeviceHookCalls: state', () => {
   it('keeps nothing once every request has ended', async () => {
-    const { calls, approvals, polls } = setup()
+    const { calls, polls } = setup()
     const client = new AbortController()
-    const answered = calls.onApproval(approval, live())
-    const failed = calls.onApproval({ ...approval, sessionId: 's2' }, live())
-    const left = calls.onApproval({ ...approval, sessionId: 's3' }, client.signal)
     const replaced = calls.onInbox({ sessionId: 's1' }, live())
     const held = calls.onInbox({ sessionId: 's1' }, live())
     const other = calls.onInbox({ sessionId: 's2' }, client.signal)
-    expect(calls.open()).toEqual({ approvals: 3, polls: 2 })
+    const failed = calls.onInbox({ sessionId: 's3' }, live())
+    expect(calls.open()).toEqual({ polls: 3 })
 
-    approvals[0].resolve('allow')
-    approvals[1].reject(new Error('devices gone'))
     client.abort()
     polls[1].resolve({})
-    await Promise.all([answered, failed, left, replaced, held, other])
-    expect(calls.open()).toEqual({ approvals: 0, polls: 0 })
+    polls[3].reject(new Error('devices gone'))
+    await Promise.all([replaced, held, other, failed])
+    expect(calls.open()).toEqual({ polls: 0 })
   })
 })

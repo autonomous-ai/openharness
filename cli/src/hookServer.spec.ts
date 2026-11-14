@@ -340,12 +340,9 @@ describe('process-owned hook server', () => {
     expect(onObserved).not.toHaveBeenCalled()
   })
 
-  describe('the dial\'s two hook routes', () => {
-    const ROUTES = [
-      ['/api/hook/approval', 'onApproval', 4096],
-      ['/api/hook/inbox', 'onInbox', 1024],
-    ] as const
-    const APPROVAL = { sessionId: 'session-1', tool: 'Bash', summary: 'npm test' }
+  describe('the mod\'s inbox route', () => {
+    const ROUTES = [['/api/hook/inbox', 'onInbox', 1024]] as const
+    const POLL = { sessionId: 'session-1' }
     const post = (base: string, path: string, headers: Record<string, string>, body: string, signal?: AbortSignal) =>
       fetch(`${base}${path}`, { method: 'POST', headers, body, signal })
 
@@ -382,20 +379,12 @@ describe('process-owned hook server', () => {
       expect(handler).toHaveBeenCalledWith({ sessionId: 'session-1' }, expect.any(AbortSignal))
     })
 
-    it.each(['allow', 'deny', 'none'] as const)('/api/hook/approval answers the handler\'s %s', async (decision) => {
-      const onApproval = vi.fn(async () => decision)
-      const { base, headers } = await start({ onApproval })
-      const response = await post(base, '/api/hook/approval', headers, JSON.stringify(APPROVAL))
-      expect(response.status).toBe(200)
-      expect(await response.json()).toEqual({ decision })
-      expect(onApproval).toHaveBeenCalledWith(APPROVAL, expect.any(AbortSignal))
-    })
-
-    it('/api/hook/approval answers none when no handler is wired', async () => {
+    // The dial only shows a waiting prompt (docs/specs/2026-11-13-device-claude-orca.md): no route answers one.
+    it('/api/hook/approval is no route: 404, with no decision', async () => {
       const { base, headers } = await start()
-      const response = await post(base, '/api/hook/approval', headers, JSON.stringify(APPROVAL))
-      expect(response.status).toBe(200)
-      expect(await response.json()).toEqual({ decision: 'none' })
+      const response = await post(base, '/api/hook/approval', headers, JSON.stringify({ sessionId: 'session-1', tool: 'Bash', summary: 'npm test' }))
+      expect(response.status).toBe(404)
+      expect(await response.json()).toEqual({ error: 'not found' })
     })
 
     it.each([
@@ -427,7 +416,7 @@ describe('process-owned hook server', () => {
       })
       const { base, headers } = await start({ [name]: handler })
       const client = new AbortController()
-      const request = post(base, path, headers, JSON.stringify(APPROVAL), client.signal).catch(() => 'gone')
+      const request = post(base, path, headers, JSON.stringify(POLL), client.signal).catch(() => 'gone')
       const gone = await held
       expect(gone.aborted).toBe(false)
       const aborted = new Promise<void>((resolve) => gone.addEventListener('abort', () => resolve(), { once: true }))
@@ -435,7 +424,7 @@ describe('process-owned hook server', () => {
       expect(await request).toBe('gone')
       await aborted
       // The answer that comes after has nobody to go to.
-      answer(name === 'onApproval' ? 'allow' : { text: 'late' })
+      answer({ text: 'late' })
     })
 
     // Over TCP, who is calling is looked up before any route (audit H1). A client gone during that closed before the route
@@ -452,7 +441,7 @@ describe('process-owned hook server', () => {
       server.prependListener('request', (req: IncomingMessage) => { arrived.push(req) })
       const client = new AbortController()
       const request = fetch(`http://127.0.0.1:${started.port}${path}`, {
-        method: 'POST', body: JSON.stringify(APPROVAL), signal: client.signal,
+        method: 'POST', body: JSON.stringify(POLL), signal: client.signal,
         headers: { 'content-type': 'application/json', 'x-harness-hook-token': readHookCredential(env.ADAPTER_DATA_DIR)! },
       }).catch(() => 'gone')
       await vi.waitFor(() => expect(arrived).toHaveLength(1))
@@ -469,12 +458,12 @@ describe('process-owned hook server', () => {
       let seen: AbortSignal | undefined
       const handler = vi.fn(async (_body: unknown, gone: AbortSignal) => {
         seen = gone
-        return name === 'onApproval' ? 'allow' as const : {}
+        return {}
       })
       const { base, headers } = await start({ [name]: handler })
       // This listener runs before the route's own: by the time it resolves, the route has heard the close too.
       const closed = new Promise<void>((resolve) => server!.once('request', (_req, res) => res.once('close', () => resolve())))
-      const response = await post(base, path, headers, JSON.stringify(APPROVAL))
+      const response = await post(base, path, headers, JSON.stringify(POLL))
       expect(response.status).toBe(200)
       await response.text()
       await closed
@@ -1270,11 +1259,11 @@ describe('the daemon socket', () => {
     rmSync(dir, { recursive: true, force: true })
   })
 
-  // The approval hook (deviceClaude/approve.ts) and the mod's voice poll post over the socket only: without one, this line is
-  // why the dial asks nothing and takes no voice.
-  it('says once, with no path, that dial approvals and voice are off where it has no Unix socket', async () => {
+  // The permission hook (deviceClaude/asked.ts) and the mod's voice poll post over the socket only: without one, this line is
+  // why the dial shows no waiting prompt and takes no voice.
+  it('says once, with no path, that the dial\'s waiting prompts and voice are off where it has no Unix socket', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const said = () => warn.mock.calls.filter(([line]) => String(line).includes('dial approvals'))
+    const said = () => warn.mock.calls.filter(([line]) => String(line).includes('the dial\'s waiting prompts'))
     const dir = mkdtempSync('/tmp/hsock-')
     const blocked = join(dir, 'daemon.sock')
     writeFileSync(blocked, 'not a socket')
@@ -1282,7 +1271,7 @@ describe('the daemon socket', () => {
       for (const socketPath of [null, blocked]) {
         const started = await startHookServer(0, { onRegistered: vi.fn(), onSessionEnd: vi.fn() }, { socketPath })
         await new Promise<void>((resolve) => started.server.close(() => resolve()))
-        expect(said()).toEqual([['[hooks] dial approvals and voice from the Claude Code plugin are off: no Unix socket']])
+        expect(said()).toEqual([['[hooks] the dial\'s waiting prompts and voice from the Claude Code plugin are off: no Unix socket']])
         warn.mockClear()
       }
       const socketPath = join(dir, 'open.sock')

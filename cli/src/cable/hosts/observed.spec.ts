@@ -380,53 +380,6 @@ describe('ObservedSource codex and open sessions', () => {
     expect(src.list()[0].state).toBe('working')
   })
 
-  it('an agent with a card open stays needs-you while its transcript is written, and after the card leaves until it grows again', async () => {
-    const { src, clock, stamps, ev } = setup()
-    src.ingest(ev('turn-start', { transcriptPath: '/t/s.jsonl' }))
-    clock.t += 10
-    src.approval('s1', '/work/proj', 'open')
-    // The tool call's line is written after its hook asked: the prompt is not answered.
-    stamps.set('/t/s.jsonl', clock.t + 5)
-    clock.t += 3_000
-    await src.checkWorking()
-    expect(src.list()[0].state).toBe('needs-you')
-    // The card expired, and the terminal's prompt still waits: the write before is not its answer.
-    clock.t += 300_000
-    src.approval('s1', '/work/proj', 'left')
-    await src.checkWorking()
-    expect(src.list()[0].state).toBe('needs-you')
-    // Answered in the terminal: the transcript grows.
-    stamps.set('/t/s.jsonl', clock.t + 1)
-    await src.checkWorking()
-    expect(src.list()[0].state).toBe('working')
-  })
-
-  it('a prompt with no card is not read as answered by the line its asking writes, nor by the last prompt\'s answer', async () => {
-    const { src, clock, stamps, ev } = setup()
-    src.ingest(ev('turn-start', { transcriptPath: '/t/s.jsonl' }))
-    clock.t += 10_000
-    src.approval('s1', '/work/proj', 'terminal')
-    // The tool call's line is written after its hook asked, as with a card.
-    stamps.set('/t/s.jsonl', clock.t + 5)
-    clock.t += 3_000
-    await src.checkWorking()
-    expect(src.list()[0].state).toBe('needs-you')
-    expect(src.terminalOnly(src.list()[0].id)).toBe(true)
-    // Answered in the terminal: the tool's result is written.
-    stamps.set('/t/s.jsonl', clock.t + 1)
-    // The next prompt asks before the 3 s check has seen that answer: the agent still reads needs-you.
-    clock.t += 500
-    src.approval('s1', '/work/proj', 'terminal')
-    stamps.set('/t/s.jsonl', clock.t + 5)
-    clock.t += 3_000
-    await src.checkWorking()
-    expect(src.list()[0].state).toBe('needs-you')
-    // Answered in the terminal again.
-    stamps.set('/t/s.jsonl', clock.t + 1)
-    await src.checkWorking()
-    expect(src.list()[0].state).toBe('working')
-  })
-
   it('scanOpen adds terminal/app sessions as idle and skips harness-owned ones', async () => {
     const { src, open, owners, externals } = setup()
     open.set('a', 'terminal')
@@ -602,7 +555,7 @@ describe('ObservedSource actions', () => {
     expect(src.capabilities(src.list()[0])).toMatchObject({ voice: true, focus: true })
   })
 
-  it('caps: s alone with no actions; v and f with a handle; v for a claude session the mod is ready for; never v from the mod for codex; a only while an approval is open', () => {
+  it('caps: s alone with no actions; v and f with a handle; v for a claude session the mod is ready for; never v from the mod for codex; never a', () => {
     const bare = setup()
     bare.src.ingest(bare.ev('session-start', withHandle))
     expect(bare.src.capabilities(bare.src.list()[0])).toEqual({ status: true, voice: false, focus: false, answer: false })
@@ -618,102 +571,10 @@ describe('ObservedSource actions', () => {
     expect(caps('orca')).toEqual({ status: true, voice: true, focus: true, answer: false })
     expect(caps('mod')).toEqual({ status: true, voice: true, focus: false, answer: false })
     expect(caps('cx')).toEqual({ status: true, voice: false, focus: false, answer: false })
-    src.approval('mod', '/work/proj', 'open')
-    expect(caps('mod').answer).toBe(true)
-    src.approval('mod', '/work/proj', 'answered')
-    expect(caps('mod').answer).toBe(false)
-  })
-
-  it('approval open creates a claude agent the hook never named and turns it needs-you', async () => {
-    const { actions } = fakeActions()
-    const { src, clock, changes } = setup({ actions })
-    const agent = src.approval('new', '/work/fresh', 'open')
-    expect(agent).toMatchObject({ id: observedAgentId('claude', 'new'), engine: 'claude', name: 'fresh', state: 'needs-you' })
-    expect(src.list()).toEqual([agent])
-    expect(src.capabilities(agent!).answer).toBe(true)
-    expect(changes).toHaveBeenCalled()
-    // No process is known for it until its hook comes: the process sweep keeps it, until 12 h of silence.
-    await src.tick()
-    expect(src.list()).toHaveLength(1)
-    clock.t += 12 * 3600_000
-    await src.tick()
-    expect(src.list()).toEqual([])
-  })
-
-  it('a hook after the approval gives the agent its process', async () => {
-    const { actions } = fakeActions()
-    const { src, gens, ev } = setup({ actions })
-    src.approval('s1', '/work/proj', 'open')
-    src.ingest(ev('session-start', { callerPid: 300 }))
-    expect(src.list()[0].callerPid).toBe(300)
-    gens.set(300, null)
-    await src.tick()
-    expect(src.list()).toEqual([])
-  })
-
-  it('answered turns it working', () => {
-    const { actions } = fakeActions()
-    const { src, ev } = setup({ actions })
-    src.ingest(ev('turn-start'))
-    src.approval('s1', '/work/proj', 'open')
-    expect(src.approval('s1', '/work/proj', 'answered')).toMatchObject({ state: 'working' })
-    expect(src.capabilities(src.list()[0]).answer).toBe(false)
-  })
-
-  it('left keeps it needs-you', () => {
-    const { actions } = fakeActions()
-    const { src, ev } = setup({ actions })
-    src.ingest(ev('turn-start'))
-    src.approval('s1', '/work/proj', 'open')
-    expect(src.approval('s1', '/work/proj', 'left')).toMatchObject({ state: 'needs-you' })
-    expect(src.capabilities(src.list()[0]).answer).toBe(false)
-  })
-
-  it('terminal: a prompt the dial cannot show whole turns the agent needs-you with nothing to answer, until it moves on', () => {
-    const { actions } = fakeActions()
-    const { src, ev, changes } = setup({ actions })
-    const agent = src.approval('new', '/work/fresh', 'terminal')
-    expect(agent).toMatchObject({ id: observedAgentId('claude', 'new'), name: 'fresh', state: 'needs-you' })
-    expect(src.list()).toEqual([agent])
-    expect(src.capabilities(agent!).answer).toBe(false)
-    expect(src.terminalOnly(agent!.id)).toBe(true)
-    expect(changes).toHaveBeenCalled()
-    // The same prompt's notice keeps it; the turn going on ends it.
-    src.ingest(ev('needs-input', { sessionId: 'new' }))
-    expect(src.terminalOnly(agent!.id)).toBe(true)
-    src.ingest(ev('turn-start', { sessionId: 'new' }))
-    expect(src.list()[0].state).toBe('working')
-    expect(src.terminalOnly(agent!.id)).toBe(false)
-  })
-
-  it('terminal: a card for the next prompt is the dial\'s again, and one already open keeps its answer', () => {
-    const { actions } = fakeActions()
-    const { src, ev } = setup({ actions })
-    src.ingest(ev('turn-start'))
-    const id = observedAgentId('claude', 's1')
-    src.approval('s1', '/work/proj', 'terminal')
-    src.approval('s1', '/work/proj', 'open')
-    expect(src.terminalOnly(id)).toBe(false)
-    src.approval('s1', '/work/proj', 'terminal')
-    expect(src.terminalOnly(id)).toBe(true)
-    expect(src.capabilities(src.list()[0]).answer).toBe(true)
-    expect(src.terminalOnly('unknown')).toBe(false)
-  })
-
-  it('terminal with the source full gives undefined', () => {
-    const { actions } = fakeActions()
-    const { src, ev } = setup({ actions })
-    for (let i = 0; i < 50; i++) src.ingest(ev('turn-start', { sessionId: `s${i}`, callerPid: 200 + i }))
-    expect(src.approval('new', '/work/proj', 'terminal')).toBeUndefined()
-    expect(src.list()).toHaveLength(50)
-  })
-
-  it('open with the source full gives undefined', () => {
-    const { actions } = fakeActions()
-    const { src, ev } = setup({ actions })
-    for (let i = 0; i < 50; i++) src.ingest(ev('turn-start', { sessionId: `s${i}`, callerPid: 200 + i }))
-    expect(src.approval('new', '/work/proj', 'open')).toBeUndefined()
-    expect(src.list()).toHaveLength(50)
+    // Waiting on a prompt it is not the dial's to answer: the prompt is the app's.
+    src.ingest(ev('turn-start', { sessionId: 'mod' }))
+    src.ingest(ev('needs-input', { sessionId: 'mod' }))
+    expect(caps('mod')).toEqual({ status: true, voice: true, focus: false, answer: false })
   })
 
   it('send is refused while working and while needs-you, and nothing is typed', async () => {

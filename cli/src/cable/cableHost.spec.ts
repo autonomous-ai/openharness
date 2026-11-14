@@ -1117,38 +1117,24 @@ describe('the dial reaches the fleet through the core\'s port', () => {
       expect(JSON.stringify(heard())).not.toContain('o1')
     })
 
-    it('an approval id is answered by approvals through answer and through answerReviewed, and the fleet hears neither', async () => {
-      const { host, heard } = setup()
-      const approvals = { answer: vi.fn(() => ({ ok: true as const })) }
-      host.setApprovals(approvals)
-      expect(host.answer('o1', 'approval:7', { approval: 'Allow' })).toEqual({ ok: true })
-      expect(approvals.answer).toHaveBeenLastCalledWith('o1', 'approval:7', 'Allow')
-      expect(await host.answerReviewed({ agentId: 'o1', requestId: 'approval:8', questions: [], answers: { approval: 'Deny' }, selections: {} }))
-        .toEqual({ ok: true })
-      expect(approvals.answer).toHaveBeenLastCalledWith('o1', 'approval:8', 'Deny')
+    // The dial only shows a waiting prompt (docs/specs/2026-11-13-device-claude-orca.md): an answer for an agent outside
+    // Harness, whatever its id, approves nothing, and the fleet never hears of it.
+    it('an answer or a reviewed answer for an agent outside Harness, an approval\'s id or not, reaches nothing', async () => {
+      const { host, fleet, heard } = setup()
+      expect(host.answer('o1', 'approval:7', { approval: 'Allow' })).toBeUndefined()
+      expect(await host.answerReviewed({ agentId: 'o1', requestId: 'approval:8', questions: [], answers: { approval: 'Allow' }, selections: {} }))
+        .toEqual({ ok: false, error: 'Use the terminal to answer this question.' })
+      expect(fleet.answer).not.toHaveBeenCalled()
+      expect(fleet.answerReviewed).not.toHaveBeenCalled()
       expect(JSON.stringify(heard())).not.toContain('approval:')
     })
 
-    it('any other id goes to the fleet as before', async () => {
+    it('an answer for a Harness agent goes to the fleet as before, whatever its id', async () => {
       const { host, fleet } = setup()
-      const approvals = { answer: vi.fn(() => ({ ok: true as const })) }
-      host.setApprovals(approvals)
-      host.answer('r1', 'q1', { k: 'v' })
-      expect(fleet.answer).toHaveBeenCalledWith('r1', 'q1', { k: 'v' })
+      host.answer('r1', 'approval:1', { k: 'v' })
+      expect(fleet.answer).toHaveBeenCalledWith('r1', 'approval:1', { k: 'v' })
       expect(await host.answerReviewed({ agentId: 'r1', requestId: 'q2', questions: [], answers: {}, selections: {} })).toEqual({ ok: true, pending: true })
       expect(fleet.answerReviewed).toHaveBeenCalledTimes(1)
-      expect(approvals.answer).not.toHaveBeenCalled()
-    })
-
-    it('an approval id with no approvals set is refused', async () => {
-      const { host, heard } = setup()
-      const closed = { ok: false, error: 'This request is closed.' }
-      expect(host.answer('o1', 'approval:7', { approval: 'Allow' })).toEqual(closed)
-      host.setApprovals({ answer: vi.fn(() => ({ ok: true as const })) })
-      host.setApprovals(null)
-      expect(await host.answerReviewed({ agentId: 'o1', requestId: 'approval:7', questions: [], answers: { approval: 'Allow' }, selections: {} }))
-        .toEqual(closed)
-      expect(JSON.stringify(heard())).not.toContain('approval:')
     })
 
     it('a tap on an agent with f runs source.focus', async () => {
@@ -1180,19 +1166,6 @@ describe('the dial reaches the fleet through the core\'s port', () => {
       expect(observed.markSeen).toHaveBeenCalledWith('o1')
       expect(observed.focus).not.toHaveBeenCalled()
       expect(JSON.stringify(heard())).not.toContain('o1')
-    })
-
-    it('machineView is true only with no window and a registry', () => {
-      const host = new DaemonCableHost(wiring())
-      expect(host.machineView()).toBe(false)
-      host.setRegistry(new HostRegistry([host.harness]))
-      expect(host.machineView()).toBe(true)
-      onTab(host, ['r1'])
-      expect(host.machineView()).toBe(false)
-      host.setSwarms(null)
-      expect(host.machineView()).toBe(true)
-      host.setRegistry(null)
-      expect(host.machineView()).toBe(false)
     })
   })
 })

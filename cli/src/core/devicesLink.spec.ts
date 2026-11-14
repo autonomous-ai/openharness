@@ -3,7 +3,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
-import { APPROVAL_CALL_MS, createDevicesLink, DEVICES_WAIT_MS, INBOX_CALL_MS, ROUTE_TASK_WAIT_MS, type DevicesState } from './devicesLink.js'
+import { createDevicesLink, DEVICES_WAIT_MS, INBOX_CALL_MS, ROUTE_TASK_WAIT_MS, type DevicesState } from './devicesLink.js'
 
 const STATE: DevicesState = {
   desk: ['a1'], foreground: true, swarms: null, unread: [], focus: { voice: null, form: null }, engines: ['claude'], commanders: false,
@@ -82,14 +82,10 @@ describe('what the core tells the devices', () => {
     expect(sent).toEqual([])
   })
 
-  it('tells them a hook\'s client that went first, as the notices approval.gone and inbox.gone', () => {
+  it('tells them a mod\'s poll that went first, as the notice inbox.gone', () => {
     const { sent, port } = link()
-    port.approvalGone('r1')
     port.inboxGone('p1')
-    expect(sent).toEqual([
-      { type: 'service_event', payload: { id: 'r1', kind: 'approval.gone' } },
-      { type: 'service_event', payload: { pollId: 'p1', kind: 'inbox.gone' } },
-    ])
+    expect(sent).toEqual([{ type: 'service_event', payload: { pollId: 'p1', kind: 'inbox.gone' } }])
   })
 
   it('says everything again when they connect, and nothing to stop: the master stops their process', async () => {
@@ -126,19 +122,10 @@ describe('what the core asks of the devices', () => {
     expect(await port.stepFocus('next')).toBe('no_agents')
   })
 
-  // Past the devices' own 300 s, so a card that runs out is their expiry, not this wait's.
-  it('asks for an approval with a 305 s wait and reads allow and deny; anything else and an error are none', async () => {
-    const request = { id: 'r1', sessionId: 's1', tool: 'Bash', summary: 'npm test', cwd: '/work/api' }
-    const { call, port } = link({ decision: 'allow' })
-    expect(APPROVAL_CALL_MS).toBe(305_000)
-    expect(await port.approval(request)).toBe('allow')
-    expect(call).toHaveBeenLastCalledWith('approval', request, APPROVAL_CALL_MS)
-    call.mockResolvedValueOnce({ decision: 'deny' })
-    expect(await port.approval(request)).toBe('deny')
-    for (const answer of [{ decision: 'none' }, { decision: 'ALLOW' }, {}, { error: 'SERVICE_UNAVAILABLE', service: 'devices', retryable: true }]) {
-      call.mockResolvedValueOnce(answer)
-      expect(await port.approval(request), JSON.stringify(answer)).toBe('none')
-    }
+  // The dial only shows a waiting prompt (docs/specs/2026-11-13-device-claude-orca.md): nothing asks the devices for an approval.
+  it('has no approval call or notice', () => {
+    const { port } = link()
+    expect(Object.keys(port).filter((member) => /approval/i.test(member))).toEqual([])
   })
 
   // Past the devices' own 25 s hold, so a hold that runs out is their empty answer, which the mod follows at once.

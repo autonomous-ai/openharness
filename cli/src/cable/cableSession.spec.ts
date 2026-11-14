@@ -4270,23 +4270,16 @@ describe('what the dial cannot do for an agent', () => {
     } finally { await session.stop() }
   })
 
-  it('a refused answer is toasted with its error', async () => {
-    const answer = vi.fn(() => ({ ok: false as const, error: 'This request is closed.' }))
-    const { session, port } = await greeted(caps({ answer }))
-    try {
-      port.say({ t: 'answer', agentId: 'a2', requestId: 'r2', answers: { q: 'yes' } })
-      await vi.waitFor(() => expect(toasts(port)).toEqual([{ t: 'toast', text: 'This request is closed.' }]))
-    } finally { await session.stop() }
-  })
-
-  it("an approval's answer reaches the host even when the agent has no a", async () => {
-    const host = caps({ answer: vi.fn(() => ({ ok: true as const })) })
+  // The dial only shows a waiting prompt (docs/specs/2026-11-13-device-claude-orca.md): an answer for an agent outside
+  // Harness, whatever its id, never reaches the host, so nothing on the dial can approve a command.
+  it('an answer with an approval\'s id for an agent outside Harness toasts and never reaches the host', async () => {
+    const host = caps()
     const { session, port } = await greeted(host)
     try {
       port.say({ t: 'answer', agentId: 'a1', requestId: 'approval:r1', answers: { approval: 'Allow' } })
-      await vi.waitFor(() => expect(host.answer).toHaveBeenCalledWith('a1', 'approval:r1', { approval: 'Allow' }))
-      await settle()
-      expect(toasts(port)).toEqual([])
+      await vi.waitFor(() => expect(toasts(port)).toEqual([{ t: 'toast',
+        text: 'This agent is in Orca. Answering it from the device comes in an update.' }]))
+      expect(host.answer).not.toHaveBeenCalled()
     } finally { await session.stop() }
   })
 
@@ -4300,24 +4293,6 @@ describe('what the dial cannot do for an agent', () => {
       expect(toasts(port)).toEqual([])
       port.say({ t: 'agent.open', agentId: 'a1' })
       await vi.waitFor(() => expect(toasts(port)).toEqual([{ t: 'toast', text: 'Orca did not open it.' }]))
-    } finally { await session.stop() }
-  })
-
-  it('a spoken answer to an approval keeps no audio and answers Tap Allow or Deny.', async () => {
-    const transcribe = vi.fn(async () => 'allow it')
-    const { session, port } = await greeted(caps({ transcribe, canSpeakQuestion: () => true }))
-    try {
-      await session.question('a1', 'approval:r1', [{ key: 'approval', q: 'Allow Bash?\nls', options: ['Allow', 'Deny'], multi: false }])
-      port.say({ t: 'question.read', agentId: 'a1', requestId: 'read' })
-      await vi.waitFor(() => expect(port.types()).toContain('question.state'))
-      const token = port.sent.find((m) => m.t === 'question.state')!.token
-      port.say({ t: 'voice.begin', agentId: 'a1', questionToken: token, questionIndex: 0, uploadId: 'u1' })
-      port.pcm(Buffer.alloc(3200, 7))
-      await settle()
-      expect(session['voice']).toBeNull()
-      port.say({ t: 'voice.end', uploadId: 'u1' })
-      await vi.waitFor(() => expect(port.sent).toContainEqual({ t: 'voice.error', uploadId: 'u1', message: 'Tap Allow or Deny.' }))
-      expect(transcribe).not.toHaveBeenCalled()
     } finally { await session.stop() }
   })
 
