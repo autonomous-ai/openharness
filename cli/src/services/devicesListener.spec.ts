@@ -473,7 +473,8 @@ describe.skipIf(process.platform === 'win32')('the devices listener', () => {
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
       const idle = connection(path)
       expect((await idle.send('{"type":"nope"}')).status).toBe(404)
-      expect(vi.getTimerCount()).toBe(1)
+      // The minute's count, and the idle connection's deadline.
+      expect(vi.getTimerCount()).toBe(2)
       const waiting = bare(path, post('{"type":"later"}'))
       await later.called
 

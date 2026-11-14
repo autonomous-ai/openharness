@@ -25,6 +25,8 @@ export const LISTENER_MAX_CONNECTIONS = 16
 /** Messages dropped in a second, of every kind and connection together, past which a message is refused before its body
  *  is read: a sender that keeps to the rates is refused a few, a loop thousands. */
 export const LISTENER_DROPPED_PER_SECOND = 100
+/** From a connection's opening, or its last answer, to its next answer: a message is a few dozen bytes on a local
+ *  socket, so a connection slower than that is holding one of the slots, not sending. */
 const LISTENER_TIMEOUT_MS = 2_000
 
 /** What a handler returns for a body that is not a message of its type. */
@@ -108,6 +110,8 @@ export async function openDevicesListener(
   const rates = new WeakMap<Socket, Map<string, PerSecond>>()
   const wide = new Map(Object.entries(handlers).map(([type, { perSecond }]) => [type, new PerSecond(perSecond * LISTENER_MAX_CONNECTIONS)]))
   const droppedRate = new PerSecond(LISTENER_DROPPED_PER_SECOND)
+  // Each connection's deadline, gone with it.
+  const deadlines = new WeakMap<Socket, NodeJS.Timeout>()
   const waiting = new Set<AbortController>()
   let dropped = { ...NONE_DROPPED }
   let minute: NodeJS.Timeout | undefined
@@ -162,6 +166,8 @@ export async function openDevicesListener(
   }
 
   const onRequest = (req: IncomingMessage, res: ServerResponse): void => {
+    // A next message on a connection kept alive has the same time, counted from this answer.
+    res.once('finish', () => deadlines.get(req.socket)?.refresh())
     // Its body is never read, so the connection closes after the answer rather than reading through that body, of any
     // size, to a next message.
     if (req.method !== 'POST' || req.url !== '/') return drop(res, 405, 'refused', true)
@@ -191,9 +197,17 @@ export async function openDevicesListener(
     return null
   }
   listening.server.maxConnections = LISTENER_MAX_CONNECTIONS
-  // A message is a few dozen bytes on a local socket: a connection idle this long, or this long into its headers or its
-  // request, is holding one of the slots, not sending.
-  listening.server.timeout = listening.server.headersTimeout = listening.server.requestTimeout = LISTENER_TIMEOUT_MS
+  // A deadline of its own, as Node's timeouts hold a slot far longer: it checks headersTimeout and requestTimeout every
+  // 30 s, and keeps a connection idle after its answer for keepAliveTimeout and a second (measured: 30 s for a sender of
+  // a byte at a time, 6 s for one that sends nothing more).
+  listening.server.on('connection', (socket: Socket) => {
+    const deadline = setTimeout(() => socket.destroy(), LISTENER_TIMEOUT_MS).unref()
+    deadlines.set(socket, deadline)
+    socket.once('close', () => clearTimeout(deadline))
+  })
+  // Said in each answer (`Keep-Alive: timeout=2`): a Node client lets go of an idle connection a second before the
+  // deadline, rather than send on one the listener is closing.
+  listening.server.keepAliveTimeout = LISTENER_TIMEOUT_MS
   // A listener never keeps its process up.
   listening.server.unref()
   // No path: a path holds the account's name.
