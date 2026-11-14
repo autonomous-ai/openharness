@@ -1778,14 +1778,11 @@ describe('a plug-in whose first lane open fails', () => {
   })
 
   it('runs one backoff over the real lane when the backend is down at the first plug-in', async () => {
-    // A port nothing listens on: every dial is refused at once, as with the backend down.
-    const probe = new WebSocketServer({ port: 0, host: '127.0.0.1' })
-    await new Promise<void>((resolve) => probe.once('listening', () => resolve()))
-    const port = (probe.address() as { port: number }).port
-    await new Promise<void>((resolve) => probe.close(() => resolve()))
+    // Port 1: every dial is refused at once, as with the backend down. An unprivileged process cannot listen there,
+    // where a port freed a moment ago could be taken by another listener before the dial.
     const lines: string[] = []
     const link = new DeviceLink({
-      auth: { accessToken: async () => 'token' }, backendWsBase: `ws://127.0.0.1:${port}`,
+      auth: { accessToken: async () => 'token' }, backendWsBase: 'ws://127.0.0.1:1',
       computerId: 'this-computer', autonomousEnv: 'test',
       seal: { hello: vi.fn(), welcome: vi.fn(), rekey: vi.fn(), seal: vi.fn(), open: vi.fn(), drop: vi.fn() } as never,
       peer: () => null, localMachineId: () => 'mine', log: (line) => { lines.push(line) },
