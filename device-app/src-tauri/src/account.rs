@@ -1,5 +1,156 @@
 //! `harness auth status --json` and `harness login --json`.
 
+use crate::cli::{Child, Cli, Killer, LINE_MAX, LOGIN_DEADLINE, LOGIN_EXIT_DEADLINE, STATUS_DEADLINE, Timeout};
+use crate::types::{Event, Log, LoginEvent};
+use serde::Deserialize;
+use std::io;
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::{Duration, Instant};
+use url::Url;
+
+/// The sign-in screen's words when the CLI gave no `result`, or none in time.
+pub const NO_RESULT: &str = "Sign-in did not finish.";
+
+/// Whether this computer is signed in; `None` when the CLI could not say.
+pub fn auth_status(cli: &dyn Cli) -> Option<bool> {
+    auth_status_within(cli, STATUS_DEADLINE)
+}
+
+fn auth_status_within(cli: &dyn Cli, deadline: Duration) -> Option<bool> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Status {
+        logged_in: bool,
+    }
+    let output = cli.run(&["auth", "status", "--json"], deadline).ok()?;
+    // It always exits 0, signed out too: any other end is a run that failed.
+    if output.timed_out || output.code != Some(0) {
+        return None;
+    }
+    output
+        .stdout
+        .lines()
+        .filter(|line| line.len() <= LINE_MAX)
+        .find_map(|line| serde_json::from_str::<Status>(line).ok())
+        .map(|status| status.logged_in)
+}
+
+/// The lines of `harness login --json` the app acts on. Any other type is ignored.
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum Line {
+    AuthorizeUrl { url: String },
+    Waiting { message: String },
+    Result { status: String, code: Option<String>, message: Option<String> },
+}
+
+/// A sign-in under way.
+pub struct Login {
+    /// The child's killer until the sign-in is decided: its `result`, its output's end, the deadline or a cancel takes
+    /// it. Events are sent while it is held, so once `cancel` has returned nothing more is sent.
+    live: Arc<Mutex<Option<Killer>>>,
+    log: Arc<dyn Log>,
+}
+
+impl Login {
+    /// Kills the child before its `result`. After it, `harness login` is restarting the daemon, so this does nothing.
+    pub fn cancel(&self) {
+        if let Some(killer) = self.live.lock().unwrap().take() {
+            killer.kill();
+            self.log.line("sign-in: cancelled");
+        }
+    }
+}
+
+/// Runs `login --json`: an `Event::Login` for its authorize URL (`https:` only), each `waiting`, and one `Done`,
+/// unless it is cancelled first.
+pub fn login(cli: &dyn Cli, log: Arc<dyn Log>, send: impl Fn(Event) + Send + 'static) -> io::Result<Login> {
+    login_within(cli, log, send, LOGIN_DEADLINE, LOGIN_EXIT_DEADLINE)
+}
+
+fn login_within(
+    cli: &dyn Cli,
+    log: Arc<dyn Log>,
+    send: impl Fn(Event) + Send + 'static,
+    before_result: Duration,
+    after_result: Duration,
+) -> io::Result<Login> {
+    let mut child = cli.spawn(&["login", "--json"])?;
+    let live = Arc::new(Mutex::new(Some(child.killer())));
+    let login = Login { live: live.clone(), log: log.clone() };
+    thread::spawn(move || {
+        until_result(&mut child, &live, &*log, &|event| send(Event::Login(event)), before_result);
+        // However it ended, the child is read to its end, so it never blocks on a full pipe, and waited for: after a
+        // `result` it is restarting the daemon, and nothing here kills it. The thread ends once it has exited.
+        let end = Instant::now() + after_result;
+        while let Ok(Some(_)) = child.line(end.saturating_duration_since(Instant::now())) {}
+        let _ = child.exit(end.saturating_duration_since(Instant::now()));
+        // Only here is the child let go of, and its stdin with it: `harness login` reads a closed stdin as the app
+        // having gone, and gives up.
+    });
+    Ok(login)
+}
+
+/// Sends the child's events until its `result`, its output's end, the deadline (which kills it) or a cancel.
+fn until_result(
+    child: &mut Child,
+    live: &Mutex<Option<Killer>>,
+    log: &dyn Log,
+    send: &dyn Fn(LoginEvent),
+    deadline: Duration,
+) {
+    let end = Instant::now() + deadline;
+    loop {
+        let next = child.line(end.saturating_duration_since(Instant::now()));
+        let mut live = live.lock().unwrap();
+        // Cancelled: nothing more is sent.
+        let Some(killer) = live.as_ref() else { return };
+        let done = match next {
+            Ok(Some(line)) => match serde_json::from_str(&line) {
+                Ok(Line::AuthorizeUrl { url }) => {
+                    // A browser opens it: nothing but `https:` gets through.
+                    if let Some(url) = Url::parse(&url).ok().filter(|url| url.scheme() == "https") {
+                        let host = url.host_str().unwrap_or_default();
+                        log.line(&format!("sign-in: browser {}://{host}{}", url.scheme(), url.path()));
+                        send(LoginEvent::AuthorizeUrl(url.into()));
+                    }
+                    continue;
+                }
+                Ok(Line::Waiting { message }) => {
+                    log.line("sign-in: waiting");
+                    send(LoginEvent::Waiting(message));
+                    continue;
+                }
+                Ok(Line::Result { status, code, message }) => {
+                    if status == "success" {
+                        log.line("sign-in: result success");
+                        Ok(())
+                    } else {
+                        let code = code.map_or(String::new(), |code| format!(" {code}"));
+                        log.line(&format!("sign-in: result error{code}"));
+                        let message = message.filter(|message| !message.trim().is_empty());
+                        Err(message.unwrap_or_else(|| NO_RESULT.into()))
+                    }
+                }
+                Err(_) => continue,
+            },
+            Ok(None) => {
+                log.line("sign-in: no result");
+                Err(NO_RESULT.into())
+            }
+            Err(Timeout) => {
+                killer.kill();
+                log.line("sign-in: no result");
+                Err(NO_RESULT.into())
+            }
+        };
+        *live = None;
+        send(LoginEvent::Done(done));
+        return;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
