@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
 import { SERVICE_REGISTERED_NOT_RUNNING } from '../lib/serviceCommand.js'
+import { type PowerShellRun, windowsPowerShell } from '../testing/windowsPowerShell.js'
 
 // vitest runs from cli/, so this is cli/scripts/install.ps1, the file published to the CDN.
 const installer = join(process.cwd(), 'scripts', 'install.ps1')
@@ -112,11 +113,17 @@ describe('install.ps1, as written', () => {
 const windows = process.platform === 'win32'
 const scratch: string[] = []
 const subkeys: string[] = []
-// The registry keys first: a folder a still-running program holds cannot be removed, and must not leave keys behind.
-afterAll(() => {
-  for (const key of subkeys) spawnSync('reg.exe', ['delete', `HKCU\\${key}`, '/f'], { encoding: 'utf8' })
-  for (const dir of scratch) {
-    try { rmSync(dir, { recursive: true, force: true }) } catch { /* left in the temp folder */ }
+const session = windowsPowerShell()
+// The session first, then the registry keys, the folders last: a folder a still-running program holds cannot be
+// removed, and must not leave keys behind. A session that did not end still fails the file, after the clean-up.
+afterAll(async () => {
+  try {
+    await session.close()
+  } finally {
+    for (const key of subkeys) spawnSync('reg.exe', ['delete', `HKCU\\${key}`, '/f'], { encoding: 'utf8' })
+    for (const dir of scratch) {
+      try { rmSync(dir, { recursive: true, force: true }) } catch { /* left in the temp folder */ }
+    }
   }
 })
 
@@ -154,72 +161,73 @@ function powershellEnv(modulePath: ModulePath, extra: NodeJS.ProcessEnv = {}): N
   return { ...env, ...extra }
 }
 
-/** Run [script] in Windows PowerShell 5.1 with the installer dot-sourced in library mode. */
-function ps(script: string, env: NodeJS.ProcessEnv = {}, modulePath: ModulePath = 'default'): { status: number | null; stdout: string; stderr: string } {
-  const text = `$ErrorActionPreference = 'Stop'; . '${installer}'; ${script}`
-  const run = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', Buffer.from(text, 'utf16le').toString('base64')], {
-    encoding: 'utf8', env: powershellEnv(modulePath, { HARNESS_INSTALL_LIBRARY: '1', ...env }), timeout: 120_000,
-  })
-  return { status: run.status, stdout: run.stdout.trim(), stderr: run.stderr }
+/**
+ * Run [script] in Windows PowerShell 5.1 with the installer dot-sourced in library mode, in a runspace of this file's
+ * one session: a powershell.exe of its own would pay module autoload's first command again, 22 to 29 s on
+ * windows-11-arm.
+ */
+async function ps(script: string, env: NodeJS.ProcessEnv = {}, modulePath: ModulePath = 'default'): Promise<PowerShellRun> {
+  return session.run(`$ErrorActionPreference = 'Stop'; . '${installer}'; ${script}`, { env: powershellEnv(modulePath, { HARNESS_INSTALL_LIBRARY: '1', ...env }) })
 }
 
 /** The message a call throws, or `no error`. */
-const thrown = (call: string) => ps(`try { ${call} | Out-Null; 'no error' } catch { $_.Exception.Message }`).stdout
+const thrown = async (call: string): Promise<string> => (await ps(`try { ${call} | Out-Null; 'no error' } catch { $_.Exception.Message }`)).stdout
 
-// Each case starts powershell.exe several times, and one start takes 1 to 2 seconds on the ARM64 VM: the
-// default 5 seconds timed out six of the seven cases there.
+// Each case makes several calls, and the session's first pays module autoload's first command, 22 to 29 s on
+// windows-11-arm. When each call started a powershell.exe, the default 5 seconds timed out six of the seven cases on
+// the ARM64 VM.
 describe.runIf(windows)('install.ps1 building blocks, in Windows PowerShell 5.1', { timeout: 120_000 }, () => {
-  it('names this computer\'s platform from the native architecture, and refuses one Harness is not built for', () => {
-    expect(ps("Get-HarnessPlatform -Architecture 'AMD64'").stdout).toBe('win32-x64')
-    expect(ps("Get-HarnessPlatform -Architecture 'ARM64'").stdout).toBe('win32-arm64')
-    expect(thrown("Get-HarnessPlatform -Architecture 'x86'")).toContain('not supported')
-    expect(ps('Get-HarnessPlatform').stdout).toMatch(/^win32-(x64|arm64)$/)
+  it('names this computer\'s platform from the native architecture, and refuses one Harness is not built for', async () => {
+    expect((await ps("Get-HarnessPlatform -Architecture 'AMD64'")).stdout).toBe('win32-x64')
+    expect((await ps("Get-HarnessPlatform -Architecture 'ARM64'")).stdout).toBe('win32-arm64')
+    expect(await thrown("Get-HarnessPlatform -Architecture 'x86'")).toContain('not supported')
+    expect((await ps('Get-HarnessPlatform')).stdout).toMatch(/^win32-(x64|arm64)$/)
   })
 
-  it('refuses a Windows older than ConPTY, and a Windows without its own tar.exe', () => {
-    expect(thrown('Test-HarnessHost -Build 17134')).toContain('Windows 10 version 1809 or later')
+  it('refuses a Windows older than ConPTY, and a Windows without its own tar.exe', async () => {
+    expect(await thrown('Test-HarnessHost -Build 17134')).toContain('Windows 10 version 1809 or later')
     const empty = mkdtempSync(join(tmpdir(), 'harness-ps1-root-'))
     scratch.push(empty)
-    expect(thrown(`Test-HarnessHost -Build 22631 -SystemRoot '${empty}'`)).toContain('tar.exe')
-    expect(ps('Test-HarnessHost').stdout.toLowerCase()).toBe(join(process.env.SystemRoot!, 'System32', 'tar.exe').toLowerCase())
+    expect(await thrown(`Test-HarnessHost -Build 22631 -SystemRoot '${empty}'`)).toContain('tar.exe')
+    expect((await ps('Test-HarnessHost')).stdout.toLowerCase()).toBe(join(process.env.SystemRoot!, 'System32', 'tar.exe').toLowerCase())
   })
 
   // 2026-10-28: 0 of 25 Windows Store installs succeeded; where git was missing, the clone failed at once.
-  it('finds git on PATH or where Git for Windows installs it, and says how to get Git for Windows when there is none', () => {
+  it('finds git on PATH or where Git for Windows installs it, and says how to get Git for Windows when there is none', async () => {
     const root = mkdtempSync(join(tmpdir(), 'harness-ps1-git-'))
     scratch.push(root)
     const cmd = join(root, 'Git', 'cmd')
     mkdirSync(cmd, { recursive: true })
     writeFileSync(join(cmd, 'git.exe'), '')
-    expect(ps(`Find-HarnessGit -Path 'C:\\nowhere;${cmd}' -Roots @()`).stdout).toBe(join(cmd, 'git.exe'))
-    expect(ps(`Find-HarnessGit -Path '' -Roots @('${root}')`).stdout).toBe(join(cmd, 'git.exe'))
-    expect(ps(`Find-HarnessGit -Path '' -Roots @()`).stdout).toBe('')
+    expect((await ps(`Find-HarnessGit -Path 'C:\\nowhere;${cmd}' -Roots @()`)).stdout).toBe(join(cmd, 'git.exe'))
+    expect((await ps(`Find-HarnessGit -Path '' -Roots @('${root}')`)).stdout).toBe(join(cmd, 'git.exe'))
+    expect((await ps(`Find-HarnessGit -Path '' -Roots @()`)).stdout).toBe('')
     // A PATH entry on a drive that is not there (an unplugged USB disk, an unmapped share), or one written in quotes:
     // Join-Path stops on the first under errors-stop, and a finished install then exited as failed (review of #2025).
     const absent = 'ZYXWVUTSRQ'.split('').find((letter) => !existsSync(`${letter}:\\`))!
-    const odd = ps(`Find-HarnessGit -Path '${absent}:\\gone;"C:\\quoted dir";${cmd}' -Roots @('${absent}:\\gone')`)
+    const odd = await ps(`Find-HarnessGit -Path '${absent}:\\gone;"C:\\quoted dir";${cmd}' -Roots @('${absent}:\\gone')`)
     expect(odd.stdout, odd.stderr).toBe(join(cmd, 'git.exe'))
     expect(odd.status).toBe(0)
-    const missing = ps(`Write-HarnessGitNote -Git ''`).stdout
+    const missing = (await ps(`Write-HarnessGitNote -Git ''`)).stdout
     expect(missing).toContain('Git for Windows is not installed')
     expect(missing).toContain('winget install --id Git.Git -e')
     expect(missing).toContain('https://git-scm.com/download/win')
-    expect(ps(`Write-HarnessGitNote -Git '${join(cmd, 'git.exe')}'`).stdout).toBe('')
+    expect((await ps(`Write-HarnessGitNote -Git '${join(cmd, 'git.exe')}'`)).stdout).toBe('')
   })
 
-  it('trusts https:// and local files only, and resolves a local manifest\'s relative names against its folder', () => {
+  it('trusts https:// and local files only, and resolves a local manifest\'s relative names against its folder', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'harness-ps1-ref-'))
     scratch.push(dir)
     const manifest = join(dir, 'install-manifest.json')
     writeFileSync(manifest, '{}')
-    expect(ps(`Resolve-HarnessRef 'cli.js' '${manifest}'`).stdout).toBe(join(dir, 'cli.js'))
-    expect(ps(`Resolve-HarnessRef 'https://cdn.example/a.zip' '${manifest}'`).stdout).toBe('https://cdn.example/a.zip')
-    expect(thrown(`Resolve-HarnessRef 'http://cdn.example/a.zip' '${manifest}'`)).toContain('https://')
-    expect(thrown("Resolve-HarnessRef 'cli.js' 'https://cdn.example/metadata.json'")).toContain('not an https:// address')
-    expect(thrown("Get-HarnessJson 'http://cdn.example/metadata.json'")).toContain('https://')
+    expect((await ps(`Resolve-HarnessRef 'cli.js' '${manifest}'`)).stdout).toBe(join(dir, 'cli.js'))
+    expect((await ps(`Resolve-HarnessRef 'https://cdn.example/a.zip' '${manifest}'`)).stdout).toBe('https://cdn.example/a.zip')
+    expect(await thrown(`Resolve-HarnessRef 'http://cdn.example/a.zip' '${manifest}'`)).toContain('https://')
+    expect(await thrown("Resolve-HarnessRef 'cli.js' 'https://cdn.example/metadata.json'")).toContain('not an https:// address')
+    expect(await thrown("Get-HarnessJson 'http://cdn.example/metadata.json'")).toContain('https://')
   })
 
-  it('keeps a download only when its size and SHA-256 are the manifest\'s', () => {
+  it('keeps a download only when its size and SHA-256 are the manifest\'s', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'harness-ps1-dl-'))
     scratch.push(dir)
     const file = join(dir, 'payload.bin')
@@ -227,76 +235,76 @@ describe.runIf(windows)('install.ps1 building blocks, in Windows PowerShell 5.1'
     const sha = 'a'.repeat(64) // a valid shape, not this file's digest
     const real = createHash('sha256').update('harness').digest('hex')
     const out = join(dir, 'out.bin')
-    expect(ps(`Save-HarnessVerified -Source '${file}' -Destination '${out}' -Sha256 '${real}' -Size 7; 'ok'`).stdout).toBe('ok')
+    expect((await ps(`Save-HarnessVerified -Source '${file}' -Destination '${out}' -Sha256 '${real}' -Size 7; 'ok'`)).stdout).toBe('ok')
     // Also with PowerShell 7's modules first on PSModulePath, as a PowerShell 7 window or CI hands it on.
-    expect(ps(`Save-HarnessVerified -Source '${file}' -Destination '${out}' -Sha256 '${real}' -Size 7; 'ok'`, {}, 'powershell7').stdout).toBe('ok')
-    expect(ps(`Get-HarnessSha256 '${file}'`, {}, 'powershell7').stdout).toBe(real)
-    expect(thrown(`Save-HarnessVerified -Source '${file}' -Destination '${out}' -Sha256 '${real}' -Size 8`)).toContain('7 bytes, but the manifest says 8')
-    expect(thrown(`Save-HarnessVerified -Source '${file}' -Destination '${out}' -Sha256 '${sha}' -Size 7`)).toContain('failed its checksum')
-    expect(thrown(`Save-HarnessVerified -Source '${file}' -Destination '${out}' -Sha256 'nope' -Size 7`)).toContain('no valid SHA-256')
+    expect((await ps(`Save-HarnessVerified -Source '${file}' -Destination '${out}' -Sha256 '${real}' -Size 7; 'ok'`, {}, 'powershell7')).stdout).toBe('ok')
+    expect((await ps(`Get-HarnessSha256 '${file}'`, {}, 'powershell7')).stdout).toBe(real)
+    expect(await thrown(`Save-HarnessVerified -Source '${file}' -Destination '${out}' -Sha256 '${real}' -Size 8`)).toContain('7 bytes, but the manifest says 8')
+    expect(await thrown(`Save-HarnessVerified -Source '${file}' -Destination '${out}' -Sha256 '${sha}' -Size 7`)).toContain('failed its checksum')
+    expect(await thrown(`Save-HarnessVerified -Source '${file}' -Destination '${out}' -Sha256 'nope' -Size 7`)).toContain('no valid SHA-256')
   })
 
-  it('writes a pointer as its value and CRLF, with no BOM, and replaces one that is there', () => {
+  it('writes a pointer as its value and CRLF, with no BOM, and replaces one that is there', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'harness-ps1-ptr-'))
     scratch.push(dir)
     const pointer = join(dir, 'current')
-    expect(ps(`Write-HarnessPointer -Path '${pointer}' -Value '1.2.3'; 'ok'`).stdout).toBe('ok')
-    expect(ps(`Write-HarnessPointer -Path '${pointer}' -Value '1.2.4'; 'ok'`).stdout).toBe('ok')
+    expect((await ps(`Write-HarnessPointer -Path '${pointer}' -Value '1.2.3'; 'ok'`)).stdout).toBe('ok')
+    expect((await ps(`Write-HarnessPointer -Path '${pointer}' -Value '1.2.4'; 'ok'`)).stdout).toBe('ok')
     expect(readFileSync(pointer)).toEqual(Buffer.from('1.2.4\r\n'))
     expect(readdirSync(dir)).toEqual(['current']) // no temporary file left beside it
   })
 
-  it('adds the bin folder to the user\'s PATH once, keeping the value\'s kind and what was there', () => {
+  it('adds the bin folder to the user\'s PATH once, keeping the value\'s kind and what was there', async () => {
     const subkey = `Software\\HarnessInstallTest\\${randomUUID()}`
     subkeys.push(subkey)
     spawnSync('reg.exe', ['add', `HKCU\\${subkey}`, '/v', 'Path', '/t', 'REG_EXPAND_SZ', '/d', '%SystemRoot%\\fake', '/f'], { encoding: 'utf8' })
     const bin = 'C:\\Users\\someone\\.harness\\bin'
-    expect(ps(`Add-HarnessUserPath -Directory '${bin}' -SubKey '${subkey}'`).stdout).toBe('True')
-    expect(ps(`Add-HarnessUserPath -Directory '${bin}\\' -SubKey '${subkey}'`).stdout).toBe('False')
+    expect((await ps(`Add-HarnessUserPath -Directory '${bin}' -SubKey '${subkey}'`)).stdout).toBe('True')
+    expect((await ps(`Add-HarnessUserPath -Directory '${bin}\\' -SubKey '${subkey}'`)).stdout).toBe('False')
     const query = spawnSync('reg.exe', ['query', `HKCU\\${subkey}`, '/v', 'Path'], { encoding: 'utf8' }).stdout
     expect(query).toContain('REG_EXPAND_SZ')
     expect(query).toContain(`%SystemRoot%\\fake;${bin}`)
   })
 
-  it('writes PATH under HARNESS_INSTALL_ENV_KEY when no -SubKey is given, so a test never reaches the real one', () => {
+  it('writes PATH under HARNESS_INSTALL_ENV_KEY when no -SubKey is given, so a test never reaches the real one', async () => {
     const subkey = `Software\\HarnessInstallTest\\${randomUUID()}`
     subkeys.push(subkey)
     const bin = `C:\\Users\\someone\\.harness-${randomUUID()}\\bin`
-    expect(ps(`Add-HarnessUserPath -Directory '${bin}'`, { HARNESS_INSTALL_ENV_KEY: subkey }).stdout).toBe('True')
+    expect((await ps(`Add-HarnessUserPath -Directory '${bin}'`, { HARNESS_INSTALL_ENV_KEY: subkey })).stdout).toBe('True')
     expect(spawnSync('reg.exe', ['query', `HKCU\\${subkey}`, '/v', 'Path'], { encoding: 'utf8' }).stdout).toContain(bin)
     expect(spawnSync('reg.exe', ['query', 'HKCU\\Environment', '/v', 'Path'], { encoding: 'utf8' }).stdout).not.toContain(bin)
   })
 
-  it('reads one -Manifest document for all three entries, and says which entry is missing', () => {
+  it('reads one -Manifest document for all three entries, and says which entry is missing', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'harness-ps1-man-'))
     scratch.push(dir)
     const manifest = join(dir, 'install-manifest.json')
     writeFileSync(manifest, JSON.stringify({ cli: { version: '1.2.3' }, node: { 'win32-x64': { version: 'v22.0.0' } }, pty: { 'win32-x64': { version: '1.2.3' } } }))
-    expect(ps(`(Get-HarnessManifests -Manifest '${manifest}' -Platform 'win32-x64').node.entry.version`).stdout).toBe('v22.0.0')
-    expect(ps(`(Get-HarnessManifests -Manifest '${manifest}' -Platform 'win32-x64').pty.source`).stdout).toBe(manifest)
+    expect((await ps(`(Get-HarnessManifests -Manifest '${manifest}' -Platform 'win32-x64').node.entry.version`)).stdout).toBe('v22.0.0')
+    expect((await ps(`(Get-HarnessManifests -Manifest '${manifest}' -Platform 'win32-x64').pty.source`)).stdout).toBe(manifest)
     const partial = join(dir, 'partial.json')
     writeFileSync(partial, JSON.stringify({ cli: { version: '1.2.3' }, node: { 'win32-x64': { version: 'v22.0.0' } }, pty: {} }))
-    expect(thrown(`Get-HarnessManifests -Manifest '${partial}' -Platform 'win32-x64'`)).toContain("no 'win32-x64' entry")
-    expect(thrown(`Get-HarnessManifests -Manifest '${join(dir, 'missing.json')}' -Platform 'win32-x64'`)).toContain('missing.json')
+    expect(await thrown(`Get-HarnessManifests -Manifest '${partial}' -Platform 'win32-x64'`)).toContain("no 'win32-x64' entry")
+    expect(await thrown(`Get-HarnessManifests -Manifest '${join(dir, 'missing.json')}' -Platform 'win32-x64'`)).toContain('missing.json')
   })
 
   // 2026-11-09: production named an unsigned terminal host, Smart App Control blocked harness-launch.exe, and Harness
   // could neither start nor update itself on that computer.
-  it('names each terminal host file that is unsigned or signed by someone else, also under PowerShell 7\'s modules', () => {
+  it('names each terminal host file that is unsigned or signed by someone else, also under PowerShell 7\'s modules', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'harness-ps1-sig-'))
     scratch.push(dir)
     const names = ['harness-pty.exe', 'harness-launch.exe', 'harness.exe', 'conpty.dll', 'OpenConsole.exe', 'harness-serial.exe', 'harness-tui.exe']
     for (const name of names) writeFileSync(join(dir, name), name)
     // Not programs at all: Windows reads no signature format there (UnknownError; an unsigned program is NotSigned).
-    const unsigned = ps(`Get-HarnessPtySignatureProblems '${dir}'`, {}, 'powershell7')
+    const unsigned = await ps(`Get-HarnessPtySignatureProblems '${dir}'`, {}, 'powershell7')
     expect(unsigned.stdout.split(/\r?\n/), unsigned.stderr).toEqual(names.map((name) => `${name} is UnknownError`))
     // Validly signed, by the wrong signer: node.exe carries the OpenJS Foundation's signature.
     for (const name of names) writeFileSync(join(dir, name), readFileSync(process.execPath))
-    const signer = ps(`Get-HarnessPtySignatureProblems '${dir}'`, {}, 'powershell7').stdout.split(/\r?\n/)
+    const signer = (await ps(`Get-HarnessPtySignatureProblems '${dir}'`, {}, 'powershell7')).stdout.split(/\r?\n/)
     expect(signer).toEqual(names.map((name) => `${name} is signed by 'OpenJS Foundation', not '${['conpty.dll', 'OpenConsole.exe'].includes(name) ? 'Microsoft Corporation' : 'AUTONOMOUS INC.'}'`))
     // The install step refuses either, unless a developer's build is allowed on purpose.
-    expect(thrown(`Assert-HarnessPtySigned '${dir}'`)).toContain("not installed: harness-pty.exe is signed by 'OpenJS Foundation'")
-    const allowed = ps(`Assert-HarnessPtySigned '${dir}'; 'ok'`, { HARNESS_ALLOW_UNSIGNED: '1' })
+    expect(await thrown(`Assert-HarnessPtySigned '${dir}'`)).toContain("not installed: harness-pty.exe is signed by 'OpenJS Foundation'")
+    const allowed = await ps(`Assert-HarnessPtySigned '${dir}'; 'ok'`, { HARNESS_ALLOW_UNSIGNED: '1' })
     expect(allowed.stdout).toContain('HARNESS_ALLOW_UNSIGNED=1')
     expect(allowed.stdout.endsWith('ok')).toBe(true)
   })
@@ -388,7 +396,15 @@ describe.runIf(windows)('install.ps1, installing for real from a local manifest'
     })
   }
 
-  const platform = () => ps('Get-HarnessPlatform').stdout
+  // Asked once for the file, and kept only once answered with a platform: a kept failure (a call that timed out, or
+  // one that ended on an error and printed nothing) would fail every later case with it.
+  let native: string | undefined
+  const platform = async () => {
+    if (native) return native
+    const run = await ps('Get-HarnessPlatform')
+    if (run.status !== 0 || !run.stdout) throw new Error(`Get-HarnessPlatform gave no platform: status ${run.status}, ${run.stderr}`)
+    return (native = run.stdout)
+  }
   const freshKey = () => {
     const subkey = `Software\\HarnessInstallTest\\${randomUUID()}`
     subkeys.push(subkey)
@@ -408,18 +424,18 @@ describe.runIf(windows)('install.ps1, installing for real from a local manifest'
    * the OEM code page, which turns `ö` and `日` into other bytes, so the profile path would never match.
    * PowerShell prints the value as base64 of its UTF-16 bytes, which no code page can change.
    */
-  function userPathValue(subkey: string): string {
+  async function userPathValue(subkey: string): Promise<string> {
     const script = `$k = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('${subkey}'); $v = if ($k) { [string]$k.GetValue('Path', '', 'DoNotExpandEnvironmentNames') } else { '' }; [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($v))`
-    const run = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8' })
-    return Buffer.from(run.stdout.trim(), 'base64').toString('utf16le')
+    const run = await session.run(script)
+    return Buffer.from(run.stdout, 'base64').toString('utf16le')
   }
 
-  const ticks = (file: string) => spawnSync('powershell.exe', ['-NoProfile', '-Command', `(Get-Item -LiteralPath '${file}').LastWriteTimeUtc.Ticks`], { encoding: 'utf8' }).stdout.trim()
+  const ticks = async (file: string) => (await session.run(`(Get-Item -LiteralPath '${file}').LastWriteTimeUtc.Ticks`)).stdout
 
-  it('lays the version folders, the pointers and both programs down, and harness works by its full path', () => {
+  it('lays the version folders, the pointers and both programs down, and harness works by its full path', async () => {
     const home = profile()
     const subkey = freshKey()
-    const key = platform()
+    const key = await platform()
     // What an earlier install wrote: a harness.cmd, which re-parsed its arguments. It must go.
     mkdirSync(join(home, '.harness', 'bin'), { recursive: true })
     writeFileSync(join(home, '.harness', 'bin', 'harness.cmd'), '@echo off\r\n')
@@ -448,31 +464,31 @@ describe.runIf(windows)('install.ps1, installing for real from a local manifest'
     expect(viaCmd.stdout.trim()).toBe('9.8.7')
     expect(spawnSync('cmd.exe', ['/d', '/s', '/c', `""${command}" fail"`], { encoding: 'utf8', windowsVerbatimArguments: true }).status).toBe(7)
 
-    const path = userPathValue(subkey)
+    const path = await userPathValue(subkey)
     expect(path.split(';')).toContain(join(root, 'bin'))
     expect(run.stdout).toContain('harness 9.8.7 installed')
   })
 
-  it('runs again over itself: nothing downloaded twice, PATH not doubled, the programs and notify.mjs left as they are', () => {
+  it('runs again over itself: nothing downloaded twice, PATH not doubled, the programs and notify.mjs left as they are', async () => {
     const home = profile()
     const subkey = freshKey()
-    const manifest = build(platform())
+    const manifest = build(await platform())
     // This process's own PSModulePath, as it is: a PowerShell 7 one in CI.
     expect(install(home, manifest, subkey, ['-NoService'], 'inherited').status).toBe(0)
     const kept = ['bin\\harness.exe', 'bin\\harness-launch.exe', 'cli\\notify.mjs'].map((name) => join(home, '.harness', name))
-    const before = kept.map(ticks)
+    const before = await Promise.all(kept.map(ticks))
     const again = install(home, manifest, subkey, ['-NoService'], 'inherited')
     expect(again.status, again.stdout).toBe(0)
     expect(again.stdout).not.toContain('Downloading')
-    expect(kept.map(ticks)).toEqual(before)
-    const path = userPathValue(subkey)
+    expect(await Promise.all(kept.map(ticks))).toEqual(before)
+    const path = await userPathValue(subkey)
     expect(path.split(';').filter((entry) => entry === join(home, '.harness', 'bin'))).toHaveLength(1)
   })
 
   it('replaces a harness.exe that is running, and removes the old one once it has exited', async () => {
     const home = profile()
     const subkey = freshKey()
-    const platformKey = platform()
+    const platformKey = await platform()
     expect(install(home, build(platformKey), subkey).status).toBe(0)
     const bin = join(home, '.harness', 'bin')
     const release = join(home, 'release')
@@ -497,18 +513,18 @@ describe.runIf(windows)('install.ps1, installing for real from a local manifest'
     expect(readdirSync(bin).filter(aside)).toEqual([])
   })
 
-  it('installs when PowerShell 7\'s modules come first on PSModulePath, as a PowerShell 7 window hands it on', () => {
+  it('installs when PowerShell 7\'s modules come first on PSModulePath, as a PowerShell 7 window hands it on', async () => {
     const home = profile()
     const subkey = freshKey()
-    const run = install(home, build(platform()), subkey, ['-NoService'], 'powershell7')
+    const run = install(home, build(await platform()), subkey, ['-NoService'], 'powershell7')
     expect(run.status, `${run.stdout}\n${run.stderr}`).toBe(0)
     expect(spawnSync(join(home, '.harness', 'bin', 'harness.exe'), ['version'], { encoding: 'utf8' }).stdout.trim()).toBe('9.8.7')
   })
 
-  it('says, in a sentence, which step failed, and points nothing at a CLI it did not verify', () => {
+  it('says, in a sentence, which step failed, and points nothing at a CLI it did not verify', async () => {
     const home = profile()
     const subkey = freshKey()
-    const run = install(home, build(platform(), { cliSha: '0'.repeat(64) }), subkey)
+    const run = install(home, build(await platform(), { cliSha: '0'.repeat(64) }), subkey)
     expect(run.status).toBe(1)
     expect(run.stdout).toContain('Harness could not be installed. The step that failed: Installing the Harness CLI.')
     expect(run.stdout).toContain('failed its checksum')
@@ -525,10 +541,10 @@ describe.runIf(windows)('install.ps1, installing for real from a local manifest'
     expect(run.stdout.trim().endsWith('after 1')).toBe(true)
   })
 
-  it('passes arguments to the CLI exactly as cmd and Windows PowerShell 5.1 users quote them, and runs nothing else', () => {
+  it('passes arguments to the CLI exactly as cmd and Windows PowerShell 5.1 users quote them, and runs nothing else', async () => {
     const home = profile()
     const subkey = freshKey()
-    expect(install(home, build(platform()), subkey).status).toBe(0)
+    expect(install(home, build(await platform()), subkey).status).toBe(0)
     const env = withBin(join(home, '.harness', 'bin'))
     const work = mkdtempSync(join(tmpdir(), 'harness-ps1-args-'))
     scratch.push(work)
@@ -571,10 +587,10 @@ describe.runIf(windows)('install.ps1, installing for real from a local manifest'
     expect(readdirSync(work)).toEqual([])
   })
 
-  it('installs by irm | iex under the Restricted execution policy, and harness then runs from a Restricted PowerShell', () => {
+  it('installs by irm | iex under the Restricted execution policy, and harness then runs from a Restricted PowerShell', async () => {
     const home = profile()
     const subkey = freshKey()
-    const manifest = build(platform())
+    const manifest = build(await platform())
     const text = `Get-Content -Raw -LiteralPath '${installer}' | Invoke-Expression; Write-Output "after $LASTEXITCODE"`
     const run = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Restricted', '-EncodedCommand', Buffer.from(text, 'utf16le').toString('base64')], {
       encoding: 'utf8', env: installEnv(home, subkey, { HARNESS_INSTALL_MANIFEST: manifest }), timeout: 300_000,
@@ -600,15 +616,15 @@ describe.runIf(windows)('install.ps1, run again over a live install', { timeout:
   }
   const last = (text: string) => text.split(/\r?\n/).at(-1)
 
-  it('restarts a running daemon once when the version changed: stop, then start', () => {
+  it('restarts a running daemon once when the version changed: stop, then start', async () => {
     const harness = fakeHarness('running - backend connected')
-    const run = ps(`Restart-HarnessDaemon -Command '${harness.command}' -Before '1.0.0' -After '1.0.1'`)
+    const run = await ps(`Restart-HarnessDaemon -Command '${harness.command}' -Before '1.0.0' -After '1.0.1'`)
     expect(last(run.stdout), run.stderr).toBe('True')
     expect(run.stdout).toContain('Moving the running Harness from 1.0.0 to 1.0.1')
     expect(harness.calls()).toEqual(['status', 'stop', 'start'])
   })
 
-  it('goes on once `harness start` has started the daemon, which holds the handles it was given for as long as it runs', () => {
+  it('goes on once `harness start` has started the daemon, which holds the handles it was given for as long as it runs', async () => {
     // The daemon `harness start` leaves running inherits that command's output handles (seen on the VM: the installer
     // waited on `harness start | ForEach-Object` for as long as the new daemon ran). Here a process left behind holds
     // them for 120 seconds, and the restart must take under 60. The margins are wide on purpose: a slow runner (the
@@ -635,43 +651,43 @@ describe.runIf(windows)('install.ps1, run again over a live install', { timeout:
     } finally {
       // End the holder (the cmd that started the ping, and the ping under it), so nothing outlives the test.
       const kill = "Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -like '*holder-of-handles*' } | ForEach-Object { taskkill /T /F /PID $_.ProcessId | Out-Null }"
-      spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(kill, 'utf16le').toString('base64')], { encoding: 'utf8' })
+      await session.run(kill)
     }
   })
 
-  it('starts nothing, and says the daemon stays on the old build, when it does not stop', () => {
+  it('starts nothing, and says the daemon stays on the old build, when it does not stop', async () => {
     const harness = fakeHarness('running - backend connected', ['if "%1"=="stop" exit /b 1'])
-    const run = ps(`Restart-HarnessDaemon -Command '${harness.command}' -Before '1.0.0' -After '1.0.1'`)
+    const run = await ps(`Restart-HarnessDaemon -Command '${harness.command}' -Before '1.0.0' -After '1.0.1'`)
     expect(last(run.stdout), run.stderr).toBe('False')
     expect(run.stdout).toContain('Harness is still running version 1.0.0; it moves to 1.0.1 when it next restarts (harness stop, then harness start).')
     expect(harness.calls()).toEqual(['status', 'stop'])
   })
 
-  it('says so when Harness does not start again on the new build', () => {
+  it('says so when Harness does not start again on the new build', async () => {
     const harness = fakeHarness('running - backend connected', ['if "%1"=="start" exit /b 3'])
-    const run = ps(`Restart-HarnessDaemon -Command '${harness.command}' -Before '1.0.0' -After '1.0.1'`)
+    const run = await ps(`Restart-HarnessDaemon -Command '${harness.command}' -Before '1.0.0' -After '1.0.1'`)
     expect(last(run.stdout), run.stderr).toBe('True')
     expect(run.stdout).toContain("Harness did not start again on version 1.0.1. Run 'harness start'.")
   })
 
-  it('leaves the daemon alone on the same version, on a first install, and when no daemon runs', () => {
+  it('leaves the daemon alone on the same version, on a first install, and when no daemon runs', async () => {
     const same = fakeHarness('running - backend connected')
-    expect(ps(`Restart-HarnessDaemon -Command '${same.command}' -Before '1.0.1' -After '1.0.1'`).stdout).toBe('False')
-    expect(ps(`Restart-HarnessDaemon -Command '${same.command}' -Before '' -After '1.0.1'`).stdout).toBe('False')
+    expect((await ps(`Restart-HarnessDaemon -Command '${same.command}' -Before '1.0.1' -After '1.0.1'`)).stdout).toBe('False')
+    expect((await ps(`Restart-HarnessDaemon -Command '${same.command}' -Before '' -After '1.0.1'`)).stdout).toBe('False')
     expect(same.calls()).toEqual([])
     const stopped = fakeHarness('stopped')
-    expect(ps(`Restart-HarnessDaemon -Command '${stopped.command}' -Before '1.0.0' -After '1.0.1'`).stdout).toBe('False')
+    expect((await ps(`Restart-HarnessDaemon -Command '${stopped.command}' -Before '1.0.0' -After '1.0.1'`)).stdout).toBe('False')
     expect(stopped.calls()).toEqual(['status'])
   })
 
-  it('names the terminal host when Harness does not start again after a host-only move', () => {
+  it('names the terminal host when Harness does not start again after a host-only move', async () => {
     const harness = fakeHarness('running - backend connected', ['if "%1"=="start" exit /b 3'])
-    const run = ps(`Restart-HarnessDaemon -Command '${harness.command}' -Before '1.0.1' -After '1.0.1' -PtyBefore '2.0.0' -PtyAfter '2.0.1'`)
+    const run = await ps(`Restart-HarnessDaemon -Command '${harness.command}' -Before '1.0.1' -After '1.0.1' -PtyBefore '2.0.0' -PtyAfter '2.0.1'`)
     expect(last(run.stdout), run.stderr).toBe('True')
     expect(run.stdout).toContain("Harness did not start again on terminal host 2.0.1. Run 'harness start'.")
   })
 
-  it('removes a terminal host probation marker when it moves current-pty, and keeps it when the pointer stays', () => {
+  it('removes a terminal host probation marker when it moves current-pty, and keeps it when the pointer stays', async () => {
     const root = mkdtempSync(join(tmpdir(), 'harness-ps1-pending-'))
     scratch.push(root)
     const ptyRoot = join(root, 'runtime', 'pty')
@@ -684,69 +700,70 @@ describe.runIf(windows)('install.ps1, run again over a live install', { timeout:
     writeFileSync(marker, JSON.stringify({ version: '1.0.0', previous: '0.9.0' }))
     // The version folders hold placeholder text, not signed programs: allowed as a developer's build is, the door the
     // signature case uses. Without it Install-HarnessPty refuses a version folder already there (#4018).
-    const moved = ps(`$null = Install-HarnessPty -Root '${root}' -Entry @{ version = '2.0.0' } -Source '' -Tar ''`, { HARNESS_ALLOW_UNSIGNED: '1' })
+    const moved = await ps(`$null = Install-HarnessPty -Root '${root}' -Entry @{ version = '2.0.0' } -Source '' -Tar ''`, { HARNESS_ALLOW_UNSIGNED: '1' })
     expect(moved.status, moved.stderr).toBe(0)
     expect(readFileSync(join(ptyRoot, 'current-pty'), 'utf8')).toBe('2.0.0\r\n')
     expect(existsSync(marker)).toBe(false)
     writeFileSync(marker, JSON.stringify({ version: '2.0.0', previous: '1.0.0' }))
-    const same = ps(`$null = Install-HarnessPty -Root '${root}' -Entry @{ version = '2.0.0' } -Source '' -Tar ''`, { HARNESS_ALLOW_UNSIGNED: '1' })
+    const same = await ps(`$null = Install-HarnessPty -Root '${root}' -Entry @{ version = '2.0.0' } -Source '' -Tar ''`, { HARNESS_ALLOW_UNSIGNED: '1' })
     expect(same.status, same.stderr).toBe(0)
     expect(existsSync(marker)).toBe(true)
   })
 
-  it('restarts the daemon when only the terminal host moved', () => {
+  it('restarts the daemon when only the terminal host moved', async () => {
     const harness = fakeHarness('running - backend connected')
-    const run = ps(`Restart-HarnessDaemon -Command '${harness.command}' -Before '1.0.1' -After '1.0.1' -PtyBefore '2.0.0' -PtyAfter '2.0.1'`)
+    const run = await ps(`Restart-HarnessDaemon -Command '${harness.command}' -Before '1.0.1' -After '1.0.1' -PtyBefore '2.0.0' -PtyAfter '2.0.1'`)
     expect(last(run.stdout), run.stderr).toBe('True')
     expect(run.stdout).toContain('Moving the running Harness to terminal host 2.0.1 (your agents keep running)...')
     expect(harness.calls()).toEqual(['status', 'stop', 'start'])
   })
 
-  it('does not restart the daemon when neither the CLI nor the terminal host changed', () => {
+  it('does not restart the daemon when neither the CLI nor the terminal host changed', async () => {
     const harness = fakeHarness('running - backend connected')
-    expect(ps(`Restart-HarnessDaemon -Command '${harness.command}' -Before '1.0.1' -After '1.0.1' -PtyBefore '2.0.1' -PtyAfter '2.0.1'`).stdout).toBe('False')
+    expect((await ps(`Restart-HarnessDaemon -Command '${harness.command}' -Before '1.0.1' -After '1.0.1' -PtyBefore '2.0.1' -PtyAfter '2.0.1'`)).stdout).toBe('False')
     // A first terminal host install has nothing running to move.
-    expect(ps(`Restart-HarnessDaemon -Command '${harness.command}' -Before '1.0.1' -After '1.0.1' -PtyBefore '' -PtyAfter '2.0.1'`).stdout).toBe('False')
+    expect((await ps(`Restart-HarnessDaemon -Command '${harness.command}' -Before '1.0.1' -After '1.0.1' -PtyBefore '' -PtyAfter '2.0.1'`)).stdout).toBe('False')
     expect(harness.calls()).toEqual([])
   })
 
-  it('closes without the setup steps when this computer is signed in and Harness runs', () => {
+  it('closes without the setup steps when this computer is signed in and Harness runs', async () => {
     // With a line on stderr, as a sign-in refresh warning would be: it must not reach the closing text.
     const ready = fakeHarness('running - backend connected', ['if "%1"=="auth" echo refreshing the sign-in 1>&2', 'if "%1"=="auth" echo {"loggedIn":true}'])
-    const done = ps(`Write-HarnessDone -Version '1.0.1' -Command '${ready.command}'`)
+    const done = await ps(`Write-HarnessDone -Version '1.0.1' -Command '${ready.command}'`)
     expect(done.stdout, done.stderr).toContain('This computer is signed in and Harness is running: nothing more to set up.')
     expect(done.stdout).not.toContain('harness login')
     expect(done.stdout).not.toContain('refreshing the sign-in')
     const glyph = fakeHarness('\u25cf started \u00b7 backend connected', ['if "%1"=="auth" echo {"loggedIn":true}'])
-    expect(ps(`Write-HarnessDone -Version '1.0.1' -Command '${glyph.command}'`).stdout).toContain('nothing more to set up')
+    expect((await ps(`Write-HarnessDone -Version '1.0.1' -Command '${glyph.command}'`)).stdout).toContain('nothing more to set up')
   })
 
-  // Apart from the case above, with room: each PowerShell takes about 20 s on the Arm runner, and seven ran past 120 s.
-  it('closes with the setup steps when this computer is not signed in, or Harness does not run', () => {
+  // Apart from the case above, with room: when each call started a PowerShell, each took about 20 s on the Arm runner
+  // and seven ran past 120 s. Its calls now share the session, whose first call in a file can still take that long.
+  it('closes with the setup steps when this computer is not signed in, or Harness does not run', async () => {
     for (const [state, auth] of [['stopped', '{"loggedIn":true}'], ['running - backend connected', '{"loggedIn":false}'], ['running - backend connected', 'not json']]) {
       const other = fakeHarness(state, [`if "%1"=="auth" echo ${auth}`])
-      expect(ps(`Write-HarnessDone -Version '1.0.1' -Command '${other.command}'`).stdout, `${state} ${auth}`).toContain('harness login')
+      expect((await ps(`Write-HarnessDone -Version '1.0.1' -Command '${other.command}'`)).stdout, `${state} ${auth}`).toContain('harness login')
     }
-    expect(ps(`Write-HarnessDone -Version '1.0.1'`).stdout).toContain('harness login')
+    expect((await ps(`Write-HarnessDone -Version '1.0.1'`)).stdout).toContain('harness login')
   }, 240_000)
 
   // Re-review N1: harness service install says it itself (serviceCommand.ts); the installer passes its lines on and adds none.
-  it('passes on what `harness service install` said when it registered the task but did not start it now (exit 5), and adds nothing', () => {
+  it('passes on what `harness service install` said when it registered the task but did not start it now (exit 5), and adds nothing', async () => {
     const registered = fakeHarness('stopped', ['if "%1"=="service" echo Task Scheduler will start the Harness daemon when you sign in to Windows.', 'if "%1"=="service" exit /b 5'])
-    const run = ps(`Register-HarnessService -Command '${registered.command}'`)
+    const run = await ps(`Register-HarnessService -Command '${registered.command}'`)
     expect(run.stdout.split(/\r?\n/), run.stderr).toEqual(['Task Scheduler will start the Harness daemon when you sign in to Windows.'])
     expect(run.stdout).not.toContain('could not set itself to start')
     expect(registered.calls()).toEqual(['service install'])
     const failed = fakeHarness('stopped', ['if "%1"=="service" exit /b 1'])
-    expect(ps(`Register-HarnessService -Command '${failed.command}'`).stdout).toContain('Harness could not set itself to start when you sign in (harness service install exited 1).')
+    expect((await ps(`Register-HarnessService -Command '${failed.command}'`)).stdout).toContain('Harness could not set itself to start when you sign in (harness service install exited 1).')
   })
 
-  it('reads the version cli\\current names, and none before a first install', () => {
+  it('reads the version cli\\current names, and none before a first install', async () => {
     const root = mkdtempSync(join(tmpdir(), 'harness-ps1-current-'))
     scratch.push(root)
-    expect(ps(`Read-HarnessCurrentCli -Root '${root}'`).stdout).toBe('')
+    expect((await ps(`Read-HarnessCurrentCli -Root '${root}'`)).stdout).toBe('')
     mkdirSync(join(root, 'cli'))
     writeFileSync(join(root, 'cli', 'current'), '1.0.0\r\n')
-    expect(ps(`Read-HarnessCurrentCli -Root '${root}'`).stdout).toBe('1.0.0')
+    expect((await ps(`Read-HarnessCurrentCli -Root '${root}'`)).stdout).toBe('1.0.0')
   })
 })
