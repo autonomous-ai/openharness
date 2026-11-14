@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ObservedHookEvent } from '../../core/observedHook.js'
 import { STOP_HOOK_GRACE_MS } from '../../core/turns/turnHooks.js'
-import { observedAgentId, ObservedSource, type ObservedDeps } from './observed.js'
+import { observedAgentId, type ObservedActions, ObservedSource, type ObservedDeps } from './observed.js'
 
 function setup(over: Partial<ObservedDeps> = {}) {
   const clock = { t: 1_000_000 }
@@ -499,6 +499,235 @@ describe('ObservedSource and Harness\'s own sessions', () => {
     src.ingest(ev('turn-start', { cwd: scratch }))
     expect(src.list()).toEqual([])
     expect(changes).toHaveBeenCalledTimes(1)
+  })
+})
+
+const HANDLE = 'term_0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b'
+
+/** Routes that answer as told, recording what each was handed. */
+function fakeActions(over: Partial<ObservedActions> = {}) {
+  const ready = new Set<string>()
+  const actions = {
+    modReady: vi.fn((sessionId: string) => ready.has(sessionId)),
+    toMod: vi.fn(async (_sessionId: string, _text: string) => true),
+    orcaSend: vi.fn(async (_handle: string, _text: string) => true),
+    orcaOpen: vi.fn(async (_handle: string) => true),
+    count: vi.fn((_what: Parameters<ObservedActions['count']>[0]) => {}),
+  }
+  return { actions: { ...actions, ...over } as typeof actions, ready }
+}
+
+describe('ObservedSource actions', () => {
+  const withHandle = { hostHints: { ORCA_AGENT_SESSION_ID: 'x', ORCA_TERMINAL_HANDLE: HANDLE } }
+
+  it('keeps a handle that is term_<uuid> and ignores any other', () => {
+    const { actions } = fakeActions()
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('session-start', withHandle))
+    expect(src.capabilities(src.list()[0])).toMatchObject({ voice: true, focus: true })
+    src.ingest(ev('turn-stop', { hostHints: { ORCA_TERMINAL_HANDLE: `${HANDLE}; rm -rf /` } }))
+    expect(src.capabilities(src.list()[0])).toMatchObject({ voice: false, focus: false })
+  })
+
+  it('an event whose hints carry no handle clears it', async () => {
+    const { actions } = fakeActions()
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('session-start', withHandle))
+    // Resumed in another terminal: the old handle now holds something else.
+    src.ingest(ev('session-start', { hostHints: { TERM_PROGRAM: 'ghostty' } }))
+    const agent = src.list()[0]
+    expect(src.capabilities(agent)).toMatchObject({ voice: false, focus: false })
+    expect(await src.focus(agent)).toBe(false)
+    expect(actions.orcaOpen).not.toHaveBeenCalled()
+  })
+
+  it('a session found by the scan takes its host from its first event', async () => {
+    const { actions } = fakeActions()
+    const { src, open, owners, externals, ev } = setup({ actions })
+    open.set('s1', 'terminal')
+    owners.set('s1', { pid: 100, engine: 'claude' })
+    externals.set('s1', { cwd: '/work/proj', transcriptPath: '/t/s1.jsonl' })
+    await src.scanOpen()
+    expect(src.capabilities(src.list()[0])).toMatchObject({ voice: false, focus: false })
+    src.ingest(ev('session-start', withHandle))
+    expect(src.list()[0].host).toBe('orca')
+    expect(src.capabilities(src.list()[0])).toMatchObject({ voice: true, focus: true })
+  })
+
+  it('caps: s alone with no actions; v and f with a handle; v for a claude session the mod is ready for; never v from the mod for codex; a only while an approval is open', () => {
+    const bare = setup()
+    bare.src.ingest(bare.ev('session-start', withHandle))
+    expect(bare.src.capabilities(bare.src.list()[0])).toEqual({ status: true, voice: false, focus: false, answer: false })
+
+    const { actions, ready } = fakeActions()
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('session-start', { sessionId: 'orca', ...withHandle }))
+    src.ingest(ev('session-start', { sessionId: 'mod' }))
+    src.ingest(ev('session-start', { sessionId: 'cx', engine: 'codex' }))
+    ready.add('mod')
+    ready.add('cx')
+    const caps = (sessionId: string) => src.capabilities(src.list().find((a) => a.sessionId === sessionId)!)
+    expect(caps('orca')).toEqual({ status: true, voice: true, focus: true, answer: false })
+    expect(caps('mod')).toEqual({ status: true, voice: true, focus: false, answer: false })
+    expect(caps('cx')).toEqual({ status: true, voice: false, focus: false, answer: false })
+    src.approval('mod', '/work/proj', 'open')
+    expect(caps('mod').answer).toBe(true)
+    src.approval('mod', '/work/proj', 'answered')
+    expect(caps('mod').answer).toBe(false)
+  })
+
+  it('approval open creates a claude agent the hook never named and turns it needs-you', async () => {
+    const { actions } = fakeActions()
+    const { src, clock, changes } = setup({ actions })
+    const agent = src.approval('new', '/work/fresh', 'open')
+    expect(agent).toMatchObject({ id: observedAgentId('claude', 'new'), engine: 'claude', name: 'fresh', state: 'needs-you' })
+    expect(src.list()).toEqual([agent])
+    expect(src.capabilities(agent!).answer).toBe(true)
+    expect(changes).toHaveBeenCalled()
+    // No process is known for it until its hook comes: the process sweep keeps it, until 12 h of silence.
+    await src.tick()
+    expect(src.list()).toHaveLength(1)
+    clock.t += 12 * 3600_000
+    await src.tick()
+    expect(src.list()).toEqual([])
+  })
+
+  it('a hook after the approval gives the agent its process', async () => {
+    const { actions } = fakeActions()
+    const { src, gens, ev } = setup({ actions })
+    src.approval('s1', '/work/proj', 'open')
+    src.ingest(ev('session-start', { callerPid: 300 }))
+    expect(src.list()[0].callerPid).toBe(300)
+    gens.set(300, null)
+    await src.tick()
+    expect(src.list()).toEqual([])
+  })
+
+  it('answered turns it working', () => {
+    const { actions } = fakeActions()
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('turn-start'))
+    src.approval('s1', '/work/proj', 'open')
+    expect(src.approval('s1', '/work/proj', 'answered')).toMatchObject({ state: 'working' })
+    expect(src.capabilities(src.list()[0]).answer).toBe(false)
+  })
+
+  it('left keeps it needs-you', () => {
+    const { actions } = fakeActions()
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('turn-start'))
+    src.approval('s1', '/work/proj', 'open')
+    expect(src.approval('s1', '/work/proj', 'left')).toMatchObject({ state: 'needs-you' })
+    expect(src.capabilities(src.list()[0]).answer).toBe(false)
+  })
+
+  it('open with the source full gives undefined', () => {
+    const { actions } = fakeActions()
+    const { src, ev } = setup({ actions })
+    for (let i = 0; i < 50; i++) src.ingest(ev('turn-start', { sessionId: `s${i}`, callerPid: 200 + i }))
+    expect(src.approval('new', '/work/proj', 'open')).toBeUndefined()
+    expect(src.list()).toHaveLength(50)
+  })
+
+  it('send is refused while working and while needs-you, and nothing is typed', async () => {
+    const { actions, ready } = fakeActions()
+    const { src, ev } = setup({ actions })
+    ready.add('s1')
+    src.ingest(ev('turn-start', withHandle))
+    const busy = { ok: false, reason: 'proj is busy. Say it when it is done.' }
+    expect(await src.send(src.list()[0], 'next')).toEqual(busy)
+    src.ingest(ev('needs-input', withHandle))
+    expect(await src.send(src.list()[0], 'next')).toEqual(busy)
+    expect(actions.toMod).not.toHaveBeenCalled()
+    expect(actions.orcaSend).not.toHaveBeenCalled()
+  })
+
+  it('send goes to the mod when it is ready', async () => {
+    const { actions, ready } = fakeActions()
+    const { src, ev } = setup({ actions })
+    ready.add('s1')
+    src.ingest(ev('turn-stop', withHandle))
+    expect(await src.send(src.list()[0], 'next step')).toEqual({ ok: true })
+    expect(actions.toMod).toHaveBeenCalledWith('s1', 'next step')
+    expect(actions.orcaSend).not.toHaveBeenCalled()
+  })
+
+  it('to Orca with a handle and no mod', async () => {
+    const { actions } = fakeActions()
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('turn-stop', withHandle))
+    expect(await src.send(src.list()[0], 'next step')).toEqual({ ok: true })
+    expect(actions.toMod).not.toHaveBeenCalled()
+    expect(actions.orcaSend).toHaveBeenCalledWith(HANDLE, 'next step')
+  })
+
+  it('to Orca when the mod missed its 5 s and there is a handle', async () => {
+    const { actions, ready } = fakeActions({ toMod: vi.fn(async () => false) })
+    const { src, ev } = setup({ actions })
+    ready.add('s1')
+    src.ingest(ev('session-start', withHandle))
+    expect(await src.send(src.list()[0], 'next step')).toEqual({ ok: true })
+    expect(actions.toMod).toHaveBeenCalledTimes(1)
+    expect(actions.orcaSend).toHaveBeenCalledWith(HANDLE, 'next step')
+  })
+
+  it('did not answer with neither', async () => {
+    const { actions, ready } = fakeActions({ toMod: vi.fn(async () => false) })
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('session-start'))
+    expect(await src.send(src.list()[0], 'next')).toEqual({ ok: false, reason: 'proj did not answer.' })
+    ready.add('s1')
+    expect(await src.send(src.list()[0], 'next')).toEqual({ ok: false, reason: 'proj did not answer.' })
+    expect(actions.orcaSend).not.toHaveBeenCalled()
+  })
+
+  it('a failed Orca send says did not answer', async () => {
+    const { actions } = fakeActions({ orcaSend: vi.fn(async () => false) })
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('session-start', withHandle))
+    expect(await src.send(src.list()[0], 'next')).toEqual({ ok: false, reason: 'proj did not answer.' })
+  })
+
+  it('a text over 2000 characters is refused before any route', async () => {
+    const { actions, ready } = fakeActions()
+    const { src, ev } = setup({ actions })
+    ready.add('s1')
+    // Busy too: the length is what the person can fix by saying it again.
+    src.ingest(ev('turn-start', withHandle))
+    expect(await src.send(src.list()[0], 'a'.repeat(2001))).toEqual({ ok: false, reason: 'Too long. Say it shorter.' })
+    expect(actions.toMod).not.toHaveBeenCalled()
+    expect(actions.orcaSend).not.toHaveBeenCalled()
+  })
+
+  it('focus runs orcaOpen for a handle and is false without one', async () => {
+    const { actions } = fakeActions({ orcaOpen: vi.fn(async () => false) })
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('session-start', { sessionId: 'orca', ...withHandle }))
+    src.ingest(ev('session-start', { sessionId: 'plain' }))
+    const agent = (sessionId: string) => src.list().find((a) => a.sessionId === sessionId)!
+    expect(await src.focus(agent('orca'))).toBe(false)
+    expect(actions.orcaOpen).toHaveBeenCalledWith(HANDLE)
+    actions.orcaOpen.mockResolvedValue(true)
+    expect(await src.focus(agent('orca'))).toBe(true)
+    expect(await src.focus(agent('plain'))).toBe(false)
+    expect(actions.orcaOpen).toHaveBeenCalledTimes(2)
+  })
+
+  it('counts mod, orca, busy, too-long and no-answer', async () => {
+    const { actions, ready } = fakeActions()
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('session-start', { sessionId: 'mod' }))
+    src.ingest(ev('session-start', { sessionId: 'orca', ...withHandle }))
+    src.ingest(ev('session-start', { sessionId: 'none' }))
+    src.ingest(ev('turn-start', { sessionId: 'busy' }))
+    ready.add('mod')
+    const agent = (sessionId: string) => src.list().find((a) => a.sessionId === sessionId)!
+    await src.send(agent('mod'), 'x')
+    await src.send(agent('orca'), 'x')
+    await src.send(agent('busy'), 'x')
+    await src.send(agent('none'), 'x'.repeat(2001))
+    await src.send(agent('none'), 'x')
+    expect(actions.count.mock.calls.map(([what]) => what)).toEqual(['mod', 'orca', 'busy', 'too-long', 'no-answer'])
   })
 })
 
