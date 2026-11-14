@@ -6,7 +6,8 @@ import type { OpenSessions, SessionRows } from '../../lib/sessionSearch/external
 import { type fileStamp, within } from '../../lib/sessionSearch/externals/support.js'
 import type { ExternalEngine, RunningProcess } from '../../lib/sessionSearch/externals/types.js'
 import { detectHost } from './hostDetect.js'
-import type { Caps, HostAgent, HostAgentState, HostSource } from './types.js'
+import { ORCA_HANDLE } from './orca.js'
+import type { Caps, HostAgent, HostAgentState, HostSource, SendResult } from './types.js'
 
 export { detectHost, hostDisplayName } from './hostDetect.js'
 
@@ -21,6 +22,8 @@ const ANSWER_CHARS = 300
 const ANSWER_GRACE_MS = 1_500
 /** A turn's hook runs before the engine marks the turn begun in its record: a turn younger than this may still read idle. */
 const TURN_SETTLE_MS = 2_000
+/** Orca's own bound on a typed text (orca.ts); the mod's prompt takes no more. */
+const MAX_TEXT = 2000
 
 /** A name-based UUID (v5 layout, SHA-1) of engine + sessionId, so the same session always gets the same id. */
 export function observedAgentId(engine: string, sessionId: string): string {
@@ -46,6 +49,17 @@ export interface ObservedDeps {
   /** Folders whose sessions are Harness's own (its data folder), as the external sessions are given them: never observed. */
   excluded: readonly string[]
   log(line: string): void
+  /** The routes for the dial's voice and tap; absent, an agent is status only. */
+  actions?: ObservedActions
+}
+
+export interface ObservedActions {
+  /** The session's mod has a poll open, or closed one moments ago. */
+  modReady(sessionId: string): boolean
+  toMod(sessionId: string, text: string): Promise<boolean>
+  orcaSend(handle: string, text: string): Promise<boolean>
+  orcaOpen(handle: string): Promise<boolean>
+  count(what: 'mod' | 'orca' | 'busy' | 'too-long' | 'no-answer'): void
 }
 
 interface Entry {
@@ -53,7 +67,11 @@ interface Entry {
   /** When its state began (a turn's start renews it): how long a turn has run, and since when an agent waits. */
   since: number
   transcriptPath?: string
-  pid: number
+  /** None for an agent an approval named before any hook did. */
+  pid?: number
+  /** The Orca terminal its last event came from. */
+  handle?: string
+  approvalOpen?: boolean
   generation?: string
   endAt?: number
   /** The read of the last answer, waiting out the grace. */
@@ -77,8 +95,71 @@ export class ObservedSource implements HostSource {
     return () => this.listeners.delete(listener)
   }
 
-  capabilities(_agent?: HostAgent): Caps {
-    return { status: true, voice: false, focus: false, answer: false }
+  capabilities(agent?: HostAgent): Caps {
+    const e = agent && this.entries.get(agent.id)
+    const actions = this.deps.actions
+    if (!e || !actions) return { status: true, voice: false, focus: false, answer: false }
+    return {
+      status: true,
+      voice: !!e.handle || this.modReady(e, actions),
+      focus: !!e.handle,
+      answer: !!e.approvalOpen,
+    }
+  }
+
+  /** Only Claude Code runs the mod; another engine's session id is no poll. */
+  private modReady(e: Entry, actions: ObservedActions): boolean {
+    return e.agent.engine === 'claude' && actions.modReady(e.agent.sessionId!)
+  }
+
+  /** A Claude Code session's approval, as the devices' Approvals holds it: the agent whose card it is. */
+  approval(sessionId: string, cwd: string | undefined, state: 'open' | 'answered' | 'left'): HostAgent | undefined {
+    const now = this.deps.now()
+    const e = state === 'open'
+      ? this.entry('claude', sessionId, now, { cwd })
+      : this.entries.get(observedAgentId('claude', sessionId))
+    if (!e) return undefined
+    e.approvalOpen = state === 'open'
+    if (state === 'open') {
+      this.setState(e, 'needs-you', now)
+      e.agent.lastActivityAt = now
+    } else if (state === 'answered' && e.agent.state === 'needs-you') {
+      this.setState(e, 'working', now)
+    }
+    // Left (expired, or the dial went): the terminal's prompt still waits, so the agent stays needs-you.
+    this.emit()
+    return { ...e.agent }
+  }
+
+  /** The dial's words for an idle agent: to its mod, else typed into its Orca terminal. Nothing is queued. */
+  async send(agent: HostAgent, text: string): Promise<SendResult> {
+    const e = this.entries.get(agent.id)
+    const actions = this.deps.actions
+    const refuse = (what: 'busy' | 'too-long' | 'no-answer', reason: string): SendResult => {
+      actions?.count(what)
+      return { ok: false, reason }
+    }
+    if (text.length > MAX_TEXT) return refuse('too-long', 'Too long. Say it shorter.')
+    const current = e?.agent ?? agent
+    // A prompt typed into a turn would answer its question or queue behind it, unseen.
+    if (current.state === 'working' || current.state === 'needs-you') return refuse('busy', `${current.name} is busy. Say it when it is done.`)
+    if (e && actions) {
+      if (this.modReady(e, actions) && await actions.toMod(e.agent.sessionId!, text)) {
+        actions.count('mod')
+        return { ok: true }
+      }
+      if (e.handle && await actions.orcaSend(e.handle, text)) {
+        actions.count('orca')
+        return { ok: true }
+      }
+    }
+    return refuse('no-answer', `${current.name} did not answer.`)
+  }
+
+  focus(agent: HostAgent): Promise<boolean> {
+    const handle = this.entries.get(agent.id)?.handle
+    const actions = this.deps.actions
+    return handle && actions ? actions.orcaOpen(handle) : Promise.resolve(false)
   }
 
   private emit(): void {
@@ -97,6 +178,11 @@ export class ObservedSource implements HostSource {
     a.lastActivityAt = now
     // Only a hook says where a session runs: one the open scan found is a plain terminal until its first.
     a.host = detectHost(e.hostHints)
+    // Every event's own: a session resumed elsewhere must not be typed into the terminal it left.
+    const handle = e.hostHints.ORCA_TERMINAL_HANDLE
+    entry.handle = handle && ORCA_HANDLE.test(handle) ? handle : undefined
+    // An approval may have named the session first, before any hook gave its process.
+    if (entry.pid === undefined) { entry.pid = e.callerPid; a.callerPid = e.callerPid }
     if (e.cwd) { a.cwd = e.cwd; a.name = basename(e.cwd) || a.name }
     if (e.transcriptPath) entry.transcriptPath = e.transcriptPath
     if (e.event === 'session-end') {
@@ -142,7 +228,7 @@ export class ObservedSource implements HostSource {
   /** The existing entry, or a new one if there is room. */
   private entry(
     engine: string, sessionId: string, now: number,
-    init: { cwd?: string; transcriptPath?: string | null; pid: number },
+    init: { cwd?: string; transcriptPath?: string | null; pid?: number },
   ): Entry | undefined {
     const id = observedAgentId(engine, sessionId)
     // Harness's own session (the voice router's Claude Code runs in the data folder, outside a pane) is never an agent
@@ -244,6 +330,11 @@ export class ObservedSource implements HostSource {
     let changed = false
     for (const [id, e] of judged) {
       if (this.entries.get(id) !== e) continue
+      if (e.pid === undefined) {
+        // Named by an approval and no hook since: no process to look for, only its silence.
+        if (now - e.agent.lastActivityAt >= NO_GENERATION_TTL_MS) { this.entries.delete(id); changed = true }
+        continue
+      }
       // Its process's generation, noted at the first look that sees it.
       const gen = table.get(e.pid)
       if (gen) e.generation ??= gen
