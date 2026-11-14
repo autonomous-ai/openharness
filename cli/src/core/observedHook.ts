@@ -30,10 +30,10 @@ const MAX_COUNTERS = 256
 const MAX_COUNTERS_HARD = 1024
 
 /** Same rule as hookServer's optionalBoundedString: a bounded string with no control character (a path or id with one is forged). */
-const bounded = (value: unknown, max: number): value is string =>
+export const bounded = (value: unknown, max: number): value is string =>
   typeof value === 'string' && value.length <= max && !/[\u0000-\u001f\u007f]/.test(value)
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
+export const isRecord = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === 'object' && !Array.isArray(value)
 
 export function parseObservedHook(body: unknown): ObservedHookEvent | null {

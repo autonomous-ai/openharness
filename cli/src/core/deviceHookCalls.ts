@@ -1,4 +1,4 @@
-import { minuteCounts } from './observedHook.js'
+import { bounded, isRecord, minuteCounts } from './observedHook.js'
 
 /**
  * A hook's approval and inbox calls, checked and bounded here and then handed to the devices process, which owns the
@@ -44,14 +44,7 @@ const MAX_APPROVALS = 16
 /** One poll per session, so this bounds the sessions whose mod is held at once. */
 const MAX_POLLS = 64
 
-/** Same rule as observedHook's bounded: a bounded string with no control character (an id or path with one is forged). */
-const bounded = (value: unknown, max: number): value is string =>
-  typeof value === 'string' && value.length <= max && !/[\u0000-\u001f\u007f]/.test(value)
-
 const filled = (value: unknown, max: number): value is string => bounded(value, max) && value !== ''
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  !!value && typeof value === 'object' && !Array.isArray(value)
 
 export function parseApproval(body: unknown): Omit<ApprovalRequest, 'id'> | null {
   if (!isRecord(body)) return null
