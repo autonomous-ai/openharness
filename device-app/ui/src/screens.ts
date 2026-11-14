@@ -73,7 +73,8 @@ function body(kind: Body, lines: string[]): HTMLElement[] {
     case 'spinner': {
       const spinner = element('div', 'spinner')
       spinner.setAttribute('role', 'status')
-      spinner.setAttribute('aria-label', 'Working…')
+      // Named by the screen's heading: its only approved words.
+      spinner.setAttribute('aria-labelledby', 'heading')
       return [spinner]
     }
     case 'output': {
@@ -102,7 +103,9 @@ export function render(root: HTMLElement, view: View | null, act: (action: Actio
   const screen = element('main', 'screen')
   const content = element('div', 'content')
   const under = body(face.body, view.lines)
-  content.append(element('h1', 'heading', face.heading), ...under)
+  const heading = element('h1', 'heading', face.heading)
+  heading.id = 'heading'
+  content.append(heading, ...under)
   // The text a screen reader reads after the focused button's label. The window shows one screen at a time, so the ids
   // are unique in it.
   const text = under.filter((node) => node.textContent)
