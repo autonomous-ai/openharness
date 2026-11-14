@@ -128,6 +128,30 @@ describe('AppFilter', () => {
     expect(causes()).toEqual([])
   })
 
+  it('the app in front is shown once it gets an agent, as a switch by the front', () => {
+    const { filter, agents, causes } = setup()
+    agents({ ghostty: 3 })
+    expect(filter.shown()).toBe('ghostty')
+    filter.front('vscode')
+    settle()
+    expect(filter.shown()).toBe('ghostty')
+    agents({ ghostty: 3, vscode: 1 })
+    expect(filter.shown()).toBe('vscode')
+    expect(causes()).toEqual(['front'])
+  })
+
+  it('a pick made before the app in front gets agents still holds', () => {
+    const { filter, agents, causes } = setup()
+    agents({ ghostty: 3, cursor: 1 })
+    expect(filter.shown()).toBe('ghostty')
+    filter.front('vscode')
+    settle()
+    expect(filter.pick('cursor')).toBe('switched')
+    agents({ ghostty: 3, cursor: 1, vscode: 2 })
+    expect(filter.shown()).toBe('cursor')
+    expect(causes()).toEqual(['pick'])
+  })
+
   it('none in front changes nothing', () => {
     const { filter, agents, causes } = setup()
     agents({ ghostty: 3, vscode: 1 })
@@ -339,6 +363,19 @@ describe('AppFilter', () => {
       expect(causes()).toEqual(['empty'])
       expect(filter.shown()).toBe('ghostty')
       expect(causes()).toEqual(['empty'])
+    })
+
+    it('a default another app won gives way to the app in front once its agents are known', () => {
+      // Diego's morning: Ghostty in front over five tmux sessions the scan cannot place, and one known agent in VS Code.
+      const { filter, agents, causes } = setup()
+      agents({ terminal: 5, vscode: 1 }, { vscode: 1 })
+      filter.front('ghostty')
+      settle()
+      expect(filter.shown()).toBe('vscode')
+      // Their hooks say they run in Ghostty.
+      agents({ ghostty: 5, vscode: 1 })
+      expect(filter.shown()).toBe('ghostty')
+      expect(causes()).toEqual(['front'])
     })
 
     it('that default stays while only its own agents become known', () => {

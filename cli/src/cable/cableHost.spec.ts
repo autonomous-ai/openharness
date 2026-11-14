@@ -966,6 +966,22 @@ describe('the dial that shows one app at a time', () => {
     expect(appSwitched.mock.calls).toEqual([['front']])
   })
 
+  it('an app that settled in front with no agents is shown once its first agent starts there', async () => {
+    const agents = [agent('g1', 'ghostty'), agent('g2', 'ghostty'), agent('g3', 'ghostty')]
+    const settles: Array<() => void> = []
+    const appSwitched = vi.fn()
+    const host = setup(agents, { appSwitched, appTimer: (_ms, run) => { settles.push(run); return () => {} } })
+    expect(await shown(host)).toBe('ghostty')
+    host.front('vscode')
+    settles[0]()
+    expect(await shown(host)).toBe('ghostty')
+    agents.push(agent('v1', 'vscode'))
+    const after = await host.listAgentSnapshot({ apps: true })
+    expect(after).toMatchObject({ total: 1, apps: { shown: 'vscode' } })
+    expect(ids(after)).toEqual(['v1'])
+    expect(appSwitched.mock.calls).toEqual([['front']])
+  })
+
   it('two reads in a row give the same shown app and the same order', async () => {
     const appRandom = vi.fn(() => 0.75)
     const host = setup([agent('g1', 'ghostty'), agent('v1', 'vscode'), agent('g2', 'ghostty'), agent('v2', 'vscode')], { appRandom })
