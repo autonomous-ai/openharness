@@ -166,12 +166,15 @@ int main(void) {
     p=cJSON_Parse("{\"shown\":\"a\",\"apps\":[{\"id\":\"a\",\"name\":\"aaaaaaaaaaaaaaaaaaaaaa\xc3\xa9\"},{\"id\":\"b\",\"name\":\"aaaaaaaaaaaaaaaaaaaa\xc3\xa9\"}]}");
     assert(p);handle_apps(p);cJSON_Delete(p);
     assert(app_count==2&&!strcmp(apps[0].name,"aaaaaaaaaaaaaaaaaaaaaa")&&!strcmp(apps[1].name,"aaaaaaaaaaaaaaaaaaaa\xc3\xa9"));
-    // apps with no array is an empty list that is still known: the daemon is answered, never ignored.
+    // A duplicate id keeps its first row: a pick names one app.
+    p=cJSON_Parse("{\"shown\":\"a\",\"apps\":[{\"id\":\"a\",\"count\":1},{\"id\":\"b\"},{\"id\":\"a\",\"count\":2}]}");
+    assert(p);handle_apps(p);cJSON_Delete(p);
+    assert(app_count==2&&!strcmp(apps[0].id,"a")&&apps[0].count==1&&!strcmp(apps[1].id,"b"));
+    // apps that is missing or not an array keeps the dial's apps, as every other malformed list does.
     unsigned calls=app_calls;
-    p=cJSON_Parse("{\"shown\":\"a\"}");assert(p);handle_apps(p);cJSON_Delete(p);
-    assert(app_calls==calls+1&&!app_count&&!strcmp(app_shown,"a"));
-    p=cJSON_Parse("{\"shown\":\"a\",\"apps\":{\"id\":\"a\"}}");assert(p);handle_apps(p);cJSON_Delete(p);
-    assert(app_calls==calls+2&&!app_count);bounds();
+    p=cJSON_Parse("{\"shown\":\"b\"}");assert(p);handle_apps(p);cJSON_Delete(p);
+    p=cJSON_Parse("{\"shown\":\"b\",\"apps\":{\"id\":\"b\"}}");assert(p);handle_apps(p);cJSON_Delete(p);
+    assert(app_calls==calls&&app_count==2&&!strcmp(app_shown,"a"));bounds();
     printf("Protocol identities: exact %u-byte targets / %zu-byte profiles, overlong/duplicate rejection, malformed lists preserve state, fixed row bounds PASS\n",ID_MAX-1,sizeof profile-1);
 }
 '''
