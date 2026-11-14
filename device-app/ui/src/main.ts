@@ -9,9 +9,16 @@ export async function start(root: HTMLElement): Promise<void> {
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') void getCurrentWindow().close()
   })
-  // Listen first, so a view Rust sends while view() is on its way is not missed.
-  await onView(draw)
-  draw(await view())
+  // Listen first, so a view Rust sends while view() is on its way is not missed. Events and view()'s answer are not
+  // ordered: once an event has come, the answer may be older, and drawing it would leave buttons acting on a screen
+  // the window no longer shows.
+  let heard = false
+  await onView((next) => {
+    heard = true
+    draw(next)
+  })
+  const first = await view()
+  if (!heard) draw(first)
 }
 
 // The page always has #app; a test imports start without one.
