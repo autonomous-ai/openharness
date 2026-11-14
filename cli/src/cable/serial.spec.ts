@@ -258,7 +258,7 @@ describe('macOS dial discovery wiring', () => {
     await findDialPorts()
     await findDialPorts()
     expect(io.configure).toHaveBeenCalledTimes(1)
-    expect(io.configure.mock.calls[0].slice(0, 2)).toEqual(['ioreg', ['-r', '-c', 'IOUSBHostDevice', '-w0', '-l']])
+    expect(io.configure.mock.calls[0].slice(0, 2)).toEqual(['ioreg', ['-r', '-c', 'IOSerialBSDClient', '-t', '-w0', '-l']])
     expect(io.configure.mock.calls[0][2]).toMatchObject({ timeout: 5000 })
     expect(io.lstat.mock.calls.every(([path]) => path === '/dev/cu.usbmodem1101')).toBe(true)
     expect(io.lstat).toHaveBeenCalled()
