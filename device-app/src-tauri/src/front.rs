@@ -65,7 +65,7 @@ impl FrontFeed {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::{Value, json};
+    use serde_json::json;
     use std::sync::Mutex;
 
     fn line(value: &str) -> String {
@@ -94,22 +94,38 @@ mod tests {
         let whole = "a".repeat(FRONT_MAX);
         assert_eq!(front_line(&whole), line(&whole));
         assert_eq!(front_line(&"a".repeat(200)), line(&whole));
-        // Cut on a character boundary, never inside one.
-        let cut = format!("{}é", "a".repeat(FRONT_MAX - 1));
-        assert_eq!(front_line(&format!("{cut}z")), line(&cut));
-        assert_eq!(front_line(&"🦀".repeat(200)), line(&"🦀".repeat(FRONT_MAX)));
     }
 
     #[test]
-    fn a_quote_or_a_newline_stays_one_json_line() {
-        let value = "a\"b\nc\\d\r\u{1}";
-        let written = front_line(value);
-        assert!(!written.contains(['\n', '\r']), "{written}");
-        assert_eq!(serde_json::from_str::<Value>(&written).unwrap(), json!({ "front": value }));
-        // Characters are counted before they are escaped, and the longest line stays under the 1 KiB the watch takes.
-        let escaped = front_line(&"\u{1}".repeat(200));
-        assert_eq!(serde_json::from_str::<Value>(&escaped).unwrap(), json!({ "front": "\u{1}".repeat(FRONT_MAX) }));
-        assert!(escaped.len() < 1024, "{}", escaped.len());
+    fn a_value_with_a_character_the_watch_never_maps_is_the_empty_value() {
+        // Bundle ids and exe names, spaces and underscores too.
+        for kept in ["com.mitchellh.ghostty", "wezterm-gui", "Code.exe", "Visual Studio Code", "a_b", "A1"] {
+            assert_eq!(front_line(kept), line(kept));
+        }
+        for other in [
+            "a\"b",
+            "a\nb",
+            "a\\b",
+            "a\u{1}b",
+            "caf\u{e9}",
+            "\u{1f980}",
+            "a/b",
+            "a+b",
+            &format!("{}\u{e9}", "a".repeat(200)),
+        ] {
+            assert_eq!(front_line(other), line(""), "{other:?}");
+        }
+    }
+
+    #[test]
+    fn the_longest_line_is_one_atomic_pipe_write() {
+        // macOS writes up to PIPE_BUF, 512 bytes, to a pipe whole or not at all: a longer line could be torn when
+        // the watch is slow to read.
+        for value in ["a", "\u{1}", "\u{1f980}", "\""] {
+            let written = front_line(&value.repeat(200));
+            assert!(written.len() <= 512, "{value:?}: {}", written.len());
+            assert!(!written.contains(['\n', '\r']), "{written}");
+        }
     }
 
     #[test]
