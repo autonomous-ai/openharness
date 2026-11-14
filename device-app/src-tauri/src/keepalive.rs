@@ -122,7 +122,7 @@ impl KeepAlive {
         }
     }
 
-    /// The caller stops the watch: nothing is looked at again.
+    /// The caller stops the watch: the exit that answers is not a down.
     pub fn stop_watch(&mut self) {
         self.watch = Watch::Closed;
     }
