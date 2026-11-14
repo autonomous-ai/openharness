@@ -137,7 +137,7 @@ describe('local CLI WebSocket', () => {
       ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1, ...(tool ? { tool } : {}) } }))
       const frame = await connected
       expect(frame.type).toBe('connected')
-      if (tool) expect(frame.payload).toMatchObject({ features: ['openclaw-local', 'dial-watch'] })
+      if (tool) expect(frame.payload).toMatchObject({ features: ['openclaw-local', 'dial-watch', 'dial-front'] })
       else expect(frame.payload).not.toHaveProperty('features')
       ws.close()
       await local!.close()
@@ -208,6 +208,83 @@ describe('local CLI WebSocket', () => {
       expect(backend.watches.at(-1)).toEqual(watch)
       expect(backend.tools.includes(backend.connId!)).toBe(fields.tool === true)
     }
+  })
+
+  /** A `dialFront` option that hands each connection a gate of its own, kept in the order they were asked for. */
+  function frontGates(): { dialFront: () => (payload: unknown) => void; gates: Array<ReturnType<typeof vi.fn>> } {
+    const gates: Array<ReturnType<typeof vi.fn>> = []
+    return { gates, dialFront: () => { const gate = vi.fn(); gates.push(gate); return gate } }
+  }
+
+  /** Selects with `fields`, sends `frames`, then a marker that `heard` must see: a connection's frames are handled in
+   *  order, so once the marker is heard every frame before it was handled. */
+  async function sendAfterSelect(url: string, fields: Record<string, unknown>, frames: Frame[], heard: () => Frame[]): Promise<WebSocket> {
+    const ws = new WebSocket(url)
+    await onceOpen(ws)
+    ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1, ...fields } }))
+    for (const frame of frames) ws.send(JSON.stringify(frame))
+    const marker = { type: 'agents_list', payload: { requestId: randomBytes(8).toString('hex') } }
+    ws.send(JSON.stringify(marker))
+    await vi.waitFor(() => expect(heard()).toContainEqual(marker))
+    return ws
+  }
+
+  it('dial_front from a tool that watches the dial reaches its gate with the payload', async () => {
+    const backend = new FakeBackend(), { dialFront, gates } = frontGates()
+    const ws = await sendAfterSelect(await start(backend, { dialFront }), { tool: true, watch: ['dial'] },
+      [{ type: 'dial_front', payload: { app: 'ghostty' } }, { type: 'dial_front', payload: 'not an object' }], () => backend.frames)
+    expect(gates).toHaveLength(1)
+    // What the payload is, is the gate's to judge (core/dialFront.ts): it is handed over as sent.
+    expect(gates[0].mock.calls).toEqual([[{ app: 'ghostty' }], ['not an object']])
+    expect(backend.frames.map((frame) => frame.type)).toEqual(['agents_list'])
+    ws.close()
+  })
+
+  it('dial_front from a window, from a tool that did not ask for the dial, and on a relayed machine reaches no gate and no backend', async () => {
+    const backend = new FakeBackend(), relayed: Frame[] = [], { dialFront, gates } = frontGates()
+    const acquire = async (_id: string, _env: string, _select: Frame, sink: LocalClientSink) => {
+      sink.sendFrame({ type: 'connected', payload: { machineId: 'remote', e2ee: false } })
+      return { send: async (frame: Frame) => { relayed.push(frame) }, sendBinary: async () => {}, detach: () => {} }
+    }
+    const url = await start(backend, {
+      dialFront, autonomousEnv: 'test',
+      relayPool: { acquire, acquireIsolated: acquire, invalidate: () => {}, invalidateIsolated: () => {} } as unknown as NonNullable<LocalWsServerOptions['relayPool']>,
+    })
+    const front = { type: 'dial_front', payload: { app: 'ghostty' } }
+    const cases: Array<[Record<string, unknown>, () => Frame[]]> = [
+      [{}, () => backend.frames],
+      [{ client: 'tui', watch: ['dial'] }, () => backend.frames],
+      [{ tool: true }, () => backend.frames],
+      [{ tool: true, watch: ['agents'] }, () => backend.frames],
+      [{ machineId: 'remote', tool: true, watch: ['dial'] }, () => relayed],
+      [{ machineId: 'remote', watch: ['dial'] }, () => relayed],
+    ]
+    for (const [fields, heard] of cases) (await sendAfterSelect(url, fields, [front], heard)).close()
+    expect(gates).toEqual([])
+    expect([...backend.frames, ...relayed].some((frame) => frame.type === 'dial_front')).toBe(false)
+  })
+
+  it('each watching connection gets a gate of its own', async () => {
+    const backend = new FakeBackend(), { dialFront, gates } = frontGates()
+    const url = await start(backend, { dialFront })
+    const watching = { tool: true, watch: ['dial'] }
+    const first = await sendAfterSelect(url, watching, [{ type: 'dial_front', payload: { app: 'ghostty' } }], () => backend.frames)
+    const second = await sendAfterSelect(url, watching, [{ type: 'dial_front', payload: { app: 'vscode' } }], () => backend.frames)
+    first.send(JSON.stringify({ type: 'dial_front', payload: { app: 'none' } }))
+    await vi.waitFor(() => expect(gates[0]).toHaveBeenCalledTimes(2))
+    expect(gates).toHaveLength(2)
+    expect(gates[0].mock.calls).toEqual([[{ app: 'ghostty' }], [{ app: 'none' }]])
+    expect(gates[1].mock.calls).toEqual([[{ app: 'vscode' }]])
+    first.close()
+    second.close()
+  })
+
+  it('with no dialFront option the frame is dropped', async () => {
+    const backend = new FakeBackend()
+    const ws = await sendAfterSelect(await start(backend), { tool: true, watch: ['dial'] },
+      [{ type: 'dial_front', payload: { app: 'ghostty' } }], () => backend.frames)
+    expect(backend.frames.map((frame) => frame.type)).toEqual(['agents_list'])
+    ws.close()
   })
 
   it('keeps notification identities on the local read and snapshot paths', async () => {
