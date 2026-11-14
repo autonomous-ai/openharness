@@ -178,6 +178,24 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn a_front_line_reaches_the_watch() {
+        let (ghostty, vscode) = (r#"{"front":"com.mitchellh.ghostty"}"#, r#"{"front":"com.microsoft.VSCode"}"#);
+        let fake = Fake::new();
+        fake.script("hardware watch --json", &[r#"{"attached":false}"#, "@record"]);
+        let (watch, events) = start(&fake);
+        assert_eq!(events.recv_timeout(WAIT), Ok(dial(false, None, None)));
+        watch.front(ghostty);
+        watch.stop();
+        assert_eq!(events.recv_timeout(WAIT), Ok(Event::WatchExit(Some(0))));
+        assert_eq!(fake.stdin(), [ghostty]);
+        // A watch that has ended takes nothing, and the log says nothing of it.
+        watch.front(vscode);
+        assert_eq!(fake.stdin(), [ghostty]);
+        assert_eq!(fake.log().lines(), ["harness hardware watch --json: exit 0"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn a_watch_with_no_first_line_in_time_is_ended() {
         let fake = Fake::new();
         fake.script("hardware watch --json", &["@hang"]);

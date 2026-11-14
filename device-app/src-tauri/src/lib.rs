@@ -5,6 +5,7 @@ pub mod app;
 pub mod claude;
 pub mod cli;
 pub mod desktop;
+pub mod front;
 pub mod install;
 pub mod keepalive;
 pub mod log;

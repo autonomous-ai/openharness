@@ -229,6 +229,7 @@ mod tests {
     use super::*;
     use crate::account::NO_RESULT;
     use crate::app::App;
+    use crate::front::{FrontSource, NoFront};
     use crate::install::{DESKTOP, HOST, NOT_INSTALLED, NOT_SUPPORTED, Shell};
     use crate::loginitem::LoginItem;
     use crate::state::StateFile;
@@ -248,6 +249,12 @@ mod tests {
     const URL: &str = r#"{"type":"authorize_url","url":"https://id.example/a?state=S"}"#;
     const SUCCESS: &str = r#"{"type":"result","status":"success","email":"person@example.com"}"#;
     const FAILED: &str = r#"{"type":"result","status":"error","code":"BACKEND_ERROR","message":"fetch failed"}"#;
+    const GHOSTTY: &str = "com.mitchellh.ghostty";
+    const VSCODE: &str = "com.microsoft.VSCode";
+    const GHOSTTY_LINE: &str = r#"{"front":"com.mitchellh.ghostty"}"#;
+    const VSCODE_LINE: &str = r#"{"front":"com.microsoft.VSCode"}"#;
+    /// A watch that keeps what it reads on its stdin until it is stopped.
+    const RECORDING: [&str; 2] = [r#"{"attached":false}"#, "@record"];
 
     /// The doors besides the CLI. Each keeps what it was asked, and fails while `failing` is set.
     #[derive(Default)]
@@ -298,6 +305,25 @@ mod tests {
             }
             self.saved.lock().unwrap().push(*saved);
             Ok(())
+        }
+    }
+
+    /// The app in front, as a test tells it: `now` at start, then each `tell`.
+    struct Fronts {
+        now: String,
+        changed: Mutex<Option<Box<dyn Fn(String) + Send + Sync>>>,
+    }
+
+    impl Fronts {
+        fn tell(&self, value: &str) {
+            (self.changed.lock().unwrap().as_ref().expect("started"))(value.into());
+        }
+    }
+
+    impl FrontSource for Fronts {
+        fn start(&self, changed: Box<dyn Fn(String) + Send + Sync>) {
+            changed(self.now.clone());
+            *self.changed.lock().unwrap() = Some(changed);
         }
     }
 
@@ -354,6 +380,15 @@ mod tests {
         world_where(|_| {})
     }
 
+    /// A world with the CLI found, whose app in front is `now` when the runner starts.
+    fn world_in_front_of(now: &str) -> (World, Arc<Fronts>) {
+        let fronts = Arc::new(Fronts { now: now.into(), changed: Mutex::default() });
+        let source = fronts.clone();
+        let w = world_where(move |doors| doors.front = source);
+        assert!(w.runner.find_cli());
+        (w, fronts)
+    }
+
     /// A fake CLI as the override, an empty home, the doubles, and a channel for what `send` is handed.
     fn world_where(change: impl FnOnce(&mut Doors)) -> World {
         let (fake, home, doubles) = (Fake::new(), tempfile::tempdir().unwrap(), Arc::new(Doubles::default()));
@@ -382,6 +417,7 @@ mod tests {
             state: doubles.clone(),
             log: fake.log(),
             open: Arc::new(move |args: &[&str]| opener.open(args)),
+            front: Arc::new(NoFront),
         }
     }
 
@@ -589,6 +625,74 @@ mod tests {
         assert_eq!(w.fake.ends(), ["hardware watch --json", "hardware watch --json"]);
         // The first's own WatchExit(Some(0)) never came: it would read as the app closing the second.
         assert_eq!(w.rest(), []);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_app_in_front_is_written_to_the_watch() {
+        let (w, fronts) = world_in_front_of(GHOSTTY);
+        w.fake.script("hardware watch --json", &RECORDING);
+        assert_eq!(w.answer(Effect::SpawnWatch), no_dial());
+        fronts.tell(VSCODE);
+        // An app with no name: the watch takes it as no listed app in front.
+        fronts.tell("");
+        assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
+        assert_eq!(w.fake.stdin(), [GHOSTTY_LINE, VSCODE_LINE, r#"{"front":""}"#]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_new_watch_is_told_the_app_in_front_once() {
+        let (w, fronts) = world_in_front_of(GHOSTTY);
+        w.fake.script("hardware watch --json", &RECORDING);
+        // In front before any watch ran: the first is told it as it starts.
+        assert_eq!(w.answer(Effect::SpawnWatch), no_dial());
+        assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
+        assert_eq!(w.fake.stdin(), [GHOSTTY_LINE]);
+        // Changed while no watch ran: the next is told the new one.
+        fronts.tell(VSCODE);
+        assert_eq!(w.answer(Effect::SpawnWatch), no_dial());
+        assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
+        assert_eq!(w.fake.stdin(), [GHOSTTY_LINE, VSCODE_LINE]);
+        // A watch that replaces a running one is told it too, once.
+        assert_eq!(w.answer(Effect::SpawnWatch), no_dial());
+        assert_eq!(w.answer(Effect::SpawnWatch), no_dial());
+        assert!(wait_gone(w.fake.pids()[2]));
+        assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
+        assert_eq!(w.fake.stdin(), [GHOSTTY_LINE, VSCODE_LINE, VSCODE_LINE, VSCODE_LINE]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_repeat_writes_nothing() {
+        let (w, fronts) = world_in_front_of(GHOSTTY);
+        w.fake.script("hardware watch --json", &RECORDING);
+        assert_eq!(w.answer(Effect::SpawnWatch), no_dial());
+        for value in [GHOSTTY, VSCODE, VSCODE, GHOSTTY, GHOSTTY] {
+            fronts.tell(value);
+        }
+        assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
+        assert_eq!(w.fake.stdin(), [GHOSTTY_LINE, VSCODE_LINE, GHOSTTY_LINE]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn nothing_of_the_front_is_logged() {
+        let (w, fronts) = world_in_front_of(GHOSTTY);
+        // A watch that ends by itself: the runner still holds it, and the next value is written to its closed pipe.
+        w.fake.script("hardware watch --json", &[r#"{"attached":false}"#, "@wait end"]);
+        assert_eq!(w.answer(Effect::SpawnWatch), no_dial());
+        fronts.tell(VSCODE);
+        fronts.tell(VSCODE);
+        w.fake.touch("end");
+        assert_eq!(w.next(), Event::WatchExit(Some(0)));
+        fronts.tell(GHOSTTY);
+        let (log, doubles) = (w.fake.log(), w.doubles.clone());
+        assert_eq!(w.rest(), []);
+        let lines = log.lines();
+        assert!(lines.iter().any(|line| line == "harness hardware watch --json: exit 0"), "{lines:?}");
+        assert!(lines.iter().all(|line| !line.contains("ghostty") && !line.contains("VSCode")), "{lines:?}");
+        assert!(doubles.saved.lock().unwrap().is_empty());
     }
 
     #[cfg(unix)]
