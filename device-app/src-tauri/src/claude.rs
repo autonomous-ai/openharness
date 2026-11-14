@@ -94,6 +94,18 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn a_line_without_supported_is_not_a_status() {
+        let real = r#"{"supported":true,"installed":false,"enabled":false}"#;
+        let fake = Fake::new();
+        fake.script("device claude status --json", &[r#"{"error":"Harness is too old"}"#, "{}", r#"{"notice":"x"}"#]);
+        assert_eq!(status(&fake.cli()), None);
+        let fake = Fake::new();
+        fake.script("device claude status --json", &[r#"{"supported":"yes"}"#, r#"{"notice":"x"}"#, real]);
+        assert_eq!(status(&fake.cli()), Some(ClaudeStatus { supported: true, ..ClaudeStatus::default() }));
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn on_and_off_run_one_command_each() {
         for (on, call) in [(true, "device claude enable"), (false, "device claude disable")] {
             let fake = Fake::new();
