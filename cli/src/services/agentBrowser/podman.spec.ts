@@ -1,8 +1,10 @@
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { chmodSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ownProcessGroup } from '../../lib/windows/noWindow.js'
+import { alive } from '../../testing/spawnedRuns.js'
 import { fakePodman, type FakePodman } from './fakePodman.js'
 import { createPodman, PodmanError } from './podman.js'
 
@@ -15,6 +17,8 @@ vi.mock('node:child_process', async (importOriginal) => {
 vi.mock('../../lib/loginShellEnv.js', () => ({ oneShotParentEnv: () => ({ ...process.env, FAKE_PODMAN_MARK: 'login-shell' }) }))
 
 const GiB = 1024 ** 3
+const CLI = fileURLToPath(new URL('../../..', import.meta.url))
+const gone = (...pids: number[]) => vi.waitFor(() => expect(pids.filter(alive)).toEqual([]), { timeout: 10_000, interval: 20 })
 const info = (version: string, memTotal: number) => JSON.stringify({ version: { Version: version }, host: { memTotal } })
 
 let fake: FakePodman
@@ -28,6 +32,33 @@ afterEach(async () => {
 
 const found = (platform: NodeJS.Platform = 'darwin', now = () => 0) =>
   createPodman({ resolve: async () => fake.path, platform, now })
+
+/** A Node process in place of the agent browser's (tsx, the real modules, the fake as its Podman): it runs `body` with `podman`. */
+function standIn(body: string): ChildProcess {
+  const script = join(dirname(fake.path), 'stand-in.mts')
+  writeFileSync(script, `import { createPodman } from ${JSON.stringify(new URL('./podman.ts', import.meta.url).href)}
+const podman = createPodman({ resolve: async () => ${JSON.stringify(fake.path)} })
+await podman.path()
+${body}
+setInterval(() => {}, 1 << 30)
+`)
+  return spawn(process.execPath, ['--import', 'tsx', script], { cwd: CLI, stdio: ['ignore', 'ignore', 'inherit'] })
+}
+
+/** The service's process can die with no chance to stop anything (a crash, SIGKILL, the OOM killer): what it started ends all the same. */
+async function endsWithItsProcess(body: string, command: string): Promise<void> {
+  fake.reply(command, { hangMs: 60_000 })
+  const service = standIn(body)
+  try {
+    await vi.waitFor(() => expect(fake.pids()).toHaveLength(1), { timeout: 20_000, interval: 20 })
+    service.kill('SIGKILL')
+    await gone(...fake.pids())
+  } finally {
+    // By their exact pids, and before the fake's folder goes: this process tracks none of them.
+    for (const pid of [...fake.pids(), service.pid!]) try { process.kill(pid, 'SIGKILL') } catch { /* gone */ }
+    await gone(...fake.pids(), service.pid!)
+  }
+}
 
 const failure = async (work: Promise<unknown>): Promise<PodmanError> => {
   const error = await work.then(() => null, (e: unknown) => e)
@@ -273,7 +304,7 @@ describe('createPodman', () => {
     // The relay's shell leads its own process group (ownProcessGroup): once run() has failed, its podman and cat are
     // gone with it, not left running or unreaped behind it.
     const shell = vi.mocked(execFile).mock.results[0]!.value as ChildProcess
-    expect(() => process.kill(fake.lastPid(), 0)).toThrow(/ESRCH/)
+    expect(() => process.kill(fake.pids().at(-1)!, 0)).toThrow(/ESRCH/)
     expect(() => process.kill(-shell.pid!, 0)).toThrow(/ESRCH/)
   })
 
@@ -281,7 +312,7 @@ describe('createPodman', () => {
     fake.reply('secret create', { stdout: 'abc123\n' })
     await found('linux').run(['secret', 'create', 's1', '-'], { stdin: 'pw' })
     const shell = vi.mocked(execFile).mock.results[0]!.value as ChildProcess
-    expect(() => process.kill(fake.lastPid(), 0)).toThrow(/ESRCH/)
+    expect(() => process.kill(fake.pids().at(-1)!, 0)).toThrow(/ESRCH/)
     expect(() => process.kill(-shell.pid!, 0)).toThrow(/ESRCH/)
   })
 
@@ -303,6 +334,23 @@ describe('createPodman', () => {
     const podman = found()
     expect((await podman.run(['build', '-t', 'harness-browser:t', '/ctx'])).stdout).toHaveLength(3 * 1024 * 1024)
     expect(vi.mocked(execFile).mock.calls[0]![2]).toEqual(expect.objectContaining({ timeout: 30_000, maxBuffer: 64 * 1024 * 1024 }))
+  })
+
+  // Each crash of the agent browser's process left its `podman events` running, one more per restart.
+  it.each([
+    ['podman events', `podman.spawn(['events', '--format', 'json'])`, 'events'],
+  ])('%s ends when the process that started it is killed', (_, body, command) => endsWithItsProcess(body, command))
+
+  it('a podman removed after it was found ends its stream as a failed command does, with no spawn error', async () => {
+    const podman = createPodman({ resolve: async () => join(dirname(fake.path), 'removed'), platform: 'linux' })
+    await podman.path()
+    const child = podman.spawn(['events'])
+    const errors: Error[] = []
+    child.on('error', error => errors.push(error))
+    const code = await new Promise<number | null>(done => child.once('close', done))
+    expect(errors).toEqual([])
+    // The shell's own exit: 127 from dash ("not found"), 126 from bash as sh on macOS.
+    expect([126, 127]).toContain(code)
   })
 
   it('without podman, run and spawn are needs_setup', async () => {

@@ -43,8 +43,11 @@ export interface FakePodman {
   /** Answers every call whose argv starts with `prefix` (joined by spaces); the longest prefix wins. */
   reply(prefix: string, answer: FakeReply): void
   calls(): FakeCall[]
-  /** The process id of the call that read its stdin last. */
-  lastPid(): number
+  /**
+   * The process id of every call, in the order they started, logged before a call reads its stdin: a `podman events`,
+   * whose stdin stays open, is in it too.
+   */
+  pids(): number[]
   /** Starts no more calls, waits for the running ones to exit, then deletes the folder. */
   remove(): Promise<void>
 }
@@ -54,6 +57,7 @@ const SCRIPT = `
 const fs = require('node:fs')
 const path = require('node:path')
 const args = process.argv.slice(2)
+fs.appendFileSync(path.join(__dirname, 'pids.log'), process.pid + '\\n')
 // As Podman 4.9 does (cmd/podman/secrets/create.go): \`-\` is read only from a real pipe, never a socket or a terminal.
 const line = args.join(' ')
 if (/(^| )secret create /.test(line) && args.at(-1) === '-' && !fs.fstatSync(0).isFIFO()) {
@@ -61,7 +65,6 @@ if (/(^| )secret create /.test(line) && args.at(-1) === '-' && !fs.fstatSync(0).
   process.exit(125)
 }
 const stdin = fs.readFileSync(0, 'utf8')
-fs.writeFileSync(path.join(__dirname, 'last.pid'), String(process.pid))
 fs.appendFileSync(path.join(__dirname, 'calls.jsonl'), JSON.stringify({ args, stdin, mark: process.env.FAKE_PODMAN_MARK }) + '\\n')
 const table = JSON.parse(fs.readFileSync(path.join(__dirname, 'replies.json'), 'utf8'))
 const key = Object.keys(table).filter(k => line === k || line.startsWith(k + ' ')).sort((a, b) => b.length - a.length)[0]
@@ -83,6 +86,7 @@ export function fakePodman(): FakePodman {
   writeFileSync(path, `#!${process.execPath}\n${SCRIPT}`)
   chmodSync(path, 0o755)
   save()
+  writeFileSync(join(dir, 'pids.log'), '')
   return {
     path,
     reply(prefix, answer) {
@@ -94,7 +98,7 @@ export function fakePodman(): FakePodman {
       if (!existsSync(log)) return []
       return readFileSync(log, 'utf8').trim().split('\n').map(line => JSON.parse(line) as FakeCall)
     },
-    lastPid: () => Number(readFileSync(join(dir, 'last.pid'), 'utf8')),
+    pids: () => readFileSync(join(dir, 'pids.log'), 'utf8').split('\n').filter(Boolean).map(Number),
     async remove() {
       fake.removed = true
       await Promise.all([...fake.running].map(child => new Promise(done => child.once('exit', done))))
