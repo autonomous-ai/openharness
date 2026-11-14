@@ -4,11 +4,12 @@
  * PATH their rc files build, not from the detached daemon's. This is the same reasoning (and the
  * same shell selection) `engineLaunch.ts` uses to exec an engine in a pane.
  */
-import { spawn, type ChildProcess } from 'node:child_process'
+import type { ChildProcess } from 'node:child_process'
 import { win32 } from 'node:path'
 import { harnessNodePrelude, interactiveEngineShell } from '../lib/engineLaunch.js'
 import { managedNodePath } from '../lib/nodeRuntime.js'
 import { shellSingleQuote } from '../lib/shellQuote.js'
+import { spawnTied } from '../lib/tied.js'
 import { findGitBash, INSTALL_GIT_FOR_WINDOWS } from '../lib/windows/gitBash.js'
 import { endGitBashTree, gitBashTreeDeps } from '../lib/windows/gitBashTree.js'
 import { ownProcessGroup } from '../lib/windows/noWindow.js'
@@ -164,7 +165,9 @@ export function spawnDshCommand(
   opts: { cwd: string; env?: Record<string, string>; host?: DshShellHost; purpose?: DshCommandPurpose },
 ): ChildProcess {
   const { path, args, env } = dshShellArgv(script, opts.host, opts.purpose)
-  return spawn(path, args, {
+  // Tied: each crash of the viewers service, or of the `harness dsh` command, left a viewer server or a setup running,
+  // one more per crash; the tie ends the command's whole group with that process (lib/tied.ts).
+  return spawnTied(path, args, {
     cwd: opts.cwd,
     env: { ...process.env, ...env, ...(opts.env ?? {}) },
     stdio: ['ignore', 'pipe', 'pipe'],
