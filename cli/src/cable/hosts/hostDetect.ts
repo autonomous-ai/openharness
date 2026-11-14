@@ -43,7 +43,7 @@ export const UNKNOWN_APP = 'terminal'
 
 // The outermost app by its bundle id: each host's app, and Harness Desktop's, which stays out of APP_BUNDLES because
 // a tap never opens a Harness agent by its bundle id.
-const BUNDLE_APPS: Readonly<Record<string, string>> = {
+export const BUNDLE_APPS: Readonly<Record<string, string>> = {
   ...Object.fromEntries(Object.entries(APP_BUNDLES).map(([id, bundle]) => [bundle, id])),
   'ai.autonomous.harness': 'harness',
 }
