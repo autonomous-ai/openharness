@@ -49,6 +49,51 @@ describe('parseObservedHook', () => {
   })
 })
 
+// A permission prompt that waits, from the plugin's hook client (deviceClaude/asked.ts): it sends no process and no
+// environment, and where the session runs stays its own hooks' to say.
+describe('parseObservedHook: asked', () => {
+  const asked = { engine: 'claude', sessionId: 's1', event: 'asked', tool: 'Bash', summary: 'npm test', cwd: '/work/app' }
+
+  it('parses the client\'s body as it posts it', () => {
+    expect(parseObservedHook(asked)).toStrictEqual(asked)
+  })
+
+  it('parses one with no tool, summary or cwd', () => {
+    expect(parseObservedHook({ engine: 'claude', sessionId: 's1', event: 'asked' })).toStrictEqual({ engine: 'claude', sessionId: 's1', event: 'asked' })
+  })
+
+  it('takes a 64-character tool and a 200-byte summary of multi-byte characters', () => {
+    const body = { ...asked, tool: 't'.repeat(64), summary: 'é'.repeat(100) }
+    expect(parseObservedHook(body)).toStrictEqual(body)
+  })
+
+  it('keeps no process, hints or transcript an asked event carries, and no tool or summary another event carries', () => {
+    expect(parseObservedHook({ ...asked, callerPid: 7, hostHints: { ORCA_TERMINAL_HANDLE: 'term_x' }, transcriptPath: '/t/s1.jsonl' }))
+      .toStrictEqual(asked)
+    expect(parseObservedHook({ ...full, tool: 'Bash', summary: 'npm test' })).toStrictEqual(full)
+  })
+
+  it.each([
+    ['a tool of 65 characters', { tool: 't'.repeat(65) }],
+    ['a summary of 201 bytes', { summary: `${'é'.repeat(100)}x` }],
+    ['a summary of 201 characters', { summary: 'x'.repeat(201) }],
+    ['a control character in tool', { tool: 'Ba\tsh' }],
+    ['a control character in summary', { summary: 'npm\ntest' }],
+    ['a non-string tool', { tool: 7 }],
+    ['a non-string summary', { summary: { text: 'npm test' } }],
+    ['a control character in cwd', { cwd: '/work\u007f/app' }],
+    ['an empty sessionId', { sessionId: '' }],
+  ])('rejects %s', (_name, patch) => {
+    expect(parseObservedHook({ ...asked, ...patch })).toBeNull()
+  })
+
+  it('forwards it, under the session\'s own rate', () => {
+    const forward = vi.fn(() => true)
+    expect(createObservedHook({ forward, now: () => 7 }).onObserved(asked)).toBe('ok')
+    expect(forward).toHaveBeenCalledWith(asked)
+  })
+})
+
 describe('createObservedHook', () => {
   afterEach(() => { vi.useRealTimers() })
 

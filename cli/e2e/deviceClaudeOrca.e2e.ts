@@ -1,48 +1,27 @@
 /**
- * The dial answers Claude Code outside Harness (docs/specs/2026-11-13-device-claude-orca.md), on the real daemon: the
- * plugin's PermissionRequest hook runs the real `harness device claude approve`, which asks over the daemon's socket, and
- * a fake dial on the desk (harness/fakeDial.ts) shows the card and answers it:
- * - with no dial, the client answers nothing at once, and no devices process is started for it;
- * - Allow and Deny on the dial print the hook's decision, byte for byte; the client going closes the card;
- * - with a window open the dial shows its tab, where no card can be answered, so nothing is asked;
+ * The dial shows Claude Code waiting outside Harness (docs/specs/2026-11-13-device-claude-orca.md), on the real daemon: the
+ * session's own hooks (the real hook/notify.mjs the daemon installed) tell where it runs and when its turns go, the
+ * plugin's PermissionRequest hook runs the real `harness device claude asked`, and a fake dial on the desk
+ * (harness/fakeDial.ts) shows what it is shown:
+ * - the client prints nothing and exits at once, and with no dial nothing more happens: no devices process is started;
+ * - with a dial, the agent waits with "<summary> · answer in Orca", and the session's Stop ends the wait;
  * - the mod's inbox poll is refused with no dial and held with one.
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { request } from 'node:http'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
-import { LocalClient } from './harness/client.js'
+import { observedAgentId } from '../src/cable/hosts/observed.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 import { Desk, devicesPids } from './harness/desk.js'
 import type { DialMessage, FakeDial } from './harness/fakeDial.js'
 
-const ALLOW = '{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}\n'
-const DENY = '{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny","message":"Denied from the Harness device."}}}\n'
-/** An answer at once, not a card's 300 s: room for the CLI's own start on a loaded machine. */
+/** At once, not a held hook's seconds: room for the CLI's own start on a loaded machine. */
 const AT_ONCE_MS = 30_000
-
-/** One run of the hook's client, as Claude Code runs it: the prompt's input on stdin, the decision on stdout. */
-interface Approve { child: ChildProcess; done: Promise<{ stdout: string; code: number | null; ms: number }> }
-
-/** One list the dial was sent: its rows, between `agents.begin` and `agents.end`, and the end. */
-interface Roster { rows: DialMessage[]; end: DialMessage }
-function rosters(dial: FakeDial, since = 0): Roster[] {
-  const out: Roster[] = []
-  let rows: DialMessage[] | null = null
-  for (const m of dial.messages.slice(since)) {
-    if (m.t === 'agents.begin') rows = []
-    else if (m.t === 'agent' && rows) rows.push(m)
-    else if (m.t === 'agents.end' && rows) { out.push({ rows, end: m }); rows = null }
-  }
-  return out
-}
-const showing = (dial: FakeDial, what: string, test: (roster: Roster) => boolean, since = 0, ms = 45_000): Promise<Roster> =>
-  until(what, () => {
-    const last = rosters(dial, since).at(-1)
-    return last && test(last) ? last : null
-  }, ms, 100)
+/** Orca's names for the terminal, as its hook reads them; its secrets sit beside them and must never leave the hook. */
+const IN_ORCA = { ORCA_AGENT_SESSION_ID: 'e2e-orca-session', ORCA_PAIRING_CODE: 'pairing-e2e-4f1e', ORCA_AGENT_SESSION_SPAWN_TOKEN: 'spawn-e2e-8b2d' }
 
 /** A POST of the mod's poll over the daemon's socket, as the mod sends it: its status once answered. */
 const inboxPoll = (d: IsolatedDaemon, sessionId: string, signal?: AbortSignal): Promise<number> =>
@@ -53,12 +32,68 @@ const inboxPoll = (d: IsolatedDaemon, sessionId: string, signal?: AbortSignal): 
     req.end(JSON.stringify({ sessionId }))
   })
 
-describe('the dial answers Claude Code outside Harness', () => {
+/** Claude Code in an Orca terminal, outside Harness: no tmux pane, no Harness pane, and Orca's own variables. */
+class InOrca {
+  readonly sessionId = randomUUID()
+  readonly cwd: string
+  constructor(private readonly d: IsolatedDaemon, folder: string, private readonly children: ChildProcess[]) {
+    this.cwd = join(d.projectsDir, folder)
+    mkdirSync(this.cwd, { recursive: true })
+  }
+
+  get id(): string { return observedAgentId('claude', this.sessionId) }
+
+  private env(): NodeJS.ProcessEnv {
+    const env: NodeJS.ProcessEnv = { ...this.d.env, ...IN_ORCA }
+    for (const name of ['TMUX', 'TMUX_PANE', 'HARNESS_PANE']) delete env[name]
+    return env
+  }
+
+  private run(file: string, args: string[], input: Record<string, unknown>): Promise<{ stdout: string; stderr: string; code: number | null; ms: number }> {
+    const started = Date.now()
+    const child = spawn(file, args, { cwd: this.cwd, env: this.env(), stdio: ['pipe', 'pipe', 'pipe'] })
+    this.children.push(child)
+    let stdout = '', stderr = ''
+    child.stdout!.on('data', (chunk: Buffer) => { stdout += chunk.toString('utf8') })
+    child.stderr!.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf8') })
+    const done = new Promise<{ stdout: string; stderr: string; code: number | null; ms: number }>((resolve) =>
+      child.once('exit', (code) => resolve({ stdout, stderr, code, ms: Date.now() - started })))
+    child.stdin!.end(JSON.stringify({ session_id: this.sessionId, cwd: this.cwd, ...input }))
+    return done
+  }
+
+  /** Its own hook for [event], the command the daemon installed in Claude Code's settings, run through a shell as Claude
+   *  Code runs it. */
+  async hook(event: 'SessionStart' | 'UserPromptSubmit' | 'Stop', fields: Record<string, unknown> = {}): Promise<void> {
+    const settings = join(this.d.env.HOME!, '.claude', 'settings.json')
+    const command = await until(`the ${event} hook in Claude Code's settings`, () => {
+      try {
+        const blocks = (JSON.parse(readFileSync(settings, 'utf8')) as { hooks?: Record<string, Array<{ hooks?: Array<{ command?: string }> }>> }).hooks?.[event] ?? []
+        return blocks.flatMap((block) => block.hooks ?? []).map((hook) => hook.command).find((line) => line?.includes('notify.mjs'))
+      } catch {
+        return undefined
+      }
+    }, 30_000, 100)
+    const run = await this.run('/bin/sh', ['-c', command], { hook_event_name: event, ...fields })
+    expect(run.code, run.stderr).toBe(0)
+  }
+
+  /** The plugin's PermissionRequest hook: the real CLI, from the run's bundle or the sources as the daemon is started. */
+  asked(command: string) {
+    const bundle = process.env.E2E_BUNDLE_PATH
+    const script = bundle ? [bundle] : ['--import', 'tsx', join(CLI_ROOT, 'src', 'cli.ts')]
+    return this.run(process.execPath, [...script, 'device', 'claude', 'asked'], {
+      hook_event_name: 'PermissionRequest', permission_mode: 'default', tool_name: 'Bash', tool_input: { command, description: 'Say hi' },
+    })
+  }
+}
+
+describe('the dial shows Claude Code waiting outside Harness', () => {
   let daemon: IsolatedDaemon | undefined
   let desk: Desk | undefined
-  const clients: ChildProcess[] = []
+  const children: ChildProcess[] = []
   afterEach(async () => {
-    for (const child of clients.splice(0)) if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
+    for (const child of children.splice(0)) if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
     await desk?.close()
     await daemon?.close()
     daemon = undefined
@@ -82,100 +117,43 @@ describe('the dial answers Claude Code outside Harness', () => {
     await dial.next((m) => m.t === 'agents.end', 45_000, 'the first list')
     return dial
   }
-  /** The real CLI, from the run's bundle or the sources as the daemon is started, for a Bash prompt in [folder]. */
-  const approve = (d: IsolatedDaemon, folder: string, command: string, sessionId = randomUUID()): Approve => {
-    const cwd = join(d.projectsDir, folder)
-    mkdirSync(cwd, { recursive: true })
-    const env: NodeJS.ProcessEnv = { ...d.env }
-    // A terminal outside Harness: no pane of ours, nor of the tmux this run is started in.
-    for (const name of ['TMUX', 'TMUX_PANE', 'HARNESS_PANE']) delete env[name]
-    const bundle = process.env.E2E_BUNDLE_PATH
-    const script = bundle ? [bundle] : ['--import', 'tsx', 'src/cli.ts']
-    const started = Date.now()
-    const child = spawn(process.execPath, [...script, 'device', 'claude', 'approve'], { cwd: CLI_ROOT, env, stdio: ['pipe', 'pipe', 'pipe'] })
-    clients.push(child)
-    let stdout = ''
-    child.stdout!.on('data', (chunk: Buffer) => { stdout += chunk.toString('utf8') })
-    child.stderr!.resume()
-    const done = new Promise<{ stdout: string; code: number | null; ms: number }>((resolve) =>
-      child.once('exit', (code) => resolve({ stdout, code, ms: Date.now() - started })))
-    child.stdin!.end(JSON.stringify({
-      session_id: sessionId, cwd, hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: { command },
-    }))
-    return { child, done }
-  }
-  const card = (dial: FakeDial, since = 0): Promise<DialMessage> =>
-    dial.next((m) => m.t === 'question' && String(m.id).startsWith('approval:'), 45_000, 'the approval card', since)
-  /** The card answered as the dial's review screen answers it: read for its token, then the choice's mask. */
-  const choose = async (dial: FakeDial, shown: DialMessage, mask: number): Promise<void> => {
-    const agentId = String(shown.agentId)
-    const since = dial.messages.length
-    dial.send({ t: 'question.read', agentId, requestId: 'read-1' })
-    const state = await dial.next((m) => m.t === 'question.state' && m.requestId === 'read-1', 15_000, 'the card\'s state', since)
-    expect(state).toMatchObject({ ok: true, id: shown.id })
-    dial.send({ t: 'answer.reviewed', agentId, token: state.token, requestId: 'review-1', choices: [mask] })
-    const receipt = await dial.next((m) => m.t === 'answer.receipt' && m.requestId === 'review-1', 15_000, 'the receipt', since)
-    expect(receipt).toMatchObject({ ok: true })
-  }
-  const closed = (dial: FakeDial, shown: DialMessage, since = 0): Promise<DialMessage> =>
-    dial.next((m) => m.t === 'question.close' && m.agentId === shown.agentId && m.id === shown.id, 45_000, 'the card closing', since)
+  /** What the dial was told the agent's line is, from [since]. */
+  const line = (dial: FakeDial, agentId: string, text: string, what: string, since = 0): Promise<DialMessage> =>
+    dial.next((m) => (m.t === 'turn.started' || m.t === 'turn.activity') && m.agentId === agentId && m.text === text, 45_000, what, since)
 
-  it('no dial: the client prints nothing at once and exits 0, and no devices process was started', async () => {
+  it('no dial: the client prints nothing at once and exits 0, and no devices process is started', async () => {
     const { d } = await fresh()
-    const run = await approve(d, 'in-orca', 'printf hi').done
-    expect(run).toMatchObject({ stdout: '', code: 0 })
+    const claude = new InOrca(d, 'in-orca', children)
+    await claude.hook('SessionStart', { source: 'startup' })
+    const run = await claude.asked('printf hi')
+    expect(run).toMatchObject({ stdout: '', stderr: '', code: 0 })
     expect(run.ms).toBeLessThan(AT_ONCE_MS)
     expect(devicesPids(d)).toEqual([])
   })
 
-  it('the dial gets the card, and Allow prints the allow decision', async () => {
+  it('the dial shows the agent waiting with "printf hi · answer in Orca", and its Stop ends the wait', async () => {
     const { d, desk } = await fresh()
     const dial = await plugged(desk)
-    const client = approve(d, 'in-orca', 'printf hi')
-    const shown = await card(dial)
-    expect(shown.name).toBe('in-orca')
-    expect(shown.questions).toEqual([{ key: 'approval', q: 'Allow Bash?\nprintf hi', options: ['Allow', 'Deny'], multi: false }])
-    const roster = await showing(dial, 'the agent listed with its approval', (r) =>
-      String(r.rows.find((row) => row.id === shown.agentId)?.caps ?? '').includes('a'))
-    expect(roster.rows.find((row) => row.id === shown.agentId)).toMatchObject({ name: 'in-orca' })
-    await choose(dial, shown, 1)
-    expect(await client.done).toMatchObject({ stdout: ALLOW, code: 0 })
-    await closed(dial, shown)
-  })
-
-  it('Deny prints the deny decision with its message', async () => {
-    const { d, desk } = await fresh()
-    const dial = await plugged(desk)
-    const client = approve(d, 'in-orca', 'rm -rf build')
-    const shown = await card(dial)
-    await choose(dial, shown, 2)
-    expect(await client.done).toMatchObject({ stdout: DENY, code: 0 })
-    await closed(dial, shown)
-  })
-
-  it('killing the client closes the card', async () => {
-    const { d, desk } = await fresh()
-    const dial = await plugged(desk)
-    const client = approve(d, 'in-orca', 'printf hi')
-    const shown = await card(dial)
-    // The person answered in the terminal: Claude Code kills its hook.
-    client.child.kill('SIGKILL')
-    await closed(dial, shown)
-  })
-
-  it('with a window open the client prints nothing at once', async () => {
-    const { d, desk } = await fresh()
-    const dial = await plugged(desk)
-    const window = await LocalClient.connect(d)
+    const claude = new InOrca(d, 'in-orca', children)
+    await claude.hook('SessionStart', { source: 'startup' })
+    await dial.next((m) => m.t === 'agent' && m.id === claude.id, 45_000, 'the agent listed')
+    await claude.hook('UserPromptSubmit', { prompt: 'say hi' })
+    await line(dial, claude.id, '', 'its turn started')
     const since = dial.messages.length
-    window.send('app_swarms', { active: 't1', swarms: [{ id: 't1', name: 'Tab', agentIds: [], panes: 0 }], tiles: [] })
-    window.send('app_panes', { agentIds: [], foreground: true })
-    await showing(dial, 'the tab\'s list', (r) => r.end.tab === 't1', since)
-    const run = await approve(d, 'in-orca', 'printf hi').done
-    expect(run).toMatchObject({ stdout: '', code: 0 })
+    const run = await claude.asked('printf hi')
+    expect(run).toMatchObject({ stdout: '', stderr: '', code: 0 })
     expect(run.ms).toBeLessThan(AT_ONCE_MS)
-    expect(dial.messages.some((m) => m.t === 'question' && String(m.id).startsWith('approval:'))).toBe(false)
-    window.close()
+    await line(dial, claude.id, 'printf hi · answer in Orca', 'the waiting line', since)
+    // Nothing for the dial to answer: no question, and no `a` on its row.
+    expect(dial.messages.some((m) => m.t === 'question' && m.agentId === claude.id)).toBe(false)
+    expect(dial.messages.filter((m) => m.t === 'agent' && m.id === claude.id).map((row) => row.caps)).not.toContainEqual(expect.stringContaining('a'))
+    // Orca's secrets never left the hook.
+    expect(JSON.stringify(dial.messages)).not.toMatch(/pairing-e2e|spawn-e2e/)
+    // Answered in Orca, the turn goes to its end: the session's Stop.
+    const answered = dial.messages.length
+    await claude.hook('Stop', { stop_hook_active: false })
+    await dial.next((m) => m.t === 'turn.done' && m.agentId === claude.id, 45_000, 'its turn done', answered)
+    expect(dial.messages.slice(answered).some((m) => m.agentId === claude.id && m.text === 'printf hi · answer in Orca')).toBe(false)
   })
 
   it('the inbox route answers 503 with no dial, and holds a poll with one', async () => {

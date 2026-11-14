@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { ObservedHookEvent } from '../../core/observedHook.js'
+import type { ObservedAsked, ObservedHookEvent } from '../../core/observedHook.js'
 import { STOP_HOOK_GRACE_MS } from '../../core/turns/turnHooks.js'
 import { type Delivery, Inbox } from './inbox.js'
-import { observedAgentId, type ObservedActions, ObservedSource, type ObservedDeps } from './observed.js'
+import { askedLine, observedAgentId, type ObservedActions, ObservedSource, type ObservedDeps } from './observed.js'
 
 function setup(over: Partial<ObservedDeps> = {}) {
   const clock = { t: 1_000_000 }
@@ -753,6 +753,153 @@ describe('ObservedSource actions', () => {
     await src.send(agent('none'), 'x'.repeat(2001))
     await src.send(agent('none'), 'x')
     expect(actions.count.mock.calls.map(([what]) => what)).toEqual(['mod', 'orca', 'busy', 'too-long', 'no-answer'])
+  })
+})
+
+// A permission prompt that waits (deviceClaude/asked.ts): the dial shows the agent waiting and for what, and the prompt is
+// answered in its own app.
+describe('ObservedSource and a waiting prompt', () => {
+  const asked = (over: Partial<ObservedAsked> = {}): ObservedAsked => ({
+    engine: 'claude', sessionId: 's1', event: 'asked', tool: 'Bash', summary: 'npm test', cwd: '/elsewhere', ...over,
+  })
+
+  it('asked turns a listed agent needs-you with what its prompt asks, and keeps its host, handle, process and folder', () => {
+    const { actions } = fakeActions()
+    const { src, ev, changes } = setup({ actions })
+    src.ingest(ev('turn-start', { hostHints: { ORCA_AGENT_SESSION_ID: 'x', ORCA_TERMINAL_HANDLE: HANDLE } }))
+    changes.mockClear()
+    src.ingest(asked())
+    const agent = src.list()[0]
+    expect(agent).toMatchObject({ state: 'needs-you', host: 'orca', callerPid: 100, cwd: '/work/proj', name: 'proj' })
+    expect(src.waitingOn(agent.id)).toBe('npm test')
+    expect(src.capabilities(agent)).toEqual({ status: true, voice: true, focus: true, answer: false })
+    expect(changes).toHaveBeenCalledTimes(1)
+  })
+
+  it('asked for a session no hook listed lists nothing: the plugin\'s hook runs in a Harness pane too', () => {
+    const { src, changes } = setup()
+    src.ingest(asked({ sessionId: 'in-a-pane' }))
+    expect(src.list()).toEqual([])
+    expect(src.waitingOn(observedAgentId('claude', 'in-a-pane'))).toBeUndefined()
+    expect(changes).not.toHaveBeenCalled()
+  })
+
+  it('asked for a session that ended changes nothing', () => {
+    const { src, ev } = setup()
+    src.ingest(ev('session-start'))
+    src.ingest(ev('session-end'))
+    src.ingest(asked())
+    expect(src.list()[0].state).toBe('idle')
+    expect(src.waitingOn(src.list()[0].id)).toBeUndefined()
+  })
+
+  it('a prompt with no summary waits on its tool\'s name, and with neither on nothing to show', () => {
+    const { src, ev } = setup()
+    src.ingest(ev('turn-start'))
+    const id = src.list()[0].id
+    src.ingest(asked({ summary: undefined }))
+    expect(src.waitingOn(id)).toBe('Bash')
+    src.ingest(asked({ summary: '', tool: undefined }))
+    expect(src.waitingOn(id)).toBe('')
+    expect(src.list()[0].state).toBe('needs-you')
+  })
+
+  it('its Notification, before or after, keeps what the prompt asks: one wait, one line', () => {
+    const { src, ev } = setup()
+    src.ingest(ev('turn-start'))
+    src.ingest(ev('needs-input'))
+    const id = src.list()[0].id
+    expect(src.waitingOn(id)).toBeUndefined()
+    src.ingest(asked())
+    expect(src.waitingOn(id)).toBe('npm test')
+    src.ingest(ev('needs-input'))
+    expect(src.list()[0].state).toBe('needs-you')
+    expect(src.waitingOn(id)).toBe('npm test')
+    // A later prompt of the same turn says what it asks instead.
+    src.ingest(asked({ summary: 'ls' }))
+    expect(src.waitingOn(id)).toBe('ls')
+  })
+
+  it.each(['turn-start', 'turn-stop', 'turn-error', 'session-end'] as const)(
+    'the session\'s own %s clears it, and another session\'s does not', (event) => {
+      const { src, ev } = setup()
+      src.ingest(ev('turn-start'))
+      src.ingest(ev('turn-start', { sessionId: 's2' }))
+      src.ingest(asked())
+      const id = observedAgentId('claude', 's1')
+      src.ingest(ev(event, { sessionId: 's2' }))
+      expect(src.waitingOn(id)).toBe('npm test')
+      src.ingest(ev(event))
+      expect(src.waitingOn(id)).toBeUndefined()
+    })
+
+  it('answered in its app: the transcript growing past the prompt clears it, the asking\'s own line and the last prompt\'s answer do not', async () => {
+    const { src, clock, stamps, ev } = setup()
+    src.ingest(ev('turn-start', { transcriptPath: '/t/s.jsonl' }))
+    clock.t += 10_000
+    src.ingest(asked())
+    const id = src.list()[0].id
+    // The tool call's line is written just after its hook ran.
+    stamps.set('/t/s.jsonl', clock.t + 5)
+    clock.t += 3_000
+    await src.checkWorking()
+    expect(src.list()[0].state).toBe('needs-you')
+    expect(src.waitingOn(id)).toBe('npm test')
+    // Allowed in its app: the tool's result is written.
+    stamps.set('/t/s.jsonl', clock.t + 1)
+    // The next prompt asks before the 3 s check has seen that answer: the agent still reads needs-you.
+    clock.t += 500
+    src.ingest(asked({ summary: 'ls' }))
+    stamps.set('/t/s.jsonl', clock.t + 5)
+    clock.t += 3_000
+    await src.checkWorking()
+    expect(src.list()[0].state).toBe('needs-you')
+    expect(src.waitingOn(id)).toBe('ls')
+    // Answered again.
+    stamps.set('/t/s.jsonl', clock.t + 1)
+    await src.checkWorking()
+    expect(src.list()[0].state).toBe('working')
+    expect(src.waitingOn(id)).toBeUndefined()
+  })
+
+  it('logs each prompt shown and each wait cleared, and nothing of either', () => {
+    const log = vi.fn()
+    const { src, ev } = setup({ log })
+    src.ingest(ev('turn-start'))
+    src.ingest(asked())
+    src.ingest(asked({ summary: 'ls' }))
+    src.ingest(ev('turn-stop'))
+    src.ingest(ev('turn-start'))
+    src.ingest(asked())
+    src.ingest(ev('session-end'))
+    expect(log.mock.calls).toEqual([
+      ['[observed] waiting prompt · shown'], ['[observed] waiting prompt · shown'], ['[observed] waiting prompt · cleared'],
+      ['[observed] waiting prompt · shown'], ['[observed] waiting prompt · cleared'],
+    ])
+  })
+})
+
+describe('askedLine', () => {
+  /** ` · answer in Orca`: 18 bytes, its dot two. */
+  const WHERE = ' · answer in Orca'
+
+  it('is what the prompt asks and the app to answer it in', () => {
+    expect(askedLine('npm test', 'Orca')).toBe('npm test · answer in Orca')
+  })
+
+  it('draws each letter the round dial cannot as ?', () => {
+    expect(askedLine('echo 你好 🙂', 'Ghostty')).toBe('echo ?? ? · answer in Ghostty')
+  })
+
+  // The firmware holds the line in `activity[100]` (ui_habitat.c) and cuts a longer one at its byte, app and all.
+  it('fits the dial\'s 99 bytes by cutting the summary on a character, never the app', () => {
+    expect(Buffer.byteLength(WHERE)).toBe(18)
+    const fits = 'b'.repeat(81)
+    expect(askedLine(fits, 'Orca')).toBe(`${fits}${WHERE}`)
+    expect(askedLine(`${fits}b`, 'Orca')).toBe(`${'b'.repeat(78)}…${WHERE}`)
+    const cut = askedLine('é'.repeat(60), 'Orca')
+    expect(cut).toBe(`${'é'.repeat(39)}…${WHERE}`)
+    for (const line of [cut, askedLine('x'.repeat(200), 'VS Code')]) expect(Buffer.byteLength(line)).toBeLessThanOrEqual(99)
   })
 })
 

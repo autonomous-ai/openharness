@@ -9,6 +9,7 @@ import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { parseObservedHook } from '../core/observedHook.js'
 import { hookTokenPath } from '../lib/hookAuth.js'
 import { unixSocketPath } from '../lib/localSocket.js'
 import { askedSummary, daemonPost, runAsked, type AskedBody } from './asked.js'
@@ -197,6 +198,16 @@ describe('runAsked', () => {
     await runAsked({ stdin: chunks(hookInput({ cwd })), post: daemon.post })
     const { cwd: _cwd, ...noCwd } = BODY
     expect(daemon.bodies).toStrictEqual([noCwd])
+  })
+
+  // The core's own check (core/observedHook.ts): an event it refused would show nothing on the dial.
+  it('the core takes every body it sends, at each bound', async () => {
+    const daemon = recording()
+    await runAsked({ stdin: chunks(hookInput({ tool_name: `mcp__s__${'t'.repeat(80)}`, tool_input: {}, cwd: `/${'d'.repeat(1023)}` })), post: daemon.post })
+    await runAsked({ stdin: chunks(hookInput({ tool_input: { command: `${'日'.repeat(100)}\nls` } })), post: daemon.post })
+    await runAsked({ stdin: chunks(hookInput({ tool_name: 'Read', tool_input: { file_path: '/a\tb\u0085c' }, cwd: undefined })), post: daemon.post })
+    expect(daemon.bodies).toHaveLength(3)
+    for (const body of daemon.bodies) expect(parseObservedHook(body)).toStrictEqual(body)
   })
 
   it('a cwd of 1024 characters is sent', async () => {
