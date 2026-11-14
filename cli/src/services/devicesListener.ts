@@ -19,8 +19,12 @@ import { listenLocalSocket, type LocalSocketServer } from '../lib/localSocket.js
 import { APP_IDS } from '../cable/hosts/hostDetect.js'
 import { FRONT_NONE } from '../cable/hosts/frontApp.js'
 
-/** Connections at once. A sender that opens one per message is held here, where a per-connection rate cannot. */
+/** Connections at once. Each type's rate across them is what this many could send at its rate on one, so a sender that
+ *  opens one per message is held to that too. */
 export const LISTENER_MAX_CONNECTIONS = 16
+/** Messages dropped in a second, of every kind and connection together, past which a message is refused before its body
+ *  is read: a sender that keeps to the rates is refused a few, a loop thousands. */
+export const LISTENER_DROPPED_PER_SECOND = 100
 
 /** What a handler returns for a body that is not a message of its type. */
 export const REFUSED: unique symbol = Symbol('refused')
@@ -28,7 +32,8 @@ export const REFUSED: unique symbol = Symbol('refused')
 export interface ListenerHandler {
   /** The largest body of this type, in bytes. */
   maxBytes: number
-  /** How many of this type one connection may send a second. */
+  /** How many of this type one connection may send in any second; every connection together, LISTENER_MAX_CONNECTIONS
+   *  times that. */
   perSecond: number
   /** The parsed body, `type` included. `REFUSED`, nothing (taken), or the answer, or a promise of one. `gone` aborts
    *  when the sender's connection closes before the answer, or the listener does. */
@@ -51,7 +56,29 @@ export interface DevicesListener {
 type Dropped = 'unknown' | 'oversized' | 'rate' | 'refused' | 'failed'
 
 const NONE_DROPPED: Readonly<Record<Dropped, number>> = { unknown: 0, oversized: 0, rate: 0, refused: 0, failed: 0 }
+const SECOND_MS = 1_000
 const MINUTE_MS = 60_000
+
+/** At most `limit` in any second: the times of the last `limit` taken, so a first second holds no more than the rest. */
+class PerSecond {
+  private readonly times: number[] = []
+  private oldest = 0
+  constructor(private readonly limit: number) {}
+
+  /** A clock that stepped back frees nothing. */
+  full(at: number): boolean {
+    return this.times.length === this.limit && at - this.times[this.oldest]! < SECOND_MS
+  }
+
+  take(at: number): void {
+    if (this.full(at)) return
+    if (this.times.length < this.limit) this.times.push(at)
+    else {
+      this.times[this.oldest] = at
+      this.oldest = (this.oldest + 1) % this.limit
+    }
+  }
+}
 
 /**
  * Serve `handlers` on the devices' socket, or nothing: no path, a folder that is not this account's own, a name a live
@@ -69,14 +96,17 @@ export async function openDevicesListener({ path, handlers, log, now = () => per
   }
 
   const largest = Math.max(...Object.values(handlers).map(({ maxBytes }) => maxBytes))
-  // A bucket per type per connection, gone with the connection: no table to bound or clean.
-  const buckets = new WeakMap<Socket, Map<string, { tokens: number; at: number }>>()
+  // A rate per type per connection, gone with the connection: no table to bound or clean. And one per type across them.
+  const rates = new WeakMap<Socket, Map<string, PerSecond>>()
+  const wide = new Map(Object.entries(handlers).map(([type, { perSecond }]) => [type, new PerSecond(perSecond * LISTENER_MAX_CONNECTIONS)]))
+  const droppedRate = new PerSecond(LISTENER_DROPPED_PER_SECOND)
   const waiting = new Set<AbortController>()
   let dropped = { ...NONE_DROPPED }
   let minute: NodeJS.Timeout | undefined
 
   const drop = (res: ServerResponse, status: number, kind: Dropped, close = false): void => {
     dropped[kind]++
+    droppedRate.take(now())
     minute ??= setTimeout(() => {
       minute = undefined
       log(`[devices] listener in the last minute: ${dropped.unknown} unknown, ${dropped.oversized} oversized, ${dropped.rate} over rate, ${dropped.refused} refused, ${dropped.failed} failed`)
@@ -86,18 +116,15 @@ export async function openDevicesListener({ path, handlers, log, now = () => per
   }
 
   const allowed = (socket: Socket, type: string, perSecond: number): boolean => {
-    let own = buckets.get(socket)
-    if (!own) buckets.set(socket, own = new Map())
+    let own = rates.get(socket)
+    if (!own) rates.set(socket, own = new Map())
+    let rate = own.get(type)
+    if (!rate) own.set(type, rate = new PerSecond(perSecond))
+    const across = wide.get(type)!
     const at = now()
-    let bucket = own.get(type)
-    if (!bucket) own.set(type, bucket = { tokens: perSecond, at })
-    // A clock that stepped back refills nothing.
-    if (at > bucket.at) {
-      bucket.tokens = Math.min(perSecond, bucket.tokens + (at - bucket.at) * perSecond / 1_000)
-      bucket.at = at
-    }
-    if (bucket.tokens < 1) return false
-    bucket.tokens--
+    if (rate.full(at) || across.full(at)) return false
+    rate.take(at)
+    across.take(at)
     return true
   }
 
@@ -130,6 +157,8 @@ export async function openDevicesListener({ path, handlers, log, now = () => per
     // Its body is never read, so the connection closes after the answer rather than reading through that body, of any
     // size, to a next message.
     if (req.method !== 'POST' || req.url !== '/') return drop(res, 405, 'refused', true)
+    // A loop of what is dropped costs a read and a parse each: past the dropped rate, neither.
+    if (droppedRate.full(now())) return drop(res, 429, 'rate', true)
     const chunks: Buffer[] = []
     let size = 0
     const take = (chunk: Buffer): void => {
