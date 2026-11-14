@@ -167,8 +167,8 @@ describe("--if-down's view of this computer", () => {
     // FLASHER_DIR is read as its module loads: load it again without an override from the shell that ran the suite.
     const cache = process.env.HARNESS_FLASHER_CACHE
     delete process.env.HARNESS_FLASHER_CACHE
-    vi.resetModules()
     try {
+      vi.resetModules()
       const { FLASHER_DIR } = await import('./flasherDir.js')
       const { processIfDownDeps: own } = await import('./startIfDown.js')
       expect(FLASHER_DIR).toBe(join(homedir(), '.harness', 'flasher'))
@@ -180,10 +180,11 @@ describe("--if-down's view of this computer", () => {
       writeFileSync(join(homedir(), '.harness', 'uninstalling'), now)
       expect(own('darwin').flashing()).toBe(true)
       expect(own('darwin').uninstalling()).toBe(true)
-      rmSync(join(FLASHER_DIR, 'flashing'))
-      rmSync(join(homedir(), '.harness', 'uninstalling'))
     } finally {
+      rmSync(join(homedir(), '.harness', 'flasher', 'flashing'), { force: true })
+      rmSync(join(homedir(), '.harness', 'uninstalling'), { force: true })
       if (cache !== undefined) process.env.HARNESS_FLASHER_CACHE = cache
+      vi.resetModules()
     }
   })
 
