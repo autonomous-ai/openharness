@@ -10,19 +10,11 @@
  */
 import { mkdirSync } from 'node:fs'
 import { createServer, type Server } from 'node:http'
-import { createServer as netServer } from 'node:net'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { Store } from '../src/lib/connectors/store.js'
 import { LocalClient, type Frame } from './harness/client.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
-
-const freePort = (): Promise<number> => new Promise((resolve) => {
-  const probe = netServer().listen(0, '127.0.0.1', () => {
-    const port = (probe.address() as { port: number }).port
-    probe.close(() => resolve(port))
-  })
-})
 
 /** Devin's v3 sessions: one session, which asks which branch, then finishes with a pull request. */
 class FakeDevin {
@@ -102,9 +94,8 @@ describe('cloud agents on the real daemon', () => {
 
   it('a Devin Cloud harness: made, listed with no pane, asked, answered, finished with its pull request, stopped, and watched again after a restart', async () => {
     const fake = devin = await new FakeDevin().start()
-    const port = await freePort()
     const d = daemon = await IsolatedDaemon.create({ env: {
-      HARNESS_CONNECTIONS_PORT: String(port), HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '200',
+      HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '200',
       // Devin here is the fake: the key is found by where it points, as the person's would be at api.devin.ai.
       HARNESS_CLOUD_ENDPOINTS: JSON.stringify({ 'devin-cloud': devin.base }),
     } })
@@ -209,8 +200,7 @@ describe('cloud agents on the real daemon', () => {
     await new Promise<void>((resolve) => fo.listen(0, '127.0.0.1', resolve))
     const foBase = `http://127.0.0.1:${(fo.address() as { port: number }).port}`
     try {
-      const port = await freePort()
-      const d = daemon = await IsolatedDaemon.create({ env: { HARNESS_CONNECTIONS_PORT: String(port), HARNESS_CLOUD_ENDPOINTS: JSON.stringify({ fo: `${foBase}/fo` }) } })
+      const d = daemon = await IsolatedDaemon.create({ env: { HARNESS_CLOUD_ENDPOINTS: JSON.stringify({ fo: `${foBase}/fo` }) } })
       onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-80).join('\n')}\n---- fo saw\n${JSON.stringify(calls)}`) })
       const vault = new Store(join(d.root, 'home', '.harness', 'connections'))
       mkdirSync(vault.root, { recursive: true, mode: 0o700 })
@@ -246,8 +236,7 @@ describe('cloud agents on the real daemon', () => {
   }, 240_000)
 
   it('refuses a cloud agent that is not connected, in words a person reads', async () => {
-    const port = await freePort()
-    const d = daemon = await IsolatedDaemon.create({ env: { HARNESS_CONNECTIONS_PORT: String(port) } })
+    const d = daemon = await IsolatedDaemon.create()
     await d.start()
     const client = await LocalClient.connect(d)
     const refused = await client.request('agent_create', { engine: 'cursor-cloud', prompt: 'x', repositoryUrl: 'https://github.com/acme/api' }, 90_000)
