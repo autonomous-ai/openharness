@@ -120,8 +120,9 @@ Usage: harness start [options]
 
   -f, --foreground       run the daemon in the FOREGROUND (for a supervisor; logs to stdout)
   --repair               also re-verify the managed Node runtime and repoint the launcher at it
-  --if-down              start only if it is not running and \`harness stop\` has not stopped it
-                         (what Windows's scheduled task runs; quiet otherwise)
+  --if-down              start only if it is not running, \`harness stop\` has not stopped it and
+                         \`harness flash\` or \`harness uninstall\` is not at work (what Windows's
+                         scheduled task and the Harness Device app run; quiet otherwise)
   --at-logon             with --if-down: the sign-in task's start, first forgets a \`harness stop\`
   --restart              stop the daemon that is running for this data folder and start it over
                          (without it, a running daemon is never replaced by a start that has no
@@ -169,8 +170,9 @@ Machine:
   harness start --restart      stop the daemon that is running and start it over (a start with no sign-in of its own
                                never replaces a running daemon without it)
   harness start --help         the start options; starts nothing
-  harness start --if-down      start the daemon only if it is not running and \`harness stop\` has not stopped it
-                               since the computer started (what Windows's scheduled task runs; quiet otherwise).
+  harness start --if-down      start the daemon only if it is not running, \`harness stop\` has not stopped it
+                               since the computer started and \`harness flash\` or \`harness uninstall\` is not at
+                               work (what Windows's scheduled task and the Harness Device app run; quiet otherwise).
                                --at-logon (the sign-in task's start) first forgets a \`harness stop\`
   harness logout               stop the adapter and clear this computer's SSO session
   harness stop                 stop the background adapter (keeps the SSO session)
