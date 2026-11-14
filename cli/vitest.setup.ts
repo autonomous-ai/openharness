@@ -11,8 +11,8 @@
  * under `~/.harness/runtime` would send a spec's calls to this machine's managed binary instead of the
  * fake the spec put on PATH. `src/config/envIsolation.spec.ts` pins both.
  */
-import { vi } from 'vitest'
-import { mkdtempSync } from 'node:fs'
+import { afterAll, vi } from 'vitest'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -34,7 +34,7 @@ for (const name of Object.keys(process.env)) if (name.startsWith('HARNESSD_')) d
 // ~/.codex/sessions (homes, sessionRepair), read ~/.codex/config.toml (dsh/runtime), ~/.harness/computer-id
 // (serviceProcess) and ~/.harness/runtime/current-node (hooks). CI's runner has an empty home, so nothing
 // there showed it. A spec that wants a home of its own still sets one.
-process.env.HOME = mkdtempSync(join(tmpdir(), 'adapter-test-home-'))
+const home = process.env.HOME = mkdtempSync(join(tmpdir(), 'adapter-test-home-'))
 // And no engine's or desktop's folder handed down from the shell that ran the suite (a Codex or Claude Code
 // session sets some of these for its own children), which would outrank that home.
 for (const name of [
@@ -43,8 +43,12 @@ for (const name of [
   'AGY_HOME', 'AGY_CONFIG_DIR', 'OPENCODE_DB', 'KILO_DB', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME',
 ]) delete process.env[name]
 
-process.env.ADAPTER_DATA_DIR = mkdtempSync(join(tmpdir(), 'adapter-test-data-'))
-process.env.ADAPTER_RUNTIME_DIR = mkdtempSync(join(tmpdir(), 'adapter-test-runtime-'))
+const data = process.env.ADAPTER_DATA_DIR = mkdtempSync(join(tmpdir(), 'adapter-test-data-'))
+const runtime = process.env.ADAPTER_RUNTIME_DIR = mkdtempSync(join(tmpdir(), 'adapter-test-runtime-'))
+// This runs again for the next file, with folders of its own, so these go when this file ends, passed or failed: the
+// end-to-end suite has no run folder to take them (vitest.tmpdir.ts), and every file left three in $TMPDIR. Registered
+// before any of the file's own, this runs after them all, once its afterAll has closed the daemons that used them.
+afterAll(() => { for (const folder of [home, data, runtime]) rmSync(folder, { recursive: true, force: true }) })
 // Real zsh subprocesses must not load a developer's prompts, plugins, updates,
 // or nvm configuration. Shell-startup tests supply their own ZDOTDIR fixture.
 process.env.ZDOTDIR = process.env.ADAPTER_DATA_DIR

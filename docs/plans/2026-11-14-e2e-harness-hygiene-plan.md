@@ -25,8 +25,8 @@ None.
 
 ## Global Constraints
 
-- No product code. Under `cli/src/` only new files in `cli/src/testing/`; everything else is in `cli/e2e/` and
-  `cli/vitest.e2e.config.ts`. A real `podman events` outliving a crashed agent-browser process is out of scope.
+- No product code. Under `cli/src/` only new files in `cli/src/testing/`; everything else is in `cli/e2e/`,
+  `cli/vitest.e2e.config.ts` and `cli/vitest.setup.ts` (Task 9). A real `podman events` outliving a crashed agent-browser process is out of scope.
 - A failing or flaky test is a bug, fixed at its layer with a red-then-green test: never skipped, loosened, retried
   or given a longer timeout. No fixed sleeps in a test; a wait is on a condition, with a bound.
 - The spec's values, verbatim: `http://127.0.0.1:9/grid.json`; `DISABLE_GRID_INSTALL: 'true'`; 30 000 ms; 96 bytes;
@@ -110,6 +110,7 @@ Checked at `b79d017c41`.
 | `cli/e2e/harness/hungCodex.ts` | new: a Codex whose rate-limit read never ends | 6 |
 | `cli/e2e/leftBehind.e2e.ts` | the close's tests (6), the worker's (7), grid's (8) | 6, 7, 8 |
 | `cli/e2e/harness/reaperProcess.mjs`, `abandonedWorker.ts` | the reaper sweeps a root before removing it | 7 |
+| `cli/vitest.setup.ts`, `cli/src/testing/vitestSetupFolders.spec.ts` | the setup removes the home, data and runtime folders it made when the file ends; the spec, new | 9 |
 
 ## Review Focus
 
@@ -816,6 +817,70 @@ git commit -m "e2e: a daemon under test reads its grid manifest from this machin
 
 ---
 
+### Task 9: The setup removes the folders it made
+
+**Depends on:** nothing. **Effort:** high.
+
+`cli/vitest.setup.ts` is a setup file of both suites (`vitest.config.ts`, `vitest.e2e.config.ts`), so it runs before
+every test file. Each time it makes `adapter-test-home-*`, `adapter-test-data-*` and `adapter-test-runtime-*` under
+`os.tmpdir()` and never removes them. The unit suite's are inside the run's own folder, which goes with the run
+(`src/__fixtures__/vitestRun.ts`); the end-to-end suite has none, so every file left three empty folders in TMPDIR.
+Nothing reads them after the file: the next file's setup makes and points the environment at folders of its own.
+
+**Files:**
+- Create: `cli/src/testing/vitestSetupFolders.spec.ts`
+- Modify: `cli/vitest.setup.ts` (the three `mkdtempSync` lines, 37, 46 and 47)
+
+- [ ] **Step 1: Write the failing spec**
+
+It runs Vitest as a child (`node node_modules/vitest/vitest.mjs run`, Vitest's own variables left out of its
+environment) on a project of its own under a `mkdtempSync` root, with `TMPDIR`, `TEMP` and `TMP` set to `<root>/tmp`.
+The project's config has `globals: true` and `setupFiles: [<cli>/vitest.setup.ts]`; it holds one file that passes
+and one that fails, each of whose own `afterAll` records `HOME`, `ADAPTER_DATA_DIR` and `ADAPTER_RUNTIME_DIR` with
+whether each is still there. `afterEach` removes the root.
+
+```ts
+expect(code).toBe(1)
+expect(recorded).toHaveLength(6)
+// Each was the file's own, in the child's temporary folder, and still there for the file's own afterAll.
+for (const [folder, there] of recorded) expect([folder.startsWith(temp), there]).toEqual([true, true])
+expect(made.filter((folder) => existsSync(folder))).toEqual([])
+expect(readdirSync(temp).filter((name) => name.startsWith('adapter-test-'))).toEqual([])
+```
+
+- [ ] **Step 2: Run it to see it fail**
+
+Run: `cd cli && npx vitest run src/testing/vitestSetupFolders.spec.ts`
+Expected: 1 failed, the six folders still there.
+Commit the spec alone: `e2e: a spec that vitest.setup.ts removes the folders it made when a file ends (red)`.
+
+- [ ] **Step 3: Remove them when the file ends**
+
+Keep each folder's path as the setup makes it, and register one `afterAll` that removes the three
+(`rmSync(folder, { recursive: true, force: true })`). Registered before any of the file's own, it runs after them all
+(Vitest's `sequence.hooks` is `stack`), once the file's `afterAll` has closed the daemons that used them, and it runs
+when the file fails too. The paths are kept, not read from the environment then, so a test that changed `HOME` is
+never followed elsewhere.
+
+- [ ] **Step 4: Run the checks**
+
+```bash
+cd cli
+npx vitest run src/testing/vitestSetupFolders.spec.ts src/config/envIsolation.spec.ts                           # 8 passed
+mkdir -p /private/tmp/claude-502/hyg-t9
+TMPDIR=/private/tmp/claude-502/hyg-t9/ caffeinate -i npx vitest run --config vitest.e2e.config.ts e2e/modelSwitch.e2e.ts   # 1 passed
+ls -d /private/tmp/claude-502/hyg-t9/adapter-test-* 2>/dev/null                                                  # prints nothing
+```
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add cli/vitest.setup.ts docs/plans/2026-11-14-e2e-harness-hygiene-plan.md
+git commit -m "e2e: vitest.setup.ts removes the home, data and runtime folders it made when the file ends"
+```
+
+---
+
 ## Verification
 
 On the final head, after the review. Isolation is the repo's own (`cli/AGENTS.md`, rules 5 and 6): every file boots
@@ -893,5 +958,7 @@ On GitHub, by hand, once, only on the orchestrator's go, after the branch is pus
 **Temporary workflow:** none. The long check has a workflow already (`.github/workflows/cli-e2e.yml`, run by hand
 from a branch and every night), and the local ones need this Mac's process table.
 
-**Checks PR CI does not run:** none required. `python3 scripts/local-checks.py --list` on the changed paths prints
-`{}`. PR CI's `cli-typecheck` and `cli-tests` run the four new specs.
+**Checks PR CI does not run:** Task 9's `cli/vitest.setup.ts` is shared by every CLI suite, so
+`python3 scripts/local-checks.py --list` on the changed paths names the CLI local gates (`cli-core`, `cli-harnessd`,
+`cli-portability`, `cli-pty` and the rest); their receipts go in the pull request (`--run` from a clean tree). PR CI's
+`cli-typecheck` and `cli-tests` run the five new specs.
