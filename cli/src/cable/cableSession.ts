@@ -2451,7 +2451,7 @@ export class CableSession {
       }
       try {
         // Only Harness agents the dial may talk to: the router sends each one's id and name to the backend, and nothing of
-        // an agent outside Harness leaves this computer, though one in Orca may take voice.
+        // an agent outside Harness leaves this computer, though it may take voice (an Orca handle, its mod's poll).
         const decision = await this.host.route(transcript, agents.filter((a) => !this.lacks(a.id, 'v') && !this.outsideHarness(a.id)))
         if (!current()) return
         agentId = decision.agentId
