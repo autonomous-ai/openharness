@@ -70,7 +70,11 @@ export function spawnTied(
 ): ChildProcess {
   if (platform === 'win32' || !startable(file, options)) return spawn(file, args, { ...options, stdio: [...stdio] })
   const child = spawn('/bin/sh', ['-c', options.detached ? TIED_GROUP : TIED, file, ...args], { ...options, stdio: [...stdio, 'pipe'] })
-  const tie = child.stdio[3] as Writable
+  // Out of fds (EMFILE), spawn hands back a child with no stdio and its `error` to follow: nothing started, nothing to
+  // tie, and the caller hears it as from a plain spawn. Read past, it threw before any caller listened, and the error
+  // that followed crashed the service.
+  const tie = child.stdio?.[3] as Writable | undefined
+  if (!tie) return child
   tie.on('error', () => {})
   child.once('exit', () => { if (tie.writable) tie.write('\n') })
   return child
@@ -124,8 +128,8 @@ export function execFileTied(
     // daemon, the VM `podman machine start` leaves) may still hold them, and the call must not wait on it.
     const end = (why: NonNullable<typeof ended>) => {
       ended ??= why
-      child.stdout!.destroy()
-      child.stderr!.destroy()
+      child.stdout?.destroy()
+      child.stderr?.destroy()
       child.kill(killSignal)
     }
     const timer = timeout > 0 ? setTimeout(() => end('timeout'), timeout) : undefined
@@ -133,7 +137,8 @@ export function execFileTied(
     const collect = (stream: 'stdout' | 'stderr') => {
       const chunks: Buffer[] = []
       let bytes = 0
-      child[stream]!.on('data', (chunk: Buffer) => {
+      // None out of fds, as from execFile: the start's error says so.
+      child[stream]?.on('data', (chunk: Buffer) => {
         bytes += chunk.length
         if (bytes > maxBuffer) end(stream)
         else chunks.push(chunk)
@@ -161,7 +166,7 @@ export function execFileTied(
     })
     // Always ended, so a command that reads stdin never waits on it. One that exits before reading it all leaves the
     // write to fail (EPIPE), which is not the call's failure.
-    child.stdin!.on('error', () => {}).end(input)
+    child.stdin?.on('error', () => {}).end(input)
   })
 }
 
