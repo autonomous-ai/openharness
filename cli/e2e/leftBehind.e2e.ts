@@ -14,6 +14,7 @@ import { ownProcessGroup } from '../src/lib/windows/noWindow.js'
 import { alive, processTable } from '../src/testing/spawnedRuns.js'
 import { LocalClient } from './harness/client.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
+import { hungRateLimitRead, writeHungCodex } from './harness/hungCodex.js'
 
 interface Started { root: string; master: number; core: number; socket: string }
 
@@ -78,6 +79,34 @@ describe('a daemon under test', () => {
     expect(readdirSync(daemon.env.ADAPTER_RUNTIME_DIR!).filter((name) => name.startsWith('grid-'))).toEqual([])
     // Where grid's installer would put it: under the test's home (lib/gridInstall.ts GRID_INSTALL_DIR).
     expect(existsSync(join(daemon.env.HOME!, '.local', 'bin', 'grid'))).toBe(false)
+  })
+
+  it('ends what left its process groups: a Codex rate-limit read cut by the close', async () => {
+    const d = daemon = await IsolatedDaemon.create()
+    writeHungCodex(d)
+    await d.start()
+    const group = await hungRateLimitRead(d)
+    watched = group.map((row) => row.pid)
+    // Its child names nothing of the root: only its group reaches it.
+    expect(group.filter((row) => !row.command.includes(`${d.root}/`))).toHaveLength(1)
+    await d.close()
+    daemon = undefined
+    expect(watched.filter(alive), 'the read\'s Codex and its child').toEqual([])
+    expect(processTable().filter((row) => row.command.includes(`${d.root}/`)).map((row) => row.command)).toEqual([])
+    expect(existsSync(d.root)).toBe(false)
+  })
+
+  it('leaves a shared root to the daemon that owns it, and ends alone a process of the test\'s own that names it', async () => {
+    const owner = daemon = await IsolatedDaemon.create()
+    // In this worker's own process group, as a test's `tmux -S <root>/…` call is.
+    const named = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1 << 30)', join(owner.root, 'named')], { stdio: 'ignore' })
+    watched = [named.pid!]
+    await (await IsolatedDaemon.create({ beside: owner })).close()
+    expect(alive(named.pid!), 'after the close of the daemon beside it').toBe(true)
+    await owner.close()
+    daemon = undefined
+    // Ended, and this worker, in the same group, is still here to say so.
+    expect(alive(named.pid!), 'after its owner\'s close').toBe(false)
   })
 
   it.each<[string, 'exits' | 'waits', (child: ChildProcess) => void]>([
