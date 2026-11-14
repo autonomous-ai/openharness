@@ -110,7 +110,7 @@ function result(stdout: string): Record<string, unknown> {
 async function daemonStatus(box: Box): Promise<{ machineId?: string; connected?: boolean; signedIn?: boolean }> {
   const port = readDaemonRecord(join(box.home, 'data'), box.port)?.port
   if (port === undefined) throw new Error(`${box.name}'s daemon has not recorded its port yet`)
-  return (await (await fetch(`http://127.0.0.1:${port}/api/status`)).json()) as { machineId?: string; connected?: boolean; signedIn?: boolean }
+  return (await (await fetch(`http://127.0.0.1:${port}/api/status`, { signal: AbortSignal.timeout(5_000) })).json()) as { machineId?: string; connected?: boolean; signedIn?: boolean }
 }
 const session = (box: Box) => JSON.parse(readFileSync(join(box.home, 'auth', 'session.json'), 'utf8')) as Record<string, unknown>
 

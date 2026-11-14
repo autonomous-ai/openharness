@@ -192,7 +192,7 @@ createServer((_, res) => res.end('Fixture viewer')).listen(Number(process.env.HA
     await until('daemon connection', async () => {
       port = readDaemonRecord(dataDir, cliPort)?.port
       if (port === undefined) return false
-      const status = await fetch(`http://127.0.0.1:${port}/api/status`, { headers: { 'x-adapter-local': '1' } }).then(r => r.json()) as { connected?: boolean }
+      const status = await fetch(`http://127.0.0.1:${port}/api/status`, { headers: { 'x-adapter-local': '1' }, signal: AbortSignal.timeout(5_000) }).then(r => r.json()) as { connected?: boolean }
       return status.connected === true
     })
     return port!

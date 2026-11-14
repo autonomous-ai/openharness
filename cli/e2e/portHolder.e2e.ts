@@ -36,7 +36,7 @@ it('a daemon that lost its port still hears hooks, and the holder of the port he
     const bound = await until('the daemon to say which port it took', () => d.port, 30_000)
     expect(bound).not.toBe(port)
     const status = await until('the daemon to answer on the port it took', async () => {
-      const answer = await (await fetch(`http://127.0.0.1:${bound}/api/status`)).json() as Record<string, unknown>
+      const answer = await (await fetch(`http://127.0.0.1:${bound}/api/status`, { signal: AbortSignal.timeout(5_000) })).json() as Record<string, unknown>
       return answer.corePid ? answer : null
     }, 30_000, 200)
     expect(status).toMatchObject({ pid: d.pid, corePid: d.corePid() })

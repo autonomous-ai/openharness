@@ -201,7 +201,7 @@ setInterval(() => {}, 1000);
         const bound = readDaemonRecord(data, configuredPort)?.port
         if (bound === undefined) return false
         port = bound
-        return fetch(`http://127.0.0.1:${port}/api/status`, { headers: { 'x-adapter-local': '1' } })
+        return fetch(`http://127.0.0.1:${port}/api/status`, { headers: { 'x-adapter-local': '1' }, signal: AbortSignal.timeout(5_000) })
           .then(r => r.json()).then((v: any) => v.connected && v.discoveryReady).catch(() => false)
       })
       return child

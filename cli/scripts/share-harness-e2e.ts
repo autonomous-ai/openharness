@@ -52,7 +52,7 @@ async function freePort() {
 async function daemonPort(label: string, env: NodeJS.ProcessEnv) {
   let port: number | undefined
   await until(label, async () => (port = readDaemonRecord(env.ADAPTER_DATA_DIR!, Number(env.PORT))?.port) !== undefined
-    && fetch(`http://127.0.0.1:${port}/api/status`, { headers: { 'x-adapter-local': '1' } }).then(r => r.json()).then((r: any) => r.connected === true).catch(() => false))
+    && fetch(`http://127.0.0.1:${port}/api/status`, { headers: { 'x-adapter-local': '1' }, signal: AbortSignal.timeout(5_000) }).then(r => r.json()).then((r: any) => r.connected === true).catch(() => false))
   return port!
 }
 function run(name: string, cwd: string, args: string[], env: NodeJS.ProcessEnv) {

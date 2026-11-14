@@ -249,7 +249,7 @@ describe('two daemons on one computer', () => {
       // Either master's core may be the one that serves, and the other may never say a port: the pid file names it.
       const serving = [first, second].find((daemon) => daemon.pid !== null && daemon.pid === pidFile(first))
       if (!serving || !existsSync(first.socketPath)) return null
-      return (await fetch(`http://127.0.0.1:${serving.port}/api/health`).catch(() => null))?.ok ? true : null
+      return (await fetch(`http://127.0.0.1:${serving.port}/api/health`, { signal: AbortSignal.timeout(5_000) }).catch(() => null))?.ok ? true : null
     }, 90_000, 200)
     const winner = [first, second].find((daemon) => daemon.pid === pidFile(first))
     expect(winner, `the pid file names ${pidFile(first)}; the masters are ${first.pid} and ${second.pid}`).toBeDefined()
