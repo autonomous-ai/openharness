@@ -127,7 +127,11 @@ export function createDeviceHookCalls(deps: DeviceHookCallsDeps) {
       if (mine >= APPROVALS_PER_SESSION || approvals.size >= MAX_APPROVALS) { tally('over'); return 'none' }
       const id = deps.newId()
       approvals.set(id, request.sessionId)
-      const answer = devices.approval({ id, ...request }).catch((): ApprovalDecision => 'none')
+      let asked: Promise<ApprovalDecision>
+      // Called at once, not deferred to make a throw a rejection: the request must reach the devices before any
+      // approval.gone for it. A throw would otherwise hold its place for good.
+      try { asked = devices.approval({ id, ...request }) } catch { approvals.delete(id); return 'none' }
+      const answer = asked.catch((): ApprovalDecision => 'none')
       return openCall(answer, gone, 'none', () => devices.approvalGone(id), () => approvals.delete(id)).result
     },
 
