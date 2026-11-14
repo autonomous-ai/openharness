@@ -261,8 +261,14 @@ impl App {
     }
 
     fn login_event(&mut self, event: LoginEvent, effects: &mut Vec<Effect>) {
-        // A sign-in that was cancelled or went with its CLI answers late: nothing reads it.
-        let Some(login) = &mut self.login else { return };
+        // A sign-in that was cancelled or went with its CLI answers late: nothing reads it, but for a success while its
+        // CLI is here, as one that finished just after its cancel signed this computer in all the same.
+        let Some(login) = &mut self.login else {
+            if event == LoginEvent::Done(Ok(())) && self.state.cli == CliState::Found {
+                self.signed_in(effects);
+            }
+            return;
+        };
         match event {
             LoginEvent::AuthorizeUrl(url) => {
                 effects.push(Effect::OpenUrl(url));
@@ -274,21 +280,23 @@ impl App {
                 login.lines = vec![text];
                 self.redraw(Screen::SignIn, effects);
             }
-            LoginEvent::Done(Ok(())) => {
-                self.login = None;
-                self.state.signed_in = Some(true);
-                self.remember(|saved| saved.asked_sign_in = true, effects);
-                effects.push(Effect::ReadAuth);
-                if self.showing(Screen::SignIn) {
-                    self.next(effects);
-                }
-            }
+            LoginEvent::Done(Ok(())) => self.signed_in(effects),
             LoginEvent::Done(Err(text)) => {
                 self.login = None;
                 if self.showing(Screen::SignIn) {
                     self.show(Some(screen_at(Screen::SignIn, Phase::Failed, vec![text])), effects);
                 }
             }
+        }
+    }
+
+    fn signed_in(&mut self, effects: &mut Vec<Effect>) {
+        self.login = None;
+        self.state.signed_in = Some(true);
+        self.remember(|saved| saved.asked_sign_in = true, effects);
+        effects.push(Effect::ReadAuth);
+        if self.showing(Screen::SignIn) {
+            self.next(effects);
         }
     }
 
