@@ -621,7 +621,7 @@ describe('ObservedSource actions', () => {
 
   // A working turn may show a permission prompt the daemon has not heard of yet (Codex has no hook for its approval, which
   // takes `y` or Enter; Claude Code's comes a few hundred ms late): the words and their Enter would answer it.
-  it.each(['claude', 'codex', 'grok'] as const)('with no mod, %s is typed into only at its prompt: busy while it works, waiting while it asks', async (engine) => {
+  it.each(['claude', 'codex'] as const)('with no mod, %s is typed into only at its prompt: busy while it works, waiting while it asks', async (engine) => {
     const { actions } = fakeActions()
     const { src, ev } = setup({ actions })
     const after = async (event: ObservedHookEvent['event'], text: string) => {
@@ -636,6 +636,46 @@ describe('ObservedSource actions', () => {
     expect(await after('turn-error', 'three')).toEqual({ ok: true })
     expect(actions.orcaSend.mock.calls).toEqual([[HANDLE, 'one'], [HANDLE, 'two'], [HANDLE, 'three']])
     expect(actions.count.mock.calls.map(([what]) => what)).toEqual(['orca', 'busy', 'waiting', 'orca', 'orca'])
+  })
+
+  // No scan or transcript reads another engine's turn: it is at its prompt only once a hook said its turn ended.
+  it('another engine is typed into only after a hook said its turn ended', async () => {
+    const { actions } = fakeActions()
+    const { src, ev } = setup({ actions })
+    const busy = { ok: false, reason: 'proj is busy. Say it when it is done.' }
+    const after = async (event: ObservedHookEvent['event'], text: string) => {
+      src.ingest(ev(event, { engine: 'grok', ...withHandle }))
+      return src.send(src.list()[0], text)
+    }
+    expect(await after('session-start', 'one')).toEqual(busy)
+    expect(await after('turn-start', 'yes run it')).toEqual(busy)
+    expect(await after('needs-input', '1')).toEqual({ ok: false, reason: 'proj is waiting for your answer in Orca.' })
+    expect(await after('turn-stop', 'two')).toEqual({ ok: true })
+    // A session-start after its turn ended (a compaction, a resume) keeps it at its prompt.
+    expect(await after('session-start', 'three')).toEqual({ ok: true })
+    expect(await after('turn-start', 'four')).toEqual(busy)
+    expect(await after('turn-error', 'five')).toEqual({ ok: true })
+    expect(actions.orcaSend.mock.calls).toEqual([[HANDLE, 'two'], [HANDLE, 'three'], [HANDLE, 'five']])
+    expect(actions.count.mock.calls.map(([what]) => what)).toEqual(['busy', 'busy', 'waiting', 'orca', 'orca', 'busy', 'orca'])
+  })
+
+  // The scan lists another engine's agent idle though its turn may run: its first hook with a handle is no turn's end.
+  it('another engine the scan found is busy until a hook said its turn ended', async () => {
+    const { actions } = fakeActions()
+    const { src, open, owners, externals, ev } = setup({ actions })
+    open.set('s1', 'terminal')
+    owners.set('s1', { pid: 100, engine: 'grok' })
+    externals.set('s1', { cwd: '/work/proj', transcriptPath: null })
+    await src.scanOpen()
+    src.ingest(ev('session-start', { engine: 'grok', ...withHandle }))
+    expect(src.list()[0].state).toBe('idle')
+    expect(await src.send(src.list()[0], 'yes do it')).toEqual({ ok: false, reason: 'proj is busy. Say it when it is done.' })
+    expect(actions.orcaSend).not.toHaveBeenCalled()
+    src.ingest(ev('turn-stop', { engine: 'grok', ...withHandle }))
+    expect(await src.send(src.list()[0], 'next')).toEqual({ ok: true })
+    src.ingest(ev('turn-start', { engine: 'grok', ...withHandle }))
+    expect(await src.send(src.list()[0], 'later')).toEqual({ ok: false, reason: 'proj is busy. Say it when it is done.' })
+    expect(actions.orcaSend.mock.calls).toEqual([[HANDLE, 'next']])
   })
 
   // The dial never answers a prompt: typed into a terminal that shows one, the words and their Enter would.
