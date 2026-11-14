@@ -188,6 +188,24 @@ test('a launcher that starts but exits non-zero is asked again in 10 minutes, no
   expect(w.polls).toHaveLength(0)
 })
 
+test('a HOME the engine refuses once is asked again in 60 s, and the mod still polls', async ($, on) => {
+  let refused = false
+  // Before the world's own env hook, so above it.
+  on('env.get', { name: 'HOME' }, async (_, e, next) => {
+    if (refused) return await next(e)
+    refused = true
+    throw new Error('env.get refused')
+  })
+  const w = world(on, { answers: [held(25_000)] })
+  await start($, w)
+  expect(w.runs).toHaveLength(0)
+  await w.clock.advance(MINUTE - 1)
+  expect(w.runs).toHaveLength(0)
+  await w.clock.advance(1)
+  expect(w.runs).toEqual([[LOCAL, 'device', 'claude', 'link', '--json']])
+  expect(w.polls).toHaveLength(1)
+})
+
 test('the poll goes over the socket path link printed, with only the session id in its body', async ($, on) => {
   const w = world(on, { answers: [held(25_000)] })
   await start($, w)
