@@ -21,7 +21,7 @@ it('counts local and published frames and the receivers each publish reached, pe
 })
 
 // A publish no process subscribes to is work for nobody: `none` is what tells whether the daemon's UI gate pays
-// (spec 2026-11-02-swarm-cache-delta-design, Part 4).
+// (the relay gate of 2026-11-02).
 it('a publish reaching no subscriber counts as none', async () => {
   const logs: Array<Record<string, unknown>> = []
   stop = startRelayStats({ everyMs: 50, log: (_m, c) => logs.push(c) })

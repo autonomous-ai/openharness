@@ -404,7 +404,7 @@ jobs:
       - name: The Redis-backed tests ran
         run: node scripts/redis-tests-ran.mjs vitest-results.json
 
-  # The Super Tab integration suite (npm run test:super-tabs, backend/integration), which every backend PR once ran locally
+  # The backend integration suite (npm run test:integration, backend/integration), which every backend PR once ran locally
   # for 60-90 minutes behind a per-Mac lock (task #2459). Four shards balanced by integration/ci-durations.json; each
   # integration file starts its own MongoDB replica set (mongodb-memory-server-core), so shards share no database, and the
   # suite opens no Redis (src/lib/noRedis.test-support.ts).
@@ -440,11 +440,11 @@ jobs:
         with:
           path: /tmp/harness-super-tab-mongodb-binaries
           key: super-tab-mongod-7.0.24-${{ runner.os }}-${{ runner.arch }}
-      - name: Super Tab integration shard
+      - name: Backend integration shard
         env:
           SHARD: ${{ matrix.shard }}
         run: >-
-          npx vitest run --config vitest.super-tabs.ci.config.ts --shard="$SHARD/4"
+          npx vitest run --config vitest.integration.ci.config.ts --shard="$SHARD/4"
           --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/integration-$SHARD.json"
       - name: Preserve per-file results (durations refresh integration/ci-durations.json)
         if: ${{ !cancelled() }}

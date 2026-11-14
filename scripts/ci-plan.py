@@ -190,36 +190,13 @@ NOT_READ = {"cli": ("cli/e2e/",)}
 # A folder covers only paths named from the repository root: a relative read ("../../cli/x.ts") is always a read.
 NOT_READS = {
     # A pull request's files in the merger's tests: named, never opened (CLI Swarm v4 security, 2026-11-10).
-    "cli/src/superTabs/githubMerge.spec.ts": ("test data: a pull request's file paths", {"backend/src/superTabs/", "docs/"}),
-    **{source: ("test data: owned-code paths and model names", {"desktop/lib/", "desktop/lib/super_tabs/",
-                                                                "desktop/lib/super_tabs/roster.dart"})
-       for source in ("backend/src/superTabs/commands.test.ts", "backend/integration/superTabs.test.ts")},
-    # Task #4511: a task's owned or changed paths, a PR's files, a lane's folders; none is opened.
-    **{source: ("test data: owned, changed and PR file paths", {"cli/", "companions/", "desktop/", "devices/", "docs/", "mobile/",
-                                                                 "os/", "tests/", "website/"})
-       for source in ("backend/integration/crewDispatch.test.ts", "backend/integration/superTabReviewSteps.test.ts",
-                      "backend/src/github/train.test.ts", "backend/src/superTabs/crew.test.ts",
-                      "backend/src/superTabs/dispatch.test.ts",
-                      "backend/src/superTabs/mergeTrain/plan.test.ts", "backend/src/superTabs/mergeTrain/rulesRecord.test.ts",
-                      "backend/src/superTabs/mergeTrain/train.test.ts", "backend/src/superTabs/osSteps.test.ts",
-                      "backend/src/superTabs/prHistory.test.ts",
-                      "backend/src/superTabs/prHistoryRead.test.ts", "backend/src/superTabs/process.test.ts",
-                      "backend/src/superTabs/pullRequestFiles.test.ts", "backend/src/superTabs/releaseWatch.test.ts",
-                      "backend/src/superTabs/releases.test.ts", "backend/src/superTabs/reviewSteps.test.ts",
-                      "backend/src/superTabs/reviewTable.test.ts", "backend/src/superTabs/stepOs.test.ts")},
-    **{source: ("path rules: the folders a review area or a release matches", {"cli/", "companions/", "daemons/", "desktop/",
-                                                                               "devices/", "docs/", "installer/", "mobile/",
-                                                                               "pty/", "term/", "tui/", "website/"})
-       for source in ("backend/src/superTabs/releases.ts",
-                      "backend/src/superTabs/reviewTable.ts")},
+    "cli/src/superTabs/githubMerge.spec.ts": ("test data: a pull request's file paths", {"backend/src/", "docs/"}),
     **{source: ("test data: a task's owned paths", {"docs/"})
        for source in ("cli/src/superTabs/routeCheapFirst.spec.ts", "cli/src/superTabs/routeCommand.spec.ts")},
     # cli-tests runs vitest on src/ only; these start the real backend with its installed prisma.
     **{source: ("end-to-end and local stack scripts, run by hand", {"backend/"})
        for source in ("cli/e2e/harness/realBackend.ts", "cli/scripts/box-claim-e2e.ts", "cli/scripts/local-stack-peer.ts",
                       "cli/scripts/remote-viewers-stack.ts", "cli/scripts/share-harness-e2e.ts")},
-    "backend/src/superTabs/refusalLog.test.ts": ("test data: client versions ('cli/0.5.34', 'desktop/1.3.57')",
-                                                 {"cli/", "desktop/"}),
     "cli/src/engines/__fixtures__/other-runtime.golden.json": ("test data: a model name", {"provider/"}),
     "cli/src/lib/agentInstructions.spec.ts": ("test data: instruction files in a temporary project", {"AGENTS.md", "docs/"}),
     **{source: ("test data: a task's owned paths", {"desktop/"})
@@ -232,7 +209,7 @@ NOT_READS = {
     "cli/src/lib/transcriptReader.spec.ts": ("test data: a tool result's text", {"devices/"}),
     "cli/src/superTabs/githubTrain.spec.ts": ("test data: a pull request's changed files", {"docs/"}),
     "cli/src/superTabs/plainPath.spec.ts": ("test data: a path to make plain", {"docs/"}),
-    "cli/src/superTabs/pmNumbers.spec.ts": ("test data: a hot file's name", {"backend/src/superTabs/"}),
+    "cli/src/superTabs/pmNumbers.spec.ts": ("test data: a hot file's name", {"backend/src/"}),
     "cli/src/superTabs/scoreboard.spec.ts": ("test data: the files landings touched most", {"backend/", "docs/"}),
     "companions/src/application/modelProfile.spec.ts": ("test data: a model name", {"provider/"}),
     "companions/src/memory/lessons/signals.spec.ts": ("test data: a test id", {"tests/"}),
