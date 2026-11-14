@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { randomUUID } from 'node:crypto'
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
-import { createServer, type AddressInfo } from 'node:net'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { join } from 'node:path'
 import { Redis } from 'ioredis'
 import { redisWindowCounter } from './redisRateCounter.js'
 
@@ -10,6 +11,8 @@ vi.unmock('ioredis')
 
 // Against a real Redis, so the script is what is tested: REDIS_TEST_URL when set (CI's Redis service), with keys of this run
 // alone, removed afterwards; otherwise a redis-server of its own where one is installed. Skipped with neither.
+// Its own server listens on a socket in a folder of this run and on no TCP port: a port freed for it to bind can be
+// taken by any process in between, and the test would then talk to that one.
 const url = process.env.REDIS_TEST_URL
 const hasRedis = !!url || (() => { try { execFileSync('redis-server', ['--version'], { stdio: 'pipe' }); return true } catch { return false } })()
 const run = randomUUID()
@@ -17,6 +20,7 @@ const k = (name: string) => `rl:t:${run}:${name}`
 
 describe.skipIf(!hasRedis)('Redis window counter', () => {
   let server: ChildProcess | undefined
+  let folder: string | undefined
   let redis: Redis
 
   beforeAll(async () => {
@@ -25,11 +29,11 @@ describe.skipIf(!hasRedis)('Redis window counter', () => {
       await redis.connect()
       return
     }
-    const port = await new Promise<number>((resolve) => {
-      const probe = createServer().listen(0, '127.0.0.1', () => { const { port } = probe.address() as AddressInfo; probe.close(() => resolve(port)) })
-    })
-    server = spawn('redis-server', ['--port', String(port), '--bind', '127.0.0.1', '--save', '', '--appendonly', 'no'], { stdio: 'ignore' })
-    redis = new Redis({ port, host: '127.0.0.1', lazyConnect: true, retryStrategy: () => 50 })
+    // Under /tmp, not TMPDIR: a socket's path has a length limit an agent's TMPDIR can pass.
+    folder = mkdtempSync(join('/tmp', 'rrc-'))
+    const socket = join(folder, 'redis.sock')
+    server = spawn('redis-server', ['--port', '0', '--unixsocket', socket, '--save', '', '--appendonly', 'no'], { stdio: 'ignore' })
+    redis = new Redis({ path: socket, lazyConnect: true, retryStrategy: () => 50 })
     for (let i = 0; i < 100; i++) { try { await redis.connect(); break } catch { await new Promise((r) => setTimeout(r, 50)) } }
   })
   afterAll(async () => {
@@ -37,6 +41,7 @@ describe.skipIf(!hasRedis)('Redis window counter', () => {
     if (url && used.length) await redis.del(...used)
     redis?.disconnect()
     server?.kill()
+    if (folder) rmSync(folder, { recursive: true, force: true })
   })
 
   it('counts each key in one round trip and returns the counts after this hit', async () => {
