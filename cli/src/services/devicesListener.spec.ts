@@ -7,7 +7,8 @@ import { APP_IDS } from '../cable/hosts/hostDetect.js'
 import { FRONT_NONE } from '../cable/hosts/frontApp.js'
 import { listenLocalSocket } from '../lib/localSocket.js'
 import {
-  FRONT_MAX_BYTES, FRONT_PER_SECOND, frontHandler, LISTENER_MAX_CONNECTIONS, openDevicesListener, REFUSED, type DevicesListener, type ListenerHandler,
+  FRONT_MAX_BYTES, FRONT_PER_SECOND, frontHandler, LISTENER_DROPPED_PER_SECOND, LISTENER_MAX_CONNECTIONS, openDevicesListener, REFUSED, type DevicesListener,
+  type ListenerHandler,
 } from './devicesListener.js'
 
 const dirs: string[] = []
@@ -59,6 +60,20 @@ function connection(path: string) {
   })
   return { send, front: (app: string) => send(JSON.stringify({ type: 'front', app })) }
 }
+
+/** One message on a connection of its own, closed after its answer: a sender that opens one per message. */
+function once(path: string, body: string): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const sent = request({ socketPath: path, agent: false, method: 'POST', path: '/', headers: { Connection: 'close' } }, (res) => {
+      res.resume()
+      res.on('end', () => resolve(res.statusCode ?? 0))
+    })
+    sent.on('error', reject)
+    sent.end(body)
+  })
+}
+
+const frontBody = (app: string): string => JSON.stringify({ type: 'front', app })
 
 /** A front of ghostty padded to exactly `bytes`. */
 function frontOf(bytes: number): string {
@@ -263,6 +278,58 @@ describe.skipIf(process.platform === 'win32')('the devices listener', () => {
       now = 1_000
       expect((await one.front('vscode')).status).toBe(429)
       expect(fronts).toEqual([...Array(10).fill('ghostty'), 'cursor', ...Array(10).fill('ghostty')])
+    })
+
+    it('the first second takes no more than ten fronts on a connection', async () => {
+      let now = 0
+      const fronts: string[] = []
+      const { path } = await open({ front: frontHandler((app) => fronts.push(app)) }, { now: () => now })
+      const sender = connection(path)
+      for (let i = 0; i < FRONT_PER_SECOND; i++) {
+        now = i * 99
+        expect((await sender.front('ghostty')).status).toBe(204)
+      }
+      now = 999
+      expect((await sender.front('vscode')).status).toBe(429)
+      // A second after the first, one more; the second's second is 99 ms later.
+      now = 1_000
+      expect((await sender.front('cursor')).status).toBe(204)
+      expect((await sender.front('vscode')).status).toBe(429)
+      expect(fronts).toEqual([...Array(10).fill('ghostty'), 'cursor'])
+    })
+
+    it('fresh connections, one front each: past the listener\'s budget within a second, dropped as rate', async () => {
+      let now = 0
+      const fronts: string[] = []
+      const { path, lines } = await open({ front: frontHandler((app) => fronts.push(app)) }, { now: () => now })
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      // What its connections could send at once, each at its own rate.
+      const budget = LISTENER_MAX_CONNECTIONS * FRONT_PER_SECOND
+      for (let i = 0; i < budget; i++) expect(await once(path, frontBody('ghostty'))).toBe(204)
+      expect(await once(path, frontBody('vscode'))).toBe(429)
+      now = 1_000
+      expect(await once(path, frontBody('cursor'))).toBe(204)
+      expect(fronts).toEqual([...Array(budget).fill('ghostty'), 'cursor'])
+      vi.advanceTimersByTime(MINUTE)
+      expect(lines.at(-1)).toBe('[devices] listener in the last minute: 0 unknown, 0 oversized, 1 over rate, 0 refused, 0 failed')
+    })
+
+    it('past the listener\'s budget of dropped messages in a second, a message is refused unread and its connection closed', async () => {
+      let now = 0
+      const fronts: string[] = []
+      const { path, lines } = await open({ front: frontHandler((app) => fronts.push(app)) }, { now: () => now })
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      const junk = ['{"type":"nope"}', '{', frontBody('Ghostty'), frontOf(FRONT_MAX_BYTES + 1)]
+      for (let i = 0; i < LISTENER_DROPPED_PER_SECOND; i++) expect(await once(path, junk[i % junk.length]!)).toBeGreaterThanOrEqual(400)
+      // Even a front: nothing more is read this second, of any size.
+      expect(await once(path, frontBody('ghostty'))).toBe(429)
+      const { read } = bare(path, post('x', 1 << 20))
+      expect(await read).toMatch(/^HTTP\/1\.1 429 /)
+      now = 1_000
+      expect(await once(path, frontBody('vscode'))).toBe(204)
+      expect(fronts).toEqual(['vscode'])
+      vi.advanceTimersByTime(MINUTE)
+      expect(lines.at(-1)).toBe('[devices] listener in the last minute: 25 unknown, 25 oversized, 2 over rate, 50 refused, 0 failed')
     })
 
     it('each type has a rate of its own on a connection', async () => {
