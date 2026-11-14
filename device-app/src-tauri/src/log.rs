@@ -98,9 +98,28 @@ static REDACTIONS: LazyLock<[(Regex, &str); 6]> = LazyLock::new(|| {
     ]
 });
 
+/// The home folder holds the person's name (`/Users/<name>`), and the install script prints paths under it.
+static HOME: LazyLock<Option<Regex>> = LazyLock::new(|| home_rule(&std::env::var("HOME").unwrap_or_default()));
+
+/// `home` as a whole path segment, so `/Users/a` leaves `/Users/ab` alone; none for a home of `/` or nothing.
+fn home_rule(home: &str) -> Option<Regex> {
+    let home = home.trim_end_matches('/');
+    (!home.is_empty()).then(|| Regex::new(&format!(r#"{}([/\s"'),:;]|$)"#, regex::escape(home))).unwrap())
+}
+
 /// `text` with anything that could be a secret or a person's address blanked.
 pub fn redact(text: &str) -> String {
-    REDACTIONS.iter().fold(text.to_string(), |text, (pattern, replace)| pattern.replace_all(&text, *replace).into_owned())
+    redact_with(text, HOME.as_ref())
+}
+
+fn redact_with(text: &str, home: Option<&Regex>) -> String {
+    let text = REDACTIONS
+        .iter()
+        .fold(text.to_string(), |text, (pattern, replace)| pattern.replace_all(&text, *replace).into_owned());
+    match home {
+        Some(home) => home.replace_all(&text, "~${1}").into_owned(),
+        None => text,
+    }
 }
 
 #[cfg(test)]
