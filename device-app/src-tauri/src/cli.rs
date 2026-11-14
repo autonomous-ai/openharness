@@ -498,6 +498,23 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn a_closer_ends_stdin_from_another_thread_and_later_does_nothing() {
+        let fake = Fake::new();
+        fake.script("hardware watch --json", &["a", "@stdin"]);
+        let mut child = fake.cli().spawn(&WATCH).unwrap();
+        assert_eq!(child.line(WAIT), Ok(Some("a".into())));
+        let closer = child.stdin_closer();
+        let other = closer.clone();
+        thread::spawn(move || other.close());
+        assert_eq!(child.line(WAIT), Ok(None));
+        assert_eq!(child.exit(WAIT), Ok(Some(0)));
+        closer.close();
+        drop(child);
+        closer.close();
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn a_line_over_64_kib_is_dropped() {
         let fake = Fake::new();
         let longest = "y".repeat(LINE_MAX);
