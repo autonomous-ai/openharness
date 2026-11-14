@@ -21,4 +21,11 @@ describe('a daemon under test', () => {
   it('does not borrow a GitHub login, so a daemon\'s gh cannot act as the developer', () => {
     expect(daemonEnvironment({ PATH: '/b', GH_TOKEN: 'a', GITHUB_TOKEN: 'b', GH_ENTERPRISE_TOKEN: 'c', GITHUB_ENTERPRISE_TOKEN: 'd' }, {})).toEqual({ PATH: '/b' })
   })
+  it('does not borrow the app the tests run in, so a daemon cannot type into the developer\'s own terminal', () => {
+    expect(daemonEnvironment({
+      PATH: '/b', ORCA_TERMINAL_HANDLE: 'term_00000000-0000-0000-0000-000000000000', ORCA_PAIRING_CODE: 'p',
+      ORCA_AGENT_SESSION_ID: 's', ORCA_FUTURE_SETTING: 'f', TERM_PROGRAM: 'ghostty', __CFBundleIdentifier: 'app',
+      HERDR_PANE_ID: 'h', REX_BLOCK: 'r', ZELLIJ: '0', KITTY_WINDOW_ID: '1', WEZTERM_PANE: '2',
+    }, {})).toEqual({ PATH: '/b' })
+  })
 })
