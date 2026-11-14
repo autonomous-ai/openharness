@@ -1941,6 +1941,32 @@ describe('a hook\'s approvals, the mod\'s voice and Orca, for agents outside a p
     expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 's' }])
   })
 
+  it('a command the dial cannot show whole is none at once, with no card: the agent waits with Answer this one in the terminal.', async () => {
+    const { port } = startHere({ now: () => 0 })
+    attach(port)
+    expect(await port.approval({ ...REQUEST, summary: 'npm test', terminalOnly: true })).toBe('none')
+    expect(calls('question')).toEqual([])
+    expect(calls('turnStarted')).toEqual([[ID, 'Answer this one in the terminal.', undefined]])
+    expect(await host().activityText(ID)).toBe('Answer this one in the terminal.')
+    expect(await host().activitySnapshot(ID)).toEqual({ text: 'Answer this one in the terminal.' })
+    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 's' }])
+    expect(host().answer(ID, 'approval:r1', { approval: 'Allow' })).toEqual({ ok: false, error: 'This request is closed.' })
+    expect(said()).toEqual(['[device] approval · terminal-only · 0ms'])
+  })
+
+  it('an agent already waiting is told the terminal\'s line at once, and it goes once the turn goes on', async () => {
+    const { port } = startHere()
+    attach(port)
+    port.observed(hook('turn-start'))
+    port.observed(hook('needs-input'))
+    expect(calls('turnStarted').at(-1)).toEqual([ID, 'Waiting for you · Orca', undefined])
+    expect(await port.approval({ ...REQUEST, terminalOnly: true })).toBe('none')
+    expect(calls('turnStarted').at(-1)).toEqual([ID, 'Answer this one in the terminal.', undefined])
+    port.observed(hook('turn-start'))
+    expect(calls('turnStarted').at(-1)).toEqual([ID, '', undefined])
+    expect(await host().activityText(ID)).toBeNull()
+  })
+
   it('a held poll takes the transcript for its idle agent, and the agent lists v', async () => {
     vi.useFakeTimers()
     const { port } = startHere()

@@ -97,6 +97,42 @@ describe('Approvals', () => {
     expect(answer.value).toBeUndefined()
   })
 
+  it('a terminalOnly request is none at once with no card: the agent waits for the terminal, counted terminal-only', async () => {
+    const t = setup()
+    expect(await t.approvals.request(req('r1', 's1', { summary: 'npm test', terminalOnly: true }))).toBe('none')
+    expect(t.owned).toEqual(['s1'])
+    expect(t.shown).toEqual([])
+    expect(t.closed).toEqual([])
+    expect(t.marks).toEqual([['s1', '/work', 'terminal']])
+    expect(t.counts).toEqual([['terminal-only', 0]])
+    // Nothing is held for it: no answer the dial sends reaches it.
+    expect(t.approvals.answer('agent-s1', 'approval:r1', 'Allow')).toEqual({ ok: false, error: 'This request is closed.' })
+  })
+
+  it('a terminalOnly request beside a shown card leaves that card the dial\'s, and is held nowhere', async () => {
+    const t = setup()
+    const first = track(t.approvals.request(req('r1')))
+    await settle()
+    expect(await t.approvals.request(req('r2', 's1', { terminalOnly: true }))).toBe('none')
+    expect(t.shown.map((s) => s.requestId)).toEqual(['approval:r1'])
+    expect(t.approvals.answer('agent-s1', 'approval:r1', 'Allow')).toEqual({ ok: true })
+    await settle()
+    expect(first.value).toBe('allow')
+    expect(t.shown.map((s) => s.requestId)).toEqual(['approval:r1'])
+  })
+
+  it('a terminalOnly request with no dial, for a Harness-owned session, or with no room marks and counts nothing', async () => {
+    for (const over of [{ canShow: () => false }, { owned: async () => true }] as Partial<ApprovalsDeps>[]) {
+      const t = setup(over)
+      expect(await t.approvals.request(req('r1', 's1', { terminalOnly: true }))).toBe('none')
+      expect(t.marks).toEqual([])
+      expect(t.counts).toEqual([])
+    }
+    const full = setup({ mark: () => undefined })
+    expect(await full.approvals.request(req('r1', 's1', { terminalOnly: true }))).toBe('none')
+    expect(full.counts).toEqual([])
+  })
+
   it('Allow answers allow and closes the card; Deny answers deny', async () => {
     const t = setup()
     const first = track(t.approvals.request(req('r1')))
