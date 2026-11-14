@@ -23,9 +23,6 @@ const ANSWER_CHARS = 300
 const ANSWER_GRACE_MS = 1_500
 /** A turn's hook runs before the engine marks the turn begun in its record: a turn younger than this may still read idle. */
 const TURN_SETTLE_MS = 2_000
-/** The tool call's line reaches the transcript just after its hook asked, and nobody answers a prompt sooner than this: a
- *  write that soon after a prompt with no card is the asking's own, not the terminal's answer. */
-const ASK_SETTLE_MS = 1_000
 
 /** A name-based UUID (v5 layout, SHA-1) of engine + sessionId, so the same session always gets the same id. */
 export function observedAgentId(engine: string, sessionId: string): string {
@@ -69,13 +66,9 @@ interface Entry {
   /** When its state began (a turn's start renews it): how long a turn has run, and since when an agent waits. */
   since: number
   transcriptPath?: string
-  /** None for an agent an approval named before any hook did. */
-  pid?: number
+  pid: number
   /** The Orca terminal its last event came from. */
   handle?: string
-  approvalOpen?: boolean
-  /** It waits on a prompt the dial could not show whole (approvals.ts): the terminal answers it. */
-  terminalOnly?: boolean
   generation?: string
   endAt?: number
   /** The read of the last answer, waiting out the grace. */
@@ -112,46 +105,14 @@ export class ObservedSource implements HostSource {
       status: true,
       voice: live && (!!e.handle || this.modReady(e, actions)),
       focus: live && !!e.handle,
-      answer: !!e.approvalOpen,
+      // Its prompts are answered in its own app: the dial only shows them.
+      answer: false,
     }
   }
 
   /** Only Claude Code runs the mod; another engine's session id is no poll. */
   private modReady(e: Entry, actions: ObservedActions): boolean {
     return e.agent.engine === 'claude' && actions.modReady(e.agent.sessionId!)
-  }
-
-  /** A Claude Code session's approval, as the devices' Approvals holds it: the agent whose card it is, or that waits on
-   *  its terminal for a prompt with no card (`terminal`). */
-  approval(sessionId: string, cwd: string | undefined, state: 'open' | 'terminal' | 'answered' | 'left'): HostAgent | undefined {
-    const now = this.deps.now()
-    const asks = state === 'open' || state === 'terminal'
-    const e = asks
-      ? this.entry('claude', sessionId, now, { cwd })
-      : this.entries.get(observedAgentId('claude', sessionId))
-    if (!e) return undefined
-    // A prompt with no card leaves the one shown, if any, the dial's to answer.
-    if (state !== 'terminal') e.approvalOpen = state === 'open'
-    if (asks) {
-      this.setState(e, 'needs-you', now)
-      // A new prompt, though the agent may still read needs-you for the last one: what was written before is not its answer.
-      e.since = now
-      e.agent.lastActivityAt = now
-      e.terminalOnly = state === 'terminal'
-    } else if (state === 'answered' && e.agent.state === 'needs-you') {
-      this.setState(e, 'working', now)
-    } else if (state === 'left' && e.agent.state === 'needs-you') {
-      // Expired, or the dial went: the terminal's prompt still waits, so the agent stays needs-you, and only the transcript
-      // growing from now says it was answered there. A line written while the card showed is not an answer.
-      e.since = now
-    }
-    this.emit()
-    return { ...e.agent }
-  }
-
-  /** It waits on a prompt only its terminal can answer: the dial's line says so. */
-  terminalOnly(agentId: string): boolean {
-    return !!this.entries.get(agentId)?.terminalOnly
   }
 
   /** The dial's words for an idle agent: to its mod, else typed into its Orca terminal. Nothing is queued. */
@@ -221,8 +182,6 @@ export class ObservedSource implements HostSource {
     // Every event's own: a session resumed elsewhere must not be typed into the terminal it left.
     const handle = e.hostHints.ORCA_TERMINAL_HANDLE
     entry.handle = handle && ORCA_HANDLE.test(handle) ? handle : undefined
-    // An approval may have named the session first, before any hook gave its process.
-    if (entry.pid === undefined) { entry.pid = e.callerPid; a.callerPid = e.callerPid }
     if (e.cwd) { a.cwd = e.cwd; a.name = basename(e.cwd) || a.name }
     if (e.transcriptPath) entry.transcriptPath = e.transcriptPath
     if (e.event === 'session-end') {
@@ -263,14 +222,12 @@ export class ObservedSource implements HostSource {
   private setState(entry: Entry, state: HostAgentState, now: number): void {
     if (entry.agent.state !== state || state === 'working') entry.since = now
     entry.agent.state = state
-    // The prompt it waited on is over.
-    if (state !== 'needs-you') entry.terminalOnly = false
   }
 
   /** The existing entry, or a new one if there is room. */
   private entry(
     engine: string, sessionId: string, now: number,
-    init: { cwd?: string; transcriptPath?: string | null; pid?: number },
+    init: { cwd?: string; transcriptPath?: string | null; pid: number },
   ): Entry | undefined {
     const id = observedAgentId(engine, sessionId)
     // Harness's own session (the voice router's Claude Code runs in the data folder, outside a pane) is never an agent
@@ -372,11 +329,6 @@ export class ObservedSource implements HostSource {
     let changed = false
     for (const [id, e] of judged) {
       if (this.entries.get(id) !== e) continue
-      if (e.pid === undefined) {
-        // Named by an approval and no hook since: no process to look for, only its silence.
-        if (now - e.agent.lastActivityAt >= NO_GENERATION_TTL_MS) { this.entries.delete(id); changed = true }
-        continue
-      }
       // Its process's generation, noted at the first look that sees it.
       const gen = table.get(e.pid)
       if (gen) e.generation ??= gen
@@ -398,14 +350,10 @@ export class ObservedSource implements HostSource {
    */
   async checkWorking(): Promise<void> {
     const all = [...this.entries.values()]
-    // A card on the dial waits for its answer, which the card's end tells: a line written meanwhile is not one.
-    const waits = (e: Entry): boolean => e.agent.state === 'needs-you' && !e.approvalOpen
-    // A prompt with no card has no end but the transcript's growth, and the asking writes a line of its own.
-    const answeredAfter = (e: Entry): number => e.since + (e.terminalOnly ? ASK_SETTLE_MS : 0)
     for (const e of all) {
-      if (!waits(e) || !e.transcriptPath) continue
+      if (e.agent.state !== 'needs-you' || !e.transcriptPath) continue
       const stamp = await this.deps.fileStamp(e.transcriptPath)
-      if (!stamp || stamp.mtime <= answeredAfter(e) || !waits(e) || this.entries.get(e.agent.id) !== e) continue
+      if (!stamp || stamp.mtime <= e.since || e.agent.state !== 'needs-you' || this.entries.get(e.agent.id) !== e) continue
       const now = this.deps.now()
       this.setState(e, 'working', now)
       e.agent.lastActivityAt = now

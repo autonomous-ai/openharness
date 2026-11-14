@@ -407,12 +407,12 @@ describe('process-owned hook server', () => {
     })
 
     it.each(ROUTES)('%s aborts its signal when the client goes before the answer', async (path, name) => {
-      let answer!: (value: unknown) => void
+      let answer!: (value: { text?: string }) => void
       let reached!: (gone: AbortSignal) => void
       const held = new Promise<AbortSignal>((resolve) => { reached = resolve })
       const handler = vi.fn((_body: unknown, gone: AbortSignal) => {
         reached(gone)
-        return new Promise((resolve) => { answer = resolve })
+        return new Promise<{ text?: string }>((resolve) => { answer = resolve })
       })
       const { base, headers } = await start({ [name]: handler })
       const client = new AbortController()

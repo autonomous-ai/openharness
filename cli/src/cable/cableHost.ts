@@ -35,7 +35,7 @@ import type { VisitCommand, VisitResult } from './windowVisit.js'
 import type { FormCommand, FormResult } from './windowForm.js'
 import type { PetStore } from './pets/store.js'
 import { LANE_SESSION_OVER, LANE_TOKEN_UNAVAILABLE, type MachineFleet } from './machineFleet.js'
-import { APPROVAL_REQUEST_PREFIX, type ReviewedAnswer, type AnswerReceipt } from './questionInbox.js'
+import type { ReviewedAnswer, AnswerReceipt } from './questionInbox.js'
 import { isTier, type Tier } from '../lib/notifyTier.js'
 import { HarnessSource } from './hosts/harness.js'
 import { hostDisplayName } from './hosts/hostDetect.js'
@@ -525,23 +525,6 @@ export class DaemonCableHost implements CableHost {
     return held && held.source.id !== 'harness' ? held : undefined
   }
 
-  /** The dial is on this computer's agents (no window, and the devices have a registry), not on a window's tab. */
-  machineView(): boolean {
-    return this.swarms === null && this.registry !== null
-  }
-
-  /** Who answers an approval card; null when the devices have none. */
-  private approvals: { answer(agentId: string, requestId: string, choice: string | undefined): AnswerReceipt } | null = null
-
-  setApprovals(approvals: { answer(agentId: string, requestId: string, choice: string | undefined): AnswerReceipt } | null): void {
-    this.approvals = approvals
-  }
-
-  /** An approval card's answer, which is the devices' alone: the fleet and the core never hear its id. */
-  private answerApproval(agentId: string, requestId: string, answers: Record<string, string>): AnswerReceipt {
-    return this.approvals?.answer(agentId, requestId, answers.approval) ?? { ok: false, error: 'This request is closed.' }
-  }
-
   capsOf(agentId: string): string | undefined {
     const on = this.onMachine(agentId)
     return on && capsLetters(on.source.capabilities(on.agent))
@@ -812,13 +795,11 @@ export class DaemonCableHost implements CableHost {
   }
 
   answerReviewed(answer: ReviewedAnswer): Promise<AnswerReceipt> {
-    if (answer.requestId.startsWith(APPROVAL_REQUEST_PREFIX)) return Promise.resolve(this.answerApproval(answer.agentId, answer.requestId, answer.answers))
     if (this.outside(answer.agentId)) return Promise.resolve({ ok: false, error: 'Use the terminal to answer this question.' })
     return this.viaFleet((r) => r.answerReviewed(answer))
   }
 
-  answer(agentId: string, requestId: string, answers: Record<string, string>): void | AnswerReceipt {
-    if (requestId.startsWith(APPROVAL_REQUEST_PREFIX)) return this.answerApproval(agentId, requestId, answers)
+  answer(agentId: string, requestId: string, answers: Record<string, string>): void {
     if (!this.outside(agentId)) this.viaFleet((r) => r.answer(agentId, requestId, answers))
   }
 

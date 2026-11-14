@@ -34,7 +34,7 @@ import { SerialLink, findDialPort } from './serial.js'
 import { PLAYER_PAGE_SIZE, playerPage, type PlayerSession } from './playerLibrary.js'
 import { PassageCarry, withCarriedPassage, type CarryRead } from './passageCarry.js'
 import { VoiceDraft, type DraftPin } from './voiceDraft.js'
-import { APPROVAL_REQUEST_PREFIX, QuestionInbox, type ReviewedAnswer, type AnswerReceipt, type QuestionSpeech } from './questionInbox.js'
+import { QuestionInbox, type ReviewedAnswer, type AnswerReceipt, type QuestionSpeech } from './questionInbox.js'
 import { notificationReadToken, type UnreadNotification } from '../lib/notificationRead.js'
 
 /** Bumped when the VOCABULARY changes. Separate from the frame version, which is the envelope. */
@@ -346,7 +346,7 @@ export interface CableHost {
    * and travels verbatim — re-deriving it, or keying it by the requestId, is how a rename at either end
    * becomes an answer nobody gave.
    */
-  answer(agentId: string, requestId: string, answers: Record<string, string>): void | AnswerReceipt
+  answer(agentId: string, requestId: string, answers: Record<string, string>): void
   answerReviewed?(answer: ReviewedAnswer): Promise<AnswerReceipt>
   canSpeakQuestion?(agentId: string): boolean
   /** What the dial may do with an agent of the machine list, as letters of s v f a; undefined (an older host, a
@@ -1566,13 +1566,11 @@ export class CableSession {
           for (const [k, v] of Object.entries(answers as Record<string, unknown>)) {
             if (typeof v === 'string') flat[k] = v
           }
-          // An approval is answered by the devices process itself, for an agent outside Harness too.
-          if (this.lacks(agentId, 'a') && !requestId.startsWith(APPROVAL_REQUEST_PREFIX)) {
+          if (this.lacks(agentId, 'a')) {
             await this.toast(`This agent is in ${this.hostName(agentId)}. Answering it from the device comes in an update.`)
             return
           }
-          const receipt = this.host.answer(agentId, requestId, flat)
-          if (receipt && !receipt.ok) await this.toast(receipt.error)
+          this.host.answer(agentId, requestId, flat)
         }
         return
       }
@@ -1607,13 +1605,6 @@ export class CableSession {
         let question: { pin?: QuestionSpeech } | undefined
         if (questionVoice) {
           const agentId = str('agentId'), token = str('questionToken'), index = msg.questionIndex
-          // An approval takes Allow or Deny only: its words would be transcribed for nothing.
-          const open = agentId ? this.questionInbox.read(agentId) : undefined
-          if (open?.ok && open.id.startsWith(APPROVAL_REQUEST_PREFIX)) {
-            this.voice = null
-            this.voiceRefusal = { generation: this.voiceGeneration, message: 'Tap Allow or Deny.' }
-            return
-          }
           const pin = agentId && token && Number.isInteger(index) &&
             !formVoice && !carryVoice && !draftVoice && !searchVoice && !('cmd' in msg) && !('selectionId' in msg)
             ? { agentId, token, index: index as number } : undefined

@@ -238,8 +238,7 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
     scroll: ({ phase, dy, velocity }) => { if (phase === 'down' || phase === 'move' || phase === 'up') port.scroll(phase, number(dy), number(velocity)) },
     engines: ({ engines }) => port.engines(strings(engines)),
     commanders: ({ connected }) => port.commanders(connected === true),
-    // A hook's client that went before its answer (core/deviceHookCalls.ts): its card closes, its poll ends.
-    'approval.gone': ({ id }) => port.approvalGone(text(id)),
+    // The mod's poll whose client went before its answer (core/deviceHookCalls.ts): it ends.
     'inbox.gone': ({ pollId }) => port.inboxGone(text(pollId)),
     // Everything at once, as the core keeps it: this process (re)connected, and starts where the windows are.
     // What a window has not said is not said to the dial: a fresh process holds nothing yet, and a dial still
@@ -267,15 +266,8 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
       const step = await port.stepFocus(direction === 'previous' ? 'previous' : 'next', typeof currentAgentId === 'string' ? currentAgentId : undefined)
       return step === 'no_agents' ? { step } : { ...step }
     },
-    // A hook's approval and the mod's poll, checked and bounded by the core (core/deviceHookCalls.ts), and held here until
-    // the dial or the terminal answers, the card expires or the hold runs out. Dropping terminalOnly would give a command
-    // the dial cannot show whole an Allow/Deny card.
-    approval: async ({ id, sessionId, tool, summary, cwd, terminalOnly }) => ({
-      decision: await port.approval({
-        id: text(id), sessionId: text(sessionId), tool: text(tool), summary: text(summary),
-        ...(typeof cwd === 'string' ? { cwd } : {}), ...(typeof terminalOnly === 'boolean' ? { terminalOnly } : {}),
-      }),
-    }),
+    // The mod's poll, checked and bounded by the core (core/deviceHookCalls.ts), and held here until a transcript takes it
+    // or the hold runs out.
     inboxPoll: async ({ pollId, sessionId }) => ({ ...await port.inboxPoll({ pollId: text(pollId), sessionId: text(sessionId) }) }),
   }
 

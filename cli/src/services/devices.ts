@@ -25,7 +25,6 @@ import { isLocalOnly } from '../lib/cardUpdate.js'
 import { TurnStats, type TurnStatsFields } from '../cable/turnStats.js'
 import { cableEventFor, cableStepFor, cableQuestionCloseFor, cableQuestionFor, DaemonCableHost } from '../cable/cableHost.js'
 import { CableSession } from '../cable/cableSession.js'
-import { Approvals } from '../cable/hosts/approvals.js'
 import { Inbox } from '../cable/hosts/inbox.js'
 import { LAST_ANSWER_DEADLINE_MS, LAST_ANSWER_MAX_BYTES, readLastAnswer } from '../cable/hosts/lastAnswer.js'
 import { hostDisplayName, observedAgentId, ObservedSource, type ObservedActions } from '../cable/hosts/observed.js'
@@ -229,12 +228,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   }) : null
   /** One of them, by the id the dial holds: what the dial asks of it is answered here, never by a door of the core. */
   const outside = (agentId: string): HostAgent | undefined => observed?.list().find((agent) => agent.id === agentId)
-  /** Its line while it waits on the person, where a harness agent shows its terminal's footer. A prompt the dial could
-   *  not show whole has no card (cable/hosts/approvals.ts), so the line sends the person to the terminal. */
+  /** Its line while it waits on the person, where a harness agent shows its terminal's footer. */
   const waiting = (agent: HostAgent): string | null =>
-    agent.state !== 'needs-you' ? null
-      : observed?.terminalOnly(agent.id) ? 'Answer this one in the terminal.'
-        : `Waiting for you · ${hostDisplayName(agent.host)}`
+    agent.state === 'needs-you' ? `Waiting for you · ${hostDisplayName(agent.host)}` : null
 
   const cableHost = new DaemonCableHost({
     // The cloud harnesses too, where the core offers them: tiles on the desk the dial walks like any other.
@@ -508,7 +504,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     for (const agent of agents) {
       const was = told.get(agent.id)
       const card = { agentId: agent.id, text: '', recap: '', subagent: false }
-      // A wait whose line changed (its prompt turned out to be the terminal's) is told again.
+      // A wait whose line changed is told again.
       const line = waiting(agent)
       if (was?.state === agent.state && was.line === line) {
         // The answer is read after the turn ends (observed.ts), so its summary follows the done. One still the last
@@ -552,14 +548,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   }
   /** The scan and the reminders, for an attached dial alone. */
   let attached: ReturnType<typeof setInterval>[] = []
-  /** A dial is attached: a hook's approval is asked of it only then. */
-  let dialWatched = false
   const dialAttached = (on: boolean): void => {
-    dialWatched = on
     for (const timer of attached) clearInterval(timer)
     attached = []
-    // No dial to answer a card: the terminal's prompt decides.
-    if (!on) part.call('approvals', () => approvals.closeAll())
     if (!on || !observed) return
     // Agents already running when the dial came are listed now, idle until their next hook event.
     part.call('observed', () => observed.scanOpen())
@@ -571,46 +562,19 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     ]
   }
 
-  // ── a hook's approvals ─────────────────────────────────────────────────────────────────────────────
+  // ── the mod's polls ────────────────────────────────────────────────────────────────────────────────
   //
-  // Claude Code's permission prompt outside a pane, asked of the dial while it shows this computer's agents: one card per
-  // agent, answered once, by its exact request, and closed when nobody is left to answer it (cable/hosts/approvals.ts).
-  const approvals = new Approvals({
-    now: monotonic,
-    after: timerIn('approvals'),
-    canShow: () => dialWatched && cableHost.machineView(),
-    // A Harness pane's session: the pane watcher answers its prompt. Read as the core has it now, not as the last tick did.
-    owned: async (sessionId) => {
-      await deps.refresh?.()
-      return core.agents.advertised().some((session) => session.sessionId === sessionId)
-    },
-    mark: (sessionId, cwd, state) => observed?.approval(sessionId, cwd, state),
-    show: (agentId, requestId, questions) => inOrder(agentId, () => { void cable.question(agentId, requestId, questions) }),
-    close: (agentId, requestId) => inOrder(agentId, () => { void cable.questionClose(agentId, requestId) }),
-    // The outcome and its time only: never the tool, the command or the session.
-    count: (outcome, ms) => log(`[device] approval · ${outcome} · ${Math.round(ms)}ms`),
-  })
-  cableHost.setApprovals(approvals)
-  // Each part guarded as the fleet is: one that throws, or did not start, answers as with no dial, so the terminal's prompt
-  // decides and the mod waits a minute. One switched off ends what it holds: the `gone` that would have closed it is
-  // swallowed from then on.
-  const { approval, approvalGone, inboxPoll, inboxGone } = DEVICES_FALLBACKS
-  const approvalCalls = part.start('approvals', (): Pick<DeviceHookPort, 'approval' | 'approvalGone'> & { stop(): void } => ({
-    approval: (request) => approvals.request(request),
-    approvalGone: (id) => approvals.gone(id),
-    stop: () => approvals.closeAll(),
-  }), { approval, approvalGone, stop: undefined })
+  // Guarded as the fleet is: a part that throws, or did not start, answers as with no dial, so the mod waits a minute. One
+  // switched off ends what it holds: the `gone` that would have ended a poll is swallowed from then on.
+  const { inboxPoll, inboxGone } = DEVICES_FALLBACKS
   const inboxCalls = part.start('inbox', (): Pick<DeviceHookPort, 'inboxPoll' | 'inboxGone'> & { stop(): void } => ({
     inboxPoll: ({ pollId, sessionId }) => inbox.poll(pollId, sessionId),
     inboxGone: (pollId) => inbox.gone(pollId),
     stop: () => inbox.closeAll(),
   }), { inboxPoll, inboxGone, stop: undefined })
-  /** Every card and poll held for the core's calls: that core went, or the devices stop. */
-  const endHookCalls = (): void => {
-    part.call('approvals', () => approvals.closeAll())
-    part.call('inbox', () => inbox.closeAll())
-  }
-  // The core's calls failed to none when its link dropped: a card left open would take an Allow that nobody hears.
+  /** Every poll held for the core's calls: that core went, or the devices stop. */
+  const endHookCalls = (): void => { part.call('inbox', () => inbox.closeAll()) }
+  // The core's calls failed to none when its link dropped: a transcript for a poll nobody holds would wait for nothing.
   deps.onCoreGone?.(endHookCalls)
 
   if (deps.cableDisabled) log('[cable] disabled (CABLE_DISABLE=true) — the serial port is left alone')
@@ -688,8 +652,6 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     swarms: (swarms) => part.call('dial', () => {
       const closed = windowOpen && swarms === null
       windowOpen = swarms !== null
-      // The dial shows the window's tab, where no card for an agent outside a pane can be answered.
-      if (windowOpen) part.call('approvals', () => approvals.closeAll())
       cableHost.setSwarms(swarms)
       void cable.syncSwarms()
       void cable.syncAgents()
@@ -738,9 +700,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // The voice router warms a worker on an engine the machine runs, while a device is watching.
     engines: (engines) => setVoiceRouterSessions(engines.map((engine) => ({ engine }))),
     commanders: (connected) => setVoiceRouterDeviceConnected(connected),
-    // A hook's approval and the mod's poll, as the core checked and bounded them (core/deviceHookCalls.ts).
-    approval: async (request) => (approvalCalls ? approvalCalls.approval(request) : 'none'),
-    approvalGone: (id) => approvalCalls?.approvalGone(id),
+    // The mod's poll, as the core checked and bounded it (core/deviceHookCalls.ts).
     inboxPoll: async (poll) => (inboxCalls ? inboxCalls.inboxPoll(poll) : { off: true }),
     inboxGone: (pollId) => inboxCalls?.inboxGone(pollId),
     // The serial ports first: a port left held makes esptool fail in a way that reads like dead hardware.

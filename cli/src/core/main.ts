@@ -2233,7 +2233,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     onTurnStop: turnHooks.onTurnStop,
     // A paneless agent's event goes on to the devices process and stays nowhere in the core; no devices, no forward.
     onObserved: observedHook.onObserved,
-    onApproval: deviceHookCalls.onApproval,
     onInbox: deviceHookCalls.onInbox,
     onPromptHook: turnHooks.onPromptHook,
     stopHookDelayMs: Number(harnessd.HARNESSD_TEST_STOP_HOOK_DELAY_MS) || 0,
