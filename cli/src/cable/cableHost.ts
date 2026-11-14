@@ -225,6 +225,7 @@ export class DaemonCableHost implements CableHost {
       after: wiring.appTimer ?? unrefAfter,
       random: wiring.appRandom ?? Math.random,
       counts: () => this.rings.counts(),
+      known: () => this.rings.known(),
       switched: (cause) => wiring.appSwitched?.(cause),
     })
   }

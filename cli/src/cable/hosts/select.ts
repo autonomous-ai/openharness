@@ -78,6 +78,7 @@ export class AppRings {
   /** Each app's ring, in the order the apps appeared. */
   private rings = new Map<string, AppRing>()
   private sizes = new Map<string, number>()
+  private knownSizes = new Map<string, number>()
 
   update(agents: HostAgent[]): void {
     const byApp = new Map<string, HostAgent[]>()
@@ -96,6 +97,10 @@ export class AppRings {
       this.rings.set(app, entry)
     }
     this.sizes = new Map([...this.rings.keys()].map((app) => [app, byApp.get(app)!.length]))
+    this.knownSizes = new Map([...this.rings.keys()].flatMap((app) => {
+      const n = byApp.get(app)!.filter((a) => !a.appPending).length
+      return n ? [[app, n] as const] : []
+    }))
   }
 
   apps(): Array<{ id: string; count: number; waiting: number }> {
@@ -104,6 +109,11 @@ export class AppRings {
 
   counts(): ReadonlyMap<string, number> {
     return this.sizes
+  }
+
+  /** Each app's agents whose app is known (not `appPending`), in the apps' order: an app with none is absent. */
+  known(): ReadonlyMap<string, number> {
+    return this.knownSizes
   }
 
   ring(app: string): { rows: HostAgent[]; total: number } {

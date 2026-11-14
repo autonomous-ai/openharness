@@ -10,6 +10,8 @@ export interface AppFilterDeps {
   random(): number
   /** Each app with agents and how many, as last read. */
   counts(): ReadonlyMap<string, number>
+  /** Of those, the agents whose app is known (`HostAgent.appPending`), as last read: an app with none is absent. */
+  known(): ReadonlyMap<string, number>
   switched(cause: SwitchCause): void
 }
 
@@ -20,14 +22,19 @@ const sameCounts = (a: ReadonlyMap<string, number>, b: ReadonlyMap<string, numbe
 
 /**
  * Which app the dial with no Harness window shows: the one the person brought to the front, the one picked on the dial, or
- * the one with the most agents. One per cable host, shared by every dial on it. Time and chance come in through `deps`, so
- * a test drives both.
+ * the one with the most agents whose app is known. An agent the open scan found, which nothing has told of yet, is on the
+ * unknown app's page and counts for nothing in that default: a dial plugged in over many agents already running would
+ * otherwise open on that page. It is the default only while no app has a known agent, and gives way once one has; a pick
+ * or the front can still show it. One per cable host, shared by every dial on it. Time and chance come in through `deps`,
+ * so a test drives both.
  */
 export class AppFilter {
   private showing: string | undefined
   /** Set by a pick on the dial; another app settling in front ends it. */
   private pickedOnDial = false
-  /** A tie is drawn once and held while the counts stay the ones it was drawn for, so the dial does not flip between equals. */
+  /** The default chose the shown app: nobody picked it or brought it to the front. */
+  private byDefault = false
+  /** A tie is drawn once and held while the counts stay the ones it was drawn over, so the dial does not flip between equals. */
   private tieBreak: { app: string; counts: ReadonlyMap<string, number> } | undefined
   /** The app in front at the last settle. */
   private settledFront: string | undefined
@@ -37,12 +44,17 @@ export class AppFilter {
 
   constructor(private readonly deps: AppFilterDeps) {}
 
-  /** The app shown, `undefined` with no agents. The shown app emptying is decided here, when the counts are read. */
+  /**
+   * The app shown, `undefined` with no agents. The shown app emptying, and the default's page of agents not known yet giving
+   * way, are decided here, when the counts are read.
+   */
   shown(): string | undefined {
     const counts = this.deps.counts()
-    if (this.showing !== undefined && has(counts, this.showing)) return this.showing
+    const known = this.deps.known()
+    if (this.showing !== undefined && has(counts, this.showing) && !this.givesWay(known, this.showing)) return this.showing
     this.pickedOnDial = false
-    this.show(this.fallback(counts), 'empty')
+    this.byDefault = true
+    this.show(this.fallback(counts, known), 'empty')
     return this.showing
   }
 
@@ -57,6 +69,7 @@ export class AppFilter {
     if (!has(this.deps.counts(), app)) return 'ignored'
     if (app === this.showing) return 'same'
     this.pickedOnDial = true
+    this.byDefault = false
     this.show(app, cause)
     return 'switched'
   }
@@ -73,23 +86,33 @@ export class AppFilter {
       this.settledFront = app
     }
     // `none` (no listed app in front) is no app, so it never has agents and never shows.
-    if (!this.pickedOnDial && has(this.deps.counts(), app)) this.show(app, 'front')
+    if (!this.pickedOnDial && has(this.deps.counts(), app)) {
+      this.byDefault = false
+      this.show(app, 'front')
+    }
   }
 
-  private fallback(counts: ReadonlyMap<string, number>): string | undefined {
+  /** A page the default chose, none of whose agents is known to be there, once an app has a known agent. */
+  private givesWay(known: ReadonlyMap<string, number>, app: string): boolean {
+    return this.byDefault && known.size > 0 && !has(known, app)
+  }
+
+  private fallback(counts: ReadonlyMap<string, number>, known: ReadonlyMap<string, number>): string | undefined {
     if (this.settledFront !== undefined && has(counts, this.settledFront)) return this.settledFront
+    // Agents not known yet count only when no app has a known one: their page is then all there is to show.
+    const by = known.size ? known : counts
     let most = 0
     let tied: string[] = []
-    for (const [app, n] of counts) {
+    for (const [app, n] of by) {
       if (n > most) {
         most = n
         tied = [app]
       } else if (n === most && n > 0) tied.push(app)
     }
     if (tied.length < 2) return tied[0]
-    if (this.tieBreak && sameCounts(this.tieBreak.counts, counts)) return this.tieBreak.app
+    if (this.tieBreak && sameCounts(this.tieBreak.counts, by)) return this.tieBreak.app
     const app = tied[Math.floor(this.deps.random() * tied.length)]
-    this.tieBreak = { app, counts: new Map(counts) }
+    this.tieBreak = { app, counts: new Map(by) }
     return app
   }
 

@@ -221,9 +221,11 @@ export class ObservedSource implements HostSource {
     if (!entry) return
     const a = entry.agent
     a.lastActivityAt = now
-    // Only a hook says where a session runs: one the open scan found is a plain terminal until its first.
+    // Only a hook says where a session runs: one the open scan found is not known yet until its first. A hook with no
+    // hints says it too: the session runs in a terminal nothing names.
     a.host = detectHost(e.hostHints)
     a.app = detectApp(e.hostHints)
+    delete a.appPending
     // Every event's own: a session resumed elsewhere must not be typed into the terminal it left.
     const handle = e.hostHints.ORCA_TERMINAL_HANDLE
     entry.handle = handle && ORCA_HANDLE.test(handle) ? handle : undefined
@@ -324,6 +326,7 @@ export class ObservedSource implements HostSource {
         name: (init.cwd && basename(init.cwd)) || engine,
         host: 'terminal',
         app: UNKNOWN_APP,
+        appPending: true,
         state: 'idle', lastActivityAt: now, unseenDone: false, callerPid: init.pid,
       },
       since: now,
