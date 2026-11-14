@@ -3,7 +3,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { CoreApi, CorePorts, DevicesPort, ServiceRequests } from '../core/api.js'
 import { createDeviceHookCalls } from '../core/deviceHookCalls.js'
-import { createDevicesLink } from '../core/devicesLink.js'
+import { createDevicesLink, type DevicesState } from '../core/devicesLink.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { DevicesDeps } from './devices.js'
 import { runDevicesService } from './devicesProcess.js'
@@ -443,7 +443,7 @@ describe('what the core asks of the devices', () => {
       core: {} as CoreApi,
       notify: (frame) => { f.event(frame.payload ?? {}); return true },
       call: async (type, payload) => f.options().requests[type](payload, asker),
-      state: () => ({ desk: [], foreground: true, swarms: null, unread: [], focus: { voice: null, form: null }, engines: [], commanders: false, asking: [] }),
+      state: (): DevicesState => ({ desk: [], foreground: true, swarms: null, unread: [], focus: { voice: null, form: null }, engines: [], commanders: false }),
     })
     let n = 0
     const calls = createDeviceHookCalls({ ready: () => true, devices: () => link.port, newId: () => `p${++n}` })

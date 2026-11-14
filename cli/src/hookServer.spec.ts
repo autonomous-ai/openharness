@@ -341,41 +341,42 @@ describe('process-owned hook server', () => {
   })
 
   describe('the mod\'s inbox route', () => {
-    const ROUTES = [['/api/hook/inbox', 'onInbox', 1024]] as const
+    const INBOX = '/api/hook/inbox'
     const POLL = { sessionId: 'session-1' }
     const post = (base: string, path: string, headers: Record<string, string>, body: string, signal?: AbortSignal) =>
       fetch(`${base}${path}`, { method: 'POST', headers, body, signal })
 
-    it.each(ROUTES)('%s answers 401 without the hook token', async (path, name) => {
+    it('/api/hook/inbox answers 401 without the hook token', async () => {
       const handler = vi.fn(async () => 'invalid' as const)
-      const { base } = await start({ [name]: handler })
-      expect((await post(base, path, { 'content-type': 'application/json' }, '{}')).status).toBe(401)
+      const { base } = await start({ onInbox: handler })
+      expect((await post(base, INBOX, { 'content-type': 'application/json' }, '{}')).status).toBe(401)
       expect(handler).not.toHaveBeenCalled()
     })
 
-    it.each(ROUTES)('%s answers 400 to a bad json body', async (path, name) => {
+    it('/api/hook/inbox answers 400 to a bad json body', async () => {
       const handler = vi.fn(async () => 'invalid' as const)
-      const { base, headers } = await start({ [name]: handler })
-      expect((await post(base, path, headers, '{nope')).status).toBe(400)
+      const { base, headers } = await start({ onInbox: handler })
+      expect((await post(base, INBOX, headers, '{nope')).status).toBe(400)
       expect(handler).not.toHaveBeenCalled()
     })
 
-    it.each(ROUTES)('%s answers 400 to a body one byte over its limit, and takes one at it', async (path, name, limit) => {
+    it('/api/hook/inbox answers 400 to a body one byte over its limit, and takes one at it', async () => {
+      const limit = 1024
       const handler = vi.fn(async () => 'invalid' as const)
-      const { base, headers } = await start({ [name]: handler })
+      const { base, headers } = await start({ onInbox: handler })
       // `{"pad":""}` is 10 bytes.
       const padded = (bytes: number): string => JSON.stringify({ pad: 'x'.repeat(bytes - 10) })
       expect(Buffer.byteLength(padded(limit + 1))).toBe(limit + 1)
-      expect((await post(base, path, headers, padded(limit + 1))).status).toBe(400)
+      expect((await post(base, INBOX, headers, padded(limit + 1))).status).toBe(400)
       expect(handler).not.toHaveBeenCalled()
-      await post(base, path, headers, padded(limit))
+      await post(base, INBOX, headers, padded(limit))
       expect(handler).toHaveBeenCalledTimes(1)
     })
 
-    it.each(ROUTES)('%s answers 400 when the handler says invalid', async (path, name) => {
+    it('/api/hook/inbox answers 400 when the handler says invalid', async () => {
       const handler = vi.fn(async () => 'invalid' as const)
-      const { base, headers } = await start({ [name]: handler })
-      expect((await post(base, path, headers, JSON.stringify({ sessionId: 'session-1' }))).status).toBe(400)
+      const { base, headers } = await start({ onInbox: handler })
+      expect((await post(base, INBOX, headers, JSON.stringify({ sessionId: 'session-1' }))).status).toBe(400)
       expect(handler).toHaveBeenCalledWith({ sessionId: 'session-1' }, expect.any(AbortSignal))
     })
 
@@ -406,7 +407,7 @@ describe('process-owned hook server', () => {
       expect(await response.json()).toEqual({ error: 'NO_DEVICE' })
     })
 
-    it.each(ROUTES)('%s aborts its signal when the client goes before the answer', async (path, name) => {
+    it('/api/hook/inbox aborts its signal when the client goes before the answer', async () => {
       let answer!: (value: { text?: string }) => void
       let reached!: (gone: AbortSignal) => void
       const held = new Promise<AbortSignal>((resolve) => { reached = resolve })
@@ -414,9 +415,9 @@ describe('process-owned hook server', () => {
         reached(gone)
         return new Promise<{ text?: string }>((resolve) => { answer = resolve })
       })
-      const { base, headers } = await start({ [name]: handler })
+      const { base, headers } = await start({ onInbox: handler })
       const client = new AbortController()
-      const request = post(base, path, headers, JSON.stringify(POLL), client.signal).catch(() => 'gone')
+      const request = post(base, INBOX, headers, JSON.stringify(POLL), client.signal).catch(() => 'gone')
       const gone = await held
       expect(gone.aborted).toBe(false)
       const aborted = new Promise<void>((resolve) => gone.addEventListener('abort', () => resolve(), { once: true }))
@@ -429,18 +430,18 @@ describe('process-owned hook server', () => {
 
     // Over TCP, who is calling is looked up before any route (audit H1). A client gone during that closed before the route
     // listened for it: the route never saw it go, and sat reading a body that never comes.
-    it.each(ROUTES)('%s lets go of a client that went while who it is was looked up, reading and forwarding nothing', async (path, name) => {
+    it('/api/hook/inbox lets go of a client that went while who it is was looked up, reading and forwarding nothing', async () => {
       const handler = vi.fn(async () => 'invalid' as const)
       let answered!: () => void
       const lookedUp = new Promise<void>((resolve) => { answered = resolve })
       // The lookup answers only once the client has gone.
       const peerAccount = (socket: Socket) => new Promise<boolean>((resolve) => socket.once('close', () => { resolve(true); answered() }))
-      const started = await startHookServer(0, { onRegistered: vi.fn(), onSessionEnd: vi.fn(), [name]: handler }, { peerAccount })
+      const started = await startHookServer(0, { onRegistered: vi.fn(), onSessionEnd: vi.fn(), onInbox: handler }, { peerAccount })
       server = started.server
       const arrived: IncomingMessage[] = []
       server.prependListener('request', (req: IncomingMessage) => { arrived.push(req) })
       const client = new AbortController()
-      const request = fetch(`http://127.0.0.1:${started.port}${path}`, {
+      const request = fetch(`http://127.0.0.1:${started.port}${INBOX}`, {
         method: 'POST', body: JSON.stringify(POLL), signal: client.signal,
         headers: { 'content-type': 'application/json', 'x-harness-hook-token': readHookCredential(env.ADAPTER_DATA_DIR)! },
       }).catch(() => 'gone')
@@ -454,16 +455,16 @@ describe('process-owned hook server', () => {
       expect(handler).not.toHaveBeenCalled()
     })
 
-    it.each(ROUTES)('%s leaves its signal alone once the answer is written', async (path, name) => {
+    it('/api/hook/inbox leaves its signal alone once the answer is written', async () => {
       let seen: AbortSignal | undefined
       const handler = vi.fn(async (_body: unknown, gone: AbortSignal) => {
         seen = gone
         return {}
       })
-      const { base, headers } = await start({ [name]: handler })
+      const { base, headers } = await start({ onInbox: handler })
       // This listener runs before the route's own: by the time it resolves, the route has heard the close too.
       const closed = new Promise<void>((resolve) => server!.once('request', (_req, res) => res.once('close', () => resolve())))
-      const response = await post(base, path, headers, JSON.stringify(POLL))
+      const response = await post(base, INBOX, headers, JSON.stringify(POLL))
       expect(response.status).toBe(200)
       await response.text()
       await closed

@@ -87,7 +87,7 @@ export class Inbox {
     })
   }
 
-  /** The core that held the polls connected again, or the devices stop. */
+  /** The core that held the polls went, or the devices stop. */
   closeAll(): void {
     for (const [sessionId, open] of this.polls) this.close(sessionId, open, {})
     for (const [sessionId, waiting] of this.waiting) this.endWait(sessionId, waiting, 'missed')
