@@ -331,11 +331,17 @@ mod tests {
     }
 
     #[test]
-    fn the_webview_may_call_two_commands() {
+    fn the_webview_may_close_itself_and_call_two_commands() {
         let capability: Value = serde_json::from_str(include_str!("../capabilities/default.json")).unwrap();
         assert_eq!(
             capability["permissions"],
-            json!(["core:event:allow-listen", "core:event:allow-unlisten", "allow-view", "allow-act"])
+            json!([
+                "core:event:allow-listen",
+                "core:event:allow-unlisten",
+                "core:window:allow-close",
+                "allow-view",
+                "allow-act"
+            ])
         );
         assert!(!include_str!("../Cargo.toml").contains("tauri-plugin"));
     }

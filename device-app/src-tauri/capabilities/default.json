@@ -1,7 +1,13 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "The window may listen for its view and call the app's two commands, nothing else.",
+  "description": "The window may listen for its view, close itself and call the app's two commands, nothing else.",
   "windows": ["main"],
-  "permissions": ["core:event:allow-listen", "core:event:allow-unlisten", "allow-view", "allow-act"]
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:window:allow-close",
+    "allow-view",
+    "allow-act"
+  ]
 }
