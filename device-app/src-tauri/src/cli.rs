@@ -671,21 +671,21 @@ mod tests {
         fake.script("hardware watch --json", &["@record"]);
         let mut child = fake.cli().spawn(&WATCH).unwrap();
         let writer = child.stdin_writer();
-        assert!(writer.line(r#"{"front":"a"}"#));
-        assert!(writer.line(r#"{"front":"b"}"#));
+        assert_eq!(writer.line(r#"{"front":"a"}"#), Ok(()));
+        assert_eq!(writer.line(r#"{"front":"b"}"#), Ok(()));
         assert!(child.stdin_closer().close());
-        assert!(!writer.line(r#"{"front":"c"}"#));
+        assert_eq!(writer.line(r#"{"front":"c"}"#), Err(Unwritten::Closed));
         assert_eq!(child.exit(WAIT), Ok(Some(0)));
         assert_eq!(fake.stdin(), [r#"{"front":"a"}"#, r#"{"front":"b"}"#]);
         drop(child);
-        assert!(!writer.line(r#"{"front":"d"}"#));
+        assert_eq!(writer.line(r#"{"front":"d"}"#), Err(Unwritten::Closed));
     }
 
     #[cfg(unix)]
     #[test]
     fn a_writer_never_waits_on_a_child_that_reads_nothing() {
         // The app in front is written on the thread the OS tells it on, AppKit's main thread on a Mac: a stuck child
-        // must not hold it. Once its pipe is full, a line is dropped.
+        // must not hold it. Once its pipe is full, a line is dropped, and told apart from a closed pipe.
         let fake = Fake::new();
         fake.script("hardware watch --json", &["@hang"]);
         let mut child = fake.cli().spawn(&WATCH).unwrap();
@@ -695,9 +695,9 @@ mod tests {
         thread::spawn(move || {
             let line = "x".repeat(100);
             // 1 MB, past any pipe's buffer.
-            let _ = send.send((0..10_000).any(|_| !writer.line(&line)));
+            let _ = send.send((0..10_000).find_map(|_| writer.line(&line).err()));
         });
-        assert_eq!(dropped.recv_timeout(WAIT), Ok(true));
+        assert_eq!(dropped.recv_timeout(WAIT), Ok(Some(Unwritten::Full)));
         // The closer is not held up either.
         assert!(child.stdin_closer().close());
         child.killer().kill();

@@ -97,7 +97,7 @@ mod tests {
 
     fn start(fake: &Fake) -> (Watch, mpsc::Receiver<Event>) {
         let (send, events) = mpsc::channel();
-        let watch = spawn_watch(&fake.cli(), move |event| {
+        let watch = spawn_watch(&fake.cli(), fake.log(), move |event| {
             let _ = send.send(event);
         })
         .unwrap();
@@ -109,7 +109,7 @@ mod tests {
         let send = move |event| {
             let _ = send.send(event);
         };
-        (spawn_watch_within(&fake.cli(), send, first_line, grace).unwrap(), events)
+        (spawn_watch_within(&fake.cli(), fake.log(), send, first_line, grace).unwrap(), events)
     }
 
     fn dial(attached: bool, fw: Option<&str>, hw: Option<&str>) -> Event {
@@ -203,6 +203,26 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn a_watch_that_stops_reading_is_one_line_that_names_nothing() {
+        let fake = Fake::new();
+        // `@hang` never reads stdin: its pipe fills.
+        fake.script("hardware watch --json", &[r#"{"attached":false}"#, "@hang"]);
+        let (watch, events) = start_within(&fake, WAIT, SHORT);
+        assert_eq!(events.recv_timeout(WAIT), Ok(dial(false, None, None)));
+        let value = "com.example.secret".repeat(5);
+        // 1 MB, past any pipe's buffer.
+        for _ in 0..10_000 {
+            watch.front(&format!(r#"{{"front":"{value}"}}"#));
+        }
+        watch.stop();
+        assert_eq!(events.recv_timeout(WAIT), Ok(Event::WatchExit(None)));
+        let lines = fake.log().lines();
+        assert_eq!(lines.iter().filter(|line| *line == "front: watch not reading").count(), 1, "{lines:?}");
+        assert!(!lines.iter().any(|line| line.contains("example")), "{lines:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn a_watch_with_no_first_line_in_time_is_ended() {
         let fake = Fake::new();
         fake.script("hardware watch --json", &["@hang"]);
@@ -251,7 +271,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let missing = home.path().join("harness");
         let cli = HarnessCli::new(find_cli(home.path(), None, Some(&missing)).unwrap(), Arc::new(MemoryLog::default()));
-        let error = spawn_watch(&cli, |_| {}).err().expect("no CLI there");
+        let error = spawn_watch(&cli, Arc::new(MemoryLog::default()), |_| {}).err().expect("no CLI there");
         assert_eq!(error.kind(), io::ErrorKind::NotFound);
     }
 }
