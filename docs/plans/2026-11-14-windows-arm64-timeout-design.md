@@ -47,8 +47,12 @@ In `windows-pty`'s matrix, each entry names its limit (`timeout: 40` for x64, `t
 reads `timeout-minutes: ${{ matrix.timeout }}`, with a comment that gives the measured numbers. No step is skipped,
 moved or changed. The `install` job (30 minutes, measured 3.7) is unchanged.
 
-`cli/src/scripts/windowsWorkflows.spec.ts` checks it: the arm64 entry's limit is 60, the x64 entry's 40, and the job
-takes its limit from the matrix. It fails before the change.
+The jobs keep their names. GitHub names a matrix job by all its values, so the limit would add `, 40` and `, 60` to
+them; the job's `name:` lists the other four values as GitHub does today:
+`windows-pty (${{ matrix.runner }}, ${{ matrix.target }}, ${{ matrix.arch }}, ${{ matrix.artifact }})`.
+
+`cli/src/scripts/windowsWorkflows.spec.ts` checks it: the arm64 entry's limit is 60, the x64 entry's 40, the job
+takes its limit from the matrix, and its name leaves the limit out. It fails before the change.
 
 ## Not in this change
 
@@ -59,5 +63,5 @@ the final report proposes it.
 ## Verification
 
 One run of `windows.yml` on this branch (workflow_dispatch, `--ref fix/windows-arm64-timeout`), asked of the
-orchestrator first: both `windows-pty` jobs finish inside their limits with every step run, and both `install` jobs
-run and pass. Platforms: Windows x64 and Windows arm64 (GitHub runners only; no code runs elsewhere).
+orchestrator first: both `windows-pty` jobs finish inside their limits with every step run, under the names they had,
+and both `install` jobs run and pass. Platforms: Windows x64 and Windows arm64 (GitHub runners only; no code runs elsewhere).

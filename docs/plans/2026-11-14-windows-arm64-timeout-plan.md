@@ -6,9 +6,10 @@
 **Goal:** The arm64 `windows-pty` job has 60 minutes and finishes with every step run (about 43), the x64 job keeps
 40, and the `install` job runs again after both.
 
-**Architecture:** Two lines of data and one expression in `.github/workflows/windows.yml`: each entry of
-`windows-pty`'s matrix names its limit, and the job reads `timeout-minutes: ${{ matrix.timeout }}`. A text check in
-`cli/src/scripts/windowsWorkflows.spec.ts` holds both. No step is skipped, moved or changed.
+**Architecture:** Two lines of data, one expression and a job name in `.github/workflows/windows.yml`: each entry of
+`windows-pty`'s matrix names its limit, the job reads `timeout-minutes: ${{ matrix.timeout }}`, and its `name:` lists
+the other four matrix values, so the jobs keep their names. A text check in
+`cli/src/scripts/windowsWorkflows.spec.ts` holds all three. No step is skipped, moved or changed.
 
 **Tech Stack:** GitHub Actions, TypeScript, Vitest 4.1.10, actionlint 1.7.12. No new dependency.
 
@@ -21,8 +22,10 @@ None.
 
 ## Global Constraints
 
-- The values, verbatim: `timeout: 40` on the x64 entry, `timeout: 60` on the arm64 entry, and
-  `timeout-minutes: ${{ matrix.timeout }}` on the job. Plain integers, not quoted.
+- The values, verbatim: `timeout: 40` on the x64 entry, `timeout: 60` on the arm64 entry,
+  `timeout-minutes: ${{ matrix.timeout }}` on the job, and the job's
+  `name: windows-pty (${{ matrix.runner }}, ${{ matrix.target }}, ${{ matrix.arch }}, ${{ matrix.artifact }})`.
+  Plain integers, not quoted.
 - No step is skipped, moved or changed. The `install` job is untouched: its `timeout-minutes: 30` stays, and its
   matrix gets no `timeout`.
 - Not here: making `cli/src/scripts/installPs1.spec.ts` start Windows PowerShell fewer times, or a job of its own for
@@ -49,9 +52,11 @@ Checked at `39c675b7af`, with the change rehearsed on this Mac and put back.
   limit and not an entry with none: the new test pins those two.
 - **The release uses the same matrix.** `release.yml`'s `pty-build` calls this job with `release: true`, so the arm64
   payload build gets 60 as well. It runs no test and takes minutes; only a hang waits 20 minutes longer.
-- **The job names should gain the limit.** GitHub names a matrix job by its values: today
-  `windows-pty (windows-11-arm, aarch64-pc-windows-msvc, arm64, harness-pty-windows-arm64)`, then with `, 60` at the
-  end (`, 40` on x64). Nothing in the repo reads these names, and the workflow is no required check.
+- **The job names stay.** GitHub names a matrix job by its values: today
+  `windows-pty (windows-11-arm, aarch64-pc-windows-msvc, arm64, harness-pty-windows-arm64)` (run 43565271777, and
+  `pty-build / windows-pty (…)` in a release run, 43397675738). The limit in the matrix would add `, 60` at the end
+  (`, 40` on x64), so the job's `name:` lists the other four values; a name with a matrix expression gets no suffix.
+  Nothing in the repo reads these names, and the workflow is no required check.
 
 ## Review Focus
 
@@ -63,6 +68,8 @@ Checked at `39c675b7af`, with the change rehearsed on this Mac and put back.
   of the line.
 - Half the change: the matrix names its limits and the job still says `40`, or the reverse. Task 1, Step 1: one
   assertion for each half.
+- The job names: the `name:` must list the four values in the matrix's order, as GitHub did. Task 1, Step 1 pins
+  the line; Verification 1 reads the names the run gave.
 - The `install` job's matrix and its 30 minutes. The test reads the `windows-pty` job only; Task 1, Step 6 shows
   the diff ends before the steps; Verification 1 sees both `install` jobs run.
 
@@ -73,7 +80,7 @@ Checked at `39c675b7af`, with the change rehearsed on this Mac and put back.
 **Depends on:** nothing. **Effort:** medium (mechanical: three lines of a workflow and one text check).
 
 **Files:**
-- Modify: `.github/workflows/windows.yml:51-62`
+- Modify: `.github/workflows/windows.yml:46-62`
 - Test: `cli/src/scripts/windowsWorkflows.spec.ts` (one new case, after the case that ends on line 28)
 
 **The test that fails before the change:** `gives each architecture of the Windows PTY job its own time limit`.
@@ -86,20 +93,22 @@ In `cli/src/scripts/windowsWorkflows.spec.ts`, between
 
 ```ts
   // With every step run the arm64 job takes about 43 minutes and the x64 job 16 (2026-11-14). One limit of 40 for both
-  // cancelled arm64 in its last test step, and the install job was skipped (run 43565271777).
+  // cancelled arm64 in its last test step, and the install job was skipped (run 43565271777). The job's name lists the
+  // matrix without the limit, so the jobs keep the names they had.
   it('gives each architecture of the Windows PTY job its own time limit', () => {
     const job = read('windows.yml').match(/\n  windows-pty:\n([\s\S]*?)(?=\n  [\w-]+:\n|$)/)?.[1] ?? ''
     const entries = (job.match(/\n {8}include:\n((?: {10}[^\n]*\n)+)/)?.[1] ?? '').split(/^ {10}- /m).slice(1)
     const limits = entries.map((entry) => [entry.match(/^\s*arch: (\S+)$/m)?.[1], entry.match(/^\s*timeout: (\d+)$/m)?.[1]])
     expect(limits).toStrictEqual([['x64', '40'], ['arm64', '60']])
     expect(job.match(/^ {4}timeout-minutes: (.+)$/m)?.[1]).toBe('${{ matrix.timeout }}')
+    expect(job.match(/^ {4}name: (.+)$/m)?.[1]).toBe('windows-pty (${{ matrix.runner }}, ${{ matrix.target }}, ${{ matrix.arch }}, ${{ matrix.artifact }})')
   })
 ```
 
 - [ ] **Step 2: Run it and see it fail**
 
 Run: `cd cli && npx vitest run src/scripts/windowsWorkflows.spec.ts`
-Expected: `Tests  1 failed | 11 passed (12)`, the failure at `src/scripts/windowsWorkflows.spec.ts:36:20`:
+Expected: `Tests  1 failed | 11 passed (12)`, the failure at `src/scripts/windowsWorkflows.spec.ts:37:20`:
 
 ```
 AssertionError: expected [ [ 'x64', undefined ], …(1) ] to strictly equal [ [ 'x64', '40' ], [ 'arm64', '60' ] ]
@@ -116,10 +125,15 @@ git commit -m "Windows: a spec for the PTY job's time limit per architecture (re
 
 - [ ] **Step 4: Give each matrix entry its limit, and have the job read it**
 
-In `.github/workflows/windows.yml`, the `windows-pty` job, lines 49-62 become (two `timeout:` lines added, one
-comment added, `timeout-minutes: 40` replaced):
+In `.github/workflows/windows.yml`, the `windows-pty` job, lines 46-62 become (the job's `name:` and its comment
+added, two `timeout:` lines added, one comment added, `timeout-minutes: 40` replaced):
 
 ```yaml
+  windows-pty:
+    # The matrix without its limit: the jobs keep the names GitHub gave them before it had one.
+    name: windows-pty (${{ matrix.runner }}, ${{ matrix.target }}, ${{ matrix.arch }}, ${{ matrix.artifact }})
+    strategy:
+      fail-fast: false
       matrix:
         include:
           - runner: windows-latest
@@ -152,9 +166,9 @@ Expected: no output, exit 0. On a machine without `actionlint`, skip it: PR CI's
 - [ ] **Step 6: Check the diff is that and nothing else**
 
 Run: `git diff --stat && git diff -U0 -- .github/workflows/windows.yml`
-Expected: one file; three hunks, all above the job's `steps:`: `+            timeout: 40`, `+            timeout: 60`,
-and `-    timeout-minutes: 40` replaced by the three comment lines and `+    timeout-minutes: ${{ matrix.timeout }}`.
-No line of the `install` job.
+Expected: one file; four hunks, all above the job's `steps:`: the comment and `+    name: windows-pty (…)` under
+`windows-pty:`, `+            timeout: 40`, `+            timeout: 60`, and `-    timeout-minutes: 40` replaced by the
+three comment lines and `+    timeout-minutes: ${{ matrix.timeout }}`. No line of the `install` job.
 
 - [ ] **Step 7: Commit**
 
@@ -200,8 +214,10 @@ only downloads (Node, the published firmware). It needs nobody's own login or ey
      `if:` and expected: the other architecture's OpenCode step, and the last artifact upload (`if: failure()`). On
      x64 the two OpenCode steps are `continue-on-error` and do not gate.
 
-   That is the pass. Report the run's link, the four durations and the two `windows-pty` job names: each should end
-   with its limit (`, 40`, `, 60`); say so if one does not. A job cancelled at its limit, or any other step not
+   That is the pass. Report the run's link, the four durations and the two `windows-pty` job names, which should be
+   the names of run 43565271777, with no `, 40` or `, 60`:
+   `windows-pty (windows-latest, x86_64-pc-windows-msvc, x64, harness-pty-windows-x64)` and
+   `windows-pty (windows-11-arm, aarch64-pc-windows-msvc, arm64, harness-pty-windows-arm64)`; say so if one differs. A job cancelled at its limit, or any other step not
    green, is not a pass, whatever its cause: report the job, the step and the log line with the link, and stop.
 
 **Temporary workflow:** none. The long check has its workflow already, and it starts by hand on any branch.
