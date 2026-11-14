@@ -48,7 +48,7 @@ describe('the production build', () => {
   })
 
   it('finds an import of a test or test-support file in every form', () => {
-    expect(testFileImports(`import { MemoryStamps } from '../superTabs/cache.test-support.js'`)).toEqual(['../superTabs/cache.test-support.js'])
+    expect(testFileImports(`import { fakeStore } from '../lib/store.test-support.js'`)).toEqual(['../lib/store.test-support.js'])
     expect(testFileImports(`const f = await import('./fixtures.test-support')`)).toEqual(['./fixtures.test-support'])
     expect(testFileImports(`export * from './shards.test.js'`)).toEqual(['./shards.test.js'])
     expect(testFileImports(`const x = require('./x.test-support.js')`)).toEqual(['./x.test-support.js'])

@@ -23,17 +23,10 @@ import { metrics, metricsAddress, startMetricsServer } from './lib/metrics.js'
 import { startLastHour } from './lib/lastHour.js'
 import { WORKER_INDEX } from './lib/instance.js'
 import { startTurnCredentialRefresh } from './lib/turnCredentials.js'
-import { closeBus, pub, redisCount, redisSsoProfileStore, redisSwarmStamps } from './lib/bus.js'
+import { closeBus, pub, redisCount, redisSsoProfileStore } from './lib/bus.js'
 import { prisma, prismaSecondary } from './lib/prisma.js'
 import { backendReadinessChecks, createReadiness, drainBeforeClosing, processDrain } from './lib/readiness.js'
-import { configureSwarmStamps, swarmReadCache } from './superTabs/cache.js'
-import { startCacheStats } from './superTabs/cacheStats.js'
-import { startDeliveryCalls } from './lib/deliveryCalls.js'
 import { startMemoryStats } from './lib/memoryStats.js'
-import { readDelta } from './superTabs/cachedReads.js'
-import { watchGroupIndexes } from './superTabs/parts/indexed.js'
-import { startMessageReadStats } from './superTabs/messageReadStats.js'
-import { startMessageReachStats } from './superTabs/messageReachStats.js'
 import { useSharedSsoProfileStore } from './lib/ssoAuth.js'
 import { useSharedRateCounter } from './lib/rateLimit.js'
 import { createRouteRateLimit } from './middlewares/routeRateLimit.js'
@@ -43,13 +36,11 @@ import { registerReplyJsonTiming, startCpuStats } from './lib/cpuStats.js'
 import { startRelayUsageFlush } from './lib/productUsage.js'
 import { registerWorkContext, startQueryStats } from './lib/queryStats.js'
 import { startEngineCpu } from './lib/engineCpu.js'
-import { startRetryStats } from './superTabs/retryStats.js'
 import { startRelayStats } from './lib/relayStats.js'
 import { startPodRoutes } from './lib/hub.js'
 import { registerRouteLatency, startRouteLatency } from './lib/routeLatency.js'
 import { drainAllSockets, openSocketCount, RELEASE_UPGRADE_SLOT, type SlotSocket } from './lib/wsServer.js'
 import { endpointOf, refusedUpgrade, startWsCounterLog, watchUpgrade } from './lib/wsAttribution.js'
-import { startMachineReportLog } from './superTabs/machineReports.js'
 
 // Node ≥ 15 turns an unhandled rejection into a process exit. On a cluster worker that holds thousands of
 // sockets, one DB/Redis hiccup inside a fire-and-forget promise would then drop every one of them and
@@ -167,20 +158,10 @@ async function start(): Promise<void> {
   // Always on, every minute: `last hour`, the sums of the last 60 minutes the production scan reads from a log tail
   // (lib/lastHour.ts, task #2957).
   const stopLastHour = startLastHour(metrics.hour)
-  // Every minute, how often Swarm transactions ran again and commands loaded twice (superTabs/retryStats.ts, DB 2.1).
-  const stopRetryStats = startRetryStats()
-  // Every minute: re-claims, refused receipt reads and holds, what the daemons' delivery loop costs (spec 2026-11-02 poll cost).
-  const stopDeliveryCalls = startDeliveryCalls()
-  // Every minute: how the Swarm read cache served reads (hit, patched, loaded in full and why) and what its checks found.
-  const stopCacheStats = startCacheStats()
-  // Every minute: the process's memory and what the read cache holds of it (lib/memoryStats.ts; the HPA scales on memory).
-  const stopMemoryStats = startMemoryStats({ cache: () => swarmReadCache()?.size ?? null })
+  // Every minute: the process's memory (lib/memoryStats.ts; the HPA scales on memory).
+  const stopMemoryStats = startMemoryStats()
   // The same hook feeds the Prometheus histogram and the last hour (lib/metrics.ts); WS upgrades never reach Fastify.
   const stopRouteLatency = startRouteLatency(registerRouteLatency(app, { observe: metrics.request }))
-  // Every minute: who reads messages how, with the rows each page decoded and showed (superTabs/messageReadStats.ts).
-  const stopMessageReadStats = startMessageReadStats()
-  // Every minute: how long messages took to reach their readers, p50/p95 per reader kind (superTabs/messageReachStats.ts).
-  const stopMessageReachStats = startMessageReachStats()
   // Every minute: how each frame an adapter sends for one viewer reached it, and how many processes each publish woke.
   const stopRelayStats = startRelayStats()
   // Frames for one viewer go to the process holding it (lib/terminalRoute.ts), unless TERMINAL_POD_ROUTES=off.
@@ -204,13 +185,6 @@ async function start(): Promise<void> {
   useSharedRateCounter(redisWindowCounter(pub))
   // Each pod's socket counts once a minute: open, connects by client, short-lived, refused (WebSocket roadmap Phase 0).
   startWsCounterLog()
-  // Each pod's machine reports a minute, stored without a Swarm load (fast) or in full (DB roadmap 2.5).
-  const stopMachineReportLog = startMachineReportLog()
-  configureSwarmStamps(redisSwarmStamps(), { reads: env.SWARM_READ_CACHE === 'on', maxBytes: env.SWARM_CACHE_MB * 2 ** 20,
-    ...(env.SWARM_CACHE_DELTA === 'on' ? { delta: readDelta(prisma) } : {}),
-    verifyRate: env.SWARM_CACHE_VERIFY_RATE })
-  // Hot Swarm reads name their indexes once the database is seen to have them (superTabs/parts/indexed.ts).
-  watchGroupIndexes(prisma)
 
   // SSO access-token gate for the control API (data-plane auth happens before Fastify), inside the per-route limit
   // (Stability 3.2): a request counts for the person it signed in as, and a token already refused this window is
@@ -272,15 +246,9 @@ async function start(): Promise<void> {
       stopQueryStats()
       stopEngineCpu()
       stopLastHour()
-      stopRetryStats()
-      stopDeliveryCalls()
-      stopCacheStats()
       stopMemoryStats()
       cpuStats.stop()
       stopRouteLatency()
-      stopMachineReportLog()
-      stopMessageReadStats()
-      stopMessageReachStats()
       stopRelayStats()
       stopPodRoutes()
       // The database stays connected through the drain, for the requests still being served (lib/prisma.ts).

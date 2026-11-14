@@ -62,10 +62,10 @@ it('logs a slow query with its filter keys and no values', async () => {
   await db.user.create({ data: someone })
   stats = createQueryStats({ pod: 'test', slowMs: 150, log: (_m, c) => infos.push(c), warn: (_m, c) => warns.push(c) })
   // Server-side JavaScript that sleeps makes the query itself slow: the hook times the database, not a fake clock.
-  await runWork('web-ws swarm_changes', async () => await db.user.findRaw({ filter: { email: someone.email, $where: 'sleep(200) || true' } }))
+  await runWork('web-ws desk_changed', async () => await db.user.findRaw({ filter: { email: someone.email, $where: 'sleep(200) || true' } }))
   await db.user.findMany({ where: { email: someone.email } })
   expect(warns).toHaveLength(1)
-  expect(warns[0]).toMatchObject({ op: 'User.findRaw', shape: '{"$where":"?","email":"?"}', route: 'web-ws swarm_changes', docs: 1, error: false })
+  expect(warns[0]).toMatchObject({ op: 'User.findRaw', shape: '{"$where":"?","email":"?"}', route: 'web-ws desk_changed', docs: 1, error: false })
   expect(warns[0]!.ms as number).toBeGreaterThanOrEqual(150)
   expect(JSON.stringify(warns)).not.toContain(someone.email)
   expect(JSON.stringify(warns)).not.toContain('sleep')
@@ -84,9 +84,9 @@ it('counts a failed query as an error and still throws it to the caller', async 
 it('records raw commands by their collection and command', async () => {
   const someone = person()
   await db.user.create({ data: someone })
-  await runWork('job sweepSwarms', async () => await db.$runCommandRaw({ find: 'users', filter: { email: someone.email } }))
+  await runWork('job rollupPeople', async () => await db.$runCommandRaw({ find: 'users', filter: { email: someone.email } }))
   const row = flushed().find(r => r.op === 'users.$runCommandRaw find')!
-  expect(row).toMatchObject({ shape: '{"email":"?"}', route: 'job sweepSwarms', n: 1, docs: 1 })
+  expect(row).toMatchObject({ shape: '{"email":"?"}', route: 'job rollupPeople', n: 1, docs: 1 })
 })
 
 it('times queries and records nothing when no stats are running', async () => {
@@ -122,8 +122,8 @@ it('logs every interval once started, flushes the last window on stop, and recor
   const hooked = withQueryStats(base)
   const lines: Record<string, unknown>[] = []
   const stop = startQueryStats({ reportMs: 50, log: (_m, c) => lines.push(c), warn: () => {} })
-  await runWork('job sweepSwarms', async () => await hooked.user.count())
-  while (!lines.some(l => (l.top as Row[]).some(r => r.op === 'User.count' && r.route === 'job sweepSwarms'))) await new Promise(resolve => setTimeout(resolve, 10))
+  await runWork('job rollupPeople', async () => await hooked.user.count())
+  while (!lines.some(l => (l.top as Row[]).some(r => r.op === 'User.count' && r.route === 'job rollupPeople'))) await new Promise(resolve => setTimeout(resolve, 10))
   await hooked.user.count({ where: { role: 'admin' } })
   stop()
   const last = lines.at(-1)!.top as Row[]

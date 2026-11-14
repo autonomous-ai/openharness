@@ -9,8 +9,8 @@ describe('the empty id list check', () => {
   it('flags a list in a variable that is never tested first', () => {
     expect(lint(`async function f(tx, ids: string[]) { return tx.machine.findMany({ where: { machineId: { in: ids } } }) }`)).toEqual(['ids'])
     expect(lint(`async function f(tx, rows) { return tx.user.findMany({ where: { id: { in: rows.map(r => r.id) } } }) }`)).toEqual(['rows.map(r => r.id)'])
-    expect(lint(`async function f(db, ids) { return db.superTab.findMany({ where: { id: { in: ids } } }) }`)).toEqual(['ids'])
-    expect(lint(`async function f(db, ids) { return db.superTab.aggregateRaw({ pipeline: [{ $match: { _id: { $in: ids } } }] }) }`)).toEqual(['ids'])
+    expect(lint(`async function f(db, ids) { return db.productUsageReceipt.findMany({ where: { id: { in: ids } } }) }`)).toEqual(['ids'])
+    expect(lint(`async function f(db, ids) { return db.user.aggregateRaw({ pipeline: [{ $match: { _id: { $in: ids } } }] }) }`)).toEqual(['ids'])
   })
 
   it('accepts a list tested earlier in the function, or around the call', () => {
@@ -42,7 +42,7 @@ describe('the empty id list check', () => {
     expect(lint(`async function f(tx, ids) { const base = { id: { in: ids } }; return tx.machine.findMany({ where: { ...base, ok: true } }) }`)).toEqual(['ids'])
     expect(lint(`async function f(tx, ids) { if (!ids.length) return []; const where = { id: { in: ids } }; return tx.user.findMany({ where }) }`)).toEqual([])
     // A filter for another model, or one never passed to a read of these three, is not this check's business.
-    expect(lint(`async function f(tx, ids) { const where = { id: { in: ids } }; return tx.swarmMachine.findMany({ where }) }`)).toEqual([])
+    expect(lint(`async function f(tx, ids) { const where = { id: { in: ids } }; return tx.harnessShare.findMany({ where }) }`)).toEqual([])
   })
 
   it('counts only a test that tells empty from not empty', () => {
@@ -99,7 +99,7 @@ describe('the empty id list check', () => {
     expect(lint(`async function f(tx, ids, on) { const part = on ? { id: { in: ids } } : {}; return tx.user.findMany({ where: { ...part, ok: true } }) }`)).toEqual(['ids'])
     expect(lint(`async function f(tx, ids, on) { const where = on ? { id: { in: ids } } : { ok: true }; return tx.user.findMany({ where }) }`)).toEqual(['ids'])
     // Another model is not this check's business.
-    expect(lint(`async function f(tx, where) { return tx.swarmMachine.findMany({ where }) }`)).toEqual([])
+    expect(lint(`async function f(tx, where) { return tx.harnessShare.findMany({ where }) }`)).toEqual([])
   })
 
   it('follows a filter named inside a conditional, in either branch, wherever the conditional stands', () => {
@@ -142,10 +142,10 @@ describe('the empty id list check', () => {
   it('accepts a literal list, a constant and other models', () => {
     expect(lint(`async function f(tx) { return tx.machine.findMany({ where: { authMode: { in: BILLED_MODES } } }) }`)).toEqual([])
     expect(lint(`async function f(tx) { return tx.machine.findMany({ where: { sessionKind: { in: ['team', 'person'] } } }) }`)).toEqual([])
-    expect(lint(`async function f(tx, ids) { return tx.swarmMachine.findMany({ where: { tabId: { in: ids } } }) }`)).toEqual([])
+    expect(lint(`async function f(tx, ids) { return tx.harnessShare.findMany({ where: { tabId: { in: ids } } }) }`)).toEqual([])
   })
 
-  it('finds none in the backend: no read of machines, users or SuperTab can send an empty list', () => {
+  it('finds none in the backend: no read of machines, users or receipts can send an empty list', () => {
     const root = join(process.cwd(), 'src')
     const files = (dir: string): string[] => readdirSync(dir).flatMap(name => {
       const path = join(dir, name)
