@@ -8,6 +8,7 @@ use objc2_app_kit::{
 };
 use objc2_foundation::{NSNotification, NSString};
 use std::ptr::NonNull;
+use std::sync::Arc;
 
 /// `NSWorkspace`'s front app now, then each app its notification centre says was activated.
 pub struct MacFront;
@@ -15,14 +16,15 @@ pub struct MacFront;
 impl FrontSource for MacFront {
     fn start(&self, changed: Box<dyn Fn(String) + Send + Sync>) {
         let workspace = NSWorkspace::sharedWorkspace();
-        changed(app_value(workspace.frontmostApplication().as_deref()));
+        let changed: Arc<dyn Fn(String) + Send + Sync> = Arc::from(changed);
+        let told = changed.clone();
         let block = RcBlock::new(move |notification: NonNull<NSNotification>| {
             // SAFETY: the centre passes a notification that lives for the call.
             let info = unsafe { notification.as_ref() }.userInfo();
             // SAFETY: an AppKit constant, set before any code runs.
             let key = unsafe { NSWorkspaceApplicationKey };
             let app = info.and_then(|info| info.objectForKey(key)).and_then(|app| app.downcast().ok());
-            changed(app_value(app.as_deref()));
+            told(app_value(app.as_deref()));
         });
         // SAFETY: no object filter, and with no queue the block runs on the thread that posts (AppKit's main thread);
         // `changed` is Send + Sync. The centre holds the observer for the app's life, so the token is dropped.
@@ -34,6 +36,8 @@ impl FrontSource for MacFront {
                 &block,
             );
         }
+        // Read after the observer is registered, so a change between the two is not missed; FrontFeed drops a repeat.
+        changed(app_value(workspace.frontmostApplication().as_deref()));
     }
 }
 
