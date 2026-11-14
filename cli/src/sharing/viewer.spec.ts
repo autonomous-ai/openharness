@@ -1,6 +1,6 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 const m = vi.hoisted(() => ({ spawn: vi.fn(), exists: vi.fn(), directory: vi.fn(), rm: vi.fn(), sockets: [] as any[], reply: vi.fn(), noLoad: false }))
-vi.mock('node:child_process', () => ({ spawn: m.spawn }))
+vi.mock('../lib/tied.js', () => ({ spawnTied: m.spawn }))
 vi.mock('node:fs', async actual => ({ ...await actual<typeof import('node:fs')>(), existsSync: m.exists }))
 vi.mock('node:fs/promises', () => ({ mkdtemp: m.directory, rm: m.rm }))
 vi.mock('ws', async () => {
