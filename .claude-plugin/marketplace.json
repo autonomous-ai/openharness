@@ -12,6 +12,13 @@
       "description": "Start, wait for, read and close other coding agents through Harness: the harness skill and Harness's MCP server.",
       "category": "development",
       "tags": ["agents", "parallel", "codex", "claude-code", "orchestration"]
+    },
+    {
+      "name": "harness-device",
+      "source": "./plugins/harness-device",
+      "description": "Allow or deny Claude Code's permission prompts from the Harness round dial.",
+      "category": "development",
+      "tags": ["harness", "dial", "permissions", "claude-code"]
     }
   ]
 }
