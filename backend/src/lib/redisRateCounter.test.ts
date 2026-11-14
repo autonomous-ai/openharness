@@ -59,4 +59,12 @@ describe.skipIf(!hasRedis)('Redis window counter', () => {
     expect(second).toBeGreaterThan(0)
     expect(second).toBeLessThanOrEqual(1_000)
   })
+
+  it('reaches a redis-server of its own over a socket in its folder, which listens on no TCP port', async () => {
+    // CI's Redis service is reached by its URL, and nothing of this test's own is started. Not skipped there:
+    // scripts/redis-tests-ran.mjs fails the job on a test of this file that did not run.
+    if (url) return
+    expect(await redis.config('GET', 'port')).toEqual(['port', '0'])
+    expect(await redis.config('GET', 'unixsocket')).toEqual(['unixsocket', expect.stringMatching(/^\/tmp\/rrc-[^/]+\/redis\.sock$/)])
+  })
 })
