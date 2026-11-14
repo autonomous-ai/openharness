@@ -156,6 +156,9 @@ Every change of `shown` writes the log line `app filter: switched` and counts on
 - With one app, the picker opens with one page.
 - An `apps` push while the picker is open moves the carousel by id, never by index. A page whose app went away closes
   up, and the person stays on the same app if it is still there.
+- The face's hint says what a hold does (the PM, 2026-11-15): "Hold for apps" in the machine view when a hold opens
+  `APPS`, "Hold for tabs" with a window. A dial that received no `apps` (an older daemon) keeps "Hold for tabs". The
+  hint keeps today's weight in the random pick (`focus.c`).
 
 ### The app's name on the face
 
