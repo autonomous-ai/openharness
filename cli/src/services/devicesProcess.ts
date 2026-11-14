@@ -103,6 +103,8 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
     viewing = asking
     return asking
   }
+  /** What the devices end for a core that goes (services/devices.ts `onCoreGone`). */
+  let coreGone: (() => void) | undefined
   const ask = async (query: string, payload: Record<string, unknown> = {}): Promise<Record<string, unknown>> => {
     if (!core) throw new Error('the devices are not connected to the core')
     return core.query(query, payload)
@@ -211,6 +213,7 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
     cableDisabled: env.CABLE_DISABLE,
     faults: faultsOf(processEnv.HARNESSD_TEST_FAULTS),
     refresh,
+    onCoreGone: (run) => { coreGone = run },
   }
   const requests = (options.start ?? startDevices)(api, ports, deps)
   const port = ports.devices as DevicesPort
@@ -235,6 +238,8 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
     scroll: ({ phase, dy, velocity }) => { if (phase === 'down' || phase === 'move' || phase === 'up') port.scroll(phase, number(dy), number(velocity)) },
     engines: ({ engines }) => port.engines(strings(engines)),
     commanders: ({ connected }) => port.commanders(connected === true),
+    // The mod's poll whose client went before its answer (core/deviceHookCalls.ts): it ends.
+    'inbox.gone': ({ pollId }) => port.inboxGone(text(pollId)),
     // Everything at once, as the core keeps it: this process (re)connected, and starts where the windows are.
     // What a window has not said is not said to the dial: a fresh process holds nothing yet, and a dial still
     // attached through a core's restart keeps its tab until the windows, reconnecting, say theirs again.
@@ -261,6 +266,9 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
       const step = await port.stepFocus(direction === 'previous' ? 'previous' : 'next', typeof currentAgentId === 'string' ? currentAgentId : undefined)
       return step === 'no_agents' ? { step } : { ...step }
     },
+    // The mod's poll, checked and bounded by the core (core/deviceHookCalls.ts), and held here until a transcript takes it
+    // or the hold runs out.
+    inboxPoll: async ({ pollId, sessionId }) => ({ ...await port.inboxPoll({ pollId: text(pollId), sessionId: text(sessionId) }) }),
   }
 
   const service = (options.run ?? runServiceProcess)({
@@ -278,7 +286,10 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
       if (dialWatching) tell('dialWatching', { watching: true })
       void refresh()
     },
-    onDisconnected: () => { core = null },
+    onDisconnected: () => {
+      core = null
+      coreGone?.()
+    },
   })
   return {
     stop: async () => {

@@ -16,17 +16,21 @@
  * The Wi-Fi device is a service of its own beside these (services/wifi.ts), in the same process, on a link
  * of its own: it rides the gateway's sessions, and borrows the dial's walk and stroke through the core.
  */
+import { randomUUID } from 'node:crypto'
 import { existsSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { env } from '../config/env.js'
-import { DEVICES_REQUESTS, type CoreApi, type CorePorts, type DevicesPort, type RouteAnswer, type SendResult, type ServiceRequests, type WindowFocus } from '../core/api.js'
+import { DEVICES_FALLBACKS, DEVICES_REQUESTS, type CoreApi, type CorePorts, type DeviceHookPort, type DevicesPort, type RouteAnswer, type SendResult, type ServiceRequests, type WindowFocus } from '../core/api.js'
 import { CableFleet, testDialDiscovery, type CableFleetOptions } from '../cable/cableFleet.js'
 import { isLocalOnly } from '../lib/cardUpdate.js'
 import { TurnStats, type TurnStatsFields } from '../cable/turnStats.js'
 import { cableEventFor, cableStepFor, cableQuestionCloseFor, cableQuestionFor, DaemonCableHost } from '../cable/cableHost.js'
-import { CableSession } from '../cable/cableSession.js'
+import { CableSession, SHOWN_ONLY_PREFIX } from '../cable/cableSession.js'
+import { Inbox } from '../cable/hosts/inbox.js'
 import { LAST_ANSWER_DEADLINE_MS, LAST_ANSWER_MAX_BYTES, readLastAnswer } from '../cable/hosts/lastAnswer.js'
-import { hostDisplayName, observedAgentId, ObservedSource } from '../cable/hosts/observed.js'
+import { askedLine, hostDisplayName, observedAgentId, ObservedSource, type ObservedActions } from '../cable/hosts/observed.js'
+import { createOpenActions } from '../cable/hosts/open.js'
+import { createOrcaActions, orcaDeps, type OrcaDeps } from '../cable/hosts/orca.js'
 import { HostRegistry } from '../cable/hosts/registry.js'
 import type { HostAgent, HostAgentState } from '../cable/hosts/types.js'
 import { PetStore } from '../cable/pets/store.js'
@@ -73,12 +77,17 @@ export interface DevicesDeps {
   /** Read this computer's agents again before a list is built from them: in their own process the devices
    *  keep a copy, asked of the core as the dial's tick or ⌘K needs it (services/devicesProcess.ts). */
   refresh?: () => Promise<void>
+  /** Called with a function this part runs whenever its link to the core drops: the calls that core held have failed. */
+  onCoreGone?: (run: () => void) => void
   /** An agent's conversation token totals, read fresh (not the 15 s cache); null when unknown or remote.
    *  Defaults to the core's `usageFresh`. */
   readUsage?: (agentId: string) => Promise<{ input?: number; cached?: number; output?: number } | null>
   /** For this service's tests: the dial's session, and how dials are found and opened. */
   Session?: ConstructorParameters<typeof CableFleet>[0]
   cable?: Partial<CableFleetOptions>
+  /** For this service's tests: how `orca`, and the commands a tap runs to open an app (cable/hosts/open.ts), are found and
+   *  run. */
+  orca?: OrcaDeps
 }
 
 /** ⌘K's answer while the fleet is not running: it never started, so there is no list to weigh. */
@@ -100,8 +109,9 @@ const REMIND_MS = 20_000
  *  as a timer can fire a little before the wall clock says it is due. */
 const ENDED_MS = 10_500
 
-/** This computer's agents outside a pane, read with ⌘P's readers (services/externalSessions.ts). */
-function observedSource(dataDir: string, log: (line: string) => void): ObservedSource {
+/** This computer's agents outside a pane, read with ⌘P's readers (services/externalSessions.ts), and how the dial's voice
+ *  and tap reach them. */
+function observedSource(dataDir: string, log: (line: string) => void, actions: ObservedActions): ObservedSource {
   const providers = externalProviders()
   return new ObservedSource({
     now: Date.now,
@@ -117,6 +127,7 @@ function observedSource(dataDir: string, log: (line: string) => void): ObservedS
     }),
     fileStamp,
     log,
+    actions,
   })
 }
 
@@ -199,12 +210,39 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // Claude Code in Orca, Codex in Ghostty: their hooks reach here through the core, which keeps nothing of them, and their
   // open sessions are read here. Nothing of them leaves this computer: the core, a window and the gateway hear none of it
   // (docs/specs/2026-11-13-device-without-the-app.md). `HARNESS_DEVICE_OBSERVED=off` is the kill switch.
-  const observed = env.HARNESS_DEVICE_OBSERVED ? observedSource(core.dataDir, log) : null
+  //
+  // The dial's voice reaches them through their mod's long poll (Claude Code's), idle or working, or typed into their Orca
+  // terminal when idle, and a tap brings its app forward, on its own pane where the app has a way in that asks for no new permission
+  // (docs/specs/2026-11-13-device-claude-orca.md).
+  /** A timer of one part, its run guarded as a notice into that part is, and never what keeps the process up. */
+  const timerIn = (name: string) => (ms: number, run: () => void): (() => void) => {
+    const timer = setTimeout(() => part.call(name, run), ms)
+    timer.unref()
+    return () => clearTimeout(timer)
+  }
+  const inbox = new Inbox({ now: monotonic, after: timerIn('inbox') })
+  const apps = deps.orca ?? orcaDeps()
+  const orca = createOrcaActions(apps)
+  const opener = createOpenActions({ ...apps, orcaSwitch: orca.switchTo, log })
+  const observed = env.HARNESS_DEVICE_OBSERVED ? observedSource(core.dataDir, log, {
+    modReady: (sessionId) => inbox.ready(sessionId),
+    toMod: (sessionId, text) => inbox.deliver(sessionId, text),
+    orcaSend: orca.send,
+    canOpen: opener.can,
+    open: opener.open,
+    // The route or the refusal only: never the words, the session or the terminal.
+    count: (what) => log(`[device] voice · ${what}`),
+  }) : null
   /** One of them, by the id the dial holds: what the dial asks of it is answered here, never by a door of the core. */
   const outside = (agentId: string): HostAgent | undefined => observed?.list().find((agent) => agent.id === agentId)
-  /** Its line while it waits on the person, where a harness agent shows its terminal's footer. */
-  const waiting = (agent: HostAgent): string | null =>
-    agent.state === 'needs-you' ? `Waiting for you · ${hostDisplayName(agent.host)}` : null
+  /** Its line while it waits on the person, where a harness agent shows its terminal's footer: what its permission prompt
+   *  asks once its hook said, and the app it is answered in. The dial never answers it. */
+  const waiting = (agent: HostAgent): string | null => {
+    if (agent.state !== 'needs-you') return null
+    const host = hostDisplayName(agent.host)
+    const asks = observed?.waitingOn(agent.id)
+    return asks ? askedLine(asks, host) : `Waiting for you · ${host}`
+  }
 
   const cableHost = new DaemonCableHost({
     // The cloud harnesses too, where the core offers them: tiles on the desk the dial walks like any other.
@@ -463,7 +501,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
 
   // An agent outside a pane reaches the dial through the same calls, as its state changes. What the dial was told of each
   // is kept, so that a change is told once.
-  const told = new Map<string, { state: HostAgentState; answer?: string }>()
+  const told = new Map<string, { state: HostAgentState; line: string | null; answer?: string }>()
   const busy = (agent: HostAgent): boolean => agent.state === 'working' || agent.state === 'needs-you'
   /** Its turn, with the waiting line: the session's activity read right after it (`activityText` above) repeats the line. */
   const started = (agent: HostAgent): DialEvent => ({ kind: 'processing', agentId: agent.id, text: waiting(agent) ?? '', recap: '', subagent: false })
@@ -471,14 +509,44 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    *  nothing of them. What they do is still noted, so that only a later change is told once the window closes. */
   let windowOpen = false
   const tell = (event: DialEvent): void => { if (!windowOpen) toDial(event) }
+  /**
+   * The prompt an agent waits on, once its hook said what it asks, is also a question for the dial, which the dial only
+   * shows (cableSession.ts SHOWN_ONLY_PREFIX): the round dial draws a line on its working face, a question on its asking
+   * one. One option, as a question needs one, and none to speak. By agent, so that each is closed by its own id.
+   */
+  const shown = new Map<string, { id: string; line: string; questions: unknown }>()
+  const ask = (agentId: string, question: { id: string; line: string; questions: unknown }): void => {
+    shown.set(agentId, question)
+    inOrder(agentId, () => { void cable.question(agentId, question.id, question.questions) })
+  }
+  /** Asks what waits and closes what no longer does (or what a window covers): before a line, which it takes the place of. */
+  const showWaits = (): void => {
+    const want = new Map<string, HostAgent>()
+    if (!windowOpen) for (const agent of observed?.list() ?? []) if (observed?.waitingOn(agent.id) !== undefined) want.set(agent.id, agent)
+    for (const [agentId, question] of shown) {
+      const agent = want.get(agentId)
+      if (agent && waiting(agent) === question.line) continue
+      shown.delete(agentId)
+      inOrder(agentId, () => { void cable.questionClose(agentId, question.id) })
+    }
+    for (const [agentId, agent] of want) {
+      const line = waiting(agent)
+      if (shown.has(agentId) || !line) continue
+      ask(agentId, { id: `${SHOWN_ONLY_PREFIX}${randomUUID()}`, line,
+        questions: [{ key: 'prompt', q: line, options: [`In ${hostDisplayName(agent.host)}`] }] })
+    }
+  }
   observed?.onChange(() => part.call('dial', () => {
+    showWaits()
     const agents = observed.list()
     const ids = new Set(agents.map((agent) => agent.id))
     for (const id of told.keys()) if (!ids.has(id)) told.delete(id)
     for (const agent of agents) {
       const was = told.get(agent.id)
       const card = { agentId: agent.id, text: '', recap: '', subagent: false }
-      if (was?.state === agent.state) {
+      // A wait whose line changed is told again.
+      const line = waiting(agent)
+      if (was?.state === agent.state && was.line === line) {
         // The answer is read after the turn ends (observed.ts), so its summary follows the done. One still the last
         // turn's (this turn's was not found) is not said again.
         if (agent.state === 'done' && agent.lastAnswer && agent.lastAnswer !== was.answer) {
@@ -487,7 +555,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
         }
         continue
       }
-      told.set(agent.id, { state: agent.state, answer: agent.lastAnswer })
+      told.set(agent.id, { state: agent.state, line, answer: agent.lastAnswer })
       if (busy(agent)) tell(started(agent))
       else if (agent.state === 'done') tell({ ...card, kind: 'done' })
       else if (agent.state === 'error') tell({ ...card, kind: 'error' })
@@ -526,6 +594,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     if (!on || !observed) return
     // Agents already running when the dial came are listed now, idle until their next hook event.
     part.call('observed', () => observed.scanOpen())
+    // Its questions were in its RAM: the ones still waiting are asked again, under their ids.
+    part.call('dial', () => { for (const [agentId, question] of shown) ask(agentId, question) })
     part.call('dial', remind)
     attached = [
       every(OPEN_SCAN_MS, () => observed.scanOpen()),
@@ -533,6 +603,21 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       every(REMIND_MS, remind),
     ]
   }
+
+  // ── the mod's polls ────────────────────────────────────────────────────────────────────────────────
+  //
+  // Guarded as the fleet is: a part that throws, or did not start, answers as with no dial, so the mod waits a minute. One
+  // switched off ends what it holds: the `gone` that would have ended a poll is swallowed from then on.
+  const { inboxPoll, inboxGone } = DEVICES_FALLBACKS
+  const inboxCalls = part.start('inbox', (): Pick<DeviceHookPort, 'inboxPoll' | 'inboxGone'> & { stop(): void } => ({
+    inboxPoll: ({ pollId, sessionId }) => inbox.poll(pollId, sessionId),
+    inboxGone: (pollId) => inbox.gone(pollId),
+    stop: () => inbox.closeAll(),
+  }), { inboxPoll, inboxGone, stop: undefined })
+  /** Every poll held for the core's calls: that core went, or the devices stop. */
+  const endHookCalls = (): void => { part.call('inbox', () => inbox.closeAll()) }
+  // The core's calls failed to none when its link dropped: a transcript for a poll nobody holds would wait for nothing.
+  deps.onCoreGone?.(endHookCalls)
 
   if (deps.cableDisabled) log('[cable] disabled (CABLE_DISABLE=true) — the serial port is left alone')
   else cable.start()
@@ -612,6 +697,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       cableHost.setSwarms(swarms)
       void cable.syncSwarms()
       void cable.syncAgents()
+      // An open window closes the questions of the agents outside it, as it covers their lines; closed, they are asked again.
+      showWaits()
       if (closed) part.call('dial', remind)
     }),
     // Held rather than acted on: the dial is handed it when it attaches, the one moment its drawer is known
@@ -657,11 +744,15 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // The voice router warms a worker on an engine the machine runs, while a device is watching.
     engines: (engines) => setVoiceRouterSessions(engines.map((engine) => ({ engine }))),
     commanders: (connected) => setVoiceRouterDeviceConnected(connected),
+    // The mod's poll, as the core checked and bounded it (core/deviceHookCalls.ts).
+    inboxPoll: async (poll) => (inboxCalls ? inboxCalls.inboxPoll(poll) : { off: true }),
+    inboxGone: (pollId) => inboxCalls?.inboxGone(pollId),
     // The serial ports first: a port left held makes esptool fail in a way that reads like dead hardware.
     stop: async () => {
       for (const agentId of [...replies.keys()]) endReplies(agentId, false)   // no timer may fire into a stopped cable
       for (const timer of timers) clearInterval(timer)
       for (const timer of endings.values()) clearTimeout(timer)
+      endHookCalls()
       dialAttached(false)
       await cable.stop()
       fleet?.stop()

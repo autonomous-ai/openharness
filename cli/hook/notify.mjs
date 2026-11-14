@@ -487,10 +487,13 @@ function postObserved(port, body) {
 /**
  * Which app a session outside a pane runs in, from the environment the engine gave this hook: these names exactly,
  * never by prefix. Orca also sets ORCA_PAIRING_CODE and ORCA_AGENT_SESSION_SPAWN_TOKEN there (read on an Orca 1.4.256
- * session, 2026-11-13), and they must never leave this process.
+ * session, 2026-11-13), and they must never leave this process. CLAUDE_CODE_HOST_SESSION_ID is the Claude app's own id
+ * for the session it runs (`local_<random uuid>`): a tap on the dial opens the app on that session. It is an id, not a
+ * credential (read in the app, 2026-11-14: it names the session in the app's list and its telemetry; the app's tokens
+ * are other variables).
  */
 const HOST_HINTS = ['TERM_PROGRAM', '__CFBundleIdentifier', 'HERDR_PANE_ID', 'REX_BLOCK', 'ZELLIJ', 'KITTY_WINDOW_ID',
-  'WEZTERM_PANE', 'ORCA_AGENT_SESSION_ID']
+  'WEZTERM_PANE', 'ORCA_AGENT_SESSION_ID', 'ORCA_TERMINAL_HANDLE', 'CLAUDE_CODE_HOST_SESSION_ID']
 
 /** A character the core refuses in a path or hint (core/observedHook.ts): one there is forged. */
 const CONTROL = /[\u0000-\u001f\u007f]/
@@ -498,8 +501,8 @@ const CONTROL = /[\u0000-\u001f\u007f]/
 function hostHints() {
   const hints = {}
   for (const name of HOST_HINTS) {
-    // The core refuses a whole event with more than 8 hints (as many as this list), one over 64 characters or one
-    // with a control character (core/observedHook.ts): that hint is left out instead.
+    // The core refuses a whole event with more hints than this list holds, one over 64 characters or one with a
+    // control character (core/observedHook.ts): that hint is left out instead.
     const value = process.env[name]?.slice(0, 64)
     if (value && !CONTROL.test(value)) hints[name] = value
   }

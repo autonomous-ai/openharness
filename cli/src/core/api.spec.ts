@@ -429,6 +429,14 @@ describe('the core API services stand on', () => {
     expect(FAIL).toBeTypeOf('symbol')
   })
 
+  it('answers the mod\'s poll, when the devices fail, as with no dial, and holds no approval call', () => {
+    // Off is no device, which the mod asks again a minute later, never an empty hold it would follow at once.
+    expect(readFallback(DEVICES_FALLBACKS.inboxPoll)).toEqual({ deferred: true, value: { off: true } })
+    expect(DEVICES_FALLBACKS.inboxGone).toBeUndefined()
+    // The dial only shows a waiting prompt: the devices are asked no approval.
+    expect(Object.keys(DEVICES_FALLBACKS).filter((member) => /approval/i.test(member))).toEqual([])
+  })
+
   it('answers, when the Wi-Fi device\'s service is off, nothing to its devices and "not running" to a receipt', () => {
     expect(readFallback(WIFI_FALLBACKS.receipt)).toEqual({ deferred: true, value: { unavailable: true } })
     for (const member of ['request', 'resume', 'appFocus', 'stop'] as const) {

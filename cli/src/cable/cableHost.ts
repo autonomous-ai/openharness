@@ -28,7 +28,7 @@ import type { FleetRouting } from '../services/fleet.js'
 import { ServiceUnavailableError } from '../core/serviceHost.js'
 
 import { PLAYER_STATES, type PlayerSession } from './playerLibrary.js'
-import type { ActivitySnapshot, AppSwarms, CableAgent, CableHost, CableMachine, CableMachineSource, CableSwarm, CableTile, DialStatus, OpenReason, RouteDecision } from './cableSession.js'
+import type { ActivitySnapshot, AppSwarms, CableAgent, CableHost, CableMachine, CableMachineSource, CableSwarm, CableTile, DialStatus, OpenReason, RouteDecision, SendOutcome } from './cableSession.js'
 import type { WindowRoute } from './windowRoute.js'
 import type { SelectionCommand, SelectionResult } from './windowSelection.js'
 import type { VisitCommand, VisitResult } from './windowVisit.js'
@@ -38,6 +38,7 @@ import { LANE_SESSION_OVER, LANE_TOKEN_UNAVAILABLE, type MachineFleet } from './
 import type { ReviewedAnswer, AnswerReceipt } from './questionInbox.js'
 import { isTier, type Tier } from '../lib/notifyTier.js'
 import { HarnessSource } from './hosts/harness.js'
+import { hostDisplayName } from './hosts/hostDetect.js'
 import type { HostEntry, HostRegistry } from './hosts/registry.js'
 import { selectForDial } from './hosts/select.js'
 import { capsLetters, type HostAgent } from './hosts/types.js'
@@ -518,6 +519,12 @@ export class DaemonCableHost implements CableHost {
     return this.registry?.outside(agentId)
   }
 
+  /** The machine list's copy, with the source a tap or a swipe acts through. */
+  private outsideEntry(agentId: string): HostEntry | undefined {
+    const held = this.registry?.entries().find((e) => e.agent.id === agentId)
+    return held && held.source.id !== 'harness' ? held : undefined
+  }
+
   capsOf(agentId: string): string | undefined {
     const on = this.onMachine(agentId)
     return on && capsLetters(on.source.capabilities(on.agent))
@@ -703,7 +710,14 @@ export class DaemonCableHost implements CableHost {
     return this.viaFleet((r) => r.machineOf(agentId))
   }
 
-  openAgent(agentId: string, reason?: OpenReason): void {
+  openAgent(agentId: string, reason?: OpenReason): void | Promise<void | { ok: false; error: string }> {
+    const outside = this.outsideEntry(agentId)
+    if (outside) {
+      // Only a person's tap switches the other app: a question screen that came up by itself never does.
+      if (reason) return
+      return (outside.source.focus?.(outside.agent) ?? Promise.resolve(false))
+        .then((opened) => opened ? undefined : { ok: false as const, error: `${hostDisplayName(outside.agent.host)} did not open it.` })
+    }
     const machineId = this.machineOf(agentId)
     if (!machineId) {
       // Same rule as focus: an agent id without its machine is not routable, and guessing is how a
@@ -756,7 +770,13 @@ export class DaemonCableHost implements CableHost {
    * Deliver a turn, and SAY whether it could be — through the router, on the agent's own machine, with
    * the refusal for a machine whose last request did not come back. See the router's sendTurn.
    */
-  sendTurn(agentId: string, text: string): { ok: true } | { ok: false; machine: string; reason: string } {
+  sendTurn(agentId: string, text: string): SendOutcome | Promise<SendOutcome> {
+    // A Promise only when another app's source delivers the words, which it answers once they are typed or refused. With
+    // a window the dial is on its tab, so such an agent takes no voice.
+    const on = this.onMachine(agentId)
+    if (on && on.source.id !== 'harness' && on.source.send) {
+      return on.source.send(on.agent, text).then((sent) => sent.ok ? sent : { ok: false, machine: '', reason: sent.reason, message: sent.reason })
+    }
     if (this.outside(agentId)) return { ok: false, machine: this.wiring.machineName(), reason: 'it runs outside Harness' }
     return this.viaFleet((r) => r.sendTurn(agentId, text))
   }
@@ -793,6 +813,9 @@ export class DaemonCableHost implements CableHost {
     // grew panes for remote machines. The hand is still at THIS desk; the pane it wants in front of it
     // may simply belong to a machine somewhere else, and the app is the side that decides what it can do
     // about an agent it does not have.
+    // Not for an agent of another app: the dial sends focus on every swipe, and only a tap may switch that app.
+    const outside = this.outsideEntry(agentId)
+    if (outside) { outside.source.markSeen?.(agentId); return }
     const machineId = this.machineOf(agentId)
     if (!machineId) {
       // An agent id without its machine is not routable. Guessing the selected or local machine is how a
@@ -925,7 +948,10 @@ export class DaemonCableHost implements CableHost {
     // doing, which is both wrong and completely invisible, because the router always answers with
     // something. The machine name travels too, so two agents with the same name on two computers are
     // distinguishable by the only thing that separates them.
-    const candidates: RouterAgent[] = await Promise.all(agents.map(async (a) => ({
+    //
+    // Never an agent outside Harness, whatever the caller passed: the backend is sent each candidate's id and name, and
+    // nothing of such an agent leaves this computer.
+    const candidates: RouterAgent[] = await Promise.all(agents.filter((a) => !this.outside(a.id)).map(async (a) => ({
       id: a.id,
       name: a.name,
       engine: a.engine,

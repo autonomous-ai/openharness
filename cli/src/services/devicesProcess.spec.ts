@@ -2,6 +2,8 @@
 // link, what the core tells them reaching the devices' port, and what the core asks answered from it.
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { CoreApi, CorePorts, DevicesPort, ServiceRequests } from '../core/api.js'
+import { createDeviceHookCalls } from '../core/deviceHookCalls.js'
+import { createDevicesLink, type DevicesState } from '../core/devicesLink.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { DevicesDeps } from './devices.js'
 import { runDevicesService } from './devicesProcess.js'
@@ -28,6 +30,8 @@ function devicesPort() {
     routeTask: vi.fn(async (text: string) => ({ agentId: 'a1', machineId: 'm1', name: 'api', confidence: 1, reason: text, candidates: [], weighed: 1, machines: 1, via: 'model' })),
     routeSend: vi.fn(async () => ({ ok: true as const })),
     stepFocus: vi.fn(async (): Promise<{ machineId: string; agentId: string } | 'no_agents'> => ({ machineId: 'm1', agentId: 'a2' })),
+    inboxPoll: vi.fn(async (_poll: unknown): Promise<{ text?: string; off?: true }> => ({ text: 'run the tests' })),
+    inboxGone: record('inboxGone'),
     stop: vi.fn(async () => {}),
   } satisfies DevicesPort
   return { port, calls }
@@ -82,7 +86,7 @@ describe('the devices in their own process', () => {
     expect(Object.keys(f.deps())).not.toContain('identity')
     expect([...f.deps().faults!]).toEqual(['dial', 'fleet.knows'])
     // The Devices tab's requests are the devices' own, beside what only the core asks.
-    expect(Object.keys(f.options().requests).sort()).toEqual(['harness_devices_list', 'routeSend', 'routeTask', 'stepFocus'])
+    expect(Object.keys(f.options().requests).sort()).toEqual(['harness_devices_list', 'inboxPoll', 'routeSend', 'routeTask', 'stepFocus'])
   })
 
   it('read no serials, dial or faults without them', () => {
@@ -101,6 +105,18 @@ describe('the devices in their own process', () => {
       if (was === undefined) delete process.env.HARNESSD_TEST_DIAL_PORT
       else process.env.HARNESSD_TEST_DIAL_PORT = was
     }
+  })
+
+  it('run what the devices registered for a core that goes, each time one does', () => {
+    const f = setup()
+    const gone = vi.fn()
+    f.deps().onCoreGone!(gone)
+    f.connect()
+    expect(gone).not.toHaveBeenCalled()
+    f.options().onDisconnected!()
+    f.connect()
+    f.options().onDisconnected!()
+    expect(gone).toHaveBeenCalledTimes(2)
   })
 
   it('run the devices and their link as the master starts them', () => {
@@ -360,6 +376,15 @@ describe('what the core tells the devices, reaching their port', () => {
     expect(f.calls).toEqual([['observed', [event]]])
   })
 
+  // The mod's poll, told when its client went first (core/deviceHookCalls.ts): the poll ends. No approval is held to end.
+  it('is inbox.gone, reaching the port; approval.gone reaches nothing', () => {
+    const f = setup()
+    f.event({ kind: 'approval.gone', id: 'r1' })
+    f.event({ kind: 'inbox.gone', pollId: 'p1' })
+    f.event({ kind: 'inbox.gone', pollId: 7 })
+    expect(f.calls).toEqual([['inboxGone', ['p1']], ['inboxGone', ['']]])
+  })
+
   it('is everything the windows said at once when the devices connect, and nothing they did not', () => {
     const f = setup()
     f.event({ kind: 'state', desk: ['a1'], foreground: true, swarms: { active: 't1', swarms: [], tiles: [] }, unread: [{ agentId: 'a1' }], focus: null, engines: ['codex'], commanders: true })
@@ -393,5 +418,43 @@ describe('what the core asks of the devices', () => {
     expect(await requests.stepFocus({ direction: 'sideways', currentAgentId: 7 }, asker)).toEqual({ step: 'no_agents' })
     expect(f.port.stepFocus).toHaveBeenLastCalledWith('next', undefined)
     expect(await requests.harness_devices_list({}, asker)).toEqual({ protocol: 1 })
+  })
+
+  it('is the mod\'s poll, answered { text } from the devices\' port; an approval is no request', async () => {
+    const f = setup()
+    const asker = { local: true, owner: true }
+    const { requests } = f.options()
+    expect(requests.approval).toBeUndefined()
+    // The link's own request id rides along, and is not the poll's.
+    expect(await requests.inboxPoll({ pollId: 'p1', sessionId: 's1', requestId: 'q10' }, asker)).toEqual({ text: 'run the tests' })
+    expect(f.port.inboxPoll).toHaveBeenLastCalledWith({ pollId: 'p1', sessionId: 's1' })
+    f.port.inboxPoll.mockResolvedValueOnce({})
+    expect(await requests.inboxPoll({ pollId: 'p2', sessionId: 's1' }, asker)).toEqual({})
+    // Their inbox failed: said as such, so the core answers no device.
+    f.port.inboxPoll.mockResolvedValueOnce({ off: true })
+    expect(await requests.inboxPoll({ pollId: 'p3', sessionId: 's1' }, asker)).toEqual({ off: true })
+  })
+
+  // The core's checked call (core/deviceHookCalls.ts) on the link as the core sends it (core/devicesLink.ts), to the port.
+  it('is the mod\'s poll from the core\'s route to the devices\' port, and its client going told', async () => {
+    const f = setup()
+    const asker = { local: true, owner: true }
+    const link = createDevicesLink({
+      core: {} as CoreApi,
+      notify: (frame) => { f.event(frame.payload ?? {}); return true },
+      call: async (type, payload) => f.options().requests[type](payload, asker),
+      state: (): DevicesState => ({ desk: [], foreground: true, swarms: null, unread: [], focus: { voice: null, form: null }, engines: [], commanders: false }),
+    })
+    let n = 0
+    const calls = createDeviceHookCalls({ ready: () => true, devices: () => link.port, newId: () => `p${++n}` })
+    expect(await calls.onInbox({ sessionId: 's1' }, new AbortController().signal)).toEqual({ text: 'run the tests' })
+    expect(f.port.inboxPoll).toHaveBeenLastCalledWith({ pollId: 'p1', sessionId: 's1' })
+
+    f.port.inboxPoll.mockImplementationOnce(() => new Promise<{ text?: string }>(() => {}))
+    const client = new AbortController()
+    const left = calls.onInbox({ sessionId: 's1' }, client.signal)
+    client.abort()
+    expect(await left).toBe('off')
+    expect(f.calls).toEqual([['inboxGone', ['p2']]])
   })
 })

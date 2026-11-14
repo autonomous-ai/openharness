@@ -16,6 +16,11 @@ describe('parseObservedHook', () => {
       .toEqual({ engine: 'codex', sessionId: 's', event: 'session-start', callerPid: 1, hostHints: {} })
   })
 
+  it('takes 10 hint keys', () => {
+    const hostHints = Object.fromEntries(Array.from({ length: 10 }, (_, i) => [`K${i}`, 'v'.repeat(64)]))
+    expect(parseObservedHook({ ...full, hostHints })).toEqual({ ...full, hostHints })
+  })
+
   it.each([
     ['an unknown engine', { engine: 'vim' }],
     ['a missing sessionId', { sessionId: undefined }],
@@ -28,7 +33,7 @@ describe('parseObservedHook', () => {
     ['a cwd of 1025 chars', { cwd: 'x'.repeat(1025) }],
     ['a transcriptPath of 1025 chars', { transcriptPath: 'x'.repeat(1025) }],
     ['a control character in cwd', { cwd: '/work\n/app' }],
-    ['9 hint keys', { hostHints: Object.fromEntries(Array.from({ length: 9 }, (_, i) => [`K${i}`, 'v'])) }],
+    ['11 hint keys', { hostHints: Object.fromEntries(Array.from({ length: 11 }, (_, i) => [`K${i}`, 'v'])) }],
     ['a 65-char hint value', { hostHints: { TERM_PROGRAM: 'x'.repeat(65) } }],
     ['a non-string hint value', { hostHints: { TERM_PROGRAM: 3 } }],
     ['hostHints that is an array', { hostHints: ['a'] }],
@@ -41,6 +46,51 @@ describe('parseObservedHook', () => {
     expect(parseObservedHook(null)).toBeNull()
     expect(parseObservedHook('x')).toBeNull()
     expect(parseObservedHook([])).toBeNull()
+  })
+})
+
+// A permission prompt that waits, from the plugin's hook client (deviceClaude/asked.ts): it sends no process and no
+// environment, and where the session runs stays its own hooks' to say.
+describe('parseObservedHook: asked', () => {
+  const asked = { engine: 'claude', sessionId: 's1', event: 'asked', tool: 'Bash', summary: 'npm test', cwd: '/work/app' }
+
+  it('parses the client\'s body as it posts it', () => {
+    expect(parseObservedHook(asked)).toStrictEqual(asked)
+  })
+
+  it('parses one with no tool, summary or cwd', () => {
+    expect(parseObservedHook({ engine: 'claude', sessionId: 's1', event: 'asked' })).toStrictEqual({ engine: 'claude', sessionId: 's1', event: 'asked' })
+  })
+
+  it('takes a 64-character tool and a 200-byte summary of multi-byte characters', () => {
+    const body = { ...asked, tool: 't'.repeat(64), summary: 'é'.repeat(100) }
+    expect(parseObservedHook(body)).toStrictEqual(body)
+  })
+
+  it('keeps no process, hints or transcript an asked event carries, and no tool or summary another event carries', () => {
+    expect(parseObservedHook({ ...asked, callerPid: 7, hostHints: { ORCA_TERMINAL_HANDLE: 'term_x' }, transcriptPath: '/t/s1.jsonl' }))
+      .toStrictEqual(asked)
+    expect(parseObservedHook({ ...full, tool: 'Bash', summary: 'npm test' })).toStrictEqual(full)
+  })
+
+  it.each([
+    ['a tool of 65 characters', { tool: 't'.repeat(65) }],
+    ['a summary of 201 bytes', { summary: `${'é'.repeat(100)}x` }],
+    ['a summary of 201 characters', { summary: 'x'.repeat(201) }],
+    ['a control character in tool', { tool: 'Ba\tsh' }],
+    ['a control character in summary', { summary: 'npm\ntest' }],
+    ['a non-string tool', { tool: 7 }],
+    ['a non-string summary', { summary: { text: 'npm test' } }],
+    ['a control character in cwd', { cwd: '/work\u007f/app' }],
+    ['an empty sessionId', { sessionId: '' }],
+  ])('rejects %s', (_name, patch) => {
+    expect(parseObservedHook({ ...asked, ...patch })).toBeNull()
+  })
+
+  it('forwards it, under the session\'s own rate', () => {
+    const forward = vi.fn(() => true)
+    expect(createObservedHook({ forward, now: () => 7 }).onObserved(asked)).toBe('ok')
+    expect(forward).toHaveBeenCalledWith(asked)
   })
 })
 

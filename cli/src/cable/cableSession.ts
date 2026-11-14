@@ -39,6 +39,9 @@ import { notificationReadToken, type UnreadNotification } from '../lib/notificat
 
 /** Bumped when the VOCABULARY changes. Separate from the frame version, which is the envelope. */
 export const CABLE_PROTO_VERSION = 3   // 3: + question.close (a question answered on another client)
+/** The id of a question the dial only shows: a permission prompt waiting in its agent's own app (services/devices.ts),
+ *  which is where it is answered. Nothing the dial sends for it reaches its host. */
+export const SHOWN_ONLY_PREFIX = 'shown:'
 
 const PING_EVERY_MS = 5_000
 /** No bytes of any kind for this long → the handle is dead. Longer than the dial's own 15 s window, so a
@@ -275,6 +278,8 @@ export interface AppSwarms {
 export type CableMachineSource = 'backend' | 'local' | 'signed-out'
 /** Why the dial sent an `agent.open`: a tap (absent) or a question screen that came up on its own. */
 export type OpenReason = 'question'
+/** What a send answers. `message` is a sentence for the dial, shown in place of the generic one. */
+export type SendOutcome = { ok: true } | { ok: false; machine?: string; reason?: string; message?: string }
 
 export type { WindowRoute } from './windowRoute.js'
 import type { WindowRoute } from './windowRoute.js'
@@ -336,7 +341,8 @@ export interface CableHost {
   activitySnapshot?(agentId: string): Promise<ActivitySnapshot | null>
   /** Every session the library can page through, in the order to show them. Absent: no library. */
   playerLibrary?(): Promise<PlayerSession[]>
-  sendTurn(agentId: string, text: string): void | { ok: true } | { ok: false; machine?: string; reason?: string }
+  /** Async for an agent outside Harness, whose source answers only once the words are delivered or refused. */
+  sendTurn(agentId: string, text: string): void | SendOutcome | Promise<void | SendOutcome>
   stopTurn(agentId: string): void
   /**
    * The user answered a `question`. `answers` is keyed by the QUESTION keys the daemon itself asked with
@@ -366,7 +372,7 @@ export interface CableHost {
    * came up on its own — the window then only brings the agent forward if it is already on screen,
    * because a reconnect re-shows every unanswered question and each used to open a tab.
    */
-  openAgent(agentId: string, reason?: OpenReason): void
+  openAgent(agentId: string, reason?: OpenReason): void | Promise<void | { ok: false; error: string }>
   readNotification?(agentId: string, readToken: string): void
   /** The dial asked for a fork of this agent — a second one with its history, opened in the window. */
   forkAgent(agentId: string): Promise<{ ok: true; agentId: string } | { ok: false; error: string; detail?: string }>
@@ -1327,7 +1333,7 @@ export class CableSession {
         // so it waits on this — briefly, and off its own UI task.
         const agentId = str('agentId') ?? ''
         let items: string[] = []
-        if (this.lacks(agentId, 'v')) {
+        if (this.outsideHarness(agentId)) {
           await this.toast(`This agent is in ${this.hostName(agentId)}. Changing its model from the device comes in an update.`)
         } else {
           try {
@@ -1426,7 +1432,12 @@ export class CableSession {
         // Only the one reason the window knows; anything else reads as a tap, the older frame's meaning.
         const agentId = str('agentId'), reason = str('reason') === 'question' ? 'question' as const : undefined
         if (!agentId) return
-        this.host.openAgent(agentId, reason)
+        void Promise.resolve(this.host.openAgent(agentId, reason)).then((result) => {
+          if (result && !result.ok) return this.toast(result.error)
+          // Another app moves no window, so no window focus will bring the dial to this agent's face: the tap's own
+          // open says it. The dial does not answer a focus with one, and its echo of a swipe only marks the agent seen.
+          if (!reason && this.outsideHarness(agentId)) return this.focusAgent(agentId)
+        }).catch(() => this.log('cable: agent.open → failed'))
         return
       }
       case 'agent.fork': {
@@ -1507,12 +1518,14 @@ export class CableSession {
         return
       }
       case 'turn.send':
-        if (str('agentId') && str('text')) this.host.sendTurn(str('agentId')!, str('text')!)
+        // Not awaited: the dial asks for no answer, and a send that waits on its agent must not hold the next frame.
+        if (str('agentId') && str('text')) void Promise.resolve(this.host.sendTurn(str('agentId')!, str('text')!))
+          .catch(() => this.log('cable: turn.send → failed'))
         return
       case 'turn.stop': {
         const agentId = str('agentId')
         if (!agentId) return
-        if (this.lacks(agentId, 'v')) {
+        if (this.outsideHarness(agentId)) {
           await this.toast(`This agent is in ${this.hostName(agentId)}. Stopping it from the device comes in an update.`)
           return
         }
@@ -1541,9 +1554,13 @@ export class CableSession {
         const agentId = str('agentId'), token = str('token'), requestId = str('requestId')
         if (!agentId || !token || !requestId || requestId.length > 64) return
         const link = this.link
-        const receipt = await this.questionInbox.submit(agentId, token, msg.choices,
-          answer => this.host.answerReviewed?.(answer) ?? Promise.resolve({ ok: false,
-            error: 'Update Harness to answer this question.' }), msg.drafts)
+        // Refused before it is taken: a shown-only question taken as answered would read as sent on the dial.
+        const open = this.questionInbox.read(agentId)
+        const receipt = open.ok && open.id.startsWith(SHOWN_ONLY_PREFIX)
+          ? { ok: false as const, error: `Answer it in ${this.hostName(agentId)}.` }
+          : await this.questionInbox.submit(agentId, token, msg.choices,
+            answer => this.host.answerReviewed?.(answer) ?? Promise.resolve({ ok: false,
+              error: 'Update Harness to answer this question.' }), msg.drafts)
         if (this.link === link) await this.send({ t: 'answer.receipt', agentId, token, requestId, ...receipt })
         return
       }
@@ -1560,9 +1577,13 @@ export class CableSession {
             if (typeof v === 'string') flat[k] = v
           }
           if (this.lacks(agentId, 'a')) {
-            await this.toast(`This agent is in ${this.hostName(agentId)}. Answering it from the device comes in an update.`)
+            // A shown question is answered in its app for good, as the reviewed path says: no update changes that.
+            await this.toast(requestId.startsWith(SHOWN_ONLY_PREFIX) ? `Answer it in ${this.hostName(agentId)}.`
+              : `This agent is in ${this.hostName(agentId)}. Answering it from the device comes in an update.`)
             return
           }
+          // Its agent may have gone from the list since: the id alone says nothing here answers it.
+          if (requestId.startsWith(SHOWN_ONLY_PREFIX)) return
           this.host.answer(agentId, requestId, flat)
         }
         return
@@ -2072,9 +2093,9 @@ export class CableSession {
     const generation = this.voiceGeneration
     const uploadId = this.voiceUploadId
     const current = () => generation === this.voiceGeneration
-    const reply = (message: Message) => {
+    const reply = (message: Message, logged = `"${String(message.message)}"`) => {
       // Every way a turn ends in an error is logged, with the words the dial shows: several ended silently (Diego, 2026-11-04).
-      if (message.t === 'voice.error' && current()) this.log(`cable: voice → error "${String(message.message)}"`)
+      if (message.t === 'voice.error' && current()) this.log(`cable: voice → error ${logged}`)
       return current() ? this.send({ ...message, ...(uploadId ? { uploadId } : {}) }) : Promise.resolve(false)
     }
     this.voice = null
@@ -2240,9 +2261,9 @@ export class CableSession {
         return
       }
       try {
-        // Only agents the dial may talk to: the router sends each one's id and name to the backend, and nothing of an
-        // agent outside Harness leaves this computer.
-        const decision = await this.host.route(transcript, agents.filter((a) => !this.lacks(a.id, 'v')))
+        // Only Harness agents the dial may talk to: the router sends each one's id and name to the backend, and nothing of
+        // an agent outside Harness leaves this computer, though it may take voice (an Orca handle, its mod's poll).
+        const decision = await this.host.route(transcript, agents.filter((a) => !this.lacks(a.id, 'v') && !this.outsideHarness(a.id)))
         if (!current()) return
         agentId = decision.agentId
         this.log(`cable: routed → ${agentId} (${decision.reason})`)
@@ -2273,8 +2294,8 @@ export class CableSession {
           const edited = turn.cmd ? `/${turn.cmd} ${words}` : words
           const text = carried ? withCarriedPassage(edited, carried)
             : selection?.ok && selection.text ? withSelectedPassage(edited, selection.text) : edited
-          const result = this.host.sendTurn(recipient, text)
-          if (result && !result.ok) return { ok: false, error: 'Could not reach that harness. Check its connection.' }
+          const result = await this.host.sendTurn(recipient, text)
+          if (result && !result.ok) return { ok: false, error: result.message ?? 'Could not reach that harness. Check its connection.' }
           if (carried) this.passageCarry.clear(carried.id)
           return { ok: true }
         } })
@@ -2285,11 +2306,13 @@ export class CableSession {
     const text = carried ? withCarriedPassage(instruction, carried)
       : selection?.ok && selection.text ? withSelectedPassage(instruction, selection.text) : instruction
     try {
-      const submitted = this.host.sendTurn(agentId, text)
+      const submitted = await this.host.sendTurn(agentId, text)
       if (submitted && !submitted.ok) {
-        await reply({ t: 'voice.error', message: carried
+        // Another app's words name its agent by the folder it runs in, which no log line carries: only the app is logged.
+        await reply({ t: 'voice.error', message: submitted.message ?? (carried
           ? 'Could not reach that harness. Your carried text is still here.'
-          : 'Could not reach that harness. Check its connection and try again.' })
+          : 'Could not reach that harness. Check its connection and try again.') },
+        this.outsideHarness(agentId) ? `(refused in ${this.hostName(agentId)})` : undefined)
         return
       }
     } catch (_) {
@@ -2593,6 +2616,15 @@ export class CableSession {
     // …and the drawer, which is the one thing a dial that has just greeted us is KNOWN to have lost:
     // its rows live in RAM. Last, because it names agents the pushes above put on the carousel.
     await this.replaceNotifications(this.host.listUnread())
+    // A question is a drawer row on the dial, and the drawer replaces them all: the ones still open come after it.
+    await this.resendQuestions()
+  }
+
+  /** Every question still open, asked again of a dial that lost it. */
+  private async resendQuestions(): Promise<void> {
+    for (const { agentId, id, questions } of this.questionInbox.open()) {
+      if (this.liveTurns.get(agentId) === 'question') await this.send({ t: 'question', agentId, ...this.whoIs(agentId), id, questions })
+    }
   }
 
   /**
@@ -2608,9 +2640,7 @@ export class CableSession {
     await this.syncSwarms(true)
     await this.syncAgents(true)
     await this.replaceNotifications(this.host.listUnread())
-    for (const { agentId, id, questions } of this.questionInbox.open()) {
-      if (this.liveTurns.get(agentId) === 'question') await this.send({ t: 'question', agentId, ...this.whoIs(agentId), id, questions })
-    }
+    await this.resendQuestions()
   }
 
   // ── swarms ────────────────────────────────────────────────────────────────────────────────────────
@@ -3174,6 +3204,13 @@ export class CableSession {
   private lacks(agentId: string, cap: 'v' | 'f' | 'a'): boolean {
     const caps = this.host.capsOf?.(agentId)
     return caps !== undefined && !caps.includes(cap)
+  }
+
+  /** The agent runs in another app or terminal. A host that names no app for it (an older one, a window) holds Harness
+   *  agents only. */
+  private outsideHarness(agentId: string): boolean {
+    const host = this.host.hostOf?.(agentId)
+    return host !== undefined && host !== 'harness'
   }
 
   private hostName(agentId: string): string {

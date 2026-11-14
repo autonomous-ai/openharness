@@ -932,7 +932,7 @@ describe('readying tmux at daemon start', () => {
     } finally { error.mockRestore() }
   })
 
-  it('prepare adopts tmux, renames legacy sessions, forgets harnessd variables, then logs the first inventory', async () => {
+  it('prepare adopts tmux, renames legacy sessions, forgets harnessd\'s and an agent session\'s variables (Orca\'s among them), then logs the first inventory', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'tmux-backend-prepare-'))
     dirs.push(dir)
     const calls = join(dir, 'calls')
@@ -940,7 +940,7 @@ describe('readying tmux at daemon start', () => {
 printf '%s\\n' "$1" >> "$TMUX_BACKEND_CALLS"
 case "$1" in
   list-panes) printf '%%7|4242|claude-1790000000000|/work|\\n' ;;
-  show-environment) printf 'HOME=/home/someone\\nHARNESSD_SERVICE_TOKEN=fixture-token\\nCLAUDECODE=1\\n' ;;
+  show-environment) printf 'HOME=/home/someone\\nTERM=xterm-256color\\nHARNESSD_SERVICE_TOKEN=fixture-token\\nCLAUDECODE=1\\nORCA_TERMINAL_HANDLE=term_1\\nORCA_PAIRING_CODE=fixture-pairing\\nORCA_AGENT_SESSION_SPAWN_TOKEN=fixture-spawn\\n' ;;
 esac
 exit 0
 `, { mode: 0o700 })
@@ -954,7 +954,7 @@ exit 0
       expect(log.mock.calls.map(([line]) => line)).toEqual([
         '[tmux] not on the daemon PATH · adopted /opt/tmux/bin/tmux · /opt/tmux/bin',
         expect.stringMatching(/^\[terminal\] renamed tmux session claude-1790000000000 → harness-claude-\d+-[0-9a-f-]+ \(pane %7\) · named by a build before the harness- prefix$/),
-        '[terminal] tmux: removed HARNESSD_SERVICE_TOKEN, CLAUDECODE from the environment new panes start with',
+        '[terminal] tmux: removed HARNESSD_SERVICE_TOKEN, CLAUDECODE, ORCA_TERMINAL_HANDLE, ORCA_PAIRING_CODE, ORCA_AGENT_SESSION_SPAWN_TOKEN from the environment new panes start with',
         // The renamed session is still `claude-…` in this fake, so the inventory whitelists none of it.
         '[terminal] tmux: available',
       ])

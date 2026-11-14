@@ -56,6 +56,7 @@ core/connectorsQueries.ts
 core/conversationQueries.ts
 core/daemonStopRoute.ts
 core/deliveries.ts
+core/deviceHookCalls.ts
 core/deviceInput.ts
 core/devicesLink.ts
 core/devicesWake.ts

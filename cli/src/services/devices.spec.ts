@@ -7,8 +7,9 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import type { CableHostWiring, DaemonCableHost } from '../cable/cableHost.js'
 import { observedAgentId } from '../cable/hosts/observed.js'
 import { env } from '../config/env.js'
+import { routeVoiceTask } from '../lib/voiceRouter.js'
 import { DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, ServiceUnavailableError, type CoreApi, type CorePorts, type DevicesPort } from '../core/api.js'
-import type { ObservedHookEvent } from '../core/observedHook.js'
+import type { ObservedAsked, ObservedHookEvent } from '../core/observedHook.js'
 import { createServiceHost } from '../core/serviceHost.js'
 import { STOP_HOOK_GRACE_MS } from '../core/turns/turnHooks.js'
 import type { FleetEvent } from '../cable/machineFleet.js'
@@ -166,11 +167,22 @@ vi.mock('../cable/hosts/lastAnswer.js', async (real) => ({
 
 const { startDevices } = await import('./devices.js')
 
+/** What the devices ran (`orca`, and on macOS `open`): recorded, so no spec types into, switches or brings forward the
+ *  developer's own apps. */
+const orcaRuns: Array<[string, string[], number]> = []
+const orca = {
+  run: async (file: string, args: string[], timeoutMs: number) => { orcaRuns.push([file, args, timeoutMs]); return { code: 0 } },
+  onPath: () => '/opt/orca/bin/orca',
+  exists: () => false,
+  platform: 'linux' as const,
+}
+
 let dataDir: string
 let logs: string[]
 beforeEach(() => {
   dataDir = mkdtempSync(join(tmpdir(), 'devices-'))
   logs = []
+  orcaRuns.length = 0
   seen.bridges = {}
   seen.fleet = null
   readers.open = readers.external = null
@@ -186,10 +198,11 @@ afterEach(() => {
   vi.unstubAllEnvs()
 })
 
-function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null } = {}) {
+function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; orca?: DevicesDeps['orca'] } = {}) {
   const core = over.core ?? fakeCore({ dataDir })
   const ports: CorePorts = emptyPorts()
   const onExit = vi.fn()
+  const gone: Array<() => void> = []
   const requests = startDevices(core, ports, {
     logsDir: join(dataDir, 'logs'),
     petsDir: join(dataDir, 'pets'),
@@ -198,12 +211,15 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
     cableDisabled: over.cableDisabled,
     readUsage: over.readUsage,
     now: over.now,
+    refresh: over.refresh,
+    orca: over.orca ?? orca,
     decideTier: over.decideTier === null ? undefined : over.decideTier ?? (async () => ({ tier: 'alert', by: 'test', detail: '', ms: 0 })),
     faults: new Set(over.faults ?? []),
     log: (line) => { logs.push(line) },
     onExit,
+    onCoreGone: (run) => { gone.push(run) },
   })
-  return { core, ports, port: ports.devices as DevicesPort, requests, onExit }
+  return { core, ports, port: ports.devices as DevicesPort, requests, onExit, gone }
 }
 
 const calls = (name: string) => seen.cable.calls.filter(([called]) => called === name).map(([, args]) => args)
@@ -1066,6 +1082,10 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     engine: 'claude', sessionId: 'sess-1', event, cwd: '/work/api', callerPid: 4242, transcriptPath: '/t/sess-1.jsonl',
     hostHints: { ORCA_AGENT_SESSION_ID: 'orca-1' }, ...over,
   })
+  /** A permission prompt that waits, as the plugin's hook client posts it (deviceClaude/asked.ts). */
+  const asked = (over: Partial<ObservedAsked> = {}): ObservedAsked => ({
+    engine: 'claude', sessionId: 'sess-1', event: 'asked', tool: 'Bash', summary: 'npm test', cwd: '/work/api', ...over,
+  })
   const host = () => seen.dial as unknown as DaemonCableHost
   /** The dial's list with no window, as its session reads it every second. */
   const machineList = async (port: DevicesPort) => { port.swarms(null); return host().listAgentSnapshot() }
@@ -1103,6 +1123,8 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     readers.known.set('sess-9', 'terminal')
     readers.owners.set('sess-9', { engine: 'codex', pid: 77 })
     readers.rows.set('sess-9', { cwd: '/work/web', transcriptPath: null })
+    // Between turns: a turn found running would be read every 3 s until it ends, which is not this scan.
+    readers.working.set('sess-9', false)
     await vi.advanceTimersByTimeAsync(120_000)
     expect(readers.scans).toBe(0)
     seen.host.watching!(true)
@@ -1153,10 +1175,14 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     // As core/main.ts starts the devices in the core's own process: through the service host, which guards the port.
     const ports = emptyPorts()
     createServiceHost(ports, { log: () => {} }).start('devices', (core, started) => startDevices(core, started, {
-      logsDir: join(dataDir, 'logs'), cableDisabled: true, faults: new Set(['fleet']), log: () => {}, onExit: vi.fn(),
+      logsDir: join(dataDir, 'logs'), cableDisabled: true, faults: new Set(['fleet']), log: () => {}, onExit: vi.fn(), orca,
     }), fakeCore({ dataDir }), DEVICES_FALLBACKS, DEVICES_REQUESTS)
     ports.devices!.observed(hook('session-start'))
     expect(await machineList(ports.devices!)).toMatchObject({ view: 'machine', agents: [{ id: ID, host: 'orca', caps: 's' }] })
+    // The mod's poll too, past the guard's fallbacks: held until its client goes.
+    const poll = ports.devices!.inboxPoll({ pollId: 'p1', sessionId: 'sess-1' })
+    ports.devices!.inboxGone('p1')
+    expect(await poll).toEqual({})
   })
 
   it('observed turn-stop reaches the dial as turn.done and summary with the last answer', async () => {
@@ -1209,6 +1235,129 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     port.observed(hook('turn-error'))
     expect(calls('turnError')).toEqual([[ID, '']])
     expect(core.agents.activityText).not.toHaveBeenCalled()
+  })
+
+  // The dial only shows the prompt (docs/specs/2026-11-13-device-claude-orca.md): the line names it and the app to answer in.
+  it('asked reaches the dial as the agent waiting with "<summary> · answer in Orca", in place of Waiting for you · Orca', async () => {
+    const { core, port } = start({ faults: ['fleet'] })
+    port.observed(hook('turn-start'))
+    port.observed(hook('needs-input'))
+    port.observed(asked())
+    // The Notification after it is the same prompt's: nothing more is told.
+    port.observed(hook('needs-input'))
+    expect(calls('turnStarted')).toEqual([[ID, '', undefined], [ID, 'Waiting for you · Orca', undefined], [ID, 'npm test · answer in Orca', undefined]])
+    expect(await host().activityText(ID)).toBe('npm test · answer in Orca')
+    expect(await host().activitySnapshot(ID)).toEqual({ text: 'npm test · answer in Orca' })
+    // Nothing to answer with.
+    expect(await machineList(port)).toMatchObject({ agents: [{ id: ID, caps: 's' }] })
+    expect(core.agents.activityText).not.toHaveBeenCalled()
+  })
+
+  // The round dial draws an activity line on the working face: the prompt is also the question its asking face draws, for
+  // display only (docs/specs/2026-11-13-device-claude-orca.md, "Waiting for permission").
+  const shownAs = (q: string) => [{ key: 'prompt', q, options: ['In Orca'] }]
+  it('asked also reaches the dial as a question it only shows, ahead of the line, and its wait clearing closes it', async () => {
+    const { core, port } = start({ faults: ['fleet'] })
+    port.observed(hook('turn-start'))
+    // A Notification alone names no prompt: its line, and no question.
+    port.observed(hook('needs-input'))
+    expect(calls('question')).toEqual([])
+    port.observed(asked())
+    port.observed(hook('needs-input'))
+    expect(calls('question')).toEqual([[ID, expect.stringMatching(/^shown:[0-9a-f-]{36}$/), shownAs('npm test · answer in Orca')]])
+    const [[, first]] = calls('question') as [[string, string]]
+    // Asked before its line is told: the round dial goes from the working face straight to the asking one.
+    expect(seen.cable.calls.map(([name]) => name)).toEqual(['start', 'turnStarted', 'turnStarted', 'question', 'turnStarted'])
+    // A new prompt is a new question, under an id of its own.
+    port.observed(asked({ summary: 'npm run build' }))
+    expect(calls('questionClose')).toEqual([[ID, first]])
+    const [, [, second, questions]] = calls('question') as [unknown, [string, string, unknown]]
+    expect(second).not.toBe(first)
+    expect(questions).toEqual(shownAs('npm run build · answer in Orca'))
+    // The session's next event clears the wait, and the question with it.
+    port.observed(hook('turn-stop'))
+    expect(calls('questionClose')).toEqual([[ID, first], [ID, second]])
+    // Its session ending clears it too.
+    port.observed(hook('turn-start'))
+    port.observed(asked())
+    const [, , [, third]] = calls('question') as [unknown, unknown, [string, string]]
+    port.observed(hook('session-end'))
+    expect(calls('questionClose')).toEqual([[ID, first], [ID, second], [ID, third]])
+    expect(calls('question')).toHaveLength(3)
+    expect(core.questions.answer).not.toHaveBeenCalled()
+  })
+
+  it('a dial that attaches again is asked again what still waits, under the same id', async () => {
+    const { port } = start({ faults: ['fleet'] })
+    port.observed(hook('turn-start'))
+    port.observed(hook('turn-start', { sessionId: 'sess-2' }))
+    port.observed(asked())
+    port.observed(asked({ sessionId: 'sess-2', summary: 'ls' }))
+    port.observed(hook('turn-stop', { sessionId: 'sess-2' }))
+    expect(calls('question')).toHaveLength(2)
+    const [[, id]] = calls('question') as [[string, string]]
+    // Its drawer and questions live in its RAM: a dial that comes back has neither.
+    seen.host.watching!(true)
+    expect(calls('question').slice(2)).toEqual([[ID, id, shownAs('npm test · answer in Orca')]])
+    seen.host.watching!(false)
+    seen.host.watching!(true)
+    expect(calls('question').slice(3)).toEqual([[ID, id, shownAs('npm test · answer in Orca')]])
+  })
+
+  it('a window opening closes the question; closing, it asks what still waits again', async () => {
+    const { port } = start({ faults: ['fleet'] })
+    port.observed(hook('turn-start'))
+    port.observed(asked())
+    expect(calls('question')).toHaveLength(1)
+    const [[, id]] = calls('question') as [[string, string]]
+    port.swarms({ active: 't1', swarms: [{ id: 't1', name: 'Tab', agentIds: [], panes: 0 }], tiles: [] })
+    expect(calls('questionClose')).toEqual([[ID, id]])
+    // The window's tab is what the dial shows meanwhile.
+    port.observed(asked({ summary: 'ls' }))
+    expect(calls('question')).toHaveLength(1)
+    port.swarms(null)
+    expect(calls('question').slice(1)).toEqual([[ID, expect.stringMatching(/^shown:/), shownAs('ls · answer in Orca')]])
+    expect(calls('question')[1][1]).not.toBe(id)
+  })
+
+  it('a prompt asked mid-turn, then its Notification: one line, told once', async () => {
+    const { port } = start({ faults: ['fleet'] })
+    port.observed(hook('turn-start'))
+    port.observed(asked())
+    port.observed(hook('needs-input'))
+    expect(calls('turnStarted')).toEqual([[ID, '', undefined], [ID, 'npm test · answer in Orca', undefined]])
+  })
+
+  it('the session\'s next event clears the line; another session\'s does not', async () => {
+    const { port } = start({ faults: ['fleet'] })
+    const other = observedAgentId('claude', 'sess-2')
+    port.observed(hook('turn-start'))
+    port.observed(hook('turn-start', { sessionId: 'sess-2' }))
+    port.observed(asked())
+    port.observed(hook('turn-stop', { sessionId: 'sess-2' }))
+    expect(await host().activityText(ID)).toBe('npm test · answer in Orca')
+    port.observed(hook('turn-stop'))
+    expect(await host().activityText(ID)).toBeNull()
+    expect(calls('turnDone')).toEqual([[other], [ID]])
+  })
+
+  it('a session no hook listed shows nothing: the plugin\'s hook runs in a Harness pane too', async () => {
+    const { port } = start({ core: harnessAgent(), faults: ['fleet'] })
+    port.observed(asked({ sessionId: 'in-a-pane' }))
+    expect(calls('turnStarted')).toEqual([])
+    expect(calls('question')).toEqual([])
+    expect((await machineList(port)).agents.map((a) => a.id)).toEqual(['h1'])
+  })
+
+  it('what the round dial cannot draw is ?, and a long summary is cut to the dial\'s line with the app kept', async () => {
+    const { port } = start({ faults: ['fleet'] })
+    port.observed(hook('turn-start', { hostHints: { TERM_PROGRAM: 'ghostty' } }))
+    port.observed(asked({ summary: 'echo 你好 🙂' }))
+    expect(await host().activityText(ID)).toBe('echo ?? ? · answer in Ghostty')
+    port.observed(asked({ summary: 'x'.repeat(200) }))
+    const line = (await host().activityText(ID))!
+    expect(Buffer.byteLength(line)).toBeLessThanOrEqual(99)
+    expect(line).toMatch(/^x+… · answer in Ghostty$/)
   })
 
   it('tells the dial again every 20 s, while one is attached, of an observed agent that waits or works', async () => {
@@ -1270,6 +1419,7 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     seen.host.watching!(true)
     port.observed(hook('turn-start'))
     port.observed(hook('needs-input'))
+    port.observed(asked())
     await vi.advanceTimersByTimeAsync(40_000)
     port.observed(hook('turn-stop'))
     await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
@@ -1306,7 +1456,16 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     const core = fakeCore({ dataDir })
     const { port } = start({ core, faults: ['fleet'] })
     seen.host.watching!(true)
-    for (const event of ['session-start', 'turn-start', 'needs-input', 'turn-stop'] as const) port.observed(hook(event))
+    const fetched = vi.spyOn(globalThis, 'fetch')
+    const printed = vi.spyOn(console, 'log')
+    for (const event of ['session-start', 'turn-start', 'needs-input'] as const) port.observed(hook(event))
+    port.observed(asked({ summary: 'rm -rf /srv/secret-target' }))
+    expect(await host().activityText(ID)).toBe('rm -rf /srv/secret-target · answer in Orca')
+    // A word that names no agent is weighed among Harness's agents alone: the router never hears of this one.
+    vi.mocked(routeVoiceTask).mockResolvedValueOnce({ agentId: '', confidence: 0, reason: 'no agents in machine' } as Awaited<ReturnType<typeof routeVoiceTask>>)
+    await host().route('clean up the build', (await host().listAgentSnapshot()).agents)
+    expect(vi.mocked(routeVoiceTask).mock.calls.map(([, candidates]) => candidates)).toEqual([[]])
+    port.observed(hook('turn-stop'))
     await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
     expect(calls('summary')).toHaveLength(1)
     port.observed(hook('turn-error'))
@@ -1319,7 +1478,7 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     expect(await host().recentAsks(ID)).toEqual([])
     expect(await host().listModels(ID)).toEqual([])
     expect(await host().answerReviewed({ agentId: ID, requestId: 'q1', questions: [], answers: {}, selections: {} })).toMatchObject({ ok: false })
-    expect(host().sendTurn(ID, 'run the tests')).toMatchObject({ ok: false })
+    expect(await host().sendTurn(ID, 'run the tests')).toMatchObject({ ok: false })
     host().stopTurn(ID)
     host().answer(ID, 'q1', { a: 'yes' })
     host().updateAgent(ID, 'opus', 'high')
@@ -1330,7 +1489,7 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     expect(await host().forkAgent(ID)).toMatchObject({ ok: false, error: 'AGENT_NOT_FOUND' })
     port.observed(hook('session-end'))
 
-    const carried = (value: unknown): boolean => ['sess-1', ID, '/work/api', 'Shipped the fix.'].some((s) => JSON.stringify(value).includes(s))
+    const carried = (value: unknown): boolean => ['sess-1', ID, '/work/api', 'Shipped the fix.', 'secret-target'].some((s) => JSON.stringify(value).includes(s))
     const leaks: string[] = []
     const walk = (value: unknown, path: string): void => {
       // A lookup in the agents this process holds a copy of (devicesProcess.ts `view`): no message, nothing leaves.
@@ -1340,6 +1499,180 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     }
     walk(core, 'core')
     for (const [name, bridge] of Object.entries(seen.bridges)) if (carried(bridge.calls)) leaks.push(name)
+    if (carried(fetched.mock.calls)) leaks.push('fetch')
+    if (carried(printed.mock.calls)) leaks.push('console.log')
+    if (logs.some((line) => line.includes('secret-target'))) leaks.push('log')
     expect(leaks).toEqual([])
+  })
+})
+
+describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-11-13-device-claude-orca.md)', () => {
+  const ID = observedAgentId('claude', 'sess-1')
+  const CODEX = observedAgentId('codex', 'cx-1')
+  const HANDLE = 'term_0123abcd-0000-4000-8000-0123456789ab'
+  const hook = (event: ObservedHookEvent['event'], over: Partial<ObservedHookEvent> = {}): ObservedHookEvent => ({
+    engine: 'claude', sessionId: 'sess-1', event, cwd: '/work/api', callerPid: 4242, transcriptPath: '/t/sess-1.jsonl',
+    hostHints: { ORCA_AGENT_SESSION_ID: 'orca-1' }, ...over,
+  })
+  /** The machine list is this computer's alone: no fleet's router stands in for it. */
+  const startHere = (over: Parameters<typeof start>[0] = {}) => start({ ...over, faults: ['fleet', ...over.faults ?? []] })
+  const host = () => seen.dial as unknown as DaemonCableHost
+  /** A dial on the cable, on this computer's agents: no window. */
+  const attach = (port: DevicesPort) => { seen.host.watching!(true); port.swarms(null) }
+  const listed = async () => (await host().listAgentSnapshot()).agents.map(({ id, name, caps }) => ({ id, name, caps }))
+  const said = () => logs.filter((line) => line.startsWith('[device] '))
+
+  // The dial only shows a waiting prompt: the devices take no approval, and no answer from the dial reaches a hook.
+  it('the devices take no approval call, and no answer from the dial approves anything for an agent outside a pane', async () => {
+    const { core, port } = startHere()
+    attach(port)
+    port.observed(hook('turn-start'))
+    port.observed(hook('needs-input'))
+    expect(Object.keys(port).filter((member) => /approval/i.test(member))).toEqual([])
+    expect(host().answer(ID, 'approval:r1', { approval: 'Allow' })).toBeUndefined()
+    expect(await host().answerReviewed({ agentId: ID, requestId: 'approval:r1', questions: [], answers: { approval: 'Allow' }, selections: {} }))
+      .toEqual({ ok: false, error: 'Use the terminal to answer this question.' })
+    expect(core.questions.answer).not.toHaveBeenCalled()
+    expect(core.questions.answerReviewed).not.toHaveBeenCalled()
+    expect(calls('question')).toEqual([])
+    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 's' }])
+  })
+
+  it('a core that goes ends its poll with {}', async () => {
+    const { port, gone } = startHere()
+    attach(port)
+    const poll = port.inboxPoll({ pollId: 'p1', sessionId: 'sess-2' })
+    // Its calls have already failed to none.
+    expect(gone).toHaveLength(1)
+    gone.forEach((run) => run())
+    expect(await poll).toEqual({})
+  })
+
+  it('a held poll takes the transcript for its idle agent, and the agent lists v', async () => {
+    vi.useFakeTimers()
+    const { port } = startHere()
+    port.observed(hook('session-start'))
+    attach(port)
+    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 's' }])
+    const held = port.inboxPoll({ pollId: 'p1', sessionId: 'sess-1' })
+    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sv' }])
+    // Held 25 s, then empty: the mod asks again at once.
+    await vi.advanceTimersByTimeAsync(25_000)
+    expect(await held).toEqual({})
+    const next = port.inboxPoll({ pollId: 'p2', sessionId: 'sess-1' })
+    expect(await host().sendTurn(ID, 'run the tests')).toEqual({ ok: true })
+    expect(await next).toEqual({ text: 'run the tests' })
+    expect(said()).toEqual(['[device] voice · mod'])
+    expect(orcaRuns).toEqual([])
+  })
+
+  it('an agent with an Orca handle lists v and f; its transcript runs orca terminal send, its tap orca terminal switch', async () => {
+    const { port } = startHere()
+    port.observed(hook('session-start', { engine: 'codex', sessionId: 'cx-1', hostHints: { ORCA_TERMINAL_HANDLE: HANDLE } }))
+    attach(port)
+    expect(await listed()).toEqual([{ id: CODEX, name: 'api', caps: 'svf' }])
+    expect(await host().sendTurn(CODEX, 'run the tests')).toEqual({ ok: true })
+    expect(await host().openAgent(CODEX)).toBeUndefined()
+    expect(orcaRuns).toEqual([
+      ['/opt/orca/bin/orca', ['terminal', 'send', '--terminal', HANDLE, '--text=run the tests', '--enter', '--wait-submit', '5', '--json'], 10_000],
+      ['/opt/orca/bin/orca', ['terminal', 'switch', '--terminal', HANDLE, '--json'], 10_000],
+    ])
+    expect(said()).toEqual(['[device] voice · orca'])
+  })
+
+  // On macOS a tap brings the agent's app forward by its bundle id (cable/hosts/open.ts); every run here is recorded.
+  const mac = { ...orca, platform: 'darwin' as const }
+
+  it('on macOS an agent in an app with a bundle id lists f, and a tap brings that app forward; a question screen opens nothing', async () => {
+    const { port } = startHere({ orca: mac })
+    port.observed(hook('session-start', { hostHints: { TERM_PROGRAM: 'WarpTerminal' } }))
+    attach(port)
+    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
+    expect(await host().openAgent(ID)).toBeUndefined()
+    expect(orcaRuns).toEqual([['/usr/bin/open', ['-b', 'dev.warp.Warp-Stable'], 10_000]])
+    expect(await host().openAgent(ID, 'question')).toBeUndefined()
+    expect(orcaRuns).toHaveLength(1)
+  })
+
+  it('a Claude Code in the Claude app opens on its session; a link that fails still brings the app forward, said in one line with no id', async () => {
+    const SESSION = 'local_8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b'
+    const codes = [1]
+    const { port } = startHere({ orca: { ...mac, run: async (file, args, timeoutMs) => {
+      orcaRuns.push([file, args, timeoutMs])
+      return { code: codes.shift() ?? 0 }
+    } } })
+    port.observed(hook('session-start', { hostHints: { __CFBundleIdentifier: 'com.anthropic.claudefordesktop', CLAUDE_CODE_HOST_SESSION_ID: SESSION } }))
+    attach(port)
+    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
+    expect(await host().openAgent(ID)).toBeUndefined()
+    const link: [string, string[], number] = ['/usr/bin/open', [`claude://code/continue?session=${SESSION}`], 10_000]
+    expect(orcaRuns).toEqual([link, ['/usr/bin/open', ['-b', 'com.anthropic.claudefordesktop'], 10_000]])
+    expect(said()).toEqual(['[device] open · claude · fallback'])
+    // The link that works brings the app forward itself.
+    expect(await host().openAgent(ID)).toBeUndefined()
+    expect(orcaRuns.slice(2)).toEqual([link])
+    expect(logs.filter((line) => line.includes(SESSION) || line.includes('sess-1'))).toEqual([])
+  })
+
+  it('no log line or backend request carries the command, a prompt\'s summary, a path, the transcript, a session id or a handle', async () => {
+    const { core, port } = startHere()
+    port.observed(hook('session-start', { engine: 'codex', sessionId: 'cx-1', hostHints: { ORCA_TERMINAL_HANDLE: HANDLE } }))
+    attach(port)
+    await host().sendTurn(CODEX, 'run the tests')
+    await host().openAgent(CODEX)
+    // Working, Codex may show an approval no hook tells of: the words are not typed there, nor while it waits on a prompt.
+    port.observed(hook('turn-start', { engine: 'codex', sessionId: 'cx-1', hostHints: { ORCA_TERMINAL_HANDLE: HANDLE } }))
+    expect(await host().sendTurn(CODEX, 'run the tests')).toMatchObject({ ok: false, message: 'api is busy. Say it when it is done.' })
+    port.observed(hook('needs-input', { engine: 'codex', sessionId: 'cx-1', hostHints: { ORCA_TERMINAL_HANDLE: HANDLE } }))
+    expect(await host().sendTurn(CODEX, 'run the tests')).toMatchObject({ ok: false, message: 'api is waiting for your answer in Terminal.' })
+    // A Claude Code prompt's summary shows on the dial alone.
+    port.observed(hook('turn-start'))
+    port.observed({ engine: 'claude', sessionId: 'sess-1', event: 'asked', tool: 'Bash', summary: 'deploy --secret-flag' })
+    expect(await host().activityText(observedAgentId('claude', 'sess-1'))).toMatch(/^deploy --secret-flag · answer in /)
+    expect(said()).toEqual(['[device] voice · orca', '[device] voice · busy', '[device] voice · waiting'])
+    const secrets = ['/work', '/t/', 'run the tests', 'deploy --secret-flag', 'sess-1', 'cx-1', HANDLE]
+    expect(logs.filter((line) => secrets.some((secret) => line.includes(secret)))).toEqual([])
+    expect(JSON.stringify(vi.mocked(core.account.backend).mock.calls)).not.toMatch(/secret-flag|sess-1|cx-1/)
+  })
+
+  it('an inbox part that throws answers { off: true }', async () => {
+    const { port } = startHere({ faults: ['inbox.inboxPoll'] })
+    attach(port)
+    expect(await port.inboxPoll({ pollId: 'p1', sessionId: 'sess-1' })).toEqual({ off: true })
+    expect(logs).toEqual(expect.arrayContaining(['[devices] inbox.inboxPoll failed · injected fault: inbox.inboxPoll']))
+    // A part that did not start answers the same, and hears nothing.
+    const off = startHere({ faults: ['inbox'] })
+    attach(off.port)
+    expect(await off.port.inboxPoll({ pollId: 'p1', sessionId: 'sess-1' })).toEqual({ off: true })
+    off.port.inboxGone('p1')
+    expect(logs).toEqual(expect.arrayContaining(['[devices] inbox did not start · injected fault: inbox · the devices run without it']))
+  })
+
+  it('an inbox part the guard switches off ends its open poll', async () => {
+    const { port } = startHere({ faults: ['inbox.inboxGone'] })
+    attach(port)
+    const poll = port.inboxPoll({ pollId: 'p1', sessionId: 'sess-2' })
+    // Five failures in a minute switch a part off: the gone it swallows would have ended the poll.
+    for (let i = 0; i < 5; i++) port.inboxGone('p1')
+    expect(logs).toEqual(expect.arrayContaining([expect.stringMatching(/^\[devices\] inbox switched off/)]))
+    expect(await poll).toEqual({})
+  })
+
+  it('stop ends every poll and timer', async () => {
+    vi.useFakeTimers()
+    const { port } = startHere()
+    const waiting = observedAgentId('claude', 'sess-2')
+    port.observed(hook('session-start', { sessionId: 'sess-2' }))
+    attach(port)
+    const poll = port.inboxPoll({ pollId: 'p1', sessionId: 'sess-1' })
+    // A transcript waiting for the mod's next poll, its last one just closed.
+    const closed = port.inboxPoll({ pollId: 'p2', sessionId: 'sess-2' })
+    port.inboxGone('p2')
+    await closed
+    const words = host().sendTurn(waiting, 'run the tests')
+    await port.stop()
+    expect(await poll).toEqual({})
+    expect(await words).toMatchObject({ ok: false, message: 'api did not answer.' })
+    expect(vi.getTimerCount()).toBe(0)
   })
 })

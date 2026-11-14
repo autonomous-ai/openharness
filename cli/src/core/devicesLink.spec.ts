@@ -3,7 +3,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
-import { createDevicesLink, DEVICES_WAIT_MS, ROUTE_TASK_WAIT_MS, type DevicesState } from './devicesLink.js'
+import { createDevicesLink, DEVICES_WAIT_MS, INBOX_CALL_MS, ROUTE_TASK_WAIT_MS, type DevicesState } from './devicesLink.js'
 
 const STATE: DevicesState = {
   desk: ['a1'], foreground: true, swarms: null, unread: [], focus: { voice: null, form: null }, engines: ['claude'], commanders: false,
@@ -82,6 +82,12 @@ describe('what the core tells the devices', () => {
     expect(sent).toEqual([])
   })
 
+  it('tells them a mod\'s poll that went first, as the notice inbox.gone', () => {
+    const { sent, port } = link()
+    port.inboxGone('p1')
+    expect(sent).toEqual([{ type: 'service_event', payload: { pollId: 'p1', kind: 'inbox.gone' } }])
+  })
+
   it('says everything again when they connect, and nothing to stop: the master stops their process', async () => {
     const { sent, devices, port } = link()
     devices.connected()
@@ -114,6 +120,30 @@ describe('what the core asks of the devices', () => {
     expect(await port.routeTask('fix it')).toMatchObject({ agentId: '', reason: 'the devices service is unavailable', candidates: [] })
     expect(await port.routeSend('a1', 'go')).toEqual({ ok: false, machine: '', reason: 'the devices service is unavailable' })
     expect(await port.stepFocus('next')).toBe('no_agents')
+  })
+
+  // The dial only shows a waiting prompt (docs/specs/2026-11-13-device-claude-orca.md): nothing asks the devices for an approval.
+  it('has no approval call or notice', () => {
+    const { port } = link()
+    expect(Object.keys(port).filter((member) => /approval/i.test(member))).toEqual([])
+  })
+
+  // Past the devices' own 25 s hold, so a hold that runs out is their empty answer, which the mod follows at once.
+  it('asks for the mod\'s poll with a 27 s wait and keeps only a string text; an error is { off: true }', async () => {
+    const poll = { pollId: 'p1', sessionId: 's1' }
+    const { call, port } = link({ text: 'run the tests' })
+    expect(INBOX_CALL_MS).toBe(27_000)
+    expect(await port.inboxPoll(poll)).toEqual({ text: 'run the tests' })
+    expect(call).toHaveBeenLastCalledWith('inboxPoll', poll, INBOX_CALL_MS)
+    for (const answer of [{}, { text: 7, extra: 'x' }, { off: 'yes' }]) {
+      call.mockResolvedValueOnce(answer)
+      expect(await port.inboxPoll(poll), JSON.stringify(answer)).toEqual({})
+    }
+    // Their inbox failed in their process: no device, never an empty hold.
+    call.mockResolvedValueOnce({ off: true })
+    expect(await port.inboxPoll(poll)).toEqual({ off: true })
+    call.mockResolvedValueOnce({ error: 'SERVICE_UNAVAILABLE', service: 'devices', retryable: true })
+    expect(await port.inboxPoll(poll)).toEqual({ off: true })
   })
 })
 

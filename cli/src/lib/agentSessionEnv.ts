@@ -1,6 +1,7 @@
 /**
  * The variables a coding agent sets in the shells it runs commands in, naming its own session: Claude Code's
  * CLAUDECODE, session id and messaging socket and token, Codex's thread id and sandbox, and the AI_AGENT others set.
+ * And every ORCA_* an Orca terminal has, whatever runs in it.
  *
  * They belong to that one session. An agent that installs Harness and runs `harness start` from its shell started a
  * daemon with them all (found 2026-10-11: the core of a daemon restarted from a Claude Code session had four), and a
@@ -15,12 +16,19 @@ const AGENT_SESSION_VARIABLES: ReadonlySet<string> = new Set([
   'AI_AGENT', 'HARNESS_AGENT_SESSION',
   'CLAUDECODE', 'CLAUDE_PID', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_CHILD_SESSION',
   'CLAUDE_CODE_SESSION_ATTENDED', 'CLAUDE_CODE_EXECPATH', 'CLAUDE_CODE_MESSAGING_SOCKET', 'CLAUDE_CODE_MESSAGING_TOKEN',
+  // The Claude app's id for the session it runs (`local_<uuid>`): Claude Code in a pane that kept it would name itself
+  // that app session, and a tap on the dial would open the app on it (cable/hosts/open.ts).
+  'CLAUDE_CODE_HOST_SESSION_ID',
   'CODEX_THREAD_ID', 'CODEX_CI', 'CODEX_SANDBOX', 'CODEX_SANDBOX_NETWORK_DISABLED', 'CODEX_ESCALATE_SOCKET',
 ])
 
 /** Whether [name] names an agent's own session, never for a daemon or a pane it makes. */
 export function isAgentSessionVariable(name: string): boolean {
-  return AGENT_SESSION_VARIABLES.has(name)
+  // Orca sets some thirty ORCA_* in each terminal it opens (1.4.256): that terminal's handle, pane and tab, and secrets,
+  // its pairing code and its hook, launch and spawn tokens. A pane that kept them would be that terminal to an engine's
+  // hook. The few a person may set (ORCA_USER_DATA_PATH, ORCA_ENVIRONMENT) steer only Orca's own `orca` command, which
+  // the devices process then runs as a daemon started at login does, without them. A prefix: Orca adds names as it goes.
+  return AGENT_SESSION_VARIABLES.has(name) || name.startsWith('ORCA_')
 }
 
 /** Takes every agent session variable out of [env], this process's own by default. Says which it took. */

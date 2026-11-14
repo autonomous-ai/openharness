@@ -19,7 +19,7 @@
 import type { AppSwarms } from '../cable/cableSession.js'
 import type { UnreadNotification } from '../lib/notificationRead.js'
 import type { ReviewedAnswer } from '../cable/questionInbox.js'
-import { DEVICES_FALLBACKS, readFallback, type CoreApi, type DeviceBridgeFrame, type DevicesPort, type DeviceWindowFrame, type RouteAnswer, type SendResult, type WindowFocus } from './api.js'
+import { DEVICES_FALLBACKS, readFallback, type CoreApi, type DeviceBridgeFrame, type DevicesPort, type DeviceWindowFrame, type InboxAnswer, type RouteAnswer, type SendResult, type WindowFocus } from './api.js'
 import { answerAccountQuery } from './accountQueries.js'
 import type { ServiceFrame } from './serviceLinks.js'
 
@@ -50,6 +50,8 @@ export interface DevicesLinkDeps {
 export const ROUTE_TASK_WAIT_MS = 25_000
 /** How long anything else waits for them: a send, a step along the desk. */
 export const DEVICES_WAIT_MS = 5_000
+/** The mod's poll, past the devices' own 25 s hold: a hold that runs out is their empty answer, which the mod follows at once. */
+export const INBOX_CALL_MS = 27_000
 
 const fallback = <T>(member: keyof typeof DEVICES_FALLBACKS): T => readFallback(DEVICES_FALLBACKS[member]).value as T
 const text = (value: unknown): string => (typeof value === 'string' ? value : '')
@@ -87,6 +89,12 @@ export function createDevicesLink(deps: DevicesLinkDeps) {
     engines: (engines) => event('engines', { engines }),
     commanders: (connected) => event('commanders', { connected }),
     observed: (observed) => event('observed', { ...observed }),
+    // The mod's poll, checked and bounded by the core (core/deviceHookCalls.ts). A client that goes first is told, since a
+    // request cannot be taken back: the devices end what they hold for it. Off is their inbox failing in their process:
+    // no device, never an empty hold.
+    inboxPoll: async (poll) => answered<InboxAnswer>(await deps.call('inboxPoll', { ...poll }, INBOX_CALL_MS), 'inboxPoll',
+      ({ text: said, off }) => (off === true ? { off } : typeof said === 'string' ? { text: said } : {})),
+    inboxGone: (pollId) => event('inbox.gone', { pollId }),
     // Their own process: the master stops it, and a core that restarts leaves it running with the dial.
     stop: async () => {},
   }

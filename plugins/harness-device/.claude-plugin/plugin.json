@@ -1,0 +1,12 @@
+{
+  "name": "harness-device",
+  "displayName": "Harness Device",
+  "description": "Shows Claude Code's waiting permission prompts on the Harness round dial, and takes a prompt said at the dial. Uses the Harness CLI.",
+  "author": {
+    "name": "Autonomous",
+    "url": "https://harness.autonomous.ai"
+  },
+  "homepage": "https://harness.autonomous.ai/agents",
+  "repository": "https://github.com/autonomous-ai/openharness",
+  "license": "MIT"
+}
