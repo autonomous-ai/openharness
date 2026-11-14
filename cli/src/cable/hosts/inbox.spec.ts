@@ -124,6 +124,29 @@ describe('Inbox', () => {
     expect(late.value).toBeUndefined()
   })
 
+  it('a gone that comes before its own poll answers it {} at once, and it takes no transcript; the last 16 are kept', async () => {
+    const t = setup()
+    polledOnce(t, 's1')
+    const sent = track(t.inbox.deliver('s1', 'hello'))
+    t.inbox.gone('p2')
+    const early = track(t.inbox.poll('p2', 's1'))
+    await settle()
+    expect(early.value).toEqual({})
+    // The transcript waits for a poll whose client is there.
+    expect(sent.value).toBeUndefined()
+    const next = track(t.inbox.poll('p3', 's1'))
+    await settle()
+    expect(next.value).toEqual({ text: 'hello' })
+    expect(t.pending()).toBe(0)
+    for (let i = 0; i <= 16; i++) t.inbox.gone(`g${i}`)
+    const kept = track(t.inbox.poll('g16', 's2'))
+    // The oldest went: its poll is held.
+    const forgotten = track(t.inbox.poll('g0', 's3'))
+    await settle()
+    expect(kept.value).toEqual({})
+    expect(forgotten.value).toBeUndefined()
+  })
+
   it('ready: open, closed 34 s ago, not closed 36 s ago, never polled', () => {
     const t = setup()
     void t.inbox.poll('p1', 's1')
