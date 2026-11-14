@@ -12,7 +12,7 @@ pub fn dial_line(state: &AppState) -> String {
         (_, Daemon::Starting) => return "Starting Harness".into(),
         (_, Daemon::Up) => {}
     }
-    // Up with no status line yet: the watch child has not spoken.
+    // Up comes only with a status line: none here is a watch the app has stopped.
     let Some(dial) = &state.dial else { return "Starting Harness".into() };
     if let Some(version) = &dial.updating {
         return format!("Updating to {version}");
