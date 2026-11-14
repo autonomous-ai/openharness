@@ -105,10 +105,12 @@ export class ObservedSource implements HostSource {
     const e = agent && this.entries.get(agent.id)
     const actions = this.deps.actions
     if (!e || !actions) return { status: true, voice: false, focus: false, answer: false }
+    // An ended session's terminal holds a shell now, where its words would run.
+    const live = this.live(e)
     return {
       status: true,
-      voice: !!e.handle || this.modReady(e, actions),
-      focus: !!e.handle,
+      voice: live && (!!e.handle || this.modReady(e, actions)),
+      focus: live && !!e.handle,
       answer: !!e.approvalOpen,
     }
   }
@@ -135,8 +137,11 @@ export class ObservedSource implements HostSource {
       e.terminalOnly = state === 'terminal'
     } else if (state === 'answered' && e.agent.state === 'needs-you') {
       this.setState(e, 'working', now)
+    } else if (state === 'left' && e.agent.state === 'needs-you') {
+      // Expired, or the dial went: the terminal's prompt still waits, so the agent stays needs-you, and only the transcript
+      // growing from now says it was answered there. A line written while the card showed is not an answer.
+      e.since = now
     }
-    // Left (expired, or the dial went): the terminal's prompt still waits, so the agent stays needs-you.
     this.emit()
     return { ...e.agent }
   }
@@ -157,6 +162,9 @@ export class ObservedSource implements HostSource {
     if (text.length > MAX_TEXT) return refuse('too-long', 'Too long. Say it shorter.')
     const current = e?.agent ?? agent
     const busy = (): SendResult => refuse('busy', `${current.name} is busy. Say it when it is done.`)
+    const noAnswer = (): SendResult => refuse('no-answer', `${current.name} did not answer.`)
+    // Its session ended: its terminal holds a shell now, where these words would run.
+    if (e && !this.live(e)) return noAnswer()
     // A prompt typed into a turn would answer its question or queue behind it, unseen.
     if (inTurn(current)) return busy()
     if (e && actions) {
@@ -177,7 +185,7 @@ export class ObservedSource implements HostSource {
         return { ok: true }
       }
     }
-    return refuse('no-answer', `${current.name} did not answer.`)
+    return noAnswer()
   }
 
   /** Still listed, and its session has not ended. */
@@ -186,9 +194,9 @@ export class ObservedSource implements HostSource {
   }
 
   focus(agent: HostAgent): Promise<boolean> {
-    const handle = this.entries.get(agent.id)?.handle
+    const e = this.entries.get(agent.id)
     const actions = this.deps.actions
-    return handle && actions ? actions.orcaOpen(handle) : Promise.resolve(false)
+    return e?.handle && actions && this.live(e) ? actions.orcaOpen(e.handle) : Promise.resolve(false)
   }
 
   private emit(): void {
@@ -387,10 +395,12 @@ export class ObservedSource implements HostSource {
    */
   async checkWorking(): Promise<void> {
     const all = [...this.entries.values()]
+    // A card on the dial waits for its answer, which the card's end tells: a line written meanwhile is not one.
+    const waits = (e: Entry): boolean => e.agent.state === 'needs-you' && !e.approvalOpen
     for (const e of all) {
-      if (e.agent.state !== 'needs-you' || !e.transcriptPath) continue
+      if (!waits(e) || !e.transcriptPath) continue
       const stamp = await this.deps.fileStamp(e.transcriptPath)
-      if (!stamp || stamp.mtime <= e.since || e.agent.state !== 'needs-you' || this.entries.get(e.agent.id) !== e) continue
+      if (!stamp || stamp.mtime <= e.since || !waits(e) || this.entries.get(e.agent.id) !== e) continue
       const now = this.deps.now()
       this.setState(e, 'working', now)
       e.agent.lastActivityAt = now
