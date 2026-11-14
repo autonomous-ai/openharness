@@ -1,6 +1,6 @@
 // Which app a session the open scan found runs in, from its parents' executables alone. Every process here is made up:
 // no test reads this machine's processes, and none reads any process's environment.
-import { execFileSync } from 'node:child_process'
+import { execFile, execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -11,6 +11,17 @@ import { ObservedSource, type ObservedDeps } from './observed.js'
 import {
   appRoots, learnApps, parseProcessNames, readBundleId, readProcessNames, scannedApps, type ProcessName, type ScannedAppDeps,
 } from './scannedApp.js'
+
+// The patient exec, as the scan's default `ps` gets it: each call is kept, and answered with a made-up table.
+const patient = vi.hoisted(() => ({ calls: [] as unknown[][] }))
+vi.mock('../../lib/patientExec.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../lib/patientExec.js')>(),
+  patientExec: (wrapped: unknown) => (file: string, args: readonly string[], options: object,
+    done: (error: null, stdout: string, stderr: string) => void) => {
+    patient.calls.push([wrapped, file, args, options])
+    done(null, '  100     1 claude\n', '')
+  },
+}))
 
 const HOME = '/Users/someone'
 const ROOTS = appRoots(HOME)
@@ -255,6 +266,12 @@ describe('the process table the scan reads', () => {
     const exec = vi.fn(async (): Promise<string | null> => '  100     1 claude\n')
     await learnApps([100], exec)
     expect(exec.mock.calls).toEqual([['ps', ['-axo', 'pid=,ppid=,comm='], { timeout: 3_000, maxBuffer: 1024 * 1024 }]])
+  })
+
+  it.skipIf(process.platform === 'win32')('runs ps through the patient exec: a held loop never reads as an empty table', async () => {
+    patient.calls.length = 0
+    expect(await learnApps([100])).toEqual(new Map())
+    expect(patient.calls).toEqual([[execFile, 'ps', ['-axo', 'pid=,ppid=,comm='], { timeout: 3_000, maxBuffer: 1024 * 1024 }]])
   })
 
   it('a ps that failed or listed nobody is an error that says nothing of what it printed', async () => {
