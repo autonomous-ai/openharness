@@ -3,7 +3,7 @@ import { basename } from 'node:path'
 // Types only: the devices process must not load core code.
 import type { ObservedHookEvent } from '../../core/observedHook.js'
 import type { OpenSessions, SessionRows } from '../../lib/sessionSearch/external.js'
-import { within } from '../../lib/sessionSearch/externals/support.js'
+import { type fileStamp, within } from '../../lib/sessionSearch/externals/support.js'
 import type { ExternalEngine, RunningProcess } from '../../lib/sessionSearch/externals/types.js'
 import { detectHost } from './hostDetect.js'
 import type { Caps, HostAgent, HostAgentState, HostSource } from './types.js'
@@ -19,6 +19,8 @@ const ANSWER_CHARS = 300
 /** The core's Stop grace (STOP_HOOK_GRACE_MS, core/turns/turnHooks.ts, which this process must not load): Claude's
  *  transcript can lag its Stop hook, and an answer read at once is the last turn's or none. */
 const ANSWER_GRACE_MS = 1_500
+/** A turn's hook runs before the engine marks the turn begun in its record: a turn younger than this may still read idle. */
+const TURN_SETTLE_MS = 2_000
 
 /** A name-based UUID (v5 layout, SHA-1) of engine + sessionId, so the same session always gets the same id. */
 export function observedAgentId(engine: string, sessionId: string): string {
@@ -39,6 +41,8 @@ export interface ObservedDeps {
   openSessions: Pick<OpenSessions, 'owners' | 'busy'>
   sessionRows: Pick<SessionRows, 'find'>
   lastAnswer(engine: string, path: string): Promise<string | undefined>
+  /** A transcript's last change (externals/support.ts fileStamp): one that grew while its agent waited was answered. */
+  fileStamp: typeof fileStamp
   /** Folders whose sessions are Harness's own (its data folder), as the external sessions are given them: never observed. */
   excluded: readonly string[]
   log(line: string): void
@@ -111,7 +115,8 @@ export class ObservedSource implements HostSource {
         a.lastAnswer = undefined
         break
       case 'needs-input':
-        this.setState(a, 'needs-you', now)
+        // Only a turn waits on the person: a notice to an idle or finished agent is stale.
+        if (a.state === 'working') this.setState(a, 'needs-you', now)
         break
       case 'turn-error':
         this.setState(a, 'error', now)
@@ -248,9 +253,25 @@ export class ObservedSource implements HostSource {
     if (changed) this.emit()
   }
 
-  /** Codex sends no end-of-turn hook: a working session is done once its owner's record reads idle. Called every 3 s. */
+  /**
+   * The turns no hook moves, every 3 s. A person who answers a prompt in their own terminal sends no hook: the transcript
+   * growing past the moment the agent began waiting says the turn goes on. Codex sends no end-of-turn hook, and a Claude
+   * turn stopped with Esc gets no Stop: the owner's record reading idle says each is over.
+   */
   async checkWorking(): Promise<void> {
-    const turns = [...this.entries.values()].filter((e) => e.agent.engine === 'codex' && e.agent.state === 'working')
+    const all = [...this.entries.values()]
+    for (const e of all) {
+      if (e.agent.state !== 'needs-you' || !e.transcriptPath) continue
+      const stamp = await this.deps.fileStamp(e.transcriptPath)
+      if (!stamp || stamp.mtime <= e.agent.since || e.agent.state !== 'needs-you' || this.entries.get(e.agent.id) !== e) continue
+      const now = this.deps.now()
+      this.setState(e.agent, 'working', now)
+      e.agent.lastActivityAt = now
+      this.emit()
+    }
+    const at = this.deps.now()
+    const turns = all.filter((e) => (e.agent.engine === 'codex' || e.agent.engine === 'claude')
+      && e.agent.state === 'working' && at - e.agent.since >= TURN_SETTLE_MS)
     if (!turns.length) return
     const owners = await this.deps.openSessions.owners()
     for (const e of turns) {
@@ -259,9 +280,15 @@ export class ObservedSource implements HostSource {
       if (!owner || await this.deps.openSessions.busy(owner)) continue
       if (e.agent.state !== 'working' || this.entries.get(e.agent.id) !== e) continue
       const now = this.deps.now()
+      e.agent.lastActivityAt = now
+      if (e.agent.engine === 'claude') {
+        // Stopped with Esc: no answer, nothing to tell as done.
+        this.setState(e.agent, 'idle', now)
+        this.emit()
+        continue
+      }
       this.setState(e.agent, 'done', now)
       e.agent.unseenDone = true
-      e.agent.lastActivityAt = now
       this.emit()
       await this.readAnswer(e)
     }

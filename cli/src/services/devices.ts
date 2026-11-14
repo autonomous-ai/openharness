@@ -42,7 +42,7 @@ import { harnessDevicesRequest } from '../lib/harnessDevices.js'
 import { truncateUtf8 } from '../lib/deviceRecentTrim.js'
 import { OpenSessions, SessionRows } from '../lib/sessionSearch/external.js'
 import { externalProviders } from '../lib/sessionSearch/externals/index.js'
-import { listProcesses, processAlive } from '../lib/sessionSearch/externals/support.js'
+import { fileStamp, listProcesses, processAlive } from '../lib/sessionSearch/externals/support.js'
 import { setVoiceRouterDeviceConnected, setVoiceRouterSessions, shutdownVoiceRouter } from '../lib/voiceRouter.js'
 import { createTally, createTierDecider, type Tier, type TierDecision, type TierInput } from '../lib/notifyTier.js'
 import { createPartGuard } from './devicesGuard.js'
@@ -98,10 +98,10 @@ const sid = (id: string): string => id.slice(0, 8)
 /** A card for the dial, and the machine it came from when another machine sent it (services/fleet.ts). */
 type DialEvent = NonNullable<ReturnType<typeof cableEventFor>> & { machineId?: string }
 
-// The agents outside a pane: how often their processes are checked, a Codex turn's end is looked for, and, while a dial
+// The agents outside a pane: how often their processes are checked, the turns no hook moves are looked at, and, while a dial
 // is attached, the open sessions are scanned (docs/specs/2026-11-13-device-without-the-app.md, "ObservedSource").
 const OBSERVED_TICK_MS = 30_000
-const CODEX_CHECK_MS = 3_000
+const TURN_CHECK_MS = 3_000
 const OPEN_SCAN_MS = 60_000
 /** Under the round dial's 25 s fuse (firmware ui_prune_stale_busy): it forgets a turn it hears nothing of for that long,
  *  and only `turn.started` renews it. An agent outside a pane sends no step to renew it with. */
@@ -122,6 +122,7 @@ function observedSource(dataDir: string, log: (line: string) => void): ObservedS
       roots: engine === 'claude' ? claudeProjectsRoots(env.CLAUDE_PROJECTS_DIR) : codexHomeRoots(env.CODEX_HOME).map((home) => join(home, 'sessions')),
       maxBytes: LAST_ANSWER_MAX_BYTES, deadlineMs: LAST_ANSWER_DEADLINE_MS,
     }),
+    fileStamp,
     log,
   })
 }
@@ -614,7 +615,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     timer.unref()
     return timer
   }
-  const timers = observed ? [every(OBSERVED_TICK_MS, () => observed.tick()), every(CODEX_CHECK_MS, () => observed.checkWorking())] : []
+  const timers = observed ? [every(OBSERVED_TICK_MS, () => observed.tick()), every(TURN_CHECK_MS, () => observed.checkWorking())] : []
   /** The scan and the reminders, for an attached dial alone. */
   let attached: ReturnType<typeof setInterval>[] = []
   const dialAttached = (on: boolean): void => {

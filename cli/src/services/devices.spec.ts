@@ -160,6 +160,7 @@ vi.mock('../lib/sessionSearch/externals/support.js', async (real) => ({
   ...await real<typeof import('../lib/sessionSearch/externals/support.js')>(),
   listProcesses: async () => [],
   processAlive: () => true,
+  fileStamp: async () => null,
 }))
 vi.mock('../cable/hosts/lastAnswer.js', async (real) => ({
   ...await real<typeof import('../cable/hosts/lastAnswer.js')>(),
@@ -1639,9 +1640,11 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
 
   it('observed needs-input reaches the dial as turn.activity Waiting for you · Orca', async () => {
     const { core, port } = start({ faults: ['fleet'] })
+    // A turn waits on the person (observed.ts takes needs-input only mid-turn).
+    port.observed(hook('turn-start'))
     port.observed(hook('needs-input'))
     // turn.started carries the line, and the activity the session reads right after it (its turn.activity) is the same.
-    expect(calls('turnStarted')).toEqual([[ID, 'Waiting for you · Orca', undefined]])
+    expect(calls('turnStarted')).toEqual([[ID, '', undefined], [ID, 'Waiting for you · Orca', undefined]])
     expect(await host().activityText(ID)).toBe('Waiting for you · Orca')
     expect(await host().activitySnapshot(ID)).toEqual({ text: 'Waiting for you · Orca' })
     port.observed(hook('turn-start'))
@@ -1656,23 +1659,24 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     vi.useFakeTimers()
     const { port } = start()
     const other = observedAgentId('claude', 'sess-2')
+    port.observed(hook('turn-start'))
     port.observed(hook('needs-input'))
     port.observed(hook('turn-start', { sessionId: 'sess-2', hostHints: {} }))
     port.observed(hook('session-start', { sessionId: 'sess-3' }))
-    expect(calls('turnStarted')).toEqual([[ID, 'Waiting for you · Orca', undefined], [other, '', undefined]])
+    expect(calls('turnStarted').slice(1)).toEqual([[ID, 'Waiting for you · Orca', undefined], [other, '', undefined]])
     // No dial: nobody to remind.
     await vi.advanceTimersByTimeAsync(40_000)
-    expect(calls('turnStarted')).toHaveLength(2)
+    expect(calls('turnStarted')).toHaveLength(3)
     // The dial forgets a turn it hears nothing of for 25 s (firmware ui_prune_stale_busy), and a person can take minutes.
     seen.host.watching!(true)
     await vi.advanceTimersByTimeAsync(20_000)
-    expect(calls('turnStarted').slice(2)).toEqual([[ID, 'Waiting for you · Orca', undefined], [other, '', undefined]])
+    expect(calls('turnStarted').slice(3)).toEqual([[ID, 'Waiting for you · Orca', undefined], [other, '', undefined]])
     port.observed(hook('turn-stop', { sessionId: 'sess-2' }))
     await vi.advanceTimersByTimeAsync(20_000)
-    expect(calls('turnStarted').slice(4)).toEqual([[ID, 'Waiting for you · Orca', undefined]])
+    expect(calls('turnStarted').slice(5)).toEqual([[ID, 'Waiting for you · Orca', undefined]])
     seen.host.watching!(false)
     await vi.advanceTimersByTimeAsync(60_000)
-    expect(calls('turnStarted')).toHaveLength(5)
+    expect(calls('turnStarted')).toHaveLength(6)
   })
 
   it('moves a harness agent on the machine list with the cards it is sent, a sub-agent\'s aside', async () => {
