@@ -3,7 +3,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import type { CableHostWiring, DaemonCableHost } from '../cable/cableHost.js'
 import { observedAgentId } from '../cable/hosts/observed.js'
 import { env } from '../config/env.js'
@@ -1539,7 +1539,10 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
   })
 
   it('HARNESS_DEVICE_OBSERVED=off ignores observed events and lists only harness agents with no window', async () => {
-    vi.stubEnv('HARNESS_DEVICE_OBSERVED', 'off')
+    // Read once with the rest of the environment (config/env.ts), as the cable's own switches are.
+    const switched = env as { HARNESS_DEVICE_OBSERVED: boolean }
+    switched.HARNESS_DEVICE_OBSERVED = false
+    onTestFinished(() => { switched.HARNESS_DEVICE_OBSERVED = true })
     const { port } = start({ core: harnessAgent(), faults: ['fleet'] })
     port.observed(hook('needs-input'))
     expect(await machineList(port)).toMatchObject({ view: 'machine', total: 1, agents: [{ id: 'h1', host: 'harness', caps: 'sva' }] })
