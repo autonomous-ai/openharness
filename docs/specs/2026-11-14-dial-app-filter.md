@@ -138,9 +138,15 @@ The state is `shown`, `pickedOnDial` (a boolean), `tieBreak` (the app drawn and 
    - if it has agents and is not `shown`, `shown` becomes it (`none`, no listed app in front, is no app and never
      has agents);
    - otherwise `shown` stays.
+   - **The app in front gets agents later** (the PM, 2026-11-15, D1): while no pick holds, the settled app in front
+     (never `none`) is shown as soon as it has known agents, counted as `front`. So an agent started in the app the
+     person is using turns the dial to it, and a default page gives way to the app in front once that app's agents are
+     known. This is the cause of the one flaky end-to-end run (Review Focus 7).
 3. **A pick on the dial** (`app.pick`): `shown` becomes the picked app and `pickedOnDial` is set. While it is set,
    step 2 changes only `settledFront`. A pick of an app with no agents (the list moved under the finger) is ignored,
-   and the dial gets `apps` again.
+   and the dial gets `apps` again. A pick, or a notice, of the app already shown (`same`) changes nothing: Done on the
+   shown app is how a person leaves the picker without changing anything (the PM, 2026-11-15, D2, which withdraws
+   commit `85ad59b619`).
 4. **With a Harness window,** the dial keeps the active tab, as decided on 2026-09-17: it gets no `apps` and a pick
    is ignored. The filter still follows the app in front (step 2) meanwhile, so when the window closes the dial shows
    the app in front, if it has agents.
