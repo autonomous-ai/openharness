@@ -1,8 +1,8 @@
 import { spawn } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
 import { CableFleet as SourceFleet, testDialDiscovery, type CableFleetOptions } from './cableFleet.js'
 import { CableSession, type CableHost, type CablePort } from './cableSession.js'
@@ -625,10 +625,69 @@ describe('macOS USB inventory', () => {
     +-o serial
       "sessionID" = 99
       "IOCalloutDevice" = "/dev/tux"
+  +-o Tam
+    "sessionID" = 26004684572539
+    "idProduct" = 4097
+    "idVendor" = 12346
+    "USB Serial Number" = "CC:03"
+    +-o interface
+      "idProduct" = 4097
+      "sessionID" = 98
+      "idVendor" = 12346
+      "USB Serial Number" = "CC:03"
+      +-o serial
+        "IOCalloutDevice" = "/dev/tam"
   +-o console
     "IOCalloutDevice" = "/dev/debug-console"`
-    // The attachment identity is the USB device's own sessionID, not one from a node below it.
-    expect(parseDarwinDialPorts(dump)).toEqual([device('/dev/tim', 'AA:01'), { ...device('/dev/tux', 'BB:02'), session: '14351572441873' }])
+    // The attachment identity is the USB device's own sessionID, wherever it stands among the ids (a real dump
+    // lists it first), not one from a node below it.
+    expect(parseDarwinDialPorts(dump)).toEqual([
+      device('/dev/tim', 'AA:01'),
+      { ...device('/dev/tux', 'BB:02'), session: '14351572441873' },
+      { ...device('/dev/tam', 'CC:03'), session: '26004684572539' },
+    ])
+  })
+
+  it('reads one chain per serial port, as ioreg -t prints them: two dials behind one hub keep their own serial and session', () => {
+    const dump = `+-o Root
+  +-o hub
+    "idVendor" = 8457
+    "idProduct" = 10261
+    "sessionID" = 100
+    +-o Tim
+      "sessionID" = 101
+      "idProduct" = 4097
+      "idVendor" = 12346
+      "USB Serial Number" = "AA:01"
+      +-o serial
+          "IOCalloutDevice" = "/dev/cu.usbmodem1101"
++-o Root
+  +-o hub
+    "idVendor" = 8457
+    "idProduct" = 10261
+    "sessionID" = 100
+    +-o Tux
+      "idProduct" = 4097
+      "idVendor" = 12346
+      "USB Serial Number" = "BB:02"
+      +-o serial
+          "IOCalloutDevice" = "/dev/cu.usbmodem1201"
++-o Root
+  +-o bluetooth
+    +-o serial
+        "IOCalloutDevice" = "/dev/cu.Bluetooth-Incoming-Port"`
+    // Tux lists no sessionID: the hub's above it is not its attachment.
+    expect(parseDarwinDialPorts(dump)).toEqual([{ ...device('/dev/cu.usbmodem1101', 'AA:01'), session: '101' }, device('/dev/cu.usbmodem1201', 'BB:02')])
+  })
+
+  it('finds exactly the dial in a real dump of the serial-port query, with its device node\'s own session', () => {
+    // `ioreg -r -c IOSerialBSDClient -t -w0 -l` on the Mac of the 2026-11-14 report: the chains of debug-console, a
+    // dial behind a USB hub, and the Bluetooth port. Trimmed: only the USB nodes and the serial ports keep their
+    // properties (the others name the console user, the Mac's serial numbers and its addresses), and the dial's
+    // serial number is made up.
+    const dump = readFileSync(fileURLToPath(new URL('./__fixtures__/ioregSerialClients.txt', import.meta.url)), 'utf8')
+    // 26004684572539 is the dial's own sessionID, listed before its ids; the hub above it has 26004667014204.
+    expect(parseDarwinDialPorts(dump)).toEqual([{ ...device('/dev/cu.usbmodem21101', 'AA:BB:CC:DD:EE:01'), session: '26004684572539' }])
   })
 
   describe('dial scan gate', () => {
