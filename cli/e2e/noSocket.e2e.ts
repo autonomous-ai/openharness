@@ -4,7 +4,7 @@
  * too leaves the daemon serving on its port alone. The services that run in processes of their own reach the core only through that socket, so the
  * master runs them in the core's process instead, and every one still answers.
  */
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
@@ -15,9 +15,12 @@ import { localSocketName, socketPathIn } from '../src/lib/localSocket.js'
 describe('a data folder too deep for the local socket', () => {
   let daemon: IsolatedDaemon | undefined
   let deep = ''
+  const tmp = process.env.TMPDIR
   afterEach(async () => {
     await daemon?.close()
     daemon = undefined
+    if (tmp === undefined) delete process.env.TMPDIR
+    else process.env.TMPDIR = tmp
     if (deep) rmSync(deep, { recursive: true, force: true })
   })
 
@@ -44,5 +47,19 @@ describe('a data folder too deep for the local socket', () => {
     // And no service process is left crashing on every start because it cannot reach the core.
     expect(d.log()).not.toMatch(/the core has no local socket to reach/)
     client.close()
+  })
+
+  it('refuses at once, saying so, the harness\'s own data folder under a TMPDIR too long, and leaves no root', async () => {
+    deep = mkdtempSync(join(tmpdir(), 'harness-deep-'))
+    // A daemon made outside the suite's setup: the run's TMPDIR fits, this one does not.
+    const long = join(deep, 'a-temporary-folder-whose-path-is-longer-than-a-unix-socket-path-may-be')
+    mkdirSync(long)
+    process.env.TMPDIR = long
+    const refused = await IsolatedDaemon.create({ port: 54321 }).then((made) => { daemon = made; return null }, (error: Error) => error.message)
+    const said = /^TMPDIR is too long for the daemon's Unix socket: (\S+\/htmux-\w{6}\/data\/daemon-54321\.sock) would be (\d+) bytes; a socket path has room for 96\. Run with a shorter TMPDIR, for example TMPDIR=\/tmp npm run test:e2e\.$/.exec(refused ?? '')
+    expect(said, refused ?? 'the daemon was created').not.toBeNull()
+    expect(said![1].startsWith(`${realpathSync(long)}/`)).toBe(true)
+    expect(Number(said![2])).toBe(Buffer.byteLength(said![1]))
+    expect(readdirSync(long)).toEqual([])
   })
 })
