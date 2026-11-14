@@ -205,6 +205,42 @@ spawnTied(${JSON.stringify(fake)}, [], { env: process.env, detached: true, stdio
     expect(code).toBeLessThan(0) // Node's own close after a failed start, never the shell's 127
   })
 
+  // A grid launcher whose venv Python an upgrade removed: exec says ENOENT, as for a missing command, and callers read
+  // it as "not installed". Through the shell it was a run that failed, "bad interpreter" on its stderr.
+  it.skipIf(windows)('a script whose #! interpreter is gone is the ENOENT a plain spawn gives, with nothing that reads as a run', async () => {
+    const file = join(scratch, 'orphaned', 'launcher')
+    mkdirSync(dirname(file), { recursive: true })
+    writeFileSync(file, `#!${join(scratch, 'orphaned', 'venv', 'python')}\nprint(1)\n`, { mode: 0o755 })
+    const child = spawnTied(file, [], { env: process.env })
+    const said: unknown[][] = []
+    child.on('error', (error: NodeJS.ErrnoException) => said.push(['error', error.code, error.path]))
+    child.on('exit', (...how) => said.push(['exit', ...how]))
+    const [code] = await closed(child)
+    expect(said).toEqual([['error', 'ENOENT', file]])
+    expect(code).toBeLessThan(0)
+  })
+
+  it.skipIf(windows)('a script is tied whether its #! names its interpreter by path, through env, or not at all', async () => {
+    const dir = join(scratch, 'interpreters')
+    mkdirSync(dir, { recursive: true })
+    for (const [name, head] of [['by-path', '#! /bin/sh\n'], ['by-env', '#!/usr/bin/env sh\n'], ['none', '']]) {
+      writeFileSync(join(dir, name), `${head}exit 4\n`, { mode: 0o755 })
+      const child = spawnTied(join(dir, name), [], { env: process.env })
+      expect(child.stdio).toHaveLength(4)
+      expect(await closed(child)).toEqual([4, null])
+    }
+  })
+
+  // Exec reads a script this process may not: it is left to exec, tied, as before.
+  it.skipIf(windows)('a script this process cannot read is still tied', async () => {
+    const file = join(scratch, 'execute-only')
+    writeFileSync(file, '#!/no/such/interpreter\n', { mode: 0o111 })
+    const child = spawnTied(file, [], { env: process.env })
+    child.on('error', () => {})
+    expect(child.stdio).toHaveLength(4)
+    await closed(child)
+  })
+
   // Out of fds (EMFILE), a plain spawn hands back a child with no stdio and an `error` its caller hears. The tie read
   // that stdio and threw first, so no caller was listening, and the error that followed crashed the service.
   it.skipIf(windows)('a start with no fd left fails as a plain spawn does, for both calls, and this process lives on', async () => {
@@ -386,6 +422,13 @@ describe('execFileTied', () => {
       const error = await failure(execFileTied(name(), [], { env: process.env }))
       expect([error.code, error.killed, error.stdout, error.stderr]).toEqual(['ENOENT', false, '', ''])
     })
+
+  it.skipIf(windows)('a script whose #! interpreter is gone rejects with spawn\'s own ENOENT', async () => {
+    const file = join(scratch, 'orphaned-call')
+    writeFileSync(file, '#!/no/such/interpreter\n', { mode: 0o755 })
+    const error = await failure(execFileTied(file, [], { env: process.env }))
+    expect([error.code, error.killed, error.stdout, error.stderr]).toEqual(['ENOENT', false, '', ''])
+  })
 
   // podman.run reads stderr off the rejection and appModels.ts hands stdout and stderr on: a start spawn refuses at
   // once (an argument with a NUL in it) rejected with neither, and podman.run's own TypeError hid what had happened.
