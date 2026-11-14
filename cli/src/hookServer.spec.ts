@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto'
-import { request, type Server } from 'node:http'
+import { request, type IncomingMessage, type Server } from 'node:http'
+import type { Socket } from 'node:net'
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -435,6 +436,33 @@ describe('process-owned hook server', () => {
       await aborted
       // The answer that comes after has nobody to go to.
       answer(name === 'onApproval' ? 'allow' : { text: 'late' })
+    })
+
+    // Over TCP, who is calling is looked up before any route (audit H1). A client gone during that closed before the route
+    // listened for it: the route never saw it go, and sat reading a body that never comes.
+    it.each(ROUTES)('%s lets go of a client that went while who it is was looked up, reading and forwarding nothing', async (path, name) => {
+      const handler = vi.fn(async () => 'invalid' as const)
+      let answered!: () => void
+      const lookedUp = new Promise<void>((resolve) => { answered = resolve })
+      // The lookup answers only once the client has gone.
+      const peerAccount = (socket: Socket) => new Promise<boolean>((resolve) => socket.once('close', () => { resolve(true); answered() }))
+      const started = await startHookServer(0, { onRegistered: vi.fn(), onSessionEnd: vi.fn(), [name]: handler }, { peerAccount })
+      server = started.server
+      const arrived: IncomingMessage[] = []
+      server.prependListener('request', (req: IncomingMessage) => { arrived.push(req) })
+      const client = new AbortController()
+      const request = fetch(`http://127.0.0.1:${started.port}${path}`, {
+        method: 'POST', body: JSON.stringify(APPROVAL), signal: client.signal,
+        headers: { 'content-type': 'application/json', 'x-harness-hook-token': readHookCredential(env.ADAPTER_DATA_DIR)! },
+      }).catch(() => 'gone')
+      await vi.waitFor(() => expect(arrived).toHaveLength(1))
+      client.abort()
+      expect(await request).toBe('gone')
+      await lookedUp
+      // Every step the route takes after the lookup has run.
+      await new Promise((resolve) => setImmediate(resolve))
+      expect(arrived[0].listenerCount('data')).toBe(0)
+      expect(handler).not.toHaveBeenCalled()
     })
 
     it.each(ROUTES)('%s leaves its signal alone once the answer is written', async (path, name) => {
