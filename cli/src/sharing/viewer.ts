@@ -1,9 +1,10 @@
-import { spawn, type ChildProcess } from 'node:child_process'
+import type { ChildProcess } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { WebSocket } from 'ws'
+import { spawnTied } from '../lib/tied.js'
 
 type Payload = Record<string, unknown>
 type Listener = (frame: Payload) => void
@@ -49,7 +50,8 @@ export class ViewerCapture {
     // none; `--enable-unsafe-swiftshader` keeps that fallback available on Chrome builds that gate it.
     // This disposable profile never holds account credentials. OS credential stores can block
     // its first navigation behind an invisible unlock prompt on a locked or SSH-only host.
-    this.child = spawn(browser, ['--headless=new', '--enable-unsafe-swiftshader', '--no-first-run', '--no-default-browser-check',
+    // Tied: each crash of the viewers service left a headless Chrome running on the owner's computer.
+    this.child = spawnTied(browser, ['--headless=new', '--enable-unsafe-swiftshader', '--no-first-run', '--no-default-browser-check',
       '--disable-sync', '--disable-extensions', '--disable-background-networking', '--mute-audio',
       '--use-mock-keychain', '--password-store=basic',
       '--remote-debugging-address=127.0.0.1', '--remote-debugging-port=0',

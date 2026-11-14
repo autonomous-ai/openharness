@@ -301,6 +301,45 @@ describe('process-owned hook server', () => {
   })
 
   it.each([
+    ['ok', 200], ['invalid', 400], ['dropped', 200],
+  ] as const)('answers %s from onObserved with %i', async (outcome, status) => {
+    const onObserved = vi.fn(() => outcome)
+    const { base, headers } = await start({ onObserved })
+    const response = await fetch(`${base}/api/hook/observed`, { method: 'POST', headers, body: JSON.stringify({ engine: 'claude' }) })
+    expect(response.status).toBe(status)
+    expect(onObserved).toHaveBeenCalledWith({ engine: 'claude' })
+  })
+
+  it('answers 200 to /api/hook/observed when no handler is wired', async () => {
+    const { base, headers } = await start()
+    expect((await fetch(`${base}/api/hook/observed`, { method: 'POST', headers, body: '{}' })).status).toBe(200)
+  })
+
+  it('answers 400 to a bad json body on /api/hook/observed', async () => {
+    const onObserved = vi.fn(() => 'ok' as const)
+    const { base, headers } = await start({ onObserved })
+    expect((await fetch(`${base}/api/hook/observed`, { method: 'POST', headers, body: '{nope' })).status).toBe(400)
+    expect(onObserved).not.toHaveBeenCalled()
+  })
+
+  it('answers 400 to a 4097-byte body', async () => {
+    const onObserved = vi.fn(() => 'ok' as const)
+    const { base, headers } = await start({ onObserved })
+    const body = JSON.stringify({ pad: 'x'.repeat(4097 - 10) })
+    expect(Buffer.byteLength(body)).toBe(4097)
+    expect((await fetch(`${base}/api/hook/observed`, { method: 'POST', headers, body })).status).toBe(400)
+    expect(onObserved).not.toHaveBeenCalled()
+  })
+
+  it('answers 401 without the hook token', async () => {
+    const onObserved = vi.fn(() => 'ok' as const)
+    const { base } = await start({ onObserved })
+    const response = await fetch(`${base}/api/hook/observed`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
+    expect(response.status).toBe(401)
+    expect(onObserved).not.toHaveBeenCalled()
+  })
+
+  it.each([
     ['/api/hook/session-end', { reason: 'clear' }, 'onSessionEnd'],
     ['/api/hook/turn-start', {}, 'onTurnStart'],
     ['/api/hook/tool-start', { toolUseId: 'tool-1', toolName: 'Task' }, 'onToolStart'],

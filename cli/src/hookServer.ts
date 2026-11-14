@@ -68,6 +68,8 @@ export interface PairOutcome {
 }
 
 export interface HookServerHandlers {
+  /** A paneless agent's hook event (core/observedHook.ts): checked, rate limited and forwarded, never kept. */
+  onObserved?: (body: unknown) => 'ok' | 'invalid' | 'dropped'
   onAutonomousDeviceRequest?: (method: string, target: string, body?: unknown) => Promise<{ status: number; body: unknown }>
 
   onRegistered: (
@@ -952,6 +954,17 @@ export function startHookServer(
         } catch { json(400, { error: 'bad json' }); return }
         if (!await verifiedBoundMutation(body, handlers)) { json(403, { error: 'UNBOUND_HOOK' }); return }
         if (body.sessionId) handlers.onTurnStart?.({ sessionId: body.sessionId })
+        json(200, { ok: true })
+        return
+      }
+
+      if (req.method === 'POST' && url === '/api/hook/observed') {
+        if (!hookOk) { json(401, { error: 'UNAUTHORIZED' }); return }
+        let body: unknown
+        // 4 KB: an event is a few ids and paths. Over the limit readBody gives '', which is not JSON.
+        try { body = JSON.parse(await readBody(req, 4096)) as unknown } catch { json(400, { error: 'bad json' }); return }
+        // A dropped event (rate limited, or the devices not there) is not the hook's error: it never retries.
+        if (handlers.onObserved?.(body) === 'invalid') { json(400, { error: 'invalid observed body' }); return }
         json(200, { ok: true })
         return
       }

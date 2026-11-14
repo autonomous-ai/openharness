@@ -13,11 +13,12 @@
  * One sign-in at a time, by the phone's operation id: asked again under it, the phone reads how it goes; a new id stops
  * the one before. Bounded in time and output (core/AGENTS.md rule 4).
  */
-import { spawn, type ChildProcess } from 'node:child_process'
+import type { ChildProcess } from 'node:child_process'
 import { accessSync, constants, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { engineInstallPaths, engineInstallRecipe } from '../lib/engineInstall.js'
+import { spawnTied } from '../lib/tied.js'
 import { identifier } from './wire.js'
 
 type Json = Record<string, unknown>
@@ -206,7 +207,7 @@ export function startEngineLogin(engine: SignInEngine): ClaudeLogin {
   writeFileSync(browser, '#!/bin/sh\nprintf \'%s\\n\' "$1" > "$HARNESS_CLAUDE_PAGE"\n', { mode: 0o700 })
   const { WAYLAND_DISPLAY: _wayland, DISPLAY: _x11, ...env } = process.env
   const args = engine === 'codex' ? ['login'] : ['auth', 'login', '--claudeai']
-  const child = spawn(engineExecutable(engine), args,
+  const child = spawnTied(engineExecutable(engine), args,
     { stdio: ['pipe', 'pipe', 'pipe'], env: { ...env, BROWSER: browser, HARNESS_CLAUDE_PAGE: page } })
   return {
     child,

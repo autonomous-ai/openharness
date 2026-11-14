@@ -4,7 +4,7 @@ import { join } from 'node:path'
 
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { ExternalSessions, foregroundJob, OpenSessions, stopSessionOwner, TERMINAL_RESTORE, writeTty } from './external.js'
+import { ExternalSessions, foregroundJob, OpenSessions, SessionRows, stopSessionOwner, TERMINAL_RESTORE, writeTty } from './external.js'
 import type { ExternalEngine, ExternalProvider, ExternalSession, OwnerClaim, ProcessView } from './externals/types.js'
 
 const dirs: string[] = []
@@ -55,6 +55,35 @@ describe('ExternalSessions', () => {
     const [a, b] = [sessions.scan(), sessions.scan()]
     expect(a).toBe(b)
     expect(await a).toEqual([])
+  })
+})
+
+describe('SessionRows', () => {
+  it("finds sessions in their own engines' stores alone, each engine's memo kept between looks", async () => {
+    const scanned: string[] = []
+    let heads = 0
+    let excludes: boolean | null = null
+    const providers: ExternalProvider[] = [
+      { engine: 'claude', scan: async (ctx) => {
+        scanned.push('claude')
+        excludes = ctx.excluded('/data/harness/voice-route-scratch')
+        await ctx.memo('claude:/t/a.jsonl', '1:1', async () => { heads++ })
+        return [session('a', 'claude', 1), session('b', 'claude', 2)]
+      } },
+      { engine: 'cursor', scan: async () => { scanned.push('cursor'); return [session('c', 'cursor', 1)] } },
+      { engine: 'codex', scan: async () => { throw new Error('store locked') } },
+    ]
+    const log: string[] = []
+    const rows = new SessionRows({ providers, excluded: ['/data/harness'], log: (line) => log.push(line) })
+    expect(await rows.find(new Map([['a', 'claude'], ['gone', 'claude']]))).toEqual(new Map([['a', session('a', 'claude', 1)]]))
+    expect(await rows.find(new Map([['b', 'claude']]))).toEqual(new Map([['b', session('b', 'claude', 2)]]))
+    // A store with none of them open is never read (Cursor's is a database); a file already read is not read again.
+    expect(scanned).toEqual(['claude', 'claude'])
+    expect(heads).toBe(1)
+    expect(excludes).toBe(true)
+    // A store that cannot be read finds none and says so; a session is only ever its own engine's; an engine with no reader finds none.
+    expect(await rows.find(new Map<string, ExternalEngine>([['x', 'codex'], ['c', 'claude'], ['p', 'pi']]))).toEqual(new Map())
+    expect(log).toEqual(['[search] codex sessions not read: store locked'])
   })
 })
 
@@ -112,6 +141,18 @@ describe('OpenSessions', () => {
     expect((await sessions.owner('both'))?.pid).toBe(3)
     expect((await sessions.owner('lockfirst'))?.pid).toBe(4)
     expect((await sessions.owner('twice'))?.pid).toBe(6)
+  })
+
+  it('says who owns every open session from one look', async () => {
+    const { sessions, looks } = open([{ engine: 'grok', scan: async () => [], owners: async () => [
+      { sessionId: 'term', pid: 1, record: '/r/term' }, { sessionId: 'mine', pid: 9, record: '/r/mine' },
+    ] }])
+    expect(await sessions.owners()).toEqual(new Map([
+      ['term', { pid: 1, engine: 'grok', tty: '/dev/ttys001', record: '/r/term' }],
+      ['mine', { pid: 9, engine: 'grok', tty: '/dev/ttys009', record: '/r/mine', harness: true }],
+    ]))
+    await sessions.owners()
+    expect(looks()).toBe(1)
   })
 
   it('reuses an answer for a while, looks again after, and looks now when asked who owns one', async () => {

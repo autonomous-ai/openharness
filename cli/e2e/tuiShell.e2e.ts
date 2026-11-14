@@ -47,7 +47,9 @@ it.runIf(binary)('keeps connected local shells interactive and composes a remote
   const env: NodeJS.ProcessEnv = { ...a.daemon.env, HN_TMPDIR: a.daemon.root, HN_DESKTOP: 'off', HARNESS_TUI_DESK: 'off',
     HARNESS_TUI_NOTIFY: 'off', HARNESS_SHELL_CLI: join(a.daemon.root, 'bin', 'harness') }
   delete env.TMUX; delete env.TMUX_PANE; delete env.HN_SOCKET
-  hn = async (...args) => (await exec(binary!, ['-L', 'shell-e2e', '--port', String(a.daemon.port), '-f', '/dev/null', ...args],
+  // hn's --port names the daemon's socket (`daemon-<port>.sock`, tui/src/daemon.rs `socket_path`) and hn never falls
+  // back to TCP: the port the daemon was configured with, not the one it bound, which differs once it had to move.
+  hn = async (...args) => (await exec(binary!, ['-L', 'shell-e2e', '--port', String(a.daemon.configuredPort), '-f', '/dev/null', ...args],
     { env, cwd: a.daemon.projectsDir, timeout: 15_000 })).stdout.trim()
   const client = hn
   // Paths in the private HOME can exceed one terminal row. Join soft wraps so

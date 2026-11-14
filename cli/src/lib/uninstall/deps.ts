@@ -14,9 +14,10 @@ import { platformDaemonDeps } from '../platformDaemon.js'
 import { runPowershell } from '../windows/powershell.js'
 import { stopEveryAgent } from './agents.js'
 import { labelHookRemoval, lockHolder, UninstallLockBusy, type UninstallDeps } from './command.js'
+import { UNINSTALL_MARKER } from './marker.js'
 import { endPtyHosts, ptyHostsDeps } from './ptyHosts.js'
 import { filesWithHarnessPathLines, removeHarnessPathLines } from './rcFiles.js'
-import { checkRemovable, finalRemovalDeps, listEntries, removeNow, scheduleFinalRemoval, UNINSTALL_MARKER } from './removal.js'
+import { checkRemovable, finalRemovalDeps, listEntries, removeNow, scheduleFinalRemoval } from './removal.js'
 import { removeUserPathEntry } from './windowsPath.js'
 
 const SERVICE_NAMES: Record<string, string> = { launchd: 'launchd', systemd: 'systemd', taskscheduler: 'Task Scheduler' }

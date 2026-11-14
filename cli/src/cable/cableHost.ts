@@ -38,6 +38,10 @@ import type { PetStore } from './pets/store.js'
 import { LANE_SESSION_OVER, LANE_TOKEN_UNAVAILABLE, type MachineFleet } from './machineFleet.js'
 import type { ReviewedAnswer, AnswerReceipt } from './questionInbox.js'
 import { isTier, type Tier } from '../lib/notifyTier.js'
+import { HarnessSource } from './hosts/harness.js'
+import type { HostEntry, HostRegistry } from './hosts/registry.js'
+import { selectForDial } from './hosts/select.js'
+import { capsLetters, type HostAgent } from './hosts/types.js'
 
 /** One completed turn's recap, as the mirror keeps them. */
 
@@ -148,6 +152,9 @@ function isPlaceholder(id: string): boolean {
 
 /** How long a keepalive may be answered from the last manifest read — see firmwareFor. */
 const RELEASE_KEEP_MS = 30 * 60_000
+/** The longest the machine list holds this computer's Harness agents for Swarm cards a dial asked for: a Swarm service
+ *  that is down or signed out never sends them. */
+const CARDS_WAIT_MS = 10_000
 /**
  * The wait before trying the plug-in's lane again, doubling to the cap: the same backoff as the lane's own reconnect
  * (deviceLink.ts reconnectLater). Diego, 11-01: a first open lost to a refresh that failed in a network blip was
@@ -502,6 +509,43 @@ export class DaemonCableHost implements CableHost {
     this.swarms = swarms
   }
 
+  /** This computer's Harness agents, fed from the list this host reads; the devices put it in their registry. */
+  readonly harness = new HarnessSource()
+
+  /** Every agent on this computer, by source; null when the devices have none. Read only with no window. */
+  private registry: HostRegistry | null = null
+
+  /** Its changes reach the dial on the session's next tick, which reads the list every second. */
+  setRegistry(registry: HostRegistry | null): void {
+    this.registry = registry
+  }
+
+  /** An agent of the machine list and the source that holds it. With a window the dial holds the tab, whose agents
+   *  it may do everything with, so the registry is not asked. */
+  private onMachine(agentId: string): HostEntry | undefined {
+    return this.swarms === null ? this.registry?.entries().find((e) => e.agent.id === agentId) : undefined
+  }
+
+  /** An agent of another app or terminal, heard on this computer, or undefined. Nothing of it may reach the core: the
+   *  fleet's router takes an id it does not know for a local agent and asks the core's doors, so each route here that
+   *  names an agent answers for it first. Asked with a window too: the dial may still hold it from the machine list. */
+  private outside(agentId: string): HostAgent | undefined {
+    return this.registry?.outside(agentId)
+  }
+
+  capsOf(agentId: string): string | undefined {
+    const on = this.onMachine(agentId)
+    return on && capsLetters(on.source.capabilities(on.agent))
+  }
+
+  hostOf(agentId: string): string | undefined {
+    return this.onMachine(agentId)?.agent.host
+  }
+
+  markSeen(agentId: string): void {
+    this.onMachine(agentId)?.source.markSeen?.(agentId)
+  }
+
   /** What the window still has unread, newest first. Empty until a window says otherwise. */
   private unread: UnreadNotification[] = []
 
@@ -539,11 +583,24 @@ export class DaemonCableHost implements CableHost {
     this.cards = items
   }
 
+  /** The last ask for the cards was refused (no Swarm on this computer, or the core not reached): none is coming, so the
+   *  machine list waits for none. A later ask that is taken waits again. */
+  private cardsUnavailable = false
+
+  swarmCardsUnavailable(unavailable: boolean): void {
+    this.cardsUnavailable = unavailable
+  }
+
   swarmCards(): SwarmCard[] | null {
     return this.cards
   }
 
+  /** When a dial asked for the cards (performance.now(): a wall clock set back would hold the wait), while it wants them;
+   *  the machine list's wait for them runs from here. */
+  private cardsAskedAt: number | null = null
+
   swarmCardsWanted(on: boolean): void {
+    this.cardsAskedAt = on ? this.cardsAskedAt ?? performance.now() : null
     this.wiring.swarmCardsWanted?.(on)
   }
 
@@ -599,8 +656,11 @@ export class DaemonCableHost implements CableHost {
    * (`agentTotal`), the switcher is gone, and a notification for an agent the dial does not hold carries
    * its own name.
    *
-   * Three answers, and each is a state the dial draws:
-   *   - no window (`swarms === null`)      → `[]`; the dial shows "Run OpenHarness on your computer".
+   * Four answers, and each is a state the dial draws:
+   *   - no window, and the devices have a registry → this computer's agents (Harness and any other app or
+   *                                          terminal), at most ten, the ones that need the person first, with
+   *                                          `host`, `caps` and `view: 'machine'`; `total` is every agent here.
+   *   - no window and no registry          → `[]`; the dial shows "Run OpenHarness on your computer".
    *   - a window with an empty tab         → `[]`; the dial shows "Nothing on this tab".
    *   - a window with panes                → those agents, in tile order; a tile whose machine dropped out
    *                                          is held from the router's `knownAgents` (see listAgentsFlat).
@@ -609,13 +669,15 @@ export class DaemonCableHost implements CableHost {
     return (await this.listAgentSnapshot()).agents
   }
 
-  async listAgentSnapshot(): Promise<{ agents: CableAgent[]; tab: string; total: number }> {
+  async listAgentSnapshot(): Promise<{ agents: CableAgent[]; tab: string; total: number; view?: 'machine' }> {
     const flat = await this.listAgentsFlat()
     const byId = new Map(flat.map((a) => [a.id, a]))
     // app_panes and app_swarms are separate messages. Never label the new panes
     // with the previous tab (or vice versa) between those two arrivals. The
     // swarm announcement already contains membership in the same tile order.
     const app = this.swarms
+    const registry = this.registry
+    if (app === null && registry) return this.machineSnapshot(registry, flat, byId)
     const tab = app?.active ?? ''
     const ids = app?.swarms.find(s => s.id === tab)?.agentIds ?? []
     const out = ids.map(id => byId.get(id)).filter((a): a is CableAgent => !!a)
@@ -629,6 +691,33 @@ export class DaemonCableHost implements CableHost {
       this.wiring.log(`cable: tab ${shape} · ${flat.length} in all`)
     }
     return { agents: out, tab, total: this.viaFleet((r) => r.agentTotal()) }
+  }
+
+  /** The machine list: the registry's agents, bounded by the selection (the 78-agent reconnect above is not repeated). */
+  private async machineSnapshot(registry: HostRegistry, flat: CableAgent[], byId: Map<string, CableAgent>): Promise<{ agents: CableAgent[]; tab: string; total: number; view: 'machine' }> {
+    const local = this.localMachine()
+    // The engine session bound to each agent, so one that moved into a Harness pane is not listed again as observed.
+    const bound = new Map(this.wiring.sessions().map((s) => [s.agentId, s.sessionId]))
+    this.harness.update(flat.map((a) => bound.get(a.id) ? { ...a, sessionId: bound.get(a.id) } : a), local.id,
+      await this.viaFleet((r) => r.activityTimes()))
+    // The reader's Buddy is shown on its Swarm card, and its session id never leaves this computer (cableSession dialBuddy).
+    // Dropped after the registry's dedupe, which needs it to tell its Claude Code session from an agent outside Harness.
+    const buddies = new Set((this.cards ?? []).flatMap((card) => card.leads.map((l) => l.buddy?.local).filter((id) => id !== undefined)))
+    // Before the cards a dial asked for, a Buddy cannot be told from any other Harness agent: theirs wait for them. Signed
+    // out or with the Swarm service down, no card comes and no Swarm has a Buddy here.
+    const waiting = this.cards === null && this.cardsAskedAt !== null && performance.now() - this.cardsAskedAt < CARDS_WAIT_MS
+      && this.wiring.signedIn?.() !== false && !this.cardsUnavailable
+    // Read once: each read merges every source's whole list.
+    const entries = registry.entries()
+    const sourceOf = new Map(entries.map((e) => [e.agent, e.source]))
+    const { rows, total } = selectForDial(entries.map((e) => e.agent).filter((a) => !buddies.has(a.id) && !(waiting && a.host === 'harness')))
+    const agents = rows.map((a): CableAgent => {
+      // A Harness agent keeps the row the window would show (its chips too); another app's is drawn from what was heard.
+      const row = byId.get(a.id) ?? { id: a.id, name: a.name, engine: a.engine, machineId: local.id, machine: local.name }
+      // Every row is one of the entries.
+      return { ...row, host: a.host, caps: capsLetters(sourceOf.get(a)!.capabilities(a)) }
+    })
+    return { agents, tab: '', total, view: 'machine' }
   }
 
   /** How many agents the account has across every machine — the overview's number, sent beside the
@@ -645,20 +734,23 @@ export class DaemonCableHost implements CableHost {
 
   /**
    * Name, engine and machine of an agent this daemon has ever listed — for a `summary` or `question`
-   * about one the dial no longer holds. See the router's describe.
+   * about one the dial no longer holds. See the router's describe. An agent outside Harness is only in the
+   * registry, never in the router, and it runs on this computer.
    */
   describe(agentId: string): { name: string; engine: string; machine: string } | undefined {
+    const outside = this.outside(agentId)
+    if (outside) return { name: outside.name, engine: outside.engine, machine: this.wiring.machineName() }
     return this.viaFleet((r) => r.describe(agentId))
   }
 
   async activityText(agentId: string): Promise<string | null> {
-    if (!this.viaFleet((r) => r.isLocalAgent(agentId))) return null
+    if (!this.outside(agentId) && !this.viaFleet((r) => r.isLocalAgent(agentId))) return null
     if (this.wiring.activityText) return await this.wiring.activityText(agentId) ?? null
     return (await this.wiring.activitySnapshot?.(agentId))?.text ?? null
   }
 
   async activitySnapshot(agentId: string): Promise<ActivitySnapshot | null> {
-    if (!this.viaFleet((r) => r.isLocalAgent(agentId))) return null
+    if (!this.outside(agentId) && !this.viaFleet((r) => r.isLocalAgent(agentId))) return null
     if (this.wiring.activitySnapshot) return await this.wiring.activitySnapshot(agentId)
     const text = await this.wiring.activityText?.(agentId)
     return text ? { text } : null
@@ -748,6 +840,7 @@ export class DaemonCableHost implements CableHost {
    * the refusal for a machine whose last request did not come back. See the router's sendTurn.
    */
   sendTurn(agentId: string, text: string): { ok: true } | { ok: false; machine: string; reason: string } {
+    if (this.outside(agentId)) return { ok: false, machine: this.wiring.machineName(), reason: 'it runs outside Harness' }
     return this.viaFleet((r) => r.sendTurn(agentId, text))
   }
 
@@ -757,19 +850,20 @@ export class DaemonCableHost implements CableHost {
   }
 
   stopTurn(agentId: string): void {
-    this.viaFleet((r) => r.stopTurn(agentId))
+    if (!this.outside(agentId)) this.viaFleet((r) => r.stopTurn(agentId))
   }
 
   canSpeakQuestion(agentId: string): boolean {
-    return this.viaFleet((r) => r.canSpeakQuestion(agentId))
+    return !this.outside(agentId) && this.viaFleet((r) => r.canSpeakQuestion(agentId))
   }
 
   answerReviewed(answer: ReviewedAnswer): Promise<AnswerReceipt> {
+    if (this.outside(answer.agentId)) return Promise.resolve({ ok: false, error: 'Use the terminal to answer this question.' })
     return this.viaFleet((r) => r.answerReviewed(answer))
   }
 
   answer(agentId: string, requestId: string, answers: Record<string, string>): void {
-    this.viaFleet((r) => r.answer(agentId, requestId, answers))
+    if (!this.outside(agentId)) this.viaFleet((r) => r.answer(agentId, requestId, answers))
   }
 
 
@@ -829,21 +923,27 @@ export class DaemonCableHost implements CableHost {
   }
 
   updateAgent(agentId: string, model?: string, effort?: string): void {
-    this.viaFleet((r) => r.updateAgent(agentId, model, effort))
+    if (!this.outside(agentId)) this.viaFleet((r) => r.updateAgent(agentId, model, effort))
   }
 
-  /** The last few turns, newest first, in the shape the dial's tile draws — from the agent's own machine. */
+  /** The last few turns, newest first, in the shape the dial's tile draws — from the agent's own machine. An agent
+   *  outside Harness has only the end of its last turn, as heard here: the card it was sent live. */
   recentSummaries(agentId: string): Promise<Array<{ recap: string; text: string; ask: string; fullText?: string }>> {
+    const outside = this.outside(agentId)
+    if (outside) {
+      const answer = outside.lastAnswer
+      return Promise.resolve(answer ? [{ recap: answer, text: answer, ask: '', fullText: answer }] : [])
+    }
     return this.viaFleet((r) => r.recentSummaries(agentId))
   }
 
   /** The person's own last questions to an agent, newest first — what the router ranks on. */
   recentAsks(agentId: string): Promise<string[]> {
-    return this.viaFleet((r) => r.recentAsks(agentId))
+    return this.outside(agentId) ? Promise.resolve([]) : this.viaFleet((r) => r.recentAsks(agentId))
   }
 
   listModels(agentId: string): Promise<string[]> {
-    return this.viaFleet((r) => r.listModels(agentId))
+    return this.outside(agentId) ? Promise.resolve([]) : this.viaFleet((r) => r.listModels(agentId))
   }
 
   /**

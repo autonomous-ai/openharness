@@ -152,17 +152,18 @@ it('stores an agent\'s post in its channel once, from its own pane, whatever it 
   expect(reused.code).toBe(1)
   expect(reused.answer).toMatchObject({ error: 'OPERATION_REUSED', operationId: 'post-bare' })
 
-  // What it says arrives as it said it: unicode, quotes, shell characters and newlines; a post of 32,000 characters whole.
-  const words = 'Pip: ✅ shipped 👨‍👩‍👧‍👦 🇻🇳 שלום مرحبا 日本語 é "double" \'single\' $(not run) `ticks` \\ back\nand a second line\n\n    indented'
-  const unicode = await f.run(pip, ['post', CHANNEL, words, 'post-unicode'])
+  // What it says arrives as it said it, without the name it signed with (#4074, src/superTabs/signature.ts: its channel shows
+  // who wrote a post): unicode, quotes, shell characters and newlines; a post of 32,000 characters whole.
+  const said = '✅ shipped 👨‍👩‍👧‍👦 🇻🇳 שלום مرحبا 日本語 é "double" \'single\' $(not run) `ticks` \\ back\nand a second line\n\n    indented'
+  const unicode = await f.run(pip, ['post', CHANNEL, `Pip: ${said}`, 'post-unicode'])
   expect(unicode.code, JSON.stringify(unicode.answer)).toBe(0)
-  expect(f.stored.get('post-unicode')!.text).toBe(words)
+  expect(f.stored.get('post-unicode')!.text).toBe(said)
   const full = 'x'.repeat(32_000)
   expect((await f.run(pip, ['post', CHANNEL, full, 'post-full'])).code).toBe(0)
   expect(f.stored.get('post-full')!.text).toBe(full)
   // The message on stdin with `-`, which no shell quoting can split.
-  expect((await f.run(pip, ['post', CHANNEL, '-', 'post-stdin'], `${words}\n`)).code).toBe(0)
-  expect(f.stored.get('post-stdin')!.text).toBe(words)
+  expect((await f.run(pip, ['post', CHANNEL, '-', 'post-stdin'], `Pip: ${said}\n`)).code).toBe(0)
+  expect(f.stored.get('post-stdin')!.text).toBe(said)
 
   // Past the server's 32,000 characters the agent is told so, with the length, and nothing is sent, stored or cut: far past what
   // the daemon's own socket takes too.

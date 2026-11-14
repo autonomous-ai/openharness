@@ -1,6 +1,6 @@
 /** Disposable one-shot processes used by device recaps and voice routing. */
 
-import { spawn, type ChildProcess } from 'child_process'
+import type { ChildProcess } from 'child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { chmod, copyFile, mkdtemp, readFile, readdir, rm, unlink } from 'fs/promises'
 import { dirname, join } from 'path'
@@ -18,6 +18,9 @@ import {
 } from './disposableOneShotPool.js'
 import { oneShotParentEnv } from './loginShellEnv.js'
 import { scrubTerminalContext } from './terminalEnvironment.js'
+// Every worker is tied: each crash of its service left its warm workers, and what they started in their group,
+// running on the person's computer, one more set per crash.
+import { spawnTied } from './tied.js'
 import { ownProcessGroup } from './windows/noWindow.js'
 
 function claudeBin(): string {
@@ -149,7 +152,7 @@ class ClaudeWorker extends ProcessWorker {
       ...(model ? ['--model', model] : []),
       ...(effort ? ['--effort', effort] : []),
     ]
-    const child = spawn(claudeBin(), args, {
+    const child = spawnTied(claudeBin(), args, {
       cwd, env: buildEnv(), ...ownProcessGroup(), stdio: ['pipe', 'pipe', 'pipe'],
     })
     super(child)
@@ -259,7 +262,7 @@ class CodexWorker extends ProcessWorker {
     ]
     const processEnv = scrubTerminalContext({ ...oneShotParentEnv() })
     if (codexHome) processEnv.CODEX_HOME = codexHome
-    const child = spawn(process.env.CODEX_PATH || 'codex', args, {
+    const child = spawnTied(process.env.CODEX_PATH || 'codex', args, {
       cwd, env: processEnv, ...ownProcessGroup(), stdio: ['pipe', 'ignore', 'pipe'],
     })
     super(child)
@@ -348,7 +351,7 @@ class CursorWorker extends ProcessWorker {
       ...(model ? ['--model', model] : []),
     ]
     const processEnv = scrubTerminalContext({ ...oneShotParentEnv() })
-    const child = spawn(cursorBin(), args, {
+    const child = spawnTied(cursorBin(), args, {
       cwd, env: processEnv, ...ownProcessGroup(), stdio: ['pipe', 'pipe', 'pipe'],
     })
     super(child)
@@ -477,7 +480,7 @@ class OpencodeWorker extends ProcessWorker {
     // self-registers this ephemeral recap session). `--format json` streams `{type:'text',part:{text}}`.
     mkdirSync(OPENCODE_RECAP_DATA_DIR, { recursive: true, mode: 0o700 })
     const { args, env: processEnv } = opencodeOneShotSpawn(model, oneShotParentEnv(), OPENCODE_RECAP_DATA_DIR)
-    const child = spawn(opencodeBin(), args, {
+    const child = spawnTied(opencodeBin(), args, {
       cwd: OPENCODE_RECAP_DATA_DIR, env: processEnv, ...ownProcessGroup(), stdio: ['pipe', 'pipe', 'pipe'],
     })
     super(child)
@@ -627,7 +630,7 @@ class KiloWorker extends ProcessWorker {
     // empty scratch dir. It then hung indexing and gathering context until the 60s timeout, so no
     // `turn_summary` was ever emitted and the device tile stayed on `processing` forever.
     const { args, env: processEnv } = kiloOneShotSpawn(model, oneShotParentEnv())
-    const child = spawn(kiloBin(), args, {
+    const child = spawnTied(kiloBin(), args, {
       cwd: KILO_RECAP_DATA_DIR, env: processEnv, ...ownProcessGroup(), stdio: ['pipe', 'pipe', 'pipe'],
     })
     super(child)
@@ -723,7 +726,7 @@ class PiWorker extends ProcessWorker {
     // user's session store; `--no-extensions` stops the machine discovery extension from registering it.
     const args = ['-p', '--no-session', '--no-extensions', ...(model ? ['--model', model] : [])]
     const processEnv = scrubTerminalContext({ ...oneShotParentEnv() })
-    const child = spawn(piBin(), args, {
+    const child = spawnTied(piBin(), args, {
       cwd, env: processEnv, ...ownProcessGroup(), stdio: ['pipe', 'pipe', 'pipe'],
     })
     super(child)
@@ -801,7 +804,7 @@ class CommandCodeWorker extends ProcessWorker {
     // stops our own SessionStart hook registering this process.
     const args = ['-p', '--no-session', ...(model ? ['-m', model] : [])]
     const processEnv = scrubTerminalContext({ ...oneShotParentEnv() })
-    const child = spawn(commandCodeBin(), args, {
+    const child = spawnTied(commandCodeBin(), args, {
       cwd, env: processEnv, ...ownProcessGroup(), stdio: ['pipe', 'pipe', 'pipe'],
     })
     super(child)
@@ -931,7 +934,7 @@ export async function runGrokOneShot(opts: OneShotOptions): Promise<OneShotResul
     const { args, env: processEnv } = grokOneShotSpawn(opts, scratchHome)
     const timeoutMs = opts.timeoutMs ?? 60_000
     return await new Promise<OneShotResult>((resolve, reject) => {
-      const child = spawn(env.GROK_PATH || 'grok', args, {
+      const child = spawnTied(env.GROK_PATH || 'grok', args, {
         cwd: opts.cwd, env: processEnv, ...ownProcessGroup(), stdio: ['ignore', 'pipe', 'pipe'],
       })
       let stdout = ''

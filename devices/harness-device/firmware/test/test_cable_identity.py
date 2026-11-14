@@ -63,7 +63,7 @@ static void ui_notif_replace(const cable_notif_t *rows,int n) {
     assert(!held&&n>=0&&n<=8);notice_calls++;notice_count=n;memcpy(notices,rows,(size_t)n*sizeof *rows);
 }
 '''
-for name in ['str_of','bool_of','handle_agent','handle_swarms','handle_notifications','handle_models']:
+for name in ['str_of','bool_of','caps_of','handle_agent','handle_swarms','handle_notifications','handle_models']:
     code += function(name)
 code += r'''
 static cJSON *object(const char *key,const char *value) {

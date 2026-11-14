@@ -43,21 +43,28 @@ export { PROBE_ANSWER, PROBE_COMMAND, PROBE_HANDOVER, PROBE_TIMEOUT_MS } from '.
  */
 export const REEXEC_LIMIT = 3
 
-/** How much of a file `sha256File` holds at a time. */
-const HASH_PIECE_BYTES = 64 * 1024
+/** The piece of a file `sha256File` holds at a time: one, for every call (why is on `sha256File`). */
+const HASH_PIECE = Buffer.allocUnsafe(64 * 1024)
 
 /**
  * The sha256 of the file at [path], read a piece at a time. A master hashes cli.js, 6.5 MB, and every
  * file of its lean bundle before each process it starts (./leanServices.ts), eight of them as it boots:
  * read whole, each read was a buffer the size of the file, and at idle a master still held 35 to 45 MiB
  * of them, which a collection would have freed but none came (measured 2026-10-06).
+ *
+ * Every call reads through the same piece. With a piece of its own per call, a check of the lean folder
+ * allocated 64 KiB per file, and the folder grew from 236 files to 393: about 25 MiB at each check. They
+ * were freed, but the allocator kept the pages, so the master stayed as high as the collections' timing
+ * had let it climb: 88 to 99 MiB resident on Linux and 101 to 111 on macOS, against the 100 MiB
+ * e2e/lean.e2e.ts holds it under, which failed at 100.4 on 2026-11-14. Through one piece it is 75.3 MiB
+ * on Linux (the median was 95.6) and 76.6 on macOS (108.6), the same in every run (Node 24.22.2, measured
+ * 2026-11-14). The reads are synchronous, so no two calls ever hold the piece at once.
  */
 export function sha256File(path: string): string {
   const hash = createHash('sha256')
   const fd = openSync(path, 'r')
   try {
-    const piece = Buffer.allocUnsafe(HASH_PIECE_BYTES)
-    for (let read = readSync(fd, piece); read > 0; read = readSync(fd, piece)) hash.update(piece.subarray(0, read))
+    for (let read = readSync(fd, HASH_PIECE); read > 0; read = readSync(fd, HASH_PIECE)) hash.update(HASH_PIECE.subarray(0, read))
   } finally {
     closeSync(fd)
   }

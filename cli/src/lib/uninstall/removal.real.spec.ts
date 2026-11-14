@@ -4,7 +4,8 @@ import { homedir, tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it } from 'vitest'
-import { finalRemovalDeps, finalRemovalScript, listEntries, removalPlan, removeNow, scheduleFinalRemoval, UNINSTALL_MARKER } from './removal.js'
+import { finalRemovalDeps, finalRemovalScript, listEntries, removalPlan, removeNow, scheduleFinalRemoval } from './removal.js'
+import { UNINSTALL_MARKER } from './marker.js'
 
 // The real last step, on Windows only: a cmd.exe that waits for a process (a node.exe standing in for the CLI, holding
 // a file open in the tree) to exit, then removes the tree and itself. Every root here is a throwaway one under the

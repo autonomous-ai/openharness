@@ -185,7 +185,7 @@ describe('harnessd\'s master and services lean', () => {
     const files = Object.fromEntries([...lean.files].map(([name, code]) => [name, code.toString('utf8')]))
     files['harnessd.mjs'] += '\n// another build\n'
     const other = buildWithLean(join(scratch, 'other'), bundle, files)
-    const second = await IsolatedDaemon.create({ beside: d, dataDir: d.dataDir, port: d.port, scriptPath: other })
+    const second = await IsolatedDaemon.create({ beside: d, dataDir: d.dataDir, port: d.configuredPort, scriptPath: other })
     try {
       await second.start({ ready: 'none' })
       await until('the other master to leave', () => second.child === null || null, 90_000, 250)
