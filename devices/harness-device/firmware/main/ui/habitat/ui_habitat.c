@@ -79,6 +79,7 @@ typedef enum {
     ANSWER_REVIEW,
     INBOX,
     TABS,
+    APPS,
     MACHINES,
     VOICE,
     SELECTION,
@@ -106,6 +107,7 @@ typedef enum {
     A_NOTICE,
     A_TABS,
     A_TAB, A_TAB_REFRESH, A_TAB_DONE,
+    A_APP, A_APP_DONE,   // a page of APPS, by app id; its Done
     A_MACHINES,
     A_MACHINE,
     A_VOICE,
@@ -228,6 +230,7 @@ static EXT_RAM_BSS_ATTR struct {
     int app_count;
     char app_shown[CABLE_APP_ID_MAX];   // the app whose agents the roster holds; may be no entry's id
     bool apps_known;         // an `apps` frame came this session: false from an older daemon
+    char app_landing[CABLE_APP_ID_MAX];   // an app picked here whose ring has not landed: its first agent goes on the face
     model_item_t models[48];
     int model_count;
     bool model_request;
@@ -268,6 +271,7 @@ static ht_workspace_t workspace;
 static ht_tab_carousel_t tab_carousel;
 static ht_tab_carousel_t pane_carousel;   // Focus's pane picker, the same pages as the tabs (design 2026-10-06)
 static ht_tab_carousel_t inbox_carousel;  // Focus's inbox, paged the same way; it follows s.offset when at rest
+static ht_tab_carousel_t app_carousel;    // APPS, the tabs' pages again
 static ht_carry_t carry;
 static ht_visit_t visit;
 static ht_form_t form;
@@ -608,6 +612,42 @@ static void tabs_open(void)
     view(TABS);
     if (s.view != TABS) return;
     ht_tab_carousel_reset(&tab_carousel, s.tab_count, workspace_index(s.selected_tab));
+}
+static int app_index(const char *id)
+{
+    for (int i = 0; id && i < s.app_count; i++)
+        if (!strcmp(s.apps[i].id, id)) return i;
+    return -1;
+}
+// APPS opens on the app the dial shows. No agents is no app: then nothing opens (an empty list shows nothing).
+static void apps_open(void)
+{
+    if (!s.app_count) return;
+    view(APPS);
+    if (s.view != APPS) return;
+    int i = app_index(s.app_shown);
+    ht_tab_carousel_reset(&app_carousel, s.app_count, i < 0 ? 0 : i);
+}
+// The machine view picks an app when the daemon names them; a window's list, and an older daemon's, picks a tab.
+static bool hold_picks_app(void)
+{
+    return s.machine_view && s.apps_known;
+}
+static void hold_open(void)
+{
+    if (hold_picks_app()) apps_open();
+    else tabs_open();
+}
+// A pick goes to the daemon, which answers with `apps` and that app's ring; the face lands on its first agent. The app
+// already shown is answered with nothing, so its face stays as it was.
+static void app_pick(int i)
+{
+    if (i < 0 || i >= s.app_count) return;
+    action_t a = {.kind = A_APP};
+    COPY(a.id, s.apps[i].id);
+    if (!queue(a)) return;
+    if (strcmp(a.id, s.app_shown)) COPY(s.app_landing, a.id);
+    view(HOME);
 }
 static void workspace_failed(const char *message)
 {
@@ -971,6 +1011,7 @@ static void surface_tick(uint32_t now)
         if (ht_tab_carousel_tick(&tab_carousel, now)) change();
         tabs_sync();
     }
+    if (s.view == APPS && !display_is_asleep() && ht_tab_carousel_tick(&app_carousel, now)) change();
     if (s.view == AGENTS && !display_is_asleep() &&
         ht_tab_carousel_tick(&pane_carousel, now)) change();
     if (s.view == INBOX && !display_is_asleep() &&
@@ -999,7 +1040,7 @@ static void surface_tick(uint32_t now)
         pressed_action.kind == A_PET && !gesture.moved && held >= 650 && held < 5000) {
         // Enter directly. The opening contact is consumed until a real release,
         // so lifting or sliding after the hold cannot also select a tab.
-        tabs_open();
+        hold_open();
         return;
     }
     ht_character_mood_t mood = s.view == VOICE ?
@@ -1073,6 +1114,7 @@ static void render_home(ht_scene_t *f)
 {
     s.pet_next_ms = 0; s.timer_at = 0;
     if (!s.connected || s.loading) { render_brand(f); return; }
+    ht_focus_set_hold_apps(hold_picks_app());   // the face's hint names what a hold opens
     if (workspace.touching && workspace.moved && !workspace.cancelled) { render_workspace_preview(f); return; }
     agent_t *a = active();
     // The top caption belongs to the current pane; only completed work gets
@@ -1263,7 +1305,7 @@ static void focus_header(ht_scene_t *f, const char *title)
  * goes back. It replaced the column of cards (owner, 2026-10-01).
  */
 static void focus_carousel(ht_scene_t *f, const ht_tab_carousel_t *c, int count, const char *(*label)(int),
-                           action_kind_t pick);   // with the tabs, below
+                           action_kind_t pick, void (*under)(ht_scene_t *, int, int));   // with the tabs, below
 static const char *pane_label(int i)
 {
     return s.agents[i].name[0] ? s.agents[i].name : "Untitled";
@@ -1302,7 +1344,7 @@ static void render_agents(ht_scene_t *f)
     // that comes or goes keeps them in step. Done (green, at the foot) and a tap on the chosen page open it.
     if (pane_carousel.count != count)
         ht_tab_carousel_reset(&pane_carousel, count, current >= 0 && current < count ? current : 0);
-    focus_carousel(f, &pane_carousel, count, pane_label, A_AGENT);
+    focus_carousel(f, &pane_carousel, count, pane_label, A_AGENT, NULL);
     ht_text(f, (HT_WIDTH - ht_done_28.width) / 2, 400, ht_done_28.width, &ht_done_28,
             s.connected ? color(HT_THEME_VOICE) : DIM, BG, HT_DONE);
     s.hits[s.hit_count++] = (hit_t){{83, 392, 300, 74}, A_AGENT, ht_tab_carousel_index(&pane_carousel), s.connected};
@@ -1517,8 +1559,9 @@ static void tab_neighbour(ht_scene_t *f, const char *name, int edge, bool next)
     }
     for (; used < FADE_SLOTS; used++) ht_text(f, 0, LINE_Y, 1, font, BG, BG, "");
 }
+// `under`, when given, draws a line under the chosen page (its index, its left edge), and the name keeps to one line.
 static void focus_carousel(ht_scene_t *f, const ht_tab_carousel_t *c, int count, const char *(*label)(int),
-                           action_kind_t pick)
+                           action_kind_t pick, void (*under)(ht_scene_t *, int, int))
 {
     enum { TAB_PAGE = 320, TAB_PAGE_LEFT = 73, TAB_LINE_W = 300 };
     const ht_font_t *big = &ht_lv_inter_44.base;
@@ -1530,7 +1573,8 @@ static void focus_carousel(ht_scene_t *f, const ht_tab_carousel_t *c, int count,
         const char *name = here ? label(i) : "";
         if (i != current) { tab_neighbour(f, name, i > current ? left : left + TAB_PAGE, i > current); continue; }
         char one[HT_TEXT_BYTES], two[HT_TEXT_BYTES], fit[HT_TEXT_BYTES];
-        tab_split(name, one, two, sizeof one);
+        if (under) { snprintf(one, sizeof one, "%s", name); two[0] = 0; }
+        else tab_split(name, one, two, sizeof one);
         int lines = two[0] ? 2 : 1, top = lines == 2 ? 181 : 207;     // the design's 52 px lines, centred on 233
         uint16_t ink = s.connected ? color(HT_THEME_VOICE) : DIM;
         for (int n = 0; n < 2; n++) {
@@ -1541,6 +1585,7 @@ static void focus_carousel(ht_scene_t *f, const ht_tab_carousel_t *c, int count,
                           strlen(fit), 8, 458);
             if (f->count == before) ht_text(f, 0, 0, 1, big, BG, BG, "");   // off the glass: its slot stays
         }
+        if (under) under(f, i, left);
     }
     // Each page's half of the glass is its target: a tap on the chosen one picks it, on a neighbour picks that one.
     for (int n = 0; n < 3; n++) {
@@ -1563,7 +1608,7 @@ static void render_focus_tabs(ht_scene_t *f)
         focus_centred(f, 214, 348, &ht_lv_inter_30.base, DIM, BG, "No tabs yet.");
         return;
     }
-    focus_carousel(f, &tab_carousel, s.tab_count, tab_label, A_TAB);
+    focus_carousel(f, &tab_carousel, s.tab_count, tab_label, A_TAB, NULL);
 }
 static void render_tabs(ht_scene_t *f)
 {
@@ -1572,6 +1617,39 @@ static void render_tabs(ht_scene_t *f)
             color(HT_THEME_VOICE), BG, HT_DONE);
     render_focus_tabs(f);
     s.hits[s.hit_count++] = (hit_t){{83, 392, 300, 74}, A_TAB_DONE, 0, true};
+}
+/*
+ * APPS (mockup dial-app-filter, section 1): the tabs' screen with an app a page. The name in the tab page's type on one
+ * line, and under it "3 agents" in grey Inter 25 with " · 1 waiting" beside it in the accent, one line centred on the
+ * page, 48 px below the name's baseline as the mockup has it. Both runs are always drawn, so the count never moves.
+ */
+static const char *app_label(int i)
+{
+    return i >= 0 && i < s.app_count ? s.apps[i].name : "";
+}
+static void app_under(ht_scene_t *f, int i, int left)
+{
+    enum { TAB_PAGE = 320, LINE_Y = 272 };   // its baseline at y 300, the mockup's
+    const ht_font_t *small = &ht_lv_inter_25.base;
+    char agents[24], waits[24] = "";
+    unsigned n = s.apps[i].count, w = s.apps[i].waiting;
+    snprintf(agents, sizeof agents, "%u agent%s", n, n == 1 ? "" : "s");
+    if (w) snprintf(waits, sizeof waits, " \xc2\xb7 %u waiting", w);
+    int aw = ht_measure(small, agents), x = left + (TAB_PAGE - aw - (w ? ht_measure(small, waits) : 0)) / 2;
+    int before = f->count;
+    focus_clipped(f, x, LINE_Y, small, DIM, agents, strlen(agents), 8, 458);
+    if (f->count == before) ht_text(f, 0, 0, 1, small, BG, BG, "");
+    before = f->count;
+    if (w) focus_clipped(f, x + aw, LINE_Y, small, ACCENT, waits, strlen(waits), 8, 458);
+    if (f->count == before) ht_text(f, 0, 0, 1, small, BG, BG, "");
+}
+static void render_apps(ht_scene_t *f)
+{
+    ht_text(f, (HT_WIDTH-ht_done_28.width)/2, 400, ht_done_28.width, &ht_done_28,
+            color(HT_THEME_VOICE), BG, HT_DONE);
+    focus_header(f, "APPS");
+    focus_carousel(f, &app_carousel, s.app_count, app_label, A_APP, app_under);
+    s.hits[s.hit_count++] = (hit_t){{83, 392, 300, 74}, A_APP_DONE, 0, true};
 }
 /*
  * THE FOCUS INBOX (design 2026-10-06, focus-project.html "Inbox", "Inbox, empty"; owner, 2026-10-06: the message as
@@ -1702,6 +1780,7 @@ static void render_focus_inbox(ht_scene_t *f)
 static void render_list(ht_scene_t *f)
 {
     if (s.view == TABS) { render_tabs(f); return; }
+    if (s.view == APPS) { render_apps(f); return; }
     if (s.view == INBOX) { render_focus_inbox(f); return; }
     heading(f, "machines");
     int count = s.machine_count;
@@ -1930,6 +2009,7 @@ bool habitat_scene_take(ht_scene_t *f)
         render_answer_review(f);
         break;
     case TABS:
+    case APPS:
     case MACHINES:
     case INBOX:
         render_list(f);
@@ -2082,6 +2162,8 @@ static action_t make_action(hit_t h)
         COPY(a.id, s.notice[h.value].agent_id);
     else if (h.action == A_TAB && h.value < s.tab_count)
         COPY(a.id, tab_id_at(h.value));
+    else if (h.action == A_APP && h.value < s.app_count)
+        COPY(a.id, s.apps[h.value].id);
     else if (h.action == A_MACHINE && h.value < s.machine_count)
         COPY(a.id, s.machines[h.value].id);
     else if (h.action == A_MODEL && h.value < s.model_count) {
@@ -2346,6 +2428,14 @@ static void dispatch(action_t a)
             COPY(s.title,"Switching tab"); COPY(s.message,"Opening your workspace...");
             view(MESSAGE);
         } else view(HOME);
+        break;
+    case A_APP:
+        if (s.view == APPS) app_pick(app_index(a.id));
+        break;
+    case A_APP_DONE:
+        if (s.view != APPS) break;
+        ht_tab_carousel_cancel(&app_carousel);
+        app_pick(ht_tab_carousel_index(&app_carousel));
         break;
     case A_MACHINE:
         if (s.connected && queue(a)) {
@@ -2664,6 +2754,9 @@ static void worker(void *unused)
         case A_MACHINE:
             cable_client_select_machine(a.id);
             break;
+        case A_APP:
+            cable_client_pick_app(a.id);
+            break;
         case A_VOICE:
             display_lock();
             if (s.connected && s.voice_open && s.voice_start_pending &&
@@ -2793,6 +2886,7 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
         if (surface && pressed_action.kind==A_TABS && !s.touch_brake)
             ht_workspace_touch(&workspace,workspace_index(s.selected_tab),s.tab_count,x,y,now);
         if (s.view == TABS && pressed_action.kind == A_TAB) ht_tab_carousel_begin(&tab_carousel, x, now);
+        if (s.view == APPS && pressed_action.kind == A_APP) ht_tab_carousel_begin(&app_carousel, x, now);
         if (s.view == AGENTS && pressed_action.kind == A_AGENT)
             ht_tab_carousel_begin(&pane_carousel, x, now);
         if (s.view == INBOX && pressed_action.kind == A_NOTICE)
@@ -2820,6 +2914,8 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
             if (gesture.axis == 2 && ht_tab_carousel_move(&tab_carousel, x, now)) {
                 tabs_sync(); change();
             }
+        } else if (s.view == APPS) {
+            if (gesture.axis == 2 && ht_tab_carousel_move(&app_carousel, x, now)) change();
         } else if (s.view == AGENTS) {
             if (gesture.axis == 2 && ht_tab_carousel_move(&pane_carousel, x, now)) change();
         } else if (s.view == INBOX && inbox_carousel.touching) {
@@ -2856,6 +2952,8 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
             tabs_move((s.last_y - y) * (scroll_reversed ? -1 : 1));
         bool tab_contact = s.view == TABS && tab_carousel.touching;
         bool tab_tap = tab_contact && ht_tab_carousel_end(&tab_carousel, x, gesture.axis == 2, now);
+        bool app_contact = s.view == APPS && app_carousel.touching;
+        bool app_tap = app_contact && ht_tab_carousel_end(&app_carousel, x, gesture.axis == 2, now);
         bool scrolled = ht_scroll_end(&scroll, x, y, now);
         if (scrolled) {
             uint32_t coast = ht_scroll_coast_ms(scroll.velocity);
@@ -2875,6 +2973,12 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
                 if (s.view == TABS) dispatch((action_t){.kind = A_TAB_DONE});
             }
             tabs_sync();
+            change();
+        } else if (app_contact) {
+            // Browsing the apps changes nothing: a pick rebuilds the ring. A tap on a page picks that app.
+            int index = pressed_action.value;
+            if (app_tap && result == HT_TOUCH_TAP && pressed_action.kind == A_APP && index >= 0 &&
+                index < s.app_count && !strcmp(pressed_action.id, s.apps[index].id)) dispatch(pressed_action);
             change();
         } else if (notice_contact) {
             // Browsing the notices changes nothing but the page (and so s.offset); a tap on the page opens that agent.
@@ -2972,7 +3076,7 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
             } else if (s.view == DRAFT && pressed_action.kind == A_DRAFT_EDIT) {
                 pressed_action.kind = A_DRAFT_OPTIONS; dispatch(pressed_action);
             } else if (surface && pressed_action.kind == A_PET)
-                tabs_open();
+                hold_open();
         } else if (result == HT_TOUCH_TAP) {
             if (pressed_action.kind == A_PET) {
                 if (surface) dispatch(pressed_action); // immediate, harmless acknowledgement
@@ -2981,7 +3085,7 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
                 dispatch(pressed_action);
             }
         } else if (gesture.axis == 1 && abs(dy) > 55 && abs(dy) > abs(dx)) {
-            if (s.view == TABS || s.view == AGENTS || s.view == SETTINGS) {
+            if (s.view == TABS || s.view == APPS || s.view == AGENTS || s.view == SETTINGS) {
                 // The list consumed the drag already, including its final sample.
             } else if (s.view == DRAFT || s.view == DRAFT_OPTIONS) {
                 // Reading a draft never submits or starts recording.
@@ -3015,7 +3119,7 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
                 if (next >= 0 && next < count) s.offset = next;
             }
         } else if (gesture.axis == 2 && abs(dx) > 60 && abs(dx) > abs(dy)) {
-            if (s.view == TABS) {
+            if (s.view == TABS || s.view == APPS) {
                 // The carousel owns horizontal motion, including contacts that began on its footer.
             } else if (s.view == DRAFT || s.view == DRAFT_OPTIONS) {
                 if (dx > 0) {
@@ -3047,6 +3151,8 @@ void habitat_touch_cancel(void)
 {
     bool visible = s.touch_down || s.pressed >= 0;
     input_cancel();
+    // No release follows to settle APPS' pages (one cancelled any other way still ends them on its release).
+    ht_tab_carousel_cancel(&app_carousel);
     s.touch_down = false; // driver swallows the rest of this contact until a trustworthy UP
     if (visible) change();
 }
@@ -3058,6 +3164,7 @@ uint32_t habitat_next_wake_ms(void)
     if (s.voice_open)
         delay = 125;
     if (s.view == TABS && tab_carousel.animating && !display_is_asleep()) delay = 16;
+    if (s.view == APPS && app_carousel.animating && !display_is_asleep()) delay = 16;
     if (s.view == AGENTS && pane_carousel.animating && !display_is_asleep()) delay = 16;
     if (s.view == INBOX && inbox_carousel.animating && !display_is_asleep()) delay = 16;
     if (selection.pending && delay > 100) delay = 100;
@@ -3371,6 +3478,7 @@ void ui_fleet_set_view(bool machine)
     display_lock();
     if (s.machine_view != machine) {
         s.machine_view = machine;
+        if (s.view == APPS) view(HOME);   // a window's list is picked by tab
         change();
     }
     display_unlock();
@@ -3378,10 +3486,21 @@ void ui_fleet_set_view(bool machine)
 void ui_apps_replace(const cable_app_t *rows, int count, const char *shown)
 {
     display_lock();
+    // APPS stays on its app by id, never by place: a list that moved keeps the person on the same app, the page of an
+    // app that went closes up, and no app left closes the picker.
+    int at = ht_tab_carousel_index(&app_carousel);
+    char on[CABLE_APP_ID_MAX] = "";
+    if (s.view == APPS && at >= 0 && at < s.app_count) COPY(on, s.apps[at].id);
     s.app_count = !rows || count < 0 ? 0 : count > CABLE_MAX_APPS ? CABLE_MAX_APPS : count;
     if (s.app_count) memcpy(s.apps, rows, (size_t)s.app_count * sizeof *rows);
     COPY(s.app_shown, shown);
     s.apps_known = true;
+    if (s.view == APPS) {
+        int i = app_index(on);
+        if (!s.app_count) view(HOME);
+        else if (i != at || app_carousel.count != s.app_count)   // the same page in the same list keeps a dragging finger
+            ht_tab_carousel_reset(&app_carousel, s.app_count, i < 0 ? at : i);
+    }
     change();
     display_unlock();
 }
@@ -3391,6 +3510,8 @@ void ui_apps_forget(void)
     s.app_count = 0;
     s.app_shown[0] = 0;
     s.apps_known = false;
+    s.app_landing[0] = 0;
+    if (s.view == APPS) view(HOME);
     change();
     display_unlock();
 }
@@ -3669,6 +3790,12 @@ void ui_land_after_reload(void)
         ht_workspace_cancel_request(&workspace);
         s.loading = false;
         if (s.view != TABS) view(HOME);
+    }
+    // The ring of an app picked here: the `apps` that names it came first, so this list is that app's.
+    if (s.app_landing[0] && !strcmp(s.app_landing, s.app_shown)) {
+        s.app_landing[0] = 0;
+        if (s.active != 0) input_cancel();
+        s.active = s.count ? 0 : -1;
     }
     change();
     display_unlock();

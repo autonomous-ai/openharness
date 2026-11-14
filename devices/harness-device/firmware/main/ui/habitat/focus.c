@@ -90,6 +90,7 @@ static const char *const RESTING[] = {
  */
 #define TAP_TALK "Tap to talk"
 #define HOLD_TABS "Hold for tabs"
+#define HOLD_APPS "Hold for apps"   // HOLD_TABS where a hold opens APPS (relaxing_line)
 #define TAP_NAME "Tap name for panes"
 static const char *const RELAXING[] = {
     TAP_TALK, TAP_TALK, TAP_TALK, TAP_TALK, TAP_TALK, TAP_TALK, TAP_TALK, TAP_TALK, TAP_TALK, TAP_TALK,
@@ -105,6 +106,8 @@ static const char *const RESTING_MUTE[] = {HOLD_FOR_TABS, TAP_THE_NAME};
 static const char *const RELAXING_MUTE[] = {HOLD_TABS, TAP_NAME};
 static bool voice_ok = true;
 void ht_focus_set_voice(bool can_talk) { voice_ok = can_talk; }
+static bool hold_apps;
+void ht_focus_set_hold_apps(bool apps) { hold_apps = apps; }
 static struct {
     bool showing;           // the last home face drawn was a resting one
     char who[64];           // ... for this recipient
@@ -135,8 +138,10 @@ static const char *resting_line(const ht_character_face_t *f)
 }
 static const char *relaxing_line(const ht_character_face_t *f)
 {
-    if (!voice_ok) return pick_line(f, RELAXING_MUTE, sizeof RELAXING_MUTE / sizeof RELAXING_MUTE[0]);
-    return pick_line(f, RELAXING, sizeof RELAXING / sizeof RELAXING[0]);
+    const char *line = voice_ok ? pick_line(f, RELAXING, sizeof RELAXING / sizeof RELAXING[0])
+                                : pick_line(f, RELAXING_MUTE, sizeof RELAXING_MUTE / sizeof RELAXING_MUTE[0]);
+    // The hint says what a hold does (the PM, 2026-11-15): where it opens APPS it names the apps, as often as the tabs.
+    return hold_apps && !strcmp(line, HOLD_TABS) ? HOLD_APPS : line;
 }
 
 /*
