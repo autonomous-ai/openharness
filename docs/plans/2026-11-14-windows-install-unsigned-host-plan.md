@@ -59,7 +59,8 @@ Checked at `905fb180ec` on 2026-11-14:
 - The failure case still fails where it did, now with the allowance in its environment (`Reading the release
   manifests`, `after 1`): its own two assertions (Verification 1).
 - `signed` is gone from `install()` and no comment names a refusing install case: no call passed it (Step 4), and
-  the refusal is still asserted, by the signature case.
+  the refusal is still asserted, by the signature case; that `Install-HarnessPty` calls it, by the `as written` case
+  the final review added (the design's Change 4).
 - Not this spec's: no case runs the signature check under `-ExecutionPolicy Restricted`, as a real signed `irm | iex`
   install does. The Restricted case passes by the door, and CI has no signed host. A proposal, not a task.
 
@@ -155,8 +156,8 @@ npx vitest run src/scripts/installPs1.spec.ts
 npm run typecheck
 ```
 
-Expected: `Test Files 1 passed (1)`, `Tests 13 passed | 31 skipped (44)` (counted from the file's four blocks, not
-run for this plan); `tsc --noEmit` exits 0. This shows the file loads and typechecks; it is not the green.
+Expected: `Test Files 1 passed (1)`, `Tests 13 passed | 31 skipped (44)`, and `14 passed | 31 skipped (45)` with the
+final review's wiring case; `tsc --noEmit` exits 0. This shows the file loads and typechecks; it is not the green.
 
 - [ ] **Step 6: Commit**
 
@@ -191,10 +192,11 @@ registry keys on the runner. Nothing here needs a person's own login or eye.
    No inputs: `release` defaults to `false`, so the tests run. Check `headSha` is the branch head.
 
    To see, in both `windows-pty` jobs: the step `Two real builds: the pty host rollover and the payload install`
-   green, with `Test Files  4 passed (4)` and `Tests  85 passed (85)`, and in its verbose log a `✓` on each of four
-   cases: the Restricted `irm | iex` one, the probation one, "reports the failure and leaves the PowerShell it was
-   iex-ed into running", and "names each terminal host file that is unsigned or signed by someone else, …". Then the
-   `install` job starts on both architectures instead of being skipped. Report the run's link.
+   green, with `Test Files  4 passed (4)` and `Tests  86 passed (86)` (85, and the final review's wiring case), and
+   in its verbose log a `✓` on each of four cases: the Restricted `irm | iex` one, the probation one, "reports the
+   failure and leaves the PowerShell it was iex-ed into running", and "names each terminal host file that is unsigned
+   or signed by someone else, …". Then the `install` job starts on both architectures instead of being skipped.
+   Report the run's link.
 
    The pass, and the merge gate, is that step green on both jobs with the four `✓`; the signature case's `✓` on x64
    and arm64 is what shows the refusal is still asserted now that `signed` is gone. The steps after it and the

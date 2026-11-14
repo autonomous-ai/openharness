@@ -50,6 +50,11 @@ Test-only, in `cli/src/scripts/installPs1.spec.ts`. `install.ps1`, the updater a
    function override. The signature check keeps its own case (that one, which asserts the refusal without the door).
 3. **No dead parameter.** `install()`'s `signed` parameter has no caller (#4018 added it without a case that passes
    it), so it goes, with the comment that names a case that does not exist.
+4. **The check stays wired in.** With 1 and 2, every case that runs `Install-HarnessPty` allows its unsigned host,
+   and the probation case's red was the only test that held it to `Assert-HarnessPtySigned`. A case in
+   `install.ps1, as written` (it runs on every platform, PR CI too) requires both calls, on the unpacked download
+   before it moves into place and on a version folder already there before `current-pty` names it. Found in the final
+   review.
 
 The refusal on real installs stays exactly as strict: no new switch, environment variable or flag.
 
@@ -58,6 +63,8 @@ The refusal on real installs stays exactly as strict: no new switch, environment
 The red tests are the two existing cases, red on Windows today (run 43560364769, both jobs). After the change both pass,
 with the rest of `installPs1.spec.ts`, on windows.yml's step on x64 and arm64. They run only on Windows
 (`describe.runIf(windows)`), so the red-then-green evidence is that workflow run, started only with the orchestrator's go.
+The wiring case (Change 4) guards code that is already right, so its red is shown on `install.ps1` with either
+`Assert-HarnessPtySigned` call removed, locally, and not committed.
 
 ## Same cause elsewhere
 
