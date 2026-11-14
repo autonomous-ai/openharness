@@ -1,14 +1,14 @@
 /**
  * `harness device claude …` as the menu-bar app, the plugin's hook and its mod run it: a fake `claude` (a ClaudeRun that
- * answers from a table) and a daemon listening on a socket in a throwaway folder. The real `claude`, ~/.claude and the
- * daemon are never touched.
+ * answers from a table), Claude Code's settings in a throwaway CLAUDE_CONFIG_DIR, and a daemon listening on a socket in a
+ * throwaway folder. The real `claude`, ~/.claude and the daemon are never touched.
  */
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { unixSocketPath } from '../lib/localSocket.js'
 import { DEVICE_USAGE, runDeviceCommand, type DeviceDeps } from './command.js'
 import type { ClaudeRun } from './plugin.js'
@@ -19,6 +19,7 @@ const PORT = 4998
 
 const cleanup: Array<() => unknown> = []
 afterEach(async () => {
+  vi.unstubAllEnvs()
   for (const step of cleanup.splice(0).reverse()) await step()
 })
 
@@ -26,6 +27,33 @@ function folder(): string {
   const dir = mkdtempSync(join(tmpdir(), 'dc-'))
   cleanup.push(() => rmSync(dir, { recursive: true, force: true }))
   return dir
+}
+
+/** Claude Code's user settings as `claude plugin` leaves them: the entry true once enabled, gone once uninstalled. */
+let settings: string
+function pluginOn(on: boolean): void {
+  writeFileSync(settings, JSON.stringify({ enabledPlugins: on ? { 'harness-device@openharness': true } : {} }))
+}
+beforeEach(() => {
+  const claudeHome = folder()
+  vi.stubEnv('CLAUDE_CONFIG_DIR', claudeHome)
+  settings = join(claudeHome, 'settings.json')
+  pluginOn(true)
+})
+
+/** A daemon on its socket in [dataDir] that records each body and answers 200. */
+async function daemonAt(dataDir: string): Promise<string[]> {
+  const bodies: string[] = []
+  const server = createServer((req, res) => {
+    let body = ''
+    req.setEncoding('utf8')
+    req.on('data', (chunk: string) => { body += chunk })
+    req.on('end', () => { bodies.push(body); res.writeHead(200).end('{}') })
+  })
+  server.on('connection', (socket) => { socket.on('error', () => {}) })
+  cleanup.push(() => new Promise<void>((resolve) => { server.closeAllConnections(); server.close(() => resolve()) }))
+  await new Promise<void>((resolve) => { server.listen(unixSocketPath(dataDir, PORT)!, resolve) })
+  return bodies
 }
 
 /** A `claude` 2.1.287 with nothing installed, whose calls answer from [answers] by their arguments. */
@@ -106,6 +134,30 @@ describe('harness device claude', () => {
       .toEqual({ code: 0, out: [], err: [] })
     await vi.waitFor(() => expect(bodies.map((body) => JSON.parse(body)))
       .toEqual([{ engine: 'claude', sessionId: 'sess-1', event: 'asked', tool: 'Bash', summary: 'npm test', cwd: '/repo' }]))
+  })
+
+  // A session started before disable keeps the plugin's hook: it still runs `asked`, which reads the plugin is off.
+  it('asked after disable tells the daemon nothing, and after enable tells it again', async () => {
+    const dataDir = folder()
+    const bodies = await daemonAt(dataDir)
+    const asked = (session: string) => device(['claude', 'asked'], {
+      dataDir, stdin: chunks(JSON.stringify({ session_id: session, tool_name: 'Bash', tool_input: { command: 'npm test' } })),
+    })
+    pluginOn(false)
+    expect(await asked('sess-off')).toEqual({ code: 0, out: [], err: [] })
+    pluginOn(true)
+    expect(await asked('sess-on')).toEqual({ code: 0, out: [], err: [] })
+    await vi.waitFor(() => expect(bodies).toHaveLength(1))
+    expect(JSON.parse(bodies[0]).sessionId).toBe('sess-on')
+  })
+
+  it('link after disable exits 1 with no output, and after enable prints the socket again', async () => {
+    const dataDir = folder()
+    pluginOn(false)
+    expect(await device(['claude', 'link', '--json'], { dataDir })).toEqual({ code: 1, out: [], err: [] })
+    pluginOn(true)
+    expect(await device(['claude', 'link', '--json'], { dataDir }))
+      .toEqual({ code: 0, err: [], out: [JSON.stringify({ socketPath: unixSocketPath(dataDir, PORT) })] })
   })
 
   it('asked with no daemon prints nothing and exits 0', async () => {

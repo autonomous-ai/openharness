@@ -24,15 +24,22 @@ type World = {
   envAsked: string[]
   /** In order, each timer of the mod's that fired and each poll it sent. */
   steps: ('timer' | 'poll')[]
+  /** Whether Claude Code's user settings enable the plugin: `disable` uninstalls it, which drops the entry. */
+  enabled: boolean
+  /** The path of each file the mod read. */
+  reads: string[]
 }
 
 /**
- * Sets the world beneath the mod. `launchers` are the argv[0]s that start, and `exitCode` is what each exits with;
- * `answers` are the daemon's answers, one per poll, the last repeated.
+ * Sets the world beneath the mod. `launchers` are the argv[0]s that start, and `exitCode` is what each exits with, as
+ * the launcher's `link` exits 1 too while the plugin is off; `answers` are the daemon's answers, one per poll, the last
+ * repeated. `configDir` is CLAUDE_CONFIG_DIR, and `settings: 'unreadable'` makes every read of a file fail.
  */
 function world(
   on: On,
-  { launchers = [LOCAL], exitCode = 0, answers }: { launchers?: string[]; exitCode?: number; answers: Answer[] },
+  { launchers = [LOCAL], exitCode = 0, answers, configDir, settings = 'readable' }: {
+    launchers?: string[]; exitCode?: number; answers: Answer[]; configDir?: string; settings?: 'readable' | 'unreadable'
+  },
 ): World {
   const steps: World['steps'] = []
   // Before the clock's own hook, so above it: it hears each of the mod's waits fire, just before the mod's function runs.
@@ -42,24 +49,30 @@ function world(
     return fired
   })
   const clock = mock.clock(on, { now: 1_000_000 })
-  const w: World = { clock, runs: [], polls: [], submitted: [], envAsked: [], steps }
+  const w: World = { clock, runs: [], polls: [], submitted: [], envAsked: [], steps, enabled: true, reads: [] }
   const env: Record<string, string> = {
     HOME,
     ORCA_PAIRING_CODE: 'pairing-secret',
     ORCA_AGENT_SESSION_SPAWN_TOKEN: 'spawn-secret',
+    ...(configDir ? { CLAUDE_CONFIG_DIR: configDir } : {}),
   }
   on('env.get', (_, e) => {
     w.envAsked.push(e.name)
     return { value: env[e.name] }
+  })
+  on('fs.read', (_, e) => {
+    w.reads.push(e.path)
+    if (settings === 'unreadable') return { deny: 'EACCES' }
+    return { value: JSON.stringify({ enabledPlugins: w.enabled ? { 'harness-device@openharness': true } : {} }) }
   })
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('session.id', () => ({ value: SESSION }))
   on('process.run', (_, e) => {
     w.runs.push([...e.argv])
     if (!launchers.includes(e.argv[0] ?? '')) return { deny: 'cannot start' }
-    const out = exitCode === 0
-      ? { exitCode, stdout: JSON.stringify({ socketPath: SOCKET }), stderr: '' }
-      : { exitCode, stdout: '', stderr: 'Unknown command: device' }
+    const out = exitCode !== 0 ? { exitCode, stdout: '', stderr: 'Unknown command: device' }
+      : !w.enabled ? { exitCode: 1, stdout: '', stderr: '' }
+      : { exitCode, stdout: JSON.stringify({ socketPath: SOCKET }), stderr: '' }
     return { value: { ...out, isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('http.fetch', async (_, e) => {
@@ -226,5 +239,61 @@ test('with ORCA_PAIRING_CODE and ORCA_AGENT_SESSION_SPAWN_TOKEN set, neither is 
   const w = world(on, { answers: [{ status: 200, text: JSON.stringify({ text: 'hi' }) }, held(25_000)] })
   await start($, w)
   await w.clock.advance(25_000)
-  expect(new Set(w.envAsked)).toEqual(new Set(['HOME']))
+  expect(new Set(w.envAsked)).toEqual(new Set(['HOME', 'CLAUDE_CONFIG_DIR']))
+})
+
+// A session started before `harness device claude disable` keeps the mod loaded: it reads the plugin is off and goes
+// idle, as with a launcher that has no socket.
+test('disabled while a poll is held: its text is not submitted, link answers off and no poll follows', async ($, on) => {
+  const said = async (clock: Clock) => {
+    await clock.sleep(10_000)
+    return { status: 200, text: JSON.stringify({ text: 'run the tests' }) }
+  }
+  const w = world(on, { answers: [said, held(25_000)] })
+  await start($, w)
+  expect(w.polls).toHaveLength(1)
+  w.enabled = false
+  await w.clock.advance(10_000)
+  expect(w.submitted).toHaveLength(0)
+  expect(w.runs).toHaveLength(2)
+  await w.clock.advance(10 * MINUTE - 1)
+  expect(w.runs).toHaveLength(2)
+  expect(w.polls).toHaveLength(1)
+})
+
+test('enabled again: the next link polls and submits again', async ($, on) => {
+  const text = { status: 200, text: JSON.stringify({ text: 'run the tests' }) }
+  const w = world(on, { answers: [held(25_000), text, held(25_000)] })
+  await start($, w)
+  w.enabled = false
+  await w.clock.advance(25_000)
+  expect(w.runs).toHaveLength(2)
+  w.enabled = true
+  await w.clock.advance(10 * MINUTE)
+  expect(w.runs).toHaveLength(3)
+  expect(w.polls).toHaveLength(3)
+  expect(w.submitted).toHaveLength(1)
+})
+
+test('each poll costs one read, of ~/.claude/settings.json', async ($, on) => {
+  const w = world(on, { answers: [held(25_000)] })
+  await start($, w)
+  await w.clock.advance(25_000)
+  await w.clock.advance(25_000)
+  expect(w.polls).toHaveLength(3)
+  expect(w.reads).toEqual([`${HOME}/.claude/settings.json`, `${HOME}/.claude/settings.json`])
+})
+
+test('with CLAUDE_CONFIG_DIR set, the settings are read there', async ($, on) => {
+  const w = world(on, { answers: [held(25_000)], configDir: '/home/dee/profile-b' })
+  await start($, w)
+  await w.clock.advance(25_000)
+  expect(w.reads).toEqual(['/home/dee/profile-b/settings.json'])
+})
+
+test('settings it cannot read keep the mod as it was: the text is submitted', async ($, on) => {
+  const w = world(on, { answers: [{ status: 200, text: JSON.stringify({ text: 'run the tests' }) }, held(25_000)], settings: 'unreadable' })
+  await start($, w)
+  expect(w.submitted).toHaveLength(1)
+  expect(w.polls).toHaveLength(2)
 })
