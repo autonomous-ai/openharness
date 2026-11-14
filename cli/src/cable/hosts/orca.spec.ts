@@ -3,7 +3,7 @@ import { once } from 'node:events'
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { createOrcaActions, ORCA_HANDLE, orcaDeps, type OrcaDeps } from './orca.js'
 
 // The real execFile, watched: a spec reads how the child of a run ended.
@@ -158,6 +158,8 @@ describe('Orca actions', () => {
     // The run's own child says how it ended. A pid file the fake writes may not exist yet: on a loaded machine its shell
     // can still be starting at the deadline.
     const child = vi.mocked(execFile).mock.results.at(-1)!.value as ChildProcess
+    // A run that is never killed fails the test on its timeout, and its sleep, deaf to SIGTERM, would outlive the suite.
+    onTestFinished(() => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL') })
     // Answered by the deadline, the child may still be on its way out.
     if (child.exitCode === null && child.signalCode === null) await once(child, 'exit')
     expect(child.signalCode).toBe('SIGKILL')
