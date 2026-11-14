@@ -16,7 +16,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { PID_FILE, isAlive, readPid } from './daemonState.js'
 import { FLASHER_DIR } from './flasherDir.js'
-import { UNINSTALL_MARKER } from './uninstall/removal.js'
+import { UNINSTALL_MARKER } from './uninstall/marker.js'
 import {
   describeSpawnLockOwner, readSpawnLockOwner, releaseAbandonedSpawnLock, spawnLockOwnerReused, type SpawnLockOwner,
 } from './daemonSpawnLock.js'
