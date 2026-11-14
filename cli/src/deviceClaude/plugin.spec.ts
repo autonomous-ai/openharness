@@ -109,7 +109,8 @@ describe('claudeEnable', () => {
     }
     expect(await claudeEnable({ run, platform: 'darwin' })).toEqual({ ok: true })
     expect(claude.writes()).toEqual([install, 'plugin marketplace update openharness', install])
-    expect(claude.calls.find((call) => call.args === 'plugin marketplace update openharness')?.timeoutMs).toBe(15_000)
+    // It pulls from GitHub, as the add and the install fetch: the time a fetch gets.
+    expect(claude.calls.find((call) => call.args === 'plugin marketplace update openharness')?.timeoutMs).toBe(60_000)
   })
 
   it('an install that fails after the update gives its line, and a failed update gives its own', async () => {
