@@ -34,6 +34,10 @@ objc2-service-management = { version = "0.3", default-features = false, features
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 sysinfo = "0.40"
 
+# The app in front on X11 (front_x11.rs). With no feature it is the pure-Rust connection: no system library.
+[target.'cfg(target_os = "linux")'.dependencies]
+x11rb = "0.14"
+
 [build-dependencies]
 # As `cargo tauri build` writes it back: any other form, and every build rewrites this line.
 tauri-build = { version = "2", features = [] }

@@ -1,3 +1,86 @@
+//! The app in front on Linux X11: the window manager sets the root window's `_NET_ACTIVE_WINDOW`, and the X server
+//! tells each change. No timer, no permission. Wayland has no common way to tell: there this source tells nothing.
+
+use std::path::Path;
+#[cfg(target_os = "linux")]
+use {
+    crate::front::FrontSource,
+    std::error::Error,
+    x11rb::connection::Connection,
+    x11rb::protocol::Event,
+    x11rb::protocol::xproto::{Atom, AtomEnum, ChangeWindowAttributesAux, ConnectionExt as _, EventMask, Window},
+};
+
+/// The exe name of the process whose window is active: once at start, then on each change.
+#[cfg(target_os = "linux")]
+pub struct X11Front;
+
+#[cfg(target_os = "linux")]
+impl FrontSource for X11Front {
+    fn start(&self, changed: Box<dyn Fn(String) + Send + Sync>) {
+        let var = |name| std::env::var(name).ok();
+        let (session_type, wayland_display, display) =
+            (var("XDG_SESSION_TYPE"), var("WAYLAND_DISPLAY"), var("DISPLAY"));
+        if !session_is_x11(session_type.as_deref(), wayland_display.as_deref(), display.as_deref()) {
+            return;
+        }
+        // Connecting can wait on a remote display: never on the thread that starts the app. A display that cannot be
+        // reached, or that goes away, tells nothing more, as on Wayland.
+        let _ = std::thread::Builder::new().name("front-x11".into()).spawn(move || {
+            let _ = follow(&*changed);
+        });
+    }
+}
+
+/// Tells the app in front now, then on each change, until the connection ends.
+#[cfg(target_os = "linux")]
+fn follow(changed: &dyn Fn(String)) -> Result<(), Box<dyn Error>> {
+    let (conn, screen) = x11rb::connect(None)?;
+    let root = conn.setup().roots[screen].root;
+    let (active, wm_pid) = (conn.intern_atom(false, b"_NET_ACTIVE_WINDOW")?, conn.intern_atom(false, b"_NET_WM_PID")?);
+    let (active, wm_pid) = (active.reply()?.atom, wm_pid.reply()?.atom);
+    // Asked for before the first read, so a change between the two is not missed.
+    let mask = ChangeWindowAttributesAux::new().event_mask(EventMask::PROPERTY_CHANGE);
+    conn.change_window_attributes(root, &mask)?.check()?;
+    let front = || {
+        let window =
+            property32(&conn, root, active, AtomEnum::WINDOW, 1).first().copied().filter(|&w| w != x11rb::NONE);
+        let pid = window.and_then(|window| property32(&conn, window, wm_pid, AtomEnum::CARDINAL, 1).first().copied());
+        pid.and_then(|pid| exe_name(Path::new("/proc"), pid)).unwrap_or_default()
+    };
+    changed(front());
+    loop {
+        if let Event::PropertyNotify(event) = conn.wait_for_event()?
+            && event.window == root
+            && event.atom == active
+        {
+            changed(front());
+        }
+    }
+}
+
+/// Up to `length` values of a window's 32-bit property: none when it is unset, of another type, or the window is gone.
+#[cfg(target_os = "linux")]
+fn property32(conn: &impl Connection, window: Window, property: Atom, kind: AtomEnum, length: u32) -> Vec<u32> {
+    let reply = conn.get_property(false, window, property, kind, 0, length).ok().and_then(|cookie| cookie.reply().ok());
+    reply.and_then(|reply| reply.value32().map(Iterator::collect)).unwrap_or_default()
+}
+
+/// The file name of `/proc/<pid>/exe`, which the watch maps to an app (`code`, `ghostty`). None when the process is
+/// gone or is another person's.
+pub fn exe_name(proc_root: &Path, pid: u32) -> Option<String> {
+    let exe = std::fs::read_link(proc_root.join(pid.to_string()).join("exe")).ok()?;
+    let name = exe.file_name()?.to_str()?;
+    // The kernel's mark on a binary replaced while it runs (a package upgrade): still the same app.
+    Some(name.strip_suffix(" (deleted)").unwrap_or(name).to_string())
+}
+
+/// Under Wayland, XWayland's DISPLAY sees only X11 windows, never the app in front: read X11 only in an X11 session.
+pub fn session_is_x11(session_type: Option<&str>, wayland_display: Option<&str>, display: Option<&str>) -> bool {
+    let set = |value: Option<&str>| value.is_some_and(|value| !value.is_empty());
+    session_type != Some("wayland") && !set(wayland_display) && set(display)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

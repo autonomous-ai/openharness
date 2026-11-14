@@ -12,7 +12,7 @@ pub trait FrontSource: Send + Sync {
     fn start(&self, changed: Box<dyn Fn(String) + Send + Sync>);
 }
 
-/// Reports nothing: Wayland has no common way to tell, and a platform with no source of its own yet.
+/// Reports nothing: a platform with no source of its own yet (Windows, until its wave).
 pub struct NoFront;
 
 impl FrontSource for NoFront {
@@ -23,7 +23,9 @@ impl FrontSource for NoFront {
 pub fn system() -> Arc<dyn FrontSource> {
     #[cfg(target_os = "macos")]
     let source = crate::front_macos::MacFront;
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    let source = crate::front_x11::X11Front;
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     let source = NoFront;
     Arc::new(source)
 }
