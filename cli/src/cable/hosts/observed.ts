@@ -36,7 +36,7 @@ export interface ObservedDeps {
   processes(): Promise<readonly Pick<RunningProcess, 'pid' | 'generation'>[]>
   /** Whether a pid is running, for a session whose process has no generation to read (Windows has no `ps` here). */
   alive(pid: number): boolean
-  openSessions: Pick<OpenSessions, 'owners' | 'working'>
+  openSessions: Pick<OpenSessions, 'owners' | 'busy'>
   sessionRows: Pick<SessionRows, 'find'>
   lastAnswer(engine: string, path: string): Promise<string | undefined>
   /** Folders whose sessions are Harness's own (its data folder), as the external sessions are given them: never observed. */
@@ -248,17 +248,16 @@ export class ObservedSource implements HostSource {
     if (changed) this.emit()
   }
 
-  /** Codex sends no end-of-turn hook: a working session is done once the open-session check says it stopped. Called every 3 s. */
+  /** Codex sends no end-of-turn hook: a working session is done once its owner's record reads idle. Called every 3 s. */
   async checkWorking(): Promise<void> {
-    for (const e of [...this.entries.values()]) {
-      if (e.agent.engine !== 'codex' || e.agent.state !== 'working' || !e.agent.sessionId) continue
-      let working: boolean | null
-      try {
-        working = await this.deps.openSessions.working(e.agent.sessionId)
-      } catch {
-        continue
-      }
-      if (working !== false || e.agent.state !== 'working' || this.entries.get(e.agent.id) !== e) continue
+    const turns = [...this.entries.values()].filter((e) => e.agent.engine === 'codex' && e.agent.state === 'working')
+    if (!turns.length) return
+    const owners = await this.deps.openSessions.owners()
+    for (const e of turns) {
+      // Not found says nothing (a process read that timed out finds nobody): only an owner that reads idle ends a turn.
+      const owner = owners.get(e.agent.sessionId ?? '')
+      if (!owner || await this.deps.openSessions.busy(owner)) continue
+      if (e.agent.state !== 'working' || this.entries.get(e.agent.id) !== e) continue
       const now = this.deps.now()
       this.setState(e.agent, 'done', now)
       e.agent.unseenDone = true

@@ -28,7 +28,6 @@ function setup(over: Partial<ObservedDeps> = {}) {
     openSessions: {
       // The cached answer is empty before the first look, as it is when a dial attaches; only a fresh look sees.
       known: () => new Map(),
-      working: async (id: string) => (working.has(id) ? working.get(id)! : false),
       owners: async () => {
         await look()
         return new Map([...open].flatMap(([id, openIn]) => {

@@ -145,9 +145,9 @@ vi.mock('../lib/sessionSearch/external.js', async (real) => ({
     constructor(options: Record<string, unknown>) { readers.open = options }
     async owners() {
       readers.scans++
-      return new Map([...readers.known.keys()].flatMap((id) => readers.owners.has(id) ? [[id, readers.owners.get(id)!] as const] : []))
+      return new Map([...readers.known.keys()].flatMap((id) => readers.owners.has(id) ? [[id, { ...readers.owners.get(id)!, record: id }] as const] : []))
     }
-    async working(id: string) { return readers.working.get(id) ?? null }
+    async busy(owner: { record: string }) { return readers.working.get(owner.record) !== false }
   },
   SessionRows: class {
     constructor(options: Record<string, unknown>) { readers.external = options }
@@ -1572,6 +1572,8 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     const { port } = start({ faults: ['fleet'] })
     const codex = observedAgentId('codex', 'cx-1')
     port.observed(hook('turn-start', { engine: 'codex', sessionId: 'cx-1' }))
+    readers.known.set('cx-1', 'terminal')
+    readers.owners.set('cx-1', { engine: 'codex', pid: 4242 })
     readers.working.set('cx-1', false)
     await vi.advanceTimersByTimeAsync(3_000)
     expect(calls('turnDone')).toEqual([[codex]])
