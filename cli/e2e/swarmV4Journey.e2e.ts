@@ -328,7 +328,10 @@ describe.skipIf(!process.env.HARNESS_E2E_SERVICES_DIR)('the Swarm v4 journey, on
     await command({ type: 'agent.remove', agentId: agents.Pip.id })
     // The roster as Desktop reads it, by parts (client.dart readSnapshot). The PM still on it says the read was a real one.
     const roster = await until('Pip to leave the Swarm\'s roster', async () => {
-      const swarm = reassemble(storeOf({ ...(await api(`/api/super-tabs/${tab}/parts`)).body.data, tabId: tab })) as Record<string, any>
+      // A refused read names its status and the server's error: read as parts it would only say a list was undefined.
+      const read = await api(`/api/super-tabs/${tab}/parts`)
+      if (read.status !== 200) throw new Error(`the parts read answered ${read.status}: ${JSON.stringify(read.body)}`)
+      const swarm = reassemble(storeOf({ ...read.body.data, tabId: tab })) as Record<string, any>
       const ids = (swarm.agents as Array<Record<string, any>>).map(a => a.id as string)
       return ids.includes(agents.Pip.id) ? null : ids
     }, 30_000, 500)
