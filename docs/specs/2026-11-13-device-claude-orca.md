@@ -150,7 +150,10 @@ wave 0's "Waiting for you · {Host}", which it replaces for that session, so the
 On the round dial an activity line is drawn on the working face, so the dial also gets the existing `question` frame,
 for display only (Diego, after the dial check: "the device only shows the question"): the asking face and its bubble
 with "<summary> · answer in {Host}". Nothing answers it: the hook has already decided nothing, and every `answer` or
-`answer.reviewed` frame for it is dropped. It closes (`question.close`) when the waiting line clears.
+`answer.reviewed` frame for it is dropped. It closes (`question.close`) when the waiting line clears. Its one option, which
+the host's question store requires and the round dial never shows as a button, reads "In {Host}". The round firmware
+clears every question notice when the drawer is replaced on attach, so the session sends every open question again
+after that replace (and on resync); a question can arrive twice, which is harmless (the dial coalesces the beep).
 The next hook event of that session (UserPromptSubmit, Stop, StopFailure, SessionEnd) clears it, and so does the open
 session's transcript check (every 3 s), which sees a prompt answered in the app. PostToolUse is not used: Harness does
 not run its hook script on every tool call, and adding one would start a process per tool call. A character the round
