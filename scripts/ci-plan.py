@@ -28,7 +28,7 @@ _local_spec.loader.exec_module(local_checks)
 
 
 CORE = {"cli", "desktop", "tui", "backend", "companions"}
-EXTRA = {"website", "os", "provider", "firmware", "mobile", "daemons", "pty"}
+EXTRA = {"website", "os", "provider", "firmware", "mobile", "daemons", "pty", "device-app"}
 SUITES = CORE | EXTRA | {"pro"}
 JOBS = {
     "cli": {"cli-typecheck", "cli-tests"},
@@ -44,6 +44,7 @@ MANUAL = {"full": CORE, "all": SUITES, "process": set(), **{name: {name} for nam
 COMPONENTS = {"cli": "cli", "tests": "cli", "desktop": "desktop", "tui": "tui", "backend": "backend",
               "companions": "companions", "website": "website", "os": "os", "provider": "provider",
               "devices": "firmware", "mobile": "mobile", "daemons": "daemons", "pty": "pty", "term": "pty",
+              "device-app": "device-app",
               # harness-install.exe's model and steps test on Linux; its Windows half runs in windows-desktop.yml.
               "installer": "pty"}
 # Code inside another component that a suite runs as its own (its references are scanned as the suite's reads): the PTY
@@ -189,33 +190,10 @@ NOT_READ = {"cli": ("cli/e2e/",)}
 # test data, or a script run only by hand. {source: (why, {path the scan reports, or a folder "dir/" covering it})}.
 # A folder covers only paths named from the repository root: a relative read ("../../cli/x.ts") is always a read.
 NOT_READS = {
-    **{source: ("test data: owned-code paths and model names", {"desktop/lib/", "desktop/lib/super_tabs/",
-                                                                "desktop/lib/super_tabs/roster.dart"})
-       for source in ("backend/src/superTabs/commands.test.ts", "backend/integration/superTabs.test.ts")},
-    # Task #4511: a task's owned or changed paths, a PR's files, a lane's folders; none is opened.
-    **{source: ("test data: owned, changed and PR file paths", {"cli/", "companions/", "desktop/", "devices/", "docs/", "mobile/",
-                                                                 "os/", "tests/", "website/"})
-       for source in ("backend/integration/crewDispatch.test.ts", "backend/integration/superTabReviewSteps.test.ts",
-                      "backend/src/github/train.test.ts", "backend/src/superTabs/crew.test.ts",
-                      "backend/src/superTabs/dispatch.test.ts",
-                      "backend/src/superTabs/mergeTrain/plan.test.ts", "backend/src/superTabs/mergeTrain/rulesRecord.test.ts",
-                      "backend/src/superTabs/mergeTrain/train.test.ts", "backend/src/superTabs/osSteps.test.ts",
-                      "backend/src/superTabs/prHistory.test.ts",
-                      "backend/src/superTabs/prHistoryRead.test.ts", "backend/src/superTabs/process.test.ts",
-                      "backend/src/superTabs/pullRequestFiles.test.ts", "backend/src/superTabs/releaseWatch.test.ts",
-                      "backend/src/superTabs/releases.test.ts", "backend/src/superTabs/reviewSteps.test.ts",
-                      "backend/src/superTabs/reviewTable.test.ts", "backend/src/superTabs/stepOs.test.ts")},
-    **{source: ("path rules: the folders a review area or a release matches", {"cli/", "companions/", "daemons/", "desktop/",
-                                                                               "devices/", "docs/", "installer/", "mobile/",
-                                                                               "pty/", "term/", "tui/", "website/"})
-       for source in ("backend/src/superTabs/releases.ts",
-                      "backend/src/superTabs/reviewTable.ts")},
     # cli-tests runs vitest on src/ only; these start the real backend with its installed prisma.
     **{source: ("end-to-end and local stack scripts, run by hand", {"backend/"})
        for source in ("cli/e2e/harness/realBackend.ts", "cli/scripts/box-claim-e2e.ts", "cli/scripts/local-stack-peer.ts",
                       "cli/scripts/remote-viewers-stack.ts", "cli/scripts/share-harness-e2e.ts")},
-    "backend/src/superTabs/refusalLog.test.ts": ("test data: client versions ('cli/0.5.34', 'desktop/1.3.57')",
-                                                 {"cli/", "desktop/"}),
     "cli/src/engines/__fixtures__/other-runtime.golden.json": ("test data: a model name", {"provider/"}),
     "cli/src/lib/sessionSearch/turns.spec.ts": ("test data: a tool call's file path", {"desktop/"}),
     "cli/src/lib/handoffChangedFiles.spec.ts": ("test data: changed file names", {"docs/"}),

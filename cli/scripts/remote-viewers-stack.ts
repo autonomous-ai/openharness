@@ -18,6 +18,8 @@ import { promisify } from 'node:util'
 import { randomUUID, createHash } from 'node:crypto'
 import { once } from 'node:events'
 import { WebSocket } from 'ws'
+import { backendListeningPortIn } from '../src/testing/backendListeningPort.js'
+import { readDaemonRecord } from '../src/lib/daemonRecord.js'
 
 if (process.env.HARNESS_VIEWER_STACK !== '1') throw new Error('Opt in with HARNESS_VIEWER_STACK=1')
 const servicesDir = process.env.HARNESS_E2E_SERVICES_DIR
@@ -41,6 +43,8 @@ async function until(label: string, check: () => unknown | Promise<unknown>, ms 
     await new Promise(resolve => setTimeout(resolve, 100))
   }
 }
+// Only a daemon's configured PORT, the name of its socket and of its record: a port picked here can be taken before
+// the daemon binds it, so every address of a daemon is the port its record says.
 async function freePort(): Promise<number> {
   const server = netServer().listen(0, '127.0.0.1')
   await once(server, 'listening')
@@ -120,8 +124,7 @@ try {
   }).listen(0, '127.0.0.1')
   await once(sso, 'listening')
   cleanups.push(() => { sso.closeAllConnections(); sso.close() })
-  const backendPorts = [await freePort(), await freePort()]
-  const proxyPorts = [await freePort(), await freePort()]
+  const backendPorts: number[] = []
   const backendEnv = { ...process.env, NODE_ENV: 'test', DATABASE_URL: mongo.getUri('viewer'),
     REDIS_URL: `redis://127.0.0.1:${redisPort}`, HARNESS_BILLING_ENABLED: 'false', MESH_ENABLED: 'false',
     SSO_PROFILE_URL: `http://127.0.0.1:${(sso.address() as { port: number }).port}/profile`,
@@ -130,12 +133,20 @@ try {
   await exec(join(repo, 'backend/node_modules/.bin/prisma'), ['db', 'push', '--skip-generate'], {
     cwd: join(repo, 'backend'), env: backendEnv, timeout: 60_000,
   })
+  // A first boot binds a port of the system's choosing and its log says which: a port picked ahead can be taken before
+  // the backend binds it (cli-e2e run 43568618113, shard 2). The boot after the outage asks for the port that backend
+  // had, since its daemon's BACKEND_WS_URL names it and the checkpoint is that the daemon finds it again.
   async function bootBackend(index: number) {
     const child = run(`backend-${index}`, join(repo, 'backend'), ['--import', 'tsx', 'src/server.ts'], {
-      ...backendEnv, PORT: String(backendPorts[index]), PORT_APP_PROXY: String(proxyPorts[index]), BACKEND_INSTANCE_ID: `viewer-${index}`,
+      ...backendEnv, PORT: String(backendPorts[index] ?? 0), PORT_APP_PROXY: '0', BACKEND_INSTANCE_ID: `viewer-${index}`,
     })
     // Ready, not only alive: /api/health answers before its Redis is connected (cli/e2e/harness/realBackend.ts).
-    await until('backend readiness', () => fetch(`http://127.0.0.1:${backendPorts[index]}/api/ready`, { signal: AbortSignal.timeout(5_000) }).then(r => r.ok).catch(() => false))
+    await until('backend readiness', () => {
+      const port = backendPorts[index] ?? backendListeningPortIn(join(root, `backend-${index}.log`))
+      if (port === null) return false
+      backendPorts[index] = port
+      return fetch(`http://127.0.0.1:${port}/api/ready`, { signal: AbortSignal.timeout(5_000) }).then(r => r.ok).catch(() => false)
+    })
     return child
   }
   await bootBackend(0)
@@ -152,7 +163,7 @@ setInterval(() => {}, 1000);
   const packages = [...harnesses.map(name => `agents/${name}`), ...['game', 'model', 'video'].map(name => `viewers/${name}-viewer`)]
   async function machine(name: string, index: number) {
     const dir = join(root, name), data = join(dir, 'data'), auth = join(dir, 'auth')
-    const computerId = randomUUID().replaceAll('-', ''), port = await freePort()
+    const computerId = randomUUID().replaceAll('-', ''), configuredPort = await freePort()
     const socket = join(dir, 'tmux.sock')
     for (const path of [data, auth, join(dir, 'dsh'), join(dir, 'runtime'), join(dir, 'claude')]) await mkdir(path, { recursive: true })
     const base = `http://127.0.0.1:${backendPorts[index]}`
@@ -174,7 +185,7 @@ setInterval(() => {}, 1000);
     })))
     await exec('tmux', ['-S', socket, '-f', '/dev/null', 'new-session', '-d', '-s', 'fixture-keeper'])
     cleanups.push(() => exec('tmux', ['-S', socket, 'kill-server']).catch(() => {}))
-    const env = { ...process.env, NODE_ENV: 'test', TMUX: `${socket},0,0`, PORT: String(port),
+    const env = { ...process.env, NODE_ENV: 'test', TMUX: `${socket},0,0`, PORT: String(configuredPort),
       HARNESS_AUTH_DIR: auth, ADAPTER_COMPUTER_ID: computerId, ADAPTER_COMPUTER_ID_FILE: join(dir, 'computer-id'),
       ADAPTER_DATA_DIR: data, ADAPTER_RUNTIME_DIR: join(dir, 'runtime'), DSH_DIR: join(dir, 'dsh'), CLAUDE_PATH: engine,
       CLAUDE_CONFIG_DIR: join(dir, 'claude'), CLAUDE_PROJECTS_DIR: join(dir, 'claude/projects'),
@@ -182,13 +193,21 @@ setInterval(() => {}, 1000);
       DISABLE_HOOK_INSTALL: 'true', ADAPTER_UPDATE_DISABLE: 'true', ANALYTICS_ENABLED: 'false', RECAP_FORCE: 'false',
       RECAP_WITHOUT_DEVICE: 'false', CABLE_DISABLE: 'true', CABLE_FW_DISABLE: 'true', TERMINAL_BACKENDS: 'tmux',
       TMUX_REAP_INTERVAL_MS: '5000', TERMINAL_RECONCILE_INTERVAL_MS: '5000' }
+    let port = 0
     async function boot() {
       const child = run(`cli-${name}`, join(repo, 'cli'), ['--import', 'tsx', 'src/cli.ts', '__run'], env)
-      await until(`${name} CLI connected`, () => fetch(`http://127.0.0.1:${port}/api/status`, { headers: { 'x-adapter-local': '1' } })
-        .then(r => r.json()).then((v: any) => v.connected && v.discoveryReady).catch(() => false))
+      // A first start has no record yet, and a daemon started again may record another port.
+      await until(`${name} CLI connected`, () => {
+        const bound = readDaemonRecord(data, configuredPort)?.port
+        if (bound === undefined) return false
+        port = bound
+        return fetch(`http://127.0.0.1:${port}/api/status`, { headers: { 'x-adapter-local': '1' }, signal: AbortSignal.timeout(5_000) })
+          .then(r => r.json()).then((v: any) => v.connected && v.discoveryReady).catch(() => false)
+      })
       return child
     }
-    return { id, port, dir, env, boot, child: await boot() }
+    const child = await boot()
+    return { id, port, dir, env, boot, child }
   }
   const remote = await machine('remote', 0)
   const local = await machine('local', 1)

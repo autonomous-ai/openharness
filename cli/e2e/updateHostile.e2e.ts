@@ -16,7 +16,7 @@
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import {
-  closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, statSync, truncateSync, writeFileSync, writeSync,
+  existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, truncateSync, writeFileSync,
 } from 'node:fs'
 import { createServer, type Server, type ServerResponse } from 'node:http'
 import { tmpdir } from 'node:os'
@@ -25,6 +25,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFailed } fr
 import { LocalClient, type Frame } from './harness/client.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 import { atVersion, withFault } from './harness/release.js'
+import { fillVolume } from './harness/fullDisk.js'
 
 const FIRST = '43.0.1'
 const DISKFULL = process.env.DISKFULL === '1' && process.platform === 'darwin'
@@ -505,15 +506,6 @@ describe.skipIf(!DISKFULL)('an update on a disk that fills', () => {
   const filler = () => join(volume, 'filler')
   const lock = () => join(machine.daemon.dataDir, 'adapter.spawn.lock')
 
-  /** Writes until the volume refuses. */
-  const fill = (): void => {
-    const fd = openSync(filler(), 'a')
-    const chunk = Buffer.alloc(1024 * 1024, 7)
-    try { for (;;) writeSync(fd, chunk) } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOSPC') throw error } finally { closeSync(fd) }
-    // The last blocks a metadata write may still find: take those too.
-    const tail = openSync(join(volume, 'filler-tail'), 'a')
-    try { for (;;) writeSync(tail, Buffer.alloc(4096, 7)) } catch { /* full */ } finally { closeSync(tail) }
-  }
   /** Gives back this much room. */
   const room = (bytes: number): void => {
     rmSync(join(volume, 'filler-tail'), { force: true })
@@ -569,7 +561,7 @@ describe.skipIf(!DISKFULL)('an update on a disk that fills', () => {
     server.faults = ['hold']
     server.offer = { version: '44.0.2' }
     await until('the download to be under way', () => server.holding === 1, 90_000)
-    fill()
+    fillVolume(volume)
     server.release()
     await until('the canary to fail on the full disk', () => /\[update\][^\n]*canary/.test(machine.log().slice(from)), 60_000)
     await sleep(3_000)
@@ -587,7 +579,7 @@ describe.skipIf(!DISKFULL)('an update on a disk that fills', () => {
     holdLock()
     server.offer = { version: '44.0.3' }
     await until('the updater to wait for the lock with the build verified', () => machine.log().slice(from).includes('[update] waiting — the daemon is'), 90_000)
-    fill()
+    fillVolume(volume)
     releaseLock()
     await until('a swap to fail on the full disk', () => count(machine.log().slice(from), '[update] check failed') >= 1, 60_000)
     // Room for the lock and part of one copy of the bundle, not all of it.
@@ -611,7 +603,7 @@ describe.skipIf(!DISKFULL)('an update on a disk that fills', () => {
     const master = machine.daemon.pid
     server.offer = { version: '44.0.4' }
     await until('the core to stage 44.0.4', () => machine.log().slice(from).includes('[update] staged 44.0.4'), 90_000, 50)
-    fill()
+    fillVolume(volume)
     // A core cannot claim its socket on a full disk (listen ENOSPC), so the core on the new bundle starts in
     // safe mode. The build before would too: the master keeps the update on trial and tries again,
     // backing off. Before, it rolled back (the rollback freeing the room the build before needed) and
@@ -620,7 +612,7 @@ describe.skipIf(!DISKFULL)('an update on a disk that fills', () => {
     // it had written is given back when that write fails (leanBundle.ts leaves no half behind), and with that
     // room the core starts and the update simply stays up, which is right and is not this test (a slow macOS
     // runner, 2026-10-12).
-    await until('the master to try the new bundle again for want of room', () => { fill(); return count(machine.log().slice(from), 'had no room to start') >= 2 }, 150_000, 100)
+    await until('the master to try the new bundle again for want of room', () => { fillVolume(volume); return count(machine.log().slice(from), 'had no room to start') >= 2 }, 150_000, 100)
     expect(machine.log().slice(from)).toContain('could not start on the new bundle for want of room on the disk (listen ENOSPC')
     expect(machine.log().slice(from)).not.toContain('the updated core failed')
     expect(IsolatedDaemon.alive(master), 'the master outlives a full disk in the middle of an update').toBe(true)
@@ -638,7 +630,7 @@ describe.skipIf(!DISKFULL)('an update on a disk that fills', () => {
     const rejectedBefore = machine.rejected()
     server.offer = { version: '44.0.5' }
     await until('the core to stage 44.0.5', () => machine.log().slice(from).includes('[update] staged 44.0.5'), 90_000, 50)
-    fill()
+    fillVolume(volume)
     await until('the rollback', () => machine.log().slice(from).includes('the updated core failed (code 3) — rolled back'), 150_000)
     await until(`the core back on ${before}`, async () => (await machine.version()) === before, 150_000, 250)
     unfill()

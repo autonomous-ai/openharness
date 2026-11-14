@@ -9,6 +9,12 @@
 void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, uint16_t ink,
                    const char *recap);
 
+/*
+ * Whether the agent on the next ht_focus_face() takes voice (caps hold V). Without it the resting face picks only the
+ * lines that teach the dial, none that invite talking. A setting rather than a face field: only Focus reads it.
+ */
+void ht_focus_set_voice(bool can_talk);
+
 /* One frame, no motion. The home face's only motion is the engine's pet, which runs on clock_ms, not on
  * these frames; the other thing that animates is the compositor's own shimmer. */
 bool ht_focus_motion_tick(ht_character_motion_t *m, uint32_t now, ht_character_mood_t mood,

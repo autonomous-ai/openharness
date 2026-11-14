@@ -1,0 +1,41 @@
+[package]
+name = "harness-device"
+version = "0.1.0"
+edition = "2024"
+# sysinfo 0.40, off macOS, needs 1.95; Tauri 2.12 needs 1.90.
+rust-version = "1.95"
+
+# Every rule lives in the library, so `cargo test --lib` reaches it without the window's bundle (ui/dist).
+[lib]
+name = "harness_device"
+path = "src/lib.rs"
+
+[[bin]]
+name = "harness-device"
+path = "src/main.rs"
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+regex = "1"
+url = "2"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSError", "NSString", "NSURL"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSRunningApplication", "NSWorkspace"] }
+objc2-service-management = { version = "0.3", default-features = false, features = ["std", "SMAppService", "objc2", "objc2-foundation"] }
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+sysinfo = "0.40"
+
+[build-dependencies]
+# As `cargo tauri build` writes it back: any other form, and every build rewrites this line.
+tauri-build = { version = "2", features = [] }
+
+[dev-dependencies]
+tempfile = "3"

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Harness finds and connects to Autonomous robots on your local network.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_autonomous._tcp</string>
+	</array>
+</dict>
+</plist>

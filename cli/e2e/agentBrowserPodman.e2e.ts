@@ -169,8 +169,12 @@ function onOwnMachine(d: IsolatedDaemon): void {
 function writePodman(d: IsolatedDaemon, store: Store): void {
   const bin = join(d.root, 'bin')
   mkdirSync(bin, { recursive: true })
+  // The run's temporary folder, not the daemon's, which is in its root (harness/daemon.ts): Podman keeps what outlives one
+  // command there, a macOS machine's API and gvproxy sockets among it ($TMPDIR/podman, as `podman machine inspect` names
+  // them), and the daemon's close sweeps the root and removes it while the machine runs on.
+  const tmp = `TMPDIR=${quote(tmpdir())}`
   if (process.platform !== 'darwin') {
-    writeFileSync(join(bin, 'podman'), `#!/bin/sh\nexec ${[realPodman!, ...store.flags].map(quote).join(' ')} "$@"\n`, { mode: 0o755 })
+    writeFileSync(join(bin, 'podman'), `#!/bin/sh\n${tmp} exec ${[realPodman!, ...store.flags].map(quote).join(' ')} "$@"\n`, { mode: 0o755 })
     return
   }
   writeFileSync(join(bin, 'podman'), '#!/bin/sh\n'
@@ -183,7 +187,7 @@ function writePodman(d: IsolatedDaemon, store: Store): void {
       // The daemon names its machine last (setup.ts, podman.ts); every other is the person's, refused as one that fails.
       : `if [ "$1" = machine ] && [ "$2" != list ]; then for last in "$@"; do :; done; [ "$last" = ${OWN_MACHINE} ] || { echo "Error: this test starts or changes no machine but ${OWN_MACHINE}" >&2; exit 125; }; fi\n`)
     // The person's HOME, where Podman keeps their machines and connections: the daemon's is the run's own.
-    + `HOME=${quote(podmanEnv.HOME!)} exec ${quote(realPodman!)} "$@"\n`, { mode: 0o755 })
+    + `HOME=${quote(podmanEnv.HOME!)} ${tmp} exec ${quote(realPodman!)} "$@"\n`, { mode: 0o755 })
   // macOS's /etc/zprofile (path_helper) puts /etc/paths.d, Homebrew's podman among them, ahead of the daemon's PATH in
   // the login shell it asks where podman is (lib/tmuxOnPath.ts): this bin goes first again after it.
   writeFileSync(join(d.env.ZDOTDIR!, '.zprofile'), `path=(${quote(bin)} $path)\n`, { flag: 'a' })
@@ -908,9 +912,7 @@ describe('the agent browser on real Podman', () => {
     expect(set.code, set.stderr).toBe(0)
     // A turn first, as every agent a person stops has had (core.e2e.ts does the same): until one ends, the fake engine's
     // conversation has no opening to keep, and the stop is held (IDENTITY_UNAVAILABLE).
-    const ended = client!.next((frame) => frame.type === 'turn_ended' && frame.agentId === agent!.id, 45_000, 'turn_ended')
-    client!.send('message', { agentId: agent!.id, content: 'Keep this conversation across the stop' })
-    await ended
+    await client!.turn(agent!.id, 'Keep this conversation across the stop')
     const stopped = await client!.request('agent_delete', { agentId: agent!.id }, 60_000)
     expect(stopped.error, JSON.stringify(stopped)).toBeUndefined()
     await until('the agent to stop', async () => (await row())?.status === 'stopped' || null, 60_000, 500)

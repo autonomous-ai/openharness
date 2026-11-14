@@ -4,17 +4,8 @@ import { randomUUID } from 'node:crypto'
 const mocks = vi.hoisted(() => ({
   prisma: { harnessShare: { findFirst: vi.fn(), findMany: vi.fn(), findUnique: vi.fn(), upsert: vi.fn(), updateMany: vi.fn() },
     machine: { findFirst: vi.fn(), findMany: vi.fn() }, user: { findMany: vi.fn(), findUnique: vi.fn() }, harnessLink: { findMany: vi.fn() } },
-  mayOpenShare: vi.fn(), presence: vi.fn(), changed: vi.fn(), listChanged: vi.fn(), auth: vi.fn(),
+  presence: vi.fn(), changed: vi.fn(), listChanged: vi.fn(), auth: vi.fn(),
 }))
-// The list asks about every share at once; share by share it answers as mayOpenShare would (integration/harnessSharesList.test.ts).
-vi.mock('../superTabs/store.js', () => ({ SuperTabStore: class {
-  mayOpenShare = mocks.mayOpenShare
-  openableShares = async (user: unknown, shares: unknown[]) => {
-    const open = []
-    for (const share of shares) if (await mocks.mayOpenShare(user, share)) open.push(share)
-    return open
-  }
-} }))
 vi.mock('../lib/prisma.js', () => ({ prisma: mocks.prisma, machineAlive: { OR: [{ deletedAt: null }, { deletedAt: { isSet: false } }] } }))
 vi.mock('../lib/bus.js', () => ({ getAgentPresenceMany: mocks.presence, publishShareChanged: mocks.changed,
   publishDeviceMachineListChanged: mocks.listChanged }))
@@ -34,7 +25,6 @@ describe('account-bound harness invitations', () => {
   let app: FastifyInstance
   beforeEach(async () => {
     vi.resetAllMocks()
-    mocks.mayOpenShare.mockResolvedValue(true)
     mocks.auth.mockResolvedValue(owner)
     mocks.prisma.machine.findFirst.mockResolvedValue(machine)
     mocks.prisma.machine.findMany.mockResolvedValue([machine])
@@ -164,20 +154,20 @@ describe('account-bound harness invitations', () => {
     mocks.prisma.harnessShare.findFirst.mockResolvedValue({ id })
     const removed = await app.inject({ method: 'DELETE', url: `/api/harness-shares/${id}`, headers: auth })
     expect(removed.json()).toEqual({ success: true, data: { removed: true } })
-    const saved = { id, ...input(), ownerId: 'owner', superTabId: null, revokedAt: null, expiresAt: new Date(input().expiresAt) }
+    const saved = { id, ...input(), ownerId: 'owner', revokedAt: null, expiresAt: new Date(input().expiresAt) }
     mocks.prisma.harnessShare.findUnique.mockResolvedValue(saved)
     expect((await put({ ...input(), expiresAt: new Date(Date.now() + 31 * 86400_000).toISOString() }, id)).statusCode).toBe(200)
     expect(mocks.prisma.harnessShare.upsert).toHaveBeenCalledTimes(1)
     expect(mocks.changed).not.toHaveBeenCalled()
     expect(mocks.listChanged).not.toHaveBeenCalled()
     // What the recipient sees, changed: told.
-    for (const change of [{ name: 'Renamed' }, { engine: 'claude' }, { superTabId: 'c51479bd73b59e58176ad9e4' }]) {
+    for (const change of [{ name: 'Renamed' }, { engine: 'claude' }]) {
       mocks.prisma.harnessShare.findUnique.mockResolvedValue(saved)
       await put({ ...input(), ...change }, id)
     }
     mocks.prisma.harnessShare.findUnique.mockResolvedValue({ ...saved, revokedAt: new Date() })
     await put(input(), id)
-    expect(mocks.changed).toHaveBeenCalledTimes(4)
+    expect(mocks.changed).toHaveBeenCalledTimes(3)
   })
   it('tells the invited account that its list changed, so its apps need not poll for invitations', async () => {
     const info = vi.spyOn(logger, 'info').mockImplementation(() => logger)
@@ -191,7 +181,7 @@ describe('account-bound harness invitations', () => {
     // Named in the log, so a burst of `machines_changed` on someone's app can be traced to the invitation behind it.
     expect(info).toHaveBeenCalledWith('harness share: told the recipient it changed', { shareId: id, recipientId: 'ken' })
   })
-  // Task #3925 (Ken's scan, 11-06): a Swarm's agent restarts made a share per new agent for each member, and each one told every
+  // Task #3925 (Ken's scan, 11-06): agent restarts made a share per new agent for each member, and each one told every
   // app of theirs to read its shares again: a burst of starts was a burst of share-list reads. A recipient is told at once, then
   // at most once more a window, so the last change is never lost.
   it('tells a recipient once for a burst of changes, then once more when the burst is over', async () => {
@@ -219,7 +209,7 @@ describe('account-bound harness invitations', () => {
   })
   it('makes the viewers of the agent’s private links check again when the invitation behind them changes', async () => {
     const id = randomUUID()
-    mocks.prisma.harnessShare.findUnique.mockResolvedValue({ id, ...input(), ownerId: 'owner', autonomousEnv: 'prod', superTabId: null,
+    mocks.prisma.harnessShare.findUnique.mockResolvedValue({ id, ...input(), ownerId: 'owner', autonomousEnv: 'prod',
       revokedAt: new Date(), expiresAt: new Date(input().expiresAt) })
     mocks.prisma.harnessLink.findMany.mockResolvedValue([{ id: 'link-1' }, { id: 'link-2' }])
     expect((await app.inject({ method: 'DELETE', url: `/api/harness-shares/${id}`, headers: auth })).statusCode).toBe(200)
@@ -251,16 +241,21 @@ describe('account-bound harness invitations', () => {
     mocks.prisma.machine.findFirst.mockResolvedValueOnce({ ...machine, billingStatus: 'pending' })
     expect(await recipientShare('share', ken)).toBeNull()
   })
-  it('rechecks Super Tab membership for session admission and excludes revoked views from inventory', async () => {
+  // Swarms are gone (anh Dee, 2026-11-14): a share an older daemon made for one opens nothing until the Swarm data removal deletes
+  // it, and a new one is refused with a 400, which that daemon takes as final instead of trying again.
+  it('never opens or lists a share made for a Swarm, and refuses a new one', async () => {
     mocks.auth.mockResolvedValue(ken)
-    const share = { id: 'share', ...input(), superTabId: 'a'.repeat(24), ownerId: owner.sub, expiresAt: new Date(input().expiresAt) }
-    mocks.prisma.harnessShare.findFirst.mockResolvedValue(share)
-    mocks.prisma.harnessShare.findMany.mockResolvedValue([share])
-    expect(await recipientShare('share', ken)).toEqual(share)
-    expect(mocks.mayOpenShare).toHaveBeenCalledWith(ken, share)
-    mocks.mayOpenShare.mockResolvedValue(false)
-    expect(await recipientShare('share', ken)).toBeNull()
-    expect((await app.inject({ method: 'GET', url: '/api/harness-shares', headers: auth })).json().data.machines).toEqual([])
+    const ordinary = { id: 'ordinary', ...input(), ownerId: owner.sub, expiresAt: new Date(input().expiresAt) }
+    const swarm = { ...ordinary, id: 'swarm', agentId: 'agent-2', superTabId: 'a'.repeat(24) }
+    mocks.prisma.harnessShare.findFirst.mockResolvedValue(swarm)
+    expect(await recipientShare('swarm', ken)).toBeNull()
+    mocks.prisma.harnessShare.findMany.mockResolvedValue([ordinary, swarm])
+    const listed = (await app.inject({ method: 'GET', url: '/api/harness-shares', headers: auth })).json().data.machines
+    expect(listed.flatMap((m: { shares: Array<{ id: string }> }) => m.shares.map(s => s.id))).toEqual(['ordinary'])
+    mocks.auth.mockResolvedValue(owner)
+    const refused = await put({ ...input(), superTabId: 'a'.repeat(24) }, randomUUID())
+    expect(refused.statusCode).toBe(400)
+    expect(mocks.prisma.harnessShare.upsert).not.toHaveBeenCalled()
   })
 
   // Prisma sends an empty list as `$or: []`, a scan of all machines (prod slow log, 2026-11-04): most people have no share.
@@ -276,17 +271,6 @@ describe('account-bound harness invitations', () => {
     mocks.prisma.machine.findMany.mockResolvedValue([])
     expect((await app.inject({ method: 'GET', url: '/api/harness-shares', headers: auth })).json().data.machines).toEqual([])
     expect(mocks.prisma.user.findMany).not.toHaveBeenCalled()
-  })
-
-  it('asks the Swarms about an ordinary share too: a confidential session refuses it (final review, Critical 1)', async () => {
-    mocks.auth.mockResolvedValue(ken)
-    const share = { id: 'share', ...input(), superTabId: null, ownerId: owner.sub, expiresAt: new Date(input().expiresAt) }
-    mocks.prisma.harnessShare.findFirst.mockResolvedValue(share)
-    mocks.prisma.harnessShare.findMany.mockResolvedValue([share])
-    mocks.mayOpenShare.mockResolvedValue(false)
-    expect(await recipientShare('share', ken)).toBeNull()
-    expect(mocks.mayOpenShare).toHaveBeenCalledWith(ken, share)
-    expect((await app.inject({ method: 'GET', url: '/api/harness-shares', headers: auth })).json().data.machines).toEqual([])
   })
 
 })

@@ -2,6 +2,7 @@
 // under test. It behaves the way the daemon depends on the real CLIs behaving, and nothing more:
 //
 //   - answers `--version` / `--help` probes;
+//   - as `codex app-server`, reads its stdin, answers nothing and ends when that stdin ends;
 //   - runs the hooks its own settings carry, as the real CLIs run them: the commands the daemon
 //     installed (lib/hooks.ts), through a shell, from inside the pane, with the event on stdin, killed at
 //     their timeout and waited for. So the real `hook/notify.mjs` is what reaches the daemon, with its
@@ -64,6 +65,9 @@
 // Run `fg` to bring Claude Code back."; Codex 0.160: "`ctrl-z` is reserved for suspending the terminal
 // on Unix"): it gives the terminal back and stops its whole process group with SIGTSTP. Continued from
 // that stop it takes the terminal again; continued from any stop it repaints, and nothing more.
+// It notes that stop, and the continue that ends it, in `suspends` under the test's root, each with its
+// pid: the proof a test has of a Ctrl+Z, as Codex prints nothing and bash 5.3 keeps its "Stopped" notice
+// for a prompt an agent's pane never reaches (#1612, suspend.e2e.ts).
 //
 // Codex runs as npm installs it: a Node wrapper, the command the pane starts, with the engine as its
 // child in the same process group and terminal (`codexWrapper`).
@@ -82,7 +86,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
  */
 const HOOK_EVENTS = {
   // PostToolUse: Agent Messages' hook (engines/kit/messagesHook.ts), run after each tool of the `!work` directive.
-  claude: new Set(['SessionStart', 'UserPromptSubmit', 'Stop', 'StopFailure', 'SessionEnd', 'PostToolUse']),
+  // Notification: run once a permission dialog has waited on the person (`permitDialog`).
+  claude: new Set(['SessionStart', 'UserPromptSubmit', 'Stop', 'StopFailure', 'SessionEnd', 'PostToolUse', 'Notification']),
   codex: new Set(['SessionStart', 'UserPromptSubmit', 'PostToolUse']),
 }
 
@@ -199,6 +204,15 @@ export async function run(engine, config = {}, { native = false } = {}) {
     // Who asked, by its pid: Claude Code's engine worker, not the core (#4146).
     if (config.root) appendFileSync(join(config.root, 'background-job-queries'), `${process.ppid}\n`)
     process.stdout.write('[]\n')
+    return
+  }
+  // `codex app-server [-c …]`, as a rate-limit read (lib/codexRateLimits.ts) or a provider move starts it. The real
+  // server speaks JSON-RPC on stdio and exits when its stdin ends; this one answers nothing, so a read finds no limits,
+  // but it ends with its stdin too. It used to draw its TUI instead and outlive its daemon: 14 pairs of the fake were
+  // found orphaned on 2026-11-14. A read is no launch, so it is kept out of the launch-argv ledger.
+  if (engine === 'codex' && args[0] === 'app-server') {
+    process.stdin.resume()
+    process.stdin.on('end', () => process.exit(0))
     return
   }
   // Every launch's argv, for a test to read what an agent was started with.
@@ -419,7 +433,8 @@ export async function run(engine, config = {}, { native = false } = {}) {
   let parent = null
   const claude = (record) => {
     const uuid = randomUUID()
-    write({ parentUuid: parent, isSidechain: false, userType: 'external', cwd, sessionId, version, timestamp: now(), uuid, ...record })
+    // `entrypoint`: who drives it, `cli` from a terminal (lib/sessionSearch/externals/claude.ts reads it to list a session).
+    write({ parentUuid: parent, isSidechain: false, userType: 'external', entrypoint: 'cli', cwd, sessionId, version, timestamp: now(), uuid, ...record })
     parent = uuid
   }
   const codex = (type, payload) => write({ timestamp: now(), type, payload })
@@ -852,11 +867,13 @@ export async function run(engine, config = {}, { native = false } = {}) {
     for (const key of chunk.match(/\x1b\[200~[\s\S]*?(?:\x1b\[201~|$)|\x1b\[[ABCD]|\x1b|\r|\n|\x7f|./gs) ?? []) {
       if (!dialog) return
       noteDialogKey(key)
+      dialog.idle?.refresh()
       const settle = (choice) => {
         // An old dialog can survive in tmux scrollback after a redraw/resize, as in the chaos run.
         // Keep the whole frame for that acceptance case; the composer below it is the live screen.
         if (dialog.keepInScrollback) process.stdout.write('\r\n')
         else eraseDialog()
+        clearTimeout(dialog.idle)
         const asked = dialog; dialog = null; notes = asked.notes ?? ''; drawComposer(); asked.resolve(choice)
       }
       if (dialog.kind === 'many') {
@@ -1230,15 +1247,24 @@ export async function run(engine, config = {}, { native = false } = {}) {
     }
     return finish(allowed ? `ran ${command}` : `did not run ${command}`)
   }
+  // A permission dialog in the composer's place, as the CLIs draw theirs, until it is answered. Claude Code also says
+  // so to its Notification hooks once the dialog has waited 6 s with no key (2.1.x: `permission_prompt`, "Claude needs
+  // your permission to use Bash"): each key starts the wait again, and an answer in time sends none. Codex has no such hook.
+  const PERMIT_NOTICE_MS = 6_000
+  const permitDialog = (command, resolve) => {
+    eraseComposer()
+    dialog = { kind: 'permit', command, cursor: 0, drawn: 0, resolve, idle: setTimeout(() => {
+      void runHooks('Notification', { message: 'Claude needs your permission to use Bash', notification_type: 'permission_prompt' })
+    }, PERMIT_NOTICE_MS) }
+    drawDialog()
+  }
   // `!permitnext`: the request waiting for the next paste.
   let armed = null
   const askOnPaste = () => {
     if (!armed) return
     const { command, turn: turnOf } = armed
     armed = null
-    eraseComposer()
-    dialog = { kind: 'permit', command, cursor: 0, drawn: 0, resolve: (row) => { void permitted(command, row, turnOf) } }
-    drawDialog()
+    permitDialog(command, (row) => { void permitted(command, row, turnOf) })
   }
 
   const handle = async (raw) => {
@@ -1475,8 +1501,7 @@ export async function run(engine, config = {}, { native = false } = {}) {
     if (directive?.[1] === 'permit') {
       const command = directive[2] || 'printf hi'
       await new Promise((resolve) => setTimeout(resolve, 2_000))
-      // The dialog takes the composer's place, as the CLIs draw theirs, until it is answered.
-      const row = await new Promise((resolve) => { eraseComposer(); dialog = { kind: 'permit', command, cursor: 0, drawn: 0, resolve }; drawDialog() })
+      const row = await new Promise((resolve) => permitDialog(command, resolve))
       await permitted(command, row)
       return
     }
@@ -1684,18 +1709,26 @@ export async function run(engine, config = {}, { native = false } = {}) {
     pastes.clear()
     return text
   }
+  const noteSuspend = (what) => {
+    if (!config.root) return
+    try { appendFileSync(join(config.root, 'suspends'), `${what} ${process.pid}\n`) } catch { /* a note, never a failure */ }
+  }
   // Ctrl+Z, as the real CLIs do it: give the terminal back, and stop the whole process group (the
   // npm Codex's wrapper with it) once the terminal is restored; in raw mode the terminal sends no
   // SIGTSTP of its own. Raw mode comes back only from this stop: Claude Code arms a one-time SIGCONT
   // handler here, Codex takes the terminal again when its stop returns.
+  // Both are noted for the test: `stopped` before the SIGTSTP, as nothing runs between it and the
+  // continue, and `continued` from this stop's own handler alone, which only a `fg` reaches.
   const suspend = () => {
     process.stdout.write('\x1b[?2004l')
     if (engine === 'claude') process.stdout.write('\r\nClaude Code has been suspended. Run `fg` to bring Claude Code back.\r\n')
     process.stdin.setRawMode?.(false)
     process.once('SIGCONT', () => {
+      noteSuspend('continued')
       process.stdin.setRawMode?.(true)
       process.stdout.write('\x1b[?2004h')
     })
+    noteSuspend('stopped')
     process.kill(0, 'SIGTSTP')
   }
   // Continued, whoever stopped it, the renderer repaints, and that is all: after a stop from outside

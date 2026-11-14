@@ -2,7 +2,7 @@ import { expect, it } from 'vitest'
 import type { WebSocket } from 'ws'
 import { addClient, clientCounts, removeClient } from './registry.js'
 
-// A daemon stops a machine's live events while `ui` is 0 (spec 2026-11-02-swarm-cache-delta-design, Part 4), so every
+// A daemon stops a machine's live events while `ui` is 0 (the relay gate of 2026-11-02), so every
 // client that receives web-eligible frames must add to it. Desktop, the web app and the phone all attach as 'web'
 // (webWs.ts); a guest is a web client too and must keep the gate open for the frames sealed for it.
 it('ui counts web and guest web clients, never commanders', () => {

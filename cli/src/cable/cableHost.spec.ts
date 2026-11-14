@@ -9,6 +9,8 @@ import type { RegisteredSession } from '../lib/registry.js'
 import { WebSocketServer, type WebSocket } from 'ws'
 import { DeviceFleet } from '../device/deviceFleet.js'
 import { DeviceLink } from '../device/deviceLink.js'
+import { HostRegistry } from './hosts/registry.js'
+import type { HostAgent, HostSource } from './hosts/types.js'
 
 const AGENTS: Array<{ agentId: string; registeredAt: number; active: boolean; terminalAvailable: boolean; engine: string; lastHookAt?: number }> = []
 
@@ -700,6 +702,80 @@ describe('DaemonCableHost.listSwarms', () => {
   })
 })
 
+describe('the dial with no window: this computer\'s agents', () => {
+  const sessions = () => [
+    { agentId: 'h1', registeredAt: 1, active: true, terminalAvailable: true, engine: 'claude', sessionId: 's-h1' },
+    { agentId: 'h2', registeredAt: 2, active: true, terminalAvailable: true, engine: 'codex', sessionId: 's-h2' },
+  ] as unknown as RegisteredSession[]
+  const observedAgent = (over: Partial<HostAgent>): HostAgent => ({
+    id: 'o', engine: 'claude', name: 'scratch', host: 'ghostty', state: 'idle', lastActivityAt: 0, unseenDone: false, ...over,
+  })
+  const observed = (agents: HostAgent[]): HostSource => ({
+    id: 'observed', list: () => agents,
+    capabilities: () => ({ status: true, voice: false, focus: false, answer: false }),
+  })
+
+  it('no window and a registry: the selected rows with host and caps, and view machine', async () => {
+    const host = new DaemonCableHost(wiring({ sessions }), fleetOf([]))
+    host.setRegistry(new HostRegistry([host.harness, observed([
+      observedAgent({ id: 'o1', state: 'needs-you', lastActivityAt: 10 }),
+      // The same Claude Code session as h1, heard before it moved into a Harness pane: shown once, as h1.
+      observedAgent({ id: 'o2', sessionId: 's-h1', state: 'working' }),
+    ])]))
+    host.harness.noteCard('h2', 'processing')
+    host.setSwarms(null)
+    const local = { machineId: 'mine', machine: 'MacbookPro.local' }
+    expect(await host.listAgentSnapshot()).toEqual({ tab: '', total: 3, view: 'machine', agents: [
+      { id: 'o1', name: 'scratch', engine: 'claude', ...local, host: 'ghostty', caps: 's' },
+      { id: 'h2', name: 'h2', engine: 'codex', ...local, host: 'harness', caps: 'sva' },
+      { id: 'h1', name: 'h1', engine: 'claude', ...local, host: 'harness', caps: 'sva' },
+    ] })
+  })
+
+  it('with a window and a registry: the tab, as today', async () => {
+    const host = new DaemonCableHost(wiring({ sessions }), fleetOf([]))
+    host.setRegistry(new HostRegistry([host.harness, observed([observedAgent({ id: 'o1' })])]))
+    onTab(host, ['h2'])
+    expect(await host.listAgentSnapshot()).toStrictEqual({ tab: 't1', total: 2, agents: [
+      { id: 'h2', name: 'h2', engine: 'codex', machineId: 'mine', machine: 'MacbookPro.local' },
+    ] })
+  })
+
+  it('caps, host and seen come from the registry only with no window', async () => {
+    const markSeen = vi.fn()
+    const host = new DaemonCableHost(wiring({ sessions }), fleetOf([]))
+    expect(host.capsOf('h1')).toBeUndefined()
+    host.setRegistry(new HostRegistry([host.harness, { ...observed([observedAgent({ id: 'o1', host: 'orca' })]), markSeen }]))
+    await host.listAgentSnapshot()
+    expect([host.capsOf('h1'), host.hostOf('h1')]).toEqual(['sva', 'harness'])
+    expect([host.capsOf('o1'), host.hostOf('o1')]).toEqual(['s', 'orca'])
+    expect([host.capsOf('nobody'), host.hostOf('nobody')]).toEqual([undefined, undefined])
+    host.markSeen('o1')
+    expect(markSeen).toHaveBeenCalledWith('o1')
+    host.harness.noteCard('h1', 'done')
+    host.markSeen('h1')
+    expect(host.harness.list().find((a) => a.id === 'h1')).toMatchObject({ state: 'done', unseenDone: false })
+    // With a window the dial holds the tab, whose agents it may do everything with, as today.
+    onTab(host, ['h1'])
+    expect([host.capsOf('h1'), host.hostOf('h1')]).toEqual([undefined, undefined])
+  })
+
+  it('describes an agent the fleet never listed from the registry, so its summary and question carry a name', () => {
+    const host = new DaemonCableHost(wiring({ sessions }), fleetOf([]))
+    host.setRegistry(new HostRegistry([host.harness, observed([observedAgent({ id: 'o1', engine: 'codex' })])]))
+    expect(host.describe('o1')).toEqual({ name: 'scratch', engine: 'codex', machine: 'MacbookPro.local' })
+    expect(host.describe('nobody')).toBeUndefined()
+  })
+
+  it('no window and no registry: [] as today', async () => {
+    const host = new DaemonCableHost(wiring({ sessions }), fleetOf([]))
+    expect(await host.listAgentSnapshot()).toStrictEqual({ agents: [], tab: '', total: 2 })
+    host.setRegistry(new HostRegistry([host.harness]))
+    host.setRegistry(null)
+    expect(await host.listAgentSnapshot()).toStrictEqual({ agents: [], tab: '', total: 2 })
+  })
+})
+
 describe('cableEventFor', () => {
   it('carries whether the card is a sub-agent\'s turn end, and nothing else about it', () => {
     const base = { type: 'commander_event', agentId: 'a1', payload: { kind: 'summary', text: 'body', recap: 'recap' } }
@@ -900,6 +976,55 @@ describe('the dial reaches the fleet through the core\'s port', () => {
     host.onDialAttached()
     expect(fleet.online).not.toHaveBeenCalled()
     expect(await host.selectMachine('other')).toMatchObject({ ok: false, code: 'UNAVAILABLE' })
+  })
+
+  it('an agent outside Harness never reaches the core: the fleet\'s router takes an id it does not know for a local agent', async () => {
+    const fleet = port()
+    const w = wiring({ fleet: () => fleet, recent: vi.fn(() => []), recentAsks: vi.fn(() => []), updateAgent: vi.fn(),
+      listModels: vi.fn(async () => []), answerReviewed: vi.fn(async () => true),
+      // The devices' own reading of it, which never asks the core (services/devices.ts).
+      activityText: async () => 'Waiting for you · Orca', activitySnapshot: async () => ({ text: 'Waiting for you · Orca' }) })
+    const host = new DaemonCableHost(w)
+    const outside: HostAgent = { id: 'outside-1', engine: 'claude', name: 'scratch', host: 'orca', state: 'done',
+      lastActivityAt: 0, lastAnswer: 'Fixed the login.', unseenDone: true }
+    host.setRegistry(new HostRegistry([host.harness, { id: 'observed', list: () => [outside],
+      capabilities: () => ({ status: true, voice: false, focus: false, answer: false }) }]))
+    expect(host.sendTurn('outside-1', 'ship it')).toMatchObject({ ok: false })
+    host.stopTurn('outside-1'); host.answer('outside-1', 'q', { k: 'v' }); host.updateAgent('outside-1', 'opus')
+    expect(host.canSpeakQuestion('outside-1')).toBe(false)
+    expect(await host.answerReviewed({ agentId: 'outside-1', requestId: 'q', questions: [], answers: {}, selections: {} }))
+      .toEqual({ ok: false, error: 'Use the terminal to answer this question.' })
+    expect(await host.recentAsks('outside-1')).toEqual([])
+    expect(await host.listModels('outside-1')).toEqual([])
+    // Its answer, as heard: one entry, which an attach restores without a beep.
+    expect(await host.recentSummaries('outside-1')).toEqual([{ recap: 'Fixed the login.', text: 'Fixed the login.', ask: '', fullText: 'Fixed the login.' }])
+    // What rides on each of its cards, and its line while it waits, every refresh: read here too.
+    expect(host.describe('outside-1')).toEqual({ name: 'scratch', engine: 'claude', machine: 'MacbookPro.local' })
+    expect(await host.activityText('outside-1')).toBe('Waiting for you · Orca')
+    expect(await host.activitySnapshot('outside-1')).toEqual({ text: 'Waiting for you · Orca' })
+    // Not one call to the fleet's router, or to the core's doors this host holds, names it.
+    const calls = [...Object.values(fleet), ...Object.values(w)].filter((fn) => vi.isMockFunction(fn)).flatMap((fn) => fn.mock.calls)
+    expect(JSON.stringify(calls)).not.toContain('outside-1')
+    // A Harness agent's routes are the router's, as before.
+    expect(host.sendTurn('r1', 'ship it')).toEqual({ ok: true })
+    expect(fleet.sendTurn).toHaveBeenCalledWith('r1', 'ship it')
+  })
+
+  it('an agent outside Harness that the machine list folds into a Harness agent of the same session never reaches the core', async () => {
+    const fleet = port()
+    const w = wiring({ fleet: () => fleet, recentAsks: vi.fn(() => []) })
+    const host = new DaemonCableHost(w)
+    // The session moved into a Harness pane: the list shows the Harness copy, and the dial may still hold the old id.
+    const harness: HostSource = { id: 'harness', list: () => [{ id: 'r1', engine: 'claude', name: 'web', host: 'harness', state: 'idle',
+      sessionId: 's1', lastActivityAt: 0, unseenDone: false }], capabilities: () => ({ status: true, voice: true, focus: false, answer: true }) }
+    host.setRegistry(new HostRegistry([harness, { id: 'observed', list: () => [{ id: 'outside-2', engine: 'claude', name: 'web',
+      host: 'orca', state: 'idle', sessionId: 's1', lastActivityAt: 0, unseenDone: false }],
+    capabilities: () => ({ status: true, voice: false, focus: false, answer: false }) }]))
+    expect(host.sendTurn('outside-2', 'ship it')).toMatchObject({ ok: false })
+    host.stopTurn('outside-2')
+    expect(await host.recentAsks('outside-2')).toEqual([])
+    const calls = [...Object.values(fleet), ...Object.values(w)].filter((fn) => vi.isMockFunction(fn)).flatMap((fn) => fn.mock.calls)
+    expect(JSON.stringify(calls)).not.toContain('outside-2')
   })
 
   it('says nothing of a fork that was refused before anyone was asked, and says a refused one that was', async () => {
@@ -1441,14 +1566,11 @@ describe('a plug-in whose first lane open fails', () => {
   })
 
   it('runs one backoff over the real lane when the backend is down at the first plug-in', async () => {
-    // A port nothing listens on: every dial is refused at once, as with the backend down.
-    const probe = new WebSocketServer({ port: 0, host: '127.0.0.1' })
-    await new Promise<void>((resolve) => probe.once('listening', () => resolve()))
-    const port = (probe.address() as { port: number }).port
-    await new Promise<void>((resolve) => probe.close(() => resolve()))
+    // Port 1: every dial is refused at once, as with the backend down. An unprivileged process cannot listen there,
+    // where a port freed a moment ago could be taken by another listener before the dial.
     const lines: string[] = []
     const link = new DeviceLink({
-      auth: { accessToken: async () => 'token' }, backendWsBase: `ws://127.0.0.1:${port}`,
+      auth: { accessToken: async () => 'token' }, backendWsBase: 'ws://127.0.0.1:1',
       computerId: 'this-computer', autonomousEnv: 'test',
       seal: { hello: vi.fn(), welcome: vi.fn(), rekey: vi.fn(), seal: vi.fn(), open: vi.fn(), drop: vi.fn() } as never,
       peer: () => null, localMachineId: () => 'mine', log: (line) => { lines.push(line) },

@@ -92,8 +92,8 @@ describe('sharing a machine', () => {
     const res = await put({ emails: [' Ann@Gmail.com ', 'ann@gmail.com', 'DEE@acme.io', 'ghost@x.invalid'], sameDomain: true })
     expect(res.statusCode).toBe(200)
     expect(mocks.prisma.machineShare.upsert).toHaveBeenCalledWith({ where: { machineId: M1 },
-      create: { machineId: M1, ownerId: 'dee', autonomousEnv: 'prod', emails: ['ann@gmail.com'], domain: 'acme.io', grantVersions: expect.any(Object) },
-      update: { ownerId: 'dee', autonomousEnv: 'prod', emails: ['ann@gmail.com'], domain: 'acme.io', grantVersions: expect.any(Object) } })
+      create: { machineId: M1, ownerId: 'dee', autonomousEnv: 'prod', emails: ['ann@gmail.com'], domain: 'acme.io' },
+      update: { ownerId: 'dee', autonomousEnv: 'prod', emails: ['ann@gmail.com'], domain: 'acme.io' } })
     expect(res.json().data).toEqual({ emails: ['ann@gmail.com'], sameDomain: true, domain: 'acme.io', members })
     expect(mocks.shareChanged).toHaveBeenCalledWith(M1)
     expect(mocks.prisma.user.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { OR: [

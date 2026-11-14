@@ -14,11 +14,13 @@
 import { execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { basename, join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { browserAssetsHash } from '../src/services/agentBrowser/assets.js'
 import { imageTag } from '../src/services/agentBrowser/image.js'
 import { READY_LINE } from '../src/services/agentBrowser/notices.js'
+import { alive } from '../src/testing/spawnedRuns.js'
 import { TerminalBinaryKind } from '../src/lib/terminalBinary.js'
 import { LocalClient } from './harness/client.js'
 import { CLI_ROOT, fakeEngineShim, IsolatedDaemon, until } from './harness/daemon.js'
@@ -26,11 +28,11 @@ import { CLI_ROOT, fakeEngineShim, IsolatedDaemon, until } from './harness/daemo
 const GiB = 1024 ** 3
 
 /**
- * A `podman` that logs each argv as a line and answers what a browser's start asks; `events` streams nothing. Its exec
- * of the tool server (browser-tools.mjs) answers each line as the real one does: a snapshot with [TREE], a screenshot
- * with [SHOT], and the window with the size it was asked for. Its exec of the pipe to a browser's screen (`socat`)
- * logs which process started it, sends the server's banner, then sends back every byte it is sent, and logs
- * `pipe ended` when it ends.
+ * A `podman` that logs each argv as a line and answers what a browser's start asks; `events` logs `events pid <pid>`
+ * before it waits, and streams nothing. Its exec of the tool server (browser-tools.mjs) answers each line as the real
+ * one does: a snapshot with [TREE], a screenshot with [SHOT], and the window with the size it was asked for. Its exec
+ * of the pipe to a browser's screen (`socat`) logs which process started it, sends the server's banner, then sends
+ * back every byte it is sent, and logs `pipe ended` when it ends.
  */
 function writeFakePodman(daemon: IsolatedDaemon): string {
   const calls = join(daemon.root, 'podman-calls.log')
@@ -42,7 +44,11 @@ const fs = require('node:fs')
 const args = process.argv.slice(2)
 fs.appendFileSync(${JSON.stringify(calls)}, args.join(' ') + '\\n')
 const line = args.join(' ')
-if (args[0] === 'events') { setInterval(() => {}, 1 << 30); return }
+if (args[0] === 'events') {
+  fs.appendFileSync(${JSON.stringify(calls)}, 'events pid ' + process.pid + '\\n')
+  setInterval(() => {}, 1 << 30)
+  return
+}
 if (args[0] === 'exec' && args.at(-1) === '/opt/harness-browser/browser-tools.mjs') {
   const answers = {
     browser_snapshot: () => ({ content: [{ type: 'text', text: ${JSON.stringify(TREE)} }] }),
@@ -248,6 +254,9 @@ describe('the agent browser on the real daemon', () => {
     const path = shot.out.trim()
     expect(path).toMatch(/\/browser\/shot-\d{8}-\d{6}-\d{3}\.jpg$/)
     expect(readFileSync(path).equals(SHOT)).toBe(true)
+    // In the daemon's root, which goes with the test: the agent's TMPDIR is the daemon's, and none is left in the worker's.
+    expect(path.startsWith(`${d.root}/`), path).toBe(true)
+    expect(existsSync(join(tmpdir(), 'browser', basename(path)))).toBe(false)
     // The panel's size, at 1:1: Chrome's window is the panel's, held only to the browser's screen (#4141, which left
     // this line asking for the smallest window it took away; nightly e2e on main failed it since).
     expect(await client.request('agent_browser_window', { agentId: agent.id, width: 800, height: 500 }, 30_000)).toMatchObject({ width: 800, height: 500 })
@@ -270,9 +279,7 @@ describe('the agent browser on the real daemon', () => {
     // A turn first, as agentBrowserPodman.e2e.ts takes before its stop: until one ends, the fake engine's conversation
     // has no opening, and a purge is held (IDENTITY_UNAVAILABLE, retryable).
     const createdAt = Date.parse(agent.createdAt)
-    const ended = client.next((frame) => frame.type === 'turn_ended' && frame.agentId === agent.id, 45_000, 'turn_ended')
-    client.send('message', { agentId: agent.id, content: 'One turn before the purge' })
-    await ended
+    await client.turn(agent.id, 'One turn before the purge')
     const purging = log().length
     const review = await client.request('agent_purge', { agentId: agent.id, sessionId: bound.sessionId, createdAt, mode: 'inspect' }, 60_000)
     expect(review.error, JSON.stringify(review)).toBeUndefined()
@@ -308,9 +315,7 @@ describe('the agent browser on the real daemon', () => {
     await ready(client, agent.id, 'the browser to be ready')
     // A turn first: until one ends, the fake engine's conversation has no opening, and Stop Harness is held
     // (IDENTITY_UNAVAILABLE, retryable).
-    const ended = client.next((frame) => frame.type === 'turn_ended' && frame.agentId === agent.id, 45_000, 'turn_ended')
-    client.send('message', { agentId: agent.id, content: 'One turn before the stop' })
-    await ended
+    await client.turn(agent.id, 'One turn before the stop')
 
     // The engine restarts: the browser stays as it is.
     let mark = log().length
@@ -357,9 +362,7 @@ describe('the agent browser on the real daemon', () => {
     expect(await client.request('agent_browser_start', { agentId: agent.id }, 60_000)).toMatchObject({ ok: true })
     await ready(client, agent.id, 'the browser to be ready')
     // A turn first: until one ends, the fake engine's conversation has no opening, and its resume below is held.
-    const ended = client.next((frame) => frame.type === 'turn_ended' && frame.agentId === agent.id, 45_000, 'turn_ended')
-    client.send('message', { agentId: agent.id, content: 'One turn before the exit' })
-    await ended
+    await client.turn(agent.id, 'One turn before the exit')
 
     // The engine quits in its pane: the pane is a shell under a new id, and its browser stops.
     const gone = client.next((frame) => frame.type === 'agent_deleted' && frame.payload?.agentId === agent.id, 45_000, 'agent_deleted (the engine)')
@@ -449,10 +452,16 @@ describe('the agent browser on the real daemon', () => {
     const gone = closeOf(second)
     const before = browserPids(d)
     expect(before).toHaveLength(1)
+    // The `podman events` of the process about to die, by the pid the fake logged: the shell that started it became it.
+    const watching = log().filter((line) => line.startsWith('events pid ')).map((line) => Number(line.slice('events pid '.length)))
+    expect(watching.length).toBeGreaterThan(0)
     for (const pid of before) process.kill(pid, 'SIGKILL')
     expect((await gone).payload).toMatchObject({ streamId: second, reason: 'agent' })
     // The pipe of the process that died ends with it: its stdin closed.
     await until('the dead process\'s pipe to end', () => count('pipe ended') === 2 || null, 15_000, 100)
+    // Its `podman events` reads no stdin and ran on, one more after each crash. Checked here, before the daemon closes:
+    // the close ends what is left under its root (#4287) and would hide it.
+    await until('the dead process\'s podman events to end', () => watching.every((pid) => !alive(pid)) || null, 15_000, 100)
     const third = await until('the stream to open again', async () => {
       const opened = await client.request<{ streamId?: string; error?: string }>('agent_browser_open', { agentId: agent.id }, 30_000)
       return opened.streamId ?? null

@@ -68,17 +68,17 @@ const top = (context: Record<string, unknown>) => context.top as Row[]
 describe('prisma by query', () => {
   it('times a query that runs alone and scales its mean by how often it ran', () => {
     const t = sampler()
-    runWork('http GET /api/super-tabs/:tabId/changes', () => {
+    runWork('http GET /api/harness-shares', () => {
       const sample = t.engine.start()
       t.burn(4)
-      t.engine.end(sample, 'SwarmGroup', 'findMany', {}, [{ a: 1 }, { a: 2 }])
+      t.engine.end(sample, 'HarnessShare', 'findMany', {}, [{ a: 1 }, { a: 2 }])
       // Inside the gap: counted, not sampled.
-      for (let i = 0; i < 9; i++) t.engine.end(t.engine.start(), 'SwarmGroup', 'findMany', {}, [{ a: 1 }, { a: 2 }])
+      for (let i = 0; i < 9; i++) t.engine.end(t.engine.start(), 'HarnessShare', 'findMany', {}, [{ a: 1 }, { a: 2 }])
     })
     t.engine.flush()
     expect(t.infos).toHaveLength(1)
     expect(t.infos[0]!.message).toBe('prisma by query')
-    expect(top(t.infos[0]!.context)[0]).toEqual({ op: 'SwarmGroup.findMany', route: 'http GET /api/super-tabs/:tabId/changes', n: 10, sampled: 1,
+    expect(top(t.infos[0]!.context)[0]).toEqual({ op: 'HarnessShare.findMany', route: 'http GET /api/harness-shares', n: 10, sampled: 1,
       engineMs: 40, usPerQuery: 4000, docs: 20 })
     expect(t.infos[0]!.context).toMatchObject({ pod: 'pod-1', clock: 'schedstat', queries: 10, sampled: 1, discarded: 0, engineMs: 40 })
   })
@@ -109,7 +109,7 @@ describe('prisma by query', () => {
     const t = sampler({ gapMs: 100 })
     for (let i = 0; i < 1_000; i++) {
       t.advance(1)
-      t.engine.end(t.engine.start(), 'SwarmHead', 'findUnique', {}, { id: 'h' })
+      t.engine.end(t.engine.start(), 'User', 'findUnique', {}, { id: 'h' })
     }
     t.engine.flush()
     // 1,000 solo queries over a second: about 10 samples, each a read before and after.
@@ -137,17 +137,17 @@ describe('prisma by query', () => {
       t.burn(engineMs)
       t.engine.end(sample, model, action, args, [])
     })
-    run('http GET /api/a', 'SwarmGroup', 'findMany', {}, 1)
-    run('http GET /api/b', 'SwarmGroup', 'findMany', {}, 2)
-    run('http POST /api/hosts/:id/readings', undefined, '$runCommandRaw', { aggregate: 'SwarmMachine', pipeline: [] }, 5)
+    run('http GET /api/a', 'HarnessShare', 'findMany', {}, 1)
+    run('http GET /api/b', 'HarnessShare', 'findMany', {}, 2)
+    run('http POST /api/hosts/:id/readings', undefined, '$runCommandRaw', { aggregate: 'Machine', pipeline: [] }, 5)
     t.engine.flush()
     const context = t.infos[0]!.context
     expect(top(context).map(r => [r.op, r.route, r.engineMs])).toEqual([
-      ['SwarmMachine.$runCommandRaw aggregate', 'http POST /api/hosts/:id/readings', 5],
-      ['SwarmGroup.findMany', 'http GET /api/b', 2],
-      ['SwarmGroup.findMany', 'http GET /api/a', 1],
+      ['Machine.$runCommandRaw aggregate', 'http POST /api/hosts/:id/readings', 5],
+      ['HarnessShare.findMany', 'http GET /api/b', 2],
+      ['HarnessShare.findMany', 'http GET /api/a', 1],
     ])
-    expect(context.byOp).toEqual({ 'SwarmMachine.$runCommandRaw aggregate': 5, 'SwarmGroup.findMany': 3 })
+    expect(context.byOp).toEqual({ 'Machine.$runCommandRaw aggregate': 5, 'HarnessShare.findMany': 3 })
     expect(context.costMs).toEqual(expect.any(Number))
     t.engine.flush()
     expect(t.infos[1]!.context).toMatchObject({ queries: 0, sampled: 0, engineMs: 0, top: [] })

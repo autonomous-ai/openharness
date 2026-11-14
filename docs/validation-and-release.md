@@ -32,8 +32,11 @@ The rules AGENTS.md carried until 2026-11-11; the sections below have the detail
   `harness-train/` branch; add the `hold` label to keep a PR out. A train carries each member's local check receipts at
   that member's head; one without them keeps the train red.
 - Merge by hand with `make merge-pr ARGS="N --reviewed-head SHA --reviewed-base SHA --merge"`. No `--queue`, no
-  `--run/--scope`. Never replay an uncertain merge; inspect the PR. If `main` moves, integrate it, review the combined
-  change, rerun only newly affected checks, and finish the authorized merge without asking again.
+  `--run/--scope`. Never replay an uncertain merge; inspect the PR. If `make merge-pr` refuses only because `main`
+  moved, and the required checks are green on the head and GitHub shows the PR mergeable with no conflict and
+  no unresolved review conversation, merge with `gh pr merge <PR> --squash --admin --match-head-commit <head>`.
+  On a conflict, integrate `main`, review the combined change, rerun only the affected checks, and finish the
+  authorized merge without asking again.
 - Once required checks pass, do the authorized merge or release without another validation cycle, then verify the
   published versions and checksums. A release failure is a code failure: fix it and cut the next version; never move a
   published tag.
@@ -75,6 +78,7 @@ beside the CLI's own suite); the CLI reads `pty/`, `tui/` and `store/`, Desktop 
 | `desktop/` | `desktop-tests` (VM suite, four Linux shards); a change to a desktop file the phone's tests read (the Swarm models in `scripts/ci-plan.py` `PR_READS`, compared by `mobile/test/swarm/desktop_parity_test.dart`) also runs `mobile-checks` | 5–7 min |
 | `tui/`, `term/` (the TUI builds on it) | `tui-test` (`cargo test`) | a few minutes |
 | `pty/`, `term/`, `tui/vendor/`, `cli/` (the ptyhost contract imports the CLI's code) | `pty-checks` (`cargo test` for `term` and `pty`, then the ptyhost terminal contract against the built host) | a few minutes |
+| `device-app/` | `device-app-checks` (the UI's typecheck, Vitest and bundle, then `cargo test` with Tauri's Linux packages; the macOS code is not compiled) | a few minutes |
 | `backend/` | `backend-desk` (the backend unit suite, `npm test` in `backend/`) and `backend-integration` (the Super Tab integration suite, `npm run test:super-tabs`, four shards) | unit about 1–2 min; integration about 5 min |
 | `companions/`, `website/`, `os/`, `provider/`, `mobile/`, `daemons/` | that component's one check | 1–4 min |
 | `devices/` | `firmware-checks` | 1–2 min |
@@ -178,6 +182,7 @@ the planner, refuses a receipt whose members differ from the head's merges.
 | CLI end to end (`cli/e2e`) | nightly and **Actions → CLI end to end → Run workflow** | for user-facing CLI flows; start one run on the branch |
 | A guest's harness against an owner's (`npm run test:guest-real`) | nowhere automatically: it needs a Mac with guest access on and a guest user | when you change guest sharing, a guest's launch or environment, Stop, or how pane titles name harnesses: the guest runs as another OS user with `env -i`, and each difference has broken something only a shared Mac showed |
 | Desktop tests on macOS | nowhere automatically | when you change macOS-specific Desktop code; `make desktop-test` on a Mac |
+| Harness Device on macOS (PR CI compiles only its Linux code) | nowhere automatically | when you change `device-app/`; `cargo test --locked` in `device-app/src-tauri` on a Mac |
 | TUI native fixtures and connected shells | the TUI release (`release-tui.yml`) | optional locally: `scripts/validate-tui-native.py` |
 | Experience, authoring, Home Assistant and Desktop logging browser checks | **Run workflow** on their own workflows | when you change their area |
 | OS image builds, VM and hardware acceptance | **Actions → Harness OS** and the other OS workflows, by hand only | for installer, image or session changes; start once with the needed inputs |
@@ -622,13 +627,17 @@ actually enforces a queue, the helper detects its rule and uses it, verifying th
 merged tree against successful candidate CI. Explicit `--queue` is only for an
 intentionally configured queue, such as a disposable integration trial.
 
-If `main` moved before a direct merge, inspect and integrate the new source, then
-supply the updated reviewed head/base. Reuse validation only for unchanged inputs;
-rerun checks affected by the integration. This is routine handling of concurrent
-merges: continue the user's already-authorized merge without asking for permission
-again. A quiet branch takes the direct path immediately after checks and review;
-concurrent changes require only the additional review and validation they affect.
-Do not enable or disable a queue based on the number of open PRs or running jobs.
+If the helper refuses only because `main` moved ("main moved since review; inspect
+the new source before merging"), and the required checks are green on the head and
+GitHub shows the PR mergeable with no conflict and
+no unresolved review conversation, merge with
+`gh pr merge <PR> --squash --admin --match-head-commit <head>`. On a conflict,
+integrate `main`, review the combined change, then supply the updated reviewed
+head/base. Reuse validation only for unchanged inputs; rerun only the checks the
+integration affects. This is routine handling of concurrent merges: continue the
+user's already-authorized merge without asking for permission again. A quiet branch
+takes the direct path immediately after checks and review. Do not enable or disable
+a queue based on the number of open PRs or running jobs.
 
 A changed head/target, missing coverage,
 failed/skipped required jobs or a lost response cannot report success. Inspect an

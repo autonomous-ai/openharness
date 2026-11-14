@@ -55,6 +55,14 @@ void ui_project_set_engine(const char *project_id, const char *engine);
 // line shows and what a machine row uses to find the first agent to land on.
 void ui_project_set_machine(const char *project_id, const char *machine_id, const char *machine);
 
+// Where an agent runs (the daemon's short id: orca, ghostty, ...) and which of CABLE_CAP_* the dial may
+// use on it. An agent outside Harness can be watched, not spoken to, so a face tap without voice shows
+// "See it in {Host}" instead of opening the microphone.
+void ui_project_set_host_caps(const char *project_id, const char *host, uint8_t caps);
+// `view: machine` on the roster: it is this computer's agents rather than a tab's, so each face names
+// where its agent lives under the agent's name.
+void ui_fleet_set_view(bool machine);
+
 // Runtime model/effort (remote machines): store the opaque runtime-v1 profile and repaint the Model/Effort
 // chips. set_ is authoritative (agent_synced, clears the optimistic hold); reconcile_ is the guarded poll
 // path (keeps a just-made local change on-screen until the adapter catches up).

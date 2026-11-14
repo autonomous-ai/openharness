@@ -2,7 +2,8 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, st
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { checkRemovable, finalRemovalScript, listEntries, removalPlan, removeNow, scheduleFinalRemoval, UNINSTALL_MARKER, type FinalRemovalDeps, type PlanInput, type RemovalPlan, type RootEntry } from './removal.js'
+import { checkRemovable, finalRemovalScript, listEntries, removalPlan, removeNow, scheduleFinalRemoval, type FinalRemovalDeps, type PlanInput, type RemovalPlan, type RootEntry } from './removal.js'
+import { UNINSTALL_MARKER } from './marker.js'
 
 const d = (name: string): RootEntry => ({ name, dir: true })
 const f = (name: string): RootEntry => ({ name, dir: false })

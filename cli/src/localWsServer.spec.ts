@@ -26,12 +26,14 @@ class FakeBackend implements LocalWsBackend {
   focuses: Array<[string, string | null]> = []
   tools: string[] = []
   surfaces: Array<string | undefined> = []
+  watches: Array<readonly string[] | undefined> = []
 
-  registerLocalClient(connId: string, sink: LocalClientSink, opts: { tool?: boolean; surface?: 'tui' } = {}): boolean {
+  registerLocalClient(connId: string, sink: LocalClientSink, opts: { tool?: boolean; surface?: 'tui'; watch?: readonly 'dial'[] } = {}): boolean {
     this.connId = connId
     this.sink = sink
     if (opts.tool) this.tools.push(connId)
     this.surfaces.push(opts.surface)
+    this.watches.push(opts.watch)
     return true
   }
   async unregisterLocalClient(connId: string): Promise<void> {
@@ -135,11 +137,76 @@ describe('local CLI WebSocket', () => {
       ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1, ...(tool ? { tool } : {}) } }))
       const frame = await connected
       expect(frame.type).toBe('connected')
-      if (tool) expect(frame.payload).toMatchObject({ features: ['openclaw-local'] })
+      if (tool) expect(frame.payload).toMatchObject({ features: ['openclaw-local', 'dial-watch'] })
       else expect(frame.payload).not.toHaveProperty('features')
       ws.close()
       await local!.close()
       local = null
+    }
+  })
+
+  /** Every frame a client is sent up to a marker behind all its select set off, so an absence needs no wait.
+   *  Called in the turn its select is sent, before any reply can arrive. */
+  async function after(ws: WebSocket, backend: FakeBackend): Promise<Frame[]> {
+    const frames: Frame[] = []
+    const marked = new Promise<Frame[]>((resolve) => ws.on('message', (raw) => {
+      const frame = JSON.parse(raw.toString()) as Frame
+      frames.push(frame)
+      if (frame.type === 'marker') resolve(frames)
+    }))
+    // A connection's frames are handled in order: this one reaching the backend means the select was handled.
+    const handled = { type: 'agents_list', payload: { requestId: randomBytes(8).toString('hex') } }
+    ws.send(JSON.stringify(handled))
+    await vi.waitFor(() => expect(backend.frames).toContainEqual(handled))
+    expect(local!.sendToWindow(backend.connId!, { type: 'marker', payload: {} })).toBe(true)
+    return marked
+  }
+
+  async function selectHere(url: string, backend: FakeBackend, fields: Record<string, unknown>): Promise<Frame[]> {
+    const ws = new WebSocket(url)
+    await onceOpen(ws)
+    ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1, ...fields } }))
+    const frames = await after(ws, backend)
+    ws.close()
+    return frames
+  }
+
+  it('sends the last dial status to a window and to a tool that asked for the dial', async () => {
+    const backend = new FakeBackend()
+    const url = await start(backend, { dialStatus: () => ({ attached: true, fw: '0.0.95' }) })
+    for (const fields of [{}, { tool: true, watch: ['dial'] }]) {
+      const frames = await selectHere(url, backend, fields)
+      expect(frames.map((frame) => frame.type)).toEqual(['connected', 'dial_status', 'marker'])
+      expect(frames[1].payload).toEqual({ attached: true, fw: '0.0.95' })
+    }
+    expect(backend.watches).toEqual([undefined, ['dial']])
+  })
+
+  it('sends a tool that did not ask no dial status', async () => {
+    const backend = new FakeBackend()
+    const url = await start(backend, { dialStatus: () => ({ attached: true, fw: '0.0.95' }) })
+    expect((await selectHere(url, backend, { tool: true })).map((frame) => frame.type)).toEqual(['connected', 'marker'])
+    expect(backend.watches).toEqual([[]])
+  })
+
+  it('reads watch from a tool only, and only names it knows', async () => {
+    const backend = new FakeBackend()
+    const url = await start(backend, { dialStatus: () => ({ attached: false }) })
+    const told = ['connected', 'dial_status', 'marker'], untold = ['connected', 'marker']
+    const cases: Array<[Record<string, unknown>, readonly string[] | undefined, string[]]> = [
+      [{ tool: true, watch: 'dial' }, [], untold],
+      [{ tool: true, watch: ['agents', 7, null] }, [], untold],
+      [{ tool: true, watch: {} }, [], untold],
+      [{ tool: true, watch: ['agents', 'dial', 'dial'] }, ['dial'], told],
+      // A window is sent the dial whatever it asks, and stays a window: its watch is never read.
+      [{ watch: ['dial'] }, undefined, told],
+      // `harness tui` selects without `tool: true`: a window.
+      [{ client: 'tui' }, undefined, told],
+    ]
+    for (const [fields, watch, types] of cases) {
+      expect((await selectHere(url, backend, fields)).map((frame) => frame.type)).toEqual(types)
+      expect(backend.watches.at(-1)).toEqual(watch)
+      expect(backend.tools.includes(backend.connId!)).toBe(fields.tool === true)
     }
   })
 

@@ -46,7 +46,18 @@ typedef struct {
     // showing an empty line.
     char machine_id[ID_MAX];
     char machine[CABLE_NAME_MAX];
+    // WHERE THE AGENT RUNS AND WHAT THE DIAL MAY DO WITH IT. `host` is the daemon's short id (orca,
+    // ghostty, ...), empty when it did not say. `caps` is a CABLE_CAP_* set: an agent that lives outside
+    // Harness can be watched but not spoken to, and the dial holds back what it cannot take. A daemon
+    // that predates the field sends none, which reads as everything, so nothing changes for it.
+    char host[16];
+    uint8_t caps;
 } project_t;
+#define CABLE_CAP_S 1      // status
+#define CABLE_CAP_V 2      // voice
+#define CABLE_CAP_F 4      // focus
+#define CABLE_CAP_A 8      // answer
+#define CABLE_CAPS_ALL 15
 
 
 // The firmware version reported in `hello` and printed at boot, so a device on someone's desk can be
@@ -114,6 +125,7 @@ typedef struct {
     uint32_t generation;
     int total;
     bool window;
+    bool machine_view;   // agents.end said `view: machine`: this computer's agents rather than a tab's (no window)
 } cable_agent_snapshot_t;
 // A complete roster and its workspace identity are copied under the same lock.
 // Returns -1 while a new roster is being assembled, leaving the UI intact.

@@ -98,7 +98,9 @@ interface RunHookOpts {
   /** Kernel birth evidence for the synthetic process; never read an unrelated host pid. */
   nativeProcess?: 'linux' | 'missing' | 'changed' | 'lock-replaced' | 'boot-replaced' | 'registry-replaced'
     | 'zombie' | 'registry-zombie' | 'registry-command' | 'registry-reparented' | 'short' | 'wrong-pid'
-  engine?: 'claude' | 'codex' | 'cursor' | 'hermes' | 'devin' | 'commandcode' | 'grok'
+  engine?: 'claude' | 'codex' | 'cursor' | 'hermes' | 'devin' | 'commandcode' | 'grok' | 'copilot' | 'agy'
+  /** More of the installed command line: Copilot's and agy's event flags, agy's home. */
+  args?: string[]
   /** Run as on Windows: the process table comes from `harness-pty ps --json` (a fake), and `ps` fails. */
   windowsProcessTable?: boolean
   env?: Record<string, string>
@@ -228,6 +230,7 @@ fs.readFileSync = (path, ...args) => {
     if (opts.hermesHome) args.push('--hermes-home', opts.hermesHome)
     if (opts.grokHome) args.push('--grok-home', opts.grokHome)
     if (opts.devinHome) args.push('--devin-home', opts.devinHome)
+    if (opts.args) args.push(...opts.args)
     const hookDataDir = opts.dataDir || process.env.ADAPTER_DATA_DIR
     if (hookDataDir) {
       mkdirSync(hookDataDir, { recursive: true, mode: 0o700 })
@@ -593,7 +596,7 @@ describe('hook notify terminal scope', () => {
       expect(requests.map((request) => request.url)).toEqual(['/api/hook/session-end'])
     })
 
-  it('drops standalone SessionEnd but forwards tmux SessionEnd', async () => {
+  it('tells a standalone SessionEnd only to the devices, and forwards a tmux SessionEnd', async () => {
     const requests: Array<{ url: string; body: Record<string, unknown> }> = []
     const server = createServer((req, res) => {
       if (req.method !== 'POST') { res.writeHead(405).end(); return }
@@ -610,7 +613,11 @@ describe('hook notify terminal scope', () => {
     if (!address || typeof address === 'string') throw new Error('test server did not bind a TCP port')
 
     await runHook({ port: address.port })
-    expect(requests).toEqual([])
+    expect(requests).toEqual([{
+      url: '/api/hook/observed',
+      body: { engine: 'claude', sessionId: 'session-test', event: 'session-end', callerPid: process.pid, hostHints: expect.any(Object) },
+    }])
+    requests.length = 0
 
     await runHook({ port: address.port, tmuxPane: '%42' })
     expect(requests).toEqual([{
@@ -2035,15 +2042,16 @@ describe('hook notify in a Harness pty host pane (Windows)', () => {
     const { port, requests } = await collect()
     await runHook({ port, tmuxPane: '%42', env: { HARNESS_PANE: 'p3:%1007' }, input: sessionStart() })
     expect(requests[0].body.runtimeHints).toEqual([{ backend: 'tmux', paneId: '%42' }])
+    // Not a pane: the session is told to the devices only, as one outside a pane.
     const bad = await collect()
     await runHook({ port: bad.port, env: { HARNESS_PANE: 'p3:1007' }, input: sessionStart() })
-    expect(bad.requests).toEqual([])
+    expect(bad.requests.map((request) => request.url)).toEqual(['/api/hook/observed'])
     const odd = await collect()
     await runHook({ port: odd.port, env: { HARNESS_PANE: 'p2-0.4.21 x:%7' }, input: sessionStart() })
-    expect(odd.requests).toEqual([])
+    expect(odd.requests.map((request) => request.url)).toEqual(['/api/hook/observed'])
     const empty = await collect()
     await runHook({ port: empty.port, env: { HARNESS_PANE: '' }, input: sessionStart() })
-    expect(empty.requests).toEqual([])
+    expect(empty.requests.map((request) => request.url)).toEqual(['/api/hook/observed'])
   })
 })
 
@@ -2185,5 +2193,247 @@ describe('hook notify posts over the daemon\'s pipe on Windows (W1)', () => {
     })
     expect(attempts).toBe(posts)
     expect(tcp.requests).toEqual([])
+  })
+})
+
+describe('hook notify: a session outside a pane', () => {
+  /** The environment names the hook may send as host hints, and nothing else (spec: The hook). */
+  const HINTS = ['TERM_PROGRAM', '__CFBundleIdentifier', 'HERDR_PANE_ID', 'REX_BLOCK', 'ZELLIJ', 'KITTY_WINDOW_ID',
+    'WEZTERM_PANE', 'ORCA_AGENT_SESSION_ID']
+  /** The hint names unset, so the environment this test runs in sends none of its own. */
+  const noHints = Object.fromEntries(HINTS.map((name) => [name, '']))
+  const folder = (prefix: string): string => {
+    const dir = mkdtempSync(join(tmpdir(), prefix))
+    tmpDirs.push(dir)
+    return dir
+  }
+
+  it('paneless claude Stop posts turn-stop to /api/hook/observed with callerPid and transcriptPath', async () => {
+    const { port, requests } = await collect()
+    const transcriptPath = '/home/u/.claude/projects/-work-app/sess-1.jsonl'
+    await runHook({ port, input: { hook_event_name: 'Stop', session_id: 'sess-1', cwd: '/work/app', transcript_path: transcriptPath } })
+    expect(requests).toEqual([{
+      url: '/api/hook/observed',
+      body: {
+        engine: 'claude', sessionId: 'sess-1', event: 'turn-stop', cwd: '/work/app', callerPid: process.pid, transcriptPath,
+        hostHints: expect.any(Object),
+      },
+    }])
+  })
+
+  // Each waits for the person: a permission, an MCP server's question or link, or a resume after the quota.
+  it.each(['permission_prompt', 'elicitation_dialog', 'elicitation_url_dialog', 'quota_auto_resume_stale'])(
+    'paneless claude Notification %s posts needs-input', async (type) => {
+      const { port, requests } = await collect()
+      await runHook({ port, input: { hook_event_name: 'Notification', notification_type: type, session_id: 'sess-1', cwd: '/w' } })
+      expect(requests.map((request) => [request.url, request.body.event])).toEqual([['/api/hook/observed', 'needs-input']])
+    })
+
+  // An old Claude Code names no type, and says so a minute after every finished turn too: it would flip each done agent.
+  it('a Notification with no type posts nothing', async () => {
+    const { port, requests } = await collect()
+    await runHook({ port, input: { hook_event_name: 'Notification', message: 'Claude is waiting for your input', session_id: 'sess-1', cwd: '/w' } })
+    expect(requests).toEqual([])
+  })
+
+  // Claude Code also sends Notification a minute after a finished turn (idle_prompt) and after a sign-in: neither is a
+  // wait for the person's answer, and a done agent must not turn into one that needs them.
+  it.each(['idle_prompt', 'auth_success'])('paneless claude Notification %s posts nothing', async (type) => {
+    const { port, requests } = await collect()
+    await runHook({ port, input: { hook_event_name: 'Notification', notification_type: type, session_id: 'sess-1', cwd: '/w' } })
+    expect(requests).toEqual([])
+  })
+
+  it('claude Notification inside a tmux pane posts nothing', async () => {
+    const { port, requests } = await collect()
+    await runHook({ port, tmuxPane: '%42', input: {
+      hook_event_name: 'Notification', notification_type: 'permission_prompt', session_id: 'sess-1', cwd: '/w',
+    } })
+    expect(requests).toEqual([])
+  })
+
+  it('paneless codex subagent posts nothing', async () => {
+    const codexHome = folder('adapter-hook-observed-codex-')
+    const { port, requests } = await collect()
+    const start = { hook_event_name: 'SessionStart', cwd: '/w' }
+    await runHook({ port, engine: 'codex', codexHome, input: {
+      ...start, session_id: 'child', source: { subagent: { thread_spawn: { parent_thread_id: 'parent', depth: 1 } } },
+    } })
+    await runHook({ port, engine: 'codex', codexHome, input: { ...start, session_id: 'parent', source: 'startup' } })
+    expect(requests.map((request) => request.body.sessionId)).toEqual(['parent'])
+  })
+
+  it('paneless cursor background agent posts nothing', async () => {
+    const cursorHome = folder('adapter-hook-observed-cursor-')
+    const { port, requests } = await collect()
+    await runHook({ port, engine: 'cursor', cursorHome, input: { hook_event_name: 'sessionStart', session_id: 'background', is_background_agent: true } })
+    await runHook({ port, engine: 'cursor', cursorHome, input: { hook_event_name: 'sessionStart', session_id: 'foreground', is_background_agent: false } })
+    expect(requests.map((request) => request.body.sessionId)).toEqual(['foreground'])
+  })
+
+  // agy gives each sub-agent a conversation and hooks of its own; only a top-level one has a presence lock.
+  it('paneless agy sub-agent posts nothing', async () => {
+    const agyHome = folder('adapter-hook-observed-agy-')
+    mkdirSync(join(agyHome, 'presence'))
+    writeFileSync(join(agyHome, 'presence', 'top.lock'), '')
+    const { port, requests } = await collect()
+    for (const conversationId of ['child', 'top']) {
+      await runHook({ port, engine: 'agy', args: ['--agy-event', 'PreInvocation', '--agy-home', agyHome], input: { conversationId } })
+    }
+    expect(requests.map((request) => request.body.sessionId)).toEqual(['top'])
+  })
+
+  // Each engine's own names for the same moments (main() tells them apart for a pane), in its own session id field.
+  it.each([
+    ['claude', 'SessionStart', [], { hook_event_name: 'SessionStart' }, { event: 'session-start' }],
+    ['claude', 'UserPromptSubmit', [], { hook_event_name: 'UserPromptSubmit', prompt: 'hi' }, { event: 'turn-start' }],
+    ['claude', 'StopFailure', [], { hook_event_name: 'StopFailure' }, { event: 'turn-error' }],
+    ['claude', 'SessionEnd', [], { hook_event_name: 'SessionEnd' }, { event: 'session-end' }],
+    ['codex', 'UserPromptSubmit', [], { hook_event_name: 'UserPromptSubmit' }, { event: 'turn-start' }],
+    // Devin's payload has no cwd: the hook runs in the session's folder.
+    ['devin', 'Stop', [], { hook_event_name: 'Stop' }, { event: 'turn-stop', cwd: process.cwd() }],
+    ['commandcode', 'PreToolUse', [], { hook_event_name: 'PreToolUse' }, { event: 'turn-start' }],
+    ['commandcode', 'Stop', [], { hook_event_name: 'Stop' }, { event: 'turn-stop' }],
+    ['cursor', 'beforeSubmitPrompt', [], { hook_event_name: 'beforeSubmitPrompt', workspace_roots: ['/w'] }, { event: 'turn-start', cwd: '/w' }],
+    ['cursor', 'preToolUse', [], { hook_event_name: 'preToolUse', tool_name: 'Task' }, null],
+    ['cursor', 'stop completed', [], { hook_event_name: 'stop', status: 'completed' }, { event: 'turn-stop' }],
+    ['cursor', 'stop error', [], { hook_event_name: 'stop', status: 'error' }, { event: 'turn-error' }],
+    ['cursor', 'sessionEnd', [], { hook_event_name: 'sessionEnd' }, { event: 'session-end' }],
+    ['grok', 'session_start', [], { hookEventName: 'session_start', workspaceRoot: '/w' }, { event: 'session-start', cwd: '/w' }],
+    ['grok', 'userPromptSubmit', [], { hookEventName: 'userPromptSubmit' }, { event: 'turn-start' }],
+    // Grok writes its Stop before the turn's last words, which is why it is not installed (main()).
+    ['grok', 'stop', [], { hookEventName: 'stop' }, null],
+    ['grok', 'stopFailure', [], { hookEventName: 'stopFailure' }, { event: 'turn-error' }],
+    ['grok', 'session_end', [], { hookEventName: 'session_end' }, { event: 'session-end' }],
+    ['copilot', 'sessionStart', ['--copilot-event', 'sessionStart'], {}, { event: 'session-start' }],
+    ['copilot', 'userPromptSubmitted', ['--copilot-event', 'userPromptSubmitted'], {}, { event: 'turn-start' }],
+    ['copilot', 'agentStop end_turn', ['--copilot-event', 'agentStop'], { stopReason: 'end_turn' }, { event: 'turn-stop' }],
+    ['copilot', 'agentStop max_turns', ['--copilot-event', 'agentStop'], { stopReason: 'max_turns' }, { event: 'turn-error' }],
+    ['copilot', 'sessionEnd', ['--copilot-event', 'sessionEnd'], {}, { event: 'session-end' }],
+    ['agy', 'PreInvocation', ['--agy-event', 'PreInvocation'], { workspacePaths: ['/w'] }, { event: 'turn-start', cwd: '/w' }],
+    ['agy', 'Stop idle', ['--agy-event', 'Stop'], { fullyIdle: true }, { event: 'turn-stop' }],
+    // Waiting for its sub-agents: the turn goes on.
+    ['agy', 'Stop waiting', ['--agy-event', 'Stop'], { fullyIdle: false }, null],
+    ['agy', 'Stop failed', ['--agy-event', 'Stop'], { terminationReason: 'ERROR' }, { event: 'turn-error' }],
+  ] as const)('paneless %s %s', async (engine, _name, args, payload, expected) => {
+    const sessionField = engine === 'agy' ? 'conversationId' : engine === 'copilot' || engine === 'grok' ? 'sessionId' : 'session_id'
+    const agyHome = folder('adapter-hook-observed-agy-')
+    mkdirSync(join(agyHome, 'presence'))
+    writeFileSync(join(agyHome, 'presence', 'sess-1.lock'), '')
+    const { port, requests } = await collect()
+    await runHook({
+      port, engine, args: engine === 'agy' ? [...args, '--agy-home', agyHome] : [...args],
+      input: { ...payload, [sessionField]: 'sess-1' },
+    })
+    expect(requests).toEqual(expected === null ? [] : [{
+      url: '/api/hook/observed', body: expect.objectContaining({ engine, sessionId: 'sess-1', ...expected }),
+    }])
+  })
+
+  it('hostHints carries only the allowlist: ORCA_PAIRING_CODE and ORCA_AGENT_SESSION_SPAWN_TOKEN set in the env are absent from the body', async () => {
+    const { port, requests } = await collect()
+    const allowed: Record<string, string> = Object.fromEntries(HINTS.map((name, index) => [name, `hint-${index}`]))
+    await runHook({
+      port,
+      env: { ...allowed, ORCA_PAIRING_CODE: 'pairing-secret', ORCA_AGENT_SESSION_SPAWN_TOKEN: 'spawn-secret', ORCA_OTHER: 'other-secret' },
+      input: { hook_event_name: 'UserPromptSubmit', session_id: 'sess-1', cwd: '/w', prompt: 'prompt-secret' },
+    })
+    expect(requests.map((request) => request.url)).toEqual(['/api/hook/observed'])
+    // Eight names, as many as the core takes (core/observedHook.ts): every one is sent.
+    expect(requests[0].body.hostHints).toEqual(allowed)
+    expect(JSON.stringify(requests[0].body)).not.toMatch(/PAIRING|SPAWN|ORCA_OTHER|secret/)
+  })
+
+  // Which Orca build it is says nothing about where the session runs.
+  it('never sends ORCA_APP_VERSION', async () => {
+    const { port, requests } = await collect()
+    await runHook({ port, env: { ...noHints, ORCA_APP_VERSION: '1.4.256' }, input: { hook_event_name: 'Stop', session_id: 'sess-1' } })
+    expect(requests).toHaveLength(1)
+    expect(requests[0].body.hostHints).toEqual({})
+  })
+
+  it('a hint value of 200 chars is cut to 64', async () => {
+    const { port, requests } = await collect()
+    await runHook({ port, env: { TERM_PROGRAM: 'x'.repeat(200) }, input: { hook_event_name: 'Stop', session_id: 'sess-1' } })
+    expect(requests).toHaveLength(1)
+    expect((requests[0].body.hostHints as Record<string, string>).TERM_PROGRAM).toBe('x'.repeat(64))
+  })
+
+  // The core refuses the whole event for a path over its bound (core/observedHook.ts): the path goes, the event stays.
+  it('leaves out a cwd the core would refuse, and still posts the event', async () => {
+    const { port, requests } = await collect()
+    await runHook({ port, input: { hook_event_name: 'Stop', session_id: 'sess-1', cwd: `/${'d'.repeat(1024)}`, transcript_path: '/t.jsonl' } })
+    expect(requests).toHaveLength(1)
+    expect(requests[0].body).not.toHaveProperty('cwd')
+    expect(requests[0].body.transcriptPath).toBe('/t.jsonl')
+  })
+
+  // The core refuses the whole event for a hint with a control character (core/observedHook.ts): the hint goes.
+  it('leaves out a hint value with a control character, and still posts the event', async () => {
+    const { port, requests } = await collect()
+    await runHook({ port, env: { ...noHints, TERM_PROGRAM: 'ghost\u0007ty', ZELLIJ: '0' }, input: { hook_event_name: 'Stop', session_id: 'sess-1' } })
+    expect(requests).toHaveLength(1)
+    expect(requests[0].body.hostHints).toEqual({ ZELLIJ: '0' })
+  })
+
+  // The core reads 4096 bytes of a body at most (hookServer.ts): the transcript's path goes first, then the folder.
+  it('leaves out transcriptPath when the body is over 4096 bytes, and keeps cwd', async () => {
+    const { port, requests } = await collect()
+    const long = `/${'日'.repeat(1000)}`
+    await runHook({ port, env: noHints, input: { hook_event_name: 'Stop', session_id: 'sess-1', cwd: long, transcript_path: long } })
+    expect(requests).toHaveLength(1)
+    expect(requests[0].body).not.toHaveProperty('transcriptPath')
+    expect(requests[0].body.cwd).toBe(long)
+  })
+
+  it('leaves out cwd too when the body is still over 4096 bytes', async () => {
+    const { port, requests } = await collect()
+    const long = `/${'日'.repeat(1000)}`
+    const wide = Object.fromEntries(HINTS.map((name) => [name, '日'.repeat(64)]))
+    await runHook({ port, env: wide, input: { hook_event_name: 'Stop', session_id: 'sess-1', cwd: long, transcript_path: long } })
+    expect(requests).toHaveLength(1)
+    expect(requests[0].body).not.toHaveProperty('transcriptPath')
+    expect(requests[0].body).not.toHaveProperty('cwd')
+    expect(requests[0].body.hostHints).toEqual(wide)
+  })
+
+  it('the hook exits within 300 ms when the daemon never answers', async () => {
+    const urls: string[] = []
+    let arrived: (at: number) => void = () => {}
+    const arrival = new Promise<number>((resolve) => { arrived = resolve })
+    // Takes the request in and never answers it.
+    const server = createServer((req) => { urls.push(req.url ?? ''); arrived(Date.now()); req.resume() })
+    servers.push(server)
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()))
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('test server did not bind a TCP port')
+    await runHook({ port: address.port, input: { hook_event_name: 'Stop', session_id: 'sess-1' } })
+    const exited = Date.now()
+    const at = await Promise.race([arrival, new Promise<null>((resolve) => setTimeout(() => resolve(null), 2_000))])
+    server.closeAllConnections()
+    expect(urls).toEqual(['/api/hook/observed'])
+    expect(exited - (at ?? 0)).toBeLessThan(300)
+  })
+
+  it('paneless never calls fallbackRegister or routeToPaneOwner', async () => {
+    const dir = folder('adapter-hook-observed-')
+    // A tmux that leaves a mark when asked: the pane's routing and the offline fallback both ask it about the pane.
+    const bin = join(dir, 'bin')
+    mkdirSync(bin)
+    const mark = join(dir, 'tmux-asked')
+    writeFileSync(join(bin, 'tmux'), `#!/bin/sh\ntouch '${mark}'\n`, { mode: 0o755 })
+    const claudeProjectsDir = join(dir, 'claude-projects')
+    mkdirSync(join(claudeProjectsDir, 'demo'), { recursive: true })
+    const transcriptPath = join(claudeProjectsDir, 'demo', 'session-offline.jsonl')
+    writeFileSync(transcriptPath, '{}\n')
+    const input = { hook_event_name: 'SessionStart', session_id: 'session-offline', transcript_path: transcriptPath, cwd: '/tmp/demo', source: 'startup' }
+    const env = { PATH: `${bin}:${process.env.PATH ?? ''}` }
+    const live = await collect()
+    await runHook({ port: live.port, dataDir: join(dir, 'live'), claudeProjectsDir, env, input })
+    expect(live.requests.map((request) => request.url)).toEqual(['/api/hook/observed'])
+    // The daemon down (nothing on port 9): no registry row is written behind it.
+    await runHook({ port: 9, dataDir: join(dir, 'down'), claudeProjectsDir, env, input })
+    expect(existsSync(join(dir, 'down', 'registry.json'))).toBe(false)
+    expect(existsSync(mark)).toBe(false)
   })
 })

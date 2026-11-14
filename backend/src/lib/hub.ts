@@ -158,7 +158,7 @@ export async function recomputeAndSendClients(machineId: string): Promise<void> 
   const frame = {
     type: CLIENTS_FRAME,
     // `uiGate` lets the daemon hold live events while `ui` is 0; without it the daemon sends everything, so
-    // RELAY_UI_GATE=off undoes the gate from here alone (spec 2026-11-02-swarm-cache-delta-design, Part 4).
+    // RELAY_UI_GATE=off undoes the gate from here alone (the relay gate of 2026-11-02).
     payload: {
       ui, commander, commanderActive,
       ...(commanderJoinGeneration != null ? { commanderJoinGeneration } : {}),

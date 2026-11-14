@@ -1,6 +1,5 @@
 import 'dotenv/config'
-import { closeBus, pub, publishSwarmAccessChanged, redisSwarmStamps } from './lib/bus.js'
-import { configureSwarmStamps } from './superTabs/cache.js'
+import { closeBus } from './lib/bus.js'
 import { reconcileCommunityLikeCounts } from './lib/db/communityLikeCounts.js'
 import { backfillMachineFreeEntitlements } from './lib/db/freeEntitlement.js'
 import {
@@ -13,38 +12,14 @@ import {
   pruneLegacyDeviceBindings,
 } from './lib/db/migrate.js'
 import { ensurePlans } from './lib/db/seed.js'
-import { prisma, prismaSecondary } from './lib/prisma.js'
+import { prisma } from './lib/prisma.js'
 import { startQueryStats } from './lib/queryStats.js'
-import { startRetryStats } from './superTabs/retryStats.js'
 import { releaseSchema } from './lib/db/schemaRelease.js'
-import { startSwarmSweeps } from './superTabs/sweeps.js'
-import { startLegacyDrop } from './superTabs/migration/dropLegacyJob.js'
-import { startAccountNames } from './superTabs/migration/accountNamesJob.js'
-import { startTeamMachines } from './superTabs/migration/teamMachinesJob.js'
-import { startSwarmWipe } from './superTabs/migration/wipeJob.js'
-import { startRetiredNoticeRemoval } from './superTabs/migration/retiredNotices.js'
-import { startPersonalProjectRemoval } from './superTabs/migration/personalProjectJob.js'
-import { startAvatarRemoval } from './superTabs/migration/avatarRemoval.js'
-import { startDeliverySettle } from './superTabs/deliverySettle.js'
-import { startDeliveryRepush } from './superTabs/deliveryRepush.js'
-import { startDeliveryCompaction } from './superTabs/deliveryCompaction.js'
-import { startThreadBackfill } from './superTabs/threadBackfill.js'
-import { startTimeChecks } from './superTabs/timeChecks.js'
-import { SuperTabStore } from './superTabs/store.js'
-import { announceSwarmDeliveries, announceSwarmTerminal } from './lib/swarmDeliveryPushes.js'
-import { announceSwarmHostChanges } from './lib/swarmHostPushes.js'
-import { announceSwarmChanges } from './lib/swarmClientPushes.js'
+import { startSwarmDataRemoval } from './lib/db/swarmDataRemoval.js'
 import { env } from './config/env.js'
-import { phoneSendersFromEnv, sendPhoneNotices } from './push/send.js'
-import { redisRingMemory } from './push/rings.js'
 import { machineBillingWorkerService } from './services/MachineBillingWorkerService.js'
 import { productUsagePeopleRollupService } from './services/ProductUsagePeopleRollupService.js'
 import { startReceiptSweep } from './lib/productUsageReceiptSweep.js'
-import { startReadMarkSweep } from './superTabs/readMarks.js'
-import { startPendingUploadSweep } from './lib/pendingUploadSweep.js'
-import { startSwarmPurge } from './superTabs/purge.js'
-import { startAttachmentSweepFrom } from './lib/attachmentSweep.js'
-import { attachmentsFromEnv } from './superTabs/attachments.js'
 import { logger } from './utils/logger.js'
 
 // Singleton background process. HTTP/WS server.ts runs as a PM2 cluster and must never own schema
@@ -53,15 +28,13 @@ async function start(): Promise<void> {
   // Every minute, this process's queries by model.action and filter shape (lib/queryStats.ts, DB roadmap Phase 1); its
   // jobs and startup migrations count as background.
   const stopQueryStats = startQueryStats()
-  // Every minute, how often Swarm transactions ran again and commands loaded twice (superTabs/retryStats.ts, DB 2.1).
-  const stopRetryStats = startRetryStats()
   // Existing production data was created against staging upstreams. Stamp it before Prisma swaps
   // the old global unique indexes for their per-environment replacements.
   await migrateAutonomousEnvironment()
   await migrateUserIdentityByEmail()
   // Same reason: the old (user, day) unique must be gone before the push installs its replacement.
   await migrateUserPresencePerMachine()
-  const schema = await releaseSchema()
+  await releaseSchema()
   // AFTER the push: it creates the new collections + their unique indexes, and the copy uses $merge
   // so those indexes survive. Copying first would leave the unique index build to fail silently.
   await migrateMachineRename()
@@ -74,51 +47,18 @@ async function start(): Promise<void> {
   await backfillMachinePresenceTurnsStarted()
   await reconcileCommunityLikeCounts()
 
-  let stopSweeps = (): void => {}
-  let stopLegacyDrop = (): void => {}
-  let stopAccountNames = (): void => {}
-  let stopTeamMachines = (): void => {}
-  let stopSwarmWipe = (): void => {}
-  let stopRetiredNotices = (): void => {}
-  let stopPersonalProjects = (): void => {}
-  let stopAvatarRemoval = (): void => {}
-  let stopTimeChecks = (): void => {}
-  let stopDeliveries = (): void => {}
-  let stopRepush = (): void => {}
-  let stopCompaction = (): void => {}
-  let stopThreadBackfill = (): void => {}
   let stopReceiptSweep = (): void => {}
-  let stopReadMarkSweep = (): void => {}
-  let stopPendingUploads = (): void => {}
-  let stopSwarmPurge = (): void => {}
-  let stopAttachmentSweep = (): void => {}
+  let stopSwarmDataRemoval = (): void => {}
   const shutdown = (signal: string): void => {
     logger.info(`Received ${signal}, stopping backend worker...`)
     const hardExit = setTimeout(() => process.exit(0), 5000)
     hardExit.unref()
     machineBillingWorkerService.stop()
     productUsagePeopleRollupService.stop()
-    stopSweeps()
-    stopLegacyDrop()
-    stopAccountNames()
-    stopTeamMachines()
-    stopSwarmWipe()
-    stopRetiredNotices()
-    stopPersonalProjects()
-    stopAvatarRemoval()
-    stopTimeChecks()
-    stopDeliveries()
-    stopRepush()
-    stopCompaction()
     stopReceiptSweep()
-    stopReadMarkSweep()
-    stopPendingUploads()
-    stopSwarmPurge()
-    stopAttachmentSweep()
-    stopThreadBackfill()
+    stopSwarmDataRemoval()
     // The last partial minute, before the database closes.
     stopQueryStats()
-    stopRetryStats()
     void Promise.allSettled([prisma.$disconnect(), closeBus()]).finally(() => process.exit(0))
   }
   process.on('SIGINT', () => shutdown('SIGINT'))
@@ -128,58 +68,9 @@ async function start(): Promise<void> {
   productUsagePeopleRollupService.start()
   // Usage receipts from when they lived 36 days, a few at a time until none are left (lib/productUsageReceiptSweep.ts).
   stopReceiptSweep = startReceiptSweep(prisma)
-  // Read marks untouched for 180 days, where the database refused their index expiry, a chunk every 30 s (superTabs/readMarks.ts).
-  stopReadMarkSweep = startReadMarkSweep(prisma, schema.readMarkExpirySet)
-  // Uploads begun on a link and never finished go an hour after the link expired, with what they stored (lib/pendingUploadSweep.ts).
-  stopPendingUploads = startPendingUploadSweep(prisma, env)
-  // Deleted Swarms past their 7 days go with their records and stored files (superTabs/purge.ts).
-  stopSwarmPurge = startSwarmPurge(prisma, env)
-  // Swarm uploads nobody sent within a day, row and stored file, once an hour (lib/attachmentSweep.ts). It logs whether it
-  // is on; settings it cannot read turn off only the sweep.
-  stopAttachmentSweep = startAttachmentSweepFrom(prisma, () => attachmentsFromEnv(env))
-  // The worker's sweeps and archive write Swarms: they bump the stamps the API processes read by. It reads too little to keep a cache.
-  configureSwarmStamps(redisSwarmStamps(), { reads: false })
-  // What the worker's store writes reaches messages too: their recipients' hosts hear of them at once, and of the groups
-  // they changed.
-  // Their tags reach the tagged person's phones too (push/send.ts, task #2905).
-  const phones = phoneSendersFromEnv(env)
-  const rings = redisRingMemory(pub)
-  const swarms = new SuperTabStore(prisma, Date.now, null, { deliveriesWaiting: announceSwarmDeliveries, terminalWaiting: announceSwarmTerminal, hostsChanged: announceSwarmHostChanges,
-    swarmChanged: announceSwarmChanges, phoneNotices: notices => { void sendPhoneNotices(prisma, phones, notices, rings) },
-    // A Swarm its jobs delete closes its observer sockets, on any instance (store.ts accessChanged).
-    accessChanged: tabId => { void publishSwarmAccessChanged(tabId) } })
-  stopSweeps = startSwarmSweeps(prisma)
-  // The collections of what Swarm v4 removed go by themselves, a chunk of rows at a time (superTabs/migration/dropLegacyJob.ts).
-  stopLegacyDrop = startLegacyDrop(prisma)
-  // Once after this release: each Swarm's people take their accounts' names (superTabs/migration/accountNamesJob.ts).
-  stopAccountNames = startAccountNames(prisma, swarms)
-  // Once after this release: Harness Team accounts' machines leave every Swarm, and their account rows go
-  // (superTabs/migration/teamMachinesJob.ts).
-  stopTeamMachines = startTeamMachines(prisma, swarms)
-  // Once after this release: every Swarm from before Swarm v4 is deleted, its hosts stop its agents, and then everything it kept
-  // goes (superTabs/migration/wipeJob.ts).
-  stopSwarmWipe = startSwarmWipe(prisma, swarms, env)
-  // Once after this release: stored notices of kinds nothing writes any more go, each as its author's delete would take it
-  // (superTabs/migration/retiredNotices.ts).
-  stopRetiredNotices = startRetiredNoticeRemoval(prisma, swarms)
-  // Once after this release: the repo-less "Personal" project every Personal Swarm was made with goes where nothing is in it
-  // (superTabs/migration/personalProjectJob.ts).
-  stopPersonalProjects = startPersonalProjectRemoval(prisma, swarms)
-  // Once after this release: every avatar still stored goes, object and record (superTabs/migration/avatarRemoval.ts).
-  stopAvatarRemoval = startAvatarRemoval(prisma, env)
-  // Every 30 s, each active Swarm's time checks: v4's jobs only (superTabs/timeChecks.ts). Swarm v4 (anh Dee, 2026-11-09) runs
-  // no v1-v3 job: no decisions, task archive, pull request watch, release steps, merge train, routing reflection or scorecards.
-  stopTimeChecks = startTimeChecks(prisma, swarms)
-  // A delivery that can no longer move ends as Not sent, instead of waiting for good (superTabs/deliverySettle.ts).
-  stopDeliveries = startDeliverySettle(prisma, swarms)
-  // Every 15 s, the machine of each agent with a delivery still queued after 10 s is told again, in case its push was lost:
-  // hosts read an idle worker's list only when told (superTabs/deliveryRepush.ts, task #2800).
-  stopRepush = startDeliveryRepush(prisma, announceSwarmDeliveries)
-  // Every hour, finished deliveries 14 days old move into their messages' receipts, kept forever (superTabs/deliveryCompaction.ts).
-  stopCompaction = startDeliveryCompaction(prisma, env.SWARM_DELIVERY_COMPACTION)
-  // Every 15 minutes, thread summaries for replies no write summed up: all of a Swarm's at first, then only what changed
-  // (superTabs/threadBackfill.ts). Pages read the summaries once a Swarm is backfilled.
-  stopThreadBackfill = startThreadBackfill(prisma)
+  // Once after the release that deleted the Swarm (anh Dee, 2026-11-14): everything it stored goes, its files, its shares and its
+  // collections, and the job stops once a pass finds nothing left (lib/db/swarmDataRemoval.ts). Irreversible.
+  stopSwarmDataRemoval = startSwarmDataRemoval(prisma, env)
   // PM2 wait_ready gates the singleton worker's "online" state on schema/catalog/backfill startup.
   // Plain node/tsx runs do not provide process.send and simply continue.
   process.send?.('ready')

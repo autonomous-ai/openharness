@@ -47,7 +47,7 @@ describe('filterShape', () => {
   })
 
   it('hides keys that carry ids, emails or anything else that is not a plain name', () => {
-    const shape = filterShape('$runCommandRaw', { update: 'SwarmGroup', updates: [{ q: { 'parts.a5e7c91b0462f5fa1a4a7f1b': 1, 'alice@example.com': 2, 'state.ok': 3, 'agent 7': 4 } }] })
+    const shape = filterShape('$runCommandRaw', { update: 'HarnessShare', updates: [{ q: { 'parts.a5e7c91b0462f5fa1a4a7f1b': 1, 'alice@example.com': 2, 'state.ok': 3, 'agent 7': 4 } }] })
     expect(shape).toBe('{"*":"?","parts.*":"?","state.ok":"?"}')
   })
 
@@ -56,7 +56,7 @@ describe('filterShape', () => {
       .toBe('[{"$match":{"archived":"?","tabId":"?"}},"$sort","$limit"]')
     expect(filterShape('findRaw', { filter: { machineIds: 'm1' } })).toBe('{"machineIds":"?"}')
     expect(filterShape('$runCommandRaw', { find: 'users', filter: { email: 'a@b.c' } })).toBe('{"email":"?"}')
-    expect(filterShape('$runCommandRaw', { aggregate: 'SwarmGroup', pipeline: [{ $match: { tabId: 'x' } }], cursor: {} })).toBe('[{"$match":{"tabId":"?"}}]')
+    expect(filterShape('$runCommandRaw', { aggregate: 'HarnessShare', pipeline: [{ $match: { tabId: 'x' } }], cursor: {} })).toBe('[{"$match":{"tabId":"?"}}]')
     expect(filterShape('$runCommandRaw', { ping: 1 })).toBe('')
   })
 
@@ -101,7 +101,7 @@ describe('per-minute totals', () => {
     const big = [{ blob: 'x'.repeat(100) }], small = [{ blob: '' }]
     // Results 1 and 5 are measured (two bigs), the rest are not even serialized: 2 × big over 2 samples, times 8 queries.
     const results = [big, small, small, small, big, small, small, small]
-    for (const r of results) s.record('SwarmGroup', 'findMany', { where: { tabId: 't' } }, 1, r)
+    for (const r of results) s.record('HarnessShare', 'findMany', { where: { tabId: 't' } }, 1, r)
     s.flush()
     expect(rows(infos[0]!)[0]!.bytes).toBe(JSON.stringify(big).length * 8)
   })
@@ -117,11 +117,11 @@ describe('per-minute totals', () => {
     const { s, infos } = stats({ sampleEvery: 1 })
     s.record('User', 'findUnique', { where: { id: '1' } }, 1, { id: '1' })
     s.record('User', 'findUnique', { where: { id: '2' } }, 1, null)
-    s.record(undefined, '$runCommandRaw', { aggregate: 'SwarmGroup', pipeline: [] }, 1, { cursor: { firstBatch: [{}, {}, {}] }, ok: 1 })
+    s.record(undefined, '$runCommandRaw', { aggregate: 'HarnessShare', pipeline: [] }, 1, { cursor: { firstBatch: [{}, {}, {}] }, ok: 1 })
     s.flush()
     const byOp = Object.fromEntries(rows(infos[0]!).map(r => [r.op, r]))
     expect(byOp['User.findUnique']!.docs).toBe(1)
-    expect(byOp['SwarmGroup.$runCommandRaw aggregate']!.docs).toBe(3)
+    expect(byOp['HarnessShare.$runCommandRaw aggregate']!.docs).toBe(3)
   })
 
   it('keeps a bounded number of keys per window and counts the rest under other', () => {
@@ -147,11 +147,11 @@ describe('per-minute totals', () => {
 describe('slow queries', () => {
   it('warns about a query at or over the threshold with its shape and route, never its values', () => {
     const { s, warns } = stats({ slowMs: 200 })
-    runWork('web-ws swarm_changes', () => s.record('SwarmGroup', 'findMany', { where: { tabId: 'tab-secret', title: { contains: 'payroll' } } }, 250, [{ title: 'payroll 2026' }]))
-    s.record('SwarmGroup', 'findMany', { where: { tabId: 'quick' } }, 199, [])
+    runWork('web-ws desk_changed', () => s.record('HarnessShare', 'findMany', { where: { tabId: 'tab-secret', title: { contains: 'payroll' } } }, 250, [{ title: 'payroll 2026' }]))
+    s.record('HarnessShare', 'findMany', { where: { tabId: 'quick' } }, 199, [])
     expect(warns).toHaveLength(1)
-    expect(warns[0]).toEqual({ message: 'slow query', context: { pod: 'pod-1', op: 'SwarmGroup.findMany', shape: '{"tabId":"?","title":{"contains":"?"}}',
-      route: 'web-ws swarm_changes', ms: 250, docs: 1, bytes: JSON.stringify([{ title: 'payroll 2026' }]).length, error: false } })
+    expect(warns[0]).toEqual({ message: 'slow query', context: { pod: 'pod-1', op: 'HarnessShare.findMany', shape: '{"tabId":"?","title":{"contains":"?"}}',
+      route: 'web-ws desk_changed', ms: 250, docs: 1, bytes: JSON.stringify([{ title: 'payroll 2026' }]).length, error: false } })
     expect(JSON.stringify(warns)).not.toMatch(/tab-secret|payroll/)
   })
 
@@ -247,8 +247,8 @@ describe('estimateBytes', () => {
 
   it('reports how many results a window estimated past the budget', () => {
     const { s, infos } = stats({ sampleEvery: 1, byteBudget: 1024 })
-    s.record('SwarmGroup', 'findMany', {}, 1, Array.from({ length: 100 }, () => ({ body: 'x'.repeat(100) })))
-    s.record('SwarmGroup', 'findMany', {}, 1, [])
+    s.record('HarnessShare', 'findMany', {}, 1, Array.from({ length: 100 }, () => ({ body: 'x'.repeat(100) })))
+    s.record('HarnessShare', 'findMany', {}, 1, [])
     s.flush()
     expect(infos[0]!.context).toMatchObject({ bytesCapped: 1 })
   })

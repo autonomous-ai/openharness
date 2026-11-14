@@ -40,13 +40,6 @@ const envSchema = z.object({
   // Per person and second, whatever agents or machines the calls name, so made-up ids cannot spend the minute's budget
   // at once. 200 agents polling once a second can land up to 400 in one second when polls arrive late: 500 is above it.
   ROUTE_RATE_LIMIT_PER_PERSON_SECOND: z.coerce.number().int().min(0).default(500),
-  // What each process keeps of the Swarms it read, by their stamps in Redis (superTabs/cache.ts). 'off' is the kill switch:
-  // every read goes to Mongo again, while writes still bump the stamps, so processes that keep theirs on stay right.
-  SWARM_READ_CACHE: z.enum(['on', 'off']).default('on'),
-  // The read cache patches what it holds from the parts that changed (superTabs/cache.ts, spec 2026-11-02); off: a bump drops it.
-  SWARM_CACHE_DELTA: z.enum(['on', 'off']).default('on'),
-  // The share of patches checked against a full load in the background: the drift alarm in the `swarm cache` log.
-  SWARM_CACHE_VERIFY_RATE: z.coerce.number().min(0).max(1).default(0.01),
   // A frame an adapter sends for one viewer goes to the process holding that viewer (lib/terminalRoute.ts), found by its
   // record in Redis, instead of to every process with a viewer of the machine. 'off' is the kill switch: such frames go
   // through the machine's channels again; a viewer on the adapter's own process is still served directly.
@@ -54,12 +47,6 @@ const envSchema = z.object({
   // `__clients` tells each daemon it may hold a machine's live events while no app views it (lib/hub.ts). 'off' is the
   // kill switch: the frame stops saying so, and daemons send every event again with no release of their own.
   RELAY_UI_GATE: z.enum(['on', 'off']).default('on'),
-  // Its size per process, counted as the JSON size of what it holds.
-  SWARM_CACHE_MB: z.string().default('64').transform(Number),
-  // The worker's hourly move of finished deliveries older than 14 days into their messages' receipts
-  // (superTabs/deliveryCompaction.ts). 'off' is the kill switch: set it before rolling back to a release whose pages do not
-  // read compacted receipts.
-  SWARM_DELIVERY_COMPACTION: z.enum(['on', 'off']).default('on'),
 
   // This backend instance's stable id (used to route manager-command replies via Redis in a
   // multi-instance deploy). Defaults to the pm2 instance index or a per-process fallback.
@@ -279,36 +266,15 @@ const envSchema = z.object({
   // key's OpenRouter credit limit stays the hard cap. Past it ⌘B says Harness's Jev budget has run out until the next UTC day.
   JEV_DAILY_DECISIONS: z.coerce.number().int().positive().default(200_000),
 
-  // Super Tab chat attachments (superTabs/attachments.ts). Clients upload through POST /api/super-tabs/:tabId/attachments,
-  // which streams each file into this GCS bucket (10 MB at most); everyone reads it through the public CDN. No bucket:
-  // uploads answer ATTACHMENTS_UNAVAILABLE and chat stays text only.
+  // Where the Swarm stored its files, read only by the removal of its data (lib/db/swarmDataRemoval.ts), and gone with it: the
+  // attachments bucket and its chat folder, the base64 of the service account JSON key that writes to it (empty: application
+  // default credentials, as Workload Identity), and the avatars' own bucket where there was one.
   SUPER_TAB_ATTACHMENTS_BUCKET: z.string().default(''),
-  // The base64 of the service account JSON key that writes to the bucket. Empty: application default credentials (Workload Identity, or GOOGLE_APPLICATION_CREDENTIALS). A value that
-  // is not base64 of such a key stops the backend at startup, with a message that never shows the value.
   SUPER_TAB_ATTACHMENTS_CREDENTIALS: z.string().default(''),
   SUPER_TAB_ATTACHMENTS_PREFIX: z.string().default('super-tabs'),
-  // Where clients read the files. https:// in production (superTabs/attachments.ts refuses anything else at startup).
-  SUPER_TAB_ATTACHMENTS_PUBLIC_BASE: z.string().url().default('https://cdn.harness.autonomous.ai'),
-  // A private bucket (no public read) for Swarm avatars, served only through signed links that expire. Unset: avatars go in
-  // the attachments bucket under avatars/ and are linked on its public CDN like chat files, links that never expire
-  // (docs/swarms.md). No attachments bucket either: avatar uploads are off.
   SUPER_TAB_AVATARS_BUCKET: z.string().default(''),
 
-  // The Harness GitHub App (github/app.ts, docs/swarm-github-app.md): a Swarm agent doing a task pushes and opens pull
-  // requests with a one-hour token for its project's repository alone. Both empty: off, and POST
-  // /api/super-tabs/:tabId/github-token answers GITHUB_APP_NOT_CONFIGURED. One without the other, or a key that cannot be
-  // read, stops the backend at startup with a message that never shows the key. The ID is the numeric App ID (or the
-  // Client ID); the key is the app's PEM private key as downloaded, with its line breaks as \n, or base64 of the file.
-  GITHUB_APP_ID: z.string().default(''),
-  GITHUB_APP_PRIVATE_KEY: z.string().default(''),
-  // The app's name in github.com/apps/NAME, for the install link a refusal gives. Optional.
-  GITHUB_APP_SLUG: z.string().default(''),
-  // The app's own GitHub sign-in (its Client ID and a client secret), with which a person who can push to a repository
-  // approves it for a Swarm (github/approvals.ts). Unset, no repository can be approved and the app gives no token.
-  GITHUB_APP_CLIENT_ID: z.string().default(''),
-  GITHUB_APP_CLIENT_SECRET: z.string().default(''),
-
-  // Phone push (push/keys.ts, task #2905): a thread reply or a tag reaches a phone whose app is closed. APNs for iPhones: the
+  // Phone push (push/keys.ts, task #2905): a notice reaches a phone whose app is closed. APNs for iPhones: the
   // Production key Apple generated in the developer account (the .p8 file, with its line breaks as \n, or base64 of it), its Key ID and
   // the Team ID; all three or none. FCM for Android: base64 of the Firebase service account's JSON key. Unset: that platform
   // gets no push, and each one skipped is counted and logged. A value that cannot be right stops the backend at startup, with
