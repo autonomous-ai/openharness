@@ -79,6 +79,10 @@ const CLOSED = 'The connection to Harness on this computer closed.'
 const DIAL_FIELDS = ['fw', 'hw', 'board', 'updating', 'problem'] as const
 // The app cuts the value to 128 characters, under 1 KiB as a JSON line even escaped: a longer line is no front line.
 const FRONT_LINE_MAX = 1024
+// The devices' listener takes ten fronts in any second on a connection, and the tells share one kept alive. Counted from
+// each answer, the listener has heard the tell before by then: a burst of changes (focus following the mouse) stays
+// within its ten, and the newest is not the one refused.
+const TELL_GAP_MS = 100
 
 /** One call per line of at most [max] bytes; a longer line is dropped whole, its start included. */
 function lines(max: number, line: (text: string) => void): (chunk: Buffer | string) => void {
@@ -118,18 +122,23 @@ export function runDialWatch(argv: string[], deps: DialWatchDeps): Promise<numbe
     // The app in front as an app id (the raw name stops in this process), the last one the devices' listener took, and
     // whether the current one is owed to it whatever it took before: a dial that attaches may come with a new devices process.
     let front: string | undefined, told: string | undefined, owed = false, telling = false
+    let gap: ReturnType<typeof setTimeout> | undefined
     const tell = deps.tell ?? (message => tellDevices(deps.dataDir ?? env.ADAPTER_DATA_DIR, message))
-    // One tell at a time, so the listener hears them in order and the newest last; the ones between are skipped.
+    // One tell at a time, so the listener hears them in order and the newest last; the ones between are skipped. Each is
+    // followed by a gap, and what came in it is told as it ends.
     const tellFront = (): void => {
-      if (settled || telling || front === undefined || (front === told && !owed)) return
+      if (settled || telling || gap || front === undefined || (front === told && !owed)) return
       const app = front
       telling = true
       owed = false
       void tell({ type: 'front', app }).then(taken => {
         telling = false
         if (taken) told = app
-        // A tell not taken is not tried again by itself: only a newer app in front, or the dial attaching, is told.
-        if (front !== app || owed) tellFront()
+        gap = setTimeout(() => {
+          gap = undefined
+          // A tell not taken is not tried again by itself: only a newer app in front, or the dial attaching, is told.
+          if (front !== app || owed) tellFront()
+        }, TELL_GAP_MS)
       })
     }
     const finish = (code: number, why?: string): void => {
@@ -137,6 +146,7 @@ export function runDialWatch(argv: string[], deps: DialWatchDeps): Promise<numbe
       settled = true
       if (why) deps.printError(why)
       clearTimeout(deadline)
+      clearTimeout(gap)
       deps.stdin.pause()
       try { socket?.close() } catch { /* already closed */ }
       resolve(code)

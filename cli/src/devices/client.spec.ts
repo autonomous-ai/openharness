@@ -303,8 +303,14 @@ const front = (run: ReturnType<typeof watch>, value: string) => run.stdin.emit('
 const told = (run: ReturnType<typeof watch>) => run.tell.mock.calls.map(([message]) => message)
 const apps = (run: ReturnType<typeof watch>) => told(run).map(message => message.app)
 const coreFrames = (run: ReturnType<typeof watch>) => run.socket.send.mock.calls.map(([data]) => JSON.parse(data).type)
-// One turn of the event loop, no time: every tell already answered has been seen by the watch.
-const turn = () => new Promise(resolve => setImmediate(resolve))
+// The pause the watch makes after each tell (client.ts): a change that comes in it is told as it ends.
+const TELL_GAP_MS = 100
+// One turn of the event loop, then the pause: every tell already answered has been seen by the watch, and what came
+// since is told.
+const turn = async () => {
+  await new Promise(resolve => setImmediate(resolve))
+  await vi.advanceTimersByTimeAsync(TELL_GAP_MS)
+}
 /** A devices listener that answers only when the test says, one tell at a time. */
 function heldListener() {
   const answers: ((taken: boolean) => void)[] = []
@@ -313,6 +319,8 @@ function heldListener() {
 }
 
 describe('harness hardware watch: the app in front', () => {
+  // The event loop's turns stay real: only the watch's own timers are the test's.
+  beforeEach(() => { vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }) })
   it('a front line is told to the devices listener as an app id', async () => {
     const run = watch()
     await opened(run.socket)
@@ -357,6 +365,7 @@ describe('harness hardware watch: the app in front', () => {
   it("nothing of the app in front goes on the core's socket", async () => {
     const run = watch()
     front(run, 'com.mitchellh.ghostty')
+    await turn()
     await opened(run.socket)
     // A daemon that still names the old door is sent nothing through it.
     connected(run.socket, ['openclaw-local', 'dial-watch', 'dial-front'])
