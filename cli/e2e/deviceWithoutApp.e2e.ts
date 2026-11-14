@@ -223,14 +223,18 @@ describe('the device without the app', () => {
     const engine = await startOutside(d, 'in-orca', { ORCA_AGENT_SESSION_ID: 'e2e-orca-session' })
     await showing(dial, 'the agent listed', (r) => ids(r).includes(engine.id))
     const since = dial.messages.length
-    // It asks the person's permission to run a command, as Claude Code does in a turn: its Notification hook says so.
+    // It asks the person's permission to run a command, as Claude Code does in a turn: its Notification hook says so once
+    // the prompt has waited 6 s.
     engine.type('!permit printf hi')
     await until('its Notification hook to run', () => engine.ran(d, 'Notification'), 30_000, 100)
     await heard(dial, (m) => (m.t === 'turn.started' || m.t === 'turn.activity') && m.agentId === engine.id && m.text === 'Waiting for you · Orca',
       'the waiting line', since)
-    // Allowed in its own terminal, the turn goes on to its end.
+    // Allowed in its own terminal: the line goes, and the turn goes on to its end.
+    const answered = dial.messages.length
     engine.type('')
-    await heard(dial, (m) => m.t === 'turn.done' && m.agentId === engine.id, 'its turn done', since)
+    await heard(dial, (m) => m.agentId === engine.id && (m.t === 'turn.done' || ((m.t === 'turn.started' || m.t === 'turn.activity') && m.text === '')),
+      'the waiting line gone', answered)
+    await heard(dial, (m) => m.t === 'turn.done' && m.agentId === engine.id, 'its turn done', answered)
   })
 
   it('it disappears when its process exits', async () => {
