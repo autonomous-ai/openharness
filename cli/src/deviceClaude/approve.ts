@@ -96,9 +96,10 @@ function terminalOnly(tool: string, input: unknown): boolean {
     const lines = target.split(/[\r\n]/).map((line) => line.trim()).filter(Boolean)
     return lines.length !== 1 || Buffer.byteLength(lines[0]) > MAX_SUMMARY_BYTES || /[^\x20-\x7e\r\n]/.test(target)
   }
-  // A host in other letters arrives as punycode (xn--…): ASCII, but not the name the person would read.
-  return !target || Buffer.byteLength(target) > MAX_SUMMARY_BYTES || /[^\x20-\x7e]/.test(target)
-    || (tool === 'WebFetch' && /(^|\.)xn--/.test(target))
+  // A host in other letters arrives as punycode (xn--…): ASCII, but not the name the person would read. The card trims a
+  // path, so " /x" would read "/x" while the tool acts on " /x".
+  return !target || target !== target.trim() || Buffer.byteLength(target) > MAX_SUMMARY_BYTES
+    || /[^\x20-\x7e]/.test(target) || (tool === 'WebFetch' && /(^|\.)xn--/.test(target))
 }
 
 /** The card's one line under "Allow <tool>?": what the tool acts on, or its name when the input does not say. */
