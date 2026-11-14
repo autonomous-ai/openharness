@@ -109,8 +109,9 @@ export interface DaemonOptions {
 
 /** The port a daemon is configured with: its `PORT`, which names its socket, its record and its artifacts. It is free
  *  when picked and closed before the daemon binds it, so another process can take it first (cli-e2e run 43568618113,
- *  shard 2). That is harmless: the daemon then listens on another port and says which, and the harness reads that one
- *  (`listeningPort`). */
+ *  shard 2). For a daemon with a socket that is harmless: it then listens on another port and says which, and the
+ *  harness reads that one (`listeningPort`). One with no socket cannot move (hookServer.ts) and fails to start
+ *  (noSocket.e2e.ts's first case). */
 async function freePort(): Promise<number> {
   const server = createServer()
   await new Promise<void>((done) => server.listen(0, '127.0.0.1', done))
