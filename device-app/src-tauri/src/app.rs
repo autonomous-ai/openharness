@@ -697,6 +697,25 @@ mod tests {
     }
 
     #[test]
+    fn a_sign_in_that_finishes_just_after_cancel_signed_in() {
+        let mut app = on_sign_in();
+        app.handle(Event::Act(Action::SignIn));
+        app.handle(login(LoginEvent::AuthorizeUrl("https://id.example/a".into())));
+        app.handle(Event::Act(Action::Cancel));
+        let effects = app.handle(login(LoginEvent::Done(Ok(()))));
+        assert!(has(&effects, &Effect::ReadAuth));
+        assert!(has(&effects, &Effect::Save(Saved { asked_sign_in: true, ..SEEN })));
+        assert!(rows(&effects).contains(&"Signed in".to_string()));
+        assert_eq!(shows(&effects), [shown(Screen::Claude, Phase::Offer, &[])]);
+
+        // One that went with its CLI signed in no CLI that is here.
+        let mut app = on_sign_in();
+        app.handle(Event::Act(Action::SignIn));
+        app.handle(Event::Cli(false));
+        assert!(app.handle(login(LoginEvent::Done(Ok(())))).is_empty());
+    }
+
+    #[test]
     fn later_and_not_now_are_remembered() {
         let mut app = on_sign_in();
         let later = Saved { asked_sign_in: true, ..SEEN };
