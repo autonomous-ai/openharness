@@ -311,97 +311,6 @@ void main() {
       expect(rig.app.currentUser, isNull);
     });
 
-    group('the account this sign-in last said it was', () {
-      test('a first launch knows nobody until the account says', () async {
-        final rig = viewerApp();
-        addTearDown(rig.app.dispose);
-        final profile = Completer<Map<String, dynamic>?>();
-        rig.api.onProfile = () => profile.future;
-
-        await rig.app.bootstrap();
-
-        expect(rig.app.swarmAccountId, isNull);
-        expect(rig.app.accountReading, isTrue);
-
-        profile.complete(rig.api.profile);
-        await settle();
-
-        expect(rig.app.swarmAccountId, 'u1');
-        expect(await rig.app.session.accountId(), 'u1');
-        expect(rig.app.accountReading, isFalse);
-      });
-
-      test('the next launch has it before the account answers', () async {
-        final rig = viewerApp();
-        addTearDown(rig.app.dispose);
-        await rig.app.session.saveAccountId('u1');
-        final seen = <String?>[];
-        rig.app.addListener(() {
-          if (rig.app.status == AppStatus.authenticated) {
-            seen.add(rig.app.swarmAccountId);
-          }
-        });
-        final profile = Completer<Map<String, dynamic>?>();
-        rig.api.onProfile = () => profile.future;
-
-        await rig.app.bootstrap();
-
-        expect(rig.app.currentUser, isNull);
-        expect(rig.app.swarmAccountId, 'u1');
-        expect(rig.app.accountReading, isFalse);
-        expect(seen.first, 'u1', reason: 'from the first frame of the shell');
-      });
-
-      test('the account naming another wins, and is what the next launch '
-          'reads', () async {
-        final rig = viewerApp();
-        addTearDown(rig.app.dispose);
-        await rig.app.session.saveAccountId('u1');
-        final profile = Completer<Map<String, dynamic>?>();
-        rig.api.onProfile = () => profile.future;
-
-        await rig.app.bootstrap();
-        profile.complete({
-          'user': {'id': 'u2', 'email': 'other@example.com'},
-        });
-        await settle();
-
-        expect(rig.app.swarmAccountId, 'u2');
-        expect(await rig.app.session.accountId(), 'u2');
-      });
-
-      test('is no one once signed out, and a late profile brings it not '
-          'back', () async {
-        final rig = viewerApp();
-        addTearDown(rig.app.dispose);
-        await rig.app.session.saveAccountId('u1');
-        final profile = Completer<Map<String, dynamic>?>();
-        rig.api.onProfile = () => profile.future;
-
-        await rig.app.bootstrap();
-        await rig.app.session.clear();
-        await rig.app.logout();
-        profile.complete(rig.api.profile);
-        await settle();
-
-        expect(rig.app.swarmAccountId, isNull);
-        expect(await rig.app.session.accountId(), isNull);
-      });
-
-      test('names no one while the app is not signed in', () async {
-        final rig = viewerApp();
-        addTearDown(rig.app.dispose);
-        await rig.app.session.saveAccountId('u1');
-        rig.api.onProfile = () => Completer<Map<String, dynamic>?>().future;
-
-        await rig.app.bootstrap();
-        expect(rig.app.swarmAccountId, 'u1');
-        rig.app.status = AppStatus.unauthenticated;
-
-        expect(rig.app.swarmAccountId, isNull);
-      });
-    });
-
     test('a profile that cannot be read leaves the app signed in', () async {
       final rig = viewerApp();
       addTearDown(rig.app.dispose);
@@ -601,7 +510,7 @@ void main() {
         async.flushMicrotasks();
         expect(rig.api.profileReads, 1);
         expect(rig.app.status, AppStatus.authenticated);
-        expect(rig.app.accountReading, isTrue);
+        expect(rig.app.currentUser, isNull);
 
         async.elapse(const Duration(seconds: 4));
         expect(rig.api.profileReads, 1);
@@ -611,14 +520,13 @@ void main() {
         expect(rig.api.profileReads, 2);
         async.elapse(const Duration(seconds: 1));
         expect(rig.api.profileReads, 3, reason: '10 seconds after that');
-        expect(rig.app.accountReading, isTrue);
+        expect(rig.app.currentUser, isNull);
         expect(log.errors, [failure], reason: 'once, not once per read');
 
         rig.api.onProfile = null;
         async.elapse(const Duration(seconds: 20));
         expect(rig.api.profileReads, 4, reason: '20 seconds after that');
         expect(rig.app.currentUser, isNotNull);
-        expect(rig.app.accountReading, isFalse);
 
         async.elapse(const Duration(minutes: 5));
         expect(rig.api.profileReads, 4, reason: 'read: nothing asks again');
@@ -653,7 +561,7 @@ void main() {
 
         rig.app.bootstrap();
         async.flushMicrotasks();
-        expect(rig.app.accountReading, isTrue);
+        expect(rig.app.currentUser, isNull);
         expect(rig.app.lastError, isNull);
         async.elapse(const Duration(seconds: 5));
         expect(rig.api.profileReads, 2);
@@ -672,7 +580,6 @@ void main() {
         rig.app.logout();
         async.flushMicrotasks();
         final reads = rig.api.profileReads;
-        expect(rig.app.accountReading, isFalse, reason: 'nobody signed in');
         async.elapse(const Duration(minutes: 5));
         expect(rig.api.profileReads, reads);
         rig.app.dispose();

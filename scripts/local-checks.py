@@ -187,7 +187,7 @@ def host_platform():
 
 def run_command(name):
     """The command --run runs for CHECKS[name]: its own, and for the Desktop suite the budget the docs give a slower
-    Mac. Vitest suites size their own workers to their Swarm agent's share of the cores (cli/src/testing/suiteWorkers.ts),
+    Mac. Vitest suites size their own workers to their agent's share of the cores (cli/src/testing/suiteWorkers.ts),
     which a --maxWorkers would override."""
     command = CHECKS[name]["command"]
     return command + ' ARGS="--timeout 3600"' if "resources" in CHECKS[name] else command

@@ -52,11 +52,6 @@ COMPONENTS = {"cli": "cli", "tests": "cli", "desktop": "desktop", "tui": "tui", 
 # only reads is in DEPENDS.
 ALSO = {"cli/src/lib/ptyHost/": "pty", "cli/src/lib/ptyHostBackend": "pty",
         "cli/src/lib/terminalBackend.contract.ts": "pty", "tui/vendor/": "pty", "term/": "tui"}
-# Each Swarm UI style allowlist is checked by its own component's job (check-ui-style.py --only), so
-# it is that component's input: a PR or main commit that changes it runs (never reuses) that suite.
-# Any other file in scripts/ui-style-allowlist/ stays a shared input.
-STYLE_ALLOWLISTS = {"scripts/ui-style-allowlist/desktop.json": "desktop", "scripts/ui-style-allowlist/mobile.json": "mobile"}
-ALSO.update(STYLE_ALLOWLISTS)
 # The Desktop VM runner and the measured file times it splits the shards by (task #3458): a change to either runs those
 # shards, so a split that runs short cannot merge on process checks alone.
 ALSO.update({"scripts/test-desktop.py": "desktop", "scripts/desktop-test-durations.json": "desktop"})
@@ -77,7 +72,6 @@ DEPENDS = {
                 "cli/src/lib/superTabAttachmentProxy.ts", "cli/src/superTabs/attachments.ts", "cli/src/superTabs/command.ts",
                 "daemons/frames.json",
                 "desktop/lib/measurement/", "desktop/lib/super_tabs/attachment_upload.dart", "mobile/lib/measurement/",
-                "mobile/integration_test/push_e2e/reply_push.apns", "mobile/lib/swarm/swarm_outgoing_files.dart",
                 "provider/reference-provider/", "tests/fixtures/"),
     # CLAUDE.md: agentInstructions.spec.ts expects '../../../CLAUDE.md' in a temporary project, and a relative path always
     # counts as a read; the repository's own CLAUDE.md is a one-line pointer that rarely changes.
@@ -122,7 +116,6 @@ PR_READS = {
                 "cli/src/lib/superTabAttachmentProxy.ts", "cli/src/superTabs/attachments.ts", "cli/src/superTabs/command.ts",
                 "daemons/frames.json",
                 "desktop/lib/measurement/", "desktop/lib/super_tabs/attachment_upload.dart", "mobile/lib/measurement/",
-                "mobile/integration_test/push_e2e/reply_push.apns", "mobile/lib/swarm/swarm_outgoing_files.dart",
                 "provider/reference-provider/", "tests/fixtures/"),
     # CLAUDE.md: agentInstructions.spec.ts expects '../../../CLAUDE.md' in a temporary project, and a relative path always
     # counts as a read; the repository's own CLAUDE.md is a one-line pointer that rarely changes.
@@ -164,8 +157,7 @@ PR_READS = {
                 "mobile/lib/ws/terminal_transport_plugin.dart", "mobile/pubspec.lock", "store/",
                 "tests/fixtures/shared-pane-layouts.json",
                 "website/scripts/harness-web-assets.mjs", "website/scripts/precompress.mjs"),
-    # The desktop files the phone's tests read: the Swarm models the phone carries as copies or must parse alike
-    # (swarm/desktop_parity_test.dart), the words and helpers its other tests compare; a desktop-only change to one once
+    # The desktop files the phone's tests read: the words and helpers its tests compare; a desktop-only change to one once
     # failed only in a batch, two batches later (River, 2026-11-03). test_ci_plan's
     # test_every_desktop_file_the_phone_tests_read_selects_mobile scans mobile/test and fails on one missing here.
     "mobile": ("backend/src/types/productHealthContract.ts", "backend/src/types/productUsage.ts", "cli/src/engines/",
@@ -173,9 +165,7 @@ PR_READS = {
                "cli/src/lib/productUsageSignals.ts", "cli/src/lib/relayFrames.ts", "cli/src/lib/shellProtocol.ts",
                "cli/src/lib/viewerFrames.ts", "cli/src/messages/wire.ts", "cli/src/sharing/protocol.ts",
                "daemons/banner.json", "daemons/frames.json", "daemons/plates.json", "daemons/roster.json",
-               *(f"desktop/lib/{path}" for path in (
-                   "super_tabs/model.dart", "super_tabs/controller.dart", "super_tabs/parts.dart", "super_tabs/profile_model.dart",
-                   "widgets/engine_identity.dart", "screens/swarm_screen.dart")),
+               "desktop/lib/widgets/engine_identity.dart",
                "docs/performance/"),
     # pty-checks also runs the CLI's ptyhost contract, which imports CLI code.
     # os-checks reads the CLI's dial ids (cli/src/cable/serial.ts), its version and the TUI it packages;
@@ -299,8 +289,6 @@ def inert(path):
 
 def shared_input(path):
     """Why a changed path invalidates every suite, or None."""
-    if path in STYLE_ALLOWLISTS:
-        return None
     if path.startswith(SHARED_PREFIXES) or path in SHARED_FILES:
         return "workflow, CI script, merge tool or repository setting"
     if PurePosixPath(path).name in LOCKS_AND_TOOLCHAINS:
@@ -340,8 +328,7 @@ def update_parents(root, head, base):
 def own_shared_change(root, head, base):
     """A shared input this PR itself changes (its own CI runs its own planner), or None."""
     own = changed_paths(root, git(root, "merge-base", base, head), head)
-    return next((path for path in own if (path.startswith(SHARED_PREFIXES) or path in SHARED_FILES)
-                 and path not in STYLE_ALLOWLISTS), None)
+    return next((path for path in own if path.startswith(SHARED_PREFIXES) or path in SHARED_FILES), None)
 
 
 def reuse_blocker(root, suite, origin, head):

@@ -10,7 +10,7 @@ import 'package:share_plus/share_plus.dart';
 import 'package:video_player/video_player.dart';
 
 import 'phone_edge/edge_fixture.dart';
-import 'swarm/picture_loads.dart';
+import 'picture_loads.dart';
 
 /// A picture or video an agent printed, downloaded and shown in the app — the page a tap on a
 /// terminal's media link opens. Real files in a temporary folder, a share sheet and a player that
