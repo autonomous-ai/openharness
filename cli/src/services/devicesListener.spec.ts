@@ -204,6 +204,29 @@ describe.skipIf(process.platform === 'win32')('the devices listener', () => {
       await partway.read
     })
 
+    // Node checks a request's headers and body against their timeouts only every 30 s, and keeps a connection idle after
+    // its answer 5 s and a second: measured at 30 s and 6 s.
+    it('a connection that sends a byte at a time, or kept alive sends nothing after its answer, is closed after the timeout', { timeout: 10_000 }, async () => {
+      const { path } = await open({ front: frontHandler(() => {}) })
+      const started = performance.now()
+      const message = post(frontBody('ghostty'))
+      const trickling = bare(path, message[0]!)
+      let sent = 1
+      // 17 s for the whole message.
+      const drip = setInterval(() => { if (!trickling.socket.destroyed && sent < message.length) trickling.socket.write(message[sent++]!) }, 200)
+      const kept = bare(path, message)
+      try {
+        const answer = await kept.read
+        expect(answer).toMatch(/^HTTP\/1\.1 204 /)
+        // What a Node client reads to let go of an idle connection a second before that.
+        expect(answer).toMatch(/\r\nKeep-Alive: timeout=2\r\n/)
+        expect(await trickling.read).toBe('')
+      } finally {
+        clearInterval(drip)
+      }
+      expect(performance.now() - started).toBeLessThan(4_000)
+    })
+
     it('the 17th connection at once is closed, and the 16 go on', async () => {
       const { path } = await open({ front: frontHandler(() => {}) })
       const sixteen = Array.from({ length: LISTENER_MAX_CONNECTIONS }, () => connection(path))
