@@ -185,6 +185,9 @@ open.
    (Codex has no hook for it; Claude Code's is a few hundred ms behind, and the transcript check can clear a wait early),
    and text with Enter would answer it. So with no mod, a working agent is refused ("<name> is busy. Say it when it is
    done.") and a waiting one too ("<name> is waiting for your answer in {Host}."). The dial never approves anything.
+   Idle is only trusted where it can be known: for Claude Code and Codex from their own turn state (as the scan and the
+   transcript check read it), for any other engine only after a hook said its turn ended (a turn-stop, or a
+   session-start after one). An agent of another engine the scan found, with no such hook yet, is told busy.
 2. To the mod when its session has a poll open, or opens one within 5 s: the text is the answer to that poll, and that is
    "sent" (the mod sends no acknowledgement). No poll in 5 s: "<name> did not answer."
 3. Else to Orca (`orca terminal send … --enter --wait-submit 5`).
