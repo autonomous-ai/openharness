@@ -2603,6 +2603,8 @@ export class CableSession {
 
   /** A background restore already walking the list, so a second trigger joins it rather than racing it. */
   private restoring = false
+  /** A trigger that found a walk running: the ring may have changed under it, so it walks again once it ends. */
+  private restoreAgain = false
 
   async pushRestores(): Promise<void> {
     // READ FIRST, QUEUE SECOND, and the split is the whole point. A remote agent's history is a cloud
@@ -2623,7 +2625,11 @@ export class CableSession {
     }
     if (!rows.length) return
     return this.queued(async () => {
+      // The ring can have moved while the reads were out. A tile the dial no longer holds would drop its recaps, so it
+      // is not sent and not marked: the push that brings it back restores it.
+      const held = new Set(this.lastRing)
       for (const row of rows) {
+        if (!held.has(row.id)) { this.restored.delete(row.id); continue }
         // Oldest first, so the newest ends up on top of the tile's stack.
         for (const s of [...row.past].reverse()) {
           if (!s.recap && !s.text) continue
@@ -2641,11 +2647,15 @@ export class CableSession {
    * no beep, no notification — so nothing about it is worth a second of staring at the old tile.
    */
   private restoreInBackground(): void {
-    if (this.restoring) return
+    if (this.restoring) { this.restoreAgain = true; return }
     this.restoring = true
+    this.restoreAgain = false
     void this.pushRestores()
       .catch((err) => this.log(`cable: restores failed (${(err as Error).message})`))
-      .finally(() => { this.restoring = false })
+      .finally(() => {
+        this.restoring = false
+        if (this.restoreAgain) this.restoreInBackground()
+      })
   }
 
   /** Attach: tell the dial everything, whether or not any of it looks unchanged from here. */
@@ -2663,6 +2673,8 @@ export class CableSession {
       await this.syncPlayerLibrary(true)
     } finally {
       this.restoring = false
+      // The walk below covers the ring those pushes sent.
+      this.restoreAgain = false
     }
     await this.pushRestores()
     // …and the drawer, which is the one thing a dial that has just greeted us is KNOWN to have lost:
