@@ -4,7 +4,7 @@ Harness runs Swarms: people bring their own agents (Claude Code, Codex and the r
 computers, and a Product Manager agent directs them to build one repository; another agent reads every change, and it is
 tested before it lands. What we build and what we don't: [docs/product.md](docs/product.md).
 
-Each component has its own AGENTS.md (`cli/`, `desktop/`, `backend/`, `mobile/`): read it before changing that component.
+Each component has its own AGENTS.md (`cli/`, `desktop/`, `backend/`, `mobile/`, `device-app/`): read it before changing that component.
 
 # Scope
 
