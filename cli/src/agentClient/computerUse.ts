@@ -14,12 +14,13 @@
  * OpenCode's own config (below): a harness running already gets them when it restarts. The person's phone does the same (services/osDevice.ts `computer_use`). An agent may
  * not: a server runs inside every later agent.
  */
-import { execFile, execFileSync } from 'node:child_process'
+import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { env } from '../config/env.js'
 import { MACHINE_MCP_MOST_SERVERS, readMachineMcp, writeMachineMcp, type MachineMcpServer, type MachineMcpServers } from '../lib/machineMcp.js'
+import { execFileTied } from '../lib/tied.js'
 import { outsideCaller } from './model.js'
 
 export const PLAYWRIGHT_MCP = '/usr/lib/harness-os/playwright-mcp/node_modules/@playwright/mcp/cli.js'
@@ -90,8 +91,9 @@ export function machineOpencode(environment: NodeJS.ProcessEnv = process.env, ho
       } catch { return null }
     },
     reload: () => {
-      // Its service picks the change up now; a failure only leaves it to the next start.
-      execFile('opencode', ['reload'], { timeout: 30_000 }, () => {})
+      // Its service picks the change up now; a failure only leaves it to the next start. Tied, so a crash of the
+      // service that asked leaves no reload running; OpenCode 2's reload is one HTTP call and reads no stdin.
+      void execFileTied('opencode', ['reload'], { timeout: 30_000 }).catch(() => {})
     },
   }
 }
