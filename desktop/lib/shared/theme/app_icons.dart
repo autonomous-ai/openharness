@@ -11,10 +11,6 @@ abstract final class AppIcons {
   static const double controlSize = 20;
   static const double featureSize = 24;
 
-  /// Dense pane actions and metadata beside 12pt text, as the icon design
-  /// system's 14pt role.
-  static const double metadataSize = 14;
-
   /// The close mark in tabs and pane headers, inside the full click target.
   /// 14: its stroke matches the 13pt regular text beside it (1.1pt, measured),
   /// as the native tab's × takes the title's size and weight.
@@ -67,10 +63,6 @@ abstract final class AppIcons {
   static const circleMinus = LucideIcons.circleMinus400;
   static const circlePlus = LucideIcons.circlePlus400;
   static const circleSlash = LucideIcons.circleSlash400;
-
-  /// The Lead choice in New agent: a person in a ring, as a Lead wears its
-  /// gold ring; the crown is only the leaderboard's number one (task #4461).
-  static const circleUser = LucideIcons.circleUser400;
   static const circleX = LucideIcons.circleX400;
   static const clipboardPaste = LucideIcons.clipboardPaste400;
   static const clock = LucideIcons.clock400;
@@ -120,7 +112,6 @@ abstract final class AppIcons {
   static const gamepad2 = LucideIcons.gamepad2400;
   static const gauge = LucideIcons.gauge400;
   static const gitBranch = LucideIcons.gitBranch400;
-  static const gitPullRequest = LucideIcons.gitPullRequest400;
   static const globe = LucideIcons.globe400;
   static const hand = LucideIcons.hand400;
   static const heart = LucideIcons.heart400;
@@ -149,9 +140,7 @@ abstract final class AppIcons {
   static const messageCircleQuestionMark =
       LucideIcons.messageCircleQuestionMark400;
   static const messagesSquare = LucideIcons.messagesSquare400;
-  static const messageSquare = LucideIcons.messageSquare400;
   static const messageSquareText = LucideIcons.messageSquareText400;
-  static const mic = LucideIcons.mic400;
   static const minimize = LucideIcons.minimize400;
   static const minus = LucideIcons.minus400;
   static const monitor = LucideIcons.monitor400;
@@ -201,8 +190,6 @@ abstract final class AppIcons {
   static const sparkles = LucideIcons.sparkles400;
   static const square = LucideIcons.square400;
   static const squareCheck = LucideIcons.squareCheck400;
-  static const crown = LucideIcons.crown400;
-  static const squareKanban = LucideIcons.squareKanban400;
   static const squarePlus = LucideIcons.squarePlus400;
   static const squareTerminal = LucideIcons.squareTerminal400;
   static const star = LucideIcons.star400;
@@ -212,16 +199,12 @@ abstract final class AppIcons {
   static const terminal = LucideIcons.terminal400;
   static const trash2 = LucideIcons.trash2400;
   static const triangleAlert = LucideIcons.triangleAlert400;
-  static const trophy = LucideIcons.trophy400;
   static const type = LucideIcons.type400;
   static const undo2 = LucideIcons.undo2400;
   static const unlink = LucideIcons.unlink400;
   static const unplug = LucideIcons.unplug400;
   static const user = LucideIcons.user400;
   static const users = LucideIcons.users400;
-
-  /// Invite people, under a Swarm's name in its left pane.
-  static const userPlus = LucideIcons.userPlus400;
   static const waypoints = LucideIcons.waypoints400;
   static const wrapText = LucideIcons.wrapText400;
 }

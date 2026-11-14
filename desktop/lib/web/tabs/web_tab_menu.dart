@@ -143,9 +143,7 @@ List<Widget> webTabMenuRows(
           PaneMenuRow(
             selected: tab.id == app.activeSwarmId,
             title: tab.name,
-            status:
-                tabWaitingLabel(app, tab) ??
-                _statusLabel(tabActivity(app, tab)),
+            status: _statusLabel(tabActivity(app, tab)),
           ),
         )
       else
@@ -158,9 +156,7 @@ List<Widget> webTabMenuRows(
             selected: tab.id == app.activeSwarmId,
             title:
                 '${app.numberedSwarms.indexOf(tab) + 1}:${names[tab.id] ?? tab.name}',
-            status:
-                tabWaitingLabel(app, tab) ??
-                _statusLabel(tabActivity(app, tab)),
+            status: _statusLabel(tabActivity(app, tab)),
           ),
         ),
     // This tab's sharing with other accounts (1c) and its Agent Messages, as

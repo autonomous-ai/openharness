@@ -8,7 +8,6 @@ import '../core/runtime_platform.dart';
 import '../logging/app_log.dart';
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
-import '../shared/theme/swarm_layout.dart';
 import '../shared/widgets/app_icon_button.dart';
 import '../state/app_state.dart';
 import '../widgets/desktop_chrome.dart';
@@ -425,16 +424,13 @@ class _BrowserPanelState extends State<BrowserPanel> {
     grid.AppTheme.watch(context);
     return ColoredBox(
       key: const ValueKey('swarm-browser-panel'),
-      // The Swarm's one ground, beside the chat or in its place (design system, One surface).
       color: grid.AppPalette.swarmField,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Container(
             height: 52,
-            padding: const EdgeInsets.symmetric(
-              horizontal: SwarmLayout.barSide,
-            ),
+            padding: const EdgeInsets.symmetric(horizontal: 20),
             decoration: BoxDecoration(
               border: Border(bottom: BorderSide(color: DesktopChrome.rim)),
             ),

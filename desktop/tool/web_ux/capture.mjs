@@ -13,8 +13,7 @@
 // falls back to for missing glyphs in production too, is let through.
 // Run from desktop/ with PLAYWRIGHT_DIR set (see playwright.mjs). CHROME_PATH
 // uses an already-installed Chromium; WIDTHS=360,1440 captures only some widths
-// (separate runs can go in parallel); FIXTURE=super-tab captures the Super Tab
-// flows from a build of tool/super_tab_mobile_fixture.dart.
+// (separate runs can go in parallel).
 import { chromium, devices } from './playwright.mjs';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -137,8 +136,7 @@ async function shoot(context, origin, flow, viewport, theme, outDir) {
 
 async function main() {
   const [buildDir, outDir, ...only] = process.argv.slice(2);
-  const fixture = process.env.FIXTURE ?? 'app';
-  const all = await loadFlows(fixture);
+  const all = await loadFlows();
   const flows = only.length ? all.filter((f) => only.includes(f.name)) : all;
   const server = await serve(buildDir);
   const origin = server.origin;
@@ -157,7 +155,7 @@ async function main() {
       await context.close();
     }
   }
-  const tag = `${fixture === 'app' ? '' : `-${fixture}`}${widths ? `-${widths.join('-')}` : ''}`;
+  const tag = widths ? `-${widths.join('-')}` : '';
   writeFileSync(join(outDir, `captures${tag}.json`), JSON.stringify(results, null, 2));
   writeFileSync(join(outDir, `blocked${tag}.json`), JSON.stringify([...blocked], null, 2));
   await browser.close();

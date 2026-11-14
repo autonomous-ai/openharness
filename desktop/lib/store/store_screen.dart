@@ -23,7 +23,7 @@ import '../shortcuts/app_keymap.dart';
 import '../shortcuts/keymap.dart';
 import '../state/app_state.dart';
 import '../state/essential_harness_controller.dart';
-import '../super_tabs/visible_tick.dart';
+import '../widgets/visible_tick.dart';
 import '../widgets/dsh_install_panel.dart' show describeInstallFailure;
 import '../widgets/engine_identity.dart';
 import '../widgets/new_agent_dialog.dart';

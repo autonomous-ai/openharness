@@ -15,7 +15,6 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/terminal_pane.dart';
 import 'package:harness/state/workspace_chrome.dart';
-import 'package:harness/web/shell/web_new_menu.dart';
 import 'package:harness/web/shell/web_chrome.dart';
 import 'package:harness/web/tabs/web_tab_menu.dart';
 import 'package:harness/widgets/desktop_workspace_tab.dart';
@@ -306,7 +305,7 @@ void main() {
     await _workspace(tester, _phone);
     await _openAppMenu(tester);
 
-    for (final row in ['swarm.new', 'super_tab.new', 'app.store', 'web.more']) {
+    for (final row in ['swarm.new', 'app.store', 'web.more']) {
       expect(
         _target(tester, ValueKey('web-menu:$row')).height,
         greaterThanOrEqualTo(_finger),
@@ -320,10 +319,7 @@ void main() {
     await _workspace(tester, _computer);
     await _openAppMenu(tester);
 
-    expect(
-      _target(tester, const ValueKey('web-menu:super_tab.new')).height,
-      32,
-    );
+    expect(_target(tester, const ValueKey('web-menu:swarm.new')).height, 32);
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
@@ -466,57 +462,4 @@ void main() {
     expect(_target(tester, const Key('settings-back-button')).height, 38);
     await tester.pumpWidget(const SizedBox.shrink());
   });
-
-  for (final size in [_phone, _computer]) {
-    testWidgets('New Swarm in the menu runs what Alt+S runs at ${size.width}', (
-      tester,
-    ) async {
-      final app = _app();
-      final ran = <String>[];
-      _size(tester, size);
-      await tester.pumpWidget(
-        MaterialApp(
-          theme: grid.buildAppTheme(brightness: Brightness.dark),
-          home: Scaffold(
-            body: Align(
-              alignment: Alignment.topLeft,
-              child: WebNewMenuButton(
-                app: app,
-                commands: WorkspaceCommands(
-                  enabled: () => true,
-                  canRun: (_) => true,
-                  run: ran.add,
-                ),
-              ),
-            ),
-          ),
-        ),
-      );
-      await _openAppMenu(tester);
-      expect(find.text('New Swarm'), findsOneWidget);
-
-      await tester.tap(find.byKey(const ValueKey('web-menu:super_tab.new')));
-      await tester.pump(const Duration(milliseconds: 100));
-
-      // super_tab.new is the command Alt+S is bound to (keymap_host_test).
-      expect(ran, ['super_tab.new']);
-      await tester.pumpWidget(const SizedBox.shrink());
-    });
-
-    testWidgets('New Swarm in the menu opens a new Swarm at ${size.width}', (
-      tester,
-    ) async {
-      final app = await _workspace(tester, size);
-      final tabs = app.swarms.length;
-
-      await _openAppMenu(tester);
-      await tester.tap(find.byKey(const ValueKey('web-menu:super_tab.new')));
-      await tester.pump(const Duration(milliseconds: 200));
-
-      expect(app.swarms, hasLength(tabs + 1));
-      expect(app.activeSwarm.isSuperTab, isTrue);
-      expect(tester.takeException(), isNull);
-      await tester.pumpWidget(const SizedBox.shrink());
-    });
-  }
 }

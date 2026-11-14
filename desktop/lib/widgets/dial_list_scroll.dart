@@ -3,8 +3,8 @@ import 'dart:math' as math;
 
 import 'package:flutter/widgets.dart';
 
-/// The dial's drag on a conversation list (a cloud harness's pane, a Swarm's
-/// chat), as it scrolls a terminal: the same scale, speed and fling decay as
+/// The dial's drag on a conversation list (a cloud harness's pane), as it
+/// scrolls a terminal: the same scale, speed and fling decay as
 /// terminal_panel.dart. A positive dy shows earlier lines, here older messages,
 /// whichever way the list runs: a reversed list's offset grows toward them, a
 /// forward one's shrinks, so the sign follows the list to keep the direction on

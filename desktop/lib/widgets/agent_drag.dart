@@ -6,7 +6,6 @@ import '../shared/theme/app_pane_icon.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../theme/app_theme.dart';
 import '../shortcuts/app_keymap.dart';
-import '../super_tabs/pane.dart';
 import '../shared/theme/workspace_bar_style.dart';
 import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
@@ -156,7 +155,7 @@ class PaneCloseButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => PaneHeaderButton(
-    label: SuperPane.maybeOf(context) == null ? 'Close Pane' : 'Hide terminal',
+    label: 'Close Pane',
     command: 'pane.close',
     icon: AppPaneSymbol.close,
     iconSize: AppIcons.closeSize,
