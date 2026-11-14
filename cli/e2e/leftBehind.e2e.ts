@@ -58,9 +58,8 @@ describe('a daemon under test', () => {
     }))).toBe('4321')
   })
 
-  // What asked, on 2026-11-14: models' process (`harnessd-models`), at each of its starts in swarmV4Journey.e2e.ts on the real
-  // backend, once the Swarm's grid was listed. The Swarm's pass (superTabs/swarmGrids.ts) sends `grid_swarm_sync`, which sets
-  // grid up first: installCli, the managed grid's manifest, then grid's public installer when there is still no `grid`.
+  // What asked, on 2026-11-14: models' process (`harnessd-models`), at each of its starts once a Swarm's grid was
+  // listed. The Swarm's pass (superTabs/swarmGrids.ts) sends `grid_swarm_sync`, which sets grid up first: installCli, the managed grid's manifest, then grid's public installer when there is still no `grid`.
   it('asks no grid manifest and runs no grid installer beyond the machine', async () => {
     daemon = await IsolatedDaemon.create()
     expect(daemon.env.ADAPTER_GRID_RUNTIME_METADATA_URL).toBe('http://127.0.0.1:9/grid.json')
