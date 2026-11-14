@@ -281,7 +281,8 @@ Commit the fixture and the spec: `models: specs that Ollama and llama.cpp start 
 In `appModels.ts`:
 
 - Delete `freePort` and the `node:net` import. Add `open` to the `node:fs/promises` import.
-- `background` opens the log with `'w'` in place of `'a'`: emptied at each start, so only this run's lines are in it.
+- `background` removes the log and opens a new one with `'w'` in place of `'a'`: made new at each start, so only this
+  run's lines are in it, and an engine still running from an earlier start writes on into the old file, not this one.
 - The log's name, one per engine and model: `ollama-${encodeURIComponent(model.name).slice(0, 200)}.log` and
   `llama-${encodeURIComponent(model.name).slice(0, 200)}.log`. Percent-encoding keeps two names two files
   (`qwen3:8b` is `ollama-qwen3%3A8b.log`), so two engines never write one file.

@@ -47,10 +47,11 @@ Both take port 0 and say the port they bound (tried on this Mac: Ollama 0.32.6 l
 - `start` passes port 0: `OLLAMA_HOST=127.0.0.1:0` and `llama-server --port 0` (`llamaServerArgs` takes the port to
   pass, so the caller gives it 0).
 - The log file name no longer carries the port, which is not known when the file opens. *(Builder's call)* One file per
-  engine and model (`ollama-<model>.log`, `llama-<model>.log`, the model's name made safe for a file name), emptied at
+  engine and model (`ollama-<model>.log`, `llama-<model>.log`, the model's name made safe for a file name), made new at
   each start: only this run's lines are in it, and the folder stays bounded by the number of models (today's
-  `-<port>.log` names grow by one file per start). A model is started once at a time (one record per model), so two
-  engines never write one file.
+  `-<port>.log` names grow by one file per start). The old file is removed, not emptied in place: an engine from an
+  earlier start can still run (the model on another grid, an Ollama whose start failed) and writes on at its own
+  offset into the file it was given, so two engines never write one file.
 - The wait for the engine reads its log as it grows until the engine's own line names the port, then checks health on
   that port as it does now. It gives up, as now, when the process exits or the deadline passes, with the same
   messages. *(Builder's call)* Only the two lines above are read (Ollama's `Listening on 127.0.0.1:<port>`, llama.cpp's
