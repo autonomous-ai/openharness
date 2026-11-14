@@ -39,6 +39,9 @@ import { notificationReadToken, type UnreadNotification } from '../lib/notificat
 
 /** Bumped when the VOCABULARY changes. Separate from the frame version, which is the envelope. */
 export const CABLE_PROTO_VERSION = 3   // 3: + question.close (a question answered on another client)
+/** The id of a question the dial only shows: a permission prompt waiting in its agent's own app (services/devices.ts),
+ *  which is where it is answered. Nothing the dial sends for it reaches its host. */
+export const SHOWN_ONLY_PREFIX = 'shown:'
 
 const PING_EVERY_MS = 5_000
 /** No bytes of any kind for this long → the handle is dead. Longer than the dial's own 15 s window, so a
@@ -1551,9 +1554,13 @@ export class CableSession {
         const agentId = str('agentId'), token = str('token'), requestId = str('requestId')
         if (!agentId || !token || !requestId || requestId.length > 64) return
         const link = this.link
-        const receipt = await this.questionInbox.submit(agentId, token, msg.choices,
-          answer => this.host.answerReviewed?.(answer) ?? Promise.resolve({ ok: false,
-            error: 'Update Harness to answer this question.' }), msg.drafts)
+        // Refused before it is taken: a shown-only question taken as answered would read as sent on the dial.
+        const open = this.questionInbox.read(agentId)
+        const receipt = open.ok && open.id.startsWith(SHOWN_ONLY_PREFIX)
+          ? { ok: false as const, error: `Answer it in ${this.hostName(agentId)}.` }
+          : await this.questionInbox.submit(agentId, token, msg.choices,
+            answer => this.host.answerReviewed?.(answer) ?? Promise.resolve({ ok: false,
+              error: 'Update Harness to answer this question.' }), msg.drafts)
         if (this.link === link) await this.send({ t: 'answer.receipt', agentId, token, requestId, ...receipt })
         return
       }
@@ -1573,6 +1580,8 @@ export class CableSession {
             await this.toast(`This agent is in ${this.hostName(agentId)}. Answering it from the device comes in an update.`)
             return
           }
+          // Its agent may have gone from the list since: the id alone says nothing here answers it.
+          if (requestId.startsWith(SHOWN_ONLY_PREFIX)) return
           this.host.answer(agentId, requestId, flat)
         }
         return
@@ -2605,6 +2614,15 @@ export class CableSession {
     // …and the drawer, which is the one thing a dial that has just greeted us is KNOWN to have lost:
     // its rows live in RAM. Last, because it names agents the pushes above put on the carousel.
     await this.replaceNotifications(this.host.listUnread())
+    // A question is a drawer row on the dial, and the drawer replaces them all: the ones still open come after it.
+    await this.resendQuestions()
+  }
+
+  /** Every question still open, asked again of a dial that lost it. */
+  private async resendQuestions(): Promise<void> {
+    for (const { agentId, id, questions } of this.questionInbox.open()) {
+      if (this.liveTurns.get(agentId) === 'question') await this.send({ t: 'question', agentId, ...this.whoIs(agentId), id, questions })
+    }
   }
 
   /**
@@ -2620,9 +2638,7 @@ export class CableSession {
     await this.syncSwarms(true)
     await this.syncAgents(true)
     await this.replaceNotifications(this.host.listUnread())
-    for (const { agentId, id, questions } of this.questionInbox.open()) {
-      if (this.liveTurns.get(agentId) === 'question') await this.send({ t: 'question', agentId, ...this.whoIs(agentId), id, questions })
-    }
+    await this.resendQuestions()
   }
 
   // ── swarms ────────────────────────────────────────────────────────────────────────────────────────

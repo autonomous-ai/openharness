@@ -16,6 +16,7 @@
  * The Wi-Fi device is a service of its own beside these (services/wifi.ts), in the same process, on a link
  * of its own: it rides the gateway's sessions, and borrows the dial's walk and stroke through the core.
  */
+import { randomUUID } from 'node:crypto'
 import { existsSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { env } from '../config/env.js'
@@ -24,7 +25,7 @@ import { CableFleet, testDialDiscovery, type CableFleetOptions } from '../cable/
 import { isLocalOnly } from '../lib/cardUpdate.js'
 import { TurnStats, type TurnStatsFields } from '../cable/turnStats.js'
 import { cableEventFor, cableStepFor, cableQuestionCloseFor, cableQuestionFor, DaemonCableHost } from '../cable/cableHost.js'
-import { CableSession } from '../cable/cableSession.js'
+import { CableSession, SHOWN_ONLY_PREFIX } from '../cable/cableSession.js'
 import { Inbox } from '../cable/hosts/inbox.js'
 import { LAST_ANSWER_DEADLINE_MS, LAST_ANSWER_MAX_BYTES, readLastAnswer } from '../cable/hosts/lastAnswer.js'
 import { askedLine, hostDisplayName, observedAgentId, ObservedSource, type ObservedActions } from '../cable/hosts/observed.js'
@@ -508,7 +509,35 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    *  nothing of them. What they do is still noted, so that only a later change is told once the window closes. */
   let windowOpen = false
   const tell = (event: DialEvent): void => { if (!windowOpen) toDial(event) }
+  /**
+   * The prompt an agent waits on, once its hook said what it asks, is also a question for the dial, which the dial only
+   * shows (cableSession.ts SHOWN_ONLY_PREFIX): the round dial draws a line on its working face, a question on its asking
+   * one. One option, as a question needs one, and none to speak. By agent, so that each is closed by its own id.
+   */
+  const shown = new Map<string, { id: string; line: string; questions: unknown }>()
+  const ask = (agentId: string, question: { id: string; line: string; questions: unknown }): void => {
+    shown.set(agentId, question)
+    inOrder(agentId, () => { void cable.question(agentId, question.id, question.questions) })
+  }
+  /** Asks what waits and closes what no longer does (or what a window covers): before a line, which it takes the place of. */
+  const showWaits = (): void => {
+    const want = new Map<string, HostAgent>()
+    if (!windowOpen) for (const agent of observed?.list() ?? []) if (observed?.waitingOn(agent.id) !== undefined) want.set(agent.id, agent)
+    for (const [agentId, question] of shown) {
+      const agent = want.get(agentId)
+      if (agent && waiting(agent) === question.line) continue
+      shown.delete(agentId)
+      inOrder(agentId, () => { void cable.questionClose(agentId, question.id) })
+    }
+    for (const [agentId, agent] of want) {
+      const line = waiting(agent)
+      if (shown.has(agentId) || !line) continue
+      ask(agentId, { id: `${SHOWN_ONLY_PREFIX}${randomUUID()}`, line,
+        questions: [{ key: 'prompt', q: line, options: [`Answer in ${hostDisplayName(agent.host)}`] }] })
+    }
+  }
   observed?.onChange(() => part.call('dial', () => {
+    showWaits()
     const agents = observed.list()
     const ids = new Set(agents.map((agent) => agent.id))
     for (const id of told.keys()) if (!ids.has(id)) told.delete(id)
@@ -565,6 +594,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     if (!on || !observed) return
     // Agents already running when the dial came are listed now, idle until their next hook event.
     part.call('observed', () => observed.scanOpen())
+    // Its questions were in its RAM: the ones still waiting are asked again, under their ids.
+    part.call('dial', () => { for (const [agentId, question] of shown) ask(agentId, question) })
     part.call('dial', remind)
     attached = [
       every(OPEN_SCAN_MS, () => observed.scanOpen()),
@@ -666,6 +697,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       cableHost.setSwarms(swarms)
       void cable.syncSwarms()
       void cable.syncAgents()
+      // An open window closes the questions of the agents outside it, as it covers their lines; closed, they are asked again.
+      showWaits()
       if (closed) part.call('dial', remind)
     }),
     // Held rather than acted on: the dial is handed it when it attaches, the one moment its drawer is known
