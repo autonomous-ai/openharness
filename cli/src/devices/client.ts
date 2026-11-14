@@ -114,7 +114,7 @@ export function runDialWatch(argv: string[], deps: DialWatchDeps): Promise<numbe
   }
   return new Promise(resolve => {
     let socket: ClientSocket | undefined
-    let settled = false, last: string | undefined, attached = false
+    let settled = false, last: string | undefined
     // The app in front as an app id (the raw name stops in this process), the last one the devices' listener took, and
     // whether the current one is owed to it whatever it took before: a dial that attaches may come with a new devices process.
     let front: string | undefined, told: string | undefined, owed = false, telling = false
@@ -175,17 +175,17 @@ export function runDialWatch(argv: string[], deps: DialWatchDeps): Promise<numbe
           return finish(4)
         }
         if (frame?.type !== 'dial_status' || typeof frame.payload !== 'object' || frame.payload === null) return
+        // The devices process usually starts with the dial, after this watch: it hears the app in front as the dial attaches.
+        // Told on every status that says attached, a repeat too: a devices process restarted under a dial still attached
+        // sends one that reads as the last, and the filter takes the same app again as nothing new.
+        if ((frame.payload as { attached?: unknown }).attached === true) {
+          owed = true
+          tellFront()
+        }
         const line = dialWatchLine(frame.payload)
         if (line === last) return
         last = line
         deps.print(line)
-        // The devices process usually starts with the dial, after this watch: it hears the app in front as the dial attaches.
-        const nowAttached = (frame.payload as { attached?: unknown }).attached === true
-        if (nowAttached && !attached) {
-          owed = true
-          tellFront()
-        }
-        attached = nowAttached
       })
     }).catch(() => finish(3, NOT_RUNNING))
   })

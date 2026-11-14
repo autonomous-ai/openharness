@@ -406,7 +406,7 @@ describe('harness hardware watch: the app in front', () => {
     expect(run.errors).toEqual([])
     await stillRunning(run)
   })
-  it('when dial_status turns attached the current app is told again, also one the listener took before; with no front line read yet nothing is told', async () => {
+  it('when dial_status says attached the current app is told again, also one the listener took before; with no front line read yet nothing is told', async () => {
     const run = watch()
     await opened(run.socket)
     connected(run.socket, ['dial-watch'])
@@ -416,8 +416,7 @@ describe('harness hardware watch: the app in front', () => {
     front(run, 'com.mitchellh.ghostty')
     await turn()
     expect(apps(run)).toEqual(['ghostty'])
-    // Still attached, then gone: nothing new for the devices.
-    dial(run.socket, { attached: true, fw: '0.0.95' })
+    // Gone: nothing for the devices.
     dial(run.socket, { attached: false })
     await turn()
     expect(apps(run)).toEqual(['ghostty'])
