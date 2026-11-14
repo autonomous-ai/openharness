@@ -3,7 +3,8 @@
 Three defects in the CLI end-to-end harness (`cli/e2e/`), fixed in one pull request. Ken's rule holds throughout: a
 failing or flaky test is a bug, fixed at the layer where it lives with a red-then-green test, never skipped or loosened.
 
-Platforms: macOS and Linux, where the end-to-end suite runs (Windows does not run it). Only test code changes, plus the
+Platforms: macOS and Linux, where the end-to-end suite runs (Windows does not run it), and Windows for
+`cli/vitest.setup.ts` alone (Task 9), which the Windows workflow's CLI specs load too. Only test code changes, plus the
 fake engine; no product code.
 
 ## 1. Every test ends every process and folder it started

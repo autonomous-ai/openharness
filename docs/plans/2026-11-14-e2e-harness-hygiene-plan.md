@@ -48,7 +48,8 @@ None.
 - Comments say why, in plain sentences, and name the incident (the census of 2026-11-14 in the spec).
 - This checkout has `cli/node_modules`. A task run in another checkout installs once first:
   `cd cli && npm ci --no-audit --no-fund`.
-- Platforms: macOS and Linux, where the end-to-end suite runs. One pull request; its body names them and carries
+- Platforms: macOS and Linux, where the end-to-end suite runs, and Windows for `cli/vitest.setup.ts` (Task 9), which
+  `windows.yml`'s CLI specs load. One pull request; its body names them and carries
   each task's red and green output and the Verification results.
 
 ## Found while reading the code
@@ -109,7 +110,7 @@ Checked at `b79d017c41`.
 | `cli/e2e/noSocket.e2e.ts` | the refusal's test, beside the test whose own data folder is too long on purpose | 4 |
 | `cli/src/testing/rootProcesses.ts`, `.spec.ts` | new: what still names a root, and ending it | 5 |
 | `cli/e2e/harness/hungCodex.ts` | new: a Codex whose rate-limit read never ends | 6 |
-| `cli/src/testing/isolatedTmux.ts`, `.spec.ts` | the root's removal also removes a folder made read-only in it | 6 |
+| `cli/src/testing/isolatedTmux.ts`, `.spec.ts` | the root's removal also removes a folder made read-only in it (moved to `removeRoot.ts` in the final review, which `vitest.setup.ts` uses too) | 6, 9 |
 | `cli/e2e/leftBehind.e2e.ts` | the close's tests (6), the worker's (7), grid's (8) | 6, 7, 8 |
 | `cli/e2e/harness/reaperProcess.mjs`, `abandonedWorker.ts` | the reaper sweeps a root before removing it, and removes a folder made read-only in it | 7 |
 | `cli/vitest.setup.ts`, `cli/src/testing/vitestSetupFolders.spec.ts` | the setup removes the home, data and runtime folders it made when the file ends; the spec, new | 9 |
