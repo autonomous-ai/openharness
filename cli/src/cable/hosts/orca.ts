@@ -1,7 +1,7 @@
 /**
- * Types into and brings forward an Orca terminal, by the handle its hook sent (ORCA_TERMINAL_HANDLE). The handle came
+ * Types into and switches to an Orca terminal, by the handle its hook sent (ORCA_TERMINAL_HANDLE). The handle came
  * from a hook and the text from the dial, so both are checked here, and `orca` runs with no shell: the text is one
- * argument, never a command line. Nothing here polls Orca.
+ * argument, never a command line. Nothing here polls Orca. Orca itself comes forward as every app does (open.ts).
  */
 import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
@@ -10,8 +10,8 @@ import { resolveBinaryOnPath } from '../../lib/binaryOnPath.js'
 export const ORCA_HANDLE = /^term_[0-9a-f-]{36}$/
 
 const APP_ORCA = '/Applications/Orca.app/Contents/Resources/bin/orca'
-const ORCA_BUNDLE = 'com.stablyai.orca'
-const RUN_TIMEOUT_MS = 10_000
+/** How long any app's command may run (open.ts too). */
+export const RUN_TIMEOUT_MS = 10_000
 /** The longest text typed into a terminal; the mod's prompt takes no more either (observed.ts). */
 export const MAX_TEXT = 2000
 // A newline would submit part of the text and an escape would steer the agent's screen: the text is typed as one line,
@@ -43,7 +43,7 @@ export function orcaDeps(): OrcaDeps {
   }
 }
 
-export function createOrcaActions(deps: OrcaDeps): { send(handle: string, text: string): Promise<boolean>; open(handle: string): Promise<boolean> } {
+export function createOrcaActions(deps: OrcaDeps): { send(handle: string, text: string): Promise<boolean>; switchTo(handle: string): Promise<boolean> } {
   // One command at a time per terminal: two transcripts typed at once would mix in its prompt.
   const running = new Set<string>()
 
@@ -71,14 +71,9 @@ export function createOrcaActions(deps: OrcaDeps): { send(handle: string, text: 
       // Joined to its flag: orca reads a separate argument that starts with -- as the next flag, not as the text.
       return alone(handle, (orca) => exitsZero(orca, ['terminal', 'send', '--terminal', handle, `--text=${line}`, '--enter', '--wait-submit', '5', '--json']))
     },
-    open(handle) {
-      return alone(handle, async (orca) => {
-        if (!await exitsZero(orca, ['terminal', 'switch', '--terminal', handle, '--json'])) return false
-        // The switch picks the terminal inside Orca; on macOS Orca itself still has to come to the front. Its own path,
-        // so no `open` earlier on PATH runs instead.
-        if (deps.platform === 'darwin') await deps.run('/usr/bin/open', ['-b', ORCA_BUNDLE], RUN_TIMEOUT_MS)
-        return true
-      })
+    // Picks the terminal inside Orca, under the same one-at-a-time as the words typed into it.
+    switchTo(handle) {
+      return alone(handle, (orca) => exitsZero(orca, ['terminal', 'switch', '--terminal', handle, '--json']))
     },
   }
 }

@@ -28,6 +28,7 @@ import { CableSession } from '../cable/cableSession.js'
 import { Inbox } from '../cable/hosts/inbox.js'
 import { LAST_ANSWER_DEADLINE_MS, LAST_ANSWER_MAX_BYTES, readLastAnswer } from '../cable/hosts/lastAnswer.js'
 import { askedLine, hostDisplayName, observedAgentId, ObservedSource, type ObservedActions } from '../cable/hosts/observed.js'
+import { createOpenActions } from '../cable/hosts/open.js'
 import { createOrcaActions, orcaDeps, type OrcaDeps } from '../cable/hosts/orca.js'
 import { HostRegistry } from '../cable/hosts/registry.js'
 import type { HostAgent, HostAgentState } from '../cable/hosts/types.js'
@@ -83,7 +84,8 @@ export interface DevicesDeps {
   /** For this service's tests: the dial's session, and how dials are found and opened. */
   Session?: ConstructorParameters<typeof CableFleet>[0]
   cable?: Partial<CableFleetOptions>
-  /** For this service's tests: how `orca` is found and run. */
+  /** For this service's tests: how `orca`, and the commands a tap runs to open an app (cable/hosts/open.ts), are found and
+   *  run. */
   orca?: OrcaDeps
 }
 
@@ -209,7 +211,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // (docs/specs/2026-11-13-device-without-the-app.md). `HARNESS_DEVICE_OBSERVED=off` is the kill switch.
   //
   // The dial's voice reaches them, idle or working, through their mod's long poll (Claude Code's) or typed into their Orca
-  // terminal, and a tap brings that terminal forward (docs/specs/2026-11-13-device-claude-orca.md).
+  // terminal, and a tap brings its app forward, on its own pane where the app has a way in that asks for no new permission
+  // (docs/specs/2026-11-13-device-claude-orca.md).
   /** A timer of one part, its run guarded as a notice into that part is, and never what keeps the process up. */
   const timerIn = (name: string) => (ms: number, run: () => void): (() => void) => {
     const timer = setTimeout(() => part.call(name, run), ms)
@@ -217,12 +220,15 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     return () => clearTimeout(timer)
   }
   const inbox = new Inbox({ now: monotonic, after: timerIn('inbox') })
-  const orca = createOrcaActions(deps.orca ?? orcaDeps())
+  const apps = deps.orca ?? orcaDeps()
+  const orca = createOrcaActions(apps)
+  const opener = createOpenActions({ ...apps, orcaSwitch: orca.switchTo, log })
   const observed = env.HARNESS_DEVICE_OBSERVED ? observedSource(core.dataDir, log, {
     modReady: (sessionId) => inbox.ready(sessionId),
     toMod: (sessionId, text) => inbox.deliver(sessionId, text),
     orcaSend: orca.send,
-    orcaOpen: orca.open,
+    canOpen: opener.can,
+    open: opener.open,
     // The route or the refusal only: never the words, the session or the terminal.
     count: (what) => log(`[device] voice · ${what}`),
   }) : null

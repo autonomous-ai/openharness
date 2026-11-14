@@ -1173,7 +1173,7 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     // As core/main.ts starts the devices in the core's own process: through the service host, which guards the port.
     const ports = emptyPorts()
     createServiceHost(ports, { log: () => {} }).start('devices', (core, started) => startDevices(core, started, {
-      logsDir: join(dataDir, 'logs'), cableDisabled: true, faults: new Set(['fleet']), log: () => {}, onExit: vi.fn(),
+      logsDir: join(dataDir, 'logs'), cableDisabled: true, faults: new Set(['fleet']), log: () => {}, onExit: vi.fn(), orca,
     }), fakeCore({ dataDir }), DEVICES_FALLBACKS, DEVICES_REQUESTS)
     ports.devices!.observed(hook('session-start'))
     expect(await machineList(ports.devices!)).toMatchObject({ view: 'machine', agents: [{ id: ID, host: 'orca', caps: 's' }] })

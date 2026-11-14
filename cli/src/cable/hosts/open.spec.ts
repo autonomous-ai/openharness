@@ -101,7 +101,8 @@ describe('opening an agent outside Harness from the dial', () => {
 
   it('an app with no known bundle id opens nothing', async () => {
     const { calls, opener } = recorder()
-    for (const hints of [{}, { TERM_PROGRAM: 'tmux' }, { ZELLIJ: '0' }, { REX_BLOCK: 'x' }, { __CFBundleIdentifier: 'com.example.unknown' }]) {
+    const none: Array<Record<string, string>> = [{}, { TERM_PROGRAM: 'tmux' }, { ZELLIJ: '0' }, { REX_BLOCK: 'x' }, { __CFBundleIdentifier: 'com.example.unknown' }]
+    for (const hints of none) {
       expect(opener.can(target(hints)), JSON.stringify(hints)).toBe(false)
       expect(await opener.open('a1', target(hints))).toBe(false)
     }
@@ -195,7 +196,10 @@ describe('opening an agent outside Harness from the dial', () => {
     expect(await linux.opener.open('a3', target({ HERDR_PANE_ID: 'w1:p2' }))).toBe(true)
     expect(linux.switched).toEqual([HANDLE])
     expect(linux.calls).toEqual([run('/fake/bin/wezterm', 'cli', 'activate-pane', '--pane-id', '7'), run('/fake/bin/herdr', 'agent', 'focus', 'w1:p2')])
-    for (const hints of [{ TERM_PROGRAM: 'WarpTerminal' }, { __CFBundleIdentifier: 'org.alacritty' }, { __CFBundleIdentifier: CLAUDE, CLAUDE_CODE_HOST_SESSION_ID: SESSION }]) {
+    const appsOnly: Array<Record<string, string>> = [
+      { TERM_PROGRAM: 'WarpTerminal' }, { __CFBundleIdentifier: 'org.alacritty' }, { __CFBundleIdentifier: CLAUDE, CLAUDE_CODE_HOST_SESSION_ID: SESSION },
+    ]
+    for (const hints of appsOnly) {
       expect(linux.opener.can(target(hints))).toBe(false)
       expect(await linux.opener.open('a4', target(hints))).toBe(false)
     }

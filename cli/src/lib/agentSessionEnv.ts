@@ -16,6 +16,9 @@ const AGENT_SESSION_VARIABLES: ReadonlySet<string> = new Set([
   'AI_AGENT', 'HARNESS_AGENT_SESSION',
   'CLAUDECODE', 'CLAUDE_PID', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_CHILD_SESSION',
   'CLAUDE_CODE_SESSION_ATTENDED', 'CLAUDE_CODE_EXECPATH', 'CLAUDE_CODE_MESSAGING_SOCKET', 'CLAUDE_CODE_MESSAGING_TOKEN',
+  // The Claude app's id for the session it runs (`local_<uuid>`): Claude Code in a pane that kept it would name itself
+  // that app session, and a tap on the dial would open the app on it (cable/hosts/open.ts).
+  'CLAUDE_CODE_HOST_SESSION_ID',
   'CODEX_THREAD_ID', 'CODEX_CI', 'CODEX_SANDBOX', 'CODEX_SANDBOX_NETWORK_DISABLED', 'CODEX_ESCALATE_SOCKET',
 ])
 

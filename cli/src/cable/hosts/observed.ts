@@ -9,6 +9,7 @@ import type { ExternalEngine, RunningProcess } from '../../lib/sessionSearch/ext
 import { roundDrawable } from '../roundGlyphs.js'
 import { detectHost, hostDisplayName } from './hostDetect.js'
 import type { Delivery } from './inbox.js'
+import { openTarget, type OpenTarget } from './open.js'
 import { MAX_TEXT, ORCA_HANDLE } from './orca.js'
 import type { Caps, HostAgent, HostAgentState, HostSource, SendResult } from './types.js'
 
@@ -75,7 +76,10 @@ export interface ObservedActions {
   modReady(sessionId: string): boolean
   toMod(sessionId: string, text: string): Promise<Delivery>
   orcaSend(handle: string, text: string): Promise<boolean>
-  orcaOpen(handle: string): Promise<boolean>
+  /** Whether a tap can open the target here: macOS brings an app forward, elsewhere only a pane's own command runs. */
+  canOpen(target: OpenTarget): boolean
+  /** A tap: the agent's pane, then its app (open.ts). */
+  open(agentId: string, target: OpenTarget): Promise<boolean>
   count(what: 'mod' | 'orca' | 'waiting' | 'pending' | 'too-long' | 'no-answer'): void
 }
 
@@ -87,6 +91,8 @@ interface Entry {
   pid: number
   /** The Orca terminal its last event came from. */
   handle?: string
+  /** What a tap opens, from its last event: none for a session the scan found, until its first. */
+  opens: OpenTarget
   /** What the permission prompt it waits on asks, from its hook (deviceClaude/asked.ts): '' when it names nothing. */
   asked?: string
   generation?: string
@@ -121,7 +127,7 @@ export class ObservedSource implements HostSource {
     return {
       status: true,
       voice: live && (!!e.handle || this.modReady(e, actions)),
-      focus: live && !!e.handle,
+      focus: live && actions.canOpen(e.opens),
       // Its prompts are answered in its own app: the dial only shows them.
       answer: false,
     }
@@ -178,7 +184,7 @@ export class ObservedSource implements HostSource {
   focus(agent: HostAgent): Promise<boolean> {
     const e = this.entries.get(agent.id)
     const actions = this.deps.actions
-    return e?.handle && actions && this.live(e) ? actions.orcaOpen(e.handle) : Promise.resolve(false)
+    return e && actions && this.live(e) && actions.canOpen(e.opens) ? actions.open(e.agent.id, e.opens) : Promise.resolve(false)
   }
 
   private emit(): void {
@@ -209,6 +215,7 @@ export class ObservedSource implements HostSource {
     // Every event's own: a session resumed elsewhere must not be typed into the terminal it left.
     const handle = e.hostHints.ORCA_TERMINAL_HANDLE
     entry.handle = handle && ORCA_HANDLE.test(handle) ? handle : undefined
+    entry.opens = openTarget(a.host, e.hostHints)
     if (e.cwd) { a.cwd = e.cwd; a.name = basename(e.cwd) || a.name }
     if (e.transcriptPath) entry.transcriptPath = e.transcriptPath
     if (e.event === 'session-end') {
@@ -306,6 +313,7 @@ export class ObservedSource implements HostSource {
       },
       since: now,
       pid: init.pid,
+      opens: {},
       ...(init.transcriptPath ? { transcriptPath: init.transcriptPath } : {}),
     }
     this.entries.set(id, entry)
