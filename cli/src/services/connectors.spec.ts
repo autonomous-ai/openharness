@@ -609,6 +609,16 @@ describe('the connectors service', () => {
     })
   })
 
+  it('says which port its bridge bound, to a spec that asked for any', async () => {
+    const said: number[] = []
+    startConnectors(fakeCore(), emptyPorts(), { vault: new Store(join(home, 'store'), env), env, port: 0, offered: async () => ({}),
+      listening: (port) => { said.push(port) } })
+    await vi.waitFor(() => expect(said).toHaveLength(1))
+    expect(said[0]).toBeGreaterThan(0)
+    // The bridge answers there (refused, with no key).
+    expect(await answered(`http://127.0.0.1:${said[0]}/x/linear/mcp`)).toBe(404)
+  })
+
   it('waits for its port while another process holds it', async () => {
     const holder = await holdPort()
     const port = (holder.address() as { port: number }).port
