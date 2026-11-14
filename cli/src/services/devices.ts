@@ -114,6 +114,8 @@ const REMIND_MS = 20_000
 /** The observed source drops an ended session 10 s after its end, by the wall clock (observed.ts); looked at a beat later,
  *  as a timer can fire a little before the wall clock says it is due. */
 const ENDED_MS = 10_500
+/** How long the cable waits for the devices' listener to open: it opens in a few milliseconds. */
+const LISTENER_WAIT_MS = 1_000
 
 /** This computer's agents outside a pane, read with ⌘P's readers (services/externalSessions.ts), and how the dial's voice
  *  and tap reach them. */
@@ -646,15 +648,25 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // The core's calls failed to none when its link dropped: a transcript for a poll nobody holds would wait for nothing.
   deps.onCoreGone?.(endHookCalls)
 
-  if (deps.cableDisabled) log('[cable] disabled (CABLE_DISABLE=true) — the serial port is left alone')
-  else cable.start()
-  ;(deps.onExit ?? ((run) => { process.once('exit', run) }))(() => shutdownVoiceRouter())
-
   // `harness hardware watch` tells the devices' own listener which app is in front, and the dial with no window follows it
   // once it settles (cable/hosts/appFilter.ts): the core never hears it. Another message type is another key here. A
   // rejection's text is not logged: it can hold the socket's path, and a path the account's name.
   const listening = deps.listen?.({ front: frontHandler((app) => part.call('dial', () => cableHost.front(app))) }, log)
     .catch((): null => { log('[devices] listener not opened · failed'); return null })
+
+  let stopped = false
+  if (deps.cableDisabled) log('[cable] disabled (CABLE_DISABLE=true) — the serial port is left alone')
+  else if (!listening) cable.start()
+  else {
+    // After the listener has opened, so a dial that attaches finds it open: the watch tells it the app in front once, as
+    // the dial attaches. One that has not opened in a second does not keep the dial off.
+    let bound: ReturnType<typeof setTimeout> | undefined
+    void Promise.race([listening, new Promise((resolve) => { bound = setTimeout(resolve, LISTENER_WAIT_MS).unref() })]).then(() => {
+      clearTimeout(bound)
+      if (!stopped) cable.start()
+    })
+  }
+  ;(deps.onExit ?? ((run) => { process.once('exit', run) }))(() => shutdownVoiceRouter())
 
   /** A card bound for the devices, translated once for the cable. */
   const toCable = (frame: Record<string, unknown>): void => {
@@ -782,6 +794,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     inboxGone: (pollId) => inboxCalls?.inboxGone(pollId),
     // The serial ports first: a port left held makes esptool fail in a way that reads like dead hardware.
     stop: async () => {
+      // A cable still waiting on the listener never starts.
+      stopped = true
       // The listener before anything, once it has opened: no front reaches a stopped cable or sets a timer after the
       // timers below are cleared.
       await (await listening)?.close()
