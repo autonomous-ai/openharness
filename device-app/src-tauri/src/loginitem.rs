@@ -16,9 +16,14 @@ pub enum Status {
     NotFound,
 }
 
-/// Registers the item only when it is not registered.
-pub fn register_from(_status: Status, register: impl FnOnce() -> Result<(), String>) -> Result<(), String> {
-    register()
+/// Registers the item only when it is not registered: one the person turned off reads RequiresApproval, and is never
+/// turned on again over their choice.
+pub fn register_from(status: Status, register: impl FnOnce() -> Result<(), String>) -> Result<(), String> {
+    match status {
+        Status::NotRegistered => register(),
+        Status::Enabled | Status::RequiresApproval => Ok(()),
+        Status::NotFound => Err("Login item not found.".into()),
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -26,11 +31,20 @@ impl LoginItem for SystemLoginItem {
     /// Never called under `cargo test`: it would make the test binary a login item of the
     /// developer's account.
     fn register(&self) -> Result<(), String> {
+        use objc2_service_management::{SMAppService, SMAppServiceStatus};
         // SAFETY: plain ServiceManagement calls on the main app's own service, with no arguments.
-        let service = unsafe { objc2_service_management::SMAppService::mainAppService() };
-        // The error code only: macOS's description may name the app's path.
-        unsafe { service.registerAndReturnError() }
-            .map_err(|error| format!("Login item not added (error {}).", error.code()))
+        let service = unsafe { SMAppService::mainAppService() };
+        let status = match unsafe { service.status() } {
+            SMAppServiceStatus::NotRegistered => Status::NotRegistered,
+            SMAppServiceStatus::Enabled => Status::Enabled,
+            SMAppServiceStatus::RequiresApproval => Status::RequiresApproval,
+            _ => Status::NotFound,
+        };
+        register_from(status, || {
+            // The error code only: macOS's description may name the app's path.
+            unsafe { service.registerAndReturnError() }
+                .map_err(|error| format!("Login item not added (error {}).", error.code()))
+        })
     }
 }
 
