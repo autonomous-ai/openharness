@@ -79,15 +79,17 @@ describe('Orca actions', () => {
   })
 
   // Orca comes forward with every other app, by its bundle id (open.ts): the switch only picks the terminal inside it.
-  it('switchTo runs the switch alone, on every platform, and is true when it exits 0', async () => {
+  it('switchTo runs the switch alone, on every platform: ok when it exits 0, failed when it does not', async () => {
     for (const platform of ['darwin', 'linux'] as const) {
       const { calls, orca } = recorder({ platform })
-      expect(await orca.switchTo(HANDLE)).toBe(true)
+      expect(await orca.switchTo(HANDLE)).toBe('ok')
       expect(calls).toEqual([{ file: FAKE_PATH_ORCA, args: ['terminal', 'switch', '--terminal', HANDLE, '--json'], timeoutMs: 10_000 }])
     }
-    const refused = recorder({}, [1])
-    expect(await refused.orca.switchTo(HANDLE)).toBe(false)
-    expect(refused.calls).toHaveLength(1)
+    // A non-zero exit, then a run with no exit code (its timeout's kill).
+    const refused = recorder({}, [1, null])
+    expect(await refused.orca.switchTo(HANDLE)).toBe('failed')
+    expect(await refused.orca.switchTo(HANDLE)).toBe('failed')
+    expect(refused.calls).toHaveLength(2)
   })
 
   it('a handle that is not term_<uuid> runs nothing', async () => {
@@ -95,7 +97,7 @@ describe('Orca actions', () => {
     const { calls, orca } = recorder()
     for (const handle of ['', 'term_', 'term_0f8e2c1a', HANDLE.toUpperCase(), `${HANDLE}0`, `${HANDLE}\n`, ` ${HANDLE}`, `term_${'g'.repeat(36)}`, '--help']) {
       expect(await orca.send(handle, 'hi')).toBe(false)
-      expect(await orca.switchTo(handle)).toBe(false)
+      expect(await orca.switchTo(handle)).toBe('failed')
     }
     expect(calls).toEqual([])
   })
@@ -104,7 +106,7 @@ describe('Orca actions', () => {
     for (const platform of ['darwin', 'linux'] as const) {
       const { calls, orca } = recorder({ platform, onPath: () => null })
       expect(await orca.send(HANDLE, 'hi')).toBe(false)
-      expect(await orca.switchTo(HANDLE)).toBe(false)
+      expect(await orca.switchTo(HANDLE)).toBe('failed')
       expect(calls).toEqual([])
     }
     // The app's folder is a macOS path: Linux never runs it.
@@ -174,7 +176,8 @@ describe('Orca actions', () => {
     expect(await orcaDeps().run(join(dir, 'missing'), [], 10_000)).toEqual({ code: null })
   })
 
-  it('a second command for the same handle while one runs is false; another handle\'s runs', async () => {
+  /** A `run` that holds each command until the test lets it end. */
+  function held() {
     const calls: string[][] = []
     const waiting: Array<() => void> = []
     const orca = createOrcaActions({
@@ -186,19 +189,42 @@ describe('Orca actions', () => {
       exists: () => false,
       platform: 'linux',
     })
+    return { calls, waiting, orca }
+  }
+
+  it('a second command for the same handle while one runs is false; another handle\'s runs', async () => {
+    const { calls, waiting, orca } = held()
     const first = orca.send(HANDLE, 'one')
     expect(await orca.send(HANDLE, 'two')).toBe(false)
-    expect(await orca.switchTo(HANDLE)).toBe(false)
     const other = orca.switchTo(OTHER)
     expect(calls.map((args) => args[3])).toEqual([HANDLE, OTHER])
     for (const done of waiting) done()
     expect(await first).toBe(true)
-    expect(await other).toBe(true)
+    expect(await other).toBe('ok')
 
     // Once its command has ended, the handle takes the next one.
     const next = orca.send(HANDLE, 'three')
     waiting[2]()
     expect(await next).toBe(true)
+  })
+
+  it('a switch for a handle whose command still runs is busy and runs nothing; another handle\'s switch runs', async () => {
+    const sending = held()
+    const sent = sending.orca.send(HANDLE, 'one')
+    expect(await sending.orca.switchTo(HANDLE)).toBe('busy')
+    expect(sending.calls).toHaveLength(1)
+    sending.waiting[0]()
+    expect(await sent).toBe(true)
+
+    const switching = held()
+    const switched = switching.orca.switchTo(HANDLE)
+    expect(await switching.orca.switchTo(HANDLE)).toBe('busy')
+    expect(switching.calls).toHaveLength(1)
+    const other = switching.orca.switchTo(OTHER)
+    expect(switching.calls.map((args) => args[3])).toEqual([HANDLE, OTHER])
+    for (const done of switching.waiting) done()
+    expect(await switched).toBe('ok')
+    expect(await other).toBe('ok')
   })
 
   it('a text over 2000 characters runs nothing', async () => {

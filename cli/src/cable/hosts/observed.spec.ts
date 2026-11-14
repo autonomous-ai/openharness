@@ -4,6 +4,7 @@ import { STOP_HOOK_GRACE_MS } from '../../core/turns/turnHooks.js'
 import { type Delivery, Inbox } from './inbox.js'
 import { askedLine, observedAgentId, type ObservedActions, ObservedSource, type ObservedDeps } from './observed.js'
 import type { OpenTarget } from './open.js'
+import type { PaneSwitch } from './types.js'
 
 function setup(over: Partial<ObservedDeps> = {}) {
   const clock = { t: 1_000_000 }
@@ -664,6 +665,7 @@ function fakeActions(over: Partial<ObservedActions> = {}) {
     modReady: vi.fn((sessionId: string) => ready.has(sessionId)),
     toMod: vi.fn(async (_sessionId: string, _text: string): Promise<Delivery> => 'taken'),
     orcaSend: vi.fn(async (_handle: string, _text: string) => true),
+    orcaSwitch: vi.fn(async (_handle: string): Promise<PaneSwitch> => 'ok'),
     // As on macOS: an app or a pane is something a tap can open (open.ts).
     canOpen: vi.fn((target: OpenTarget) => !!target.bundle || !!target.pane),
     open: vi.fn(async (_agentId: string, _target: OpenTarget) => true),
@@ -1057,6 +1059,65 @@ describe('ObservedSource actions', () => {
 
 // A permission prompt that waits (deviceClaude/asked.ts): the dial shows the agent waiting and for what, and the prompt is
 // answered in its own app.
+describe('ObservedSource panes', () => {
+  const OTHER = 'term_9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d'
+  const inOrca = (handle = HANDLE) => ({ hostHints: { ORCA_AGENT_SESSION_ID: 'x', ORCA_TERMINAL_HANDLE: handle } })
+
+  it('hasPane: an agent in an Orca terminal, while its session lives', () => {
+    const { actions } = fakeActions()
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('session-start', { sessionId: 'orca', ...inOrca() }))
+    src.ingest(ev('session-start', { sessionId: 'wez', hostHints: { WEZTERM_PANE: '3' } }))
+    src.ingest(ev('session-start', { sessionId: 'herdr', hostHints: { HERDR_PANE_ID: 'p1' } }))
+    src.ingest(ev('session-start', { sessionId: 'app', hostHints: { __CFBundleIdentifier: 'com.anthropic.claudefordesktop' } }))
+    const agent = (sessionId: string) => src.list().find((a) => a.sessionId === sessionId)!
+    expect(src.hasPane(agent('orca'))).toBe(true)
+    expect(src.hasPane(agent('wez'))).toBe(false)
+    expect(src.hasPane(agent('herdr'))).toBe(false)
+    expect(src.hasPane(agent('app'))).toBe(false)
+    src.ingest(ev('session-end', { sessionId: 'orca', ...inOrca() }))
+    expect(src.hasPane(agent('orca'))).toBe(false)
+
+    const bare = setup()
+    bare.src.ingest(bare.ev('session-start', inOrca()))
+    expect(bare.src.hasPane(bare.src.list()[0])).toBe(false)
+  })
+
+  it('showPane switches Orca to the terminal and answers what Orca said', async () => {
+    for (const said of ['ok', 'failed', 'busy'] as const) {
+      const { actions } = fakeActions({ orcaSwitch: vi.fn(async () => said) })
+      const { src, ev } = setup({ actions })
+      src.ingest(ev('turn-start', inOrca()))
+      expect(await src.showPane(src.list()[0])).toBe(said)
+      expect(actions.orcaSwitch.mock.calls).toEqual([[HANDLE]])
+      expect(actions.open).not.toHaveBeenCalled()
+    }
+  })
+
+  it('the handle is the latest event\'s', async () => {
+    const { actions } = fakeActions()
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('session-start', inOrca()))
+    // Resumed in another Orca terminal: the old one holds something else now.
+    src.ingest(ev('turn-start', inOrca(OTHER)))
+    const agent = src.list()[0]
+    expect(await src.showPane(agent)).toBe('ok')
+    expect(actions.orcaSwitch.mock.calls).toEqual([[OTHER]])
+    actions.orcaSwitch.mockClear()
+
+    // Its next event carries no handle: it runs elsewhere now.
+    src.ingest(ev('turn-stop', { hostHints: { TERM_PROGRAM: 'ghostty' } }))
+    expect(await src.showPane(agent)).toBe('failed')
+    src.ingest(ev('turn-start', inOrca()))
+    src.ingest(ev('session-end', inOrca()))
+    expect(await src.showPane(agent)).toBe('failed')
+    // One the source never listed.
+    expect(await src.showPane({ ...agent, id: 'gone' })).toBe('failed')
+    expect(actions.orcaSwitch).not.toHaveBeenCalled()
+    expect(actions.open).not.toHaveBeenCalled()
+  })
+})
+
 describe('ObservedSource and a waiting prompt', () => {
   const asked = (over: Partial<ObservedAsked> = {}): ObservedAsked => ({
     engine: 'claude', sessionId: 's1', event: 'asked', tool: 'Bash', summary: 'npm test', cwd: '/elsewhere', ...over,
