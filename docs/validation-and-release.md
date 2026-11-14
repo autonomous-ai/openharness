@@ -75,7 +75,7 @@ beside the CLI's own suite); the CLI reads `pty/`, `tui/` and `store/`, Desktop 
 | `desktop/` | `desktop-tests` (VM suite, four Linux shards); a change to a desktop file the phone's tests read (the Swarm models in `scripts/ci-plan.py` `PR_READS`, compared by `mobile/test/swarm/desktop_parity_test.dart`) also runs `mobile-checks` | 5–7 min |
 | `tui/`, `term/` (the TUI builds on it) | `tui-test` (`cargo test`) | a few minutes |
 | `pty/`, `term/`, `tui/vendor/`, `cli/` (the ptyhost contract imports the CLI's code) | `pty-checks` (`cargo test` for `term` and `pty`, then the ptyhost terminal contract against the built host) | a few minutes |
-| `device-app/` | `device-app-checks` (the UI's Vitest and bundle, then `cargo test` with Tauri's Linux packages; the macOS code is not compiled) | a few minutes |
+| `device-app/` | `device-app-checks` (the UI's typecheck, Vitest and bundle, then `cargo test` with Tauri's Linux packages; the macOS code is not compiled) | a few minutes |
 | `backend/` | `backend-desk` (the backend unit suite, `npm test` in `backend/`) and `backend-integration` (the Super Tab integration suite, `npm run test:super-tabs`, four shards) | unit about 1–2 min; integration about 5 min |
 | `companions/`, `website/`, `os/`, `provider/`, `mobile/`, `daemons/` | that component's one check | 1–4 min |
 | `devices/` | `firmware-checks` | 1–2 min |
@@ -179,6 +179,7 @@ the planner, refuses a receipt whose members differ from the head's merges.
 | CLI end to end (`cli/e2e`) | nightly and **Actions → CLI end to end → Run workflow** | for user-facing CLI flows; start one run on the branch |
 | A guest's harness against an owner's (`npm run test:guest-real`) | nowhere automatically: it needs a Mac with guest access on and a guest user | when you change guest sharing, a guest's launch or environment, Stop, or how pane titles name harnesses: the guest runs as another OS user with `env -i`, and each difference has broken something only a shared Mac showed |
 | Desktop tests on macOS | nowhere automatically | when you change macOS-specific Desktop code; `make desktop-test` on a Mac |
+| Harness Device on macOS (PR CI compiles only its Linux code) | nowhere automatically | when you change `device-app/`; `cargo test --locked` in `device-app/src-tauri` on a Mac |
 | TUI native fixtures and connected shells | the TUI release (`release-tui.yml`) | optional locally: `scripts/validate-tui-native.py` |
 | Experience, authoring, Home Assistant and Desktop logging browser checks | **Run workflow** on their own workflows | when you change their area |
 | OS image builds, VM and hardware acceptance | **Actions → Harness OS** and the other OS workflows, by hand only | for installer, image or session changes; start once with the needed inputs |
