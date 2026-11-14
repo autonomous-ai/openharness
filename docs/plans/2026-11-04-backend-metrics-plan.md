@@ -1,7 +1,6 @@
 # Backend metrics the scan can read from the log tail: implementation plan
 
-This plan is followed task by task, test first, by the Engineer of task #2957 (project instructions, Engineer role),
-on PR #1880's own branch. There is no execution handoff.
+This plan is followed task by task, test first, for task #2957, on PR #1880's own branch. There is no execution handoff.
 
 **Goal:** The production scan measures an hour of backend load from what one `argocd app logs` call returns today,
 even though each pod's logs keep only its last ~3 minutes (Ken's scan, 2026-11-04 21:30): requests per route, CPU per
@@ -20,7 +19,7 @@ the counters are how scans measure the backend, so they cover everything the sca
 
 ## Global Constraints
 
-- Labels and log keys are bounded and carry no ids: a route is its Fastify pattern (`/api/super-tabs/:tabId/changes`)
+- Labels and log keys are bounded and carry no ids: a route is its Fastify pattern (`/api/machines/:machineId/share`)
   or `unrouted`; a kind of work is the name `workKind()` gives (`http GET /x`, `web-ws <frame>`, `bus <sub> <channel>`,
   `background`); a Prisma model and operation; a status code. Each set is capped (300 values), past that `other`.
 - Ships on, with no switch (ENGINEERING.md §1, Ken): the counters, the `last hour` line and the `/metrics` listener

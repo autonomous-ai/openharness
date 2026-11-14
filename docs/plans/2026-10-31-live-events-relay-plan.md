@@ -4,8 +4,7 @@
 
 **Goal:** About half the frames between daemons, backend and apps, with every app showing what it shows today.
 
-**Architecture:** Four independent changes: the backend publishes a machine's Swarm reading at most every 30 s; the
-daemon's heartbeat sends one frame per beat and repeats no unchanged activity; the daemon skips an `agent_synced` that
+**Architecture:** Three independent changes: the daemon's heartbeat sends one frame per beat and repeats no unchanged activity; the daemon skips an `agent_synced` that
 changes nothing but activity; and apps away from the computer get slim transcript events. A measuring script runs
 before and after.
 
@@ -16,25 +15,23 @@ before and after.
 ## Status and handoff (2026-10-31)
 
 - Spec and plan written. Tasks 0, 2, 4 and 5 built on branch `fewer-relay-frames` (2026-10-31), not pushed;
-  tasks 1 and 3 still on hold. Built differently from the steps below, each for the reason given:
+  task 3 still on hold. Built differently from the steps below, each for the reason given:
   - Task 0: the build Mac's Desktop log of 2026-10-30 is not Ken's (161,203 frames, 03:05-17:02); both are in the
     spec's Results.
   - Task 2: an unchanged activity is compared by `state` and `epoch`, not `revision` (spec, change 2).
   - Task 4: `slimForRelay` is `cli/src/lib/slimForRelay.ts`, not `src/gateway/` (the core may not import it); a tool
     input's objects are bounded to 50 keys as its lists are; the terminal app's mock sends only fields the slim
     frame keeps, so it needs no change, and `tui/tests/e2e.sh` could not be run on a current build (no Rust here).
-  - Task 5: `docs/swarms.md` is unchanged: its 30 s rule is task 1's, on hold.
-- **Run tasks 0, 2, 4 and 5.** Tasks 1 and 3 are **on hold** (spec, "On hold"): task 1 would make Desktop and the web
-  show machines late or offline, and needs its own design with a client change, not yet decided by Ken; task 3 saves
-  little that is safe to drop. Skip them; do not delete them, they are the starting point if Ken decides.
+- **Run tasks 0, 2, 4 and 5.** Task 3 is **on hold** (spec, "On hold"): it saves little that is safe to drop. Skip
+  it; do not delete it, it is the starting point if Ken decides.
 - A first version of task 0's script is in `scripts/desktop-frame-count.py` (counts by type); task 0 adds the
-  `swarm_changed` gap and the `agent_synced` classes, then runs it on a Desktop log to reproduce the "before" table.
+  `agent_synced` classes, then runs it on a Desktop log to reproduce the "before" table.
 - Task 2: activity states are only `working`, `idle` and `unknown` (`cli/src/lib/turnActivity.ts`); write the tests
   with those (the plan's "waiting" example becomes `idle`).
 
 ## Global Constraints
 
-- Windows on this computer and everything inside the daemon (the dial's cards, recaps, the Swarm, search, the
+- Windows on this computer and everything inside the daemon (the dial's cards, recaps, search, the
   orchestrator, local tool clients) keep full events; only frames for apps away from the computer change (task 4).
 - `cli/src/lib/e2ee/core.ts` is not edited (its hash is pinned with other repositories' clients).
 - `updatedAt` changes are always sent in `agent_synced` (the phone sorts agents by it).
@@ -46,9 +43,6 @@ before and after.
 
 ## Review Focus
 
-- A Swarm whose only changes are machine readings for an hour: apps still see machine cards update at least every
-  30 s. (Task 1 test.)
-- A main change 5 s after a machine push: it goes at once and also carries any machine part held since. (Task 1 test.)
 - An agent waiting on a question for 10 minutes: one `agent_activity` when it starts waiting, none after, and
   `turn_heartbeat` again when it resumes working. (Task 2 test.)
 - The same agent synced 100 times with only `activity` moving: one frame to the apps, every one to the dial. (Task 3
@@ -65,67 +59,17 @@ before and after.
 
 **Interfaces:**
 - Produces: `python3 -I scripts/desktop-frame-count.py <app-log>` prints, for one Desktop log, the window, the total
-  `↓` frames, and per type the count, share and logged bytes, most frequent first; plus `swarm_changed` median gap and
+  `↓` frames, and per type the count, share and logged bytes, most frequent first; plus the
   `agent_synced` classes (first, identical, activity-only, other) as in the spec.
 
 - [ ] **Step 1:** Write the script (stdlib only; read the file as bytes and decode with `errors='replace'`; the line
   format is `[YYYY-MM-DD HH:MM:SS] DEBUG ws      ↓ <type> {...}`).
 - [ ] **Step 2:** Run it on `~/.harness/logs/app-20261030.log`.
-  Expected: 170,666 frames; `swarm_changed` 54,282; `agent_activity` 32,819; `turn_heartbeat` 28,411; `agent_synced`
+  Expected: 170,666 frames; `agent_activity` 32,819; `turn_heartbeat` 28,411; `agent_synced`
   17,099 with 4,239 identical and 181 activity-only.
 - [ ] **Step 3:** Add a "Results" section to the spec with the command and the "before" table; leave an "after" row.
 - [ ] **Step 4:** Commit: `git add scripts/desktop-frame-count.py docs/plans/2026-10-31-live-events-relay-design.md`,
   message "Frame count: a script that counts a Desktop log's frames by type, and the before number".
-
-### Task 1: A machine's Swarm reading published at most every 30 s (backend)
-
-**Files:**
-- Modify: `backend/src/lib/swarmClientPushes.ts` (`coalescer`, `announced`, `announceSwarmChanges`)
-- Test: `backend/src/lib/swarmClientPushes.test.ts` (beside "publishes at most once per Swarm a second")
-
-**Interfaces:**
-- Produces: `MACHINE_COALESCE_MS = 30_000` (exported for the test); `coalescer(merge, emit, windowMs)` takes its window
-  instead of the module constant; `announceSwarmChanges(change)` keeps its signature.
-
-- [ ] **Step 1: Write the failing tests** (each uses a Swarm id of its own, as the existing publish test does):
-
-```ts
-it('publishes a machine reading at most every 30 s per Swarm, the first at once', async () => {
-  announceSwarmChanges({ tabId: 'tab-readings', userIds: ['kim'], lastChangedAt: 1, parts: ['machine'] })
-  expect(bus.published).toEqual([['kim', { tabId: 'tab-readings', lastChangedAt: 1, parts: ['machine'] }]])
-  for (let at = 2; at <= 20; at++) {
-    await vi.advanceTimersByTimeAsync(1_000)
-    announceSwarmChanges({ tabId: 'tab-readings', userIds: ['kim', 'lee'], lastChangedAt: at, parts: ['machine'] })
-  }
-  expect(bus.published).toHaveLength(1)
-  await vi.advanceTimersByTimeAsync(MACHINE_COALESCE_MS)
-  expect(bus.published.slice(1)).toEqual([['kim', { tabId: 'tab-readings', lastChangedAt: 20, parts: ['machine'] }],
-    ['lee', { tabId: 'tab-readings', lastChangedAt: 20, parts: ['machine'] }]])
-})
-it('sends a main change at once, carrying the machine reading it held', async () => {
-  announceSwarmChanges({ tabId: 'tab-mixed', userIds: ['kim'], lastChangedAt: 1, parts: ['machine'] })
-  await vi.advanceTimersByTimeAsync(5_000)
-  announceSwarmChanges({ tabId: 'tab-mixed', userIds: ['kim'], lastChangedAt: 2, parts: ['machine'] })
-  announceSwarmChanges({ tabId: 'tab-mixed', userIds: ['kim'], lastChangedAt: 3, parts: ['main'] })
-  expect(bus.published.slice(1)).toEqual([['kim', { tabId: 'tab-mixed', lastChangedAt: 3, parts: ['main', 'machine'] }]])
-  // The machine reading went with it: none is left for the end of its window.
-  await vi.advanceTimersByTimeAsync(MACHINE_COALESCE_MS)
-  expect(bus.published).toHaveLength(2)
-})
-```
-
-- [ ] **Step 2: Run them**: `… npx vitest run src/lib/swarmClientPushes.test.ts`. Expected: FAIL (the 1 s coalescer
-  publishes the readings every second; `MACHINE_COALESCE_MS` undefined).
-- [ ] **Step 3: Implement.** Give `coalescer` a `windowMs` parameter (`relaySwarmChanges` and `announced` pass
-  `COALESCE_MS`). Add a second process-level coalescer `announcedReadings` with `MACHINE_COALESCE_MS` for changes whose
-  parts are only `machine`. In `announceSwarmChanges`: a machine-only change goes to `announcedReadings`; any other
-  change takes what `announcedReadings` holds for that Swarm (a `take(key)` on the coalescer that returns and clears the
-  held value, leaving its window open), merges it, and goes to `announced`. Update the comment above `COALESCE_MS`
-  with the measurement (54,282 machine pushes a day for one Swarm of ten machines, 2026-10-30).
-- [ ] **Step 4: Run the file.** Expected: PASS, the existing tests included (the old "publishes at most once per Swarm
-  a second" test still passes: its machine part rides with the main change).
-- [ ] **Step 5: Commit** `backend/src/lib/swarmClientPushes.ts backend/src/lib/swarmClientPushes.test.ts`, message
-  "Swarm pushes: a machine's reading is published at most every 30 s; main changes still at once".
 
 ### Task 2: One heartbeat frame per beat, and no unchanged activity repeated (CLI core)
 
@@ -254,20 +198,17 @@ it('sends in full after the agent was unavailable, and remembers at most SYNC_ME
 ### Task 5: Docs, and the "after" number
 
 **Files:**
-- Modify: `docs/swarms.md` (the push section: machine readings at most every 30 s), the spec's Results section.
+- Modify: the spec's Results section.
 
-- [ ] **Step 1:** Update `docs/swarms.md` where it describes Swarm pushes (search "swarm_changed" / "push") with the
-  30 s rule and why.
-- [ ] **Step 2:** After release, on a comparable day, run Task 0's script on that day's Desktop log and fill the
+- [ ] **Step 1:** After release, on a comparable day, run Task 0's script on that day's Desktop log and fill the
   "after" row in the spec. (Done after release; leave the row marked pending until then.)
-- [ ] **Step 3: Commit** `docs/swarms.md docs/plans/2026-10-31-live-events-relay-design.md`, message
-  "Docs: Swarm machine readings pushed every 30 s; frame counts before".
+- [ ] **Step 2: Commit** `docs/plans/2026-10-31-live-events-relay-design.md`, message "Docs: frame counts after".
 
 ## Validation and release
 
 - Backend unit (`src/lib`), CLI unit (`src/core/turns`, `src/lib`, `src/gateway`, `src/backendSocket.spec.ts`),
   `npm run test:core`, both `tsc`, `tui/tests/e2e.sh`.
-- Release order: backend (task 1), CLI (tasks 2-4); each is compatible alone.
+- Release: the CLI (tasks 2-4); each is compatible alone.
 
 ---
 
@@ -287,8 +228,8 @@ gateway keeps `tuiUntil` and, once it has heard one, holds those four event type
 - Values: key `tui_open:{userId}` `EX 150`; push gate `tui_open_said:{userId}` `SET NX EX 60`; `forMs` 180000 (open)
   or 0 (none); frame type `__tui_open`; held types exactly `tool_end`, `subagent_finished`, `done`, `context_compact`.
 - TUI surfaces are the backend's `TUI_SURFACES` (`tui`, `harness-os`, `harness-os-pi`); the desktop surface never
-  counts. A team socket neither gets the push nor the attach word.
-- No word heard (older backend, team account, link not re-attached) means every event is relayed, as today.
+  counts.
+- No word heard (older backend, link not re-attached) means every event is relayed, as today.
 - Guest-sealed copies, windows on this computer and `productUsage.observe` are never affected.
 
 ## Review Focus (change 5)
@@ -338,7 +279,6 @@ it('tells the daemon at attach whether a terminal app of the account is open, an
   expect(send).toHaveBeenCalledWith({ t: 'down', connId: '', frame: { type: '__tui_open', payload: { forMs: 180_000 } } })
 })
 it('says none is open at attach, so the daemon starts holding events back', async () => { /* tuiOpenNow false → forMs 0 */ })
-it('tells a team machine nothing about terminal apps', async () => { /* team: no subscribeTuiOpen, no __tui_open */ })
 ```
 
   In `adapterTuiPresence.test.ts` (copy the socket harness of `adapterShortTurns.test.ts`, its `bus.js` mock gaining
@@ -348,7 +288,7 @@ it('tells a team machine nothing about terminal apps', async () => { /* team: no
 - [ ] **Step 2: Run** `cd backend && NODE_ENV=test HARNESS_CREDENTIAL_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= npx vitest run src/lib/bus.test.ts src/lib/adapterAccountPushes.test.ts src/lib/adapterTuiPresence.test.ts`.
   Expected: FAIL (functions missing).
 - [ ] **Step 3: Implement** the three `bus.ts` functions, the `adapterWs.ts` call (`void noteTuiPresence(userId,
-  kind)` in the TUI-surface branch), and in `relayAccountPushes` (not for `opts.team`): subscribe, then send the
+  kind)` in the TUI-surface branch), and in `relayAccountPushes`: subscribe, then send the
   attach word (`forMs: await tuiOpenNow(userId) ? TUI_OPEN_FOR_MS : 0`). Comment why (spec change 5).
 - [ ] **Step 4: Run** the files, then `npx tsc --noEmit -p .`. Expected: PASS, clean.
 - [ ] **Step 5: Commit** the six files, message "Account pushes: a terminal app open on the account is told to its
@@ -403,8 +343,7 @@ it('always sends a guest\'s sealed copy, held or not', async () => { /* guest se
 
 ### Task 8: Docs
 
-- [ ] Update the spec's status line (change 5 built) and `docs/swarms.md` if it describes relayed events (search
-  "relay"); commit.
+- [ ] Update the spec's status line (change 5 built); commit.
 
 ## Validation (change 5)
 

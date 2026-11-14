@@ -1,10 +1,10 @@
 # Round Dial: A Model List Too Big for One Frame No Longer Drops the USB Link Implementation Plan
 
-> **How this is worked:** by the project's instructions, task by task, each failing test committed before its code.
+> **How this is worked:** task by task, each failing test committed before its code.
 
 **Goal:** The dial's model picker shows the selected model plus the rest, up to 48, within one frame, and an oversized frame never closes the port.
 
-**Architecture:** `models.list` (cli/src/cable/cableSession.ts) answers the selected id first, then the catalog in order, up to the dial's 48, and stops before the frame would pass `CABLE_MAX_PAYLOAD - 256` bytes or `SWARM_TOKENS_MAX` tokens, the bounds other Swarm frames already use. `send()` tells an encode failure (a message over the cap: a bug on this side) from a write failure (a dead port): the first is logged and dropped, and only the second closes the link.
+**Architecture:** `models.list` (cli/src/cable/cableSession.ts) answers the selected id first, then the catalog in order, up to the dial's 48, and stops before the frame would pass `CABLE_MAX_PAYLOAD - 256` bytes or `SWARM_TOKENS_MAX` tokens, the bounds other frames already use. `send()` tells an encode failure (a message over the cap: a bug on this side) from a write failure (a dead port): the first is logged and dropped, and only the second closes the link.
 
 **Tech Stack:** TypeScript, Vitest.
 
@@ -15,7 +15,7 @@
 - The PR body starts with: `Requested by diego@autonomous.ai through Harness.`
 - No firmware change. Never publish firmware, run upload scripts or touch the device update manifest.
 - Only `cli/src/cable/cableSession.ts` and its spec change.
-- Before Ready: both new tests fail on main, red/green evidence in a PR comment, and `npm run test:super-tabs`.
+- Before Ready: both new tests fail on main, red/green evidence in a PR comment.
 
 ## Review Focus
 
@@ -51,4 +51,4 @@
 
 - [ ] **Step 1: Write the failing test** `drops and logs a frame over the cap, and the link stays up`: a message of about 9000 bytes sent through the session returns false, a log line names it, `port.isOpen` stays true, and the next small message still goes.
 - [ ] **Step 2: Run.** Expected: FAIL (the port closed). **Step 3: Commit.**
-- [ ] **Step 4: Implement.** **Step 5: Run** the file and `npm run test:super-tabs`. Expected: PASS. **Step 6: Commit and push.**
+- [ ] **Step 4: Implement.** **Step 5: Run** the file. Expected: PASS. **Step 6: Commit and push.**

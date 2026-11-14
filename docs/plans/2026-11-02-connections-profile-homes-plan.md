@@ -1,7 +1,7 @@
 # Connections reach an agent running under a profile home: plan
 
-**Goal:** An agent started under a Claude profile (`CLAUDE_CONFIG_DIR`) or a Codex profile (`CODEX_HOME`), such as a switched PM
-(#2527-#2529), gets the connection entries the default homes get. Today `sync` writes only `<HOME>/.claude.json` and
+**Goal:** An agent started under a Claude profile (`CLAUDE_CONFIG_DIR`) or a Codex profile (`CODEX_HOME`) gets the
+connection entries the default homes get. Today `sync` writes only `<HOME>/.claude.json` and
 `~/.codex/config.toml` (or the daemon's own moved homes), so such an agent has no connections. Task #2088.
 
 ## Design
