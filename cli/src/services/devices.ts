@@ -49,6 +49,7 @@ import { fileStamp, listProcesses, processAlive } from '../lib/sessionSearch/ext
 import { setVoiceRouterDeviceConnected, setVoiceRouterSessions, shutdownVoiceRouter } from '../lib/voiceRouter.js'
 import { createTally, createTierDecider, type Tier, type TierDecision, type TierInput } from '../lib/notifyTier.js'
 import { createPartGuard } from './devicesGuard.js'
+import { frontHandler, type DevicesListener, type ListenerHandler } from './devicesListener.js'
 import { FLEET_FALLBACKS, startFleet, type Fleet } from './fleet.js'
 
 export { DEVICES_REQUESTS }
@@ -88,6 +89,10 @@ export interface DevicesDeps {
   /** For this service's tests: how `orca`, and the commands a tap runs to open an app (cable/hosts/open.ts), are found and
    *  run. */
   orca?: OrcaDeps
+  /** Opens the devices' own listener with these handlers (services/devicesListener.ts). Given by the devices process
+   *  alone: inside the core's process (`HARNESSD_SERVICES=none`, Harness OS) there is none, so the core's process opens
+   *  no socket for the devices, and the dial follows no app in front there. */
+  listen?: (handlers: Readonly<Record<string, ListenerHandler>>, log: (line: string) => void) => Promise<DevicesListener | null>
 }
 
 /** ⌘K's answer while the fleet is not running: it never started, so there is no list to weigh. */
@@ -643,6 +648,12 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   else cable.start()
   ;(deps.onExit ?? ((run) => { process.once('exit', run) }))(() => shutdownVoiceRouter())
 
+  // `harness hardware watch` tells the devices' own listener which app is in front, and the dial with no window follows it
+  // once it settles (cable/hosts/appFilter.ts): the core never hears it. Another message type is another key here. A
+  // rejection's text is not logged: it can hold the socket's path, and a path the account's name.
+  const listening = deps.listen?.({ front: frontHandler((app) => part.call('dial', () => cableHost.front(app))) }, log)
+    .catch((): null => { log('[devices] listener not opened · failed'); return null })
+
   /** A card bound for the devices, translated once for the cable. */
   const toCable = (frame: Record<string, unknown>): void => {
     // A question, its close and a turn's card each also move the agent on the dial's list with no window (hosts/harness.ts).
@@ -769,6 +780,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     inboxGone: (pollId) => inboxCalls?.inboxGone(pollId),
     // The serial ports first: a port left held makes esptool fail in a way that reads like dead hardware.
     stop: async () => {
+      // The listener before anything, once it has opened: no front reaches a stopped cable or sets a timer after the
+      // timers below are cleared.
+      await (await listening)?.close()
       for (const agentId of [...replies.keys()]) endReplies(agentId, false)   // no timer may fire into a stopped cable
       for (const timer of timers) clearInterval(timer)
       for (const timer of endings.values()) clearTimeout(timer)
