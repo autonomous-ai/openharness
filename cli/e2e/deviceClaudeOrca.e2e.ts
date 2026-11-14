@@ -152,14 +152,14 @@ describe('the dial shows Claude Code waiting outside Harness', () => {
     expect(run.ms).toBeLessThan(AT_ONCE_MS)
     await line(dial, claude.id, 'printf hi · answer in Orca', 'the waiting line', since)
     // The round dial's asking face draws it from a question, which the dial only shows.
-    const shown = [{ key: 'prompt', q: 'printf hi · answer in Orca', options: ['Answer in Orca'] }]
+    const shown = [{ key: 'prompt', q: 'printf hi · answer in Orca', options: ['In Orca'] }]
     const question = await dial.next((m) => m.t === 'question' && m.agentId === claude.id, 45_000, 'the question', since)
     expect(question).toEqual({ t: 'question', agentId: claude.id, name: 'in-orca', engine: 'claude', machine: expect.any(String),
       id: expect.stringMatching(/^shown:/), questions: shown })
     // Nothing for the dial to answer with: no `a` on its row, and an answer, a reviewed one or spoken words are refused.
     expect(dial.messages.filter((m) => m.t === 'agent' && m.id === claude.id).map((row) => row.caps)).not.toContainEqual(expect.stringContaining('a'))
     const tried = dial.messages.length
-    dial.send({ t: 'answer', agentId: claude.id, requestId: question.id, answers: { prompt: 'Answer in Orca' } })
+    dial.send({ t: 'answer', agentId: claude.id, requestId: question.id, answers: { prompt: 'In Orca' } })
     dial.send({ t: 'question.read', agentId: claude.id, requestId: 'read-1' })
     const state = await dial.next((m) => m.t === 'question.state' && m.requestId === 'read-1', 45_000, 'the question read', tried)
     expect(state).toMatchObject({ ok: true, id: question.id, questions: shown })

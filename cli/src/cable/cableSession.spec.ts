@@ -4129,7 +4129,7 @@ describe('what the dial cannot do for an agent', () => {
     const host = caps({ answerReviewed, transcribe, canSpeakQuestion: () => true })
     const { session, port } = await greeted(host)
     try {
-      const shown = [{ key: 'prompt', q: 'npm test · answer in Orca', options: ['Answer in Orca'] }]
+      const shown = [{ key: 'prompt', q: 'npm test · answer in Orca', options: ['In Orca'] }]
       // a1 is listed in Orca; `gone` is no longer listed, its question still on the dial.
       for (const agentId of ['a1', 'gone']) {
         const id = `${SHOWN_ONLY_PREFIX}${agentId}`
@@ -4138,7 +4138,7 @@ describe('what the dial cannot do for an agent', () => {
         port.say({ t: 'question.read', agentId, requestId: 'read-1' })
         await vi.waitFor(() => expect(read()).toHaveLength(1))
         const { token } = read()[0]
-        port.say({ t: 'answer', agentId, requestId: id, answers: { prompt: 'Answer in Orca' } })
+        port.say({ t: 'answer', agentId, requestId: id, answers: { prompt: 'In Orca' } })
         port.say({ t: 'answer.reviewed', agentId, requestId: 'send-1', token, choices: [1] })
         port.say({ t: 'voice.begin', agentId, questionToken: token, questionIndex: 0, uploadId: `speech-${agentId}` })
         port.pcm(Buffer.alloc(640)); port.say({ t: 'voice.end', uploadId: `speech-${agentId}` })

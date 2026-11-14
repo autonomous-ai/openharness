@@ -247,7 +247,7 @@ int main(int argc,char **argv) {
     // A permission prompt that waits in the agent's own app (the host's services/devices.ts): one option, which the host's
     // inbox needs, and no canText. Filed with its prompt for the face, drawable on the question screen, closed by its id.
     {
-        cJSON option={.type=JSTRING,.valuestring="Answer in Orca"};
+        cJSON option={.type=JSTRING,.valuestring="In Orca"};
         cJSON fields[]={{.string="key",.type=JSTRING,.valuestring="prompt"},
             {.string="q",.type=JSTRING,.valuestring="printf hi \xc2\xb7 answer in Orca"},
             {.string="options",.type=JARRAY,.child=&option}};

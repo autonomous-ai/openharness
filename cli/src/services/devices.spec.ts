@@ -1255,7 +1255,7 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
 
   // The round dial draws an activity line on the working face: the prompt is also the question its asking face draws, for
   // display only (docs/specs/2026-11-13-device-claude-orca.md, "Waiting for permission").
-  const shownAs = (q: string) => [{ key: 'prompt', q, options: ['Answer in Orca'] }]
+  const shownAs = (q: string) => [{ key: 'prompt', q, options: ['In Orca'] }]
   it('asked also reaches the dial as a question it only shows, ahead of the line, and its wait clearing closes it', async () => {
     const { core, port } = start({ faults: ['fleet'] })
     port.observed(hook('turn-start'))
