@@ -78,13 +78,18 @@ function body(kind: Body, lines: string[]): HTMLElement[] {
     }
     case 'output': {
       const output = element('div', 'output')
+      output.setAttribute('role', 'alert')
       output.append(...lines.slice(-OUTPUT_LINES).map((line) => element('p', 'line', line)))
       return [output]
     }
     case 'note':
       return lines.length > 0 ? [element('p', 'body muted', lines[0])] : []
-    case 'error':
-      return lines.length > 0 ? [element('p', 'body error', lines[0])] : []
+    case 'error': {
+      if (lines.length === 0) return []
+      const error = element('p', 'body error', lines[0])
+      error.setAttribute('role', 'alert')
+      return [error]
+    }
   }
 }
 
@@ -96,7 +101,12 @@ export function render(root: HTMLElement, view: View | null, act: (action: Actio
 
   const screen = element('main', 'screen')
   const content = element('div', 'content')
-  content.append(element('h1', 'heading', face.heading), ...body(face.body, view.lines))
+  const under = body(face.body, view.lines)
+  content.append(element('h1', 'heading', face.heading), ...under)
+  // The text a screen reader reads after the focused button's label. The window shows one screen at a time, so the ids
+  // are unique in it.
+  const text = under.filter((node) => node.textContent)
+  text.forEach((node, i) => (node.id = `body-${i}`))
   screen.append(content)
 
   if (face.buttons.length > 0) {
@@ -104,6 +114,7 @@ export function render(root: HTMLElement, view: View | null, act: (action: Actio
     for (const { label, action, primary } of face.buttons) {
       const button = element('button', primary ? 'button primary' : 'button', label) as HTMLButtonElement
       button.type = 'button'
+      if (primary && text.length > 0) button.setAttribute('aria-describedby', text.map((node) => node.id).join(' '))
       button.addEventListener('click', () => act(action))
       row.append(button)
     }
