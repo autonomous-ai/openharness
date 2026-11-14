@@ -18,7 +18,7 @@ const CONTRACT_PAIRS = [
 
 describe('gallery', () => {
   it('the gallery draws every state in both themes', () => {
-    expect(STATES).toHaveLength(10)
+    expect(STATES).toHaveLength(11)
     expect(new Set(STATES.map(({ view }) => `${view.screen}.${view.phase}`))).toEqual(new Set(CONTRACT_PAIRS))
 
     const root = document.createElement('div')
@@ -37,6 +37,10 @@ describe('gallery', () => {
         expect(frame.querySelector('.heading')?.textContent).toBe(alone.querySelector('.heading')?.textContent)
         expect(frame.innerHTML).toBe(alone.innerHTML)
       })
+
+      const focused = root.querySelectorAll(`[data-theme="${theme}"] .frame.focused`)
+      expect(focused).toHaveLength(1)
+      expect(focused[0].querySelector('.primary')?.textContent).toBe('Sign in')
 
       const trays = root.querySelectorAll<HTMLImageElement>(`[data-theme="${theme}"] .bar img.tray`)
       expect(trays).toHaveLength(1)

@@ -3,7 +3,8 @@
 import type { View } from './api'
 import { render } from './screens'
 
-export const STATES: { name: string; view: View }[] = [
+// focused draws the primary button's focus ring, which a page shows on one element at a time (gallery.html).
+export const STATES: { name: string; view: View; focused?: true }[] = [
   { name: 'Install · working', view: { screen: 'install', phase: 'working', lines: [] } },
   {
     name: 'Install · failed',
@@ -20,6 +21,7 @@ export const STATES: { name: string; view: View }[] = [
     },
   },
   { name: 'Sign in · offer', view: { screen: 'sign_in', phase: 'offer', lines: [] } },
+  { name: 'Sign in · offer, focused', view: { screen: 'sign_in', phase: 'offer', lines: [] }, focused: true },
   { name: 'Sign in · working', view: { screen: 'sign_in', phase: 'working', lines: [] } },
   { name: 'Sign in · browser', view: { screen: 'sign_in', phase: 'browser', lines: [] } },
   {
@@ -55,10 +57,10 @@ function theme(name: 'light' | 'dark'): HTMLElement {
 
   const grid = document.createElement('div')
   grid.className = 'grid'
-  for (const { name: caption, view } of STATES) {
+  for (const { name: caption, view, focused } of STATES) {
     const figure = document.createElement('figure')
     const frame = document.createElement('div')
-    frame.className = 'frame'
+    frame.className = focused ? 'frame focused' : 'frame'
     frame.style.width = `${WIDTH}px`
     frame.style.height = `${HEIGHT}px`
     // The gallery's buttons do nothing.
@@ -75,7 +77,7 @@ function theme(name: 'light' | 'dark'): HTMLElement {
 
 /** Draws every state, once light and once dark. */
 export function draw(root: HTMLElement): void {
-  // Drawn apart from the page, so render's focus lands on none of the twenty windows.
+  // Drawn apart from the page, so render's focus lands on none of the windows.
   root.replaceChildren(theme('light'), theme('dark'))
 }
 

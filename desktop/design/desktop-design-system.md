@@ -1347,7 +1347,8 @@ theme: the app runs from macOS 13, older than WebKit's `color-mix()`.
   (`device-app/src-tauri/icons/tray.png`): black on a light bar, white on a dark one.
 
 The [gallery](../../device-app/ui/gallery.html) shows every screen in every
-state, light and dark, and the menu-bar icon on both bars. Build it with
+state, light and dark, the primary button focused, and the menu-bar icon on
+both bars. Build it with
 `npm run gallery` in `device-app/ui`, then open the file. A change to a screen
 changes the gallery and this section in the same pull request.
 
