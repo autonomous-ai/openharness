@@ -117,6 +117,41 @@ describe('screens', () => {
     expect(act).toHaveBeenLastCalledWith('not_now')
   })
 
+  it('the install shows its last four lines; a note or an error shows its first', async () => {
+    await mount(at('install', 'failed', ['1', '2', '3', '4', '5', '6']))
+    expect([...page().querySelectorAll('.output .line')].map((line) => line.textContent)).toEqual(['3', '4', '5', '6'])
+
+    push(at('sign_in', 'browser', ['first', 'second']))
+    expect(text()).toContain('first')
+    expect(text()).not.toContain('second')
+
+    for (const screen of ['sign_in', 'claude'] as const) {
+      push(at(screen, 'failed', ['first', 'second']))
+      expect(text()).toContain('first')
+      expect(text()).not.toContain('second')
+    }
+  })
+
+  it('the primary button is the one the contract names', async () => {
+    const primary = () => page().querySelector('.primary')?.textContent ?? null
+    const table: [Screen, Phase, string | null][] = [
+      ['install', 'working', null],
+      ['install', 'failed', null],
+      ['sign_in', 'offer', 'Sign in'],
+      ['sign_in', 'working', null],
+      ['sign_in', 'browser', null],
+      ['sign_in', 'failed', 'Retry'],
+      ['claude', 'offer', 'Turn on'],
+      ['claude', 'working', null],
+      ['claude', 'failed', 'Retry'],
+    ]
+    await mount(null)
+    for (const [screen, phase, label] of table) {
+      push(at(screen, phase, ['a line']))
+      expect([screen, phase, primary()]).toEqual([screen, phase, label])
+    }
+  })
+
   it('outside text is drawn as text', async () => {
     const outside = '<img src=x onerror=alert(1)>'
     await mount(at('install', 'failed', [outside]))
