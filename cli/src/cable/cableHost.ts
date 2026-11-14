@@ -136,13 +136,14 @@ export interface CableHostWiring {
   appSwitched?: (cause: SwitchCause) => void
   /** A dial sent a pick from its list of apps, whatever came of it: the picker's measure. A notice's pick is none. */
   appPicked?: () => void
-  /** Runs `run` once after `ms` and returns its cancel: the settle of the app in front. Absent, an unref'd setTimeout. */
+  /** Runs `run` once after `ms` and returns its cancel: the settle of the app in front. The devices always give theirs,
+   *  which their stop cancels; absent (a test's host), an unref'd setTimeout. */
   appTimer?: (ms: number, run: () => void) => () => void
   /** In [0, 1): the draw between apps tied for the most agents. Absent, Math.random. */
   appRandom?: () => number
 }
 
-/** The settle of the app in front when no timer is wired: never what keeps the process up. */
+/** The settle of the app in front when no timer is wired (a test's host): never what keeps the process up. */
 function unrefAfter(ms: number, run: () => void): () => void {
   const timer = setTimeout(run, ms)
   timer.unref()

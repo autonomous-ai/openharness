@@ -319,18 +319,6 @@ describe('AppFilter', () => {
     expect(vi.getTimerCount()).toBe(0)
   })
 
-  it('stop cancels the timer', () => {
-    const { filter, agents, causes } = setup()
-    agents({ ghostty: 3, vscode: 1 })
-    expect(filter.shown()).toBe('ghostty')
-    filter.front('vscode')
-    filter.stop()
-    expect(vi.getTimerCount()).toBe(0)
-    settle()
-    expect(filter.shown()).toBe('ghostty')
-    expect(causes()).toEqual([])
-  })
-
   describe('agents not known yet', () => {
     it('the default counts known agents only: five not known yet lose to two in Ghostty', () => {
       const { filter, agents } = setup()

@@ -89,11 +89,6 @@ export class AppFilter {
     return 'switched'
   }
 
-  stop(): void {
-    this.cancelSettle?.()
-    this.cancelSettle = undefined
-  }
-
   private settle(app: string): void {
     this.cancelSettle = undefined
     if (app !== this.settledFront) {
