@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { getCurrentWindow, type Window } from '@tauri-apps/api/window'
-import { onView, view } from './api'
+import { onView, view, type View } from './api'
 import { start } from './main'
 
 vi.mock('./api')
@@ -11,6 +11,23 @@ describe('main', () => {
     vi.resetAllMocks()
     document.body.innerHTML = '<div id="app"></div>'
     vi.mocked(onView).mockResolvedValue(() => {})
+  })
+
+  it('a view event that comes before view() answers wins over the answer', async () => {
+    let push: (next: View | null) => void = () => {}
+    vi.mocked(onView).mockImplementation(async (listener) => {
+      push = listener
+      return () => {}
+    })
+    let answer: (older: View | null) => void = () => {}
+    vi.mocked(view).mockReturnValue(new Promise((resolve) => (answer = resolve)))
+    const started = start(document.getElementById('app')!)
+    await vi.waitFor(() => expect(view).toHaveBeenCalled())
+
+    push({ screen: 'sign_in', phase: 'browser', lines: [] })
+    answer({ screen: 'sign_in', phase: 'offer', lines: [] })
+    await started
+    expect(document.querySelector('h1')?.textContent).toBe('Finish in your browser')
   })
 
   it('Escape closes the window', async () => {
