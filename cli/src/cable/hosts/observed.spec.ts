@@ -15,6 +15,8 @@ function setup(over: Partial<ObservedDeps> = {}) {
   const working = new Map<string, boolean | null>()
   const externals = new Map<string, { cwd?: string; transcriptPath?: string | null }>()
   const answers = new Map<string, string>()
+  // Each transcript's last change, as its file's stamp says it.
+  const stamps = new Map<string, number>()
   // Each look at the machine's processes, as OpenSessions takes one.
   let looks = 0
   let held: Promise<void> | undefined
@@ -40,6 +42,7 @@ function setup(over: Partial<ObservedDeps> = {}) {
     } as unknown as ObservedDeps['openSessions'],
     sessionRows: { find } as unknown as ObservedDeps['sessionRows'],
     lastAnswer: async (_engine, path) => answers.get(path),
+    fileStamp: async (path: string) => (stamps.has(path) ? { stamp: '', mtime: stamps.get(path)! } : null),
     excluded: ['/data/harness'],
     log: () => {},
     ...over,
@@ -51,7 +54,7 @@ function setup(over: Partial<ObservedDeps> = {}) {
     engine: 'claude', sessionId: 's1', event, cwd: '/work/proj', callerPid: 100, hostHints: {}, at: clock.t, ...over,
   })
   return {
-    src, clock, gens, procs, alive, open, owners, working, externals, answers, changes, ev, find,
+    src, clock, gens, procs, alive, open, owners, working, externals, answers, stamps, changes, ev, find,
     looks: () => looks, hold: (until: Promise<void>) => { held = until },
   }
 }
@@ -117,6 +120,16 @@ describe('ObservedSource states', () => {
   it('capabilities are status only', () => {
     const { src } = setup()
     expect(src.capabilities()).toEqual({ status: true, voice: false, focus: false, answer: false })
+  })
+
+  it('takes needs-input only while a turn works', () => {
+    const { src, ev } = setup()
+    src.ingest(ev('session-start'))
+    src.ingest(ev('needs-input'))
+    expect(src.list()[0].state).toBe('idle')
+    src.ingest(ev('turn-stop'))
+    src.ingest(ev('needs-input'))
+    expect(src.list()[0].state).toBe('done')
   })
 
   it('turn-stop for claude sets lastAnswer and unseenDone', async () => {
@@ -301,11 +314,12 @@ describe('ObservedSource removal', () => {
 
 describe('ObservedSource codex and open sessions', () => {
   it('codex working → done when its owner reads idle (3 s check)', async () => {
-    const { src, open, owners, working, answers, ev } = setup()
+    const { src, clock, open, owners, working, answers, ev } = setup()
     open.set('c1', 'terminal')
     owners.set('c1', { pid: 100, engine: 'codex' })
     answers.set('/c/r.jsonl', 'Codex says hi')
     src.ingest(ev('turn-start', { engine: 'codex', sessionId: 'c1', transcriptPath: '/c/r.jsonl' }))
+    clock.t += 3_000
     working.set('c1', true)
     await src.checkWorking()
     expect(src.list()[0].state).toBe('working')
@@ -324,9 +338,32 @@ describe('ObservedSource codex and open sessions', () => {
     expect(src.list()[0].state).toBe('working')
   })
 
-  it('checkWorking ignores claude sessions', async () => {
-    const { src, ev } = setup()
-    src.ingest(ev('turn-start'))
+  it('a Claude turn stopped with Esc goes idle once its record reads idle, with no done', async () => {
+    const lastAnswer = vi.fn(async () => 'x')
+    const { src, clock, open, owners, working, ev } = setup({ lastAnswer })
+    open.set('s1', 'terminal')
+    owners.set('s1', { pid: 100, engine: 'claude' })
+    src.ingest(ev('turn-start', { transcriptPath: '/t/s.jsonl' }))
+    working.set('s1', false)
+    // A turn just begun can still read idle: its prompt's hook runs before the engine marks the turn begun.
+    await src.checkWorking()
+    expect(src.list()[0].state).toBe('working')
+    clock.t += 3_000
+    await src.checkWorking()
+    expect(src.list()[0]).toMatchObject({ state: 'idle', unseenDone: false })
+    expect(lastAnswer).not.toHaveBeenCalled()
+  })
+
+  it('a waiting agent works again once its transcript grows past the moment it began waiting', async () => {
+    const { src, clock, stamps, ev } = setup()
+    src.ingest(ev('turn-start', { transcriptPath: '/t/s.jsonl' }))
+    stamps.set('/t/s.jsonl', clock.t)
+    clock.t += 6_000
+    src.ingest(ev('needs-input'))
+    await src.checkWorking()
+    expect(src.list()[0].state).toBe('needs-you')
+    // Allowed in its own terminal, with no hook: the tool's result is written.
+    stamps.set('/t/s.jsonl', clock.t + 1)
     await src.checkWorking()
     expect(src.list()[0].state).toBe('working')
   })
