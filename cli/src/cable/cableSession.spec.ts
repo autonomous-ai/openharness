@@ -5126,4 +5126,50 @@ describe('a prompt in the app in front', () => {
       expect(focuses(port)).toEqual([{ t: 'focus', agentId: 'a2' }])
     } finally { await session.stop() }
   })
+
+  /** A list read the test holds out (it can read files for activity times) until `release`. */
+  async function heldRead() {
+    const rows: CableAgent[] = [...AGENTS, { id: 'a3', name: 'Release notes', engine: 'claude' }]
+    const snapshot = { agents: rows, tab: 't1', total: rows.length }
+    let hold = false
+    let release = () => {}
+    const c = await greeted({
+      listAgentSnapshot: async () => {
+        if (!hold) return snapshot
+        hold = false
+        return new Promise<typeof snapshot>((resolve) => { release = () => resolve(snapshot) })
+      },
+    })
+    const followApp = vi.spyOn(c.session, 'followApp')
+    c.port.say({ t: 'focus', agentId: 'a1' })   // a hand put the dial on a1
+    return { ...c, followApp, holdNext: () => { hold = true }, release: () => release() }
+  }
+
+  it('two prompts whose list reads end out of order: the later one wins', async () => {
+    const { session, port, promptFollowed, followApp, holdNext, release } = await heldRead()
+    try {
+      holdNext()
+      const first = session.followPrompt('a2')
+      await session.followPrompt('a3')
+      release()
+      await first
+      expect(followApp.mock.calls).toEqual([['mac-local', 'a3']])
+      expect(focuses(port)).toEqual([{ t: 'focus', agentId: 'a3' }])
+      expect(promptFollowed.mock.calls).toEqual([['moved']])
+    } finally { await session.stop() }
+  })
+
+  it('a later prompt for the agent the dial shows keeps it there, though the earlier read ends after it', async () => {
+    const { session, port, promptFollowed, followApp, holdNext, release } = await heldRead()
+    try {
+      holdNext()
+      const first = session.followPrompt('a2')
+      await session.followPrompt('a1')
+      release()
+      await first
+      expect(followApp).not.toHaveBeenCalled()
+      expect(focuses(port)).toEqual([])
+      expect(promptFollowed).not.toHaveBeenCalled()
+    } finally { await session.stop() }
+  })
 })
