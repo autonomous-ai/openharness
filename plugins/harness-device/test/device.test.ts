@@ -27,10 +27,13 @@ type World = {
 }
 
 /**
- * Sets the world beneath the mod. `launchers` are the argv[0]s that start; `answers` are the daemon's answers, one
- * per poll, the last repeated.
+ * Sets the world beneath the mod. `launchers` are the argv[0]s that start, and `exitCode` is what each exits with;
+ * `answers` are the daemon's answers, one per poll, the last repeated.
  */
-function world(on: On, { launchers = [LOCAL], answers }: { launchers?: string[]; answers: Answer[] }): World {
+function world(
+  on: On,
+  { launchers = [LOCAL], exitCode = 0, answers }: { launchers?: string[]; exitCode?: number; answers: Answer[] },
+): World {
   const steps: World['steps'] = []
   // Before the clock's own hook, so above it: it hears each of the mod's waits fire, just before the mod's function runs.
   on('clock.after', { ms: [0, MINUTE, 10 * MINUTE] }, async (_, e, next) => {
@@ -54,7 +57,9 @@ function world(on: On, { launchers = [LOCAL], answers }: { launchers?: string[];
   on('process.run', (_, e) => {
     w.runs.push([...e.argv])
     if (!launchers.includes(e.argv[0] ?? '')) return { deny: 'cannot start' }
-    const out = { exitCode: 0, stdout: JSON.stringify({ socketPath: SOCKET }), stderr: '' }
+    const out = exitCode === 0
+      ? { exitCode, stdout: JSON.stringify({ socketPath: SOCKET }), stderr: '' }
+      : { exitCode, stdout: '', stderr: 'Unknown command: device' }
     return { value: { ...out, isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('http.fetch', async (_, e) => {
@@ -168,6 +173,18 @@ test('no launcher at all stays idle and asks again in 60 s', async ($, on) => {
   expect(w.runs).toHaveLength(2)
   await w.clock.advance(1)
   expect(w.runs).toHaveLength(4)
+  expect(w.polls).toHaveLength(0)
+})
+
+// An older Harness with no `device` word, or one with no socket here (Windows): no answer comes before an update.
+test('a launcher that starts but exits non-zero is asked again in 10 minutes, not before', async ($, on) => {
+  const w = world(on, { exitCode: 1, answers: [held(25_000)] })
+  await start($, w)
+  expect(w.runs).toHaveLength(1)
+  await w.clock.advance(10 * MINUTE - 1)
+  expect(w.runs).toHaveLength(1)
+  await w.clock.advance(1)
+  expect(w.runs).toHaveLength(2)
   expect(w.polls).toHaveLength(0)
 })
 
