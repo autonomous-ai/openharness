@@ -5,6 +5,10 @@ use crate::types::Daemon;
 /// How long a watch that an old daemon or CLI turned away waits before it is tried again.
 pub const RETRY_OLD_SECS: u64 = 60;
 
+/// How often a daemon down twice in a row is looked at again, so one that comes back by itself is seen before the
+/// slot or while the desktop app runs.
+const LOOK_AGAIN_SECS: u64 = 15;
+
 /// Seconds 10 to 19 of a minute: the desktop app's `inSpawnSlot`, clear of the CLI's update slot.
 pub fn in_spawn_slot(now: u64) -> bool {
     (10..20).contains(&(now % 60))
@@ -20,8 +24,11 @@ pub enum Keep {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Watch {
     Running,
-    /// Ended with the daemon down: looked at again on a tick.
-    Down,
+    /// Ended with the daemon down at `since`: looked at again on the next tick, and from the second down in a row
+    /// every 15 s.
+    Down {
+        since: u64,
+    },
     /// Turned away by an old daemon or CLI, which updates itself.
     Old {
         since: u64,
@@ -72,7 +79,7 @@ impl KeepAlive {
                 self.daemon = Daemon::Updating;
             }
             _ => {
-                self.watch = Watch::Down;
+                self.watch = Watch::Down { since: now };
                 self.downs += 1;
                 self.daemon = if self.last_start_ok {
                     Daemon::Stopped
@@ -90,13 +97,17 @@ impl KeepAlive {
         match self.watch {
             Watch::Running | Watch::Closed => None,
             Watch::Old { since } => waited(now, since, RETRY_OLD_SECS).then(|| self.spawn_watch()),
-            // The desktop app supervises its own daemon; the app only watches the dial.
-            Watch::Down if self.downs < 2 || desktop_running => Some(self.spawn_watch()),
-            Watch::Down if in_spawn_slot(now) && self.last_start_minute != Some(now / 60) => {
-                self.start_begun(now);
-                Some(Keep::RunStart)
+            Watch::Down { since } => {
+                // One down is not proof: a self-update leaves a gap. The desktop app supervises its own daemon.
+                let start = self.downs >= 2 && in_spawn_slot(now) && self.last_start_minute != Some(now / 60);
+                if start && !desktop_running {
+                    self.start_begun(now);
+                    Some(Keep::RunStart)
+                } else {
+                    let wait = if self.downs < 2 { 0 } else { LOOK_AGAIN_SECS };
+                    waited(now, since, wait).then(|| self.spawn_watch())
+                }
             }
-            Watch::Down => None,
         }
     }
 
