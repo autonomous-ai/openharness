@@ -1,10 +1,11 @@
 /**
  * Claude Code started outside Harness, as a terminal app starts it (the end-to-end suite's fake engine): no tmux pane,
- * no Harness pane, and the app it runs in named only by the hints a test gives it (hook/notify.mjs HOST_HINTS).
+ * no Harness pane, and the app it runs in named by the hints a test gives it (hook/notify.mjs HOST_HINTS) and, when a
+ * test asks, by a fake of that app above it, as the open scan reads its parents (src/cable/hosts/scannedApp.ts).
  */
 import { spawn, type ChildProcess } from 'node:child_process'
-import { mkdirSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, mkdirSync, symlinkSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { observedAgentId } from '../../src/cable/hosts/observed.js'
 import { until, type IsolatedDaemon } from './daemon.js'
 
@@ -38,6 +39,40 @@ while True:
             inputs = [fd]
 `
 
+/** The apps a test can start a tab under: the bundle and id macOS names, the executable Linux names. */
+const FAKE_APPS = {
+  ghostty: { bundle: 'Ghostty', id: 'com.mitchellh.ghostty', exe: 'ghostty' },
+  vscode: { bundle: 'Visual Studio Code', id: 'com.microsoft.VSCode', exe: 'code' },
+} as const
+export type FakeApp = keyof typeof FAKE_APPS
+
+/** What the fake app runs: the tab's pseudo-terminal on its own stdio, gone when it goes. */
+const UNDER_APP = `
+const tab = require('node:child_process').spawn('python3', ['-c', ...process.argv.slice(1)], { stdio: 'inherit' })
+tab.on('exit', (code) => process.exit(code ?? 1))
+`
+
+/**
+ * [app]'s executable, made once under the throwaway root: Node under the app's name, which is all `ps` shows of it.
+ * On macOS a bundle under the daemon's home's Applications folder, one of the folders the scan reads bundles in; it
+ * is never one of the developer's.
+ */
+function fakeApp(d: IsolatedDaemon, app: FakeApp): string {
+  const { bundle, id, exe } = FAKE_APPS[app]
+  const contents = join(d.env.HOME!, 'Applications', `${bundle}.app`, 'Contents')
+  const path = process.platform === 'darwin' ? join(contents, 'MacOS', exe) : join(d.root, 'apps', exe)
+  if (existsSync(path)) return path
+  mkdirSync(dirname(path), { recursive: true })
+  if (process.platform === 'darwin') {
+    writeFileSync(join(contents, 'Info.plist'), `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>${id}</string></dict></plist>
+`)
+  }
+  symlinkSync(process.execPath, path)
+  return path
+}
+
 /** Claude Code in a terminal app outside Harness: no tmux pane, no Harness pane. */
 export class Outside {
   private constructor(private readonly tab: ChildProcess, readonly pid: number, readonly sessionId: string, readonly folder: string) {}
@@ -45,12 +80,14 @@ export class Outside {
   /** The dial's id for it. */
   get id(): string { return observedAgentId('claude', this.sessionId) }
 
-  static async start(d: IsolatedDaemon, folder: string, hints: Record<string, string>): Promise<Outside> {
+  /** With [app], the tab runs under a fake of it: the engine's parents are the pseudo-terminal, the app, the test. */
+  static async start(d: IsolatedDaemon, folder: string, hints: Record<string, string>, app?: FakeApp): Promise<Outside> {
     const cwd = join(d.projectsDir, folder)
     mkdirSync(cwd, { recursive: true })
     // d.env carries none of the developer's host hints (testing/daemonEnvironment.ts): only [hints] name the app.
     const env: NodeJS.ProcessEnv = { ...d.env, TERM: 'xterm-256color' }
-    const tab = spawn('python3', ['-c', PTY, d.env.CLAUDE_PATH!], { cwd, env: { ...env, ...hints }, stdio: ['pipe', 'pipe', 'pipe'] })
+    const [command, args] = app ? [fakeApp(d, app), ['-e', UNDER_APP, PTY, d.env.CLAUDE_PATH!]] : ['python3', ['-c', PTY, d.env.CLAUDE_PATH!]]
+    const tab = spawn(command, args, { cwd, env: { ...env, ...hints }, stdio: ['pipe', 'pipe', 'pipe'] })
     tab.stdout!.resume()
     const pid = await new Promise<number>((resolve, reject) => {
       let said = ''

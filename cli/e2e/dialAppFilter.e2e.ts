@@ -1,7 +1,8 @@
 /**
  * The dial's app filter (docs/specs/2026-11-14-dial-app-filter.md), on the real daemon: fake Claude Codes started outside
- * Harness in the apps their hints name (harness/outsideAgent.ts), a fake dial that greets with `appFilter: 'v1'`, and the
- * real `harness hardware watch`, written the app in front on its stdin as the Harness Device app writes it.
+ * Harness in the apps their hints name, or under a fake of the app (harness/outsideAgent.ts), a fake dial that greets
+ * with `appFilter: 'v1'`, and the real `harness hardware watch`, written the app in front on its stdin as the Harness
+ * Device app writes it.
  * - The dial with no window holds one app's ring, is sent `apps`, and picks with `app.pick`.
  * - The app in front takes the real path: the watch's stdin → the devices process's own socket (`devices.sock`, opened
  *   when a dial starts that process) → the filter, which follows it once it has settled. The core's socket carries none.
@@ -17,7 +18,7 @@ import { LocalClient } from './harness/client.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
 import type { DialMessage, FakeDial } from './harness/fakeDial.js'
-import { Outside } from './harness/outsideAgent.js'
+import { Outside, type FakeApp } from './harness/outsideAgent.js'
 
 // How `harness hardware watch` is started: the run's bundle when there is one (E2E_BUNDLE), as the daemon runs.
 const CLI_ENTRY = process.env.E2E_BUNDLE_PATH ? [process.env.E2E_BUNDLE_PATH] : ['--import', 'tsx', 'src/cli.ts']
@@ -102,8 +103,8 @@ describe('the dial\'s app filter', () => {
     await d.start()
     return { d, desk: theDesk }
   }
-  const startOutside = async (d: IsolatedDaemon, folder: string, hints: Record<string, string>): Promise<Outside> => {
-    const engine = await Outside.start(d, folder, hints)
+  const startOutside = async (d: IsolatedDaemon, folder: string, hints: Record<string, string>, app?: FakeApp): Promise<Outside> => {
+    const engine = await Outside.start(d, folder, hints, app)
     outside.push(engine)
     return engine
   }
@@ -399,22 +400,30 @@ describe('the dial\'s app filter', () => {
     await shows(again, 'vscode', vscode)
   })
 
-  it('a dial plugged in while VS Code is already in front (the watch started first) is sent VS Code\'s ring', async () => {
+  // Windows learns no app at the scan: its agents wait for their first hook.
+  it.skipIf(process.platform === 'win32')('a dial plugged in while VS Code is already in front (the watch started first) is sent VS Code\'s ring', async () => {
     const { d, desk } = await fresh()
     const run = watch(d)
     await until('the watch\'s first line', () => run.lines.length > 0, 60_000)
     run.front(VSCODE_BUNDLE)
-    // Started before the dial: no devices process hears their first hooks, and the scan the dial's attach runs finds
-    // them in no app. A prompt each, once the dial is in, names their apps.
-    const ghostty = [await startOutside(d, 'a1', GHOSTTY), await startOutside(d, 'a2', GHOSTTY), await startOutside(d, 'a3', GHOSTTY)]
-    const vscode = [await startOutside(d, 'a4', VSCODE), await startOutside(d, 'a5', VSCODE)]
+    // Started before the dial, each under a fake of its app, and each a turn done: no devices process hears their hooks,
+    // and nobody types once the dial is in, so only the scan the dial's attach runs can name their apps, from their
+    // parent processes. The turn gives each its transcript's first line, without which the scan has no row to list.
+    const ghostty = [await startOutside(d, 'a1', GHOSTTY, 'ghostty'), await startOutside(d, 'a2', GHOSTTY, 'ghostty'), await startOutside(d, 'a3', GHOSTTY, 'ghostty')]
+    const vscode = [await startOutside(d, 'a4', VSCODE, 'vscode'), await startOutside(d, 'a5', VSCODE, 'vscode')]
+    for (const engine of [...ghostty, ...vscode]) {
+      engine.type('before the dial')
+      await until(`${engine.folder}'s Stop hook to run`, () => engine.ran(d, 'Stop'), 30_000, 100)
+    }
     const dial = await plugged(desk)
     await listening(d)
     await until('the watch to hear the dial attached', () => run.lines.some((line) => line.startsWith('{"attached":true')), 60_000)
-    for (const engine of [...ghostty, ...vscode]) engine.type('the dial is in')
     // With the most agents Ghostty would be shown: VS Code is, as the watch told the devices when the dial attached.
     await showing(dial, 'VS Code\'s ring', (apps, roster) =>
       same(counts(apps), { ghostty: 3, vscode: 2 }) && apps.shown === 'vscode' && same(ids(roster).sort(), idsOf(vscode).sort()))
+    // The five were never on Other's page: the scan knew each one's app.
+    expect(appsFrames(dial).filter((apps) => apps.apps.some((a) => a.id === 'terminal'))).toEqual([])
+    expect(d.log()).toMatch(/\[observed\] scan · 5 found · 5 app known · \d+ ms/)
   })
 
   it('a dial without appFilter beside it gets all five agents in one ring and no apps frame', async () => {
