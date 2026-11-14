@@ -572,6 +572,15 @@ mod tests {
     }
 
     #[test]
+    fn reads_that_answer_after_the_cli_went_away_are_not_heard() {
+        let mut app = found();
+        let mut effects = app.handle(Event::Cli(false));
+        effects.extend(app.handle(Event::Auth(Some(true))));
+        effects.extend(app.handle(Event::Claude(claude(true))));
+        assert_eq!(rows(&effects), ["Harness removed", "Install", "Quit"]);
+    }
+
+    #[test]
     fn the_login_item_is_registered_once() {
         let saved = Saved { cli_seen: true, ..Saved::default() };
         let (mut app, effects) = App::new(saved, true, false, B);
