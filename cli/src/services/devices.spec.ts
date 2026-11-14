@@ -169,11 +169,21 @@ vi.mock('../cable/hosts/lastAnswer.js', async (real) => ({
 
 const { startDevices } = await import('./devices.js')
 
+/** What the devices ran as `orca`: recorded, so no spec types into or switches the developer's own Orca. */
+const orcaRuns: Array<[string, string[], number]> = []
+const orca = {
+  run: async (file: string, args: string[], timeoutMs: number) => { orcaRuns.push([file, args, timeoutMs]); return { code: 0 } },
+  onPath: () => '/opt/orca/bin/orca',
+  exists: () => false,
+  platform: 'linux' as const,
+}
+
 let dataDir: string
 let logs: string[]
 beforeEach(() => {
   dataDir = mkdtempSync(join(tmpdir(), 'devices-'))
   logs = []
+  orcaRuns.length = 0
   seen.bridges = {}
   seen.fleet = null
   readers.open = readers.external = null
@@ -189,7 +199,7 @@ afterEach(() => {
   vi.unstubAllEnvs()
 })
 
-function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null } = {}) {
+function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh'] } = {}) {
   const core = over.core ?? fakeCore({ dataDir })
   const ports: CorePorts = emptyPorts()
   const onExit = vi.fn()
@@ -202,6 +212,8 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
     cableDisabled: over.cableDisabled,
     readUsage: over.readUsage,
     now: over.now,
+    refresh: over.refresh,
+    orca,
     decideTier: over.decideTier === null ? undefined : over.decideTier ?? (async () => ({ tier: 'alert', by: 'test', detail: '', ms: 0 })),
     faults: new Set(over.faults ?? []),
     log: (line) => { logs.push(line) },
@@ -1614,6 +1626,12 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     }), fakeCore({ dataDir }), DEVICES_FALLBACKS, DEVICES_REQUESTS)
     ports.devices!.observed(hook('session-start'))
     expect(await machineList(ports.devices!)).toMatchObject({ view: 'machine', agents: [{ id: ID, host: 'orca', caps: 's' }] })
+    // A hook's calls too, past the guard's fallbacks: no dial here, so no card, and a poll held until its client goes.
+    expect(await ports.devices!.approval({ id: 'r1', sessionId: 'sess-1', tool: 'Bash', summary: 'npm test' })).toBe('none')
+    ports.devices!.approvalGone('r1')
+    const poll = ports.devices!.inboxPoll({ pollId: 'p1', sessionId: 'sess-1' })
+    ports.devices!.inboxGone('p1')
+    expect(await poll).toEqual({})
   })
 
   it('observed turn-stop reaches the dial as turn.done and summary with the last answer', async () => {
@@ -1819,5 +1837,200 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     walk(core, 'core')
     for (const [name, bridge] of Object.entries(seen.bridges)) if (carried(bridge.calls)) leaks.push(name)
     expect(leaks).toEqual([])
+  })
+})
+
+describe('a hook\'s approvals, the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-11-13-device-claude-orca.md)', () => {
+  const ID = observedAgentId('claude', 'sess-1')
+  const CODEX = observedAgentId('codex', 'cx-1')
+  const HANDLE = 'term_0123abcd-0000-4000-8000-0123456789ab'
+  const REQUEST = { id: 'r1', sessionId: 'sess-1', tool: 'Bash', summary: 'npm test', cwd: '/work/api' }
+  const CARD = [{ key: 'approval', q: 'Allow Bash?\nnpm test', options: ['Allow', 'Deny'], multi: false }]
+  const hook = (event: ObservedHookEvent['event'], over: Partial<ObservedHookEvent> = {}): ObservedHookEvent => ({
+    engine: 'claude', sessionId: 'sess-1', event, cwd: '/work/api', callerPid: 4242, transcriptPath: '/t/sess-1.jsonl',
+    hostHints: { ORCA_AGENT_SESSION_ID: 'orca-1' }, ...over,
+  })
+  /** The machine list is this computer's alone: no fleet's router stands in for it. */
+  const startHere = (over: Parameters<typeof start>[0] = {}) => start({ ...over, faults: ['fleet', ...over.faults ?? []] })
+  const host = () => seen.dial as unknown as DaemonCableHost
+  /** A dial on the cable, on this computer's agents: no window. */
+  const attach = (port: DevicesPort) => { seen.host.watching!(true); port.swarms(null) }
+  const listed = async () => (await host().listAgentSnapshot()).agents.map(({ id, name, caps }) => ({ id, name, caps }))
+  const said = () => logs.filter((line) => line.startsWith('[device] '))
+  const window = { active: 't1', swarms: [], tiles: [] }
+
+  it('an approval with a dial and no window shows the card and answers the dial\'s Allow', async () => {
+    const { port } = startHere({ now: () => 0 })
+    attach(port)
+    const decision = port.approval(REQUEST)
+    await vi.waitFor(() => expect(calls('question')).toEqual([[ID, 'approval:r1', CARD]]))
+    // Named by its folder, and answerable while its card is open.
+    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sa' }])
+    expect(host().answer(ID, 'approval:r1', { approval: 'Allow' })).toEqual({ ok: true })
+    expect(await decision).toBe('allow')
+    expect(calls('questionClose')).toEqual([[ID, 'approval:r1']])
+    expect(said()).toEqual(['[device] approval · shown · 0ms', '[device] approval · allowed · 0ms'])
+  })
+
+  it('no dial, a window open, HARNESS_DEVICE_OBSERVED=off or a Harness-owned session: none at once and no card', async () => {
+    const core = fakeCore({ dataDir })
+    const refresh = vi.fn(async () => {})
+    const { port } = startHere({ core, refresh })
+    port.swarms(null)
+    expect(await port.approval(REQUEST)).toBe('none')
+    seen.host.watching!(true)
+    port.swarms(window)
+    expect(await port.approval(REQUEST)).toBe('none')
+    // A Harness pane holds the session, as the core says when asked again: its pane answers the prompt.
+    port.swarms(null)
+    refresh.mockImplementation(async () => {
+      vi.mocked(core.agents.advertised).mockReturnValue([{ agentId: 'h1', sessionId: 'sess-1', registeredAt: 1, engine: 'claude' }] as RegisteredSession[])
+    })
+    const before = refresh.mock.calls.length
+    expect(await port.approval(REQUEST)).toBe('none')
+    expect(refresh.mock.calls.length).toBeGreaterThan(before)
+    expect(calls('question')).toEqual([])
+    // The kill switch: no agent outside a pane to put a card on.
+    const switched = env as { HARNESS_DEVICE_OBSERVED: boolean }
+    switched.HARNESS_DEVICE_OBSERVED = false
+    onTestFinished(() => { switched.HARNESS_DEVICE_OBSERVED = true })
+    const off = startHere()
+    attach(off.port)
+    expect(await off.port.approval(REQUEST)).toBe('none')
+    expect(calls('question')).toEqual([])
+  })
+
+  it('the dial going and a window opening each close the open card with none', async () => {
+    const { port } = startHere()
+    attach(port)
+    const first = port.approval(REQUEST)
+    await vi.waitFor(() => expect(calls('question')).toHaveLength(1))
+    seen.host.watching!(false)
+    expect(await first).toBe('none')
+    attach(port)
+    const second = port.approval({ ...REQUEST, id: 'r2' })
+    await vi.waitFor(() => expect(calls('question')).toHaveLength(2))
+    port.swarms(window)
+    expect(await second).toBe('none')
+    expect(calls('questionClose')).toEqual([[ID, 'approval:r1'], [ID, 'approval:r2']])
+    expect(said().filter((line) => line.startsWith('[device] approval · closed'))).toHaveLength(2)
+  })
+
+  it('a core that connects again closes the open cards and polls', async () => {
+    const { port, reconnected } = startHere()
+    attach(port)
+    const decision = port.approval(REQUEST)
+    await vi.waitFor(() => expect(calls('question')).toHaveLength(1))
+    const poll = port.inboxPoll({ pollId: 'p1', sessionId: 'sess-2' })
+    // The calls the last core held went with it: nobody hears their answers.
+    reconnected.forEach((run) => run())
+    expect(await decision).toBe('none')
+    expect(await poll).toEqual({})
+    expect(calls('questionClose')).toEqual([[ID, 'approval:r1']])
+  })
+
+  it('approval.gone closes the card', async () => {
+    const { port } = startHere({ now: () => 0 })
+    attach(port)
+    const decision = port.approval(REQUEST)
+    await vi.waitFor(() => expect(calls('question')).toHaveLength(1))
+    port.approvalGone('r1')
+    expect(await decision).toBe('none')
+    expect(calls('questionClose')).toEqual([[ID, 'approval:r1']])
+    expect(said()).toEqual(['[device] approval · shown · 0ms', '[device] approval · terminal · 0ms'])
+    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 's' }])
+  })
+
+  it('a held poll takes the transcript for its idle agent, and the agent lists v', async () => {
+    vi.useFakeTimers()
+    const { port } = startHere()
+    port.observed(hook('session-start'))
+    attach(port)
+    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 's' }])
+    const held = port.inboxPoll({ pollId: 'p1', sessionId: 'sess-1' })
+    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sv' }])
+    // Held 25 s, then empty: the mod asks again at once.
+    await vi.advanceTimersByTimeAsync(25_000)
+    expect(await held).toEqual({})
+    const next = port.inboxPoll({ pollId: 'p2', sessionId: 'sess-1' })
+    expect(await host().sendTurn(ID, 'run the tests')).toEqual({ ok: true })
+    expect(await next).toEqual({ text: 'run the tests' })
+    expect(said()).toEqual(['[device] voice · mod'])
+    expect(orcaRuns).toEqual([])
+  })
+
+  it('an agent with an Orca handle lists v and f; its transcript runs orca terminal send, its tap orca terminal switch', async () => {
+    const { port } = startHere()
+    port.observed(hook('session-start', { engine: 'codex', sessionId: 'cx-1', hostHints: { ORCA_TERMINAL_HANDLE: HANDLE } }))
+    attach(port)
+    expect(await listed()).toEqual([{ id: CODEX, name: 'api', caps: 'svf' }])
+    expect(await host().sendTurn(CODEX, 'run the tests')).toEqual({ ok: true })
+    expect(await host().openAgent(CODEX)).toBeUndefined()
+    expect(orcaRuns).toEqual([
+      ['/opt/orca/bin/orca', ['terminal', 'send', '--terminal', HANDLE, '--text', 'run the tests', '--enter', '--wait-submit', '5', '--json'], 10_000],
+      ['/opt/orca/bin/orca', ['terminal', 'switch', '--terminal', HANDLE, '--json'], 10_000],
+    ])
+    expect(said()).toEqual(['[device] voice · orca'])
+  })
+
+  it('no log line carries the summary, the command, a path, the transcript, a session id or a handle', async () => {
+    const { port } = startHere()
+    port.observed(hook('session-start', { engine: 'codex', sessionId: 'cx-1', hostHints: { ORCA_TERMINAL_HANDLE: HANDLE } }))
+    attach(port)
+    const decision = port.approval(REQUEST)
+    await vi.waitFor(() => expect(calls('question')).toHaveLength(1))
+    host().answer(ID, 'approval:r1', { approval: 'Deny' })
+    expect(await decision).toBe('deny')
+    await host().sendTurn(CODEX, 'run the tests')
+    await host().openAgent(CODEX)
+    port.observed(hook('turn-start', { engine: 'codex', sessionId: 'cx-1', hostHints: { ORCA_TERMINAL_HANDLE: HANDLE } }))
+    expect(await host().sendTurn(CODEX, 'run the tests')).toMatchObject({ ok: false, message: 'api is busy. Say it when it is done.' })
+    expect(said()).toEqual([
+      expect.stringMatching(/^\[device\] approval · shown · \d+ms$/), expect.stringMatching(/^\[device\] approval · denied · \d+ms$/),
+      '[device] voice · orca', '[device] voice · busy',
+    ])
+    const secrets = ['npm test', 'Bash', '/work', '/t/', 'run the tests', 'sess-1', 'cx-1', HANDLE]
+    expect(logs.filter((line) => secrets.some((secret) => line.includes(secret)))).toEqual([])
+  })
+
+  it('an approvals or inbox part that throws answers none and { off: true }', async () => {
+    const { port } = startHere({ faults: ['approvals.approval', 'inbox.inboxPoll'] })
+    attach(port)
+    expect(await port.approval(REQUEST)).toBe('none')
+    expect(await port.inboxPoll({ pollId: 'p1', sessionId: 'sess-1' })).toEqual({ off: true })
+    expect(logs).toEqual(expect.arrayContaining([
+      '[devices] approvals.approval failed · injected fault: approvals.approval',
+      '[devices] inbox.inboxPoll failed · injected fault: inbox.inboxPoll',
+    ]))
+    // Parts that did not start answer the same, and hear nothing.
+    const off = startHere({ faults: ['approvals', 'inbox'] })
+    attach(off.port)
+    expect(await off.port.approval(REQUEST)).toBe('none')
+    expect(await off.port.inboxPoll({ pollId: 'p1', sessionId: 'sess-1' })).toEqual({ off: true })
+    off.port.approvalGone('r1')
+    off.port.inboxGone('p1')
+    expect(calls('question')).toEqual([])
+    expect(logs).toEqual(expect.arrayContaining(['[devices] approvals did not start · injected fault: approvals · the devices run without it']))
+  })
+
+  it('stop ends every approval, poll and timer', async () => {
+    vi.useFakeTimers()
+    const { port } = startHere()
+    const waiting = observedAgentId('claude', 'sess-2')
+    port.observed(hook('session-start', { sessionId: 'sess-2' }))
+    attach(port)
+    const decision = port.approval(REQUEST)
+    await vi.waitFor(() => expect(calls('question')).toHaveLength(1))
+    const poll = port.inboxPoll({ pollId: 'p1', sessionId: 'sess-1' })
+    // A transcript waiting for the mod's next poll, its last one just closed.
+    const closed = port.inboxPoll({ pollId: 'p2', sessionId: 'sess-2' })
+    port.inboxGone('p2')
+    await closed
+    const words = host().sendTurn(waiting, 'run the tests')
+    await port.stop()
+    expect(await decision).toBe('none')
+    expect(await poll).toEqual({})
+    expect(await words).toMatchObject({ ok: false, message: 'api did not answer.' })
+    expect(vi.getTimerCount()).toBe(0)
   })
 })
