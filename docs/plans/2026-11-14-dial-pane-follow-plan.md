@@ -25,6 +25,7 @@ Every file this plan creates or changes, and the process it runs in (`cli/AGENTS
 | `cli/src/cable/cableHost.ts`, `cableSession.ts`, `cableFleet.ts` | **Devices service process** | Their specs |
 | `cli/src/services/devices.ts` | **Devices service process** | 100% per file (`npm run test:core`) |
 | `cli/e2e/dialPaneFollow.e2e.ts`, `cli/e2e/harness/inOrca.ts` (new), `cli/e2e/deviceClaudeOrca.e2e.ts` | Test: the real daemon, a fake dial, a fake `orca`, the real watch | `cli-e2e.yml` |
+| `cli/e2e/harness/fakeBackend.ts`, `cli/e2e/harness/fakeDial.ts` | Test fakes: the fake backend answers speech to text, the fake dial sends audio (Task 16) | `cli-e2e.yml` |
 | `cli/AGENTS.md`, `docs/specs/2026-11-13-device-claude-orca.md` | Repo files, no process | none |
 
 The core learns nothing of the prompt and nothing of where the dial is: it lets one boolean through. `core/api.ts`, `core/devicesLink.ts` and `services/devicesProcess.ts` do not change: they already forward the event whole (`event('observed', { ...observed })`).
@@ -43,7 +44,7 @@ The core learns nothing of the prompt and nothing of where the dial is: it lets 
   - T5: `DaemonCableHost` owns the filter and the rings; `front(app: string): void`; `listAgentSnapshot(opts?: { apps?: boolean })`, which answers the shown app's ring (`AppRings.ring(shown)`) asked with `apps: true`, and the single `DialRing` asked without.
   - T6: the session's `appFilter` flag, and its list read `listAgentSnapshot({ apps: this.appFilter })`.
   - T9: `DevicesPort.front(app: string): boolean` (it needs T5 and T7).
-- **Not landed, needed by Task 15** (Task 14 waits for them): T10 (`dial_front` on the local socket), T11 (`frontAppId`, with the `claude` row), T12 (`harness hardware watch --json` reads `{"front":"…"}` on stdin and sends `dial_front`).
+- **Not landed, needed by Tasks 15 and 16** (Task 14 waits for them): T10 (`dial_front` on the local socket), T11 (`frontAppId`, with the `claude` row), T12 (`harness hardware watch --json` reads `{"front":"…"}` on stdin and sends `dial_front`).
 - **Not landed, needed only by the on-dial check** (Verification, check 2): T13 and T14, the Harness Device app writing the app in front on macOS. No task here waits for them.
 - **Files both branches write.** `cableHost.ts` (`CableHostWiring`, the class), `cableSession.ts` (`interface CableHost`), `services/devices.ts` (the `new DaemonCableHost({ … })` literal, `port`). Each task below says where its lines go, so a rebase keeps both sides.
 
@@ -59,7 +60,8 @@ The core learns nothing of the prompt and nothing of where the dial is: it lets 
 - **The Claude app** is the app `claude` by T23's mapping, which has landed. This plan adds no mapping.
 - **Measures** are daemon log lines with no content and no identifier: `[device] prompt · moved`, `[device] prompt · skipped · relayed | dial prompt | not in front | no tile`, `[device] swipe · ok | failed | busy | superseded`.
 - **Memory only.** Nothing is written to disk. No polling: no timer but the 400 ms rest.
-- **Platforms.** macOS is tested, on a dial too. Linux runs the unit and end-to-end tests. Windows has no agents outside a pane.
+- **Platforms** (decision 3). macOS is tested, on a dial too. Linux X11, where `feat/dial-app-filter` also reports the app in front (its T15): the same code follows prompts and switches Orca, with no platform switch; it runs the unit and end-to-end tests and is untested on a dial, and the pull request says "Linux X11 untested". Where no front is reported (Wayland), the dial does not move. Windows has no agents outside a pane.
+- **Speech to text** (decision 5) runs only on production: there is no staging account. So nobody speaks to a dial for this branch, and no test or check asks a real backend for a transcript. "A prompt the dial delivered does not move the dial" is covered end to end with a fake speech to text (Task 16).
 - **Repo rules.** Tests never touch the developer's real `~/.claude`, daemon (port 18473), tmux, Orca or dial. No fixed sleeps: fake timers, or a wait on a condition.
 
 ## Review Focus
@@ -436,6 +438,33 @@ The core learns nothing of the prompt and nothing of where the dial is: it lets 
 - [ ] **Step 2: Run** `cd cli && npx vitest run --config vitest.e2e.config.ts e2e/dialPaneFollow.e2e.ts e2e/deviceClaudeOrca.e2e.ts e2e/hardwareWatch.e2e.ts`. Expected: PASS.
 - [ ] **Step 3: Commit** `e2e: a prompt in the app in front moves the dial, and a relayed one does not`.
 
+### Task 16: End to end: the turn of a prompt the dial spoke, with a fake speech to text
+
+**Layer:** test. **Depends on:** Task 15 (its file, and its fake front app). **Effort:** `high`. **Red test:** none: no behavior (it adds an end-to-end test of what Tasks 4 and 13 built, and two test fakes).
+
+**Files:**
+- Modify: `cli/e2e/dialPaneFollow.e2e.ts`, `cli/e2e/harness/fakeBackend.ts`, `cli/e2e/harness/fakeDial.ts`
+
+**Interfaces:**
+- Why a fake (decision 5): the daemon asks the backend it is signed in to for the transcript (`DaemonCableHost.transcribe`: `POST <backend>/api/voice/stt?lang=<lang>`, a bearer token, one WAV in a multipart body), and speech to text runs only on production. The suite has no fake of it yet: its voice cases (`deviceWithoutApp.e2e.ts`, #4296's) send no audio and read a refusal.
+- The daemon does not change: no switch and no test seam. Its own `transcribe` runs against the fake backend.
+- Produces, in `harness/fakeBackend.ts`: `FakeBackend.speech: string | null = null`. While it is a string, `POST /api/voice/stt` reads the upload to its end and answers `{ success: true, data: { transcript: <speech>, lang: <the query's lang> } }`, as `backend/src/routes/voice.ts` does. The route sits after the token check, so a call with no machine's token is the 401 every route gives. `seen` holds its request line, as for every request. While it is null, nothing changes.
+- Produces, in `harness/fakeDial.ts`: `FakeDial.audio(pcm: Buffer): void`, one `CableType.Pcm` frame.
+- In `dialPaneFollow.e2e.ts`: the helper that creates and starts a case's daemon (Task 8) takes two optional things more: extra env, and a function run on the created daemon before `d.start()`. The other cases pass neither.
+- Consumes: Task 8's fake `orca` and `InOrca`; Task 15's watch and its front line; the sign-in of `e2e/dialBuddyChat.e2e.ts` (`FakeBackend.start()`, `addMachine(ME)`, `me`; env `BACKEND_WS_URL: relay.wsUrl`, `WEB_URL: relay.httpUrl`, `ADAPTER_COMPUTER_ID`; `auth/session.json` under `d.root`, written before `d.start()`).
+- Orca's route only: the on-dial step this replaces spoke into an Orca pane. The mod's route stays at the unit layer (Tasks 4 and 13).
+
+- [ ] **Step 1: Write the test** `the turn of a prompt the dial spoke does not move the dial, and the next typed prompt does` (no window; a daemon of its own, signed in to a `FakeBackend` whose `speech` is `'run the spoken tests'`; `A` and `B` in Orca terminals, as in Task 15; the watch written `{"front":"com.stablyai.orca"}`). Every wait is on a condition:
+  1. The dial is turned to `B` by hand; wait for the fake `orca`'s `terminal switch` run for `B`'s handle.
+  2. `A`'s `UserPromptSubmit` hook with `prompt: 'first'`, inside `until(…)` as Task 15's "moves" cases send theirs, until the dial hears `{ t: 'focus', agentId: A.id }`: Orca has settled in front. Then `A`'s `Stop` hook; wait for the dial's `turn.done` for `A` (Orca's route types only at an idle agent's prompt).
+  3. The dial speaks to `A`: `{ t: 'voice.begin', agentId: A.id, uploadId: 'spoken-1', sr: 16_000 }`, `dial.audio(Buffer.alloc(3_200, 1))`, `{ t: 'voice.end', uploadId: 'spoken-1' }`. The dial hears `voice.transcript` with `text: 'run the spoken tests'` and `agentId: A.id`. `relay.seen` holds one `POST /api/voice/stt?lang=en`. The fake `orca` recorded one `terminal send --terminal <A's handle> --text=run the spoken tests --enter --wait-submit 5 --json`. The log has `[device] voice · orca`.
+  4. The dial is turned to `B` by hand; wait for the second `terminal switch` run for `B`'s handle.
+  5. `A`'s `UserPromptSubmit` hook, once, with `prompt: 'run the spoken tests'` (the turn Orca's typing starts). Wait for the log's `[device] prompt · skipped · dial prompt`. The dial heard no `focus` for `A` since step 4.
+  6. `A`'s `Stop` hook, then its `UserPromptSubmit` with `prompt: 'and again'`: the dial hears `{ t: 'focus', agentId: A.id }` again, and the log has a second `[device] prompt · moved`.
+  7. The daemon's log has no `spoken tests`, no handle and no session id.
+- [ ] **Step 2: Run** `cd cli && npm run typecheck && npx vitest run --config vitest.e2e.config.ts e2e/dialPaneFollow.e2e.ts e2e/dialBuddyChat.e2e.ts e2e/deviceCompat.e2e.ts` (the last two use the two fakes). Expected: PASS.
+- [ ] **Step 3: Commit** `e2e: the turn of a prompt the dial spoke does not move the dial, with a fake speech to text`.
+
 ---
 
 ## Verification
@@ -445,28 +474,33 @@ The core learns nothing of the prompt and nothing of where the dial is: it lets 
 - `python3 scripts/local-checks.py --run` from a clean tree at the final commit; its receipts go in the pull request.
 - Not needed: `npm run test:harnessd`, the serial specs, `make device-test` (nothing of theirs changes).
 
-**Platforms the pull request names:** the daemon and CLI on macOS (tested, on a dial too) and on Linux (unit and end-to-end tests; no dial). Windows: no agents outside a pane.
+**Platforms the pull request names:** the daemon and CLI on macOS (tested, on a dial too) and on Linux (unit and end-to-end tests; no dial, so "Linux X11 untested"). Windows: no agents outside a pane.
+
+**The pull request also says,** in these words or closer to its own:
+- "Linux X11 untested": the same code follows prompts and switches Orca there, and no dial was tried on Linux (decision 3).
+- No spoken prompt was run on a dial: speech to text runs only on production. "A prompt the dial delivered does not move the dial" is covered end to end with a fake speech to text (`cli/e2e/dialPaneFollow.e2e.ts`, Task 16), by Orca's route; the mod's route by unit tests (decision 5).
 
 **Temporary workflow:** none. The one long check runs in the repo's own **CLI end to end** workflow, and the new file joins that suite's nightly run as every file in `cli/e2e` does.
 
 **Turns.** The tester asks before using either, and starts nothing until it is granted.
 - **A runner turn,** asked of the orchestrator, before the one hand-started run on GitHub (check 1).
-- **The dial and Diego's turn,** asked of the orchestrator, before checks 2 and 3.
+- **The dial and Diego's turn,** asked of the orchestrator, before check 2.
 
-**1. The real daemon, a fake dial, a fake `orca`, a fake front app**
-- Run: `cd cli && npx vitest run --config vitest.e2e.config.ts e2e/dialPaneFollow.e2e.ts e2e/deviceClaudeOrca.e2e.ts e2e/deviceWithoutApp.e2e.ts e2e/hardwareWatch.e2e.ts e2e/devicesProcess.e2e.ts`, on a Mac or a Linux box, at the final head.
-- Isolation: the suite's own (`e2e/harness/daemon.ts`): a throwaway home and data folder, a private port and tmux server, fake engines, a fake dial on a pseudo-terminal, no backend and no sign-in. The fake `orca` is first on that daemon's `PATH`; the front app is a line on the real watch's stdin. The real Orca, the real Claude app and the everyday daemon (18473) are not touched.
-- A person sees: every test passes. The daemon's log has `[device] prompt · moved`, `[device] prompt · skipped · relayed` and `[device] swipe · ok` lines, with nothing else in them.
+**1. The real daemon, a fake dial, a fake `orca`, a fake front app, a fake speech to text**
+- Run: `cd cli && npx vitest run --config vitest.e2e.config.ts e2e/dialPaneFollow.e2e.ts e2e/deviceClaudeOrca.e2e.ts e2e/deviceWithoutApp.e2e.ts e2e/hardwareWatch.e2e.ts e2e/devicesProcess.e2e.ts e2e/dialBuddyChat.e2e.ts`, on a Mac or a Linux box, at the final head.
+- Isolation: the suite's own (`e2e/harness/daemon.ts`): a throwaway home and data folder, a private port and tmux server, fake engines, a fake dial on a pseudo-terminal. No real backend and no real account: every case runs with no backend and no sign-in but Task 16's, whose daemon is signed in, with a fixture token, to the suite's fake backend on this machine (`e2e/harness/fakeBackend.ts`), which answers the speech-to-text call with a fixed transcript. The fake `orca` is first on that daemon's `PATH`; the front app is a line on the real watch's stdin. The real Orca, the real Claude app, the everyday daemon (18473) and production are not touched.
+- A person sees: every test passes. The daemon's log has `[device] prompt · moved`, `[device] prompt · skipped · relayed`, `[device] prompt · skipped · dial prompt`, `[device] voice · orca` and `[device] swipe · ok` lines, with nothing else in them.
 - On GitHub, by hand, once on the final head, after a runner turn: Actions → CLI end to end → Run workflow, branch `feat/dial-pane-follow` (`.github/workflows/cli-e2e.yml`). Every shard passes.
 
-**2. On a dial: the app moves the dial, a swipe moves Orca** (the spec's "On a dial" 1 first half, 2, 3, 4, 5)
+**2. On a dial: the app moves the dial, a swipe moves Orca** (the spec's "On a dial" 1 to 5)
 - When: after every task, on the final head, once the base holds T13 and T14.
 - **First, the turn.** Nothing below starts before the orchestrator's go.
 - Where: Diego's Mac, his round dial on the firmware it has (none is flashed), the real Orca, the real Claude Code and the real Claude app. The Harness window closed, so the dial lists this computer's agents.
 - Why not an isolated daemon: the real Claude Code's hooks, in Orca and in the Claude app, reach only the daemon that installed them. These steps call no backend: every frame stays between the hook, the daemon, `orca` and the dial on this Mac.
+- **Nobody speaks to the dial in this check** (decision 5): a spoken word would ask production for its transcript. A word spoken by mistake is told to the orchestrator.
 - Before anything changes, save `harness version`.
 - Build: `make install-cli` at the final head (a local install; nothing is published).
-- The front app: the Harness Device app built from this stack (T13, T14), the only source of the app in front; the released one writes none. `(cd device-app/ui && npm ci && npm run build) && (cd device-app/src-tauri && cargo build --locked)`, then `target/debug/harness-device`, with the released Harness Device app quit (open question 4).
+- The front app (decision 4): the Harness Device app built from this stack (T13, T14), the only source of the app in front; the released one writes none. `(cd device-app/ui && npm ci && npm run build) && (cd device-app/src-tauri && cargo build --locked)`, then `target/debug/harness-device`, with the released Harness Device app quit. It is quit after the check ("Afterwards").
 - A person does and sees:
   1. Two Claude Code agents in two Orca panes, Orca in front: a prompt typed in either pane turns the dial to it within a second or two.
   2. Swiping between them switches Orca's pane each time the dial rests. With another app in front, Orca does not come forward.
@@ -478,23 +512,19 @@ The core learns nothing of the prompt and nothing of where the dial is: it lets 
 - Not done, for whatever reason: report it as not verified, never as passed.
 - On GitHub: none. It needs a real dial, Orca and the Claude app.
 
-**3. On a dial: a spoken prompt** (the spec's "On a dial" 1, second half)
-- Same Mac, dial, build and turn as check 2, before its "Afterwards".
-- Backend: **staging, never production** (open question 5). Speech-to-text is asked of the backend the daemon is signed in to, so this step runs on a daemon started on the staging env file, as #4296's voice checks did (`docs/development.md`, "Isolated end-to-end testing"; `docs/plans/2026-11-13-device-claude-orca-plan.md`, Verification check 4): `harness stop`, then `HARNESS_ENV_FILE=<the staging env file, absolute> harness start`. `harness status` must report the staging backend before the first word. If it does not, stop and tell the orchestrator; never fall back to production. When the staging file moves the data folder or the port, the Claude Code session in Orca is started from a shell that exports the same `HARNESS_ENV_FILE`, so its hook finds this daemon.
-- The front app is not needed here: a dial prompt is told before the front is read.
-- A person does and sees: with the dial on an agent in an Orca pane, a spoken prompt goes into that pane. Then, the dial swiped to the other agent while that turn starts: the dial stays where it was swiped to. The log has `[device] prompt · skipped · dial prompt`.
-- After: `harness stop`, then `harness start` with no env file; `harness status` reports the everyday backend. Then check 2's "Afterwards".
-- On GitHub: none.
+**Not run: a spoken prompt on a dial** (decision 5). Speech to text runs only on production and there is no staging account, so no check here speaks to a dial. What that step would have shown is check 1's, by Task 16's test.
 
-## Open questions
+## Decisions (the PM for Diego, 2026-11-14)
 
-For Diego, in one message. Each has the draft's provisional answer; a different one changes the task named.
+The answers to this plan's open questions, numbered as they were asked. The spec holds them too ("On a dial", "Design notes"). Task 4 still calls 1 and 2 "open question, provisional": they are decided as it was drafted, and nothing in it changes.
 
-1. **Engines with no prompt event.** Command Code and agy post `turn-start` on every tool call or model call. As the spec is written, each one would pull the dial back to that agent while its app is in front, also after a swipe away. Draft: their `turn-start` never moves the dial (Task 4). Or move on each, as written?
-2. **A relayed message while a dial prompt waits.** The spec says the session's next `turn-start` consumes the pending dial prompt. Draft: a relayed `turn-start` does not use it up, so the dial prompt's own turn still does not move the dial (Task 4). Or the literal reading: any `turn-start` consumes it?
-3. **Linux.** The spec leaves Linux out because no front app is known there. T15 reports the front on Linux X11, so the same code would follow prompts there, untested on a dial. Draft: leave it on, with no platform switch, and name Linux X11 as untested in the pull request. Or keep following to macOS?
-4. **The front app for the on-dial check.** The spec's recipe names only `make install-cli`, but the app in front comes only from the Harness Device app with T13 and T14. Draft: run the stack's debug Harness Device build on Diego's Mac for the check and quit it afterwards (Verification, check 2). Or type the front line by hand into `harness hardware watch --json`, with no app?
-5. **The spoken prompt on a dial.** It needs speech-to-text from the backend. Draft: that one step runs on a daemon on the staging env file, as #4296's voice checks did; the other steps run on the everyday daemon with this branch's CLI and call no backend (Verification, checks 2 and 3). Or leave the spoken step out here, since #4296 verified voice?
+1. **Engines with no prompt event.** Command Code's and agy's `turn-start` never moves the dial: theirs is a tool call or a model call, not a prompt (Task 4).
+2. **A relayed message while a dial prompt waits.** A relayed `turn-start` does not consume a pending dial prompt, so the dial prompt's own turn still does not move the dial (Task 4).
+3. **Linux.** Linux X11 stays on, with no platform switch. The pull request says "Linux X11 untested" (Global Constraints, Verification).
+4. **The front app for the on-dial check.** The stack's debug Harness Device build runs on Diego's Mac for the check and is quit after (Verification, check 2).
+5. **The spoken prompt on a dial.** None: there is no staging account, and #4296 ran voice on production by Diego's own choice, which this branch does not repeat. "A prompt the dial delivered does not move the dial" is covered end to end with a fake speech to text (Task 16), and the pull request says so (Verification).
+
+Open questions: none.
 
 Waited on, outside this plan: the base SHA (Task 1); the dial-app-filter tasks named in Tasks 10 and 14 (T5, T6, T9; then T10, T11, T12); and T13 and T14 for the on-dial check.
 
@@ -513,3 +543,5 @@ Waited on, outside this plan: the base SHA (Task 1); the dial-app-filter tasks n
 - Grok's prompt event is named `UserPromptSubmit` by the hook, so its rule is Claude Code's.
 - `DaemonCableHost.knows` is true for an agent outside Harness, so `followApp`'s log line does not say the dial has no tile for it.
 - The end-to-end test takes 395 ms as the earliest a switch may run: Node may fire a timer a millisecond early. The exact 400 is the unit test's.
+- The fake speech to text is a route of the suite's fake backend (`POST /api/voice/stt`), not a switch in the daemon: the daemon's own `transcribe` runs unchanged against it. The suite had no such fake: its voice cases sent no audio.
+- The end-to-end dial prompt goes by Orca's route, as the on-dial step it replaces did. The mod's route is covered by unit tests (Tasks 4 and 13).
