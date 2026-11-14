@@ -249,13 +249,15 @@ mod tests {
     }
 
     #[test]
-    fn only_a_new_screen_takes_the_keyboard() {
+    fn only_a_new_screen_or_a_menu_click_takes_the_keyboard() {
         let offer = view(Screen::SignIn, Phase::Offer, &[]);
         let waiting = view(Screen::SignIn, Phase::Browser, &["Waiting"]);
-        assert!(raises(None, &offer));
-        assert!(raises(Some(&view(Screen::Install, Phase::Working, &[])), &offer));
+        assert!(raises(None, &offer, false));
+        assert!(raises(Some(&view(Screen::Install, Phase::Working, &[])), &offer, false));
         // A sign-in's lines while the browser is open: the person is typing there.
-        assert!(!raises(Some(&offer), &waiting));
-        assert!(!raises(Some(&waiting), &view(Screen::SignIn, Phase::Browser, &["Waiting", "Still waiting"])));
+        assert!(!raises(Some(&offer), &waiting, false));
+        assert!(!raises(Some(&waiting), &view(Screen::SignIn, Phase::Browser, &["Waiting", "Still waiting"]), false));
+        // The menu's Sign in while the window shows it behind another app's: the person asked for it.
+        assert!(raises(Some(&offer), &offer, true));
     }
 }
