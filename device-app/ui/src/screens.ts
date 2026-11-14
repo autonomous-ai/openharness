@@ -110,6 +110,7 @@ export function render(root: HTMLElement, view: View | null, act: (action: Actio
   }
 
   root.append(screen)
-  // Enter takes the screen's first answer, as a dialog's default button does.
-  root.querySelector('button')?.focus()
+  // Return takes the primary answer, as a dialog's default button does. A screen without one focuses nothing: the
+  // window can come up while the person types elsewhere, and Return must not press Cancel.
+  root.querySelector<HTMLElement>('.primary')?.focus()
 }
