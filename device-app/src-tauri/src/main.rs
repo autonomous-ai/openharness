@@ -155,27 +155,29 @@ fn run_loop(
     first: Vec<Effect>,
     queue: Receiver<Event>,
 ) {
-    let run = |effects: Vec<Effect>| {
+    // `asked`: the effects answer a menu click.
+    let run = |effects: Vec<Effect>, asked: bool| {
         for effect in effects {
             // Menu, Show and Quit are AppKit's, on the main thread, which runs them in the order they are handed over.
             if let Some(effect) = runner.run(effect) {
                 let (drawing, log) = (handle.clone(), log.clone());
                 let _ = handle.run_on_main_thread(move || {
-                    if let Err(error) = draw(&drawing, effect) {
+                    if let Err(error) = draw(&drawing, effect, asked) {
                         log.line(&format!("menu or window: {error}"));
                     }
                 });
             }
         }
     };
-    run(first);
+    run(first, false);
     for event in queue {
-        run(app.handle(event));
+        let asked = matches!(event, Event::Menu(_));
+        run(app.handle(event), asked);
     }
 }
 
 /// On the main thread.
-fn draw(handle: &AppHandle, effect: Effect) -> tauri::Result<()> {
+fn draw(handle: &AppHandle, effect: Effect, asked: bool) -> tauri::Result<()> {
     match effect {
         Effect::Menu(items) => {
             if let Some(tray) = handle.tray_by_id(TRAY) {
@@ -187,7 +189,7 @@ fn draw(handle: &AppHandle, effect: Effect) -> tauri::Result<()> {
             let Some(window) = handle.get_webview_window(WINDOW) else { return Ok(()) };
             window.emit("view", &view)?;
             match &view {
-                Some(next) if raises(last.as_ref(), next) => {
+                Some(next) if raises(last.as_ref(), next, asked) => {
                     window.show()?;
                     window.set_focus()?;
                 }
@@ -202,10 +204,11 @@ fn draw(handle: &AppHandle, effect: Effect) -> tauri::Result<()> {
     Ok(())
 }
 
-/// Whether showing `next` after `last` raises the window and takes the keyboard: only a new screen does. A phase or
-/// its lines only redraw, so a sign-in's `Waiting` never takes the keyboard from the browser.
-fn raises(last: Option<&View>, next: &View) -> bool {
-    last.map(|view| view.screen) != Some(next.screen)
+/// Whether showing `next` after `last` raises the window and takes the keyboard: a new screen, or one the menu asked
+/// for, which may be behind another app's windows. A phase or its lines only redraw, so a sign-in's `Waiting` never
+/// takes the keyboard from the browser.
+fn raises(last: Option<&View>, next: &View, asked: bool) -> bool {
+    asked || last.map(|view| view.screen) != Some(next.screen)
 }
 
 fn native_menu(handle: &AppHandle, items: &[MenuItem]) -> tauri::Result<Menu<tauri::Wry>> {
