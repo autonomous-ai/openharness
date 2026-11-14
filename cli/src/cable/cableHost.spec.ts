@@ -1225,12 +1225,12 @@ describe('the dial reaches the fleet through the core\'s port', () => {
       expect(JSON.stringify(heard())).not.toContain('o1')
     })
 
-    it('a failed focus answers Orca did not open it.', async () => {
+    it('a failed focus answers that its own app did not open it', async () => {
       const failed = setup({ focus: vi.fn(async () => false) })
       expect(await failed.host.openAgent('o1')).toEqual({ ok: false, error: 'Orca did not open it.' })
       // A source with no open of its own cannot bring it forward either.
-      const none = setup({ focus: undefined })
-      expect(await none.host.openAgent('o1')).toEqual({ ok: false, error: 'Orca did not open it.' })
+      const none = setup({ focus: undefined, list: () => [{ ...scratch, host: 'ghostty' }] })
+      expect(await none.host.openAgent('o1')).toEqual({ ok: false, error: 'Ghostty did not open it.' })
       expect(JSON.stringify([...failed.heard(), ...none.heard()])).not.toContain('o1')
     })
 

@@ -39,6 +39,7 @@ import { LANE_SESSION_OVER, LANE_TOKEN_UNAVAILABLE, type MachineFleet } from './
 import { APPROVAL_REQUEST_PREFIX, type ReviewedAnswer, type AnswerReceipt } from './questionInbox.js'
 import { isTier, type Tier } from '../lib/notifyTier.js'
 import { HarnessSource } from './hosts/harness.js'
+import { hostDisplayName } from './hosts/hostDetect.js'
 import type { HostEntry, HostRegistry } from './hosts/registry.js'
 import { selectForDial } from './hosts/select.js'
 import { capsLetters, type HostAgent } from './hosts/types.js'
@@ -817,7 +818,7 @@ export class DaemonCableHost implements CableHost {
       // Only a person's tap switches the other app: a question screen that came up by itself never does.
       if (reason) return
       return (outside.source.focus?.(outside.agent) ?? Promise.resolve(false))
-        .then((opened) => opened ? undefined : { ok: false as const, error: 'Orca did not open it.' })
+        .then((opened) => opened ? undefined : { ok: false as const, error: `${hostDisplayName(outside.agent.host)} did not open it.` })
     }
     const machineId = this.machineOf(agentId)
     if (!machineId) {
