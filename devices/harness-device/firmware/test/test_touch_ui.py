@@ -1349,7 +1349,25 @@ static void app_picker_checks(const char *dir) {
         if (mode == 0 || mode == 3) assert(apps > 10 && !tabs);
         else assert(tabs > 10 && !apps);
     }
-    puts("APPS picker: a hold in the machine view opens it on the shown app, pages drawn as the mockup, picks only on Done or a tap, kept by app id; the hint says Hold for apps PASS");
+    // The resting line of an engine with no relaxing scene follows the same rule: "Hold to switch apps", as often.
+    for (int mode = 0; mode < 4; mode++) {
+        reset(); fake_ms = 1000; strcpy(s.agents[0].engine, "cursor");
+        if (mode != 1) ui_fleet_set_view(true);
+        if (mode != 2) ui_apps_replace(picker_rows, 3, "ghostty");
+        if (mode == 3) ui_project_set_host_caps("a", "zellij", CABLE_CAP_S);
+        int apps = 0, tabs = 0;
+        for (int k = 0; k < 120; k++) {
+            fake_ms += 1000; s.voice_retry_until = fake_ms + 2000; scene_take();
+            s.voice_retry_until = 0; scene_take();
+            // The line wraps over two runs ("Hold to switch " / "apps"): read the face as one text.
+            char face[1024] = "";
+            for (int q = 0; q < scene.count; q++) strncat(face, scene.runs[q].text, sizeof face - strlen(face) - 1);
+            apps += !!strstr(face, "Hold to switch apps"); tabs += !!strstr(face, "Hold to switch tabs");
+        }
+        if (mode == 0 || mode == 3) assert(apps > 10 && !tabs);
+        else assert(tabs > 10 && !apps);
+    }
+    puts("APPS picker: a hold in the machine view opens it on the shown app, pages drawn as the mockup, picks only on Done or a tap, kept by app id; the hints say Hold for apps and Hold to switch apps PASS");
 }
 int main(int argc, char **argv) {
     test_character = HT_CHARACTER_FOCUS;
