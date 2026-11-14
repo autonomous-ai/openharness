@@ -45,10 +45,8 @@ firmware needs no change.
 6. **Needs-you is not an order.** The dial still learns it as today: the activity line "Waiting for you · {Host}",
    the notification and the bell. No new UI.
 7. **The first ring** (the devices process starts, or a dial attaches to a host with no ring yet) takes the agents in
-   the order the registry lists them, then cuts at 16 with rule 5's priority. While the Swarm cards are awaited
-   (`machineSnapshot`, a few seconds after attach), Harness agents are hidden; they join at the end when the cards
-   come.
-8. **Several arrive in one pass** (an attach scan, the Swarm cards): they enter needs-you first, then by most recent
+   the order the registry lists them, then cuts at 16 with rule 5's priority.
+8. **Several arrive in one pass** (an attach scan): they enter needs-you first, then by most recent
    activity; an agent that entered in this pass is not replaced in the same pass, so at most 16 enter; those entering
    together go to the end in the registry's order. An agent that found no place counts as seen: it enters later only
    through a free place or when it needs the person, so the ring never turns on every pass.
@@ -60,8 +58,9 @@ firmware needs no change.
 - **With a window**, the dial holds the active tab's panes in tile order, as today. The ring is only the machine
   list.
 - The firmware. Swiping still wraps from the last agent to the first.
-- The Buddy filter and the wait for Swarm cards (`machineSnapshot`) still decide which agents the ring may see. An
-  agent they hide is, for the ring, not there.
+- The ring sees every agent the registry lists (`machineSnapshot`). Main removed the Swarm (#4303) and with it the
+  Buddy filter and the wait for the Swarm cards that used to hide some agents before this selection; this change
+  adds no filter back.
 - The 1 s coalescing of machine-list pushes.
 
 ### Effect on pushes

@@ -69,7 +69,9 @@ rebases `fix/dial-swipe-order` on the `main` that holds it, and phase 3 starts f
 - Ties, which the spec does not name and this plan fixes: equal `lastActivityAt` among ring agents, the place
   nearest the front goes; equal standing among outside agents, the registry's order decides.
 - The Buddy filter and the wait for the Swarm cards stay in `machineSnapshot`, before the ring: an agent they hide
-  is, for the ring, not listed. It leaves, and joins again at the end.
+  is, for the ring, not listed. It leaves, and joins again at the end. (Superseded: main removed both with the Swarm,
+  #4303, 2026-11-14; on rebase the ring takes the registry's list unfiltered, and the "until the cards come" test
+  goes with them.)
 - `total` stays the count of the list the ring is given (every agent on this computer after that filter).
 - In memory only, one ring per `DaemonCableHost`. No file, no setting, no timer, no I/O in `select.ts`.
 - Not touched: the firmware (`devices/harness-device/**`), `devices/harness-pro/**` (never), `cableSession.ts` (the
