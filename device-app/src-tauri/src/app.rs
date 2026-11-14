@@ -82,6 +82,8 @@ impl App {
         effects
     }
 
+    /// The binary keeps the view each Show hands it; only the tests ask the rules.
+    #[cfg(test)]
     pub fn view(&self) -> Option<View> {
         self.window.clone()
     }
