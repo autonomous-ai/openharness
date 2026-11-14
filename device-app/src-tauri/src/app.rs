@@ -115,7 +115,7 @@ impl App {
             // Gone (`harness uninstall`): what ran on it ends, and nothing it said is known any more.
             Event::Cli(false) if self.state.cli == CliState::Found => {
                 self.state.cli = CliState::Removed;
-                effects.push(Effect::StopWatch);
+                self.stop_watch(effects);
                 if self.login.take().is_some() {
                     effects.push(Effect::CancelLogin);
                 }
@@ -209,7 +209,10 @@ impl App {
                     self.set_claude(false, effects);
                 }
                 MenuAction::OpenHarness => effects.push(Effect::OpenDesktop),
-                MenuAction::Quit => effects.extend([Effect::StopWatch, Effect::Quit]),
+                MenuAction::Quit => {
+                    self.stop_watch(effects);
+                    effects.push(Effect::Quit);
+                }
             },
             Event::Act(action) => self.act(action, effects),
             // Decision 2: closing answers an offer, and never stops what runs.
@@ -298,6 +301,11 @@ impl App {
         self.keep = KeepAlive::new();
         self.first_answers = Some((false, false));
         self.read(effects);
+    }
+
+    fn stop_watch(&mut self, effects: &mut Vec<Effect>) {
+        self.keep.stop_watch();
+        effects.push(Effect::StopWatch);
     }
 
     fn install(&mut self, effects: &mut Vec<Effect>) {

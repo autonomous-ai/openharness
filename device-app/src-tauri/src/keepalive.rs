@@ -70,8 +70,11 @@ impl KeepAlive {
     }
 
     pub fn watch_exit(&mut self, code: Option<i32>, now: u64) {
+        // A watch the app stopped answers with exit 0. An exit 0 nobody asked for is a down like any other end.
+        if self.watch == Watch::Closed {
+            return;
+        }
         match code {
-            Some(0) => self.watch = Watch::Closed,
             // 4: a daemon older than `dial-watch`; 1: a CLI older than `watch` printing its usage.
             Some(1) | Some(4) => {
                 self.watch = Watch::Old { since: now };
@@ -109,6 +112,11 @@ impl KeepAlive {
                 }
             }
         }
+    }
+
+    /// The caller stops the watch: nothing is looked at again.
+    pub fn stop_watch(&mut self) {
+        self.watch = Watch::Closed;
     }
 
     /// A start the caller runs outside the slot, after an install.
@@ -319,6 +327,7 @@ mod tests {
     #[test]
     fn exit_0_is_the_app_closing_it() {
         let mut keep = KeepAlive::new();
+        keep.stop_watch();
         keep.watch_exit(Some(0), B);
         quiet(&mut keep, B + 5, B + 120);
     }
