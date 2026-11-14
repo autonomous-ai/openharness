@@ -24,6 +24,9 @@ export interface Caps {
   answer: boolean
 }
 
+/** What a source's send answers: `reason` is the sentence the dial shows when it refused. */
+export type SendResult = { ok: true } | { ok: false; reason: string }
+
 export interface HostSource {
   /** 'harness' | 'observed' | a host adapter's name (wave 1). */
   readonly id: string
