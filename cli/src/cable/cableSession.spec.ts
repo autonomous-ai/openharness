@@ -4092,7 +4092,7 @@ describe('the machine list with no window', () => {
     try {
       port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
       await vi.waitFor(() => expect(ends(port)).toEqual([{ t: 'agents.end', total: 0, tab: '', view: 'machine' }]))
-      agents = [{ id: 'o1', engine: 'claude', sessionId: 's1', name: 'scratch', host: 'ghostty', state: 'working', lastActivityAt: 1, unseenDone: false }]
+      agents = [{ id: 'o1', engine: 'claude', sessionId: 's1', name: 'scratch', host: 'ghostty', app: 'ghostty', state: 'working', lastActivityAt: 1, unseenDone: false }]
       await vi.waitFor(() => expect(ends(port)).toHaveLength(2), NEXT_TICKS)
       expect(port.sent.filter((m) => m.t === 'agent')).toEqual([
         { t: 'agent', id: 'o1', name: 'scratch', engine: 'claude', model: '', effort: '', machineId: 'mac-local', machine: 'this-mac', host: 'ghostty', caps: 's' },
@@ -4228,7 +4228,7 @@ describe('what the dial cannot do for an agent', () => {
       sendTurn, stopTurn: vi.fn(), answer: vi.fn(), recent: () => [], recentAsks: () => [], log: (line) => { lines.push(line) },
     })
     // In Orca with its terminal's handle, so the dial may talk to it: `svf`.
-    const outside: HostAgent = { id: 'outside-7f3c', engine: 'claude', sessionId: 's-o', name: 'secret-folder', host: 'orca',
+    const outside: HostAgent = { id: 'outside-7f3c', engine: 'claude', sessionId: 's-o', name: 'secret-folder', host: 'orca', app: 'orca',
       state: 'idle', lastActivityAt: 0, lastAnswer: 'the secret last answer', unseenDone: false }
     host.setRegistry(new HostRegistry([host.harness, { id: 'observed', list: () => [outside],
       capabilities: () => ({ status: true, voice: true, focus: true, answer: false }) }]))

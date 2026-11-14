@@ -10,12 +10,34 @@ export interface HostAgent {
   name: string
   /** 'harness' | 'orca' | 'herdr' | 'ghostty' | 'iterm' | 'vscode' | 'terminal' | ... */
   host: string
+  /** The outermost app, one of `APP_IDS`: the dial's page the agent is on. */
+  app: string
   state: HostAgentState
   lastActivityAt: number
   /** The end of the last turn, cut to the card's length. */
   lastAnswer?: string
   unseenDone: boolean
 }
+
+/** One app in the dial's list: its agents, and how many of them wait on the person. */
+export interface AppEntry {
+  id: string
+  name: string
+  count: number
+  waiting: number
+}
+
+/** The apps the dial can show; `shown` is '' with no agents. */
+export interface AppList {
+  shown: string
+  apps: AppEntry[]
+}
+
+/** What a pick on the dial did. */
+export type AppPick = 'switched' | 'same' | 'ignored'
+
+/** Why the shown app changed. */
+export type SwitchCause = 'front' | 'pick' | 'empty' | 'notice'
 
 export interface Caps {
   status: boolean

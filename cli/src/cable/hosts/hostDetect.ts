@@ -33,8 +33,49 @@ const NAMES: Record<string, string> = {
   terminal: 'Terminal',
 }
 
+/** The apps an agent can run in, the dial's pages: the hosts, in the order of their names. */
+export const APP_IDS: readonly string[] = Object.keys(NAMES)
+
+/** An agent in a terminal the daemon does not know. */
+export const UNKNOWN_APP = 'terminal'
+
+// The outermost app by its bundle id: each host's app, and Harness Desktop's, which stays out of APP_BUNDLES because
+// a tap never opens a Harness agent by its bundle id.
+const BUNDLE_APPS: Readonly<Record<string, string>> = {
+  ...Object.fromEntries(Object.entries(APP_BUNDLES).map(([id, bundle]) => [bundle, id])),
+  'ai.autonomous.harness': 'harness',
+}
+
+// kitty sets no TERM_PROGRAM: off macOS its own variable names it (detectApp).
+const PROGRAM_APPS: Readonly<Record<string, string>> = {
+  'iTerm.app': 'iterm',
+  Apple_Terminal: 'terminal-app',
+  ghostty: 'ghostty',
+  vscode: 'vscode',
+  WarpTerminal: 'warp',
+  WezTerm: 'wezterm',
+}
+
 export function hostDisplayName(id: string): string {
   return NAMES[id] ?? 'Terminal'
+}
+
+/** "Other" for the unknown app, so its page never reads as Apple's Terminal; a host's own name for the rest. */
+export function appDisplayName(id: string): string {
+  return id === UNKNOWN_APP ? 'Other' : hostDisplayName(id)
+}
+
+/** The outermost app an agent runs in. The bundle id and TERM_PROGRAM name it, unlike a multiplexer's own variables,
+ *  which name the nearest host; with neither set, the nearest host is the only one known. */
+export function detectApp(hints: Record<string, string>): string {
+  const bundle = hints.__CFBundleIdentifier ?? ''
+  const program = hints.TERM_PROGRAM ?? ''
+  // Cursor is a VS Code fork and reports TERM_PROGRAM=vscode, so the bundle id decides first.
+  const named = BUNDLE_APPS[bundle] ?? PROGRAM_APPS[program]
+  if (named) return named
+  if (bundle || program) return UNKNOWN_APP
+  if (hints.KITTY_WINDOW_ID) return 'kitty'
+  return detectHost(hints)
 }
 
 export function detectHost(hints: Record<string, string>): string {

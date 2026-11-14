@@ -7,7 +7,7 @@ import type { OpenSessions, SessionRows } from '../../lib/sessionSearch/external
 import { type fileStamp, within } from '../../lib/sessionSearch/externals/support.js'
 import type { ExternalEngine, RunningProcess } from '../../lib/sessionSearch/externals/types.js'
 import { roundDrawable } from '../roundGlyphs.js'
-import { detectHost, hostDisplayName } from './hostDetect.js'
+import { detectApp, detectHost, hostDisplayName, UNKNOWN_APP } from './hostDetect.js'
 import type { Delivery } from './inbox.js'
 import { openTarget, type OpenTarget } from './open.js'
 import { MAX_TEXT, ORCA_HANDLE } from './orca.js'
@@ -223,6 +223,7 @@ export class ObservedSource implements HostSource {
     a.lastActivityAt = now
     // Only a hook says where a session runs: one the open scan found is a plain terminal until its first.
     a.host = detectHost(e.hostHints)
+    a.app = detectApp(e.hostHints)
     // Every event's own: a session resumed elsewhere must not be typed into the terminal it left.
     const handle = e.hostHints.ORCA_TERMINAL_HANDLE
     entry.handle = handle && ORCA_HANDLE.test(handle) ? handle : undefined
@@ -322,6 +323,7 @@ export class ObservedSource implements HostSource {
         id, engine, sessionId, cwd: init.cwd,
         name: (init.cwd && basename(init.cwd)) || engine,
         host: 'terminal',
+        app: UNKNOWN_APP,
         state: 'idle', lastActivityAt: now, unseenDone: false, callerPid: init.pid,
       },
       since: now,
