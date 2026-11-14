@@ -68,11 +68,6 @@ const Set<String> encryptedDownTypes = {
   'agent_update',
   'agent_files',
   'agent_read_file',
-  // An agent's instructions file, read and saved from another of the owner's
-  // computers (CLI services/projects.ts): the text is the person's own, so the
-  // relay sees none of it. `MACHINE_REQUESTS` types in the CLI.
-  'agent_instructions_read',
-  'agent_instructions_write',
   // An agent's Browser (CLI services/agentBrowser.ts): its settings carry the proxy and its password.
   'agent_browser_available',
   'agent_browser_retry',
@@ -93,7 +88,7 @@ const Set<String> encryptedDownTypes = {
   'git_project_info',
   // The harness's branch and pull-request history is a machine RPC too (applicationFrames.ts
   // `MACHINE_REQUESTS`): unsealed, the machine answers E2EE_REQUIRED.
-  'git_pull_request', 'git_pull_requests_status',
+  'git_pull_request',
   // Memories across machines (CLI services/memory.ts).
   'memory_snapshot',
   'memory_about_put',
