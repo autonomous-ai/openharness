@@ -329,7 +329,7 @@ face's app line goes in the main checkout's `devices/harness-device/mockup/`, fo
   1 s coalescing; `app.pick` answered with `apps` and the new ring.
 - `runDialWatch`: bundle ids and exe names mapped, unknown → `none`, the raw value never sent (the test reads every
   frame), `front` ignored with an older daemon.
-- Devices listener (red first, on the module itself): the socket's mode is 0600; another uid is refused; an oversized
+- Devices listener (red first, on the module itself): the socket's mode is 0600 in a folder that is the owner's alone, and the client checks both before it sends; an oversized
   body, an unknown type and a frame over its rate are dropped and counted; `front` takes only a known app or `none`
   (the old word `other` and the display name "Other" are refused); nothing logs an app name. The core is as on
   `main`: `architecture.spec` and `npm run test:core` unchanged by this work.
