@@ -270,9 +270,7 @@ describe('the agent browser on the real daemon', () => {
     // A turn first, as agentBrowserPodman.e2e.ts takes before its stop: until one ends, the fake engine's conversation
     // has no opening, and a purge is held (IDENTITY_UNAVAILABLE, retryable).
     const createdAt = Date.parse(agent.createdAt)
-    const ended = client.next((frame) => frame.type === 'turn_ended' && frame.agentId === agent.id, 45_000, 'turn_ended')
-    client.send('message', { agentId: agent.id, content: 'One turn before the purge' })
-    await ended
+    await client.turn(agent.id, 'One turn before the purge')
     const purging = log().length
     const review = await client.request('agent_purge', { agentId: agent.id, sessionId: bound.sessionId, createdAt, mode: 'inspect' }, 60_000)
     expect(review.error, JSON.stringify(review)).toBeUndefined()
@@ -308,9 +306,7 @@ describe('the agent browser on the real daemon', () => {
     await ready(client, agent.id, 'the browser to be ready')
     // A turn first: until one ends, the fake engine's conversation has no opening, and Stop Harness is held
     // (IDENTITY_UNAVAILABLE, retryable).
-    const ended = client.next((frame) => frame.type === 'turn_ended' && frame.agentId === agent.id, 45_000, 'turn_ended')
-    client.send('message', { agentId: agent.id, content: 'One turn before the stop' })
-    await ended
+    await client.turn(agent.id, 'One turn before the stop')
 
     // The engine restarts: the browser stays as it is.
     let mark = log().length
@@ -357,9 +353,7 @@ describe('the agent browser on the real daemon', () => {
     expect(await client.request('agent_browser_start', { agentId: agent.id }, 60_000)).toMatchObject({ ok: true })
     await ready(client, agent.id, 'the browser to be ready')
     // A turn first: until one ends, the fake engine's conversation has no opening, and its resume below is held.
-    const ended = client.next((frame) => frame.type === 'turn_ended' && frame.agentId === agent.id, 45_000, 'turn_ended')
-    client.send('message', { agentId: agent.id, content: 'One turn before the exit' })
-    await ended
+    await client.turn(agent.id, 'One turn before the exit')
 
     // The engine quits in its pane: the pane is a shell under a new id, and its browser stops.
     const gone = client.next((frame) => frame.type === 'agent_deleted' && frame.payload?.agentId === agent.id, 45_000, 'agent_deleted (the engine)')

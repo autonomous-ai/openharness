@@ -13,9 +13,15 @@ import { LocalClient, type Frame } from './harness/client.js'
 import { until } from './harness/daemon.js'
 import { startFleet, type Fleet } from './harness/fleet.js'
 
-const harnessEvents = (client: LocalClient, agentId: string, since: number) => (state: string) =>
-  client.waitFor((frame: Frame) => frame.type === 'harness_event' && frame.payload?.agentId === agentId && frame.payload?.state === state,
-    45_000, `harness_event ${state}`, since)
+const harnessEvent = (agentId: string, state: string) => (frame: Frame) =>
+  frame.type === 'harness_event' && frame.payload?.agentId === agentId && frame.payload?.state === state
+/** One round as the tool is told it: `working` from `since` on, an index into its frames, then the `idle` after that
+ *  event. By index, because both can come in one socket read: an `idle` that came before anyone waited for it was
+ *  never seen (nightly run 43247147594), and the `idle` of the round before must not count. */
+async function workedThenIdle(client: LocalClient, agentId: string, since: number): Promise<void> {
+  const working = await client.waitFor(harnessEvent(agentId, 'working'), 45_000, 'harness_event working', since)
+  await client.waitFor(harnessEvent(agentId, 'idle'), 45_000, 'harness_event idle', client.frames.indexOf(working))
+}
 
 describe('harness_watch across machines', () => {
   let fleet: Fleet | undefined
@@ -48,11 +54,9 @@ describe('harness_watch across machines', () => {
     const [relay] = backend.webConnections(b.machineId)
     expect(relay).toBeDefined()
 
-    const since = Date.now()
-    const told = harnessEvents(tool, agentId, since)
+    const since = tool.frames.length
     onB.send('message', { agentId, content: 'harness watch across machines' })
-    await told('working')
-    await told('idle')
+    await workedThenIdle(tool, agentId, since)
 
     // What B sent A's relay: its harness_events, sealed to that connection.
     expect((backend.webReceived.get(relay) ?? []).map((frame) => frame.type)).toContain('harness_event')
@@ -61,10 +65,9 @@ describe('harness_watch across machines', () => {
     const other = await LocalClient.connect(a.daemon, { tool: true, machineId: b.machineId })
     expect(await other.request('agents_list', {}, 30_000)).toHaveProperty('agents')
     const otherRelay = backend.webConnections(b.machineId).find((connId) => connId !== relay)!
-    const again = Date.now()
+    const again = tool.frames.length
     onB.send('message', { agentId, content: 'once more' })
-    await harnessEvents(tool, agentId, again)('working')
-    await harnessEvents(tool, agentId, again)('idle')
+    await workedThenIdle(tool, agentId, again)
     expect((backend.webReceived.get(otherRelay) ?? []).map((frame) => frame.type)).not.toContain('harness_event')
 
     // A tool that leaves takes its watch with it: the next tool on A is told nothing it did not ask for, though A's
