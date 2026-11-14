@@ -2199,7 +2199,7 @@ describe('hook notify posts over the daemon\'s pipe on Windows (W1)', () => {
 describe('hook notify: a session outside a pane', () => {
   /** The environment names the hook may send as host hints, and nothing else (spec: The hook). */
   const HINTS = ['TERM_PROGRAM', '__CFBundleIdentifier', 'HERDR_PANE_ID', 'REX_BLOCK', 'ZELLIJ', 'KITTY_WINDOW_ID',
-    'WEZTERM_PANE', 'ORCA_AGENT_SESSION_ID']
+    'WEZTERM_PANE', 'ORCA_AGENT_SESSION_ID', 'ORCA_TERMINAL_HANDLE']
   /** The hint names unset, so the environment this test runs in sends none of its own. */
   const noHints = Object.fromEntries(HINTS.map((name) => [name, '']))
   const folder = (prefix: string): string => {
@@ -2330,7 +2330,7 @@ describe('hook notify: a session outside a pane', () => {
     }])
   })
 
-  it('hostHints carries only the allowlist: ORCA_PAIRING_CODE and ORCA_AGENT_SESSION_SPAWN_TOKEN set in the env are absent from the body', async () => {
+  it('hostHints carries only the allowlist, ORCA_TERMINAL_HANDLE among it: ORCA_PAIRING_CODE and ORCA_AGENT_SESSION_SPAWN_TOKEN set in the env are absent from the body', async () => {
     const { port, requests } = await collect()
     const allowed: Record<string, string> = Object.fromEntries(HINTS.map((name, index) => [name, `hint-${index}`]))
     await runHook({
@@ -2339,9 +2339,20 @@ describe('hook notify: a session outside a pane', () => {
       input: { hook_event_name: 'UserPromptSubmit', session_id: 'sess-1', cwd: '/w', prompt: 'prompt-secret' },
     })
     expect(requests.map((request) => request.url)).toEqual(['/api/hook/observed'])
-    // Eight names, as many as the core takes (core/observedHook.ts): every one is sent.
+    // Every name, all set at once: the core takes up to 10 (core/observedHook.ts), so none is cut.
     expect(requests[0].body.hostHints).toEqual(allowed)
     expect(JSON.stringify(requests[0].body)).not.toMatch(/PAIRING|SPAWN|ORCA_OTHER|secret/)
+  })
+
+  // The core reads 4096 bytes of a body at most (hookServer.ts): with every field at its bound, nothing is left out.
+  it('the largest body the hook can build is under 4096 bytes', async () => {
+    const { port, requests } = await collect()
+    const hints = Object.fromEntries(HINTS.map((name) => [name, 'h'.repeat(64)]))
+    const path = `/${'d'.repeat(1023)}`
+    await runHook({ port, env: hints, input: { hook_event_name: 'Stop', session_id: 's'.repeat(128), cwd: path, transcript_path: path } })
+    expect(requests).toHaveLength(1)
+    expect(requests[0].body).toMatchObject({ sessionId: 's'.repeat(128), cwd: path, transcriptPath: path, hostHints: hints })
+    expect(Buffer.byteLength(JSON.stringify(requests[0].body))).toBeLessThan(4096)
   })
 
   // Which Orca build it is says nothing about where the session runs.
