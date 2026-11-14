@@ -108,6 +108,8 @@ body {
 }
 
 .output {
+  /* The rim keeps the box seen in dark, where --control is near --surface. */
+  border: 1px solid var(--rim);
   /* Four lines of 120 characters wrap past the window's height: the box shrinks and scrolls instead. */
   min-height: 0;
   overflow-y: auto;
