@@ -1,8 +1,16 @@
+import { type ChildProcess, execFile } from 'node:child_process'
+import { once } from 'node:events'
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createOrcaActions, ORCA_HANDLE, orcaDeps, type OrcaDeps } from './orca.js'
+
+// The real execFile, watched: a spec reads how the child of a run ended.
+vi.mock('node:child_process', async (original) => {
+  const real = await original<typeof import('node:child_process')>()
+  return { ...real, execFile: vi.fn(real.execFile) }
+})
 
 const HANDLE = 'term_0f8e2c1a-3b4d-4e5f-8a9b-0c1d2e3f4a5b'
 const OTHER = 'term_9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d'
@@ -141,15 +149,18 @@ describe('Orca actions', () => {
     expect(asked).toEqual([10_000])
   })
 
-  it('a run that ignores SIGTERM is killed at its deadline and is false', async () => {
-    const pidFile = join(dir, 'pid')
-    // Deaf to the kill's SIGTERM, it would exit 0 once its sleep ends, as if the text had been sent.
-    const fake = fakeOrca(`trap '' TERM\necho $$ > '${pidFile}'\nexec sleep 3`)
+  it('a run that ignores SIGTERM is killed with SIGKILL at its deadline and is false', async () => {
+    // Deaf to SIGTERM, it would outlive a kill that sent one: its sleep runs past the test's own timeout.
+    const fake = fakeOrca(`trap '' TERM\nexec sleep 300`)
     const real = orcaDeps()
     const orca = createOrcaActions({ ...real, onPath: () => fake.file, run: (file, args) => real.run(file, args, 1000) })
     expect(await orca.send(HANDLE, 'hi')).toBe(false)
-    const pid = Number(readFileSync(pidFile, 'utf8'))
-    await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow())
+    // The run's own child says how it ended. A pid file the fake writes may not exist yet: on a loaded machine its shell
+    // can still be starting at the deadline.
+    const child = vi.mocked(execFile).mock.results.at(-1)!.value as ChildProcess
+    // Answered by the deadline, the child may still be on its way out.
+    if (child.exitCode === null && child.signalCode === null) await once(child, 'exit')
+    expect(child.signalCode).toBe('SIGKILL')
   })
 
   it('a non-zero exit is false', async () => {
