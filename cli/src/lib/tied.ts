@@ -120,8 +120,12 @@ export function execFileTied(
   { timeout = 0, killSignal = 'SIGTERM', maxBuffer = 1024 * 1024, input, ...options }: TiedExecOptions = {},
 ): Promise<{ stdout: string; stderr: string }> {
   const cmd = [file, ...args].join(' ')
+  // Not started, in execFile's shape all the same: its callers read stdout and stderr off any failure (podman.run).
+  const unstarted = (error: Error) => Object.assign(error, { cmd, killed: false, signal: null, stdout: '', stderr: '' })
   return new Promise((done, fail) => {
-    const child = spawnTied(file, args, options)
+    let child: ChildProcess
+    // Refused at once (a NUL in an argument): thrown, where every other failure to start is an `error`.
+    try { child = spawnTied(file, args, options) } catch (error) { return fail(unstarted(error as Error)) }
     // The first reason this call ends the command names its failure.
     let ended: 'timeout' | 'stdout' | 'stderr' | undefined
     // Its pipes go first, then the command, as execFile does: something it started (a git credential helper, an `lms`
@@ -162,7 +166,7 @@ export function execFileTied(
     // follows, and finds the call settled.
     child.once('error', (error) => {
       clearTimeout(timer)
-      fail(Object.assign(error, { cmd, killed: false, signal: null, stdout: '', stderr: '' }))
+      fail(unstarted(error))
     })
     // Always ended, so a command that reads stdin never waits on it. One that exits before reading it all leaves the
     // write to fail (EPIPE), which is not the call's failure.
