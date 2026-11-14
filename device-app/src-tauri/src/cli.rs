@@ -535,15 +535,25 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_run_past_its_deadline_dies_with_its_children() {
-        let folder = tempfile::tempdir().unwrap();
-        let mut command = Command::new("sh");
-        command.args(["-c", "sleep 600 & echo $! > pid; wait"]).current_dir(folder.path());
-        let started = Instant::now();
-        let output = run(command, Duration::from_millis(300)).unwrap();
-        assert!(output.timed_out);
-        assert!(started.elapsed() < WAIT);
-        let pid = fs::read_to_string(folder.path().join("pid")).unwrap().trim().parse().unwrap();
-        assert!(wait_gone(pid));
+        // Under load `sh` can take the whole deadline to start and die before it writes the pid: the deadline then
+        // doubles until a run got that far.
+        let mut deadline = Duration::from_millis(300);
+        loop {
+            let folder = tempfile::tempdir().unwrap();
+            let mut command = Command::new("sh");
+            command.args(["-c", "sleep 600 & echo $! > pid; wait"]).current_dir(folder.path());
+            let started = Instant::now();
+            let output = run(command, deadline).unwrap();
+            assert!(output.timed_out);
+            assert!(started.elapsed() < deadline + WAIT);
+            let pid = fs::read_to_string(folder.path().join("pid")).ok().and_then(|pid| pid.trim().parse().ok());
+            if let Some(pid) = pid {
+                assert!(wait_gone(pid));
+                return;
+            }
+            deadline *= 2;
+            assert!(deadline < Duration::from_secs(10), "sh never wrote the pid");
+        }
     }
 
     #[cfg(unix)]
