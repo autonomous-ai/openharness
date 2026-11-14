@@ -1516,9 +1516,12 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     attach(port)
     await host().sendTurn(CODEX, 'run the tests')
     await host().openAgent(CODEX)
+    // Working, the words go on, as a Harness agent's do; waiting on a prompt in its terminal, they are not typed there.
     port.observed(hook('turn-start', { engine: 'codex', sessionId: 'cx-1', hostHints: { ORCA_TERMINAL_HANDLE: HANDLE } }))
-    expect(await host().sendTurn(CODEX, 'run the tests')).toMatchObject({ ok: false, message: 'api is busy. Say it when it is done.' })
-    expect(said()).toEqual(['[device] voice · orca', '[device] voice · busy'])
+    expect(await host().sendTurn(CODEX, 'run the tests')).toEqual({ ok: true })
+    port.observed(hook('needs-input', { engine: 'codex', sessionId: 'cx-1', hostHints: { ORCA_TERMINAL_HANDLE: HANDLE } }))
+    expect(await host().sendTurn(CODEX, 'run the tests')).toMatchObject({ ok: false, message: 'api is waiting for your answer in Terminal.' })
+    expect(said()).toEqual(['[device] voice · orca', '[device] voice · orca', '[device] voice · waiting'])
     const secrets = ['/work', '/t/', 'run the tests', 'sess-1', 'cx-1', HANDLE]
     expect(logs.filter((line) => secrets.some((secret) => line.includes(secret)))).toEqual([])
   })
