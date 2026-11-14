@@ -49,6 +49,16 @@ export async function backendApi(url: string, a: Account, path: string, method =
   }
 }
 
+/** backend.stop(): closes every daemon, then stops every service, the last started first, and then throws what a close
+ *  could not do. A root left behind or a process that would not end was swallowed here and seen by no one. */
+export async function stopAll(daemons: Array<Pick<IsolatedDaemon, 'close'>>, stops: Array<() => unknown>): Promise<void> {
+  const failed: unknown[] = []
+  for (const d of daemons) await d.close().catch((error: unknown) => { failed.push(error) })
+  // One that throws, at once or later, still lets the others stop: Mongo and Redis come last.
+  for (const s of [...stops].reverse()) await (async () => s())().catch(() => {})
+  if (failed.length) throw new AggregateError(failed, `${failed.length} daemon(s) under test did not close: ${failed.map(String).join('; ')}`)
+}
+
 async function freePort(): Promise<number> {
   const s = netServer().listen(0, '127.0.0.1')
   await once(s, 'listening')
@@ -77,7 +87,7 @@ export async function startRealBackend(accounts: Account[], log: (line: string) 
     return await boot(accounts, log, stops)
   } catch (error) {
     // The handle is never returned on a failed start, so nobody else can stop what already runs.
-    for (const s of stops.reverse()) await Promise.resolve(s()).catch(() => {})
+    await stopAll([], stops)
     throw error
   }
 }
@@ -155,14 +165,7 @@ async function boot(accounts: Account[], log: (line: string) => void, stops: Arr
   const backend: RealBackend = {
     url, wsUrl: `ws://127.0.0.1:${port}`, logPath,
     api: (a, path, method, body) => backendApi(url, a, path, method, body),
-    async stop() {
-      // Every daemon is closed, then what a close could not do is thrown: a root left behind or a process that would
-      // not end was swallowed here and seen by no one.
-      const failed: unknown[] = []
-      for (const d of owned.get(backend) ?? []) await d.close().catch((error: unknown) => { failed.push(error) })
-      for (const s of stops.reverse()) await Promise.resolve(s()).catch(() => {})
-      if (failed.length) throw new AggregateError(failed, `${failed.length} daemon(s) under test did not close: ${failed.map(String).join('; ')}`)
-    },
+    stop: () => stopAll(owned.get(backend) ?? [], stops),
   }
   owned.set(backend, [])
   return backend
