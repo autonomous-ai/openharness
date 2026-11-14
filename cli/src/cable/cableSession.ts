@@ -796,6 +796,7 @@ export class CableSession {
   private readonly passageCarry = new PassageCarry({
     select: command => this.host.selectPassage?.(command) ??
       Promise.resolve({ ok: false, error: 'Update Harness to carry text.' }),
+    // The single ring, like the voice turn's candidates: a carry must not hang on the app in front.
     name: async id => (await this.host.listAgents()).find(a => a.id === id)?.name ?? 'Harness',
   })
   private readonly voiceDraft = new VoiceDraft()
@@ -2249,6 +2250,8 @@ export class CableSession {
     // Named an agent: the dial was on a tile and there is nothing to decide.
     let agentId = turn.agentId
     let agentName = ''
+    // The single ring, never the shown app's: who a voice turn may reach must not hang on the app in front, and the
+    // backend routing over these candidates must not learn which app that is.
     const agents = await this.host.listAgents()
     if (!current()) return
     if (review && !agentId) {
@@ -2603,7 +2606,10 @@ export class CableSession {
     // desk: a click from a local agent to a remote one took 1.5 s, of which 0.7 s was this loop waiting
     // on the first `agent_recent` while the dial sat on the old tile.
     const rows: Array<{ id: string; past: Array<{ recap: string; text: string; fullText?: string }> }> = []
-    for (const a of await this.host.listAgents()) {
+    // The ring the dial holds: a filtering dial's shown app can have agents the single ring of 16 cut.
+    const agents = this.host.listAgentSnapshot
+      ? (await this.host.listAgentSnapshot({ apps: this.appFilter })).agents : await this.host.listAgents()
+    for (const a of agents) {
       // Marked as it is ASKED FOR, not as it is sent: the answer is a cloud round trip, and a tick
       // arriving mid-loop would otherwise start a second walk over the same agents.
       if (this.restored.has(a.id)) continue
