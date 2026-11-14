@@ -82,6 +82,23 @@ describe('what the core tells the devices', () => {
     expect(sent).toEqual([])
   })
 
+  it('front is one event on the link', () => {
+    const { sent, port } = link()
+    expect(port.front('vscode')).toBe(true)
+    expect(sent).toEqual([{ type: 'service_event', payload: { app: 'vscode', kind: 'front' } }])
+  })
+
+  it('with the devices down it answers false and nothing is queued', () => {
+    const sent: Array<{ type: string; payload?: Record<string, unknown> }> = []
+    let up = false
+    const devices = createDevicesLink({ core: fakeCore(), notify: (frame) => { if (up) sent.push(frame); return up }, call: vi.fn(), state: () => STATE, log: vi.fn() })
+    expect(devices.port.front('vscode')).toBe(false)
+    // The core keeps no app in front: devices that connect are told what the windows said, and nothing of it.
+    up = true
+    devices.connected()
+    expect(sent).toEqual([{ type: 'service_event', payload: { ...STATE, kind: 'state' } }])
+  })
+
   it('tells them a mod\'s poll that went first, as the notice inbox.gone', () => {
     const { sent, port } = link()
     port.inboxGone('p1')

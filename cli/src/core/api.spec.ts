@@ -453,6 +453,11 @@ describe('the core API services stand on', () => {
     expect(Object.keys(DEVICES_FALLBACKS).filter((member) => /approval/i.test(member))).toEqual([])
   })
 
+  it('the front\'s fallback is false', () => {
+    // Not taken: the core drops the app in front (core/dialFront.ts) and keeps nothing of it.
+    expect(DEVICES_FALLBACKS.front).toBe(false)
+  })
+
   it('answers, when the Wi-Fi device\'s service is off, nothing to its devices', () => {
     for (const member of ['request', 'resume', 'appFocus', 'stop'] as const) {
       expect(readFallback(WIFI_FALLBACKS[member]), member).toEqual({ deferred: true, value: undefined })

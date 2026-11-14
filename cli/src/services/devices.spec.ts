@@ -26,7 +26,7 @@ const seen = vi.hoisted(() => ({
   dial: null as unknown as { onDialStatus(status: unknown): void },
   cable: null as unknown as { args: unknown[]; calls: Array<[string, unknown[]]>; setSettings: (id: string, patch: unknown) => Promise<{ ok: boolean; error?: string }> },
   bridges: {} as Record<string, { wiring: Record<string, (...args: unknown[]) => unknown>; calls: Array<[string, unknown[]]> }>,
-  fleet: null as null | { deps: FleetDeps; events: ((event: FleetEvent) => void) | null; fail: boolean },
+  fleet: null as null | { deps: FleetDeps; events: ((event: FleetEvent) => void) | null; fail: boolean; calls: Array<[string, unknown[]]>; answers: Record<string, (...args: never[]) => unknown> },
   voice: { sessions: vi.fn(), connected: vi.fn(), shutdown: vi.fn() },
 }))
 
@@ -103,19 +103,23 @@ vi.mock('./fleet.js', async (real) => {
   return {
     ...actual,
     startFleet: (_core: CoreApi, deps: FleetDeps) => {
-      const state = { deps, events: null as ((event: FleetEvent) => void) | null, fail: false }
+      const state = { deps, events: null as ((event: FleetEvent) => void) | null, fail: false, calls: [] as Array<[string, unknown[]]>,
+        answers: {} as Record<string, (...args: never[]) => unknown> }
       seen.fleet = state
+      const member = (key: string | symbol): ((...args: never[]) => unknown) => {
+        if (typeof key === 'string' && Object.hasOwn(state.answers, key)) return state.answers[key]
+        if (key === 'onEvent') return (listener: (event: FleetEvent) => void) => { state.events = listener; return () => {} }
+        if (key === 'routeTask') return async (text: string) => ({ agentId: 'a1', machineId: 'm1', name: 'api', confidence: 1, reason: text, candidates: [], weighed: 1, machines: 1, via: 'model' })
+        if (key === 'routeSend') return (agentId: string) => agentId === 'far' ? { ok: false, machine: 'mac-mini', reason: 'the last request to it did not come back' }
+          : agentId === 'nameless' ? { ok: false, machine: '', reason: 'no such agent' } : { ok: true }
+        if (key === 'knows') return () => { if (state.fail) throw new Error('lost'); return true }
+        if (key === 'stop') return vi.fn()
+        // Any other routing member: unanswered here, and failing once the test says the fleet fails.
+        return () => { if (state.fail) throw new Error('lost') }
+      }
+      // Every call the devices make on the fleet, recorded: what crosses to the owner's other machines is read by a spec.
       const fleet = new Proxy({} as Fleet, {
-        get: (_t, key) => {
-          if (key === 'onEvent') return (listener: (event: FleetEvent) => void) => { state.events = listener; return () => {} }
-          if (key === 'routeTask') return async (text: string) => ({ agentId: 'a1', machineId: 'm1', name: 'api', confidence: 1, reason: text, candidates: [], weighed: 1, machines: 1, via: 'model' })
-          if (key === 'routeSend') return (agentId: string) => agentId === 'far' ? { ok: false, machine: 'mac-mini', reason: 'the last request to it did not come back' }
-            : agentId === 'nameless' ? { ok: false, machine: '', reason: 'no such agent' } : { ok: true }
-          if (key === 'knows') return () => { if (state.fail) throw new Error('lost'); return true }
-          if (key === 'stop') return vi.fn()
-          // Any other routing member: unanswered here, and failing once the test says the fleet fails.
-          return () => { if (state.fail) throw new Error('lost') }
-        },
+        get: (_t, key) => (...args: never[]) => { state.calls.push([String(key), args]); return member(key)(...args) },
       })
       return { fleet, router: null }
     },
@@ -1590,6 +1594,87 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
       expect(vi.getTimerCount()).toBe(timers + 1)
       await port.stop()
       expect(vi.getTimerCount()).toBe(0)
+    })
+
+    it('the app in front becomes the shown app 1 s later, and the dial is pushed apps', async () => {
+      vi.useFakeTimers()
+      const { port } = start({ faults: ['fleet'] })
+      await twoApps(port)
+      const pushed = calls('syncAgents').length
+      expect(port.front('vscode')).toBe(true)
+      await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS - 1)
+      expect(calls('syncAgents')).toHaveLength(pushed)
+      expect((await host().listAgentSnapshot({ apps: true })).apps?.shown).toBe('ghostty')
+      await vi.advanceTimersByTimeAsync(1)
+      // Every dial is pushed the list, and a dial that says appFilter its apps with it.
+      expect(calls('syncAgents')).toHaveLength(pushed + 1)
+      expect((await host().listAgentSnapshot({ apps: true })).apps?.shown).toBe('vscode')
+      expect(switches()).toEqual(['[device] app filter: switched · front'])
+    })
+
+    it('a front with a window open moves nothing on the dial', async () => {
+      vi.useFakeTimers()
+      const { port } = start({ faults: ['fleet'] })
+      await twoApps(port)
+      port.swarms({ active: 't1', swarms: [], tiles: [] })
+      const tab = await host().listAgentSnapshot({ apps: true })
+      port.front('vscode')
+      await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+      // The dial holds the window's tab, with no apps, as before.
+      expect(tab.apps).toBeUndefined()
+      expect(await host().listAgentSnapshot({ apps: true })).toEqual(tab)
+      // Followed meanwhile: once the window closes, the dial shows the app that settled in front.
+      port.swarms(null)
+      expect((await host().listAgentSnapshot({ apps: true })).apps?.shown).toBe('vscode')
+    })
+
+    it('across a run with front changes, nothing but the dial\'s own frames holds the app in front', async () => {
+      vi.useFakeTimers()
+      const core = fakeCore({ dataDir })
+      // The fleet running: what goes to the owner's other machines is read too.
+      const { port } = start({ core })
+      // A fleet of this computer alone, with no Harness agent on it.
+      seen.fleet!.answers = { listAgentsFlat: async () => [], activityTimes: async () => new Map(), agentTotal: () => 0 }
+      seen.host.watching!(true)
+      const fetched = vi.spyOn(globalThis, 'fetch')
+      const printed = vi.spyOn(console, 'log')
+      await twoApps(port)
+      for (const app of ['ghostty', 'none', 'vscode']) {
+        port.front(app)
+        await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+      }
+      // The dial's own frame: the list it picks from names the app shown.
+      expect((await host().listAgentSnapshot({ apps: true })).apps).toMatchObject({ shown: 'vscode', apps: expect.arrayContaining([expect.objectContaining({ id: 'vscode', name: 'VS Code' })]) })
+
+      // Every call the devices made on the core's API (the windows and the gateway's lane among them), the window bridges,
+      // the fleet, the backend and the console.
+      const made: unknown[][] = []
+      const walk = (value: unknown): void => {
+        if (vi.isMockFunction(value)) { made.push(...value.mock.calls); return }
+        if (value && typeof value === 'object') for (const inner of Object.values(value)) walk(inner)
+      }
+      walk(core)
+      for (const bridge of Object.values(seen.bridges)) made.push(...bridge.calls.map(([, args]) => args))
+      made.push(...seen.fleet!.calls.map(([, args]) => args), ...fetched.mock.calls, ...printed.mock.calls)
+      expect(made.length).toBeGreaterThan(0)
+      const front = /ghostty|vscode|VS Code/i
+      expect(made.filter((args) => front.test(JSON.stringify(args)))).toEqual([])
+      expect(made.filter((args) => args.includes('none'))).toEqual([])
+      expect(logs.filter((line) => front.test(line))).toEqual([])
+    })
+
+    it('the inline port takes a front too', async () => {
+      vi.useFakeTimers()
+      // As core/main.ts starts the devices in the core's own process: through the service host, which guards the port.
+      const ports = emptyPorts()
+      createServiceHost(ports, { log: () => {} }).start('devices', (core, started) => startDevices(core, started, {
+        logsDir: join(dataDir, 'logs'), cableDisabled: true, faults: new Set(['fleet']), log: () => {}, onExit: vi.fn(), orca,
+      }), fakeCore({ dataDir }), DEVICES_FALLBACKS, DEVICES_REQUESTS)
+      const port = ports.devices!
+      await twoApps(port)
+      expect(port.front('vscode')).toBe(true)
+      await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+      expect((await host().listAgentSnapshot({ apps: true })).apps?.shown).toBe('vscode')
     })
 
     it('an app that empties as a dial reads the list is pushed after that read, never from inside it', async () => {
