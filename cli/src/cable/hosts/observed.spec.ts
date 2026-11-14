@@ -380,6 +380,27 @@ describe('ObservedSource codex and open sessions', () => {
     expect(src.list()[0].state).toBe('working')
   })
 
+  it('an agent with a card open stays needs-you while its transcript is written, and after the card leaves until it grows again', async () => {
+    const { src, clock, stamps, ev } = setup()
+    src.ingest(ev('turn-start', { transcriptPath: '/t/s.jsonl' }))
+    clock.t += 10
+    src.approval('s1', '/work/proj', 'open')
+    // The tool call's line is written after its hook asked: the prompt is not answered.
+    stamps.set('/t/s.jsonl', clock.t + 5)
+    clock.t += 3_000
+    await src.checkWorking()
+    expect(src.list()[0].state).toBe('needs-you')
+    // The card expired, and the terminal's prompt still waits: the write before is not its answer.
+    clock.t += 300_000
+    src.approval('s1', '/work/proj', 'left')
+    await src.checkWorking()
+    expect(src.list()[0].state).toBe('needs-you')
+    // Answered in the terminal: the transcript grows.
+    stamps.set('/t/s.jsonl', clock.t + 1)
+    await src.checkWorking()
+    expect(src.list()[0].state).toBe('working')
+  })
+
   it('scanOpen adds terminal/app sessions as idle and skips harness-owned ones', async () => {
     const { src, open, owners, externals } = setup()
     open.set('a', 'terminal')
@@ -792,6 +813,28 @@ describe('ObservedSource actions', () => {
     expect(await src.send(src.list()[0], 'a'.repeat(2001))).toEqual({ ok: false, reason: 'Too long. Say it shorter.' })
     expect(actions.toMod).not.toHaveBeenCalled()
     expect(actions.orcaSend).not.toHaveBeenCalled()
+  })
+
+  it('an agent whose session ended takes no voice and no tap: its terminal holds a shell now', async () => {
+    const { actions, ready } = fakeActions()
+    const { src, ev } = setup({ actions })
+    ready.add('s1')
+    src.ingest(ev('turn-stop', withHandle))
+    src.ingest(ev('session-end', withHandle))
+    const agent = src.list()[0]
+    expect(src.capabilities(agent)).toEqual({ status: true, voice: false, focus: false, answer: false })
+    expect(await src.send(agent, 'git push --force')).toEqual({ ok: false, reason: 'proj did not answer.' })
+    expect(await src.focus(agent)).toBe(false)
+    // Ended in a turn too: nobody is there to be busy.
+    src.ingest(ev('turn-start', { sessionId: 's2', ...withHandle }))
+    src.ingest(ev('session-end', { sessionId: 's2', ...withHandle }))
+    expect(await src.send(src.list()[1], 'next')).toEqual({ ok: false, reason: 'proj did not answer.' })
+    expect(actions.toMod).not.toHaveBeenCalled()
+    expect(actions.orcaSend).not.toHaveBeenCalled()
+    expect(actions.orcaOpen).not.toHaveBeenCalled()
+    // Resumed, it is a live session again.
+    src.ingest(ev('session-start', withHandle))
+    expect(src.capabilities(src.list()[0])).toMatchObject({ voice: true, focus: true })
   })
 
   it('focus runs orcaOpen for a handle and is false without one', async () => {
