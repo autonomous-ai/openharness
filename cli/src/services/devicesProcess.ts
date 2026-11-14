@@ -279,9 +279,13 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
       return step === 'no_agents' ? { step } : { ...step }
     },
     // A hook's approval and the mod's poll, checked and bounded by the core (core/deviceHookCalls.ts), and held here until
-    // the dial or the terminal answers, the card expires or the hold runs out.
-    approval: async ({ id, sessionId, tool, summary, cwd }) => ({
-      decision: await port.approval({ id: text(id), sessionId: text(sessionId), tool: text(tool), summary: text(summary), ...(typeof cwd === 'string' ? { cwd } : {}) }),
+    // the dial or the terminal answers, the card expires or the hold runs out. Dropping terminalOnly would give a command
+    // the dial cannot show whole an Allow/Deny card.
+    approval: async ({ id, sessionId, tool, summary, cwd, terminalOnly }) => ({
+      decision: await port.approval({
+        id: text(id), sessionId: text(sessionId), tool: text(tool), summary: text(summary),
+        ...(typeof cwd === 'string' ? { cwd } : {}), ...(typeof terminalOnly === 'boolean' ? { terminalOnly } : {}),
+      }),
     }),
     inboxPoll: async ({ pollId, sessionId }) => ({ ...await port.inboxPoll({ pollId: text(pollId), sessionId: text(sessionId) }) }),
   }
