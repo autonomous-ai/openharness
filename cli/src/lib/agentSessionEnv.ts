@@ -23,8 +23,9 @@ const AGENT_SESSION_VARIABLES: ReadonlySet<string> = new Set([
 /** Whether [name] names an agent's own session, never for a daemon or a pane it makes. */
 export function isAgentSessionVariable(name: string): boolean {
   // Orca sets some thirty ORCA_* in each terminal it opens (1.4.256): that terminal's handle, pane and tab, and secrets,
-  // its pairing code and its hook, launch and spawn tokens. All are that terminal's or its session's, none a setting the
-  // person chose, and a pane that kept them would be that terminal to an engine's hook. A prefix: Orca adds names as it goes.
+  // its pairing code and its hook, launch and spawn tokens. A pane that kept them would be that terminal to an engine's
+  // hook. The few a person may set (ORCA_USER_DATA_PATH, ORCA_ENVIRONMENT) steer only Orca's own `orca` command, which
+  // the devices process then runs as a daemon started at login does, without them. A prefix: Orca adds names as it goes.
   return AGENT_SESSION_VARIABLES.has(name) || name.startsWith('ORCA_')
 }
 
