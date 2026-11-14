@@ -61,6 +61,16 @@ Other engines' prompt events (`beforeSubmitPrompt`, `userPromptSubmitted`) carry
 **The core (`core/observedHook.ts`).** `turn-start` takes an optional boolean `relayed`; any other type is refused, and
 it is refused on any other event. Bounded and forwarded like the other fields; the core keeps nothing.
 
+**Changed for the core's rule 7 (PM for Diego, 2026-11-15).** Main's `cli/AGENTS.md` now says the core grows nothing for
+one component, not even a generic field only it would use. `relayed` is such a field, and so is #4296's observed-hook
+route itself. Decided (option B): the devices' hook path goes straight to the devices process's own listener, which
+`feat/dial-app-filter` is building for the front app; `relayed` moves with it, checked there with the same rule (a
+boolean, on `turn-start` only), and `core/observedHook.ts` loses it. When #4296's route moves (before or after it
+merges) is Diego's call. Until then the field stays in the core on this branch, and the pull request says so.
+Not chosen: the devices reading the transcript instead. Checked on Claude Code 2.1.325, a prompt is not yet in the
+transcript when `UserPromptSubmit` runs (the first prompt's file does not exist yet; the second finds the first as
+the last user entry).
+
 **The devices process.** A `turn-start` moves the dial to its agent when all of these hold:
 
 - it is not `relayed`;
