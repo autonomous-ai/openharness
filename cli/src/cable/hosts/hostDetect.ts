@@ -72,9 +72,10 @@ export function appDisplayName(id: string): string {
 export function detectApp(hints: Record<string, string>): string {
   const bundle = hints.__CFBundleIdentifier ?? ''
   const program = hints.TERM_PROGRAM ?? ''
-  // Cursor is a VS Code fork and reports TERM_PROGRAM=vscode, so the bundle id decides first.
-  const named = BUNDLE_APPS[bundle] ?? PROGRAM_APPS[program]
-  if (named) return named
+  // Cursor is a VS Code fork and reports TERM_PROGRAM=vscode, so the bundle id decides first. A hint is outside text:
+  // only a table's own key names an app, never one an object inherits (`constructor`).
+  if (Object.hasOwn(BUNDLE_APPS, bundle)) return BUNDLE_APPS[bundle]
+  if (Object.hasOwn(PROGRAM_APPS, program)) return PROGRAM_APPS[program]
   if (bundle || program) return UNKNOWN_APP
   if (hints.KITTY_WINDOW_ID) return 'kitty'
   return detectHost(hints)
