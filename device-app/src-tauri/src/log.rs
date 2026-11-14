@@ -189,7 +189,12 @@ mod tests {
             ("Installed to /Users/person/.local/bin/harness", "Installed to ~/.local/bin/harness"),
             ("cd /Users/person && ls /Users/person/a", "cd ~ && ls ~/a"),
             ("\"/Users/person\"", "\"~\""),
+            ("Installed to /Users/person.", "Installed to ~."),
+            ("[/Users/person] {/Users/person} </Users/person> /Users/person|wc", "[~] {~} <~> ~|wc"),
+            ("/Users/person@host /Users/person=x", "~@host ~=x"),
+            // Another person's folder: a name goes on with letters, digits, `_`, `-` and `.`.
             ("/Users/personal/x stays", "/Users/personal/x stays"),
+            ("/Users/person.b /Users/person-b /Users/person_b /Users/person..b", "/Users/person.b /Users/person-b /Users/person_b /Users/person..b"),
         ];
         for (text, expected) in cases {
             assert_eq!(redact_with(text, home.as_ref()), expected, "{text}");
