@@ -1,5 +1,5 @@
 // The voice half of harness-device: it keeps one long poll open to the Harness daemon, and a prompt the person says
-// at the dial comes back as its answer and is submitted as theirs. Approvals are the PermissionRequest hook's.
+// at the dial comes back as its answer and is submitted as theirs. A waiting prompt is the PermissionRequest hook's to tell.
 const INBOX = 'http://harness/api/hook/inbox'
 const LINK = ['device', 'claude', 'link', '--json']
 // No launcher, no daemon, no dial watching: the daemon answers at once, so ask again only this often.
