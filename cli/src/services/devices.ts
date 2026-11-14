@@ -32,6 +32,7 @@ import { askedLine, hostDisplayName, observedAgentId, ObservedSource, type Obser
 import { createOpenActions } from '../cable/hosts/open.js'
 import { createOrcaActions, orcaDeps, type OrcaDeps } from '../cable/hosts/orca.js'
 import { HostRegistry } from '../cable/hosts/registry.js'
+import { learnApps } from '../cable/hosts/scannedApp.js'
 import type { HostAgent, HostAgentState } from '../cable/hosts/types.js'
 import { PetStore } from '../cable/pets/store.js'
 import { DialLog } from '../cable/dialLog.js'
@@ -133,6 +134,7 @@ function observedSource(dataDir: string, log: (line: string) => void, actions: O
     fileStamp,
     log,
     actions,
+    apps: learnApps,
   })
 }
 
