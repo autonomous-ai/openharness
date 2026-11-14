@@ -473,9 +473,10 @@ export class IsolatedDaemon {
     await Promise.race([exited, (async () => {
       await until('the daemon to answer on its port', async () => {
         // The port this start said, never an earlier boot's: a start can move it. Every miss throws, so the timeout
-        // names the last one (`until`): no port said yet, a refused connection, or an answer that is not healthy.
+        // names the last one (`until`): no port said yet, a refused connection, or an answer that is not healthy. Each
+        // ask has a deadline of its own: `until` checks its 60 s only between asks, and a fetch nobody answers waits 300 s.
         const port = saidPort(this.output.slice(from))
-        const response = await fetch(`http://127.0.0.1:${port}/api/health`)
+        const response = await fetch(`http://127.0.0.1:${port}/api/health`, { signal: AbortSignal.timeout(5_000) })
         if (!response.ok) throw new Error(`port ${port} answered /api/health with ${response.status}`)
         return true
       }, 60_000, 200)
