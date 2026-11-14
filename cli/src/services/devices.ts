@@ -286,18 +286,18 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       dialAttached(on)
     },
     // The core's own doors for a local agent. The fleet's router reaches them the same way; the dial uses
-    // these only when it routes by itself, with the fleet off. The router takes an agent outside a pane, which has no
-    // machine, for a local one: each door is shut to it here.
-    sendTurn: (agentId, text) => { if (!outside(agentId)) core.turns.send(agentId, text) },
-    stopTurn: (agentId) => { if (!outside(agentId)) core.turns.stop(agentId) },
+    // these only when it routes by itself, with the fleet off. An agent outside a pane never reaches them: the host shuts
+    // each to it, the fleet's way too (cableHost.ts `outside`).
+    sendTurn: (agentId, text) => core.turns.send(agentId, text),
+    stopTurn: (agentId) => core.turns.stop(agentId),
     // A Super Tab wait is shown, never answered here: its id is no pane's, and nothing is typed for it.
-    answer: (agentId, requestId, answers) => { if (!superTabWait(requestId) && !outside(agentId)) core.questions.answer(agentId, requestId, answers) },
-    answerReviewed: (answer) => superTabWait(answer.requestId) || outside(answer.agentId) ? Promise.resolve(false) : core.questions.answerReviewed(answer),
-    recent: (agentId, n) => outside(agentId) ? [] : core.turns.recent(agentId, n),
-    recentAsks: (agentId) => outside(agentId) ? [] : core.turns.asks(agentId),
+    answer: (agentId, requestId, answers) => { if (!superTabWait(requestId)) core.questions.answer(agentId, requestId, answers) },
+    answerReviewed: (answer) => superTabWait(answer.requestId) ? Promise.resolve(false) : core.questions.answerReviewed(answer),
+    recent: (agentId, n) => core.turns.recent(agentId, n),
+    recentAsks: (agentId) => core.turns.asks(agentId),
     runtimeProfile: (session) => core.agents.runtimeProfile(session),
-    updateAgent: (agentId, model, effort) => { if (!outside(agentId)) core.agents.setRuntime(agentId, model, effort) },
-    listModels: async (agentId) => outside(agentId) ? [] : core.agents.runtimeModels(agentId),
+    updateAgent: (agentId, model, effort) => core.agents.setRuntime(agentId, model, effort),
+    listModels: async (agentId) => core.agents.runtimeModels(agentId),
     // Each of these is for the windows on this computer alone: they describe a hand at this desk, not a
     // change in what the machine is doing, and the cloud web audience may be sitting at another computer.
     // A notification tap asks for a tile of its OWN (see CableHost.openAgent). `reason` rides along only
