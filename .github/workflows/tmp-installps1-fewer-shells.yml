@@ -1,0 +1,93 @@
+name: tmp installps1-fewer-shells
+
+# TEMPORARY: removed before the merge (docs/plans/2026-11-14-installps1-fewer-shells-plan.md, Task 5).
+# The red and the green of this branch's Windows-only tests on both runners, at every push to it: PR CI runs no
+# Windows, and windows.yml builds the host first. No build, no secret, nothing published or written outside the run.
+on:
+  push:
+    branches: [fix/installps1-fewer-shells]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tmp-installps1-fewer-shells
+  cancel-in-progress: true
+
+jobs:
+  library:
+    name: library (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [windows-11-arm, windows-latest]
+    runs-on: ${{ matrix.runner }}
+    # With room: before the session, the two library describes took 16 minutes on windows-11-arm (run 43576955663).
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: cli
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          # The same pin as windows.yml.
+          node-version: 24.22.2
+          cache: npm
+          cache-dependency-path: cli/package-lock.json
+      - name: CLI install
+        run: npm ci
+      # vitest by its file, not npx: the name filter below has a `|`, which must not pass through cmd.
+      - name: The session's own spec
+        run: node node_modules/vitest/vitest.mjs run src/testing/windowsPowerShell.spec.ts --maxWorkers=1 --reporter=verbose
+      # Not `installing for real`: it runs the real harness.exe, which windows.yml builds.
+      - name: installPs1.spec.ts, its two library describes
+        run: |
+          node node_modules/vitest/vitest.mjs run src/scripts/installPs1.spec.ts -t "building blocks, in Windows PowerShell 5\.1|run again over a live install" --maxWorkers=1 --reporter=verbose
+      # Each mutation is made in this run's checkout and put back. Its step is green only when its case, and no other,
+      # fails for the mutation's reason: that shows the `powershell7` cases still test autoload.
+      - name: 'Mutation 1: Get-HarnessSha256 calls Get-FileHash, and the download case fails under PowerShell 7''s modules'
+        env:
+          OLD: 'function Get-HarnessSha256([string]$Path) {'
+          NEW: "function Get-HarnessSha256([string]$Path) {\n  return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()"
+          CASE: keeps a download only when its size and SHA-256
+          # The line the case fails on: its first check, under 5.1's own modules, still passes.
+          EVIDENCE: "'powershell7'"
+        run: |
+          $ps1 = (Resolve-Path 'scripts/install.ps1').Path
+          $text = [IO.File]::ReadAllText($ps1)
+          if (-not $text.Contains($env:OLD)) { throw "install.ps1 no longer has the text this mutation replaces: $env:OLD" }
+          [IO.File]::WriteAllText($ps1, $text.Replace($env:OLD, $env:NEW))
+          $report = Join-Path $env:RUNNER_TEMP 'mutation.json'
+          try { node node_modules/vitest/vitest.mjs run src/scripts/installPs1.spec.ts -t $env:CASE --maxWorkers=1 --reporter=verbose --reporter=json "--outputFile.json=$report" }
+          finally { git checkout -- scripts/install.ps1 }
+          $failed = @((Get-Content -Raw -LiteralPath $report | ConvertFrom-Json).testResults.assertionResults | Where-Object { $_.status -eq 'failed' })
+          if ($failed.Count -ne 1 -or -not $failed[0].title.StartsWith($env:CASE)) { throw "Only '$env:CASE' must fail. Failed: $($failed.title -join '; ')" }
+          $said = $failed[0].failureMessages -join "`n"
+          $at = if ($said -match 'installPs1\.spec\.ts:(\d+):\d+') { (Get-Content -LiteralPath src/scripts/installPs1.spec.ts)[[int]$Matches[1] - 1] } else { '' }
+          if (-not "$said`n$at".Contains($env:EVIDENCE)) { throw "The case failed, but not for this mutation's reason: no $env:EVIDENCE in its failure or on the line it failed at." }
+          Write-Host "ok: '$($failed[0].title)' failed, at: $($at.Trim())"
+          exit 0
+      - name: 'Mutation 2: Get-HarnessPtySignatureProblems does not import Security by its path, and the signature case fails'
+        env:
+          OLD: 'Import-Module -Name (Join-Path $PSHOME ''Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1'') -ErrorAction Stop'
+          NEW: '# mutation: this PowerShell''s own Security module is not imported'
+          CASE: names each terminal host file that is unsigned or signed by someone else
+          # In the case's failure message, which carries the call's stderr.
+          EVIDENCE: Get-AuthenticodeSignature
+        run: |
+          $ps1 = (Resolve-Path 'scripts/install.ps1').Path
+          $text = [IO.File]::ReadAllText($ps1)
+          if (-not $text.Contains($env:OLD)) { throw "install.ps1 no longer has the text this mutation replaces: $env:OLD" }
+          [IO.File]::WriteAllText($ps1, $text.Replace($env:OLD, $env:NEW))
+          $report = Join-Path $env:RUNNER_TEMP 'mutation.json'
+          try { node node_modules/vitest/vitest.mjs run src/scripts/installPs1.spec.ts -t $env:CASE --maxWorkers=1 --reporter=verbose --reporter=json "--outputFile.json=$report" }
+          finally { git checkout -- scripts/install.ps1 }
+          $failed = @((Get-Content -Raw -LiteralPath $report | ConvertFrom-Json).testResults.assertionResults | Where-Object { $_.status -eq 'failed' })
+          if ($failed.Count -ne 1 -or -not $failed[0].title.StartsWith($env:CASE)) { throw "Only '$env:CASE' must fail. Failed: $($failed.title -join '; ')" }
+          $said = $failed[0].failureMessages -join "`n"
+          $at = if ($said -match 'installPs1\.spec\.ts:(\d+):\d+') { (Get-Content -LiteralPath src/scripts/installPs1.spec.ts)[[int]$Matches[1] - 1] } else { '' }
+          if (-not "$said`n$at".Contains($env:EVIDENCE)) { throw "The case failed, but not for this mutation's reason: no $env:EVIDENCE in its failure or on the line it failed at." }
+          Write-Host "ok: '$($failed[0].title)' failed, at: $($at.Trim())"
+          exit 0
