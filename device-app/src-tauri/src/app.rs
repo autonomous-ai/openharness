@@ -625,6 +625,16 @@ mod tests {
     }
 
     #[test]
+    fn an_install_while_the_desktop_app_runs_leaves_the_start_to_it() {
+        let mut app = fresh();
+        app.handle(Event::Tick { now: B + 5, desktop_running: true });
+        let effects = app.handle(Event::InstallDone(Ok(())));
+        assert!(!has(&effects, &Effect::RunStart));
+        assert!(has(&effects, &Effect::SpawnWatch));
+        assert_eq!(logs(&effects), ["keep-alive: the desktop app runs; not starting"]);
+    }
+
+    #[test]
     fn an_install_that_fails_shows_its_lines_and_retry() {
         let mut app = fresh();
         let effects = app.handle(Event::InstallDone(Err(vec!["a".into(), "b".into()])));
