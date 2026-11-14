@@ -42,12 +42,13 @@ export interface ListenerHandler {
 }
 
 export interface DevicesListenerOptions {
-  /** devices/listenerPath.ts; null where there is no listener (Windows). */
+  /** devices/listenerPath.ts; null where there is no listener: Windows, or a data folder and a home both too long. */
   path: string | null
   handlers: Readonly<Record<string, ListenerHandler>>
   log(line: string): void
   /** Monotonic milliseconds. */
   now?: () => number
+  platform?: NodeJS.Platform
 }
 
 export interface DevicesListener {
@@ -83,10 +84,16 @@ class PerSecond {
 
 /**
  * Serve `handlers` on the devices' socket, or nothing: no path, a folder that is not this account's own, a name a live
- * listener holds, or a socket that cannot be made. Each is one log line, and the devices run on without it.
+ * listener holds, or a socket that cannot be made. Each is one log line, and the devices run on without it. Windows has
+ * no listener yet, so no path there says nothing.
  */
-export async function openDevicesListener({ path, handlers, log, now = () => performance.now() }: DevicesListenerOptions): Promise<DevicesListener | null> {
-  if (path === null) return null
+export async function openDevicesListener(
+  { path, handlers, log, now = () => performance.now(), platform = process.platform }: DevicesListenerOptions,
+): Promise<DevicesListener | null> {
+  if (path === null) {
+    if (platform !== 'win32') log('[devices] listener not opened · no path')
+    return null
+  }
   let folder: Stats | undefined
   try { folder = lstatSync(dirname(path)) } catch { /* a short folder not made yet: listenLocalSocket makes it owner only */ }
   // What a client asks of the socket's folder before it sends (socketIsPrivate): a real folder of this account that no
