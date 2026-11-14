@@ -98,8 +98,8 @@ bring its terminal forward. Every prompt is answered in its own app.
 Claude Code (outside a Harness pane), plugin harness-device enabled
   ├─ PermissionRequest hook → hooks/asked → `harness device claude asked`   (fire and forget, decides nothing)
   │     POST /api/hook/observed { event: "asked", summary } ── core: check, bound, forward ──▶ devices: the agent waits,
-  │     with the line "<summary> · answer in {Host}"; the next hook event of that session (PostToolUse, Stop,
-  │     UserPromptSubmit, SessionEnd) clears it
+  │     with the line "<summary> · answer in {Host}"; the session's next hook event or its transcript check
+  │     clears it
   └─ mod (hooks/device.js), voice only
         POST /api/hook/inbox (long poll ≤ 25 s) ── core ──▶ devices: Inbox ◀── a transcript for this session
         ◀── { text } → $.prompt.submit({ text, asUser: true })
@@ -145,7 +145,9 @@ observed event. The core keeps nothing. There is no approval route, no held requ
 **In the devices process.** An `asked` event makes the observed agent `needs-you` with the activity line
 "<summary> · answer in {Host}" (the host's display name: Orca, Ghostty, Terminal, …), through the same activity path as
 wave 0's "Waiting for you · {Host}", which it replaces for that session, so the two never show as two lines or flicker.
-The next hook event of that session (PostToolUse, Stop, UserPromptSubmit, SessionEnd) clears it. A character the round
+The next hook event of that session (UserPromptSubmit, Stop, StopFailure, SessionEnd) clears it, and so does the open
+session's transcript check (every 3 s), which sees a prompt answered in the app. PostToolUse is not used: Harness does
+not run its hook script on every tool call, and adding one would start a process per tool call. A character the round
 dial cannot draw becomes `?`. The summary goes only to the dial over its cable: never to the backend, the phone, the
 router or a log line.
 
@@ -175,9 +177,12 @@ open.
 **In the devices process.** An observed agent can take voice (`v`) when its session has a poll open, or one closed under
 35 s ago (the mod opens the next at once), or when it has an Orca terminal handle. A transcript for it goes:
 
-1. Refused only when the session has ended ("<name> did not answer."). Idle, working or waiting, the words go on: the
-   mod's `$.prompt.submit` waits for the turn to end before it starts the next, and Claude Code and Codex queue what is
-   typed into their running TUI.
+1. Refused when the session has ended ("<name> did not answer."). Idle or working, the words go on: the mod's
+   `$.prompt.submit` waits for the turn to end before it starts the next, and Claude Code and Codex queue what is typed
+   into their running TUI. Through Orca, an agent waiting on a permission prompt is refused ("<name> is waiting for your
+   answer in {Host}."): text and Enter typed then would answer the prompt itself (a leading digit can even pick "don't
+   ask again"), and the dial never approves anything; Harness's own path refuses the same case. The mod's route has no
+   such risk and delivers in every state.
 2. To the mod when its session has a poll open, or opens one within 5 s: the text is the answer to that poll, and that is
    "sent" (the mod sends no acknowledgement). No poll in 5 s: "<name> did not answer."
 3. Else to Orca (`orca terminal send … --enter --wait-submit 5`).
