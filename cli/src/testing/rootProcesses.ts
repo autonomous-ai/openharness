@@ -12,6 +12,7 @@
  * Any other match is ended alone, never its group: a test's own `tmux -S <root>/…` call runs in the Vitest worker's
  * group, and signalling that group would end the test run.
  */
+import { basename, isAbsolute } from 'node:path'
 import { alive, processTable, type ProcessRow } from './spawnedRuns.js'
 
 export interface RootProcesses {
@@ -25,6 +26,9 @@ export interface RootProcesses {
 
 /** What in [table] names [root], seen from the process [self]: itself, its parent and pid 1 are never matched. */
 export function rootProcesses(root: string, table: ProcessRow[], self: number = process.pid): RootProcesses {
+  // Only isolatedTmux's own folder, unique to its test. A wrong one (empty, `/`, a TMPDIR) would name other runs'
+  // processes or every one on the machine, and their whole groups would be SIGKILLed.
+  if (!isAbsolute(root) || !basename(root).startsWith('htmux-')) throw new Error(`not a test root (isolatedTmux's <tmp>/htmux-XXXXXX): ${root}`)
   const caller = table.find((row) => row.pid === self)
   const spared = new Set([self, caller?.ppid, 1])
   const matches = table.filter((row) => row.command.includes(`${root}/`) && !spared.has(row.pid))

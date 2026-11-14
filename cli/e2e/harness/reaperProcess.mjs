@@ -16,7 +16,7 @@
  */
 import { execFileSync } from 'node:child_process'
 import { chmodSync, lstatSync, readdirSync, rmSync } from 'node:fs'
-import { join } from 'node:path'
+import { basename, isAbsolute, join } from 'node:path'
 import { createInterface } from 'node:readline'
 
 /** How long a daemon gets to stop on SIGTERM before SIGKILL: as IsolatedDaemon.stop gives it. */
@@ -119,6 +119,12 @@ async function reap() {
     // The server names the root on its own command line: stopped first, its panes with it, so the sweep meets only what
     // left the worker's groups. Swept before the removal, so nothing that names the root writes into it as it goes.
     try { execFileSync('tmux', ['-S', socket, 'kill-server'], { stdio: 'ignore', timeout: 5_000 }) } catch { /* already gone */ }
+    // Only isolatedTmux's own folder, as src/testing/rootProcesses.ts holds: a wrong one (empty, `/`, a TMPDIR) would have
+    // every process that names it SIGKILLed, group and all, and every folder under it made writable and removed.
+    if (typeof root !== 'string' || !isAbsolute(root) || !basename(root).startsWith('htmux-')) {
+      console.error(`[e2e reaper] not a test root, left alone: ${root}`)
+      continue
+    }
     await endRootProcesses(root)
     removeRoot(root)
   }
