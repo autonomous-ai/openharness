@@ -35,7 +35,7 @@ import { PLAYER_PAGE_SIZE, playerPage, type PlayerSession } from './playerLibrar
 import { PassageCarry, withCarriedPassage, type CarryRead } from './passageCarry.js'
 import { VoiceDraft, type DraftPin } from './voiceDraft.js'
 import { SUPER_TAB_REQUEST_PREFIX } from '../core/api.js'
-import { QuestionInbox, type ReviewedAnswer, type AnswerReceipt, type QuestionSpeech } from './questionInbox.js'
+import { APPROVAL_REQUEST_PREFIX, QuestionInbox, type ReviewedAnswer, type AnswerReceipt, type QuestionSpeech } from './questionInbox.js'
 import { notificationReadToken, type UnreadNotification } from '../lib/notificationRead.js'
 
 /** Bumped when the VOCABULARY changes. Separate from the frame version, which is the envelope. */
@@ -379,6 +379,8 @@ export interface SuperTabAsk { superTab: string; attention: 'decision' | 'stuck'
 
 /** Why the dial sent an `agent.open`: a tap (absent) or a question screen that came up on its own. */
 export type OpenReason = 'question'
+/** What a send answers. `message` is a sentence for the dial, shown in place of the generic one. */
+export type SendOutcome = { ok: true } | { ok: false; machine?: string; reason?: string; message?: string }
 
 export type { WindowRoute } from './windowRoute.js'
 import type { WindowRoute } from './windowRoute.js'
@@ -460,14 +462,15 @@ export interface CableHost {
   activitySnapshot?(agentId: string): Promise<ActivitySnapshot | null>
   /** Every session the library can page through, in the order to show them. Absent: no library. */
   playerLibrary?(): Promise<PlayerSession[]>
-  sendTurn(agentId: string, text: string): void | { ok: true } | { ok: false; machine?: string; reason?: string }
+  /** Async for an agent outside Harness, whose source answers only once the words are delivered or refused. */
+  sendTurn(agentId: string, text: string): void | SendOutcome | Promise<void | SendOutcome>
   stopTurn(agentId: string): void
   /**
    * The user answered a `question`. `answers` is keyed by the QUESTION keys the daemon itself asked with
    * and travels verbatim — re-deriving it, or keying it by the requestId, is how a rename at either end
    * becomes an answer nobody gave.
    */
-  answer(agentId: string, requestId: string, answers: Record<string, string>): void
+  answer(agentId: string, requestId: string, answers: Record<string, string>): void | AnswerReceipt
   answerReviewed?(answer: ReviewedAnswer): Promise<AnswerReceipt>
   canSpeakQuestion?(agentId: string): boolean
   /** What the dial may do with an agent of the machine list, as letters of s v f a; undefined (an older host, a
@@ -490,7 +493,7 @@ export interface CableHost {
    * came up on its own — the window then only brings the agent forward if it is already on screen,
    * because a reconnect re-shows every unanswered question and each used to open a tab.
    */
-  openAgent(agentId: string, reason?: OpenReason): void
+  openAgent(agentId: string, reason?: OpenReason): void | Promise<void | { ok: false; error: string }>
   readNotification?(agentId: string, readToken: string): void
   /** The dial asked for a fork of this agent — a second one with its history, opened in the window. */
   forkAgent(agentId: string): Promise<{ ok: true; agentId: string } | { ok: false; error: string; detail?: string }>
@@ -1605,7 +1608,9 @@ export class CableSession {
         // one whose close stopped the Buddy (Diego, 10-30). A question screen brings the agent forward as before.
         const swarm = reason ? null : this.swarmSessionOf(agentId)
         if (swarm) this.openSwarmChat(swarm.tab, swarm.projectId, swarm.chat)
-        else this.host.openAgent(agentId, reason)
+        else void Promise.resolve(this.host.openAgent(agentId, reason)).then((result) => {
+          if (result && !result.ok) return this.toast(result.error)
+        }).catch(() => this.log('cable: agent.open → failed'))
         return
       }
       case 'agent.fork': {
@@ -1687,7 +1692,9 @@ export class CableSession {
         return
       }
       case 'turn.send':
-        if (str('agentId') && str('text')) this.host.sendTurn(str('agentId')!, str('text')!)
+        // Not awaited: the dial asks for no answer, and a send that waits on its agent must not hold the next frame.
+        if (str('agentId') && str('text')) void Promise.resolve(this.host.sendTurn(str('agentId')!, str('text')!))
+          .catch(() => this.log('cable: turn.send → failed'))
         return
       case 'turn.stop': {
         const agentId = str('agentId')
@@ -1739,11 +1746,13 @@ export class CableSession {
           for (const [k, v] of Object.entries(answers as Record<string, unknown>)) {
             if (typeof v === 'string') flat[k] = v
           }
-          if (this.lacks(agentId, 'a')) {
+          // An approval is answered by the devices process itself, for an agent outside Harness too.
+          if (this.lacks(agentId, 'a') && !requestId.startsWith(APPROVAL_REQUEST_PREFIX)) {
             await this.toast(`This agent is in ${this.hostName(agentId)}. Answering it from the device comes in an update.`)
             return
           }
-          this.host.answer(agentId, requestId, flat)
+          const receipt = this.host.answer(agentId, requestId, flat)
+          if (receipt && !receipt.ok) await this.toast(receipt.error)
         }
         return
       }
@@ -1778,6 +1787,13 @@ export class CableSession {
         let question: { pin?: QuestionSpeech } | undefined
         if (questionVoice) {
           const agentId = str('agentId'), token = str('questionToken'), index = msg.questionIndex
+          // An approval takes Allow or Deny only: its words would be transcribed for nothing.
+          const open = agentId ? this.questionInbox.read(agentId) : undefined
+          if (open?.ok && open.id.startsWith(APPROVAL_REQUEST_PREFIX)) {
+            this.voice = null
+            this.voiceRefusal = { generation: this.voiceGeneration, message: 'Tap Allow or Deny.' }
+            return
+          }
           const pin = agentId && token && Number.isInteger(index) &&
             !formVoice && !carryVoice && !draftVoice && !searchVoice && !('cmd' in msg) && !('selectionId' in msg)
             ? { agentId, token, index: index as number } : undefined
@@ -2487,8 +2503,8 @@ export class CableSession {
           const edited = turn.cmd ? `/${turn.cmd} ${words}` : words
           const text = carried ? withCarriedPassage(edited, carried)
             : selection?.ok && selection.text ? withSelectedPassage(edited, selection.text) : edited
-          const result = this.host.sendTurn(recipient, text)
-          if (result && !result.ok) return { ok: false, error: 'Could not reach that harness. Check its connection.' }
+          const result = await this.host.sendTurn(recipient, text)
+          if (result && !result.ok) return { ok: false, error: result.message ?? 'Could not reach that harness. Check its connection.' }
           if (carried) this.passageCarry.clear(carried.id)
           return { ok: true }
         } })
@@ -2525,11 +2541,11 @@ export class CableSession {
     const text = carried ? withCarriedPassage(instruction, carried)
       : selection?.ok && selection.text ? withSelectedPassage(instruction, selection.text) : instruction
     try {
-      const submitted = this.host.sendTurn(agentId, text)
+      const submitted = await this.host.sendTurn(agentId, text)
       if (submitted && !submitted.ok) {
-        await reply({ t: 'voice.error', message: carried
+        await reply({ t: 'voice.error', message: submitted.message ?? (carried
           ? 'Could not reach that harness. Your carried text is still here.'
-          : 'Could not reach that harness. Check its connection and try again.' })
+          : 'Could not reach that harness. Check its connection and try again.') })
         return
       }
     } catch (_) {
