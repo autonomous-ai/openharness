@@ -4347,6 +4347,18 @@ describe('the app filter', () => {
       expect(listFrames(port)).toEqual([])
     } finally { await session.stop() }
   })
+
+  it('restores recaps for the ring the dial holds, not the single ring', async () => {
+    // The single ring is cut at 16 across apps, so an agent of the shown app can be missing from it.
+    const { host } = appHost({
+      listAgents: async () => [row('g1', 'ghostty')],
+      recentSummaries: async () => [{ recap: 'shipped it', text: 'shipped it' }],
+    })
+    const { session, port } = await greeted(host)
+    try {
+      await vi.waitFor(() => expect(port.sent.filter((m) => m.t === 'summary' && m.restore).map((m) => m.agentId)).toEqual(['g1', 'g2', 'g3']))
+    } finally { await session.stop() }
+  })
 })
 
 describe('what the dial cannot do for an agent', () => {
