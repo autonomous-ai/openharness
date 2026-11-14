@@ -14,6 +14,7 @@ export const APP_BUNDLES: Readonly<Record<string, string>> = {
   vscode: 'com.microsoft.VSCode',
   cursor: 'com.todesktop.230313mzl4w4u92',
   warp: 'dev.warp.Warp-Stable',
+  claude: 'com.anthropic.claudefordesktop',
 }
 
 const NAMES: Record<string, string> = {
@@ -30,6 +31,7 @@ const NAMES: Record<string, string> = {
   vscode: 'VS Code',
   cursor: 'Cursor',
   warp: 'Warp',
+  claude: 'Claude',
   terminal: 'Terminal',
 }
 
@@ -90,6 +92,7 @@ export function detectHost(hints: Record<string, string>): string {
   if (has('ORCA_AGENT_SESSION_ID') || bundle === APP_BUNDLES.orca) return 'orca'
   // Cursor is a VS Code fork and reports TERM_PROGRAM=vscode, so its bundle id decides first.
   if (bundle === APP_BUNDLES.cursor) return 'cursor'
+  if (bundle === APP_BUNDLES.claude) return 'claude'
   if (program === 'iTerm.app' || bundle === APP_BUNDLES.iterm) return 'iterm'
   if (program === 'Apple_Terminal' || bundle === APP_BUNDLES['terminal-app']) return 'terminal-app'
   if (program === 'ghostty' || bundle === APP_BUNDLES.ghostty) return 'ghostty'
