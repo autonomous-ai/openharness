@@ -104,14 +104,27 @@ export async function scannedApps(pids: readonly number[], deps: ScannedAppDeps)
     return apps
   }
   const bundles = walks.map(([pid, names]) => [pid, names.flatMap((name) => bundleOf(name, deps.roots) ?? [])] as const)
-  // Each bundle once a pass, all together, and a bounded number of them: a bundle past that names nothing.
+  // Each bundle once a pass, all together, and a bounded number of them: a bundle past that is not read.
   const read = [...new Set(bundles.flatMap(([, of]) => of))].slice(0, BUNDLES_A_PASS)
   const ids = new Map(await Promise.all(read.map(async (bundle) => [bundle, await deps.bundleId(bundle).catch(() => undefined)] as const)))
   for (const [pid, of] of bundles) {
-    const app = of.flatMap((bundle) => ids.get(bundle) ?? []).map(frontAppId).find(listed)
+    const app = nearestApp(of, ids)
     if (app) apps.set(pid, app)
   }
   return apps
+}
+
+/** The nearest listed app of a walk's bundles. A bundle with no id (not read this pass, or unreadable) ends the walk
+ *  with none: it may be the session's own app, and an outer one would be a guess. One read but no table lists is
+ *  passed over: a helper or an engine of its own. */
+function nearestApp(bundles: readonly string[], ids: ReadonlyMap<string, string | undefined>): string | undefined {
+  for (const bundle of bundles) {
+    const id = ids.get(bundle)
+    if (!id) return undefined
+    const app = frontAppId(id)
+    if (listed(app)) return app
+  }
+  return undefined
 }
 
 /** The executables of a process and up to WALK_PARENTS of its parents, nearest first. */
