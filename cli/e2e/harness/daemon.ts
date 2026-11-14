@@ -23,6 +23,7 @@ import { daemonEnvironment } from '../../src/testing/daemonEnvironment.js'
 import { GH_FORBIDDEN_STUB } from '../../src/testing/ghStub.js'
 import { readAdoptedHomes } from '../../src/engines/kit/homeAdoption.js'
 import { ownProcessGroup } from '../../src/lib/windows/noWindow.js'
+import { endRootProcesses } from '../../src/testing/rootProcesses.js'
 import { alive } from '../../src/testing/spawnedRuns.js'
 import { forgetGroup, forgetTmux, leaderGone, watchGroup, watchTmux } from './reaper.js'
 
@@ -548,11 +549,20 @@ export class IsolatedDaemon {
       forgetGroup(leader.pid!)
     }
     this.groups.clear()
-    // A daemon beside another shares its tmux server: that one closes it.
+    // A daemon beside another shares its tmux server and its root: that one closes them.
+    let left: string[] = []
     if (!this.options.beside) {
+      // The server names the root on its own command line: stopped first, its panes with it, so the sweep meets only
+      // what left the daemon's groups.
+      await this.tmux.run('kill-server').catch(() => { /* already gone */ })
+      // The census of 2026-11-14 found 14 fake `codex app-server` pairs outliving their runs: a Codex rate-limit read
+      // runs in a process group of its own (lib/codexRateLimits.ts), out of reach of the daemon's groups. Ended before
+      // the root is removed, so nothing that names it writes into it as it goes.
+      left = await endRootProcesses(this.root)
       await this.tmux.close()
       forgetTmux(this.tmux.socket)
     }
     if (escaped) throw escaped
+    if (left.length) throw new Error(`a daemon under test left processes that would not end (root ${this.root}): ${left.join('; ')}`)
   }
 }

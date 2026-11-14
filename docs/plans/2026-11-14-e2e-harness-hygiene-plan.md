@@ -25,7 +25,8 @@ None.
 
 ## Global Constraints
 
-- No product code. Under `cli/src/` only new files in `cli/src/testing/`; everything else is in `cli/e2e/`,
+- No product code. Under `cli/src/` only files in `cli/src/testing/` (new ones, and the root's removal in
+  `isolatedTmux.ts`, Task 6); everything else is in `cli/e2e/`,
   `cli/vitest.e2e.config.ts` and `cli/vitest.setup.ts` (Task 9). A real `podman events` outliving a crashed agent-browser process is out of scope.
 - A failing or flaky test is a bug, fixed at its layer with a red-then-green test: never skipped, loosened, retried
   or given a longer timeout. No fixed sleeps in a test; a wait is on a condition, with a bound.
@@ -108,6 +109,7 @@ Checked at `b79d017c41`.
 | `cli/e2e/noSocket.e2e.ts` | the refusal's test, beside the test whose own data folder is too long on purpose | 4 |
 | `cli/src/testing/rootProcesses.ts`, `.spec.ts` | new: what still names a root, and ending it | 5 |
 | `cli/e2e/harness/hungCodex.ts` | new: a Codex whose rate-limit read never ends | 6 |
+| `cli/src/testing/isolatedTmux.ts`, `.spec.ts` | the root's removal also removes a folder made read-only in it | 6 |
 | `cli/e2e/leftBehind.e2e.ts` | the close's tests (6), the worker's (7), grid's (8) | 6, 7, 8 |
 | `cli/e2e/harness/reaperProcess.mjs`, `abandonedWorker.ts` | the reaper sweeps a root before removing it | 7 |
 | `cli/vitest.setup.ts`, `cli/src/testing/vitestSetupFolders.spec.ts` | the setup removes the home, data and runtime folders it made when the file ends; the spec, new | 9 |
@@ -552,6 +554,7 @@ outlives it). **Effort:** xhigh. Shares `daemon.ts` with Task 4.
 - Create: `cli/e2e/harness/hungCodex.ts`
 - Modify: `cli/e2e/leftBehind.e2e.ts`
 - Modify: `cli/e2e/harness/daemon.ts` (`close`, 545-550)
+- Modify: `cli/src/testing/isolatedTmux.ts` (`close`, 30-36), `cli/src/testing/isolatedTmux.spec.ts`
 
 **Interfaces:**
 - Consumes: `endRootProcesses(root: string, ms?: number): Promise<string[]>` from
@@ -618,19 +621,46 @@ it('leaves a shared root to the daemon that owns it, and ends alone a process of
 })
 ```
 
+In `src/testing/isolatedTmux.spec.ts`, inside its `describe` (it needs tmux, as the file's first test does):
+
+```ts
+it('removes a folder made read-only in the root, and changes nothing a link in it leads to', async () => {
+  const tmux = await isolatedTmux()
+  const bin = join(tmux.root, 'runtime', 'grid-0.3.63-darwin-arm64', 'bin')
+  const outside = mkdtempSync(join(tmpdir(), 'isolated-tmux-outside-'))
+  try {
+    mkdirSync(bin, { recursive: true })
+    writeFileSync(join(bin, 'grid'), '')
+    chmodSync(bin, 0o555)
+    writeFileSync(join(outside, 'kept'), '')
+    chmodSync(outside, 0o555)
+    symlinkSync(outside, join(tmux.root, 'link'))
+    await tmux.close()
+    expect(existsSync(tmux.root)).toBe(false)
+    expect([statSync(outside).mode & 0o777, readdirSync(outside)]).toEqual([0o555, ['kept']])
+  } finally {
+    for (const folder of [bin, outside]) { try { chmodSync(folder, 0o755) } catch { /* gone */ } }
+    rmSync(tmux.root, { recursive: true, force: true })
+    rmSync(outside, { recursive: true, force: true })
+  }
+})
+```
+
 - [ ] **Step 2: Run them to see them fail**
 
 ```bash
 cd cli && mkdir -p /private/tmp/claude-502/hyg-t6
 TMPDIR=/private/tmp/claude-502/hyg-t6/ caffeinate -i npx vitest run --config vitest.e2e.config.ts e2e/leftBehind.e2e.ts -t 'ends what left|leaves a shared root'
+npx vitest run src/testing/isolatedTmux.spec.ts
 ```
 
-Expected: 2 failed. The first on `the read's Codex and its child: expected [ <pid>, <pid> ] to deeply equal []`, the
+Expected: the spec, 1 failed, on `EACCES: permission denied, unlink '<root>/runtime/grid-0.3.63-darwin-arm64/bin/grid'`.
+The end-to-end file, 2 failed. The first on `the read's Codex and its child: expected [ <pid>, <pid> ] to deeply equal []`, the
 second on `after its owner's close: expected true to be false`. A first test that fails earlier, waiting for the
 read's Codex, means this plan read the daemon wrongly: stop and report it. The file's `afterEach` ends the `watched`
 pids, so the red run leaves nothing: check with
 `ps -A -ww -o pid=,command= | grep -F /private/tmp/claude-502/hyg-t6/htmux- | grep -v 'grep -F'`, which prints nothing.
-Commit the helper and the tests: `e2e: tests that a daemon's close ends what left its process groups (red)`.
+Commit the helper and the tests: `e2e: tests that a daemon's close ends what left its process groups, and removes a read-only folder in its root (red)`.
 
 - [ ] **Step 3: Sweep in `close`**
 
@@ -640,25 +670,35 @@ For the daemon that owns the root (not one `beside` another), in this order:
 2. `const left = await endRootProcesses(this.root)`.
 3. `await this.tmux.close()`, which removes the root: after the sweep, so nothing that named it can write into it
    while it goes. The removal also removes a folder a test or a daemon made read-only (the managed grid's `bin/` kept
-   ten roots on this Mac, 2026-11-14): see Task 6's read-only step.
+   ten roots on this Mac, 2026-11-14): see Step 4, the read-only step.
 4. `forgetTmux(this.tmux.socket)`.
 
 Then `if (escaped) throw escaped` as today, and after it, when `left` is not empty, throw
 `` new Error(`a daemon under test left processes that would not end (root ${this.root}): ${left.join('; ')}`) ``.
 
-- [ ] **Step 4: Run the checks**
+- [ ] **Step 4: The read-only step**
+
+`isolatedTmux().close()` removes the root as today, `rm(root, { recursive, force, maxRetries: 10, retryDelay: 50 })`.
+When that fails, it makes the root's folders writable by their owner and removes it once more: each folder, the root
+first, is read with `lstat` and given `u+rwx`, and only entries that are folders themselves are walked, so a link in the
+root is never followed and nothing outside it changes. Only on a failure: a close that removes its root at once walks
+nothing. What the second removal cannot remove, its error names, and the close throws it. The worker's reaper does the
+same in Task 7.
+
+- [ ] **Step 5: Run the checks**
 
 ```bash
 TMPDIR=/private/tmp/claude-502/hyg-t6/ caffeinate -i npx vitest run --config vitest.e2e.config.ts e2e/leftBehind.e2e.ts   # 7 passed
+npx vitest run src/testing/isolatedTmux.spec.ts                                                                         # 2 passed
 ps -A -ww -o pid=,command= | grep -F /private/tmp/claude-502/hyg-t6/htmux- | grep -v 'grep -F'                          # prints nothing
 ls -d /private/tmp/claude-502/hyg-t6/htmux-* 2>/dev/null                                                                # prints nothing
 ```
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add cli/e2e/harness/daemon.ts
-git commit -m "e2e: a daemon's close ends every process that still names its root, then removes it"
+git add cli/e2e/harness/daemon.ts cli/src/testing/isolatedTmux.ts docs/plans/2026-11-14-e2e-harness-hygiene-plan.md
+git commit -m "e2e: a daemon's close ends every process that still names its root, then removes it, read-only folders and all"
 ```
 
 ---
