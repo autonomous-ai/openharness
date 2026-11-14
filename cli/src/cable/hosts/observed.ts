@@ -72,6 +72,8 @@ interface Entry {
   /** The Orca terminal its last event came from. */
   handle?: string
   approvalOpen?: boolean
+  /** It waits on a prompt the dial could not show whole (approvals.ts): the terminal answers it. */
+  terminalOnly?: boolean
   generation?: string
   endAt?: number
   /** The read of the last answer, waiting out the grace. */
@@ -112,23 +114,32 @@ export class ObservedSource implements HostSource {
     return e.agent.engine === 'claude' && actions.modReady(e.agent.sessionId!)
   }
 
-  /** A Claude Code session's approval, as the devices' Approvals holds it: the agent whose card it is. */
-  approval(sessionId: string, cwd: string | undefined, state: 'open' | 'answered' | 'left'): HostAgent | undefined {
+  /** A Claude Code session's approval, as the devices' Approvals holds it: the agent whose card it is, or that waits on
+   *  its terminal for a prompt with no card (`terminal`). */
+  approval(sessionId: string, cwd: string | undefined, state: 'open' | 'terminal' | 'answered' | 'left'): HostAgent | undefined {
     const now = this.deps.now()
-    const e = state === 'open'
+    const asks = state === 'open' || state === 'terminal'
+    const e = asks
       ? this.entry('claude', sessionId, now, { cwd })
       : this.entries.get(observedAgentId('claude', sessionId))
     if (!e) return undefined
-    e.approvalOpen = state === 'open'
-    if (state === 'open') {
+    // A prompt with no card leaves the one shown, if any, the dial's to answer.
+    if (state !== 'terminal') e.approvalOpen = state === 'open'
+    if (asks) {
       this.setState(e, 'needs-you', now)
       e.agent.lastActivityAt = now
+      e.terminalOnly = state === 'terminal'
     } else if (state === 'answered' && e.agent.state === 'needs-you') {
       this.setState(e, 'working', now)
     }
     // Left (expired, or the dial went): the terminal's prompt still waits, so the agent stays needs-you.
     this.emit()
     return { ...e.agent }
+  }
+
+  /** It waits on a prompt only its terminal can answer: the dial's line says so. */
+  terminalOnly(agentId: string): boolean {
+    return !!this.entries.get(agentId)?.terminalOnly
   }
 
   /** The dial's words for an idle agent: to its mod, else typed into its Orca terminal. Nothing is queued. */
@@ -223,6 +234,8 @@ export class ObservedSource implements HostSource {
   private setState(entry: Entry, state: HostAgentState, now: number): void {
     if (entry.agent.state !== state || state === 'working') entry.since = now
     entry.agent.state = state
+    // The prompt it waited on is over.
+    if (state !== 'needs-you') entry.terminalOnly = false
   }
 
   /** The existing entry, or a new one if there is room. */

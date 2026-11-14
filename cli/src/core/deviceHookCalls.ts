@@ -11,6 +11,8 @@ export interface ApprovalRequest {
   tool: string
   summary: string
   cwd?: string
+  /** The dial cannot show the command whole (deviceClaude/approve.ts): the devices hold no card for it. */
+  terminalOnly?: boolean
 }
 
 export interface InboxPoll {
@@ -51,11 +53,16 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 export function parseApproval(body: unknown): Omit<ApprovalRequest, 'id'> | null {
   if (!isRecord(body)) return null
-  const { sessionId, tool, summary, cwd } = body
+  const { sessionId, tool, summary, cwd, terminalOnly } = body
   if (!filled(sessionId, MAX_SESSION_ID) || !filled(tool, MAX_TOOL)) return null
   if (!bounded(summary, MAX_SUMMARY_BYTES) || Buffer.byteLength(summary) > MAX_SUMMARY_BYTES) return null
   if (cwd !== undefined && !bounded(cwd, MAX_PATH)) return null
-  return { sessionId, tool, summary, ...(cwd === undefined ? {} : { cwd }) }
+  if (terminalOnly !== undefined && typeof terminalOnly !== 'boolean') return null
+  return {
+    sessionId, tool, summary,
+    ...(cwd === undefined ? {} : { cwd }),
+    ...(terminalOnly === undefined ? {} : { terminalOnly }),
+  }
 }
 
 export function parseInboxPoll(body: unknown): { sessionId: string } | null {
