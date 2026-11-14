@@ -175,10 +175,9 @@ describe('what an answer means', () => {
   it('a refused connection reads "not answering", keeps the list, and falls back to `grid` once, with --no-wake', async () => {
     answer(TEAM_ID, OVERVIEW, awake([node('rig', ['big-model'])], ['Big-Model']))
     await look()
-    const closed = createServer()
-    await new Promise<void>((resolve) => closed.listen(0, '127.0.0.1', resolve))
-    const refused = `http://127.0.0.1:${(closed.address() as { port: number }).port}`
-    await new Promise<void>((resolve) => closed.close(() => resolve()))
+    // Port 1, not a port freed a moment ago that another listener can take: nothing listens there, and
+    // Node's fetch refuses the port before it dials, so the read fails at once every time.
+    const refused = 'http://127.0.0.1:1'
     grid.replan(plan({ teamUrl: refused, models: { exit: 1, stderr: 'Could not reach grid team\n' } }))
     forgetGridModels()
 

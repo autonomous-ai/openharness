@@ -194,11 +194,7 @@ describe('a long data folder whose daemon was given another port', () => {
 describe('the keys that crossed the port', () => {
   it('the service takes Harness\'s key on its socket and not on its port, and the agents\' old key on its port for now', async () => {
     const agents = bridgeKey(vault), stale = harnessKey(vault)
-    const free = createServer()
-    await new Promise<void>(ready => free.listen(0, '127.0.0.1', ready))
-    const port = (free.address() as AddressInfo).port
-    await new Promise(done => free.close(done))
-    startConnectors(fakeCore(), emptyPorts(), { vault, env, port, offered: async () => ({}), retryMs: 60_000 })
+    const port = await new Promise<number>(listening => { startConnectors(fakeCore(), emptyPorts(), { vault, env, port: 0, offered: async () => ({}), retryMs: 60_000, listening }) })
     const socket = bridgeRoute(vault)
     await vi.waitFor(async () => expect((await socket.fetch(`${socket.base}/connections`)).status).toBe(200))
     await vi.waitFor(async () => expect((await fetch(`http://127.0.0.1:${port}/nope/connections`)).status).toBe(404))

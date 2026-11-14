@@ -91,6 +91,12 @@ beforeEach(async () => {
       if (catalogFails) throw new Error('private raw error must never escape')
       return response({ models: catalogCards, runnable_total: catalogCards.length, pagination: { page: 1, total_pages: 1 } })
     }
+    // The engine on this machine, as Grid starts it: llama-server --alias <the first --advertise-as, else the --serve value>.
+    if (String(url).includes('127.0.0.1') && String(url).endsWith('/v1/models')) {
+      const join = calls.findLast(args => args.includes('join')) ?? []
+      const advertised = join.indexOf('--advertise-as')
+      return response({ object: 'list', data: [{ id: join[advertised >= 0 ? advertised + 1 : join.indexOf('--serve') + 1] }] })
+    }
     return response({ choices: [{ message: { content: 'ok' } }] })
   })
   // The inventory as production reads it (`gridModels.gridInventory`), over this fake's grid: the owner
@@ -1508,6 +1514,48 @@ describe('stepping down to the context that actually runs', () => {
     expect(joinedAt()).toEqual([131072])
     expect(request.mock.calls.some(([url]) => String(url).includes(RELAY_CHAT))).toBe(true)
     expect((await service.list('home', true)).models[0].operation?.phase).toBe('done')
+  })
+
+  // Grid starts its engine on another port, without saying, when the one it was asked for is taken (grid 0.3.43,
+  // remote/serve.py). Whatever answers on the port Harness picked may then be another process: it is never read as the engine.
+  it.each([
+    ['lists another model', () => response({ object: 'list', data: [{ id: 'someone-elses-model' }] })],
+    ['lists the model as the grid shows it, not as it was started', () => response({ object: 'list', data: [{ id: 'small-q4' }] })],
+    ['answers /v1/models with something that is not JSON', () => new Response('<html>busy</html>')],
+    ['does not answer /v1/models', () => { throw new Error('socket closed') }],
+  ])('leaves the judgement to the relay check when whatever holds the port %s', async (_case, models) => {
+    catalogCards[0].fit.ctx = 262144
+    const original = request.getMockImplementation()!
+    request.mockImplementation(async (url, init) => {
+      if (!String(url).includes('127.0.0.1')) return original(url, init)
+      if (String(url).endsWith('/health')) return new Response('{"status":"ok"}')
+      if (String(url).endsWith('/v1/models')) return models()
+      // Read as the engine's, this answer stepped the window down to the floor and then said the computer had no memory.
+      return new Response(JSON.stringify({ error: { code: 500, message: 'Compute error.', type: 'server_error' } }), { status: 500 })
+    })
+    await service.act('home', 'org/Small-GGUF', 'start'); await service.settled()
+    expect(joinedAt()).toEqual([262144])
+    expect(calls.some(args => args.includes('leave'))).toBe(false)
+    expect(request.mock.calls.some(([url]) => String(url).includes('127.0.0.1') && String(url).endsWith('/chat/completions'))).toBe(false)
+    expect(request.mock.calls.some(([url]) => String(url).includes(RELAY_CHAT))).toBe(true)
+    expect((await service.list('home', true)).models[0].operation?.phase).toBe('done')
+  })
+
+  it('knows its engine by the first name it was started under, where it has names of its own', async () => {
+    catalogCards = []; serving = true
+    await writeFile(join(home, 'models', 'Small-Q4.gguf'), Buffer.alloc(64))
+    await writeFile(join(records, 'remote.json'), JSON.stringify({ node_id: 'local-node',
+      engines: [{ models: ['Small-Q4.gguf'] }], advertise_as: ['team/my-model', 'team/second'] }))
+    await writeFile(join(records, 'remote.heartbeat'), '')
+    const id = (await service.list('home')).models[0].id
+    await service.act('home', id, 'stop'); await service.settled()
+    trainedWindow = 262144
+    gpuHolds(131072)
+    const fresh = modelFixture({ stateDir, processEnv: { GRID_HOME: home }, run, request: request as typeof fetch, inventory })
+    await fresh.act('home', id, 'start'); await fresh.settled()
+    expect(calls.findLast(args => args.includes('join'))).toEqual(expect.arrayContaining(['--advertise-as', 'team/my-model', 'team/second']))
+    // Judged as its own: the engine's out of memory stepped it down.
+    expect(joinedAt()).toEqual([262144, 131072])
   })
 
   it('starts a file on disk at the most its header says it holds', async () => {
