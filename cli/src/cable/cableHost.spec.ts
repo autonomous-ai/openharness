@@ -1096,9 +1096,9 @@ describe('the dial reaches the fleet through the core\'s port', () => {
       const { host, observed, heard } = setup()
       expect(await host.sendTurn('o1', 'ship it')).toEqual({ ok: true })
       expect(observed.send).toHaveBeenCalledWith(scratch, 'ship it')
-      observed.send.mockResolvedValueOnce({ ok: false, reason: 'scratch is busy. Say it when it is done.' })
+      observed.send.mockResolvedValueOnce({ ok: false, reason: 'scratch did not answer.' })
       expect(await host.sendTurn('o1', 'ship it')).toEqual({ ok: false, machine: '',
-        reason: 'scratch is busy. Say it when it is done.', message: 'scratch is busy. Say it when it is done.' })
+        reason: 'scratch did not answer.', message: 'scratch did not answer.' })
       expect(JSON.stringify(heard())).not.toContain('o1')
     })
 

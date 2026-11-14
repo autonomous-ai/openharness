@@ -10,9 +10,9 @@ the Harness daemon on this computer, and decides nothing. While a dial is attach
 with one line of what it asks: "npm test · answer in Orca". Answer the prompt where it is, in the terminal or the app;
 the line goes once the agent goes on.
 
-Voice: a prompt said at the dial is typed into an idle session as yours, never into a running turn. The plugin's mod
-(`hooks/device.js`) keeps one request open to the daemon, and the prompt comes back as its answer. While the session is
-working or waiting on you, the dial says it is busy and nothing is kept for later.
+Voice: a prompt said at the dial goes to the session as yours, idle or working. The plugin's mod (`hooks/device.js`)
+keeps one request open to the daemon, and the prompt comes back as its answer; Claude Code starts it once its turn is
+over. Nothing is kept for later.
 
 With no dial attached, no Harness daemon running, or no Harness CLI (`~/.local/bin/harness`, then `harness` on
 `PATH`), the hook tells nothing, and Claude Code carries on as it would without the plugin.

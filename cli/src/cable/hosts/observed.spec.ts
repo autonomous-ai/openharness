@@ -592,7 +592,7 @@ describe('ObservedSource actions', () => {
   })
 
   // Claude Code and Codex queue what is typed into their running TUI (engines/<engine>/submissionPolicy.ts typesWhileBusy).
-  it.each(['claude', 'codex'])('to Orca while %s works, as typed into its running turn', async (engine) => {
+  it.each(['claude', 'codex'] as const)('to Orca while %s works, as typed into its running turn', async (engine) => {
     const { actions } = fakeActions()
     const { src, ev } = setup({ actions })
     src.ingest(ev('turn-start', { engine, ...withHandle }))

@@ -7,7 +7,7 @@ import type { OpenSessions, SessionRows } from '../../lib/sessionSearch/external
 import { type fileStamp, within } from '../../lib/sessionSearch/externals/support.js'
 import type { ExternalEngine, RunningProcess } from '../../lib/sessionSearch/externals/types.js'
 import { roundDrawable } from '../roundGlyphs.js'
-import { detectHost } from './hostDetect.js'
+import { detectHost, hostDisplayName } from './hostDetect.js'
 import type { Delivery } from './inbox.js'
 import { MAX_TEXT, ORCA_HANDLE } from './orca.js'
 import type { Caps, HostAgent, HostAgentState, HostSource, SendResult } from './types.js'
@@ -76,7 +76,7 @@ export interface ObservedActions {
   toMod(sessionId: string, text: string): Promise<Delivery>
   orcaSend(handle: string, text: string): Promise<boolean>
   orcaOpen(handle: string): Promise<boolean>
-  count(what: 'mod' | 'orca' | 'busy' | 'too-long' | 'no-answer'): void
+  count(what: 'mod' | 'orca' | 'waiting' | 'pending' | 'too-long' | 'no-answer'): void
 }
 
 interface Entry {
@@ -94,9 +94,6 @@ interface Entry {
   /** The read of the last answer, waiting out the grace. */
   answerTimer?: ReturnType<typeof setTimeout>
 }
-
-/** Working, or waiting on the person: its turn has not ended. */
-const inTurn = (agent: HostAgent): boolean => agent.state === 'working' || agent.state === 'needs-you'
 
 export class ObservedSource implements HostSource {
   readonly id = 'observed'
@@ -135,41 +132,42 @@ export class ObservedSource implements HostSource {
     return e.agent.engine === 'claude' && actions.modReady(e.agent.sessionId!)
   }
 
-  /** The dial's words for an idle agent: to its mod, else typed into its Orca terminal. Nothing is queued. */
+  /**
+   * The dial's words for the agent, idle or working, as a Harness agent's are (lib/sessionInput.ts): to its mod, else typed
+   * into its Orca terminal, and nothing is queued here. The mod's `$.prompt.submit` starts them once the turn is over, and
+   * Claude Code and Codex queue what is typed into their running TUI (engines/<engine>/submissionPolicy.ts
+   * `typesWhileBusy`).
+   */
   async send(agent: HostAgent, text: string): Promise<SendResult> {
     const e = this.entries.get(agent.id)
     const actions = this.deps.actions
-    const refuse = (what: 'busy' | 'too-long' | 'no-answer', reason: string): SendResult => {
+    const refuse = (what: 'waiting' | 'pending' | 'too-long' | 'no-answer', reason: string): SendResult => {
       actions?.count(what)
       return { ok: false, reason }
     }
     if (text.length > MAX_TEXT) return refuse('too-long', 'Too long. Say it shorter.')
-    const current = e?.agent ?? agent
-    const busy = (): SendResult => refuse('busy', `${current.name} is busy. Say it when it is done.`)
-    const noAnswer = (): SendResult => refuse('no-answer', `${current.name} did not answer.`)
+    const name = (e?.agent ?? agent).name
+    const noAnswer = (): SendResult => refuse('no-answer', `${name} did not answer.`)
     // Its session ended: its terminal holds a shell now, where these words would run.
-    if (e && !this.live(e)) return noAnswer()
-    // A prompt typed into a turn would answer its question or queue behind it, unseen.
-    if (inTurn(current)) return busy()
-    if (e && actions) {
-      const handle = e.handle
-      if (this.modReady(e, actions)) {
-        const delivery = await actions.toMod(e.agent.sessionId!, text)
-        if (delivery === 'taken') {
-          actions.count('mod')
-          return { ok: true }
-        }
-        // One before it still waits for the mod's next poll: typed into Orca now, this one would land before it. And the
-        // wait ran up to 5 s, in which a turn may have begun in its terminal.
-        if (delivery === 'busy' || inTurn(e.agent)) return busy()
-      }
-      // In that wait the session may also have ended, moved to another terminal or gone: the old one holds something else.
-      if (handle && this.live(e) && e.handle === handle && await actions.orcaSend(handle, text)) {
-        actions.count('orca')
+    if (!e || !actions || !this.live(e)) return noAnswer()
+    const handle = e.handle
+    if (this.modReady(e, actions)) {
+      const delivery = await actions.toMod(e.agent.sessionId!, text)
+      if (delivery === 'taken') {
+        actions.count('mod')
         return { ok: true }
       }
+      // One before it still waits for the mod's next poll: typed into Orca now, this one would land before it.
+      if (delivery === 'busy') return refuse('pending', `${name} has not taken your last words yet.`)
     }
-    return noAnswer()
+    // In that wait the session may also have ended, moved to another terminal or gone: the old one holds something else.
+    if (!handle || !this.live(e) || e.handle !== handle) return noAnswer()
+    // A prompt open in the terminal takes what is typed as its answer: Enter there would allow what the dial only shows,
+    // as the core never types into a Harness pane that shows one (lib/messageHolds.ts `permission_open`).
+    if (e.agent.state === 'needs-you') return refuse('waiting', `${name} is waiting for your answer in ${hostDisplayName(e.agent.host)}.`)
+    if (!await actions.orcaSend(handle, text)) return noAnswer()
+    actions.count('orca')
+    return { ok: true }
   }
 
   /** Still listed, and its session has not ended. */

@@ -208,8 +208,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // open sessions are read here. Nothing of them leaves this computer: the core, a window and the gateway hear none of it
   // (docs/specs/2026-11-13-device-without-the-app.md). `HARNESS_DEVICE_OBSERVED=off` is the kill switch.
   //
-  // The dial's voice reaches them through their mod's long poll (Claude Code's) or typed into their Orca terminal, and a tap
-  // brings that terminal forward (docs/specs/2026-11-13-device-claude-orca.md).
+  // The dial's voice reaches them, idle or working, through their mod's long poll (Claude Code's) or typed into their Orca
+  // terminal, and a tap brings that terminal forward (docs/specs/2026-11-13-device-claude-orca.md).
   /** A timer of one part, its run guarded as a notice into that part is, and never what keeps the process up. */
   const timerIn = (name: string) => (ms: number, run: () => void): (() => void) => {
     const timer = setTimeout(() => part.call(name, run), ms)
