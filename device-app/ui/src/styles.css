@@ -108,6 +108,9 @@ body {
 }
 
 .output {
+  /* Four lines of 120 characters wrap past the window's height: the box shrinks and scrolls instead. */
+  min-height: 0;
+  overflow-y: auto;
   padding: 8px 12px;
   border-radius: 10px;
   background: var(--control);
@@ -116,9 +119,8 @@ body {
 
 .line {
   margin: 0;
-  white-space: pre;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .spinner {

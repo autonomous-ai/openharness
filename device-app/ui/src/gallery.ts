@@ -13,7 +13,8 @@ export const STATES: { name: string; view: View }[] = [
       lines: [
         '==> Installing Harness',
         '==> Downloading the CLI',
-        'curl: (6) Could not resolve host: cdn.autonomous.ai',
+        // 120 characters, the longest line Rust sends.
+        'curl: (6) Could not resolve host: cdn.autonomous.ai while fetching https://cdn.autonomous.ai/harness/cli/macos-arm64.tgz',
         'exit 6',
       ],
     },
