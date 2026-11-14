@@ -116,9 +116,13 @@ export class BackendSocket {
    * Loopback clients that are TOOLS, not windows (`machine_select { tool: true }`): `harness pair`, the
    * `harnessd` MCP server. They get their RPC replies like any local client, but they are not a person at
    * this computer — not presence, not a window to push to, and never what wakes the pair brain. What they are
-   * pushed is the state of the harnesses each named (`agents_watch`), and nothing else.
+   * pushed is the state of the harnesses each named (`agents_watch`) and, to one that asked for the dial
+   * (`dialWatchers`), its `dial_status`; nothing else.
    */
   private readonly toolClients = new Set<string>()
+  /** The tools that asked for the dial (`watch: ['dial']`, the menu-bar app's `harness hardware watch`): sent
+   *  every `dial_status` the windows are, and still tools. */
+  private readonly dialWatchers = new Set<string>()
   /** Which harnesses each tool follows, and what it is told of them (core/toolWatches.ts). */
   private readonly toolWatches = createToolWatches({ sendTo: (connId, frame) => this.sendLocalTo(connId, frame as Frame) })
   /** The windows that are `harness tui`, not the desktop app: each surface is its own presence. */
@@ -678,7 +682,9 @@ export class BackendSocket {
       if (!sink.sendFrame(sent)) void this.unregisterLocalClient(connId)
     }
     // A question goes to the windows this way (core/questions.ts); a frame made per window is never a state event.
-    if (typeof frame !== 'function') this.toolWatches.tell(frame)
+    if (typeof frame === 'function') return
+    this.toolWatches.tell(frame)
+    if (frame.type === 'dial_status') for (const connId of this.dialWatchers) this.sendLocalTo(connId, frame)
   }
 
   /** One frame to ONE window on this computer, if it is one. Never queued, never to the cloud. */
@@ -771,7 +777,7 @@ export class BackendSocket {
   }
 
   /** Attach one authenticated loopback desktop client to the same RPC and event plane as cloud web. */
-  registerLocalClient(connId: string, sink: LocalClientSink, opts: { tool?: boolean; surface?: WindowSurface } = {}): boolean {
+  registerLocalClient(connId: string, sink: LocalClientSink, opts: { tool?: boolean; surface?: WindowSurface; watch?: readonly 'dial'[] } = {}): boolean {
     if (!isLocalClientId(connId) || this.localClients.has(connId)) return false
     const surface = opts.surface ?? 'desktop'
     // The app holds a connection per machine and dials again on every reconnect and link retry:
@@ -781,6 +787,8 @@ export class BackendSocket {
     this.localClients.set(connId, sink)
     if (opts.tool) this.toolClients.add(connId)
     else if (opts.surface === 'tui') this.tuiClients.add(connId)
+    // A window is sent every dial_status already: listed too, it would be sent each one twice.
+    if (opts.tool && opts.watch?.includes('dial')) this.dialWatchers.add(connId)
     this.gatewayPort?.localClients(this.localWindows())
     if (opts.tool) return true
     // The window is the person's session: the backend counts it, now or when the link next comes up.
@@ -825,6 +833,7 @@ export class BackendSocket {
     if (!this.localClients.delete(connId)) return
     if (!this.toolClients.delete(connId)) this.onLocalClient?.(connId, false)
     this.toolWatches.closed(connId)
+    this.dialWatchers.delete(connId)
     this.tuiClients.delete(connId)
     this.rowStateWindows.delete(connId)
     this.viewerStreams?.closed(connId); this.ownerCommands.closeConnection(connId); this.onConnectionClosed?.(connId)

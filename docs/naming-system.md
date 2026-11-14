@@ -24,6 +24,7 @@ applicable design system, including the [desktop Design System](../desktop/desig
 | Desktop, web, and mobile interfaces | **Harness** | Use descriptors such as “the Harness desktop app” or “Harness on your phone.” |
 | Compute hardware | **Autonomous Computer** | The physical computer. “Personal AI computer” can describe it. |
 | Optional companion controller | **Harness device** | The input and status device connected to the computer. |
+| Menu-bar app for the round dial | **Harness Device** | The small app in the menu bar that keeps the dial's line to Harness: its status, sign-in and Claude Code. Capital D: the app's name. In copy the hardware is the **dial**, never "Harness device", so the two never meet in Title Case. |
 | Optional inference network | **Grid** | Routes model requests to the computers serving them. |
 | Open source project and repository | **OpenHarness** | Use for the source project and repository identity; the product interface says Harness. |
 
@@ -74,6 +75,7 @@ and **Browser**. Technical documentation may still call the terminal interface a
 | **Connections** | Service accounts available to agents running as the same local user on a Harness computer. | Open Connections; connect GitHub. |
 | **Viewer** | A surface for inspecting or interacting with work. | The game viewer; the HTML preview. |
 | **This computer** | The local execution machine. | Run on This computer. |
+| **dial** | The round Harness hardware on a person's desk; the word copy uses for it. Lowercase in a sentence, like *harness* and *tab*. | Your dial is unplugged. |
 | **Cloud** | An agent maker's own servers, as a place a harness runs beside the computers. A **cloud agent** runs there, reached through its maker's API rather than as a terminal program. | Devin Cloud runs in Devin's cloud; Fo runs only in Fo's cloud. |
 | **Store** | The catalog of reusable harnesses and viewers. | Install a harness from the Store. |
 | **Conversation** | An agent's conversation history, including histories started outside Harness. | Provider usage counts native conversations. |

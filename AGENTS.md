@@ -4,7 +4,7 @@ Harness runs Swarms: people bring their own agents (Claude Code, Codex and the r
 computers, and a Product Manager agent directs them to build one repository; another agent reads every change, and it is
 tested before it lands. What we build and what we don't: [docs/product.md](docs/product.md).
 
-Each component has its own AGENTS.md (`cli/`, `desktop/`, `backend/`, `mobile/`): read it before changing that component.
+Each component has its own AGENTS.md (`cli/`, `desktop/`, `backend/`, `mobile/`, `device-app/`): read it before changing that component.
 
 # Scope
 
@@ -55,6 +55,7 @@ The core is the one process every agent depends on (`cli/src/core/`). Protect it
 9. **Within the architecture.** Flutter for screens, TypeScript for the backend and daemon, Rust on the terminal's hot
    path; no other language, framework, datastore or hosted service. The daemon that owns the work is the truth. Terminal
    traffic is end-to-end encrypted. No feature goes into [the daemon core](#the-daemon-core).
+   Exception: Harness Device app (`device-app/`): Rust + Tauri, UI webview TypeScript.
 10. **Every platform.** The pull request names the platforms it affects and it is tested where it runs. Windows looks
     and works as on a Mac ([Windows rules](docs/windows-rules.md)).
 11. **Readable.** Names and copy follow the [Naming System](docs/naming-system.md). Comments say why.

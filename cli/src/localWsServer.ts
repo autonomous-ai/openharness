@@ -26,8 +26,8 @@ const DAEMON_PLATE = 'daemon_plate'
 
 export const LOCAL_WS_PATH = '/api/local-ws'
 export const LOCAL_WS_PROTOCOL_VERSION = 1
-/** What a tool (`harness new`) may ask of this daemon that an older one would silently ignore. */
-const LOCAL_TOOL_FEATURES = ['openclaw-local'] as const
+/** What a tool (`harness new`, `harness hardware watch`) may ask of this daemon that an older one would silently ignore. */
+const LOCAL_TOOL_FEATURES = ['openclaw-local', 'dial-watch'] as const
 
 const LOCAL_IDLE_DEADLINE_MS = 40_000
 // The `ws` library enforces this on EVERY message on this socket, JSON or binary — so it has to
@@ -40,8 +40,9 @@ import type { WindowVoiceReply } from './cable/windowRoute.js'
 import { LOCAL_JSON_MAX_BYTES } from './lib/localJsonLimit.js'
 
 export interface LocalWsBackend {
-  /** `tool`: `harness pair` or the harnessd MCP server — answered like any local client, never presence. */
-  registerLocalClient: (connId: string, sink: LocalClientSink, opts?: { tool?: boolean; surface?: 'tui' }) => boolean
+  /** `tool`: `harness pair` or the harnessd MCP server — answered like any local client, never presence.
+   *  `watch`: what a tool asked to be sent as it changes; a window is sent it anyway. */
+  registerLocalClient: (connId: string, sink: LocalClientSink, opts?: { tool?: boolean; surface?: 'tui'; watch?: readonly 'dial'[] }) => boolean
   unregisterLocalClient: (connId: string) => Promise<void>
   handleLocalFrame: (connId: string, frame: Frame) => void
   handleLocalBinary: (connId: string, frame: TerminalBinaryClear) => Promise<void>
@@ -114,7 +115,8 @@ export interface LocalWsServerOptions {
    * their own that is a hop, so the answer is awaited off this connection's ordered chain.
    */
   onRouteSend?: (agentId: string, text: string) => Promise<{ ok: true } | { ok: false; machine: string; reason: string }>
-  /** The dial right now, sent to a window the moment it connects — it may have missed the announcement. */
+  /** The dial right now, sent to a window, or a tool that asked for the dial, the moment it connects — it may have
+   *  missed the announcement. */
   dialStatus?: () => Record<string, unknown>
   /**
    * A window changed a device's settings. `id` names which device on this desk; the rest of the payload
@@ -472,8 +474,10 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
       }
       if (requestedMachineId === options.machineId) {
         tool = payload.tool === true
+        // Outside text: only names this daemon knows are kept. A window's is never read: it is sent the dial anyway.
+        const watch: readonly 'dial'[] = tool && Array.isArray(payload.watch) && payload.watch.includes('dial') ? ['dial'] : []
         // `harness tui` says so; every other window is the desktop app. Each is its own presence.
-        const registration = tool ? { tool: true } : payload.client === 'tui' ? { surface: 'tui' as const } : {}
+        const registration = tool ? { tool: true, watch } : payload.client === 'tui' ? { surface: 'tui' as const } : {}
         if (!options.backend.registerLocalClient(connId, terminalSink, registration)) {
           close(1011, 'local registration failed')
           return
@@ -493,8 +497,9 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
           },
         })
         // Right after, not inside `connected`: the window's handshake parser is shared with the
-        // relay path, and a field it does not expect is a field it has to learn to ignore.
-        if (options.dialStatus) sink.sendFrame({ type: 'dial_status', payload: options.dialStatus() })
+        // relay path, and a field it does not expect is a field it has to learn to ignore. A tool that did not
+        // ask for the dial is not told it.
+        if (options.dialStatus && (!tool || watch.includes('dial'))) sink.sendFrame({ type: 'dial_status', payload: options.dialStatus() })
         if (options.openQuestions) {
           const open = options.openQuestions()
           for (const asked of open) sink.sendFrame(asked)

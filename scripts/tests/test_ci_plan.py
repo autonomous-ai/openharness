@@ -99,9 +99,39 @@ class SelectionTests(unittest.TestCase):
             "devices/harness-pro/README.md": {"firmware", "pro"}, "devices/harness-pro-other/x.c": {"firmware"},
             "mobile/pubspec.lock": {"mobile"}, "daemons/tools/card.mjs": {"daemons"},
             "pty/src/stream.rs": {"pty"},
+            "device-app/src-tauri/src/lib.rs": {"device-app"}, "device-app/ui/src/main.ts": {"device-app"},
         }.items():
             with self.subTest(path=path):
                 self.assertEqual(planner.owners(path), expected)
+
+    def test_the_device_app_runs_its_own_suite_and_no_other(self):
+        for path in ("device-app/src-tauri/src/keepalive.rs", "device-app/src-tauri/Cargo.lock",
+                     "device-app/ui/package-lock.json", "device-app/AGENTS.md"):
+            with self.subTest(path=path):
+                self.assertEqual(planner.select([path])[0], {"device-app"})
+        self.assertEqual(planner.JOBS["device-app"], {"device-app-checks"})
+        self.assertEqual(planner.MANUAL["device-app"], {"device-app"})
+        self.assertNotIn("device-app", planner.PR_READS)
+
+    def test_the_workflow_carries_every_suite(self):
+        workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/ci.yml").read_text()
+        options = re.search(r"(?m)^        options: \[(.+)\]$", workflow).group(1).split(", ")
+        self.assertEqual(set(options), set(planner.MANUAL))
+        jobs = dict(re.findall(r"(?m)^  ([\w-]+):\n((?:(?:    .*)?\n)+)", workflow))
+        needs = set(re.findall(r"[\w-]+", re.search(r"(?m)^    needs: \[((?:.|\n)+?)\]", jobs["required"]).group(1)))
+        for suite in sorted(planner.SUITES):
+            with self.subTest(suite=suite):
+                self.assertIn(f"      {suite}: ${{{{ steps.select.outputs.{suite} }}}}", jobs["plan"])
+                for job in planner.JOBS[suite]:
+                    self.assertIn(f"needs.plan.outputs.{suite} == 'true'", jobs[job])
+                    self.assertIn(job, needs)
+        job = jobs["device-app-checks"]
+        for text in ("libwebkit2gtk-4.1-dev", "libayatana-appindicator3-dev", "librsvg2-dev",
+                     "working-directory: device-app/ui", "npx vitest run", "npm run build",
+                     "cargo test --locked --manifest-path device-app/src-tauri/Cargo.toml"):
+            self.assertIn(text, job)
+        self.assertLess(job.index("npm run build"), job.index("cargo test"))  # the binary embeds ui/dist
+        self.assertNotIn("macos", job)
 
     def test_the_cli_ptyhost_backend_and_the_vendored_terminal_also_belong_to_the_pty_suite(self):
         for path, expected in {

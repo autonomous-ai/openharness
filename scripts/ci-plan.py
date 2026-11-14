@@ -28,7 +28,7 @@ _local_spec.loader.exec_module(local_checks)
 
 
 CORE = {"cli", "desktop", "tui", "backend", "companions"}
-EXTRA = {"website", "os", "provider", "firmware", "mobile", "daemons", "pty"}
+EXTRA = {"website", "os", "provider", "firmware", "mobile", "daemons", "pty", "device-app"}
 SUITES = CORE | EXTRA | {"pro"}
 JOBS = {
     "cli": {"cli-typecheck", "cli-tests"},
@@ -44,6 +44,7 @@ MANUAL = {"full": CORE, "all": SUITES, "process": set(), **{name: {name} for nam
 COMPONENTS = {"cli": "cli", "tests": "cli", "desktop": "desktop", "tui": "tui", "backend": "backend",
               "companions": "companions", "website": "website", "os": "os", "provider": "provider",
               "devices": "firmware", "mobile": "mobile", "daemons": "daemons", "pty": "pty", "term": "pty",
+              "device-app": "device-app",
               # harness-install.exe's model and steps test on Linux; its Windows half runs in windows-desktop.yml.
               "installer": "pty"}
 # Code inside another component that a suite runs as its own (its references are scanned as the suite's reads): the PTY
