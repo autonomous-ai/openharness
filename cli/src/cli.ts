@@ -70,6 +70,9 @@ import { dshCommand, dshUsage } from './dsh/command.js'
 import { ApiConnections } from './lib/apiConnections.js'
 import { apiCommand, apiUsage } from './lib/apiCommand.js'
 import { connectionsCommand, connectionsUsage } from './lib/connectors/command.js'
+// Static, not import(): --help prints DEVICE_USAGE, so the module loads at start anyway, and the core and services never load cli.ts.
+import { DEVICE_USAGE, runDeviceCommand } from './deviceClaude/command.js'
+import { claudeRun } from './deviceClaude/plugin.js'
 import { remoteCommand } from './remoteCommand.js'
 import { tuiCommand } from './tui/index.js'
 import { machineChoices, newCommand, type MachineRow, type NewMachine } from './lib/newCommand.js'
@@ -246,6 +249,8 @@ ${dshUsage()}
 ${apiUsage}
 
 ${connectionsUsage}
+
+${DEVICE_USAGE}
 
 Browser end-to-end encryption:
   harness autonomous-device <command>     pair/status/list/revoke an Autonomous device; addon state/propose/proposal
@@ -3090,6 +3095,17 @@ switch (cmd) {
     break
   case 'devices':
     devicesCommand(args[0], args[1], flags).catch(onError)
+    break
+  case 'device':
+    runDeviceCommand(rest, {
+      dataDir: env.ADAPTER_DATA_DIR,
+      port: daemonPort(),
+      platform: process.platform,
+      stdin: process.stdin,
+      claude: claudeRun,
+      out: (line) => console.log(line),
+      err: (line) => console.error(line),
+    }).then((code) => { process.exitCode = code }).catch(onError)
     break
   case 'remote-password':
     if (args[0] === 'set') remotePasswordSetCommand(flags.includes('--json'), flags.includes('--stdin')).catch(onError)

@@ -10,6 +10,14 @@ describe('an agent session\'s variables', () => {
     for (const name of ['CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'HARNESSD_SERVICE_TOKEN', 'PATH']) expect(isAgentSessionVariable(name), name).toBe(false)
   })
 
+  it('are every variable Orca sets in its terminals, its secrets among them, and take nothing else with them', () => {
+    const env: NodeJS.ProcessEnv = {
+      TERM: 'xterm-256color', ORCA_TERMINAL_HANDLE: 'term_1', ORCA_PAIRING_CODE: 'pairing', ORCA_AGENT_SESSION_SPAWN_TOKEN: 'spawn', CODEX_HOME: '/c',
+    }
+    expect(dropAgentSessionEnv(env)).toEqual(['ORCA_TERMINAL_HANDLE', 'ORCA_PAIRING_CODE', 'ORCA_AGENT_SESSION_SPAWN_TOKEN'])
+    expect(env).toEqual({ TERM: 'xterm-256color', CODEX_HOME: '/c' })
+  })
+
   it('are taken out of an environment, which says which', () => {
     const env: NodeJS.ProcessEnv = { PATH: '/bin', CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 's', CODEX_HOME: '/c' }
     expect(dropAgentSessionEnv(env)).toEqual(['CLAUDECODE', 'CLAUDE_CODE_SESSION_ID'])

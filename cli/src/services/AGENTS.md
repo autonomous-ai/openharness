@@ -194,6 +194,9 @@ master too old to run it starts it beside itself, still in its own process (`src
   Their process runs only once there is a device (`onDemand`, asked for since protocol 4): a dial's port in
   /dev, a paired Wi-Fi device or its session, or a request for them (src/core/devicesWake.ts);
   what a Wi-Fi device sends while it starts is held by the core. `e2e/devicesOnDemand.e2e.ts` proves it.
+  A hook's approval and inbox call reach the devices as a request with a deadline
+  (src/core/deviceHookCalls.ts). The core asks only while a dial watches, so a call never starts their
+  process; a client that goes first is told as a notice.
 - A service the core tells what happens and never waits on: the recaps (`src/services/recapsProcess.ts`,
   `src/core/recapsLink.ts`) hear each turn's lifecycle as a notification, and one they miss costs that
   turn its recap, nothing else; what would pile up on a hung process is dropped. What they put in front

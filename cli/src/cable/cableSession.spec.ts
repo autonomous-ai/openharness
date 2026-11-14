@@ -14,7 +14,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { CABLE_MAX_FRAME, CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
 import { DaemonCableHost } from './cableHost.js'
 import type { MachineFleet } from './machineFleet.js'
-import { CableSession, recapFrame, type CableAgent, type CableHost, type CableMachine, type CablePort } from './cableSession.js'
+import { CableSession, recapFrame, type CableAgent, type CableHost, type CableMachine, type CablePort, type SendOutcome } from './cableSession.js'
 import { DialLog } from './dialLog.js'
 import { leadsOf, type LeadRecap, type SaidOnCard, type SwarmCard, type SwarmLead } from '../superTabs/cards.js'
 import { createSwarmCardsIn } from './swarmCardsIn.js'
@@ -22,6 +22,20 @@ import type { PetStore } from './pets/store.js'
 import { HostRegistry } from './hosts/registry.js'
 import type { HostAgent, HostSource } from './hosts/types.js'
 import type { RegisteredSession } from '../lib/registry.js'
+
+// The voice router as it runs, watched: what it weighs, and the ranking it asks of the backend, leave this computer.
+const router = vi.hoisted(() => ({ routed: [] as unknown[], ranked: [] as unknown[] }))
+vi.mock('../lib/voiceRouter.js', async (original) => {
+  const actual = await original<typeof import('../lib/voiceRouter.js')>()
+  return { ...actual, routeVoiceTask: (...args: Parameters<typeof actual.routeVoiceTask>) => {
+    router.routed.push(args)
+    return actual.routeVoiceTask(...args)
+  } }
+})
+vi.mock('../lib/routeApi.js', () => ({ rankAgents: async (options: unknown) => {
+  router.ranked.push(options)
+  return [{ agentId: 'h2', score: 0.9, reason: 'matched' }]
+} }))
 
 /** A port whose two ends are both in this process. */
 class LoopbackPort implements CablePort {
@@ -6136,14 +6150,189 @@ describe('what the dial cannot do for an agent', () => {
     } finally { await session.stop() }
   })
 
-  it('voice to a harness agent works as today', async () => {
-    const host = caps()
+  it('words that name no agent are routed only among Harness agents, though one outside Harness takes voice', async () => {
+    const route = vi.fn(async () => ({ agentId: 'a2', confidence: 0.9, reason: 'name matched' }))
+    const host = caps({ route, capsOf: (id) => ({ ...CAPS, a1: 'svf' })[id] })
     const { session, port } = await greeted(host)
     try {
+      port.say({ t: 'voice.begin', lang: 'en', sr: 16000, uploadId: 'u3' })
+      port.pcm(Buffer.alloc(3200, 7))
+      port.say({ t: 'voice.end', uploadId: 'u3' })
+      await vi.waitFor(() => expect(host.sendTurn).toHaveBeenCalledWith('a2', 'fix the login screen'))
+      expect(route).toHaveBeenCalledWith('fix the login screen', [AGENTS[1]])
+    } finally { await session.stop() }
+  })
+
+  it('words that name no agent leave nothing of an agent outside Harness to the router or the backend', async () => {
+    const sessions = () => [
+      { agentId: 'h1', registeredAt: 1, active: true, terminalAvailable: true, engine: 'claude', sessionId: 's-h1' },
+      { agentId: 'h2', registeredAt: 2, active: true, terminalAvailable: true, engine: 'codex', sessionId: 's-h2' },
+    ] as unknown as RegisteredSession[]
+    const lines: string[] = []
+    const sendTurn = vi.fn()
+    const host = new DaemonCableHost({
+      sessions, displayName: (s) => s.agentId, machineName: () => 'this-mac', machineId: () => 'mac-local', computerId: () => 'abc',
+      sendTurn, stopTurn: vi.fn(), answer: vi.fn(), recent: () => [], recentAsks: () => [], log: (line) => { lines.push(line) },
+    })
+    // In Orca with its terminal's handle, so the dial may talk to it: `svf`.
+    const outside: HostAgent = { id: 'outside-7f3c', engine: 'claude', sessionId: 's-o', name: 'secret-folder', host: 'orca',
+      state: 'idle', lastActivityAt: 0, lastAnswer: 'the secret last answer', unseenDone: false }
+    host.setRegistry(new HostRegistry([host.harness, { id: 'observed', list: () => [outside],
+      capabilities: () => ({ status: true, voice: true, focus: true, answer: false }) }]))
+    vi.spyOn(host, 'transcribe').mockResolvedValue('fix the login screen')
+    const { session, port } = await connect(host)
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+      await vi.waitFor(() => expect(port.sent).toContainEqual({ t: 'agents.end', total: 3, tab: '', view: 'machine' }))
+      vi.spyOn(console, 'log').mockImplementation((line) => { lines.push(String(line)) })
+      router.routed.length = 0
+      router.ranked.length = 0
+      port.say({ t: 'voice.begin', lang: 'en', sr: 16000, uploadId: 'u1' })
+      port.pcm(Buffer.alloc(3200, 7))
+      port.say({ t: 'voice.end', uploadId: 'u1' })
+      await vi.waitFor(() => expect(sendTurn).toHaveBeenCalledWith('h2', 'fix the login screen'))
+      expect(router.ranked).toHaveLength(1)
+      // Everything the router weighed, the backend's request, the router's log lines and the dial's own.
+      const left = JSON.stringify([router.routed, router.ranked, lines.filter((line) => /voice|rout/.test(line))])
+      expect(left).toContain('h1')
+      for (const secret of [outside.id, outside.name, outside.lastAnswer!]) expect(left).not.toContain(secret)
+    } finally { vi.restoreAllMocks(); await session.stop() }
+  })
+
+  it.each([['a bare void', () => undefined], ['a sync { ok: true }', () => ({ ok: true as const })]])(
+    'voice to a harness agent works as today (%s)', async (_, sent) => {
+      const host = caps({ sendTurn: vi.fn(sent) })
+      const { session, port } = await greeted(host)
+      try {
+        speak(port, 'a2', 'u2')
+        port.say({ t: 'voice.end', uploadId: 'u2' })
+        await vi.waitFor(() => expect(port.types()).toContain('voice.transcript'))
+        expect(host.sendTurn).toHaveBeenCalledWith('a2', 'fix the login screen')
+        expect(port.types()).not.toContain('voice.error')
+      } finally { await session.stop() }
+    })
+
+  it("another app's refusal is shown in its words, and the log says only which app refused", async () => {
+    const lines: string[] = []
+    const sendTurn = vi.fn(async (id: string): Promise<SendOutcome> =>
+      ({ ok: false, message: `${id === 'a1' ? 'secret-folder' : 'Device firmware voice'} is busy. Say it when it is done.` }))
+    const { session, port } = await greeted(caps({ capsOf: (id) => ({ ...CAPS, a1: 'svf' })[id], sendTurn, log: (line) => { lines.push(line) } }))
+    try {
+      speak(port, 'a1', 'u1')
+      port.say({ t: 'voice.end', uploadId: 'u1' })
+      await vi.waitFor(() => expect(port.sent).toContainEqual({ t: 'voice.error', uploadId: 'u1',
+        message: 'secret-folder is busy. Say it when it is done.' }))
+      expect(lines).toContain('cable: voice → error (refused in Orca)')
+      expect(lines.filter((line) => line.includes('secret-folder'))).toEqual([])
+      // A Harness agent's refusal is logged in the words the dial shows, as before.
       speak(port, 'a2', 'u2')
       port.say({ t: 'voice.end', uploadId: 'u2' })
-      await vi.waitFor(() => expect(host.sendTurn).toHaveBeenCalledWith('a2', 'fix the login screen'))
+      await vi.waitFor(() => expect(lines).toContain('cable: voice → error "Device firmware voice is busy. Say it when it is done."'))
+    } finally { await session.stop() }
+  })
+
+  it('voice waits for an async sendTurn, and shows its message when it refuses', async () => {
+    let outcome!: (o: SendOutcome) => void
+    const sendTurn = vi.fn((): Promise<SendOutcome> => new Promise((resolve) => { outcome = resolve }))
+    const { session, port } = await greeted(caps({ sendTurn }))
+    try {
+      speak(port, 'a2', 'u1')
+      port.say({ t: 'voice.end', uploadId: 'u1' })
+      await vi.waitFor(() => expect(sendTurn).toHaveBeenCalledWith('a2', 'fix the login screen'))
+      await settle()
       expect(port.types()).not.toContain('voice.error')
+      expect(port.types()).not.toContain('voice.transcript')
+      outcome({ ok: false, message: 'Device firmware voice is busy. Say it when it is done.' })
+      await vi.waitFor(() => expect(port.sent).toContainEqual({ t: 'voice.error', uploadId: 'u1',
+        message: 'Device firmware voice is busy. Say it when it is done.' }))
+      // A refusal with no sentence of its own says today's.
+      sendTurn.mockImplementation(async () => ({ ok: false }))
+      speak(port, 'a2', 'u2')
+      port.say({ t: 'voice.end', uploadId: 'u2' })
+      await vi.waitFor(() => expect(port.sent).toContainEqual({ t: 'voice.error', uploadId: 'u2',
+        message: 'Could not reach that harness. Check its connection and try again.' }))
+      sendTurn.mockImplementation(async () => ({ ok: true }))
+      speak(port, 'a2', 'u3')
+      port.say({ t: 'voice.end', uploadId: 'u3' })
+      await vi.waitFor(() => expect(port.sent).toContainEqual(expect.objectContaining({ t: 'voice.transcript', uploadId: 'u3' })))
+    } finally { await session.stop() }
+  })
+
+  it("a reviewed draft's send shows the host's message when it refuses", async () => {
+    const sendTurn = vi.fn(async (): Promise<SendOutcome> => ({ ok: false, message: 'Device firmware voice did not answer.' }))
+    const { session, port } = await greeted(caps({ sendTurn }))
+    try {
+      port.say({ t: 'voice.begin', agentId: 'a2', lang: 'en', sr: 16000, uploadId: 'u1' })
+      port.pcm(Buffer.alloc(3200, 7))
+      port.say({ t: 'voice.end', uploadId: 'u1', review: true })
+      await vi.waitFor(() => expect(port.types()).toContain('voice.draft'))
+      const draft = port.sent.find((m) => m.t === 'voice.draft')!
+      port.say({ t: 'draft.command', draftId: draft.id, revision: draft.revision, requestId: 'r1', op: 'send' })
+      await vi.waitFor(() => expect(port.sent).toContainEqual(expect.objectContaining({ t: 'draft.state', requestId: 'r1',
+        error: 'Device firmware voice did not answer.' })))
+    } finally { await session.stop() }
+  })
+
+  it('a refused answer is toasted with its error', async () => {
+    const answer = vi.fn(() => ({ ok: false as const, error: 'This request is closed.' }))
+    const { session, port } = await greeted(caps({ answer }))
+    try {
+      port.say({ t: 'answer', agentId: 'a2', requestId: 'r2', answers: { q: 'yes' } })
+      await vi.waitFor(() => expect(toasts(port)).toEqual([{ t: 'toast', text: 'This request is closed.' }]))
+    } finally { await session.stop() }
+  })
+
+  it("an approval's answer reaches the host even when the agent has no a", async () => {
+    const host = caps({ answer: vi.fn(() => ({ ok: true as const })) })
+    const { session, port } = await greeted(host)
+    try {
+      port.say({ t: 'answer', agentId: 'a1', requestId: 'approval:r1', answers: { approval: 'Allow' } })
+      await vi.waitFor(() => expect(host.answer).toHaveBeenCalledWith('a1', 'approval:r1', { approval: 'Allow' }))
+      await settle()
+      expect(toasts(port)).toEqual([])
+    } finally { await session.stop() }
+  })
+
+  it('a failed open is toasted; a void open says nothing', async () => {
+    const openAgent = vi.fn(async (id: string) => id === 'a1' ? { ok: false as const, error: 'Orca did not open it.' } : undefined)
+    const { session, port } = await greeted(caps({ openAgent }))
+    try {
+      port.say({ t: 'agent.open', agentId: 'a2' })
+      await vi.waitFor(() => expect(openAgent).toHaveBeenCalledWith('a2', undefined))
+      await settle()
+      expect(toasts(port)).toEqual([])
+      port.say({ t: 'agent.open', agentId: 'a1' })
+      await vi.waitFor(() => expect(toasts(port)).toEqual([{ t: 'toast', text: 'Orca did not open it.' }]))
+    } finally { await session.stop() }
+  })
+
+  it('a spoken answer to an approval keeps no audio and answers Tap Allow or Deny.', async () => {
+    const transcribe = vi.fn(async () => 'allow it')
+    const { session, port } = await greeted(caps({ transcribe, canSpeakQuestion: () => true }))
+    try {
+      await session.question('a1', 'approval:r1', [{ key: 'approval', q: 'Allow Bash?\nls', options: ['Allow', 'Deny'], multi: false }])
+      port.say({ t: 'question.read', agentId: 'a1', requestId: 'read' })
+      await vi.waitFor(() => expect(port.types()).toContain('question.state'))
+      const token = port.sent.find((m) => m.t === 'question.state')!.token
+      port.say({ t: 'voice.begin', agentId: 'a1', questionToken: token, questionIndex: 0, uploadId: 'u1' })
+      port.pcm(Buffer.alloc(3200, 7))
+      await settle()
+      expect(session['voice']).toBeNull()
+      port.say({ t: 'voice.end', uploadId: 'u1' })
+      await vi.waitFor(() => expect(port.sent).toContainEqual({ t: 'voice.error', uploadId: 'u1', message: 'Tap Allow or Deny.' }))
+      expect(transcribe).not.toHaveBeenCalled()
+    } finally { await session.stop() }
+  })
+
+  it('turn.send with a rejecting host does not throw', async () => {
+    const lines: string[] = []
+    const sendTurn = vi.fn(async () => { throw new Error('gone') })
+    const { session, port } = await greeted(caps({ sendTurn, log: (line) => lines.push(line) }))
+    try {
+      port.say({ t: 'turn.send', agentId: 'a2', text: 'hi' })
+      await vi.waitFor(() => expect(lines).toContain('cable: turn.send → failed'))
+      port.say({ t: 'turn.send', agentId: 'a2', text: 'again' })
+      await vi.waitFor(() => expect(sendTurn).toHaveBeenCalledTimes(2))
     } finally { await session.stop() }
   })
 
@@ -6207,6 +6396,21 @@ describe('what the dial cannot do for an agent', () => {
       expect(host.listModels).not.toHaveBeenCalled()
       port.say({ t: 'turn.stop', agentId: 'a2' })
       await vi.waitFor(() => expect(host.stopTurn).toHaveBeenCalledWith('a2'))
+    } finally { await session.stop() }
+  })
+
+  it('stop and model toast for an agent outside Harness that takes voice, and do not reach the host', async () => {
+    const host = caps({ capsOf: (id) => ({ ...CAPS, a1: 'svf' })[id], listModels: vi.fn(async () => ['opus']) })
+    const { session, port } = await greeted(host)
+    try {
+      port.say({ t: 'turn.stop', agentId: 'a1' })
+      await vi.waitFor(() => expect(toasts(port)).toEqual([{ t: 'toast',
+        text: 'This agent is in Orca. Stopping it from the device comes in an update.' }]))
+      port.say({ t: 'models.list', agentId: 'a1', request: 7 })
+      await vi.waitFor(() => expect(port.sent).toContainEqual({ t: 'models', agentId: 'a1', request: 7, items: [] }))
+      expect(toasts(port).at(-1)).toEqual({ t: 'toast', text: 'This agent is in Orca. Changing its model from the device comes in an update.' })
+      expect(host.stopTurn).not.toHaveBeenCalled()
+      expect(host.listModels).not.toHaveBeenCalled()
     } finally { await session.stop() }
   })
 

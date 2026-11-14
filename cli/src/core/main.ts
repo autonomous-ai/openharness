@@ -41,6 +41,7 @@ import { masterRunsEngineSubmission } from '../harnessd/services.js'
  */
 import { readFileSync, writeFileSync, openSync, existsSync, rmSync, statSync } from 'fs'
 import { readFile } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
 import { join } from 'path'
 import { execFile, spawn } from 'child_process'
 import { createServer, type Server } from 'http'
@@ -70,6 +71,7 @@ import { AUTH_DIR, AuthSessionError, ensureSignInEpoch, markSignedOut, readAuthS
 import { ENGINES, enginePathOverride } from '../lib/engineBin.js'
 import { isTerminalEngine, type AgentEngine } from '../engines/types.js'
 import { createObservedHook } from './observedHook.js'
+import { createDeviceHookCalls } from './deviceHookCalls.js'
 import { engineInstallRecipe } from '../lib/engineInstall.js'
 import { buildEngineLaunchArgv, engineLaunchEnv, supportsFirstPrompt, typedFirstPrompt } from '../lib/engineLaunch.js'
 import { isWindowsHeldPane, windowsPaneLaunch } from '../lib/windows/engineStart.js'
@@ -2272,6 +2274,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     now: () => performance.now(),
     forward: (observed) => ports.devices?.observed(observed) ?? false,
   })
+  // Asked only while a dial is watching: a call to a devices process that is not running would start it.
+  const deviceHookCalls = createDeviceHookCalls({ ready: cableWatchingLocal, devices: () => ports.devices ?? undefined, newId: randomUUID })
   const { server: hookServer, port: hookPort, localSocket } = await startHookServer(daemonPort(), {
     onAutonomousDeviceRequest: async (method, target, body) => {
       // Until the pieces below are built; after, a piece that could not be is refused by the requests
@@ -2318,6 +2322,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     onTurnStop: turnHooks.onTurnStop,
     // A paneless agent's event goes on to the devices process and stays nowhere in the core; no devices, no forward.
     onObserved: observedHook.onObserved,
+    onApproval: deviceHookCalls.onApproval,
+    onInbox: deviceHookCalls.onInbox,
     onPromptHook: turnHooks.onPromptHook,
     stopHookDelayMs: Number(harnessd.HARNESSD_TEST_STOP_HOOK_DELAY_MS) || 0,
     // `harness pair`, `unpair`, `remote-password`, `link connect`, `group` and `devices`: the keys are the

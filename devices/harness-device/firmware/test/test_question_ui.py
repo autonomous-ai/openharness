@@ -164,6 +164,30 @@ static void recording(void) {
     s.voice_question_revision=s.q.revision;s.voice_question_index=0;s.view=VOICE;
 }
 static const char *long_question="The helper found three related places using the old token. Should this change apply only to this file, across the whole project including tests, or should we leave the current behavior in place until the next release?";
+// The approval card the devices process sends for a hook's permission request: Allow or Deny, no voice.
+static void approval(const char *prompt) {
+    memset(&s,0,sizeof s);s.connected=true;s.pressed=-1;
+    congested=pending_receipt=false;transport_ok=true;queued_answers=sent_answers=removed=reads=0;
+    open_question();work(queued);
+    cJSON options[2]={{.type=JSTRING,.valuestring="Allow"},{.type=JSTRING,.valuestring="Deny"}};
+    cJSON array=object(options,2);
+    cJSON fields[]={{.string="key",.type=JSTRING,.valuestring="approval"},
+        {.string="q",.type=JSTRING,.valuestring=prompt},
+        {.string="multi",.type=0},
+        {.string="options",.type=JARRAY,.child=array.child}};
+    cJSON question=object(fields,4),questions={.type=JARRAY,.child=&question};
+    cJSON reply[]={{.string="agentId",.type=JSTRING,.valuestring="a"},
+        {.string="requestId",.type=JSTRING,.valuestring=s.q.fetch},
+        {.string="id",.type=JSTRING,.valuestring="approval:1"},
+        {.string="token",.type=JSTRING,.valuestring="token-a"},
+        {.string="ok",.type=JTRUE},
+        {.string="questions",.type=JARRAY,.child=questions.child}};
+    cJSON root=object(reply,6);ui_question_state(&root);
+}
+static bool offered(action_kind_t kind) {
+    for(int i=0;i<s.hit_count;i++) if(s.hits[i].action==kind) return true;
+    return false;
+}
 static void reset(bool multi) {
     memset(&s,0,sizeof s);s.connected=true;s.pressed=-1;
     congested=pending_receipt=false;transport_ok=true;queued_answers=sent_answers=removed=reads=0;
@@ -244,6 +268,28 @@ int main(int argc,char **argv) {
     wakes=0;notices=0;face_agent="b";
     assert(!ui_question_show("b","Other","M2","q-b3",NULL) && wakes==0 && notices==1 && read_now==1);
     face_agent="";
+    // An approval card draws with its longest summary, offers choices and never [say].
+    char command[256],longest[256];
+    memcpy(command,"Allow Bash?\n",12);
+    for(int i=0;i<200;i++) command[12+i]="git log --oneline "[i%18];
+    command[212]=0;
+    memcpy(longest,"Allow ",6);memset(longest+6,'t',64);memcpy(longest+70,"?\n",2);
+    for(int i=72;i<255;i++) longest[i]="rm -rf build "[i%13];
+    longest[255]=0;
+    const char *prompts[]={command,longest};
+    for(int i=0;i<2;i++) {
+        approval(prompts[i]);assert(s.q.valid && s.q.supported && !strcmp(s.q.item[0].prompt,prompts[i]));
+        render(i ? NULL : dir,"approval");assert(!offered(A_QUESTION_SAY) && offered(A_QUESTION_CHOICES));
+    }
+    act(A_QUESTION_CHOICES,0);act(A_CHOICE,0);act(A_QUESTION_REVIEW,0);act(A_ANSWER,0);work(queued);
+    assert(sent_answers==1 && sent_choices[0]==1);
+    // The host replaces what the dial cannot draw with ?, so the card still shows.
+    const char *replaced="Allow Bash?\necho ?? ?";
+    approval(replaced);assert(s.q.valid && s.q.supported && !strcmp(s.q.item[0].prompt,replaced));
+    assert(question_rows(replaced)==2);
+    render(dir,"approval-replaced");assert(!offered(A_QUESTION_SAY) && offered(A_QUESTION_CHOICES));
+    // As the hook cut it, CJK and an emoji make the card need the desktop: why the host replaces.
+    approval("Allow Bash?\necho \xe4\xbd\xa0\xe5\xa5\xbd \xf0\x9f\x99\x82");assert(s.q.valid && !s.q.supported);
     // The ESP32 compiler's -O0 restrict analysis sees the enclosing global s,
     // not the disjoint options/answer fields. Exercise every selected subset
     // at their real capacities and prove that no neighboring state changes.
@@ -268,7 +314,7 @@ int main(int argc,char **argv) {
             memcpy(q->answer,before.item[index].answer,sizeof q->answer);
             assert(!memcmp(&s.q,&before,sizeof s.q));combinations++;
         }
-    printf("question UI: PASS (full prompt, focused choices, explicit review, correlated reads/receipts, stale commands, spoken drafts, pending and multi-select; %u full-capacity subsets preserve adjacent state); state=%zu bytes\n",combinations,sizeof(question_t));
+    printf("question UI: PASS (full prompt, focused choices, explicit review, correlated reads/receipts, stale commands, spoken drafts, pending and multi-select; approval cards; %u full-capacity subsets preserve adjacent state); state=%zu bytes\n",combinations,sizeof(question_t));
 }
 '''
 with tempfile.TemporaryDirectory(prefix='harness-question-ui-') as tmp:

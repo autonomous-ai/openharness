@@ -15,6 +15,8 @@ export interface ReviewedAnswer {
   selections: Record<string, string[]>
   freeTextKeys?: string[]
 }
+/** The id of a question that is a tool approval: answered with a tap, never through the fleet or by voice. */
+export const APPROVAL_REQUEST_PREFIX = 'approval:'
 export type AnswerReceipt = { ok: true; pending?: boolean } | { ok: false; error: string }
 export type QuestionSpeech = { agentId: string; token: string; index: number }
 type Draft = { id: string; text: string }

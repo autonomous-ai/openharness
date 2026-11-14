@@ -48,10 +48,6 @@ while True:
             inputs = [fd]
 `
 
-/** The values the hook reads to name the app an agent runs in (hook/notify.mjs HOST_HINTS): none of the developer's own. */
-const HOST_HINTS = ['TERM_PROGRAM', '__CFBundleIdentifier', 'HERDR_PANE_ID', 'REX_BLOCK', 'ZELLIJ', 'KITTY_WINDOW_ID',
-  'WEZTERM_PANE', 'ORCA_AGENT_SESSION_ID', 'ORCA_PAIRING_CODE', 'ORCA_AGENT_SESSION_SPAWN_TOKEN']
-
 /** Claude Code in a terminal app outside Harness: no tmux pane, no Harness pane. */
 class Outside {
   private constructor(private readonly tab: ChildProcess, readonly pid: number, readonly sessionId: string, readonly folder: string) {}
@@ -62,8 +58,8 @@ class Outside {
   static async start(d: IsolatedDaemon, folder: string, hints: Record<string, string>): Promise<Outside> {
     const cwd = join(d.projectsDir, folder)
     mkdirSync(cwd, { recursive: true })
+    // d.env carries none of the developer's host hints (testing/daemonEnvironment.ts): only [hints] name the app.
     const env: NodeJS.ProcessEnv = { ...d.env, TERM: 'xterm-256color' }
-    for (const name of HOST_HINTS) delete env[name]
     delete env.TMUX
     delete env.TMUX_PANE
     delete env.HARNESS_PANE

@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ObservedHookEvent } from '../../core/observedHook.js'
 import { STOP_HOOK_GRACE_MS } from '../../core/turns/turnHooks.js'
-import { observedAgentId, ObservedSource, type ObservedDeps } from './observed.js'
+import { type Delivery, Inbox } from './inbox.js'
+import { observedAgentId, type ObservedActions, ObservedSource, type ObservedDeps } from './observed.js'
 
 function setup(over: Partial<ObservedDeps> = {}) {
   const clock = { t: 1_000_000 }
@@ -379,6 +380,53 @@ describe('ObservedSource codex and open sessions', () => {
     expect(src.list()[0].state).toBe('working')
   })
 
+  it('an agent with a card open stays needs-you while its transcript is written, and after the card leaves until it grows again', async () => {
+    const { src, clock, stamps, ev } = setup()
+    src.ingest(ev('turn-start', { transcriptPath: '/t/s.jsonl' }))
+    clock.t += 10
+    src.approval('s1', '/work/proj', 'open')
+    // The tool call's line is written after its hook asked: the prompt is not answered.
+    stamps.set('/t/s.jsonl', clock.t + 5)
+    clock.t += 3_000
+    await src.checkWorking()
+    expect(src.list()[0].state).toBe('needs-you')
+    // The card expired, and the terminal's prompt still waits: the write before is not its answer.
+    clock.t += 300_000
+    src.approval('s1', '/work/proj', 'left')
+    await src.checkWorking()
+    expect(src.list()[0].state).toBe('needs-you')
+    // Answered in the terminal: the transcript grows.
+    stamps.set('/t/s.jsonl', clock.t + 1)
+    await src.checkWorking()
+    expect(src.list()[0].state).toBe('working')
+  })
+
+  it('a prompt with no card is not read as answered by the line its asking writes, nor by the last prompt\'s answer', async () => {
+    const { src, clock, stamps, ev } = setup()
+    src.ingest(ev('turn-start', { transcriptPath: '/t/s.jsonl' }))
+    clock.t += 10_000
+    src.approval('s1', '/work/proj', 'terminal')
+    // The tool call's line is written after its hook asked, as with a card.
+    stamps.set('/t/s.jsonl', clock.t + 5)
+    clock.t += 3_000
+    await src.checkWorking()
+    expect(src.list()[0].state).toBe('needs-you')
+    expect(src.terminalOnly(src.list()[0].id)).toBe(true)
+    // Answered in the terminal: the tool's result is written.
+    stamps.set('/t/s.jsonl', clock.t + 1)
+    // The next prompt asks before the 3 s check has seen that answer: the agent still reads needs-you.
+    clock.t += 500
+    src.approval('s1', '/work/proj', 'terminal')
+    stamps.set('/t/s.jsonl', clock.t + 5)
+    clock.t += 3_000
+    await src.checkWorking()
+    expect(src.list()[0].state).toBe('needs-you')
+    // Answered in the terminal again.
+    stamps.set('/t/s.jsonl', clock.t + 1)
+    await src.checkWorking()
+    expect(src.list()[0].state).toBe('working')
+  })
+
   it('scanOpen adds terminal/app sessions as idle and skips harness-owned ones', async () => {
     const { src, open, owners, externals } = setup()
     open.set('a', 'terminal')
@@ -499,6 +547,351 @@ describe('ObservedSource and Harness\'s own sessions', () => {
     src.ingest(ev('turn-start', { cwd: scratch }))
     expect(src.list()).toEqual([])
     expect(changes).toHaveBeenCalledTimes(1)
+  })
+})
+
+const HANDLE = 'term_0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b'
+
+/** Routes that answer as told, recording what each was handed. */
+function fakeActions(over: Partial<ObservedActions> = {}) {
+  const ready = new Set<string>()
+  const actions = {
+    modReady: vi.fn((sessionId: string) => ready.has(sessionId)),
+    toMod: vi.fn(async (_sessionId: string, _text: string): Promise<Delivery> => 'taken'),
+    orcaSend: vi.fn(async (_handle: string, _text: string) => true),
+    orcaOpen: vi.fn(async (_handle: string) => true),
+    count: vi.fn((_what: Parameters<ObservedActions['count']>[0]) => {}),
+  }
+  return { actions: { ...actions, ...over } as typeof actions, ready }
+}
+
+describe('ObservedSource actions', () => {
+  const withHandle = { hostHints: { ORCA_AGENT_SESSION_ID: 'x', ORCA_TERMINAL_HANDLE: HANDLE } }
+
+  it('keeps a handle that is term_<uuid> and ignores any other', () => {
+    const { actions } = fakeActions()
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('session-start', withHandle))
+    expect(src.capabilities(src.list()[0])).toMatchObject({ voice: true, focus: true })
+    src.ingest(ev('turn-stop', { hostHints: { ORCA_TERMINAL_HANDLE: `${HANDLE}; rm -rf /` } }))
+    expect(src.capabilities(src.list()[0])).toMatchObject({ voice: false, focus: false })
+  })
+
+  it('an event whose hints carry no handle clears it', async () => {
+    const { actions } = fakeActions()
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('session-start', withHandle))
+    // Resumed in another terminal: the old handle now holds something else.
+    src.ingest(ev('session-start', { hostHints: { TERM_PROGRAM: 'ghostty' } }))
+    const agent = src.list()[0]
+    expect(src.capabilities(agent)).toMatchObject({ voice: false, focus: false })
+    expect(await src.focus(agent)).toBe(false)
+    expect(actions.orcaOpen).not.toHaveBeenCalled()
+  })
+
+  it('a session found by the scan takes its host from its first event', async () => {
+    const { actions } = fakeActions()
+    const { src, open, owners, externals, ev } = setup({ actions })
+    open.set('s1', 'terminal')
+    owners.set('s1', { pid: 100, engine: 'claude' })
+    externals.set('s1', { cwd: '/work/proj', transcriptPath: '/t/s1.jsonl' })
+    await src.scanOpen()
+    expect(src.capabilities(src.list()[0])).toMatchObject({ voice: false, focus: false })
+    src.ingest(ev('session-start', withHandle))
+    expect(src.list()[0].host).toBe('orca')
+    expect(src.capabilities(src.list()[0])).toMatchObject({ voice: true, focus: true })
+  })
+
+  it('caps: s alone with no actions; v and f with a handle; v for a claude session the mod is ready for; never v from the mod for codex; a only while an approval is open', () => {
+    const bare = setup()
+    bare.src.ingest(bare.ev('session-start', withHandle))
+    expect(bare.src.capabilities(bare.src.list()[0])).toEqual({ status: true, voice: false, focus: false, answer: false })
+
+    const { actions, ready } = fakeActions()
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('session-start', { sessionId: 'orca', ...withHandle }))
+    src.ingest(ev('session-start', { sessionId: 'mod' }))
+    src.ingest(ev('session-start', { sessionId: 'cx', engine: 'codex' }))
+    ready.add('mod')
+    ready.add('cx')
+    const caps = (sessionId: string) => src.capabilities(src.list().find((a) => a.sessionId === sessionId)!)
+    expect(caps('orca')).toEqual({ status: true, voice: true, focus: true, answer: false })
+    expect(caps('mod')).toEqual({ status: true, voice: true, focus: false, answer: false })
+    expect(caps('cx')).toEqual({ status: true, voice: false, focus: false, answer: false })
+    src.approval('mod', '/work/proj', 'open')
+    expect(caps('mod').answer).toBe(true)
+    src.approval('mod', '/work/proj', 'answered')
+    expect(caps('mod').answer).toBe(false)
+  })
+
+  it('approval open creates a claude agent the hook never named and turns it needs-you', async () => {
+    const { actions } = fakeActions()
+    const { src, clock, changes } = setup({ actions })
+    const agent = src.approval('new', '/work/fresh', 'open')
+    expect(agent).toMatchObject({ id: observedAgentId('claude', 'new'), engine: 'claude', name: 'fresh', state: 'needs-you' })
+    expect(src.list()).toEqual([agent])
+    expect(src.capabilities(agent!).answer).toBe(true)
+    expect(changes).toHaveBeenCalled()
+    // No process is known for it until its hook comes: the process sweep keeps it, until 12 h of silence.
+    await src.tick()
+    expect(src.list()).toHaveLength(1)
+    clock.t += 12 * 3600_000
+    await src.tick()
+    expect(src.list()).toEqual([])
+  })
+
+  it('a hook after the approval gives the agent its process', async () => {
+    const { actions } = fakeActions()
+    const { src, gens, ev } = setup({ actions })
+    src.approval('s1', '/work/proj', 'open')
+    src.ingest(ev('session-start', { callerPid: 300 }))
+    expect(src.list()[0].callerPid).toBe(300)
+    gens.set(300, null)
+    await src.tick()
+    expect(src.list()).toEqual([])
+  })
+
+  it('answered turns it working', () => {
+    const { actions } = fakeActions()
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('turn-start'))
+    src.approval('s1', '/work/proj', 'open')
+    expect(src.approval('s1', '/work/proj', 'answered')).toMatchObject({ state: 'working' })
+    expect(src.capabilities(src.list()[0]).answer).toBe(false)
+  })
+
+  it('left keeps it needs-you', () => {
+    const { actions } = fakeActions()
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('turn-start'))
+    src.approval('s1', '/work/proj', 'open')
+    expect(src.approval('s1', '/work/proj', 'left')).toMatchObject({ state: 'needs-you' })
+    expect(src.capabilities(src.list()[0]).answer).toBe(false)
+  })
+
+  it('terminal: a prompt the dial cannot show whole turns the agent needs-you with nothing to answer, until it moves on', () => {
+    const { actions } = fakeActions()
+    const { src, ev, changes } = setup({ actions })
+    const agent = src.approval('new', '/work/fresh', 'terminal')
+    expect(agent).toMatchObject({ id: observedAgentId('claude', 'new'), name: 'fresh', state: 'needs-you' })
+    expect(src.list()).toEqual([agent])
+    expect(src.capabilities(agent!).answer).toBe(false)
+    expect(src.terminalOnly(agent!.id)).toBe(true)
+    expect(changes).toHaveBeenCalled()
+    // The same prompt's notice keeps it; the turn going on ends it.
+    src.ingest(ev('needs-input', { sessionId: 'new' }))
+    expect(src.terminalOnly(agent!.id)).toBe(true)
+    src.ingest(ev('turn-start', { sessionId: 'new' }))
+    expect(src.list()[0].state).toBe('working')
+    expect(src.terminalOnly(agent!.id)).toBe(false)
+  })
+
+  it('terminal: a card for the next prompt is the dial\'s again, and one already open keeps its answer', () => {
+    const { actions } = fakeActions()
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('turn-start'))
+    const id = observedAgentId('claude', 's1')
+    src.approval('s1', '/work/proj', 'terminal')
+    src.approval('s1', '/work/proj', 'open')
+    expect(src.terminalOnly(id)).toBe(false)
+    src.approval('s1', '/work/proj', 'terminal')
+    expect(src.terminalOnly(id)).toBe(true)
+    expect(src.capabilities(src.list()[0]).answer).toBe(true)
+    expect(src.terminalOnly('unknown')).toBe(false)
+  })
+
+  it('terminal with the source full gives undefined', () => {
+    const { actions } = fakeActions()
+    const { src, ev } = setup({ actions })
+    for (let i = 0; i < 50; i++) src.ingest(ev('turn-start', { sessionId: `s${i}`, callerPid: 200 + i }))
+    expect(src.approval('new', '/work/proj', 'terminal')).toBeUndefined()
+    expect(src.list()).toHaveLength(50)
+  })
+
+  it('open with the source full gives undefined', () => {
+    const { actions } = fakeActions()
+    const { src, ev } = setup({ actions })
+    for (let i = 0; i < 50; i++) src.ingest(ev('turn-start', { sessionId: `s${i}`, callerPid: 200 + i }))
+    expect(src.approval('new', '/work/proj', 'open')).toBeUndefined()
+    expect(src.list()).toHaveLength(50)
+  })
+
+  it('send is refused while working and while needs-you, and nothing is typed', async () => {
+    const { actions, ready } = fakeActions()
+    const { src, ev } = setup({ actions })
+    ready.add('s1')
+    src.ingest(ev('turn-start', withHandle))
+    const busy = { ok: false, reason: 'proj is busy. Say it when it is done.' }
+    expect(await src.send(src.list()[0], 'next')).toEqual(busy)
+    src.ingest(ev('needs-input', withHandle))
+    expect(await src.send(src.list()[0], 'next')).toEqual(busy)
+    expect(actions.toMod).not.toHaveBeenCalled()
+    expect(actions.orcaSend).not.toHaveBeenCalled()
+  })
+
+  it('send goes to the mod when it is ready', async () => {
+    const { actions, ready } = fakeActions()
+    const { src, ev } = setup({ actions })
+    ready.add('s1')
+    src.ingest(ev('turn-stop', withHandle))
+    expect(await src.send(src.list()[0], 'next step')).toEqual({ ok: true })
+    expect(actions.toMod).toHaveBeenCalledWith('s1', 'next step')
+    expect(actions.orcaSend).not.toHaveBeenCalled()
+  })
+
+  it('to Orca with a handle and no mod', async () => {
+    const { actions } = fakeActions()
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('turn-stop', withHandle))
+    expect(await src.send(src.list()[0], 'next step')).toEqual({ ok: true })
+    expect(actions.toMod).not.toHaveBeenCalled()
+    expect(actions.orcaSend).toHaveBeenCalledWith(HANDLE, 'next step')
+  })
+
+  it('to Orca when the mod missed its 5 s and there is a handle', async () => {
+    const { actions, ready } = fakeActions({ toMod: vi.fn(async (): Promise<Delivery> => 'missed') })
+    const { src, ev } = setup({ actions })
+    ready.add('s1')
+    src.ingest(ev('session-start', withHandle))
+    expect(await src.send(src.list()[0], 'next step')).toEqual({ ok: true })
+    expect(actions.toMod).toHaveBeenCalledTimes(1)
+    expect(actions.orcaSend).toHaveBeenCalledWith(HANDLE, 'next step')
+  })
+
+  it('a turn that begins while the mod is waited for is busy, and nothing is typed into Orca', async () => {
+    let missed!: (delivery: Delivery) => void
+    const { actions, ready } = fakeActions({ toMod: vi.fn(() => new Promise<Delivery>((resolve) => { missed = resolve })) })
+    const { src, ev } = setup({ actions })
+    ready.add('s1')
+    src.ingest(ev('turn-stop', withHandle))
+    const sent = src.send(src.list()[0], 'run the tests')
+    // The person starts a turn in the terminal while the mod's next poll does not come.
+    src.ingest(ev('turn-start', withHandle))
+    missed('missed')
+    expect(await sent).toEqual({ ok: false, reason: 'proj is busy. Say it when it is done.' })
+    expect(actions.orcaSend).not.toHaveBeenCalled()
+    expect(actions.count.mock.calls.map(([what]) => what)).toEqual(['busy'])
+  })
+
+  it('a session that ends, moves to another terminal or goes while the mod is waited for is not typed into', async () => {
+    const other = 'term_9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d'
+    const meanwhile: Array<(t: ReturnType<typeof setup>) => Promise<void>> = [
+      async ({ src, ev }) => { src.ingest(ev('session-end', withHandle)) },
+      async ({ src, ev }) => { src.ingest(ev('session-start', { hostHints: { ORCA_TERMINAL_HANDLE: other } })) },
+      async ({ src, gens }) => { gens.set(100, null); await src.tick() },
+    ]
+    for (const happen of meanwhile) {
+      let missed!: (delivery: Delivery) => void
+      const { actions, ready } = fakeActions({ toMod: vi.fn(() => new Promise<Delivery>((resolve) => { missed = resolve })) })
+      const t = setup({ actions })
+      ready.add('s1')
+      t.src.ingest(t.ev('turn-stop', withHandle))
+      const sent = t.src.send(t.src.list()[0], 'run the tests')
+      await happen(t)
+      missed('missed')
+      expect(await sent).toEqual({ ok: false, reason: 'proj did not answer.' })
+      expect(actions.orcaSend).not.toHaveBeenCalled()
+    }
+  })
+
+  it('a second transcript while the first waits for the mod is busy: typed into Orca, it would land before the first', async () => {
+    const inbox = new Inbox({ now: () => 0, after: () => () => {} })
+    const { actions } = fakeActions({
+      modReady: vi.fn((sessionId: string) => inbox.ready(sessionId)),
+      toMod: vi.fn((sessionId: string, text: string) => inbox.deliver(sessionId, text)),
+    })
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('turn-stop', withHandle))
+    // The mod's poll just closed; its next is a moment away.
+    void inbox.poll('p1', 's1')
+    inbox.gone('p1')
+    const agent = src.list()[0]
+    const first = src.send(agent, 'run the tests')
+    expect(await src.send(agent, 'and then deploy')).toEqual({ ok: false, reason: 'proj is busy. Say it when it is done.' })
+    expect(actions.orcaSend).not.toHaveBeenCalled()
+    expect(await inbox.poll('p2', 's1')).toEqual({ text: 'run the tests' })
+    expect(await first).toEqual({ ok: true })
+  })
+
+  it('did not answer with neither', async () => {
+    const { actions, ready } = fakeActions({ toMod: vi.fn(async (): Promise<Delivery> => 'missed') })
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('session-start'))
+    expect(await src.send(src.list()[0], 'next')).toEqual({ ok: false, reason: 'proj did not answer.' })
+    ready.add('s1')
+    expect(await src.send(src.list()[0], 'next')).toEqual({ ok: false, reason: 'proj did not answer.' })
+    expect(actions.orcaSend).not.toHaveBeenCalled()
+  })
+
+  it('a failed Orca send says did not answer', async () => {
+    const { actions } = fakeActions({ orcaSend: vi.fn(async () => false) })
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('session-start', withHandle))
+    expect(await src.send(src.list()[0], 'next')).toEqual({ ok: false, reason: 'proj did not answer.' })
+  })
+
+  it('a text over 2000 characters is refused before any route', async () => {
+    const { actions, ready } = fakeActions()
+    const { src, ev } = setup({ actions })
+    ready.add('s1')
+    // Busy too: the length is what the person can fix by saying it again.
+    src.ingest(ev('turn-start', withHandle))
+    expect(await src.send(src.list()[0], 'a'.repeat(2001))).toEqual({ ok: false, reason: 'Too long. Say it shorter.' })
+    expect(actions.toMod).not.toHaveBeenCalled()
+    expect(actions.orcaSend).not.toHaveBeenCalled()
+  })
+
+  it('an agent whose session ended takes no voice and no tap: its terminal holds a shell now', async () => {
+    const { actions, ready } = fakeActions()
+    const { src, ev } = setup({ actions })
+    ready.add('s1')
+    src.ingest(ev('turn-stop', withHandle))
+    src.ingest(ev('session-end', withHandle))
+    const agent = src.list()[0]
+    expect(src.capabilities(agent)).toEqual({ status: true, voice: false, focus: false, answer: false })
+    expect(await src.send(agent, 'git push --force')).toEqual({ ok: false, reason: 'proj did not answer.' })
+    expect(await src.focus(agent)).toBe(false)
+    // Ended in a turn too: nobody is there to be busy.
+    src.ingest(ev('turn-start', { sessionId: 's2', ...withHandle }))
+    src.ingest(ev('session-end', { sessionId: 's2', ...withHandle }))
+    expect(await src.send(src.list()[1], 'next')).toEqual({ ok: false, reason: 'proj did not answer.' })
+    expect(actions.toMod).not.toHaveBeenCalled()
+    expect(actions.orcaSend).not.toHaveBeenCalled()
+    expect(actions.orcaOpen).not.toHaveBeenCalled()
+    // Resumed, it is a live session again.
+    src.ingest(ev('session-start', withHandle))
+    expect(src.capabilities(src.list()[0])).toMatchObject({ voice: true, focus: true })
+  })
+
+  it('focus runs orcaOpen for a handle and is false without one', async () => {
+    const { actions } = fakeActions({ orcaOpen: vi.fn(async () => false) })
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('session-start', { sessionId: 'orca', ...withHandle }))
+    src.ingest(ev('session-start', { sessionId: 'plain' }))
+    const agent = (sessionId: string) => src.list().find((a) => a.sessionId === sessionId)!
+    expect(await src.focus(agent('orca'))).toBe(false)
+    expect(actions.orcaOpen).toHaveBeenCalledWith(HANDLE)
+    actions.orcaOpen.mockResolvedValue(true)
+    expect(await src.focus(agent('orca'))).toBe(true)
+    expect(await src.focus(agent('plain'))).toBe(false)
+    expect(actions.orcaOpen).toHaveBeenCalledTimes(2)
+  })
+
+  it('counts mod, orca, busy, too-long and no-answer', async () => {
+    const { actions, ready } = fakeActions()
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('session-start', { sessionId: 'mod' }))
+    src.ingest(ev('session-start', { sessionId: 'orca', ...withHandle }))
+    src.ingest(ev('session-start', { sessionId: 'none' }))
+    src.ingest(ev('turn-start', { sessionId: 'busy' }))
+    ready.add('mod')
+    const agent = (sessionId: string) => src.list().find((a) => a.sessionId === sessionId)!
+    await src.send(agent('mod'), 'x')
+    await src.send(agent('orca'), 'x')
+    await src.send(agent('busy'), 'x')
+    await src.send(agent('none'), 'x'.repeat(2001))
+    await src.send(agent('none'), 'x')
+    expect(actions.count.mock.calls.map(([what]) => what)).toEqual(['mod', 'orca', 'busy', 'too-long', 'no-answer'])
   })
 })
 

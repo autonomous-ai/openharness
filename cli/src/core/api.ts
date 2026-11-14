@@ -51,9 +51,12 @@ import type { TerminalBinaryClear } from '../lib/terminalBinary.js'
 import { VIEWER_UP_TYPES } from '../lib/viewerFrames.js'
 import type { RouteAnswer } from '../localWsServer.js'
 import type { DeviceInputStatus } from './deviceInput.js'
+import type { DeviceHookPort } from './deviceHookCalls.js'
 import { FAIL, later, readFallback, ServiceUnavailableError, type PortFallbacks } from './serviceHost.js'
 
 export type { RouteAnswer }
+/** A hook's approval and the mod's poll, as the core hands them to the devices: a service reads these types here alone. */
+export type { ApprovalDecision, ApprovalRequest, DeviceHookPort, InboxAnswer, InboxPoll } from './deviceHookCalls.js'
 /** What a service guards its own parts with, as the core guards a service (core/serviceHost.ts): the
  *  devices keep a dial failing from costing ⌘K its routing (services/devices.ts). */
 export { FAIL, later, readFallback, ServiceUnavailableError, type PortFallbacks }
@@ -1651,10 +1654,11 @@ export const DEVICES_REQUESTS = ['harness_devices_list', 'harness_device_setting
 
 /**
  * The core's calls into the devices: what the windows on this computer said that the dial follows, the
- * cards every device is sent, ⌘K, and stopping. Every one is a notice or a request the core never waits
- * on in line: across a process, a hung devices process answers the fallbacks, never a frozen core.
+ * cards every device is sent, ⌘K, a hook's approval and the mod's poll (core/deviceHookCalls.ts), and
+ * stopping. Every one is a notice or a request the core never waits on in line: across a process, a hung
+ * devices process answers the fallbacks, never a frozen core.
  */
-export interface DevicesPort {
+export interface DevicesPort extends DeviceHookPort {
   /** A frame bound for the devices (`commander_event`, `commander_question`, `commander_question_close`):
    *  every one the core sends the Wi-Fi devices, as it is sent, so a dial cannot drift from them. */
   card(frame: Record<string, unknown>): void
@@ -1704,7 +1708,8 @@ const DEVICES_UNAVAILABLE = 'the devices service is unavailable'
 
 /**
  * What the core gets when the devices fail: the dial and the window bridges hear nothing, ⌘K says so,
- * picking no agent and sending nothing, the Wi-Fi device finds no desk to walk, and a shutdown goes on.
+ * picking no agent and sending nothing, the Wi-Fi device finds no desk to walk, a hook is answered as
+ * with no dial, and a shutdown goes on.
  */
 export const DEVICES_FALLBACKS: PortFallbacks<DevicesPort> = {
   card: undefined, desk: undefined, swarms: undefined, unread: undefined, appFocus: undefined, seen: undefined,
@@ -1712,6 +1717,8 @@ export const DEVICES_FALLBACKS: PortFallbacks<DevicesPort> = {
   routeTask: later({ agentId: '', machineId: '', name: '', confidence: 0, reason: DEVICES_UNAVAILABLE, candidates: [], weighed: 0, machines: 0, via: '' }),
   routeSend: later({ ok: false, machine: '', reason: DEVICES_UNAVAILABLE }),
   stepFocus: later('no_agents'), scroll: undefined, engines: undefined, commanders: undefined, asking: undefined, observed: false,
+  // No decision, so the terminal's prompt decides. Off, not an empty hold: the mod asks again in a minute, not at once.
+  approval: later('none'), approvalGone: undefined, inboxPoll: later({ off: true }), inboxGone: undefined,
   stop: later(undefined),
 }
 

@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto'
-import { request, type Server } from 'node:http'
+import { request, type IncomingMessage, type Server } from 'node:http'
+import type { Socket } from 'node:net'
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -337,6 +338,148 @@ describe('process-owned hook server', () => {
     const response = await fetch(`${base}/api/hook/observed`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
     expect(response.status).toBe(401)
     expect(onObserved).not.toHaveBeenCalled()
+  })
+
+  describe('the dial\'s two hook routes', () => {
+    const ROUTES = [
+      ['/api/hook/approval', 'onApproval', 4096],
+      ['/api/hook/inbox', 'onInbox', 1024],
+    ] as const
+    const APPROVAL = { sessionId: 'session-1', tool: 'Bash', summary: 'npm test' }
+    const post = (base: string, path: string, headers: Record<string, string>, body: string, signal?: AbortSignal) =>
+      fetch(`${base}${path}`, { method: 'POST', headers, body, signal })
+
+    it.each(ROUTES)('%s answers 401 without the hook token', async (path, name) => {
+      const handler = vi.fn(async () => 'invalid' as const)
+      const { base } = await start({ [name]: handler })
+      expect((await post(base, path, { 'content-type': 'application/json' }, '{}')).status).toBe(401)
+      expect(handler).not.toHaveBeenCalled()
+    })
+
+    it.each(ROUTES)('%s answers 400 to a bad json body', async (path, name) => {
+      const handler = vi.fn(async () => 'invalid' as const)
+      const { base, headers } = await start({ [name]: handler })
+      expect((await post(base, path, headers, '{nope')).status).toBe(400)
+      expect(handler).not.toHaveBeenCalled()
+    })
+
+    it.each(ROUTES)('%s answers 400 to a body one byte over its limit, and takes one at it', async (path, name, limit) => {
+      const handler = vi.fn(async () => 'invalid' as const)
+      const { base, headers } = await start({ [name]: handler })
+      // `{"pad":""}` is 10 bytes.
+      const padded = (bytes: number): string => JSON.stringify({ pad: 'x'.repeat(bytes - 10) })
+      expect(Buffer.byteLength(padded(limit + 1))).toBe(limit + 1)
+      expect((await post(base, path, headers, padded(limit + 1))).status).toBe(400)
+      expect(handler).not.toHaveBeenCalled()
+      await post(base, path, headers, padded(limit))
+      expect(handler).toHaveBeenCalledTimes(1)
+    })
+
+    it.each(ROUTES)('%s answers 400 when the handler says invalid', async (path, name) => {
+      const handler = vi.fn(async () => 'invalid' as const)
+      const { base, headers } = await start({ [name]: handler })
+      expect((await post(base, path, headers, JSON.stringify({ sessionId: 'session-1' }))).status).toBe(400)
+      expect(handler).toHaveBeenCalledWith({ sessionId: 'session-1' }, expect.any(AbortSignal))
+    })
+
+    it.each(['allow', 'deny', 'none'] as const)('/api/hook/approval answers the handler\'s %s', async (decision) => {
+      const onApproval = vi.fn(async () => decision)
+      const { base, headers } = await start({ onApproval })
+      const response = await post(base, '/api/hook/approval', headers, JSON.stringify(APPROVAL))
+      expect(response.status).toBe(200)
+      expect(await response.json()).toEqual({ decision })
+      expect(onApproval).toHaveBeenCalledWith(APPROVAL, expect.any(AbortSignal))
+    })
+
+    it('/api/hook/approval answers none when no handler is wired', async () => {
+      const { base, headers } = await start()
+      const response = await post(base, '/api/hook/approval', headers, JSON.stringify(APPROVAL))
+      expect(response.status).toBe(200)
+      expect(await response.json()).toEqual({ decision: 'none' })
+    })
+
+    it.each([
+      [{ text: 'run the tests' }, 200, { text: 'run the tests' }],
+      [{}, 200, {}],
+      ['off', 503, { error: 'NO_DEVICE' }],
+    ] as const)('/api/hook/inbox answers %j with %i', async (answer, status, reply) => {
+      const onInbox = vi.fn(async () => answer)
+      const { base, headers } = await start({ onInbox })
+      const response = await post(base, '/api/hook/inbox', headers, JSON.stringify({ sessionId: 'session-1' }))
+      expect(response.status).toBe(status)
+      expect(await response.json()).toEqual(reply)
+    })
+
+    it('/api/hook/inbox answers 503 when no handler is wired', async () => {
+      const { base, headers } = await start()
+      const response = await post(base, '/api/hook/inbox', headers, JSON.stringify({ sessionId: 'session-1' }))
+      expect(response.status).toBe(503)
+      expect(await response.json()).toEqual({ error: 'NO_DEVICE' })
+    })
+
+    it.each(ROUTES)('%s aborts its signal when the client goes before the answer', async (path, name) => {
+      let answer!: (value: unknown) => void
+      let reached!: (gone: AbortSignal) => void
+      const held = new Promise<AbortSignal>((resolve) => { reached = resolve })
+      const handler = vi.fn((_body: unknown, gone: AbortSignal) => {
+        reached(gone)
+        return new Promise((resolve) => { answer = resolve })
+      })
+      const { base, headers } = await start({ [name]: handler })
+      const client = new AbortController()
+      const request = post(base, path, headers, JSON.stringify(APPROVAL), client.signal).catch(() => 'gone')
+      const gone = await held
+      expect(gone.aborted).toBe(false)
+      const aborted = new Promise<void>((resolve) => gone.addEventListener('abort', () => resolve(), { once: true }))
+      client.abort()
+      expect(await request).toBe('gone')
+      await aborted
+      // The answer that comes after has nobody to go to.
+      answer(name === 'onApproval' ? 'allow' : { text: 'late' })
+    })
+
+    // Over TCP, who is calling is looked up before any route (audit H1). A client gone during that closed before the route
+    // listened for it: the route never saw it go, and sat reading a body that never comes.
+    it.each(ROUTES)('%s lets go of a client that went while who it is was looked up, reading and forwarding nothing', async (path, name) => {
+      const handler = vi.fn(async () => 'invalid' as const)
+      let answered!: () => void
+      const lookedUp = new Promise<void>((resolve) => { answered = resolve })
+      // The lookup answers only once the client has gone.
+      const peerAccount = (socket: Socket) => new Promise<boolean>((resolve) => socket.once('close', () => { resolve(true); answered() }))
+      const started = await startHookServer(0, { onRegistered: vi.fn(), onSessionEnd: vi.fn(), [name]: handler }, { peerAccount })
+      server = started.server
+      const arrived: IncomingMessage[] = []
+      server.prependListener('request', (req: IncomingMessage) => { arrived.push(req) })
+      const client = new AbortController()
+      const request = fetch(`http://127.0.0.1:${started.port}${path}`, {
+        method: 'POST', body: JSON.stringify(APPROVAL), signal: client.signal,
+        headers: { 'content-type': 'application/json', 'x-harness-hook-token': readHookCredential(env.ADAPTER_DATA_DIR)! },
+      }).catch(() => 'gone')
+      await vi.waitFor(() => expect(arrived).toHaveLength(1))
+      client.abort()
+      expect(await request).toBe('gone')
+      await lookedUp
+      // Every step the route takes after the lookup has run.
+      await new Promise((resolve) => setImmediate(resolve))
+      expect(arrived[0].listenerCount('data')).toBe(0)
+      expect(handler).not.toHaveBeenCalled()
+    })
+
+    it.each(ROUTES)('%s leaves its signal alone once the answer is written', async (path, name) => {
+      let seen: AbortSignal | undefined
+      const handler = vi.fn(async (_body: unknown, gone: AbortSignal) => {
+        seen = gone
+        return name === 'onApproval' ? 'allow' as const : {}
+      })
+      const { base, headers } = await start({ [name]: handler })
+      // This listener runs before the route's own: by the time it resolves, the route has heard the close too.
+      const closed = new Promise<void>((resolve) => server!.once('request', (_req, res) => res.once('close', () => resolve())))
+      const response = await post(base, path, headers, JSON.stringify(APPROVAL))
+      expect(response.status).toBe(200)
+      await response.text()
+      await closed
+      expect(seen?.aborted).toBe(false)
+    })
   })
 
   it.each([
@@ -1207,6 +1350,32 @@ describe('the daemon socket', () => {
     expect(started.localSocket).toBeNull()
     expect(started.port).toBeGreaterThan(0)
     rmSync(dir, { recursive: true, force: true })
+  })
+
+  // The approval hook (deviceClaude/approve.ts) and the mod's voice poll post over the socket only: without one, this line is
+  // why the dial asks nothing and takes no voice.
+  it('says once, with no path, that dial approvals and voice are off where it has no Unix socket', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const said = () => warn.mock.calls.filter(([line]) => String(line).includes('dial approvals'))
+    const dir = mkdtempSync('/tmp/hsock-')
+    const blocked = join(dir, 'daemon.sock')
+    writeFileSync(blocked, 'not a socket')
+    try {
+      for (const socketPath of [null, blocked]) {
+        const started = await startHookServer(0, { onRegistered: vi.fn(), onSessionEnd: vi.fn() }, { socketPath })
+        await new Promise<void>((resolve) => started.server.close(() => resolve()))
+        expect(said()).toEqual([['[hooks] dial approvals and voice from the Claude Code plugin are off: no Unix socket']])
+        warn.mockClear()
+      }
+      const socketPath = join(dir, 'open.sock')
+      const started = await startHookServer(0, { onRegistered: vi.fn(), onSessionEnd: vi.fn() }, { socketPath })
+      await started.localSocket?.close()
+      await new Promise<void>((resolve) => started.server.close(() => resolve()))
+      expect(started.localSocket?.path).toBe(socketPath)
+      expect(said()).toEqual([])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })
 
