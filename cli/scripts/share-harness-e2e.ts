@@ -17,6 +17,8 @@ import { WebSocket } from 'ws'
 import { b64e, newEphemeral } from '../src/lib/e2ee/core.js'
 import { recipientHandshake, type ObserverCipher } from '../src/sharing/crypto.js'
 import { decodeTerminalLocal, encodeTerminalLocal, TerminalBinaryKind, type TerminalBinaryClear } from '../src/lib/terminalBinary.js'
+import { readDaemonRecord } from '../src/lib/daemonRecord.js'
+import { backendListeningPortIn } from '../src/testing/backendListeningPort.js'
 
 if (!process.env.HARNESS_SHARE_E2E_SERVICES) throw new Error('Set HARNESS_SHARE_E2E_SERVICES to disposable service URLs.')
 const exec = promisify(execFile), repo = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
@@ -35,12 +37,23 @@ async function until(label: string, check: () => boolean | Promise<boolean>, tim
   while (Date.now() < end) { if (await check()) return; await delay(60) }
   throw new Error(`Timed out: ${label}. Logs: ${root}`)
 }
+// Only the PORT a daemon is configured with: it names the daemon's socket and its record. The port the daemon binds is
+// read from that record, as the backend's is from its log: a port picked ahead can be taken before the bind, as one
+// was in cli-e2e run 43568618113 (shard 2).
 async function freePort() {
   const server = createServer()
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
   const port = (server.address() as { port: number }).port
   await new Promise<void>(resolve => server.close(() => resolve()))
   return port
+}
+// The port the daemon of `env` bound, from its own record on every attempt: a first start has none yet, and a start
+// again may write another.
+async function daemonPort(label: string, env: NodeJS.ProcessEnv) {
+  let port: number | undefined
+  await until(label, async () => (port = readDaemonRecord(env.ADAPTER_DATA_DIR!, Number(env.PORT))?.port) !== undefined
+    && fetch(`http://127.0.0.1:${port}/api/status`, { headers: { 'x-adapter-local': '1' } }).then(r => r.json()).then((r: any) => r.connected === true).catch(() => false))
+  return port!
 }
 function run(name: string, cwd: string, args: string[], env: NodeJS.ProcessEnv) {
   const child = spawn(process.execPath, args, { cwd, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] })
@@ -138,10 +151,7 @@ const sso = createServer((req, res) => {
 let success = false
 try {
   await new Promise<void>(resolve => sso.listen(0, '127.0.0.1', resolve))
-  const backendPort = process.env.HARNESS_SHARE_BACKEND_PORT ? Number(process.env.HARNESS_SHARE_BACKEND_PORT) : await freePort()
-  const proxyPort = await freePort()
-  backendUrl = `http://127.0.0.1:${backendPort}`
-  const backendEnv = { ...process.env, NODE_ENV: 'test', PORT: String(backendPort), PORT_APP_PROXY: String(proxyPort),
+  const backendEnv = { ...process.env, NODE_ENV: 'test', PORT: process.env.HARNESS_SHARE_BACKEND_PORT ?? '0', PORT_APP_PROXY: '0',
     DATABASE_URL: mongo.href, REDIS_URL: redis.href, HARNESS_BILLING_ENABLED: 'false', MESH_ENABLED: 'false',
     SSO_PROFILE_URL: `http://127.0.0.1:${(sso.address() as { port: number }).port}/profile`,
     SSO_IDENTITY_URL: '', // the stand-in SSO has only /profile; never prove rig tokens against the real BFF
@@ -149,7 +159,10 @@ try {
   await exec(join(repo, 'backend/node_modules/.bin/prisma'), ['db', 'push', '--skip-generate'], { cwd: join(repo, 'backend'), env: backendEnv, timeout: 60_000 })
   run('backend', join(repo, 'backend'), ['--import', 'tsx', 'src/server.ts'], backendEnv)
   // Ready, not only alive: /api/health answers before its Redis is connected (cli/e2e/harness/realBackend.ts).
-  await until('backend', async () => fetch(`${backendUrl}/api/ready`, { signal: AbortSignal.timeout(5_000) }).then(r => r.ok).catch(() => false))
+  let backendPort: number | null = null
+  await until('backend', async () => (backendPort = backendListeningPortIn(join(root, 'backend.log'))) !== null
+    && fetch(`http://127.0.0.1:${backendPort}/api/ready`, { signal: AbortSignal.timeout(5_000) }).then(r => r.ok).catch(() => false))
+  backendUrl = `http://127.0.0.1:${backendPort}`
   const engine = join(root, 'codex')
   await writeFile(engine, `#!${process.execPath}\nif (process.argv.includes('--version')) { console.log('codex-cli 1.0.0'); process.exit(0) }\nif (process.argv.includes('--help')) { console.log('--approve-for-me --dangerously-bypass-approvals-and-sandbox --ask-for-approval'); process.exit(0) }\nconst { appendFileSync } = require('node:fs'); process.title = 'codex'; process.stdin.setRawMode?.(true); console.log('SHARING_READY'); process.stdin.on('data', x => { appendFileSync(${JSON.stringify(join(root, 'fixture-input.bin'))}, x); process.stdout.write('ECHO:' + x + '\\r\\n'); }); setInterval(() => {}, 1000);\n`, { mode: 0o700 })
   const fixture = join(root, 'harness-source')
@@ -165,7 +178,7 @@ try {
   for (const account of accounts.slice(0, 3)) {
     const folder = join(root, account.name), data = join(folder, 'data'), auth = join(folder, 'auth'), workspace = join(folder, 'project')
     for (const dir of [data, auth, workspace]) await mkdir(dir, { recursive: true })
-    const computerId = randomUUID(), port = await freePort(), socket = join(folder, 'tmux.sock')
+    const computerId = randomUUID(), configuredPort = await freePort(), socket = join(folder, 'tmux.sock')
     tmuxSockets.push(socket)
     const registered = await api(account, '/api/machines/resolve-computer', 'POST', { computerId, label: `${account.name} test machine` })
     assert.equal(registered.status, 200, JSON.stringify(registered))
@@ -178,7 +191,7 @@ try {
       NODE_OPTIONS: `--require=${join(repo, 'cli/scripts/share-harness-e2e-preload.cjs')}`,
       HARNESS_GRID_BIN: join(folder, 'no-grid'), DISABLE_GRID_INSTALL: 'true',
       GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null',
-      TMUX: `${socket},0,0`, PORT: String(port), HARNESS_AUTH_DIR: auth,
+      TMUX: `${socket},0,0`, PORT: String(configuredPort), HARNESS_AUTH_DIR: auth,
       ADAPTER_COMPUTER_ID: computerId, ADAPTER_COMPUTER_ID_FILE: join(folder, 'computer-id'), ADAPTER_DATA_DIR: data,
       ADAPTER_RUNTIME_DIR: join(folder, 'runtime'), DSH_DIR: join(folder, 'dsh'), CODEX_PATH: engine,
       BACKEND_WS_URL: `ws://127.0.0.1:${backendPort}`, WEB_URL: backendUrl, HARNESS_STORE_CATALOG_URL: 'http://127.0.0.1:9/catalog',
@@ -187,7 +200,7 @@ try {
       CLAUDE_PROJECTS_DIR: join(folder, 'claude-projects') }
     if (account.name === 'owner') await exec(process.execPath, ['--import', 'tsx', 'src/cli.ts', 'dsh', 'install', fixture, '--link'], { cwd: join(repo, 'cli'), env, timeout: 30_000 })
     const child = run(account.name, join(repo, 'cli'), ['--import', 'tsx', 'src/cli.ts', '__run'], env)
-    await until(`${account.name} daemon`, async () => fetch(`http://127.0.0.1:${port}/api/status`, { headers: { 'x-adapter-local': '1' } }).then(r => r.json()).then((r: any) => r.connected === true).catch(() => false))
+    const port = await daemonPort(`${account.name} daemon`, env)
     machines.push({ machineId, port, env, child, socket, workspace })
   }
   const [host, kenMachine, diegoMachine] = machines
@@ -310,7 +323,7 @@ try {
   await until('owner disconnect is recoverable', () => diego.closedCode === 1012)
   await until('offline grant stays discoverable', async () => (await api(accounts[2], '/api/harness-shares')).body.data.machines[0]?.status === 'offline')
   host.child = run('owner-restarted', join(repo, 'cli'), ['--import', 'tsx', 'src/cli.ts', '__run'], host.env)
-  await until('owner restarted', async () => fetch(`http://127.0.0.1:${host.port}/api/status`, { headers: { 'x-adapter-local': '1' } }).then(r => r.json()).then((r: any) => r.connected === true).catch(() => false))
+  host.port = await daemonPort('owner restarted', host.env)
   owner = await Peer.connect(host.port, host.machineId)
   assert.equal((await owner.rpc('harness_share_list', { agentId })).shares.length, 1)
   assert.equal((await owner.rpc('harness_share_comments', { agentId })).comments[0].text, 'Fixture collaboration')
