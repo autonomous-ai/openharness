@@ -1727,6 +1727,18 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     await vi.waitFor(async () => expect((await machineList(port)).agents.map((a) => a.id)).toEqual(['h1']))
   })
 
+  it('once the core answers for the Swarm cards again, the machine list waits for them as before', async () => {
+    const superTabRequest = vi.fn(async (): Promise<Record<string, unknown>> => ({ error: 'SERVICE_UNAVAILABLE' }))
+    const { port, reconnected } = start({ core: { ...harnessAgent(), superTabRequest } as CoreApi, faults: ['fleet'] })
+    host().swarmCardsWanted(true)
+    await vi.waitFor(async () => expect((await machineList(port)).agents.map((a) => a.id)).toEqual(['h1']))
+    // The core is back and asks the Swarm service for them: they are coming, and a Buddy cannot be told until they do.
+    superTabRequest.mockResolvedValue({ ok: true })
+    reconnected.forEach((run) => run())
+    await vi.waitFor(() => expect(superTabRequest).toHaveBeenCalledTimes(2))
+    await vi.waitFor(async () => expect((await machineList(port)).agents).toEqual([]))
+  })
+
   it('with a window open, an observed agent tells the dial nothing: no turn, answer or reminder', async () => {
     vi.useFakeTimers()
     readers.answer.mockResolvedValue('Shipped the fix.')
