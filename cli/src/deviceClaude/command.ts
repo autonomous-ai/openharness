@@ -1,14 +1,14 @@
 /**
  * `harness device claude …`: the menu-bar app's status, enable and disable, and two words the harness-device plugin runs
- * that a person never types: `approve` (its PermissionRequest hook) and `link` (its mod, for the daemon's socket). This
+ * that a person never types: `asked` (its PermissionRequest hook) and `link` (its mod, for the daemon's socket). This
  * runs only in the `harness` command's own process; nothing the core or a service loads imports this folder.
  */
 import { localSocketRoute } from '../lib/localTransport.js'
-import { daemonPost, runApprove } from './approve.js'
+import { daemonPost, runAsked } from './asked.js'
 import { claudeDisable, claudeEnable, claudeStatus, type ClaudeRun } from './plugin.js'
 
-/** `approve` and `link` are left out: they are the plugin's, and typed by hand they only wait or print a path. */
-export const DEVICE_USAGE = `Harness device (the dial answers Claude Code's prompts in any terminal):
+/** `asked` and `link` are left out: they are the plugin's, and typed by hand they only wait on stdin or print a path. */
+export const DEVICE_USAGE = `Harness device (the dial shows Claude Code's waiting prompts in any terminal, and takes a spoken prompt):
   harness device claude status [--json]  whether Claude Code has the harness-device plugin, and its version
   harness device claude enable           install the plugin, or turn it on (Claude Code 2.1.287 or later)
   harness device claude disable          uninstall the plugin`
@@ -18,7 +18,7 @@ export interface DeviceDeps {
   port: number
   platform: NodeJS.Platform
   stdin: AsyncIterable<Buffer | string>
-  /** Looked for only by the words that run Claude Code: the hook's `approve` runs on every prompt and needs none. */
+  /** Looked for only by the words that run Claude Code: the hook's `asked` runs on every prompt and needs none. */
   claude(): ClaudeRun | null
   out(line: string): void
   err(line: string): void
@@ -42,8 +42,9 @@ export async function runDeviceCommand(argv: string[], deps: DeviceDeps): Promis
       deps.err(result.error)
       return 1
     }
-    case 'approve':
-      return runApprove({ stdin: deps.stdin, post: daemonPost(deps.dataDir, deps.port), out: deps.out })
+    case 'asked':
+      // Prints nothing, ever: what the hook prints, Claude Code reads as its decision.
+      return runAsked({ stdin: deps.stdin, post: daemonPost(deps.dataDir, deps.port) })
     case 'link': {
       // The socket alone: a request over it is trusted by the filesystem, so the mod is handed no credential. Where
       // there is none (Windows), no answer, and the mod tries again later.
