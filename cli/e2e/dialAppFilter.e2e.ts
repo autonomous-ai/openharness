@@ -208,6 +208,29 @@ describe('the dial\'s app filter', () => {
     expect(switches(d, 'front')).toBe(1)
   })
 
+  // The PM's D1 (2026-11-15): an app that settled in front with no agents is shown once it gets one (Review Focus 7).
+  it('an agent started in the app in front turns the dial to it', async () => {
+    const { d, desk } = await fresh()
+    const dial = await plugged(desk)
+    await startFirst(d, dial, 'ghostty', 'a1', GHOSTTY)
+    await listening(d)
+    const run = watch(d)
+    let since = dial.messages.length
+    const written = Date.now()
+    run.front(VSCODE_BUNDLE)
+    await settleWindowPassed(dial, written)
+    // Settled in front with no agents: nothing moved.
+    expect(appsFrames(dial, since).every((apps) => apps.shown === 'ghostty')).toBe(true)
+    expect(switches(d, 'front')).toBe(0)
+    since = dial.messages.length
+    const started = await startOutside(d, 'a2', VSCODE)
+    started.type('in the app in front')
+    await until('its UserPromptSubmit hook to run', () => started.ran(d, 'UserPromptSubmit'), 30_000, 100)
+    const { apps } = await shows(dial, 'vscode', [started], since)
+    expect(same(counts(apps), { ghostty: 1, vscode: 1 })).toBe(true)
+    expect(switches(d, 'front')).toBe(1)
+  })
+
   it('Finder\'s bundle id changes nothing', async () => {
     const { d, desk } = await fresh()
     const dial = await plugged(desk)
@@ -424,6 +447,29 @@ describe('the dial\'s app filter', () => {
     // The five were never on Other's page: the scan knew each one's app.
     expect(appsFrames(dial).filter((apps) => apps.apps.some((a) => a.id === 'terminal'))).toEqual([])
     expect(d.log()).toMatch(/\[observed\] scan · 5 found · 5 app known · \d+ ms/)
+  })
+
+  // The same, with the five known only by the hooks of prompts typed once the dial is in: the shape that flaked (Review
+  // Focus 7) when VS Code's hooks came after the front had settled, the case the PM's D1 settles.
+  it('a dial plugged in while VS Code is already in front, its agents known only by hooks after the attach, ends on VS Code\'s ring', async () => {
+    const { d, desk } = await fresh()
+    const run = watch(d)
+    await until('the watch\'s first line', () => run.lines.length > 0, 60_000)
+    run.front(VSCODE_BUNDLE)
+    // Started before the dial with no turn: no devices process hears their first hooks, and the scan the dial's attach
+    // runs has no transcript of theirs to list.
+    const ghostty = [await startOutside(d, 'a1', GHOSTTY), await startOutside(d, 'a2', GHOSTTY), await startOutside(d, 'a3', GHOSTTY)]
+    const vscode = [await startOutside(d, 'a4', VSCODE), await startOutside(d, 'a5', VSCODE)]
+    const dial = await plugged(desk)
+    await listening(d)
+    await until('the watch to hear the dial attached', () => run.lines.some((line) => line.startsWith('{"attached":true')), 60_000, 10)
+    for (const engine of ghostty) engine.type('the dial is in')
+    // A deliberate delay, not a wait for anything: VS Code's hooks reach the devices after the front's 1 s settle, as a
+    // loaded machine delays them, which is what left the dial on Ghostty before D1.
+    await new Promise((resolve) => setTimeout(resolve, 1_500))
+    for (const engine of vscode) engine.type('the dial is in')
+    await showing(dial, 'VS Code\'s ring', (apps, roster) =>
+      same(counts(apps), { ghostty: 3, vscode: 2 }) && apps.shown === 'vscode' && same(ids(roster).sort(), idsOf(vscode).sort()))
   })
 
   it('a dial without appFilter beside it gets all five agents in one ring and no apps frame', async () => {
