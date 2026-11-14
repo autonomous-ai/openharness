@@ -462,6 +462,31 @@ describe('ObservedSource codex and open sessions', () => {
     expect(src.list()[0]).toMatchObject({ host: 'orca', state: 'working' })
   })
 
+  it('a session the open scan found is in terminal until its first hook says its app', async () => {
+    const { src, open, owners, externals, ev } = setup()
+    open.set('s1', 'terminal')
+    owners.set('s1', { pid: 100, engine: 'claude' })
+    externals.set('s1', { cwd: '/work/proj', transcriptPath: '/t/s1.jsonl' })
+    await src.scanOpen()
+    expect(src.list()[0].app).toBe('terminal')
+    src.ingest(ev('turn-start', { hostHints: { TERM_PROGRAM: 'ghostty' } }))
+    expect(src.list()[0]).toMatchObject({ host: 'ghostty', app: 'ghostty' })
+  })
+
+  it('a hook from zellij inside Ghostty gives host zellij and app ghostty', () => {
+    const { src, ev } = setup()
+    src.ingest(ev('session-start', { hostHints: { ZELLIJ: '0', TERM_PROGRAM: 'ghostty' } }))
+    expect(src.list()[0]).toMatchObject({ host: 'zellij', app: 'ghostty' })
+  })
+
+  it('a session resumed in another terminal changes app', () => {
+    const { src, ev } = setup()
+    src.ingest(ev('session-start', { hostHints: { TERM_PROGRAM: 'ghostty' } }))
+    src.ingest(ev('session-end'))
+    src.ingest(ev('session-start', { hostHints: { TERM_PROGRAM: 'iTerm.app' } }))
+    expect(src.list()[0]).toMatchObject({ host: 'iterm', app: 'iterm' })
+  })
+
   it('scanOpen leaves a session a hook already knows', async () => {
     const { src, open, owners, ev } = setup()
     src.ingest(ev('turn-start'))
