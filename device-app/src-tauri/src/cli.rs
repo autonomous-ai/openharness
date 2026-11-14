@@ -351,13 +351,25 @@ impl StdinCloser {
 /// Writes lines on a child's stdin from any thread. It holds the pipe weakly, as StdinCloser does.
 pub struct StdinWriter(Weak<Mutex<Option<ChildStdin>>>);
 
+/// Why a line was not written.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Unwritten {
+    /// Stdin is closed, or the child has gone.
+    Closed,
+    /// The pipe is full: the writer never waits (Child::start), and only a child that has stopped reading fills it.
+    Full,
+}
+
 impl StdinWriter {
-    /// The text and a newline. False when stdin is closed, the child has gone, or the pipe is full: it never waits
-    /// (Child::start), and only a child that has stopped reading fills it.
-    pub fn line(&self, text: &str) -> bool {
-        let Some(stdin) = self.0.upgrade() else { return false };
+    /// The text and a newline.
+    pub fn line(&self, text: &str) -> Result<(), Unwritten> {
+        let stdin = self.0.upgrade().ok_or(Unwritten::Closed)?;
         let mut stdin = stdin.lock().unwrap();
-        stdin.as_mut().is_some_and(|pipe| pipe.write_all(format!("{text}\n").as_bytes()).is_ok())
+        let pipe = stdin.as_mut().ok_or(Unwritten::Closed)?;
+        pipe.write_all(format!("{text}\n").as_bytes()).map_err(|error| match error.kind() {
+            io::ErrorKind::WouldBlock => Unwritten::Full,
+            _ => Unwritten::Closed,
+        })
     }
 }
 

@@ -1,8 +1,10 @@
 //! The `harness hardware watch --json` child.
 
-use crate::cli::{Cli, Killer, StdinCloser, StdinWriter, Timeout};
-use crate::types::{DialStatus, Event};
+use crate::cli::{Cli, Killer, StdinCloser, StdinWriter, Timeout, Unwritten};
+use crate::types::{DialStatus, Event, Log};
 use std::io;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 
@@ -18,13 +20,18 @@ pub struct Watch {
     writer: StdinWriter,
     killer: Killer,
     grace: Duration,
+    log: Arc<dyn Log>,
+    /// Whether the log has said this watch stopped reading: once is enough to be seen.
+    not_reading: AtomicBool,
 }
 
 impl Watch {
     /// A line of the app in front (front.rs) on the child's stdin. One that has ended takes nothing, and nothing of the
-    /// line is logged.
+    /// line is logged. One that has stopped reading drops it, and the log says so once, never with the line.
     pub fn front(&self, line: &str) {
-        self.writer.line(line);
+        if self.writer.line(line) == Err(Unwritten::Full) && !self.not_reading.swap(true, Ordering::Relaxed) {
+            self.log.line("front: watch not reading");
+        }
     }
 
     /// One that has not ended within the grace is killed, so a stop always ends it.
@@ -43,12 +50,13 @@ impl Drop for Watch {
 }
 
 /// Runs `hardware watch --json`: an `Event::WatchLine` for each status line it prints, then one `Event::WatchExit`.
-pub fn spawn_watch(cli: &dyn Cli, send: impl Fn(Event) + Send + 'static) -> io::Result<Watch> {
-    spawn_watch_within(cli, send, FIRST_LINE, STOP_GRACE)
+pub fn spawn_watch(cli: &dyn Cli, log: Arc<dyn Log>, send: impl Fn(Event) + Send + 'static) -> io::Result<Watch> {
+    spawn_watch_within(cli, log, send, FIRST_LINE, STOP_GRACE)
 }
 
 fn spawn_watch_within(
     cli: &dyn Cli,
+    log: Arc<dyn Log>,
     send: impl Fn(Event) + Send + 'static,
     first_line: Duration,
     grace: Duration,
@@ -79,7 +87,7 @@ fn spawn_watch_within(
         // An Err only if the thread that reaps the child died; the run is over either way.
         send(Event::WatchExit(child.exit(Duration::MAX).unwrap_or(None)));
     });
-    Ok(Watch { stdin, writer, killer, grace })
+    Ok(Watch { stdin, writer, killer, grace, log, not_reading: AtomicBool::new(false) })
 }
 
 #[cfg(test)]

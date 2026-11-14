@@ -188,7 +188,7 @@ impl Shared {
             old.stop();
         }
         let (watching, send) = (self.watching.clone(), self.send.clone());
-        let spawned = watch::spawn_watch(&*cli, move |event| {
+        let spawned = watch::spawn_watch(&*cli, self.doors.log.clone(), move |event| {
             // Held while the event is handed on, so once a newer watch has its number nothing more of this one is sent.
             let current = watching.lock().unwrap();
             if *current == number {
