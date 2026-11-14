@@ -5,6 +5,7 @@
 
 import { execFile } from 'node:child_process'
 import { homedir } from 'node:os'
+import { patientExec } from '../../lib/patientExec.js'
 import { run } from '../../lib/sessionSearch/externals/support.js'
 import type { RunningProcess } from '../../lib/sessionSearch/externals/types.js'
 import { frontAppId } from './frontApp.js'
@@ -52,8 +53,10 @@ export async function readBundleId(bundle: string, exec: typeof run = run): Prom
 /** A command's whole output; null when it failed, ran past `timeout` or printed past `maxBuffer`. */
 export type Exec = (command: string, args: readonly string[], options: { timeout: number; maxBuffer: number }) => Promise<string | null>
 
+// A held event loop must not turn the timeout into an empty table (patientExec.ts).
+const patient = patientExec(execFile)
 const execText: Exec = (command, args, options) => new Promise((resolve) => {
-  execFile(command, [...args], options, (error, stdout) => resolve(error ? null : stdout))
+  patient(command, args, options, (error, stdout) => resolve(error ? null : stdout))
 })
 
 /** `ps -axo pid=,ppid=,comm=` rows; a line that is no row is passed over. */
