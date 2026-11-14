@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { basename } from 'node:path'
 // Types only: the devices process must not load core code.
-import type { ObservedAsked, ObservedEvent } from '../../core/observedHook.js'
+import type { ObservedAsked, ObservedEvent, ObservedHookEvent } from '../../core/observedHook.js'
 import { truncateUtf8 } from '../../lib/deviceRecentTrim.js'
 import type { OpenSessions, SessionRows } from '../../lib/sessionSearch/external.js'
 import { type fileStamp, within } from '../../lib/sessionSearch/externals/support.js'
@@ -31,6 +31,13 @@ const TURN_SETTLE_MS = 2_000
 const ASK_SETTLE_MS = 1_000
 /** The firmware's activity line, `activity[100]` (ui_habitat.c), less its terminating zero: it cuts a longer one there. */
 const LINE_BYTES = 99
+
+/** What a turn's start was: a prompt a person typed, one another session sent, or the dial's own words. */
+export type PromptSource = 'person' | 'relayed' | 'dial'
+/** The mod holds the dial's words until a long turn is over: a turn that starts later than this is not theirs. */
+export const DIAL_PROMPT_TTL_MS = 600_000
+/** The dial's words a session holds before a turn starts for them: one that never starts a turn holds no more. */
+const MAX_DIAL_PROMPTS = 8
 
 /**
  * The dial's line for a prompt that waits: what it asks, and the app to answer it in. What the round dial cannot draw is a
@@ -103,6 +110,8 @@ interface Entry {
   endAt?: number
   /** The read of the last answer, waiting out the grace. */
   answerTimer?: ReturnType<typeof setTimeout>
+  /** When the dial's words reached it, oldest first, each until a turn starts for it. */
+  dialPrompts: { at: number }[]
 }
 
 export class ObservedSource implements HostSource {
@@ -163,6 +172,7 @@ export class ObservedSource implements HostSource {
     if (this.modReady(e, actions)) {
       const delivery = await actions.toMod(e.agent.sessionId!, text)
       if (delivery === 'taken') {
+        this.dialPrompt(e)
         actions.count('mod')
         return { ok: true }
       }
@@ -177,9 +187,23 @@ export class ObservedSource implements HostSource {
     // A working turn may show a prompt not yet heard of: Codex's approval overlay, which takes `y` or Enter, has no hook, and
     // Claude Code's comes a few hundred ms after its prompt opens.
     if (e.agent.state === 'working' || !this.idleKnown(e)) return refuse('busy', `${name} is busy. Say it when it is done.`)
-    if (!await actions.orcaSend(handle, text)) return noAnswer()
+    // Recorded first: `orca terminal send` returns once the prompt is submitted, and its turn's hook can be heard before.
+    const record = this.dialPrompt(e)
+    if (!await actions.orcaSend(handle, text)) {
+      // Its own record only, if no turn took it meanwhile: an earlier one is the mod's, for words still to come.
+      const i = e.dialPrompts.indexOf(record)
+      if (i >= 0) e.dialPrompts.splice(i, 1)
+      return noAnswer()
+    }
     actions.count('orca')
     return { ok: true }
+  }
+
+  /** The dial's words reached the session: its next turn is theirs, not a person's. */
+  private dialPrompt(e: Entry): { at: number } {
+    const record = { at: this.deps.now() }
+    if (e.dialPrompts.push(record) > MAX_DIAL_PROMPTS) e.dialPrompts.shift()
+    return record
   }
 
   /**
@@ -227,7 +251,8 @@ export class ObservedSource implements HostSource {
     return this.entries.get(agentId)?.asked
   }
 
-  ingest(e: ObservedEvent): void {
+  /** Takes the event; for a turn's start of a session it lists, answers what started it. */
+  ingest(e: ObservedEvent): PromptSource | undefined {
     if (e.event === 'asked') {
       this.asked(e)
       return
@@ -260,6 +285,7 @@ export class ObservedSource implements HostSource {
     }
     // A session that comes back after its end (a resume) is a live one again.
     entry.endAt = undefined
+    let source: PromptSource | undefined
     switch (e.event) {
       case 'session-start':
         // A start must not undo a state a faster event already set.
@@ -269,6 +295,7 @@ export class ObservedSource implements HostSource {
         a.unseenDone = false
         // The last turn's answer is not this one's: cleared, the same answer at this turn's end is a change the dial hears.
         a.lastAnswer = undefined
+        source = this.promptSource(entry, e, now)
         break
       case 'needs-input':
         // In every state: the hook hears a prompt only (hook/notify.mjs, never the idle notice), and one can open in any.
@@ -288,6 +315,16 @@ export class ObservedSource implements HostSource {
         break
     }
     this.emit()
+    return source
+  }
+
+  private promptSource(entry: Entry, e: ObservedHookEvent, now: number): PromptSource | undefined {
+    // Their turn starts on a model call or a tool call (hook/notify.mjs, observedEvent): no prompt at all.
+    if (e.engine === 'agy' || e.engine === 'commandcode') return undefined
+    // Another session's message is not the dial's words: their turn is still to come.
+    if (e.relayed === true) return 'relayed'
+    entry.dialPrompts = entry.dialPrompts.filter((p) => now - p.at < DIAL_PROMPT_TTL_MS)
+    return entry.dialPrompts.shift() ? 'dial' : 'person'
   }
 
   /**
@@ -352,6 +389,7 @@ export class ObservedSource implements HostSource {
       since: now,
       pid: init.pid,
       opens: {},
+      dialPrompts: [],
       ...(init.transcriptPath ? { transcriptPath: init.transcriptPath } : {}),
     }
     this.entries.set(id, entry)
