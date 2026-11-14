@@ -95,15 +95,20 @@ describe('Devices DSH commands', () => {
   })
 })
 
+const NOT_RUNNING = 'Harness is not running on this computer. Run: harness start'
+const CLOSED = 'The connection to Harness on this computer closed.'
 const TOO_OLD = '{"error":"Harness on this computer is too old for this. Run: harness update"}'
 function watch(over: Partial<DialWatchDeps> = {}, argv = ['--json']) {
   const socket = Object.assign(new EventEmitter(), { send: vi.fn(), close: vi.fn() })
   const stdin = Object.assign(new EventEmitter(), { resume: vi.fn(), pause: vi.fn() })
-  const printed: string[] = []
+  const printed: string[] = [], errors: string[] = []
   const connect = vi.fn((_url: string, _headers?: Record<string, string>) => socket)
-  const deps: DialWatchDeps = { port: 18473, machineId: async () => 'local', connect, stdin, print: line => { printed.push(line) }, ...over }
+  const deps: DialWatchDeps = {
+    port: 18473, machineId: async () => 'local', connect, stdin,
+    print: line => { printed.push(line) }, printError: line => { errors.push(line) }, ...over,
+  }
   const done = runDialWatch(argv, deps)
-  return { done, socket, stdin, printed, connect }
+  return { done, socket, stdin, printed, errors, connect }
 }
 // machineId() is awaited before the socket opens: wait until it has.
 async function opened(socket: EventEmitter) {
@@ -157,6 +162,38 @@ describe('harness hardware watch', () => {
       await vi.advanceTimersByTimeAsync(60_000)
       await stillRunning(answered)
     } finally { vi.useRealTimers() }
+  })
+  it('says on stderr what to do when it exits 3, and keeps stdout for status lines', async () => {
+    const runs: [ReturnType<typeof watch>, string][] = []
+    for (const over of [{ machineId: async () => null }, { machineId: async () => { throw new Error('EACCES') } }, { connect: () => { throw new Error('ENOENT') } }]) {
+      runs.push([watch(over), NOT_RUNNING])
+    }
+    const refused = watch()
+    await opened(refused.socket)
+    refused.socket.emit('error', new Error('ECONNREFUSED'))
+    runs.push([refused, NOT_RUNNING])
+    const closed = watch()
+    await opened(closed.socket)
+    connected(closed.socket, ['dial-watch'])
+    closed.socket.emit('close', 1006, '')
+    runs.push([closed, CLOSED])
+    for (const [run, line] of runs) {
+      expect(await run.done).toBe(3)
+      expect(run.errors).toEqual([line])
+      expect(run.printed).toEqual([])
+    }
+    vi.useFakeTimers()
+    try {
+      const silent = watch()
+      await opened(silent.socket)
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(silent.errors).toEqual([CLOSED])
+    } finally { vi.useRealTimers() }
+    const stopped = watch()
+    await opened(stopped.socket)
+    stopped.stdin.emit('end')
+    expect(await stopped.done).toBe(0)
+    expect(stopped.errors).toEqual([])
   })
   it('asks for the dial as a tool', async () => {
     const run = watch()
