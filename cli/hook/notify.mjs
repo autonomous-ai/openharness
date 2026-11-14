@@ -557,9 +557,14 @@ const OBSERVED_EVENTS = new Map([
  *  link, or a resume after the quota ran out. */
 const NEEDS_INPUT = ['permission_prompt', 'elicitation_dialog', 'elicitation_url_dialog', 'quota_auto_resume_stale']
 
+/** The hook's event in its engine's own name: Copilot's and agy's come on the command line, Grok's in its own case. */
+function engineEventName(engine, event) {
+  return engine === 'copilot' ? argCopilotEvent() : engine === 'agy' ? argAgyEvent() : engine === 'grok' ? grokHookEvent(event) : event
+}
+
 /** A paneless hook's event in the devices' words (core/observedHook.ts); null for one that says none of them. */
 function observedEvent(engine, event, input) {
-  const name = engine === 'copilot' ? argCopilotEvent() : engine === 'agy' ? argAgyEvent() : engine === 'grok' ? grokHookEvent(event) : event
+  const name = engineEventName(engine, event)
   if (engine === 'copilot' && name === 'agentStop') return copilotStopFailed(input) ? 'turn-error' : 'turn-stop'
   if (engine === 'cursor' && name === 'stop') return input.status === 'error' ? 'turn-error' : 'turn-stop'
   if (engine === 'agy' && name === 'Stop') {
@@ -575,6 +580,14 @@ function observedEvent(engine, event, input) {
   // done agent stays done. One too old to name its type sends that idle notice untyped too, so it says nothing.
   if (name === 'Notification') return NEEDS_INPUT.includes(input.notification_type) ? 'needs-input' : null
   return OBSERVED_EVENTS.get(name) ?? null
+}
+
+/** How Claude Code types in a message another session sent; the start is all that is read of the prompt. */
+const CROSS_SESSION = /^\s*<cross-session-message /
+
+/** A prompt another session sent, not one the person typed: the devices do not move the dial for it. */
+function relayedPrompt(engine, event, input) {
+  return engineEventName(engine, event) === 'UserPromptSubmit' && typeof input.prompt === 'string' && CROSS_SESSION.test(input.prompt)
 }
 
 /**
@@ -596,6 +609,7 @@ function observedBody(engine, event, input) {
     engine, sessionId, event: kind, cwd: path(cwd), callerPid: process.ppid,
     transcriptPath: path(input.transcript_path || input.transcriptPath), hostHints: hostHints(),
   }
+  if (relayedPrompt(engine, event, input)) body.relayed = true
   const fits = () => Buffer.byteLength(JSON.stringify(body)) <= 4096
   if (!fits()) delete body.transcriptPath
   if (!fits()) delete body.cwd
