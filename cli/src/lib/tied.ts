@@ -23,7 +23,9 @@
  * - A command that is not there, or a cwd that is not, is looked for first and left to the plain spawn: callers tell
  *   "not installed" from its `ENOENT` error (gridExec.ts, codexRateLimits.ts), and a person reads its message, which
  *   names the command. Through the shell it would be exit 127 (126 from macOS's sh), or `spawn /bin/sh ENOENT`. The
- *   file is looked for as exec looks: on the PATH of the env given, or from the cwd given.
+ *   file is looked for as exec looks: on the PATH of the env given, or from the cwd given. So is the interpreter a
+ *   script's `#!` names: exec fails with the same `ENOENT` when it is gone (a launcher whose venv Python an upgrade
+ *   removed), where the shell would report a run that failed, "bad interpreter".
  * Measured on macOS (bash 3.2 and dash): a tied command, and a detached one with a child in its group, were gone
  * within 5 ms of their parent's SIGKILL, where a plain one was still alive after 2 s. A tied start costs 1.7 to 3.7 ms
  * more (`/usr/bin/true` to `close`: 1.25 ms plain; by path 4.7 ms on bash, 2.9 ms on dash; by bare name on 81 PATH
@@ -40,7 +42,7 @@
  * this process (lib/windows/noWindow.ts).
  */
 import { spawn, type ChildProcess } from 'node:child_process'
-import { statSync } from 'node:fs'
+import { closeSync, openSync, readSync, statSync } from 'node:fs'
 import { resolve } from 'node:path'
 import type { Writable } from 'node:stream'
 import { resolveBinaryOnPath } from './binaryOnPath.js'
@@ -174,10 +176,26 @@ export function execFileTied(
   })
 }
 
-/** Whether exec would find the file and the cwd: a path is looked at from the cwd, as exec sees it after the chdir. */
+/** Whether exec would find the file, the cwd, and a script's interpreter: a path is looked at from the cwd, as exec
+ *  sees it after the chdir. */
 function startable(file: string, { cwd, env }: TiedOptions): boolean {
   if (cwd !== undefined && !isDirectory(cwd)) return false
-  return resolveBinaryOnPath(file.includes('/') ? resolve(cwd ?? '', file) : file, env) !== null
+  const found = resolveBinaryOnPath(file.includes('/') ? resolve(cwd ?? '', file) : file, env)
+  if (found === null) return false
+  const named = interpreter(found)
+  return named === null || resolveBinaryOnPath(resolve(cwd ?? '', named)) !== null
+}
+
+/** The interpreter a script's `#!` names, read as exec reads it: the first word of the file's first 512 bytes (macOS
+ *  reads 512, Linux 256). Null for a file with no `#!`, or one this process cannot read, which exec may still run. */
+function interpreter(path: string): string | null {
+  const head = Buffer.alloc(512)
+  let length: number
+  try {
+    const fd = openSync(path, 'r')
+    try { length = readSync(fd, head) } finally { closeSync(fd) }
+  } catch { return null }
+  return /^#![ \t]*([^ \t\n]+)/.exec(head.toString('latin1', 0, length))?.[1] ?? null
 }
 
 function isDirectory(path: string): boolean {
