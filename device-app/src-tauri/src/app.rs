@@ -785,13 +785,12 @@ mod tests {
 
         let mut app = two_downs();
         let effects = app.handle(Event::Tick { now: B + 10, desktop_running: true });
-        assert!(has(&effects, &Effect::SpawnWatch));
         assert!(!has(&effects, &Effect::RunStart));
+        assert!(!has(&effects, &Effect::SpawnWatch));
         assert_eq!(logs(&effects), ["keep-alive: the desktop app runs; not starting"]);
-        app.handle(Event::WatchExit(Some(3)));
-        let effects = app.handle(Event::Tick { now: B + 15, desktop_running: true });
-        assert!(has(&effects, &Effect::SpawnWatch));
-        assert!(logs(&effects).is_empty());
+        assert!(logs(&app.handle(Event::Tick { now: B + 15, desktop_running: true })).is_empty());
+        // It still watches the dial: it looks again 15 s after the last down.
+        assert_eq!(app.handle(Event::Tick { now: B + 20, desktop_running: true }), [Effect::SpawnWatch]);
     }
 
     #[test]

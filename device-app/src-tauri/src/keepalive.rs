@@ -143,6 +143,21 @@ mod tests {
         }
     }
 
+    /// Ticks every 5 s from `from` to `to`, both included, each watch it looks at ending down at once: what the ticks
+    /// gave, by second after B.
+    fn ticks(keep: &mut KeepAlive, from: u64, to: u64, desktop_running: bool) -> Vec<(u64, Keep)> {
+        let mut gave = Vec::new();
+        for now in (from..=to).step_by(5) {
+            if let Some(kept) = keep.tick(now, desktop_running) {
+                if kept == Keep::SpawnWatch {
+                    keep.watch_exit(Some(3), now);
+                }
+                gave.push((now - B, kept));
+            }
+        }
+        gave
+    }
+
     /// Two downs in a row at B, with the watch looked at again at B+5 in between.
     fn two_downs() -> KeepAlive {
         let mut keep = KeepAlive::new();
@@ -190,6 +205,16 @@ mod tests {
     }
 
     #[test]
+    fn after_two_downs_it_looks_again_every_15_s_until_the_slot() {
+        let mut keep = KeepAlive::new();
+        keep.watch_exit(Some(3), B + 20);
+        assert_eq!(keep.tick(B + 25, false), Some(Keep::SpawnWatch));
+        keep.watch_exit(Some(3), B + 25);
+        assert_eq!(ticks(&mut keep, B + 30, B + 65, false), [40, 55].map(|at| (at, Keep::SpawnWatch)));
+        assert_eq!(keep.tick(B + 70, false), Some(Keep::RunStart));
+    }
+
+    #[test]
     fn a_watch_that_connects_resets_the_count() {
         let mut keep = KeepAlive::new();
         keep.watch_exit(Some(3), B);
@@ -202,7 +227,9 @@ mod tests {
     #[test]
     fn never_while_the_desktop_app_runs() {
         let mut keep = two_downs();
-        assert_eq!(keep.tick(B + 10, true), Some(Keep::SpawnWatch));
+        // It still watches the dial, 15 s after each down.
+        let looks = [20, 35, 50, 65, 80, 95, 110, 125].map(|at| (at, Keep::SpawnWatch));
+        assert_eq!(ticks(&mut keep, B + 10, B + 125, true), looks);
         assert_eq!(keep.daemon(), Daemon::Starting);
     }
 
@@ -234,6 +261,12 @@ mod tests {
         let mut keep = KeepAlive::new();
         keep.watch_exit(Some(4), B + 3600);
         assert_eq!(keep.tick(B, false), Some(Keep::SpawnWatch));
+
+        let mut keep = KeepAlive::new();
+        keep.watch_exit(Some(3), B + 3600);
+        assert_eq!(keep.tick(B + 3605, false), Some(Keep::SpawnWatch));
+        keep.watch_exit(Some(3), B + 3605);
+        assert_eq!(keep.tick(B + 5, false), Some(Keep::SpawnWatch));
     }
 
     #[test]
@@ -256,8 +289,8 @@ mod tests {
         keep.watch_exit(Some(3), B + 11);
         assert_eq!(keep.tick(B + 12, false), Some(Keep::SpawnWatch));
         keep.watch_exit(Some(3), B + 13);
-        assert_eq!(keep.tick(B + 15, false), None);
-        quiet(&mut keep, B + 20, B + 65);
+        // In the slot, but the same minute: it only looks again, 15 s after each down.
+        assert_eq!(ticks(&mut keep, B + 15, B + 65, false), [30, 45, 60].map(|at| (at, Keep::SpawnWatch)));
         assert_eq!(keep.tick(B + 70, false), Some(Keep::RunStart));
         assert_eq!(keep.daemon(), Daemon::Starting);
     }
