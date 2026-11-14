@@ -113,7 +113,7 @@ Checked at `b79d017c41`.
 | `cli/src/testing/isolatedTmux.ts`, `.spec.ts` | the root's removal also removes a folder made read-only in it (moved to `removeRoot.ts` in the final review, which `vitest.setup.ts` uses too) | 6, 9 |
 | `cli/e2e/leftBehind.e2e.ts` | the close's tests (6), the worker's (7), grid's (8) | 6, 7, 8 |
 | `cli/e2e/harness/reaperProcess.mjs`, `abandonedWorker.ts` | the reaper sweeps a root before removing it, and removes a folder made read-only in it | 7 |
-| `cli/vitest.setup.ts`, `cli/src/testing/vitestSetupFolders.spec.ts` | the setup removes the home, data and runtime folders it made when the file ends; the spec, new | 9 |
+| `cli/vitest.setup.ts`, `cli/src/testing/vitestSetupFolders.spec.ts`, `cli/src/testing/removeRoot.ts` | the setup removes the home, data and runtime folders it made when the file ends, or as its worker ends when the file ran no afterAll (`removeRootSync`); the spec, new | 9 |
 | `cli/e2e/harness/daemon.ts`, `cli/e2e/agentBrowser.e2e.ts`, `cli/e2e/harness/realBackend.ts` | a daemon's TMPDIR is in its root, and the screenshot test's check; `backend.stop()` throws the closes that failed | 10 |
 
 ## Review Focus
@@ -883,10 +883,12 @@ every test file. Each time it makes `adapter-test-home-*`, `adapter-test-data-*`
 `os.tmpdir()` and never removes them. The unit suite's are inside the run's own folder, which goes with the run
 (`src/__fixtures__/vitestRun.ts`); the end-to-end suite has none, so every file left three empty folders in TMPDIR.
 Nothing reads them after the file: the next file's setup makes and points the environment at folders of its own.
+They are made at import, since `config/env.ts` reads the environment then, so their removal cannot wait for a test.
 
 **Files:**
 - Create: `cli/src/testing/vitestSetupFolders.spec.ts`
 - Modify: `cli/vitest.setup.ts` (the three `mkdtempSync` lines, 37, 46 and 47)
+- Modify: `cli/src/testing/removeRoot.ts` (`removeRootSync`, added in the final review's fix)
 
 - [ ] **Step 1: Write the failing spec**
 
@@ -894,7 +896,9 @@ It runs Vitest as a child (`node node_modules/vitest/vitest.mjs run`, Vitest's o
 environment) on a project of its own under a `mkdtempSync` root, with `TMPDIR`, `TEMP` and `TMP` set to `<root>/tmp`.
 The project's config has `globals: true` and `setupFiles: [<cli>/vitest.setup.ts]`; it holds one file that passes
 and one that fails, each of whose own `afterAll` records `HOME`, `ADAPTER_DATA_DIR` and `ADAPTER_RUNTIME_DIR` with
-whether each is still there. `afterEach` removes the root.
+whether each is still there, and one whose tests are all skipped (`describe.skipIf(true)`), as
+`e2e/socketChurn.e2e.ts`'s are without `HARNESS_E2E_SERVICES_DIR`: Vitest runs no `afterAll` of such a file, so it
+records nothing, and only the last line below holds it. `afterEach` removes the root.
 
 ```ts
 expect(code).toBe(1)
@@ -914,10 +918,19 @@ Commit the spec alone: `e2e: a spec that vitest.setup.ts removes the folders it 
 - [ ] **Step 3: Remove them when the file ends**
 
 Keep each folder's path as the setup makes it, and register one `afterAll` that removes the three
-(`rmSync(folder, { recursive: true, force: true })`). Registered before any of the file's own, it runs after them all
-(Vitest's `sequence.hooks` is `stack`), once the file's `afterAll` has closed the daemons that used them, and it runs
-when the file fails too. The paths are kept, not read from the environment then, so a test that changed `HOME` is
-never followed elsewhere.
+(`removeRoot`, which also removes a folder made read-only in them). Registered before any of the file's own, it runs
+after them all (Vitest's `sequence.hooks` is `stack`), once the file's `afterAll` has closed the daemons that used
+them, and it runs when the file fails too. The paths are kept, not read from the environment then, so a test that
+changed `HOME` is never followed elsewhere.
+
+A file that runs no `afterAll` (its tests all skipped) has its three removed as its worker ends, when the file is over
+and nothing of it uses them. Vitest 4's forks pool runs each file in a worker of its own (`isolate`), and after the
+worker's teardown stops it with SIGTERM, then SIGKILL 500 ms later: SIGTERM's default ends it with no `exit`, while a
+worker that drains by itself first emits only `exit` (both seen with a child Vitest, 2026-11-14). So the setup
+registers `removeRootSync` on `exit` and once on `SIGTERM`; the SIGTERM listener then passes the signal on to its
+default (`process.kill(process.pid, 'SIGTERM')`) when no other listener has taken it, so the worker still ends. The
+`afterAll` removes both listeners before it removes the folders. On Windows a worker's kill runs no listener; there
+only the unit suite runs this setup, whose folders go with the run's own (`vitest.tmpdir.ts`).
 
 - [ ] **Step 4: Run the checks**
 
@@ -926,6 +939,7 @@ cd cli
 npx vitest run src/testing/vitestSetupFolders.spec.ts src/config/envIsolation.spec.ts                           # 8 passed
 mkdir -p /private/tmp/claude-502/hyg-t9
 TMPDIR=/private/tmp/claude-502/hyg-t9/ caffeinate -i npx vitest run --config vitest.e2e.config.ts e2e/modelSwitch.e2e.ts   # 1 passed
+env -u HARNESS_E2E_SERVICES_DIR TMPDIR=/private/tmp/claude-502/hyg-t9/ caffeinate -i npx vitest run --config vitest.e2e.config.ts e2e/socketChurn.e2e.ts   # 5 skipped
 ls -d /private/tmp/claude-502/hyg-t9/adapter-test-* 2>/dev/null                                                  # prints nothing
 ```
 
