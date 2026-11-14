@@ -311,6 +311,8 @@ describe('daemonPost', () => {
     ['a Write to a path past ASCII', 'Write', { file_path: '/tmp/café.txt', content: 'x' }, '/tmp/café.txt'],
     ['an Edit of a path with a newline', 'Edit', { file_path: '/repo/a.ts\n/etc/hosts', old_string: 'a', new_string: 'b' }, '/repo/a.ts /etc/hosts'],
     ['a Read of a path of 201 bytes', 'Read', { file_path: `/repo/${'a'.repeat(195)}` }, `/repo/${'a'.repeat(194)}`],
+    ['a Write to a path that opens with a space', 'Write', { file_path: ' /repo/a.ts', content: 'x' }, '/repo/a.ts'],
+    ['a Read of a path that ends with a space', 'Read', { file_path: '/repo/a.ts ' }, '/repo/a.ts'],
     ['a NotebookEdit of a path past ASCII', 'NotebookEdit', { notebook_path: '/repo/日本.ipynb', new_source: 'x' }, '/repo/日本.ipynb'],
     ['a WebFetch of a host in other letters', 'WebFetch', { url: 'https://café.example/menu', prompt: 'x' }, 'xn--caf-dma.example'],
     ['a WebFetch of a URL with no host', 'WebFetch', { url: 'file:///etc/passwd', prompt: 'x' }, 'WebFetch'],
