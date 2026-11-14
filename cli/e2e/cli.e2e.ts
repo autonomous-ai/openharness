@@ -20,6 +20,7 @@ import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
 import { LAUNCHD_LABEL, SYSTEMD_UNIT, launchdPlist, systemdUnit } from '../src/harnessd/platform.js'
+import { savedDaemonPort } from '../src/lib/daemonRecord.js'
 import { LocalClient } from './harness/client.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 
@@ -106,7 +107,10 @@ const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 /** The core a master starts on an installed bundle: from the core's entry in the lean bundle it carries,
  *  written out into the data folder. */
 const leanCore = (m: Machine) => new RegExp(` ${escape(join(m.daemon.dataDir, 'lean'))}/[0-9a-f]{16}/harnessd-core\\.mjs __run$`)
-const statusOf = async (m: Machine) => await (await fetch(`http://127.0.0.1:${m.daemon.port}/api/status`)).json() as Record<string, any>
+/** The port this machine's daemon bound, as the daemon recorded it (`daemon-<configured>.json`): `harness start` runs
+ *  it, so the harness never sees its output and cannot say which port it took. */
+const portOf = (m: Machine): number => savedDaemonPort(m.daemon.dataDir, m.daemon.configuredPort)
+const statusOf = async (m: Machine) => await (await fetch(`http://127.0.0.1:${portOf(m)}/api/status`)).json() as Record<string, any>
 
 describe('harness start, stop and status from the installed bundle', () => {
   let machine: Machine | undefined
@@ -172,7 +176,7 @@ describe('harness start, stop and status from the installed bundle', () => {
     const started = await harness(m, 'start')
     expect(started.status, said(started)).toBe(0)
     seen.add(pidOf(m)!)
-    expect((await fetch(`http://127.0.0.1:${m.daemon.port}/api/health`)).ok).toBe(true)
+    expect((await fetch(`http://127.0.0.1:${portOf(m)}/api/health`)).ok).toBe(true)
     expect(existsSync(join(dirname(dirname(m.node)), 'libexec', 'harnessd', 'harnessd'))).toBe(false)
     const stopped = await harness(m, 'stop')
     expect(stopped.status, said(stopped)).toBe(0)
@@ -185,7 +189,7 @@ describe('harness start, stop and status from the installed bundle', () => {
     expect(started.stdout).toContain('● started · this computer only (not signed in)')
     const master = pidOf(m)!
     expect(alive(master)).toBe(true)
-    expect((await fetch(`http://127.0.0.1:${m.daemon.port}/api/health`)).ok).toBe(true)
+    expect((await fetch(`http://127.0.0.1:${portOf(m)}/api/health`)).ok).toBe(true)
     const status = await statusOf(m)
     expect(status.pid).toBe(master)
     const core = status.corePid as number

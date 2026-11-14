@@ -3,7 +3,6 @@ import { once } from 'node:events'
 import { createRequire } from 'node:module'
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { promisify } from 'node:util'
-import { createServer as netServer } from 'node:net'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
@@ -13,6 +12,7 @@ import { IsolatedDaemon, until as untilDaemon } from './daemon.js'
 import { LocalClient } from './client.js'
 import { forgetGroup, watchGroup } from './reaper.js'
 import { ownProcessGroup } from '../../src/lib/windows/noWindow.js'
+import { backendListeningPortIn } from '../../src/testing/backendListeningPort.js'
 
 const exec = promisify(execFile)
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
@@ -57,14 +57,6 @@ export async function stopAll(daemons: Array<Pick<IsolatedDaemon, 'close'>>, sto
   // One that throws, at once or later, still lets the others stop: Mongo and Redis come last.
   for (const s of [...stops].reverse()) await (async () => s())().catch(() => {})
   if (failed.length) throw new AggregateError(failed, `${failed.length} daemon(s) under test did not close: ${failed.map(String).join('; ')}`)
-}
-
-async function freePort(): Promise<number> {
-  const s = netServer().listen(0, '127.0.0.1')
-  await once(s, 'listening')
-  const port = (s.address() as { port: number }).port
-  await new Promise(r => s.close(r))
-  return port
 }
 
 /** A wait that cannot end well: thrown by a check, it ends the wait at once instead of being tried again. */
@@ -118,7 +110,6 @@ async function boot(accounts: Account[], log: (line: string) => void, stops: Arr
   await once(sso, 'listening')
   stops.push(() => { sso.closeAllConnections(); sso.close() })
   log(`services ${Date.now() - t}ms`)
-  const port = await freePort(), proxyPort = await freePort()
   const env = { ...process.env, NODE_ENV: 'test', DATABASE_URL: mongo.getUri('spike'),
     REDIS_URL: `redis://127.0.0.1:${redisPort}`, HARNESS_BILLING_ENABLED: 'false', MESH_ENABLED: 'false',
     SSO_PROFILE_URL: `http://127.0.0.1:${(sso.address() as { port: number }).port}/profile`,
@@ -131,11 +122,14 @@ async function boot(accounts: Account[], log: (line: string) => void, stops: Arr
   t = Date.now()
   const logPath = join(mkdtempSync(join(tmpdir(), 'spike-backend-')), 'backend.log')
   const logFd = openSync(logPath, 'a')
+  // PORT=0 and PORT_APP_PROXY=0: the system picks each port as the backend binds it, and the harness reads the port
+  // the backend bound from its log. A port picked here ahead could be taken before the backend bound it, as the
+  // daemon's was in cli-e2e run 43568618113 (shard 2, turns.e2e.ts), and the harness then waited on whoever held it.
   // Ended by the worker's reaper should the worker go without stopping it (reaper.ts): one killed run's backend was
   // still running 1.5 days later (2026-11-11).
   const child: ChildProcess = spawn(process.execPath, ['--import', 'tsx', 'src/server.ts'], {
     cwd: join(repo, 'backend'), stdio: ['ignore', logFd, logFd], ...ownProcessGroup(),
-    env: { ...env, PORT: String(port), PORT_APP_PROXY: String(proxyPort), BACKEND_INSTANCE_ID: 'spike-0' } })
+    env: { ...env, PORT: '0', PORT_APP_PROXY: '0', BACKEND_INSTANCE_ID: 'spike-0' } })
   if (child.pid) {
     watchGroup(child.pid)
     // Whatever it started goes with it.
@@ -150,18 +144,21 @@ async function boot(accounts: Account[], log: (line: string) => void, stops: Arr
     await exited
     clearTimeout(timer)
   })
-  const url = `http://127.0.0.1:${port}`
+  let port: number | null = null
   try {
     // A backend that died while starting (a bad migration, a missing setting) fails at once, not at the deadline. Ready, not
     // only alive: /api/health answers before its Redis is connected, and a first request then failed (COMPUTER_LOCK_UNAVAILABLE).
     await until('backend readiness', async () => {
       if (child.exitCode !== null || child.signalCode !== null) throw new WaitEnded(`the backend exited (${child.exitCode ?? child.signalCode}) while starting`)
-      return (await fetch(`${url}/api/ready`, { signal: AbortSignal.timeout(5_000) })).ok
+      port ??= backendListeningPortIn(logPath)
+      if (port === null) return false
+      return (await fetch(`http://127.0.0.1:${port}/api/ready`, { signal: AbortSignal.timeout(5_000) })).ok
     })
   } catch (error) {
     throw new Error(`${(error as Error).message}; backend log ${logPath}:\n${readFileSync(logPath, 'utf8').slice(-2000)}`)
   }
   log(`backend ${Date.now() - t}ms`)
+  const url = `http://127.0.0.1:${port}`
   const backend: RealBackend = {
     url, wsUrl: `ws://127.0.0.1:${port}`, logPath,
     api: (a, path, method, body) => backendApi(url, a, path, method, body),

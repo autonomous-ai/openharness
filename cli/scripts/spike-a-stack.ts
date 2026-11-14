@@ -98,7 +98,7 @@ const { spawnSync } = require('node:child_process')
 const fs = require('node:fs')
 const args = process.argv.slice(2)
 fs.appendFileSync(${JSON.stringify(cliLog)}, new Date().toISOString() + ' ' + JSON.stringify(args) + ' PORT=' + process.env.PORT + ' HOME=' + process.env.HOME + '\\n')
-if (process.env.PORT !== ${JSON.stringify(String(B.daemon.port))} || process.env.HOME !== ${JSON.stringify(home)}) { console.error('spike guard: wrong environment'); process.exit(1) }
+if (process.env.PORT !== ${JSON.stringify(String(B.daemon.configuredPort))} || process.env.HOME !== ${JSON.stringify(home)}) { console.error('spike guard: wrong environment'); process.exit(1) }
 if (args[0] === 'version') { console.log('0.0.1-dev.spike'); process.exit(0) }\nconst blocked = ['start', 'stop', 'restart', 'login', 'logout', 'update', 'uninstall', 'install']
 if (blocked.includes(args[0])) { fs.appendFileSync(${JSON.stringify(cliLog)}, '  blocked\\n'); process.exit(args[0] === 'login' || args[0] === 'logout' ? 1 : 0) }
 const r = spawnSync(process.execPath, ['--import', 'tsx', 'src/cli.ts', ...args], { cwd: ${JSON.stringify(CLI_ROOT)}, stdio: 'inherit', env: process.env })

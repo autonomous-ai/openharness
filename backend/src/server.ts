@@ -269,7 +269,9 @@ async function start(): Promise<void> {
   })
 
   await app.listen({ port: env.PORT, host: '0.0.0.0' })
-  logger.info(`backend listening on ${env.PORT}`)
+  // The bound port, not the configured one: with PORT=0 the system picks it, and the CLI's end-to-end harness and
+  // stack scripts read it from this line (cli/src/testing/backendListeningPort.ts). A fixed PORT reads as before.
+  logger.info(`backend listening on ${(app.server.address() as net.AddressInfo).port}`)
 }
 
 start().catch((err) => {

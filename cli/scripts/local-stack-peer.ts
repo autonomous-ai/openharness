@@ -16,6 +16,8 @@ import { WebSocket, WebSocketServer } from 'ws'
 import { newIdentity, b64e } from '../src/lib/e2ee/core.js'
 import { RelaySessionCrypto } from '../src/lib/e2ee/relayClient.js'
 import { decodeTerminalLocal, encodeTerminalLocal } from '../src/lib/terminalBinary.js'
+import { readDaemonRecord } from '../src/lib/daemonRecord.js'
+import { backendListeningPortIn } from '../src/testing/backendListeningPort.js'
 
 if (process.env.HARNESS_STACK_E2E !== '1') throw new Error('Opt in with HARNESS_STACK_E2E=1')
 const exec = promisify(execFile)
@@ -41,6 +43,8 @@ async function until(label: string, check: () => Promise<boolean>, ms = 30_000) 
   }
   throw new Error(`Timed out: ${label}; logs: ${root}`)
 }
+// Only the daemon's configured PORT, which names its socket and record: a port picked here and bound later can be
+// taken in between (cli-e2e run 43568618113, shard 2), so every TCP port this script talks to is one a process bound.
 async function freePort() {
   const server = netServer()
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
@@ -80,7 +84,7 @@ process.on('uncaughtException', error => { console.error(error); void cleanup(1)
 process.on('unhandledRejection', error => { console.error(error); void cleanup(1) })
 
 try {
-  const [mongoPort, redisPort, backendPort, proxyPort, cliPort] = await Promise.all(Array.from({ length: 5 }, freePort))
+  const cliPort = await freePort()
   const sso = createServer((req, res) => {
     res.setHeader('content-type', 'application/json')
     if (req.headers.authorization !== `Bearer ${token}`) { res.writeHead(401); res.end('{}'); return }
@@ -88,15 +92,22 @@ try {
   })
   await new Promise<void>(resolve => sso.listen(0, '127.0.0.1', resolve))
   const ssoPort = (sso.address() as { port: number }).port
+  const published: number[] = []
   for (const [kind, port, image, args] of [
-    ['mongo', mongoPort, 'mongo:7', ['--replSet', 'rs0', '--bind_ip_all']],
-    ['redis', redisPort, 'redis:7-alpine', []],
+    ['mongo', 27017, 'mongo:7', ['--replSet', 'rs0', '--bind_ip_all']],
+    ['redis', 6379, 'redis:7-alpine', []],
   ] as const) {
     const name = `harness-stack-${kind}-${process.pid}`
     containers.push(name)
+    // Docker picks the host port as it binds it, and says which.
     await exec('docker', [...docker, 'run', '--rm', '-d', '--name', name,
-      '-p', `127.0.0.1:${port}:${kind === 'mongo' ? 27017 : 6379}`, image, ...args], { timeout: 120_000 })
+      '-p', `127.0.0.1::${port}`, image, ...args], { timeout: 120_000 })
+    const { stdout } = await exec('docker', [...docker, 'port', name, `${port}/tcp`], { timeout: 30_000 })
+    const bound = /:(\d+)\s*$/m.exec(stdout)?.[1]
+    if (!bound) throw new Error(`docker port ${name} ${port}/tcp said no port: ${stdout.trim()}`)
+    published.push(Number(bound))
   }
+  const [mongoPort, redisPort] = published
   await until('Mongo replica set', async () => {
     await exec('docker', [...docker, 'exec', containers[0]!, 'mongosh', '--quiet', '--eval',
       'try { if (rs.status().ok === 1) quit(0) } catch (_) { try { rs.initiate({_id:"rs0",members:[{_id:0,host:"127.0.0.1:27017"}]}) } catch (_) {} } quit(1)'])
@@ -111,7 +122,7 @@ try {
     client.on('error', () => finish(false))
     client.on('timeout', () => finish(false))
   }))
-  const backendEnv = { ...process.env, NODE_ENV: 'test', PORT: String(backendPort), PORT_APP_PROXY: String(proxyPort),
+  const backendEnv = { ...process.env, NODE_ENV: 'test', PORT: '0', PORT_APP_PROXY: '0',
     DATABASE_URL: `mongodb://127.0.0.1:${mongoPort}/harness?replicaSet=rs0&directConnection=true`,
     REDIS_URL: `redis://127.0.0.1:${redisPort}`, HARNESS_BILLING_ENABLED: 'false', MESH_ENABLED: 'false',
     SSO_PROFILE_URL: `http://127.0.0.1:${ssoPort}/profile`, SSO_IDENTITY_URL: '', TERMINAL_P2P_ROLLOUT_PERCENT: '0',
@@ -119,9 +130,13 @@ try {
   await exec(join(repo, 'backend/node_modules/.bin/prisma'), ['db', 'push', '--skip-generate'],
     { cwd: join(repo, 'backend'), env: backendEnv, timeout: 60_000 })
   run('backend', join(repo, 'backend'), ['--import', 'tsx', 'src/server.ts'], backendEnv)
-  const backendUrl = `http://127.0.0.1:${backendPort}`
+  let backendPort: number | null = null
   // Ready, not only alive: /api/health answers before its Redis is connected (cli/e2e/harness/realBackend.ts).
-  await until('backend readiness', async () => (await fetch(`${backendUrl}/api/ready`, { signal: AbortSignal.timeout(5_000) })).ok)
+  await until('backend readiness', async () => {
+    backendPort = backendListeningPortIn(join(root, 'backend.log'))
+    return backendPort !== null && (await fetch(`http://127.0.0.1:${backendPort}/api/ready`, { signal: AbortSignal.timeout(5_000) })).ok
+  })
+  const backendUrl = `http://127.0.0.1:${backendPort}`
   const resolved = await fetch(`${backendUrl}/api/machines/resolve-computer`, { method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${token}`, 'x-autonomous-env': 'prod' },
     body: JSON.stringify({ computerId, label: 'E2E fixture' }) })
@@ -172,12 +187,17 @@ createServer((_, res) => res.end('Fixture viewer')).listen(Number(process.env.HA
     { cwd: join(repo, 'cli'), env: daemonEnv, timeout: 30_000 })
   async function bootDaemon() {
     daemon = run('daemon', join(repo, 'cli'), ['--import', 'tsx', 'src/cli.ts', '__run'], daemonEnv)
+    let port: number | undefined
+    // Read on every attempt: a first start has no record yet, and a daemon started again may bind another port.
     await until('daemon connection', async () => {
-      const status = await fetch(`http://127.0.0.1:${cliPort}/api/status`, { headers: { 'x-adapter-local': '1' } }).then(r => r.json()) as { connected?: boolean }
+      port = readDaemonRecord(dataDir, cliPort)?.port
+      if (port === undefined) return false
+      const status = await fetch(`http://127.0.0.1:${port}/api/status`, { headers: { 'x-adapter-local': '1' }, signal: AbortSignal.timeout(5_000) }).then(r => r.json()) as { connected?: boolean }
       return status.connected === true
     })
+    return port!
   }
-  await bootDaemon()
+  const localPort = await bootDaemon()
 
   // Desktop sees its normal loopback protocol; the other leg uses the real
   // backend plus the production signed handshake and encrypted terminal codec.
@@ -227,7 +247,7 @@ createServer((_, res) => res.end('Fixture viewer')).listen(Number(process.env.HA
     })().catch(error => { res.writeHead(500); res.end(String(error)) })
   })
   await new Promise<void>(resolve => control.listen(0, '127.0.0.1', resolve))
-  console.log(JSON.stringify({ machineId, workspace, localPort: cliPort,
+  console.log(JSON.stringify({ machineId, workspace, localPort,
     remotePort: (bridge.address() as { port: number }).port,
     controlPort: (control.address() as { port: number }).port, logs: root }))
 } catch (error) { console.error(error); await cleanup(1) }
