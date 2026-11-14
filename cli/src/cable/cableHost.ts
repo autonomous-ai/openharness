@@ -42,7 +42,7 @@ import { AppFilter } from './hosts/appFilter.js'
 import { appDisplayName, hostDisplayName } from './hosts/hostDetect.js'
 import type { HostEntry, HostRegistry } from './hosts/registry.js'
 import { AppRings, DialRing } from './hosts/select.js'
-import { capsLetters, type AppList, type AppPick, type HostAgent, type SwitchCause } from './hosts/types.js'
+import { capsLetters, type AppList, type AppPick, type HostAgent, type PaneSwitch, type SwitchCause } from './hosts/types.js'
 
 /** One completed turn's recap, as the mirror keeps them. */
 
@@ -98,6 +98,8 @@ export interface CableHostWiring {
   listModels?: (agentId: string) => Promise<Array<{ id: string }>>
   /** The dial moved to another agent — the desktop window should show that agent on its own machine. */
   focused?: (machineId: string, agentId: string) => void
+  /** What came of a swipe that rested on an agent of another app, or was superseded before it rested: for its count. */
+  swiped?: (outcome: PaneSwitch | 'superseded') => void
   /**
    * A notification was tapped: the window gives that agent a tile of its own. With `reason`
    * `'question'` it was a question screen instead, and the window only brings the agent forward.
@@ -878,7 +880,8 @@ export class DaemonCableHost implements CableHost {
     // grew panes for remote machines. The hand is still at THIS desk; the pane it wants in front of it
     // may simply belong to a machine somewhere else, and the app is the side that decides what it can do
     // about an agent it does not have.
-    // Not for an agent of another app: the dial sends focus on every swipe, and only a tap may switch that app.
+    // Not for an agent of another app: the dial sends focus on every swipe, and only a tap brings that app forward.
+    // A swipe that rests on it shows its pane inside the app (swipeEnded); here it is only seen.
     const outside = this.outsideEntry(agentId)
     if (outside) { outside.source.markSeen?.(agentId); return }
     const machineId = this.machineOf(agentId)
@@ -893,6 +896,21 @@ export class DaemonCableHost implements CableHost {
     // only question the old arcs answered, and there is nothing left to replace.
     this.wiring.log(`cable: focus ${machineId}/${agentId}`)
     this.wiring.focused?.(machineId, agentId)
+  }
+
+  /** Whether a swipe that rests on the agent shows its pane: only one of another app, in a pane that app can show. */
+  swipeSwitches(agentId: string): boolean {
+    const outside = this.outsideEntry(agentId)
+    return outside?.source.hasPane?.(outside.agent) ?? false
+  }
+
+  /** A swipe that rested shows the agent's pane, and its app stays where it is; one superseded runs nothing. */
+  swipeEnded(agentId: string, how: 'rest' | 'superseded'): void {
+    if (how === 'superseded') { this.wiring.swiped?.('superseded'); return }
+    // The agent may have gone, or left its pane, since the dial turned to it.
+    const outside = this.outsideEntry(agentId)
+    const shown = outside?.source.showPane?.(outside.agent) ?? Promise.resolve<PaneSwitch>('failed')
+    void shown.catch((): PaneSwitch => 'failed').then((outcome) => this.wiring.swiped?.(outcome))
   }
 
   /**

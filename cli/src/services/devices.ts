@@ -312,6 +312,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // The dial's Fork: the same path the window's `agent_fork` takes, then `forked` above lands on it.
     forkAgent: (agentId) => core.agents.fork(agentId),
     focused: (machineId, agentId) => core.clients.sendLocal({ type: 'dial_focus', payload: { machineId, agentId } }),
+    // The outcome only: never the agent, its session or its terminal.
+    swiped: (outcome) => log(`[device] swipe · ${outcome}`),
     swarmSelected: (swarmId) => core.clients.sendLocal({ type: 'dial_swarm', payload: { swarmId } }),
     scrolled: (phase, dy, velocity) => core.clients.sendLocal({ type: 'dial_scroll', payload: { phase, dy, velocity } }),
     // Gestures stay at this desk. The device inventory and its settings also reach the owner's other
