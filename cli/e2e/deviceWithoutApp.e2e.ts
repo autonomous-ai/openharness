@@ -255,7 +255,8 @@ describe('the device without the app', () => {
     const dial = await desk.plug('E2E-A', 'e2:e0:00:00:00:0a')
     // Found by the scan the dial's attach runs (4-6 s after the plug here), not the next one a minute later.
     const roster = await showing(dial, 'the agent already running listed', (r) => ids(r).includes(engine.id), 0, 15_000)
-    expect(roster.rows.find((r) => r.id === engine.id)).toMatchObject({ engine: 'claude', host: 'terminal', caps: 's' })
+    // Named by its folder, read from its transcript as a terminal's Claude Code writes it.
+    expect(roster.rows.find((r) => r.id === engine.id)).toMatchObject({ name: 'in-ghostty', engine: 'claude', host: 'terminal', caps: 's' })
   })
 
   it('opening a window brings back the tab\'s list; closing it brings the machine list', async () => {
