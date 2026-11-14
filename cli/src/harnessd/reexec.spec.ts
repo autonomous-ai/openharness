@@ -41,6 +41,30 @@ describe('which bundle', () => {
     writeFileSync(file, '')
     expect(sha256File(file)).toBe(createHash('sha256').update('').digest('hex'))
   })
+
+  it('reads every file through one piece: no buffer per file, and nothing of one file hashed into the next', () => {
+    // A lean folder in small: many files, the longest first, so every one after it is read into a piece that
+    // still holds the end of a longer file.
+    const files = Array.from({ length: 40 }, (_, index) => {
+      const path = join(dir, `chunk-${index}.mjs`)
+      const bytes = randomBytes(index === 0 ? 2 * 64 * 1024 + 5 : index * 97)
+      writeFileSync(path, bytes)
+      return { path, sha256: createHash('sha256').update(bytes).digest('hex') }
+    })
+    // Watched from here on: the one piece the module holds was made as it loaded.
+    const allocators = (['alloc', 'allocUnsafe', 'allocUnsafeSlow'] as const).map((name) => vi.spyOn(Buffer, name))
+    let hashes: string[]
+    let allocations: number
+    try {
+      hashes = files.map(({ path }) => sha256File(path))
+      // Counted before the spies are restored: restoring one clears its calls.
+      allocations = allocators.reduce((sum, allocator) => sum + allocator.mock.calls.length, 0)
+    } finally {
+      for (const allocator of allocators) allocator.mockRestore()
+    }
+    expect(allocations, 'buffers allocated while hashing 40 files').toBe(0)
+    expect(hashes).toEqual(files.map(({ sha256 }) => sha256))
+  })
 })
 
 describe('the state a master hands on', () => {
