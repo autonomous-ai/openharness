@@ -1016,6 +1016,45 @@ describe('the dial that shows one app at a time', () => {
     expect(appPicked).toHaveBeenCalledTimes(3)
     expect(appSwitched.mock.calls).toEqual([['pick'], ['notice']])
   })
+
+  /** Agents the open scan found, which nothing has told the app of yet: on the unknown app's page. */
+  const pending = (n: number): HostAgent[] =>
+    Array.from({ length: n }, (_, i) => agent(`t${i + 1}`, 'terminal', { appPending: true }))
+
+  it('agents not known yet are counted on Other\'s page and never win the default', async () => {
+    const host = setup([...pending(5), agent('g1', 'ghostty'), agent('g2', 'ghostty')])
+    const snapshot = await host.listAgentSnapshot({ apps: true })
+    expect(snapshot).toMatchObject({ total: 2, apps: { shown: 'ghostty' } })
+    expect(ids(snapshot)).toEqual(['g1', 'g2'])
+    expect(snapshot.apps?.apps).toEqual([
+      { id: 'terminal', name: 'Other', count: 5, waiting: 0 },
+      { id: 'ghostty', name: 'Ghostty', count: 2, waiting: 0 },
+    ])
+  })
+
+  it('only agents not known yet: Other is shown, and gives way when one of them is known to be in Ghostty', async () => {
+    const agents = pending(3)
+    const appSwitched = vi.fn()
+    const host = setup(agents, { appSwitched })
+    expect(await shown(host)).toBe('terminal')
+    // Its first hook says it runs in Ghostty.
+    agents[0] = agent('t1', 'ghostty')
+    const after = await host.listAgentSnapshot({ apps: true })
+    expect(after).toMatchObject({ total: 1, apps: { shown: 'ghostty' } })
+    expect(ids(after)).toEqual(['t1'])
+    expect(await shown(host)).toBe('ghostty')
+    expect(appSwitched.mock.calls).toEqual([['empty']])
+  })
+
+  it('a notice for an agent not known yet turns the dial to Other', async () => {
+    const host = setup([...pending(3), agent('g1', 'ghostty'), agent('g2', 'ghostty')])
+    expect(await shown(host)).toBe('ghostty')
+    expect(host.appOf('t2')).toBe('terminal')
+    expect(host.pickApp('terminal', 'notice')).toBe('switched')
+    const next = await host.listAgentSnapshot({ apps: true })
+    expect(next).toMatchObject({ total: 3, apps: { shown: 'terminal' } })
+    expect(ids(next)).toEqual(['t1', 't2', 't3'])
+  })
 })
 
 describe('cableEventFor', () => {

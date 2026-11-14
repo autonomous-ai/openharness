@@ -462,15 +462,40 @@ describe('ObservedSource codex and open sessions', () => {
     expect(src.list()[0]).toMatchObject({ host: 'orca', state: 'working' })
   })
 
-  it('a session the open scan found is in terminal until its first hook says its app', async () => {
+  it('a session the open scan found is not known yet, on the unknown app\'s page, until its first hook', async () => {
     const { src, open, owners, externals, ev } = setup()
     open.set('s1', 'terminal')
     owners.set('s1', { pid: 100, engine: 'claude' })
     externals.set('s1', { cwd: '/work/proj', transcriptPath: '/t/s1.jsonl' })
     await src.scanOpen()
-    expect(src.list()[0].app).toBe('terminal')
+    expect(src.list()[0]).toMatchObject({ app: 'terminal', appPending: true })
     src.ingest(ev('turn-start', { hostHints: { TERM_PROGRAM: 'ghostty' } }))
     expect(src.list()[0]).toMatchObject({ host: 'ghostty', app: 'ghostty' })
+    expect(src.list()[0]).not.toHaveProperty('appPending')
+  })
+
+  it('a hook with no hints makes it known to be in the unknown app', async () => {
+    const { src, open, owners, externals, ev } = setup()
+    open.set('s1', 'terminal')
+    owners.set('s1', { pid: 100, engine: 'claude' })
+    externals.set('s1', { cwd: '/work/proj', transcriptPath: '/t/s1.jsonl' })
+    await src.scanOpen()
+    expect(src.list()[0].appPending).toBe(true)
+    src.ingest(ev('session-start', { hostHints: {} }))
+    expect(src.list()[0].app).toBe('terminal')
+    expect(src.list()[0]).not.toHaveProperty('appPending')
+  })
+
+  it('an agent a hook told of first is never not known yet', async () => {
+    const { src, open, owners, externals, ev } = setup()
+    src.ingest(ev('session-start'))
+    expect(src.list()[0]).not.toHaveProperty('appPending')
+    open.set('s1', 'terminal')
+    owners.set('s1', { pid: 100, engine: 'claude' })
+    externals.set('s1', { cwd: '/work/proj', transcriptPath: '/t/s1.jsonl' })
+    await src.scanOpen()
+    expect(src.list()).toHaveLength(1)
+    expect(src.list()[0]).not.toHaveProperty('appPending')
   })
 
   it('a hook from zellij inside Ghostty gives host zellij and app ghostty', () => {
@@ -966,6 +991,16 @@ describe('ObservedSource and a waiting prompt', () => {
     expect(src.list()).toEqual([])
     expect(src.waitingOn(observedAgentId('claude', 'in-a-pane'))).toBeUndefined()
     expect(changes).not.toHaveBeenCalled()
+  })
+
+  it('a waiting prompt on a session the scan found leaves it not known yet', async () => {
+    const { src, open, owners, externals } = setup()
+    open.set('s1', 'terminal')
+    owners.set('s1', { pid: 100, engine: 'claude' })
+    externals.set('s1', { cwd: '/work/proj', transcriptPath: '/t/s1.jsonl' })
+    await src.scanOpen()
+    src.ingest(asked())
+    expect(src.list()[0]).toMatchObject({ state: 'needs-you', app: 'terminal', appPending: true })
   })
 
   it('asked for a session that ended changes nothing', () => {

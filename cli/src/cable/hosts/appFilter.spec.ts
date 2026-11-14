@@ -2,9 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AppFilter, FRONT_SETTLE_MS } from './appFilter.js'
 import type { SwitchCause } from './types.js'
 
-/** A filter over counts the test sets, a settle timer on vitest's fake clock, and a random function that draws only what is scripted. */
+/**
+ * A filter over counts the test sets, a settle timer on vitest's fake clock, and a random function that draws only what is
+ * scripted. The known agents are the counts unless a test gives its own.
+ */
 function setup(draws: number[] = []) {
   const counts = new Map<string, number>()
+  let known: Map<string, number> | undefined
   const switched = vi.fn<(cause: SwitchCause) => void>()
   const random = vi.fn(() => {
     const r = draws.shift()
@@ -15,10 +19,11 @@ function setup(draws: number[] = []) {
     const t = setTimeout(run, ms)
     return () => clearTimeout(t)
   })
-  const filter = new AppFilter({ after, random, counts: () => counts, switched })
-  const agents = (next: Record<string, number>): void => {
+  const filter = new AppFilter({ after, random, counts: () => counts, known: () => known ?? counts, switched })
+  const agents = (next: Record<string, number>, knownNext?: Record<string, number>): void => {
     counts.clear()
     for (const [app, n] of Object.entries(next)) counts.set(app, n)
+    known = knownNext && new Map(Object.entries(knownNext))
   }
   const causes = (): SwitchCause[] => switched.mock.calls.map(([cause]) => cause)
   return { filter, agents, random, after, causes }
@@ -288,5 +293,92 @@ describe('AppFilter', () => {
     settle()
     expect(filter.shown()).toBe('ghostty')
     expect(causes()).toEqual([])
+  })
+
+  describe('agents not known yet', () => {
+    it('the default counts known agents only: five not known yet lose to two in Ghostty', () => {
+      const { filter, agents } = setup()
+      agents({ terminal: 5, ghostty: 2 }, { ghostty: 2 })
+      expect(filter.shown()).toBe('ghostty')
+    })
+
+    it('known agents in the unknown app count as any app\'s: three there beat two in Ghostty', () => {
+      const { filter, agents } = setup()
+      agents({ terminal: 3, ghostty: 2 }, { terminal: 3, ghostty: 2 })
+      expect(filter.shown()).toBe('terminal')
+    })
+
+    it('a tie is drawn over known agents: one not known yet coming or going draws nothing new', () => {
+      const { filter, agents, random } = setup([0.9])
+      agents({ ghostty: 2, vscode: 2 })
+      expect(filter.shown()).toBe('vscode')
+      agents({})
+      expect(filter.shown()).toBeUndefined()
+      agents({ ghostty: 2, vscode: 2, terminal: 1 }, { ghostty: 2, vscode: 2 })
+      expect(filter.shown()).toBe('vscode')
+      agents({})
+      expect(filter.shown()).toBeUndefined()
+      agents({ ghostty: 2, vscode: 2, terminal: 3 }, { ghostty: 2, vscode: 2 })
+      expect(filter.shown()).toBe('vscode')
+      expect(random).toHaveBeenCalledTimes(1)
+    })
+
+    it('only agents not known yet: their page is the default', () => {
+      const { filter, agents, causes } = setup()
+      agents({ terminal: 3 }, {})
+      expect(filter.shown()).toBe('terminal')
+      expect(causes()).toEqual([])
+    })
+
+    it('that default gives way once an app has a known agent, as an empty switch', () => {
+      const { filter, agents, causes } = setup()
+      agents({ terminal: 3 }, {})
+      expect(filter.shown()).toBe('terminal')
+      agents({ terminal: 2, ghostty: 1 }, { ghostty: 1 })
+      expect(filter.shown()).toBe('ghostty')
+      expect(causes()).toEqual(['empty'])
+      expect(filter.shown()).toBe('ghostty')
+      expect(causes()).toEqual(['empty'])
+    })
+
+    it('that default stays while only its own agents become known', () => {
+      const { filter, agents, causes } = setup()
+      agents({ terminal: 3 }, {})
+      expect(filter.shown()).toBe('terminal')
+      agents({ terminal: 3 }, { terminal: 1 })
+      expect(filter.shown()).toBe('terminal')
+      expect(causes()).toEqual([])
+    })
+
+    it('a pick of the page of agents not known yet holds while a known app has more', () => {
+      const { filter, agents, causes } = setup()
+      agents({ terminal: 3, ghostty: 5 }, { ghostty: 5 })
+      expect(filter.shown()).toBe('ghostty')
+      expect(filter.pick('terminal')).toBe('switched')
+      expect([filter.shown(), filter.shown(), filter.shown()]).toEqual(['terminal', 'terminal', 'terminal'])
+      expect(causes()).toEqual(['pick'])
+    })
+
+    it('the app in front with only agents not known yet is shown, and holds', () => {
+      const { filter, agents, causes } = setup()
+      agents({ terminal: 3 }, {})
+      expect(filter.shown()).toBe('terminal')
+      filter.front('terminal')
+      settle()
+      agents({ terminal: 3, ghostty: 5 }, { ghostty: 5 })
+      expect(filter.shown()).toBe('terminal')
+      expect(causes()).toEqual([])
+    })
+
+    it('a pick that ended in front of an app with no agents does not give way', () => {
+      const { filter, agents, causes } = setup()
+      agents({ terminal: 3, ghostty: 5 }, { ghostty: 5 })
+      expect(filter.shown()).toBe('ghostty')
+      expect(filter.pick('terminal')).toBe('switched')
+      filter.front('none')
+      settle()
+      expect(filter.shown()).toBe('terminal')
+      expect(causes()).toEqual(['pick'])
+    })
   })
 })
