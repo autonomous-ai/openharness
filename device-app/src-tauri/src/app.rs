@@ -162,7 +162,7 @@ impl App {
                 self.first_screen(effects);
             }
             Event::Claude(status) if self.state.cli == CliState::Found => {
-                self.state.claude = status;
+                self.state.claude = status.or(self.state.claude.take());
                 if let Some((_, claude)) = &mut self.first_answers {
                     *claude = true;
                 }
