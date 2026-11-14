@@ -1208,6 +1208,31 @@ describe('the daemon socket', () => {
     expect(started.port).toBeGreaterThan(0)
     rmSync(dir, { recursive: true, force: true })
   })
+
+  // The approval hook posts over the socket only (deviceClaude/approve.ts): without one, this line is why the dial asks nothing.
+  it('says once, with no path, that dial approvals are off where it has no Unix socket', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const said = () => warn.mock.calls.filter(([line]) => String(line).includes('dial approvals'))
+    const dir = mkdtempSync('/tmp/hsock-')
+    const blocked = join(dir, 'daemon.sock')
+    writeFileSync(blocked, 'not a socket')
+    try {
+      for (const socketPath of [null, blocked]) {
+        const started = await startHookServer(0, { onRegistered: vi.fn(), onSessionEnd: vi.fn() }, { socketPath })
+        await new Promise<void>((resolve) => started.server.close(() => resolve()))
+        expect(said()).toEqual([['[hooks] dial approvals from the Claude Code plugin are off: no Unix socket']])
+        warn.mockClear()
+      }
+      const socketPath = join(dir, 'open.sock')
+      const started = await startHookServer(0, { onRegistered: vi.fn(), onSessionEnd: vi.fn() }, { socketPath })
+      await started.localSocket?.close()
+      await new Promise<void>((resolve) => started.server.close(() => resolve()))
+      expect(started.localSocket?.path).toBe(socketPath)
+      expect(said()).toEqual([])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
 })
 
 describe('the device history and dismiss endpoints', () => {

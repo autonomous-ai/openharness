@@ -2,13 +2,13 @@
  * The approval hook's client: what leaves the hook is four typed fields, and anything it cannot read or hear back is
  * no decision, so the terminal's own prompt decides. Every daemon here is a listener on a throwaway socket or port.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { createServer, type IncomingHttpHeaders, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { hookCredentialPath, hookTokenPath } from '../lib/hookAuth.js'
+import { hookTokenPath } from '../lib/hookAuth.js'
 import { unixSocketPath } from '../lib/localSocket.js'
 import { approvalSummary, daemonPost, runApprove } from './approve.js'
 
@@ -264,26 +264,17 @@ describe('daemonPost', () => {
     }
   })
 
-  // As hook/notify.mjs: over the socket the filesystem says who calls. A data folder and a home too long for a socket
-  // leave only the port, and there the hook-only token goes, never the credential (audit H1).
-  it('sends the hook token only where there is no socket, and never the credential', async () => {
-    const overSocket = await socketDaemon(answers(200, '{"decision":"deny"}'))
-    expect(await overSocket.post(BODY)).toBe('deny')
-    expect(overSocket.seen[0].headers['x-harness-hook-token']).toBeUndefined()
-
+  // Over the port nothing proves the answer is the daemon's: an account holding it while the daemon restarts could
+  // answer allow (audit H1). A data folder and a home too long for a socket leave only the port, so nothing is sent.
+  it('posts nothing, creates no hook token and prints nothing where there is no socket', async () => {
     const dir = folder('ap-')
     const dataDir = join(dir, 'd'.repeat(100))
     mkdirSync(dataDir, { mode: 0o700 })
     vi.stubEnv('HOME', join(dir, 'h'.repeat(100)))
-    expect(unixSocketPath(dataDir, PORT)).toBeNull()
-    const token = 't'.repeat(43), credential = 'c'.repeat(43)
-    writeFileSync(hookTokenPath(dataDir), `${token}\n`, { mode: 0o600 })
-    writeFileSync(hookCredentialPath(dataDir), `${credential}\n`, { mode: 0o600 })
     const overPort = await listener(0, answers(200, '{"decision":"allow"}'))
-    expect(await daemonPost(dataDir, overPort.port)(BODY)).toBe('allow')
-    expect(overPort.seen).toHaveLength(1)
-    expect(overPort.seen[0].headers['x-harness-hook-token']).toBe(token)
-    expect(JSON.stringify(overPort.seen[0])).not.toContain(credential)
-    expect(JSON.parse(overPort.seen[0].body)).toEqual(BODY)
+    expect(unixSocketPath(dataDir, overPort.port)).toBeNull()
+    expect(await approve(chunks(hookInput()), daemonPost(dataDir, overPort.port))).toEqual({ code: 0, out: [] })
+    expect(overPort.seen).toEqual([])
+    expect(existsSync(hookTokenPath(dataDir))).toBe(false)
   })
 })
