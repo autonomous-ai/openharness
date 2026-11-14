@@ -173,7 +173,8 @@ async function boot(accounts: Account[], log: (line: string) => void, stops: Arr
 
 /** An isolated daemon signed in as `a` against `backend`, with a client on its account machine. The daemon is
  *  closed by backend.stop(), also when this throws after creating it. */
-export async function signIn(backend: RealBackend, a: Account, env: Record<string, string> = {}): Promise<{ daemon: IsolatedDaemon; machineId: string; client: LocalClient }> {
+export async function signIn(backend: RealBackend, a: Account,
+  env: Record<string, string> = {}): Promise<{ daemon: IsolatedDaemon; machineId: string; client: LocalClient }> {
   const computerId = randomUUID()
   const r = await backend.api(a, '/api/machines/resolve-computer', 'POST', { computerId, label: a.name })
   if (r.status !== 200) throw new Error(`Sign-in of ${a.name} refused: ${r.status} ${JSON.stringify(r.body)}`)
