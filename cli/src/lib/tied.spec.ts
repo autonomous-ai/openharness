@@ -8,6 +8,22 @@ import { alive } from '../testing/spawnedRuns.js'
 import { tiedScene } from '../testing/tiedStandIn.js'
 import { execFileTied, spawnTied, type TiedExecError, type TiedExecOptions } from './tied.js'
 
+// The next spawn fails as Node's does out of fds (EMFILE), here in this process so its coverage counts: a child never
+// started, with no stdio, its error a tick later. A case below proves the same against a real limit, in a process of
+// its own.
+const outOfFds = vi.hoisted(() => ({ next: false }))
+vi.mock('node:child_process', async (load) => {
+  const real = await load<typeof import('node:child_process')>()
+  const spawn = (...args: unknown[]) => {
+    if (!outOfFds.next) return (real.spawn as (...args: unknown[]) => ChildProcess)(...args)
+    outOfFds.next = false
+    const child = new real.ChildProcess()
+    process.nextTick(() => child.emit('error', Object.assign(new Error('spawn /bin/sh EMFILE'), { code: 'EMFILE', syscall: 'spawn /bin/sh' })))
+    return child
+  }
+  return { ...real, spawn }
+})
+
 const windows = process.platform === 'win32'
 const MiB = 1024 ** 2
 const TIED = JSON.stringify(new URL('./tied.ts', import.meta.url).href)
@@ -209,6 +225,16 @@ spawnTied(${JSON.stringify(fake)}, [], { env: process.env, detached: true, stdio
     const said = output(standIn)
     expect(await closed(standIn), said.err).toEqual([0, null])
     expect(said.out).toBe('["EMFILE","EMFILE"]\n')
+  })
+
+  it('the same in this process: the child is handed back, its caller hears the error, and a call rejects with it', async () => {
+    onTestFinished(() => { outOfFds.next = false })
+    outOfFds.next = true
+    const child = spawnTied(process.execPath, [])
+    expect((await new Promise<NodeJS.ErrnoException>(done => child.once('error', done))).code).toBe('EMFILE')
+    outOfFds.next = true
+    const error = await execFileTied(process.execPath, [], { timeout: 60_000 }).then(() => null, (e: TiedExecError) => e)
+    expect([error?.code, error?.killed, error?.signal, error?.stdout, error?.stderr]).toEqual(['EMFILE', false, null, '', ''])
   })
 
   // A DSH command runs on its login shell's PATH, not the daemon's.
