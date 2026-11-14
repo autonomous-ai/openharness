@@ -51,7 +51,7 @@ No code task starts before both of these are on `main` (Task 1). The plan names 
 
 ## External gate: mockup approved
 
-A mockup of the `APPS` picker and of the face's app line is made by the main session in the main checkout's `devices/harness-device/mockup/` and reviewed by Diego. It is not a task of this plan. Diego has it open and has not answered yet (2026-11-14). Tasks 17 and 18 start only after it is approved, and draw what it shows. No other task waits on it. The unknown app's page and face line read "Other" (the PM, answer 4).
+A mockup of the `APPS` picker and of the face's app line is made by the main session in the main checkout's `devices/harness-device/mockup/` and reviewed by Diego. It is not a task of this plan. **Approved by Diego, 2026-11-14:** `/Users/duynguyen/go/src/github.com/autonomous-ai/autonomous-harness/devices/harness-device/mockup/dial-app-filter/index.html` (gitignored; its "today" images are `test_touch_ui.py` renders). Tasks 17 and 18 draw exactly what it shows and wait only for their dependencies. The unknown app's page and face line read "Other" (the PM, answer 4).
 
 ## Global Constraints
 
@@ -599,7 +599,7 @@ A mockup of the `APPS` picker and of the face's app line is made by the main ses
 
 ### Task 17: Round firmware: the shown app's name on the face
 
-**Layer:** firmware UI. **Depends on:** Task 16, and **mockup approved**. **Effort:** `high`.
+**Layer:** firmware UI. **Depends on:** Task 16 (the mockup is approved; draw what it shows). **Effort:** `high`.
 
 **Files** (under `devices/harness-device/firmware/`):
 - Modify: `main/ui/habitat/ui_habitat.c` — `render_home`'s `.chat` (:1807)
@@ -623,7 +623,7 @@ A mockup of the `APPS` picker and of the face's app line is made by the main ses
 
 ### Task 18: Round firmware: the `APPS` picker
 
-**Layer:** firmware UI. **Depends on:** Task 16, and **mockup approved**. **Effort:** `high`.
+**Layer:** firmware UI. **Depends on:** Task 16 (the mockup is approved; draw what it shows). **Effort:** `high`.
 
 **Files** (under `devices/harness-device/firmware/`):
 - Modify: `main/ui/habitat/ui_habitat.c` — `view_t` (:73), the actions (:96), the carousels (:273), `face_hold` (:891), a new `render_apps` beside `render_tabs` (:2251), `dispatch` (:3085), the sender's switch (:3412), the hold branch (:3783-3792), `ui_apps_replace`, `ui_fleet_set_view` (:4203)
