@@ -33,9 +33,11 @@ function setup(over: Partial<ObservedDeps> = {}) {
         await look()
         return new Map([...open].flatMap(([id, openIn]) => {
           const owner = owners.get(id)
-          return owner ? [[id, { ...owner, tty: null, record: '', ...(openIn === 'harness' ? { harness: true } : {}) }] as const] : []
+          return owner ? [[id, { ...owner, tty: null, record: id, ...(openIn === 'harness' ? { harness: true } : {}) }] as const] : []
         }))
       },
+      // As OpenSessions says: busy unless the owner's record reads idle.
+      busy: async (owner: { record: string }) => working.get(owner.record) !== false,
     } as unknown as ObservedDeps['openSessions'],
     sessionRows: { find } as unknown as ObservedDeps['sessionRows'],
     lastAnswer: async (_engine, path) => answers.get(path),
@@ -299,8 +301,10 @@ describe('ObservedSource removal', () => {
 })
 
 describe('ObservedSource codex and open sessions', () => {
-  it('codex working → done when openSessions.working turns false (3 s check)', async () => {
-    const { src, working, answers, ev } = setup()
+  it('codex working → done when its owner reads idle (3 s check)', async () => {
+    const { src, open, owners, working, answers, ev } = setup()
+    open.set('c1', 'terminal')
+    owners.set('c1', { pid: 100, engine: 'codex' })
     answers.set('/c/r.jsonl', 'Codex says hi')
     src.ingest(ev('turn-start', { engine: 'codex', sessionId: 'c1', transcriptPath: '/c/r.jsonl' }))
     working.set('c1', true)
@@ -312,6 +316,13 @@ describe('ObservedSource codex and open sessions', () => {
     working.set('c1', false)
     await src.checkWorking()
     expect(src.list()[0]).toMatchObject({ state: 'done', unseenDone: true, lastAnswer: 'Codex says hi' })
+  })
+
+  it('a Codex turn goes on while its owner cannot be found: a process read that timed out says nothing', async () => {
+    const { src, ev } = setup()
+    src.ingest(ev('turn-start', { engine: 'codex', sessionId: 'c1' }))
+    await src.checkWorking()
+    expect(src.list()[0].state).toBe('working')
   })
 
   it('checkWorking ignores claude sessions', async () => {
