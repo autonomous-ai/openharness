@@ -20,7 +20,7 @@ export interface ObservedHookEvent {
 const EVENTS: readonly string[] = ['session-start', 'turn-start', 'needs-input', 'turn-stop', 'turn-error', 'session-end']
 const MAX_SESSION_ID = 128
 const MAX_PATH = 1024
-const MAX_HINTS = 8
+const MAX_HINTS = 10
 const MAX_HINT_VALUE = 64
 /** Events a session may send a second; the rest are dropped, so parallel tool calls or a stuck engine repeating Stop cannot flood the devices. */
 const EVENTS_PER_SECOND = 20

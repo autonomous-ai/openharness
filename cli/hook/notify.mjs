@@ -490,7 +490,7 @@ function postObserved(port, body) {
  * session, 2026-11-13), and they must never leave this process.
  */
 const HOST_HINTS = ['TERM_PROGRAM', '__CFBundleIdentifier', 'HERDR_PANE_ID', 'REX_BLOCK', 'ZELLIJ', 'KITTY_WINDOW_ID',
-  'WEZTERM_PANE', 'ORCA_AGENT_SESSION_ID']
+  'WEZTERM_PANE', 'ORCA_AGENT_SESSION_ID', 'ORCA_TERMINAL_HANDLE']
 
 /** A character the core refuses in a path or hint (core/observedHook.ts): one there is forged. */
 const CONTROL = /[\u0000-\u001f\u007f]/
@@ -498,8 +498,8 @@ const CONTROL = /[\u0000-\u001f\u007f]/
 function hostHints() {
   const hints = {}
   for (const name of HOST_HINTS) {
-    // The core refuses a whole event with more than 8 hints (as many as this list), one over 64 characters or one
-    // with a control character (core/observedHook.ts): that hint is left out instead.
+    // The core refuses a whole event with more than 10 hints (more than this list holds), one over 64 characters or
+    // one with a control character (core/observedHook.ts): that hint is left out instead.
     const value = process.env[name]?.slice(0, 64)
     if (value && !CONTROL.test(value)) hints[name] = value
   }
