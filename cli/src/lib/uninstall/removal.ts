@@ -22,6 +22,7 @@ import { homedir, tmpdir } from 'node:os'
 import { posix, win32 } from 'node:path'
 import { removeLink } from '../removePath.js'
 import { runPowershell, type PowershellRun } from '../windows/powershell.js'
+import { UNINSTALL_MARKER } from './marker.js'
 
 export interface RootEntry { name: string; dir: boolean; link?: true }
 export interface RemovalTarget { path: string; dir: boolean; link?: true }
@@ -33,14 +34,6 @@ export const DESKTOP_STATE = /^desktop-app/
 export const PROGRAM = new Set(['bin', 'runtime', 'pty'])
 /** The only folder name a removal root may have. */
 export const ROOT_NAME = '.harness'
-/**
- * `harness uninstall` at work, in the root: while it is there (and fresh) the desktop app does not start the daemon
- * again (desktop/lib/core/uninstall_marker.dart), which would hold the files being removed and undo the uninstall. It
- * is in no plan: it goes after every other path (removeNow, finalRemovalScript), and before the root, whatever
- * --keep-data keeps. Its text is the time it was written, in seconds: one that outlived an uninstall killed half way
- * stops counting on its own.
- */
-export const UNINSTALL_MARKER = 'uninstalling'
 
 export interface PlanInput {
   platform: NodeJS.Platform

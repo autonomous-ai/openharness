@@ -102,6 +102,8 @@ const FW_WRITES_PER_HOUR = 3
 /** How often the machine list is re-read. Slower than the agent list because it is an HTTP read, not a
  *  map lookup — and because a machine appearing is not something anyone is waiting on a stopwatch for. */
 const MACHINES_POLL_MS = 15_000
+/** The least time between two pushes of the machine list (spec 2026-11-13-device-without-the-app, "When"). */
+const AGENTS_PUSH_GAP_MS = 1_000
 /**
  * A programmatic focus write may be followed by the dial reporting the tile it was painting just before
  * that write. Real hardware delivered that stale report 23 ms after the machine switch completed; keep
@@ -281,6 +283,10 @@ export interface CableAgent {
    */
   machineId?: string
   machine?: string
+  /** With no window only: the app or terminal the agent runs in (`harness`, `ghostty`, …) and what the dial may do
+   *  with it, as letters of s v f a (cable/hosts/types.ts capsLetters). Absent, the firmware reads `svfa`. */
+  host?: string
+  caps?: string
 }
 
 
@@ -384,6 +390,7 @@ import type { TurnStatsFields } from './turnStats.js'
 import type { Tier } from '../lib/notifyTier.js'
 import type { CardChat, CardSide, LeadNotice, LeadRecap, SaidOnCard, SwarmBuddy, SwarmCard, SwarmChat, SwarmLead } from '../superTabs/cards.js'
 import { truncateUtf8 } from '../lib/deviceRecentTrim.js'
+import { hostDisplayName } from './hosts/hostDetect.js'
 
 export interface RouteDecision {
   agentId: string
@@ -439,8 +446,9 @@ export interface CableHost {
   appFocus?(): { machineId: string; agentId: string } | undefined
   /** The active tab's agents, in tile order — and nothing else. Empty with no window or an empty tab. */
   listAgents(): Promise<CableAgent[]>
-  /** Pane rows and workspace identity from the same desktop announcement. */
-  listAgentSnapshot?(): Promise<{ agents: CableAgent[]; tab: string; total: number }>
+  /** Pane rows and workspace identity from the same desktop announcement; with no window, `view: 'machine'` when the
+   *  rows are this computer's agents instead. */
+  listAgentSnapshot?(): Promise<{ agents: CableAgent[]; tab: string; total: number; view?: 'machine' }>
   /** Every agent across the account — the overview's number. The dial gets the count, never the rows. */
   agentTotal(): number
   /** The active tab's id, or '' with no window: what lets the dial tell an empty tab from a shut app. */
@@ -462,6 +470,13 @@ export interface CableHost {
   answer(agentId: string, requestId: string, answers: Record<string, string>): void
   answerReviewed?(answer: ReviewedAnswer): Promise<AnswerReceipt>
   canSpeakQuestion?(agentId: string): boolean
+  /** What the dial may do with an agent of the machine list, as letters of s v f a; undefined (an older host, a
+   *  window, an agent it does not list) means everything, as before. */
+  capsOf?(agentId: string): string | undefined
+  /** The app or terminal that agent runs in (`orca`, `ghostty`, …), for the words of a refusal. */
+  hostOf?(agentId: string): string | undefined
+  /** The dial is on that agent: its finished answer counts as seen. */
+  markSeen?(agentId: string): void
   focus(agentId: string): void
   /**
    * "Put this one in front of me" — a NOTIFICATION was tapped.
@@ -732,6 +747,9 @@ export class CableSession {
 
   /** What the dial was last told the agent list is. Empty = it has been told nothing. */
   private lastAgentsKey = ''
+  /** When the agent list last went down the cable, by performance.now(): the machine list's pacing, which a wall clock set
+   *  back would hold for as long. Never, at first. */
+  private agentsPushedAt = -Infinity
   // What the hello NAMED. Each switches on only its own fields; a hello that names none gets the frames it
   // always got. A positive string match, per session (see hello).
   /** `swarms: 'members-v1'`: `agentIds` and `members` on the swarms items. */
@@ -923,6 +941,9 @@ export class CableSession {
   private readonly questionInbox = new QuestionInbox()
   private voiceGeneration = 0
   private voiceUploadId = ''
+  /** A recording refused at `voice.begin` (its agent has no `v`), said on `voice.end`: today's firmware drops a voice
+   *  error that arrives before the person lets go. Any later turn, abort or close moves the generation on and drops it. */
+  private voiceRefusal?: { generation: number; message: string }
 
   constructor(
     private readonly host: CableHost,
@@ -1481,10 +1502,14 @@ export class CableSession {
         // so it waits on this — briefly, and off its own UI task.
         const agentId = str('agentId') ?? ''
         let items: string[] = []
-        try {
-          items = await this.host.listModels(agentId)
-        } catch (err) {
-          this.log(`cable: models for ${agentId} failed (${(err as Error).message})`)
+        if (this.lacks(agentId, 'v')) {
+          await this.toast(`This agent is in ${this.hostName(agentId)}. Changing its model from the device comes in an update.`)
+        } else {
+          try {
+            items = await this.host.listModels(agentId)
+          } catch (err) {
+            this.log(`cable: models for ${agentId} failed (${(err as Error).message})`)
+          }
         }
         // Answered either way. An empty catalog closes the dial's picker cleanly; silence strands it on a
         // spinner until its own timeout, which reads as a hang rather than "this engine has no choices".
@@ -1550,7 +1575,11 @@ export class CableSession {
           // avoid echoing the dial's own move back at it.
           this.desiredFocus = agentId
           this.appFocusUnsent = false
-          this.host.focus(agentId)
+          // The dial sends focus on every swipe, so an agent it cannot bring forward is passed over without a toast,
+          // which would fire on each turn of the carousel. Turning to it still means its answer was seen, and the record
+          // above still names it: the next list push re-asserts it rather than turning the dial back.
+          if (this.lacks(agentId, 'f')) this.host.markSeen?.(agentId)
+          else this.host.focus(agentId)
         }
         return
       case 'notif.read': {
@@ -1660,9 +1689,16 @@ export class CableSession {
       case 'turn.send':
         if (str('agentId') && str('text')) this.host.sendTurn(str('agentId')!, str('text')!)
         return
-      case 'turn.stop':
-        if (str('agentId')) this.host.stopTurn(str('agentId')!)
+      case 'turn.stop': {
+        const agentId = str('agentId')
+        if (!agentId) return
+        if (this.lacks(agentId, 'v')) {
+          await this.toast(`This agent is in ${this.hostName(agentId)}. Stopping it from the device comes in an update.`)
+          return
+        }
+        this.host.stopTurn(agentId)
         return
+      }
       case 'draft.command': {
         const id = str('draftId'), requestId = str('requestId'), op = str('op'), revision = msg.revision
         if (!id || !requestId || requestId.length > 64 || !op || !Number.isSafeInteger(revision)) return
@@ -1702,6 +1738,10 @@ export class CableSession {
           const flat: Record<string, string> = {}
           for (const [k, v] of Object.entries(answers as Record<string, unknown>)) {
             if (typeof v === 'string') flat[k] = v
+          }
+          if (this.lacks(agentId, 'a')) {
+            await this.toast(`This agent is in ${this.hostName(agentId)}. Answering it from the device comes in an update.`)
+            return
           }
           this.host.answer(agentId, requestId, flat)
         }
@@ -1784,6 +1824,14 @@ export class CableSession {
         const focused = plain && !dialFace && !swarmId ? this.host.appFocus?.() : undefined
         const agentId = focused?.agentId ?? str('agentId')
         const swarmFace = dialFace ?? (agentId ? this.voiceFaceOf(agentId, proFace) : undefined)
+        // Words for an agent's terminal that the dial cannot type into (an agent outside Harness): no audio is kept and
+        // nothing goes to the transcriber. A form, a search, a draft, a question or a Swarm chat is not its terminal.
+        if (agentId && !swarmFace && !formVoice && !searchVoice && !draftVoice && !questionVoice && this.lacks(agentId, 'v')) {
+          this.voice = null
+          this.voiceRefusal = { generation: this.voiceGeneration,
+            message: `This agent is in ${this.hostName(agentId)}. Talking to it from the device comes in an update.` }
+          return
+        }
         this.voice = {
           agentId,
           ...(swarmFace ? { swarmFace } : {}),
@@ -2220,6 +2268,9 @@ export class CableSession {
       return current() ? this.send({ ...message, ...(uploadId ? { uploadId } : {}) }) : Promise.resolve(false)
     }
     this.voice = null
+    const refusal = this.voiceRefusal?.generation === generation ? this.voiceRefusal.message : undefined
+    this.voiceRefusal = undefined
+    if (refusal) { await reply({ t: 'voice.error', message: refusal }); return }
     if (turn?.draft && (!turn.draft.pin || !this.voiceDraft.current(turn.draft.pin))) {
       await reply({ t: 'voice.error', message: 'That draft changed. Review it again.' }); return
     }
@@ -2383,7 +2434,9 @@ export class CableSession {
         return
       }
       try {
-        const decision = await this.host.route(transcript, agents)
+        // Only agents the dial may talk to: the router sends each one's id and name to the backend, and nothing of an
+        // agent outside Harness leaves this computer.
+        const decision = await this.host.route(transcript, agents.filter((a) => !this.lacks(a.id, 'v')))
         if (!current()) return
         agentId = decision.agentId
         this.log(`cable: routed → ${agentId} (${decision.reason})`)
@@ -2579,7 +2632,7 @@ export class CableSession {
   private static agentsKey(agents: CableAgent[]): string {
     // `machine` is in the key, not just `machineId`: the dial DRAWS the name, so a machine being renamed
     // has to reach the screen even though not one agent has changed.
-    return agents.map((a) => `${a.id}:${a.name}:${a.engine ?? ''}:${a.model ?? ''}:${a.effort ?? ''}:${a.machineId ?? ''}:${a.machine ?? ''}`).join('|')
+    return agents.map((a) => `${a.id}:${a.name}:${a.engine ?? ''}:${a.model ?? ''}:${a.effort ?? ''}:${a.machineId ?? ''}:${a.machine ?? ''}:${a.host ?? ''}:${a.caps ?? ''}`).join('|')
   }
 
 
@@ -2628,14 +2681,19 @@ export class CableSession {
     const snapshot = this.host.listAgentSnapshot ? await this.host.listAgentSnapshot() : {
       agents: await this.host.listAgents(), tab: this.host.activeSwarm(), total: this.host.agentTotal(),
     }
-    const { agents, tab, total } = snapshot
+    const { agents, tab, total, view } = snapshot
     // WHETHER there is a window is in the key, not WHICH tab: an empty tab after the window shut sends the
     // same zero rows and draws a different screen, so that flip has to push. The tab's id does not — the
     // dial names the tab from the `swarms` frame — and keying on it made every tab switch push twice,
     // once when `app_swarms` named the new tab over the old panes and again when `app_panes` arrived.
-    const key = `${tab ? 'window' : ''}|${CableSession.agentsKey(agents)}`
+    const key = `${tab ? 'window' : view ?? ''}|${CableSession.agentsKey(agents)}`
     if (!force && key === this.lastAgentsKey) return
+    // The machine list goes at most once a second after the last push: a window opening and closing quickly would
+    // otherwise swap whole lists down the cable on every flip. The tick sends what was held. Forced pushes (an attach, a
+    // refresh) and a window's lists go at once, as before, its opening too: a new ring must beat its focus.
+    if (!force && view === 'machine' && performance.now() - this.agentsPushedAt < AGENTS_PUSH_GAP_MS) return
     this.lastAgentsKey = key
+    this.agentsPushedAt = performance.now()
     // Every push, and only pushes. The dial showing a different number from the daemon is a question this
     // line answers in one look: either the daemon never said it, or it said it and the dial disagreed.
     this.log(`cable: agents → ${agents.length} of ${total}${force ? ' (requested)' : ''}`)
@@ -2653,13 +2711,17 @@ export class CableSession {
         // under the agent's, and the id is also how a machine row finds its first agent.
         machineId: a.machineId ?? '',
         machine: a.machine ?? '',
+        ...(a.host ? { host: a.host } : {}),
+        // '' says the dial may do nothing with it; left out, the firmware would read everything (svfa).
+        ...(a.caps !== undefined ? { caps: a.caps } : {}),
       })
 
     }
     // Every agent sent is walked. What travels beside them: `total`, the account-wide count the overview
     // prints (the rows behind it stay here), and `tab`, the active tab's id — '' with no window, which is
-    // how the dial tells "the app is shut" from "this tab is empty" when both send zero agents.
-    await this.send({ t: 'agents.end', total, tab })
+    // how the dial tells "the app is shut" from "this tab is empty" when both send zero agents. `view`:
+    // with no window, rows that are this computer's agents rather than nothing.
+    await this.send({ t: 'agents.end', total, tab, ...(view ? { view } : {}) })
 
     // The list just changed shape under the dial, so say again which agent both screens are on.
     //
@@ -3760,5 +3822,15 @@ export class CableSession {
   }
   async toast(text: string): Promise<void> {
     await this.send({ t: 'toast', text })
+  }
+
+  /** The agent's host says the dial may not do this with it. A host that says nothing (an older one, a window) allows it. */
+  private lacks(agentId: string, cap: 'v' | 'f' | 'a'): boolean {
+    const caps = this.host.capsOf?.(agentId)
+    return caps !== undefined && !caps.includes(cap)
+  }
+
+  private hostName(agentId: string): string {
+    return hostDisplayName(this.host.hostOf?.(agentId) ?? '')
   }
 }

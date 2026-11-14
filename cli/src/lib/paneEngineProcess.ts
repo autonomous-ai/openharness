@@ -118,3 +118,10 @@ export async function checkSessionRuntime<Ref extends TerminalRuntimeRef>(
   if (!saved) registry.updateProcessIdentity(session.sessionId, live)
   return { state: 'alive' }
 }
+
+/**
+ * How long an engine must stay the pane's engine before a launch counts it as come up: a launch the engine
+ * refuses (`codex resume` after an update dropped it) runs for an instant. One rule for a restart
+ * (`core/agents/swap.ts` `waitForProcess`) and a resume (`resumeStoppedAgent.ts` `waitForResumedAgent`).
+ */
+export const ENGINE_SETTLE_MS = 500

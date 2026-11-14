@@ -115,11 +115,13 @@ function depthOf(line: string): number {
   return m ? m[0].length : 0
 }
 
-// `ioreg` cost ~150 ms CPU every 2 s (~7.5% of a core, measured 2026-10-06) even with no dial attached, so
-// it runs only when /dev/cu.* changes (~0.3 ms to fingerprint two cu.* nodes, same measurement).
+// `ioreg` costs CPU on every run, even with no dial attached: ~150 ms for the whole-USB query on 2026-10-06
+// (~7.5% of a core at a scan every 2 s), 7.5 s of kernel time for it on a Mac with DriverKit HID devices on
+// 2026-11-14, and still ~70 ms for the serial-port query that replaced it (runIoreg below, the same Mac). So it
+// runs only when /dev/cu.* changes (~0.3 ms to fingerprint two cu.* nodes, measured 2026-10-06).
 // `ino` is in the fingerprint because a re-plug makes a new devfs node, and that attachment is what moves
 // `session`. No mtime/ctime: I/O on an open tty bumps them, defeating the gate exactly when a dial is
-// attached. Every 5 min is a safety net (~0.05%); no name filter, so an odd name is never invisible.
+// attached. Every 5 min is a safety net (~0.02%); no name filter, so an odd name is never invisible.
 // devfs and the IORegistry do not change atomically, so a scan on a plug/unplug edge can see a missing or
 // phantom port; a scan that followed a change, or that lists a port whose /dev node is gone, is therefore
 // confirmed by another (one extra ioreg per edge, and one per call while the IORegistry lags an unplug).
@@ -149,8 +151,13 @@ const findDarwin = createDarwinDialFinder({
   }),
   runIoreg: async () => {
     try {
-      // Keep each USB device's children (the tty lives below its vendor/product IDs), but skip the rest of the IOService plane.
-      return (await runFile('ioreg', ['-r', '-c', 'IOUSBHostDevice', '-w0', '-l'], { maxBuffer: 64 * 1024 * 1024, timeout: TOOL_TIMEOUT_MS })).stdout
+      // Only the serial ports, each with the chain of nodes above it (-t): the USB device node in that chain carries
+      // the ids, the serial number and the sessionID. Asking for every USB device with its whole subtree
+      // (-c IOUSBHostDevice) also read the DriverKit HID drivers below a keyboard and a trackpad: 7.7 s wall, 7.5 s
+      // of it in the kernel, 4.5 MB. The 5 s timeout ended every scan and no dial attached (2,282 failed scans in
+      // one day's log, daemon 0.6.56, 2026-11-14). This query took 0.07 s wall, 0.06 s in the kernel and 336 KB on
+      // the same Mac.
+      return (await runFile('ioreg', ['-r', '-c', 'IOSerialBSDClient', '-t', '-w0', '-l'], { maxBuffer: 64 * 1024 * 1024, timeout: TOOL_TIMEOUT_MS })).stdout
     } catch {
       throw new Error('Could not enumerate USB dials')
     }
@@ -166,6 +173,7 @@ export function parseDarwinDialPorts(dump: string): DialPort[] {
   let armedSerial: string | undefined
   let armedSession: string | undefined
   let serialNumber: string | undefined
+  let session: string | undefined
   let sawVendor = false
   let sawProduct = false
   let nodeDepth = 0
@@ -179,6 +187,7 @@ export function parseDarwinDialPorts(dump: string): DialPort[] {
       sawVendor = false
       sawProduct = false
       serialNumber = undefined
+      session = undefined
       continue
     }
 
@@ -188,9 +197,14 @@ export function parseDarwinDialPorts(dump: string): DialPort[] {
       serialNumber = line.split('=')[1]?.trim().replace(/^"|"$/g, '')
       if (armedAt === nodeDepth) armedSerial = serialNumber
     }
-    // The USB device node's own sessionID (the interfaces below it carry ones of their own).
-    if (line.includes('"sessionID"') && armedAt === nodeDepth) armedSession = line.split('=')[1]?.trim()
-    if (sawVendor && sawProduct && armedAt === null) { armedAt = nodeDepth; armedSerial = serialNumber }
+    // The USB device node's own sessionID (the interfaces below it carry ones of their own). Kept as it is read,
+    // like the serial number, because the node may list it before its ids: the real dump of 2026-11-14 does, and
+    // a parser that waited for the match never set `session` on macOS.
+    if (line.includes('"sessionID"')) {
+      session = line.split('=')[1]?.trim()
+      if (armedAt === nodeDepth) armedSession = session
+    }
+    if (sawVendor && sawProduct && armedAt === null) { armedAt = nodeDepth; armedSerial = serialNumber; armedSession = session }
 
     if (armedAt !== null && line.includes('"IOCalloutDevice"')) {
       const path = line.split('=')[1]?.trim().replace(/^"|"$/g, '')

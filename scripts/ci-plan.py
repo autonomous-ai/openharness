@@ -28,7 +28,7 @@ _local_spec.loader.exec_module(local_checks)
 
 
 CORE = {"cli", "desktop", "tui", "backend", "companions"}
-EXTRA = {"website", "os", "provider", "firmware", "mobile", "daemons", "pty"}
+EXTRA = {"website", "os", "provider", "firmware", "mobile", "daemons", "pty", "device-app"}
 SUITES = CORE | EXTRA | {"pro"}
 JOBS = {
     "cli": {"cli-typecheck", "cli-tests"},
@@ -44,6 +44,7 @@ MANUAL = {"full": CORE, "all": SUITES, "process": set(), **{name: {name} for nam
 COMPONENTS = {"cli": "cli", "tests": "cli", "desktop": "desktop", "tui": "tui", "backend": "backend",
               "companions": "companions", "website": "website", "os": "os", "provider": "provider",
               "devices": "firmware", "mobile": "mobile", "daemons": "daemons", "pty": "pty", "term": "pty",
+              "device-app": "device-app",
               # harness-install.exe's model and steps test on Linux; its Windows half runs in windows-desktop.yml.
               "installer": "pty"}
 # Code inside another component that a suite runs as its own (its references are scanned as the suite's reads): the PTY
@@ -136,8 +137,11 @@ PR_READS = {
                 "companions/src/companion/roster.g.ts", "desktop/assets/daemon-art/",
                 "desktop/lib/daemons/illustrated_alignment.g.dart", "desktop/lib/daemons/plates.g.dart",
                 "desktop/lib/daemons/roster.g.dart", "mobile/lib/daemons/plates.g.dart", "mobile/lib/daemons/roster.g.dart"),
-    "firmware": ("daemons/plates/tux.mjs", "daemons/review/traits.html",
-                 "daemons/tools/illustrated/daemon_art.py", "daemons/tools/plate.mjs", "desktop/assets/model-icons/claude.png"),
+    # test_touch_ui.py holds the dial's host names and busy fuse to the daemon's (cli/src/cable/hosts/hostDetect.ts,
+    # cli/src/services/devices.ts REMIND_MS).
+    "firmware": ("cli/src/cable/hosts/hostDetect.ts", "cli/src/services/devices.ts", "daemons/plates/tux.mjs",
+                 "daemons/review/traits.html", "daemons/tools/illustrated/daemon_art.py", "daemons/tools/plate.mjs",
+                 "desktop/assets/model-icons/claude.png"),
     # Its tests run in a sparse checkout (ci.SOURCE_INPUTS["desktop"]) and read these from it. By hand: the phone's P2P and
     # E2EE files test/p2p/mobile_parity_test.dart compares (its paths are built), the phone's lockfile, store/ (its
     # agents, branding and hands-on list) and docs/images/ (the Store's example images store_discover_test.dart opens);

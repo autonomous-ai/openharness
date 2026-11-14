@@ -31,6 +31,9 @@ typedef struct {
      * "Coalescing", never a tool call. The face has a row for it beside the name.
      */
     const char *engine, *activity;
+    // The grey line under the name, on the inner arc: in the machine view, the app an agent runs in ("Orca"). NULL or ""
+    // for every other face.
+    const char *chat;
     uint32_t elapsed;
     ht_character_mood_t mood;
     ht_character_pose_t pose;

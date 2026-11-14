@@ -94,6 +94,7 @@ static int refresh_projects(void)
         ui_project_set_name(pr[i].id, pr[i].name);
         ui_project_set_engine(pr[i].id, pr[i].engine);
         ui_project_set_machine(pr[i].id, pr[i].machine_id, pr[i].machine);
+        ui_project_set_host_caps(pr[i].id, pr[i].host, pr[i].caps);
 
         ui_project_reconcile_selected_model(pr[i].id, pr[i].selected_model);
     }
@@ -124,6 +125,7 @@ static int refresh_projects(void)
     // The fleet behind the list: the overview's count, and whether the empty page means "no window" or
     // "empty tab".
     ui_fleet_set(snapshot.total, snapshot.window);
+    ui_fleet_set_view(snapshot.machine_view);
     ui_workspace_applied(snapshot.tab, snapshot.generation);
 
     // The list is built. If a landing is pending, LAND: drop the loading spinner and focus agent 1 (or the

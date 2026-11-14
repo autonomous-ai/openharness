@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto'
 import { PROCESS_ENGINES } from '../engines/types.js'
-import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { availableParallelism, homedir } from 'node:os'
 import { lstat, readdir, readFile, realpath, rm, stat } from 'node:fs/promises'
@@ -9,6 +8,7 @@ import type { CoreApi } from '../core/api.js'
 import { openDaemon } from '../agentClient/daemon.js'
 import { codingRefusal } from '../lib/codingModel.js'
 import { ownProcessGroup } from '../lib/windows/noWindow.js'
+import { spawnTied } from '../lib/tied.js'
 import { backend, FIELD_REFUSED_MS, fieldRefused, identifier, object, SuperTabHostError } from './wire.js'
 import type { SwarmSources } from './host.js'
 import { HostFeed } from './hostFeed.js'
@@ -1314,16 +1314,17 @@ export function createQuietGit(timeoutMs = 15_000): GitRun {
     const env: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: '', SSH_ASKPASS: '', SSH_ASKPASS_REQUIRE: 'never',
       GCM_INTERACTIVE: 'never', GIT_OPTIONAL_LOCKS: '0' }
     for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE']) delete env[key]
-    const child = spawn('git', ['-C', cwd, ...args], { env, ...ownProcessGroup(), stdio: ['ignore', 'pipe', 'pipe'] })
+    // Tied, so a crash of its service ends its group too instead of leaving git and its helpers running.
+    const child = spawnTied('git', ['-C', cwd, ...args], { env, ...ownProcessGroup(), stdio: ['ignore', 'pipe', 'pipe'] })
     let stdout = '', stderr = '', settled = false
     const settle = (answer: { ok: boolean; timedOut?: boolean }) => { if (!settled) { settled = true; clearTimeout(timer); resolve({ ...answer, stdout, stderr }) } }
-    child.stdout.setEncoding('utf8').on('data', (text: string) => { stdout = (stdout + text).slice(0, 65_536) })
-    child.stderr.setEncoding('utf8').on('data', (text: string) => { stderr = (stderr + text).slice(0, 65_536) })
+    child.stdout!.setEncoding('utf8').on('data', (text: string) => { stdout = (stdout + text).slice(0, 65_536) })
+    child.stderr!.setEncoding('utf8').on('data', (text: string) => { stderr = (stderr + text).slice(0, 65_536) })
     // Its own group (detached), so the group id is its pid; Windows has no groups, and kills git alone. A helper it left
     // behind holding its pipes is ended too, whether git hung or had already gone (re-check of #1743: one left per check).
     const end = () => {
       try { if (process.platform !== 'win32' && child.pid) process.kill(-child.pid, 'SIGKILL'); else child.kill('SIGKILL') } catch { /* already gone */ }
-      child.stdout.destroy(); child.stderr.destroy()
+      child.stdout!.destroy(); child.stderr!.destroy()
     }
     const timer = setTimeout(() => { end(); settle({ ok: false, timedOut: true }) }, timeoutMs)
     child.on('error', () => settle({ ok: false }))

@@ -70,7 +70,9 @@ export function contextLadder(first: number): number[] {
   return sizes
 }
 
-/** A port nothing on this machine is listening on, for the engine to take. */
+/** The port Grid is asked to start the engine on. Grid may not use it: when it is taken by the time the
+ *  engine binds (a port freed for someone else to bind can be taken by any process in between), Grid starts
+ *  the engine on another port without saying, and it treats port 0 as unset. */
 function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const server = createServer()
@@ -651,8 +653,13 @@ export class LocalModels {
    * failure is a second away and says what it is.
    *
    * `unknown` when there is nothing to ask (no engine listening on this machine, or no answer in
-   * time): the relay check that follows is then the judge, as it always was. */
-  private async probeEngine(port: number): Promise<'ok' | 'out-of-memory' | 'unknown'> {
+   * time): the relay check that follows is then the judge, as it always was.
+   *
+   * Whatever answers on [port] must list [served], the first name Grid started the engine under, in
+   * `/v1/models` before anything it says is read as the engine's: Grid starts its engine on another
+   * port, without saying, when the one it was asked for is taken (grid 0.3.43, remote/serve.py), and
+   * another process holding that port must never pass, fail or step down a start. */
+  private async probeEngine(port: number, served: string): Promise<'ok' | 'out-of-memory' | 'unknown'> {
     const base = `http://127.0.0.1:${port}`
     // `grid join` returns once the engine has loaded, so it is listening by now; 503 is a load still
     // finishing, and the only answer worth waiting on. Nothing listening, twice, is not an engine
@@ -666,6 +673,8 @@ export class LocalModels {
       await sleep(500)
     }
     try {
+      const models = await this.request(`${base}/v1/models`, { signal: AbortSignal.timeout(5_000), redirect: 'error' })
+      if (!rows(obj(await models.json()).data).some(model => model.id === served)) return 'unknown'
       const response = await this.request(`${base}/v1/chat/completions`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ messages: [{ role: 'user', content: 'Reply with the single word: ok' }], max_tokens: 8 }),
@@ -1199,7 +1208,7 @@ export class LocalModels {
             ...(candidate.aliases ?? []).flatMap(alias => ['--advertise-as', alias])], undefined, 30 * 60_000)
           // A join that fails at a size is also stepped down from: an allocation that fails at load
           // takes the engine down before Grid can register it.
-          const probe = joined.ok ? await this.probeEngine(port) : 'failed'
+          const probe = joined.ok ? await this.probeEngine(port, candidate.aliases?.[0] ?? candidate.file) : 'failed'
           if (probe === 'ok' || probe === 'unknown') { started = true; break }
           outOfMemory ||= probe === 'out-of-memory'
           // Down before the next size. The last engine leaving drops Grid's local registration, which

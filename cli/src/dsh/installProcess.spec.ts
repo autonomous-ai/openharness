@@ -8,9 +8,7 @@ import { env } from '../config/env.js'
 import { cloneInstall } from './install.js'
 
 const { spawn } = vi.hoisted(() => ({ spawn: vi.fn() }))
-vi.mock('node:child_process', async (original) => ({
-  ...await original<typeof import('node:child_process')>(), spawn,
-}))
+vi.mock('../lib/tied.js', () => ({ spawnTied: spawn }))
 
 let directory: string
 let previous: string

@@ -5,15 +5,12 @@
  * not pass is left exactly as it is. Nothing sweeps the worktrees folder on a timer any more (#4166, #711): that removed clean,
  * week-idle worktrees their person chose to keep, gitignored files and all.
  */
-import { execFile } from 'node:child_process'
 import { constants, type Dirent } from 'node:fs'
 import { access, lstat, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, join, relative, resolve } from 'node:path'
-import { promisify } from 'node:util'
 import { inRepositoryTurn } from './gitProject.js'
 import { upgradeOlderRuntimeIgnore } from './harnessRuntimeIgnore.js'
-
-const exec = promisify(execFile)
+import { execFileTied } from './tied.js'
 
 /**
  * git as itself: none of the repository settings a parent process left in the environment, and not the three repository
@@ -27,7 +24,9 @@ export async function git(cwd: string, args: string[]): Promise<string> {
   const env = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' }
   for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE']) delete (env as NodeJS.ProcessEnv)[key]
   const guarded = ['-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-c', 'status.showUntrackedFiles=normal']
-  return (await exec('git', [...guarded, '-C', cwd, ...args], { timeout: 30_000, killSignal: 'SIGKILL', maxBuffer: 1024 * 1024, env }))
+  // Tied: each crash of its service left a git it was running behind. Its stdin is ended, which none of the subcommands
+  // run through here reads (no `--stdin`, and no prompt: GIT_TERMINAL_PROMPT=0).
+  return (await execFileTied('git', [...guarded, '-C', cwd, ...args], { timeout: 30_000, killSignal: 'SIGKILL', maxBuffer: 1024 * 1024, env }))
     .stdout.replace(/\r?\n$/, '')
 }
 

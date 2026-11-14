@@ -228,6 +228,8 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
   const heard: Record<string, (payload: Record<string, unknown>) => void> = {
     notice: ({ notice }) => { if (notice && typeof notice === 'object') for (const listener of noticeListeners) listener(notice as BackendNotice) },
     card: ({ frame }) => port.card(object(frame)),
+    // Checked and bounded by the core before it was sent (core/observedHook.ts), and kept nowhere there.
+    observed: ({ kind: _kind, ...event }) => port.observed(event as unknown as Parameters<DevicesPort['observed']>[0]),
     desk: ({ agentIds, foreground }) => port.desk(strings(agentIds), foreground !== false),
     swarms: ({ swarms }) => port.swarms(swarms && typeof swarms === 'object' ? swarms as AppSwarms : null),
     unread: ({ items }) => port.unread(Array.isArray(items) ? items as UnreadNotification[] : []),

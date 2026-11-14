@@ -1,0 +1,231 @@
++-o Root  <class IORegistryEntry, id 0x100000100, retain 35>
+  +-o J000AP  <class IOPlatformExpertDevice, id 0x100000258, registered, matched, active, busy 0 (921042 ms), retain 41>
+    +-o AppleARMPE  <class AppleARMPE, id 0x10000025e, registered, matched, active, busy 0 (465156 ms), retain 50>
+      +-o arm-io  <class IOPlatformDevice, id 0x100000292, registered, matched, active, busy 0 (457760 ms), retain 153>
+        +-o AppleT600xIO  <class AppleT600xIO, id 0x1000002a2, registered, matched, active, busy 0 (457798 ms), retain 151>
+          +-o uart0@9B200000  <class AppleARMIODevice, id 0x100000337, registered, matched, active, busy 0 (551 ms), retain 10>
+            +-o AppleSamsungSerial  <class AppleSamsungSerial, id 0x10000037e, !registered, !matched, active, busy 0 (297 ms), retain 6>
+              +-o debug-console  <class AppleSimpleUARTSync, id 0x100000460, registered, matched, active, busy 0 (297 ms), retain 10>
+                +-o IOSerialBSDClient  <class IOSerialBSDClient, id 0x1000004d8, registered, matched, active, busy 0 (0 ms), retain 5>
+                    {
+                      "IOClass" = "IOSerialBSDClient"
+                      "CFBundleIdentifier" = "com.apple.iokit.IOSerialFamily"
+                      "IOProviderClass" = "IOSerialStreamSync"
+                      "IOTTYBaseName" = "debug-console"
+                      "IOSerialBSDClientType" = "IOSerialStream"
+                      "IOProbeScore" = 1000
+                      "IOResourceMatch" = "IOBSD"
+                      "IOMatchedAtBoot" = Yes
+                      "IOMatchCategory" = "IODefaultMatchCategory"
+                      "IOTTYDevice" = "debug-console"
+                      "IOCalloutDevice" = "/dev/cu.debug-console"
+                      "IODialinDevice" = "/dev/tty.debug-console"
+                      "IOPersonalityPublisher" = "com.apple.iokit.IOSerialFamily"
+                      "CFBundleIdentifierKernel" = "com.apple.iokit.IOSerialFamily"
+                      "IOTTYSuffix" = ""
+                    }
+                    
+
++-o Root  <class IORegistryEntry, id 0x100000100, retain 35>
+  +-o J000AP  <class IOPlatformExpertDevice, id 0x100000258, registered, matched, active, busy 0 (921042 ms), retain 41>
+    +-o AppleARMPE  <class AppleARMPE, id 0x10000025e, registered, matched, active, busy 0 (465156 ms), retain 50>
+      +-o arm-io  <class IOPlatformDevice, id 0x100000292, registered, matched, active, busy 0 (457760 ms), retain 153>
+        +-o AppleT600xIO  <class AppleT600xIO, id 0x1000002a2, registered, matched, active, busy 0 (457798 ms), retain 151>
+          +-o usb-drd2@2280000  <class AppleARMIODevice, id 0x10000034a, registered, matched, active, busy 0 (20221 ms), retain 15>
+            +-o AppleT6000USBXHCI@02000000  <class AppleT6000USBXHCI, id 0x10000045c, registered, matched, active, busy 0 (19697 ms), retain 564>
+              +-o usb-drd2-port-hs@02100000  <class AppleUSB20XHCIARMPort, id 0x1000007fc, registered, matched, active, busy 0 (15320 ms), retain 82>
+                +-o USB2.0 Hub@02100000  <class IOUSBHostDevice, id 0x100137ae5, registered, matched, active, busy 0 (333 ms), retain 42>
+                  | {
+                  |   "kUSBSerialNumberString" = "000000001"
+                  |   "bDeviceClass" = 9
+                  |   "UsbLinkSpeed" = 480000000
+                  |   "bDeviceSubClass" = 0
+                  |   "iSerialNumber" = 3
+                  |   "IOServiceDEXTEntitlements" = (("com.apple.developer.driverkit.transport.usb"))
+                  |   "iProduct" = 2
+                  |   "USB Serial Number" = "000000001"
+                  |   "USB Vendor Name" = "VIA Labs, Inc."
+                  |   "USBSpeed" = 3
+                  |   "IOPowerManagement" = {"PowerOverrideOn"=Yes,"CapabilityFlags"=32768,"MaxPowerState"=2,"DevicePowerState"=2,"DriverPowerState"=0,"ChildrenPowerState"=2,"CurrentPowerState"=2}
+                  |   "bNumConfigurations" = 1
+                  |   "kUSBProductString" = "USB2.0 Hub"
+                  |   "kUSBVendorString" = "VIA Labs, Inc."
+                  |   "USB Product Name" = "USB2.0 Hub"
+                  |   "iManufacturer" = 1
+                  |   "idVendor" = 8457
+                  |   "Device Speed" = 2
+                  |   "kUSBCurrentConfiguration" = 1
+                  |   "idProduct" = 10261
+                  |   "bcdDevice" = 1843
+                  |   "UsbDeviceSignature" = <092115283307303030303030303031090002090001090002>
+                  |   "kUSBContainerID" = "00000000-0000-0000-0000-000000000000"
+                  |   "sessionID" = 26004667014204
+                  |   "USB Address" = 1
+                  |   "IOCFPlugInTypes" = {"9dc7b780-9ec0-11d4-a54f-000a27052861"="IOUSBHostFamily.kext/Contents/PlugIns/IOUSBLib.bundle"}
+                  |   "UsbExclusiveOwner" = "AppleUSB20Hub"
+                  |   "USBPortType" = 5
+                  |   "UsbDeviceFunction" = 3
+                  |   "bDeviceProtocol" = 2
+                  |   "locationID" = 34603008
+                  |   "kUSBAddress" = 1
+                  |   "bcdUSB" = 528
+                  |   "bMaxPacketSize0" = 64
+                  | }
+                  | 
+                  +-o AppleUSB20Hub@02100000  <class AppleUSB20Hub, id 0x100137ae9, registered, matched, active, busy 0 (309 ms), retain 28>
+                    | {
+                    |   "IOClass" = "AppleUSB20Hub"
+                    |   "CFBundleIdentifier" = "com.apple.driver.usb.AppleUSBHub"
+                    |   "IOProviderClass" = "IOUSBHostDevice"
+                    |   "kUSBHubPowerSupply" = 2600
+                    |   "IOProbeScore" = 50000
+                    |   "IOMatchedAtBoot" = Yes
+                    |   "locationID" = 34603008
+                    |   "IOMatchCategory" = "IODefaultMatchCategory"
+                    |   "UsbBusCurrentPoolID" = 4296243945
+                    |   "bDeviceSubClass" = 0
+                    |   "IOPersonalityPublisher" = "com.apple.driver.usb.AppleUSBHub"
+                    |   "CFBundleIdentifierKernel" = "com.apple.driver.usb.AppleUSBHub"
+                    |   "bDeviceClass" = 9
+                    | }
+                    | 
+                    +-o AppleUSB20HubPort@02110000  <class AppleUSB20HubPort, id 0x100137aee, registered, matched, active, busy 0 (220 ms), retain 16>
+                      | {
+                      |   "usb-port-number" = <01000000>
+                      |   "IOPowerManagement" = {"ChildrenPowerState"=3,"DevicePowerState"=1,"CurrentPowerState"=3,"CapabilityFlags"=32768,"MaxPowerState"=3,"DriverPowerState"=0}
+                      |   "UsbProtocol (2.0)" = Yes
+                      |   "UsbProtocol (1.x)" = Yes
+                      |   "kUSBWakePortCurrentLimit" = 500
+                      |   "kUSBSleepPortCurrentLimit" = 500
+                      |   "locationID" = 34668544
+                      |   "usb-port-type" = <00000000>
+                      |   "port-status" = 4352
+                      |   "kUSBBusCurrentAllocation" = 500
+                      |   "port-statistics" = {"kPortStatEOF2ViolationCurrentConnectCount"=0,"kPortStatEOF2ViolationDuringResetCount"=0,"kPortStatPowerStateTime"={"kPowerStateOff"="0ms (0%)","kPowerStateSleep"="0ms (0%)","kPowerStateOn"="15904943ms (100%)","kPowerStateSuspended"="0ms (0%)"},"kPortStatConnectCount"=1,"kPortStatRemoteWakeCount"=0,"kPortStatEOF2ViolationRecoveryDuringResetCount"=0,"kPortStatAddressFailureCount"=0,"kPortStatEOF2ViolationCount"=0,"kPortStatEnumerationFailureCount"=0,"kPortStatOverCurrentCount"=0,"kPortStatEOF2ViolationDuringResumeCount"=0}
+                      |   "port" = <01000000>
+                      | }
+                      | 
+                      +-o USB JTAG/serial debug unit@02110000  <class IOUSBHostDevice, id 0x100137b0e, registered, matched, active, busy 0 (218 ms), retain 35>
+                        | {
+                        |   "sessionID" = 26004684572539
+                        |   "USBSpeed" = 1
+                        |   "UsbLinkSpeed" = 12000000
+                        |   "idProduct" = 4097
+                        |   "iManufacturer" = 1
+                        |   "bDeviceClass" = 239
+                        |   "IOPowerManagement" = {"PowerOverrideOn"=Yes,"DevicePowerState"=2,"CurrentPowerState"=2,"CapabilityFlags"=32768,"MaxPowerState"=2,"DriverPowerState"=0}
+                        |   "bcdDevice" = 257
+                        |   "bMaxPacketSize0" = 64
+                        |   "iProduct" = 2
+                        |   "iSerialNumber" = 3
+                        |   "bNumConfigurations" = 1
+                        |   "UsbDeviceSignature" = <3a300110010141413a42423a43433a44443a45453a3031ef02010202000a0200ffff01>
+                        |   "USB Product Name" = "USB JTAG_serial debug unit"
+                        |   "locationID" = 34668544
+                        |   "bDeviceSubClass" = 2
+                        |   "bcdUSB" = 512
+                        |   "kUSBSerialNumberString" = "AA:BB:CC:DD:EE:01"
+                        |   "USB Address" = 3
+                        |   "IOCFPlugInTypes" = {"9dc7b780-9ec0-11d4-a54f-000a27052861"="IOUSBHostFamily.kext/Contents/PlugIns/IOUSBLib.bundle"}
+                        |   "UsbPowerSinkAllocation" = 500
+                        |   "bDeviceProtocol" = 1
+                        |   "USBPortType" = 0
+                        |   "IOServiceDEXTEntitlements" = (("com.apple.developer.driverkit.transport.usb"))
+                        |   "kUSBCurrentConfiguration" = 1
+                        |   "USB Vendor Name" = "Espressif"
+                        |   "Device Speed" = 1
+                        |   "idVendor" = 12346
+                        |   "kUSBProductString" = "USB JTAG/serial debug unit"
+                        |   "USB Serial Number" = "AA:BB:CC:DD:EE:01"
+                        |   "kUSBAddress" = 3
+                        |   "kUSBVendorString" = "Espressif"
+                        | }
+                        | 
+                        +-o IOUSBHostInterface@1  <class IOUSBHostInterface, id 0x100137b16, registered, matched, active, busy 0 (211 ms), retain 8>
+                          | {
+                          |   "USBSpeed" = 1
+                          |   "iInterface" = 0
+                          |   "bInterfaceProtocol" = 0
+                          |   "bAlternateSetting" = 0
+                          |   "idProduct" = 4097
+                          |   "bcdDevice" = 257
+                          |   "USB Product Name" = "USB JTAG/serial debug unit"
+                          |   "locationID" = 34668544
+                          |   "Product Name" = "USB JTAG/serial debug unit"
+                          |   "bInterfaceClass" = 10
+                          |   "bInterfaceSubClass" = 2
+                          |   "IOCFPlugInTypes" = {"2d9786c6-9ef3-11d4-ad51-000a27052861"="IOUSBHostFamily.kext/Contents/PlugIns/IOUSBLib.bundle"}
+                          |   "USBPortType" = 0
+                          |   "bConfigurationValue" = 1
+                          |   "bInterfaceNumber" = 1
+                          |   "USB Vendor Name" = "Espressif"
+                          |   "IOServiceDEXTEntitlements" = (("com.apple.developer.driverkit.transport.usb"))
+                          |   "idVendor" = 12346
+                          |   "bNumEndpoints" = 2
+                          |   "USB Serial Number" = "AA:BB:CC:DD:EE:01"
+                          | }
+                          | 
+                          +-o AppleUSBACMData  <class AppleUSBACMData, id 0x100137b19, registered, matched, active, busy 0 (2 ms), retain 7>
+                            | {
+                            |   "IOClass" = "AppleUSBACMData"
+                            |   "CFBundleIdentifier" = "com.apple.driver.usb.cdc.acm"
+                            |   "IOProviderClass" = "IOUSBHostInterface"
+                            |   "IOTTYBaseName" = "usbmodem"
+                            |   "idProduct" = 4097
+                            |   "IOProbeScore" = 49998
+                            |   "bInterfaceSubClass" = 2
+                            |   "IOMatchedAtBoot" = Yes
+                            |   "IOMatchCategory" = "IODefaultMatchCategory"
+                            |   "IOPersonalityPublisher" = "com.apple.driver.usb.cdc.acm"
+                            |   "idVendor" = 12346
+                            |   "CFBundleIdentifierKernel" = "com.apple.driver.usb.cdc.acm"
+                            |   "IOTTYSuffix" = "21101"
+                            |   "bInterfaceClass" = 10
+                            | }
+                            | 
+                            +-o IOSerialBSDClient  <class IOSerialBSDClient, id 0x100137b4b, registered, matched, active, busy 0 (1 ms), retain 5>
+                                {
+                                  "IOClass" = "IOSerialBSDClient"
+                                  "CFBundleIdentifier" = "com.apple.iokit.IOSerialFamily"
+                                  "IOProviderClass" = "IOSerialStreamSync"
+                                  "IOTTYBaseName" = "usbmodem"
+                                  "IOSerialBSDClientType" = "IOSerialStream"
+                                  "IOProbeScore" = 1000
+                                  "IOResourceMatch" = "IOBSD"
+                                  "IOMatchedAtBoot" = Yes
+                                  "IOMatchCategory" = "IODefaultMatchCategory"
+                                  "IOTTYDevice" = "usbmodem21101"
+                                  "IOCalloutDevice" = "/dev/cu.usbmodem21101"
+                                  "IODialinDevice" = "/dev/tty.usbmodem21101"
+                                  "IOPersonalityPublisher" = "com.apple.iokit.IOSerialFamily"
+                                  "CFBundleIdentifierKernel" = "com.apple.iokit.IOSerialFamily"
+                                  "IOTTYSuffix" = "21101"
+                                }
+                                
+
++-o Root  <class IORegistryEntry, id 0x100000100, retain 35>
+  +-o J000AP  <class IOPlatformExpertDevice, id 0x100000258, registered, matched, active, busy 0 (921042 ms), retain 41>
+    +-o IOResources  <class IOResources, id 0x100000260, registered, matched, active, busy 0 (503256 ms), retain 60>
+      +-o IOBluetoothHCIController  <class IOBluetoothHCIController, id 0x100000277, registered, matched, active, busy 0 (8655 ms), retain 9>
+        +-o IOBluetoothDevice  <class IOBluetoothDevice, id 0x1000f1a58, registered, matched, active, busy 0 (57 ms), retain 8>
+          +-o IOUserBluetoothSerialDriver  <class IOUserService, id 0x1000f1a59, registered, matched, active, busy 0 (4 ms), retain 10>
+            +-o IOUserPseudoSerial  <class IOUserSerial, id 0x1000f1a5d, registered, matched, active, busy 0 (2 ms), retain 10>
+              +-o IOSerialBSDClient  <class IOSerialBSDClient, id 0x1000f1a5e, registered, matched, active, busy 0 (1 ms), retain 5>
+                  {
+                    "IOClass" = "IOSerialBSDClient"
+                    "CFBundleIdentifier" = "com.apple.iokit.IOSerialFamily"
+                    "IOProviderClass" = "IOSerialStreamSync"
+                    "IOTTYBaseName" = "Bluetooth-Incoming-Port"
+                    "IOSerialBSDClientType" = "IOSerialStream"
+                    "IOProbeScore" = 1000
+                    "IOResourceMatch" = "IOBSD"
+                    "IOMatchedAtBoot" = Yes
+                    "IOMatchCategory" = "IODefaultMatchCategory"
+                    "IOTTYDevice" = "Bluetooth-Incoming-Port"
+                    "IOCalloutDevice" = "/dev/cu.Bluetooth-Incoming-Port"
+                    "IODialinDevice" = "/dev/tty.Bluetooth-Incoming-Port"
+                    "IOPersonalityPublisher" = "com.apple.iokit.IOSerialFamily"
+                    "CFBundleIdentifierKernel" = "com.apple.iokit.IOSerialFamily"
+                    "IOTTYSuffix" = ""
+                  }
+                  

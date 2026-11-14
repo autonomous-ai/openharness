@@ -28,7 +28,8 @@ messages, replayed from the built bridge. They are not photographs of the panel.
 
 ## Controls
 
-- Tap the glass to speak; tap again to finish.
+- Tap the glass to speak; tap again to finish. An agent in another app (Orca, a
+  terminal) cannot hear the dial: the tap shows "See it in Orca" instead.
 - Drag vertically to scroll the selected desktop pane; swipe horizontally to
   switch panes. A drag cannot also start the microphone.
 - Hold for the directional menu: up for panes, left for tabs, right for inbox,

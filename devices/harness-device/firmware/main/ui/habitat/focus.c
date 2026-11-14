@@ -97,6 +97,14 @@ static const char *const RELAXING[] = {
     TAP_NAME, TAP_NAME, TAP_NAME, TAP_NAME, TAP_NAME,
     "What's next?", "Your move", "Say the word", "Ask away",
 };
+/*
+ * AN AGENT WITHOUT VOICE (caps lack V: it lives in another app): a tap only says where it lives, so every line above
+ * that asks it for something would invite what the dial then refuses. It keeps the lines that teach the dial.
+ */
+static const char *const RESTING_MUTE[] = {HOLD_FOR_TABS, TAP_THE_NAME};
+static const char *const RELAXING_MUTE[] = {HOLD_TABS, TAP_NAME};
+static bool voice_ok = true;
+void ht_focus_set_voice(bool can_talk) { voice_ok = can_talk; }
 static struct {
     bool showing;           // the last home face drawn was a resting one
     char who[64];           // ... for this recipient
@@ -122,10 +130,12 @@ static const char *pick_line(const ht_character_face_t *f, const char *const *li
 }
 static const char *resting_line(const ht_character_face_t *f)
 {
+    if (!voice_ok) return pick_line(f, RESTING_MUTE, sizeof RESTING_MUTE / sizeof RESTING_MUTE[0]);
     return pick_line(f, RESTING, sizeof RESTING / sizeof RESTING[0]);
 }
 static const char *relaxing_line(const ht_character_face_t *f)
 {
+    if (!voice_ok) return pick_line(f, RELAXING_MUTE, sizeof RELAXING_MUTE / sizeof RELAXING_MUTE[0]);
     return pick_line(f, RELAXING, sizeof RELAXING / sizeof RELAXING[0]);
 }
 
@@ -881,6 +891,10 @@ void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, u
     int title_run = s->count;
     ht_arc_title_face(s, ht_rgb(FOCUS_FG), f->recipient && *f->recipient ? f->recipient : "\xe2\x80\xa6",
                       &ht_arc_inter_prop);
+    // The face's grey line, smaller on the curve under it, in the gap above the pet (option A, 2026-10-28): in the machine
+    // view, the app an agent runs in.
+    static const ht_arc_face_t chat_face = {.prop = &ht_lv_inter_20, .mid = 12};
+    if (f->chat && *f->chat) ht_arc_inner_face(s, ht_rgb(HT_THEME_SECONDARY), f->chat, &chat_face);
 
     // The engine's mark, in the middle of the glass. An unknown engine leaves the place empty.
     int engine = ht_focus_engine_index(f->engine);

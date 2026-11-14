@@ -69,6 +69,7 @@ import { dropAgentSessionEnv } from '../lib/agentSessionEnv.js'
 import { AUTH_DIR, AuthSessionError, ensureSignInEpoch, markSignedOut, readAuthSession, signInOf, type AuthSession } from '../lib/authSession.js'
 import { ENGINES, enginePathOverride } from '../lib/engineBin.js'
 import { isTerminalEngine, type AgentEngine } from '../engines/types.js'
+import { createObservedHook } from './observedHook.js'
 import { engineInstallRecipe } from '../lib/engineInstall.js'
 import { buildEngineLaunchArgv, engineLaunchEnv, supportsFirstPrompt, typedFirstPrompt } from '../lib/engineLaunch.js'
 import { isWindowsHeldPane, windowsPaneLaunch } from '../lib/windows/engineStart.js'
@@ -2266,6 +2267,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Windows: the daemon's pipe takes only requests that prove this token (lib/windows/pipeAuth.ts). It is made on
   // the first start and kept in the data folder, in the profile.
   const pipeToken = process.platform === 'win32' ? ensureDaemonToken(env.ADAPTER_DATA_DIR) : null
+  const observedHook = createObservedHook({
+    // Monotonic: the rate limit measures intervals, which a wall clock set back would stretch.
+    now: () => performance.now(),
+    forward: (observed) => ports.devices?.observed(observed) ?? false,
+  })
   const { server: hookServer, port: hookPort, localSocket } = await startHookServer(daemonPort(), {
     onAutonomousDeviceRequest: async (method, target, body) => {
       // Until the pieces below are built; after, a piece that could not be is refused by the requests
@@ -2310,6 +2316,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     onTurnStart: turnHooks.onTurnStart,
     onToolStart: turnHooks.onToolStart,
     onTurnStop: turnHooks.onTurnStop,
+    // A paneless agent's event goes on to the devices process and stays nowhere in the core; no devices, no forward.
+    onObserved: observedHook.onObserved,
     onPromptHook: turnHooks.onPromptHook,
     stopHookDelayMs: Number(harnessd.HARNESSD_TEST_STOP_HOOK_DELAY_MS) || 0,
     // `harness pair`, `unpair`, `remote-password`, `link connect`, `group` and `devices`: the keys are the
