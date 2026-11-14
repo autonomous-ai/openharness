@@ -21,8 +21,9 @@ plan and the root `AGENTS.md`. The spec is the authority.
 ## Decisions
 
 - `CONTRIBUTING.md`, step 5, gets the same rule in this pull request (Task 1, Step 4).
-- `docs/pr-triage/roles.md` does not change: that role merges outside contributors' pull requests and keeps its
-  stricter rule. The docs this change edits say nothing about it.
+- `docs/pr-triage/roles.md` keeps its stricter rule for outside contributors' pull requests; only its "(AGENTS.md)"
+  attribution goes, since `AGENTS.md` now names the admin merge.
+- The admin merge also needs no unresolved review conversation: `--admin` never skips one.
 
 ## Global Constraints
 
