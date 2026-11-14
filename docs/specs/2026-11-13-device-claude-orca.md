@@ -147,6 +147,10 @@ observed event. The core keeps nothing. There is no approval route, no held requ
 **In the devices process.** An `asked` event makes the observed agent `needs-you` with the activity line
 "<summary> · answer in {Host}" (the host's display name: Orca, Ghostty, Terminal, …), through the same activity path as
 wave 0's "Waiting for you · {Host}", which it replaces for that session, so the two never show as two lines or flicker.
+On the round dial an activity line is drawn on the working face, so the dial also gets the existing `question` frame,
+for display only (Diego, after the dial check: "the device only shows the question"): the asking face and its bubble
+with "<summary> · answer in {Host}". Nothing answers it: the hook has already decided nothing, and every `answer` or
+`answer.reviewed` frame for it is dropped. It closes (`question.close`) when the waiting line clears.
 The next hook event of that session (UserPromptSubmit, Stop, StopFailure, SessionEnd) clears it, and so does the open
 session's transcript check (every 3 s), which sees a prompt answered in the app. PostToolUse is not used: Harness does
 not run its hook script on every tool call, and adding one would start a process per tool call. A character the round
