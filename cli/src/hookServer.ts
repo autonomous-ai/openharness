@@ -979,6 +979,8 @@ export function startHookServer(
         // Before the body is read: the person can answer in the terminal at any time, and Claude Code then kills the hook.
         const gone = new AbortController()
         res.once('close', () => { if (!res.writableEnded) gone.abort() })
+        // The caller check was awaited above: a client that went during it closed before this listened, and is gone already.
+        if (req.socket.destroyed) return
         let body: unknown
         // 4 KB: a session id, a tool's name, a 200-byte summary and a path.
         try { body = JSON.parse(await readBody(req, 4096)) as unknown } catch { json(400, { error: 'bad json' }); return }
@@ -994,6 +996,8 @@ export function startHookServer(
         // Before the body is read: a mod whose Claude Code quit holds no poll the devices should still answer.
         const gone = new AbortController()
         res.once('close', () => { if (!res.writableEnded) gone.abort() })
+        // Gone during the caller check, as for an approval.
+        if (req.socket.destroyed) return
         let body: unknown
         // 1 KB: a session id.
         try { body = JSON.parse(await readBody(req, 1024)) as unknown } catch { json(400, { error: 'bad json' }); return }
