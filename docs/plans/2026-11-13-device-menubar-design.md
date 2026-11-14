@@ -70,7 +70,7 @@ Window   ─ webview ui/ (3 screens) ──┤ invoke / events
      install.rs  install script runs (--host, then --desktop)
      account.rs  `auth status --json`, `login --json`
      claude.rs   `device claude status|enable|disable`
-     state.rs    ~/.harness/device-app/state.json
+     state.rs    state.json in the app data folder (not ~/.harness)
      desktop.rs  desktop app installed / running (trait; macOS NSWorkspace)
      loginitem.rs SMAppService register (trait)
      model.rs    AppState → menu model (pure: what the menu shows)
