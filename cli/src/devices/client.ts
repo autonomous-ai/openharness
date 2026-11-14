@@ -120,7 +120,7 @@ export function runDialWatch(argv: string[], deps: DialWatchDeps): Promise<numbe
   }
   return new Promise(resolve => {
     let socket: ClientSocket | undefined
-    let settled = false, last: string | undefined
+    let settled = false, exited = false, last: string | undefined
     // The app in front as an app id (the raw name stops in this process), the last one the devices' listener took, and
     // whether the current one is owed to it whatever it took before: a dial that attaches may come with a new devices process.
     let front: string | undefined, told: string | undefined, owed = false, telling = false
@@ -161,14 +161,15 @@ export function runDialWatch(argv: string[], deps: DialWatchDeps): Promise<numbe
       let bound: ReturnType<typeof setTimeout> | undefined
       void Promise.race([last, new Promise(done => { bound = setTimeout(done, QUIT_TELL_MS) })]).then(() => {
         clearTimeout(bound)
+        exited = true
         resolve(code)
       })
     }
     // The Device app quit: the devices would otherwise go on following the last app it saw in front. One try, after the
-    // tell under way so the listener hears none last.
+    // tell under way so the listener hears none last, and none once the bound has passed: it would hold the process on.
     const quit = (): void => {
       if (settled || !sentApp) return finish(0)
-      const none = (): Promise<boolean> => tell({ type: 'front', app: 'none' })
+      const none = async (): Promise<void> => { if (!exited) await tell({ type: 'front', app: 'none' }) }
       finish(0, undefined, telling && under ? under.then(none) : none())
     }
     // A daemon that takes the socket and never answers would otherwise keep the app's probe waiting for ever.
