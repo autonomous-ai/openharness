@@ -105,7 +105,8 @@ function result(stdout: string): Record<string, unknown> {
   }
   return {}
 }
-/** Read on every call: `harness start` starts the daemon and a sign-in starts it again, each time on a port of its own. */
+/** Read on every call: `harness start` starts the daemon and a sign-in starts it again, and a start that finds its port
+ *  taken binds another and records it. */
 async function daemonStatus(box: Box): Promise<{ machineId?: string; connected?: boolean; signedIn?: boolean }> {
   const port = readDaemonRecord(join(box.home, 'data'), box.port)?.port
   if (port === undefined) throw new Error(`${box.name}'s daemon has not recorded its port yet`)
