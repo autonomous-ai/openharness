@@ -59,13 +59,13 @@ code += source
 code += r'''
 int main(void) {
     ht_layout_benchmark(scratch,&a,&b,fake_paint);
-    assert(blocks==120 && ends==1 && !cancels && paints==2460);
+    assert(blocks==96 && ends==1 && !cancels && paints==1968);
     ht_layout_benchmark(scratch,&a,&b,fake_paint);
-    assert(skips==1 && blocks==120);
+    assert(skips==1 && blocks==96);
     attempted[0]=attempted[1]=0;queries=0;cancel_at=99;
     ht_layout_benchmark(scratch,&a,&b,fake_paint);
     assert(cancels==1 && ends==1 && a.count==0 && b.count==0);
-    puts("Layout benchmark: 4800 nonzero-damage workloads, 2460 bounded panel calls, one-shot reset guard and physical-input cancellation PASS (offline)");
+    puts("Layout benchmark: 3840 nonzero-damage workloads, 1968 bounded panel calls, one-shot reset guard and physical-input cancellation PASS (offline)");
 }
 '''
 with tempfile.TemporaryDirectory(prefix='harness-layout-bench-') as d:

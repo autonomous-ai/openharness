@@ -79,21 +79,20 @@ import UserNotifications
     HandoffChannel.register(with: engineBridge.pluginRegistry)
     ChimeChannel.register(with: engineBridge.pluginRegistry)
     AppBadgeChannel.register(with: engineBridge.pluginRegistry)
-    LinkChannel.register(with: engineBridge.pluginRegistry)
     SetupWifiChannel.register(with: engineBridge.pluginRegistry)
     PushChannel.shared.attach(to: engineBridge.pluginRegistry)
   }
 }
 
-/// `harness/push` — this phone's push address, the pushes the person tapped, and the pushes still shown
-/// (Dart: `lib/notify/push_channel.dart`).
+/// `harness/push` — this phone's push address and the pushes the person tapped (Dart:
+/// `lib/notify/push_channel.dart`).
 ///
 /// `address` asks iOS for the APNs device token, which comes back to the app delegate; every call
 /// waiting then hears it. `forget` stops iOS delivering to it: the phone signed out. `changed` tells
 /// Dart that iOS handed over another token while the app ran.
 ///
-/// A tapped push's data waits here until Dart's `take` answers it, as `LinkChannel`'s links do: the
-/// push that launched the app is tapped before the engine is up. At most 20 wait, the newest kept;
+/// A tapped push's data waits here until Dart's `take` answers it: the push that launched the app is
+/// tapped before the engine is up. At most 20 wait, the newest kept;
 /// `arrived` tells a listening Dart that more wait. Everything here runs on the main thread.
 final class PushChannel {
   static let shared = PushChannel()
@@ -122,19 +121,6 @@ final class PushChannel {
       case "take":
         result(self.waiting)
         self.waiting.removeAll()
-      case "shown":
-        // The keys of our pushes still in the notification centre, and the slots they show in: the
-        // app does not post them again (Dart: `PushChannel.shown`). The server keys a push as the app
-        // keys its own notice, and a thread's replies share one slot (task #3248).
-        UNUserNotificationCenter.current().getDeliveredNotifications { delivered in
-          let keys = delivered
-            .filter { $0.request.trigger is UNPushNotificationTrigger }
-            .flatMap { shown -> [String] in
-              let info = shown.request.content.userInfo
-              return [info["key"], info["slot"]].compactMap { $0 as? String }
-            }
-          DispatchQueue.main.async { result(keys) }
-        }
       default:
         result(FlutterMethodNotImplemented)
       }
@@ -300,71 +286,9 @@ enum SetupWifiChannel {
   }
 }
 
-/// `harness/links` — the message links (`harness://swarm/<tab>/<conversation>/<message>`, Desktop's
-/// Copy link to message) this phone was asked to open (Dart: `SwarmLinkChannel` in
-/// `lib/swarm/swarm_message_link.dart`). A link that launches the app comes with the scene's
-/// connection options, one that arrives while it runs through `openURLContexts`; Flutter's scene
-/// delegate passes both to plugins registered for scene events, as this is.
-///
-/// Each link waits here until Dart's `take` answers it (and empties the list), so one that launched
-/// the app, or came before sign-in, waits for the signed-in screen to ask; `arrived` tells a
-/// listening Dart that more wait. At most 20 wait, the newest kept. Only `harness://swarm` links are
-/// taken; any other URL is left to whoever else handles it.
-final class LinkChannel: NSObject, FlutterSceneLifeCycleDelegate {
-  /// Held here: the registrar keeps scene delegates weakly.
-  private static var shared: LinkChannel?
-
-  private let channel: FlutterMethodChannel
-  private var waiting: [String] = []
-
-  static func register(with registry: FlutterPluginRegistry) {
-    guard let registrar = registry.registrar(forPlugin: "HarnessLinks") else { return }
-    let links = LinkChannel(messenger: registrar.messenger())
-    registrar.addSceneDelegate(links)
-    shared = links
-  }
-
-  private init(messenger: FlutterBinaryMessenger) {
-    channel = FlutterMethodChannel(name: "harness/links", binaryMessenger: messenger)
-    super.init()
-    channel.setMethodCallHandler { [weak self] call, result in
-      guard call.method == "take", let self else {
-        result(FlutterMethodNotImplemented)
-        return
-      }
-      result(self.waiting)
-      self.waiting.removeAll()
-    }
-  }
-
-  @objc(scene:willConnectToSession:options:)
-  func scene(
-    _ scene: UIScene,
-    willConnectTo session: UISceneSession,
-    options connectionOptions: UIScene.ConnectionOptions?
-  ) -> Bool {
-    receive(connectionOptions?.urlContexts ?? [])
-  }
-
-  @objc(scene:openURLContexts:)
-  func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) -> Bool {
-    receive(URLContexts)
-  }
-
-  private func receive(_ contexts: Set<UIOpenURLContext>) -> Bool {
-    let links = contexts.map(\.url)
-      .filter { $0.scheme == "harness" && $0.host == "swarm" }
-      .map(\.absoluteString)
-    if links.isEmpty { return false }
-    waiting = Array((waiting + links).suffix(20))
-    channel.invokeMethod("arrived", arguments: nil)
-    return true
-  }
-}
-
-/// `harness/app_badge` — the app icon's count (Dart: `setSwarmBadge` in `lib/notify/system_notices.dart`):
-/// what the Swarms ask of the person, the drawer's waiting count. `set` takes the count; zero takes it
-/// off. Drawn only where the person allowed badges with the notification prompt.
+/// `harness/app_badge` — the app icon's count. `set` takes the count; zero takes it off. Only the
+/// cleanup of what the removed Swarm left (Dart: `lib/core/swarm_leftovers.dart`) still calls it, with
+/// zero, to take off the count the Swarm set; it goes with that cleanup after 2027-02-14.
 enum AppBadgeChannel {
   static func register(with registry: FlutterPluginRegistry) {
     guard let messenger = registry.registrar(forPlugin: "HarnessAppBadge")?.messenger() else { return }

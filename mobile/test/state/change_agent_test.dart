@@ -132,8 +132,7 @@ void main() {
       'sessionId': 's1',
       'createdAt': created,
       'mode': 'now',
-      // The switch the handoff was prepared for: a Swarm Product Manager's machine stops it only
-      // for that switch, and any other machine reads past it.
+      // The switch the handoff was prepared for.
       'changeId': create['creationId'],
     });
     expect(create['engine'], 'codex');
@@ -418,172 +417,6 @@ void main() {
     });
   });
 
-  // A Swarm's Product Manager is switched from its pane like any harness (#2493). Its machine stops
-  // it only for a `now` close that names the switch whose handoff it prepared moments before, and
-  // only once (cli superTabs/leadSwitch.ts); any other close is refused LEAD_PROTECTED.
-  group('a Swarm Product Manager', () {
-    const protectedWords =
-        'This harness is the Product Manager of a Swarm project. '
-        'Delete its project first to stop it.';
-    const switchingWords =
-        'This Product Manager is already switching its agent. '
-        'Wait for it to finish.';
-
-    /// A machine that runs `a` as a Swarm's Product Manager, guarding its close as the CLI does.
-    /// [words]: whether its refusal carries the CLI's sentence.
-    Future<ViewerRig> leadRig({bool words = true}) async {
-      final rig = await rigWith([source()]);
-      final answers = rig.conn('m').answers;
-      final prepare = answers['agent_handoff_prepare']!;
-      final prepared = <String>{}, used = <String>{};
-      answers['agent_handoff_prepare'] = (p) {
-        prepared.add(p['changeId'] as String);
-        return prepare(p);
-      };
-      answers['agent_close'] = (p) {
-        final change = p['changeId'];
-        if (p['mode'] != 'now' ||
-            change is! String ||
-            !prepared.contains(change) ||
-            !used.add(change)) {
-          throw refusal(
-            'LEAD_PROTECTED',
-            detail: words ? protectedWords : null,
-          );
-        }
-        return {'closed': true};
-      };
-      answers['agent_handoff_complete'] = (_) => {'ok': true};
-      return rig;
-    }
-
-    bool stillRunning(ViewerRig rig) =>
-        !rig.app.stateOf('m')!.agents.firstWhere((a) => a.id == 'a').isStopped;
-
-    test('its close names the switch its handoff was prepared for, so its '
-        'machine stops it; then the machine hears which harness took '
-        'over', () async {
-      final rig = await leadRig();
-
-      final result = await finished(
-        rig,
-        rig.app.changeAgent('m', 'a', 'codex'),
-      );
-
-      expect(result.error, isNull);
-      expect(result.agentId, 'b');
-      final conn = rig.conn('m');
-      final changeId = conn
-          .payloadsOf('agent_handoff_prepare')
-          .single['changeId'];
-      expect(changeId, matches(RegExp(r'^[0-9a-f]{32}$')));
-      expect(conn.payloadsOf('agent_close').single['changeId'], changeId);
-      expect(
-        conn.payloadsOf('agent_create').single['creationId'],
-        changeId,
-        reason: 'its machine finds the new session by the same id',
-      );
-      expect(conn.payloadsOf('agent_handoff_complete').single, {
-        'agentId': 'a',
-        'replacementId': 'b',
-        'changeId': changeId,
-        'targetEngine': 'codex',
-      });
-      expect(
-        conn.asked.indexOf('agent_handoff_complete'),
-        greaterThan(conn.asked.indexOf('agent_create')),
-        reason: 'reported only once the new harness runs',
-      );
-    });
-
-    test('no handoff prepared, no change named: its machine refuses, its '
-        'words are said, and it keeps running with nothing started', () async {
-      // An engine that takes no first message gets no handoff; an older machine hands over the
-      // last requests instead. Neither prepared this switch on the machine.
-      for (final older in [false, true]) {
-        final rig = await leadRig();
-        if (older) {
-          final answers = rig.conn('m').answers;
-          answers['agent_handoff_prepare'] = (_) =>
-              throw refusal('UNSUPPORTED');
-          answers['agent_recent'] = (_) => {
-            'agentId': 'a',
-            'asks': ['plan the release'],
-          };
-        }
-
-        final result = await rig.app.changeAgent(
-          'm',
-          'a',
-          older ? 'codex' : 'cursor',
-        );
-
-        expect(result.error, protectedWords);
-        final conn = rig.conn('m');
-        expect(
-          conn.payloadsOf('agent_close').single.containsKey('changeId'),
-          isFalse,
-        );
-        expect(conn.payloadsOf('agent_create'), isEmpty);
-        expect(conn.payloadsOf('agent_handoff_complete'), isEmpty);
-        expect(stillRunning(rig), isTrue);
-        expect(rig.app.agentChanging('m', 'a'), isFalse);
-      }
-    });
-
-    test('a refusal without words is said in a sentence, never as its '
-        'code', () async {
-      final rig = await leadRig(words: false);
-
-      final result = await rig.app.changeAgent('m', 'a', 'cursor');
-
-      expect(result.error, protectedWords);
-      expect(result.error, isNot(contains('LEAD_PROTECTED')));
-
-      // The same refusal in the reply itself rather than as an error frame.
-      rig.conn('m').answers['agent_close'] = (_) => {'error': 'LEAD_SWITCHING'};
-      final again = await rig.app.changeAgent('m', 'a', 'cursor');
-      expect(again.error, switchingWords);
-      expect(rig.conn('m').payloadsOf('agent_create'), isEmpty);
-      expect(stillRunning(rig), isTrue);
-    });
-
-    test('refused while another switch runs: choosing it again prepares a new '
-        'switch under a new id, never the refused one', () async {
-      final rig = await leadRig();
-      final answers = rig.conn('m').answers;
-      final guarded = answers['agent_close']!;
-      var closes = 0;
-      answers['agent_close'] = (p) => closes++ == 0
-          ? throw refusal('LEAD_SWITCHING', detail: switchingWords)
-          : guarded(p);
-
-      final first = await rig.app.changeAgent('m', 'a', 'codex');
-
-      expect(first.error, switchingWords);
-      expect(rig.conn('m').payloadsOf('agent_create'), isEmpty);
-      expect(stillRunning(rig), isTrue);
-
-      final second = await finished(
-        rig,
-        rig.app.changeAgent('m', 'a', 'codex'),
-      );
-
-      expect(second.error, isNull);
-      expect(second.agentId, 'b');
-      final conn = rig.conn('m');
-      final [one, two] = conn.payloadsOf('agent_handoff_prepare');
-      expect(two['changeId'], isNot(one['changeId']));
-      final [refused, closed] = conn.payloadsOf('agent_close');
-      expect(refused['changeId'], one['changeId']);
-      expect(closed['changeId'], two['changeId']);
-      expect(
-        conn.payloadsOf('agent_create').single['creationId'],
-        two['changeId'],
-      );
-    });
-  });
-
   test(
     'an older machine that has no replacement report: the switch is done',
     () async {
@@ -610,13 +443,10 @@ void main() {
     'a replacement report refused or never answered is not the end of the '
     'switch: it says so, and choosing again reports it, as the desktop does',
     () async {
-      // Unreported, a Swarm Product Manager's machine never takes the new session in, and closes it
-      // once its time is up (cli superTabs/host.ts, SWITCH_ADOPT_MS): the switch would undo itself.
       for (final answer
           in <Map<String, dynamic> Function(Map<String, dynamic>)>[
             (_) => throw const WsRequestTimeout('agent_handoff_complete'),
             (_) => {'error': 'HANDOFF_UNAVAILABLE'},
-            (_) => throw refusal('LEAD_SWITCHING'),
           ]) {
         final rig = await rigWith([source()]);
         rig.conn('m').answers['agent_handoff_complete'] = answer;
@@ -677,32 +507,13 @@ void main() {
     expect(rig.conn('m').payloadsOf('agent_create'), hasLength(1));
   });
 
-  test('a refused close is said in the machine’s words, else in a sentence '
-      'for its code', () {
+  test('a refused close is said in the machine’s words, else in a sentence', () {
     const generic =
         'Could not save and stop this conversation. '
         'Its agent has not been changed.';
-    expect(
-      AppNotifier.closeRefusalMessage('CLOSE_FAILED', 'Disk is full'),
-      'Disk is full',
-    );
-    expect(
-      AppNotifier.closeRefusalMessage('LEAD_PROTECTED', 'Machine words.'),
-      'Machine words.',
-    );
+    expect(AppNotifier.closeRefusalMessage('Disk is full'), 'Disk is full');
     for (final detail in [null, '', 7]) {
-      expect(
-        AppNotifier.closeRefusalMessage('LEAD_PROTECTED', detail),
-        'This harness is the Product Manager of a Swarm project. '
-        'Delete its project first to stop it.',
-      );
-      expect(
-        AppNotifier.closeRefusalMessage('LEAD_SWITCHING', detail),
-        'This Product Manager is already switching its agent. '
-        'Wait for it to finish.',
-      );
-      expect(AppNotifier.closeRefusalMessage('CLOSE_FAILED', detail), generic);
-      expect(AppNotifier.closeRefusalMessage(null, detail), generic);
+      expect(AppNotifier.closeRefusalMessage(detail), generic);
     }
   });
 
@@ -882,7 +693,7 @@ void main() {
     final rig = await rigWith([source()]);
     final state = rig.app.machineStates['m']!;
     // The desktop offers Change agent on its owner's own machine only, and the machine answers
-    // the handoff for its owner alone (cli superTabs/leadSwitch.ts).
+    // the handoff for its owner alone (cli services/handoff.ts).
     state.machine = Machine(
       machineId: 'm',
       authMode: state.machine.authMode,

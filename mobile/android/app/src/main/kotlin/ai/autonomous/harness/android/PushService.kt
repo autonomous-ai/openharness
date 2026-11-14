@@ -6,9 +6,9 @@ import com.google.firebase.messaging.FirebaseMessagingService
 
 /**
  * FCM's side of push (Dart: `lib/notify/push_channel.dart`). The server sends a notification
- * message (backend/src/push/fcm.ts): while the app is away Android draws it on the app's Swarm
- * channel, and its tap reaches MainActivity's `receivePush`; while the app is in front it comes to
- * `onMessageReceived`, which draws nothing, as the app tells it with its own notices.
+ * message (backend/src/push/fcm.ts): while the app is away Android draws it, and its tap reaches
+ * MainActivity's `receivePush`; while the app is in front it comes to `onMessageReceived`, which
+ * draws nothing.
  */
 class PushService : FirebaseMessagingService() {
   // Tokens, not Installation IDs (`onRegistered`): see `pushAddress` in MainActivity.kt.
