@@ -107,6 +107,10 @@ export interface DaemonOptions {
   graphicsQuery?: { title: string; titleAfterMs: number }
 }
 
+/** The port a daemon is configured with: its `PORT`, which names its socket, its record and its artifacts. It is free
+ *  when picked and closed before the daemon binds it, so another process can take it first (cli-e2e run 43568618113,
+ *  shard 2). That is harmless: the daemon then listens on another port and says which, and the harness reads that one
+ *  (`listeningPort`). */
 async function freePort(): Promise<number> {
   const server = createServer()
   await new Promise<void>((done) => server.listen(0, '127.0.0.1', done))
@@ -114,6 +118,21 @@ async function freePort(): Promise<number> {
   await new Promise<void>((done) => server.close(() => done()))
   if (!address || typeof address === 'string') throw new Error('no free port')
   return address.port
+}
+
+/** The port in the last `[hooks] listening on 127.0.0.1:<n> (` line of a daemon's output (hookServer.ts), or null
+ *  before it said one. The last, so a core started again on another port is followed. The bracket after the number is
+ *  part of the match on purpose: output arrives in chunks, and a line cut inside its port would read as a shorter one. */
+export function listeningPort(output: string): number | null {
+  const said = [...output.matchAll(/\[hooks\] listening on 127\.0\.0\.1:(\d+) \(/g)]
+  return said.length ? Number(said[said.length - 1][1]) : null
+}
+
+/** listeningPort of [output]; before the daemon said one, an error by name rather than a guess. */
+function saidPort(output: string): number {
+  const port = listeningPort(output)
+  if (port === null) throw new Error('the daemon has not said which port it listens on yet')
+  return port
 }
 
 /** Inside `root`, or `root` itself. */
@@ -388,8 +407,10 @@ export class IsolatedDaemon {
   get dataDir(): string { return this.env.ADAPTER_DATA_DIR! }
   get computerId(): string { return this.env.ADAPTER_COMPUTER_ID! }
   get socketPath(): string { return join(this.dataDir, `daemon-${this.configuredPort}.sock`) }
-  /** The port its control server answers on. */
-  get port(): number { return this.configuredPort }
+  /** The port its control server answers on, as the daemon last said it: not the configured one, which another process
+   *  may have taken first. The last line, so a core the master starts again on another port is followed, as
+   *  `corePid()` follows it. */
+  get port(): number { return saidPort(this.output) }
   get projectsDir(): string { return join(this.root, 'projects') }
   /** The process `harness start` would have started: the master, or a core run on its own. */
   get pid(): number | null { return this.child?.pid ?? null }
@@ -451,8 +472,12 @@ export class IsolatedDaemon {
     if (options.ready === 'none') return
     await Promise.race([exited, (async () => {
       await until('the daemon to answer on its port', async () => {
-        const response = await fetch(`http://127.0.0.1:${this.port}/api/health`).catch(() => null)
-        return response?.ok ? true : null
+        // The port this start said, never an earlier boot's: a start can move it. Every miss throws, so the timeout
+        // names the last one (`until`): no port said yet, a refused connection, or an answer that is not healthy.
+        const port = saidPort(this.output.slice(from))
+        const response = await fetch(`http://127.0.0.1:${port}/api/health`)
+        if (!response.ok) throw new Error(`port ${port} answered /api/health with ${response.status}`)
+        return true
       }, 60_000, 200)
       await until('the daemon socket', () => existsSync(this.socketPath), 10_000)
       // The port answers ~1,100 lines of startup before every handler is wired (see the startup-race
