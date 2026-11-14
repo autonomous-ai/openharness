@@ -469,10 +469,23 @@ describe.skipIf(process.platform === 'win32')('the devices listener', () => {
 })
 
 describe('the devices listener on every computer', () => {
-  it('with no path (Windows) nothing is opened and nothing is logged', async () => {
+  const noPath = (platform: NodeJS.Platform, log: (line: string) => void) => {
+    const options = { path: null, handlers: { front: frontHandler(() => {}) }, log, platform }
+    return openDevicesListener(options)
+  }
+
+  it('with no path on Windows, where there is no listener yet, nothing is opened and nothing is logged', async () => {
     const log = vi.fn()
-    expect(await openDevicesListener({ path: null, handlers: { front: frontHandler(() => {}) }, log })).toBeNull()
+    expect(await noPath('win32', log)).toBeNull()
     expect(log).not.toHaveBeenCalled()
+  })
+
+  it('with no path elsewhere (a data folder and a home both too long) nothing is opened, and it says so', async () => {
+    for (const platform of ['darwin', 'linux'] as const) {
+      const lines: string[] = []
+      expect(await noPath(platform, (line) => lines.push(line))).toBeNull()
+      expect(lines, platform).toEqual(['[devices] listener not opened · no path'])
+    }
   })
 })
 
