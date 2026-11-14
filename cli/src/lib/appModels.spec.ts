@@ -228,6 +228,19 @@ describe.skipIf(process.platform === 'win32')('an engine started on a port it pi
     await ops.stop(record(mine, again))
   })
 
+  // An engine from an earlier start can still run (the model on another grid, an Ollama whose start failed). Given the
+  // same file emptied, it wrote on at its own offset, into the lines a later start reads its port from.
+  it('starts each run on a log of its own, which an engine still running from an earlier start never writes into', async () => {
+    const engine = fake('ollama'), mine = ollama(engine.binary)
+    const earlier = await ops.start(mine, 65536, logs)
+    const again = await ops.start(mine, 65536, logs)
+    expect(again.port).toBe(engine.starts()[1].port)
+    expect((await fetch(`http://127.0.0.1:${earlier.port}/from-the-earlier-engine`)).status).toBe(200)
+    expect(readFileSync(join(logs, 'ollama-qwen3%3A8b.log'), 'utf8')).not.toContain('from-the-earlier-engine')
+    await ops.stop(record(mine, earlier))
+    await ops.stop(record(mine, again))
+  })
+
   it.each([
     ['ollama', ollama, 'Ollama could not start. Try again.'],
     ['llama.cpp', llama, 'llama.cpp could not load the model. Try again.'],

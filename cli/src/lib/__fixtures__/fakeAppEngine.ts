@@ -3,7 +3,8 @@
  *
  * Asked for port 0, the real engines bind a port of the system's choosing and print it in their log: Ollama 0.32.6
  * and llama.cpp 9550 did on this Mac on 2026-11-14, and this fake prints the lines they printed. It binds the port it
- * is asked for on 127.0.0.1, answers every request `200 {}`, and appends each start to a log the spec reads back.
+ * is asked for on 127.0.0.1, answers every request `200 {}` with a line in its log, and appends each start to a log
+ * the spec reads back.
  * Named as the real binary, so `ps` shows the name Stop checks for.
  */
 import { execFileSync } from 'node:child_process'
@@ -47,6 +48,9 @@ if (fault === 'exits') {
 process.on('SIGTERM', () => process.exit(0))
 if (fault === 'early-line') out.write('main: HTTP server is listening, hostname: 127.0.0.1, port: 0, http threads: 9\\n')
 const server = http.createServer((request, response) => {
+  // A line for each request, as the real engines print one, before the answer: a spec that has its answer has the line.
+  out.write((kind === 'ollama' ? '[GIN] | 200 | 127.0.0.1 | ' + request.method + ' "' + request.url + '"'
+    : 'srv  log_server_r: request: ' + request.method + ' ' + request.url + ' 127.0.0.1 200') + '\\n')
   response.writeHead(200, { 'content-type': 'application/json' })
   response.end('{}')
 })
