@@ -191,9 +191,10 @@ fn draw(handle: &AppHandle, effect: Effect) -> tauri::Result<()> {
     Ok(())
 }
 
-/// Whether showing `next` after `last` raises the window and takes the keyboard.
-fn raises(_last: Option<&View>, _next: &View) -> bool {
-    true
+/// Whether showing `next` after `last` raises the window and takes the keyboard: only a new screen does. A phase or
+/// its lines only redraw, so a sign-in's `Waiting` never takes the keyboard from the browser.
+fn raises(last: Option<&View>, next: &View) -> bool {
+    last.map(|view| view.screen) != Some(next.screen)
 }
 
 fn native_menu(handle: &AppHandle, items: &[MenuItem]) -> tauri::Result<Menu<tauri::Wry>> {
