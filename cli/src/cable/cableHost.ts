@@ -530,8 +530,7 @@ export class DaemonCableHost implements CableHost {
    *  fleet's router takes an id it does not know for a local agent and asks the core's doors, so each route here that
    *  names an agent answers for it first. Asked with a window too: the dial may still hold it from the machine list. */
   private outside(agentId: string): HostAgent | undefined {
-    const held = this.registry?.entries().find((e) => e.agent.id === agentId)
-    return held && held.source.id !== 'harness' ? held.agent : undefined
+    return this.registry?.outside(agentId)
   }
 
   capsOf(agentId: string): string | undefined {

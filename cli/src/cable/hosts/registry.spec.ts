@@ -65,6 +65,16 @@ describe('HostRegistry', () => {
     expect(new HostRegistry([fakeSource('observed', [])]).entries()).toEqual([])
   })
 
+  it('outside: the agent any source but Harness holds by that id, the merged list folding it away or not', () => {
+    const harness = fakeSource('harness', [agent({ id: 'h', sessionId: 's' })])
+    const observed = fakeSource('observed', [agent({ id: 'o', sessionId: 's' })])
+    const reg = new HostRegistry([harness, observed])
+    expect(ids(reg)).toEqual(['h'])
+    expect(reg.outside('o')?.id).toBe('o')
+    expect(reg.outside('h')).toBeUndefined()
+    expect(reg.outside('nobody')).toBeUndefined()
+  })
+
   it('reflects the sources live', () => {
     const observed = fakeSource('observed', [])
     const reg = new HostRegistry([observed])

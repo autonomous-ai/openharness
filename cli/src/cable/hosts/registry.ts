@@ -40,4 +40,15 @@ export class HostRegistry {
     }
     return out
   }
+
+  /** The agent a source other than Harness holds by this id, listed or not: one whose session a stronger source also
+   *  holds is left out of the merged list, and the id is still that source's, never a Harness agent's. */
+  outside(agentId: string): HostAgent | undefined {
+    for (const source of this.ordered) {
+      if (source.id === 'harness') continue
+      const agent = source.list().find((a) => a.id === agentId)
+      if (agent) return agent
+    }
+    return undefined
+  }
 }
