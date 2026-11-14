@@ -528,6 +528,18 @@ describe('harness hardware watch: the app in front', () => {
     await turn()
     expect(apps(run)).toEqual(['ghostty'])
   })
+  it('a tell answered after stdin closed leaves no timer', async () => {
+    let answer!: (taken: boolean) => void
+    const run = watch({ tell: vi.fn((_message: Told) => new Promise<boolean>(resolve => { answer = resolve })) })
+    await opened(run.socket)
+    connected(run.socket, ['dial-watch'])
+    front(run, 'com.mitchellh.ghostty')
+    run.stdin.emit('end')
+    expect(await run.done).toBe(0)
+    answer(true)
+    await new Promise(resolve => setImmediate(resolve))
+    expect(vi.getTimerCount()).toBe(0)
+  })
   it('a line in two chunks is one line; a 2000-byte line and a line that is not JSON are dropped, and the next line still works', async () => {
     const run = watch()
     await opened(run.socket)
