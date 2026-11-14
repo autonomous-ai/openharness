@@ -122,19 +122,20 @@ describe('ObservedSource states', () => {
     expect(src.capabilities()).toEqual({ status: true, voice: false, focus: false, answer: false })
   })
 
-  // Claude Code's Notification reaches the hook only for a prompt (hook/notify.mjs), and an agent the open scan found
-  // reads idle until its next hook, though its turn may already run: from idle it is a prompt, not a stale notice.
-  it('takes needs-input unless the turn has ended', () => {
+  // Claude Code's Notification reaches the hook only for a prompt (hook/notify.mjs): an agent the open scan found reads
+  // idle until its next hook, though its turn may run; the quota's resume asks after its turn stopped; and a turn another
+  // Stop hook keeps going asks after its Stop. Each is a prompt open in the terminal.
+  it('takes needs-input in every state', () => {
     const { src, ev } = setup()
     src.ingest(ev('session-start'))
     src.ingest(ev('needs-input'))
     expect(src.list()[0].state).toBe('needs-you')
     src.ingest(ev('turn-stop'))
     src.ingest(ev('needs-input'))
-    expect(src.list()[0].state).toBe('done')
+    expect(src.list()[0].state).toBe('needs-you')
     src.ingest(ev('turn-error'))
     src.ingest(ev('needs-input'))
-    expect(src.list()[0].state).toBe('error')
+    expect(src.list()[0].state).toBe('needs-you')
   })
 
   it('turn-stop for claude sets lastAnswer and unseenDone', async () => {
@@ -658,6 +659,17 @@ describe('ObservedSource actions', () => {
     expect(await src.send(src.list()[0], 'yes do it')).toEqual({ ok: false, reason: 'proj is waiting for your answer in Orca.' })
     expect(actions.orcaSend).not.toHaveBeenCalled()
     expect(actions.count.mock.calls.map(([what]) => what)).toEqual(['waiting'])
+  })
+
+  // The quota's resume asks once its turn stopped, and a turn another Stop hook keeps going asks after its Stop.
+  it.each(['turn-stop', 'turn-error'] as const)('never typed into Orca when a prompt opens after %s', async (ended) => {
+    const { actions } = fakeActions()
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('turn-start', withHandle))
+    src.ingest(ev(ended, withHandle))
+    src.ingest(ev('needs-input', withHandle))
+    expect(await src.send(src.list()[0], '1')).toEqual({ ok: false, reason: 'proj is waiting for your answer in Orca.' })
+    expect(actions.orcaSend).not.toHaveBeenCalled()
   })
 
   it('send goes to the mod when it is ready', async () => {
