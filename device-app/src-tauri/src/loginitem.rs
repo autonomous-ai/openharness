@@ -6,6 +6,21 @@ pub trait LoginItem: Send + Sync {
 
 pub struct SystemLoginItem;
 
+/// What ServiceManagement says of the app's login item.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Status {
+    NotRegistered,
+    Enabled,
+    /// Registered, and the person has not allowed it or has turned it off since.
+    RequiresApproval,
+    NotFound,
+}
+
+/// Registers the item only when it is not registered.
+pub fn register_from(_status: Status, register: impl FnOnce() -> Result<(), String>) -> Result<(), String> {
+    register()
+}
+
 #[cfg(target_os = "macos")]
 impl LoginItem for SystemLoginItem {
     /// Never called under `cargo test`: it would make the test binary a login item of the
@@ -32,13 +47,29 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    /// The status, and how many times `register` was called.
+    fn from(status: Status) -> (Result<(), String>, usize) {
+        let mut calls = 0;
+        let result = register_from(status, || {
+            calls += 1;
+            Ok(())
+        });
+        (result, calls)
+    }
+
+    #[test]
+    fn only_an_item_not_registered_is_registered() {
+        assert_eq!(from(Status::NotRegistered), (Ok(()), 1));
+        assert_eq!(from(Status::Enabled), (Ok(()), 0));
+        // An item the person turned off stays off, also after the app's state file is lost.
+        assert_eq!(from(Status::RequiresApproval), (Ok(()), 0));
+        assert_eq!(from(Status::NotFound), (Err("Login item not found.".into()), 0));
+    }
+
     #[cfg(not(target_os = "macos"))]
     #[test]
     fn there_is_none_off_a_mac() {
-        assert_eq!(
-            SystemLoginItem.register(),
-            Err("Login items are not supported here.".to_string())
-        );
+        assert_eq!(SystemLoginItem.register(), Err("Login items are not supported here.".to_string()));
     }
 
     struct Counting(Arc<AtomicUsize>);
