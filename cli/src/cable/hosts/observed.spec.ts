@@ -122,14 +122,19 @@ describe('ObservedSource states', () => {
     expect(src.capabilities()).toEqual({ status: true, voice: false, focus: false, answer: false })
   })
 
-  it('takes needs-input only while a turn works', () => {
+  // Claude Code's Notification reaches the hook only for a prompt (hook/notify.mjs), and an agent the open scan found
+  // reads idle until its next hook, though its turn may already run: from idle it is a prompt, not a stale notice.
+  it('takes needs-input unless the turn has ended', () => {
     const { src, ev } = setup()
     src.ingest(ev('session-start'))
     src.ingest(ev('needs-input'))
-    expect(src.list()[0].state).toBe('idle')
+    expect(src.list()[0].state).toBe('needs-you')
     src.ingest(ev('turn-stop'))
     src.ingest(ev('needs-input'))
     expect(src.list()[0].state).toBe('done')
+    src.ingest(ev('turn-error'))
+    src.ingest(ev('needs-input'))
+    expect(src.list()[0].state).toBe('error')
   })
 
   it('turn-stop for claude sets lastAnswer and unseenDone', async () => {
@@ -638,6 +643,21 @@ describe('ObservedSource actions', () => {
     expect(await src.send(src.list()[0], '1')).toEqual({ ok: false, reason: 'proj is waiting for your answer in Orca.' })
     expect(actions.orcaSend).not.toHaveBeenCalled()
     expect(actions.count.mock.calls.map(([what]) => what)).toEqual(['waiting', 'waiting'])
+  })
+
+  // The scan lists a running agent idle; with no mod, its first hook can be the prompt its turn opened.
+  it('never typed into Orca when an agent the scan found asks before any other hook', async () => {
+    const { actions } = fakeActions()
+    const { src, open, owners, externals, ev } = setup({ actions })
+    open.set('s1', 'terminal')
+    owners.set('s1', { pid: 100, engine: 'claude' })
+    externals.set('s1', { cwd: '/work/proj', transcriptPath: '/t/s1.jsonl' })
+    await src.scanOpen()
+    src.ingest(ev('needs-input', withHandle))
+    expect(src.list()[0].state).toBe('needs-you')
+    expect(await src.send(src.list()[0], 'yes do it')).toEqual({ ok: false, reason: 'proj is waiting for your answer in Orca.' })
+    expect(actions.orcaSend).not.toHaveBeenCalled()
+    expect(actions.count.mock.calls.map(([what]) => what)).toEqual(['waiting'])
   })
 
   it('send goes to the mod when it is ready', async () => {
