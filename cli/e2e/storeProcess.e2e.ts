@@ -218,22 +218,25 @@ describe('the Store in its own process, beside the viewers', () => {
     client.close()
   })
 
-  it('a Store killed during init preserves uncertain work and never repeats it under a new create label', async () => {
+  // The init now ends with the Store's process (dsh/shell.ts ties it); before, it ran on orphaned.
+  it('a Store killed during init ends the init, preserves uncertain work and never repeats it under a new create label', async () => {
     const d = await fresh()
     const client = await LocalClient.connect(d)
-    const release = join(d.root, 'release-init')
     const cwd = join(d.projectsDir, 'interrupted-init')
     mkdirSync(cwd)
     const script = `import fs from 'node:fs';
-      fs.appendFileSync('attempts', 'once\\n'); fs.writeFileSync('init-ready', 'ready');
-      const timer = setInterval(() => { if (fs.existsSync(${JSON.stringify(release)})) { fs.writeFileSync('init-done', 'done'); clearInterval(timer); } }, 20);
-      setTimeout(() => { clearInterval(timer); process.exit(2); }, 30000).unref();`
+      fs.appendFileSync('attempts', 'once\\n'); fs.writeFileSync('init-pid', String(process.pid)); fs.writeFileSync('init-ready', 'ready');
+      setTimeout(() => process.exit(2), 30000);`
     expect(await client.request('dsh_install', { url: repository(d, HARNESS, 'Interrupted Init', undefined, script) }, 180_000)).toMatchObject({ ok: true })
     const request = { engine: 'claude', cwd, dsh: HARNESS, bypassPermission: true }
     const creating = client.request('agent_create', request, 45_000)
+    const alive = (pid: number) => { try { process.kill(pid, 0); return true } catch { return false } }
+    let initPid: number | undefined
     try {
       await until('init writes its first part', () => existsSync(join(cwd, 'init-ready')) || null, 20_000, 50)
+      initPid = Number(readFileSync(join(cwd, 'init-pid'), 'utf8'))
       process.kill(viewersPid(d)!, 'SIGKILL')
+      await until('the init ends with the Store\'s process', () => !alive(initPid!) || null, 10_000, 50)
       expect(await creating).toMatchObject({ error: 'DSH_UNAVAILABLE' })
       await until('the replacement Store connects', () => connected(d) >= 2 || null, 20_000, 100)
       const retry = await client.request('agent_create', request, 10_000)
@@ -244,8 +247,7 @@ describe('the Store in its own process, beside the viewers', () => {
       await turn(client, plain.id, 'workspace uncertainty is isolated')
       expect(d.coresStarted()).toBe(1)
     } finally {
-      writeFileSync(release, 'finish')
-      await until('the isolated orphaned init finishes', () => existsSync(join(cwd, 'init-done')) || null, 10_000, 50)
+      if (initPid && alive(initPid)) process.kill(initPid, 'SIGKILL')
       client.close()
     }
   })
