@@ -7,7 +7,7 @@ import { type fileStamp, within } from '../../lib/sessionSearch/externals/suppor
 import type { ExternalEngine, RunningProcess } from '../../lib/sessionSearch/externals/types.js'
 import { detectHost } from './hostDetect.js'
 import type { Delivery } from './inbox.js'
-import { ORCA_HANDLE } from './orca.js'
+import { MAX_TEXT, ORCA_HANDLE } from './orca.js'
 import type { Caps, HostAgent, HostAgentState, HostSource, SendResult } from './types.js'
 
 export { detectHost, hostDisplayName } from './hostDetect.js'
@@ -23,8 +23,6 @@ const ANSWER_CHARS = 300
 const ANSWER_GRACE_MS = 1_500
 /** A turn's hook runs before the engine marks the turn begun in its record: a turn younger than this may still read idle. */
 const TURN_SETTLE_MS = 2_000
-/** Orca's own bound on a typed text (orca.ts); the mod's prompt takes no more. */
-const MAX_TEXT = 2000
 
 /** A name-based UUID (v5 layout, SHA-1) of engine + sessionId, so the same session always gets the same id. */
 export function observedAgentId(engine: string, sessionId: string): string {

@@ -12,7 +12,8 @@ export const ORCA_HANDLE = /^term_[0-9a-f-]{36}$/
 const APP_ORCA = '/Applications/Orca.app/Contents/Resources/bin/orca'
 const ORCA_BUNDLE = 'com.stablyai.orca'
 const RUN_TIMEOUT_MS = 10_000
-const MAX_TEXT = 2000
+/** The longest text typed into a terminal; the mod's prompt takes no more either (observed.ts). */
+export const MAX_TEXT = 2000
 // A newline would submit part of the text and an escape would steer the agent's screen: the text is typed as one line,
 // and --enter submits it.
 const CONTROL = /\p{Cc}/gu
