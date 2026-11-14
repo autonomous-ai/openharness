@@ -620,9 +620,14 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     return timer
   }
   const timers = observed ? [every(OBSERVED_TICK_MS, () => observed.tick()), every(TURN_CHECK_MS, () => observed.checkWorking())] : []
-  /** Each observed agent mid-turn, told again: the dial forgets a turn it hears nothing of for 25 s, and one that
-   *  just came, or whose window just closed, has heard nothing of it yet. */
-  const remind = (): void => { for (const agent of observed?.list() ?? []) if (busy(agent)) tell(started(agent)) }
+  /** Each observed agent mid-turn that the dial lists (ten at most of the fifty), told again: the dial forgets a turn it
+   *  hears nothing of for 25 s, and one that just came, or whose window just closed, has heard nothing of it yet. */
+  const remind = async (): Promise<void> => {
+    const mid = (observed?.list() ?? []).filter(busy)
+    if (!mid.length || windowOpen) return
+    const listed = new Set((await cableHost.listAgentSnapshot()).agents.map((agent) => agent.id))
+    for (const agent of mid) if (listed.has(agent.id)) tell(started(agent))
+  }
   /** The scan and the reminders, for an attached dial alone. */
   let attached: ReturnType<typeof setInterval>[] = []
   const dialAttached = (on: boolean): void => {
@@ -725,7 +730,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       void cable.syncAgents()
       // The Swarm cards link to their desk tab and follow its open project.
       void cable.syncSwarmCards()
-      if (closed) remind()
+      if (closed) part.call('dial', remind)
     }),
     // Held rather than acted on: the dial is handed it when it attaches, the one moment its drawer is known
     // to be empty.

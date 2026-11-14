@@ -1660,7 +1660,8 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
 
   it('tells the dial again every 20 s, while one is attached, of an observed agent that waits or works', async () => {
     vi.useFakeTimers()
-    const { port } = start()
+    // The machine list the reminders are for is this computer's alone.
+    const { port } = start({ faults: ['fleet'] })
     const other = observedAgentId('claude', 'sess-2')
     port.observed(hook('turn-start'))
     port.observed(hook('needs-input'))
@@ -1673,7 +1674,7 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     // The dial forgets a turn it hears nothing of for 25 s (firmware ui_prune_stale_busy), and a person can take minutes.
     // Told at once as it attaches, then every 20 s.
     seen.host.watching!(true)
-    expect(calls('turnStarted').slice(3)).toEqual([[ID, 'Waiting for you · Orca', undefined], [other, '', undefined]])
+    await vi.waitFor(() => expect(calls('turnStarted').slice(3)).toEqual([[ID, 'Waiting for you · Orca', undefined], [other, '', undefined]]))
     await vi.advanceTimersByTimeAsync(20_000)
     expect(calls('turnStarted').slice(5)).toEqual([[ID, 'Waiting for you · Orca', undefined], [other, '', undefined]])
     port.observed(hook('turn-stop', { sessionId: 'sess-2' }))
