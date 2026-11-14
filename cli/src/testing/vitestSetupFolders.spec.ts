@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -9,21 +9,33 @@ const VITEST = join(CLI_ROOT, 'node_modules', 'vitest', 'vitest.mjs')
 
 let root = ''
 
-afterEach(() => { rmSync(root, { recursive: true, force: true }) })
+afterEach(() => {
+  // A read-only folder the setup left behind is made writable again first, or this removal would fail on it too.
+  if (root) for (const entry of readdirSync(root, { recursive: true, withFileTypes: true })) if (entry.isDirectory()) chmodSync(join(entry.parentPath, entry.name), 0o755)
+  rmSync(root, { recursive: true, force: true })
+})
 
 /** A test file that passes or fails, and whose own afterAll records the folders vitest.setup.ts gave it into `<name>.json`,
- *  with whether each is still there for it. */
+ *  with whether each is still there for it. Its test leaves a read-only folder with a file in its runtime folder, as the
+ *  managed grid's install leaves its bin/ (lib/runtimeInstall.ts `readOnly`), which a recursive removal cannot empty. */
 const fixture = (name: string, passes: boolean) => `
-import { existsSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 afterAll(() => {
   const folders = [process.env.HOME, process.env.ADAPTER_DATA_DIR, process.env.ADAPTER_RUNTIME_DIR]
   writeFileSync(${JSON.stringify(`${name}.json`)}, JSON.stringify(folders.map((folder) => [folder, existsSync(folder)])))
 })
-test('${name}', () => { expect(${passes}).toBe(true) })
+test('${name}', () => {
+  const bin = join(process.env.ADAPTER_RUNTIME_DIR, 'grid-0.0.0-test', 'bin')
+  mkdirSync(bin, { recursive: true })
+  writeFileSync(join(bin, 'grid'), '')
+  chmodSync(bin, 0o555)
+  expect(${passes}).toBe(true)
+})
 `
 
 describe('vitest.setup.ts', () => {
-  it("removes the home, data and runtime folders it made, after the file's own afterAll, when it passes and when it fails", async () => {
+  it("removes the home, data and runtime folders it made, read-only folders and all, after the file's own afterAll, when it passes and when it fails", async () => {
     root = mkdtempSync(join(tmpdir(), 'setup-folders-'))
     const temp = join(root, 'tmp'), project = join(root, 'project')
     mkdirSync(temp)
