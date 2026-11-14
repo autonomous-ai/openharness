@@ -167,7 +167,8 @@ overlap (Harness agents have a pane), but the rule and its tests land now, so wa
   and the bell.
 - **How many.** At most 16 places, the firmware's `CABLE_MAX_AGENTS`. An agent in the ring stays until its source
   stops listing it. With the ring full, an agent outside it enters only when it is new or needs the person: it takes
-  the place of the ring agent idle the longest, and goes to the end. Idle is neither working nor needing the person:
+  the place of the ring agent idle the longest (an agent with no known activity counts from when it entered the
+  ring), and goes to the end. Idle is neither working nor needing the person:
   an agent that works or needs the person is never replaced, and when no ring agent is idle the newcomer waits
   outside. A free place goes to an agent that needs the person first, then to the most recent activity. When several
   arrive together, that same priority picks who enters, at most 16 in one pass; those that enter go to the end in the

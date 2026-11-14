@@ -36,8 +36,9 @@ firmware needs no change.
 3. **An agent in the ring stays until it ends** (its source stops listing it).
 4. **When the ring is full**, an agent outside it enters only when it is new (never seen by the ring) or needs the
    person. It takes the place of the ring agent idle the longest: the oldest `lastActivityAt` among the ring agents
-   that are idle, that is neither working nor needing the person (Diego's word, "nghỉ"). The newcomer goes to the end
-   of the ring, not into the freed place. An agent that works or needs the person is never replaced. If no ring agent
+   that are idle, that is neither working nor needing the person (Diego's word, "nghỉ"). An agent with no known
+   activity (`lastActivityAt` 0, as a Harness agent can be) counts from the moment it entered the ring: missing data is
+   not idleness (the PM, 2026-11-14). The newcomer goes to the end of the ring, not into the freed place. An agent that works or needs the person is never replaced. If no ring agent
    is idle, the newcomer waits outside.
 5. **A free place** (an agent ended) is filled from outside: agents that need the person first, then the most
    recent activity. The newcomer goes to the end.
@@ -96,7 +97,8 @@ Both code files are also changed by PR #4296; no code on them before it merges.
 ## Tests
 
 - `cli/src/cable/hosts/select.spec.ts` (red first): order kept across state and activity changes; a new agent at the
-  end; a removed agent closes up; 16 places; full ring: a new agent replaces the longest idle and goes to the end;
+  end; a removed agent closes up; 16 places; full ring: a new agent replaces the longest idle and goes to the end; an agent with no known activity counts from
+  when it entered;
   a needs-you outsider enters; a working or needs-you ring agent is never replaced; no idle ring agent: newcomer
   waits; several in one pass (rule 8);
   a free place is filled needs-you first; the first ring cut by rule 5; the seen set drops ended ids.
