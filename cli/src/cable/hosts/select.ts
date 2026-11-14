@@ -1,3 +1,4 @@
+import { APP_IDS, UNKNOWN_APP } from './hostDetect.js'
 import type { HostAgent } from './types.js'
 
 /** The firmware's `CABLE_MAX_AGENTS` (devices/harness-device/firmware/main/cable_client.h): the dial holds no more. */
@@ -59,5 +60,53 @@ export class DialRing {
     this.enteredAt = new Map(this.ring.map((id) => [id, this.enteredAt.get(id) ?? at]))
     this.seen = new Set(byId.keys())
     return { rows, total: agents.length }
+  }
+}
+
+interface AppRing {
+  ring: DialRing
+  rows: HostAgent[]
+  waiting: number
+}
+
+/**
+ * One `DialRing` per app, for the dial that shows one app at a time. The apps keep the order they appeared in, so the
+ * dial's list of apps holds still as the rings do. An app with no agents left loses its ring: back again, it starts a
+ * new one, as an agent back under its id is new.
+ */
+export class AppRings {
+  /** Each app's ring, in the order the apps appeared. */
+  private rings = new Map<string, AppRing>()
+  private sizes = new Map<string, number>()
+
+  update(agents: HostAgent[]): void {
+    const byApp = new Map<string, HostAgent[]>()
+    for (const a of agents) {
+      // An app outside the set is the unknown one, so there are never more rings than APP_IDS.
+      const app = APP_IDS.includes(a.app) ? a.app : UNKNOWN_APP
+      const list = byApp.get(app)
+      if (list) list.push(a)
+      else byApp.set(app, [a])
+    }
+    for (const app of this.rings.keys()) if (!byApp.has(app)) this.rings.delete(app)
+    for (const [app, list] of byApp) {
+      const entry = this.rings.get(app) ?? { ring: new DialRing(), rows: [], waiting: 0 }
+      entry.rows = entry.ring.select(list).rows
+      entry.waiting = list.filter(needsYou).length
+      this.rings.set(app, entry)
+    }
+    this.sizes = new Map([...this.rings.keys()].map((app) => [app, byApp.get(app)!.length]))
+  }
+
+  apps(): Array<{ id: string; count: number; waiting: number }> {
+    return [...this.rings].map(([id, r]) => ({ id, count: this.sizes.get(id)!, waiting: r.waiting }))
+  }
+
+  counts(): ReadonlyMap<string, number> {
+    return this.sizes
+  }
+
+  ring(app: string): { rows: HostAgent[]; total: number } {
+    return { rows: this.rings.get(app)?.rows ?? [], total: this.sizes.get(app) ?? 0 }
   }
 }
