@@ -33,8 +33,9 @@ One way the agent browser starts a Podman command, in a new module `src/services
 `spawnTied(file, args, options)`, a `spawn` whose child ends when this process ends.
 
 - **macOS and Linux.** The child starts as
-  `/bin/sh -c '{ read -r _ <&3 || kill $$; } </dev/null >/dev/null 2>&1 & exec "$0" "$@" 3<&-' file args…`, with a
-  fourth stdio pipe (fd 3) from this process:
+  `/bin/sh -c '{ read -r _ <&3 || kill $$; } </dev/null >/dev/null 2>&1 & exec 3<&-; exec "$0" "$@"' file args…`,
+  with a fourth stdio pipe (fd 3) from this process. fd 3 is closed by its own `exec` first: macOS's `/bin/sh` (bash
+  3.2) keeps a saved copy of it (fd 10) across `exec "$0" "$@" 3<&-`, which the command's own children would hold.
   - `exec` replaces the shell with the command, so the child's pid, stdio, exit code and signals are the command's own
     (`child.kill` reaches Podman directly, as today).
   - A background watcher holds the read end of fd 3. When this process ends, in any way, the OS closes the write end,
