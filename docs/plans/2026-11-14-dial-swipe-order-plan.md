@@ -72,7 +72,7 @@ rebases `fix/dial-swipe-order` on the `main` that holds it, and phase 3 starts f
   is, for the ring, not listed. It leaves, and joins again at the end. (Superseded: main removed both with the Swarm,
   #4303, 2026-11-14; on rebase the ring takes the registry's list unfiltered, and the "until the cards come" test
   goes with them.)
-- `total` stays the count of the list the ring is given (every agent on this computer after that filter).
+- `total` stays the count of the list the ring is given (every agent on this computer).
 - In memory only, one ring per `DaemonCableHost`. No file, no setting, no timer, no I/O in `select.ts`.
 - Not touched: the firmware (`devices/harness-device/**`), `devices/harness-pro/**` (never), `cableSession.ts` (the
   1 s coalescing and `agentsKey` stay), anything under `cli/src/core/`, `cli/src/architecture.coreFiles.txt`
@@ -96,7 +96,7 @@ rebases `fix/dial-swipe-order` on the `main` that holds it, and phase 3 starts f
 Checked at `92aa7660f4` and against #4296's diff at `9eed162bbb`.
 
 - **One caller.** `selectForDial` is called once, in `DaemonCableHost.machineSnapshot`, on the registry's agents
-  after the Buddy filter and the cards wait. Its default `max` is 10.
+  after the Buddy filter and the cards wait (both gone with the Swarm, #4303). Its default `max` is 10.
 - **Read several times a second.** `listAgentSnapshot()` is read by each dial session's tick (every second), by
   `listAgents()` (a name lookup, voice routing, the next-agent walk) and by `devices.ts` `remind`. So
   `DialRing.select` runs often and must change nothing on a list that did not change.
@@ -106,9 +106,9 @@ Checked at `92aa7660f4` and against #4296's diff at `9eed162bbb`.
   by the agent object (`sourceOf.get(a)!`). Task 1 pins it.
 - **Tests that pin the old order or the ten:** `select.spec.ts` (all of it); `cableHost.spec.ts` "no window and a
   registry: the selected rows…" (expects `o1, h2, h1`) and "…until the cards a dial asked for come…" (expects
-  `h1, h2, o1` after the wait); `devices.spec.ts` "reminds only the observed agents the dial lists, never all fifty"
-  (expects 10 of 12). `cableSession.spec.ts` has its own fake host and does not change. No end-to-end test asserts
-  the order or the ten.
+  `h1, h2, o1` after the wait; deleted with the Swarm, #4303); `devices.spec.ts` "reminds only the observed agents
+  the dial lists, never all fifty" (expects 10 of 12). `cableSession.spec.ts` has its own fake host and does not
+  change. No end-to-end test asserts the order or the ten.
 - **Comments that say ten:** the doc comment above `listAgents` in `cableHost.ts` ("at most ten, the ones that need
   the person first") and `remind` in `devices.ts` ("ten at most of the fifty").
 - **The firmware holds 16.** `#define CABLE_MAX_AGENTS 16`; its arrays are allocated at that size at start; a row
@@ -152,7 +152,7 @@ Checked at `92aa7660f4` and against #4296's diff at `9eed162bbb`.
 | `cli/src/cable/cableHost.ts` | the `ring` field; `machineSnapshot` reads it; two comments | 2 |
 | `cli/src/cable/hosts/select.ts` | `selectForDial` and `group` deleted | 2 |
 | `cli/src/cable/hosts/select.spec.ts` | `describe('selectForDial')` deleted | 2 |
-| `cli/src/cable/cableHost.spec.ts` | two cases' expectations; three new cases | 2 |
+| `cli/src/cable/cableHost.spec.ts` | one case's expectation; three new cases | 2 |
 | `cli/src/services/devices.ts` | one comment in `remind` | 2 |
 | `cli/src/services/devices.spec.ts` | "reminds only the observed agents…": 18 sessions, 16 listed | 2 |
 | `cli/e2e/deviceWithoutApp.e2e.ts` | one new case | 2 |
@@ -173,8 +173,8 @@ Each line is pinned by a test in the task named.
   list changes nothing. Task 1, "more new agents than places in one pass"; Task 2, "a state change moves no agent".
 - **A window opened and shut.** The ring is not read while the tab is held: it comes back as it was, what started
   meanwhile last. Task 2, "a window opened and shut leaves the ring as it was".
-- **The cards wait and the Buddy filter.** Harness agents hidden for the wait leave and come back at the end; the
-  others keep their places. Task 2, "…until the cards a dial asked for come…".
+- **No filter before the ring.** Main removed the Buddy filter and the cards wait with the Swarm (#4303): the ring
+  takes every agent the registry lists, in its order. Task 2, "no window and a registry: the rows of the ring…".
 - **Equal activity times** (the scan stamps every session it finds with one time): which agent goes and which
   enters is the same on every run. Task 1, "equal activity".
 - **An id that goes and comes back** (a resumed session): it is new again and enters at the end, and the set of seen
@@ -440,7 +440,7 @@ git commit -m "devices: the dial's ring, sixteen fixed places for this computer'
   `cli/src/services/devices.spec.ts`, `cli/e2e/deviceWithoutApp.e2e.ts`
 
 **The tests that fail before the change:** in `cli/src/cable/cableHost.spec.ts`, inside
-`describe('the dial with no window: this computer's agents')`: the two changed cases and the three new ones below;
+`describe('the dial with no window: this computer's agents')`: the changed case and the three new ones below;
 in `cli/src/services/devices.spec.ts`, "reminds only the observed agents the dial lists, never all fifty"; in
 `cli/e2e/deviceWithoutApp.e2e.ts`, "the machine list keeps its order while an agent works, and a new agent comes
 last".
@@ -452,7 +452,7 @@ last".
 
 - [ ] **Step 1: `cableHost.spec.ts`**
 
-Two cases change their expectation. "no window and a registry: the selected rows with host and caps, and view
+One case changes its expectation. "no window and a registry: the selected rows with host and caps, and view
 machine" is renamed "no window and a registry: the rows of the ring with host and caps, and view machine", and
 expects:
 
@@ -465,9 +465,8 @@ expects:
     ] })
 ```
 
-In "no window: until the cards a dial asked for come, no Harness agent is listed, for at most 10 s", both
-`toEqual(['h1', 'h2', 'o1'])` become `toEqual(['o1', 'h1', 'h2'])`: the Harness agents join at the end when the wait
-is over, and again when the cards come. The other expectations of that case stay.
+(A second case, "no window: until the cards a dial asked for come…", changed here before the rebase. Main deleted
+it with the Swarm, #4303, and nothing replaces it.)
 
 Three new cases, in the same `describe`:
 
@@ -573,7 +572,8 @@ Expected, as seen at `92aa7660f4` (the counts of passed and skipped cases differ
 
 - `cableHost.spec.ts`, five failed:
   - the rows of the ring: the snapshot lists `o1` first;
-  - until the cards come: `expected [ 'h1', 'h2', 'o1' ] to deeply equal [ 'o1', 'h1', 'h2' ]`;
+  - until the cards come: `expected [ 'h1', 'h2', 'o1' ] to deeply equal [ 'o1', 'h1', 'h2' ]` (a case gone with
+    the Swarm, #4303: four fail at the rebased base);
   - a state change: `expected [ 'o1', 'h1', 'h2' ] to deeply equal [ 'h1', 'h2', 'o1' ]`;
   - seventeen agents: `to have a length of 16 but got 10`;
   - a window opened and shut: `expected [ 'o0', 'h1', 'h2', 'o1' ] to deeply equal [ 'h1', 'h2', 'o1', 'o0' ]`.
@@ -600,8 +600,9 @@ In `cableHost.ts`:
   private readonly ring = new DialRing()
 ```
 
-- in `machineSnapshot`, `selectForDial(…)` becomes `this.ring.select(…)` on the same filtered list. Nothing else in
-  the function changes: the Buddy filter and the cards wait still run first, and `total` is what `select` returns;
+- in `machineSnapshot`, `selectForDial(…)` becomes `this.ring.select(…)` on the same list, the registry's agents
+  (main has no filter before it since #4303). Nothing else in the function changes, and `total` is what `select`
+  returns;
 - the comment above `machineSnapshot` says the ring bounds the list (the 78-agent reconnect is still not repeated);
 - in the doc comment above `listAgents`, the first of the four answers becomes:
 
@@ -764,8 +765,8 @@ process only: the tester's shell, where `harness stop` runs, never has them.
    ```
 
    To see, in that run: every case of `deviceWithoutApp` passes, the new one among them, and `deviceClaudeOrca`,
-   `devicesProcess`, `devicesOnDemand` and `dialBuddyChat` pass. Report the run's link. A file that fails there and
-   on `main`'s last nightly is named as that, never as a pass. No second run.
+   `devicesProcess` and `devicesOnDemand` pass (`dialBuddyChat` went with the Swarm, #4303). Report the run's link.
+   A file that fails there and on `main`'s last nightly is named as that, never as a pass. No second run.
 
 4. **The ring on a dial, and the push numbers.** This Mac (Diego's). Two runs of one script, the base build then
    this branch.

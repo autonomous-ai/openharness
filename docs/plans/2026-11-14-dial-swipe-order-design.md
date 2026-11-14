@@ -67,8 +67,7 @@ firmware needs no change.
 
 The list is pushed when its members or order change. With a fixed order, it changes only when an agent enters or
 leaves the ring: a state change no longer moves an agent, so it no longer pushes the list (state still goes as the
-per-agent frames). The
-PR records the pushes per hour before and after on the same workload.
+per-agent frames). The PR records the pushes per hour before and after on the same workload.
 
 ## Design
 
