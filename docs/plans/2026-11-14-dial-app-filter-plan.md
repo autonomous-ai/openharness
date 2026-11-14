@@ -37,7 +37,7 @@ Every file this plan creates or changes, and the process it runs in (`cli/AGENTS
 | `cli/AGENTS.md`, `device-app/AGENTS.md`, `docs/specs/2026-11-13-device-without-the-app.md` | Repo files, no process | none |
 
 What this fixes, by layer:
-- **The core never** learns which app is shown, keeps the app in front, or logs an app name. It lets through one of 15 fixed words (the 14 app ids and `none`), at most 10 a second per connection, and only from a tool that asked to watch the dial.
+- **The core never** learns which app is shown, keeps the app in front, or logs an app name. It lets through one of 16 fixed words (the 15 app ids, `claude` among them (Task 23), and `none`), at most 10 a second per connection, and only from a tool that asked to watch the dial.
 - **The raw name** (a bundle id, an exe name) exists only in the Harness Device app and in the `harness hardware watch` process. The daemon is sent an app id.
 - **Which app is shown, the rings and the settle timer** live in the devices process, in memory only.
 - With `HARNESSD_SERVICES=none` (debugging) and on Harness OS the devices service runs inside the core's process, as every service does there. The file boundaries stay the same.
@@ -344,7 +344,7 @@ A mockup of the `APPS` picker and of the face's app line is made by the main ses
 **Interfaces:**
 - Consumes: `minuteCounts`, `isRecord` from `core/observedHook.ts` (exported there by #4296 ⚠).
 - Produces:
-  - `const FRONT_APPS: ReadonlySet<string>` — the 14 app ids and `none`, written out here: the core imports nothing of the devices'.
+  - `const FRONT_APPS: ReadonlySet<string>` — the 15 app ids (Task 2's 14 and `claude`, Task 23) and `none`, written out here: the core imports nothing of the devices'.
   - `const FRONT_PER_SECOND = 10`
   - `createDialFront(deps: { forward(app: string): boolean; now(): number; log?: (line: string) => void }): { connection(): (payload: unknown) => void }`
 - Rules:
@@ -425,7 +425,7 @@ A mockup of the `APPS` picker and of the face's app line is made by the main ses
 
 ### Task 11: The front table
 
-**Layer:** CLI only. **Depends on:** Tasks 2, 8. **Effort:** `high`.
+**Layer:** CLI only. **Depends on:** Tasks 2, 8, 23. **Effort:** `high`.
 
 **Files:**
 - Create: `cli/src/cable/hosts/frontApp.ts`, `cli/src/cable/hosts/frontApp.spec.ts`
@@ -436,13 +436,13 @@ A mockup of the `APPS` picker and of the face's app line is made by the main ses
   - `const FRONT_NONE = 'none'` — no listed app is in front. Not an app id.
   - `frontAppId(value: string): string` — an app id, or `FRONT_NONE`.
 - The table (the PM, answer 3; the list is closed):
-  - Bundle ids, matched whole: the ten of Task 2's bundle table, with the same ids. The three new ones and their sources: `net.kovidgoyal.kitty` → `kitty` (kitty's `setup.py`, <https://github.com/kovidgoyal/kitty/blob/master/setup.py>), `com.github.wez.wezterm` → `wezterm` (WezTerm's `Info.plist`, <https://github.com/wezterm/wezterm/blob/main/assets/macos/WezTerm.app/Contents/Info.plist>), `ai.autonomous.harness` → `harness` (`/Applications/Harness.app`, read on Diego's Mac).
+  - Bundle ids, matched whole: the ten of Task 2's bundle table, with the same ids. The three new ones and their sources: `net.kovidgoyal.kitty` → `kitty` (kitty's `setup.py`, <https://github.com/kovidgoyal/kitty/blob/master/setup.py>), `com.github.wez.wezterm` → `wezterm` (WezTerm's `Info.plist`, <https://github.com/wezterm/wezterm/blob/main/assets/macos/WezTerm.app/Contents/Info.plist>), `ai.autonomous.harness` → `harness` (`/Applications/Harness.app`, read on Diego's Mac). And `com.anthropic.claudefordesktop` → `claude` (Task 23; `/Applications/Claude.app`'s `CFBundleIdentifier`, read by the main session on Diego's Mac, 2026-11-14).
   - Exe names, lower-cased, a trailing `.exe` dropped: `code` → `vscode`, `cursor` → `cursor`, `windowsterminal` → `terminal`, `wezterm-gui` → `wezterm` (the `CFBundleExecutable` of the same `Info.plist`), `kitty` → `kitty`, `ghostty` → `ghostty`.
   - The `.exe` rows (`Code.exe`, `Cursor.exe`, `WindowsTerminal.exe`) stay, as answer 2's option A says: the watch takes them, and nothing sends them until the Windows source exists.
   - Anything else, the empty string included → `FRONT_NONE`. An unknown terminal in front (Alacritty) is `none`, never the unknown app `terminal`: only `WindowsTerminal.exe` maps to that id.
 
 - [ ] **Step 1: Write the failing tests:**
-  - `every bundle id maps to the id detectApp gives for it` (all ten rows, kitty's, WezTerm's and Harness Desktop's among them, each also run through `detectApp({ __CFBundleIdentifier })`).
+  - `every bundle id maps to the id detectApp gives for it` (every row, kitty's, WezTerm's, Harness Desktop's and Claude's among them, each also run through `detectApp({ __CFBundleIdentifier })`).
   - `Code.exe, Cursor.exe, WindowsTerminal.exe, wezterm-gui, kitty and ghostty map` (`CODE.EXE` too).
   - `an unknown app, the empty string and a 128-character string are none` (`com.apple.Safari`, `org.alacritty`, `net.kovidgoyal.kitty-quick-access`).
   - `no value maps to the words other or Other, and none is no app id` (`FRONT_NONE` is not in `APP_IDS`; `frontAppId('other')` and `frontAppId('Other')` are `none`).
@@ -752,6 +752,34 @@ Why it is a task (the PM, answer 8): the repo has no rig for this. `fix/dial-swi
 - [ ] **Step 2: Run** `cd cli && npx vitest run --config vitest.e2e.config.ts e2e/dialAppFilterOnDial.e2e.ts`. Expected: 1 skipped. `npm run typecheck`. Expected: PASS.
 - [ ] **Step 3: Rehearse without a dial,** on the developer's Mac: `ON_DIAL_PORT` at a pseudo-terminal nothing answers on, `ON_DIAL_OUT` a scratch folder, `ON_DIAL_MINUTES=5`. The three files are written; `sh <out>/tab.sh a1` in a terminal tab adds a fake session the daemon's log lists; `touch <out>/done` ends the run. The case fails on "the dial never greeted", which is expected here. The everyday daemon (18473), its dial and `~/.harness` are untouched.
 - [ ] **Step 4: Commit** `e2e: an opt-in rig for the app filter on a real dial`.
+
+### Task 23: Claude desktop reads "Claude" on the dial
+
+The PM, 2026-11-14 (added to this plan's scope): #4296 finds an agent in the Claude desktop app (bundle
+`com.anthropic.claudefordesktop`) and opens its session, but the dial reads "Terminal": neither the daemon's `NAMES`
+(`hostDetect.ts`) nor the firmware's `host_name` table has `claude`, and `test_touch_ui.py` holds the two tables equal.
+`/Applications/Claude.app`'s `CFBundleIdentifier` is `com.anthropic.claudefordesktop` (read by the main session on
+Diego's Mac, 2026-11-14).
+
+**Layer:** devices service process and firmware (one table row each; no drawing, so the mockup does not gate it).
+**Depends on:** Task 2 (it shares `hostDetect.ts` and its spec). **Effort:** `medium`.
+
+**Files:**
+- Modify: `cli/src/cable/hosts/hostDetect.ts` (`NAMES`; and `detectHost` / `detectApp` only if #4296 merged without a `claude` id: Task 1 reports which), `devices/harness-device/firmware/main/ui/habitat/ui_habitat.c` (`host_name`'s table)
+- Test: `cli/src/cable/hosts/hostDetect.spec.ts`, `devices/harness-device/firmware/test/test_touch_ui.py`
+
+**Interfaces:**
+- `NAMES` gains `claude: 'Claude'`, so `APP_IDS` has 15 ids (Task 2's count test moves from 14 to 15) and `appDisplayName('claude')` is `Claude`.
+- `detectHost` and `detectApp`: `__CFBundleIdentifier === 'com.anthropic.claudefordesktop'` gives `claude`.
+- Firmware `host_name`: `{"claude", "Claude"}`.
+
+- [ ] **Step 1: Write the failing tests:**
+  - `hostDetect.spec.ts`: `the Claude desktop app's bundle id is claude, read Claude` (`detectHost` and `detectApp` of `{ __CFBundleIdentifier: 'com.anthropic.claudefordesktop' }` → `claude`; `hostDisplayName('claude')` → `Claude`); `APP_IDS has 15 ids, at most 16, and every one has a display name`.
+  - `test_touch_ui.py`: `host_name("claude")` is `Claude`, and the existing check that the firmware's table equals the daemon's `NAMES` (less its "Terminal" rows) passes with the new row on both sides.
+- [ ] **Step 2: Run** `cd cli && npx vitest run src/cable/hosts/hostDetect.spec.ts` and `python3 devices/harness-device/firmware/test/test_touch_ui.py`. Expected: FAIL (`Terminal` where `Claude` is wanted).
+- [ ] **Step 3: Implement** the two rows (and the bundle-id branch if Task 1 found none).
+- [ ] **Step 4: Run** the step 2 commands, then `make device-test`. Expected: PASS.
+- [ ] **Step 5: Commit** `dial: the Claude desktop app reads Claude, in the daemon's names and the firmware's`.
 
 ---
 

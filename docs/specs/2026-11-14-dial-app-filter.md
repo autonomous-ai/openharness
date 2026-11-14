@@ -86,7 +86,10 @@ working in. The app he is working in is the one in front, and the computer alrea
 - **kitty sets no `TERM_PROGRAM`.** Its documented variables are `KITTY_WINDOW_ID`, `KITTY_PID`, `TERM` and the rest of
   <https://sw.kovidgoyal.net/kitty/glossary/#environment-variables>, and its repository has no `TERM_PROGRAM`. So with
   no bundle id and no `TERM_PROGRAM` (Linux), `KITTY_WINDOW_ID` names kitty as the outer app, also inside zellij.
-- The apps are the fixed set of host ids hostDetect knows (14 today). An app it does not know is `terminal`, which
+- **The Claude desktop app reads "Claude"** (the PM, 2026-11-14): bundle `com.anthropic.claudefordesktop` is the app
+  `claude`, in the daemon's `NAMES`, the firmware's `host_name` table and the front table. Today the dial reads
+  "Terminal" for it.
+- The apps are the fixed set of host ids hostDetect knows (15 with `claude`). An app it does not know is `terminal`, which
   reads "Other" in the picker and on the face. Apple's Terminal (`terminal-app`) reads "Terminal". The set has 16
   members at most, which bounds every per-app structure below.
 - Windows and Linux hooks report less, so `app` there is often `terminal`. That still filters, but it is followed to
