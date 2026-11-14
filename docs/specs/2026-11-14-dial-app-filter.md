@@ -16,7 +16,7 @@ working in. The app he is working in is the one in front, and the computer alrea
   `hostHints` and gives `harness`, `orca`, `iterm`, `ghostty`, `vscode`, `cursor`, `warp`, `zellij`, `kitty`, ….
 - Nothing on this computer reports which app is in front. `focus` in `cli/src/services/devices.ts` is the focus
   inside the Harness window only.
-- Firmware, `ui_habitat.c`: a hold on the face (`face_hold`) opens TABS, the desk tabs in a carousel
+- Firmware, `ui_habitat.c`: a hold on an agent's face opens TABS (`tabs_open`), the desk tabs in a carousel
   (`tab_carousel`, `focus_carousel`). With no window there are no desk tabs, so it shows "TABS — No tabs yet.". In
   the machine view each face draws its host under the agent's name (`host_name(a->host)`).
 - The dial says what it reads in `hello` (`swarmCard`, `swarmThread`, …). An older daemon ignores a field it does not
@@ -42,16 +42,16 @@ working in. The app he is working in is the one in front, and the computer alrea
 - **The Harness Device app reports the app in front** when the OS says it changed. There is no polling, no osascript
   and no System Events. Without the Harness Device app, the dial does not follow the app in front.
 - **An agent's app is its outermost app.** Claude Code in zellij inside Ghostty is in Ghostty.
-- **The core gains one small file,** `cli/src/core/dialFront.ts` (a new line in `architecture.coreFiles.txt`), and
-  one block in `localWsServer.ts` that hands it the frame. The file checks the frame against the fixed set, bounds it
-  and forwards it to the devices process. It keeps no state and logs no app name. `architecture.spec` and 100%
-  coverage per file test it.
+- **The core knows nothing of the app in front** (the PM, 2026-11-15, replacing the core door first decided here).
+  `cli/AGENTS.md` rule 7, added with the Swarm's deletion (#4303), says the core grows nothing for one component, not
+  even a generic mechanism only it would use. So the watch hands the app id to the devices process through the devices
+  process's own local listener (§ From the watch to the devices process), and the app id never passes through the core
+  at all, which is also the stronger privacy.
 
 ## Decided on the plan's questions (the PM, 2026-11-14)
 
-1. **The core's check is a file of its own,** `cli/src/core/dialFront.ts`, with its line in
-   `architecture.coreFiles.txt` and 100% per file. The port (`core/api.ts`), its event (`core/devicesLink.ts`) and one
-   wiring line (`core/main.ts`) carry the frame on.
+1. The core's check as a file of its own (`core/dialFront.ts`) was replaced on 2026-11-15 by the devices listener
+   (§ Decided, "The core knows nothing of the app in front").
 2. **macOS and Linux X11 now.** The Windows source of the app in front comes with the wave that builds the Harness
    Device app for Windows (Follow-ups).
 3. **kitty, WezTerm and Harness Desktop are named** in the tables (§ Each agent's app, § From the watch to the devices
@@ -103,7 +103,8 @@ working in. The app he is working in is the one in front, and the computer alrea
 - A ring is dropped when its app has no agents left. If that app comes back, it starts a new ring (swipe-order
   rule 7).
 - The machine list sent to the dial is the shown app's ring. `total` is the shown app's agent count.
-- The Buddy filter and the wait for Swarm cards still run first: an agent they hide counts in no app.
+- The rings see every agent on this computer, in the registry's list as it is (the Buddy filter and the wait for
+  Swarm cards went with the Swarm).
 
 ### Which app is shown (devices process, `AppFilter`, one per `CableHost`)
 
@@ -113,7 +114,7 @@ The state is `shown`, `pickedOnDial` (a boolean), `tieBreak` (the app drawn and 
 1. **No `shown` yet, or `shown` has no agents left:** show the app in front if it has agents. Otherwise show the
    app with the most agents. On a tie, keep `tieBreak` while the counts are the ones it was drawn for, else draw again.
    The random function is injected, so tests are deterministic. This clears `pickedOnDial`.
-2. **The app in front changes** (`dial_front`): start a 1 s timer, and restart it on every later change. The timer
+2. **The app in front changes** (a `front` message): start a 1 s timer, and restart it on every later change. The timer
    runs only after a change. When it fires:
    - if the app is not `settledFront`, it ends `pickedOnDial`, and `settledFront` becomes it;
    - if it has agents and is not `shown`, `shown` becomes it (`none`, no listed app in front, is no app and never
@@ -144,8 +145,9 @@ Every change of `shown` writes the log line `app filter: switched` and counts on
 
 ### The app picker (firmware, `ui_habitat.c`)
 
-- `face_hold` in the machine view, with `appFilter` known to the daemon (an `apps` frame received), opens `APPS`
-  instead of TABS. The Personal | Team picker on a Swarm recap is unchanged.
+- A hold on any agent's face with no window, once an `apps` frame was received, opens `APPS` instead of TABS; with a
+  window it opens TABS (the PM, 2026-11-15: the Swarm, its recap picker and its badged companion are gone from
+  `main`, so there is no exception).
 - `APPS` reuses `focus_carousel` and `tab_carousel`. The header is `APPS`. Each page is the app's name in the tab
   page's type, with `3 agents` under it, or `3 agents · 1 waiting` with the waiting part in the accent. Done is at
   the bottom, as in TABS. It opens on `shown`.
@@ -158,6 +160,8 @@ Every change of `shown` writes the log line `app filter: switched` and counts on
   up, and the person stays on the same app if it is still there.
 - The face's hint says what a hold does (the PM, 2026-11-15): "Hold for apps" in the machine view when a hold opens
   `APPS`, "Hold for tabs" with a window. A dial that received no `apps` (an older daemon) keeps "Hold for tabs". The
+  same rule turns "Hold to switch tabs" (the resting line of engines with no relaxing scene) into "Hold to switch
+  apps" (the PM, 2026-11-15). The
   hint keeps today's weight in the random pick (`focus.c`).
 
 ### The app's name on the face
@@ -219,12 +223,19 @@ desktop change. The rings are memory only too, as swipe-order decided.
   unknown app `terminal` ("Other"): Safari in front and an agent in an unknown terminal are different things, so on
   macOS and Linux the dial reaches "Other" by a pick or as the default, and never by following (the one row that
   gives `terminal` is `WindowsTerminal.exe`). The raw value never leaves the CLI process.
-- The watch sends `dial_front { app }`. With an older daemon (no `dial-front` in `connected.features`), it ignores
-  the `front` lines.
-- Core (`core/dialFront.ts`, called from one block of `localWsServer.ts`): `dial_front` is accepted only from a tool
-  that asked for `watch: ['dial']`, with `app` in the fixed set or `none`, and at most 10 per second per connection.
-  The core forwards it through `devicesLink` as it does the window's dial frames, keeps no state, logs no app name,
-  and drops the frame when the devices process is not running.
+- The watch sends `{ type: 'front', app }` to the devices listener. With no listener (an older daemon, or the devices
+  process not running) it ignores the `front` lines and tries again on the next change.
+- **The devices listener** (`cli/src/services/devicesListener.ts`, the PM, 2026-11-15) is **shared**: one local
+  socket of the devices process for every message a local tool sends the devices, so later device routes (#4296's
+  follow-up: `asked`, the mod's inbox, `observed`) only register a handler of their own. It:
+  - runs only in the devices process and is open only while that process runs; the core neither opens nor knows it;
+  - is a Unix socket in the data folder with mode 0600 (a short folder when the path is too long, as the core's own
+    socket does), and accepts a connection only from this computer's owner (the peer's uid, as the core's local socket
+    checks it); Windows' named pipe comes with the Harness Device app for Windows (Follow-ups);
+  - registers handlers by message type, each with its own body limit and rate limit; an unknown type, a body over its
+    limit or a frame over its rate is dropped and counted, never echoed or logged with its content;
+  - `front`'s handler takes `app` only from the fixed set or `none`, at most 10 a second per connection, keeps no
+    state of its own and logs no app name; it hands the app id to the cable host.
 
 ## Data
 
@@ -233,7 +244,8 @@ desktop change. The rings are memory only too, as swipe-order decided.
   and as an app id in the devices process's memory. The shown app's name and the counts go to the dial over USB.
 - **Kept:** in memory only. Nothing is written to disk, a log, an error, a measure, the backend, the phone or the
   gateway.
-- **Bounded:** 16 apps, 16 agents per ring, 10 `dial_front` per second, values cut to 128 characters.
+- **Bounded:** 16 apps, 16 agents per ring, 10 `front` messages per second per connection, values cut to 128
+  characters, each listener message type with its own body limit.
 
 ## Measures
 
@@ -276,9 +288,10 @@ face's app line goes in the main checkout's `devices/harness-device/mockup/`, fo
   1 s coalescing; `app.pick` answered with `apps` and the new ring.
 - `runDialWatch`: bundle ids and exe names mapped, unknown → `none`, the raw value never sent (the test reads every
   frame), `front` ignored with an older daemon.
-- Core: `dial_front` only from a dial watch, only with a known app or `none` (the old word `other` and the display
-  name "Other" are refused), rate-bounded, forwarded, dropped with no devices process, never logged.
-  `architecture.spec`; 100% per file (`npm run test:core`).
+- Devices listener (red first, on the module itself): the socket's mode is 0600; another uid is refused; an oversized
+  body, an unknown type and a frame over its rate are dropped and counted; `front` takes only a known app or `none`
+  (the old word `other` and the display name "Other" are refused); nothing logs an app name. The core is as on
+  `main`: `architecture.spec` and `npm run test:core` unchanged by this work.
 - Device app (`cargo test --lib`): one line per change, none for a repeat, the 128-character cut, nothing in `log`.
   The macOS and X11 sources each sit behind a trait with a fake. The X11 source also runs live in PR CI's
   `device-app-checks`, under Xvfb.
