@@ -175,6 +175,42 @@ describe('AppFilter', () => {
     expect(causes()).toEqual(['front'])
   })
 
+  // The Device app quitting tells none: nothing is in front that the person chose, so a pick holds and the last app is
+  // not followed any more.
+  it('none in front keeps a held pick; the next app brought to the front ends it', () => {
+    const { filter, agents, causes } = setup()
+    agents({ ghostty: 3, vscode: 1 })
+    filter.front('ghostty')
+    settle()
+    expect(filter.pick('vscode')).toBe('switched')
+    filter.front('none')
+    settle()
+    agents({ ghostty: 4, vscode: 1 })
+    expect(filter.shown()).toBe('vscode')
+    filter.front('ghostty')
+    settle()
+    expect(filter.shown()).toBe('ghostty')
+    expect(causes()).toEqual(['pick', 'front'])
+  })
+
+  it('none settled is never shown, and the app in front before it getting agents turns nothing', () => {
+    const { filter, agents, causes } = setup()
+    agents({ vscode: 2 })
+    filter.front('ghostty')
+    settle()
+    expect(filter.shown()).toBe('vscode')
+    filter.front('none')
+    settle()
+    agents({ vscode: 2, ghostty: 1 })
+    expect(filter.shown()).toBe('vscode')
+    // Nor while a pick holds.
+    expect(filter.pick('ghostty')).toBe('switched')
+    expect(filter.pick('vscode')).toBe('switched')
+    agents({ vscode: 2, ghostty: 3 })
+    expect(filter.shown()).toBe('vscode')
+    expect(causes()).toEqual(['pick', 'pick'])
+  })
+
   it('a pick holds through count changes and through the same app settling in front again', () => {
     const { filter, agents, causes } = setup()
     agents({ ghostty: 3, vscode: 1 })
