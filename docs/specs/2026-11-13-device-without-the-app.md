@@ -96,7 +96,6 @@ interface HostAgent {
   engine: string; sessionId?: string; callerPid?: number; cwd?: string
   name: string; host: string    // 'harness' | 'orca' | 'herdr' | 'ghostty' | 'iterm' | 'vscode' | 'terminal' | …
   state: 'idle' | 'working' | 'needs-you' | 'done' | 'error'
-  since: number                 // when the state began
   lastActivityAt: number
   lastAnswer?: string           // the end of the last turn, cut to the card's length
   unseenDone: boolean
@@ -122,23 +121,33 @@ statement to the window (`CableHost.focus`), and there is none.
 | Event | State |
 |---|---|
 | `session-start` | idle (appears) |
-| `turn-start` | working; `since` starts the timer |
-| `needs-input` | needs-you |
+| `turn-start` | working; the source notes when the turn began |
+| `needs-input` | needs-you, only mid-turn (a notice to an idle or finished agent is stale) |
 | `turn-stop` | done; `unseenDone` until the dial shows it; `lastAnswer` read (below) |
 | `turn-error` | error |
 | `session-end` | removed 10 s later |
 
-- **The last answer.** On `turn-stop`, read at most the last 256 KB of the transcript, under a 1 s deadline, and take
+- **The last answer.** On `turn-stop`, once the core's Stop grace is over (1.5 s, `STOP_HOOK_GRACE_MS`: Claude's
+  transcript can lag its Stop hook), read at most the last 256 KB of the transcript, under a 1 s deadline, and take
   the agent's last message, for Claude Code and Codex. Other engines show done with no text. Only paths inside the
   engine's own folders are read (`~/.claude/projects`, `CODEX_HOME/sessions`, as the engine readers already resolve
   them): a forged hook cannot point it at another file.
-- **Codex's end of turn.** While an observed Codex session is working, check `OpenSessions.working(sessionId)` every
-  3 s; when it stops working, the turn is done.
+- **The turns no hook moves.** Every 3 s, for Claude Code and Codex:
+  - a working turn older than 2 s whose owner (`OpenSessions`, Claude's `~/.claude/sessions/<pid>.json` status) is found
+    and reads idle is over: Codex's is done (it sends no `Stop`), and a Claude turn stopped with Esc (no `Stop`) goes
+    idle, with no chime and no done. An owner not found (a process read that timed out) says nothing;
+  - a needs-you agent whose transcript has grown since it began waiting (a stat, no read) was answered in its
+    terminal: it is working again.
 - **Agents already running.** When a dial connects, and every 60 s while one is connected, scan open sessions with
-  `OpenSessions` (`cli/src/lib/sessionSearch/external.ts`, what ⌘P uses to know which conversations a process holds).
-  A session found only this way is idle until its next hook event. Sessions that Harness owns are skipped, as ⌘P does.
-- **Removal.** Every 30 s, check each `callerPid` (with `externalProcessGeneration`, so a reused pid does not keep a dead
-  session); gone → removed. No pid and no event for 12 hours → removed.
+  `OpenSessions` (`cli/src/lib/sessionSearch/external.ts`, what ⌘P uses to know which conversations a process holds):
+  one fresh read of the process table names each open session's owner, and only the sessions found are looked up, each
+  in its own engine's store (no engine's store is read when none of its sessions is open). One scan at a time. A
+  session found only this way is idle until its next hook event. Sessions that Harness owns, that live in Harness's
+  data folder, or whose folder cannot be told are skipped.
+- **Removal.** Every 30 s, one read of the process table for every session: a `callerPid` not in it, or whose start
+  (its generation) changed, so a reused pid does not keep a dead session → removed. Where the table has no
+  generation (Windows), `kill 0` says whether the pid runs, and no event for 12 hours → removed. An ended session goes
+  10 s after its end.
 - **Bound.** At most 50 sessions; when full, the oldest idle one goes.
 - **Privacy.** None of it leaves this computer: not to the backend, the phone or another machine.
 
@@ -157,7 +166,10 @@ overlap (Harness agents have a pane), but the rule and its tests land now, so wa
   selection, not in name lengths: the 78-agent reconnect (`listAgentSnapshot`'s comment) is not repeated.
 - **When.** Changes are coalesced for 1 s, and pushes are at least 1 s apart. The list is pushed only when its members or
   order change (`agentsKey`, as today); a state change inside the same list goes as the existing per-agent frames.
-- **With a window.** Exactly today's behaviour.
+- **With a window.** Exactly today's behaviour: an observed agent sends the dial no frame (no turn, answer or
+  reminder). Its state is still noted, and when the window closes the dial hears at once of each one mid-turn.
+- **Mid-turn reminders.** The round dial forgets a turn it hears nothing of for 25 s, and an observed agent sends no
+  step: each one mid-turn that the dial lists is told again every 20 s, and at once when a dial attaches.
 
 ### The wire
 
