@@ -173,6 +173,7 @@ export function parseDarwinDialPorts(dump: string): DialPort[] {
   let armedSerial: string | undefined
   let armedSession: string | undefined
   let serialNumber: string | undefined
+  let session: string | undefined
   let sawVendor = false
   let sawProduct = false
   let nodeDepth = 0
@@ -186,6 +187,7 @@ export function parseDarwinDialPorts(dump: string): DialPort[] {
       sawVendor = false
       sawProduct = false
       serialNumber = undefined
+      session = undefined
       continue
     }
 
@@ -195,9 +197,14 @@ export function parseDarwinDialPorts(dump: string): DialPort[] {
       serialNumber = line.split('=')[1]?.trim().replace(/^"|"$/g, '')
       if (armedAt === nodeDepth) armedSerial = serialNumber
     }
-    // The USB device node's own sessionID (the interfaces below it carry ones of their own).
-    if (line.includes('"sessionID"') && armedAt === nodeDepth) armedSession = line.split('=')[1]?.trim()
-    if (sawVendor && sawProduct && armedAt === null) { armedAt = nodeDepth; armedSerial = serialNumber }
+    // The USB device node's own sessionID (the interfaces below it carry ones of their own). Kept as it is read,
+    // like the serial number, because the node may list it before its ids: the real dump of 2026-11-14 does, and
+    // a parser that waited for the match never set `session` on macOS.
+    if (line.includes('"sessionID"')) {
+      session = line.split('=')[1]?.trim()
+      if (armedAt === nodeDepth) armedSession = session
+    }
+    if (sawVendor && sawProduct && armedAt === null) { armedAt = nodeDepth; armedSerial = serialNumber; armedSession = session }
 
     if (armedAt !== null && line.includes('"IOCalloutDevice"')) {
       const path = line.split('=')[1]?.trim().replace(/^"|"$/g, '')
