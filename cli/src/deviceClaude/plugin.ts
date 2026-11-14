@@ -4,7 +4,7 @@
  * This runs only in the `harness` command's own process (the menu-bar app calls it), never in the daemon.
  */
 import { execFile } from 'node:child_process'
-import { closeSync, openSync, readSync } from 'node:fs'
+import { closeSync, fstatSync, openSync, readSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { installedEngineBin } from '../lib/engineBin.js'
@@ -49,17 +49,20 @@ export function claudeSettingsPath(): string {
  * disabled, gone once uninstalled. A session started before `disable` keeps the plugin's hook and mod loaded, so both
  * ask this before they act. It is Claude Code's own record, not a file of Harness's: the /plugin menu turns the plugin
  * off there too, and `status` reads the same entry through `claude plugin list`. One read of at most 1 MiB. A file that
- * is missing (the plugin loaded with --plugin-dir), cut short or not an object says nothing of the person turning the
- * plugin off: it stays on, as it was before this check, rather than the dial going quiet for no reason anyone can see.
+ * is missing, cut short or not an object says nothing of the person turning the plugin off: it stays on, as it was
+ * before this check, rather than the dial going quiet for no reason anyone can see. A plugin loaded with --plugin-dir or
+ * installed at project scope is on only while that file is missing: once it exists without the entry, it reads as off.
  */
 export function claudePluginOn(settingsPath: string): boolean {
   let settings: unknown
   try {
     const fd = openSync(settingsPath, 'r')
     try {
-      const buffer = Buffer.alloc(MAX_SETTINGS_BYTES + 1)
-      const length = readSync(fd, buffer, 0, buffer.length, 0)
-      if (length > MAX_SETTINGS_BYTES) return true
+      // Sized by the file, not the bound: every `asked` and `link` reads it, and it is a few hundred bytes.
+      const { size } = fstatSync(fd)
+      if (size > MAX_SETTINGS_BYTES) return true
+      const buffer = Buffer.allocUnsafe(size)
+      const length = readSync(fd, buffer, 0, size, 0)
       settings = JSON.parse(buffer.toString('utf8', 0, length))
     } finally {
       closeSync(fd)
