@@ -6,6 +6,7 @@
 import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { resolveBinaryOnPath } from '../../lib/binaryOnPath.js'
+import type { PaneSwitch } from './types.js'
 
 export const ORCA_HANDLE = /^term_[0-9a-f-]{36}$/
 
@@ -43,37 +44,37 @@ export function orcaDeps(): OrcaDeps {
   }
 }
 
-export function createOrcaActions(deps: OrcaDeps): { send(handle: string, text: string): Promise<boolean>; switchTo(handle: string): Promise<boolean> } {
+export function createOrcaActions(deps: OrcaDeps): { send(handle: string, text: string): Promise<boolean>; switchTo(handle: string): Promise<PaneSwitch> } {
   // One command at a time per terminal: two transcripts typed at once would mix in its prompt.
   const running = new Set<string>()
 
   const orcaBinary = (): string | null =>
     deps.onPath('orca') ?? (deps.platform === 'darwin' && deps.exists(APP_ORCA) ? APP_ORCA : null)
 
-  async function alone(handle: string, work: (orca: string) => Promise<boolean>): Promise<boolean> {
-    if (!ORCA_HANDLE.test(handle) || running.has(handle)) return false
+  // Busy runs nothing and queues nothing: a later command for the terminal is asked for again, never stacked behind.
+  async function alone(handle: string, args: string[]): Promise<PaneSwitch> {
+    if (!ORCA_HANDLE.test(handle)) return 'failed'
+    if (running.has(handle)) return 'busy'
     const orca = orcaBinary()
-    if (!orca) return false
+    if (!orca) return 'failed'
     running.add(handle)
     try {
-      return await work(orca)
+      return (await deps.run(orca, args, RUN_TIMEOUT_MS)).code === 0 ? 'ok' : 'failed'
     } finally {
       running.delete(handle)
     }
   }
-
-  const exitsZero = async (file: string, args: string[]): Promise<boolean> => (await deps.run(file, args, RUN_TIMEOUT_MS)).code === 0
 
   return {
     async send(handle, text) {
       if (text === '' || text.length > MAX_TEXT) return false
       const line = text.replace(CONTROL, ' ')
       // Joined to its flag: orca reads a separate argument that starts with -- as the next flag, not as the text.
-      return alone(handle, (orca) => exitsZero(orca, ['terminal', 'send', '--terminal', handle, `--text=${line}`, '--enter', '--wait-submit', '5', '--json']))
+      return (await alone(handle, ['terminal', 'send', '--terminal', handle, `--text=${line}`, '--enter', '--wait-submit', '5', '--json'])) === 'ok'
     },
     // Picks the terminal inside Orca, under the same one-at-a-time as the words typed into it.
     switchTo(handle) {
-      return alone(handle, (orca) => exitsZero(orca, ['terminal', 'switch', '--terminal', handle, '--json']))
+      return alone(handle, ['terminal', 'switch', '--terminal', handle, '--json'])
     },
   }
 }

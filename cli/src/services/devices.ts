@@ -235,11 +235,12 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const inbox = new Inbox({ now: monotonic, after: timerIn('inbox') })
   const apps = deps.orca ?? orcaDeps()
   const orca = createOrcaActions(apps)
-  const opener = createOpenActions({ ...apps, orcaSwitch: orca.switchTo, log })
+  const opener = createOpenActions({ ...apps, orcaSwitch: (handle) => orca.switchTo(handle).then((done) => done === 'ok'), log })
   const observed = env.HARNESS_DEVICE_OBSERVED ? observedSource(core.dataDir, log, {
     modReady: (sessionId) => inbox.ready(sessionId),
     toMod: (sessionId, text) => inbox.deliver(sessionId, text),
     orcaSend: orca.send,
+    orcaSwitch: orca.switchTo,
     canOpen: opener.can,
     open: opener.open,
     // The route or the refusal only: never the words, the session or the terminal.

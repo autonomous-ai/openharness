@@ -11,7 +11,7 @@ import { detectApp, detectHost, hostDisplayName, UNKNOWN_APP } from './hostDetec
 import type { Delivery } from './inbox.js'
 import { openTarget, type OpenTarget } from './open.js'
 import { MAX_TEXT, ORCA_HANDLE } from './orca.js'
-import type { Caps, HostAgent, HostAgentState, HostSource, SendResult } from './types.js'
+import type { Caps, HostAgent, HostAgentState, HostSource, PaneSwitch, SendResult } from './types.js'
 
 export { detectHost, hostDisplayName } from './hostDetect.js'
 
@@ -78,6 +78,8 @@ export interface ObservedActions {
   modReady(sessionId: string): boolean
   toMod(sessionId: string, text: string): Promise<Delivery>
   orcaSend(handle: string, text: string): Promise<boolean>
+  /** Picks the terminal inside Orca; Orca itself stays where it is. */
+  orcaSwitch(handle: string): Promise<PaneSwitch>
   /** Whether a tap can open the target here: macOS brings an app forward, elsewhere only a pane's own command runs. */
   canOpen(target: OpenTarget): boolean
   /** A tap: the agent's pane, then its app (open.ts). */
@@ -198,6 +200,22 @@ export class ObservedSource implements HostSource {
     const e = this.entries.get(agent.id)
     const actions = this.deps.actions
     return e && actions && this.live(e) && actions.canOpen(e.opens) ? actions.open(e.agent.id, e.opens) : Promise.resolve(false)
+  }
+
+  /** Only an Orca terminal can be shown without its app coming forward. */
+  hasPane(agent: HostAgent): boolean {
+    return this.paneHandle(agent) !== undefined
+  }
+
+  showPane(agent: HostAgent): Promise<PaneSwitch> {
+    const handle = this.paneHandle(agent)
+    return handle ? this.deps.actions!.orcaSwitch(handle) : Promise.resolve('failed')
+  }
+
+  /** The terminal of its latest event, while it lives: one it left, or an ended session's, holds something else now. */
+  private paneHandle(agent: HostAgent): string | undefined {
+    const e = this.entries.get(agent.id)
+    return e && this.deps.actions && this.live(e) ? e.handle : undefined
   }
 
   private emit(): void {
