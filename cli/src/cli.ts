@@ -2950,7 +2950,7 @@ switch (cmd) {
       connect: (url, headers) => new NewCommandSocket(url, { headers }),
     }
     const run = rest[0] === 'watch'
-      ? runDialWatch(rest.slice(1), { ...daemon, stdin: process.stdin, print: (line) => console.log(line) })
+      ? runDialWatch(rest.slice(1), { ...daemon, stdin: process.stdin, print: (line) => console.log(line), printError: (line) => console.error(line) })
       : runDevicesCommand(rest, daemon)
     run.then(code => { process.exitCode = code }).catch(onError)
     break

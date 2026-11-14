@@ -60,8 +60,12 @@ Offline computers never receive queued changes. A write is complete only when co
 export interface DialWatchDeps extends Pick<DevicesClientDeps, 'port' | 'dataDir' | 'machineId' | 'connect'> {
   stdin: { on(event: 'end' | 'close', listener: () => void): unknown; resume(): unknown; pause(): unknown }
   print(line: string): void
+  /** stderr: stdout carries only the app's NDJSON. */
+  printError(line: string): void
 }
 
+const NOT_RUNNING = 'Harness is not running on this computer. Run: harness start'
+const CLOSED = 'The connection to Harness on this computer closed.'
 const DIAL_FIELDS = ['fw', 'hw', 'board', 'updating', 'problem'] as const
 
 /** A dial_status reduced to what the menu-bar app shows, so a settings change alone prints nothing. */
@@ -84,28 +88,29 @@ export function runDialWatch(argv: string[], deps: DialWatchDeps): Promise<numbe
   return new Promise(resolve => {
     let socket: ClientSocket | undefined
     let settled = false, last: string | undefined
-    const finish = (code: number): void => {
+    const finish = (code: number, why?: string): void => {
       if (settled) return
       settled = true
+      if (why) deps.printError(why)
       clearTimeout(deadline)
       deps.stdin.pause()
       try { socket?.close() } catch { /* already closed */ }
       resolve(code)
     }
     // A daemon that takes the socket and never answers would otherwise keep the app's probe waiting for ever.
-    const deadline = setTimeout(() => finish(3), 10_000)
+    const deadline = setTimeout(() => finish(3, CLOSED), 10_000)
     // The app spawns this with a stdin pipe, so a killed app never leaves a tool connection open for ever.
     deps.stdin.on('end', () => finish(0))
     deps.stdin.on('close', () => finish(0))
     deps.stdin.resume()
     deps.machineId().then(machineId => {
       if (settled) return
-      if (!machineId) return finish(3)
+      if (!machineId) return finish(3, NOT_RUNNING)
       socket = openLocalWs(deps.dataDir ?? env.ADAPTER_DATA_DIR, deps.port, deps.connect)
       socket.on('open', () => socket!.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1, tool: true, watch: ['dial'] } })))
-      socket.on('error', () => finish(3))
+      socket.on('error', () => finish(3, NOT_RUNNING))
       // Any close, 4403 included: the machine id changes during `harness login`, and the app starts a new watch.
-      socket.on('close', () => finish(3))
+      socket.on('close', () => finish(3, CLOSED))
       socket.on('message', data => {
         if (settled) return
         let frame: { type?: unknown; payload?: unknown } | null
@@ -123,7 +128,7 @@ export function runDialWatch(argv: string[], deps: DialWatchDeps): Promise<numbe
         last = line
         deps.print(line)
       })
-    }).catch(() => finish(3))
+    }).catch(() => finish(3, NOT_RUNNING))
   })
 }
 
