@@ -690,9 +690,14 @@ mod tests {
         fake.script("hardware watch --json", &["@hang"]);
         let mut child = fake.cli().spawn(&WATCH).unwrap();
         let writer = child.stdin_writer();
-        let line = "x".repeat(100);
-        // 1 MB, past any pipe's buffer.
-        assert!((0..10_000).any(|_| !writer.line(&line)));
+        // On a thread, so a write that waits fails the test instead of hanging it.
+        let (send, dropped) = mpsc::channel();
+        thread::spawn(move || {
+            let line = "x".repeat(100);
+            // 1 MB, past any pipe's buffer.
+            let _ = send.send((0..10_000).any(|_| !writer.line(&line)));
+        });
+        assert_eq!(dropped.recv_timeout(WAIT), Ok(true));
         // The closer is not held up either.
         assert!(child.stdin_closer().close());
         child.killer().kill();
