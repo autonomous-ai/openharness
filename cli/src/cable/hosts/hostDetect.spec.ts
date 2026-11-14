@@ -61,6 +61,15 @@ describe('detectApp', () => {
     expect(UNKNOWN_APP).toBe('terminal')
   })
 
+  it("a hint naming an object's own key gives the unknown app: hint values are outside text", () => {
+    for (const key of ['constructor', '__proto__', 'toString']) {
+      for (const hint of ['__CFBundleIdentifier', 'TERM_PROGRAM']) {
+        expect(detectApp({ [hint]: key })).toBe(UNKNOWN_APP)
+        expect(detectHost({ [hint]: key })).toBe('terminal')
+      }
+    }
+  })
+
   it('kitty and WezTerm by bundle id, WezTerm by TERM_PROGRAM, Harness Desktop by bundle id', () => {
     expect(detectApp({ __CFBundleIdentifier: 'net.kovidgoyal.kitty' })).toBe('kitty')
     expect(detectApp({ __CFBundleIdentifier: 'com.github.wez.wezterm' })).toBe('wezterm')
