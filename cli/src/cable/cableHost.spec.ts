@@ -982,6 +982,51 @@ describe('the dial that shows one app at a time', () => {
     expect(appSwitched.mock.calls).toEqual([['front']])
   })
 
+  it('settledApp is undefined until an app settles in front, then that app', () => {
+    const settles: Array<() => void> = []
+    const host = setup(five(), { appTimer: (_ms, run) => { settles.push(run); return () => {} } })
+    expect(host.settledApp()).toBeUndefined()
+    host.front('orca')
+    expect(host.settledApp()).toBeUndefined()
+    settles[0]()
+    expect(host.settledApp()).toBe('orca')
+  })
+
+  it('a pick on the dial changes the shown app and not the settled one', async () => {
+    const settles: Array<() => void> = []
+    const host = setup([...five(), agent('o1', 'orca')], { appTimer: (_ms, run) => { settles.push(run); return () => {} } })
+    expect(await shown(host)).toBe('ghostty')
+    host.front('orca')
+    settles[0]()
+    expect(await shown(host)).toBe('orca')
+    expect(host.pickApp('vscode')).toBe('switched')
+    expect(host.settledApp()).toBe('orca')
+    expect(await shown(host)).toBe('vscode')
+  })
+
+  it('settledApp follows the app in front with a window open too', () => {
+    const settles: Array<() => void> = []
+    const host = setup(five(), { sessions, appTimer: (_ms, run) => { settles.push(run); return () => {} } })
+    onTab(host, ['h1'])
+    host.front('vscode')
+    settles[0]()
+    expect(host.settledApp()).toBe('vscode')
+  })
+
+  it('promptFollowed reaches the wiring', () => {
+    const promptFollowed = vi.fn()
+    const host = setup(five(), { promptFollowed })
+    host.promptFollowed('moved')
+    host.promptFollowed('no-tile')
+    expect(promptFollowed.mock.calls).toEqual([['moved'], ['no-tile']])
+  })
+
+  it('knows an agent outside Harness', () => {
+    const host = setup(five())
+    expect(host.knows('g1')).toBe(true)
+    expect(host.knows('nobody')).toBe(false)
+  })
+
   it('two reads in a row give the same shown app and the same order', async () => {
     const appRandom = vi.fn(() => 0.75)
     const host = setup([agent('g1', 'ghostty'), agent('v1', 'vscode'), agent('g2', 'ghostty'), agent('v2', 'vscode')], { appRandom })
