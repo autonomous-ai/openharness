@@ -85,7 +85,8 @@ export interface DaemonOptions {
   launch?: string[]
   /** Run the daemon on this Node instead of the test's own: a managed Node under the runtime folder. */
   node?: string
-  /** Run this bundle (an installed `cli.js`) instead of the checkout's source. */
+  /** Run this bundle (an installed `cli.js`, its `notify.mjs` beside it: `assertHookScriptBeside`) instead of
+   *  the checkout's source. */
   scriptPath?: string
   /** Keep the daemon's data folder here instead of under the throwaway root (a test volume). The fake
    *  engines read their hook credential from it, so it is set for them too. */
@@ -185,6 +186,17 @@ export function assertHooksContained(root: string, env: NodeJS.ProcessEnv): void
   for (const [engine, homes] of Object.entries(remembered)) {
     for (const home of homes) check(`the ${engine} home remembered in engine-homes.json`, home)
   }
+}
+
+/**
+ * A daemon whose `cli.js` has no `notify.mjs` beside it refuses every hook install
+ * (`engines/kit/notifyHooks.ts` `requireHookScript`), and its test then fails far from the cause: six tests
+ * of the nightly run of 2026-11-12 failed on `NATIVE_LAUNCH_HELD` or a hook timeout. It never copies the
+ * file, which would hide a layout no build produces.
+ */
+export function assertHookScriptBeside(scriptPath: string): void {
+  if (existsSync(join(dirname(scriptPath), 'notify.mjs'))) return
+  throw new Error(`${scriptPath} has no notify.mjs beside it: its daemon refuses every hook install (lay it out with buildWithLean)`)
 }
 
 /**
@@ -367,8 +379,10 @@ export class IsolatedDaemon {
    *  `'none'` as soon as the process is started. */
   async start(options: { ready?: 'none' | 'port' | 'wired' } = {}): Promise<void> {
     if (this.child) throw new Error('already running')
-    // Checked at every start: a test writes a shell profile, or the data folder remembers a home, between them.
+    // Checked at every start: a test writes a shell profile, or the data folder remembers a home, between them,
+    // and a test may name its script after `create` (`masterIpcExit.e2e.ts`).
     assertHooksContained(this.root, this.env)
+    if (this.options.scriptPath) assertHookScriptBeside(this.options.scriptPath)
     const heap = this.options.heapMiB ? [`--max-old-space-size=${this.options.heapMiB}`] : []
     const entry = this.options.noMaster ? ['__run'] : this.options.foreground ? ['start', '-f'] : ['__harnessd']
     // Readiness is judged from what this start prints, never from an earlier boot's lines.
