@@ -2010,7 +2010,7 @@ describe('a hook\'s approvals, the mod\'s voice and Orca, for agents outside a p
     expect(await host().sendTurn(CODEX, 'run the tests')).toEqual({ ok: true })
     expect(await host().openAgent(CODEX)).toBeUndefined()
     expect(orcaRuns).toEqual([
-      ['/opt/orca/bin/orca', ['terminal', 'send', '--terminal', HANDLE, '--text', 'run the tests', '--enter', '--wait-submit', '5', '--json'], 10_000],
+      ['/opt/orca/bin/orca', ['terminal', 'send', '--terminal', HANDLE, '--text=run the tests', '--enter', '--wait-submit', '5', '--json'], 10_000],
       ['/opt/orca/bin/orca', ['terminal', 'switch', '--terminal', HANDLE, '--json'], 10_000],
     ])
     expect(said()).toEqual(['[device] voice · orca'])
