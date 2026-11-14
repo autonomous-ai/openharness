@@ -8,6 +8,9 @@ pub mod desktop;
 pub mod front;
 #[cfg(target_os = "macos")]
 pub mod front_macos;
+// Its pure rules compile everywhere under test, so a Mac checks them too; the X11 source is Linux only.
+#[cfg(any(target_os = "linux", test))]
+pub mod front_x11;
 pub mod install;
 pub mod keepalive;
 pub mod log;
