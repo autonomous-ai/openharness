@@ -61,6 +61,10 @@ describe('the harness-device plugin', () => {
     })
   })
 
+  it('hooks.json loads the voice mod, hooks/device.js', () => {
+    expect(json(pluginRoot, 'hooks', 'hooks.json').modules).toEqual(['./device.js'])
+  })
+
   it('hooks/approve is executable and starts with #!/bin/sh', () => {
     expect(statSync(HOOK).mode & 0o111).toBe(0o111)
     expect(readFileSync(HOOK, 'utf8').startsWith('#!/bin/sh\n')).toBe(true)
