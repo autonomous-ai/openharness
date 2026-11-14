@@ -200,11 +200,7 @@ impl App {
                 }
             }
             Event::Menu(action) => match action {
-                MenuAction::Install => {
-                    if matches!(self.state.cli, CliState::Removed | CliState::InstallFailed) {
-                        self.install(effects);
-                    }
-                }
+                MenuAction::Install => self.install(effects),
                 MenuAction::SignIn => self.show(Some(self.view_of(Screen::SignIn)), effects),
                 MenuAction::ClaudeOn => self.show(Some(self.view_of(Screen::Claude)), effects),
                 MenuAction::ClaudeOff => {
@@ -310,7 +306,11 @@ impl App {
         effects.push(Effect::StopWatch);
     }
 
+    /// Only where no CLI is: a CLI found after a failed install is never installed over.
     fn install(&mut self, effects: &mut Vec<Effect>) {
+        if !matches!(self.state.cli, CliState::Removed | CliState::InstallFailed) {
+            return;
+        }
         self.state.cli = CliState::Installing;
         effects.push(Effect::RunInstall);
         self.show(Some(self.view_of(Screen::Install)), effects);
