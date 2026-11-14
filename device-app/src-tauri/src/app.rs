@@ -28,6 +28,9 @@ pub struct App {
     /// The last time an event told, for the keep-alive.
     now: u64,
     last_read: u64,
+    /// The app started the daemon: its first status line reads the account and Claude Code again, at once, as
+    /// reads made while it was down may have needed it.
+    read_when_up: bool,
     /// The desktop app ran at the last tick.
     desktop_running: bool,
 }
@@ -54,6 +57,7 @@ impl App {
             first_answers: None,
             now,
             last_read: now,
+            read_when_up: false,
             desktop_running: false,
         };
         let mut effects = Vec::new();
@@ -92,10 +96,11 @@ impl App {
                         if desktop_running && !self.desktop_running {
                             effects.push(Effect::Log(DESKTOP_RUNS.into()));
                         }
-                        effects.extend(self.keep.tick(now, desktop_running).map(|keep| match keep {
-                            Keep::SpawnWatch => Effect::SpawnWatch,
-                            Keep::RunStart => Effect::RunStart,
-                        }));
+                        match self.keep.tick(now, desktop_running) {
+                            Some(Keep::SpawnWatch) => effects.push(Effect::SpawnWatch),
+                            Some(Keep::RunStart) => self.run_start(effects),
+                            None => {}
+                        }
                     }
                     // A CLI installed by hand is found again; an install that runs is waited for.
                     CliState::Removed | CliState::InstallFailed => effects.push(Effect::FindCli),
@@ -134,6 +139,9 @@ impl App {
             Event::WatchLine(status) => {
                 self.keep.watch_line();
                 self.state.dial = Some(status);
+                if std::mem::take(&mut self.read_when_up) {
+                    self.read(effects);
+                }
             }
             Event::WatchExit(code) => {
                 self.keep.watch_exit(code, self.now);
@@ -150,7 +158,7 @@ impl App {
                     effects.extend([Effect::Log(DESKTOP_RUNS.into()), Effect::SpawnWatch]);
                 } else {
                     self.keep.start_begun(self.now);
-                    effects.push(Effect::RunStart);
+                    self.run_start(effects);
                 }
             }
             Event::InstallDone(Err(lines)) => {
@@ -314,6 +322,11 @@ impl App {
         self.keep = KeepAlive::new();
         self.first_answers = Some((false, false));
         self.read(effects);
+    }
+
+    fn run_start(&mut self, effects: &mut Vec<Effect>) {
+        self.read_when_up = true;
+        effects.push(Effect::RunStart);
     }
 
     fn stop_watch(&mut self, effects: &mut Vec<Effect>) {
