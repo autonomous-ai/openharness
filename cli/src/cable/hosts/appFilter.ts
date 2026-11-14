@@ -3,15 +3,21 @@ import type { AppPick, SwitchCause } from './types.js'
 /** How long an app stays in front before the dial follows it: a Cmd-Tab across apps moves nothing. */
 export const FRONT_SETTLE_MS = 1_000
 
+/** Each app with agents and how many (`all`), and of those the agents whose app is known (`HostAgent.appPending`): an app
+ *  with none is absent from `known`. */
+export interface AppCounts {
+  all: ReadonlyMap<string, number>
+  known: ReadonlyMap<string, number>
+}
+
 export interface AppFilterDeps {
   /** Runs `run` once after `ms`; returns its cancel. */
   after(ms: number, run: () => void): () => void
   /** In [0, 1). */
   random(): number
-  /** Each app with agents and how many, as last read. */
-  counts(): ReadonlyMap<string, number>
-  /** Of those, the agents whose app is known (`HostAgent.appPending`), as last read: an app with none is absent. */
-  known(): ReadonlyMap<string, number>
+  /** The agents there now, counted at each call: a settle or a pick between two list reads decides on them, never on
+   *  the last read's. */
+  counts(): AppCounts
   switched(cause: SwitchCause): void
 }
 
@@ -49,8 +55,7 @@ export class AppFilter {
    * way, are decided here, when the counts are read.
    */
   shown(): string | undefined {
-    const counts = this.deps.counts()
-    const known = this.deps.known()
+    const { all: counts, known } = this.deps.counts()
     if (this.showing !== undefined && has(counts, this.showing) && !this.givesWay(known, this.showing)) return this.showing
     this.pickedOnDial = false
     this.byDefault = true
@@ -66,7 +71,7 @@ export class AppFilter {
   }
 
   pick(app: string, cause: 'pick' | 'notice' = 'pick'): AppPick {
-    if (!has(this.deps.counts(), app)) return 'ignored'
+    if (!has(this.deps.counts().all, app)) return 'ignored'
     // A pick of the shown app is the person's choice too: it holds as one that switched does, and tells no switch.
     this.pickedOnDial = true
     this.byDefault = false
@@ -87,7 +92,7 @@ export class AppFilter {
       this.settledFront = app
     }
     // `none` (no listed app in front) is no app, so it never has agents and never shows.
-    if (!this.pickedOnDial && has(this.deps.counts(), app)) {
+    if (!this.pickedOnDial && has(this.deps.counts().all, app)) {
       this.byDefault = false
       this.show(app, 'front')
     }

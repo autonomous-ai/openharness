@@ -19,7 +19,7 @@ function setup(draws: number[] = []) {
     const t = setTimeout(run, ms)
     return () => clearTimeout(t)
   })
-  const filter = new AppFilter({ after, random, counts: () => counts, known: () => known ?? counts, switched })
+  const filter = new AppFilter({ after, random, counts: () => ({ all: counts, known: known ?? counts }), switched })
   const agents = (next: Record<string, number>, knownNext?: Record<string, number>): void => {
     counts.clear()
     for (const [app, n] of Object.entries(next)) counts.set(app, n)

@@ -291,13 +291,11 @@ describe('AppRings', () => {
       { id: 'ghostty', count: 18, waiting: 2 },
       { id: 'orca', count: 1, waiting: 0 },
     ])
-    expect([...rings.counts()]).toEqual([['ghostty', 18], ['orca', 1]])
     rings.update([needs(list[18]), list[1]])
     expect(rings.apps()).toEqual([
       { id: 'ghostty', count: 1, waiting: 0 },
       { id: 'orca', count: 1, waiting: 1 },
     ])
-    expect([...rings.counts()]).toEqual([['ghostty', 1], ['orca', 1]])
   })
 
   it('an agent whose app changes leaves its ring and joins the other at the end', () => {
@@ -317,35 +315,53 @@ describe('AppRings', () => {
     ])
   })
 
-  it('known leaves out the agents not known yet; the counts, the list and the ring keep them', () => {
+  it('agents not known yet: the list and the ring keep them', () => {
     const rings = new AppRings()
     const pending = row(3, 'p').map((a) => ({ ...a, appPending: true as const }))
     rings.update([...pending, agent('t'), ...row(2, 'g').map(at('ghostty'))])
-    expect([...rings.counts()]).toEqual([['terminal', 4], ['ghostty', 2]])
-    expect([...rings.known()]).toEqual([['terminal', 1], ['ghostty', 2]])
     expect(rings.apps()).toContainEqual({ id: 'terminal', count: 4, waiting: 0 })
     expect(ringIds(rings, 'terminal')).toEqual(['p1', 'p2', 'p3', 't'])
   })
 
-  it('an app whose agents are all not known yet is absent from known', () => {
-    const rings = new AppRings()
-    rings.update([...row(2, 'p').map((a) => ({ ...a, appPending: true as const })), at('ghostty')(agent('g'))])
-    expect(rings.counts().get('terminal')).toBe(2)
-    expect([...rings.known()]).toEqual([['ghostty', 1]])
-  })
-
-  it('an agent that becomes known joins its app\'s ring at the end, and its known count', () => {
+  it('an agent that becomes known joins its app\'s ring at the end', () => {
     const rings = new AppRings()
     const p = agent('p', { appPending: true, lastActivityAt: 50 })
     const [g1, g2] = row(2, 'g').map(at('ghostty'))
     rings.update([p, g1, g2])
-    expect([...rings.known()]).toEqual([['ghostty', 2]])
     // Its first hook says it runs in Ghostty, and the flag goes.
     rings.update([agent('p', { app: 'ghostty', lastActivityAt: 50 }), g1, g2])
     expect(ringIds(rings, 'ghostty')).toEqual(['g1', 'g2', 'p'])
-    expect([...rings.known()]).toEqual([['ghostty', 3]])
     expect(rings.ring('terminal')).toEqual({ rows: [], total: 0 })
     expect(rings.apps()).toEqual([{ id: 'ghostty', count: 3, waiting: 0 }])
+  })
+
+  describe('counts, of the agents given', () => {
+    const pending = (n: number): HostAgent[] => row(n, 'p').map((a) => ({ ...a, appPending: true as const }))
+
+    it('known leaves out the agents not known yet; all keeps them', () => {
+      const { all, known } = new AppRings().counts([...pending(3), agent('t'), ...row(2, 'g').map(at('ghostty'))])
+      expect([...all]).toEqual([['terminal', 4], ['ghostty', 2]])
+      expect([...known]).toEqual([['terminal', 1], ['ghostty', 2]])
+    })
+
+    it('an app whose agents are all not known yet is absent from known', () => {
+      const { all, known } = new AppRings().counts([...pending(2), at('ghostty')(agent('g'))])
+      expect(all.get('terminal')).toBe(2)
+      expect([...known]).toEqual([['ghostty', 1]])
+    })
+
+    it('an app outside the set counts as the unknown app', () => {
+      expect([...new AppRings().counts(row(3).map((a, i) => at(`unknown-${i}`)(a))).all]).toEqual([['terminal', 3]])
+    })
+
+    it('not the last update\'s: the rings are left as they were', () => {
+      const rings = new AppRings()
+      const [g1, g2] = row(2, 'g').map(at('ghostty'))
+      rings.update([g1, g2])
+      expect([...rings.counts([g1, at('vscode')(agent('v'))]).all]).toEqual([['ghostty', 1], ['vscode', 1]])
+      expect(rings.apps()).toEqual([{ id: 'ghostty', count: 2, waiting: 0 }])
+      expect(ringIds(rings, 'ghostty')).toEqual(['g1', 'g2'])
+    })
   })
 
   it('the map is bounded: 20 agents with 20 unknown app ids make one terminal ring', () => {

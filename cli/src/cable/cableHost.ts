@@ -224,8 +224,11 @@ export class DaemonCableHost implements CableHost {
     this.filter = new AppFilter({
       after: wiring.appTimer ?? unrefAfter,
       random: wiring.appRandom ?? Math.random,
-      counts: () => this.rings.counts(),
-      known: () => this.rings.known(),
+      // The registry's agents at each call, not the rings' last update: only a list read with no window updates the
+      // rings, so a settle with a window open or the dial unplugged, or a pick just after an app's last agent ended,
+      // would count the past. Harness's own agents still count as that read left them: the list read feeds their source
+      // (machineSnapshot).
+      counts: () => this.rings.counts(this.registry?.entries().map((e) => e.agent) ?? []),
       switched: (cause) => wiring.appSwitched?.(cause),
     })
   }

@@ -1,3 +1,4 @@
+import type { AppCounts } from './appFilter.js'
 import { APP_IDS, UNKNOWN_APP } from './hostDetect.js'
 import type { HostAgent } from './types.js'
 
@@ -69,6 +70,9 @@ interface AppRing {
   waiting: number
 }
 
+/** The app whose page an agent is on: an app outside the set is the unknown one, so there are never more than APP_IDS. */
+const pageOf = (a: HostAgent): string => (APP_IDS.includes(a.app) ? a.app : UNKNOWN_APP)
+
 /**
  * One `DialRing` per app, for the dial that shows one app at a time. The apps keep the order they appeared in, so the
  * dial's list of apps holds still as the rings do. An app with no agents left loses its ring: back again, it starts a
@@ -78,13 +82,11 @@ export class AppRings {
   /** Each app's ring, in the order the apps appeared. */
   private rings = new Map<string, AppRing>()
   private sizes = new Map<string, number>()
-  private knownSizes = new Map<string, number>()
 
   update(agents: HostAgent[]): void {
     const byApp = new Map<string, HostAgent[]>()
     for (const a of agents) {
-      // An app outside the set is the unknown one, so there are never more rings than APP_IDS.
-      const app = APP_IDS.includes(a.app) ? a.app : UNKNOWN_APP
+      const app = pageOf(a)
       const list = byApp.get(app)
       if (list) list.push(a)
       else byApp.set(app, [a])
@@ -97,26 +99,27 @@ export class AppRings {
       this.rings.set(app, entry)
     }
     this.sizes = new Map([...this.rings.keys()].map((app) => [app, byApp.get(app)!.length]))
-    this.knownSizes = new Map([...this.rings.keys()].flatMap((app) => {
-      const n = byApp.get(app)!.filter((a) => !a.appPending).length
-      return n ? [[app, n] as const] : []
-    }))
   }
 
   apps(): Array<{ id: string; count: number; waiting: number }> {
     return [...this.rings].map(([id, r]) => ({ id, count: this.sizes.get(id)!, waiting: r.waiting }))
   }
 
-  counts(): ReadonlyMap<string, number> {
-    return this.sizes
-  }
-
-  /** Each app's agents whose app is known (not `appPending`), in the apps' order: an app with none is absent. */
-  known(): ReadonlyMap<string, number> {
-    return this.knownSizes
-  }
-
   ring(app: string): { rows: HostAgent[]; total: number } {
     return { rows: this.rings.get(app)?.rows ?? [], total: this.sizes.get(app) ?? 0 }
+  }
+
+  /** Each app's agents among these, and of those the ones whose app is known, by the page each is on. Counted from the
+   *  agents given, not the last update: the filter decides a settle or a pick between two list reads on the agents there
+   *  now. */
+  counts(agents: readonly HostAgent[]): AppCounts {
+    const all = new Map<string, number>()
+    const known = new Map<string, number>()
+    for (const a of agents) {
+      const app = pageOf(a)
+      all.set(app, (all.get(app) ?? 0) + 1)
+      if (!a.appPending) known.set(app, (known.get(app) ?? 0) + 1)
+    }
+    return { all, known }
   }
 }
