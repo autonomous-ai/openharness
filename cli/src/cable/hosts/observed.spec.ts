@@ -608,11 +608,26 @@ describe('ObservedSource actions', () => {
     expect(actions.orcaSend).not.toHaveBeenCalled()
   })
 
-  // Claude Code and Codex queue what is typed into their running TUI (engines/<engine>/submissionPolicy.ts typesWhileBusy).
-  it.each(['claude', 'codex'] as const)('to Orca while %s works, as typed into its running turn', async (engine) => {
+  // Claude Code queues what is typed into its running TUI (engines/claude/submissionPolicy.ts typesWhileBusy), and its
+  // hooks say when a permission prompt opens (Notification, the plugin's asked), so a working turn reads as one with none.
+  it('to Orca while Claude Code works, as typed into its running turn', async () => {
+    const { actions } = fakeActions()
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('turn-start', withHandle))
+    expect(await src.send(src.list()[0], 'next step')).toEqual({ ok: true })
+    expect(actions.orcaSend).toHaveBeenCalledWith(HANDLE, 'next step')
+  })
+
+  // Codex's hooks never say an approval is open, and its overlay takes `y` or Enter as an approval: a working turn may be
+  // showing one, so nothing is typed into it. Idle, it takes the words.
+  it.each(['codex', 'grok'] as const)('never typed into Orca while %s works: its prompts are never heard of', async (engine) => {
     const { actions } = fakeActions()
     const { src, ev } = setup({ actions })
     src.ingest(ev('turn-start', { engine, ...withHandle }))
+    expect(await src.send(src.list()[0], 'yes run it')).toEqual({ ok: false, reason: 'proj is busy. Say it when it is done.' })
+    expect(actions.orcaSend).not.toHaveBeenCalled()
+    expect(actions.count.mock.calls.map(([what]) => what)).toEqual(['busy'])
+    src.ingest(ev('turn-stop', { engine, ...withHandle }))
     expect(await src.send(src.list()[0], 'next step')).toEqual({ ok: true })
     expect(actions.orcaSend).toHaveBeenCalledWith(HANDLE, 'next step')
   })
