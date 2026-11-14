@@ -1571,7 +1571,7 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     expect(readers.scans).toBe(2)
   })
 
-  it('removes an ended session within 30 s, and ends a Codex turn within 3 s of its process going quiet', async () => {
+  it('removes an ended session within 11 s, and ends a Codex turn within 3 s of its process going quiet', async () => {
     vi.useFakeTimers()
     const { port } = start({ faults: ['fleet'] })
     const codex = observedAgentId('codex', 'cx-1')
@@ -1583,7 +1583,8 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     expect(calls('turnDone')).toEqual([[codex]])
     port.observed(hook('session-start'))
     port.observed(hook('session-end'))
-    await vi.advanceTimersByTimeAsync(30_000)
+    // 10 s after its end (observed.ts), not at the next 30 s look at the processes.
+    await vi.advanceTimersByTimeAsync(11_000)
     expect((await machineList(port)).agents.map((a) => a.id)).toEqual([codex])
   })
 
