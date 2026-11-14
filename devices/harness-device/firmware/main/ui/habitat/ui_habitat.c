@@ -519,6 +519,14 @@ static const char *host_name(const char *host)
         if (!strcmp(host, table[i][0])) return table[i][1];
     return "Terminal";
 }
+// The face names the app the dial shows, the outermost one a person sees in front, as the daemon names it. An older
+// daemon sends no `apps`, and a shown app missing from the list names nothing: then the agent's nearest host.
+static const char *face_app(const char *host)
+{
+    for (int i = 0; s.apps_known && i < s.app_count; i++)
+        if (!strcmp(s.apps[i].id, s.app_shown)) return s.apps[i].name;
+    return host_name(host);
+}
 // An agent that is not on the roster is not restricted: the check guards what a row says it cannot take.
 static bool agent_allows(const char *id, uint8_t cap)
 {
@@ -1118,7 +1126,7 @@ static void render_home(ht_scene_t *f)
     ht_character_face_t f_ = {.recipient = caption, .status = bell ? "" : status,
         .engine = a ? a->engine : "",
         .activity = activity,
-        .chat = s.machine_view && a ? host_name(a->host) : NULL,   // the host under the name, grey on the curve
+        .chat = s.machine_view && a ? face_app(a->host) : NULL,   // the app under the name, grey on the curve
         .elapsed = since,
         .mood = character_mood(), .pose = character.motion.reaction.pose,
         .asking = a && is_question(a->id),
