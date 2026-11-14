@@ -424,7 +424,8 @@ export async function run(engine, config = {}, { native = false } = {}) {
   let parent = null
   const claude = (record) => {
     const uuid = randomUUID()
-    write({ parentUuid: parent, isSidechain: false, userType: 'external', cwd, sessionId, version, timestamp: now(), uuid, ...record })
+    // `entrypoint`: who drives it, `cli` from a terminal (lib/sessionSearch/externals/claude.ts reads it to list a session).
+    write({ parentUuid: parent, isSidechain: false, userType: 'external', entrypoint: 'cli', cwd, sessionId, version, timestamp: now(), uuid, ...record })
     parent = uuid
   }
   const codex = (type, payload) => write({ timestamp: now(), type, payload })
