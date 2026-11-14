@@ -154,20 +154,22 @@ impl App {
                 }
             }
             // A read that failed keeps the last answer.
-            Event::Auth(answer) => {
+            Event::Auth(answer) if self.state.cli == CliState::Found => {
                 self.state.signed_in = answer.or(self.state.signed_in);
                 if let Some((auth, _)) = &mut self.first_answers {
                     *auth = true;
                 }
                 self.first_screen(effects);
             }
-            Event::Claude(status) => {
+            Event::Claude(status) if self.state.cli == CliState::Found => {
                 self.state.claude = status;
                 if let Some((_, claude)) = &mut self.first_answers {
                     *claude = true;
                 }
                 self.first_screen(effects);
             }
+            // A read of a CLI that went away answers late: nothing reads it.
+            Event::Auth(_) | Event::Claude(_) => {}
             Event::Login(event) => self.login_event(event, effects),
             Event::ClaudeSet(result) => {
                 // A change that no longer runs (its CLI went away) answers late: nothing reads it.
