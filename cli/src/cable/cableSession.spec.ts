@@ -23,6 +23,20 @@ import { HostRegistry } from './hosts/registry.js'
 import type { HostAgent, HostSource } from './hosts/types.js'
 import type { RegisteredSession } from '../lib/registry.js'
 
+// The voice router as it runs, watched: what it weighs, and the ranking it asks of the backend, leave this computer.
+const router = vi.hoisted(() => ({ routed: [] as unknown[], ranked: [] as unknown[] }))
+vi.mock('../lib/voiceRouter.js', async (original) => {
+  const actual = await original<typeof import('../lib/voiceRouter.js')>()
+  return { ...actual, routeVoiceTask: (...args: Parameters<typeof actual.routeVoiceTask>) => {
+    router.routed.push(args)
+    return actual.routeVoiceTask(...args)
+  } }
+})
+vi.mock('../lib/routeApi.js', () => ({ rankAgents: async (options: unknown) => {
+  router.ranked.push(options)
+  return [{ agentId: 'h2', score: 0.9, reason: 'matched' }]
+} }))
+
 /** A port whose two ends are both in this process. */
 class LoopbackPort implements CablePort {
   readonly path = '/dev/loopback'
@@ -6134,6 +6148,55 @@ describe('what the dial cannot do for an agent', () => {
       // a1 runs in Orca: its id and name are never weighed, and the router sends what it weighs to the backend.
       expect(route).toHaveBeenCalledWith('fix the login screen', [AGENTS[1]])
     } finally { await session.stop() }
+  })
+
+  it('words that name no agent are routed only among Harness agents, though one outside Harness takes voice', async () => {
+    const route = vi.fn(async () => ({ agentId: 'a2', confidence: 0.9, reason: 'name matched' }))
+    const host = caps({ route, capsOf: (id) => ({ ...CAPS, a1: 'svf' })[id] })
+    const { session, port } = await greeted(host)
+    try {
+      port.say({ t: 'voice.begin', lang: 'en', sr: 16000, uploadId: 'u3' })
+      port.pcm(Buffer.alloc(3200, 7))
+      port.say({ t: 'voice.end', uploadId: 'u3' })
+      await vi.waitFor(() => expect(host.sendTurn).toHaveBeenCalledWith('a2', 'fix the login screen'))
+      expect(route).toHaveBeenCalledWith('fix the login screen', [AGENTS[1]])
+    } finally { await session.stop() }
+  })
+
+  it('words that name no agent leave nothing of an agent outside Harness to the router or the backend', async () => {
+    const sessions = () => [
+      { agentId: 'h1', registeredAt: 1, active: true, terminalAvailable: true, engine: 'claude', sessionId: 's-h1' },
+      { agentId: 'h2', registeredAt: 2, active: true, terminalAvailable: true, engine: 'codex', sessionId: 's-h2' },
+    ] as unknown as RegisteredSession[]
+    const lines: string[] = []
+    const sendTurn = vi.fn()
+    const host = new DaemonCableHost({
+      sessions, displayName: (s) => s.agentId, machineName: () => 'this-mac', machineId: () => 'mac-local', computerId: () => 'abc',
+      sendTurn, stopTurn: vi.fn(), answer: vi.fn(), recent: () => [], recentAsks: () => [], log: (line) => { lines.push(line) },
+    })
+    // In Orca with its terminal's handle, so the dial may talk to it: `svf`.
+    const outside: HostAgent = { id: 'outside-7f3c', engine: 'claude', sessionId: 's-o', name: 'secret-folder', host: 'orca',
+      state: 'idle', lastActivityAt: 0, lastAnswer: 'the secret last answer', unseenDone: false }
+    host.setRegistry(new HostRegistry([host.harness, { id: 'observed', list: () => [outside],
+      capabilities: () => ({ status: true, voice: true, focus: true, answer: false }) }]))
+    vi.spyOn(host, 'transcribe').mockResolvedValue('fix the login screen')
+    const { session, port } = await connect(host)
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+      await vi.waitFor(() => expect(port.sent).toContainEqual({ t: 'agents.end', total: 3, tab: '', view: 'machine' }))
+      vi.spyOn(console, 'log').mockImplementation((line) => { lines.push(String(line)) })
+      router.routed.length = 0
+      router.ranked.length = 0
+      port.say({ t: 'voice.begin', lang: 'en', sr: 16000, uploadId: 'u1' })
+      port.pcm(Buffer.alloc(3200, 7))
+      port.say({ t: 'voice.end', uploadId: 'u1' })
+      await vi.waitFor(() => expect(sendTurn).toHaveBeenCalledWith('h2', 'fix the login screen'))
+      expect(router.ranked).toHaveLength(1)
+      // Everything the router weighed, the backend's request, the router's log lines and the dial's own.
+      const left = JSON.stringify([router.routed, router.ranked, lines.filter((line) => /voice|rout/.test(line))])
+      expect(left).toContain('h1')
+      for (const secret of [outside.id, outside.name, outside.lastAnswer!]) expect(left).not.toContain(secret)
+    } finally { vi.restoreAllMocks(); await session.stop() }
   })
 
   it.each([['a bare void', () => undefined], ['a sync { ok: true }', () => ({ ok: true as const })]])(

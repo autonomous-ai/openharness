@@ -12,6 +12,20 @@ import { DeviceLink } from '../device/deviceLink.js'
 import { HostRegistry } from './hosts/registry.js'
 import type { HostAgent, HostSource, SendResult } from './hosts/types.js'
 
+// The voice router as it runs, watched: what it weighs, and the ranking it asks of the backend, leave this computer.
+const router = vi.hoisted(() => ({ routed: [] as unknown[], ranked: [] as unknown[] }))
+vi.mock('../lib/voiceRouter.js', async (original) => {
+  const actual = await original<typeof import('../lib/voiceRouter.js')>()
+  return { ...actual, routeVoiceTask: (...args: Parameters<typeof actual.routeVoiceTask>) => {
+    router.routed.push(args)
+    return actual.routeVoiceTask(...args)
+  } }
+})
+vi.mock('../lib/routeApi.js', () => ({ rankAgents: async (options: unknown) => {
+  router.ranked.push(options)
+  return [{ agentId: 'h2', score: 0.9, reason: 'matched' }]
+} }))
+
 const AGENTS: Array<{ agentId: string; registeredAt: number; active: boolean; terminalAvailable: boolean; engine: string; lastHookAt?: number }> = []
 
 function wiring(over: Partial<CableHostWiring> = {}): CableHostWiring {
@@ -823,6 +837,28 @@ describe('the dial with no window: this computer\'s agents', () => {
     host.setRegistry(new HostRegistry([host.harness, observed([observedAgent({ id: 'o1', engine: 'codex' })])]))
     expect(host.describe('o1')).toEqual({ name: 'scratch', engine: 'codex', machine: 'MacbookPro.local' })
     expect(host.describe('nobody')).toBeUndefined()
+  })
+
+  it('an agent outside Harness that takes voice is never one of the router\'s candidates', async () => {
+    const host = new DaemonCableHost(wiring({ sessions }), fleetOf([]))
+    const outside = observedAgent({ id: 'outside-7f3c', name: 'secret-folder', host: 'orca', lastAnswer: 'the secret last answer' })
+    host.setRegistry(new HostRegistry([host.harness, { ...observed([outside]),
+      capabilities: () => ({ status: true, voice: true, focus: true, answer: false }) }]))
+    host.setSwarms(null)
+    const agents = (await host.listAgentSnapshot()).agents
+    expect(agents.find((a) => a.id === outside.id)).toMatchObject({ caps: 'svf' })
+    const lines: string[] = []
+    vi.spyOn(console, 'log').mockImplementation((line) => { lines.push(String(line)) })
+    router.routed.length = 0
+    router.ranked.length = 0
+    try {
+      expect(await host.route('fix the login screen', agents)).toMatchObject({ agentId: 'h2' })
+    } finally { vi.restoreAllMocks() }
+    expect(router.ranked).toHaveLength(1)
+    // Everything the router weighed, the backend's request and the router's own log lines.
+    const left = JSON.stringify([router.routed, router.ranked, lines.filter((line) => line.startsWith('[voice-route]'))])
+    expect(left).toContain('h1')
+    for (const secret of [outside.id, outside.name, outside.lastAnswer!]) expect(left).not.toContain(secret)
   })
 
   it('no window and no registry: [] as today', async () => {
