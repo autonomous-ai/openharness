@@ -82,6 +82,8 @@ export interface DevicesDeps {
   /** Called with a function this part runs whenever it (re)connects to the core, which has forgotten what the devices
    *  told it (services/devicesProcess.ts): the cards wanted are said again. */
   onCoreConnected?: (run: () => void) => void
+  /** Called with a function this part runs whenever its link to the core drops: the calls that core held have failed. */
+  onCoreGone?: (run: () => void) => void
   /** An agent's conversation token totals, read fresh (not the 15 s cache); null when unknown or remote.
    *  Defaults to the core's `usageFresh`. */
   readUsage?: (agentId: string) => Promise<{ input?: number; cached?: number; output?: number } | null>
@@ -732,6 +734,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     part.call('approvals', () => approvals.closeAll())
     part.call('inbox', () => inbox.closeAll())
   }
+  // The core's calls failed to none when its link dropped: a card left open would take an Allow that nobody hears.
+  deps.onCoreGone?.(endHookCalls)
 
   if (deps.cableDisabled) log('[cable] disabled (CABLE_DISABLE=true) — the serial port is left alone')
   else cable.start()

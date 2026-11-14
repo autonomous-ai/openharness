@@ -104,8 +104,10 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
     viewing = asking
     return asking
   }
-  /** What the devices say again to a core that connects (services/devices.ts `onCoreConnected`). */
+  /** What the devices say again to a core that connects, and end for one that goes (services/devices.ts `onCoreConnected`,
+   *  `onCoreGone`). */
   let coreConnected: (() => void) | undefined
+  let coreGone: (() => void) | undefined
   const ask = async (query: string, payload: Record<string, unknown> = {}): Promise<Record<string, unknown>> => {
     if (!core) throw new Error('the devices are not connected to the core')
     return core.query(query, payload)
@@ -220,6 +222,7 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
     faults: faultsOf(processEnv.HARNESSD_TEST_FAULTS),
     refresh,
     onCoreConnected: (run) => { coreConnected = run },
+    onCoreGone: (run) => { coreGone = run },
   }
   const requests = (options.start ?? startDevices)(api, ports, deps)
   const port = ports.devices as DevicesPort
@@ -300,7 +303,10 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
       if (dialWatching) tell('dialWatching', { watching: true })
       void refresh()
     },
-    onDisconnected: () => { core = null },
+    onDisconnected: () => {
+      core = null
+      coreGone?.()
+    },
   })
   return {
     stop: async () => {
