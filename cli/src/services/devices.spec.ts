@@ -1697,6 +1697,16 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     await vi.waitFor(() => expect(calls('turnStarted').slice(3)).toEqual([[ID, 'Waiting for you · Orca', undefined]]))
   })
 
+  it('reminds only the observed agents the dial lists, never all fifty', async () => {
+    const { port } = start({ faults: ['fleet'] })
+    for (let i = 0; i < 12; i++) port.observed(hook('turn-start', { sessionId: `many-${i}` }))
+    expect(calls('turnStarted')).toHaveLength(12)
+    seen.host.watching!(true)
+    const listed = (await machineList(port)).agents.map((a) => a.id)
+    expect(listed).toHaveLength(10)
+    await vi.waitFor(() => expect(calls('turnStarted').slice(12).map(([id]) => id).sort()).toEqual([...listed].sort()))
+  })
+
   it('with a window open, an observed agent tells the dial nothing: no turn, answer or reminder', async () => {
     vi.useFakeTimers()
     readers.answer.mockResolvedValue('Shipped the fix.')
