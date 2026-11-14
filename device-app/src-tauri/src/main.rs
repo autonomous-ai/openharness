@@ -3,6 +3,7 @@
 use harness_device::app::App;
 use harness_device::cli::cli_override;
 use harness_device::desktop::{DesktopApp, SystemDesktopApp, run_open};
+use harness_device::front;
 use harness_device::install::{Shell, system_shell};
 use harness_device::log::FileLog;
 use harness_device::loginitem::SystemLoginItem;
@@ -84,6 +85,7 @@ fn start(handle: &AppHandle, events: Sender<Event>, queue: Receiver<Event>) -> t
             let log = log.clone();
             Arc::new(move |args: &[&str]| run_open(args, log.clone()))
         },
+        front: front::system(),
     };
 
     // A watch or a sign-in hands its events over holding a lock that stopping or cancelling it takes: `send` only

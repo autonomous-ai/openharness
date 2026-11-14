@@ -4,6 +4,7 @@ use crate::account::{self, Login, NO_RESULT};
 use crate::claude;
 use crate::cli::{self, Cli, HarnessCli, START_DEADLINE};
 use crate::desktop;
+use crate::front::{FrontFeed, FrontSource};
 use crate::install::{self, NOT_SUPPORTED, Shell};
 use crate::loginitem::LoginItem;
 use crate::state::StateFile;
@@ -28,6 +29,8 @@ pub struct Doors {
     pub log: Arc<dyn Log>,
     /// `open` with these arguments (`desktop::run_open`).
     pub open: Arc<dyn Fn(&[&str]) -> io::Result<()> + Send + Sync>,
+    /// Which app is in front (`front::system`), started once with the runner.
+    pub front: Arc<dyn FrontSource>,
 }
 
 pub struct Runner(Arc<Shared>);
@@ -43,20 +46,31 @@ struct Shared {
     /// watch must still go with the runner.
     watching: Arc<Mutex<u64>>,
     login: Mutex<Option<Login>>,
+    /// What the watches have been told of the app in front. Taken inside `watch`, never around it.
+    front: Mutex<FrontFeed>,
 }
 
 impl Runner {
     /// `send` hands the event to the app's loop and returns. It never runs an effect itself: a watch or a sign-in
     /// calls it holding a lock that stopping or cancelling it takes.
     pub fn new(doors: Doors, send: Arc<dyn Fn(Event) + Send + Sync>) -> Runner {
-        Runner(Arc::new(Shared {
+        let shared = Arc::new(Shared {
             doors,
             send,
             cli: Mutex::new(None),
             watch: Mutex::new(None),
             watching: Arc::default(),
             login: Mutex::new(None),
-        }))
+            front: Mutex::default(),
+        });
+        // Weakly: the source keeps its callback for as long as it runs, and the runner must still go.
+        let weak = Arc::downgrade(&shared);
+        shared.doors.front.start(Box::new(move |value| {
+            if let Some(shared) = weak.upgrade() {
+                shared.front_changed(&value);
+            }
+        }));
+        Runner(shared)
     }
 
     /// Looks for the CLI now; the runs after it use what it found.
@@ -182,7 +196,14 @@ impl Shared {
             }
         });
         match spawned {
-            Ok(started) => *watch = Some(started),
+            Ok(started) => {
+                // A change meanwhile waits on `watch`, held here: this watch is told the app in front once, by one of
+                // the two.
+                if let Some(line) = self.front.lock().unwrap().current() {
+                    started.front(&line);
+                }
+                *watch = Some(started);
+            }
             Err(error) => {
                 // No lock is held across `send`.
                 drop(watch);
@@ -194,6 +215,17 @@ impl Shared {
                     Event::WatchExit(None)
                 });
             }
+        }
+    }
+
+    /// Each value the source tells, on its thread: the line, when it is new, to the watch running now. The value goes
+    /// nowhere else.
+    fn front_changed(&self, value: &str) {
+        // `watch` first, as spawn_watch takes them.
+        let watch = self.watch.lock().unwrap();
+        let Some(line) = self.front.lock().unwrap().changed(value) else { return };
+        if let Some(watch) = watch.as_ref() {
+            watch.front(&line);
         }
     }
 

@@ -1,6 +1,6 @@
 //! The `harness hardware watch --json` child.
 
-use crate::cli::{Cli, Killer, StdinCloser, Timeout};
+use crate::cli::{Cli, Killer, StdinCloser, StdinWriter, Timeout};
 use crate::types::{DialStatus, Event};
 use std::io;
 use std::thread;
@@ -15,11 +15,18 @@ const STOP_GRACE: Duration = Duration::from_secs(3);
 /// A running watch. Stopping it, or dropping it, closes the child's stdin: the child then exits 0 by itself.
 pub struct Watch {
     stdin: StdinCloser,
+    writer: StdinWriter,
     killer: Killer,
     grace: Duration,
 }
 
 impl Watch {
+    /// A line of the app in front (front.rs) on the child's stdin. One that has ended takes nothing, and nothing of the
+    /// line is logged.
+    pub fn front(&self, line: &str) {
+        self.writer.line(line);
+    }
+
     /// One that has not ended within the grace is killed, so a stop always ends it.
     pub fn stop(&self) {
         // Only the close that closed it: a stop and the drop after it start one kill, not two.
@@ -47,7 +54,7 @@ fn spawn_watch_within(
     grace: Duration,
 ) -> io::Result<Watch> {
     let mut child = cli.spawn(&["hardware", "watch", "--json"])?;
-    let (stdin, killer) = (child.stdin_closer(), child.killer());
+    let (stdin, writer, killer) = (child.stdin_closer(), child.stdin_writer(), child.killer());
     thread::spawn(move || {
         // After its first line the watch has no deadline: it runs until it is stopped or the daemon goes.
         // Duration::MAX waits without one.
@@ -72,7 +79,7 @@ fn spawn_watch_within(
         // An Err only if the thread that reaps the child died; the run is over either way.
         send(Event::WatchExit(child.exit(Duration::MAX).unwrap_or(None)));
     });
-    Ok(Watch { stdin, killer, grace })
+    Ok(Watch { stdin, writer, killer, grace })
 }
 
 #[cfg(test)]

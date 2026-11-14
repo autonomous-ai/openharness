@@ -1,6 +1,58 @@
 //! Which app is in front, for the dial to follow. The value (a bundle id, an exe name) goes on the watch's stdin and
 //! nowhere else: never an Event, the log, the state file or the window.
 
+use std::sync::Arc;
+
+/// What an OS names an app is outside text: past this it is cut, so the line stays under the 1 KiB the watch reads.
+pub const FRONT_MAX: usize = 128;
+
+/// Where the app in front is read. The OS tells it: no source polls.
+pub trait FrontSource: Send + Sync {
+    /// `changed` gets the app in front now, once, then each new one. An app with no name is the empty string.
+    fn start(&self, changed: Box<dyn Fn(String) + Send + Sync>);
+}
+
+/// Reports nothing: Wayland has no common way to tell, and a platform with no source of its own yet.
+pub struct NoFront;
+
+impl FrontSource for NoFront {
+    fn start(&self, _changed: Box<dyn Fn(String) + Send + Sync>) {}
+}
+
+/// The source this platform has.
+pub fn system() -> Arc<dyn FrontSource> {
+    Arc::new(NoFront)
+}
+
+/// `{"front":"…"}`, one line: the value cut to FRONT_MAX characters, then escaped.
+pub fn front_line(value: &str) -> String {
+    let cut: String = value.chars().take(FRONT_MAX).collect();
+    serde_json::json!({ "front": cut }).to_string()
+}
+
+/// What the watch has been told: a line only for a change, and the last one again for a watch that has just started.
+#[derive(Default)]
+pub struct FrontFeed {
+    last: Option<String>,
+}
+
+impl FrontFeed {
+    /// The line to write; None when the watch was told it already.
+    pub fn changed(&mut self, value: &str) -> Option<String> {
+        let line = front_line(value);
+        if self.last.as_ref() == Some(&line) {
+            return None;
+        }
+        self.last = Some(line.clone());
+        Some(line)
+    }
+
+    /// The line a new watch is told first; None until the source has told one.
+    pub fn current(&self) -> Option<String> {
+        self.last.clone()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

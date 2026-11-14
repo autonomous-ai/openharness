@@ -5,7 +5,8 @@ use std::collections::VecDeque;
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fs;
-use std::io::{self, BufRead, BufReader, Read};
+use std::io::{self, BufRead, BufReader, Read, Write};
+use std::os::fd::AsRawFd;
 use std::os::unix::process::CommandExt;
 use std::path::{Component, Path, PathBuf};
 use std::process::{ChildStdin, Command, Stdio};
@@ -229,7 +230,17 @@ impl Child {
         };
         let pid = child.id() as libc::pid_t;
         // Taken out, or `wait` below would close it.
-        let stdin = Arc::new(Mutex::new(child.stdin.take()));
+        let stdin = child.stdin.take();
+        if let Some(pipe) = &stdin {
+            // A StdinWriter writes on the thread the OS tells the app in front on: a child that stops reading must
+            // not hold it, nor a closer waiting on the same lock.
+            // SAFETY: fcntl only reads and sets the flags of the pipe this child's handle owns.
+            unsafe {
+                let flags = libc::fcntl(pipe.as_raw_fd(), libc::F_GETFL);
+                libc::fcntl(pipe.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK);
+            }
+        }
+        let stdin = Arc::new(Mutex::new(stdin));
         let stdout = child.stdout.take().expect("stdout is piped");
         let (send, lines) = mpsc::sync_channel(LINES_QUEUED);
         thread::spawn(move || read_lines(stdout, |line| send.send(line).is_ok()));
@@ -265,6 +276,10 @@ impl Child {
 
     pub fn stdin_closer(&self) -> StdinCloser {
         StdinCloser(Arc::downgrade(&self.stdin))
+    }
+
+    pub fn stdin_writer(&self) -> StdinWriter {
+        StdinWriter(Arc::downgrade(&self.stdin))
     }
 
     /// The exit code once it has exited; `Ok(None)`: it was ended by a signal.
@@ -330,6 +345,19 @@ impl StdinCloser {
     /// True when this call closed it.
     pub fn close(&self) -> bool {
         self.0.upgrade().is_some_and(|stdin| stdin.lock().unwrap().take().is_some())
+    }
+}
+
+/// Writes lines on a child's stdin from any thread. It holds the pipe weakly, as StdinCloser does.
+pub struct StdinWriter(Weak<Mutex<Option<ChildStdin>>>);
+
+impl StdinWriter {
+    /// The text and a newline. False when stdin is closed, the child has gone, or the pipe is full: it never waits
+    /// (Child::start), and only a child that has stopped reading fills it.
+    pub fn line(&self, text: &str) -> bool {
+        let Some(stdin) = self.0.upgrade() else { return false };
+        let mut stdin = stdin.lock().unwrap();
+        stdin.as_mut().is_some_and(|pipe| pipe.write_all(format!("{text}\n").as_bytes()).is_ok())
     }
 }
 
