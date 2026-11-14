@@ -4,7 +4,8 @@ const INBOX = 'http://harness/api/hook/inbox'
 const LINK = ['device', 'claude', 'link', '--json']
 // No launcher, no daemon, no dial watching: the daemon answers at once, so ask again only this often.
 const RETRY_MS = 60_000
-// A 404 is a Harness older than the inbox: it will not learn the route before an update.
+// A 404, or a launcher that exits non-zero, is a Harness older than the inbox or one with no socket here (Windows):
+// neither changes before an update.
 const OLD_HARNESS_MS = 10 * 60_000
 // An empty answer sooner than this was not held, and polling again at once would spin.
 const HELD_MS = 1_000
@@ -25,14 +26,15 @@ export const register = (on) =>
  * @param {Engine} $
  */
 async function link($) {
-  const socketPath = await socketOf($)
-  if (socketPath === undefined) $.clock.after(RETRY_MS, () => void link($))
-  else $.clock.after(0, () => void poll($, socketPath))
+  const found = await socketOf($)
+  if ('socketPath' in found) $.clock.after(0, () => void poll($, found.socketPath))
+  else $.clock.after(found.wait, () => void link($))
 }
 
 /**
+ * The socket the launcher prints, or how long to wait before asking again.
  * @param {Engine} $
- * @returns {Promise<string | undefined>}
+ * @returns {Promise<{ socketPath: string } | { wait: number }>}
  */
 async function socketOf($) {
   const home = await $.env.get('HOME')
@@ -44,15 +46,15 @@ async function socketOf($) {
     } catch {
       continue // It cannot start: the next one.
     }
-    if (out.exitCode !== 0) return undefined
+    if (out.exitCode !== 0) return { wait: OLD_HARNESS_MS }
     try {
       const { socketPath } = JSON.parse(out.stdout)
-      return typeof socketPath === 'string' && socketPath !== '' ? socketPath : undefined
+      return typeof socketPath === 'string' && socketPath !== '' ? { socketPath } : { wait: RETRY_MS }
     } catch {
-      return undefined
+      return { wait: RETRY_MS }
     }
   }
-  return undefined
+  return { wait: RETRY_MS }
 }
 
 /**
