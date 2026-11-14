@@ -21,7 +21,11 @@ impl FrontSource for NoFront {
 
 /// The source this platform has.
 pub fn system() -> Arc<dyn FrontSource> {
-    Arc::new(NoFront)
+    #[cfg(target_os = "macos")]
+    let source = crate::front_macos::MacFront;
+    #[cfg(not(target_os = "macos"))]
+    let source = NoFront;
+    Arc::new(source)
 }
 
 /// `{"front":"…"}`, one line: the value cut to FRONT_MAX characters, then escaped.

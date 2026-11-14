@@ -1,3 +1,51 @@
+//! The app in front on macOS: AppKit says when another app becomes active. No timer, no Accessibility or Screen
+//! Recording permission.
+
+use crate::front::FrontSource;
+use block2::RcBlock;
+use objc2_app_kit::{
+    NSRunningApplication, NSWorkspace, NSWorkspaceApplicationKey, NSWorkspaceDidActivateApplicationNotification,
+};
+use objc2_foundation::{NSNotification, NSString};
+use std::ptr::NonNull;
+
+/// `NSWorkspace`'s front app now, then each app its notification centre says was activated.
+pub struct MacFront;
+
+impl FrontSource for MacFront {
+    fn start(&self, changed: Box<dyn Fn(String) + Send + Sync>) {
+        let workspace = NSWorkspace::sharedWorkspace();
+        changed(app_value(workspace.frontmostApplication().as_deref()));
+        let block = RcBlock::new(move |notification: NonNull<NSNotification>| {
+            // SAFETY: the centre passes a notification that lives for the call.
+            let info = unsafe { notification.as_ref() }.userInfo();
+            // SAFETY: an AppKit constant, set before any code runs.
+            let key = unsafe { NSWorkspaceApplicationKey };
+            let app = info.and_then(|info| info.objectForKey(key)).and_then(|app| app.downcast().ok());
+            changed(app_value(app.as_deref()));
+        });
+        // SAFETY: no object filter, and with no queue the block runs on the thread that posts (AppKit's main thread);
+        // `changed` is Send + Sync. The centre holds the observer for the app's life, so the token is dropped.
+        unsafe {
+            workspace.notificationCenter().addObserverForName_object_queue_usingBlock(
+                Some(NSWorkspaceDidActivateApplicationNotification),
+                None,
+                None,
+                &block,
+            );
+        }
+    }
+}
+
+fn app_value(app: Option<&NSRunningApplication>) -> String {
+    value(app.and_then(|app| app.bundleIdentifier()).as_deref())
+}
+
+/// An app with no bundle id (a bare executable) is the empty value.
+fn value(bundle_id: Option<&NSString>) -> String {
+    bundle_id.map(NSString::to_string).unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
