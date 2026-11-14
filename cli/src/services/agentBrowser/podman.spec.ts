@@ -1,33 +1,74 @@
-import { execFile, spawn, type ChildProcess } from 'node:child_process'
-import { chmodSync, writeFileSync } from 'node:fs'
+import { spawn, type ChildProcess } from 'node:child_process'
+import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ownProcessGroup } from '../../lib/windows/noWindow.js'
+import { alive } from '../../testing/spawnedRuns.js'
 import { fakePodman, type FakePodman } from './fakePodman.js'
-import { createPodman, PodmanError } from './podman.js'
+import { createPodman, OUTPUT_LIMIT, PodmanError, type Podman } from './podman.js'
 
-// Pass-through spies: every call still reaches the fake script, and the spec can read the options it was started with.
+// A pass-through spy: every call still reaches the fake script, and the spec can read what it was started with.
 vi.mock('node:child_process', async (importOriginal) => {
   const real = (await import('./fakePodman.js')).trackingFakes(await importOriginal<typeof import('node:child_process')>())
-  return { ...real, execFile: vi.fn(real.execFile), spawn: vi.fn(real.spawn) }
+  return { ...real, spawn: vi.fn(real.spawn) }
 })
 // The login shell is never started in a spec; this stands for what it would have given.
 vi.mock('../../lib/loginShellEnv.js', () => ({ oneShotParentEnv: () => ({ ...process.env, FAKE_PODMAN_MARK: 'login-shell' }) }))
 
+const MiB = 1024 ** 2
 const GiB = 1024 ** 3
+const CLI = fileURLToPath(new URL('../../..', import.meta.url))
+const gone = (...pids: number[]) => vi.waitFor(() => expect(pids.filter(alive)).toEqual([]), { timeout: 10_000, interval: 20 })
 const info = (version: string, memTotal: number) => JSON.stringify({ version: { Version: version }, host: { memTotal } })
+// Captured before any case fakes the clock: a wait in real time, which a fake clock's case needs (vi.waitFor moves it).
+const realSetTimeout = setTimeout
+const until = async (ready: () => boolean) => {
+  const deadline = Date.now() + 10_000
+  while (!ready()) {
+    if (Date.now() > deadline) throw new Error('not ready after 10 s')
+    await new Promise(done => realSetTimeout(done, 10))
+  }
+}
+const started = (count: number) => until(() => fake.pids().length >= count)
 
 let fake: FakePodman
 beforeEach(() => { fake = fakePodman() })
 afterEach(async () => {
+  vi.useRealTimers()
   await fake.remove()
   vi.unstubAllEnvs()
-  vi.mocked(execFile).mockClear()
   vi.mocked(spawn).mockClear()
 })
 
 const found = (platform: NodeJS.Platform = 'darwin', now = () => 0) =>
   createPodman({ resolve: async () => fake.path, platform, now })
+
+/** A Node process in place of the agent browser's (tsx, the real modules, the fake as its Podman): it runs `body` with `podman`. */
+function standIn(body: string): ChildProcess {
+  const script = join(dirname(fake.path), 'stand-in.mts')
+  writeFileSync(script, `import { createPodman } from ${JSON.stringify(new URL('./podman.ts', import.meta.url).href)}
+const podman = createPodman({ resolve: async () => ${JSON.stringify(fake.path)} })
+await podman.path()
+${body}
+setInterval(() => {}, 1 << 30)
+`)
+  return spawn(process.execPath, ['--import', 'tsx', script], { cwd: CLI, stdio: ['ignore', 'ignore', 'inherit'] })
+}
+
+/** The service's process can die with no chance to stop anything (a crash, SIGKILL, the OOM killer): what it started ends all the same. */
+async function endsWithItsProcess(body: string, command: string): Promise<void> {
+  fake.reply(command, { hangMs: 60_000 })
+  const service = standIn(body)
+  try {
+    await vi.waitFor(() => expect(fake.pids()).toHaveLength(1), { timeout: 20_000, interval: 20 })
+    service.kill('SIGKILL')
+    await gone(...fake.pids())
+  } finally {
+    // By their exact pids, and before the fake's folder goes: this process tracks none of them.
+    for (const pid of [...fake.pids(), service.pid!]) try { process.kill(pid, 'SIGKILL') } catch { /* gone */ }
+    await gone(...fake.pids(), service.pid!)
+  }
+}
 
 const failure = async (work: Promise<unknown>): Promise<PodmanError> => {
   const error = await work.then(() => null, (e: unknown) => e)
@@ -126,10 +167,24 @@ describe('createPodman', () => {
     expect(fake.calls()).toHaveLength(2)
   })
 
-  it('info times out after 5 s', async () => {
-    fake.reply('info', { stdout: info('5.8.9', 4 * GiB) })
-    await found().available()
-    expect(vi.mocked(execFile).mock.calls[0]![2]).toEqual(expect.objectContaining({ timeout: 5_000 }))
+  it.each([
+    ['info', 5_000, (podman: Podman) => podman.memoryBytes(), 'info', 'podman_failed'],
+    ['a call with no limit of its own', 30_000, (podman: Podman) => podman.run(['ps']), 'ps', 'podman_failed'],
+    ['machine start', 10 * 60_000, (podman: Podman) => podman.startMachine(), 'machine', 'needs_setup'],
+  ] as const)('%s is given %i ms, then ended and named', async (_, ms, call, command, state) => {
+    fake.reply(command, { hangMs: 60_000 })
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const outcome = failure(call(found('linux')))
+    await started(1)
+    const pid = fake.pids()[0]!
+    // No group of its own: it stays in this process's, as under execFile, which never applied `detached`.
+    expect(() => process.kill(-pid, 0)).toThrow(/ESRCH/)
+    await vi.advanceTimersByTimeAsync(ms - 1)
+    expect(alive(pid)).toBe(true)
+    await vi.advanceTimersByTimeAsync(1)
+    const error = await outcome
+    expect([error.state, error.message, error.output]).toEqual([state, `podman ${command} timed out after ${ms} ms`, undefined])
+    expect(alive(pid)).toBe(false)
   })
 
   it('startMachine runs machine start, and a failure is PodmanError(\'podman_down\')', async () => {
@@ -138,7 +193,6 @@ describe('createPodman', () => {
     await podman.available()
     await podman.startMachine()
     expect(fake.calls()[1]!.args).toEqual(['machine', 'start'])
-    expect(vi.mocked(execFile).mock.calls[1]![2]).toEqual(expect.objectContaining({ timeout: 10 * 60_000 }))
     // A machine just started is measured again, not read from the cache.
     await podman.available()
     expect(fake.calls()).toHaveLength(3)
@@ -225,20 +279,19 @@ describe('createPodman', () => {
     expect((await failure(found('linux').memoryBytes())).state).toBe('podman_failed')
   })
 
-  it('run uses the login shell env and ownProcessGroup, and passes stdin', async () => {
+  it('run and spawn use the login shell env, run passes stdin, and spawn has a group of its own', async () => {
     fake.reply('secret create', { stdout: 'abc123\n' })
     const podman = found()
     expect(await podman.run(['secret', 'create', 's1', '-'], { stdin: '{"host":"h"}' }))
       .toEqual({ stdout: 'abc123\n', stderr: '' })
     expect(fake.calls()).toEqual([{ args: ['secret', 'create', 's1', '-'], stdin: '{"host":"h"}', mark: 'login-shell' }])
-    expect(vi.mocked(execFile).mock.calls[0]![2])
-      .toEqual(expect.objectContaining({ ...ownProcessGroup(), timeout: 30_000, env: expect.objectContaining({ FAKE_PODMAN_MARK: 'login-shell' }) }))
 
     const child = podman.spawn(['events', '--format', 'json'])
+    // A group of its own while it runs (ownProcessGroup).
+    expect(() => process.kill(-child.pid!, 0)).not.toThrow()
     child.stdin!.end()
     await new Promise(resolve => child.once('close', resolve))
     expect(fake.calls()[1]).toEqual({ args: ['events', '--format', 'json'], stdin: '', mark: 'login-shell' })
-    expect(vi.mocked(spawn).mock.calls[0]).toEqual([fake.path, ['events', '--format', 'json'], expect.objectContaining(ownProcessGroup())])
   })
 
   // Podman 4.9 takes `-` only from a real pipe (cmd/podman/secrets/create.go), and Node hands a child a socket: the
@@ -255,7 +308,7 @@ describe('createPodman', () => {
       [['--connection', 'harness', 'secret', 'create', 's2', '-'], second],
     ])
     // Through the relay the data is on stdin alone: never in an argument or the environment of either run.
-    const runs = vi.mocked(execFile).mock.calls as unknown as Array<[string, string[], { env?: NodeJS.ProcessEnv }]>
+    const runs = vi.mocked(spawn).mock.calls as unknown as Array<[string, string[], { env?: NodeJS.ProcessEnv }]>
     expect(runs).toHaveLength(2)
     for (const [file, args, opts] of runs) {
       for (const secret of [first, second]) {
@@ -270,19 +323,17 @@ describe('createPodman', () => {
     // Long enough for the fake to start and read its stdin, so there is a podman to leave behind.
     const slow = await failure(found('linux').run(['secret', 'create', 's1', '-'], { stdin: 'pw', timeoutMs: 2_000 }))
     expect(slow.message).toBe('podman secret timed out after 2000 ms')
-    // The relay's shell leads its own process group (ownProcessGroup): once run() has failed, its podman and cat are
-    // gone with it, not left running or unreaped behind it.
-    const shell = vi.mocked(execFile).mock.results[0]!.value as ChildProcess
-    expect(() => process.kill(fake.lastPid(), 0)).toThrow(/ESRCH/)
-    expect(() => process.kill(-shell.pid!, 0)).toThrow(/ESRCH/)
+    // Once run() has failed, the relay's shell and its podman are gone with it, not left running or unreaped behind it.
+    // Looked at as it fails, never polled: the shell is reaped before `close`, and it reaps its podman before it exits.
+    const shell = vi.mocked(spawn).mock.results[0]!.value as ChildProcess
+    expect([fake.pids().at(-1)!, shell.pid!].filter(alive)).toEqual([])
   })
 
   it('a run with stdin ends only after its podman and cat have', async () => {
     fake.reply('secret create', { stdout: 'abc123\n' })
     await found('linux').run(['secret', 'create', 's1', '-'], { stdin: 'pw' })
-    const shell = vi.mocked(execFile).mock.results[0]!.value as ChildProcess
-    expect(() => process.kill(fake.lastPid(), 0)).toThrow(/ESRCH/)
-    expect(() => process.kill(-shell.pid!, 0)).toThrow(/ESRCH/)
+    const shell = vi.mocked(spawn).mock.results[0]!.value as ChildProcess
+    expect([fake.pids().at(-1)!, shell.pid!].filter(alive)).toEqual([])
   })
 
   it('a failed or slow run is a named PodmanError', async () => {
@@ -298,11 +349,89 @@ describe('createPodman', () => {
 
   // An image build prints a line per package it installs: more than execFile's 1 MB default, which killed the build
   // and read as a timeout.
-  it('output over a megabyte is read whole, and a timeout still applies', async () => {
-    fake.reply('build', { stdout: 'x'.repeat(3 * 1024 * 1024) })
+  it('output over a megabyte is read whole', async () => {
+    fake.reply('build', { stdout: 'x'.repeat(3 * MiB) })
     const podman = found()
-    expect((await podman.run(['build', '-t', 'harness-browser:t', '/ctx'])).stdout).toHaveLength(3 * 1024 * 1024)
-    expect(vi.mocked(execFile).mock.calls[0]![2]).toEqual(expect.objectContaining({ timeout: 30_000, maxBuffer: 64 * 1024 * 1024 }))
+    expect((await podman.run(['build', '-t', 'harness-browser:t', '/ctx'])).stdout).toHaveLength(3 * MiB)
+  })
+
+  it.each(['stdout', 'stderr'] as const)('%s past the limit ends the call and says so', async (stream) => {
+    fake.reply('build', { [stream]: 'x'.repeat(3 * MiB) })
+    const error = await failure(createPodman({ resolve: async () => fake.path, platform: 'darwin', outputLimit: 2 * MiB }).run(['build', '/ctx']))
+    expect([error.state, error.message, error.output]).toEqual(['podman_failed', 'podman build printed more than 2 MiB', undefined])
+  })
+
+  it('the limit is 64 MiB, for stdout and for stderr each', async () => {
+    expect(OUTPUT_LIMIT).toBe(64 * MiB)
+    fake.reply('build', { stdout: 'x'.repeat(1.5 * MiB), stderr: 'y'.repeat(1.5 * MiB) })
+    const read = await createPodman({ resolve: async () => fake.path, platform: 'darwin', outputLimit: 2 * MiB }).run(['build', '/ctx'])
+    expect([read.stdout.length, read.stderr.length]).toEqual([1.5 * MiB, 1.5 * MiB])
+  })
+
+  // A build log: a character of several bytes can fall across two reads of the pipe.
+  it('output whose characters fall across two reads is read whole', async () => {
+    const text = `x${'é'.repeat(200_000)}`
+    fake.reply('logs', { stdout: text })
+    expect((await found().run(['logs'])).stdout).toBe(text)
+  })
+
+  it('a call that timed out is over even while something it started still holds its output', async () => {
+    // A podman that leaves a helper behind holding its stdout, as `machine start` leaves its VM's.
+    const script = join(dirname(fake.path), 'leaves-a-helper')
+    const helper = join(dirname(fake.path), 'helper.pid')
+    writeFileSync(script, `#!/bin/sh\nsleep 60 &\necho $! > '${helper}'\nexec sleep 60\n`)
+    chmodSync(script, 0o755)
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const slow = failure(createPodman({ resolve: async () => script, platform: 'linux' }).run(['machine', 'start'], { timeoutMs: 500 }))
+    // The clock moves once the helper is there: under load, a real 500 ms ran out before the script had started it.
+    await until(() => existsSync(helper) && readFileSync(helper, 'utf8').endsWith('\n'))
+    try {
+      await vi.advanceTimersByTimeAsync(500)
+      expect((await slow).message).toBe('podman machine timed out after 500 ms')
+    } finally {
+      process.kill(Number(readFileSync(helper, 'utf8')), 'SIGKILL')
+    }
+  })
+
+  // Each crash of the agent browser's process left its `podman events` running, one more per restart.
+  it.each([
+    ['podman events', `podman.spawn(['events', '--format', 'json'])`, 'events'],
+    ['a call in flight', `void podman.run(['ps'], { timeoutMs: 120_000 }).catch(() => {})`, 'ps'],
+    ['a call with stdin in flight, through its relay', `void podman.run(['secret', 'create', 's1', '-'], { stdin: 'pw', timeoutMs: 120_000 }).catch(() => {})`, 'secret create'],
+  ])('%s ends when the process that started it is killed', (_, body, command) => endsWithItsProcess(body, command))
+
+  // A detached child on Windows leaves the Job Object that ends it with this process (lib/windows/noWindow.ts).
+  it('on Windows podman events is a plain spawn, never detached', async () => {
+    const podman = found('win32')
+    await podman.path()
+    const child = podman.spawn(['events'])
+    child.stdin!.end()
+    await new Promise(resolve => child.once('close', resolve))
+    const [file, args, opts] = vi.mocked(spawn).mock.calls[0] as unknown as [string, string[], { detached?: boolean; windowsHide?: boolean }]
+    expect([file, args, opts.detached, opts.windowsHide]).toEqual([fake.path, ['events'], undefined, true])
+  })
+
+  it('a podman removed after it was found ends its stream as a failed command does, with no spawn error', async () => {
+    const podman = createPodman({ resolve: async () => join(dirname(fake.path), 'removed'), platform: 'linux' })
+    await podman.path()
+    const child = podman.spawn(['events'])
+    const errors: Error[] = []
+    child.on('error', error => errors.push(error))
+    const code = await new Promise<number | null>(done => child.once('close', done))
+    expect(errors).toEqual([])
+    // The shell's own exit: 127 from dash ("not found"), 126 from bash as sh on macOS.
+    expect([126, 127]).toContain(code)
+  })
+
+  it('a podman removed after it was found is a failed call, in the shell\'s own words', async () => {
+    const error = await failure(createPodman({ resolve: async () => join(dirname(fake.path), 'removed'), platform: 'linux' }).run(['ps']))
+    expect(error.state).toBe('podman_failed')
+    expect(error.message).toMatch(/^podman ps failed: [^]*removed[^]*(not found|No such file)/)
+  })
+
+  it('a podman that cannot be started at all, as on Windows where no shell starts it, is the same failed call', async () => {
+    const error = await failure(createPodman({ resolve: async () => join(dirname(fake.path), 'removed'), platform: 'win32' }).run(['ps']))
+    expect([error.state, error.message, error.output]).toEqual(['podman_failed', 'podman ps failed: ', ''])
   })
 
   it('without podman, run and spawn are needs_setup', async () => {
