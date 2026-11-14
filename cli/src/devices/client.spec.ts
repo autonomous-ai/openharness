@@ -8,7 +8,7 @@ import { DEVICES_USAGE, devicesCommand, deviceRequest, runDialWatch, type Device
 
 // A folder too long for a socket now has one under the home folder: only a home too long as well is left on the port.
 beforeEach(() => { vi.stubEnv('HOME', `/${'h'.repeat(120)}`) })
-afterEach(() => { vi.unstubAllEnvs() })
+afterEach(() => { vi.unstubAllEnvs(); vi.useRealTimers() })
 
 const snapshot = (brightness = 80) => ({ status: { devices: [{ id: 'usb', attached: true, settings: { brightness } }] } })
 function fixture() {
@@ -477,6 +477,31 @@ describe('harness hardware watch: the app in front', () => {
     front(run, 'cursor')
     await held.answer(true)
     expect(apps(run)).toEqual(['ghostty', 'cursor'])
+    await stillRunning(run)
+  })
+  it('a change every 10 ms against a listener of ten a second: told at most once each 100 ms, and the newest last', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    const sent: number[] = [], taken: Array<{ app: string; at: number }> = []
+    // The listener's rate on one connection: ten in any second.
+    const tell = vi.fn(async ({ app }: Told) => {
+      const at = Date.now()
+      sent.push(at)
+      if (taken.length >= 10 && at - taken.at(-10)!.at < 1_000) return false
+      taken.push({ app, at })
+      return true
+    })
+    const run = watch({ tell })
+    for (let i = 0; i < 12; i++) {
+      front(run, ['com.mitchellh.ghostty', 'Code.exe', 'cursor'][i % 3]!)
+      await vi.advanceTimersByTimeAsync(10)
+    }
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(taken.at(-1)!.app).toBe('cursor')
+    expect(sent.slice(1).map((at, i) => at - sent[i]!).every(gap => gap >= 100)).toBe(true)
+    // Nothing more once the newest is told: one timer, no retry.
+    const tells = tell.mock.calls.length
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(tell.mock.calls.length).toBe(tells)
     await stillRunning(run)
   })
   it('after stdin closes nothing is told', async () => {
