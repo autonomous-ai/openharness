@@ -1,5 +1,46 @@
 //! The `harness hardware watch --json` child.
 
+use crate::cli::{Cli, StdinCloser};
+use crate::types::{DialStatus, Event};
+use std::io;
+use std::thread;
+use std::time::Duration;
+
+/// A running watch. Stopping it, or dropping it, closes the child's stdin: the child then exits 0 by itself.
+pub struct Watch {
+    stdin: StdinCloser,
+}
+
+impl Watch {
+    pub fn stop(&self) {
+        self.stdin.close();
+    }
+}
+
+impl Drop for Watch {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+/// Runs `hardware watch --json`: an `Event::WatchLine` for each status line it prints, then one `Event::WatchExit`.
+pub fn spawn_watch(cli: &dyn Cli, send: impl Fn(Event) + Send + 'static) -> io::Result<Watch> {
+    let mut child = cli.spawn(&["hardware", "watch", "--json"])?;
+    let stdin = child.stdin_closer();
+    thread::spawn(move || {
+        // The watch has no deadline: it runs until it is stopped or the daemon goes. Duration::MAX waits without one.
+        while let Ok(Some(line)) = child.line(Duration::MAX) {
+            // A line without a boolean `attached` (an `{"error":…}`, anything else) is not a status.
+            if let Ok(status) = serde_json::from_str::<DialStatus>(&line) {
+                send(Event::WatchLine(status));
+            }
+        }
+        // An Err only if the thread that reaps the child died; the run is over either way.
+        send(Event::WatchExit(child.exit(Duration::MAX).unwrap_or(None)));
+    });
+    Ok(Watch { stdin })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -12,7 +53,7 @@ mod tests {
 
     const WAIT: Duration = Duration::from_secs(5);
 
-    fn watch(fake: &Fake) -> (Watch, mpsc::Receiver<Event>) {
+    fn start(fake: &Fake) -> (Watch, mpsc::Receiver<Event>) {
         let (send, events) = mpsc::channel();
         let watch = spawn_watch(&fake.cli(), move |event| {
             let _ = send.send(event);
@@ -38,7 +79,7 @@ mod tests {
         let fake = Fake::new();
         let attached = r#"{"attached":true,"fw":"0.0.95","hw":"cst816s"}"#;
         fake.script("hardware watch --json", &[r#"{"attached":false}"#, "@wait next", attached, "@stdin"]);
-        let (_watch, events) = watch(&fake);
+        let (_watch, events) = start(&fake);
         assert_eq!(events.recv_timeout(WAIT), Ok(dial(false, None, None)));
         fake.touch("next");
         assert_eq!(events.recv_timeout(WAIT), Ok(dial(true, Some("0.0.95"), Some("cst816s"))));
@@ -51,7 +92,7 @@ mod tests {
         let fake = Fake::new();
         let lines = ["not json", "[1]", r#"{"error":"Harness is too old"}"#, "{}", r#"{"attached":false}"#];
         fake.script("hardware watch --json", &lines);
-        let (_watch, events) = watch(&fake);
+        let (_watch, events) = start(&fake);
         assert_eq!(events.recv_timeout(WAIT), Ok(dial(false, None, None)));
         assert_eq!(events.recv_timeout(WAIT), Ok(Event::WatchExit(Some(0))));
     }
@@ -62,14 +103,14 @@ mod tests {
         for code in [3, 4] {
             let fake = Fake::new();
             fake.script("hardware watch --json", &[&format!("@exit {code}")]);
-            let (_watch, events) = watch(&fake);
+            let (_watch, events) = start(&fake);
             assert_eq!(events.recv_timeout(WAIT), Ok(Event::WatchExit(Some(code))));
             // One exit, then nothing: the thread has ended.
             assert_eq!(events.recv_timeout(WAIT), Err(mpsc::RecvTimeoutError::Disconnected));
         }
         // No script: the CLI has no such command.
         let fake = Fake::new();
-        let (_watch, events) = watch(&fake);
+        let (_watch, events) = start(&fake);
         assert_eq!(events.recv_timeout(WAIT), Ok(Event::WatchExit(Some(1))));
     }
 
@@ -78,7 +119,7 @@ mod tests {
     fn stopping_closes_stdin_and_the_child_ends_by_itself() {
         let fake = Fake::new();
         fake.script("hardware watch --json", &[r#"{"attached":false}"#, "@stdin"]);
-        let (watch, events) = watch(&fake);
+        let (watch, events) = start(&fake);
         assert_eq!(events.recv_timeout(WAIT), Ok(dial(false, None, None)));
         watch.stop();
         assert_eq!(events.recv_timeout(WAIT), Ok(Event::WatchExit(Some(0))));
@@ -86,7 +127,7 @@ mod tests {
         // Dropping a watch stops it too.
         let fake = Fake::new();
         fake.script("hardware watch --json", &[r#"{"attached":false}"#, "@stdin"]);
-        let (watch, events) = watch(&fake);
+        let (watch, events) = start(&fake);
         assert_eq!(events.recv_timeout(WAIT), Ok(dial(false, None, None)));
         drop(watch);
         assert_eq!(events.recv_timeout(WAIT), Ok(Event::WatchExit(Some(0))));

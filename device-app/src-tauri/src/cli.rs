@@ -9,7 +9,7 @@ use std::io::{self, BufRead, BufReader, Read};
 use std::os::unix::process::CommandExt;
 use std::path::{Component, Path, PathBuf};
 use std::process::{ChildStdin, Command, Stdio};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, Mutex, Weak, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -170,7 +170,7 @@ impl Cli for HarnessCli {
 /// A running CLI in its own process group: its stdin is held open until closed or dropped, its stdout comes a line
 /// at a time.
 pub struct Child {
-    stdin: Option<ChildStdin>,
+    stdin: Arc<Mutex<Option<ChildStdin>>>,
     lines: mpsc::Receiver<String>,
     exit: mpsc::Receiver<Option<i32>>,
     code: Option<Option<i32>>,
@@ -187,7 +187,7 @@ impl Child {
         let mut child = command.spawn()?;
         let pid = child.id() as libc::pid_t;
         // Taken out, or `wait` below would close it.
-        let stdin = child.stdin.take();
+        let stdin = Arc::new(Mutex::new(child.stdin.take()));
         let stdout = child.stdout.take().expect("stdout is piped");
         let (send, lines) = mpsc::sync_channel(LINES_QUEUED);
         thread::spawn(move || read_lines(stdout, |line| send.send(line).is_ok()));
@@ -221,7 +221,11 @@ impl Child {
     }
 
     pub fn close_stdin(&mut self) {
-        self.stdin = None;
+        self.stdin.lock().unwrap().take();
+    }
+
+    pub fn stdin_closer(&self) -> StdinCloser {
+        StdinCloser(Arc::downgrade(&self.stdin))
     }
 
     /// The exit code once it has exited; `Ok(None)`: it was ended by a signal.
@@ -246,6 +250,19 @@ impl Killer {
     pub fn kill(&self) {
         if let Some(pid) = *self.0.lock().unwrap() {
             kill_group(pid);
+        }
+    }
+}
+
+/// Closes a child's stdin from any thread, while another waits on its lines. It holds the pipe weakly, so a dropped
+/// child's stdin still closes with it, and a close after that does nothing.
+#[derive(Clone)]
+pub struct StdinCloser(Weak<Mutex<Option<ChildStdin>>>);
+
+impl StdinCloser {
+    pub fn close(&self) {
+        if let Some(stdin) = self.0.upgrade() {
+            stdin.lock().unwrap().take();
         }
     }
 }
