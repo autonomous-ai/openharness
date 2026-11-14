@@ -38,6 +38,11 @@ describe('parseApproval', () => {
     expect(parseApproval({ sessionId: 's1', tool: 'Bash', summary: '' })).toEqual({ sessionId: 's1', tool: 'Bash', summary: '' })
   })
 
+  it('takes terminalOnly true or false, and keeps it', () => {
+    expect(parseApproval({ ...approval, terminalOnly: true })).toStrictEqual({ ...approval, terminalOnly: true })
+    expect(parseApproval({ ...approval, terminalOnly: false })).toStrictEqual({ ...approval, terminalOnly: false })
+  })
+
   it('takes a 200-byte summary of multi-byte characters', () => {
     const summary = 'é'.repeat(100)
     expect(parseApproval({ ...approval, summary })).toEqual({ ...approval, summary })
@@ -61,6 +66,9 @@ describe('parseApproval', () => {
     ['a non-string tool', { tool: null }],
     ['a non-string summary', { summary: { text: 'npm test' } }],
     ['a non-string cwd', { cwd: 5 }],
+    ['a terminalOnly that is a string', { terminalOnly: 'true' }],
+    ['a terminalOnly that is a number', { terminalOnly: 1 }],
+    ['a terminalOnly that is null', { terminalOnly: null }],
   ])('rejects %s', (_name, patch) => {
     expect(parseApproval({ ...approval, ...patch })).toBeNull()
   })
@@ -105,6 +113,16 @@ describe('createDeviceHookCalls: approvals', () => {
     approvals[1].resolve('deny')
     expect(await first).toBe('allow')
     expect(await second).toBe('deny')
+  })
+
+  it('forwards terminalOnly typed, and answers invalid to one that is not a boolean', async () => {
+    const { calls, port, approvals } = setup()
+    const answer = calls.onApproval({ ...approval, terminalOnly: true }, live())
+    expect(port.approval).toHaveBeenCalledWith({ id: 'id-1', ...approval, terminalOnly: true })
+    approvals[0].resolve('none')
+    expect(await answer).toBe('none')
+    expect(await calls.onApproval({ ...approval, terminalOnly: 'yes' }, live())).toBe('invalid')
+    expect(port.approval).toHaveBeenCalledTimes(1)
   })
 
   it('a call that rejects is none', async () => {

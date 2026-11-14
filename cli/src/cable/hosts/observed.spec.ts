@@ -621,6 +621,45 @@ describe('ObservedSource actions', () => {
     expect(src.capabilities(src.list()[0]).answer).toBe(false)
   })
 
+  it('terminal: a prompt the dial cannot show whole turns the agent needs-you with nothing to answer, until it moves on', () => {
+    const { actions } = fakeActions()
+    const { src, ev, changes } = setup({ actions })
+    const agent = src.approval('new', '/work/fresh', 'terminal')
+    expect(agent).toMatchObject({ id: observedAgentId('claude', 'new'), name: 'fresh', state: 'needs-you' })
+    expect(src.list()).toEqual([agent])
+    expect(src.capabilities(agent!).answer).toBe(false)
+    expect(src.terminalOnly(agent!.id)).toBe(true)
+    expect(changes).toHaveBeenCalled()
+    // The same prompt's notice keeps it; the turn going on ends it.
+    src.ingest(ev('needs-input', { sessionId: 'new' }))
+    expect(src.terminalOnly(agent!.id)).toBe(true)
+    src.ingest(ev('turn-start', { sessionId: 'new' }))
+    expect(src.list()[0].state).toBe('working')
+    expect(src.terminalOnly(agent!.id)).toBe(false)
+  })
+
+  it('terminal: a card for the next prompt is the dial\'s again, and one already open keeps its answer', () => {
+    const { actions } = fakeActions()
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('turn-start'))
+    const id = observedAgentId('claude', 's1')
+    src.approval('s1', '/work/proj', 'terminal')
+    src.approval('s1', '/work/proj', 'open')
+    expect(src.terminalOnly(id)).toBe(false)
+    src.approval('s1', '/work/proj', 'terminal')
+    expect(src.terminalOnly(id)).toBe(true)
+    expect(src.capabilities(src.list()[0]).answer).toBe(true)
+    expect(src.terminalOnly('unknown')).toBe(false)
+  })
+
+  it('terminal with the source full gives undefined', () => {
+    const { actions } = fakeActions()
+    const { src, ev } = setup({ actions })
+    for (let i = 0; i < 50; i++) src.ingest(ev('turn-start', { sessionId: `s${i}`, callerPid: 200 + i }))
+    expect(src.approval('new', '/work/proj', 'terminal')).toBeUndefined()
+    expect(src.list()).toHaveLength(50)
+  })
+
   it('open with the source full gives undefined', () => {
     const { actions } = fakeActions()
     const { src, ev } = setup({ actions })
