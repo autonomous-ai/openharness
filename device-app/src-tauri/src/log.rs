@@ -164,6 +164,21 @@ mod tests {
     }
 
     #[test]
+    fn the_home_folder_is_written_as_a_tilde() {
+        let home = home_rule("/Users/person");
+        let cases = [
+            ("Installed to /Users/person/.local/bin/harness", "Installed to ~/.local/bin/harness"),
+            ("cd /Users/person && ls /Users/person/a", "cd ~ && ls ~/a"),
+            ("\"/Users/person\"", "\"~\""),
+            ("/Users/personal/x stays", "/Users/personal/x stays"),
+        ];
+        for (text, expected) in cases {
+            assert_eq!(redact_with(text, home.as_ref()), expected, "{text}");
+        }
+        assert!(home_rule("/").is_none() && home_rule("").is_none());
+    }
+
+    #[test]
     fn old_logs_go_and_nothing_else_does() {
         let dir = tempfile::tempdir().unwrap();
         for name in ["app-20261029.log", "app-20261030.log", "app-junk.log", "cli.txt"] {
