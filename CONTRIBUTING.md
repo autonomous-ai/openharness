@@ -179,7 +179,8 @@ Security reports go through [SECURITY.md](SECURITY.md).
 5. **Merge and release.** After review and required checks pass, squash-merge the reviewed PR
    with the [merge helper](docs/validation-and-release.md#merge-an-already-reviewed-pr).
    No merge queue is required. If the helper refuses only because `main` moved, and the required
-   checks are green on the head and GitHub shows the PR mergeable with no conflict, merge with
+   checks are green on the head and GitHub shows the PR mergeable with no conflict and
+   no unresolved review conversation, merge with
    `gh pr merge <PR> --squash --admin --match-head-commit <head>`. On a conflict, integrate
    `main`, review the combined change and rerun only the affected checks. Harness catalog
    changes publish after merge; app, CLI and firmware releases keep their schedules.

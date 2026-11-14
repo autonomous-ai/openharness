@@ -12,7 +12,8 @@ guide says to integrate `main` and re-review whenever it moves. The docs should 
 
 - `AGENTS.md` ("Merge and release"), `docs/validation-and-release.md` and `CONTRIBUTING.md` name the fallback: when
   `make merge-pr` refuses only because `main` moved, the required checks are green on the head, and GitHub shows the PR
-  mergeable with no conflict, the merge is `gh pr merge <PR> --squash --admin --match-head-commit <head>`.
+  mergeable with no conflict and no unresolved review conversation, the merge is
+  `gh pr merge <PR> --squash --admin --match-head-commit <head>`.
 - A conflict still means integrating `main`, reviewing the combined change and rerunning only the affected checks.
 
 ## Non-goals
@@ -35,15 +36,16 @@ guide says to integrate `main` and re-review whenever it moves. The docs should 
 ## Design
 
 - `AGENTS.md`, "Merge and release": after "Merge with `make merge-pr`", add: when it refuses only because `main`
-  moved, the required checks are green on the head and GitHub shows the PR mergeable with no conflict, merge with
-  `gh pr merge <PR> --squash --admin --match-head-commit <head>`.
+  moved, the required checks are green on the head and GitHub shows the PR mergeable with no conflict and no
+  unresolved review conversation, merge with `gh pr merge <PR> --squash --admin --match-head-commit <head>`.
 - `docs/validation-and-release.md`, the hand-merge bullet (Rules) and "Merge an already-reviewed PR": replace the
   "if `main` moves, integrate it and review again" text with the same rule; integrating `main`, the combined review
   and rerunning affected checks remain for a conflict.
 - `CONTRIBUTING.md`, step 5 ("Merge and release"): its "If `main` moved, inspect and integrate" sentence gets the same
   rule.
-- `docs/pr-triage/roles.md` stays as it is: the PR triage role merges outside contributors' pull requests and keeps its
-  stricter rule (merge helper only; on a moved `main`, update the branch and try once more).
+- `docs/pr-triage/roles.md` keeps its rule; only its trailing "(AGENTS.md)" attribution is dropped. The PR triage role
+  merges outside contributors' pull requests and keeps its stricter rule (merge helper only; on a moved `main`, update
+  the branch and try once more).
 
 ## Left to the builder
 

@@ -33,9 +33,10 @@ The rules AGENTS.md carried until 2026-11-11; the sections below have the detail
   that member's head; one without them keeps the train red.
 - Merge by hand with `make merge-pr ARGS="N --reviewed-head SHA --reviewed-base SHA --merge"`. No `--queue`, no
   `--run/--scope`. Never replay an uncertain merge; inspect the PR. If `make merge-pr` refuses only because `main`
-  moved, and the required checks are green on the head and GitHub shows the PR mergeable with no conflict, merge with
-  `gh pr merge <PR> --squash --admin --match-head-commit <head>`. On a conflict, integrate `main`, review the combined
-  change, rerun only the affected checks, and finish the authorized merge without asking again.
+  moved, and the required checks are green on the head and GitHub shows the PR mergeable with no conflict and
+  no unresolved review conversation, merge with `gh pr merge <PR> --squash --admin --match-head-commit <head>`.
+  On a conflict, integrate `main`, review the combined change, rerun only the affected checks, and finish the
+  authorized merge without asking again.
 - Once required checks pass, do the authorized merge or release without another validation cycle, then verify the
   published versions and checksums. A release failure is a code failure: fix it and cut the next version; never move a
   published tag.
@@ -626,7 +627,8 @@ intentionally configured queue, such as a disposable integration trial.
 
 If the helper refuses only because `main` moved ("main moved since review; inspect
 the new source before merging"), and the required checks are green on the head and
-GitHub shows the PR mergeable with no conflict, merge with
+GitHub shows the PR mergeable with no conflict and
+no unresolved review conversation, merge with
 `gh pr merge <PR> --squash --admin --match-head-commit <head>`. On a conflict,
 integrate `main`, review the combined change, then supply the updated reviewed
 head/base. Reuse validation only for unchanged inputs; rerun only the checks the

@@ -26,15 +26,17 @@ plan and the root `AGENTS.md`. The spec is the authority.
 
 ## Global Constraints
 
-- Files: `AGENTS.md`, `docs/validation-and-release.md` and `CONTRIBUTING.md` only. `docs/pr-triage/roles.md`,
-  `scripts/merge-validated-pr.py` and the `Makefile` do not change; nor do branch protection, CI or the merge train.
+- Files: `AGENTS.md`, `docs/validation-and-release.md` and `CONTRIBUTING.md`; `docs/pr-triage/roles.md` only drops
+  its "(AGENTS.md)" attribution. `scripts/merge-validated-pr.py` and the `Makefile` do not change; nor do branch
+  protection, CI or the merge train.
 - Docs describe and name no person. Short, in each file's own words and wrap:
   - `AGENTS.md` says "pull request" and wraps at 120.
   - The guide says "PR"; "In short" wraps at 120 with a two-space continuation, and "Merge an already-reviewed PR"
     wraps at about 84.
   - `CONTRIBUTING.md` says "PR" and "the merge helper"; step 5 wraps at about 100 with a three-space continuation.
-- The fallback needs all three: `make merge-pr` refuses only because `main` moved; the required checks are green on
-  the head; GitHub shows the PR mergeable with no conflict.
+- The fallback needs all four: `make merge-pr` refuses only because `main` moved; the required checks are green on
+  the head; GitHub shows the PR mergeable with no conflict; no review conversation is unresolved (`--admin` never
+  skips one: the `main` ruleset requires them resolved).
 - The command reads the same in all four spots: `gh pr merge <PR> --squash --admin --match-head-commit <head>`.
 - A conflict: integrate `main`, review the combined change, rerun only the affected checks.
 - `make merge-pr` (in `CONTRIBUTING.md`, "the merge helper") stays the first step in every spot.
@@ -161,7 +163,7 @@ Run from the repo root:
 ```bash
 git diff --shortstat -- AGENTS.md docs/validation-and-release.md CONTRIBUTING.md
 for p in 'gh pr merge <PR> --squash --admin --match-head-commit <head>' 'only because `main`' \
-         'mergeable with no conflict' 'On a conflict,'; do
+         'mergeable with no conflict' 'no unresolved review conversation' 'On a conflict,'; do
   echo "[$p]"; grep -c -F "$p" AGENTS.md CONTRIBUTING.md docs/validation-and-release.md | sort
 done
 grep -n -E 'If `main` move|inspect and integrate|concurrent changes require|newly affected|; never push' \
@@ -175,8 +177,8 @@ git status --porcelain
 
 Expected (measured on a scratch copy of `905fb180ec` with the four texts above applied):
 
-- `3 files changed, 22 insertions(+), 14 deletions(-)`.
-- The first three strings: `AGENTS.md:1`, `CONTRIBUTING.md:1` and `docs/validation-and-release.md:2`.
+- `3 files changed, 27 insertions(+), 14 deletions(-)`.
+- The first four strings: `AGENTS.md:1`, `CONTRIBUTING.md:1` and `docs/validation-and-release.md:2`.
   `On a conflict,`: `AGENTS.md:0`, `CONTRIBUTING.md:1` and `docs/validation-and-release.md:2`. (On the base all four
   are 0 in all three files.)
 - The old-text `grep` prints nothing (on the base it prints six lines: one in `AGENTS.md`, one in `CONTRIBUTING.md`,
