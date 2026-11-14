@@ -1072,6 +1072,17 @@ describe('the dial that shows one app at a time', () => {
     expect(ids(next)).toEqual(['t1', 't2', 't3'])
   })
 
+  it('a notice of an agent on the page shown changes nothing: Other still gives way once agents are known', async () => {
+    const agents = pending(3)
+    const appSwitched = vi.fn()
+    const host = setup(agents, { appSwitched })
+    expect(await shown(host)).toBe('terminal')
+    expect(host.pickApp('terminal', 'notice')).toBe('same')
+    agents.push(agent('g1', 'ghostty'), agent('g2', 'ghostty'), agent('g3', 'ghostty'))
+    expect(await shown(host)).toBe('ghostty')
+    expect(appSwitched.mock.calls).toEqual([['empty']])
+  })
+
   // Only a list read with no window updates the rings, so a settle or a pick between reads counts the agents there now.
   describe('decided on the agents there now, not those of the last read', () => {
     const ghostty3 = (): HostAgent[] => [agent('g1', 'ghostty'), agent('g2', 'ghostty'), agent('g3', 'ghostty')]

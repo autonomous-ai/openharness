@@ -254,6 +254,18 @@ describe('AppFilter', () => {
     expect(causes()).toEqual([])
   })
 
+  it('a pick of the shown app holds nothing: the app in front getting an agent still turns the dial', () => {
+    const { filter, agents, causes } = setup()
+    agents({ ghostty: 3 })
+    expect(filter.shown()).toBe('ghostty')
+    filter.front('vscode')
+    settle()
+    expect(filter.pick('ghostty')).toBe('same')
+    agents({ ghostty: 3, vscode: 1 })
+    expect(filter.shown()).toBe('vscode')
+    expect(causes()).toEqual(['front'])
+  })
+
   it('a notice pick is a switch by notice and holds as a pick does', () => {
     const { filter, agents, causes } = setup()
     agents({ ghostty: 3, vscode: 1 })
@@ -407,7 +419,7 @@ describe('AppFilter', () => {
       expect(causes()).toEqual([])
     })
 
-    it('a pick of the default page holds it: an app with a known agent does not take over', () => {
+    it('Done on the default page changes nothing: the app in front takes over once its agents are known', () => {
       const { filter, agents, causes } = setup()
       agents({ terminal: 3 }, {})
       filter.front('ghostty')
@@ -415,21 +427,18 @@ describe('AppFilter', () => {
       expect(filter.shown()).toBe('terminal')
       expect(filter.pick('terminal')).toBe('same')
       agents({ terminal: 3, ghostty: 5 }, { ghostty: 5 })
-      expect(filter.shown()).toBe('terminal')
-      // As a pick that switched: the app that was in front settling there again moves nothing.
-      filter.front('vscode')
-      vi.advanceTimersByTime(300)
-      filter.front('ghostty')
-      settle()
-      expect(filter.shown()).toBe('terminal')
-      expect(causes()).toEqual([])
-      // Another app settling in front ends it.
-      filter.front('none')
-      settle()
-      filter.front('ghostty')
-      settle()
       expect(filter.shown()).toBe('ghostty')
       expect(causes()).toEqual(['front'])
+    })
+
+    it('a notice of an agent on the default page changes nothing: it still gives way to an app with a known agent', () => {
+      const { filter, agents, causes } = setup()
+      agents({ terminal: 3 }, {})
+      expect(filter.shown()).toBe('terminal')
+      expect(filter.pick('terminal', 'notice')).toBe('same')
+      agents({ terminal: 3, ghostty: 5 }, { ghostty: 5 })
+      expect(filter.shown()).toBe('ghostty')
+      expect(causes()).toEqual(['empty'])
     })
 
     it('a pick that ended in front of an app with no agents does not give way', () => {
