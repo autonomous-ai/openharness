@@ -45,8 +45,8 @@ of it":
    session's identity from `agents_list`. Pip is idle (it answered and waits), so the close succeeds; the step expects
    `closed`.
 3. Wait (bounded `until`, no sleep) for Pip's session to no longer be active on A.
-4. Send `agent.remove` as the person: it succeeds, and Pip is no longer on the Swarm's roster (read from the backend's
-   tab state, the same API the test already uses).
+4. Send `agent.remove` as the person: it succeeds, and Pip is no longer on the Swarm's roster (read by parts as Desktop
+   reads it, `GET /api/super-tabs/:tabId/parts`, as `swarmAttachChat.e2e.ts` does), while the PM still is.
 5. Faye, on the same computer, still runs (as now).
 
 `agent.remove` keeping the session is #4078's own behavior, already covered at the layer where it lives (backend
@@ -65,7 +65,7 @@ The other six causes of the nightly failure (other sessions own them). No produc
 
 ## Verification
 
-- E: `superTabChannel.e2e.ts` runs locally in seconds (fake backend): red at base (the failing assertion at line 156),
+- E: `superTabChannel.e2e.ts` runs locally in seconds (fake backend): red at base (the failing assertion at line 159),
   green after.
 - D: `swarmV4Journey.e2e.ts` needs the real-backend rig (`e2e/harness/realBackend.ts`); red at base is the nightly run
   43247147594's failure of that step. Green: run the spec locally if the rig runs on this Mac, and the `CLI end to end`
