@@ -12,6 +12,8 @@ import { join, sep } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, onTestFailed, type TestContext } from 'vitest'
 import { PM_BASICS, SWARM_BASICS } from '../src/lib/swarmSkills.js'
 import { superTabCommand } from '../src/superTabs/command.js'
+import { storeOf } from '../src/superTabs/partsStore.js'
+import { reassemble } from '../src/superTabs/reassemble.js'
 import { CLI_ROOT, until, type IsolatedDaemon } from './harness/daemon.js'
 import type { LocalClient } from './harness/client.js'
 import { account, signIn, startRealBackend, type RealBackend } from './harness/realBackend.js'
@@ -311,15 +313,30 @@ describe.skipIf(!process.env.HARNESS_E2E_SERVICES_DIR)('the Swarm v4 journey, on
     expect((await messages(channel)).filter(m => m.text === 'Yes: reading #12 now.')).toHaveLength(1)
   }, 120_000)
 
-  it('its person deletes a builder: the Swarm lets go of it, and its computer stops its session', async context => {
+  it('its person deletes a builder: its computer stops its session, then the Swarm lets go of it', async context => {
     step(context)
-    const active = async () => ((await A.client.request<{ agents: Array<Record<string, any>> }>('agents_list', {}, 30_000)).agents)
-      .some(a => a.id === agents.Pip.harnessId && a.status === 'active')
-    expect(await active()).toBe(true)
+    const rows = async () => (await A.client.request<{ agents: Array<Record<string, any>> }>('agents_list', {}, 30_000)).agents
+    const active = async (name: 'Pip' | 'Faye') => (await rows()).some(a => a.id === agents[name]!.harnessId && a.status === 'active')
+    // As Desktop's Remove does when Your Team is the session's last place (desktop/lib/super_tabs/remove_agent.dart): the quiet
+    // close of a pane's last view, then the removal, which stops nothing on the computer (#4078). Pip answered and waits, so
+    // the close is not refused as a working session's is. The close names the row read as running.
+    const pip = (await rows()).find(a => a.id === agents.Pip.harnessId)
+    expect(pip?.status, JSON.stringify(pip)).toBe('active')
+    const closed = await A.client.request('agent_close', { agentId: pip!.id, sessionId: pip!.sessionId, createdAt: pip!.createdAt, mode: 'idle' }, 60_000)
+    expect(closed, JSON.stringify(closed)).toMatchObject({ closed: true })
+    await until('Pip\'s session to stop on its computer', async () => (await active('Pip')) ? null : true, 120_000, 1_000)
     await command({ type: 'agent.remove', agentId: agents.Pip.id })
-    await until('Pip\'s session to stop on its computer', async () => (await active()) ? null : true, 120_000, 1_000)
+    // The roster as Desktop reads it, by parts (client.dart readSnapshot). The PM still on it says the read was a real one.
+    const roster = await until('Pip to leave the Swarm\'s roster', async () => {
+      // A refused read names its status and the server's error: read as parts it would only say a list was undefined.
+      const read = await api(`/api/super-tabs/${tab}/parts`)
+      if (read.status !== 200) throw new Error(`the parts read answered ${read.status}: ${JSON.stringify(read.body)}`)
+      const swarm = reassemble(storeOf({ ...read.body.data, tabId: tab })) as Record<string, any>
+      const ids = (swarm.agents as Array<Record<string, any>>).map(a => a.id as string)
+      return ids.includes(agents.Pip.id) ? null : ids
+    }, 30_000, 500)
+    expect(roster).toContain(agents.Faye.id)
     // Faye, on the same computer, runs on.
-    expect(((await A.client.request<{ agents: Array<Record<string, any>> }>('agents_list', {}, 30_000)).agents)
-      .some(a => a.id === agents.Faye.harnessId && a.status === 'active')).toBe(true)
+    expect(await active('Faye')).toBe(true)
   }, 300_000)
 })
