@@ -628,10 +628,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   /** A look at the processes for each session that ended, once it is old enough to go: the 30 s one leaves it listed for
    *  up to 40 s. One per listed session (fifty at most), a later end of it putting its look off. */
   const endings = new Map<string, ReturnType<typeof setTimeout>>()
-  const dropEnded = (agentId: string): void => {
+  const dropEnded = (source: ObservedSource, agentId: string): void => {
     if (!outside(agentId)) return
     clearTimeout(endings.get(agentId))
-    const timer = setTimeout(() => { endings.delete(agentId); part.call('observed', () => observed?.tick()) }, ENDED_MS)
+    const timer = setTimeout(() => { endings.delete(agentId); part.call('observed', () => source.tick()) }, ENDED_MS)
     timer.unref()
     endings.set(agentId, timer)
   }
@@ -710,8 +710,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // switched off.
     observed: (event) => {
       part.call('observed', () => {
-        observed?.ingest(event)
-        if (event.event === 'session-end') dropEnded(observedAgentId(event.engine, event.sessionId))
+        if (!observed) return
+        observed.ingest(event)
+        if (event.event === 'session-end') dropEnded(observed, observedAgentId(event.engine, event.sessionId))
       })
       return true
     },

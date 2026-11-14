@@ -1545,6 +1545,8 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     onTestFinished(() => { switched.HARNESS_DEVICE_OBSERVED = true })
     const { port } = start({ core: harnessAgent(), faults: ['fleet'] })
     port.observed(hook('needs-input'))
+    // A window closing reminds of no agent outside a pane: there is none.
+    port.swarms({ active: 't1', swarms: [], tiles: [] })
     expect(await machineList(port)).toMatchObject({ view: 'machine', total: 1, agents: [{ id: 'h1', host: 'harness', caps: 'sva' }] })
     expect(calls('turnStarted')).toEqual([])
     // No source at all: nothing reads this machine's sessions.
@@ -1581,6 +1583,10 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     readers.working.set('cx-1', false)
     await vi.advanceTimersByTimeAsync(3_000)
     expect(calls('turnDone')).toEqual([[codex]])
+    // The end of a session never listed is looked at by nobody.
+    const timers = vi.getTimerCount()
+    port.observed(hook('session-end', { sessionId: 'never-listed' }))
+    expect(vi.getTimerCount()).toBe(timers)
     port.observed(hook('session-start'))
     port.observed(hook('session-end'))
     // 10 s after its end (observed.ts), not at the next 30 s look at the processes.
