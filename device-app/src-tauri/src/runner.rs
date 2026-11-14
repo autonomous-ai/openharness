@@ -1,5 +1,227 @@
 //! Runs the effects the reducer asks for, on threads.
 
+use crate::account::{self, Login, NO_RESULT};
+use crate::claude;
+use crate::cli::{self, Cli, HarnessCli, START_DEADLINE};
+use crate::desktop;
+use crate::install::{self, NOT_SUPPORTED, Shell};
+use crate::loginitem::LoginItem;
+use crate::state::StateFile;
+use crate::types::{Effect, Event, Log, LoginEvent};
+use crate::watch::{self, Watch};
+use std::ffi::OsString;
+use std::io;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use std::thread;
+
+/// What the runner reaches outside itself.
+pub struct Doors {
+    pub home: PathBuf,
+    pub path_var: Option<OsString>,
+    /// The fake CLI, in a debug build (`cli::cli_override`).
+    pub cli_override: Option<PathBuf>,
+    /// None where the install is not offered (`install::system_shell`).
+    pub shell: Option<Arc<dyn Shell>>,
+    pub login_item: Arc<dyn LoginItem>,
+    pub state: Arc<dyn StateFile>,
+    pub log: Arc<dyn Log>,
+    /// `open` with these arguments (`desktop::run_open`).
+    pub open: Arc<dyn Fn(&[&str]) -> io::Result<()> + Send + Sync>,
+}
+
+pub struct Runner(Arc<Shared>);
+
+/// What the runner and the threads it starts share.
+struct Shared {
+    doors: Doors,
+    send: Arc<dyn Fn(Event) + Send + Sync>,
+    /// What the last look found: every run uses it.
+    cli: Mutex<Option<Arc<HarnessCli>>>,
+    watch: Mutex<Option<Watch>>,
+    /// The number of the watch whose events reach `send`. Apart from `watch`, as a watch's thread holds it and the
+    /// watch must still go with the runner.
+    watching: Arc<Mutex<u64>>,
+    login: Mutex<Option<Login>>,
+}
+
+impl Runner {
+    /// `send` hands the event to the app's loop and returns. It never runs an effect itself: a watch or a sign-in
+    /// calls it holding a lock that stopping or cancelling it takes.
+    pub fn new(doors: Doors, send: Arc<dyn Fn(Event) + Send + Sync>) -> Runner {
+        Runner(Arc::new(Shared {
+            doors,
+            send,
+            cli: Mutex::new(None),
+            watch: Mutex::new(None),
+            watching: Arc::default(),
+            login: Mutex::new(None),
+        }))
+    }
+
+    /// Looks for the CLI now; the runs after it use what it found.
+    pub fn find_cli(&self) -> bool {
+        self.0.find_cli()
+    }
+
+    /// Menu, Show and Quit come back for the binary. Everything else is done here, anything slow on a thread, and
+    /// answers through `send`.
+    pub fn run(&self, effect: Effect) -> Option<Effect> {
+        let shared = &self.0;
+        match effect {
+            Effect::Menu(_) | Effect::Show(_) | Effect::Quit => return Some(effect),
+            Effect::FindCli => shared.answer(Event::Cli(shared.find_cli())),
+            Effect::SpawnWatch => shared.spawn_watch(),
+            // Its child then exits 0 by itself, and its WatchExit(Some(0)) is the answer.
+            Effect::StopWatch => {
+                let watch = shared.watch.lock().unwrap().take();
+                if let Some(watch) = watch {
+                    watch.stop();
+                }
+            }
+            Effect::RunStart => shared.with_cli(|cli| {
+                let output = cli.run(&["start", "--if-down"], START_DEADLINE);
+                Event::StartDone { ok: output.is_ok_and(|output| output.code == Some(0) && !output.timed_out) }
+            }),
+            Effect::RunInstall => {
+                let shared = shared.clone();
+                thread::spawn(move || {
+                    let result = match &shared.doors.shell {
+                        Some(shell) => install::install(&**shell, &*shared.doors.log, &|| shared.find_cli()),
+                        None => Err(vec![NOT_SUPPORTED.into()]),
+                    };
+                    shared.answer(Event::InstallDone(result));
+                });
+            }
+            Effect::ReadAuth => shared.with_cli(|cli| Event::Auth(account::auth_status(cli))),
+            Effect::ReadClaude => shared.with_cli(|cli| Event::Claude(claude::status(cli))),
+            Effect::RunLogin => shared.run_login(),
+            Effect::CancelLogin => {
+                let login = shared.login.lock().unwrap().take();
+                if let Some(login) = login {
+                    login.cancel();
+                }
+            }
+            Effect::SetClaude(on) => {
+                let log = shared.doors.log.clone();
+                shared.with_cli(move |cli| {
+                    let result = claude::set(cli, on);
+                    if let Err(message) = &result {
+                        log.line(&format!("claude: {message}"));
+                    }
+                    Event::ClaudeSet(result)
+                });
+            }
+            Effect::OpenUrl(url) => shared.open(&[&url], "browser"),
+            Effect::OpenDesktop => shared.open(&desktop::open_desktop_args(), "desktop app"),
+            // On the caller's thread: one ServiceManagement call, once at start.
+            Effect::RegisterLoginItem => {
+                let registered = shared.doors.login_item.register();
+                shared.doors.log.line(&match &registered {
+                    Ok(()) => "login item: registered".to_string(),
+                    Err(error) => format!("login item: not registered: {error}"),
+                });
+                shared.answer(Event::LoginItem(registered.is_ok()));
+            }
+            // On the caller's thread, in order: a later save never lands before an earlier one.
+            Effect::Save(saved) => {
+                if let Err(error) = shared.doors.state.save(&saved) {
+                    shared.doors.log.line(&format!("state: could not save: {error}"));
+                }
+            }
+            Effect::Log(text) => shared.doors.log.line(&text),
+        }
+        None
+    }
+}
+
+impl Shared {
+    fn answer(&self, event: Event) {
+        (self.send)(event);
+    }
+
+    fn find_cli(&self) -> bool {
+        let doors = &self.doors;
+        let found = cli::find_cli(&doors.home, doors.path_var.as_deref(), doors.cli_override.as_deref())
+            .map(|invocation| Arc::new(HarnessCli::new(invocation, doors.log.clone())));
+        let there = found.is_some();
+        *self.cli.lock().unwrap() = found;
+        there
+    }
+
+    fn cli(&self) -> Option<Arc<HarnessCli>> {
+        self.cli.lock().unwrap().clone()
+    }
+
+    /// `work` on a thread, with the CLI; Cli(false) at once when none is known.
+    fn with_cli(&self, work: impl FnOnce(&HarnessCli) -> Event + Send + 'static) {
+        let Some(cli) = self.cli() else { return self.answer(Event::Cli(false)) };
+        let send = self.send.clone();
+        thread::spawn(move || send(work(&cli)));
+    }
+
+    fn spawn_watch(&self) {
+        let Some(cli) = self.cli() else { return self.answer(Event::Cli(false)) };
+        let mut watch = self.watch.lock().unwrap();
+        // Numbered before the watch it replaces stops: that one's late WatchExit(Some(0)) would read as the app
+        // closing this one.
+        let number = {
+            let mut current = self.watching.lock().unwrap();
+            *current += 1;
+            *current
+        };
+        if let Some(old) = watch.take() {
+            old.stop();
+        }
+        let (watching, send) = (self.watching.clone(), self.send.clone());
+        let spawned = watch::spawn_watch(&*cli, move |event| {
+            // Held while the event is handed on, so once a newer watch has its number nothing more of this one is sent.
+            let current = watching.lock().unwrap();
+            if *current == number {
+                send(event);
+            }
+        });
+        match spawned {
+            Ok(started) => *watch = Some(started),
+            Err(error) => {
+                self.doors.log.line(&format!("harness hardware watch --json: could not start: {error}"));
+                // A CLI that went away is removed. One that is there and cannot run is a watch that ended: the
+                // keep-alive tries it again in its own time, where a removed CLI is found again at every tick.
+                self.answer(if error.kind() == io::ErrorKind::NotFound {
+                    Event::Cli(false)
+                } else {
+                    Event::WatchExit(None)
+                });
+            }
+        }
+    }
+
+    fn run_login(&self) {
+        let Some(cli) = self.cli() else { return self.answer(Event::Cli(false)) };
+        let mut login = self.login.lock().unwrap();
+        // The app cannot tell one sign-in's events from another's. A sign-in sends nothing more once its cancel has
+        // returned (account.rs), so the one this replaces is cancelled first.
+        if let Some(old) = login.take() {
+            old.cancel();
+        }
+        let send = self.send.clone();
+        match account::login(&*cli, self.doors.log.clone(), move |event| send(event)) {
+            Ok(started) => *login = Some(started),
+            Err(error) => {
+                self.doors.log.line(&format!("sign-in: could not start: {error}"));
+                self.answer(Event::Login(LoginEvent::Done(Err(NO_RESULT.into()))));
+            }
+        }
+    }
+
+    /// A failure is logged without the arguments: a sign-in URL carries its state in its query.
+    fn open(&self, args: &[&str], what: &str) {
+        if let Err(error) = (self.doors.open)(args) {
+            self.doors.log.line(&format!("{what}: could not open: {error}"));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -149,8 +371,9 @@ mod tests {
         let opener = doubles.clone();
         Doors {
             home: home.to_path_buf(),
-            // Never the developer's PATH: a `harness` on it would be found.
-            path_var: None,
+            // The system's folders, which the fake's tools are in; never the developer's PATH, where a `harness` would
+            // be found.
+            path_var: Some("/usr/bin:/bin".into()),
             cli_override: Some(fake.program()),
             shell: Some(doubles.clone()),
             login_item: doubles.clone(),
@@ -222,8 +445,8 @@ mod tests {
         let w = world();
         w.doubles.failing.store(true, Ordering::SeqCst);
         assert_eq!(w.answer(Effect::RegisterLoginItem), Event::LoginItem(false));
-        for effect in [Effect::Save(Saved::default()), Effect::OpenUrl("https://id.example/a".into()), Effect::OpenDesktop]
-        {
+        let url = Effect::OpenUrl("https://id.example/a".into());
+        for effect in [Effect::Save(Saved::default()), url, Effect::OpenDesktop] {
             assert_eq!(w.runner.run(effect), None);
         }
         assert_eq!(
@@ -270,8 +493,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_watch_that_cannot_start_has_ended() {
-        // A CLI that is there and cannot run is not one that went away (the menu would call it removed and the next tick
-        // find it again, over and over): it is a watch that ended, which the keep-alive tries again in its own time.
+        // A CLI that is there and cannot run is not one that went away (the menu would call it removed and the next
+        // tick find it again, over and over): it is a watch that ended, which the keep-alive tries again in its time.
         let w = world_where(|doors| {
             let not_a_program = doors.home.join("harness");
             fs::write(&not_a_program, "").unwrap();
@@ -280,7 +503,8 @@ mod tests {
         assert!(w.runner.find_cli());
         assert_eq!(w.answer(Effect::SpawnWatch), Event::WatchExit(None));
         let lines = w.fake.log().lines();
-        assert!(lines.iter().any(|line| line.starts_with("harness hardware watch --json: could not start: ")), "{lines:?}");
+        let said = |line: &String| line.starts_with("harness hardware watch --json: could not start: ");
+        assert!(lines.iter().any(said), "{lines:?}");
     }
 
     #[cfg(unix)]
