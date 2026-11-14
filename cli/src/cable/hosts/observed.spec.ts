@@ -672,6 +672,26 @@ describe('ObservedSource actions', () => {
     expect(actions.orcaSend).not.toHaveBeenCalled()
   })
 
+  // Its compaction's SessionStart, mid-turn, gives it a handle and no state: a turn listed idle would be typed into, and a
+  // prompt it opens is heard a few hundred ms late.
+  it('an agent the scan found mid-turn is listed working, and never typed into until its turn ends', async () => {
+    const { actions } = fakeActions()
+    const { src, clock, open, owners, working, externals, ev } = setup({ actions })
+    open.set('s1', 'terminal')
+    owners.set('s1', { pid: 100, engine: 'claude' })
+    externals.set('s1', { cwd: '/work/proj', transcriptPath: '/t/s1.jsonl' })
+    await src.scanOpen()
+    expect(src.list()[0].state).toBe('working')
+    src.ingest(ev('session-start', withHandle))
+    expect(await src.send(src.list()[0], 'yes do it')).toEqual({ ok: false, reason: 'proj is busy. Say it when it is done.' })
+    // Its owner's record reads idle: the turn is over.
+    working.set('s1', false)
+    clock.t += 3_000
+    await src.checkWorking()
+    expect(await src.send(src.list()[0], 'next')).toEqual({ ok: true })
+    expect(actions.orcaSend.mock.calls).toEqual([[HANDLE, 'next']])
+  })
+
   it('send goes to the mod when it is ready', async () => {
     const { actions, ready } = fakeActions()
     const { src, ev } = setup({ actions })
