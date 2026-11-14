@@ -13,8 +13,11 @@ export interface InboxDeps {
   after(ms: number, run: () => void): () => void
 }
 
+/** What became of a transcript: a poll took it, one before it still waits for the session's next poll, or no poll came. */
+export type Delivery = 'taken' | 'busy' | 'missed'
+
 type Poll = { pollId: string; resolve: (answer: { text?: string }) => void; cancel: () => void }
-type Waiting = { text: string; resolve: (taken: boolean) => void; cancel: () => void }
+type Waiting = { text: string; resolve: (delivery: Delivery) => void; cancel: () => void }
 
 /**
  * The mod's long polls, one per Claude Code session, and the dial's transcripts for them. A transcript lives only until
@@ -36,7 +39,7 @@ export class Inbox {
     if (older) this.close(sessionId, older, {})
     const waiting = this.waiting.get(sessionId)
     if (waiting) {
-      this.endWait(sessionId, waiting, true)
+      this.endWait(sessionId, waiting, 'taken')
       this.closedNow(sessionId)
       return Promise.resolve({ text: waiting.text })
     }
@@ -60,16 +63,17 @@ export class Inbox {
     return this.polls.has(sessionId) || this.recent(sessionId)
   }
 
-  /** True when a poll took the text. The mod sends no acknowledgement: that is all "sent" can mean. */
-  deliver(sessionId: string, text: string): Promise<boolean> {
+  /** Taken when a poll took the text. The mod sends no acknowledgement: that is all "sent" can mean. */
+  deliver(sessionId: string, text: string): Promise<Delivery> {
     const open = this.polls.get(sessionId)
     if (open) {
       this.close(sessionId, open, { text })
-      return Promise.resolve(true)
+      return Promise.resolve('taken')
     }
-    if (this.waiting.has(sessionId) || !this.recent(sessionId)) return Promise.resolve(false)
+    if (this.waiting.has(sessionId)) return Promise.resolve('busy')
+    if (!this.recent(sessionId)) return Promise.resolve('missed')
     return new Promise((resolve) => {
-      const waiting: Waiting = { text, resolve, cancel: this.deps.after(WAIT_MS, () => this.endWait(sessionId, waiting, false)) }
+      const waiting: Waiting = { text, resolve, cancel: this.deps.after(WAIT_MS, () => this.endWait(sessionId, waiting, 'missed')) }
       this.waiting.set(sessionId, waiting)
     })
   }
@@ -77,7 +81,7 @@ export class Inbox {
   /** The core that held the polls connected again, or the devices stop. */
   closeAll(): void {
     for (const [sessionId, open] of this.polls) this.close(sessionId, open, {})
-    for (const [sessionId, waiting] of this.waiting) this.endWait(sessionId, waiting, false)
+    for (const [sessionId, waiting] of this.waiting) this.endWait(sessionId, waiting, 'missed')
     // Those polls died with their core, and the mod waits 60 s after a failed poll: none comes back within 35 s.
     this.closed.clear()
   }
@@ -89,10 +93,10 @@ export class Inbox {
     open.resolve(answer)
   }
 
-  private endWait(sessionId: string, waiting: Waiting, taken: boolean): void {
+  private endWait(sessionId: string, waiting: Waiting, delivery: Delivery): void {
     this.waiting.delete(sessionId)
     waiting.cancel()
-    waiting.resolve(taken)
+    waiting.resolve(delivery)
   }
 
   private closedNow(sessionId: string): void {
