@@ -17,7 +17,8 @@ the agent runs. But `cli/hook/notify.mjs` returns before posting when the sessio
 ## Decided (Diego, 2026-11-13)
 
 - **Keep the app; the device works without it.** The app becomes one place the device works, not its gate.
-- **With no window, the dial shows this computer's agents, the ones that need the person first** (option A).
+- **With no window, the dial shows this computer's agents** (option A), in a fixed ring (Diego, 2026-11-14:
+  [the swipe order](../plans/2026-11-14-dial-swipe-order-design.md)).
   With a window, nothing changes: the dial holds the active tab, as decided on 2026-09-17.
 - **Agents outside a pane appear on the device only** (option A). The app, the phone, ⌘K and the Swarm do not see
   them; ⌘P still finds their conversations, as today.
@@ -160,10 +161,18 @@ overlap (Harness agents have a pane), but the rule and its tests land now, so wa
 ### What the dial gets with no window
 
 - **Which.** `HarnessSource` and `ObservedSource`, deduped.
-- **Order.** needs-you, then working, then done and unseen, then the rest by last activity; within a group, the most
-  recent first.
-- **How many.** At most 10 rows (to be tuned on a dial). `total` is every agent on this computer. The bound is in the
-  selection, not in name lengths: the 78-agent reconnect (`listAgentSnapshot`'s comment) is not repeated.
+- **Order.** A fixed ring ([the swipe order](../plans/2026-11-14-dial-swipe-order-design.md), Diego, 2026-11-14): an
+  agent keeps its place from the moment it enters, whatever its state does. A new agent enters at the end. When one
+  ends, the others close up. Needs-you is not an order: the dial learns it from the activity line, the notification
+  and the bell.
+- **How many.** At most 16 places, the firmware's `CABLE_MAX_AGENTS`. An agent in the ring stays until its source
+  stops listing it. With the ring full, an agent outside it enters only when it is new or needs the person: it takes
+  the place of the ring agent idle the longest, and goes to the end. Idle is neither working nor needing the person:
+  an agent that works or needs the person is never replaced, and when no ring agent is idle the newcomer waits
+  outside. A free place goes to an agent that needs the person first, then to the most recent activity. When several
+  arrive together they enter in that same order, at most 16 in one pass, and one that found no place is no longer
+  new. `total` is every agent on this computer. The bound is in the selection, not in name lengths: the 78-agent
+  reconnect (`listAgentSnapshot`'s comment) is not repeated.
 - **When.** Changes are coalesced for 1 s, and pushes are at least 1 s apart. The list is pushed only when its members or
   order change (`agentsKey`, as today); a state change inside the same list goes as the existing per-agent frames.
 - **With a window.** Exactly today's behaviour: an observed agent sends the dial no frame (no turn, answer or
@@ -226,7 +235,7 @@ agents; Windows and Linux beyond what the hook already does there.
   (`npm run test:core`).
 - `HostRegistry`, `ObservedSource`: each event, removal by pid and by age, the 50-session bound, the open-session scan,
   the transcript read (bounded, deadline, inside the engine's folders only), host detection.
-- Selection: order, the 10-row bound, `total`, the 1 s coalescing, dedupe precedence.
+- Selection: the ring's fixed order, its 16 places, `total`, the 1 s coalescing, dedupe precedence.
 - `voice.begin` refused for an agent without `v`, before audio is kept.
 - `notify.mjs`: the paneless post, fire and forget; the hint allowlist; the existing guards still run.
 - End to end: the real daemon, a fake engine started outside tmux firing its hooks, a fake dial. The machine list with
@@ -241,7 +250,7 @@ agents; Windows and Linux beyond what the hook already does there.
 2. Their states follow: idle, working, done with a chime and the last answer, needs-you while one waits for approval.
 3. A tap to talk on an Orca agent shows "See it in Orca"; an older firmware gets the card, and nothing breaks.
 4. Plugged in after the agents started, the dial still lists them.
-5. 60 observed sessions: the dial gets 10; no reboot, no watchdog; the devices process's CPU and memory stay within
+5. 60 observed sessions: the dial gets 16; no reboot, no watchdog; the devices process's CPU and memory stay within
    the recorded baseline.
 6. Opening the app: the dial goes back to the active tab.
 
