@@ -81,6 +81,11 @@ class InOrca {
 
   /** The plugin's PermissionRequest hook: the real CLI, from the run's bundle or the sources as the daemon is started. */
   asked(command: string) {
+    // The plugin as `claude plugin install` leaves it: its entry in the user settings, which `asked` reads before it tells
+    // (`harness device claude disable` drops it). Beside the hooks the daemon installed there.
+    const settings = join(this.d.env.HOME!, '.claude', 'settings.json')
+    const current = JSON.parse(readFileSync(settings, 'utf8')) as { enabledPlugins?: Record<string, boolean> }
+    writeFileSync(settings, JSON.stringify({ ...current, enabledPlugins: { ...current.enabledPlugins, 'harness-device@openharness': true } }))
     const bundle = process.env.E2E_BUNDLE_PATH
     const script = bundle ? [bundle] : ['--import', 'tsx', 'src/cli.ts']
     // From the CLI's folder, where tsx resolves; the session's folder is the input's.
