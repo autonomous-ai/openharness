@@ -341,14 +341,13 @@ sign-in, never the machine's own `~/.claude`, `~/.codex`, daemon (port 18473) or
    | Task 2 red | `6 failed \| 6 passed (12)`: every Ctrl+Z case, Codex under `/bin/bash` among them, at the new wait. |
    | Task 2 green (the head) | `12 passed (12)`, none skipped. |
 
-   The runs as decided, two of them:
-   `git push origin <red commit>:refs/heads/fix/1612-codex-suspend`, then `git push origin fix/1612-codex-suspend`.
+   The runs as decided, two of them (open question 1):
+   `git push origin <Task 1 commit>:refs/heads/fix/1612-codex-suspend`, then `git push origin fix/1612-codex-suspend`.
    Find them with `gh run list --workflow tmp-1612-codex-suspend.yml --branch fix/1612-codex-suspend`. In each, a
    person sees `Image: ubuntu-26.04` under "Set up job", `GNU bash, version 5.3` and `tmux 3.6` in the step "The bash
    and tmux under test" (and on the run's summary page), and the verbose reporter's line for each of the 12 cases
    with the totals above. Keep both run links for the pull request. A job still waiting for a runner after ten
-   minutes means the label is not served: stop and report, change nothing. Whether the first push should be the
-   Task 1 commit instead is open question 1.
+   minutes means the label is not served: stop and report, change nothing.
 3. **After the runs,** phase 4 removes the workflow in its own commit. `git diff <verified head> HEAD --stat -- .github cli`
    then shows only `.github/workflows/tmp-1612-codex-suspend.yml` deleted, so the verified tree under `cli/` is the
    one the pull request carries.
@@ -362,7 +361,6 @@ runs this file on `ubuntu-latest`, and its first run after the merge is where #1
 
 ## Open questions
 
-1. At the red commit the runner shows six cases red, not only Codex under `/bin/bash`: no engine writes the record
-   on any shell. The #1612 failure itself (one red of twelve) shows only at the Task 1 commit, and that run is also
-   the one that proves this workflow's runner reproduces the bug. Which baseline should be pushed before the head:
-   the red commit (as decided, and as check 2 is written), the Task 1 commit, or both (three runs)?
+None. Question 1, which baseline the runner shows before the head, was decided for the Task 1 commit: its run is
+the one that shows #1612 itself (one red of twelve, Codex under `/bin/bash` at the old wait) on this workflow's
+runner, which the red commit's six reds would not.
