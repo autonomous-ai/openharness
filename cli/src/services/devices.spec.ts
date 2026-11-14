@@ -70,6 +70,8 @@ vi.mock('../cable/cableFleet.js', async (real) => {
     connected = true
     get isConnected() { return this.connected }
     wantsStats() { return this.wants }
+    apps = true
+    wantsApps() { return this.apps }
     petDial = () => ({ supported: false, held: [] as string[], sending: null })
     setSettings = vi.fn(async (id: string, _patch: unknown) => (id === 'usb' ? { ok: true } : { ok: false, error: 'That device is not plugged into this computer.' }))
   }
@@ -1820,6 +1822,23 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
       expect(insideRead).toEqual([0])
       await vi.waitFor(() => expect(switches()).toEqual(['[device] app filter: switched · pick', '[device] app filter: switched · empty']))
       await vi.waitFor(() => expect(calls('syncAgents').length - pushed).toBe(1))
+    })
+
+    it('with only an older dial attached, the reminder reads the one ring: an app that empties switches nothing', async () => {
+      vi.useFakeTimers()
+      const { port } = start({ faults: ['fleet'] })
+      await twoApps(port)
+      expect(host().pickApp('vscode')).toBe('switched')
+      // A dial that never said appFilter shows no app: nobody reads the shown app's list.
+      ;(seen.cable as unknown as { apps: boolean }).apps = false
+      seen.host.watching!(true)
+      // VS Code's one session resumes in Ghostty, mid-turn: the app shown is empty, and the reminders come.
+      inApp(port, 'v-1', 'ghostty', 'turn-start')
+      await vi.advanceTimersByTimeAsync(0)
+      const pushed = calls('syncAgents').length
+      await vi.advanceTimersByTimeAsync(20_000)
+      expect(switches()).toEqual(['[device] app filter: switched · pick'])
+      expect(calls('syncAgents')).toHaveLength(pushed)
     })
   })
 })
