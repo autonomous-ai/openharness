@@ -43,7 +43,7 @@ One way the agent browser starts a Podman command, in a new module `src/services
   - When the command exits on its own, `spawnTied` writes a newline on fd 3 at its `exit`: the watcher reads a line and
     leaves without a signal. No watcher outlives its command.
   - The command does not inherit fd 3, and the watcher holds none of the command's stdio. Node's `close` also waits for
-    fd 3, so it comes once the watcher has read the newline (about 55 ms after `exit`, measured).
+    fd 3, so it comes once the watcher has read the newline (under a millisecond after `exit`, measured).
   - The newline is written only while fd 3 is open, and fd 3 has an `error` listener: a watcher already gone (a spec
     ending its group) never crashes this process.
 - **Windows.** A plain `spawn`: the Job Object already ends the command with this process.
