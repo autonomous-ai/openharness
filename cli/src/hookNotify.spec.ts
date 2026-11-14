@@ -7,6 +7,7 @@ import { tmpdir } from 'os'
 import { dirname, join } from 'path'
 import { fileURLToPath, pathToFileURL } from 'url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { MAX_HINTS } from './core/observedHook.js'
 import { ENGINES } from './engines/types.js'
 import { HARNESS_OWNER_OPTION, HARNESS_SESSION_PREFIX, harnessPaneOwner, ownerCommand, paneOwnerFormat } from './lib/harnessSessionLabel.js'
 import { hookRouteFile, publishHookRoute } from './lib/hookRoutes.js'
@@ -2339,12 +2340,22 @@ describe('hook notify: a session outside a pane', () => {
       input: { hook_event_name: 'UserPromptSubmit', session_id: 'sess-1', cwd: '/w', prompt: 'prompt-secret' },
     })
     expect(requests.map((request) => request.url)).toEqual(['/api/hook/observed'])
-    // Every name, all set at once: the core takes up to 10 (core/observedHook.ts), so none is cut.
+    // Every name, all set at once: the core takes as many as the list holds (core/observedHook.ts), so none is cut.
     expect(requests[0].body.hostHints).toEqual(allowed)
     expect(JSON.stringify(requests[0].body)).not.toMatch(/PAIRING|SPAWN|ORCA_OTHER|secret/)
   })
 
   // The core reads 4096 bytes of a body at most (hookServer.ts): with every field at its bound, nothing is left out.
+  // The core refuses an event with more hints than it takes (core/observedHook.ts): every name set must still be taken,
+  // and the core takes no more than an honest hook sends.
+  it('lists as many hint names as the core takes', () => {
+    const literal = /const HOST_HINTS = \[([^\]]*)\]/.exec(readFileSync(HOOK, 'utf8'))?.[1]
+    expect(literal, 'HOST_HINTS in hook/notify.mjs').toBeDefined()
+    const listed = [...literal!.matchAll(/'([^']+)'/g)].map((match) => match[1])
+    expect(listed).toEqual(HINTS)
+    expect(listed).toHaveLength(MAX_HINTS)
+  })
+
   it('the largest body the hook can build is under 4096 bytes', async () => {
     const { port, requests } = await collect()
     const hints = Object.fromEntries(HINTS.map((name) => [name, 'h'.repeat(64)]))
