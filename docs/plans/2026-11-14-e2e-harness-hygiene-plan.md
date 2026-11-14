@@ -111,7 +111,7 @@ Checked at `b79d017c41`.
 | `cli/e2e/harness/hungCodex.ts` | new: a Codex whose rate-limit read never ends | 6 |
 | `cli/src/testing/isolatedTmux.ts`, `.spec.ts` | the root's removal also removes a folder made read-only in it | 6 |
 | `cli/e2e/leftBehind.e2e.ts` | the close's tests (6), the worker's (7), grid's (8) | 6, 7, 8 |
-| `cli/e2e/harness/reaperProcess.mjs`, `abandonedWorker.ts` | the reaper sweeps a root before removing it | 7 |
+| `cli/e2e/harness/reaperProcess.mjs`, `abandonedWorker.ts` | the reaper sweeps a root before removing it, and removes a folder made read-only in it | 7 |
 | `cli/vitest.setup.ts`, `cli/src/testing/vitestSetupFolders.spec.ts` | the setup removes the home, data and runtime folders it made when the file ends; the spec, new | 9 |
 
 ## Review Focus
@@ -709,19 +709,21 @@ git commit -m "e2e: a daemon's close ends every process that still names its roo
 
 **Files:**
 - Modify: `cli/e2e/harness/abandonedWorker.ts`
-- Modify: `cli/e2e/leftBehind.e2e.ts` (`Started` at 16, `watched` at 73-74)
+- Modify: `cli/e2e/leftBehind.e2e.ts` (`Started` at 19, the `afterEach` at 41-44, `watched` at 128-129)
 - Modify: `cli/e2e/harness/reaperProcess.mjs` (the header, `reap` at 56-61)
 
 **Interfaces:**
 - Consumes: `writeHungCodex(daemon)`, `hungRateLimitRead(daemon): Promise<ProcessRow[]>` from `./hungCodex.js`.
 
-- [ ] **Step 1: Make the three worker cases leave a hung read**
+- [ ] **Step 1: Make the three worker cases leave a hung read and a read-only folder**
 
 `abandonedWorker.ts`: `writeHungCodex(daemon)` before `daemon.start()`; once the tmux session is made,
-`const escaped = (await hungRateLimitRead(daemon)).map((row) => row.pid)`; the line it prints gains `escaped`. Its
-header says so. `leftBehind.e2e.ts`: `Started` gains `escaped: number[]`; before `end(child)`,
-`expect(started.escaped, 'the hung read\'s Codex and its child').toHaveLength(2)`, and `watched` includes
-`...started.escaped`. The two waits that follow stay as they are: every watched process gone, then the root.
+`const escaped = (await hungRateLimitRead(daemon)).map((row) => row.pid)`; then `readOnly`, `<root>/read-only` with a
+file `kept` in it, `chmod 0o555` (empty, a recursive removal would remove it); the line it prints gains `escaped` and
+`readOnly`. Its header says so. `leftBehind.e2e.ts`: `Started` gains `escaped: number[]` and `readOnly: string`; before
+`end(child)`, `expect(started.escaped, 'the hung read\'s Codex and its child').toHaveLength(2)`, and `watched` includes
+`...started.escaped`. The two waits that follow stay as they are: every watched process gone, then the root. The
+`afterEach` makes `started.readOnly` `0o755` before its `rmSync(started.root, …)`, so a red run leaves no root either.
 
 - [ ] **Step 2: Run one case to see it fail**
 
@@ -731,18 +733,25 @@ TMPDIR=/private/tmp/claude-502/hyg-t7/ caffeinate -i npx vitest run --config vit
 ```
 
 Expected: FAIL, `timed out after 40000ms waiting for every process of the daemon to be gone` (the pair outlives the
-reaper). The `afterEach` ends the pair.
-Commit: `e2e: the abandoned worker's daemon leaves a hung Codex read for the reaper (red)`.
+reaper), and the reaper's `[e2e reaper] could not remove <root>: ENOTEMPTY` (the read-only folder). The `afterEach`
+ends the pair and removes the root.
+Commit: `e2e: the abandoned worker's daemon leaves a hung Codex read and a read-only folder for the reaper (red)`.
 
-- [ ] **Step 3: Sweep in the reaper**
+- [ ] **Step 3: Sweep in the reaper, and remove a read-only folder**
 
-In `reap`, for each tmux server: after its `kill-server` and before `rmSync(root, …)`, read the process table
+In `reap`, for each tmux server: after its `kill-server` and before the root's removal, read the process table
 (`ps -A -ww -o pid=,pgid=,command=`, `maxBuffer` 64 MiB), and for each row whose command contains `` `${root}/` ``,
-never this process or pid 1: SIGKILL to its group when `pid === pgid`, to the pid alone otherwise. One line on
-stderr when it found any: `[e2e reaper] ended <n> processes that still named <root>`. Then wait until none of them
-`exists`, at most 5 s, 100 ms apart, as `reap` waits for its groups. A failed `ps` is logged and the root is still
-removed. The comment names `src/testing/rootProcesses.ts` as the rule it mirrors, and the header's first paragraph
-and protocol note say what a root's removal now does.
+never this process, its parent or pid 1: SIGKILL to its group when `pid === pgid`, to the pid alone otherwise. One line
+on stderr when it found any: `[e2e reaper] ended <n> processes that still named <root>`. Then wait until none of them
+`exists`, at most 5 s, 100 ms apart, as `reap` waits for its groups; one line names those still there. A failed `ps` is
+logged and the root is still removed. The comment names `src/testing/rootProcesses.ts` as the rule it mirrors, and the
+header's first paragraph and protocol note say what a root's removal now does.
+
+The removal is Task 6's read-only step, in plain Node (the reaper cannot import `src/testing/isolatedTmux.ts`): `rmSync`
+as today; when it fails, each folder, the root first, read with `lstatSync` and given `u+rwx`, only entries that are
+folders themselves walked, and `rmSync` once more. What that one cannot remove is logged:
+`[e2e reaper] could not remove <root>: <error>`. Checked by the root wait: without the second removal, the `exits` case
+fails on `timed out after 10000ms waiting for the daemon's root to be removed`.
 
 - [ ] **Step 4: Run the checks**
 
@@ -755,8 +764,8 @@ ls -d /private/tmp/claude-502/hyg-t7/htmux-* 2>/dev/null                        
 - [ ] **Step 5: Commit**
 
 ```bash
-git add cli/e2e/harness/reaperProcess.mjs
-git commit -m "e2e: the worker's reaper ends what still names a root before it removes it"
+git add cli/e2e/harness/reaperProcess.mjs docs/plans/2026-11-14-e2e-harness-hygiene-plan.md
+git commit -m "e2e: the worker's reaper ends what still names a root before it removes it, read-only folders and all"
 ```
 
 ---
