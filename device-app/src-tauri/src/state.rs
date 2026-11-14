@@ -21,7 +21,6 @@ impl JsonStateFile {
     pub fn new(dir: PathBuf, log: Arc<dyn Log>) -> Self {
         JsonStateFile { dir, log }
     }
-
 }
 
 impl StateFile for JsonStateFile {

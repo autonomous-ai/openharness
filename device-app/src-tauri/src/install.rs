@@ -83,10 +83,7 @@ pub fn install(shell: &dyn Shell, log: &dyn Log, cli_there: &dyn Fn() -> bool) -
 /// an empty line dropped: the output is outside text, bound for the screen and the log.
 fn clean_lines(output: &Output) -> Vec<String> {
     let clean = |line: &str| {
-        line.rsplit('\r')
-            .map(printable)
-            .map(|frame| frame.trim().to_string())
-            .find(|frame| !frame.is_empty())
+        line.rsplit('\r').map(printable).map(|frame| frame.trim().to_string()).find(|frame| !frame.is_empty())
     };
     output.stdout.lines().chain(output.stderr.lines()).filter_map(clean).collect()
 }

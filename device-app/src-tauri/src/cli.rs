@@ -263,10 +263,6 @@ impl Child {
         }
     }
 
-    pub fn close_stdin(&mut self) {
-        self.stdin.lock().unwrap().take();
-    }
-
     pub fn stdin_closer(&self) -> StdinCloser {
         StdinCloser(Arc::downgrade(&self.stdin))
     }
@@ -543,7 +539,11 @@ mod tests {
         assert_eq!(child_env(home, system, None), [with_system.clone(), c_utf8.clone()]);
         assert_eq!(child_env(home, system, Some(OsStr::new("C"))), [with_system.clone(), c_utf8.clone()]);
         for locale in ["en_US.UTF-8", "vi_VN.utf8"] {
-            assert_eq!(child_env(home, system, Some(OsStr::new(locale))), [with_system.clone()], "{locale}");
+            assert_eq!(
+                child_env(home, system, Some(OsStr::new(locale))),
+                std::slice::from_ref(&with_system),
+                "{locale}"
+            );
         }
         assert_eq!(child_env(home, None, None), [path("/Users/someone/.local/bin"), c_utf8]);
     }
@@ -614,7 +614,7 @@ mod tests {
         let mut child = fake.cli().spawn(&WATCH).unwrap();
         assert_eq!(child.line(WAIT), Ok(Some("a".into())));
         assert_eq!(child.line(WAIT), Ok(Some("b".into())));
-        child.close_stdin();
+        child.stdin_closer().close();
         assert_eq!(child.line(WAIT), Ok(None));
         assert_eq!(child.exit(WAIT), Ok(Some(0)));
     }
@@ -735,7 +735,7 @@ mod tests {
 
         fake.script("login --json", &["@driver", "@wait never"]);
         let mut driven = cli.spawn(&["login", "--json"]).unwrap();
-        driven.close_stdin();
+        driven.stdin_closer().close();
         assert_eq!(driven.line(WAIT), Ok(Some(CANCELLED.into())));
         assert_eq!(driven.line(WAIT), Ok(None));
         assert_eq!(driven.exit(WAIT), Ok(Some(1)));

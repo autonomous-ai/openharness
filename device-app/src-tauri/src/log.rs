@@ -229,7 +229,10 @@ mod tests {
             ("/Users/person@host /Users/person=x", "~@host ~=x"),
             // Another person's folder: a name goes on with letters, digits, `_`, `-` and `.`.
             ("/Users/personal/x stays", "/Users/personal/x stays"),
-            ("/Users/person.b /Users/person-b /Users/person_b /Users/person..b", "/Users/person.b /Users/person-b /Users/person_b /Users/person..b"),
+            (
+                "/Users/person.b /Users/person-b /Users/person_b /Users/person..b",
+                "/Users/person.b /Users/person-b /Users/person_b /Users/person..b",
+            ),
         ];
         for (text, expected) in cases {
             assert_eq!(redact_with(text, home.as_ref()), expected, "{text}");
