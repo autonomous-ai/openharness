@@ -1951,6 +1951,91 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     expect(logs.filter((line) => line.includes(SESSION) || line.includes('sess-1'))).toEqual([])
   })
 
+  // A swipe that rests on an agent in an Orca terminal shows its pane, and Orca stays where it is.
+  const switched: [string, string[], number] = ['/opt/orca/bin/orca', ['terminal', 'switch', '--terminal', HANDLE, '--json'], 10_000]
+  /** The Codex agent in an Orca terminal, its dial on the cable. */
+  const inOrca = (over: Parameters<typeof start>[0] = {}) => {
+    const started = startHere(over)
+    started.port.observed(hook('session-start', { engine: 'codex', sessionId: 'cx-1',
+      hostHints: { ORCA_AGENT_SESSION_ID: 'orca-1', ORCA_TERMINAL_HANDLE: HANDLE } }))
+    attach(started.port)
+    return started
+  }
+  const swiped = (outcome: string) => vi.waitFor(() => expect(said()).toContain(`[device] swipe · ${outcome}`))
+
+  it('a rest on an Orca agent runs orca terminal switch once and no open -b, on macOS too', async () => {
+    inOrca({ orca: mac })
+    expect(host().swipeSwitches(CODEX)).toBe(true)
+    host().swipeEnded(CODEX, 'rest')
+    await swiped('ok')
+    expect(orcaRuns).toEqual([switched])
+    expect(said()).toEqual(['[device] swipe · ok'])
+  })
+
+  it('a switch that fails is one line with no handle, and the dial is sent nothing', async () => {
+    inOrca({ orca: { ...orca, run: async (file, args, timeoutMs) => { orcaRuns.push([file, args, timeoutMs]); return { code: 1 } } } })
+    const sent = seen.cable.calls.length
+    host().swipeEnded(CODEX, 'rest')
+    await swiped('failed')
+    expect(orcaRuns).toEqual([switched])
+    expect(said()).toEqual(['[device] swipe · failed'])
+    expect(seen.cable.calls).toHaveLength(sent)
+  })
+
+  it('a rest while a command runs on that terminal is dropped: busy', async () => {
+    let typed = () => {}
+    inOrca({ orca: { ...orca, run: (file, args, timeoutMs) => {
+      orcaRuns.push([file, args, timeoutMs])
+      return new Promise((done) => { typed = () => done({ code: 0 }) })
+    } } })
+    const words = host().sendTurn(CODEX, 'run the tests')
+    await vi.waitFor(() => expect(orcaRuns).toHaveLength(1))
+    host().swipeEnded(CODEX, 'rest')
+    await swiped('busy')
+    expect(orcaRuns).toHaveLength(1)
+    typed()
+    expect(await words).toEqual({ ok: true })
+  })
+
+  it('a superseded rest is counted and runs nothing', () => {
+    inOrca()
+    host().swipeEnded(CODEX, 'superseded')
+    expect(said()).toEqual(['[device] swipe · superseded'])
+    expect(orcaRuns).toEqual([])
+  })
+
+  it('an agent in the Claude app or WezTerm: a rest runs nothing', async () => {
+    const { port } = startHere({ orca: mac })
+    port.observed(hook('session-start', { hostHints: { __CFBundleIdentifier: 'com.anthropic.claudefordesktop', CLAUDE_CODE_HOST_SESSION_ID: 'local_1' } }))
+    port.observed(hook('session-start', { engine: 'codex', sessionId: 'cx-1', hostHints: { TERM_PROGRAM: 'WezTerm', WEZTERM_PANE: '3' } }))
+    attach(port)
+    expect(host().swipeSwitches(ID)).toBe(false)
+    expect(host().swipeSwitches(CODEX)).toBe(false)
+    // The dial asks for no rest on them; one asked all the same shows nothing.
+    host().swipeEnded(ID, 'rest')
+    host().swipeEnded(CODEX, 'rest')
+    await vi.waitFor(() => expect(said()).toEqual(['[device] swipe · failed', '[device] swipe · failed']))
+    expect(orcaRuns).toEqual([])
+  })
+
+  it('a tap still switches and, on macOS, brings Orca forward', async () => {
+    inOrca({ orca: mac })
+    expect(await host().openAgent(CODEX)).toBeUndefined()
+    expect(orcaRuns).toEqual([switched, ['/usr/bin/open', ['-b', 'com.stablyai.orca'], 10_000]])
+  })
+
+  it('no swipe line carries a handle, a session or an agent', async () => {
+    const codes = [0, 1]
+    inOrca({ orca: { ...orca, run: async (file, args, timeoutMs) => { orcaRuns.push([file, args, timeoutMs]); return { code: codes.shift() ?? 0 } } } })
+    host().swipeEnded(CODEX, 'rest')
+    await swiped('ok')
+    host().swipeEnded(CODEX, 'rest')
+    await swiped('failed')
+    host().swipeEnded(CODEX, 'superseded')
+    expect(said()).toEqual(['[device] swipe · ok', '[device] swipe · failed', '[device] swipe · superseded'])
+    expect(logs.filter((line) => [HANDLE, 'orca-1', 'cx-1', CODEX].some((secret) => line.includes(secret)))).toEqual([])
+  })
+
   it('no log line or backend request carries the command, a prompt\'s summary, a path, the transcript, a session id or a handle', async () => {
     const { core, port } = startHere()
     port.observed(hook('session-start', { engine: 'codex', sessionId: 'cx-1', hostHints: { ORCA_TERMINAL_HANDLE: HANDLE } }))
