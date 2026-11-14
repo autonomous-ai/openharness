@@ -25,6 +25,7 @@ export const LISTENER_MAX_CONNECTIONS = 16
 /** Messages dropped in a second, of every kind and connection together, past which a message is refused before its body
  *  is read: a sender that keeps to the rates is refused a few, a loop thousands. */
 export const LISTENER_DROPPED_PER_SECOND = 100
+const LISTENER_TIMEOUT_MS = 2_000
 
 /** What a handler returns for a body that is not a message of its type. */
 export const REFUSED: unique symbol = Symbol('refused')
@@ -183,6 +184,9 @@ export async function openDevicesListener({ path, handlers, log, now = () => per
     return null
   }
   listening.server.maxConnections = LISTENER_MAX_CONNECTIONS
+  // A message is a few dozen bytes on a local socket: a connection idle this long, or this long into its headers or its
+  // request, is holding one of the slots, not sending.
+  listening.server.timeout = listening.server.headersTimeout = listening.server.requestTimeout = LISTENER_TIMEOUT_MS
   // A listener never keeps its process up.
   listening.server.unref()
   // No path: a path holds the account's name.
