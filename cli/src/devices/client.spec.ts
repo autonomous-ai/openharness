@@ -98,17 +98,20 @@ describe('Devices DSH commands', () => {
 const NOT_RUNNING = 'Harness is not running on this computer. Run: harness start'
 const CLOSED = 'The connection to Harness on this computer closed.'
 const TOO_OLD = '{"error":"The Harness daemon on this computer is older than this command. Run: harness start --restart"}'
+type Told = Parameters<NonNullable<DialWatchDeps['tell']>>[0]
 function watch(over: Partial<DialWatchDeps> = {}, argv = ['--json']) {
   const socket = Object.assign(new EventEmitter(), { send: vi.fn(), close: vi.fn() })
   const stdin = Object.assign(new EventEmitter(), { resume: vi.fn(), pause: vi.fn() })
   const printed: string[] = [], errors: string[] = []
   const connect = vi.fn((_url: string, _headers?: Record<string, string>) => socket)
+  // The devices listener, faked: no test reaches a socket of its own. It takes every message unless a test says otherwise.
+  const tell = vi.fn(async (_message: Told) => true)
   const deps: DialWatchDeps = {
-    port: 18473, machineId: async () => 'local', connect, stdin,
+    port: 18473, machineId: async () => 'local', connect, stdin, tell,
     print: line => { printed.push(line) }, printError: line => { errors.push(line) }, ...over,
   }
   const done = runDialWatch(argv, deps)
-  return { done, socket, stdin, printed, errors, connect }
+  return { done, socket, stdin, printed, errors, connect, tell: deps.tell! as typeof tell }
 }
 // machineId() is awaited before the socket opens: wait until it has.
 async function opened(socket: EventEmitter) {
@@ -295,115 +298,220 @@ describe('harness hardware watch', () => {
 })
 
 // What the Harness Device app writes on the watch's stdin, one line each time the app in front changes.
-const FRONT_FEATURES = ['openclaw-local', 'dial-watch', 'dial-front']
 const frontLine = (value: string) => `${JSON.stringify({ front: value })}\n`
 const front = (run: ReturnType<typeof watch>, value: string) => run.stdin.emit('data', frontLine(value))
-const sentFronts = (run: ReturnType<typeof watch>) => run.socket.send.mock.calls
-  .map(([data]) => JSON.parse(data)).filter(frame => frame.type === 'dial_front').map(frame => frame.payload)
+const told = (run: ReturnType<typeof watch>) => run.tell.mock.calls.map(([message]) => message)
+const apps = (run: ReturnType<typeof watch>) => told(run).map(message => message.app)
+const coreFrames = (run: ReturnType<typeof watch>) => run.socket.send.mock.calls.map(([data]) => JSON.parse(data).type)
+// One turn of the event loop, no time: every tell already answered has been seen by the watch.
+const turn = () => new Promise(resolve => setImmediate(resolve))
+/** A devices listener that answers only when the test says, one tell at a time. */
+function heldListener() {
+  const answers: ((taken: boolean) => void)[] = []
+  const tell = vi.fn((_message: Told) => new Promise<boolean>(resolve => { answers.push(resolve) }))
+  return { tell, answer: async (taken: boolean) => { answers.shift()!(taken); await turn() } }
+}
 
 describe('harness hardware watch: the app in front', () => {
-  it('a front line becomes dial_front with the app id', async () => {
+  it('a front line is told to the devices listener as an app id', async () => {
     const run = watch()
     await opened(run.socket)
-    connected(run.socket, FRONT_FEATURES)
+    connected(run.socket, ['dial-watch'])
     front(run, 'com.mitchellh.ghostty')
-    expect(JSON.parse(run.socket.send.mock.calls.at(-1)![0])).toEqual({ type: 'dial_front', payload: { app: 'ghostty' } })
+    await turn()
+    expect(told(run)).toEqual([{ type: 'front', app: 'ghostty' }])
     front(run, 'Code.exe')
-    expect(sentFronts(run)).toEqual([{ app: 'ghostty' }, { app: 'vscode' }])
+    await turn()
+    expect(told(run)).toEqual([{ type: 'front', app: 'ghostty' }, { type: 'front', app: 'vscode' }])
     await stillRunning(run)
   })
-  it('an unknown app is sent as none', async () => {
+  it('an unknown app is told as none', async () => {
     const run = watch()
-    await opened(run.socket)
-    connected(run.socket, FRONT_FEATURES)
     front(run, 'com.apple.Safari')
-    expect(sentFronts(run)).toEqual([{ app: 'none' }])
+    await turn()
+    expect(told(run)).toEqual([{ type: 'front', app: 'none' }])
     await stillRunning(run)
   })
   it('the raw value is never sent or printed', async () => {
     const raw = /mitchellh|code\.exe|safari/i
-    const run = watch()
+    // A listener that refuses none, so a tell that fails is read too.
+    const tell = vi.fn(async (message: Told) => message.app !== 'none')
+    const run = watch({ tell })
     front(run, 'com.mitchellh.ghostty')
     await opened(run.socket)
-    connected(run.socket, FRONT_FEATURES)
+    connected(run.socket, ['openclaw-local', 'dial-watch', 'dial-front'])
     front(run, 'Code.exe')
+    await turn()
     front(run, 'com.apple.Safari')
+    await turn()
     run.stdin.emit('data', 'com.mitchellh.ghostty\n')
     run.stdin.emit('data', `{"front":"Code.exe","pad":"${'x'.repeat(2000)}"}\n`)
     dial(run.socket, { attached: true, fw: '0.0.95' })
-    const older = watch()
-    await opened(older.socket)
-    connected(older.socket, ['openclaw-local', 'dial-watch'])
-    front(older, 'Code.exe')
-    for (const each of [run, older]) {
-      each.socket.emit('close', 1006, '')
-      expect(await each.done).toBe(3)
-      const out = [...each.socket.send.mock.calls.map(([data]) => String(data)), ...each.printed, ...each.errors]
-      expect(out.filter(line => raw.test(line))).toEqual([])
+    await turn()
+    run.socket.emit('close', 1006, '')
+    expect(await run.done).toBe(3)
+    const out = [...tell.mock.calls.map(([message]) => JSON.stringify(message)), ...run.socket.send.mock.calls.map(([data]) => String(data)), ...run.printed, ...run.errors]
+    expect(out.filter(line => raw.test(line))).toEqual([])
+    expect(apps(run)).toEqual(['ghostty', 'vscode', 'none', 'none'])
+  })
+  it("nothing of the app in front goes on the core's socket", async () => {
+    const run = watch()
+    front(run, 'com.mitchellh.ghostty')
+    await opened(run.socket)
+    // A daemon that still names the old door is sent nothing through it.
+    connected(run.socket, ['openclaw-local', 'dial-watch', 'dial-front'])
+    front(run, 'Code.exe')
+    dial(run.socket, { attached: true })
+    await turn()
+    expect(apps(run)).toEqual(['ghostty', 'vscode', 'vscode'])
+    expect(coreFrames(run)).toEqual(['machine_select'])
+    await stillRunning(run)
+  })
+  it('the same app twice is told once; Safari then Finder is one none', async () => {
+    const run = watch()
+    for (const value of ['com.mitchellh.ghostty', 'ghostty', 'com.apple.Safari', 'com.apple.finder', 'com.mitchellh.ghostty']) {
+      front(run, value)
+      await turn()
     }
-    expect(sentFronts(run)).toEqual([{ app: 'ghostty' }, { app: 'vscode' }, { app: 'none' }])
-  })
-  it('the same app twice sends one frame; Safari then Finder sends one none', async () => {
-    const run = watch()
-    await opened(run.socket)
-    connected(run.socket, FRONT_FEATURES)
-    front(run, 'com.mitchellh.ghostty')
-    front(run, 'ghostty')
-    front(run, 'com.apple.Safari')
-    front(run, 'com.apple.finder')
-    front(run, 'com.mitchellh.ghostty')
-    expect(sentFronts(run)).toEqual([{ app: 'ghostty' }, { app: 'none' }, { app: 'ghostty' }])
+    expect(apps(run)).toEqual(['ghostty', 'none', 'ghostty'])
     await stillRunning(run)
   })
-  it('a front line that arrives before connected is sent once after it', async () => {
-    const run = watch()
-    front(run, 'com.mitchellh.ghostty')
+  it('a front line is told at once, before the daemon has answered', async () => {
+    const waiting = watch({ machineId: () => new Promise(() => {}) })
+    front(waiting, 'com.mitchellh.ghostty')
+    expect(told(waiting)).toEqual([{ type: 'front', app: 'ghostty' }])
+    await stillRunning(waiting)
+    const unanswered = watch()
+    await opened(unanswered.socket)
+    front(unanswered, 'Code.exe')
+    expect(told(unanswered)).toEqual([{ type: 'front', app: 'vscode' }])
+    await stillRunning(unanswered)
+  })
+  it('with no listener the line is ignored, and the next change is told', async () => {
+    const answers = [false, true]
+    const tell = vi.fn(async (_message: Told) => answers.shift() ?? true)
+    const run = watch({ tell })
     await opened(run.socket)
+    connected(run.socket, ['dial-watch'])
+    front(run, 'com.mitchellh.ghostty')
+    await turn()
+    // Not taken, and not tried again by itself.
+    expect(apps(run)).toEqual(['ghostty'])
     front(run, 'Code.exe')
-    expect(sentFronts(run)).toEqual([])
-    connected(run.socket, FRONT_FEATURES)
-    expect(sentFronts(run)).toEqual([{ app: 'vscode' }])
-    front(run, 'Code.exe')
-    expect(sentFronts(run)).toEqual([{ app: 'vscode' }])
+    await turn()
+    front(run, 'com.mitchellh.ghostty')
+    await turn()
+    expect(apps(run)).toEqual(['ghostty', 'vscode', 'ghostty'])
+    expect(run.printed).toEqual([])
+    expect(run.errors).toEqual([])
     await stillRunning(run)
   })
-  it('with a daemon that has no dial-front, front lines send nothing', async () => {
+  it('when dial_status turns attached the current app is told again, also one the listener took before; with no front line read yet nothing is told', async () => {
     const run = watch()
-    front(run, 'com.mitchellh.ghostty')
     await opened(run.socket)
-    connected(run.socket, ['openclaw-local', 'dial-watch'])
-    front(run, 'Code.exe')
-    expect(run.socket.send.mock.calls.map(([data]) => JSON.parse(data).type)).toEqual(['machine_select'])
+    connected(run.socket, ['dial-watch'])
+    dial(run.socket, { attached: true })
+    await turn()
+    expect(told(run)).toEqual([])
+    front(run, 'com.mitchellh.ghostty')
+    await turn()
+    expect(apps(run)).toEqual(['ghostty'])
+    // Still attached, then gone: nothing new for the devices.
+    dial(run.socket, { attached: true, fw: '0.0.95' })
+    dial(run.socket, { attached: false })
+    await turn()
+    expect(apps(run)).toEqual(['ghostty'])
+    dial(run.socket, { attached: true, fw: '0.0.95' })
+    await turn()
+    expect(apps(run)).toEqual(['ghostty', 'ghostty'])
     await stillRunning(run)
+    // The first status says attached.
+    const first = watch()
+    front(first, 'Code.exe')
+    await turn()
+    await opened(first.socket)
+    connected(first.socket, ['dial-watch'])
+    dial(first.socket, { attached: true })
+    await turn()
+    expect(apps(first)).toEqual(['vscode', 'vscode'])
+    await stillRunning(first)
+    // The dial attaches while the same app is being told, perhaps before the devices listen: it is told again after.
+    const held = heldListener()
+    const during = watch({ tell: held.tell })
+    await opened(during.socket)
+    connected(during.socket, ['dial-watch'])
+    front(during, 'com.mitchellh.ghostty')
+    dial(during.socket, { attached: true })
+    expect(apps(during)).toEqual(['ghostty'])
+    await held.answer(false)
+    expect(apps(during)).toEqual(['ghostty', 'ghostty'])
+    await held.answer(true)
+    expect(apps(during)).toEqual(['ghostty', 'ghostty'])
+    await stillRunning(during)
+  })
+  it('two changes while a tell is under way: the newest is told when it ends, the one between is skipped', async () => {
+    const held = heldListener()
+    const run = watch({ tell: held.tell })
+    front(run, 'com.mitchellh.ghostty')
+    front(run, 'Code.exe')
+    front(run, 'cursor')
+    expect(apps(run)).toEqual(['ghostty'])
+    await held.answer(true)
+    expect(apps(run)).toEqual(['ghostty', 'cursor'])
+    // Away and back to the app being told: the listener has it when the tell ends.
+    front(run, 'Code.exe')
+    front(run, 'cursor')
+    await held.answer(true)
+    expect(apps(run)).toEqual(['ghostty', 'cursor'])
+    await stillRunning(run)
+  })
+  it('after stdin closes nothing is told', async () => {
+    const held = heldListener()
+    const run = watch({ tell: held.tell })
+    await opened(run.socket)
+    connected(run.socket, ['dial-watch'])
+    front(run, 'com.mitchellh.ghostty')
+    front(run, 'Code.exe')
+    run.stdin.emit('end')
+    expect(await run.done).toBe(0)
+    await held.answer(true)
+    front(run, 'cursor')
+    dial(run.socket, { attached: true })
+    await turn()
+    expect(apps(run)).toEqual(['ghostty'])
   })
   it('a line in two chunks is one line; a 2000-byte line and a line that is not JSON are dropped, and the next line still works', async () => {
     const run = watch()
     await opened(run.socket)
-    connected(run.socket, FRONT_FEATURES)
+    connected(run.socket, ['dial-watch'])
     run.stdin.emit('data', '{"front":"com.mitch')
     run.stdin.emit('data', 'ellh.ghostty"}\n')
-    expect(sentFronts(run)).toEqual([{ app: 'ghostty' }])
-    // Each would send vscode if it were read.
+    await turn()
+    expect(apps(run)).toEqual(['ghostty'])
+    // Each would tell vscode if it were read.
     const long = `{"front":"Code.exe","pad":"${'x'.repeat(2000)}"}\n`
     run.stdin.emit('data', long)
     for (let at = 0; at < long.length; at += 500) run.stdin.emit('data', Buffer.from(long.slice(at, at + 500)))
     for (const line of ['Code.exe\n', '{"front":5}\n', '{}\n', 'null\n', '\n']) run.stdin.emit('data', line)
-    expect(sentFronts(run)).toEqual([{ app: 'ghostty' }])
+    await turn()
+    expect(apps(run)).toEqual(['ghostty'])
     // 1024 bytes is the longest line read.
     const longest = `{"front":"Code.exe","pad":"${'x'.repeat(1024 - 29)}"}`
     expect(Buffer.byteLength(longest)).toBe(1024)
     const bytes = Buffer.from(`${longest}\n`)
     run.stdin.emit('data', bytes.subarray(0, 700))
     run.stdin.emit('data', bytes.subarray(700))
-    expect(sentFronts(run)).toEqual([{ app: 'ghostty' }, { app: 'vscode' }])
+    await turn()
+    expect(apps(run)).toEqual(['ghostty', 'vscode'])
     run.stdin.emit('data', `${frontLine('com.apple.Safari')}${frontLine('com.mitchellh.ghostty')}`)
-    expect(sentFronts(run)).toEqual([{ app: 'ghostty' }, { app: 'vscode' }, { app: 'none' }, { app: 'ghostty' }])
+    await turn()
+    expect(apps(run)).toEqual(['ghostty', 'vscode', 'none', 'ghostty'])
     await stillRunning(run)
   })
   it('dial status lines print as before, and stdin closing still exits 0', async () => {
     const run = watch()
     await opened(run.socket)
-    connected(run.socket, FRONT_FEATURES)
+    connected(run.socket, ['dial-watch'])
     dial(run.socket, { attached: true, fw: '0.0.95' })
     front(run, 'com.mitchellh.ghostty')
     dial(run.socket, { attached: true, fw: '0.0.95' })
