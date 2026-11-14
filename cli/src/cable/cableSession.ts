@@ -718,6 +718,8 @@ export class CableSession {
   /** A remote attachment can take seconds. It must not hold the next pane's focus behind it. */
   private appMachineTail: Promise<void> = Promise.resolve()
   private appFocusGeneration = 0
+  /** The latest person's prompt: one whose list read ends after a later prompt came does nothing. */
+  private promptGeneration = 0
   /** When the app-driven switch began — see APP_SWITCH_REPAINT_MS. */
   private drivingSince = 0
   /** While the app is rebuilding the dial's machine/list state, focus reports describe that rebuild. */
@@ -3293,9 +3295,13 @@ export class CableSession {
    */
   async followPrompt(agentId: string): Promise<void> {
     if (!this.isConnected) return
+    // Taken before the read: reads can end out of order, and an earlier prompt's must not land after a later prompt's,
+    // even a later one for the agent already shown.
+    const generation = ++this.promptGeneration
     // Already there: a stuck engine repeating its event costs no list read.
     if (agentId === this.desiredFocus && !this.appFocusUnsent) return
     const { agents } = await this.agentSnapshot()
+    if (generation !== this.promptGeneration) return
     if (!agents.some((a) => a.id === agentId)) return this.host.promptFollowed?.('no-tile')
     this.host.promptFollowed?.('moved')
     await this.followApp(this.host.localMachine().id, agentId)
