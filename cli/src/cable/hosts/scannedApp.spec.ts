@@ -5,23 +5,35 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { RunningProcess } from '../../lib/sessionSearch/externals/types.js'
 import { ObservedSource, type ObservedDeps } from './observed.js'
 import {
   appRoots, learnApps, parseProcessNames, readBundleId, readProcessNames, scannedApps, type ProcessName, type ScannedAppDeps,
 } from './scannedApp.js'
 
-// The patient exec, as the scan's default `ps` gets it: each call is kept, and answered with a made-up table.
-const patient = vi.hoisted(() => ({ calls: [] as unknown[][] }))
-vi.mock('../../lib/patientExec.js', async (importOriginal) => ({
-  ...await importOriginal<typeof import('../../lib/patientExec.js')>(),
-  patientExec: (wrapped: unknown) => (file: string, args: readonly string[], options: object,
-    done: (error: null, stdout: string, stderr: string) => void) => {
-    patient.calls.push([wrapped, file, args, options])
-    done(null, '  100     1 claude\n', '')
-  },
-}))
+// The patient exec, as the scan's default reads get it: each call is kept, and a command a test gives an answer for is
+// answered with it; any other runs for real.
+const patient = vi.hoisted(() => ({ calls: [] as unknown[][], answers: {} as Record<string, string> }))
+vi.mock('../../lib/patientExec.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../lib/patientExec.js')>()
+  return {
+    ...real,
+    patientExec: (wrapped: Parameters<typeof real.patientExec>[0]) => {
+      const through = real.patientExec(wrapped)
+      return (...call: Parameters<ReturnType<typeof real.patientExec>>) => {
+        const [file, args, options, done] = call
+        patient.calls.push([wrapped, file, args, options])
+        if (Object.hasOwn(patient.answers, file)) done(null, patient.answers[file], '')
+        else through(...call)
+      }
+    },
+  }
+})
+afterEach(() => {
+  patient.calls.length = 0
+  patient.answers = {}
+})
 
 const HOME = '/Users/someone'
 const ROOTS = appRoots(HOME)
@@ -284,7 +296,7 @@ describe('the process table the scan reads', () => {
   })
 
   it.skipIf(process.platform === 'win32')('runs ps through the patient exec: a held loop never reads as an empty table', async () => {
-    patient.calls.length = 0
+    patient.answers = { ps: '  100     1 claude\n' }
     expect(await learnApps([100])).toEqual(new Map())
     expect(patient.calls).toEqual([[execFile, 'ps', ['-axo', 'pid=,ppid=,comm='], { timeout: 3_000, maxBuffer: 1024 * 1024 }]])
   })
@@ -339,6 +351,14 @@ describe('readBundleId', () => {
     const exec = vi.fn(async () => 'com.mitchellh.ghostty\n')
     expect(await readBundleId('/Applications/Ghostty.app', exec)).toBe('com.mitchellh.ghostty')
     expect(exec.mock.calls).toEqual([['plutil', ['-extract', 'CFBundleIdentifier', 'raw', '-o', '-', '/Applications/Ghostty.app/Contents/Info.plist'], 1000]])
+  })
+
+  it('runs plutil through the patient exec: a held loop never reads as a bundle with no id', async () => {
+    patient.answers = { plutil: 'com.mitchellh.ghostty\n' }
+    expect(await readBundleId('/Applications/Ghostty.app')).toBe('com.mitchellh.ghostty')
+    expect(patient.calls).toEqual([[execFile, 'plutil',
+      ['-extract', 'CFBundleIdentifier', 'raw', '-o', '-', '/Applications/Ghostty.app/Contents/Info.plist'],
+      { timeout: 1_000, maxBuffer: 1024 }]])
   })
 
   it('an answer that is no bundle id is none', async () => {
