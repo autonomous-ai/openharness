@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { DialRing, RING_PLACES } from './select.js'
+import { AppRings, DialRing, RING_PLACES } from './select.js'
 import type { HostAgent } from './types.js'
 
 function agent(id: string, over: Partial<HostAgent> = {}): HostAgent {
@@ -213,5 +213,116 @@ describe('DialRing', () => {
     const input = [agent('b', { lastActivityAt: 1 }), agent('a', { lastActivityAt: 2 })]
     new DialRing().select(input)
     expect(ids(input)).toEqual(['b', 'a'])
+  })
+})
+
+describe('AppRings', () => {
+  const at = (app: string) => (a: HostAgent): HostAgent => ({ ...a, app })
+  const ringIds = (rings: AppRings, app: string) => ids(rings.ring(app).rows)
+
+  it('one ring per app, each over its own agents only', () => {
+    const rings = new AppRings()
+    const [a1, a2, a3, a4] = row(4)
+    rings.update([at('ghostty')(a1), at('orca')(a2), at('ghostty')(a3), at('orca')(a4)])
+    expect(ringIds(rings, 'ghostty')).toEqual(['a1', 'a3'])
+    expect(ringIds(rings, 'orca')).toEqual(['a2', 'a4'])
+    expect(rings.ring('vscode')).toEqual({ rows: [], total: 0 })
+  })
+
+  it('inside a ring the order is fixed: a state change moves nobody, a new agent goes to the end, an ended one closes up', () => {
+    const rings = new AppRings()
+    const [a, b, c] = row(3).map(at('ghostty'))
+    const others = row(2, 'o').map(at('orca'))
+    rings.update([a, b, c, ...others])
+    rings.update([{ ...working(c), lastActivityAt: 99 }, needs(b), a, needs(others[1])])
+    expect(ringIds(rings, 'ghostty')).toEqual(['a1', 'a2', 'a3'])
+    rings.update([at('ghostty')(agent('n')), a, b, c, ...row(3, 'o').map(at('orca'))])
+    expect(ringIds(rings, 'ghostty')).toEqual(['a1', 'a2', 'a3', 'n'])
+    rings.update([at('ghostty')(agent('n')), a, c])
+    expect(ringIds(rings, 'ghostty')).toEqual(['a1', 'a3', 'n'])
+  })
+
+  it('each ring holds at most 16; total is the app\'s count', () => {
+    const rings = new AppRings()
+    rings.update([...row(20).map(at('ghostty')), ...row(3, 'o').map(at('orca'))])
+    expect(rings.ring('ghostty').rows).toHaveLength(RING_PLACES)
+    expect(rings.ring('ghostty').total).toBe(20)
+    expect(ringIds(rings, 'orca')).toEqual(['o1', 'o2', 'o3'])
+    expect(rings.ring('orca').total).toBe(3)
+  })
+
+  it('a ring is dropped when its app empties, and the app starts a new ring when it comes back', () => {
+    const rings = new AppRings()
+    const [a, b] = row(2).map(at('ghostty'))
+    const o = at('orca')(agent('o'))
+    rings.update([a, b, o])
+    rings.update([b, a, o])
+    expect(ringIds(rings, 'ghostty')).toEqual(['a1', 'a2'])
+    rings.update([o])
+    expect(rings.ring('ghostty')).toEqual({ rows: [], total: 0 })
+    // The old ring would keep a1 first: a new one takes the registry's order.
+    rings.update([b, a, o])
+    expect(ringIds(rings, 'ghostty')).toEqual(['a2', 'a1'])
+  })
+
+  it('the apps keep their order: a new app at the end, a gone app closes up', () => {
+    const rings = new AppRings()
+    const g = at('ghostty')(agent('g'))
+    const o = at('orca')(agent('o'))
+    const v = at('vscode')(agent('v'))
+    const order = () => rings.apps().map((x) => x.id)
+    rings.update([o, g])
+    expect(order()).toEqual(['orca', 'ghostty'])
+    rings.update([v, g, o])
+    expect(order()).toEqual(['orca', 'ghostty', 'vscode'])
+    rings.update([v, o])
+    expect(order()).toEqual(['orca', 'vscode'])
+    rings.update([g, v, o])
+    expect(order()).toEqual(['orca', 'vscode', 'ghostty'])
+  })
+
+  it('count and waiting follow the agents', () => {
+    const rings = new AppRings()
+    const list = [...row(18).map(at('ghostty')), at('orca')(agent('o'))]
+    list[0] = needs(list[0])
+    list[17] = needs(list[17])
+    rings.update(list)
+    expect(rings.apps()).toEqual([
+      { id: 'ghostty', count: 18, waiting: 2 },
+      { id: 'orca', count: 1, waiting: 0 },
+    ])
+    expect([...rings.counts()]).toEqual([['ghostty', 18], ['orca', 1]])
+    rings.update([needs(list[18]), list[1]])
+    expect(rings.apps()).toEqual([
+      { id: 'ghostty', count: 1, waiting: 0 },
+      { id: 'orca', count: 1, waiting: 1 },
+    ])
+    expect([...rings.counts()]).toEqual([['ghostty', 1], ['orca', 1]])
+  })
+
+  it('an agent whose app changes leaves its ring and joins the other at the end', () => {
+    const rings = new AppRings()
+    const s = agent('s', { lastActivityAt: 50 })
+    const t = agent('t')
+    const [g1, g2] = row(2, 'g').map(at('ghostty'))
+    // The open scan lists s in terminal until its first hook says it runs in Ghostty.
+    rings.update([s, t, g1, g2])
+    expect(ringIds(rings, 'terminal')).toEqual(['s', 't'])
+    rings.update([at('ghostty')(s), t, g1, g2])
+    expect(ringIds(rings, 'terminal')).toEqual(['t'])
+    expect(ringIds(rings, 'ghostty')).toEqual(['g1', 'g2', 's'])
+    expect(rings.apps()).toEqual([
+      { id: 'terminal', count: 1, waiting: 0 },
+      { id: 'ghostty', count: 3, waiting: 0 },
+    ])
+  })
+
+  it('the map is bounded: 20 agents with 20 unknown app ids make one terminal ring', () => {
+    const rings = new AppRings()
+    rings.update(row(20).map((a, i) => at(`unknown-${i}`)(a)))
+    expect(rings.apps()).toEqual([{ id: 'terminal', count: 20, waiting: 0 }])
+    expect(rings.ring('terminal').rows).toHaveLength(RING_PLACES)
+    expect(rings.ring('terminal').total).toBe(20)
+    expect(rings.ring('unknown-0')).toEqual({ rows: [], total: 0 })
   })
 })
