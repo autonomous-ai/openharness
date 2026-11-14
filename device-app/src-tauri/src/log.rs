@@ -185,6 +185,18 @@ mod tests {
     }
 
     #[test]
+    fn a_line_holds_no_control_character() {
+        // A CLI's error code with a newline in it would forge a line; a terminal's colours from stderr are noise.
+        let dir = tempfile::tempdir().unwrap();
+        let forged = "sign-in: result error X\n2026-11-13T00:00:00Z \x1b[31msign-in: result success\x1b[0m\x07\r\t";
+        FileLog::new(dir.path().to_path_buf(), clock(LAST_SECOND)).line(forged);
+        assert_eq!(
+            fs::read_to_string(dir.path().join("app-20261113.log")).unwrap(),
+            "2026-11-13T23:59:59Z sign-in: result error X2026-11-13T00:00:00Z sign-in: result success\n"
+        );
+    }
+
+    #[test]
     fn the_home_folder_is_written_as_a_tilde() {
         let home = home_rule("/Users/person");
         let cases = [
