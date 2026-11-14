@@ -38,6 +38,13 @@ describe('rootProcesses', () => {
     expect(rootProcesses(ROOT, [named(1, 0, 1), named(40, 1, 40), named(41, 40, 40), named(50, 41, 40)], 50)).toEqual({ groups: [], pids: [40], all: [40] })
   })
 
+  it('names nothing but a test root: an empty path, `/` or a TMPDIR would name other runs\' processes, or every one', () => {
+    const table = [...OWN, row(100, 1, 100, 'node /tmp/htmux-abc/bin/codex app-server'), row(110, 1, 110, 'node /x')]
+    for (const root of ['', '/', '/tmp', 'htmux-abc', '/tmp/htmux-abc/bin']) {
+      expect(() => rootProcesses(root, table, 50), root).toThrow(`not a test root (isolatedTmux's <tmp>/htmux-XXXXXX): ${root}`)
+    }
+  })
+
   it('a root whose path begins another\'s is not that root, nor is the root named alone', () => {
     const table = [...OWN, row(100, 1, 100, 'node /tmp/htmux-abcd/bin/codex app-server'), row(110, 1, 110, 'rm -rf /tmp/htmux-abc')]
     expect(rootProcesses(ROOT, table, 50)).toEqual({ groups: [], pids: [], all: [] })
