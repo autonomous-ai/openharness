@@ -3,7 +3,7 @@
 use crate::types::{Clock, Log};
 use regex::Regex;
 use std::fs;
-use std::io::Write;
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, LazyLock, Mutex};
 
@@ -42,6 +42,21 @@ impl FileLog {
             }
         }
     }
+
+    /// The folder and its files are the person's alone: on Linux the logs folder is inside the app's data folder,
+    /// beside state.json.
+    fn append(&self, name: &str, line: &str) -> io::Result<()> {
+        let mut folder = fs::DirBuilder::new();
+        folder.recursive(true);
+        #[cfg(unix)]
+        std::os::unix::fs::DirBuilderExt::mode(&mut folder, 0o700);
+        folder.create(&self.dir)?;
+        let mut options = fs::OpenOptions::new();
+        options.create(true).append(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        options.open(self.dir.join(name))?.write_all(line.as_bytes())
+    }
 }
 
 impl Log for FileLog {
@@ -56,12 +71,8 @@ impl Log for FileLog {
         }
         let (hours, minutes, seconds) = (now % DAY / 3600, now % 3600 / 60, now % 60);
         let stamp = format!("{}T{hours:02}:{minutes:02}:{seconds:02}Z", dashed(&ymd(today)));
-        let _ = fs::create_dir_all(&self.dir)
-            .and_then(|()| {
-                fs::OpenOptions::new().create(true).append(true).open(self.dir.join(format!("app-{}.log", ymd(today))))
-            })
-            // Printable first: a newline would forge a line, and a code inside a secret would hide it from redact.
-            .and_then(|mut file| file.write_all(format!("{stamp} {}\n", redact(&printable(text))).as_bytes()));
+        // Printable first: a newline would forge a line, and a code inside a secret would hide it from redact.
+        let _ = self.append(&format!("app-{}.log", ymd(today)), &format!("{stamp} {}\n", redact(&printable(text))));
     }
 }
 
@@ -267,5 +278,11 @@ mod tests {
         let dir = root.path().join("Logs").join("ai.autonomous.harness.device");
         FileLog::new(dir.clone(), clock(LAST_SECOND)).line("first");
         assert_eq!(names(&dir), ["app-20261113.log"]);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = |path: &std::path::Path| fs::metadata(path).unwrap().permissions().mode() & 0o777;
+            assert_eq!((mode(&dir), mode(&dir.join("app-20261113.log"))), (0o700, 0o600));
+        }
     }
 }
