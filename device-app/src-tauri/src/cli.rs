@@ -369,6 +369,7 @@ fn ended(name: &str, code: Option<i32>, stderr: &str) -> String {
 mod tests {
     use super::*;
     use crate::testing::{Fake, wait_gone};
+    use crate::types::MemoryLog;
     use std::env;
     use std::fs;
     use std::time::Instant;
@@ -475,6 +476,31 @@ mod tests {
             assert_eq!(child_env(home, system, Some(OsStr::new(locale))), [with_system.clone()], "{locale}");
         }
         assert_eq!(child_env(home, None, None), [path("/Users/someone/.local/bin"), c_utf8]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn each_run_looks_for_the_cli_again() {
+        let home = tempfile::tempdir().unwrap();
+        let home = home.path();
+        let runtime = home.join(".harness").join("runtime");
+        put(home.join(".harness").join("cli").join("cli.js"));
+        // Two Nodes that end apart, linked rather than written (testing::Fake on ETXTBSY).
+        let (old, new) = (runtime.join("node-old"), runtime.join("node-new"));
+        fs::create_dir_all(&runtime).unwrap();
+        std::os::unix::fs::symlink("/usr/bin/true", &old).unwrap();
+        std::os::unix::fs::symlink("/usr/bin/false", &new).unwrap();
+        fs::write(runtime.join("current-node"), old.display().to_string()).unwrap();
+        let cli = HarnessCli::new(find_cli(home, None, None).unwrap(), Arc::new(MemoryLog::default()));
+        let status = ["auth", "status", "--json"];
+        assert_eq!(cli.run(&status, WAIT).unwrap().code, Some(0));
+        // The CLI's updater repoints it while the app runs.
+        fs::write(runtime.join("current-node"), new.display().to_string()).unwrap();
+        assert_eq!(cli.run(&status, WAIT).unwrap().code, Some(1));
+        // Gone by the time of a run: not found, as when it was never there.
+        fs::remove_file(runtime.join("current-node")).unwrap();
+        assert_eq!(cli.run(&status, WAIT).unwrap_err().kind(), io::ErrorKind::NotFound);
+        assert_eq!(cli.spawn(&WATCH).err().map(|error| error.kind()), Some(io::ErrorKind::NotFound));
     }
 
     #[cfg(unix)]
