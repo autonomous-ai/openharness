@@ -33,6 +33,15 @@ it('refuses a native hook destination outside the test, including the OpenCode s
   expect(() => assertHooksContained(d.root, d.env)).toThrow('supported hook engines')
 })
 
+it('refuses to start from a cli.js with no notify.mjs beside it, before any process starts', async () => {
+  const alone = join(scratch, 'alone', 'cli.js')
+  mkdirSync(dirname(alone), { recursive: true })
+  writeFileSync(alone, '')
+  const d = daemon = await IsolatedDaemon.create({ scriptPath: alone })
+  await expect(d.start()).rejects.toThrow(`${alone} has no notify.mjs beside it`)
+  expect(d.pid).toBeNull()
+})
+
 it('becomes ready and serves control while startup hook preparation is still waiting', async () => {
   const d = daemon = await IsolatedDaemon.create({ scriptPath: bundle })
   onTestFailed(() => console.log(d.log()))
