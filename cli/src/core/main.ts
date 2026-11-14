@@ -2270,7 +2270,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const observedHook = createObservedHook({
     // Monotonic: the rate limit measures intervals, which a wall clock set back would stretch.
     now: () => performance.now(),
-    forward: (observed) => { const devices = ports.devices; if (!devices) return false; devices.observed(observed); return true },
+    forward: (observed) => ports.devices?.observed(observed) ?? false,
   })
   const { server: hookServer, port: hookPort, localSocket } = await startHookServer(daemonPort(), {
     onAutonomousDeviceRequest: async (method, target, body) => {

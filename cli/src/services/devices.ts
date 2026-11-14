@@ -678,8 +678,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     toDial(event)
   }
   const port: DevicesPort = {
-    // A paneless session's hook event, as the core checked it: dropped while the observed source is switched off.
-    observed: (event) => part.call('observed', () => observed?.ingest(event)),
+    // A paneless session's hook event, as the core checked it: taken, and dropped here while the observed source is
+    // switched off.
+    observed: (event) => { part.call('observed', () => observed?.ingest(event)); return true },
     // Every card bound for the Wi-Fi devices goes down the cable too, translated once: a new kind of card
     // reaches the dial the day it reaches the backend's devices.
     // An engine's question takes the place of a Swarm wait on the devices, which shows again once it closes (cable/swarmWaits.ts).

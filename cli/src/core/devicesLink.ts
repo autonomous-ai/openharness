@@ -62,7 +62,7 @@ const isFrame = (value: unknown): value is { type: string; payload: Record<strin
 export function createDevicesLink(deps: DevicesLinkDeps) {
   const { core } = deps
   const log = deps.log ?? ((line: string) => console.warn(line))
-  const event = (kind: string, payload: Record<string, unknown> = {}): void => { deps.notify({ type: 'service_event', payload: { ...payload, kind } }) }
+  const event = (kind: string, payload: Record<string, unknown> = {}): boolean => deps.notify({ type: 'service_event', payload: { ...payload, kind } })
   /** An answer from the devices, or the port's fallback when there was none (down, slow, or failed). */
   const answered = <T>(answer: Record<string, unknown>, member: keyof typeof DEVICES_FALLBACKS, read: (answer: Record<string, unknown>) => T): T =>
     typeof answer.error === 'string' ? fallback<T>(member) : read(answer)
