@@ -1,5 +1,7 @@
 /* The window's look, from the desktop design doc's tokens and type. :root is light; the system's dark appearance
-   sets dark unless a data-theme says otherwise, which the gallery uses to show both. */
+   sets dark unless a data-theme says otherwise, which the gallery uses to show both. Hover and press fills are
+   precomputed, since color-mix() needs WebKit 16.2 and the app runs from macOS 13.0: --control with --text 6% / 12%,
+   --accent with black 8% / 16%. */
 :root,
 [data-theme='light'] {
   color-scheme: light;
@@ -8,7 +10,11 @@
   --muted: #62615b;
   --rim: rgba(0, 0, 0, 0.08);
   --control: #f2f2f4;
+  --control-hover: #e5e5e7;
+  --control-press: #d8d8da;
   --accent: #2f5bea;
+  --accent-hover: #2b54d7;
+  --accent-press: #274cc5;
   --focus: #2f5bea;
   --danger: #b3261e;
 }
@@ -21,7 +27,11 @@
     --muted: #a8a8a2;
     --rim: rgba(255, 255, 255, 0.12);
     --control: #303030;
+    --control-hover: #3c3c3c;
+    --control-press: #484848;
     --accent: #2f5bea;
+    --accent-hover: #2b54d7;
+    --accent-press: #274cc5;
     --focus: #8ba9ff;
     --danger: #ff7068;
   }
@@ -34,7 +44,11 @@
   --muted: #a8a8a2;
   --rim: rgba(255, 255, 255, 0.12);
   --control: #303030;
+  --control-hover: #3c3c3c;
+  --control-press: #484848;
   --accent: #2f5bea;
+  --accent-hover: #2b54d7;
+  --accent-press: #274cc5;
   --focus: #8ba9ff;
   --danger: #ff7068;
 }
@@ -165,11 +179,11 @@ body {
 }
 
 .button:hover {
-  background: color-mix(in srgb, var(--control), var(--text) 6%);
+  background: var(--control-hover);
 }
 
 .button:active {
-  background: color-mix(in srgb, var(--control), var(--text) 12%);
+  background: var(--control-press);
 }
 
 .button.primary {
@@ -179,11 +193,11 @@ body {
 }
 
 .button.primary:hover {
-  background: color-mix(in srgb, var(--accent), #000000 8%);
+  background: var(--accent-hover);
 }
 
 .button.primary:active {
-  background: color-mix(in srgb, var(--accent), #000000 16%);
+  background: var(--accent-press);
 }
 
 .button:focus-visible {

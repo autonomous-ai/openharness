@@ -1322,7 +1322,8 @@ Claude Code once.
 
 Its menu is the native menu. Its window has three screens, Install, Sign in and
 Claude Code, at 420 × 320, in plain HTML and CSS (`device-app/ui/src/styles.css`)
-with this document's tokens and type:
+with this document's tokens and type. Hover and press fills are precomputed per
+theme: the app runs from macOS 13, older than WebKit's `color-mix()`.
 
 | CSS token | Role here |
 | --- | --- |
@@ -1331,7 +1332,9 @@ with this document's tokens and type:
 | `--muted` | Metadata |
 | `--rim` | Hairline rim |
 | `--control` | Neutral control fill (`AppDesktop.field`) |
+| `--control-hover` / `--control-press` | `--control` with `--text` 6% / 12% |
 | `--accent` | Primary action |
+| `--accent-hover` / `--accent-press` | `--accent` with black 8% / 16% |
 | `--focus` | 1.5-point focus boundary |
 | `--danger` | Error ink |
 
