@@ -708,7 +708,7 @@ describe('the dial with no window: this computer\'s agents', () => {
     { agentId: 'h2', registeredAt: 2, active: true, terminalAvailable: true, engine: 'codex', sessionId: 's-h2' },
   ] as unknown as RegisteredSession[]
   const observedAgent = (over: Partial<HostAgent>): HostAgent => ({
-    id: 'o', engine: 'claude', name: 'scratch', host: 'ghostty', state: 'idle', since: 0, lastActivityAt: 0, unseenDone: false, ...over,
+    id: 'o', engine: 'claude', name: 'scratch', host: 'ghostty', state: 'idle', lastActivityAt: 0, unseenDone: false, ...over,
   })
   const observed = (agents: HostAgent[]): HostSource => ({
     id: 'observed', list: () => agents,
@@ -1043,7 +1043,7 @@ describe('the dial reaches the fleet through the core\'s port', () => {
       // The devices' own reading of it, which never asks the core (services/devices.ts).
       activityText: async () => 'Waiting for you · Orca', activitySnapshot: async () => ({ text: 'Waiting for you · Orca' }) })
     const host = new DaemonCableHost(w)
-    const outside: HostAgent = { id: 'outside-1', engine: 'claude', name: 'scratch', host: 'orca', state: 'done', since: 0,
+    const outside: HostAgent = { id: 'outside-1', engine: 'claude', name: 'scratch', host: 'orca', state: 'done',
       lastActivityAt: 0, lastAnswer: 'Fixed the login.', unseenDone: true }
     host.setRegistry(new HostRegistry([host.harness, { id: 'observed', list: () => [outside],
       capabilities: () => ({ status: true, voice: false, focus: false, answer: false }) }]))

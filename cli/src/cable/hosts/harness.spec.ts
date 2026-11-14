@@ -14,8 +14,8 @@ describe('HarnessSource', () => {
     const src = new HarnessSource(() => 1_000)
     src.update(ROWS, 'mine', new Map([['l1', 500], ['r1', 900]]))
     expect(src.list()).toEqual([
-      { id: 'l1', name: 'api', engine: 'claude', sessionId: 's1', host: 'harness', state: 'idle', since: 500, lastActivityAt: 500, unseenDone: false },
-      { id: 'l2', name: 'web', engine: 'codex', host: 'harness', state: 'idle', since: 0, lastActivityAt: 0, unseenDone: false },
+      { id: 'l1', name: 'api', engine: 'claude', sessionId: 's1', host: 'harness', state: 'idle', lastActivityAt: 500, unseenDone: false },
+      { id: 'l2', name: 'web', engine: 'codex', host: 'harness', state: 'idle', lastActivityAt: 0, unseenDone: false },
     ])
     expect(capsLetters(src.capabilities())).toBe('sva')
   })
@@ -26,12 +26,12 @@ describe('HarnessSource', () => {
     src.update(ROWS, 'mine', new Map())
     const state = (id: string) => src.list().find((a) => a.id === id)
     src.noteCard('l1', 'processing')
-    expect(state('l1')).toMatchObject({ state: 'working', since: 1_000, lastActivityAt: 1_000 })
+    expect(state('l1')).toMatchObject({ state: 'working', lastActivityAt: 1_000 })
     now = 2_000
     src.noteCard('l1', 'processing')
-    expect(state('l1')).toMatchObject({ state: 'working', since: 1_000 })
+    expect(state('l1')).toMatchObject({ state: 'working', lastActivityAt: 1_000 })
     src.noteCard('l1', 'question')
-    expect(state('l1')).toMatchObject({ state: 'needs-you', since: 2_000 })
+    expect(state('l1')).toMatchObject({ state: 'needs-you', lastActivityAt: 2_000 })
     src.noteCard('l1', 'question.close')
     expect(state('l1')).toMatchObject({ state: 'working' })
     src.noteCard('l1', 'done')

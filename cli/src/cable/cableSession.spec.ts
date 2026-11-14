@@ -6065,7 +6065,7 @@ describe('the machine list with no window', () => {
     try {
       port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
       await vi.waitFor(() => expect(ends(port)).toEqual([{ t: 'agents.end', total: 0, tab: '', view: 'machine' }]))
-      agents = [{ id: 'o1', engine: 'claude', sessionId: 's1', name: 'scratch', host: 'ghostty', state: 'working', since: 1, lastActivityAt: 1, unseenDone: false }]
+      agents = [{ id: 'o1', engine: 'claude', sessionId: 's1', name: 'scratch', host: 'ghostty', state: 'working', lastActivityAt: 1, unseenDone: false }]
       await vi.waitFor(() => expect(ends(port)).toHaveLength(2), NEXT_TICKS)
       expect(port.sent.filter((m) => m.t === 'agent')).toEqual([
         { t: 'agent', id: 'o1', name: 'scratch', engine: 'claude', model: '', effort: '', machineId: 'mac-local', machine: 'this-mac', host: 'ghostty', caps: 's' },

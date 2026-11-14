@@ -50,6 +50,8 @@ export interface ObservedDeps {
 
 interface Entry {
   agent: HostAgent
+  /** When its state began (a turn's start renews it): how long a turn has run, and since when an agent waits. */
+  since: number
   transcriptPath?: string
   pid: number
   generation?: string
@@ -109,20 +111,20 @@ export class ObservedSource implements HostSource {
         // A start must not undo a state a faster event already set.
         break
       case 'turn-start':
-        this.setState(a, 'working', now)
+        this.setState(entry, 'working', now)
         a.unseenDone = false
         // The last turn's answer is not this one's: cleared, the same answer at this turn's end is a change the dial hears.
         a.lastAnswer = undefined
         break
       case 'needs-input':
         // Only a turn waits on the person: a notice to an idle or finished agent is stale.
-        if (a.state === 'working') this.setState(a, 'needs-you', now)
+        if (a.state === 'working') this.setState(entry, 'needs-you', now)
         break
       case 'turn-error':
-        this.setState(a, 'error', now)
+        this.setState(entry, 'error', now)
         break
       case 'turn-stop':
-        this.setState(a, 'done', now)
+        this.setState(entry, 'done', now)
         a.unseenDone = true
         clearTimeout(entry.answerTimer)
         entry.answerTimer = setTimeout(() => { void this.readAnswer(entry) }, ANSWER_GRACE_MS)
@@ -132,10 +134,9 @@ export class ObservedSource implements HostSource {
     this.emit()
   }
 
-  private setState(a: HostAgent, state: HostAgentState, now: number): void {
-    if (a.state !== state) a.since = now
-    else if (state === 'working') a.since = now
-    a.state = state
+  private setState(entry: Entry, state: HostAgentState, now: number): void {
+    if (entry.agent.state !== state || state === 'working') entry.since = now
+    entry.agent.state = state
   }
 
   /** The existing entry, or a new one if there is room. */
@@ -161,8 +162,9 @@ export class ObservedSource implements HostSource {
         id, engine, sessionId, cwd: init.cwd,
         name: (init.cwd && basename(init.cwd)) || engine,
         host: 'terminal',
-        state: 'idle', since: now, lastActivityAt: now, unseenDone: false, callerPid: init.pid,
+        state: 'idle', lastActivityAt: now, unseenDone: false, callerPid: init.pid,
       },
+      since: now,
       pid: init.pid,
       ...(init.transcriptPath ? { transcriptPath: init.transcriptPath } : {}),
     }
@@ -263,15 +265,15 @@ export class ObservedSource implements HostSource {
     for (const e of all) {
       if (e.agent.state !== 'needs-you' || !e.transcriptPath) continue
       const stamp = await this.deps.fileStamp(e.transcriptPath)
-      if (!stamp || stamp.mtime <= e.agent.since || e.agent.state !== 'needs-you' || this.entries.get(e.agent.id) !== e) continue
+      if (!stamp || stamp.mtime <= e.since || e.agent.state !== 'needs-you' || this.entries.get(e.agent.id) !== e) continue
       const now = this.deps.now()
-      this.setState(e.agent, 'working', now)
+      this.setState(e, 'working', now)
       e.agent.lastActivityAt = now
       this.emit()
     }
     const at = this.deps.now()
     const turns = all.filter((e) => (e.agent.engine === 'codex' || e.agent.engine === 'claude')
-      && e.agent.state === 'working' && at - e.agent.since >= TURN_SETTLE_MS)
+      && e.agent.state === 'working' && at - e.since >= TURN_SETTLE_MS)
     if (!turns.length) return
     const owners = await this.deps.openSessions.owners()
     for (const e of turns) {
@@ -283,11 +285,11 @@ export class ObservedSource implements HostSource {
       e.agent.lastActivityAt = now
       if (e.agent.engine === 'claude') {
         // Stopped with Esc: no answer, nothing to tell as done.
-        this.setState(e.agent, 'idle', now)
+        this.setState(e, 'idle', now)
         this.emit()
         continue
       }
-      this.setState(e.agent, 'done', now)
+      this.setState(e, 'done', now)
       e.agent.unseenDone = true
       this.emit()
       await this.readAnswer(e)

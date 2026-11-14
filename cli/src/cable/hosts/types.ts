@@ -11,8 +11,6 @@ export interface HostAgent {
   /** 'harness' | 'orca' | 'herdr' | 'ghostty' | 'iterm' | 'vscode' | 'terminal' | ... */
   host: string
   state: HostAgentState
-  /** When the state began. */
-  since: number
   lastActivityAt: number
   /** The end of the last turn, cut to the card's length. */
   lastAnswer?: string

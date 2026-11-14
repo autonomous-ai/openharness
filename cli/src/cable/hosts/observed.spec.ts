@@ -66,21 +66,19 @@ describe('ObservedSource states', () => {
   beforeEach(() => { vi.useFakeTimers() })
   afterEach(() => { vi.useRealTimers() })
 
-  it('drives each event to the spec table and resets since on turn-start', () => {
+  it('drives each event to the spec table', () => {
     const { src, clock, ev } = setup()
     src.ingest(ev('session-start'))
     expect(src.list()[0]).toMatchObject({ state: 'idle', name: 'proj', engine: 'claude', host: 'terminal' })
     clock.t += 1000
     src.ingest(ev('turn-start'))
-    expect(src.list()[0]).toMatchObject({ state: 'working', since: clock.t })
-    const first = clock.t
+    expect(src.list()[0]).toMatchObject({ state: 'working' })
     clock.t += 1000
     src.ingest(ev('needs-input'))
-    expect(src.list()[0]).toMatchObject({ state: 'needs-you', since: clock.t })
+    expect(src.list()[0]).toMatchObject({ state: 'needs-you' })
     clock.t += 1000
     src.ingest(ev('turn-start'))
-    expect(src.list()[0].since).toBe(clock.t)
-    expect(clock.t).toBeGreaterThan(first)
+    expect(src.list()[0]).toMatchObject({ state: 'working' })
     src.ingest(ev('turn-error'))
     expect(src.list()[0].state).toBe('error')
     src.ingest(ev('turn-stop'))

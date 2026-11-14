@@ -72,7 +72,6 @@ export class HarnessSource implements HostSource {
         ...(r.sessionId ? { sessionId: r.sessionId } : {}),
         host: 'harness',
         state: noted?.state ?? 'idle',
-        since: noted?.since ?? lastActivityAt,
         lastActivityAt,
         unseenDone: noted?.unseenDone ?? false,
       }
