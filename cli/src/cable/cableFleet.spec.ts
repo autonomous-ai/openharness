@@ -992,3 +992,20 @@ describe('a Harness Pro that is silent from the moment its port opens', () => {
     } finally { await s.fleet.stop() }
   })
 })
+
+describe('which apps the dials want', () => {
+  it('wants apps while any connected dial says appFilter', async () => {
+    const f = fixture()
+    try {
+      f.fleet.start()
+      await vi.waitFor(() => expect(f.ports).toHaveLength(2))
+      expect(f.fleet.wantsApps()).toBe(false)
+      f.ports[0].say({ t: 'hello', product: 'harness', mac: f.ports[0].path, fw: 'fixture', proto: 3, appFilter: 'v1' })
+      f.ports[1].say({ t: 'hello', product: 'harness', mac: f.ports[1].path, fw: 'fixture', proto: 3 })
+      await vi.waitFor(() => { for (const p of f.ports) expect(p.sent.some(m => m.t === 'agents.end')).toBe(true) })
+      expect(f.fleet.wantsApps()).toBe(true)
+      await f.ports[0].close()
+      await vi.waitFor(() => expect(f.fleet.wantsApps()).toBe(false))
+    } finally { await f.fleet.stop() }
+  })
+})

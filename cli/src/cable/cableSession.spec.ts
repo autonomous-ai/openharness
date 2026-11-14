@@ -4359,6 +4359,15 @@ describe('the app filter', () => {
       await vi.waitFor(() => expect(port.sent.filter((m) => m.t === 'summary' && m.restore).map((m) => m.agentId)).toEqual(['g1', 'g2', 'g3']))
     } finally { await session.stop() }
   })
+
+  it('wants apps only while a dial that says appFilter is connected', async () => {
+    const old = await greeted(appHost().host, false)
+    try { expect(old.session.wantsApps).toBe(false) } finally { await old.session.stop() }
+    const { session } = await greeted(appHost().host)
+    expect(session.wantsApps).toBe(true)
+    await session.stop()
+    expect(session.wantsApps).toBe(false)
+  })
 })
 
 describe('what the dial cannot do for an agent', () => {
