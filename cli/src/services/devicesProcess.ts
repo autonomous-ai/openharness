@@ -245,6 +245,9 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
     engines: ({ engines }) => port.engines(strings(engines)),
     commanders: ({ connected }) => port.commanders(connected === true),
     asking: ({ agentIds }) => port.asking(strings(agentIds)),
+    // A hook's client that went before its answer (core/deviceHookCalls.ts): its card closes, its poll ends.
+    'approval.gone': ({ id }) => port.approvalGone(text(id)),
+    'inbox.gone': ({ pollId }) => port.inboxGone(text(pollId)),
     // Everything at once, as the core keeps it: this process (re)connected, and starts where the windows are.
     // What a window has not said is not said to the dial: a fresh process holds nothing yet, and a dial still
     // attached through a core's restart keeps its tab until the windows, reconnecting, say theirs again.
@@ -272,6 +275,12 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
       const step = await port.stepFocus(direction === 'previous' ? 'previous' : 'next', typeof currentAgentId === 'string' ? currentAgentId : undefined)
       return step === 'no_agents' ? { step } : { ...step }
     },
+    // A hook's approval and the mod's poll, checked and bounded by the core (core/deviceHookCalls.ts), and held here until
+    // the dial or the terminal answers, the card expires or the hold runs out.
+    approval: async ({ id, sessionId, tool, summary, cwd }) => ({
+      decision: await port.approval({ id: text(id), sessionId: text(sessionId), tool: text(tool), summary: text(summary), ...(typeof cwd === 'string' ? { cwd } : {}) }),
+    }),
+    inboxPoll: async ({ pollId, sessionId }) => ({ ...await port.inboxPoll({ pollId: text(pollId), sessionId: text(sessionId) }) }),
   }
 
   const service = (options.run ?? runServiceProcess)({

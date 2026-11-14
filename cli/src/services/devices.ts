@@ -19,14 +19,17 @@
 import { existsSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { env } from '../config/env.js'
-import { DEVICES_REQUESTS, SUPER_TAB_REQUEST_PREFIX, type CardChat, type CoreApi, type SaidOnCard, type CorePorts, type DevicesPort, type RouteAnswer, type SendResult, type ServiceRequests, type WindowFocus } from '../core/api.js'
+import { DEVICES_FALLBACKS, DEVICES_REQUESTS, SUPER_TAB_REQUEST_PREFIX, type CardChat, type CoreApi, type DeviceHookPort, type SaidOnCard, type CorePorts, type DevicesPort, type RouteAnswer, type SendResult, type ServiceRequests, type WindowFocus } from '../core/api.js'
 import { CableFleet, testDialDiscovery, type CableFleetOptions } from '../cable/cableFleet.js'
 import { isLocalOnly } from '../lib/cardUpdate.js'
 import { TurnStats, type TurnStatsFields } from '../cable/turnStats.js'
 import { cableEventFor, cableStepFor, cableQuestionCloseFor, cableQuestionFor, DaemonCableHost } from '../cable/cableHost.js'
 import { CableSession } from '../cable/cableSession.js'
+import { Approvals } from '../cable/hosts/approvals.js'
+import { Inbox } from '../cable/hosts/inbox.js'
 import { LAST_ANSWER_DEADLINE_MS, LAST_ANSWER_MAX_BYTES, readLastAnswer } from '../cable/hosts/lastAnswer.js'
-import { hostDisplayName, observedAgentId, ObservedSource } from '../cable/hosts/observed.js'
+import { hostDisplayName, observedAgentId, ObservedSource, type ObservedActions } from '../cable/hosts/observed.js'
+import { createOrcaActions, orcaDeps, type OrcaDeps } from '../cable/hosts/orca.js'
 import { HostRegistry } from '../cable/hosts/registry.js'
 import type { HostAgent, HostAgentState } from '../cable/hosts/types.js'
 import { PetStore } from '../cable/pets/store.js'
@@ -85,6 +88,8 @@ export interface DevicesDeps {
   /** For this service's tests: the dial's session, and how dials are found and opened. */
   Session?: ConstructorParameters<typeof CableFleet>[0]
   cable?: Partial<CableFleetOptions>
+  /** For this service's tests: how `orca` is found and run. */
+  orca?: OrcaDeps
 }
 
 /** ⌘K's answer while the fleet is not running: it never started, so there is no list to weigh. */
@@ -110,8 +115,9 @@ const REMIND_MS = 20_000
  *  as a timer can fire a little before the wall clock says it is due. */
 const ENDED_MS = 10_500
 
-/** This computer's agents outside a pane, read with ⌘P's readers (services/externalSessions.ts). */
-function observedSource(dataDir: string, log: (line: string) => void): ObservedSource {
+/** This computer's agents outside a pane, read with ⌘P's readers (services/externalSessions.ts), and how the dial's voice
+ *  and tap reach them. */
+function observedSource(dataDir: string, log: (line: string) => void, actions: ObservedActions): ObservedSource {
   const providers = externalProviders()
   return new ObservedSource({
     now: Date.now,
@@ -127,6 +133,7 @@ function observedSource(dataDir: string, log: (line: string) => void): ObservedS
     }),
     fileStamp,
     log,
+    actions,
   })
 }
 
@@ -234,7 +241,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       // until an ask is taken.
       .then((answer) => { if (on) cableHost.swarmCardsUnavailable(typeof answer.error === 'string') })
   }
-  deps.onCoreConnected?.(() => { if (cardDevices > 0) tellCards() })
+  deps.onCoreConnected?.(() => {
+    if (cardDevices > 0) tellCards()
+    // The hook calls the last core held went with it (an update hands over several times a day): nobody hears their answers.
+    endHookCalls()
+  })
   // The Swarm's members here waiting on a person, as alerts on the dial (cable/swarmWaits.ts): raised through the same
   // translation as every card, once the cable exists.
   const waits = createSwarmWaits({ send: (frame) => toCable(frame), log })
@@ -245,7 +256,25 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // Claude Code in Orca, Codex in Ghostty: their hooks reach here through the core, which keeps nothing of them, and their
   // open sessions are read here. Nothing of them leaves this computer: the core, a window and the gateway hear none of it
   // (docs/specs/2026-11-13-device-without-the-app.md). `HARNESS_DEVICE_OBSERVED=off` is the kill switch.
-  const observed = env.HARNESS_DEVICE_OBSERVED ? observedSource(core.dataDir, log) : null
+  //
+  // The dial's voice reaches them through their mod's long poll (Claude Code's) or typed into their Orca terminal, and a tap
+  // brings that terminal forward (docs/specs/2026-11-13-device-claude-orca.md).
+  /** A timer of one part, its run guarded as a notice into that part is, and never what keeps the process up. */
+  const timerIn = (name: string) => (ms: number, run: () => void): (() => void) => {
+    const timer = setTimeout(() => part.call(name, run), ms)
+    timer.unref()
+    return () => clearTimeout(timer)
+  }
+  const inbox = new Inbox({ now: monotonic, after: timerIn('inbox') })
+  const orca = createOrcaActions(deps.orca ?? orcaDeps())
+  const observed = env.HARNESS_DEVICE_OBSERVED ? observedSource(core.dataDir, log, {
+    modReady: (sessionId) => inbox.ready(sessionId),
+    toMod: (sessionId, text) => inbox.deliver(sessionId, text),
+    orcaSend: orca.send,
+    orcaOpen: orca.open,
+    // The route or the refusal only: never the words, the session or the terminal.
+    count: (what) => log(`[device] voice · ${what}`),
+  }) : null
   /** One of them, by the id the dial holds: what the dial asks of it is answered here, never by a door of the core. */
   const outside = (agentId: string): HostAgent | undefined => observed?.list().find((agent) => agent.id === agentId)
   /** Its line while it waits on the person, where a harness agent shows its terminal's footer. */
@@ -649,6 +678,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const dialAttached = (on: boolean): void => {
     for (const timer of attached) clearInterval(timer)
     attached = []
+    // No dial to answer a card: the terminal's prompt decides.
+    if (!on) part.call('approvals', () => approvals.closeAll())
     if (!on || !observed) return
     // Agents already running when the dial came are listed now, idle until their next hook event.
     part.call('observed', () => observed.scanOpen())
@@ -658,6 +689,43 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       // A person can take minutes to come to an agent that waits on them.
       every(REMIND_MS, remind),
     ]
+  }
+
+  // ── a hook's approvals ─────────────────────────────────────────────────────────────────────────────
+  //
+  // Claude Code's permission prompt outside a pane, asked of the dial while it shows this computer's agents: one card per
+  // agent, answered once, by its exact request, and closed when nobody is left to answer it (cable/hosts/approvals.ts).
+  const approvals = new Approvals({
+    now: monotonic,
+    after: timerIn('approvals'),
+    canShow: () => dialWatched && cableHost.machineView(),
+    // A Harness pane's session: the pane watcher answers its prompt. Read as the core has it now, not as the last tick did.
+    owned: async (sessionId) => {
+      await deps.refresh?.()
+      return core.agents.advertised().some((session) => session.sessionId === sessionId)
+    },
+    mark: (sessionId, cwd, state) => observed?.approval(sessionId, cwd, state),
+    show: (agentId, requestId, questions) => inOrder(agentId, () => { void cable.question(agentId, requestId, questions) }),
+    close: (agentId, requestId) => inOrder(agentId, () => { void cable.questionClose(agentId, requestId) }),
+    // The outcome and its time only: never the tool, the command or the session.
+    count: (outcome, ms) => log(`[device] approval · ${outcome} · ${Math.round(ms)}ms`),
+  })
+  cableHost.setApprovals(approvals)
+  // Each part guarded as the fleet is: one that throws, or did not start, answers as with no dial, so the terminal's prompt
+  // decides and the mod waits a minute.
+  const { approval, approvalGone, inboxPoll, inboxGone } = DEVICES_FALLBACKS
+  const approvalCalls = part.start('approvals', (): Pick<DeviceHookPort, 'approval' | 'approvalGone'> => ({
+    approval: (request) => approvals.request(request),
+    approvalGone: (id) => approvals.gone(id),
+  }), { approval, approvalGone })
+  const inboxCalls = part.start('inbox', (): Pick<DeviceHookPort, 'inboxPoll' | 'inboxGone'> => ({
+    inboxPoll: ({ pollId, sessionId }) => inbox.poll(pollId, sessionId),
+    inboxGone: (pollId) => inbox.gone(pollId),
+  }), { inboxPoll, inboxGone })
+  /** Every card and poll held for the core's calls: that core went, or the devices stop. */
+  const endHookCalls = (): void => {
+    part.call('approvals', () => approvals.closeAll())
+    part.call('inbox', () => inbox.closeAll())
   }
 
   if (deps.cableDisabled) log('[cable] disabled (CABLE_DISABLE=true) — the serial port is left alone')
@@ -741,6 +809,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     swarms: (swarms) => part.call('dial', () => {
       const closed = windowOpen && swarms === null
       windowOpen = swarms !== null
+      // The dial shows the window's tab, where no card for an agent outside a pane can be answered.
+      if (windowOpen) part.call('approvals', () => approvals.closeAll())
       cableHost.setSwarms(swarms)
       // The Swarms the window has tabs for are read first; said again to the core only when they change.
       const include = [...new Set((swarms?.swarms ?? []).map((s) => s.superTabId).filter((id): id is string => !!id))].slice(0, 16)
@@ -800,11 +870,17 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     commanders: (connected) => setVoiceRouterDeviceConnected(connected),
     // Which agents have an engine's question open, as the core knows them now: a Swarm wait shows only where none is.
     asking: (agentIds) => part.call('dial', () => waits.asking(agentIds)),
+    // A hook's approval and the mod's poll, as the core checked and bounded them (core/deviceHookCalls.ts).
+    approval: async (request) => (approvalCalls ? approvalCalls.approval(request) : 'none'),
+    approvalGone: (id) => approvalCalls?.approvalGone(id),
+    inboxPoll: async (poll) => (inboxCalls ? inboxCalls.inboxPoll(poll) : { off: true }),
+    inboxGone: (pollId) => inboxCalls?.inboxGone(pollId),
     // The serial ports first: a port left held makes esptool fail in a way that reads like dead hardware.
     stop: async () => {
       for (const agentId of [...replies.keys()]) endReplies(agentId, false)   // no timer may fire into a stopped cable
       for (const timer of timers) clearInterval(timer)
       for (const timer of endings.values()) clearTimeout(timer)
+      endHookCalls()
       dialAttached(false)
       await cable.stop()
       fleet?.stop()
