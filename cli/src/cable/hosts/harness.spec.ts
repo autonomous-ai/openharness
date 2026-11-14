@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { HarnessSource } from './harness.js'
 import { capsLetters } from './types.js'
 
@@ -42,29 +42,15 @@ describe('HarnessSource', () => {
     expect(state('l2')).toMatchObject({ state: 'error' })
   })
 
-  it('says it changed only when its list did', () => {
-    const src = new HarnessSource(() => 1_000)
-    const changed = vi.fn()
-    src.onChange(changed)
-    src.update(ROWS, 'mine', new Map())
-    expect(changed).toHaveBeenCalledTimes(1)
-    src.update(ROWS, 'mine', new Map())
-    expect(changed).toHaveBeenCalledTimes(1)
-    src.noteCard('l1', 'processing')
-    expect(changed).toHaveBeenCalledTimes(2)
-  })
-
-  it('markSeen clears a done agent\'s unseenDone and tells listeners once', () => {
+  it('markSeen clears a done agent\'s unseenDone, and leaves one with no card as it was', () => {
     const src = new HarnessSource(() => 1_000)
     src.update(ROWS, 'mine', new Map())
     src.noteCard('l1', 'done')
-    const changed = vi.fn()
-    src.onChange(changed)
     src.markSeen('l1')
     src.markSeen('l1')
     src.markSeen('l2')
     expect(src.list().find((a) => a.id === 'l1')).toMatchObject({ state: 'done', unseenDone: false })
-    expect(changed).toHaveBeenCalledTimes(1)
+    expect(src.list().find((a) => a.id === 'l2')).toMatchObject({ state: 'idle', unseenDone: false })
   })
 
   it('forgets the state of an agent that left', () => {

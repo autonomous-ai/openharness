@@ -30,8 +30,6 @@ export class HarnessSource implements HostSource {
   private rows: HarnessRow[] = []
   private times = new Map<string, number>()
   private readonly noted = new Map<string, Noted>()
-  private readonly listeners = new Set<() => void>()
-  private key = ''
 
   constructor(private readonly now: () => number = Date.now) {}
 
@@ -41,11 +39,6 @@ export class HarnessSource implements HostSource {
     this.times = times
     const ids = new Set(this.rows.map((r) => r.id))
     for (const id of this.noted.keys()) if (!ids.has(id)) this.noted.delete(id)
-    // Called on every read of the list: said only when it changed, or a listener that reads the list again loops.
-    const key = this.rows.map((r) => `${r.id}:${r.name}:${r.engine ?? ''}:${r.sessionId ?? ''}:${times.get(r.id) ?? ''}`).join('|')
-    if (key === this.key) return
-    this.key = key
-    this.emit()
   }
 
   /** A card the devices were sent for one of these agents. A silent one (a sub-agent's, a restored recap) is not news. */
@@ -60,9 +53,7 @@ export class HarnessSource implements HostSource {
     else return
     const since = was?.state === state ? was.since : this.now()
     const unseenDone = state === 'done' ? true : state === 'working' ? false : was?.unseenDone ?? false
-    if (was && was.state === state && was.unseenDone === unseenDone) return
     this.noted.set(agentId, { state, since, unseenDone })
-    this.emit()
   }
 
   /** The person turned the dial to it: a done agent's answer has been seen, rather than staying unseen until its next turn. */
@@ -70,7 +61,6 @@ export class HarnessSource implements HostSource {
     const noted = this.noted.get(agentId)
     if (!noted?.unseenDone) return
     this.noted.set(agentId, { ...noted, unseenDone: false })
-    this.emit()
   }
 
   list(): HostAgent[] {
@@ -89,16 +79,7 @@ export class HarnessSource implements HostSource {
     })
   }
 
-  onChange(listener: () => void): () => void {
-    this.listeners.add(listener)
-    return () => this.listeners.delete(listener)
-  }
-
   capabilities(): Caps {
     return { status: true, voice: true, focus: false, answer: true }
-  }
-
-  private emit(): void {
-    for (const l of [...this.listeners]) l()
   }
 }
