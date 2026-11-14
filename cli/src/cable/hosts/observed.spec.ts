@@ -401,6 +401,32 @@ describe('ObservedSource codex and open sessions', () => {
     expect(src.list()[0].state).toBe('working')
   })
 
+  it('a prompt with no card is not read as answered by the line its asking writes, nor by the last prompt\'s answer', async () => {
+    const { src, clock, stamps, ev } = setup()
+    src.ingest(ev('turn-start', { transcriptPath: '/t/s.jsonl' }))
+    clock.t += 10_000
+    src.approval('s1', '/work/proj', 'terminal')
+    // The tool call's line is written after its hook asked, as with a card.
+    stamps.set('/t/s.jsonl', clock.t + 5)
+    clock.t += 3_000
+    await src.checkWorking()
+    expect(src.list()[0].state).toBe('needs-you')
+    expect(src.terminalOnly(src.list()[0].id)).toBe(true)
+    // Answered in the terminal: the tool's result is written.
+    stamps.set('/t/s.jsonl', clock.t + 1)
+    // The next prompt asks before the 3 s check has seen that answer: the agent still reads needs-you.
+    clock.t += 500
+    src.approval('s1', '/work/proj', 'terminal')
+    stamps.set('/t/s.jsonl', clock.t + 5)
+    clock.t += 3_000
+    await src.checkWorking()
+    expect(src.list()[0].state).toBe('needs-you')
+    // Answered in the terminal again.
+    stamps.set('/t/s.jsonl', clock.t + 1)
+    await src.checkWorking()
+    expect(src.list()[0].state).toBe('working')
+  })
+
   it('scanOpen adds terminal/app sessions as idle and skips harness-owned ones', async () => {
     const { src, open, owners, externals } = setup()
     open.set('a', 'terminal')
