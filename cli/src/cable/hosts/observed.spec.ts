@@ -19,6 +19,7 @@ function setup(over: Partial<ObservedDeps> = {}) {
   const answers = new Map<string, string>()
   // Each transcript's last change, as its file's stamp says it.
   const stamps = new Map<string, number>()
+  const logs: string[] = []
   // Each look at the machine's processes, as OpenSessions takes one.
   let looks = 0
   let held: Promise<void> | undefined
@@ -46,7 +47,7 @@ function setup(over: Partial<ObservedDeps> = {}) {
     lastAnswer: async (_engine, path) => answers.get(path),
     fileStamp: async (path: string) => (stamps.has(path) ? { stamp: '', mtime: stamps.get(path)! } : null),
     excluded: ['/data/harness'],
-    log: () => {},
+    log: (line) => { logs.push(line) },
     ...over,
   }
   const src = new ObservedSource(deps)
@@ -56,7 +57,7 @@ function setup(over: Partial<ObservedDeps> = {}) {
     engine: 'claude', sessionId: 's1', event, cwd: '/work/proj', callerPid: 100, hostHints: {}, ...over,
   })
   return {
-    src, clock, gens, procs, alive, open, owners, working, externals, answers, stamps, changes, ev, find,
+    src, clock, gens, procs, alive, open, owners, working, externals, answers, stamps, changes, ev, find, logs,
     looks: () => looks, hold: (until: Promise<void>) => { held = until },
   }
 }
@@ -520,6 +521,95 @@ describe('ObservedSource codex and open sessions', () => {
     await src.scanOpen()
     expect(src.list()).toHaveLength(1)
     expect(src.list()[0].state).toBe('working')
+  })
+})
+
+describe('ObservedSource and the app the scan learns', () => {
+  /** A session found open in a terminal, its owner `pid`. */
+  const found = (s: ReturnType<typeof setup>, sessionId: string, pid: number): void => {
+    s.open.set(sessionId, 'terminal')
+    s.owners.set(sessionId, { pid, engine: 'claude' })
+    s.externals.set(sessionId, { cwd: `/x/${sessionId}`, transcriptPath: `/t/${sessionId}.jsonl` })
+  }
+
+  it('a session the scan found under a listed app is on that app\'s page from its first listing, and known', async () => {
+    const s = setup({ apps: async () => new Map([[11, 'ghostty']]) })
+    found(s, 'a', 11)
+    await s.src.scanOpen()
+    expect(s.src.list()[0]).toMatchObject({ app: 'ghostty', host: 'terminal' })
+    expect(s.src.list()[0]).not.toHaveProperty('appPending')
+  })
+
+  it('the scan asks once a pass, for the new sessions\' pids alone, and never again for one it listed', async () => {
+    const apps = vi.fn(async (_pids: readonly number[]) => new Map<number, string>())
+    const s = setup({ apps })
+    found(s, 'a', 11)
+    found(s, 'b', 12)
+    await s.src.scanOpen()
+    found(s, 'c', 13)
+    await s.src.scanOpen()
+    await s.src.scanOpen()
+    expect(apps.mock.calls).toEqual([[[11, 12]], [[13]]])
+  })
+
+  it('a session nothing was learned of is not known yet, and its first hook still names its app', async () => {
+    const s = setup({ apps: async () => new Map() })
+    found(s, 's1', 100)
+    await s.src.scanOpen()
+    expect(s.src.list()[0]).toMatchObject({ app: 'terminal', appPending: true })
+    s.src.ingest(s.ev('turn-start', { hostHints: { TERM_PROGRAM: 'ghostty' } }))
+    expect(s.src.list()[0].app).toBe('ghostty')
+    expect(s.src.list()[0]).not.toHaveProperty('appPending')
+  })
+
+  it('a learn that fails still lists every session, not known yet', async () => {
+    const s = setup({ apps: async () => { throw new Error('ps timed out under /Users/someone') } })
+    found(s, 'a', 11)
+    found(s, 'b', 12)
+    await s.src.scanOpen()
+    expect(s.src.list().map((a) => [a.sessionId, a.app, a.appPending])).toEqual([['a', 'terminal', true], ['b', 'terminal', true]])
+    expect(s.logs).toContain('[observed] scan · apps not read')
+    // No error text: a path holds the account's name.
+    expect(s.logs.join('\n')).not.toContain('someone')
+  })
+
+  it('a process table that cannot be read leaves every session not known yet, and listed', async () => {
+    const s = setup({ apps: async () => new Map() })
+    found(s, 'a', 11)
+    found(s, 'b', 12)
+    await s.src.scanOpen()
+    expect(s.src.list().map((a) => [a.sessionId, a.app, a.appPending])).toEqual([['a', 'terminal', true], ['b', 'terminal', true]])
+  })
+
+  it('a hook that told of a session while its app was being learned wins', async () => {
+    let answer: (apps: ReadonlyMap<number, string>) => void = () => {}
+    const apps = vi.fn(() => new Promise<ReadonlyMap<number, string>>((resolve) => { answer = resolve }))
+    const s = setup({ apps })
+    found(s, 's1', 100)
+    const scan = s.src.scanOpen()
+    await vi.waitFor(() => expect(apps).toHaveBeenCalled())
+    s.src.ingest(s.ev('turn-start', { hostHints: { TERM_PROGRAM: 'ghostty' } }))
+    answer(new Map([[100, 'vscode']]))
+    await scan
+    expect(s.src.list()).toHaveLength(1)
+    expect(s.src.list()[0]).toMatchObject({ app: 'ghostty', state: 'working' })
+    expect(s.src.list()[0]).not.toHaveProperty('appPending')
+  })
+
+  it('the scan\'s log line counts and names nothing', async () => {
+    const s = setup({ apps: async () => { s.clock.t += 7; return new Map([[11, 'ghostty']]) } })
+    found(s, 'a', 11)
+    found(s, 'b', 12)
+    await s.src.scanOpen()
+    expect(s.logs).toEqual(['[observed] scan · 2 found · 1 app known · 7 ms'])
+    for (const word of ['ghostty', 'terminal', '11', '12', '/x/', '/t/']) expect(s.logs.join('\n')).not.toContain(word)
+  })
+
+  it('with no apps reader the scan lists as before', async () => {
+    const s = setup()
+    found(s, 'a', 11)
+    await s.src.scanOpen()
+    expect(s.src.list()[0]).toMatchObject({ sessionId: 'a', app: 'terminal', appPending: true })
   })
 })
 

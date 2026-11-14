@@ -144,6 +144,7 @@ const readers = vi.hoisted(() => ({
   working: new Map<string, boolean>(),
   scans: 0,
   answer: vi.fn(async (..._args: unknown[]): Promise<string | undefined> => undefined),
+  apps: vi.fn(async (_pids: readonly number[]) => new Map<number, string>()),
 }))
 vi.mock('../lib/sessionSearch/external.js', async (real) => ({
   ...await real<typeof import('../lib/sessionSearch/external.js')>(),
@@ -168,6 +169,8 @@ vi.mock('../lib/sessionSearch/externals/support.js', async (real) => ({
   processAlive: () => true,
   fileStamp: async () => null,
 }))
+// Which app each session found runs in: from the made-up owners above, never this machine's processes.
+vi.mock('../cable/hosts/scannedApp.js', () => ({ learnApps: readers.apps }))
 vi.mock('../cable/hosts/lastAnswer.js', async (real) => ({
   ...await real<typeof import('../cable/hosts/lastAnswer.js')>(),
   readLastAnswer: readers.answer,
@@ -1213,6 +1216,18 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     seen.host.watching!(false)
     await vi.advanceTimersByTimeAsync(180_000)
     expect(readers.scans).toBe(2)
+  })
+
+  it('the scan asks which app each session it found runs in, by pid', async () => {
+    vi.useFakeTimers()
+    const { port } = start({ faults: ['fleet'] })
+    readers.known.set('sess-9', 'terminal')
+    readers.owners.set('sess-9', { engine: 'codex', pid: 77 })
+    readers.rows.set('sess-9', { cwd: '/work/web', transcriptPath: null })
+    readers.working.set('sess-9', false)
+    seen.host.watching!(true)
+    await vi.waitFor(async () => expect((await machineList(port)).agents).toHaveLength(1))
+    expect(readers.apps.mock.calls).toEqual([[[77]]])
   })
 
   it('removes an ended session within 11 s, and ends a Codex turn within 3 s of its process going quiet', async () => {
