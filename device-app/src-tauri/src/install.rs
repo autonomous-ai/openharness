@@ -1,11 +1,10 @@
 //! The install script runs: `--host`, then `--desktop`.
 
 use crate::cli::{self, INSTALL_DEADLINE};
+use crate::log::printable;
 use crate::types::{Log, Output};
-use regex::Regex;
 use std::io;
 use std::process::Command;
-use std::sync::LazyLock;
 use std::time::Duration;
 
 /// The desktop app's `kHarnessHostSetupCommand`, word for word. Fixed: nothing is ever added to it.
@@ -79,16 +78,13 @@ pub fn install(shell: &dyn Shell, log: &dyn Log, cli_there: &dyn Fn() -> bool) -
     Err(shown(&last, NOT_INSTALLED))
 }
 
-/// A terminal's colour and cursor codes (CSI sequences).
-static ESCAPES: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\x1b\[[0-?]*[ -/]*[@-~]").unwrap());
-
 /// Each line of stdout, then of stderr (Output keeps them apart; a script's error is on stderr, so it comes last), as
 /// a terminal leaves it: a `\r` progress line shows its last frame. No escape or other control character, trimmed, and
 /// an empty line dropped: the output is outside text, bound for the screen and the log.
 fn clean_lines(output: &Output) -> Vec<String> {
     let clean = |line: &str| {
         line.rsplit('\r')
-            .map(|frame| ESCAPES.replace_all(frame, "").chars().filter(|c| !c.is_control()).collect::<String>())
+            .map(printable)
             .map(|frame| frame.trim().to_string())
             .find(|frame| !frame.is_empty())
     };

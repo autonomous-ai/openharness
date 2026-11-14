@@ -60,7 +60,8 @@ impl Log for FileLog {
             .and_then(|()| {
                 fs::OpenOptions::new().create(true).append(true).open(self.dir.join(format!("app-{}.log", ymd(today))))
             })
-            .and_then(|mut file| file.write_all(format!("{stamp} {}\n", redact(text)).as_bytes()));
+            // Printable first: a newline would forge a line, and a code inside a secret would hide it from redact.
+            .and_then(|mut file| file.write_all(format!("{stamp} {}\n", redact(&printable(text))).as_bytes()));
     }
 }
 
@@ -79,6 +80,15 @@ fn ymd(days: u64) -> String {
 
 fn dashed(ymd: &str) -> String {
     format!("{}-{}-{}", &ymd[..4], &ymd[4..6], &ymd[6..])
+}
+
+/// A terminal's colour and cursor codes (CSI sequences).
+static ESCAPES: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\x1b\[[0-?]*[ -/]*[@-~]").unwrap());
+
+/// `text` without a terminal's codes or any other control character: outside text, bound for one line of a file or a
+/// screen.
+pub fn printable(text: &str) -> String {
+    ESCAPES.replace_all(text, "").chars().filter(|c| !c.is_control()).collect()
 }
 
 /// The desktop's four text rules (`redactSecretsInText` in its logging folder; keep the two in step), then two
