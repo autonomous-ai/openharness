@@ -1,5 +1,5 @@
 import type { AddressInfo } from 'node:net'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { WebSocketServer, type WebSocket } from 'ws'
 
 type Frame = { type: string; agentId?: string; payload?: Record<string, unknown> }
@@ -93,10 +93,23 @@ describe('LocalClient.turn', () => {
   })
 
   it('names the wait that ran out', async () => {
+    const opened = (frame: Frame) => frame.type === 'turn_started' && frame.payload?.userMessage === 'starts, never ends'
     const { client } = await stubDaemon((frame, send) => {
       if (frame.type === 'message' && said(frame).content === 'starts, never ends') send({ type: 'turn_started', agentId: 'agent-1', payload: { userMessage: 'starts, never ends' } })
     })
     await expect(client.turn('agent-1', 'never typed', 100)).rejects.toThrow('turn_started (never typed)')
-    await expect(client.turn('agent-1', 'starts, never ends', 100)).rejects.toThrow('turn_ended (starts, never ends)')
+    // The bounds run out only when the test says so: on real timers a runner that stalled past 100 ms ran the first
+    // wait out before the stub's turn_started came, and the error named turn_started (reproduced with a 150 ms stall).
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      const since = client.frames.length
+      const ending = client.turn('agent-1', 'starts, never ends', 100)
+      // turn() waited first, so by the time this wait resumes it has found the same frame and is waiting for the end.
+      await client.waitFor(opened, 100, 'turn_started', since)
+      vi.advanceTimersByTime(100)
+      await expect(ending).rejects.toThrow('turn_ended (starts, never ends)')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
