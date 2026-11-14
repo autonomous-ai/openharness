@@ -1431,6 +1431,9 @@ export class CableSession {
         if (!agentId) return
         void Promise.resolve(this.host.openAgent(agentId, reason)).then((result) => {
           if (result && !result.ok) return this.toast(result.error)
+          // Another app moves no window, so no window focus will bring the dial to this agent's face: the tap's own
+          // open says it. The dial does not answer a focus with one, and its echo of a swipe only marks the agent seen.
+          if (!reason && this.outsideHarness(agentId)) return this.focusAgent(agentId)
         }).catch(() => this.log('cable: agent.open → failed'))
         return
       }
