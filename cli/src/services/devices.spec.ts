@@ -1682,6 +1682,19 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     expect(calls('turnStarted')).toHaveLength(6)
   })
 
+  it('a dial attaching while an observed agent waits hears turn.started + Waiting for you · Orca before any 20 s tick', async () => {
+    const { port } = start({ faults: ['fleet'] })
+    port.observed(hook('turn-start'))
+    port.observed(hook('needs-input'))
+    expect(calls('turnStarted')).toHaveLength(2)
+    seen.host.watching!(true)
+    await vi.waitFor(() => expect(calls('turnStarted').slice(2)).toEqual([[ID, 'Waiting for you · Orca', undefined]]))
+    // The same as a window closes: the machine list it brings back shows the line at once.
+    port.swarms({ active: 't1', swarms: [{ id: 't1', name: 'Tab', agentIds: [], panes: 0 }], tiles: [] })
+    port.swarms(null)
+    await vi.waitFor(() => expect(calls('turnStarted').slice(3)).toEqual([[ID, 'Waiting for you · Orca', undefined]]))
+  })
+
   it('with a window open, an observed agent tells the dial nothing: no turn, answer or reminder', async () => {
     vi.useFakeTimers()
     readers.answer.mockResolvedValue('Shipped the fix.')
