@@ -85,6 +85,18 @@ describe('install.ps1, as written', () => {
     expect(source).toContain(`Write-Host "  Harness did not start again on terminal host \${PtyAfter}. Run 'harness start'."`)
   })
 
+  // #4018: a terminal host is put in use only once its signatures are checked. Every case below that installs one
+  // allows its unsigned build (HARNESS_ALLOW_UNSIGNED=1), and PR CI runs none of them, so only this holds
+  // Install-HarnessPty to the check: on the unpacked download, and on a version folder already there.
+  it('checks the terminal host\'s signatures before it moves the host into place or points current-pty at it', () => {
+    // Its code lines only: a call commented out is no check.
+    const pty = (source.match(/^function Install-HarnessPty[\s\S]*?^}\r?$/m)?.[0] ?? '')
+      .split(/\r?\n/).filter((line) => !line.trimStart().startsWith('#')).join('\n')
+    const at = (text: string) => { expect(pty).toContain(text); return pty.indexOf(text) }
+    expect(at('Assert-HarnessPtySigned $unpacked')).toBeLessThan(at('Move-Item -LiteralPath $unpacked -Destination $target'))
+    expect(at('Assert-HarnessPtySigned $target')).toBeLessThan(at('Write-HarnessPointer -Path $pointer -Value $version'))
+  })
+
   it('keeps exactly one app-default line off in the CLI source', () => {
     expect(source.split(/\r?\n/).filter((line) => line.startsWith('$HarnessInstallApp ='))).toEqual(['$HarnessInstallApp = $false'])
     expect(source).toContain('if ($App -or $HarnessInstallApp) {')
@@ -360,11 +372,19 @@ describe.runIf(windows)('install.ps1, installing for real from a local manifest'
     return home
   }
 
-  /** These builds' payload files are not signed (`build`), so each install allows that, as only a test may; the case
-   *  that refuses one says `signed: true`. */
-  function install(home: string, manifest: string, subkey: string, extra: string[] = ['-NoService'], modulePath: ModulePath = 'default', signed = false) {
+  /**
+   * The environment of a whole install run in this block: the throwaway profile and PATH key, then [env]. These
+   * builds' payload files are not signed (`build`), so every run allows that, as only a test may. In one place
+   * because the two `irm | iex` cases built their own, and when install.ps1 began to refuse an unsigned terminal
+   * host (#4018, 2026-11-11) the Restricted one was refused.
+   */
+  function installEnv(home: string, subkey: string, env: NodeJS.ProcessEnv = {}, modulePath: ModulePath = 'default'): NodeJS.ProcessEnv {
+    return powershellEnv(modulePath, { USERPROFILE: home, HARNESS_INSTALL_ENV_KEY: subkey, HARNESS_ALLOW_UNSIGNED: '1', ...env })
+  }
+
+  function install(home: string, manifest: string, subkey: string, extra: string[] = ['-NoService'], modulePath: ModulePath = 'default') {
     return spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', installer, '-Manifest', manifest, ...extra], {
-      encoding: 'utf8', env: powershellEnv(modulePath, { USERPROFILE: home, HARNESS_INSTALL_ENV_KEY: subkey, ...(signed ? {} : { HARNESS_ALLOW_UNSIGNED: '1' }) }), timeout: 300_000,
+      encoding: 'utf8', env: installEnv(home, subkey, {}, modulePath), timeout: 300_000,
     })
   }
 
@@ -500,7 +520,7 @@ describe.runIf(windows)('install.ps1, installing for real from a local manifest'
     // The throwaway PATH key as well: the install must fail before PATH, but if it ever did not, it lands there.
     const subkey = freshKey()
     const text = `$env:HARNESS_INSTALL_MANIFEST = '${missing}'; Get-Content -Raw -LiteralPath '${installer}' | Invoke-Expression; Write-Output "after $LASTEXITCODE"`
-    const run = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(text, 'utf16le').toString('base64')], { encoding: 'utf8', env: powershellEnv('default', { USERPROFILE: profile(), HARNESS_INSTALL_ENV_KEY: subkey }), timeout: 120_000 })
+    const run = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(text, 'utf16le').toString('base64')], { encoding: 'utf8', env: installEnv(profile(), subkey), timeout: 120_000 })
     expect(run.stdout).toContain('The step that failed: Reading the release manifests.')
     expect(run.stdout.trim().endsWith('after 1')).toBe(true)
   })
@@ -557,7 +577,7 @@ describe.runIf(windows)('install.ps1, installing for real from a local manifest'
     const manifest = build(platform())
     const text = `Get-Content -Raw -LiteralPath '${installer}' | Invoke-Expression; Write-Output "after $LASTEXITCODE"`
     const run = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Restricted', '-EncodedCommand', Buffer.from(text, 'utf16le').toString('base64')], {
-      encoding: 'utf8', env: powershellEnv('default', { USERPROFILE: home, HARNESS_INSTALL_ENV_KEY: subkey, HARNESS_INSTALL_MANIFEST: manifest }), timeout: 300_000,
+      encoding: 'utf8', env: installEnv(home, subkey, { HARNESS_INSTALL_MANIFEST: manifest }), timeout: 300_000,
     })
     expect(run.stdout.trim().endsWith('after 0'), `${run.stdout}\n${run.stderr}`).toBe(true)
     // The command is a program, never a .ps1, so a Restricted PowerShell runs it.
@@ -662,12 +682,14 @@ describe.runIf(windows)('install.ps1, run again over a live install', { timeout:
     const marker = join(ptyRoot, 'pty-pending.json')
     writeFileSync(join(ptyRoot, 'current-pty'), '1.0.0\r\n')
     writeFileSync(marker, JSON.stringify({ version: '1.0.0', previous: '0.9.0' }))
-    const moved = ps(`$null = Install-HarnessPty -Root '${root}' -Entry @{ version = '2.0.0' } -Source '' -Tar ''`)
+    // The version folders hold placeholder text, not signed programs: allowed as a developer's build is, the door the
+    // signature case uses. Without it Install-HarnessPty refuses a version folder already there (#4018).
+    const moved = ps(`$null = Install-HarnessPty -Root '${root}' -Entry @{ version = '2.0.0' } -Source '' -Tar ''`, { HARNESS_ALLOW_UNSIGNED: '1' })
     expect(moved.status, moved.stderr).toBe(0)
     expect(readFileSync(join(ptyRoot, 'current-pty'), 'utf8')).toBe('2.0.0\r\n')
     expect(existsSync(marker)).toBe(false)
     writeFileSync(marker, JSON.stringify({ version: '2.0.0', previous: '1.0.0' }))
-    const same = ps(`$null = Install-HarnessPty -Root '${root}' -Entry @{ version = '2.0.0' } -Source '' -Tar ''`)
+    const same = ps(`$null = Install-HarnessPty -Root '${root}' -Entry @{ version = '2.0.0' } -Source '' -Tar ''`, { HARNESS_ALLOW_UNSIGNED: '1' })
     expect(same.status, same.stderr).toBe(0)
     expect(existsSync(marker)).toBe(true)
   })
