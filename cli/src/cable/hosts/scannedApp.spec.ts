@@ -8,7 +8,9 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
 import type { RunningProcess } from '../../lib/sessionSearch/externals/types.js'
 import { ObservedSource, type ObservedDeps } from './observed.js'
-import { appRoots, readBundleId, scannedApps, type ProcessName, type ScannedAppDeps } from './scannedApp.js'
+import {
+  appRoots, learnApps, parseProcessNames, readBundleId, readProcessNames, scannedApps, type ProcessName, type ScannedAppDeps,
+} from './scannedApp.js'
 
 const HOME = '/Users/someone'
 const ROOTS = appRoots(HOME)
@@ -204,6 +206,102 @@ describe('scannedApps elsewhere', () => {
   })
 })
 
+describe('the process table the scan reads', () => {
+  // Recorded as `ps -axo pid=,ppid=,comm=` prints it on macOS, the names made up: `comm` last is the whole path. With a
+  // column after it (`comm=,lstart=,args=`), the first rows' names came cut to `/Users/someone/A` and `/Applications/Vi`.
+  const MACOS = [
+    '    1     0 /sbin/launchd',
+    '  612     1 /Users/someone/Applications/Ghostty.app/Contents/MacOS/ghostty',
+    '  640   612 /usr/bin/login',
+    '  641   640 -zsh',
+    '  700   641 claude',
+    '  810     1 /Applications/Visual Studio Code.app/Contents/Frameworks/Code Helper (Plugin).app/Contents/MacOS/Code Helper (Plugin)',
+    '  820   810 /bin/zsh',
+    '  830   820 claude',
+    '',
+  ].join('\n')
+  // As procps prints it: `comm` is the task name, cut to 15 characters either way.
+  const LINUX = ['      1       0 systemd', '   2201       1 ghostty', '   2230    2201 bash', '   2300    2230 claude',
+    '   2400       1 Visual Studio C', ''].join('\n')
+
+  it('parses macOS rows, each name whole however long, spaces and all', () => {
+    expect(parseProcessNames(MACOS)).toEqual(table([
+      [1, 0, '/sbin/launchd'],
+      [612, 1, '/Users/someone/Applications/Ghostty.app/Contents/MacOS/ghostty'],
+      [640, 612, '/usr/bin/login'], [641, 640, '-zsh'], [700, 641, 'claude'],
+      [810, 1, '/Applications/Visual Studio Code.app/Contents/Frameworks/Code Helper (Plugin).app/Contents/MacOS/Code Helper (Plugin)'],
+      [820, 810, '/bin/zsh'], [830, 820, 'claude'],
+    ]))
+  })
+
+  it('parses Linux rows, each name the task\'s', () => {
+    expect(parseProcessNames(LINUX)).toEqual(table([
+      [1, 0, 'systemd'], [2201, 1, 'ghostty'], [2230, 2201, 'bash'], [2300, 2230, 'claude'], [2400, 1, 'Visual Studio C'],
+    ]))
+  })
+
+  it('a line that is no row is passed over', () => {
+    expect(parseProcessNames(['', '   ', 'PID PPID COMM', '  12', '  12   1', '  x   1 claude', '  13   1 claude  '].join('\n')))
+      .toEqual(table([[13, 1, 'claude']]))
+  })
+
+  it('an app\'s path longer than 16 characters names its app, as the read that cut it never did', async () => {
+    const d = deps([], { [`${HOME}/Applications/Ghostty.app`]: 'com.mitchellh.ghostty', '/Applications/Visual Studio Code.app': 'com.microsoft.VSCode' })
+    d.processes.mockResolvedValue(parseProcessNames(MACOS))
+    expect(await scannedApps([700, 830], d)).toEqual(new Map([[700, 'ghostty'], [830, 'vscode']]))
+  })
+
+  it.skipIf(process.platform === 'win32')('runs one ps with comm last: no command line, no environment, under 3 s and 1 MiB', async () => {
+    const exec = vi.fn(async (): Promise<string | null> => '  100     1 claude\n')
+    await learnApps([100], exec)
+    expect(exec.mock.calls).toEqual([['ps', ['-axo', 'pid=,ppid=,comm='], { timeout: 3_000, maxBuffer: 1024 * 1024 }]])
+  })
+
+  it('a ps that failed or listed nobody is an error that says nothing of what it printed', async () => {
+    const MARK = 'SECRET-TOKEN'
+    for (const out of [null, '', `${MARK} rotate the key\n`]) {
+      const error = await readProcessNames(async () => out).catch((e: unknown) => e)
+      expect(error).toEqual(new Error('process table not read'))
+    }
+  })
+})
+
+describe.skipIf(process.platform === 'win32')('the scan\'s process read', () => {
+  it('runs once for a scan of several new sessions, never on a tick, nor at a scan with no new session', async () => {
+    const owners = new Map<string, { pid: number; engine: string; record: string }>()
+    const exec = vi.fn(async (): Promise<string | null> => [...owners.values()].map(({ pid }) => `  ${pid}     1 claude`).join('\n'))
+    const src = new ObservedSource({
+      now: () => 0,
+      processes: async () => [...owners.values()].map(({ pid }) => ({ pid, generation: `g${pid}` })),
+      alive: () => true,
+      openSessions: { owners: async () => new Map(owners), busy: async () => false } as unknown as ObservedDeps['openSessions'],
+      sessionRows: {
+        find: async (wanted: ReadonlyMap<string, string>) => new Map([...wanted.keys()].map((id) => [id, { cwd: `/x/${id}`, transcriptPath: null }])),
+      } as unknown as ObservedDeps['sessionRows'],
+      lastAnswer: async () => undefined,
+      fileStamp: async () => null,
+      excluded: [],
+      log: () => {},
+      apps: (pids) => learnApps(pids, exec),
+    })
+    const open = (...ids: string[]): void => { for (const id of ids) owners.set(id, { pid: 100 + owners.size, engine: 'claude', record: id }) }
+    await src.tick()
+    await src.scanOpen()
+    expect(exec).not.toHaveBeenCalled()
+    open('a', 'b', 'c')
+    await src.scanOpen()
+    expect(exec).toHaveBeenCalledTimes(1)
+    expect(src.list().map((a) => [a.sessionId, a.appPending])).toEqual([['a', true], ['b', true], ['c', true]])
+    // The three are listed: a tick, and a scan that finds no other, have nothing to learn.
+    await src.tick()
+    await src.scanOpen()
+    expect(exec).toHaveBeenCalledTimes(1)
+    open('d')
+    await src.scanOpen()
+    expect(exec).toHaveBeenCalledTimes(2)
+  })
+})
+
 describe('readBundleId', () => {
   it('asks plutil for CFBundleIdentifier alone, under 1 s', async () => {
     const exec = vi.fn(async () => 'com.mitchellh.ghostty\n')
@@ -289,5 +387,14 @@ describe('the scan\'s files', () => {
       const source = readFileSync(fileURLToPath(new URL(file, import.meta.url)), 'utf8')
       for (const reader of [/processEnv\.js/, /\benviron\b/, /\beww\b/, /'-E'/, /process\.env/]) expect(source).not.toMatch(reader)
     }
+  })
+
+  it('read the processes with one ps, comm last: no command line, and no read that cuts the name', () => {
+    const source = readFileSync(fileURLToPath(new URL('./scannedApp.ts', import.meta.url)), 'utf8')
+    for (const reader of [/listProcesses/, /processTable/, /processRows/, /\bargs=/, /\bcommand=/, /lstart/, /\/proc\//]) {
+      expect(source).not.toMatch(reader)
+    }
+    expect(source.match(/'ps'/g)).toEqual(["'ps'"])
+    expect(source).toContain("'ps', ['-axo', 'pid=,ppid=,comm=']")
   })
 })
