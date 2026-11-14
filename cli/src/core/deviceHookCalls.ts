@@ -1,3 +1,5 @@
+import { minuteCounts } from './observedHook.js'
+
 /**
  * A hook's approval and inbox calls, checked and bounded here and then handed to the devices process, which owns the
  * dial's card and the voice inbox. The core keeps only the open requests themselves, so a forged or flooding hook costs
@@ -99,6 +101,7 @@ export interface DeviceHookCallsDeps {
   ready(): boolean
   devices(): DeviceHookPort | undefined
   newId(): string
+  log?: (line: string) => void
 }
 
 export function createDeviceHookCalls(deps: DeviceHookCallsDeps) {
@@ -108,17 +111,20 @@ export function createDeviceHookCalls(deps: DeviceHookCallsDeps) {
   const polls = new Map<string, () => void>()
 
   const port = (): DeviceHookPort | undefined => (deps.ready() ? deps.devices() : undefined)
+  // No dial is not counted: it is every call while none is plugged in, and says nothing about a hook.
+  const tally = minuteCounts(['refused', 'over'] as const,
+    (lost) => `[devices] dial hook calls in the last minute: ${lost.refused} refused, ${lost.over} over the bound`, deps.log ?? console.warn)
 
   return {
     async onApproval(body: unknown, gone: AbortSignal): Promise<'invalid' | ApprovalDecision> {
       const request = parseApproval(body)
-      if (!request) return 'invalid'
+      if (!request) { tally('refused'); return 'invalid' }
       const devices = port()
       // A client gone before its call is forwarded would never abort again, and its card would wait for nobody.
       if (!devices || gone.aborted) return 'none'
       let mine = 0
       for (const sessionId of approvals.values()) if (sessionId === request.sessionId) mine += 1
-      if (mine >= APPROVALS_PER_SESSION || approvals.size >= MAX_APPROVALS) return 'none'
+      if (mine >= APPROVALS_PER_SESSION || approvals.size >= MAX_APPROVALS) { tally('over'); return 'none' }
       const id = deps.newId()
       approvals.set(id, request.sessionId)
       const answer = devices.approval({ id, ...request }).catch((): ApprovalDecision => 'none')
@@ -127,13 +133,13 @@ export function createDeviceHookCalls(deps: DeviceHookCallsDeps) {
 
     async onInbox(body: unknown, gone: AbortSignal): Promise<'invalid' | 'off' | { text?: string }> {
       const poll = parseInboxPoll(body)
-      if (!poll) return 'invalid'
+      if (!poll) { tally('refused'); return 'invalid' }
       const devices = port()
       if (!devices || gone.aborted) return 'off'
       const { sessionId } = poll
       // The mod keeps one poll open, so an older one for the session is a client that went quiet: it gives up its place.
       polls.get(sessionId)?.()
-      if (polls.size >= MAX_POLLS) return 'off'
+      if (polls.size >= MAX_POLLS) { tally('over'); return 'off' }
       const pollId = deps.newId()
       const answer = devices.inboxPoll({ pollId, sessionId }).then(
         ({ text, off }): 'off' | { text?: string } =>
