@@ -6,6 +6,8 @@ const READY_MS = 35_000
 const WAIT_MS = 5_000
 /** Sessions whose last poll closed recently; past this many the oldest goes. */
 const MAX_CLOSED = 256
+/** The gone ids kept for a poll still to come; past this many the oldest goes. */
+const MAX_EARLY_GONE = 16
 
 export interface InboxDeps {
   now(): number
@@ -30,10 +32,15 @@ export class Inbox {
   private readonly waiting = new Map<string, Waiting>()
   /** When each session's last poll closed, oldest first. */
   private readonly closed = new Map<string, number>()
+  /** Ids `gone` found no open poll for, oldest first. Its notice can come before its own poll: the devices process handles
+   *  a notice at once and a call a microtask later (services/process.ts), and the socket hands it several in one tick. */
+  private readonly early = new Set<string>()
 
   constructor(private readonly deps: InboxDeps) {}
 
   poll(pollId: string, sessionId: string): Promise<{ text?: string }> {
+    // Its client went before it came: nobody is there to take a transcript.
+    if (this.early.delete(pollId)) return Promise.resolve({})
     // The newer poll is the one its client still waits on: it is held, never answered at once, or the mod asks again at once.
     const older = this.polls.get(sessionId)
     if (older) this.close(sessionId, older, {})
@@ -57,6 +64,8 @@ export class Inbox {
         return
       }
     }
+    this.early.add(pollId)
+    if (this.early.size > MAX_EARLY_GONE) this.early.delete(this.early.values().next().value!)
   }
 
   ready(sessionId: string): boolean {
