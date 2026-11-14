@@ -44,6 +44,8 @@ permissions:
 
 jobs:
   windows-pty:
+    # The matrix without its limit: the jobs keep the names GitHub gave them before it had one.
+    name: windows-pty (${{ matrix.runner }}, ${{ matrix.target }}, ${{ matrix.arch }}, ${{ matrix.artifact }})
     strategy:
       fail-fast: false
       matrix:
@@ -52,14 +54,19 @@ jobs:
             target: x86_64-pc-windows-msvc
             arch: x64
             artifact: harness-pty-windows-x64
+            timeout: 40
           - runner: windows-11-arm
             target: aarch64-pc-windows-msvc
             arch: arm64
             artifact: harness-pty-windows-arm64
+            timeout: 60
     # Each runner builds and tests its own native target. Cross-building the other
     # target is dropped: it needs extra MSVC components and adds little signal.
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 40
+    # A limit per architecture, in minutes. With every step run arm64 takes about 43 and x64 16 (2026-11-14):
+    # installPs1.spec.ts starts Windows PowerShell 5.1 many times, at about 8 s a start on windows-11-arm and 0.4 s on
+    # windows-latest. One limit of 40 cancelled the arm64 job in its last test step (run 43565271777).
+    timeout-minutes: ${{ matrix.timeout }}
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
