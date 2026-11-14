@@ -228,6 +228,13 @@ mod tests {
     }
 
     #[test]
+    fn a_clock_set_back_ends_the_wait() {
+        let mut keep = KeepAlive::new();
+        keep.watch_exit(Some(4), B + 3600);
+        assert_eq!(keep.tick(B, false), Some(Keep::SpawnWatch));
+    }
+
+    #[test]
     fn a_start_that_changes_nothing_reads_stopped_until_the_watch_connects() {
         let mut keep = two_downs();
         assert_eq!(keep.tick(B + 10, false), Some(Keep::RunStart));
