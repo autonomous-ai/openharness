@@ -10,6 +10,7 @@ import { WebSocket, WebSocketServer } from 'ws'
 import { describe, expect, it } from 'vitest'
 import { cursorMessagesToEvents } from './normalizer.js'
 import { loadCursorReplayTaskLinks } from './subagent.js'
+import { readDaemonRecord } from '../../lib/daemonRecord.js'
 import { managedNodePath } from '../../lib/nodeRuntime.js'
 
 const runCursorE2e = process.env.RUN_CURSOR_E2E === '1'
@@ -130,7 +131,7 @@ describe.skipIf(!runCursorE2e)('Cursor local HTTP/WS/tmux E2E', () => {
     const registryPath = join(dataDir, 'registry.json')
     const tmuxSession = `machine-cursor-e2e-${process.pid}`
     const held = await heldPort()
-    const hookPort = held.port
+    const configured = held.port
     const frames: Envelope[] = []
     const logs: string[] = []
     const originalHooks = existsSync(cursorHooksPath) ? await readFile(cursorHooksPath) : null
@@ -149,7 +150,6 @@ describe.skipIf(!runCursorE2e)('Cursor local HTTP/WS/tmux E2E', () => {
 
     let adapter: ChildProcess | null = null
     try {
-      await installTemporaryCursorHooks(hookPort, dataDir)
       await mkdir(authDir, { recursive: true, mode: 0o700 })
       await writeFile(join(authDir, 'session.json'), JSON.stringify({
         version: 1,
@@ -171,7 +171,7 @@ describe.skipIf(!runCursorE2e)('Cursor local HTTP/WS/tmux E2E', () => {
           ADAPTER_DATA_DIR: dataDir,
           BACKEND_WS_URL: `ws://127.0.0.1:${address.port}`,
           WEB_URL: 'http://127.0.0.1:3000',
-          PORT: String(hookPort),
+          PORT: String(configured),
           DISABLE_HOOK_INSTALL: 'true',
           ADAPTER_UPDATE_DISABLE: 'true',
           RECAP_FORCE: 'false',
@@ -185,11 +185,17 @@ describe.skipIf(!runCursorE2e)('Cursor local HTTP/WS/tmux E2E', () => {
       adapter.stdout?.on('data', (chunk) => logs.push(chunk.toString()))
       adapter.stderr?.on('data', (chunk) => logs.push(chunk.toString()))
 
+      // The daemon moved off its configured port and wrote the one it bound, once bound (lib/daemonRecord.ts).
+      const hookPort = (await waitUntil('the port the daemon bound, in its record',
+        () => readDaemonRecord(dataDir, configured)?.port ?? null, (port) => port !== null))!
+      expect(hookPort).not.toBe(configured)
       await waitUntil(
         'adapter health',
         async () => fetch(`http://127.0.0.1:${hookPort}/api/health`).then((res) => res.ok).catch(() => false),
         Boolean,
       )
+      // The hooks carry the port the daemon bound, known only once it is up.
+      await installTemporaryCursorHooks(hookPort, dataDir)
       const backendSocket = await waitUntil<WebSocket | null>(
         'adapter backend websocket',
         () => socket,
