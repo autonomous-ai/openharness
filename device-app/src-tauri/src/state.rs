@@ -119,7 +119,9 @@ mod tests {
     }
 
     #[test]
-    fn an_unknown_or_unreadable_file_gives_defaults_and_one_log_line() {
+    fn an_unknown_or_unreadable_file_gives_defaults_with_the_cli_seen_and_one_log_line() {
+        // A file there is no first run: a CLI the person removed is never installed again on their behalf.
+        let seen = Saved { cli_seen: true, ..Saved::default() };
         let contents = [
             "not json",
             "[]",
@@ -132,7 +134,7 @@ mod tests {
             fs::write(dir.path().join("state.json"), content).unwrap();
             let log = Arc::new(MemoryLog::default());
             let file = JsonStateFile::new(dir.path().to_path_buf(), log.clone());
-            assert_eq!(file.load(), Saved::default(), "{content}");
+            assert_eq!(file.load(), seen, "{content}");
             assert_eq!(log.lines(), ["state: unreadable, starting from defaults"], "{content}");
         }
         // A folder where the file should be cannot be read either.
@@ -140,7 +142,7 @@ mod tests {
         fs::create_dir(dir.path().join("state.json")).unwrap();
         let log = Arc::new(MemoryLog::default());
         let file = JsonStateFile::new(dir.path().to_path_buf(), log.clone());
-        assert_eq!(file.load(), Saved::default());
+        assert_eq!(file.load(), seen);
         assert_eq!(log.lines(), ["state: unreadable, starting from defaults"]);
     }
 
