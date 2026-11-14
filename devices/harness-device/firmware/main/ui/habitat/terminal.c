@@ -690,7 +690,7 @@ bool ht_ring_arc(ht_scene_t *s, int cx16, int cy16, int radius16, int width16, i
  */
 enum { ARC_PROP_MID = 11, ARC_PROP_RADIUS = 205, ARC_PROP_LOWER = 202, ARC_PROP_SPAN16 = HT_ARC_SPAN * 16 };
 // The inner upper arc (ht_arc_inner_face): its caps' middle 33 px inside the title's, and a span of about 30 degrees each
-// side of 12 o'clock, so a Swarm face's chat name stays in the gap above the pet (option A of the mockup, 2026-10-28).
+// side of 12 o'clock, so the face's grey line stays in the gap above the pet (option A of the mockup, 2026-10-28).
 enum { ARC_PROP_INNER = 172, ARC_INNER_SPAN16 = 176 * 16 };
 #ifdef DEVICE_LAYOUT_BENCH
 static bool arc_tight;   // defined below with the mask cache

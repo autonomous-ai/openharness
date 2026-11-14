@@ -183,13 +183,11 @@ class SetupHotspot {
   }
 
   /// Hands the device the Wi-Fi and the ticket, or on a cable ([ssid] empty) the ticket alone.
-  /// Answers the run to look for in a later result. [swarm]: set up for the person's Swarm, so its screen opens no
-  /// OpenCode of its own (os/setup.py); an older device ignores it.
+  /// Answers the run to look for in a later result.
   Future<int> connect({
     required String ssid,
     required String password,
     required String ticket,
-    bool swarm = false,
   }) async {
     final Response<dynamic> res;
     try {
@@ -198,7 +196,6 @@ class SetupHotspot {
         data: {
           if (ssid.isNotEmpty) ...{'ssid': ssid, 'password': password},
           'ticket': ticket,
-          if (swarm) 'swarm': true,
         },
       );
     } on DioException {

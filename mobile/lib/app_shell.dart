@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'measurement/launch_measurement.dart';
 import 'measurement/setup_usage_choice.dart';
 
@@ -17,6 +19,7 @@ import 'shared/theme/color_palette.dart';
 import 'shared/theme/system_bars.dart';
 import 'core/machine_cache.dart';
 import 'core/startup.dart';
+import 'core/swarm_leftovers.dart';
 import 'logging/app_log.dart';
 import 'logging/install.dart';
 import 'logging/launch_frames.dart';
@@ -97,6 +100,10 @@ Future<void> startHarness({
   );
   // And the twenty seconds after it, frame by frame — whether the launch stuttered.
   LaunchFrames.watch();
+  // What the removed Swarm left on this phone, once the first frame is up: the launch never waits.
+  WidgetsBinding.instance.addPostFrameCallback(
+    (_) => unawaited(forgetSwarmLeftovers()),
+  );
 }
 
 class HarnessApp extends StatelessWidget {
