@@ -24,7 +24,8 @@ Read it with this plan, the root `AGENTS.md` and `cli/AGENTS.md`. The spec is th
   `store/tools/test-folders.test.mjs:19` and `os/tests/dsh/exercise.mjs:90`, read the exit status or save the output).
 - Platforms: Windows x64 and arm64 only. The case is `it.runIf(process.platform === 'win32')`; on macOS and Linux it
   is skipped, so a local `vitest run` of the spec proves nothing and is not evidence.
-- The comment at the changed line says why and names the incident (runs 43158661612 and 43557665371).
+- The comment at the changed line says why and names the incident; the run IDs go in the commit message and the
+  pull request body, not the code.
 - One pull request. Its body carries the two red runs, the local proof's output, the green run's link, and the
   platforms.
 
@@ -123,7 +124,7 @@ Line 13 becomes, with its comment:
 
 ```ts
     // TAP by name: since Node 23 `node --test` reports in `spec` even when stdout is not a terminal, and prints `ℹ fail 0`.
-    // On Node 24.22.2 this spec was red with all 19 cases passing (windows.yml runs 43158661612 and 43557665371).
+    // On Node 24 the Windows jobs went red here with every case passing.
     const run = spawnSync(process.execPath, ['--test', '--test-reporter=tap', join('..', 'store', 'tools', 'windows-pipe.test.mjs')], { encoding: 'utf8', timeout: 120_000 })
 ```
 
