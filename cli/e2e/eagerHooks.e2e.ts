@@ -7,7 +7,7 @@ import { afterAll, afterEach, beforeAll, expect, it, onTestFailed } from 'vitest
 import { readLeanBundle } from '../src/harnessd/leanBundle.js'
 import { LocalClient } from './harness/client.js'
 import { assertHooksContained, CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
-import { withLean } from './harness/release.js'
+import { buildWithLean } from './harness/release.js'
 import { shellSingleQuote } from '../src/lib/shellQuote.js'
 
 let scratch = '', bundle = ''
@@ -31,6 +31,15 @@ it('refuses a native hook destination outside the test, including the OpenCode s
   expect(() => assertHooksContained(d.root, d.env)).not.toThrow()
   d.env.HOOK_INSTALL_ENGINES = 'unknown'
   expect(() => assertHooksContained(d.root, d.env)).toThrow('supported hook engines')
+})
+
+it('refuses to start from a cli.js with no notify.mjs beside it, before any process starts', async () => {
+  const alone = join(scratch, 'alone', 'cli.js')
+  mkdirSync(dirname(alone), { recursive: true })
+  writeFileSync(alone, '')
+  const d = daemon = await IsolatedDaemon.create({ scriptPath: alone })
+  await expect(d.start()).rejects.toThrow(`${alone} has no notify.mjs beside it`)
+  expect(d.pid).toBeNull()
 })
 
 it('becomes ready and serves control while startup hook preparation is still waiting', async () => {
@@ -223,8 +232,7 @@ it.each([['missing', 'claude'], ['stalled', 'codex']] as const)(
     expect(chunks).toHaveLength(1)
     if (mode === 'missing') delete files[chunks[0]!]
     else files[chunks[0]!] = "console.error('[fixture] legacy hooks stalled'); await new Promise(() => {});\n"
-    const script = join(scratch, mode, 'cli.js'); mkdirSync(dirname(script), { recursive: true })
-    writeFileSync(script, withLean(readFileSync(bundle, 'utf8'), files), { mode: 0o755 })
+    const script = buildWithLean(join(scratch, mode), bundle, files)
     const d = daemon = await IsolatedDaemon.create({ scriptPath: script })
     onTestFailed(() => console.log(d.log()))
     const root = join(d.root, 'native')

@@ -7,7 +7,7 @@ import { afterAll, afterEach, beforeAll, expect, it, onTestFailed } from 'vitest
 import { readLeanBundle } from '../src/harnessd/leanBundle.js'
 import { LocalClient } from './harness/client.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
-import { withLean } from './harness/release.js'
+import { buildWithLean } from './harness/release.js'
 
 let scratch = '', bundle = ''
 let daemon: IsolatedDaemon | undefined
@@ -30,9 +30,7 @@ it.each(['missing', 'stalled'] as const)('binds, follows Copilot resume and loca
     if (mode === 'missing') delete files[chunks[0]!]
     else files[chunks[0]!] = `console.error('[fixture] ${marker} stalled'); await new Promise(() => {});\n`
   }
-  const script = join(scratch, mode, 'cli.js')
-  mkdirSync(dirname(script), { recursive: true })
-  writeFileSync(script, withLean(readFileSync(bundle, 'utf8'), files), { mode: 0o755 })
+  const script = buildWithLean(join(scratch, mode), bundle, files)
   const d = daemon = await IsolatedDaemon.create({ scriptPath: script })
   onTestFailed(() => console.log(d.log()))
   const first = 'aaaaaaaa-1111-4222-8333-444444444444', next = 'bbbbbbbb-1111-4222-8333-444444444444'
