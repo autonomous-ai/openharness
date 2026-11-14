@@ -1830,6 +1830,7 @@ int main(int argc, char **argv) {
     assert(!scene_says("Orca"));                                            // not on a window's list
     ui_fleet_set_view(true); scene_take(); assert(scene_says("Orca")); portrait(dir,"caps-machine-view");
     ui_project_set_host_caps("a","vscode",CABLE_CAP_S); scene_take(); assert(scene_says("VS Code"));
+    ui_project_set_host_caps("a","claude",CABLE_CAP_S); scene_take(); assert(scene_says("Claude"));
     ui_project_set_host_caps("a","",CABLE_CAP_S); scene_take(); assert(scene_says("Terminal"));
     ui_fleet_set_view(false); scene_take(); assert(!scene_says("Terminal"));
     // the resting face of an agent without V shows no voice invitation, on the plain face and the pet's relaxing one

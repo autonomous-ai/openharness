@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { FRONT_APPS } from '../../core/dialFront.js'
 import { APP_IDS, appDisplayName, detectApp, detectHost, hostDisplayName, UNKNOWN_APP } from './hostDetect.js'
 
 describe('detectHost', () => {
@@ -89,8 +90,16 @@ describe('detectApp', () => {
     expect(detectApp({ WEZTERM_PANE: '0' })).toBe('wezterm')
   })
 
-  it('APP_IDS has 14 ids, at most 16, and every one has a display name', () => {
-    expect(APP_IDS).toHaveLength(14)
+  it("the Claude desktop app's bundle id is claude, read Claude", () => {
+    const hints = { __CFBundleIdentifier: 'com.anthropic.claudefordesktop' }
+    expect(detectHost(hints)).toBe('claude')
+    expect(detectApp(hints)).toBe('claude')
+    expect(hostDisplayName('claude')).toBe('Claude')
+    expect(appDisplayName('claude')).toBe('Claude')
+  })
+
+  it('APP_IDS has 15 ids, at most 16, and every one has a display name', () => {
+    expect(APP_IDS).toHaveLength(15)
     expect(APP_IDS.length).toBeLessThanOrEqual(16)
     for (const id of APP_IDS) expect(appDisplayName(id)).toMatch(/\S/)
   })
@@ -100,7 +109,11 @@ describe('detectApp', () => {
     expect(appDisplayName('terminal-app')).toBe('Terminal')
     expect(hostDisplayName('terminal')).toBe('Terminal')
     const others = APP_IDS.filter((id) => id !== 'terminal' && id !== 'terminal-app')
-    expect(others).toHaveLength(12)
+    expect(others).toHaveLength(13)
     for (const id of others) expect(appDisplayName(id)).toBe(hostDisplayName(id))
+  })
+
+  it("the core's front words are the app ids and none, so the two cannot drift", () => {
+    expect([...FRONT_APPS].sort()).toEqual([...APP_IDS, 'none'].sort())
   })
 })
