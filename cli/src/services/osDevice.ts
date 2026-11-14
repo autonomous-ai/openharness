@@ -17,6 +17,7 @@ import { basename } from 'node:path'
 import type { CoreApi, ServiceRequests } from '../core/api.js'
 import { setComputerUse, computerUseAvailable, computerUseOn } from '../agentClient/computerUse.js'
 import { readMachineMcp } from '../lib/machineMcp.js'
+import { spawnTied } from '../lib/tied.js'
 
 /** The requests this service answers for the apps, declared in core/api.ts for the core to route. */
 export { OS_DEVICE_REQUESTS } from '../core/api.js'
@@ -117,7 +118,8 @@ export function githubLoginOf(out: string): string | null {
  *  screen's display either: the code is the phone's to copy, not this computer's clipboard. */
 export function githubDeviceSignIn(gh: string = GH): GithubSignIn {
   const { WAYLAND_DISPLAY: _wayland, DISPLAY: _x11, ...env } = process.env
-  const child = spawn(gh, ['auth', 'login', '--hostname', 'github.com', '--git-protocol', 'https', '--web', '--skip-ssh-key'],
+  // Tied: each crash of this service left a sign-in running, waiting its 15 minutes on a code nobody would read.
+  const child = spawnTied(gh, ['auth', 'login', '--hostname', 'github.com', '--git-protocol', 'https', '--web', '--skip-ssh-key'],
     { stdio: ['ignore', 'pipe', 'pipe'], env: { ...env, BROWSER: 'true', GH_PROMPT_DISABLED: '1' } })
   let output = ''
   let shown: (value: { code: string; url: string }) => void
