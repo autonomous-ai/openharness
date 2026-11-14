@@ -1,5 +1,108 @@
 //! The install script runs: `--host`, then `--desktop`.
 
+use crate::cli::{self, INSTALL_DEADLINE};
+use crate::types::{Log, Output};
+use regex::Regex;
+use std::io;
+use std::process::Command;
+use std::sync::LazyLock;
+use std::time::Duration;
+
+/// The desktop app's `kHarnessHostSetupCommand`, word for word. Fixed: nothing is ever added to it.
+pub const HOST: &str = "curl -fsSL https://cdn.autonomous.ai/harness/cli/install.sh | /bin/sh -s -- --host";
+/// The desktop app's `kHarnessDesktopInstallCommand`, word for word.
+pub const DESKTOP: &str = "curl -fsSL https://cdn.autonomous.ai/harness/cli/install.sh | /bin/sh -s -- --desktop";
+
+/// Off macOS: the Windows script (`install.ps1 -Desktop`) is a later wave.
+pub const NOT_SUPPORTED: &str = "Not supported here.";
+/// A run past its deadline that printed nothing.
+pub const TIMED_OUT: &str = "Setup timed out.";
+/// A run that failed, or a computer with no CLI after both runs, when the run printed nothing.
+pub const NOT_INSTALLED: &str = "Harness was not installed.";
+/// What the Install screen shows of a failed run: its last lines, each cut to LINE_CHARS characters.
+pub const LAST_LINES: usize = 4;
+pub const LINE_CHARS: usize = 120;
+
+/// Runs one shell line, behind a trait so no test runs the script or reaches the network.
+pub trait Shell: Send + Sync {
+    fn run(&self, line: &str, deadline: Duration) -> io::Result<Output>;
+}
+
+/// `/bin/sh -c line`, in its own process group: past the deadline curl and the script die with it.
+pub struct SystemShell;
+
+impl Shell for SystemShell {
+    fn run(&self, line: &str, deadline: Duration) -> io::Result<Output> {
+        let mut command = Command::new("/bin/sh");
+        command.arg("-c").arg(line);
+        cli::run(command, deadline)
+    }
+}
+
+/// Some on macOS only: the install is not offered elsewhere yet, so the runner answers NOT_SUPPORTED there.
+pub fn system_shell() -> Option<SystemShell> {
+    cfg!(target_os = "macos").then_some(SystemShell)
+}
+
+/// HOST, then DESKTOP, each within INSTALL_DEADLINE. Each line's exit code is `/bin/sh`'s, not curl's: a curl that
+/// fails hands sh nothing, and sh exits 0. So an install counts only when `cli_there()` finds a CLI after both.
+/// Err holds the last lines of the run that failed, or of the last run; each line of every run goes to `log`.
+pub fn install(shell: &dyn Shell, log: &dyn Log, cli_there: &dyn Fn() -> bool) -> Result<(), Vec<String>> {
+    let mut last = Vec::new();
+    for (line, flag) in [(HOST, "--host"), (DESKTOP, "--desktop")] {
+        let output = shell.run(line, INSTALL_DEADLINE).map_err(|error| {
+            log.line(&format!("install: {flag} could not start: {error}"));
+            vec![error.to_string()]
+        })?;
+        last = clean_lines(&output);
+        for line in &last {
+            log.line(&format!("install: {line}"));
+        }
+        let failed = if output.timed_out {
+            log.line(&format!("install: {flag} timed out after {} s", INSTALL_DEADLINE.as_secs()));
+            Some(TIMED_OUT)
+        } else {
+            log.line(&match output.code {
+                Some(code) => format!("install: {flag} exit {code}"),
+                None => format!("install: {flag} killed by a signal"),
+            });
+            (output.code != Some(0)).then_some(NOT_INSTALLED)
+        };
+        if let Some(sentence) = failed {
+            return Err(shown(&last, sentence));
+        }
+    }
+    if cli_there() {
+        return Ok(());
+    }
+    log.line("install: harness not found after it");
+    Err(shown(&last, NOT_INSTALLED))
+}
+
+/// A terminal's colour and cursor codes (CSI sequences).
+static ESCAPES: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\x1b\[[0-?]*[ -/]*[@-~]").unwrap());
+
+/// Each line of stdout, then of stderr (Output keeps them apart; a script's error is on stderr, so it comes last), as
+/// a terminal leaves it: a `\r` progress line shows its last frame. No escape or other control character, trimmed, and
+/// an empty line dropped: the output is outside text, bound for the screen and the log.
+fn clean_lines(output: &Output) -> Vec<String> {
+    let clean = |line: &str| {
+        line.rsplit('\r')
+            .map(|frame| ESCAPES.replace_all(frame, "").chars().filter(|c| !c.is_control()).collect::<String>())
+            .map(|frame| frame.trim().to_string())
+            .find(|frame| !frame.is_empty())
+    };
+    output.stdout.lines().chain(output.stderr.lines()).filter_map(clean).collect()
+}
+
+/// The last LAST_LINES of `lines`, each cut to LINE_CHARS; `sentence` when the run printed nothing.
+fn shown(lines: &[String], sentence: &str) -> Vec<String> {
+    if lines.is_empty() {
+        return vec![sentence.to_string()];
+    }
+    lines[lines.len().saturating_sub(LAST_LINES)..].iter().map(|line| line.chars().take(LINE_CHARS).collect()).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
