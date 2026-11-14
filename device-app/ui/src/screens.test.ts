@@ -132,6 +132,31 @@ describe('screens', () => {
     expect(text()).toContain(outside)
   })
 
+  it('a screen reader hears a failure, and what the focused button answers', async () => {
+    const alert = () => page().querySelector('[role="alert"]')?.textContent ?? null
+    const described = () =>
+      (document.activeElement?.getAttribute('aria-describedby') ?? '')
+        .split(' ')
+        .map((id) => document.getElementById(id)?.textContent)
+        .join(' ')
+
+    await mount(at('install', 'failed', ['curl: (6) Could not resolve host', 'exit 6']))
+    expect(alert()).toContain('curl: (6) Could not resolve host')
+    expect(alert()).toContain('exit 6')
+
+    push(at('sign_in', 'failed', ['Sign-in did not finish.']))
+    expect(alert()).toBe('Sign-in did not finish.')
+    expect(described()).toBe('Sign-in did not finish.')
+
+    push(at('claude', 'failed', ['Claude Code is too old.']))
+    expect(alert()).toBe('Claude Code is too old.')
+    expect(described()).toBe('Claude Code is too old.')
+
+    push(at('claude', 'offer'))
+    expect(alert()).toBeNull()
+    expect(described()).toBe("The dial speaks Claude Code's answers and asks its approvals. Harness adds hooks to Claude Code's settings.")
+  })
+
   it('the primary button has the focus, and no other', async () => {
     await mount(at('sign_in', 'offer'))
     expect(document.activeElement?.textContent).toBe('Sign in')
