@@ -4,8 +4,7 @@
  * architecture. Grid's llama.cpp starts one only when its app is not installed here. */
 import { execFile, spawn } from 'node:child_process'
 import { closeSync, openSync } from 'node:fs'
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
-import { createServer, type AddressInfo } from 'node:net'
+import { mkdir, open, readFile, rename, writeFile } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import { processExists } from './processLiveness.js'
 
@@ -153,18 +152,34 @@ export function appContext(model: Pick<AppModel, 'contextLength' | 'kvBytesPerTo
   return null
 }
 
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = createServer()
-    server.once('error', reject)
-    server.listen(0, '127.0.0.1', () => {
-      const { port } = server.address() as AddressInfo
-      server.close(() => resolve(port))
-    })
-  })
-}
-
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+
+/** What each engine prints once it has bound the port the system gave it. */
+const SAYS_PORT = {
+  ollama: /Listening on 127\.0\.0\.1:(\d{1,5})\b/,
+  'llama.cpp': /server is listening on http:\/\/127\.0\.0\.1:(\d{1,5})\b/,
+} as const
+const LOG_POLL_MS = 100
+
+/** The port [engine] says it bound, from its log as the log grows. Null when its process ends or [deadline] passes first. */
+const saidPort = async (engine: keyof typeof SAYS_PORT, logFile: string, deadline: number, pid: number): Promise<number | null> => {
+  const log = await open(logFile, 'r')
+  try {
+    const chunk = Buffer.alloc(64 * 1024)
+    let offset = 0, unfinished = ''
+    for (;;) {
+      for (let read = await log.read(chunk, 0, chunk.length, offset); read.bytesRead > 0; read = await log.read(chunk, 0, chunk.length, offset)) {
+        offset += read.bytesRead
+        // Whole lines only: a write cut inside the number would read as a shorter port.
+        const lines = (unfinished + chunk.toString('latin1', 0, read.bytesRead)).split('\n')
+        unfinished = lines.pop()!.slice(-4096)
+        for (const line of lines) { const said = SAYS_PORT[engine].exec(line); if (said) return Number(said[1]) }
+      }
+      if (!processExists(pid) || Date.now() >= deadline) return null
+      await sleep(LOG_POLL_MS)
+    }
+  } finally { await log.close() }
+}
 
 /** llama-server's arguments for [model] on loopback [port]: one slot, so a harness's one conversation has the
  *  whole window. */
@@ -208,7 +223,7 @@ export function appEngineOps(env: NodeJS.ProcessEnv, request: typeof fetch = fet
   }
   const background = async (binary: string, args: string[], extra: NodeJS.ProcessEnv, logDir: string, logName: string): Promise<number> => {
     await mkdir(logDir, { recursive: true, mode: 0o700 })
-    const log = openSync(join(logDir, logName), 'a', 0o600)
+    const log = openSync(join(logDir, logName), 'w', 0o600)
     try {
       // Its own process group, so it outlives this daemon and Stop ends it with whatever it started.
       const child = spawn(binary, args, { env: { ...env, ...extra }, detached: true, windowsHide: true, stdio: ['ignore', log, log] })
@@ -231,21 +246,31 @@ export function appEngineOps(env: NodeJS.ProcessEnv, request: typeof fetch = fet
   return {
     async start(model, ctx, logDir) {
       const binary = model.binary!
+      // Each engine is started on port 0 and the port it bound is read from its log: a port picked here and freed
+      // for the engine could be taken before the engine bound it, and the engine then failed or this talked to
+      // whoever held the port. One log per engine and model, emptied at each start, so the port read is this run's;
+      // the name is percent-encoded so two models' names stay two files.
+      const logName = (prefix: string) => `${prefix}-${encodeURIComponent(model.name).slice(0, 200)}.log`
       if (model.engine === 'ollama') {
         // Its own server beside the person's Ollama app, never on the app's 11434: the window is a server
         // setting, and theirs ran every model at 16K [run]. Same model store, so nothing is copied.
-        const port = await freePort()
-        const pid = await background(binary, ['serve'], { OLLAMA_HOST: `127.0.0.1:${port}`, OLLAMA_CONTEXT_LENGTH: String(ctx),
-          OLLAMA_NUM_PARALLEL: '1', OLLAMA_KEEP_ALIVE: '-1' }, logDir, `ollama-${port}.log`)
-        if (!await ready(`http://127.0.0.1:${port}/api/version`, 60_000, pid)) throw new AppStartError('Ollama could not start. Try again.')
+        const log = logName('ollama')
+        const pid = await background(binary, ['serve'], { OLLAMA_HOST: '127.0.0.1:0', OLLAMA_CONTEXT_LENGTH: String(ctx),
+          OLLAMA_NUM_PARALLEL: '1', OLLAMA_KEEP_ALIVE: '-1' }, logDir, log)
+        const deadline = Date.now() + 60_000
+        const port = await saidPort('ollama', join(logDir, log), deadline, pid)
+        if (!port || !await ready(`http://127.0.0.1:${port}/api/version`, deadline - Date.now(), pid)) throw new AppStartError('Ollama could not start. Try again.')
         return { engine: 'ollama', served: model.ref, alias: model.name, port, binary, pid }
       }
       if (model.engine === 'llama.cpp') {
-        const port = await freePort()
-        const pid = await background(binary, llamaServerArgs(model, ctx, port), {}, logDir, `llama-${port}.log`)
-        if (!await ready(`http://127.0.0.1:${port}/health`, 10 * 60_000, pid)) {
+        const log = logName('llama')
+        const pid = await background(binary, llamaServerArgs(model, ctx, 0), {}, logDir, log)
+        const deadline = Date.now() + 10 * 60_000
+        const port = await saidPort('llama.cpp', join(logDir, log), deadline, pid)
+        if (!port || !await ready(`http://127.0.0.1:${port}/health`, deadline - Date.now(), pid)) {
           try { process.kill(-pid, 'SIGTERM') } catch { /* gone */ }
-          throw new AppStartError('llama.cpp could not load the model. Try again.')
+          // A build before 4240 binds a port for --port 0 but says 0, so its port cannot be known.
+          throw new AppStartError(port === 0 ? 'Update llama.cpp to build 4240 or newer, then try again.' : 'llama.cpp could not load the model. Try again.')
         }
         return { engine: 'llama.cpp', served: model.name, alias: model.name, port, binary, pid }
       }
