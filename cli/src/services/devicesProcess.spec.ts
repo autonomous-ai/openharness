@@ -107,6 +107,18 @@ describe('the devices in their own process', () => {
     }
   })
 
+  it('run what the devices registered for a core that goes, each time one does', () => {
+    const f = setup()
+    const gone = vi.fn()
+    f.deps().onCoreGone!(gone)
+    f.connect()
+    expect(gone).not.toHaveBeenCalled()
+    f.options().onDisconnected!()
+    f.connect()
+    f.options().onDisconnected!()
+    expect(gone).toHaveBeenCalledTimes(2)
+  })
+
   it('run the devices and their link as the master starts them', () => {
     runDevicesService({ dataDir: '/data', socketPath: '/sock', machineId: 'c', token: 't' })
     expect(real.started).toHaveLength(1)

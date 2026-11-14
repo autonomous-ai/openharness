@@ -200,6 +200,7 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
   const core = over.core ?? fakeCore({ dataDir })
   const ports: CorePorts = emptyPorts()
   const onExit = vi.fn()
+  const gone: Array<() => void> = []
   const requests = startDevices(core, ports, {
     logsDir: join(dataDir, 'logs'),
     petsDir: join(dataDir, 'pets'),
@@ -214,8 +215,9 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
     faults: new Set(over.faults ?? []),
     log: (line) => { logs.push(line) },
     onExit,
+    onCoreGone: (run) => { gone.push(run) },
   })
-  return { core, ports, port: ports.devices as DevicesPort, requests, onExit }
+  return { core, ports, port: ports.devices as DevicesPort, requests, onExit, gone }
 }
 
 const calls = (name: string) => seen.cable.calls.filter(([called]) => called === name).map(([, args]) => args)
@@ -1436,6 +1438,21 @@ describe('a hook\'s approvals, the mod\'s voice and Orca, for agents outside a p
     expect(await second).toBe('none')
     expect(calls('questionClose')).toEqual([[ID, 'approval:r1'], [ID, 'approval:r2']])
     expect(said().filter((line) => line.startsWith('[device] approval · closed'))).toHaveLength(2)
+  })
+
+  it('a core that goes closes the open card with none and its poll with {}', async () => {
+    const { port, gone } = startHere()
+    attach(port)
+    const decision = port.approval(REQUEST)
+    await vi.waitFor(() => expect(calls('question')).toHaveLength(1))
+    const poll = port.inboxPoll({ pollId: 'p1', sessionId: 'sess-2' })
+    // Its calls have already failed to none: a card left open would take an Allow that nothing hears.
+    expect(gone).toHaveLength(1)
+    gone.forEach((run) => run())
+    expect(await decision).toBe('none')
+    expect(await poll).toEqual({})
+    expect(calls('questionClose')).toEqual([[ID, 'approval:r1']])
+    expect(host().answer(ID, 'approval:r1', { approval: 'Allow' })).toEqual({ ok: false, error: 'This request is closed.' })
   })
 
   it('approval.gone closes the card', async () => {
