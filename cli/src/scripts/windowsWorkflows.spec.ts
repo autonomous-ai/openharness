@@ -27,6 +27,18 @@ describe('the Windows release workflows', () => {
     for (const spec of ['src/lib/hostMove/hostMove.real.spec.ts', 'src/lib/ptyHost/drain.spec.ts', 'src/lib/windows/ptyInstall.windows.real.spec.ts']) expect(pty).toContain(spec)
   })
 
+  // With every step run the arm64 job takes about 43 minutes and the x64 job 16 (2026-11-14). One limit of 40 for both
+  // cancelled arm64 in its last test step, and the install job was skipped (run 43565271777). The job's name lists the
+  // matrix without the limit, so the jobs keep today's names.
+  it('gives each architecture of the Windows PTY job its own time limit', () => {
+    const job = read('windows.yml').match(/\n  windows-pty:\n([\s\S]*?)(?=\n  [\w-]+:\n|$)/)?.[1] ?? ''
+    const entries = (job.match(/\n {8}include:\n((?: {10}[^\n]*\n)+)/)?.[1] ?? '').split(/^ {10}- /m).slice(1)
+    const limits = entries.map((entry) => [entry.match(/^\s*arch: (\S+)$/m)?.[1], entry.match(/^\s*timeout: (\d+)$/m)?.[1]])
+    expect(limits).toStrictEqual([['x64', '40'], ['arm64', '60']])
+    expect(job.match(/^ {4}timeout-minutes: (.+)$/m)?.[1]).toBe('${{ matrix.timeout }}')
+    expect(job.match(/^ {4}name: (.+)$/m)?.[1]).toBe('windows-pty (${{ matrix.runner }}, ${{ matrix.target }}, ${{ matrix.arch }}, ${{ matrix.artifact }})')
+  })
+
   it('publishes the Windows bits to staging, and to production only when a dispatch asks', () => {
     const release = read('release.yml')
     expect(release).toContain('uses: ./.github/workflows/windows.yml')
