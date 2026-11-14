@@ -777,6 +777,15 @@ mod tests {
     }
 
     #[test]
+    fn a_claude_read_that_failed_keeps_the_last_answer() {
+        let mut app = found();
+        answer(&mut app, true, claude(true));
+        assert!(app.handle(Event::Claude(None)).is_empty());
+        let redrawn = app.handle(Event::MenuOpened { now: B + 10, desktop_installed: true });
+        assert_eq!(rows(&redrawn)[2..4], ["Claude Code: On", "Turn off"]);
+    }
+
+    #[test]
     fn no_claude_row_or_screen_without_the_command() {
         let mut app = found();
         let effects = answer(&mut app, true, None);
