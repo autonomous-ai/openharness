@@ -10,6 +10,7 @@ import { env } from '../config/env.js'
 import { DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, ServiceUnavailableError, type CoreApi, type CorePorts, type DevicesPort } from '../core/api.js'
 import type { ObservedHookEvent } from '../core/observedHook.js'
 import { createServiceHost } from '../core/serviceHost.js'
+import { STOP_HOOK_GRACE_MS } from '../core/turns/turnHooks.js'
 import type { FleetEvent } from '../cable/machineFleet.js'
 import { claudeProjectsRoots, codexHomeRoots } from '../lib/engineHomes.js'
 import type { RegisteredSession } from '../lib/registry.js'
@@ -1600,11 +1601,14 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
   })
 
   it('observed turn-stop reaches the dial as turn.done and summary with the last answer', async () => {
+    vi.useFakeTimers()
     readers.answer.mockResolvedValue('All 12 tests pass.')
     const { port } = start()
     port.observed(hook('turn-start'))
     port.observed(hook('turn-stop'))
-    await vi.waitFor(() => expect(calls('summary')).toHaveLength(1))
+    // The answer is read once the core's Stop grace is over (observed.ts).
+    await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
+    expect(calls('summary')).toHaveLength(1)
     expect(seen.cable.calls.map(([name]) => name)).toEqual(['start', 'turnStarted', 'turnDone', 'summary'])
     expect(calls('turnStarted')).toEqual([[ID, '', undefined]])
     expect(calls('turnDone')).toEqual([[ID]])
@@ -1616,14 +1620,16 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     readers.answer.mockResolvedValue(undefined)
     port.observed(hook('turn-start'))
     port.observed(hook('turn-stop'))
-    await vi.waitFor(() => expect(readers.answer).toHaveBeenCalledTimes(2))
+    await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
+    expect(readers.answer).toHaveBeenCalledTimes(2)
     expect(calls('turnDone')).toHaveLength(2)
     expect(calls('summary')).toHaveLength(1)
 
     // Codex's transcripts are read under its home's sessions folder.
     readers.answer.mockResolvedValue('Renamed the flag.')
     port.observed(hook('turn-stop', { engine: 'codex', sessionId: 'cx-1', transcriptPath: '/t/rollout.jsonl' }))
-    await vi.waitFor(() => expect(calls('summary')).toHaveLength(2))
+    await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
+    expect(calls('summary')).toHaveLength(2)
     expect(calls('summary')[1]).toEqual([observedAgentId('codex', 'cx-1'), 'Renamed the flag.', 'Renamed the flag.', 'alert', 'Renamed the flag.', false])
     expect(readers.answer).toHaveBeenLastCalledWith('codex', '/t/rollout.jsonl',
       expect.objectContaining({ roots: codexHomeRoots(env.CODEX_HOME).map((home) => join(home, 'sessions')) }))
@@ -1685,12 +1691,14 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
   })
 
   it('an observed agent is never sent to the core, a window or the gateway', async () => {
+    vi.useFakeTimers()
     readers.answer.mockResolvedValue('Shipped the fix.')
     const core = fakeCore({ dataDir })
     const { port } = start({ core, faults: ['fleet'] })
     seen.host.watching!(true)
     for (const event of ['session-start', 'turn-start', 'needs-input', 'turn-stop'] as const) port.observed(hook(event))
-    await vi.waitFor(() => expect(calls('summary')).toHaveLength(1))
+    await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
+    expect(calls('summary')).toHaveLength(1)
     port.observed(hook('turn-error'))
     expect((await machineList(port)).agents.map((a) => a.id)).toEqual([ID])
     // What the dial's session asks of its host about an agent it holds: for a harness agent, each is a door to the core.

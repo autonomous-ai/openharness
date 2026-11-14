@@ -16,6 +16,9 @@ const END_DELAY_MS = 10_000
 const NO_GENERATION_TTL_MS = 12 * 60 * 60 * 1000
 /** The dial's card is small; keep what it can show. */
 const ANSWER_CHARS = 300
+/** The core's Stop grace (STOP_HOOK_GRACE_MS, core/turns/turnHooks.ts, which this process must not load): Claude's
+ *  transcript can lag its Stop hook, and an answer read at once is the last turn's or none. */
+const ANSWER_GRACE_MS = 1_500
 
 /** A name-based UUID (v5 layout, SHA-1) of engine + sessionId, so the same session always gets the same id. */
 export function observedAgentId(engine: string, sessionId: string): string {
@@ -47,6 +50,8 @@ interface Entry {
   pid: number
   generation?: string
   endAt?: number
+  /** The read of the last answer, waiting out the grace. */
+  answerTimer?: ReturnType<typeof setTimeout>
 }
 
 export class ObservedSource implements HostSource {
@@ -114,7 +119,9 @@ export class ObservedSource implements HostSource {
       case 'turn-stop':
         this.setState(a, 'done', now)
         a.unseenDone = true
-        void this.readAnswer(entry)
+        clearTimeout(entry.answerTimer)
+        entry.answerTimer = setTimeout(() => { void this.readAnswer(entry) }, ANSWER_GRACE_MS)
+        entry.answerTimer.unref()
         break
     }
     this.emit()
