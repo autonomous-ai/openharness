@@ -61,6 +61,11 @@ void ui_project_set_host_caps(const char *project_id, const char *host, uint8_t 
 // `view: machine` on the roster: it is this computer's agents rather than a tab's, so each face names
 // where its agent lives under the agent's name.
 void ui_fleet_set_view(bool machine);
+// The `apps` frame: the apps this dial can show with no window and the one shown. Known from the first frame, even
+// an empty one, until forgotten when the session ends: an older daemon sends none, and the dial then reads as before.
+// Memory only. Safe from the reader task.
+void ui_apps_replace(const cable_app_t *rows, int count, const char *shown);
+void ui_apps_forget(void);
 
 // Runtime model/effort (remote machines): store the opaque runtime-v1 profile and repaint the Model/Effort
 // chips. set_ is authoritative (agent_synced, clears the optimistic hold); reconcile_ is the guarded poll

@@ -224,6 +224,10 @@ static EXT_RAM_BSS_ATTR struct {
     uint32_t voice_retry_until;
     char hint[40];           // shown in the retry line's place while voice_retry_until runs; "" = "Try again"
     bool machine_view;       // the roster is this computer's agents: each face names its host
+    cable_app_t apps[CABLE_MAX_APPS];   // the `apps` frame, memory only: the apps the machine view can show
+    int app_count;
+    char app_shown[CABLE_APP_ID_MAX];   // the app whose agents the roster holds; may be no entry's id
+    bool apps_known;         // an `apps` frame came this session: false from an older daemon
     model_item_t models[48];
     int model_count;
     bool model_request;
@@ -3361,6 +3365,25 @@ void ui_fleet_set_view(bool machine)
         s.machine_view = machine;
         change();
     }
+    display_unlock();
+}
+void ui_apps_replace(const cable_app_t *rows, int count, const char *shown)
+{
+    display_lock();
+    s.app_count = !rows || count < 0 ? 0 : count > CABLE_MAX_APPS ? CABLE_MAX_APPS : count;
+    if (s.app_count) memcpy(s.apps, rows, (size_t)s.app_count * sizeof *rows);
+    COPY(s.app_shown, shown);
+    s.apps_known = true;
+    change();
+    display_unlock();
+}
+void ui_apps_forget(void)
+{
+    display_lock();
+    s.app_count = 0;
+    s.app_shown[0] = 0;
+    s.apps_known = false;
+    change();
     display_unlock();
 }
 void ui_project_set_selected_model(const char *id, const char *model)
