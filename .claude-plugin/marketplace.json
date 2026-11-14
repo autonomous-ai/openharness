@@ -16,9 +16,9 @@
     {
       "name": "harness-device",
       "source": "./plugins/harness-device",
-      "description": "Allow or deny Claude Code's permission prompts from the Harness round dial.",
+      "description": "Allow or deny Claude Code's permission prompts, and say a prompt, from the Harness round dial.",
       "category": "development",
-      "tags": ["harness", "dial", "permissions", "claude-code"]
+      "tags": ["harness", "dial", "permissions", "voice", "claude-code"]
     }
   ]
 }
