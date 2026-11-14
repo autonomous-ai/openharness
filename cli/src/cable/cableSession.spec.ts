@@ -6054,7 +6054,6 @@ describe('the machine list with no window', () => {
     const observed: HostSource = {
       id: 'observed',
       list: () => agents,
-      onChange: () => () => {},
       capabilities: () => ({ status: true, voice: false, focus: false, answer: false }),
     }
     const host = new DaemonCableHost({

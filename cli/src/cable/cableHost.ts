@@ -39,9 +39,9 @@ import { LANE_SESSION_OVER, LANE_TOKEN_UNAVAILABLE, type MachineFleet } from './
 import type { ReviewedAnswer, AnswerReceipt } from './questionInbox.js'
 import { isTier, type Tier } from '../lib/notifyTier.js'
 import { HarnessSource } from './hosts/harness.js'
-import type { HostRegistry } from './hosts/registry.js'
+import type { HostEntry, HostRegistry } from './hosts/registry.js'
 import { selectForDial } from './hosts/select.js'
-import { capsLetters, type HostAgent, type HostSource } from './hosts/types.js'
+import { capsLetters, type HostAgent } from './hosts/types.js'
 
 /** One completed turn's recap, as the mirror keeps them. */
 
@@ -522,19 +522,16 @@ export class DaemonCableHost implements CableHost {
 
   /** An agent of the machine list and the source that holds it. With a window the dial holds the tab, whose agents
    *  it may do everything with, so the registry is not asked. */
-  private onMachine(agentId: string): { agent: HostAgent; source: HostSource } | undefined {
-    const registry = this.swarms === null ? this.registry : null
-    const agent = registry?.agents().find((a) => a.id === agentId)
-    const source = agent && registry?.source(agentId)
-    return agent && source ? { agent, source } : undefined
+  private onMachine(agentId: string): HostEntry | undefined {
+    return this.swarms === null ? this.registry?.entries().find((e) => e.agent.id === agentId) : undefined
   }
 
   /** An agent of another app or terminal, heard on this computer, or undefined. Nothing of it may reach the core: the
    *  fleet's router takes an id it does not know for a local agent and asks the core's doors, so each route here that
    *  names an agent answers for it first. Asked with a window too: the dial may still hold it from the machine list. */
   private outside(agentId: string): HostAgent | undefined {
-    const source = this.registry?.source(agentId)
-    return source && source.id !== 'harness' ? this.registry?.agents().find((a) => a.id === agentId) : undefined
+    const held = this.registry?.entries().find((e) => e.agent.id === agentId)
+    return held && held.source.id !== 'harness' ? held.agent : undefined
   }
 
   capsOf(agentId: string): string | undefined {
@@ -547,9 +544,7 @@ export class DaemonCableHost implements CableHost {
   }
 
   markSeen(agentId: string): void {
-    // Not every source keeps unseen answers (HostSource has no markSeen); those that do are the Harness and observed ones.
-    const source = this.onMachine(agentId)?.source as { markSeen?(id: string): void } | undefined
-    source?.markSeen?.(agentId)
+    this.onMachine(agentId)?.source.markSeen?.(agentId)
   }
 
   /** What the window still has unread, newest first. Empty until a window says otherwise. */
@@ -705,12 +700,15 @@ export class DaemonCableHost implements CableHost {
     // out, no card comes and no Swarm has a Buddy here.
     const waiting = this.cards === null && this.cardsAskedAt !== null && performance.now() - this.cardsAskedAt < CARDS_WAIT_MS
       && this.wiring.signedIn?.() !== false
-    const { rows, total } = selectForDial(registry.agents().filter((a) => !buddies.has(a.id) && !(waiting && a.host === 'harness')))
+    // Read once: each read merges every source's whole list.
+    const entries = registry.entries()
+    const sourceOf = new Map(entries.map((e) => [e.agent, e.source]))
+    const { rows, total } = selectForDial(entries.map((e) => e.agent).filter((a) => !buddies.has(a.id) && !(waiting && a.host === 'harness')))
     const agents = rows.map((a): CableAgent => {
-      const caps = registry.source(a.id)?.capabilities(a)
       // A Harness agent keeps the row the window would show (its chips too); another app's is drawn from what was heard.
       const row = byId.get(a.id) ?? { id: a.id, name: a.name, engine: a.engine, machineId: local.id, machine: local.name }
-      return { ...row, host: a.host, ...(caps ? { caps: capsLetters(caps) } : {}) }
+      // Every row is one of the entries.
+      return { ...row, host: a.host, caps: capsLetters(sourceOf.get(a)!.capabilities(a)) }
     })
     return { agents, tab: '', total, view: 'machine' }
   }

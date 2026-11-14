@@ -26,16 +26,13 @@ export interface Caps {
   answer: boolean
 }
 
-export type SendResult = { ok: true } | { ok: false; reason: string }
-
 export interface HostSource {
   /** 'harness' | 'observed' | a host adapter's name (wave 1). */
   readonly id: string
   list(): HostAgent[]
-  onChange(listener: () => void): () => void
-  send?(agent: HostAgent, text: string): Promise<SendResult>
-  focus?(agent: HostAgent): Promise<boolean>
   capabilities(agent: HostAgent): Caps
+  /** The dial turned to the agent: its finished answer has been seen. A source that keeps no unseen answers has none. */
+  markSeen?(agentId: string): void
 }
 
 /** The capabilities as letters, always in the order s v f a. */

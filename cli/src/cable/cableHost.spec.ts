@@ -711,7 +711,7 @@ describe('the dial with no window: this computer\'s agents', () => {
     id: 'o', engine: 'claude', name: 'scratch', host: 'ghostty', state: 'idle', since: 0, lastActivityAt: 0, unseenDone: false, ...over,
   })
   const observed = (agents: HostAgent[]): HostSource => ({
-    id: 'observed', list: () => agents, onChange: () => () => {},
+    id: 'observed', list: () => agents,
     capabilities: () => ({ status: true, voice: false, focus: false, answer: false }),
   })
 
@@ -803,7 +803,7 @@ describe('the dial with no window: this computer\'s agents', () => {
     const markSeen = vi.fn()
     const host = new DaemonCableHost(wiring({ sessions }), fleetOf([]))
     expect(host.capsOf('h1')).toBeUndefined()
-    host.setRegistry(new HostRegistry([host.harness, { ...observed([observedAgent({ id: 'o1', host: 'orca' })]), markSeen } as HostSource]))
+    host.setRegistry(new HostRegistry([host.harness, { ...observed([observedAgent({ id: 'o1', host: 'orca' })]), markSeen }]))
     await host.listAgentSnapshot()
     expect([host.capsOf('h1'), host.hostOf('h1')]).toEqual(['sva', 'harness'])
     expect([host.capsOf('o1'), host.hostOf('o1')]).toEqual(['s', 'orca'])
@@ -1045,7 +1045,7 @@ describe('the dial reaches the fleet through the core\'s port', () => {
     const host = new DaemonCableHost(w)
     const outside: HostAgent = { id: 'outside-1', engine: 'claude', name: 'scratch', host: 'orca', state: 'done', since: 0,
       lastActivityAt: 0, lastAnswer: 'Fixed the login.', unseenDone: true }
-    host.setRegistry(new HostRegistry([host.harness, { id: 'observed', list: () => [outside], onChange: () => () => {},
+    host.setRegistry(new HostRegistry([host.harness, { id: 'observed', list: () => [outside],
       capabilities: () => ({ status: true, voice: false, focus: false, answer: false }) }]))
     expect(host.sendTurn('outside-1', 'ship it')).toMatchObject({ ok: false })
     host.stopTurn('outside-1'); host.answer('outside-1', 'q', { k: 'v' }); host.updateAgent('outside-1', 'opus')
