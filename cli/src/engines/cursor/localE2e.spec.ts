@@ -42,15 +42,19 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`
 }
 
-async function freePort(): Promise<number> {
-  const server = createServer()
+/** A loopback port held for the whole test, which hangs up on whoever dials it. The daemon is configured with it, so
+ *  it must move to a port of its own and say which in `daemon-<configured>.json` (lib/daemonRecord.ts). A port freed
+ *  for the daemon to bind could be taken by any process in between. */
+async function heldPort(): Promise<{ port: number; release: () => Promise<void> }> {
+  const server = createServer((socket) => socket.destroy())
   server.listen(0, '127.0.0.1')
   await once(server, 'listening')
   const address = server.address()
-  if (!address || typeof address === 'string') throw new Error('could not allocate a local port')
-  await new Promise<void>((resolveClose, reject) =>
-    server.close((error) => error ? reject(error) : resolveClose()))
-  return address.port
+  if (!address || typeof address === 'string') throw new Error('could not hold a local port')
+  return {
+    port: address.port,
+    release: () => new Promise<void>((resolveClose) => server.close(() => resolveClose())),
+  }
 }
 
 async function waitUntil<T>(
@@ -125,7 +129,8 @@ describe.skipIf(!runCursorE2e)('Cursor local HTTP/WS/tmux E2E', () => {
     const authDir = join(temp, 'auth')
     const registryPath = join(dataDir, 'registry.json')
     const tmuxSession = `machine-cursor-e2e-${process.pid}`
-    const hookPort = await freePort()
+    const held = await heldPort()
+    const hookPort = held.port
     const frames: Envelope[] = []
     const logs: string[] = []
     const originalHooks = existsSync(cursorHooksPath) ? await readFile(cursorHooksPath) : null
@@ -322,6 +327,7 @@ describe.skipIf(!runCursorE2e)('Cursor local HTTP/WS/tmux E2E', () => {
         await rm(cursorHooksPath, { force: true })
       }
       await rm(temp, { recursive: true, force: true })
+      await held.release()
     }
   }, E2E_TIMEOUT_MS)
 })
