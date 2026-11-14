@@ -20,7 +20,7 @@ export function approvalQuestion(tool: string, summary: string): ReviewQuestion 
   }
 }
 
-export type ApprovalOutcome = 'shown' | 'allowed' | 'denied' | 'expired' | 'terminal' | 'closed'
+export type ApprovalOutcome = 'shown' | 'allowed' | 'denied' | 'expired' | 'terminal' | 'closed' | 'terminal-only'
 
 export interface ApprovalsDeps {
   now(): number
@@ -30,8 +30,8 @@ export interface ApprovalsDeps {
   canShow(): boolean
   /** A Harness agent holds this session: its pane answers the prompt. */
   owned(sessionId: string): Promise<boolean>
-  /** The observed agent for the session; `open` creates it, `undefined` when there is no room. */
-  mark(sessionId: string, cwd: string | undefined, state: 'open' | 'answered' | 'left'): { id: string } | undefined
+  /** The observed agent for the session; `open` and `terminal` create it, `undefined` when there is no room. */
+  mark(sessionId: string, cwd: string | undefined, state: 'open' | 'terminal' | 'answered' | 'left'): { id: string } | undefined
   show(agentId: string, requestId: string, questions: ReviewQuestion[]): void
   close(agentId: string, requestId: string): void
   /** `ms` since the request arrived. */
@@ -67,6 +67,12 @@ export class Approvals {
     const owned = await this.deps.owned(request.sessionId).catch(() => true)
     // The terminal may have answered, the dial gone or everything closed while the session was checked.
     if (!this.checking.delete(request.id) || owned || !this.deps.canShow()) return 'none'
+    // A command the dial cannot show whole: Allow there would approve what it never showed. The agent waits on its
+    // terminal, and nothing is held.
+    if (request.terminalOnly) {
+      if (this.deps.mark(request.sessionId, request.cwd, 'terminal')) this.deps.count('terminal-only', this.deps.now() - arrived)
+      return 'none'
+    }
     // A request id seen twice is one prompt: the second would orphan the first's answer.
     if (this.held.size >= MAX_HELD || this.held.has(request.id)) return 'none'
     const agent = this.deps.mark(request.sessionId, request.cwd, 'open')

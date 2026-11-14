@@ -277,9 +277,12 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   }) : null
   /** One of them, by the id the dial holds: what the dial asks of it is answered here, never by a door of the core. */
   const outside = (agentId: string): HostAgent | undefined => observed?.list().find((agent) => agent.id === agentId)
-  /** Its line while it waits on the person, where a harness agent shows its terminal's footer. */
+  /** Its line while it waits on the person, where a harness agent shows its terminal's footer. A prompt the dial could
+   *  not show whole has no card (cable/hosts/approvals.ts), so the line sends the person to the terminal. */
   const waiting = (agent: HostAgent): string | null =>
-    agent.state === 'needs-you' ? `Waiting for you · ${hostDisplayName(agent.host)}` : null
+    agent.state !== 'needs-you' ? null
+      : observed?.terminalOnly(agent.id) ? 'Answer this one in the terminal.'
+        : `Waiting for you · ${hostDisplayName(agent.host)}`
 
   const cableHost = new DaemonCableHost({
     // The cloud harnesses too, where the core offers them: tiles on the desk the dial walks like any other.
@@ -618,7 +621,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
 
   // An agent outside a pane reaches the dial through the same calls, as its state changes. What the dial was told of each
   // is kept, so that a change is told once.
-  const told = new Map<string, { state: HostAgentState; answer?: string }>()
+  const told = new Map<string, { state: HostAgentState; line: string | null; answer?: string }>()
   const busy = (agent: HostAgent): boolean => agent.state === 'working' || agent.state === 'needs-you'
   /** Its turn, with the waiting line: the session's activity read right after it (`activityText` above) repeats the line. */
   const started = (agent: HostAgent): DialEvent => ({ kind: 'processing', agentId: agent.id, text: waiting(agent) ?? '', recap: '', subagent: false })
@@ -633,7 +636,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     for (const agent of agents) {
       const was = told.get(agent.id)
       const card = { agentId: agent.id, text: '', recap: '', subagent: false }
-      if (was?.state === agent.state) {
+      // A wait whose line changed (its prompt turned out to be the terminal's) is told again.
+      const line = waiting(agent)
+      if (was?.state === agent.state && was.line === line) {
         // The answer is read after the turn ends (observed.ts), so its summary follows the done. One still the last
         // turn's (this turn's was not found) is not said again.
         if (agent.state === 'done' && agent.lastAnswer && agent.lastAnswer !== was.answer) {
@@ -642,7 +647,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
         }
         continue
       }
-      told.set(agent.id, { state: agent.state, answer: agent.lastAnswer })
+      told.set(agent.id, { state: agent.state, line, answer: agent.lastAnswer })
       if (busy(agent)) tell(started(agent))
       else if (agent.state === 'done') tell({ ...card, kind: 'done' })
       else if (agent.state === 'error') tell({ ...card, kind: 'error' })
