@@ -1068,6 +1068,23 @@ describe('the dial reaches the fleet through the core\'s port', () => {
     expect(fleet.sendTurn).toHaveBeenCalledWith('r1', 'ship it')
   })
 
+  it('an agent outside Harness that the machine list folds into a Harness agent of the same session never reaches the core', async () => {
+    const fleet = port()
+    const w = wiring({ fleet: () => fleet, recentAsks: vi.fn(() => []) })
+    const host = new DaemonCableHost(w)
+    // The session moved into a Harness pane: the list shows the Harness copy, and the dial may still hold the old id.
+    const harness: HostSource = { id: 'harness', list: () => [{ id: 'r1', engine: 'claude', name: 'web', host: 'harness', state: 'idle',
+      sessionId: 's1', lastActivityAt: 0, unseenDone: false }], capabilities: () => ({ status: true, voice: true, focus: false, answer: true }) }
+    host.setRegistry(new HostRegistry([harness, { id: 'observed', list: () => [{ id: 'outside-2', engine: 'claude', name: 'web',
+      host: 'orca', state: 'idle', sessionId: 's1', lastActivityAt: 0, unseenDone: false }],
+    capabilities: () => ({ status: true, voice: false, focus: false, answer: false }) }]))
+    expect(host.sendTurn('outside-2', 'ship it')).toMatchObject({ ok: false })
+    host.stopTurn('outside-2')
+    expect(await host.recentAsks('outside-2')).toEqual([])
+    const calls = [...Object.values(fleet), ...Object.values(w)].filter((fn) => vi.isMockFunction(fn)).flatMap((fn) => fn.mock.calls)
+    expect(JSON.stringify(calls)).not.toContain('outside-2')
+  })
+
   it('says nothing of a fork that was refused before anyone was asked, and says a refused one that was', async () => {
     const fleet = port({ forkAgent: vi.fn(async () => ({ result: { ok: false as const, error: 'AGENT_NOT_FOUND' }, machineId: '', asked: false })) })
     const w = wiring({ fleet: () => fleet, opened: vi.fn() })
