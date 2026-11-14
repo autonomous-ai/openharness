@@ -63,9 +63,13 @@ jobs:
     # Each runner builds and tests its own native target. Cross-building the other
     # target is dropped: it needs extra MSVC components and adds little signal.
     runs-on: ${{ matrix.runner }}
-    # A limit per architecture, in minutes. With every step run arm64 takes about 43 and x64 16 (2026-11-14):
-    # installPs1.spec.ts starts Windows PowerShell 5.1 many times, at about 8 s a start on windows-11-arm and 0.4 s on
-    # windows-latest. One limit of 40 cancelled the arm64 job in its last test step (run 43565271777).
+    # A limit per architecture, in minutes. One limit of 40 cancelled the arm64 job in its last test step (run
+    # 43565271777); with every step run it then took 44.8 minutes, and x64 16.8 (run 43576955663). The cause,
+    # measured (runs 43581413308 and 43582091190): the first command a Windows PowerShell 5.1 process has module
+    # autoload find costs 22 to 29 s on windows-11-arm and 0.25 to 0.8 s on windows-latest, once per process,
+    # whatever PSModulePath is; a start that runs no such command takes 0.24 to 0.38 s. installPs1.spec.ts paid it
+    # at each of its PowerShell starts, about 1390 s of that job. Its library calls now share one PowerShell
+    # (cli/src/testing/windowsPowerShell.ts). arm64 keeps 60 until several runs show the new time.
     timeout-minutes: ${{ matrix.timeout }}
     steps:
       - uses: actions/checkout@v7
@@ -189,7 +193,7 @@ jobs:
           npx vitest run @paths --maxWorkers=1
       # Two real builds (sub-project G): the rollover from the previous host to this one (hostMove.real.spec.ts, and
       # drain.spec.ts's two-build case), and the payload install (the bin\ replacement, and install.ps1 in Windows
-      # PowerShell 5.1). Verbose, so the log names each case that ran.
+      # PowerShell 5.1, with the spec of the one PowerShell its library cases share). Verbose, so the log names each case that ran.
       - name: 'Two real builds: the pty host rollover and the payload install'
         if: ${{ !inputs.release }}
         working-directory: cli
@@ -200,7 +204,7 @@ jobs:
           # installPs1.spec.ts runs the real harness.exe; a --target build is not where it looks by default.
           HARNESS_EXE_BIN: ${{ github.workspace }}\pty\target\${{ matrix.target }}\release\harness.exe
         run: |
-          $paths = @('src/lib/hostMove/hostMove.real.spec.ts', 'src/lib/ptyHost/drain.spec.ts', 'src/lib/windows/ptyInstall.windows.real.spec.ts', 'src/scripts/installPs1.spec.ts')
+          $paths = @('src/lib/hostMove/hostMove.real.spec.ts', 'src/lib/ptyHost/drain.spec.ts', 'src/lib/windows/ptyInstall.windows.real.spec.ts', 'src/scripts/installPs1.spec.ts', 'src/testing/windowsPowerShell.spec.ts')
           npx vitest run @paths --maxWorkers=1 --reporter=verbose
       - name: Collect the payload
         shell: pwsh
