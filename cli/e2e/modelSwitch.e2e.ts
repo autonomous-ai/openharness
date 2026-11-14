@@ -47,7 +47,7 @@ it('moves onto a grid model and back in the same conversation, whatever an older
   expect(await client.request('agent_retarget', { agentId, clearGrid: true }, 60_000)).toMatchObject({ retargeted: true })
   expect((await settled(agentId, id => id === s1, 'the same conversation at home')).sessionId).toBe(s1)
 
-  // A fresh move served only the v3 Buddy's model switch (#3901): a request that still asks for one resumes the conversation.
+  // A fresh move is no longer offered (#3901): a request that still asks for one resumes the conversation.
   // The fake engine records every launch's argv (e2e/harness/fakeEngine.mjs): the move's relaunch resumes s1.
   const launches = (): Array<{ engine: string; args: string[] }> => readFileSync(join(d.root, 'launch-argv'), 'utf8').trim().split('\n').map(line => JSON.parse(line))
   const before = launches().length

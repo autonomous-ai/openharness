@@ -137,11 +137,11 @@ describe('moveAgent', () => {
     expect(h.events).not.toContain('hold')
   })
 
-  // Security review 1 of #2255: an old Buddy whose Swarm role cannot be read is never relaunched without its guard; its
+  // Security review 1 of #2255: an agent whose launch a service holds is never relaunched without what it waits for; its
   // move does not happen and its engine goes on where it is (core/agents/restoreLaunch.ts).
-  it('a launch held for the Swarm\'s role leaves the agent where it is', async () => {
-    const h = harness({ buildLaunch: vi.fn(async () => ({ held: 'superTabs', detail: 'Waiting for the Swarm to confirm this agent\'s role.' })) })
-    expect(await run(h.deps)).toEqual({ moved: false, reason: expect.stringContaining('superTabs'), fellBack: false })
+  it('a held launch leaves the agent where it is', async () => {
+    const h = harness({ buildLaunch: vi.fn(async () => ({ held: 'store', detail: 'Waiting for the Store to prepare this harness.' })) })
+    expect(await run(h.deps)).toEqual({ moved: false, reason: expect.stringContaining('store'), fellBack: false })
     expect(h.deps.createSeeded).not.toHaveBeenCalled()
     expect(h.events).not.toContain('stop')
   })

@@ -8,8 +8,7 @@
  * it, `profileId(machine, 'claude', 'default')`. A profile's `path` is the folder as it was given or linked, which is what
  * Claude Code hashes for its Keychain item and what CLAUDE_CONFIG_DIR must hold; its id is of the real path.
  *
- * Its `label` is the folder's name, for the machine's owner alone: no profile leaves the machine (a machine reports each
- * engine's default account, superTabs/machines.ts).
+ * Its `label` is the folder's name, for the machine's owner alone: no profile leaves the machine.
  */
 
 import { createHash } from 'crypto'

@@ -68,7 +68,6 @@ hang or leak costs only its process. A process per risk, not per feature (`SERVI
 | `memory` | memory | an experiment: Memories across machines | on demand |
 | `router` | router | an experiment: where ⌘B sends a task, decided by Jev | on demand |
 | `cloud` | cloud | an experiment: cloud agents (Fo, Devin Cloud, Cursor Cloud), harnesses on their makers' servers | on demand |
-| `superTabs` | superTabs | the Swarm: its host, its GitHub loops and its calls to the backend | on demand, only while the Swarm is on |
 | `agentBrowser` | agentBrowser | Podman's calls and event stream, image builds, Podman's setup, and each viewer's stream of a browser's screen: its exec into the container, the viewer's VNC bytes, the credit and the pacing (`agentBrowserProcess.ts`, `core/agentBrowserLink.ts`; the core passes a stream on and holds it to the connection that opened it, `core/browserStreams.ts`) | on demand |
 
 A fault in one of the edge host's services can cost the others in it, never the core. Every service in
@@ -159,10 +158,6 @@ master too old to run it starts it beside itself, still in its own process (`src
   asks the core over its link, in order, and hears only its own deliveries; the core lets a process deliver
   only when `TURN_DELIVERERS` (`src/core/api.ts`) names it: the experiments (below), Agent Messages and the agent
   browser.
-  The Swarm's host, which answers a person in their agent's own chat when the agent's turn ends, also hears each
-  live turn's end (`core.turns.onEnd`; `TURN_END_HEARERS`, told as `service_event` `turn_end`, never waited on), which
-  names its turn by a hash of its prompt and a number, and asks the core for the answer of that turn (`core.turns.answerOf`, the
-  `turn_answer` query, core/experimentQueries.ts).
 - A service that graduates from an experiment keeps the same questions to the core and is answered by a link of its
   own, for what it uses alone, never by the experiments' hooks: Agent Messages in the edge host
   (`src/core/messagesLink.ts`, `MESSAGES_QUERIES` in `src/core/api.ts`) is shown the agents, told how this daemon is
@@ -270,8 +265,7 @@ To add one:
    (`core.terminals.watch`, `services/watchLink.ts`).
 2. Its entry in `EXPERIMENTS` (`src/core/api.ts`): its requests and its saved state. And its backend routes in
    `EXPERIMENT_BACKEND_ROUTES` beside it, each a method and a whole path, `[]` when it calls none: the core signs a
-   call of its process on those and no other, and answers any other `ROUTE_NOT_DECLARED`, said in the core's log.
-   (The Swarm's is its own API whole, because an app's asks go through its service.) A new backend call is a line
+   call of its process on those and no other, and answers any other `ROUTE_NOT_DECLARED`, said in the core's log. A new backend call is a line
    there in the same pull request; `src/core/experimentQueries.spec.ts` fails on a path, or a method, written in
    the experiment's code that is not declared.
 3. Its process in `SERVICE_HOSTS` (`src/harnessd/services.ts`) with `onDemand: true`, and its runner in

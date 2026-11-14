@@ -1167,24 +1167,9 @@ describe('the agent\'s commands', () => {
     expect(c.tools).toEqual([])
   })
 
-  it('an agent in a regular tab is allowed: it is in no Swarm, and drives its browser as any other', async () => {
-    const c = await commands()
-    // No Swarm here: the core has no door to one.
-    expect(c.core.superTabs).toBeUndefined()
-    const answer = c.run('click', { ref: 'e12' })
-    await c.line(1)
-    c.tools[0]!.answer(page('Clicked'))
-    expect(await answer).toEqual({ ok: true, text: 'Clicked' })
-  })
-
-  it('it answers with the backend and the Swarm unreachable', async () => {
+  it('answers with the backend unreachable', async () => {
     const unreachable = () => { throw new Error('unreachable') }
-    const c = await commands({ core: {
-      account: { backend: unreachable, machines: unreachable },
-      superTabs: { shareObservers: unreachable },
-      panes: { screen: unreachable, input: unreachable, inputIfScreen: unreachable },
-      superTabRequest: unreachable,
-    } })
+    const c = await commands({ core: { account: { backend: unreachable, machines: unreachable } } })
     const answer = c.run('snapshot')
     await c.line(1)
     c.tools[0]!.answer(page('Example Domain'))

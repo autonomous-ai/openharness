@@ -4,9 +4,6 @@ import { dropAgentSessionEnv, isAgentSessionVariable } from './agentSessionEnv.j
 describe('an agent session\'s variables', () => {
   it('are the ones naming the session, never a setting the person chose', () => {
     for (const name of ['CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_MESSAGING_TOKEN', 'CODEX_THREAD_ID', 'AI_AGENT']) expect(isAgentSessionVariable(name), name).toBe(true)
-    // A Swarm agent's share of its machine's cores (superTabs/inCore/launch.ts) is that agent's: a daemon it starts from its
-    // shell hands it to no pane.
-    expect(isAgentSessionVariable('HARNESS_CORES')).toBe(true)
     for (const name of ['CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'HARNESSD_SERVICE_TOKEN', 'PATH']) expect(isAgentSessionVariable(name), name).toBe(false)
   })
 

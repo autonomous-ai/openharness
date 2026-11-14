@@ -202,22 +202,6 @@ describe('remote-password link + relay session crypto (interop with the real E2e
       expect(stopReply.payload).not.toHaveProperty('deleted')
       expect(crypto.unwrapIncoming(stopReply)?.payload).toEqual(stopped)
 
-      // An agent's instructions file, read and saved from another of the owner's computers: the relay sees neither the
-      // agent, the name nor a word of the text, in either direction.
-      const saving = { requestId: 'instructions-1', agentId: 'faye-agent', name: 'Faye', text: 'private instructions', version: '' }
-      const savingRequest = crypto.wrapOutgoing({ type: 'agent_instructions_write', payload: saving })
-      for (const field of ['agentId', 'name', 'text']) expect(savingRequest.payload).not.toHaveProperty(field)
-      expect(JSON.stringify(savingRequest)).not.toContain('private instructions')
-      expect(manager.unwrapDown('session-conn', savingRequest)?.payload).toEqual(saving)
-      const reading = { requestId: 'instructions-2', agentId: 'faye-agent', name: 'Faye' }
-      const readingRequest = crypto.wrapOutgoing({ type: 'agent_instructions_read', payload: reading })
-      expect(readingRequest.payload).not.toHaveProperty('agentId')
-      expect(manager.unwrapDown('session-conn', readingRequest)?.payload).toEqual(reading)
-      const instructions = { requestId: 'instructions-2', text: 'private instructions', version: 'abc' }
-      const instructionsReply = manager.wrapTarget('session-conn', 'agent_instructions_read_result', instructions)!
-      expect(instructionsReply.payload).not.toHaveProperty('text')
-      expect(crypto.unwrapIncoming(instructionsReply)?.payload).toEqual(instructions)
-
       // An agent browser's settings from another of the owner's computers carry the proxy and its password, and a proxy
       // test's reply the proxy's exit address: sealed both ways, for every request a remote Desktop sends.
       // The person's Start, Stop and window size from their other Desktop are sealed the same way.

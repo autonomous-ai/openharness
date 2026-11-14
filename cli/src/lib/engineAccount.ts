@@ -72,7 +72,7 @@ const runEngineStatus: EngineStatusRun = (engine, args, env) => new Promise(reso
 })
 
 /** What Claude Code or Codex itself says of its sign-in under [env]: true, false, or null when it cannot say. */
-export async function cliSignedIn(engine: 'claude' | 'codex', env: NodeJS.ProcessEnv, run: EngineStatusRun = runEngineStatus): Promise<boolean | null> {
+async function cliSignedIn(engine: 'claude' | 'codex', env: NodeJS.ProcessEnv, run: EngineStatusRun = runEngineStatus): Promise<boolean | null> {
   if (engine === 'codex') {
     const status = await run('codex', ['login', 'status'], env)
     return status ? status.code === 0 : null
@@ -134,7 +134,7 @@ export async function engineAccount(engine: AgentEngine, deps: EngineAccountDeps
   // process (loginShellEnv.ts), with the daemon's own on top.
   const env = deps.env ?? { ...await warmLoginShellEnvironment(), ...process.env }
   // A model API saved on this computer (Models ▸ APIs) serves Claude Code without a
-  // subscription, so the machine can take Swarm work on it (headless run, 2026-11-03: a working OpenRouter key saved,
+  // subscription, so the machine can run Claude Code on it (headless run, 2026-11-03: a working OpenRouter key saved,
   // and the account read "not signed in").
   const savedApi = await savedBearerApi(env.ADAPTER_DATA_DIR || join(home, '.harness', 'cli', 'data'))
   if (engine === 'claude') {

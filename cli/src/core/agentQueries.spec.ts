@@ -61,7 +61,7 @@ describe('what a service in its own process may ask the core of the agents', () 
     expect(answerAgentQuery(fakeCore(), 'hachi_goal_done', { agentId: 'hachi', goalId: 'g1', title: 't' })).toEqual({ ok: true })
   })
 
-  // A Swarm attempt's end read an agent's usage fresh, for the backend's costs, which went with backend S8 (#3908).
+  // An attempt's end once read an agent's usage fresh, for the backend's costs, which went with backend S8 (#3908).
   it('answers no fresh usage read', async () => {
     const core = fakeCore({ agents: { all: () => [...live, ...stopped], live: () => live } })
     core.usageFresh = vi.fn(async () => ({ totalTokens: 9, updatedAt: '2026-10-29T00:00:00Z' }))

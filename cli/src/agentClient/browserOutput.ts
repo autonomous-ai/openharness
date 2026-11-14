@@ -1,7 +1,7 @@
 /**
  * Where `harness browser` puts what is too big for the agent's terminal: screenshots, and the whole of a long output.
- * The folder is in the agent's own `$TMPDIR` (../lib/agentTmp.ts), which a Swarm agent reads without being asked, or in
- * the folder Harness keeps for its agents' files where nothing sets a TMPDIR.
+ * The folder is in the agent's own `$TMPDIR`, or in the folder Harness keeps for its agents' files (../lib/agentTmp.ts)
+ * where nothing sets a TMPDIR.
  */
 import { lstatSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -17,8 +17,8 @@ export const KEPT_FILES = 50
 export class BrowserFilesError extends Error {}
 
 /**
- * `$TMPDIR/browser`, or where nothing sets a TMPDIR `<Harness data>/agent-tmp/browser`: on Linux a plain agent has none
- * (only a Swarm agent is given its own, ../lib/agentTmp.ts), and every screenshot there was refused (the agent browser's
+ * `$TMPDIR/browser`, or where nothing sets a TMPDIR `<Harness data>/agent-tmp/browser`: on Linux an agent has none,
+ * and every screenshot there was refused (the agent browser's
  * real-Podman run, 2026-11-13). Either is made this account's alone (0700). Never a folder other accounts can read, such
  * as /tmp: one that cannot be made private gives no files.
  */

@@ -1105,7 +1105,7 @@ describe('overlapping machine selects', () => {
   })
 
   /**
-   * Diego's Buddy, 11-02: a select is answered, then the machine's handshake may take its whole 15 s. A newer pick in those
+   * Diego, 11-02: a select is answered, then the machine's handshake may take its whole 15 s. A newer pick in those
    * seconds found nothing to replace (the select had settled), so the older attach still resolved and the dial was told it
    * had landed on a machine the person had already left.
    */

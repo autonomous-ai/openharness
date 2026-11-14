@@ -15,7 +15,6 @@
 import { emptyPorts, SHARE_REQUESTS, type DaemonAddress, type ServiceRequests, type SharingPort } from '../core/api.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess } from './process.js'
 import { agentsIn, daemonIn, processCoreApi, type ShownAgent } from './processCoreApi.js'
-import type { SwarmServices } from '../serviceProcess.js'
 import { startSharing } from './sharing.js'
 import { watchLink } from './watchLink.js'
 
@@ -34,8 +33,6 @@ export interface SharingServiceOptions {
   /** Swapped in tests for a Share that keeps nothing on disk and starts no browser. */
   start?: typeof startSharing
   now?: () => number
-  /** The Swarm's side of this service, while the Swarm is on (serviceProcess.ts, superTabs/inServices.ts). */
-  swarm?: Pick<SwarmServices, 'observerSource'>
 }
 
 export function runSharingService(options: SharingServiceOptions): ServiceProcess {
@@ -68,7 +65,7 @@ export function runSharingService(options: SharingServiceOptions): ServiceProces
 
   const build = () => {
     const ports = emptyPorts()
-    const requests = (options.start ?? startSharing)(api, ports, options.swarm ? { observers: options.swarm.observerSource } : {})
+    const requests = (options.start ?? startSharing)(api, ports)
     return { requests, port: ports.sharing! }
   }
   let built: { requests: ServiceRequests; port: SharingPort } = build()

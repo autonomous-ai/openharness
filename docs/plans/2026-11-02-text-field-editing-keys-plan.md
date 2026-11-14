@@ -8,7 +8,7 @@
 
 **Tech Stack:** Flutter 3.47.2 (Desktop `desktop/`), `flutter_test`.
 
-**Spec:** Task #2010 brief (Scholes's Buddy 11-02): Mac Option+Left/Right by word; Cmd+Left/Right line start/end; Cmd+Up/Down text start/end; Shift selects; Option+Backspace deletes a word; Cmd+Backspace to line start; Ctrl+A/E/K. Windows Ctrl+arrows by word, Home/End, Ctrl+Backspace. Pane focus stays on Cmd+H/J/K/L and on the arrows when the box is empty or not focused; tab switching on Cmd+Option+arrows unchanged. Out: keymap editing, emoji, IME.
+**Spec:** Task #2010 brief (Scholes, 11-02): Mac Option+Left/Right by word; Cmd+Left/Right line start/end; Cmd+Up/Down text start/end; Shift selects; Option+Backspace deletes a word; Cmd+Backspace to line start; Ctrl+A/E/K. Windows Ctrl+arrows by word, Home/End, Ctrl+Backspace. Pane focus stays on Cmd+H/J/K/L and on the arrows when the box is empty or not focused; tab switching on Cmd+Option+arrows unchanged. Out: keymap editing, emoji, IME.
 
 ## Global Constraints
 
@@ -51,7 +51,7 @@
 **Interfaces:**
 - Consumes: `textFieldKeepsStroke`, `KeymapRegion.contextKind`, the `EditableTextState` already read for `value`.
 
-- [ ] **Step 1: Write the failing widget tests** — for the Super Tab message box (`super-message-composer`), the thread reply box (`super-thread-composer`) and `TerminalComposer`: each listed key reaches the field (selection or text asserted), and no `pane.*` action runs; empty box keeps `pane.focus_left`, `pane.focus_below`, `pane.move_right`; ⌘H/L still run with text; focus on a button still runs pane, move and tab actions.
+- [ ] **Step 1: Write the failing widget tests** — for `TerminalComposer`: each listed key reaches the field (selection or text asserted), and no `pane.*` action runs; empty box keeps `pane.focus_left`, `pane.focus_below`, `pane.move_right`; ⌘H/L still run with text; focus on a button still runs pane, move and tab actions.
 - [ ] **Step 2: Run them on main's host, expect FAIL** (record the assertion lines for the PR comment).
 - [ ] **Step 3: Return `KeyEventResult.ignored`** when `value != null`, no chord is pending, the context is neither `picker` nor `project`, and the predicate keeps the stroke.
 - [ ] **Step 4: Run the new file and `keymap_host_test.dart`, `keymap_dispatch_test.dart`, `terminal_composer_test.dart`, `windows_shortcuts_test.dart`, `shortcuts_test.dart`, expect PASS.**

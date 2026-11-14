@@ -1,4 +1,4 @@
-/** GitHub CLI reads shared by Tasks and the Swarm pull requests pane. No prompts; every subprocess is bounded. */
+/** GitHub CLI reads for Tasks and an agent's work (`harness show --work`). No prompts; every subprocess is bounded. */
 import { execFile } from 'node:child_process'
 import { homedir } from 'node:os'
 import { delimiter, join } from 'node:path'
@@ -78,7 +78,6 @@ export function ciCounts(rollup: unknown): CiCounts {
   }
   return counts
 }
-
 /** One pull request's CI from its checks: a check run has `status` and `conclusion`, a commit status has `state`. */
 export function ciOf(rollup: unknown): CiState {
   const checks = Array.isArray(rollup) ? rollup.filter((c): c is Record<string, unknown> => !!c && typeof c === 'object') : []

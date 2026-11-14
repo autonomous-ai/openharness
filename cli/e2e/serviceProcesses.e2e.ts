@@ -271,8 +271,8 @@ describe('the edge host: several services in one process of their own', () => {
       return answer.engines.map((entry: Record<string, any>) => [entry.engine, entry.installed])
     }
     expect(await installed()).toEqual([['claude', true], ['codex', true]])
-    // A Swarm told nothing would take it for no engine here (superTabs/start.ts): asked while the host is gone,
-    // the answer waits for the one the master starts.
+    // A caller told nothing would take it for no engine here: asked while the host is gone, the answer waits for the one
+    // the master starts.
     const before = edgePids(d)
     expect(before).toHaveLength(1)
     for (const pid of before) process.kill(pid, 'SIGKILL')

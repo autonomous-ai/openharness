@@ -91,8 +91,8 @@ async function claudeAvailableModels(session: RuntimeSession): Promise<string[]>
 async function claudeConfiguredEffort(session: RuntimeSession): Promise<string> {
   // A session launched with --effort starts at it: the flag outranks the settings' effortLevel, though Claude Code may still
   // cap it (maxEffortLevel, its organization's), override it (CLAUDE_CODE_EFFORT_LEVEL) or step it down on a model without it. Read as the settings' effortLevel
-  // until its first reply recorded its own, the 2026-11-11 rehearsal's Product Manager, launched at xhigh, was announced to its
-  // project as running at high (the backend's start line, leadStart.ts otherThanAsked), and Desktop showed high. Only an
+  // until its first reply recorded its own, an agent of the 2026-11-11 rehearsal, launched at xhigh, was announced to its
+  // project as running at high, and Desktop showed high. Only an
   // effort its launch model takes: haiku has none, and a launch flag is never auto (review of #4090).
   const launch = session.launchModel, launched = launch?.effort
   if (launched && (launch.model ? claudeEfforts(launch.model, session.cliVersion) : [...BASIC_EFFORTS]).includes(launched)) return launched
@@ -132,7 +132,7 @@ function decode(raw: Record<string, unknown>): RuntimeRecord | null {
   const nextModel = modelMatch ? normalizeClaudeDisplay(modelMatch[1]) : null
   const effortMatch = /Set effort level to\s+(low|medium|high|xhigh|max|ultracode)/i.exec(content)
   // Each reply records the effort it ran with. A session launched with --effort, or adopted, prints no "Set effort
-  // level" and its banner names none: without this its Lead read as "opus unknown" in the Swarm sidebar (2026-10-28).
+  // level" and its banner names none: without this it read as "opus unknown" (2026-10-28).
   const replyEffort = raw.type === 'assistant' ? text(raw.effort).toLowerCase() : ''
   const effort = effortMatch?.[1].toLowerCase()
     ?? (CLAUDE_EFFORTS.has(replyEffort) ? replyEffort : null)

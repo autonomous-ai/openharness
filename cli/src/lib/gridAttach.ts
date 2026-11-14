@@ -210,9 +210,8 @@ export interface GridAccess {
  * - **Remembered.** A sign-in as this account, and the account's grid once it is there, hold for the
  *   daemon's life — until `grid` no longer holds a sign-in at all, which a hand-run `grid logout`
  *   leaves behind.
- * - **A failure is held.** Not every ask is a person acting: a held Swarm start asks every 2 seconds
- *   (core/agents/pendingLaunches.ts) and each owner's Swarm every minute (superTabs/swarmGrids.ts), and each ask that
- *   failed ran grid's installer again. A failure answers as it is for a minute, twice as long after each failure in a
+ * - **A failure is held.** Not every ask is a person acting: a held start asks every 2 seconds
+ *   (core/agents/pendingLaunches.ts), and each ask that failed ran grid's installer again. A failure answers as it is for a minute, twice as long after each failure in a
  *   row up to ten; a success clears it.
  */
 export function createGridAccess(opts: GridAccessOptions): GridAccess {

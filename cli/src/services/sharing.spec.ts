@@ -11,38 +11,11 @@ import { setAgentSettingsForTest, signedOutForTest } from '../testing/agentSetti
 import type { RegisteredSession } from '../lib/registry.js'
 import { observerContext, recipientHandshake } from '../sharing/crypto.js'
 import { fakeCore } from '../testing/fakeCore.js'
-import { SHARE_REQUESTS, shareObservers, startSharing, viewerPage, watchStreams } from './sharing.js'
-import { observerSource, publishObservers } from '../superTabs/observers.js'
+import { SHARE_REQUESTS, startSharing, viewerPage, watchStreams } from './sharing.js'
+import { HarnessGrantStore } from '../sharing/grants.js'
 
 const identity = newIdentity()
 const agent = { agentId: 'agent', sessionId: 's', engine: 'codex', active: true } as unknown as RegisteredSession
-
-// HARNESS_SWARM=off: Share's process hands in no Swarm. Its observers then watch nothing, invitations kept as for a host
-// that stalled, and a session a roster marked confidential still refuses every share (sharing/swarmMarks.ts).
-describe('who a Super Tab lets watch a harness here', () => {
-  let dataDir: string
-  beforeEach(() => { dataDir = mkdtempSync(join(tmpdir(), 'sharing-observers-')) })
-  afterEach(() => { rmSync(dataDir, { recursive: true, force: true }) })
-  const core = () => fakeCore({ dataDir, daemon: { command: 'harness', port: 1, machineId: () => 'machine' } })
-  const grant = (agentId: string, tab?: string) => ({ agentId, recipientEmail: 'b@example.com', ...(tab ? { tab } : {}) }) as never
-
-  it('is the Swarm\'s roster while it is on, and with it off, none of a Super Tab\'s and no confidential session\'s', () => {
-    publishObservers(dataDir, 'machine', [{ tabId: 'tab', agent: { harnessId: 'member', machineId: 'machine' }, observers: [{ email: 'b@example.com' }] },
-      { tabId: 'tab', confidential: true, agent: { harnessId: 'lead', machineId: 'machine' }, observers: [] }], Date.now() + 5_000)
-    const on = shareObservers(core(), observerSource)
-    expect(on.known()).toEqual([expect.objectContaining({ tab: 'super:tab', agentId: 'member', email: 'b@example.com' })])
-    expect(on.allows(grant('member', 'super:tab'))).toBe(true)
-    expect(on.allows(grant('lead'))).toBe(false)
-    expect(on.allows(grant('ordinary'))).toBe(true)
-    expect(on.paused(grant('member', 'super:tab'))).toBe(false)
-    const off = shareObservers(core())
-    expect(off.known()).toBeNull()
-    expect(off.allows(grant('member', 'super:tab'))).toBe(false)
-    expect(off.allows(grant('lead'))).toBe(false)
-    expect(off.allows(grant('ordinary'))).toBe(true)
-    expect(off.paused(grant('member', 'super:tab'))).toBe(false)
-  })
-})
 
 describe('Share, as a service', () => {
   let dataDir: string
@@ -175,6 +148,20 @@ describe('Share, as a service', () => {
     expect(await derive()).toEqual({ invited: 0, revoked: 1 })
     setAgentSettingsForTest(dataDir, { agentMessages: true })
     expect(await derive()).toEqual({ invited: 1, revoked: 0 })
+  })
+
+  // The Swarm was deleted on 2026-11-14: what its rosters granted here (`tab: super:<id>`) was kept while the Swarm was off,
+  // waiting for a roster. No roster is coming: it is revoked as Share starts, and the withdrawal published.
+  it('revokes what a Swarm\'s roster granted on this machine as it starts, and keeps a person\'s own invitation', async () => {
+    const grants = new HarnessGrantStore(join(dataDir, 'harness-shares.json'))
+    const expiry = new Date(Date.now() + 10 * 86400_000).toISOString()
+    grants.derive('machine', [{ agentId: 'agent', email: 'old@x.io', tab: 'super:t1', name: 'api', engine: 'codex', ownerPublicKey: b64e(identity.pub) }], expiry, 0)
+    grants.invite({ machineId: 'machine', agentId: 'agent', recipientEmail: 'own@x.io', name: 'api', engine: 'codex', ownerPublicKey: b64e(identity.pub), expiresAt: expiry })
+    const { core, ports } = start({ account: { identity: async () => ({ accountId: 'u-bob', email: 'bob@x.io' }) } })
+    const kept = () => new HarnessGrantStore(join(dataDir, 'harness-shares.json')).all().filter((g) => !g.revoked).map((g) => g.recipientEmail)
+    await vi.waitFor(() => expect(kept()).toEqual(['own@x.io']))
+    await vi.waitFor(() => expect(vi.mocked(core.account.backend).mock.calls.some(([method]) => method === 'DELETE')).toBe(true))
+    await ports.sharing!.stop()
   })
 
   it('hands the owner the core\'s streams: frames to the core, what each viewer is shown back to it', async () => {

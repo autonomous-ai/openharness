@@ -1,5 +1,5 @@
 /**
- * Harness never reads a Claude or ChatGPT login (anh Dee, 2026-11-07, Swarm v3): every agent runs under its own
+ * Harness never reads a Claude or ChatGPT login (anh Dee, 2026-11-07): every agent runs under its own
  * person's login and settings, and quota comes only from the CLIs' own reports (task #4137). So no shipped code names
  * a sign-in: Claude Code's credentials file or Keychain item, the sign-in fields of its config, Codex's `auth.json`, or
  * the vendors' usage endpoints that only a stored token can call.

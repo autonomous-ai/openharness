@@ -1,7 +1,7 @@
 # The subscription relay forwards only the engines' calls
 
 Audit M4 (`docs/security/2026-11-02-team-account-boundary.md`, PR #2538): `lib/subscriptionRelay.ts` forwarded any path
-under `/claude/` or `/codex/`, for any method, with the owner's vendor sign-in. A guest or Team agent holding a relay
+under `/claude/` or `/codex/`, for any method, with the owner's vendor sign-in. A guest holding a relay
 token could therefore reach account endpoints, not only model calls, and an encoded `..%2f` went to the vendor as sent.
 
 ## Change
