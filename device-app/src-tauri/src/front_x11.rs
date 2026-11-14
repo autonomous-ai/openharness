@@ -140,6 +140,42 @@ mod tests {
         assert!(session_is_x11(Some("x11"), Some(""), Some(":0")));
     }
 
+    const WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
+    /// A log that hands each line on, so a test waits for it without a sleep.
+    struct Lines(std::sync::mpsc::Sender<String>);
+    impl crate::types::Log for Lines {
+        fn line(&self, text: &str) {
+            let _ = self.0.send(text.into());
+        }
+    }
+
+    fn lines() -> (std::sync::Arc<dyn crate::types::Log>, std::sync::mpsc::Receiver<String>) {
+        let (send, lines) = std::sync::mpsc::channel();
+        (std::sync::Arc::new(Lines(send)), lines)
+    }
+
+    #[test]
+    fn why_following_stopped_is_one_fixed_line() {
+        for (stop, line) in [(Stop::NotFollowed, "front: X11 not followed"), (Stop::Ended, "front: X11 ended")] {
+            let (log, lines) = lines();
+            on_thread(log, move || stop);
+            assert_eq!(lines.recv_timeout(WAIT).as_deref(), Ok(line));
+            // The thread has ended and dropped the log: one line, then nothing.
+            assert_eq!(lines.recv_timeout(WAIT), Err(std::sync::mpsc::RecvTimeoutError::Disconnected));
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_display_with_no_server_is_one_line_that_names_nothing() {
+        let (log, lines) = lines();
+        // A socket no server listens on: no TCP is tried for a `unix:` display.
+        on_thread(log, || follow("unix:59000", &|_| {}));
+        assert_eq!(lines.recv_timeout(WAIT).as_deref(), Ok("front: X11 not followed"));
+        assert_eq!(lines.recv_timeout(WAIT), Err(std::sync::mpsc::RecvTimeoutError::Disconnected));
+    }
+
     /// Run by PR CI under Xvfb (device-app-checks): `X11_LIVE_CLIENTS` names two X clients, split by ':'.
     #[cfg(target_os = "linux")]
     #[test]
