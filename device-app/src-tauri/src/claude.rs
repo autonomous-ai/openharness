@@ -3,6 +3,7 @@
 use crate::cli::{CHANGE_DEADLINE, Cli, LINE_MAX, STATUS_DEADLINE};
 use crate::types::{ClaudeStatus, Output};
 use serde::Deserialize;
+use serde_json::Value;
 
 /// The words for a change that failed and printed nothing.
 pub const FAILED: &str = "Could not change Claude Code.";
@@ -16,11 +17,12 @@ pub fn status(cli: &dyn Cli) -> Option<ClaudeStatus> {
     if output.timed_out || output.code != Some(0) {
         return None;
     }
-    output
-        .stdout
-        .lines()
-        .filter(|line| line.len() <= LINE_MAX && line.trim_start().starts_with('{'))
-        .find_map(|line| serde_json::from_str(line).ok())
+    output.stdout.lines().filter(|line| line.len() <= LINE_MAX && line.trim_start().starts_with('{')).find_map(|line| {
+        let line: Value = serde_json::from_str(line).ok()?;
+        // ClaudeStatus has a default for every field, so an `{"error":…}` or a notice would read as one.
+        line.get("supported")?.as_bool()?;
+        serde_json::from_value(line).ok()
+    })
 }
 
 /// Turns Claude Code's voice and approvals on or off; `Err` says why it could not.
