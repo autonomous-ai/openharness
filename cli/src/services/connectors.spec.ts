@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fakeCore } from '../testing/fakeCore.js'
 import { emptyPorts, type BackendNotice } from '../core/api.js'
-import { CONNECTORS_REQUESTS, startConnectors } from './connectors.js'
+import { CONNECTORS_REQUESTS, startConnectors, type ConnectorsOverrides } from './connectors.js'
 import { Store } from '../lib/connectors/store.js'
 import * as gateway from '../lib/connectors/gateway.js'
 import { FakeGateway } from '../testing/connectorServers.js'
@@ -57,13 +57,9 @@ describe('the connectors service', () => {
     await new Promise<void>(resolve => holder.listen(0, '127.0.0.1', resolve))
     return holder
   }
-  /** A loopback port free a moment ago. */
-  const freePort = async (): Promise<number> => {
-    const free = await holdPort()
-    const { port } = free.address() as { port: number }
-    await new Promise(done => free.close(done))
-    return port
-  }
+  /** The service started on a port of its bridge's own choosing, and that port once the bridge listens on it. */
+  const startedOnAnyPort = (overrides: ConnectorsOverrides): Promise<number> =>
+    new Promise(listening => { startConnectors(fakeCore(), emptyPorts(), { ...overrides, port: 0, listening }) })
   /** What a request answered, or 0 when it was not answered in ANSWER_MS. */
   const answered = (url: string) => fetch(url, { method: 'POST', body: '{}', signal: AbortSignal.timeout(ANSWER_MS) }).then(reply => reply.status, () => 0)
 
@@ -502,11 +498,11 @@ describe('the connectors service', () => {
     }
 
     it('answers both keys on the port, leaves them unchanged, and makes no socket', async () => {
-      const vault = longVault(), port = await freePort()
+      const vault = longVault()
       mkdirSync(vault.root, { recursive: true, mode: 0o700 })
       writeFileSync(join(vault.root, 'harness-key.json'), JSON.stringify({ key: 'harness-key-placeholder' }), { mode: 0o600 })
       const agentKey = bridgeKey(vault)
-      startConnectors(fakeCore(), emptyPorts(), { vault, env, port, offered: async () => ({}), retryMs: 20, vaultPort: null })
+      const port = await startedOnAnyPort({ vault, env, offered: async () => ({}), retryMs: 20, vaultPort: null })
       expect(vault.file('bridge.json').key).toBe(agentKey)
       expect(vault.file('bridge.json').keyRetiresAt).toBeUndefined()
       expect(vault.file('harness-key.json').key).toBe('harness-key-placeholder')
@@ -521,9 +517,9 @@ describe('the connectors service', () => {
     })
 
     it('with neither key on file, refuses everyone, an empty key included', async () => {
-      const vault = longVault(), port = await freePort()
+      const vault = longVault()
       const agentKey = bridgeKey(vault)
-      startConnectors(fakeCore(), emptyPorts(), { vault, env, port, offered: async () => ({}), retryMs: 20, vaultPort: null })
+      const port = await startedOnAnyPort({ vault, env, offered: async () => ({}), retryMs: 20, vaultPort: null })
       rmSync(join(vault.root, 'bridge.json'), { force: true })
       rmSync(join(vault.root, 'harness-key.json'), { force: true })
       expect(await status(port, '/x/connections')).toBe(404)
@@ -562,8 +558,7 @@ describe('the connectors service', () => {
     const behindLink = JSON.stringify({ key: 'k'.repeat(40) })
     writeFileSync(join(elsewhere, 'bridge.json'), behindLink, { mode: 0o600 })
     symlinkSync(elsewhere, root)
-    const port = await freePort()
-    startConnectors(fakeCore(), emptyPorts(), { vault: new Store(root, env), env, port, offered: async () => ({}), retryMs: 20, vaultPort: null })
+    const port = await startedOnAnyPort({ vault: new Store(root, env), env, offered: async () => ({}), retryMs: 20, vaultPort: null })
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('could not replace Harness\'s key'))
     let answer = ''
     for (let n = 0; n < 40 && !answer; n++) {
@@ -648,9 +643,8 @@ describe('the connectors service', () => {
       const vault = new Store(join(home, 'store'), env)
       const stale = harnessKey(vault)
       bridgeKey(vault)
-      const port = await freePort()
       try {
-        startConnectors(fakeCore(), emptyPorts(), { vault, env, port, offered: async () => ({}), retryMs: 5, platform: 'win32', pipePath: () => pipe })
+        const port = await startedOnAnyPort({ vault, env, offered: async () => ({}), retryMs: 5, platform: 'win32', pipePath: () => pipe })
         await vi.waitFor(() => expect(readBridgePipe(vault)?.pipe).toBe(pipe))
         expect(vault.file('harness-key.json')).toMatchObject({ socketOnly: true })
         expect(harnessKey(vault)).not.toBe(stale)
@@ -665,7 +659,7 @@ describe('the connectors service', () => {
       const said = vi.spyOn(console, 'warn').mockImplementation(() => {})
       try {
         // Its folder is not there yet: the first listens fail.
-        startConnectors(fakeCore(), emptyPorts(), { vault, env, port: await freePort(), offered: async () => ({}), retryMs: 5, platform: 'win32', pipePath: () => pipe })
+        startConnectors(fakeCore(), emptyPorts(), { vault, env, port: 0, offered: async () => ({}), retryMs: 5, platform: 'win32', pipePath: () => pipe })
         await vi.waitFor(() => expect(said.mock.calls.flat().join(' ')).toContain('the bridge\'s pipe is not listening'))
         mkdirSync(join(folder, 'p'))
         await vi.waitFor(() => expect(readBridgePipe(vault)?.pipe).toBe(pipe))
