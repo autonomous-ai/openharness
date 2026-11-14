@@ -172,14 +172,16 @@ fn draw(handle: &AppHandle, effect: Effect) -> tauri::Result<()> {
             }
         }
         Effect::Show(view) => {
-            *handle.state::<Shared>().view.lock().unwrap() = view.clone();
+            let last = std::mem::replace(&mut *handle.state::<Shared>().view.lock().unwrap(), view.clone());
             let Some(window) = handle.get_webview_window(WINDOW) else { return Ok(()) };
             window.emit("view", &view)?;
-            if view.is_some() {
-                window.show()?;
-                window.set_focus()?;
-            } else {
-                window.hide()?;
+            match &view {
+                Some(next) if raises(last.as_ref(), next) => {
+                    window.show()?;
+                    window.set_focus()?;
+                }
+                Some(_) => {}
+                None => window.hide()?,
             }
         }
         // The daemon is left running: the app only ever watched it.
@@ -187,6 +189,11 @@ fn draw(handle: &AppHandle, effect: Effect) -> tauri::Result<()> {
         _ => {}
     }
     Ok(())
+}
+
+/// Whether showing `next` after `last` raises the window and takes the keyboard.
+fn raises(_last: Option<&View>, _next: &View) -> bool {
+    true
 }
 
 fn native_menu(handle: &AppHandle, items: &[MenuItem]) -> tauri::Result<Menu<tauri::Wry>> {
@@ -218,4 +225,25 @@ fn menu_id(action: MenuAction) -> &'static str {
 fn menu_action(id: &str) -> Option<MenuAction> {
     use MenuAction::*;
     [Install, SignIn, ClaudeOn, ClaudeOff, OpenHarness, Quit].into_iter().find(|action| menu_id(*action) == id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use harness_device::types::{Phase, Screen};
+
+    fn view(screen: Screen, phase: Phase, lines: &[&str]) -> View {
+        View { screen, phase, lines: lines.iter().map(|line| line.to_string()).collect() }
+    }
+
+    #[test]
+    fn only_a_new_screen_takes_the_keyboard() {
+        let offer = view(Screen::SignIn, Phase::Offer, &[]);
+        let waiting = view(Screen::SignIn, Phase::Browser, &["Waiting"]);
+        assert!(raises(None, &offer));
+        assert!(raises(Some(&view(Screen::Install, Phase::Working, &[])), &offer));
+        // A sign-in's lines while the browser is open: the person is typing there.
+        assert!(!raises(Some(&offer), &waiting));
+        assert!(!raises(Some(&waiting), &view(Screen::SignIn, Phase::Browser, &["Waiting", "Still waiting"])));
+    }
 }
