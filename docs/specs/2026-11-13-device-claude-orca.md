@@ -235,7 +235,13 @@ In the `harness` CLI (`cli/src/cli.ts`, a new `device` command), never in the co
   --sparse .claude-plugin plugins`, as the README already says), then `claude plugin install harness-device@openharness`
   (user scope), or `claude plugin enable` when it is installed but off. Doing it twice does it once. Unsupported:
   exits 1 with "Claude Code 2.1.287 or later is needed."
-- `harness device claude disable`: `claude plugin uninstall harness-device@openharness`; the marketplace stays.
+- `harness device claude disable`: `claude plugin uninstall harness-device@openharness`; the marketplace stays. It takes
+  effect at once, also in a Claude Code session already running, which keeps the plugin's hook and mod loaded until it
+  restarts: both read the plugin's entry in Claude Code's user settings (`enabledPlugins["harness-device@openharness"]`
+  in `$CLAUDE_CONFIG_DIR/settings.json`, else `~/.claude/settings.json`; true once installed or enabled, gone once
+  uninstalled, false once turned off in `/plugin`), the entry `status` reads through `claude plugin list`. With it off,
+  `asked` tells the daemon nothing and `link` exits 1; the mod reads it once per poll, submits nothing, and asks `link`
+  again in 10 minutes. A settings file that cannot be read leaves the plugin on, as before.
 - Every `claude` call has a timeout (60 s for install, 15 s for the rest) and its failure is one line on stderr and exit 1.
 
 ### The wire and the firmware

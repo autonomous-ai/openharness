@@ -5,7 +5,7 @@
  */
 import { localSocketRoute } from '../lib/localTransport.js'
 import { daemonPost, runAsked } from './asked.js'
-import { claudeDisable, claudeEnable, claudeStatus, type ClaudeRun } from './plugin.js'
+import { claudeDisable, claudeEnable, claudePluginOn, claudeSettingsPath, claudeStatus, type ClaudeRun } from './plugin.js'
 
 /** `asked` and `link` are left out: they are the plugin's, and typed by hand they only wait on stdin or print a path. */
 export const DEVICE_USAGE = `Harness device (the dial shows Claude Code's waiting prompts in any terminal, and takes a spoken prompt):
@@ -42,14 +42,17 @@ export async function runDeviceCommand(argv: string[], deps: DeviceDeps): Promis
       deps.err(result.error)
       return 1
     }
-    case 'asked':
+    case 'asked': {
+      // A session started before `disable` still runs the hook: with the plugin off, its stdin is read and nothing told.
+      const post = claudePluginOn(claudeSettingsPath()) ? daemonPost(deps.dataDir, deps.port) : async () => {}
       // Prints nothing, ever: what the hook prints, Claude Code reads as its decision.
-      return runAsked({ stdin: deps.stdin, post: daemonPost(deps.dataDir, deps.port) })
+      return runAsked({ stdin: deps.stdin, post })
+    }
     case 'link': {
       // The socket alone: a request over it is trusted by the filesystem, so the mod is handed no credential. Where
-      // there is none (Windows), no answer, and the mod tries again later.
+      // there is none (Windows), or the plugin is off, no answer, and the mod tries again later.
       const socketPath = localSocketRoute(deps.dataDir, deps.port, deps.platform)
-      if (!socketPath) return 1
+      if (!socketPath || !claudePluginOn(claudeSettingsPath())) return 1
       deps.out(JSON.stringify({ socketPath }))
       return 0
     }

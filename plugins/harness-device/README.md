@@ -30,3 +30,6 @@ With no dial attached, no Harness daemon running, or no Harness CLI (`~/.local/b
 ```
 harness device claude disable
 ```
+
+It takes effect at once, also in a session already running: the hook and the mod check Claude Code's settings before
+they act, so the dial shows no more prompts and nothing said at it reaches the session.

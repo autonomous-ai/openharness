@@ -9,6 +9,7 @@ const RETRY_MS = 60_000
 const OLD_HARNESS_MS = 10 * 60_000
 // An empty answer sooner than this was not held, and polling again at once would spin.
 const HELD_MS = 1_000
+const PLUGIN_ID = 'harness-device@openharness'
 
 /** @type {import('claude-code').Register} */
 export const register = (on) =>
@@ -28,17 +29,19 @@ export const register = (on) =>
 async function link($) {
   // A call the engine refuses ($.env.get, say) is tried again later, not the end of the voice for the session.
   const found = await socketOf($).catch(() => ({ wait: RETRY_MS }))
-  if ('socketPath' in found) $.clock.after(0, () => void poll($, found.socketPath))
+  if ('socketPath' in found) $.clock.after(0, () => void poll($, found))
   else $.clock.after(found.wait, () => void link($))
 }
 
 /**
- * The socket the launcher prints, or how long to wait before asking again.
+ * The socket the launcher prints, with the settings that say the plugin is on, or how long to wait before asking again.
  * @param {Engine} $
- * @returns {Promise<{ socketPath: string } | { wait: number }>}
+ * @returns {Promise<Linked | { wait: number }>}
  */
 async function socketOf($) {
   const home = await $.env.get('HOME')
+  const claudeHome = (await $.env.get('CLAUDE_CONFIG_DIR')) || (home ? `${home}/.claude` : '')
+  const settingsPath = claudeHome ? `${claudeHome}/settings.json` : ''
   const launchers = home ? [`${home}/.local/bin/harness`, 'harness'] : ['harness']
   for (const launcher of launchers) {
     let out
@@ -50,7 +53,7 @@ async function socketOf($) {
     if (out.exitCode !== 0) return { wait: OLD_HARNESS_MS }
     try {
       const { socketPath } = JSON.parse(out.stdout)
-      return typeof socketPath === 'string' && socketPath !== '' ? { socketPath } : { wait: RETRY_MS }
+      return typeof socketPath === 'string' && socketPath !== '' ? { socketPath, settingsPath } : { wait: RETRY_MS }
     } catch {
       return { wait: RETRY_MS }
     }
@@ -58,26 +61,29 @@ async function socketOf($) {
   return { wait: RETRY_MS }
 }
 
+/** @typedef {{ socketPath: string, settingsPath: string }} Linked */
+
 /**
  * One poll, and the next from a timer, even one due at once: a reload cancels the module's timers, so no poll of the old
- * copy goes on beside the new one's.
+ * copy goes on beside the new one's. With the plugin off, the launcher is asked again, and answers off.
  * @param {Engine} $
- * @param {string} socketPath
+ * @param {Linked} linked
  */
-async function poll($, socketPath) {
-  const wait = await pollOnce($, socketPath).catch(() => RETRY_MS)
-  $.clock.after(wait, () => void poll($, socketPath))
+async function poll($, linked) {
+  const wait = await pollOnce($, linked).catch(() => RETRY_MS)
+  if (wait === null) $.clock.after(0, () => void link($))
+  else $.clock.after(wait, () => void poll($, linked))
 }
 
 /**
- * One poll; resolves how long to wait before the next, 0 for at once.
+ * One poll; resolves how long to wait before the next, 0 for at once, or null once the plugin is off.
  * @param {Engine} $
- * @param {string} socketPath
- * @returns {Promise<number>}
+ * @param {Linked} linked
+ * @returns {Promise<number | null>}
  */
-async function pollOnce($, socketPath) {
+async function pollOnce($, { socketPath, settingsPath }) {
   const sentAt = await $.clock.now()
-  let answer
+  let answer = null
   try {
     answer = await $.http.fetch(INBOX, {
       method: 'POST',
@@ -86,8 +92,12 @@ async function pollOnce($, socketPath) {
       body: JSON.stringify({ sessionId: await $.session.id() }),
     })
   } catch {
-    return RETRY_MS
+    // No daemon: still asked whether the plugin is on, so a session that waits for one stops too.
   }
+  // Checked once the poll is back, before its text: a session started before `harness device claude disable` keeps
+  // this module loaded, and nothing said at the dial may reach it after.
+  if (!(await isOn($, settingsPath))) return null
+  if (!answer) return RETRY_MS
   if (answer.status === 404) return OLD_HARNESS_MS
   if (answer.status !== 200) return RETRY_MS
   let text
@@ -103,4 +113,25 @@ async function pollOnce($, socketPath) {
     return 0
   }
   return (await $.clock.now()) - sentAt >= HELD_MS ? 0 : RETRY_MS
+}
+
+/**
+ * Whether the plugin is on, as `harness device claude link` and `asked` read it (cli/src/deviceClaude/plugin.ts
+ * `claudePluginOn`): its entry in Claude Code's user settings, gone once `disable` uninstalls it. One read, which the
+ * engine bounds. Settings it cannot read leave it on, as before this check.
+ * @param {Engine} $
+ * @param {string} settingsPath
+ * @returns {Promise<boolean>}
+ */
+async function isOn($, settingsPath) {
+  if (!settingsPath) return true
+  let settings
+  try {
+    settings = JSON.parse(await $.fs.read(settingsPath))
+  } catch {
+    return true
+  }
+  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) return true
+  const plugins = settings.enabledPlugins
+  return !!plugins && typeof plugins === 'object' && plugins[PLUGIN_ID] === true
 }

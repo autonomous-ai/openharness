@@ -4,6 +4,9 @@
  * This runs only in the `harness` command's own process (the menu-bar app calls it), never in the daemon.
  */
 import { execFile } from 'node:child_process'
+import { closeSync, openSync, readSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { installedEngineBin } from '../lib/engineBin.js'
 
 export const PLUGIN_ID = 'harness-device@openharness'
@@ -33,6 +36,41 @@ const LOCAL_MS = 15_000
 const MAX_OUTPUT_BYTES = 1024 * 1024
 const UNSUPPORTED = `Claude Code ${MIN_CLAUDE} or later is needed.`
 const NO_ANSWER = 'Claude Code did not answer.'
+/** A settings.json is a few keys; one past this is not read whole. */
+const MAX_SETTINGS_BYTES = 1024 * 1024
+
+/** Claude Code's user settings: in CLAUDE_CONFIG_DIR, which a Claude Code session hands its hooks, else in ~/.claude. */
+export function claudeSettingsPath(): string {
+  return join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude'), 'settings.json')
+}
+
+/**
+ * Whether the plugin is on, by its entry in Claude Code's user settings: true once installed or enabled, false once
+ * disabled, gone once uninstalled. A session started before `disable` keeps the plugin's hook and mod loaded, so both
+ * ask this before they act. It is Claude Code's own record, not a file of Harness's: the /plugin menu turns the plugin
+ * off there too, and `status` reads the same entry through `claude plugin list`. One read of at most 1 MiB. A file that
+ * is missing (the plugin loaded with --plugin-dir), cut short or not an object says nothing of the person turning the
+ * plugin off: it stays on, as it was before this check, rather than the dial going quiet for no reason anyone can see.
+ */
+export function claudePluginOn(settingsPath: string): boolean {
+  let settings: unknown
+  try {
+    const fd = openSync(settingsPath, 'r')
+    try {
+      const buffer = Buffer.alloc(MAX_SETTINGS_BYTES + 1)
+      const length = readSync(fd, buffer, 0, buffer.length, 0)
+      if (length > MAX_SETTINGS_BYTES) return true
+      settings = JSON.parse(buffer.toString('utf8', 0, length))
+    } finally {
+      closeSync(fd)
+    }
+  } catch {
+    return true
+  }
+  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) return true
+  const plugins = (settings as { enabledPlugins?: unknown }).enabledPlugins
+  return !!plugins && typeof plugins === 'object' && (plugins as Record<string, unknown>)[PLUGIN_ID] === true
+}
 
 /** The Claude Code binary as Harness finds it for its own agents, run with no shell; null when it is not installed. */
 export function claudeRun(): ClaudeRun | null {
