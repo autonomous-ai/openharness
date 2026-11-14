@@ -4388,6 +4388,42 @@ describe('the app filter', () => {
     } finally { await c.session.stop() }
   })
 
+  it('a switch while the restores read loses no recap: the new ring is restored, the old one when it is back', async () => {
+    let release!: () => void
+    const held = new Promise<void>((r) => { release = r })
+    let reading = false
+    const { host, state } = appHost({
+      recentSummaries: async (id) => {
+        // g4's history is a slow cloud read, and the switch lands while it is out.
+        if (id === 'g4') { reading = true; await held }
+        return [{ recap: `${id} shipped`, text: `${id} shipped` }]
+      },
+    })
+    const c = await greeted(host)
+    const restores = () => c.port.sent.filter((m) => m.t === 'summary' && m.restore).map((m) => m.agentId)
+    try {
+      await vi.waitFor(() => expect(restores()).toEqual(['g1', 'g2', 'g3']))
+      state.rings.ghostty.push(row('g4', 'ghostty'))
+      c.port.say({ t: 'agents.refresh' })
+      await vi.waitFor(() => expect(reading).toBe(true))
+      state.shown = 'vscode'
+      const switchedAt = c.port.sent.length
+      c.port.say({ t: 'agents.refresh' })
+      await vi.waitFor(() => expect(c.port.sent.slice(switchedAt).map((m) => m.t)).toContain('agents.end'))
+      release()
+      // The ring the dial holds now is restored; g4, which it no longer holds, is not sent into it.
+      await vi.waitFor(() => expect(restores()).toEqual(['g1', 'g2', 'g3', 'v1', 'v2']))
+      await settle()
+      expect(restores()).toEqual(['g1', 'g2', 'g3', 'v1', 'v2'])
+      state.shown = 'ghostty'
+      const backAt = c.port.sent.length
+      c.port.say({ t: 'agents.refresh' })
+      await vi.waitFor(() => expect(restores()).toEqual(['g1', 'g2', 'g3', 'v1', 'v2', 'g4']))
+      const back = c.port.sent.slice(backAt)
+      expect(back.findIndex((m) => m.t === 'agents.end')).toBeLessThan(back.findIndex((m) => m.t === 'summary' && m.agentId === 'g4'))
+    } finally { await c.session.stop() }
+  })
+
   it('wants apps only while a dial that says appFilter is connected', async () => {
     const old = await greeted(appHost().host, false)
     try { expect(old.session.wantsApps).toBe(false) } finally { await old.session.stop() }
