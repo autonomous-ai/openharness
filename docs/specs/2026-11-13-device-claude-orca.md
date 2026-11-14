@@ -132,11 +132,12 @@ Claude Code or Codex in an Orca terminal (hint ORCA_TERMINAL_HANDLE from the wav
 the same authentication (`hookOk`). Their checks and forwarding live in one new core file, `core/deviceHookCalls.ts`,
 listed in `src/architecture.coreFiles.txt` with its reason (hook calls are what the core already receives; it only
 forwards them, typed and bounded, to the one component that faces the dial). The devices port gains the matching members
-in `core/api.ts`, with fallbacks in `DEVICES_FALLBACKS` (`none`, empty), so the devices-in-core path works too.
+in `core/api.ts`, with fallbacks in `DEVICES_FALLBACKS` (`none` for an approval, `{ off: true }` for a poll), so the devices-in-core path works too.
 
 - **Never starts the devices process.** A call to a service that has never run starts it (`serviceLinks.ts`), so both
   routes first check that the devices process is connected and a dial is watching (`devicesLink`'s watching state);
-  otherwise they answer `none` or an empty poll at once.
+  otherwise they answer at once: `none` for an approval, 503 for a poll (no device), so the mod can tell it from a
+  hold that ran out.
 
 `/api/hook/approval`:
 
@@ -209,9 +210,9 @@ dial shows the existing `voice.transcript` or `voice.error`.
 ### Orca actions (`cli/src/cable/hosts/orca.ts`)
 
 - **The handle.** `ORCA_TERMINAL_HANDLE` joins the hook's hint allowlist (`cli/hook/notify.mjs`): the only new name.
-  `ORCA_PANE_KEY` is not needed: the handle is what the CLI takes. The allowlist then has 10 names, so both caps rise to
-  10: the hook's own stop at 8 hints (`notify.mjs`) and the core's `MAX_HINTS` (`cli/src/core/observedHook.ts`); no
-  hint is cut when every one is set.
+  `ORCA_PANE_KEY` is not needed: the handle is what the CLI takes. Wave 0 dropped `ORCA_APP_VERSION`, so the allowlist
+  has 9 names, and the core's `MAX_HINTS` (`cli/src/core/observedHook.ts`) equals it: 9. A test holds the two equal, so
+  no hint is cut when every one is set and the core takes no more than an honest hook can send.
 - **Per agent.** `ObservedSource` reads the hints on every event, not only when it first creates the agent, and keeps the
   handle when it matches `^term_[0-9a-f-]{36}$`. Its `capabilities(agent)` becomes per agent: `s` always, `v` and `f` as
   this section and Voice say, `a` while an approval is open.
@@ -260,8 +261,8 @@ Windows.
   output for each answer; exit 0 on every failure; the posted body never carries `ORCA_PAIRING_CODE`,
   `ORCA_AGENT_SESSION_SPAWN_TOKEN` or any other environment variable (set them in the test and look at the body).
 - `notify.mjs`: `ORCA_TERMINAL_HANDLE` is posted; `ORCA_PAIRING_CODE` and `ORCA_AGENT_SESSION_SPAWN_TOKEN` are never
-  posted, with both set; all 10 allowlisted hints set at once reach the devices uncut (the hook's cap and the core's).
-- Core routes: bounds, the open-request caps, `none` or an empty poll at once when the devices process is not connected
+  posted, with both set; all 9 allowlisted hints set at once reach the devices uncut; the core takes 9 and refuses 10.
+- Core routes: bounds, the open-request caps, `none` or a 503 at once when the devices process is not connected
   or no dial watches (and the process is not started), `approval.gone` when the client goes first, `inbox.gone` when it
   goes or a newer poll replaces it, the fallbacks; 100% per file (`npm run test:core`).
 - Approvals: no dial or a window's tab view → `none`; a Harness-owned session → `none`; the card's frame with the
