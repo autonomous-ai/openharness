@@ -26,7 +26,7 @@ import { TurnStats, type TurnStatsFields } from '../cable/turnStats.js'
 import { cableEventFor, cableStepFor, cableQuestionCloseFor, cableQuestionFor, DaemonCableHost } from '../cable/cableHost.js'
 import { CableSession } from '../cable/cableSession.js'
 import { LAST_ANSWER_DEADLINE_MS, LAST_ANSWER_MAX_BYTES, readLastAnswer } from '../cable/hosts/lastAnswer.js'
-import { hostDisplayName, ObservedSource } from '../cable/hosts/observed.js'
+import { hostDisplayName, observedAgentId, ObservedSource } from '../cable/hosts/observed.js'
 import { HostRegistry } from '../cable/hosts/registry.js'
 import type { HostAgent, HostAgentState } from '../cable/hosts/types.js'
 import { PetStore } from '../cable/pets/store.js'
@@ -106,6 +106,9 @@ const OPEN_SCAN_MS = 60_000
 /** Under the round dial's 25 s fuse (firmware ui_prune_stale_busy): it forgets a turn it hears nothing of for that long,
  *  and only `turn.started` renews it. An agent outside a pane sends no step to renew it with. */
 const REMIND_MS = 20_000
+/** The observed source drops an ended session 10 s after its end, by the wall clock (observed.ts); looked at a beat later,
+ *  as a timer can fire a little before the wall clock says it is due. */
+const ENDED_MS = 10_500
 
 /** This computer's agents outside a pane, read with ⌘P's readers (services/externalSessions.ts). */
 function observedSource(dataDir: string, log: (line: string) => void): ObservedSource {
@@ -620,6 +623,16 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     return timer
   }
   const timers = observed ? [every(OBSERVED_TICK_MS, () => observed.tick()), every(TURN_CHECK_MS, () => observed.checkWorking())] : []
+  /** A look at the processes for each session that ended, once it is old enough to go: the 30 s one leaves it listed for
+   *  up to 40 s. One per listed session (fifty at most), a later end of it putting its look off. */
+  const endings = new Map<string, ReturnType<typeof setTimeout>>()
+  const dropEnded = (agentId: string): void => {
+    if (!outside(agentId)) return
+    clearTimeout(endings.get(agentId))
+    const timer = setTimeout(() => { endings.delete(agentId); part.call('observed', () => observed?.tick()) }, ENDED_MS)
+    timer.unref()
+    endings.set(agentId, timer)
+  }
   /** Each observed agent mid-turn that the dial lists (ten at most of the fifty), told again: the dial forgets a turn it
    *  hears nothing of for 25 s, and one that just came, or whose window just closed, has heard nothing of it yet. */
   const remind = async (): Promise<void> => {
@@ -693,7 +706,13 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const port: DevicesPort = {
     // A paneless session's hook event, as the core checked it: taken, and dropped here while the observed source is
     // switched off.
-    observed: (event) => { part.call('observed', () => observed?.ingest(event)); return true },
+    observed: (event) => {
+      part.call('observed', () => {
+        observed?.ingest(event)
+        if (event.event === 'session-end') dropEnded(observedAgentId(event.engine, event.sessionId))
+      })
+      return true
+    },
     // Every card bound for the Wi-Fi devices goes down the cable too, translated once: a new kind of card
     // reaches the dial the day it reaches the backend's devices.
     // An engine's question takes the place of a Swarm wait on the devices, which shows again once it closes (cable/swarmWaits.ts).
@@ -781,6 +800,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     stop: async () => {
       for (const agentId of [...replies.keys()]) endReplies(agentId, false)   // no timer may fire into a stopped cable
       for (const timer of timers) clearInterval(timer)
+      for (const timer of endings.values()) clearTimeout(timer)
       dialAttached(false)
       await cable.stop()
       fleet?.stop()
