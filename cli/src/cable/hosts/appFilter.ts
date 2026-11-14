@@ -31,7 +31,8 @@ const sameCounts = (a: ReadonlyMap<string, number>, b: ReadonlyMap<string, numbe
  * the one with the most agents whose app is known. An agent the open scan found, which nothing has told of yet, is on the
  * unknown app's page and counts for nothing in that default: a dial plugged in over many agents already running would
  * otherwise open on that page. It is the default only while no app has a known agent, and gives way once one has; a pick
- * or the front can still show it. One per cable host, shared by every dial on it. Time and chance come in through `deps`,
+ * or the front can still show it. The app in front is shown whenever it has known agents and no pick holds, so a default
+ * gives way to it. One per cable host, shared by every dial on it. Time and chance come in through `deps`,
  * so a test drives both.
  */
 export class AppFilter {
@@ -51,11 +52,19 @@ export class AppFilter {
   constructor(private readonly deps: AppFilterDeps) {}
 
   /**
-   * The app shown, `undefined` with no agents. The shown app emptying, and the default's page of agents not known yet giving
-   * way, are decided here, when the counts are read.
+   * The app shown, `undefined` with no agents. The app in front getting known agents after it settled, the shown app
+   * emptying, and the default's page of agents not known yet giving way, are decided here, when the counts are read.
    */
   shown(): string | undefined {
     const { all: counts, known } = this.deps.counts()
+    const front = this.settledFront
+    // An agent started in the app the person is using turns the dial to it, over any default (the PM, D1). `none` is no
+    // app, so it never has agents.
+    if (!this.pickedOnDial && front !== undefined && front !== this.showing && has(known, front)) {
+      this.byDefault = false
+      this.show(front, 'front')
+      return this.showing
+    }
     if (this.showing !== undefined && has(counts, this.showing) && !this.givesWay(known, this.showing)) return this.showing
     this.pickedOnDial = false
     this.byDefault = true
