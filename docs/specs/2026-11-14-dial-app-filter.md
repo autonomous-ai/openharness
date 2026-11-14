@@ -137,7 +137,11 @@ The state is `shown`, `pickedOnDial` (a boolean), `tieBreak` (the app drawn and 
    The random function is injected, so tests are deterministic. This clears `pickedOnDial`.
 2. **The app in front changes** (a `front` message): start a 1 s timer, and restart it on every later change. The timer
    runs only after a change. When it fires:
-   - if the app is not `settledFront`, it ends `pickedOnDial`, and `settledFront` becomes it;
+   - if the app is not `settledFront`, `settledFront` becomes it, and a real app (not `none`) ends `pickedOnDial`.
+     `none` never ends a pick (the PM, 2026-11-15): it means no listed app is in front, or the Harness Device app
+     quit (the watch tells `none` once when its input ends), and neither is the person switching apps. It only stops
+     the following, so D1 never turns the dial to a stale app. Accepted edge: the Device app restarting with the same
+     app in front ends a held pick, since that app differs from `none`; the dial then shows the app in use;
    - if it has agents and is not `shown`, `shown` becomes it (`none`, no listed app in front, is no app and never
      has agents);
    - otherwise `shown` stays.
@@ -252,8 +256,9 @@ and a desktop change. The rings are memory only too, as swipe-order decided.
   macOS and Linux the dial reaches "Other" by a pick or as the default, and never by following (the one row that
   gives `terminal` is `WindowsTerminal.exe`). The raw value never leaves the CLI process.
 - The watch sends `{ type: 'front', app }` to the devices listener. With no listener (an older daemon, or the devices
-  process not running) it ignores the `front` lines and tries again on the next change, and again when the dial
-  attaches (`dial_status` turns `attached`), so a devices process that starts with the dial hears the app in front
+  process not running) it ignores the `front` lines and tries again on the next change. When its input ends (the
+  Harness Device app quit), a watch that told an app in front tells `none` once, bounded, before it exits. It tells
+  again when the dial attaches (`dial_status` turns `attached`), so a devices process that starts with the dial hears the app in front
   at once (the PM, 2026-11-15).
 - **The devices listener** (`cli/src/services/devicesListener.ts`, the PM, 2026-11-15) is **shared**: one local
   socket of the devices process for every message a local tool sends the devices, so later device routes (#4296's
