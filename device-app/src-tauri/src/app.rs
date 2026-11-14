@@ -629,6 +629,14 @@ mod tests {
     }
 
     #[test]
+    fn retry_never_installs_over_a_cli_that_was_found() {
+        let mut app = fresh();
+        app.handle(Event::InstallDone(Err(vec!["a".into()])));
+        app.handle(Event::Cli(true));
+        assert!(!has(&app.handle(Event::Act(Action::Retry)), &Effect::RunInstall));
+    }
+
+    #[test]
     fn the_first_screen_waits_for_both_answers() {
         let mut app = found();
         assert!(shows(&app.handle(Event::Auth(Some(false)))).is_empty());
