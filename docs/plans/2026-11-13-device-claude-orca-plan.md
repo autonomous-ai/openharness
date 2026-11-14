@@ -65,13 +65,14 @@ This branch stacks on `feat/device-without-the-app` at `9bffc37cbb`: wave 0's Ta
 - **Exact copy:**
   - "This request is closed." (a stale or other id)
   - "Tap Allow or Deny." (a spoken answer to an approval)
-  - "<name> is busy. Say it when it is done." (voice to a working or needs-you agent)
+  - "<name> is busy. Say it when it is done." (voice with no mod to a working agent)
+  - "<name> is waiting for your answer in {Host}." (voice with no mod to a needs-you agent)
   - "<name> did not answer." (no poll in 5 s, or Orca failed)
   - "Orca did not open it." (a failed open, as a toast)
   - "Denied from the Harness device." (the hook's deny message)
   - "Claude Code 2.1.287 or later is needed." (`enable` when unsupported)
 - **The hook's client** reads at most 256 KB of stdin, always exits 0, and prints exactly `{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}`, the same with `"behavior":"deny","message":"Denied from the Harness device."`, or nothing.
-- **Voice.** Only to an agent that is not `working` or `needs-you`, for every route and engine. An agent has `v` when its session has a poll open or one closed under 35 s ago, or when it has an Orca handle. A transcript waits at most 5 s for a poll. Text is at most 2000 characters.
+- **Voice** (the spec's Voice step 1). An ended session is refused. The mod takes it in every state (`$.prompt.submit` queues it for after the turn). Typing through Orca goes only to an `idle` agent: with no mod, a `working` one is told busy and a `needs-you` one waiting. The dial never answers a prompt. An agent has `v` when its session has a poll open or one closed under 35 s ago, or when it has an Orca handle. A transcript waits at most 5 s for a poll. Text is at most 2000 characters.
 - **Orca.** Handle `^term_[0-9a-f-]{36}$`. `orca` on `PATH`, else `/Applications/Orca.app/Contents/Resources/bin/orca` on macOS. `execFile`, no shell, 10 s, one command at a time per handle. No polling of Orca.
 - **Hints.** The allowlist has 10 names, and both caps are 10 (`notify.mjs`, `MAX_HINTS` in `core/observedHook.ts`).
 - **With a window open nothing changes:** approvals answer `none` and observed agents take no voice. A Harness-pane session keeps the pane path: its approval is `none`.
@@ -310,9 +311,9 @@ This branch stacks on `feat/device-without-the-app` at `9bffc37cbb`: wave 0's Ta
   - `approval(sessionId: string, cwd: string | undefined, state: 'open' | 'answered' | 'left'): HostAgent | undefined` — for engine `claude`. `'open'` creates the agent when its hook has not come, turns it `needs-you` and sets the flag. `'answered'` clears the flag and turns `needs-you` back to `working`. `'left'` clears the flag only.
   - `send(agent, text): Promise<SendResult>`, in this order:
     1. Over 2000 characters → `{ ok: false, reason: 'Too long. Say it shorter.' }`.
-    2. `working` or `needs-you` → "<name> is busy. Say it when it is done."
-    3. A `claude` session with `modReady` → `toMod`; true is `{ ok: true }`.
-    4. A handle → `orcaSend`; true is `{ ok: true }`.
+    2. An ended session → "<name> did not answer."
+    3. A `claude` session with `modReady` → `toMod`, in every state; true is `{ ok: true }`.
+    4. A handle, only while `idle` → `orcaSend`; true is `{ ok: true }`. With no mod, `working` → "<name> is busy. Say it when it is done." and `needs-you` → "<name> is waiting for your answer in {Host}."
     5. Otherwise "<name> did not answer."
     Each outcome is counted; nothing is queued.
   - `focus(agent): Promise<boolean>` — `orcaOpen(handle)`, or false with no handle.
@@ -321,7 +322,7 @@ This branch stacks on `feat/device-without-the-app` at `9bffc37cbb`: wave 0's Ta
   - `keeps a handle that is term_<uuid> and ignores any other`; `an event whose hints carry no handle clears it`; `a session found by the scan takes its host from its first event`.
   - `caps: s alone with no actions; v and f with a handle; v for a claude session the mod is ready for; never v from the mod for codex; a only while an approval is open`.
   - `approval open creates a claude agent the hook never named and turns it needs-you`; `answered turns it working`; `left keeps it needs-you`; `open with the source full gives undefined`.
-  - `send is refused while working and while needs-you, and nothing is typed`.
+  - `with no mod, typed into Orca only while idle: busy while working, waiting while needs-you`.
   - `send goes to the mod when it is ready`; `to Orca with a handle and no mod`; `to Orca when the mod missed its 5 s and there is a handle`; `did not answer with neither`.
   - `a failed Orca send says did not answer`; `a text over 2000 characters is refused before any route`.
   - `focus runs orcaOpen for a handle and is false without one`.
@@ -717,10 +718,10 @@ No temporary workflow is needed: the one long check has a repo workflow.
   - Before the first spoken word, `harness status` reports the staging backend and a staging sign-in, and the dial lists the agents of checks 4-6 (their hooks reach this daemon). If either is not so, stop and tell the orchestrator; never fall back to production.
   - When the staging file moves the data folder or the port, start those Claude Code and Codex sessions from a shell that exports the same `HARNESS_ENV_FILE`, so their hook and the launcher find this daemon.
 - A person does and sees:
-  4. An idle Claude Code in Ghostty: a spoken prompt starts a turn. A working one: the dial says "<name> is busy. Say it when it is done."
+  4. An idle Claude Code in Ghostty: a spoken prompt starts a turn. Said while it works, the words are taken and queued for after its turn.
   5. Codex in an Orca terminal, idle: a spoken prompt is typed and starts a turn.
   6. Claude Code in an Orca chat: a spoken prompt starts a turn, through the mod.
-- Evidence: `[device] voice · mod`, `· orca` and `· busy` lines.
+- Evidence: `[device] voice · mod` and `· orca` lines.
 - After: `harness stop`, then `harness start` with no env file; `harness status` reports the everyday backend and account. Then check 3's "After".
 
 ## Answers (2026-11-13)
