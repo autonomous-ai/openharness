@@ -9,7 +9,7 @@ use std::io::{self, BufRead, BufReader, Read};
 use std::os::unix::process::CommandExt;
 use std::path::{Component, Path, PathBuf};
 use std::process::{ChildStdin, Command, Stdio};
-use std::sync::{Arc, Condvar, Mutex, Weak, mpsc};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -118,12 +118,22 @@ pub fn child_env(home: &Path, path_var: Option<&OsStr>, locale: Option<&OsStr>) 
     env
 }
 
+/// Held around every spawn. macOS has no pipe2: a child's pipes are made, then marked close-on-exec, and a child
+/// another thread starts between the two keeps them, holding the first child's output open after it has ended.
+pub(crate) fn spawn_lock() -> MutexGuard<'static, ()> {
+    static SPAWNING: Mutex<()> = Mutex::new(());
+    SPAWNING.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
 /// Runs `command` in its own process group to its end, stdin empty. Past `deadline` the whole group is killed and
 /// `timed_out` is true. Each stream keeps its last 256 KiB.
 pub fn run(mut command: Command, deadline: Duration) -> io::Result<Output> {
     let end = Instant::now() + deadline;
     command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).process_group(0);
-    let mut child = command.spawn()?;
+    let mut child = {
+        let _spawning = spawn_lock();
+        command.spawn()?
+    };
     let pid = child.id() as libc::pid_t;
     let (done, finished) = mpsc::channel();
     let stdout = tail(child.stdout.take().expect("stdout is piped"), done.clone());
@@ -213,7 +223,10 @@ pub struct Timeout;
 impl Child {
     fn start(mut command: Command, name: String, log: Arc<dyn Log>) -> io::Result<Child> {
         command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).process_group(0);
-        let mut child = command.spawn()?;
+        let mut child = {
+            let _spawning = spawn_lock();
+            command.spawn()?
+        };
         let pid = child.id() as libc::pid_t;
         // Taken out, or `wait` below would close it.
         let stdin = Arc::new(Mutex::new(child.stdin.take()));
