@@ -308,6 +308,38 @@ describe('Approvals', () => {
     expect(t.marks).toEqual([])
   })
 
+  it('a session check that ends after the 300 s shows no card: the core has stopped waiting', async () => {
+    let owner!: (owned: boolean) => void
+    const t = setup({ owned: () => new Promise((resolve) => { owner = resolve }) })
+    const answer = track(t.approvals.request(req('r1')))
+    await settle()
+    t.advance(300_000)
+    owner(false)
+    await settle()
+    expect(answer.value).toBe('none')
+    expect(t.shown).toEqual([])
+    expect(t.marks).toEqual([])
+    expect(t.counts).toEqual([['expired', 300_000]])
+  })
+
+  it('a gone that comes before its own request answers it none at once, with no card; the last 16 are kept', async () => {
+    const t = setup()
+    t.approvals.gone('r1')
+    const early = track(t.approvals.request(req('r1')))
+    await settle()
+    expect(early.value).toBe('none')
+    expect(t.owned).toEqual([])
+    expect(t.shown).toEqual([])
+    expect(t.marks).toEqual([])
+    for (let i = 0; i <= 16; i++) t.approvals.gone(`g${i}`)
+    const kept = track(t.approvals.request(req('g16', 's2')))
+    // The oldest went: its request shows.
+    track(t.approvals.request(req('g0')))
+    await settle()
+    expect(kept.value).toBe('none')
+    expect(t.shown.map((s) => s.requestId)).toEqual(['approval:g0'])
+  })
+
   it('a dial that goes while the session is checked shows no card', async () => {
     let owner!: (owned: boolean) => void
     let dial = true
