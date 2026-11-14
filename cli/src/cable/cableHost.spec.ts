@@ -729,7 +729,7 @@ describe('the dial with no window: this computer\'s agents', () => {
     capabilities: () => ({ status: true, voice: false, focus: false, answer: false }),
   })
 
-  it('no window and a registry: the selected rows with host and caps, and view machine', async () => {
+  it('no window and a registry: the rows of the ring with host and caps, and view machine', async () => {
     const host = new DaemonCableHost(wiring({ sessions }), fleetOf([]))
     host.setRegistry(new HostRegistry([host.harness, observed([
       observedAgent({ id: 'o1', state: 'needs-you', lastActivityAt: 10 }),
@@ -739,11 +739,54 @@ describe('the dial with no window: this computer\'s agents', () => {
     host.harness.noteCard('h2', 'processing')
     host.setSwarms(null)
     const local = { machineId: 'mine', machine: 'MacbookPro.local' }
+    // In the registry's order: o1 waits on the person and h2 is mid-turn, and neither moves ahead.
     expect(await host.listAgentSnapshot()).toEqual({ tab: '', total: 3, view: 'machine', agents: [
-      { id: 'o1', name: 'scratch', engine: 'claude', ...local, host: 'ghostty', caps: 's' },
-      { id: 'h2', name: 'h2', engine: 'codex', ...local, host: 'harness', caps: 'sva' },
       { id: 'h1', name: 'h1', engine: 'claude', ...local, host: 'harness', caps: 'sva' },
+      { id: 'h2', name: 'h2', engine: 'codex', ...local, host: 'harness', caps: 'sva' },
+      { id: 'o1', name: 'scratch', engine: 'claude', ...local, host: 'ghostty', caps: 's' },
     ] })
+  })
+
+  it('no window: a state change moves no agent, so the list the dial holds is not sent again', async () => {
+    const host = new DaemonCableHost(wiring({ sessions }), fleetOf([]))
+    const o1 = observedAgent({ id: 'o1', lastActivityAt: 10 })
+    host.setRegistry(new HostRegistry([host.harness, observed([o1])]))
+    host.setSwarms(null)
+    const before = await host.listAgentSnapshot()
+    expect(before.agents.map((a) => a.id)).toEqual(['h1', 'h2', 'o1'])
+    // Each of these moved its agent under the old order: a question, a turn, an answer not yet seen.
+    Object.assign(o1, { state: 'needs-you', lastActivityAt: 99 })
+    host.harness.noteCard('h2', 'processing')
+    // The session sends a list only when these rows differ from the last it sent (CableSession.agentsKey).
+    expect(await host.listAgentSnapshot()).toEqual(before)
+    host.harness.noteCard('h2', 'done')
+    Object.assign(o1, { state: 'working' })
+    expect(await host.listAgentSnapshot()).toEqual(before)
+  })
+
+  it('no window: seventeen agents: sixteen rows, and total says seventeen', async () => {
+    const host = new DaemonCableHost(wiring({ sessions }), fleetOf([]))
+    host.setRegistry(new HostRegistry([host.harness, observed(
+      Array.from({ length: 15 }, (_, i) => observedAgent({ id: `o${i + 1}`, lastActivityAt: i + 1 })))]))
+    host.setSwarms(null)
+    const first = await host.listAgentSnapshot()
+    expect(first.agents).toHaveLength(16)
+    expect(first.total).toBe(17)
+  })
+
+  it('a window opened and shut leaves the ring as it was: what started meanwhile comes last', async () => {
+    const host = new DaemonCableHost(wiring({ sessions }), fleetOf([]))
+    const outside = [observedAgent({ id: 'o1' })]
+    host.setRegistry(new HostRegistry([host.harness, observed(outside)]))
+    host.setSwarms(null)
+    const listed = async () => (await host.listAgentSnapshot()).agents.map((a) => a.id)
+    expect(await listed()).toEqual(['h1', 'h2', 'o1'])
+    onTab(host, ['h2'])
+    // Started while the tab was held, and already waiting on the person: the registry lists it before o1.
+    outside.unshift(observedAgent({ id: 'o0', state: 'needs-you', lastActivityAt: 99 }))
+    expect(await listed()).toEqual(['h2'])
+    host.setSwarms(null)
+    expect(await listed()).toEqual(['h1', 'h2', 'o1', 'o0'])
   })
 
   it('with a window and a registry: the tab, as today', async () => {
