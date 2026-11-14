@@ -51,7 +51,7 @@ function setup(over: Partial<ObservedDeps> = {}) {
   const changes = vi.fn()
   src.onChange(changes)
   const ev = (event: ObservedHookEvent['event'], over: Partial<ObservedHookEvent> = {}): ObservedHookEvent => ({
-    engine: 'claude', sessionId: 's1', event, cwd: '/work/proj', callerPid: 100, hostHints: {}, at: clock.t, ...over,
+    engine: 'claude', sessionId: 's1', event, cwd: '/work/proj', callerPid: 100, hostHints: {}, ...over,
   })
   return {
     src, clock, gens, procs, alive, open, owners, working, externals, answers, stamps, changes, ev, find,

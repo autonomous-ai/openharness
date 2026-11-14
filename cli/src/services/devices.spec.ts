@@ -1521,7 +1521,7 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
   const ID = observedAgentId('claude', 'sess-1')
   const hook = (event: ObservedHookEvent['event'], over: Partial<ObservedHookEvent> = {}): ObservedHookEvent => ({
     engine: 'claude', sessionId: 'sess-1', event, cwd: '/work/api', callerPid: 4242, transcriptPath: '/t/sess-1.jsonl',
-    hostHints: { ORCA_AGENT_SESSION_ID: 'orca-1' }, at: 1, ...over,
+    hostHints: { ORCA_AGENT_SESSION_ID: 'orca-1' }, ...over,
   })
   const host = () => seen.dial as unknown as DaemonCableHost
   /** The dial's list with no window, as its session reads it every second. */
