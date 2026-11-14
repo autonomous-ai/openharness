@@ -194,7 +194,7 @@ describe('runApprove', () => {
     const tool = `mcp__server__${'t'.repeat(70)}`
     const daemon = recording()
     await approve(chunks(hookInput({ tool_name: tool, tool_input: {} })), daemon.post)
-    expect(daemon.bodies).toEqual([{ sessionId: 'sess-1', tool: tool.slice(0, 64), summary: `server: ${'t'.repeat(70)}`, cwd: '/repo' }])
+    expect(daemon.bodies).toEqual([{ sessionId: 'sess-1', tool: tool.slice(0, 64), summary: `server: ${'t'.repeat(70)}`, cwd: '/repo', terminalOnly: true }])
   })
 
   // The dial shows one line of at most 200 bytes, and draws a curly quote or a no-break space as quoting or spacing that
@@ -223,13 +223,6 @@ describe('runApprove', () => {
     const daemon = recording()
     expect(await approve(chunks(hookInput({ tool_input: toolInput })), daemon.post)).toEqual({ code: 0, out: [ALLOW] })
     expect(daemon.bodies).toStrictEqual([{ ...BODY, summary }])
-  })
-
-  it('only a command is held to the dial\'s line: a path it cannot draw is still the dial\'s', async () => {
-    const daemon = recording()
-    expect(await approve(chunks(hookInput({ tool_name: 'Read', tool_input: { file_path: '/repo/日本.md' } })), daemon.post))
-      .toEqual({ code: 0, out: [ALLOW] })
-    expect(daemon.bodies).toStrictEqual([{ ...BODY, tool: 'Read', summary: '/repo/日本.md' }])
   })
 
   it('the rest of tool_input is not posted, and a cwd that is missing or not a string is left out', async () => {
@@ -307,6 +300,37 @@ describe('daemonPost', () => {
     const daemon = await socketDaemon(answers(200, '{"decision":"allow"}'))
     expect(await approve(chunks(hookInput({ tool_input: { command } })), daemon.post)).toEqual({ code: 0, out: [] })
     expect(daemon.seen.map(({ body }) => JSON.parse(body))).toStrictEqual([{ ...BODY, summary, terminalOnly: true }])
+  })
+
+  // Allow on the dial approves what its card shows and nothing more. A card that could show only a tool's name, or a
+  // path or host it cannot show whole in plain ASCII, leaves the answer to the terminal.
+  it.each([
+    ['an MCP tool', 'mcp__github__create_issue', { title: 'A bug', body: 'Steps' }, 'github: create_issue'],
+    ['a tool the dial does not show', 'Task', { description: 'Explore', prompt: 'Find the bug' }, 'Task'],
+    ['a tool newer than this client', 'SomeNewTool', { anything: 'x' }, 'SomeNewTool'],
+    ['a Write to a path past ASCII', 'Write', { file_path: '/tmp/café.txt', content: 'x' }, '/tmp/café.txt'],
+    ['an Edit of a path with a newline', 'Edit', { file_path: '/repo/a.ts\n/etc/hosts', old_string: 'a', new_string: 'b' }, '/repo/a.ts /etc/hosts'],
+    ['a Read of a path of 201 bytes', 'Read', { file_path: `/repo/${'a'.repeat(195)}` }, `/repo/${'a'.repeat(194)}`],
+    ['a NotebookEdit of a path past ASCII', 'NotebookEdit', { notebook_path: '/repo/日本.ipynb', new_source: 'x' }, '/repo/日本.ipynb'],
+    ['a WebFetch of a host in other letters', 'WebFetch', { url: 'https://café.example/menu', prompt: 'x' }, 'xn--caf-dma.example'],
+    ['a WebFetch of a URL with no host', 'WebFetch', { url: 'file:///etc/passwd', prompt: 'x' }, 'WebFetch'],
+    ['a blank Bash command', 'Bash', { command: ' \n ' }, 'Bash'],
+  ])('%s is posted terminalOnly, and the daemon\'s allow prints nothing', async (_case, tool, toolInput, summary) => {
+    const daemon = await socketDaemon(answers(200, '{"decision":"allow"}'))
+    expect(await approve(chunks(hookInput({ tool_name: tool, tool_input: toolInput })), daemon.post)).toEqual({ code: 0, out: [] })
+    expect(daemon.seen.map(({ body }) => JSON.parse(body))).toStrictEqual([{ ...BODY, tool, summary, terminalOnly: true }])
+  })
+
+  it.each([
+    ['Edit', { file_path: '/repo/src/app.ts', old_string: 'a', new_string: 'b' }, '/repo/src/app.ts'],
+    ['Write', { file_path: '/repo/notes.md', content: 'café' }, '/repo/notes.md'],
+    ['Read', { file_path: `/repo/${'a'.repeat(194)}` }, `/repo/${'a'.repeat(194)}`],
+    ['NotebookEdit', { notebook_path: '/repo/analysis.ipynb', new_source: 'x = 1' }, '/repo/analysis.ipynb'],
+    ['WebFetch', { url: 'https://docs.example.com/guide/café?lang=en', prompt: 'Summarize' }, 'docs.example.com'],
+  ])('%s of %j, shown whole, is the dial\'s: posted plain, and the daemon\'s allow prints', async (tool, toolInput, summary) => {
+    const daemon = await socketDaemon(answers(200, '{"decision":"allow"}'))
+    expect(await approve(chunks(hookInput({ tool_name: tool, tool_input: toolInput })), daemon.post)).toEqual({ code: 0, out: [ALLOW] })
+    expect(daemon.seen.map(({ body }) => JSON.parse(body))).toStrictEqual([{ ...BODY, tool, summary }])
   })
 
   it('a connection that closes mid-wait prints nothing and exits 0', async () => {
