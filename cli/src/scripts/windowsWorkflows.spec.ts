@@ -29,7 +29,7 @@ describe('the Windows release workflows', () => {
 
   // With every step run the arm64 job takes about 43 minutes and the x64 job 16 (2026-11-14). One limit of 40 for both
   // cancelled arm64 in its last test step, and the install job was skipped (run 43565271777). The job's name lists the
-  // matrix without the limit, so the jobs keep today's names.
+  // matrix without the limit, so the jobs keep the names they had.
   it('gives each architecture of the Windows PTY job its own time limit', () => {
     const job = read('windows.yml').match(/\n  windows-pty:\n([\s\S]*?)(?=\n  [\w-]+:\n|$)/)?.[1] ?? ''
     const entries = (job.match(/\n {8}include:\n((?: {10}[^\n]*\n)+)/)?.[1] ?? '').split(/^ {10}- /m).slice(1)
