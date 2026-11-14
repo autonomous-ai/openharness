@@ -30,7 +30,7 @@ export function trackingFakes(real: typeof ChildProcesses): typeof ChildProcesse
     }
     return child
   }) as unknown as T
-  return { ...real, execFile: started(real.execFile), spawn: started(real.spawn) }
+  return { ...real, spawn: started(real.spawn) }
 }
 
 export interface FakeReply { stdout?: string; stderr?: string; code?: number; hangMs?: number }

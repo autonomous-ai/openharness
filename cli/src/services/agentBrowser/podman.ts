@@ -1,10 +1,11 @@
 /**
  * The one way the agent browser runs Podman: where it is, whether it can run a browser, and every call to it, each
- * with a timeout and started without a window (docs/windows-rules.md, rule 1). Harness runs `podman` only, never
- * `docker`.
+ * with a timeout, started without a window (docs/windows-rules.md, rule 1) and ended with this process (./tied.ts).
+ * Harness runs `podman` only, never `docker`.
  */
-import { execFile, type ChildProcess } from 'node:child_process'
+import type { ChildProcess } from 'node:child_process'
 import { existsSync } from 'node:fs'
+import type { Readable } from 'node:stream'
 import { oneShotParentEnv } from '../../lib/loginShellEnv.js'
 import { resolveViaLoginShell } from '../../lib/tmuxOnPath.js'
 import { ownProcessGroup } from '../../lib/windows/noWindow.js'
@@ -50,13 +51,15 @@ const MIN_VERSION: readonly [number, number] = [4, 6]
 const MiB = 1024 ** 2
 // Enough of Podman's complaint to act on, never a whole build log.
 const MESSAGE_LIMIT = 2_000
-// An image build prints a line per package it installs, past execFile's 1 MB default, which kills the child.
-const OUTPUT_LIMIT = 64 * 1024 * 1024
+// An image build prints a line per package it installs, megabytes of it. A call that prints more than this on stdout or
+// on stderr is ended, and fails saying so.
+export const OUTPUT_LIMIT = 64 * MiB
 // `cat | podman …` with podman ($0 "$@") ended by the shell when a timeout ends the shell, never left running. In the
 // background so the trap runs at once; stdin is kept on fd 3, since a background list's own stdin is /dev/null. The
 // trap is set first and `ended` looked at once podman is started, so a timeout before then still ends it. The shell
 // exits only after waiting for both (`wait` again after the trap): a run that failed on its timeout left podman
-// unreaped behind it, and a spec's teardown deleted the fake's folder under it (CI, 2026-11-10).
+// unreaped behind it, and a spec's teardown deleted the fake's folder under it (CI, 2026-11-10). The tie's SIGTERM
+// (./tied.ts) reaches this shell too, and its trap ends podman.
 const STDIN_RELAY = `trap 'ended=1; kill $! 2>/dev/null' TERM; exec 3<&0; cat <&3 | "$0" "$@" 3<&- & [ -z "$ended" ] || kill $!; wait $!; s=$?; until wait; do :; done; exit $s`
 
 /** Where Podman's own installers put it, for a daemon whose login shell does not have it on PATH yet. */
@@ -78,11 +81,14 @@ export function createPodman(deps: {
   exists?: (path: string) => boolean
   platform?: NodeJS.Platform
   now?: () => number
+  /** Bytes, for stdout and for stderr each. */
+  outputLimit?: number
 } = {}): Podman {
   const resolve = deps.resolve ?? resolveViaLoginShell
   const exists = deps.exists ?? existsSync
   const platform = deps.platform ?? process.platform
   const now = deps.now ?? Date.now
+  const outputLimit = deps.outputLimit ?? OUTPUT_LIMIT
   // Kept once found; looked for again while missing, since setup may have just installed it.
   let found: string | null = null
   let cached: { at: number; answer: Promise<Availability> } | null = null
@@ -110,16 +116,47 @@ export function createPodman(deps: {
     const [command, commandArgs] = relay ? ['/bin/sh', ['-c', STDIN_RELAY, file, ...onConnection(args)]] : [file, onConnection(args)]
     return await new Promise((done, fail) => {
       // The daemon was started by launchd or systemd, not a shell: the login shell's environment is what the
-      // person's own `podman` sees (its machine connections, its helpers on PATH).
-      const child = execFile(command, commandArgs, { env: oneShotParentEnv(), timeout: timeoutMs, maxBuffer: OUTPUT_LIMIT, ...ownProcessGroup() }, (error, stdout, stderr) => {
-        if (!error) return done({ stdout, stderr })
-        fail(new PodmanError('podman_failed', error.killed
-          ? `podman ${args[0]} timed out after ${timeoutMs} ms`
-          : `podman ${args[0]} failed: ${stderr.trim().slice(-MESSAGE_LIMIT)}`,
-          error.killed ? undefined : `${stdout.trimEnd()}\n${stderr.trimEnd()}`.trim()))
-      })
+      // person's own `podman` sees (its machine connections, its helpers on PATH). In this process's group, as
+      // under execFile, which never applied a group of its own.
+      const child = spawnTied(command, commandArgs, { env: oneShotParentEnv(), windowsHide: true, platform })
+      // The first reason to end the call names its failure.
+      let ended: string | undefined
+      // Its pipes go first, then the command: something it started (a helper `machine start` leaves) may still hold
+      // them, and the call must not wait on it.
+      const end = (why: string) => {
+        ended ??= why
+        child.stdout!.destroy()
+        child.stderr!.destroy()
+        child.kill()
+      }
+      const timer = setTimeout(() => end(`timed out after ${timeoutMs} ms`), timeoutMs)
+      // Bytes, decoded once: a character of several bytes can fall across two reads.
+      const collect = (stream: Readable) => {
+        const chunks: Buffer[] = []
+        let bytes = 0
+        stream.on('data', (chunk: Buffer) => {
+          bytes += chunk.length
+          if (bytes > outputLimit) end(`printed more than ${outputLimit / MiB} MiB`)
+          else chunks.push(chunk)
+        })
+        return () => Buffer.concat(chunks).toString('utf8')
+      }
+      const stdout = collect(child.stdout!)
+      const stderr = collect(child.stderr!)
+      const settle = (code: number | null) => {
+        clearTimeout(timer)
+        if (ended) return fail(new PodmanError('podman_failed', `podman ${args[0]} ${ended}`))
+        const out = stdout()
+        const err = stderr()
+        if (code === 0) return done({ stdout: out, stderr: err })
+        fail(new PodmanError('podman_failed', `podman ${args[0]} failed: ${err.trim().slice(-MESSAGE_LIMIT)}`, `${out.trimEnd()}\n${err.trimEnd()}`.trim()))
+      }
+      // Once all its output is read. An error is a command that could not be started; unheard, it would crash this
+      // process.
+      child.once('close', settle)
+      child.once('error', () => settle(null))
       // Always closed, so a command that reads stdin never waits on it.
-      child.stdin?.end(opts.stdin)
+      child.stdin!.end(opts.stdin)
     })
   }
 
