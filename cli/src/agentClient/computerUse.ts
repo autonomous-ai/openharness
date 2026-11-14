@@ -136,7 +136,8 @@ export function applyOpencode(on: boolean, opencode: Opencode, home: string = ho
   const temporary = `${opencode.path}.${process.pid}.tmp`
   writeFileSync(temporary, JSON.stringify(data, null, 2) + '\n')
   renameSync(temporary, opencode.path)
-  opencode.reload()
+  // OpenCode 1 has no `reload`: it would read the word as a project folder and could open a TUI there.
+  if (major >= 2) opencode.reload()
   return skipped.length ? `OpenCode already has its own ${skipped.join(' and ')}, so it was left as it is.` : null
 }
 
