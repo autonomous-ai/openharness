@@ -587,6 +587,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const busy = (agent: HostAgent): boolean => agent.state === 'working' || agent.state === 'needs-you'
   /** Its turn, with the waiting line: the session's activity read right after it (`activityText` above) repeats the line. */
   const started = (agent: HostAgent): DialEvent => ({ kind: 'processing', agentId: agent.id, text: waiting(agent) ?? '', recap: '', subagent: false })
+  /** A window is open (its tabs, not null): the dial shows the tab, as before there were agents outside a pane, and hears
+   *  nothing of them. What they do is still noted, so that only a later change is told once the window closes. */
+  let windowOpen = false
+  const tell = (event: DialEvent): void => { if (!windowOpen) toDial(event) }
   observed?.onChange(() => part.call('dial', () => {
     const agents = observed.list()
     const ids = new Set(agents.map((agent) => agent.id))
@@ -599,14 +603,14 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
         // turn's (this turn's was not found) is not said again.
         if (agent.state === 'done' && agent.lastAnswer && agent.lastAnswer !== was.answer) {
           was.answer = agent.lastAnswer
-          toDial({ ...card, kind: 'summary', text: agent.lastAnswer, recap: agent.lastAnswer, fullText: agent.lastAnswer })
+          tell({ ...card, kind: 'summary', text: agent.lastAnswer, recap: agent.lastAnswer, fullText: agent.lastAnswer })
         }
         continue
       }
       told.set(agent.id, { state: agent.state, answer: agent.lastAnswer })
-      if (busy(agent)) toDial(started(agent))
-      else if (agent.state === 'done') toDial({ ...card, kind: 'done' })
-      else if (agent.state === 'error') toDial({ ...card, kind: 'error' })
+      if (busy(agent)) tell(started(agent))
+      else if (agent.state === 'done') tell({ ...card, kind: 'done' })
+      else if (agent.state === 'error') tell({ ...card, kind: 'error' })
     }
   }))
   /** One of the observed source's timers, each run guarded as a notice is: one that throws is logged and the next runs. */
@@ -627,7 +631,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     attached = [
       every(OPEN_SCAN_MS, () => observed.scanOpen()),
       // A person can take minutes to come to an agent that waits on them.
-      every(REMIND_MS, () => { for (const agent of observed.list()) if (busy(agent)) toDial(started(agent)) }),
+      every(REMIND_MS, () => { for (const agent of observed.list()) if (busy(agent)) tell(started(agent)) }),
     ]
   }
 
@@ -703,6 +707,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     },
     // Null is the window gone: an empty desk with a window behind it is an empty tab, with none a shut app.
     swarms: (swarms) => part.call('dial', () => {
+      windowOpen = swarms !== null
       cableHost.setSwarms(swarms)
       // The Swarms the window has tabs for are read first; said again to the core only when they change.
       const include = [...new Set((swarms?.swarms ?? []).map((s) => s.superTabId).filter((id): id is string => !!id))].slice(0, 16)
