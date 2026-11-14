@@ -6,8 +6,8 @@ in `src-tauri/`; the window's three screens are plain TypeScript in `ui/`.
 
 ## Toolchain
 
-- Rust stable, 1.77 or newer (Tauri 2): `rustup update stable`. The repo pins no toolchain; CI uses
-  `dtolnay/rust-toolchain@stable`.
+- Rust stable, 1.95 or newer (`rust-version` in `src-tauri/Cargo.toml`): `rustup update stable`. The repo pins no
+  toolchain; CI uses `dtolnay/rust-toolchain@stable`.
 - The Tauri CLI, to build and run the app (CI does not use it): `cargo install tauri-cli --version "^2" --locked`.
 - macOS 13 or later (`SMAppService`). Linux builds need webkit2gtk 4.1, appindicator and rsvg.
 - Tauri's dependencies take minutes to compile: one `CARGO_TARGET_DIR` outside the repository compiles them once.

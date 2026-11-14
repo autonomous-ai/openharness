@@ -2,6 +2,8 @@
 name = "harness-device"
 version = "0.1.0"
 edition = "2024"
+# sysinfo 0.40, off macOS, needs 1.95; Tauri 2.12 needs 1.90.
+rust-version = "1.95"
 
 # Every rule lives in the library, so `cargo test --lib` reaches it without the window's bundle (ui/dist).
 [lib]
