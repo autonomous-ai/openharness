@@ -1322,6 +1322,11 @@ static void app_picker_checks(const char *dir) {
     assert(!strcmp(active()->id, "c"));   // the reconcile alone would keep the old place
     ui_land_after_reload(); assert(!strcmp(active()->id, "d") && s.view == HOME && !s.app_landing[0]);
     ui_land_after_reload(); assert(!strcmp(active()->id, "d"));
+    // A pick the host ignored (it answered with another app shown) lands nothing later, when that app is shown anyway.
+    picker_setup(3, "ghostty"); s.active = 1; scene_take(); hold_at(233, 230);
+    picker_swipe(300, 200); fake_ms += 1000; tap(fake_ms, 233, 420); assert(app_picks == 1 && s.app_landing[0]);
+    ui_apps_replace(picker_rows, 3, "ghostty"); assert(!s.app_landing[0]);
+    ui_apps_replace(picker_rows, 3, "vscode"); ui_land_after_reload(); assert(s.active == 1);
     // A push while open keeps the app by id: on VS Code, a new list puts Orca before it.
     picker_setup(3, "vscode"); hold_at(233, 230);
     { const cable_app_t moved[3] = {picker_rows[0], picker_rows[2], picker_rows[1]};
