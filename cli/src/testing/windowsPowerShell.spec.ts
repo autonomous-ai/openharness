@@ -8,8 +8,11 @@ import { windowsPowerShell } from './windowsPowerShell.js'
 const session = windowsPowerShell()
 const scratch = mkdtempSync(join(tmpdir(), 'harness-ps-session-'))
 afterAll(async () => {
-  await session.close()
-  rmSync(scratch, { recursive: true, force: true })
+  try {
+    await session.close()
+  } finally {
+    rmSync(scratch, { recursive: true, force: true })
+  }
 })
 
 // On any platform: installPs1.spec.ts closes its session in an afterAll that also runs where no case started one.

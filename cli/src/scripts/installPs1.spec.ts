@@ -115,12 +115,15 @@ const scratch: string[] = []
 const subkeys: string[] = []
 const session = windowsPowerShell()
 // The session first, then the registry keys, the folders last: a folder a still-running program holds cannot be
-// removed, and must not leave keys behind.
+// removed, and must not leave keys behind. A session that did not end still fails the file, after the clean-up.
 afterAll(async () => {
-  await session.close()
-  for (const key of subkeys) spawnSync('reg.exe', ['delete', `HKCU\\${key}`, '/f'], { encoding: 'utf8' })
-  for (const dir of scratch) {
-    try { rmSync(dir, { recursive: true, force: true }) } catch { /* left in the temp folder */ }
+  try {
+    await session.close()
+  } finally {
+    for (const key of subkeys) spawnSync('reg.exe', ['delete', `HKCU\\${key}`, '/f'], { encoding: 'utf8' })
+    for (const dir of scratch) {
+      try { rmSync(dir, { recursive: true, force: true }) } catch { /* left in the temp folder */ }
+    }
   }
 })
 

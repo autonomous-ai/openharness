@@ -34,10 +34,14 @@ export interface WindowsPowerShell {
   /**
    * Runs [script] after the calls made before it. `env` is the call's whole environment, `process.env` when left out;
    * `timeoutMs` is 120 s when left out. Rejects when the call passes its timeout or its host exits under it, once that
-   * host has exited (the next call starts a new one), and for a script with an exit statement.
+   * host has exited or is still there 3 s after its tree was ended (the next call starts a new one), and for a script
+   * with an exit statement.
    */
   run(script: string, call?: { env?: NodeJS.ProcessEnv; timeoutMs?: number }): Promise<PowerShellRun>
-  /** Ends the host, and its tree if it is still there 5 s later; resolves once it has exited. */
+  /**
+   * Ends the host, and its tree if it is still there 5 s later; resolves once it has exited, and rejects, naming it,
+   * if it is still there 3 s after that.
+   */
   close(): Promise<void>
 }
 
@@ -61,10 +65,10 @@ export function windowsPowerShell(): WindowsPowerShell {
     }
     // This host is done: the next call starts a new one.
     if (host === starting) host = undefined
-    if (answer === 'late') await stopTree(own.pid)
-    const code = await own.exited
+    const what = answer === 'late' ? `the call timed out after ${timeoutMs} ms` : `host exited with code ${await own.exited}`
+    const left = answer === 'late' ? await endTree(own) : ''
     const said = own.said()
-    throw new Error(`Windows PowerShell: ${answer === 'late' ? `the call timed out after ${timeoutMs} ms` : `host exited with code ${code}`}${said ? `. Its last stderr: ${said}` : ''}`)
+    throw new Error(`Windows PowerShell: ${what}${left ? `, and ${left}` : ''}${said ? `. Its last stderr: ${said}` : ''}`)
   }
 
   return {
@@ -78,10 +82,21 @@ export function windowsPowerShell(): WindowsPowerShell {
       host = undefined
       if (!own) return
       own.end()
-      if (await within(own.exited, 5_000) === 'late') await stopTree(own.pid)
-      await own.exited
+      if (await within(own.exited, 5_000) !== 'late') return
+      const left = await endTree(own)
+      if (left) throw new Error(`Windows PowerShell: ${left}`)
     },
   }
+}
+
+/**
+ * Ends [own]'s process tree, and gives '' once it has exited, or, when it is still there 3 s later, what is left and
+ * what taskkill said: a wait with no end would hang the call, or the spec's afterAll, with no word of why.
+ */
+async function endTree(own: Host): Promise<string> {
+  const failed = await stopTree(own.pid)
+  if (await within(own.exited, 3_000) !== 'late') return ''
+  return `host ${own.pid} is still running 3 s after its tree was ended${failed ? ` (${failed})` : ''}`
 }
 
 interface Host {
