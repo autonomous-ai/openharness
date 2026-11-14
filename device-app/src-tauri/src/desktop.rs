@@ -1,7 +1,9 @@
 //! The desktop app: installed, running, and opening it.
 
+use crate::types::Log;
 use std::io;
 use std::process::{Command, Stdio};
+use std::sync::Arc;
 
 pub const DESKTOP_BUNDLE_ID: &str = "ai.autonomous.harness";
 
@@ -17,15 +19,12 @@ pub struct SystemDesktopApp;
 impl DesktopApp for SystemDesktopApp {
     fn installed(&self) -> bool {
         let id = objc2_foundation::NSString::from_str(DESKTOP_BUNDLE_ID);
-        objc2_app_kit::NSWorkspace::sharedWorkspace()
-            .URLForApplicationWithBundleIdentifier(&id)
-            .is_some()
+        objc2_app_kit::NSWorkspace::sharedWorkspace().URLForApplicationWithBundleIdentifier(&id).is_some()
     }
 
     fn running(&self) -> bool {
         let id = objc2_foundation::NSString::from_str(DESKTOP_BUNDLE_ID);
-        !objc2_app_kit::NSRunningApplication::runningApplicationsWithBundleIdentifier(&id)
-            .is_empty()
+        !objc2_app_kit::NSRunningApplication::runningApplicationsWithBundleIdentifier(&id).is_empty()
     }
 }
 
@@ -70,19 +69,8 @@ pub fn running_among(os: &str, mut executables: impl Iterator<Item = String>) ->
     // Windows paths may use either separator, and its file names ignore case.
     let windows = os == "windows";
     executables.any(|exe| {
-        let file = if windows {
-            exe.rsplit(['/', '\\']).next()
-        } else {
-            exe.rsplit('/').next()
-        }
-        .unwrap_or_default();
-        names.iter().any(|name| {
-            if windows {
-                name.eq_ignore_ascii_case(file)
-            } else {
-                *name == file
-            }
-        })
+        let file = if windows { exe.rsplit(['/', '\\']).next() } else { exe.rsplit('/').next() }.unwrap_or_default();
+        names.iter().any(|name| if windows { name.eq_ignore_ascii_case(file) } else { *name == file })
     })
 }
 
@@ -90,16 +78,29 @@ pub fn open_desktop_args() -> [&'static str; 2] {
     ["-b", DESKTOP_BUNDLE_ID]
 }
 
-/// Starts `open` with these arguments and does not wait for it.
-pub fn run_open(args: &[&str]) -> io::Result<()> {
-    let mut child = Command::new("open")
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()?;
+/// By its full path on macOS: a PATH the app was started with never decides what opens a sign-in URL.
+#[cfg(target_os = "macos")]
+const OPEN: &str = "/usr/bin/open";
+#[cfg(not(target_os = "macos"))]
+const OPEN: &str = "xdg-open";
+
+/// Starts `open` with these arguments and does not wait for it. An exit that is not 0 is a log line without the
+/// arguments: a sign-in URL carries its state in its query.
+pub fn run_open(args: &[&str], log: Arc<dyn Log>) -> io::Result<()> {
+    let mut command = Command::new(OPEN);
+    command.args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    let mut child = {
+        let _spawning = crate::cli::spawn_lock();
+        command.spawn()?
+    };
     // Reaped off the caller's thread, so each click leaves no zombie behind.
-    std::thread::spawn(move || child.wait());
+    std::thread::spawn(move || match child.wait() {
+        Ok(status) if !status.success() => log.line(&match status.code() {
+            Some(code) => format!("open: exit {code}"),
+            None => "open: killed by a signal".to_string(),
+        }),
+        _ => {}
+    });
     Ok(())
 }
 
@@ -121,19 +122,11 @@ mod tests {
     #[test]
     fn a_name_matches_the_file_whole() {
         assert!(among("linux", "/opt/harness/harness"));
-        for other in [
-            "/usr/bin/node",
-            "/x/harness-pty",
-            "/x/harnessd",
-            "/x/Harness",
-        ] {
+        for other in ["/usr/bin/node", "/x/harness-pty", "/x/harnessd", "/x/Harness"] {
             assert!(!among("linux", other), "{other}");
         }
         assert!(among("windows", r"C:\x\Harness-Desktop.exe"));
-        assert!(!among(
-            "macos",
-            "/Applications/Harness.app/Contents/MacOS/harness"
-        ));
+        assert!(!among("macos", "/Applications/Harness.app/Contents/MacOS/harness"));
         assert!(!among("macos", "harness"));
     }
 

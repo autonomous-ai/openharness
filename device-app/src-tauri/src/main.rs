@@ -80,7 +80,10 @@ fn start(handle: &AppHandle, events: Sender<Event>, queue: Receiver<Event>) -> t
         login_item: Arc::new(SystemLoginItem),
         state,
         log: log.clone(),
-        open: Arc::new(run_open),
+        open: {
+            let log = log.clone();
+            Arc::new(move |args: &[&str]| run_open(args, log.clone()))
+        },
     };
 
     // A watch or a sign-in hands its events over holding a lock that stopping or cancelling it takes: `send` only
