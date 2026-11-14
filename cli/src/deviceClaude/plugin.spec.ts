@@ -96,6 +96,47 @@ describe('claudeEnable', () => {
     expect(claude.writes()).toEqual(['plugin install harness-device@openharness --scope user'])
   })
 
+  // A clone made before harness-device was in the marketplace does not list it, and the install says it is not found.
+  it('enable with a stale marketplace clone updates it once and installs again', async () => {
+    const install = 'plugin install harness-device@openharness --scope user'
+    const notFound = { code: 1, stderr: 'Plugin "harness-device" not found in marketplace "openharness"\n' }
+    const claude = fakeClaude({ 'plugin marketplace list --json': list(...MARKETPLACE), [install]: notFound })
+    let updated = false
+    const run: ClaudeRun = async (args, timeoutMs) => {
+      const answer = await claude.run(args, timeoutMs)
+      if (args.join(' ') === 'plugin marketplace update openharness') updated = true
+      return args.join(' ') === install && updated ? { code: 0, stdout: '', stderr: '' } : answer
+    }
+    expect(await claudeEnable({ run, platform: 'darwin' })).toEqual({ ok: true })
+    expect(claude.writes()).toEqual([install, 'plugin marketplace update openharness', install])
+    expect(claude.calls.find((call) => call.args === 'plugin marketplace update openharness')?.timeoutMs).toBe(15_000)
+  })
+
+  it('an install that fails after the update gives its line, and a failed update gives its own', async () => {
+    const install = 'plugin install harness-device@openharness --scope user'
+    const stale = fakeClaude({
+      'plugin marketplace list --json': list(...MARKETPLACE),
+      [install]: { code: 1, stderr: 'Error: not found\n' },
+    })
+    expect(await claudeEnable({ run: stale.run, platform: 'darwin' })).toEqual({ ok: false, error: 'Error: not found' })
+    expect(stale.writes()).toEqual([install, 'plugin marketplace update openharness', install])
+
+    const offline = fakeClaude({
+      'plugin marketplace list --json': list(...MARKETPLACE),
+      [install]: { code: 1, stderr: 'Error: not found\n' },
+      'plugin marketplace update openharness': { code: 1, stderr: 'Error: no network\n' },
+    })
+    expect(await claudeEnable({ run: offline.run, platform: 'darwin' })).toEqual({ ok: false, error: 'Error: no network' })
+    expect(offline.writes()).toEqual([install, 'plugin marketplace update openharness'])
+  })
+
+  it('an install that fails just after the marketplace add is not tried again: the clone is new', async () => {
+    const install = 'plugin install harness-device@openharness --scope user'
+    const claude = fakeClaude({ [install]: { code: 1, stderr: 'Error: no network\n' } })
+    expect(await claudeEnable({ run: claude.run, platform: 'darwin' })).toEqual({ ok: false, error: 'Error: no network' })
+    expect(claude.writes()).toEqual(['plugin marketplace add autonomous-ai/openharness --sparse .claude-plugin plugins', install])
+  })
+
   it('enable when installed but off runs plugin enable', async () => {
     const claude = fakeClaude({ 'plugin list --json': list(USER_OFF) })
     expect(await claudeEnable({ run: claude.run, platform: 'darwin' })).toEqual({ ok: true })
