@@ -1682,6 +1682,28 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     expect(calls('turnStarted')).toHaveLength(6)
   })
 
+  it('with a window open, an observed agent tells the dial nothing: no turn, answer or reminder', async () => {
+    vi.useFakeTimers()
+    readers.answer.mockResolvedValue('Shipped the fix.')
+    const { port } = start({ faults: ['fleet'] })
+    // The window's tab is what the dial shows, as before there were agents outside a pane.
+    port.swarms({ active: 't1', swarms: [{ id: 't1', name: 'Tab', agentIds: [], panes: 0 }], tiles: [] })
+    seen.host.watching!(true)
+    port.observed(hook('turn-start'))
+    port.observed(hook('needs-input'))
+    await vi.advanceTimersByTimeAsync(40_000)
+    port.observed(hook('turn-stop'))
+    await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
+    port.observed(hook('turn-start'))
+    port.observed(hook('turn-error'))
+    const told = () => seen.cable.calls.filter(([name]) => ['turnStarted', 'turnDone', 'summary', 'turnError'].includes(name))
+    expect(told()).toEqual([])
+    // The window closed, the machine list is back and so is what it is told.
+    port.swarms(null)
+    port.observed(hook('turn-start'))
+    expect(told()).toEqual([['turnStarted', [ID, '', undefined]]])
+  })
+
   it('moves a harness agent on the machine list with the cards it is sent, a sub-agent\'s aside', async () => {
     const { port } = start({ core: harnessAgent(), faults: ['fleet'] })
     const states = () => host().harness.list().map((a) => a.state)
