@@ -3,11 +3,12 @@
  * with a timeout and started without a window (docs/windows-rules.md, rule 1). Harness runs `podman` only, never
  * `docker`.
  */
-import { execFile, spawn, type ChildProcess } from 'node:child_process'
+import { execFile, type ChildProcess } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { oneShotParentEnv } from '../../lib/loginShellEnv.js'
 import { resolveViaLoginShell } from '../../lib/tmuxOnPath.js'
 import { ownProcessGroup } from '../../lib/windows/noWindow.js'
+import { spawnTied } from './tied.js'
 
 export class PodmanError extends Error {
   /** A call that exited with an error: all it printed, stdout then stderr. A build's RUN steps print to stdout. */
@@ -153,7 +154,8 @@ export function createPodman(deps: {
     run,
     spawn(args) {
       if (!found) throw new PodmanError('needs_setup', 'Podman is not installed')
-      return spawn(found, onConnection(args), { env: oneShotParentEnv(), stdio: 'pipe', ...ownProcessGroup() })
+      // Tied to this process: a crash of it left its `podman events` running, one more per restart.
+      return spawnTied(found, onConnection(args), { env: oneShotParentEnv(), ...ownProcessGroup(), platform })
     },
     available() {
       if (cached && now() - cached.at < AVAILABLE_CACHE_MS) return cached.answer

@@ -266,10 +266,11 @@ describe('createPodman', () => {
       .toEqual(expect.objectContaining({ ...ownProcessGroup(), timeout: 30_000, env: expect.objectContaining({ FAKE_PODMAN_MARK: 'login-shell' }) }))
 
     const child = podman.spawn(['events', '--format', 'json'])
+    // A group of its own while it runs (ownProcessGroup).
+    expect(() => process.kill(-child.pid!, 0)).not.toThrow()
     child.stdin!.end()
     await new Promise(resolve => child.once('close', resolve))
     expect(fake.calls()[1]).toEqual({ args: ['events', '--format', 'json'], stdin: '', mark: 'login-shell' })
-    expect(vi.mocked(spawn).mock.calls[0]).toEqual([fake.path, ['events', '--format', 'json'], expect.objectContaining(ownProcessGroup())])
   })
 
   // Podman 4.9 takes `-` only from a real pipe (cmd/podman/secrets/create.go), and Node hands a child a socket: the
