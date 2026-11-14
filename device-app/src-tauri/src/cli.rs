@@ -168,11 +168,20 @@ impl HarnessCli {
         command.args(&invocation.prefix).args(args).envs(invocation.env);
         Ok(command)
     }
+
+    /// `start` with the command. One that cannot start is a log line too: its error's kind, never a path.
+    fn started<T>(&self, args: &[&str], start: impl FnOnce(Command) -> io::Result<T>) -> io::Result<T> {
+        let started = self.command(args).and_then(start);
+        if let Err(error) = &started {
+            self.log.line(&format!("{}: could not start: {}", name(args), error.kind()));
+        }
+        started
+    }
 }
 
 impl Cli for HarnessCli {
     fn run(&self, args: &[&str], deadline: Duration) -> io::Result<Output> {
-        let output = run(self.command(args)?, deadline)?;
+        let output = self.started(args, |command| run(command, deadline))?;
         let name = name(args);
         self.log.line(&if output.timed_out {
             format!("{name}: timed out after {} s", deadline.as_secs_f64())
@@ -183,7 +192,7 @@ impl Cli for HarnessCli {
     }
 
     fn spawn(&self, args: &[&str]) -> io::Result<Child> {
-        Child::start(self.command(args)?, name(args), self.log.clone())
+        self.started(args, |command| Child::start(command, name(args), self.log.clone()))
     }
 }
 
@@ -662,6 +671,26 @@ mod tests {
         let mut child = fake.cli().spawn(&WATCH).unwrap();
         assert_eq!(child.exit(WAIT), Ok(Some(3)));
         assert_eq!(fake.log().lines(), ["harness hardware watch --json: exit 3: gone"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_cli_that_cannot_start_is_one_log_line() {
+        let home = tempfile::tempdir().unwrap();
+        // There, and not executable.
+        let program = put(home.path().join("harness"));
+        let log = Arc::new(MemoryLog::default());
+        let cli = HarnessCli::new(find_cli(home.path(), None, Some(&program)).unwrap(), log.clone());
+        let denied = Some(io::ErrorKind::PermissionDenied);
+        assert_eq!(cli.run(&["auth", "status", "--json"], WAIT).err().map(|error| error.kind()), denied);
+        assert_eq!(cli.spawn(&WATCH).err().map(|error| error.kind()), denied);
+        assert_eq!(
+            log.lines(),
+            [
+                "harness auth status --json: could not start: permission denied",
+                "harness hardware watch --json: could not start: permission denied",
+            ]
+        );
     }
 
     #[cfg(unix)]
