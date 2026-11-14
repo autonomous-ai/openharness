@@ -1352,8 +1352,9 @@ describe('the daemon socket', () => {
     rmSync(dir, { recursive: true, force: true })
   })
 
-  // The approval hook posts over the socket only (deviceClaude/approve.ts): without one, this line is why the dial asks nothing.
-  it('says once, with no path, that dial approvals are off where it has no Unix socket', async () => {
+  // The approval hook (deviceClaude/approve.ts) and the mod's voice poll post over the socket only: without one, this line is
+  // why the dial asks nothing and takes no voice.
+  it('says once, with no path, that dial approvals and voice are off where it has no Unix socket', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const said = () => warn.mock.calls.filter(([line]) => String(line).includes('dial approvals'))
     const dir = mkdtempSync('/tmp/hsock-')
@@ -1363,7 +1364,7 @@ describe('the daemon socket', () => {
       for (const socketPath of [null, blocked]) {
         const started = await startHookServer(0, { onRegistered: vi.fn(), onSessionEnd: vi.fn() }, { socketPath })
         await new Promise<void>((resolve) => started.server.close(() => resolve()))
-        expect(said()).toEqual([['[hooks] dial approvals from the Claude Code plugin are off: no Unix socket']])
+        expect(said()).toEqual([['[hooks] dial approvals and voice from the Claude Code plugin are off: no Unix socket']])
         warn.mockClear()
       }
       const socketPath = join(dir, 'open.sock')

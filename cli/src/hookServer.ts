@@ -1452,9 +1452,10 @@ export function startHookServer(
       const actual = (server.address() as AddressInfo).port
       hosts = loopbackHosts(actual)
       console.log(`[hooks] listening on 127.0.0.1:${actual} (SessionStart/SessionEnd callbacks)`)
-      // The approval hook asks only over the socket (deviceClaude/approve.ts), so without one the person sees why the dial asks nothing.
+      // The approval hook (deviceClaude/approve.ts) and the mod's voice poll ask only over the socket, so without one the person
+      // sees why the dial asks nothing and takes no voice.
       const tcpOnly = (): void => {
-        console.warn('[hooks] dial approvals from the Claude Code plugin are off: no Unix socket')
+        console.warn('[hooks] dial approvals and voice from the Claude Code plugin are off: no Unix socket')
         resolve({ server, port: actual, localSocket: null })
       }
       const socketPath = options.socketPath
