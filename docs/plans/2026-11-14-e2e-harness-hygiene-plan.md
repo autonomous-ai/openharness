@@ -727,42 +727,47 @@ git commit -m "e2e: the worker's reaper ends what still names a root before it r
 Decided: the harness's environment sets both `ADAPTER_GRID_RUNTIME_METADATA_URL: 'http://127.0.0.1:9/grid.json'` and
 `DISABLE_GRID_INSTALL: 'true'` (the product's own variable, `src/config/env.ts:285`). The second is needed because a
 manifest that cannot be read sends `installCli` on to grid's public installer (Found while reading the code). A
-test's own `env` still wins over both. So whichever caller Step 1 names, the fix is the same two lines.
+test's own `env` still wins over both. Step 1 named the caller (`installCli`); the fix is these two lines.
 
 **Files:**
 - Modify: `cli/e2e/leftBehind.e2e.ts`
 - Modify: `cli/e2e/harness/daemon.ts` (the environment, beside `BACKEND_WS_URL` at 313-315)
-- Temporary, never committed: `cli/e2e/gridFind.e2e.ts` (Step 1; deleted before the red commit)
 
-- [ ] **Step 1: Find what asks for the manifest**
+- [x] **Step 1: Find what asks for the manifest** (done, 2026-11-14)
 
-A probe, not a test that is kept. Copy `e2e/masterIpcExit.e2e.ts` to `e2e/gridFind.e2e.ts` and, in the copy only:
-- start a `node:http` server on `127.0.0.1:0` that answers every request 404 and notes, for each, the time, the URL
-  and who asked: the other end of `req.socket.remotePort` (`lsof -nP -iTCP:<port> -sTCP:ESTABLISHED -Fp`), with its
-  `ps -o pid=,ppid=,command=` line;
-- add `ADAPTER_GRID_RUNTIME_METADATA_URL: 'http://127.0.0.1:<its port>/grid/metadata.json'` and
-  `DISABLE_GRID_INSTALL: 'true'` to `options.env`: with a manifest that answers 404, `installCli` would otherwise go
-  on to the public installer, and the probe must start no download itself;
-- note each step of the test beside the requests (started, the first core, the update kept, the agent created,
-  closed), keep listening five minutes after `daemon.close()` (the leftover folders were written about three minutes
-  after their roots went), then print the notes and `daemon.log()`. Give the test 900 000 ms.
+Not `masterIpcExit.e2e.ts`: a copy of it with a local manifest server that noted every request saw none in two runs
+of about 320 s, during the test or for five minutes after its close. Nor `storeProcess`, `serviceProcesses`,
+`services`, `modelsOnDemand`, `modelSwitch` or `eagerOpenCode` (`compat` skips without a released build), each run
+unchanged with `ADAPTER_GRID_RUNTIME_METADATA_URL` pointed at a counting server and `DISABLE_GRID_INSTALL=true` in
+Vitest's environment, which the harness passed on to its daemons.
 
-Run it once:
-`mkdir -p /private/tmp/claude-502/hyg-t8 && TMPDIR=/private/tmp/claude-502/hyg-t8/ caffeinate -i npx vitest run --config vitest.e2e.config.ts e2e/gridFind.e2e.ts`.
-From who asked, when, and the daemon's log (`[grid-runtime] …`; for `installCli` on a machine with no `grid` on its
-PATH, also `[grid-attach] grid install is switched off (DISABLE_GRID_INSTALL)`), name the caller among the three of
-`ensureManagedGrid` (Found while reading the code) and what in the test reaches it. Then:
-- **No request at all:** stop and report, with the notes. Do not guess a path.
-- **Otherwise, `installCli` included:** delete `e2e/gridFind.e2e.ts` and go on.
+`swarmV4Journey.e2e.ts` asks, on the real backend from before the Swarm's backend was deleted (`be3d169b2b^`, #4280;
+at the head the journey fails at its first step, `/api/super-tabs` being gone). Ten requests in one 70 s run, all
+from `harnessd-models`, one at each start of models on each of its two computers. The stacks: `harnessd-superTabs`
+(`SwarmGrids.pass`, `src/superTabs/swarmGrids.ts:54`) sends `grid_swarm_sync` for the project's Swarm grid; models
+answers it after `notReady` (`src/services/models.ts:441`), whose `gridAccess.ensure` runs `reconcileGridAttach`,
+then `installCli` (`:92`), then `ensureManagedGrid`. The leftover roots match it: 14 on this Mac now, mostly pairs
+made 2-3 s apart, as the journey's two computers are; four pairs were made seconds after a logged run of the journey
+started (2026-11-13 17:32 and 17:46, 2026-11-14 07:25 and 07:29), and each root last changed 60-90 s after it was
+made, when its close removed what it could.
 
-- [ ] **Step 2: Write the failing test**
+Why the folder outlived its root: `ensureManagedArchive` makes the managed grid's `bin/` read-only
+(`runtimeInstall.ts`, `readOnly`), and the close's recursive removal cannot unlink `bin/grid` in it. The rest of the
+root went (`LICENSE.grid` beside `bin/` too); `runtime/` itself is the root's first one, never made again.
 
-In `e2e/leftBehind.e2e.ts`, inside the `describe`; the file's imports gain `readdirSync` and `join`. Its comment
-says what Step 1 found: which process asks, and when.
+- [x] **Step 2: Write the failing test**
+
+In `e2e/leftBehind.e2e.ts`, inside the `describe`; the file's imports gain `readdirSync`, `join` and `LocalClient`.
+The path is the request that asked: a local owner's `grid_swarm_sync`, waited for by its answer. Signed out, grid's
+set-up gives up (no grid name to mint, or no `grid` on a machine without one), so the answer is `ready: false`;
+the Swarm switched off would answer `SERVICE_UNAVAILABLE` with no `ready`, and the assertion would fail.
 
 ```ts
+// What asked, on 2026-11-14: models' process (`harnessd-models`), at each of its starts in swarmV4Journey.e2e.ts on the real
+// backend, once the Swarm's grid was listed. The Swarm's pass (superTabs/swarmGrids.ts) sends `grid_swarm_sync`, which sets
+// grid up first: installCli, the managed grid's manifest, then grid's public installer when there is still no `grid`.
 it('asks no grid manifest and runs no grid installer beyond the machine', async () => {
-  daemon = await IsolatedDaemon.create(/* what the path of Step 1 needs */)
+  daemon = await IsolatedDaemon.create()
   expect(daemon.env.ADAPTER_GRID_RUNTIME_METADATA_URL).toBe('http://127.0.0.1:9/grid.json')
   expect(daemon.env.DISABLE_GRID_INSTALL).toBe('true')
   // A test's own still stands (update.e2e.ts, harness/fleet.ts). Never started: it only shows whose word wins.
@@ -770,22 +775,22 @@ it('asks no grid manifest and runs no grid installer beyond the machine', async 
   await own.close()
   expect(own.env.ADAPTER_GRID_RUNTIME_METADATA_URL).toBe('http://127.0.0.1:1/own.json')
   expect(own.env.DISABLE_GRID_INSTALL).toBe('false')
-  // … the path of Step 1, driven here and waited for by its own end …
+  await daemon.start()
+  const client = await LocalClient.connect(daemon)
+  // The owner's computer keeping a Swarm's grid, as the Swarm's pass asks it: answered once grid's set-up gave up.
+  expect(await client.request('grid_swarm_sync', { grid: 'swarm-0123456789ab', members: [] }, 60_000)).toMatchObject({ ready: false })
+  client.close()
   expect(daemon.log()).not.toContain('installing the Harness grid runtime')
   expect(daemon.log()).not.toMatch(/grid installer (exited|finished)|installed `grid` to/)
-  expect(readdirSync(join(daemon.root, 'runtime')).filter((name) => name.startsWith('grid-'))).toEqual([])
+  expect(readdirSync(daemon.env.ADAPTER_RUNTIME_DIR!).filter((name) => name.startsWith('grid-'))).toEqual([])
   // Where grid's installer would put it: under the test's home (lib/gridInstall.ts GRID_INSTALL_DIR).
   expect(existsSync(join(daemon.env.HOME!, '.local', 'bin', 'grid'))).toBe(false)
 })
 ```
 
 The environment's assertions come first on purpose: the red run stops at the first of them and never drives the
-path, which before the fix could reach the internet.
-
-The path is waited for by its own end: the answer to the request that starts it, the exit of the command, or the
-line the daemon prints. When the process that asks is not the daemon, the two log assertions read that process's
-output. The `switched off` line is not asserted and is no wait condition: a machine with `grid` on its PATH never
-reaches the installer. A path with no end a test can wait on gets no sleep: stop and report it.
+path, which before the fix could reach the internet. After the fix, the same request asks `127.0.0.1:9/grid.json`
+from `harnessd-models` (seen with a fetch trace), and is refused on this machine.
 
 - [ ] **Step 3: Run it to see it fail**
 
@@ -798,14 +803,14 @@ Commit the test alone: `e2e: a test that a daemon under test asks no grid manife
 In `create`'s environment, with the two lines under "Signed out, and nothing reaches beyond the machine":
 `ADAPTER_GRID_RUNTIME_METADATA_URL: 'http://127.0.0.1:9/grid.json'` and `DISABLE_GRID_INSTALL: 'true'`. Both are
 above `...options.env`, so a test's own still decides. Their comment names the 19 MB
-`runtime/grid-0.3.63-darwin-arm64` that ten removed roots got back, and says why the second line: with no manifest
-to read, the models service goes on to grid's public installer (`services/models.ts` `installCli`).
+`runtime/grid-0.3.63-darwin-arm64` that removed roots kept, the file that downloaded it (`swarmV4Journey.e2e.ts`,
+through `grid_swarm_sync`), and says why the second line: with no manifest to read, the models service goes on to
+grid's public installer (`services/models.ts` `installCli`).
 
 - [ ] **Step 5: Run the checks**
 
 ```bash
 TMPDIR=/private/tmp/claude-502/hyg-t8/ caffeinate -i npx vitest run --config vitest.e2e.config.ts e2e/leftBehind.e2e.ts -t 'asks no grid manifest|bridge a port'   # 2 passed
-git status --short cli/e2e/                                                                                                                                  # no gridFind.e2e.ts
 ```
 
 - [ ] **Step 6: Commit**

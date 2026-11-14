@@ -31,13 +31,15 @@ fake engine; no product code.
   sleeps forever.
 - **A daemon under test can download grid from the internet.** `ADAPTER_GRID_RUNTIME_METADATA_URL` keeps its real
   default in the harness's environment, so a daemon that installs or follows a managed grid (`ensureManagedArchive`,
-  `src/lib/runtimeInstall.ts:225`) fetches the 19 MB release into its root's `runtime/`. A download that finishes after
-  `close()` removed the root brings the folder back, and nobody removes it. The harness already points the backend and
-  web URLs at `127.0.0.1:9` so that nothing reaches beyond the machine; the grid manifest was missed. Which path starts
-  the download under `masterIpcExit.e2e.ts` is not shown in the code (it is not `start --repair`, and the test only
-  creates a Claude agent); the plan's grid task finds it with a local manifest server that counts requests, and the
-  red test is written against that path. A second way out sits behind the first: with no managed grid after the
-  manifest was asked, the models service's `installCli` (`src/services/models.ts`) goes on to grid's public installer
+  `src/lib/runtimeInstall.ts:225`) fetches the 19 MB release into its root's `runtime/`, and makes its `bin/`
+  read-only: the close's recursive removal cannot unlink `bin/grid` there, so `runtime/grid-*/bin` is all that is
+  left of the root. The harness already points the backend and web URLs at `127.0.0.1:9` so that nothing reaches
+  beyond the machine; the grid manifest was missed. Found with a local manifest server that counted requests
+  (2026-11-14): not `masterIpcExit.e2e.ts`, which asks none, but `swarmV4Journey.e2e.ts` on the real backend. At each
+  start of models on each of its two computers, the Swarm's pass (`src/superTabs/swarmGrids.ts`) sends
+  `grid_swarm_sync` for the project's grid, and models sets grid up first (`installCli`, `src/services/models.ts`),
+  which installs the managed grid. The red test drives that request. A second way out sits behind the first: with no
+  managed grid after the manifest was asked, `installCli` goes on to grid's public installer
   (`curl -fsSL https://grid.autonomous.ai/install.sh | bash`, `src/lib/gridInstall.ts`), so a manifest that cannot be
   read would, alone, trade one download for another.
 
