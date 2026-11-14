@@ -72,6 +72,7 @@ import { ENGINES, enginePathOverride } from '../lib/engineBin.js'
 import { isTerminalEngine, type AgentEngine } from '../engines/types.js'
 import { createObservedHook } from './observedHook.js'
 import { createDeviceHookCalls } from './deviceHookCalls.js'
+import { createDialFront } from './dialFront.js'
 import { engineInstallRecipe } from '../lib/engineInstall.js'
 import { buildEngineLaunchArgv, engineLaunchEnv, supportsFirstPrompt, typedFirstPrompt } from '../lib/engineLaunch.js'
 import { isWindowsHeldPane, windowsPaneLaunch } from '../lib/windows/engineStart.js'
@@ -2199,6 +2200,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     now: () => performance.now(),
     forward: (observed) => ports.devices?.observed(observed) ?? false,
   })
+  // The app in front, from a dial watch on the local socket: checked and bounded here, then the devices' alone.
+  const dialFront = createDialFront({ now: () => performance.now(), forward: (app) => ports.devices?.front(app) ?? false })
   // Asked only while a dial is watching: a call to a devices process that is not running would start it.
   const deviceHookCalls = createDeviceHookCalls({ ready: cableWatchingLocal, devices: () => ports.devices ?? undefined, newId: randomUUID })
   const { server: hookServer, port: hookPort, localSocket } = await startHookServer(daemonPort(), {
@@ -2390,6 +2393,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
      * holds, and that reaches the window as an ordinary `dial_status`.
      */
     onDialSettings: (id, patch) => ports.devices?.settings(id, patch),
+    dialFront: dialFront.connection,
     openQuestions: () => [...openQuestions.values()],
     // Committed. Sent through the fleet's router — the dial's own dispatch — and NOT straight into
     // backend.onMessage: that resolves the id against THIS computer's registry, so a remote agent would land
