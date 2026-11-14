@@ -170,9 +170,9 @@ overlap (Harness agents have a pane), but the rule and its tests land now, so wa
   the place of the ring agent idle the longest, and goes to the end. Idle is neither working nor needing the person:
   an agent that works or needs the person is never replaced, and when no ring agent is idle the newcomer waits
   outside. A free place goes to an agent that needs the person first, then to the most recent activity. When several
-  arrive together they enter in that same order, at most 16 in one pass, and one that found no place is no longer
-  new. `total` is every agent on this computer. The bound is in the selection, not in name lengths: the 78-agent
-  reconnect (`listAgentSnapshot`'s comment) is not repeated.
+  arrive together, that same priority picks who enters, at most 16 in one pass; those that enter go to the end in the
+  registry's order, and one that found no place is no longer new. `total` is every agent on this computer. The bound
+  is in the selection, not in name lengths: the 78-agent reconnect (`listAgentSnapshot`'s comment) is not repeated.
 - **When.** Changes are coalesced for 1 s, and pushes are at least 1 s apart. The list is pushed only when its members or
   order change (`agentsKey`, as today); a state change inside the same list goes as the existing per-agent frames.
 - **With a window.** Exactly today's behaviour: an observed agent sends the dial no frame (no turn, answer or
