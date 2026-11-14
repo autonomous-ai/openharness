@@ -607,11 +607,12 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   /** Each observed agent mid-turn that a dial lists (sixteen at most of the fifty in each list), told again: the dial forgets
    *  a turn it hears nothing of for 25 s, and one that just came, whose window just closed, or whose app the dial was just
    *  turned to, has heard nothing of it yet. Both lists a dial can hold: the one ring, and the shown app's for a dial that
-   *  says appFilter. */
+   *  says appFilter, read only while one is connected: that read can switch the app, which no older dial shows. */
   const remind = async (): Promise<void> => {
     const mid = (observed?.list() ?? []).filter(busy)
     if (!mid.length || windowOpen) return
-    const lists = await Promise.all([cableHost.listAgentSnapshot(), cableHost.listAgentSnapshot({ apps: true })])
+    const apps = cable.wantsApps() ? [cableHost.listAgentSnapshot({ apps: true })] : []
+    const lists = await Promise.all([cableHost.listAgentSnapshot(), ...apps])
     const listed = new Set(lists.flatMap((list) => list.agents.map((agent) => agent.id)))
     for (const agent of mid) if (listed.has(agent.id)) tell(started(agent))
   }
