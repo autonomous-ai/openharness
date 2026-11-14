@@ -22,6 +22,8 @@ type World = {
   submitted: unknown[]
   /** The variables the mod asked for, by name. */
   envAsked: string[]
+  /** In order, each timer of the mod's that fired and each poll it sent. */
+  steps: ('timer' | 'poll')[]
 }
 
 /**
@@ -29,8 +31,15 @@ type World = {
  * per poll, the last repeated.
  */
 function world(on: On, { launchers = [LOCAL], answers }: { launchers?: string[]; answers: Answer[] }): World {
+  const steps: World['steps'] = []
+  // Before the clock's own hook, so above it: it hears each of the mod's waits fire, just before the mod's function runs.
+  on('clock.after', { ms: [0, MINUTE, 10 * MINUTE] }, async (_, e, next) => {
+    const fired = await next(e)
+    steps.push('timer')
+    return fired
+  })
   const clock = mock.clock(on, { now: 1_000_000 })
-  const w: World = { clock, runs: [], polls: [], submitted: [], envAsked: [] }
+  const w: World = { clock, runs: [], polls: [], submitted: [], envAsked: [], steps }
   const env: Record<string, string> = {
     HOME,
     ORCA_PAIRING_CODE: 'pairing-secret',
@@ -50,6 +59,7 @@ function world(on: On, { launchers = [LOCAL], answers }: { launchers?: string[];
   })
   on('http.fetch', async (_, e) => {
     w.polls.push({ url: e.url, init: e.init })
+    w.steps.push('poll')
     const answer = answers[Math.min(w.polls.length, answers.length) - 1]
     if (answer === 'reject' || answer === undefined) return { deny: 'connect ECONNREFUSED' }
     const { status, text = '' } = typeof answer === 'function' ? await answer(clock) : answer
@@ -79,6 +89,17 @@ test('a delivered text is submitted as the user, and the next poll opens at once
   expect(w.submitted).toHaveLength(1)
   expect(w.submitted[0]).toMatchObject({ text: 'run the tests', origin: { asUser: true } })
   expect(w.polls).toHaveLength(2)
+})
+
+// A timer is the module's own: a reload cancels it, where a loop that went on in a continuation would outlive it.
+test('every poll is sent from a timer of its own, after a text and after a hold alike', async ($, on) => {
+  const text = { status: 200, text: JSON.stringify({ text: 'run the tests' }) }
+  const w = world(on, { answers: [text, held(25_000), text, held(25_000)] })
+  await start($, w)
+  await w.clock.advance(25_000)
+  await w.clock.advance(25_000)
+  expect(w.polls).toHaveLength(5)
+  expect(w.steps.join(' ')).toBe('timer timer poll timer poll timer poll timer poll timer poll')
 })
 
 test('an empty 200 after a hold polls again at once and submits nothing', async ($, on) => {
