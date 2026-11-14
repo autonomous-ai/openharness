@@ -21,7 +21,7 @@ function devicesPort() {
   const calls: Array<[string, unknown[]]> = []
   const record = (name: string) => (...args: unknown[]) => { calls.push([name, args]) }
   const port = {
-    card: record('card'), desk: record('desk'), swarms: record('swarms'), unread: record('unread'), appFocus: record('appFocus'),
+    card: record('card'), observed: (...args: unknown[]) => { calls.push(['observed', args]); return true }, desk: record('desk'), swarms: record('swarms'), unread: record('unread'), appFocus: record('appFocus'),
     seen: record('seen'), settings: record('settings'), windowFocus: record('windowFocus'), windowReply: record('windowReply'),
     voiceReply: record('voiceReply'), windowGone: record('windowGone'), scroll: record('scroll'), engines: record('engines'),
     commanders: record('commanders'),
@@ -385,6 +385,14 @@ describe('what the core tells the devices, reaching their port', () => {
       ['asking', [['a1']]],
       ['asking', [[]]],
     ])
+  })
+
+  it('is a paneless agent\'s hook event, handed to the devices as the core checked it', () => {
+    const f = setup()
+    const event = { engine: 'claude', sessionId: 's1', event: 'turn-stop', cwd: '/work/api', callerPid: 42, transcriptPath: '/t/s1.jsonl',
+      hostHints: { TERM_PROGRAM: 'ghostty' }, at: 7 }
+    f.event({ ...event, kind: 'observed' })
+    expect(f.calls).toEqual([['observed', [event]]])
   })
 
   it('is everything the windows said at once when the devices connect, and nothing they did not', () => {

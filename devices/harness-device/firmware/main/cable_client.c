@@ -51,6 +51,8 @@ typedef struct {
     char effort[16];
     char machine_id[ID_MAX];    // which machine this agent lives on ("" from a daemon that predates it)
     char machine[CABLE_NAME_MAX];     // that machine's name, drawn under the agent's
+    char host[16];              // where it runs (orca, ghostty, ...); "" from a daemon that predates it
+    uint8_t caps;               // CABLE_CAP_* set; all of them when the daemon sends none
 } cable_agent_t;
 
 
@@ -758,6 +760,7 @@ void cable_client_fw_error(const char *message)
 // Set by `agents.end`, read by the refresh that applies the list — see ui_fleet_set.
 static int  s_agents_total;
 static bool s_has_window;
+static bool s_agents_machine_view;
 static char s_agents_tab[ID_MAX];
 static uint32_t s_agents_generation;
 
@@ -787,6 +790,7 @@ int cable_client_list_agents_snapshot(project_t *out, int max, cable_agent_snaps
     if (snapshot) {
         snprintf(snapshot->tab,sizeof snapshot->tab,"%s",s_agents_tab);
         snapshot->generation=s_agents_generation; snapshot->total=s_agents_total; snapshot->window=s_has_window;
+        snapshot->machine_view=s_agents_machine_view;
     }
     for (int i = 0; i < s_agent_count && n < max; i++) {
         memset(&out[n], 0, sizeof(out[n]));
@@ -795,6 +799,8 @@ int cable_client_list_agents_snapshot(project_t *out, int max, cable_agent_snaps
         snprintf(out[n].engine, sizeof(out[n].engine), "%s", s_agents[i].engine);
         snprintf(out[n].machine_id, sizeof(out[n].machine_id), "%s", s_agents[i].machine_id);
         snprintf(out[n].machine, sizeof(out[n].machine), "%s", s_agents[i].machine);
+        snprintf(out[n].host, sizeof(out[n].host), "%s", s_agents[i].host);
+        out[n].caps = s_agents[i].caps;
 
         // The [mark][Model][Effort] chip row reads ONE shape — the opaque runtime-v1 profile — so the
         // daemon's plain model/effort are assembled into it here rather than teaching the UI a second
@@ -1055,7 +1061,7 @@ static void session_down(const char *why)
     if (s_agents_lock) {
         xSemaphoreTake(s_agents_lock, portMAX_DELAY);
         s_agent_count = 0;
-        s_agents_total = 0; s_has_window = false;
+        s_agents_total = 0; s_has_window = false; s_agents_machine_view = false;
         s_agents_tab[0] = 0; s_agents_generation++;
         s_agents_building = false;
         xSemaphoreGive(s_agents_lock);
@@ -1077,6 +1083,21 @@ static void session_down(const char *why)
     pet_forget_transfer();             // likewise a half-received pet pack; the held packs stay
     ESP_LOGI(TAG, "session down (%s)", why);
     ui_set_connected(false);
+}
+
+// `caps` is letters (s status, v voice, f focus, a answer). Absent means all of them, so an older daemon
+// changes nothing; a present string grants exactly its letters, and an unknown letter grants nothing.
+static uint8_t caps_of(const char *letters)
+{
+    if (!letters) return CABLE_CAPS_ALL;
+    uint8_t caps = 0;
+    for (const char *c = letters; *c; c++) {
+        if (*c == 's') caps |= CABLE_CAP_S;
+        else if (*c == 'v') caps |= CABLE_CAP_V;
+        else if (*c == 'f') caps |= CABLE_CAP_F;
+        else if (*c == 'a') caps |= CABLE_CAP_A;
+    }
+    return caps;
 }
 
 static void handle_agent(const cJSON *p)
@@ -1106,7 +1127,9 @@ static void handle_agent(const cJSON *p)
             snprintf(a->machine_id, sizeof(a->machine_id), "%s", machine_id);
         const char *machine = str_of(p, "machine");
         if (machine) snprintf(a->machine, sizeof(a->machine), "%s", machine);
-
+        const char *host = str_of(p, "host");
+        if (host && strlen(host) < sizeof a->host) snprintf(a->host, sizeof(a->host), "%s", host);
+        a->caps = caps_of(str_of(p, "caps"));
     }
     xSemaphoreGive(s_agents_lock);
 }
@@ -1139,6 +1162,9 @@ static void handle_agents_end(const cJSON *p)
     s_agents_total = cJSON_IsNumber(total) ? (total->valueint > 0 ? total->valueint : 0) : n;
     s_has_window = tab && tab[0];
     snprintf(s_agents_tab,sizeof s_agents_tab,"%s",tab ? tab : "");
+    // `view: machine` says the list is this computer's agents, not a tab's, so each face names its host.
+    const char *view = p ? str_of(p, "view") : NULL;
+    s_agents_machine_view = view && !strcmp(view, "machine");
     s_agents_generation++;
     xSemaphoreGive(s_agents_lock);
     ESP_LOGI(TAG, "agents: %d of %d%s", n, s_agents_total, s_has_window ? "" : " (no window)");

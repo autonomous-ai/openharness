@@ -57,6 +57,7 @@ static struct {
     uint32_t error_until;
     uint32_t pet_until, nap_until, voice_retry_until, voice_started, voice_wait_until, voice_generation, voice_question_revision, voice_draft_revision;
     int voice_question_index;
+    char hint[40];
     char title[80], message[256], voice_target[64], voice_engine[12], pending_focus[64], pending_machine[64], opening_notice[48];
     struct { bool valid, supported, loading, pending, uncertain; uint32_t revision, deadline; int index; char error[120],speech_error[96],agent[64],token[48]; struct { bool can_text; } item[4]; } q;
     agent_t agents[1];
@@ -303,8 +304,9 @@ int main(void) {
 
     // Empty transcription is a transient hint on the companion, not a modal.
     reset(); begin(); done(); finish_audio(); now=UINT32_MAX-1000;
+    strcpy(s.hint, "See it in Orca");   // a hint left from an agent that cannot hear: the retry line says its own words
     ui_voice_error("Didn't catch that");
-    assert(s.view==HOME && !s.voice_open && !s.voice_waiting && s.voice_retry_until);
+    assert(s.view==HOME && !s.voice_open && !s.voice_waiting && s.voice_retry_until && !s.hint[0]);
     uint32_t retry_deadline=s.voice_retry_until;
     now=retry_deadline-1; habitat_tick(); assert(s.voice_retry_until==retry_deadline);
     now=retry_deadline; habitat_tick(); assert(!s.voice_retry_until && s.view==HOME);

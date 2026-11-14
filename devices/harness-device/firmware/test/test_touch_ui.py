@@ -17,6 +17,18 @@ def function(name):
         body = body.replace('{', "{\n    if (label[0] == '[') assert(ht_can_display(label, UI_FONT, w, 1));", 1)
     return body + '\n'
 
+# The dial names a host as the daemon does (cli/src/cable/hosts/hostDetect.ts), so a host the daemon learns to tell
+# never reads "See it in Terminal" here. Ids the daemon names "Terminal" need no row: that is the dial's fallback.
+host_detect = (here / '../../../../cli/src/cable/hosts/hostDetect.ts').read_text()
+daemon_hosts = dict(re.findall(r"^\s+'?([\w-]+)'?: '([^']+)',$", host_detect.split('const NAMES', 1)[1].split('}', 1)[0], re.M))
+dial_hosts = dict(re.findall(r'\{"([\w-]+)", "([^"]+)"\}', function('host_name')))
+assert daemon_hosts and dial_hosts == {k: v for k, v in daemon_hosts.items() if v != 'Terminal'}, (dial_hosts, daemon_hosts)
+# The daemon renews the turn of an agent outside a pane every REMIND_MS; at the fuse or above, the dial would drop a
+# turn still running between two reminders.
+devices_ts = (here / '../../../../cli/src/services/devices.ts').read_text()
+remind_ms = int(re.search(r'^const REMIND_MS = ([\d_]+)$', devices_ts, re.M)[1].replace('_', ''))
+assert remind_ms < int(re.search(r'^#define BUSY_FUSE_MS (\d+)u$', source, re.M)[1]), remind_ms
+
 code = r'''
 #include "runtime.h"
 #include "../../cable_features.h"
@@ -46,7 +58,8 @@ code = r'''
 # Keep real protocol capacities: a larger fake buffer can hide target truncation.
 code += defines('CABLE_READ_TOKEN_MAX','ID_MAX','CABLE_NAME_MAX','SWARM_ID_MAX','SWARMS_MAX','CABLE_MAX_AGENTS','MAX_PROJECTS')
 code += defines('NOTICES','QUESTION_MAX','OPTION_MAX','PANE_MEMORY_MAX','UI_FONT','Q_ROWS','DRAFT_ROWS',source=source)
-code += defines('FACE_CX', 'BUDDY_LILAC', source=source)
+code += defines('FACE_CX', 'BUDDY_LILAC', 'BUSY_FUSE_MS', source=source)
+code += defines('CABLE_CAP_S', 'CABLE_CAP_V', 'CABLE_CAP_F', 'CABLE_CAP_A', 'CABLE_CAPS_ALL')
 code += '#define NOTICE_TTL_MS 21600000u\n#define ERROR_VIEW_MS 8000u\nstatic void ui_cable_toast(const char *message) { (void)message; }\n'
 if '#define PANE_RESULT_BYTES ' in source:
     code += defines('PANE_RESULT_BYTES', source=source)
@@ -65,6 +78,8 @@ static struct {
     int touch_far2;
     uint32_t touch_started, coast_until, character_activity, pet_until, nap_until, last_celebration;
     uint32_t notice_sequence, voice_retry_until, error_until;
+    char hint[40];
+    bool machine_view;
     uint8_t status_phase;
     unsigned bell_unread;
     uint32_t notice_ms;
@@ -222,7 +237,7 @@ swarm_parts = {
     # with the last `swarms` list it keeps beside it
     'swarms_apply': source[source.index('// The last `swarms` list as it came'):source.index('void ui_swarms_replace(')],
 }
-for name in ['copy', 'recap_preview', 'notice_unread', 'notice_was_read', 'notice_forget_read', 'notice_flush_reads', 'notice_mark_read', 'habitat_scene_receipt', 'habitat_scene_presented', 'pane_memory', 'pane_memory_apply', 'dismiss_result', 'activity_text', 'ensure', 'input_cancel', 'view', 'notice_open', 'workspace_index', 'swarm_core', 'swarm_voice_id', 'voice_lead', 'tabs_open', 'face_hold', 'workspace_failed', 'tab_request', 'tabs_sync', 'ui_scroll_reportable', 'focus_face_for', 'focus_chord', 'focus_put', 'focus_span', 'focus_take', 'focus_rows', 'ui_rows', 'ui_can_display', 'ui_wrap', 'text_in', 'control', 'home_footer', 'footer_control', 'text', 'center', 'render_brand', 'heading', 'question_view', 'question_rows', 'question_move', 'question_text', 'render_question', 'render_choices', 'render_answer_review', 'question_answer', 'send_answer', 'make_action', 'character_mood', 'voice_status', 'status_animated', 'status_speed', 'status_wake_ms', 'surface_tick', 'render_workspace_preview', 'question_prompt', 'focus_bell', 'mix_black', 'face_buddy_disc', 'face_buddy_ring', 'companion_box', 'notice_badge', 'pill2', 'swarm_pair', 'pick_icon', 'pick_row', 'render_swarm_pick', 'face_buddy_avatar', 'render_buddy_empty', 'thread_line', 'thread_rest', 'face_thread', 'render_swarm_face', 'render_home', 'render_voice', 'render_selection', 'render_form', 'draft_move', 'render_draft', 'render_draft_options', 'swarms_apply', 'ui_swarms_replace', 'ui_workspace_applied', 'ui_land_after_reload']:
+for name in ['copy', 'recap_preview', 'notice_unread', 'notice_was_read', 'notice_forget_read', 'notice_flush_reads', 'notice_mark_read', 'habitat_scene_receipt', 'habitat_scene_presented', 'pane_memory', 'pane_memory_apply', 'dismiss_result', 'activity_text', 'host_name', 'agent_allows', 'ensure', 'input_cancel', 'view', 'notice_open', 'workspace_index', 'swarm_core', 'swarm_voice_id', 'voice_lead', 'tabs_open', 'face_hold', 'workspace_failed', 'tab_request', 'tabs_sync', 'ui_scroll_reportable', 'focus_face_for', 'focus_chord', 'focus_put', 'focus_span', 'focus_take', 'focus_rows', 'ui_rows', 'ui_can_display', 'ui_wrap', 'text_in', 'control', 'home_footer', 'footer_control', 'text', 'center', 'render_brand', 'heading', 'question_view', 'question_rows', 'question_move', 'question_text', 'render_question', 'render_choices', 'render_answer_review', 'question_answer', 'send_answer', 'make_action', 'character_mood', 'voice_status', 'status_animated', 'status_speed', 'status_wake_ms', 'surface_tick', 'render_workspace_preview', 'question_prompt', 'focus_bell', 'mix_black', 'face_buddy_disc', 'face_buddy_ring', 'companion_box', 'notice_badge', 'pill2', 'swarm_pair', 'pick_icon', 'pick_row', 'render_swarm_pick', 'face_buddy_avatar', 'render_buddy_empty', 'thread_line', 'thread_rest', 'face_thread', 'render_swarm_face', 'render_home', 'render_voice', 'render_selection', 'render_form', 'draft_move', 'render_draft', 'render_draft_options', 'swarms_apply', 'ui_swarms_replace', 'ui_workspace_applied', 'ui_land_after_reload']:
     code += swarm_parts[name] if name in swarm_parts else function(name)
 code += function('render_settings') + function('ui_visit_state')
 code += function('ui_project_known') + function('ui_focus_project') + function('ui_apply_pending_focus')
@@ -233,8 +248,9 @@ for name in ['notice_remove', 'notice_sync_view', 'notice_selection', 'notice_re
              'ui_supertab_wait', 'ui_supertab_wait_close', 'ui_supertabs_clear', 'swarm_said_of', 'ui_supertab_notice', 'ui_supertab_notice_read']:
     code += function(name)
 code += '#define ui_notify_task_done(a,b,c,d) ui_notify_summary(a,b,c,d,"alert",false,false)\n'
-for name in ['event', 'ui_project_emit', 'ui_project_restore_event', 'ui_project_clear_event', 'ui_project_set_name', 'ui_project_remove', 'ui_project_clear_all', 'ui_project_apply_order']:
+for name in ['ui_project_set_host_caps', 'ui_fleet_set_view', 'event', 'ui_project_emit', 'ui_project_restore_event', 'ui_project_clear_event', 'ui_project_set_name', 'ui_project_remove', 'ui_project_clear_all', 'ui_project_apply_order']:
     code += function(name)
+code += 'static void dispatch(action_t a);\n'
 visit_actions=source.split('    case A_LATEST:',1)[1].split('    case A_TABS:',1)[0]
 code+='static void visit_action(action_t a) { switch(a.kind) { case A_LATEST:'+visit_actions+'default: break; } }\n'
 notice_actions=source.split('    case A_NOTICE:',1)[1].split('    case A_LATEST:',1)[0]
@@ -245,7 +261,6 @@ visit_worker=source.split('static void worker(',1)[1].split('        case A_VISI
 code+='static void visit_work(action_t a) { switch(a.kind) { case A_VISIT_SEND:'+visit_worker+'default: break; } }\n'
 carry_actions = source.split('case A_CARRY:\n',1)[1].split('case A_NAP:',1)[0]
 code += 'static void carry_action(action_t a) { switch(a.kind) { case A_CARRY:\n' + carry_actions + 'default: break; } }\n'
-code += 'static void dispatch(action_t a);\n'
 lead_actions = source.split('    case A_LEAD: {',1)[1].split('    case A_READER:',1)[0]
 panes_actions = source.split('    case A_AGENTS: {',1)[1].split('    case A_AGENT: {',1)[0]
 code += '#define TAB_ROWS 4\nstatic void panes_action(action_t a) { switch(a.kind) { case A_AGENTS: {'+panes_actions+'default: break; } }\n'
@@ -1338,6 +1353,21 @@ static void swarm_tabs_checks(const char *dir) {
 static bool scene_says(const char *needle) {
     for (int i = 0; i < scene.count; i++) if (strstr(scene.runs[i].text, needle)) return true;
     return false;
+}
+// The resting face drawn afresh `n` times (a retry status in between ends it, so the next one picks its line again):
+// how many of those faces carried one of focus.c's lines that ask the agent for something.
+static int rest_invitations(int n) {
+    static const char *const asks[] = {"Tap to talk", "Say the word", "Ask away", "Let's build it", "Do anything",
+        "What's next?", "Ready when you are", "Make it happen", "Start something", "Your move"};
+    int seen = 0;
+    for (int k = 0; k < n; k++) {
+        fake_ms += 1000; s.voice_retry_until = fake_ms + 2000; scene_take();
+        s.voice_retry_until = 0; scene_take();
+        bool ask = false;
+        for (unsigned i = 0; i < sizeof asks / sizeof asks[0]; i++) if (scene_says(asks[i])) ask = true;
+        seen += ask;
+    }
+    return seen;
 }
 static const void *pet_frame(void) {
     for (int i = 0; i < scene.count; i++) if (scene.runs[i].sprite.width) return scene.runs[i].sprite.cells;
@@ -3321,6 +3351,92 @@ int main(int argc, char **argv) {
     s.voice_retry_until=0; scene_take(); assert(result_visible());
     s.voice_retry_until=4000; scene_take(); tap(1000,233,220);
     assert(starts==1 && s.view==VOICE && !s.voice_retry_until && !strcmp(target,"a"));
+    // THE DEVICE WITHOUT THE APP: where an agent lives (`host`) and what it can take (`caps`).
+    // caps absent: voice starts as today (a daemon that predates the fields changes nothing)
+    reset(); fake_ms = 1000; scene_take();
+    tap(1000,233,220); assert(starts==1 && s.view==VOICE && recording);
+    reset(); fake_ms = 1000; ui_project_set_host_caps("a","orca",CABLE_CAPS_ALL); scene_take();
+    tap(1000,233,220); assert(starts==1 && s.view==VOICE);                // an explicit full set is the same
+    // a tap on an agent without V starts no voice and shows the hint
+    reset(); fake_ms = 1000; ui_project_set_host_caps("a","orca",CABLE_CAP_S|CABLE_CAP_A); scene_take();
+    tap(1000,233,220);
+    assert(!starts && !recording && s.view==HOME && scene_says("See it in Orca"));
+    portrait(dir,"caps-no-voice-hint");
+    // For 2 s, woken for: habitat_tick clears the deadline when it is due, and the face goes back.
+    assert(s.voice_retry_until == 3000 && habitat_next_wake_ms() <= 2000);
+    fake_ms = 3000; assert(habitat_next_wake_ms() == 1); s.voice_retry_until = 0;
+    scene_take(); assert(!scene_says("See it in"));
+    tap(4000,233,220); assert(!starts && scene_says("See it in Orca"));   // and a tap shows it again
+    // over a working agent's verb too, which would otherwise hold the line it is drawn in
+    reset(); fake_ms = 1000; ui_project_set_host_caps("a","orca",CABLE_CAP_S);
+    ui_project_emit("a","sess","processing","Coalescing",NULL); scene_take(); assert(scene_says("Coalescing"));
+    tap(1000,233,220); assert(!starts && scene_says("See it in Orca") && !scene_says("Coalescing"));
+    // the name is short, and an unknown or missing host is a terminal
+    reset(); fake_ms = 1000; ui_project_set_host_caps("a","iterm",CABLE_CAP_S); scene_take();
+    tap(1000,233,220); assert(!starts && scene_says("See it in iTerm2"));
+    { static const char *const named[][2] = {{"kitty","See it in kitty"},{"wezterm","See it in WezTerm"},
+                                             {"zellij","See it in Zellij"},{"rex","See it in Rex"}};
+      for (unsigned i = 0; i < sizeof named / sizeof named[0]; i++) {
+          reset(); fake_ms = 1000; ui_project_set_host_caps("a",named[i][0],CABLE_CAP_S); scene_take();
+          tap(1000,233,220); assert(!starts && scene_says(named[i][1]));
+      } }
+    reset(); fake_ms = 1000; ui_project_set_host_caps("a","xterm",CABLE_CAP_S); scene_take();
+    tap(1000,233,220); assert(!starts && scene_says("See it in Terminal"));
+    reset(); fake_ms = 1000; ui_project_set_host_caps("a","",CABLE_CAP_S); scene_take();
+    tap(1000,233,220); assert(!starts && scene_says("See it in Terminal"));
+    // a turn.activity Waiting for you · Orca shows on the home face (no logic of its own: any activity text)
+    reset(); fake_ms = 1200; ui_project_set_host_caps("a","orca",CABLE_CAP_S);
+    ui_project_emit("a","","processing","",NULL);                                   // turn.started
+    ui_project_emit("a","","activity","Waiting for you \xc2\xb7 Orca",NULL); scene_take();   // turn.activity
+    assert(s.view==HOME && scene_says("Waiting for you \xc2\xb7 Orca"));
+    portrait(dir,"caps-waiting-orca");
+    // machine view shows the host line under the name
+    reset(); fake_ms = 1000; ui_project_set_host_caps("a","orca",CABLE_CAP_S); scene_take();
+    assert(!scene_says("Orca"));                                            // not on a window's list
+    ui_fleet_set_view(true); scene_take(); assert(scene_says("Orca")); portrait(dir,"caps-machine-view");
+    ui_project_set_host_caps("a","vscode",CABLE_CAP_S); scene_take(); assert(scene_says("VS Code"));
+    ui_project_set_host_caps("a","",CABLE_CAP_S); scene_take(); assert(scene_says("Terminal"));
+    ui_fleet_set_view(false); scene_take(); assert(!scene_says("Terminal"));
+    // the resting face of an agent without V shows no voice invitation, on the plain face and the pet's relaxing one
+    for (int pet = 0; pet < 2; pet++) {
+        reset(); fake_ms = 1000; if (pet) strcpy(s.agents[0].engine, "claude");
+        ui_project_set_host_caps("a","orca",CABLE_CAP_S|CABLE_CAP_A); scene_take();
+        assert(!rest_invitations(40));
+        // an agent with V or caps absent keeps today's invitation lines
+        reset(); fake_ms = 1000; if (pet) strcpy(s.agents[0].engine, "claude");
+        assert(rest_invitations(40) > 0);
+        reset(); fake_ms = 1000; if (pet) strcpy(s.agents[0].engine, "claude");
+        ui_project_set_host_caps("a","orca",CABLE_CAPS_ALL); scene_take();
+        assert(rest_invitations(40) > 0);
+    }
+    // question screen hides [ say ] without V
+    reset(); s.view=QUESTION; s.q.valid=s.q.supported=true; s.q.count=1; s.q.revision=1;
+    strcpy(s.q.agent,"a"); strcpy(s.q.token,"token-a"); strcpy(s.q.name,"Research helper");
+    strcpy(s.q.item[0].prompt,"Which one?"); s.q.item[0].count=2; s.q.item[0].can_text=true;
+    strcpy(s.q.item[0].options[0],"This"); strcpy(s.q.item[0].options[1],"That");
+    scene_take(); assert(action_enabled(A_QUESTION_SAY) && scene_says("[say]"));
+    ui_project_set_host_caps("a","orca",CABLE_CAP_S|CABLE_CAP_A); scene_take();
+    assert(!action_enabled(A_QUESTION_SAY) && !scene_says("[say]") && action_enabled(A_QUESTION_CHOICES));
+    portrait(dir,"caps-question-no-say");
+    // a notice tap on an agent without F opens no window: the dial goes to its face, the recap still on it
+    reset(); ui_project_set_host_caps("b","orca",CABLE_CAP_S|CABLE_CAP_V|CABLE_CAP_A);
+    ui_project_emit("b","sess","summary","The build is ready.","The build is ready.");
+    ui_notify_task_done("b","Agent B","M2","The build is ready.");
+    ui_notif_open(); dispatch((action_t){.kind=A_NOTICE,.id="b"});
+    assert(!desktop_opens && !s.opening_notice[0] && !notice_unread(NULL));
+    assert(switches==1 && s.view==AGENT && !strcmp(active()->id,"b"));
+    scene_take(); assert(result_visible() && !pane_memory("b",false)->dismissed);
+    portrait(dir,"caps-notice-no-focus");
+    // Controls: Stop current turn and Model are off for an agent without V, and a Stop already open stops nothing
+    for (int voice = 1; voice >= 0; voice--) {
+        reset(); s.agents[0].busy = true;
+        ui_project_set_host_caps("a","orca",CABLE_CAP_S|CABLE_CAP_A|(voice ? CABLE_CAP_V : 0));
+        view(SETTINGS); scene_take();
+        assert(action_enabled(A_STOP) == voice && action_enabled(A_MODELS) == voice && action_enabled(A_INBOX));
+        if (!voice) portrait(dir,"caps-controls-no-voice");
+        COPY(s.stop_agent,"a"); view(STOP); dispatch((action_t){.kind=A_STOP_YES});
+        assert(!strcmp(stopped_agent, voice ? "a" : ""));
+    }
     // Hold opens one destination immediately; every direction of the opening contact is consumed.
     const int hold_ends[][2]={{233,220},{330,220},{130,220},{233,130},{233,320}};
     for(unsigned i=0;i<sizeof hold_ends/sizeof hold_ends[0];i++) {
@@ -4242,6 +4358,17 @@ int main(int argc, char **argv) {
             }
             DESIGN_HOME(); fake_ms = 1200; dispatch((action_t){.kind = A_VOICE, .id = "a"}); scene_take(); DESIGN("voice-listening");
             DESIGN_HOME(); fake_ms = 1200; dispatch((action_t){.kind = A_VOICE, .id = "a"}); s.voice_waiting = true; scene_take(); DESIGN("voice-sending");
+            DESIGN_HOME(); fake_ms = 1200; ui_project_set_host_caps("a", "orca", CABLE_CAP_S); ui_fleet_set_view(true); scene_take(); DESIGN("machine-view");
+            DESIGN_HOME(); fake_ms = 1200; ui_project_set_host_caps("a", "orca", CABLE_CAP_S); scene_take(); tap(1200, 233, 220); DESIGN("no-voice-hint");
+            DESIGN_HOME(); fake_ms = 1200; ui_project_set_host_caps("a", "orca", CABLE_CAP_S); ui_fleet_set_view(true);
+            ui_project_emit("a", "", "processing", "", NULL);
+            ui_project_emit("a", "", "activity", "Waiting for you \xc2\xb7 Orca", NULL); scene_take(); DESIGN("waiting-orca");
+            DESIGN_HOME(); fake_ms = 1200; ui_project_set_host_caps("b", "orca", CABLE_CAP_S);
+            ui_project_emit("b", "sess", "summary", "Hero and pricing are in.", "Hero and pricing are in.");
+            ui_notify_task_done("b", "Landing page", "MacBook", "Hero and pricing are in."); ui_notif_open();
+            dispatch((action_t){.kind = A_NOTICE, .id = "b"}); scene_take(); DESIGN("notice-no-focus");
+            DESIGN_HOME(); s.agents[0].busy = true; ui_project_set_host_caps("a", "orca", CABLE_CAP_S);
+            view(SETTINGS); scene_take(); DESIGN("controls-no-voice");
             #undef DESIGN_HOME
             #undef DESIGN
         }

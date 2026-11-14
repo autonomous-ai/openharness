@@ -21,6 +21,7 @@ import type { GridAssignmentProcess, GridAssignmentAnswer } from '../lib/gridAss
 import type { RecentTurn } from '../cable/cableHost.js'
 import type { ReviewedAnswer } from '../cable/questionInbox.js'
 import type { AgentEngine } from '../engines/types.js'
+import type { ObservedHookEvent } from './observedHook.js'
 import type { AppSwarms } from '../cable/cableSession.js'
 import type { UnreadNotification } from '../lib/notificationRead.js'
 import type { AutonomousDeviceAgent, AutonomousDeviceDelivery, AutonomousDeviceReceipt } from '../lib/autonomous-device/service.js'
@@ -1692,6 +1693,9 @@ export interface DevicesPort {
   /** The agents with an engine's question open, as the core knows them, said as the devices connect or start: what the cards
    *  that pass after say keeps it current. A Swarm wait shows only where none is open (cable/swarmWaits.ts). */
   asking(agentIds: string[]): void
+  /** A paneless agent's hook event, checked by the core and kept nowhere in it; false when the devices did not take it
+   *  (not connected), so the core counts it lost. */
+  observed(event: ObservedHookEvent): boolean
   /** Let go of the serial ports and the lane, for a restart or a shutdown. */
   stop(): Promise<void>
 }
@@ -1707,7 +1711,8 @@ export const DEVICES_FALLBACKS: PortFallbacks<DevicesPort> = {
   settings: undefined, windowFocus: undefined, windowReply: undefined, voiceReply: undefined, windowGone: undefined,
   routeTask: later({ agentId: '', machineId: '', name: '', confidence: 0, reason: DEVICES_UNAVAILABLE, candidates: [], weighed: 0, machines: 0, via: '' }),
   routeSend: later({ ok: false, machine: '', reason: DEVICES_UNAVAILABLE }),
-  stepFocus: later('no_agents'), scroll: undefined, engines: undefined, commanders: undefined, asking: undefined, stop: later(undefined),
+  stepFocus: later('no_agents'), scroll: undefined, engines: undefined, commanders: undefined, asking: undefined, observed: false,
+  stop: later(undefined),
 }
 
 /*

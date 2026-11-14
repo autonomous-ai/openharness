@@ -67,6 +67,9 @@
 #define SET_TEXT_W 300
 #define PANE_MEMORY_MAX 128
 #define PANE_RESULT_BYTES 1024
+// A turn heard nothing of for this long is over: the daemon renews a running one with turn.started, an agent outside
+// a pane every REMIND_MS (cli/src/services/devices.ts), which test_touch_ui.py keeps below this.
+#define BUSY_FUSE_MS 25000u
 typedef enum {
     HOME,
     AGENTS,
@@ -155,6 +158,10 @@ typedef struct {
 typedef struct {
     char id[ID_MAX], name[CABLE_NAME_MAX], engine[12], machine_id[ID_MAX], machine[CABLE_NAME_MAX], model[192],
         session[80];
+    // Where the agent runs, and the CABLE_CAP_* it LACKS. The missing set is stored, not the granted one,
+    // so a zeroed row (every new agent) can do everything, which is what an older daemon means.
+    char host[16];
+    uint8_t caps_off;
     // The row receives the same bounded result stored in pane memory. Keeping
     // an unused 4 KB tail here wasted RAM and enlarged every roster swap.
     char preview[240], full[PANE_RESULT_BYTES], tool[100];
@@ -222,6 +229,8 @@ static EXT_RAM_BSS_ATTR struct {
     char voice_target[CABLE_NAME_MAX];
     char voice_engine[12];   // the engine of whoever this voice turn is for; empty for Find, forms and drafts
     uint32_t voice_retry_until;
+    char hint[40];           // shown in the retry line's place while voice_retry_until runs; "" = "Try again"
+    bool machine_view;       // the roster is this computer's agents: each face names its host
     model_item_t models[48];
     int model_count;
     bool model_request;
@@ -468,7 +477,7 @@ static pane_memory_t *pane_memory(const char *id, bool create)
 static void pane_memory_apply(agent_t *a, pane_memory_t *m)
 {
     if (!a || !m) return;
-    if (m->busy && ms() - m->last_busy > 25000) m->busy = false;
+    if (m->busy && ms() - m->last_busy > BUSY_FUSE_MS) m->busy = false;
     COPY(a->session, m->session);
     COPY(a->preview, m->preview);
     COPY(a->full, m->full);
@@ -501,6 +510,26 @@ static void activity_text(char *dst, size_t cap, const char *src)
     while (n && dst[n - 1] == ' ') dst[--n] = 0;
 }
 
+// The short name a person knows an app by, kept short for the face. Harness is there for its own agents in the
+// machine view; an unknown or missing host reads as "Terminal". The daemon's NAMES (cli/src/cable/hosts/hostDetect.ts)
+// less its "Terminal" rows; test_touch_ui.py keeps the two the same.
+static const char *host_name(const char *host)
+{
+    static const char *const table[][2] = {
+        {"orca", "Orca"}, {"herdr", "herdr"}, {"rex", "Rex"}, {"zellij", "Zellij"}, {"kitty", "kitty"},
+        {"wezterm", "WezTerm"}, {"ghostty", "Ghostty"}, {"iterm", "iTerm2"}, {"vscode", "VS Code"},
+        {"cursor", "Cursor"}, {"warp", "Warp"}, {"harness", "Harness"},
+    };
+    for (unsigned i = 0; host && i < sizeof(table) / sizeof(table[0]); i++)
+        if (!strcmp(host, table[i][0])) return table[i][1];
+    return "Terminal";
+}
+// An agent that is not on the roster is not restricted: the check guards what a row says it cannot take.
+static bool agent_allows(const char *id, uint8_t cap)
+{
+    int i = find(id);
+    return i < 0 || !(s.agents[i].caps_off & cap);
+}
 static int ensure(const char *id)
 {
     if (!id || !*id || strnlen(id, ID_MAX) >= ID_MAX) return -1;
@@ -1634,7 +1663,7 @@ static void render_swarm_face(ht_scene_t *f)
         f_.notice_ms = bell ? s.notice_ms : 0;
     }
     if (thread) face_thread(f, l, buddy, recap, wait, bell && l->buddies);
-    else ht_character_face(f, &character, &f_, ACCENT, recap);
+    else { ht_focus_set_voice(true); ht_character_face(f, &character, &f_, ACCENT, recap); }   // a Swarm always hears
     s.pet_next_ms = !thread ? ht_focus_pet_next_ms(&f_, recap) : 0;
     ht_rect_t bubble = {0};
     bool told = bell && !thread && ht_focus_alert_shown(&f_, recap, &bubble);
@@ -1744,16 +1773,18 @@ static void render_home(ht_scene_t *f)
     const char *activity = a && s.connected && !s.loading && !s.nap && is_question(a->id) ?
         "Needs your answer" : a && a->busy && s.connected && !s.loading && !s.nap ?
         (a->tool[0] ? a->tool : "Working") : "";
+    // The hint takes the activity's row too: a working agent would otherwise hide it behind its verb.
+    if (s.voice_retry_until && s.hint[0]) activity = "";
     // The face has a row for the name and one for `activity`, so the name stays still.
     const char *caption = a ? a->name : "Choose a pane";
     bool bell = !s.voice_retry_until && !carry.active && !carry.error[0] && !visit.available;
     unsigned unread = notice_unread(a ? a->id : NULL);
     bell = bell && unread > 0;
     char status[100];
-    if (s.voice_retry_until) COPY(status, "Try again");
+    if (s.voice_retry_until) snprintf(status, sizeof status, "%s", s.hint[0] ? s.hint : "Try again");
     else status[0] = 0;
     // Seconds since THIS DIAL heard about the turn, not since it began: turn.started carries no
-    // timestamp. The 25 s staleness fuse (ui_prune_stale_busy) is what keeps this from counting a
+    // timestamp. The staleness fuse (BUSY_FUSE_MS, ui_prune_stale_busy) is what keeps this from counting a
     // turn nobody is running any more.
     // 0 = unknown (not busy, no start stamp, or under a second): nothing is drawn. The same stamp sets the
     // redraw deadline: the text only changes when fmt_elapsed's displayed unit does (elapsed.h), not every tick.
@@ -1773,6 +1804,7 @@ static void render_home(ht_scene_t *f)
     ht_character_face_t f_ = {.recipient = caption, .status = bell ? "" : status,
         .engine = a ? a->engine : "",
         .activity = activity,
+        .chat = s.machine_view && a ? host_name(a->host) : NULL,   // the host under the name, grey on the curve
         .elapsed = since,
         .mood = character_mood(), .pose = character.motion.reaction.pose,
         .asking = a && is_question(a->id),
@@ -1788,6 +1820,8 @@ static void render_home(ht_scene_t *f)
         s.notice_ms = (clock - ht_focus_alert_pop_ms(&f_)) | 1;
         f_.notice_ms = bell ? s.notice_ms : 0;
     }
+    // A tap on an agent without V only says where it lives, so its resting face must not invite talking.
+    ht_focus_set_voice(!a || !(a->caps_off & CABLE_CAP_V));
     ht_character_face(f, &character, &f_, ACCENT, recap);
     s.pet_next_ms = ht_focus_pet_next_ms(&f_, recap);
     // The working face says it with the pet's bell bubble; the other faces keep the pill at 400.
@@ -2003,7 +2037,7 @@ static void render_question(ht_scene_t *f)
     text(f, FACE_CX(216), 109, 216, label, DIM);
     question_text(f, q->prompt);
     if (s.q.speech_error[0]) ui_wrap(f,FACE_CX(312),319,312,2,0,&ht_mono_20,ERROR,s.q.speech_error);
-    if (q->can_text) {
+    if (q->can_text && agent_allows(s.q.agent, CABLE_CAP_V)) {
         /*
      * UP TO y=336, AND THE RIM IS WHY.
      *
@@ -2523,9 +2557,11 @@ static void render_settings(ht_scene_t *f)
         const char *label = settings_item(s.offset + row, &action);
         if (!label) break;
         if (action == A_NAP) label = s.nap ? "Wake" : "Nap";
+        // An agent without V lives in another app: the dial cannot stop its turn or change its model there.
         bool enabled = action == A_INBOX || action == A_NAP ||
             (s.connected && ((action != A_STOP && action != A_MODELS && action != A_SELECT_BEGIN && action != A_LATEST) ||
-                (active() && (action != A_STOP || active()->busy) && (action != A_LATEST || !visit.pending))));
+                (active() && (action != A_STOP || active()->busy) && (action != A_LATEST || !visit.pending) &&
+                 ((action != A_STOP && action != A_MODELS) || !(active()->caps_off & CABLE_CAP_V)))));
         int y = TAB_TOP + row * TAB_ROW_HEIGHT, hit = s.hit_count++;
         s.hits[hit] = (hit_t){{LIST_HIT_X, y, LIST_HIT_W, TAB_ROW_HEIGHT}, action, 0, enabled};
         // Inter, centred in the row it is tapped in
@@ -2938,7 +2974,7 @@ static void dispatch(action_t a)
     case A_ANSWER:
         if (!question_view(s.view) || a.revision!=s.q.revision || a.dy!=s.q.index ||
             !s.q.valid || s.q.loading || s.q.pending || s.q.error[0] || strcmp(a.id,s.q.agent)) break;
-        if (a.kind==A_QUESTION_SAY && s.q.item[s.q.index].can_text) {
+        if (a.kind==A_QUESTION_SAY && s.q.item[s.q.index].can_text && agent_allows(s.q.agent, CABLE_CAP_V)) {
             a.kind=A_VOICE; a.value=4; copy(a.text,sizeof s.q.token,s.q.token);
             ht_gesture_guard(&gesture,ms()); dispatch(a);
         } else if (a.kind==A_QUESTION_CHOICES && s.view==QUESTION) view(CHOICE);
@@ -2976,6 +3012,14 @@ static void dispatch(action_t a)
             for (int k = 0; k < swarm.n && !t; k++) if (swarm_lead_index(&swarm.tabs[k], a.id) >= 0) t = &swarm.tabs[k];
             if (t) swarm_enter(t, a.id, true);
             else swarm_notice_drop(a.id);
+            break;
+        }
+        if (s.connected && a.id[0] && !agent_allows(a.id, CABLE_CAP_F)) {
+            // The agent lives in another app, so there is no window to open: go to its face, its recap still there.
+            for (int i = 0; i < s.notice_count; i++)
+                if (!strcmp(s.notice[i].agent_id, a.id)) notice_mark_read(&s.notice[i]);
+            action_t face = {.kind = A_AGENT}; COPY(face.id, a.id);
+            dispatch(face);
             break;
         }
         if (s.connected && !visit.pending && a.id[0]) {
@@ -3264,7 +3308,8 @@ static void dispatch(action_t a)
             COPY(a.id, s.stop_agent);
             queue(a);
             view(HOME);
-        } else if (s.connected && find(s.stop_agent) >= 0 && s.agents[find(s.stop_agent)].busy) {
+        } else if (s.connected && find(s.stop_agent) >= 0 && s.agents[find(s.stop_agent)].busy &&
+                   agent_allows(s.stop_agent, CABLE_CAP_V)) {   // its caps may have lost V since Stop opened
             COPY(a.id, s.stop_agent);
             queue(a);
             view(AGENT);
@@ -3706,10 +3751,20 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
              */
             ht_gesture_guard(&gesture, now);
             if (s.connected && !s.loading && (active() || swarm_mode())) {
-                ESP_LOGI("habitat", "focus touch: start voice");
-                // Built as the old microphone's was: make_action names the agent on the face, and
-                // main-surface voice without a recipient is dropped.
-                dispatch(make_action((hit_t){.action = A_VOICE}));
+                agent_t *talker = swarm_mode() ? NULL : active();
+                if (talker && (talker->caps_off & CABLE_CAP_V)) {
+                    // The agent lives in another app, so there is nobody here to hear the microphone. Say where to
+                    // go for two seconds instead, in the line "Try again" uses.
+                    snprintf(s.hint, sizeof s.hint, "See it in %s", host_name(talker->host));
+                    s.voice_retry_until = ms() + 2000;
+                    if (!s.voice_retry_until) s.voice_retry_until = 1;
+                    change();
+                } else {
+                    ESP_LOGI("habitat", "focus touch: start voice");
+                    // Built as the old microphone's was: make_action names the agent on the face, and
+                    // main-surface voice without a recipient is dropped.
+                    dispatch(make_action((hit_t){.action = A_VOICE}));
+                }
             }
         } else if (result == HT_TOUCH_TAP && pressed_action.kind == A_PET &&
                    (surface || s.view == VOICE || s.view == SELECTION)) {
@@ -4131,6 +4186,29 @@ void ui_project_set_machine(const char *id, const char *machine_id, const char *
     }
     display_unlock();
 }
+void ui_project_set_host_caps(const char *id, const char *host, uint8_t caps)
+{
+    display_lock();
+    int i = find(id);
+    if (i >= 0) {
+        uint8_t off = (uint8_t)(~caps & CABLE_CAPS_ALL);
+        if (strcmp(s.agents[i].host, host ? host : "") || s.agents[i].caps_off != off) {
+            COPY(s.agents[i].host, host);
+            s.agents[i].caps_off = off;
+            change();
+        }
+    }
+    display_unlock();
+}
+void ui_fleet_set_view(bool machine)
+{
+    display_lock();
+    if (s.machine_view != machine) {
+        s.machine_view = machine;
+        change();
+    }
+    display_unlock();
+}
 void ui_project_set_selected_model(const char *id, const char *model)
 {
     display_lock();
@@ -4241,7 +4319,7 @@ static void event(const char *id, const char *session, const char *kind, const c
     if (kind && !strcmp(kind, "activity")) {
         // Activity is a read of the current terminal, not a new turn or a recap.
         // A late read must never reanimate an idle pane.
-        if (m->busy && ms() - m->last_busy <= 25000) {
+        if (m->busy && ms() - m->last_busy <= BUSY_FUSE_MS) {
             activity_text(m->activity, sizeof m->activity, text_);
             if (a) { COPY(a->tool, m->activity); change(); }
         }
@@ -4329,7 +4407,7 @@ int ui_prune_stale_busy(void)
     int n = 0;
     uint32_t now = ms();
     for (int i = 0; i < s.count; i++)
-        if (s.agents[i].busy && now - s.agents[i].last_busy > 25000) {
+        if (s.agents[i].busy && now - s.agents[i].last_busy > BUSY_FUSE_MS) {
             s.agents[i].busy = false;
             pane_memory_t *m = pane_memory(s.agents[i].id, false);
             if (m) m->busy = false;
@@ -5663,6 +5741,7 @@ void ui_voice_error(const char *message)
         // An empty transcript sent nothing. Keep the familiar voice surface
         // available for one-tap retry, then restore its previous result/status.
         view(HOME);
+        s.hint[0] = 0;
         s.voice_retry_until = ms() + 3000;
         if (!s.voice_retry_until) s.voice_retry_until = 1;
         change();

@@ -9,6 +9,7 @@
  *   but only from an authenticated tmux context.
  * SessionEnd:   asks the adapter to reconcile the terminal; process discovery remains
  *   the authority for whether the agent exists.
+ * Outside a pane: tells the devices what the session did (postObserved), and registers nothing.
  *
  * Always exits 0 quickly and swallows every error, so it can never block or
  * delay claude's session start/teardown.
@@ -111,6 +112,11 @@ function argCopilotEvent() {
   return ['sessionStart', 'userPromptSubmitted', 'agentStop', 'sessionEnd'].includes(value) ? value : ''
 }
 
+/** Copilot's agentStop: `stopReason` is `end_turn` on a clean finish; anything else ended the loop early. */
+function copilotStopFailed(input) {
+  return typeof input.stopReason === 'string' && input.stopReason !== '' && input.stopReason !== 'end_turn'
+}
+
 /**
  * agy names its hook event nowhere in the payload, so the installer puts it on the command line.
  *
@@ -121,6 +127,18 @@ function argAgyEvent() {
   const i = process.argv.indexOf('--agy-event')
   const value = i !== -1 ? process.argv[i + 1] : ''
   return value === 'PreInvocation' || value === 'Stop' ? value : ''
+}
+
+/**
+ * agy's Stop: 'waiting' while its sub-agents still work (`fullyIdle: false`, the agy branch of main() says why),
+ * 'error' when the loop ended early (`terminationReason` is NO_TOOL_CALL on a clean finish), else undefined.
+ */
+function agyStopStatus(input) {
+  const failed = typeof input.terminationReason === 'string'
+    && input.terminationReason !== ''
+    && input.terminationReason !== 'NO_TOOL_CALL'
+    && input.terminationReason !== 'model_stop'
+  return input.fullyIdle === false ? 'waiting' : failed || input.error ? 'error' : undefined
 }
 
 function paths() {
@@ -440,6 +458,110 @@ function post(port, path, body, onResponse) {
     req.write(payload)
     req.end()
   })
+}
+
+/**
+ * post() for a session outside a pane, which only the devices hear of (core/observedHook.ts): written, never waited on.
+ * The engine waits for this hook, and nothing in the daemon's answer changes what the hook does. So it resolves once
+ * the request is handed to the socket ('finish'), which the exit in main()'s finally then cannot cut, or after 150 ms,
+ * so a daemon that takes the request and never answers cannot hold the engine.
+ */
+function postObserved(port, body) {
+  return new Promise((resolve) => {
+    const route = hookRoute(port)
+    if (!route) { resolve(); return }
+    const payload = JSON.stringify(body)
+    const req = http.request({
+      ...route.address,
+      path: '/api/hook/observed',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload), ...route.headers },
+    })
+    setTimeout(resolve, 150)
+    req.on('finish', resolve)
+    req.on('error', resolve)
+    req.end(payload)
+  })
+}
+
+/**
+ * Which app a session outside a pane runs in, from the environment the engine gave this hook: these names exactly,
+ * never by prefix. Orca also sets ORCA_PAIRING_CODE and ORCA_AGENT_SESSION_SPAWN_TOKEN there (read on an Orca 1.4.256
+ * session, 2026-11-13), and they must never leave this process.
+ */
+const HOST_HINTS = ['TERM_PROGRAM', '__CFBundleIdentifier', 'HERDR_PANE_ID', 'REX_BLOCK', 'ZELLIJ', 'KITTY_WINDOW_ID',
+  'WEZTERM_PANE', 'ORCA_AGENT_SESSION_ID']
+
+/** A character the core refuses in a path or hint (core/observedHook.ts): one there is forged. */
+const CONTROL = /[\u0000-\u001f\u007f]/
+
+function hostHints() {
+  const hints = {}
+  for (const name of HOST_HINTS) {
+    // The core refuses a whole event with more than 8 hints (as many as this list), one over 64 characters or one
+    // with a control character (core/observedHook.ts): that hint is left out instead.
+    const value = process.env[name]?.slice(0, 64)
+    if (value && !CONTROL.test(value)) hints[name] = value
+  }
+  return hints
+}
+
+/** Each engine's name for these moments, as main() reads them in a pane: Claude Code's and the engines that copy it
+ *  (Grok's once grokHookEvent has named them), Cursor's and Copilot's lower-camel ones. */
+const OBSERVED_EVENTS = new Map([
+  ['SessionStart', 'session-start'], ['sessionStart', 'session-start'],
+  ['UserPromptSubmit', 'turn-start'], ['beforeSubmitPrompt', 'turn-start'], ['userPromptSubmitted', 'turn-start'],
+  ['Stop', 'turn-stop'], ['StopFailure', 'turn-error'],
+  ['SessionEnd', 'session-end'], ['sessionEnd', 'session-end'],
+])
+
+/** Claude Code's Notification types that wait for the person's answer: a permission, an MCP server's question or
+ *  link, or a resume after the quota ran out. */
+const NEEDS_INPUT = ['permission_prompt', 'elicitation_dialog', 'elicitation_url_dialog', 'quota_auto_resume_stale']
+
+/** A paneless hook's event in the devices' words (core/observedHook.ts); null for one that says none of them. */
+function observedEvent(engine, event, input) {
+  const name = engine === 'copilot' ? argCopilotEvent() : engine === 'agy' ? argAgyEvent() : engine === 'grok' ? grokHookEvent(event) : event
+  if (engine === 'copilot' && name === 'agentStop') return copilotStopFailed(input) ? 'turn-error' : 'turn-stop'
+  if (engine === 'cursor' && name === 'stop') return input.status === 'error' ? 'turn-error' : 'turn-stop'
+  if (engine === 'agy' && name === 'Stop') {
+    const status = agyStopStatus(input)
+    // Waiting for its sub-agents: the turn goes on.
+    return status === 'waiting' ? null : status === 'error' ? 'turn-error' : 'turn-stop'
+  }
+  // agy's call of its model, and Command Code's tool call, are the only signs those engines give of a turn running.
+  if (name === 'PreInvocation' || (engine === 'commandcode' && (name === 'PreToolUse' || name === 'preToolUse'))) return 'turn-start'
+  // Grok writes its Stop before the turn's last words (its branch in main()).
+  if (engine === 'grok' && name === 'Stop') return null
+  // Claude Code also says idle_prompt a minute after a finished turn, and auth_success: no answer is waited for, and a
+  // done agent stays done. One too old to name its type sends that idle notice untyped too, so it says nothing.
+  if (name === 'Notification') return NEEDS_INPUT.includes(input.notification_type) ? 'needs-input' : null
+  return OBSERVED_EVENTS.get(name) ?? null
+}
+
+/**
+ * What a paneless session's hook tells the devices: which session, what happened and where, never its prompt. A path
+ * the core would refuse (over 1024 characters, or with a control character) is left out rather than cost the whole
+ * event (core/observedHook.ts), and so are the paths of a body over the 4096 bytes the core reads (hookServer.ts):
+ * the transcript's first, as the devices can do without it, then the folder.
+ */
+function observedBody(engine, event, input) {
+  const kind = observedEvent(engine, event, input)
+  const sessionId = input.session_id || input.conversation_id || input.sessionId || input.conversationId
+  if (!kind || typeof sessionId !== 'string') return null
+  const path = (value) => typeof value === 'string' && value.length <= 1024 && !CONTROL.test(value) ? value : undefined
+  // Devin's payload carries no cwd; the hook process inherits the session's working directory.
+  const cwd = Array.isArray(input.workspace_roots) ? input.workspace_roots[0]
+    : Array.isArray(input.workspacePaths) ? input.workspacePaths[0]
+      : input.cwd || input.workspaceRoot || (engine === 'devin' ? process.cwd() : undefined)
+  const body = {
+    engine, sessionId, event: kind, cwd: path(cwd), callerPid: process.ppid,
+    transcriptPath: path(input.transcript_path || input.transcriptPath), hostHints: hostHints(),
+  }
+  const fits = () => Buffer.byteLength(JSON.stringify(body)) <= 4096
+  if (!fits()) delete body.transcriptPath
+  if (!fits()) delete body.cwd
+  return body
 }
 
 /** Mirrors syncStateDirectory in src/lib/secureState.ts: Windows cannot flush a directory handle (EPERM), and NTFS
@@ -1801,11 +1923,15 @@ async function main() {
 
   const event = input.hook_event_name || input.hookEventName
   const tmuxPane = process.env.TMUX_PANE
-  // A pane is required: tmux's, or a pty host's (Windows). Routing to another daemon and the offline registry
-  // fallback read tmux; from a pty host pane they find nothing and the daemon's own scan reconciles.
-  if (!tmuxPane && !PTY_PANE) return
+  // A pane: tmux's, or a pty host's (Windows). Routing to another daemon and the offline registry fallback read
+  // tmux; from a pty host pane they find nothing and the daemon's own scan reconciles. A session outside a pane is
+  // told only to the devices, below, after the engine guards: it registers nothing.
+  const paneless = !tmuxPane && !PTY_PANE
+  // Notification is installed for the session outside a pane, to say it waits for the person. In a pane nothing is
+  // told, as before it was installed.
+  if (!paneless && event === 'Notification') return
   // Before anything reads the data folder or posts: which daemon this pane is (routeToPaneOwner).
-  if (await routeToPaneOwner(tmuxPane)) port = argPort()
+  if (!paneless && await routeToPaneOwner(tmuxPane)) port = argPort()
   const mutationFields = { engine, ...terminalHookFields(tmuxPane) }
   if (engine === 'cursor' && input.is_background_agent === true) return
   if (engine === 'codex' && isCodexSubagent(input, paths())) return
@@ -1815,6 +1941,14 @@ async function main() {
   // `--engine devin`; drop the claude-armed duplicate. Cheap and scoped: a real claude session has a UUID
   // session id and no Devin lock file.
   if (engine === 'claude' && isDevinSession(input, paths())) return
+
+  if (paneless) {
+    // agy's sub-agents fire hooks of their own; only a top-level conversation is a session (agyIsPaneConversation).
+    if (engine === 'agy' && !agyIsPaneConversation(paths(), input.conversationId)) return
+    const body = observedBody(engine, event, input)
+    if (body) await postObserved(port, body)
+    return
+  }
 
   // Grok's hook payload and event records are camelCase, while every Claude-compatible engine above is
   // snake_case. Its Stop hook is deliberately NOT installed: Grok persists that hook_execution before
@@ -1838,10 +1972,8 @@ async function main() {
       return
     }
     if (copilotEvent === 'agentStop') {
-      // `stopReason` is `end_turn` on a clean finish; anything else ended the loop early.
-      const failed = typeof input.stopReason === 'string' && input.stopReason !== '' && input.stopReason !== 'end_turn'
       await post(port, '/api/hook/turn-stop', {
-        sessionId, transcriptPath, status: failed ? 'error' : undefined, ...mutationFields,
+        sessionId, transcriptPath, status: copilotStopFailed(input) ? 'error' : undefined, ...mutationFields,
       })
       return
     }
@@ -1890,13 +2022,7 @@ async function main() {
       // A waiting Stop is still REPORTED, as `status: 'waiting'`, rather than swallowed: one measured run
       // finished its sub-agents and never sent another Stop at all, leaving the turn open with nothing
       // coming to close it. The daemon uses this to arm a pane-idle backstop.
-      // `terminationReason` is NO_TOOL_CALL on a clean finish; anything else ended the loop early.
-      const failed = typeof input.terminationReason === 'string'
-        && input.terminationReason !== ''
-        && input.terminationReason !== 'NO_TOOL_CALL'
-        && input.terminationReason !== 'model_stop'
-      const status = input.fullyIdle === false ? 'waiting' : failed || input.error ? 'error' : undefined
-      await post(port, '/api/hook/turn-stop', { sessionId, transcriptPath, status, ...mutationFields })
+      await post(port, '/api/hook/turn-stop', { sessionId, transcriptPath, status: agyStopStatus(input), ...mutationFields })
       return
     }
     const body = {
