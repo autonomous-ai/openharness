@@ -35,8 +35,8 @@ working in. The app he is working in is the one in front, and the computer alrea
 5. **The dial follows the app in front** once it has stayed in front for 1 s. An app in front with no agents changes
    nothing. A pick on the dial wins until the person brings another app to the front.
 6. **The shown app's name is on the face.**
-7. **Needs-you in another app:** proposed below (§ Needs-you elsewhere), for the PM to approve.
-8. **Whether the pick survives a replug or a daemon restart:** proposed below (§ Memory), for the PM to approve.
+7. **Needs-you in another app:** option A (§ Needs-you elsewhere), approved by the PM on 2026-11-14.
+8. **Whether the pick survives a replug or a daemon restart:** option A (§ Memory), approved by the PM on 2026-11-14.
 - **Which app is in front is private.** It goes only from the Harness Device app to the devices process, never to the
   backend, the phone or a log. The log line is `app filter: switched` and never names the app.
 - **The Harness Device app reports the app in front** when the OS says it changed. There is no polling, no osascript
@@ -105,10 +105,13 @@ working in. The app he is working in is the one in front, and the computer alrea
     agents are all not known yet is shown by default only when no other app has an agent; a pick or the front can
     still show it.
 - **The scan learns the app where that is cheap** (the PM, 2026-11-15): with no new permission, by walking the
-  session's parent processes (`ppid`) and reading only each one's executable name or path (`ps -o ppid=,comm=`;
-  Linux `/proc/<pid>/stat`, `comm` or the `exe` link), mapped to an app with the existing bundle and exe tables (a
-  `.app` path's bundle id comes from that app's `Info.plist`). Nothing else of a process is read, stored, logged or
-  sent. Where this is not cheap or not reliable on a platform, that platform waits for the first hook (Follow-ups).
+  session's parent processes (`ppid`) and reading only each one's executable name or path. The scan runs its own
+  `ps -axo pid=,ppid=,comm=` (`comm` last, so macOS prints the whole path, not 16 characters), and only on a scan
+  with sessions whose app is not known yet. Each name is mapped to an app with the existing bundle and exe tables (a
+  `.app` path's bundle id comes from that app's `Info.plist`). A bundle that was not read (past the pass's bound, or
+  unreadable) ends that walk: the app stays not known yet, never an outer app's guess. Nothing else of a process is
+  read, stored, logged or sent. Where this is not cheap or not reliable on a platform, that platform waits for the
+  first hook (Follow-ups).
 - **Never read another process's environment** (the PM, 2026-11-15, a hard rule): no `ps eww`, `ps -E`,
   `/proc/<pid>/environ` or anything equivalent, not even to read and discard at once. An environment holds secrets
   (`ORCA_PAIRING_CODE`, `ORCA_AGENT_SESSION_SPAWN_TOKEN`, API tokens).
@@ -151,7 +154,8 @@ The state is `shown`, `pickedOnDial` (a boolean), `tieBreak` (the app drawn and 
    is ignored. The filter still follows the app in front (step 2) meanwhile, so when the window closes the dial shows
    the app in front, if it has agents.
 
-Every change of `shown` writes the log line `app filter: switched` and counts once in the measures.
+Every switch from one app to another writes the log line `app filter: switched` and counts once in the measures. The
+first app shown, and going to none when every agent has ended, are no switch and write nothing.
 
 ### The wire (cable protocol, optional, both ways)
 
@@ -196,7 +200,7 @@ Every change of `shown` writes the log line `app filter: switched` and counts on
   uses the nearest host.
 - Without `apps` (an older daemon), it stays `host_name(a->host)`.
 
-### Needs-you elsewhere (decision 7, proposed)
+### Needs-you elsewhere (decision 7, approved)
 
 Options:
 
@@ -205,12 +209,12 @@ Options:
 - B. As A, plus the face shows a small dot when another app has an agent waiting.
 - C. The dial switches to that app by itself.
 
-**Proposed: A.** The person already hears needs-you through the bell and the notice, which say the app ("Waiting
-for you · Orca"). C makes the dial jump under the finger, and the swipe-order fix exists to stop that. B adds UI on a
-face that already has the bell for this. A needs one new behavior: a notice opens its agent across apps. If the
+**A** (the PM, 2026-11-14). The person already hears needs-you through the bell and the notice, which say the app
+("Waiting for you · Orca"). C makes the dial jump under the finger, and the swipe-order fix exists to stop that. B adds
+UI on a face that already has the bell for this. A needs one new behavior: a notice opens its agent across apps. If the
 inbox cannot open an agent today, the plan adds that one action and nothing else.
 
-### Memory (decision 8, proposed)
+### Memory (decision 8, approved)
 
 Options:
 
@@ -219,9 +223,9 @@ Options:
 - B. On disk in the devices process (one host id).
 - C. In the dial's NVS.
 
-**Proposed: A.** Following the app in front finds the right app again within 1 s of the person's next app switch, so
-little is lost. B and C store a person's choice that A never stores, and C also needs a firmware setting and a
-desktop change. The rings are memory only too, as swipe-order decided.
+**A** (the PM, 2026-11-14). Following the app in front finds the right app again within 1 s of the person's next app
+switch, so little is lost. B and C store a person's choice that A never stores, and C also needs a firmware setting
+and a desktop change. The rings are memory only too, as swipe-order decided.
 
 ### Which app is in front (`device-app/`)
 
@@ -255,13 +259,19 @@ desktop change. The rings are memory only too, as swipe-order decided.
   socket of the devices process for every message a local tool sends the devices, so later device routes (#4296's
   follow-up: `asked`, the mod's inbox, `observed`) only register a handler of their own. It:
   - runs only in the devices process and is open only while that process runs; the core neither opens nor knows it;
-  - is a Unix socket in the data folder with mode 0600 (a short folder when the path is too long, as the core's own
-    socket does), and accepts a connection only from this computer's owner (the peer's uid, as the core's local socket
-    checks it); Windows' named pipe comes with the Harness Device app for Windows (Follow-ups);
+  - is a Unix socket with mode 0600 in a folder that is this account's alone (the data folder, or a short folder when
+    the path is too long), so the kernel refuses another account's connect, as for the core's own socket; nothing reads
+    a peer's uid, and the client checks the socket's owner and mode before it sends; Windows' named pipe comes with the
+    Harness Device app for Windows (Follow-ups);
   - registers handlers by message type, each with its own body limit and rate limit; an unknown type, a body over its
     limit or a frame over its rate is dropped and counted, never echoed or logged with its content;
-  - `front`'s handler takes `app` only from the fixed set or `none`, at most 10 a second per connection, keeps no
-    state of its own and logs no app name; it hands the app id to the cable host.
+  - `front`'s handler takes `app` only from the fixed set or `none`, keeps no state of its own and logs no app name;
+    it hands the app id to the cable host;
+  - bounds every sender: per connection at most 10 messages of a type in any 1000 ms (a sliding window), across the
+    listener at most 160 `front` a second, and past 100 dropped messages in a second a request is refused (429) before
+    its body is read; a connection idle, or slow through its headers or request, is closed after 2 s.
+- The devices process starts the cable once the listener has opened, or after 1 s, so a dial that attaches finds it
+  open.
 
 ## Data
 
@@ -270,8 +280,9 @@ desktop change. The rings are memory only too, as swipe-order decided.
   and as an app id in the devices process's memory. The shown app's name and the counts go to the dial over USB.
 - **Kept:** in memory only. Nothing is written to disk, a log, an error, a measure, the backend, the phone or the
   gateway.
-- **Bounded:** 16 apps, 16 agents per ring, 10 `front` messages per second per connection, values cut to 128
-  characters, each listener message type with its own body limit.
+- **Bounded:** 16 apps, 16 agents per ring, at most 10 `front` messages in any 1000 ms per connection and 160 a second
+  across the listener, 100 dropped messages a second before requests are refused unread, idle or slow connections
+  closed after 2 s, values cut to 128 characters, each listener message type with its own body limit.
 
 ## Measures
 
@@ -286,8 +297,12 @@ The devices process's existing counters, with no app name and no agent id:
 - Harness Desktop reporting the app in front, for people who run the desktop app without the Harness Device app.
 - The Windows source of the app in front, with the wave that builds the Harness Device app for Windows. Until then a
   dial on Windows filters by app and takes a pick, and does not follow the app in front.
-- Cursor outside macOS: its agents say `TERM_PROGRAM=vscode` there, so they are in VS Code's ring, and Cursor in front
-  is followed nowhere.
+- Cursor outside macOS: its hooks say `TERM_PROGRAM=vscode` there, so its agents are in VS Code's ring. On Linux the
+  scan names a Cursor agent `cursor` (its `comm`), so that agent moves to VS Code's ring at its first hook.
+- `WM_CLIENT_MACHINE` on X11: a window forwarded with `ssh -X` carries the remote host's `_NET_WM_PID`, which the local
+  `/proc` can match to an unrelated process. The source could give `""` when the machine is not this one.
+- The watch's owed tell is not retried: if the listener refuses it, the dial waits for the next app in front or the
+  next attach.
 - Wayland.
 - A setting to turn the filter or the following off.
 - Harness Pro.
