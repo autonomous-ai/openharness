@@ -12,6 +12,10 @@ use url::Url;
 /// The sign-in screen's words when the CLI gave no `result`, or none in time.
 pub const NO_RESULT: &str = "Sign-in did not finish.";
 
+/// How long `harness login` has after SIGTERM before its group is killed: it waits up to 3 s to take its code back,
+/// then exits.
+const TERM_GRACE: Duration = Duration::from_secs(5);
+
 /// Whether this computer is signed in; `None` when the CLI could not say.
 pub fn auth_status(cli: &dyn Cli) -> Option<bool> {
     auth_status_within(cli, STATUS_DEADLINE)
@@ -54,10 +58,12 @@ pub struct Login {
 }
 
 impl Login {
-    /// Kills the child before its `result`. After it, `harness login` is restarting the daemon, so this does nothing.
+    /// Ends the child before its `result`. After it, `harness login` is restarting the daemon, so this does nothing.
     pub fn cancel(&self) {
         if let Some(killer) = self.live.lock().unwrap().take() {
-            killer.kill();
+            // SIGTERM first, as the desktop app sends: `harness login` then takes its code back, and its spawn lock's
+            // exit hook runs.
+            killer.stop(TERM_GRACE);
             self.log.line("sign-in: cancelled");
         }
     }
@@ -92,7 +98,8 @@ fn login_within(
     Ok(login)
 }
 
-/// Sends the child's events until its `result`, its output's end, the deadline (which kills it) or a cancel.
+/// Sends the child's events until its `result`, its output's end, the deadline (which ends it as a cancel does) or a
+/// cancel.
 fn until_result(
     child: &mut Child,
     live: &Mutex<Option<Killer>>,
@@ -140,7 +147,7 @@ fn until_result(
                 Err(NO_RESULT.into())
             }
             Err(Timeout) => {
-                killer.kill();
+                killer.stop(TERM_GRACE);
                 log.line("sign-in: no result");
                 Err(NO_RESULT.into())
             }

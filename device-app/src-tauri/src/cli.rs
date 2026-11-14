@@ -280,6 +280,15 @@ impl Killer {
         }
     }
 
+    /// SIGTERM to the child alone, which it may catch to clean up, then `kill_after(grace)`.
+    pub fn stop(&self, grace: Duration) {
+        if let Some(pid) = *self.0.pid.lock().unwrap() {
+            // SAFETY: kill only sends a signal, to an unreaped child's own pid.
+            unsafe { libc::kill(pid, libc::SIGTERM) };
+        }
+        self.kill_after(grace);
+    }
+
     /// Kills the group unless the child is reaped within `grace`, on a thread of its own: for a child asked to end,
     /// which may not.
     pub fn kill_after(&self, grace: Duration) {
