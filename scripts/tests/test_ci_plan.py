@@ -125,9 +125,13 @@ class SelectionTests(unittest.TestCase):
         job = jobs["device-app-checks"]
         for text in ("libwebkit2gtk-4.1-dev", "libayatana-appindicator3-dev", "librsvg2-dev",
                      "working-directory: device-app/ui", "npx vitest run", "npm run build",
-                     "cargo test --locked --manifest-path device-app/src-tauri/Cargo.toml"):
+                     "cargo test --locked --manifest-path device-app/src-tauri/Cargo.toml",
+                     "xvfb", "openbox", "xdotool", "xterm", "--ignored x11_live", "x11_live ... ok"):
             self.assertIn(text, job)
         self.assertLess(job.index("npm run build"), job.index("cargo test"))  # the binary embeds ui/dist
+        # The live X11 step reuses the unit tests' build.
+        self.assertLess(job.index("cargo test --locked --manifest-path device-app/src-tauri/Cargo.toml"),
+                        job.index("X11 front source, live"))
         self.assertNotIn("macos", job)
 
     def test_the_cli_ptyhost_backend_and_the_vendored_terminal_also_belong_to_the_pty_suite(self):
