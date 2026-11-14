@@ -27,7 +27,8 @@ const SPINNER: Body = { kind: 'spinner' }
 const RETRY: Button = { label: 'Retry', action: 'retry', primary: true }
 const CANCEL: Button = { label: 'Cancel', action: 'cancel' }
 
-// Rust never sends a pair missing here; one would draw nothing.
+// Rust never sends a pair missing here; one would draw nothing. Buttons are in the order drawn: secondary first,
+// primary last, as the desktop's dialogs (swarm_dialogs.dart).
 const FACES: Partial<Record<`${Screen}.${Phase}`, Face>> = {
   'install.working': { heading: 'Setting up Harness', body: SPINNER, buttons: [] },
   'install.failed': {
@@ -38,7 +39,7 @@ const FACES: Partial<Record<`${Screen}.${Phase}`, Face>> = {
   'sign_in.offer': {
     heading: 'Sign in',
     body: { kind: 'sentences', text: ['Add your other computers to the dial.'] },
-    buttons: [{ label: 'Sign in', action: 'sign_in', primary: true }, { label: 'Later', action: 'later' }],
+    buttons: [{ label: 'Later', action: 'later' }, { label: 'Sign in', action: 'sign_in', primary: true }],
   },
   'sign_in.working': { heading: 'Sign in', body: SPINNER, buttons: [CANCEL] },
   'sign_in.browser': { heading: 'Finish in your browser', body: { kind: 'note' }, buttons: [CANCEL] },
@@ -49,7 +50,7 @@ const FACES: Partial<Record<`${Screen}.${Phase}`, Face>> = {
       kind: 'sentences',
       text: ["The dial speaks Claude Code's answers and asks its approvals.", "Harness adds hooks to Claude Code's settings."],
     },
-    buttons: [{ label: 'Turn on', action: 'turn_on', primary: true }, { label: 'Not now', action: 'not_now' }],
+    buttons: [{ label: 'Not now', action: 'not_now' }, { label: 'Turn on', action: 'turn_on', primary: true }],
   },
   'claude.working': { heading: 'Claude Code', body: SPINNER, buttons: [] },
   'claude.failed': { heading: 'Claude Code', body: { kind: 'error' }, buttons: [RETRY] },

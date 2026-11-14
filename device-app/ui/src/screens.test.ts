@@ -61,7 +61,7 @@ describe('screens', () => {
     await mount(at('sign_in', 'offer'))
     expect(heading()).toBe('Sign in')
     expect(text()).toContain('Add your other computers to the dial.')
-    expect(buttons()).toEqual(['Sign in', 'Later'])
+    expect(buttons()).toEqual(['Later', 'Sign in'])
     click('Sign in')
     expect(act).toHaveBeenCalledWith('sign_in')
 
@@ -98,7 +98,7 @@ describe('screens', () => {
     expect(heading()).toBe('Claude Code')
     expect(text()).toContain("The dial speaks Claude Code's answers and asks its approvals.")
     expect(text()).toContain("Harness adds hooks to Claude Code's settings.")
-    expect(buttons()).toEqual(['Turn on', 'Not now'])
+    expect(buttons()).toEqual(['Not now', 'Turn on'])
     click('Turn on')
     expect(act).toHaveBeenCalledWith('turn_on')
 

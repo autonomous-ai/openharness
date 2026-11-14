@@ -1338,7 +1338,8 @@ with this document's tokens and type:
 - Type: dialog heading 17 semibold, 1.3; body 13, 1.45; control 13 medium,
   1.25; metadata 12, 1.35; monospace for the install's last lines.
 - Geometry: dialog content inset 24; group / control gap 16 / 8; buttons are
-  capsules, 32 high at least. The spinner stands still under Reduce Motion.
+  capsules, 32 high at least, trailing: secondary first, primary last, as the
+  desktop's dialogs. The spinner stands still under Reduce Motion.
 - The menu-bar icon is Lucide `circle-dot`, a template image
   (`device-app/src-tauri/icons/tray.png`): black on a light bar, white on a dark one.
 
