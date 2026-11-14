@@ -102,7 +102,7 @@ try {
     // Docker picks the host port as it binds it, and says which.
     await exec('docker', [...docker, 'run', '--rm', '-d', '--name', name,
       '-p', `127.0.0.1::${port}`, image, ...args], { timeout: 120_000 })
-    const { stdout } = await exec('docker', [...docker, 'port', name, `${port}/tcp`])
+    const { stdout } = await exec('docker', [...docker, 'port', name, `${port}/tcp`], { timeout: 30_000 })
     const bound = /:(\d+)\s*$/m.exec(stdout)?.[1]
     if (!bound) throw new Error(`docker port ${name} ${port}/tcp said no port: ${stdout.trim()}`)
     published.push(Number(bound))
