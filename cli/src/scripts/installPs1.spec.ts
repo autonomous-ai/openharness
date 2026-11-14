@@ -395,8 +395,10 @@ describe.runIf(windows)('install.ps1, installing for real from a local manifest'
     })
   }
 
-  let native: Promise<string> | undefined
-  const platform = () => (native ??= ps('Get-HarnessPlatform').then((run) => run.stdout))
+  // Asked once for the file, and kept only once answered: a kept failure (a call that timed out) would fail every
+  // later case with it.
+  let native: string | undefined
+  const platform = async () => (native ??= (await ps('Get-HarnessPlatform')).stdout)
   const freshKey = () => {
     const subkey = `Software\\HarnessInstallTest\\${randomUUID()}`
     subkeys.push(subkey)
