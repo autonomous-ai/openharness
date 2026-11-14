@@ -4086,9 +4086,10 @@ describe('the machine list with no window', () => {
 
 
 describe('what the dial cannot do for an agent', () => {
-  // a1 is in Orca, heard from its hooks (`s`); a2 is a Harness agent with no window (`sva`).
-  const CAPS: Record<string, string> = { a1: 's', a2: 'sva' }
-  const HOSTS: Record<string, string> = { a1: 'orca', a2: 'harness' }
+  // a1 is in Orca, heard from its hooks (`s`); a2 is a Harness agent with no window (`sva`); o1 is in Orca, which a tap
+  // can bring forward (`sf`).
+  const CAPS: Record<string, string> = { a1: 's', a2: 'sva', o1: 'sf' }
+  const HOSTS: Record<string, string> = { a1: 'orca', a2: 'harness', o1: 'orca' }
   const caps = (over: Partial<CableHost> = {}) => makeHost({
     capsOf: (id) => CAPS[id], hostOf: (id) => HOSTS[id], markSeen: vi.fn(), ...over,
   })
@@ -4293,6 +4294,30 @@ describe('what the dial cannot do for an agent', () => {
       expect(toasts(port)).toEqual([])
       port.say({ t: 'agent.open', agentId: 'a1' })
       await vi.waitFor(() => expect(toasts(port)).toEqual([{ t: 'toast', text: 'Orca did not open it.' }]))
+    } finally { await session.stop() }
+  })
+
+  // No window moves for an agent in another app, so no window's focus brings the dial along: the tap's open does.
+  it('a tap that opens an agent in another app moves the dial to it; a failed open or a question screen does not', async () => {
+    let opened = true
+    const openAgent = vi.fn(async (_id: string, reason?: string) =>
+      reason || opened ? undefined : { ok: false as const, error: 'Orca did not open it.' })
+    const { session, port } = await greeted(caps({ openAgent }))
+    const focuses = () => port.sent.filter((m) => m.t === 'focus')
+    try {
+      port.sent.length = 0
+      port.say({ t: 'agent.open', agentId: 'o1', reason: 'question' })
+      port.say({ t: 'agent.open', agentId: 'a2' })
+      await vi.waitFor(() => expect(openAgent).toHaveBeenCalledTimes(2))
+      await settle()
+      expect(focuses()).toEqual([])
+      port.say({ t: 'agent.open', agentId: 'o1' })
+      await vi.waitFor(() => expect(focuses()).toEqual([{ t: 'focus', agentId: 'o1' }]))
+      opened = false
+      port.sent.length = 0
+      port.say({ t: 'agent.open', agentId: 'o1' })
+      await vi.waitFor(() => expect(toasts(port)).toEqual([{ t: 'toast', text: 'Orca did not open it.' }]))
+      expect(focuses()).toEqual([])
     } finally { await session.stop() }
   })
 
