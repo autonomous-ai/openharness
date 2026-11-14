@@ -317,12 +317,12 @@ describe.skipIf(!process.env.HARNESS_E2E_SERVICES_DIR)('the Swarm v4 journey, on
     step(context)
     const rows = async () => (await A.client.request<{ agents: Array<Record<string, any>> }>('agents_list', {}, 30_000)).agents
     const active = async (name: 'Pip' | 'Faye') => (await rows()).some(a => a.id === agents[name]!.harnessId && a.status === 'active')
-    expect(await active('Pip')).toBe(true)
     // As Desktop's Remove does when Your Team is the session's last place (desktop/lib/super_tabs/remove_agent.dart): the quiet
     // close of a pane's last view, then the removal, which stops nothing on the computer (#4078). Pip answered and waits, so
-    // the close is not refused as a working session's is.
-    const pip = (await rows()).find(a => a.id === agents.Pip.harnessId)!
-    const closed = await A.client.request('agent_close', { agentId: pip.id, sessionId: pip.sessionId, createdAt: pip.createdAt, mode: 'idle' }, 60_000)
+    // the close is not refused as a working session's is. The close names the row read as running.
+    const pip = (await rows()).find(a => a.id === agents.Pip.harnessId)
+    expect(pip?.status, JSON.stringify(pip)).toBe('active')
+    const closed = await A.client.request('agent_close', { agentId: pip!.id, sessionId: pip!.sessionId, createdAt: pip!.createdAt, mode: 'idle' }, 60_000)
     expect(closed, JSON.stringify(closed)).toMatchObject({ closed: true })
     await until('Pip\'s session to stop on its computer', async () => (await active('Pip')) ? null : true, 120_000, 1_000)
     await command({ type: 'agent.remove', agentId: agents.Pip.id })
