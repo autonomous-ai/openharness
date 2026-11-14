@@ -1502,10 +1502,14 @@ export class CableSession {
         // so it waits on this — briefly, and off its own UI task.
         const agentId = str('agentId') ?? ''
         let items: string[] = []
-        try {
-          items = await this.host.listModels(agentId)
-        } catch (err) {
-          this.log(`cable: models for ${agentId} failed (${(err as Error).message})`)
+        if (this.lacks(agentId, 'v')) {
+          await this.toast(`This agent is in ${this.hostName(agentId)}. Changing its model from the device comes in an update.`)
+        } else {
+          try {
+            items = await this.host.listModels(agentId)
+          } catch (err) {
+            this.log(`cable: models for ${agentId} failed (${(err as Error).message})`)
+          }
         }
         // Answered either way. An empty catalog closes the dial's picker cleanly; silence strands it on a
         // spinner until its own timeout, which reads as a hang rather than "this engine has no choices".
@@ -1685,9 +1689,16 @@ export class CableSession {
       case 'turn.send':
         if (str('agentId') && str('text')) this.host.sendTurn(str('agentId')!, str('text')!)
         return
-      case 'turn.stop':
-        if (str('agentId')) this.host.stopTurn(str('agentId')!)
+      case 'turn.stop': {
+        const agentId = str('agentId')
+        if (!agentId) return
+        if (this.lacks(agentId, 'v')) {
+          await this.toast(`This agent is in ${this.hostName(agentId)}. Stopping it from the device comes in an update.`)
+          return
+        }
+        this.host.stopTurn(agentId)
         return
+      }
       case 'draft.command': {
         const id = str('draftId'), requestId = str('requestId'), op = str('op'), revision = msg.revision
         if (!id || !requestId || requestId.length > 64 || !op || !Number.isSafeInteger(revision)) return
