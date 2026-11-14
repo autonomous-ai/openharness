@@ -32,8 +32,10 @@ The rules AGENTS.md carried until 2026-11-11; the sections below have the detail
   `harness-train/` branch; add the `hold` label to keep a PR out. A train carries each member's local check receipts at
   that member's head; one without them keeps the train red.
 - Merge by hand with `make merge-pr ARGS="N --reviewed-head SHA --reviewed-base SHA --merge"`. No `--queue`, no
-  `--run/--scope`. Never replay an uncertain merge; inspect the PR. If `main` moves, integrate it, review the combined
-  change, rerun only newly affected checks, and finish the authorized merge without asking again.
+  `--run/--scope`. Never replay an uncertain merge; inspect the PR. If `make merge-pr` refuses only because `main`
+  moved, and the required checks are green on the head and GitHub shows the PR mergeable with no conflict, merge with
+  `gh pr merge <PR> --squash --admin --match-head-commit <head>`. On a conflict, integrate `main`, review the combined
+  change, rerun only the affected checks, and finish the authorized merge without asking again.
 - Once required checks pass, do the authorized merge or release without another validation cycle, then verify the
   published versions and checksums. A release failure is a code failure: fix it and cut the next version; never move a
   published tag.
@@ -622,13 +624,16 @@ actually enforces a queue, the helper detects its rule and uses it, verifying th
 merged tree against successful candidate CI. Explicit `--queue` is only for an
 intentionally configured queue, such as a disposable integration trial.
 
-If `main` moved before a direct merge, inspect and integrate the new source, then
-supply the updated reviewed head/base. Reuse validation only for unchanged inputs;
-rerun checks affected by the integration. This is routine handling of concurrent
-merges: continue the user's already-authorized merge without asking for permission
-again. A quiet branch takes the direct path immediately after checks and review;
-concurrent changes require only the additional review and validation they affect.
-Do not enable or disable a queue based on the number of open PRs or running jobs.
+If the helper refuses only because `main` moved ("main moved since review; inspect
+the new source before merging"), and the required checks are green on the head and
+GitHub shows the PR mergeable with no conflict, merge with
+`gh pr merge <PR> --squash --admin --match-head-commit <head>`. On a conflict,
+integrate `main`, review the combined change, then supply the updated reviewed
+head/base. Reuse validation only for unchanged inputs; rerun only the checks the
+integration affects. This is routine handling of concurrent merges: continue the
+user's already-authorized merge without asking for permission again. A quiet branch
+takes the direct path immediately after checks and review. Do not enable or disable
+a queue based on the number of open PRs or running jobs.
 
 A changed head/target, missing coverage,
 failed/skipped required jobs or a lost response cannot report success. Inspect an
