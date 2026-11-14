@@ -28,7 +28,7 @@ import { cableEventFor, cableStepFor, cableQuestionCloseFor, cableQuestionFor, D
 import { CableSession, SHOWN_ONLY_PREFIX } from '../cable/cableSession.js'
 import { Inbox } from '../cable/hosts/inbox.js'
 import { LAST_ANSWER_DEADLINE_MS, LAST_ANSWER_MAX_BYTES, readLastAnswer } from '../cable/hosts/lastAnswer.js'
-import { askedLine, hostDisplayName, observedAgentId, ObservedSource, type ObservedActions } from '../cable/hosts/observed.js'
+import { askedLine, hostDisplayName, observedAgentId, ObservedSource, type ObservedActions, type PromptSource } from '../cable/hosts/observed.js'
 import { createOpenActions } from '../cable/hosts/open.js'
 import { createOrcaActions, orcaDeps, type OrcaDeps } from '../cable/hosts/orca.js'
 import { HostRegistry } from '../cable/hosts/registry.js'
@@ -314,6 +314,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     focused: (machineId, agentId) => core.clients.sendLocal({ type: 'dial_focus', payload: { machineId, agentId } }),
     // The outcome only: never the agent, its session or its terminal.
     swiped: (outcome) => log(`[device] swipe · ${outcome}`),
+    // What a dial made of a person's prompt it was asked to follow: the outcome only, never the app or the agent.
+    promptFollowed: (outcome) => log(outcome === 'moved' ? '[device] prompt · moved' : '[device] prompt · skipped · no tile'),
     swarmSelected: (swarmId) => core.clients.sendLocal({ type: 'dial_swarm', payload: { swarmId } }),
     scrolled: (phase, dy, velocity) => core.clients.sendLocal({ type: 'dial_scroll', payload: { phase, dy, velocity } }),
     // Gestures stay at this desk. The device inventory and its settings also reach the owner's other
@@ -713,14 +715,30 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     if (!event.subagent) cableHost.harness.noteCard(event.agentId, event.kind)
     toDial(event)
   }
+  /**
+   * A turn's start outside a pane turns the dials to its agent only when a person typed its prompt in the app settled in
+   * front (docs/specs/2026-11-14-dial-pane-follow.md). The front, never the app a dial shows: a pick on the dial leaves
+   * the front where it is, and a dial whose ring lacks the agent answers no tile itself. Each line is a reason, never the
+   * app, the agent or the session.
+   */
+  const followPrompt = (agentId: string, source: PromptSource): Promise<void> | undefined => {
+    // No dial linked: nothing to turn or count. The turn still used up a dial's prompt, in `ingest`.
+    if (!cable.isConnected) return
+    if (source === 'relayed') { log('[device] prompt · skipped · relayed'); return }
+    if (source === 'dial') { log('[device] prompt · skipped · dial prompt'); return }
+    const front = cableHost.settledApp()
+    if (front === undefined || outside(agentId)?.app !== front) { log('[device] prompt · skipped · not in front'); return }
+    return cable.followPrompt(agentId)
+  }
   const port: DevicesPort = {
     // A paneless session's hook event, as the core checked it: taken, and dropped here while the observed source is
     // switched off.
     observed: (event) => {
       part.call('observed', () => {
         if (!observed) return
-        observed.ingest(event)
+        const source = observed.ingest(event)
         if (event.event === 'session-end') dropEnded(observed, observedAgentId(event.engine, event.sessionId))
+        if (source) part.call('dial', () => followPrompt(observedAgentId(event.engine, event.sessionId), source))
       })
       return true
     },
