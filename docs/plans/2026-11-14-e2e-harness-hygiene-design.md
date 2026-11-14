@@ -10,14 +10,14 @@ fake engine; no product code.
 
 ### What was seen
 
-- `masterIpcExit.e2e.ts` leaves two fake `codex app-server` processes and a ~19 MB `runtime/grid-0.3.63-darwin-arm64`
-  folder in its throwaway root after it finishes.
+- `masterIpcExit.e2e.ts` leaves two fake `codex app-server` processes after it finishes. The ~19 MB
+  `runtime/grid-0.3.63-darwin-arm64` folder reported with it comes from another file (below).
 - Every `agentBrowser.e2e.ts` run leaves one fake `podman events` process (the fake's `events` branch,
   `agentBrowser.e2e.ts:45`, sleeps forever).
 - On this Mac on 2026-11-14: 14 orphaned fake `codex app-server` pairs (parent 1, a process group of their own, their
   executable in a removed `htmux-*` root), one fake `podman events`, and ten `htmux-*` roots holding only
-  `runtime/grid-0.3.63-darwin-arm64` (19,168 KB each), written about three minutes after the roots' other contents were
-  removed.
+  `runtime/grid-0.3.63-darwin-arm64` (19,168 KB each): the part of each root its removal could not delete, a read-only
+  `bin/` (below).
 
 ### Why
 

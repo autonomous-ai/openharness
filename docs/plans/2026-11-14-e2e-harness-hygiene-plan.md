@@ -638,8 +638,9 @@ For the daemon that owns the root (not one `beside` another), in this order:
 1. `await this.tmux.run('kill-server').catch(() => {})`: its server names the root on its own command line, so it
    is stopped before the sweep.
 2. `const left = await endRootProcesses(this.root)`.
-3. `await this.tmux.close()`, which removes the root: after the sweep, so nothing that named it can write it back
-   (a grid download that finished after the close brought ten roots back, 2026-11-14).
+3. `await this.tmux.close()`, which removes the root: after the sweep, so nothing that named it can write into it
+   while it goes. The removal also removes a folder a test or a daemon made read-only (the managed grid's `bin/` kept
+   ten roots on this Mac, 2026-11-14): see Task 6's read-only step.
 4. `forgetTmux(this.tmux.socket)`.
 
 Then `if (escaped) throw escaped` as today, and after it, when `left` is not empty, throw
@@ -926,7 +927,7 @@ census() { ps -A -ww -o pid=,ppid=,pgid=,command= | grep -F "${TMPDIR}htmux-" | 
 
    To see: 7 passed; both censuses print nothing.
 
-4. **Five minutes later**, since a grid folder used to come back about three minutes after its root went:
+4. **Five minutes later**, so that a writer that outlived the close would have shown:
 
    ```bash
    sleep 300; census
