@@ -235,12 +235,15 @@ export class ObservedSource implements HostSource {
   /** Removals: ended sessions, dead or reused pids, and sessions with no generation silent for 12 h. Called every 30 s by the owner. */
   async tick(): Promise<void> {
     if (!this.entries.size) return
+    // Only the sessions known as the read begins: one first heard of while `ps` runs may have a process it did not see.
+    const judged = [...this.entries]
     // One read of the machine's processes for every session: a `ps` each blocked the loop for seconds with 50 of them.
     // A table that cannot be read is empty: it always holds the process reading it.
     const table = new Map((await this.deps.processes()).map((p) => [p.pid, p.generation]))
     const now = this.deps.now()
     let changed = false
-    for (const [id, e] of this.entries) {
+    for (const [id, e] of judged) {
+      if (this.entries.get(id) !== e) continue
       // Its process's generation, noted at the first look that sees it.
       const gen = table.get(e.pid)
       if (gen) e.generation ??= gen
