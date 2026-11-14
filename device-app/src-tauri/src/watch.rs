@@ -1,19 +1,31 @@
 //! The `harness hardware watch --json` child.
 
-use crate::cli::{Cli, StdinCloser};
+use crate::cli::{Cli, Killer, StdinCloser, Timeout};
 use crate::types::{DialStatus, Event};
 use std::io;
 use std::thread;
 use std::time::Duration;
 
+/// How long a watch has to print its first line. One that connects and says nothing would keep the menu on its first
+/// words, and never count as the daemon being down.
+const FIRST_LINE: Duration = Duration::from_secs(20);
+/// How long a stopped watch has to end by itself before its group is killed.
+const STOP_GRACE: Duration = Duration::from_secs(3);
+
 /// A running watch. Stopping it, or dropping it, closes the child's stdin: the child then exits 0 by itself.
 pub struct Watch {
     stdin: StdinCloser,
+    killer: Killer,
+    grace: Duration,
 }
 
 impl Watch {
+    /// One that has not ended within the grace is killed, so a stop always ends it.
     pub fn stop(&self) {
-        self.stdin.close();
+        // Only the close that closed it: a stop and the drop after it start one kill, not two.
+        if self.stdin.close() {
+            self.killer.kill_after(self.grace);
+        }
     }
 }
 
@@ -25,20 +37,42 @@ impl Drop for Watch {
 
 /// Runs `hardware watch --json`: an `Event::WatchLine` for each status line it prints, then one `Event::WatchExit`.
 pub fn spawn_watch(cli: &dyn Cli, send: impl Fn(Event) + Send + 'static) -> io::Result<Watch> {
+    spawn_watch_within(cli, send, FIRST_LINE, STOP_GRACE)
+}
+
+fn spawn_watch_within(
+    cli: &dyn Cli,
+    send: impl Fn(Event) + Send + 'static,
+    first_line: Duration,
+    grace: Duration,
+) -> io::Result<Watch> {
     let mut child = cli.spawn(&["hardware", "watch", "--json"])?;
-    let stdin = child.stdin_closer();
+    let (stdin, killer) = (child.stdin_closer(), child.killer());
     thread::spawn(move || {
-        // The watch has no deadline: it runs until it is stopped or the daemon goes. Duration::MAX waits without one.
-        while let Ok(Some(line)) = child.line(Duration::MAX) {
-            // A line without a boolean `attached` (an `{"error":…}`, anything else) is not a status.
-            if let Ok(status) = serde_json::from_str::<DialStatus>(&line) {
-                send(Event::WatchLine(status));
+        // After its first line the watch has no deadline: it runs until it is stopped or the daemon goes.
+        // Duration::MAX waits without one.
+        let mut wait = first_line;
+        loop {
+            match child.line(wait) {
+                Ok(Some(line)) => {
+                    // A line without a boolean `attached` (an `{"error":…}`, anything else) is not a status.
+                    if let Ok(status) = serde_json::from_str::<DialStatus>(&line) {
+                        send(Event::WatchLine(status));
+                    }
+                    wait = Duration::MAX;
+                }
+                Ok(None) => break,
+                // Killed, it ends by a signal: the WatchExit(None) of a watch that ended with the daemon down.
+                Err(Timeout) => {
+                    child.killer().kill();
+                    break;
+                }
             }
         }
         // An Err only if the thread that reaps the child died; the run is over either way.
         send(Event::WatchExit(child.exit(Duration::MAX).unwrap_or(None)));
     });
-    Ok(Watch { stdin })
+    Ok(Watch { stdin, killer, grace })
 }
 
 #[cfg(test)]

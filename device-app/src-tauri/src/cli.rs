@@ -9,7 +9,7 @@ use std::io::{self, BufRead, BufReader, Read};
 use std::os::unix::process::CommandExt;
 use std::path::{Component, Path, PathBuf};
 use std::process::{ChildStdin, Command, Stdio};
-use std::sync::{Arc, Mutex, Weak, mpsc};
+use std::sync::{Arc, Condvar, Mutex, Weak, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -213,17 +213,18 @@ impl Child {
         thread::spawn(move || read_lines(stdout, |line| send.send(line).is_ok()));
         let (stderr_done, stderr_ended) = mpsc::channel();
         let stderr = tail(child.stderr.take().expect("stderr is piped"), stderr_done);
-        let killer = Killer(Arc::new(Mutex::new(Some(pid))));
+        let killer = Killer(Arc::new(Unreaped { pid: Mutex::new(Some(pid)), reaped: Condvar::new() }));
         let unreaped = killer.0.clone();
         let (send_exit, exit) = mpsc::channel();
         thread::spawn(move || {
             exited(pid);
             let _ = stderr_ended.recv_timeout(STDERR_GRACE);
             let status = {
-                let mut unreaped = unreaped.lock().unwrap();
-                *unreaped = None;
+                let mut pid = unreaped.pid.lock().unwrap();
+                *pid = None;
                 child.wait()
             };
+            unreaped.reaped.notify_all();
             let code = status.ok().and_then(|status| status.code());
             log.line(&ended(&name, code, &text(&stderr)));
             let _ = send_exit.send(code);
@@ -264,13 +265,32 @@ impl Child {
 /// Kills a child's process group from any thread. Its pid while the child is unreaped: once reaped, the pid may be
 /// another process's, so a kill then does nothing.
 #[derive(Clone)]
-pub struct Killer(Arc<Mutex<Option<libc::pid_t>>>);
+pub struct Killer(Arc<Unreaped>);
+
+/// A child's pid until it is reaped, and the word that it has been.
+struct Unreaped {
+    pid: Mutex<Option<libc::pid_t>>,
+    reaped: Condvar,
+}
 
 impl Killer {
     pub fn kill(&self) {
-        if let Some(pid) = *self.0.lock().unwrap() {
+        if let Some(pid) = *self.0.pid.lock().unwrap() {
             kill_group(pid);
         }
+    }
+
+    /// Kills the group unless the child is reaped within `grace`, on a thread of its own: for a child asked to end,
+    /// which may not.
+    pub fn kill_after(&self, grace: Duration) {
+        let unreaped = self.0.clone();
+        thread::spawn(move || {
+            let pid = unreaped.pid.lock().unwrap();
+            let (pid, _) = unreaped.reaped.wait_timeout_while(pid, grace, |pid| pid.is_some()).unwrap();
+            if let Some(pid) = *pid {
+                kill_group(pid);
+            }
+        });
     }
 }
 
@@ -280,10 +300,9 @@ impl Killer {
 pub struct StdinCloser(Weak<Mutex<Option<ChildStdin>>>);
 
 impl StdinCloser {
-    pub fn close(&self) {
-        if let Some(stdin) = self.0.upgrade() {
-            stdin.lock().unwrap().take();
-        }
+    /// True when this call closed it.
+    pub fn close(&self) -> bool {
+        self.0.upgrade().is_some_and(|stdin| stdin.lock().unwrap().take().is_some())
     }
 }
 
