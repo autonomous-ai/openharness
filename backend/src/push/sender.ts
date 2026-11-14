@@ -3,20 +3,14 @@ import type { PushDevice } from './devices.js'
 /**
  * One notification for one person's phones (task #2905), as the phone's own notices word it (mobile
  * lib/swarm/swarm_notices.dart): who and where, never what was written. `key` is the phone's key for the same notice, so the
- * app never posts it a second time; `link` is the phone's `swarm:` payload, which opens the thread at the reply.
+ * app never posts it a second time; `link` is the phone's payload, which opens what the notice is about.
  *
- * `slot` is the notification it shows in, the one the app's own notice for the same thing uses (task #3248): a tag's own
- * key, one per thread for its reply, so the app's notice replaces the push instead of showing beside it. `quiet` shows it with no sound and no banner: it only replaces what that slot showed.
- *
- * `setting` is a tag's, and an agent's 1:1 chat's: the id of its person's setting for the chat, which drops it as it is sent when that chat is
- * muted (push/muted.ts). The senders never send it.
+ * `slot` is the notification it shows in, the one the app's own notice for the same thing uses (task #3248), so the app's notice
+ * replaces the push instead of showing beside it. `quiet` shows it with no sound and no banner: it only replaces what that slot
+ * showed.
  */
 export interface PhoneNotice {
   personId: string; key: string; title: string; subtitle: string; body: string; link: string; slot: string; quiet?: true
-  setting?: string
-  /** An agent's 1:1 chat's: its person's read mark of the chat, and the chat's newest main row before this write. Sent while
-   *  that row is someone else's and the mark is behind it, the notice is quiet: it sounds once until they read (push/unread.ts). */
-  unreadBefore?: { mark: string; tabId: string; conversationId: string; sequence: number }
 }
 
 /** The app's id for the notice in `slot` (mobile lib/notify/system_notices.dart swarmNoticeIdFor: FNV-1a over UTF-16 code

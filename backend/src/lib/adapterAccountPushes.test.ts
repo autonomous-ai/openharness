@@ -3,9 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const m = vi.hoisted(() => ({
   desk: vi.fn(), zoo: vi.fn(), machines: vi.fn(), keys: vi.fn(), vault: vi.fn(),
   deskUnsub: vi.fn(), zooUnsub: vi.fn(), machinesUnsub: vi.fn(), keysUnsub: vi.fn(), vaultUnsub: vi.fn(),
-  swarms: vi.fn(), swarmsUnsub: vi.fn(), tui: vi.fn(), tuiUnsub: vi.fn(), tuiOpenNow: vi.fn(),
+  tui: vi.fn(), tuiUnsub: vi.fn(), tuiOpenNow: vi.fn(),
 }))
-vi.mock('./swarmClientPushes.js', () => ({ relaySwarmChanges: m.swarms }))
 vi.mock('./bus.js', () => ({
   subscribeDeskChanged: m.desk, subscribeZooChanged: m.zoo, subscribeDeviceMachineListChanged: m.machines,
   subscribeDeviceKeysChanged: m.keys, subscribeConnectorsChanged: m.vault, subscribeTuiOpen: m.tui, tuiOpenNow: m.tuiOpenNow,
@@ -25,20 +24,8 @@ describe('account pushes on a daemon socket', () => {
     m.machines.mockResolvedValue(m.machinesUnsub)
     m.keys.mockResolvedValue(m.keysUnsub)
     m.vault.mockResolvedValue(m.vaultUnsub)
-    m.swarms.mockResolvedValue(m.swarmsUnsub)
     m.tui.mockResolvedValue(m.tuiUnsub)
     m.tuiOpenNow.mockResolvedValue(false)
-  })
-
-  // WS roadmap Phase 2a: the windows read a Swarm when told (lib/swarmClientPushes.ts), through this daemon.
-  it('hands the daemon a change to a Swarm the account is in, as a connection-less down frame', async () => {
-    const send = vi.fn()
-    const stop = await relayAccountPushes('user-1', send, on)
-    expect(m.swarms).toHaveBeenCalledWith('user-1', expect.any(Function))
-    m.swarms.mock.calls[0][1]({ type: 'swarm_changed', payload: { tabId: 'tab-1', lastChangedAt: 1, parts: ['main'] } })
-    expect(send).toHaveBeenCalledWith({ t: 'down', connId: '', frame: { type: 'swarm_changed', payload: { tabId: 'tab-1', lastChangedAt: 1, parts: ['main'] } } })
-    stop()
-    expect(m.swarmsUnsub).toHaveBeenCalledOnce()
   })
 
   it('hands the daemon a change to the account\'s sealed connections, for it to re-read and merge', async () => {

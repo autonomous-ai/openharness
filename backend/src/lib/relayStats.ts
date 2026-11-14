@@ -7,7 +7,7 @@ import { logger } from '../utils/logger.js'
 
 export type RelayKind = 'termup' | 'up targeted' | 'up broadcast' | 'pod hop' | 'pod json'
 // `none` counts the publishes that reached no subscription: work for nobody, which is what the daemon's UI gate removes
-// (spec 2026-11-02-swarm-cache-delta-design, Part 4).
+// (the relay gate of 2026-11-02).
 interface Counts { local: number; published: number; receivers: number; none: number }
 
 let kinds = new Map<RelayKind, Counts>()
