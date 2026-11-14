@@ -67,9 +67,10 @@ export class AppFilter {
 
   pick(app: string, cause: 'pick' | 'notice' = 'pick'): AppPick {
     if (!has(this.deps.counts(), app)) return 'ignored'
-    if (app === this.showing) return 'same'
+    // A pick of the shown app is the person's choice too: it holds as one that switched does, and tells no switch.
     this.pickedOnDial = true
     this.byDefault = false
+    if (app === this.showing) return 'same'
     this.show(app, cause)
     return 'switched'
   }
