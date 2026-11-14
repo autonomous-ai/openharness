@@ -725,7 +725,7 @@ jobs:
           HARNESS_PTY_BIN: ${{ github.workspace }}/pty/target/debug/harness-pty
         run: npx vitest run src/lib/ptyHostBackend.contract.spec.ts --maxWorkers=1
 
-  # The Harness Device menu bar app (device-app/, Rust and Tauri): the UI's typecheck, Vitest and bundle, then the Rust
+  # The Harness Device menu-bar app (device-app/, Rust and Tauri): the UI's typecheck, Vitest and bundle, then the Rust
   # unit tests on Linux. The macOS code is not compiled here; it is built and tested on a Mac.
   device-app-checks:
     concurrency:
@@ -734,7 +734,8 @@ jobs:
     needs: plan
     if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.device-app == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # apt-install.sh can take about 19.5 minutes to give up in a mirror outage, and a cold Tauri compile follows.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
         with:
