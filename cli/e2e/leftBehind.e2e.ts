@@ -126,7 +126,7 @@ describe('a daemon under test', () => {
     started = await until('the worker\'s daemon', () => out.includes('\n') ? JSON.parse(out.split('\n')[0]) as Started : null, 120_000, 100)
     const tmux = tmuxServer(started.socket)
     expect(tmux, 'the daemon\'s tmux server').not.toBeNull()
-    expect(started.escaped, 'the hung read\'s Codex and its child').toHaveLength(2)
+    expect(started.escaped, 'the hung read\'s Codex, its watcher and its child').toHaveLength(3)
     watched = [...new Set([...daemonProcesses(started.master), started.core, tmux!, ...started.escaped])]
     expect(watched.length, 'master, core, edge and tmux at the least').toBeGreaterThanOrEqual(4)
     end(child)

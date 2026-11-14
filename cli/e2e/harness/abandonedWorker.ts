@@ -2,9 +2,9 @@
  * A test worker that starts a daemon and goes without closing it (e2e/leftBehind.e2e.ts): `exits` ends by itself when a
  * line comes on stdin, as a worker does after a file whose teardown never ran; otherwise it waits to be killed or
  * interrupted. It prints the daemon's root, master, core and tmux socket once the daemon, its edge service (the one
- * that ran lsof forever) and its tmux server are up. With them, `escaped`: a hung Codex rate-limit read and its child,
- * out of the daemon's process groups (e2e/harness/hungCodex.ts); and `readOnly`: a read-only folder in the root, as the
- * managed grid's install leaves its bin/ (lib/runtimeInstall.ts).
+ * that ran lsof forever) and its tmux server are up. With them, `escaped`: a hung Codex rate-limit read, its tie's
+ * watcher and its child, out of the daemon's process groups (e2e/harness/hungCodex.ts); and `readOnly`: a read-only
+ * folder in the root, as the managed grid's install leaves its bin/ (lib/runtimeInstall.ts).
  */
 import { chmodSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
