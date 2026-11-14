@@ -139,9 +139,9 @@ export class ObservedSource implements HostSource {
   }
 
   /**
-   * The dial's words for the agent, idle or working, as a Harness agent's are (lib/sessionInput.ts): to its mod, else typed
-   * into its Orca terminal, and nothing is queued here. The mod's `$.prompt.submit` starts them once the turn is over, and
-   * Claude Code queues what is typed into its running TUI (engines/claude/submissionPolicy.ts `typesWhileBusy`).
+   * The dial's words for the agent, and nothing is queued here: to its mod in every state, as a Harness agent's are
+   * (lib/sessionInput.ts), whose `$.prompt.submit` types nothing and starts them once the turn is over; else typed into its
+   * Orca terminal, only at its prompt.
    */
   async send(agent: HostAgent, text: string): Promise<SendResult> {
     const e = this.entries.get(agent.id)
@@ -170,9 +170,9 @@ export class ObservedSource implements HostSource {
     // A prompt open in the terminal takes what is typed as its answer: Enter there would allow what the dial only shows,
     // as the core never types into a Harness pane that shows one (lib/messageHolds.ts `permission_open`).
     if (e.agent.state === 'needs-you') return refuse('waiting', `${name} is waiting for your answer in ${hostDisplayName(e.agent.host)}.`)
-    // Only Claude Code's hooks say a prompt opened (its Notification, the plugin's asked). Codex's approval overlay, which
-    // takes `y` or Enter as an approval, and any other engine's prompt are never heard of: their working turn may show one.
-    if (e.agent.state === 'working' && e.agent.engine !== 'claude') return refuse('busy', `${name} is busy. Say it when it is done.`)
+    // A working turn may show a prompt not yet heard of: Codex's approval overlay, which takes `y` or Enter, has no hook, and
+    // Claude Code's comes a few hundred ms after its prompt opens.
+    if (e.agent.state === 'working') return refuse('busy', `${name} is busy. Say it when it is done.`)
     if (!await actions.orcaSend(handle, text)) return noAnswer()
     actions.count('orca')
     return { ok: true }
