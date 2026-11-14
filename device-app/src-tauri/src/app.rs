@@ -9,6 +9,9 @@ use crate::types::{
 /// The menu reads the account and Claude Code again at most this often.
 const READ_EVERY_SECS: u64 = 60;
 
+/// A start left to the desktop app, which supervises its own daemon.
+const DESKTOP_RUNS: &str = "keep-alive: the desktop app runs; not starting";
+
 pub struct App {
     state: AppState,
     keep: KeepAlive,
@@ -87,7 +90,7 @@ impl App {
                     CliState::Found => {
                         // Once each time the desktop app starts running, not on every tick.
                         if desktop_running && !self.desktop_running {
-                            effects.push(Effect::Log("keep-alive: the desktop app runs; not starting".into()));
+                            effects.push(Effect::Log(DESKTOP_RUNS.into()));
                         }
                         effects.extend(self.keep.tick(now, desktop_running).map(|keep| match keep {
                             Keep::SpawnWatch => Effect::SpawnWatch,
@@ -143,8 +146,12 @@ impl App {
             // The runner found a CLI after it. The window stays on Install until the first screen is chosen.
             Event::InstallDone(Ok(())) => {
                 self.found(effects);
-                self.keep.start_begun(self.now);
-                effects.push(Effect::RunStart);
+                if self.desktop_running {
+                    effects.extend([Effect::Log(DESKTOP_RUNS.into()), Effect::SpawnWatch]);
+                } else {
+                    self.keep.start_begun(self.now);
+                    effects.push(Effect::RunStart);
+                }
             }
             Event::InstallDone(Err(lines)) => {
                 self.state.cli = CliState::InstallFailed;
