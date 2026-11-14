@@ -239,7 +239,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // Claude Code in Orca, Codex in Ghostty: their hooks reach here through the core, which keeps nothing of them, and their
   // open sessions are read here. Nothing of them leaves this computer: the core, a window and the gateway hear none of it
   // (docs/specs/2026-11-13-device-without-the-app.md). `HARNESS_DEVICE_OBSERVED=off` is the kill switch.
-  const observed = process.env.HARNESS_DEVICE_OBSERVED === 'off' ? null : observedSource(core.dataDir, log)
+  const observed = env.HARNESS_DEVICE_OBSERVED ? observedSource(core.dataDir, log) : null
   /** One of them, by the id the dial holds: what the dial asks of it is answered here, never by a door of the core. */
   const outside = (agentId: string): HostAgent | undefined => observed?.list().find((agent) => agent.id === agentId)
   /** Its line while it waits on the person, where a harness agent shows its terminal's footer. */

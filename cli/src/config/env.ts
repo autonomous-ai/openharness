@@ -411,6 +411,9 @@ const fields = {
   // `make upload-circle` remains the only way a release happens — this only changes who downloads.
   CABLE_FW_MANIFEST_URL: text('https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/esp32/ota/metadata.json'),
   CABLE_FW_DISABLE: flag('false'),
+  // Set 'off' to leave the agents outside a pane alone (Claude Code in Orca, Codex in Ghostty): the dial then lists
+  // Harness's agents only. The kill switch of docs/specs/2026-11-13-device-without-the-app.md.
+  HARNESS_DEVICE_OBSERVED: (raw): boolean => raw !== 'off',
 } satisfies Record<string, EnvField<unknown>>
 
 export type Env = EnvOf<typeof fields>
