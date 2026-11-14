@@ -279,6 +279,20 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn the_words_shown_are_200_characters_at_most() {
+        // Characters of two bytes: a cut by bytes would split one.
+        let long = "é".repeat(LINE_MAX / 4);
+        let waiting = format!(r#"{{"type":"waiting","message":"{long}"}}"#);
+        let result = format!(r#"{{"type":"result","status":"error","code":"BACKEND_ERROR","message":"{long}"}}"#);
+        let fake = Fake::new();
+        fake.script("login --json", &[&waiting, &result, "@exit 1"]);
+        let (send, events) = channel();
+        let _login = login(&fake.cli(), fake.log(), send).unwrap();
+        assert_eq!(all(&events), [Waiting("é".repeat(200)), failed(&"é".repeat(200))]);
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn a_child_that_ends_without_a_result_is_a_failure() {
         let fake = Fake::new();
         fake.script("login --json", &["@exit 1"]);
