@@ -130,9 +130,10 @@ describe('an engine that is stopped, or killed', () => {
 
       // Ctrl+Z, typed into the pane. The engine gives the terminal back and stops itself, and the launch
       // script continues it within milliseconds: too short a stop to catch in the process table, and the
-      // shell's notice of it is no proof (bash 5.3 holds it back, #1612). The engine's own note is: it
-      // stopped, then was continued, and it is this pane's engine, for Codex the one below npm's wrapper,
-      // which reads the key. The comparison throws until it holds, so a timeout says what was noted.
+      // shell's notice of it is no proof (bash 5.3 holds it back, #1612). The engine's own note is the
+      // proof: it stopped, then was continued, and the pid is this pane's engine's, for Codex the one below
+      // npm's wrapper, which reads the key. The comparison throws until it holds, so a timeout says what
+      // was noted.
       const self = await until(`the ${engine} engine itself`, () => enginePid(d, root, engine, engine === 'codex'), 10_000, 200)
       // Claude Code says it is suspended. Read from everything the pane writes from here on, not its
       // screen: the engine repaints its composer over that line the moment it is back.
