@@ -4,7 +4,8 @@
  * plugin's PermissionRequest hook runs the real `harness device claude asked`, and a fake dial on the desk
  * (harness/fakeDial.ts) shows what it is shown:
  * - the client prints nothing and exits at once, and with no dial nothing more happens: no devices process is started;
- * - with a dial, the agent waits with "<summary> · answer in Orca", and the session's Stop ends the wait;
+ * - with a dial, the agent waits with "<summary> · answer in Orca", also as a question the dial only shows (every answer
+ *   to it refused, and asked again of a dial plugged in again), and the session's Stop ends the wait and closes it;
  * - the mod's inbox poll is refused with no dial and held with one.
  */
 import { spawn, type ChildProcess } from 'node:child_process'
@@ -132,9 +133,9 @@ describe('the dial shows Claude Code waiting outside Harness', () => {
     expect(devicesPids(d)).toEqual([])
   })
 
-  it('the dial shows the agent waiting with "printf hi · answer in Orca", and its Stop ends the wait', async () => {
+  it('the dial shows the agent waiting with "printf hi · answer in Orca", as a question nothing answers, and its Stop ends the wait', async () => {
     const { d, desk } = await fresh()
-    const dial = await plugged(desk)
+    let dial = await plugged(desk)
     const claude = new InOrca(d, 'in-orca', children)
     await claude.hook('SessionStart', { source: 'startup' })
     await dial.next((m) => m.t === 'agent' && m.id === claude.id, 45_000, 'the agent listed')
@@ -145,14 +146,36 @@ describe('the dial shows Claude Code waiting outside Harness', () => {
     expect(run).toMatchObject({ stdout: '', stderr: '', code: 0 })
     expect(run.ms).toBeLessThan(AT_ONCE_MS)
     await line(dial, claude.id, 'printf hi · answer in Orca', 'the waiting line', since)
-    // Nothing for the dial to answer: no question, and no `a` on its row.
-    expect(dial.messages.some((m) => m.t === 'question' && m.agentId === claude.id)).toBe(false)
+    // The round dial's asking face draws it from a question, which the dial only shows.
+    const shown = [{ key: 'prompt', q: 'printf hi · answer in Orca', options: ['Answer in Orca'] }]
+    const question = await dial.next((m) => m.t === 'question' && m.agentId === claude.id, 45_000, 'the question', since)
+    expect(question).toEqual({ t: 'question', agentId: claude.id, name: 'in-orca', engine: 'claude', machine: expect.any(String),
+      id: expect.stringMatching(/^shown:/), questions: shown })
+    // Nothing for the dial to answer with: no `a` on its row, and an answer, a reviewed one or spoken words are refused.
     expect(dial.messages.filter((m) => m.t === 'agent' && m.id === claude.id).map((row) => row.caps)).not.toContainEqual(expect.stringContaining('a'))
+    const tried = dial.messages.length
+    dial.send({ t: 'answer', agentId: claude.id, requestId: question.id, answers: { prompt: 'Answer in Orca' } })
+    dial.send({ t: 'question.read', agentId: claude.id, requestId: 'read-1' })
+    const state = await dial.next((m) => m.t === 'question.state' && m.requestId === 'read-1', 45_000, 'the question read', tried)
+    expect(state).toMatchObject({ ok: true, id: question.id, questions: shown })
+    dial.send({ t: 'answer.reviewed', agentId: claude.id, requestId: 'send-1', token: state.token, choices: [1] })
+    expect(await dial.next((m) => m.t === 'answer.receipt' && m.requestId === 'send-1', 45_000, 'the refusal', tried))
+      .toMatchObject({ ok: false, error: 'Answer it in Orca.' })
+    dial.send({ t: 'voice.begin', agentId: claude.id, questionToken: state.token, questionIndex: 0, uploadId: 'spoken-1' })
+    dial.send({ t: 'voice.end', uploadId: 'spoken-1' })
+    await dial.next((m) => m.t === 'voice.error' && m.uploadId === 'spoken-1', 45_000, 'the spoken refusal', tried)
+    // A dial plugged in again is shown it again, after the drawer that clears its own.
+    await desk.unplug('E2E-A')
+    dial = await plugged(desk)
+    await dial.next((m) => m.t === 'notif.replace', 45_000, 'the drawer')
+    const drawer = dial.messages.findIndex((m) => m.t === 'notif.replace')
+    expect(await dial.next((m) => m.t === 'question' && m.agentId === claude.id, 45_000, 'the question again', drawer + 1)).toMatchObject({ id: question.id, questions: shown })
     // Orca's secrets never left the hook.
     expect(JSON.stringify(dial.messages)).not.toMatch(/pairing-e2e|spawn-e2e/)
     // Answered in Orca, the turn goes to its end: the session's Stop.
     const answered = dial.messages.length
     await claude.hook('Stop', { stop_hook_active: false })
+    await dial.next((m) => m.t === 'question.close' && m.agentId === claude.id && m.id === question.id, 45_000, 'the question closed', answered)
     await dial.next((m) => m.t === 'turn.done' && m.agentId === claude.id, 45_000, 'its turn done', answered)
     expect(dial.messages.slice(answered).some((m) => m.agentId === claude.id && m.text === 'printf hi · answer in Orca')).toBe(false)
   })

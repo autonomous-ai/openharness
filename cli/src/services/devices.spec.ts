@@ -1248,10 +1248,76 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     expect(calls('turnStarted')).toEqual([[ID, '', undefined], [ID, 'Waiting for you · Orca', undefined], [ID, 'npm test · answer in Orca', undefined]])
     expect(await host().activityText(ID)).toBe('npm test · answer in Orca')
     expect(await host().activitySnapshot(ID)).toEqual({ text: 'npm test · answer in Orca' })
-    // No question for the dial to answer, and nothing to answer with.
-    expect(calls('question')).toEqual([])
+    // Nothing to answer with.
     expect(await machineList(port)).toMatchObject({ agents: [{ id: ID, caps: 's' }] })
     expect(core.agents.activityText).not.toHaveBeenCalled()
+  })
+
+  // The round dial draws an activity line on the working face: the prompt is also the question its asking face draws, for
+  // display only (docs/specs/2026-11-13-device-claude-orca.md, "Waiting for permission").
+  const shownAs = (q: string) => [{ key: 'prompt', q, options: ['Answer in Orca'] }]
+  it('asked also reaches the dial as a question it only shows, ahead of the line, and its wait clearing closes it', async () => {
+    const { core, port } = start({ faults: ['fleet'] })
+    port.observed(hook('turn-start'))
+    // A Notification alone names no prompt: its line, and no question.
+    port.observed(hook('needs-input'))
+    expect(calls('question')).toEqual([])
+    port.observed(asked())
+    port.observed(hook('needs-input'))
+    expect(calls('question')).toEqual([[ID, expect.stringMatching(/^shown:[0-9a-f-]{36}$/), shownAs('npm test · answer in Orca')]])
+    const [[, first]] = calls('question') as [[string, string]]
+    // Asked before its line is told: the round dial goes from the working face straight to the asking one.
+    expect(seen.cable.calls.map(([name]) => name)).toEqual(['start', 'turnStarted', 'turnStarted', 'question', 'turnStarted'])
+    // A new prompt is a new question, under an id of its own.
+    port.observed(asked({ summary: 'npm run build' }))
+    expect(calls('questionClose')).toEqual([[ID, first]])
+    const [, [, second, questions]] = calls('question') as [unknown, [string, string, unknown]]
+    expect(second).not.toBe(first)
+    expect(questions).toEqual(shownAs('npm run build · answer in Orca'))
+    // The session's next event clears the wait, and the question with it.
+    port.observed(hook('turn-stop'))
+    expect(calls('questionClose')).toEqual([[ID, first], [ID, second]])
+    // Its session ending clears it too.
+    port.observed(hook('turn-start'))
+    port.observed(asked())
+    const [, , [, third]] = calls('question') as [unknown, unknown, [string, string]]
+    port.observed(hook('session-end'))
+    expect(calls('questionClose')).toEqual([[ID, first], [ID, second], [ID, third]])
+    expect(calls('question')).toHaveLength(3)
+    expect(core.questions.answer).not.toHaveBeenCalled()
+  })
+
+  it('a dial that attaches again is asked again what still waits, under the same id', async () => {
+    const { port } = start({ faults: ['fleet'] })
+    port.observed(hook('turn-start'))
+    port.observed(hook('turn-start', { sessionId: 'sess-2' }))
+    port.observed(asked())
+    port.observed(asked({ sessionId: 'sess-2', summary: 'ls' }))
+    port.observed(hook('turn-stop', { sessionId: 'sess-2' }))
+    expect(calls('question')).toHaveLength(2)
+    const [[, id]] = calls('question') as [[string, string]]
+    // Its drawer and questions live in its RAM: a dial that comes back has neither.
+    seen.host.watching!(true)
+    expect(calls('question').slice(2)).toEqual([[ID, id, shownAs('npm test · answer in Orca')]])
+    seen.host.watching!(false)
+    seen.host.watching!(true)
+    expect(calls('question').slice(3)).toEqual([[ID, id, shownAs('npm test · answer in Orca')]])
+  })
+
+  it('a window opening closes the question; closing, it asks what still waits again', async () => {
+    const { port } = start({ faults: ['fleet'] })
+    port.observed(hook('turn-start'))
+    port.observed(asked())
+    expect(calls('question')).toHaveLength(1)
+    const [[, id]] = calls('question') as [[string, string]]
+    port.swarms({ active: 't1', swarms: [{ id: 't1', name: 'Tab', agentIds: [], panes: 0 }], tiles: [] })
+    expect(calls('questionClose')).toEqual([[ID, id]])
+    // The window's tab is what the dial shows meanwhile.
+    port.observed(asked({ summary: 'ls' }))
+    expect(calls('question')).toHaveLength(1)
+    port.swarms(null)
+    expect(calls('question').slice(1)).toEqual([[ID, expect.stringMatching(/^shown:/), shownAs('ls · answer in Orca')]])
+    expect(calls('question')[1][1]).not.toBe(id)
   })
 
   it('a prompt asked mid-turn, then its Notification: one line, told once', async () => {
@@ -1279,6 +1345,7 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     const { port } = start({ core: harnessAgent(), faults: ['fleet'] })
     port.observed(asked({ sessionId: 'in-a-pane' }))
     expect(calls('turnStarted')).toEqual([])
+    expect(calls('question')).toEqual([])
     expect((await machineList(port)).agents.map((a) => a.id)).toEqual(['h1'])
   })
 

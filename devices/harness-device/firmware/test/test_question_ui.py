@@ -244,6 +244,21 @@ int main(int argc,char **argv) {
     wakes=0;notices=0;face_agent="b";
     assert(!ui_question_show("b","Other","M2","q-b3",NULL) && wakes==0 && notices==1 && read_now==1);
     face_agent="";
+    // A permission prompt that waits in the agent's own app (the host's services/devices.ts): one option, which the host's
+    // inbox needs, and no canText. Filed with its prompt for the face, drawable on the question screen, closed by its id.
+    {
+        cJSON option={.type=JSTRING,.valuestring="Answer in Orca"};
+        cJSON fields[]={{.string="key",.type=JSTRING,.valuestring="prompt"},
+            {.string="q",.type=JSTRING,.valuestring="printf hi \xc2\xb7 answer in Orca"},
+            {.string="options",.type=JARRAY,.child=&option}};
+        cJSON question=object(fields,3),questions={.type=JARRAY,.child=&question};
+        reset(false);view(HOME);wakes=0;notices=0;removed=0;
+        assert(ui_question_show("b","in-orca","M2","shown:p1",&questions) && s.view==HOME && wakes==1 && notices==1);
+        question_load(&questions);
+        assert(s.q.valid && s.q.supported && s.q.count==1 && s.q.item[0].count==1 && !s.q.item[0].can_text);
+        view(QUESTION);render(dir,"shown-only");
+        ui_question_close("b","shown:p1");assert(removed==1);
+    }
     // The ESP32 compiler's -O0 restrict analysis sees the enclosing global s,
     // not the disjoint options/answer fields. Exercise every selected subset
     // at their real capacities and prove that no neighboring state changes.

@@ -14,7 +14,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { CABLE_MAX_FRAME, CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
 import { DaemonCableHost } from './cableHost.js'
 import type { MachineFleet } from './machineFleet.js'
-import { CableSession, type CableAgent, type CableHost, type CableMachine, type CablePort, type SendOutcome } from './cableSession.js'
+import { CableSession, SHOWN_ONLY_PREFIX, type CableAgent, type CableHost, type CableMachine, type CablePort, type SendOutcome } from './cableSession.js'
 import { DialLog } from './dialLog.js'
 import type { PetStore } from './pets/store.js'
 import { HostRegistry } from './hosts/registry.js'
@@ -3398,6 +3398,23 @@ describe('hello capabilities', () => {
     } finally { await session.stop() }
   })
 
+  it('a dial that greets anew is shown the questions still open again, after the drawer that clears them', async () => {
+    const { session, port } = await connect(richHost())
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.0' })
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+      await session.question('a1', 'q1', [{ key: 'k', q: 'Ship it?', options: ['yes', 'no'] }])
+      await session.question('a2', 'q2', [{ key: 'k', q: 'Closed?', options: ['yes'] }])
+      await session.questionClose('a2', 'q2')
+      port.sent.length = 0
+      // It rebooted: its drawer and its questions were in its RAM, and the drawer it is sent replaces the whole of it.
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.1' })
+      await vi.waitFor(() => expect(port.types()).toContain('question'))
+      expect(port.types().indexOf('question')).toBeGreaterThan(port.types().indexOf('notif.replace'))
+      expect(ofType(port, 'question')).toMatchObject([{ agentId: 'a1', id: 'q1' }])   // the closed one is not
+    } finally { await session.stop() }
+  })
+
   it('advertises resync in the welcome of a Pro only', async () => {
     const { session, port } = await connect(richHost())
     try {
@@ -4104,6 +4121,42 @@ describe('what the dial cannot do for an agent', () => {
     port.pcm(Buffer.alloc(3200, 7))
   }
   const toasts = (port: LoopbackPort) => port.sent.filter((m) => m.t === 'toast')
+
+  // A permission prompt waiting in Orca, which the dial is shown as a question (services/devices.ts): its app answers it.
+  it('a question the dial only shows: no answer, reviewed answer or spoken word for it reaches the host, and none is sent', async () => {
+    const answerReviewed = vi.fn<NonNullable<CableHost['answerReviewed']>>(async () => ({ ok: true }))
+    const transcribe = vi.fn(async () => 'allow it')
+    const host = caps({ answerReviewed, transcribe, canSpeakQuestion: () => true })
+    const { session, port } = await greeted(host)
+    try {
+      const shown = [{ key: 'prompt', q: 'npm test · answer in Orca', options: ['Answer in Orca'] }]
+      // a1 is listed in Orca; `gone` is no longer listed, its question still on the dial.
+      for (const agentId of ['a1', 'gone']) {
+        const id = `${SHOWN_ONLY_PREFIX}${agentId}`
+        await session.question(agentId, id, shown)
+        const read = () => port.sent.filter((m) => m.t === 'question.state' && m.agentId === agentId)
+        port.say({ t: 'question.read', agentId, requestId: 'read-1' })
+        await vi.waitFor(() => expect(read()).toHaveLength(1))
+        const { token } = read()[0]
+        port.say({ t: 'answer', agentId, requestId: id, answers: { prompt: 'Answer in Orca' } })
+        port.say({ t: 'answer.reviewed', agentId, requestId: 'send-1', token, choices: [1] })
+        port.say({ t: 'voice.begin', agentId, questionToken: token, questionIndex: 0, uploadId: `speech-${agentId}` })
+        port.pcm(Buffer.alloc(640)); port.say({ t: 'voice.end', uploadId: `speech-${agentId}` })
+        await vi.waitFor(() => expect(port.sent.some((m) => m.t === 'voice.error' && m.uploadId === `speech-${agentId}`)).toBe(true))
+        await vi.waitFor(() => expect(port.sent.some((m) => m.t === 'answer.receipt' && m.agentId === agentId)).toBe(true))
+        expect(port.sent.find((m) => m.t === 'answer.receipt' && m.agentId === agentId)).toMatchObject({ ok: false })
+        // Still unanswered, as the app left it.
+        port.say({ t: 'question.read', agentId, requestId: 'read-2' })
+        await vi.waitFor(() => expect(read()).toHaveLength(2))
+        expect(read()[1]).toMatchObject({ ok: true, id, submitted: false })
+      }
+      expect(port.sent.find((m) => m.t === 'answer.receipt' && m.agentId === 'a1')).toMatchObject({ error: 'Answer it in Orca.' })
+      expect(host.answer).not.toHaveBeenCalled()
+      expect(answerReviewed).not.toHaveBeenCalled()
+      expect(transcribe).not.toHaveBeenCalled()
+      expect(host.sendTurn).not.toHaveBeenCalled()
+    } finally { await session.stop() }
+  })
 
   it('voice to an observed agent keeps no audio and answers voice.error on voice.end', async () => {
     const { session, port } = await greeted(caps())
