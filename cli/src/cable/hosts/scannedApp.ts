@@ -6,7 +6,6 @@
 import { execFile } from 'node:child_process'
 import { homedir } from 'node:os'
 import { patientExec } from '../../lib/patientExec.js'
-import { run } from '../../lib/sessionSearch/externals/support.js'
 import type { RunningProcess } from '../../lib/sessionSearch/externals/types.js'
 import { frontAppId } from './frontApp.js'
 import { APP_IDS, UNKNOWN_APP } from './hostDetect.js'
@@ -17,6 +16,8 @@ export type ProcessName = Pick<RunningProcess, 'pid' | 'ppid' | 'executable'>
 export const WALK_PARENTS = 16
 export const BUNDLES_A_PASS = 16
 export const BUNDLE_ID_TIMEOUT_MS = 1_000
+/** plutil prints the id alone, at most 128 characters: more is no bundle id. */
+const BUNDLE_ID_MAX_BYTES = 1024
 // The daemon's own table read has the same bounds; this one took 42 ms for 862 processes on an M1 Pro, and 1 MiB holds
 // that many rows at the longest name macOS prints (MAXPATHLEN).
 export const PS_TIMEOUT_MS = 3_000
@@ -42,22 +43,22 @@ export function bundleOf(executable: string, roots: readonly string[]): string |
   return roots.some((root) => bundle.startsWith(root)) ? bundle : undefined
 }
 
-/** A bundle's id from its Info.plist, XML or binary; none for anything that is not one. */
-export async function readBundleId(bundle: string, exec: typeof run = run): Promise<string | undefined> {
-  const out = await exec('plutil', ['-extract', 'CFBundleIdentifier', 'raw', '-o', '-', `${bundle}/Contents/Info.plist`],
-    BUNDLE_ID_TIMEOUT_MS).catch(() => null)
-  const id = out?.trim()
-  return id && BUNDLE_ID.test(id) ? id : undefined
-}
-
 /** A command's whole output; null when it failed, ran past `timeout` or printed past `maxBuffer`. */
 export type Exec = (command: string, args: readonly string[], options: { timeout: number; maxBuffer: number }) => Promise<string | null>
 
-// A held event loop must not turn the timeout into an empty table (patientExec.ts).
+// A held event loop must not turn the timeout into an empty table, or a bundle with no id (patientExec.ts).
 const patient = patientExec(execFile)
 const execText: Exec = (command, args, options) => new Promise((resolve) => {
   patient(command, args, options, (error, stdout) => resolve(error ? null : stdout))
 })
+
+/** A bundle's id from its Info.plist, XML or binary; none for anything that is not one. */
+export async function readBundleId(bundle: string, exec: Exec = execText): Promise<string | undefined> {
+  const out = await exec('plutil', ['-extract', 'CFBundleIdentifier', 'raw', '-o', '-', `${bundle}/Contents/Info.plist`],
+    { timeout: BUNDLE_ID_TIMEOUT_MS, maxBuffer: BUNDLE_ID_MAX_BYTES }).catch(() => null)
+  const id = out?.trim()
+  return id && BUNDLE_ID.test(id) ? id : undefined
+}
 
 /** `ps -axo pid=,ppid=,comm=` rows; a line that is no row is passed over. */
 export function parseProcessNames(stdout: string): ProcessName[] {

@@ -347,10 +347,11 @@ describe.skipIf(process.platform === 'win32')('the scan\'s process read', () => 
 })
 
 describe('readBundleId', () => {
-  it('asks plutil for CFBundleIdentifier alone, under 1 s', async () => {
-    const exec = vi.fn(async () => 'com.mitchellh.ghostty\n')
+  it('asks plutil for CFBundleIdentifier alone, under 1 s and 1 KiB', async () => {
+    const exec = vi.fn(async (): Promise<string | null> => 'com.mitchellh.ghostty\n')
     expect(await readBundleId('/Applications/Ghostty.app', exec)).toBe('com.mitchellh.ghostty')
-    expect(exec.mock.calls).toEqual([['plutil', ['-extract', 'CFBundleIdentifier', 'raw', '-o', '-', '/Applications/Ghostty.app/Contents/Info.plist'], 1000]])
+    expect(exec.mock.calls).toEqual([['plutil', ['-extract', 'CFBundleIdentifier', 'raw', '-o', '-', '/Applications/Ghostty.app/Contents/Info.plist'],
+      { timeout: 1_000, maxBuffer: 1024 }]])
   })
 
   it('runs plutil through the patient exec: a held loop never reads as a bundle with no id', async () => {
