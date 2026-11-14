@@ -533,7 +533,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       const line = waiting(agent)
       if (shown.has(agentId) || !line) continue
       ask(agentId, { id: `${SHOWN_ONLY_PREFIX}${randomUUID()}`, line,
-        questions: [{ key: 'prompt', q: line, options: [`Answer in ${hostDisplayName(agent.host)}`] }] })
+        questions: [{ key: 'prompt', q: line, options: [`In ${hostDisplayName(agent.host)}`] }] })
     }
   }
   observed?.onChange(() => part.call('dial', () => {
