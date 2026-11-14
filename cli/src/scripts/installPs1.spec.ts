@@ -173,8 +173,9 @@ async function ps(script: string, env: NodeJS.ProcessEnv = {}, modulePath: Modul
 /** The message a call throws, or `no error`. */
 const thrown = async (call: string): Promise<string> => (await ps(`try { ${call} | Out-Null; 'no error' } catch { $_.Exception.Message }`)).stdout
 
-// Each case makes several calls, and the session's first pays the start of its powershell.exe. When each call started
-// one, a start took 1 to 2 seconds on the ARM64 VM and the default 5 seconds timed out six of the seven cases there.
+// Each case makes several calls, and the session's first pays module autoload's first command, 22 to 29 s on
+// windows-11-arm. When each call started a powershell.exe, the default 5 seconds timed out six of the seven cases on
+// the ARM64 VM.
 describe.runIf(windows)('install.ps1 building blocks, in Windows PowerShell 5.1', { timeout: 120_000 }, () => {
   it('names this computer\'s platform from the native architecture, and refuses one Harness is not built for', async () => {
     expect((await ps("Get-HarnessPlatform -Architecture 'AMD64'")).stdout).toBe('win32-x64')

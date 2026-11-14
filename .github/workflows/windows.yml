@@ -193,7 +193,8 @@ jobs:
           npx vitest run @paths --maxWorkers=1
       # Two real builds (sub-project G): the rollover from the previous host to this one (hostMove.real.spec.ts, and
       # drain.spec.ts's two-build case), and the payload install (the bin\ replacement, and install.ps1 in Windows
-      # PowerShell 5.1, with the spec of the one PowerShell its library cases share). Verbose, so the log names each case that ran.
+      # PowerShell 5.1, with the spec of the one PowerShell its library cases share). Verbose, so the log names each
+      # case that ran.
       - name: 'Two real builds: the pty host rollover and the payload install'
         if: ${{ !inputs.release }}
         working-directory: cli

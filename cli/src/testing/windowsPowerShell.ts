@@ -14,17 +14,23 @@ import { stopTree } from '../lib/gitProject.js'
  * A call runs as `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand` would run it: the
  * process environment replaced by the call's, PSModulePath included (autoload reads it), then a runspace of its own
  * from InitialSessionState.CreateDefault2(), execution policy Bypass, a single-threaded apartment, the script in its
- * global scope, in this process's working folder. Requests and answers cross a named pipe this process serves, not the host's standard handles: a native
- * command a call runs inherits those (a Start-Process -NoNewWindow child writes straight to them).
+ * global scope, in this process's working folder. Requests and answers cross a named pipe this process serves, not
+ * the host's standard handles: a native command a call runs inherits those (a Start-Process -NoNewWindow child writes
+ * straight to them).
  *
  * What a fresh runspace does not reset: the .NET assemblies and types loaded in the process (Add-Type), and $PID, one
  * value for every call of a host.
  *
- * Not covered, so no call may depend on either:
+ * Not covered, so no call may depend on any of these:
  * - `exit N`: a runspace has no process to end, so the script would stop with no status. A script whose own text has an
  *   exit statement is refused.
  * - a native command's standard error under `$ErrorActionPreference = 'Stop'`: in a runspace each of its lines is an
  *   error record, which stops the script, where powershell.exe passes it through to its own standard error.
+ * - what is written to the process's own standard handles, not to PowerShell's streams (a Start-Process -NoNewWindow
+ *   child, [Console]::WriteLine): the host's are read and dropped, so it is in neither stdout nor stderr of the call,
+ *   where powershell.exe's would carry it.
+ * - `Write-Host -NoNewline`: each Write-Host is a line of its own here.
+ * - `$Host`: the runspace has PowerShell's default host, not powershell.exe's console host.
  */
 
 /** What one call gave, as `powershell.exe -EncodedCommand` would have. */
