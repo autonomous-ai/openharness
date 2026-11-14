@@ -6,9 +6,10 @@ import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { alive } from '../testing/spawnedRuns.js'
 import { tiedScene } from '../testing/tiedStandIn.js'
-import { spawnTied } from './tied.js'
+import { execFileTied, spawnTied, type TiedExecError, type TiedExecOptions } from './tied.js'
 
 const windows = process.platform === 'win32'
+const MiB = 1024 ** 2
 const TIED = JSON.stringify(new URL('./tied.ts', import.meta.url).href)
 const CLI = fileURLToPath(new URL('../..', import.meta.url))
 const scratch = mkdtempSync(join(tmpdir(), 'tied-'))
@@ -17,6 +18,17 @@ afterAll(() => rmSync(scratch, { recursive: true, force: true }))
 const gone = (...pids: number[]) => vi.waitFor(() => expect(pids.filter(alive)).toEqual([]), { timeout: 10_000, interval: 20 })
 /** The group the command led is empty: it and its watcher have ended and been reaped (a zombie still counts). */
 const groupGone = (pid: number) => vi.waitFor(() => expect(() => process.kill(-pid, 0)).toThrow(/ESRCH/), { timeout: 10_000, interval: 20 })
+// Captured before a case fakes the clock: a wait in real time, which a fake clock's case needs (vi.waitFor moves it).
+const realSetTimeout = setTimeout
+const until = async (ready: () => boolean) => {
+  const deadline = Date.now() + 10_000
+  while (!ready()) {
+    if (Date.now() > deadline) throw new Error('not ready after 10 s')
+    await new Promise(done => realSetTimeout(done, 10))
+  }
+}
+/** A file a command wrote whole: its last line ended. */
+const written = (path: string) => existsSync(path) && readFileSync(path, 'utf8').endsWith('\n')
 const closed = (child: ChildProcess) => new Promise<[number | null, NodeJS.Signals | null]>(done => child.once('close', (code, signal) => done([code, signal])))
 /** A tied Node child, ended by its handle when the test ends, so a failing case leaves nothing running. */
 function node(script: string, options: Partial<Parameters<typeof spawnTied>[2]> = {}): ChildProcess {
@@ -239,5 +251,103 @@ spawnTied(${JSON.stringify(fake)}, [], { env: process.env, detached: true, stdio
 
   it('runs on the Windows runners, where the Windows half is proven', () => {
     expect(readFileSync(join(CLI, '..', '.github', 'workflows', 'windows.yml'), 'utf8')).toContain("'src/lib/tied.spec.ts'")
+  })
+})
+
+describe('execFileTied', () => {
+  const run = (script: string, options: TiedExecOptions = {}) => execFileTied(process.execPath, ['-e', script], { env: process.env, ...options })
+  /** The error a call that should fail rejected with. */
+  const failure = async (work: Promise<unknown>): Promise<TiedExecError> => {
+    const error = await work.then(() => null, (e: unknown) => e)
+    expect(error).toBeInstanceOf(Error)
+    return error as TiedExecError
+  }
+  const fakeClock = () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    onTestFinished(() => { vi.useRealTimers() })
+  }
+  const killOnFinish = (pid: number) => onTestFinished(() => { try { process.kill(pid, 'SIGKILL') } catch { /* gone */ } })
+
+  it('resolves with all the command printed; its stdin is the input, and is ended with or without one', async () => {
+    expect(await run(`process.stdin.on('data', d => process.stdout.write('out:' + d)).on('end', () => process.stderr.write('err'))`, { input: 'in' }))
+      .toEqual({ stdout: 'out:in', stderr: 'err' })
+    expect(await run(`process.stdin.resume().on('end', () => console.log('ended'))`)).toEqual({ stdout: 'ended\n', stderr: '' })
+  })
+
+  // More input than the pipe holds: the write is still pending when the command exits, and fails with EPIPE.
+  it('a command that exits before reading its input has not failed for it', async () => {
+    expect(await run('0', { input: 'x'.repeat(4 * MiB) })).toEqual({ stdout: '', stderr: '' })
+  })
+
+  it('a failed command rejects as execFile does: its exit code, and what it printed', async () => {
+    const error = await failure(run(`console.log('out'); console.error('err'); process.exitCode = 3`))
+    expect([error.code, error.killed, error.signal, error.stdout, error.stderr]).toEqual([3, false, null, 'out\n', 'err\n'])
+    expect(error.message).toBe(`Command failed: ${error.cmd}\nerr\n`)
+  })
+
+  it('a call past its timeout is ended with its signal, and says so', async () => {
+    const said = join(scratch, 'timed-out.pid')
+    fakeClock()
+    const outcome = failure(run(`require('fs').writeFileSync(${JSON.stringify(said)}, process.pid + '\\n'); setInterval(() => {}, 1 << 30)`,
+      { timeout: 5_000, killSignal: 'SIGKILL' }))
+    // The clock moves once the command is there: under load, Node takes a while to start.
+    await until(() => written(said))
+    const pid = Number(readFileSync(said, 'utf8'))
+    killOnFinish(pid)
+    await vi.advanceTimersByTimeAsync(4_999)
+    expect(alive(pid)).toBe(true)
+    await vi.advanceTimersByTimeAsync(1)
+    const error = await outcome
+    expect([error.code, error.killed, error.signal]).toEqual([null, true, 'SIGKILL'])
+    expect(alive(pid)).toBe(false)
+  })
+
+  // A git credential helper, an `lms` daemon, the VM `podman machine start` leaves: each holds the command's output.
+  it.skipIf(windows)('a call that timed out is over even while something the command started still holds its output', async () => {
+    const helper = join(scratch, 'helper.pid')
+    const file = join(scratch, 'leaves-a-helper')
+    script(file, `sleep 60 &\necho $! > '${helper}'\nexec sleep 60`)
+    fakeClock()
+    const slow = failure(execFileTied(file, [], { env: process.env, timeout: 500 }))
+    // The clock moves once the helper is there: under load, a real 500 ms ran out before the script had started it.
+    await until(() => written(helper))
+    killOnFinish(Number(readFileSync(helper, 'utf8')))
+    await vi.advanceTimersByTimeAsync(500)
+    const error = await slow
+    expect([error.killed, error.signal]).toEqual([true, 'SIGTERM'])
+  })
+
+  it.each(['stdout', 'stderr'] as const)('%s past maxBuffer ends the call and says so', async (stream) => {
+    const flood = (bytes: number) => `process.${stream}.write('x'.repeat(${bytes})); setInterval(() => {}, 1 << 30)`
+    for (const [bytes, options] of [[3 * MiB, { maxBuffer: 2 * MiB }], [MiB + 1, {}]] as const) { // {}: the default, 1 MiB
+      const error = await failure(run(flood(bytes), options))
+      expect([error.code, error.killed, error.message]).toEqual(['ERR_CHILD_PROCESS_STDIO_MAXBUFFER', true, `${stream} maxBuffer length exceeded`])
+    }
+  })
+
+  it('maxBuffer is for stdout and for stderr each, and what a call read is decoded once', async () => {
+    const both = await run(`process.stdout.write('x'.repeat(${1.5 * MiB})); process.stderr.write('y'.repeat(${1.5 * MiB}))`, { maxBuffer: 2 * MiB })
+    expect([both.stdout.length, both.stderr.length]).toEqual([1.5 * MiB, 1.5 * MiB])
+    const text = `x${'é'.repeat(200_000)}` // a character of two bytes falls across two reads
+    expect((await run(`process.stdout.write(${JSON.stringify(text)})`)).stdout).toBe(text)
+  })
+
+  // As execFile rejects, never the shell's exit 127: a missing command must not read as one that ran and failed.
+  it.each([['a bare name', () => `no-such-command-${process.pid}`], ['a path', () => join(scratch, 'removed')]])(
+    'a command that is not there, %s, rejects with spawn\'s own ENOENT', async (_, name) => {
+      const error = await failure(execFileTied(name(), [], { env: process.env }))
+      expect([error.code, error.killed, error.stdout, error.stderr]).toEqual(['ENOENT', false, '', ''])
+    })
+
+  // Each crash of a service left its call in flight running: a `claude mcp list`, a `git` on the network.
+  it.skipIf(windows)('a call in flight ends when the process that started it is killed', async () => {
+    const scene = tiedScene()
+    const fake = scene.program('slow')
+    await scene.endsWithItsProcess(`import { execFileTied } from ${TIED}
+void execFileTied(${JSON.stringify(fake)}, [], { timeout: 120_000 }).catch(() => {})`)
+  }, 90_000)
+
+  it('with Windows as its platform it is the same call over a plain spawn', async () => {
+    expect((await failure(run('process.exitCode = 5', { platform: 'win32' }))).code).toBe(5)
   })
 })
