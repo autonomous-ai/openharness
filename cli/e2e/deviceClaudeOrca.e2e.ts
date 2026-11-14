@@ -49,9 +49,9 @@ class InOrca {
     return env
   }
 
-  private run(file: string, args: string[], input: Record<string, unknown>): Promise<{ stdout: string; stderr: string; code: number | null; ms: number }> {
+  private run(file: string, args: string[], input: Record<string, unknown>, cwd = this.cwd): Promise<{ stdout: string; stderr: string; code: number | null; ms: number }> {
     const started = Date.now()
-    const child = spawn(file, args, { cwd: this.cwd, env: this.env(), stdio: ['pipe', 'pipe', 'pipe'] })
+    const child = spawn(file, args, { cwd, env: this.env(), stdio: ['pipe', 'pipe', 'pipe'] })
     this.children.push(child)
     let stdout = '', stderr = ''
     child.stdout!.on('data', (chunk: Buffer) => { stdout += chunk.toString('utf8') })
@@ -81,10 +81,11 @@ class InOrca {
   /** The plugin's PermissionRequest hook: the real CLI, from the run's bundle or the sources as the daemon is started. */
   asked(command: string) {
     const bundle = process.env.E2E_BUNDLE_PATH
-    const script = bundle ? [bundle] : ['--import', 'tsx', join(CLI_ROOT, 'src', 'cli.ts')]
+    const script = bundle ? [bundle] : ['--import', 'tsx', 'src/cli.ts']
+    // From the CLI's folder, where tsx resolves; the session's folder is the input's.
     return this.run(process.execPath, [...script, 'device', 'claude', 'asked'], {
       hook_event_name: 'PermissionRequest', permission_mode: 'default', tool_name: 'Bash', tool_input: { command, description: 'Say hi' },
-    })
+    }, CLI_ROOT)
   }
 }
 

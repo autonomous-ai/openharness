@@ -20,7 +20,7 @@ import type { GridAssignmentProcess, GridAssignmentAnswer } from '../lib/gridAss
 import type { RecentTurn } from '../cable/cableHost.js'
 import type { ReviewedAnswer } from '../cable/questionInbox.js'
 import type { AgentEngine } from '../engines/types.js'
-import type { ObservedHookEvent } from './observedHook.js'
+import type { ObservedEvent } from './observedHook.js'
 import type { AppSwarms } from '../cable/cableSession.js'
 import type { UnreadNotification } from '../lib/notificationRead.js'
 import type { AutonomousDeviceAgent, AutonomousDeviceDelivery, AutonomousDeviceReceipt } from '../lib/autonomous-device/service.js'
@@ -1422,7 +1422,7 @@ export interface DevicesPort extends DeviceHookPort {
   commanders(connected: boolean): void
   /** A paneless agent's hook event, checked by the core and kept nowhere in it; false when the devices did not take it
    *  (not connected), so the core counts it lost. */
-  observed(event: ObservedHookEvent): boolean
+  observed(event: ObservedEvent): boolean
   /** Let go of the serial ports and the lane, for a restart or a shutdown. */
   stop(): Promise<void>
 }

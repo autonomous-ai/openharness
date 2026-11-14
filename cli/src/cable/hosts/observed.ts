@@ -1,10 +1,12 @@
 import { createHash } from 'node:crypto'
 import { basename } from 'node:path'
 // Types only: the devices process must not load core code.
-import type { ObservedHookEvent } from '../../core/observedHook.js'
+import type { ObservedAsked, ObservedEvent } from '../../core/observedHook.js'
+import { truncateUtf8 } from '../../lib/deviceRecentTrim.js'
 import type { OpenSessions, SessionRows } from '../../lib/sessionSearch/external.js'
 import { type fileStamp, within } from '../../lib/sessionSearch/externals/support.js'
 import type { ExternalEngine, RunningProcess } from '../../lib/sessionSearch/externals/types.js'
+import { roundDrawable } from '../roundGlyphs.js'
 import { detectHost } from './hostDetect.js'
 import type { Delivery } from './inbox.js'
 import { MAX_TEXT, ORCA_HANDLE } from './orca.js'
@@ -23,6 +25,22 @@ const ANSWER_CHARS = 300
 const ANSWER_GRACE_MS = 1_500
 /** A turn's hook runs before the engine marks the turn begun in its record: a turn younger than this may still read idle. */
 const TURN_SETTLE_MS = 2_000
+/** The tool call's line reaches the transcript just after its permission hook ran, and nobody answers a prompt sooner than
+ *  this: a write that soon after the prompt is the asking's own, not the app's answer. */
+const ASK_SETTLE_MS = 1_000
+/** The firmware's activity line, `activity[100]` (ui_habitat.c), less its terminating zero: it cuts a longer one there. */
+const LINE_BYTES = 99
+
+/**
+ * The dial's line for a prompt that waits: what it asks, and the app to answer it in. What the round dial cannot draw is a
+ * `?`, and the summary is cut, never the app: the line is all that tells the person where the prompt is answered.
+ */
+export function askedLine(summary: string, host: string): string {
+  const where = ` · answer in ${host}`
+  const room = LINE_BYTES - Buffer.byteLength(where)
+  const shown = roundDrawable(summary)
+  return `${Buffer.byteLength(shown) <= room ? shown : `${truncateUtf8(shown, room - Buffer.byteLength('…'))}…`}${where}`
+}
 
 /** A name-based UUID (v5 layout, SHA-1) of engine + sessionId, so the same session always gets the same id. */
 export function observedAgentId(engine: string, sessionId: string): string {
@@ -69,6 +87,8 @@ interface Entry {
   pid: number
   /** The Orca terminal its last event came from. */
   handle?: string
+  /** What the permission prompt it waits on asks, from its hook (deviceClaude/asked.ts): '' when it names nothing. */
+  asked?: string
   generation?: string
   endAt?: number
   /** The read of the last answer, waiting out the grace. */
@@ -167,7 +187,16 @@ export class ObservedSource implements HostSource {
     for (const l of [...this.listeners]) l()
   }
 
-  ingest(e: ObservedHookEvent): void {
+  /** What the permission prompt the agent waits on asks, while it waits; '' for a prompt that names nothing. */
+  waitingOn(agentId: string): string | undefined {
+    return this.entries.get(agentId)?.asked
+  }
+
+  ingest(e: ObservedEvent): void {
+    if (e.event === 'asked') {
+      this.asked(e)
+      return
+    }
     // The end of a session never listed (one of the 50 dropped when full, or ended before the devices started) lists none.
     if (e.event === 'session-end' && !this.entries.has(observedAgentId(e.engine, e.sessionId))) return
     const now = this.deps.now()
@@ -186,6 +215,7 @@ export class ObservedSource implements HostSource {
     if (e.transcriptPath) entry.transcriptPath = e.transcriptPath
     if (e.event === 'session-end') {
       entry.endAt = now
+      this.clearAsked(entry)
       this.emit()
       return
     }
@@ -219,9 +249,36 @@ export class ObservedSource implements HostSource {
     this.emit()
   }
 
+  /**
+   * A permission prompt the session waits on: the agent waits, and the dial's line says for what. Only on an agent the
+   * session's own hooks listed: the plugin's hook runs in a Harness pane too, whose agent is Harness's, and says nothing
+   * of where a session runs.
+   */
+  private asked(e: ObservedAsked): void {
+    const entry = this.entries.get(observedAgentId(e.engine, e.sessionId))
+    if (!entry || !this.live(entry)) return
+    const now = this.deps.now()
+    this.setState(entry, 'needs-you', now)
+    // A new prompt, though the agent may still read needs-you for the last one: what was written before is not its answer.
+    entry.since = now
+    entry.agent.lastActivityAt = now
+    entry.asked = e.summary || e.tool || ''
+    // Counts only: never the prompt, the tool or the session.
+    this.deps.log('[observed] waiting prompt · shown')
+    this.emit()
+  }
+
+  /** The prompt it waited on is over. */
+  private clearAsked(entry: Entry): void {
+    if (entry.asked === undefined) return
+    entry.asked = undefined
+    this.deps.log('[observed] waiting prompt · cleared')
+  }
+
   private setState(entry: Entry, state: HostAgentState, now: number): void {
     if (entry.agent.state !== state || state === 'working') entry.since = now
     entry.agent.state = state
+    if (state !== 'needs-you') this.clearAsked(entry)
   }
 
   /** The existing entry, or a new one if there is room. */
@@ -350,10 +407,12 @@ export class ObservedSource implements HostSource {
    */
   async checkWorking(): Promise<void> {
     const all = [...this.entries.values()]
+    // A prompt its hook told of writes a line of its own as it asks.
+    const answeredAfter = (e: Entry): number => e.since + (e.asked === undefined ? 0 : ASK_SETTLE_MS)
     for (const e of all) {
       if (e.agent.state !== 'needs-you' || !e.transcriptPath) continue
       const stamp = await this.deps.fileStamp(e.transcriptPath)
-      if (!stamp || stamp.mtime <= e.since || e.agent.state !== 'needs-you' || this.entries.get(e.agent.id) !== e) continue
+      if (!stamp || stamp.mtime <= answeredAfter(e) || e.agent.state !== 'needs-you' || this.entries.get(e.agent.id) !== e) continue
       const now = this.deps.now()
       this.setState(e, 'working', now)
       e.agent.lastActivityAt = now

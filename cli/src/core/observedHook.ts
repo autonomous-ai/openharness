@@ -17,9 +17,29 @@ export interface ObservedHookEvent {
   hostHints: Record<string, string>
 }
 
-const EVENTS: readonly string[] = ['session-start', 'turn-start', 'needs-input', 'turn-stop', 'turn-error', 'session-end']
+/**
+ * A permission prompt that waits, from the plugin's hook client (deviceClaude/asked.ts) rather than the session's own
+ * hook: it sends no process and no environment, so where the session runs stays its own hooks' to say. The dial shows it,
+ * and nothing answers it there.
+ */
+export interface ObservedAsked {
+  engine: AgentEngine
+  sessionId: string
+  event: 'asked'
+  cwd?: string
+  /** The tool the prompt is for, and one line of what it acts on. */
+  tool?: string
+  summary?: string
+}
+
+export type ObservedEvent = ObservedHookEvent | ObservedAsked
+
+const EVENTS: readonly string[] = ['session-start', 'turn-start', 'needs-input', 'asked', 'turn-stop', 'turn-error', 'session-end']
 const MAX_SESSION_ID = 128
 const MAX_PATH = 1024
+const MAX_TOOL = 64
+/** Bytes, as the dial holds its line in a byte buffer. */
+const MAX_SUMMARY_BYTES = 200
 /** As many as the hook's list holds (hook/notify.mjs HOST_HINTS): an honest hook sends no more, and none it sends is cut. */
 export const MAX_HINTS = 9
 const MAX_HINT_VALUE = 64
@@ -36,14 +56,22 @@ export const bounded = (value: unknown, max: number): value is string =>
 export const isRecord = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === 'object' && !Array.isArray(value)
 
-export function parseObservedHook(body: unknown): ObservedHookEvent | null {
+export function parseObservedHook(body: unknown): ObservedEvent | null {
   if (!isRecord(body)) return null
-  const { engine, sessionId, event, cwd, callerPid, transcriptPath, hostHints } = body
+  const { engine, sessionId, event, cwd, callerPid, transcriptPath, hostHints, tool, summary } = body
   if (typeof engine !== 'string' || !(ENGINES as readonly string[]).includes(engine)) return null
   if (!bounded(sessionId, MAX_SESSION_ID) || sessionId === '') return null
   if (typeof event !== 'string' || !EVENTS.includes(event)) return null
-  if (typeof callerPid !== 'number' || !Number.isSafeInteger(callerPid) || callerPid <= 0) return null
   if (cwd !== undefined && !bounded(cwd, MAX_PATH)) return null
+  if (event === 'asked') {
+    if (tool !== undefined && !bounded(tool, MAX_TOOL)) return null
+    if (summary !== undefined && (!bounded(summary, MAX_SUMMARY_BYTES) || Buffer.byteLength(summary) > MAX_SUMMARY_BYTES)) return null
+    return {
+      engine: engine as AgentEngine, sessionId, event,
+      ...(cwd === undefined ? {} : { cwd }), ...(tool === undefined ? {} : { tool }), ...(summary === undefined ? {} : { summary }),
+    }
+  }
+  if (typeof callerPid !== 'number' || !Number.isSafeInteger(callerPid) || callerPid <= 0) return null
   if (transcriptPath !== undefined && !bounded(transcriptPath, MAX_PATH)) return null
   if (!isRecord(hostHints)) return null
   const entries = Object.entries(hostHints)
@@ -62,7 +90,7 @@ export function parseObservedHook(body: unknown): ObservedHookEvent | null {
 
 export interface ObservedHookDeps {
   /** Hand the event to the devices process; false when it is not there (the event is dropped). */
-  forward: (event: ObservedHookEvent) => boolean
+  forward: (event: ObservedEvent) => boolean
   now: () => number
   log?: (line: string) => void
 }

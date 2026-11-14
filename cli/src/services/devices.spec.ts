@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import type { CableHostWiring, DaemonCableHost } from '../cable/cableHost.js'
 import { observedAgentId } from '../cable/hosts/observed.js'
 import { env } from '../config/env.js'
+import { routeVoiceTask } from '../lib/voiceRouter.js'
 import { DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, ServiceUnavailableError, type CoreApi, type CorePorts, type DevicesPort } from '../core/api.js'
 import type { ObservedAsked, ObservedHookEvent } from '../core/observedHook.js'
 import { createServiceHost } from '../core/serviceHost.js'
@@ -1391,7 +1392,9 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     port.observed(asked({ summary: 'rm -rf /srv/secret-target' }))
     expect(await host().activityText(ID)).toBe('rm -rf /srv/secret-target · answer in Orca')
     // A word that names no agent is weighed among Harness's agents alone: the router never hears of this one.
+    vi.mocked(routeVoiceTask).mockResolvedValueOnce({ agentId: '', confidence: 0, reason: 'no agents in machine' } as Awaited<ReturnType<typeof routeVoiceTask>>)
     await host().route('clean up the build', (await host().listAgentSnapshot()).agents)
+    expect(vi.mocked(routeVoiceTask).mock.calls.map(([, candidates]) => candidates)).toEqual([[]])
     port.observed(hook('turn-stop'))
     await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
     expect(calls('summary')).toHaveLength(1)

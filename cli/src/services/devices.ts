@@ -27,7 +27,7 @@ import { cableEventFor, cableStepFor, cableQuestionCloseFor, cableQuestionFor, D
 import { CableSession } from '../cable/cableSession.js'
 import { Inbox } from '../cable/hosts/inbox.js'
 import { LAST_ANSWER_DEADLINE_MS, LAST_ANSWER_MAX_BYTES, readLastAnswer } from '../cable/hosts/lastAnswer.js'
-import { hostDisplayName, observedAgentId, ObservedSource, type ObservedActions } from '../cable/hosts/observed.js'
+import { askedLine, hostDisplayName, observedAgentId, ObservedSource, type ObservedActions } from '../cable/hosts/observed.js'
 import { createOrcaActions, orcaDeps, type OrcaDeps } from '../cable/hosts/orca.js'
 import { HostRegistry } from '../cable/hosts/registry.js'
 import type { HostAgent, HostAgentState } from '../cable/hosts/types.js'
@@ -228,9 +228,14 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   }) : null
   /** One of them, by the id the dial holds: what the dial asks of it is answered here, never by a door of the core. */
   const outside = (agentId: string): HostAgent | undefined => observed?.list().find((agent) => agent.id === agentId)
-  /** Its line while it waits on the person, where a harness agent shows its terminal's footer. */
-  const waiting = (agent: HostAgent): string | null =>
-    agent.state === 'needs-you' ? `Waiting for you · ${hostDisplayName(agent.host)}` : null
+  /** Its line while it waits on the person, where a harness agent shows its terminal's footer: what its permission prompt
+   *  asks once its hook said, and the app it is answered in. The dial never answers it. */
+  const waiting = (agent: HostAgent): string | null => {
+    if (agent.state !== 'needs-you') return null
+    const host = hostDisplayName(agent.host)
+    const asks = observed?.waitingOn(agent.id)
+    return asks ? askedLine(asks, host) : `Waiting for you · ${host}`
+  }
 
   const cableHost = new DaemonCableHost({
     // The cloud harnesses too, where the core offers them: tiles on the desk the dial walks like any other.
