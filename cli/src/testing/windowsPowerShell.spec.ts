@@ -2,8 +2,8 @@ import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterAll, describe, expect, it } from 'vitest'
-import { windowsPowerShell } from './windowsPowerShell.js'
+import { afterAll, describe, expect, it, vi } from 'vitest'
+import { endTree, windowsPowerShell } from './windowsPowerShell.js'
 
 const session = windowsPowerShell()
 const scratch = mkdtempSync(join(tmpdir(), 'harness-ps-session-'))
@@ -18,6 +18,20 @@ afterAll(async () => {
 // On any platform: installPs1.spec.ts closes its session in an afterAll that also runs where no case started one.
 it('closes a session that never ran a call', async () => {
   await expect(windowsPowerShell().close()).resolves.toBeUndefined()
+})
+
+// On any platform: a host that outlived the end of its tree would otherwise hang the call, the queue behind it, or the
+// close, with no word of why.
+it('stops waiting for a host 3 s after its tree was ended, and names it', async () => {
+  vi.useFakeTimers()
+  try {
+    const left = endTree({ pid: undefined, exited: new Promise(() => undefined) })
+    await vi.advanceTimersByTimeAsync(3_000)
+    await expect(left).resolves.toBe('host undefined is still running 3 s after its tree was ended')
+    await expect(endTree({ pid: undefined, exited: Promise.resolve(0) })).resolves.toBe('')
+  } finally {
+    vi.useRealTimers()
+  }
 })
 
 // With room: the first module command a host runs costs about 22 s on windows-11-arm. The three cases that start a host
