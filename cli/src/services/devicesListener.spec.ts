@@ -195,6 +195,15 @@ describe.skipIf(process.platform === 'win32')('the devices listener', () => {
       expect(fronts).toEqual(['cursor'])
     })
 
+    // Node's own would hold one for a minute and more, and sixteen of them every connection the listener takes.
+    it('a connection that sends nothing, or stops partway through a message, is closed after the timeout', { timeout: 10_000 }, async () => {
+      const { path } = await open({ front: frontHandler(() => {}) })
+      const silent = bare(path, '')
+      const partway = bare(path, post('{', 10))
+      expect(await silent.read).toBe('')
+      await partway.read
+    })
+
     it('the 17th connection at once is closed, and the 16 go on', async () => {
       const { path } = await open({ front: frontHandler(() => {}) })
       const sixteen = Array.from({ length: LISTENER_MAX_CONNECTIONS }, () => connection(path))
