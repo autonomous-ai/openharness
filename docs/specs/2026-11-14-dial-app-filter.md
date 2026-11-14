@@ -94,6 +94,20 @@ working in. The app he is working in is the one in front, and the computer alrea
   members at most, which bounds every per-app structure below.
 - Windows and Linux hooks report less, so `app` there is often `terminal`. That still filters, but it is followed to
   the front only for apps that say who they are (VS Code and Cursor through `TERM_PROGRAM=vscode`).
+- **Not known yet is not "Other"** (the PM, 2026-11-15). An agent the open scan found has had no hook, so nothing has
+  said where it runs. Diego plugs the dial in each morning with many agents already running: if those counted as
+  "Other", the default (the app with the most agents) would pick "Other". So:
+  - such an agent's app is **not known yet** until its first hook, or until the scan learns it (below); "Other"
+    (`terminal`) stays an app that is known to be there but not in the table;
+  - it is reachable: it sits in "Other"'s ring and page until its app is known, then moves to its app's ring at the
+    end (Review Focus 1);
+  - it counts for nothing in the default: the default and the tie draw count known apps only, and an app whose
+    agents are all not known yet is shown by default only when no other app has an agent; a pick or the front can
+    still show it.
+- **The scan learns the app where that is cheap** (the PM, 2026-11-15): with no new permission, from the session's own
+  process (the same hints a hook carries, such as `__CFBundleIdentifier` and `TERM_PROGRAM`, or its parent processes'
+  app), reusing `detectApp` and the bundle table. Only the names `detectApp` reads are kept; nothing else of a process
+  is stored, logged or sent. Where it is not cheap on a platform, that platform waits for the first hook (Follow-ups).
 
 ### The rings (`select.ts`, built on `DialRing` from `fix/dial-swipe-order`)
 
