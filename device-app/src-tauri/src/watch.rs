@@ -45,13 +45,14 @@ pub fn spawn_watch(cli: &dyn Cli, send: impl Fn(Event) + Send + 'static) -> io::
 mod tests {
     use super::*;
     use crate::cli::{HarnessCli, find_cli};
-    use crate::testing::Fake;
+    use crate::testing::{Fake, wait_gone};
     use crate::types::{DialStatus, Event, MemoryLog};
     use std::io;
     use std::sync::{Arc, mpsc};
     use std::time::Duration;
 
     const WAIT: Duration = Duration::from_secs(5);
+    const SHORT: Duration = Duration::from_millis(300);
 
     fn start(fake: &Fake) -> (Watch, mpsc::Receiver<Event>) {
         let (send, events) = mpsc::channel();
@@ -60,6 +61,14 @@ mod tests {
         })
         .unwrap();
         (watch, events)
+    }
+
+    fn start_within(fake: &Fake, first_line: Duration, grace: Duration) -> (Watch, mpsc::Receiver<Event>) {
+        let (send, events) = mpsc::channel();
+        let send = move |event| {
+            let _ = send.send(event);
+        };
+        (spawn_watch_within(&fake.cli(), send, first_line, grace).unwrap(), events)
     }
 
     fn dial(attached: bool, fw: Option<&str>, hw: Option<&str>) -> Event {
@@ -131,6 +140,37 @@ mod tests {
         assert_eq!(events.recv_timeout(WAIT), Ok(dial(false, None, None)));
         drop(watch);
         assert_eq!(events.recv_timeout(WAIT), Ok(Event::WatchExit(Some(0))));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_watch_with_no_first_line_in_time_is_ended() {
+        let fake = Fake::new();
+        fake.script("hardware watch --json", &["@hang"]);
+        let (_watch, events) = start_within(&fake, SHORT, WAIT);
+        assert_eq!(events.recv_timeout(WAIT), Ok(Event::WatchExit(None)));
+        assert!(fake.pids().into_iter().all(wait_gone));
+        assert!(fake.ends().is_empty());
+        // Only the first line has a deadline: after it, the dial may stay as it is for as long as it likes.
+        let fake = Fake::new();
+        fake.script("hardware watch --json", &[r#"{"attached":false}"#, "@stdin"]);
+        let (_watch, events) = start_within(&fake, SHORT, WAIT);
+        assert_eq!(events.recv_timeout(WAIT), Ok(dial(false, None, None)));
+        assert_eq!(events.recv_timeout(SHORT * 2), Err(mpsc::RecvTimeoutError::Timeout));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_stopped_watch_that_does_not_end_is_killed() {
+        let fake = Fake::new();
+        // `@hang` never reads stdin, so its end goes unseen.
+        fake.script("hardware watch --json", &[r#"{"attached":false}"#, "@hang"]);
+        let (watch, events) = start_within(&fake, WAIT, SHORT);
+        assert_eq!(events.recv_timeout(WAIT), Ok(dial(false, None, None)));
+        watch.stop();
+        assert_eq!(events.recv_timeout(WAIT), Ok(Event::WatchExit(None)));
+        assert!(wait_gone(fake.pids()[0]));
+        assert!(fake.ends().is_empty());
     }
 
     #[cfg(unix)]
