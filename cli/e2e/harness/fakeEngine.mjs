@@ -86,7 +86,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
  */
 const HOOK_EVENTS = {
   // PostToolUse: Agent Messages' hook (engines/kit/messagesHook.ts), run after each tool of the `!work` directive.
-  // Notification: run as a permission dialog opens (`permitDialog`).
+  // Notification: run once a permission dialog has waited on the person (`permitDialog`).
   claude: new Set(['SessionStart', 'UserPromptSubmit', 'Stop', 'StopFailure', 'SessionEnd', 'PostToolUse', 'Notification']),
   codex: new Set(['SessionStart', 'UserPromptSubmit', 'PostToolUse']),
 }
@@ -858,11 +858,13 @@ export async function run(engine, config = {}, { native = false } = {}) {
     for (const key of chunk.match(/\x1b\[200~[\s\S]*?(?:\x1b\[201~|$)|\x1b\[[ABCD]|\x1b|\r|\n|\x7f|./gs) ?? []) {
       if (!dialog) return
       noteDialogKey(key)
+      dialog.idle?.refresh()
       const settle = (choice) => {
         // An old dialog can survive in tmux scrollback after a redraw/resize, as in the chaos run.
         // Keep the whole frame for that acceptance case; the composer below it is the live screen.
         if (dialog.keepInScrollback) process.stdout.write('\r\n')
         else eraseDialog()
+        clearTimeout(dialog.idle)
         const asked = dialog; dialog = null; notes = asked.notes ?? ''; drawComposer(); asked.resolve(choice)
       }
       if (dialog.kind === 'many') {
@@ -1237,13 +1239,15 @@ export async function run(engine, config = {}, { native = false } = {}) {
     return finish(allowed ? `ran ${command}` : `did not run ${command}`)
   }
   // A permission dialog in the composer's place, as the CLIs draw theirs, until it is answered. Claude Code also says
-  // so to its Notification hooks, the dialog already up (2.1.x: `permission_prompt`, "Claude needs your permission to
-  // use Bash"); Codex has no such hook.
+  // so to its Notification hooks once the dialog has waited 6 s with no key (2.1.x: `permission_prompt`, "Claude needs
+  // your permission to use Bash"): each key starts the wait again, and an answer in time sends none. Codex has no such hook.
+  const PERMIT_NOTICE_MS = 6_000
   const permitDialog = (command, resolve) => {
     eraseComposer()
-    dialog = { kind: 'permit', command, cursor: 0, drawn: 0, resolve }
+    dialog = { kind: 'permit', command, cursor: 0, drawn: 0, resolve, idle: setTimeout(() => {
+      void runHooks('Notification', { message: 'Claude needs your permission to use Bash', notification_type: 'permission_prompt' })
+    }, PERMIT_NOTICE_MS) }
     drawDialog()
-    void runHooks('Notification', { message: 'Claude needs your permission to use Bash', notification_type: 'permission_prompt' })
   }
   // `!permitnext`: the request waiting for the next paste.
   let armed = null
