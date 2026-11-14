@@ -370,6 +370,31 @@ describe('AppFilter', () => {
       expect(causes()).toEqual([])
     })
 
+    it('a pick of the default page holds it: an app with a known agent does not take over', () => {
+      const { filter, agents, causes } = setup()
+      agents({ terminal: 3 }, {})
+      filter.front('ghostty')
+      settle()
+      expect(filter.shown()).toBe('terminal')
+      expect(filter.pick('terminal')).toBe('same')
+      agents({ terminal: 3, ghostty: 5 }, { ghostty: 5 })
+      expect(filter.shown()).toBe('terminal')
+      // As a pick that switched: the app that was in front settling there again moves nothing.
+      filter.front('vscode')
+      vi.advanceTimersByTime(300)
+      filter.front('ghostty')
+      settle()
+      expect(filter.shown()).toBe('terminal')
+      expect(causes()).toEqual([])
+      // Another app settling in front ends it.
+      filter.front('none')
+      settle()
+      filter.front('ghostty')
+      settle()
+      expect(filter.shown()).toBe('ghostty')
+      expect(causes()).toEqual(['front'])
+    })
+
     it('a pick that ended in front of an app with no agents does not give way', () => {
       const { filter, agents, causes } = setup()
       agents({ terminal: 3, ghostty: 5 }, { ghostty: 5 })
