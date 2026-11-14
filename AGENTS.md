@@ -65,5 +65,8 @@ The core is the one process every agent depends on (`cli/src/core/`). Protect it
 
 Follow [validation and release](docs/validation-and-release.md). Pick the checks before starting them; never skip a
 required check or start an extra CI run. Run the local gates PR CI does not (`npm run test:core` and the others) when you
-touch their area, and record them in the pull request. Merge with `make merge-pr`; never push to a `harness-train/`
-branch.
+touch their area, and record them in the pull request. Merge with `make merge-pr`. If it refuses only because `main`
+moved, and the required checks are green on the head and GitHub shows the pull request mergeable with no conflict and
+no unresolved review conversation, merge with `gh pr merge <PR> --squash --admin --match-head-commit <head>`. On a
+conflict, integrate `main`, review the combined change and rerun only the affected checks. Never push to a
+`harness-train/` branch.
