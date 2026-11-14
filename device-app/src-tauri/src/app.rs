@@ -91,10 +91,11 @@ mod tests {
         Event::Login(event)
     }
 
-    /// The first answers of the two reads; gives the effects of the last.
+    /// The first answers of the two reads; gives the effects of both, as either may change the menu.
     fn answer(app: &mut App, signed_in: bool, claude: Option<ClaudeStatus>) -> Vec<Effect> {
-        app.handle(Event::Auth(Some(signed_in)));
-        app.handle(Event::Claude(claude))
+        let mut effects = app.handle(Event::Auth(Some(signed_in)));
+        effects.extend(app.handle(Event::Claude(claude)));
+        effects
     }
 
     /// Found, signed out, Claude Code off: the window offers sign-in.
