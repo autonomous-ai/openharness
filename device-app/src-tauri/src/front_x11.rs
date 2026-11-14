@@ -1,7 +1,9 @@
 //! The app in front on Linux X11: the window manager sets the root window's `_NET_ACTIVE_WINDOW`, and the X server
 //! tells each change. No timer, no permission. Wayland has no common way to tell: there this source tells nothing.
 
+use crate::types::Log;
 use std::path::Path;
+use std::sync::Arc;
 #[cfg(target_os = "linux")]
 use {
     crate::front::FrontSource,
@@ -9,11 +11,14 @@ use {
     x11rb::connection::Connection,
     x11rb::protocol::Event,
     x11rb::protocol::xproto::{Atom, AtomEnum, ChangeWindowAttributesAux, ConnectionExt as _, EventMask, Window},
+    x11rb::rust_connection::RustConnection,
 };
 
 /// The exe name of the process whose window is active: once at start, then on each change.
 #[cfg(target_os = "linux")]
-pub struct X11Front;
+pub struct X11Front {
+    pub log: Arc<dyn Log>,
+}
 
 #[cfg(target_os = "linux")]
 impl FrontSource for X11Front {
@@ -24,24 +29,44 @@ impl FrontSource for X11Front {
         if !session_is_x11(session_type.as_deref(), wayland_display.as_deref(), display.as_deref()) {
             return;
         }
-        // Connecting can wait on a remote display: never on the thread that starts the app. A display that cannot be
-        // reached, or that goes away, tells nothing more, as on Wayland.
-        let _ = std::thread::Builder::new().name("front-x11".into()).spawn(move || {
-            let _ = follow(&*changed);
-        });
+        let Some(display) = display else { return };
+        // Connecting can wait on a remote display: never on the thread that starts the app.
+        on_thread(self.log.clone(), move || follow(&display, &*changed));
+    }
+}
+
+/// Why the source stopped telling; it tells nothing more, as on Wayland. Each is one fixed log line, never the
+/// error's own text: x11rb's carries `$DISPLAY` and the X server's words.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Stop {
+    /// The display could not be reached, or no thread could follow it.
+    NotFollowed,
+    /// The connection to it ended.
+    Ended,
+}
+
+impl Stop {
+    fn line(&self) -> &'static str {
+        match self {
+            Stop::NotFollowed => "front: X11 not followed",
+            Stop::Ended => "front: X11 ended",
+        }
+    }
+}
+
+/// `follow` on a thread of its own, then the line of why it stopped.
+pub fn on_thread(log: Arc<dyn Log>, follow: impl FnOnce() -> Stop + Send + 'static) {
+    let told = log.clone();
+    let spawned = std::thread::Builder::new().name("front-x11".into()).spawn(move || told.line(follow().line()));
+    if spawned.is_err() {
+        log.line(Stop::NotFollowed.line());
     }
 }
 
 /// Tells the app in front now, then on each change, until the connection ends.
 #[cfg(target_os = "linux")]
-fn follow(changed: &dyn Fn(String)) -> Result<(), Box<dyn Error>> {
-    let (conn, screen) = x11rb::connect(None)?;
-    let root = conn.setup().roots[screen].root;
-    let (active, wm_pid) = (conn.intern_atom(false, b"_NET_ACTIVE_WINDOW")?, conn.intern_atom(false, b"_NET_WM_PID")?);
-    let (active, wm_pid) = (active.reply()?.atom, wm_pid.reply()?.atom);
-    // Asked for before the first read, so a change between the two is not missed.
-    let mask = ChangeWindowAttributesAux::new().event_mask(EventMask::PROPERTY_CHANGE);
-    conn.change_window_attributes(root, &mask)?.check()?;
+fn follow(display: &str, changed: &dyn Fn(String)) -> Stop {
+    let Ok((conn, root, active, wm_pid)) = subscribe(display) else { return Stop::NotFollowed };
     let front = || {
         let window =
             property32(&conn, root, active, AtomEnum::WINDOW, 1).first().copied().filter(|&w| w != x11rb::NONE);
@@ -50,13 +75,26 @@ fn follow(changed: &dyn Fn(String)) -> Result<(), Box<dyn Error>> {
     };
     changed(front());
     loop {
-        if let Event::PropertyNotify(event) = conn.wait_for_event()?
-            && event.window == root
-            && event.atom == active
-        {
-            changed(front());
+        match conn.wait_for_event() {
+            Err(_) => return Stop::Ended,
+            Ok(Event::PropertyNotify(event)) if event.window == root && event.atom == active => changed(front()),
+            Ok(_) => {}
         }
     }
+}
+
+/// A connection to `display` told each change of the root window's properties, with the root and the atoms of the
+/// active window and of a window's pid.
+#[cfg(target_os = "linux")]
+fn subscribe(display: &str) -> Result<(RustConnection, Window, Atom, Atom), Box<dyn Error>> {
+    let (conn, screen) = x11rb::connect(Some(display))?;
+    let root = conn.setup().roots[screen].root;
+    let (active, wm_pid) = (conn.intern_atom(false, b"_NET_ACTIVE_WINDOW")?, conn.intern_atom(false, b"_NET_WM_PID")?);
+    let (active, wm_pid) = (active.reply()?.atom, wm_pid.reply()?.atom);
+    // Asked for before the first read, so a change between the two is not missed.
+    let mask = ChangeWindowAttributesAux::new().event_mask(EventMask::PROPERTY_CHANGE);
+    conn.change_window_attributes(root, &mask)?.check()?;
+    Ok((conn, root, active, wm_pid))
 }
 
 /// Up to `length` values of a window's 32-bit property: none when it is unset, of another type, or the window is gone.
@@ -144,15 +182,15 @@ mod tests {
 
     /// A log that hands each line on, so a test waits for it without a sleep.
     struct Lines(std::sync::mpsc::Sender<String>);
-    impl crate::types::Log for Lines {
+    impl Log for Lines {
         fn line(&self, text: &str) {
             let _ = self.0.send(text.into());
         }
     }
 
-    fn lines() -> (std::sync::Arc<dyn crate::types::Log>, std::sync::mpsc::Receiver<String>) {
+    fn lines() -> (Arc<dyn Log>, std::sync::mpsc::Receiver<String>) {
         let (send, lines) = std::sync::mpsc::channel();
-        (std::sync::Arc::new(Lines(send)), lines)
+        (Arc::new(Lines(send)), lines)
     }
 
     #[test]
@@ -207,7 +245,7 @@ mod tests {
             property32(&conn, root, supported, AtomEnum::ATOM, 1024).contains(&active)
         });
         let (tell, told) = mpsc::channel();
-        X11Front.start(Box::new(move |value| {
+        X11Front { log: Arc::new(crate::types::MemoryLog::default()) }.start(Box::new(move |value| {
             let _ = tell.send(value);
         }));
 

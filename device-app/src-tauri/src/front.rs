@@ -1,6 +1,7 @@
 //! Which app is in front, for the dial to follow. The value (a bundle id, an exe name) goes on the watch's stdin and
 //! nowhere else: never an Event, the log, the state file or the window.
 
+use crate::types::Log;
 use std::sync::Arc;
 
 /// What an OS names an app is outside text: past this it is cut, so the line stays under the 1 KiB the watch reads.
@@ -19,12 +20,14 @@ impl FrontSource for NoFront {
     fn start(&self, _changed: Box<dyn Fn(String) + Send + Sync>) {}
 }
 
-/// The source this platform has.
-pub fn system() -> Arc<dyn FrontSource> {
+/// The source this platform has. Only the X11 one can fail after it starts, and says so in `log`.
+pub fn system(
+    #[cfg_attr(not(target_os = "linux"), expect(unused_variables))] log: Arc<dyn Log>,
+) -> Arc<dyn FrontSource> {
     #[cfg(target_os = "macos")]
     let source = crate::front_macos::MacFront;
     #[cfg(target_os = "linux")]
-    let source = crate::front_x11::X11Front;
+    let source = crate::front_x11::X11Front { log };
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     let source = NoFront;
     Arc::new(source)

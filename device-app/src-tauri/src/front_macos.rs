@@ -79,7 +79,7 @@ mod tests {
     fn system_is_the_appkit_source_on_macos() {
         // NoFront tells nothing; the AppKit source tells the app in front at once, even when there is none.
         let (told, changed) = recorder();
-        system().start(changed);
+        system(Arc::new(crate::types::MemoryLog::default())).start(changed);
         assert_eq!(told.lock().unwrap().len(), 1);
     }
 }
