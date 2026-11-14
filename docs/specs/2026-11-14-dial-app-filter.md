@@ -224,7 +224,9 @@ desktop change. The rings are memory only too, as swipe-order decided.
   macOS and Linux the dial reaches "Other" by a pick or as the default, and never by following (the one row that
   gives `terminal` is `WindowsTerminal.exe`). The raw value never leaves the CLI process.
 - The watch sends `{ type: 'front', app }` to the devices listener. With no listener (an older daemon, or the devices
-  process not running) it ignores the `front` lines and tries again on the next change.
+  process not running) it ignores the `front` lines and tries again on the next change, and again when the dial
+  attaches (`dial_status` turns `attached`), so a devices process that starts with the dial hears the app in front
+  at once (the PM, 2026-11-15).
 - **The devices listener** (`cli/src/services/devicesListener.ts`, the PM, 2026-11-15) is **shared**: one local
   socket of the devices process for every message a local tool sends the devices, so later device routes (#4296's
   follow-up: `asked`, the mod's inbox, `observed`) only register a handler of their own. It:

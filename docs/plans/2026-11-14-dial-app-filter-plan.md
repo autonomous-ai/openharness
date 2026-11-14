@@ -6,12 +6,41 @@
 
 **Architecture:**
 - In the devices process each agent gets an `app` (its outermost app). The cable host keeps one ring per app (`AppRings`, built on `DialRing`) and one `AppFilter` that says which app is shown. A dial that greets with `appFilter: "v1"` gets the shown app's ring and an `apps` frame, and sends `app.pick` back. An older dial keeps the single ring.
-- The Harness Device app learns which app is in front from the OS and writes it on the stdin of the `harness hardware watch --json` child it already runs. The watch maps the raw name to an app id and sends `dial_front`. The core checks and bounds that frame and forwards it to the devices process, where the filter settles it for 1 s.
+- The Harness Device app learns which app is in front from the OS and writes it on the stdin of the `harness hardware watch --json` child it already runs. The watch maps the raw name to an app id and tells the devices process through the devices' own local listener (`{ type: 'front', app }`), where the filter settles it for 1 s. The core is not on this path and knows nothing of it (`cli/AGENTS.md`, Protect the core, rule 7; the PM, 2026-11-15).
+- The devices listener (`cli/src/services/devicesListener.ts`) is shared: one private socket of the devices process, with a handler per message type. `front` is its first handler; #4296's follow-up registers `asked`, `inbox` and `observed` and changes nothing else.
 - The round firmware says `appFilter` in `hello`, holds the `apps` it is sent, draws the shown app's name on the face, and opens `APPS` (the TABS carousel) on a hold in the machine view.
 
 **Tech Stack:** TypeScript daemon and CLI (Node, vitest, `cli/`), Rust and Tauri 2 (`device-app/`, objc2 on macOS, x11rb on Linux), ESP-IDF 5.5.4 C firmware with Python host tests.
 
-**Spec:** `docs/specs/2026-11-14-dial-app-filter.md`. It stacks on the fixed ring (`docs/plans/2026-11-14-dial-swipe-order-design.md`, uncommitted on `fix/dial-swipe-order`) and on wave 1a (`docs/plans/2026-11-13-device-claude-orca-plan.md`, PR #4296).
+**Spec:** `docs/specs/2026-11-14-dial-app-filter.md` (as of `bd7b36656e`). It stacks on the fixed ring (`fix/dial-swipe-order`, `6fd0344484`) and on wave 1a (`docs/plans/2026-11-13-device-claude-orca-plan.md`, PR #4296).
+
+## State (2026-11-15)
+
+- **Done, on `feat/dial-app-filter`:** Tasks 2 to 18, 20 and 23, each as a red commit and a code commit (its `Done:` line names the code commit).
+- **Obsolete:** Task 1. The branch is stacked on `fix/dial-swipe-order` (`6fd0344484`), which sits on PR #4296 and on a `main` that deleted the Swarm (#4303).
+- **To do:** Tasks 24 to 29 (the PM's decisions of 2026-11-15), then Tasks 19, 21 and 22.
+- **Decided by the PM, 2026-11-15:**
+  1. The core knows nothing of the app in front (rule 7). Tasks 8, 9 and 10 are reverted (Task 24); the watch tells the devices through their own listener (Tasks 25 to 28).
+  2. The Swarm is gone from `main`: no Buddy filter, no wait for Swarm cards, no Swarm-recap or badged-companion exception to the hold. The rebase already applied this in the code; this plan now says the same.
+  3. "Hold to switch tabs" becomes "Hold to switch apps" where a hold opens `APPS` (Task 29).
+
+## Start order
+
+diegodev starts a task when the tasks it depends on are done and no running task shares its files.
+
+| Task | Depends on | Shares files with |
+|---|---|---|
+| 24 Revert the core's part | none | 27 (`services/devices.ts`, `services/devicesProcess.ts` and their specs) |
+| 25 The listener's path | none | none |
+| 26 The devices listener | 25 | none |
+| 27 The devices open the listener | 24, 25, 26 | 24 |
+| 28 The watch tells the listener | 25 | none |
+| 29 The hint "Hold to switch apps" | none | none |
+| 19 End to end | 27, 28 | none |
+| 21 Docs | 27, 28 | none |
+| 22 The on-dial rig | 19, 27 | none |
+
+Longest chain: 25 → 26 → 27 → 19 → 22.
 
 ## Layers
 
@@ -19,35 +48,32 @@ Every file this plan creates or changes, and the process it runs in (`cli/AGENTS
 
 | File | Layer and process | Gate |
 |---|---|---|
-| `cli/src/core/dialFront.ts` (new) | **Core** (`harnessd-core`). Checks, bounds and forwards one frame; keeps a rate counter and nothing else | A new line in `src/architecture.coreFiles.txt`; 100% per file (`npm run test:core`). Decided: the PM, answer 1 |
-| `cli/src/core/api.ts`, `cli/src/core/devicesLink.ts` | **Core** | Already listed; 100% per file |
-| `cli/src/localWsServer.ts` | **Core** (listed in `coreFiles.txt`, outside the 100% gate): one frame block and one feature name, no logic | `localWsServer.spec.ts` |
-| `cli/src/core/main.ts` | **Core**, wiring only | The end-to-end suite |
-| `cli/src/architecture.coreFiles.txt` | The list of what the **core** loads: one new line | `architecture.spec.ts` |
+| `cli/src/core/**`, `cli/src/localWsServer.ts`, `cli/src/architecture.coreFiles.txt` | **Core** (`harnessd-core`): **unchanged by this work.** Tasks 8 to 10 added to it; Task 24 takes all of it out | `git diff` against the base is empty for these paths; `architecture.spec.ts`; `npm run test:core` |
 | `cli/src/cable/hosts/types.ts`, `hostDetect.ts`, `select.ts`, `appFilter.ts` (new), `observed.ts`, `harness.ts` | **Devices service process** (`harnessd-devices`) | Their specs |
 | `cli/src/cable/cableHost.ts`, `cli/src/cable/cableSession.ts` | **Devices service process** | Their specs |
 | `cli/src/services/devices.ts`, `cli/src/services/devicesProcess.ts` | **Devices service process** | 100% per file (`npm run test:core`) |
-| `cli/src/cable/hosts/frontApp.ts` (new), `cli/src/devices/client.ts` | **CLI only**: the `harness hardware watch` process. The table sits next to `hostDetect.ts` as the spec says, and only the CLI imports it | Their specs |
+| `cli/src/services/devicesListener.ts` (new) | **Devices service process**, and only there: the devices' own private socket and its handlers. The core's process never opens it, also when the devices run inside it | 100% per file (`npm run test:core`); its security tests |
+| `cli/src/devices/listenerPath.ts` (new) | Shared by the **devices service process** and the **CLI**: where the socket is. A pure helper; the core does not load it | Its spec |
+| `cli/src/devices/listenerClient.ts` (new) | **CLI only**: one message to the devices listener, sent only to a socket that is this account's own | Its spec |
+| `cli/src/cable/hosts/frontApp.ts` (new), `cli/src/devices/client.ts` | **CLI only**: the `harness hardware watch` process. The table sits next to `hostDetect.ts` as the spec says, and only the CLI and the listener's `front` handler import it | Their specs |
 | `device-app/src-tauri/src/front.rs`, `front_macos.rs`, `front_x11.rs` (new), `cli.rs`, `watch.rs`, `runner.rs`, `lib.rs`, `main.rs`, `testing.rs`, `tests/fake-harness`, `Cargo.toml`, `Cargo.lock` | **Harness Device app** (its own process, thin over the CLI) | `cargo test --lib`: PR CI on Linux, by hand on a Mac |
-| `devices/harness-device/firmware/main/cable_client.c`, `cable_client.h`, `ui/ui_screens.h`, `ui/habitat/ui_habitat.c` | **Firmware**, round dial (OTA key `harness-device`) | `make device-test`, every `firmware/test/test_*.py` |
-| `devices/harness-device/firmware/test/test_touch_ui.py`, `test_cable_supertab.py`, `test_cable_identity.py`, `test_cable_outbound.py` | **Firmware** host tests | Themselves |
+| `devices/harness-device/firmware/main/cable_client.c`, `cable_client.h`, `ui/ui_screens.h`, `ui/habitat/ui_habitat.c`, `ui/habitat/focus.c`, `ui/habitat/focus.h` | **Firmware**, round dial (OTA key `harness-device`) | `make device-test`, every `firmware/test/test_*.py` |
+| `devices/harness-device/firmware/test/test_touch_ui.py`, `test_cable_identity.py`, `test_cable_outbound.py`, `test_character.c` | **Firmware** host tests | Themselves |
 | `cli/e2e/dialAppFilter.e2e.ts`, `cli/e2e/harness/outsideAgent.ts` (new), `cli/e2e/harness/desk.ts`, `cli/e2e/deviceWithoutApp.e2e.ts` | Test: the real daemon, a fake dial, the real watch | `cli-e2e.yml` |
 | `cli/e2e/dialAppFilterOnDial.e2e.ts` (new, opt-in) | Test rig: the isolated daemon on a real dial. It skips unless `ON_DIAL_PORT` is set | By hand, Verification check 4 |
 | `.github/workflows/ci.yml` (`device-app-checks`), `scripts/tests/test_ci_plan.py`, `docs/validation-and-release.md` | PR CI: the X11 source, live under Xvfb | `process-checks` (`scripts/tests`) |
-| `cli/AGENTS.md`, `device-app/AGENTS.md`, `docs/specs/2026-11-13-device-without-the-app.md` | Repo files, no process | none |
+| `cli/AGENTS.md`, `cli/src/services/AGENTS.md`, `device-app/AGENTS.md`, `docs/specs/2026-11-13-device-without-the-app.md` | Repo files, no process | none |
 
 What this fixes, by layer:
-- **The core never** learns which app is shown, keeps the app in front, or logs an app name. It lets through one of 16 fixed words (the 15 app ids, `claude` among them (Task 23), and `none`), at most 10 a second per connection, and only from a tool that asked to watch the dial.
-- **The raw name** (a bundle id, an exe name) exists only in the Harness Device app and in the `harness hardware watch` process. The daemon is sent an app id.
+- **The core never** hears of the app in front, in any form: no frame, no port member, no feature name, no file, no line of `architecture.coreFiles.txt`. Delete the devices and nothing is left in the core to take out.
+- **The devices listener** takes one of 16 fixed words (the 15 app ids, `claude` among them (Task 23), and `none`), at most 10 a second per connection, on a socket only this computer's owner can open.
+- **The raw name** (a bundle id, an exe name) exists only in the Harness Device app and in the `harness hardware watch` process. The devices are told an app id.
 - **Which app is shown, the rings and the settle timer** live in the devices process, in memory only.
-- With `HARNESSD_SERVICES=none` (debugging) and on Harness OS the devices service runs inside the core's process, as every service does there. The file boundaries stay the same.
+- With `HARNESSD_SERVICES=none` (debugging) and on Harness OS the devices service runs inside the core's process, as every service does there. There is no devices process then, so no listener is opened: the dial filters by app and takes a pick, and does not follow the app in front.
 
-## Unmerged dependencies
+## Base
 
-No code task starts before both of these are on `main` (Task 1). The plan names files and functions as those branches leave them.
-
-- **`fix/dial-swipe-order`** has a design and no code yet. `DialRing`, its `select(agents): { rows, total }` and "one per `CableHost` in `machineSnapshot`" are known **only from the design**. Every place below that uses them is marked **⚠ design-only**: the implementer reads the merged code at dispatch and uses its real names.
-- **PR #4296** (`origin/feat/device-claude-orca`, head `9eed162bbb`, open). Names below from `cableHost.ts`, `cableSession.ts`, `observed.ts`, `services/devices.ts`, `core/api.ts`, `core/devicesLink.ts` and `core/main.ts` are read from that head and marked **⚠ #4296**: review can still change them. Line numbers are that head's (or `main` at `92aa7660f4` for files it does not touch) and will move.
+The branch is stacked on `fix/dial-swipe-order` (`6fd0344484`), which holds `DialRing` and sits on PR #4296. "The base" below is `git merge-base HEAD fix/dial-swipe-order` today, and `origin/main` once both have merged. The marks **⚠ design-only** and **⚠ #4296** in the done tasks are history: their code is written against the real names. Line numbers in the done tasks are from before the rebase.
 
 ## External gate: mockup approved
 
@@ -55,15 +81,17 @@ A mockup of the `APPS` picker and of the face's app line is made by the main ses
 
 ## Global Constraints
 
-- **Apps.** The fixed set is the host ids `hostDetect.ts` names: `harness`, `orca`, `herdr`, `rex`, `zellij`, `kitty`, `wezterm`, `iterm`, `terminal-app`, `ghostty`, `vscode`, `cursor`, `warp`, `terminal` (14, at most 16). An unknown app is `terminal`. An agent's `app` is its outermost app; `host` stays the nearest host, for caps and "See it in …".
+- **Apps.** The fixed set is the host ids `hostDetect.ts` names: `harness`, `orca`, `herdr`, `rex`, `zellij`, `kitty`, `wezterm`, `iterm`, `terminal-app`, `ghostty`, `vscode`, `cursor`, `warp`, `terminal`, and `claude` (Task 23): 15, at most 16. An unknown app is `terminal`. An agent's `app` is its outermost app; `host` stays the nearest host, for caps and "See it in …".
 - **Two names that must not meet** (the PM, answer 4).
   - **The unknown app** is the app id `terminal` (`UNKNOWN_APP`): an agent in a terminal the daemon does not know. In `apps` its `name` is **"Other"**. Apple's Terminal (`terminal-app`) stays "Terminal". Reason: `docs/naming-system.md` defines Terminal ("A shell for entering commands") and neither defines nor forbids Other, so two pages no longer share one name. `hostDisplayName('terminal')` stays "Terminal" for "See it in Terminal".
   - **No listed app in front** is the front value `none` (`FRONT_NONE`): Safari, Finder, an app with no name. **Renamed here:** the spec's first word for it was `other`; the app id keeps its name and the front value changed, because the front value was new everywhere and the app id is the one `detectHost` already gives. `none` is not an app id, never has agents, and is never shown. The words `other` and `Other` are no id and no front value: "Other" travels only as the `name` of the `terminal` entry in `apps`.
-- **Rings.** One per app, at most 16 agents, the swipe-order rules inside each. A ring is dropped when its app has no agents. The Buddy filter and the wait for Swarm cards run first.
+- **Rings.** One per app, at most 16 agents, the swipe-order rules inside each. A ring is dropped when its app has no agents. The rings see every agent on this computer, in the registry's list as it is (the Buddy filter and the wait for Swarm cards went with the Swarm).
 - **Shown app.** No "All". Default: the app in front if it has agents, else the app with the most agents; a tie is drawn once and held while the counts stay the same. The app in front is followed after it has stayed in front for 1 s. An app in front with no agents, and `none`, change nothing. A pick on the dial holds until another app settles in front. With a Harness window the dial is sent none of it and a pick is ignored; the filter still follows the app in front (the PM, answer 6), so the dial shows it when the window closes.
 - **Wire.** `hello.appFilter: "v1"`. Host → dial `apps`: `{ shown, apps: [{ id, name, count, waiting }] }`, at most 16 entries, in a fixed order, in the machine view only, coalesced with the machine list's 1 s. Dial → host `app.pick`: `{ app }`. A dial without `appFilter` gets the single ring and no `apps`. An older daemon sends no `apps`, and the new firmware's hold then opens TABS.
-- **Front.** The Harness Device app writes `{"front":"<bundle id or exe name>"}` on the watch's stdin, only on a change, cut to 128 characters. The watch sends `dial_front { app }` only to a daemon whose `connected.features` has `dial-front`. The core takes it only from a tool that asked for `watch: ['dial']`, with `app` in the fixed set or `none`, at most 10 a second per connection, and drops it with no devices process.
-- **Privacy.** Which app is in front goes only from the Harness Device app to the devices process: never to the backend, the phone, the gateway, a file or a log. The log line is `app filter: switched` and never names an app. Measures carry a cause and no app name or agent id.
+- **Front.** The Harness Device app writes `{"front":"<bundle id or exe name>"}` on the watch's stdin, only on a change, cut to 128 characters. The watch sends `{ type: 'front', app }` to the devices listener. With no listener (an older daemon, the devices process not running, Windows) it ignores the line and tries again on the next change.
+- **The devices listener** (the PM, 2026-11-15). A Unix socket `devices.sock` in the data folder (a short folder under the home when that path is too long for a socket), mode 0600, opened only by the devices process and only while it runs. Handlers are registered by message type, each with its own body limit and rate limit. An unknown type, a body over its limit and a message over its rate are dropped and counted, never echoed or logged with their content. `front` takes `app` only from the fixed set or `none`, at most 10 a second per connection, keeps nothing and logs no app name. Windows has none yet (its named pipe comes with the Harness Device app for Windows).
+- **The core is not touched.** Nothing under `cli/src/core/`, `cli/src/localWsServer.ts` or `cli/src/architecture.coreFiles.txt` differs from the base when this work ends.
+- **Privacy.** Which app is in front goes only from the Harness Device app to the devices process: never to the core, the backend, the phone, the gateway, a file or a log. The log line is `app filter: switched` and never names an app. Measures carry a cause and no app name or agent id.
 - **Memory only.** The pick, the rings and the app in front are never written to disk or to the dial's NVS.
 - **Needs-you elsewhere (decision 7, A).** The bell and inbox count every agent on this computer. A notice opened from the inbox turns the dial to the agent and its app, and counts as a pick.
 - **No polling.** The OS tells the app when the front changes: no timer, no osascript, no System Events, no Accessibility or Screen Recording permission.
@@ -74,14 +102,17 @@ A mockup of the `APPS` picker and of the face's app line is made by the main ses
 ## Review Focus
 
 1. **An agent whose app changes.** The open scan lists a session as `terminal` until its first hook says where it runs, and a session can be resumed in another terminal. It must leave its old ring, join the new app's at the end, and the counts must follow. Covered in Task 3 (`an agent whose app changes leaves its ring and joins the other at the end`).
-2. **A burst of front changes** (Cmd-Tab held down, a daemon flooded by a broken tool). One timer, one settle, a bounded rate. Covered in Task 4 (`fifty changes inside a second leave one timer and settle once`) and Task 8 (`the 11th frame within a second is dropped; another connection's is kept`).
+2. **A burst of front changes** (Cmd-Tab held down, a daemon flooded by a broken tool). One timer, one settle, a bounded rate. Covered in Task 4 (`fifty changes inside a second leave one timer and settle once`) and Task 26 (`the 11th front within a second on one connection is dropped; another connection's is taken`).
 3. **The list moving under the finger.** The picked app's last agent ends while the picker is open. Covered in Task 6 (`a pick of an app with no agents sends apps again and no ring`) and Task 18 (`a push while open keeps the app by id`).
 4. **Two dials on one computer, one old and one new.** Each gets its own list, and a pick on one moves the other new dial. Covered in Task 5 (`asked without apps it is the single ring; asked with, the shown app's`) and Task 6 (`a dial without appFilter is sent no apps frame`).
-5. **A watch that starts after the app is already in front**, or a daemon that restarts. Without the first value the dial follows nothing until the next app switch. Covered in Task 12 (`a front line that arrives before connected is sent once after it`) and Task 13 (`a new watch is told the app in front once`).
+5. **A watch that starts after the app is already in front.** Without the first value the dial follows nothing until the next app switch. Covered in Task 13 (`a new watch is told the app in front once`) and Task 28 (`a front line is told at once, before the daemon has answered`). **Not covered, by the spec's own rule:** a devices process that starts after the watch (a dial plugged in later) hears nothing until the next app switch (Open question 2).
+6. **A socket that is not the owner's.** Another account's process, or a file put where the socket should be, must neither reach the listener nor be sent the app in front. Covered in Task 26 (`the socket is 0600`, `a folder that is not this account's own is refused`) and Task 28 (`a socket of another account, or one looser than 0600, is told nothing`).
 
 ---
 
 ### Task 1: Rebase on `main` once both dependencies have merged
+
+**Obsolete** (2026-11-15): not run. The branch was stacked on `fix/dial-swipe-order` (`6fd0344484`) instead, and the tasks were written against its real names (§ Base). Every "Depends on: Task 1" below is met.
 
 **Layer:** none. **Depends on:** `fix/dial-swipe-order` and PR #4296 merged to `main` (external). **Effort:** `medium`. **Red test:** none: no behavior (workflow).
 
@@ -93,6 +124,8 @@ A mockup of the `APPS` picker and of the face's app line is made by the main ses
 - [ ] **Step 4:** `cd cli && npm run typecheck && npx vitest run src/cable src/services/devices.spec.ts`. Expected: PASS, as on `main`.
 
 ### Task 2: Each agent's app
+
+**Done:** `a62d2c2642` (red: `ba2cab39be`).
 
 **Layer:** devices service process. **Depends on:** Task 1. **Effort:** `high`.
 
@@ -130,7 +163,7 @@ A mockup of the `APPS` picker and of the face's app line is made by the main ses
   - **kitty has no `TERM_PROGRAM` row: kitty does not set it.** Its documented variables are `KITTY_WINDOW_ID`, `KITTY_PID`, `TERM` (`xterm-kitty`) and the rest of <https://sw.kovidgoyal.net/kitty/glossary/#environment-variables>; `kitty/child.py` sets `TERM`, `COLORTERM`, `KITTY_PID`; a code search of `kovidgoyal/kitty` for `TERM_PROGRAM` finds nothing (all read 2026-11-14). Hence step 4.
 - `ObservedSource`: a new entry has `app: UNKNOWN_APP`; every event sets `a.app = detectApp(e.hostHints)`. `HarnessSource.list()`: `app: 'harness'`.
 
-- [ ] **Step 1: Write the failing tests.**
+- [x] **Step 1: Write the failing tests.**
   - `hostDetect.spec.ts`, `detectApp`:
     - `zellij, herdr and rex inside Ghostty, iTerm2 and Terminal give the terminal` — nine rows: each of `ZELLIJ`, `HERDR_PANE_ID`, `REX_BLOCK` with each of `TERM_PROGRAM` `ghostty` / `iTerm.app` / `Apple_Terminal` → `ghostty` / `iterm` / `terminal-app`.
     - `the bundle id decides before TERM_PROGRAM: Cursor before VS Code`.
@@ -143,12 +176,14 @@ A mockup of the `APPS` picker and of the face's app line is made by the main ses
     - `the unknown app reads Other, Apple's Terminal reads Terminal, and every other app reads as its host` (`appDisplayName('terminal')` is `Other`; `appDisplayName('terminal-app')` is `Terminal`; `hostDisplayName('terminal')` is still `Terminal`; for the other twelve the two functions agree).
   - `observed.spec.ts`: `a session the open scan found is in terminal until its first hook says its app`; `a hook from zellij inside Ghostty gives host zellij and app ghostty`; `a session resumed in another terminal changes app`.
   - `harness.spec.ts`: `a Harness agent's app is harness`.
-- [ ] **Step 2: Run** `cd cli && npx vitest run src/cable/hosts`. Expected: FAIL (`detectApp` missing, `app` undefined).
-- [ ] **Step 3: Implement.** Add `app` to the other files' `HostAgent` literals so `npm run typecheck` passes.
-- [ ] **Step 4: Run** the step 2 command and `cd cli && npm run typecheck`. Expected: PASS.
-- [ ] **Step 5: Commit** `devices: each agent's outermost app, beside its nearest host`.
+- [x] **Step 2: Run** `cd cli && npx vitest run src/cable/hosts`. Expected: FAIL (`detectApp` missing, `app` undefined).
+- [x] **Step 3: Implement.** Add `app` to the other files' `HostAgent` literals so `npm run typecheck` passes.
+- [x] **Step 4: Run** the step 2 command and `cd cli && npm run typecheck`. Expected: PASS.
+- [x] **Step 5: Commit** `devices: each agent's outermost app, beside its nearest host`.
 
 ### Task 3: One ring per app
+
+**Done:** `15aedfd288` (red: `6eb62e9b65`).
 
 **Layer:** devices service process. **Depends on:** Task 2. **Effort:** `high`.
 
@@ -167,7 +202,7 @@ A mockup of the `APPS` picker and of the face's app line is made by the main ses
   - `ring(app)` is that app's rows and its agent count; `{ rows: [], total: 0 }` for an app with none.
   - No timers, no I/O.
 
-- [ ] **Step 1: Write the failing tests:**
+- [x] **Step 1: Write the failing tests:**
   - `one ring per app, each over its own agents only`.
   - `inside a ring the order is fixed: a state change moves nobody, a new agent goes to the end, an ended one closes up` (the swipe-order rules, on one app while another app's agents change).
   - `each ring holds at most 16; total is the app's count` (20 agents in one app, 3 in another).
@@ -176,12 +211,14 @@ A mockup of the `APPS` picker and of the face's app line is made by the main ses
   - `count and waiting follow the agents`.
   - `an agent whose app changes leaves its ring and joins the other at the end`.
   - `the map is bounded: 20 agents with 20 unknown app ids make one terminal ring`.
-- [ ] **Step 2: Run** `cd cli && npx vitest run src/cable/hosts/select.spec.ts`. Expected: FAIL (`AppRings` missing).
-- [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run** the step 2 command. Expected: PASS, the swipe-order tests of `DialRing` untouched.
-- [ ] **Step 5: Commit** `devices: one fixed ring per app`.
+- [x] **Step 2: Run** `cd cli && npx vitest run src/cable/hosts/select.spec.ts`. Expected: FAIL (`AppRings` missing).
+- [x] **Step 3: Implement.**
+- [x] **Step 4: Run** the step 2 command. Expected: PASS, the swipe-order tests of `DialRing` untouched.
+- [x] **Step 5: Commit** `devices: one fixed ring per app`.
 
 ### Task 4: Which app is shown
+
+**Done:** `f84efcac74` (red: `bf176568d6`).
 
 **Layer:** devices service process. **Depends on:** Task 2 (the `AppPick` and `SwitchCause` types). **Effort:** `xhigh` (state every dial shares, a timer racing picks and counts).
 
@@ -201,7 +238,7 @@ A mockup of the `APPS` picker and of the face's app line is made by the main ses
   - `switched(cause)` is called once for each change of `shown` from one app to another: `front`, `pick`, `notice`, or `empty` (rule 1 replacing an app that emptied). The first app shown, when none was, is not a switch.
   - `stop()` cancels the timer.
 
-- [ ] **Step 1: Write the failing tests** with a fake `after` and a scripted `random`:
+- [x] **Step 1: Write the failing tests** with a fake `after` and a scripted `random`:
   - `the default is the app with the most agents`; `the app in front is the default when it has agents`.
   - `a tie is drawn once: the same counts later draw nothing new, and changed counts draw again` (2+2 draws; every agent goes; 2+2 again keeps the drawn app with no call to `random`; 3+3 draws).
   - `the app in front is shown after 1 s, not before`.
@@ -215,12 +252,14 @@ A mockup of the `APPS` picker and of the face's app line is made by the main ses
   - `a notice pick is a switch by notice and holds as a pick does`.
   - `each change tells its cause once; the first app shown tells none`.
   - `a front equal to the last starts no timer`; `stop cancels the timer`.
-- [ ] **Step 2: Run** `cd cli && npx vitest run src/cable/hosts/appFilter.spec.ts`. Expected: FAIL (module missing).
-- [ ] **Step 3: Implement.** No `setTimeout`, `Date` or `Math.random` in the file: everything comes through `deps`.
-- [ ] **Step 4: Run** the step 2 command. Expected: PASS.
-- [ ] **Step 5: Commit** `devices: which app the dial shows: the one in front, a pick, or the biggest`.
+- [x] **Step 2: Run** `cd cli && npx vitest run src/cable/hosts/appFilter.spec.ts`. Expected: FAIL (module missing).
+- [x] **Step 3: Implement.** No `setTimeout`, `Date` or `Math.random` in the file: everything comes through `deps`.
+- [x] **Step 4: Run** the step 2 command. Expected: PASS.
+- [x] **Step 5: Commit** `devices: which app the dial shows: the one in front, a pick, or the biggest`.
 
 ### Task 5: The cable host: the shown app's ring, the app list, a pick, the front
+
+**Done:** `d27a5e64a6` (red: `fa9996b5e3`).
 
 **Layer:** devices service process. **Depends on:** Tasks 3, 4. **Effort:** `xhigh` (one state read by every dial's tick, a timer and a pick at once).
 
@@ -242,17 +281,16 @@ A mockup of the `APPS` picker and of the face's app line is made by the main ses
   - `front(app: string): void`
 - Rules:
   - The host owns one `AppRings` and one `AppFilter` (its `counts` are the rings' `counts()`), beside the single `DialRing`.
-  - `machineSnapshot` filters as today (the Buddies, the wait for Swarm cards). Asked without `apps`: today's single ring, unchanged. Asked with `apps: true`: it updates the rings with the filtered agents, reads `filter.shown()`, and answers the shown app's rows, `total` = that app's count, and `apps: { shown, apps }` with each entry's `name` from `appDisplayName(id)`. With no agents: `apps: { shown: '', apps: [] }`, no rows, `total: 0`.
-  - With a window (`swarms !== null`) or no registry: the answer is today's, with no `apps`, whatever `opts` says.
+  - `machineSnapshot` takes the registry's list as it is: every agent on this computer (the Buddy filter and the wait for Swarm cards went with the Swarm, #4303). Asked without `apps`: today's single ring, unchanged. Asked with `apps: true`: it updates the rings with those agents, reads `filter.shown()`, and answers the shown app's rows, `total` = that app's count, and `apps: { shown, apps }` with each entry's `name` from `appDisplayName(id)`. With no agents: `apps: { shown: '', apps: [] }`, no rows, `total: 0`.
+  - With a window (the windows' tab list is set: `swarms !== null`, the port's name for it) or no registry: the answer is today's, with no `apps`, whatever `opts` says.
   - `pickApp` with a window is `'ignored'`. `appOf` is the machine list's agent's `app` (`onMachine(agentId)` ⚠ #4296), `undefined` with a window.
   - `front(app)` hands the app to the filter, with or without a window (the PM, answer 6): the filter keeps following while a window is open, and only the dial does not show it.
 
-- [ ] **Step 1: Write the failing tests:**
+- [x] **Step 1: Write the failing tests:**
   - `asked without apps it is the single ring; asked with, the shown app's` (Ghostty 3, VS Code 2: with `apps`, three rows, `total: 3`, `apps.shown: 'ghostty'`; without, five rows and no `apps`).
   - `the app list: fixed order, display names, count and waiting` (`{ id: 'vscode', name: 'VS Code', count: 2, waiting: 1 }`).
   - `the unknown app is named Other and Apple's Terminal is named Terminal` (agents in `terminal` and `terminal-app`: `{ id: 'terminal', name: 'Other', … }`, `{ id: 'terminal-app', name: 'Terminal', … }`).
   - `the front is followed while a window is open: when it closes, the app that settled in front meanwhile is shown` (Ghostty shown; a window opens; `front('vscode')` settles; the window closes → `apps.shown: 'vscode'`).
-  - `a Buddy, and a Harness agent that waits for its Swarm cards, count in no app`.
   - `a pick switches the list and holds through a count change`; `a pick of an app with no agents is ignored`.
   - `the app in front is shown 1 s later` (a scripted `appTimer`); `appSwitched hears front once`.
   - `two reads in a row give the same shown app and the same order`.
@@ -260,12 +298,14 @@ A mockup of the `APPS` picker and of the face's app line is made by the main ses
   - `appOf is the agent's app in the machine view, undefined with a window`.
   - `no agents: shown is empty and nothing is listed`.
   - `appPicked is told once for each pick, and not for a notice`.
-- [ ] **Step 2: Run** `cd cli && npx vitest run src/cable/cableHost.spec.ts`. Expected: FAIL.
-- [ ] **Step 3: Implement.** Update the doc comment above `listAgents` (:670): the "no window" answer for a dial that says `appFilter` is one app's ring.
-- [ ] **Step 4: Run** the step 2 command and `cd cli && npm run typecheck`. Expected: PASS.
-- [ ] **Step 5: Commit** `dial: the machine list is the shown app's ring for a dial that asks for it`.
+- [x] **Step 2: Run** `cd cli && npx vitest run src/cable/cableHost.spec.ts`. Expected: FAIL.
+- [x] **Step 3: Implement.** Update the doc comment above `listAgents` (:670): the "no window" answer for a dial that says `appFilter` is one app's ring.
+- [x] **Step 4: Run** the step 2 command and `cd cli && npm run typecheck`. Expected: PASS.
+- [x] **Step 5: Commit** `dial: the machine list is the shown app's ring for a dial that asks for it`.
 
 ### Task 6: The dial's session: `appFilter`, `apps`, `app.pick`, a notice across apps
+
+**Done:** `9eca48b8ec` (red: `ab386740fe`).
 
 **Layer:** devices service process. **Depends on:** Task 2 (the wire types). **Effort:** `high`.
 
@@ -283,10 +323,10 @@ A mockup of the `APPS` picker and of the face's app line is made by the main ses
   - `hello`: `this.appFilter = str('appFilter') === 'v1'`, reset with the other capabilities, named `appFilter` in the greeting's log line.
   - `syncAgentsNow` asks `listAgentSnapshot({ apps: this.appFilter })`. When the answer has `apps`, the frame `{ t: 'apps', shown, apps }` goes before `agents.begin`, when its own key (`shown`, and each `id:count:waiting`) changed or the push is forced. A change of `apps` alone sends `apps` alone. Both follow the machine list's gap (`AGENTS_PUSH_GAP_MS` ⚠ #4296): at most one push a second, a forced one at once.
   - `app.pick`: dropped unless the dial said `appFilter` and `app` is a string of 1 to 16 characters. `'switched'` → `apps` and the ring, forced. `'ignored'` → `apps` again, forced, and no ring. `'same'` → nothing.
-  - `agent.open` with no `reason` (a tapped notice), from a dial that said `appFilter`, for an agent whose `appOf` is defined: `pickApp(app, 'notice')`. On `'switched'`: `desiredFocus` becomes the agent, then a forced push, which re-asserts the focus when the new ring holds the agent. After a switch an agent without `f` is not opened (the dial is on its face; no "did not open it" toast). An agent with `f` is opened as today. On `'same'` or `'ignored'` everything is as today.
+  - `agent.open` with no `reason` (a tapped notice), from a dial that said `appFilter`, for an agent whose `appOf` is defined: `pickApp(app, 'notice')`. There is no other condition: the "not a Swarm Lead or Buddy" one went with the Swarm. On `'switched'`: `desiredFocus` becomes the agent, then a forced push, which re-asserts the focus when the new ring holds the agent. After a switch an agent without `f` is not opened (the dial is on its face; no "did not open it" toast). An agent with `f` is opened as today. On `'same'` or `'ignored'` everything is as today.
   - `agent.open` with `reason: 'question'` never picks an app.
 
-- [ ] **Step 1: Write the failing tests:**
+- [x] **Step 1: Write the failing tests:**
   - `a dial that says appFilter v1 is sent apps, then the shown app's ring` (the frames in order: `apps`, `agents.begin`, `agent`×3, `agents.end` with `total: 3`).
   - `a dial without appFilter is sent no apps frame, and asks for the single ring` (the fake host records `opts`).
   - `with a window no apps frame is sent`.
@@ -300,12 +340,14 @@ A mockup of the `APPS` picker and of the face's app line is made by the main ses
   - `after that turn an agent without f is not opened and gets no toast; one with f is opened`.
   - `a tapped notice for an agent in the shown app does what it did before`.
   - `a question that opened by itself never switches the app`.
-- [ ] **Step 2: Run** `cd cli && npx vitest run src/cable/cableSession.spec.ts`. Expected: FAIL.
-- [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run** the step 2 command and `cd cli && npm run typecheck`. Expected: PASS.
-- [ ] **Step 5: Commit** `dial: apps and app.pick for a dial that says appFilter, and a notice opens its agent across apps`.
+- [x] **Step 2: Run** `cd cli && npx vitest run src/cable/cableSession.spec.ts`. Expected: FAIL.
+- [x] **Step 3: Implement.**
+- [x] **Step 4: Run** the step 2 command and `cd cli && npm run typecheck`. Expected: PASS.
+- [x] **Step 5: Commit** `dial: apps and app.pick for a dial that says appFilter, and a notice opens its agent across apps`.
 
 ### Task 7: The devices' wiring: a switch is logged, pushed and reminded
+
+**Done:** `98bbef7522` (red: `7f1addc962`).
 
 **Layer:** devices service process. **Depends on:** Task 5. **Effort:** `xhigh` (what the log may say; `services/devices.ts` is in the 100% gate).
 
@@ -321,19 +363,21 @@ A mockup of the `APPS` picker and of the face's app line is made by the main ses
   - `appTimer: timerIn('dial')`.
   - `remind` reads both lists a dial can hold, `listAgentSnapshot()` and `listAgentSnapshot({ apps: true })`, and tells again each mid-turn agent in either: a ring the dial was just turned to has heard nothing of its agents yet.
 
-- [ ] **Step 1: Write the failing tests:**
+- [x] **Step 1: Write the failing tests:**
   - `a switch logs "[device] app filter: switched · pick" and no app id or name` (the whole log is read: no `vscode`, `VS Code`, `ghostty`, `Ghostty`).
   - `a switch pushes the list to the dials at once`.
   - `after a switch each mid-turn agent of the new ring is told again`.
   - `the picker's use is one log line with no app in it`.
   - `the settle timer is guarded: a filter that throws is logged and the devices keep running`.
   - `the timer is cancelled when the service stops`.
-- [ ] **Step 2: Run** `cd cli && npx vitest run src/services/devices.spec.ts`. Expected: FAIL.
-- [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run** `cd cli && npm run test:core && npm run typecheck`. Expected: PASS, 100% for `services/devices.ts`.
-- [ ] **Step 5: Commit** `devices: a change of the shown app is logged by its cause, pushed and reminded`.
+- [x] **Step 2: Run** `cd cli && npx vitest run src/services/devices.spec.ts`. Expected: FAIL.
+- [x] **Step 3: Implement.**
+- [x] **Step 4: Run** `cd cli && npm run test:core && npm run typecheck`. Expected: PASS, 100% for `services/devices.ts`.
+- [x] **Step 5: Commit** `devices: a change of the shown app is logged by its cause, pushed and reminded`.
 
 ### Task 8: Core: check and bound a `dial_front`
+
+**Done:** `ea6b817e24` (red: `e89a64d4fc`). **Reverted by Task 24** (the PM, 2026-11-15, rule 7): the file and its spec are deleted. The text below is history.
 
 **Layer:** core. **Depends on:** Task 1. **Effort:** `xhigh` (the core's trust boundary). A core file of its own: the PM, answer 1.
 
@@ -353,19 +397,21 @@ A mockup of the `APPS` picker and of the face's app line is made by the main ses
   - Refused and dropped are counted and logged at most once a minute as `[devices] dial front in the last minute: N refused, M dropped`. No app, no payload, ever.
   - It keeps no app: after a forward nothing of the frame is held.
 
-- [ ] **Step 1: Write the failing tests:**
+- [x] **Step 1: Write the failing tests:**
   - `forwards a known app and none` (`terminal`, the unknown app's id, is a known app).
   - `refuses`: a non-object, no `app`, a number, `''`, `Ghostty` (a name, not an id), `com.mitchellh.ghostty` (a raw value), `other` and `Other` (neither is an id or a front value), a 5000-character string.
   - `the 11th frame within a second is dropped; another connection's is kept`; `a second later ten more pass`; `a clock set back refills nothing`.
   - `forward false is dropped, not an error`.
   - `the minute's line has counts and nothing of what was sent` (the log is read for the refused value).
   - `keeps nothing`: the returned object and its connections have no field holding an app after a forward.
-- [ ] **Step 2: Run** `cd cli && npx vitest run src/core/dialFront.spec.ts`. Expected: FAIL (module missing).
-- [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run** the step 2 command, then `cd cli && npm run test:core`. Expected: PASS, 100% for `core/dialFront.ts`.
-- [ ] **Step 5: Commit** `core: check and bound the app in front before it goes to the devices`.
+- [x] **Step 2: Run** `cd cli && npx vitest run src/core/dialFront.spec.ts`. Expected: FAIL (module missing).
+- [x] **Step 3: Implement.**
+- [x] **Step 4: Run** the step 2 command, then `cd cli && npm run test:core`. Expected: PASS, 100% for `core/dialFront.ts`.
+- [x] **Step 5: Commit** `core: check and bound the app in front before it goes to the devices`.
 
 ### Task 9: The devices' port takes the app in front
+
+**Done:** `82d30fa91f` (red: `84c62eb4ee`). **Reverted by Task 24** (the PM, 2026-11-15, rule 7): `DevicesPort.front`, its fallback, the link's `front` event, `heard.front` and the port's `front` member in `services/devices.ts` all go. What stays is `DaemonCableHost.front` (Task 5) and the call that guards it, `part.call('dial', () => cableHost.front(app))`, which Task 27 makes the body of the listener's `front` handler. The text below is history.
 
 **Layer:** core (`api.ts`, `devicesLink.ts`) and devices service process (`devices.ts`, `devicesProcess.ts`). **Depends on:** Tasks 5, 7. **Effort:** `xhigh` (privacy; state across two processes).
 
@@ -382,7 +428,7 @@ A mockup of the `APPS` picker and of the face's app line is made by the main ses
   - `devices.ts`: `front: (app) => { part.call('dial', () => cableHost.front(app)); return true }`.
   - The inline path (`HARNESSD_SERVICES=none`) gets the same port.
 
-- [ ] **Step 1: Write the failing tests:**
+- [x] **Step 1: Write the failing tests:**
   - `api.spec.ts`: `the front's fallback is false`.
   - `devicesLink.spec.ts`: `front is one event on the link`; `with the devices down it answers false and nothing is queued`.
   - `devicesProcess.spec.ts`: `a front event reaches the port`; `a front that is not a string reaches it as ''`.
@@ -391,12 +437,14 @@ A mockup of the `APPS` picker and of the face's app line is made by the main ses
     - `a front with a window open moves nothing on the dial`.
     - **Privacy:** `across a run with front changes, nothing but the dial's own frames holds the app in front`. Agents in Ghostty and VS Code; `port.front('ghostty')`, `'none'`, `'vscode'`, each settled. Every log line, and every call the devices made on the core's API, the windows, the fleet and the gateway, is read: none matches `/ghostty|vscode|VS Code/i`, and no argument of a call is the front value `none`. The dial's `apps` frames do name the shown app.
     - `the inline port takes a front too`.
-- [ ] **Step 2: Run** `cd cli && npx vitest run src/core/api.spec.ts src/core/devicesLink.spec.ts src/services/devicesProcess.spec.ts src/services/devices.spec.ts`. Expected: FAIL.
-- [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run** `cd cli && npm run test:core && npm run typecheck`. Expected: PASS, 100% for the four files.
-- [ ] **Step 5: Commit** `devices: the app in front, from the core's port to the filter`.
+- [x] **Step 2: Run** `cd cli && npx vitest run src/core/api.spec.ts src/core/devicesLink.spec.ts src/services/devicesProcess.spec.ts src/services/devices.spec.ts`. Expected: FAIL.
+- [x] **Step 3: Implement.**
+- [x] **Step 4: Run** `cd cli && npm run test:core && npm run typecheck`. Expected: PASS, 100% for the four files.
+- [x] **Step 5: Commit** `devices: the app in front, from the core's port to the filter`.
 
 ### Task 10: The local socket's `dial_front`
+
+**Done:** `e3cbfdfc22` (red: `e9678f8eca`). **Reverted by Task 24** (the PM, 2026-11-15, rule 7): `dial_front`, the `dial-front` feature, the wiring in `core/main.ts` and the line in `architecture.coreFiles.txt` all go. The text below is history.
 
 **Layer:** core. **Depends on:** Tasks 8, 9. **Effort:** `xhigh` (the core line).
 
@@ -412,18 +460,20 @@ A mockup of the `APPS` picker and of the face's app line is made by the main ses
   - A `dial_front` frame is always consumed here: handed to the connection's gate when it has one, dropped otherwise. It never reaches `handleLocalFrame` or a relay.
   - `main.ts`: `const dialFront = createDialFront({ forward: (app) => ports.devices?.front(app) ?? false, now: () => performance.now(), log })`, and `dialFront: dialFront.connection` in the server's options. Nothing here starts the devices process.
 
-- [ ] **Step 1: Write the failing tests** in `localWsServer.spec.ts`:
+- [x] **Step 1: Write the failing tests** in `localWsServer.spec.ts`:
   - `a tool is told dial-front among its features` (`['openclaw-local', 'dial-watch', 'dial-front']`).
   - `dial_front from a tool that watches the dial reaches its gate with the payload`.
   - `dial_front from a window, from a tool that did not ask for the dial, and on a relayed machine reaches no gate and no backend`.
   - `each watching connection gets a gate of its own`.
   - `with no dialFront option the frame is dropped`.
-- [ ] **Step 2: Run** `cd cli && npx vitest run src/localWsServer.spec.ts`. Expected: FAIL.
-- [ ] **Step 3: Implement.** The block in `localWsServer.ts` is the check of who sent it and one call; every other rule is in `core/dialFront.ts`. The pull request says why every session's core loads that file: the local socket is the core's, and what a tool sends on it is checked before it reaches a component.
-- [ ] **Step 4: Run** the step 2 command, then `cd cli && npm run test:core && npx vitest run src/architecture.spec.ts && npm run typecheck`. Expected: PASS.
-- [ ] **Step 5: Commit** `core: a dial watch may say which app is in front`.
+- [x] **Step 2: Run** `cd cli && npx vitest run src/localWsServer.spec.ts`. Expected: FAIL.
+- [x] **Step 3: Implement.** The block in `localWsServer.ts` is the check of who sent it and one call; every other rule is in `core/dialFront.ts`. The pull request says why every session's core loads that file: the local socket is the core's, and what a tool sends on it is checked before it reaches a component.
+- [x] **Step 4: Run** the step 2 command, then `cd cli && npm run test:core && npx vitest run src/architecture.spec.ts && npm run typecheck`. Expected: PASS.
+- [x] **Step 5: Commit** `core: a dial watch may say which app is in front`.
 
 ### Task 11: The front table
+
+**Done:** `8835a1209a` (red: `0114b2de47`). Task 24 changes its last test: `FRONT_APPS` goes with `core/dialFront.ts`.
 
 **Layer:** CLI only. **Depends on:** Tasks 2, 8, 23. **Effort:** `high`.
 
@@ -441,18 +491,20 @@ A mockup of the `APPS` picker and of the face's app line is made by the main ses
   - The `.exe` rows (`Code.exe`, `Cursor.exe`, `WindowsTerminal.exe`) stay, as answer 2's option A says: the watch takes them, and nothing sends them until the Windows source exists.
   - Anything else, the empty string included → `FRONT_NONE`. An unknown terminal in front (Alacritty) is `none`, never the unknown app `terminal`: only `WindowsTerminal.exe` maps to that id.
 
-- [ ] **Step 1: Write the failing tests:**
+- [x] **Step 1: Write the failing tests:**
   - `every bundle id maps to the id detectApp gives for it` (every row, kitty's, WezTerm's, Harness Desktop's and Claude's among them, each also run through `detectApp({ __CFBundleIdentifier })`).
   - `Code.exe, Cursor.exe, WindowsTerminal.exe, wezterm-gui, kitty and ghostty map` (`CODE.EXE` too).
   - `an unknown app, the empty string and a 128-character string are none` (`com.apple.Safari`, `org.alacritty`, `net.kovidgoyal.kitty-quick-access`).
   - `no value maps to the words other or Other, and none is no app id` (`FRONT_NONE` is not in `APP_IDS`; `frontAppId('other')` and `frontAppId('Other')` are `none`).
   - `every id the table can give is in FRONT_APPS, and FRONT_APPS is APP_IDS and FRONT_NONE` (the core's list and the devices' list cannot drift).
-- [ ] **Step 2: Run** `cd cli && npx vitest run src/cable/hosts/frontApp.spec.ts`. Expected: FAIL (module missing).
-- [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run** the step 2 command. Expected: PASS.
-- [ ] **Step 5: Commit** `hardware watch: which app a bundle id or an exe name is`.
+- [x] **Step 2: Run** `cd cli && npx vitest run src/cable/hosts/frontApp.spec.ts`. Expected: FAIL (module missing).
+- [x] **Step 3: Implement.**
+- [x] **Step 4: Run** the step 2 command. Expected: PASS.
+- [x] **Step 5: Commit** `hardware watch: which app a bundle id or an exe name is`.
 
 ### Task 12: `harness hardware watch` reads the app in front
+
+**Done:** `7f608ce279` (red: `72a836ffe2`). **Changed by Task 28** (the PM, 2026-11-15): the watch tells the devices listener, and sends the core nothing of the app in front. Reading stdin, the line limits and `frontAppId` stay.
 
 **Layer:** CLI only. **Depends on:** Task 11. **Effort:** `xhigh` (the raw name must stop here).
 
@@ -470,7 +522,7 @@ A mockup of the `APPS` picker and of the face's app line is made by the main ses
   - A line over 1024 bytes, a line that is not JSON, and one with no string `front` are dropped. A partial line is kept up to 1024 bytes.
   - Nothing of a line is printed, on stdout or stderr.
 
-- [ ] **Step 1: Write the failing tests:**
+- [x] **Step 1: Write the failing tests:**
   - `a front line becomes dial_front with the app id` (`{"front":"com.mitchellh.ghostty"}` → `{ app: 'ghostty' }`; `{"front":"Code.exe"}` → `{ app: 'vscode' }`).
   - `an unknown app is sent as none`.
   - `the raw value is never sent or printed`: every frame the fake socket was sent, and every `print` and `printError`, is read for the bundle id and the exe name.
@@ -479,12 +531,14 @@ A mockup of the `APPS` picker and of the face's app line is made by the main ses
   - `with a daemon that has no dial-front, front lines send nothing`.
   - `a line in two chunks is one line; a 2000-byte line and a line that is not JSON are dropped, and the next line still works`.
   - `dial status lines print as before, and stdin closing still exits 0`.
-- [ ] **Step 2: Run** `cd cli && npx vitest run src/devices/client.spec.ts`. Expected: FAIL.
-- [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run** the step 2 command and `cd cli && npm run typecheck`. Expected: PASS.
-- [ ] **Step 5: Commit** `hardware watch: tell the daemon which app is in front, as an app id`.
+- [x] **Step 2: Run** `cd cli && npx vitest run src/devices/client.spec.ts`. Expected: FAIL.
+- [x] **Step 3: Implement.**
+- [x] **Step 4: Run** the step 2 command and `cd cli && npm run typecheck`. Expected: PASS.
+- [x] **Step 5: Commit** `hardware watch: tell the daemon which app is in front, as an app id`.
 
 ### Task 13: Harness Device: the app in front goes to the watch's stdin
+
+**Done:** `0f1cf140c6` (red: `b4d1056b1a`).
 
 **Layer:** Harness Device app. **Depends on:** Task 1. **Effort:** `xhigh` (the value must never reach the log).
 
@@ -508,17 +562,19 @@ A mockup of the `APPS` picker and of the face's app line is made by the main ses
   - `tests/fake-harness`: a directive `@record`, which copies stdin to `stdin.log` in the fake's folder until stdin closes; `Fake::stdin(&self) -> Vec<String>` in `testing.rs`.
 - Rules: the value goes to the watch's stdin and nowhere else: not `Event`, not `Effect::Log`, not the state file, not the window. A write that fails is not logged with the value.
 
-- [ ] **Step 1: Write the failing tests:**
+- [x] **Step 1: Write the failing tests:**
   - `front.rs`: `one_line_per_change_and_none_for_a_repeat`; `a_value_is_cut_to_128_characters` (ASCII, and a multi-byte name cut on a boundary); `a_quote_or_a_newline_stays_one_json_line`; `no_front_reports_nothing`.
   - `cli.rs`: `a_writer_reaches_the_child_and_stops_when_stdin_is_closed`.
   - `watch.rs`: `a_front_line_reaches_the_watch` (`@record`; `fake.stdin()` is the line).
   - `runner.rs`, with a fake `FrontSource`: `the_app_in_front_is_written_to_the_watch`; `a_new_watch_is_told_the_app_in_front_once`; `a_repeat_writes_nothing`; `nothing_of_the_front_is_logged` (after a run with a value, a repeat and a write to a watch that has ended, no line of the `MemoryLog` holds the value).
-- [ ] **Step 2: Run** `cd device-app/src-tauri && cargo test --lib`. Expected: FAIL (does not compile: `front` is missing).
-- [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run** `cd device-app/src-tauri && cargo test --lib`. Expected: PASS, on Linux (PR CI) and on a Mac.
-- [ ] **Step 5: Commit** `Harness Device: write the app in front on the watch's stdin, and nowhere else`.
+- [x] **Step 2: Run** `cd device-app/src-tauri && cargo test --lib`. Expected: FAIL (does not compile: `front` is missing).
+- [x] **Step 3: Implement.**
+- [x] **Step 4: Run** `cd device-app/src-tauri && cargo test --lib`. Expected: PASS, on Linux (PR CI) and on a Mac.
+- [x] **Step 5: Commit** `Harness Device: write the app in front on the watch's stdin, and nowhere else`.
 
 ### Task 14: Harness Device: the app in front on macOS
+
+**Done:** `32bfece710` (red: `eee547f99b`).
 
 **Layer:** Harness Device app. **Depends on:** Task 13. **Effort:** `high`.
 
@@ -532,16 +588,18 @@ A mockup of the `APPS` picker and of the face's app line is made by the main ses
 - Produces: `struct MacFront` implementing `FrontSource`: `NSWorkspace.frontmostApplication` once at `start`, then an observer of `NSWorkspaceDidActivateApplicationNotification` on the workspace's notification centre. The value is the app's `bundleIdentifier`, or the empty string when it has none. `system()` gives it on macOS.
 - Rules: no timer, no `osascript`, no System Events, no Accessibility or Screen Recording. The objc2 crates gain only the features the observer needs (the notification, its block); the pull request lists them.
 
-- [ ] **Step 1: Write the failing tests:**
+- [x] **Step 1: Write the failing tests:**
   - `an_app_with_no_bundle_id_is_the_empty_value` (the pure helper that turns an optional bundle id into the value).
   - `start_tells_the_app_in_front_once` (`start` calls `changed` exactly once before it returns, with at most 128 characters).
   - `system_is_the_appkit_source_on_macos`.
-- [ ] **Step 2: Run** on a Mac: `cd device-app/src-tauri && cargo test --lib front_macos`. Expected: FAIL (module missing).
-- [ ] **Step 3: Implement.** Start it where the app's `setup` runs, on the main thread (check `main.rs` at dispatch).
-- [ ] **Step 4: Run** `cd device-app/src-tauri && cargo test --lib` on a Mac. Expected: PASS. PR CI does not compile this file.
-- [ ] **Step 5: Commit** `Harness Device: the app in front on macOS, from NSWorkspace`.
+- [x] **Step 2: Run** on a Mac: `cd device-app/src-tauri && cargo test --lib front_macos`. Expected: FAIL (module missing).
+- [x] **Step 3: Implement.** Start it where the app's `setup` runs, on the main thread (check `main.rs` at dispatch).
+- [x] **Step 4: Run** `cd device-app/src-tauri && cargo test --lib` on a Mac. Expected: PASS. PR CI does not compile this file.
+- [x] **Step 5: Commit** `Harness Device: the app in front on macOS, from NSWorkspace`.
 
 ### Task 15: Harness Device: the app in front on Linux X11
+
+**Done:** `4fccb20e7c` (red: `5146cd3872`).
 
 **Layer:** Harness Device app. **Depends on:** Task 13. **Effort:** `high`.
 
@@ -559,22 +617,24 @@ A mockup of the `APPS` picker and of the face's app line is made by the main ses
   - `system()` on Linux: `X11Front` when `session_is_x11`, else `NoFront`. A connection that fails is `NoFront`'s behavior and one log line with no value.
 - New crate: `x11rb`, for Linux only, its pure-Rust connection (no new system package). The pull request names its license.
 
-- [ ] **Step 1: Write the failing tests:**
+- [x] **Step 1: Write the failing tests:**
   - `the_exe_name_is_the_file_name_of_the_proc_link` (a temp folder shaped like `/proc`); `a_process_that_is_gone_has_no_name`.
   - `a_wayland_session_is_not_x11` (the table of the three variables, XWayland's `DISPLAY` under Wayland included).
   - `x11_live`, `#[ignore]` (it needs an X server, a window manager and `xdotool`): it waits, up to 10 s, for the root window's `_NET_SUPPORTED` to list `_NET_ACTIVE_WINDOW` (the window manager is up), starts the X clients named in `X11_LIVE_CLIENTS` (two paths), activates each with `xdotool`, and waits on the source, with a 10 s deadline each, for each client's exe name in order. It ends its clients. Every wait is on a condition. Task 20 runs it in PR CI.
-- [ ] **Step 2: Run** on Linux: `cd device-app/src-tauri && cargo test --lib front_x11`. Expected: FAIL (module missing).
-- [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run** `cd device-app/src-tauri && cargo test --lib --locked`. Expected: PASS; `x11_live` is listed as ignored. On a Mac this file is not compiled: its first run is Task 20's, on a runner.
-- [ ] **Step 5: Commit** `Harness Device: the app in front on Linux X11, from _NET_ACTIVE_WINDOW`.
+- [x] **Step 2: Run** on Linux: `cd device-app/src-tauri && cargo test --lib front_x11`. Expected: FAIL (module missing).
+- [x] **Step 3: Implement.**
+- [x] **Step 4: Run** `cd device-app/src-tauri && cargo test --lib --locked`. Expected: PASS; `x11_live` is listed as ignored. On a Mac this file is not compiled: its first run is Task 20's, on a runner.
+- [x] **Step 5: Commit** `Harness Device: the app in front on Linux X11, from _NET_ACTIVE_WINDOW`.
 
 ### Task 16: Round firmware: `appFilter` in `hello`, `apps` in, `app.pick` out
+
+**Done:** `507119d2d5` (red: `1150823726`).
 
 **Layer:** firmware. No drawing, so the mockup does not gate it. **Depends on:** Task 1. **Effort:** `high`.
 
 **Files** (under `devices/harness-device/firmware/`):
 - Modify: `main/cable_client.c` (`send_hello` :250, a new `handle_apps` and its line in the frame switch :1359-1540, a new `cable_client_pick_app`, `session_up` / the session's end), `main/cable_client.h`, `main/ui/ui_screens.h`, `main/ui/habitat/ui_habitat.c` (the state :233, two setters beside `ui_fleet_set_view` :4203)
-- Test: `test/test_cable_supertab.py` (`send_hello`), `test/test_cable_identity.py` (the parse), `test/test_cable_outbound.py` (`app.pick`), `test/test_touch_ui.py` (the state; its copy of the struct :82 and its function lists :240, :251)
+- Test: `test/test_cable_outbound.py` (`send_hello` and `app.pick`; `test_cable_supertab.py` was deleted with the Swarm), `test/test_cable_identity.py` (the parse), `test/test_touch_ui.py` (the state; its copy of the struct :82 and its function lists :240, :251)
 
 **Interfaces:**
 - Produces:
@@ -587,17 +647,18 @@ A mockup of the `APPS` picker and of the face's app line is made by the main ses
   - `ui_apps_replace` sets `apps_known`. `ui_apps_forget` clears it and the list; it is called when the session ends and when a `welcome` starts a new one, so an older daemon after a newer one reads as "no apps".
   - A failed allocation sends no partial `app.pick` (the rule `test_cable_outbound.py` holds every command to).
 
-- [ ] **Step 1: Write the failing tests:**
-  - `test_cable_supertab.py`: `hello` has `appFilter` `v1`.
+- [x] **Step 1: Write the failing tests:**
   - `test_cable_identity.py`: `two apps and shown are handed on`; `the 17th entry is dropped`; `an id of 16 characters is dropped, not cut`; `a count of 5000 is 999`; `apps with no array is an empty list that is still known`.
-  - `test_cable_outbound.py`: `app.pick carries the app`; `a failed allocation sends nothing`.
+  - `test_cable_outbound.py`: `hello has appFilter v1`; `app.pick carries the app`; `a failed allocation sends nothing`.
   - `test_touch_ui.py`: `ui_apps_replace holds the apps and the shown one`; `ui_apps_forget makes them unknown`.
-- [ ] **Step 2: Run** `IDF_PATH=~/esp/esp-idf-5.5.4 python3 devices/harness-device/firmware/test/test_cable_supertab.py` and the three others the same way. Expected: FAIL.
-- [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run** `env -u IDF_PATH make device-test` and every `devices/harness-device/firmware/test/test_*.py`. Expected: PASS, except the known macOS `test_cable_models.py` "'snprintf' macro redefined". Build `default` with `-DPROJECT_VER=0.1.0-dev`.
-- [ ] **Step 5: Commit** `round dial: say appFilter, hold the apps, and send a pick`.
+- [x] **Step 2: Run** `IDF_PATH=~/esp/esp-idf-5.5.4 python3 devices/harness-device/firmware/test/test_cable_outbound.py` and the two others the same way. Expected: FAIL.
+- [x] **Step 3: Implement.**
+- [x] **Step 4: Run** `env -u IDF_PATH make device-test` and every `devices/harness-device/firmware/test/test_*.py`. Expected: PASS, except the known macOS `test_cable_models.py` "'snprintf' macro redefined". Build `default` with `-DPROJECT_VER=0.1.0-dev`.
+- [x] **Step 5: Commit** `round dial: say appFilter, hold the apps, and send a pick`.
 
 ### Task 17: Round firmware: the shown app's name on the face
+
+**Done:** `abdaab785e` (red: `6cecd5b99f`).
 
 **Layer:** firmware UI. **Depends on:** Task 16 (the mockup is approved; draw what it shows). **Effort:** `high`.
 
@@ -609,19 +670,21 @@ A mockup of the `APPS` picker and of the face's app line is made by the main ses
 - Consumes: `s.apps`, `s.app_shown`, `s.apps_known` (Task 16).
 - Produces: in the machine view with `apps_known` and a shown app that is in the list, the grey line under the agent's name is that entry's `name`. Otherwise it stays `host_name(a->host)`. "See it in …" still uses `host_name(a->host)`.
 
-- [ ] **Step 1: Write the failing tests:**
+- [x] **Step 1: Write the failing tests:**
   - `the face's line is the shown app's name`: an agent with host `zellij`, apps `ghostty` "Ghostty" shown → the scene says `Ghostty` and not `Zellij`.
   - `a tap still says See it in Zellij` (the nearest host).
   - `without apps the line is the host's name, as before`; `with a window there is no line`.
   - `a shown app that is not in the list falls back to the host's name`.
   - `an agent in an unknown terminal: the line reads Other, and a tap says See it in Terminal` (host `terminal`, apps `terminal` "Other" shown). The firmware draws the `name` it was sent and has no word of its own for it.
   - A `DESIGN` preview `machine-view-app`, as the mockup draws it.
-- [ ] **Step 2: Run** `IDF_PATH=~/esp/esp-idf-5.5.4 python3 devices/harness-device/firmware/test/test_touch_ui.py`. Expected: FAIL.
-- [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run** `env -u IDF_PATH make device-test` and every `test_*.py`. Expected: PASS (the known macOS exception of Task 16).
-- [ ] **Step 5: Commit** `round dial: the face names the app it shows`.
+- [x] **Step 2: Run** `IDF_PATH=~/esp/esp-idf-5.5.4 python3 devices/harness-device/firmware/test/test_touch_ui.py`. Expected: FAIL.
+- [x] **Step 3: Implement.**
+- [x] **Step 4: Run** `env -u IDF_PATH make device-test` and every `test_*.py`. Expected: PASS (the known macOS exception of Task 16).
+- [x] **Step 5: Commit** `round dial: the face names the app it shows`.
 
 ### Task 18: Round firmware: the `APPS` picker
+
+**Done:** `b0e0ed82ea` (red: `8a42a1d3b7`). The same commits hold the hint "Hold for apps" (`focus.c`, `ht_focus_set_hold_apps`; the spec's line is `3f8b1dac53`).
 
 **Layer:** firmware UI. **Depends on:** Task 16 (the mockup is approved; draw what it shows). **Effort:** `high`.
 
@@ -633,17 +696,17 @@ A mockup of the `APPS` picker and of the face's app line is made by the main ses
 - Consumes: the UI state and `cable_client_pick_app` (Task 16); `focus_carousel`, `focus_header`, `ht_tab_carousel_*`.
 - Produces: a view `APPS`, a carousel `app_carousel`, actions `A_APP` (a page, by app id) and `A_APP_DONE`.
 - Rules:
-  - A hold on the face, and on the badged companion (`A_PET_INBOX`): on a Swarm recap, the Personal | Team picker as today. Else in the machine view with `apps_known`: `APPS` when there is at least one app, and nothing at all when there is none. Else TABS as today (a window; an older daemon).
+  - A hold on any agent's face (the PM, 2026-11-15: no Swarm-recap, Personal | Team or badged-companion exception; they went with the Swarm): in the machine view with `apps_known`, `APPS` when there is at least one app, and nothing at all when there is none. Else TABS as today (a window; an older daemon).
+  - The relaxing face's hint follows the same rule (`ht_focus_set_hold_apps(hold_picks_app())`): "Hold for apps" where a hold opens `APPS`, "Hold for tabs" otherwise. The resting line "Hold to switch tabs" is Task 29's.
   - `APPS`: the header `APPS`; one page per app through `focus_carousel`, the app's `name` in the tab page's type; under it `1 agent` / `3 agents`, or `3 agents · 1 waiting` with the waiting part in the accent; Done at the bottom, as in TABS, and no close pill, as in TABS (`focus_header`). It opens on the shown app. Positions and type are the mockup's.
   - Browsing sends nothing. Done, or a tap on a page, sends `app.pick` for that page's app, returns to the face, and arms the landing so the first agent of the next list is shown. Done on the shown app is how a person leaves without changing anything.
   - `ui_apps_replace` while `APPS` is open keeps the carousel on the same app **by id**. A page whose app went closes up, and a list that became empty closes `APPS` to the face.
   - `APPS` closes to the face when the list stops being the machine view (a window opened) and when the apps are forgotten (the link dropped).
 
-- [ ] **Step 1: Write the failing tests:**
-  - `a hold in the machine view with apps opens APPS on the shown app`; `the same hold on the badged companion`.
+- [x] **Step 1: Write the failing tests:**
+  - `a hold in the machine view with apps opens APPS on the shown app`.
   - `a hold with a window opens TABS`; `a hold in the machine view without apps opens TABS, which says No tabs yet.` (today's screen, an older daemon).
   - `a hold with apps known and none listed opens nothing` (the view stays `HOME`, the scene is the face's).
-  - `a hold on a Swarm recap still opens the Personal | Team picker`.
   - `the pages`: `Ghostty` with `3 agents`; `VS Code` with `2 agents · 1 waiting`, the waiting run in the accent ink; `1 agent` for one.
   - `one app: one page`.
   - `browsing sends nothing` (a swipe to the next page: no action queued).
@@ -651,28 +714,35 @@ A mockup of the `APPS` picker and of the face's app line is made by the main ses
   - `after a pick the first agent of the new list is on the face`.
   - `a push while open keeps the app by id` (on VS Code; a new list puts Orca before it → still VS Code); `the page of an app that went closes up`; `a list that became empty closes the picker`.
   - `a window opening closes APPS`; `a dropped link closes APPS`.
+  - `the hint says Hold for apps in the machine view with apps, Hold for tabs with a window or with no apps, as often as before, also on a face without voice`.
   - `DESIGN` previews `apps`, `apps-waiting`, `apps-one`.
-- [ ] **Step 2: Run** `IDF_PATH=~/esp/esp-idf-5.5.4 python3 devices/harness-device/firmware/test/test_touch_ui.py`. Expected: FAIL.
-- [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run** `env -u IDF_PATH make device-test` and every `test_*.py`. Expected: PASS (the known macOS exception). Build `default` with `-DPROJECT_VER=0.1.0-dev`. The previews go to the main session for review beside the mockup.
-- [ ] **Step 5: Commit** `round dial: a hold on the face picks the app, with no window`.
+- [x] **Step 2: Run** `IDF_PATH=~/esp/esp-idf-5.5.4 python3 devices/harness-device/firmware/test/test_touch_ui.py`. Expected: FAIL.
+- [x] **Step 3: Implement.**
+- [x] **Step 4: Run** `env -u IDF_PATH make device-test` and every `test_*.py`. Expected: PASS (the known macOS exception). Build `default` with `-DPROJECT_VER=0.1.0-dev`. The previews go to the main session for review beside the mockup.
+- [x] **Step 5: Commit** `round dial: a hold on the face picks the app, with no window`.
 
 ### Task 19: End to end: the daemon, a fake dial and the real watch
 
-**Layer:** test. **Depends on:** Tasks 6, 10, 12. **Effort:** `high`. **Red test:** none: no behavior (it adds end-to-end tests of what Tasks 2 to 12 built, and moves a test helper).
+**Not done** (started and stopped before the PM's decisions of 2026-11-15; nothing of it is on the branch).
+
+**Layer:** test. **Depends on:** Tasks 27, 28 (Task 6 is done). **Effort:** `high`. **Red test:** none: no behavior (it adds end-to-end tests of what Tasks 2 to 7, 11 and 24 to 28 built, and moves a test helper).
 
 **Files:**
 - Create: `cli/e2e/dialAppFilter.e2e.ts`, `cli/e2e/harness/outsideAgent.ts`
 - Modify: `cli/e2e/deviceWithoutApp.e2e.ts` (its `Outside` class, `PTY` and `HOST_HINTS` move to `harness/outsideAgent.ts`, which exports them, and it imports them), `cli/e2e/harness/desk.ts` (`plug` takes the dial's `capabilities`)
 
 **Interfaces:**
-- Consumes: `IsolatedDaemon`, `Desk`, `FakeDial` (its `capabilities`), `Outside.start(d, folder, hints)`, and the way `e2e/hardwareWatch.e2e.ts` starts `harness hardware watch --json` with a stdin pipe.
+- Consumes: `IsolatedDaemon`, `Desk`, `FakeDial` (its `capabilities`), `Outside.start(d, folder, hints)`, the way `e2e/hardwareWatch.e2e.ts` starts `harness hardware watch --json` with a stdin pipe (under the daemon's environment, so the watch finds the daemon's data folder and its devices socket), and `devicesListenerPath` (Task 25).
+- The path the app in front takes here is the real one: the watch's stdin → `tellDevices` → the devices process's `devices.sock` → the filter. The daemon runs under its master (the suite's default), so the devices are a process of their own; with `CABLE_DISABLE: 'false'` that process starts when the fake dial is plugged in.
+- **When a `front` line may be written.** The listener exists only while the devices process runs. The tests write a `front` line only after the daemon's log has `[devices] listener open` (Task 26's line), waited for with `until`. A line written earlier is dropped by design, and one test below proves that.
 
 - [ ] **Step 1: Write the tests** (no window unless said; the dial greets with `appFilter: 'v1'`). The agents' folders are named `a1`, `a2`, …: the last test reads the log for app names, and a folder name is in it.
   - `Ghostty 3 and VS Code 2: the dial is sent apps with both counts and Ghostty's three agents`.
   - `app.pick vscode: apps says vscode, and the ring is VS Code's two, in the order they started`.
   - `Claude Code in zellij inside Ghostty is in Ghostty's ring, and its row's host is zellij`.
   - `the watch is written {"front":"com.microsoft.VSCode"}: the dial is sent VS Code's ring`; `Finder's bundle id changes nothing`. The test waits for the frame, never for a time.
+  - `a front line written before a dial is plugged in is dropped, and the next app in front is followed` (no devices process yet: `devices.sock` does not exist; then the dial is plugged in, the log says `[devices] listener open`, and a second, different app is written).
+  - `while a dial is plugged in the devices' socket is in the data folder with mode 0600, and it is gone once the daemon has stopped` (`devicesListenerPath(<the daemon's data folder>)`; skipped on Windows, which has none).
   - `an agent in an unknown terminal is in the app named Other, beside Apple's Terminal` (`TERM_PROGRAM: 'tmux'` and `TERM_PROGRAM: 'Apple_Terminal'`: `apps` has `{ id: 'terminal', name: 'Other' }` and `{ id: 'terminal-app', name: 'Terminal' }`); `an unknown terminal in front ({"front":"org.alacritty"}) does not turn the dial to Other`.
   - `kitty's bundle id in front turns the dial to kitty's agents` (an agent with `__CFBundleIdentifier: 'net.kovidgoyal.kitty'`; the watch is written `{"front":"net.kovidgoyal.kitty"}`).
   - `the front is followed while a window is open: when it closes the dial is sent the app that came to the front meanwhile`.
@@ -680,12 +750,15 @@ A mockup of the `APPS` picker and of the face's app line is made by the main ses
   - `an agent in VS Code needs the person while Ghostty is shown: apps says waiting 1, and agent.open for it turns the dial to VS Code and focuses it`.
   - `a window opens: the tab's list and no apps; it closes: apps again`.
   - `unplugged and plugged in again, the dial is sent the app it had picked` (decision 8: the pick lives as long as the devices process).
+  - `a dial plugged in while VS Code is already in front (the watch started first) is sent VS Code's ring`: the watch tells its current app when `dial_status` turns attached (Task 28).
   - `a dial without appFilter beside it gets all five agents in one ring and no apps frame`.
-  - `the daemon's log has "app filter: switched" lines and no bundle id, no exe name and no app name`.
+  - `the daemon's log has "app filter: switched" lines and no bundle id, no exe name and no app name` (the `[devices] listener` lines among them: `open`, and the minute's counts when there are any).
 - [ ] **Step 2: Run** `cd cli && npx vitest run --config vitest.e2e.config.ts e2e/dialAppFilter.e2e.ts e2e/deviceWithoutApp.e2e.ts e2e/hardwareWatch.e2e.ts`. Expected: PASS.
 - [ ] **Step 3: Commit** `e2e: the dial's app filter`.
 
 ### Task 20: PR CI runs the X11 source live
+
+**Done:** `acac59fc67` (red: `328e454bde`).
 
 **Layer:** PR CI (`device-app-checks`, which runs only when `device-app/` changes). **Depends on:** Task 15 (the `x11_live` test). **Effort:** `high` (a job the required check waits on).
 
@@ -707,27 +780,36 @@ This replaces the draft's temporary workflow (the PM, answer 7): the check has t
   - The job's `timeout-minutes` stays 30. No secret, nothing published.
 - `docs/validation-and-release.md`: the row says the job also runs the X11 front source live under Xvfb.
 
-- [ ] **Step 1: Write the failing test.** In `test_the_workflow_carries_every_suite`, the `device-app-checks` job must also hold `xvfb`, `openbox`, `xdotool`, `xterm`, `--ignored x11_live` and `x11_live ... ok`; and `X11 front source, live` comes after `cargo test --locked --manifest-path device-app/src-tauri/Cargo.toml`.
-- [ ] **Step 2: Run** `python3 -m unittest discover -s scripts/tests -p 'test_ci_plan.py' -v`. Expected: FAIL (`'xvfb' not found in …`).
-- [ ] **Step 3: Implement** the job's change and the doc row.
-- [ ] **Step 4: Run** the step 2 command, then `go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/ci.yml`. Expected: PASS, no finding.
-- [ ] **Step 5: Commit** `CI: device-app-checks runs the X11 front source live, under Xvfb`.
-- [ ] **Step 6: The first run on a runner** is Verification check 2, the pull request's own CI run (no hand-started run: `AGENTS.md` allows no extra CI run). The pull request records the job's time there beside its time on the latest earlier run in which the job ran, and the difference.
+- [x] **Step 1: Write the failing test.** In `test_the_workflow_carries_every_suite`, the `device-app-checks` job must also hold `xvfb`, `openbox`, `xdotool`, `xterm`, `--ignored x11_live` and `x11_live ... ok`; and `X11 front source, live` comes after `cargo test --locked --manifest-path device-app/src-tauri/Cargo.toml`.
+- [x] **Step 2: Run** `python3 -m unittest discover -s scripts/tests -p 'test_ci_plan.py' -v`. Expected: FAIL (`'xvfb' not found in …`).
+- [x] **Step 3: Implement** the job's change and the doc row.
+- [x] **Step 4: Run** the step 2 command, then `go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/ci.yml`. Expected: PASS, no finding.
+- [x] **Step 5: Commit** `CI: device-app-checks runs the X11 front source live, under Xvfb`.
+- [x] **Step 6: The first run on a runner** is Verification check 2, the pull request's own CI run (no hand-started run: `AGENTS.md` allows no extra CI run). The pull request records the job's time there beside its time on the latest earlier run in which the job ran, and the difference.
 
 ### Task 21: Say it in the docs
 
-**Layer:** repo files. **Depends on:** Task 1. **Effort:** `medium`. **Red test:** none: no behavior.
+**Not done.** Checked against the decisions of 2026-11-15: it still holds, with the listener added and one more file.
+
+**Layer:** repo files. **Depends on:** Tasks 27, 28 (it names what they built). **Effort:** `medium`. **Red test:** none: no behavior.
 
 **Files:**
-- Modify: `cli/AGENTS.md` (the devices row of the processes table: which app the dial shows, and the app in front, in memory), `device-app/AGENTS.md` ("Rules a change keeps": the app in front is written to the watch's stdin and nowhere else, and is never logged), `docs/specs/2026-11-13-device-without-the-app.md` ("What the dial gets with no window": one ring per app for a dial that says `appFilter`, with a link to this spec)
+- Modify:
+  - `cli/AGENTS.md`, the devices row of the processes table: which app the dial shows and the app in front, in memory; and the devices' own local listener (`services/devicesListener.ts`), a private socket open only while the process runs, which the core neither opens nor knows.
+  - `cli/src/services/AGENTS.md`, the paragraph "A service that drives hardware: the devices": one sentence. What a local tool tells the devices (first the app in front, from `harness hardware watch`) goes to their listener, never through the core; a new message is a handler registered there.
+  - `device-app/AGENTS.md`, "Rules a change keeps": the app in front is written to the watch's stdin and nowhere else, and is never logged.
+  - `docs/specs/2026-11-13-device-without-the-app.md`, "What the dial gets with no window": one ring per app for a dial that says `appFilter`, with a link to this spec.
+- Not touched: the rules of `cli/AGENTS.md` (rule 7 is already there, from #4303), and anything that says the Swarm.
 
-- [ ] **Step 1:** Write the three changes, in the files' own words and length.
-- [ ] **Step 2:** Check every link resolves.
+- [ ] **Step 1:** Write the four changes, in the files' own words and length.
+- [ ] **Step 2:** Check every link resolves, and that none of the four says the core takes, checks or forwards the app in front.
 - [ ] **Step 3: Commit** `docs: the dial's app filter, where the daemon and the device app describe themselves`.
 
 ### Task 22: The on-dial rig (opt-in)
 
-**Layer:** test rig. **Depends on:** Task 19 (`HOST_HINTS`, exported by `cli/e2e/harness/outsideAgent.ts`). **Effort:** `high`. **Red test:** none: no behavior (an opt-in rig for the check a person walks; every run that does not set `ON_DIAL_PORT` skips it).
+**Not done.** Checked against the decisions of 2026-11-15: it still holds. The watch the Harness Device app runs reaches the rig's devices through their socket in the rig's own data folder, so nothing in the rig's files changes; only the log lines it asserts do.
+
+**Layer:** test rig. **Depends on:** Task 19 (`HOST_HINTS`, exported by `cli/e2e/harness/outsideAgent.ts`), Task 27 (the listener's log lines). **Effort:** `high`. **Red test:** none: no behavior (an opt-in rig for the check a person walks; every run that does not set `ON_DIAL_PORT` skips it).
 
 Why it is a task (the PM, answer 8): the repo has no rig for this. `fix/dial-swipe-order`'s on-dial check runs a script kept in its plan, which starts its own sessions on pseudo-terminals. This check needs each fake Claude Code in a real app's tab, so the tab names its app and the app can be brought to the front.
 
@@ -741,12 +823,12 @@ Why it is a task (the PM, answer 8): the repo has no rig for this. `fix/dial-swi
   1. Starts `IsolatedDaemon.create({ env: { CABLE_DISABLE: 'false', HARNESSD_TEST_DIAL_PORT: <ON_DIAL_PORT> } })`, as `e2e/deviceCompat.e2e.ts` does for a fake dial. `CABLE_FW_DISABLE` stays `true`: this daemon offers the dial no firmware.
   2. Writes into `ON_DIAL_OUT`, each value shell-quoted:
      - `tab.sh <folder>`: exports the daemon's environment without `HOST_HINTS`, `TMUX`, `TMUX_PANE` and `HARNESS_PANE` (the tab's own `TERM_PROGRAM` and `__CFBundleIdentifier` name its app), makes and enters `<projectsDir>/<folder>`, and execs the fake engine (`CLAUDE_PATH`).
-     - `harness`: an executable that runs this checkout's CLI (`CLI_ENTRY`) under the daemon's environment.
+     - `harness`: an executable that runs this checkout's CLI (`CLI_ENTRY`) under the daemon's environment (its data folder and home among it: that is how the watch finds the rig's `devices.sock`, and never the everyday daemon's).
      - `device.sh`: under the daemon's environment, writes the Harness Device app's first-run state with `loginItem` true (`$HOME/Library/Application Support/ai.autonomous.harness.device/state.json`, as `docs/plans/2026-11-13-device-menubar-plan.md` Verification says) and execs `device-app/src-tauri/target/debug/harness-device` with `HARNESS_DEVICE_CLI` at the `harness` above.
   3. Prints the three lines a person pastes (`sh <out>/tab.sh a1`, `sh <out>/device.sh`, `touch <out>/done`), and the dial's line once it greets (`cable: dial … on fw …`, waited for up to 60 s).
   4. Waits, on a condition, for `<out>/done`, up to `ON_DIAL_MINUTES`.
   5. Copies the daemon's log to `<out>/daemon.log`, prints how many `[device] app filter: switched · <cause>` lines each cause has and how many `[device] app filter: picker` lines there are, and closes the daemon (its throwaway root goes with it).
-- Asserts: the dial greeted; every `app filter:` line is exactly `[device] app filter: switched · front|pick|empty|notice` or `[device] app filter: picker`; every `dial front` line is the minute's count and nothing else.
+- Asserts: the dial greeted; every `app filter:` line is exactly `[device] app filter: switched · front|pick|empty|notice` or `[device] app filter: picker`; every `[devices] listener` line is exactly `[devices] listener open` or the minute's counts (Task 26), and nothing else; the log has no `dial front` and no `dial_front` at all.
 
 - [ ] **Step 1: Write the file.**
 - [ ] **Step 2: Run** `cd cli && npx vitest run --config vitest.e2e.config.ts e2e/dialAppFilterOnDial.e2e.ts`. Expected: 1 skipped. `npm run typecheck`. Expected: PASS.
@@ -754,6 +836,8 @@ Why it is a task (the PM, answer 8): the repo has no rig for this. `fix/dial-swi
 - [ ] **Step 4: Commit** `e2e: an opt-in rig for the app filter on a real dial`.
 
 ### Task 23: Claude desktop reads "Claude" on the dial
+
+**Done:** `8feb4fede0` (red: `51fcc4ed52`).
 
 The PM, 2026-11-14 (added to this plan's scope): #4296 finds an agent in the Claude desktop app (bundle
 `com.anthropic.claudefordesktop`) and opens its session, but the dial reads "Terminal": neither the daemon's `NAMES`
@@ -765,7 +849,7 @@ Diego's Mac, 2026-11-14).
 **Depends on:** Task 2 (it shares `hostDetect.ts` and its spec). **Effort:** `medium`.
 
 **Files:**
-- Modify: `cli/src/cable/hosts/hostDetect.ts` (`NAMES`; and `detectHost` / `detectApp` only if #4296 merged without a `claude` id: Task 1 reports which), `devices/harness-device/firmware/main/ui/habitat/ui_habitat.c` (`host_name`'s table)
+- Modify: `cli/src/cable/hosts/hostDetect.ts` (`NAMES`, and the bundle id in `detectHost` / `detectApp`), `devices/harness-device/firmware/main/ui/habitat/ui_habitat.c` (`host_name`'s table)
 - Test: `cli/src/cable/hosts/hostDetect.spec.ts`, `devices/harness-device/firmware/test/test_touch_ui.py`
 
 **Interfaces:**
@@ -773,26 +857,282 @@ Diego's Mac, 2026-11-14).
 - `detectHost` and `detectApp`: `__CFBundleIdentifier === 'com.anthropic.claudefordesktop'` gives `claude`.
 - Firmware `host_name`: `{"claude", "Claude"}`.
 
-- [ ] **Step 1: Write the failing tests:**
+- [x] **Step 1: Write the failing tests:**
   - `hostDetect.spec.ts`: `the Claude desktop app's bundle id is claude, read Claude` (`detectHost` and `detectApp` of `{ __CFBundleIdentifier: 'com.anthropic.claudefordesktop' }` → `claude`; `hostDisplayName('claude')` → `Claude`); `APP_IDS has 15 ids, at most 16, and every one has a display name`.
   - `test_touch_ui.py`: `host_name("claude")` is `Claude`, and the existing check that the firmware's table equals the daemon's `NAMES` (less its "Terminal" rows) passes with the new row on both sides.
-- [ ] **Step 2: Run** `cd cli && npx vitest run src/cable/hosts/hostDetect.spec.ts` and `python3 devices/harness-device/firmware/test/test_touch_ui.py`. Expected: FAIL (`Terminal` where `Claude` is wanted).
-- [ ] **Step 3: Implement** the two rows (and the bundle-id branch if Task 1 found none).
-- [ ] **Step 4: Run** the step 2 commands, then `make device-test`. Expected: PASS.
-- [ ] **Step 5: Commit** `dial: the Claude desktop app reads Claude, in the daemon's names and the firmware's`.
+- [x] **Step 2: Run** `cd cli && npx vitest run src/cable/hosts/hostDetect.spec.ts` and `python3 devices/harness-device/firmware/test/test_touch_ui.py`. Expected: FAIL (`Terminal` where `Claude` is wanted).
+- [x] **Step 3: Implement** the two rows and the bundle-id branch.
+- [x] **Step 4: Run** the step 2 commands, then `make device-test`. Expected: PASS.
+- [x] **Step 5: Commit** `dial: the Claude desktop app reads Claude, in the daemon's names and the firmware's`.
+
+### Task 24: Revert: the core knows nothing of the app in front
+
+The PM, 2026-11-15 (`cli/AGENTS.md`, Protect the core, rule 7): "No rule, list, record or mechanism goes into the core for one component, not even a generic one only it would use." Tasks 8, 9 and 10 put exactly that in the core. This task takes all of it out, in **one commit**.
+
+**Layer:** core (taken out of) and devices service process. **Depends on:** none. **Effort:** `high`.
+
+**Files:**
+- Delete: `cli/src/core/dialFront.ts`, `cli/src/core/dialFront.spec.ts`
+- Restore to the base, whole (`git checkout "$(git merge-base HEAD fix/dial-swipe-order)" -- <path>`; each file's whole diff against the base is the front, checked 2026-11-15): `cli/src/core/api.ts`, `cli/src/core/api.spec.ts`, `cli/src/core/devicesLink.ts`, `cli/src/core/devicesLink.spec.ts`, `cli/src/core/main.ts`, `cli/src/localWsServer.ts`, `cli/src/localWsServer.spec.ts`, `cli/src/architecture.coreFiles.txt`, `cli/src/services/devicesProcess.ts`, `cli/src/services/devicesProcess.spec.ts`
+- Modify: `cli/src/services/devices.ts`, `cli/src/services/devices.spec.ts`, `cli/src/cable/hosts/frontApp.spec.ts`, `cli/src/cable/hosts/hostDetect.spec.ts`
+- Not touched: `cli/src/devices/client.ts` and its spec. The watch still reads `dial-front` in `connected.features`; no daemon says it after this task, so the watch sends nothing of the front until Task 28.
+
+**What goes, and what stays:**
+- Task 8 goes whole: `createDialFront`, `FRONT_APPS`, `FRONT_PER_SECOND`.
+- Task 9 goes whole: `DevicesPort.front` and its fallback (`core/api.ts`), the link's `front` event (`core/devicesLink.ts`), `heard.front` (`services/devicesProcess.ts`: it only served that port member), and the `front` member of the port in `services/devices.ts`.
+- Task 10 goes whole: the `dial_front` block, `LocalWsServerOptions.dialFront` and `'dial-front'` in `LOCAL_TOOL_FEATURES` (`localWsServer.ts`), the wiring and the import in `core/main.ts`, the line `core/dialFront.ts` in `architecture.coreFiles.txt`.
+- **Stays:** `DaemonCableHost.front` and the filter (Tasks 4, 5), and Task 7's `appTimer: timerIn('dial')`. From Task 9 only one expression is reused, by Task 27: `part.call('dial', () => cableHost.front(app))`, as the body of the listener's `front` handler. Until Task 27, `cableHost.front` is called by tests alone.
+
+**Test expectation** (this task removes behavior, so its red is the base's own tests failing against the code that is still there):
+
+- [ ] **Step 1: Put the tests back first.**
+  - Restore the four spec files and `architecture.coreFiles.txt` from the base; delete `core/dialFront.spec.ts`.
+  - `devices.spec.ts`: `the inline port takes a front too` is deleted. The three other tests that call `port.front(app)` (`the app in front becomes the shown app 1 s later, and the dial is pushed apps`; `a front with a window open moves nothing on the dial`; `across a run with front changes, nothing but the dial's own frames holds the app in front`) call `host().front(app)` instead, as Task 7's tests beside them do, and drop the `toBe(true)` on its answer. Nothing else in them changes: the privacy test keeps reading every call and every log line.
+  - `frontApp.spec.ts`: the last test becomes `every id the table can give is an app id or none` (`APP_IDS.includes(id) || id === FRONT_NONE` for every row); the `FRONT_APPS` import goes.
+  - `hostDetect.spec.ts`: the test `the core's front words are the app ids and none, so the two cannot drift` and its import go. There is no second list any more: the listener's handler reads `APP_IDS` itself (Task 26).
+- [ ] **Step 2: Run** `cd cli && npx vitest run src/architecture.spec.ts src/localWsServer.spec.ts && npm run test:core`. Expected: FAIL, three ways:
+  - `localWsServer.spec.ts`: a tool is told `['openclaw-local', 'dial-watch']`, and the code says three features.
+  - `architecture.spec.ts`: the core loads `core/dialFront.ts`, a file the list does not name.
+  - `npm run test:core`: under 100% for `core/dialFront.ts` (no test left), `core/devicesLink.ts`, `services/devicesProcess.ts` and `services/devices.ts` (their `front` lines run in no test).
+- [ ] **Step 3: Take the code out.** Restore the five source files from the base, delete `core/dialFront.ts`, and delete the `front` member (and its comment) from the port in `services/devices.ts`.
+- [ ] **Step 4: Run** `cd cli && npm run typecheck && npx vitest run src/architecture.spec.ts src/localWsServer.spec.ts src/core src/services/devices.spec.ts src/services/devicesProcess.spec.ts src/cable && npm run test:core`. Expected: PASS, 100% per file. Then, from the repo root:
+  - `git diff --stat "$(git merge-base HEAD fix/dial-swipe-order)" -- cli/src/core cli/src/localWsServer.ts cli/src/localWsServer.spec.ts cli/src/architecture.coreFiles.txt cli/src/architecture.spec.ts cli/src/services/devicesProcess.ts cli/src/services/devicesProcess.spec.ts`. Expected: no output. The core is as on `fix/dial-swipe-order`.
+  - `git grep -n "dialFront\|FRONT_APPS" -- cli/src`. Expected: no output.
+  - `git grep -ln "dial_front\|dial-front" -- cli/src`. Expected: `cli/src/devices/client.ts` and `cli/src/devices/client.spec.ts` only (Task 28's).
+- [ ] **Step 5: Commit** (one commit, tests and code) `core: the app in front leaves the core; the devices will hear it on a listener of their own`. The message names the three commits it undoes: `ea6b817e24`, `82d30fa91f`, `e3cbfdfc22`.
+
+### Task 25: Where the devices listener is
+
+**Layer:** shared by the devices service process and the CLI; not the core. **Depends on:** none. **Effort:** `medium`.
+
+**Files:**
+- Create: `cli/src/devices/listenerPath.ts`, `cli/src/devices/listenerPath.spec.ts`
+
+**Interfaces:**
+- Consumes: `socketPathIn(folder, name, home)` from `cli/src/lib/localSocket.ts`. That is how the core's own socket and the connectors' `bridge.sock` (`lib/connectors/agents.ts`) find their place, the short folder included (`~/.harness/s/<16 hex of the folder's sha256>` when `folder/name` is over 96 bytes). It is a `lib/` helper, not a core module; every service process already loads the file (`serviceProcess.ts`); this task does not change it.
+- Produces:
+  - `export const DEVICES_SOCKET = 'devices.sock'`
+  - `export function devicesListenerPath(dataDir: string, platform: NodeJS.Platform = process.platform, home: string = homedir()): string | null` — `null` on `win32` (no listener there yet) and where even the short folder is too long; else `socketPathIn(dataDir, DEVICES_SOCKET, home)`.
+- This file is the one thing the listener (Task 26, through Task 27) and the watch (Task 28) share: both find the socket by calling it with the daemon's data folder. It imports nothing else, so the devices process pays nothing for it.
+
+- [ ] **Step 1: Write the failing tests:**
+  - `the socket is devices.sock in the data folder`.
+  - `a data folder too long for a socket gives the short folder under the home, the one socketPathIn gives` (a 200-character folder: the answer is `join(shortSocketFolder(folder, home), 'devices.sock')`).
+  - `null on Windows, whatever the folder`.
+  - `null when the home is too long as well`.
+- [ ] **Step 2: Run** `cd cli && npx vitest run src/devices/listenerPath.spec.ts`. Expected: FAIL (module missing).
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run** the step 2 command and `cd cli && npm run typecheck`. Expected: PASS. Every case passes the platform in, so the spec runs the same on Windows.
+- [ ] **Step 5: Commit** `devices: where their own listener is`.
+
+### Task 26: The devices listener
+
+**Layer:** devices service process. **Depends on:** Task 25 (the spec opens the path it gives). **Effort:** `xhigh` (a new way in to a daemon process: who may connect, what a message may be, what a flood costs, what the log may say).
+
+**Files:**
+- Create: `cli/src/services/devicesListener.ts`, `cli/src/services/devicesListener.spec.ts`
+
+**How the core's own local socket checks who is calling** (read in the code, 2026-11-15; this task reuses it, and changes none of it):
+- The core's socket never reads a peer's uid: Node has no call for it. The **file is the credential** (`lib/localSocket.ts`, its header): the socket is 0600 in a folder that is the owner's alone, so the kernel refuses another account's `connect`.
+- `listenLocalSocket(handler, path)` makes that true without a gap: it listens under a private name, `chmod`s it to 0600, and only then hard-links it to its name (a name already taken by a live listener is refused; a dead one's file is replaced); a short folder is made 0700 and checked to be a real folder of this uid (`prepareShortFolder`). The connectors service already serves its own `bridge.sock` this way (`lib/connectors/bridge.ts`), from the edge host.
+- A client checks the other half before it sends: `socketIsPrivate(path)` (`lib/localTransport.ts`): a socket of this uid, no group or other bit, in a folder of this uid that nobody else can write to.
+- So "another uid refused" is three checks here: the mode, the folder's owner, and the client's look at the socket (Task 28). A second account connecting for real is refused by the kernel on the mode, and no unit test can run as a second account (Open question 1).
+
+**Interfaces:**
+- Consumes: `listenLocalSocket`, `LocalSocketServer` (`lib/localSocket.ts`, as `lib/connectors/bridge.ts` does); `APP_IDS` (`cable/hosts/hostDetect.ts`, Task 2); `FRONT_NONE` (`cable/hosts/frontApp.ts`, Task 11).
+- Produces:
+  - `export const LISTENER_MAX_CONNECTIONS = 16`
+  - `export const REFUSED: unique symbol` — what a handler returns for a body that is not a message of its type.
+  - `export interface ListenerHandler { maxBytes: number; perSecond: number; handle(message: Record<string, unknown>, gone: AbortSignal): unknown }` — `maxBytes` is the largest body of this type; `perSecond` is how many one connection may send a second; `handle` gets the parsed body (`type` included) and returns `REFUSED`, nothing (taken), or a value or a promise of one (the answer). `gone` aborts when the sender's connection closes before the answer.
+  - `export interface DevicesListenerOptions { path: string | null; handlers: Readonly<Record<string, ListenerHandler>>; log(line: string): void; now?: () => number }` — `now` is monotonic milliseconds, `performance.now` by default.
+  - `export interface DevicesListener { close(): Promise<void> }`
+  - `export function openDevicesListener(options: DevicesListenerOptions): Promise<DevicesListener | null>` — `null` when nothing was opened. It never rejects for a socket it could not open.
+  - `export const FRONT_PER_SECOND = 10`, `export const FRONT_MAX_BYTES = 64` (the longest message, `{"type":"front","app":"terminal-app"}`, is 37 bytes)
+  - `export function frontHandler(front: (app: string) => void): ListenerHandler` — `maxBytes: FRONT_MAX_BYTES`, `perSecond: FRONT_PER_SECOND`; `handle` calls `front(app)` when `app` is a string in `APP_IDS` or is `FRONT_NONE`, and returns `REFUSED` otherwise. It holds nothing between calls and logs nothing.
+- **The wire.** One message is one `POST /` on the socket, its body a JSON object with a string `type`: `{"type":"front","app":"ghostty"}`. It is HTTP because `listenLocalSocket` serves HTTP, and because both kinds of sender already speak it over a private socket: the CLI (`fetchOverSocket`) and the hook scripts #4296's follow-up will point here. A connection is kept alive, so "per connection" is the HTTP connection. The answer's status says what became of the message, and its body is empty unless the handler answered:
+
+  | Status | When | Counted as |
+  |---|---|---|
+  | `204` | taken; the handler returned nothing | |
+  | `200` + the handler's value as JSON | the handler answered | |
+  | `400` | not a JSON object, no string `type`, or the handler returned `REFUSED` | `refused` |
+  | `404` | no handler for the type (own keys only: `__proto__` and `constructor` are unknown types) | `unknown` |
+  | `405` | not `POST /` | `refused` |
+  | `413` | the body is over the largest `maxBytes` of any handler (reading stops there and the connection is closed), or over its own type's | `oversized` |
+  | `429` | over the type's rate on this connection | `rate` |
+  | `500` | the handler threw or its promise rejected | `failed` |
+
+- **Rules:**
+  - **Open.** `path: null` (Windows) opens nothing, logs nothing and answers `null`. When the socket's folder exists it must be a real folder of this uid that no one else can write to (`lstat`: a directory, `uid === process.getuid()`, `(mode & 0o022) === 0`: what `socketIsPrivate` asks of a socket's folder); a short folder that does not exist yet is made and checked by `listenLocalSocket`. Then `listenLocalSocket(handler, path)`, `server.maxConnections = LISTENER_MAX_CONNECTIONS`, and `server.unref()` (a listener never keeps a process up).
+  - **Seen.** One line when it opens: `[devices] listener open` (no path: a path holds the account's name). One line when it does not: `[devices] listener not opened · folder not private`, `· in use` (a live listener already has the name) or `· failed`.
+  - **Order of checks:** method and path, the body's size as it is read, JSON object and `type`, the handler, its own `maxBytes`, its rate, then `handle`.
+  - **Rate.** One bucket for each type on each connection, full at `perSecond`, refilled at `perSecond` a second; a clock that stepped back refills nothing. The buckets go with the connection (keyed on its socket, weakly): no table to bound or clean.
+  - **Counted, never told.** Dropped messages are counted by the five kinds above and logged at most once a minute, by an unref'd timer started at the first count: `[devices] listener in the last minute: N unknown, N oversized, N over rate, N refused, N failed`. No type a sender made up, no body, no app, no error text, in any log line or answer.
+  - **Close.** `close()` stops listening, ends every open connection, aborts every `gone`, removes the socket file and cancels the minute's timer. A second `close()` does nothing.
+- **For #4296's follow-up:** `asked`, `inbox` and `observed` are three more entries in `handlers`, each with its own `maxBytes` and `perSecond`. `inbox` is why `handle` may answer with a promise and gets `gone`: its poll is held until a transcript takes it or its client goes. Nothing in this file changes for them.
+- **Windows.** No named pipe in this work (the follow-up that builds the Harness Device app for Windows adds it: `listenLocalSocket` already serves a pipe when given a token). Here `devicesListenerPath` is `null` on `win32`, so nothing is opened. The file imports only what a Windows service process already loads. In the spec, every case that binds a socket sits in `describe.skipIf(process.platform === 'win32')`; the no-path case and `frontHandler`'s cases run on every OS. `windows.yml` runs a fixed list of specs, and this one is not in it.
+
+- [ ] **Step 1: Write the failing tests** (real sockets in a short folder of the test's own under `/tmp`, `mkdtempSync('/tmp/hdl-')`, as `shortDir` in `lib/localSocket.spec.ts`: a longer one would send the socket to the short folder under the developer's own home; the spec's client is `node:http` with `socketPath`; a scripted `now`; fake timers only for the minute's line):
+  - **Who may connect**
+    - `the socket is 0600, and a socket, at the path asked for` (`lstat`: `isSocket()`, `(mode & 0o777) === 0o600`).
+    - `a folder that is not this account's own is refused: nothing is opened` (`process.getuid` spied to another uid; the answer is `null`, no socket file, the log is `[devices] listener not opened · folder not private`).
+    - `a folder others can write to is refused` (the temp folder `chmod` 0o757).
+    - `a live listener already on the path: nothing is opened, and the first still answers` (`· in use`).
+    - `the socket file of a process that died is replaced`.
+    - `the 17th connection at once is closed, and the 16 go on`.
+  - **What a message may be**
+    - `an oversized body is dropped and counted, and the handler never runs` (one byte over `maxBytes` → `413`; a 1 MiB body → `413`, the connection closed, and no more than the largest `maxBytes` read).
+    - `a body over its own type's limit and under another type's is dropped` (handlers of 64 and 1024 bytes; a 200-byte `front`).
+    - `an unknown type is dropped and counted` (`nope`, `__proto__`, `constructor`, `toString` → `404`).
+    - `a body that is not a JSON object with a string type is refused` (`[]`, `"front"`, `null`, `{`, `{"type":7}`, `{}` → `400`).
+    - `anything but POST / is refused` (`GET /`, `POST /front` → `405`).
+  - **What a flood costs**
+    - `the 11th front within a second on one connection is dropped; another connection's is taken` (`429`); `a second later ten more pass`; `a clock set back refills nothing`.
+    - `each type has a rate of its own on a connection` (`front`'s bucket empty, a second test type still taken).
+  - **`front`**
+    - `front takes every app id and none` (each of `APP_IDS`, `terminal` among them, and `none` → `204`, and `front` was called with it).
+    - `front refuses an unknown app id`: no `app`, a number, `''`, `Ghostty` (a name), `com.mitchellh.ghostty` (a raw value), `other`, `Other` (the old word and the display name), `__proto__` → `400`, and `front` is never called.
+    - `the front handler holds nothing: it is its two limits and handle` (the object's own keys).
+  - **What is said of it**
+    - `opening logs "[devices] listener open" and no path`.
+    - `nothing logs or echoes what was sent`: after an unknown type, an oversized body, an over-rate burst and refused bodies that carry `ghostty`, `com.mitchellh.ghostty` and a marker string, every log line and every answer's body is read: none holds any of the three, nor the made-up type. After a minute the one line is exactly `[devices] listener in the last minute: 1 unknown, 1 oversized, 1 over rate, 3 refused, 0 failed`.
+    - `a handler that throws is 500, counted failed, logged with no text of the error, and the next message is taken`.
+  - **The door for the handlers to come**
+    - `a handler's value is the answer, and a promise is waited for`.
+    - `gone aborts when the sender's connection closes before the answer`.
+  - **Close and Windows**
+    - `close removes the socket, ends open connections, aborts every gone and leaves no timer; a second close does nothing`.
+    - `with no path (Windows) nothing is opened and nothing is logged`.
+- [ ] **Step 2: Run** `cd cli && npx vitest run src/services/devicesListener.spec.ts`. Expected: FAIL (module missing).
+- [ ] **Step 3: Implement.** The file imports nothing from `src/core/`, `backendSocket.ts` or `cli.ts`, and nothing from `lib/localTransport.ts` (a client's file, which the devices process does not load).
+- [ ] **Step 4: Run** the step 2 command, then `cd cli && npm run test:core && npm run typecheck && npx vitest run src/architecture.spec.ts`. Expected: PASS, 100% for `services/devicesListener.ts`; `architecture.spec.ts` unchanged (a service's file is not in the core's walk).
+- [ ] **Step 5: Commit** `devices: a private listener of their own, a handler for each message type; front is the first`.
+
+### Task 27: The devices open their listener
+
+**Layer:** devices service process. **Depends on:** Task 24 (the same four files; the port's `front` is gone), Task 25 (`devicesListenerPath`), Task 26. **Effort:** `xhigh` (privacy; a socket's life tied to a process; `services/devices.ts` and `services/devicesProcess.ts` are in the 100% gate).
+
+**Files:**
+- Modify: `cli/src/services/devices.ts` (`DevicesDeps`, after the cable host is built, `port.stop`), `cli/src/services/devicesProcess.ts` (`DevicesServiceOptions`, the `deps` literal)
+- Test: `cli/src/services/devices.spec.ts`, `cli/src/services/devicesProcess.spec.ts`
+
+**Interfaces:**
+- Consumes: `openDevicesListener`, `frontHandler`, `ListenerHandler`, `DevicesListener` (Task 26); `devicesListenerPath` (Task 25); `DaemonCableHost.front` (Task 5); `part.call` and `log` of `startDevices`.
+- Produces:
+  - `DevicesDeps.listen?: (handlers: Readonly<Record<string, ListenerHandler>>, log: (line: string) => void) => Promise<DevicesListener | null>` — given by the devices process alone.
+  - `startDevices`, when `deps.listen` is given: calls it once, after the cable host exists, with `{ front: frontHandler((app) => part.call('dial', () => cableHost.front(app))) }` and its own `log`. A rejection is one line, `[devices] listener not opened · failed`, and the devices run on. `port.stop` closes the listener first (waiting for an open still under way), so no front reaches a stopped cable.
+  - `DevicesServiceOptions.openListener?: typeof openDevicesListener` (for this service's tests, beside `start` and `run`).
+  - `runDevicesService`: `deps.listen = (handlers, log) => (options.openListener ?? openDevicesListener)({ path: devicesListenerPath(options.dataDir), handlers, log })`.
+- **Only in the devices process.** The start inside the core's process (`core/main.ts`, for `HARNESSD_SERVICES=none` and Harness OS) gives no `listen`, and this task does not touch it: the core's process opens no socket for the devices, in any mode. There the dial filters by app and takes a pick, and does not follow the app in front.
+- This is the registration #4296's follow-up copies: one more key in the object given to `deps.listen`.
+
+- [ ] **Step 1: Write the failing tests:**
+  - `devices.spec.ts` (a fake `listen` that records its handlers and gives a `close` spy):
+    - `the devices open their listener once, with a front handler of 10 a second and 64 bytes`.
+    - `the listener is closed when the devices stop, before the cable is`.
+    - `stopping while the listener is still opening closes it once it has opened`.
+    - `a listener that cannot open is one log line, and the devices run on` (`listen` rejects; and `listen` answering `null` adds no line of the devices' own).
+    - `with no listen given (the devices inside the core's process) nothing is opened, and a pick still turns the dial`.
+    - `a front through the listener's handler becomes the shown app 1 s later, and the dial is pushed apps` (`handlers.front.handle({ type: 'front', app: 'vscode' }, signal)`; this replaces the `host().front` form Task 24 left).
+    - `a front through the handler with a window open moves nothing on the dial, and is shown when the window closes`.
+    - **Privacy:** `across a run with fronts through the handler, nothing but the dial's own frames holds the app in front` — Task 24's test, driven through `handlers.front.handle` for `ghostty`, `none`, `vscode`: every log line, and every call the devices made on the core's API, the windows, the fleet, the gateway and `fetch`, is read: none matches `/ghostty|vscode|VS Code/i`, and no argument is `none`. The core's API is called with nothing of the front at all.
+    - `a cable host that throws on a front is logged as the dial's failure, and the handler returns as taken`.
+  - `devicesProcess.spec.ts`:
+    - `the devices process gives the devices its listener, on the data folder's devices socket` (a fake `openListener` records `{ path, handlers, log }`: `path` is `devicesListenerPath(dataDir)`, and the handlers are the ones `listen` was called with).
+- [ ] **Step 2: Run** `cd cli && npx vitest run src/services/devices.spec.ts src/services/devicesProcess.spec.ts`. Expected: FAIL (`listen` is never called; `openListener` is not an option).
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run** `cd cli && npm run test:core && npm run typecheck && npx vitest run src/architecture.spec.ts src/leanEntry.spec.ts`. Expected: PASS, 100% for both files; the core's file list and what its process may open are unchanged.
+- [ ] **Step 5: Commit** `devices: open the listener with the devices process, and close it with it`.
+
+### Task 28: `harness hardware watch` tells the devices listener
+
+This is the change to Task 12 (the PM, 2026-11-15). Task 12's stdin reading, its line limits and `frontAppId` stay.
+
+**Layer:** CLI only. **Depends on:** Task 25. **Effort:** `xhigh` (the raw name must stop here, and the app id must reach only the owner's own socket).
+
+**Files:**
+- Create: `cli/src/devices/listenerClient.ts`, `cli/src/devices/listenerClient.spec.ts`
+- Modify: `cli/src/devices/client.ts` (`DialWatchDeps`, `runDialWatch`)
+- Test: `cli/src/devices/client.spec.ts`
+
+**Interfaces:**
+- Consumes: `devicesListenerPath` (Task 25); `fetchOverSocket` (`lib/localTransport.ts`), which refuses a socket that is missing or not private (`socketIsPrivate`) before a byte is sent; `frontAppId` (Task 11); the wire of Task 26 (`POST /`, a JSON object with `type`; a `2xx` is taken).
+- Produces, in `listenerClient.ts`:
+  - `export function tellDevices(dataDir: string, message: { type: string } & Record<string, unknown>, options?: { platform?: NodeJS.Platform; fetch?: typeof fetch; timeoutMs?: number }): Promise<boolean>` — true when the listener took it (`2xx`). False, and never a throw, when there is no path (Windows), no socket (an older daemon, the devices process not running), a socket that is not this account's own, any other answer, or no answer in `timeoutMs` (2000 by default, `AbortSignal.timeout`).
+- Produces, in `client.ts`:
+  - `DialWatchDeps.tell?: (message: { type: 'front'; app: string }) => Promise<boolean>` — by default `tellDevices(deps.dataDir ?? env.ADAPTER_DATA_DIR, message)`.
+  - Each stdin line with a string `front` is mapped with `frontAppId`. When the app id differs from the last one the listener took, the watch tells `{ type: 'front', app }`.
+  - One tell at a time. When it ends and the app in front has changed meanwhile, the newest is told and the ones between are skipped, so the listener hears them in order and the last one last.
+  - A tell that is not taken changes nothing and is not tried again by itself: the next change of the app in front is told (the spec: "it ignores the `front` lines and tries again on the next change").
+  - **When the `dial_status` the watch already hears turns to `attached: true`** (from not attached, or at the first status), the watch tells its current app again, even if the listener took the same one before (the PM, 2026-11-15, open question 2: B). The devices process usually starts when the dial is plugged in, after the watch; this gives it the app in front at once. No current app yet (no `front` line read): nothing is told.
+  - It does not wait for the core: a `front` line is told as soon as it is read, before or after `connected`. Nothing of the app in front goes on the core's socket: `dial_front`, `frontTaken` and the reading of `dial-front` in `connected.features` are deleted.
+  - After stdin closes or the watch has finished, nothing more is told.
+  - Nothing of a line is printed, on stdout or stderr, also when a tell fails.
+
+- [ ] **Step 1: Write the failing tests:**
+  - `listenerClient.spec.ts` (a real `listenLocalSocket` server stands for the listener, in a short data folder of the test's own under `/tmp`, so the path is beside it and never under the developer's home; the socket cases are skipped on Windows):
+    - `tells the data folder's devices socket: POST /, the message as JSON, true on 204`.
+    - `false when the listener answers 400, 404, 413, 429 or 500`.
+    - `false with no socket there, and nothing is sent`.
+    - `false on Windows without a call` (`platform: 'win32'`, a `fetch` spy never called).
+    - `a socket of another account, or one looser than 0600, is told nothing` (`process.getuid` spied to another uid; then the socket `chmod` 0o666: the server hears no request).
+    - `false when the listener does not answer in time` (`timeoutMs: 50` against a server that never answers; the test waits on the promise).
+    - `never throws` (a `fetch` that rejects).
+  - `client.spec.ts` (a fake `tell` that records its messages and answers as scripted). Task 12's tests of `dial_front` are replaced by:
+    - `a front line is told to the devices listener as an app id` (`{"front":"com.mitchellh.ghostty"}` → `{ type: 'front', app: 'ghostty' }`; `{"front":"Code.exe"}` → `vscode`).
+    - `an unknown app is told as none`.
+    - `the raw value is never sent or printed`: every message given to `tell`, every frame the fake core socket was sent, and every `print` and `printError`, is read for the bundle id and the exe name.
+    - `nothing of the app in front goes on the core's socket`: the frames sent there are `machine_select` and nothing else, also when its `connected.features` names `dial-front`.
+    - `the same app twice is told once; Safari then Finder is one none`.
+    - `a front line is told at once, before the daemon has answered`.
+    - `with no listener the line is ignored, and the next change is told` (`tell` answers false for `ghostty`, then true: `vscode` is told, and `ghostty` after it is told again).
+    - `when dial_status turns attached the current app is told again, also one the listener took before; with no front line read yet nothing is told`.
+    - `two changes while a tell is under way: the newest is told when it ends, the one between is skipped`.
+    - `after stdin closes nothing is told`.
+    - Kept from Task 12, unchanged: `a line in two chunks is one line; a 2000-byte line and a line that is not JSON are dropped, and the next line still works`; `dial status lines print as before, and stdin closing still exits 0`.
+- [ ] **Step 2: Run** `cd cli && npx vitest run src/devices`. Expected: FAIL (`listenerClient` missing; `tell` is never called).
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run** the step 2 command and `cd cli && npm run typecheck`. Expected: PASS. Then `git grep -n "dial_front\|dial-front" -- cli/src`. Expected: only the one test above that names `dial-front` to prove it is ignored.
+- [ ] **Step 5: Commit** `hardware watch: tell the devices' own listener which app is in front, and the core nothing`.
+
+### Task 29: Round firmware: "Hold to switch apps"
+
+The PM, 2026-11-15 (the spec, § The app picker): the same rule that turned "Hold for tabs" into "Hold for apps" (Task 18) turns the resting line "Hold to switch tabs" into "Hold to switch apps". The resting line is the one an engine with no relaxing scene shows (every engine but Claude, Codex and Muse).
+
+**Layer:** firmware UI. **Depends on:** none (Task 18 is done: it added `hold_apps` and `ht_focus_set_hold_apps`). **Effort:** `medium`.
+
+**Files** (under `devices/harness-device/firmware/`):
+- Modify: `main/ui/habitat/focus.c` (`resting_line`, a new `#define` beside `HOLD_FOR_TABS`, and the comment above `RESTING`)
+- Test: `test/test_touch_ui.py` (beside the "Hold for apps" loop in `app_picker_checks`); `test/test_character.c` only if a check there lists the resting lines by name with `hold_apps` set (it does not today: it never sets it, so it keeps reading "Hold to switch tabs")
+
+**Interfaces:**
+- Consumes: `hold_apps` (`focus.c`), set by `ui_habitat.c` from `hold_picks_app()` before each face is drawn: the machine view with `apps` received.
+- Produces: `#define HOLD_FOR_APPS "Hold to switch apps"`. `resting_line` returns it in place of `HOLD_FOR_TABS` when `hold_apps` is set, from `RESTING` and from `RESTING_MUTE`. The pick itself is untouched, so the line keeps its weight (5 of 27; 1 of 2 on a face without voice), and "never the same line twice running" still compares the list's own words.
+- The rule, as for "Hold for apps": machine view with `apps` → apps; a window → tabs; no `apps` (an older daemon) → unchanged.
+
+- [ ] **Step 1: Write the failing test** in `test_touch_ui.py`, on an agent whose engine has no relaxing scene, over the same four cases as the "Hold for apps" loop, each over 120 fresh resting faces (counted with `scene_says`, as `rest_invitations` counts the resting lines):
+  - the machine view with apps: `Hold to switch apps` is seen more than 10 times, and `Hold to switch tabs` never;
+  - a window: `Hold to switch tabs` more than 10 times, `Hold to switch apps` never;
+  - the machine view with no `apps`: the same as a window;
+  - the machine view with apps on a face without voice (`CABLE_CAP_S` only): `Hold to switch apps`, and `Hold to switch tabs` never.
+- [ ] **Step 2: Run** `IDF_PATH=~/esp/esp-idf-5.5.4 python3 devices/harness-device/firmware/test/test_touch_ui.py`. Expected: FAIL (the machine view with apps still says "Hold to switch tabs").
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run** `env -u IDF_PATH make device-test` and every `devices/harness-device/firmware/test/test_*.py`. Expected: PASS (the known macOS exception of Task 16). Build `default` with `-DPROJECT_VER=0.1.0-dev`.
+- [ ] **Step 5: Commit** `round dial: the resting hint says Hold to switch apps where a hold opens the apps`.
 
 ---
 
 ## Verification
 
 **Local gates**, recorded in the pull request (PR CI does not run them):
-- `cd cli && npm run typecheck && npm run test:core` — 100% per file for `core/dialFront.ts`, `core/api.ts`, `core/devicesLink.ts`, `services/devices.ts`, `services/devicesProcess.ts`; and `npx vitest run src/architecture.spec.ts`.
+- `cd cli && npm run typecheck && npm run test:core` — 100% per file for `services/devicesListener.ts`, `services/devices.ts` and `services/devicesProcess.ts`; and `npx vitest run src/architecture.spec.ts src/leanEntry.spec.ts`. These receipts now prove the **core is unchanged**: with them, from the repo root, `git diff --stat <base> -- cli/src/core cli/src/localWsServer.ts cli/src/localWsServer.spec.ts cli/src/architecture.coreFiles.txt cli/src/architecture.spec.ts` prints nothing (`<base>` is `$(git merge-base HEAD fix/dial-swipe-order)`, or `origin/main` once the stack has merged), and `git grep -n "dial_front\|dialFront\|FRONT_APPS" -- cli/src` prints nothing.
+- `python3 -m unittest discover -s scripts/tests -p 'test_ci_plan.py'` — the CI plan still carries every suite (Task 20 changed `device-app-checks`).
 - `cd device-app/ui && npm ci && npm run build`, then `cd device-app/src-tauri && cargo test --lib` and `cargo test --locked`, **on a Mac**: PR CI compiles and tests the app's Linux code only, so `front_macos.rs` is compiled nowhere else.
 - `env -u IDF_PATH make device-test`, every `devices/harness-device/firmware/test/test_*.py` with `IDF_PATH=~/esp/esp-idf-5.5.4`, and the `default` build with `-DPROJECT_VER=0.1.0-dev`.
 - `python3 scripts/local-checks.py --run` from a clean tree at the final commit; its receipts go in the pull request.
 - Not needed: `npm run test:harnessd` and the serial specs (nothing of theirs changes).
 
-**Platforms the pull request names:** the daemon and CLI on macOS, Linux and Windows; the Harness Device app on macOS and Linux X11; the round dial. On Windows the dial filters by app and takes a pick, and follows nothing until the Windows source exists (a follow-up). This plan has no Windows check (the PM, answer 2): `windows.yml` runs a fixed list of Windows specs, none of them touched, and is not started.
+**Platforms the pull request names:** the daemon and CLI on macOS, Linux and Windows; the Harness Device app on macOS and Linux X11; the round dial. On Windows the dial filters by app and takes a pick, and follows nothing: there is no source of the app in front and no devices listener there (`devicesListenerPath` is `null`, so nothing is opened and the watch tells nothing) until the Harness Device app for Windows (a follow-up). This plan has no Windows check (the PM, answer 2): `windows.yml` runs a fixed list of Windows specs, none of them touched or added to, and is not started. The new specs skip their socket cases on Windows and run the rest.
 
 **Turns.** The tester asks before using either, and starts nothing until it is granted.
 - **A runner turn,** asked of the orchestrator, before the one hand-started run on GitHub: CLI end to end (check 1: eight shards, about 70 minutes of test time).
@@ -803,14 +1143,15 @@ Diego's Mac, 2026-11-14).
 **1. The daemon, a fake dial and the real watch**
 - Run: `cd cli && npx vitest run --config vitest.e2e.config.ts e2e/dialAppFilter.e2e.ts e2e/deviceWithoutApp.e2e.ts e2e/hardwareWatch.e2e.ts e2e/deviceCompat.e2e.ts e2e/devicesProcess.e2e.ts`, on a Mac or a Linux box.
 - Isolation: the suite's own (`e2e/harness/daemon.ts`): a throwaway home and data folder, a private port and tmux server, fake engines, a fake dial on a pseudo-terminal, no backend and no sign-in.
-- A person sees: every test passes; the daemon's log has `[device] app filter: switched · front` and `· pick` lines with no app in them.
+- What it proves end to end: the watch's stdin → the devices process's own socket (`devices.sock`, 0600, in the throwaway data folder) → the filter → the fake dial's frames. The core's socket carries none of it.
+- A person sees: every test passes; the daemon's log has `[devices] listener open`, and `[device] app filter: switched · front` and `· pick` lines with no app in them.
 - On GitHub, by hand, once on the final head, after a runner turn: Actions → CLI end to end → Run workflow, branch `feat/dial-app-filter` (`.github/workflows/cli-e2e.yml`). Every shard passes. This is also the Linux run of the daemon's side of the spec's check 9.
 
 **2. Linux X11: the front line arrives**
 - Where: PR CI's `device-app-checks` on `ubuntu-latest`, its step `X11 front source, live` (Task 20): Xvfb, `openbox`, two `xterm` clients, one of them copied to the name `code`.
 - Isolation: the runner. No daemon, no backend, no login, no secret.
 - A person sees: the step prints `x11_live ... ok`: the source gave `xterm`, then `code`, as each window was brought to the front.
-- That `code` in front becomes `vscode` and turns the dial is Tasks 11 and 12's tests and check 1.
+- That `code` in front becomes `vscode` and turns the dial is Tasks 11 and 28's tests and check 1.
 - On GitHub: the pull request's own CI run, which runs `device-app-checks` because `device-app/` changed. It is the first run of `front_x11.rs` anywhere (a Mac does not compile it), so a failure there is fixed as phase 5 says. No CI run is started by hand (`AGENTS.md`: never an extra CI run).
 - The pull request records how much longer the job runs: `device-app-checks`' time on this run, its time on the latest earlier run in which the job ran (`gh run view <run> --json jobs`), and the difference.
 - No Linux desktop is named for this plan, so following VS Code on a person's X11 desktop is not walked by hand.
@@ -834,32 +1175,43 @@ Diego's Mac, 2026-11-14).
 - Order:
   1. **Rig run 1, on the firmware the dial already has. Check 8:** note the firmware version the rig prints. Five agents (Ghostty 3, VS Code 2). The dial lists all five in one ring, as today; a hold on the face shows "TABS — No tabs yet.". End the run.
   2. With no daemon running, flash the branch's firmware by the repo procedure (the flag file, `esptool chip_id` says ESP32-S3, `idf.py -p <port> flash` of the `-DPROJECT_VER=0.1.0-dev` build, remove the flag).
-  3. **Rig run 2. Check 1:** the same five agents. The dial opens on Ghostty. The face says "Ghostty". A swipe goes around Ghostty's three only.
+  3. **Rig run 2. Check 1:** the same five agents. The dial opens on Ghostty. The face says "Ghostty". A swipe goes around Ghostty's three only. On an agent of an engine with no relaxing scene, the resting hint that names a hold says "Hold to switch apps"; on Claude Code's relaxing face it says "Hold for apps" (Tasks 18, 29).
   4. **Check 2:** hold → `APPS`: Ghostty `3 agents`, VS Code `2 agents`. Browsing changes nothing on the face behind. Pick VS Code: VS Code's two, in the order they started.
-  5. **Check 3,** with the debug Harness Device app running: bring Ghostty to the front: the dial turns to Ghostty in about 1 s. Cmd-Tab across three apps and back within a second: nothing moves. Finder in front: nothing moves.
+  5. **Check 3,** with the debug Harness Device app running (started after the dial greeted, so the rig's devices process and its listener are up): bring Ghostty to the front: the dial turns to Ghostty in about 1 s. Cmd-Tab across three apps and back within a second: nothing moves. Finder in front: nothing moves.
   6. **Check 4:** pick VS Code on the dial with Ghostty in front: it holds. Safari, then Ghostty, in front: the dial returns to Ghostty.
   7. **Check 5:** a VS Code agent asks for approval while the dial shows Ghostty: the bell rings; `APPS` says `2 agents · 1 waiting` on VS Code; opening the notice turns the dial to that agent.
   8. **Check 6:** a fake Claude Code in zellij inside Ghostty is in Ghostty's ring; its face says "Ghostty"; a tap says "See it in Zellij".
   9. **Check 7:** not run on the dial: opening the Harness desktop app would start and reach the everyday daemon. Its two halves are check 1 above (`a window opens: the tab's list and no apps`) and Task 18's host tests (`a hold with a window opens TABS`).
-- Evidence: `<out>/daemon.log` of both runs (`[device] app filter: switched · …`, `[device] app filter: picker` and `cable: agents → N of M` lines), the rig's counts, and a photo of the face and of `APPS`.
+- Evidence: `<out>/daemon.log` of both runs (`[devices] listener open`, `[device] app filter: switched · …`, `[device] app filter: picker` and `cable: agents → N of M` lines), the rig's counts, and a photo of the face and of `APPS`.
 - **Afterwards:** end the run and quit the debug app (the rig removes its throwaway root). Flash the released firmware back (`harness flash`), then run `harness start`. Check the dial lists the everyday daemon's agents, and tell the PM and the orchestrator the dial is free.
 - Not done, for whatever reason: report check 4 as not verified, never as passed.
 - On GitHub: none. It needs a real dial.
 
 ## Open questions
 
-None. The draft's eight were answered by the PM on 2026-11-14:
+None open. The PM answered both of 2026-11-15 the same day: 1. **A** (exactly as the core: 0600, an owner-only folder, the client checks owner and mode; no native code). 2. **B** (the watch tells its current app again when the dial attaches; Task 28 and one Task 19 test). Kept below for the record.
 
-1. **The core's change:** A. A new core file, `cli/src/core/dialFront.ts`, a line in `architecture.coreFiles.txt`, 100% per file (Tasks 8, 10).
+1. **"The peer's uid, as the core's local socket checks it."** The core's local socket reads no peer uid: Node has no call for it. What it has is the file as the credential: a 0600 socket in a folder that is the owner's alone, so the kernel refuses another account's `connect`, and a client looks at the socket's owner and mode before it sends (`lib/localSocket.ts`, `lib/localTransport.ts` `socketIsPrivate`).
+   - A (the plan, Tasks 26 and 28): the devices listener does exactly that, with the same helpers. Its tests prove the mode, the folder's owner and the client's check; a second account connecting for real is not run, as no unit test has one.
+   - B: also read the peer's uid from the kernel on each connection (`SO_PEERCRED`, `LOCAL_PEERCRED`). That needs native code in the devices process, which the daemon does not have today: a new decision, and a change to Task 26 alone.
+2. **The first app in front after the devices process starts.** The spec says the watch "tries again on the next change". The devices process starts on demand, when a dial is plugged in, and the Harness Device app's watch is usually running before it. So a dial plugged in while Ghostty is in front opens on the app with the most agents, and turns to Ghostty only after the person's next app switch.
+   - A (the plan, Task 28, the spec as written): nothing more.
+   - B: the watch also tells its current app when the `dial_status` it already hears turns to `attached: true`. One more tell on the same path, no new state in the daemon; a change to Task 28 alone, and one more test in Task 19.
+
+Answered by the PM on 2026-11-15: the core knows nothing of the app in front, and the devices have a shared listener of their own (Tasks 24 to 28); the Swarm's exceptions are gone (Tasks 5, 6, 16, 18 as marked); "Hold to switch apps" (Task 29).
+
+The draft's eight were answered by the PM on 2026-11-14:
+
+1. **The core's change:** first A (a core file, `cli/src/core/dialFront.ts`, Tasks 8 and 10). **Replaced on 2026-11-15:** nothing in the core; Task 24 reverts it.
 2. **Windows:** A. macOS and Linux X11 now; the Windows source is a follow-up, and this plan has no Windows check.
 3. **Rows the tables lacked:** kitty and WezTerm by bundle id, WezTerm by `TERM_PROGRAM` (kitty sets none), and `ai.autonomous.harness` (Tasks 2, 11, each row with its source). Cursor outside macOS is a follow-up.
 4. **Two pages named "Terminal":** B. The unknown app reads "Other"; Apple's Terminal stays "Terminal" (Global Constraints; Tasks 2, 5, 17, 19).
 5. **The picker's measure:** A. Each `app.pick` is counted (Tasks 5, 7).
-6. **While a Harness window is open:** A. The filter keeps following the app in front (Tasks 5, 9, 19).
+6. **While a Harness window is open:** A. The filter keeps following the app in front (Tasks 5, 27, 19).
 7. **The X11 check after this pull request:** B. It runs in PR CI's `device-app-checks` (Task 20); the temporary workflow is gone.
 8. **The on-dial check's agents:** A. The suite's fake Claude Code against an isolated daemon, through an opt-in rig (Task 22).
 
-Still waited on, outside this plan: the mockup's approval (Tasks 17 and 18), and the two unmerged dependencies (Task 1).
+Still waited on, outside this plan: `fix/dial-swipe-order` and PR #4296 reaching `main`, before this branch's pull request can land on it.
 
 ## Decided here, where the spec was silent
 
@@ -876,3 +1228,13 @@ Still waited on, outside this plan: the mockup's approval (Tasks 17 and 18), and
 - **`ai.autonomous.harness` is a row of both tables:** the front table (the question asked) and `detectApp`'s bundle table, so the two cannot disagree about one bundle id. `detectHost` does not change.
 - **The `.exe` rows stay** in the front table, as answer 2's option A says, though nothing sends them until the Windows source exists.
 - **The rig runs twice on the dial** (check 4): once on the firmware the dial has, once after the flash, because a daemon that holds the port cannot be flashed past.
+- **The listener speaks HTTP on its socket** (2026-11-15). The spec says "message" and "frame" and names no wire. `listenLocalSocket` serves HTTP, the connectors' `bridge.sock` already does, and the hook scripts #4296's follow-up will point at the listener post HTTP to the core today. One message is one `POST /`; "per connection" is the HTTP connection.
+- **The listener reuses `lib/localSocket.ts`** (`socketPathIn`, `listenLocalSocket`) rather than a copy of it. It is a `lib/` helper that every service process already loads and the connectors service already serves a socket with; it is not under `src/core/`, and this work does not change it. A second copy of the stage-chmod-link claim would be a second way to do one security-critical thing.
+- **A sender that opens a new connection for each message** is not held by a per-connection rate. It is held by the 16 connections the listener takes at once, and each message still costs one bounded parse.
+- **What a dropped message is answered:** a status (`400`, `404`, `405`, `413`, `429`, `500`) and an empty body. Nothing a sender wrote comes back or is logged.
+- **The listener's log lines:** `[devices] listener open`, `[devices] listener not opened · folder not private|in use|failed`, and the minute's counts. None has a path: a path holds the account's name.
+- **`front`'s body limit is 64 bytes.** The spec gives each type "its own body limit" and no number; the longest valid message is 37 bytes.
+- **With the devices inside the core's process** (`HARNESSD_SERVICES=none`, Harness OS) there is no listener, by the spec's "runs only in the devices process": the dial filters and takes a pick, and does not follow the app in front.
+- **`harness reset` is not changed.** The listener removes its socket when it closes, and a file left by a process that was killed is replaced at the next open. A reset that keeps the data folder leaves such a file there until then: nothing can connect to it.
+- **The watch tells the newest app only.** While one tell is under way, changes between it and the newest are skipped: the filter settles on the last one anyway.
+- **The revert is one commit** (Task 24), tests and code together, as the PM asked: its red is the base's own tests failing against the code still there, shown before the code goes.
