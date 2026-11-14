@@ -812,18 +812,23 @@ static uint16_t count_of(const cJSON *o, const char *key)
     const cJSON *v = cJSON_GetObjectItemCaseSensitive(o, key);
     return !cJSON_IsNumber(v) || !(v->valuedouble > 0) ? 0 : v->valuedouble > 999 ? 999 : (uint16_t)v->valuedouble;
 }
-// `apps` {shown, apps}: the whole list, replaced on arrival, and known even when empty or missing, so the dial can tell
-// "no apps" from a daemon that sends none. An id goes back in `app.pick`, so one that cannot be held whole is dropped;
+// `apps` {shown, apps}: the whole list, replaced on arrival, and known even when empty, so the dial can tell "no apps"
+// from a daemon that sends none. A list that is not an array keeps the dial's apps, as every other malformed list does.
+// An id goes back in `app.pick`, so one that cannot be held whole is dropped, and so is a second row with the same id;
 // a name is only drawn, so it is cut on a character. A `shown` that is no entry's id is kept: the UI does not find it.
 static void handle_apps(const cJSON *p)
 {
+    const cJSON *list = cJSON_GetObjectItemCaseSensitive(p, "apps"), *it = NULL;
+    if (!cJSON_IsArray(list)) return;
     static cable_app_t rows[CABLE_MAX_APPS];   // static: off the reader task's stack
     int n = 0;
-    const cJSON *list = cJSON_GetObjectItemCaseSensitive(p, "apps"), *it = NULL;
-    if (cJSON_IsArray(list)) cJSON_ArrayForEach(it, list) {
+    cJSON_ArrayForEach(it, list) {
         if (n >= CABLE_MAX_APPS) break;
         const char *id = str_of(it, "id"), *name = str_of(it, "name");
         if (!id || !id[0] || strlen(id) >= sizeof rows[n].id) continue;
+        bool duplicate = false;
+        for (int i = 0; i < n; i++) if (!strcmp(rows[i].id, id)) duplicate = true;
+        if (duplicate) continue;
         cable_app_t *a = &rows[n++];
         memset(a, 0, sizeof *a);
         memcpy(a->id, id, strlen(id));
