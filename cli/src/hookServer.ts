@@ -1411,8 +1411,13 @@ export function startHookServer(
       const actual = (server.address() as AddressInfo).port
       hosts = loopbackHosts(actual)
       console.log(`[hooks] listening on 127.0.0.1:${actual} (SessionStart/SessionEnd callbacks)`)
+      // The approval hook asks only over the socket (deviceClaude/approve.ts), so without one the person sees why the dial asks nothing.
+      const tcpOnly = (): void => {
+        console.warn('[hooks] dial approvals from the Claude Code plugin are off: no Unix socket')
+        resolve({ server, port: actual, localSocket: null })
+      }
       const socketPath = options.socketPath
-      if (!socketPath) { resolve({ server, port: actual, localSocket: null }); return }
+      if (!socketPath) { tcpOnly(); return }
       // The private socket is mandatory when opting into multi-user startup. A duplicate daemon
       // must not survive on a random port while another one owns this user's socket.
       listenLocalSocket(handle, socketPath, { token: options.pipeToken ?? undefined }).then(
@@ -1428,7 +1433,7 @@ export function startHookServer(
             return
           }
           console.warn(`[hooks] local socket unavailable (${socketPath}): ${error instanceof Error ? error.message : error}`)
-          resolve({ server, port: actual, localSocket: null })
+          tcpOnly()
         },
       )
     })
