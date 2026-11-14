@@ -1052,7 +1052,10 @@ export class DaemonCableHost implements CableHost {
     // doing, which is both wrong and completely invisible, because the router always answers with
     // something. The machine name travels too, so two agents with the same name on two computers are
     // distinguishable by the only thing that separates them.
-    const candidates: RouterAgent[] = await Promise.all(agents.map(async (a) => ({
+    //
+    // Never an agent outside Harness, whatever the caller passed: the backend is sent each candidate's id and name, and
+    // nothing of such an agent leaves this computer.
+    const candidates: RouterAgent[] = await Promise.all(agents.filter((a) => !this.outside(a.id)).map(async (a) => ({
       id: a.id,
       name: a.name,
       engine: a.engine,

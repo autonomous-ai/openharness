@@ -2450,9 +2450,9 @@ export class CableSession {
         return
       }
       try {
-        // Only agents the dial may talk to: the router sends each one's id and name to the backend, and nothing of an
-        // agent outside Harness leaves this computer.
-        const decision = await this.host.route(transcript, agents.filter((a) => !this.lacks(a.id, 'v')))
+        // Only Harness agents the dial may talk to: the router sends each one's id and name to the backend, and nothing of
+        // an agent outside Harness leaves this computer, though one in Orca may take voice.
+        const decision = await this.host.route(transcript, agents.filter((a) => !this.lacks(a.id, 'v') && !this.outsideHarness(a.id)))
         if (!current()) return
         agentId = decision.agentId
         this.log(`cable: routed → ${agentId} (${decision.reason})`)
@@ -3844,6 +3844,13 @@ export class CableSession {
   private lacks(agentId: string, cap: 'v' | 'f' | 'a'): boolean {
     const caps = this.host.capsOf?.(agentId)
     return caps !== undefined && !caps.includes(cap)
+  }
+
+  /** The agent runs in another app or terminal. A host that names no app for it (an older one, a window) holds Harness
+   *  agents only. */
+  private outsideHarness(agentId: string): boolean {
+    const host = this.host.hostOf?.(agentId)
+    return host !== undefined && host !== 'harness'
   }
 
   private hostName(agentId: string): string {
