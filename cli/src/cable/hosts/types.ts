@@ -34,6 +34,10 @@ export interface HostSource {
   capabilities(agent: HostAgent): Caps
   /** The dial turned to the agent: its finished answer has been seen. A source that keeps no unseen answers has none. */
   markSeen?(agentId: string): void
+  /** The dial's words for one of its agents, answered once they are delivered or refused. A source without it takes none. */
+  send?(agent: HostAgent, text: string): Promise<SendResult>
+  /** A tap: bring the agent's terminal forward; false when it did not come. A source without it opens nothing. */
+  focus?(agent: HostAgent): Promise<boolean>
 }
 
 /** The capabilities as letters, always in the order s v f a. */
