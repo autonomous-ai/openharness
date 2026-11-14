@@ -247,8 +247,7 @@ mod tests {
 
     #[test]
     fn a_status_line_needs_attached() {
-        let status: DialStatus =
-            serde_json::from_str(r#"{"attached":true,"fw":"0.0.95","settings":{}}"#).unwrap();
+        let status: DialStatus = serde_json::from_str(r#"{"attached":true,"fw":"0.0.95","settings":{}}"#).unwrap();
         assert_eq!(
             status,
             DialStatus {
@@ -301,10 +300,9 @@ mod tests {
 
     #[test]
     fn claude_status_reads_camel_case() {
-        let status: ClaudeStatus = serde_json::from_str(
-            r#"{"supported":true,"installed":true,"enabled":false,"claudeVersion":"2.1.0"}"#,
-        )
-        .unwrap();
+        let status: ClaudeStatus =
+            serde_json::from_str(r#"{"supported":true,"installed":true,"enabled":false,"claudeVersion":"2.1.0"}"#)
+                .unwrap();
         assert_eq!(
             status,
             ClaudeStatus { supported: true, installed: true, enabled: false, claude_version: Some("2.1.0".into()) }

@@ -220,16 +220,16 @@ mod tests {
 
     #[test]
     fn without_a_cli_the_menu_says_only_what_it_knows() {
-        let removed = AppState {
-            cli: CliState::Removed,
-            signed_in: None,
-            claude: None,
-            desktop_installed: false,
-            ..state()
-        };
+        let removed =
+            AppState { cli: CliState::Removed, signed_in: None, claude: None, desktop_installed: false, ..state() };
         assert_eq!(
             menu(&removed),
-            vec![text("Harness removed"), act(MenuAction::Install, "Install"), Separator, act(MenuAction::Quit, "Quit")]
+            vec![
+                text("Harness removed"),
+                act(MenuAction::Install, "Install"),
+                Separator,
+                act(MenuAction::Quit, "Quit")
+            ]
         );
     }
 

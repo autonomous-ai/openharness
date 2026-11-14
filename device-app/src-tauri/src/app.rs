@@ -445,7 +445,8 @@ mod tests {
     const B: u64 = 1794556800;
 
     /// A CLI seen before and a login item registered: only what each test does is saved.
-    const SEEN: Saved = Saved { version: 1, cli_seen: true, asked_sign_in: false, asked_claude: false, login_item: true };
+    const SEEN: Saved =
+        Saved { version: 1, cli_seen: true, asked_sign_in: false, asked_claude: false, login_item: true };
 
     fn found() -> App {
         App::new(SEEN, true, false, B).0
@@ -552,7 +553,8 @@ mod tests {
     fn a_found_cli_is_watched_and_read() {
         let (app, effects) = App::new(Saved::default(), true, false, B);
         let seen = Saved { cli_seen: true, ..Saved::default() };
-        for effect in [Effect::SpawnWatch, Effect::ReadAuth, Effect::ReadClaude, Effect::Save(seen), Effect::RegisterLoginItem]
+        for effect in
+            [Effect::SpawnWatch, Effect::ReadAuth, Effect::ReadClaude, Effect::Save(seen), Effect::RegisterLoginItem]
         {
             assert!(has(&effects, &effect), "{effect:?}");
         }
@@ -849,7 +851,14 @@ mod tests {
     fn the_first_status_line_after_a_start_reads_again() {
         let reads = |effects: &[Effect]| has(effects, &Effect::ReadAuth) && has(effects, &Effect::ReadClaude);
         let line = || {
-            Event::WatchLine(DialStatus { attached: false, fw: None, hw: None, board: None, updating: None, problem: None })
+            Event::WatchLine(DialStatus {
+                attached: false,
+                fw: None,
+                hw: None,
+                board: None,
+                updating: None,
+                problem: None,
+            })
         };
 
         // The reads after an install ran beside the start, while the daemon may have been down.

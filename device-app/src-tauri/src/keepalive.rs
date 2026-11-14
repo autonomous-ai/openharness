@@ -86,11 +86,7 @@ impl KeepAlive {
             _ => {
                 self.watch = Watch::Down { since: now };
                 self.downs += 1;
-                self.daemon = if self.last_start_ok {
-                    Daemon::Stopped
-                } else {
-                    Daemon::Starting
-                };
+                self.daemon = if self.last_start_ok { Daemon::Stopped } else { Daemon::Starting };
             }
         }
     }
@@ -270,18 +266,10 @@ mod tests {
             keep.watch_exit(Some(code), B);
             assert_eq!(keep.daemon(), Daemon::Updating, "exit {code}");
             quiet(&mut keep, B + 5, B + 59);
-            assert_eq!(
-                keep.tick(B + 60, false),
-                Some(Keep::SpawnWatch),
-                "exit {code}"
-            );
+            assert_eq!(keep.tick(B + 60, false), Some(Keep::SpawnWatch), "exit {code}");
             keep.watch_exit(Some(code), B + 61);
             quiet(&mut keep, B + 65, B + 120);
-            assert_eq!(
-                keep.tick(B + 121, false),
-                Some(Keep::SpawnWatch),
-                "exit {code}"
-            );
+            assert_eq!(keep.tick(B + 121, false), Some(Keep::SpawnWatch), "exit {code}");
             assert_eq!(keep.daemon(), Daemon::Updating, "exit {code}");
         }
     }
