@@ -290,6 +290,7 @@ import { deriveLongRecap, extendShortRecap } from '../lib/deviceRecap.js'
 import type { TurnStatsFields } from './turnStats.js'
 import type { Tier } from '../lib/notifyTier.js'
 import { hostDisplayName } from './hosts/hostDetect.js'
+import type { AppList, AppPick } from './hosts/types.js'
 
 export interface RouteDecision {
   agentId: string
@@ -328,8 +329,13 @@ export interface CableHost {
   /** The active tab's agents, in tile order — and nothing else. Empty with no window or an empty tab. */
   listAgents(): Promise<CableAgent[]>
   /** Pane rows and workspace identity from the same desktop announcement; with no window, `view: 'machine'` when the
-   *  rows are this computer's agents instead. */
-  listAgentSnapshot?(): Promise<{ agents: CableAgent[]; tab: string; total: number; view?: 'machine' }>
+   *  rows are this computer's agents instead. Asked with `apps` (a dial that says `appFilter`), the machine view is the
+   *  shown app's ring and `apps` the list the dial picks from. */
+  listAgentSnapshot?(opts?: { apps?: boolean }): Promise<{ agents: CableAgent[]; tab: string; total: number; view?: 'machine'; apps?: AppList }>
+  /** The dial picked an app, or a tapped notice turns it to its agent's app (`notice`). `ignored` with a window. */
+  pickApp?(app: string, cause?: 'pick' | 'notice'): AppPick
+  /** The app an agent of the machine view is in; undefined with a window. */
+  appOf?(agentId: string): string | undefined
   /** Every agent across the account — the overview's number. The dial gets the count, never the rows. */
   agentTotal(): number
   /** The active tab's id, or '' with no window: what lets the dial tell an empty tab from a shut app. */
@@ -625,6 +631,8 @@ export class CableSession {
 
   /** What the dial was last told the agent list is. Empty = it has been told nothing. */
   private lastAgentsKey = ''
+  /** What the dial was last told the app list is: the shown app and each app's counts. Empty = none. */
+  private lastAppsKey = ''
   /** When the agent list last went down the cable, by performance.now(): the machine list's pacing, which a wall clock set
    *  back would hold for as long. Never, at first. */
   private agentsPushedAt = -Infinity
@@ -640,6 +648,9 @@ export class CableSession {
   private statsTurn = false
   /** `player: 'library-v1'`: the paged `player.library`. */
   private playerCapable = false
+  /** `appFilter: 'v1'` (the round dial, spec 2026-11-14-dial-app-filter): with no window it holds one app's ring, is sent
+   *  `apps` and picks with `app.pick`. Any other device gets the single ring. */
+  private appFilter = false
   private playerOffset = 0
   private playerRequest = 0
   private playerLibraryKey = ''
@@ -653,13 +664,13 @@ export class CableSession {
 
   /** For the greeting's log line: which capabilities this hello named, or nothing. */
   private capabilitiesNamed(): string {
-    const named = [this.swarmMembers && 'swarms', this.longRecap && 'recap', this.stepsActivity && 'activity', this.statsTurn && 'stats', this.playerCapable && 'player']
+    const named = [this.swarmMembers && 'swarms', this.longRecap && 'recap', this.stepsActivity && 'activity', this.statsTurn && 'stats', this.playerCapable && 'player', this.appFilter && 'appFilter']
       .filter(Boolean)
     return named.length ? ` caps ${named.join(',')}` : ''
   }
 
   private resetCapabilities(): void {
-    this.swarmMembers = this.longRecap = this.stepsActivity = this.statsTurn = this.playerCapable = false
+    this.swarmMembers = this.longRecap = this.stepsActivity = this.statsTurn = this.playerCapable = this.appFilter = false
     this.seqOn = false
     this.seq = 0
     this.resyncAt = 0
@@ -1013,6 +1024,7 @@ export class CableSession {
     this.expectedAppFocusEchoUntil = 0
     // A new port is a new dial until proven otherwise; tell it everything.
     this.lastAgentsKey = ''
+    this.lastAppsKey = ''
     this.lastMachinesKey = ''
     this.resetCapabilities()
     // INCLUDING which images it has been offered. `offered` holds bare version strings and named no dial,
@@ -1057,6 +1069,7 @@ export class CableSession {
     this.expectedAppFocusEcho = ''
     this.expectedAppFocusEchoUntil = 0
     this.lastAgentsKey = ''
+    this.lastAppsKey = ''
     this.lastMachinesKey = ''
     this.resetCapabilities()
     this.voice = null
@@ -1221,6 +1234,7 @@ export class CableSession {
         this.stepsActivity = str('activity') === 'steps-v1'
         this.statsTurn = str('stats') === 'turn-v1'
         this.playerCapable = str('player') === 'library-v1'
+        this.appFilter = str('appFilter') === 'v1'
         this.seqOn = str('board') === 'pro'
         this.seq = 0
         const mac = str('mac') ?? ''
@@ -1428,10 +1442,28 @@ export class CableSession {
         await this.syncPlayerLibrary(true)
         return
       }
+      case 'app.pick': {
+        const app = str('app')
+        if (!this.appFilter || !app || app.length > 16 || !this.host.pickApp) return
+        const picked = this.host.pickApp(app)
+        if (picked === 'switched') await this.syncAgents(true)
+        // The dial picked from a list that moved under it: it is told the list again, and keeps the ring it holds.
+        else if (picked === 'ignored') await this.queued(() => this.syncAgentsNow(true, false))
+        return
+      }
       case 'agent.open': {
         // Only the one reason the window knows; anything else reads as a tap, the older frame's meaning.
         const agentId = str('agentId'), reason = str('reason') === 'question' ? 'question' as const : undefined
         if (!agentId) return
+        // A tapped notice for an agent of another app turns the dial to that app's ring, on the agent (decision 7, A). A
+        // question that opened by itself never moves it.
+        const app = reason || !this.appFilter ? undefined : this.host.appOf?.(agentId)
+        if (app && this.host.pickApp?.(app, 'notice') === 'switched') {
+          this.desiredFocus = agentId
+          await this.syncAgents(true)
+          // The dial is on its face now: one the dial cannot bring forward would only add a toast.
+          if (this.lacks(agentId, 'f')) return
+        }
         void Promise.resolve(this.host.openAgent(agentId, reason)).then((result) => {
           if (result && !result.ok) return this.toast(result.error)
           // Another app moves no window, so no window focus will bring the dial to this agent's face: the tap's own
@@ -2460,23 +2492,32 @@ export class CableSession {
     })
   }
 
-  private async syncAgentsNow(force: boolean): Promise<void> {
-    const snapshot = this.host.listAgentSnapshot ? await this.host.listAgentSnapshot() : {
+  /** `ring` false: only the app list, which a pick the host ignored is answered with. */
+  private async syncAgentsNow(force: boolean, ring = true): Promise<void> {
+    const snapshot = this.host.listAgentSnapshot ? await this.host.listAgentSnapshot({ apps: this.appFilter }) : {
       agents: await this.host.listAgents(), tab: this.host.activeSwarm(), total: this.host.agentTotal(),
     }
-    const { agents, tab, total, view } = snapshot
+    const { agents, tab, total, view, apps } = snapshot
     // WHETHER there is a window is in the key, not WHICH tab: an empty tab after the window shut sends the
     // same zero rows and draws a different screen, so that flip has to push. The tab's id does not — the
     // dial names the tab from the `swarms` frame — and keying on it made every tab switch push twice,
     // once when `app_swarms` named the new tab over the old panes and again when `app_panes` arrived.
     const key = `${tab ? 'window' : view ?? ''}|${CableSession.agentsKey(agents)}`
-    if (!force && key === this.lastAgentsKey) return
+    // The name is the id's, so the counts and the shown app are all that can change what the dial draws.
+    const appsKey = apps ? `${apps.shown}|${apps.apps.map((a) => `${a.id}:${a.count}:${a.waiting}`).join('|')}` : ''
+    const sendRing = ring && (force || key !== this.lastAgentsKey)
+    const sendApps = apps !== undefined && (force || appsKey !== this.lastAppsKey)
+    if (!sendRing && !sendApps) return
     // The machine list goes at most once a second after the last push: a window opening and closing quickly would
     // otherwise swap whole lists down the cable on every flip. The tick sends what was held. Forced pushes (an attach, a
     // refresh) and a window's lists go at once, as before, its opening too: a new ring must beat its focus.
     if (!force && view === 'machine' && performance.now() - this.agentsPushedAt < AGENTS_PUSH_GAP_MS) return
-    this.lastAgentsKey = key
+    this.lastAppsKey = appsKey
     this.agentsPushedAt = performance.now()
+    // Before the ring, which the dial draws under the app it names.
+    if (sendApps) await this.send({ t: 'apps', shown: apps.shown, apps: apps.apps })
+    if (!sendRing) return
+    this.lastAgentsKey = key
     // Every push, and only pushes. The dial showing a different number from the daemon is a question this
     // line answers in one look: either the daemon never said it, or it said it and the dial disagreed.
     this.log(`cable: agents → ${agents.length} of ${total}${force ? ' (requested)' : ''}`)
