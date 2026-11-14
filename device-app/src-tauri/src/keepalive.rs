@@ -24,7 +24,7 @@ enum Watch {
     Down,
     /// Turned away by an old daemon or CLI, which updates itself.
     Old {
-        retry_at: u64,
+        since: u64,
     },
     /// The app closed its stdin.
     Closed,
@@ -67,9 +67,7 @@ impl KeepAlive {
             Some(0) => self.watch = Watch::Closed,
             // 4: a daemon older than `dial-watch`; 1: a CLI older than `watch` printing its usage.
             Some(1) | Some(4) => {
-                self.watch = Watch::Old {
-                    retry_at: now + RETRY_OLD_SECS,
-                };
+                self.watch = Watch::Old { since: now };
                 self.downs = 0;
                 self.daemon = Daemon::Updating;
             }
@@ -91,8 +89,7 @@ impl KeepAlive {
         }
         match self.watch {
             Watch::Running | Watch::Closed => None,
-            Watch::Old { retry_at } if now >= retry_at => Some(self.spawn_watch()),
-            Watch::Old { .. } => None,
+            Watch::Old { since } => waited(now, since, RETRY_OLD_SECS).then(|| self.spawn_watch()),
             // The desktop app supervises its own daemon; the app only watches the dial.
             Watch::Down if self.downs < 2 || desktop_running => Some(self.spawn_watch()),
             Watch::Down if in_spawn_slot(now) && self.last_start_minute != Some(now / 60) => {
@@ -125,6 +122,11 @@ impl KeepAlive {
         self.watch = Watch::Running;
         Keep::SpawnWatch
     }
+}
+
+/// `wait` seconds have passed since `since`, or the clock was set back before it: a time that would never come.
+fn waited(now: u64, since: u64, wait: u64) -> bool {
+    now < since || now - since >= wait
 }
 
 #[cfg(test)]
