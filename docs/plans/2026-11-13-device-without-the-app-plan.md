@@ -24,7 +24,7 @@
   - At most 8 hint keys, each value at most 64 characters.
   - At most 20 events per second per session; the rest are dropped.
 - **Events:** `session-start`, `turn-start`, `needs-input`, `turn-stop`, `turn-error`, `session-end`.
-- **Host-hint allowlist, exact names only, never by prefix:** `TERM_PROGRAM`, `__CFBundleIdentifier`, `HERDR_PANE_ID`, `REX_BLOCK`, `ZELLIJ`, `KITTY_WINDOW_ID`, `WEZTERM_PANE`, `ORCA_AGENT_SESSION_ID`, `ORCA_APP_VERSION`. Orca also sets `ORCA_PAIRING_CODE` and `ORCA_AGENT_SESSION_SPAWN_TOKEN` in the same environment, and they must never leave the hook.
+- **Host-hint allowlist, exact names only, never by prefix:** `TERM_PROGRAM`, `__CFBundleIdentifier`, `HERDR_PANE_ID`, `REX_BLOCK`, `ZELLIJ`, `KITTY_WINDOW_ID`, `WEZTERM_PANE`, `ORCA_AGENT_SESSION_ID`. Orca also sets `ORCA_PAIRING_CODE` and `ORCA_AGENT_SESSION_SPAWN_TOKEN` in the same environment, and they must never leave the hook.
 - **Dial list:**
   - At most 10 rows; `total` = every agent on this computer.
   - Changes are coalesced for 1 s, and pushes are at least 1 s apart.

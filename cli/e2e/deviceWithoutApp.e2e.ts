@@ -50,7 +50,7 @@ while True:
 
 /** The values the hook reads to name the app an agent runs in (hook/notify.mjs HOST_HINTS): none of the developer's own. */
 const HOST_HINTS = ['TERM_PROGRAM', '__CFBundleIdentifier', 'HERDR_PANE_ID', 'REX_BLOCK', 'ZELLIJ', 'KITTY_WINDOW_ID',
-  'WEZTERM_PANE', 'ORCA_AGENT_SESSION_ID', 'ORCA_APP_VERSION', 'ORCA_PAIRING_CODE', 'ORCA_AGENT_SESSION_SPAWN_TOKEN']
+  'WEZTERM_PANE', 'ORCA_AGENT_SESSION_ID', 'ORCA_PAIRING_CODE', 'ORCA_AGENT_SESSION_SPAWN_TOKEN']
 
 /** Claude Code in a terminal app outside Harness: no tmux pane, no Harness pane. */
 class Outside {
