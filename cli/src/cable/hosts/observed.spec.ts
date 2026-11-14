@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ObservedHookEvent } from '../../core/observedHook.js'
 import { STOP_HOOK_GRACE_MS } from '../../core/turns/turnHooks.js'
+import { type Delivery, Inbox } from './inbox.js'
 import { observedAgentId, type ObservedActions, ObservedSource, type ObservedDeps } from './observed.js'
 
 function setup(over: Partial<ObservedDeps> = {}) {
@@ -509,7 +510,7 @@ function fakeActions(over: Partial<ObservedActions> = {}) {
   const ready = new Set<string>()
   const actions = {
     modReady: vi.fn((sessionId: string) => ready.has(sessionId)),
-    toMod: vi.fn(async (_sessionId: string, _text: string) => true),
+    toMod: vi.fn(async (_sessionId: string, _text: string): Promise<Delivery> => 'taken'),
     orcaSend: vi.fn(async (_handle: string, _text: string) => true),
     orcaOpen: vi.fn(async (_handle: string) => true),
     count: vi.fn((_what: Parameters<ObservedActions['count']>[0]) => {}),
@@ -701,7 +702,7 @@ describe('ObservedSource actions', () => {
   })
 
   it('to Orca when the mod missed its 5 s and there is a handle', async () => {
-    const { actions, ready } = fakeActions({ toMod: vi.fn(async () => false) })
+    const { actions, ready } = fakeActions({ toMod: vi.fn(async (): Promise<Delivery> => 'missed') })
     const { src, ev } = setup({ actions })
     ready.add('s1')
     src.ingest(ev('session-start', withHandle))
@@ -710,8 +711,63 @@ describe('ObservedSource actions', () => {
     expect(actions.orcaSend).toHaveBeenCalledWith(HANDLE, 'next step')
   })
 
+  it('a turn that begins while the mod is waited for is busy, and nothing is typed into Orca', async () => {
+    let missed!: (delivery: Delivery) => void
+    const { actions, ready } = fakeActions({ toMod: vi.fn(() => new Promise<Delivery>((resolve) => { missed = resolve })) })
+    const { src, ev } = setup({ actions })
+    ready.add('s1')
+    src.ingest(ev('turn-stop', withHandle))
+    const sent = src.send(src.list()[0], 'run the tests')
+    // The person starts a turn in the terminal while the mod's next poll does not come.
+    src.ingest(ev('turn-start', withHandle))
+    missed('missed')
+    expect(await sent).toEqual({ ok: false, reason: 'proj is busy. Say it when it is done.' })
+    expect(actions.orcaSend).not.toHaveBeenCalled()
+    expect(actions.count.mock.calls.map(([what]) => what)).toEqual(['busy'])
+  })
+
+  it('a session that ends, moves to another terminal or goes while the mod is waited for is not typed into', async () => {
+    const other = 'term_9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d'
+    const meanwhile: Array<(t: ReturnType<typeof setup>) => Promise<void>> = [
+      async ({ src, ev }) => { src.ingest(ev('session-end', withHandle)) },
+      async ({ src, ev }) => { src.ingest(ev('session-start', { hostHints: { ORCA_TERMINAL_HANDLE: other } })) },
+      async ({ src, gens }) => { gens.set(100, null); await src.tick() },
+    ]
+    for (const happen of meanwhile) {
+      let missed!: (delivery: Delivery) => void
+      const { actions, ready } = fakeActions({ toMod: vi.fn(() => new Promise<Delivery>((resolve) => { missed = resolve })) })
+      const t = setup({ actions })
+      ready.add('s1')
+      t.src.ingest(t.ev('turn-stop', withHandle))
+      const sent = t.src.send(t.src.list()[0], 'run the tests')
+      await happen(t)
+      missed('missed')
+      expect(await sent).toEqual({ ok: false, reason: 'proj did not answer.' })
+      expect(actions.orcaSend).not.toHaveBeenCalled()
+    }
+  })
+
+  it('a second transcript while the first waits for the mod is busy: typed into Orca, it would land before the first', async () => {
+    const inbox = new Inbox({ now: () => 0, after: () => () => {} })
+    const { actions } = fakeActions({
+      modReady: vi.fn((sessionId: string) => inbox.ready(sessionId)),
+      toMod: vi.fn((sessionId: string, text: string) => inbox.deliver(sessionId, text)),
+    })
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('turn-stop', withHandle))
+    // The mod's poll just closed; its next is a moment away.
+    void inbox.poll('p1', 's1')
+    inbox.gone('p1')
+    const agent = src.list()[0]
+    const first = src.send(agent, 'run the tests')
+    expect(await src.send(agent, 'and then deploy')).toEqual({ ok: false, reason: 'proj is busy. Say it when it is done.' })
+    expect(actions.orcaSend).not.toHaveBeenCalled()
+    expect(await inbox.poll('p2', 's1')).toEqual({ text: 'run the tests' })
+    expect(await first).toEqual({ ok: true })
+  })
+
   it('did not answer with neither', async () => {
-    const { actions, ready } = fakeActions({ toMod: vi.fn(async () => false) })
+    const { actions, ready } = fakeActions({ toMod: vi.fn(async (): Promise<Delivery> => 'missed') })
     const { src, ev } = setup({ actions })
     src.ingest(ev('session-start'))
     expect(await src.send(src.list()[0], 'next')).toEqual({ ok: false, reason: 'proj did not answer.' })

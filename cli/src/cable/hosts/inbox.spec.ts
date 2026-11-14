@@ -81,11 +81,11 @@ describe('Inbox', () => {
     expect(t.pending()).toBe(1)
   })
 
-  it('a transcript answers the open poll and deliver is true', async () => {
+  it('a transcript answers the open poll and deliver is taken', async () => {
     const t = setup()
     const poll = track(t.inbox.poll('p1', 's1'))
     const other = track(t.inbox.poll('p2', 's2'))
-    expect(await t.inbox.deliver('s1', 'run the tests')).toBe(true)
+    expect(await t.inbox.deliver('s1', 'run the tests')).toBe('taken')
     await settle()
     expect(poll.value).toEqual({ text: 'run the tests' })
     expect(other.value).toBeUndefined()
@@ -104,7 +104,7 @@ describe('Inbox', () => {
     const next = track(t.inbox.poll('p2', 's1'))
     await settle()
     expect(next.value).toEqual({ text: 'hello' })
-    expect(sent.value).toBe(true)
+    expect(sent.value).toBe('taken')
     expect(t.pending()).toBe(0)
     // Taken once: the poll after it is held.
     const after = track(t.inbox.poll('p3', 's1'))
@@ -112,13 +112,13 @@ describe('Inbox', () => {
     expect(after.value).toBeUndefined()
   })
 
-  it('no poll in 5 s is false and the transcript is dropped', async () => {
+  it('no poll in 5 s is missed and the transcript is dropped', async () => {
     const t = setup()
     polledOnce(t, 's1')
     const sent = track(t.inbox.deliver('s1', 'hello'))
     t.advance(5_000)
     await settle()
-    expect(sent.value).toBe(false)
+    expect(sent.value).toBe('missed')
     const late = track(t.inbox.poll('p2', 's1'))
     await settle()
     expect(late.value).toBeUndefined()
@@ -136,25 +136,25 @@ describe('Inbox', () => {
     expect(t.inbox.ready('never')).toBe(false)
   })
 
-  it('a session never polled is false at once, without waiting', async () => {
+  it('a session never polled is missed at once, without waiting', async () => {
     const t = setup()
     const sent = track(t.inbox.deliver('never', 'hello'))
     await settle()
-    expect(sent.value).toBe(false)
+    expect(sent.value).toBe('missed')
     expect(t.pending()).toBe(0)
   })
 
-  it('a second transcript while one waits is false', async () => {
+  it('a second transcript while one waits is busy', async () => {
     const t = setup()
     polledOnce(t, 's1')
     const first = track(t.inbox.deliver('s1', 'one'))
     const second = track(t.inbox.deliver('s1', 'two'))
     await settle()
-    expect(second.value).toBe(false)
+    expect(second.value).toBe('busy')
     const next = track(t.inbox.poll('p2', 's1'))
     await settle()
     expect(next.value).toEqual({ text: 'one' })
-    expect(first.value).toBe(true)
+    expect(first.value).toBe('taken')
   })
 
   it('keeps at most 256 closed-poll times and drops those older than 35 s', () => {
@@ -176,7 +176,7 @@ describe('Inbox', () => {
     expect(t.inbox.ready('s256')).toBe(false)
   })
 
-  it('closeAll answers every poll {} and every waiting transcript false, and leaves no timer', async () => {
+  it('closeAll answers every poll {} and every waiting transcript missed, and leaves no timer', async () => {
     const t = setup()
     polledOnce(t, 's3')
     const a = track(t.inbox.poll('p1', 's1'))
@@ -186,7 +186,7 @@ describe('Inbox', () => {
     await settle()
     expect(a.value).toEqual({})
     expect(b.value).toEqual({})
-    expect(sent.value).toBe(false)
+    expect(sent.value).toBe('missed')
     expect(t.pending()).toBe(0)
     // The core that held them is gone, and the mod waits 60 s after a failed poll: none is ready.
     expect(t.inbox.ready('s1')).toBe(false)
