@@ -583,12 +583,12 @@ export class DaemonCableHost implements CableHost {
     this.cards = items
   }
 
-  /** The cards could not be asked for (no Swarm on this computer, or the core not reached): none is coming, so the machine
-   *  list waits for none. */
+  /** The last ask for the cards was refused (no Swarm on this computer, or the core not reached): none is coming, so the
+   *  machine list waits for none. A later ask that is taken waits again. */
   private cardsUnavailable = false
 
-  swarmCardsUnavailable(): void {
-    this.cardsUnavailable = true
+  swarmCardsUnavailable(unavailable: boolean): void {
+    this.cardsUnavailable = unavailable
   }
 
   swarmCards(): SwarmCard[] | null {
