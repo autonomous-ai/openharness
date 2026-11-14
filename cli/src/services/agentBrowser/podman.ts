@@ -1,6 +1,6 @@
 /**
  * The one way the agent browser runs Podman: where it is, whether it can run a browser, and every call to it, each
- * with a timeout, started without a window (docs/windows-rules.md, rule 1) and ended with this process (./tied.ts).
+ * with a timeout, started without a window (docs/windows-rules.md, rule 1) and ended with this process (lib/tied.ts).
  * Harness runs `podman` only, never `docker`.
  */
 import type { ChildProcess } from 'node:child_process'
@@ -9,7 +9,7 @@ import type { Readable } from 'node:stream'
 import { oneShotParentEnv } from '../../lib/loginShellEnv.js'
 import { resolveViaLoginShell } from '../../lib/tmuxOnPath.js'
 import { ownProcessGroup } from '../../lib/windows/noWindow.js'
-import { spawnTied } from './tied.js'
+import { spawnTied } from '../../lib/tied.js'
 
 export class PodmanError extends Error {
   /** A call that exited with an error: all it printed, stdout then stderr. A build's RUN steps print to stdout. */
@@ -59,7 +59,7 @@ export const OUTPUT_LIMIT = 64 * MiB
 // trap is set first and `ended` looked at once podman is started, so a timeout before then still ends it. The shell
 // exits only after waiting for both (`wait` again after the trap): a run that failed on its timeout left podman
 // unreaped behind it, and a spec's teardown deleted the fake's folder under it (CI, 2026-11-10). The tie's SIGTERM
-// (./tied.ts) reaches this shell too, and its trap ends podman.
+// (lib/tied.ts) reaches this shell too, and its trap ends podman.
 const STDIN_RELAY = `trap 'ended=1; kill $! 2>/dev/null' TERM; exec 3<&0; cat <&3 | "$0" "$@" 3<&- & [ -z "$ended" ] || kill $!; wait $!; s=$?; until wait; do :; done; exit $s`
 
 /** Where Podman's own installers put it, for a daemon whose login shell does not have it on PATH yet. */

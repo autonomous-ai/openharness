@@ -4,11 +4,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it, onTestFinished, vi } from 'vitest'
-import { alive } from '../../testing/spawnedRuns.js'
+import { alive } from '../testing/spawnedRuns.js'
 import { spawnTied } from './tied.js'
 
 const windows = process.platform === 'win32'
-const CLI = fileURLToPath(new URL('../../..', import.meta.url))
+const CLI = fileURLToPath(new URL('../..', import.meta.url))
 const scratch = mkdtempSync(join(tmpdir(), 'tied-'))
 afterAll(() => rmSync(scratch, { recursive: true, force: true }))
 
@@ -148,6 +148,6 @@ describe('spawnTied', () => {
   })
 
   it('runs on the Windows runners, where the Windows half is proven', () => {
-    expect(readFileSync(join(CLI, '..', '.github', 'workflows', 'windows.yml'), 'utf8')).toContain("'src/services/agentBrowser/tied.spec.ts'")
+    expect(readFileSync(join(CLI, '..', '.github', 'workflows', 'windows.yml'), 'utf8')).toContain("'src/lib/tied.spec.ts'")
   })
 })
