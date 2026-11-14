@@ -79,6 +79,11 @@ export class AppFilter {
     this.cancelSettle = this.deps.after(FRONT_SETTLE_MS, () => this.settle(app))
   }
 
+  /** The app that last stayed in front for FRONT_SETTLE_MS, whether or not it is shown: a pick on the dial leaves it. */
+  settledApp(): string | undefined {
+    return this.settledFront
+  }
+
   pick(app: string, cause: 'pick' | 'notice' = 'pick'): AppPick {
     if (!has(this.deps.counts().all, app)) return 'ignored'
     // Done on the shown app is how a person leaves the picker without changing anything (the PM, D2): it holds nothing.

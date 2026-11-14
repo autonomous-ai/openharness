@@ -100,6 +100,8 @@ export interface CableHostWiring {
   focused?: (machineId: string, agentId: string) => void
   /** What came of a swipe that rested on an agent of another app, or was superseded before it rested: for its count. */
   swiped?: (outcome: PaneSwitch | 'superseded') => void
+  /** What came of a person's prompt in the app in front: the dial moved to its agent, or its list had no tile for it. */
+  promptFollowed?: (outcome: 'moved' | 'no-tile') => void
   /**
    * A notification was tapped: the window gives that agent a tile of its own. With `reason`
    * `'question'` it was a question screen instead, and the window only brings the agent forward.
@@ -586,6 +588,15 @@ export class DaemonCableHost implements CableHost {
     this.filter.front(app)
   }
 
+  /** The app that settled in front, with or without a window. Not the shown app: the person may have picked another. */
+  settledApp(): string | undefined {
+    return this.filter.settledApp()
+  }
+
+  promptFollowed(outcome: 'moved' | 'no-tile'): void {
+    this.wiring.promptFollowed?.(outcome)
+  }
+
   markSeen(agentId: string): void {
     this.onMachine(agentId)?.source.markSeen?.(agentId)
   }
@@ -828,9 +839,10 @@ export class DaemonCableHost implements CableHost {
     })
   }
 
-  /** Whether this daemon's last list held that agent — see CableHost.knows. */
+  /** Whether this daemon's last list held that agent — see CableHost.knows. An agent outside Harness is the registry's,
+   *  never the router's: without it, followApp's log line would say the dial has no tile for it. */
   knows(agentId: string): boolean {
-    return this.viaFleet((r) => r.knows(agentId))
+    return this.outside(agentId) !== undefined || this.viaFleet((r) => r.knows(agentId))
   }
 
   /**
