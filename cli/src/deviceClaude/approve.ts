@@ -32,6 +32,8 @@ const MAX_STDIN_BYTES = 256 * 1024
 const MAX_TOOL_CHARS = 64
 /** Bytes, as the round dial holds its question in a 256-byte buffer, and "Allow <tool>?\n" must fit beside it. */
 const MAX_SUMMARY_BYTES = 200
+/** The core's bound on a path (core/deviceHookCalls.ts). */
+const MAX_CWD_CHARS = 1024
 /** Past the devices' 300 s and the core's 305 s, so an expiry is counted there; inside the hook's 330 s, so this answers before Claude Code kills it. */
 const WAIT_MS = 310_000
 /** These need the person at the terminal anyway: an answer from the dial would only stand in their way. */
@@ -117,7 +119,8 @@ async function approvalBody(stdin: AsyncIterable<Buffer | string>): Promise<Appr
   if (typeof sessionId !== 'string' || !sessionId || typeof tool !== 'string' || !tool || PERSON_ONLY.has(tool)) return null
   return {
     sessionId, tool: tool.slice(0, MAX_TOOL_CHARS), summary: approvalSummary(tool, toolInput),
-    ...(typeof cwd === 'string' ? { cwd } : {}),
+    // The core refuses a cwd it cannot hold, and the whole card with it: one it would refuse is not sent.
+    ...(typeof cwd === 'string' && cwd.length <= MAX_CWD_CHARS && !/\p{Cc}/u.test(cwd) ? { cwd } : {}),
     ...(tool === 'Bash' && terminalOnly(toolInput) ? { terminalOnly: true as const } : {}),
   }
 }
