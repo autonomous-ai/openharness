@@ -19,6 +19,8 @@ pub fn in_spawn_slot(now: u64) -> bool {
 pub enum Keep {
     SpawnWatch,
     RunStart,
+    /// A start was due, and the desktop app runs: it supervises its own daemon.
+    HoldBack,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -103,12 +105,18 @@ impl KeepAlive {
             Watch::Down { since } => {
                 // One down is not proof: a self-update leaves a gap. The desktop app supervises its own daemon.
                 let start = self.downs >= 2 && in_spawn_slot(now) && self.last_start_minute != Some(now / 60);
+                let wait = if self.downs < 2 { 0 } else { LOOK_AGAIN_SECS };
                 if start && !desktop_running {
                     self.start_begun(now);
                     Some(Keep::RunStart)
+                } else if waited(now, since, wait) {
+                    Some(self.spawn_watch())
+                } else if start {
+                    // Counted as the minute's start, so it is held back, and told, once a minute.
+                    self.last_start_minute = Some(now / 60);
+                    Some(Keep::HoldBack)
                 } else {
-                    let wait = if self.downs < 2 { 0 } else { LOOK_AGAIN_SECS };
-                    waited(now, since, wait).then(|| self.spawn_watch())
+                    None
                 }
             }
         }
@@ -245,10 +253,13 @@ mod tests {
 
     #[test]
     fn never_while_the_desktop_app_runs() {
+        use Keep::{HoldBack, SpawnWatch};
         let mut keep = two_downs();
-        // It still watches the dial, 15 s after each down.
-        let looks = [20, 35, 50, 65, 80, 95, 110, 125].map(|at| (at, Keep::SpawnWatch));
-        assert_eq!(ticks(&mut keep, B + 10, B + 125, true), looks);
+        // It still watches the dial, 15 s after each down, and holds back the start in each minute's slot.
+        let kept = [(10, HoldBack), (20, SpawnWatch), (35, SpawnWatch), (50, SpawnWatch), (65, SpawnWatch)];
+        assert_eq!(ticks(&mut keep, B + 10, B + 65, true), kept);
+        let kept = [(70, HoldBack), (80, SpawnWatch), (95, SpawnWatch), (110, SpawnWatch), (125, SpawnWatch)];
+        assert_eq!(ticks(&mut keep, B + 70, B + 125, true), kept);
         assert_eq!(keep.daemon(), Daemon::Starting);
     }
 

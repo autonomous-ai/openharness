@@ -91,17 +91,12 @@ impl App {
             Event::Tick { now, desktop_running } => {
                 self.now = now;
                 match self.state.cli {
-                    CliState::Found => {
-                        // Once each time the desktop app starts running, not on every tick.
-                        if desktop_running && !self.desktop_running {
-                            effects.push(Effect::Log(DESKTOP_RUNS.into()));
-                        }
-                        match self.keep.tick(now, desktop_running) {
-                            Some(Keep::SpawnWatch) => effects.push(Effect::SpawnWatch),
-                            Some(Keep::RunStart) => self.run_start(effects),
-                            None => {}
-                        }
-                    }
+                    CliState::Found => match self.keep.tick(now, desktop_running) {
+                        Some(Keep::SpawnWatch) => effects.push(Effect::SpawnWatch),
+                        Some(Keep::RunStart) => self.run_start(effects),
+                        Some(Keep::HoldBack) => effects.push(Effect::Log(DESKTOP_RUNS.into())),
+                        None => {}
+                    },
                     // A CLI installed by hand is found again; an install that runs is waited for.
                     CliState::Removed | CliState::InstallFailed => effects.push(Effect::FindCli),
                     CliState::Installing => {}
@@ -904,6 +899,8 @@ mod tests {
         assert!(has(&app.handle(Event::StartDone { ok: true }), &Effect::SpawnWatch));
 
         let mut app = two_downs();
+        // Told only when a start is held back, not when the desktop app starts running.
+        assert!(logs(&app.handle(Event::Tick { now: B + 9, desktop_running: true })).is_empty());
         let effects = app.handle(Event::Tick { now: B + 10, desktop_running: true });
         assert!(!has(&effects, &Effect::RunStart));
         assert!(!has(&effects, &Effect::SpawnWatch));
