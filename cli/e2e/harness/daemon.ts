@@ -24,6 +24,7 @@ import { GH_FORBIDDEN_STUB } from '../../src/testing/ghStub.js'
 import { readAdoptedHomes } from '../../src/engines/kit/homeAdoption.js'
 import { ownProcessGroup } from '../../src/lib/windows/noWindow.js'
 import { endRootProcesses } from '../../src/testing/rootProcesses.js'
+import { assertSocketPathFits } from '../../src/testing/socketPathRoom.js'
 import { alive } from '../../src/testing/spawnedRuns.js'
 import { forgetGroup, forgetTmux, leaderGone, watchGroup, watchTmux } from './reaper.js'
 
@@ -90,7 +91,8 @@ export interface DaemonOptions {
    *  the checkout's source. */
   scriptPath?: string
   /** Keep the daemon's data folder here instead of under the throwaway root (a test volume). The fake
-   *  engines read their hook credential from it, so it is set for them too. */
+   *  engines read their hook credential from it, so it is set for them too. Its socket path is never measured:
+   *  where it sits is the test's subject (noSocket.e2e.ts passes one too long on purpose). */
   dataDir?: string
   /** Run beside this daemon, as a dev daemon runs beside the release one on one computer: its home, its
    *  tmux server, the engines' transcript folders and the projects, with a data folder, port and engines
@@ -265,6 +267,22 @@ export class IsolatedDaemon {
       home: join(root, 'home'), data: options.dataDir ?? join(own, beside ? 'd' : 'data'), runtime: join(own, 'runtime'), auth: join(own, 'auth'),
       bin: join(own, 'bin'), dsh: join(own, 'dsh'), claudeProjects: join(root, 'claude', 'projects'), codexHome: join(root, 'codex'),
       projects: join(root, 'projects'),
+    }
+    // A data folder the harness gives a daemon under a TMPDIR too long for its socket falls back to one under the
+    // test's home, as long, and the test failed later with `EINVAL connect` and no word of why: refused here, before
+    // anything is made in the root. A test's own data folder is not measured: where it sits is that test's subject
+    // (noSocket.e2e.ts passes one too long on purpose).
+    if (options.dataDir === undefined) {
+      try {
+        assertSocketPathFits(join(dirs.data, `daemon-${port}.sock`))
+      } catch (error) {
+        // A daemon beside another made nothing yet, and the root it shares is the other's.
+        if (!beside) {
+          await tmux.close()
+          forgetTmux(tmux.socket)
+        }
+        throw error
+      }
     }
     for (const dir of Object.values(dirs)) await mkdir(dir, { recursive: true })
     // A zsh user as most are, with a .zshrc of their own (empty: nothing of anyone's). With none, the zsh
