@@ -97,7 +97,7 @@ describe('Devices DSH commands', () => {
 
 const NOT_RUNNING = 'Harness is not running on this computer. Run: harness start'
 const CLOSED = 'The connection to Harness on this computer closed.'
-const TOO_OLD = '{"error":"Harness on this computer is too old for this. Run: harness update"}'
+const TOO_OLD = '{"error":"The Harness daemon on this computer is older than this command. Run: harness start --restart"}'
 function watch(over: Partial<DialWatchDeps> = {}, argv = ['--json']) {
   const socket = Object.assign(new EventEmitter(), { send: vi.fn(), close: vi.fn() })
   const stdin = Object.assign(new EventEmitter(), { resume: vi.fn(), pause: vi.fn() })

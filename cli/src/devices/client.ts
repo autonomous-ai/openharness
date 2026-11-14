@@ -119,7 +119,7 @@ export function runDialWatch(argv: string[], deps: DialWatchDeps): Promise<numbe
           clearTimeout(deadline)
           const features = (frame.payload as { features?: unknown } | undefined)?.features
           if (Array.isArray(features) && features.includes('dial-watch')) return
-          deps.print(JSON.stringify({ error: 'Harness on this computer is too old for this. Run: harness update' }))
+          deps.print(JSON.stringify({ error: 'The Harness daemon on this computer is older than this command. Run: harness start --restart' }))
           return finish(4)
         }
         if (frame?.type !== 'dial_status' || typeof frame.payload !== 'object' || frame.payload === null) return
