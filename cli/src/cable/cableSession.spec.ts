@@ -4360,6 +4360,34 @@ describe('the app filter', () => {
     } finally { await session.stop() }
   })
 
+  it('a switch landing on the restore read loses no recap: restores follow the ring the dial was sent', async () => {
+    let port: LoopbackPort | undefined
+    let switched = false
+    const { host, state } = appHost({ recentSummaries: async () => [{ recap: 'shipped it', text: 'shipped it' }] })
+    const read = host.listAgentSnapshot!
+    // The first read after the ring went down switches the shown app first, as the app filter can.
+    host.listAgentSnapshot = async (opts) => {
+      if (!switched && port?.sent.some((m) => m.t === 'agents.end')) { switched = true; state.shown = 'vscode' }
+      return read(opts)
+    }
+    const c = await connect(host)
+    port = c.port
+    const restores = () => c.port.sent.filter((m) => m.t === 'summary' && m.restore).map((m) => m.agentId)
+    try {
+      c.port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', appFilter: 'v1' })
+      await vi.waitFor(() => expect(c.port.types()).toContain('notif.replace'))
+      await vi.waitFor(() => expect(restores()).toEqual(['g1', 'g2', 'g3']))
+      const ringAt = c.port.sent.length
+      c.port.say({ t: 'agents.refresh' })
+      await vi.waitFor(() => expect(restores()).toEqual(['g1', 'g2', 'g3', 'v1', 'v2']))
+      expect(switched).toBe(true)
+      const after = c.port.sent.slice(ringAt)
+      const begin = after.findIndex((m) => m.t === 'agents.begin')
+      expect(begin).toBeGreaterThanOrEqual(0)
+      expect(after.slice(begin).filter((m) => m.t === 'summary' && m.restore).map((m) => m.agentId)).toEqual(['v1', 'v2'])
+    } finally { await c.session.stop() }
+  })
+
   it('wants apps only while a dial that says appFilter is connected', async () => {
     const old = await greeted(appHost().host, false)
     try { expect(old.session.wantsApps).toBe(false) } finally { await old.session.stop() }
