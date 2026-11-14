@@ -5,7 +5,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import type { CableHostWiring, DaemonCableHost } from '../cable/cableHost.js'
+import { AppFilter, FRONT_SETTLE_MS } from '../cable/hosts/appFilter.js'
 import { observedAgentId } from '../cable/hosts/observed.js'
+import { AppRings } from '../cable/hosts/select.js'
 import { env } from '../config/env.js'
 import { routeVoiceTask } from '../lib/voiceRouter.js'
 import { DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, ServiceUnavailableError, type CoreApi, type CorePorts, type DevicesPort } from '../core/api.js'
@@ -1503,6 +1505,113 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     if (carried(printed.mock.calls)) leaks.push('console.log')
     if (logs.some((line) => line.includes('secret-target'))) leaks.push('log')
     expect(leaks).toEqual([])
+  })
+
+  describe('the app a dial that says appFilter shows (cable/hosts/appFilter.ts)', () => {
+    /** A Claude Code session in an app, its hook naming the app as the terminal's own variable does. */
+    const inApp = (port: DevicesPort, sessionId: string, app: string, event: ObservedHookEvent['event'] = 'session-start') =>
+      port.observed(hook(event, { sessionId, hostHints: { TERM_PROGRAM: app } }))
+    /** Ghostty 2, VS Code 1: Ghostty is shown. */
+    const twoApps = async (port: DevicesPort) => {
+      inApp(port, 'g-1', 'ghostty')
+      inApp(port, 'g-2', 'ghostty')
+      inApp(port, 'v-1', 'vscode')
+      expect((await appList(port))?.shown).toBe('ghostty')
+    }
+    /** The list a dial that says appFilter reads with no window. */
+    const appList = async (port: DevicesPort) => { port.swarms(null); return (await host().listAgentSnapshot({ apps: true })).apps }
+    const switches = () => logs.filter((line) => line.includes('app filter: switched'))
+
+    it('a switch logs "[device] app filter: switched · pick" and no app id or name', async () => {
+      const { port } = start({ faults: ['fleet'] })
+      await twoApps(port)
+      expect(host().pickApp('vscode')).toBe('switched')
+      await vi.waitFor(() => expect(switches()).toEqual(['[device] app filter: switched · pick']))
+      // The whole log: which app is shown is never written down.
+      expect(logs.filter((line) => /vscode|VS Code|ghostty|Ghostty/.test(line))).toEqual([])
+    })
+
+    it('a switch pushes the list to the dials at once', async () => {
+      const { port } = start({ faults: ['fleet'] })
+      await twoApps(port)
+      const pushed = calls('syncAgents').length
+      host().pickApp('vscode')
+      // Every dial here, not the picking one alone: a pick on one turns every dial that says appFilter.
+      await vi.waitFor(() => expect(calls('syncAgents').slice(pushed)).toEqual([[]]))
+    })
+
+    it('after a switch each mid-turn agent of the new ring is told again', async () => {
+      const { port } = start({ faults: ['fleet'] })
+      // Sixteen in Orca fill the one ring an older dial holds; the two in Ghostty, come later, are only in Ghostty's.
+      const orca = Array.from({ length: 16 }, (_, i) => { port.observed(hook('turn-start', { sessionId: `o-${i}` })); return observedAgentId('claude', `o-${i}`) })
+      await machineList(port)
+      inApp(port, 'g-1', 'ghostty', 'turn-start')
+      inApp(port, 'g-2', 'ghostty', 'turn-start')
+      const ghostty = [observedAgentId('claude', 'g-1'), observedAgentId('claude', 'g-2')]
+      expect((await machineList(port)).agents.map((a) => a.id)).toEqual(orca)
+      expect((await appList(port))?.shown).toBe('orca')
+      const told = calls('turnStarted').length
+      host().pickApp('ghostty')
+      // The dial was just turned to a ring whose agents it has heard nothing of: each is told its turn, as are the others.
+      await vi.waitFor(() => expect(calls('turnStarted').slice(told).map(([id]) => id).sort()).toEqual([...orca, ...ghostty].sort()))
+    })
+
+    it('the picker\'s use is one log line with no app in it', async () => {
+      const { port } = start({ faults: ['fleet'] })
+      await twoApps(port)
+      // Done on the app shown, a tap on another, one whose agents ended under the finger: each a use of the picker.
+      expect([host().pickApp('ghostty'), host().pickApp('vscode'), host().pickApp('cursor')]).toEqual(['same', 'switched', 'ignored'])
+      // A tapped notice turning the dial is no use of the picker.
+      host().pickApp('ghostty', 'notice')
+      expect(logs.filter((line) => line.includes('app filter: picker'))).toEqual(Array(3).fill('[device] app filter: picker'))
+    })
+
+    it('the settle timer is guarded: a filter that throws is logged and the devices keep running', async () => {
+      vi.useFakeTimers()
+      const { port } = start({ faults: ['fleet'] })
+      await twoApps(port)
+      vi.spyOn(AppRings.prototype, 'counts').mockImplementationOnce(() => { throw new Error('rings unreadable') })
+      host().front('vscode')
+      await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+      expect(logs).toContain('[devices] dial failed · rings unreadable')
+      // The next app in front settles as before.
+      host().front('ghostty')
+      host().front('vscode')
+      await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+      expect(switches()).toEqual(['[device] app filter: switched · front'])
+    })
+
+    it('the timer is cancelled when the service stops', async () => {
+      vi.useFakeTimers()
+      const { port } = start({ faults: ['fleet'] })
+      await twoApps(port)
+      const timers = vi.getTimerCount()
+      host().front('vscode')
+      expect(vi.getTimerCount()).toBe(timers + 1)
+      await port.stop()
+      expect(vi.getTimerCount()).toBe(0)
+    })
+
+    it('an app that empties as a dial reads the list is pushed after that read, never from inside it', async () => {
+      const { port } = start({ faults: ['fleet'] })
+      await twoApps(port)
+      host().pickApp('vscode')
+      // VS Code's one session resumed in Ghostty: the next read finds the app shown empty, and shows another.
+      inApp(port, 'v-1', 'ghostty')
+      await vi.waitFor(() => expect(switches()).toHaveLength(1))
+      const pushed = calls('syncAgents').length
+      const shown = AppFilter.prototype.shown
+      const insideRead: number[] = []
+      vi.spyOn(AppFilter.prototype, 'shown').mockImplementation(function (this: AppFilter) {
+        const app = shown.call(this)
+        insideRead.push(calls('syncAgents').length - pushed)
+        return app
+      })
+      expect((await host().listAgentSnapshot({ apps: true })).apps?.shown).toBe('ghostty')
+      expect(insideRead).toEqual([0])
+      await vi.waitFor(() => expect(switches()).toEqual(['[device] app filter: switched · pick', '[device] app filter: switched · empty']))
+      await vi.waitFor(() => expect(calls('syncAgents').length - pushed).toBe(1))
+    })
   })
 })
 
