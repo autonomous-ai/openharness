@@ -396,10 +396,15 @@ describe.runIf(windows)('install.ps1, installing for real from a local manifest'
     })
   }
 
-  // Asked once for the file, and kept only once answered: a kept failure (a call that timed out) would fail every
-  // later case with it.
+  // Asked once for the file, and kept only once answered with a platform: a kept failure (a call that timed out, or
+  // one that ended on an error and printed nothing) would fail every later case with it.
   let native: string | undefined
-  const platform = async () => (native ??= (await ps('Get-HarnessPlatform')).stdout)
+  const platform = async () => {
+    if (native) return native
+    const run = await ps('Get-HarnessPlatform')
+    if (run.status !== 0 || !run.stdout) throw new Error(`Get-HarnessPlatform gave no platform: status ${run.status}, ${run.stderr}`)
+    return (native = run.stdout)
+  }
   const freshKey = () => {
     const subkey = `Software\\HarnessInstallTest\\${randomUUID()}`
     subkeys.push(subkey)
