@@ -361,6 +361,13 @@ describe('execFileTied', () => {
       expect([error.code, error.killed, error.stdout, error.stderr]).toEqual(['ENOENT', false, '', ''])
     })
 
+  // podman.run reads stderr off the rejection and appModels.ts hands stdout and stderr on: a start spawn refuses at
+  // once (an argument with a NUL in it) rejected with neither, and podman.run's own TypeError hid what had happened.
+  it('a command spawn refuses outright rejects in the same shape', async () => {
+    const error = await failure(run('0\0'))
+    expect([error.code, error.killed, error.signal, error.stdout, error.stderr]).toEqual(['ERR_INVALID_ARG_VALUE', false, null, '', ''])
+  })
+
   // Each crash of a service left its call in flight running: a `claude mcp list`, a `git` on the network.
   it.skipIf(windows)('a call in flight ends when the process that started it is killed', async () => {
     const scene = tiedScene()

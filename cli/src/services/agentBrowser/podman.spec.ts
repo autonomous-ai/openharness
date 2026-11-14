@@ -427,6 +427,11 @@ describe('createPodman', () => {
     expect([error.state, error.message, error.output]).toEqual(['podman_failed', 'podman ps failed: ', ''])
   })
 
+  it('a call spawn refuses outright (a NUL in an argument) is a failed call', async () => {
+    const error = await failure(found('linux').run(['ps', '\0']))
+    expect([error.state, error.message]).toEqual(['podman_failed', 'podman ps failed: '])
+  })
+
   it('without podman, run and spawn are needs_setup', async () => {
     const podman = createPodman({ resolve: async () => null, exists: () => false, platform: 'linux' })
     expect((await failure(podman.run(['ps']))).state).toBe('needs_setup')
