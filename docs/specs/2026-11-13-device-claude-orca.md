@@ -15,8 +15,11 @@ in the app, so the face grows no buttons", `ui_habitat.c`). So Diego decided, re
 - **The dial only shows a permission prompt,** never answers it. The person answers in the app it is in (the terminal,
   Orca, the Claude app). The plugin's `PermissionRequest` hook only tells the daemon, then decides nothing at once; no
   path anywhere lets the dial approve a command.
-- **Voice reaches a busy agent too,** as it already does for a Harness agent: the words are delivered and the engine
-  queues them for after its turn. Only an ended session is refused (its terminal may hold a shell by then).
+- **Voice reaches a busy agent through the mod only** (Diego asked for busy agents to take voice; the PM settled the
+  route on 2026-11-14 when the time ran out, after the review found keystrokes could answer a prompt): a working agent
+  with the plugin's mod takes the words, which `$.prompt.submit` queues for after its turn without typing anything.
+  Typing into a terminal (Orca) is only for an idle agent, of any engine. A working agent with no mod (Codex, Claude
+  Code without the plugin) is told busy. An ended session is refused (its terminal may hold a shell by then).
 - **Opening an agent from the dial opens its app and focuses its pane,** with no new permission:
   - **Every host with a known bundle id** at least comes forward (`open -b <bundle id>` on macOS), Warp, Alacritty,
     VS Code and Cursor included.
@@ -53,8 +56,7 @@ to do next.
 - **Orca: actions only** (option A). Harness already sees Claude Code in Orca through its hooks (wave 0); the adapter adds
   voice (`orca terminal send`) and open (`orca terminal switch`) for those agents, found by their Orca terminal handle.
   No polling of Orca.
-- **Voice reaches an agent whether it is idle or working** (Diego, 2026-11-14, replacing "only when not working"): the
-  engine queues words given during a turn, as for a Harness agent. A session that has ended is refused.
+- **Voice reaches a working agent only through its mod; Orca typing only an idle one** (2026-11-14, above).
 - **Claude Code in a Harness pane keeps today's path:** the pane watcher sees the prompt and the dial keys the answer;
   the hook stands aside for those sessions.
 - **The plugin reaches Harness through its launcher:** `~/.local/bin/harness` first, then `harness` on `PATH`; with
@@ -177,14 +179,12 @@ open.
 **In the devices process.** An observed agent can take voice (`v`) when its session has a poll open, or one closed under
 35 s ago (the mod opens the next at once), or when it has an Orca terminal handle. A transcript for it goes:
 
-1. Refused when the session has ended ("<name> did not answer."). Idle or working, the words go on: the mod's
-   `$.prompt.submit` waits for the turn to end before it starts the next, and Claude Code queues what is typed into its
-   running TUI. Through Orca, an agent waiting on a permission prompt is refused ("<name> is waiting for your
-   answer in {Host}."): text and Enter typed then would answer the prompt itself (a leading digit can even pick "don't
-   ask again"), and the dial never approves anything; Harness's own path refuses the same case. Only Claude Code's hooks
-   say a prompt opened, so through Orca any other engine is refused while it works ("<name> is busy. Say it when it is
-   done."): Codex's approval overlay takes `y` or Enter as an approval, and no hook of it tells. The mod's route has no
-   such risk and delivers in every state.
+1. Refused when the session has ended ("<name> did not answer."). The mod's route delivers in every state:
+   `$.prompt.submit` waits for the turn to end before it starts the next and types nothing. Typing through Orca goes
+   only to an idle agent: a working or waiting one could be showing a permission prompt the daemon has not heard of yet
+   (Codex has no hook for it; Claude Code's is a few hundred ms behind, and the transcript check can clear a wait early),
+   and text with Enter would answer it. So with no mod, a working agent is refused ("<name> is busy. Say it when it is
+   done.") and a waiting one too ("<name> is waiting for your answer in {Host}."). The dial never approves anything.
 2. To the mod when its session has a poll open, or opens one within 5 s: the text is the answer to that poll, and that is
    "sent" (the mod sends no acknowledgement). No poll in 5 s: "<name> did not answer."
 3. Else to Orca (`orca terminal send … --enter --wait-submit 5`).
@@ -253,8 +253,9 @@ Windows.
 - Waiting: `asked` gives the agent `needs-you` and "<summary> · answer in {Host}" in place of wave 0's line; the next
   event of that session clears it, another session's does not; no `question` frame is sent and no `answer` or
   `answer.reviewed` frame can approve anything; the summary reaches no backend request, router candidate or log line.
-- Voice: delivered to a working Claude Code (not refused), never typed into a working Codex in Orca; refused once the
-  session ended; the mod route when a poll is open or opens within 5 s; the Orca route
+- Voice: a working Claude Code with the mod gets it through the mod; a working or waiting agent with no mod (Claude Code
+  without the plugin, Codex) is told busy or waiting and nothing is typed; an idle agent of any engine gets it through
+  Orca; refused once the session ended; the mod route when a poll is open or opens within 5 s; the Orca route
   otherwise; `sendTurn` reaches `source.send` for an agent outside Harness; `v` and `f` per agent, following the poll
   and the handle (read on every event).
 - Orca actions against a fake `orca`: the arguments, no shell, the timeout, the handle check, the toast on failure; a
