@@ -307,6 +307,15 @@ describe('USB dial fleet', () => {
     } finally { await f.fleet.stop() }
   })
 
+  it('followPrompt reaches each attached dial', async () => {
+    const f = fixture()
+    try {
+      await f.start()
+      await f.fleet.followPrompt('a')
+      for (const port of f.ports) expect(port.sent).toContainEqual({ t: 'focus', agentId: 'a' })
+    } finally { await f.fleet.stop() }
+  })
+
   it('keeps simultaneous voice uploads separate even with the same upload id', async () => {
     const f = fixture()
     try {
