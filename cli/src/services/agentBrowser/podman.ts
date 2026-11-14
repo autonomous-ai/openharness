@@ -192,7 +192,7 @@ export function createPodman(deps: {
     spawn(args) {
       if (!found) throw new PodmanError('needs_setup', 'Podman is not installed')
       // Tied to this process: a crash of it left its `podman events` running, one more per restart.
-      return spawnTied(found, onConnection(args), { env: oneShotParentEnv(), ...ownProcessGroup(), platform })
+      return spawnTied(found, onConnection(args), { env: oneShotParentEnv(), ...ownProcessGroup(platform), platform })
     },
     available() {
       if (cached && now() - cached.at < AVAILABLE_CACHE_MS) return cached.answer
