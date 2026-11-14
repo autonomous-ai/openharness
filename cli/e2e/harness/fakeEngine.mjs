@@ -2,6 +2,7 @@
 // under test. It behaves the way the daemon depends on the real CLIs behaving, and nothing more:
 //
 //   - answers `--version` / `--help` probes;
+//   - as `codex app-server`, reads its stdin, answers nothing and ends when that stdin ends;
 //   - runs the hooks its own settings carry, as the real CLIs run them: the commands the daemon
 //     installed (lib/hooks.ts), through a shell, from inside the pane, with the event on stdin, killed at
 //     their timeout and waited for. So the real `hook/notify.mjs` is what reaches the daemon, with its
@@ -203,6 +204,15 @@ export async function run(engine, config = {}, { native = false } = {}) {
     // Who asked, by its pid: Claude Code's engine worker, not the core (#4146).
     if (config.root) appendFileSync(join(config.root, 'background-job-queries'), `${process.ppid}\n`)
     process.stdout.write('[]\n')
+    return
+  }
+  // `codex app-server [-c …]`, as a rate-limit read (lib/codexRateLimits.ts) or a provider move starts it. The real
+  // server speaks JSON-RPC on stdio and exits when its stdin ends; this one answers nothing, so a read finds no limits,
+  // but it ends with its stdin too. It used to draw its TUI instead and outlive its daemon: 14 pairs of the fake were
+  // found orphaned on 2026-11-14. A read is no launch, so it is kept out of the launch-argv ledger.
+  if (engine === 'codex' && args[0] === 'app-server') {
+    process.stdin.resume()
+    process.stdin.on('end', () => process.exit(0))
     return
   }
   // Every launch's argv, for a test to read what an agent was started with.
