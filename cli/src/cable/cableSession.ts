@@ -1505,7 +1505,7 @@ export class CableSession {
         // so it waits on this — briefly, and off its own UI task.
         const agentId = str('agentId') ?? ''
         let items: string[] = []
-        if (this.lacks(agentId, 'v')) {
+        if (this.outsideHarness(agentId)) {
           await this.toast(`This agent is in ${this.hostName(agentId)}. Changing its model from the device comes in an update.`)
         } else {
           try {
@@ -1699,7 +1699,7 @@ export class CableSession {
       case 'turn.stop': {
         const agentId = str('agentId')
         if (!agentId) return
-        if (this.lacks(agentId, 'v')) {
+        if (this.outsideHarness(agentId)) {
           await this.toast(`This agent is in ${this.hostName(agentId)}. Stopping it from the device comes in an update.`)
           return
         }
