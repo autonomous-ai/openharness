@@ -23,6 +23,9 @@ const ANSWER_CHARS = 300
 const ANSWER_GRACE_MS = 1_500
 /** A turn's hook runs before the engine marks the turn begun in its record: a turn younger than this may still read idle. */
 const TURN_SETTLE_MS = 2_000
+/** The tool call's line reaches the transcript just after its hook asked, and nobody answers a prompt sooner than this: a
+ *  write that soon after a prompt with no card is the asking's own, not the terminal's answer. */
+const ASK_SETTLE_MS = 1_000
 
 /** A name-based UUID (v5 layout, SHA-1) of engine + sessionId, so the same session always gets the same id. */
 export function observedAgentId(engine: string, sessionId: string): string {
@@ -131,6 +134,8 @@ export class ObservedSource implements HostSource {
     if (state !== 'terminal') e.approvalOpen = state === 'open'
     if (asks) {
       this.setState(e, 'needs-you', now)
+      // A new prompt, though the agent may still read needs-you for the last one: what was written before is not its answer.
+      e.since = now
       e.agent.lastActivityAt = now
       e.terminalOnly = state === 'terminal'
     } else if (state === 'answered' && e.agent.state === 'needs-you') {
@@ -395,10 +400,12 @@ export class ObservedSource implements HostSource {
     const all = [...this.entries.values()]
     // A card on the dial waits for its answer, which the card's end tells: a line written meanwhile is not one.
     const waits = (e: Entry): boolean => e.agent.state === 'needs-you' && !e.approvalOpen
+    // A prompt with no card has no end but the transcript's growth, and the asking writes a line of its own.
+    const answeredAfter = (e: Entry): number => e.since + (e.terminalOnly ? ASK_SETTLE_MS : 0)
     for (const e of all) {
       if (!waits(e) || !e.transcriptPath) continue
       const stamp = await this.deps.fileStamp(e.transcriptPath)
-      if (!stamp || stamp.mtime <= e.since || !waits(e) || this.entries.get(e.agent.id) !== e) continue
+      if (!stamp || stamp.mtime <= answeredAfter(e) || !waits(e) || this.entries.get(e.agent.id) !== e) continue
       const now = this.deps.now()
       this.setState(e, 'working', now)
       e.agent.lastActivityAt = now
