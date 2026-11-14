@@ -189,6 +189,28 @@ spawnTied(${JSON.stringify(fake)}, [], { env: process.env, detached: true, stdio
     expect(code).toBeLessThan(0) // Node's own close after a failed start, never the shell's 127
   })
 
+  // Out of fds (EMFILE), a plain spawn hands back a child with no stdio and an `error` its caller hears. The tie read
+  // that stdio and threw first, so no caller was listening, and the error that followed crashed the service.
+  it.skipIf(windows)('a start with no fd left fails as a plain spawn does, for both calls, and this process lives on', async () => {
+    const file = join(scratch, 'no-fds.mts')
+    writeFileSync(file, [
+      `import { openSync } from 'node:fs'`,
+      `import { execFileTied, spawnTied } from ${TIED}`,
+      `const held = []`,
+      `try { for (;;) held.push(openSync('/dev/null', 'r')) } catch { /* every fd taken */ }`,
+      `const spawned = await new Promise(done => spawnTied('/bin/ls', []).once('error', error => done(error.code)))`,
+      `const called = await execFileTied('/bin/ls', [], { timeout: 60_000 }).then(() => 'ran', error => error.code)`,
+      `console.log(JSON.stringify([spawned, called]))`,
+    ].join('\n'))
+    // A limit of its own, low enough to reach at once.
+    const standIn = spawn('/bin/sh', ['-c', 'ulimit -n 256 && exec "$0" "$@"', process.execPath, '--import', 'tsx', file], { cwd: CLI })
+    onTestFinished(() => { standIn.kill('SIGKILL') })
+    standIn.stdin!.end()
+    const said = output(standIn)
+    expect(await closed(standIn), said.err).toEqual([0, null])
+    expect(said.out).toBe('["EMFILE","EMFILE"]\n')
+  })
+
   // A DSH command runs on its login shell's PATH, not the daemon's.
   it.skipIf(windows)('a name is looked for on the PATH the command is given, not this process\'s', async () => {
     script(join(scratch, 'only-here', 'only-here'), 'exit 4')
