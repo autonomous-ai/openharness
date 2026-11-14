@@ -1797,7 +1797,7 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     expect(await host().recentAsks(ID)).toEqual([])
     expect(await host().listModels(ID)).toEqual([])
     expect(await host().answerReviewed({ agentId: ID, requestId: 'q1', questions: [], answers: {}, selections: {} })).toMatchObject({ ok: false })
-    expect(host().sendTurn(ID, 'run the tests')).toMatchObject({ ok: false })
+    expect(await host().sendTurn(ID, 'run the tests')).toMatchObject({ ok: false })
     host().stopTurn(ID)
     host().answer(ID, 'q1', { a: 'yes' })
     host().updateAgent(ID, 'opus', 'high')

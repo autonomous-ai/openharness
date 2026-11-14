@@ -10,7 +10,7 @@ import { WebSocketServer, type WebSocket } from 'ws'
 import { DeviceFleet } from '../device/deviceFleet.js'
 import { DeviceLink } from '../device/deviceLink.js'
 import { HostRegistry } from './hosts/registry.js'
-import type { HostAgent, HostSource } from './hosts/types.js'
+import type { HostAgent, HostSource, SendResult } from './hosts/types.js'
 
 const AGENTS: Array<{ agentId: string; registeredAt: number; active: boolean; terminalAvailable: boolean; engine: string; lastHookAt?: number }> = []
 
@@ -1095,6 +1095,136 @@ describe('the dial reaches the fleet through the core\'s port', () => {
     expect(await host.forkAgent('r1')).toEqual({ ok: false, error: 'FORK_FAILED', detail: 'busy' })
     expect(w.log).toHaveBeenCalledWith('cable: fork other/r1 refused (FORK_FAILED: busy)')
     expect(w.opened).not.toHaveBeenCalled()
+  })
+
+  describe('an agent outside Harness takes its voice, its answer and its tap from its own source', () => {
+    const scratch: HostAgent = { id: 'o1', engine: 'claude', sessionId: 's-o1', name: 'scratch', host: 'orca', state: 'idle',
+      lastActivityAt: 0, unseenDone: false }
+    function setup(source: Partial<HostSource> = {}) {
+      const fleet = port()
+      const w = wiring({ fleet: () => fleet, focused: vi.fn(), opened: vi.fn(), answerReviewed: vi.fn(async () => true),
+        swarmSay: vi.fn(async () => ({ said: true as const })) })
+      const host = new DaemonCableHost(w)
+      const observed = { send: vi.fn(async (_agent: HostAgent, _text: string): Promise<SendResult> => ({ ok: true })),
+        focus: vi.fn(async (_agent: HostAgent) => true), markSeen: vi.fn() }
+      host.setRegistry(new HostRegistry([host.harness, { id: 'observed', list: () => [scratch],
+        capabilities: () => ({ status: true, voice: true, focus: true, answer: true }), ...observed, ...source }]))
+      // Every call that reached the fleet's router or the core's doors this host holds.
+      const heard = () => [...Object.values(fleet), ...Object.values(w)].filter((fn) => vi.isMockFunction(fn) && fn !== (w.log as unknown))
+        .flatMap((fn) => (fn as ReturnType<typeof vi.fn>).mock.calls)
+      return { host, fleet, w, observed, heard }
+    }
+
+    it('sendTurn reaches source.send for an agent outside Harness and answers its result', async () => {
+      const { host, observed, heard } = setup()
+      expect(await host.sendTurn('o1', 'ship it')).toEqual({ ok: true })
+      expect(observed.send).toHaveBeenCalledWith(scratch, 'ship it')
+      observed.send.mockResolvedValueOnce({ ok: false, reason: 'scratch is busy. Say it when it is done.' })
+      expect(await host.sendTurn('o1', 'ship it')).toEqual({ ok: false, machine: '',
+        reason: 'scratch is busy. Say it when it is done.', message: 'scratch is busy. Say it when it is done.' })
+      expect(JSON.stringify(heard())).not.toContain('o1')
+    })
+
+    it('a harness agent keeps the fleet\'s path', () => {
+      const { host, fleet, observed } = setup()
+      expect(host.sendTurn('r1', 'ship it')).toEqual({ ok: true })
+      expect(fleet.sendTurn).toHaveBeenCalledWith('r1', 'ship it')
+      expect(observed.send).not.toHaveBeenCalled()
+    })
+
+    it('with a window open, voice to an observed agent reaches no source.send', async () => {
+      const { host, observed, heard } = setup()
+      onTab(host, ['r1'])
+      expect(await host.sendTurn('o1', 'ship it')).toMatchObject({ ok: false })
+      expect(observed.send).not.toHaveBeenCalled()
+      expect(JSON.stringify(heard())).not.toContain('o1')
+    })
+
+    it('voice to an agent outside Harness never asks the Swarm', async () => {
+      const { host, w } = setup()
+      expect(await host.swarmSay('o1', 'ship it')).toEqual({ said: false })
+      expect(w.swarmSay).not.toHaveBeenCalled()
+      // A Harness agent is still offered to its Swarm first.
+      expect(await host.swarmSay('r1', 'ship it')).toEqual({ said: true })
+    })
+
+    it('an approval id is answered by approvals through answer and through answerReviewed, and the fleet hears neither', async () => {
+      const { host, heard } = setup()
+      const approvals = { answer: vi.fn(() => ({ ok: true as const })) }
+      host.setApprovals(approvals)
+      expect(host.answer('o1', 'approval:7', { approval: 'Allow' })).toEqual({ ok: true })
+      expect(approvals.answer).toHaveBeenLastCalledWith('o1', 'approval:7', 'Allow')
+      expect(await host.answerReviewed({ agentId: 'o1', requestId: 'approval:8', questions: [], answers: { approval: 'Deny' }, selections: {} }))
+        .toEqual({ ok: true })
+      expect(approvals.answer).toHaveBeenLastCalledWith('o1', 'approval:8', 'Deny')
+      expect(JSON.stringify(heard())).not.toContain('approval:')
+    })
+
+    it('any other id goes to the fleet as before', async () => {
+      const { host, fleet } = setup()
+      const approvals = { answer: vi.fn(() => ({ ok: true as const })) }
+      host.setApprovals(approvals)
+      host.answer('r1', 'q1', { k: 'v' })
+      expect(fleet.answer).toHaveBeenCalledWith('r1', 'q1', { k: 'v' })
+      expect(await host.answerReviewed({ agentId: 'r1', requestId: 'q2', questions: [], answers: {}, selections: {} })).toEqual({ ok: true, pending: true })
+      expect(fleet.answerReviewed).toHaveBeenCalledTimes(1)
+      expect(approvals.answer).not.toHaveBeenCalled()
+    })
+
+    it('an approval id with no approvals set is refused', async () => {
+      const { host, heard } = setup()
+      const closed = { ok: false, error: 'This request is closed.' }
+      expect(host.answer('o1', 'approval:7', { approval: 'Allow' })).toEqual(closed)
+      host.setApprovals({ answer: vi.fn(() => ({ ok: true as const })) })
+      host.setApprovals(null)
+      expect(await host.answerReviewed({ agentId: 'o1', requestId: 'approval:7', questions: [], answers: { approval: 'Allow' }, selections: {} }))
+        .toEqual(closed)
+      expect(JSON.stringify(heard())).not.toContain('approval:')
+    })
+
+    it('a tap on an agent with f runs source.focus', async () => {
+      const { host, observed, heard } = setup()
+      expect(await host.openAgent('o1')).toBeUndefined()
+      expect(observed.focus).toHaveBeenCalledWith(scratch)
+      expect(JSON.stringify(heard())).not.toContain('o1')
+    })
+
+    it('a failed focus answers Orca did not open it.', async () => {
+      const failed = setup({ focus: vi.fn(async () => false) })
+      expect(await failed.host.openAgent('o1')).toEqual({ ok: false, error: 'Orca did not open it.' })
+      // A source with no open of its own cannot bring it forward either.
+      const none = setup({ focus: undefined })
+      expect(await none.host.openAgent('o1')).toEqual({ ok: false, error: 'Orca did not open it.' })
+      expect(JSON.stringify([...failed.heard(), ...none.heard()])).not.toContain('o1')
+    })
+
+    it('an open with reason question never calls source.focus', async () => {
+      const { host, observed, heard } = setup()
+      expect(await host.openAgent('o1', 'question')).toBeUndefined()
+      expect(observed.focus).not.toHaveBeenCalled()
+      expect(JSON.stringify(heard())).not.toContain('o1')
+    })
+
+    it('a swipe to an Orca agent marks it seen and never opens Orca', () => {
+      const { host, observed, heard } = setup()
+      host.focus('o1')
+      expect(observed.markSeen).toHaveBeenCalledWith('o1')
+      expect(observed.focus).not.toHaveBeenCalled()
+      expect(JSON.stringify(heard())).not.toContain('o1')
+    })
+
+    it('machineView is true only with no window and a registry', () => {
+      const host = new DaemonCableHost(wiring())
+      expect(host.machineView()).toBe(false)
+      host.setRegistry(new HostRegistry([host.harness]))
+      expect(host.machineView()).toBe(true)
+      onTab(host, ['r1'])
+      expect(host.machineView()).toBe(false)
+      host.setSwarms(null)
+      expect(host.machineView()).toBe(true)
+      host.setRegistry(null)
+      expect(host.machineView()).toBe(false)
+    })
   })
 })
 
