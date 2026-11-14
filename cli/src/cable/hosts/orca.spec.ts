@@ -150,6 +150,17 @@ describe('Orca actions', () => {
     expect(asked).toEqual([10_000])
   })
 
+  it('a run that ignores SIGTERM is killed at its deadline and is false', async () => {
+    const pidFile = join(dir, 'pid')
+    // Deaf to the kill's SIGTERM, it would exit 0 once its sleep ends, as if the text had been sent.
+    const fake = fakeOrca(`trap '' TERM\necho $$ > '${pidFile}'\nexec sleep 3`)
+    const real = orcaDeps()
+    const orca = createOrcaActions({ ...real, onPath: () => fake.file, run: (file, args) => real.run(file, args, 1000) })
+    expect(await orca.send(HANDLE, 'hi')).toBe(false)
+    const pid = Number(readFileSync(pidFile, 'utf8'))
+    await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow())
+  })
+
   it('a non-zero exit is false', async () => {
     const fake = fakeOrca('exit 3')
     const orca = createOrcaActions({ ...orcaDeps(), onPath: () => fake.file })
