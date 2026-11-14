@@ -400,6 +400,17 @@ describe('createPodman', () => {
     ['a call with stdin in flight, through its relay', `void podman.run(['secret', 'create', 's1', '-'], { stdin: 'pw', timeoutMs: 120_000 }).catch(() => {})`, 'secret create'],
   ])('%s ends when the process that started it is killed', (_, body, command) => endsWithItsProcess(body, command))
 
+  // A detached child on Windows leaves the Job Object that ends it with this process (lib/windows/noWindow.ts).
+  it('on Windows podman events is a plain spawn, never detached', async () => {
+    const podman = found('win32')
+    await podman.path()
+    const child = podman.spawn(['events'])
+    child.stdin!.end()
+    await new Promise(resolve => child.once('close', resolve))
+    const [file, args, opts] = vi.mocked(spawn).mock.calls[0] as unknown as [string, string[], { detached?: boolean; windowsHide?: boolean }]
+    expect([file, args, opts.detached, opts.windowsHide]).toEqual([fake.path, ['events'], undefined, true])
+  })
+
   it('a podman removed after it was found ends its stream as a failed command does, with no spawn error', async () => {
     const podman = createPodman({ resolve: async () => join(dirname(fake.path), 'removed'), platform: 'linux' })
     await podman.path()
