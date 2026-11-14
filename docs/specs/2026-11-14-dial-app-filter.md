@@ -104,10 +104,14 @@ working in. The app he is working in is the one in front, and the computer alrea
   - it counts for nothing in the default: the default and the tie draw count known apps only, and an app whose
     agents are all not known yet is shown by default only when no other app has an agent; a pick or the front can
     still show it.
-- **The scan learns the app where that is cheap** (the PM, 2026-11-15): with no new permission, from the session's own
-  process (the same hints a hook carries, such as `__CFBundleIdentifier` and `TERM_PROGRAM`, or its parent processes'
-  app), reusing `detectApp` and the bundle table. Only the names `detectApp` reads are kept; nothing else of a process
-  is stored, logged or sent. Where it is not cheap on a platform, that platform waits for the first hook (Follow-ups).
+- **The scan learns the app where that is cheap** (the PM, 2026-11-15): with no new permission, by walking the
+  session's parent processes (`ppid`) and reading only each one's executable name or path (`ps -o ppid=,comm=`;
+  Linux `/proc/<pid>/stat`, `comm` or the `exe` link), mapped to an app with the existing bundle and exe tables (a
+  `.app` path's bundle id comes from that app's `Info.plist`). Nothing else of a process is read, stored, logged or
+  sent. Where this is not cheap or not reliable on a platform, that platform waits for the first hook (Follow-ups).
+- **Never read another process's environment** (the PM, 2026-11-15, a hard rule): no `ps eww`, `ps -E`,
+  `/proc/<pid>/environ` or anything equivalent, not even to read and discard at once. An environment holds secrets
+  (`ORCA_PAIRING_CODE`, `ORCA_AGENT_SESSION_SPAWN_TOKEN`, API tokens).
 
 ### The rings (`select.ts`, built on `DialRing` from `fix/dial-swipe-order`)
 
