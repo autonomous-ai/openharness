@@ -42,7 +42,8 @@ fn act(action: Action, shared: tauri::State<Shared>) {
 
 fn main() {
     let (events, queue) = mpsc::channel();
-    tauri::Builder::default()
+    #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
+    let mut app = tauri::Builder::default()
         // Managed before the window is made, so its first `view` finds it.
         .manage(Shared { view: Mutex::default(), events: events.clone() })
         .invoke_handler(tauri::generate_handler![view, act])
@@ -55,16 +56,17 @@ fn main() {
                 let _ = window.state::<Shared>().events.send(Event::WindowClosed);
             }
         })
-        .run(tauri::generate_context!())
+        .build(tauri::generate_context!())
         .expect("Harness Device could not start");
+    // Decision 3: no Dock icon. Set before the event loop runs: in `setup`, macOS has already made the app Regular and
+    // the window is made, so the Dock icon shows for a moment at each launch.
+    #[cfg(target_os = "macos")]
+    app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+    app.run(|_, _| {});
 }
 
 /// On the main thread.
 fn start(handle: &AppHandle, events: Sender<Event>, queue: Receiver<Event>) -> tauri::Result<()> {
-    // Decision 3: no Dock icon.
-    #[cfg(target_os = "macos")]
-    handle.set_activation_policy(tauri::ActivationPolicy::Accessory)?;
-
     let paths = handle.path();
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
     let log: Arc<dyn Log> = Arc::new(FileLog::new(paths.app_log_dir()?, clock.clone()));
