@@ -34,8 +34,16 @@ test('${name}', () => {
 })
 `
 
+/** A test file whose tests are all skipped, as e2e/socketChurn.e2e.ts's are without HARNESS_E2E_SERVICES_DIR: Vitest runs no
+ *  afterAll of such a file, the setup's neither, so it records nothing. */
+const skipped = `
+describe.skipIf(true)('skipped', () => {
+  test('skipped', () => {})
+})
+`
+
 describe('vitest.setup.ts', () => {
-  it("removes the home, data and runtime folders it made, read-only folders and all, after the file's own afterAll, when it passes and when it fails", async () => {
+  it("removes the home, data and runtime folders it made, read-only folders and all, after the file's own afterAll, when it passes, when it fails and when its tests are all skipped", async () => {
     root = mkdtempSync(join(tmpdir(), 'setup-folders-'))
     const temp = join(root, 'tmp'), project = join(root, 'project')
     mkdirSync(temp)
@@ -44,6 +52,7 @@ describe('vitest.setup.ts', () => {
       `export default { test: { globals: true, include: ['*.test.mjs'], setupFiles: [${JSON.stringify(join(CLI_ROOT, 'vitest.setup.ts'))}] } }\n`)
     writeFileSync(join(project, 'passes.test.mjs'), fixture('passes', true))
     writeFileSync(join(project, 'fails.test.mjs'), fixture('fails', false))
+    writeFileSync(join(project, 'skipped.test.mjs'), skipped)
     // The child's own os.tmpdir(), and nothing of this worker's Vitest to make it think it runs inside one.
     const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('VITEST')))
     const code = await new Promise<number | null>((done) => {
