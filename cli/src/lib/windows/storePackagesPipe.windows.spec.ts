@@ -10,7 +10,9 @@ import { describe, expect, it } from 'vitest'
 
 describe('Store packages on Windows', () => {
   it.runIf(process.platform === 'win32')('reach the daemon over its proven pipe, and send nothing to its port', () => {
-    const run = spawnSync(process.execPath, ['--test', join('..', 'store', 'tools', 'windows-pipe.test.mjs')], { encoding: 'utf8', timeout: 120_000 })
+    // TAP by name: since Node 23 `node --test` reports in `spec` even when stdout is not a terminal, and prints `ℹ fail 0`.
+    // On Node 24.22.2 this spec was red with all 19 cases passing (windows.yml runs 43158661612 and 43557665371).
+    const run = spawnSync(process.execPath, ['--test', '--test-reporter=tap', join('..', 'store', 'tools', 'windows-pipe.test.mjs')], { encoding: 'utf8', timeout: 120_000 })
     expect(run.status, `${run.stdout}\n${run.stderr}`).toBe(0)
     expect(run.stdout).toMatch(/^# fail 0$/m)
   }, 130_000)
