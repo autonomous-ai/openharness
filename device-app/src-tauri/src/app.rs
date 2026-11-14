@@ -3,7 +3,7 @@
 use crate::keepalive::{Keep, KeepAlive};
 use crate::model::{due, menu, menu_log};
 use crate::types::{
-    Action, AppState, CliState, Effect, Event, LoginEvent, MenuAction, MenuItem, Phase, Saved, Screen, View,
+    Action, AppState, CliState, Daemon, Effect, Event, LoginEvent, MenuAction, MenuItem, Phase, Saved, Screen, View,
 };
 
 /// The menu reads the account and Claude Code again at most this often.
@@ -139,8 +139,13 @@ impl App {
                 }
             }
             Event::WatchExit(code) => {
+                let before = self.keep.daemon();
                 self.keep.watch_exit(code, self.now);
                 self.state.dial = None;
+                // A start the CLI refused (a flash, an uninstall) exits 0 as a real one does: this down tells it.
+                if self.keep.daemon() == Daemon::Stopped && before != Daemon::Stopped {
+                    effects.push(Effect::Log("keep-alive: the start changed nothing".into()));
+                }
             }
             Event::StartDone { ok } => {
                 self.keep.start_done(ok);
@@ -897,6 +902,11 @@ mod tests {
         let mut app = two_downs();
         assert!(has(&app.handle(tick(B + 10)), &Effect::RunStart));
         assert!(has(&app.handle(Event::StartDone { ok: true }), &Effect::SpawnWatch));
+        let effects = app.handle(Event::WatchExit(Some(3)));
+        assert_eq!(rows(&effects)[0], "Harness stopped");
+        assert_eq!(logs(&effects), ["keep-alive: the start changed nothing"]);
+        app.handle(tick(B + 15));
+        assert!(logs(&app.handle(Event::WatchExit(Some(3)))).is_empty());
 
         let mut app = two_downs();
         // Told only when a start is held back, not when the desktop app starts running.
