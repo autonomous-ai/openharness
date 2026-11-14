@@ -3,8 +3,9 @@
 // read: its environment holds secrets, and its name is outside text (a process can write a prompt there), so a name is
 // matched against the tables and dropped, never kept, logged or sent.
 
+import { execFile } from 'node:child_process'
 import { homedir } from 'node:os'
-import { listProcesses, run } from '../../lib/sessionSearch/externals/support.js'
+import { run } from '../../lib/sessionSearch/externals/support.js'
 import type { RunningProcess } from '../../lib/sessionSearch/externals/types.js'
 import { frontAppId } from './frontApp.js'
 import { APP_IDS, UNKNOWN_APP } from './hostDetect.js'
@@ -15,6 +16,10 @@ export type ProcessName = Pick<RunningProcess, 'pid' | 'ppid' | 'executable'>
 export const WALK_PARENTS = 16
 export const BUNDLES_A_PASS = 16
 export const BUNDLE_ID_TIMEOUT_MS = 1_000
+// The daemon's own table read has the same bounds; this one took 42 ms for 862 processes on an M1 Pro, and 1 MiB holds
+// that many rows at the longest name macOS prints (MAXPATHLEN).
+export const PS_TIMEOUT_MS = 3_000
+export const PS_MAX_BYTES = 1024 * 1024
 const MAX_PATH = 1024
 const BUNDLE_ID = /^[A-Za-z0-9.-]{1,128}$/
 const CONTROL = /[\u0000-\u001f\u007f]/
@@ -42,6 +47,32 @@ export async function readBundleId(bundle: string, exec: typeof run = run): Prom
     BUNDLE_ID_TIMEOUT_MS).catch(() => null)
   const id = out?.trim()
   return id && BUNDLE_ID.test(id) ? id : undefined
+}
+
+/** A command's whole output; null when it failed, ran past `timeout` or printed past `maxBuffer`. */
+export type Exec = (command: string, args: readonly string[], options: { timeout: number; maxBuffer: number }) => Promise<string | null>
+
+const execText: Exec = (command, args, options) => new Promise((resolve) => {
+  execFile(command, [...args], options, (error, stdout) => resolve(error ? null : stdout))
+})
+
+/** `ps -axo pid=,ppid=,comm=` rows; a line that is no row is passed over. */
+export function parseProcessNames(stdout: string): ProcessName[] {
+  const rows: ProcessName[] = []
+  for (const line of stdout.split('\n')) {
+    const row = /^\s*(\d+)\s+(\d+)\s+(\S.*?)\s*$/.exec(line)
+    if (row) rows.push({ pid: Number(row[1]), ppid: Number(row[2]), executable: row[3] })
+  }
+  return rows
+}
+
+/** Each process's pid, parent and name, `comm` last: before another column macOS cuts it to 16 characters (`-ww` does
+ *  not help), which leaves no `.app` in an app's path. On Linux it is the task's name either way. */
+export async function readProcessNames(exec: Exec = execText): Promise<ProcessName[]> {
+  const rows = parseProcessNames(await exec('ps', ['-axo', 'pid=,ppid=,comm='], { timeout: PS_TIMEOUT_MS, maxBuffer: PS_MAX_BYTES }) ?? '')
+  // `ps` lists itself at the least: no row is a read that failed. The error names nothing it printed: a name is outside text.
+  if (!rows.length) throw new Error('process table not read')
+  return rows
 }
 
 export interface ScannedAppDeps {
@@ -95,6 +126,8 @@ function walk(pid: number, table: ReadonlyMap<number, ProcessName>): string[] {
 }
 
 /** The app each of these processes runs in, read from this machine. */
-export function learnApps(pids: readonly number[]): Promise<Map<number, string>> {
-  return scannedApps(pids, { platform: process.platform, roots: appRoots(homedir()), processes: listProcesses, bundleId: readBundleId })
+export function learnApps(pids: readonly number[], exec: Exec = execText): Promise<Map<number, string>> {
+  return scannedApps(pids, {
+    platform: process.platform, roots: appRoots(homedir()), processes: () => readProcessNames(exec), bundleId: readBundleId,
+  })
 }
