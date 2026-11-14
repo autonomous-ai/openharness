@@ -718,8 +718,8 @@ The links' target is the design document, which lands in the same pull request a
 
 On the final head, after the review. Checks 1 to 3 and 4b use nothing of Diego's: not his daemon (port 18473), his
 agents, `~/.harness`, `~/.claude`, `~/.codex`, his tmux server or an account. Check 4a touches two things of his, each
-as he and the PM answered (2026-11-14): his daemon is stopped with `harness stop` and started again with
-`harness start`, its environment and settings never changed; and his pet folder is read once, to be copied. Nothing
+as he and the PM answered (2026-11-14): his daemon is stopped with `harness stop` and started again by Diego
+opening the desktop app (step 4), its environment and settings never changed; and his pet folder is read once, to be copied. Nothing
 runs against production.
 
 **How check 4 is isolated** (the repo's guide: `docs/development.md` "Isolated end-to-end testing", `cli/AGENTS.md`
@@ -731,7 +731,7 @@ alone. The root is removed when the run ends, the copied pets with it. The 16 ag
 outside a pane, each on a pseudo-terminal of its own, listed through their own hooks as `ring-01` to `ring-16`. The
 dial attaches because the daemon is started with `HARNESSD_TEST_DIAL_PORT=<the dial's port>`: that path is then the
 only port it looks at. The script sets that variable, and every other of the isolated daemon's, in the daemon's own
-process only: the tester's shell, where `harness stop` and `harness start` run, never has them.
+process only: the tester's shell, where `harness stop` runs, never has them.
 
 1. **The specs and the typecheck.** This Mac, a minute or two.
 
@@ -806,7 +806,7 @@ process only: the tester's shell, where `harness stop` and `harness start` run, 
       - `ai.autonomous.harness.device` or `/Harness Device.app/`: **the Harness Device app runs.** With the desktop
         app quit it starts the daemon again within about a minute of a stop, and the dial would go back to Diego's
         daemon between the two runs. Say so by name.
-      - The `env` line must print nothing: `harness stop` and `harness start` then reach his daemon exactly as his
+      - The `env` line must print nothing: `harness stop` then reaches his daemon exactly as his
         own shell would. If it prints a line, stop and report.
       - No pet folder: leave the script's last argument out. His daemon keeps none either.
 
@@ -847,13 +847,18 @@ process only: the tester's shell, where `harness stop` and `harness start` run, 
 
       ```bash
       ls "<the root the script printed>"     # No such file or directory: the root went, the copied pets with it
-      harness start                          # only if step 2 stopped it; nothing set on the line
-      harness status                         # running
       git -C "$W" worktree remove --force "$S/base"
       ```
 
-      A root still there (the script was killed) is removed by hand: it is the tester's own, under `/tmp`. Tell the
-      orchestrator his daemon is back, so Diego opens his apps again. To see on the dial: his own agents.
+      A root still there (the script was killed) is removed by hand: it is the tester's own, under `/tmp`.
+
+      **His daemon is started again by Diego, never from the tester's shell by default.** A daemon started from a
+      terminal inside Orca inherits every `ORCA_*` variable of that terminal, secrets included; the fix ships with
+      #4296 and only in an installed CLI that carries it (PM, 2026-11-14). So the tester tells the orchestrator the
+      dial is free, and Diego opens the Harness desktop app, which starts his daemon itself. The tester may run
+      `harness start` (nothing set on the line) only if `harness version` first shows an installed CLI that carries
+      #4296's `ORCA_*` fix, and the PM agrees; then `harness status` must say running. To see on the dial: his own
+      agents.
 
    **To see on the dial, in the second run (this branch):**
    - 16 agents, `ring-01` to `ring-16`, each with "Ghostty" under its name.
