@@ -26,7 +26,8 @@ export const register = (on) =>
  * @param {Engine} $
  */
 async function link($) {
-  const found = await socketOf($)
+  // A call the engine refuses ($.env.get, say) is tried again later, not the end of the voice for the session.
+  const found = await socketOf($).catch(() => ({ wait: RETRY_MS }))
   if ('socketPath' in found) $.clock.after(0, () => void poll($, found.socketPath))
   else $.clock.after(found.wait, () => void link($))
 }
@@ -64,7 +65,7 @@ async function socketOf($) {
  * @param {string} socketPath
  */
 async function poll($, socketPath) {
-  const wait = await pollOnce($, socketPath)
+  const wait = await pollOnce($, socketPath).catch(() => RETRY_MS)
   $.clock.after(wait, () => void poll($, socketPath))
 }
 
