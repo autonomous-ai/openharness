@@ -1,5 +1,5 @@
 import { spawnSync } from 'child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { fileURLToPath } from 'url'
@@ -52,13 +52,23 @@ describe('the harness-device plugin', () => {
     expect(json(pluginRoot, '.claude-plugin', 'plugin.json').name).toBe('harness-device')
   })
 
-  it('hooks.json holds one PermissionRequest command hook for every tool, at ${CLAUDE_PLUGIN_ROOT}/hooks/approve, with a 330 s timeout', () => {
+  it('hooks.json holds one PermissionRequest command hook for every tool, at "${CLAUDE_PLUGIN_ROOT}/hooks/approve", with a 330 s timeout', () => {
     const { hooks } = json(pluginRoot, 'hooks', 'hooks.json') as { hooks: Record<string, unknown> }
     expect(hooks).toEqual({
       PermissionRequest: [
-        { matcher: '*', hooks: [{ type: 'command', command: '${CLAUDE_PLUGIN_ROOT}/hooks/approve', timeout: 330 }] },
+        { matcher: '*', hooks: [{ type: 'command', command: '"${CLAUDE_PLUGIN_ROOT}/hooks/approve"', timeout: 330 }] },
       ],
     })
+  })
+
+  // Claude Code puts the plugin's folder in place of ${CLAUDE_PLUGIN_ROOT} and runs the command through a shell.
+  it('the hook command runs from a plugin folder with a space in its name', () => {
+    const root = join(tempDir(), 'Harness Device')
+    cpSync(pluginRoot, root, { recursive: true })
+    const { hooks } = json(root, 'hooks', 'hooks.json') as { hooks: { PermissionRequest: { hooks: { command: string }[] }[] } }
+    const command = hooks.PermissionRequest[0].hooks[0].command.replaceAll('${CLAUDE_PLUGIN_ROOT}', root)
+    const result = spawnSync('/bin/sh', ['-c', command], { input: INPUT, env: { HOME: tempDir(), PATH: '/usr/bin:/bin' }, encoding: 'utf8' })
+    expect(result).toMatchObject({ status: 0, stdout: '', stderr: '' })
   })
 
   it('hooks.json loads the voice mod, hooks/device.js', () => {
