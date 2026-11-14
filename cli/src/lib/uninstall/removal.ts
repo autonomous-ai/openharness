@@ -24,8 +24,6 @@ import { removeLink } from '../removePath.js'
 import { runPowershell, type PowershellRun } from '../windows/powershell.js'
 import { UNINSTALL_MARKER } from './marker.js'
 
-export { UNINSTALL_MARKER }
-
 export interface RootEntry { name: string; dir: boolean; link?: true }
 export interface RemovalTarget { path: string; dir: boolean; link?: true }
 export interface RemovalPlan { root: string; remove: RemovalTarget[]; kept: string[]; removeRoot: boolean }
