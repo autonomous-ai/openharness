@@ -1470,6 +1470,9 @@ export interface DevicesPort extends DeviceHookPort {
   /** A paneless agent's hook event, checked by the core and kept nowhere in it; false when the devices did not take it
    *  (not connected), so the core counts it lost. */
   observed(event: ObservedEvent): boolean
+  /** The app in front, one of the ids the core let through (core/dialFront.ts) and kept nowhere there; false when the
+   *  devices did not take it (not connected). */
+  front(app: string): boolean
   /** Let go of the serial ports and the lane, for a restart or a shutdown. */
   stop(): Promise<void>
 }
@@ -1487,6 +1490,7 @@ export const DEVICES_FALLBACKS: PortFallbacks<DevicesPort> = {
   routeTask: later({ agentId: '', machineId: '', name: '', confidence: 0, reason: DEVICES_UNAVAILABLE, candidates: [], weighed: 0, machines: 0, via: '' }),
   routeSend: later({ ok: false, machine: '', reason: DEVICES_UNAVAILABLE }),
   stepFocus: later('no_agents'), scroll: undefined, engines: undefined, commanders: undefined, observed: false,
+  front: false,
   // Off, not an empty hold: the mod asks again in a minute, not at once.
   inboxPoll: later({ off: true }), inboxGone: undefined,
   stop: later(undefined),

@@ -695,6 +695,12 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       })
       return true
     },
+    // The app in front, which the dial with no window follows once it settles (cable/hosts/appFilter.ts): held in memory
+    // there, and named to nobody but the dial.
+    front: (app) => {
+      part.call('dial', () => cableHost.front(app))
+      return true
+    },
     // Every card bound for the Wi-Fi devices goes down the cable too, translated once: a new kind of card
     // reaches the dial the day it reaches the backend's devices.
     card: (frame) => part.call('dial', () => toCable(frame)),

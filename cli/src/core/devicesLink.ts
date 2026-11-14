@@ -89,6 +89,7 @@ export function createDevicesLink(deps: DevicesLinkDeps) {
     engines: (engines) => event('engines', { engines }),
     commanders: (connected) => event('commanders', { connected }),
     observed: (observed) => event('observed', { ...observed }),
+    front: (app) => event('front', { app }),
     // The mod's poll, checked and bounded by the core (core/deviceHookCalls.ts). A client that goes first is told, since a
     // request cannot be taken back: the devices end what they hold for it. Off is their inbox failing in their process:
     // no device, never an empty hold.
