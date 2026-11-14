@@ -6212,6 +6212,25 @@ describe('what the dial cannot do for an agent', () => {
       } finally { await session.stop() }
     })
 
+  it("another app's refusal is shown in its words, and the log says only which app refused", async () => {
+    const lines: string[] = []
+    const sendTurn = vi.fn(async (id: string): Promise<SendOutcome> =>
+      ({ ok: false, message: `${id === 'a1' ? 'secret-folder' : 'Device firmware voice'} is busy. Say it when it is done.` }))
+    const { session, port } = await greeted(caps({ capsOf: (id) => ({ ...CAPS, a1: 'svf' })[id], sendTurn, log: (line) => { lines.push(line) } }))
+    try {
+      speak(port, 'a1', 'u1')
+      port.say({ t: 'voice.end', uploadId: 'u1' })
+      await vi.waitFor(() => expect(port.sent).toContainEqual({ t: 'voice.error', uploadId: 'u1',
+        message: 'secret-folder is busy. Say it when it is done.' }))
+      expect(lines).toContain('cable: voice → error (refused in Orca)')
+      expect(lines.filter((line) => line.includes('secret-folder'))).toEqual([])
+      // A Harness agent's refusal is logged in the words the dial shows, as before.
+      speak(port, 'a2', 'u2')
+      port.say({ t: 'voice.end', uploadId: 'u2' })
+      await vi.waitFor(() => expect(lines).toContain('cable: voice → error "Device firmware voice is busy. Say it when it is done."'))
+    } finally { await session.stop() }
+  })
+
   it('voice waits for an async sendTurn, and shows its message when it refuses', async () => {
     let outcome!: (o: SendOutcome) => void
     const sendTurn = vi.fn((): Promise<SendOutcome> => new Promise((resolve) => { outcome = resolve }))
