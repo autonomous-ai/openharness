@@ -1712,6 +1712,15 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     await vi.waitFor(() => expect(calls('turnStarted').slice(12).map(([id]) => id).sort()).toEqual([...listed].sort()))
   })
 
+  it('with the Swarm service down, the machine list holds no Harness agent back for cards that cannot come', async () => {
+    const superTabRequest = vi.fn(async () => ({ error: 'SERVICE_UNAVAILABLE' }))
+    const { port } = start({ core: { ...harnessAgent(), superTabRequest } as CoreApi, faults: ['fleet'] })
+    host().swarmCardsWanted(true)
+    expect(superTabRequest).toHaveBeenCalledWith(expect.objectContaining({ action: 'cardsWanted', on: true }))
+    // Not after the 10 s the cards are waited for: at once.
+    await vi.waitFor(async () => expect((await machineList(port)).agents.map((a) => a.id)).toEqual(['h1']))
+  })
+
   it('with a window open, an observed agent tells the dial nothing: no turn, answer or reminder', async () => {
     vi.useFakeTimers()
     readers.answer.mockResolvedValue('Shipped the fix.')
