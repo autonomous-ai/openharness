@@ -2,6 +2,8 @@
 // link, what the core tells them reaching the devices' port, and what the core asks answered from it.
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { CoreApi, CorePorts, DevicesPort, ServiceRequests } from '../core/api.js'
+import { createDeviceHookCalls } from '../core/deviceHookCalls.js'
+import { createDevicesLink } from '../core/devicesLink.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { DevicesDeps } from './devices.js'
 import { runDevicesService } from './devicesProcess.js'
@@ -474,5 +476,43 @@ describe('what the core asks of the devices', () => {
     // Their inbox failed: said as such, so the core answers no device.
     f.port.inboxPoll.mockResolvedValueOnce({ off: true })
     expect(await requests.inboxPoll({ pollId: 'p3', sessionId: 's1' }, asker)).toEqual({ off: true })
+  })
+
+  // A command the dial cannot show whole (deviceClaude/approve.ts) has no Allow/Deny card: dropped here, it got one.
+  it('is a terminal-only approval, handed to the port as terminal-only', async () => {
+    const f = setup()
+    const asker = { local: true, owner: true }
+    const { requests } = f.options()
+    const request = { id: 'r1', sessionId: 's1', tool: 'Bash', summary: '' }
+    await requests.approval({ ...request, terminalOnly: true }, asker)
+    expect(f.port.approval).toHaveBeenLastCalledWith({ ...request, terminalOnly: true })
+    await requests.approval({ ...request, terminalOnly: false }, asker)
+    expect(f.port.approval).toHaveBeenLastCalledWith({ ...request, terminalOnly: false })
+    await requests.approval({ ...request, terminalOnly: 'yes' }, asker)
+    expect(f.port.approval).toHaveBeenLastCalledWith(request)
+  })
+
+  // The core's checked call (core/deviceHookCalls.ts) on the link as the core sends it (core/devicesLink.ts), to the port.
+  it('is a hook\'s approval from the core\'s route to the devices\' port, terminal-only kept, and its client going told', async () => {
+    const f = setup()
+    const asker = { local: true, owner: true }
+    const link = createDevicesLink({
+      core: {} as CoreApi,
+      notify: (frame) => { f.event(frame.payload ?? {}); return true },
+      call: async (type, payload) => f.options().requests[type](payload, asker),
+      state: () => ({ desk: [], foreground: true, swarms: null, unread: [], focus: { voice: null, form: null }, engines: [], commanders: false, asking: [] }),
+    })
+    let n = 0
+    const calls = createDeviceHookCalls({ ready: () => true, devices: () => link.port, newId: () => `r${++n}` })
+    const request = { sessionId: 's1', tool: 'Bash', summary: '', terminalOnly: true }
+    expect(await calls.onApproval(request, new AbortController().signal)).toBe('allow')
+    expect(f.port.approval).toHaveBeenLastCalledWith({ id: 'r1', ...request })
+
+    f.port.approval.mockImplementationOnce(() => new Promise<'allow'>(() => {}))
+    const client = new AbortController()
+    const left = calls.onApproval(request, client.signal)
+    client.abort()
+    expect(await left).toBe('none')
+    expect(f.calls).toEqual([['approvalGone', ['r2']]])
   })
 })
