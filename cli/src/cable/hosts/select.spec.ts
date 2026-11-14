@@ -73,6 +73,20 @@ describe('DialRing', () => {
     expect(next.total).toBe(17)
   })
 
+  it('a full ring: an agent with no known activity counts from when it entered, not as idle the longest', () => {
+    let now = 100
+    const ring = new DialRing(() => now)
+    const observed = agent('o', { host: 'observed', lastActivityAt: 50 })
+    const busy = row(14).map(working)
+    ring.select([observed, ...busy])
+    now = 200
+    // A Harness agent whose activity nobody has reported yet: 0 says nothing about how long it has rested.
+    const harness = agent('h', { host: 'harness' })
+    ring.select([observed, ...busy, harness])
+    now = 300
+    expect(ids(ring.select([observed, ...busy, harness, agent('n', { lastActivityAt: 250 })]).rows)).toEqual([...ids(busy), 'h', 'n'])
+  })
+
   it('a full ring: an agent seen before stays outside until it needs the person', () => {
     const ring = new DialRing()
     const list = row(17)
