@@ -27,7 +27,7 @@ export const register = (on) =>
 async function link($) {
   const socketPath = await socketOf($)
   if (socketPath === undefined) $.clock.after(RETRY_MS, () => void link($))
-  else void poll($, socketPath)
+  else $.clock.after(0, () => void poll($, socketPath))
 }
 
 /**
@@ -56,15 +56,14 @@ async function socketOf($) {
 }
 
 /**
- * Polls until an answer asks to wait, then polls again from a timer.
+ * One poll, and the next from a timer, even one due at once: a reload cancels the module's timers, so no poll of the old
+ * copy goes on beside the new one's.
  * @param {Engine} $
  * @param {string} socketPath
  */
 async function poll($, socketPath) {
-  for (;;) {
-    const wait = await pollOnce($, socketPath)
-    if (wait > 0) return void $.clock.after(wait, () => void poll($, socketPath))
-  }
+  const wait = await pollOnce($, socketPath)
+  $.clock.after(wait, () => void poll($, socketPath))
 }
 
 /**
