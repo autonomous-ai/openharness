@@ -118,7 +118,7 @@ New subcommand in `cli/src/devices/client.ts`, dispatched from `cli/src/cli.ts` 
   **4** = the daemon is older than `dial-watch`; **0** = stdin closed (below); **1** = anything else. The app uses
   this command as its probe of the daemon.
 - Opens the local socket and sends `machine_select { machineId, localProtocolVersion: 1, tool: true, watch: ["dial"] }`.
-- On `connected`: if `features` lacks `dial-watch` (an older daemon) → `{"error":"…update…"}` and **exits 4**.
+- On `connected`: if `features` lacks `dial-watch` (an older daemon) → `{"error":"…Run: harness start --restart"}` and **exits 4**. Before `connected`, a 10 s deadline ends the run with exit 3; every exit 3 writes one line to stderr saying what to do.
 - On each `dial_status` frame: reduces it to `{ attached, fw, hw, board, updating, problem }` (the primary flat
   fields; absent fields omitted) and prints one NDJSON line **only when it differs from the last line printed**.
   The first frame (the daemon sends the last status right after `connected`) always prints.
