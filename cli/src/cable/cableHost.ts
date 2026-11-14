@@ -40,7 +40,7 @@ import { isTier, type Tier } from '../lib/notifyTier.js'
 import { HarnessSource } from './hosts/harness.js'
 import { hostDisplayName } from './hosts/hostDetect.js'
 import type { HostEntry, HostRegistry } from './hosts/registry.js'
-import { selectForDial } from './hosts/select.js'
+import { DialRing } from './hosts/select.js'
 import { capsLetters, type HostAgent } from './hosts/types.js'
 
 /** One completed turn's recap, as the mirror keeps them. */
@@ -500,6 +500,9 @@ export class DaemonCableHost implements CableHost {
 
   /** Every agent on this computer, by source; null when the devices have none. Read only with no window. */
   private registry: HostRegistry | null = null
+  /** The machine list's ring: one for this host, so every dial here swipes through the same agents in the same order.
+   *  In memory only: a restart of the devices process builds it again from the registry. */
+  private readonly ring = new DialRing()
 
   /** Its changes reach the dial on the session's next tick, which reads the list every second. */
   setRegistry(registry: HostRegistry | null): void {
@@ -589,7 +592,8 @@ export class DaemonCableHost implements CableHost {
    *
    * Four answers, and each is a state the dial draws:
    *   - no window, and the devices have a registry → this computer's agents (Harness and any other app or
-   *                                          terminal), at most ten, the ones that need the person first, with
+   *                                          terminal) in a fixed ring of at most sixteen (hosts/select.ts): an
+   *                                          agent keeps its place whatever its state does, with
    *                                          `host`, `caps` and `view: 'machine'`; `total` is every agent here.
    *   - no window and no registry          → `[]`; the dial shows "Run OpenHarness on your computer".
    *   - a window with an empty tab         → `[]`; the dial shows "Nothing on this tab".
@@ -624,7 +628,7 @@ export class DaemonCableHost implements CableHost {
     return { agents: out, tab, total: this.viaFleet((r) => r.agentTotal()) }
   }
 
-  /** The machine list: the registry's agents, bounded by the selection (the 78-agent reconnect above is not repeated). */
+  /** The machine list: the registry's agents, bounded by the ring (the 78-agent reconnect above is not repeated). */
   private async machineSnapshot(registry: HostRegistry, flat: CableAgent[], byId: Map<string, CableAgent>): Promise<{ agents: CableAgent[]; tab: string; total: number; view: 'machine' }> {
     const local = this.localMachine()
     // The engine session bound to each agent, so one that moved into a Harness pane is not listed again as observed.
@@ -634,7 +638,7 @@ export class DaemonCableHost implements CableHost {
     // Read once: each read merges every source's whole list.
     const entries = registry.entries()
     const sourceOf = new Map(entries.map((e) => [e.agent, e.source]))
-    const { rows, total } = selectForDial(entries.map((e) => e.agent))
+    const { rows, total } = this.ring.select(entries.map((e) => e.agent))
     const agents = rows.map((a): CableAgent => {
       // A Harness agent keeps the row the window would show (its chips too); another app's is drawn from what was heard.
       const row = byId.get(a.id) ?? { id: a.id, name: a.name, engine: a.engine, machineId: local.id, machine: local.name }
