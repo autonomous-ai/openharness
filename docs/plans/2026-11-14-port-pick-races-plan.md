@@ -220,7 +220,7 @@ describe.skipIf(process.platform === 'win32')('an engine started on a port it pi
     expect(processExists(seen.pid)).toBe(false)
   })
 
-  it("empties a model's log at each start, so the port read is this run's", async () => {
+  it("makes a model's log new at each start, so the port read is this run's", async () => {
     const engine = fake('ollama'), mine = ollama(engine.binary)
     await ops.stop(record(mine, await ops.start(mine, 65536, logs)))
     const again = await ops.start(mine, 65536, logs)
