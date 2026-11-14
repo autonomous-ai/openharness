@@ -261,6 +261,19 @@ describe('ObservedSource removal', () => {
     expect(src.list()).toHaveLength(50)
   })
 
+  it('a session first heard of while the process table is read is not judged by that table', async () => {
+    const { src, procs, ev } = setup()
+    src.ingest(ev('session-start'))
+    let read!: (rows: { pid: number; generation?: string }[]) => void
+    procs.mockImplementationOnce(() => new Promise((resolve) => { read = resolve }))
+    const ticking = src.tick()
+    // Its process started after the read began, so the table cannot hold it.
+    src.ingest(ev('session-start', { sessionId: 's2', callerPid: 5000 }))
+    read([{ pid: 100, generation: 'g100' }])
+    await ticking
+    expect(src.list().map((a) => a.sessionId)).toEqual(['s1', 's2'])
+  })
+
   it('with no process table to read (Windows here), a session goes once its process is not alive', async () => {
     const { src, procs, alive, ev } = setup()
     procs.mockResolvedValue([])
