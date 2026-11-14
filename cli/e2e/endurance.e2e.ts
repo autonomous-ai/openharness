@@ -314,7 +314,7 @@ describe.skipIf(!ON)('the daemon over time, every service in its own process', (
     d.env.HARNESSD_TEST_DIAL_PORT = file
     desk = new Desk(file)
     onTestFailed(() => {
-      writeFileSync(join(OUT, `daemon-${d.port}.log`), d.log())
+      writeFileSync(join(OUT, `daemon-${d.configuredPort}.log`), d.log())
       console.log(`---- daemon log (whole log in ${OUT})\n${d.log().split('\n').slice(-120).join('\n')}`)
     })
     await d.start()

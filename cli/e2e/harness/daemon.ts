@@ -246,7 +246,8 @@ export class IsolatedDaemon {
   private constructor(
     readonly root: string,
     readonly tmux: IsolatedTmux,
-    readonly port: number,
+    /** What `PORT` is set to: it names the daemon's socket (`daemon-<n>.sock`), its record and its artifacts. */
+    readonly configuredPort: number,
     readonly env: NodeJS.ProcessEnv,
     readonly options: DaemonOptions,
     /** What the fake engines' wrappers hand `fakeEngine.mjs` (updates.e2e.ts writes releases with it). */
@@ -386,7 +387,9 @@ export class IsolatedDaemon {
 
   get dataDir(): string { return this.env.ADAPTER_DATA_DIR! }
   get computerId(): string { return this.env.ADAPTER_COMPUTER_ID! }
-  get socketPath(): string { return join(this.dataDir, `daemon-${this.port}.sock`) }
+  get socketPath(): string { return join(this.dataDir, `daemon-${this.configuredPort}.sock`) }
+  /** The port its control server answers on. */
+  get port(): number { return this.configuredPort }
   get projectsDir(): string { return join(this.root, 'projects') }
   /** The process `harness start` would have started: the master, or a core run on its own. */
   get pid(): number | null { return this.child?.pid ?? null }
@@ -431,7 +434,7 @@ export class IsolatedDaemon {
       child.once('exit', () => leaderGone(child.pid!))
     }
     // The whole log, as files, for a failing test's CI artifacts (E2E_ARTIFACTS_DIR, artifacts.ts).
-    const logName = `daemon-${this.port}.log`
+    const logName = `daemon-${this.configuredPort}.log`
     artifactLog(logName, `---- ${new Date().toISOString()} start (pid ${child.pid}, ${script.at(-1)} ${entry.join(' ')}, data ${this.dataDir})\n`)
     const take = (chunk: Buffer) => {
       const text = chunk.toString('utf8')
@@ -549,7 +552,7 @@ export class IsolatedDaemon {
         const screen = await this.tmux.run('capture-pane', '-p', '-J', '-S', '-200', '-t', line.split('\t')[0]).catch((error) => String(error))
         text += `==== ${line}\n${screen}\n`
       }
-      artifactLog(`daemon-${this.port}-panes.txt`, text)
+      artifactLog(`daemon-${this.configuredPort}-panes.txt`, text)
     } catch { /* no server any more: nothing on screen to keep */ }
   }
 
@@ -562,7 +565,7 @@ export class IsolatedDaemon {
     try { this.assertHooksStayedInside() } catch (error) { escaped = error }
     // A failed test prints it after this close has removed the root.
     this.closedHookLog = this.hookLog()
-    artifactLog(`daemon-${this.port}-engine-hooks.log`, this.closedHookLog)
+    artifactLog(`daemon-${this.configuredPort}-engine-hooks.log`, this.closedHookLog)
     // A core or service whose master died during the test must not outlive it: 20 such cores, left by a
     // run whose masters crashed, spun on their closed output pipes for the rest of a parallel suite. They
     // are in their master's process group, every start's.

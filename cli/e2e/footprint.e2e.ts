@@ -179,8 +179,10 @@ describe.runIf(process.env.FOOTPRINT === '1')('the daemon\'s memory at idle', ()
         if (at - probedAt >= probeEvery) {
           probedAt = at
           for (const path of Object.keys(probes)) {
+            // The harness finds the port in the daemon's output; the clock must not count that.
+            const port = d.port
             const sent = performance.now()
-            const answer = await fetch(`http://127.0.0.1:${d.port}${path}`, { headers: d.localHeaders({ 'x-adapter-local': '1' }) })
+            const answer = await fetch(`http://127.0.0.1:${port}${path}`, { headers: d.localHeaders({ 'x-adapter-local': '1' }) })
             await answer.arrayBuffer()
             if (answer.ok) probes[path]!.push(performance.now() - sent)
           }
