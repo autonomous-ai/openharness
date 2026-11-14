@@ -84,6 +84,7 @@ static struct {
     int app_count;
     char app_shown[CABLE_APP_ID_MAX];
     bool apps_known;
+    char app_landing[CABLE_APP_ID_MAX];
     uint8_t status_phase;
     unsigned bell_unread;
     uint32_t notice_ms;
@@ -123,7 +124,9 @@ static ht_workspace_t workspace;
 static ht_tab_carousel_t tab_carousel;
 static ht_tab_carousel_t pane_carousel;
 static ht_tab_carousel_t inbox_carousel;
-static int tab_switches;
+static ht_tab_carousel_t app_carousel;
+static int tab_switches, app_picks;
+static char app_target[CABLE_APP_ID_MAX];
 static char tab_target[64];
 static action_t tab_queued;
 static int draft_actions, reviews;
@@ -210,6 +213,7 @@ static bool queue(action_t a) {
     if (a.kind==A_ANSWER) question_sends++;
     if (a.kind==A_TAB) { tab_switches++; COPY(tab_target,a.id); tab_queued=a; }
     if (a.kind==A_TAB_REFRESH) tab_queued=a;
+    if (a.kind==A_APP) { app_picks++; COPY(app_target,a.id); }
     if (a.kind==A_NOTICE_READ) { notice_reads_sent++; notice_read_queued=a; }
     if (a.kind==A_DESKTOP) { desktop_opens++; COPY(opened_agent,a.id); }
     if (a.kind==A_STOP_YES) COPY(stopped_agent,a.id);
@@ -228,11 +232,11 @@ code += function('color')
 code += function('settings_item') + function('settings_count') + function('hit_contains')
 code += function('find')
 code += 'static void notice_expire(uint32_t now);\n'
-for name in ['copy', 'recap_preview', 'notice_unread', 'notice_was_read', 'notice_forget_read', 'notice_flush_reads', 'notice_mark_read', 'habitat_scene_receipt', 'habitat_scene_presented', 'pane_memory', 'pane_memory_apply', 'dismiss_result', 'activity_text', 'host_name', 'face_app', 'agent_allows', 'ensure', 'input_cancel', 'view', 'notice_open', 'workspace_index', 'face_id', 'tab_id_at', 'tabs_open', 'workspace_failed', 'tab_request', 'tabs_sync', 'ui_scroll_reportable', 'focus_face_for', 'focus_chord', 'focus_put', 'focus_span', 'focus_take', 'focus_rows', 'ui_rows', 'ui_can_display', 'ui_wrap', 'text_in', 'control', 'home_footer', 'footer_control', 'text', 'center', 'render_brand', 'heading', 'question_view', 'question_rows', 'question_move', 'question_text', 'render_question', 'render_choices', 'render_answer_review', 'question_answer', 'send_answer', 'make_action', 'character_mood', 'voice_status', 'status_animated', 'status_speed', 'status_wake_ms', 'surface_tick', 'render_workspace_preview', 'question_prompt', 'focus_bell', 'render_home', 'render_voice', 'render_selection', 'render_form', 'draft_move', 'render_draft', 'render_draft_options', 'ui_swarms_replace', 'ui_workspace_applied', 'ui_land_after_reload']:
+for name in ['copy', 'recap_preview', 'notice_unread', 'notice_was_read', 'notice_forget_read', 'notice_flush_reads', 'notice_mark_read', 'habitat_scene_receipt', 'habitat_scene_presented', 'pane_memory', 'pane_memory_apply', 'dismiss_result', 'activity_text', 'host_name', 'face_app', 'agent_allows', 'ensure', 'input_cancel', 'view', 'notice_open', 'workspace_index', 'face_id', 'tab_id_at', 'tabs_open', 'app_index', 'apps_open', 'hold_picks_app', 'hold_open', 'app_pick', 'workspace_failed', 'tab_request', 'tabs_sync', 'ui_scroll_reportable', 'focus_face_for', 'focus_chord', 'focus_put', 'focus_span', 'focus_take', 'focus_rows', 'ui_rows', 'ui_can_display', 'ui_wrap', 'text_in', 'control', 'home_footer', 'footer_control', 'text', 'center', 'render_brand', 'heading', 'question_view', 'question_rows', 'question_move', 'question_text', 'render_question', 'render_choices', 'render_answer_review', 'question_answer', 'send_answer', 'make_action', 'character_mood', 'voice_status', 'status_animated', 'status_speed', 'status_wake_ms', 'surface_tick', 'render_workspace_preview', 'question_prompt', 'focus_bell', 'render_home', 'render_voice', 'render_selection', 'render_form', 'draft_move', 'render_draft', 'render_draft_options', 'ui_swarms_replace', 'ui_workspace_applied', 'ui_land_after_reload']:
     code += function(name)
 code += function('render_settings') + function('ui_visit_state')
 code += function('ui_project_known') + function('ui_focus_project') + function('ui_apply_pending_focus')
-code += function('focus_centred') + function('focus_header') + function('focus_clipped') + function('tabs_move') + function('tab_split') + function('tab_fade') + function('tab_neighbour') + function('focus_carousel') + function('tab_label') + function('render_focus_tabs') + function('pane_label') + function('render_agents') + function('render_tabs') + function('page_controls') + function('css_line') + function('inbox_line') + function('inbox_page') + function('render_focus_inbox') + function('render_list')
+code += function('focus_centred') + function('focus_header') + function('focus_clipped') + function('tabs_move') + function('tab_split') + function('tab_fade') + function('tab_neighbour') + function('focus_carousel') + function('tab_label') + function('render_focus_tabs') + function('app_label') + function('app_under') + function('render_apps') + function('pane_label') + function('render_agents') + function('render_tabs') + function('page_controls') + function('css_line') + function('inbox_line') + function('inbox_page') + function('render_focus_inbox') + function('render_list')
 for name in ['notice_remove', 'notice_sync_view', 'notice_selection', 'notice_restore_selection', 'notice_add', 'notice_expire', 'on_face', 'notice_read_now', 'ui_notify_summary', 'ui_turn_error', 'ui_notif_seen', 'ui_notif_read', 'ui_notif_replace', 'ui_notif_open', 'ui_question_close', 'ui_answer_receipt']:
     code += function(name)
 code += '#define ui_notify_task_done(a,b,c,d) ui_notify_summary(a,b,c,d,"alert",false,false)\n'
@@ -296,7 +300,7 @@ static void dispatch(action_t a) {
     else if (a.kind == A_RECAP_DISMISS) dismiss_result(a.id);
     else if (a.kind == A_DESKTOP) desktop_action(a);
     else if (a.kind == A_UP || a.kind == A_DOWN) page_action(a);
-    else if (a.kind == A_TABS || a.kind == A_TAB || a.kind == A_TAB_DONE) workspace_action(a);
+    else if (a.kind == A_TABS || a.kind == A_TAB || a.kind == A_TAB_DONE || a.kind == A_APP || a.kind == A_APP_DONE) workspace_action(a);
     else if (a.kind == A_SELECT_BEGIN) {
         view(SELECTION); ht_selection_open(&selection,"pick-test",active()->id,1800,select_emit,NULL);
     } else if (a.kind == A_SELECT_EXTEND) ht_selection_extend(&selection,3000);
@@ -315,7 +319,7 @@ static void scene_take(void) {
     else if (s.view == ANSWER_REVIEW) render_answer_review(&scene);
     else if (s.view == FORM) render_form(&scene);
     else if (s.view == VOICE) render_voice(&scene);
-    else if (s.view == TABS || s.view == INBOX || s.view == MACHINES) render_list(&scene);
+    else if (s.view == TABS || s.view == APPS || s.view == INBOX || s.view == MACHINES) render_list(&scene);
     else if (s.view == AGENTS) render_agents(&scene);
     else if (s.view == SELECTION) render_selection(&scene);
     else render_home(&scene);
@@ -325,7 +329,7 @@ static void scene_take(void) {
 static void reset(void) {
     host_features=31; fake_ms=0; fake_asleep=false; present_scene=true; fake_random=122;
     memset(&visit,0,sizeof visit); visit_sends=visit_wire=returns=0; question_pending=false;
-    memset(&tab_carousel,0,sizeof tab_carousel); memset(&pane_carousel,0,sizeof pane_carousel); memset(&inbox_carousel,0,sizeof inbox_carousel);
+    memset(&tab_carousel,0,sizeof tab_carousel); memset(&pane_carousel,0,sizeof pane_carousel); memset(&inbox_carousel,0,sizeof inbox_carousel); memset(&app_carousel,0,sizeof app_carousel); app_picks=0; app_target[0]=0;
     memset(&workspace,0,sizeof workspace); tab_switches=0; tab_target[0]=0;
     memset(&selection,0,sizeof(selection)); selections=0;
     memset(&carry,0,sizeof(carry)); carry_prepares=carry_drops=0; voice_context[0]=0;
@@ -1214,6 +1218,139 @@ static int rest_invitations(int n) {
     }
     return seen;
 }
+/*
+ * THE APPS PICKER (spec 2026-11-14-dial-app-filter, mockup dial-app-filter section 1): in the machine view, with the
+ * daemon naming the apps, a hold on the face opens APPS on the shown app, the TABS carousel; only Done or a tap on a
+ * page picks, and the picker follows the list by app id.
+ */
+static const cable_app_t picker_rows[3] = {{"ghostty", "Ghostty", 3, 0}, {"vscode", "VS Code", 2, 1}, {"orca", "Orca", 1, 0}};
+static void picker_setup(int n, const char *shown) {
+    reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); fake_ms = 1000;
+    ui_fleet_set_view(true); ui_apps_replace(picker_rows, n, shown); scene_take();
+}
+static void hold_at(int x, int y) {
+    fake_ms += 1000; habitat_touch(true, x, y, fake_ms); surface_tick(fake_ms + 700);
+    habitat_touch(false, x, y, fake_ms + 760); scene_take();
+}
+static void picker_swipe(int from, int to) {
+    fake_ms += 1000; habitat_touch(true, from, 233, fake_ms); habitat_touch(true, to, 233, fake_ms + 100);
+    habitat_touch(false, to, 233, fake_ms + 150); surface_tick(fake_ms + 600); scene_take();
+}
+// The run that says `text` in `font`, or NULL.
+static const ht_run_t *run_in(const char *text, const ht_font_t *font) {
+    for (int i = 0; i < scene.count; i++) if (!strcmp(scene.runs[i].text, text) && scene.runs[i].font == font) return &scene.runs[i];
+    return NULL;
+}
+// How many of `faces` fresh relaxing faces (Claude, a new name each) say `line` on the lower arc.
+static int hint_says(const char *line, int faces) {
+    int n = 0;
+    for (int i = 0; i < faces; i++) {
+        snprintf(s.agents[0].name, sizeof s.agents[0].name, "Agent %d", i); fake_ms += 977; scene_take();
+        for (int k = 0; k < scene.count; k++) n += scene.runs[k].arc == 2 && !strcmp(scene.runs[k].text, line);
+    }
+    return n;
+}
+static void app_picker_checks(const char *dir) {
+    // A hold in the machine view with apps opens APPS on the shown app, and sends nothing.
+    picker_setup(3, "vscode"); hold_at(233, 230);
+    assert(s.view == APPS && ht_tab_carousel_index(&app_carousel) == 1 && !app_picks);
+    {
+        // The header APPS (focus_header: a letter a run at y 62), the name in the tab page's green Inter 44, "2 agents" in
+        // grey Inter 25 under it and " · 1 waiting" in the accent beside it, Done at y 400.
+        const ht_run_t *name = run_in("VS Code", &ht_lv_inter_44.base), *count = run_in("2 agents", &ht_lv_inter_25.base),
+                       *wait = run_in(" \xc2\xb7 1 waiting", &ht_lv_inter_25.base);
+        assert(run_in("A", &ht_lv_inter_20.base) && run_in("A", &ht_lv_inter_20.base)->y == 62);
+        assert(name && name->fg == color(HT_THEME_VOICE) && name->y == 207 + (52 - ht_lv_inter_44.base.height) / 2);
+        assert(count && count->fg == DIM && wait && wait->fg == ACCENT && wait->y == count->y && wait->x > count->x);
+        assert(count->y > name->y + ht_lv_inter_44.base.height / 2 && count->y < 300);
+        int mid = (count->x + wait->x + ht_measure(&ht_lv_inter_25.base, wait->text)) / 2;
+        assert(abs(mid - 233) <= 1);   // the two runs are one line, centred
+        bool done = false;
+        for (int i = 0; i < scene.count; i++) done |= !strcmp(scene.runs[i].text, HT_DONE) && scene.runs[i].y == 400;
+        assert(done && action_enabled(A_APP_DONE));
+        // the run count holds while the finger drags the pages
+        int runs = scene.count;
+        for (int d = -200; d <= 200; d += 40) {
+            int keep = app_carousel.position; app_carousel.position = keep + d;
+            ht_scene_t dragged; ht_scene_clear(&dragged, BG); s.hit_count = 0; render_apps(&dragged);
+            assert(dragged.count == runs);
+            app_carousel.position = keep;
+        }
+        FOCUS_PAGE("apps-waiting");
+    }
+    // Ghostty: "3 agents" and no waiting run; the next page, VS Code, peeks in at the right in the neighbours' Inter 28.
+    picker_setup(3, "ghostty"); hold_at(233, 230);
+    assert(s.view == APPS && run_in("Ghostty", &ht_lv_inter_44.base) && run_in("3 agents", &ht_lv_inter_25.base) && !scene_says("waiting"));
+    assert(run_in("V", &ht_lv_inter_28.base) && run_in("V", &ht_lv_inter_28.base)->x > 233);
+    FOCUS_PAGE("apps");
+    // One agent: "1 agent".
+    picker_setup(3, "orca"); hold_at(233, 230); assert(run_in("1 agent", &ht_lv_inter_25.base));
+    // One app: one page, nothing peeks in.
+    picker_setup(1, "ghostty"); hold_at(233, 230);
+    assert(s.view == APPS && app_carousel.count == 1);
+    for (int i = 0; i < scene.count; i++) assert(scene.runs[i].font != &ht_lv_inter_28.base || !scene.runs[i].text[0]);
+    FOCUS_PAGE("apps-one");
+    // With a window the hold opens TABS; in the machine view without apps (an older daemon) too, which says No tabs yet.
+    picker_setup(3, "ghostty"); ui_fleet_set_view(false); hold_at(233, 230); assert(s.view == TABS);
+    reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); fake_ms = 1000; ui_fleet_set_view(true); scene_take();
+    hold_at(233, 230); assert(s.view == TABS && run_in("No tabs yet.", &ht_lv_inter_30.base));
+    // Apps known and none listed: the hold opens nothing, the face stays.
+    picker_setup(0, ""); hold_at(233, 230); assert(s.view == HOME && !scene_says("No tabs yet."));
+    // Browsing sends nothing; Done sends app.pick for the page in the middle and returns to the face.
+    picker_setup(3, "ghostty"); hold_at(233, 230);
+    picker_swipe(300, 200); assert(s.view == APPS && ht_tab_carousel_index(&app_carousel) == 1 && !app_picks);
+    fake_ms += 1000; tap(fake_ms, 233, 420);
+    assert(app_picks == 1 && !strcmp(app_target, "vscode") && s.view == HOME);
+    // A tap on a page sends app.pick for that page: the chosen one, or the neighbour peeking in.
+    picker_setup(3, "ghostty"); hold_at(233, 230);
+    fake_ms += 1000; tap(fake_ms, 415, 233); assert(app_picks == 1 && !strcmp(app_target, "vscode") && s.view == HOME);
+    picker_setup(3, "orca"); hold_at(233, 230);
+    fake_ms += 1000; tap(fake_ms, 233, 233); assert(app_picks == 1 && !strcmp(app_target, "orca") && s.view == HOME);
+    // Done on the shown app sends its pick and the face is as it was: the same agent, nothing waiting to land.
+    picker_setup(3, "vscode"); s.active = 1; scene_take(); hold_at(233, 230);
+    fake_ms += 1000; tap(fake_ms, 233, 420);
+    assert(app_picks == 1 && !strcmp(app_target, "vscode") && s.view == HOME && s.active == 1 && !s.app_landing[0]);
+    ui_land_after_reload(); assert(s.active == 1);
+    // After a pick the first agent of the new list is on the face: the host answers with apps, then the app's ring.
+    picker_setup(3, "ghostty"); s.active = 1; scene_take(); hold_at(233, 230);
+    picker_swipe(300, 200); fake_ms += 1000; tap(fake_ms, 233, 420); assert(app_picks == 1 && s.view == HOME);
+    ui_land_after_reload(); assert(s.active == 1);   // a ring of the old app before the answer lands nothing
+    ui_apps_replace(picker_rows, 3, "vscode");
+    { ui_project_set_name("c", "Agent C"); ui_project_set_name("d", "Agent D");
+      ui_project_remove("b"); ui_project_remove("a");
+      const char *order[2] = {"d", "c"}; ui_project_apply_order(order, 2); }
+    assert(!strcmp(active()->id, "c"));   // the reconcile alone would keep the old place
+    ui_land_after_reload(); assert(!strcmp(active()->id, "d") && s.view == HOME && !s.app_landing[0]);
+    ui_land_after_reload(); assert(!strcmp(active()->id, "d"));
+    // A push while open keeps the app by id: on VS Code, a new list puts Orca before it.
+    picker_setup(3, "vscode"); hold_at(233, 230);
+    { const cable_app_t moved[3] = {picker_rows[0], picker_rows[2], picker_rows[1]};
+      ui_apps_replace(moved, 3, "vscode"); scene_take();
+      assert(s.view == APPS && ht_tab_carousel_index(&app_carousel) == 2 && run_in("VS Code", &ht_lv_inter_44.base)); }
+    // The page of an app that went closes up: the next one takes its place.
+    { const cable_app_t gone[2] = {picker_rows[0], picker_rows[2]};
+      ui_apps_replace(gone, 2, "ghostty"); scene_take();
+      assert(s.view == APPS && app_carousel.count == 2 && run_in("Orca", &ht_lv_inter_44.base)); }
+    // A list that became empty closes the picker.
+    ui_apps_replace(picker_rows, 0, ""); assert(s.view == HOME);
+    // A window opening closes APPS; a dropped link (the apps forgotten) too.
+    picker_setup(3, "ghostty"); hold_at(233, 230); assert(s.view == APPS);
+    ui_fleet_set_view(false); assert(s.view == HOME);
+    picker_setup(3, "ghostty"); hold_at(233, 230); assert(s.view == APPS);
+    ui_apps_forget(); assert(s.view == HOME);
+    // The face's hint says what a hold does (the PM, 2026-11-15): "Hold for apps" where it opens APPS, "Hold for tabs"
+    // with a window and from a daemon that names no apps; as often as "Hold for tabs" was, and also on a face without voice.
+    for (int mode = 0; mode < 4; mode++) {
+        reset(); fake_ms = 1000; strcpy(s.agents[0].engine, "claude");
+        if (mode != 1) ui_fleet_set_view(true);
+        if (mode != 2) ui_apps_replace(picker_rows, 3, "ghostty");
+        if (mode == 3) ui_project_set_host_caps("a", "zellij", CABLE_CAP_S);
+        int apps = hint_says("Hold for apps", 120), tabs = hint_says("Hold for tabs", 120);
+        if (mode == 0 || mode == 3) assert(apps > 10 && !tabs);
+        else assert(tabs > 10 && !apps);
+    }
+    puts("APPS picker: a hold in the machine view opens it on the shown app, pages drawn as the mockup, picks only on Done or a tap, kept by app id; the hint says Hold for apps PASS");
+}
 int main(int argc, char **argv) {
     test_character = HT_CHARACTER_FOCUS;
     notification_read_checks(argc>1 ? argv[1] : NULL);
@@ -1865,6 +2002,7 @@ int main(int argc, char **argv) {
       const cable_app_t rows[1] = {{"terminal", "Other", 1, 0}};
       ui_apps_replace(rows, 1, "terminal"); scene_take(); assert(scene_says("Other") && !scene_says("Terminal"));
       tap(1000,233,220); assert(!starts && scene_says("See it in Terminal")); }
+    app_picker_checks(dir);
     // the resting face of an agent without V shows no voice invitation, on the plain face and the pet's relaxing one
     for (int pet = 0; pet < 2; pet++) {
         reset(); fake_ms = 1000; if (pet) strcpy(s.agents[0].engine, "claude");
@@ -2828,6 +2966,11 @@ int main(int argc, char **argv) {
                 const cable_app_t rows[2] = {{"ghostty", "Ghostty", 3, 0}, {"vscode", "VS Code", 2, 1}};
                 DESIGN_HOME(); fake_ms = 1200; ui_project_set_host_caps("a", "zellij", CABLE_CAP_S); ui_fleet_set_view(true);
                 ui_apps_replace(rows, 2, "ghostty"); scene_take(); DESIGN("machine-view-app");
+                // The APPS picker, as the mockup draws it: Ghostty with VS Code peeking in, VS Code with one waiting, one app.
+                const cable_app_t apps[3] = {{"ghostty", "Ghostty", 3, 0}, {"vscode", "VS Code", 2, 1}, {"orca", "Orca", 1, 0}};
+                ui_apps_replace(apps, 3, "ghostty"); hold_at(233, 230); DESIGN("apps");
+                dispatch((action_t){.kind = A_HOME}); ui_apps_replace(apps, 3, "vscode"); scene_take(); hold_at(233, 230); DESIGN("apps-waiting");
+                dispatch((action_t){.kind = A_HOME}); ui_apps_replace(apps, 1, "ghostty"); scene_take(); hold_at(233, 230); DESIGN("apps-one");
             }
             DESIGN_HOME(); fake_ms = 1200; ui_project_set_host_caps("a", "orca", CABLE_CAP_S); scene_take(); tap(1200, 233, 220); DESIGN("no-voice-hint");
             DESIGN_HOME(); fake_ms = 1200; ui_project_set_host_caps("a", "orca", CABLE_CAP_S); ui_fleet_set_view(true);
