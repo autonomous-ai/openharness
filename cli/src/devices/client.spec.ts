@@ -339,7 +339,7 @@ describe('harness hardware watch: the app in front', () => {
     const run = watch({ tell })
     front(run, 'com.mitchellh.ghostty')
     await opened(run.socket)
-    connected(run.socket, ['openclaw-local', 'dial-watch', 'dial-front'])
+    connected(run.socket, ['openclaw-local', 'dial-watch'])
     front(run, 'Code.exe')
     await turn()
     front(run, 'com.apple.Safari')

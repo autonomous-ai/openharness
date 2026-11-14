@@ -6,6 +6,7 @@ import { daemonFetch, openLocalWs } from '../lib/localTransport.js'
 import type { ClientSocket } from '../lib/clientSocket.js'
 import { deviceSettingsPatchSchema } from '../lib/harnessDevices.js'
 import { frontAppId } from '../cable/hosts/frontApp.js'
+import { tellDevices } from './listenerClient.js'
 
 export interface DevicesClientDeps {
   port: number
@@ -69,6 +70,8 @@ export interface DialWatchDeps extends Pick<DevicesClientDeps, 'port' | 'dataDir
   print(line: string): void
   /** stderr: stdout carries only the app's NDJSON. */
   printError(line: string): void
+  /** Tells the devices' own listener which app is in front: true when it took it. `tellDevices` by default. */
+  tell?: (message: { type: 'front'; app: string }) => Promise<boolean>
 }
 
 const NOT_RUNNING = 'Harness is not running on this computer. Run: harness start'
@@ -111,13 +114,23 @@ export function runDialWatch(argv: string[], deps: DialWatchDeps): Promise<numbe
   }
   return new Promise(resolve => {
     let socket: ClientSocket | undefined
-    let settled = false, last: string | undefined
-    // The app in front as an app id, held until a daemon that takes it is connected: the raw name stops in this process.
-    let front: string | undefined, sentFront: string | undefined, frontTaken = false
-    const sendFront = (): void => {
-      if (!frontTaken || front === undefined || front === sentFront) return
-      sentFront = front
-      socket!.send(JSON.stringify({ type: 'dial_front', payload: { app: front } }))
+    let settled = false, last: string | undefined, attached = false
+    // The app in front as an app id (the raw name stops in this process), the last one the devices' listener took, and
+    // whether the current one is owed to it whatever it took before: a dial that attaches may come with a new devices process.
+    let front: string | undefined, told: string | undefined, owed = false, telling = false
+    const tell = deps.tell ?? (message => tellDevices(deps.dataDir ?? env.ADAPTER_DATA_DIR, message))
+    // One tell at a time, so the listener hears them in order and the newest last; the ones between are skipped.
+    const tellFront = (): void => {
+      if (settled || telling || front === undefined || (front === told && !owed)) return
+      const app = front
+      telling = true
+      owed = false
+      void tell({ type: 'front', app }).then(taken => {
+        telling = false
+        if (taken) told = app
+        // A tell not taken is not tried again by itself: only a newer app in front, or the dial attaching, is told.
+        if (front !== app || owed) tellFront()
+      })
     }
     const finish = (code: number, why?: string): void => {
       if (settled) return
@@ -139,7 +152,7 @@ export function runDialWatch(argv: string[], deps: DialWatchDeps): Promise<numbe
       try { value = (JSON.parse(line) as { front?: unknown } | null)?.front } catch { return }
       if (typeof value !== 'string') return
       front = frontAppId(value)
-      sendFront()
+      tellFront()
     }))
     deps.stdin.resume()
     deps.machineId().then(machineId => {
@@ -157,10 +170,7 @@ export function runDialWatch(argv: string[], deps: DialWatchDeps): Promise<numbe
         if (frame?.type === 'connected') {
           clearTimeout(deadline)
           const features = (frame.payload as { features?: unknown } | undefined)?.features
-          if (Array.isArray(features) && features.includes('dial-watch')) {
-            frontTaken = features.includes('dial-front')
-            return sendFront()
-          }
+          if (Array.isArray(features) && features.includes('dial-watch')) return
           deps.print(JSON.stringify({ error: 'The Harness daemon on this computer is older than this command. Run: harness start --restart' }))
           return finish(4)
         }
@@ -169,6 +179,13 @@ export function runDialWatch(argv: string[], deps: DialWatchDeps): Promise<numbe
         if (line === last) return
         last = line
         deps.print(line)
+        // The devices process usually starts with the dial, after this watch: it hears the app in front as the dial attaches.
+        const nowAttached = (frame.payload as { attached?: unknown }).attached === true
+        if (nowAttached && !attached) {
+          owed = true
+          tellFront()
+        }
+        attached = nowAttached
       })
     }).catch(() => finish(3, NOT_RUNNING))
   })
