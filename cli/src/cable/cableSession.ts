@@ -124,6 +124,9 @@ const AGENTS_PUSH_GAP_MS = 1_000
  * now says so in the log.
  */
 const APP_FOCUS_SETTLE_MS = 750
+/** How long the dial stays on an agent before its pane is switched to: a swipe through five tiles switches one pane, the
+ *  last, rather than flicking the app through all five. */
+export const SWIPE_REST_MS = 400
 
 /**
  * How long after an app-driven switch begins its own repaint can still arrive.
@@ -365,6 +368,10 @@ export interface CableHost {
   hostOf?(agentId: string): string | undefined
   /** The dial is on that agent: its finished answer counts as seen. */
   markSeen?(agentId: string): void
+  /** A rest of the dial on that agent switches its app's pane: the session then times a hand's turn to it. */
+  swipeSwitches?(agentId: string): boolean
+  /** How a hand's turn to such an agent ended: the dial rested on it for SWIPE_REST_MS, or left it first. */
+  swipeEnded?(agentId: string, how: 'rest' | 'superseded'): void
   focus(agentId: string): void
   /**
    * "Put this one in front of me" — a NOTIFICATION was tapped.
@@ -713,6 +720,8 @@ export class CableSession {
   private drivingSince = 0
   /** While the app is rebuilding the dial's machine/list state, focus reports describe that rebuild. */
   private drivingAppFocus = false
+  /** A hand's turn waiting out SWIPE_REST_MS. One per dial: a later turn ends it. */
+  private swipeRest: { agentId: string; timer: ReturnType<typeof setTimeout> } | null = null
   /** The dial may echo a focus command after its write promise resolves; consume that one echo. */
   private expectedAppFocusEcho = ''
   private expectedAppFocusEchoUntil = 0
@@ -841,6 +850,8 @@ export class CableSession {
     this.stopped = true
     if (this.timer) clearInterval(this.timer)
     this.timer = null
+    // Now, not when the link says it closed: the serial link says so only once its stream has.
+    this.endRest()
     await this.link?.close('daemon stopping')
     this.link = null
   }
@@ -1025,6 +1036,7 @@ export class CableSession {
     this.drivingAppFocus = false
     this.expectedAppFocusEcho = ''
     this.expectedAppFocusEchoUntil = 0
+    this.endRest()
     // A new port is a new dial until proven otherwise; tell it everything.
     this.lastAgentsKey = ''
     this.lastRing = []
@@ -1072,6 +1084,7 @@ export class CableSession {
     this.appFocusGeneration += 1
     this.expectedAppFocusEcho = ''
     this.expectedAppFocusEchoUntil = 0
+    this.endRest()
     this.lastAgentsKey = ''
     this.lastRing = []
     this.lastAppsKey = ''
@@ -1430,6 +1443,7 @@ export class CableSession {
           // above still names it: the next list push re-asserts it rather than turning the dial back.
           if (this.lacks(agentId, 'f')) this.host.markSeen?.(agentId)
           else this.host.focus(agentId)
+          this.restOn(agentId)
         }
         return
       case 'notif.read': {
@@ -3264,6 +3278,30 @@ export class CableSession {
   }
   async toast(text: string): Promise<void> {
     await this.send({ t: 'toast', text })
+  }
+
+  /** A hand turned the dial to `agentId`: a turn still resting on another agent ends there, and this one rests if a rest
+   *  on it switches a pane. */
+  private restOn(agentId: string): void {
+    const pending = this.swipeRest
+    this.endRest()
+    if (pending && pending.agentId !== agentId) this.host.swipeEnded?.(pending.agentId, 'superseded')
+    if (!this.host.swipeSwitches?.(agentId)) return
+    const timer = setTimeout(() => {
+      this.swipeRest = null
+      // The app may have moved the dial since (a prompt, a tapped notice): the dial rests only on the agent it still shows.
+      try { this.host.swipeEnded?.(agentId, this.desiredFocus === agentId ? 'rest' : 'superseded') }
+      // Thrown out of a timer, it would end the whole devices process.
+      catch (error) { this.fault(error) }
+    }, SWIPE_REST_MS)
+    timer.unref?.()
+    this.swipeRest = { agentId, timer }
+  }
+
+  /** Ends a pending rest without telling the host: the caller says why, if anyone is to hear it. */
+  private endRest(): void {
+    if (this.swipeRest) clearTimeout(this.swipeRest.timer)
+    this.swipeRest = null
   }
 
   /** The agent's host says the dial may not do this with it. A host that says nothing (an older one, a window) allows it. */
