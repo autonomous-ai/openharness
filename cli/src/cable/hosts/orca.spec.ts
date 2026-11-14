@@ -70,25 +70,16 @@ describe('Orca actions', () => {
     expect(calls[0].args[4]).toBe('--text=first line second  third [2J  end ')
   })
 
-  it('open switches, then brings Orca forward on macOS only', async () => {
-    const mac = recorder()
-    expect(await mac.orca.open(HANDLE)).toBe(true)
-    expect(mac.calls).toEqual([
-      { file: FAKE_PATH_ORCA, args: ['terminal', 'switch', '--terminal', HANDLE, '--json'], timeoutMs: 10_000 },
-      { file: '/usr/bin/open', args: ['-b', 'com.stablyai.orca'], timeoutMs: 10_000 },
-    ])
-
-    const linux = recorder({ platform: 'linux' })
-    expect(await linux.orca.open(HANDLE)).toBe(true)
-    expect(linux.calls.map((call) => call.args)).toEqual([['terminal', 'switch', '--terminal', HANDLE, '--json']])
-
-    // A failed switch brings nothing forward; a switch that worked stays true when Orca does not come forward.
+  // Orca comes forward with every other app, by its bundle id (open.ts): the switch only picks the terminal inside it.
+  it('switchTo runs the switch alone, on every platform, and is true when it exits 0', async () => {
+    for (const platform of ['darwin', 'linux'] as const) {
+      const { calls, orca } = recorder({ platform })
+      expect(await orca.switchTo(HANDLE)).toBe(true)
+      expect(calls).toEqual([{ file: FAKE_PATH_ORCA, args: ['terminal', 'switch', '--terminal', HANDLE, '--json'], timeoutMs: 10_000 }])
+    }
     const refused = recorder({}, [1])
-    expect(await refused.orca.open(HANDLE)).toBe(false)
+    expect(await refused.orca.switchTo(HANDLE)).toBe(false)
     expect(refused.calls).toHaveLength(1)
-    const notForward = recorder({}, [0, 1])
-    expect(await notForward.orca.open(HANDLE)).toBe(true)
-    expect(notForward.calls).toHaveLength(2)
   })
 
   it('a handle that is not term_<uuid> runs nothing', async () => {
@@ -96,7 +87,7 @@ describe('Orca actions', () => {
     const { calls, orca } = recorder()
     for (const handle of ['', 'term_', 'term_0f8e2c1a', HANDLE.toUpperCase(), `${HANDLE}0`, `${HANDLE}\n`, ` ${HANDLE}`, `term_${'g'.repeat(36)}`, '--help']) {
       expect(await orca.send(handle, 'hi')).toBe(false)
-      expect(await orca.open(handle)).toBe(false)
+      expect(await orca.switchTo(handle)).toBe(false)
     }
     expect(calls).toEqual([])
   })
@@ -105,7 +96,7 @@ describe('Orca actions', () => {
     for (const platform of ['darwin', 'linux'] as const) {
       const { calls, orca } = recorder({ platform, onPath: () => null })
       expect(await orca.send(HANDLE, 'hi')).toBe(false)
-      expect(await orca.open(HANDLE)).toBe(false)
+      expect(await orca.switchTo(HANDLE)).toBe(false)
       expect(calls).toEqual([])
     }
     // The app's folder is a macOS path: Linux never runs it.
@@ -184,8 +175,8 @@ describe('Orca actions', () => {
     })
     const first = orca.send(HANDLE, 'one')
     expect(await orca.send(HANDLE, 'two')).toBe(false)
-    expect(await orca.open(HANDLE)).toBe(false)
-    const other = orca.open(OTHER)
+    expect(await orca.switchTo(HANDLE)).toBe(false)
+    const other = orca.switchTo(OTHER)
     expect(calls.map((args) => args[3])).toEqual([HANDLE, OTHER])
     for (const done of waiting) done()
     expect(await first).toBe(true)

@@ -167,7 +167,8 @@ vi.mock('../cable/hosts/lastAnswer.js', async (real) => ({
 
 const { startDevices } = await import('./devices.js')
 
-/** What the devices ran as `orca`: recorded, so no spec types into or switches the developer's own Orca. */
+/** What the devices ran (`orca`, and on macOS `open`): recorded, so no spec types into, switches or brings forward the
+ *  developer's own apps. */
 const orcaRuns: Array<[string, string[], number]> = []
 const orca = {
   run: async (file: string, args: string[], timeoutMs: number) => { orcaRuns.push([file, args, timeoutMs]); return { code: 0 } },
@@ -197,7 +198,7 @@ afterEach(() => {
   vi.unstubAllEnvs()
 })
 
-function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh'] } = {}) {
+function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; orca?: DevicesDeps['orca'] } = {}) {
   const core = over.core ?? fakeCore({ dataDir })
   const ports: CorePorts = emptyPorts()
   const onExit = vi.fn()
@@ -211,7 +212,7 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
     readUsage: over.readUsage,
     now: over.now,
     refresh: over.refresh,
-    orca,
+    orca: over.orca ?? orca,
     decideTier: over.decideTier === null ? undefined : over.decideTier ?? (async () => ({ tier: 'alert', by: 'test', detail: '', ms: 0 })),
     faults: new Set(over.faults ?? []),
     log: (line) => { logs.push(line) },
@@ -1508,6 +1509,40 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       ['/opt/orca/bin/orca', ['terminal', 'switch', '--terminal', HANDLE, '--json'], 10_000],
     ])
     expect(said()).toEqual(['[device] voice · orca'])
+  })
+
+  // On macOS a tap brings the agent's app forward by its bundle id (cable/hosts/open.ts); every run here is recorded.
+  const mac = { ...orca, platform: 'darwin' as const }
+
+  it('on macOS an agent in an app with a bundle id lists f, and a tap brings that app forward; a question screen opens nothing', async () => {
+    const { port } = startHere({ orca: mac })
+    port.observed(hook('session-start', { hostHints: { TERM_PROGRAM: 'WarpTerminal' } }))
+    attach(port)
+    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
+    expect(await host().openAgent(ID)).toBeUndefined()
+    expect(orcaRuns).toEqual([['/usr/bin/open', ['-b', 'dev.warp.Warp-Stable'], 10_000]])
+    expect(await host().openAgent(ID, 'question')).toBeUndefined()
+    expect(orcaRuns).toHaveLength(1)
+  })
+
+  it('a Claude Code in the Claude app opens on its session; a link that fails still brings the app forward, said in one line with no id', async () => {
+    const SESSION = 'local_8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b'
+    const codes = [1]
+    const { port } = startHere({ orca: { ...mac, run: async (file, args, timeoutMs) => {
+      orcaRuns.push([file, args, timeoutMs])
+      return { code: codes.shift() ?? 0 }
+    } } })
+    port.observed(hook('session-start', { hostHints: { __CFBundleIdentifier: 'com.anthropic.claudefordesktop', CLAUDE_CODE_HOST_SESSION_ID: SESSION } }))
+    attach(port)
+    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
+    expect(await host().openAgent(ID)).toBeUndefined()
+    const link: [string, string[], number] = ['/usr/bin/open', [`claude://code/continue?session=${SESSION}`], 10_000]
+    expect(orcaRuns).toEqual([link, ['/usr/bin/open', ['-b', 'com.anthropic.claudefordesktop'], 10_000]])
+    expect(said()).toEqual(['[device] open · claude · fallback'])
+    // The link that works brings the app forward itself.
+    expect(await host().openAgent(ID)).toBeUndefined()
+    expect(orcaRuns.slice(2)).toEqual([link])
+    expect(logs.filter((line) => line.includes(SESSION) || line.includes('sess-1'))).toEqual([])
   })
 
   it('no log line carries the command, a path, the transcript, a session id or a handle', async () => {

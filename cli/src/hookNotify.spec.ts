@@ -2200,7 +2200,7 @@ describe('hook notify posts over the daemon\'s pipe on Windows (W1)', () => {
 describe('hook notify: a session outside a pane', () => {
   /** The environment names the hook may send as host hints, and nothing else (spec: The hook). */
   const HINTS = ['TERM_PROGRAM', '__CFBundleIdentifier', 'HERDR_PANE_ID', 'REX_BLOCK', 'ZELLIJ', 'KITTY_WINDOW_ID',
-    'WEZTERM_PANE', 'ORCA_AGENT_SESSION_ID', 'ORCA_TERMINAL_HANDLE']
+    'WEZTERM_PANE', 'ORCA_AGENT_SESSION_ID', 'ORCA_TERMINAL_HANDLE', 'CLAUDE_CODE_HOST_SESSION_ID']
   /** The hint names unset, so the environment this test runs in sends none of its own. */
   const noHints = Object.fromEntries(HINTS.map((name) => [name, '']))
   const folder = (prefix: string): string => {
@@ -2331,7 +2331,7 @@ describe('hook notify: a session outside a pane', () => {
     }])
   })
 
-  it('hostHints carries only the allowlist, ORCA_TERMINAL_HANDLE among it: ORCA_PAIRING_CODE and ORCA_AGENT_SESSION_SPAWN_TOKEN set in the env are absent from the body', async () => {
+  it('hostHints carries only the allowlist, ORCA_TERMINAL_HANDLE and CLAUDE_CODE_HOST_SESSION_ID among it: ORCA_PAIRING_CODE and ORCA_AGENT_SESSION_SPAWN_TOKEN set in the env are absent from the body', async () => {
     const { port, requests } = await collect()
     const allowed: Record<string, string> = Object.fromEntries(HINTS.map((name, index) => [name, `hint-${index}`]))
     await runHook({

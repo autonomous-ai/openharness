@@ -4,6 +4,8 @@ import { dropAgentSessionEnv, isAgentSessionVariable } from './agentSessionEnv.j
 describe('an agent session\'s variables', () => {
   it('are the ones naming the session, never a setting the person chose', () => {
     for (const name of ['CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_MESSAGING_TOKEN', 'CODEX_THREAD_ID', 'AI_AGENT']) expect(isAgentSessionVariable(name), name).toBe(true)
+    // The Claude app's id for the session it runs: a pane that kept it would open that app session from the dial.
+    expect(isAgentSessionVariable('CLAUDE_CODE_HOST_SESSION_ID')).toBe(true)
     for (const name of ['CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'HARNESSD_SERVICE_TOKEN', 'PATH']) expect(isAgentSessionVariable(name), name).toBe(false)
   })
 

@@ -3,6 +3,7 @@ import type { ObservedAsked, ObservedHookEvent } from '../../core/observedHook.j
 import { STOP_HOOK_GRACE_MS } from '../../core/turns/turnHooks.js'
 import { type Delivery, Inbox } from './inbox.js'
 import { askedLine, observedAgentId, type ObservedActions, ObservedSource, type ObservedDeps } from './observed.js'
+import type { OpenTarget } from './open.js'
 
 function setup(over: Partial<ObservedDeps> = {}) {
   const clock = { t: 1_000_000 }
@@ -512,7 +513,9 @@ function fakeActions(over: Partial<ObservedActions> = {}) {
     modReady: vi.fn((sessionId: string) => ready.has(sessionId)),
     toMod: vi.fn(async (_sessionId: string, _text: string): Promise<Delivery> => 'taken'),
     orcaSend: vi.fn(async (_handle: string, _text: string) => true),
-    orcaOpen: vi.fn(async (_handle: string) => true),
+    // As on macOS: an app or a pane is something a tap can open (open.ts).
+    canOpen: vi.fn((target: OpenTarget) => !!target.bundle || !!target.pane),
+    open: vi.fn(async (_agentId: string, _target: OpenTarget) => true),
     count: vi.fn((_what: Parameters<ObservedActions['count']>[0]) => {}),
   }
   return { actions: { ...actions, ...over } as typeof actions, ready }
@@ -530,16 +533,30 @@ describe('ObservedSource actions', () => {
     expect(src.capabilities(src.list()[0])).toMatchObject({ voice: false, focus: false })
   })
 
-  it('an event whose hints carry no handle clears it', async () => {
+  it('an event whose hints carry no handle clears it: a tap opens the app it runs in now', async () => {
     const { actions } = fakeActions()
     const { src, ev } = setup({ actions })
     src.ingest(ev('session-start', withHandle))
     // Resumed in another terminal: the old handle now holds something else.
     src.ingest(ev('session-start', { hostHints: { TERM_PROGRAM: 'ghostty' } }))
     const agent = src.list()[0]
-    expect(src.capabilities(agent)).toMatchObject({ voice: false, focus: false })
-    expect(await src.focus(agent)).toBe(false)
-    expect(actions.orcaOpen).not.toHaveBeenCalled()
+    expect(src.capabilities(agent)).toMatchObject({ voice: false, focus: true })
+    expect(await src.focus(agent)).toBe(true)
+    expect(actions.open.mock.calls).toEqual([[agent.id, { bundle: 'com.mitchellh.ghostty' }]])
+  })
+
+  it('f for an agent whose app a tap can bring forward, with no handle and no mod', () => {
+    const { actions } = fakeActions()
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('session-start', { sessionId: 'warp', hostHints: { TERM_PROGRAM: 'WarpTerminal' } }))
+    src.ingest(ev('session-start', { sessionId: 'app', hostHints: { __CFBundleIdentifier: 'org.alacritty' } }))
+    const caps = (sessionId: string) => src.capabilities(src.list().find((a) => a.sessionId === sessionId)!)
+    expect(caps('warp')).toEqual({ status: true, voice: false, focus: true, answer: false })
+    expect(caps('app')).toEqual({ status: true, voice: false, focus: true, answer: false })
+    expect(actions.canOpen.mock.calls).toEqual([[{ bundle: 'dev.warp.Warp-Stable' }], [{ bundle: 'org.alacritty' }]])
+    // What cannot open it (Linux, with no pane) gives no f.
+    actions.canOpen.mockReturnValue(false)
+    expect(caps('warp')).toMatchObject({ focus: false })
   })
 
   it('a session found by the scan takes its host from its first event', async () => {
@@ -747,24 +764,24 @@ describe('ObservedSource actions', () => {
     expect(await src.send(src.list()[1], 'next')).toEqual({ ok: false, reason: 'proj did not answer.' })
     expect(actions.toMod).not.toHaveBeenCalled()
     expect(actions.orcaSend).not.toHaveBeenCalled()
-    expect(actions.orcaOpen).not.toHaveBeenCalled()
+    expect(actions.open).not.toHaveBeenCalled()
     // Resumed, it is a live session again.
     src.ingest(ev('session-start', withHandle))
     expect(src.capabilities(src.list()[0])).toMatchObject({ voice: true, focus: true })
   })
 
-  it('focus runs orcaOpen for a handle and is false without one', async () => {
-    const { actions } = fakeActions({ orcaOpen: vi.fn(async () => false) })
+  it('focus opens what its last event names, as the agent\'s own, and is false when nothing can open it', async () => {
+    const { actions } = fakeActions({ open: vi.fn(async () => false) })
     const { src, ev } = setup({ actions })
     src.ingest(ev('session-start', { sessionId: 'orca', ...withHandle }))
     src.ingest(ev('session-start', { sessionId: 'plain' }))
     const agent = (sessionId: string) => src.list().find((a) => a.sessionId === sessionId)!
     expect(await src.focus(agent('orca'))).toBe(false)
-    expect(actions.orcaOpen).toHaveBeenCalledWith(HANDLE)
-    actions.orcaOpen.mockResolvedValue(true)
+    expect(actions.open).toHaveBeenCalledWith(agent('orca').id, { bundle: 'com.stablyai.orca', pane: { app: 'orca', id: HANDLE } })
+    actions.open.mockResolvedValue(true)
     expect(await src.focus(agent('orca'))).toBe(true)
     expect(await src.focus(agent('plain'))).toBe(false)
-    expect(actions.orcaOpen).toHaveBeenCalledTimes(2)
+    expect(actions.open).toHaveBeenCalledTimes(2)
   })
 
   it('counts mod, orca, waiting, too-long and no-answer', async () => {
