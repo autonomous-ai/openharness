@@ -28,9 +28,6 @@ The rules AGENTS.md carried until 2026-11-11; the sections below have the detail
   prints their receipts; paste its output into the PR body.
 - Heavy workflows (OS images, VM tests, CLI end to end) run only by hand, once, when the change needs them; report the
   run link. The account runs at most 20 jobs at once, 5 on macOS: never several heavy workflows together.
-- In a Swarm project the merge train lands ready pull requests by itself, together on one run. Never push to a
-  `harness-train/` branch; add the `hold` label to keep a PR out. A train carries each member's local check receipts at
-  that member's head; one without them keeps the train red.
 - Merge by hand with `make merge-pr ARGS="N --reviewed-head SHA --reviewed-base SHA --merge"`. No `--queue`, no
   `--run/--scope`. Never replay an uncertain merge; inspect the PR. If `make merge-pr` refuses only because `main`
   moved, and the required checks are green on the head and GitHub shows the PR mergeable with no conflict and
@@ -75,11 +72,11 @@ beside the CLI's own suite); the CLI reads `pty/`, `tui/` and `store/`, Desktop 
 | Changed directory | PR check | Typical time |
 | --- | --- | --- |
 | `cli/`, `tests/` | `cli-typecheck` and `cli-tests` (default Vitest suite, four shards) | 3–5 min |
-| `desktop/` | `desktop-tests` (VM suite, four Linux shards); a change to a desktop file the phone's tests read (the Swarm models in `scripts/ci-plan.py` `PR_READS`, compared by `mobile/test/swarm/desktop_parity_test.dart`) also runs `mobile-checks` | 5–7 min |
+| `desktop/` | `desktop-tests` (VM suite, four Linux shards); a change to a desktop file the phone's tests read (`PR_READS` in `scripts/ci-plan.py`) also runs `mobile-checks` | 5–7 min |
 | `tui/`, `term/` (the TUI builds on it) | `tui-test` (`cargo test`) | a few minutes |
 | `pty/`, `term/`, `tui/vendor/`, `cli/` (the ptyhost contract imports the CLI's code) | `pty-checks` (`cargo test` for `term` and `pty`, then the ptyhost terminal contract against the built host) | a few minutes |
 | `device-app/` | `device-app-checks` (the UI's typecheck, Vitest and bundle, then `cargo test` with Tauri's Linux packages; the macOS code is not compiled) | a few minutes |
-| `backend/` | `backend-desk` (the backend unit suite, `npm test` in `backend/`) and `backend-integration` (the Super Tab integration suite, `npm run test:super-tabs`, four shards) | unit about 1–2 min; integration about 5 min |
+| `backend/` | `backend-desk` (the backend unit suite, `npm test` in `backend/`) and `backend-integration` (the backend integration suite, `npm run test:integration`, four shards) | unit about 1–2 min; integration about 5 min |
 | `companions/`, `website/`, `os/`, `provider/`, `mobile/`, `daemons/` | that component's one check | 1–4 min |
 | `devices/` | `firmware-checks` | 1–2 min |
 | `devices/harness-pro/` | also `pro-firmware-build` (ESP-IDF v5.5.4 build of `harness_pro.bin`, which must fit `ota_0`) and `pro-golden` (`test/golden.sh --check` with Liberation Sans, on macOS arm64 where the baseline is recorded: float maths in the code-drawn shapes differs on Linux x86-64) | build ~4 min, golden ~1 min |
@@ -111,7 +108,7 @@ A component's result is reused only when all of these hold; otherwise it runs as
 - Nothing that differs between the tested commit and the new head is a component input:
   its own directory (by the map above) or a file it may read elsewhere (`DEPENDS` in
   `scripts/ci-plan.py`: broader than the `PR_READS` that select it, as the scan misses a path joined from parts). `backend/integration/` and `cli/e2e/` (apart from
-  `cli/e2e/harness/`) are skipped because the PR jobs never read them. Each Swarm UI
+  `cli/e2e/harness/`) are skipped because the PR jobs never read them. Each UI
   style allowlist (`scripts/ui-style-allowlist/mobile.json`, `desktop.json`) is an input
   of the component whose job checks it, and a PR that changes one runs that component.
 - No changed path is a shared input: `.github/`, `scripts/` (the planner and the merge
@@ -149,7 +146,7 @@ from `main` before relying on its CI.
 
 ### Reuse in a batch PR
 
-A batch PR (a branch from main with each member PR merged in, as the PM builds them) reuses
+A batch PR (a branch from main with each member PR merged in) reuses
 a member PR's passed result the same way. A phone PR batched with unrelated work does not
 run mobile-checks again. The planner reads the members from the batch's own commits, never
 from the PR's text:
@@ -208,17 +205,17 @@ runs the same fast jobs as PR CI.
 Each shard has four test workers and the bounded runner's ten-minute budget. Logs
 and receipts are retained for seven days.
 
-`backend-integration` runs the backend's Super Tab integration suite (`backend/integration/`,
-`vitest.super-tabs.config.ts`) on four Linux runners. It replaces the full local run every
+`backend-integration` runs the backend's integration suite (`backend/integration/`,
+`vitest.integration.config.ts`) on four Linux runners. It replaces the full local run every
 backend pull request needed before Ready: CI's run is that evidence, so nobody waits on a
 per-Mac lock for it. Each integration file starts its own MongoDB replica set through
 `mongodb-memory-server-core` (the job caches the downloaded `mongod`), so the shards share no
-database; the suite opens no Redis. `vitest.super-tabs.ci.config.ts` spreads files over the
+database; the suite opens no Redis. `vitest.integration.ci.config.ts` spreads files over the
 shards by `integration/ci-durations.json`, longest first onto the least-loaded shard, as the
 CLI does below; new files get the default cost and the discovered file list stays
 authoritative. Each shard uploads its per-file JSON results (`backend-integration-N`) for
 refreshing the hints. Reproduce one shard locally with `npx vitest run --config
-vitest.super-tabs.ci.config.ts --shard=N/4` in `backend/`.
+vitest.integration.ci.config.ts --shard=N/4` in `backend/`.
 
 CLI's default Vitest suite runs as four file shards on separate runners, retaining
 its worker cap and isolation. Shard reports and inventories are retained as

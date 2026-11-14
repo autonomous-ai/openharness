@@ -23,8 +23,7 @@ domain) exactly as a Mac can:
 
 - Full owner rights (removed on every platform, 2026-10-19).
 - Guest device pairing, per-person limits/approval/activity views, Store apps or web panes.
-- Any change to macOS or Linux behavior, or to the existing Windows **Team account**
-  (`harnessteam`, for teammates' Swarm agents).
+- Any change to macOS or Linux behavior, or to the existing Windows **Team account** (`harnessteam`).
 - Extending guests to the Team account or to a second machine from the same guest.
 
 ## What exists today

@@ -218,7 +218,7 @@ The person never sees any of this: no notice, no button, no choice to make.
 - a desktop window shows its tile on screen. The desktop already tells the daemon which agent its window focuses
   (`setLocalTerminalFocus`, `TerminalStreamManager.setFocusedAgent`). G widens that local message to carry every
   agent whose tile is on screen in that window. The list is empty while the window is minimized or hidden to the
-  tray. A tile kept mounted off screen (another super tab, `Offstage`) is not looked at, even though its stream stays
+  tray. A tile kept mounted off screen (another tab, `Offstage`) is not looked at, even though its stream stays
   open;
 - a mobile or web client, or a Share viewer (`terminalWatch.ts`), has a stream open to it. That includes the phone
   pager's streams to the agents one swipe away (`takeover: false`), which the person can reach in a moment;

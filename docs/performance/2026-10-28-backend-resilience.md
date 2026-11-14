@@ -42,7 +42,7 @@ the value it was built and measured with.
 Measured with `integration/bench/resilience.ts` (README in the file) on a MacBook Pro (M2 Max) shared with other agents,
 so absolute numbers drift between runs. Before and after runs were interleaved so the drift hit both. One backend
 process, its own MongoDB and Redis, 8 good clients listing their machines with a tenth fresh tokens, 30 s per scenario.
-The bad client loads its own Swarm in full with 128 calls in flight and ignores 429. Before is main d193981; after is
+The bad client keeps 128 calls in flight and ignores 429. Before is main d193981; after is
 390d416 (the limits as reviewed). Latency is good clients' p95 in ms.
 
 | Scenario | Before (3 runs) | After, defaults (3 runs) | Target |
@@ -86,8 +86,7 @@ Reviewed revision: pending. Reviewer (another engine): pending.
    Redis command latency, which opens the breaker at 1 s and logs `[bus] Redis commands failing`. Rate counts then
    fall back to per pod, with one log line.
 5. **Compatibility.** No client changes. Old CLI, Desktop and phone clients get a 429 only above limits set well
-   beyond any working client. They already handle a 429 as they do from the existing limiters: the CLI's Swarm client
-   reports it as RATE_LIMITED and its polls retry on the next tick. Rolling deploy: old and new pods count in
+   beyond any working client. They already handle a 429 as they do from the existing limiters. Rolling deploy: old and new pods count in
    different places during the rollout (old ones in memory), which only makes limits looser for a few minutes.
    Fast 503s from an open SSO breaker are the 503 clients already get when the SSO is unreachable.
 6. **Migration and rollback.** No data migration. Rolling back drops the new keys, which expire on their own. Every

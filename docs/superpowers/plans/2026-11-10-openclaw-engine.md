@@ -21,7 +21,6 @@
 - **The one rule** (`cli/src/engines/README.md`): every field, event type, tool name and screen line comes from a recording of the real binary (OpenClaw `2026.11.2` or newer).
 - **Read only.** Harness writes nothing under the OpenClaw state folder and never deletes OpenClaw rows. The DB is opened read-only, with the bounded busy timeout.
 - **Hands off the Gateway.** Harness never starts, stops or reconfigures it.
-- **Not in Swarm.** `backend/src/superTabs/commands.ts:133` stays as it is.
 - **Architecture.** `cli/src/architecture.spec.ts` keeps passing. Core, `bind.ts` and `sessionRepair.ts` import only `engines/openclaw/contract.ts`, which is data only.
 - **Clean fixtures.** No model key, no Gateway token, no personal content.
 - **Idle cost.** Daemon at rest: ≤ 1% of one core with one idle bound OpenClaw pane, with numbers in the PR.

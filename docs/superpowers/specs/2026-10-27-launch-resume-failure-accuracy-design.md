@@ -16,7 +16,7 @@ The Oct 26 usage report showed agent start failures at 8–16% a day since Oct 2
   same session and gets `SESSION_IN_HARNESS`.
 - `harness new <cloud>` sends a cloud request without checking the task or repository first
   (`cli/src/lib/newCommand.ts`), so a typo becomes a counted failure.
-- The launch counters do not say whether a person or an agent started the launch, so Swarm and
+- The launch counters do not say whether a person or an agent started the launch, so
   agent-started launches (much more of them since Oct 21) move a rate people read as user pain.
 - `RESUME_PREPARATION_FAILED` discards the error (`cli/src/lib/resumeAgentService.ts:276-278`). In
   practice it comes from Codex history repair (`cli/src/engines/kit/resumeRepair.ts`), and nobody can
@@ -58,7 +58,7 @@ integrity and safety checks, not damage.
   `INVALID_REQUEST`. These stop counting as `launch_failed`.
 - Every launch counter gets an agent-started twin: `launch_agent_started`, `launch_agent_created`,
   `launch_agent_failed`, `launch_agent_refused`, counted when the create request carries a
-  `startedBy` (the field `core/agents/create.ts` already records for agent and Swarm starts). The
+  `startedBy` (the field `core/agents/create.ts` already records for agent starts). The
   measurement at `backendSocket.ts:939` reads it from the same payload. The existing totals keep counting everything, so
   history stays comparable; person-started = total − agent.
 

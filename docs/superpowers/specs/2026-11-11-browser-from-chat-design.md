@@ -41,7 +41,7 @@ in an agent that already runs, in every engine, with nothing added to its launch
 - Stopping a browser that sits idle. It runs until its person stops it or its agent ends.
 - The agent starting or stopping its browser, or installing Podman.
 - A browser for an agent that is not running.
-- A Browser button anywhere but the Swarm chat: not in a regular tab, not in the terminal interface.
+- A Browser button in the terminal interface.
 - New browser tools. The commands are today's eleven tools.
 - Any change to the container, the image, the proxy, the device, challenge detection or the browser limit. The stream
   changes only in what the panel shows (The window fits the panel).
@@ -51,19 +51,19 @@ in an agent that already runs, in every engine, with nothing added to its launch
 
 - An agent that can start or stop its browser, or one agent's command reaching another agent's browser.
 - An MCP server or any launch argument added to an agent for the browser.
-- A read of the backend or of the Swarm on a command's path.
+- A read of the backend on a command's path.
 - A line typed into an agent more than once per start, or at every daemon restart: that spends the person's tokens
   without them knowing.
-- Any change to how a person's or the Swarm's messages reach an agent.
+- Any change to how a person's messages reach an agent.
 - A login lost because the person pressed Stop.
 - Image bytes on the agent's terminal, or a snapshot that floods its context.
 - A guest's agent starting a browser on the owner's machine.
 
 ## What exists today (read 2026-11-11)
 
-- **The checkbox.** `BrowserPill` in Swarm New agent (`desktop/lib/browser/browser_pill.dart`,
+- **The checkbox.** `BrowserPill` in New agent (`desktop/lib/browser/browser_pill.dart`,
   `desktop/lib/widgets/new_harness_form.dart:2464`), its state in `desktop/lib/state/new_harness.dart:1051-1116`,
-  turned on by `offersBrowser: true` (`desktop/lib/super_tabs/new_agent.dart:101`). Create sends `browser: true`
+  turned on by `offersBrowser: true`. Create sends `browser: true`
   (`desktop/lib/state/app_state.dart:15916`).
 - **The flag.** The daemon copies it to the registry row, `browser?: true`, "created with Browser"
   (`cli/src/core/agents/launches.ts:541`, `cli/src/lib/registry.ts:193-197`). The row keeps it through a stop and a
@@ -83,25 +83,14 @@ in an agent that already runs, in every engine, with nothing added to its launch
   the last snapshot. So it has to live across calls.
 - **Who may open, retry or change a browser.** `mayOpenBrowser` (`cli/src/core/api.ts:667`): a process on this
   computer, or another of the owner's own apps and computers; never a machine share, never a guest.
-- **The button.** `BrowserButton` after Terminal in the agent chat's header, drawn only when the agent's frame carries
-  `browser` and its machine is the person's own (`desktop/lib/super_tabs/view.dart:2826-2842, 2967`). The frame's
+- **The button.** `BrowserButton` after Terminal in the agent's header, drawn only when the agent's frame carries
+  `browser` and its machine is the person's own. The frame's
   `browser` is `{state, step?, error?}`, present only for an agent with a browser.
 - **Text into an agent.** `CoreApi.turns.deliver(agentId, text, deliveryId)` (`cli/src/core/api.ts:246`): the path
   Agent Messages, the Wi-Fi device and the orchestrator use. A delivery waits for the agent's turn to end, at most 5
   minutes (`cli/src/lib/sessionInput.ts:16`), and its outcome is heard through `onDelivery`. A service in its own
   process may deliver only when it is in `TURN_DELIVERERS` (`core/api.ts:934`).
-- **How a Swarm delivery is typed.** `SuperTabHost` puts every delivery's text together in one place
-  (`cli/src/superTabs/host.ts:1504-1520`), in one of two shapes:
-  - a person's own words in their agent's own 1:1 chat: exactly as typed and nothing else (`plainChat`,
-    `host.ts:1552`; `plainText`, `host.ts:317`; anh Dee, 2026-11-09);
-  - any other message: its context lines, its quote, the message and an Answer line (`prompt`, `host.ts:1779`). A
-    notice for the agent alone is its text alone.
-  - Before anything is typed, the host writes the delivery's journal entry (`stage: 'submitting'`, `host.ts:1525`),
-    and it hears from the core when the delivery was written (`heard`, `host.ts:1824`).
-  - In the agent's own chat it posts the agent's answer by matching the turn to a hash of what was typed
-    (`host.ts:1526`, `cli/src/superTabs/agentReplies.ts`).
-  - The host holds each agent's registry row in memory (`core.agents.byAgent`).
-- **An agent verb's pane.** `runningPane` (`cli/src/superTabs/callerPane.ts`) proves the pane a command runs in from
+- **An agent verb's pane.** `runningPane` proves the pane a command runs in from
   its parent processes, and refuses a `TMUX_PANE` that names another pane.
 - **Counters** are one fixed list that the backend also holds and validates
   (`cli/src/lib/productUsageContract.ts:229`, `backend/src/types/productUsage.ts`,
@@ -139,9 +128,8 @@ in an agent that already runs, in every engine, with nothing added to its launch
     path, its browser starts again with it. It is kept by the agent's id: the flag on its registry row.
 15. **(main)** The ready and stopped lines go to the agent only. They are not shown in the person's chat.
 16. **(Ken)** Which agents: today's `mayOpenBrowser` rule, applied to the agent. An agent on this machine that is not
-    a guest's may use its browser. The check uses what the daemon already has, never a read of the backend or of the
-    Swarm on the command's path. An agent in a regular tab is not refused; its person starts, sees and stops its
-    browser through the Swarm chat's Browser button.
+    a guest's may use its browser. The check uses what the daemon already has, never a read of the backend on the
+    command's path. An agent in a regular tab is not refused.
 17. **(Ken)** The stop line is `Your person stopped your browser.`
 19. **(Ken)** When a pane's agent is replaced by a new agent in the same pane (the engine typed again in the pane
     it left, or a scan that finds the engine before its hook and makes a new row), the browser moves to the new
@@ -231,8 +219,6 @@ carries what the agent types and the addresses it opens. The builder may rename 
   `$HARNESS_PANE`, which every agent's shell already has. No agent id is an argument, so a command cannot name another
   agent. The pane is proven from the command's parent processes (`runningPane`); a pane variable that names another
   pane is refused. The daemon maps the pane to its agent (`agents.ofPane`).
-  - `runningPane` is Swarm code behind its door (`cli/src/architecture.spec.ts` `SWARM_DOORS`). If the browser command
-    cannot import it, the builder moves the proof to `lib/`.
 - **How it reaches the daemon.** The local socket of the daemon that owns the pane, opened as a tool, as every agent
   verb does (`cli/src/agentClient/daemon.ts`). The socket is 0600 in a 0700 folder (`cli/src/lib/localTransport.ts`),
   so only the person's own processes can open it, and the daemon answers `agent_browser_run` only to a local asker.
@@ -242,10 +228,8 @@ carries what the agent types and the addresses it opens. The builder may rename 
 - **(Ken) Which agents.** `mayOpenBrowser` allows an asker that is on this machine and is not a guest. The same rule
   holds for the agent: its pane is on this machine, and its registry row is not a guest's (the row's `guest`). Every
   command is refused with exit 5 for a guest's agent: the machine's Podman, memory and network are its owner's.
-  - The check reads the registry row and nothing else. No command waits on the backend or on a Swarm read.
+  - The check reads the registry row and nothing else. No command waits on the backend.
   - An agent in a regular tab is allowed. It drives its browser with the CLI like any other.
-  - Its person starts, sees and stops that browser from the agent's Swarm chat. An agent that is in no Swarm has no
-    chat and so no button: it cannot get a browser.
 
 **Commands.** Each maps to one tool in `browser-tools.json`, which stays the one source for the names, the arguments
 and the help.
@@ -295,8 +279,8 @@ Your browser: a Chrome your person can also see and use. Your person starts and 
 - **Output size.** A command prints at most a fixed number of characters. Longer output (a large page's snapshot) is
   cut there, saved in full to a text file, and ends with a line that names the file. The number is set under what
   both engines keep of a shell command's output (see To measure first).
-- **Where files go.** A `browser` folder in the agent's temporary folder (`$TMPDIR`, which a Swarm agent can read
-  without being asked: `cli/src/lib/agentTmp.ts`), or, where nothing sets a TMPDIR (a plain agent on Linux), in the
+- **Where files go.** A `browser` folder in the agent's temporary folder (`$TMPDIR`,
+  `cli/src/lib/agentTmp.ts`), or, where nothing sets a TMPDIR (a plain agent on Linux), in the
   folder Harness keeps for its agents' files (`<data>/agent-tmp`), this account's alone as `$TMPDIR` is (changed
   2026-11-13: every screenshot on Linux was refused). It keeps the newest 50 files; writing one more deletes the oldest.
 - **Timeouts.** The tools keep theirs: 20 s, navigation 60 s, `wait` at most 30 s. The service gives a call 10 s more
@@ -309,7 +293,7 @@ Your browser: a Chrome your person can also see and use. Your person starts and 
 | Code | Means | What the agent reads |
 |---|---|---|
 | 0 | done | the tool's words |
-| 1 | failed | the tool's error (`Element not found; take a new snapshot`), the browser's state: `Browser is starting`, `Podman is not running`, …, or a pane its environment keeps it from proving (Codex's sandbox refuses `ps` and the tmux socket): `runningPane`'s own reason, as `harness super-tab`'s, so the agent runs it again outside the sandbox |
+| 1 | failed | the tool's error (`Element not found; take a new snapshot`), the browser's state: `Browser is starting`, `Podman is not running`, …, or a pane its environment keeps it from proving (Codex's sandbox refuses `ps` and the tmux socket): `runningPane`'s own reason, so the agent runs it again outside the sandbox |
 | 2 | wrong command or arguments | the usage line |
 | 4 | the browser is off | `Your browser is off. Ask your person to start it: Browser in your chat.`, or `Your person stopped your browser.` when the stop came during the command |
 | 5 | refused; do not retry | see below |
@@ -360,9 +344,8 @@ removes the container, the volume, the network, the secret and the settings.
 
 - **The path (spec).** `CoreApi.turns.deliver`: the line is typed into the agent as a turn of its own, when its
   current turn ends. The service joins `TURN_DELIVERERS` for when it runs in its own process.
-- **To the agent only (main).** It is the daemon's line: it is not posted in the person's Swarm chat, and the agent's
-  answer to it is not posted there either (the Swarm posts only answers to the person's own messages,
-  `cli/src/superTabs/agentReplies.ts`). The person reads the state on the button.
+- **To the agent only (main).** It is the daemon's line, typed to the agent alone. The person reads the state on the
+  button.
 - **The copy.**
   - Ready: ``Your browser is ready: run `harness browser --help` ``
   - Stopped **(Ken)**: `Your person stopped your browser.` It names who stopped it, so the agent asks before it needs
@@ -392,7 +375,7 @@ removes the container, the volume, the network, the secret and the settings.
   text (`plainChat`) do not change.
 - An agent that runs a command while its browser is off reads exit 4 and how to ask for it.
 - `harness help agents` lists `harness browser --help` in one line, for an agent that looks.
-- **Nothing at launch.** The launch arguments and the Swarm's basics do not change.
+- **Nothing at launch.** The launch arguments do not change.
 
 ### The window fits the panel
 
@@ -553,7 +536,6 @@ Kept: every counter the first spec added. `agent_browser_enabled` still counts a
   does nothing. The pull request shows the daemon's CPU at rest with a ready browser, before and after: within 1% of
   one core, and no higher than today, when the same process ran under the relay.
 - **The agent's frame.** Unchanged: `browser` is sent only when it changes.
-- **Swarm delivery.** Not touched.
 - **Terminals, the relay.** Not touched. A command is one request on the local socket, and reads nothing outside the
   daemon.
 - **A command's own cost.** A command is a new CLI process each time, where an MCP call was not. That is the price of
@@ -603,7 +585,7 @@ Kept: every counter the first spec added. `agent_browser_enabled` still counts a
 
 ## To measure first
 
-Before the plan fixes its numbers, on Claude Code and on Codex, in a Swarm agent's default mode:
+Before the plan fixes its numbers, on Claude Code and on Codex, in an agent's default mode:
 
 - how long a shell command may run by default, and how much of its output the engine keeps. These set the output cap,
   and whether `--help` must tell the agent to give `navigate` more time;
@@ -633,7 +615,7 @@ both engines run without asking.
   - `agent_browser_start` and `_stop`: refused for a guest and a machine share, allowed for the person's other
     Desktop; idempotent; the flag set and cleared; a stop keeps the volume and the settings and removes the rest.
   - `agent_browser_run`: refused to a remote asker; the pane gives the agent; refused for a guest's agent; allowed
-    for an agent in a regular tab; answered with the backend and the Swarm unreachable; off, starting and failed each
+    for an agent in a regular tab; answered with the backend unreachable; off, starting and failed each
     answer by name.
   - The tool server: started at the first command, once; started again after it exits; ended at stop; a stop answers
     every running and waiting command; a call past its limit is ended; commands run in order; the ninth waits no
@@ -644,13 +626,10 @@ both engines run without asking.
 - **Core specs.** The lifecycle when the flag changes while the agent runs; the link to the service's own process;
   no launch carries a browser argument (create and relaunch); `agent_create` with `browser: true` still starts one;
   `agent_browser_state` still answers.
-- **Swarm host specs.** Unchanged: a delivery to an agent, its own 1:1 chat included, is typed exactly as before,
-  with or without a browser.
 - **End to end, real daemon, fake `podman`** (`cli/e2e/agentBrowser.e2e.ts`): create a plain agent; start its browser
   as the app does; see `ready`; run `harness browser snapshot` from the agent's pane; stop; see the frame without
   `browser` and the volume kept; run `harness browser snapshot` from the pane and see exit 4 with the
-  ask-your-person line; start it again as the app does and see it ready (the agent is in no Swarm, and the backend
-  is not reachable); delete; see everything removed. The fault case stays.
+  ask-your-person line; start it again as the app does and see it ready (the backend is not reachable); delete; see everything removed. The fault case stays.
 - **Real Podman** (`cli/e2e/agentBrowserPodman.e2e.ts`, run once by hand, `agent_browser_podman`). Its driver changes
   from the `browser-mcp` relay to `harness browser` run in the agent's pane.
   - Changed: the first case creates a plain agent and starts its browser with `agent_browser_start`; the tools case
@@ -698,9 +677,5 @@ both engines run without asking.
 - Whether `agent_browser_retry` folds into start. This spec keeps it.
 
 ## Open for Ken
-
-Each has the answer this spec takes.
-
-1. **An agent in no Swarm has no chat, so no Browser button.** It cannot get a browser. Taken: accepted.
 
 Closed: how an agent finds the command (decision 5), and that only the person starts it (decision 4).

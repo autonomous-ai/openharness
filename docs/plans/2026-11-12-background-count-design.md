@@ -125,7 +125,7 @@ Copy follows docs/naming-system.md; the planner checks the exact words against i
 - Code standards in AGENTS.md: smallest change, red-then-green test at the layer where each behavior lives, no fixed
   sleeps, bounded reads.
 - Per-engine knowledge lives in `cli/src/engines/<engine>/`; a pure dispatcher in `cli/src/lib/`; `closeAgentService`
-  gets it as a dependency wired in `core/main.ts` (wiring only). Swarm code untouched.
+  gets it as a dependency wired in `core/main.ts` (wiring only).
 - No content or identifiers in logs: a refusal logs the count, never command text or session ids.
 - `src/core/` and `src/services/` stay at 100% per-file coverage (`npm run test:core`), run locally once and recorded.
 - Docs updated in the same pull request: `docs/cli.md` (show, wait, watch, close) and
