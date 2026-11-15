@@ -60,11 +60,6 @@ describe.skipIf(process.platform === 'win32')('the PATH of what a test starts', 
     expect(resolveBinaryOnPath('opencode', { PATH: path })).toBeNull()
   })
 
-  it('makes the folder once: a daemon beside another asks again for the same root', () => {
-    const tools = workerTools({ PATH: folder('git') }), root = folder()
-    expect(testPath(root, tools)).toBe(testPath(root, tools))
-  })
-
   it('runs each tool the worker has through its link, with nothing else on PATH', () => {
     const root = folder(), path = testPath(root)
     for (const [name] of workerTools()) {

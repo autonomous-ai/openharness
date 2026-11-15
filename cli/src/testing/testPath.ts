@@ -36,12 +36,12 @@ export const TEST_TOOLS: readonly string[] = [
 /** Where every machine keeps ps, lsof, sh, env, sleep and the rest, and no engine. */
 export const SYSTEM_FOLDERS: readonly string[] = ['/usr/bin', '/bin', '/usr/sbin', '/sbin']
 
-let own: ReadonlyMap<string, string> | undefined
+let found: ReadonlyMap<string, string> | undefined
 
 /** Each tool [worker]'s PATH has, with its absolute file; `node` is the Node running the tests. With no argument:
  *  this worker's own, found once and kept. */
 export function workerTools(worker?: NodeJS.ProcessEnv): ReadonlyMap<string, string> {
-  if (!worker) return own ??= workerTools(process.env)
+  if (!worker) return found ??= workerTools(process.env)
   const tools = new Map<string, string>()
   for (const name of TEST_TOOLS) {
     // A relative PATH entry names a file from the worker's folder; as a link's target it would be read from <root>/tools.
@@ -51,13 +51,11 @@ export function workerTools(worker?: NodeJS.ProcessEnv): ReadonlyMap<string, str
   return tools
 }
 
-/** Makes `<root>/tools`, a link for each of [tools], and returns `<root>/tools:/usr/bin:/bin:/usr/sbin:/sbin`. */
+/** Makes `<root>/tools`, a link for each of [tools], and returns `<root>/tools:/usr/bin:/bin:/usr/sbin:/sbin`. Once for
+ *  each root: isolatedTmux makes it, and a daemon beside another takes the PATH from that tmux's environment. */
 export function testPath(root: string, tools: ReadonlyMap<string, string> = workerTools()): string {
   const folder = join(root, 'tools')
-  mkdirSync(folder, { recursive: true })
-  for (const [name, file] of tools) {
-    // A daemon beside another asks again for the same root.
-    try { symlinkSync(file, join(folder, name)) } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error }
-  }
+  mkdirSync(folder)
+  for (const [name, file] of tools) symlinkSync(file, join(folder, name))
   return [folder, ...SYSTEM_FOLDERS].join(':')
 }
