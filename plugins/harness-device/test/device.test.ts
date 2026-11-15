@@ -426,6 +426,28 @@ test('an attach with no devicesSocket asks the launcher again, and the devices a
   expect(w.attaches).toEqual([ATTACH, ATTACH])
 })
 
+// A reload while the launcher is asked cancels the module's timers: the send its answer allows waits on one too.
+test('the attach the launcher allows is sent from a timer of its own', async ($, on) => {
+  const order: string[] = []
+  // Before the world's own, so above it: each timer that fires, with the attaches sent by then.
+  on('clock.after', { ms: [0] }, async (_, e, next) => {
+    const fired = await next(e)
+    order.push(`timer, ${w.attaches.length} sent`)
+    return fired
+  })
+  const w = world(on, { answers: [held(25_000)], devices: '' })
+  await start($, w)
+  order.length = 0
+  w.relink = async () => {
+    order.push('launcher')
+    return withDevices
+  }
+  await attach($)
+  await w.clock.settle()
+  expect(order).toEqual(['timer, 0 sent', 'launcher', 'timer, 0 sent'])
+  expect(w.attaches).toEqual([ATTACH])
+})
+
 test('only the launcher that linked is asked again', async ($, on) => {
   const w = world(on, { launchers: ['harness'], answers: [held(25_000)], devices: '' })
   await start($, w)
