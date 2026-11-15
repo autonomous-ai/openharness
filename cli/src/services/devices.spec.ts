@@ -2244,7 +2244,7 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
         expect(calls('turnStarted')).toEqual([[G1, WAITS, undefined]])
       })
 
-      it('a dial that says appFilter coming while the view is apps is asked what waits and told each agent mid-turn, and its going closes the question', async () => {
+      it('a dial that says appFilter coming while the view is apps is asked what waits and told each agent mid-turn, and its going closes the question an older dial coming next would be asked', async () => {
         const { port } = await windowed('ghostty', false)
         waits(port)
         await vi.advanceTimersByTimeAsync(0)
@@ -2256,10 +2256,14 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
         expect(calls('question')).toEqual([[G1, expect.stringMatching(/^shown:/), [{ key: 'prompt', q: WAITS, options: ['In Ghostty'] }]]])
         expect(calls('turnStarted')).toEqual([[G1, WAITS, undefined]])
         const [[, id]] = calls('question') as [[string, string]]
-        // An older dial stays: the gate shuts again.
+        // It goes, the last dial (the fleet tells `watching` for the first dial and the last alone): the gate shuts again.
         appsSaid(false)
         seen.host.watching!(false)
         expect(calls('questionClose')).toEqual([[G1, id]])
+        // An older dial comes next: the question is not asked of it again.
+        seen.host.watching!(true)
+        await vi.advanceTimersByTimeAsync(0)
+        expect(calls('question')).toHaveLength(1)
       })
 
       it('the shown app left as Harness logs "view tabs · empty", sends the dials their lists and closes the outside agents\' questions', async () => {

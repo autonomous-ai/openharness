@@ -803,7 +803,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const dialAttached = (on: boolean): void => {
     for (const timer of attached) clearInterval(timer)
     attached = []
-    // A dial that says appFilter coming or going can turn the gate (heldOnTab): what waits is asked, or closed, again.
+    // The first dial coming, or the last going, can turn the gate (heldOnTab) when it says appFilter: what waits is asked,
+    // or closed, again. Closed as the last goes, an older dial that comes next is not asked it. A second dial coming or
+    // going does not reach here: the fleet tells `watching` for the first and the last alone.
     if (!on) part.call('dial', showWaits)
     if (!observed || !herdr) return
     // Only with herdr installed, read at each attach, as a tap needs it (herdr.ts): with none, no folder is watched
