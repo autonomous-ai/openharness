@@ -183,7 +183,7 @@ const notBare = (): boolean => SYSTEM.some((dir) => ['codex', 'npm', 'node'].som
  * as an offline npm does while `npm-offline` exists.
  */
 function withoutCodex(d: IsolatedDaemon): void {
-  const bin = join(d.root, 'bin'), tools = join(d.root, 'tools'), installed = join(d.root, 'codex-package')
+  const bin = join(d.root, 'bin'), tools = join(d.root, 'tmux-only'), installed = join(d.root, 'codex-package')
   const offline = join(d.root, 'npm-offline'), seconds = join(d.root, 'npm-seconds')
   renameSync(join(bin, 'codex'), installed)
   delete d.env.CODEX_PATH
