@@ -101,18 +101,21 @@ export function createAgentLife(deps: AgentLifeDeps) {
     for (const session of agents) told(follower, session.agentId)
     return agents
   }
+  // The scan visits every agent: keep its callback here, so each visit allocates no function.
+  const look = (follower: Follower, session: RegisteredSession): void => {
+    if (follower.options.running === false) return
+    const known = follower.told.has(session.agentId)
+    if (known && !follower.options.each) return
+    if (!matches(follower.options, session)) return
+    if (!known) told(follower, session.agentId)
+    follower.tell({ kind: 'running', session })
+  }
 
   return {
     /** A look at a live agent: a create, a fork, a resume, a start's restore, a scan (every agent, every 5 s at idle). */
     running(session: RegisteredSession): void {
-      const look = (follower: Follower): void => {
-        if (follower.options.running === false || !matches(follower.options, session)) return
-        if (!follower.options.each && follower.told.has(session.agentId)) return
-        told(follower, session.agentId)
-        follower.tell({ kind: 'running', session })
-      }
-      for (const follower of listeners) look(follower)
-      for (const follower of processes.values()) look(follower)
+      for (const follower of listeners) look(follower, session)
+      for (const follower of processes.values()) look(follower, session)
     },
     /** It stopped running here: every way an agent stops running passes through this. */
     ended(agentId: string): void {

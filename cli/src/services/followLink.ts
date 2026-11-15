@@ -37,8 +37,9 @@ export function followLink(options: FollowOptions, log: (line: string) => void =
   const listeners = new Set<(event: AgentLife) => void>()
   /** The agents the followers were told run, and not since that they ended. */
   const told = new Map<string, RegisteredSession>()
-  /** Heard of since the catch-up was asked: newer than its answer. */
-  const heard = new Set<string>()
+  /** Heard of while a catch-up is pending: newer than its answer. Released when it ends, so a long connection
+   *  retains no ids of agents that have ended. */
+  let heard: Set<string> | null = null
   /** Bumped by each connection and its end, so an answer that comes after either is not used. */
   let generation = 0
   let caughtUp = false
@@ -75,10 +76,10 @@ export function followLink(options: FollowOptions, log: (line: string) => void =
       const event = agentLifeIn(payload)
       if (!event) return true
       if (event.kind === 'running') {
-        heard.add(event.session.agentId)
+        heard?.add(event.session.agentId)
         told.set(event.session.agentId, event.session)
       } else if (event.kind === 'ended') {
-        heard.add(event.agentId)
+        heard?.add(event.agentId)
         told.delete(event.agentId)
       }
       tell(event)
@@ -89,30 +90,33 @@ export function followLink(options: FollowOptions, log: (line: string) => void =
     async connected(query: Query): Promise<void> {
       if (options.running === false) return
       const mine = ++generation
-      heard.clear()
+      const changed = heard = new Set<string>()
       const answer = await query('follow_agents', { ...options }).catch(() => null)
       if (mine !== generation) return
       const listed = agentsIn(answer)
       if (!listed) {
+        heard = null
         log(`[agents] the core did not answer what agents to follow (${typeof answer?.error === 'string' ? answer.error : 'no answer'}): none is heard of as it runs`)
         return
       }
       const ids = new Set(listed.map((session) => session.agentId))
       for (const agentId of [...told.keys()]) {
-        if (ids.has(agentId) || heard.has(agentId)) continue
+        if (ids.has(agentId) || changed.has(agentId)) continue
         told.delete(agentId)
         tell({ kind: 'ended', agentId })
       }
       for (const session of listed) {
-        if (heard.has(session.agentId) || (!options.each && told.has(session.agentId))) continue
+        if (changed.has(session.agentId) || (!options.each && told.has(session.agentId))) continue
         told.set(session.agentId, session)
         tell({ kind: 'running', session })
       }
+      heard = null
       settle(true)
     },
     /** The connection went: an answer still on its way is not used, and the next connection catches up again. */
     disconnected(): void {
       generation++
+      heard = null
       settle(false)
     },
     /** Whether this connection's catch-up is in, waiting [ms] at most for it. */

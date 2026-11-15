@@ -152,12 +152,13 @@ describe('discovery', () => {
       const run = setup()
       await run.handlers.onDiscovered(seen({ dsh: 'blender' } as never))
       expect(vi.mocked(run.deps.registry.openProcessAgent).mock.calls[0]![0]).not.toHaveProperty('dsh')
+      run.rows.set('a1', row())
       await run.handlers.onObserved(seen({ dsh: 'blender' } as never), row())
-      expect(run.deps.attachDsh).not.toHaveBeenCalled()
+      expect(vi.mocked(run.deps.attach).mock.lastCall![0]).not.toHaveProperty('dsh')
       // A row Harness created as a DSH keeps its viewer.
       run.rows.set('a1', row({ dsh: 'blender' } as Partial<RegisteredSession>))
       await run.handlers.onObserved(seen(), row({ dsh: 'blender' } as Partial<RegisteredSession>))
-      expect(run.deps.attachDsh).toHaveBeenCalled()
+      expect(run.deps.attach).toHaveBeenLastCalledWith(expect.objectContaining({ dsh: 'blender' }))
     })
 
     it('fills a Hermes home it did not have, with the mark discovery gave it, and never marks or moves one it has', async () => {

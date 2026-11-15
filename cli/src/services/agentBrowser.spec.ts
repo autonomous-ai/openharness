@@ -718,7 +718,11 @@ describe('the agent browser service', () => {
       await eventually(() => expect(savedState().deleting).toEqual([]))
       expect(Object.keys(savedState().browsers).sort()).toEqual(['a1', 'a2', 'a3'])
       expect(asked()).toContain('volume rm harness-browser-a9')
-      expect(asked().filter(line => !line.includes('harness-browser-a9') && !line.includes('harness-proxy-a9'))).toEqual([])
+      // Startup lists running containers after resuming the recorded delete. Observe that step before asserting
+      // what it changed: on a faster host its read-only listing already arrived at the old assertion (#4320).
+      const listing = `ps --filter label=harness.daemon=${daemonIdOf(dataDir)} --format json`
+      await eventually(() => expect(asked()).toContain(listing))
+      expect(asked().filter(line => line !== listing && !line.includes('harness-browser-a9') && !line.includes('harness-proxy-a9'))).toEqual([])
     }
   })
 

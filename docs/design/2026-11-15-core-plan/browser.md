@@ -160,3 +160,20 @@ moves it onto `followLink`**, with the viewers' e2e as the proof.
   `BrowserRoute`, `mayOpenBrowser` (the open's asker check can move to the service: it gets the asker), the browser bits
   of `backendSocket.ts`, `CoreApi.clients.browserFrame/browserBytes`, and make `wakeAgentBrowser` generic.
 - Keep: `core/terminals/browser.ts`, `lib/browserShim.ts` (the sign-in BROWSER shim, not the Agent Browser).
+
+## Continuation, 15 November (Codex)
+
+PR #4320 is being completed from `codex/core-browser-continue` in an isolated worktree. Main `aad8dcd535` is integrated:
+the discovery and resume conflicts keep both the generic lifecycle and main's removal of process-environment reads.
+
+CI run 43679841924 failed because the startup spec rejected a read-only `podman ps` call if it arrived before the
+assertion. The spec now waits for that listing, permits exactly it, and still rejects any unrequested change to a
+browser or profile. Waiting without changing the assertion reproduces the failure; the corrected test passes.
+
+Review also found that `followLink` retained ended agent ids until the next connection. Only an outstanding catch-up
+now keeps the ids needed to protect its answer from newer events. The core's scan callback is allocated once, and
+an agent already known to a follower is not reinserted or pruned at each look.
+
+Remaining before merge: final coverage receipts, integration checks, the exact-head CI run and the performance
+comparison. The earlier isolated scan measurement was slower than main; a full isolated-daemon comparison is being
+recorded as well. Package 2's frame parts and stream work remain step 2.
