@@ -44,17 +44,18 @@ describe('asynchronous question evidence', () => {
 
   it('releases its lease and types nothing when the control port cannot be bound', async () => {
     const current = row(), sendKey = vi.fn(async () => true), sendText = vi.fn(async () => true), release = vi.fn()
-    let bind: () => undefined = () => { throw new Error('no control port') }
+    let bind: () => { apply(): Promise<boolean> } | undefined = () => { throw new Error('no control port') }
+    const readQuestion = vi.fn(async (): Promise<PaneView> => null).mockResolvedValueOnce(view)
     const controller = new AskQuestionController({ getSession: () => current, capture: async () => capture,
-      readQuestion: async () => view, sendKey, sendText, acquireControl: () => release, questionControlFor: () => bind() })
+      readQuestion, sendKey, sendText, acquireControl: () => release, questionControlFor: () => bind() })
     if (!view || view.kind !== 'question') throw new Error('missing recorded fixture')
     const answer = { agentId: 'agent', answers: { [view.question]: view.rows[0].label } }
     expect(await controller.answer(answer)).toMatchObject({ ok: false, error: 'ANSWER_FAILED' })
     expect(sendKey).not.toHaveBeenCalled(); expect(sendText).not.toHaveBeenCalled()
     expect(release).toHaveBeenCalledOnce()
     // Nothing is left marked as driving this terminal: the next answer is entered, not refused as busy.
-    bind = () => undefined
-    expect(await controller.answer(answer)).not.toMatchObject({ error: 'ANSWER_BUSY' })
+    bind = () => ({ apply: async () => true })
+    expect(await controller.answer(answer)).toEqual({ ok: true })
     expect(release).toHaveBeenCalledTimes(2)
   })
 
