@@ -76,7 +76,7 @@ describe('core runtime profile authority', () => {
     expect(pending.commit()).toBe(false)
   })
 
-  it.each(['codexHome', 'hermesHome', 'boundAt', 'tmuxPane', 'primaryRuntimeKey', 'active', 'runtimes'] as const)(
+  it.each(['transcriptPath', 'codexHome', 'hermesHome', 'boundAt', 'cwd', 'tmuxPane', 'primaryRuntimeKey', 'active', 'runtimes'] as const)(
     'preserves JSON null/undefined equivalence for %s', async field => {
       const t = setup(); Object.assign(t.s, { [field]: undefined }); await t.seed()
       const copied = structuredClone(t.s), pending = t.sessions.stage(t.s, false, false)
