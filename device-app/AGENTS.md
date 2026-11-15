@@ -19,8 +19,9 @@ in `src-tauri/`; the window's three screens are plain TypeScript in `ui/`.
 - `cd ui && npm test` and `npm run typecheck`: the window.
 - `cd src-tauri && cargo tauri build --debug`: the app bundle.
 - `cd ui && npm run gallery`: every screen in every state, both themes (`ui/gallery.html`).
-- `cd src-tauri && cargo test --locked --lib -- --ignored scratch_terminal_windows`, on a Mac: the Terminal scripts
-  against two Terminal windows the test opens and closes. macOS may first ask to let your shell's app control Terminal.
+- `cd src-tauri && cargo test --locked --lib -- --ignored scratch_terminal_windows`, on a Mac, run from another
+  terminal app than Terminal, with Terminal running and another app in front: the Terminal scripts against two Terminal
+  windows the test opens and closes. macOS may first ask to let that terminal app control Terminal.
 
 ## Rules a change keeps
 
