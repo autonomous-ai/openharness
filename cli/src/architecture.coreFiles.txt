@@ -143,6 +143,7 @@ core/turns/turnHooks.ts
 core/updateHandoff.ts
 core/updaterBeside.ts
 core/usageLink.ts
+core/usageOutcomes.ts
 core/viewerStreams.ts
 core/viewersLink.ts
 core/viewersWake.ts
@@ -158,7 +159,6 @@ dsh/installed.ts
 dsh/launch.ts
 dsh/launchWire.ts
 dsh/manifest.ts
-dsh/probe.ts
 engines/agy/contract.ts
 engines/amp/contract.ts
 engines/claude/backgroundCommands.ts
@@ -226,7 +226,6 @@ engines/kit/notifyHooks.ts
 engines/kit/pane.ts
 engines/kit/pluginFetch.ts
 engines/kit/processFacts.ts
-engines/kit/processHome.ts
 engines/kit/processRecordEvidence.ts
 engines/kit/projectFolder.ts
 engines/kit/questionPane.ts
@@ -301,7 +300,6 @@ lib/agentTmp.ts
 lib/agentUsageWire.ts
 lib/apiConnectionMetadata.ts
 lib/apiInstructions.ts
-lib/appProductUsageReport.ts
 lib/attachTracker.ts
 lib/attachTranscript.ts
 lib/authSession.ts
@@ -418,8 +416,8 @@ lib/pathContainment.ts
 lib/patientExec.ts
 lib/peerAccount.ts
 lib/piSessionHome.ts
-lib/processEnv.ts
 lib/processEvidence.ts
+lib/processHeldFiles.ts
 lib/processLiveness.ts
 lib/processMounts.ts
 lib/processProof.ts
@@ -428,7 +426,6 @@ lib/processTable.ts
 lib/processTree.ts
 lib/productHealthContract.ts
 lib/productUsageContract.ts
-lib/productUsageSignals.ts
 lib/projectFolder.ts
 lib/ptyHost/client.ts
 lib/ptyHost/drain.ts
@@ -482,7 +479,6 @@ lib/sqliteThread.ts
 lib/sshHosts.ts
 lib/stopAgentService.ts
 lib/stoppedAgents.ts
-lib/storeProxy.ts
 lib/subagentTranscript.ts
 lib/submitTiming.ts
 lib/subscriptionModel.ts
@@ -538,7 +534,6 @@ lib/windows/shell.ts
 lib/windows/storeAppAlias.ts
 lib/windows/treeKill.ts
 lib/workspaceCheck.ts
-lib/worktreeDeletion.ts
 lib/wsLiveness.ts
 localWsServer.ts
 scm/gitScmProject.ts

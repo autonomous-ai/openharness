@@ -5,14 +5,14 @@ import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { startHookServer, type HookServerHandlers, chooseHookAgent, clientEnvPane, hookFiredAt, knownTranscriptFor } from './hookServer.js'
+import { startHookServer, type HookServerHandlers, chooseHookAgent, clientEnvPane, hookFacts, hookFiredAt, knownTranscriptFor } from './hookServer.js'
 import { registry, type RegisteredSession } from './lib/registry.js'
 import { env } from './config/env.js'
 import { readHookCredential } from './lib/hookAuth.js'
 import { ENGINES } from './engines/types.js'
 import { engineHooks } from './engines/hooks.js'
 import { pipeRequest } from './lib/windows/pipeClient.js'
-import type { ServiceHttpRequest } from './core/serviceRoutes.js'
+import type { DoorRequest } from './core/serviceRoutes.js'
 
 let server: Server | null = null
 
@@ -536,13 +536,180 @@ describe('process-owned hook server', () => {
     expect(await response.json()).toEqual({ success: false, error: { code: 'PROXY_FAILED', message: 'fetch failed' } })
   })
 
-  it('forwards a proxied answer verbatim, status and body alike', async () => {
-    const { base } = await start({
-      onAuthMe: async () => ({ status: 504, body: { success: false, error: { code: 'BACKEND_TIMEOUT', message: 'slow' } } }),
-    })
-    const response = await fetch(`${base}/api/auth/me`)
+  it('hands a route a service answers on as it came, and writes its answer and the headers it declares', async () => {
+    const heard: unknown[] = []
+    const onServiceRoute = vi.fn((path: string, request: DoorRequest, localOk: boolean) => (path === '/api/auth/me' || path === '/api/desk/ops'
+      ? (async () => {
+        heard.push({ path, method: request.method, target: request.target, localOk, ...(request.method === 'GET' ? {} : { body: await request.readBody(4) }) })
+        return { status: 504, body: { success: false, error: { code: 'BACKEND_TIMEOUT', message: 'slow' } }, headers: { 'x-harness-usage-vocabulary': '10' } }
+      })()
+      : null))
+    const { base } = await start({ onServiceRoute })
+    const response = await fetch(`${base}/api/auth/me?fresh=1`)
     expect(response.status).toBe(504)
+    expect(response.headers.get('x-harness-usage-vocabulary')).toBe('10')
     expect(await response.json()).toEqual({ success: false, error: { code: 'BACKEND_TIMEOUT', message: 'slow' } })
+    // A write's body as text, read up to its route's bound (past it, empty), and whether it carries the local header.
+    await fetch(`${base}/api/desk/ops`, { method: 'POST', headers: { 'x-adapter-local': '1' }, body: '{}' })
+    await fetch(`${base}/api/desk/ops`, { method: 'POST', body: '{"ops":[]}' })
+    expect(heard).toEqual([
+      { path: '/api/auth/me', method: 'GET', target: '/api/auth/me?fresh=1', localOk: false },
+      { path: '/api/desk/ops', method: 'POST', target: '/api/desk/ops', localOk: true, body: '{}' },
+      { path: '/api/desk/ops', method: 'POST', target: '/api/desk/ops', localOk: false, body: '' },
+    ])
+    // No service answers it: the door's own 404.
+    const missing = await fetch(`${base}/api/nowhere`, { method: 'POST', body: '{}' })
+    expect(missing.status).toBe(404)
+    expect(await missing.json()).toEqual({ error: 'not found' })
+    // A path open without the credential (a hook's), asked without it, never reaches a service.
+    onServiceRoute.mockClear()
+    expect((await realFetch(`${base}/api/hook/unknown`, { method: 'POST', body: '{}' })).status).toBe(404)
+    expect(onServiceRoute).not.toHaveBeenCalled()
+  })
+})
+
+// The hook says the gateway and the Codex home of its own environment in two headers (hook/notify.mjs): a daemon that
+// does not read a header ignores it, where it refuses a body with a field it does not list.
+describe('what a hook says of its own environment', () => {
+  const GATEWAY = 'x-harness-hook-gateway', HOME = 'x-harness-hook-codex-home'
+
+  it.each([
+    [{ [GATEWAY]: 'ori' }, { gateway: 'ori' }, []],
+    [{ [GATEWAY]: 'none' }, { gateway: null }, []],
+    [{}, {}, []],
+    [{ [GATEWAY]: 'vendor' }, {}, [GATEWAY]],
+    [{ [GATEWAY]: 'ori, none' }, {}, [GATEWAY]],
+    [{ [HOME]: '/home/u/.codex-work' }, { codexHome: '/home/u/.codex-work' }, []],
+    [{ [HOME]: encodeURIComponent('/home/nguyễn/.codex work') }, { codexHome: '/home/nguyễn/.codex work' }, []],
+    [{ [HOME]: encodeURIComponent(`/${'あ'.repeat(1023)}`) }, { codexHome: `/${'あ'.repeat(1023)}` }, []],
+    [{ [HOME]: 'relative/home' }, {}, [HOME]],
+    [{ [HOME]: `/${'x'.repeat(1024)}` }, {}, [HOME]],
+    [{ [HOME]: '/bad%0Ahome' }, {}, [HOME]],
+    [{ [HOME]: '/cut%E0%A4%A' }, {}, [HOME]],
+    [{ [HOME]: '' }, {}, [HOME]],
+  ])('%j is taken as %j, refusing %j', (headers, taken, refused) => {
+    expect(hookFacts({ headers }, 'linux')).toEqual({ ...taken, refused })
+  })
+
+  // A home on a share or a device would have the core open another computer's folder on every registration
+  // (cli/AGENTS.md rule 4): on Windows only a drive's path is taken, as agent_create takes one.
+  it.each([
+    ['C:\\Users\\u\\.codex-work', { codexHome: 'C:\\Users\\u\\.codex-work' }, []],
+    ['\\\\host\\share\\.codex', {}, [HOME]],
+    ['//host/share/.codex', {}, [HOME]],
+    ['\\\\?\\C:\\x', {}, [HOME]],
+    ['\\foo', {}, [HOME]],
+    ['/foo', {}, [HOME]],
+  ])('on Windows the home %j is taken as %j, refusing %j', (home, taken, refused) => {
+    expect(hookFacts({ headers: { [HOME]: encodeURIComponent(home) } }, 'win32')).toEqual({ ...taken, refused })
+  })
+
+  /** A session-start from the pane of a live agent of `engine`, which registers: `registry.register` is spied and
+   *  answers `result`. */
+  async function registering(engine: 'claude' | 'codex', result: Record<string, unknown> = {}) {
+    const agent = { engine, sessionId: '', agentId: `${engine}-agent`, active: true,
+      runtimes: [{ backend: 'tmux', paneId: '%1' }], primaryRuntimeKey: 'tmux\u0000%1',
+      processIdentity: { pid: 4242, startMarker: 'fixture', executable: `<${engine}>` } } as RegisteredSession
+    vi.spyOn(registry, 'byAgent').mockReturnValue(agent)
+    const register = vi.spyOn(registry, 'register')
+      .mockReturnValue({ entry: agent, isNew: true, evicted: null, rebound: null, orphaned: null, ...result })
+    const { base, headers } = await start({ resolveHookAgent: async () => agent })
+    const post = (extra: Record<string, string>) => fetch(`${base}/api/hook/session-start`, {
+      method: 'POST', headers: { ...headers, ...extra },
+      body: JSON.stringify({ engine, sessionId: 'session-1', tmuxPane: '%1', hookEvent: 'SessionStart' }),
+    })
+    return { register, post }
+  }
+
+  it('registers with the facts it took, and names a refused header without its value', async () => {
+    const logged = (['log', 'warn', 'error', 'info', 'debug'] as const).map(level => vi.spyOn(console, level).mockImplementation(() => {}))
+    const { register, post } = await registering('claude')
+    // What the start said (the dial's prompts are off with no Unix socket, as here) is not this request's.
+    vi.mocked(console.warn).mockClear()
+    expect((await post({ [GATEWAY]: 'vendor', [HOME]: 'secret/place' })).status).toBe(200)
+    await vi.waitFor(() => expect(register).toHaveBeenCalledOnce())
+    expect(register.mock.calls[0][0]).not.toHaveProperty('gateway')
+    expect(register.mock.calls[0][0]).not.toHaveProperty('codexHome')
+    expect(vi.mocked(console.warn).mock.calls).toEqual([
+      ['[hooks] session- SessionStart header refused · x-harness-hook-gateway'],
+      ['[hooks] session- SessionStart header refused · x-harness-hook-codex-home'],
+    ])
+    expect(JSON.stringify(logged.flatMap(spy => spy.mock.calls))).not.toMatch(/vendor|secret/)
+  })
+
+  it('registers with the gateway it took', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const { register, post } = await registering('claude')
+    await post({ [GATEWAY]: 'ori' })
+    await vi.waitFor(() => expect(register).toHaveBeenCalledOnce())
+    expect(register.mock.calls[0][0]).toMatchObject({ gateway: 'ori' })
+  })
+
+  it('takes the longest home a hook sends', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const home = `/${'あ'.repeat(1023)}`
+    expect(Buffer.byteLength(encodeURIComponent(home))).toBe(9_210)
+    const { register, post } = await registering('codex')
+    expect((await post({ [HOME]: encodeURIComponent(home) })).status).toBe(200)
+    await vi.waitFor(() => expect(register).toHaveBeenCalledOnce())
+    expect(register.mock.calls[0][0]).toMatchObject({ codexHome: home })
+  })
+
+  it('names a home the registration refused, without its value', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { register, post } = await registering('codex', { refusedHome: true })
+    await post({ [HOME]: '/home/u/.codex-work' })
+    await vi.waitFor(() => expect(register).toHaveBeenCalledOnce())
+    await vi.waitFor(() => expect(warn).toHaveBeenCalledWith('[hooks] session- SessionStart header refused · x-harness-hook-codex-home'))
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('codex-work')
+  })
+
+  it('reads neither on another route', async () => {
+    const onTurnStop = vi.fn(), onSessionEnd = vi.fn()
+    const agent = { engine: 'claude', sessionId: 'real-session', agentId: 'agent-1', runtimes: [], processIdentity: null } as unknown as RegisteredSession
+    vi.spyOn(registry, 'bySession').mockReturnValue(agent)
+    vi.spyOn(registry, 'byAgent').mockReturnValue(agent)
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { base, headers } = await start({ onTurnStop, onSessionEnd, resolveHookAgent: async () => agent })
+    // The start's own line (no Unix socket here) is not these requests'.
+    warn.mockClear()
+    for (const path of ['/api/hook/turn-stop', '/api/hook/session-end']) {
+      const send = async (extra: Record<string, string>) => {
+        const response = await fetch(`${base}${path}`, { method: 'POST', headers: { ...headers, ...extra },
+          body: JSON.stringify({ engine: 'claude', sessionId: 'real-session', tmuxPane: '%1', callerPid: 123 }) })
+        return [response.status, await response.json()]
+      }
+      expect(await send({ [GATEWAY]: 'vendor', [HOME]: 'secret/place' })).toEqual(await send({}))
+    }
+    expect(onTurnStop).toHaveBeenCalledTimes(2)
+    expect(onTurnStop.mock.calls[0]).toEqual(onTurnStop.mock.calls[1])
+    expect(onSessionEnd).toHaveBeenCalledTimes(2)
+    expect(onSessionEnd.mock.calls[0]).toEqual(onSessionEnd.mock.calls[1])
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it.each([{ gateway: 'ori' }, { codexHome: '/x' }])('a body that names them is refused as before: %j', async (field) => {
+    const resolveHookAgent = vi.fn(async () => null)
+    const { base, headers } = await start({ resolveHookAgent })
+    const response = await fetch(`${base}/api/hook/session-start`, {
+      method: 'POST', headers, body: JSON.stringify({ engine: 'claude', sessionId: 'session-1', tmuxPane: '%1', ...field }),
+    })
+    expect(response.status).toBe(400)
+    expect(await response.json()).toEqual({ error: 'invalid hook body' })
+    expect(resolveHookAgent).not.toHaveBeenCalled()
+  })
+
+  // The daemon a later hook will meet as the older one.
+  it('ignores a header it does not read', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const { register, post } = await registering('claude')
+    await post({})
+    await vi.waitFor(() => expect(register).toHaveBeenCalledOnce())
+    await post({ 'X-Harness-Hook-Next': '1' })
+    await vi.waitFor(() => expect(register).toHaveBeenCalledTimes(2))
+    expect(register.mock.calls[1]).toEqual(register.mock.calls[0])
   })
 })
 
@@ -619,217 +786,7 @@ describe('the pane a Hermes client environment names', () => {
   })
 })
 
-describe('the account name proxy', () => {
-  it('passes the signed-in person\'s new name on only with the local header, body and answer verbatim', async () => {
-    const update = vi.fn(async (body: unknown) => ({ status: 200, body: { success: true, data: { user: { id: 'u1', name: 'Elvis' }, echo: body } } }))
-    const { base } = await start({ onAuthMeUpdate: update })
-    const refused = await fetch(`${base}/api/auth/me`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: '{"name":"Elvis"}' })
-    expect(refused.status).toBe(403)
-    expect(update).not.toHaveBeenCalled()
-
-    const saved = await fetch(`${base}/api/auth/me`, { method: 'PATCH', headers: { 'content-type': 'application/json', 'x-adapter-local': '1' }, body: '{"name":"Elvis"}' })
-    expect(saved.status).toBe(200)
-    expect(((await saved.json()) as { data: unknown }).data).toEqual({ user: { id: 'u1', name: 'Elvis' }, echo: { name: 'Elvis' } })
-    expect(update).toHaveBeenCalledWith({ name: 'Elvis' })
-
-    const bad = await fetch(`${base}/api/auth/me`, { method: 'PATCH', headers: { 'content-type': 'application/json', 'x-adapter-local': '1' }, body: '{nope' })
-    expect(bad.status).toBe(400)
-    expect(update).toHaveBeenCalledTimes(1)
-  })
-
-  it('answers a refusal as the backend gave it, so the app can say why', async () => {
-    const { base } = await start({
-      onAuthMeUpdate: async () => ({ status: 400, body: { success: false, error: { code: 'INVALID_NAME', message: 'Use 1 to 60 characters, with no hidden ones.' } } }),
-    })
-    const response = await fetch(`${base}/api/auth/me`, { method: 'PATCH', headers: { 'content-type': 'application/json', 'x-adapter-local': '1' }, body: '{"name":" "}' })
-    expect(response.status).toBe(400)
-    expect(((await response.json()) as { error: { code: string } }).error.code).toBe('INVALID_NAME')
-  })
-})
-
-describe('the desk proxy', () => {
-  it('reads the desk ungated and writes its ops only with the local header, body passed through', async () => {
-    const ops = vi.fn(async (body: unknown) => ({ status: 200, body: { success: true, data: { revision: 2, tabs: [], echo: body } } }))
-    const { base } = await start({
-      onDeskRead: async () => ({ status: 200, body: { success: true, data: { revision: 1, tabs: [] } } }),
-      onDeskOps: ops,
-    })
-    const read = await fetch(`${base}/api/desk`)
-    expect(await read.json()).toEqual({ success: true, data: { revision: 1, tabs: [] } })
-
-    const refused = await fetch(`${base}/api/desk/ops`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"ops":[]}' })
-    expect(refused.status).toBe(403)
-    expect(ops).not.toHaveBeenCalled()
-
-    const body = { ops: [{ op: 'tab.create', id: 'a', name: 'Local' }] }
-    const written = await fetch(`${base}/api/desk/ops`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-adapter-local': '1' }, body: JSON.stringify(body) })
-    expect(((await written.json()) as { data: unknown }).data).toMatchObject({ revision: 2, echo: body })
-    expect(ops).toHaveBeenCalledWith(body)
-
-    const bad = await fetch(`${base}/api/desk/ops`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-adapter-local': '1' }, body: '{nope' })
-    expect(bad.status).toBe(400)
-  })
-})
-
-describe('the Agent Messages proxy', () => {
-  it('reads which tabs have Agent Messages on ungated, and sets one tab only with the local header', async () => {
-    const write = vi.fn(async (tabId: string, body: unknown) => ({ status: 200, body: { success: true, data: { tabId, echo: body } } }))
-    const { base } = await start({
-      onAgentMessagesRead: async () => ({ status: 200, body: { success: true, data: { revision: 1, machines: [], tabs: [] } } }),
-      onAgentMessagesWrite: write,
-    })
-    expect(await (await fetch(`${base}/api/agent-messages`)).json()).toEqual({ success: true, data: { revision: 1, machines: [], tabs: [] } })
-    const patch = (path: string, body: string, local = true) => fetch(`${base}${path}`, { method: 'PATCH', headers: { 'content-type': 'application/json', ...(local ? { 'x-adapter-local': '1' } : {}) }, body })
-    expect((await patch('/api/agent-messages/tabs/app', '{"enabled":true}', false)).status).toBe(403)
-    expect(write).not.toHaveBeenCalled()
-    const saved = await patch('/api/agent-messages/tabs/app', '{"enabled":true}')
-    expect(((await saved.json()) as { data: unknown }).data).toEqual({ tabId: 'app', echo: { enabled: true } })
-    expect(write).toHaveBeenCalledExactlyOnceWith('app', { enabled: true })
-    expect((await patch('/api/agent-messages/tabs/app', '{nope')).status).toBe(400)
-    expect((await patch('/api/agent-messages/tabs/bad.tab', '{}')).status).toBe(404)
-  })
-
-  it('answers UNAVAILABLE where the daemon has no handler for it', async () => {
-    const { base } = await start({})
-    expect((await fetch(`${base}/api/agent-messages`)).status).toBe(503)
-    expect((await fetch(`${base}/api/agent-messages/tabs/app`, { method: 'PATCH', headers: { 'content-type': 'application/json', 'x-adapter-local': '1' }, body: '{}' })).status).toBe(503)
-  })
-})
-
-// The desktop and web apps approve a device that says its code aloud (a lamp, #1410), as the phone does:
-// the daemon passes the phone half of a sign-in through with its own session, and nothing else.
-describe('sign-in approval proxy', () => {
-  it('passes lookup, approve and deny through with the code only, guarded from cross-origin requests', async () => {
-    const send = vi.fn(async () => ({ status: 200, body: { success: true, data: { ok: true } } }))
-    const { base } = await start({ onSignInAnswer: send })
-    const headers = { 'x-adapter-local': '1', 'content-type': 'application/json' }
-    for (const h of [{}, { ...headers, origin: 'https://untrusted.example' }]) {
-      expect((await fetch(`${base}/api/auth/qr/approve`, { method: 'POST', headers: h, body: JSON.stringify({ code: '12345678' }) })).status).toBe(403)
-    }
-    for (const invalid of [{}, { code: '' }, { code: 5 }, { code: 'x'.repeat(129) }, { code: '12345678', userId: 'u2' }]) {
-      expect((await fetch(`${base}/api/auth/qr/approve`, { method: 'POST', headers, body: JSON.stringify(invalid) })).status).toBe(400)
-    }
-    expect((await fetch(`${base}/api/auth/qr/claim`, { method: 'POST', headers, body: JSON.stringify({ code: '12345678' }) })).status).toBe(404)
-    expect(send).not.toHaveBeenCalled()
-    for (const action of ['lookup', 'approve', 'deny'] as const) {
-      expect((await fetch(`${base}/api/auth/qr/${action}`, { method: 'POST', headers, body: JSON.stringify({ code: '1234 5678' }) })).status).toBe(200)
-      expect(send).toHaveBeenLastCalledWith(action, { code: '1234 5678' })
-    }
-  })
-
-  it('is unavailable on a daemon that cannot reach the backend for it', async () => {
-    const { base } = await start({})
-    const r = await fetch(`${base}/api/auth/qr/lookup`, { method: 'POST', headers: { 'x-adapter-local': '1', 'content-type': 'application/json' }, body: JSON.stringify({ code: '12345678' }) })
-    expect(r.status).toBe(503)
-  })
-})
-
-// The native desktop's chat files: its REST client has no account token, so the daemon streams the upload on with its own.
 describe('account Experimental settings proxy', () => {
-  it('proxies only voluntary fixed-choice feedback and guards it from cross-origin requests', async () => {
-    const send = vi.fn(async () => ({ status: 200, body: { success: true, data: { accepted: true } } }))
-    const { base } = await start({ onProductFeedback: send })
-    const path = `${base}/api/product-usage/feedback`
-    const body = { id: '12345678-1234-4234-8234-123456789012', answer: 'useful' }
-    const headers = { 'x-adapter-local': '1', 'content-type': 'application/json' }
-    for (const h of [{}, { ...headers, origin: 'https://untrusted.example' }]) {
-      expect((await fetch(path, { method: 'POST', headers: h, body: JSON.stringify(body) })).status).toBe(403)
-    }
-    for (const invalid of [{ ...body, text: 'PRIVATE_CANARY' }, { ...body, answer: 'PRIVATE_CANARY' }, { ...body, id: 'PRIVATE_CANARY' }]) {
-      expect((await fetch(path, { method: 'POST', headers, body: JSON.stringify(invalid) })).status).toBe(400)
-    }
-    expect(send).not.toHaveBeenCalled()
-    expect((await fetch(path, { method: 'POST', headers, body: JSON.stringify(body) })).status).toBe(200)
-    expect(send).toHaveBeenCalledExactlyOnceWith(body)
-  })
-  it('accepts only bounded fixed app counts through the local gateway proxy', async () => {
-    const send = vi.fn(async () => ({ status: 200, body: { success: true, data: { accepted: true } } }))
-    const { base } = await start({ onProductUsageReport: send })
-    const body = { schemaVersion: 1, revision: 0, id: '12345678-1234-4234-8234-123456789012', day: '2026-10-14', counters: { ui_desktop_sign_in_ok: 1 } }
-    const headers = { 'x-adapter-local': '1', 'content-type': 'application/json' }
-    const post = (value: unknown, h = headers) => fetch(`${base}/api/product-usage/report`, { method: 'POST', headers: h, body: JSON.stringify(value) })
-    expect((await post(body, { ...headers, origin: 'https://untrusted.example' } as typeof headers)).status).toBe(403)
-    for (const bad of [{ ...body, prompt: 'PRIVATE_CANARY' }, { ...body, counters: { turns_started: 1 } },
-      { ...body, counters: { ui_desktop_sign_in_ok: -1 } }, { ...body, counters: { ui_desktop_sign_in_ok: 'PRIVATE_CANARY' } },
-      { ...body, counters: { 'PRIVATE_CANARY': 1 } }, { ...body, prompt: 'PRIVATE_CANARY'.repeat(1000) }]) {
-      const response = await post(bad)
-      expect(response.status).toBe(400)
-      expect(await response.text()).not.toContain('PRIVATE_CANARY')
-    }
-    expect(send).not.toHaveBeenCalled()
-    expect((await post(body)).status).toBe(200)
-    expect(send).toHaveBeenCalledExactlyOnceWith(body)
-    send.mockRejectedValueOnce(new Error('PRIVATE_CANARY'))
-    const failed = await post(body)
-    expect(failed.status).toBe(502)
-    expect(await failed.text()).not.toContain('PRIVATE_CANARY')
-    // The backend's busy answer reaches the Desktop with its Retry-After, which the Desktop waits out.
-    const busy = { success: false, error: { code: 'USAGE_WRITE_CONFLICT', message: 'Usage measurement busy' } }
-    send.mockResolvedValueOnce({ status: 429, body: busy, retryAfterMs: 90_500 } as never)
-    const refused = await post(body)
-    expect(refused.status).toBe(429)
-    expect(refused.headers.get('retry-after')).toBe('91')
-    expect(await refused.json()).toEqual(busy)
-    expect((await post(body)).headers.get('retry-after')).toBeNull()
-  })
-  it('forwards the current Desktop health report intact while rejecting private context', async () => {
-    const body = JSON.parse(readFileSync(new URL('../../tests/fixtures/desktop-product-usage-report.json', import.meta.url), 'utf8'))
-    const send = vi.fn(async () => ({ status: 200, body: { success: true, data: { accepted: true } } }))
-    const { base } = await start({ onProductUsageReport: send })
-    const headers = { 'content-type': 'application/json', 'x-adapter-local': '1' }
-    const post = (value: unknown, h = headers) => fetch(`${base}/api/product-usage/report`, { method: 'POST', headers: h, body: JSON.stringify(value) })
-    expect((await post(body, { ...headers, origin: 'https://untrusted.example' } as typeof headers)).status).toBe(403)
-    for (const bad of [{ ...body, context: { ...body.context, path: 'PRIVATE_CANARY' } },
-      { ...body, context: { ...body.context, release: 'PRIVATE_CANARY' } },
-      { ...body, counters: { health_cli_report_failure_auth: 1 } }]) {
-      const refused = await post(bad)
-      expect(refused.status).toBe(400); expect(await refused.text()).not.toContain('PRIVATE_CANARY')
-    }
-    expect(send).not.toHaveBeenCalled()
-    expect((await post(body)).status).toBe(200)
-    expect(send).toHaveBeenCalledExactlyOnceWith(body)
-  })
-  it('forwards a newer Desktop report without the names it does not know, and says which it knows', async () => {
-    // Refused whole before: the Desktop drops a refused packet for good, so one new name lost all of it.
-    const body = JSON.parse(readFileSync(new URL('../../tests/fixtures/desktop-product-usage-report.json', import.meta.url), 'utf8'))
-    const send = vi.fn(async () => ({ status: 200, body: { success: true, data: { accepted: true } } }))
-    const { base } = await start({ onProductUsageReport: send })
-    const headers = { 'content-type': 'application/json', 'x-adapter-local': '1' }
-    const post = (value: unknown, h: Record<string, string> = headers) =>
-      fetch(`${base}/api/product-usage/report`, { method: 'POST', headers: h, body: JSON.stringify(value) })
-    const newer = { ...body, counters: { ...body.counters, health_desktop_frame_slow_wait: 2, health_desktop_PRIVATE_CANARY: 1 } }
-    const kept = await post(newer)
-    expect(kept.status).toBe(200)
-    expect(kept.headers.get('x-harness-usage-vocabulary')).toBe('10')
-    expect(send).toHaveBeenCalledExactlyOnceWith({ ...body,
-      counters: { ...body.counters, health_desktop_frame_slow_wait: 2, health_desktop_report_unknown_metric: 1 } })
-    expect(JSON.stringify(send.mock.calls)).not.toContain('PRIVATE_CANARY')
-    // Everything else is refused as before, and every answer names the vocabulary.
-    for (const [refused, h] of [
-      [{ ...body, counters: { health_desktop_PRIVATE_CANARY: 1 } }, headers],
-      [{ ...newer, counters: { ...newer.counters, turns_started: 1 } }, headers],
-      [{ ...newer, prompt: 'PRIVATE_CANARY' }, headers],
-      [newer, { 'content-type': 'application/json' }],
-    ] as const) {
-      const response = await post(refused, h)
-      expect(response.status).toBe('x-adapter-local' in h ? 400 : 403)
-      expect(response.headers.get('x-harness-usage-vocabulary')).toBe('10')
-      expect(await response.text()).not.toContain('PRIVATE_CANARY')
-    }
-    expect(send).toHaveBeenCalledOnce()
-  })
-  it('serves the Privacy switch and rejects cross-origin, extra-field and malformed writes', async () => {
-    const write = vi.fn(async () => ({ status: 200, body: { success: true, data: { enabled: false, revision: 1 } } }))
-    const { base } = await start({ onProductUsageRead: async () => ({ status: 200, body: { success: true, data: { enabled: true, revision: 0 } } }), onProductUsageWrite: write })
-    expect((await (await fetch(`${base}/api/product-usage/settings`)).json())).toMatchObject({ data: { enabled: true } })
-    const path = `${base}/api/product-usage/settings`
-    expect((await fetch(path, { method: 'POST', body: '{"enabled":false}' })).status).toBe(403)
-    const headers = { 'x-adapter-local': '1', 'content-type': 'application/json' }
-    expect((await fetch(path, { method: 'POST', headers: { ...headers, origin: 'https://untrusted.example' }, body: '{"enabled":false}' })).status).toBe(403)
-    expect((await fetch(path, { method: 'POST', headers, body: '{"enabled":false,"userId":"other"}' })).status).toBe(400)
-    expect((await fetch(path, { method: 'POST', headers, body: '{"enabled":false}' })).status).toBe(200)
-    expect(write).toHaveBeenCalledExactlyOnceWith({ enabled: false })
-  })
   it('reads through the account proxy and guards writes with the local header', async () => {
     const snapshot = { accountId: 'owner', revision: 0, features: { focus_bar_creature: false, share_button: false } }
     const write = vi.fn(async (body: unknown) => ({ status: 200, body: { success: true, data: { ...snapshot, echo: body } } }))
@@ -873,7 +830,7 @@ describe('optional feature routes are absent from core', () => {
   it.each(['/api/zoo', '/api/zoo/ops', '/api/hook/memory-context', '/api/hook/memory-emitted', '/api/hook/opencode-memory-runtime'])(
     'does not handle %s or consult account metadata', async path => {
       const me = vi.fn(async () => ({ status: 200, body: {} }))
-      const { base } = await start({ onAuthMe: me })
+      const { base } = await start({ onServiceRoute: (route) => (route === '/api/auth/me' ? me() : null) })
       const response = await fetch(`${base}${path}`, {
         method: path === '/api/zoo' ? 'GET' : 'POST', headers: { 'x-adapter-local': '1' }, body: path === '/api/zoo' ? undefined : '{}',
       })
@@ -881,39 +838,6 @@ describe('optional feature routes are absent from core', () => {
       expect(me).not.toHaveBeenCalled()
     },
   )
-})
-
-describe('the Harness Store proxy', () => {
-  it('forwards a store read with its path and query, and a store write only with the local header', async () => {
-    const calls: Array<[string, string, unknown]> = []
-    const { base } = await start({
-      onStore: async (method, path, body) => { calls.push([method, path, body]); return { status: 200, body: { success: true, data: { ok: method } } } },
-    })
-    const read = await fetch(`${base}/api/store/harnesses/autonomous/marp/reviews?limit=5`)
-    expect(read.status).toBe(200)
-    expect(await read.json()).toEqual({ success: true, data: { ok: 'GET' } })
-
-    const crossOrigin = await fetch(`${base}/api/store/harnesses/autonomous/marp/review`, { method: 'PUT', body: JSON.stringify({ rating: 5 }) })
-    expect(crossOrigin.status).toBe(403)
-
-    const write = await fetch(`${base}/api/store/harnesses/autonomous/marp/review`, {
-      method: 'PUT', headers: { 'x-adapter-local': '1', 'content-type': 'application/json' }, body: JSON.stringify({ rating: 5, title: 'Keynote' }),
-    })
-    expect(write.status).toBe(200)
-    const gone = await fetch(`${base}/api/store/harnesses/autonomous/marp/review`, { method: 'DELETE', headers: { 'x-adapter-local': '1' } })
-    expect(gone.status).toBe(200)
-    expect(calls).toEqual([
-      ['GET', '/api/store/harnesses/autonomous/marp/reviews?limit=5', undefined],
-      ['PUT', '/api/store/harnesses/autonomous/marp/review', { rating: 5, title: 'Keynote' }],
-      ['DELETE', '/api/store/harnesses/autonomous/marp/review', undefined],
-    ])
-  })
-
-  it('refuses a store path with anything but id characters in it', async () => {
-    const { base } = await start({ onStore: async () => ({ status: 200, body: {} }) })
-    expect((await fetch(`${base}/api/store/harnesses/a%20b/reviews`)).status).toBe(400)
-    expect((await fetch(`${base}/api/store/ratings`, { method: 'POST', headers: { 'x-adapter-local': '1' } })).status).toBe(405)
-  })
 })
 
 describe('knownTranscriptFor', () => {
@@ -1129,8 +1053,10 @@ describe('the trust group endpoints', () => {
 
 describe('the Wi-Fi device\'s routes at the door', () => {
   it('hands each on as it came once its checks pass, and writes the answer its service gave', async () => {
-    const onServiceRoute = vi.fn((path: string, request: ServiceHttpRequest) =>
-      path === '/api/autonomous-device/nobody' ? null : Promise.resolve({ status: 207, body: { path, request } }))
+    const onServiceRoute = vi.fn((path: string, request: DoorRequest) => path === '/api/autonomous-device/nobody' ? null : (async () => {
+      const body = request.method === 'GET' ? undefined : await request.readBody()
+      return { status: 207, body: { path, request: { method: request.method, target: request.target, ...(body === undefined ? {} : { body }) } } }
+    })())
     const { base } = await start({ onServiceRoute })
     const bearer = { authorization: `Bearer ${readHookCredential(env.ADAPTER_DATA_DIR)}` }
     // A read: its query goes with it, and no body.

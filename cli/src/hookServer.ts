@@ -1,5 +1,3 @@
-import { PRODUCT_FEEDBACK } from './lib/productUsageContract.js'
-import { appProductUsageReport, APP_USAGE_VOCABULARY, APP_USAGE_VOCABULARY_HEADER } from './lib/appProductUsageReport.js'
 /**
  * Tiny localhost HTTP server for the Claude Code hook callbacks. `hook/notify.mjs` POSTs here on
  * SessionStart/SessionEnd (127.0.0.1:<PORT>). This replaces the old Fastify routes — the browser
@@ -13,6 +11,7 @@ import type { AddressInfo } from 'node:net'
 import { admitHook, hooksFor } from './engines/hooks.js'
 import { HERMES_HOMES, HERMES_SESSION_PANE, HERMES_SOURCE } from './engines/hermes/contract.js'
 import { readStorePool } from './engines/kit/storePool.js'
+import { homeIsAbsolute } from './engines/kit/homeAdoption.js'
 import { isInteractiveSource, rowSessionSource, storeSourceQuery } from './engines/kit/storeSource.js'
 import { IdentityReadUnavailable } from './engines/kit/identityScan.js'
 import { createPendingAdmissions, type AdmissionDecision } from './core/engines/pendingAdmission.js'
@@ -26,14 +25,13 @@ import { env } from './config/env.js'
 import { hookCredentialMatches, loadOrCreateHookCredential, loadOrCreateHookToken } from './lib/hookAuth.js'
 import { peerIsThisAccount, type PeerAccount } from './lib/peerAccount.js'
 import { LOCAL_CREDENTIAL_REQUIRED, localCredentialMatches, PEER_LOOKUP_UNANSWERED, PEER_LOOKUP_UNANSWERED_MESSAGE } from './lib/localCredential.js'
-import { routeStoreRequest, type StoreHandler } from './lib/storeProxy.js'
 import type { HookTerminalHint } from './lib/terminalTypes.js'
 import { ENGINES, type AgentEngine } from './engines/types.js'
 import { isLoopbackRequest, loopbackHosts } from './lib/loopbackRequest.js'
 import { isTrustedLocal, listenLocalSocket, type LocalSocketServer } from './lib/localSocket.js'
 import { PTY_HOST_INSTANCE, PTY_HOST_PANE } from './lib/ptyHost/instance.js'
 import type { HttpAnswer } from './core/api.js'
-import type { ServiceHttpRequest } from './core/serviceRoutes.js'
+import type { DoorRequest } from './core/serviceRoutes.js'
 
 /**
  * Which agent does a hook belong to, given the two grades of evidence?
@@ -76,7 +74,7 @@ export interface HookServerHandlers {
   onInbox?: (body: unknown, gone: AbortSignal) => Promise<'invalid' | 'off' | { text?: string }>
   /** A route a service answers, once the door let its request in (core/serviceRoutes.ts): its answer, or null when no
    *  service answers `path`. */
-  onServiceRoute?: (path: string, request: ServiceHttpRequest) => Promise<HttpAnswer> | null
+  onServiceRoute?: (path: string, request: DoorRequest, localOk: boolean) => Promise<HttpAnswer> | null
 
   onRegistered: (
     entry: RegisteredSession,
@@ -171,18 +169,10 @@ export interface HookServerHandlers {
   onDevicesDismiss?: (body: { pub?: string; pubs?: string[]; baseline?: boolean }) => PairOutcome | Promise<PairOutcome>
   /** The daemon's status (GET /api/status): what `harness status`, the desktop's discovery and scripts read. */
   onStatus?: () => Record<string, unknown> | Promise<Record<string, unknown>>
-  /** GET /api/machines — proxy the user's full machine list from backend using this daemon's own
-   *  saved SSO session, so a local GUI client never needs a token of its own. */
+  /** GET /api/machines — the user's full machine list from the backend, through this daemon's own sign-in, so a local
+   *  GUI client never needs a token of its own: the core's, which answers it from its own copy while the gateway is away
+   *  and signed out without starting it (core/gatewayLink.ts `machines`). */
   onMachinesList?: () => Promise<PairOutcome>
-  /** PATCH /api/machines/:machineId — proxy a rename to backend the same way. */
-  onMachineRename?: (machineId: string, name: string) => Promise<PairOutcome>
-  /** DELETE /api/machines/:machineId — proxy a delete to backend the same way. */
-  onMachineDelete?: (machineId: string) => Promise<PairOutcome>
-  /** GET /api/auth/me — proxy the signed-in user's profile from backend. */
-  onAuthMe?: () => Promise<PairOutcome>
-  /** PATCH /api/auth/me — the signed-in person's own account name (`{ name }`, task #2654), passed to the backend, which
-   *  validates it and answers the profile as GET does; a local write, so CSRF-guarded like the desk's ops. */
-  onAuthMeUpdate?: (body: unknown) => Promise<PairOutcome>
   /** POST /api/auth/handoff — a one-time code that signs a phone in to this account (the desktop's
    *  Add Phone QR), minted by backend against this daemon's own session. */
   onAuthHandoff?: () => Promise<PairOutcome>
@@ -191,18 +181,6 @@ export interface HookServerHandlers {
    *  it the route does not exist (404), as before on a Mac or Linux. */
   onDaemonStop?: () => Promise<PairOutcome>
   onSharedHarnesses?: () => Promise<PairOutcome>
-  /** GET /api/desk — the account's tabs, the same on every computer; proxied like the machine list. */
-  onDeskRead?: () => Promise<PairOutcome>
-  /** POST /api/desk/ops — the window's tab edits, applied on the backend (its routes/desk.ts); a
-   *  local write, so CSRF-guarded like a rename. */
-  onDeskOps?: (body: unknown) => Promise<PairOutcome>
-  /** GET /api/agent-messages — the account's tabs and who is in each (docs/design/2026-10-10-agent-messages.md),
-   *  proxied like the desk without starting the experiment's process. An older window draws each tab's chat icon
-   *  from its flag, which no daemon reads now: the account's experiment decides (lib/agentSettings.ts). */
-  onAgentMessagesRead?: () => Promise<PairOutcome>
-  /** PATCH /api/agent-messages/tabs/:tabId — an older window's tab switch, passed to the backend so it gets the
-   *  answer it expects, and deciding nothing; a local write, so CSRF-guarded like the desk's ops. */
-  onAgentMessagesWrite?: (tabId: string, body: unknown) => Promise<PairOutcome>
   /** GET/PATCH /api/agent-settings — what the person lets agents do (lib/agentSettings.ts): the account's experiments
    *  as this computer keeps them, and a change written through to the account (`harness settings`, and an older
    *  window's Settings ▸ Agents). The write is CSRF-guarded like the others. */
@@ -212,19 +190,7 @@ export interface HookServerHandlers {
    *  here too (core/experiments.ts `createAgentSettingsSync`). */
   onExperimentalRead?: () => Promise<PairOutcome>
   onExperimentalWrite?: (body: unknown) => Promise<PairOutcome>
-  onProductFeedback?: (body: unknown) => Promise<PairOutcome>
-  /** The phone half of a sign-in (backend routes/qrSignIn.ts) for the desktop and web apps: approve a device
-   *  that says its code aloud (a lamp, #1410) with this computer's own session, as the phone does. */
-  onSignInAnswer?: (action: 'lookup' | 'approve' | 'deny', body: { code: string }) => Promise<PairOutcome>
-  onProductUsageReport?: (body: unknown) => Promise<PairOutcome>
-  onProductUsageRead?: () => Promise<PairOutcome>
-  onProductUsageWrite?: (body: unknown) => Promise<PairOutcome>
-  /** /api/store/* — proxy the Harness Store's ratings and reviews to backend the same way: reads
-   *  ungated like the machine list, writes (PUT/DELETE) CSRF-guarded like a rename. See storeProxy.ts. */
-  onStore?: StoreHandler
 }
-
-export { STORE_PATH_RE } from './lib/storeProxy.js'
 
 const MAX_HOOK_BODY_BYTES = 256 * 1024
 const HOOK_BODY_FIELDS = new Set([
@@ -252,6 +218,31 @@ function optionalBoundedJson(value: unknown, max: number): boolean {
 export function hookFiredAt(req: Pick<http.IncomingMessage, 'headers'>): number | undefined {
   const value = Number(req.headers['x-harness-hook-fired-at'])
   return Number.isSafeInteger(value) && value > 0 ? value : undefined
+}
+
+const GATEWAY_HEADER = 'x-harness-hook-gateway', CODEX_HOME_HEADER = 'x-harness-hook-codex-home'
+
+/**
+ * What a hook says of its own environment, in two headers: a daemon that does not read a header ignores it, where it
+ * refuses a body with a field it does not list. Each is judged alone: a refused one is named, never the request.
+ */
+export function hookFacts(req: Pick<http.IncomingMessage, 'headers'>, platform?: NodeJS.Platform): { gateway?: 'ori' | null; codexHome?: string; refused: string[] } {
+  const facts: { gateway?: 'ori' | null; codexHome?: string; refused: string[] } = { refused: [] }
+  const gateway = req.headers[GATEWAY_HEADER]
+  if (gateway === 'ori') facts.gateway = 'ori'
+  else if (gateway === 'none') facts.gateway = null
+  else if (gateway !== undefined) facts.refused.push(GATEWAY_HEADER)
+  const home = req.headers[CODEX_HOME_HEADER]
+  if (home !== undefined) {
+    // Percent-encoded by the hook: Node refuses a header value above U+00FF, and a path may hold any character.
+    let decoded: string | undefined
+    try { decoded = typeof home === 'string' ? decodeURIComponent(home) : undefined } catch { decoded = undefined }
+    // Absolute as agent_create takes a home: on Windows a drive's path. A share's or a device's would have the core's
+    // realpath open another computer's folder on every registration.
+    if (decoded !== undefined && homeIsAbsolute(decoded, platform) && decoded.length <= 1_024 && !/[\u0000-\u001f\u007f]/.test(decoded)) facts.codexHome = decoded
+    else facts.refused.push(CODEX_HOME_HEADER)
+  }
+  return facts
 }
 
 function validHookBody(value: unknown): value is BoundHookBody {
@@ -550,6 +541,17 @@ export function startHookServer(
       // send it, can trigger actions. A local process could still call it — same trust level as the
       // CLI, which is acceptable on loopback.
       const localOk = req.headers['x-adapter-local'] === '1'
+      /** A route a service answers (core/serviceRoutes.ts), written as it answered, with the headers its route declares:
+       *  false when no service answers this path and method. Whether a write carries the local header is its route's to
+       *  ask, and its body is read only then, up to its route's bound. */
+      const serviceRoute = async (): Promise<boolean> => {
+        const routed = handlers.onServiceRoute?.(url, { method: req.method ?? '', target: req.url ?? '', readBody: (max) => readBody(req, max) }, localOk)
+        if (!routed) return false
+        const result = await routed
+        for (const [name, value] of Object.entries(result.headers ?? {})) res.setHeader(name, value)
+        json(result.status, result.body)
+        return true
+      }
       // An engine hook's token, which opens these hook routes and nothing else (lib/hookAuth.ts). The credential
       // is still taken here: an engine's loaded plugin keeps the copy it started with until its pane restarts. A
       // guest's harness will carry a token scoped to its own agent (docs/plans/2026-10-19-guest-machine-sharing-plan.md).
@@ -586,11 +588,8 @@ export function startHookServer(
           json(403, { error: { code: 'FORBIDDEN', message: 'Authenticated native loopback client required' } }); return
         }
         // The Wi-Fi device's services', as the client sent it: the gateway's, its service's and the machine add-ons'.
-        const body = req.method === 'GET' ? undefined : await readBody(req)
-        const answer = handlers.onServiceRoute?.(url, { method: req.method ?? '', target: req.url ?? '', ...(body === undefined ? {} : { body }) })
-        if (!answer) { json(503, { error: { code: 'UNAVAILABLE', message: 'Autonomous device service unavailable' } }); return }
-        const result = await answer
-        json(result.status, result.body); return
+        if (!await serviceRoute()) json(503, { error: { code: 'UNAVAILABLE', message: 'Autonomous device service unavailable' } })
+        return
       }
       if (req.method === 'GET' && url === '/api/health') {
         json(200, { ok: true, version: VERSION }); return
@@ -617,6 +616,10 @@ export function startHookServer(
           if (!validHookBody(parsed)) { json(400, { error: 'invalid hook body' }); return }
           body = parsed
         } catch { json(400, { error: 'bad json' }); return }
+        // Only a refused header's name is logged: its value is a path or a word of the hook's own environment.
+        const refusedHeader = (name: string) => console.warn(`[hooks] ${sid(body.sessionId ?? '?')} ${body.hookEvent ?? 'session-start'} header refused · ${name}`)
+        const { refused, ...taken } = hookFacts(req)
+        for (const name of refused) refusedHeader(name)
         // Every rejection below says WHY, out loud. They used to be silent, and a hook that arrives and
         // is dropped looks exactly like a hook that never fired — which is precisely the confusion behind
         // "the agent is running in my terminal but the list does not show it".
@@ -825,7 +828,7 @@ export function startHookServer(
             return { kind: 'hold', reason: 'Waiting for the original hook pane to belong to its engine process.' }
           }
           inspectionIdentity = paneReadIdentity(row)
-          prepared = { ...body, processIdentity: row.processIdentity ? { ...row.processIdentity } : undefined,
+          prepared = { ...body, ...taken, processIdentity: row.processIdentity ? { ...row.processIdentity } : undefined,
             runtimes: row.runtimes.map(runtime => ({ ...runtime })), primaryRuntimeKey: row.primaryRuntimeKey,
             transcriptPath: knownTranscriptFor(body, row) }
           const admission = admitHook(engine, prepared)
@@ -840,6 +843,7 @@ export function startHookServer(
           const before = prior && { sessionId: prior.sessionId, transcriptPath: prior.transcriptPath,
             held: !!(prior.identityHold || prior.interpretationHold) }
           committed = registry.register(hermesHome ? { ...prepared, hermesHome } : prepared, { verifiedNativeSource: true })
+          if (committed?.refusedHome) refusedHeader(CODEX_HOME_HEADER)
           if (stopCurrent && !stopCurrent()) stopInvocationClaimed = true
           if (committed && carriesStop && !stopRetained && !stopInvocationClaimed) {
             stopUnmatched ||= deferred || before?.sessionId !== committed.entry.sessionId
@@ -1160,10 +1164,9 @@ export function startHookServer(
         const out = await handlers.onRemotePasswordStatus(); json(out.status, out.body); return
       }
 
-      // Local GUI clients (e.g. the desktop app): read the full machine list / rename or delete one /
-      // read the signed-in profile through this daemon's own SSO session, so the local caller never
-      // holds a bearer token itself — loopback trust does the authenticating. Reads are ungated (same
-      // tier as /api/status); the rename/delete mutations are CSRF-guarded like every other local write.
+      // Local GUI clients (the desktop app): the full machine list and the harnesses shared with this account, through this
+      // daemon's own sign-in, so the local caller never holds a bearer token itself. The account's other routes are the
+      // gateway's (below, `onServiceRoute`).
       if (req.method === 'GET' && url === '/api/machines') {
         const list = handlers.onMachinesList
         if (!list) { json(503, { error: 'UNAVAILABLE' }); return }
@@ -1172,29 +1175,6 @@ export function startHookServer(
       if (req.method === 'GET' && url === '/api/harness-shares') {
         if (!handlers.onSharedHarnesses) { json(503, { error: 'UNAVAILABLE' }); return }
         await proxied(handlers.onSharedHarnesses); return
-      }
-      if (req.method === 'GET' && url === '/api/desk') {
-        if (!handlers.onDeskRead) { json(503, { error: 'UNAVAILABLE' }); return }
-        await proxied(handlers.onDeskRead); return
-      }
-      if (req.method === 'POST' && url === '/api/desk/ops') {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onDeskOps) { json(503, { error: 'UNAVAILABLE' }); return }
-        let body: unknown
-        try { body = JSON.parse(await readBody(req)) } catch { json(400, { error: { code: 'BAD_REQUEST', message: 'Invalid JSON body' } }); return }
-        await proxied(() => handlers.onDeskOps!(body)); return
-      }
-      if (req.method === 'GET' && url === '/api/agent-messages') {
-        if (!handlers.onAgentMessagesRead) { json(503, { error: 'UNAVAILABLE' }); return }
-        await proxied(handlers.onAgentMessagesRead); return
-      }
-      const agentMessagesTab = req.method === 'PATCH' ? /^\/api\/agent-messages\/tabs\/([A-Za-z0-9_-]{1,64})$/.exec(url) : null
-      if (agentMessagesTab) {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onAgentMessagesWrite) { json(503, { error: 'UNAVAILABLE' }); return }
-        let body: unknown
-        try { body = JSON.parse(await readBody(req)) } catch { json(400, { error: { code: 'BAD_REQUEST', message: 'Invalid JSON body' } }); return }
-        await proxied(() => handlers.onAgentMessagesWrite!(agentMessagesTab[1], body)); return
       }
       if (req.method === 'GET' && url === '/api/agent-settings') {
         if (!handlers.onAgentSettingsRead) { json(503, { error: 'UNAVAILABLE' }); return }
@@ -1211,90 +1191,12 @@ export function startHookServer(
         if (!handlers.onExperimentalRead) { json(503, { error: 'UNAVAILABLE' }); return }
         await proxied(handlers.onExperimentalRead); return
       }
-      if (req.method === 'POST' && url === '/api/product-usage/report') {
-        // On every answer, a refusal too: the Desktop counts names newer than revision 1 only after
-        // reading it here, because a proxy that predates a name refused the whole report.
-        res.setHeader(APP_USAGE_VOCABULARY_HEADER, String(APP_USAGE_VOCABULARY))
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onProductUsageReport) { json(503, { error: 'UNAVAILABLE' }); return }
-        let body: unknown
-        try {
-          const raw = await readBody(req, 8192)
-          body = JSON.parse(raw)
-        } catch { json(400, { error: 'BAD_REQUEST' }); return }
-        // Without the names this contract does not know yet; see lib/appProductUsageReport.ts.
-        const report = appProductUsageReport(body)
-        if (!report) {
-          json(400, { error: 'BAD_REQUEST' }); return
-        }
-        try {
-          const result = await handlers.onProductUsageReport(report)
-          // The Desktop waits a busy answer out (desktop/lib/measurement/product_measurement.dart).
-          if (result.retryAfterMs !== undefined) res.setHeader('Retry-After', String(Math.ceil(result.retryAfterMs / 1000)))
-          json(result.status, result.body)
-        } catch { json(502, { success: false, error: { code: 'USAGE_UNAVAILABLE', message: 'Product usage unavailable' } }) }
-        return
-      }
-      const signInAnswer = req.method === 'POST' ? /^\/api\/auth\/qr\/(lookup|approve|deny)$/.exec(url) : null
-      if (signInAnswer) {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onSignInAnswer) { json(503, { error: 'UNAVAILABLE' }); return }
-        let body: unknown
-        try { body = JSON.parse(await readBody(req)) } catch { json(400, { error: 'BAD_REQUEST' }); return }
-        // The code and nothing else: whose account approves is this computer's session, never the caller's.
-        const code = (body as { code?: unknown } | null)?.code
-        if (!body || typeof body !== 'object' || Object.keys(body).length !== 1
-            || typeof code !== 'string' || code.length < 1 || code.length > 128) {
-          json(400, { error: 'BAD_REQUEST' }); return
-        }
-        const action = signInAnswer[1] as 'lookup' | 'approve' | 'deny'
-        await proxied(() => handlers.onSignInAnswer!(action, { code })); return
-      }
-      if (req.method === 'POST' && url === '/api/product-usage/feedback') {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onProductFeedback) { json(503, { error: 'UNAVAILABLE' }); return }
-        let body: unknown
-        try { body = JSON.parse(await readBody(req)) } catch { json(400, { error: 'BAD_REQUEST' }); return }
-        const feedback = body as { answer?: unknown; id?: unknown } | null
-        if (!feedback || typeof feedback !== 'object' || Object.keys(feedback).length !== 2
-            || !PRODUCT_FEEDBACK.includes(feedback.answer as never) || typeof feedback.id !== 'string'
-            || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(feedback.id)) {
-          json(400, { error: 'BAD_REQUEST' }); return
-        }
-        await proxied(() => handlers.onProductFeedback!(feedback)); return
-      }
-      if (req.method === 'GET' && url === '/api/product-usage/settings') {
-        if (!handlers.onProductUsageRead) { json(503, { error: 'UNAVAILABLE' }); return }
-        await proxied(handlers.onProductUsageRead); return
-      }
-      if (req.method === 'POST' && url === '/api/product-usage/settings') {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onProductUsageWrite) { json(503, { error: 'UNAVAILABLE' }); return }
-        let body: unknown
-        try { body = JSON.parse(await readBody(req)) } catch { json(400, { error: 'BAD_REQUEST' }); return }
-        if (!body || typeof body !== 'object' || Object.keys(body).length !== 1 || typeof (body as { enabled?: unknown }).enabled !== 'boolean') {
-          json(400, { error: 'BAD_REQUEST' }); return
-        }
-        await proxied(() => handlers.onProductUsageWrite!(body)); return
-      }
       if (req.method === 'PATCH' && url === '/api/experimental-settings') {
         if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
         if (!handlers.onExperimentalWrite) { json(503, { error: 'UNAVAILABLE' }); return }
         let body: unknown
         try { body = JSON.parse(await readBody(req)) } catch { json(400, { error: { code: 'BAD_REQUEST', message: 'Invalid JSON body' } }); return }
         await proxied(() => handlers.onExperimentalWrite!(body)); return
-      }
-      if (req.method === 'GET' && url === '/api/auth/me') {
-        const me = handlers.onAuthMe
-        if (!me) { json(503, { error: 'UNAVAILABLE' }); return }
-        await proxied(me); return
-      }
-      if (req.method === 'PATCH' && url === '/api/auth/me') {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onAuthMeUpdate) { json(503, { error: 'UNAVAILABLE' }); return }
-        let body: unknown
-        try { body = JSON.parse(await readBody(req)) } catch { json(400, { error: { code: 'BAD_REQUEST', message: 'Invalid JSON body' } }); return }
-        await proxied(() => handlers.onAuthMeUpdate!(body)); return
       }
       // Add Phone: a code that SIGNS A PHONE IN to this account — the one local route whose answer is
       // a credential. So not the CSRF header, which any local process can send, but the daemon's
@@ -1313,37 +1215,6 @@ export function startHookServer(
         if (!trustedLocal || !localOk) { json(403, { error: 'FORBIDDEN' }); return }
         await proxied(handlers.onDaemonStop); return
       }
-      if (req.method === 'PATCH' && url.startsWith('/api/machines/')) {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        const rename = handlers.onMachineRename
-        if (!rename) { json(503, { error: 'UNAVAILABLE' }); return }
-        const machineId = decodeURIComponent(url.slice('/api/machines/'.length))
-        if (!machineId) { json(400, { error: 'MISSING_MACHINE_ID' }); return }
-        let body: { name?: string }
-        try { body = JSON.parse(await readBody(req)) as { name?: string } } catch { json(400, { error: 'bad json' }); return }
-        const name = body.name
-        if (!name) { json(400, { error: 'MISSING_NAME' }); return }
-        await proxied(() => rename(machineId, name)); return
-      }
-      if (req.method === 'DELETE' && url.startsWith('/api/machines/')) {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        const remove = handlers.onMachineDelete
-        if (!remove) { json(503, { error: 'UNAVAILABLE' }); return }
-        const machineId = decodeURIComponent(url.slice('/api/machines/'.length))
-        if (!machineId) { json(400, { error: 'MISSING_MACHINE_ID' }); return }
-        await proxied(() => remove(machineId)); return
-      }
-
-      // The Harness Store: ratings and reviews in the backend, through this daemon's own session. The
-      // rules (reads ungated, writes behind the local header, the paths it forwards) are storeProxy.ts's.
-      if (url.startsWith('/api/store/')) {
-        // A request an http.Server hands over always has its url; `url` above is it without the query.
-        const route = await routeStoreRequest({ method: req.method, url: req.url as string, localOk, readBody: () => readBody(req) }, handlers.onStore)
-        if ('forward' in route) await proxied(route.forward)
-        else json(route.status, route.body)
-        return
-      }
-
       // `harness pairings` — list paired browsers.
       if (req.method === 'GET' && url === '/api/pairs') {
         if (!handlers.onListPairs) { json(503, { error: 'UNAVAILABLE' }); return }
@@ -1367,6 +1238,11 @@ export function startHookServer(
         const out = await handlers.onRevokeAll(); json(out.status, out.body); return
       }
 
+      // A route a service answers (core/api.ts `SERVICE_HTTP_ROUTES`): the account's (the desk, Agent Messages' tabs, the
+      // account's name, the phone half of a sign-in, the usage reports and choice, a machine's rename and delete, the
+      // Store's ratings and reviews), each the gateway's. The door's checks above are done. Never one of the paths open
+      // without the local credential (a hook's): a caller that has not shown it reaches no service here.
+      if (credentialOk && await serviceRoute()) return
       json(404, { error: 'not found' })
     })().catch((error: unknown) => {
       // Whatever a handler throws, the request is answered: an engine's hook that waits on this server

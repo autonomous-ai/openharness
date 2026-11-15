@@ -3,8 +3,8 @@
 Package: the feature routes and the product usage code still in the daemon core's process (audit
 docs/design/2026-11-12-core-audit.md section 2: "Feature routes in the two doors", "The product usage vocabulary",
 "Smaller"). Follow the plan's rules and lessons (../2026-11-15-core-plan.md). One PR at a time, each on a branch of its
-own (core-routes-1 and -2 are step 1's: start step 2 on core-routes-3), worktrees at .claude/worktrees/<branch> from a
-fresh origin/main.
+own (core-routes-1 and -2 are step 1's, core-routes-3 step 2's: start step 3 on core-routes-4), worktrees at
+.claude/worktrees/<branch> from a fresh origin/main.
 
 Worktree setup: run `npm ci` in the worktree's `cli/`. The main checkout's `cli/node_modules` is incomplete (no
 @sindresorhus/slugify, yaml or pngjs), and the e2e daemon and bundle fail on a link to it.
@@ -44,6 +44,10 @@ The core's files and lines: 543 / 93,160 before (main at 5c3703b042), 543 / 93,0
   longer takes those ops (only the core's old hop sent them), and refuses, as the routes do, while the machine's id is
   not known, in one place (`MachineAddons`), in both modes.
 
+### The cost (tools-free micro-benchmark on this Mac, the link's JSON counted)
+- A measured request (session_search, answered): 3.1 µs of the core's CPU and 5 frames to the gateway before; 2.0 µs
+  and 2 frames after. A frame the report does not measure (terminal input): 43 ns before, 8 ns after.
+
 ### Answers that differ (said in the PR)
 - `status` during a devices-process restart: before `connected:false`, `sessions:0` (the core's `up`); now the
   gateway's live direct sessions, whose frames the core holds through the restart.
@@ -57,27 +61,75 @@ The core's files and lines: 543 / 93,160 before (main at 5c3703b042), 543 / 93,0
 - e2e: deviceRoutes (red on main in both modes, green after), wifiDevice, robustness, gatewayProcess, devicesOnDemand.
 - `npm run test:core` through `scripts/local-checks.py --run` (the PR's receipt).
 
-## Step 2: account, desk and Store proxies, usage reports, usage vocabulary -> gateway (+ viewers)
-- hookServer.ts routes: GET /api/machines, PATCH|DELETE /api/machines/:id, GET /api/harness-shares, GET /api/desk,
-  POST /api/desk/ops, GET /api/agent-messages, PATCH /api/agent-messages/tabs/:id, GET|PATCH /api/auth/me,
-  POST /api/auth/qr/(lookup|approve|deny), POST /api/product-usage/(report|feedback), GET|POST
-  /api/product-usage/settings, /api/store/* (lib/storeProxy.ts). Agent settings + experimental settings STAY (decided
-  13 Nov, core/experiments.ts). /api/auth/handoff -> step 3 or here (door: trustedLocal && x-adapter-local).
-- All go to `gateway_http` (the gateway already has accountHttp.backend). Needs from the adapter: a door kind per route
-  in the table (read: credential only; write: also `x-adapter-local: 1` -> 403 FORBIDDEN; socket-only), headers on
-  the answer (`Retry-After` from retryAfterMs; `X-Harness-App-Usage-Vocabulary` set on EVERY answer of the report
-  route, the door's 403 too: put it in the route's declared headers). Each route's own bad-JSON body differs
-  (`{error:'bad json'}`, `{error:'BAD_REQUEST'}`, `{error:{code:'BAD_REQUEST',...}}`): the service parses, so keep
-  each byte for byte. `proxied()` 502 PROXY_FAILED and gatewayLink's `{status:503, body:{error:'GATEWAY_UNAVAILABLE'}}`
-  are the unanswered answers to keep. onSharedHarnesses signed-out answer, machines' stale fallback (gatewayLink
-  `machines`) and `/api/status` (stays in the core) need care. Write goldens first, as in step 1 (e2e/deviceRoutes.e2e.ts).
-- Usage vocabulary: lib/productUsageContract.ts, productUsageSignals.ts, productHealthContract.ts,
-  appProductUsageReport.ts. The socket maps request outcomes to counter names (backendSocket.ts ~1041-1050); move the
-  mapping to the gateway: the core sends one raw outcome (`usageCounter`/`usageLaunch` on GatewayPort). Prove the
-  backend gets the same names and totals: a test on what the gateway sends (gateway/productUsage.spec.ts style) and
-  e2e/productUsage.e2e.ts. hachiMetrics.ts and agentBrowserLink.ts use the allowlists too (files.tsv).
+## Step 2, done (#4321, branch core-routes-3): the account's routes and the usage report's names, to the gateway
+
+The core's files and lines: 544 / 92,925 before (main at 20534f8822), 542 / 92,562 after (tools/coreCount.mjs). Out of
+the core's process: lib/appProductUsageReport.ts, lib/productUsageSignals.ts, lib/storeProxy.ts (deleted). In:
+core/usageOutcomes.ts.
+
+### The adapter, extended (core/serviceRoutes.ts, `ServiceHttpRoute` in core/api.ts)
+- `methods`: the methods a route takes; another goes on to the door's own routes and its 404, as before.
+- `writes`: the methods that need `x-adapter-local: 1`; without it the door answers its own 403 `{error:'FORBIDDEN'}`
+  before the service is asked (hookServer.ts passes `localOk` to `onServiceRoute`).
+- `headers`: on every answer of the route, the door's 403 and `unanswered` too (the report's
+  `x-harness-usage-vocabulary`, `APP_USAGE_VOCABULARY` in core/api.ts). `answerHeaders`: the ones a service's answer may
+  set (`answer.headers`, one printable line of at most 128 characters each); the report's `retry-after`.
+- `maxBodyBytes`: the most of a body the door reads for the route (the report's 8 KiB, as before); the door's own
+  256 KiB bound when absent. The body is read only once a route took the request and let it in (`DoorRequest.readBody`).
+- The door asks `onServiceRoute` (one helper, `serviceRoute` in hookServer.ts, for the device branch too) for every path
+  its own routes did not take, just before its 404, and only with the local credential: an open path (a hook's) never
+  reaches a service.
+
+### Where the routes went: `gateway_http` (gateway/accountRoutes.ts)
+- GET /api/desk, POST /api/desk/ops, GET /api/agent-messages, PATCH /api/agent-messages/tabs/:id, GET|PATCH /api/auth/me,
+  POST /api/auth/qr/(lookup|approve|deny), POST /api/product-usage/(feedback|report), GET|POST /api/product-usage/settings,
+  PATCH|DELETE /api/machines/:id, /api/store/* (`STORE_PATH_RE` moved there). Each keeps its own bad-JSON words; a
+  backend call that throws is the old 502 PROXY_FAILED (the report's 502 USAGE_UNAVAILABLE); what threw in the door's
+  own code (a machine id that does not decode, a rename body of `null`) is the old 500 `{error:'INTERNAL'}`.
+- Unanswered (gateway down, slow, failing): 503 `{error:'GATEWAY_UNAVAILABLE'}`, as gatewayLink answered. Wait 25 s.
+- `gatewayHttp` (accountRoutes.ts) dispatches: `/api/autonomous-device/*` to the device handler, the rest only for a
+  local owner that is no guest (403 `{error:'FORBIDDEN'}` otherwise: a remote client may send `gateway_http` too).
+- The Store's routes went to the gateway, not the viewers: the Store's process has no way to the backend, and one would
+  be a backend allowlist for the Store in the core (rule 7); the gateway holds the account's HTTP already.
+
+### Stay in the core, said why
+- GET /api/machines: signed out its answer is the guest list without starting the gateway (gatewayWake's design), and
+  while the gateway is away the core's own copy (gatewayLink `machines`, kept for models' labels anyway).
+- GET /api/harness-shares: signed out its empty list, without starting the gateway, as above.
+- POST /api/auth/handoff -> step 3: its door is the private socket only, and `gateway_http` also comes over the local
+  WebSocket on loopback TCP, which would reach it from TCP. Step 3 needs a door kind the WebSocket path honours too.
+
+### The usage report's names (core/usageOutcomes.ts -> gateway/usageEvents.ts)
+- The core sends `GatewayPort.usage(event)`: one `request` event as a measured request comes (its type, local/tool/
+  role, and the facts its counters read: creationId, engine, startedBy, userAction, usageSurface, usageIntent, agentId,
+  each bounded), one `answer` per reply (error, state, agent, ok, reason, held, raw and bounded; `first` for the one its
+  counters count; elapsed on the core's clock), and `observed` for hn's `product_observe`. `usageLaunch` is gone.
+- Told only when it counts: a durable create's status and cancel (polls) send no `request` event and nothing at all
+  without a durable id; a later reply is told only for the three launch requests, whose later replies say what became
+  of a launch. `MEASURED_REQUESTS` (core) is held equal to the reductions' own list by gateway/usageEvents.spec.ts.
+- The gateway runs the same reductions, unchanged (lib/productUsageSignals.ts), and keeps nothing between a request and
+  its answer. A failed count is said in the gateway's log, at most once a minute. gateway/usageEvents.spec.ts holds the old path and the new side by side: the same names in the same order,
+  the same launch signals, and the same report totals at the backend. The backendSocket specs' exact counter names pass
+  unchanged through the real gateway.
+- Left in the core's process: lib/productUsageContract.ts and lib/productHealthContract.ts, only for the two allowlists
+  of what a service may count (core/agentQueries.ts via lib/hachiMetrics.ts, and core/agentBrowserLink.ts, package 2's
+  file). They leave when those checks do: the core passes the counting service's name and the gateway checks it.
+
+### Answers that differ (said in the PR)
+- A Store write (PUT, DELETE) without the local header to a path the Store refuses: 403 now, 400 BAD_PATH before (the
+  door asks the header before the service reads the path). Every other answer is byte for byte (e2e/accountRoutes).
+
+### Verified
+- e2e: accountRoutes (its fault test red on main in both modes, green after; goldens green before and after),
+  productUsage, deviceRoutes. Unit: core/serviceRoutes.spec.ts (its new cases red on main's adapter),
+  core/usageOutcomes.spec.ts, gateway/accountRoutes.spec.ts, gateway/usageEvents.spec.ts; the backendSocket specs'
+  exact counter names pass unchanged through the real gateway.
+- The vocabulary revision stays in the core's route table, on purpose: the door's own answers (its 403, and the answer
+  while the gateway is away) must carry it, because the Desktop reads it off every answer and one without it would stop
+  its newer names until the next report. appProductUsageReport.spec.ts reads it from core/api.ts beside the names.
 
 ## Step 3: pairing and keys, voice, the relay to other machines
+- /api/auth/handoff from step 2 (above: a socket-only door).
 - hookServer.ts: /api/pair, /api/pairs, /api/revoke, /api/revoke-all, /api/remote-password/(set|clear|status),
   /api/link/trust-peer, /api/group, /api/group/(sync|remove), /api/devices, /api/devices/(remove|rebaseline|history|
   dismiss): each a GatewayOps call today (gatewayLink `http(...)`, unanswered `{status:503, body:{error:

@@ -8,7 +8,7 @@ import { DEVICES_USAGE, devicesCommand, deviceRequest, runDialWatch, type Device
 
 // A folder too long for a socket now has one under the home folder: only a home too long as well is left on the port.
 beforeEach(() => { vi.stubEnv('HOME', `/${'h'.repeat(120)}`) })
-afterEach(() => { vi.unstubAllEnvs() })
+afterEach(() => { vi.unstubAllEnvs(); vi.useRealTimers() })
 
 const snapshot = (brightness = 80) => ({ status: { devices: [{ id: 'usb', attached: true, settings: { brightness } }] } })
 function fixture() {
@@ -98,17 +98,20 @@ describe('Devices DSH commands', () => {
 const NOT_RUNNING = 'Harness is not running on this computer. Run: harness start'
 const CLOSED = 'The connection to Harness on this computer closed.'
 const TOO_OLD = '{"error":"The Harness daemon on this computer is older than this command. Run: harness start --restart"}'
+type Told = Parameters<NonNullable<DialWatchDeps['tell']>>[0]
 function watch(over: Partial<DialWatchDeps> = {}, argv = ['--json']) {
   const socket = Object.assign(new EventEmitter(), { send: vi.fn(), close: vi.fn() })
   const stdin = Object.assign(new EventEmitter(), { resume: vi.fn(), pause: vi.fn() })
   const printed: string[] = [], errors: string[] = []
   const connect = vi.fn((_url: string, _headers?: Record<string, string>) => socket)
+  // The devices listener, faked: no test reaches a socket of its own. It takes every message unless a test says otherwise.
+  const tell = vi.fn(async (_message: Told) => true)
   const deps: DialWatchDeps = {
-    port: 18473, machineId: async () => 'local', connect, stdin,
+    port: 18473, machineId: async () => 'local', connect, stdin, tell,
     print: line => { printed.push(line) }, printError: line => { errors.push(line) }, ...over,
   }
   const done = runDialWatch(argv, deps)
-  return { done, socket, stdin, printed, errors, connect }
+  return { done, socket, stdin, printed, errors, connect, tell: deps.tell! as typeof tell }
 }
 // machineId() is awaited before the socket opens: wait until it has.
 async function opened(socket: EventEmitter) {
@@ -291,5 +294,355 @@ describe('harness hardware watch', () => {
   it('the usage names watch', () => {
     expect(DEVICES_USAGE).toContain('watch [--json]')
     expect(DEVICES_USAGE).toContain("one line each time this computer's dial changes")
+  })
+})
+
+// What the Harness Device app writes on the watch's stdin, one line each time the app in front changes.
+const frontLine = (value: string) => `${JSON.stringify({ front: value })}\n`
+const front = (run: ReturnType<typeof watch>, value: string) => run.stdin.emit('data', frontLine(value))
+const told = (run: ReturnType<typeof watch>) => run.tell.mock.calls.map(([message]) => message)
+const apps = (run: ReturnType<typeof watch>) => told(run).map(message => message.app)
+const coreFrames = (run: ReturnType<typeof watch>) => run.socket.send.mock.calls.map(([data]) => JSON.parse(data).type)
+// The pause the watch makes after each tell (client.ts): a change that comes in it is told as it ends.
+const TELL_GAP_MS = 100
+// One turn of the event loop, then the pause: every tell already answered has been seen by the watch, and what came
+// since is told.
+const turn = async () => {
+  await new Promise(resolve => setImmediate(resolve))
+  await vi.advanceTimersByTimeAsync(TELL_GAP_MS)
+}
+/** A devices listener that answers only when the test says, one tell at a time. */
+function heldListener() {
+  const answers: ((taken: boolean) => void)[] = []
+  const tell = vi.fn((_message: Told) => new Promise<boolean>(resolve => { answers.push(resolve) }))
+  return { tell, answer: async (taken: boolean) => { answers.shift()!(taken); await turn() } }
+}
+
+describe('harness hardware watch: the app in front', () => {
+  // The event loop's turns stay real: only the watch's own timers are the test's.
+  beforeEach(() => { vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }) })
+  it('a front line is told to the devices listener as an app id', async () => {
+    const run = watch()
+    await opened(run.socket)
+    connected(run.socket, ['dial-watch'])
+    front(run, 'com.mitchellh.ghostty')
+    await turn()
+    expect(told(run)).toEqual([{ type: 'front', app: 'ghostty' }])
+    front(run, 'Code.exe')
+    await turn()
+    expect(told(run)).toEqual([{ type: 'front', app: 'ghostty' }, { type: 'front', app: 'vscode' }])
+    await stillRunning(run)
+  })
+  it('an unknown app is told as none', async () => {
+    const run = watch()
+    front(run, 'com.apple.Safari')
+    await turn()
+    expect(told(run)).toEqual([{ type: 'front', app: 'none' }])
+    await stillRunning(run)
+  })
+  it('the raw value is never sent or printed', async () => {
+    const raw = /mitchellh|code\.exe|safari/i
+    // A listener that refuses none, so a tell that fails is read too.
+    const tell = vi.fn(async (message: Told) => message.app !== 'none')
+    const run = watch({ tell })
+    front(run, 'com.mitchellh.ghostty')
+    await opened(run.socket)
+    connected(run.socket, ['openclaw-local', 'dial-watch'])
+    front(run, 'Code.exe')
+    await turn()
+    front(run, 'com.apple.Safari')
+    await turn()
+    run.stdin.emit('data', 'com.mitchellh.ghostty\n')
+    run.stdin.emit('data', `{"front":"Code.exe","pad":"${'x'.repeat(2000)}"}\n`)
+    dial(run.socket, { attached: true, fw: '0.0.95' })
+    await turn()
+    run.socket.emit('close', 1006, '')
+    expect(await run.done).toBe(3)
+    const out = [...tell.mock.calls.map(([message]) => JSON.stringify(message)), ...run.socket.send.mock.calls.map(([data]) => String(data)), ...run.printed, ...run.errors]
+    expect(out.filter(line => raw.test(line))).toEqual([])
+    expect(apps(run)).toEqual(['ghostty', 'vscode', 'none', 'none'])
+  })
+  it("nothing of the app in front goes on the core's socket", async () => {
+    const run = watch()
+    front(run, 'com.mitchellh.ghostty')
+    await turn()
+    await opened(run.socket)
+    // A daemon that still names the old door is sent nothing through it.
+    connected(run.socket, ['openclaw-local', 'dial-watch', 'dial-front'])
+    front(run, 'Code.exe')
+    dial(run.socket, { attached: true })
+    await turn()
+    expect(apps(run)).toEqual(['ghostty', 'vscode', 'vscode'])
+    expect(coreFrames(run)).toEqual(['machine_select'])
+    await stillRunning(run)
+  })
+  it('the same app twice is told once; Safari then Finder is one none', async () => {
+    const run = watch()
+    for (const value of ['com.mitchellh.ghostty', 'ghostty', 'com.apple.Safari', 'com.apple.finder', 'com.mitchellh.ghostty']) {
+      front(run, value)
+      await turn()
+    }
+    expect(apps(run)).toEqual(['ghostty', 'none', 'ghostty'])
+    await stillRunning(run)
+  })
+  it('a front line is told at once, before the daemon has answered', async () => {
+    const waiting = watch({ machineId: () => new Promise(() => {}) })
+    front(waiting, 'com.mitchellh.ghostty')
+    expect(told(waiting)).toEqual([{ type: 'front', app: 'ghostty' }])
+    await stillRunning(waiting)
+    const unanswered = watch()
+    await opened(unanswered.socket)
+    front(unanswered, 'Code.exe')
+    expect(told(unanswered)).toEqual([{ type: 'front', app: 'vscode' }])
+    await stillRunning(unanswered)
+  })
+  it('with no listener the line is ignored, and the next change is told', async () => {
+    const answers = [false, true]
+    const tell = vi.fn(async (_message: Told) => answers.shift() ?? true)
+    const run = watch({ tell })
+    await opened(run.socket)
+    connected(run.socket, ['dial-watch'])
+    front(run, 'com.mitchellh.ghostty')
+    await turn()
+    // Not taken, and not tried again by itself.
+    expect(apps(run)).toEqual(['ghostty'])
+    front(run, 'Code.exe')
+    await turn()
+    front(run, 'com.mitchellh.ghostty')
+    await turn()
+    expect(apps(run)).toEqual(['ghostty', 'vscode', 'ghostty'])
+    expect(run.printed).toEqual([])
+    expect(run.errors).toEqual([])
+    await stillRunning(run)
+  })
+  it('when dial_status says attached the current app is told again, also one the listener took before; with no front line read yet nothing is told', async () => {
+    const run = watch()
+    await opened(run.socket)
+    connected(run.socket, ['dial-watch'])
+    dial(run.socket, { attached: true })
+    await turn()
+    expect(told(run)).toEqual([])
+    front(run, 'com.mitchellh.ghostty')
+    await turn()
+    expect(apps(run)).toEqual(['ghostty'])
+    // Gone: nothing for the devices.
+    dial(run.socket, { attached: false })
+    await turn()
+    expect(apps(run)).toEqual(['ghostty'])
+    dial(run.socket, { attached: true, fw: '0.0.95' })
+    await turn()
+    expect(apps(run)).toEqual(['ghostty', 'ghostty'])
+    await stillRunning(run)
+    // The first status says attached.
+    const first = watch()
+    front(first, 'Code.exe')
+    await turn()
+    await opened(first.socket)
+    connected(first.socket, ['dial-watch'])
+    dial(first.socket, { attached: true })
+    await turn()
+    expect(apps(first)).toEqual(['vscode', 'vscode'])
+    await stillRunning(first)
+    // The dial attaches while the same app is being told, perhaps before the devices listen: it is told again after.
+    const held = heldListener()
+    const during = watch({ tell: held.tell })
+    await opened(during.socket)
+    connected(during.socket, ['dial-watch'])
+    front(during, 'com.mitchellh.ghostty')
+    dial(during.socket, { attached: true })
+    expect(apps(during)).toEqual(['ghostty'])
+    await held.answer(false)
+    expect(apps(during)).toEqual(['ghostty', 'ghostty'])
+    await held.answer(true)
+    expect(apps(during)).toEqual(['ghostty', 'ghostty'])
+    during.stdin.emit('end')
+    await held.answer(true)
+    expect(await during.done).toBe(0)
+  })
+  it('the same attached status again (a new devices process) tells the app in front again', async () => {
+    const run = watch()
+    await opened(run.socket)
+    connected(run.socket, ['dial-watch'])
+    front(run, 'com.mitchellh.ghostty')
+    dial(run.socket, { attached: true, fw: '0.0.95' })
+    await turn()
+    expect(apps(run)).toEqual(['ghostty', 'ghostty'])
+    // The devices process restarted under a dial still attached: the core kept its status, and the new one's reads the same.
+    dial(run.socket, { attached: true, fw: '0.0.95' })
+    await turn()
+    expect(apps(run)).toEqual(['ghostty', 'ghostty', 'ghostty'])
+    expect(run.printed).toEqual(['{"attached":true,"fw":"0.0.95"}'])
+    await stillRunning(run)
+  })
+  it('two changes while a tell is under way: the newest is told when it ends, the one between is skipped', async () => {
+    const held = heldListener()
+    const run = watch({ tell: held.tell })
+    front(run, 'com.mitchellh.ghostty')
+    front(run, 'Code.exe')
+    front(run, 'cursor')
+    expect(apps(run)).toEqual(['ghostty'])
+    await held.answer(true)
+    expect(apps(run)).toEqual(['ghostty', 'cursor'])
+    // Away and back to the app being told: the listener has it when the tell ends.
+    front(run, 'Code.exe')
+    front(run, 'cursor')
+    await held.answer(true)
+    expect(apps(run)).toEqual(['ghostty', 'cursor'])
+    run.stdin.emit('end')
+    await held.answer(true)
+    expect(await run.done).toBe(0)
+  })
+  it('a change every 10 ms against a listener of ten a second: told at most once each 100 ms, and the newest last', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    const sent: number[] = [], taken: Array<{ app: string; at: number }> = []
+    // The listener's rate on one connection: ten in any second.
+    const tell = vi.fn(async ({ app }: Told) => {
+      const at = Date.now()
+      sent.push(at)
+      if (taken.length >= 10 && at - taken.at(-10)!.at < 1_000) return false
+      taken.push({ app, at })
+      return true
+    })
+    const run = watch({ tell })
+    for (let i = 0; i < 12; i++) {
+      front(run, ['com.mitchellh.ghostty', 'Code.exe', 'cursor'][i % 3]!)
+      await vi.advanceTimersByTimeAsync(10)
+    }
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(taken.at(-1)!.app).toBe('cursor')
+    expect(sent.slice(1).map((at, i) => at - sent[i]!).every(gap => gap >= 100)).toBe(true)
+    // Nothing more once the newest is told: one timer, no retry.
+    const tells = tell.mock.calls.length
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(tell.mock.calls.length).toBe(tells)
+    await stillRunning(run)
+  })
+  it('after stdin closes only none is told, once the tell under way has ended', async () => {
+    const held = heldListener()
+    const run = watch({ tell: held.tell })
+    await opened(run.socket)
+    connected(run.socket, ['dial-watch'])
+    front(run, 'com.mitchellh.ghostty')
+    front(run, 'Code.exe')
+    run.stdin.emit('end')
+    run.stdin.emit('close')
+    expect(apps(run)).toEqual(['ghostty'])
+    await held.answer(true)
+    expect(apps(run)).toEqual(['ghostty', 'none'])
+    await held.answer(true)
+    expect(await run.done).toBe(0)
+    front(run, 'cursor')
+    dial(run.socket, { attached: true })
+    await turn()
+    expect(apps(run)).toEqual(['ghostty', 'none'])
+  })
+  it('a tell answered after stdin closed leaves no timer', async () => {
+    const held = heldListener()
+    const run = watch({ tell: held.tell })
+    await opened(run.socket)
+    connected(run.socket, ['dial-watch'])
+    front(run, 'com.mitchellh.ghostty')
+    run.stdin.emit('end')
+    await held.answer(true)
+    await held.answer(true)
+    expect(await run.done).toBe(0)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+  it('stdin ending after an app in front tells none once, then exits: the devices stop following an app the Device app no longer sees', async () => {
+    const run = watch()
+    await opened(run.socket)
+    connected(run.socket, ['dial-watch'])
+    front(run, 'com.mitchellh.ghostty')
+    await turn()
+    run.stdin.emit('end')
+    run.stdin.emit('close')
+    expect(await run.done).toBe(0)
+    await turn()
+    expect(told(run)).toEqual([{ type: 'front', app: 'ghostty' }, { type: 'front', app: 'none' }])
+  })
+  it('stdin ending with no app in front ever told tells nothing', async () => {
+    const quiet = watch()
+    await opened(quiet.socket)
+    connected(quiet.socket, ['dial-watch'])
+    quiet.stdin.emit('end')
+    expect(await quiet.done).toBe(0)
+    expect(told(quiet)).toEqual([])
+    // Only unlisted apps in front: the devices already have none.
+    const unlisted = watch()
+    front(unlisted, 'com.apple.Safari')
+    await turn()
+    unlisted.stdin.emit('end')
+    expect(await unlisted.done).toBe(0)
+    expect(apps(unlisted)).toEqual(['none'])
+  })
+  it('a tell under way that outlasts the 2 s holds the exit no longer, and no none follows it after the exit', async () => {
+    const held = heldListener()
+    const run = watch({ tell: held.tell })
+    front(run, 'com.mitchellh.ghostty')
+    run.stdin.emit('end')
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(await run.done).toBe(0)
+    await held.answer(true)
+    expect(apps(run)).toEqual(['ghostty'])
+  })
+  it('a listener that never answers the none holds the exit 2 s at most, and the none is not tried again', async () => {
+    const held = heldListener()
+    const run = watch({ tell: held.tell })
+    front(run, 'com.mitchellh.ghostty')
+    await held.answer(true)
+    let exited = false
+    void run.done.then(() => { exited = true })
+    run.stdin.emit('end')
+    expect(apps(run)).toEqual(['ghostty', 'none'])
+    await vi.advanceTimersByTimeAsync(1_999)
+    expect(exited).toBe(false)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(exited).toBe(true)
+    expect(await run.done).toBe(0)
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(apps(run)).toEqual(['ghostty', 'none'])
+  })
+  it('a line in two chunks is one line; a 2000-byte line and a line that is not JSON are dropped, and the next line still works', async () => {
+    const run = watch()
+    await opened(run.socket)
+    connected(run.socket, ['dial-watch'])
+    run.stdin.emit('data', '{"front":"com.mitch')
+    run.stdin.emit('data', 'ellh.ghostty"}\n')
+    await turn()
+    expect(apps(run)).toEqual(['ghostty'])
+    // Each would tell vscode if it were read.
+    const long = `{"front":"Code.exe","pad":"${'x'.repeat(2000)}"}\n`
+    run.stdin.emit('data', long)
+    for (let at = 0; at < long.length; at += 500) run.stdin.emit('data', Buffer.from(long.slice(at, at + 500)))
+    for (const line of ['Code.exe\n', '{"front":5}\n', '{}\n', 'null\n', '\n']) run.stdin.emit('data', line)
+    await turn()
+    expect(apps(run)).toEqual(['ghostty'])
+    // 1024 bytes is the longest line read.
+    const longest = `{"front":"Code.exe","pad":"${'x'.repeat(1024 - 29)}"}`
+    expect(Buffer.byteLength(longest)).toBe(1024)
+    const bytes = Buffer.from(`${longest}\n`)
+    run.stdin.emit('data', bytes.subarray(0, 700))
+    run.stdin.emit('data', bytes.subarray(700))
+    await turn()
+    expect(apps(run)).toEqual(['ghostty', 'vscode'])
+    run.stdin.emit('data', `${frontLine('com.apple.Safari')}${frontLine('com.mitchellh.ghostty')}`)
+    await turn()
+    expect(apps(run)).toEqual(['ghostty', 'vscode', 'none', 'ghostty'])
+    await stillRunning(run)
+  })
+  it('dial status lines print as before, and stdin closing still exits 0', async () => {
+    const run = watch()
+    await opened(run.socket)
+    connected(run.socket, ['dial-watch'])
+    dial(run.socket, { attached: true, fw: '0.0.95' })
+    front(run, 'com.mitchellh.ghostty')
+    dial(run.socket, { attached: true, fw: '0.0.95' })
+    dial(run.socket, { attached: false })
+    expect(run.printed).toEqual(['{"attached":true,"fw":"0.0.95"}', '{"attached":false}'])
+    expect(run.errors).toEqual([])
+    run.stdin.emit('end')
+    expect(await run.done).toBe(0)
+    expect(run.socket.close).toHaveBeenCalled()
+    expect(run.stdin.pause).toHaveBeenCalled()
   })
 })

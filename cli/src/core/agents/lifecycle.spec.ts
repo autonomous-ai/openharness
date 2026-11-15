@@ -7,6 +7,7 @@ import { createRetainExitedSession } from '../../lib/retainExitedSession.js'
 import { createAgentBrowserLifecycle, createAgentLifecycle, createPurgeRequest, createStopRequest, TOLD_NOT_ERASED, type LifecycleDeps } from './lifecycle.js'
 import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
 import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
+import { WORKSPACES_OFF, type WorkspacesPort } from '../api.js'
 import { moveHeldLine } from '../../lib/hostMove/moveAgent.js'
 
 vi.mock('../../lib/stopAgentService.js', async (real) => ({ ...await real<object>(), createStopAgentService: vi.fn(() => vi.fn(async () => {})) }))
@@ -56,6 +57,7 @@ function setup(over: Partial<LifecycleDeps> = {}) {
     attachSession: vi.fn(async () => true),
     forgetTold: vi.fn(async () => true),
     scrubCreated: vi.fn(async () => 0),
+    workspaces: vi.fn(() => null),
     ...over,
   }
   const lifecycle = createAgentLifecycle(deps)
@@ -128,6 +130,16 @@ describe('stopping, purging and resuming an agent', () => {
       expect(purge.stopped).toBe(deps.stoppedAgents)
       expect(purge.checkpoints).toBe(deps.sessionCheckpoints)
       expect(purge.stop).toBe(lifecycle.stopAgent)
+    })
+
+    it('asks workspaces, as they are at each call, for a worktree; while they are off, nothing of it is read or removed', async () => {
+      const port = { ...WORKSPACES_OFF, ready: () => true }
+      let workspaces: WorkspacesPort | null = null
+      const { purge } = setup({ workspaces: () => workspaces })
+      expect(purge.worktrees()).toBe(WORKSPACES_OFF)
+      expect(await purge.worktrees().reviewWorktree({ cwd: '/work' }, [])).toEqual({ ok: false, reason: expect.stringContaining('did not answer') })
+      workspaces = port
+      expect(purge.worktrees()).toBe(port)
     })
 
     it('asks the pane, through the core, whether an agent waits at its folder-trust question', () => {

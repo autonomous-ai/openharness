@@ -1,4 +1,3 @@
-import type { ProductUsageLaunchSignal } from '../lib/productUsageSignals.js'
 import type { ProductUsageMetric } from '../lib/productUsageContract.js'
 import type { PreparedHandoff, HandoffPermit, HandoffOutcome } from '../lib/handoffAuthority.js'
 import type { AgentTokenUsage, AgentUsageTarget } from '../lib/agentUsageWire.js'
@@ -39,6 +38,9 @@ import type { LastTurnText, LiveEvent } from '../engines/kit/events.js'
 import type { SessionRecaps } from '../lib/recapReads.js'
 import type { SessionInputDelivery } from '../lib/sessionInput.js'
 import type { AgentCloseRequest, AgentCloseResult } from '../lib/closeAgentService.js'
+import type { GitProjectFolder } from '../lib/projectFolder.js'
+import type { WorkspaceInspection, WorkspaceTarget, WorktreeReview } from '../lib/worktreeDeletion.js'
+import type { ScmLaunchRecord } from '../scm/types.js'
 import { projectDisplayName, type registry, type RegisteredSession } from '../lib/registry.js'
 import { sessionForPaneId } from '../lib/terminalRuntime.js'
 import type { RuntimeModelOption } from '../lib/runtimeProfile.js'
@@ -1283,15 +1285,59 @@ export const CONNECTORS_FALLBACKS: PortFallbacks<ConnectorsPort> = { syncProfile
 /** What the core calls while `ports.connectors` is null (connected services are off): its fallbacks' answer. */
 export const CONNECTORS_OFF: ConnectorsPort = { syncProfileHome: async () => [] }
 
-/** The core's call into workspaces: name made-up worktree branches after their sessions, on each terminal-title pass. No
- *  worktree is removed on a timer (#4166, #711): the daemon swept clean, week-idle ones twice a day, including those their
- *  person chose to keep and the gitignored files in them. */
+/** The folder git made for a create (`WorkspacesPort.prepareFolder`), with what its every relaunch needs and, for a clone,
+ *  the SSH alias it got in through; or why not, in the create's own code and words (`access: 'denied'`: GitHub refused
+ *  every way in, which the apps say in their own words). */
+export type PreparedFolder = { ok: true; cwd: string; scmLaunchRecord?: ScmLaunchRecord; clonedVia?: { alias: string } }
+  | { ok: false; error: string; detail: string; access?: 'denied' }
+/** A worktree reviewed for its removal (`WorkspacesPort.reviewWorktree`), or why it may not be removed. */
+export type WorktreeAnswer = { ok: true; review: WorktreeReview } | { ok: false; reason: string }
+
+/**
+ * The core's calls into workspaces (services/workspaces.ts), the folders agents work in. Each runs git, and git runs in
+ * the edge host, never in the core (the audit of 2026-11-12): the folder a create asks git for (a clone, a worktree, the
+ * folder itself on another branch), a harness's worktree read and removed at a purge, and the made-up worktree branches
+ * named after their sessions, on each terminal-title pass. No worktree is removed on a timer (#4166, #711): the daemon
+ * swept clean, week-idle ones twice a day, including those their person chose to keep and the gitignored files in them.
+ * A refusal is an answer, never a throw, which would count against the service and could switch it off.
+ */
 export interface WorkspacesPort {
   nameBranches(): void
+  /** Whether it can make a folder now: a create waits for it (held) while it cannot, rather than failing for the moment a
+   *  restart takes. */
+  ready(): boolean
+  /** The folder git makes for a create. `cloneFallback`: the computer owner's own start, which may try every way this
+   *  computer reaches GitHub (lib/gitProjectFolder.ts); a start whose address someone else chose never picks the owner's
+   *  accounts. */
+  prepareFolder(project: GitProjectFolder, options: { cloneFallback: boolean }): Promise<PreparedFolder>
+  /** Where a harness works, for Inspect: a worktree, the main checkout or a plain folder; null when nothing answered.
+   *  [others]: the folders every other harness here works in, live or stopped. */
+  describeWorkspace(target: WorkspaceTarget, others: readonly string[]): Promise<WorkspaceInspection | null>
+  /** A harness's linked worktree, reviewed for its removal: its path, branch, changes and the signature the removal is
+   *  held to. */
+  reviewWorktree(target: WorkspaceTarget, others: readonly string[]): Promise<WorktreeAnswer>
+  /** Removes a reviewed worktree, only while it is still exactly what was reviewed. Never its branch. */
+  removeWorktree(review: WorktreeReview, target: WorkspaceTarget, others: readonly string[], discardChanges: boolean): Promise<{ ok: true } | { ok: false; reason: string }>
 }
 
-/** What the core gets when workspaces fails: branches keep their names. */
-export const WORKSPACES_FALLBACKS: PortFallbacks<WorkspacesPort> = { nameBranches: undefined }
+/** What a create and a purge say when workspaces did not answer: down, restarting, switched off, or too old to know. */
+export const WORKSPACES_UNAVAILABLE = 'Harness\'s workspaces service did not answer. Try again in a moment.'
+const FOLDER_UNAVAILABLE: PreparedFolder = { ok: false, error: 'SERVICE_UNAVAILABLE', detail: `Could not make the project folder. ${WORKSPACES_UNAVAILABLE}` }
+const REVIEW_UNAVAILABLE: WorktreeAnswer = { ok: false, reason: `The worktree could not be checked. ${WORKSPACES_UNAVAILABLE}` }
+const REMOVAL_UNAVAILABLE = { ok: false as const, reason: `The worktree was kept. ${WORKSPACES_UNAVAILABLE}` }
+
+/** What the core gets when workspaces fails: branches keep their names, a create waits for its folder, and nothing of a
+ *  worktree is read or removed. */
+export const WORKSPACES_FALLBACKS: PortFallbacks<WorkspacesPort> = {
+  nameBranches: undefined, ready: false, prepareFolder: later(FOLDER_UNAVAILABLE), describeWorkspace: later(null),
+  reviewWorktree: later(REVIEW_UNAVAILABLE), removeWorktree: later(REMOVAL_UNAVAILABLE),
+}
+
+/** What the core calls while `ports.workspaces` is null (workspaces off): its fallbacks' answers. */
+export const WORKSPACES_OFF: WorkspacesPort = {
+  nameBranches: () => {}, ready: () => false, prepareFolder: async () => FOLDER_UNAVAILABLE, describeWorkspace: async () => null,
+  reviewWorktree: async () => REVIEW_UNAVAILABLE, removeWorktree: async () => REMOVAL_UNAVAILABLE,
+}
 
 /** The core's calls into Agent Messages: whether one of its typed deliveries (a `team:` id) may still be written,
  *  asked in line as it is written (core/input.ts); and that the core's copy of the account's switch changed
@@ -1582,11 +1628,59 @@ export type BackendNotice =
 export type { LocalWindows, WindowSurface } from '../lib/windowSurfaces.js'
 import type { LocalWindows, WindowSurface } from '../lib/windowSurfaces.js'
 
+/**
+ * A request the usage report measures, as the core saw it, raw and bounded (core/usageOutcomes.ts): which request, who
+ * sent it, and what its answer said. The gateway turns it into the report's fixed counter names
+ * (gateway/usageEvents.ts, lib/productUsageSignals.ts): those names are the backend's vocabulary, which the core does not load. Nothing in it
+ * goes into a report: a launch's and an agent's ids stay in the gateway's memory, as they did when the core sent them.
+ */
+export interface UsageRequest {
+  type: string
+  /** Over the local socket, by a tool there, and the remote client's role (`web`, `device`), as the core knows them. */
+  local: boolean
+  tool: boolean
+  role: string | null
+  /** The phone said it is the phone (`usageSurface: 'phone'`). */
+  phone?: true
+  /** A person opened the list (`userAction`). */
+  userAction?: true
+  /** A launch's own facts: its durable id, the engine asked for, and whether an agent (Hachi) asked for it. */
+  creationId?: string
+  engine?: string
+  agentStarted?: true
+  hachiStarted?: true
+  /** A message a person's composer sent (`usageIntent: 'interactive'`), and the agent it is for. */
+  interactive?: true
+  agentId?: string
+}
+/** What an answer to it said: its error (`true` for one that is not a string), state and agent, as its reply had them. */
+export interface UsageAnswer {
+  error?: string | true
+  state?: string
+  hasAgent?: true
+  ok?: false
+  /** A refused resume's preparation check (`reason`): `null` for one that is not a string. */
+  preparation?: string | null
+  /** The created agent's id and launch, as its frame had them; `true` for an agent that is not a frame. */
+  agent?: { id?: string; launch?: { state?: string; error?: string } } | true
+  /** The service a pending launch waits for. */
+  held?: string
+  /** What became of a person's message (lib/sessionInput.ts `MessageOutcome`), which nothing else answers. */
+  message?: string
+}
+export type UsageEvent =
+  | { kind: 'request'; request: UsageRequest }
+  /** [first]: the request's first answer, the one its counters count; a later one says only what became of a launch. */
+  | { kind: 'answer'; request: UsageRequest; answer: UsageAnswer; first: boolean; elapsedMs: number }
+  /** `hn`'s own measurement of its flows (`product_observe`), as it sent it, bounded. */
+  | { kind: 'observed'; payload: Record<string, unknown> }
+
 /** What the core asks of the gateway: everything bound for a remote client, and the link's state. */
 export interface GatewayPort {
   /** Optional, fixed-name counter to the gateway; no user payload or identifier. */
   usageCounter?(metric: ProductUsageMetric): void
-  usageLaunch?(signal: ProductUsageLaunchSignal): void
+  /** A request the usage report measures, as the core saw it (core/usageOutcomes.ts): the gateway names its counters. */
+  usage?(event: UsageEvent): void
   /** Dial the backend: this daemon is signed in. */
   connect(): void
   /** Never dial: signed out, so nothing is sealed or queued for a link that will not open. */
@@ -1732,6 +1826,8 @@ export interface HttpAnswer {
   body: Record<string, unknown>
   /** A busy or failing answer's Retry-After, when it had one (gateway/accountHttp.ts). */
   retryAfterMs?: number
+  /** Headers on a route's answer, only those its route declares (`ServiceHttpRoute.headers`, `answerHeaders`). */
+  headers?: Record<string, string>
 }
 
 /** What the core's status reads of the relay: the machine's E2EE fingerprint, its pairings and the one
@@ -1767,9 +1863,20 @@ export interface GatewayMachines {
 export interface ServiceHttpRoute {
   /** The paths it takes, its query left out. */
   path: RegExp
+  /** The methods it takes; another goes on to the door's own routes. Every method when absent. */
+  methods?: readonly string[]
+  /** The methods that write: the door answers one without the local header (`x-adapter-local: 1`, which a page in a
+   *  browser cannot send without a preflight the door never allows) with its 403, before its service is asked. */
+  writes?: readonly string[]
   type: string
   waitMs: number
   unanswered: HttpAnswer
+  /** Headers on every answer of the route: the door's own, and its service's. */
+  headers?: Readonly<Record<string, string>>
+  /** The headers its service's answer may set, lower case; any other is not written. */
+  answerHeaders?: readonly string[]
+  /** The most of a body the door reads for it, in bytes: past it the body is empty (the door's own bound when absent). */
+  maxBodyBytes?: number
 }
 
 /** The gateway's routes of the door (gateway/start.ts): one request, by path. */
@@ -1779,9 +1886,34 @@ const deviceDown = (status: number, code: string, message: string): HttpAnswer =
 const DEVICE_LINK_DOWN = deviceDown(503, 'UNAVAILABLE', 'The Wi-Fi device link is not reachable on this computer right now. Try again.')
 
 /**
+ * The usage report's vocabulary revision, on every answer of its route (`x-harness-usage-vocabulary`), the door's own
+ * too: the Desktop counts a name newer than revision 1 only once a proxy has announced it, since an older CLI refused a
+ * whole report for one name it did not know (gateway/accountRoutes.ts, lib/appProductUsageReport.ts), and it reads the
+ * revision off every answer, a refusal included. 2: the Desktop's frame-phase counters (`frame_slow_*`,
+ * `frame_long_collector`). 3: its Add Phone card (`ui_desktop_phone_offer_*`) and the ways Add Phone opened
+ * (`ui_desktop_add_phone_*`). 4: the card offered after work or after time away (`ui_desktop_phone_offer_after_work_*`,
+ * `ui_desktop_phone_offer_away_*`). 5: first-arrival episodes and shared-tab invitation outcomes. 6: returning-account
+ * phone offers, offer skip reasons and Add Phone pairing sources. 7: Import an agent running on this Mac
+ * (`ui_desktop_agent_import_*`, task #2379). 8: How a Team account's removal from the computer ended
+ * (`ui_desktop_team_account_removal_*`, 2026-11-10). 9: an agent's Browser panel opened (`agent_browser_opened`).
+ * 10: Hachi's window counters (docs/design/2026-11-12-hachi.md, Measures). Raise it with each name the Desktop gates on
+ * it (`ProductHealthMeasure.vocabulary`, `ProductFlow.vocabulary`), in the pull request that lets the gateway take it.
+ */
+export const APP_USAGE_VOCABULARY = 10
+export const APP_USAGE_VOCABULARY_HEADER = 'x-harness-usage-vocabulary'
+
+/** What a route of the account answers while the gateway is down or does not answer in time, as it did in the core. */
+const GATEWAY_DOWN: HttpAnswer = { status: 503, body: { error: 'GATEWAY_UNAVAILABLE' } }
+/** How long a route of the account is waited for: as a backend call through the gateway always was (core/gatewayLink.ts). */
+const ACCOUNT_WAIT_MS = 25_000
+/** A route of the account (gateway/accountRoutes.ts) that takes [methods], each but GET a write. */
+const account = (path: RegExp, methods: readonly string[]): ServiceHttpRoute =>
+  ({ path, methods, writes: methods.filter((method) => method !== 'GET'), type: 'gateway_http', waitMs: ACCOUNT_WAIT_MS, unanswered: GATEWAY_DOWN })
+
+/**
  * The door's routes each service answers, the first that matches taking a request. Each says what it answered before
- * it left the core's process, word for word, while its service is down (e2e/deviceRoutes.e2e.ts). The door's own
- * checks come first (hookServer.ts).
+ * it left the core's process, word for word, while its service is down (e2e/deviceRoutes.e2e.ts,
+ * e2e/accountRoutes.e2e.ts). The door's own checks come first (hookServer.ts, core/serviceRoutes.ts).
  */
 export const SERVICE_HTTP_ROUTES: readonly ServiceHttpRoute[] = [
   // The add-ons of a device that is this machine (services/machineAddons.ts): its own service's take waits up to 20 s
@@ -1799,6 +1931,22 @@ export const SERVICE_HTTP_ROUTES: readonly ServiceHttpRoute[] = [
   // for the service, and listens for three seconds.
   { path: /^\/api\/autonomous-device\/pair\/start$/, type: 'gateway_http', waitMs: 140_000, unanswered: DEVICE_LINK_DOWN },
   { path: /^\/api\/autonomous-device\//, type: 'gateway_http', waitMs: 45_000, unanswered: DEVICE_LINK_DOWN },
+  // The account's, through this computer's sign-in, which the gateway holds (gateway/accountRoutes.ts,
+  // e2e/accountRoutes.e2e.ts): the desk, Agent Messages' tabs, the account's name and the phone half of a sign-in.
+  account(/^\/api\/desk$/, ['GET']),
+  account(/^\/api\/desk\/ops$/, ['POST']),
+  account(/^\/api\/agent-messages$/, ['GET']),
+  account(/^\/api\/agent-messages\/tabs\/[A-Za-z0-9_-]{1,64}$/, ['PATCH']),
+  account(/^\/api\/auth\/me$/, ['GET', 'PATCH']),
+  account(/^\/api\/auth\/qr\/(lookup|approve|deny)$/, ['POST']),
+  // The product usage feedback, choice and reports; a busy backend's Retry-After reaches the Desktop, which waits it out.
+  account(/^\/api\/product-usage\/feedback$/, ['POST']),
+  account(/^\/api\/product-usage\/settings$/, ['GET', 'POST']),
+  { ...account(/^\/api\/product-usage\/report$/, ['POST']), maxBodyBytes: 8192,
+    headers: { [APP_USAGE_VOCABULARY_HEADER]: String(APP_USAGE_VOCABULARY) }, answerHeaders: ['retry-after'] },
+  // A machine's rename and delete, and the Store's ratings and reviews, which answers its other methods itself.
+  account(/^\/api\/machines\//, ['PATCH', 'DELETE']),
+  { path: /^\/api\/store\//, writes: ['PUT', 'DELETE'], type: 'gateway_http', waitMs: ACCOUNT_WAIT_MS, unanswered: GATEWAY_DOWN },
 ]
 
 /**

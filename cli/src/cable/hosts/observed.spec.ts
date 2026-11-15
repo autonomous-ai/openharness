@@ -4,6 +4,7 @@ import { STOP_HOOK_GRACE_MS } from '../../core/turns/turnHooks.js'
 import { type Delivery, Inbox } from './inbox.js'
 import { askedLine, observedAgentId, type ObservedActions, ObservedSource, type ObservedDeps } from './observed.js'
 import type { OpenTarget } from './open.js'
+import type { PaneSwitch } from './types.js'
 
 function setup(over: Partial<ObservedDeps> = {}) {
   const clock = { t: 1_000_000 }
@@ -19,6 +20,7 @@ function setup(over: Partial<ObservedDeps> = {}) {
   const answers = new Map<string, string>()
   // Each transcript's last change, as its file's stamp says it.
   const stamps = new Map<string, number>()
+  const logs: string[] = []
   // Each look at the machine's processes, as OpenSessions takes one.
   let looks = 0
   let held: Promise<void> | undefined
@@ -46,7 +48,7 @@ function setup(over: Partial<ObservedDeps> = {}) {
     lastAnswer: async (_engine, path) => answers.get(path),
     fileStamp: async (path: string) => (stamps.has(path) ? { stamp: '', mtime: stamps.get(path)! } : null),
     excluded: ['/data/harness'],
-    log: () => {},
+    log: (line) => { logs.push(line) },
     ...over,
   }
   const src = new ObservedSource(deps)
@@ -56,7 +58,7 @@ function setup(over: Partial<ObservedDeps> = {}) {
     engine: 'claude', sessionId: 's1', event, cwd: '/work/proj', callerPid: 100, hostHints: {}, ...over,
   })
   return {
-    src, clock, gens, procs, alive, open, owners, working, externals, answers, stamps, changes, ev, find,
+    src, clock, gens, procs, alive, open, owners, working, externals, answers, stamps, changes, ev, find, logs,
     looks: () => looks, hold: (until: Promise<void>) => { held = until },
   }
 }
@@ -462,6 +464,56 @@ describe('ObservedSource codex and open sessions', () => {
     expect(src.list()[0]).toMatchObject({ host: 'orca', state: 'working' })
   })
 
+  it('a session the open scan found is not known yet, on the unknown app\'s page, until its first hook', async () => {
+    const { src, open, owners, externals, ev } = setup()
+    open.set('s1', 'terminal')
+    owners.set('s1', { pid: 100, engine: 'claude' })
+    externals.set('s1', { cwd: '/work/proj', transcriptPath: '/t/s1.jsonl' })
+    await src.scanOpen()
+    expect(src.list()[0]).toMatchObject({ app: 'terminal', appPending: true })
+    src.ingest(ev('turn-start', { hostHints: { TERM_PROGRAM: 'ghostty' } }))
+    expect(src.list()[0]).toMatchObject({ host: 'ghostty', app: 'ghostty' })
+    expect(src.list()[0]).not.toHaveProperty('appPending')
+  })
+
+  it('a hook with no hints makes it known to be in the unknown app', async () => {
+    const { src, open, owners, externals, ev } = setup()
+    open.set('s1', 'terminal')
+    owners.set('s1', { pid: 100, engine: 'claude' })
+    externals.set('s1', { cwd: '/work/proj', transcriptPath: '/t/s1.jsonl' })
+    await src.scanOpen()
+    expect(src.list()[0].appPending).toBe(true)
+    src.ingest(ev('session-start', { hostHints: {} }))
+    expect(src.list()[0].app).toBe('terminal')
+    expect(src.list()[0]).not.toHaveProperty('appPending')
+  })
+
+  it('an agent a hook told of first is never not known yet', async () => {
+    const { src, open, owners, externals, ev } = setup()
+    src.ingest(ev('session-start'))
+    expect(src.list()[0]).not.toHaveProperty('appPending')
+    open.set('s1', 'terminal')
+    owners.set('s1', { pid: 100, engine: 'claude' })
+    externals.set('s1', { cwd: '/work/proj', transcriptPath: '/t/s1.jsonl' })
+    await src.scanOpen()
+    expect(src.list()).toHaveLength(1)
+    expect(src.list()[0]).not.toHaveProperty('appPending')
+  })
+
+  it('a hook from zellij inside Ghostty gives host zellij and app ghostty', () => {
+    const { src, ev } = setup()
+    src.ingest(ev('session-start', { hostHints: { ZELLIJ: '0', TERM_PROGRAM: 'ghostty' } }))
+    expect(src.list()[0]).toMatchObject({ host: 'zellij', app: 'ghostty' })
+  })
+
+  it('a session resumed in another terminal changes app', () => {
+    const { src, ev } = setup()
+    src.ingest(ev('session-start', { hostHints: { TERM_PROGRAM: 'ghostty' } }))
+    src.ingest(ev('session-end'))
+    src.ingest(ev('session-start', { hostHints: { TERM_PROGRAM: 'iTerm.app' } }))
+    expect(src.list()[0]).toMatchObject({ host: 'iterm', app: 'iterm' })
+  })
+
   it('scanOpen leaves a session a hook already knows', async () => {
     const { src, open, owners, ev } = setup()
     src.ingest(ev('turn-start'))
@@ -470,6 +522,95 @@ describe('ObservedSource codex and open sessions', () => {
     await src.scanOpen()
     expect(src.list()).toHaveLength(1)
     expect(src.list()[0].state).toBe('working')
+  })
+})
+
+describe('ObservedSource and the app the scan learns', () => {
+  /** A session found open in a terminal, its owner `pid`. */
+  const found = (s: ReturnType<typeof setup>, sessionId: string, pid: number): void => {
+    s.open.set(sessionId, 'terminal')
+    s.owners.set(sessionId, { pid, engine: 'claude' })
+    s.externals.set(sessionId, { cwd: `/x/${sessionId}`, transcriptPath: `/t/${sessionId}.jsonl` })
+  }
+
+  it('a session the scan found under a listed app is on that app\'s page from its first listing, and known', async () => {
+    const s = setup({ apps: async () => new Map([[11, 'ghostty']]) })
+    found(s, 'a', 11)
+    await s.src.scanOpen()
+    expect(s.src.list()[0]).toMatchObject({ app: 'ghostty', host: 'terminal' })
+    expect(s.src.list()[0]).not.toHaveProperty('appPending')
+  })
+
+  it('the scan asks once a pass, for the new sessions\' pids alone, and never again for one it listed', async () => {
+    const apps = vi.fn(async (_pids: readonly number[]) => new Map<number, string>())
+    const s = setup({ apps })
+    found(s, 'a', 11)
+    found(s, 'b', 12)
+    await s.src.scanOpen()
+    found(s, 'c', 13)
+    await s.src.scanOpen()
+    await s.src.scanOpen()
+    expect(apps.mock.calls).toEqual([[[11, 12]], [[13]]])
+  })
+
+  it('a session nothing was learned of is not known yet, and its first hook still names its app', async () => {
+    const s = setup({ apps: async () => new Map() })
+    found(s, 's1', 100)
+    await s.src.scanOpen()
+    expect(s.src.list()[0]).toMatchObject({ app: 'terminal', appPending: true })
+    s.src.ingest(s.ev('turn-start', { hostHints: { TERM_PROGRAM: 'ghostty' } }))
+    expect(s.src.list()[0].app).toBe('ghostty')
+    expect(s.src.list()[0]).not.toHaveProperty('appPending')
+  })
+
+  it('a learn that fails still lists every session, not known yet', async () => {
+    const s = setup({ apps: async () => { throw new Error('ps timed out under /Users/someone') } })
+    found(s, 'a', 11)
+    found(s, 'b', 12)
+    await s.src.scanOpen()
+    expect(s.src.list().map((a) => [a.sessionId, a.app, a.appPending])).toEqual([['a', 'terminal', true], ['b', 'terminal', true]])
+    expect(s.logs).toContain('[observed] scan · apps not read')
+    // No error text: a path holds the account's name.
+    expect(s.logs.join('\n')).not.toContain('someone')
+  })
+
+  it('a process table that cannot be read leaves every session not known yet, and listed', async () => {
+    const s = setup({ apps: async () => new Map() })
+    found(s, 'a', 11)
+    found(s, 'b', 12)
+    await s.src.scanOpen()
+    expect(s.src.list().map((a) => [a.sessionId, a.app, a.appPending])).toEqual([['a', 'terminal', true], ['b', 'terminal', true]])
+  })
+
+  it('a hook that told of a session while its app was being learned wins', async () => {
+    let answer: (apps: ReadonlyMap<number, string>) => void = () => {}
+    const apps = vi.fn(() => new Promise<ReadonlyMap<number, string>>((resolve) => { answer = resolve }))
+    const s = setup({ apps })
+    found(s, 's1', 100)
+    const scan = s.src.scanOpen()
+    await vi.waitFor(() => expect(apps).toHaveBeenCalled())
+    s.src.ingest(s.ev('turn-start', { hostHints: { TERM_PROGRAM: 'ghostty' } }))
+    answer(new Map([[100, 'vscode']]))
+    await scan
+    expect(s.src.list()).toHaveLength(1)
+    expect(s.src.list()[0]).toMatchObject({ app: 'ghostty', state: 'working' })
+    expect(s.src.list()[0]).not.toHaveProperty('appPending')
+  })
+
+  it('the scan\'s log line counts and names nothing', async () => {
+    const s = setup({ apps: async () => { s.clock.t += 7; return new Map([[11, 'ghostty']]) } })
+    found(s, 'a', 11)
+    found(s, 'b', 12)
+    await s.src.scanOpen()
+    expect(s.logs).toEqual(['[observed] scan · 2 found · 1 app known · 7 ms'])
+    for (const word of ['ghostty', 'terminal', '11', '12', '/x/', '/t/']) expect(s.logs.join('\n')).not.toContain(word)
+  })
+
+  it('with no apps reader the scan lists as before', async () => {
+    const s = setup()
+    found(s, 'a', 11)
+    await s.src.scanOpen()
+    expect(s.src.list()[0]).toMatchObject({ sessionId: 'a', app: 'terminal', appPending: true })
   })
 })
 
@@ -524,9 +665,12 @@ function fakeActions(over: Partial<ObservedActions> = {}) {
     modReady: vi.fn((sessionId: string) => ready.has(sessionId)),
     toMod: vi.fn(async (_sessionId: string, _text: string): Promise<Delivery> => 'taken'),
     orcaSend: vi.fn(async (_handle: string, _text: string) => true),
+    orcaSwitch: vi.fn(async (_handle: string): Promise<PaneSwitch> => 'ok'),
     // As on macOS: an app or a pane is something a tap can open (open.ts).
     canOpen: vi.fn((target: OpenTarget) => !!target.bundle || !!target.pane),
     open: vi.fn(async (_agentId: string, _target: OpenTarget) => true),
+    claudeInFront: vi.fn(() => true),
+    claudeShow: vi.fn(async (_agentId: string, _session: string): Promise<PaneSwitch> => 'ok'),
     count: vi.fn((_what: Parameters<ObservedActions['count']>[0]) => {}),
   }
   return { actions: { ...actions, ...over } as typeof actions, ready }
@@ -915,6 +1059,309 @@ describe('ObservedSource actions', () => {
   })
 })
 
+describe('ObservedSource panes', () => {
+  const OTHER = 'term_9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d'
+  const inOrca = (handle = HANDLE) => ({ hostHints: { ORCA_AGENT_SESSION_ID: 'x', ORCA_TERMINAL_HANDLE: handle } })
+
+  it('hasPane: an agent in an Orca terminal, while its session lives', () => {
+    const { actions } = fakeActions()
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('session-start', { sessionId: 'orca', ...inOrca() }))
+    src.ingest(ev('session-start', { sessionId: 'wez', hostHints: { WEZTERM_PANE: '3' } }))
+    src.ingest(ev('session-start', { sessionId: 'herdr', hostHints: { HERDR_PANE_ID: 'p1' } }))
+    src.ingest(ev('session-start', { sessionId: 'app', hostHints: { __CFBundleIdentifier: 'com.anthropic.claudefordesktop' } }))
+    const agent = (sessionId: string) => src.list().find((a) => a.sessionId === sessionId)!
+    expect(src.hasPane(agent('orca'))).toBe(true)
+    expect(src.hasPane(agent('wez'))).toBe(false)
+    expect(src.hasPane(agent('herdr'))).toBe(false)
+    expect(src.hasPane(agent('app'))).toBe(false)
+    src.ingest(ev('session-end', { sessionId: 'orca', ...inOrca() }))
+    expect(src.hasPane(agent('orca'))).toBe(false)
+
+    const bare = setup()
+    bare.src.ingest(bare.ev('session-start', inOrca()))
+    expect(bare.src.hasPane(bare.src.list()[0])).toBe(false)
+  })
+
+  it('showPane switches Orca to the terminal and answers what Orca said', async () => {
+    for (const said of ['ok', 'failed', 'busy'] as const) {
+      const { actions } = fakeActions({ orcaSwitch: vi.fn(async () => said) })
+      const { src, ev } = setup({ actions })
+      src.ingest(ev('turn-start', inOrca()))
+      expect(await src.showPane(src.list()[0])).toBe(said)
+      expect(actions.orcaSwitch.mock.calls).toEqual([[HANDLE]])
+      expect(actions.open).not.toHaveBeenCalled()
+    }
+  })
+
+  it('the handle is the latest event\'s', async () => {
+    const { actions } = fakeActions()
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('session-start', inOrca()))
+    // Resumed in another Orca terminal: the old one holds something else now.
+    src.ingest(ev('turn-start', inOrca(OTHER)))
+    const agent = src.list()[0]
+    expect(await src.showPane(agent)).toBe('ok')
+    expect(actions.orcaSwitch.mock.calls).toEqual([[OTHER]])
+    actions.orcaSwitch.mockClear()
+
+    // Its next event carries no handle: it runs elsewhere now.
+    src.ingest(ev('turn-stop', { hostHints: { TERM_PROGRAM: 'ghostty' } }))
+    expect(await src.showPane(agent)).toBe('failed')
+    src.ingest(ev('turn-start', inOrca()))
+    src.ingest(ev('session-end', inOrca()))
+    expect(await src.showPane(agent)).toBe('failed')
+    // One the source never listed.
+    expect(await src.showPane({ ...agent, id: 'gone' })).toBe('failed')
+    expect(actions.orcaSwitch).not.toHaveBeenCalled()
+    expect(actions.open).not.toHaveBeenCalled()
+  })
+  // A rest shows a Claude app session in the app, only while that app is in front (docs/specs/2026-11-15-dial-claude-app-follow.md).
+  const SESSION = 'local_8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b'
+  const inClaude = (session = SESSION, bundle = 'com.anthropic.claudefordesktop') =>
+    ({ hostHints: { __CFBundleIdentifier: bundle, CLAUDE_CODE_HOST_SESSION_ID: session } })
+
+  it('hasPane: a Claude app session, where a tap can open it, while the Claude app is in front', () => {
+    const { actions } = fakeActions()
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('session-start', inClaude()))
+    src.ingest(ev('session-start', { sessionId: 'ghostty', ...inClaude(SESSION, 'com.mitchellh.ghostty') }))
+    src.ingest(ev('session-start', { sessionId: 'uuid', ...inClaude('8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b') }))
+    const agent = (sessionId: string) => src.list().find((a) => a.sessionId === sessionId)!
+    expect(src.hasPane(agent('s1'))).toBe(true)
+    expect(actions.canOpen).toHaveBeenLastCalledWith({ pane: { app: 'claude', id: SESSION } })
+    actions.claudeInFront.mockReturnValueOnce(false)
+    expect(src.hasPane(agent('s1'))).toBe(false)
+    actions.canOpen.mockReturnValueOnce(false)
+    expect(src.hasPane(agent('s1'))).toBe(false)
+    expect(src.hasPane(agent('ghostty'))).toBe(false)
+    expect(src.hasPane(agent('uuid'))).toBe(false)
+    src.ingest(ev('session-end', inClaude()))
+    expect(src.hasPane(agent('s1'))).toBe(false)
+
+    const bare = setup()
+    bare.src.ingest(bare.ev('session-start', inClaude()))
+    expect(bare.src.hasPane(bare.src.list()[0])).toBe(false)
+  })
+
+  it('showPane shows the session through claudeShow and answers what it said', async () => {
+    for (const said of ['ok', 'failed', 'busy'] as const) {
+      const { actions } = fakeActions({ claudeShow: vi.fn(async () => said) })
+      const { src, ev } = setup({ actions })
+      src.ingest(ev('turn-start', inClaude()))
+      const agent = src.list()[0]
+      expect(await src.showPane(agent)).toBe(said)
+      expect(actions.claudeShow.mock.calls).toEqual([[agent.id, SESSION]])
+      expect(actions.orcaSwitch).not.toHaveBeenCalled()
+      expect(actions.open).not.toHaveBeenCalled()
+    }
+  })
+
+  it('showPane asks the front again: no longer in front, it is failed and nothing runs', async () => {
+    const { actions } = fakeActions()
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('session-start', inClaude()))
+    const agent = src.list()[0]
+    expect(src.hasPane(agent)).toBe(true)
+    actions.claudeInFront.mockReturnValue(false)
+    expect(await src.showPane(agent)).toBe('failed')
+    expect(actions.claudeShow).not.toHaveBeenCalled()
+    expect(actions.open).not.toHaveBeenCalled()
+  })
+
+  it('the session is the latest event\'s', async () => {
+    const NEXT = 'local_0f1e2d3c-4b5a-4968-8776-655443322110'
+    const { actions } = fakeActions()
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('session-start', inClaude()))
+    // Resumed under another of the app's sessions: the old one shows something else now.
+    src.ingest(ev('turn-start', inClaude(NEXT)))
+    const agent = src.list()[0]
+    expect(await src.showPane(agent)).toBe('ok')
+    expect(actions.claudeShow.mock.calls).toEqual([[agent.id, NEXT]])
+    actions.claudeShow.mockClear()
+
+    // Its next event comes from another app: the Claude app no longer holds it.
+    src.ingest(ev('turn-stop', inClaude(NEXT, 'com.mitchellh.ghostty')))
+    expect(await src.showPane(agent)).toBe('failed')
+    src.ingest(ev('turn-start', inClaude()))
+    src.ingest(ev('session-end', inClaude()))
+    expect(await src.showPane(agent)).toBe('failed')
+    expect(actions.claudeShow).not.toHaveBeenCalled()
+    expect(actions.open).not.toHaveBeenCalled()
+  })
+})
+
+// Only a person's prompt moves the dial: not one another session sent, nor the turn of words the dial delivered.
+describe('ObservedSource and what a turn\'s start was', () => {
+  beforeEach(() => { vi.useFakeTimers() })
+  afterEach(() => { vi.useRealTimers() })
+  const withHandle = { hostHints: { ORCA_AGENT_SESSION_ID: 'x', ORCA_TERMINAL_HANDLE: HANDLE } }
+
+  it('a turn\'s start says what it was', () => {
+    const { src, ev } = setup()
+    expect(src.ingest(ev('session-start'))).toBeUndefined()
+    expect(src.ingest(ev('turn-start'))).toBe('person')
+    expect(src.ingest(ev('turn-start', { relayed: true }))).toBe('relayed')
+    expect(src.ingest(ev('turn-start', { relayed: false }))).toBe('person')
+    expect(src.ingest(ev('needs-input'))).toBeUndefined()
+    expect(src.ingest({ engine: 'claude', sessionId: 's1', event: 'asked', tool: 'Bash', summary: 'npm test' })).toBeUndefined()
+    expect(src.ingest(ev('turn-error'))).toBeUndefined()
+    expect(src.ingest(ev('turn-stop'))).toBeUndefined()
+    expect(src.ingest(ev('session-end'))).toBeUndefined()
+    // A session it does not list: Harness's own, and one with no room left.
+    expect(src.ingest(ev('turn-start', { sessionId: 'router', cwd: '/data/harness/voice-route-scratch' }))).toBeUndefined()
+    for (let i = 0; i < 50; i++) src.ingest(ev('turn-start', { sessionId: `busy${i}`, callerPid: 200 + i }))
+    expect(src.ingest(ev('turn-start', { sessionId: 'new', callerPid: 999 }))).toBeUndefined()
+  })
+
+  // Theirs is a model call or a tool call, not a prompt (hook/notify.mjs, observedEvent).
+  it('Command Code\'s and agy\'s turn-start say nothing', () => {
+    const { src, ev } = setup()
+    expect(src.ingest(ev('turn-start', { engine: 'commandcode' }))).toBeUndefined()
+    expect(src.ingest(ev('turn-start', { engine: 'agy' }))).toBeUndefined()
+    expect(src.list().map((a) => a.state)).toEqual(['working', 'working'])
+  })
+
+  it('the turn after the mod took the dial\'s words is the dial\'s, and the one after is the person\'s', async () => {
+    const { actions, ready } = fakeActions()
+    const { src, ev } = setup({ actions })
+    ready.add('s1')
+    src.ingest(ev('turn-stop'))
+    src.ingest(ev('turn-stop', { sessionId: 's2' }))
+    expect(await src.send(src.list().find((a) => a.sessionId === 's1')!, 'run the tests')).toEqual({ ok: true })
+    // Another session's turn is its own.
+    expect(src.ingest(ev('turn-start', { sessionId: 's2' }))).toBe('person')
+    expect(src.ingest(ev('turn-start'))).toBe('dial')
+    src.ingest(ev('turn-stop'))
+    expect(src.ingest(ev('turn-start'))).toBe('person')
+  })
+
+  it('the turn after orca terminal send is the dial\'s, and the one after is the person\'s', async () => {
+    const { actions } = fakeActions()
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('turn-stop', withHandle))
+    expect(await src.send(src.list()[0], 'run the tests')).toEqual({ ok: true })
+    expect(actions.orcaSend).toHaveBeenCalledTimes(1)
+    expect(src.ingest(ev('turn-start', withHandle))).toBe('dial')
+    src.ingest(ev('turn-stop', withHandle))
+    expect(src.ingest(ev('turn-start', withHandle))).toBe('person')
+  })
+
+  // Its `--wait-submit` returns once the prompt is submitted: the turn's hook can be heard first.
+  it('the turn that starts while orca terminal send still runs is the dial\'s', async () => {
+    let submitted!: (ok: boolean) => void
+    const { actions } = fakeActions({ orcaSend: vi.fn(() => new Promise<boolean>((resolve) => { submitted = resolve })) })
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('turn-stop', withHandle))
+    const sent = src.send(src.list()[0], 'run the tests')
+    expect(actions.orcaSend).toHaveBeenCalledTimes(1)
+    expect(src.ingest(ev('turn-start', withHandle))).toBe('dial')
+    submitted(true)
+    expect(await sent).toEqual({ ok: true })
+    src.ingest(ev('turn-stop', withHandle))
+    expect(src.ingest(ev('turn-start', withHandle))).toBe('person')
+  })
+
+  it('a send Orca refuses leaves no record', async () => {
+    const { actions } = fakeActions({ orcaSend: vi.fn(async () => false) })
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('turn-stop', withHandle))
+    expect(await src.send(src.list()[0], 'run the tests')).toEqual({ ok: false, reason: 'proj did not answer.' })
+    expect(src.ingest(ev('turn-start', withHandle))).toBe('person')
+  })
+
+  // The words the mod took are still to come: a refused send takes back its own record, which would outlive theirs.
+  it('a send Orca refuses takes back its own record, not the one the mod left before it', async () => {
+    /** The mod takes the first words; a minute later Orca refuses the next. */
+    const refused = async () => {
+      const { actions, ready } = fakeActions({
+        toMod: vi.fn(async (): Promise<Delivery> => 'missed').mockResolvedValueOnce('taken'),
+        orcaSend: vi.fn(async () => false),
+      })
+      const { src, clock, ev } = setup({ actions })
+      ready.add('s1')
+      src.ingest(ev('turn-stop', withHandle))
+      expect(await src.send(src.list()[0], 'run the tests')).toEqual({ ok: true })
+      clock.t += 60_000
+      expect(await src.send(src.list()[0], 'then deploy')).toEqual({ ok: false, reason: 'proj did not answer.' })
+      return { src, clock, turn: () => src.ingest(ev('turn-start', withHandle)) }
+    }
+    // One record is left.
+    const now = await refused()
+    expect(now.turn()).toBe('dial')
+    expect(now.turn()).toBe('person')
+    // It is the mod's: past its 10 minutes, though Orca's would still have a minute to go, the next turn is a person's.
+    const later = await refused()
+    later.clock.t += 540_000
+    expect(later.turn()).toBe('person')
+  })
+
+  it('a refused or missed delivery records nothing', async () => {
+    for (const [mod, before, hints, text, refused] of [
+      // The mod has not taken the last words yet.
+      ['busy', ['turn-stop'], withHandle.hostHints, 'next', 'pending'],
+      // The mod missed them, and no Orca terminal takes them instead.
+      ['missed', ['turn-stop'], {}, 'next', 'no-answer'],
+      [undefined, ['turn-start'], withHandle.hostHints, 'next', 'busy'],
+      [undefined, ['turn-start', 'needs-input'], withHandle.hostHints, 'next', 'waiting'],
+      [undefined, ['turn-stop'], withHandle.hostHints, 'x'.repeat(2001), 'too-long'],
+    ] as const) {
+      const { actions, ready } = fakeActions({ toMod: vi.fn(async (): Promise<Delivery> => mod ?? 'taken') })
+      const { src, ev } = setup({ actions })
+      if (mod) ready.add('s1')
+      for (const event of before) src.ingest(ev(event, { hostHints: hints }))
+      expect((await src.send(src.list()[0], text)).ok).toBe(false)
+      expect(actions.count).toHaveBeenLastCalledWith(refused)
+      expect(src.ingest(ev('turn-start', { hostHints: hints }))).toBe('person')
+    }
+  })
+
+  it('two prompts the mod took: the next two turns are the dial\'s, the third the person\'s', async () => {
+    const { actions, ready } = fakeActions()
+    const { src, ev } = setup({ actions })
+    ready.add('s1')
+    src.ingest(ev('turn-start'))
+    await src.send(src.list()[0], 'run the tests')
+    await src.send(src.list()[0], 'then deploy')
+    expect([1, 2, 3].map(() => src.ingest(ev('turn-start')))).toEqual(['dial', 'dial', 'person'])
+  })
+
+  // The mod holds the dial's words until a long turn is over, and no longer than this.
+  it('a dial prompt expires after 10 minutes', async () => {
+    const { actions, ready } = fakeActions()
+    const { src, clock, ev } = setup({ actions })
+    ready.add('s1')
+    src.ingest(ev('turn-start'))
+    await src.send(src.list()[0], 'run the tests')
+    clock.t += 599_999
+    expect(src.ingest(ev('turn-start'))).toBe('dial')
+    await src.send(src.list()[0], 'then deploy')
+    clock.t += 600_000
+    expect(src.ingest(ev('turn-start'))).toBe('person')
+  })
+
+  // Another session's message is not the dial's words: their turn is still to come.
+  it('a relayed turn does not use up the dial\'s prompt', async () => {
+    const { actions, ready } = fakeActions()
+    const { src, ev } = setup({ actions })
+    ready.add('s1')
+    src.ingest(ev('turn-stop'))
+    await src.send(src.list()[0], 'run the tests')
+    expect(src.ingest(ev('turn-start', { relayed: true }))).toBe('relayed')
+    expect(src.ingest(ev('turn-start'))).toBe('dial')
+  })
+
+  it('at most 8 are kept for a session', async () => {
+    const { actions, ready } = fakeActions()
+    const { src, ev } = setup({ actions })
+    ready.add('s1')
+    src.ingest(ev('turn-start'))
+    for (let i = 0; i < 9; i++) await src.send(src.list()[0], `step ${i}`)
+    expect(Array.from({ length: 9 }, () => src.ingest(ev('turn-start')))).toEqual([...Array(8).fill('dial'), 'person'])
+  })
+})
+
 // A permission prompt that waits (deviceClaude/asked.ts): the dial shows the agent waiting and for what, and the prompt is
 // answered in its own app.
 describe('ObservedSource and a waiting prompt', () => {
@@ -941,6 +1388,16 @@ describe('ObservedSource and a waiting prompt', () => {
     expect(src.list()).toEqual([])
     expect(src.waitingOn(observedAgentId('claude', 'in-a-pane'))).toBeUndefined()
     expect(changes).not.toHaveBeenCalled()
+  })
+
+  it('a waiting prompt on a session the scan found leaves it not known yet', async () => {
+    const { src, open, owners, externals } = setup()
+    open.set('s1', 'terminal')
+    owners.set('s1', { pid: 100, engine: 'claude' })
+    externals.set('s1', { cwd: '/work/proj', transcriptPath: '/t/s1.jsonl' })
+    await src.scanOpen()
+    src.ingest(asked())
+    expect(src.list()[0]).toMatchObject({ state: 'needs-you', app: 'terminal', appPending: true })
   })
 
   it('asked for a session that ended changes nothing', () => {

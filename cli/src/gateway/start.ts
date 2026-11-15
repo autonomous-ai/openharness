@@ -51,6 +51,7 @@ import { TabRelaySockets } from './tabRelay.js'
 import { openVault, sealVault } from '../lib/e2ee/connectorVault.js'
 import { shareWindows } from './share.js'
 import { createAccountHttp } from './accountHttp.js'
+import { accountRoutes, gatewayHttp } from './accountRoutes.js'
 
 /** What the gateway needs of the core, in whichever process it runs. */
 export interface GatewayHost {
@@ -79,7 +80,8 @@ export interface StartedGateway {
   port: RelayGateway
   ops: GatewayOps
   windowRelay: Required<WindowRelay>
-  /** Its routes of the door (core/api.ts `SERVICE_HTTP_ROUTES`), as the core hands them on. */
+  /** Its routes of the door (core/api.ts `SERVICE_HTTP_ROUTES`): the Wi-Fi device's and the account's, as the core hands
+   *  them on. */
   requests: ServiceRequests
   stop(): Promise<void>
 }
@@ -585,27 +587,29 @@ export function startGateway(given: GatewayHost): StartedGateway {
   }
 
   // The Wi-Fi device's routes about its pairings and direct links (lib/autonomous-device/localHttp.ts checks them).
-  const requests: ServiceRequests = {
-    gateway_http: deviceRoutes({
-      discover: () => coded(async () => ({ devices: await (await directLink()).discover() })),
-      pairStart: ({ code, device }) => coded(async () => (await directLink()).pair(device, code)),
-      pairStatus: () => coded(() => {
-        const pending = gateway.pendingPair()
-        return pending?.role === 'device' ? { state: pending.active ? 'running' : 'waiting', pairId: pending.pairId, deviceLabel: pending.label, expiresAt: pending.expiresAt } : { state: 'idle' }
-      }),
-      list: () => coded(() => ({ devices: devicePairs().map(p => ({ ...p, id: p.fingerprint })) })),
-      // The sessions on a direct link whose app said hello, each still its identity's device's.
-      status: () => coded(() => {
-        const sessions = gateway.directDeviceSessions()
-        return { transport: 'direct', connected: sessions > 0, paired: devicePairs().length, sessions, proto: 1 }
-      }),
-      revoke: ({ id }) => coded(() => {
-        if (!devicePairs().some(p => p.fingerprint === id)) throw deviceRefusal('UNKNOWN_DEVICE', 'Device pairing not found')
-        const result = gateway.revoke(id)
-        if (!result.ok) throw deviceRefusal(result.error, result.error)
-        return { revoked: 1 }
-      }),
+  const deviceHttp = deviceRoutes({
+    discover: () => coded(async () => ({ devices: await (await directLink()).discover() })),
+    pairStart: ({ code, device }) => coded(async () => (await directLink()).pair(device, code)),
+    pairStatus: () => coded(() => {
+      const pending = gateway.pendingPair()
+      return pending?.role === 'device' ? { state: pending.active ? 'running' : 'waiting', pairId: pending.pairId, deviceLabel: pending.label, expiresAt: pending.expiresAt } : { state: 'idle' }
     }),
+    list: () => coded(() => ({ devices: devicePairs().map(p => ({ ...p, id: p.fingerprint })) })),
+    // The sessions on a direct link whose app said hello, each still its identity's device's.
+    status: () => coded(() => {
+      const sessions = gateway.directDeviceSessions()
+      return { transport: 'direct', connected: sessions > 0, paired: devicePairs().length, sessions, proto: 1 }
+    }),
+    revoke: ({ id }) => coded(() => {
+      if (!devicePairs().some(p => p.fingerprint === id)) throw deviceRefusal('UNKNOWN_DEVICE', 'Device pairing not found')
+      const result = gateway.revoke(id)
+      if (!result.ok) throw deviceRefusal(result.error, result.error)
+      return { revoked: 1 }
+    }),
+  })
+  // The account's (gateway/accountRoutes.ts), through `ops.backend`: a choice written there is read again at once.
+  const requests: ServiceRequests = {
+    gateway_http: gatewayHttp(deviceHttp, accountRoutes((method, path, body) => ops.backend(method, path, body))),
   }
 
   return {

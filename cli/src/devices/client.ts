@@ -5,6 +5,8 @@ import { localCredentialHeaders } from '../lib/localCredential.js'
 import { daemonFetch, openLocalWs } from '../lib/localTransport.js'
 import type { ClientSocket } from '../lib/clientSocket.js'
 import { deviceSettingsPatchSchema } from '../lib/harnessDevices.js'
+import { frontAppId } from '../cable/hosts/frontApp.js'
+import { tellDevices } from './listenerClient.js'
 
 export interface DevicesClientDeps {
   port: number
@@ -58,15 +60,46 @@ export const DEVICES_USAGE = `harness hardware — your Harness hardware across 
 Offline computers never receive queued changes. A write is complete only when confirmed.`
 
 export interface DialWatchDeps extends Pick<DevicesClientDeps, 'port' | 'dataDir' | 'machineId' | 'connect'> {
-  stdin: { on(event: 'end' | 'close', listener: () => void): unknown; resume(): unknown; pause(): unknown }
+  /** The Harness Device app writes on it a `{"front":"<bundle id or exe name>"}` line each time the app in front changes. */
+  stdin: {
+    on(event: 'end' | 'close', listener: () => void): unknown
+    on(event: 'data', listener: (chunk: Buffer | string) => void): unknown
+    resume(): unknown
+    pause(): unknown
+  }
   print(line: string): void
   /** stderr: stdout carries only the app's NDJSON. */
   printError(line: string): void
+  /** Tells the devices' own listener which app is in front: true when it took it. `tellDevices` by default. */
+  tell?: (message: { type: 'front'; app: string }) => Promise<boolean>
 }
 
 const NOT_RUNNING = 'Harness is not running on this computer. Run: harness start'
 const CLOSED = 'The connection to Harness on this computer closed.'
 const DIAL_FIELDS = ['fw', 'hw', 'board', 'updating', 'problem'] as const
+// The app cuts the value to 128 characters, under 1 KiB as a JSON line even escaped: a longer line is no front line.
+const FRONT_LINE_MAX = 1024
+// The devices' listener takes ten fronts in any second on a connection, and the tells share one kept alive. Counted from
+// each answer, the listener has heard the tell before by then: a burst of changes (focus following the mouse) stays
+// within its ten, and the newest is not the one refused.
+const TELL_GAP_MS = 100
+// tellDevices' own bound, held by the watch too, so an app that quits waits no longer on a listener that does not answer.
+const QUIT_TELL_MS = 2_000
+
+/** One call per line of at most [max] bytes; a longer line is dropped whole, its start included. */
+function lines(max: number, line: (text: string) => void): (chunk: Buffer | string) => void {
+  let pending = Buffer.alloc(0), dropping = false
+  return chunk => {
+    let rest = Buffer.concat([pending, typeof chunk === 'string' ? Buffer.from(chunk) : chunk])
+    for (let end = rest.indexOf('\n'); end !== -1; end = rest.indexOf('\n')) {
+      if (!dropping && end <= max) line(rest.subarray(0, end).toString())
+      dropping = false
+      rest = rest.subarray(end + 1)
+    }
+    dropping ||= rest.length > max
+    pending = dropping ? Buffer.alloc(0) : rest
+  }
+}
 
 /** A dial_status reduced to what the menu-bar app shows, so a settings change alone prints nothing. */
 export function dialWatchLine(payload: unknown): string {
@@ -87,21 +120,71 @@ export function runDialWatch(argv: string[], deps: DialWatchDeps): Promise<numbe
   }
   return new Promise(resolve => {
     let socket: ClientSocket | undefined
-    let settled = false, last: string | undefined
-    const finish = (code: number, why?: string): void => {
+    let settled = false, exited = false, last: string | undefined
+    // The app in front as an app id (the raw name stops in this process), the last one the devices' listener took, and
+    // whether the current one is owed to it whatever it took before: a dial that attaches may come with a new devices process.
+    let front: string | undefined, told: string | undefined, owed = false, telling = false
+    // The tell under way, and whether any app (not none) was ever sent: only then do the devices have one to forget.
+    let under: Promise<boolean> | undefined, sentApp = false
+    let gap: ReturnType<typeof setTimeout> | undefined
+    const tell = deps.tell ?? (message => tellDevices(deps.dataDir ?? env.ADAPTER_DATA_DIR, message))
+    // One tell at a time, so the listener hears them in order and the newest last; the ones between are skipped. Each is
+    // followed by a gap, and what came in it is told as it ends.
+    const tellFront = (): void => {
+      if (settled || telling || gap || front === undefined || (front === told && !owed)) return
+      const app = front
+      telling = true
+      owed = false
+      sentApp ||= app !== 'none'
+      under = tell({ type: 'front', app })
+      void under.then(taken => {
+        telling = false
+        // A watch that has ended waits on nothing.
+        if (settled) return
+        if (taken) told = app
+        gap = setTimeout(() => {
+          gap = undefined
+          // A tell not taken is not tried again by itself: only a newer app in front, or the dial attaching, is told.
+          if (front !== app || owed) tellFront()
+        }, TELL_GAP_MS)
+      })
+    }
+    const finish = (code: number, why?: string, last?: Promise<unknown>): void => {
       if (settled) return
       settled = true
       if (why) deps.printError(why)
       clearTimeout(deadline)
+      clearTimeout(gap)
       deps.stdin.pause()
       try { socket?.close() } catch { /* already closed */ }
-      resolve(code)
+      if (!last) return resolve(code)
+      let bound: ReturnType<typeof setTimeout> | undefined
+      void Promise.race([last, new Promise(done => { bound = setTimeout(done, QUIT_TELL_MS) })]).then(() => {
+        clearTimeout(bound)
+        exited = true
+        resolve(code)
+      })
+    }
+    // The Device app quit: the devices would otherwise go on following the last app it saw in front. One try, after the
+    // tell under way so the listener hears none last, and none once the bound has passed: it would hold the process on.
+    const quit = (): void => {
+      if (settled || !sentApp) return finish(0)
+      const none = async (): Promise<void> => { if (!exited) await tell({ type: 'front', app: 'none' }) }
+      finish(0, undefined, telling && under ? under.then(none) : none())
     }
     // A daemon that takes the socket and never answers would otherwise keep the app's probe waiting for ever.
     const deadline = setTimeout(() => finish(3, CLOSED), 10_000)
     // The app spawns this with a stdin pipe, so a killed app never leaves a tool connection open for ever.
-    deps.stdin.on('end', () => finish(0))
-    deps.stdin.on('close', () => finish(0))
+    deps.stdin.on('end', quit)
+    deps.stdin.on('close', quit)
+    deps.stdin.on('data', lines(FRONT_LINE_MAX, line => {
+      if (settled) return
+      let value: unknown
+      try { value = (JSON.parse(line) as { front?: unknown } | null)?.front } catch { return }
+      if (typeof value !== 'string') return
+      front = frontAppId(value)
+      tellFront()
+    }))
     deps.stdin.resume()
     deps.machineId().then(machineId => {
       if (settled) return
@@ -123,6 +206,13 @@ export function runDialWatch(argv: string[], deps: DialWatchDeps): Promise<numbe
           return finish(4)
         }
         if (frame?.type !== 'dial_status' || typeof frame.payload !== 'object' || frame.payload === null) return
+        // The devices process usually starts with the dial, after this watch: it hears the app in front as the dial attaches.
+        // Told on every status that says attached, a repeat too: a devices process restarted under a dial still attached
+        // sends one that reads as the last, and the filter takes the same app again as nothing new.
+        if ((frame.payload as { attached?: unknown }).attached === true) {
+          owed = true
+          tellFront()
+        }
         const line = dialWatchLine(frame.payload)
         if (line === last) return
         last = line

@@ -28,6 +28,7 @@
  *
  * Like the real relay it is blind: the machines seal everything between them end to end, and a frame
  * for a machine whose node is not connected is simply never answered, as the real hub's would not be.
+ * - `POST /api/voice/stt`: what `speech` says, for any upload, once a test sets it.
  * - `PUT`/`DELETE /api/harness-links/:id` and `/api/harness-shares/:id`: Share publishing a link or an
  *   invitation, answered 200; what a node sends to one of Share's observers (`observer:` connections) is
  *   kept in `targeted`, so a test can open what Share sealed for it.
@@ -114,7 +115,13 @@ export class FakeBackend {
   /** What `GET /api/auth/me` answers: the signed-in person; null, a 404 as before. */
   me: { id: string; email: string } | null = null
   /** Opt-in fixture: older scenarios keep the endpoint absent, as on an older backend. */
-  productUsage: { enabled: boolean; revision: number; reports: Record<string, unknown>[]; stallReports?: boolean } | null = null
+  productUsage: { enabled: boolean; revision: number; reports: Record<string, unknown>[]; stallReports?: boolean; busySeconds?: number } | null = null
+  /** The paths answered with what reached the backend: its method, path and query, content type and body as sent. For
+   *  tests of what the daemon forwards, after the sign-in is checked. */
+  echo: RegExp | null = null
+  /** What `POST /api/voice/stt` hears in any upload, as the real route answers it (backend routes/voice.ts); null, a 404 as
+   *  before. Speech to text runs only on production, so a test that speaks to a dial hears it here. */
+  speech: string | null = null
   /** `POST /api/route/jev`, Harness's hosted Jev. Unset answers 503 JEV_BUSY, which callers treat as unavailable. */
   jev: ((body: Record<string, any>) => Record<string, unknown>) | null = null
   readonly seen: string[] = []
@@ -192,6 +199,21 @@ export class FakeBackend {
       res.setHeader('content-type', 'application/json')
       if (backend.down) { res.statusCode = 503; res.end(json({ success: false, error: { code: 'UNAVAILABLE' } })); return }
       if (!machine) { res.statusCode = 401; res.end(json({ success: false, error: { code: 'UNAUTHORIZED' } })); return }
+      if (backend.echo?.test(req.url?.split('?')[0] ?? '')) {
+        let raw = ''
+        req.on('data', chunk => { raw += String(chunk) })
+        req.on('end', () => res.end(json({ success: true, data: { method: req.method, url: req.url, type: req.headers['content-type'] ?? null, ...(raw ? { body: raw } : {}) } })))
+        return
+      }
+      if (backend.speech !== null && req.method === 'POST' && req.url?.split('?')[0] === '/api/voice/stt') {
+        const transcript = backend.speech
+        req.resume()
+        req.on('end', () => {
+          const lang = new URL(req.url!, backend.httpUrl).searchParams.get('lang')
+          res.end(json({ success: true, data: { transcript, lang } }))
+        })
+        return
+      }
       if (backend.me && req.method === 'GET' && req.url?.split('?')[0] === '/api/auth/me') {
         res.end(json({ success: true, data: { user: backend.me } })); return
       }
@@ -201,6 +223,13 @@ export class FakeBackend {
       }
       if (usage && req.method === 'POST' && ['/api/product-usage/settings', '/api/product-usage/report'].includes(req.url ?? '')) {
         if (usage.stallReports && req.url === '/api/product-usage/report') { req.resume(); return }
+        if (usage.busySeconds !== undefined && req.url === '/api/product-usage/report') {
+          req.resume()
+          res.statusCode = 429
+          res.setHeader('retry-after', String(usage.busySeconds))
+          res.end(json({ success: false, error: { code: 'USAGE_WRITE_CONFLICT', message: 'Usage measurement busy' } }))
+          return
+        }
         let body = ''
         req.on('data', chunk => { body += String(chunk) })
         req.on('end', () => {

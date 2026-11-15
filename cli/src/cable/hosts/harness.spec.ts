@@ -14,10 +14,16 @@ describe('HarnessSource', () => {
     const src = new HarnessSource(() => 1_000)
     src.update(ROWS, 'mine', new Map([['l1', 500], ['r1', 900]]))
     expect(src.list()).toEqual([
-      { id: 'l1', name: 'api', engine: 'claude', sessionId: 's1', host: 'harness', state: 'idle', lastActivityAt: 500, unseenDone: false },
-      { id: 'l2', name: 'web', engine: 'codex', host: 'harness', state: 'idle', lastActivityAt: 0, unseenDone: false },
+      { id: 'l1', name: 'api', engine: 'claude', sessionId: 's1', host: 'harness', app: 'harness', state: 'idle', lastActivityAt: 500, unseenDone: false },
+      { id: 'l2', name: 'web', engine: 'codex', host: 'harness', app: 'harness', state: 'idle', lastActivityAt: 0, unseenDone: false },
     ])
     expect(capsLetters(src.capabilities())).toBe('sva')
+  })
+
+  it("a Harness agent's app is harness", () => {
+    const src = new HarnessSource(() => 1_000)
+    src.update(ROWS, 'mine', new Map())
+    expect(src.list().map((a) => a.app)).toEqual(['harness', 'harness'])
   })
 
   it('takes each agent\'s state from the cards it is told', () => {

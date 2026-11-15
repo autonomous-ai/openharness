@@ -12,8 +12,9 @@ import { AGENT_OPENED_THROTTLE_MS } from './core/agents/update.js'
 import { deviceAgentListItem, deviceAgentRow } from './core/agents/list.js'
 import { wholeHistoryPage } from './engines/others/transcripts.js'
 import { grokMessagesToEvents } from './engines/grok/normalizer.js'
-import { bindAgentList, bindAgentUpdate, bindCancelRequest, bindLaunchRequests, bindCloseRequests, bindMessageRequest, bindPurgeRequest, bindQuestionResponse, bindStopRequest, bindTerminalRequests } from './testing/socketCore.js'
-import { emptyPorts, MODELS_FALLBACKS, MODELS_OFF, MONITOR_FALLBACKS, type ModelsPort } from './core/api.js'
+import { bindAgentList, bindAgentUpdate, bindCancelRequest, bindLaunchRequests, bindCloseRequests, bindMessageRequest, bindPurgeRequest, bindQuestionResponse, bindStopRequest, bindTerminalRequests, prepared, preparingWorkspaces } from './testing/socketCore.js'
+import { emptyPorts, MODELS_FALLBACKS, MODELS_OFF, MONITOR_FALLBACKS, type ModelsPort, type UsageEvent } from './core/api.js'
+import { countUsage } from './gateway/usageEvents.js'
 import { createServiceHost, ServiceUnavailableError } from './core/serviceHost.js'
 import { MODELS_REQUESTS, startModels } from './services/models.js'
 import { SHELL_REQUESTS, startShell } from './services/shell.js'
@@ -2135,10 +2136,10 @@ describe('BackendSocket outbound queue', () => {
 
   it('explains invalid repository choices without echoing credentials or preparing a folder', async () => {
     const socket = relaySocket('token')
-    bindLaunchRequests(socket)
+    const prepare = vi.fn(async () => prepared('/never'))
+    bindLaunchRequests(socket, { workspaces: preparingWorkspaces(prepare) })
     const frames: Array<Record<string, unknown>> = []
     socket.registerLocalClient('local:invalid-project', { sendFrame: frame => { frames.push(frame); return true }, sendBinary: () => true })
-    const prepare = vi.spyOn(projectFolder, 'prepareProjectFolder')
     const create = vi.fn()
     socket.onCreateAgent = create
     try {
@@ -2165,11 +2166,11 @@ describe('BackendSocket outbound queue', () => {
     { projectSource: 'branch', gitSource: '/remote/repo', branchRef: 'refs/heads/feature' },
   ])('prepares $projectSource once under its creation receipt and retains its folder after a refused launch', async (project) => {
     const socket = relaySocket('token')
-    bindLaunchRequests(socket)
+    let finish!: (folder: string) => void
+    const prepare = vi.fn(() => new Promise<ReturnType<typeof prepared>>(resolve => { finish = folder => resolve(prepared(folder)) }))
+    bindLaunchRequests(socket, { workspaces: preparingWorkspaces(prepare) })
     const frames: Array<Record<string, unknown>> = []
     socket.registerLocalClient('local:project', { sendFrame: frame => { frames.push(frame); return true }, sendBinary: () => true })
-    let finish!: (folder: string) => void
-    const prepare = vi.spyOn(projectFolder, 'prepareProjectFolder').mockImplementation(() => new Promise(resolve => { finish = resolve }))
     const create = vi.fn(async () => ({ ok: false as const, error: 'TMUX_UNAVAILABLE' }))
     socket.onCreateAgent = create
     const creationId = randomUUID()
@@ -2209,17 +2210,19 @@ describe('BackendSocket outbound queue', () => {
   ])('records Claude trust for $name: $trusts', async ({ project, sourceTrusted, trusts }) => {
     // Only a folder the daemon made empty, or a worktree of a repo already trusted, is trusted for the person.
     const socket = relaySocket('token')
-    bindLaunchRequests(socket)
+    // A worktree is made where Harness makes them; the other folders' places do not matter to their trust.
+    const folder = project.projectSource === 'worktree' ? join(projectFolder.projectsRoot(), 'worktrees', 'repo', 'prepared') : '/work/prepared'
+    bindLaunchRequests(socket, { workspaces: preparingWorkspaces(async () => prepared(folder)) })
     const frames: Array<Record<string, unknown>> = []
     socket.registerLocalClient('local:trust', { sendFrame: frame => { frames.push(frame); return true }, sendBinary: () => true })
-    vi.spyOn(projectFolder, 'prepareProjectFolder').mockResolvedValue('/work/prepared')
+    vi.spyOn(projectFolder, 'prepareNewFolder').mockResolvedValue(folder)
     vi.mocked(claudeTrust.claudeTrusts).mockReturnValue(sourceTrusted)
     vi.mocked(claudeTrust.preTrustClaudeProject).mockClear()
     socket.onCreateAgent = vi.fn(async () => ({ ok: false as const, error: 'TMUX_UNAVAILABLE' }))
     try {
       socket.handleLocalFrame('local:trust', { type: 'agent_create', payload: { requestId: 'r', creationId: randomUUID(), engine: 'claude', ...project } })
       await vi.waitFor(() => expect(socket.onCreateAgent).toHaveBeenCalled())
-      if (trusts) expect(claudeTrust.preTrustClaudeProject).toHaveBeenCalledExactlyOnceWith('/work/prepared')
+      if (trusts) expect(claudeTrust.preTrustClaudeProject).toHaveBeenCalledExactlyOnceWith(folder)
       else expect(claudeTrust.preTrustClaudeProject).not.toHaveBeenCalled()
       if (project.projectSource === 'worktree') expect(claudeTrust.claudeTrusts).toHaveBeenCalledWith('/work/repo')
     } finally {
@@ -2290,13 +2293,11 @@ describe('BackendSocket outbound queue', () => {
 
   it('hands the launch the SCM record the prepared workspace reported, and none for a folder no SCM made', async () => {
     const socket = relaySocket('token')
-    bindLaunchRequests(socket)
+    const prepare = vi.fn(async () => prepared('/remote/harnesses/worktrees/repo/brave-otter', { scmLaunchRecord: { kind: 'git' } }))
+    bindLaunchRequests(socket, { workspaces: preparingWorkspaces(prepare) })
     const frames: Array<Record<string, unknown>> = []
     socket.registerLocalClient('local:scm', { sendFrame: frame => { frames.push(frame); return true }, sendBinary: () => true })
-    const prepare = vi.spyOn(projectFolder, 'prepareProjectFolder').mockImplementation(async (project, options) => {
-      if (project.source === 'worktree') options?.onPrepared?.({ cwd: '/remote/harnesses/worktrees/repo/brave-otter', scmLaunchRecord: { kind: 'git' } })
-      return project.source === 'worktree' ? '/remote/harnesses/worktrees/repo/brave-otter' : '/remote/harnesses/codex-2026-09-24-12-00'
-    })
+    const made = vi.spyOn(projectFolder, 'prepareNewFolder').mockResolvedValue('/remote/harnesses/codex-2026-09-24-12-00')
     const create = vi.fn(async (_input: Record<string, unknown>) => ({ ok: false as const, error: 'TMUX_UNAVAILABLE' }))
     socket.onCreateAgent = create
     const ask = (requestId: string, choices: Record<string, unknown>) =>
@@ -2313,7 +2314,8 @@ describe('BackendSocket outbound queue', () => {
       await vi.waitFor(() => expect(frames).toContainEqual(expect.objectContaining({ payload: expect.objectContaining({ requestId: 'cwd' }) })))
       expect(create).toHaveBeenLastCalledWith(expect.objectContaining({ cwd: '/remote/own' }))
       expect(create.mock.lastCall?.[0]).not.toHaveProperty('scmLaunchRecord')
-      expect(prepare).toHaveBeenCalledTimes(2)
+      expect(prepare).toHaveBeenCalledTimes(1)
+      expect(made).toHaveBeenCalledTimes(1)
     } finally {
       await socket.unregisterLocalClient('local:scm')
       await socket.stop()
@@ -4004,15 +4006,14 @@ describe('agent_recent replies', () => {
 describe('request sources', () => {
   it.each(['phone', 'Desktop'] as const)('%s: names a project preparation refusal for a Claude or Codex creation', async surface => {
     const socket = relaySocket('token')
-    bindLaunchRequests(socket)
+    // The real creation handler translates workspaces' refusal into a durable receipt.
+    bindLaunchRequests(socket, { workspaces: preparingWorkspaces(async () => ({ ok: false, error: 'WORKTREE_FAILED', detail: 'PRIVATE_CANARY' })) })
     socket.connect()
     const ws = wsMock.instances.at(-1)!
     ws.open()
     const counters: string[] = [], signals: unknown[] = []
     vi.spyOn(gatewayOf(socket), 'usageCounter').mockImplementation(metric => { counters.push(metric) })
     vi.spyOn(gatewayOf(socket), 'usageLaunch').mockImplementation(signal => { signals.push(signal) })
-    // The real creation handler translates this imported helper's refusal into a durable receipt.
-    vi.spyOn(projectFolder, 'prepareProjectFolder').mockRejectedValue(new projectFolder.ProjectFolderError('WORKTREE_FAILED', 'PRIVATE_CANARY'))
     socket.onCreateAgent = vi.fn()
     socket.registerLocalClient('local:creation-report', { sendFrame: () => true, sendBinary: () => true })
     vi.spyOn(gatewayOf(socket).e2ee, 'hasSession').mockReturnValue(true)
@@ -4509,7 +4510,7 @@ describe('opening the app', () => {
     const socket = new BackendSocket('fixture')
     const counted: string[] = []
     socket.useGateway({ holdRequests: () => {}, serveThisComputerOnly: () => {}, localClients: () => {}, windowOpened: () => {},
-      usageCounter: (metric: string) => { counted.push(metric) } } as never)
+      usage: (event: UsageEvent) => countUsage(event, (metric) => { counted.push(metric) }, () => {}) } as never)
     const sink = { sendFrame: () => true, sendBinary: () => true }
     socket.registerLocalClient('local:tui', sink, { surface: 'tui' })
     socket.registerLocalClient('local:app', sink)

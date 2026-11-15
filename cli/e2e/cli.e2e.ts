@@ -153,8 +153,6 @@ describe('harness start, stop and status from the installed bundle', () => {
     const env: NodeJS.ProcessEnv = {
       ...daemon.env, PATH: `${fakes}:${daemon.env.PATH}`, XDG_CONFIG_HOME: join(home, '.config'), HARNESSD_TEST_PLATFORM: platform,
     }
-    // The defaults, all under the throwaway home: never a folder of the person running the tests.
-    for (const name of ['ADAPTER_CLI_DIR', 'HARNESS_BIN_DIR', 'HARNESS_LOGS_DIR', 'HARNESS_ENV_FILE', 'DOTENV_CONFIG_PATH']) delete env[name]
     const definition = platform === 'launchd'
       ? join(home, 'Library', 'LaunchAgents', `${LAUNCHD_LABEL}.plist`)
       : join(home, '.config', 'systemd', 'user', SYSTEMD_UNIT)

@@ -8,7 +8,6 @@ import { nameBranchAfterSession } from './branchNaming.js'
 import { insideGitCheckout } from './gitProject.js'
 import { readGitPullRequest } from './gitPullRequest.js'
 import { projectPreview } from './projectPreview.js'
-import type { RegisteredSession } from './registry.js'
 import { inspectWorkspace, inspectWorktree } from './worktreeDeletion.js'
 
 // On a Mac without the Command Line Tools, `/usr/bin/git` is Apple's stub: running it opens the
@@ -56,9 +55,9 @@ describe('a folder with no .git runs no git', () => {
   })
 
   it('when Harness Monitor previews deleting it', async () => {
-    const session = { cwd: join(root, 'project') } as RegisteredSession
-    expect(await inspectWorkspace(session, [session])).toMatchObject({ kind: 'folder' })
-    await expect(inspectWorktree(session, [session])).rejects.toThrow(/No separate worktree/)
+    const session = { cwd: join(root, 'project') }
+    expect(await inspectWorkspace(session, [])).toMatchObject({ kind: 'folder' })
+    await expect(inspectWorktree(session, [])).rejects.toThrow(/No separate worktree/)
     expect(await ran()).toBe('')
   })
 

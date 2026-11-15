@@ -13,6 +13,7 @@
  */
 import { existsSync, lstatSync, readdirSync } from 'node:fs'
 import { request } from 'node:http'
+import type { Socket } from 'node:net'
 import { dirname, join } from 'node:path'
 import { Readable } from 'node:stream'
 import type { ReadableStream as NodeReadableStream } from 'node:stream/web'
@@ -25,6 +26,8 @@ import { newPipeNonce, PIPE_AUTH_HEADER, pipeAuthValue, pipeProven, readDaemonTo
 import { pipeWebSocket, PipeUnproven, type PipeTarget } from './windows/pipeClient.js'
 
 const LOCAL_WS_PATH = '/api/local-ws'
+/** The sockets that carry overSocket's no-op 'error' listener. */
+const tolerated = new WeakSet<Socket>()
 
 /**
  * The daemon's socket for [port], or null where it has none. A socket is named for the port the daemon was configured
@@ -88,8 +91,13 @@ async function overSocket(socketPath: string, input: Request, pipe?: PipeTarget)
     // As fetch fails: a TypeError with the reason as its cause, which the callers' "is it running" texts read.
     req.on('error', (error) => { reject(input.signal.aborted ? error : Object.assign(new TypeError('fetch failed'), { cause: error })) })
     // A write the socket finishes after the answer was refused and the request destroyed fails with EPIPE on Linux, when
-    // nothing listens on the socket any more: the request has settled by then (Linux CI on #2605).
-    req.on('socket', (socket) => { socket.on('error', () => {}) })
+    // nothing listens on the socket any more: the request has settled by then (Linux CI on #2605). Once per socket, which
+    // a kept-alive one serves many requests on.
+    req.on('socket', (socket) => {
+      if (tolerated.has(socket)) return
+      tolerated.add(socket)
+      socket.on('error', () => {})
+    })
     req.end(body ?? undefined)
   })
 }

@@ -1,4 +1,4 @@
-import { execFile, execFileSync, spawn } from 'node:child_process'
+import { execFile, execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -6,7 +6,6 @@ import {
   stopProbeWorkerForTest, type ProbeOptions,
 } from './offThreadExec.js'
 import { launchEnvironment, clearLaunchEnvironmentCache } from '../engines/kit/launchExecutable.js'
-import { clearProcessEnvCache, readProcessEnv } from './processEnv.js'
 
 // The real execFile, watched: a probe the route sends to the worker must never reach it on this thread.
 // The worker's own child_process is its thread's, untouched by this mock.
@@ -131,18 +130,7 @@ describe('the route the core turns on', () => {
 })
 
 describe('the probes that called execFile directly', () => {
-  afterEach(() => { clearProcessEnvCache(); clearLaunchEnvironmentCache() })
-
-  it.runIf(process.platform === 'darwin')('reads a process environment through the worker', async () => {
-    enableOffThreadExec()
-    // A Node child with a mark of its own: `ps eww` shows a process's environment as it started, and Apple's
-    // platform binaries (sleep, sh) refuse to show theirs at all.
-    const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 10_000)'], { env: { ...process.env, HARNESS_PROBE_MARK: 'marked' }, stdio: 'ignore' })
-    try {
-      const env = await readProcessEnv({ pid: child.pid!, startMarker: 'x', executable: process.execPath } as never)
-      expect(env?.HARNESS_PROBE_MARK).toBe('marked')
-    } finally { child.kill() }
-  })
+  afterEach(() => { clearLaunchEnvironmentCache() })
 
   it('captures the launch environment through the worker', async () => {
     enableOffThreadExec()
@@ -154,7 +142,6 @@ describe('the probes that called execFile directly', () => {
     enableOffThreadExec()
     vi.mocked(execFile).mockClear()
     await launchEnvironment('/bin/sh')
-    if (process.platform === 'darwin') await readProcessEnv({ pid: process.pid, startMarker: 'y', executable: process.execPath } as never)
     expect(execFile).not.toHaveBeenCalled()
   })
 })

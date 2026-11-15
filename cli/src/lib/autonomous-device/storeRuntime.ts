@@ -12,7 +12,7 @@ import { runDshDoctor } from '../../dsh/install.js'
 import { viewerUse } from '../../dsh/manifest.js'
 import { HARNESS_MONOREPO, type DshRegistryEntry } from '../../dsh/registry.js'
 import { mutateDsh } from '../../dsh/service.js'
-import { prepareProjectFolder, ProjectFolderError } from '../projectFolder.js'
+import { prepareNewFolder, ProjectFolderError } from '../projectFolder.js'
 import { AutonomousDeviceStore, type StoreAgent, type StorePackage } from './store.js'
 import { DeviceStoreError } from './storeContract.js'
 
@@ -81,7 +81,7 @@ export function createDeviceStore(options: DeviceStoreOptions): AutonomousDevice
     },
     workspace: async (request, label) => {
       if (request.kind === 'new') {
-        try { return realpathSync(await prepareProjectFolder({ source: 'new', ...(request.name ? { name: request.name } : {}) }, { label })) }
+        try { return realpathSync(await prepareNewFolder({ source: 'new', ...(request.name ? { name: request.name } : {}) }, { label })) }
         catch (error) {
           if (error instanceof ProjectFolderError) throw new DeviceStoreError(error.code, error.message)
           throw error

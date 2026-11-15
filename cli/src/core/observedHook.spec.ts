@@ -94,6 +94,40 @@ describe('parseObservedHook: asked', () => {
   })
 })
 
+// The hook says a typed prompt's turn came from another session (hook/notify.mjs); the core lets that one boolean
+// through, on turn-start only, and nothing else of the prompt.
+describe('parseObservedHook: relayed', () => {
+  const turnStart = { ...full, event: 'turn-start' }
+
+  it('takes relayed true and false on turn-start, and hands it on', () => {
+    for (const relayed of [true, false]) {
+      const body = { ...turnStart, relayed }
+      expect(parseObservedHook(body)).toStrictEqual(body)
+      const forward = vi.fn(() => true)
+      expect(createObservedHook({ forward, now: () => 7 }).onObserved(body)).toBe('ok')
+      expect(forward).toHaveBeenCalledWith(body)
+    }
+  })
+
+  it('a turn-start without relayed has no such key', () => {
+    expect(parseObservedHook(turnStart)).toStrictEqual(turnStart)
+  })
+
+  it.each([['true'], [1], [0], [null], [{}], [[]]])('rejects a relayed that is not a boolean: %j', (relayed) => {
+    expect(parseObservedHook({ ...turnStart, relayed })).toBeNull()
+  })
+
+  const others = [
+    ...['session-start', 'needs-input', 'turn-stop', 'turn-error', 'session-end'].map((event) => ({ ...full, event })),
+    { engine: 'claude', sessionId: 's1', event: 'asked' },
+  ]
+  it.each(others.flatMap((body) => [true, false].map((relayed) => [body.event, relayed, body] as const)))(
+    'rejects relayed on any other event: %s, relayed %s', (_event, relayed, body) => {
+      expect(parseObservedHook(body)).not.toBeNull()
+      expect(parseObservedHook({ ...body, relayed })).toBeNull()
+    })
+})
+
 describe('createObservedHook', () => {
   afterEach(() => { vi.useRealTimers() })
 

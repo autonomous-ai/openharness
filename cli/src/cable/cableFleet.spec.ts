@@ -307,6 +307,18 @@ describe('USB dial fleet', () => {
     } finally { await f.fleet.stop() }
   })
 
+  it('followLocal reaches each attached dial', async () => {
+    const f = fixture()
+    try {
+      await f.start()
+      const localFollowed = vi.fn()
+      f.host.localFollowed = localFollowed
+      await f.fleet.followLocal('a', 'tab')
+      for (const port of f.ports) expect(port.sent).toContainEqual({ t: 'focus', agentId: 'a' })
+      expect(localFollowed.mock.calls).toEqual([['tab', 'moved'], ['tab', 'moved']])
+    } finally { await f.fleet.stop() }
+  })
+
   it('keeps simultaneous voice uploads separate even with the same upload id', async () => {
     const f = fixture()
     try {
@@ -990,5 +1002,22 @@ describe('a Harness Pro that is silent from the moment its port opens', () => {
       Quiet.made[0].silent()
       await vi.waitFor(() => expect(s.reset).toHaveBeenCalledTimes(1))
     } finally { await s.fleet.stop() }
+  })
+})
+
+describe('which apps the dials want', () => {
+  it('wants apps while any connected dial says appFilter', async () => {
+    const f = fixture()
+    try {
+      f.fleet.start()
+      await vi.waitFor(() => expect(f.ports).toHaveLength(2))
+      expect(f.fleet.wantsApps()).toBe(false)
+      f.ports[0].say({ t: 'hello', product: 'harness', mac: f.ports[0].path, fw: 'fixture', proto: 3, appFilter: 'v1' })
+      f.ports[1].say({ t: 'hello', product: 'harness', mac: f.ports[1].path, fw: 'fixture', proto: 3 })
+      await vi.waitFor(() => { for (const p of f.ports) expect(p.sent.some(m => m.t === 'agents.end')).toBe(true) })
+      expect(f.fleet.wantsApps()).toBe(true)
+      await f.ports[0].close()
+      await vi.waitFor(() => expect(f.fleet.wantsApps()).toBe(false))
+    } finally { await f.fleet.stop() }
   })
 })

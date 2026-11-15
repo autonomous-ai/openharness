@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fakeCore } from '../testing/fakeCore.js'
-import { emptyPorts, type CorePorts, type SearchPort, type ViewersPort, type WorkspacesPort } from './api.js'
+import { emptyPorts, WORKSPACES_FALLBACKS, WORKSPACES_OFF, type CorePorts, type SearchPort, type ViewersPort, type WorkspacesPort } from './api.js'
 import { createServiceHost, FAIL, later, ServiceUnavailableError, testFaults, type PortFallbacks } from './serviceHost.js'
 
 // A port whose members cover every shape: sync and async, value and FAIL fallbacks, a stop.
@@ -65,7 +65,7 @@ describe('hosting services so one that fails cannot take the core down', () => {
       const viewers = { stop: vi.fn() } as unknown as ViewersPort
       h.ports.viewers = viewers
       h.services.start('search', () => { throw new Error('index locked') }, fakeCore(), SEARCH)
-      h.services.start('workspaces', () => { throw 'no home folder' }, fakeCore(), { nameBranches: undefined })
+      h.services.start('workspaces', () => { throw 'no home folder' }, fakeCore(), WORKSPACES_FALLBACKS)
       expect(h.ports.search).toBeNull()
       expect(h.ports.workspaces).toBeNull()
       expect(h.ports.viewers).toBe(viewers)
@@ -86,7 +86,7 @@ describe('hosting services so one that fails cannot take the core down', () => {
 
     it('takes only the port a service owns: what it writes into another is dropped', () => {
       const h = host()
-      const stray = { nameBranches: vi.fn() } as WorkspacesPort
+      const stray: WorkspacesPort = { ...WORKSPACES_OFF, nameBranches: vi.fn() }
       h.services.start('search', (_core, ports) => { ports.search = new FakeSearch(); ports.workspaces = stray }, fakeCore(), SEARCH)
       expect(h.ports.search).not.toBeNull()
       expect(h.ports.workspaces).toBeNull()
@@ -204,8 +204,8 @@ describe('hosting services so one that fails cannot take the core down', () => {
 
       const stopless = host({ maxFailures: 1 })
       stopless.services.start('workspaces', (_core, ports) => {
-        ports.workspaces = { nameBranches: () => { throw new Error('x') } }
-      }, fakeCore(), { nameBranches: undefined })
+        ports.workspaces = { ...WORKSPACES_OFF, nameBranches: () => { throw new Error('x') } }
+      }, fakeCore(), WORKSPACES_FALLBACKS)
       stopless.ports.workspaces!.nameBranches()
       expect(stopless.services.isOff('workspaces')).toBe(true)
     })
@@ -214,7 +214,7 @@ describe('hosting services so one that fails cannot take the core down', () => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
       const ports: CorePorts = emptyPorts()
       const services = createServiceHost(ports)
-      services.start('workspaces', (_core, p) => { p.workspaces = { nameBranches: () => { throw new Error('x') } } }, fakeCore(), { nameBranches: undefined })
+      services.start('workspaces', (_core, p) => { p.workspaces = { ...WORKSPACES_OFF, nameBranches: () => { throw new Error('x') } } }, fakeCore(), WORKSPACES_FALLBACKS)
       for (let i = 0; i < 5; i++) ports.workspaces?.nameBranches()
       expect(services.isOff('workspaces')).toBe(true)
       expect(warn).toHaveBeenLastCalledWith('[services] workspaces switched off after 5 failures in 60s · it stays off until the daemon restarts')

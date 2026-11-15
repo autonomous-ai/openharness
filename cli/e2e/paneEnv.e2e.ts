@@ -48,6 +48,8 @@ const AGENT_SESSION = {
 }
 const HARNESSD = 'HARNESSD_'
 const SESSION = 'AI_AGENT,CLAUDECODE,CLAUDE_CODE_MESSAGING,CLAUDE_CODE_SESSION,CODEX_THREAD'
+/** What the core says as it takes a server over: how many names it unset, never which the server had. */
+const UNSET = /\[terminal\] tmux: unset \d+ harnessd and agent session names in the environment new panes start with/
 
 /** What an agent's engine answers to [directive] (fakeEngine), read from its thread by the answer's [lead]. */
 async function engineAnswer(client: LocalClient, agentId: string, directive: string, lead: string): Promise<string> {
@@ -113,12 +115,14 @@ describe('a pane\'s environment', () => {
     // The server as an earlier core left it: started from an environment with that boot's HARNESSD_*, and a
     // pane of that boot's still in it, which keeps what it was started with.
     const earlier = join(d.root, 'earlier.env')
-    await exec('tmux', ['-S', d.tmux.socket, 'new-session', '-d', '-s', 'earlier-boot', '/bin/sh', '-c', `env > ${earlier}; sleep 600`],
+    // The shell creates the file before env writes it, so the file shows up empty first (CI run 43672659842 read
+    // it then): write it aside and move it into place whole.
+    await exec('tmux', ['-S', d.tmux.socket, 'new-session', '-d', '-s', 'earlier-boot', '/bin/sh', '-c', `env > ${earlier}.tmp && mv ${earlier}.tmp ${earlier}; sleep 600`],
       { env: { ...d.env, ...EARLIER_BOOT }, timeout: 10_000 })
     await until('the earlier boot\'s pane to write its environment', () => existsSync(earlier) || null, 10_000, 50)
     expect(names(readFileSync(earlier, 'utf8'))).toEqual(Object.keys(EARLIER_BOOT).sort())
     await d.start()
-    expect(d.log()).toContain(`[terminal] tmux: removed ${Object.keys(EARLIER_BOOT).sort().join(', ')} from the environment new panes start with`)
+    expect(d.log()).toMatch(UNSET)
     const client = await LocalClient.connect(d)
     await expectNoneIn(d, client)
     client.close()
@@ -132,7 +136,7 @@ describe('a pane\'s environment', () => {
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`) })
     await exec('tmux', ['-S', d.tmux.socket, 'new-session', '-d', '-s', 'agent-shell', '/bin/sh', '-c', 'sleep 600'], { env: d.env, timeout: 10_000 })
     await d.start()
-    expect(d.log()).toContain(`[terminal] tmux: removed ${Object.keys(AGENT_SESSION).sort().join(', ')} from the environment new panes start with`)
+    expect(d.log()).toMatch(UNSET)
     const client = await LocalClient.connect(d)
     await expectNoneIn(d, client, SESSION)
     client.close()

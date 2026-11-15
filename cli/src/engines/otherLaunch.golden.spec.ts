@@ -75,6 +75,7 @@ describe('which OpenCode the core asks for, for a named agent', () => {
         },
         forkAgent: () => null, resumeAgent: () => null, restartAgent: () => null,
         byAgent: () => undefined, stoppedAgent: () => undefined, toProject: async () => ({}) as never, modelTarget: async () => null as never,
+        workspaces: () => null,
       })
       const results: unknown[] = []
       for (const engine of ['opencode', 'claude', 'pi', 'cursor'] as const) {
