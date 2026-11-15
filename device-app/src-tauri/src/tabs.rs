@@ -679,7 +679,10 @@ mod tests {
         assert!(follow.selected(TabApp::Ghostty, Err(TabError::NoScripting)).log.is_empty());
         // A tap's select finds it out the same way.
         let mut follow = polling();
-        assert_eq!(follow.selected(TabApp::Ghostty, Err(TabError::NoScripting)).log, ["tabs: Ghostty has no scripting"]);
+        assert_eq!(
+            follow.selected(TabApp::Ghostty, Err(TabError::NoScripting)).log,
+            ["tabs: Ghostty has no scripting"]
+        );
         follow.front(TabApp::Ghostty.bundle());
         assert_eq!(follow.polls(), None);
     }

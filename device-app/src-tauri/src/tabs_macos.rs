@@ -319,7 +319,8 @@ fn runs(bundle: &str) -> bool {
 fn declares_scripting(bundle: &str) -> Option<bool> {
     autoreleasepool(|_| {
         let running = NSRunningApplication::runningApplicationsWithBundleIdentifier(&NSString::from_str(bundle));
-        let plist = running.firstObject()?.bundleURL()?.URLByAppendingPathComponent(ns_string!("Contents/Info.plist"))?;
+        let plist =
+            running.firstObject()?.bundleURL()?.URLByAppendingPathComponent(ns_string!("Contents/Info.plist"))?;
         // SAFETY: Foundation's class method with its own argument types; a file it cannot read is an error.
         let info: Result<Retained<NSDictionary<NSString, AnyObject>>, Retained<NSError>> = unsafe {
             msg_send![NSDictionary::<NSString, AnyObject>::class(), dictionaryWithContentsOfURL: &*plist, error: _]
