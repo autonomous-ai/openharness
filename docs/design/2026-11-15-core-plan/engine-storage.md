@@ -167,7 +167,7 @@ The expanded run passed all 36 database Close cases, including those corrections
 its three unrelated fixture failures are retained (two optional-argument expectations, one incomplete OpenClaw row).
 Full acceptance and same-workload measurements remain pending; no native-switch success is claimed from unit results.
 
-## Purge design still under review
+## Purge lifetime analysis
 
 The existing stopped-agent `.resume` reservation is durable, but its stale takeover is based on age. A timeout or lost
 service connection does not prove that a frozen writer has stopped. Worker deletion cannot ship until the reservation
@@ -203,5 +203,50 @@ cannot release authority: admission and the stopped reservation remain held thro
 thread termination. Shutdown/update must settle that writer, or end the core process, before releasing the listening
 authority to an older startup. No bounded SQLite termination is claimed. The thread has its own JS heap but shares the
 process's native address space and SQLite page/cache allocations; thread resource limits alone do not bound native
-memory. Exact row/page/cache limits, index requirements, core declaration size, and same-workload latency/CPU/RSS need
-measurement and review before this alternative is approved. No destructive implementation is included in this checkpoint.
+memory. This alternative is rejected: optional database work must not share the core's native failure domain. Existing
+endpoint retention also does not prove exclusion of every older startup: a Unix claim can fall back to replacement
+without a hard link, and Windows can continue without a proven claim. No writer thread or new retirement RPC ships.
+
+## Design: database purge unavailable before effects
+
+The approved boundary removes destructive database SQL rather than grant a subprocess authority that cannot survive
+every supported core replacement safely. This is temporary feature unavailability and completion of the core boundary,
+not a working database-purge feature. OpenCode, Kilo, Hermes and Devin conversation deletion is refused before Stop,
+cleanup, checkpoint deletion, registry mutation or worktree removal. OpenClaw continues explicitly retaining its engine
+store. File-native purge and separately reviewed worktree-only deletion keep their existing behavior.
+
+- Growth: no database writer, grant, durable marker, recovery collection or retry queue is created. Destructive database
+  admission is zero. Existing deletion reviews remain capped at 64 and expire after two minutes. Read-only monitor size
+  inspection remains in the monitor's existing process and bounded work queue; it creates no new core cache or timer.
+- Concurrency: reject a request selecting database session data before **any** requested effect, including mixed
+  session/worktree deletion. Recheck at the delete entry independently of saved or injected review data. Worktree-only
+  requests continue through their current review and reservation. No stopped reservation is held by a database writer.
+- Read cost: refusing database deletion needs only the captured engine/session and existing static storage declaration.
+  It opens no database. Existing read-only size inspection moves to the subprocess-side engine module, preserving its
+  successful byte totals and unknown results; no schema/row parser or SQL comes back into the core.
+- Scale: ten times the request count still starts zero database writers. Fixed STORAGE_PURGE_AUTHORITY_UNAVAILABLE
+  diagnostics and visible refusal identify the limitation. Monitor sizing retains its current two active probes and
+  existing per-agent cache; this change introduces no scan or poll. Export's independent resource measurements remain
+  required and are not evidence of working purge.
+- Compatibility: the public result keeps DELETE_REFUSED, with an additive reason
+  STORAGE_PURGE_AUTHORITY_UNAVAILABLE and a short instruction to delete the conversation in its engine. Existing combined
+  inspection sets sessionData.available=false and its reason; worktree-only selection stays possible. Clients from the
+  last 30 days already consume these failure/availability fields. Explicit inline and older-master modes refuse the same
+  unsafe operation; worker failure never activates an inline writer. This availability loss is deliberate, not a new
+  configuration switch. A review from a previous core cannot authorize anything because reviews are process-local.
+- Migration and rollback: no native data or saved format migration. Remove database DELETE SQL and its unused planning
+  results entirely. No unshipped writer or marker remains after rollback; an older core retains that release's original
+  deletion behavior. Do not claim its behavior becomes safer or that durable registry absence fences stale launchers.
+- Audience: existing authenticated local purge and monitor surfaces are unchanged. The limitation is enforced by core,
+  before dependency calls, rather than by the client hiding a control.
+- Identity: no deletion runs under any login. File-native deletion keeps its captured binding and native proofs;
+  read-only monitor inspection still uses this account's captured engine/profile.
+- Failure: both Inspect and Delete expose the named limitation. A mixed request changes neither session data nor
+  workspace. The engine's own deletion command is the actionable alternative; retrying Harness cannot establish the
+  missing authority. No hidden retry or timeout is added to refusal.
+- Platforms: same fail-closed result on macOS, Linux and Windows, including legacy-master compatibility. Existing native
+  file/worktree platform rules remain. No process or console is introduced.
+
+Red-first caller cases cover all four database engines, zero calls to every irreversible dependency, unchanged real
+shared database contents, mixed-request refusal, worktree-only success, explicit OpenClaw retention, file-native
+regressions and unchanged monitor byte totals. Export's frozen acceptance is completed before this implementation.
