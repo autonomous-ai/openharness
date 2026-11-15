@@ -33,7 +33,9 @@ The same `master.spec.ts`, run on an arm64 Node 22.21.1 with `npm ci`: 60 of 60 
 `placeNode` refuses, with an error that names the cause and the fix, when the Node running the tests is an x86_64 build
 under Rosetta: `process.platform` is `darwin`, `process.arch` is `x64` and the CPU is Apple's (`os.cpus()[0].model`
 starts with `Apple`). An Intel Mac and an arm64 Node are unchanged. The error tells the developer to run the tests with
-an arm64 Node. Every spec that copies a Node gets it (`master`, `processName`, `selfUpdate`).
+an arm64 Node. Every spec that copies a Node gets it: `master`, `processName` and `selfUpdate` through `placeNode`,
+and `e2e/nodeReferences.e2e.ts`, which copies its own, from the same check (`refuseRosettaNode`) before it copies.
+A symlink costs nothing (0.08 s), since it runs the file it names, so the specs that symlink their Node are unchanged.
 
 No timeout changes. A test that copies Node cannot be made to hold under Rosetta without paying about 15 s for each new
 path it runs. On an arm64 Node it is already well inside its budget.

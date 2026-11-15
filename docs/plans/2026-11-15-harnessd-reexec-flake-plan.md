@@ -239,9 +239,8 @@ Report both commits, and the Step 2 (red) and Step 5 (green) outputs with the co
 ## Left out
 
 - `runtimeInstall.ts` `platformKey` under Rosetta: the spec sends it to the maintainers as its own proposal.
-- Specs that copy their Node without `placeNode`: `cli/e2e/nodeReferences.e2e.ts:26, 57` (and
-  `cli/src/lib/engineBin.spec.ts:142`, Linux only). The spec names `placeNode`'s three callers; the final report
-  names these two as a possible follow-up.
+- `cli/src/lib/engineBin.spec.ts:142`, which copies its Node without `placeNode`: Linux only. The other such spec,
+  `cli/e2e/nodeReferences.e2e.ts`, was added in the final review: it asks `refuseRosettaNode` before it copies.
 - A `cli-harnessd` path for `cli/src/testing/placeNode*` in `scripts/local-checks.py`: not asked.
 
 ## Verification
