@@ -79,8 +79,11 @@ async function send($, state) {
   if (!state.held || !state.linked) return
   const { devicesSocket, settingsPath, launcher } = state.linked
   if (devicesSocket) {
-    state.held = false
+    // Off, it stays held, as when the poll notices first: the link that follows switching on again sends it.
     if (!(await isOn($, settingsPath))) return
+    // Checked again and cleared with no await before the fetch: a detach during the read, or a second timer, sends nothing.
+    if (!state.held) return
+    state.held = false
     await $.http.fetch(DEVICES, {
       method: 'POST',
       socketPath: devicesSocket,
