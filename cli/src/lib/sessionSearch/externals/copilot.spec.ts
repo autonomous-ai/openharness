@@ -332,6 +332,18 @@ describe('copilotProvider.owners', () => {
     const claims = await copilotProvider({ home: root }).owners!(view(rows))
     expect(claims.map((claim) => [claim.pid, claim.app ?? false]).sort()).toEqual([[21, true], [22, true], [23, false]])
   })
+
+  // macOS `ps` cuts `comm` at 16 bytes and `args` is split at a space: under such a folder neither says `copilot-runtime`.
+  it("knows an editor's runtime under a folder with a space, by its whole path", async () => {
+    const root = home()
+    session(root, ID)
+    lock(root, ID, 24, 1_700_000_000)
+    const path = '/Users/someone/Library/Application Support/Code/copilot/sdk/runtime/copilot-runtime'
+    const cut: RunningProcess = { pid: 24, ppid: 1, executable: path.slice(0, 16), args: `${path} --headless --stdio` }
+    expect(await copilotProvider({ home: root }).owners!(view([cut]))).toEqual([])
+    const claims = await copilotProvider({ home: root }).owners!(view([{ ...cut, commandPath: path }]))
+    expect(claims.map((claim) => [claim.pid, claim.app ?? false])).toEqual([[24, true]])
+  })
 })
 
 describe('copilotProvider.busy', () => {
