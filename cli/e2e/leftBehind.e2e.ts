@@ -66,11 +66,18 @@ describe('a daemon under test', () => {
     daemon = await IsolatedDaemon.create()
     expect(daemon.env.ADAPTER_GRID_RUNTIME_METADATA_URL).toBe('http://127.0.0.1:9/grid.json')
     expect(daemon.env.DISABLE_GRID_INSTALL).toBe('true')
-    // A test's own still stands (update.e2e.ts, harness/fleet.ts). Never started: it only shows whose word wins.
-    const own = await IsolatedDaemon.create({ env: { ADAPTER_GRID_RUNTIME_METADATA_URL: 'http://127.0.0.1:1/own.json', DISABLE_GRID_INSTALL: 'false' } })
+    // Nor the developer's grid login, control plane or grid: the Set up below would name their grid and ask its models.
+    expect(daemon.env.GRID_HOME).toBe(join(daemon.root, 'home', '.grid'))
+    expect(daemon.env.GRID_CONTROL_PLANE_URL).toBe('http://127.0.0.1:9')
+    expect(daemon.env.HARNESS_GRID_BIN).toBe('')
+    // A test's own still stands (update.e2e.ts, harness/fleet.ts, serviceProcesses.e2e.ts). Never started: it only
+    // shows whose word wins.
+    const own = await IsolatedDaemon.create({ env: { ADAPTER_GRID_RUNTIME_METADATA_URL: 'http://127.0.0.1:1/own.json', DISABLE_GRID_INSTALL: 'false',
+      HARNESS_GRID_BIN: '/own/grid' } })
     await own.close()
     expect(own.env.ADAPTER_GRID_RUNTIME_METADATA_URL).toBe('http://127.0.0.1:1/own.json')
     expect(own.env.DISABLE_GRID_INSTALL).toBe('false')
+    expect(own.env.HARNESS_GRID_BIN).toBe('/own/grid')
     await daemon.start()
     const client = await LocalClient.connect(daemon)
     // The picker's Set up, signed out: answered once grid's set-up gave up, at 'no-cli' without a `grid` on PATH, or at
