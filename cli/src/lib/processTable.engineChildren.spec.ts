@@ -5,7 +5,8 @@
  */
 import { describe, expect, it } from 'vitest'
 import type { AgentCommandOwnershipSnapshot } from './engineBin.js'
-import { ENGINE_CHILDREN_MOST, engineChildren, type ProcessRow } from './processTable.js'
+import { ENGINE_CHILDREN_MOST } from './processHeldFiles.js'
+import { engineChildren, type ProcessRow } from './processTable.js'
 
 // No installed command is any engine's: each row is named by its argv alone, and nothing walks PATH (#3880).
 const OWNERSHIP: AgentCommandOwnershipSnapshot = {

@@ -18,13 +18,18 @@ import { descriptorPaths } from '../engines/kit/nativeDescriptors.js'
 import { psEnv } from './childLocale.js'
 import { probeExecFile } from './offThreadExec.js'
 import { processView } from './processMounts.js'
-import { ENGINE_CHILDREN_MOST } from './processTable.js'
 import type { ProcessIdentity } from './terminalTypes.js'
 
 /** How long a process that held no such file is left alone: 5 s after the first listing, then twice as long each
  *  time, up to a minute. An engine opens its store at its start or its first prompt, and one listing a minute is what
  *  reading its environment cost (lib/processEnv.ts, deleted 2026-11). */
 export const HELD_RETRY_MS = { first: 5_000, most: 60_000 } as const
+
+/** The most direct children of one launcher whose open files are listed. npm's Codex 0.169.0 has two (the spike of
+ *  2026-11-15); the bound keeps one listing to five processes whatever a launcher starts (decision 8). The reader's
+ *  own, which processTable.ts `engineChildren` follows: kept here so this file needs nothing of the process table,
+ *  which loads engine discovery's tables at its own load and so cannot be loaded by engines/discoveries.ts. */
+export const ENGINE_CHILDREN_MOST = 4
 
 // One listing's work is bounded: a process with more descriptors cannot be listed, and no home is taken from part
 // of its files.

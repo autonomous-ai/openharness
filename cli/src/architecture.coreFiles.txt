@@ -419,6 +419,7 @@ lib/peerAccount.ts
 lib/piSessionHome.ts
 lib/processEnv.ts
 lib/processEvidence.ts
+lib/processHeldFiles.ts
 lib/processLiveness.ts
 lib/processMounts.ts
 lib/processProof.ts

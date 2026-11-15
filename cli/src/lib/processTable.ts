@@ -19,6 +19,7 @@ import { discoveryField, versionedInstalls } from '../engines/discoveries.js'
 import { HERMES_HISTORY_ID_RE } from '../engines/hermes/contract.js'
 import type { AgentEngine } from '../engines/types.js'
 import { psEnv } from './childLocale.js'
+import { ENGINE_CHILDREN_MOST } from './processHeldFiles.js'
 import { processStartTicks } from './processLiveness.js'
 import { nativeProcessImages } from './nativeProcessImages.js'
 import { patientExec } from './patientExec.js'
@@ -199,10 +200,6 @@ export function hermesGatewaysUnder(rows: readonly ProcessRow[], engine: Process
     .map((row) => ({ pid: row.pid, executable: row.executable, startMarker: row.startMarker,
       ...(row.startTicks !== undefined ? { startTicks: row.startTicks } : {}) }))
 }
-
-/** The most direct children of one launcher whose open files are listed. npm's Codex 0.169.0 has two (the spike of
- *  2026-11-15); the bound keeps one listing to five processes whatever a launcher starts (decision 8). */
-export const ENGINE_CHILDREN_MOST = 4
 
 /**
  * The processes right under `selected` that are `engine`'s too, lowest pid first, ENGINE_CHILDREN_MOST at most:
