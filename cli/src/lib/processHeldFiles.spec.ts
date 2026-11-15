@@ -1,20 +1,26 @@
 /**
- * A fixture `/proc` under a temporary folder (`<proc>/<pid>/fd/<n>` are symbolic links to paths that need not exist)
- * and a fake `lsof`: no real process is ever listed.
+ * A fixture `/proc` under a temporary folder (`<proc>/<pid>/fd/<n>` are symbolic links to paths that need not exist,
+ * `<proc>/<pid>/stat` says when the process started) and a fake `lsof`: no real process is ever listed.
  */
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { ProcessView } from './processMounts.js'
 import type { ProcessIdentity } from './terminalTypes.js'
 
-// Every call into `node:fs/promises`, by its name and the path it was given: what a listing touched.
+// Every call into `node:fs/promises`, by its name and the path it was given: what a listing touched. `onCall` is the
+// case's own step, run before each one.
 const calls = vi.hoisted(() => [] as string[])
+const fsHook = vi.hoisted(() => ({ onCall: null as null | ((name: string, path: string) => void) }))
 vi.mock('node:fs/promises', async (original) => {
   const fs = await original<Record<string, unknown>>()
   return Object.fromEntries(Object.entries(fs).map(([name, value]) => [name, typeof value === 'function'
-    ? (...args: unknown[]) => { calls.push(`${name} ${String(args[0])}`); return Reflect.apply(value, fs, args) }
+    ? (...args: unknown[]) => {
+      calls.push(`${name} ${String(args[0])}`)
+      fsHook.onCall?.(name, String(args[0]))
+      return Reflect.apply(value, fs, args)
+    }
     : value]))
 })
 
@@ -42,7 +48,8 @@ vi.mock('node:child_process', async (original) => ({ ...await original<object>()
 let held: typeof import('./processHeldFiles.js')
 
 const STORE = /^(.+)\/state\.db$/, ROLLOUT = /^(.+)\/sessions\/(?:[^/]+\/)*rollout-[^/]+\.jsonl$/
-const id = (pid: number, startMarker = 'Sun Nov 15 10:00:00 2026'): ProcessIdentity => ({ pid, startMarker, executable: 'codex' })
+const TICKS = 7_000
+const id = (pid: number, startMarker = 'Sun Nov 15 10:00:00 2026'): ProcessIdentity => ({ pid, startMarker, executable: 'codex', startTicks: TICKS })
 const now = () => mocks.state.t
 let proc = ''
 const linux = (selected: ProcessIdentity, file: RegExp, children?: () => readonly ProcessIdentity[]) =>
@@ -54,9 +61,13 @@ const mac = (selected: ProcessIdentity, file: RegExp, children?: () => readonly 
 function unlink(file: string) {
   try { unlinkSync(file) } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
 }
+// `/proc/<pid>/stat`: field 22, the 20th after the command, is when the process started, in ticks since boot.
+const started = (pid: number, ticks: number) =>
+  writeFileSync(join(proc, String(pid), 'stat'), `${pid} (codex) S 1 ${'0 '.repeat(17)}${ticks} 0 0\n`)
 function hold(pid: number, fd: number, target: string) {
   const folder = join(proc, String(pid), 'fd')
   mkdirSync(folder, { recursive: true })
+  if (!existsSync(join(proc, String(pid), 'stat'))) started(pid, TICKS)
   unlink(join(folder, String(fd)))
   symlinkSync(target, join(folder, String(fd)))
 }
@@ -81,6 +92,7 @@ beforeEach(async () => {
   mocks.execFile.mockClear()
   mocks.processView.mockClear()
   calls.length = 0
+  fsHook.onCall = null
 })
 afterEach(() => { rmSync(proc, { recursive: true, force: true }) })
 
@@ -93,9 +105,11 @@ it('names the folder of the one file that matches, on Linux, from the links alon
   // Not a link: what a descriptor closed between the listing and its read leaves, and it says nothing.
   writeFileSync(join(proc, '4242', 'fd', '7'), '')
   expect(await linux(id(4242), STORE)).toBe('/h/.hermes')
-  // Nothing exists at /h: no file is opened, stat'ed or read, only the folder listed and each link read.
-  expect(new Set(calls.map((call) => call.slice(0, call.indexOf(' '))))).toEqual(new Set(['opendir', 'readlink']))
-  expect(calls.every((call) => call.includes(join(proc, '4242', 'fd')))).toBe(true)
+  // Nothing exists at /h: no file is opened, stat'ed or read, only the folder listed, each link read, and when the
+  // process started.
+  const fd = join(proc, '4242', 'fd')
+  expect(calls.filter((call) => !call.startsWith(`opendir ${fd}`) && !call.startsWith(`readlink ${fd}/`)
+    && call !== `readFile ${join(proc, '4242', 'stat')}`)).toEqual([])
   expect(mocks.processView).toHaveBeenCalledWith(id(4242), 'linux', proc)
   expect(mocks.execFile).not.toHaveBeenCalled()
 })
@@ -106,6 +120,25 @@ it('answers nothing for two folders, and the folder for one file open twice', as
   expect(await linux(id(4242), STORE)).toBeUndefined()
   hold(4242, 4, '/h/.hermes/state.db')
   expect(await linux(id(4242, 'Sun Nov 15 11:00:00 2026'), STORE)).toBe('/h/.hermes')
+})
+
+it('lists no process that is not the one selected any more, on Linux', async () => {
+  hold(4242, 3, '/h/.hermes/state.db')
+  // The pid is another process's now: its files are not listed.
+  started(4242, TICKS + 1)
+  expect(await linux(id(4242), STORE)).toBeUndefined()
+  expect(calls.filter((call) => call.includes(join(proc, '4242', 'fd')))).toEqual([])
+  // It ended and its pid went to another while its files were listed: what they say is not the selected one's.
+  started(4242, TICKS)
+  fsHook.onCall = (name) => { if (name === 'readlink') started(4242, TICKS + 1) }
+  expect(await linux(id(4242, 'replaced while listed'), STORE)).toBeUndefined()
+  fsHook.onCall = null
+  // Gone, and an identity that does not say when it started.
+  rmSync(join(proc, '4242', 'stat'))
+  expect(await linux(id(4242, 'gone'), STORE)).toBeUndefined()
+  started(4242, TICKS)
+  expect(await linux({ pid: 4242, startMarker: 'no ticks', executable: 'codex' }, STORE)).toBeUndefined()
+  expect(await linux(id(4242, 'the same process'), STORE)).toBe('/h/.hermes')
 })
 
 it('asks again of a process that held nothing 5 s later, and never again of one that answered', async () => {
