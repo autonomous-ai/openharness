@@ -1,5 +1,5 @@
 /** Real bundled Close callers, supervised storage workers and private Hermes stores. */
-import { appendFileSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterAll, afterEach, beforeAll, expect, it, onTestFailed } from 'vitest'
@@ -49,7 +49,7 @@ if (process.env.E2E_STORAGE_WRITES) {
 afterEach(async () => { client?.close(); companion?.close(); await daemon?.close(); client = undefined; companion = undefined; daemon = undefined })
 afterAll(() => { if (build) rmSync(build, { recursive: true, force: true }) })
 
-async function fresh(env: Record<string, string> = {}) {
+async function fresh(env: Record<string, string> = {}, changeTerminalRouteOnSignal = false) {
   const d = daemon = await IsolatedDaemon.create({ scriptPath, env: { HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '200',
     HARNESSD_SERVICE_MAX_BACKOFF_MS: '1000', HARNESSD_SERVICE_HEARTBEAT_TIMEOUT_MS: '120000', ...env } })
   onTestFailed(() => console.log(d.log()))
@@ -57,7 +57,27 @@ async function fresh(env: Record<string, string> = {}) {
   const commands = join(d.root, 'hermes-script.jsonl'), writes = join(d.root, 'storage-writes.jsonl'), hold = join(d.root, 'hold-storage')
   Object.assign(d.env, { HERMES_PATH: join(d.root, 'bin', 'hermes'), HOOK_INSTALL_ENGINES: 'hermes', E2E_STORAGE_WRITES: writes, E2E_STORAGE_HOLD: hold })
   mkdirSync(home, { recursive: true }); writeFileSync(commands, ''); writeFileSync(writes, '')
-  writeFileSync(d.env.HERMES_PATH!, fakeHermesScript({ version: 'Hermes Agent v0.23.1 (2026.11.1)', script: commands }), { mode: 0o755 })
+  const signalMarker = join(d.root, 'terminal-route-changed.json')
+  let script = fakeHermesScript({ version: 'Hermes Agent v0.23.1 (2026.11.1)', script: commands })
+  if (changeTerminalRouteOnSignal) {
+    const original = join(home, 'records-original'), replacement = join(home, 'records-replacement'), alias = join(home, 'terminal-sessions')
+    mkdirSync(original); mkdirSync(replacement); symlinkSync(original, alias)
+    // The fixture changes its native record route on the real first signal and keeps running, forcing escalation.
+    // Preserve normal cleanup handling after that first signal; no daemon fault hook is needed.
+    script = script.trimEnd() + `.then(() => {
+      const fs = process.getBuiltinModule('node:fs');
+      const handlers = process.listeners('SIGTERM');
+      process.removeAllListeners('SIGTERM');
+      process.on('SIGTERM', () => {
+        if (fs.existsSync(${JSON.stringify(signalMarker)})) { for (const handler of handlers) handler(); return; }
+        const terminal = JSON.parse(fs.readFileSync(${JSON.stringify(join(home, 'started.json'))}, 'utf8')).terminal;
+        fs.copyFileSync(${JSON.stringify(original)} + '/' + terminal, ${JSON.stringify(replacement)} + '/' + terminal);
+        fs.unlinkSync(${JSON.stringify(alias)}); fs.symlinkSync(${JSON.stringify(replacement)}, ${JSON.stringify(alias)});
+        fs.writeFileSync(${JSON.stringify(signalMarker)}, JSON.stringify({ pid: process.pid, signal: 'SIGTERM' }));
+      });
+    })\n`
+  }
+  writeFileSync(d.env.HERMES_PATH!, script, { mode: 0o755 })
   await d.start()
   const c = client = await LocalClient.connect(d)
   const cwd = join(d.projectsDir, 'hermes'); mkdirSync(cwd, { recursive: true })
@@ -94,8 +114,31 @@ async function fresh(env: Record<string, string> = {}) {
     expect(answer.error, JSON.stringify(answer)).toBeUndefined()
     agent = await bound()
   }
-  return { d, c, home, tell, rows, close, manifests, written, nativeSession, nativeState, enginePid, hold, resume, agent: () => agent }
+  return { d, c, home, tell, rows, close, manifests, written, nativeSession, nativeState, enginePid, hold, signalMarker, resume, agent: () => agent }
 }
+
+it('refuses escalation after the native terminal-record directory route changes on SIGTERM', async () => {
+  const r = await fresh({}, true)
+  const engine = await until('the bound engine process was saved', () => r.enginePid() ?? null, 15_000, 50)
+  const original = { ...r.agent() }, core = r.d.corePid()
+  const closing = r.close()
+  void closing.catch(() => {})
+  await until('the engine changed its native record route after receiving SIGTERM', () => existsSync(r.signalMarker) || null, 15_000, 50)
+  expect(JSON.parse(readFileSync(r.signalMarker, 'utf8'))).toEqual({ pid: engine, signal: 'SIGTERM' })
+  const savedBeforeSignal = r.manifests()
+  expect(savedBeforeSignal).toHaveLength(1)
+  expect(await closing).toMatchObject({ error: 'IDENTITY_UNAVAILABLE' })
+  expect(alive(engine)).toBe(true)
+  expect(r.enginePid()).toBe(engine)
+  expect(r.nativeSession()).toBe(original.sessionId)
+  expect(r.nativeState(original.sessionId)).toMatchObject({ ended_at: null, end_reason: null })
+  expect(r.manifests()).toEqual(savedBeforeSignal)
+  r.tell({ say: 'alive after the escalation was refused' })
+  await until('the original engine accepts another turn after the refused escalation', async () =>
+    JSON.stringify(await r.c.request('session_get', { sessionId: original.id, limit: 10 }, 15_000))
+      .includes('alive after the escalation was refused') || null, 30_000, 100)
+  expect(r.d.corePid()).toBe(core)
+})
 
 it.each(['worker', 'inline', 'older master'] as const)('saves the existing checkpoint format through the %s and never exposes private storage requests', async mode => {
   const r = await fresh(mode === 'inline' ? { HARNESSD_SERVICES: 'none' } : mode === 'older master' ? { E2E_STORAGE_OLD_MASTER: '1' } : {})
