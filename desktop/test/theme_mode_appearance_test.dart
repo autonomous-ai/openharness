@@ -132,22 +132,22 @@ void main() {
     expect(store.value.mode, AppearanceMode.light);
     expect(store.value.palette, HarnessPalette.cloud);
 
-    await tester.ensureVisible(find.byKey(const ValueKey('palette-plum')));
-    await tester.tap(find.byKey(const ValueKey('palette-plum')));
+    await tester.ensureVisible(find.byKey(const ValueKey('palette-mist')));
+    await tester.tap(find.byKey(const ValueKey('palette-mist')));
     await tester.pumpAndSettle();
-    expect(store.value.palette, HarnessPalette.plum);
+    expect(store.value.palette, HarnessPalette.mist);
 
     await tester.ensureVisible(find.byKey(const ValueKey('palette-night')));
     await tester.tap(find.byKey(const ValueKey('palette-night')));
     await tester.pumpAndSettle();
     expect(store.value.mode, AppearanceMode.dark);
     expect(store.value.palette, HarnessPalette.night);
-    expect(store.value.lightPalette, HarnessPalette.plum);
+    expect(store.value.lightPalette, HarnessPalette.mist);
 
     await tester.ensureVisible(mode);
     await tester.tap(find.descendant(of: mode, matching: find.text('Light')));
     await tester.pumpAndSettle();
-    expect(store.value.palette, HarnessPalette.plum);
+    expect(store.value.palette, HarnessPalette.mist);
 
     // Each list marks its own choice, whichever one is on screen.
     expect(
