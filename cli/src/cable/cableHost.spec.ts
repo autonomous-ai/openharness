@@ -1041,6 +1041,17 @@ describe('the dial that shows one app at a time', () => {
     expect(host.latestFront()).toBe('orca')
   })
 
+  it('frontSettled reaches the wiring when the app in front settles, with a window open too', () => {
+    const settles: Array<() => void> = []
+    const frontSettled = vi.fn()
+    const host = setup(five(), { sessions, frontSettled, appTimer: (_ms, run) => { settles.push(run); return () => {} } })
+    onTab(host, ['h1'])
+    host.front('vscode')
+    expect(frontSettled).not.toHaveBeenCalled()
+    settles[0]()
+    expect(frontSettled.mock.calls).toEqual([['vscode']])
+  })
+
   it('localFollowed reaches the wiring', () => {
     const localFollowed = vi.fn()
     const host = setup(five(), { localFollowed })

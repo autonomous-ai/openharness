@@ -12,7 +12,6 @@ function setup(draws: number[] = []) {
   /** What the filter told, in order: a switch as its cause, a settle as `settled <app>`. */
   const told: string[] = []
   const switched = vi.fn((cause: SwitchCause) => { told.push(cause) })
-  const settled = vi.fn((app: string) => { told.push(`settled ${app}`) })
   const random = vi.fn(() => {
     const r = draws.shift()
     if (r === undefined) throw new Error('a draw nobody scripted')
@@ -22,15 +21,28 @@ function setup(draws: number[] = []) {
     const t = setTimeout(run, ms)
     return () => clearTimeout(t)
   })
-  const filter = new AppFilter({ after, random, counts: () => ({ all: counts, known: known ?? counts }), switched, settled })
+  // Each settled app, with what settledApp() read at that moment.
+  const settled: Array<[string]> = []
+  let filter: AppFilter
+  filter = new AppFilter({
+    after,
+    random,
+    counts: () => ({ all: counts, known: known ?? counts }),
+    switched,
+    settled: (app) => {
+      expect(filter.settledApp()).toBe(app)
+      settled.push([app])
+      told.push(`settled ${app}`)
+    },
+  })
   const agents = (next: Record<string, number>, knownNext?: Record<string, number>): void => {
     counts.clear()
     for (const [app, n] of Object.entries(next)) counts.set(app, n)
     known = knownNext && new Map(Object.entries(knownNext))
   }
   const causes = (): SwitchCause[] => switched.mock.calls.map(([cause]) => cause)
-  const settles = (): string[] => settled.mock.calls.map(([app]) => app)
-  return { filter, agents, random, after, causes, told, settles }
+  const settles = (): string[] => settled.map(([app]) => app)
+  return { filter, agents, random, after, causes, told, settles, settled }
 }
 
 const settle = (): void => {
@@ -431,6 +443,24 @@ describe('AppFilter', () => {
     expect(filter.latestFront()).toBe('orca')
     filter.front('none')
     expect(filter.latestFront()).toBe('none')
+  })
+
+  it('settled is told each app that stays in front 1 s, and never one that left sooner', () => {
+    const { filter, agents, settled } = setup()
+    agents({ ghostty: 3, vscode: 1 })
+    filter.front('orca')
+    vi.advanceTimersByTime(FRONT_SETTLE_MS - 1)
+    expect(settled).toEqual([])
+    vi.advanceTimersByTime(1)
+    expect(settled).toEqual([['orca']])
+    filter.front('ghostty')
+    vi.advanceTimersByTime(FRONT_SETTLE_MS - 1)
+    filter.front('vscode')
+    settle()
+    expect(settled).toEqual([['orca'], ['vscode']])
+    filter.front('none')
+    settle()
+    expect(settled).toEqual([['orca'], ['vscode'], ['none']])
   })
 
   describe('agents not known yet', () => {
