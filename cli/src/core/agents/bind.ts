@@ -655,7 +655,7 @@ export function createBinding({
       sessionId,
       transcriptPath,
       ...(hermesHome ? { hermesHome } : {}),
-      // A home Harness worked out, from the process's HOME or a sandbox's path of it: a relaunch must not export it.
+      // The daemon's path of a sandboxed process's home: a relaunch must not export it.
       ...(hermesHome && followed && observed.hermesHomeDerived ? { hermesHomeDerived: true as const } : {}),
       cwd: observed.cwd,
       source,

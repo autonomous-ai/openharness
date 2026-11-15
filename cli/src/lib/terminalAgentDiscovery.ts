@@ -8,7 +8,7 @@ import {
 import { gatewayFromArgv } from './gatewayRuntime.js'
 import { gridAssignmentEvidence, type GridAssignment, type GridAssignmentProcess } from './gridAssignmentWire.js'
 import { probeProfileHome } from '../engines/discoveries.js'
-import { probeHermesHome, probeHermesHomeDerived, probeHermesSandbox } from '../engines/identities.js'
+import { probeHermesHome, probeHermesSandbox } from '../engines/identities.js'
 import type { TerminalBackend } from './terminalBackend.js'
 import {
   ambiguousAgentProcess,
@@ -75,23 +75,22 @@ export interface DiscoveredTerminalAgent {
    */
   codexHome?: string | null
   /**
-   * Hermes only: the home the process runs under (`hermes -p <name>` → `~/.hermes/profiles/<name>`, or
-   * one under a `HOME` of its own), at the daemon's path of it, when it is not this machine's default.
-   * Same three answers as `codexHome`. The registry also finds this by looking the session up in each
-   * store (`engines/hermes/home.ts`), which is the answer that needs no cooperation from the engine —
-   * this is the free one, from a read the discovery pass makes anyway.
+   * Hermes only: the home the process runs under (`hermes -p <name>` → `~/.hermes/profiles/<name>`), from the
+   * store it or one of its engine children holds open, at the daemon's path of it, when it is not this machine's
+   * default. Same three answers as `codexHome`. The registry also finds this by looking the session up in each
+   * store (`engines/hermes/home.ts`), which is the answer that needs no cooperation from the engine — this is the
+   * free one, found once the store is open. See `probeHermesHome` (engines/identities.ts).
    */
   hermesHome?: string | null
   /**
-   * Hermes only: `hermesHome` is one Harness worked out (from the process's `HOME`, or the daemon's path of
-   * a home a sandbox named), not the value of its own `HERMES_HOME`. A relaunch does not export it
+   * Hermes only: `hermesHome` is the daemon's path of a sandboxed process's home. A relaunch does not export it
    * (registry.ts RegisteredSession.hermesHomeDerived).
    */
   hermesHomeDerived?: true
   /**
    * Hermes only, a process in another mount namespace (a sandbox, Linux): its folder as it names it, the one
    * Hermes writes, for comparisons with what Hermes wrote; `cwd` is then the daemon's path of that folder.
-   * 'unseen': its home or folder has no path in the daemon's view, and `cwd` stays the pane's.
+   * 'unseen': its folder has no path in the daemon's view, and `cwd` stays the pane's.
    */
   sandbox?: { cwd: string } | 'unseen'
 }
@@ -338,11 +337,10 @@ export async function probeTerminalAgents(
     // And, for Codex, the profile it runs under, from the rollout it holds open: npm's launcher leaves that to one of
     // the `codex` processes right under it, so those are named too, and no other process. An agent is only found in
     // a pane, so the pass has its snapshot.
-    agent.codexHome = await probeProfileHome(agent.processIdentity, agent.engine,
-      () => engineChildren(enrichedRows, agent.engine, agent.processIdentity, ownership!))
-    // Hermes's declared profile is read eagerly from the same verified process environment.
-    agent.hermesHome = await probeHermesHome(agent.processIdentity, agent.engine)
-    if (agent.hermesHome && await probeHermesHomeDerived(agent.processIdentity, agent.engine)) agent.hermesHomeDerived = true
+    const children = () => engineChildren(enrichedRows, agent.engine, agent.processIdentity, ownership!)
+    agent.codexHome = await probeProfileHome(agent.processIdentity, agent.engine, children)
+    // For Hermes, the home of the store it holds open, read of the same processes.
+    agent.hermesHome = await probeHermesHome(agent.processIdentity, agent.engine, children)
     // A sandboxed Hermes names its folder in its own view: the row gets the daemon's path of it, which outlives the
     // sandbox, and the agent keeps the one Hermes writes, to compare with what Hermes wrote.
     const sandbox = await probeHermesSandbox(agent.processIdentity, agent.engine)
@@ -351,6 +349,9 @@ export async function probeTerminalAgents(
       agent.sandbox = { cwd: sandbox.cwd }
       agent.cwd = sandbox.hostCwd
     }
+    // Only a sandbox's home is the daemon's own path of it, which a relaunch must not hand back. Outside one the
+    // home is the store the process uses, and a relaunch names it (HERMES_HOME=/x hermes, typed by hand, restarted).
+    if (agent.hermesHome && sandbox) agent.hermesHomeDerived = true
     if (agent.engine === 'hermes') {
       const gateways = hermesGatewaysUnder(enrichedRows, agent.processIdentity)
       if (gateways.length) agent.formerProcesses = [...agent.formerProcesses ?? [], ...gateways]

@@ -227,7 +227,6 @@ engines/kit/notifyHooks.ts
 engines/kit/pane.ts
 engines/kit/pluginFetch.ts
 engines/kit/processFacts.ts
-engines/kit/processHome.ts
 engines/kit/processRecordEvidence.ts
 engines/kit/projectFolder.ts
 engines/kit/questionPane.ts
@@ -417,7 +416,6 @@ lib/pathContainment.ts
 lib/patientExec.ts
 lib/peerAccount.ts
 lib/piSessionHome.ts
-lib/processEnv.ts
 lib/processEvidence.ts
 lib/processHeldFiles.ts
 lib/processLiveness.ts

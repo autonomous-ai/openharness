@@ -225,8 +225,9 @@ export interface RegisteredSession {
    *
    * Unlike `codexHome` this is not a launch choice the daemon makes: `hermes -p` is how a person starts
    * one, and the daemon meets the pane afterwards. So it is FOUND rather than recorded — by the session
-   * id, in whichever store holds its row (`engines/hermes/home.ts`) — and then kept here so the lookup
-   * happens once per agent instead of once per poll. Fill-only, like `codexHome`.
+   * id, in whichever store holds its row (`engines/hermes/home.ts`), or from the store its process holds
+   * open — and then kept here so the lookup happens once per agent instead of once per poll. Fill-only,
+   * like `codexHome`.
    *
    * Everything Hermes-shaped reads it: the live mirror, `agent_recent`, the recap fallback, the hook's
    * source check and the model/effort poll. Reading one fixed home instead is what left a profile
@@ -234,10 +235,10 @@ export interface RegisteredSession {
    */
   hermesHome?: string | null
   /**
-   * Only beside `hermesHome`: that path is Harness's own for the home (worked out from the process's `HOME`, or
-   * translated from a sandbox's view), not the value of the process's `HERMES_HOME`. A relaunch exports no
-   * `HERMES_HOME` for it, since the relaunched process works out the same home, in its own view. Stored, not kept in
-   * memory, so an agent resumed after the daemon that saw its process has gone still is not handed the daemon's path.
+   * Only beside `hermesHome`: that path is the daemon's path of a sandboxed process's home, not the one the process
+   * names it by. A relaunch exports no `HERMES_HOME` for it, since the relaunched process works out its own home, in
+   * its own view. Stored, not kept in memory, so an agent resumed after the daemon that saw its process has gone still
+   * is not handed the daemon's path.
    */
   hermesHomeDerived?: true
   /**
@@ -2852,14 +2853,14 @@ class Registry {
   }
 
   /** Fill in the Hermes home a row did not know — found by looking for its session in each store, or
-   *  read off the live process. Never overwrites: like `setCodexHome`, a session does not move between
-   *  homes, and a later probe that could not read the process must not take the answer away. `derived`: the home is
-   *  one Harness worked out (RegisteredSession.hermesHomeDerived); a row that has this same home without the mark (an
-   *  older daemon saved over it) takes the mark alone. */
+   *  from the store its process holds open. Never overwrites: like `setCodexHome`, a session does not move between
+   *  homes, and a later probe that could not list the process must not take the answer away. `derived`: the home is
+   *  the daemon's path of a sandboxed process's home (RegisteredSession.hermesHomeDerived). A row that has a home is
+   *  never marked either: a descriptor cannot tell an older daemon's row from one Harness launched by name, whose
+   *  relaunch must export its home. */
   setHermesHome(agentId: string, hermesHome: string, derived = false): boolean {
     const session = this.agents.get(agentId)
-    if (!session || session.engine !== 'hermes') return false
-    if (session.hermesHome && !(derived && session.hermesHome === hermesHome && !session.hermesHomeDerived)) return false
+    if (!session || session.engine !== 'hermes' || session.hermesHome) return false
     session.hermesHome = hermesHome
     if (derived) session.hermesHomeDerived = true
     session.touchedAt = Date.now()
