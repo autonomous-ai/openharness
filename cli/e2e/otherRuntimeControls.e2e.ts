@@ -6,15 +6,11 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LEAN_CORE_ENTRY, readLeanBundle } from '../src/harnessd/leanBundle.js'
 import { TerminalBinaryKind } from '../src/lib/terminalBinary.js'
-import { b64e, newIdentity } from '../src/lib/e2ee/core.js'
 import { LocalClient, type Frame } from './harness/client.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
 import { harnessdProcesses } from './harness/endurance.js'
 import { buildWithLean } from './harness/release.js'
-import { FakeBackend } from './harness/fakeBackend.js'
-import { assertLocalOnly, remoteSettings, signIn, writeE2ee } from './harness/fleet.js'
 
-const SESSION = 'dddddddd-2222-4333-8444-555555555555'
 const profile = (agent: string, effort = 'high') => `runtime-v1:${encodeURIComponent(agent)}:cursor:model-7@${effort}`
 const permission = ['────────────────────────────', ' $ printf fixture in .', '', ' Run this command?',
   ' Not in allowlist: printf', ' → Run (once) (y)', ' Add Shell(printf) to allowlist? (tab)',
@@ -24,10 +20,8 @@ type Row = { id: string; sessionId: string; status: string; tmuxPane: string; se
 // The same checked bundle is used for the normal, damaged-core, older-master and explicit-inline paths.
 describe.runIf(!!process.env.E2E_BUNDLE_PATH)('other-engine runtime and question isolation', () => {
   let daemon: IsolatedDaemon | undefined, client: LocalClient | undefined, scratch: string | undefined
-  let relay: FakeBackend | undefined
   afterEach(async () => {
     client?.close(); await daemon?.close(); client = undefined; daemon = undefined
-    await relay?.close(); relay = undefined
     if (scratch) rmSync(scratch, { recursive: true, force: true })
     scratch = undefined
   })
@@ -41,7 +35,7 @@ describe.runIf(!!process.env.E2E_BUNDLE_PATH)('other-engine runtime and question
     scratch = mkdtempSync(join(tmpdir(), 'other-runtime-controls-'))
     return buildWithLean(scratch, bundle, files)
   }
-  async function fresh(env: Record<string, string> = {}, scriptPath = process.env.E2E_BUNDLE_PATH!, prepare?: (d: IsolatedDaemon) => Promise<string | void>) {
+  async function fresh(env: Record<string, string> = {}, scriptPath = process.env.E2E_BUNDLE_PATH!) {
     const d = daemon = await IsolatedDaemon.create({ scriptPath, env: {
       HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '200', HARNESSD_SERVICE_MAX_BACKOFF_MS: '1000', ...env,
     } })
@@ -53,47 +47,50 @@ describe.runIf(!!process.env.E2E_BUNDLE_PATH)('other-engine runtime and question
     writeFileSync(bin, `#!${process.execPath}
 const fs = require('node:fs'), path = require('node:path');
 if (process.argv.includes('--version') || process.argv.includes('--help')) { console.log('2026.08.11'); process.exit(0) }
-const id = ${JSON.stringify(SESSION)}, cwd = process.cwd();
+const id = require('node:crypto').randomUUID(), cwd = process.cwd();
+const output = path.basename(cwd) === 'cursor' ? ${JSON.stringify(d.root)} : cwd;
 process.title = ('cursor-agent --session-id ' + id).padEnd(160);
 const file = path.join(process.env.CURSOR_HOME, 'projects', 'fixture', 'agent-transcripts', id, id + '.jsonl');
 fs.mkdirSync(path.dirname(file), { recursive: true });
 fs.writeFileSync(file, JSON.stringify({ type: 'assistant', model: 'model-7', sessionId: id, cwd, uuid: 'ready',
  message: { role: 'assistant', content: [{ type: 'text', text: 'fixture ready' }] } }) + '\\n');
-fs.writeFileSync(${JSON.stringify(join(d.root, 'cursor.json'))}, JSON.stringify({ pid: process.pid, file }));
-fs.writeFileSync(${JSON.stringify(join(d.root, 'keys.txt'))}, '');
-fs.writeFileSync(${JSON.stringify(join(d.root, 'choices.txt'))}, '');
+fs.writeFileSync(path.join(output, 'cursor.json'), JSON.stringify({ pid: process.pid, file, sessionId: id }));
+fs.writeFileSync(path.join(output, 'keys.txt'), '');
+fs.writeFileSync(path.join(output, 'choices.txt'), '');
 let asking = false, asks = 0, effort = 'High';
 process.stdout.write('\\x1b[?1049h');
 const idle = text => { process.stdout.write('\\x1b[2J\\x1b[H' + text + '\\nModel 7 ' + effort + ' · 1%\\n'); };
 process.stdin.setRawMode(true); process.stdin.setEncoding('utf8'); process.stdin.resume();
 process.stdin.on('data', data => { for (const key of data) {
- fs.appendFileSync(${JSON.stringify(join(d.root, 'keys.txt'))}, key);
+ fs.appendFileSync(path.join(output, 'keys.txt'), key);
  if (key === '\\x03') process.exit(0);
  if (key === 'q') { asking = true; const next = asks++ ? 'printf fixture ' + asks : 'printf fixture'; process.stdout.write('\\x1b[2J\\x1b[H' + ${JSON.stringify(permission)}.replace('printf fixture', next) + '\\n'); }
- else if (asking && (key === 'y' || key === 'n' || key === '\\t')) { asking = false; fs.appendFileSync(${JSON.stringify(join(d.root, 'choices.txt'))}, key); idle('fixture choice ' + key); }
+ else if (asking && (key === 'y' || key === 'n' || key === '\\t')) { asking = false; fs.appendFileSync(path.join(output, 'choices.txt'), key); idle('fixture choice ' + key); }
  else if (key === 't') process.stdout.write('\\nfixture terminal input\\n');
  else if (key === 'l' || key === 'h') { effort = key === 'l' ? 'Low' : 'High'; idle('fixture profile observed'); }
 } });
 idle('fixture-cursor-ready');
 `, { mode: 0o755 })
-    const machineId = await prepare?.(d)
     await d.start()
-    const c = client = await LocalClient.connect(d, machineId ? { machineId } : {})
-    const cwd = join(d.projectsDir, 'cursor'); mkdirSync(cwd, { recursive: true })
-    const created = await c.request('agent_create', { engine: 'cursor', cwd, permissionMode: 'ask', bypassPermission: false }, 60_000)
-    expect(created.error, JSON.stringify(created)).toBeUndefined()
-    const id = created.agent.id as string
-    const pane = await until('Cursor pane created', async () => (await row(c, id))?.tmuxPane
-      ?? created.agent.terminal?.runtimes?.[0]?.paneId ?? null, 15_000, 100)
-    await until('the private Cursor ready', async () => (await d.capture(pane)).includes('fixture-cursor-ready') || null, 20_000, 100)
-    const fake = JSON.parse(readFileSync(join(d.root, 'cursor.json'), 'utf8')) as { pid: number; file: string }
-    const hook = await fetch(`http://127.0.0.1:${d.port}/api/hook/session-start`, { method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-harness-hook-token': d.hookCredential() },
-      body: JSON.stringify({ engine: 'cursor', sessionId: SESSION, transcriptPath: fake.file, cwd, tmuxPane: pane,
-        callerPid: fake.pid, runtimeHints: [{ backend: 'tmux', paneId: pane }] }) })
-    expect(hook.status).toBe(200)
-    await until('Cursor profile from its pane', async () => (await row(c, id))?.selectedModel === profile(id) || null, 30_000, 100)
-    return { d, c, id, pane }
+    const c = client = await LocalClient.connect(d)
+    const addCursor = async (index = 0) => {
+      const cwd = join(d.projectsDir, index ? `cursor-${index}` : 'cursor'); mkdirSync(cwd, { recursive: true })
+      const created = await c.request('agent_create', { engine: 'cursor', cwd, permissionMode: 'ask', bypassPermission: false }, 60_000)
+      expect(created.error, JSON.stringify(created)).toBeUndefined()
+      const id = created.agent.id as string
+      const pane = await until('Cursor pane created', async () => (await row(c, id))?.tmuxPane
+        ?? created.agent.terminal?.runtimes?.[0]?.paneId ?? null, 15_000, 100)
+      await until('the private Cursor ready', async () => (await d.capture(pane)).includes('fixture-cursor-ready') || null, 20_000, 100)
+      const fake = JSON.parse(readFileSync(join(index ? cwd : d.root, 'cursor.json'), 'utf8')) as { pid: number; file: string; sessionId: string }
+      const hook = await fetch(`http://127.0.0.1:${d.port}/api/hook/session-start`, { method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-harness-hook-token': d.hookCredential() },
+        body: JSON.stringify({ engine: 'cursor', sessionId: fake.sessionId, transcriptPath: fake.file, cwd, tmuxPane: pane,
+          callerPid: fake.pid, runtimeHints: [{ backend: 'tmux', paneId: pane }] }) })
+      expect(hook.status).toBe(200)
+      await until('Cursor profile from its pane', async () => (await row(c, id))?.selectedModel === profile(id) || null, 30_000, 100)
+      return { id, pane }
+    }
+    return { d, c, ...await addCursor(), addCursor }
   }
   async function question(d: IsolatedDaemon, c: LocalClient, id: string, pane: string): Promise<Frame> {
     const asked = c.next(frame => frame.type === 'commander_question' && frame.agentId === id, 30_000, 'Cursor permission')
@@ -195,19 +192,13 @@ idle('fixture-cursor-ready');
 
   // One identical fixture runs against the parent and candidate bundles, in a reserved quiet interval.
   it.runIf(!!process.env.OTHER_RUNTIME_CONTROLS_PERF)('measures actual pane observations and approved question round trips', async () => {
-    const backend = relay = await FakeBackend.start(), identity = newIdentity()
-    const machine = { machineId: 'e8'.repeat(16), computerId: 'e2e-controls-profile', name: 'controls fixture', token: 'e2e-controls-token' }
-    backend.addMachine(machine)
-    const { d, c, id, pane } = await fresh({ ...remoteSettings(backend), ADAPTER_COMPUTER_ID: machine.computerId }, process.env.E2E_BUNDLE_PATH!, async d => {
-      assertLocalOnly(d.env, backend)
-      await signIn(d, machine)
-      await writeE2ee(d, { 'identity.json': { priv: b64e(identity.priv), pub: b64e(identity.pub) } })
-      return machine.machineId
-    })
+    const { d, c, id, pane, addCursor } = await fresh()
+    const agents = [{ id, pane }]
+    for (let i = 1; i < 10; i++) agents.push(await addCursor(i))
     const refusalAt = performance.now(); await viewOnly(c, id)
     const refusalMs = performance.now() - refusalAt
     await until('on-demand services finished startup', () =>
-      d.log().includes('[services] models connected') && backend.nodeUp(machine.machineId) || null, 20_000, 100)
+      d.log().includes('[services] models connected') && d.log().includes('[services] gateway connected') || null, 20_000, 100)
     const sample = () => new Promise<{ cpu: number; rssMiB: number }>((done, fail) => {
       execFile('ps', ['-o', 'time=,rss=', '-p', String(d.corePid()!)], { timeout: 5000 }, (error, output) => {
         if (error) { fail(error); return }
@@ -221,23 +212,21 @@ idle('fixture-cursor-ready');
     const beforeIdle = await sample(), idleAt = performance.now()
     await new Promise(done => setTimeout(done, 30_000)) // The defined idle measurement interval, not fixture settling.
     const afterIdle = await sample(), idleMs = performance.now() - idleAt
-    const observations: number[] = [], profileAt = performance.now()
-    for (let i = 0; i < 20; i++) {
-      const effort = i % 2 === 0 ? 'low' : 'high', started = performance.now()
-      await d.tmux.run('send-keys', '-t', pane, '-l', effort === 'low' ? 'l' : 'h')
-      await until('new footer painted', async () => (await d.capture(pane)).includes(`Model 7 ${effort === 'low' ? 'Low' : 'High'}`) || null, 5000, 50)
-      // Existing public recovery path: reconnect reconciles config, transcript and the actual pane.
-      // Ordinary footer polling is 15 s; this deliberately measures reconnect observations, not that timer.
-      const from = d.log().length
-      backend.dropAll()
-      let accepted: string | null | undefined
-      try {
-        await until('reconnected Cursor footer accepted', async () => {
-          accepted = (await row(c, id))?.selectedModel
-          return d.log().slice(from).includes('[cli] connected') && accepted === profile(id, effort) || null
-        }, 20_000, 50)
-      } catch { throw Error(`footer observation ${i + 1}: expected ${effort}, accepted ${accepted?.split('@').at(-1) ?? 'none'}`) }
-      observations.push(performance.now() - started)
+    const observations: number[] = [], batches: number[] = [], perAgent = agents.map(() => ({ lowMs: 0, highMs: 0 })), profileAt = performance.now()
+    for (const effort of ['low', 'high'] as const) {
+      const started = performance.now(), seen = new Set<string>()
+      for (const agent of agents) await d.tmux.run('send-keys', '-t', agent.pane, '-l', effort === 'low' ? 'l' : 'h')
+      // The native 15 s poll is unchanged: ten agents each contribute two real accepted observations.
+      await until(`all ten Cursor ${effort} footers accepted`, async () => {
+        const current = await rows(c)
+        for (const [index, agent] of agents.entries()) if (!seen.has(agent.id)
+          && current.find(row => row.id === agent.id)?.selectedModel === profile(agent.id, effort)) {
+          const ms = performance.now() - started
+          seen.add(agent.id); observations.push(ms); perAgent[index][effort === 'low' ? 'lowMs' : 'highMs'] = ms
+        }
+        return seen.size === agents.length || null
+      }, 25_000, 50)
+      batches.push(performance.now() - started)
     }
     const afterProfiles = await sample(), profileMs = performance.now() - profileAt
     const detections: number[] = [], answers: number[] = [], questionsAt = performance.now()
@@ -255,8 +244,9 @@ idle('fixture-cursor-ready');
       return { p50: round(values[Math.ceil(values.length * .5) - 1]), p95: round(values[Math.ceil(values.length * .95) - 1]), max: round(values.at(-1)!) }
     }
     writeFileSync(process.env.OTHER_RUNTIME_CONTROLS_PERF!, JSON.stringify({
+      agents: agents.length,
       idle: { ms: round(idleMs), coreCpuPercent: round(100 * (afterIdle.cpu - beforeIdle.cpu) / (idleMs / 1000)), coreRssMiB: round(afterIdle.rssMiB) },
-      profiles: { trigger: 'backendReconnect', count: observations.length, ms: round(profileMs), observationMs: latency(observations), coreCpuSeconds: round(afterProfiles.cpu - afterIdle.cpu), coreRssMiB: round(afterProfiles.rssMiB) },
+      profiles: { trigger: 'native15sPoll', count: observations.length, batchMs: batches.map(round), perAgentMs: perAgent.map(value => ({ low: round(value.lowMs), high: round(value.highMs) })), ms: round(profileMs), observationMs: latency(observations), coreCpuSeconds: round(afterProfiles.cpu - afterIdle.cpu), coreRssMiB: round(afterProfiles.rssMiB) },
       questions: { count: answers.length, ms: round(questionsMs), detectionMs: latency(detections), answerMs: latency(answers), coreCpuSeconds: round(afterQuestions.cpu - afterProfiles.cpu), coreRssMiB: round(afterQuestions.rssMiB) },
       viewOnlyRefusalMs: round(refusalMs), initialCoreRssMiB: round(beforeIdle.rssMiB),
     }, null, 2) + '\n')
