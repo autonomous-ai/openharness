@@ -1533,7 +1533,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     { call: (type, payload, waitMs) => serviceLinks.call('viewers', type, payload, waitMs), buffered: () => serviceLinks.buffered('viewers') },
     { wake: (why) => viewersWake.ask('viewers', why) })
   // How the core tells workspaces in their own process what to do, and answers them (core/workspacesLink.ts).
-  const workspacesLink = createWorkspacesLink(coreApi, (frame) => serviceLinks.notify('workspaces', frame), forgetAgentProject)
+  const workspacesLink = createWorkspacesLink(coreApi, (frame) => serviceLinks.notify('workspaces', frame),
+    (type, payload, waitMs) => serviceLinks.call('workspaces', type, payload, waitMs), forgetAgentProject)
   // Agent Messages in its own process: which of its deliveries may be written, as it last said, and what it may ask
   // and hear of the core (core/messagesLink.ts).
   // A roster change it tells (`observers`) goes to Share: to its process, which a call starts while it is off, or to its
@@ -1697,6 +1698,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       if (service === 'wifi') wifiCore.stopped()
       if (service === 'recaps') recapsLink.disconnected()
       if (service === 'agentBrowser') agentBrowserLink.disconnected()
+      if (service === 'workspaces') workspacesLink.disconnected()
       void terminalWatch.gone(service)
     },
   })
@@ -2916,6 +2918,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // that made it; either failing refuses the purge.
     forgetTold: async (agentId) => await ports.agentCleanup?.forgetTold(agentId) ?? false,
     scrubCreated: (agentId) => receipts.scrubCreated(agentId),
+    workspaces: () => ports.workspaces,
     send: (frame) => backend.send(frame),
     pinnedControls,
     retainExitedSession,
@@ -3094,6 +3097,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     modelTarget: (selection) => (ports.models ?? MODELS_OFF).launchTarget(selection),
     // A guest's New Harness: built by shared machines, as the guest's own OS user (core/agents/guestCreate.ts).
     guestCreate: () => guestCreate,
+    // The folders git makes for a create: workspaces', in the edge host (core/workspacesLink.ts).
+    workspaces: () => ports.workspaces,
   })
   // A cloud agent is made by its service (core/agents/cloud.ts); every other engine launches here.
   // Answered when the service answers, never in the connection's line: the window's next requests go on.

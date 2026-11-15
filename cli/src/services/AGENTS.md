@@ -141,10 +141,13 @@ master too old to run it starts it beside itself, still in its own process (`src
   and work that belongs to one connection's request (a Grid harness's command) is keyed by the connection
   and request id the core gives every request (`Asker`). `e2e/serviceProcesses.e2e.ts` proves it: a create
   on a grid model while models is killed answers GRID_UNAVAILABLE, and every agent works on.
-- A service the core only gives commands to needs nothing kept for it while it is down. Workspaces
-  (`src/services/workspacesProcess.ts`, `src/core/workspacesLink.ts`) is told to name branches. A command that
-  destroys something is never held or replayed, and what it must know is asked for when it starts, never sent ahead
-  where it could go stale. `e2e/workspacesProcess.e2e.ts` proves it.
+- Workspaces (`src/services/workspacesProcess.ts`, `src/core/workspacesLink.ts`) run the git the core runs none of:
+  the folder a create asks for (a clone, a worktree, a branch) and a purge's worktree, reviewed and removed. The core
+  asks each with a deadline and checks the answer's shape; a process says it makes folders each time it connects
+  (`folders`), and until one does, a create that needs git is held and a purge's worktree is unavailable. A removal is
+  never held or replayed, and is asked again before the purge's first step that changes anything. Branch naming is a
+  command, said again on each pass, so nothing is kept for it. `e2e/workspacesFolders.e2e.ts` and
+  `e2e/workspacesProcess.e2e.ts` prove it.
 - A service that is transport rather than requests: the gateway (src/gateway/gatewayProcess.ts,
   src/core/gatewayLink.ts) carries every remote client's traffic, so it tells the core without asking
   (`service_notice`) and carries terminal bytes as binary frames on its link. The core drops what would
