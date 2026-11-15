@@ -73,6 +73,7 @@ vi.mock('../cable/cableFleet.js', async (real) => {
     summary = recorder('summary')
     turnError = recorder('turnError')
     petsChanged = recorder('petsChanged')
+    viewChanged = recorder('viewChanged')
     wants = true
     connected = true
     get isConnected() { return this.connected }
@@ -901,13 +902,15 @@ describe('what the windows say, reaching the dial', () => {
     })
   })
 
-  it('passes the tabs, the unread rows, the window\'s focus and what it saw', () => {
+  it('passes the tabs, the unread rows, the window\'s focus and what it saw', async () => {
     const { port } = start()
     port.swarms({ active: 't1', swarms: [], tiles: [] })
+    // The view the window opens in is sent after the window's own pushes, once they are done.
+    await Promise.resolve()
     port.unread([{ agentId: 'a1', machineId: 'm1', text: 'done', question: false }])
     port.appFocus('m1', 'a1')
     port.seen('a1', 'tok')
-    expect(seen.cable.calls.map(([name]) => name)).toEqual(['start', 'syncSwarms', 'syncAgents', 'replaceNotifications', 'followApp', 'agentSeen'])
+    expect(seen.cable.calls.map(([name]) => name)).toEqual(['start', 'syncSwarms', 'syncAgents', 'viewChanged', 'replaceNotifications', 'followApp', 'agentSeen'])
     expect(calls('followApp')).toEqual([['m1', 'a1']])
     expect(calls('agentSeen')).toEqual([['a1', 'tok']])
   })
@@ -2122,6 +2125,161 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
       await vi.advanceTimersByTimeAsync(20_000)
       expect(switches()).toEqual(['[device] app filter: switched · pick'])
       expect(calls('syncAgents')).toHaveLength(pushed)
+    })
+
+    describe('with a window open (docs/specs/2026-11-15-dial-follow-front-with-window.md)', () => {
+      const G1 = observedAgentId('claude', 'g-1')
+      const TAB = { active: 't1', swarms: [{ id: 't1', name: 'Tab', agentIds: [], panes: 0 }], tiles: [] }
+      const WAITS = 'npm test · answer in Ghostty'
+      /** Whether the connected dials say appFilter. */
+      const appsSaid = (on: boolean) => { (seen.cable as unknown as { apps: boolean }).apps = on }
+      /** Ghostty 2, VS Code 1, a window open on one tab, and `app` settled in front when one is named. */
+      const windowed = async (app?: string, apps = true) => {
+        vi.useFakeTimers()
+        const started = start({ faults: ['fleet'] })
+        appsSaid(apps)
+        await twoApps(started.port)
+        started.port.swarms(TAB)
+        if (app) host().front(app)
+        await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+        return started
+      }
+      const settle = async (app: string) => {
+        host().front(app)
+        await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+      }
+      const views = () => logs.filter((line) => line.includes('app filter: view'))
+      /** Ghostty's first session mid-turn, then waiting on its permission prompt. */
+      const waits = (port: DevicesPort) => {
+        inApp(port, 'g-1', 'ghostty', 'turn-start')
+        port.observed(asked({ sessionId: 'g-1' }))
+      }
+
+      it('the window opening, an app settling in front and a pick of Harness each log the view with its cause, and no app', async () => {
+        await windowed('ghostty')
+        expect(host().pickApp('harness')).toBe('tabs')
+        expect(views()).toEqual([
+          '[device] app filter: view tabs · window',
+          '[device] app filter: view apps · front',
+          '[device] app filter: view tabs · pick',
+        ])
+      })
+
+      it('a view change sends the dials their lists once', async () => {
+        await windowed()
+        expect(calls('viewChanged')).toHaveLength(1)
+        await settle('ghostty')
+        expect(calls('viewChanged')).toHaveLength(2)
+        host().pickApp('harness')
+        await vi.advanceTimersByTimeAsync(0)
+        expect(calls('viewChanged')).toHaveLength(3)
+        // A burst back to Ghostty: the pick of Harness holds through it, and nothing is sent.
+        host().front('vscode')
+        await settle('ghostty')
+        expect(calls('viewChanged')).toHaveLength(3)
+      })
+
+      it('on an app\'s ring an outside agent\'s turn, wait and reminder reach the dial, and on the tab none does', async () => {
+        const { port } = await windowed('ghostty')
+        seen.host.watching!(true)
+        await vi.advanceTimersByTimeAsync(0)
+        waits(port)
+        await vi.advanceTimersByTimeAsync(20_000)
+        expect(calls('turnStarted')).toEqual([[G1, '', undefined], [G1, WAITS, undefined], [G1, WAITS, undefined]])
+        expect(calls('question')).toEqual([[G1, expect.stringMatching(/^shown:/), [{ key: 'prompt', q: WAITS, options: ['In Ghostty'] }]]])
+        await settle('harness')
+        const told = { started: calls('turnStarted').length, asked: calls('question').length }
+        inApp(port, 'g-2', 'ghostty', 'turn-start')
+        port.observed(asked({ sessionId: 'g-2' }))
+        await vi.advanceTimersByTimeAsync(20_000)
+        expect(calls('turnStarted')).toHaveLength(told.started)
+        expect(calls('question')).toHaveLength(told.asked)
+      })
+
+      it('turning to an app\'s ring asks what waits and tells each agent mid-turn; turning back closes its question', async () => {
+        const { port } = await windowed()
+        waits(port)
+        expect(calls('question')).toEqual([])
+        expect(calls('turnStarted')).toEqual([])
+        await settle('ghostty')
+        expect(calls('question')).toEqual([[G1, expect.stringMatching(/^shown:/), [{ key: 'prompt', q: WAITS, options: ['In Ghostty'] }]]])
+        expect(calls('turnStarted')).toEqual([[G1, WAITS, undefined]])
+        const [[, id]] = calls('question') as [[string, string]]
+        await settle('harness')
+        expect(calls('questionClose')).toEqual([[G1, id]])
+      })
+
+      it('with a window and an app\'s ring, a prompt in the app in front asks the dials to follow, and the list a dial that says appFilter reads holds its agent', async () => {
+        const { port } = await windowed('ghostty')
+        inApp(port, 'g-1', 'ghostty', 'turn-start')
+        expect(calls('followLocal')).toEqual([[G1, 'prompt']])
+        expect((await host().listAgentSnapshot({ apps: true })).agents.map((a) => a.id)).toContain(G1)
+      })
+
+      it('the window closing from the tab reminds, and from an app\'s ring does not again', async () => {
+        const { port } = await windowed()
+        inApp(port, 'g-1', 'ghostty', 'turn-start')
+        expect(calls('turnStarted')).toEqual([])
+        port.swarms(null)
+        await vi.advanceTimersByTimeAsync(0)
+        expect(calls('turnStarted')).toEqual([[G1, '', undefined]])
+        port.swarms(TAB)
+        // Ghostty's ring: its agent mid-turn is told as the view turns to it, and not again as the window closes.
+        await settle('ghostty')
+        expect(calls('turnStarted')).toHaveLength(2)
+        port.swarms(null)
+        await vi.advanceTimersByTimeAsync(0)
+        expect(calls('turnStarted')).toHaveLength(2)
+      })
+
+      it('with a window open and no dial that says appFilter, an app\'s ring opens nothing', async () => {
+        const { port } = await windowed('ghostty', false)
+        seen.host.watching!(true)
+        waits(port)
+        await vi.advanceTimersByTimeAsync(20_000)
+        expect(calls('turnStarted')).toEqual([])
+        expect(calls('question')).toEqual([])
+        port.swarms(null)
+        await vi.advanceTimersByTimeAsync(0)
+        expect(calls('turnStarted')).toEqual([[G1, WAITS, undefined]])
+      })
+
+      it('a dial that says appFilter coming while the view is apps is asked what waits and told each agent mid-turn, and its going closes the question', async () => {
+        const { port } = await windowed('ghostty', false)
+        waits(port)
+        await vi.advanceTimersByTimeAsync(0)
+        expect(calls('question')).toEqual([])
+        expect(calls('turnStarted')).toEqual([])
+        appsSaid(true)
+        seen.host.watching!(true)
+        await vi.advanceTimersByTimeAsync(0)
+        expect(calls('question')).toEqual([[G1, expect.stringMatching(/^shown:/), [{ key: 'prompt', q: WAITS, options: ['In Ghostty'] }]]])
+        expect(calls('turnStarted')).toEqual([[G1, WAITS, undefined]])
+        const [[, id]] = calls('question') as [[string, string]]
+        // An older dial stays: the gate shuts again.
+        appsSaid(false)
+        seen.host.watching!(false)
+        expect(calls('questionClose')).toEqual([[G1, id]])
+      })
+
+      it('the shown app left as Harness logs "view tabs · empty", sends the dials their lists and closes the outside agents\' questions', async () => {
+        const { port } = await windowed('ghostty')
+        waits(port)
+        const [[, id]] = calls('question') as [[string, string]]
+        const changed = calls('viewChanged').length
+        vi.spyOn(AppFilter.prototype, 'shown').mockReturnValue('harness')
+        await host().listAgentSnapshot({ apps: true })
+        await vi.advanceTimersByTimeAsync(0)
+        expect(views().at(-1)).toBe('[device] app filter: view tabs · empty')
+        expect(calls('viewChanged')).toHaveLength(changed + 1)
+        expect(calls('questionClose')).toEqual([[G1, id]])
+      })
+
+      it('the window\'s focus is handed to the dials as before', async () => {
+        const { port } = await windowed('ghostty')
+        port.appFocus('m1', 'a1')
+        expect(calls('followApp')).toEqual([['m1', 'a1']])
+      })
     })
   })
 })
@@ -3518,6 +3676,15 @@ describe('selecting a tab moves the dial (docs/specs/2026-11-15-dial-terminal-fo
     expect(asked()).toEqual([[ID, 'tab']])
     // What the dials make of it is theirs to count.
     expect(tabLines()).toEqual([])
+  })
+
+  it('with a window open, a tab report whose app has settled in front asks the dials to follow, and the list holds its agent', async () => {
+    const { port, report, settle } = await dialWith()
+    port.swarms({ active: 't1', swarms: [{ id: 't1', name: 'Tab', agentIds: [], panes: 0 }], tiles: [] })
+    await settle('terminal-app')
+    expect(report('terminal-app', TTY)).toBeUndefined()
+    expect(asked()).toEqual([[ID, 'tab']])
+    expect((await host().listAgentSnapshot({ apps: true })).agents.map((a) => a.id)).toContain(ID)
   })
 
   it('a report before its app settles waits for the settle, then asks', async () => {
