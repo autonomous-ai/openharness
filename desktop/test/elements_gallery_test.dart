@@ -116,8 +116,14 @@ String _image(String id, Brightness brightness) =>
 
 Future<void> _show(WidgetTester tester, Brightness brightness) async {
   final old = grid.AppTheme.brightness.value;
+  final oldPalette = grid.AppTheme.palette.value;
+  // A palette carries its brightness, as the app's does: pane chrome reads it.
+  grid.AppTheme.palette.value = grid.AppTheme.paletteFor(brightness);
   grid.AppTheme.brightness.value = brightness;
-  addTearDown(() => grid.AppTheme.brightness.value = old);
+  addTearDown(() {
+    grid.AppTheme.brightness.value = old;
+    grid.AppTheme.palette.value = oldPalette;
+  });
   // Faye's Browser settings, as her computer keeps them, and her running browser's screen.
   final browserApp = _BrowserSettingsApp();
   addTearDown(browserApp.dispose);
@@ -285,8 +291,8 @@ class _Gallery extends StatelessWidget {
             ],
           ),
           section(
-            'browser-bar',
-            'Browser in an agent\'s bar, plain, open and running; its panel off, running, failed and stopping',
+            'browser-pane',
+            'Browser in a terminal pane\'s header, plain, open and running; its tile off, running, failed and stopping',
             [
               Row(
                 children: [
@@ -312,11 +318,13 @@ class _Gallery extends StatelessWidget {
                       key: ValueKey('gallery-browser-$agent'),
                       width: 340,
                       height: 230,
+                      // In the workspace, whose pane headers are compact.
                       child: BrowserPanel(
                         app: browserApp,
                         machineId: 'm',
                         agentId: agent,
                         thisComputer: true,
+                        compactHeader: true,
                         onClose: () {},
                         newView: _Screen.new,
                       ),

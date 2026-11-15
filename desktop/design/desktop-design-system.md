@@ -293,7 +293,7 @@ The gallery (`test/elements_gallery_test.dart`) draws these elements in light
 and dark, each section against its own images,
 `test/goldens/elements/<section>-{light,dark}.png`, so a pull request that
 changes one element changes only its section's images: `browser-setup`,
-`browser-settings`, `browser-bar` and `hachi-tab`. Words are left out of the
+`browser-settings`, `browser-pane` and `hachi-tab`. Words are left out of the
 comparison, since macOS and Linux smooth their edges differently; outside them
 at most 38 pixels of a section's image may differ, so a lost element fails. A
 new or changed element updates this document and the gallery, with its
@@ -301,32 +301,47 @@ section's images, in the same pull request.
 
 ## Agent Browser
 
-An agent's own sandboxed Chrome (`lib/browser/`). Nothing opens it since the
-Swarm was removed (2026-11-14): its button sat in the Swarm's agent chat bar.
+An agent's own sandboxed Chrome (`lib/browser/`), in a tile of its own left of
+that agent's terminal (`PaneKind.browser`), where a viewer sits: 70% beside a
+lone terminal. It moves and closes with that terminal, and like every viewer it
+is never in the saved layout or the desk.
 
 - **Browser button** (`BrowserButton`, `browser/browser_panel.dart`). The globe
-  (`AppIcons.globe`) in an agent's bar, selected while its panel is open. While
-  its browser runs (`ready`), a 6-point dot in `AppPalette.online`, the
-  connection dot's green, sits at the glyph's top right; the tooltip stays
-  `Browser` and its label reads `Browser, running`.
+  (`AppIcons.globe`) in a terminal pane's header, after the agent and model and
+  before ×, for a running agent on one of the person's own machines: never a
+  plain terminal, a machine shared with them, the web build or Windows. It
+  opens and closes the agent's Browser tile in this tab and is selected while
+  that tile is open. While its browser runs (`ready`), a 6-point dot in
+  `AppPalette.online`, the connection dot's green, sits at the glyph's top
+  right; the tooltip stays `Browser` and its label reads `Browser, running`.
+  The palette's `Toggle Browser` does the same for the focused agent.
+- **When the tile shows.** Opened by hand, it stays until closed by hand, its
+  browser on or off. A browser that comes on (a Start here or on another
+  computer, its agent running again) opens its tile; one closed while it ran
+  stays closed until it starts again. After a restart, an agent whose browser
+  is on gets its tile back and one whose browser is off does not. A stopped
+  agent's tile goes and comes back when it runs. Out of sight (a tab behind, a
+  zoomed pane) the tile ends its stream; in sight, it opens another.
 - **Set up Browser** (`BrowserSetupPrompt`, `browser/browser_setup_dialog.dart`).
-  The Browser panel's Install, on a computer with no Podman, asks once in the
+  The Browser tile's Install, on a computer with no Podman, asks once in the
   shared prompt (`DesktopPromptSurface`): the title in the dialog heading, then
   `Installs Podman on this computer to run the agent's Chrome. Asks for your
   password once. About 15 minutes, 3 GB.` in 13 body, `Podman on this computer
   won't start. Harness will set up its own.` on its own line when its Podman
   machine will not start. `Cancel` and the blue `Install`: Install starts the
   setup; Cancel does nothing.
-- **Browser panel** (`BrowserPanel`, `browser/browser_panel.dart`). The agent's
-  own Chrome, in a pane. Its header is `Browser` in 13 medium, then Stop
+- **Browser tile** (`BrowserPanel`, `browser/browser_panel.dart`). The agent's
+  own Chrome. Its header is a pane header (38 points in the workspace, carried
+  by a drag as every tile's): `Browser` in the pane title's face, then Stop
   (`AppIcons.circleStop`, tooltip `Stop`, an `AppIconButton` as the gear is,
   never a bare square, which is an
   unticked box and Maximize; there in every state while the browser is on, a
   failed one too, with no confirmation), the gear (`Browser settings`, which
-  opens them in the panel, off too), Paste (`AppIcons.clipboardPaste`, which
-  sends the clipboard's text, only while the screen shows) and ×. × only
-  hides the panel: the browser runs on. Off, one centred line in 13, `A sandboxed Chrome the agent
-  drives`, and the blue `Start` under it. Ready, the screen fills the panel:
+  opens them in the tile, off too), Paste (`AppIcons.clipboardPaste`, which
+  sends the clipboard's text, only while the screen shows) and the pane's ×
+  (`Close Browser`). × only hides the tile: the browser runs on. Off, one
+  centred line in 13, `A sandboxed Chrome the agent drives`, and the blue
+  `Start` under it. Ready, the screen fills the panel:
   the bundled noVNC page in the native webview, which the person uses as the
   agent does. It shows Chrome's window at 1:1, and the window follows the
   panel: the panel asks the computer for its size when the screen opens and
@@ -354,9 +369,9 @@ Swarm was removed (2026-11-14): its button sat in the Swarm's agent chat bar.
   from an older Harness, `Browser doesn't run on Windows yet`, `Only its owner
   can open this browser`, any other `Browser isn't available on Mac Studio
   right now`. The gallery draws the button plain, open and running, and the
-  panel off, running, failed and stopping.
+  tile off, running, failed and stopping.
 - **Browser settings** (`BrowserSettingsPage`, `browser/browser_settings_page.dart`).
-  Inside the agent's Browser panel, read from and saved to the agent's
+  Inside the agent's Browser tile, read from and saved to the agent's
   computer only. `‹ Browser settings` (a compact quiet `DesktopPill` with a
   left chevron) leads back. Under `Proxy`, 12 grey: the scheme (HTTP, HTTPS,
   SOCKS5) in an `AppSelectField`, host and port, username and password
@@ -570,6 +585,8 @@ Show a focus outline when a tab control is deliberately reached by keyboard
 navigation; the temporary input hold after Close does not add one.
 
 **Pane header** — terminal panes show agent, model and close at every width.
+An agent's pane on one of the person's own machines also shows the Browser
+globe just before × ([Agent Browser](#agent-browser)).
 Splitting is revealed at the pane edges; zoom remains available through menus,
 command search and shortcuts. Keep split, add and zoom icons out of the header.
 

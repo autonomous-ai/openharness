@@ -380,7 +380,7 @@ abstract final class AppPalette {
   static Color get onboardingTagline =>
       AppTheme.pick(const Color(0xFF7D5A2C), const Color(0xFFD4A574));
 
-  // A palette may bring its own three grays (Plum, Night, Cloud, Storm); the
+  // A palette may bring its own three grays (Night, Cloud, Storm); the
   // rest share these ramps.
   static Color get textPrimary =>
       AppTheme.surfacePalette.text ??

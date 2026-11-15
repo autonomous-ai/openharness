@@ -448,6 +448,13 @@ final harnessCommands = <HarnessCommand>[
     ShortcutGroup.panes,
     nativeAction: 'toggleViewer',
   ),
+  // The focused agent's own Chrome, beside its terminal (lib/browser/).
+  const HarnessCommand(
+    'pane.toggle_browser',
+    'Toggle Browser',
+    ShortcutGroup.panes,
+    keywords: ['chrome', 'web', 'agent browser'],
+  ),
   const HarnessCommand(
     'pane.toggle_composer',
     'Toggle Message Composer',

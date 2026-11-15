@@ -58,23 +58,35 @@ describe('a daemon under test', () => {
     }))).toBe('4321')
   })
 
-  // What asked, on 2026-11-14: models' process (`harnessd-models`), at each of its starts once a Swarm's grid was
-  // listed. The Swarm's pass (superTabs/swarmGrids.ts) sends `grid_swarm_sync`, which sets grid up first: installCli,
-  // the managed grid's manifest, then grid's public installer when there is still no `grid`.
+  // Removed roots on one Mac each kept a 19 MB runtime/grid-* (2026-11-14). What can still ask, in models' process
+  // (`harnessd-models`): a managed grid following its pin on every start, and grid's set-up on a grid feature's first
+  // use (the picker's Set up, a Get, a Use): installCli reads the managed grid's manifest, then runs grid's public
+  // installer when there is still no `grid`.
   it('asks no grid manifest and runs no grid installer beyond the machine', async () => {
     daemon = await IsolatedDaemon.create()
     expect(daemon.env.ADAPTER_GRID_RUNTIME_METADATA_URL).toBe('http://127.0.0.1:9/grid.json')
     expect(daemon.env.DISABLE_GRID_INSTALL).toBe('true')
-    // A test's own still stands (update.e2e.ts, harness/fleet.ts). Never started: it only shows whose word wins.
-    const own = await IsolatedDaemon.create({ env: { ADAPTER_GRID_RUNTIME_METADATA_URL: 'http://127.0.0.1:1/own.json', DISABLE_GRID_INSTALL: 'false' } })
+    // Nor the developer's grid login, control plane or grid: the Set up below would name their grid and ask its models.
+    expect(daemon.env.GRID_HOME).toBe(join(daemon.root, 'home', '.grid'))
+    expect(daemon.env.GRID_CONTROL_PLANE_URL).toBe('http://127.0.0.1:9')
+    expect(daemon.env.HARNESS_GRID_BIN).toBe('')
+    // A test's own still stands (update.e2e.ts, harness/fleet.ts, serviceProcesses.e2e.ts). Never started: it only
+    // shows whose word wins.
+    const own = await IsolatedDaemon.create({ env: { ADAPTER_GRID_RUNTIME_METADATA_URL: 'http://127.0.0.1:1/own.json', DISABLE_GRID_INSTALL: 'false',
+      HARNESS_GRID_BIN: '/own/grid' } })
     await own.close()
     expect(own.env.ADAPTER_GRID_RUNTIME_METADATA_URL).toBe('http://127.0.0.1:1/own.json')
     expect(own.env.DISABLE_GRID_INSTALL).toBe('false')
+    expect(own.env.HARNESS_GRID_BIN).toBe('/own/grid')
     await daemon.start()
     const client = await LocalClient.connect(daemon)
-    // The owner's computer keeping a Swarm's grid, as the Swarm's pass asks it: answered once grid's set-up gave up.
-    expect(await client.request('grid_swarm_sync', { grid: 'swarm-0123456789ab', members: [] }, 60_000)).toMatchObject({ ready: false })
+    // The picker's Set up, signed out: answered once grid's set-up gave up, at 'no-cli' without a `grid` on PATH, or at
+    // the grid name a signed-out daemon is never given with one. installCli runs before either (lib/gridAttach.ts): the
+    // manifest is asked and, with no `grid`, grid's installer.
+    expect(await client.request('grid_fleet_models_list', { setup: true }, 60_000)).toMatchObject({ gridSetupError: expect.stringMatching(/\S/) })
     client.close()
+    // Models' own lines reach the log the asserts below read.
+    expect(daemon.log()).toContain('[grid-attach] ')
     expect(daemon.log()).not.toContain('installing the Harness grid runtime')
     expect(daemon.log()).not.toMatch(/grid installer (exited|finished)|installed `grid` to/)
     expect(readdirSync(daemon.env.ADAPTER_RUNTIME_DIR!).filter((name) => name.startsWith('grid-'))).toEqual([])

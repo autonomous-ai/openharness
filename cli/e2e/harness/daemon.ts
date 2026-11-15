@@ -357,12 +357,17 @@ export class IsolatedDaemon {
       // Signed out, and nothing reaches beyond the machine.
       BACKEND_WS_URL: 'ws://127.0.0.1:9',
       WEB_URL: 'http://127.0.0.1:9',
-      // Nor grid's release server: removed roots on one Mac kept a 19 MB runtime/grid-0.3.63-darwin-arm64 each, since
-      // the Swarm's grid pass (superTabs/swarmGrids.ts) sends models a `grid_swarm_sync` at each of its starts, and
-      // grid's set-up (services/models.ts installCli) installs the managed grid. With no manifest to read, installCli
-      // goes on to grid's public installer: that is switched off too.
+      // Nor grid's release server: removed roots on one Mac kept a 19 MB runtime/grid-0.3.63-darwin-arm64 each
+      // (2026-11-14). Grid's set-up on a grid feature's first use (services/models.ts installCli: the picker's Set up,
+      // a Get, a Use) installs the managed grid, and a managed grid already here follows its pin on every models start.
+      // With no manifest to read, installCli goes on to grid's public installer: that is switched off too.
       ADAPTER_GRID_RUNTIME_METADATA_URL: 'http://127.0.0.1:9/grid.json',
       DISABLE_GRID_INSTALL: 'true',
+      // Nor the developer's grid login: their GRID_HOME's session would name their grid and fetch its models from
+      // their control plane, and their HARNESS_GRID_BIN would skip the set-up above (empty counts as unset).
+      GRID_HOME: join(dirs.home, '.grid'),
+      GRID_CONTROL_PLANE_URL: 'http://127.0.0.1:9',
+      HARNESS_GRID_BIN: '',
       // Claude Code's and Codex's hooks, installed as on a person's computer, into this home and CODEX_HOME
       // (assertHooksContained), and run by the fake engines. Every other engine's installer writes into
       // folders these tests have no engine for.

@@ -27,32 +27,26 @@ T wearing<T>(HarnessPalette palette, T Function() read) {
 }
 
 const newPalettes = [
-  HarnessPalette.plum,
   HarnessPalette.night,
   HarnessPalette.cloud,
   HarnessPalette.storm,
 ];
 
 void main() {
-  test('the four themes carry the grounds and text the brief names', () {
-    expect(HarnessPalette.plum.brightness, Brightness.light);
-    expect(HarnessPalette.plum.background, const Color(0xffffffff));
-    expect(HarnessPalette.plum.text, const Color(0xff1d1c1d));
-    expect(HarnessPalette.plum.sidebar, const Color(0xff3f0e40));
-
+  test('the three themes carry the grounds and text the brief names', () {
     expect(HarnessPalette.night.brightness, Brightness.dark);
     expect(HarnessPalette.night.background, const Color(0xff1a1d21));
-    expect(HarnessPalette.night.sidebar, const Color(0xff19171d));
+    expect(HarnessPalette.night.workspace, const Color(0xff19171d));
 
     expect(HarnessPalette.cloud.brightness, Brightness.light);
     expect(HarnessPalette.cloud.background, const Color(0xffffffff));
-    expect(HarnessPalette.cloud.sidebar, const Color(0xfff2f3f5));
+    expect(HarnessPalette.cloud.workspace, const Color(0xfff2f3f5));
     expect(HarnessPalette.cloud.tabBar, const Color(0xffe3e5e8));
     expect(HarnessPalette.cloud.text, const Color(0xff313338));
 
     expect(HarnessPalette.storm.brightness, Brightness.dark);
     expect(HarnessPalette.storm.background, const Color(0xff313338));
-    expect(HarnessPalette.storm.sidebar, const Color(0xff2b2d31));
+    expect(HarnessPalette.storm.workspace, const Color(0xff2b2d31));
     expect(HarnessPalette.storm.tabBar, const Color(0xff1e1f22));
 
     // Our own plain names, never another product's.
@@ -62,12 +56,7 @@ void main() {
         isNot(matches(RegExp('slack|discord|aubergine'))),
       );
     }
-    expect(newPalettes.map((p) => p.label), [
-      'Plum',
-      'Night',
-      'Cloud',
-      'Storm',
-    ]);
+    expect(newPalettes.map((p) => p.label), ['Night', 'Cloud', 'Storm']);
     // Paper and Mist stay, and the default is still Graphite.
     expect(HarnessPalette.values, contains(HarnessPalette.paper));
     expect(HarnessPalette.values, contains(HarnessPalette.mist));

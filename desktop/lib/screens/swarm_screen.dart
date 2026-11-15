@@ -3287,6 +3287,14 @@ class _SwarmScreenState extends State<SwarmScreen> {
     }
   }
 
+  /// The focused agent's Browser: its terminal or its tile, or a viewer of it.
+  void _toggleFocusedBrowser() {
+    final focused = WorkspacePaneContext.focused(app);
+    if (focused?.agentId case final id?) {
+      unawaited(app.toggleBrowserPane(focused!.pane.machineId, id));
+    }
+  }
+
   void _footerPreviewChanged(bool current) {
     if (!mounted || _footerPreviewCurrent == current) return;
     _footerPreviewCurrent = current;
@@ -7412,6 +7420,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     },
     'agent.fork': _forkAgent,
     'pane.toggle_viewer': _toggleFocusedViewer,
+    'pane.toggle_browser': _toggleFocusedBrowser,
     'pane.toggle_composer': () {
       if (app.focusedPaneId case final id?) app.toggleComposer(id);
     },
@@ -7481,6 +7490,12 @@ class _SwarmScreenState extends State<SwarmScreen> {
           (id == 'agent.share' ||
               agent.viewerUrl != null ||
               agent.viewerError != null);
+    }
+    if (id == 'pane.toggle_browser') {
+      final focused = WorkspacePaneContext.focused(app);
+      final agentId = focused?.agentId;
+      return agentId != null &&
+          app.offersBrowser(focused!.pane.machineId, agentId);
     }
     if (id == 'pane.toggle_composer') {
       final pane = app.focusedPane;
