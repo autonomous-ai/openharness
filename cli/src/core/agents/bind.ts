@@ -345,8 +345,13 @@ export function createBinding({
     const authority = paneReadIdentity(agent)
     const current = () => !changing(agent.agentId) && !isRecentlyDeleted(agent.agentId)
       && paneReadIdentity(registry.byProcess(observed.engine, observed.processIdentity)) === authority
+    // Whether this pass ran a native read, and whether anything in it said to hold the agent: a read that failed, a
+    // refused register, Hermes's follower. A register refused in the words of the hold already there changes nothing on
+    // the row (its transcript check reads with the lookups' own scan), and still says to hold.
+    let ran = false, held = false
     /** Whether this set a hold on the row: one already there in the same words is left as it is. */
     const hold = (error: unknown): boolean => {
+      held = true
       if (!current()) return false
       const reason = error instanceof Error ? error.message : String(error)
       const set = registry.setIdentityHold(agent.agentId, reason)
@@ -360,12 +365,10 @@ export function createBinding({
     }
     // Only native reads are contained here. A rejected lookup cannot end the serial
     // discovery/readiness pass or bind an unwritten session as if evidence were absent.
-    let ran = false, failed = false
     const read = async <T>(work: () => Promise<T>): Promise<{ value: T } | null> => {
       ran = true
       try { return { value: await work() } }
       catch (error) {
-        failed = true
         if (hold(error)) rememberReadHold(agent.agentId)
         return null
       }
@@ -379,12 +382,13 @@ export function createBinding({
       return !Number.isFinite(ownerStarted) || (Number.isFinite(observedStarted) && observedStarted > ownerStarted)
     }
     await bindPass(observed, agent, { current, hold, commit, read, mayClaim })
-    // A pass whose native reads all completed lets go of the hold an earlier pass's failed read set, and of no other: the
-    // row must still carry that very hold, and be the row this pass began with (`current`), so every read here began
-    // after the hold was set (core rule 6). A pass that read nothing, or that threw, proves nothing.
+    // A pass whose native reads all completed, and that nothing in it held, lets go of the hold an earlier pass's failed
+    // read set, and of no other: the row must still carry that very hold, and be the row this pass began with
+    // (`current`), so every read here began after the hold was set (core rule 6). A pass that read nothing, or that
+    // threw, proves nothing.
     const row = readHeld(agent.agentId)
     if (!row) { readHolds.delete(agent.agentId); return }
-    if (!ran || failed || !current()) return
+    if (!ran || held || !current()) return
     readHolds.delete(agent.agentId)
     registry.setIdentityHold(agent.agentId, undefined)
     announceSession(row)
