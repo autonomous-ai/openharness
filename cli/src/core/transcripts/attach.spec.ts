@@ -1514,10 +1514,10 @@ describe('attaching a session', () => {
       // waited two seconds, or after a fifth retry that found the session bound anew, gave up without trying at all.
       it('counts from one second again for the session bound anew while its retry waited', async () => {
         fakeTimers(); quiet()
-        const run = setup(), row = session('claude', transcript([CLAUDE_PROMPT]))
+        const run = setup(), file = transcript([CLAUDE_PROMPT]), row = session('claude', file)
         vi.mocked(run.deps.runtimeProfiles.beginHydrate).mockReturnValue({ ...run.profile, commitWith: () => false })
         await run.attach.attachSession(row)
-        const rebound = session('claude', row.transcriptPath, { boundAt: 2 })
+        const rebound = session('claude', file, { boundAt: 2 })
         await vi.advanceTimersByTimeAsync(1_000)
         expect(reads(run)).toBe(1)
         // The new binding's attach, superseded in its turn.
