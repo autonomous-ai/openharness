@@ -139,6 +139,8 @@ interface Entry {
   pid: number
   /** Its latest event's host hints: none for a session the scan found, until its first. */
   hints: Readonly<Record<string, string>>
+  /** The process its latest event came from: none for a session the scan found, until its first. */
+  caller?: number
   /** Every pane an adapter knows it by, from its latest event and its tty, in the adapters' order. */
   panes: readonly Located[]
   /** The process its tty was read for, its latest in a tab app, and that tty once read. */
@@ -351,7 +353,7 @@ export class ObservedSource implements HostSource {
 
   /** Every pane its adapters know it by, afresh: a session resumed elsewhere keeps none it left. */
   private locate(entry: Entry): void {
-    const place = { host: entry.agent.host, app: entry.agent.app, hints: entry.hints, tty: entry.tty }
+    const place = { host: entry.agent.host, app: entry.agent.app, hints: entry.hints, tty: entry.tty, pid: entry.caller }
     entry.panes = (this.deps.actions?.adapters ?? []).flatMap((adapter) => {
       const pane = adapter.paneOf(place)
       return pane ? [{ adapter, pane }] : []
@@ -424,6 +426,7 @@ export class ObservedSource implements HostSource {
     delete a.appPending
     // Every event's own: a session resumed elsewhere must not be typed into the terminal it left.
     entry.hints = e.hostHints
+    entry.caller = e.callerPid
     this.locate(entry)
     entry.bundle = bundleOf(a.host, e.hostHints)
     if (e.cwd) a.cwd = e.cwd

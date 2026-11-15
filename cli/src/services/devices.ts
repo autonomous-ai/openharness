@@ -38,8 +38,9 @@ import { createOpenActions } from '../cable/hosts/open.js'
 import { createOrcaAdapter, orcaDeps, type OrcaDeps } from '../cable/hosts/orca.js'
 import { readRecordName } from '../cable/hosts/recordName.js'
 import { HostRegistry } from '../cable/hosts/registry.js'
-import { learnApps } from '../cable/hosts/scannedApp.js'
+import { learnApps, readProcessNames } from '../cable/hosts/scannedApp.js'
 import { createTabsAdapter, readTty, type Tab } from '../cable/hosts/tabs.js'
+import { createTmuxAdapter } from '../cable/hosts/tmux.js'
 import type { HostAgent, HostAgentState } from '../cable/hosts/types.js'
 import { createWeztermAdapter } from '../cable/hosts/wezterm.js'
 import { PetStore } from '../cable/pets/store.js'
@@ -299,9 +300,12 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // One with no `show` gets none: the source reads whether it has one (observed.ts rest).
     return show ? { ...noted, show: (pane, agentId) => { noteMove(); return show(pane, agentId) } } : noted
   }
-  /** The apps an outside agent runs in, in the order its panes are kept: each verb of the dial takes the first that can. */
+  /** The apps an outside agent runs in, in the order its panes are kept: each verb of the dial takes the first that can.
+   *  The nearest host first: a multiplexer keeps the environment it started in, so in a tmux pane WezTerm's and Orca's
+   *  values name the terminal the tmux server began in, and herdr inside tmux carries tmux's pane. */
   const adapters: readonly HostAdapter[] = [
     createHerdrAdapter(apps),
+    createTmuxAdapter({ run: apps.run, processes: readProcessNames, log }),
     createWeztermAdapter(apps),
     createOrcaAdapter(apps),
     // A rest's continue link: the app's attach that follows is the dial's own echo.
