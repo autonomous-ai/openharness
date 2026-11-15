@@ -4,6 +4,7 @@
  * (harness/fakeDial.ts) on the desk lists it beside a Harness agent in a tmux pane, with no window open:
  * - the machine list, each agent with where it lives and what the dial can do with it;
  * - the agent outside a pane goes idle, working, done with its answer, and waits for the person;
+ * - the machine list keeps its order while an agent works, and a new agent comes last;
  * - it goes when its process does, and one already running when the dial is plugged in is listed;
  * - a window brings back its tab's list, and closing it the machine's;
  * - talking to it is refused kindly, and `HARNESS_DEVICE_OBSERVED=off` leaves only the Harness agent.
@@ -233,6 +234,30 @@ describe('the device without the app', () => {
     await heard(dial, (m) => m.agentId === engine.id && (m.t === 'turn.done' || ((m.t === 'turn.started' || m.t === 'turn.activity') && m.text === '')),
       'the waiting line gone', answered)
     await heard(dial, (m) => m.t === 'turn.done' && m.agentId === engine.id, 'its turn done', answered)
+  })
+
+  it('the machine list keeps its order while an agent works, and a new agent comes last', async () => {
+    const { d, desk } = await fresh()
+    const dial = await desk.plug('E2E-A', 'e2:e0:00:00:00:0a')
+    await heard(dial, (m) => m.t === 'agents.end', 'the first list')
+    // Listed with the app its hook named: a row the open scan found first is sent again once that hook comes.
+    const settled = (id: string) => (r: Roster) => r.rows.find((row) => row.id === id)?.host === 'ghostty'
+    const first = await startOutside(d, 'ring-a', { TERM_PROGRAM: 'ghostty' })
+    await showing(dial, 'the first agent listed', settled(first.id))
+    const second = await startOutside(d, 'ring-b', { TERM_PROGRAM: 'ghostty' })
+    const two = await showing(dial, 'both agents listed', settled(second.id))
+    expect(ids(two)).toEqual([first.id, second.id])
+    const lists = rosters(dial).length
+    const since = dial.messages.length
+    // A whole turn: working, then done and not yet seen. Each used to move it and send the list again.
+    first.type('hello from the ring')
+    await heard(dial, (m) => m.t === 'turn.done' && m.agentId === first.id, 'its turn done', since)
+    const third = await startOutside(d, 'ring-c', { TERM_PROGRAM: 'ghostty' })
+    await showing(dial, 'the new agent listed', (r) => ids(r).includes(third.id))
+    // Every list sent since the turn began holds all three, in the order they came: none was sent for the turn itself.
+    const sent = rosters(dial).slice(lists).map(ids)
+    expect(sent.length).toBeGreaterThan(0)
+    for (const order of sent) expect(order).toEqual([first.id, second.id, third.id])
   })
 
   it('it disappears when its process exits', async () => {

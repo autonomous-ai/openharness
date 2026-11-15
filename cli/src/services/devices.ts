@@ -578,7 +578,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     timer.unref()
     endings.set(agentId, timer)
   }
-  /** Each observed agent mid-turn that the dial lists (ten at most of the fifty), told again: the dial forgets a turn it
+  /** Each observed agent mid-turn that the dial lists (sixteen at most of the fifty), told again: the dial forgets a turn it
    *  hears nothing of for 25 s, and one that just came, or whose window just closed, has heard nothing of it yet. */
   const remind = async (): Promise<void> => {
     const mid = (observed?.list() ?? []).filter(busy)
