@@ -88,8 +88,10 @@ shows its pane in tmux and brings its terminal app forward. An agent in a tmux p
   accepted: no firmware change.
 
 **The tap** (`cable/hosts/open.ts`):
-- `paneOf` reads `TMUX_PANE` (`/^%[0-9]{1,9}$/`) as pane `{ app: 'tmux' }`. A nearer host's pane read before it wins
-  (herdr, WezTerm, Orca).
+- `paneOf` reads `TMUX_PANE` (`/^%[0-9]{1,9}$/`) as pane `{ app: 'tmux' }`, in the order `detectHost` reads hosts:
+  herdr, then tmux, then WezTerm and Orca (PM, 2026-11-15, after the final review). A tmux server keeps the environment it
+  started in, so in a tmux pane `WEZTERM_PANE` and `ORCA_TERMINAL_HANDLE` name the terminal the server began in, not
+  where the agent is; the same reason its Orca handle is dropped for voice.
 - Focus runs `tmux` with no shell, each value one argument, under `RUN_TIMEOUT_MS`:
   1. `tmux display-message -p -t <pane> '#{pane_pid}'`. The pane's process must be the agent's process or one of its
      parents (at most `WALK_PARENTS`, from the process table the open scan already reads). Otherwise this is not the
@@ -103,8 +105,9 @@ shows its pane in tmux and brings its terminal app forward. An agent in a tmux p
 - The tmux is the daemon's: the same binary and server as `lib/tmux.ts`. The hook's `TMUX` (the socket path) is not
   sent: it is longer than a hint takes, and it is a path someone could shape.
 - Step 2 is allowed by Q1 (Decided): only this switch, only on the person's own pane, after step 1's check.
-- After #4331: the agent's tty in tmux is the pane's, never a terminal tab's, so the tab selection finds no tab.
-  The tmux pane decides, and the plan checks this against #4331's code once it is on `main`.
+- After #4331: the agent's tty in tmux (or Zellij, herdr) is the multiplexer pane's, never a terminal tab's. An agent
+  gets a terminal tab only while the tab app is its nearest host, so no tab select is sent for it; the tmux pane
+  decides (final review, 2026-11-15).
 
 **Voice.** Through the mod only, as for any agent outside a pane (`ObservedSource.send`). Nothing is typed into a tmux
 pane the person owns: `tmux send-keys` for an agent with no mod is not in this work.
