@@ -113,29 +113,10 @@ enum HarnessPalette {
     search: Color(0xffdce4ee),
     accent: Color(0xff2f5bb8),
   ),
-  // Task #3006 (Dee, 11-05): four neutral themes modeled on the two most used
+  // Task #3006 (Dee, 11-05): neutral themes modeled on the two most used
   // team chat apps, untinted so the text carries the page. Each brings its own
   // three grays (text, muted for times and names, faint for hints) and one
   // accent for links, the unread dot and buttons; red stays for counts.
-  plum(
-    'Plum',
-    'White with a plum sidebar',
-    brightness: Brightness.light,
-    foreground: Color(0xff1d1c1d),
-    text: Color(0xff1d1c1d),
-    muted: Color(0xff616061),
-    faint: Color(0xff686768),
-    background: Color(0xffffffff),
-    panel: Color(0xfff8f8f8),
-    card: Color(0xfff8f8f8),
-    hover: Color(0xffefefef),
-    workspace: Color(0xfff8f8f8),
-    tabBar: Color(0xfff4f4f4),
-    search: Color(0xffededed),
-    accent: Color(0xff1264a3),
-    // The one dark surface in a light theme, shown in its card.
-    sidebar: Color(0xff3f0e40),
-  ),
   night(
     'Night',
     'Near-black, untinted',
@@ -205,7 +186,6 @@ enum HarnessPalette {
     this.muted,
     this.faint,
     this.errorInk,
-    this._sidebar,
   });
 
   final String label, description;
@@ -215,20 +195,12 @@ enum HarnessPalette {
 
   /// The palette's own text, muted and faint inks. Null keeps the app's
   /// shared ramp for this brightness (`AppPalette.textPrimary` and the rest),
-  /// which is what every palette before these four uses.
+  /// which is what every palette before these three uses.
   final Color? text, muted, faint;
 
   /// Error ink, where the shared one for this brightness is too dim on the
   /// palette's grounds.
   final Color? errorInk;
-
-  final Color? _sidebar;
-
-  /// A sidebar's ground: the workspace color unless the palette gives
-  /// the sidebar one of its own. Only the palette's card in Appearance draws
-  /// it: the Swarm's left pane, the one sidebar that wore it, went on
-  /// 2026-11-14.
-  Color get sidebar => _sidebar ?? workspace;
   bool get isDark => brightness == Brightness.dark;
 
   static HarnessPalette fromId(String? id) => byId(id) ?? graphite;
