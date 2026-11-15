@@ -2081,6 +2081,17 @@ describe('the dial reaches the fleet through the core\'s port', () => {
       } finally { vi.useRealTimers() }
     })
 
+    it('on the tab, where no machine list is read, a session that moved into a Harness pane takes no words as outside', async () => {
+      const { host, w, observed, heard } = setup()
+      onTab(host, ['r1'])
+      // The dial may still hold the old id; the Harness agent r1 runs the session now.
+      const advertised = w.sessions
+      w.sessions = () => [...advertised(), { agentId: 'r1', sessionId: 's-o1' } as unknown as RegisteredSession]
+      expect(await host.sendTurn('o1', 'ship it')).toMatchObject({ ok: false })
+      expect(observed.send).not.toHaveBeenCalled()
+      expect(JSON.stringify(heard())).not.toContain('o1')
+    })
+
     // The dial only shows a waiting prompt (docs/specs/2026-11-13-device-claude-orca.md): an answer for an agent outside
     // Harness, whatever its id, approves nothing, and the fleet never hears of it.
     it('an answer or a reviewed answer for an agent outside Harness, an approval\'s id or not, reaches nothing', async () => {
