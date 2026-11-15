@@ -63,7 +63,7 @@ The core's files and lines: 543 / 93,160 before (main at 5c3703b042), 543 / 93,0
 
 ## Step 2, done (branch core-routes-3): the account's routes and the usage report's names, to the gateway
 
-The core's files and lines: 543 / 93,002 before (main at 85d8e61897), 541 / 92,639 after (tools/coreCount.mjs). Out of
+The core's files and lines: 544 / 92,925 before (main at 20534f8822), 542 / 92,562 after (tools/coreCount.mjs). Out of
 the core's process: lib/appProductUsageReport.ts, lib/productUsageSignals.ts, lib/storeProxy.ts (deleted). In:
 core/usageOutcomes.ts.
 
