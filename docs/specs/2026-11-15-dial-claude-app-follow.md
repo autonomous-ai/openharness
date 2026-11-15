@@ -95,8 +95,7 @@ It moves the dial when all of these hold:
 - the Claude app has settled in front (`cableHost.settledApp() === 'claude'`);
 - a dial is linked and its ring holds the agent.
 
-The move goes through the path a prompt takes (`followPrompt` today, `followLocal(agentId, 'attach')` once
-`feat/dial-terminal-follow` lands it), so it keeps followApp's queue, its list before its focus and its echo guard: the
+The move goes through the path a prompt takes (`followLocal(agentId, 'attach')`), so it keeps followApp's queue, its list before its focus and its echo guard: the
 dial's own report of the move starts no swipe rest. An agent the dial already shows: nothing is sent.
 
 **The app settling in front (6).** The devices keep the last attach that named a listed Claude app agent:
@@ -127,18 +126,29 @@ take a second kind of pane beside Orca's terminal: a Claude app session, `opens.
 
 ### Measures
 
-Daemon log counts, no content and no identifiers: dial moves by attach; attaches skipped by reason (echo, not in
-front, unknown agent, no tile); moves on the app settling in front; swipe links by outcome (ok, failed, busy,
-superseded), the last through #4311's swipe count.
+Daemon log counts, no content and no identifiers: dial moves by attach (`[device] attach · moved`); attaches skipped
+by reason (echo, not in front, unknown agent, no tile); moves on the app settling in front (`[device] settle · moved`,
+`· skipped · echo | no tile`); swipe links by outcome (ok, failed, busy, superseded), the last through #4311's swipe
+count. A tap's continue link counts as the dial's own link for the echo, as a swipe's does.
+
+### Known limits
+
+- The 2 s echo counts from the link's start. An attach that comes later (a Claude Code process the app has to start,
+  or a mod that has to ask the launcher again) is followed as the person's choice.
+- A swipe still waiting for its 400 ms rest when the app settles in front is overridden by the settle, as a prompt
+  overrides it today.
+- Each well-formed attach writes one log line while a dial is linked, as each prompt does: a same-account process that
+  posts attaches in a loop is held to the listener's rate (10 a second per connection).
 
 ## Coordination with `feat/dial-terminal-follow`
 
-Both branches are stacked on #4311 and change the same follow code. No commit is shared between the two pull requests;
-whichever merges second rebases onto the other.
+Both branches are stacked on #4311 and change the same follow code. The shared frame is the other branch's first task,
+cherry-picked here unchanged (its red and code commits, PM for Diego, 2026-11-15); whichever pull request merges second
+drops those two commits in its rebase.
 
-- `cable/cableSession.ts`: terminal-follow renames `followPrompt` to `followLocal(agentId, cause)`, `cause` one of
-  `'prompt' | 'tab' | 'attach'`. This branch calls `followPrompt` and counts attach moves on its own side; after a
-  rebase onto `followLocal` it passes `'attach'`.
+- `cable/cableSession.ts`: `followPrompt` is `followLocal(agentId, cause)`, `cause` one of `'prompt' | 'tab' |
+  'attach'`. This branch passes `'attach'` for both an attach and the settle, and tells the two apart in its own
+  log lines (`services/devices.ts`), so the shared type stays the same on both branches.
 - `cable/hosts/observed.ts`: terminal-follow makes `hasPane` / `showPane` dispatch on the kind of pane (`orca`, `tty`),
   each with its own action in `ObservedActions`. This branch adds the `claude` kind with a `claudeShow` action.
 - `services/devicesListener.ts`, `services/devices.ts`: each branch adds its own handler (`attach` here; a stream
