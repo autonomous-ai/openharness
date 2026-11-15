@@ -41,6 +41,8 @@ type World = {
   enabled: boolean
   /** The path of each file the mod read. */
   reads: string[]
+  /** How long each read of a file takes, by the clock. */
+  readMs: number
 }
 
 /**
@@ -66,7 +68,7 @@ function world(
   const clock = mock.clock(on, { now: 1_000_000 })
   const w: World = {
     clock, runs: [], inits: [], polls: [], attaches: [], devices, devicesRefuse: false, submitted: [], envAsked: [], steps,
-    enabled: true, reads: [],
+    enabled: true, reads: [], readMs: 0,
   }
   const env: Record<string, string> = {
     HOME,
@@ -78,8 +80,9 @@ function world(
     w.envAsked.push(e.name)
     return { value: env[e.name] }
   })
-  on('fs.read', (_, e) => {
+  on('fs.read', async (_, e) => {
     w.reads.push(e.path)
+    if (w.readMs) await clock.sleep(w.readMs)
     if (settings === 'unreadable') return { deny: 'EACCES' }
     return { value: JSON.stringify({ enabledPlugins: w.enabled ? { 'harness-device@openharness': true } : {} }) }
   })
@@ -525,6 +528,23 @@ test('shown and left again while the launcher is asked: nothing is sent', async 
   await attach($)
   await w.clock.settle()
   expect(w.runs).toHaveLength(2)
+  expect(w.attaches).toEqual([ATTACH])
+})
+
+// The send reads the settings before it tells the devices: what came during that read decides.
+test('while the settings are read: left again sends nothing, and shown twice is told once', async ($, on) => {
+  const w = world(on, { answers: [held(25_000)] })
+  await start($, w)
+  w.readMs = 1_000
+  await attach($)
+  await w.clock.settle()
+  await detach($)
+  await w.clock.advance(1_000)
+  expect(w.attaches).toHaveLength(0)
+  await attach($)
+  await attach($)
+  await w.clock.settle()
+  await w.clock.advance(1_000)
   expect(w.attaches).toEqual([ATTACH])
 })
 
