@@ -60,7 +60,7 @@ import {
 
 import { ensureTmuxOnPath, type TmuxPathOutcome } from './tmuxOnPath.js'
 import { harnessdEnv, isHarnessdVariable } from './harnessdEnv.js'
-import { AGENT_SESSION_VARIABLES, ORCA_VARIABLES, isAgentSessionVariable } from './agentSessionEnv.js'
+import { AGENT_SESSION_VARIABLES, ORCA_VARIABLES } from './agentSessionEnv.js'
 import { LEAN_CORE_SCRIPT_ENV } from '../harnessd/protocol.js'
 import { serviceProcessesEnv } from '../harnessd/services.js'
 import { DEFAULT_HOST_THEME, windowStyleOf, type HostTheme } from './hostTheme.js'
@@ -118,12 +118,14 @@ export const HARNESSD_SET_VARIABLES: readonly string[] = [
 
 /**
  * What the core unsets in the tmux server's global environment: every agent session name, Orca's known names, every
- * `HARNESSD_*` harnessd sets, and every `HARNESSD_*` and `ORCA_*` [own] has, this process's as it was started by
- * default, its names alone. Named, never listed from the server: that environment is the person's, their keys among
- * it. A `HARNESSD_*` only an older build set, and an `ORCA_*` not in ORCA_VARIABLES, stay until the server restarts.
+ * `HARNESSD_*` harnessd sets, and every `HARNESSD_*` [own] has, this process's as it was started by default, its names
+ * alone. For Orca only the fixed ORCA_VARIABLES list applies: dropAgentSessionEnv() has cleared every `ORCA_*` from this
+ * process before tmux is prepared, so [own] holds none. Named, never listed from the server: that environment is the
+ * person's, their keys among it. A `HARNESSD_*` only an older build set, and an `ORCA_*` not in ORCA_VARIABLES, stay
+ * until the server restarts.
  */
 export function serverVariablesToUnset(own: NodeJS.ProcessEnv = harnessdEnv()): string[] {
-  const ownNames = Object.keys(own).filter((name) => isHarnessdVariable(name) || isAgentSessionVariable(name))
+  const ownNames = Object.keys(own).filter(isHarnessdVariable)
   return [...new Set([...AGENT_SESSION_VARIABLES, ...ORCA_VARIABLES, ...HARNESSD_SET_VARIABLES, ...ownNames])]
 }
 

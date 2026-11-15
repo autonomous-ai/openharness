@@ -843,9 +843,9 @@ describe('clearEnv command shape', () => {
 // service token among them (found 2026-10-11: `env` in an agent's pane listed every one). The core names what
 // it unsets and never lists the server's environment: that is the person's, their keys among it.
 describe('harnessd\'s variables in the tmux server\'s environment', () => {
-  it('are the agent session names, Orca\'s, harnessd\'s own, and every HARNESSD_* and ORCA_* this process has, once each', () => {
-    const unset = serverVariablesToUnset({ HARNESSD_TEST_FAULTS: 'fixture', ORCA_FUTURE_SETTING: 'fixture', OPENAI_API_KEY: 'fixture-key', PATH: '/bin' })
-    expect(new Set(unset)).toEqual(new Set([...AGENT_SESSION_VARIABLES, ...ORCA_VARIABLES, ...HARNESSD_SET_VARIABLES, 'HARNESSD_TEST_FAULTS', 'ORCA_FUTURE_SETTING']))
+  it('are the agent session names, Orca\'s, harnessd\'s own, and every HARNESSD_* this process has, once each', () => {
+    const unset = serverVariablesToUnset({ HARNESSD_TEST_FAULTS: 'fixture', OPENAI_API_KEY: 'fixture-key', PATH: '/bin' })
+    expect(new Set(unset)).toEqual(new Set([...AGENT_SESSION_VARIABLES, ...ORCA_VARIABLES, ...HARNESSD_SET_VARIABLES, 'HARNESSD_TEST_FAULTS']))
     expect(unset).toHaveLength(new Set(unset).size)
   })
 
@@ -857,19 +857,19 @@ describe('harnessd\'s variables in the tmux server\'s environment', () => {
 
   it('are, in an environment as a server keeps one, what its listing and the prefix filter removed, and no key of the person\'s', () => {
     // As an earlier boot's core and an agent's shell in an Orca terminal left a server, beside the person's own
-    // settings and keys. ORCA_FUTURE_SETTING stands for a name Orca adds that this core finds in its own environment.
+    // settings and keys.
     const server = ['HOME', 'PATH', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'MY_HARNESSD_NOTE',
       'AI_AGENT', 'CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_MESSAGING_TOKEN', 'CLAUDE_CODE_HOST_SESSION_ID',
       'CODEX_THREAD_ID', 'CODEX_SANDBOX',
       'ORCA_TERMINAL_HANDLE', 'ORCA_PANE_KEY', 'ORCA_AGENT_SESSION_ID', 'ORCA_APP_VERSION', 'ORCA_PAIRING_CODE',
-      'ORCA_AGENT_SESSION_SPAWN_TOKEN', 'ORCA_USER_DATA_PATH', 'ORCA_ENVIRONMENT', 'ORCA_FUTURE_SETTING',
+      'ORCA_AGENT_SESSION_SPAWN_TOKEN', 'ORCA_USER_DATA_PATH', 'ORCA_ENVIRONMENT',
       'HARNESSD_SERVICE_TOKEN', 'HARNESSD_SUPERVISED', 'HARNESSD_RESTARTS', 'HARNESSD_WATCHDOG_MS', 'HARNESSD_JUDGES_SUPERSEDED',
       'HARNESSD_UPDATES', 'HARNESSD_LAST_EXIT', 'HARNESSD_SAFE_MODE', 'HARNESSD_SERVICES', 'HARNESSD_SERVICE_PROCESSES',
       'HARNESSD_ENGINE_LIVE', 'HARNESSD_ENGINE_PROVIDER_MOVE', 'HARNESSD_CORE_SCRIPT', 'HARNESSD_JUDGES_PTY', 'HARNESSD_SERVICE',
       'HARNESSD_BUNDLE', 'HARNESSD_BUNDLE_SHA256', 'HARNESSD_LEAN_FINGERPRINT', 'HARNESSD_RESUME', 'HARNESSD_PLATFORM',
       'HARNESSD_TEST_X']
     const listedAndFiltered = server.filter((name) => isHarnessdVariable(name) || isAgentSessionVariable(name))
-    const unset = new Set(serverVariablesToUnset({ HARNESSD_TEST_X: '1', ORCA_FUTURE_SETTING: '1', OPENAI_API_KEY: 'fixture-key' }))
+    const unset = new Set(serverVariablesToUnset({ HARNESSD_TEST_X: '1', OPENAI_API_KEY: 'fixture-key' }))
     expect(server.filter((name) => unset.has(name))).toEqual(listedAndFiltered)
     expect([...unset]).not.toContain('OPENAI_API_KEY')
   })
