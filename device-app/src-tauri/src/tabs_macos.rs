@@ -377,6 +377,7 @@ mod tests {
     use super::*;
     use crate::tabs::{CALL_TIMEOUT, NO_TTY};
     use std::process::Command;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
     const T: TabApp = TabApp::Terminal;
@@ -435,6 +436,17 @@ end focus_tty
     /// Stands in for an app's script in the tty check's test alone: no other test compiles it.
     const SENT: &str =
         "on select_tty(t, in_front)\n\treturn true\nend select_tty\n\non focus_tty(t)\n\treturn true\nend focus_tty";
+
+    /// Stands in for every app's script in the scripting check's tests alone: no other test compiles it.
+    const CHECKED: &str = "on selected_tty()\n\treturn \"/dev/ttys023\"\nend selected_tty\n\non focus_tty(t)\n\treturn true\nend focus_tty";
+
+    /// Stands in for Ghostty's in the test of a Ghostty with no scripting, which never compiles it.
+    const UNASKED: &str = "on selected_tty()\n\treturn \"\"\nend selected_tty";
+
+    /// MacTabs whose Ghostty declares scripting, so a stand-in script answers for it.
+    fn scripted() -> MacTabs {
+        MacTabs { scripting: |_| Some(true), ..MacTabs::default() }
+    }
 
     /// The text of each script the thread holds for `source`. The thread is the process's own, so tests that run at the
     /// same time each look only at a source of their own.
@@ -581,7 +593,7 @@ end focus_tty
 
     #[test]
     fn a_tty_that_fails_the_check_is_never_sent() {
-        let tabs = MacTabs { source: |_| SENT };
+        let tabs = MacTabs { source: |_| SENT, ..scripted() };
         for bad in ["/dev/ttys023; rm", "/dev/ttys023\n", "/dev/pts/3", "/dev/ttys12345", ""] {
             assert_eq!(tabs.select_tty(T, bad, true), Err(TabError::Failed), "{bad:?}");
             assert_eq!(tabs.focus_tty(T, bad), Err(TabError::Failed), "{bad:?}");
@@ -602,6 +614,7 @@ end focus_tty
                 TabApp::Iterm => REFUSES,
                 TabApp::Ghostty => VANISHED,
             },
+            ..scripted()
         };
         assert_eq!(tabs.selected_tty(T), Ok(Some(TTY.to_string())));
         // The empty string is no window.
@@ -621,6 +634,47 @@ end focus_tty
         assert_eq!(tabs.focus_tty(TabApp::Ghostty, TTY), Err(TabError::Failed));
         // Each source was compiled once.
         assert_eq!((compiled(ANSWERS).len(), compiled(REFUSES).len(), compiled(VANISHED).len()), (1, 1, 1));
+    }
+
+    #[test]
+    fn a_ghostty_with_no_scripting_is_sent_no_event() {
+        // A Ghostty before 1.3 has no dictionary: an event would only bring macOS's consent prompt, then fail.
+        let tabs = MacTabs { source: |_| UNASKED, scripting: |_| Some(false), ..MacTabs::default() };
+        assert_eq!(tabs.selected_tty(TabApp::Ghostty), Err(TabError::NoScripting));
+        assert_eq!(tabs.select_tty(TabApp::Ghostty, TTY, true), Err(TabError::NoScripting));
+        assert_eq!(tabs.focus_tty(TabApp::Ghostty, TTY), Err(TabError::NoScripting));
+        // One that quit as it was checked: the next tick tries again.
+        let tabs = MacTabs { source: |_| UNASKED, scripting: |_| None, ..MacTabs::default() };
+        assert_eq!(tabs.selected_tty(TabApp::Ghostty), Err(TabError::Failed));
+        assert_eq!(tabs.focus_tty(TabApp::Ghostty, TTY), Err(TabError::Failed));
+        // No call reached the script thread.
+        assert!(compiled(UNASKED).is_empty());
+    }
+
+    #[test]
+    fn only_ghostty_is_checked_for_scripting_and_once() {
+        static CHECKS: AtomicUsize = AtomicUsize::new(0);
+        let scripting = |bundle: &str| {
+            assert_eq!(bundle, TabApp::Ghostty.bundle());
+            CHECKS.fetch_add(1, Ordering::SeqCst);
+            Some(true)
+        };
+        let tabs = MacTabs { source: |_| CHECKED, scripting, ..MacTabs::default() };
+        for _ in 0..2 {
+            for app in APPS {
+                assert_eq!(tabs.selected_tty(app), Ok(Some(TTY.to_string())), "{app:?}");
+                assert_eq!(tabs.focus_tty(app, TTY), Ok(Selected::Done), "{app:?}");
+            }
+        }
+        assert_eq!(CHECKS.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn the_scripting_check_reads_the_running_bundle() {
+        assert_eq!(declares_scripting("ai.autonomous.harness.no-such-app"), None);
+        // Both run in every session a person is logged in to: the Dock has no dictionary, the Finder has one.
+        assert_eq!(declares_scripting("com.apple.dock"), Some(false));
+        assert_eq!(declares_scripting("com.apple.finder"), Some(true));
     }
 
     #[test]

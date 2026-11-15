@@ -653,6 +653,25 @@ mod tests {
     }
 
     #[test]
+    fn a_ghostty_with_no_scripting_is_turned_off_and_says_so_once() {
+        let mut follow = polling();
+        follow.front(TabApp::Ghostty.bundle());
+        follow.select(TabApp::Ghostty, TTY.into(), true);
+        let out = follow.polled(TabApp::Ghostty, Err(TabError::NoScripting), 0);
+        assert_eq!((out.line, out.log), (None, vec!["tabs: Ghostty has no scripting".to_string()]));
+        assert_eq!(follow.polls(), None);
+        assert_eq!(follow.next_select(), None);
+        follow.select(TabApp::Ghostty, TTY.into(), true);
+        assert_eq!(follow.next_select(), None);
+        assert!(follow.selected(TabApp::Ghostty, Err(TabError::NoScripting)).log.is_empty());
+        // A tap's select finds it out the same way.
+        let mut follow = polling();
+        assert_eq!(follow.selected(TabApp::Ghostty, Err(TabError::NoScripting)).log, ["tabs: Ghostty has no scripting"]);
+        follow.front(TabApp::Ghostty.bundle());
+        assert_eq!(follow.polls(), None);
+    }
+
+    #[test]
     fn failed_polls_are_one_count_line_a_minute() {
         let mut follow = polling();
         assert!(follow.polled(T, Err(TabError::Failed), 100).log.is_empty());
