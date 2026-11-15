@@ -288,6 +288,21 @@ existing query augmentation spreads; there is no claim of zero cost before measu
 
 ## Remaining custody work stays open
 
+### CI fixture correction
+
+The first automatic ready run (43751304284) passed three CLI shards, typecheck, PTY and process checks, but shard 1
+failed the existing 200-MB resume loop test: 52.538 ms against its 50-ms CPU limit. The credential assertions passed.
+The test generated its entire history in the process whose loop it then measured, leaving fixture allocation and
+garbage collection in that heap. An isolated GC-trace diagnostic passed, so it does not establish the exact cause
+of the Linux sample or erase that failure.
+
+Fixture generation now uses the existing disposable repair worker before measurement. The caller verifies the
+worker PID and actual 200-MB file size. The repair workload, parent-thread CPU observer, 50-ms limit, publication
+and tail assertions are unchanged. No production code or process-launch options change. The new fixture-boundary
+assertion failed before its child handler existed (3.17 s), then both launch-loop and resume-repair files passed
+33 tests (7.24 s). Logs: `/tmp/core-resume-loop-fixture-red.log`, `/tmp/core-resume-loop-fixture-green.log`.
+The new exact-head core receipt and automatic CI remain required; this correction is not a retry of the failed job.
+
 **Authoritative grid credentials.** `registry.ts` documents same-provider/same-credential restart and reboot.
 `restoreAgents.ts`, `resumeAgentService.ts` and `launchOverrides.ts` rely on the full override; stopped files
 preserve it for later resume. Removing it now strands saved work. Copying it to a new file while leaving the old
