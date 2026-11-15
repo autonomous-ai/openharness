@@ -289,6 +289,13 @@ describe('the agent browser in its own process', () => {
     expect(await asked).toBeNull()
   })
 
+  it('a core caught up with that cannot say which agents are here is no answer', async () => {
+    const { options, given } = setup()
+    options.onConnected!({ query: async (name: string) => { if (name === 'follow_agents') return { agents: [] }; throw new Error('gone') } } as CoreConnection)
+    expect(await given.followed!()).toBe(true)
+    expect(await given.everyAgent!()).toBeNull()
+  })
+
   it('a core that never answers which agents are here is no answer after 10 s', async () => {
     vi.useFakeTimers()
     const { options, given } = setup()

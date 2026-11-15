@@ -1696,6 +1696,19 @@ describe('the browser moves with its pane', () => {
     expect(savedState()).toMatchObject({ adopted: { a1: true } })
   })
 
+  it('a core that does not say which agents are here takes no flag in, and the entry still moves', async () => {
+    saveState({ a1: defaultSettings(HOST) })
+    // As the service begins, a1 is here: its browser is kept.
+    const everyAgent = vi.fn(async (): Promise<RegisteredSession[] | null> => [session('a1'), session('b1', { browser: undefined })])
+    const sw = startSwitching([session('b1', { browser: undefined })], { options: { everyAgent } })
+    await eventually(() => expect(everyAgent).toHaveBeenCalled())
+    everyAgent.mockRejectedValueOnce(new Error('no core'))
+    sw.move('a1', 'b1')
+    await eventually(() => expect(Object.keys(savedState().browsers)).toEqual(['b1']))
+    expect(turnedOn()).toEqual({})
+    expect(sw.port.frameContext('b1')).toBeUndefined()
+  })
+
   it('a move of an agent with no entry makes no Podman call', async () => {
     const read = vi.spyOn(StateFile.prototype, 'read')
     const sw = startSwitching([session('a1', { browser: undefined }), session('b1', { browser: undefined })])

@@ -111,6 +111,11 @@ describe('what happens to agents, for the services that follow them', () => {
       expect(log).toHaveBeenCalledTimes(FOLLOWER_FAILURES_MAX + 1)
       hub.stopped('a1')
       expect(listener).toHaveBeenCalledTimes(FOLLOWER_FAILURES_MAX)
+      // Dropped in the middle of its catch-up: the rest of it is not told either.
+      const many = setup(Array.from({ length: FOLLOWER_FAILURES_MAX + 2 }, (_, i) => agent(`m${i}`)))
+      const failing = vi.fn(() => { throw new Error('boom') })
+      many.hub.follow(failing)
+      expect(failing).toHaveBeenCalledTimes(FOLLOWER_FAILURES_MAX)
     })
 
     it('says a failing follower in the core\'s log when it is given none', () => {

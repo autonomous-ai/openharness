@@ -272,10 +272,6 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
       log(`agent browser ${session.agentId}: its Browser flag was not taken in: ${(error as Error).message}`)
     }
   }
-  /** Whether the agent's row flag from before was taken in already; a file that cannot be read says so. */
-  const takenIn = (agentId: string): boolean => {
-    try { return state.read().adopted?.[agentId] === true } catch { return true }
-  }
   /** Its browser, started: once each time it runs here, and not for a guest's (the machine's Podman, memory and network
    *  are its owner's). */
   const startFor = (session: RegisteredSession): void => {
@@ -296,7 +292,12 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
     // A stopped agent whose browser has an entry may still carry the flag from before on its saved row, never taken in
     // since it did not run under this build: taken in first, so its Browser being on goes with the pane. Delete on or
     // after 2026-12-18, with `adopt`.
-    if (listed(from) === true && !takenIn(from)) {
+    let untaken = false
+    try {
+      const saved = state.read()
+      untaken = Object.hasOwn(saved.browsers, from) && saved.adopted?.[from] !== true
+    } catch { /* unreadable: the move says so below */ }
+    if (untaken) {
       const saved = (await everyAgent().catch(() => null))?.find(session => session.agentId === from)
       if (saved) adopt(saved)
     }

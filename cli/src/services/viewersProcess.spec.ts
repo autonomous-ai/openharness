@@ -256,6 +256,21 @@ describe('the viewers in their own process', () => {
     expect(core.told()).toEqual([{ agentId: 'a1', context: viewers.contexts.get('a1'), forwardingUrl: null }])
   })
 
+  it('hands what it hears of agents to the service\'s follower, the latest; an earlier one\'s end changes nothing', () => {
+    const { options, api } = setup()
+    const first = vi.fn()
+    const latest = vi.fn()
+    const unfollowFirst = api.agents.follow!(first)
+    const unfollowLatest = api.agents.follow!(latest)
+    unfollowFirst()
+    options.onEvent!(running(agent('a1')))
+    expect(latest).toHaveBeenCalledWith({ kind: 'running', session: agent('a1') })
+    expect(first).not.toHaveBeenCalled()
+    unfollowLatest()
+    options.onEvent!(running(agent('a2')))
+    expect(latest).toHaveBeenCalledTimes(1)
+  })
+
   it('ignores what it is told that it does not act on', () => {
     const { viewers, options } = setup()
     options.onEvent!({ kind: 'touch', sessionId: 's1' })
