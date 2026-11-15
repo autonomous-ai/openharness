@@ -778,11 +778,12 @@ ensureUtf8Locale()
  * year before the time. Every one of those parses ZERO rows, the hook concludes the machine has no
  * processes, and the engine it was launched by goes unrecognised. LC_ALL has to be cleared because it
  * outranks both categories; LC_CTYPE stays UTF-8 so Linux procps keeps returning raw bytes.
+ * COMMAND_MODE=unix2003: in legacy mode macOS `ps -e` lists every process's environment, which the hook never reads.
  */
 function psEnv(env = process.env) {
   const configured = env.LC_ALL || env.LC_CTYPE || env.LANG
   const ctype = configured && /utf-?8/i.test(configured) ? configured : 'C.UTF-8'
-  return { ...env, LC_ALL: '', LC_CTYPE: ctype, LC_TIME: 'C' }
+  return { ...env, LC_ALL: '', LC_CTYPE: ctype, LC_TIME: 'C', COMMAND_MODE: 'unix2003' }
 }
 
 /** Second line of defence: /proc is raw bytes, so a glibc without C.UTF-8 still resolves correctly. */
