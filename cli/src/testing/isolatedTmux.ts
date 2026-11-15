@@ -1,12 +1,12 @@
 import { execFile } from 'node:child_process'
 import { mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import { promisify } from 'node:util'
 import { resolveBinaryOnPath } from '../lib/binaryOnPath.js'
 import { daemonEnvironment } from './daemonEnvironment.js'
 import { removeRoot } from './removeRoot.js'
-import { testPath } from './testPath.js'
+import { SYSTEM_FOLDERS, testPath } from './testPath.js'
 
 const exec = promisify(execFile)
 
@@ -21,8 +21,14 @@ const exec = promisify(execFile)
  * [own] is what the caller sets on top, never an environment to inherit. Its home has an empty .zshrc: with none, the
  * zsh of Debian, Ubuntu and Fedora opens its new-user menu in every pane. <root>/t is the temporary folder of a pane on
  * this server, so what it leaves stays in the root. Its PATH is the fixture's own (testPath.ts), so a pane finds no
- * engine of the developer's. TMUX_TMPDIR comes last: no caller moves the server away from its socket. */
+ * engine of the developer's. TMUX_TMPDIR comes last: no caller moves the server away from its socket. A PATH of the
+ * caller's with a folder of the worker's is refused, however it was built: the source check (isolatedTmux.spec.ts)
+ * reads only the text of the argument (review of 2026-11-16). */
 export async function isolatedTmux(own: NodeJS.ProcessEnv = {}) {
+  const workers = new Set((process.env.PATH ?? '').split(delimiter).filter((folder) => folder && !SYSTEM_FOLDERS.includes(folder)))
+  const theirs = (own.PATH ?? '').split(delimiter).filter((folder) => workers.has(folder)).length
+  // A count, not the folders: they name the developer's own.
+  if (theirs) throw new Error(`isolatedTmux: own.PATH holds folders of the worker's PATH (${theirs}): a pane would find its engines`)
   const binary = resolveBinaryOnPath('tmux')
   if (!binary) throw new Error('tmux is required for this test')
   const root = await realpath(await mkdtemp(join(tmpdir(), 'htmux-')))
