@@ -5,6 +5,7 @@ import { basename, dirname, join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from './registry.js'
 import type { PurgeDeps } from './purgeAgentService.js'
+import { worktreesThrough } from '../testing/worktreesThrough.js'
 
 vi.mock('node:fs', async original => ({ ...await original<object>() }))
 let root: string, cwd: string, path: string, catalog: string, row: RegisteredSession
@@ -34,7 +35,8 @@ async function setup(over: Partial<PurgeDeps> = {}, rows = [row]) {
   const service = new PurgeAgentService({ live: (id: string) => live.get(id), sessions: () => [...live.values(), ...saved.values()],
     stopped: { get: (id: string) => saved.get(id) ?? null, beginResume: () => 'fixture-reservation',
       finishResume: () => {}, remove: (id: string) => saved.delete(id) },
-    checkpoints: { deletionFiles: () => [] }, stop, restarting: () => false, deleted, ...over,
+    checkpoints: { deletionFiles: () => [] }, stop, restarting: () => false, deleted,
+    worktrees: worktreesThrough(await import('./worktreeDeletion.js')), ...over,
   } as unknown as PurgeDeps)
   const request = { agentId: row.agentId, sessionId: row.sessionId, createdAt: row.registeredAt }
   return { service, live, saved, stop, deleted, request }
