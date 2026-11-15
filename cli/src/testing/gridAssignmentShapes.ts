@@ -9,8 +9,10 @@ import { modelsAssignments } from '../services/modelsAssignments.js'
 import { prepareApiInstructions } from '../lib/apiInstructions.js'
 
 export function gridAssignmentShapes(dataDir: string) {
-  const store = new ApiConnectionMetadata(dataDir)
-  const classify = modelsAssignments(new ApiConnections(dataDir))
+  // The store as models reads it, and the list without keys as the core reads it for the note.
+  const store = new ApiConnections(dataDir)
+  const list = new ApiConnectionMetadata(dataDir)
+  const classify = modelsAssignments(store)
   const port = createModelsLink({} as never, async (_type, payload) => {
     const processes = gridAssignmentProcessesIn(JSON.parse(JSON.stringify(payload.processes)))
     if (!processes) throw new Error('invalid assignment request')
@@ -26,6 +28,7 @@ export function gridAssignmentShapes(dataDir: string) {
       return process ? (await port.gridAssignments([process]))[0].assignment : null
     },
     list: () => store.list(),
-    instructions: (workspace: string, engine: string) => prepareApiInstructions(store, workspace, engine),
+    // The spec's workspaces are made in its data folder, which stands for where Harness makes them.
+    instructions: (workspace: string, engine: string) => prepareApiInstructions(list, workspace, engine, dataDir),
   }
 }

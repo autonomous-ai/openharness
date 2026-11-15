@@ -182,7 +182,7 @@ beforeAll(async () => {
   invalidate = (await import('../dsh/installed.js')).invalidateInstalledDsh
   shapes = (gridName = null) => launchShapes({
     dataDir: join(root, 'data'), machine: () => ({ ...M1 }), capabilities: async () => ({ sessionEnv: pane.tmux }),
-    readCodexConfig: () => null, setGridLaunch: () => {}, gridName: () => gridName,
+    readCodexConfig: () => null, setGridLaunch: () => {}, gridName: () => gridName, projectsRoot: join(root, 'work'),
   })
 })
 
