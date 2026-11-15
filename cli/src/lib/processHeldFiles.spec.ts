@@ -331,6 +331,7 @@ it('refuses a process with more than 4,096 descriptors, and keeps at most 256 pr
 it('lsofPaths keeps the n lines that are paths', async () => {
   expect(held.lsofPaths('p1\nf3\nn/a/b\nf4\nnpipe\nf5\nn/c d\n')).toEqual(['/a/b', '/c d'])
   expect(held.lsofPaths('p1\nf3\nn/a/b')).toBeNull()
-  expect(held.lsofPaths(`p1\n${'f3\n'.repeat(4_095)}`)).toHaveLength(0)
-  expect(held.lsofPaths(`p1\n${'f3\n'.repeat(4_096)}`)).toBeNull()
+  // The bound is on descriptors, as on Linux, and each one has an `f` line and an `n` line.
+  expect(held.lsofPaths(`p1\n${'f3\nn/a\n'.repeat(4_096)}`)).toHaveLength(4_096)
+  expect(held.lsofPaths(`p1\n${'f3\nn/a\n'.repeat(4_097)}`)).toBeNull()
 })
