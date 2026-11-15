@@ -111,9 +111,11 @@ it grants no second read target. Database/WAL/journal generation evidence and ex
   legitimately changes message rows and end markers. Existing process/binding/cancellation checks remain on escalation;
   an exact native record naming a different conversation still revokes a live-process action. The first-effect seam
   must be explicit, not an elapsed timeout or a promise that merely started. An effect includes native server Stop or
-  unload, as well as an OS signal; none of the five current database engines declares a shared server. A queued grant,
-  denied native action or throwing signal does not retire the generation. The successful effect boundary, rather than
-  an assumed engine kind, owns this transition.
+  unload, as well as an OS signal; none of the five current database engines declares a shared server. Their generation
+  therefore stays active across the existing native Stop call until the actual successful signal or confirmed prior
+  exit. A queued grant, denied native action or throwing signal does not retire it. Adding a shared-server contract to
+  a database engine must supply an equivalent successful-effect boundary; this change adds no speculative callback to
+  the existing Claude/Codex control protocol.
 - After positively confirmed exit, capture fresh database generations for the final checkpoint. The prior generation
   and a live-process record cannot be required after a legitimate exit. Final export includes flushed rows, is fenced
   through publication by its new generation, and must be durable before Close is acknowledged.
@@ -132,6 +134,10 @@ on confirmed exit does not make normal Close fail. Source/config/alias substitut
 redirect an export to another database. No
 production switch, registry refresh loop, worker SQL authority or second history cache is proposed. Runtime changes
 follow caller red tests; the proof API and source diff are reviewed before full gates or performance.
+
+Hermes versions/interfaces without terminal records retain their existing initial binding policy. Capture the absence
+of the declared record names, so a record appearing during saving revokes that attempt. Present malformed, unreadable or
+mismatching records hold identity; absence alone is not represented as proof that the saved ID is currently active.
 
 ## Purge design still under review
 
