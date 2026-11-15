@@ -21,8 +21,8 @@ function setup(draws: number[] = []) {
     const t = setTimeout(run, ms)
     return () => clearTimeout(t)
   })
-  // Each settled app, with what settledApp() read at that moment.
-  const settled: Array<[string]> = []
+  // Each settled app, in order; settledApp() already reads it inside the callback.
+  const settled: string[] = []
   let filter: AppFilter
   filter = new AppFilter({
     after,
@@ -31,7 +31,7 @@ function setup(draws: number[] = []) {
     switched,
     settled: (app) => {
       expect(filter.settledApp()).toBe(app)
-      settled.push([app])
+      settled.push(app)
       told.push(`settled ${app}`)
     },
   })
@@ -41,8 +41,7 @@ function setup(draws: number[] = []) {
     known = knownNext && new Map(Object.entries(knownNext))
   }
   const causes = (): SwitchCause[] => switched.mock.calls.map(([cause]) => cause)
-  const settles = (): string[] => settled.map(([app]) => app)
-  return { filter, agents, random, after, causes, told, settles, settled }
+  return { filter, agents, random, after, causes, told, settled }
 }
 
 const settle = (): void => {
@@ -394,7 +393,7 @@ describe('AppFilter', () => {
   })
 
   it('settled is told each time an app settles in front, after the switch it caused', () => {
-    const { filter, agents, told, settles } = setup()
+    const { filter, agents, told, settled } = setup()
     agents({ ghostty: 3, vscode: 1, cursor: 1 })
     expect(filter.shown()).toBe('ghostty')
     filter.front('vscode')
@@ -405,32 +404,34 @@ describe('AppFilter', () => {
     // An app with no agents settles all the same.
     filter.front('orca')
     settle()
-    expect(settles()).toEqual(['vscode', 'none', 'orca'])
+    expect(settled).toEqual(['vscode', 'none', 'orca'])
     // Away and back inside a second: the same app settles again, and is told again.
     filter.front('ghostty')
     vi.advanceTimersByTime(300)
     filter.front('orca')
     settle()
-    expect(settles()).toEqual(['vscode', 'none', 'orca', 'orca'])
+    expect(settled).toEqual(['vscode', 'none', 'orca', 'orca'])
     for (let i = 0; i < 50; i++) {
       filter.front(i % 2 === 0 ? 'vscode' : 'cursor')
       vi.advanceTimersByTime(10)
     }
     settle()
-    expect(settles()).toEqual(['vscode', 'none', 'orca', 'orca', 'cursor'])
+    expect(settled).toEqual(['vscode', 'none', 'orca', 'orca', 'cursor'])
   })
 
   it('a front that does not stay 1 s tells no settle', () => {
-    const { filter, agents, settles } = setup()
+    const { filter, agents, settled } = setup()
     agents({ ghostty: 3 })
     for (const app of ['vscode', 'cursor', 'orca']) {
       filter.front(app)
       vi.advanceTimersByTime(300)
     }
-    expect(settles()).toEqual([])
+    expect(settled).toEqual([])
     filter.front('ghostty')
-    settle()
-    expect(settles()).toEqual(['ghostty'])
+    vi.advanceTimersByTime(FRONT_SETTLE_MS - 1)
+    expect(settled).toEqual([])
+    vi.advanceTimersByTime(1)
+    expect(settled).toEqual(['ghostty'])
   })
 
   it('latestFront is the app last reported, before it settles', () => {
@@ -443,24 +444,6 @@ describe('AppFilter', () => {
     expect(filter.latestFront()).toBe('orca')
     filter.front('none')
     expect(filter.latestFront()).toBe('none')
-  })
-
-  it('settled is told each app that stays in front 1 s, and never one that left sooner', () => {
-    const { filter, agents, settled } = setup()
-    agents({ ghostty: 3, vscode: 1 })
-    filter.front('orca')
-    vi.advanceTimersByTime(FRONT_SETTLE_MS - 1)
-    expect(settled).toEqual([])
-    vi.advanceTimersByTime(1)
-    expect(settled).toEqual([['orca']])
-    filter.front('ghostty')
-    vi.advanceTimersByTime(FRONT_SETTLE_MS - 1)
-    filter.front('vscode')
-    settle()
-    expect(settled).toEqual([['orca'], ['vscode']])
-    filter.front('none')
-    settle()
-    expect(settled).toEqual([['orca'], ['vscode'], ['none']])
   })
 
   describe('agents not known yet', () => {
