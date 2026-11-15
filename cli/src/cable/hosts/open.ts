@@ -12,7 +12,7 @@ import type { PaneSwitch } from './types.js'
  *  ever reaches `open`, never a hint's own value. */
 const BUNDLES: ReadonlySet<string> = new Set([...Object.values(APP_BUNDLES), 'org.alacritty'])
 /** `open`'s own path, so no `open` earlier on PATH runs instead. */
-const OPEN = '/usr/bin/open'
+export const OPEN = '/usr/bin/open'
 const APP_WEZTERM = '/Applications/WezTerm.app/Contents/MacOS/wezterm'
 const WEZTERM_PANE = /^[0-9]{1,9}$/
 /** herdr's pane id, `w1:p1` (its own guide). */
