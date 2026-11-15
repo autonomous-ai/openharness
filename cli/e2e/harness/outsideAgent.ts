@@ -46,8 +46,13 @@ const FAKE_APPS = {
 } as const
 export type FakeApp = keyof typeof FAKE_APPS
 
-/** What the fake app runs: the tab's pseudo-terminal on its own stdio, gone when it goes. */
+/**
+ * What the fake app runs: the tab's pseudo-terminal on its own stdio, gone when it goes. Node 24 names its main thread
+ * MainThread, which on Linux is the process's task name, the `comm` the scan reads: the fake takes back the name it was
+ * started under, as the app it fakes keeps its own. macOS's `comm` is the path it was started from, which no name moves.
+ */
 const UNDER_APP = `
+if (process.platform === 'linux') process.title = require('node:path').basename(process.argv0)
 const tab = require('node:child_process').spawn('python3', ['-c', ...process.argv.slice(1)], { stdio: 'inherit' })
 tab.on('exit', (code) => process.exit(code ?? 1))
 `
