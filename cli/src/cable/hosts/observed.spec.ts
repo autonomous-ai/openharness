@@ -1,12 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ObservedAsked, ObservedHookEvent } from '../../core/observedHook.js'
 import { STOP_HOOK_GRACE_MS } from '../../core/turns/turnHooks.js'
+import type { HostAdapter, Pane, Place } from './adapter.js'
+import { createClaudeAppAdapter } from './claudeApp.js'
 import type { CodexQueueResult } from './codexQueue.js'
+import { createHerdrAdapter } from './herdr.js'
 import { type Delivery, Inbox } from './inbox.js'
 import { askedLine, observedAgentId, type ObservedActions, ObservedSource, type ObservedDeps, type PromptSource } from './observed.js'
 import type { OpenTarget } from './open.js'
-import type { TabApp } from './tabs.js'
+import { createOrcaAdapter, type OrcaDeps } from './orca.js'
+import { createTabsAdapter, type TabApp } from './tabs.js'
 import type { PaneSwitch } from './types.js'
+import { createWeztermAdapter } from './wezterm.js'
 
 function setup(over: Partial<ObservedDeps> = {}) {
   const clock = { t: 1_000_000 }
@@ -16,7 +21,8 @@ function setup(over: Partial<ObservedDeps> = {}) {
     .filter((pid) => gens.get(pid) !== null).map((pid) => ({ pid, generation: gens.get(pid) ?? `g${pid}` })))
   const alive = vi.fn((_pid: number) => true)
   const open = new Map<string, 'terminal' | 'app' | 'harness' | 'maybe'>()
-  const owners = new Map<string, { pid: number; engine: string }>()
+  // An owner's record path is its session id unless one is given.
+  const owners = new Map<string, { pid: number; engine: string; record?: string }>()
   const working = new Map<string, boolean | null>()
   const externals = new Map<string, { cwd?: string; transcriptPath?: string | null }>()
   const answers = new Map<string, string>()
@@ -40,7 +46,7 @@ function setup(over: Partial<ObservedDeps> = {}) {
         await look()
         return new Map([...open].flatMap(([id, openIn]) => {
           const owner = owners.get(id)
-          return owner ? [[id, { ...owner, tty: null, record: id, ...(openIn === 'harness' ? { harness: true } : {}) }] as const] : []
+          return owner ? [[id, { record: id, ...owner, tty: null, ...(openIn === 'harness' ? { harness: true } : {}) }] as const] : []
         }))
       },
       // As OpenSessions says: busy unless the owner's record reads idle.
@@ -604,7 +610,7 @@ describe('ObservedSource and the app the scan learns', () => {
     found(s, 'a', 11)
     found(s, 'b', 12)
     await s.src.scanOpen()
-    expect(s.logs).toEqual(['[observed] scan · 2 found · 1 app known · 7 ms'])
+    expect(s.logs).toEqual(['[observed] scan · 2 found · 1 app known · 0 named · 7 ms'])
     for (const word of ['ghostty', 'terminal', '11', '12', '/x/', '/t/']) expect(s.logs.join('\n')).not.toContain(word)
   })
 
@@ -658,12 +664,224 @@ describe('ObservedSource and Harness\'s own sessions', () => {
   })
 })
 
+describe('ObservedSource and the name a session gives itself', () => {
+  beforeEach(() => { vi.useFakeTimers() })
+  afterEach(() => { vi.useRealTimers() })
+
+  it('a title names the agent, a new one renames it, a turn-stop keeps it, and a Claude turn-start with none reads the folder again', () => {
+    const { src, changes, ev } = setup()
+    src.ingest(ev('turn-start', { title: 'Tho', cwd: '/x/scratch-2016' }))
+    expect(src.list()[0]).toMatchObject({ name: 'Tho', cwd: '/x/scratch-2016' })
+    changes.mockClear()
+    src.ingest(ev('turn-start', { title: 'Math' }))
+    expect(src.list()[0].name).toBe('Math')
+    expect(changes).toHaveBeenCalled()
+    src.ingest(ev('turn-stop', { cwd: '/x/other' }))
+    expect(src.list()[0]).toMatchObject({ name: 'Math', cwd: '/x/other' })
+    src.ingest(ev('turn-start', { cwd: undefined }))
+    expect(src.list()[0].name).toBe('other')
+  })
+
+  it('a Claude turn-start with no title and a new folder reads that folder', () => {
+    const { src, ev } = setup()
+    src.ingest(ev('turn-start', { title: 'Tho' }))
+    src.ingest(ev('turn-start', { cwd: '/x/third' }))
+    expect(src.list()[0].name).toBe('third')
+  })
+
+  it('a Claude session-start with no title clears it too', () => {
+    const { src, ev } = setup()
+    src.ingest(ev('turn-start', { title: 'Tho' }))
+    src.ingest(ev('session-start'))
+    expect(src.list()[0].name).toBe('proj')
+  })
+
+  it('a session-start with a title renames a session the scan listed', async () => {
+    const { src, open, owners, externals, ev } = setup()
+    open.set('a', 'terminal')
+    owners.set('a', { pid: 11, engine: 'claude' })
+    externals.set('a', { cwd: '/x/alpha', transcriptPath: '/t/a.jsonl' })
+    await src.scanOpen()
+    expect(src.list()[0].name).toBe('alpha')
+    src.ingest(ev('session-start', { sessionId: 'a', callerPid: 11, cwd: '/x/alpha', title: 'Tho' }))
+    expect(src.list()[0].name).toBe('Tho')
+  })
+
+  it('another engine\'s turn-start with no title keeps its title', () => {
+    const { src, ev } = setup()
+    src.ingest(ev('turn-start', { engine: 'codex', sessionId: 'c1', title: 'Tho' }))
+    src.ingest(ev('turn-start', { engine: 'codex', sessionId: 'c1' }))
+    expect(src.list()[0].name).toBe('Tho')
+  })
+
+  it('needs-input, asked, turn-error and session-end leave the name', () => {
+    const { src, ev } = setup()
+    src.ingest(ev('turn-start', { title: 'Tho' }))
+    src.ingest(ev('needs-input'))
+    expect(src.list()[0].name).toBe('Tho')
+    src.ingest({ engine: 'claude', sessionId: 's1', event: 'asked', tool: 'Bash', summary: 'npm test', cwd: '/x/elsewhere' })
+    expect(src.list()[0].name).toBe('Tho')
+    src.ingest(ev('turn-error'))
+    expect(src.list()[0].name).toBe('Tho')
+    src.ingest(ev('session-end'))
+    expect(src.list()[0].name).toBe('Tho')
+  })
+
+  it('with no folder known, a cleared title reads the engine', () => {
+    const { src, ev } = setup()
+    src.ingest(ev('turn-start', { cwd: undefined, title: 'Tho' }))
+    expect(src.list()[0].name).toBe('Tho')
+    src.ingest(ev('turn-start', { cwd: undefined }))
+    expect(src.list()[0].name).toBe('claude')
+  })
+
+  // Claude Code's compaction starts a session again in the middle of a turn.
+  it('a session-start in the middle of a turn renames it and leaves it working', () => {
+    const { src, ev } = setup()
+    src.ingest(ev('turn-start', { title: 'Tho' }))
+    src.ingest(ev('session-start', { title: 'Math' }))
+    expect(src.list()[0]).toMatchObject({ name: 'Math', state: 'working' })
+  })
+
+  it('a refusal names the agent by its title', async () => {
+    const { src, ev } = setup()
+    src.ingest(ev('turn-start', { title: 'Tho' }))
+    expect(await src.send(src.list()[0], 'hi')).toEqual({ ok: false, reason: 'Tho did not answer.' })
+  })
+
+  it('no log line holds a title', () => {
+    const { src, ev, logs } = setup()
+    // Fifty working sessions fill the list: the fifty-first is dropped, and that is logged.
+    for (let i = 0; i <= 50; i++) src.ingest(ev('turn-start', { sessionId: `s${i}`, title: `Name ${i}` }))
+    src.ingest({ engine: 'claude', sessionId: 's0', event: 'asked', tool: 'Bash', summary: 'npm test' })
+    expect(logs).not.toEqual([])
+    expect(logs.join('\n')).not.toMatch(/Name \d/)
+  })
+})
+
+describe('ObservedSource and the name in a session\'s own record', () => {
+  beforeEach(() => { vi.useFakeTimers() })
+  afterEach(() => { vi.useRealTimers() })
+
+  /** A session found open in a terminal, its owner `pid`, whose record path is not its id: the reader must be told both. */
+  const found = (s: ReturnType<typeof setup>, sessionId: string, pid: number, engine = 'claude'): void => {
+    s.open.set(sessionId, 'terminal')
+    s.owners.set(sessionId, { pid, engine, record: `/s/${pid}.json` })
+    s.externals.set(sessionId, { cwd: `/x/${sessionId}`, transcriptPath: `/t/${sessionId}.jsonl` })
+  }
+
+  it('a Claude session the scan lists reads the name its record gives', async () => {
+    const s = setup({ recordName: async () => 'Tho' })
+    found(s, 'a', 11)
+    await s.src.scanOpen()
+    expect(s.src.list()[0]).toMatchObject({ name: 'Tho', cwd: '/x/a' })
+    expect(s.changes).toHaveBeenCalled()
+  })
+
+  it.each<[string, ObservedDeps['recordName']]>([
+    ['gives none', async () => undefined],
+    ['fails', async () => { throw new Error('EACCES /Users/someone/.claude/sessions/11.json') }],
+  ])('a reader that %s still lists the session by its folder', async (_what, recordName) => {
+    const s = setup({ recordName })
+    found(s, 'a', 11)
+    await s.src.scanOpen()
+    expect(s.src.list()[0].name).toBe('a')
+    expect(s.logs).toEqual(['[observed] scan · 1 found · 0 app known · 0 named · 0 ms'])
+    expect(s.logs.join('\n')).not.toContain('someone')
+  })
+
+  it('the reader is asked once, for the Claude sessions the scan is about to list', async () => {
+    const recordName = vi.fn(async (_owner: unknown): Promise<string | undefined> => undefined)
+    const s = setup({ recordName })
+    found(s, 'a', 11)
+    found(s, 'b', 12, 'codex')
+    // No row: never listed.
+    found(s, 'c', 13)
+    s.externals.delete('c')
+    // Harness's own pane.
+    found(s, 'h', 14)
+    s.open.set('h', 'harness')
+    await s.src.scanOpen()
+    found(s, 'd', 15)
+    await s.src.scanOpen()
+    await s.src.scanOpen()
+    expect(recordName.mock.calls).toEqual([[{ pid: 11, record: '/s/11.json', sessionId: 'a' }], [{ pid: 15, record: '/s/15.json', sessionId: 'd' }]])
+  })
+
+  it('at most 50 are asked a look', async () => {
+    const recordName = vi.fn(async (_owner: unknown): Promise<string | undefined> => undefined)
+    const s = setup({ recordName })
+    for (let i = 0; i < 51; i++) found(s, `s${i}`, 200 + i)
+    await s.src.scanOpen()
+    expect(recordName).toHaveBeenCalledTimes(50)
+  })
+
+  it.each<[Partial<ObservedHookEvent>, string]>([[{ title: 'Math' }, 'Math'], [{}, 'a']])(
+    'a hook that came while the names were read keeps what it said (%j)', async (over, name) => {
+      let answer: (recorded: string | undefined) => void = () => {}
+      const recordName = vi.fn(() => new Promise<string | undefined>((resolve) => { answer = resolve }))
+      const s = setup({ recordName })
+      found(s, 'a', 11)
+      const scan = s.src.scanOpen()
+      await vi.waitFor(() => expect(recordName).toHaveBeenCalled())
+      s.src.ingest(s.ev('turn-start', { sessionId: 'a', callerPid: 11, cwd: '/x/a', ...over }))
+      answer('Tho')
+      await scan
+      expect(s.src.list()).toHaveLength(1)
+      expect(s.src.list()[0].name).toBe(name)
+    })
+
+  it('the record\'s name holds until a hook says otherwise', async () => {
+    const s = setup({ recordName: async () => 'Tho' })
+    found(s, 'a', 11)
+    await s.src.scanOpen()
+    expect(s.src.list()[0].name).toBe('Tho')
+    s.src.ingest(s.ev('turn-stop', { sessionId: 'a', callerPid: 11, cwd: '/x/moved' }))
+    expect(s.src.list()[0]).toMatchObject({ name: 'Tho', cwd: '/x/moved' })
+    s.src.ingest(s.ev('turn-start', { sessionId: 'a', callerPid: 11, cwd: '/x/moved' }))
+    expect(s.src.list()[0].name).toBe('moved')
+    s.src.ingest(s.ev('session-start', { sessionId: 'a', callerPid: 11, cwd: '/x/moved', title: 'Math' }))
+    expect(s.src.list()[0].name).toBe('Math')
+  })
+
+  it('the scan\'s line counts the named ones and holds no name', async () => {
+    const s = setup({ recordName: async (owner) => (owner.pid === 11 ? 'Tho 7f3a91c2' : undefined) })
+    found(s, 'a', 11)
+    found(s, 'b', 12)
+    await s.src.scanOpen()
+    expect(s.logs).toEqual(['[observed] scan · 2 found · 0 app known · 1 named · 0 ms'])
+  })
+
+  it('with no reader the scan names by folder', async () => {
+    const s = setup()
+    found(s, 'a', 11)
+    await s.src.scanOpen()
+    expect(s.src.list()[0].name).toBe('a')
+    expect(s.logs).toEqual(['[observed] scan · 1 found · 0 app known · 0 named · 0 ms'])
+  })
+})
+
 const HANDLE = 'term_0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b'
 
-/** Routes that answer as told, recording what each was handed. */
-function fakeActions(over: Partial<ObservedActions> = {}) {
+/** What the tests answer for the source's routes: its own, and the Orca, Claude app and tab verbs its adapters run. */
+interface Fakes extends Omit<ObservedActions, 'adapters'> {
+  orcaSend(handle: string, text: string): Promise<boolean>
+  orcaSwitch(handle: string): Promise<PaneSwitch>
+  claudeInFront(): boolean
+  claudeShow(agentId: string, session: string): Promise<PaneSwitch>
+  tabsOpen(): boolean
+  tabSelect(app: TabApp, tty: string, raise: boolean): PaneSwitch
+}
+
+/** What each count says, as devices.ts logs it: an adapter by its fixed id. */
+const counted = (count: { mock: { calls: Array<Parameters<ObservedActions['count']>> } }): string[] =>
+  count.mock.calls.map(([what]) => (typeof what === 'string' ? what : what.id))
+
+/** Routes that answer as told, recording what each was handed. The adapters are the real ones for that platform, their
+ *  verbs the fakes, and any command of their own goes to an inert runner. */
+function fakeActions(over: Partial<Fakes> = {}, platform: NodeJS.Platform = 'darwin') {
   const ready = new Set<string>()
-  const actions = {
+  const fakes = {
     modReady: vi.fn((sessionId: string) => ready.has(sessionId)),
     toMod: vi.fn(async (_sessionId: string, _text: string): Promise<Delivery> => 'taken'),
     orcaSend: vi.fn(async (_handle: string, _text: string) => true),
@@ -684,7 +902,19 @@ function fakeActions(over: Partial<ObservedActions> = {}) {
     codexHome: '/home/u/.codex',
     count: vi.fn((_what: Parameters<ObservedActions['count']>[0]) => {}),
   }
-  return { actions: { ...actions, ...over } as typeof actions, ready }
+  const fake = { ...fakes, ...over } as typeof fakes
+  const ran = vi.fn(async (_file: string, _args: string[], _timeoutMs: number) => ({ code: 0 }))
+  const deps: OrcaDeps = { run: ran, onPath: (name) => `/fake/bin/${name}`, exists: () => false, platform }
+  const orca = createOrcaAdapter(deps)
+  const claude = createClaudeAppAdapter({ ...deps, inFront: () => fake.claudeInFront() })
+  const adapters: HostAdapter[] = [
+    createHerdrAdapter(deps),
+    createWeztermAdapter(deps),
+    { ...orca, type: (pane, text) => fake.orcaSend(pane.id, text), show: (pane) => fake.orcaSwitch(pane.id) },
+    { ...claude, show: (pane, agentId) => fake.claudeShow(agentId, pane.id) },
+    createTabsAdapter({ isOpen: () => fake.tabsOpen(), select: (tab, raise) => fake.tabSelect(tab.app, tab.tty, raise) === 'ok' }),
+  ]
+  return { actions: { ...fake, adapters }, ready, ran }
 }
 
 describe('ObservedSource actions', () => {
@@ -736,6 +966,27 @@ describe('ObservedSource actions', () => {
     src.ingest(ev('session-start', withHandle))
     expect(src.list()[0].host).toBe('orca')
     expect(src.capabilities(src.list()[0])).toMatchObject({ voice: true, focus: true })
+  })
+
+  // The other order: the scan skips a session a hook already listed, so it is one agent and keeps what its hook said.
+  it('one Orca session its hook told of, then the open scan found, is listed once and keeps its Orca pane', async () => {
+    const { actions } = fakeActions()
+    const apps = vi.fn(async (_pids: readonly number[]) => new Map<number, string>())
+    const { src, open, owners, externals, ev } = setup({ actions, apps })
+    src.ingest(ev('session-start', withHandle))
+    open.set('s1', 'terminal')
+    owners.set('s1', { pid: 100, engine: 'claude' })
+    externals.set('s1', { cwd: '/work/proj', transcriptPath: '/t/s1.jsonl' })
+    await src.scanOpen()
+    expect(src.list()).toHaveLength(1)
+    const agent = src.list()[0]
+    expect(agent.host).toBe('orca')
+    expect(agent.appPending).toBeUndefined()
+    expect(apps).not.toHaveBeenCalled()
+    expect(src.hasPane(agent)).toBe(true)
+    expect(await src.showPane(agent)).toBe('ok')
+    expect(actions.orcaSwitch.mock.calls).toEqual([[HANDLE]])
+    expect(src.capabilities(agent)).toMatchObject({ voice: true, focus: true })
   })
 
   it('caps: s alone with no actions; v and f with a handle; v for a claude session the mod is ready for; never v from the mod for codex; never a', () => {
@@ -790,7 +1041,7 @@ describe('ObservedSource actions', () => {
     src.ingest(ev('turn-start', { engine, ...withHandle }))
     expect(await after('turn-error', 'three')).toEqual({ ok: true })
     expect(actions.orcaSend.mock.calls).toEqual([[HANDLE, 'one'], [HANDLE, 'two'], [HANDLE, 'three']])
-    expect(actions.count.mock.calls.map(([what]) => what)).toEqual(['orca', 'busy', 'waiting', 'orca', 'orca'])
+    expect(counted(actions.count)).toEqual(['orca', 'busy', 'waiting', 'orca', 'orca'])
   })
 
   // No scan or transcript reads another engine's turn: it is at its prompt only once a hook said its turn ended.
@@ -811,7 +1062,7 @@ describe('ObservedSource actions', () => {
     expect(await after('turn-start', 'four')).toEqual(busy)
     expect(await after('turn-error', 'five')).toEqual({ ok: true })
     expect(actions.orcaSend.mock.calls).toEqual([[HANDLE, 'two'], [HANDLE, 'three'], [HANDLE, 'five']])
-    expect(actions.count.mock.calls.map(([what]) => what)).toEqual(['busy', 'busy', 'waiting', 'orca', 'orca', 'busy', 'orca'])
+    expect(counted(actions.count)).toEqual(['busy', 'busy', 'waiting', 'orca', 'orca', 'busy', 'orca'])
   })
 
   // The scan lists another engine's agent idle though its turn may run: its first hook with a handle is no turn's end.
@@ -964,6 +1215,20 @@ describe('ObservedSource actions', () => {
     }
   })
 
+  // Every event names its pane afresh: the same terminal named again is the one the words were meant for.
+  it('an event from the same pane while the mod is waited for does not cancel the words', async () => {
+    let missed!: (delivery: Delivery) => void
+    const { actions, ready } = fakeActions({ toMod: vi.fn(() => new Promise<Delivery>((resolve) => { missed = resolve })) })
+    const { src, ev } = setup({ actions })
+    ready.add('s1')
+    src.ingest(ev('turn-stop', withHandle))
+    const sent = src.send(src.list()[0], 'run the tests')
+    src.ingest(ev('session-start', withHandle))
+    missed('missed')
+    expect(await sent).toEqual({ ok: true })
+    expect(actions.orcaSend.mock.calls).toEqual([[HANDLE, 'run the tests']])
+  })
+
   it('a second transcript while the first waits for the mod is refused: typed into Orca, it would land before the first', async () => {
     const inbox = new Inbox({ now: () => 0, after: () => () => {} })
     const { actions } = fakeActions({
@@ -1042,7 +1307,7 @@ describe('ObservedSource actions', () => {
     src.ingest(ev('session-start', { sessionId: 'plain' }))
     const agent = (sessionId: string) => src.list().find((a) => a.sessionId === sessionId)!
     expect(await src.focus(agent('orca'))).toBe(false)
-    expect(actions.open).toHaveBeenCalledWith(agent('orca').id, { bundle: 'com.stablyai.orca', pane: { app: 'orca', id: HANDLE } })
+    expect(actions.open).toHaveBeenCalledWith(agent('orca').id, { bundle: 'com.stablyai.orca', pane: { adapter: 'orca', id: HANDLE } })
     actions.open.mockResolvedValue(true)
     expect(await src.focus(agent('orca'))).toBe(true)
     expect(await src.focus(agent('plain'))).toBe(false)
@@ -1066,7 +1331,7 @@ describe('ObservedSource actions', () => {
     await src.send(agent('asking'), 'x')
     await src.send(agent('none'), 'x'.repeat(2001))
     await src.send(agent('none'), 'x')
-    expect(actions.count.mock.calls.map(([what]) => what)).toEqual(['mod', 'orca', 'busy', 'waiting', 'too-long', 'no-answer'])
+    expect(counted(actions.count)).toEqual(['mod', 'orca', 'busy', 'waiting', 'too-long', 'no-answer'])
   })
 })
 
@@ -1153,18 +1418,18 @@ describe('ObservedSource and codex queue', () => {
   })
 
   it('failed falls back to Orca only when idle at a handle, with today\'s sentences', async () => {
-    const cases: Array<[Partial<ObservedHookEvent>, keyof typeof HOOKS, object, Parameters<ObservedActions['count']>[0]]> = [
+    const cases: Array<[Partial<ObservedHookEvent>, keyof typeof HOOKS, object, string]> = [
       [inOrca, 'idle', { ok: true }, 'orca'],
       [inOrca, 'working', { ok: false, reason: 'proj is busy. Say it when it is done.' }, 'busy'],
       [inOrca, 'needs-you', { ok: false, reason: 'proj is waiting for your answer in Orca.' }, 'waiting'],
       [cx, 'idle', { ok: false, reason: 'proj did not answer.' }, 'no-answer'],
     ]
-    for (const [session, state, sent, counted] of cases) {
+    for (const [session, state, sent, said] of cases) {
       const { src, actions } = given(session, state)
       actions.codexQueue.send.mockResolvedValue(FAILED)
       expect(await src.send(src.list()[0], 'next')).toEqual(sent)
-      expect(actions.orcaSend.mock.calls).toEqual(counted === 'orca' ? [[HANDLE, 'next']] : [])
-      expect(actions.count.mock.calls).toEqual([['codex-failed (exit 1)'], [counted]])
+      expect(actions.orcaSend.mock.calls).toEqual(said === 'orca' ? [[HANDLE, 'next']] : [])
+      expect(counted(actions.count)).toEqual(['codex-failed (exit 1)', said])
     }
   })
 
@@ -1323,6 +1588,125 @@ describe('ObservedSource panes', () => {
     expect(actions.orcaSwitch).not.toHaveBeenCalled()
     expect(actions.open).not.toHaveBeenCalled()
   })
+
+  // A multiplexer's pane is the nearer for a tap, and Orca's terminal still takes the words and the rest.
+  it.each([
+    ['herdr', { HERDR_PANE_ID: 'w1:p2', ORCA_TERMINAL_HANDLE: HANDLE }, 'w1:p2'],
+    ['WezTerm', { WEZTERM_PANE: '7', ORCA_TERMINAL_HANDLE: HANDLE }, '7'],
+  ])('%s inside an Orca terminal still takes the dial\'s words and a rest through Orca', async (_, hostHints, tapped) => {
+    const { actions } = fakeActions()
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('turn-stop', { hostHints }))
+    const agent = src.list()[0]
+    expect(src.capabilities(agent)).toMatchObject({ voice: true, focus: true })
+    expect(await src.send(agent, 'next')).toEqual({ ok: true })
+    expect(actions.orcaSend.mock.calls).toEqual([[HANDLE, 'next']])
+    expect(counted(actions.count).at(-1)).toBe('orca')
+    expect(src.hasPane(agent)).toBe(true)
+    expect(await src.showPane(agent)).toBe('ok')
+    expect(actions.orcaSwitch.mock.calls).toEqual([[HANDLE]])
+    expect(await src.focus(agent)).toBe(true)
+    expect(actions.open).toHaveBeenCalledTimes(1)
+    expect(actions.open.mock.calls[0][1].pane?.id).toBe(tapped)
+  })
+
+  // A wave 1 app is one adapter: the source asks it as it asks the others, and what it cannot do the next pane does.
+  it('an app the source never heard of costs one adapter, and what it cannot do falls to the next pane', async () => {
+    const PANE: Pane = { adapter: 'made-up', id: 'p1' }
+    const madeUp = () => ({
+      id: 'made-up',
+      tap: 'before' as const,
+      paneOf: vi.fn((place: Place) => (place.hints.MADE_UP === 'p1' ? PANE : undefined)),
+      canFocus: vi.fn((_pane: Pane) => true),
+      focus: vi.fn(async (_pane: Pane) => true),
+      canShow: vi.fn((_pane: Pane) => true),
+      show: vi.fn(async (_pane: Pane, _agentId: string): Promise<PaneSwitch> => 'busy'),
+      type: vi.fn(async (_pane: Pane, _text: string) => true),
+    })
+    /** A source that asks this adapter first, its agent after a turn-stop with these hints. */
+    const first = (adapter: HostAdapter, hostHints: Record<string, string>, over: Partial<Fakes> = {}) => {
+      const { actions } = fakeActions(over)
+      const t = setup({ actions: { ...actions, adapters: [adapter, ...actions.adapters] } })
+      t.src.ingest(t.ev('turn-stop', { hostHints }))
+      return { src: t.src, actions, agent: t.src.list()[0] }
+    }
+    const both = { MADE_UP: 'p1', ORCA_TERMINAL_HANDLE: HANDLE }
+
+    const adapter = madeUp()
+    const a = first(adapter, both)
+    expect(adapter.paneOf).toHaveBeenLastCalledWith({ host: 'terminal', app: 'terminal', hints: both })
+    expect(a.src.capabilities(a.agent)).toMatchObject({ voice: true })
+    expect(await a.src.send(a.agent, 'next')).toEqual({ ok: true })
+    expect(adapter.type.mock.calls).toEqual([[PANE, 'next']])
+    expect(counted(a.actions.count).at(-1)).toBe('made-up')
+    expect(a.actions.orcaSend).not.toHaveBeenCalled()
+    expect(await a.src.showPane(a.agent)).toBe('busy')
+    expect(adapter.show.mock.calls).toEqual([[PANE, a.agent.id]])
+    expect(a.actions.orcaSwitch).not.toHaveBeenCalled()
+    // It cannot show its pane now: Orca's terminal is shown.
+    adapter.canShow.mockReturnValue(false)
+    expect(a.src.hasPane(a.agent)).toBe(true)
+    expect(await a.src.showPane(a.agent)).toBe('ok')
+    expect(a.actions.orcaSwitch.mock.calls).toEqual([[HANDLE]])
+    expect(adapter.show).toHaveBeenCalledTimes(1)
+
+    // It types nothing: Orca's terminal takes the words.
+    const mute = first({ ...madeUp(), type: undefined }, both)
+    expect(mute.src.capabilities(mute.agent)).toMatchObject({ voice: true })
+    expect(await mute.src.send(mute.agent, 'next')).toEqual({ ok: true })
+    expect(mute.actions.orcaSend.mock.calls).toEqual([[HANDLE, 'next']])
+    expect(counted(mute.actions.count).at(-1)).toBe('orca')
+
+    // Its pane alone: nothing is left to fall to.
+    const hidden = madeUp()
+    hidden.canShow.mockReturnValue(false)
+    const unseen = first(hidden, { MADE_UP: 'p1' })
+    expect(unseen.src.hasPane(unseen.agent)).toBe(false)
+    expect(await unseen.src.showPane(unseen.agent)).toBe('failed')
+    const alone = first({ ...madeUp(), type: undefined }, { MADE_UP: 'p1' })
+    expect(alone.src.capabilities(alone.agent)).toMatchObject({ voice: false })
+    expect(await alone.src.send(alone.agent, 'next')).toEqual({ ok: false, reason: 'proj did not answer.' })
+
+    // A tap hands its pane to the opener, which brings it forward: the source runs none of its own.
+    const near = madeUp()
+    const tap = first(near, both)
+    expect(await tap.src.focus(tap.agent)).toBe(true)
+    expect(tap.actions.open.mock.calls).toEqual([[tap.agent.id, { pane: PANE }]])
+    expect(near.focus).not.toHaveBeenCalled()
+    // It cannot bring its pane forward here: Orca's terminal is the first that can.
+    near.canFocus.mockReturnValue(false)
+    expect(await tap.src.focus(tap.agent)).toBe(true)
+    expect(tap.actions.open.mock.calls[1]).toEqual([tap.agent.id, { pane: { adapter: 'orca', id: HANDLE } }])
+    expect(near.focus).not.toHaveBeenCalled()
+
+    // It comes after its app: Orca's terminal is the tap's pane, and its own is raised once the app came.
+    const late = { ...madeUp(), tap: 'after' as const }
+    let opened!: (yes: boolean) => void
+    const raised = first(late, both, { open: vi.fn(() => new Promise<boolean>((resolve) => { opened = resolve })) })
+    const raising = raised.src.focus(raised.agent)
+    expect(raised.actions.open.mock.calls).toEqual([[raised.agent.id, { pane: { adapter: 'orca', id: HANDLE } }]])
+    expect(late.focus).not.toHaveBeenCalled()
+    opened(true)
+    expect(await raising).toBe(true)
+    expect(late.focus.mock.calls).toEqual([[PANE]])
+    // Its app did not come: nothing is raised.
+    const unopened = { ...madeUp(), tap: 'after' as const }
+    const closed = first(unopened, both, { open: vi.fn(async () => false) })
+    expect(await closed.src.focus(closed.agent)).toBe(false)
+    expect(unopened.focus).not.toHaveBeenCalled()
+    // It cannot show its pane now: the pane a rest would show is Orca's, which comes before its app.
+    const unshown = { ...madeUp(), tap: 'after' as const }
+    unshown.canShow.mockReturnValue(false)
+    const behind = first(unshown, both)
+    expect(await behind.src.focus(behind.agent)).toBe(true)
+    expect(unshown.focus).not.toHaveBeenCalled()
+    // It is the pane a rest would show, but it cannot be brought forward here: nothing is raised.
+    const stuck = { ...madeUp(), tap: 'after' as const }
+    stuck.canFocus.mockReturnValue(false)
+    const fixed = first(stuck, both)
+    expect(await fixed.src.focus(fixed.agent)).toBe(true)
+    expect(stuck.focus).not.toHaveBeenCalled()
+  })
   // A rest shows a Claude app session in the app, only while that app is in front (docs/specs/2026-11-15-dial-claude-app-follow.md).
   const SESSION = 'local_8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b'
   const inClaude = (session = SESSION, bundle = 'com.anthropic.claudefordesktop') =>
@@ -1336,11 +1720,11 @@ describe('ObservedSource panes', () => {
     src.ingest(ev('session-start', { sessionId: 'uuid', ...inClaude('8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b') }))
     const agent = (sessionId: string) => src.list().find((a) => a.sessionId === sessionId)!
     expect(src.hasPane(agent('s1'))).toBe(true)
-    expect(actions.canOpen).toHaveBeenLastCalledWith({ pane: { app: 'claude', id: SESSION } })
     actions.claudeInFront.mockReturnValueOnce(false)
     expect(src.hasPane(agent('s1'))).toBe(false)
-    actions.canOpen.mockReturnValueOnce(false)
-    expect(src.hasPane(agent('s1'))).toBe(false)
+    const linux = setup({ actions: fakeActions({}, 'linux').actions })
+    linux.src.ingest(linux.ev('session-start', inClaude()))
+    expect(linux.src.hasPane(linux.src.list()[0])).toBe(false)
     expect(src.hasPane(agent('ghostty'))).toBe(false)
     expect(src.hasPane(agent('uuid'))).toBe(false)
     src.ingest(ev('session-end', inClaude()))
@@ -1408,7 +1792,7 @@ describe('ObservedSource tabs', () => {
   const flushed = (): Promise<void> => new Promise((resolve) => { setImmediate(resolve) })
 
   /** A source whose tty reads the test answers by hand, in the order they began, with a watch's stream open. */
-  function tabs(over: Partial<ObservedActions> = {}, deps: Partial<ObservedDeps> = {}) {
+  function tabs(over: Partial<Fakes> = {}, deps: Partial<ObservedDeps> = {}) {
     const reads: Array<{ answer(tty: string | undefined): Promise<void>; fail(): Promise<void> }> = []
     const tty = vi.fn((_pid: number) => new Promise<string | undefined>((resolve, reject) => {
       reads.push({
@@ -1416,10 +1800,10 @@ describe('ObservedSource tabs', () => {
         fail: () => { reject(new Error('ps failed')); return flushed() },
       })
     }))
-    const { actions } = fakeActions(over)
+    const { actions, ran } = fakeActions(over)
     const s = setup({ actions, tty, ...deps })
     const agent = (sessionId = 's1') => s.src.list().find((a) => a.sessionId === sessionId)!
-    return { ...s, actions, tty, reads, agent }
+    return { ...s, actions, ran, tty, reads, agent }
   }
 
   it('an agent in Terminal gets its tty from one read for its pid', async () => {
@@ -1639,6 +2023,21 @@ describe('ObservedSource tabs', () => {
     }
   })
 
+  // Its pane a rest would show is Orca's now, which comes before its app, not after: a tap has nothing left to raise.
+  it('an agent resumed in an Orca terminal while open ran gets no command', async () => {
+    const held = heldOpen()
+    const t = tabs({ open: held.open })
+    t.src.ingest(t.ev('session-start', inTerminal))
+    await t.reads[0].answer(TTY)
+    const tap = t.src.focus(t.agent())
+    t.src.ingest(t.ev('turn-start', { hostHints: { ...inTerminal.hostHints, ORCA_TERMINAL_HANDLE: HANDLE } }))
+    held.answer(true)
+    expect(await tap).toBe(true)
+    expect(t.actions.tabSelect).not.toHaveBeenCalled()
+    expect(t.actions.orcaSwitch).not.toHaveBeenCalled()
+    expect(t.ran).not.toHaveBeenCalled()
+  })
+
   it('with no stream a tap only opens; a tap on an agent with an Orca handle writes no select', async () => {
     const t = tabs({ tabsOpen: vi.fn(() => false) })
     t.src.ingest(t.ev('session-start', inTerminal))
@@ -1650,6 +2049,31 @@ describe('ObservedSource tabs', () => {
     expect(await t.src.focus(t.agent('orca'))).toBe(true)
     expect(t.actions.open).toHaveBeenCalledTimes(2)
     expect(t.actions.tabSelect).not.toHaveBeenCalled()
+  })
+
+  // herdr's pane is the nearer for a tap; the tab around it is still what a rest and a tap's raise select.
+  it('herdr inside Ghostty with a watch open still writes its tab select, on a rest and after a tap', async () => {
+    const t = tabs()
+    t.src.ingest(t.ev('session-start', { hostHints: { HERDR_PANE_ID: 'w1:p2', __CFBundleIdentifier: 'com.mitchellh.ghostty' } }))
+    await t.reads[0].answer(TTY)
+    expect(t.src.hasPane(t.agent())).toBe(true)
+    expect(await t.src.showPane(t.agent())).toBe('ok')
+    expect(t.actions.tabSelect.mock.calls).toEqual([['ghostty', TTY, false]])
+    expect(await t.src.focus(t.agent())).toBe(true)
+    expect(t.actions.open).toHaveBeenCalledTimes(1)
+    expect(t.actions.open.mock.calls[0][1].pane?.id).toBe('w1:p2')
+    expect(t.actions.tabSelect).toHaveBeenLastCalledWith('ghostty', TTY, true)
+    expect(t.actions.tabSelect).toHaveBeenCalledTimes(2)
+    expect(t.src.byTab('ghostty', TTY)).toMatchObject({ id: t.agent().id })
+    expect(t.actions.orcaSend).not.toHaveBeenCalled()
+    expect(t.actions.orcaSwitch).not.toHaveBeenCalled()
+    // No watch: no tab to select, and a tap only opens.
+    t.actions.tabsOpen.mockReturnValue(false)
+    expect(t.src.hasPane(t.agent())).toBe(false)
+    expect(await t.src.showPane(t.agent())).toBe('failed')
+    expect(await t.src.focus(t.agent())).toBe(true)
+    expect(t.actions.open).toHaveBeenCalledTimes(2)
+    expect(t.actions.tabSelect).toHaveBeenCalledTimes(2)
   })
 
   it('byTab: the live agent of that app and tty, the most recently active of two, none for another app, an ended session or an unknown tty', async () => {

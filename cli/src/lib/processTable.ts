@@ -893,8 +893,8 @@ export function selectEngineProcess(
   rows: ProcessRow[],
   rootPid: number,
   engine: RegisteredSession['engine'],
+  ownership = agentCommandOwnershipSnapshot(),
 ): ProcessRow | null {
-  const ownership = agentCommandOwnershipSnapshot()
   const byPid = new Map(rows.map((row) => [row.pid, row]))
   const children = new Map<number, ProcessRow[]>()
   for (const row of rows) {
