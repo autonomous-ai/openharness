@@ -1295,10 +1295,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // The other fourteen engines' live conversations, followed in their worker (core/engines/otherStreams.ts), or by its
   // code in this process under a master too old to run it (services/inline.ts).
   const inlineOthers = othersLive ? null : inline!.otherEngineRequests()
+  let stoppingReaderSession: (session: RegisteredSession) => Promise<void> | undefined = () => undefined
   const otherStreams = createOtherStreams({
     call: (type, payload, waitMs) => inlineOthers ? inlineOthers.call(type, payload, waitMs)
       : serviceLinksRef?.call(OTHER_ENGINES_SERVICE, type, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }),
     bySession: (id) => registry.bySession(id),
+    stopping: (session) => stoppingReaderSession(session),
     held: (session, held, rewritten) => {
       const reasons: readonly string[] = Object.values(OTHER_ENGINE_STATES)
       const reason = rewritten === 'lost' ? OTHER_ENGINE_STATES.lost : rewritten ? OTHER_ENGINE_STATES.rewritten : OTHER_ENGINE_STATES.unavailable
@@ -2953,6 +2955,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     moveHeld: (agentId) => moveHeld.has(agentId),
   })
   const stopJobs = lifecycle.stopJobs
+  stoppingReaderSession = session => stopJobs.get(session.agentId)
   launchCancelled = id => stopJobs.has(id)
   restoreCancelled = (agentId) => stopJobs.has(agentId) || pinnedControls.has(agentId) || moveHeld.has(agentId) || (restartJobs.operation(agentId) !== undefined && restartJobs.operation(agentId) !== 'restart')
   binding.whileChanging((agentId) => restorePanes.busy(agentId) || restartJobs.busy(agentId) || stopJobs.has(agentId))

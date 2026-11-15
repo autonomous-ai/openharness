@@ -2,6 +2,10 @@ import { removeRegistryAgent } from '../testing/registryFixtures.js'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { captureResumeIdentity } from './captureResumeIdentity.js'
 import { createStopAgentService, type StopAgentServiceDeps } from './stopAgentService.js'
+import { CloseAgentService } from './closeAgentService.js'
+import { createOtherStreams } from '../core/engines/otherStreams.js'
+import { OTHER_ENGINE_STATES } from '../engines/otherEngines.js'
+import { STREAM_OPEN, STREAM_OP, STREAMS_WAIT, STREAM_VERSION } from '../engines/worker/otherStreamProtocol.js'
 import { registry, type RegisteredSession } from './registry.js'
 import { setAgentSignaller } from './processSignals.js'
 import { stoppedAgents } from './stoppedAgents.js'
@@ -129,7 +133,8 @@ it('stops a guest harness by closing its pane, without the native probe or a sig
   expect(deps.stopNative).not.toHaveBeenCalled()
   expect(terminateDeletedAgent).not.toHaveBeenCalled()
   expect(tmuxKill).toHaveBeenCalledOnce()
-  expect(checkPidRuntime).toHaveBeenCalledTimes(2)
+  // Guest exit is checked before retirement and again after the durable image is prepared.
+  expect(checkPidRuntime).toHaveBeenCalledTimes(3)
   expect(stoppedAgents.get(row.agentId)).toMatchObject({ active: false, sessionId: 'saved' })
   expect(registry.byAgent(row.agentId)).toBeUndefined()
 })
@@ -143,25 +148,22 @@ it('keeps a guest harness whose process is still running after its pane closed',
   expect(registry.byAgent(row.agentId)).toBe(row)
 })
 it('checks the saved guest process after its pane removes the registry row, without claiming the changed stop completed', async () => {
-  vi.useFakeTimers()
   Object.assign(row, { guest: 'kim@example.com' })
   const identity = { ...row.processIdentity! }
+  deps.wait = vi.fn(async () => {})
   tmuxKill.mockImplementationOnce(async () => {
     ;(await removeRegistryAgent(registry, row.agentId))
     return { state: 'succeeded', dispatch: 'executed' }
   })
   vi.mocked(checkPidRuntime).mockResolvedValueOnce({ state: 'alive' })
     .mockResolvedValue({ state: 'gone', reason: 'guest exited after its pane closed' })
-  try {
-    const result = expect(createStopAgentService(deps)(row.agentId)).rejects.toThrow('The harness changed while pausing')
-    await vi.advanceTimersByTimeAsync(250)
-    await result
-    expect(checkPidRuntime).toHaveBeenCalledTimes(2)
-    for (const [session] of vi.mocked(checkPidRuntime).mock.calls) expect(session.processIdentity).toEqual(identity)
-    expect(deps.forgetSession).not.toHaveBeenCalled()
-    expect(terminateDeletedAgent).not.toHaveBeenCalled()
-    expect(stoppedAgents.get(row.agentId)?.sessionId).toBe('saved')
-  } finally { vi.useRealTimers() }
+  await expect(createStopAgentService(deps)(row.agentId)).rejects.toThrow('The harness changed while pausing')
+  expect(deps.wait).toHaveBeenCalledExactlyOnceWith(250)
+  expect(checkPidRuntime).toHaveBeenCalledTimes(2)
+  for (const [session] of vi.mocked(checkPidRuntime).mock.calls) expect(session.processIdentity).toEqual(identity)
+  expect(deps.forgetSession).not.toHaveBeenCalled()
+  expect(terminateDeletedAgent).not.toHaveBeenCalled()
+  expect(stoppedAgents.get(row.agentId)?.sessionId).toBe('saved')
 })
 it('waits for the process a starting guest harness gained while it was saved', async () => {
   // Stopped before its engine was seen, which the pane's watcher binds while the screen is saved: an older copy of the
@@ -321,17 +323,89 @@ it('holds a conversation whose evidence fails at the pane close, as at every ear
   expect(registry.byAgent(row.agentId)).toBe(row)
   expect(deps.forgetSession).not.toHaveBeenCalled()
 })
-it.each(['removed', 'replaced', 'conversation', 'route'] as const)('does not remove a target %s during termination', async mode => {
+it.each(['removed', 'replaced', 'conversation', 'route', 'native hold'] as const)('does not remove a target %s during termination', async mode => {
   vi.mocked(terminateDeletedAgent).mockImplementation(async () => {
     if (mode === 'removed') (await removeRegistryAgent(registry, row.agentId))
     else if (mode === 'conversation') row.sessionId = 'different-conversation'
     else if (mode === 'route') row.runtimes = [{ backend: 'tmux', paneId: '%88' }]
+    else if (mode === 'native hold') registry.setIdentityHold(row.agentId, 'The native process evidence changed.')
     else row.processIdentity = { ...row.processIdentity!, pid: 88 }
     return 'terminated'
   })
   await expect(createStopAgentService(deps)(row.agentId)).rejects.toThrow('changed while pausing')
   expect(tmuxKill).not.toHaveBeenCalled()
   expect(deps.forgetSession).not.toHaveBeenCalled()
+})
+it('completes Close when the lost live reader recovers while the original process exits', async () => {
+  vi.useFakeTimers()
+  Object.assign(row, { engine: 'hermes', processIdentity: { pid: 77, executable: 'hermes', startMarker: 'fixture' } })
+  const target = () => JSON.stringify([row.agentId, row.sessionId, row.engine, row.registeredAt, row.boundAt,
+    row.transcriptPath, row.cwd, row.hermesHome, row.processIdentity, row.runtimes])
+  const original = target()
+  let token = '', answerWait: ((answer: Record<string, unknown>) => void) | undefined
+  const readerDeps = {
+    call: async (type: string, payload: Record<string, unknown>): Promise<Record<string, unknown>> => {
+      if (type === STREAM_OPEN) {
+        token = payload.token as string
+        return { version: STREAM_VERSION, answer: { turn: { identity: 'turn', turnOpen: false },
+          historyTurnOpen: false, lastStarted: null, lastEnded: null, initial: [], lines: 0,
+          evidence: [], abandoned: false, frames: [] } }
+      }
+      if (type === STREAM_OP) return { version: STREAM_VERSION, answer: {} }
+      expect(type).toBe(STREAMS_WAIT)
+      return new Promise(resolve => { answerWait = resolve })
+    },
+    bySession: (id: string) => {
+      const current = registry.byAgent(row.agentId)
+      return current?.sessionId === id ? current : undefined
+    },
+    frame: vi.fn(), reattach: vi.fn(), log: vi.fn(), retryMs: 10,
+    // The lifecycle already owns this promise; discovery observes the same reservation in main.ts.
+    stopping: (session: RegisteredSession) => deps.stopJobs.get(session.agentId),
+    held: (session: RegisteredSession, held: boolean, rewritten?: boolean | 'lost') => {
+      const latest = registry.byAgent(session.agentId)
+      const reasons: readonly string[] = Object.values(OTHER_ENGINE_STATES)
+      if (!latest || latest.sessionId !== session.sessionId || (latest.identityHold && !reasons.includes(latest.identityHold))) return
+      registry.setIdentityHold(session.agentId, held
+        ? rewritten === 'lost' ? OTHER_ENGINE_STATES.lost : rewritten ? OTHER_ENGINE_STATES.rewritten : OTHER_ENGINE_STATES.unavailable
+        : undefined)
+    },
+  }
+  const streams = createOtherStreams(readerDeps)
+  const checkpoint = vi.fn(async () => {})
+  const close = new CloseAgentService({ registry, activity: async () => 'idle', checkpoint,
+    changed: vi.fn(), stop: createStopAgentService(deps) })
+  const signal = vi.fn()
+  setAgentSignaller(signal)
+  try {
+    await streams.open(row, { live: false, abandon: false, held: false, store: '/fixture/history.db' })
+    expect(answerWait).toBeDefined()
+    answerWait!({ version: STREAM_VERSION, answer: { pages: [], lost: [token] } })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(row.identityHold).toBe(OTHER_ENGINE_STATES.lost)
+    const beforeRevision = row.evidenceRevision
+    let duringRecovery: { revision?: number; held: boolean } | undefined
+    vi.mocked(terminateDeletedAgent).mockImplementation(async (session, actions) => {
+      actions.kill(session.processIdentity!.pid, 'SIGTERM')
+      await vi.advanceTimersByTimeAsync(10)
+      duringRecovery = { revision: row.evidenceRevision, held: !!row.identityHold }
+      expect(target()).toBe(original)
+      return 'terminated'
+    })
+    vi.mocked(deps.forgetSession).mockImplementation(async (id, options) => {
+      await registry.confirmEngineExit(id, 'remove', options.authority)
+      streams.forget(row.sessionId)
+    })
+    const result = await close.request({ agentId: row.agentId, sessionId: row.sessionId,
+      createdAt: new Date(row.registeredAt).toISOString(), mode: 'now' })
+    expect(signal).toHaveBeenCalledExactlyOnceWith(77, 'SIGTERM')
+    expect(result, JSON.stringify({ beforeRevision, duringRecovery, targetUnchanged: target() === original })).toEqual({ closed: true })
+    expect(checkpoint.mock.calls.map((call: unknown[]) => call[1])).toEqual(['before', 'after'])
+    expect(tmuxKill).toHaveBeenCalledOnce()
+    expect(registry.byAgent(row.agentId)).toBeUndefined()
+  } finally {
+    close.dispose(); streams.stop(); setAgentSignaller(null); vi.useRealTimers()
+  }
 })
 it.each(['capture', 'termination'] as const)('stops an agent still starting when its engine is identified during %s', async stage => {
   // Created, not yet bound to a process: the stop's snapshot has none.
@@ -356,7 +430,8 @@ it.each(['capture', 'termination'] as const)('accepts a hook rebuilding the same
     processIdentity: { startMarker: 'fixture', executable: 'codex', pid: 77 },
     runtimes: row.runtimes.map(runtime => ({ ...runtime })),
   }
-  const rebuild = () => { vi.spyOn(registry, 'resolve').mockReturnValue(replacement) }
+  const resolve = registry.resolve.bind(registry)
+  const rebuild = () => { vi.spyOn(registry, 'resolve').mockImplementation(id => resolve(id) ? replacement : undefined) }
   if (stage === 'capture') vi.mocked(captureResumeIdentity).mockImplementation(async session => { rebuild(); return session })
   else vi.mocked(terminateDeletedAgent).mockImplementation(async () => { rebuild(); return 'terminated' })
   await createStopAgentService(deps)(row.agentId)
@@ -475,7 +550,8 @@ it('does not forget a new agent published while its old pane was being retired',
 
 it('cancels an external intent through core without archiving, signalling or waiting for search', async () => {
   Object.assign(row, { sessionId: '', processIdentity: null, launch: { state: 'held', service: 'search', detail: 'Reader unavailable' },
-    externalResume: { phase: 'waiting' } })
+    externalResume: { token: '12345678-1234-1234-1234-123456789012', request: { engine: 'codex', sessionId: 'external' },
+      takeOver: null, phase: 'waiting' } })
   deps.cancelExternal = vi.fn(async (entry, current) => { expect(entry).toBe(row); expect(current()).toBe(true); return true })
   const save = vi.spyOn(stoppedAgents, 'save')
   await createStopAgentService(deps)(row.agentId)
@@ -490,7 +566,8 @@ it('cancels an external intent through core without archiving, signalling or wai
 
 it.each(['missing', 'refused', 'error', 'unknown', 'cancelled'] as const)('keeps an external intent intact when cancellation is %s', async failure => {
   Object.assign(row, { sessionId: '', processIdentity: null, launch: { state: 'held', service: 'search', detail: 'Reader unavailable' },
-    externalResume: { phase: 'waiting' } })
+    externalResume: { token: '12345678-1234-1234-1234-123456789012', request: { engine: 'codex', sessionId: 'external' },
+      takeOver: null, phase: 'waiting' } })
   if (failure !== 'missing') deps.cancelExternal = vi.fn(async (_entry, current) => {
     if (failure === 'error') throw new Error('Journal is unavailable')
     if (failure === 'unknown') throw 'unavailable'

@@ -267,9 +267,10 @@ after image preparation; every displaced owner receives cleanup. The local revie
 checkpoint inventories observational component preferences; the six obsolete
 synchronous APIs and their private release helper are removed. Four independent-review
 caller races have focused red/green evidence, including real native hooks after fresh
-fallback and Stop during revalidation. Final focused/native acceptance remains
-incomplete: no broad-gate or
-after-profile receipt is claimed. Unconfirmed rename retains whole-group recovery and
+fallback and Stop during revalidation. Exact main `8fcfa7de5` is integrated with
+focused reader/Stop/launch checks and TypeScript passing. Broad/native acceptance
+and the quiet comparison remain incomplete; no such receipt is claimed.
+Unconfirmed rename retains whole-group recovery and
 cannot authorize success, an old-engine rollback or archive deletion. Exit seals
 admission and waits for actual settlement before listener/claim release.
 

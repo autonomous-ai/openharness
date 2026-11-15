@@ -938,3 +938,20 @@ passed once on the current source; own-process identity remains synthetic and ev
 other host binary is forbidden. The earlier verification failures are retained,
 including the missing async synthetic identity before the two actual adapter reds.
 These are fixture correctness results, not new historical performance evidence.
+
+The local checkpoint integrates exact main `8fcfa7de5cab3e3beec8f587a37785dca3798585`
+without textual conflicts. Its reader/Close regression needed a semantic fixture
+conversion: strict removal retains Stop's authority and completes before reader
+cleanup. The original fixture produced `STOP_UNCONFIRMED`; its corrected case
+passes. Incoming runtime changes remain unchanged, sharing the existing Stop
+reservation with the binding revalidation fence.
+
+The single-worker combined selector retained 167 passes and 10 Stop fixture
+failures (`green-integrated-reader-close.log`, a failed run despite its filename).
+The two unchanged passing files cover reader recovery and real-registry launch
+callers. Stop's corrected selector then passed 65/65: it accounts for the final
+native proof refresh, injects the existing guest wait instead of advancing a fake
+clock through real disk I/O, stops its rebuild resolver from returning deleted
+rows, and supplies complete adoption fixture records. TypeScript passed on this
+combined source with Node 24.22.2. No broad/native gate or timing comparison was
+run for this integration; those acceptance steps remain pending.
