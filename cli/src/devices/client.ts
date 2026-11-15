@@ -77,8 +77,9 @@ export interface DialWatchDeps extends Pick<DevicesClientDeps, 'port' | 'dataDir
    *  `tellDevices` by default. */
   tell?: (message: { type: 'front'; app: string } | { type: 'tab'; app: string; tty: string }) => Promise<boolean>
   /** Opens the devices' stream of the tabs a swipe or a tap selects, handing on each chunk until it ends or [signal]
-   *  aborts: true when it had opened. `streamDevices` of `tabs` by default. */
-  selects?: (chunk: (data: Buffer) => void, signal: AbortSignal) => Promise<boolean>
+   *  aborts: true when it had opened. One asked with `standby` opens only while no other watch holds it.
+   *  `streamDevices` by default. */
+  selects?: (message: { type: 'tabs'; standby?: true }, chunk: (data: Buffer) => void, signal: AbortSignal) => Promise<boolean>
 }
 
 const NOT_RUNNING = 'Harness is not running on this computer. Run: harness start'
@@ -99,6 +100,8 @@ const SELECT_LINE_MAX = 96
 // devices process that is gone is not asked once a second.
 const STREAM_RETRY_MS = 1_000
 const STREAM_RETRY_MAX_MS = 30_000
+// The listener's last line on a stream a newer watch took (services/devicesListener.ts).
+const REPLACED_LINE = '{"replaced":true}'
 
 /** One call per line of at most [max] bytes; a longer line is dropped whole, its start included. */
 function lines(max: number, line: (text: string) => void): (chunk: Buffer | string) => void {
@@ -186,8 +189,11 @@ export function runDialWatch(argv: string[], deps: DialWatchDeps): Promise<numbe
     // nothing to open, and nothing is retried.
     let stream: AbortController | undefined, reopen: ReturnType<typeof setTimeout> | undefined
     let streamWait = STREAM_RETRY_MS
+    // Whether a newer watch took the stream, such as a second Harness Device's: this one then only stands by, taken while
+    // no stream is open, so the two do not take it from each other once a second.
+    let replaced = false
     const listening = devicesListenerPath(dataDir) !== null
-    const selects = deps.selects ?? ((chunk, signal) => streamDevices(dataDir, { type: 'tabs' }, chunk, { signal }))
+    const selects = deps.selects ?? ((message, chunk, signal) => streamDevices(dataDir, message, chunk, { signal }))
     // A select as Harness Device reads it: the tab, and `"raise":true` for a tap's. Nothing else of the line goes on.
     const printSelect = (line: string): void => {
       if (settled) return
@@ -203,11 +209,18 @@ export function runDialWatch(argv: string[], deps: DialWatchDeps): Promise<numbe
       if (settled || stream || !listening) return
       clearTimeout(reopen)
       stream = new AbortController()
+      let taken = false
       // Lines of its own: the start of a line an ended stream left never joins the next stream's first.
-      void selects(lines(SELECT_LINE_MAX, printSelect), stream.signal).then(hadOpened => {
+      const read = lines(SELECT_LINE_MAX, line => { if (line === REPLACED_LINE) taken = true; else printSelect(line) })
+      void selects(replaced ? { type: 'tabs', standby: true } : { type: 'tabs' }, read, stream.signal).then(hadOpened => {
         stream = undefined
         if (settled) return
-        if (hadOpened) streamWait = STREAM_RETRY_MS
+        if (hadOpened) {
+          streamWait = STREAM_RETRY_MS
+          // A stream of its own had opened, standing by or not: replaced only if it ended on that line, said once each.
+          replaced = taken
+          if (replaced) deps.printError('tabs stream replaced')
+        }
         reopen = setTimeout(openStream, streamWait)
         streamWait = Math.min(streamWait * 2, STREAM_RETRY_MAX_MS)
       })

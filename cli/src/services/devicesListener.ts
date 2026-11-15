@@ -13,7 +13,8 @@
  * has in front of them.
  *
  * A stream type (`tabs`) is answered with NDJSON lines that stay open: the way the devices process says something to a
- * watch without the watch asking each time. One of a type is open at once, across every connection.
+ * watch without the watch asking each time. One of a type is open at once, across every connection: a newer one ends
+ * the older with a last line, `{"replaced":true}`, and one asked with `"standby":true` opens only while none is.
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Socket } from 'node:net'
@@ -133,7 +134,7 @@ export async function openDevicesListener(
   const deadlines = new WeakMap<Socket, NodeJS.Timeout>()
   const waiting = new Set<AbortController>()
   // The open stream of each type, as how to end it; and the connections that hold one.
-  const streams = new Map<string, () => void>()
+  const streams = new Map<string, (replaced?: boolean) => void>()
   const streaming = new WeakSet<Socket>()
   let dropped = { ...NONE_DROPPED }
   let minute: NodeJS.Timeout | undefined
@@ -175,19 +176,31 @@ export async function openDevicesListener(
   }
 
   const openStream = (type: string, handler: ListenerStreamHandler, message: Record<string, unknown>, socket: Socket, res: ServerResponse): void => {
+    const { standby } = message
+    if (standby !== undefined && typeof standby !== 'boolean') return drop(res, 400, 'refused')
+    // A watch a newer one replaced stands by: it never takes the stream from one that is open, so two watches at once do
+    // not take it from each other. Not counted: it is the answer a standing watch waits on, not a message dropped.
+    if (standby && streams.has(type)) {
+      res.writeHead(409).end()
+      return
+    }
     const ended = new AbortController()
     // At most one line waits to drain, and only for the 2 s a connection has to answer: a client that stops reading
     // would otherwise hold the stream and its buffered lines.
     let writable = false
     let stall: NodeJS.Timeout | undefined
-    const end = (): void => {
+    const end = (replaced = false): void => {
       if (ended.signal.aborted) return
       writable = false
       ended.abort()
       clearTimeout(stall)
       streams.delete(type)
-      // Its connection has no deadline left to free its slot.
-      socket.destroy()
+      // Its connection has no deadline left to free its slot. A replaced one's goes once its last line is taken, which
+      // tells its watch to stand by, or 2 s on for a client that has stopped reading.
+      if (!replaced) return void socket.destroy()
+      const unread = setTimeout(() => socket.destroy(), LISTENER_TIMEOUT_MS).unref()
+      socket.once('close', () => clearTimeout(unread))
+      res.end(`${JSON.stringify({ replaced: true })}\n`, () => socket.destroy())
     }
     let answer: typeof REFUSED | void
     try {
@@ -213,7 +226,7 @@ export async function openDevicesListener(
       ended.abort()
       return drop(res, 400, 'refused')
     }
-    streams.get(type)?.()
+    streams.get(type)?.(true)
     streams.set(type, end)
     streaming.add(socket)
     clearTimeout(deadlines.get(socket))
@@ -382,7 +395,7 @@ export function tabHandler(report: (tab: Tab) => void): ListenerHandler {
 
 /** Two a second on a connection: a watch opens it again after it ends, and a loop cannot churn it. */
 export const TABS_PER_SECOND = 2
-/** Its one message, `{"type":"tabs"}`, is 15 bytes. */
+/** Its longest message, `{"type":"tabs","standby":false}`, is 31 bytes. */
 export const TABS_MAX_BYTES = 32
 
 export interface TabsStream {
