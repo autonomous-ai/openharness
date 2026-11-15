@@ -63,6 +63,14 @@ describe.skipIf(!hasTmux)('real tmux test isolation', () => {
         .toEqual(['set by the caller', join(theirs, 'own'), join(made.root, 't'), made.root, 'unset'])
     })
 
+    // The source check below reads only the text of the argument: a PATH built in a variable or a helper passes it,
+    // and every engine in the worker's folders is on the panes' again (review of 2026-11-16).
+    it('refuses a PATH holding a folder of the worker\'s, however the caller built it', async () => {
+      developer()
+      const path = [join(theirs, 'bin'), process.env.PATH].join(':')
+      await expect(isolatedTmux({ PATH: path }).then((made) => { tmux = made })).rejects.toThrow(/folders? of the worker's PATH/)
+    })
+
     it.skipIf(!existsSync('/bin/zsh'))('runs none of the developer\'s zsh startup files in a login shell', async () => {
       developer()
       const made = tmux = await isolatedTmux()
