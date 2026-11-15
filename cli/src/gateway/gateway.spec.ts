@@ -52,6 +52,7 @@ it('passes only lifecycle scalars to product reporting and keeps relaying if rep
   gateway.productUsage = { observe: fail, opened: fail, presence: fail, counter: fail, launch: fail }
   expect(() => gateway.usageCounter('create_requests')).not.toThrow()
   expect(() => gateway.usageLaunch({ id: 'synthetic-creation-1', phase: 'start' })).not.toThrow()
+  expect(() => gateway.usage({ kind: 'observed', payload: { measure: 'collector_days' } })).not.toThrow()
   expect(() => gateway.broadcast({ type: 'turn_started', agentId: 'fixture-agent' })).not.toThrow()
   expect(() => gateway.windowOpened('desktop')).not.toThrow()
   expect(() => gateway.localClients({ desktop: 1, tui: 0 })).not.toThrow()

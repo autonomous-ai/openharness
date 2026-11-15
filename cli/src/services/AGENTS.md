@@ -154,7 +154,8 @@ master too old to run it starts it beside itself, still in its own process (`src
   the edge host. It asks the core to launch literal argv or read live terminal identity through
   `core.terminals` (`core/shellQueries.ts`). A lost launch reply leaves an unconfirmed receipt and is
   never retried as a new launch. `e2e/shell.e2e.ts` keeps an attached terminal working across an edge crash.
-- The gateway owns account/backend HTTP and the single writer of `machines.json` (`gateway/accountHttp.ts`).
+- The gateway owns account/backend HTTP and the single writer of `machines.json` (`gateway/accountHttp.ts`), and the
+  account's routes of the door: the desk, the usage reports and choice, the Store's ratings and reviews (`gateway/accountRoutes.ts`).
   The core retains its reported list for stale replies during a restart, bound to the current account.
   The Store prepares bundled harnesses before reporting `prepared`; package agents wait held until
   preparation is available, after the core reports ready. The lean bundle shares one asset file, loaded by the Store and never by the core.

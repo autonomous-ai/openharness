@@ -1,4 +1,3 @@
-import { messageReceipt, productObservation, productUsageIntent, productUsageLaunch, productUsageRequest, productUsageSource } from './lib/productUsageSignals.js'
 import type { MessageReceipt } from './lib/sessionInput.js'
 import { isLocalOnly, withoutUpdate } from './lib/cardUpdate.js'
 import { slimForRelay } from './lib/slimForRelay.js'
@@ -37,6 +36,7 @@ import type { ScmLaunchRecord } from './scm/types.js'
 import type { StartedBy } from './lib/agentAttribution.js'
 import { agentFrame, type AgentBrowserFrame, type AgentDshContext, type AgentFrame } from './lib/agentFrame.js'
 import type { ProductUsageMetric } from './lib/productUsageContract.js'
+import { createUsageOutcomes } from './core/usageOutcomes.js'
 import type { AgentTokenUsage } from './lib/agentUsageWire.js'
 import { terminalHandoffRequest } from './lib/terminalHandoff.js'
 import { OwnerCommands, ROUTE_COMMAND_TYPES } from './lib/ownerCommands.js'
@@ -284,7 +284,7 @@ export class BackendSocket {
   onMessage: ((sessionId: string, content: string, deliveryId?: string) => void) | null = null
   /** Takes a `message` frame: text a person typed for an agent, into its pane (cli.ts binds core/input.ts).
    *  Agent Messages and the orchestrator deliver through `onMessage` above. [receipt]: what became of it, for
-   *  its request's measurement (lib/productUsageSignals.ts `messageReceipt`). */
+   *  its request's measurement (core/usageOutcomes.ts). */
   messageProvider: ((payload: Record<string, unknown>, receipt?: MessageReceipt) => void) | null = null
   /** Answers `agent_update` through its last argument, before the windows hear of the change: a rename, a
    *  model and effort, or an app opening the agent (cli.ts binds core/agents/update.ts). */
@@ -801,8 +801,11 @@ export class BackendSocket {
    *  counts nothing while it has none (signed out) or the account's choice is off. Never answered. */
   observeProduct(connId: string, payload: unknown): void {
     if (!this.tuiClients.has(connId)) return
-    for (const metric of productObservation(payload)) this.toGateway('usage', (gateway) => gateway.usageCounter?.(metric))
+    this.usageOutcomes.observed(payload)
   }
+
+  /** What the usage report counts of the requests answered here, raw: the gateway names the counters (core/usageOutcomes.ts). */
+  private readonly usageOutcomes = createUsageOutcomes({ send: (event) => this.toGateway('usage', (gateway) => gateway.usage?.(event)) })
 
   /** Routes a request to the service that answers it, in its own process (core/serviceLinks.ts) or in
    *  this one (core/serviceHost.ts): false when none does and the socket answers it itself. */
@@ -1031,23 +1034,10 @@ export class BackendSocket {
     if (env.LOG_FRAMES && !MESSAGE_REQUESTS.has(type) && !ROUTE_COMMAND_TYPES.has(type) && !type.startsWith('terminal_') && !type.startsWith('viewer_') && !type.startsWith(UNLOGGED_BROWSER) && !type.startsWith('grid_fleet_') && type !== 'agent_read_file' && type !== 'project_preview' && type !== 'git_project_info' && type !== 'scm_project_info' && type !== 'git_pull_request' && type !== 'git_pull_requests_status' && type !== 'agent_handoff_prepare' && type !== 'orchestrator' && type !== 'api_connections' && type !== 'connectors' && type !== 'os_device' && type !== 'machine_addon' && type !== 'browser_open' && type !== 'browser_callback' && type !== 'phone_pair' && !SHARE_REQUEST_TYPES.has(type) && !type.startsWith('pair')) {
       logFrame('←', connId ? `conn:${sid(connId)}` : 'backend', frame)
     }
-    const launchMeasured = productUsageLaunch(type, (frame.payload as { creationId?: unknown } | undefined)?.creationId,
-      signal => this.toGateway('usage', gateway => gateway.usageLaunch?.(signal)), (frame.payload as { engine?: unknown } | undefined)?.engine,
-      (frame.payload as { startedBy?: unknown } | undefined)?.startedBy === 'agent',
-      (frame.payload as { startedByHachi?: unknown } | undefined)?.startedByHachi === true)
-    const usageSource = productUsageSource(local, !!connId && this.toolClients.has(connId), role, frame.payload)
-    const measured = productUsageRequest(type, (metric) => this.toGateway('usage', (gateway) => gateway.usageCounter?.(metric)), Date.now, usageSource,
-      (frame.payload as { userAction?: unknown } | undefined)?.userAction === true)
-    productUsageIntent(type, (frame.payload as { usageIntent?: unknown } | undefined)?.usageIntent,
-      (frame.payload as { agentId?: unknown } | undefined)?.agentId, usageSource,
-      signal => this.toGateway('usage', gateway => gateway.usageLaunch?.(signal)))
+    // A request the usage report measures, and each of its answers, told the gateway as they are (core/usageOutcomes.ts).
+    const measured = this.usageOutcomes.request(type, frame.payload, { local, tool: !!connId && this.toolClients.has(connId), role })
     const reply = (t: string, rid: unknown, p: Record<string, unknown>): void => {
-      if (t === type) {
-        const failure = p.failure as { code?: unknown; reason?: unknown } | undefined
-        measured(p.error ?? failure?.code, p.state, !!p.agent, p.ok, undefined, p.reason ?? failure?.reason)
-        // The agent frame itself: a created launch's agent is watched until it starts (gateway/productUsage.ts).
-        launchMeasured(p.error ?? (p.failure as { code?: unknown } | undefined)?.code, p.state, p.agent, (p.held as { service?: unknown } | undefined)?.service)
-      }
+      if (t === type) measured?.answered(p)
       this.emitReply(connId, t, rid, p)
     }
     // A guest: a session trusted only because this machine is shared with its account (gateway/gateway.ts).
@@ -1370,7 +1360,7 @@ export class BackendSocket {
 
         // Text typed for an agent, into its pane (core/input.ts, bound by cli.ts).
         case 'message':
-          if (this.messageProvider) this.messageProvider(payload, messageReceipt(measured))
+          if (this.messageProvider) this.messageProvider(payload, measured?.receipt)
           else console.warn('[backend] message handler is not wired; terminal input was not dispatched')
           return
 
