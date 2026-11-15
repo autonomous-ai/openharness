@@ -328,28 +328,32 @@ export interface CableHost {
   selectMachine(machineId: string): Promise<{ ok: true } | { ok: false; code: string; message: string }>
   /** The machine a pick is still on its way to, or '' when none is. Picking the selected machine then has to replace it. */
   pendingPick?(): string
-  /** The window's swarms and which is on screen. Empty with no window: the dial then draws no swarm line. */
-  listSwarms(): { selected: string; swarms: CableSwarm[]; tiles: CableTile[] }
+  /** The window's swarms and which is on screen. Empty with no window, and for a dial on an app's ring (`apps`, a dial
+   *  that says `appFilter`): the dial then draws no swarm line. */
+  listSwarms(opts?: { apps?: boolean }): { selected: string; swarms: CableSwarm[]; tiles: CableTile[] }
   /** The dial picked a swarm. Relayed to the window, which switches and re-describes its desk. */
   selectSwarm(swarmId: string): void
   appName(): string
   voiceLang(): string
-  /** The window's latest selected pane, including selections made before this dial attached. */
-  appFocus?(): { machineId: string; agentId: string } | undefined
+  /** The window's latest selected pane, including selections made before this dial attached. Nothing for a dial on an
+   *  app's ring: its words go to the agent on its face. */
+  appFocus?(opts?: { apps?: boolean }): { machineId: string; agentId: string } | undefined
   /** The active tab's agents, in tile order — and nothing else. Empty with no window or an empty tab. */
   listAgents(): Promise<CableAgent[]>
   /** Pane rows and workspace identity from the same desktop announcement; with no window, `view: 'machine'` when the
    *  rows are this computer's agents instead. Asked with `apps` (a dial that says `appFilter`), the machine view is the
    *  shown app's ring and `apps` the list the dial picks from. */
   listAgentSnapshot?(opts?: { apps?: boolean }): Promise<{ agents: CableAgent[]; tab: string; total: number; view?: 'machine'; apps?: AppList }>
-  /** The dial picked an app, or a tapped notice turns it to its agent's app (`notice`). `ignored` with a window. */
+  /** The dial picked an app, or a tapped notice turns it to its agent's app (`notice`). `ignored` on a window's tab;
+   *  `tabs` when Harness was picked on an app's ring, and the dials hold the window's tab again. */
   pickApp?(app: string, cause?: 'pick' | 'notice'): AppPick
-  /** The app an agent of the machine view is in; undefined with a window. */
-  appOf?(agentId: string): string | undefined
+  /** The app an agent of the machine view is in; undefined on a window's tab. */
+  appOf?(agentId: string, opts?: { apps?: boolean }): string | undefined
   /** Every agent across the account — the overview's number. The dial gets the count, never the rows. */
   agentTotal(): number
-  /** The active tab's id, or '' with no window: what lets the dial tell an empty tab from a shut app. */
-  activeSwarm(): string
+  /** The active tab's id, or '' with no window and for a dial on an app's ring: what lets the dial tell an empty tab from
+   *  a shut app. */
+  activeSwarm(opts?: { apps?: boolean }): string
   /** Who an agent is, for a card about one the dial does not hold. Undefined for an id never listed. */
   describe(agentId: string): { name: string; engine: string; machine: string } | undefined
   activityText?(agentId: string): Promise<string | null>
@@ -369,12 +373,12 @@ export interface CableHost {
   answerReviewed?(answer: ReviewedAnswer): Promise<AnswerReceipt>
   canSpeakQuestion?(agentId: string): boolean
   /** What the dial may do with an agent of the machine list, as letters of s v f a; undefined (an older host, a
-   *  window, an agent it does not list) means everything, as before. */
-  capsOf?(agentId: string): string | undefined
+   *  window's tab, an agent it does not list) means everything, as before. */
+  capsOf?(agentId: string, opts?: { apps?: boolean }): string | undefined
   /** The app or terminal that agent runs in (`orca`, `ghostty`, …), for the words of a refusal. */
-  hostOf?(agentId: string): string | undefined
+  hostOf?(agentId: string, opts?: { apps?: boolean }): string | undefined
   /** The dial is on that agent: its finished answer counts as seen. */
-  markSeen?(agentId: string): void
+  markSeen?(agentId: string, opts?: { apps?: boolean }): void
   /** A rest of the dial on that agent switches its app's pane: the session then times a hand's turn to it. */
   swipeSwitches?(agentId: string): boolean
   /** How a hand's turn to such an agent ended: the dial rested on it for SWIPE_REST_MS, or left it first. */
@@ -673,8 +677,8 @@ export class CableSession {
   private statsTurn = false
   /** `player: 'library-v1'`: the paged `player.library`. */
   private playerCapable = false
-  /** `appFilter: 'v1'` (the round dial, spec 2026-11-14-dial-app-filter): with no window it holds one app's ring, is sent
-   *  `apps` and picks with `app.pick`. Any other device gets the single ring. */
+  /** `appFilter: 'v1'` (the round dial, spec 2026-11-14-dial-app-filter): with no window, or a window and the app in
+   *  front, it holds one app's ring, is sent `apps` and picks with `app.pick`. Any other device gets the single ring. */
   private appFilter = false
   private playerOffset = 0
   private playerRequest = 0
@@ -1365,7 +1369,7 @@ export class CableSession {
           // screen. A repeat greeting from the same dial on the same image is a keepalive and is skipped,
           // which is the whole reason the branch exists.
           await this.pushAgents()
-          const focused = this.host.appFocus?.()
+          const focused = this.host.appFocus?.(this.asItself)
           if (focused) await this.followApp(focused.machineId, focused.agentId)
         }
         // Offered on every greeting, but only ONCE per version per session: accepting makes the dial erase
@@ -1485,7 +1489,7 @@ export class CableSession {
           // The dial sends focus on every swipe, so an agent it cannot bring forward is passed over without a toast,
           // which would fire on each turn of the carousel. Turning to it still means its answer was seen, and the record
           // above still names it: the next list push re-asserts it rather than turning the dial back.
-          if (this.lacks(agentId, 'f')) this.host.markSeen?.(agentId)
+          if (this.lacks(agentId, 'f')) this.host.markSeen?.(agentId, this.asItself)
           else this.host.focus(agentId)
           this.host.turned?.()
           this.restOn(agentId)
@@ -1513,6 +1517,7 @@ export class CableSession {
         if (picked === 'switched') await this.syncAgents(true)
         // The dial picked from a list that moved under it: it is told the list again, and keeps the ring it holds.
         else if (picked === 'ignored') await this.queued(() => this.syncAgentsNow(true, false))
+        // `tabs` sends nothing here: the view's change sends every such dial its tabs before its list (viewChanged).
         return
       }
       case 'agent.open': {
@@ -1520,8 +1525,9 @@ export class CableSession {
         const agentId = str('agentId'), reason = str('reason') === 'question' ? 'question' as const : undefined
         if (!agentId) return
         // A tapped notice for an agent of another app turns the dial to that app's ring, on the agent (decision 7, A). A
-        // question that opened by itself never moves it.
-        const app = reason || !this.appFilter ? undefined : this.host.appOf?.(agentId)
+        // question that opened by itself never moves it. A Harness agent's, on an app's ring, turns the dials to the
+        // window's tab (`tabs`): the window then opens the agent, and the dial follows the window's focus.
+        const app = reason || !this.appFilter ? undefined : this.host.appOf?.(agentId, this.asItself)
         if (app && this.host.pickApp?.(app, 'notice') === 'switched') {
           this.desiredFocus = agentId
           await this.syncAgents(true)
@@ -1750,8 +1756,9 @@ export class CableSession {
         // The dial can still name the previous pane while a focus frame is in flight, or after the
         // devices process restarted. Ordinary dictation belongs to the window's selection at capture
         // start. Quoted text, carried text, questions and edits already have their own pinned targets.
+        // On an app's ring the host names no selection: the words go to the agent on the dial's face, as with no window.
         const plain = str('agentId') && !formVoice && !searchVoice && !draftVoice && !questionVoice && !carryVoice && !('selectionId' in msg)
-        const focused = plain ? this.host.appFocus?.() : undefined
+        const focused = plain ? this.host.appFocus?.(this.asItself) : undefined
         const agentId = focused?.agentId ?? str('agentId')
         // Words for an agent's terminal that the dial cannot type into (an agent outside Harness): no audio is kept and
         // nothing goes to the transcriber. A form, a search, a draft or a question is not its terminal.
@@ -2563,10 +2570,10 @@ export class CableSession {
   }
 
   /** The list this dial is sent: the shown app's ring for a dial that says `appFilter`, the single ring for one that does
-   *  not, the tab's with a window. */
+   *  not, the tab's while a window holds it. */
   private async agentSnapshot() {
-    return this.host.listAgentSnapshot ? await this.host.listAgentSnapshot({ apps: this.appFilter }) : {
-      agents: await this.host.listAgents(), tab: this.host.activeSwarm(), total: this.host.agentTotal(),
+    return this.host.listAgentSnapshot ? await this.host.listAgentSnapshot(this.asItself) : {
+      agents: await this.host.listAgents(), tab: this.host.activeSwarm(this.asItself), total: this.host.agentTotal(),
     }
   }
 
@@ -2790,7 +2797,7 @@ export class CableSession {
   }
 
   private async syncSwarmsNow(force: boolean): Promise<void> {
-    const { selected, swarms, tiles } = this.host.listSwarms()
+    const { selected, swarms, tiles } = this.host.listSwarms(this.asItself)
     const meta = await this.memberMeta(swarms)
     // `panes` belongs in the key as much as `agents` does. Opening a terminal on a tab that holds no
     // agent moves only the tile count, and a key blind to it would swallow that push and leave the
@@ -3084,6 +3091,9 @@ export class CableSession {
   get wantsStats(): boolean { return this.statsTurn && this.isConnected }
   /** A connected dial that says `appFilter`: only its reads should drive the app filter's choices. */
   get wantsApps(): boolean { return this.appFilter && this.isConnected }
+  /** What this dial asks the host as, wherever the answer differs by dial: one that says `appFilter` can hold an app's
+   *  ring while a window is open, any other holds the window's tab. */
+  private get asItself(): { apps: boolean } { return { apps: this.appFilter } }
   /** The turn's test and commit counts, for a `stats: 'turn-v1'` device; nothing when none were seen. */
   async turnStats(agentId: string, stats: TurnStatsFields): Promise<void> {
     if (!this.statsTurn || !Object.keys(stats).length) return
@@ -3252,6 +3262,18 @@ export class CableSession {
   /**
    * The desktop window moved to an agent — bring the dial with it.
    *
+   * A dial on an app's ring (it says `appFilter` and holds no tab) is not moved to an agent its last list lacks: it walks
+   * that app, and a focus off its ring would land on nothing. Nothing is sent and the record keeps the agent the dial is
+   * on; the tab coming back lands it on the window's agent (viewChanged).
+   */
+  async followApp(machineId: string, agentId: string): Promise<void> {
+    if (this.appFilter && !this.lastRing.some((a) => a.id === agentId) && this.host.activeSwarm(this.asItself) === '') return
+    await this.follow(machineId, agentId)
+  }
+
+  /**
+   * Bring the dial to an agent: the window's follow, and a local one.
+   *
    * ⚠️ THE `desiredFocus` GUARD IS WHAT KEEPS THIS FROM OSCILLATING. The two screens drive each other: the
    * dial's own carousel reports `focus` up, the daemon hands that to the app, the app opens that agent's
    * terminal, and the app opening a terminal is exactly what calls this. Answering it with another `focus`
@@ -3265,7 +3287,7 @@ export class CableSession {
    * selection behind the network, leaving the round unit on the old pane. Update the machine wheel
    * separately, still in order, so a slow attachment cannot block the selected pane.
    */
-  async followApp(machineId: string, agentId: string): Promise<void> {
+  private async follow(machineId: string, agentId: string): Promise<void> {
     if (!this.link?.isOpen || this.greetedMac === null) return
     if (!agentId) return
 
@@ -3337,8 +3359,9 @@ export class CableSession {
 
   /**
    * A person's prompt, or another local cause, in the app in front: the dial turns to its agent the way it follows the
-   * window, through followApp, so the move keeps its queue, its list before its focus and its echo guard (no swipe rest
-   * starts from the echo).
+   * window, so the move keeps its queue, its list before its focus and its echo guard (no swipe rest starts from the
+   * echo). Not through followApp: the list read here holds the agent, and a tile the dial has not been sent yet must
+   * still be reached.
    *
    * Only a dial whose ring holds the agent moves. One that walks another app's ring (a pick on the dial), a window's tab
    * or a second dial's other ring keeps its place and its record: a focus it has no tile for would land on nothing.
@@ -3351,11 +3374,27 @@ export class CableSession {
     // Already there: a stuck engine repeating its event costs no list read.
     if (agentId === this.desiredFocus && !this.appFocusUnsent) return
     const { agents } = await this.agentSnapshot()
-    // Unplugged during the read: followApp would send nothing, and a move that never happened is not counted.
+    // Unplugged during the read: the move would send nothing, and a move that never happened is not counted.
     if (!this.isConnected || generation !== this.followGeneration) return
     if (!agents.some((a) => a.id === agentId)) return this.host.localFollowed?.(cause, 'no-tile')
     this.host.localFollowed?.(cause, 'moved')
-    await this.followApp(this.host.localMachine().id, agentId)
+    await this.follow(this.host.localMachine().id, agentId)
+  }
+
+  /**
+   * The cable host turned the view of the dials that say `appFilter` while a window is open: its tab, or the shown app's
+   * ring. Such a dial is sent its tabs, then its list, at once rather than on the next tick; back on the tab it lands on
+   * the window's agent after the list. On an app's ring the host names no window focus.
+   */
+  async viewChanged(): Promise<void> {
+    if (!this.wantsApps) return
+    // At once: a machine list is otherwise held a second after the last push. Let through, not forced, so a list that
+    // did not change is not sent twice.
+    this.agentsPushedAt = -Infinity
+    await this.syncSwarms()
+    await this.syncAgents()
+    const focused = this.host.appFocus?.(this.asItself)
+    if (focused) await this.followApp(focused.machineId, focused.agentId)
   }
 
   async toast(text: string): Promise<void> {
@@ -3386,20 +3425,21 @@ export class CableSession {
     this.swipeRest = null
   }
 
-  /** The agent's host says the dial may not do this with it. A host that says nothing (an older one, a window) allows it. */
+  /** The agent's host says the dial may not do this with it. A host that says nothing (an older one, a window's tab)
+   *  allows it. */
   private lacks(agentId: string, cap: 'v' | 'f' | 'a'): boolean {
-    const caps = this.host.capsOf?.(agentId)
+    const caps = this.host.capsOf?.(agentId, this.asItself)
     return caps !== undefined && !caps.includes(cap)
   }
 
-  /** The agent runs in another app or terminal. A host that names no app for it (an older one, a window) holds Harness
-   *  agents only. */
+  /** The agent runs in another app or terminal. A host that names no app for it (an older one, a window's tab) holds
+   *  Harness agents only. */
   private outsideHarness(agentId: string): boolean {
-    const host = this.host.hostOf?.(agentId)
+    const host = this.host.hostOf?.(agentId, this.asItself)
     return host !== undefined && host !== 'harness'
   }
 
   private hostName(agentId: string): string {
-    return hostDisplayName(this.host.hostOf?.(agentId) ?? '')
+    return hostDisplayName(this.host.hostOf?.(agentId, this.asItself) ?? '')
   }
 }
