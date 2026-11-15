@@ -23,5 +23,12 @@ const enabled = process.env.RUN_TERMINAL_CONTRACT === '1' && process.platform !=
     await cleanup()
     throw new Error(`tmux contract: tmux is unavailable (${prepared.code}): ${prepared.reason}`)
   }
+  // The backend's panes take the environment of the server they reach: the fixture's, with its PATH, never one the
+  // backend's own bare `tmux` started from the worker's (review of 2026-11-16).
+  const path = await server.run('show-environment', '-g', 'PATH').catch(() => 'no server')
+  if (path !== `PATH=${server.env.PATH}`) {
+    await cleanup()
+    throw new Error('tmux contract: the backend would start its own server, with the worker\'s environment')
+  }
   return { backend, cleanup }
 })
