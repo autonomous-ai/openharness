@@ -256,8 +256,8 @@ export class DaemonCableHost implements CableHost {
     this.filter = new AppFilter({
       after: wiring.appTimer ?? unrefAfter,
       random: wiring.appRandom ?? Math.random,
-      // The registry's agents at each call, not the rings' last update: only a list read with no window updates the
-      // rings, so a settle with a window open or the dial unplugged, or a pick just after an app's last agent ended,
+      // The registry's agents at each call, not the rings' last update: only a read of the machine list updates the
+      // rings, so a settle with the dials on a window's tab or unplugged, or a pick just after an app's last agent ended,
       // would count the past. Harness's own agents still count as that read left them: the list read feeds their source
       // (machineSnapshot).
       counts: () => this.counts(),
@@ -520,7 +520,11 @@ export class DaemonCableHost implements CableHost {
     return locale.startsWith('vi') ? 'vi' : 'en'
   }
 
-  appFocus(): { machineId: string; agentId: string } | undefined {
+  /** The window's focused agent. None for a dial on an app's ring: its words go to the agent on its face, as with no
+   *  window. */
+  appFocus(opts: { apps?: boolean } = {}): { machineId: string; agentId: string } | undefined {
+    // The dial holds no tab of the open window: it is on an app's ring.
+    if (this.windowOf(opts) !== this.swarms) return undefined
     return this.wiring.appFocus?.()
   }
 
@@ -609,26 +613,34 @@ export class DaemonCableHost implements CableHost {
     else if (has(this.counts().all, app)) this.setView('apps', 'front')
   }
 
+  /** The window whose tab a dial holds: none with no window, and none for a dial that says `appFilter` on an app's ring. */
+  private windowOf(opts: { apps?: boolean }): AppSwarms | null {
+    return opts.apps && this.view === 'apps' ? null : this.swarms
+  }
+
   /**
-   * The view decided at a read by a dial that says `appFilter`, where the filter's own D1 and `empty` are. On the tab, the
-   * app in front getting known agents turns the view to its ring; on a ring, the shown app left as Harness or none turns
-   * it back to the tab. Each check reads the registry last, so a tab read with Harness or no listed app in front costs
-   * what it did before the view.
+   * On the tab, at a read by a dial that says `appFilter`, where the filter's own D1 is: the app in front getting known
+   * agents turns the view to its ring. The registry is read last, so a tab read with Harness or no listed app in front
+   * costs what it did before the view.
    */
-  private viewOnRead(): void {
-    if (this.view === 'tabs') {
-      const front = this.otherFront()
-      if (front !== undefined && front !== this.pickedOver && has(this.counts().known, front)) this.setView('apps', 'front')
-      return
-    }
-    if (this.view !== 'apps') return
-    const shown = this.filter.shown()
-    if (shown !== undefined && shown !== 'harness') return
+  private viewOnTab(): void {
+    if (this.view !== 'tabs') return
+    const front = this.otherFront()
+    if (front !== undefined && front !== this.pickedOver && has(this.counts().known, front)) this.setView('apps', 'front')
+  }
+
+  /**
+   * On a ring, at the read that built it, where the filter's own `empty` is: the shown app left as Harness or none turns
+   * the view back to the tab. Whether it did.
+   */
+  private viewOnRing(shown: string): boolean {
+    if (this.view !== 'apps' || (shown !== '' && shown !== 'harness')) return false
     this.setView('tabs', 'empty')
     // Harness shown while the app in front has known agents is a pick of Harness made before the window opened: it holds
     // as one made with the window open, or the next read's D1 would turn the view straight back.
     const front = this.otherFront()
     if (front !== undefined && has(this.counts().known, front)) this.pickedOver = front
+    return true
   }
 
   /** This computer's Harness agents, fed from the list this host reads; the devices put it in their registry. */
@@ -643,7 +655,8 @@ export class DaemonCableHost implements CableHost {
     this.waiting = null
   }
 
-  /** Every agent on this computer, by source; null when the devices have none. Read only with no window. */
+  /** Every agent on this computer, by source; null when the devices have none. Read only for a dial that holds no
+   *  window's tab. */
   private registry: HostRegistry | null = null
   /** The machine list's ring: one for this host, so every dial here swipes through the same agents in the same order.
    *  In memory only: a restart of the devices process builds it again from the registry. */
@@ -658,10 +671,10 @@ export class DaemonCableHost implements CableHost {
     this.registry = registry
   }
 
-  /** An agent of the machine list and the source that holds it. With a window the dial holds the tab, whose agents
-   *  it may do everything with, so the registry is not asked. */
-  private onMachine(agentId: string): HostEntry | undefined {
-    return this.swarms === null ? this.registry?.entries().find((e) => e.agent.id === agentId) : undefined
+  /** An agent of the machine list and the source that holds it. A dial on a window's tab may do everything with its
+   *  agents, so the registry is not asked. */
+  private onMachine(agentId: string, opts: { apps?: boolean }): HostEntry | undefined {
+    return this.windowOf(opts) === null ? this.registry?.entries().find((e) => e.agent.id === agentId) : undefined
   }
 
   /** An agent of another app or terminal, heard on this computer, or undefined. Nothing of it may reach the core: the
@@ -677,17 +690,17 @@ export class DaemonCableHost implements CableHost {
     return held && held.source.id !== 'harness' ? held : undefined
   }
 
-  capsOf(agentId: string): string | undefined {
-    const on = this.onMachine(agentId)
+  capsOf(agentId: string, opts: { apps?: boolean } = {}): string | undefined {
+    const on = this.onMachine(agentId, opts)
     return on && capsLetters(on.source.capabilities(on.agent))
   }
 
-  hostOf(agentId: string): string | undefined {
-    return this.onMachine(agentId)?.agent.host
+  hostOf(agentId: string, opts: { apps?: boolean } = {}): string | undefined {
+    return this.onMachine(agentId, opts)?.agent.host
   }
 
-  appOf(agentId: string): string | undefined {
-    return this.onMachine(agentId)?.agent.app
+  appOf(agentId: string, opts: { apps?: boolean } = {}): string | undefined {
+    return this.onMachine(agentId, opts)?.agent.app
   }
 
   /** A pick from the dial's list of apps. With a window, on the tab nothing is picked; on an app's ring Harness is the
@@ -702,8 +715,8 @@ export class DaemonCableHost implements CableHost {
     return 'tabs'
   }
 
-  /** The app the person brought to the front. Followed with a window open too, so the dial shows it once the window
-   *  closes. */
+  /** The app the person brought to the front. Followed with a window open too: it sets the view, and the app shown on
+   *  an app's ring. */
   front(app: string): void {
     this.filter.front(app)
   }
@@ -733,8 +746,8 @@ export class DaemonCableHost implements CableHost {
     this.wiring.dialShows?.(agent)
   }
 
-  markSeen(agentId: string): void {
-    this.onMachine(agentId)?.source.markSeen?.(agentId)
+  markSeen(agentId: string, opts: { apps?: boolean } = {}): void {
+    this.onMachine(agentId, opts)?.source.markSeen?.(agentId)
   }
 
   /** What the window still has unread, newest first. Empty until a window says otherwise. */
@@ -757,8 +770,8 @@ export class DaemonCableHost implements CableHost {
     this.wiring.notificationRead?.(item.machineId, agentId, readToken)
   }
 
-  listSwarms(): { selected: string; swarms: CableSwarm[]; tiles: CableTile[] } {
-    const app = this.swarms
+  listSwarms(opts: { apps?: boolean } = {}): { selected: string; swarms: CableSwarm[]; tiles: CableTile[] } {
+    const app = this.windowOf(opts)
     if (!app) return { selected: '', swarms: [], tiles: [] }
     return {
       selected: app.active,
@@ -792,7 +805,8 @@ export class DaemonCableHost implements CableHost {
    *                                          ring of at most sixteen where an agent keeps its place whatever its
    *                                          state does (hosts/select.ts); `total` is every agent here. Asked
    *                                          with `apps` (a dial that says `appFilter`), the shown app's ring
-   *                                          instead, `total` its agents, and `apps`, the list it picks from.
+   *                                          instead, `total` its agents, and `apps`, the list it picks from. The
+   *                                          same for such a dial with a window open while the view is `apps`.
    *   - no window and no registry          → `[]`; the dial shows "Run OpenHarness on your computer".
    *   - a window with an empty tab         → `[]`; the dial shows "Nothing on this tab".
    *   - a window with panes                → those agents, in tile order; a tile whose machine dropped out
@@ -803,15 +817,19 @@ export class DaemonCableHost implements CableHost {
   }
 
   async listAgentSnapshot(opts: { apps?: boolean } = {}): Promise<{ agents: CableAgent[]; tab: string; total: number; view?: 'machine'; apps?: AppList }> {
-    if (opts.apps) this.viewOnRead()
+    if (opts.apps) this.viewOnTab()
     const flat = await this.listAgentsFlat()
     const byId = new Map(flat.map((a) => [a.id, a]))
+    const registry = this.registry
+    if (this.windowOf(opts) === null && registry) {
+      const machine = await this.machineSnapshot(registry, flat, byId, opts.apps === true)
+      // A ring left as Harness or none, with a window open, is the window's tab.
+      if (!this.viewOnRing(machine.apps?.shown ?? '')) return machine
+    }
     // app_panes and app_swarms are separate messages. Never label the new panes
     // with the previous tab (or vice versa) between those two arrivals. The
     // swarm announcement already contains membership in the same tile order.
     const app = this.swarms
-    const registry = this.registry
-    if (app === null && registry) return this.machineSnapshot(registry, flat, byId, opts.apps === true)
     const tab = app?.active ?? ''
     const ids = app?.swarms.find(s => s.id === tab)?.agentIds ?? []
     const out = ids.map(id => byId.get(id)).filter((a): a is CableAgent => !!a)
@@ -872,10 +890,10 @@ export class DaemonCableHost implements CableHost {
     return this.viaFleet((r) => r.agentTotal())
   }
 
-  /** The active tab's id, or '' with no window. Travels on `agents.end` so the dial can tell an empty
-   *  tab from a shut window — the two draw different screens. */
-  activeSwarm(): string {
-    return this.swarms?.active ?? ''
+  /** The active tab's id, or '' with no window and for a dial on an app's ring. Travels on `agents.end` so the dial can
+   *  tell an empty tab from a shut window — the two draw different screens. */
+  activeSwarm(opts: { apps?: boolean } = {}): string {
+    return this.windowOf(opts)?.active ?? ''
   }
 
   /**
@@ -1020,9 +1038,10 @@ export class DaemonCableHost implements CableHost {
    * the refusal for a machine whose last request did not come back. See the router's sendTurn.
    */
   sendTurn(agentId: string, text: string): SendOutcome | Promise<SendOutcome> {
-    // A Promise only when another app's source delivers the words, which it answers once they are typed or refused. With
-    // a window the dial is on its tab, so such an agent takes no voice.
-    const on = this.onMachine(agentId)
+    // A Promise only when another app's source delivers the words, which it answers once they are typed or refused. Not
+    // asked per dial: such an agent takes words while the dials that say `appFilter` are on an app's ring, and none on
+    // the window's tab.
+    const on = this.onMachine(agentId, { apps: true })
     if (on && on.source.id !== 'harness' && on.source.send) {
       return on.source.send(on.agent, text).then((sent) => sent.ok ? sent : { ok: false, machine: '', reason: sent.reason, message: sent.reason })
     }
