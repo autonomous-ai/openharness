@@ -54,30 +54,31 @@ deadline = setTimeout(cancel, 5000);
 
 export function createSetupProbeExecutor() {
   const children = new Set<ChildProcess>()
-  const execute = (file: string, args: string[], options: ExecFileOptions,
-    callback: (error: ExecFileException | null, stdout: string, stderr: string) => void): ChildProcess => {
-    if (children.size >= 8) {
-      queueMicrotask(() => callback(Object.assign(Error('Setup probes are busy'), { code: 'SETUP_PROBE_BUSY' }), '', ''))
-      return new ChildProcess()
-    }
+  type Callback = (error: ExecFileException | null, stdout: string, stderr: string) => void
+  interface Keeper { child: ChildProcess; answered: boolean; callback?: Callback }
+  let spare: Keeper | undefined, warmed = false
+  const start = (): Keeper => {
     // The documented Windows hidden runner pattern: cleanup must outlive setup to observe IPC disconnect.
     // Only this small runner is detached; it starts real work hidden, under ownProcessGroup's platform rules.
     const child = spawn(managedNodePath(), ['--max-old-space-size=32', '-e', RUNNER], {
       detached: true, windowsHide: true, stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
     })
     children.add(child)
-    let answered = false
+    const keeper: Keeper = { child, answered: false }
     const reply = (error: ExecFileException | null, stdout = '', stderr = '') => {
-      if (answered) return
-      answered = true; callback(error, stdout, stderr)
+      if (keeper.answered) return
+      keeper.answered = true; keeper.callback?.(error, stdout, stderr)
     }
-    const unavailable = () => reply(Object.assign(Error('Setup probe is unavailable'), { code: 'SETUP_PROBE_UNAVAILABLE' }))
+    const unavailable = () => {
+      if (!keeper.answered && !keeper.callback) console.warn('[engine-setup] SETUP_PROBE_WARMUP_UNAVAILABLE')
+      reply(Object.assign(Error('Setup probe is unavailable'), { code: 'SETUP_PROBE_UNAVAILABLE' }))
+    }
     child.once('error', () => { children.delete(child); unavailable() })
     child.once('exit', () => { children.delete(child); unavailable() })
     child.once('message', value => {
       const answer = value as { error: { code?: string | number; killed: boolean; signal?: NodeJS.Signals } | null; stdout: string; stderr: string }
       if (!answer || typeof answer.stdout !== 'string' || typeof answer.stderr !== 'string'
-        || answer.stdout.length > 1_048_576 || answer.stderr.length > 1_048_576) { unavailable(); child.disconnect(); return }
+        || answer.stdout.length > 1_048_576 || answer.stderr.length > 1_048_576) { unavailable(); if (child.connected) child.disconnect(); return }
       reply(answer.error ? Object.assign(Error('Setup probe did not complete'), answer.error) as ExecFileException : null, answer.stdout, answer.stderr)
     })
     // A caller's deadline cancels the actual probe through its keeper; killing the keeper would orphan it.
@@ -85,10 +86,36 @@ export function createSetupProbeExecutor() {
       if (!child.connected) return false
       try { child.send({ cancel: true }, () => {}); return true } catch { return false }
     }
+    return keeper
+  }
+  const warmOnce = () => {
+    if (warmed) return
+    warmed = true
+    // One speculative keeper after first use, within the same admission; its own timer expires it unused.
+    if (children.size < 8) {
+      try { spare = start() } catch { console.warn('[engine-setup] SETUP_PROBE_WARMUP_UNAVAILABLE') }
+    }
+  }
+  const execute = (file: string, args: string[], options: ExecFileOptions, callback: Callback): ChildProcess => {
+    const ready = spare && !spare.answered && spare.child.connected ? spare : undefined
+    spare = undefined
+    if (!ready && children.size >= 8) {
+      queueMicrotask(() => callback(Object.assign(Error('Setup probes are busy'), { code: 'SETUP_PROBE_BUSY' }), '', ''))
+      return new ChildProcess()
+    }
+    const keeper = ready ?? start(), { child } = keeper
+    keeper.callback = callback
     child.send({ file, args, options: { ...options, maxBuffer: Math.min(options.maxBuffer ?? 65_536, 1_048_576) }, group: ownProcessGroup() }, error => {
-      if (error) { unavailable(); if (child.connected) child.disconnect() }
+      if (error) {
+        if (!keeper.answered) {
+          keeper.answered = true
+          callback(Object.assign(Error('Setup probe is unavailable'), { code: 'SETUP_PROBE_UNAVAILABLE' }), '', '')
+        }
+        if (child.connected) child.disconnect()
+      }
     })
     return child
   }
-  return { execute: execute as typeof execFile, close() { for (const child of children) child.kill('SIGKILL') } }
+  return { execute: execute as typeof execFile, warmOnce,
+    close() { spare = undefined; for (const child of children) child.kill('SIGKILL') } }
 }

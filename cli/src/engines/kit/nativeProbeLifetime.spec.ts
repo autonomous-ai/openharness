@@ -26,7 +26,7 @@ it.skipIf(process.platform === 'win32').each(['kill', 'freeze'] as const)('bound
   writeFileSync(probeFile, `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(marker)}, String(process.pid)); setInterval(() => {}, 1000)\n`, { mode: 0o700 })
   const module = pathToFileURL(resolve('src/services/engineSetup.ts')).href
   const payload = { command: probeFile, identity: executableIdentity(probeFile), kind: 'help', environment: { HOME: root, PATH: '/usr/bin:/bin' } }
-  const script = `import { startEngineSetup } from ${JSON.stringify(module)}; const setup = startEngineSetup(${JSON.stringify(root)}); await setup.requests.setup_probe(${JSON.stringify(payload)}, {local:true,owner:true}); setup.stop();`
+  const script = `import { startEngineSetup } from ${JSON.stringify(module)}; const setup = startEngineSetup(${JSON.stringify(root)}); await setup.requests.setup_download({engine:'claude'}, {local:true,owner:true}); await setup.requests.setup_probe(${JSON.stringify(payload)}, {local:true,owner:true}); setup.stop();`
   worker = spawn(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script], {
     env: { ...process.env, HOME: root, USERPROFILE: root, ADAPTER_DATA_DIR: root, ADAPTER_RUNTIME_DIR: root, SHELL: '' },
     stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true,

@@ -51,6 +51,7 @@ export function startEngineSetup(directory: string, given?: NativeSetup) {
     },
     setup_download: async payload => {
       const engine = engineOf(payload.engine)
+      if (engine) probes?.warmOnce()
       return { downloading: engine ? await setup.downloading(engine) : false }
     },
     setup_version: async payload => {
