@@ -24,13 +24,21 @@ the backend's ordinary service router remains the only dispatch path. No command
   Local windows keep `route_result` and their historical empty-task and empty-send replies; RPC keeps
   `route_task_result`, strict validation and `INVALID_REQUEST`, `BUSY`, `COMMAND_UNAVAILABLE`. Only genuine transport
   unavailability, timeout or service-host failure maps to the old unrouted/unsent objects. The adapter carries the
-  authenticated `Asker` unchanged for RPC; only the local window entry constructs a local owner. Existing private
+  authenticated `Asker` identity unchanged for RPC, with transport-owned `rpcRoute` provenance; only the local window
+  entry constructs a local owner. A raw `devices_ws` request remains local-only, even with a forged payload marker.
+  The service process copies provenance only from the trusted core envelope, never the request body. Existing private
   `routeTask`/`routeSend` service handlers remain as adapters for an older core until 2026-12-16. They live solely in
-  the devices service, with no core port or inline feature fallback. Backend deployment is N/A because its protocol
+  the devices service as direct closures preserving whole success/failure objects, with no core port or inline feature
+  fallback. Backend deployment is N/A because its protocol
   is unchanged; last-30-day clients keep their current wire contracts.
 - **Migration and rollback:** no disk format or migration. Revert restores the old core handler. An old core reconnecting
-  to the new devices service uses the dated private aliases. New core and service are one installed build; a missing or
-  failed service answers unavailable and is never replaced by feature execution inside core.
+  to the new devices service uses the dated private aliases. Normal update re-execution stops services before the new
+  core starts (`harnessd/reexec.ts`). If that master cannot re-execute or its unproven-reexecution limit keeps it,
+  an already-running older devices process cannot understand RPC provenance: remote commands return `LOCAL_ONLY`
+  until a full daemon stop/start loads matching services. Local window commands continue. This limited internal
+  skew is accepted for the optional feature; it is not full live-service compatibility. Desktop ends its routing
+  spinner on the empty answer and refuses a send without `ok: true`; the TUI likewise reports no route, never success.
+  A missing or failed service answers unavailable and is never replaced by feature execution inside core.
 - **Audience:** the gateway retains sealed-session and guest checks. The declaration admits owner RPC only; `owner=false`
   or any guest is refused before a service may be woken. The devices recheck owner authority and trust no payload field
   as identity. The local-only spoken-task reply remains local-only.

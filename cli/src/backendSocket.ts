@@ -74,9 +74,10 @@ const TERMINAL_UPLOAD_CONTROL_TYPES: ReadonlySet<string> = new Set(['terminal_ch
 const MESSAGE_REQUESTS: ReadonlySet<string> = new Set(MESSAGES_REQUESTS)
 /** Share's requests, which the frame log leaves out as well: they carry who a harness is shared with. */
 const SHARE_REQUEST_TYPES: ReadonlySet<string> = new Set(SHARE_REQUESTS)
+/** Private frame wrappers can carry personal content even when the service refuses the caller. */
+const SERVICE_FRAME_TYPES = new Set(SERVICE_WS_FRAMES.map(route => route.type))
 /** The agent browser's frames are never logged, in or out: its settings carry a proxy's password, their replies the
  *  proxy's host, and a proxy test's the proxy's exit address (services/agentBrowser.ts). */
-const SERVICE_FRAME_TYPES = new Set(SERVICE_WS_FRAMES.map(route => route.type))
 const UNLOGGED_BROWSER = 'agent_browser_'
 /** Whether an outgoing frame goes to the frame log (`LOG_FRAMES`). */
 const logged = (frame: Frame): boolean => env.LOG_FRAMES && !String(frame.type).startsWith(UNLOGGED_BROWSER)

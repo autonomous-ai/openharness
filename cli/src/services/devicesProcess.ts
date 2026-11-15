@@ -268,7 +268,6 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
     ...legacyCommands,
     // What the core asks of the devices (core/devicesLink.ts), under types only the core sends: no client's
     // request is routed here under these names (core/serviceLinks.ts routes the Devices tab's alone).
-    // A core from before 2026-11-16 used these private port names. Remove after 2026-12-16.
     stepFocus: async ({ direction, currentAgentId }) => {
       const step = await port.stepFocus(direction === 'previous' ? 'previous' : 'next', typeof currentAgentId === 'string' ? currentAgentId : undefined)
       return step === 'no_agents' ? { step } : { ...step }
