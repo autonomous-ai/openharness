@@ -645,6 +645,8 @@ export interface Asker {
    *  a core from before it was given: then the request is its own connection. */
   connection?: string
   requestId?: string
+  /** A declared frame alias routed by core/serviceRoutes, never a field a client supplied. */
+  rpcRoute?: true
   /** It came through the local door over the daemon's own socket (on Windows its pipe, with the token's proof), where
    *  the filesystem said it is this computer's owner: set by the door (core/serviceRoutes.ts), never by a payload, and
    *  never for a client of the local WebSocket. A route only that socket may ask (`ServiceHttpRoute.door`) is refused
@@ -1470,7 +1472,7 @@ export const DEVICES_REQUESTS = ['harness_devices_list', 'harness_device_setting
 
 /**
  * The core's calls into the devices: what the windows on this computer said that the dial follows, the
- * cards every device is sent, ⌘K, the mod's poll (core/deviceHookCalls.ts), and stopping. Every one is a notice or a request the core never waits on in line: across a process, a hung
+ * cards every device is sent, the mod's poll (core/deviceHookCalls.ts), and stopping. Every one is a notice or a request the core never waits on in line: across a process, a hung
  * devices process answers the fallbacks, never a frozen core.
  */
 export interface DevicesPort extends DeviceHookPort {
@@ -1495,11 +1497,6 @@ export interface DevicesPort extends DeviceHookPort {
   windowReply(kind: 'selection' | 'visit' | 'form', connId: string, machineId: string, payload: Record<string, unknown>): void
   /** A window left. */
   windowGone(connId: string): void
-  /** ⌘K from the owner's app away from this desk (lib/ownerCommands.ts): which agent a typed task belongs to, on any of
-   *  the owner's machines. A window's comes as its frame (`SERVICE_WS_FRAMES`). */
-  routeTask(text: string): Promise<RouteAnswer>
-  /** Its send: the turn delivered on the agent's own machine, or refused with why. */
-  routeSend(agentId: string, text: string): Promise<SendResult>
   /** The Wi-Fi device borrowing the dial's walk along the desk, through the core (`CoreApi.wifi.stepFocus`). */
   stepFocus(direction: 'next' | 'previous', currentAgentId?: string): Promise<{ machineId: string; agentId: string } | 'no_agents'>
   /** The Wi-Fi device borrowing the dial's stroke for the window's terminal. */
@@ -1528,7 +1525,6 @@ const UNSENT: SendResult = { ok: false, machine: '', reason: DEVICES_UNAVAILABLE
 export const DEVICES_FALLBACKS: PortFallbacks<DevicesPort> = {
   card: undefined, desk: undefined, swarms: undefined, unread: undefined, appFocus: undefined, seen: undefined,
   settings: undefined, windowFocus: undefined, windowReply: undefined, windowGone: undefined,
-  routeTask: later(UNROUTED), routeSend: later(UNSENT),
   stepFocus: later('no_agents'), scroll: undefined, engines: undefined, commanders: undefined, observed: false,
   // Off, not an empty hold: the mod asks again in a minute, not at once.
   inboxPoll: later({ off: true }), inboxGone: undefined,
@@ -2029,6 +2025,8 @@ export interface ServiceWsFrame {
   /** The frame's type, as a window sends it. */
   frame: string
   type: string
+  /** Also accepted through the authenticated owner RPC router, with its original Asker and RPC result type. */
+  rpc?: 'owner'
   /** The frame its answer goes back as; none for a frame the window tells, which nothing answers. */
   result?: string
   waitMs: number
@@ -2041,9 +2039,9 @@ export interface ServiceWsFrame {
  *  (e2e/keyRoutes.e2e.ts). */
 export const SERVICE_WS_FRAMES: readonly ServiceWsFrame[] = [
   // ⌘K: which agent a typed task belongs to, on any of the owner's machines; the classifier has 20 s (services/fleet.ts).
-  { frame: 'route_task', type: 'devices_ws', result: 'route_result', waitMs: 25_000, unanswered: { ...UNROUTED } },
+  { frame: 'route_task', type: 'devices_ws', rpc: 'owner', result: 'route_result', waitMs: 25_000, unanswered: { ...UNROUTED } },
   // ⌘K's send, through the fleet's router: the turn delivered on the agent's own machine, or refused with why.
-  { frame: 'route_send', type: 'devices_ws', result: 'route_send_result', waitMs: 5_000, unanswered: { ...UNSENT } },
+  { frame: 'route_send', type: 'devices_ws', rpc: 'owner', result: 'route_send_result', waitMs: 5_000, unanswered: { ...UNSENT } },
   // The window's answer to a spoken task the devices offered it (cable/windowRoute.ts): taken, then sent or cancelled.
   { frame: 'voice_route_reply', type: 'devices_ws', waitMs: 5_000 },
 ]

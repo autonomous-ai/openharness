@@ -209,6 +209,7 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
   }
 
   const ports: CorePorts = emptyPorts()
+  let legacyCommands: ServiceRequests = {}
   const deps: DevicesDeps = {
     logsDir: env.HARNESS_LOGS_DIR,
     dialSerials: processEnv.HARNESS_DIAL_SERIALS?.split(',').map((serial) => serial.trim()).filter(Boolean),
@@ -217,6 +218,7 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
     faults: faultsOf(processEnv.HARNESSD_TEST_FAULTS),
     refresh,
     onCoreGone: (run) => { coreGone = run },
+    onLegacyCommands: handlers => { legacyCommands = handlers },
     // Their own listener, in this process alone: the devices started inside the core's process are given none.
     listen: (handlers, log) => (options.openListener ?? openDevicesListener)({ path: devicesListenerPath(options.dataDir), handlers, log }),
   }
@@ -262,10 +264,10 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
 
   const devices: ServiceRequests = {
     ...requests,
+    // Direct service-owned closures preserve old private port replies until 2026-12-16.
+    ...legacyCommands,
     // What the core asks of the devices (core/devicesLink.ts), under types only the core sends: no client's
     // request is routed here under these names (core/serviceLinks.ts routes the Devices tab's alone).
-    routeTask: async ({ text: task }) => ({ ...await port.routeTask(text(task)) }),
-    routeSend: async ({ agentId, text: task }) => ({ ...await port.routeSend(text(agentId), text(task)) }),
     stepFocus: async ({ direction, currentAgentId }) => {
       const step = await port.stepFocus(direction === 'previous' ? 'previous' : 'next', typeof currentAgentId === 'string' ? currentAgentId : undefined)
       return step === 'no_agents' ? { step } : { ...step }

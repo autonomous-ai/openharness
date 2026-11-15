@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { HttpAnswer, ServiceHttpRoute, ServiceWsFrame } from './api.js'
+import type { Asker, HttpAnswer, ServiceHttpRoute, ServiceWsFrame } from './api.js'
 import { createServiceRoutes, type ServiceRouter } from './serviceRoutes.js'
+import { createServiceLinks, type ServiceFrame } from './serviceLinks.js'
 
 const DOWN: HttpAnswer = { status: 503, body: { error: { code: 'UNAVAILABLE', message: 'not running' } } }
 const routes: ServiceHttpRoute[] = [
@@ -27,6 +28,89 @@ const frame = (doors: ReturnType<typeof createServiceRoutes>, connection: string
   doors.frames.get(message.type as string)?.(connection, message)
 
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks() })
+
+describe('declared service frames over owner RPC', () => {
+  const frames = [{ frame: 'pick', type: 'thing_ws', result: 'picked', waitMs: 25_000, unanswered: { chosen: false }, rpc: 'owner' },
+    { frame: 'notice', type: 'thing_ws', waitMs: 5_000 }] as ServiceWsFrame[]
+  const owner: Asker = { local: false, owner: true, connection: 'remote', requestId: 'r-1', accountOwner: true }
+  const rpc = (doors: ReturnType<typeof createServiceRoutes>, type: string, payload: Record<string, unknown>, asker = owner) => {
+    let resolve!: (answer: Record<string, unknown>) => void
+    const answer = new Promise<Record<string, unknown>>((finish) => { resolve = finish })
+    const taken = (doors as unknown as ServiceRouter).route(type, payload, asker, resolve)
+    return { taken, answer }
+  }
+
+  it('keeps the authenticated asker, wrapper and service reply, including declared command errors', async () => {
+    let result: Record<string, unknown> = { chosen: 'agent' }
+    const linked = router(['thing_ws'], () => result)
+    const doors = createServiceRoutes({ routes: [], frames, linked, hosted: router([]) })
+    const payload = { requestId: 'r-1', text: 'private', owner: true, local: true }
+    const request = rpc(doors, 'pick', payload)
+    expect(request.taken).toBe(true)
+    expect(await request.answer).toEqual(result)
+    expect(linked.route).toHaveBeenCalledWith('thing_ws', { frame: 'pick', payload }, { ...owner, rpcRoute: true }, expect.any(Function), 25_000)
+    for (const error of ['INVALID_REQUEST', 'BUSY', 'COMMAND_UNAVAILABLE', 'OWNER_REQUIRED']) {
+      result = { error, detail: 'fixed detail' }
+      expect(await rpc(doors, 'pick', {}).answer).toEqual(result)
+    }
+    result = { chosen: 'agent', requestId: 'forged' }
+    expect(await rpc(doors, 'pick', { requestId: 'r-1' }).answer).toEqual({ chosen: 'agent' })
+    expect((doors as unknown as ServiceRouter).route('notice', {}, owner, vi.fn())).toBe(false)
+    expect((doors as unknown as ServiceRouter).route('unknown', {}, owner, vi.fn())).toBe(false)
+  })
+
+  it('refuses non-owners and guests before a missing service could be started', async () => {
+    const linked = router(['thing_ws']), hosted = router([])
+    const doors = createServiceRoutes({ routes: [], frames, linked, hosted })
+    for (const asker of [{ ...owner, owner: false }, { ...owner, guest: 'guest' }, { ...owner, local: true, owner: false }]) {
+      expect(await rpc(doors, 'pick', { owner: true, local: true }, asker).answer).toEqual({ error: 'OWNER_REQUIRED' })
+    }
+    expect(linked.route).not.toHaveBeenCalled()
+    expect(hosted.route).not.toHaveBeenCalled()
+  })
+
+  it('preserves legacy unavailability and answers once when the actual operation settles after its deadline', async () => {
+    vi.useFakeTimers()
+    for (const error of ['SERVICE_UNAVAILABLE', 'SERVICE_FAILED']) {
+      const down = createServiceRoutes({ routes: [], frames, linked: router(['thing_ws'], () => ({ error })), hosted: router([]) })
+      expect(await rpc(down, 'pick', {}).answer).toEqual({ chosen: false })
+    }
+    let finish!: (result: Record<string, unknown>) => void
+    const hosted = { route: (_type: string, _payload: Record<string, unknown>, _asker: Asker, reply: typeof finish) => { finish = reply; return true } }
+    const slow = createServiceRoutes({ routes: [], frames, linked: router([]), hosted })
+    const reply = vi.fn()
+    expect((slow as unknown as ServiceRouter).route('pick', {}, owner, reply)).toBe(true)
+    await vi.advanceTimersByTimeAsync(25_000)
+    expect(reply).toHaveBeenCalledExactlyOnceWith({ chosen: false })
+    finish({ chosen: 'late' })
+    await Promise.resolve()
+    expect(reply).toHaveBeenCalledTimes(1)
+    const noFallback = createServiceRoutes({ routes: [], frames: [{ ...frames[0], unanswered: undefined }], linked: router([]), hosted: router([]) })
+    expect(await rpc(noFallback, 'pick', {}).answer).toEqual({})
+  })
+
+  it('never delivers a startup request after its connection closes, including a reused connection name', async () => {
+    vi.useFakeTimers()
+    const want = vi.fn()
+    const linked = createServiceLinks({ token: 'token', owned: { thing: ['thing_ws'] }, answer: () => ({}), onDemand: new Set(['thing']), want })
+    const doors = createServiceRoutes({ routes: [], frames, linked, hosted: router([]) })
+    const first = rpc(doors, 'pick', { text: 'old connection' })
+    expect(want).toHaveBeenCalledWith('thing')
+    linked.closeConnection('remote')
+    expect(await first.answer).toEqual({ chosen: false })
+    const second = rpc(doors, 'pick', { text: 'new connection' })
+    const sent: ServiceFrame[] = []
+    const peer = linked.accept('thing', 'token', { sendFrame: frame => { sent.push(frame); return true } }, vi.fn())!
+    expect(sent).toHaveLength(1)
+    expect(sent[0].payload?.payload).toEqual({ text: 'new connection' })
+    peer.receive({ type: 'thing_ws_result', payload: { requestId: sent[0].payload?.requestId, chosen: 'new' } })
+    expect(await second.answer).toEqual({ chosen: 'new' })
+    peer.closed()
+    const down = rpc(doors, 'pick', {})
+    expect(await down.answer).toEqual({ chosen: false })
+    expect(want).toHaveBeenCalledTimes(2)
+  })
+})
 
 describe('the door\'s routes a service answers', () => {
   it('asks a service in its own process first, as this computer\'s owner, with the route\'s wait, and writes its answer as it gave it', async () => {
