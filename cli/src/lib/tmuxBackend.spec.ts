@@ -10,7 +10,7 @@ import { clearPaneRemainOnExit, forgetTmuxServer } from './tmux.js'
 import { tmuxControlGate } from './tmuxControlGate.js'
 import { assumeTmuxVersion, resetTmuxVersionCache, tmuxFeatures } from './tmuxVersion.js'
 import { isHarnessdVariable } from './harnessdEnv.js'
-import { AGENT_SESSION_VARIABLES, isAgentSessionVariable } from './agentSessionEnv.js'
+import { AGENT_SESSION_VARIABLES, ORCA_VARIABLES, isAgentSessionVariable } from './agentSessionEnv.js'
 import { BUNDLE_ENV, BUNDLE_SHA256_ENV, LEAN_FINGERPRINT_ENV } from '../masterProcess.js'
 import { RESUME_ENV } from '../harnessd/reexec.js'
 import { PLATFORM_ENV } from '../harnessd/platform.js'
@@ -843,23 +843,27 @@ describe('clearEnv command shape', () => {
 // service token among them (found 2026-10-11: `env` in an agent's pane listed every one). The core names what
 // it unsets and never lists the server's environment: that is the person's, their keys among it.
 describe('harnessd\'s variables in the tmux server\'s environment', () => {
-  it('are the agent session names, harnessd\'s own, and every HARNESSD_* this process has, once each', () => {
-    const unset = serverVariablesToUnset({ HARNESSD_TEST_FAULTS: 'fixture', OPENAI_API_KEY: 'fixture-key', PATH: '/bin' })
-    expect(new Set(unset)).toEqual(new Set([...AGENT_SESSION_VARIABLES, ...HARNESSD_SET_VARIABLES, 'HARNESSD_TEST_FAULTS']))
+  it('are the agent session names, Orca\'s, harnessd\'s own, and every HARNESSD_* and ORCA_* this process has, once each', () => {
+    const unset = serverVariablesToUnset({ HARNESSD_TEST_FAULTS: 'fixture', ORCA_FUTURE_SETTING: 'fixture', OPENAI_API_KEY: 'fixture-key', PATH: '/bin' })
+    expect(new Set(unset)).toEqual(new Set([...AGENT_SESSION_VARIABLES, ...ORCA_VARIABLES, ...HARNESSD_SET_VARIABLES, 'HARNESSD_TEST_FAULTS', 'ORCA_FUTURE_SETTING']))
     expect(unset).toHaveLength(new Set(unset).size)
   })
 
   it('are, in an environment as a server keeps one, what its listing and the prefix filter removed, and no key of the person\'s', () => {
-    // As an earlier boot's core and an agent's shell left a server, beside the person's own settings and keys.
+    // As an earlier boot's core and an agent's shell in an Orca terminal left a server, beside the person's own
+    // settings and keys. ORCA_FUTURE_SETTING stands for a name Orca adds that this core finds in its own environment.
     const server = ['HOME', 'PATH', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'MY_HARNESSD_NOTE',
-      'AI_AGENT', 'CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_MESSAGING_TOKEN', 'CODEX_THREAD_ID', 'CODEX_SANDBOX',
+      'AI_AGENT', 'CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_MESSAGING_TOKEN', 'CLAUDE_CODE_HOST_SESSION_ID',
+      'CODEX_THREAD_ID', 'CODEX_SANDBOX',
+      'ORCA_TERMINAL_HANDLE', 'ORCA_PANE_KEY', 'ORCA_AGENT_SESSION_ID', 'ORCA_APP_VERSION', 'ORCA_PAIRING_CODE',
+      'ORCA_AGENT_SESSION_SPAWN_TOKEN', 'ORCA_USER_DATA_PATH', 'ORCA_ENVIRONMENT', 'ORCA_FUTURE_SETTING',
       'HARNESSD_SERVICE_TOKEN', 'HARNESSD_SUPERVISED', 'HARNESSD_RESTARTS', 'HARNESSD_WATCHDOG_MS', 'HARNESSD_JUDGES_SUPERSEDED',
       'HARNESSD_UPDATES', 'HARNESSD_LAST_EXIT', 'HARNESSD_SAFE_MODE', 'HARNESSD_SERVICES', 'HARNESSD_SERVICE_PROCESSES',
       'HARNESSD_ENGINE_LIVE', 'HARNESSD_ENGINE_PROVIDER_MOVE', 'HARNESSD_CORE_SCRIPT', 'HARNESSD_JUDGES_PTY', 'HARNESSD_SERVICE',
       'HARNESSD_BUNDLE', 'HARNESSD_BUNDLE_SHA256', 'HARNESSD_LEAN_FINGERPRINT', 'HARNESSD_RESUME', 'HARNESSD_PLATFORM',
       'HARNESSD_TEST_X']
     const listedAndFiltered = server.filter((name) => isHarnessdVariable(name) || isAgentSessionVariable(name))
-    const unset = new Set(serverVariablesToUnset({ HARNESSD_TEST_X: '1', OPENAI_API_KEY: 'fixture-key' }))
+    const unset = new Set(serverVariablesToUnset({ HARNESSD_TEST_X: '1', ORCA_FUTURE_SETTING: '1', OPENAI_API_KEY: 'fixture-key' }))
     expect(server.filter((name) => unset.has(name))).toEqual(listedAndFiltered)
     expect([...unset]).not.toContain('OPENAI_API_KEY')
   })
@@ -909,12 +913,12 @@ describe('harnessd\'s variables in the tmux server\'s environment', () => {
     const home = mkdtempSync(join(tmpdir(), 'tmux-backend-env-home-'))
     dirs.push(home)
     const removedBefore = (name: string) => isHarnessdVariable(name) || isAgentSessionVariable(name)
-    // The server starts as one an earlier core started from an agent's shell did: with harnessd's variables and
-    // that agent's session, beside the person's own key.
+    // The server starts as one an earlier core started from an agent's shell in an Orca terminal did: with
+    // harnessd's variables, that agent's session and Orca's secrets, beside the person's own key.
     const inherited = Object.fromEntries(Object.entries(process.env).filter(([name]) => !removedBefore(name)))
     const tmux = await isolatedTmux({ ...inherited, HOME: home, ZDOTDIR: home, HISTFILE: join(home, 'history'),
       HARNESSD_SERVICE_TOKEN: 'fixture-token', HARNESSD_SUPERVISED: '1', HARNESSD_WATCHDOG_MS: '30000', CLAUDECODE: '1',
-      OPENAI_API_KEY: 'fixture-key' })
+      ORCA_PAIRING_CODE: 'fixture-pairing', ORCA_AGENT_SESSION_SPAWN_TOKEN: 'fixture-spawn', OPENAI_API_KEY: 'fixture-key' })
     // The backend's own bare `tmux` reaches this private server and no other.
     vi.stubEnv('TMUX', undefined)
     vi.stubEnv('TMUX_PANE', undefined)
@@ -927,7 +931,8 @@ describe('harnessd\'s variables in the tmux server\'s environment', () => {
         .filter((name) => removedBefore(name) || name === 'OPENAI_API_KEY').sort()
     }
     try {
-      expect(await paneHas('before')).toEqual(['CLAUDECODE', 'HARNESSD_SERVICE_TOKEN', 'HARNESSD_SUPERVISED', 'HARNESSD_WATCHDOG_MS', 'OPENAI_API_KEY'])
+      expect(await paneHas('before')).toEqual(['CLAUDECODE', 'HARNESSD_SERVICE_TOKEN', 'HARNESSD_SUPERVISED', 'HARNESSD_WATCHDOG_MS', 'OPENAI_API_KEY',
+        'ORCA_AGENT_SESSION_SPAWN_TOKEN', 'ORCA_PAIRING_CODE'])
       const names = serverVariablesToUnset()
       await expect(new TmuxBackend().unsetServerEnvironment(names)).resolves.toBe(names.length)
       // The client that asks for a pane still has them: tmux gives a new pane none of the client's own but
@@ -986,7 +991,10 @@ exit 0
         '[terminal] tmux: available',
       ])
       const unsets = commands.filter(([word]) => word === 'set-environment')
-      expect(unsets.flatMap((call) => call.join(' ').split(' ; ').map((command) => command.split(' ').at(-1)))).toEqual(names)
+        .flatMap((call) => call.join(' ').split(' ; ').map((command) => command.split(' ').at(-1)))
+      expect(unsets).toEqual(names)
+      // What the server's listing would have shown of harnessd, an agent session and Orca's terminal, its secrets among it.
+      expect(unsets).toEqual(expect.arrayContaining(['HARNESSD_SERVICE_TOKEN', 'CLAUDECODE', 'ORCA_TERMINAL_HANDLE', 'ORCA_PAIRING_CODE', 'ORCA_AGENT_SESSION_SPAWN_TOKEN']))
       expect(first('rename-session')).toBeLessThan(first('set-environment'))
       expect(commands.findLastIndex(([word]) => word === 'list-panes')).toBeGreaterThan(first('set-environment'))
     } finally { log.mockRestore() }
