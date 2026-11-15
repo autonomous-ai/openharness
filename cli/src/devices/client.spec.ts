@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { loadOrCreateHookCredential } from '../lib/hookAuth.js'
 import { DEVICES_USAGE, devicesCommand, deviceRequest, runDialWatch, type DevicesClientDeps, type DialWatchDeps } from './client.js'
+import { devicesListenerPath } from './listenerPath.js'
 
 // A folder too long for a socket now has one under the home folder: only a home too long as well is left on the port.
 beforeEach(() => { vi.stubEnv('HOME', `/${'h'.repeat(120)}`) })
@@ -106,8 +107,10 @@ function watch(over: Partial<DialWatchDeps> = {}, argv = ['--json']) {
   const connect = vi.fn((_url: string, _headers?: Record<string, string>) => socket)
   // The devices listener, faked: no test reaches a socket of its own. It takes every message unless a test says otherwise.
   const tell = vi.fn(async (_message: Told) => true)
+  // Its stream of selects, faked as one held open, so no test ends the stream of a watch Harness Device runs.
+  const selects = vi.fn((_chunk: (data: Buffer) => void, _signal: AbortSignal) => new Promise<boolean>(() => {}))
   const deps: DialWatchDeps = {
-    port: 18473, machineId: async () => 'local', connect, stdin, tell,
+    port: 18473, machineId: async () => 'local', connect, stdin, tell, selects,
     print: line => { printed.push(line) }, printError: line => { errors.push(line) }, ...over,
   }
   const done = runDialWatch(argv, deps)
@@ -644,5 +647,265 @@ describe('harness hardware watch: the app in front', () => {
     expect(await run.done).toBe(0)
     expect(run.socket.close).toHaveBeenCalled()
     expect(run.stdin.pause).toHaveBeenCalled()
+  })
+})
+
+// What the Harness Device app writes on the watch's stdin each time the selected tab of a tab app in front changes.
+const tabLine = (tab: unknown) => `${JSON.stringify({ tab })}\n`
+const TAB = { app: 'terminal-app', tty: '/dev/ttys023' }
+const SELECT = '{"select":{"app":"terminal-app","tty":"/dev/ttys023"}}'
+const RAISE = '{"select":{"app":"terminal-app","tty":"/dev/ttys023","raise":true}}'
+// A data folder with a listener path, so the watch opens its stream. Nothing in it is touched: the tells and the stream
+// are the test's.
+const LISTENING = '/tmp/hdw-none'
+/** The devices' stream of selects, faked: each open is held until the test ends it, saying whether it had opened. */
+function tabStreams() {
+  const opens: { chunk: (data: Buffer) => void; signal: AbortSignal; end: (hadOpened: boolean) => void }[] = []
+  const selects = vi.fn((chunk: (data: Buffer) => void, signal: AbortSignal) => new Promise<boolean>(end => { opens.push({ chunk, signal, end }) }))
+  // Lines on the stream opened last, in one chunk.
+  const send = (...lines: string[]) => opens.at(-1)!.chunk(Buffer.from(lines.map(line => `${line}\n`).join('')))
+  return { selects, opens, send }
+}
+/** A watch the daemon has answered, its stream open. */
+async function streaming(over: Partial<DialWatchDeps> = {}) {
+  const streams = tabStreams()
+  const run = watch({ dataDir: LISTENING, selects: streams.selects, ...over })
+  await opened(run.socket)
+  connected(run.socket, ['dial-watch'])
+  return { run, ...streams }
+}
+
+describe('harness hardware watch: the selected tab', () => {
+  beforeEach(() => { vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }) })
+  it('a tab line is told to the devices listener as a tab message', async () => {
+    const { run } = await streaming()
+    run.stdin.emit('data', tabLine(TAB))
+    await turn()
+    expect(told(run)).toEqual([{ type: 'tab', app: 'terminal-app', tty: '/dev/ttys023' }])
+    // Each of the three apps, and only app and tty travel on.
+    run.stdin.emit('data', tabLine({ app: 'iterm', tty: '/dev/ttys4', title: 'notes.md' }))
+    await turn()
+    run.stdin.emit('data', tabLine({ app: 'ghostty', tty: '/dev/ttys9999' }))
+    await turn()
+    expect(told(run)).toEqual([
+      { type: 'tab', app: 'terminal-app', tty: '/dev/ttys023' },
+      { type: 'tab', app: 'iterm', tty: '/dev/ttys4' },
+      { type: 'tab', app: 'ghostty', tty: '/dev/ttys9999' },
+    ])
+    await stillRunning(run)
+  })
+  it('a bad app, a bad tty and a tab that is not an object are dropped, and the next line is told', async () => {
+    const { run } = await streaming()
+    for (const tab of [
+      { app: 'vscode', tty: '/dev/ttys023' }, { app: 'Terminal', tty: '/dev/ttys023' }, { tty: '/dev/ttys023' },
+      { app: 'terminal-app', tty: '/dev/ttys12345' }, { app: 'terminal-app', tty: '/dev/tty023' },
+      { app: 'terminal-app', tty: '/dev/ttys023\n' }, { app: 'terminal-app' }, 'terminal-app', null, [TAB], 5,
+    ]) run.stdin.emit('data', tabLine(tab))
+    run.stdin.emit('data', '{"tab":{"app":"terminal-app","tty":"/dev/ttys023"}\n')
+    await turn()
+    expect(told(run)).toEqual([])
+    run.stdin.emit('data', tabLine(TAB))
+    await turn()
+    expect(told(run)).toEqual([{ type: 'tab', ...TAB }])
+    await stillRunning(run)
+  })
+  it('two tab lines while a tell is under way: the newest is told when it ends, the one between is skipped', async () => {
+    const held = heldListener()
+    const { run } = await streaming({ tell: held.tell })
+    run.stdin.emit('data', tabLine(TAB))
+    run.stdin.emit('data', tabLine({ app: 'iterm', tty: '/dev/ttys4' }))
+    run.stdin.emit('data', tabLine({ app: 'ghostty', tty: '/dev/ttys5' }))
+    expect(told(run)).toEqual([{ type: 'tab', ...TAB }])
+    await held.answer(true)
+    expect(told(run)).toEqual([{ type: 'tab', ...TAB }, { type: 'tab', app: 'ghostty', tty: '/dev/ttys5' }])
+    // Not taken, and not tried again by itself.
+    await held.answer(false)
+    await turn()
+    expect(told(run)).toHaveLength(2)
+    await stillRunning(run)
+  })
+  it('a tab tell does not wait for a front tell under way', async () => {
+    // A listener that never answers the app in front.
+    const tell = vi.fn((message: Told) => message.type === 'front' ? new Promise<boolean>(() => {}) : Promise.resolve(true))
+    const { run } = await streaming({ tell })
+    front(run, 'com.mitchellh.ghostty')
+    run.stdin.emit('data', tabLine({ app: 'ghostty', tty: '/dev/ttys5' }))
+    expect(told(run)).toEqual([{ type: 'front', app: 'ghostty' }, { type: 'tab', app: 'ghostty', tty: '/dev/ttys5' }])
+    await turn()
+    run.stdin.emit('data', tabLine({ app: 'ghostty', tty: '/dev/ttys6' }))
+    expect(told(run)).toEqual([
+      { type: 'front', app: 'ghostty' }, { type: 'tab', app: 'ghostty', tty: '/dev/ttys5' }, { type: 'tab', app: 'ghostty', tty: '/dev/ttys6' },
+    ])
+    // The exit waits on the front tell under way 2 s at most, as before.
+    run.stdin.emit('end')
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(await run.done).toBe(0)
+  })
+  it("nothing of a tab goes on the core's socket", async () => {
+    const run = watch({ dataDir: LISTENING, selects: tabStreams().selects })
+    run.stdin.emit('data', tabLine(TAB))
+    await opened(run.socket)
+    connected(run.socket, ['dial-watch'])
+    dial(run.socket, { attached: true })
+    run.stdin.emit('data', tabLine({ app: 'iterm', tty: '/dev/ttys4' }))
+    await turn()
+    expect(told(run)).toEqual([{ type: 'tab', ...TAB }, { type: 'tab', app: 'iterm', tty: '/dev/ttys4' }])
+    expect(coreFrames(run)).toEqual(['machine_select'])
+    const out = [...run.socket.send.mock.calls.map(([data]) => String(data)), ...run.printed, ...run.errors]
+    expect(out.filter(line => line.includes('ttys'))).toEqual([])
+    await stillRunning(run)
+  })
+  it('the stream opens after connected, and each line prints one select line', async () => {
+    const streams = tabStreams()
+    const run = watch({ dataDir: LISTENING, selects: streams.selects })
+    await opened(run.socket)
+    expect(streams.selects).not.toHaveBeenCalled()
+    connected(run.socket, ['dial-watch'])
+    expect(streams.selects).toHaveBeenCalledOnce()
+    streams.send('{"app":"terminal-app","tty":"/dev/ttys023"}')
+    expect(run.printed).toEqual([SELECT])
+    // Two lines in one chunk are two selects; a line in two chunks is one.
+    streams.send('{"app":"iterm","tty":"/dev/ttys4"}', '{"app":"ghostty","tty":"/dev/ttys5"}')
+    streams.opens[0]!.chunk(Buffer.from('{"app":"terminal-app",'))
+    streams.opens[0]!.chunk(Buffer.from('"tty":"/dev/ttys023"}\n'))
+    expect(run.printed).toEqual([SELECT, '{"select":{"app":"iterm","tty":"/dev/ttys4"}}', '{"select":{"app":"ghostty","tty":"/dev/ttys5"}}', SELECT])
+    await stillRunning(run)
+    // A daemon without dial-watch: none is opened.
+    const old = tabStreams()
+    const older = watch({ dataDir: LISTENING, selects: old.selects })
+    await opened(older.socket)
+    connected(older.socket, ['openclaw-local'])
+    expect(await older.done).toBe(4)
+    expect(old.selects).not.toHaveBeenCalled()
+  })
+  it('a stream line with a bad app or tty, one that is not JSON and one over 96 bytes print nothing', async () => {
+    const { run, send } = await streaming()
+    const padded = (bytes: number) => {
+      const start = '{"app":"terminal-app","tty":"/dev/ttys023","pad":"'
+      return `${start}${'x'.repeat(bytes - start.length - 2)}"}`
+    }
+    expect(Buffer.byteLength(padded(97))).toBe(97)
+    send('{"app":"Terminal","tty":"/dev/ttys023"}', '{"app":"terminal-app","tty":"/dev/tty023"}', '{"app":"terminal-app"}',
+      '{"app":"terminal-app","tty":"/dev/ttys023"', 'null', '[]', '"terminal-app"', padded(97))
+    expect(run.printed).toEqual([])
+    // 96 bytes is the longest line read, and its other key is not printed.
+    send(padded(96))
+    expect(run.printed).toEqual([SELECT])
+    await stillRunning(run)
+  })
+  it('a stream line with "raise":true prints the select with "raise":true, after app and tty', async () => {
+    const { run, send } = await streaming()
+    send('{"raise":true,"tty":"/dev/ttys023","app":"terminal-app"}')
+    expect(run.printed).toEqual([RAISE])
+    await stillRunning(run)
+  })
+  it('a line with no raise, or raise false, prints the select with no raise key; no other key is printed', async () => {
+    const { run, send } = await streaming()
+    send('{"app":"terminal-app","tty":"/dev/ttys023"}', '{"app":"terminal-app","tty":"/dev/ttys023","raise":false}',
+      '{"app":"terminal-app","tty":"/dev/ttys023","title":"notes.md","cwd":"/Users/me"}')
+    expect(run.printed).toEqual([SELECT, SELECT, SELECT])
+    await stillRunning(run)
+  })
+  it('a raise that is not a boolean prints nothing ("true", 1, null, {}), and the next line is printed', async () => {
+    const { run, send } = await streaming()
+    for (const raise of ['"true"', '1', 'null', '{}', '0', '[]']) send(`{"app":"terminal-app","tty":"/dev/ttys023","raise":${raise}}`)
+    expect(run.printed).toEqual([])
+    send('{"app":"terminal-app","tty":"/dev/ttys023","raise":true}')
+    expect(run.printed).toEqual([RAISE])
+    await stillRunning(run)
+  })
+  it('a stream that ends is opened again after 1 s, 2 s, 4 s, then 30 s at most; one that had opened starts again from 1 s', async () => {
+    const { run, selects, opens, send } = await streaming()
+    // The stream open last ends, and the next is opened [ms] later, not sooner.
+    const reopensAfter = async (hadOpened: boolean, ms: number) => {
+      const calls = selects.mock.calls.length
+      opens.at(-1)!.end(hadOpened)
+      await vi.advanceTimersByTimeAsync(ms - 1)
+      expect(selects).toHaveBeenCalledTimes(calls)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(selects).toHaveBeenCalledTimes(calls + 1)
+    }
+    for (const ms of [1_000, 2_000, 4_000, 8_000, 16_000, 30_000, 30_000]) await reopensAfter(false, ms)
+    await reopensAfter(true, 1_000)
+    await reopensAfter(false, 2_000)
+    // Each open reads lines of its own: the start of a line one stream ended on never joins the next one's.
+    opens.at(-1)!.chunk(Buffer.from('{"app":"terminal-app","tty":"/dev/ttys023"'))
+    await reopensAfter(true, 1_000)
+    send('}')
+    expect(run.printed).toEqual([])
+    await stillRunning(run)
+  })
+  it('the dial attaching opens it at once, and opens no second one', async () => {
+    const { run, selects, opens } = await streaming()
+    // Opening: the dial attaching opens no second one.
+    dial(run.socket, { attached: true })
+    expect(selects).toHaveBeenCalledOnce()
+    opens[0]!.end(false)
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(selects).toHaveBeenCalledTimes(2)
+    // The next try would wait 2 s: the dial attaching opens it at once.
+    opens[1]!.end(false)
+    await vi.advanceTimersByTimeAsync(500)
+    expect(selects).toHaveBeenCalledTimes(2)
+    dial(run.socket, { attached: true, fw: '0.0.95' })
+    expect(selects).toHaveBeenCalledTimes(3)
+    // The wait it replaced opens nothing, and a dial gone and attached again opens no second one.
+    await vi.advanceTimersByTimeAsync(5_000)
+    dial(run.socket, { attached: false })
+    dial(run.socket, { attached: true, fw: '0.0.95' })
+    expect(selects).toHaveBeenCalledTimes(3)
+    // The wait starts again from 1 s.
+    opens[2]!.end(false)
+    await vi.advanceTimersByTimeAsync(999)
+    expect(selects).toHaveBeenCalledTimes(3)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(selects).toHaveBeenCalledTimes(4)
+    await stillRunning(run)
+  })
+  it('with no listener path no stream is opened or retried', async () => {
+    // A data folder and a home (stubbed above) both too long for a socket: the devices have no listener to reach.
+    const dataDir = `/${'d'.repeat(120)}`
+    expect(devicesListenerPath(dataDir)).toBeNull()
+    const { run, selects } = await streaming({ dataDir })
+    dial(run.socket, { attached: true })
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(selects).not.toHaveBeenCalled()
+    expect(vi.getTimerCount()).toBe(0)
+    await stillRunning(run)
+  })
+  it('stdin closing ends the stream and leaves no timer', async () => {
+    const { run, opens } = await streaming()
+    // A tab told, and its gap under way.
+    run.stdin.emit('data', tabLine(TAB))
+    await new Promise(resolve => setImmediate(resolve))
+    run.stdin.emit('end')
+    expect(await run.done).toBe(0)
+    expect(opens[0]!.signal.aborted).toBe(true)
+    expect(vi.getTimerCount()).toBe(0)
+    // Waiting to open again when the daemon goes: the wait is cleared.
+    const waiting = await streaming()
+    waiting.opens[0]!.end(false)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(vi.getTimerCount()).toBe(1)
+    waiting.run.socket.emit('close', 1006, '')
+    expect(await waiting.run.done).toBe(3)
+    expect(vi.getTimerCount()).toBe(0)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(waiting.selects).toHaveBeenCalledOnce()
+    // Open when the daemon goes: it is let go.
+    const open = await streaming()
+    open.run.socket.emit('close', 1006, '')
+    expect(await open.run.done).toBe(3)
+    expect(open.opens[0]!.signal.aborted).toBe(true)
+  })
+  it('a select line does not hold back the next status line', async () => {
+    const { run, send } = await streaming()
+    dial(run.socket, { attached: true, fw: '0.0.95' })
+    send('{"app":"terminal-app","tty":"/dev/ttys023"}')
+    // A select is no status: the same status again prints nothing, and the next change prints at once.
+    dial(run.socket, { attached: true, fw: '0.0.95' })
+    dial(run.socket, { attached: false })
+    expect(run.printed).toEqual(['{"attached":true,"fw":"0.0.95"}', SELECT, '{"attached":false}'])
+    await stillRunning(run)
   })
 })
