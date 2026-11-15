@@ -2029,21 +2029,17 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
       expect(switches()).toEqual(['[device] app filter: switched · front'])
     })
 
-    it('a front through the handler with a window open moves nothing on the dial, and is shown when the window closes', async () => {
+    it('a front through the handler with a window open turns a dial that says appFilter to the app, and leaves an older dial its tab', async () => {
       vi.useFakeTimers()
       const listener = fakeListener()
       const { port } = start({ faults: ['fleet'], listen: listener.listen })
       await twoApps(port)
       port.swarms({ active: 't1', swarms: [], tiles: [] })
-      const tab = await host().listAgentSnapshot({ apps: true })
+      const tab = await host().listAgentSnapshot()
       listener.front('vscode')
       await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
-      // The dial holds the window's tab, with no apps, as before.
-      expect(tab.apps).toBeUndefined()
-      expect(await host().listAgentSnapshot({ apps: true })).toEqual(tab)
-      // Followed meanwhile: once the window closes, the dial shows the app that settled in front.
-      port.swarms(null)
-      expect((await host().listAgentSnapshot({ apps: true })).apps?.shown).toBe('vscode')
+      expect(await host().listAgentSnapshot({ apps: true })).toMatchObject({ view: 'machine', apps: { shown: 'vscode' } })
+      expect(await host().listAgentSnapshot()).toEqual(tab)
     })
 
     it('across a run with fronts through the handler, nothing but the dial\'s own frames holds the app in front', async () => {

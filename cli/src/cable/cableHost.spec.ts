@@ -1079,20 +1079,6 @@ describe('the dial that shows one app at a time', () => {
     ] })
   })
 
-  it('the front is followed while a window is open: when it closes, the app that settled in front meanwhile is shown', async () => {
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
-    try {
-      const host = setup(five())
-      expect(await shown(host)).toBe('ghostty')
-      onTab(host, [])
-      host.front('vscode')
-      vi.advanceTimersByTime(FRONT_SETTLE_MS)
-      expect(await host.listAgentSnapshot({ apps: true })).not.toHaveProperty('apps')
-      host.setSwarms(null)
-      expect(await shown(host)).toBe('vscode')
-    } finally { vi.useRealTimers() }
-  })
-
   it('a pick switches the list and holds through a count change', async () => {
     const agents = five()
     const appSwitched = vi.fn()
@@ -1296,7 +1282,7 @@ describe('the dial that shows one app at a time', () => {
     expect(appSwitched).not.toHaveBeenCalled()
   })
 
-  it('appOf is the agent\'s app in the machine view, undefined with a window', async () => {
+  it('appOf is the agent\'s app in the machine view, undefined on the window\'s tab', async () => {
     const host = setup([agent('g1', 'ghostty'), agent('z1', 'ghostty', { host: 'zellij' })], { sessions })
     await host.listAgentSnapshot({ apps: true })
     expect(['h1', 'g1', 'z1', 'nobody'].map((id) => host.appOf(id))).toEqual(['harness', 'ghostty', 'ghostty', undefined])
@@ -1699,6 +1685,76 @@ describe('the dial that shows one app at a time', () => {
       settle(host, 'vscode')
       expect(views).toEqual(['apps window', 'tabs empty', 'apps front'])
     })
+
+    const H1 = { id: 'h1', name: 'h1', engine: 'claude', machineId: 'mine', machine: 'MacbookPro.local' }
+
+    it('on an app\'s ring a dial that says appFilter is answered as with no window', async () => {
+      const { host } = viewed(five(), { sessions })
+      settle(host, 'ghostty')
+      const machine = await host.listAgentSnapshot({ apps: true })
+      expect(machine).toMatchObject({ tab: '', view: 'machine', apps: { shown: 'ghostty' } })
+      onTab(host, ['h1'])
+      const answers = async () => [await host.listAgentSnapshot({ apps: true }), host.listSwarms({ apps: true }), host.activeSwarm({ apps: true })]
+      expect(await answers()).toStrictEqual([machine, { selected: '', swarms: [], tiles: [] }, ''])
+      onTab(host, ['h2'], 't2')
+      expect(await answers()).toStrictEqual([machine, { selected: '', swarms: [], tiles: [] }, ''])
+    })
+
+    it('a dial without appFilter is answered as before in either view', async () => {
+      const { host } = viewed(five(), { sessions })
+      await onGhosttyRing(host)
+      for (const front of ['ghostty', 'harness']) {
+        settle(host, front)
+        expect(host.holdsTab()).toBe(front === 'harness')
+        expect(await host.listAgentSnapshot()).toStrictEqual({ tab: 't1', total: 2, agents: [H1] })
+        expect(host.listSwarms()).toMatchObject({ selected: 't1', swarms: [{ id: 't1', agentIds: ['h1'] }] })
+        expect(host.activeSwarm()).toBe('t1')
+        expect([host.capsOf('h1'), host.hostOf('h1'), host.appOf('g1')]).toEqual([undefined, undefined, undefined])
+      }
+    })
+
+    it('caps, host and app answer a dial on an app\'s ring as with no window', async () => {
+      const { host } = viewed(five(), { sessions })
+      await onGhosttyRing(host)
+      const asked = () => [host.capsOf('g1', { apps: true }), host.capsOf('h1', { apps: true }), host.hostOf('g1', { apps: true }), host.appOf('h1', { apps: true })]
+      expect(asked()).toEqual(['s', 'sva', 'ghostty', 'harness'])
+      settle(host, 'harness')
+      expect(asked()).toEqual([undefined, undefined, undefined, undefined])
+    })
+
+    it('markSeen reaches an agent of another app for a dial on an app\'s ring, and not on the tab', async () => {
+      const markSeen = vi.fn()
+      const host = new DaemonCableHost(wiring({ sessions: () => [] }), fleetOf([]))
+      host.setRegistry(new HostRegistry([host.harness, { id: 'observed', list: five, markSeen,
+        capabilities: () => ({ status: true, voice: false, focus: false, answer: false }) }]))
+      await onGhosttyRing(host)
+      host.markSeen('g1', { apps: true })
+      // A dial without appFilter holds the tab.
+      host.markSeen('g2')
+      settle(host, 'harness')
+      host.markSeen('g3', { apps: true })
+      expect(markSeen.mock.calls).toEqual([['g1']])
+    })
+
+    it('the window\'s focus is answered to a dial on the tab and to an older dial, and to no dial on an app\'s ring', async () => {
+      const focus = { machineId: 'mine', agentId: 'h1' }
+      const { host } = viewed(five(), { appFocus: () => focus })
+      const answered = () => [host.appFocus({ apps: true }), host.appFocus()]
+      expect(answered()).toEqual([focus, focus])
+      await onGhosttyRing(host)
+      expect(answered()).toEqual([undefined, focus])
+      settle(host, 'harness')
+      expect(answered()).toEqual([focus, focus])
+    })
+
+    it('a read that finds the shown app left as Harness answers the tab', async () => {
+      const agents = [agent('g1', 'ghostty')]
+      const { host } = viewed(agents, { sessions })
+      await onGhosttyRing(host)
+      agents.length = 0
+      expect(await host.listAgentSnapshot({ apps: true })).toStrictEqual({ tab: 't1', total: 2, agents: [H1] })
+      expect(host.listSwarms({ apps: true })).toMatchObject({ selected: 't1' })
+    })
   })
 })
 
@@ -2005,6 +2061,24 @@ describe('the dial reaches the fleet through the core\'s port', () => {
       expect(await host.sendTurn('o1', 'ship it')).toMatchObject({ ok: false })
       expect(observed.send).not.toHaveBeenCalled()
       expect(JSON.stringify(heard())).not.toContain('o1')
+    })
+
+    it('with a window, its words are delivered on an app\'s ring and refused on the tab', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      try {
+        const { host, observed, heard } = setup()
+        host.front('orca')
+        vi.advanceTimersByTime(FRONT_SETTLE_MS)
+        onTab(host, ['r1'])
+        expect(host.holdsTab()).toBe(false)
+        expect(await host.sendTurn('o1', 'ship it')).toEqual({ ok: true })
+        expect(observed.send).toHaveBeenCalledWith(scratch, 'ship it')
+        host.front('harness')
+        vi.advanceTimersByTime(FRONT_SETTLE_MS)
+        expect(await host.sendTurn('o1', 'ship it')).toMatchObject({ ok: false })
+        expect(observed.send).toHaveBeenCalledOnce()
+        expect(JSON.stringify(heard())).not.toContain('o1')
+      } finally { vi.useRealTimers() }
     })
 
     // The dial only shows a waiting prompt (docs/specs/2026-11-13-device-claude-orca.md): an answer for an agent outside
