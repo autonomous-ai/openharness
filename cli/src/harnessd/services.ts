@@ -49,6 +49,10 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   // contains transient parsing; RSS additionally bounds file buffers outside V8's heap.
   'engine-claude': { services: ['engine-claude'], heapLimitMiB: 512, rssLimitMiB: 1_024, onDemand: true, askedSince: 0 },
   'engine-codex': { services: ['engine-codex'], heapLimitMiB: 512, rssLimitMiB: 1_024, onDemand: true, askedSince: 0 },
+  // The fourteen other engines in one worker (engines/others/otherEnginesProcess.ts): their conversations read from their
+  // transcripts and stores, at most sixteen reads at once with replies capped at 4 MiB, each engine's code loaded
+  // only once one of its sessions is read. Started on demand, as theirs are: a computer that runs none never pays.
+  'engine-others': { services: ['engine-others'], heapLimitMiB: 512, rssLimitMiB: 1_024, onDemand: true, askedSince: 0 },
   search: { services: ['search'], heapLimitMiB: 1_024, rssLimitMiB: 2_048 },
   // Its file watches on every harness's workspace; the viewer servers it starts are processes of their
   // own, outside this budget. The Store beside them: its installs run git and the harnesses' toolchains
@@ -144,6 +148,13 @@ export const ENGINE_SUBMISSION_ENV = 'HARNESSD_ENGINE_SUBMISSION'
 export const ENGINE_NATIVE_CONTROL_ENV = 'HARNESSD_ENGINE_NATIVE_CONTROL'
 export const ENGINE_BACKGROUND_JOB_ENV = 'HARNESSD_ENGINE_BACKGROUND_JOB'
 export const ENGINE_PROVIDER_MOVE_ENV = 'HARNESSD_ENGINE_PROVIDER_MOVE'
+/**
+ * What the other engines' worker serves, as a version: `<master pid>:<version>`. 1 is their history and last turn.
+ * A version only grows, each one serving what the ones before it did: a core asks the worker only for what the
+ * version its master says covers, and reads the rest in its own process, as under a master from before the worker.
+ */
+export const ENGINE_OTHERS_ENV = 'HARNESSD_ENGINE_OTHERS'
+export const ENGINE_OTHERS_VERSION = 1
 
 /**
  * What a master puts in its core's environment about the services it runs in their own processes: the
@@ -155,7 +166,17 @@ export function serviceProcessesEnv(specs: readonly ServiceSpec[], masterPid: nu
   // The services, not the processes: a core knows what it routes by service, and one from before the
   // edge host still finds the services it knows here (workspaces) and runs the rest itself.
   const names = specs.flatMap((spec) => spec.services).join(',')
-  return { [SERVICE_PROCESSES_ENV]: names, HARNESSD_SERVICES: names || 'none', [ENGINE_LIVE_ENV]: `${masterPid}:1`, [ENGINE_RUNTIME_ENV]: `${masterPid}:1`, [ENGINE_SCREEN_ENV]: `${masterPid}:1`, [ENGINE_MODEL_CONTROL_ENV]: `${masterPid}:1`, [ENGINE_QUESTION_CONTROL_ENV]: `${masterPid}:1`, [ENGINE_SUBMISSION_ENV]: `${masterPid}:1`, [ENGINE_NATIVE_CONTROL_ENV]: `${masterPid}:1`, [ENGINE_BACKGROUND_JOB_ENV]: `${masterPid}:1`, [ENGINE_PROVIDER_MOVE_ENV]: `${masterPid}:1` }
+  return { [SERVICE_PROCESSES_ENV]: names, HARNESSD_SERVICES: names || 'none', [ENGINE_LIVE_ENV]: `${masterPid}:1`, [ENGINE_RUNTIME_ENV]: `${masterPid}:1`, [ENGINE_SCREEN_ENV]: `${masterPid}:1`, [ENGINE_MODEL_CONTROL_ENV]: `${masterPid}:1`, [ENGINE_QUESTION_CONTROL_ENV]: `${masterPid}:1`, [ENGINE_SUBMISSION_ENV]: `${masterPid}:1`, [ENGINE_NATIVE_CONTROL_ENV]: `${masterPid}:1`, [ENGINE_BACKGROUND_JOB_ENV]: `${masterPid}:1`, [ENGINE_PROVIDER_MOVE_ENV]: `${masterPid}:1`, [ENGINE_OTHERS_ENV]: `${masterPid}:${ENGINE_OTHERS_VERSION}` }
+}
+
+/**
+ * The version of the other engines' worker this core's master runs (`ENGINE_OTHERS_ENV`), 0 for none: a master from
+ * before it, no master, or an environment another master left, which names its pid and not this core's parent.
+ */
+export function otherEnginesVersion(env: NodeJS.ProcessEnv, parentPid: number): number {
+  if (env.HARNESSD_SUPERVISED !== '1' || !env.HARNESSD_SERVICE_TOKEN) return 0
+  const said = /^(\d+):([1-9]\d{0,5})$/.exec(env[ENGINE_OTHERS_ENV] ?? '')
+  return said && said[1] === String(parentPid) ? Number(said[2]) : 0
 }
 
 /** An older master may inherit a newer master's environment after rollback. Trust only this parent. */

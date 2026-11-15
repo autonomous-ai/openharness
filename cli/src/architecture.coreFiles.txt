@@ -122,7 +122,6 @@ core/terminals/requests.ts
 core/terminals/sessions.ts
 core/toolWatches.ts
 core/transcripts/attach.ts
-core/transcripts/databaseHistory.ts
 core/transcripts/history.ts
 core/transcripts/ingest.ts
 core/transcripts/lastTurn.ts
@@ -131,6 +130,7 @@ core/transcripts/readIdentity.ts
 core/transcripts/readerLoads.ts
 core/transcripts/relaunch.ts
 core/transcripts/sideReads.ts
+core/transcripts/stores.ts
 core/transcripts/turnReplacement.ts
 core/turns/activity.ts
 core/turns/agyBackstop.ts
@@ -258,6 +258,7 @@ engines/nativeHooks.ts
 engines/nativeLaunch.ts
 engines/openclaw/contract.ts
 engines/opencode/contract.ts
+engines/otherEngines.ts
 engines/pi/contract.ts
 engines/prepareNativeLaunch.ts
 engines/repairIdentities.ts

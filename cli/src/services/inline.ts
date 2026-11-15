@@ -14,6 +14,9 @@ export { questionControlFor } from '../engines/questionControls.js'
  * declared in core/api.ts, which it loads either way.
  */
 export { engineTranscriptFor } from '../engines/transcripts.js'
+// A conversation kept in a database read whole, for a service in this process (core/api.ts `transcripts`): theirs, as
+// each service's own process reads it (lib/databaseHistory.ts), loaded only once one asks (engines/inProcess.ts).
+export { databaseHistory } from '../engines/storeHistory.js'
 export { liveFor } from '../engines/live.js'
 export { screenFor } from '../engines/screens.js'
 export { submissionFor } from '../engines/submissions.js'
