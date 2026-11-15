@@ -13,10 +13,11 @@
  */
 
 import { execFile } from 'node:child_process'
-import { lstat, opendir, readlink } from 'node:fs/promises'
+import { lstat, opendir, readFile, readlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { descriptorPaths } from '../engines/kit/nativeDescriptors.js'
 import { psEnv } from './childLocale.js'
+import { linuxProcessStat } from './nativeProcessControl.js'
 import { probeExecFile } from './offThreadExec.js'
 import { processView } from './processMounts.js'
 import type { ProcessIdentity } from './terminalTypes.js'
@@ -56,8 +57,15 @@ export function lsofPaths(output: string): string[] | null {
   return lines.filter((line) => line.startsWith('n/')).map((line) => line.slice(1))
 }
 
+// When the process at `pid` started, in ticks since boot (ProcessIdentity.startTicks); null once none is there.
+const startTicks = (pid: number, proc: string): Promise<number | null> =>
+  readFile(join(proc, String(pid), 'stat'), 'utf8').then((text) => linuxProcessStat(text, pid).startTicks).catch(() => null)
+
 // The folders one process's open files name, at the daemon's path of them. Null: it cannot be listed.
 async function linuxFolders(identity: ProcessIdentity, file: RegExp, proc: string): Promise<string[] | null> {
+  // The selected process may have ended since the discovery pass and its pid gone to another: the same start before
+  // and after the listing says every file listed was the selected process's.
+  if (await startTicks(identity.pid, proc) !== identity.startTicks) return null
   const fd = join(proc, String(identity.pid), 'fd')
   const names: string[] = []
   try {
@@ -76,7 +84,7 @@ async function linuxFolders(identity: ProcessIdentity, file: RegExp, proc: strin
     if (folder) folders.push(folder)
   }
   const view = await processView(identity, 'linux', proc)
-  if (view.state === 'unreadable') return null
+  if (await startTicks(identity.pid, proc) !== identity.startTicks || view.state === 'unreadable') return null
   if (view.state === 'same') return folders
   // A store with no path here is still a home the process holds: dropped, it would leave the other one picked.
   const mapped = folders.map((folder) => view.toHost(folder))
@@ -103,6 +111,8 @@ async function spelledFolder(path: string, file: RegExp): Promise<string | undef
 const STEPS_OUT = /(?:^|\/)\.\.(?:\/|$)/
 
 async function darwinFolders(pid: number, file: RegExp): Promise<string[] | null> {
+  // Unlike on Linux, nothing checks the pid is still the selected process: its start is `ps lstart`, one more spawn a
+  // listing. macOS hands out pids in turn up to 99,999 before it reuses one, and the pass selected it just before.
   // `-n -P`: no host or port names looked up. `-w`: a file system lsof cannot stat is a warning, and the process's own
   // files are listed regardless (engines/kit/nativeDescriptors.ts).
   const paths = await new Promise<string[] | null>((resolve) => {
