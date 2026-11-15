@@ -107,6 +107,7 @@ export function otherReaderRequests(deps: OtherReaderDeps = {}): ServiceRequests
       recycle()
     }, waitMs + OTHER_READ_STUCK_MS)
     stuck.unref?.()
+    let late = false
     const reading = (async (): Promise<Record<string, unknown>> => {
       const reader = transcriptFor(engine)!
       let answer: unknown
@@ -118,7 +119,8 @@ export function otherReaderRequests(deps: OtherReaderDeps = {}): ServiceRequests
         log(`[engine ${engine}] ${kind} unreadable · ${error instanceof Error ? error.message : String(error)}`)
         return failure('ENGINE_UNAVAILABLE')
       }
-      if (closed?.aborted) return failure('ENGINE_UNAVAILABLE')
+      // A read the core has already been answered for is not kept for parts nobody will ask for.
+      if (closed?.aborted || late) return failure('ENGINE_UNAVAILABLE')
       return send({ version: READER_VERSION, answer })
     })().finally(() => {
       // The place is the read's until it ends, past its deadline too: a slow engine holds at most its own four.
@@ -129,6 +131,7 @@ export function otherReaderRequests(deps: OtherReaderDeps = {}): ServiceRequests
     let timer: ReturnType<typeof setTimeout> | undefined
     const deadline = new Promise<Record<string, unknown>>((resolve) => {
       timer = setTimeout(() => {
+        late = true
         log(`[engine ${engine}] ${kind} not read within ${waitMs / 1000} s · answered unavailable`)
         resolve(failure('ENGINE_UNAVAILABLE'))
       }, waitMs)
