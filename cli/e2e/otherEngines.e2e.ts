@@ -150,6 +150,10 @@ console.log('fixture-pi-ready'); setInterval(() => {}, 1000);
     const { d, c } = await fresh({ HARNESSD_SERVICE_HEARTBEAT_TIMEOUT_MS: '4000', HARNESSD_SERVICE_STOP_GRACE_MS: '100' })
     const agent = await pi(d, c, 'before-the-faults')
     await until('a first read through the worker', async () => said(await history(c, agent.id), 'before-the-faults') || null, 30_000, 250)
+    const bystander = await c.request('agent_create', { engine: 'claude', cwd: d.projectsDir, bypassPermission: true }, 60_000)
+    expect(bystander.error).toBeUndefined()
+    await until('the unaffected engine bound', async () => (await rows(c)).find(row => row.id === bystander.agent.id
+      && row.sessionId && row.status === 'active') || null, 30_000, 100)
     const core = d.corePid()
     const panePid = (await d.tmux.run('display-message', '-p', '-t', agent.pane, '#{pane_pid}')).trim()
     for (const signal of ['SIGKILL', 'SIGSTOP'] as const) {
@@ -158,6 +162,11 @@ console.log('fixture-pi-ready'); setInterval(() => {}, 1000);
       process.kill(before, signal)
       const at = Date.now()
       const pending = history(c, agent.id)
+      const unaffected = c.next(frame => frame.type === 'turn_ended' && frame.agentId === bystander.agent.id && !frame.replay,
+        15_000, 'input on the same connection passes the unavailable history reader')
+      c.send('message', { agentId: bystander.agent.id, content: `unaffected-${signal}` })
+      await unaffected
+      if (signal === 'SIGSTOP') expect(worker(d)).toBe(before)
       // The pane and the core's own following of it go on while the worker is down.
       await live(d, c, agent, `during-${signal}`)
       const answer = await pending
