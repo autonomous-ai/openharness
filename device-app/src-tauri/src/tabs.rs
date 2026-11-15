@@ -144,9 +144,13 @@ impl TabScripts for NoTabs {
     }
 }
 
-/// The scripts this platform has.
+/// The scripts this platform has: only macOS has tab apps.
 pub fn system() -> Arc<dyn TabScripts> {
-    Arc::new(NoTabs)
+    #[cfg(target_os = "macos")]
+    let scripts = crate::tabs_macos::MacTabs::default();
+    #[cfg(not(target_os = "macos"))]
+    let scripts = NoTabs;
+    Arc::new(scripts)
 }
 
 /// A select to run now.

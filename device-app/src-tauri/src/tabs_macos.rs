@@ -1,3 +1,351 @@
+//! The tabs of Terminal, iTerm2 and Ghostty on macOS, through three fixed scripts run in this process by
+//! `NSAppleScript`: macOS asks the person once to let Harness Device control each app, and the daemon sends no event.
+//! A tty reaches a script only as a handler's parameter, after the tty check, and never as script text.
+
+use crate::tabs::{Selected, TabApp, TabError, TabScripts, tab_error, tty_ok};
+use objc2::rc::{Retained, autoreleasepool};
+use objc2::runtime::AnyObject;
+use objc2::{AnyThread, ClassType, msg_send};
+use objc2_app_kit::NSRunningApplication;
+use objc2_foundation::{
+    NSAppleEventDescriptor, NSAppleScript, NSAppleScriptErrorNumber, NSDictionary, NSNumber, NSString,
+};
+use std::sync::OnceLock;
+use std::sync::mpsc::{self, Sender};
+use std::thread;
+
+// Each app's terms are written by their codes (from its scripting dictionary) and the app is named only at run time,
+// so a source compiles on a Mac without that app, compiling sends no event, and an app whose dictionary lacks a term
+// answers an error number instead of failing to compile. Every event is inside a 2 s timeout (tabs::CALL_TIMEOUT).
+// With no visible window `selected_tty` answers the empty string; each select answers whether a tab held `t`.
+
+const TERMINAL: &str = r#"
+-- Terminal: «class cwin» window, «property pvis» visible, «property pidx» index, «property tcnt» selected tab,
+-- «class ttab» tab, «property ttty» tty.
+property app_id : "com.apple.Terminal"
+
+on selected_tty()
+	with timeout of 2 seconds
+		tell application id app_id
+			repeat with w in (every «class cwin» whose «property pvis» is true)
+				return «property ttty» of «property tcnt» of w
+			end repeat
+		end tell
+	end timeout
+	return ""
+end selected_tty
+
+on select_tty(t, in_front)
+	with timeout of 2 seconds
+		tell application id app_id
+			repeat with w in (every «class cwin» whose «property pvis» is true)
+				set held to every «class ttab» of w whose «property ttty» is t
+				if held is not {} then
+					set «property tcnt» of w to item 1 of held
+					if in_front then set «property pidx» of w to 1
+					return true
+				end if
+			end repeat
+		end tell
+	end timeout
+	return false
+end select_tty
+
+on focus_tty(t)
+	return select_tty(t, true)
+end focus_tty
+"#;
+
+const ITERM: &str = r#"
+-- iTerm2: «class cwin» window, «property pvis» visible, «property Crwn» current window, «property Wcsn» current
+-- session, «class Trmt» tab, «class Trms» session, «property Stty» tty, «event Itrmslct» select.
+property app_id : "com.googlecode.iterm2"
+
+on selected_tty()
+	with timeout of 2 seconds
+		tell application id app_id
+			set shown to every «class cwin» whose «property pvis» is true
+			if shown is {} then return ""
+			return «property Stty» of «property Wcsn» of «property Crwn»
+		end tell
+	end timeout
+end selected_tty
+
+on select_tty(t, in_front)
+	with timeout of 2 seconds
+		tell application id app_id
+			repeat with w in (every «class cwin» whose «property pvis» is true)
+				repeat with k in (every «class Trmt» of w)
+					set held to every «class Trms» of k whose «property Stty» is t
+					if held is not {} then
+						«event Itrmslct» k
+						«event Itrmslct» (item 1 of held)
+						if in_front then «event Itrmslct» w
+						return true
+					end if
+				end repeat
+			end repeat
+		end tell
+	end timeout
+	return false
+end select_tty
+
+on focus_tty(t)
+	return select_tty(t, true)
+end focus_tty
+"#;
+
+// Ghostty's `select tab` may bring Ghostty forward, so a swipe selects only while it is in front.
+const GHOSTTY: &str = r#"
+-- Ghostty: «class Gwnd» window, «property GFWn» front window, «property GWsT» selected tab, «class Gtab» tab,
+-- «property GTfT» focused terminal, «class Gtrm» terminal, «property Gtty» tty, «event GhstSlTb» select tab.
+property app_id : "com.mitchellh.ghostty"
+
+on selected_tty()
+	with timeout of 2 seconds
+		tell application id app_id
+			-- A window, tab or terminal that is not there is no tab: only reading the tty itself may say Ghostty has none.
+			try
+				set k to «property GTfT» of «property GWsT» of «property GFWn»
+			on error number n
+				if n is -1728 then return ""
+				error number n
+			end try
+			if k is missing value then return ""
+			return «property Gtty» of k
+		end tell
+	end timeout
+end selected_tty
+
+on select_tty(t, in_front)
+	if not in_front then return false
+	with timeout of 2 seconds
+		tell application id app_id
+			repeat with w in (every «class Gwnd»)
+				repeat with k in (every «class Gtab» of w)
+					set held to every «class Gtrm» of k whose «property Gtty» is t
+					if held is not {} then
+						«event GhstSlTb» k
+						return true
+					end if
+				end repeat
+			end repeat
+		end tell
+	end timeout
+	return false
+end select_tty
+
+on focus_tty(t)
+	return select_tty(t, true)
+end focus_tty
+"#;
+
+/// Harness Device's own table: the app a line names picks one of these, and nothing of the line reaches its text.
+fn source(app: TabApp) -> &'static str {
+    match app {
+        TabApp::Terminal => TERMINAL,
+        TabApp::Iterm => ITERM,
+        TabApp::Ghostty => GHOSTTY,
+    }
+}
+
+/// AppleScript's general error (errOSAGeneralError), for a failure that carries no number: the script thread gone.
+const GENERAL_ERROR: i64 = -2700;
+
+const fn code(four: &[u8; 4]) -> u32 {
+    u32::from_be_bytes(*four)
+}
+
+/// The Apple Event that calls a script's handler (kASAppleScriptSuite, kASSubroutineEvent), its keywords for the
+/// handler's name and its parameters (keyASSubroutineName, keyDirectObject), and Carbon's "any" ids.
+const SUITE: u32 = code(b"ascr");
+const SUBROUTINE: u32 = code(b"psbr");
+const HANDLER_NAME: u32 = code(b"snam");
+const PARAMETERS: u32 = code(b"----");
+const AUTO_RETURN_ID: i16 = -1;
+const ANY_TRANSACTION: i32 = 0;
+
+/// A handler's parameter. It becomes a descriptor on the script thread, after the tty check.
+enum Arg {
+    Text(String),
+    Flag(bool),
+}
+
+/// Each source compiled, kept by the script thread: an `NSAppleScript` never leaves it.
+type Compiled = Vec<(&'static str, Retained<NSAppleScript>)>;
+type Job = Box<dyn FnOnce(&mut Compiled) + Send>;
+
+/// Runs `job` on the one thread that holds every `NSAppleScript` of this process, and waits for its answer; None when
+/// that thread is gone. AppleScript run on two threads at once mixes their calls up (a handler is not found, -1708).
+/// On a thread of its own, a call the consent prompt holds for minutes holds neither AppKit's main thread nor anything
+/// else.
+fn on_script_thread<T: Send + 'static>(job: impl FnOnce(&mut Compiled) -> T + Send + 'static) -> Option<T> {
+    static JOBS: OnceLock<Sender<Job>> = OnceLock::new();
+    let jobs = JOBS.get_or_init(|| {
+        let (jobs, todo) = mpsc::channel::<Job>();
+        // A thread that does not start drops `todo`: every call then fails, and the failed polls are counted.
+        let _ = thread::Builder::new().name("tabs".into()).spawn(move || {
+            let mut compiled = Compiled::new();
+            for job in todo {
+                autoreleasepool(|_| job(&mut compiled));
+            }
+        });
+        jobs
+    });
+    let (answer, answered) = mpsc::sync_channel(1);
+    jobs.send(Box::new(move |compiled: &mut Compiled| {
+        let _ = answer.send(job(compiled));
+    }))
+    .ok()?;
+    answered.recv().ok()
+}
+
+/// Calls `handler` of `source` with `args`; `read` turns the answer into a value on the script thread. An error is
+/// AppleScript's number for it.
+fn call<T: Send + 'static>(
+    source: &'static str,
+    handler: &'static str,
+    args: Vec<Arg>,
+    read: fn(&NSAppleEventDescriptor) -> T,
+) -> Result<T, i64> {
+    on_script_thread(move |compiled| run(compiled, source, handler, &args).map(|answer| read(&answer)))
+        .unwrap_or(Err(GENERAL_ERROR))
+}
+
+/// The fixed scripts, run on the script thread.
+pub struct MacTabs {
+    /// Always `source`, but in tests, which stand a script that answers with no event in for an app's.
+    source: fn(TabApp) -> &'static str,
+}
+
+impl Default for MacTabs {
+    fn default() -> MacTabs {
+        MacTabs { source }
+    }
+}
+
+impl MacTabs {
+    /// A swipe's or a tap's select. A tty that fails the check is refused before any descriptor is made.
+    fn select(&self, app: TabApp, handler: &'static str, tty: &str, front: Option<bool>) -> Result<Selected, TabError> {
+        if !tty_ok(tty) {
+            return Err(TabError::Failed);
+        }
+        let mut args = vec![Arg::Text(tty.to_string())];
+        args.extend(front.map(Arg::Flag));
+        let held = call((self.source)(app), handler, args, flag).map_err(|code| tab_error(app, code))?;
+        Ok(if held { Selected::Done } else { Selected::NoTab })
+    }
+}
+
+impl TabScripts for MacTabs {
+    fn running(&self, app: TabApp) -> bool {
+        runs(app.bundle())
+    }
+
+    fn selected_tty(&self, app: TabApp) -> Result<Option<String>, TabError> {
+        let tty = call((self.source)(app), "selected_tty", Vec::new(), text).map_err(|code| tab_error(app, code))?;
+        Ok(Some(tty).filter(|tty| !tty.is_empty()))
+    }
+
+    fn select_tty(&self, app: TabApp, tty: &str, frontmost: bool) -> Result<Selected, TabError> {
+        self.select(app, "select_tty", tty, Some(frontmost))
+    }
+
+    fn focus_tty(&self, app: TabApp, tty: &str) -> Result<Selected, TabError> {
+        self.select(app, "focus_tty", tty, None)
+    }
+}
+
+/// From LaunchServices: asking the app would be an Apple Event, which launches an app that does not run.
+fn runs(bundle: &str) -> bool {
+    autoreleasepool(|_| {
+        !NSRunningApplication::runningApplicationsWithBundleIdentifier(&NSString::from_str(bundle)).is_empty()
+    })
+}
+
+/// On the script thread: compiles `source` at its first call, then calls `handler`.
+fn run(
+    compiled: &mut Compiled,
+    source: &'static str,
+    handler: &str,
+    args: &[Arg],
+) -> Result<Retained<NSAppleEventDescriptor>, i64> {
+    let at = match compiled.iter().position(|(known, _)| *known == source) {
+        Some(at) => at,
+        None => {
+            compiled.push((source, compile(source)?));
+            compiled.len() - 1
+        }
+    };
+    let event = handler_call(handler, args);
+    let mut error: Option<Retained<NSDictionary<NSString, AnyObject>>> = None;
+    // SAFETY: the event is a whole handler call and `error` is the dictionary NSAppleScript writes. objc2-foundation's
+    // binding says the answer is never nil, which it is on an error, so the message is sent with an Option.
+    let answer: Option<Retained<NSAppleEventDescriptor>> =
+        unsafe { msg_send![&*compiled[at].1, executeAppleEvent: &*event, error: &mut error] };
+    answer.ok_or_else(|| error_number(error.as_deref()))
+}
+
+fn compile(source: &str) -> Result<Retained<NSAppleScript>, i64> {
+    let script =
+        NSAppleScript::initWithSource(NSAppleScript::alloc(), &NSString::from_str(source)).ok_or(GENERAL_ERROR)?;
+    let mut error = None;
+    // SAFETY: `error` is the dictionary NSAppleScript writes.
+    if unsafe { script.compileAndReturnError(Some(&mut error)) } {
+        Ok(script)
+    } else {
+        Err(error_number(error.as_deref()))
+    }
+}
+
+/// The event that calls `handler` with `args` as its positional parameters.
+fn handler_call(handler: &str, args: &[Arg]) -> Retained<NSAppleEventDescriptor> {
+    let parameters = NSAppleEventDescriptor::listDescriptor();
+    for (at, arg) in (1..).zip(args) {
+        let item = match arg {
+            Arg::Text(text) => NSAppleEventDescriptor::descriptorWithString(&NSString::from_str(text)),
+            Arg::Flag(flag) => NSAppleEventDescriptor::descriptorWithBoolean(u8::from(*flag)),
+        };
+        parameters.insertDescriptor_atIndex(&item, at);
+    }
+    let target = NSAppleEventDescriptor::currentProcessDescriptor();
+    let name = NSAppleEventDescriptor::descriptorWithString(&NSString::from_str(handler));
+    // SAFETY: Foundation's selectors with their own argument types (FourCharCode is u32, AEReturnID i16 and
+    // AETransactionID i32); objc2-foundation offers them only with a crate this app does not take.
+    unsafe {
+        let event: Retained<NSAppleEventDescriptor> = msg_send![
+            NSAppleEventDescriptor::class(),
+            appleEventWithEventClass: SUITE,
+            eventID: SUBROUTINE,
+            targetDescriptor: &*target,
+            returnID: AUTO_RETURN_ID,
+            transactionID: ANY_TRANSACTION
+        ];
+        let () = msg_send![&*event, setParamDescriptor: &*name, forKeyword: HANDLER_NAME];
+        let () = msg_send![&*event, setParamDescriptor: &*parameters, forKeyword: PARAMETERS];
+        event
+    }
+}
+
+fn error_number(error: Option<&NSDictionary<NSString, AnyObject>>) -> i64 {
+    // SAFETY: a Foundation constant, set before any code runs.
+    let key = unsafe { NSAppleScriptErrorNumber };
+    error
+        .and_then(|error| error.objectForKey(key))
+        .and_then(|number| number.downcast::<NSNumber>().ok())
+        .map_or(GENERAL_ERROR, |number| number.as_i64())
+}
+
+/// A tty, or the empty string with no window.
+fn text(answer: &NSAppleEventDescriptor) -> String {
+    answer.stringValue().map(|text| text.to_string()).unwrap_or_default()
+}
+
+/// Whether a tab held the tty.
+fn flag(answer: &NSAppleEventDescriptor) -> bool {
+    answer.booleanValue() != 0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
