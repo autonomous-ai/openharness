@@ -41,7 +41,7 @@ impl Watch {
     /// the log says so once, never with the line: both kinds of line fill the same pipe.
     fn write(&self, line: &str) {
         if self.writer.line(line) == Err(Unwritten::Full) && !self.not_reading.swap(true, Ordering::Relaxed) {
-            self.log.line("front: watch not reading");
+            self.log.line("watch: not reading");
         }
     }
 
@@ -313,7 +313,7 @@ mod tests {
         watch.stop();
         assert_eq!(events.recv_timeout(WAIT), Ok(Event::WatchExit(None)));
         let lines = fake.log().lines();
-        assert_eq!(lines.iter().filter(|line| *line == "front: watch not reading").count(), 1, "{lines:?}");
+        assert_eq!(lines.iter().filter(|line| *line == "watch: not reading").count(), 1, "{lines:?}");
         assert!(!lines.iter().any(|line| line.contains("example")), "{lines:?}");
     }
 
