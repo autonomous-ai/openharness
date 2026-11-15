@@ -1,11 +1,12 @@
 // The devices (services/devices.ts): what the core tells them reaches the dial and the window bridges, what
 // they say reaches the core through its API alone, and the fleet failing costs the dial nothing.
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import type { CableHostWiring, DaemonCableHost } from '../cable/cableHost.js'
 import { AppFilter, FRONT_SETTLE_MS } from '../cable/hosts/appFilter.js'
+import type { CodexRunEnd } from '../cable/hosts/codexQueue.js'
 import { observedAgentId } from '../cable/hosts/observed.js'
 import { AppRings } from '../cable/hosts/select.js'
 import { env } from '../config/env.js'
@@ -193,6 +194,13 @@ const orca = {
   exists: () => false,
   platform: 'linux' as const,
 }
+/** What the devices ran as `codex`: recorded, so no spec runs the developer's own. */
+const codexRuns: Array<[string, string[], { cwd: string; env: Record<string, string>; timeoutMs: number }]> = []
+const codex: NonNullable<DevicesDeps['codex']> = {
+  run: async (file, args, options) => { codexRuns.push([file, args, options]); return 0 },
+  binary: () => '/opt/codex/bin/codex',
+  platform: 'linux',
+}
 
 let dataDir: string
 let logs: string[]
@@ -200,6 +208,7 @@ beforeEach(() => {
   dataDir = mkdtempSync(join(tmpdir(), 'devices-'))
   logs = []
   orcaRuns.length = 0
+  codexRuns.length = 0
   seen.bridges = {}
   seen.fleet = null
   readers.open = readers.external = null
@@ -215,7 +224,7 @@ afterEach(() => {
   vi.unstubAllEnvs()
 })
 
-function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; orca?: DevicesDeps['orca']; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty'] } = {}) {
+function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; orca?: DevicesDeps['orca']; codex?: DevicesDeps['codex']; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty'] } = {}) {
   const core = over.core ?? fakeCore({ dataDir })
   const ports: CorePorts = emptyPorts()
   const onExit = vi.fn()
@@ -230,6 +239,7 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
     now: over.now,
     refresh: over.refresh,
     orca: over.orca ?? orca,
+    codex: over.codex ?? codex,
     decideTier: over.decideTier === null ? undefined : over.decideTier ?? (async () => ({ tier: 'alert', by: 'test', detail: '', ms: 0 })),
     faults: new Set(over.faults ?? []),
     log: (line) => { logs.push(line) },
@@ -1323,7 +1333,7 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     // As core/main.ts starts the devices in the core's own process: through the service host, which guards the port.
     const ports = emptyPorts()
     createServiceHost(ports, { log: () => {} }).start('devices', (core, started) => startDevices(core, started, {
-      logsDir: join(dataDir, 'logs'), cableDisabled: true, faults: new Set(['fleet']), log: () => {}, onExit: vi.fn(), orca,
+      logsDir: join(dataDir, 'logs'), cableDisabled: true, faults: new Set(['fleet']), log: () => {}, onExit: vi.fn(), orca, codex,
     }), fakeCore({ dataDir }), DEVICES_FALLBACKS, DEVICES_REQUESTS)
     ports.devices!.observed(hook('session-start'))
     expect(await machineList(ports.devices!)).toMatchObject({ view: 'machine', agents: [{ id: ID, host: 'orca', caps: 's' }] })
@@ -1742,7 +1752,7 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
       // As core/main.ts starts the devices in the core's own process (HARNESSD_SERVICES=none, Harness OS): no listen.
       const ports = emptyPorts()
       createServiceHost(ports, { log: () => {} }).start('devices', (core, started) => startDevices(core, started, {
-        logsDir: join(dataDir, 'logs'), cableDisabled: true, faults: new Set(['fleet']), log: (line) => { logs.push(line) }, onExit: vi.fn(), orca,
+        logsDir: join(dataDir, 'logs'), cableDisabled: true, faults: new Set(['fleet']), log: (line) => { logs.push(line) }, onExit: vi.fn(), orca, codex,
       }), fakeCore({ dataDir }), DEVICES_FALLBACKS, DEVICES_REQUESTS)
       const port = ports.devices!
       await twoApps(port)
@@ -2355,6 +2365,89 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     expect(await poll).toEqual({})
     expect(await words).toMatchObject({ ok: false, message: 'api did not answer.' })
     expect(vi.getTimerCount()).toBe(0)
+  })
+})
+
+describe('codex queue, for Codex outside a pane (docs/specs/2026-11-15-device-codex.md)', () => {
+  const THREAD = '01a1de76-a3b7-7270-b39e-1245893274c1'
+  const ID = observedAgentId('codex', THREAD)
+  const HANDLE = 'term_0123abcd-0000-4000-8000-0123456789ab'
+  /** Its rollout, in Harness's own Codex home. */
+  const transcriptPath = join(env.CODEX_HOME, 'sessions', '2026', '11', '15', `rollout-2026-11-15T16-07-59-${THREAD}.jsonl`)
+  const hook = (event: ObservedHookEvent['event'], over: Partial<ObservedHookEvent> = {}): ObservedHookEvent => ({
+    engine: 'codex', sessionId: THREAD, event, cwd: '/work/api', callerPid: 4242, transcriptPath, hostHints: { TERM_PROGRAM: 'ghostty' }, ...over,
+  })
+  const host = () => seen.dial as unknown as DaemonCableHost
+  const listed = async () => (await host().listAgentSnapshot()).agents.map(({ id, name, caps }) => ({ id, name, caps }))
+  const said = () => logs.filter((line) => line.startsWith('[device] '))
+  /** A codex that ends each run as told, recorded. */
+  const ending = (...ends: CodexRunEnd[]): NonNullable<DevicesDeps['codex']> => ({
+    ...codex,
+    run: async (file, args, options) => { codexRuns.push([file, args, options]); return ends.shift() ?? 0 },
+  })
+  /** The Codex session, told by its start, and a dial on this computer's agents: no fleet, no window. */
+  const started = (over: Parameters<typeof start>[0] = {}, session: Partial<ObservedHookEvent> = {}) => {
+    const { port } = start({ ...over, faults: ['fleet'] })
+    port.observed(hook('session-start', session))
+    seen.host.watching!(true)
+    port.swarms(null)
+  }
+
+  it('the queue is wired with env.CODEX_HOME and the home directory', async () => {
+    started()
+    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sv' }])
+    expect(await host().sendTurn(ID, 'run the tests')).toEqual({ ok: true })
+    expect(codexRuns).toEqual([['/opt/codex/bin/codex', ['queue', '--thread', THREAD, '--message=run the tests'],
+      { cwd: homedir(), env: { CODEX_HOME: env.CODEX_HOME }, timeoutMs: 10_000 }]])
+    expect(said()).toEqual(['[device] voice · codex'])
+    expect(orcaRuns).toEqual([])
+  })
+
+  it('a Codex session whose transcript is in another home lists s and runs nothing', async () => {
+    started({}, { transcriptPath: `/elsewhere/.codex/sessions/2026/11/15/rollout-2026-11-15T16-07-59-${THREAD}.jsonl` })
+    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 's' }])
+    expect(await host().sendTurn(ID, 'run the tests')).toMatchObject({ ok: false, message: 'api did not answer.' })
+    expect(codexRuns).toEqual([])
+    expect(orcaRuns).toEqual([])
+  })
+
+  it('a failed queue is said in one line with its exit code, then today\'s route answers', async () => {
+    started({ codex: ending(1) })
+    expect(await host().sendTurn(ID, 'run the tests')).toMatchObject({ ok: false, message: 'api did not answer.' })
+    expect(codexRuns).toHaveLength(1)
+    expect(said()).toEqual(['[device] voice · codex-failed (exit 1)', '[device] voice · no-answer'])
+  })
+
+  it('a codex that could not start is said with no binary', async () => {
+    started({ codex: ending('not-started') })
+    expect(await host().sendTurn(ID, 'run the tests')).toMatchObject({ ok: false, message: 'api did not answer.' })
+    expect(said()).toEqual(['[device] voice · codex-failed (no binary)', '[device] voice · no-answer'])
+  })
+
+  // The spec's first failure case: voice only where Orca can type, as today.
+  it('with no codex binary the session lists s, and nothing runs or is said of the queue', async () => {
+    started({ codex: { ...codex, binary: () => null } })
+    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 's' }])
+    expect(said()).toEqual([])
+    expect(await host().sendTurn(ID, 'run the tests')).toMatchObject({ ok: false, message: 'api did not answer.' })
+    expect(codexRuns).toEqual([])
+    expect(said()).toEqual(['[device] voice · no-answer'])
+  })
+
+  // It may have queued: typed too, the words would run twice.
+  it('a queue that times out is said once, and nothing is typed', async () => {
+    started({ codex: ending('unknown') }, { hostHints: { ORCA_TERMINAL_HANDLE: HANDLE } })
+    expect(await host().sendTurn(ID, 'run the tests')).toMatchObject({ ok: false, message: 'api did not answer.' })
+    expect(said()).toEqual(['[device] voice · codex-timeout'])
+    expect(orcaRuns).toEqual([])
+  })
+
+  it('no log line carries the thread id, the words, the transcript\'s path or the Codex home', async () => {
+    started({ codex: ending(0, 1, 'not-started', 'unknown') }, { hostHints: { ORCA_TERMINAL_HANDLE: HANDLE } })
+    for (let i = 0; i < 4; i++) await host().sendTurn(ID, 'run the tests')
+    expect(said()).toEqual(['[device] voice · codex', '[device] voice · codex-failed (exit 1)', '[device] voice · orca',
+      '[device] voice · codex-failed (no binary)', '[device] voice · orca', '[device] voice · codex-timeout'])
+    expect(logs.filter((line) => [THREAD, 'run the tests', transcriptPath, env.CODEX_HOME].some((secret) => line.includes(secret)))).toEqual([])
   })
 })
 
