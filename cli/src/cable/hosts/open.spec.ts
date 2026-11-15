@@ -241,6 +241,14 @@ describe('opening an agent outside Harness from the dial', () => {
     expect(failed.logs).toEqual([])
   })
 
+  it('Harness Desktop comes forward by its bundle id, on macOS only', async () => {
+    const { calls, opener } = recorder({}, [0, 1])
+    expect(await opener.desktop!()).toBe(true)
+    expect(await opener.desktop!()).toBe(false)
+    expect(calls).toEqual([forward('ai.autonomous.harness'), forward('ai.autonomous.harness')])
+    expect(recorder({ platform: 'linux' }).opener.desktop).toBeUndefined()
+  })
+
   it('one command at a time per agent; another agent\'s runs', async () => {
     const calls: string[][] = []
     const waiting: Array<() => void> = []

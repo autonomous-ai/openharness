@@ -267,6 +267,8 @@ const calls = (name: string) => seen.cable.calls.filter(([called]) => called ===
 /** A window on this computer, as the core names its asker, and a request it never takes back. */
 const WINDOW = { local: true, owner: true, connection: 'local:w1' }
 const never = new AbortController().signal
+/** A core with one Harness agent, h1, on this computer. */
+const harnessAgent = () => fakeCore({ dataDir, agents: { advertised: vi.fn(() => [{ agentId: 'h1', registeredAt: 1, engine: 'claude' }] as RegisteredSession[]) } })
 /** A hand turning the dial to that agent, as its cable session tells the host (cableSession.ts 'focus'). The rest that
  *  follows 400 ms later, where the agent has a pane, is the spec's to run. */
 const turnTo = (agentId: string): void => {
@@ -1279,7 +1281,6 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
   const host = () => seen.dial as unknown as DaemonCableHost
   /** The dial's list with no window, as its session reads it every second. */
   const machineList = async (port: DevicesPort) => { port.swarms(null); return host().listAgentSnapshot() }
-  const harnessAgent = () => fakeCore({ dataDir, agents: { advertised: vi.fn(() => [{ agentId: 'h1', registeredAt: 1, engine: 'claude' }] as RegisteredSession[]) } })
 
   it('an observed event from the core reaches ObservedSource and the dial\'s list', async () => {
     const { port } = start({ faults: ['fleet'] })
@@ -2027,6 +2028,44 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     expect(orcaRuns).toEqual([['/usr/bin/open', ['-b', 'dev.warp.Warp-Stable'], 10_000]])
     expect(await host().openAgent(ID, 'question')).toBeUndefined()
     expect(orcaRuns).toHaveLength(1)
+  })
+
+  const caps = async () => (await listed()).map(({ id, caps }) => ({ id, caps }))
+
+  it('on macOS a Harness agent with no window lists f, and its tap starts Harness Desktop', async () => {
+    vi.useFakeTimers()
+    const core = harnessAgent()
+    const { port } = startHere({ core, orca: mac })
+    attach(port)
+    expect(await caps()).toEqual([{ id: 'h1', caps: 'svfa' }])
+    expect(await host().openAgent('h1')).toBeUndefined()
+    expect(orcaRuns).toEqual([['/usr/bin/open', ['-b', 'ai.autonomous.harness'], 10_000]])
+    const opens = () => vi.mocked(core.clients.sendLocal).mock.calls.map(([frame]) => frame).filter((frame) => frame.type === 'dial_open')
+    expect(opens()).toEqual([])
+    port.swarms({ active: 't1', swarms: [{ id: 't1', name: 'Tab', agentIds: [], panes: 0 }], tiles: [] })
+    expect(opens()).toEqual([{ type: 'dial_open', payload: { machineId: host().localMachine().id, agentId: 'h1' } }])
+    // The next tap finds no window in 30 s.
+    port.swarms(null)
+    await host().openAgent('h1')
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(said().filter((line) => line === '[device] open · harness · no window')).toHaveLength(1)
+    port.swarms({ active: 't1', swarms: [], tiles: [] })
+    expect(opens()).toHaveLength(1)
+  })
+
+  it('Harness Desktop that is not installed answers the dial', async () => {
+    const { port } = startHere({ core: harnessAgent(), orca: { ...mac, run: async (file, args, timeoutMs) => { orcaRuns.push([file, args, timeoutMs]); return { code: 1, stdout: '' } } } })
+    attach(port)
+    expect(await caps()).toEqual([{ id: 'h1', caps: 'svfa' }])
+    expect(await host().openAgent('h1')).toEqual({ ok: false, error: 'Harness did not open it.' })
+  })
+
+  it('off macOS a Harness agent lists no f, and a tap starts nothing', async () => {
+    const { port } = startHere({ core: harnessAgent() })
+    attach(port)
+    expect(await caps()).toEqual([{ id: 'h1', caps: 'sva' }])
+    host().openAgent('h1')
+    expect(orcaRuns).toEqual([])
   })
 
   it('a Claude Code in the Claude app opens on its session; a link that fails still brings the app forward, said in one line with no id', async () => {
