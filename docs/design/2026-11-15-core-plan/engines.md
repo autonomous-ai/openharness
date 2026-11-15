@@ -31,7 +31,14 @@ State (2026-11-15, the second agent): step 1 is split in two pull requests, as t
   30 s, 400 history reads. 1a, two runs each on a shared Mac: attach 1.37 to 1.65 s before, 1.37 to 1.41 s after (core
   bound to attached); the core at rest 0.87 to 1.0% before, 0.87% after; the core's CPU for the 400 reads 0.45 s
   before, 0.10 s after; a read's p95 1.2 ms before, 1.4 ms after.
-- Core: 543 files, 93,160 lines before (main f8b67d66dc); 544 files, 93,019 lines after (+`engines/otherEngines.ts`).
+- From its review: a history past one frame of the link (4 MiB) comes back in parts the core asks for by offset
+  (`READER_PART`, up to 64 MiB): these engines have no pages, or none for some asks, and the core used to send a
+  whole replay on. A read past its deadline (15 s, Amp's history 25 s) is answered unavailable and keeps its place
+  until it ends; only one still running a minute later recycles the worker (one recycle fails every engine's reads).
+  An event the core cannot check is left out and counted, never the whole page. 1b's live pages can reuse the parts.
+- Still in the core after 1a, for 1b: Hermes's home lookup (`core/transcripts/stores.ts` `hermesDb`, which loads
+  Hermes's code and asks each profile's store, as attach does), and OpenClaw's store lookup (`lib/openclawStore.ts`).
+- Core: 543 files, 93,002 lines before (main 85d8e61897); 544 files, 92,925 lines after (+`engines/otherEngines.ts`).
   The door (`engines/inProcess.ts`) still adds 107 files, 16,037 lines once one of their sessions attaches: 1b is
   what takes that away.
 
