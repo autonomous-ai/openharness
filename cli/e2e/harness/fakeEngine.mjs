@@ -3,6 +3,8 @@
 //
 //   - answers `--version` / `--help` probes;
 //   - as `codex app-server`, reads its stdin, answers nothing and ends when that stdin ends;
+//   - as `codex queue --thread <id> --message=<text>`, notes the call in `codex-queue` under the test's root when that
+//     thread's rollout is in its CODEX_HOME, else exits 1 having noted nothing, as 0.167 does;
 //   - runs the hooks its own settings carry, as the real CLIs run them: the commands the daemon
 //     installed (lib/hooks.ts), through a shell, from inside the pane, with the event on stdin, killed at
 //     their timeout and waited for. So the real `hook/notify.mjs` is what reaches the daemon, with its
@@ -76,7 +78,7 @@ import { execFileSync, spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { appendFileSync, closeSync, constants, existsSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 /**
@@ -217,6 +219,26 @@ export async function run(engine, config = {}, { native = false } = {}) {
   if (engine === 'codex' && args[0] === 'app-server') {
     process.stdin.resume()
     process.stdin.on('end', () => process.exit(0))
+    return
+  }
+  // `codex queue` (0.167) puts a message in a thread's queue for its next turn and starts nothing: no session, no hook. A
+  // malformed id, or a thread with no rollout in the home, is refused with exit 1 and nothing queued (the spike in
+  // docs/specs/2026-11-15-device-codex.md). A queue is no launch, so it is kept out of the launch-argv ledger.
+  if (engine === 'codex' && args[0] === 'queue') {
+    const home = process.env.CODEX_HOME || config.codexHome
+    if (!within(config.root, home)) throw new Error('fake Codex queue outside its throwaway home')
+    const thread = args[args.indexOf('--thread') + 1] ?? ''
+    const known = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(thread) && (() => {
+      try {
+        return readdirSync(join(home, 'sessions'), { recursive: true }).map((path) => basename(String(path)))
+          .some((name) => name.startsWith('rollout-') && name.endsWith(`-${thread}.jsonl`))
+      } catch { return false }
+    })()
+    if (!known) {
+      process.stderr.write(`Error: no thread ${thread} in ${home}\n`)
+      process.exit(1)
+    }
+    appendFileSync(join(config.root, 'codex-queue'), `${JSON.stringify({ args, codexHome: process.env.CODEX_HOME ?? null })}\n`)
     return
   }
   // Every launch's argv, for a test to read what an agent was started with.
