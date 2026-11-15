@@ -61,9 +61,6 @@ class Outside {
     mkdirSync(cwd, { recursive: true })
     // d.env carries none of the developer's host hints (testing/daemonEnvironment.ts): only [hints] name the app.
     const env: NodeJS.ProcessEnv = { ...d.env, TERM: 'xterm-256color' }
-    delete env.TMUX
-    delete env.TMUX_PANE
-    delete env.HARNESS_PANE
     const tab = spawn('python3', ['-c', PTY, d.env.CLAUDE_PATH!], { cwd, env: { ...env, ...hints }, stdio: ['pipe', 'pipe', 'pipe'] })
     tab.stdout!.resume()
     const pid = await new Promise<number>((resolve, reject) => {
