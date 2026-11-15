@@ -17,6 +17,7 @@ export interface Place {
   hints: Readonly<Record<string, string>>       // that event's host hints, as the core checked them
   tty?: string                                  // its process's tty, read for a tab app (observed.ts learnTty)
   pid?: number                                  // its process: that event's caller
+  sessionId?: string                            // the engine's own id of the session: the VS Code extension's link names it
 }
 
 /** One adapter's own handle on one agent: an Orca terminal, a Claude app session, a tab's tty, a pane id. */

@@ -495,11 +495,15 @@ function postObserved(port, body) {
  * credential (read in the app, 2026-11-14: it names the session in the app's list and its telemetry; the app's tokens
  * are other variables).
  *
+ * CLAUDE_CODE_ENTRYPOINT is a fixed word naming how Claude Code was started, not a secret: the VS Code extension sets
+ * `claude-vscode` (read in the extension's code), and a tap then opens the extension's tab on the session.
+ *
  * In order: the app's names first, then the hosts from the nearest, so a session with more than MAX_HINTS set loses
- * the farthest.
+ * the farthest. CLAUDE_CODE_ENTRYPOINT is last, the first the cap drops: without it a tap still brings the app forward.
  */
 const HOST_HINTS = ['TERM_PROGRAM', '__CFBundleIdentifier', 'HERDR_PANE_ID', 'REX_BLOCK', 'ZELLIJ', 'TMUX_PANE',
-  'KITTY_WINDOW_ID', 'WEZTERM_PANE', 'ORCA_AGENT_SESSION_ID', 'ORCA_TERMINAL_HANDLE', 'CLAUDE_CODE_HOST_SESSION_ID']
+  'KITTY_WINDOW_ID', 'WEZTERM_PANE', 'ORCA_AGENT_SESSION_ID', 'ORCA_TERMINAL_HANDLE', 'CLAUDE_CODE_HOST_SESSION_ID',
+  'CLAUDE_CODE_ENTRYPOINT']
 /** The core's observed route takes no more (core/observedHook.ts MAX_HINTS, which hookNotify.spec.ts keeps this equal to). */
 const MAX_HINTS = 10
 

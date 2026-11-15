@@ -42,6 +42,7 @@ import { learnApps, readProcessNames } from '../cable/hosts/scannedApp.js'
 import { createTabsAdapter, readTty, type Tab } from '../cable/hosts/tabs.js'
 import { createTmuxAdapter } from '../cable/hosts/tmux.js'
 import type { HostAgent, HostAgentState } from '../cable/hosts/types.js'
+import { createVscodeAdapter } from '../cable/hosts/vscode.js'
 import { createWeztermAdapter } from '../cable/hosts/wezterm.js'
 import { PetStore } from '../cable/pets/store.js'
 import { DialLog } from '../cable/dialLog.js'
@@ -310,6 +311,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     createOrcaAdapter(apps),
     // A rest's continue link: the app's attach that follows is the dial's own echo.
     { ...claude, show: (pane: Pane, agentId: string) => { noteLink(agentId); return claude.show(pane, agentId) } },
+    createVscodeAdapter(apps),
     createTabsAdapter({
       isOpen: () => tabs.isOpen(),
       select: (tab, raise) => {
