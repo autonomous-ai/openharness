@@ -3,9 +3,7 @@
 Status: design before implementation. Package 8, step 1 of the
 [core audit](2026-11-12-core-audit.md); implements the owner's 2026-11-13 decision 2.
 
-Engine installation, login-shell discovery, Desktop download checks and executable help/version probes currently
-run in the core's process. Their subprocesses, caches, installation journals and filesystem enumeration belong to
-an optional component. An unavailable component must hold only the launch that needs it; input and unrelated
+Engine installation, Desktop download checks and executable help/version/runtime probes currently run in the core's process. Their subprocesses, caches and installation journals belong to an optional component. Trusted executable and location selection, including its existing bounded login-shell capture, remains core launch authority in this step. An unavailable component must hold only the launch that needs it; input and unrelated
 launches keep working. Native launch identity, cancellation, restore/restart ownership and the last check before
 dispatch remain the core's authority.
 
@@ -19,10 +17,7 @@ the existing installation controllers and their helper processes. It uses the ex
 transport, request deadlines and supervisor. A worker crash, hang, malformed answer or connection replacement
 returns the existing native-launch hold; it never loads an inline implementation as failure recovery.
 
-The core retains the existing native-launch coordinator and immutable executable identity verification. Worker
-answers contain bounded data, not closures or commands that the core executes. Capture returns the selected file's
-identity and launch location variables. Subsequent probes bind to that identity; the core rejects stale answers and
-rechecks the actual file before using a launch. Hook proofs, hook/plugin writes and folder trust remain for package 8
+The core retains the existing native-launch coordinator, trusted executable/location selection and immutable identity verification. A worker-supplied path and matching stat identity prove freshness, not authorization: they cannot choose a program or redirect hook homes. Core therefore retains the existing bounded login-shell capture and selection against configured paths, login PATH and declared installation roots. This preserves custom wrappers, explicit profiles and live rc edits. Workers receive only the already selected executable and location snapshot; their replies contain bounded observations, never a command or location choice that core accepts. Core rejects stale observations and rechecks the actual file before using a launch. There is no setup_capture endpoint, new authority cache or trusted subprocess channel. Retained executable, recipe and environment data are copied/frozen so an inline caller cannot mutate the prepared choice. Hook proofs, hook/plugin writes and folder trust remain for package 8
 steps 2 and 3. The old launch and hook golden contracts remain authoritative.
 
 The core uses a small typed adapter over `ServiceLinks.call`. There is no new core callback/lease registry,
@@ -69,7 +64,7 @@ PID, so moving a probe alone can leave its child behind after SIGKILL. Setup the
 disposable Node probe helpers. The existing Node IPC-disconnect signal binds each helper to setup; it owns the
 five-second probe deadline and kills its captured child's process group when setup disconnects. A frozen setup
 cannot freeze that timer. The helpers contain no public command API: only the component's prescribed capture,
-version/help/runtime and download-marker commands reach them. Executable snapshots are checked before and after
+version/help/runtime and download-marker commands reach them. The service's legacy hook-version metadata may discover an executable internally, but never returns that executable or its homes to core. Executable snapshots are checked before and after
 probing. Output retains each operation's existing cap (64 KiB for engine probes; 1 MiB for the marker's ps).
 
 Use the existing POSIX process-group primitive for the actual probe and the documented Windows hidden runner
@@ -83,10 +78,9 @@ matched measurements before any performance claim.
 ## Design
 
 - **Growth:** Keep the POSIX 128-record journal and 256 KiB record cap. Do not delete or rewrite existing immutable
-  claims. Windows keeps its bounded per-engine records/logs. Pending preparations are capped at eight, expire within
-  the service request deadline and are cleared on disconnect. Discovery keeps its existing ten-second environment
-  cache; help keeps 32 successful entries for one minute. Probe slots remain capped at eight and belong to actual
-  child settlement. No cache or pending state lives in core.
+  claims. Windows keeps one current record and log per engine, replacing the log on the next authorized attempt; its existing installer output file has no byte cap. The helper reads at most 64 KiB of that log when settling the result. Pending preparations are capped at eight, expire within
+  the service request deadline and are cleared on disconnect. Core's existing trusted selection keeps its ten-second environment cache as a stated residual; help keeps 32 successful entries for one minute in setup. Probe slots remain capped at eight and belong to actual
+  child settlement. No new cache or pending state is added to core.
 - **Concurrency:** Preserve existing immutable claim, dispatch witness and result publication rules. Bind each
   preparation to one request and service connection generation; a repeated commit cannot cause a second dispatch.
   Different launch requests share discovery/probe results only under their existing immutable executable identity
@@ -110,8 +104,7 @@ matched measurements before any performance claim.
   controller: the original saved request cannot replay; a separately requested new launch retains the older
   controller's legacy retry behavior, as detailed above.
 - **Audience:** Only authenticated core-to-service private calls may prepare or commit; no route is published to
-  clients. Inputs are checked and bounded at the worker. Returned paths/identity/environment are local capability
-  data and never go into telemetry. Errors retain the existing caller-visible installation reason; new logs carry
+  clients. Inputs are checked and bounded at the worker. Core-selected paths/identity/environment are local capability data and never go into telemetry; the worker cannot replace them. Errors retain the existing caller-visible installation reason; new logs carry
   operation/failure names, not environment contents or paths.
 - **Identity:** The worker runs under the same team/account identity that owns the daemon. It never adopts another
   account's credentials or the contributing machine owner's login. The source launch's selected homes and existing
@@ -145,6 +138,6 @@ matched measurements before any performance claim.
 ## Residual work
 
 This task does not complete package 8: hook/plugin file writers, hook installation, folder trust and their related
-proof/configuration implementations remain for the next original tasks. Launch contracts, source identity,
+proof/configuration implementations remain for the next original tasks. Trusted executable/location selection and its bounded shell capture also remain in core: independently authorizing live rc-derived locations cannot be replaced by trusting a setup reply. The separately owned async-probes work removes blocking shell/PATH work without changing this authority; root integrates it before final gates. Launch contracts, source identity,
 restart/restore cancellation and process ownership stay core responsibilities. A file moving folders alone is not
 evidence of extraction: the default runtime import closure and failure behavior must demonstrate it.
