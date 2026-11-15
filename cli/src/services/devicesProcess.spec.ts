@@ -4,18 +4,23 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { CoreApi, CorePorts, DevicesPort, ServiceRequests } from '../core/api.js'
 import { createDeviceHookCalls } from '../core/deviceHookCalls.js'
 import { createDevicesLink, type DevicesState } from '../core/devicesLink.js'
+import { devicesListenerPath } from '../devices/listenerPath.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { DevicesDeps } from './devices.js'
-import { runDevicesService } from './devicesProcess.js'
+import type { ListenerHandler } from './devicesListener.js'
+import { runDevicesService, type DevicesServiceOptions } from './devicesProcess.js'
 import type { CoreConnection, ServiceProcessOptions } from './process.js'
 
 // The real devices and the real link, as a process started by the master runs them: stood in for here.
-const real = vi.hoisted(() => ({ started: [] as unknown[], linked: [] as unknown[] }))
+const real = vi.hoisted(() => ({ started: [] as unknown[], linked: [] as unknown[], listened: [] as unknown[] }))
 vi.mock('./devices.js', () => ({
   startDevices: (_core: unknown, ports: { devices: unknown }) => { real.started.push(ports); ports.devices = { stop: async () => {} }; return {} },
 }))
 vi.mock('./process.js', () => ({
   runServiceProcess: (options: unknown) => { real.linked.push(options); return { stop: () => {} } },
+}))
+vi.mock('./devicesListener.js', () => ({
+  openDevicesListener: async (options: unknown) => { real.listened.push(options); return null },
 }))
 
 /** A devices' port that records what reached it. */
@@ -37,7 +42,7 @@ function devicesPort() {
   return { port, calls }
 }
 
-function setup(over: { processEnv?: NodeJS.ProcessEnv } = {}) {
+function setup(over: { processEnv?: NodeJS.ProcessEnv; openListener?: DevicesServiceOptions['openListener'] } = {}) {
   const { port, calls } = devicesPort()
   let api!: CoreApi
   let deps!: DevicesDeps
@@ -53,7 +58,7 @@ function setup(over: { processEnv?: NodeJS.ProcessEnv } = {}) {
   const run = vi.fn((given: ServiceProcessOptions) => { options = given; return { stop } })
   const service = runDevicesService({
     dataDir: '/data', socketPath: '/sock', machineId: 'computer-9', token: 't',
-    start, run, processEnv: over.processEnv ?? {},
+    start, run, processEnv: over.processEnv ?? {}, openListener: over.openListener,
   })
   const queries: Array<[string, Record<string, unknown> | undefined]> = []
   const notices: Array<[string, Record<string, unknown> | undefined]> = []
@@ -123,6 +128,19 @@ describe('the devices in their own process', () => {
     runDevicesService({ dataDir: '/data', socketPath: '/sock', machineId: 'c', token: 't' })
     expect(real.started).toHaveLength(1)
     expect(real.linked).toEqual([expect.objectContaining({ name: 'devices', socketPath: '/sock', token: 't' })])
+  })
+
+  it('the devices process gives the devices its listener, on the data folder\'s devices socket', async () => {
+    const opened: unknown[] = []
+    const listener = { close: async () => {} }
+    const f = setup({ openListener: async (options) => { opened.push(options); return listener } })
+    const handlers: Record<string, ListenerHandler> = { front: { maxBytes: 64, perSecond: 10, handle: () => {} } }
+    const log = vi.fn()
+    expect(await f.deps().listen!(handlers, log)).toBe(listener)
+    expect(opened).toEqual([{ path: devicesListenerPath('/data'), handlers, log }])
+    // The real listener when no test stands in for it.
+    await setup().deps().listen!(handlers, log)
+    expect(real.listened).toEqual([{ path: devicesListenerPath('/data'), handlers, log }])
   })
 
   it('stop their link, then the devices, serial ports first', async () => {

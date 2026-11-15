@@ -37,7 +37,7 @@ function setup(replyEffort?: string) {
   const attach = createAttach({ setInterpretationHold: () => false, setIdentityHold: () => false, announceSession: vi.fn(), liveFor, normalizers, runtimeProfiles: profiles, resolve: () => session,
     terminalGone: async () => false, watcher: { removeSession: async () => {}, pollSession: async () => {}, hold: async () => hold, tails: () => true, addSession },
     cursorDiscovery: { add: async () => {} }, device: () => undefined,
-    captureTerminal: async () => null, emit, announceTurnAborted: vi.fn(),
+    captureTerminal: async () => null, emit, tokenUsage: { changed: vi.fn() }, announceTurnAborted: vi.fn(),
     questionWatcher: { start: vi.fn() }, terminalLabel: () => 'private fixture',
     dbs: { opencode: join(root, 'o.db'), kilo: join(root, 'k.db'), devin: join(root, 'd.db'), openclaw: async () => null },
     devinHome: root, hermesDb: async () => join(root, 'h.db'), concurrency: 1,

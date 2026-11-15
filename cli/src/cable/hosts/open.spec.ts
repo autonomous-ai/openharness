@@ -241,3 +241,89 @@ describe('opening an agent outside Harness from the dial', () => {
     expect(await next).toBe(true)
   })
 })
+
+describe('a rest on a Claude app session', () => {
+  const link = (session: string): Call => run(OPEN, `claude://code/continue?session=${session}`)
+  const OTHER = 'local_0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d'
+
+  /** The recorder, each command held until it is let go, so a link can be caught still running. */
+  function holding() {
+    const calls: Call[] = []
+    const waiting: Array<() => void> = []
+    const { opener } = recorder({
+      run: (file, args, timeoutMs) => {
+        calls.push({ file, args, timeoutMs })
+        return new Promise((resolve) => waiting.push(() => resolve({ code: 0 })))
+      },
+    })
+    return { calls, waiting, opener }
+  }
+
+  it('claudeShow runs the continue link, and nothing else', async () => {
+    const { calls, switched, logs, opener } = recorder()
+    expect(await opener.claudeShow('a1', SESSION)).toBe('ok')
+    expect(calls).toEqual([link(SESSION)])
+    expect(switched).toEqual([])
+    expect(logs).toEqual([])
+  })
+
+  it('a link that exits non-zero, or never exits, is failed, and no app is brought forward', async () => {
+    for (const code of [1, null]) {
+      const { calls, logs, opener } = recorder({}, [code])
+      expect(await opener.claudeShow('a1', SESSION), String(code)).toBe('failed')
+      expect(calls).toEqual([link(SESSION)])
+      expect(logs).toEqual([])
+    }
+  })
+
+  it('an id not in the link\'s form never reaches open', async () => {
+    const { calls, opener } = recorder()
+    const bad = ['', 'local_', `local_${'a'.repeat(65)}`, 'local_a b', 'local_a&x=1', 'local_a/../b', '-b', '8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b']
+    for (const session of bad) expect(await opener.claudeShow('a1', session), session).toBe('failed')
+    expect(calls).toEqual([])
+  })
+
+  it('on Linux and Windows nothing runs', async () => {
+    for (const platform of ['linux', 'win32'] as const) {
+      const { calls, opener } = recorder({ platform })
+      expect(await opener.claudeShow('a1', SESSION), platform).toBe('failed')
+      expect(calls).toEqual([])
+    }
+  })
+
+  it('a link still running drops the next for that agent, and another agent\'s runs', async () => {
+    const { calls, waiting, opener } = holding()
+    const first = opener.claudeShow('a1', SESSION)
+    expect(await opener.claudeShow('a1', OTHER)).toBe('busy')
+    expect(calls).toEqual([link(SESSION)])
+    const other = opener.claudeShow('a2', OTHER)
+    expect(calls).toEqual([link(SESSION), link(OTHER)])
+    waiting[0]()
+    expect(await first).toBe('ok')
+    // Once its link has ended, the agent takes the next one.
+    const next = opener.claudeShow('a1', OTHER)
+    expect(calls).toEqual([link(SESSION), link(OTHER), link(OTHER)])
+    waiting[1]()
+    waiting[2]()
+    expect(await other).toBe('ok')
+    expect(await next).toBe('ok')
+  })
+
+  it('a tap is not refused while a rest\'s link runs, and a rest is not busy while a tap runs', async () => {
+    const { calls, waiting, opener } = holding()
+    const app = target({ __CFBundleIdentifier: CLAUDE, CLAUDE_CODE_HOST_SESSION_ID: SESSION })
+    const rest = opener.claudeShow('a1', SESSION)
+    const tap = opener.open('a1', app)
+    expect(calls).toEqual([link(SESSION), link(SESSION)])
+    for (const done of waiting.splice(0)) done()
+    expect(await rest).toBe('ok')
+    expect(await tap).toBe(true)
+
+    const tapFirst = opener.open('a1', app)
+    const restAfter = opener.claudeShow('a1', SESSION)
+    expect(calls).toEqual([link(SESSION), link(SESSION), link(SESSION), link(SESSION)])
+    for (const done of waiting.splice(0)) done()
+    expect(await tapFirst).toBe(true)
+    expect(await restAfter).toBe('ok')
+  })
+})

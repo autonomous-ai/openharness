@@ -6,18 +6,31 @@ import type { On } from 'claude-code'
 const HOME = '/home/dee'
 const LOCAL = `${HOME}/.local/bin/harness`
 const SOCKET = '/tmp/harnessd/daemon.sock'
+const DEVICES = '/tmp/harnessd/devices.sock'
 const SESSION = 'session-1'
 const MINUTE = 60_000
 
 type Answer = { status: number; text?: string } | 'reject' | ((clock: Clock) => Promise<{ status: number; text?: string }>)
 type Clock = MockClock
+/** A launcher run: how it exits and what it prints, or that it cannot start or is killed at its timeout. */
+type Run = { exitCode: number; stdout: string } | 'cannot start' | 'killed'
 
 type World = {
   clock: Clock
   /** The argv of each launcher the mod ran. */
   runs: string[][]
-  /** Each poll the mod sent: its URL and init. */
+  /** The init of each launcher run, in the same order. */
+  inits: unknown[]
+  /** Each fetch the mod sent on the core's socket (any socket but the devices'): its URL and init. */
   polls: { url: string; init: unknown }[]
+  /** Each fetch the mod sent on the devices' socket: its URL and init. */
+  attaches: { url: string; init: unknown }[]
+  /** The devicesSocket the launcher prints, '' for none. */
+  devices: string
+  /** Once set, what each launcher run does instead of the launcher's `link`. */
+  relink?: (clock: Clock) => Promise<Run>
+  /** Whether the devices' listener refuses the connection. */
+  devicesRefuse: boolean
   /** Each prompt the mod submitted. */
   submitted: unknown[]
   /** The variables the mod asked for, by name. */
@@ -28,17 +41,21 @@ type World = {
   enabled: boolean
   /** The path of each file the mod read. */
   reads: string[]
+  /** How long each read of a file takes, by the clock. */
+  readMs: number
 }
 
 /**
  * Sets the world beneath the mod. `launchers` are the argv[0]s that start, and `exitCode` is what each exits with, as
  * the launcher's `link` exits 1 too while the plugin is off; `answers` are the daemon's answers, one per poll, the last
- * repeated. `configDir` is CLAUDE_CONFIG_DIR, and `settings: 'unreadable'` makes every read of a file fail.
+ * repeated. `configDir` is CLAUDE_CONFIG_DIR, and `settings: 'unreadable'` makes every read of a file fail. `devices` is
+ * the devices' socket the launcher prints, '' for none.
  */
 function world(
   on: On,
-  { launchers = [LOCAL], exitCode = 0, answers, configDir, settings = 'readable' }: {
+  { launchers = [LOCAL], exitCode = 0, answers, configDir, settings = 'readable', devices = DEVICES }: {
     launchers?: string[]; exitCode?: number; answers: Answer[]; configDir?: string; settings?: 'readable' | 'unreadable'
+    devices?: string
   },
 ): World {
   const steps: World['steps'] = []
@@ -49,7 +66,10 @@ function world(
     return fired
   })
   const clock = mock.clock(on, { now: 1_000_000 })
-  const w: World = { clock, runs: [], polls: [], submitted: [], envAsked: [], steps, enabled: true, reads: [] }
+  const w: World = {
+    clock, runs: [], inits: [], polls: [], attaches: [], devices, devicesRefuse: false, submitted: [], envAsked: [], steps,
+    enabled: true, reads: [], readMs: 0,
+  }
   const env: Record<string, string> = {
     HOME,
     ORCA_PAIRING_CODE: 'pairing-secret',
@@ -60,22 +80,34 @@ function world(
     w.envAsked.push(e.name)
     return { value: env[e.name] }
   })
-  on('fs.read', (_, e) => {
+  on('fs.read', async (_, e) => {
     w.reads.push(e.path)
+    if (w.readMs) await clock.sleep(w.readMs)
     if (settings === 'unreadable') return { deny: 'EACCES' }
     return { value: JSON.stringify({ enabledPlugins: w.enabled ? { 'harness-device@openharness': true } : {} }) }
   })
   on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('session.attach', (_, e) => ({ clientId: e.clientId }))
+  on('session.detach', (_, e) => ({ clientId: e.clientId }))
   on('session.id', () => ({ value: SESSION }))
-  on('process.run', (_, e) => {
+  on('process.run', async (_, e) => {
     w.runs.push([...e.argv])
+    w.inits.push(e.init)
     if (!launchers.includes(e.argv[0] ?? '')) return { deny: 'cannot start' }
-    const out = exitCode !== 0 ? { exitCode, stdout: '', stderr: 'Unknown command: device' }
+    const run = w.relink ? await w.relink(clock) : undefined
+    if (run === 'cannot start') return { deny: 'cannot start' }
+    if (run === 'killed') return { deny: 'timed out' }
+    const out = run ? { ...run, stderr: '' }
+      : exitCode !== 0 ? { exitCode, stdout: '', stderr: 'Unknown command: device' }
       : !w.enabled ? { exitCode: 1, stdout: '', stderr: '' }
-      : { exitCode, stdout: JSON.stringify({ socketPath: SOCKET }), stderr: '' }
+      : { exitCode, stdout: JSON.stringify({ socketPath: SOCKET, ...(w.devices ? { devicesSocket: w.devices } : {}) }), stderr: '' }
     return { value: { ...out, isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('http.fetch', async (_, e) => {
+    if (e.init?.socketPath === DEVICES) {
+      w.attaches.push({ url: e.url, init: e.init })
+      return w.devicesRefuse ? { deny: 'connect ECONNREFUSED' } : { value: { status: 200, ok: true, headers: {}, text: '' } }
+    }
     w.polls.push({ url: e.url, init: e.init })
     w.steps.push('poll')
     const answer = answers[Math.min(w.polls.length, answers.length) - 1]
@@ -296,4 +328,371 @@ test('settings it cannot read keep the mod as it was: the text is submitted', as
   await start($, w)
   expect(w.submitted).toHaveLength(1)
   expect(w.polls).toHaveLength(2)
+})
+
+// The Claude app showing this session: the mod tells the devices, on their own socket, so the dial can turn to it.
+const LINK = ['device', 'claude', 'link', '--json']
+const ATTACH = {
+  url: 'http://harness/',
+  init: {
+    method: 'POST',
+    socketPath: DEVICES,
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ type: 'attach', sessionId: SESSION }),
+  },
+}
+const attach = ($: Engine, surface: 'desktop' | 'mobile' | 'vscode' | 'terminal' = 'desktop') =>
+  $.session.attach({ surface, clientId: `${surface}:default` })
+const detach = ($: Engine) => $.session.detach({ surface: 'desktop', clientId: 'desktop:default', reason: 'detach' })
+/** The launcher's answer once it prints the devices' socket. */
+const withDevices: Run = { exitCode: 0, stdout: JSON.stringify({ socketPath: SOCKET, devicesSocket: DEVICES }) }
+/** A launcher that answers `run` `ms` after it is asked. */
+const slow = (ms: number, run: Run) => async (clock: Clock) => {
+  await clock.sleep(ms)
+  return run
+}
+
+test('an attach on the desktop surface tells the devices its own session id, and nothing else', async ($, on) => {
+  const w = world(on, { answers: [held(25_000)] })
+  await start($, w)
+  await attach($)
+  await w.clock.settle()
+  expect(w.attaches).toEqual([ATTACH])
+})
+
+test('the attach is sent from a timer, never inside the hook', async ($, on) => {
+  const w = world(on, { answers: [held(25_000)] })
+  await start($, w)
+  await attach($)
+  expect(w.attaches).toHaveLength(0)
+  await w.clock.settle()
+  expect(w.attaches).toHaveLength(1)
+})
+
+test('a detach, and an attach on the mobile, vscode or terminal surface, send nothing', async ($, on) => {
+  const w = world(on, { answers: [held(25_000)] })
+  await start($, w)
+  await detach($)
+  await attach($, 'mobile')
+  await attach($, 'vscode')
+  await attach($, 'terminal')
+  await w.clock.settle()
+  expect(w.attaches).toHaveLength(0)
+})
+
+test('an attach before the mod has linked is sent once it links, the latest only', async ($, on) => {
+  const w = world(on, { answers: [held(25_000)] })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await attach($)
+  await attach($)
+  await w.clock.settle()
+  expect(w.attaches).toEqual([ATTACH])
+})
+
+test('a detach on another surface keeps the desktop attach held', async ($, on) => {
+  const w = world(on, { answers: [held(25_000)] })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await attach($)
+  await $.session.detach({ surface: 'mobile', clientId: 'mobile:default', reason: 'detach' })
+  await w.clock.settle()
+  expect(w.attaches).toEqual([ATTACH])
+})
+
+test('attached and detached again before the link: nothing is sent', async ($, on) => {
+  const w = world(on, { answers: [held(25_000)] })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await attach($)
+  await detach($)
+  await w.clock.settle()
+  expect(w.polls).toHaveLength(1)
+  expect(w.attaches).toHaveLength(0)
+})
+
+test('an attach before the link, with no devicesSocket, runs the launcher once', async ($, on) => {
+  const w = world(on, { answers: [held(25_000)], devices: '' })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await attach($)
+  await w.clock.settle()
+  expect(w.runs).toEqual([[LOCAL, ...LINK]])
+  expect(w.attaches).toHaveLength(0)
+  // Still held: the next attach asks again.
+  w.devices = DEVICES
+  await attach($)
+  await w.clock.settle()
+  expect(w.runs).toHaveLength(2)
+  expect(w.attaches).toEqual([ATTACH])
+})
+
+test('an attach with no devicesSocket asks the launcher again, and the devices are told once it prints one', async ($, on) => {
+  const w = world(on, { answers: [held(25_000)], devices: '' })
+  await start($, w)
+  w.devices = DEVICES
+  await attach($)
+  await w.clock.settle()
+  expect(w.runs).toEqual([[LOCAL, ...LINK], [LOCAL, ...LINK]])
+  expect(w.inits[1]).toEqual({ timeoutMs: 5_000 })
+  expect(w.attaches).toEqual([ATTACH])
+  await attach($)
+  await w.clock.settle()
+  expect(w.runs).toHaveLength(2)
+  expect(w.attaches).toEqual([ATTACH, ATTACH])
+})
+
+// A reload while the launcher is asked cancels the module's timers: the send its answer allows waits on one too.
+test('the attach the launcher allows is sent from a timer of its own', async ($, on) => {
+  const order: string[] = []
+  // Before the world's own, so above it: each timer that fires, with the attaches sent by then.
+  on('clock.after', { ms: [0] }, async (_, e, next) => {
+    const fired = await next(e)
+    order.push(`timer, ${w.attaches.length} sent`)
+    return fired
+  })
+  const w = world(on, { answers: [held(25_000)], devices: '' })
+  await start($, w)
+  order.length = 0
+  w.relink = async () => {
+    order.push('launcher')
+    return withDevices
+  }
+  await attach($)
+  await w.clock.settle()
+  expect(order).toEqual(['timer, 0 sent', 'launcher', 'timer, 0 sent'])
+  expect(w.attaches).toEqual([ATTACH])
+})
+
+test('only the launcher that linked is asked again', async ($, on) => {
+  const w = world(on, { launchers: ['harness'], answers: [held(25_000)], devices: '' })
+  await start($, w)
+  const asked = [...w.envAsked]
+  w.devices = DEVICES
+  await attach($)
+  await w.clock.settle()
+  expect(w.runs).toEqual([[LOCAL, ...LINK], ['harness', ...LINK], ['harness', ...LINK]])
+  expect(w.envAsked).toEqual(asked)
+  expect(w.attaches).toEqual([ATTACH])
+})
+
+test('a second attach within 30 s does not ask again, and one after 30 s does', async ($, on) => {
+  const w = world(on, { answers: [held(25_000)], devices: '' })
+  await start($, w)
+  await attach($)
+  await w.clock.settle()
+  expect(w.runs).toHaveLength(2)
+  await w.clock.advance(29_999)
+  await attach($)
+  await w.clock.settle()
+  expect(w.runs).toHaveLength(2)
+  await w.clock.advance(1)
+  await attach($)
+  await w.clock.settle()
+  expect(w.runs).toHaveLength(3)
+  expect(w.attaches).toHaveLength(0)
+})
+
+const failed: Record<string, (clock: Clock) => Promise<Run>> = {
+  'exits 1': async () => ({ exitCode: 1, stdout: '' }),
+  'cannot start': async () => 'cannot start',
+  'prints no JSON': async () => ({ exitCode: 0, stdout: '{' }),
+  'prints socketPath alone': async () => ({ exitCode: 0, stdout: JSON.stringify({ socketPath: SOCKET }) }),
+  'is killed at its 5 s': slow(5_000, 'killed'),
+}
+for (const [how, run] of Object.entries(failed)) {
+  test(`a launcher that ${how} sends nothing, and the polls go on`, async ($, on) => {
+    const w = world(on, { answers: [{ status: 200, text: '{}' }], devices: '' })
+    await start($, w)
+    expect(w.polls).toHaveLength(1)
+    w.relink = run
+    await attach($)
+    await w.clock.settle()
+    await w.clock.advance(5_000)
+    expect(w.runs).toEqual([[LOCAL, ...LINK], [LOCAL, ...LINK]])
+    expect(w.attaches).toHaveLength(0)
+    await w.clock.advance(MINUTE - 5_000 - 1)
+    expect(w.polls).toHaveLength(1)
+    await w.clock.advance(1)
+    expect(w.polls).toHaveLength(2)
+    expect(w.attaches).toHaveLength(0)
+  })
+}
+
+test('shown and left again while the launcher is asked: nothing is sent', async ($, on) => {
+  const w = world(on, { answers: [held(25_000)], devices: '' })
+  await start($, w)
+  w.relink = slow(1_000, withDevices)
+  await attach($)
+  await w.clock.settle()
+  await detach($)
+  await w.clock.advance(1_000)
+  expect(w.runs).toHaveLength(2)
+  expect(w.attaches).toHaveLength(0)
+  await attach($)
+  await w.clock.settle()
+  expect(w.runs).toHaveLength(2)
+  expect(w.attaches).toEqual([ATTACH])
+})
+
+// The send reads the settings before it tells the devices: what came during that read decides.
+test('while the settings are read: left again sends nothing, and shown twice is told once', async ($, on) => {
+  const w = world(on, { answers: [held(25_000)] })
+  await start($, w)
+  w.readMs = 1_000
+  await attach($)
+  await w.clock.settle()
+  await detach($)
+  await w.clock.advance(1_000)
+  expect(w.attaches).toHaveLength(0)
+  await attach($)
+  await attach($)
+  await w.clock.settle()
+  await w.clock.advance(1_000)
+  expect(w.attaches).toEqual([ATTACH])
+})
+
+// The launcher read the plugin on before `disable`; the poll that read it off has unlinked the mod since.
+test('switched off while the launcher is asked: its answer sends nothing', async ($, on) => {
+  const w = world(on, { answers: [held(2_000)], devices: '' })
+  await start($, w)
+  let asked = 0
+  w.relink = async (clock) => {
+    asked += 1
+    if (asked > 1) return { exitCode: 1, stdout: '' }
+    await clock.sleep(5_000)
+    return withDevices
+  }
+  await attach($)
+  await w.clock.settle()
+  w.enabled = false
+  await w.clock.advance(2_000)
+  expect(w.runs).toHaveLength(3)
+  await w.clock.advance(3_000)
+  expect(w.attaches).toHaveLength(0)
+  await w.clock.advance(10 * MINUTE)
+  expect(w.attaches).toHaveLength(0)
+})
+
+test('an attach while the launcher is asked is told once, when it answers', async ($, on) => {
+  const w = world(on, { answers: [held(25_000)], devices: '' })
+  await start($, w)
+  w.relink = slow(1_000, withDevices)
+  await attach($)
+  await w.clock.settle()
+  await attach($)
+  await w.clock.settle()
+  expect(w.attaches).toHaveLength(0)
+  await w.clock.advance(1_000)
+  expect(w.runs).toHaveLength(2)
+  expect(w.attaches).toEqual([ATTACH])
+})
+
+test('a mod that never linked asks nothing at an attach', async ($, on) => {
+  const w = world(on, { exitCode: 1, answers: [held(25_000)] })
+  await start($, w)
+  await attach($)
+  await w.clock.settle()
+  expect(w.runs).toEqual([[LOCAL, ...LINK]])
+  expect(w.attaches).toHaveLength(0)
+})
+
+test('a failed send is dropped', async ($, on) => {
+  const w = world(on, { answers: [held(25_000)] })
+  await start($, w)
+  w.devicesRefuse = true
+  await attach($)
+  await w.clock.settle()
+  expect(w.attaches).toHaveLength(1)
+  await w.clock.advance(10 * MINUTE)
+  expect(w.attaches).toHaveLength(1)
+  await attach($)
+  await w.clock.settle()
+  expect(w.attaches).toHaveLength(2)
+})
+
+test('with the plugin switched off nothing is sent', async ($, on) => {
+  const w = world(on, { answers: [held(10_000)] })
+  await start($, w)
+  w.enabled = false
+  await w.clock.advance(10_000)
+  expect(w.runs).toHaveLength(2)
+  await attach($)
+  await w.clock.advance(10 * MINUTE)
+  expect(w.attaches).toHaveLength(0)
+})
+
+test('switched off while a poll is held: an attach sends nothing', async ($, on) => {
+  const w = world(on, { answers: [held(25_000)] })
+  await start($, w)
+  w.enabled = false
+  await attach($)
+  await w.clock.settle()
+  expect(w.attaches).toHaveLength(0)
+  await w.clock.advance(25_000)
+  await w.clock.advance(10 * MINUTE)
+  expect(w.attaches).toHaveLength(0)
+})
+
+test('an attach told is not told again once the plugin is switched off and on', async ($, on) => {
+  const w = world(on, { answers: [held(10_000)] })
+  await start($, w)
+  await attach($)
+  await w.clock.settle()
+  expect(w.attaches).toEqual([ATTACH])
+  w.enabled = false
+  await w.clock.advance(10_000)
+  expect(w.runs).toHaveLength(2)
+  w.enabled = true
+  await w.clock.advance(10 * MINUTE)
+  expect(w.runs).toHaveLength(3)
+  expect(w.attaches).toEqual([ATTACH])
+})
+
+test('switched off and on again: the session the app still shows is told once the mod links', async ($, on) => {
+  const w = world(on, { answers: [held(10_000)] })
+  await start($, w)
+  w.enabled = false
+  await w.clock.advance(10_000)
+  await attach($)
+  await w.clock.settle()
+  expect(w.attaches).toHaveLength(0)
+  w.enabled = true
+  await w.clock.advance(10 * MINUTE)
+  expect(w.runs).toHaveLength(3)
+  expect(w.attaches).toEqual([ATTACH])
+})
+
+// The send noticing the plugin off before the poll does keeps the attach as the poll noticing it first would.
+test('switched off during a held poll, then an attach: told once the mod links again', async ($, on) => {
+  const w = world(on, { answers: [held(10_000)] })
+  await start($, w)
+  w.enabled = false
+  await attach($)
+  await w.clock.settle()
+  expect(w.attaches).toHaveLength(0)
+  await w.clock.advance(10_000)
+  expect(w.runs).toHaveLength(2)
+  w.enabled = true
+  await w.clock.advance(10 * MINUTE)
+  expect(w.runs).toHaveLength(3)
+  expect(w.attaches).toEqual([ATTACH])
+  await w.clock.advance(10_000)
+  expect(w.attaches).toEqual([ATTACH])
+})
+
+test("the polls go on the core's socket alone and the attach on the devices' alone", async ($, on) => {
+  const w = world(on, { answers: [held(25_000)] })
+  await start($, w)
+  await attach($)
+  await w.clock.advance(25_000)
+  await w.clock.advance(25_000)
+  expect(w.polls).toHaveLength(3)
+  for (const poll of w.polls) expect(poll).toMatchObject({ url: 'http://harness/api/hook/inbox', init: { socketPath: SOCKET } })
+  expect(w.attaches).toEqual([ATTACH])
+})
+
+test('only HOME and CLAUDE_CONFIG_DIR are read with an attach sent', async ($, on) => {
+  const w = world(on, { answers: [held(25_000)] })
+  await start($, w)
+  await attach($)
+  await w.clock.settle()
+  expect(w.attaches).toHaveLength(1)
+  expect(new Set(w.envAsked)).toEqual(new Set(['HOME', 'CLAUDE_CONFIG_DIR']))
 })

@@ -1,5 +1,6 @@
 /** Restore may wait for preparation; session ownership must survive that wait before core writes. */
 import { externalResumePending } from '../../lib/externalResume.js'
+import { launchedGrid } from '../../lib/gridAssignmentWire.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { LaunchOverrides, LaunchOverridesResult } from '../../lib/launchOverrides.js'
 import type { RestoreAgentsDeps, RestoreLaunch } from '../../lib/restoreAgents.js'
@@ -66,6 +67,8 @@ export function createRestoreLaunch(deps: RestoreLaunchDeps): RestoreAgentsDeps[
       const { error: code, detail } = windowsLaunchRefusal(error)
       return { error: code, detail }
     }
+    // The grid the row keeps is the launch's, with the saved API's endpoint as this build refreshed it.
+    launched = { ...launched, grid: launchedGrid(built.overrides.gridLaunchRecord?.override) }
     return prepare === false ? { ...launched, deferred: { prepare: preparation, overrides: built.overrides, permission } } : launched
   }
 }

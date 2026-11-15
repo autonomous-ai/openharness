@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { engineBin, enginePathOverride } from '../../lib/engineBin.js'
 import { engineInstallRecipe } from '../../lib/engineInstall.js'
 import { buildEngineLaunchArgv, commandAvailableInInteractiveShell } from '../../lib/engineLaunch.js'
-import { probeGatewayRuntime } from '../../lib/gatewayRuntime.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { AgentRestartCoordinator, bypassPermissionFor, restartAgent } from '../../lib/restartAgent.js'
 import { terminalRouteKey } from '../../lib/terminalRuntime.js'
@@ -19,7 +18,6 @@ vi.mock('../../lib/engineLaunch.js', async (real) => ({
   buildEngineLaunchArgv: vi.fn(() => ['zsh', '-l']),
   commandAvailableInInteractiveShell: vi.fn(async () => true),
 }))
-vi.mock('../../lib/gatewayRuntime.js', async (real) => ({ ...await real<object>(), probeGatewayRuntime: vi.fn(async () => ({ kind: 'none' })) }))
 vi.mock('../../lib/restartAgent.js', async (real) => ({
   ...await real<object>(),
   bypassPermissionFor: vi.fn(async (_s: unknown, live: () => Promise<boolean>) => live()),
@@ -521,9 +519,8 @@ describe('restarting an agent', () => {
       expect(swapDeps).toMatchObject({ swap: true })
       expect(swapDeps.isCurrent?.()).toBe(true)
       expect(run.deps.refreshGridWebSearch).toHaveBeenCalledWith('a1', { env: { GRID_KEY: 'k' } })
-      expect(probeGatewayRuntime).toHaveBeenCalledWith(newProcess)
       // Its command line, where a Codex or pi grid's address and model are: never its executable alone.
-      expect(run.deps.registry.updateProcessIdentity).toHaveBeenCalledWith('a1', newProcess, 'none')
+      expect(run.deps.registry.updateProcessIdentity).toHaveBeenCalledWith('a1', newProcess, undefined, null)
       expect(run.deps.registry.setActive).toHaveBeenCalledWith('a1', true)
       expect(releaseHold).toHaveBeenCalledWith(runtime)
       expect(run.deps.announceSession).toHaveBeenCalledWith(agent())
@@ -541,6 +538,21 @@ describe('restarting an agent', () => {
       expect(run.deps.paneSwapDeps).toHaveBeenCalledWith(grid, { backend: run.tmuxBackend, runtime }, { env: { GRID_KEY: 'k' } }, null, expect.any(Function))
       expect(vi.mocked(restartAgent).mock.calls[0][1]).toBe(false)
       expect(console.log).toHaveBeenCalledWith('[restart] a1 claude · fresh session · grid Home')
+    })
+
+    it('writes on the row the grid its launch record puts the engine on, never the grid the row had', async () => {
+      const old = { baseUrl: 'https://grid.example/old/relay', model: null }
+      // The saved API's endpoint as saved now: the record a relaunch refreshes (apiModels.ts `refreshApiLaunch`).
+      const override = { networkId: 'api', networkName: 'Saved', baseUrl: 'https://saved.example/now/v1', apiKey: 'k', model: 'm' }
+      const onGrid = setup(agent({ grid: old, gridLaunch: { ...override, baseUrl: 'https://saved.example/then/v1' } } as Partial<RegisteredSession>), {
+        relaunchOverrides: vi.fn(async () => ({ ok: true, overrides: { env: {}, extraArgs: [], clearEnv: [], gridLaunchRecord: { override, webSearch: 'on' } } })) as never,
+      })
+      await onGrid.restart('a1')
+      expect(onGrid.deps.registry.updateProcessIdentity).toHaveBeenCalledWith('a1', newProcess, undefined, { baseUrl: 'https://saved.example/now/v1', model: 'm' })
+      // A row discovery adopted from a relay URL the person set in their own shell: its relaunch runs on its own login.
+      const adopted = setup(agent({ grid: old, gridLaunch: null } as Partial<RegisteredSession>))
+      await adopted.restart('a1')
+      expect(adopted.deps.registry.updateProcessIdentity).toHaveBeenCalledWith('a1', newProcess, undefined, null)
     })
 
     it('says why the swap failed, and lets the route go', async () => {
@@ -563,10 +575,10 @@ describe('restarting an agent', () => {
       expect(swapped.deps.refreshGridWebSearch).not.toHaveBeenCalled()
       expect(swapped.deps.agentReconciler.releaseRoute).toHaveBeenCalledWith(routeKey)
 
-      const probed = setup()
-      vi.mocked(probeGatewayRuntime).mockImplementationOnce(async () => { probed.state.live = false; return { kind: 'none' } as never })
-      expect(await probed.restart('a1')).toEqual(changed)
-      expect(probed.deps.registry.updateProcessIdentity).not.toHaveBeenCalled()
+      const committing = setup()
+      vi.mocked(committing.deps.refreshGridWebSearch).mockImplementationOnce(() => { committing.state.live = false })
+      expect(await committing.restart('a1')).toEqual(changed)
+      expect(committing.deps.registry.updateProcessIdentity).not.toHaveBeenCalled()
 
       const cleared = setup()
       releaseHold.mockImplementationOnce(async () => { cleared.state.live = false })

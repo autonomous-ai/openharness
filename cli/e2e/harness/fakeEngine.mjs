@@ -54,7 +54,8 @@
 // it draws or announces anything (an engine's first run after an update). `unreadableDescriptorMs` is how long,
 // once started, it holds a descriptor the daemon's process reader has no name for, as Codex 0.162.1 did for its
 // first seconds in a clean macOS VM (2026-10-12): every read of its process was refused until then ("the native
-// control descriptor type is unavailable"). `firstHookDelayMs` is how long
+// control descriptor type is unavailable"). `holdsRollout: false` (Codex) keeps no rollout open, so a test can
+// prove the daemon learned its home from something else (enginehomes.e2e.ts). `firstHookDelayMs` is how long
 // its first SessionStart takes to reach the daemon once the engine is up: the hook command starting on a
 // loaded machine, while the daemon has already found the engine and its conversation. `root` is the
 // test's throwaway root, the only place whose hooks it will run, and `hookLog` where it notes every hook
@@ -121,6 +122,9 @@ const heldHookUrl = new URL('./heldHook.mjs', import.meta.url).href
  */
 async function codexWrapper(config) {
   const child = spawn(process.execPath, [fileURLToPath(import.meta.url), ...process.argv.slice(2)], {
+    // Named `codex` from its start, as the native binary npm's launcher runs is: the daemon reads the rollout a
+    // launcher's child holds open only from a child of the engine's own name (processTable.ts `engineChildren`).
+    argv0: 'codex',
     stdio: 'inherit',
     env: { ...process.env, [CODEX_NATIVE]: JSON.stringify(config) },
   })
@@ -419,6 +423,7 @@ export async function run(engine, config = {}, { native = false } = {}) {
   const procStart = (() => { try { return execFileSync('ps', ['-o', 'lstart=', '-p', String(process.pid)]).toString().trim() } catch { return '' } })()
   const announceProcess = () => {
     if (engine === 'codex') {
+      if (config.holdsRollout === false) return
       if (held !== null) closeSync(held)
       held = openSync(transcript, 'r')
     } else if (procStart) {

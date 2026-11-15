@@ -56,7 +56,7 @@ function setup(mode: 'inline' | 'worker', content = prompt('T1')) {
     runtimeProfiles: { transcriptFields: () => [], beginHydrate: () => profile, hydrate: vi.fn(), ingest: () => false,
       ingestConfig: async () => false, ingestPane: () => false, capturePane: async () => null },
     cursorDiscovery: { add: async () => {} }, device: () => undefined, captureTerminal: async () => null,
-    emit, settled, announceTurnAborted: vi.fn(), questionWatcher: { start: vi.fn() }, terminalLabel: () => 'private fixture',
+    emit, settled, tokenUsage: { changed: vi.fn() }, announceTurnAborted: vi.fn(), questionWatcher: { start: vi.fn() }, terminalLabel: () => 'private fixture',
     dbs: { opencode: join(root, 'o.db'), kilo: join(root, 'k.db'), devin: join(root, 'd.db'), openclaw: async () => null },
     devinHome: root, hermesDb: async () => join(root, 'h.db'), concurrency: 1 })
   const ingest = createIngest({ liveFor, has: () => true, bySession: () => row, normalizers,

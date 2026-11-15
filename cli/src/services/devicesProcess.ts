@@ -24,8 +24,10 @@ import { validUsage } from '../lib/agentUsageWire.js'
 import { AGENT_ACTIONS_OFF, DAEMON_UNKNOWN, DELIVERIES_OFF, emptyPorts, resolveAgent, TERMINALS_OFF, type CoreApi, type CorePorts, type DevicesPort, type ForkResult, type ServiceRequests, type WindowFocus } from '../core/api.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { RuntimeModelOption } from '../lib/runtimeProfile.js'
+import { devicesListenerPath } from '../devices/listenerPath.js'
 import { accountLink } from './accountLink.js'
 import { startDevices, type DevicesDeps } from './devices.js'
+import { openDevicesListener } from './devicesListener.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess, type ServiceProcessOptions } from './process.js'
 import { processCoreApi, UNASKED } from './processCoreApi.js'
 import { harnessdEnv } from '../lib/harnessdEnv.js'
@@ -47,9 +49,10 @@ export interface DevicesServiceOptions {
   socketPath: string
   machineId: string
   token: string
-  /** For this service's tests: its start and its link. */
+  /** For this service's tests: its start, its link and its listener. */
   start?: typeof startDevices
   run?: (options: ServiceProcessOptions) => ServiceProcess
+  openListener?: typeof openDevicesListener
   processEnv?: NodeJS.ProcessEnv
 }
 
@@ -214,6 +217,8 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
     faults: faultsOf(processEnv.HARNESSD_TEST_FAULTS),
     refresh,
     onCoreGone: (run) => { coreGone = run },
+    // Their own listener, in this process alone: the devices started inside the core's process are given none.
+    listen: (handlers, log) => (options.openListener ?? openDevicesListener)({ path: devicesListenerPath(options.dataDir), handlers, log }),
   }
   const requests = (options.start ?? startDevices)(api, ports, deps)
   const port = ports.devices as DevicesPort

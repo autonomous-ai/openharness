@@ -9,99 +9,14 @@
  * - a window brings back its tab's list, and closing it the machine's;
  * - talking to it is refused kindly, and `HARNESS_DEVICE_OBSERVED=off` leaves only the Harness agent.
  */
-import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
-import { observedAgentId } from '../src/cable/hosts/observed.js'
 import { LocalClient, type Frame } from './harness/client.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
 import type { DialMessage, FakeDial } from './harness/fakeDial.js'
-
-/**
- * A terminal app's tab: a fresh pseudo-terminal with the engine as its child (pty.fork + exec, as ptyRoundTrip.py), and
- * the test as the person at the keyboard. Prints the engine's pid first, on stderr.
- */
-const PTY = `
-import os, pty, select, sys
-pid, fd = pty.fork()
-if pid == 0:
-    os.execvp(sys.argv[1], sys.argv[1:])
-sys.stderr.write('%d\\n' % pid)
-sys.stderr.flush()
-inputs = [fd, sys.stdin.fileno()]
-while True:
-    ready, _, _ = select.select(inputs, [], [])
-    if fd in ready:
-        try:
-            data = os.read(fd, 65536)
-        except OSError:
-            break
-        if not data:
-            break
-        os.write(sys.stdout.fileno(), data)
-    if sys.stdin.fileno() in ready:
-        data = os.read(sys.stdin.fileno(), 65536)
-        if data:
-            os.write(fd, data)
-        else:
-            inputs = [fd]
-`
-
-/** Claude Code in a terminal app outside Harness: no tmux pane, no Harness pane. */
-class Outside {
-  private constructor(private readonly tab: ChildProcess, readonly pid: number, readonly sessionId: string, readonly folder: string) {}
-
-  /** The dial's id for it. */
-  get id(): string { return observedAgentId('claude', this.sessionId) }
-
-  static async start(d: IsolatedDaemon, folder: string, hints: Record<string, string>): Promise<Outside> {
-    const cwd = join(d.projectsDir, folder)
-    mkdirSync(cwd, { recursive: true })
-    // d.env carries none of the developer's host hints (testing/daemonEnvironment.ts): only [hints] name the app.
-    const env: NodeJS.ProcessEnv = { ...d.env, TERM: 'xterm-256color' }
-    const tab = spawn('python3', ['-c', PTY, d.env.CLAUDE_PATH!], { cwd, env: { ...env, ...hints }, stdio: ['pipe', 'pipe', 'pipe'] })
-    tab.stdout!.resume()
-    const pid = await new Promise<number>((resolve, reject) => {
-      let said = ''
-      tab.stderr!.on('data', (chunk: Buffer) => {
-        said += chunk.toString('utf8')
-        if (said.includes('\n')) resolve(Number(said.split('\n')[0]))
-      })
-      tab.once('exit', (code) => reject(new Error(`the terminal tab exited (${code}): ${said}`)))
-    })
-    // Its conversation, as its SessionStart hook named it once that hook had run.
-    const started = new RegExp(`claude pid=${pid} SessionStart\\(startup\\) session=(\\S+) ran`)
-    const sessionId = await until(`${folder} to run its SessionStart hook`, () => d.hookLog().match(started)?.[1], 30_000, 100)
-    return new Outside(tab, pid, sessionId, folder)
-  }
-
-  /** Typed at its prompt, then Enter, as a person does. */
-  type(text: string): void {
-    this.tab.stdin!.write(text)
-    this.tab.stdin!.write('\r')
-  }
-
-  /** Whether its hook for [event] has run since the engine started, as the engine noted it. */
-  ran(d: IsolatedDaemon, event: string, times = 1): boolean {
-    const line = new RegExp(`claude pid=${this.pid} ${event}\\S* session=${this.sessionId} ran`, 'g')
-    return (d.hookLog().match(line)?.length ?? 0) >= times
-  }
-
-  /** The process gone at once, with no hook: a crash, a closed terminal. */
-  kill(): void {
-    try { process.kill(this.pid, 'SIGKILL') } catch { /* already gone */ }
-  }
-
-  async close(): Promise<void> {
-    this.kill()
-    if (this.tab.exitCode !== null || this.tab.signalCode !== null) return
-    const exited = new Promise<void>((done) => this.tab.once('exit', () => done()))
-    this.tab.kill('SIGKILL')
-    await exited
-  }
-}
+import { Outside } from './harness/outsideAgent.js'
 
 const row = async (client: LocalClient, agentId: string) =>
   ((await client.request<{ agents: Array<Record<string, any>> }>('agents_list', { includeStopped: true }, 30_000)).agents)

@@ -403,7 +403,7 @@ function hookRoute(port) {
   return socketPath ? tokenRoute({ socketPath }, readHookCredential()) : null
 }
 
-function post(port, path, body, onResponse) {
+function post(port, path, body, onResponse, facts = {}) {
   return new Promise((resolve) => {
     const payload = JSON.stringify(body)
     const route = hookRoute(port)
@@ -418,6 +418,8 @@ function post(port, path, body, onResponse) {
           'Content-Type': 'application/json',
           'Content-Length': Buffer.byteLength(payload),
           ...route.headers,
+          // Headers, not body fields: a daemon that does not read one ignores it, where it refuses an unknown field.
+          ...facts,
           // When the engine ran this hook: this process's start, not its arrival, which can be seconds later on
           // a loaded machine, after the engine has moved on to its next prompt (src/hookServer.ts hookFiredAt).
           'X-Harness-Hook-Fired-At': String(FIRED_AT),
@@ -509,6 +511,39 @@ function hostHints() {
   return hints
 }
 
+/** The endpoint variables that say an engine is routed through OpenRouter: these names exactly. Their values never leave this process. */
+const GATEWAY_URLS = ['ANTHROPIC_BASE_URL', 'OPENAI_BASE_URL', 'OPENAI_API_BASE']
+
+/** By the endpoint's host alone: one that only looks like OpenRouter's (openrouter.ai.example.com, a path) is not. */
+function ownGateway() {
+  return GATEWAY_URLS.some((name) => {
+    try { return /(?:^|\.)openrouter\.ai$/i.test(new URL(process.env[name] ?? '').hostname) } catch { return false }
+  }) ? 'ori' : 'none'
+}
+
+/**
+ * This session's Codex home, as the core takes one (src/hookServer.ts hookFacts): absolute as this platform spells it,
+ * on Windows a drive's path, never a share's or a device's (src/engines/kit/homeAdoption.ts homeIsAbsolute). The
+ * default is no home of its own.
+ */
+function ownCodexHome() {
+  const home = process.env.CODEX_HOME
+  const absolute = home && (process.platform === 'win32' ? /^[A-Za-z]:\\/.test(home) : home.startsWith('/'))
+  return absolute && home.length <= 1_024 && !CONTROL.test(home) && home !== join(homedir(), '.codex')
+    ? home : undefined
+}
+
+/**
+ * What this hook says of its session's environment: it reads its own, so the daemon need read no other process's. The
+ * gateway for Claude Code and Hermes (Codex's argv says its own), the home for Codex; nothing for another engine.
+ */
+function ownFacts(engine) {
+  if (engine === 'claude' || engine === 'hermes') return { 'X-Harness-Hook-Gateway': ownGateway() }
+  const home = engine === 'codex' ? ownCodexHome() : undefined
+  // Percent-encoded: Node refuses a header value above U+00FF, and that would end the hook before it registers.
+  return home ? { 'X-Harness-Hook-Codex-Home': encodeURIComponent(home) } : {}
+}
+
 /** Each engine's name for these moments, as main() reads them in a pane: Claude Code's and the engines that copy it
  *  (Grok's once grokHookEvent has named them), Cursor's and Copilot's lower-camel ones. */
 const OBSERVED_EVENTS = new Map([
@@ -542,6 +577,15 @@ function observedEvent(engine, event, input) {
   return OBSERVED_EVENTS.get(name) ?? null
 }
 
+/** How Claude Code types in a message another session sent; the start is all that is read of the prompt. */
+const CROSS_SESSION = /^\s*<cross-session-message /
+
+/** A prompt another session sent, not one the person typed: the devices do not move the dial for it. Codex, Grok and
+ *  Devin name their prompt event as Claude Code does, but only Claude Code types another session's message in so. */
+function relayedPrompt(engine, event, input) {
+  return engine === 'claude' && event === 'UserPromptSubmit' && typeof input.prompt === 'string' && CROSS_SESSION.test(input.prompt)
+}
+
 /**
  * What a paneless session's hook tells the devices: which session, what happened and where, never its prompt. A path
  * the core would refuse (over 1024 characters, or with a control character) is left out rather than cost the whole
@@ -561,6 +605,7 @@ function observedBody(engine, event, input) {
     engine, sessionId, event: kind, cwd: path(cwd), callerPid: process.ppid,
     transcriptPath: path(input.transcript_path || input.transcriptPath), hostHints: hostHints(),
   }
+  if (relayedPrompt(engine, event, input)) body.relayed = true
   const fits = () => Buffer.byteLength(JSON.stringify(body)) <= 4096
   if (!fits()) delete body.transcriptPath
   if (!fits()) delete body.cwd
@@ -743,11 +788,12 @@ ensureUtf8Locale()
  * year before the time. Every one of those parses ZERO rows, the hook concludes the machine has no
  * processes, and the engine it was launched by goes unrecognised. LC_ALL has to be cleared because it
  * outranks both categories; LC_CTYPE stays UTF-8 so Linux procps keeps returning raw bytes.
+ * COMMAND_MODE=unix2003: in legacy mode macOS `ps -e` lists every process's environment, which the hook never reads.
  */
 function psEnv(env = process.env) {
   const configured = env.LC_ALL || env.LC_CTYPE || env.LANG
   const ctype = configured && /utf-?8/i.test(configured) ? configured : 'C.UTF-8'
-  return { ...env, LC_ALL: '', LC_CTYPE: ctype, LC_TIME: 'C' }
+  return { ...env, LC_ALL: '', LC_CTYPE: ctype, LC_TIME: 'C', COMMAND_MODE: 'unix2003' }
 }
 
 /** Second line of defence: /proc is raw bytes, so a glibc without C.UTF-8 still resolves correctly. */
@@ -2216,13 +2262,15 @@ async function main() {
     model: modelName(input.model),
     cliVersion: input.cli_version || input.cursor_version || input.version,
   }
-  let ok = await post(port, '/api/hook/session-start', body)
+  // The daemon reads them on this registration alone (src/hookServer.ts hookFacts).
+  const facts = ownFacts(engine)
+  let ok = await post(port, '/api/hook/session-start', body, undefined, facts)
   let held = ok === 'held'
   // A live core's bounded admission queue owns the existing candidates. Retry this
   // delivery within the hook budget, never reconstruct registry state behind it.
   for (let attempt = 0; engine === 'hermes' && ok === 'held' && attempt < 3 && remainingBudget() > 750; attempt++) {
     await new Promise(resolve => setTimeout(resolve, 250))
-    ok = await post(port, '/api/hook/session-start', body)
+    ok = await post(port, '/api/hook/session-start', body, undefined, facts)
     held ||= ok === 'held'
   }
   if (held && ok !== true) process.stderr.write('[harness] Hermes admission is held; this delivery could not be confirmed. The current conversation is unchanged.\n')

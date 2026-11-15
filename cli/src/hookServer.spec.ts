@@ -5,7 +5,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { startHookServer, type HookServerHandlers, chooseHookAgent, clientEnvPane, hookFiredAt, knownTranscriptFor } from './hookServer.js'
+import { startHookServer, type HookServerHandlers, chooseHookAgent, clientEnvPane, hookFacts, hookFiredAt, knownTranscriptFor } from './hookServer.js'
 import { registry, type RegisteredSession } from './lib/registry.js'
 import { env } from './config/env.js'
 import { readHookCredential } from './lib/hookAuth.js'
@@ -565,6 +565,151 @@ describe('process-owned hook server', () => {
     onServiceRoute.mockClear()
     expect((await realFetch(`${base}/api/hook/unknown`, { method: 'POST', body: '{}' })).status).toBe(404)
     expect(onServiceRoute).not.toHaveBeenCalled()
+  })
+})
+
+// The hook says the gateway and the Codex home of its own environment in two headers (hook/notify.mjs): a daemon that
+// does not read a header ignores it, where it refuses a body with a field it does not list.
+describe('what a hook says of its own environment', () => {
+  const GATEWAY = 'x-harness-hook-gateway', HOME = 'x-harness-hook-codex-home'
+
+  it.each([
+    [{ [GATEWAY]: 'ori' }, { gateway: 'ori' }, []],
+    [{ [GATEWAY]: 'none' }, { gateway: null }, []],
+    [{}, {}, []],
+    [{ [GATEWAY]: 'vendor' }, {}, [GATEWAY]],
+    [{ [GATEWAY]: 'ori, none' }, {}, [GATEWAY]],
+    [{ [HOME]: '/home/u/.codex-work' }, { codexHome: '/home/u/.codex-work' }, []],
+    [{ [HOME]: encodeURIComponent('/home/nguyễn/.codex work') }, { codexHome: '/home/nguyễn/.codex work' }, []],
+    [{ [HOME]: encodeURIComponent(`/${'あ'.repeat(1023)}`) }, { codexHome: `/${'あ'.repeat(1023)}` }, []],
+    [{ [HOME]: 'relative/home' }, {}, [HOME]],
+    [{ [HOME]: `/${'x'.repeat(1024)}` }, {}, [HOME]],
+    [{ [HOME]: '/bad%0Ahome' }, {}, [HOME]],
+    [{ [HOME]: '/cut%E0%A4%A' }, {}, [HOME]],
+    [{ [HOME]: '' }, {}, [HOME]],
+  ])('%j is taken as %j, refusing %j', (headers, taken, refused) => {
+    expect(hookFacts({ headers }, 'linux')).toEqual({ ...taken, refused })
+  })
+
+  // A home on a share or a device would have the core open another computer's folder on every registration
+  // (cli/AGENTS.md rule 4): on Windows only a drive's path is taken, as agent_create takes one.
+  it.each([
+    ['C:\\Users\\u\\.codex-work', { codexHome: 'C:\\Users\\u\\.codex-work' }, []],
+    ['\\\\host\\share\\.codex', {}, [HOME]],
+    ['//host/share/.codex', {}, [HOME]],
+    ['\\\\?\\C:\\x', {}, [HOME]],
+    ['\\foo', {}, [HOME]],
+    ['/foo', {}, [HOME]],
+  ])('on Windows the home %j is taken as %j, refusing %j', (home, taken, refused) => {
+    expect(hookFacts({ headers: { [HOME]: encodeURIComponent(home) } }, 'win32')).toEqual({ ...taken, refused })
+  })
+
+  /** A session-start from the pane of a live agent of `engine`, which registers: `registry.register` is spied and
+   *  answers `result`. */
+  async function registering(engine: 'claude' | 'codex', result: Record<string, unknown> = {}) {
+    const agent = { engine, sessionId: '', agentId: `${engine}-agent`, active: true,
+      runtimes: [{ backend: 'tmux', paneId: '%1' }], primaryRuntimeKey: 'tmux\u0000%1',
+      processIdentity: { pid: 4242, startMarker: 'fixture', executable: `<${engine}>` } } as RegisteredSession
+    vi.spyOn(registry, 'byAgent').mockReturnValue(agent)
+    const register = vi.spyOn(registry, 'register')
+      .mockReturnValue({ entry: agent, isNew: true, evicted: null, rebound: null, orphaned: null, ...result })
+    const { base, headers } = await start({ resolveHookAgent: async () => agent })
+    const post = (extra: Record<string, string>) => fetch(`${base}/api/hook/session-start`, {
+      method: 'POST', headers: { ...headers, ...extra },
+      body: JSON.stringify({ engine, sessionId: 'session-1', tmuxPane: '%1', hookEvent: 'SessionStart' }),
+    })
+    return { register, post }
+  }
+
+  it('registers with the facts it took, and names a refused header without its value', async () => {
+    const logged = (['log', 'warn', 'error', 'info', 'debug'] as const).map(level => vi.spyOn(console, level).mockImplementation(() => {}))
+    const { register, post } = await registering('claude')
+    // What the start said (the dial's prompts are off with no Unix socket, as here) is not this request's.
+    vi.mocked(console.warn).mockClear()
+    expect((await post({ [GATEWAY]: 'vendor', [HOME]: 'secret/place' })).status).toBe(200)
+    await vi.waitFor(() => expect(register).toHaveBeenCalledOnce())
+    expect(register.mock.calls[0][0]).not.toHaveProperty('gateway')
+    expect(register.mock.calls[0][0]).not.toHaveProperty('codexHome')
+    expect(vi.mocked(console.warn).mock.calls).toEqual([
+      ['[hooks] session- SessionStart header refused · x-harness-hook-gateway'],
+      ['[hooks] session- SessionStart header refused · x-harness-hook-codex-home'],
+    ])
+    expect(JSON.stringify(logged.flatMap(spy => spy.mock.calls))).not.toMatch(/vendor|secret/)
+  })
+
+  it('registers with the gateway it took', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const { register, post } = await registering('claude')
+    await post({ [GATEWAY]: 'ori' })
+    await vi.waitFor(() => expect(register).toHaveBeenCalledOnce())
+    expect(register.mock.calls[0][0]).toMatchObject({ gateway: 'ori' })
+  })
+
+  it('takes the longest home a hook sends', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const home = `/${'あ'.repeat(1023)}`
+    expect(Buffer.byteLength(encodeURIComponent(home))).toBe(9_210)
+    const { register, post } = await registering('codex')
+    expect((await post({ [HOME]: encodeURIComponent(home) })).status).toBe(200)
+    await vi.waitFor(() => expect(register).toHaveBeenCalledOnce())
+    expect(register.mock.calls[0][0]).toMatchObject({ codexHome: home })
+  })
+
+  it('names a home the registration refused, without its value', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { register, post } = await registering('codex', { refusedHome: true })
+    await post({ [HOME]: '/home/u/.codex-work' })
+    await vi.waitFor(() => expect(register).toHaveBeenCalledOnce())
+    await vi.waitFor(() => expect(warn).toHaveBeenCalledWith('[hooks] session- SessionStart header refused · x-harness-hook-codex-home'))
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('codex-work')
+  })
+
+  it('reads neither on another route', async () => {
+    const onTurnStop = vi.fn(), onSessionEnd = vi.fn()
+    const agent = { engine: 'claude', sessionId: 'real-session', agentId: 'agent-1', runtimes: [], processIdentity: null } as unknown as RegisteredSession
+    vi.spyOn(registry, 'bySession').mockReturnValue(agent)
+    vi.spyOn(registry, 'byAgent').mockReturnValue(agent)
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { base, headers } = await start({ onTurnStop, onSessionEnd, resolveHookAgent: async () => agent })
+    // The start's own line (no Unix socket here) is not these requests'.
+    warn.mockClear()
+    for (const path of ['/api/hook/turn-stop', '/api/hook/session-end']) {
+      const send = async (extra: Record<string, string>) => {
+        const response = await fetch(`${base}${path}`, { method: 'POST', headers: { ...headers, ...extra },
+          body: JSON.stringify({ engine: 'claude', sessionId: 'real-session', tmuxPane: '%1', callerPid: 123 }) })
+        return [response.status, await response.json()]
+      }
+      expect(await send({ [GATEWAY]: 'vendor', [HOME]: 'secret/place' })).toEqual(await send({}))
+    }
+    expect(onTurnStop).toHaveBeenCalledTimes(2)
+    expect(onTurnStop.mock.calls[0]).toEqual(onTurnStop.mock.calls[1])
+    expect(onSessionEnd).toHaveBeenCalledTimes(2)
+    expect(onSessionEnd.mock.calls[0]).toEqual(onSessionEnd.mock.calls[1])
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it.each([{ gateway: 'ori' }, { codexHome: '/x' }])('a body that names them is refused as before: %j', async (field) => {
+    const resolveHookAgent = vi.fn(async () => null)
+    const { base, headers } = await start({ resolveHookAgent })
+    const response = await fetch(`${base}/api/hook/session-start`, {
+      method: 'POST', headers, body: JSON.stringify({ engine: 'claude', sessionId: 'session-1', tmuxPane: '%1', ...field }),
+    })
+    expect(response.status).toBe(400)
+    expect(await response.json()).toEqual({ error: 'invalid hook body' })
+    expect(resolveHookAgent).not.toHaveBeenCalled()
+  })
+
+  // The daemon a later hook will meet as the older one.
+  it('ignores a header it does not read', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const { register, post } = await registering('claude')
+    await post({})
+    await vi.waitFor(() => expect(register).toHaveBeenCalledOnce())
+    await post({ 'X-Harness-Hook-Next': '1' })
+    await vi.waitFor(() => expect(register).toHaveBeenCalledTimes(2))
+    expect(register.mock.calls[1]).toEqual(register.mock.calls[0])
   })
 })
 

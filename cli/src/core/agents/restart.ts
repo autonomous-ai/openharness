@@ -8,8 +8,8 @@ import { isTerminalEngine, type AgentEngine } from '../../engines/types.js'
 import { engineBin, enginePathOverride } from '../../lib/engineBin.js'
 import { engineInstallRecipe } from '../../lib/engineInstall.js'
 import { buildEngineLaunchArgv, commandAvailableInInteractiveShell } from '../../lib/engineLaunch.js'
+import { launchedGrid, type GridAssignment } from '../../lib/gridAssignmentWire.js'
 import { windowsPaneLaunch } from '../../lib/windows/engineStart.js'
-import { probeGatewayRuntime } from '../../lib/gatewayRuntime.js'
 import { sid } from '../../lib/log.js'
 import type { ProcessIdentity, registry, RegisteredSession } from '../../lib/registry.js'
 import { bypassPermissionFor, restartAgent } from '../../lib/restartAgent.js'
@@ -56,17 +56,19 @@ export interface RelaunchCommitDeps {
 
 /**
  * The row learns the engine a restart relaunched in [place] (restart, and a move's fallback to the old pane:
- * core/agents/hostMove.ts): its process and gateway, active again, the pane handed back to its backend's default
- * disposal, then announced. Gateway is a core process fact; optional grid metadata follows the committed binding in the
- * background, so an unavailable models service cannot hold this route. 'changed' when [current] went false before the
- * row learned the engine, 'changed after commit' once it had, 'vanished' when the row is gone.
+ * core/agents/hostMove.ts): its process and [grid], the one its launch put it on, active again, the pane handed back to
+ * its backend's default disposal, then announced. The row keeps its gateway: no process is read for it, and the
+ * relaunched engine says it again (its hook, or a Codex's argv on the next discovery pass). A Codex's or Pi's grid is
+ * read off its argv in the background after, so an unavailable models service cannot hold this route. 'changed' when
+ * [current] went false before the row learned the engine, 'changed after commit' once it had, 'vanished' when the row
+ * is gone.
  */
 export async function commitRelaunchedEngine(
-  deps: RelaunchCommitDeps, agentId: string, identity: ProcessIdentity, place: RestartTarget, current: () => boolean,
+  deps: RelaunchCommitDeps, agentId: string, identity: ProcessIdentity, grid: GridAssignment | null | undefined, place: RestartTarget,
+  current: () => boolean,
 ): Promise<RegisteredSession | 'changed' | 'changed after commit' | 'vanished'> {
-  const gateway = await probeGatewayRuntime(identity)
   if (!current()) return 'changed'
-  deps.registry.updateProcessIdentity(agentId, identity, gateway.kind)
+  deps.registry.updateProcessIdentity(agentId, identity, undefined, grid)
   deps.registry.setActive(agentId, true)
   await place.backend.releaseHold(place.runtime)
   // The row has its new engine: cancelled from here on, the engine is still relaunched.
@@ -248,7 +250,8 @@ export function createAgentRestarter({
       // Address the CANONICAL agentId from the resolved session, not the raw RPC input — `resolve()`
       // accepts either an agentId or a bare sessionId, but `setActive`/`byAgent` only ever key on the
       // real agentId.
-      const refreshed = await commitRelaunchedEngine({ registry, announceSession, refreshGridAssignment }, session.agentId, outcome.processIdentity, place, current)
+      const refreshed = await commitRelaunchedEngine({ registry, announceSession, refreshGridAssignment }, session.agentId, outcome.processIdentity,
+        launchedGrid(built.overrides.gridLaunchRecord?.override), place, current)
       if (refreshed === 'changed' || refreshed === 'changed after commit') return changed
       if (refreshed === 'vanished') return { ok: false, error: 'RESTART_FAILED', detail: 'agent vanished from the registry mid-restart' }
       console.log(`[restart] ${sid(session.agentId)} ${engine} · ${outcome.resumed ? 'resumed' : 'fresh session'}`

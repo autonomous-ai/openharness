@@ -51,6 +51,30 @@ describe('engine model-control workers', () => {
     expect(!!harnessdProcesses(d).get('engine-claude')).toBe(!inline)
   })
 
+  // Its endpoint is in its own environment, which only its hook reads: the hook says it is routed through OpenRouter,
+  // never where, and the daemon offers no model of the person's own login for it.
+  it('a Claude Code typed in with an OpenRouter endpoint is display-only from its first hook', async () => {
+    const d = daemon = await IsolatedDaemon.create()
+    onTestFailed(() => console.log(d.log()))
+    await d.start()
+    const c = client = await LocalClient.connect(d)
+    const typedIn = async (command: string) => {
+      const opened = await c.request('agent_create', { engine: 'terminal', cwd: d.projectsDir }, 60_000)
+      expect(opened.error, JSON.stringify(opened)).toBeUndefined()
+      const tile = await until('the terminal tile', async () => (await c.request('agents_list', {})).agents
+        .find((row: any) => row.id === opened.agent.id && row.status === 'active' && row.tmuxPane), 60_000, 100)
+      await d.tmux.run('send-keys', '-t', tile.tmuxPane, '-l', command)
+      await d.tmux.run('send-keys', '-t', tile.tmuxPane, 'Enter')
+      await until(`${command} bound`, async () => (await c.request('agents_list', {})).agents
+        .find((row: any) => row.id === tile.id && row.engine === 'claude' && row.sessionId), 60_000, 100)
+      const offered = await c.request('models_list', { agentId: tile.id }, 15_000)
+      expect(offered.error, JSON.stringify(offered)).toBeUndefined()
+      return (offered.models as Array<{ id: string }>).filter(option => option.id.startsWith(`runtime-v1:${tile.id}:claude:`))
+    }
+    expect(await typedIn('ANTHROPIC_BASE_URL=https://openrouter.ai/api claude')).toEqual([])
+    expect((await typedIn('claude')).length).toBeGreaterThan(0)
+  })
+
   it.each(['claude', 'codex'] as const)('revokes an interrupted %s model change, keeps the CLI alive, and accepts a new intent after recovery', async engine => {
     const { d, c, agent, selected, turn, commands, commandsPath } = await fresh(engine, { modelControlGate: true,
       env: { HARNESSD_SERVICE_HEARTBEAT_TIMEOUT_MS: '4000', HARNESSD_SERVICE_STOP_GRACE_MS: '100' } })
