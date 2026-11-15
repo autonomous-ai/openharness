@@ -31,6 +31,7 @@ function setup(over: { buffered?: number; call?: (type: string, payload: Record<
   const backend = vi.fn(async () => ({ status: 200, body: { data: { seen: {} } } }))
   const want = vi.fn()
   const machines = vi.fn()
+  const wifiServing = vi.fn(async () => true)
   const link = createGatewayLink({
     events: heard as unknown as GatewayEvents,
     notify: (frame) => { sent.push(frame.payload as Record<string, unknown>); return writable },
@@ -38,11 +39,11 @@ function setup(over: { buffered?: number; call?: (type: string, payload: Record<
     buffered: () => buffered,
     call,
     start: over.start ?? (() => ({ machineId: 'm1', computerId: 'c1', autonomousEnv: 'prod', signedIn: true })),
-    machines,
+    machines, wifiServing,
     backend, log, now: () => clock, want, ...(over.startWaitMs ? { startWaitMs: over.startWaitMs } : {}),
   })
   return {
-    link, heard, sent, binary, call, backend, log, want, machines,
+    link, heard, sent, binary, call, backend, log, want, machines, wifiServing,
     kinds: () => sent.map((payload) => payload.kind),
     setBuffered: (bytes: number) => { buffered = bytes },
     setWritable: (value: boolean) => { writable = value },
@@ -349,18 +350,12 @@ describe('the gateway in its own process, as the core sees it', () => {
     } finally { vi.useRealTimers() }
   })
 
-  it('carries the Wi-Fi device\'s requests, a refusal as the device\'s local API words it', async () => {
-    let answer: Record<string, unknown> = { result: { devices: [] } }
-    const { link, call } = setup({ call: async () => answer })
-    expect(await link.ops.wifi({ op: 'list' })).toEqual({ result: { devices: [] } })
-    expect(call).toHaveBeenLastCalledWith(GATEWAY_CALLS.wifi, { op: 'list' }, undefined)
-    answer = { refused: { code: 'UNKNOWN_DEVICE', message: 'Device pairing not found' } }
-    expect(await link.ops.wifi({ op: 'pair', device: 'd', code: 'c' })).toEqual({ refused: { code: 'UNKNOWN_DEVICE', message: 'Device pairing not found' } })
-    expect(call).toHaveBeenLastCalledWith(GATEWAY_CALLS.wifi, { op: 'pair', device: 'd', code: 'c' }, PAIR_WAIT_MS)
-    answer = { refused: { code: 7 } }
-    expect((await link.ops.wifi({ op: 'discover' })) as { refused: { code: string } }).toMatchObject({ refused: { code: 'UNAVAILABLE' } })
-    answer = { error: 'SERVICE_UNAVAILABLE' }
-    expect(await link.ops.wifi({ op: 'revoke', id: 'x' })).toMatchObject({ refused: { code: 'UNAVAILABLE' } })
+  it('tells the gateway whether the Wi-Fi device\'s service serves, for its look for devices and its pairing, which wait for it', async () => {
+    const { link, wifiServing } = setup()
+    expect(await link.answer('wifi_serving', {})).toEqual({ serving: true })
+    wifiServing.mockResolvedValueOnce(false)
+    expect(await link.answer('wifi_serving', {})).toEqual({ serving: false })
+    expect(wifiServing).toHaveBeenCalledTimes(2)
   })
 
   it('asks the gateway for Share\'s owner\'s key, and says none is held while it cannot answer', async () => {
@@ -686,7 +681,7 @@ describe('the link\'s defaults', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const link = createGatewayLink({
       events: events() as unknown as GatewayEvents, notify: () => true, notifyBinary: () => true, buffered: () => GATEWAY_BUFFER_LIMIT + 1,
-      call: async () => ({}), start: () => ({}), backend: async () => ({ status: 200, body: {} }),
+      call: async () => ({}), start: () => ({}), backend: async () => ({ status: 200, body: {} }), wifiServing: async () => false,
     })
     link.connected()
     link.port.broadcast({ type: 'text_delta' })

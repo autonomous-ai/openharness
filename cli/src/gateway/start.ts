@@ -10,7 +10,8 @@ import { nodeStatus } from '../lib/nodeStatus.js'
  *   - the relay (gateway/gateway.ts): the backend link, the E2EE manager and its sessions, P2P;
  *   - the windows' own sessions to the owner's other machines (lib/remoteRelay.ts `RemoteRelayPool`);
  *   - the trust group (lib/e2ee/groupSyncer.ts) and the account's device key log (deviceLogSyncer.ts);
- *   - the Wi-Fi device's direct links (lib/autonomous-device/direct.ts), which carry its E2EE sessions;
+ *   - the Wi-Fi device's direct links (lib/autonomous-device/direct.ts), which carry its E2EE sessions, and its
+ *     routes of the door about them (`harness autonomous-device discover`, `pair`, `list`, `status`, `revoke`);
  *   - the daemon's own commands about the keys (`harness pair`, `unpair`, `group`, `devices`, …).
  *
  * The core gives it what it cannot hold itself: its events (`GatewayEvents`) and a few facts that it says again
@@ -24,8 +25,9 @@ import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { createProductUsage } from './productUsage.js'
 import { env } from '../config/env.js'
-import type { GatewayAccount, GatewayEvents, GatewayOps, HttpAnswer, WindowRelay } from '../core/api.js'
+import type { GatewayAccount, GatewayEvents, GatewayOps, HttpAnswer, ServiceRequests, WindowRelay } from '../core/api.js'
 import { AutonomousDeviceDirect } from '../lib/autonomous-device/direct.js'
+import { deviceRefusal, deviceRoutes } from '../lib/autonomous-device/localHttp.js'
 import { startDevicePart } from '../lib/autonomous-device/parts.js'
 import { AuthSessionManager } from '../lib/authRefresh.js'
 import { backendHttpBase } from '../lib/backendHttpBase.js'
@@ -68,12 +70,17 @@ export interface GatewayHost {
   machines?(state: import('../core/api.js').GatewayMachines): void
   /** The account's sign-in as it stood when the core started; `GatewayOps.account` says it again. */
   account: GatewayAccount
+  /** Whether the Wi-Fi device's service serves, its process asked for and waited for a while (core/wifi.ts `serving`):
+   *  its direct links run only while it does. Absent: nothing to wait for. */
+  wifiServing?(): Promise<boolean>
 }
 
 export interface StartedGateway {
   port: RelayGateway
   ops: GatewayOps
   windowRelay: Required<WindowRelay>
+  /** Its routes of the door (core/api.ts `SERVICE_HTTP_ROUTES`), as the core hands them on. */
+  requests: ServiceRequests
   stop(): Promise<void>
 }
 
@@ -431,9 +438,20 @@ export function startGateway(given: GatewayHost): StartedGateway {
     if (!hit || !selector.trim()) return { ok: false, error: 'NOT_FOUND' }
     return { ok: true, pub: hit.pub, label: hit.label, fingerprint: hit.fingerprint }
   }
-  const refusal = (error: unknown): { refused: { code: string; message: string } } =>
-    ({ refused: { code: String((error as { code?: unknown }).code ?? 'INTERNAL'), message: error instanceof Error ? error.message : String(error) } })
   const devicePairs = () => gateway.listPairs().filter((p) => p.role === 'device')
+  /** The direct links, once the Wi-Fi device's service serves: a device they connected to a service that is not there
+   *  would be answered by nothing. Waited for first, as the core asks for that service's process. */
+  const directLink = async (): Promise<AutonomousDeviceDirect> => {
+    if (!direct) await host.wifiServing?.().catch(() => false)
+    if (!direct) throw deviceRefusal('UNAVAILABLE', 'The Wi-Fi device link is not running on this computer: its state could not be read. See the daemon\'s log.')
+    return direct
+  }
+  /** A failure of the links or the pairings without a code of its own is said as an internal one, as it always was. */
+  const coded = async <T>(run: () => T | Promise<T>): Promise<T> => {
+    try { return await run() } catch (error) {
+      throw typeof (error as { code?: unknown } | null)?.code === 'string' ? error : deviceRefusal('INTERNAL', error instanceof Error ? error.message : String(error))
+    }
+  }
   /** The account's machines the connections are sealed for and opened from: the verified log's, neither
    *  suspended nor pending (lib/e2ee/connectorVault.ts). */
   const vaultMachines = (): string[] => devlog.list().members
@@ -507,27 +525,6 @@ export function startGateway(given: GatewayHost): StartedGateway {
       if (r && 'error' in r) return { status: 409, body: { error: r.error } }
       return r ? { status: 200, body: { ...r, applied: confirm } } : { status: 502, body: { error: 'LOG_UNAVAILABLE' } }
     },
-    wifi: async ({ op, device, code, id }) => {
-      try {
-        if (op === 'discover') {
-          if (!direct) throw Object.assign(new Error('The Wi-Fi device link is not running on this computer: its state could not be read. See the daemon\'s log.'), { code: 'UNAVAILABLE' })
-          return { result: { devices: await direct.discover() } }
-        }
-        if (op === 'pair') {
-          if (!direct) throw Object.assign(new Error('The Wi-Fi device link is not running on this computer: its state could not be read. See the daemon\'s log.'), { code: 'UNAVAILABLE' })
-          return { result: await direct.pair(String(device), String(code)) }
-        }
-        if (op === 'pairStatus') {
-          const pending = gateway.pendingPair()
-          return { result: pending?.role === 'device' ? { state: pending.active ? 'running' : 'waiting', pairId: pending.pairId, deviceLabel: pending.label, expiresAt: pending.expiresAt } : { state: 'idle' } }
-        }
-        if (op === 'list') return { result: { devices: devicePairs().map(p => ({ ...p, id: p.fingerprint })) } }
-        if (!devicePairs().some(p => p.fingerprint === id)) throw Object.assign(new Error('Device pairing not found'), { code: 'UNKNOWN_DEVICE' })
-        const result = gateway.revoke(String(id))
-        if (!result.ok) throw Object.assign(new Error(result.error), { code: result.error })
-        return { result: { revoked: 1 } }
-      } catch (error) { return refusal(error) }
-    },
     wifiService: (on) => {
       if (on) { startDirect(); return }
       direct?.stop()
@@ -587,10 +584,35 @@ export function startGateway(given: GatewayHost): StartedGateway {
     },
   }
 
+  // The Wi-Fi device's routes about its pairings and direct links (lib/autonomous-device/localHttp.ts checks them).
+  const requests: ServiceRequests = {
+    gateway_http: deviceRoutes({
+      discover: () => coded(async () => ({ devices: await (await directLink()).discover() })),
+      pairStart: ({ code, device }) => coded(async () => (await directLink()).pair(device, code)),
+      pairStatus: () => coded(() => {
+        const pending = gateway.pendingPair()
+        return pending?.role === 'device' ? { state: pending.active ? 'running' : 'waiting', pairId: pending.pairId, deviceLabel: pending.label, expiresAt: pending.expiresAt } : { state: 'idle' }
+      }),
+      list: () => coded(() => ({ devices: devicePairs().map(p => ({ ...p, id: p.fingerprint })) })),
+      // The sessions on a direct link whose app said hello, each still its identity's device's.
+      status: () => coded(() => {
+        const sessions = gateway.directDeviceSessions()
+        return { transport: 'direct', connected: sessions > 0, paired: devicePairs().length, sessions, proto: 1 }
+      }),
+      revoke: ({ id }) => coded(() => {
+        if (!devicePairs().some(p => p.fingerprint === id)) throw deviceRefusal('UNKNOWN_DEVICE', 'Device pairing not found')
+        const result = gateway.revoke(id)
+        if (!result.ok) throw deviceRefusal(result.error, result.error)
+        return { revoked: 1 }
+      }),
+    }),
+  }
+
   return {
     port: gateway,
     ops,
     windowRelay,
+    requests,
     stop: async () => {
       // Shutdown never waits for the optional disk queue. The stopped collector cannot upload. Its final, clean
       // state is on disk when stop() returns (written synchronously), so a process that exits next keeps it. A write

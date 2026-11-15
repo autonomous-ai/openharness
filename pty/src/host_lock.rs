@@ -93,7 +93,17 @@ mod tests {
         // Another open of the file, in this process or another, cannot have it.
         assert!(take(dir.path()).unwrap().is_none());
         drop(first);
-        assert!(take(dir.path()).unwrap().is_some());
+        // Free again, though not always at once: a test on another thread that starts a process
+        // holds a copy of every open file from its fork to its exec, where O_CLOEXEC closes them,
+        // and the lock stays held by that copy for the moment (pty-checks on #4314, 15 November).
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while take(dir.path()).unwrap().is_none() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the lock was not free 5 s after its holder went"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
     }
 
     #[test]

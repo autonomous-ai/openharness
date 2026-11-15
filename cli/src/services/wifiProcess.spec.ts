@@ -1,8 +1,8 @@
 // The Wi-Fi device in the devices' process (services/wifiProcess.ts): the core API it runs on across its link,
-// built once the core names the machine, what the core tells it reaching its port in order, and the receipt
-// the core asks of it.
+// built once the core names the machine, what the core tells it reaching its port in order, and its routes of the
+// door, which the core hands on.
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { CoreApi, CorePorts, WifiPort } from '../core/api.js'
+import type { CoreApi, CorePorts, ServiceRequests, WifiPort } from '../core/api.js'
 import type { CoreConnection, ServiceProcessOptions } from './process.js'
 import { runWifiService } from './wifiProcess.js'
 
@@ -23,8 +23,6 @@ function wifiPort(machineId: string, log: string[]) {
     request: vi.fn(async (...args: unknown[]) => { await new Promise((resolve) => setTimeout(resolve, 5)); record('request')(...args) }),
     appFocus: vi.fn(async (...args: unknown[]) => { record('appFocus')(...args) }),
     resume: vi.fn(async (...args: unknown[]) => { record('resume')(...args) }),
-    receipt: vi.fn(async () => ({ receipt: null })),
-    addon: vi.fn(async (...args: unknown[]) => { record('addon')(...args); return { result: { devices: [] } } }),
     stop: vi.fn(async () => { log.push(`${machineId} stop`) }),
   }
   return port
@@ -34,13 +32,16 @@ function setup(over: { startThrows?: boolean; leavesOff?: boolean } = {}) {
   const log: string[] = []
   const ports: WifiPort[] = []
   let api!: CoreApi
-  const start = vi.fn((core: CoreApi, given: CorePorts) => {
+  /** Its routes of the door, as each start returned them. */
+  const routes = vi.fn(async (payload: Record<string, unknown>) => ({ status: 200, body: { asked: payload.target } }))
+  const start = vi.fn((core: CoreApi, given: CorePorts): ServiceRequests => {
     if (over.startThrows) throw new Error('journal unreadable')
     api = core
-    if (over.leavesOff) return
+    if (over.leavesOff) return {}
     const port = wifiPort(core.machine.id(), log)
     ports.push(port)
     given.wifi = port
+    return { wifi_http: routes }
   })
   let options!: ServiceProcessOptions
   const stop = vi.fn()
@@ -58,7 +59,7 @@ function setup(over: { startThrows?: boolean; leavesOff?: boolean } = {}) {
   }
   const settled = () => new Promise((resolve) => setTimeout(resolve, 30))
   return {
-    service, start, log, ports, api: () => api, options: () => options, stop, notices, connection, settled,
+    service, start, routes, log, ports, api: () => api, options: () => options, stop, notices, connection, settled,
     answer: (query: string, value: unknown) => { answers = { ...answers, [query]: value } },
     connect: () => options.onConnected!(connection),
     disconnect: () => options.onDisconnected!(),
@@ -233,28 +234,17 @@ describe('the Wi-Fi device in the devices\' process', () => {
     expect(f.notices).toHaveLength(14)
   })
 
-  it('answers the core\'s receipt question once what it said before is heard, and says unavailable with no service', async () => {
+  it('answers its routes of the door once what the core said before is heard, and as down while it is not built', async () => {
     const f = setup()
-    const receipt = f.options().requests!.receipt
-    expect(await receipt({ deviceId: 'd', idempotencyKey: 'k' }, { local: false, owner: false })).toEqual({ error: 'SERVICE_UNAVAILABLE' })
+    const route = f.options().requests!.wifi_http
+    const asker = { local: true, owner: true }
+    const receipt = { method: 'GET', target: '/api/autonomous-device/receipt?deviceId=d&idempotencyKey=k' }
+    // Not answered: the core says what the route says while its service is down (core/api.ts `SERVICE_HTTP_ROUTES`).
+    expect(await route(receipt, asker)).toEqual({ error: 'SERVICE_UNAVAILABLE' })
     f.connect()
     f.event({ kind: 'resume' })
-    expect(await receipt({ deviceId: 'd', idempotencyKey: 'k' }, { local: false, owner: false })).toEqual({ receipt: null })
-    expect(f.ports[0].receipt).toHaveBeenCalledWith('d', 'k')
-  })
-
-  it('answers the core\'s add-on questions once it is built, and refuses an operation it does not know', async () => {
-    const f = setup()
-    const addon = f.options().requests!.addon
-    expect(await addon({ op: 'state', input: {} }, { local: false, owner: false })).toEqual({ error: 'SERVICE_UNAVAILABLE' })
-    f.connect()
-    f.event({ kind: 'resume' })
-    expect(await addon({ op: 'state', input: { deviceId: 'lamp' } }, { local: false, owner: false })).toEqual({ result: { devices: [] } })
-    expect(f.ports[0].addon).toHaveBeenCalledWith('state', { deviceId: 'lamp' })
-    expect(await addon({ op: 'delete', input: {} }, { local: false, owner: false })).toEqual({ error: { code: 'INVALID_REQUEST', message: 'Unknown add-on operation' } })
-    // What is not an object reaches the port as no input at all.
-    await addon({ op: 'proposal', input: ['p'] }, { local: false, owner: false })
-    expect(f.ports[0].addon).toHaveBeenLastCalledWith('proposal', {})
+    expect(await route(receipt, asker)).toEqual({ status: 200, body: { asked: receipt.target } })
+    expect(f.routes).toHaveBeenCalledWith(receipt, asker, undefined)
   })
 
   it('leaves the Wi-Fi device off when its service does not start, and says why', async () => {
@@ -265,7 +255,7 @@ describe('the Wi-Fi device in the devices\' process', () => {
     f.event({ kind: 'turnStarted', agentId: 'a' })
     await f.settled()
     expect(warn).toHaveBeenCalledWith('[wifi] did not start · journal unreadable')
-    expect(await f.options().requests!.receipt({ deviceId: 'd', idempotencyKey: 'k' }, { local: false, owner: false })).toEqual({ error: 'SERVICE_UNAVAILABLE' })
+    expect(await f.options().requests!.wifi_http({ method: 'GET', target: '/api/autonomous-device/addon/state' }, { local: true, owner: true })).toEqual({ error: 'SERVICE_UNAVAILABLE' })
     // A start that leaves its port empty is off too, and is tried again on the next connection.
     const g = setup({ leavesOff: true })
     g.connect()
