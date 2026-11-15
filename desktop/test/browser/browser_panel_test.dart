@@ -147,6 +147,7 @@ void main() {
     WidgetTester tester,
     AgentBrowser? browser, {
     bool thisComputer = true,
+    bool visible = true,
   }) async {
     app.browser(browser);
     await tester.pumpWidget(
@@ -161,6 +162,7 @@ void main() {
               machineId: 'm',
               agentId: 'a1',
               thisComputer: thisComputer,
+              visible: visible,
               onClose: () => closed++,
               newView: () {
                 final view = FakeBrowserView(ready: true);
@@ -334,6 +336,20 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     expect(app.streams.single.frames.last.$1, 'agent_browser_close');
     expect(await app.streams.single.stream.closed, 'closed');
+  });
+
+  testWidgets('a tile out of sight ends its stream, and opens another back '
+      'in sight', (tester) async {
+    await showOpen(tester);
+    await show(tester, ready, visible: false);
+    expect(app.streams.single.frames.last.$1, 'agent_browser_close');
+    expect(key('browser-screen'), findsNothing);
+    await show(tester, ready);
+    expect(app.streams, hasLength(2));
+    app.answer();
+    await tester.pump();
+    await tester.pump();
+    expect(key('browser-screen'), findsOneWidget);
   });
 
   testWidgets('opening a stream reports agent_browser_opened once, with no '

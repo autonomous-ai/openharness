@@ -165,7 +165,9 @@ none of `services/superTabs.ts`, `superTabs/host.ts` and `superTabs/service.ts`,
 ## What leaves, in order
 
 Each line is one pull request or a few, with the test that fails without it, and removes its entry from this
-list. The per-file detail is in [files.tsv](2026-11-12-core-audit/files.tsv), as the audit found it.
+list. The per-file detail is in [files.tsv](2026-11-12-core-audit/files.tsv), as the audit found it. What is left is
+worked through one package at a time, in the order and with the decisions of [the plan](2026-11-15-core-plan.md)
+(15 November), which also says where each package's work is and how to pick it up.
 
 Left since, with the core's process as `src/architecture.coreFiles.txt` lists it after each:
 

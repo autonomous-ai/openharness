@@ -13,9 +13,11 @@ import '../core/models.dart' show SharedHarness;
 /// never be loaded. [companion] and [devices] are built-in native DSH viewers,
 /// derived only after their account's experiment is enabled. A [finder] tile
 /// is a folder on its machine, browsed in place (`lib/finder/`), opened beside
-/// the chat New Harness starts with it; like the other viewers it is never in
-/// the saved layout or the desk.
-enum PaneKind { terminal, web, companion, devices, finder }
+/// the chat New Harness starts with it. A [browser] tile is an agent's own
+/// Chrome (`lib/browser/`), opened from the agent's terminal header or the
+/// palette, or by that browser coming on. Like the other viewers, neither is
+/// ever in the saved layout or the desk.
+enum PaneKind { terminal, web, companion, devices, finder, browser }
 
 /// One tile in the terminal grid.
 ///
@@ -37,8 +39,10 @@ class TerminalPane {
     this.ownerAgentId,
     this.finderRoot,
   }) : assert(
-         kind != PaneKind.web || (agentId == null && ownerAgentId != null),
-         'a web tile belongs to an agent through ownerAgentId, never agentId',
+         (kind != PaneKind.web && kind != PaneKind.browser) ||
+             (agentId == null && ownerAgentId != null),
+         'a web or Browser tile belongs to an agent through ownerAgentId, '
+         'never agentId',
        ),
        assert(
          (kind == PaneKind.finder) == (finderRoot != null) &&
@@ -51,13 +55,15 @@ class TerminalPane {
   bool get isCompanion => kind == PaneKind.companion;
   bool get isDevices => kind == PaneKind.devices;
   bool get isFinder => kind == PaneKind.finder;
-  bool get isViewer => isWeb || isCompanion || isDevices || isFinder;
+  bool get isBrowser => kind == PaneKind.browser;
+  bool get isViewer =>
+      isWeb || isCompanion || isDevices || isFinder || isBrowser;
 
   /// Whether this is [agentId]'s own viewer on [machineId] — its harness's
-  /// page, or the Finder opened with its chat — which lives beside that
-  /// agent's terminal, so it moves and closes with it.
+  /// page, the Finder opened with its chat, or its Browser — which lives
+  /// beside that agent's terminal, so it moves and closes with it.
   bool viewsAgent(String machineId, String? agentId) =>
-      (isWeb || isFinder) &&
+      (isWeb || isFinder || isBrowser) &&
       agentId != null &&
       this.machineId == machineId &&
       ownerAgentId == agentId;
@@ -71,8 +77,8 @@ class TerminalPane {
   String? viewerError;
 
   /// The agent whose viewer this is: a web viewer's harness, a Finder's
-  /// chat. The native companion viewer can exist before its agent starts,
-  /// then follows the selected individual.
+  /// chat, a Browser's agent. The native companion viewer can exist before
+  /// its agent starts, then follows the selected individual.
   /// Kept OFF [agentId]
   /// on purpose — everything that attaches a terminal, persists a layout or
   /// remembers a closed agent keys on [agentId] being set, and none of that
