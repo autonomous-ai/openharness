@@ -54,7 +54,7 @@ vi.mock('../cable/cableFleet.js', async (real) => {
     syncSwarms = recorder('syncSwarms')
     syncMachines = recorder('syncMachines')
     followApp = recorder('followApp')
-    followPrompt = recorder('followPrompt')
+    followLocal = recorder('followLocal')
     replaceNotifications = recorder('replaceNotifications')
     agentSeen = recorder('agentSeen')
     question = recorder('question')
@@ -2150,15 +2150,15 @@ describe('a person\'s prompt in the app in front turns the dial (docs/specs/2026
     expect(await host().sendTurn(ID, 'run the tests')).toEqual({ ok: true })
     expect(await poll).toEqual({ text: 'run the tests' })
   }
-  const asked = () => calls('followPrompt')
+  const asked = () => calls('followLocal')
   const prompts = () => logs.filter((line) => line.startsWith('[device] prompt'))
   const unlinked = (off: boolean) => { (seen.cable as unknown as { connected: boolean }).connected = !off }
 
   it('a person\'s prompt with its app in front asks the dials to follow it', async () => {
     const { port } = await dialWith('orca')
     port.observed(hook('turn-start'))
-    expect(seen.cable.calls).toContainEqual(['followPrompt', [ID]])
-    expect(asked()).toEqual([[ID]])
+    expect(seen.cable.calls).toContainEqual(['followLocal', [ID, 'prompt']])
+    expect(asked()).toEqual([[ID, 'prompt']])
     // What the dials make of it is theirs to count.
     expect(prompts()).toEqual([])
   })
@@ -2177,17 +2177,17 @@ describe('a person\'s prompt in the app in front turns the dial (docs/specs/2026
     expect(asked()).toEqual([])
     port.observed(hook('turn-stop'))
     port.observed(hook('turn-start'))
-    expect(asked()).toEqual([[ID]])
+    expect(asked()).toEqual([[ID, 'prompt']])
     // Codex has no mod: the dial's words are typed into its Orca terminal.
     const codex = { engine: 'codex' as const, sessionId: 'cx-1' }
     port.observed(hook('session-start', codex))
     expect(await host().sendTurn(CODEX, 'run the tests')).toEqual({ ok: true })
     expect(orcaRuns.map(([, args]) => args.slice(0, 2))).toEqual([['terminal', 'send']])
     port.observed(hook('turn-start', codex))
-    expect(asked()).toEqual([[ID]])
+    expect(asked()).toEqual([[ID, 'prompt']])
     port.observed(hook('turn-stop', codex))
     port.observed(hook('turn-start', codex))
-    expect(asked()).toEqual([[ID], [CODEX]])
+    expect(asked()).toEqual([[ID, 'prompt'], [CODEX, 'prompt']])
     expect(prompts()).toEqual(Array(2).fill('[device] prompt · skipped · dial prompt'))
   })
 
@@ -2212,7 +2212,7 @@ describe('a person\'s prompt in the app in front turns the dial (docs/specs/2026
     expect(prompts()).toEqual(['[device] prompt · skipped · not in front'])
     await vi.advanceTimersByTimeAsync(1)
     port.observed(hook('turn-start'))
-    expect(asked()).toEqual([[ID]])
+    expect(asked()).toEqual([[ID, 'prompt']])
   })
 
   it('a pick on the dial does not change which app is in front', async () => {
@@ -2225,13 +2225,13 @@ describe('a person\'s prompt in the app in front turns the dial (docs/specs/2026
     expect(host().pickApp('ghostty')).toBe('switched')
     expect((await host().listAgentSnapshot({ apps: true })).apps?.shown).toBe('ghostty')
     port.observed(hook('turn-start'))
-    expect(asked()).toEqual([[ID]])
+    expect(asked()).toEqual([[ID, 'prompt']])
   })
 
   it('a prompt in the Claude app, with the Claude app in front, asks the dials to follow it', async () => {
     const { port } = await dialWith('claude')
     port.observed(hook('turn-start', { sessionId: 'desk-1', hostHints: { __CFBundleIdentifier: 'com.anthropic.claudefordesktop' } }))
-    expect(asked()).toEqual([[observedAgentId('claude', 'desk-1')]])
+    expect(asked()).toEqual([[observedAgentId('claude', 'desk-1'), 'prompt']])
     // Orca is not in front.
     port.observed(hook('turn-start'))
     expect(asked()).toHaveLength(1)
@@ -2240,9 +2240,17 @@ describe('a person\'s prompt in the app in front turns the dial (docs/specs/2026
 
   it('the dial\'s answer is counted: moved, and no tile', () => {
     start({ faults: ['fleet'] })
-    seen.host.promptFollowed!('moved')
-    seen.host.promptFollowed!('no-tile')
+    seen.host.localFollowed!('prompt', 'moved')
+    seen.host.localFollowed!('prompt', 'no-tile')
     expect(prompts()).toEqual(['[device] prompt · moved', '[device] prompt · skipped · no tile'])
+  })
+
+  it('a follow of a cause with no line writes none', () => {
+    start({ faults: ['fleet'] })
+    const before = logs.length
+    seen.host.localFollowed!('attach', 'moved')
+    seen.host.localFollowed!('attach', 'no-tile')
+    expect(logs.slice(before)).toEqual([])
   })
 
   it('with no dial linked nothing is asked or counted, and the dial\'s prompt is still used up', async () => {
@@ -2254,10 +2262,10 @@ describe('a person\'s prompt in the app in front turns the dial (docs/specs/2026
     unlinked(false)
     // The dial's prompt went with the turn it started while no dial was linked: this one is a person's.
     port.observed(hook('turn-start'))
-    expect(asked()).toEqual([[ID]])
+    expect(asked()).toEqual([[ID, 'prompt']])
     unlinked(true)
     port.observed(hook('turn-start'))
-    expect(asked()).toEqual([[ID]])
+    expect(asked()).toEqual([[ID, 'prompt']])
     expect(prompts()).toEqual([])
   })
 
@@ -2277,8 +2285,8 @@ describe('a person\'s prompt in the app in front turns the dial (docs/specs/2026
     await spokenByMod(port)
     port.observed(hook('turn-start'))
     port.observed(hook('turn-start'))
-    seen.host.promptFollowed!('moved')
-    seen.host.promptFollowed!('no-tile')
+    seen.host.localFollowed!('prompt', 'moved')
+    seen.host.localFollowed!('prompt', 'no-tile')
     front('ghostty')
     await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
     port.observed(hook('turn-start'))
@@ -2289,11 +2297,11 @@ describe('a person\'s prompt in the app in front turns the dial (docs/specs/2026
 
   it('a follow that throws is logged and the devices keep running', async () => {
     const { port } = await dialWith('orca')
-    vi.spyOn(seen.cable as unknown as { followPrompt: (agentId: string) => Promise<void> }, 'followPrompt')
+    vi.spyOn(seen.cable as unknown as { followLocal: (agentId: string, cause: string) => Promise<void> }, 'followLocal')
       .mockRejectedValueOnce(new Error('dial unplugged'))
     port.observed(hook('turn-start'))
     await vi.waitFor(() => expect(logs).toContain('[devices] dial failed · dial unplugged'))
     port.observed(hook('turn-start'))
-    expect(asked()).toEqual([[ID]])
+    expect(asked()).toEqual([[ID, 'prompt']])
   })
 })

@@ -1041,12 +1041,12 @@ describe('the dial that shows one app at a time', () => {
     expect(host.latestFront()).toBe('orca')
   })
 
-  it('promptFollowed reaches the wiring', () => {
-    const promptFollowed = vi.fn()
-    const host = setup(five(), { promptFollowed })
-    host.promptFollowed('moved')
-    host.promptFollowed('no-tile')
-    expect(promptFollowed.mock.calls).toEqual([['moved'], ['no-tile']])
+  it('localFollowed reaches the wiring', () => {
+    const localFollowed = vi.fn()
+    const host = setup(five(), { localFollowed })
+    host.localFollowed('prompt', 'moved')
+    host.localFollowed('tab', 'no-tile')
+    expect(localFollowed.mock.calls).toEqual([['prompt', 'moved'], ['tab', 'no-tile']])
   })
 
   it('knows an agent outside Harness', () => {
