@@ -1,14 +1,20 @@
 /**
- * Workspaces: everything about the folder an agent works in (docs/design/2026-10-03-harnessd.md,
- * "Workspaces"). Here so far: a worktree branch Harness made up takes its session's name. Nothing here removes a worktree:
- * the timer sweep that did (#4166) removed clean, week-idle ones its person had chosen to keep, gitignored files and all.
+ * Workspaces: everything about the folder an agent works in (docs/design/2026-10-03-harnessd.md, "Workspaces"), and the
+ * git it takes, which the core runs none of (the audit of 2026-11-12): the folder a create asks git for (a clone, a
+ * worktree, the folder itself on another branch: lib/gitProjectFolder.ts), a harness's worktree read and removed at a
+ * purge (lib/worktreeDeletion.ts), and a worktree branch Harness made up named after its session. Nothing here removes
+ * a worktree on its own: the timer sweep that did (#4166) removed clean, week-idle ones its person had chosen to keep,
+ * gitignored files and all. Starts, renames and removals in one repository take turns (lib/gitProject.ts
+ * `inRepositoryTurn`), all of them in this process.
  *
  * A service on the core boundary (step 13): it reads the core only through `CoreApi`, and the core
  * reaches it only through `ports.workspaces`.
  */
 import type { CoreApi, CorePorts } from '../core/api.js'
+import { gitFolderAnswer } from '../lib/gitProjectFolder.js'
 import { sid } from '../lib/log.js'
 import { sessionDisplayTitle } from '../lib/registry.js'
+import { inspectWorkspace, removeWorktree, reviewWorktree } from '../lib/worktreeDeletion.js'
 import { forgetScmProject, renameScmProject } from '../scm/scmProjects.js'
 
 export function startWorkspaces(core: CoreApi, ports: CorePorts): void {
@@ -30,5 +36,12 @@ export function startWorkspaces(core: CoreApi, ports: CorePorts): void {
       }).catch(() => {})
     }
   }
-  ports.workspaces = { nameBranches: nameSessionBranches }
+  ports.workspaces = {
+    nameBranches: nameSessionBranches,
+    ready: () => true,
+    prepareFolder: gitFolderAnswer,
+    describeWorkspace: inspectWorkspace,
+    reviewWorktree,
+    removeWorktree,
+  }
 }

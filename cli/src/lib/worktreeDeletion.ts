@@ -1,4 +1,8 @@
-/** Explicit cleanup of a linked Git worktree. Main checkouts and branches are never removed. */
+/**
+ * Explicit cleanup of a linked Git worktree. Main checkouts and branches are never removed. It runs `git` and `du`, so it
+ * runs in the workspaces service (services/workspaces.ts), in the edge host: a purge in the core asks it for the review
+ * and the removal (lib/purgeAgentService.ts), and a review is plain data that crosses the link as it is.
+ */
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { lstat, realpath } from 'node:fs/promises'
@@ -6,7 +10,6 @@ import { basename, dirname, join, resolve, sep } from 'node:path'
 import { createHash } from 'node:crypto'
 import { env } from '../config/env.js'
 import { inRepositoryTurn, insideGitCheckout } from './gitProject.js'
-import type { RegisteredSession } from './registry.js'
 
 const exec = promisify(execFile)
 const within = (parent: string, path: string) => parent === path || path.startsWith(parent + sep)
@@ -27,8 +30,13 @@ export type WorkspaceInspection = {
   canDelete: boolean; reason: string
 }
 
-/** Read-only location and cleanup eligibility. No review token or deletion is created by Inspect. */
-export async function inspectWorkspace(s: RegisteredSession, sessions: readonly RegisteredSession[]): Promise<WorkspaceInspection> {
+/** A harness, as a review of its folder reads it: where it works, and the files of its conversation, which a removal
+ *  never takes with it. */
+export type WorkspaceTarget = { cwd: string | null; transcriptPath?: string | null; codexHome?: string | null; hermesHome?: string | null }
+
+/** Read-only location and cleanup eligibility. No review token or deletion is created by Inspect. [others]: the folders
+ *  every other harness here works in, live or stopped. */
+export async function inspectWorkspace(s: WorkspaceTarget, others: readonly string[]): Promise<WorkspaceInspection> {
   let path: string | null = s.cwd ?? null
   try {
     if (!path) throw new Error('No working folder')
@@ -55,7 +63,7 @@ export async function inspectWorkspace(s: RegisteredSession, sessions: readonly 
     const location = { kind: 'worktree' as const, path, worktreePath: root,
       ...(basename(common) === '.git' ? { mainPath: dirname(common) } : {}) }
     try {
-      const review = await inspectWorktree(s, sessions)
+      const review = await inspectWorktree(s, others)
       return { ...location, worktreePath: review.path, mainPath: review.main, canDelete: true,
         reason: 'Selecting Worktree data in Delete removes this entire worktree folder after confirmation. The main project and branch are kept. Leave Session data unchecked to keep the conversation.' }
     } catch (error) {
@@ -66,7 +74,7 @@ export async function inspectWorkspace(s: RegisteredSession, sessions: readonly 
   }
 }
 
-export async function inspectWorktree(s: RegisteredSession, sessions: readonly RegisteredSession[]): Promise<WorktreeReview> {
+export async function inspectWorktree(s: WorkspaceTarget, others: readonly string[]): Promise<WorktreeReview> {
   if (!s.cwd) throw new Error('This harness has no working folder.')
   if (!(await insideGitCheckout(s.cwd))) throw new Error('No separate worktree. This folder is not a Git worktree.')
   const root = await realpath(await git(s.cwd, ['rev-parse', '--show-toplevel']))
@@ -89,9 +97,8 @@ export async function inspectWorktree(s: RegisteredSession, sessions: readonly R
       throw new Error('Another Git worktree is inside this folder. It cannot be removed here.')
     }
   }
-  for (const other of sessions) {
-    if (other.agentId === s.agentId || !other.cwd) continue
-    const path = await realpath(other.cwd).catch(() => resolve(other.cwd!))
+  for (const other of others) {
+    const path = await realpath(other).catch(() => resolve(other))
     if (within(root, path) || within(path, root)) throw new Error('Another harness uses this worktree or an overlapping folder. Its files must be kept.')
   }
   for (const protectedPath of [env.ADAPTER_DATA_DIR, env.CLAUDE_PROJECTS_DIR, env.CODEX_HOME,
@@ -116,11 +123,24 @@ export async function inspectWorktree(s: RegisteredSession, sessions: readonly R
     dev: folder.dev, ino: folder.ino }
 }
 
-export async function removeReviewedWorktree(review: WorktreeReview, s: RegisteredSession, sessions: readonly RegisteredSession[], discardChanges: boolean): Promise<void> {
-  const current = await inspectWorktree(s, sessions)
+export async function removeReviewedWorktree(review: WorktreeReview, s: WorkspaceTarget, others: readonly string[], discardChanges: boolean): Promise<void> {
+  const current = await inspectWorktree(s, others)
   if (current.path !== review.path || current.dev !== review.dev || current.ino !== review.ino || current.signature !== review.signature) {
     throw new Error('The worktree or its changes changed. Review it again before deleting.')
   }
   if (current.dirty && !discardChanges) throw new Error('Confirm discarding the listed uncommitted files before deleting this worktree.')
   await inRepositoryTurn(current.main, () => git(current.main, ['worktree', 'remove', ...(current.dirty && discardChanges ? ['--force'] : []), '--', current.path]))
+}
+
+/** [inspectWorktree] as the workspaces service answers it (core/api.ts `WorkspacesPort.reviewWorktree`): a refusal is an
+ *  answer in its own words, never a throw, which would count against the service. */
+export async function reviewWorktree(s: WorkspaceTarget, others: readonly string[]): Promise<{ ok: true; review: WorktreeReview } | { ok: false; reason: string }> {
+  try { return { ok: true, review: await inspectWorktree(s, others) } }
+  catch (error) { return { ok: false, reason: error instanceof Error ? error.message : 'The worktree could not be verified.' } }
+}
+
+/** [removeReviewedWorktree], answered the same way (`WorkspacesPort.removeWorktree`). */
+export async function removeWorktree(review: WorktreeReview, s: WorkspaceTarget, others: readonly string[], discardChanges: boolean): Promise<{ ok: true } | { ok: false; reason: string }> {
+  try { await removeReviewedWorktree(review, s, others, discardChanges); return { ok: true } }
+  catch (error) { return { ok: false, reason: error instanceof Error ? error.message : 'The worktree could not be deleted.' } }
 }

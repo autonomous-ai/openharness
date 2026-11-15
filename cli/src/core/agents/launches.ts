@@ -10,9 +10,9 @@
  */
 import { readdir, rmdir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { dirname, isAbsolute } from 'node:path'
+import { dirname, isAbsolute, join, sep } from 'node:path'
 import type { BackendSocket } from '../../backendSocket.js'
-import type { Asker } from '../api.js'
+import { WORKSPACES_OFF, type Asker, type WorkspacesPort } from '../api.js'
 import { installedDsh } from '../../dsh/installed.js'
 import { DSH_ID_RE, dshSupportedEngines } from '../../dsh/manifest.js'
 import { homeIsAbsolute } from '../../engines/kit/homeAdoption.js'
@@ -32,7 +32,7 @@ import {
 import { parseGridLaunchOverride, type GridLaunchOverride } from '../../lib/gridLaunchWire.js'
 import { parseLaunchModel } from '../../lib/launchModel.js'
 import { parseNewAgentModel, type NewAgentModel } from '../../lib/newAgentModel.js'
-import { parseProjectFolder, prepareProjectFolder, projectsRoot, ProjectFolderError, RepositoryAccessError, type ProjectFolder } from '../../lib/projectFolder.js'
+import { parseProjectFolder, prepareNewFolder, projectsRoot, ProjectFolderError, type ProjectFolder } from '../../lib/projectFolder.js'
 import type { ScmLaunchRecord } from '../../scm/types.js'
 import { parentAgentIdOf, type RegisteredSession } from '../../lib/registry.js'
 import { buildHarnessSessionLabel } from '../../lib/harnessSessionLabel.js'
@@ -83,12 +83,25 @@ export interface LaunchRequestDeps {
   guestCreate?: () => GuestCreate | null
   /** Whether a `claudeHome` is a Claude profile of this machine (lib/claudeProfiles.ts claudeHomeListed); absent, any is. */
   claudeHomeListed?: (claudeHome: string) => boolean
+  /** Workspaces, which make the folder a create asks git for (a clone, a worktree, the folder itself on another branch):
+   *  the core runs no git. Null while they are off. */
+  workspaces: () => WorkspacesPort | null
 }
 
 type Reply = (result: Record<string, unknown>) => void
 type CreateInput = Parameters<CreateAgent>[0]
 
-export function createLaunchRequests({ receipts, createAgent, prepareCreate, prepareEngine, forkAgent, resumeAgent, restartAgent, byAgent, stoppedAgent, toProject, modelTarget, guestCreate, claudeHomeListed }: LaunchRequestDeps) {
+/** What a create says while workspaces cannot make its folder: held, as a launch waiting for a model is, and continued
+ *  once they can. A restart of the edge host takes a few seconds; a create asked then waits for it rather than failing. */
+const WORKSPACES_HOLD = { service: 'workspaces', detail: 'Waiting for Harness\'s workspaces service to make the project folder. This request is saved and will continue when it is available.' }
+
+/** Whether [folder] is inside [parent], not [parent] itself. */
+const inside = (parent: string, folder: string): boolean => folder.startsWith(parent.endsWith(sep) ? parent : parent + sep)
+
+export function createLaunchRequests({ receipts, createAgent, prepareCreate, prepareEngine, forkAgent, resumeAgent, restartAgent, byAgent, stoppedAgent, toProject, modelTarget, guestCreate, claudeHomeListed, workspaces }: LaunchRequestDeps) {
+  /** Git's folders wait for workspaces to be there: asked before a create's effect is claimed, so one held for it is
+   *  never a launch that failed. */
+  const folderWaits = (projectFolder: ProjectFolder | null): boolean => !!projectFolder && projectFolder.source !== 'new' && !workspaces()?.ready()
   const validateInstalled = async (input: CreateInput, known?: ReturnType<typeof installedDsh>): Promise<{ error: string; detail: string } | null> => {
     if (input.dsh) {
       const installed = known ?? installedDsh(input.dsh)
@@ -115,31 +128,38 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     let scmLaunchRecord: ScmLaunchRecord | null = null
     /** The SSH alias a clone got in through, which the apps tell the person: it is the account later pushes go as. */
     let clonedVia: { alias: string } | undefined
-    if (projectFolder) {
-      try {
-        preparedFolder = await prepareProjectFolder(projectFolder, { label: (dsh ? installedDsh(dsh)?.manifest.name : null) ?? engineLabel(input.engine),
-          onPrepared: prepared => { scmLaunchRecord = prepared.scmLaunchRecord },
-          // The person's own start may try every way this computer reaches GitHub.
-          ...(projectFolder.source === 'remote' ? { cloneFallback: true,
-            onCloned: (clone: { alias?: string }) => { if (clone.alias) clonedVia = { alias: clone.alias } } } : {}) })
-        if (projectFolder.source === 'new') made = preparedFolder
-      }
+    if (projectFolder?.source === 'new') {
+      try { made = preparedFolder = await prepareNewFolder(projectFolder, { label: (dsh ? installedDsh(dsh)?.manifest.name : null) ?? engineLabel(input.engine) }) }
       catch (error) {
         return { state: 'failed', error: error instanceof ProjectFolderError ? error.code : 'PROJECT_PREPARATION_FAILED',
           detail: error instanceof ProjectFolderError ? error.message : 'Could not prepare the project folder.',
           // The folder a typed name found already there: the apps offer to start in it, and `harness new` names it.
-          ...(error instanceof ProjectFolderError && error.folder ? { existingFolder: error.folder } : {}),
-          // GitHub refused every way in: the apps say "No access" in their own words rather than git's.
-          ...(error instanceof RepositoryAccessError ? { access: 'denied' as const } : {}) }
+          ...(error instanceof ProjectFolderError && error.folder ? { existingFolder: error.folder } : {}) }
       }
+    } else if (projectFolder) {
+      // Git's work, in the edge host (services/workspaces.ts). The person's own start may try every way this computer
+      // reaches GitHub.
+      const prepared = await (workspaces() ?? WORKSPACES_OFF).prepareFolder(projectFolder, { cloneFallback: true })
+      if (!prepared.ok) {
+        return { state: 'failed', error: prepared.error, detail: prepared.detail,
+          // GitHub refused every way in: the apps say "No access" in their own words rather than git's.
+          ...(prepared.access ? { access: prepared.access } : {}) }
+      }
+      preparedFolder = prepared.cwd
+      scmLaunchRecord = prepared.scmLaunchRecord ?? null
+      if (prepared.clonedVia) clonedVia = prepared.clonedVia
+    }
+    if (projectFolder && preparedFolder) {
       // Only a folder this daemon just made EMPTY is one the engine need not ask about. A clone or
       // the person's own repo is theirs to answer for (engines/kit/folderTrust.ts); a worktree gets only
-      // the answer its source repo already has. `branch` IS the source folder: nothing to record.
+      // the answer its source repo already has, and only where Harness makes worktrees: the folder is workspaces'
+      // word, and a trust recorded above anything else would cover every repository under it. `branch` IS the
+      // source folder: nothing to record.
       try {
         // A Codex agent on its own profile reads its trust from that profile's config.toml, not ~/.codex.
         const engineTrust = folderTrust(input.engine, input.codexHome ?? input.claudeHome ?? null)
         if (engineTrust && (projectFolder.source === 'new'
-          || (projectFolder.source === 'worktree' && engineTrust.trusts(projectFolder.gitSource)))) {
+          || (projectFolder.source === 'worktree' && inside(join(projectsRoot(), 'worktrees'), preparedFolder) && engineTrust.trusts(projectFolder.gitSource)))) {
           engineTrust.record(preparedFolder)
         }
       } catch (error) { console.warn(`[agent] pre-trust ${preparedFolder} · ${error instanceof Error ? error.message : error}`) }
@@ -212,6 +232,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
           if (engine.refusal) return refused({ error: engine.refusal, detail: engine.detail })
           held(engine); return null
         }
+        if (folderWaits(projectFolder)) { authority.hold(WORKSPACES_HOLD); return null }
         const invoke: CreateAgent = async (prepared) => {
           const ready = await prepareCreate(prepared, { ...authority, label }, { local })
           return ready.ok ? ready.dispatch() : { ok: false, error: ready.error, ...(ready.detail ? { detail: ready.detail } : {}) }
@@ -248,7 +269,9 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     const target = await modelTarget(selection)
     if (!target) return null
     input.grid = target
-    return () => executeCreate(input, (saved.projectFolder ?? null) as ProjectFolder | null, saved.local as boolean, invoke)
+    const projectFolder = (saved.projectFolder ?? null) as ProjectFolder | null
+    if (folderWaits(projectFolder)) { authority.hold(WORKSPACES_HOLD); return null }
+    return () => executeCreate(input, projectFolder, saved.local as boolean, invoke)
   } })
 
   /** Recover by stable runtime identity; a deleted agent must never become a fresh launch. */
