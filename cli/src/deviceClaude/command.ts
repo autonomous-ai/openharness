@@ -1,9 +1,10 @@
 /**
  * `harness device claude …`: the menu-bar app's status, enable and disable, and two words the harness-device plugin runs
- * that a person never types: `asked` (its PermissionRequest hook) and `link` (its mod, for the daemon's socket). This
- * runs only in the `harness` command's own process; nothing the core or a service loads imports this folder.
+ * that a person never types: `asked` (its PermissionRequest hook) and `link` (its mod, for the daemon's socket and the
+ * devices' listener's). This runs only in the `harness` command's own process; nothing the core or a service loads imports this folder.
  */
-import { localSocketRoute } from '../lib/localTransport.js'
+import { devicesListenerPath } from '../devices/listenerPath.js'
+import { localSocketRoute, socketIsPrivate } from '../lib/localTransport.js'
 import { daemonPost, runAsked } from './asked.js'
 import { claudeDisable, claudeEnable, claudePluginOn, claudeSettingsPath, claudeStatus, type ClaudeRun } from './plugin.js'
 
@@ -53,7 +54,10 @@ export async function runDeviceCommand(argv: string[], deps: DeviceDeps): Promis
       // there is none (Windows), or the plugin is off, no answer, and the mod tries again later.
       const socketPath = localSocketRoute(deps.dataDir, deps.port, deps.platform)
       if (!socketPath || !claudePluginOn(claudeSettingsPath())) return 1
-      deps.out(JSON.stringify({ socketPath }))
+      // The mod posts its session id to the devices' listener: handed only when that socket is this account's own, never
+      // one another account made or can reach. None there (Windows, no dial yet): left out, and the mod sends nothing.
+      const devicesSocket = devicesListenerPath(deps.dataDir, deps.platform)
+      deps.out(JSON.stringify(devicesSocket && socketIsPrivate(devicesSocket) ? { socketPath, devicesSocket } : { socketPath }))
       return 0
     }
     default:
