@@ -131,6 +131,7 @@ function setup(over: Partial<AttachDeps> = {}) {
     } as AttachDeps['runtimeProfiles'],
     captureTerminal: vi.fn(async () => 'pane'),
     emit: vi.fn(),
+    tokenUsage: { changed: vi.fn() },
     announceTurnAborted: vi.fn(),
     questionWatcher: { start: vi.fn() },
     terminalLabel: () => 'tmux:%0',
@@ -1529,6 +1530,62 @@ describe('attaching a session', () => {
         expect(log.mock.calls).toEqual([['[agent] claude-a attach retry failed: probe failed']])
         expect(vi.getTimerCount()).toBe(0)
       })
+    })
+  })
+
+  // An agent's usage is first read when its row is first listed, and again only when a line is delivered live
+  // (ingest.ts). A line already in the transcript when the attach reads it is folded as history, so the usage stayed
+  // as it was read before that line: unset, for good, in e2e/usageProcess.e2e.ts, "explicit inline usage follows the
+  // same aggregate boundary", 6 runs of 6 on a loaded Mac (2026-11-15), where a session's first read came after the
+  // test's write.
+  describe('reading the usage again after it folded a transcript', () => {
+    const asked = (run: { deps: AttachDeps }) => vi.mocked(run.deps.tokenUsage.changed)
+
+    it.each(['claude', 'pi'] as const)('asks once for each attach that folded what a %s transcript held, and never for one that only makes sure the tail runs', async engine => {
+      const run = setup(), row = session(engine, transcript([engine === 'claude' ? CLAUDE_PROMPT : { events: [started()], open: true }]))
+      expect(await run.attach.attachSession(row)).toBe(true)
+      expect(asked(run)).toHaveBeenCalledExactlyOnceWith(row)
+      // The session has its normalizer now: this attach folds nothing.
+      expect(await run.attach.attachSession(row)).toBe(true)
+      expect(run.deps.watcher.addSession).toHaveBeenLastCalledWith(expect.objectContaining({ sessionId: row.sessionId }), { fromStart: false })
+      expect(asked(run)).toHaveBeenCalledOnce()
+      // A reset folds the transcript again.
+      expect(await run.attach.attachSession(row, true)).toBe(true)
+      expect(asked(run)).toHaveBeenCalledTimes(2)
+    })
+
+    it('asks once for an attach whose engine worker read content, and not for one whose worker read none', async () => {
+      const p = remoteSetup(), s = session('claude', '/private/transcript')
+      expect(await p.attach.attachSession(s)).toBe(true)
+      expect(asked(p)).toHaveBeenCalledExactlyOnceWith(s)
+      const none = remoteSetup()
+      vi.mocked(none.remote.prepare).mockResolvedValueOnce({ ...none.candidate, records: 0, content: false } as PreparedLive)
+      expect(await none.attach.attachSession(s, true)).toBe(true)
+      expect(none.normalizers.liveParsers.get(s.sessionId)).toBe(none.handle)
+      expect(asked(none)).not.toHaveBeenCalled()
+    })
+
+    it('does not ask for an attach that folded nothing: an empty transcript, even one replayed as a first turn, no transcript, or a store', async () => {
+      const run = setup(), empty = session('claude', transcript([]))
+      expect(await run.attach.attachSession(empty, false, false, true)).toBe(true)
+      expect(run.attach.replayedFirstTurn.has(empty.sessionId)).toBe(true)
+      expect(await run.attach.attachSession(session('pi'))).toBe(true)
+      expect(await run.attach.attachSession(session('opencode'))).toBe(true)
+      expect(run.normalizers.hasState('opencode-s')).toBe(true)
+      expect(asked(run)).not.toHaveBeenCalled()
+    })
+
+    it.each(['a pane that is gone', 'a read that was superseded', 'a binding that changed while its tail was started'] as const)('does not ask for an attach that returns early: %s', async early => {
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const run = setup(), row = session('claude', transcript([CLAUDE_PROMPT]))
+      if (early === 'a pane that is gone') vi.mocked(run.deps.terminalGone).mockResolvedValueOnce(true)
+      if (early === 'a read that was superseded') vi.mocked(run.deps.runtimeProfiles.beginHydrate).mockReturnValueOnce({ ...run.profile, commitWith: () => false })
+      // The transcript was folded and its parser installed by then: the attach is no longer the binding's, and says nothing for it.
+      if (early === 'a binding that changed while its tail was started') vi.mocked(run.deps.watcher.addSession).mockImplementationOnce(async () => { bindings.set(row.agentId, { ...row, boundAt: 2 }) })
+      expect(await run.attach.attachSession(row)).toBe(early === 'a read that was superseded')
+      expect(asked(run)).not.toHaveBeenCalled()
+      run.attach.forget(row.sessionId)
     })
   })
 })
