@@ -99,3 +99,24 @@ Profile before optimizing. Root reserves a quiet machine window for matched befo
 latency, CPU and memory measurements on the same Node version, private home and fixture. Keep a failing
 measurement visible; do not replace it with an unrelated faster workload. Root owns independent review,
 publication, integration and merge.
+
+## Profile-backed getter correction
+
+The fixed six-run ten-agent comparison measured profile-phase core CPU at 0.77/0.77/0.68 s on the
+parent and 0.83/0.83/0.84 s on the candidate. This regression is the optimization's red evidence.
+Exact-phase diagnostic sampling attributes new work to repeated binding serialization in the
+selected-model and workspace getters: each compares the live registry object to itself, then
+`byId`/`valid` serializes that same current binding again to check the accepted View.
+
+Within one synchronous getter call, compare the caller object with the freshly resolved registry
+object first. The same object cannot have a different binding from itself during that comparison.
+A copied caller still requires the full existing binding comparison. In both cases `byId`/`valid`
+remains unchanged and independently compares the current full identity against the saved View on
+every call. No identity is retained between calls, no binding field is removed, and the display
+identity never gains authority. Native/route mutations on the same object and old copied callers
+remain covered, as do the existing hold/evidence-revision, ABA and delayed-control tests.
+
+Growth, storage, migration, audience, platform and failure contracts are unchanged; this adds no
+cache, timer, process, protocol or dependency. The getter guard tests are preservation coverage;
+an unsafe shortcut is a mutation check, not a pre-fix production failure. After scoped checks and
+bundled acceptance, repeat the same fixed comparison under a newly reserved quiet interval.

@@ -45,6 +45,34 @@ function setup() {
 afterEach(() => { active.splice(0).forEach(s => s.stop()); liveActive.splice(0).forEach(l => void l.stop()); vi.useRealTimers(); vi.restoreAllMocks() })
 
 describe('core runtime profile authority', () => {
+  it.each(['native', 'process', 'route', 'hold', 'revision', 'hold-cycle'] as const)(
+    'rechecks displayed facts after a live registry object changes: %s', async change => {
+      const t = setup(); t.s.runtimes = [{ backend: 'tmux', paneId: '%1' }]
+      await t.seed(); t.sessions.evidence(t.s, [{ workspace: '/accepted-workspace' }])
+      const copied = structuredClone(t.s), selected = profile(t.s, 'old', 'low').id
+      for (const caller of [t.s, copied]) {
+        expect(t.sessions.selectedModel(caller)).toBe(selected)
+        expect(t.sessions.workspace(caller)).toBe('/accepted-workspace')
+      }
+      if (change === 'native') t.s.sessionId = 'replacement-conversation'
+      if (change === 'process') t.s.processIdentity = { pid: 2, executable: 'claude', startMarker: 'new' }
+      if (change === 'route') t.s.runtimes[0]!.paneId = '%2'
+      if (change === 'hold' || change === 'hold-cycle') {
+        t.s.identityHold = 'Waiting for interpretation.'; t.s.evidenceRevision = 1
+      }
+      if (change === 'revision') t.s.evidenceRevision = 1
+      if (change === 'hold-cycle') {
+        expect(t.sessions.selectedModel(t.s)).toBe(selected)
+        delete t.s.identityHold; t.s.evidenceRevision = 2
+      }
+      const retained = change === 'hold' || change === 'revision' || change === 'hold-cycle'
+      expect(t.sessions.selectedModel(t.s)).toBe(retained ? selected : null)
+      expect(t.sessions.workspace(t.s)).toBe(retained ? '/accepted-workspace' : null)
+      expect(t.sessions.selectedModel(copied)).toBeNull()
+      expect(t.sessions.workspace(copied)).toBeNull()
+    },
+  )
+
   it.each(['engine', 'native', 'process', 'route', 'codexHome', 'hermesHome', 'cwd', 'transcript'] as const)(
     'does not retain displayed profile facts after a held %s replacement', async changed => {
       const t = setup(); await t.seed()
