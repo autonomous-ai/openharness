@@ -52,7 +52,7 @@ The roadmap's `list/events/send/focus/capabilities` maps like this:
 | Roadmap | Where |
 |---|---|
 | `list` / `events` | the source: `HostSource.list`, `ObservedSource.onChange` |
-| `send` | the source decides whether the agent may take words now (live, not waiting, not busy); the adapter types them (`type`); the Claude Code mod stays the source's agent-layer route |
+| `send` | the source decides whether the agent may take words now (live, not waiting, not busy); the adapter types them (`type`); the Claude Code mod and `codex queue` stay the source's agent-layer routes |
 | `focus` | the adapter's `focus`, then the app by bundle id (`open.ts`) |
 | `capabilities` | the source from its adapters: `canType`, `canFocus`, `canShow` |
 
@@ -130,7 +130,7 @@ pane it left (PM, 2026-11-15).
 - the one tap at a time per agent;
 - the fallback line when a pane's own focus fails.
 
-`ObservedActions` shrinks to the adapters, the mod's two members, the bundle opener and `count`. The `ShownPane` union,
+`ObservedActions` shrinks to the adapters, the mod's two members, the Codex queue's, the bundle opener and `count`. The `ShownPane` union,
 `paneHandle`/`shownPane` and the per-app `switch` statements go.
 
 Every command line, argument, timeout, one-at-a-time guard, refusal sentence and log line stays byte for byte as it is.
@@ -234,8 +234,10 @@ byte" above.
 
 ## Out of scope
 
-- Any wave 1 adapter: Orca `worktree ps` listing, herdr's socket, `codex queue`, `codex://`, the tmux check. Also an
-  agent-route interface for the mod (it gets one when Codex brings a second route).
+- Any wave 1 adapter: Orca `worktree ps` listing, herdr's socket, `codex://`, the tmux check.
+- An agent-route interface. `codex queue` (#4334, merged while this was built) is the second agent-layer route beside
+  the Claude Code mod. Both stay checks inside `ObservedSource`, asked before any pane, as `main` has them. The
+  interface comes with a third route, or when another source needs them (PM, 2026-11-15).
 - `cable_features`: capabilities stay per agent.
 - Harness Pro firmware; flashing any dial; a release.
 - The tmux pane a person opened outside Harness, which the core does not adopt: its hooks reach neither the core's
