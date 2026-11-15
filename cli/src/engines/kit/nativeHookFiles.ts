@@ -300,6 +300,8 @@ export interface HookPreparationOptions {
   timeoutMs?: number
   /** Immutable effect claims must let a competing publisher finish. */
   retainConflicts?: boolean
+  /** A native launch may wait once for revoked work to actually release its destinations. */
+  settleConflicts?: boolean
   /** Evidence retained by this launch; never a global success cache. */
   confirmed?(proof: HookPreparationProof): void
 }
@@ -310,7 +312,7 @@ export interface HookPreparationFiles {
   directory(path: string, mode: number | undefined, attempt: HookPreparationAttempt): void
   write(file: string, text: string, mode: number, attempt: HookPreparationAttempt): Promise<void>
 }
-interface PendingPreparation { identity?: string; keys: string[]; revoke(): void; reply: Promise<unknown>; waiters: number; proof?: HookPreparationProof }
+interface PendingPreparation { identity?: string; keys: string[]; revoke(): void; reply: Promise<unknown>; settled: Promise<void>; waiters: number; proof?: HookPreparationProof }
 function preparationProof(files: readonly string[], verifyRoutes: () => void): HookPreparationProof {
   verifyRoutes()
   const confirmed = files.map(file => {
@@ -348,6 +350,23 @@ async function joinPreparation<T>(pending: PendingPreparation, options: HookPrep
     options.confirmed?.(proof)
     return result as T
   } finally { clearTimeout(timer); pending.waiters-- }
+}
+/** Waiting grants no publication proof: the caller must acquire and capture its own reservation afterward. */
+async function settlePreparations(conflicts: PendingPreparation[], options: HookPreparationOptions, verifyRoutes: () => void, deadline: number): Promise<void> {
+  verifyRoutes()
+  if (options.current?.() === false) throw new HookPreparationHeld('the waiting owner changed')
+  if (performance.now() >= deadline) throw new HookPreparationHeld('the preparation exceeded its deadline')
+  if (conflicts.some(pending => pending.waiters >= 16)) throw new HookPreparationHeld('the preparation waiters are occupied')
+  for (const pending of conflicts) { pending.waiters++; pending.revoke() }
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    await Promise.race([Promise.all(conflicts.map(pending => pending.settled)), new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new HookPreparationHeld('the preparation exceeded its deadline')), deadline - performance.now())
+    })])
+    verifyRoutes()
+    if (options.current?.() === false) throw new HookPreparationHeld('the waiting owner changed')
+    if (performance.now() >= deadline) throw new HookPreparationHeld('the preparation exceeded its deadline')
+  } finally { clearTimeout(timer); for (const pending of conflicts) pending.waiters-- }
 }
 const pendingPreparations = new Set<PendingPreparation>()
 const MAX_PREPARATIONS = 16
@@ -392,17 +411,24 @@ export function hookPreparationRoutes(files: readonly string[]): { verify(): voi
 /** Disk waits remain in eager core code. Reservations survive a timeout until
  * actual I/O settles: a late fsync must never use a closed, recycled descriptor. */
 export async function runHookPreparation<T>(files: readonly string[], work: (attempt: HookPreparationAttempt) => Promise<T>, options: HookPreparationOptions = {}): Promise<T> {
+  const deadline = performance.now() + (options.timeoutMs ?? 5_000)
   const { verify: verifyRoutes, keys } = hookPreparationRoutes(files)
   const conflicts = [...pendingPreparations].filter(pending => pending.keys.some(key => keys.includes(key)))
   if (conflicts.length) {
     const same = conflicts.length === 1 && options.identity !== undefined && conflicts[0].identity === options.identity
       && JSON.stringify(conflicts[0].keys) === JSON.stringify(keys)
     if (same) return await joinPreparation<T>(conflicts[0], options, verifyRoutes, files)
-    if (!options.retainConflicts) for (const pending of conflicts) pending.revoke()
-    throw new HookPreparationHeld('another preparation still owns these destinations')
+    if (options.settleConflicts && !options.retainConflicts) {
+      await settlePreparations(conflicts, options, verifyRoutes, deadline)
+      if ([...pendingPreparations].some(pending => pending.keys.some(key => keys.includes(key)))) {
+        throw new HookPreparationHeld('another preparation still owns these destinations')
+      }
+    } else {
+      if (!options.retainConflicts) for (const pending of conflicts) pending.revoke()
+      throw new HookPreparationHeld('another preparation still owns these destinations')
+    }
   }
   if (pendingPreparations.size >= MAX_PREPARATIONS) throw new HookPreparationHeld('the disk preparation slots are occupied')
-  const deadline = performance.now() + (options.timeoutMs ?? 5_000)
   let revoked = false
   const cancellations = new Set<() => void>()
   const revoke = () => { revoked = true; for (const cancel of [...cancellations]) cancel() }
@@ -441,7 +467,7 @@ export async function runHookPreparation<T>(files: readonly string[], work: (att
   }
   directoryFlushes.set(attempt, { flushed: new Set(), changes: 0 })
   let timer: ReturnType<typeof setTimeout> | undefined
-  const pending: PendingPreparation = { identity: options.identity, keys, revoke, reply: Promise.resolve(), waiters: 0 }
+  const pending: PendingPreparation = { identity: options.identity, keys, revoke, reply: Promise.resolve(), settled: Promise.resolve(), waiters: 0 }
   pendingPreparations.add(pending)
   // Dispatch only after the reservation is visible. A timeout ends the caller's
   // wait; the finally below runs only when the actual work (and its FDs) finishes.
@@ -461,8 +487,9 @@ export async function runHookPreparation<T>(files: readonly string[], work: (att
     pendingPreparations.delete(pending)
     clearTimeout(timer)
   })
+  pending.settled = actual.then(() => {}, () => {})
   pending.reply = Promise.race([actual, new Promise<never>((_, reject) => {
-    timer = setTimeout(() => { revoke(); reject(new HookPreparationHeld('disk confirmation exceeded its deadline')) }, options.timeoutMs ?? 5_000)
+    timer = setTimeout(() => { revoke(); reject(new HookPreparationHeld('disk confirmation exceeded its deadline')) }, Math.max(0, deadline - performance.now()))
   })])
   return await pending.reply as T
 }

@@ -204,7 +204,7 @@ export async function inspectNativeLaunch(engine: AgentEngine, source: NativeLau
         if (Object.entries(chosen).some(([key, path]) => key !== 'PATH' && path && (!isAbsolute(path) || path.includes('\0') || path.length > 4096))) return false
         const homes = nativeHookLocations(chosen)
         const confirmed: HookPreparationProof[] = []
-        const options: NativeHookOptions = { environment: chosen, setup,
+        const options: NativeHookOptions = { environment: chosen, setup, settleConflicts: true,
           current: () => preparing && revision === attemptRevision && executable.current() && owner() && dependenciesCurrent(),
           confirmed: proof => confirmed.push(proof) }
         const home = engine === 'codex' ? homes.CODEX_HOME : engine === 'claude' ? homes.CLAUDE_HOME : homes.HERMES_HOME

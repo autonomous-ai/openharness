@@ -71,5 +71,13 @@ it('preserves the original vendor, adopted-home and refusal coordination', async
     }
   } finally { Object.defineProperty(process, 'platform', originalPlatform) }
   if (process.env.RECORD_HOOK_STARTUP_GOLDEN === '1') writeFileSync(artifact, JSON.stringify(record, null, 2) + '\n')
-  expect(record).toEqual(JSON.parse(readFileSync(artifact, 'utf8')))
+  // Default maintenance now awaits each bounded setup request. Home adoption still runs independently;
+  // preserve both dispatch orders and every argument, without pinning their former interleaving.
+  const dispatches = (value: typeof record) => Object.fromEntries(Object.entries(value).map(([platform, cases]) => [platform,
+    Object.fromEntries(Object.entries(cases as Record<string, { calls: unknown[][] }>).map(([name, snapshot]) => [name,
+      { ...snapshot, calls: snapshot.calls.filter(call => call[2] === '<default-home>'),
+        adopted: snapshot.calls.filter(call => call[2] !== '<default-home>') },
+    ])),
+  ]))
+  expect(dispatches(record)).toEqual(dispatches(JSON.parse(readFileSync(artifact, 'utf8'))))
 })

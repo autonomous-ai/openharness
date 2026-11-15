@@ -14,7 +14,7 @@ export type NotifyEngine = 'claude' | 'codex' | 'cursor' | 'hermes' | 'commandco
 
 // notify.mjs location depends on the layout (import.meta.url is the REAL executing file at runtime):
 //  - packaged/bundled: cli.js at ~/.harness/cli/cli.js → notify.mjs is a SIBLING (dist/ bundle too).
-//  - a core started from the lean bundle (leanEntry.ts): its file is lean/<sha>/ in the data folder, which
+//  - a core or service started from the lean bundle (leanCoreEntry.ts / leanEntry.ts): its file is lean/<sha>/ in the data folder, which
 //    holds no notify.mjs, and its script (process.argv[1]) is the cli.js it was read from: the sibling of that.
 //  - dev/per-file:      notifyHooks.js at <appRoot>/{src,dist}/engines/kit/ → ../../../hook/notify.mjs.
 // Prefer the sibling, fall back to the dev path.

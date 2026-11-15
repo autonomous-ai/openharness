@@ -1,11 +1,17 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, expect, it } from 'vitest'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import * as hooks from './nativeHookSetup.js'
 import { prepareNativeHookFiles } from '../services/nativeSetupFiles.js'
 import type { NativeHookInput, NativeHookCandidate } from './kit/nativeHookWire.js'
+import { inspectNativeLaunch } from './nativeLaunch.js'
+import { captureLaunchExecutable } from './kit/launchExecutable.js'
+import { installEngineHooks } from '../core/engines/hooks.js'
 import type { NativeHookOptions } from './kit/nativeLocations.js'
+
+vi.mock('./kit/launchExecutable.js', async original => ({ ...await original<object>(), captureLaunchExecutable: vi.fn() }))
+vi.mock('../lib/engineHomes.js', () => ({ recoverEngineHomes: () => ({ claude: [], codex: [] }), confirmHomes: () => ({ claude: null, codex: null }) }))
 
 let root: string
 beforeEach(() => { root = mkdtempSync(join(tmpdir(), 'native-hook-setup-')) })
@@ -64,4 +70,87 @@ it('does not let an explicit caller identity join preparations with different mi
   expect(existsSync(join(home, 'config.yaml'))).toBe(false)
   expect(await hooks.installHermesHooks(1234, home, { setup, identity: 'caller', environment: captured.environment })).toBe(true)
   expect(captured.createMissing).toBe(true)
+})
+
+
+it('joins the same bounded input when only environment property order differs', async () => {
+  let enter!: () => void, release!: () => void, calls = 0
+  const entered = new Promise<void>(resolve => { enter = resolve }), waiting = new Promise<void>(resolve => { release = resolve })
+  const setup = { opencodeMajor: async () => 1, hermesKeepsRecord: async () => false,
+    prepareFiles: async (input: NativeHookInput, _request: string, current: () => boolean) => {
+      calls++; enter(); await waiting
+      return prepareNativeHookFiles(input, current)
+    },
+  }
+  const home = join(root, '.claude'), config = join(root, 'config')
+  const first = hooks.installClaudeHooks(1234, home, { setup, environment: { HOME: root, XDG_CONFIG_HOME: config } })
+  await entered
+  const second = hooks.installClaudeHooks(1234, home, { setup, environment: { XDG_CONFIG_HOME: config, HOME: root } })
+  release()
+  expect(await Promise.all([first, second])).toEqual([true, true])
+  expect(calls).toBe(1)
+})
+
+
+it('lets a cold launch prepare its own differing snapshot after startup publication settles', async () => {
+  vi.stubEnv('HOME', root)
+  let enter!: () => void, release!: () => void
+  const entered = new Promise<void>(resolve => { enter = resolve }), waiting = new Promise<void>(resolve => { release = resolve })
+  const inputs: NativeHookInput[] = []
+  const setup = { probe: async () => ({ code: 0, stdout: '--permission-mode', stderr: '' }), opencodeMajor: async () => 1, hermesKeepsRecord: async () => false,
+    prepareFiles: async (input: NativeHookInput, _request: string, current: () => boolean) => {
+      inputs.push(input)
+      if (inputs.length === 1) { enter(); await waiting }
+      return prepareNativeHookFiles(input, current)
+    },
+  }
+  const startup = installEngineHooks(1234, { setup, only: new Set(['claude']), environment: {} })
+  try {
+    await entered
+    const environment = { HOME: root, XDG_CONFIG_HOME: join(root, 'launch-config') }
+    vi.mocked(captureLaunchExecutable).mockResolvedValueOnce({ state: 'ready',
+      executable: { command: '/fixture/claude', identity: 'fixture', current: () => true }, environment })
+    const inspected = await inspectNativeLaunch('claude', {}, { setup })
+    if (!inspected.ok) throw Error('fixture launch was held before hooks')
+    const launch = inspected.launch.prepareHooks(1234, () => true)
+    release()
+    expect(await launch).toBe(true)
+    await startup.settled
+    expect(inputs).toHaveLength(2)
+    expect(inputs[0].environment).not.toEqual(inputs[1].environment)
+    expect(inputs[1].environment).toEqual(expect.objectContaining(environment))
+    expect(inspected.launch.current()).toBe(true)
+    const candidate = await prepareNativeHookFiles(inputs[1], () => true)
+    expect(inputs[1].files.map(file => read(file.file))).toEqual(candidate!.files.map(file => file.content))
+  } finally { release(); startup.close(); await startup.settled; vi.unstubAllEnvs() }
+})
+
+
+it('never lets startup maintenance revoke or follow a live launch with a different snapshot', async () => {
+  vi.stubEnv('HOME', root)
+  let enter!: () => void, release!: () => void, calls = 0
+  const entered = new Promise<void>(resolve => { enter = resolve }), waiting = new Promise<void>(resolve => { release = resolve })
+  const setup = { probe: async () => ({ code: 0, stdout: '--permission-mode', stderr: '' }),
+    opencodeMajor: async () => 1, hermesKeepsRecord: async () => false,
+    prepareFiles: async (input: NativeHookInput, _request: string, current: () => boolean) => {
+      calls++; enter(); await waiting
+      return prepareNativeHookFiles(input, current)
+    },
+  }
+  vi.mocked(captureLaunchExecutable).mockResolvedValueOnce({ state: 'ready',
+    executable: { command: '/fixture/claude', identity: 'fixture', current: () => true },
+    environment: { HOME: root, XDG_CONFIG_HOME: join(root, 'launch-config') } })
+  const inspected = await inspectNativeLaunch('claude', {}, { setup })
+  if (!inspected.ok) throw Error('fixture launch was held before hooks')
+  const launch = inspected.launch.prepareHooks(1234, () => true)
+  await entered
+  const startup = installEngineHooks(1234, { setup, only: new Set(['claude']), environment: {} })
+  try {
+    await startup.settled
+    expect(calls).toBe(1)
+    release()
+    expect(await launch).toBe(true)
+    expect(inspected.launch.current()).toBe(true)
+    expect(calls).toBe(1)
+  } finally { release(); startup.close(); await launch; vi.unstubAllEnvs() }
 })

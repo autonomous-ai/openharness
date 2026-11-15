@@ -196,8 +196,8 @@ performance comparison, final closure measurement, push, PR and merge.
 
 ## Implementation evidence and limits
 
-Default source closure is 530 files / 88,285 lines, down from the clean eec base's 539 / 90,847.
-The same walk with legacy engine doors open (still excluding services/inline) is 674 / 108,385,
+Default source closure is 530 files / 88,311 lines, down from the clean eec base's 539 / 90,847.
+The same walk with legacy engine doors open (still excluding services/inline) is 674 / 108,400,
 versus 652 / 107,819; its growth includes both retained explicit legacy installation and the new
 boundary. The default core retains only small argument quoting, hook-script identity/refusal state,
 mandatory admission data, destination coordination and the generic publisher. Architecture assertions
@@ -214,3 +214,80 @@ the new preparation/publication boundary without regenerating golden data.
 This is an integration checkpoint, not a full-gate, runtime-isolation, performance or signed Windows
 acceptance claim. Those checks and independent review belong to the final parent source. Folder trust,
 inherited MCP and remaining core filesystem I/O remain separate unfinished work.
+
+
+## Native acceptance amendments (2026-11-16)
+
+The first real bundled process run failed seven of eight cases (the explicit inline case passed).
+It exposed a packaging error: the extracted lean service entry has no `notify.mjs` beside it, and
+unlike core it did not know the original CLI. Reuse the master-owned `HARNESSD_CORE_SCRIPT` field
+(`LEAN_CORE_SCRIPT_ENV`) for lean service children, only while they run the master's verified lean
+bundle. Consume and remove it in `leanEntry` before importing service code and change only argv[1];
+keep the service command/name tail. This extends the existing original-CLI identity protocol, adds
+no filesystem RPC, lookup fallback or worker-selected path, and leaves old masters without the field
+on their existing behavior. Current-build/CLI fallback children receive no lean identity. A rollback
+keeps existing native bytes and no durable migration; older service entries safely ignore the extra
+private metadata, which existing harnessd environment holding removes. Focused entry/master tests
+and the actual bundled worker must prove helper resolution and unchanged role dispatch.
+
+Independent review also found startup launched all thirteen families into the existing eight setup
+slots at once. Five could get `SETUP_BUSY` during a cold import and never refresh. Sequence the
+existing bounded startup pass, preserve each family's own failure handling, and keep the controller
+immediate: neither readiness nor unrelated launches wait for maintenance. Shutdown revokes the current
+attempt and prevents later ones; no new queue, admission family, capacity increase or retry loop.
+A caller regression uses the real bounded setup link with rendering held, then released, and requires
+all thirteen selected families to succeed. Adopted-home coordination retains its existing independent
+bounded mechanism. The on-demand installation fixture explicitly disables startup hooks; file tests
+keep them enabled and prove actual setup-files routing. No failed native attempt is treated as passing.
+
+Remove the unused predictable-temp `writeMessagesHook` implementation with this extraction; its only
+remaining caller was a test fixture. Runtime publication already uses the fenced generic publisher.
+The Messages execution fixture writes the unchanged source directly and retains behavior coverage.
+
+The historical startup golden changed only the independent login-shell home's interleaving with the
+sequential default pass. Keep the checked-in golden bytes unchanged and compare each dispatch stream's
+order and exact arguments separately. Native settings/template byte goldens remain exact. The bundled
+closure assertion now requires Amp's plugin template outside default core, while still present in the
+complete bundle for setup and explicit compatibility composition.
+
+The second bundled run passed six of eight cases, including real file-operation kill/freeze/malformed
+isolation and native bytes. The off fixture raced the worker's reconnect after releasing its hold; its
+recovery now waits for both the replacement PID and the observed connection. An existing cold-launch
+case also hit conflicting startup preparation. A separate focused red established that reversed
+property ordering alone made identical environment records conflict; order is canonicalized before
+forming the complete input. Keys/values, opaque caller identity, flags and arrays remain intact. This
+ordering correction is not, by itself, proof of the cold-launch failure's cause or its resolution.
+
+## Cold launch reservation handoff (approved before runtime edit)
+
+The deterministic caller regression runs actual `installEngineHooks` maintenance against actual
+`NativeLaunch.prepareHooks` with different captured locations and held rendering. Both were refused:
+revoking startup did not wait for its actual release. The diagnostic native rerun passing does not
+resolve this regression. Preserve each input's meaning; absent shell locations are never filled from
+startup defaults and different snapshots never join.
+
+Only actual NativeLaunch preparation enables bounded conflict settlement. Reuse the existing pending
+reservation's actual-settlement promise and sixteen-waiter limit, revoke obsolete work, and wait once
+within the original overall five-second budget. A timed-out reply is not settlement and cannot release
+its descriptor or reservation. Retain the original caller/owner and path-route evidence through that
+wait, then recapture file contents for one fresh reservation. If another writer won, return held; there
+is no retry loop or additional queue. Legacy/direct installer conflict behavior stays unchanged.
+Maintenance, including adopted homes, uses existing `retainConflicts`: a conflicting attempt cannot
+revoke a live launch or wait behind it as a deferred publisher. Existing adopted-home retry scheduling
+remains independent; this change adds no delayed maintenance work. Equal complete inputs retain the existing join with each original
+caller's checks. Caller cancellation, changed aliases, deadline expiry and occupied waiters remain held.
+
+The native fault fixture uses a second fixture-owned client for the held create, leaving the original
+turn and terminal on their own connection. For a frozen worker, both must finish while create is still
+pending. This distinguishes core isolation from existing per-connection request serialization. The off
+case waits for actual reconnection as well as replacement PID. All process operations remain confined
+to the fixture-owned service and disposable daemon homes.
+
+
+At the next frozen checkpoint, the deterministic cold caller regression and the five original settlement
+reds pass. The focused launch/startup/attempt batch passed 138 tests; the final affected publisher/files/
+startup-golden batch passed 71 tests in five files, including inverse overlap and shared total-deadline
+checks. TypeScript passed. Earlier unchanged entry/master checks passed four/two focused cases, and
+architecture passed 25. The corrected off native case passed; its accompanying cold rerun remains
+explicitly diagnostic. Final bundled acceptance of the new handoff and second-client pending assertion,
+full gates and performance evidence remain for the integrated checkpoint. No signed Windows claim.
