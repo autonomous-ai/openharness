@@ -142,6 +142,8 @@ export interface CableHostWiring {
   appSettled?: (app: string) => void
   /** A dial sent a pick from its list of apps, whatever came of it: the picker's measure. A notice's pick is none. */
   appPicked?: () => void
+  /** An app stayed in front for the settle, with or without a window open: a tab report waiting on it is judged then. */
+  frontSettled?: (app: string) => void
   /** Runs `run` once after `ms` and returns its cancel: the settle of the app in front. The devices always give theirs,
    *  which their stop cancels; absent (a test's host), an unref'd setTimeout. */
   appTimer?: (ms: number, run: () => void) => () => void
@@ -237,7 +239,10 @@ export class DaemonCableHost implements CableHost {
       // (machineSnapshot).
       counts: () => this.rings.counts(this.registry?.entries().map((e) => e.agent) ?? []),
       switched: (cause) => wiring.appSwitched?.(cause),
-      settled: (app) => wiring.appSettled?.(app),
+      settled: (app) => {
+        wiring.appSettled?.(app)
+        wiring.frontSettled?.(app)
+      },
     })
   }
 
