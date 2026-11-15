@@ -39,6 +39,18 @@ folders, so on the dial they cannot be told apart. The app's list and the dial s
 4. **The check on the real Claude app** (rename a session in the app, the dial follows) is done in the joint test
    session with Diego, not in this PR's checks.
 
+## Decided late (the PM, 2026-11-15)
+
+5. **A session the open scan finds is named from its own process record.** Claude Code keeps
+   `~/.claude/sessions/<pid>.json` for each running session, and the scan already reads it to find the session's owner.
+   That record holds the session's name (`name`) and where the name came from (`nameSource`: `user` for a name the
+   person gave, `derived` for one Claude Code made up). The devices read those two fields of that one record, and
+   nothing else from it. Only a `user` name is shown: a `derived` name can come from what was first asked, and the hook
+   never sends one either. This narrows decision 1 for the scan alone: the session's own record, written by the session
+   itself, is read; still nothing from the Claude app's stores, another session's files, or any conversation. Found while
+   diagnosing Diego's report that two idle Claude app sessions were missing from the dial (the scan's miss is its own
+   fix, `fix/process-table-full-comm`).
+
 ## Design
 
 ### The hook (`cli/hook/notify.mjs` `observedBody`)
@@ -72,16 +84,33 @@ folders, so on the dial they cannot be told apart. The app's list and the dial s
   event with no title leaves the name as it is (Command Code's `turn-start` is every tool call).
 - Every other event leaves the name as it is. A folder in an event still updates `a.cwd`, and sets the name only while
   the agent has no title.
-- A session first listed by the open scan shows its folder until its first `session-start` or `turn-start`.
+- A session first listed by the open scan takes the name in its own process record (below), else its folder, until its
+  first `session-start` or `turn-start`, whose title (or none, for Claude Code) wins from then on.
 - The name reaches the dial as a Harness agent's does. The firmware holds 40 bytes of it (`CABLE_NAME_MAX`), as for
   any agent's name; nothing new is cut here.
+
+### The open scan's name (`observed.ts` `scanOnce`, read in the devices process)
+
+- Claude Code only. For each session the scan lists, the owner's `record` path names the process record it was found
+  by. It is read only when that path is `<a sessions folder>/<owner pid>.json`, the shape `recordOwners`
+  (`engines/kit/adoption.ts`) claims from: an owner claimed from its arguments has no record, and a transcript is never
+  opened here.
+- One read of at most 16 KiB (a record is about 1–2 KiB): a larger file, one that is not JSON, or one whose `name` is not
+  a string gives no name. `nameSource` must be the string `user`. The name is cleaned and cut as the hook's title is
+  (whitespace folded, trimmed, 64 UTF-16 units without splitting a surrogate pair, none with a control character).
+- Read in the devices process, by the scan's own reader, for the sessions it lists in that look (at most 50), after the
+  rows and apps are read and under the same look: a session a hook told of meanwhile keeps what the hook said.
+- A read that fails leaves the folder. It is counted in the scan's line (`n named`), never with the name or a path.
+- Read once, as a session is first listed. Later names come from its hooks.
+- Nothing in the core changes for it: the record path is already on the scan's `SessionOwner`.
 
 ### What the person sees
 
 - A Claude app session named "Tho" reads "Tho" on the dial from its next `SessionStart` (start, resume) or prompt.
 - A rename in the app shows on the dial at the session's next prompt. While the session is idle, the dial keeps the
   old name.
-- A session found open by the scan, with no hook since, reads its folder until its next prompt.
+- A session found open by the scan, with no hook since, reads the name the person gave it (from its own record), else
+  its folder.
 - A session with no name reads its folder, as today.
 
 ## Design (docs/feature-design-rules.md)
@@ -93,7 +122,8 @@ Reviewed revision: this spec's first commit on `fix/dial-session-name`  Reviewer
 2. Concurrency: the devices process is one event loop. Events for one session arrive in the order the hooks posted
    them; the last `session-start` or `turn-start` wins.
 3. Read cost: at most 64 UTF-16 units (≤ 192 bytes) more on two hook events per prompt, inside the existing 4096-byte
-   body. No new read path, no file read.
+   body. One new read: the scan reads at most 16 KiB of each session's own process record it lists, once, at most 50
+   a look, beside the reads of the same folder it already makes to find owners.
 4. Scale: 10x sessions hits the existing 50-session bound first. No new list or fan-out.
 5. Compatibility: the hook and the core ship in the same build. An older core's parser ignores a field it does not
    know, so a newer hook with an older daemon shows folders. A newer core with an older hook gets no `title` and shows
@@ -116,22 +146,26 @@ Reviewed revision: this spec's first commit on `fix/dial-session-name`  Reviewer
 
 ## Data
 
-- **What:** the session's title, as the person gave it in the engine (`session_title`).
-- **Where:** the hook's body to the daemon's local hook route, the devices process's memory, the dial over USB.
+- **What:** the session's title, as the person gave it in the engine (`session_title` in its hook, `name` with
+  `nameSource: user` in its own process record).
+- **Where:** the hook's body to the daemon's local hook route; the session's process record, read by the devices process;
+  the devices process's memory; the dial over USB.
 - **Kept:** in memory only, while the agent is listed. Never written to disk, a log, an error, a measure, the backend,
   the phone or the gateway.
-- **Bounded:** 64 UTF-16 units, no control characters, two events per prompt.
+- **Bounded:** 64 UTF-16 units, no control characters, two events per prompt; one record read of at most 16 KiB per
+  session the scan lists, at most 50 a look.
 
 ## Measures
 
-None new. The title has no target to measure against; the existing counters (the core's refused and dropped hook
-events, the observed source's scan line) already show a refused event. No count carries the title or the session.
+The scan's existing line gains a count: `[observed] scan · 7 found · 7 app known · 3 named · 57 ms`. Nothing else new:
+the core's refused and dropped counts already show a refused hook event. No count carries a title, a session or a path.
 
 ## Out of scope (follow-ups)
 
 - Moving the observed path, `title` included, out of the core to `devicesListener` (the rule 7 follow-up).
-- A name for a session the scan found before its first hook (it would need a transcript read, which decision 1 rules
-  out).
+- The scan missing Claude app sessions altogether (`ps` cuts their path, so their owner is never claimed): its own
+  item, `fix/process-table-full-comm`. Until it lands, decision 5 names only the sessions the scan finds.
+- Engines other than Claude Code in the scan.
 - A rename while the session is idle reaching the dial before the next prompt (Claude Code sends no hook for it).
 - Names of other engines' sessions whose hooks carry no title.
 - The firmware cutting a 40-byte name inside a multi-byte letter (true of every agent's name today).
@@ -146,6 +180,10 @@ events, the observed source's scan line) already show a refused event. No count 
   - a later `turn-stop` with a folder keeps "Math";
   - a later Claude `turn-start` with no title reads the last known folder again, also when that event has no `cwd`;
   - a `session-start` with a title on a session the scan listed renames it;
+  - a Claude session the scan lists whose record says `name: 'Tho', nameSource: 'user'` reads "Tho"; `derived`, a
+    missing or non-string name, a record over 16 KiB, a read that fails, or a record path not shaped
+    `<sessions>/<pid>.json` read the folder; a hook that came while the scan read keeps its own name; a later Claude
+    `turn-start` with no title reads the folder; the scan's line counts the named ones;
   - another engine's `turn-start` with no title keeps its title.
 - `observedHook.spec.ts`: `title` is passed on for `session-start` and `turn-start`; a title over 64 UTF-16 units,
   empty, with a control character, not a string, or on another event (`asked` and `turn-stop` among them) refuses the
