@@ -31,7 +31,7 @@ function recorder(over: Partial<Over> = {}, codes: Array<number | null> = [], mo
   const deps: Over = {
     run: async (file, args, timeoutMs) => {
       calls.push({ file, args, timeoutMs })
-      return { code: codes.length ? codes.shift()! : 0 }
+      return { code: codes.length ? codes.shift()! : 0, stdout: '' }
     },
     onPath: (name) => `/fake/bin/${name}`,
     exists: () => false,
@@ -53,7 +53,7 @@ function recorder(over: Partial<Over> = {}, codes: Array<number | null> = [], mo
 }
 
 /** The adapters whose pane a tap takes, in the order the observed source keeps them: each reads the hints alone. */
-const inert: OrcaDeps = { run: async () => ({ code: 0 }), onPath: () => null, exists: () => false, platform: 'darwin' }
+const inert: OrcaDeps = { run: async () => ({ code: 0, stdout: '' }), onPath: () => null, exists: () => false, platform: 'darwin' }
 const tapped = [createHerdrAdapter(inert), createWeztermAdapter(inert), createOrcaAdapter(inert), createClaudeAppAdapter({ ...inert, inFront: () => true })]
 
 /** What an agent's hook hints let a tap open, as the observed source reads them. */
@@ -247,7 +247,7 @@ describe('opening an agent outside Harness from the dial', () => {
     const opener = createOpenActions({
       run: (_file, args) => {
         calls.push(args)
-        return new Promise((resolve) => waiting.push(() => resolve({ code: 0 })))
+        return new Promise((resolve) => waiting.push(() => resolve({ code: 0, stdout: '' })))
       },
       platform: 'darwin',
       adapters: [],
@@ -279,7 +279,7 @@ describe('a rest on a Claude app session', () => {
     const { claude, opener } = recorder({
       run: (file, args, timeoutMs) => {
         calls.push({ file, args, timeoutMs })
-        return new Promise((resolve) => waiting.push(() => resolve({ code: 0 })))
+        return new Promise((resolve) => waiting.push(() => resolve({ code: 0, stdout: '' })))
       },
     })
     return { calls, waiting, claude, opener }

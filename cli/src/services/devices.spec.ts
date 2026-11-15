@@ -193,7 +193,7 @@ const { startDevices } = await import('./devices.js')
  *  developer's own apps. */
 const orcaRuns: Array<[string, string[], number]> = []
 const orca = {
-  run: async (file: string, args: string[], timeoutMs: number) => { orcaRuns.push([file, args, timeoutMs]); return { code: 0 } },
+  run: async (file: string, args: string[], timeoutMs: number) => { orcaRuns.push([file, args, timeoutMs]); return { code: 0, stdout: '' } },
   onPath: () => '/opt/orca/bin/orca',
   exists: () => false,
   platform: 'linux' as const,
@@ -2027,7 +2027,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     const codes = [1]
     const { port } = startHere({ orca: { ...mac, run: async (file, args, timeoutMs) => {
       orcaRuns.push([file, args, timeoutMs])
-      return { code: codes.shift() ?? 0 }
+      return { code: codes.shift() ?? 0, stdout: '' }
     } } })
     port.observed(hook('session-start', { hostHints: { __CFBundleIdentifier: 'com.anthropic.claudefordesktop', CLAUDE_CODE_HOST_SESSION_ID: SESSION } }))
     attach(port)
@@ -2064,7 +2064,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
   })
 
   it('a switch that fails is one line with no handle, and the dial is sent nothing', async () => {
-    inOrca({ orca: { ...orca, run: async (file, args, timeoutMs) => { orcaRuns.push([file, args, timeoutMs]); return { code: 1 } } } })
+    inOrca({ orca: { ...orca, run: async (file, args, timeoutMs) => { orcaRuns.push([file, args, timeoutMs]); return { code: 1, stdout: '' } } } })
     const sent = seen.cable.calls.length
     host().swipeEnded(CODEX, 'rest')
     await swiped('failed')
@@ -2077,7 +2077,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     let typed = () => {}
     inOrca({ orca: { ...orca, run: (file, args, timeoutMs) => {
       orcaRuns.push([file, args, timeoutMs])
-      return new Promise((done) => { typed = () => done({ code: 0 }) })
+      return new Promise((done) => { typed = () => done({ code: 0, stdout: '' }) })
     } } })
     const words = host().sendTurn(CODEX, 'run the tests')
     await vi.waitFor(() => expect(orcaRuns).toHaveLength(1))
@@ -2093,7 +2093,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     let shown = () => {}
     inOrca({ orca: { ...orca, run: (file, args, timeoutMs) => {
       orcaRuns.push([file, args, timeoutMs])
-      return new Promise((done) => { shown = () => done({ code: 0 }) })
+      return new Promise((done) => { shown = () => done({ code: 0, stdout: '' }) })
     } } })
     host().swipeEnded(CODEX, 'rest')
     await vi.waitFor(() => expect(orcaRuns).toHaveLength(1))
@@ -2195,7 +2195,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     let shown = () => {}
     const { front } = await inClaudeApp({ orca: { ...mac, run: (file, args, timeoutMs) => {
       orcaRuns.push([file, args, timeoutMs])
-      return new Promise((done) => { shown = () => done({ code: 0 }) })
+      return new Promise((done) => { shown = () => done({ code: 0, stdout: '' }) })
     } } })
     front('claude')
     host().swipeEnded(ID, 'rest')
@@ -2209,7 +2209,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
   })
 
   it('a link that fails is one line and the dial is sent nothing', async () => {
-    const { front } = await inClaudeApp({ orca: { ...mac, run: async (file, args, timeoutMs) => { orcaRuns.push([file, args, timeoutMs]); return { code: 1 } } } })
+    const { front } = await inClaudeApp({ orca: { ...mac, run: async (file, args, timeoutMs) => { orcaRuns.push([file, args, timeoutMs]); return { code: 1, stdout: '' } } } })
     front('claude')
     const sent = seen.cable.calls.length
     host().swipeEnded(ID, 'rest')
@@ -2232,7 +2232,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     const codes = [0, 1]
     const { front } = await inClaudeApp({ orca: { ...mac, run: async (file, args, timeoutMs) => {
       orcaRuns.push([file, args, timeoutMs])
-      return { code: codes.shift() ?? 0 }
+      return { code: codes.shift() ?? 0, stdout: '' }
     } } })
     front('claude')
     host().swipeEnded(ID, 'rest')
@@ -2245,7 +2245,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
 
   it('no swipe line carries a handle, a session or an agent', async () => {
     const codes = [0, 1]
-    inOrca({ orca: { ...orca, run: async (file, args, timeoutMs) => { orcaRuns.push([file, args, timeoutMs]); return { code: codes.shift() ?? 0 } } } })
+    inOrca({ orca: { ...orca, run: async (file, args, timeoutMs) => { orcaRuns.push([file, args, timeoutMs]); return { code: codes.shift() ?? 0, stdout: '' } } } })
     host().swipeEnded(CODEX, 'rest')
     await swiped('ok')
     host().swipeEnded(CODEX, 'rest')
@@ -2321,7 +2321,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     let exited = (_code: number) => {}
     const { listener } = await inTab({ orca: { ...mac, run: (file, args, timeoutMs) => {
       orcaRuns.push([file, args, timeoutMs])
-      return new Promise((done) => { exited = (code) => done({ code }) })
+      return new Promise((done) => { exited = (code) => done({ code, stdout: '' }) })
     } } })
     const stream = listener.tabs()
     const tap = host().openAgent(ID)
@@ -2334,7 +2334,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
   })
 
   it('a tap whose open -b fails writes no select', async () => {
-    const { listener } = await inTab({ orca: { ...mac, run: async (file, args, timeoutMs) => { orcaRuns.push([file, args, timeoutMs]); return { code: 1 } } } })
+    const { listener } = await inTab({ orca: { ...mac, run: async (file, args, timeoutMs) => { orcaRuns.push([file, args, timeoutMs]); return { code: 1, stdout: '' } } } })
     const stream = listener.tabs()
     expect(await host().openAgent(ID)).toEqual({ ok: false, error: 'Terminal did not open it.' })
     expect(orcaRuns).toEqual([['/usr/bin/open', ['-b', 'com.apple.Terminal'], 10_000]])
@@ -3322,7 +3322,7 @@ describe('selecting a tab moves the dial (docs/specs/2026-11-15-dial-terminal-fo
     const { listener, report, stream } = await dialWith(2, (file, args, timeoutMs) => {
       orcaRuns.push([file, args, timeoutMs])
       began()
-      return new Promise((done) => { opened = () => done({ code: 0 }) })
+      return new Promise((done) => { opened = () => done({ code: 0, stdout: '' }) })
     })
     const tapped = host().openAgent(agent(2))
     await opening
@@ -3365,7 +3365,7 @@ describe('selecting a tab moves the dial (docs/specs/2026-11-15-dial-terminal-fo
   it('a switch that failed sets the report aside all the same', async () => {
     const { port, listener, report, stream } = await dialWith(1, async (file, args, timeoutMs) => {
       orcaRuns.push([file, args, timeoutMs])
-      return { code: 1 }
+      return { code: 1, stdout: '' }
     })
     port.observed(inOrca)
     expect(listener.front('terminal-app')).toBeUndefined()
@@ -3415,7 +3415,7 @@ describe('selecting a tab moves the dial (docs/specs/2026-11-15-dial-terminal-fo
     const { listener, report, stream } = await dialWith(2, (file, args, timeoutMs) => {
       orcaRuns.push([file, args, timeoutMs])
       began()
-      return new Promise((done) => { opened = () => done({ code: 0 }) })
+      return new Promise((done) => { opened = () => done({ code: 0, stdout: '' }) })
     })
     expect(listener.front('terminal-app')).toBeUndefined()
     report('terminal-app', ttyOf(1))
