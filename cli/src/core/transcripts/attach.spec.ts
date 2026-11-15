@@ -1346,6 +1346,48 @@ describe('attaching a session', () => {
       expect(inline.deps.watcher.addSession).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ sessionId: row.sessionId }), { fromOffset: statSync(file).size })
     })
 
+    // A session forgotten and registered again under the same id inherits nothing of its earlier binding
+    // (agents/forget.ts). An attach still reading its profile when the session was forgotten is no longer the
+    // binding's: where it read to is not where the next binding's history ends, and nothing is left to try again.
+    /** A profile whose config is read until the test says it cannot be. */
+    const pendingConfig = (run: ReturnType<typeof setup>) => {
+      const read: { fail?: (error: Error) => void } = {}
+      vi.mocked(run.deps.runtimeProfiles.beginHydrate).mockReturnValueOnce({ ...run.profile,
+        config: () => new Promise<void>((_, reject) => { read.fail = reject }) })
+      return async (during: () => void): Promise<void> => {
+        do await new Promise(resolve => setImmediate(resolve)); while (!read.fail)
+        during()
+        read.fail(new Error('unreadable'))
+      }
+    }
+
+    it('remembers nothing, and tries nothing again, for a read whose session was forgotten while its profile was read', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const run = setup(), file = transcript([CLAUDE_PROMPT]), row = session('claude', file)
+      const fail = pendingConfig(run)
+      const first = run.attach.attachSession(row)
+      await fail(() => run.attach.forget(row.sessionId))
+      await first
+      expect(vi.getTimerCount()).toBe(0)
+      // The same conversation bound again: its first attach folds the whole file, as any first attach does.
+      appendFileSync(file, JSON.stringify(ANSWER) + '\n')
+      expect(await run.attach.attachSession(row)).toBe(true)
+      expect(run.deps.watcher.addSession).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ sessionId: row.sessionId }), { fromOffset: statSync(file).size })
+    })
+
+    it('remembers nothing of an engine worker\'s read whose session was forgotten while its profile was read', async () => {
+      const p = remoteSetup(), s = session('claude', '/private/transcript')
+      const fail = pendingConfig(p)
+      const first = p.attach.attachSession(s)
+      await fail(() => p.attach.forget(s.sessionId))
+      await first
+      expect(p.remote.discard).toHaveBeenCalledExactlyOnceWith(p.candidate)
+      await p.attach.attachSession(s)
+      expect(askedEnd(p)).toBeUndefined()
+    })
+
     it('remembers 256 reads at most: one more starts over', async () => {
       const p = remoteSetup()
       vi.mocked(p.remote.install).mockReturnValue(false)
