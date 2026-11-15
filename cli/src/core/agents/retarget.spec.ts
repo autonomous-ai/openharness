@@ -504,8 +504,7 @@ describe('retargeting an agent', () => {
       expect(await run.retarget({ agentId: 'a1', grid })).toEqual({ ok: true })
       expect(run.deps.agentReconciler.holdRoute).toHaveBeenCalled()
       expect(restartAgent).toHaveBeenCalledWith({ engine: 'claude', sessionId: 's1' }, true, { isCurrent: expect.any(Function) })
-      // The grid is read off the new process's command line, never its executable alone.
-      expect(run.deps.registry.updateProcessIdentity).toHaveBeenCalledWith('a1', expect.objectContaining({ pid: 2 }), 'none')
+      expect(run.deps.registry.updateProcessIdentity).toHaveBeenCalledWith('a1', expect.objectContaining({ pid: 2 }), 'none', { baseUrl: grid.baseUrl, model: grid.model })
       expect(run.deps.registry.setGridLaunch).toHaveBeenCalledWith('a1', { override: grid, webSearch: 'off' })
       expect(run.deps.registry.setSubscriptionModel).toHaveBeenCalledWith('a1', 'opus')
       expect(run.deps.registry.setActive).toHaveBeenCalledWith('a1', true)
@@ -515,6 +514,17 @@ describe('retargeting an agent', () => {
       expect(run.release).toHaveBeenCalled()
       expect(run.releaseRoute).toHaveBeenCalled()
       expect(log.mock.calls.map(([line]) => String(line))).toContain('claude on Home · retargeted a1 · resumed')
+    })
+
+    it('writes the grid it launched on the row, and none for a move home', async () => {
+      const run = setup()
+      await run.retarget({ agentId: 'a1', grid })
+      expect(vi.mocked(run.deps.registry.updateProcessIdentity).mock.calls.at(-1)![3]).toEqual({ baseUrl: grid.baseUrl, model: grid.model ?? null })
+      const home = setup(agent({ grid: { baseUrl: 'x', model: null } } as Partial<RegisteredSession>), {
+        relaunchOverrides: vi.fn(async () => ({ ok: true, overrides: {} })) as never,
+      })
+      await home.retarget({ agentId: 'a1', grid: null })
+      expect(vi.mocked(home.deps.registry.updateProcessIdentity).mock.calls.at(-1)![3]).toBeNull()
     })
 
     it('remembers only the model of the agent\'s own login, never a grid\'s, never the one it moves to', async () => {
