@@ -285,6 +285,24 @@ it.each(['opencode', 'kilo', 'hermes', 'devin'] as const)('exports %s through re
   const paged = [['SELECT name, pk', [expect.any(String)]], ['WITH RECURSIVE candidate', ['conversation']]]
   expect(calls).toEqual([['SELECT * FROM', ['conversation']], ...paged, ...(engine === 'kilo' ? paged : [])])
 })
+
+it('preserves legacy checkpoint bytes across string and binary chunk boundaries', async () => {
+  const home = join(root, 'hermes')
+  Object.assign(row, { engine: 'hermes', transcriptPath: null, hermesHome: home })
+  const session = { id: row.sessionId, title: 'saved conversation' }
+  const message = { id: 'm1', body: 'x'.repeat(16_383) + '😀\u0000\n"\\' + '\ud800' + 'y'.repeat(16_384) + '\udc00',
+    binary: Uint8Array.from({ length: 5_000 }, (_, i) => i % 256), bytes: Buffer.from([0, 1, 127, 255]), value: null }
+  vi.mocked(sqliteReadAll).mockReset().mockImplementation(async (_db, query) => ({ ok: true, via: 'builtin', rows:
+    query.includes('pragma_table_xinfo') ? Object.keys(message).map(name => ({ name, pk: name === 'id' ? 1 : 0 }))
+      : query.startsWith('WITH RECURSIVE candidate AS (') ? [{ page_n: 1, page_more: 0, page_big: 0, ...message }]
+        : [session] }))
+  await store.save(row)
+  const saved = await manifest()
+  const expected = JSON.stringify({ version: 1, sessionId: row.sessionId, engine: 'hermes', database: join(home, 'state.db'),
+    tables: { sessions: [session], messages: [message] } })
+  expect(await readFile(join(directory, saved.file), 'utf8')).toBe(expected)
+  expect(saved.bytes).toBe(Buffer.byteLength(expected))
+})
 it('treats a locked or missing database as a save failure, never an empty successful backup', async () => {
   row.engine = 'hermes'
   vi.mocked(sqliteReadAll).mockResolvedValue({ ok: false, reason: 'transient' })
