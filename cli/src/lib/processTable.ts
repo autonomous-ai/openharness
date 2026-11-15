@@ -12,16 +12,18 @@ import {
   engineFileOwners,
   enginePathOverride,
   executableFileIdentity,
+  type AgentCommandOwnershipSnapshot,
 } from './engineBin.js'
 import { BYPASS_PERMISSION_FLAGS, PERMISSION_MODES, permissionModeApproves } from './engineLaunch.js'
 import { discoveryField, versionedInstalls } from '../engines/discoveries.js'
 import { HERMES_HISTORY_ID_RE } from '../engines/hermes/contract.js'
+import type { AgentEngine } from '../engines/types.js'
 import { psEnv } from './childLocale.js'
 import { processStartTicks } from './processLiveness.js'
 import { nativeProcessImages } from './nativeProcessImages.js'
 import { patientExec } from './patientExec.js'
 import { probeExecFile } from './offThreadExec.js'
-import { sameProcessIdentity } from './terminalRuntime.js'
+import { processIdentityOf, sameProcessIdentity } from './terminalRuntime.js'
 
 // Every `ps` call here: a held event loop must not turn a timeout into an empty answer
 // (patientExec.ts).
@@ -196,6 +198,23 @@ export function hermesGatewaysUnder(rows: readonly ProcessRow[], engine: Process
   return rows.filter((row) => row.pid !== engineRow.pid && under.has(row.pid) && hermesGatewayProcess(row))
     .map((row) => ({ pid: row.pid, executable: row.executable, startMarker: row.startMarker,
       ...(row.startTicks !== undefined ? { startTicks: row.startTicks } : {}) }))
+}
+
+/** The most direct children of one launcher whose open files are listed. npm's Codex 0.169.0 has two (the spike of
+ *  2026-11-15); the bound keeps one listing to five processes whatever a launcher starts (decision 8). */
+export const ENGINE_CHILDREN_MOST = 4
+
+/**
+ * The processes right under `selected` that are `engine`'s too, lowest pid first, ENGINE_CHILDREN_MOST at most:
+ * npm's launcher of Codex starts two `codex` processes there, and one of them holds the rollout
+ * (docs/plans/2026-11-15-process-env-secrets-plan.md, "Spike result"). With more, the lowest pids are named and the
+ * rest never are. Empty with none. Direct children only: a process further down is never named, whatever it is, nor
+ * one whose launcher is gone (the `codex` a `/quit` leaves behind). `ownership` has no default: the default walks
+ * PATH, which was most of an idle core's CPU (#3880).
+ */
+export function engineChildren(rows: readonly ProcessRow[], engine: AgentEngine, selected: ProcessIdentity, ownership: AgentCommandOwnershipSnapshot): ProcessIdentity[] {
+  return rows.filter((row) => row.parentPid === selected.pid && engineProcessMatchScore(row, engine, ownership) > 0)
+    .sort((a, b) => a.pid - b.pid).slice(0, ENGINE_CHILDREN_MOST).map(processIdentityOf)
 }
 
 function hasCursorPackageEntrypoint(args: string): boolean {
