@@ -396,6 +396,21 @@ test('attached and detached again before the link: nothing is sent', async ($, o
   expect(w.attaches).toHaveLength(0)
 })
 
+test('an attach before the link, with no devicesSocket, runs the launcher once', async ($, on) => {
+  const w = world(on, { answers: [held(25_000)], devices: '' })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await attach($)
+  await w.clock.settle()
+  expect(w.runs).toEqual([[LOCAL, ...LINK]])
+  expect(w.attaches).toHaveLength(0)
+  // Still held: the next attach asks again.
+  w.devices = DEVICES
+  await attach($)
+  await w.clock.settle()
+  expect(w.runs).toHaveLength(2)
+  expect(w.attaches).toEqual([ATTACH])
+})
+
 test('an attach with no devicesSocket asks the launcher again, and the devices are told once it prints one', async ($, on) => {
   const w = world(on, { answers: [held(25_000)], devices: '' })
   await start($, w)
