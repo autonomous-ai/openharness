@@ -2248,7 +2248,8 @@ describe('hook notify posts over the daemon\'s pipe on Windows (W1)', () => {
 describe('hook notify: a session outside a pane', () => {
   /** The environment names the hook may send as host hints, and nothing else (spec: The hook). */
   const HINTS = ['TERM_PROGRAM', '__CFBundleIdentifier', 'HERDR_PANE_ID', 'REX_BLOCK', 'ZELLIJ', 'TMUX_PANE',
-    'KITTY_WINDOW_ID', 'WEZTERM_PANE', 'ORCA_AGENT_SESSION_ID', 'ORCA_TERMINAL_HANDLE', 'CLAUDE_CODE_HOST_SESSION_ID']
+    'KITTY_WINDOW_ID', 'WEZTERM_PANE', 'ORCA_AGENT_SESSION_ID', 'ORCA_TERMINAL_HANDLE', 'CLAUDE_CODE_HOST_SESSION_ID',
+    'CLAUDE_CODE_ENTRYPOINT']
   /** The names a session outside a pane can set, as many as the hook sends: runHook sets no TMUX_PANE without a pane. */
   const panelessHints = HINTS.filter((name) => name !== 'TMUX_PANE').slice(0, MAX_HINTS)
   /** The hint names unset, so the environment this test runs in sends none of its own. */
@@ -2359,6 +2360,13 @@ describe('hook notify: a session outside a pane', () => {
     await runHook({ port, ...own, env: set, input: typed })
     expect(HINTS.length).toBeGreaterThan(MAX_HINTS)
     expect(Object.keys(requests[0].body.hostHints as object)).toEqual(HINTS.slice(0, MAX_HINTS))
+  })
+
+  it('says how Claude Code was started, beside the app it runs in', async () => {
+    const { port, requests } = await collect()
+    await runHook({ port, env: { ...noHints, __CFBundleIdentifier: 'com.microsoft.VSCode', CLAUDE_CODE_ENTRYPOINT: 'claude-vscode' },
+      input: { hook_event_name: 'UserPromptSubmit', session_id: 'sess-1', cwd: '/w', prompt: 'hi' } })
+    expect(requests[0].body.hostHints).toEqual({ __CFBundleIdentifier: 'com.microsoft.VSCode', CLAUDE_CODE_ENTRYPOINT: 'claude-vscode' })
   })
 
   it('paneless codex subagent posts nothing', async () => {

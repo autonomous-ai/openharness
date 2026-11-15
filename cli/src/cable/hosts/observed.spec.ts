@@ -12,6 +12,7 @@ import { createOrcaAdapter, type OrcaDeps } from './orca.js'
 import { createTabsAdapter, type TabApp } from './tabs.js'
 import { createTmuxAdapter } from './tmux.js'
 import type { PaneSwitch } from './types.js'
+import { createVscodeAdapter } from './vscode.js'
 import { createWeztermAdapter } from './wezterm.js'
 
 function setup(over: Partial<ObservedDeps> = {}) {
@@ -914,6 +915,7 @@ function fakeActions(over: Partial<Fakes> = {}, platform: NodeJS.Platform = 'dar
     createWeztermAdapter(deps),
     { ...orca, type: (pane, text) => fake.orcaSend(pane.id, text), show: (pane) => fake.orcaSwitch(pane.id) },
     { ...claude, show: (pane, agentId) => fake.claudeShow(agentId, pane.id) },
+    createVscodeAdapter(deps),
     createTabsAdapter({ isOpen: () => fake.tabsOpen(), select: (tab, raise) => fake.tabSelect(tab.app, tab.tty, raise) === 'ok' }),
   ]
   return { actions: { ...fake, adapters }, ready, ran }
@@ -1344,6 +1346,15 @@ describe('ObservedSource actions', () => {
     expect(await src.focus(src.list()[0])).toBe(true)
     expect(actions.open.mock.calls).toEqual([[src.list()[0].id, { pane: { adapter: 'tmux', id: '%9:200' } }]])
   })
+
+  it('a session in the VS Code extension\'s tab opens by its own session id', async () => {
+    const { actions } = fakeActions()
+    const { src, ev } = setup({ actions })
+    const sessionId = '8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b'
+    src.ingest(ev('session-start', { sessionId, hostHints: { __CFBundleIdentifier: 'com.microsoft.VSCode', CLAUDE_CODE_ENTRYPOINT: 'claude-vscode' } }))
+    expect(await src.focus(src.list()[0])).toBe(true)
+    expect(actions.open.mock.calls).toEqual([[src.list()[0].id, { bundle: 'com.microsoft.VSCode', pane: { adapter: 'vscode', id: sessionId } }]])
+  })
 })
 
 const THREAD = '01a1de76-a3b7-7270-b39e-1245893274c1'
@@ -1686,7 +1697,7 @@ describe('ObservedSource panes', () => {
 
     const adapter = madeUp()
     const a = first(adapter, both)
-    expect(adapter.paneOf).toHaveBeenLastCalledWith({ host: 'terminal', app: 'terminal', hints: both, pid: 100 })
+    expect(adapter.paneOf).toHaveBeenLastCalledWith({ host: 'terminal', app: 'terminal', hints: both, pid: 100, sessionId: 's1' })
     expect(a.src.capabilities(a.agent)).toMatchObject({ voice: true })
     expect(await a.src.send(a.agent, 'next')).toEqual({ ok: true })
     expect(adapter.type.mock.calls).toEqual([[PANE, 'next']])

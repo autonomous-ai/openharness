@@ -2088,6 +2088,18 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     expect(logs.filter((line) => line.includes(SESSION) || line.includes('sess-1'))).toEqual([])
   })
 
+  it('a session in the VS Code extension\'s tab opens by its link, then VS Code comes forward', async () => {
+    const SESSION = '8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b'
+    const { port } = startHere({ orca: mac })
+    port.observed(hook('session-start', { sessionId: SESSION, hostHints: { __CFBundleIdentifier: 'com.microsoft.VSCode', CLAUDE_CODE_ENTRYPOINT: 'claude-vscode' } }))
+    attach(port)
+    expect(await host().openAgent(observedAgentId('claude', SESSION))).toBeUndefined()
+    expect(orcaRuns).toEqual([
+      ['/usr/bin/open', [`vscode://anthropic.claude-code/open?session=${SESSION}`], 10_000],
+      ['/usr/bin/open', ['-b', 'com.microsoft.VSCode'], 10_000],
+    ])
+  })
+
   it('an agent in the person\'s own tmux lists f, and its tap checks the pane\'s process, then switches the person\'s client', async () => {
     readers.processes.mockResolvedValue([{ pid: 4242, ppid: 4000, executable: 'claude' }, { pid: 4000, ppid: 1, executable: 'zsh' }])
     const says = ['4000\n', '9999\n']
