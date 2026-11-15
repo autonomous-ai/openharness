@@ -3388,16 +3388,19 @@ export class CableSession {
    */
   async viewChanged(): Promise<void> {
     if (!this.wantsApps) return
-    // At once: a machine list is otherwise held a second after the last push. Let through, not forced, so a list that
-    // did not change is not sent twice.
-    this.agentsPushedAt = -Infinity
     await this.syncSwarms()
     // Back on the tab the window's agent is followed before the tab's list goes: follow writes the record, then pushes the
     // list, so the list's re-assert lands on that agent. Pushed first, the list re-asserted the agent the dial left the tab
     // on, and the dial stepped onto it on its way to the window's.
     const focused = this.host.appFocus?.(this.asItself)
     if (focused) await this.followApp(focused.machineId, focused.agentId)
-    await this.syncAgents()
+    // At once: a machine list is otherwise held a second after the last push. The gap is opened in the queue, just before
+    // this push, as a push still in flight when the view turned would close it again. Let through, not forced, so a list
+    // that did not change is not sent twice.
+    await this.queued(() => {
+      this.agentsPushedAt = -Infinity
+      return this.syncAgentsNow(false)
+    })
   }
 
   async toast(text: string): Promise<void> {
