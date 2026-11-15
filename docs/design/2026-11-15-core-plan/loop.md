@@ -87,7 +87,7 @@ Both still run in the core on main (checked 15 November):
   discovery runs every pass. Measure before and after with the e2e profile (`tools/longblocks.mjs`).
 - Platforms: the login shell is macOS and Linux; `harness-pty` is Windows only (test it on Windows, or say why not).
 
-#### Step 3 design (15 November, implementation in progress)
+#### Step 3 design (15 November)
 
 Discovery must await its first complete ownership lookup without blocking other sessions. The synchronous
 compatibility helpers remain for pure callers; the core's terminal scan, pane lookup and native ownership read
@@ -115,8 +115,18 @@ names, never unrelated entries. The Windows Hermes launcher uses the shared exte
 checks too. A synchronous reader's old shell flight cannot answer a lookup for a changed PATH. Native conversation
 proof keeps its existing remaining 3-second budget while shared ownership work has its own deadline; expiration is
 unavailable evidence. Those four regressions were reproduced red, then 81 related tests passed. The earlier affected
-set passed 440 tests (6 platform/opt-in skips); full gates and final matching-module benchmark acceptance are pending.
-Core footprint at the original base: 539 files / 92,700 lines. Publication and integration remain the coordinator's.
+set passed 440 tests (6 platform/opt-in skips). The core, PTY, shell, architecture/lean-entry and isolated resume gates
+apply to the final integrated head; their results belong to its exact-head PR receipt. Publication and integration
+remain the coordinator's.
+
+Matched probe workload (`tools/probes-bench.mts`, Node 24.22.2, macOS, private home, 48 PATH directories), exact
+2458 source plus its package/TypeScript metadata versus integrated 055ad source: 100 ownership snapshots took
+1,281 -> 261 ms wall and 1,335 -> 412 ms core CPU; longest loop hold 18.3 -> 3.6 ms. A cold 200 ms fixture shell
+held the loop 980 -> 2.8 ms (wall 980 -> 788 ms); three 200 ms PTY version children held it 563 -> 2.2 ms
+(wall 1,633 -> 1,624 ms). PTY CPU was 35 -> 51 ms, not an improvement: the now-responsive 1 ms observer ran
+1,358 times instead of 6, and its cost is included. No native Windows performance claim is made.
+An earlier async-access implementation increased ownership CPU and was rejected; the directory-name cache above
+is the measured fix. Core footprint at the original base: 539 files / 92,700 lines.
 
 ### PR 4 (core-loop-4): the registry save never sleeps the loop
 
