@@ -17,7 +17,7 @@ import { engineHooks } from '../../engines/hooks.js'
 import { ENUMERATION_ATTEMPTS } from '../../engines/kit/nativeFiles.js'
 import { loadEngine } from '../../engines/inProcess.js'
 import type { RegisteredSession } from '../../lib/registry.js'
-import { stopSessionOwner, type SessionOwner } from '../../lib/sessionSearch/external.js'
+import type { SessionOwner } from '../../lib/sessionSearch/external.js'
 import { createAgentCreator, type CreateAgentDeps } from './create.js'
 import { prepareInstructionWrites } from '../../scm/scmProjects.js'
 import { opencodeMajorVersion } from '../../engines/opencode/version.js'
@@ -110,7 +110,6 @@ vi.mock('../../engines/hooks.js', async (real) => {
   const actual = await real<typeof import('../../engines/hooks.js')>()
   return { ...actual, engineHooks: { ...actual.engineHooks, codex: { ...actual.engineHooks.codex, installIn: vi.fn(async () => true) } } }
 })
-vi.mock('../../lib/sessionSearch/external.js', async (real) => ({ ...await real<object>(), stopSessionOwner: vi.fn(async () => true) }))
 // What the backend new panes are made on can do; every test's backend can give a session its own environment.
 const capabilities = vi.fn(async () => ({ sessionEnv: true }))
 
