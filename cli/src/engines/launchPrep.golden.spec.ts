@@ -25,7 +25,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { env } from '../config/env.js'
 import type { InstalledDsh } from '../dsh/installed.js'
 import { prepareHarnessLaunch } from '../dsh/runtime.js'
-import type { ApiConnections } from '../lib/apiConnections.js'
+import type { ApiConnectionMetadata } from '../lib/apiConnectionMetadata.js'
 import { prepareApiInstructions } from '../lib/apiInstructions.js'
 import { resetEngineHomes } from '../lib/engineHomes.js'
 import { folderTrust, prepareResume, type ResumeSource } from './launchPrep.js'
@@ -484,8 +484,8 @@ function instructionCases(): Record<string, unknown> {
     cases[`harness · ${engine} · a symlinked instruction file`] = { first: attempt(() => prepareHarnessLaunch(harnessPackage(linked), lws, engine, 'runtime-1') && 'prepared'), after: instructionFiles(lws), shared: snapshot(linked)['shared.md'] }
   }
   // The saved APIs' note.
-  const withApis = { list: () => [{ id: 'openrouter' }] } as unknown as ApiConnections
-  const noApis = { list: () => [] } as unknown as ApiConnections
+  const withApis: Pick<ApiConnectionMetadata, 'saved'> = { saved: () => true }
+  const noApis: Pick<ApiConnectionMetadata, 'saved'> = { saved: () => false }
   const states: Record<string, (ws: string, file: string) => void> = {
     'no file': () => undefined,
     'a file of the person\'s': (ws, file) => write(join(ws, file), '# Mine\n\n\n'),

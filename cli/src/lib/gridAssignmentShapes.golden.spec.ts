@@ -111,6 +111,8 @@ it('keeps every assignment and saved-API instruction shape on both platforms', a
       shapes.instructions(work, 'claude')
       out['instructions/no-saved-api'] = readdirSync(work)
       writeFileSync(join(storeDir, 'connections.json'), '{')
+      // The note reads the list without keys, not the store (lib/apiConnectionMetadata.ts): that is what is unreadable here.
+      writeFileSync(join(storeDir, 'list.json'), '{')
       try { shapes.instructions(work, 'claude') } catch (error) { out['instructions/unreadable'] = (error as Error).message }
       shapes.remember() // Best effort recognition never erases remembered endpoints.
       await assignment('saved/unreadable', 'codex', {}, `-c model_providers.saved.base_url=${api} -m chosen`)

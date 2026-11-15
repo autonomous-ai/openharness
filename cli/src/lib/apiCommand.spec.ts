@@ -6,12 +6,15 @@ import { dirname, join } from 'node:path'
 import { ApiConnections } from './apiConnections.js'
 import { apiCommand } from './apiCommand.js'
 import { prepareApiInstructions } from './apiInstructions.js'
+import { ApiConnectionMetadata } from './apiConnectionMetadata.js'
 
-let directory: string, store: ApiConnections, server: Server | undefined
+let directory: string, store: ApiConnections, list: ApiConnectionMetadata, server: Server | undefined
 const secret = 'fixture-key-for-local-http-only'
 beforeEach(() => {
   directory = mkdtempSync(join(tmpdir(), 'harness-api-command-'))
   store = new ApiConnections(directory)
+  // What a launch reads for the note: the list without keys, which the store keeps.
+  list = new ApiConnectionMetadata(directory)
   vi.spyOn(console, 'log').mockImplementation(() => {})
   vi.spyOn(console, 'error').mockImplementation(() => {})
 })
@@ -85,12 +88,12 @@ describe('API tools', () => {
 
   // The test's folder stands for a workspace Harness made: the note goes only into one (apiInstructions.spec.ts).
   it.each(['codex', 'claude', 'gemini'])('makes API tools discoverable in %s without keys or replacing existing instructions', engine => {
-    prepareApiInstructions(store, directory, engine, dirname(directory))
+    prepareApiInstructions(list, directory, engine, dirname(directory))
     store.save({ provider: 'fal', apiKey: secret })
     const file = join(directory, engine === 'claude' ? 'CLAUDE.md' : engine === 'gemini' ? 'GEMINI.md' : 'AGENTS.md')
     writeFileSync(file, '# My project\nKeep these instructions.\n')
-    prepareApiInstructions(store, directory, engine, dirname(directory))
-    prepareApiInstructions(store, directory, engine, dirname(directory))
+    prepareApiInstructions(list, directory, engine, dirname(directory))
+    prepareApiInstructions(list, directory, engine, dirname(directory))
     const text = readFileSync(file, 'utf8')
     expect(text).toContain('# My project\nKeep these instructions.')
     expect(text.split('<!-- harness:apis -->')).toHaveLength(2)
@@ -100,16 +103,16 @@ describe('API tools', () => {
 
   it('creates instructions only when needed and leaves terminal and symlinked instruction files alone', () => {
     store.save({ provider: 'fal', apiKey: secret })
-    prepareApiInstructions(store, directory, 'terminal', dirname(directory))
+    prepareApiInstructions(list, directory, 'terminal', dirname(directory))
     expect(existsSync(join(directory, 'AGENTS.md'))).toBe(false)
     // OpenClaw's agent reads its own workspace's files, never the pane folder's.
-    prepareApiInstructions(store, directory, 'openclaw', dirname(directory))
+    prepareApiInstructions(list, directory, 'openclaw', dirname(directory))
     expect(existsSync(join(directory, 'AGENTS.md'))).toBe(false)
-    prepareApiInstructions(store, directory, 'codex', dirname(directory))
+    prepareApiInstructions(list, directory, 'codex', dirname(directory))
     expect(readFileSync(join(directory, 'AGENTS.md'), 'utf8')).toContain('harness api list')
     const target = join(directory, 'my-instructions.md'); writeFileSync(target, 'Preserve me')
     symlinkSync(target, join(directory, 'CLAUDE.md'))
-    prepareApiInstructions(store, directory, 'claude', dirname(directory))
+    prepareApiInstructions(list, directory, 'claude', dirname(directory))
     expect(readFileSync(target, 'utf8')).toBe('Preserve me')
   })
 })

@@ -193,7 +193,7 @@ Left since, with the core's process as `src/architecture.coreFiles.txt` lists it
 | What | Lines | What the core needs instead |
 | --- | ---: | --- |
 | `lib/agentTmp.ts`, a Swarm agent's private temporary folder, made and swept at a launch. A relaunch needs the folder too, and behind the Swarm's door it would still load by default | 183 | the folder kept in the launch record; the Swarm's service makes and sweeps it |
-| `lib/apiConnectionMetadata.ts`: the saved-API store parsed at every launch, keys included, to learn whether one exists. A look that skips the check gives another answer for a file the check refuses, as the engine probe's first cut did (#4255) | 53 | the keys in a file of their own, apart from what a launch reads: a change of what is on disk, with its migration |
+| `lib/apiConnectionMetadata.ts`: the saved-API store parsed at every launch, keys included, to learn whether one exists. A look that skips the check gives another answer for a file the check refuses, as the engine probe's first cut did (#4255). Done 15 November: a launch reads `list.json`, the saved APIs without their keys, checked as strictly; the store keeps it in step, and the core never opens the store | 53 | the keys in a file of their own, apart from what a launch reads: a change of what is on disk, with its migration |
 | Exports only tests read: `decodeTmuxControlData` and `normalizeTmuxCaptureLines` in `lib/tmuxStream.ts`, `stopSessionOwner`, `writeTty` and `foregroundJob` in `lib/externalOwnerControl.ts` (kept with a golden test: ask before deleting) | 154 | nothing, or a test's own file |
 | Lines of `core/api.ts` no core file imports, and code only the inline mode runs (`core/serviceHost.ts:122-233`, `lib/transcriptPages.ts:240-466`, `lib/sharedMachinesPort.ts:49-160`) | 707 | with their service, or gone with the inline mode |
 
@@ -352,8 +352,9 @@ today that the rule says it should not, most serious first:
 7. **Keys the core holds without need.** A grid's API key is kept on the registry row and copied into each
    stopped agent's file (`lib/registry.ts:145-153`, `lib/stoppedAgents.ts:147`). The whole environment of up to
    256 agent processes is cached to find their sessions (`lib/processEnv.ts:121`), and an OpenRouter key is cached
-   and never read (`lib/gatewayRuntime.ts:100`). The saved-API store is parsed at every launch, keys included,
-   to learn whether one exists (`lib/apiConnectionMetadata.ts:33-52`). A connected service's secret passes
+   and never read (`lib/gatewayRuntime.ts:100`). The saved-API store was parsed at every launch, keys included,
+   to learn whether one exists (`lib/apiConnectionMetadata.ts:33-52`), until 15 November: a launch reads a list
+   without the keys now. A connected service's secret passes
    through the core in the clear (`lib/connectors/vaultOps.ts:22-25`).
 8. **Any process of this OS user is the owner on both local doors, an agent's included** (`localWsServer.ts:474`,
    `backendSocket.ts:411-416`). An agent that reads other people's text, a Swarm task or a pull request, holds the
