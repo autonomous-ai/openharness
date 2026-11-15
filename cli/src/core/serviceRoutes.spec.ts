@@ -226,6 +226,17 @@ describe('the door\'s routes a service answers', () => {
       ['[services] thing_http could not be asked: not an error']])
   })
 
+  it('clears the inline deadline when a router throws before answering', async () => {
+    vi.useFakeTimers()
+    const broken: ServiceRouter = { route: () => { throw new Error('the host is closing') } }
+    const doors = createServiceRoutes({ routes, frames, linked: router([]), hosted: broken, log: vi.fn() })
+    expect(await doors.answer('/api/thing/save', read('/api/thing/save'))).toEqual(DOWN)
+    expect(vi.getTimerCount()).toBe(0)
+    expect(await doors.frame(conn, { type: 'route_task', payload: { requestId: 'q-5' } }))
+      .toEqual({ type: 'route_result', payload: { requestId: 'q-5', agentId: '', reason: 'down' } })
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
   it('waits on real timers and says what is wrong on the console when not told otherwise', async () => {
     vi.useFakeTimers()
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})

@@ -61,12 +61,14 @@ export function createServiceRoutes(deps: ServiceRoutesDeps) {
    *  request's arrival, and cut short a request that first waits for its service's process to start. Never rejects: a
    *  window holds a spinner open on its frame's answer, and silence is the one reply it cannot recover from. */
   const ask = (type: string, waitMs: number, payload: Record<string, unknown>, asker: Asker): Promise<Record<string, unknown> | null> => new Promise((resolve) => {
+    let timer: unknown
     try {
       if (deps.linked.route(type, payload, asker, resolve, waitMs)) return
-      const timer = setTimer(() => resolve(null), waitMs)
+      timer = setTimer(() => resolve(null), waitMs)
       const reply = (result: Record<string, unknown>): void => { clearTimer(timer); resolve(result) }
       if (!deps.hosted.route(type, payload, asker, reply)) reply({ error: 'SERVICE_UNAVAILABLE' })
     } catch (error) {
+      if (timer !== undefined) clearTimer(timer)
       log(`[services] ${type} could not be asked: ${error instanceof Error ? error.message : String(error)}`)
       resolve(null)
     }

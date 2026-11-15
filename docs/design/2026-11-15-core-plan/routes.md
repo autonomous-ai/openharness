@@ -128,7 +128,27 @@ core/usageOutcomes.ts.
   while the gateway is away) must carry it, because the Desktop reads it off every answer and one without it would stop
   its newer names until the next report. appProductUsageReport.spec.ts reads it from core/api.ts beside the names.
 
-## Step 3, done (#4324, branch core-routes-4): the keys' routes and the phone's code to the gateway, ⌘K's frames to the devices
+## Step 3, draft (#4324, branch core-routes-4): the keys' routes and the phone's code to the gateway, ⌘K's frames to the devices
+
+### Design
+- Growth: no new persistent records. Pending requests retain the existing service-link bounds; inline deadlines release
+  their timers on an answer or a failure. Request bodies retain the door's 256 KiB bound and WebSocket frame limit.
+- Concurrency: the gateway remains the sole key-state writer. This changes transport, not the key store's locks.
+  Window replies remain correlated by request id and never block the connection's terminal-input chain.
+- Read cost: one request and answer per command, with no new scan or polling. A frame type has one map lookup.
+- Scale: the routing tables are fixed by the build; ten times the traffic adds requests, not retained per-agent state.
+  Service deadlines, unavailable replies and request latency expose saturation first.
+- Compatibility: existing clients retain their paths, methods, result frames and byte-for-byte answers, except the
+  explicitly listed differences below. No backend contract changes. The master starts core and services from one build;
+  the socket provenance field is internal to that build, never supplied by a client payload.
+- Migration and rollback: no disk migration or backend rollout is needed; reverting restores the old route owners.
+- Audience: the local door still checks socket/credential, loopback, Host, Origin and the local-write header before
+  routing. The gateway separately refuses remote/guest callers and grants a phone code only for socket provenance.
+- Identity: commands use this daemon owner's existing gateway identity. No account fallback or agent launch changes.
+- Failure: unavailable, slow or failed services get the route's named fallback; router exceptions are logged. A service
+  failure never stops the core. No new retries or replay of key writes.
+- Platforms: macOS/Linux sockets and Windows pipes keep the same public contract. macOS validation is local; Linux CI
+  and native Windows acceptance must be recorded separately.
 
 The core's files and lines: 542 / 92,562 before (main at 0b15482b55), 542 / 92,283 after (tools/coreCount.mjs).
 
@@ -192,6 +212,25 @@ The core's files and lines: 542 / 92,562 before (main at 0b15482b55), 542 / 92,2
   both modes; the faults (`gateway.gateway_http`, `devices.devices_ws`) and the WebSocket's refusal red on main, green after.
 - Unit: core/serviceRoutes.spec.ts (socket door, frames), gateway/keyRoutes.spec.ts, gateway/accountRoutes.spec.ts,
   services/devices.spec.ts, hookServer.spec.ts, localWsServer.spec.ts, core/api.spec.ts.
+
+### Continuation (2026-11-15)
+- Worktree `/tmp/harness-core-routes-continue`, branch `codex/core-routes-continue`, from `core-routes-4` at
+  `18523b4710`. Integrated main `aad8dcd535` in `e7f7509005`. The API spec keeps both sets of imports; the shared plan
+  table keeps main's version for the coordinating root to update.
+- Review found the adapter left its inline deadline armed when a router threw. The timeout is now cleared on that
+  path, with a regression checking HTTP and WebSocket answers and zero pending timers.
+- The preceding Verified section records the original step's evidence, not fresh validation of this continuation.
+  No tests or compilers ran here: after the performance marker appeared, root held the shared validation lock for
+  Browser #4320. Red/green for the added regression, typecheck, the affected unit/architecture tests, `test:core`, and
+  isolated route e2e remain pending. The regression against `e7f7509005` should demonstrate the retained timer first.
+- `scripts/local-checks.py --list` selects `cli-core` only. Run its exact-head receipt after the final source commit.
+  The public route contracts also need `keyRoutes`, `accountRoutes`, `deviceRoutes`, `gatewayProcess`, `devicesProcess`
+  and `devicesOnDemand` e2e. Full Linux unit CI, independent review and native Windows acceptance remain unverified.
+- Current core count: main `aad8dcd535` has 539 files / 92,691 lines; this continuation has 539 / 92,414. No new file
+  enters the core. The original PR's frame microbenchmark reports 5.9 → 8.0 ns; it is not evidence of no regression.
+  Root must resolve or accept that measured increase explicitly before calling the hot-path requirement satisfied.
+- PR #4324 is still a draft with no CI runs. Root alone updates its body (currently containing `E2E_RESULTS`,
+  `CORE_AFTER` and `RECEIPTS` placeholders), pushes, marks ready, merges and publishes. Step 4 remains out of scope.
 
 ## Step 4: smaller items
 Phone sign-in relay (lib/loopbackGet.ts, core/terminals/browser.ts, 127 lines -> gateway), guest rules and a guest's
