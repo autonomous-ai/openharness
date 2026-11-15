@@ -175,8 +175,8 @@ export function serviceProcessesEnv(specs: readonly ServiceSpec[], masterPid: nu
  */
 export function otherEnginesVersion(env: NodeJS.ProcessEnv, parentPid: number): number {
   if (env.HARNESSD_SUPERVISED !== '1' || !env.HARNESSD_SERVICE_TOKEN) return 0
-  const [pid, version] = (env[ENGINE_OTHERS_ENV] ?? '').split(':')
-  return pid === String(parentPid) && /^[1-9]\d{0,5}$/.test(version ?? '') ? Number(version) : 0
+  const said = /^(\d+):([1-9]\d{0,5})$/.exec(env[ENGINE_OTHERS_ENV] ?? '')
+  return said && said[1] === String(parentPid) ? Number(said[2]) : 0
 }
 
 /** An older master may inherit a newer master's environment after rollback. Trust only this parent. */

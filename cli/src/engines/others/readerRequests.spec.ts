@@ -134,7 +134,7 @@ describe('the other engines\' readers in their worker', () => {
       const requests = otherReaderRequests()
       expect(await requests[READER_LAST_TURN]({ version: 1, session: { ...session, transcriptPath: null } }, asker)).toEqual({ version: 1, answer: null })
       expect(await requests[READER_HISTORY]({ version: 1, session: { ...session, transcriptPath: file } }, asker))
-        .toMatchObject({ version: 1, answer: { events: [] } })
+        .toMatchObject({ version: 1, answer: { events: [{ type: 'done', payload: { result: 'success' } }] } })
       expect(await requests[READER_HISTORY]({ version: 1, session: { ...session, engine: 'opencode', transcriptPath: null, store: join(dir, 'missing.db') } }, asker))
         .toMatchObject({ version: 1 })
       expect(exit).not.toHaveBeenCalled()
