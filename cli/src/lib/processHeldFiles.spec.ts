@@ -5,7 +5,7 @@
 import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, expect, it, vi, type MockInstance } from 'vitest'
 import type { ProcessView } from './processMounts.js'
 import type { ProcessIdentity } from './terminalTypes.js'
 
@@ -83,7 +83,12 @@ function file(path: string): string {
 }
 const listedPids = () => mocks.state.ran.map((run) => run.pid)
 
+// What the reader says of a listing that gave no home.
+let warn: MockInstance<typeof console.warn>
+const said = () => warn.mock.calls.map((args) => args.join(' '))
+
 beforeEach(async () => {
+  warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
   held = await import('./processHeldFiles.js')
   held.clearHeldHomes()
   proc = mkdtempSync(join(tmpdir(), 'process-held-files-'))
@@ -96,7 +101,10 @@ beforeEach(async () => {
   calls.length = 0
   fsHook.onCall = null
 })
-afterEach(() => { rmSync(proc, { recursive: true, force: true }) })
+afterEach(() => {
+  warn.mockRestore()
+  rmSync(proc, { recursive: true, force: true })
+})
 
 it('names the folder of the one file that matches, on Linux, from the links alone', async () => {
   hold(4242, 0, '/dev/pts/3')
@@ -383,14 +391,58 @@ it('lists a launcher and its children with one lsof, and answers nothing when it
 
 it('lsofPaths keeps the n lines that are paths, by process', async () => {
   expect(held.lsofPaths('p1\nf3\nn/a/b\nf4\nnpipe\np2\nf5\nn/c d\n', [1, 2])).toEqual(new Map([[1, ['/a/b']], [2, ['/c d']]]))
-  expect(held.lsofPaths('p1\nf3\nn/a/b', [1])).toBeNull()
+  expect(() => held.lsofPaths('p1\nf3\nn/a/b', [1])).toThrow('lsof failed')
   // Each process asked of has a section of its own, and no other process has one.
-  expect(held.lsofPaths('p1\nf3\nn/a/b\n', [1, 2])).toBeNull()
-  expect(held.lsofPaths('p1\np2\n', [1])).toBeNull()
-  expect(held.lsofPaths('p1\np1\n', [1])).toBeNull()
-  expect(held.lsofPaths('f3\nn/a/b\np1\n', [1])).toBeNull()
+  expect(() => held.lsofPaths('p1\nf3\nn/a/b\n', [1, 2])).toThrow('lsof failed')
+  expect(() => held.lsofPaths('p1\np2\n', [1])).toThrow('lsof failed')
+  expect(() => held.lsofPaths('p1\np1\n', [1])).toThrow('lsof failed')
+  expect(() => held.lsofPaths('f3\nn/a/b\np1\n', [1])).toThrow('lsof failed')
   // The bound is on one process's descriptors, as on Linux, and each one has an `f` line and an `n` line.
   expect(held.lsofPaths(`p1\n${'f3\nn/a\n'.repeat(4_096)}`, [1])?.get(1)).toHaveLength(4_096)
-  expect(held.lsofPaths(`p1\n${'f3\nn/a\n'.repeat(4_097)}`, [1])).toBeNull()
+  expect(() => held.lsofPaths(`p1\n${'f3\nn/a\n'.repeat(4_097)}`, [1])).toThrow('too many descriptors')
   expect(held.lsofPaths(`p1\n${'f3\nn/a\n'.repeat(4_096)}p2\n${'f3\nn/a\n'.repeat(4_096)}`, [1, 2])?.get(2)).toHaveLength(4_096)
+})
+
+it('says once for each process why its listing gave no home, and names no path', async () => {
+  // On Linux: two homes, asked twice; a pid another process has now; a sandbox's store with no path here; a process
+  // whose descriptors cannot be read.
+  hold(4242, 3, '/h/.hermes/state.db')
+  hold(4242, 4, '/p/project/state.db')
+  expect(await linux(id(4242), STORE)).toBeUndefined()
+  mocks.state.t = 5_000
+  expect(await linux(id(4242), STORE)).toBeUndefined()
+  hold(4243, 3, '/h/.hermes/state.db')
+  started(4243, TICKS + 1)
+  expect(await linux(id(4243), STORE)).toBeUndefined()
+  mocks.state.view = () => ({ state: 'sandbox', cwd: '/work', toHost: () => null })
+  hold(4244, 3, '/tmp/home/.hermes/state.db')
+  expect(await linux(id(4244), STORE)).toBeUndefined()
+  mocks.state.view = () => ({ state: 'same' })
+  mkdirSync(join(proc, '4245'))
+  started(4245, TICKS)
+  expect(await linux(id(4245), STORE)).toBeUndefined()
+  // On macOS: lsof fails, or is killed at its timeout; a process with too many descriptors; a home that steps out of
+  // a folder; a child whose pid is no pid; and a process that holds no store yet, which is no failure.
+  mocks.state.lsof.set('4246', Object.assign(new Error('Command failed: lsof'), { code: 1 }))
+  mocks.state.lsof.set('4247', Object.assign(new Error('Command failed: lsof'), { killed: true, signal: 'SIGTERM' }))
+  mocks.state.lsof.set('4248', `p4248\n${'f3\nn/a\n'.repeat(4_097)}`)
+  mkdirSync(disk('evil'), { recursive: true })
+  file('c/sessions/rollout-1.jsonl')
+  mocks.state.lsof.set('4249', `p4249\nf3\nn${disk('evil')}/..\\x2fc\\x2fsessions\\x2frollout-1.jsonl\n`)
+  for (const pid of [4246, 4247, 4248]) expect(await mac(id(pid), STORE)).toBeUndefined()
+  expect(await mac(id(4249), ROLLOUT)).toBeUndefined()
+  expect(await mac(id(4250), STORE, () => [id(0)])).toBeUndefined()
+  expect(await mac(id(4251), STORE)).toBeUndefined()
+
+  expect(said()).toEqual([
+    '[held-files] pid 4242: two homes',
+    '[held-files] pid 4243: pid changed',
+    '[held-files] pid 4244: unmappable',
+    '[held-files] pid 4245: unreadable',
+    '[held-files] pid 4246: lsof failed',
+    '[held-files] pid 4247: lsof timed out',
+    '[held-files] pid 4248: too many descriptors',
+    '[held-files] pid 4249: home with ..',
+    '[held-files] pid 4250: bad pid',
+  ])
 })
