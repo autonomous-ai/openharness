@@ -1,7 +1,8 @@
 import type { FolderSetting } from './hooks.js'
 
 /**
- * How core recognises an engine's process and reads its facts off argv, environment and transcript paths.
+ * How core recognises an engine's process and reads its facts off argv, the paths of the files it holds open and
+ * transcript paths.
  * Declared data, applied in core by the kit (kit/processFacts.ts, kit/projectFolder.ts) on every discovery
  * pass, as the registry loads and at start-up. Session binding never waits on an engine worker
  * (docs/design/2026-10-08-engine-launch.md, (c3)).
@@ -27,9 +28,10 @@ export interface DiscoveryContract {
   resumeArgs: { flags: readonly string[]; id: RegExp; unless?: readonly string[] }
   /** A grid launch writes the model into argv as `-m <model>`. */
   modelInArgv?: boolean
-  /** The engine home a process carries in `variable` when launched under a profile, and the setting naming
-   *  this machine's default. */
-  profile?: { variable: string; setting: FolderSetting; trimTrailingSlashes?: boolean }
+  /** The engine home a process runs under when launched under a profile: `held` matches the whole path of a file it
+   *  holds open for its whole run, its first group the home; `setting` names this machine's default. The daemon reads
+   *  no process's environment, so the variable that names the home is the hook's to read (cli/hook/notify.mjs). */
+  profile?: { setting: FolderSetting; held: RegExp; trimTrailingSlashes?: boolean }
   /**
    * Transcripts kept by the folder the session began in, `<root>/<folder's directory name>/<id>`, never
    * moved: the directory name is the folder with every character `mangle` matches replaced by `with`, and

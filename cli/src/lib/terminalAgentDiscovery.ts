@@ -12,6 +12,7 @@ import { probeHermesHome, probeHermesHomeDerived, probeHermesSandbox } from '../
 import type { TerminalBackend } from './terminalBackend.js'
 import {
   ambiguousAgentProcess,
+  engineChildren,
   engineProcessMatchScore,
   enrichProcessRows,
   hermesGatewaysUnder,
@@ -67,9 +68,10 @@ export interface DiscoveredTerminalAgent {
   /** Sanitized launch markers; classified after the binding pass, never awaited by it. */
   gridProcess?: GridAssignmentProcess
   /**
-   * Codex only: the CODEX_HOME profile the process was launched under, when it is not this machine's
-   * default. null = the default profile (or not Codex); undefined = the probe could not read the
-   * process, and the registry keeps what it already knows. See `probeProfileHome` (engines/discoveries.ts).
+   * Codex only: the CODEX_HOME profile the process runs under, from the rollout it or one of its engine children
+   * holds open, when it is not this machine's default. null = the default profile (or not Codex); undefined = no
+   * rollout held yet, or the files could not be listed, and the registry keeps what it already knows. See
+   * `probeProfileHome` (engines/discoveries.ts).
    */
   codexHome?: string | null
   /**
@@ -312,12 +314,16 @@ export async function probeTerminalAgents(
   const rows = beside || roots.length ? await (beside ?? processRows()) : []
   if (!rows) return { processTableAvailable: false, targets, agents: [], ambiguousPlacements: new Set() }
   const enrichedRows = await enrichProcessRows(rows, processTreePids(rows, roots.map((root) => root.rootPid)))
+  // One ownership snapshot for the pass, built only where a pane is: the walk and a launcher's children both use it,
+  // and each snapshot walks PATH (#3880).
+  const ownership = roots.length ? agentCommandOwnershipSnapshot() : undefined
   const discovered = discoverTerminalAgentsFromSnapshot(
     roots,
     enrichedRows,
     daemonPid,
     backendOrder,
     hints,
+    ownership,
   )
   // Which endpoint a Codex talks to, from its command line: no process is read for it. Runs for every
   // backend, as argv is the process's, not the pane's.
@@ -329,8 +335,11 @@ export async function probeTerminalAgents(
     const evidence = gridAssignmentEvidence('', agent.engine, row ? launchArgs(enrichedRows, row) : agent.args)
     if (evidence) agent.gridProcess = evidence
     else if (evidence === null) agent.grid = null
-    // And, for Codex, the profile it runs under — a fact about the process the row cannot otherwise learn.
-    agent.codexHome = await probeProfileHome(agent.processIdentity, agent.engine)
+    // And, for Codex, the profile it runs under, from the rollout it holds open: npm's launcher leaves that to one of
+    // the `codex` processes right under it, so those are named too, and no other process. An agent is only found in
+    // a pane, so the pass has its snapshot.
+    agent.codexHome = await probeProfileHome(agent.processIdentity, agent.engine,
+      () => engineChildren(enrichedRows, agent.engine, agent.processIdentity, ownership!))
     // Hermes's declared profile is read eagerly from the same verified process environment.
     agent.hermesHome = await probeHermesHome(agent.processIdentity, agent.engine)
     if (agent.hermesHome && await probeHermesHomeDerived(agent.processIdentity, agent.engine)) agent.hermesHomeDerived = true

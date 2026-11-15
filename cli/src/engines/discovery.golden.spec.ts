@@ -8,7 +8,7 @@
  *    the match score and its evidence, and whether the row is an unresolved `agent`;
  *  - argv against every engine: the session id it resumes, and the permission mode and approval it names;
  *  - a grid launch's argv: the model it was pointed at;
- *  - a process environment: the profile home it runs under;
+ *  - a hook's report of its own environment: the profile home it runs under;
  *  - Claude Code transcripts: whether one sits in a project directory, which folder it belongs to, the folder
  *    it names for itself (past one read, a character across reads, a limit), and the folder a row with a
  *    drifted cwd is put back in at start-up.
@@ -30,7 +30,7 @@ import type { AgentCommandOwnershipSnapshot } from '../lib/engineBin.js'
 import { classifyGridAssignment } from '../lib/gridAssignment.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { ambiguousAgentProcess, bypassPermissionActive, engineProcessMatch, permissionModeFromArgv, resumeSessionId, type ProcessRow } from '../lib/processTable.js'
-import { profileHomeFromEnv, transcriptProject } from './discoveries.js'
+import { reportedProfileHome, transcriptProject } from './discoveries.js'
 import { ENGINES, PROCESS_ENGINES } from './types.js'
 
 const GOLDEN = fileURLToPath(new URL('./__fixtures__/discovery.golden.json', import.meta.url))
@@ -192,8 +192,8 @@ function profileCases(): Record<string, unknown> {
     'relative': [{ CODEX_HOME: 'relative/codex' }, '/daemon/.codex'],
     'a control character': [{ CODEX_HOME: '/bad\nline' }, '/daemon/.codex'],
     'DEL': [{ CODEX_HOME: '/bad\x7fdel' }, '/daemon/.codex'],
-    'too long': [{ CODEX_HOME: `/${'x'.repeat(4096)}` }, '/daemon/.codex'],
-    'just long enough': [{ CODEX_HOME: `/${'x'.repeat(4095)}` }, '/daemon/.codex'],
+    'too long': [{ CODEX_HOME: `/${'x'.repeat(1024)}` }, '/daemon/.codex'],
+    'just long enough': [{ CODEX_HOME: `/${'x'.repeat(1023)}` }, '/daemon/.codex'],
     'empty': [{ CODEX_HOME: '' }, '/daemon/.codex'],
     'the daemon\'s own default': [{ CODEX_HOME: '/profiles/other' }, undefined],
     'another engine\'s variable': [{ CLAUDE_CONFIG_DIR: '/profiles/claude' }, '/daemon/.codex'],
@@ -201,7 +201,7 @@ function profileCases(): Record<string, unknown> {
   const cases: Record<string, unknown> = {}
   for (const [name, [environment, defaultHome]] of Object.entries(shapes)) {
     cases[name] = Object.fromEntries(ENGINES.flatMap((engine) => {
-      const found = profileHomeFromEnv(engine, environment, defaultHome)
+      const found = reportedProfileHome(engine, environment.CODEX_HOME, defaultHome)
       return found !== null ? [[engine, found.split(root).join('<root>')]] : []
     }))
   }

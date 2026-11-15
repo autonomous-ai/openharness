@@ -207,10 +207,10 @@ export interface RegisteredSession {
    */
   previousAgentId?: string
   /**
-   * The CODEX_HOME folder this agent was launched against, if one was chosen instead of `~/.codex`.
-   * Codex only. Unlike `grid`, this is chosen once at creation and never re-derived from the live
-   * process — a running agent cannot be moved to a different profile the way it can be retargeted
-   * to a different grid.
+   * The CODEX_HOME folder this agent runs against, if it is not `~/.codex`. Codex only. Chosen at creation; a row
+   * that does not know it (a Codex started by hand) is filled once, from its hook's own CODEX_HOME when its transcript
+   * is under it, or from the rollout its process holds open. Unlike `grid`, never changed once known — a running
+   * agent cannot be moved to a different profile the way it can be retargeted to a different grid.
    */
   codexHome?: string | null
   /**
@@ -1725,7 +1725,7 @@ class Registry {
     processIdentity: ProcessIdentity
     gateway?: 'ori' | null
     grid?: GridAssignment | null
-    /** Codex only: the CODEX_HOME the process was launched under, read off its environment. Fills a
+    /** Codex only: the CODEX_HOME the process runs under, from the rollout it holds open. Fills a
      *  row that does not know its profile yet; never overwrites one that does (see `codexHome`). */
     codexHome?: string | null
     /** The Hermes home this session's store lives in, if it is not the default. Fill-only. */
@@ -2828,8 +2828,6 @@ class Registry {
     return true
   }
 
-  /** Fill in the Codex profile a row did not know (discovery read it off the live process). Never
-   *  replaces one it already has — the profile is chosen once, see `codexHome`. */
   /** Put a row back in the folder its transcript belongs to (cwdRepair.ts). Any engine, any value:
    *  the caller has already proved the new folder from the transcript. */
   setCwd(agentId: string, cwd: string): boolean {
@@ -2841,8 +2839,9 @@ class Registry {
     return true
   }
 
-  /** Fill in the profile a row did not know (its CODEX_HOME), for an engine whose sessions follow one (its session
-   *  store's `sessions.profile`). Never overwrites. */
+  /** Fill in the profile a row did not know (its CODEX_HOME, which discovery found from the rollout its process holds
+   *  open), for an engine whose sessions follow one (its session store's `sessions.profile`). Never overwrites: the
+   *  profile is chosen once, see `codexHome`. */
   setCodexHome(agentId: string, codexHome: string): boolean {
     const session = this.agents.get(agentId)
     if (!session || !sessionStoreOf(session.engine)?.sessions.profile || session.codexHome) return false

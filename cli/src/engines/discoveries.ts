@@ -5,12 +5,12 @@
  * All of it runs in core, in line: binding a session never waits on an engine worker.
  */
 import { env } from '../config/env.js'
-import { readProcessEnv } from '../lib/processEnv.js'
+import { heldHome } from '../lib/processHeldFiles.js'
 import type { ProcessIdentity } from '../lib/registry.js'
 import { discovery as claude } from './claude/discoveryContract.js'
 import { discovery as codex } from './codex/discoveryContract.js'
 import type { DiscoveryContract } from './facets/discovery.js'
-import { profileFromEnv, versionedInstallMatcher } from './kit/processFacts.js'
+import { profileHome, versionedInstallMatcher } from './kit/processFacts.js'
 import { isProjectTranscript, projectDirectoryName, projectMatches, transcriptFolder } from './kit/projectFolder.js'
 import type { AgentEngine } from './types.js'
 
@@ -43,28 +43,27 @@ export const versionedInstalls: Readonly<Partial<Record<AgentEngine, (value: str
     contract.process.versionedInstall ? [[engine, versionedInstallMatcher(contract.process.versionedInstall)]] : []))
 
 /**
- * The engine home a process runs under, read off its environment, when it is not this machine's default: a
- * path, `null` for the default (or an engine with no such profile), never a guess. `defaultHome` overrides
- * the daemon's own, for a caller that already holds it.
+ * The profile home a hook reports for `engine`, from the hook's own environment: null for an engine with no profile,
+ * a value that could not be a home, and this machine's default. `defaultHome` overrides the daemon's own, for a caller
+ * that already holds it.
  */
-export function profileHomeFromEnv(engine: AgentEngine, processEnv: Record<string, string>, defaultHome?: string): string | null {
-  const profile = discoveryContract(engine)?.profile
-  return profile ? profileFromEnv(profile, processEnv, defaultHome ?? env[profile.setting]) : null
-}
-
-/** The profile home a hook reports for `engine`: null for an engine with no profile, a home over 1,024 characters, and this machine's default. */
 export function reportedProfileHome(engine: AgentEngine, home: string | undefined, defaultHome?: string): string | null {
   const profile = discoveryContract(engine)?.profile
-  return profile && home && home.length <= 1_024 ? profileHomeFromEnv(engine, { [profile.variable]: home }, defaultHome) : null
+  return profile && home !== undefined ? profileHome(profile, home, defaultHome ?? env[profile.setting]) : null
 }
 
-/** The same, read from the live process: `undefined` when it could not be read, which never overwrites what
- *  the registry knows. One cached environment read per process, as the grid probe makes. */
-export async function probeProfileHome(identity: ProcessIdentity, engine: AgentEngine): Promise<string | null | undefined> {
-  if (!discoveryContract(engine)?.profile) return null
-  const processEnv = await readProcessEnv(identity)
-  if (!processEnv) return undefined
-  return profileHomeFromEnv(engine, processEnv)
+/**
+ * The engine home a process runs under, from the rollout it holds open, when it is not this machine's default: a
+ * path, `null` for the default (or an engine with no such profile), `undefined` when it holds none yet or its files
+ * cannot be listed, which never overwrites what the registry knows. `children` names the selected process's direct
+ * children that are the same engine's (lib/processTable.ts `engineChildren`): no other process is listed, and two
+ * homes among them are no home (lib/processHeldFiles.ts `heldHome`).
+ */
+export async function probeProfileHome(selected: ProcessIdentity, engine: AgentEngine, children?: () => readonly ProcessIdentity[]): Promise<string | null | undefined> {
+  const profile = discoveryContract(engine)?.profile
+  if (!profile) return null
+  const home = await heldHome(selected, profile.held, children)
+  return home === undefined ? undefined : profileHome(profile, home, env[profile.setting])
 }
 
 /** Which folder a transcript belongs to, for an engine that keeps transcripts by the folder they began in. */
