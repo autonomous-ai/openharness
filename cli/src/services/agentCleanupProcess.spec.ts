@@ -126,8 +126,10 @@ describe('the agent cleanup in its own process', () => {
     mkdirSync(join(dir, 'super-tabs'))
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     const service = runAgentCleanupService({ dataDir: dir, socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't', run: () => ({ stop: vi.fn() }) })
-    await vi.waitFor(() => expect(existsSync(join(dir, 'super-tabs'))).toBe(false))
-    expect(log).toHaveBeenCalledWith('[agent-cleanup] removed 1 of the Swarm\'s files and folders from the data folder')
+    // The log line is the sweep's last step, after every name is looked at: wait for it, then the folder is surely gone.
+    // Waiting for the folder first raced the dozen names still to look at under a loaded test:core run.
+    await vi.waitFor(() => expect(log).toHaveBeenCalledWith('[agent-cleanup] removed 1 of the Swarm\'s files and folders from the data folder'))
+    expect(existsSync(join(dir, 'super-tabs'))).toBe(false)
     await service.stop()
   })
 
