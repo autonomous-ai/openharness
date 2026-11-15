@@ -2096,11 +2096,12 @@ describe('hook notify posts over the daemon\'s pipe on Windows (W1)', () => {
 
   /** The daemon's pipe server, as the daemon serves it (lib/localSocket.ts): every request proves the token. */
   async function pipeDaemon(socket: string, token: Buffer, answer: (res: import('http').ServerResponse) => void = (res) => res.end('{}')) {
-    const requests: Array<{ url: string; trusted: boolean; hookToken: unknown; credential: unknown }> = []
+    const requests: Array<{ url: string; trusted: boolean; hookToken: unknown; credential: unknown; codexHome: unknown }> = []
     const server = await listenLocalSocket((req, res) => {
       req.resume()
       req.on('end', () => {
-        requests.push({ url: req.url ?? '', trusted: isTrustedLocal(req), hookToken: req.headers['x-harness-hook-token'], credential: req.headers['x-harness-local'] })
+        requests.push({ url: req.url ?? '', trusted: isTrustedLocal(req), hookToken: req.headers['x-harness-hook-token'], credential: req.headers['x-harness-local'],
+          codexHome: req.headers['x-harness-hook-codex-home'] })
         answer(res)
       })
     }, socket, { token })
@@ -2119,6 +2120,24 @@ describe('hook notify posts over the daemon\'s pipe on Windows (W1)', () => {
     await run(tcp.port, dataDir, preload)
     expect(requests).toEqual([{ url: '/api/hook/session-start', trusted: true, hookToken: undefined, credential: undefined }])
     expect(tcp.requests).toEqual([])
+  })
+
+  // A Codex home on a share or a device would have the core open another computer's folder on every registration
+  // (src/hookServer.ts hookFacts): the hook says only a drive's path, as the core takes one.
+  it('sends a Codex home on a drive, and none on a share, a device or no drive', async () => {
+    const { dataDir, token, id, socket, preload } = windowsData()
+    const tcp = await collect()
+    record(dataDir, tcp.port, { pipe: `\\\\.\\pipe\\harness-${id}`, pid: process.pid })
+    const requests = await pipeDaemon(socket, token)
+    const codex = JSON.parse(readFileSync(new URL('./lib/__fixtures__/prompt-hooks.json', import.meta.url), 'utf8')).codex.input
+    const homes = ['C:\\Users\\u\\.codex-work', '\\\\host\\share\\.codex', '//host/share/.codex', '\\\\?\\C:\\x', '\\foo', '/foo']
+    for (const home of homes) {
+      await run(tcp.port, dataDir, preload, { engine: 'codex', input: codex,
+        env: { HARNESS_PANE: 'p1:%1', NODE_OPTIONS: `--import ${pathToFileURL(preload).href}`, CODEX_HOME: home } })
+    }
+    expect(requests.map((request) => request.url)).toEqual(homes.map(() => '/api/hook/session-start'))
+    expect(requests.map((request) => request.codexHome === undefined ? undefined : decodeURIComponent(String(request.codexHome))))
+      .toEqual([homes[0], undefined, undefined, undefined, undefined, undefined])
   })
 
   it('finds the daemon by its record when the hook was given the port it bound, not the one it was configured with', async () => {
