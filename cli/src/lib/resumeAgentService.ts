@@ -174,7 +174,7 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
         throw error
       }
       if (!ready || !ownsRoute() || !confirmedResume(ready)) return resumeChanged
-      await terminal.releaseHold(runtime)
+      await terminal.releaseHold(runtime, () => ownsRoute() && confirmedResume(ready!))
       if (!ownsRoute() || !confirmedResume(ready)) return resumeChanged
       stoppedAgents.finishResume(saved.agentId)
       const confirmed = ready
