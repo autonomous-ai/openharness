@@ -93,13 +93,16 @@ pub enum TabError {
     Failed,
 }
 
+/// The number Ghostty's script raises when reading a tty failed on a terminal that is still there. No such object
+/// (-1728) or a failed handler (-10000) alone may mean the terminal closed between two events.
+pub const NO_TTY: i64 = 1001;
+
 /// An AppleScript error number as a TabError.
-pub fn tab_error(app: TabApp, code: i64) -> TabError {
+pub fn tab_error(code: i64) -> TabError {
     match code {
         // errAEEventNotPermitted.
         -1743 => TabError::Denied,
-        // No such property, or the handler failed on it: only Ghostty may lack `tty`, elsewhere it is a passing error.
-        -1728 | -10000 if app == TabApp::Ghostty => TabError::NoTty,
+        NO_TTY => TabError::NoTty,
         _ => TabError::Failed,
     }
 }

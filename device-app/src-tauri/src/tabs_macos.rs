@@ -101,7 +101,9 @@ on focus_tty(t)
 end focus_tty
 "#;
 
-// Ghostty's `select tab` may bring Ghostty forward, so a swipe selects only while it is in front.
+// Ghostty's `select tab` may bring Ghostty forward, so a swipe selects only while it is in front. A Ghostty with no
+// `tty` and a terminal or tab that closed between two events fail a tty read alike: the script raises tabs::NO_TTY only
+// when the object it read is still there.
 const GHOSTTY: &str = r#"
 -- Ghostty: «class Gwnd» window, «property GFWn» front window, «property GWsT» selected tab, «class Gtab» tab,
 -- «property GTfT» focused terminal, «class Gtrm» terminal, «property Gtty» tty, «event GhstSlTb» select tab.
@@ -111,7 +113,7 @@ on selected_tty()
 	if not (running of application id app_id) then return ""
 	with timeout of 2 seconds
 		tell application id app_id
-			-- A window, tab or terminal that is not there is no tab: only reading the tty itself may say Ghostty has none.
+			-- A window, tab or terminal that is not there is no tab.
 			try
 				set k to «property GTfT» of «property GWsT» of «property GFWn»
 			on error number n
@@ -119,7 +121,13 @@ on selected_tty()
 				error number n
 			end try
 			if k is missing value then return ""
-			return «property Gtty» of k
+			try
+				return «property Gtty» of k
+			on error number n
+				if n is not in {-1728, -10000} then error number n
+				if exists k then error number 1001
+				return ""
+			end try
 		end tell
 	end timeout
 end selected_tty
@@ -130,8 +138,18 @@ on select_tty(t, in_front)
 	with timeout of 2 seconds
 		tell application id app_id
 			repeat with w in (every «class Gwnd»)
-				repeat with k in (every «class Gtab» of w)
-					set held to every «class Gtrm» of k whose «property Gtty» is t
+				-- By index: `repeat with k in` makes k an item of the list, which always exists.
+				set ks to every «class Gtab» of w
+				repeat with i from 1 to length of ks
+					set k to item i of ks
+					try
+						set held to every «class Gtrm» of k whose «property Gtty» is t
+					on error number n
+						if n is not in {-1728, -10000} then error number n
+						if exists k then error number 1001
+						-- A tab that closed holds no tty: the others may.
+						set held to {}
+					end try
 					if held is not {} then
 						«event GhstSlTb» k
 						return true
@@ -240,7 +258,7 @@ impl MacTabs {
         }
         let mut args = vec![Arg::Text(tty.to_string())];
         args.extend(front.map(Arg::Flag));
-        let held = call((self.source)(app), handler, args, flag).map_err(|code| tab_error(app, code))?;
+        let held = call((self.source)(app), handler, args, flag).map_err(tab_error)?;
         Ok(if held { Selected::Done } else { Selected::NoTab })
     }
 }
@@ -251,7 +269,7 @@ impl TabScripts for MacTabs {
     }
 
     fn selected_tty(&self, app: TabApp) -> Result<Option<String>, TabError> {
-        let tty = call((self.source)(app), "selected_tty", Vec::new(), text).map_err(|code| tab_error(app, code))?;
+        let tty = call((self.source)(app), "selected_tty", Vec::new(), text).map_err(tab_error)?;
         Ok(Some(tty).filter(|tty| !tty.is_empty()))
     }
 
@@ -555,7 +573,9 @@ end focus_tty
         for at in said {
             assert_eq!(lines[at - 1], "if n is not in {-1728, -10000} then error number n", "{GHOSTTY}");
             assert_eq!(lines[at], format!("if exists k then {no_tty}"), "{GHOSTTY}");
-            assert!(lines[at - 3..at - 1].iter().any(|line| line.contains("«property Gtty» of k")), "{GHOSTTY}");
+            // Raised on the tty read of k alone.
+            assert!(lines[at - 3].contains("«property Gtty»") && lines[at - 3].contains(" of k"), "{GHOSTTY}");
+            assert_eq!(lines[at - 2], "on error number n", "{GHOSTTY}");
         }
     }
 
