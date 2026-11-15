@@ -231,6 +231,14 @@ describe('the grid a resumed harness is on', () => {
     expect(await start()).toMatchObject({ ok: true })
     expect(registry.byAgent(saved.agentId)?.grid).toBeNull()
   })
+
+  it('is the launch record\'s on the row when an allocation the launch left unconfirmed is checked again', async () => {
+    // The launch wrote its record on the row (`refreshGridWebSearch`), and its engine was not confirmed then.
+    live({ grid: { baseUrl: 'https://saved.example/then/v1', model: 'm' }, gridLaunch: override })
+    expect(await start()).toMatchObject({ ok: true })
+    expect(create).not.toHaveBeenCalled()
+    expect(registry.byAgent(saved.agentId)?.grid).toEqual({ baseUrl: 'https://saved.example/now/v1', model: 'm' })
+  })
 })
 
 describe('production resume handler', () => {
