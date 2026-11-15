@@ -251,14 +251,14 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     orcaSend: orca.send,
     orcaSwitch: orca.switchTo,
     canOpen: opener.can,
-    open: opener.open,
+    // A tap on a Claude app agent runs the continue link a rest runs: its attach is the dial's own echo too.
+    open: (agentId, target) => {
+      if (target.pane?.app === 'claude' && opener.can(target)) noteLink(agentId)
+      return opener.open(agentId, target)
+    },
     claudeInFront: () => cableHost.latestFront() === 'claude',
-    // Noted as the link starts, as the app's attach can come before `open` exits: that attach is the dial's own echo, not
-    // a session the person chose. Busy or failed, the dial is on that agent all the same.
     claudeShow: (agentId, session) => {
-      const at = monotonic()
-      for (const [id, linked] of dialLinks) if (at - linked >= ATTACH_ECHO_MS) dialLinks.delete(id)
-      dialLinks.set(agentId, at)
+      noteLink(agentId)
       return opener.claudeShow(agentId, session)
     },
     // The route or the refusal only: never the words, the session or the terminal.
@@ -767,6 +767,13 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   let claudeAgent: string | undefined
   /** When the dial's own continue link to each agent started, by the devices' clock: at most one per listed agent. */
   const dialLinks = new Map<string, number>()
+  /** A tap's or a rest's link, noted as it starts, as the app's attach can come before `open` exits: that attach is the
+   *  dial's own echo, not a session the person chose. Busy or failed, the dial is on that agent all the same. */
+  const noteLink = (agentId: string): void => {
+    const at = monotonic()
+    for (const [id, linked] of dialLinks) if (at - linked >= ATTACH_ECHO_MS) dialLinks.delete(id)
+    dialLinks.set(agentId, at)
+  }
   /** Whether a link of the dial's own, to that agent or to any when none is named, is younger than ATTACH_ECHO_MS. Compared
    *  each time: an older one stays in the map until the next link. */
   const linkedByDial = (agentId?: string): boolean => {
