@@ -73,6 +73,8 @@ This exposes a real timing difference while the devices start: previously a thir
 received `BUSY` immediately in core. Now at most 100 service requests wait in the shared transport, and owner admission
 is applied when devices receives them. The third command may get `BUSY` then; if earlier operations already settled
 between deliveries, it may run sequentially instead. Preserving queue-residence admission would retain feature logic
-in core or add another feature queue outside it. This difference is explicit for root's architecture disposition;
+in core or add another feature queue outside it. Root accepted this admission-timing change on 2026-11-16 because
+`BUSY` is transient capacity feedback, not a guarantee that a particular burst must fail; no performance exception is
+implied. The real adapter and device handler are tested together with three requests queued before service startup;
 successful wire replies, eight/two concurrent execution, and actual-settlement bounds are unchanged. A disconnected
 request queued for startup is never delivered. Bounds and cancellation apply to both callers of the shared adapter.

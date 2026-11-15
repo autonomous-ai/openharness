@@ -3,7 +3,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
-import { createDevicesLink, DEVICES_WAIT_MS, INBOX_CALL_MS, ROUTE_TASK_WAIT_MS, type DevicesState } from './devicesLink.js'
+import { createDevicesLink, DEVICES_WAIT_MS, INBOX_CALL_MS, type DevicesState } from './devicesLink.js'
 
 const STATE: DevicesState = {
   desk: ['a1'], foreground: true, swarms: null, unread: [], focus: { voice: null, form: null }, engines: ['claude'], commanders: false,
@@ -95,14 +95,8 @@ describe('what the core tells the devices', () => {
 })
 
 describe('what the core asks of the devices', () => {
-  it('asks ⌘K and the Wi-Fi device\'s step under their own types, with deadlines', async () => {
-    const answer = { agentId: 'a1', machineId: 'm1', name: 'api', confidence: 1, reason: 'r', candidates: [], weighed: 1, machines: 1, via: 'model' }
-    const { call, port } = link(answer)
-    expect(await port.routeTask('fix it')).toEqual(answer)
-    expect(call).toHaveBeenLastCalledWith('routeTask', { text: 'fix it' }, ROUTE_TASK_WAIT_MS)
-    call.mockResolvedValueOnce({ ok: false, machine: 'mac-mini', reason: 'gone' })
-    expect(await port.routeSend('a1', 'go')).toEqual({ ok: false, machine: 'mac-mini', reason: 'gone' })
-    expect(call).toHaveBeenLastCalledWith('routeSend', { agentId: 'a1', text: 'go' }, DEVICES_WAIT_MS)
+  it('asks the Wi-Fi device\'s step under their own types, with deadlines', async () => {
+    const { call, port } = link()
     call.mockResolvedValueOnce({ machineId: 'm1', agentId: 'a2' })
     expect(await port.stepFocus('next', 'a1')).toEqual({ machineId: 'm1', agentId: 'a2' })
     expect(call).toHaveBeenLastCalledWith('stepFocus', { direction: 'next', currentAgentId: 'a1' }, DEVICES_WAIT_MS)
@@ -113,10 +107,8 @@ describe('what the core asks of the devices', () => {
     expect(await port.stepFocus('next')).toEqual({ machineId: '', agentId: '' })
   })
 
-  it('answers with the port\'s fallbacks when they are down, slow or failing: ⌘K says so, the walk finds no desk', async () => {
+  it('answers with the port\'s fallbacks when they are down, slow or failing: the walk finds no desk', async () => {
     const { port } = link({ error: 'SERVICE_UNAVAILABLE', service: 'devices', retryable: true })
-    expect(await port.routeTask('fix it')).toMatchObject({ agentId: '', reason: 'the devices service is unavailable', candidates: [] })
-    expect(await port.routeSend('a1', 'go')).toEqual({ ok: false, machine: '', reason: 'the devices service is unavailable' })
     expect(await port.stepFocus('next')).toBe('no_agents')
   })
 

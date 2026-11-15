@@ -20,6 +20,7 @@ import { randomUUID } from 'node:crypto'
 import { existsSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { createOwnerCommands } from './ownerCommands.js'
 import { env } from '../config/env.js'
 import { DEVICES_FALLBACKS, DEVICES_REQUESTS, type CoreApi, type CorePorts, type DeviceHookPort, type DevicesPort, type RouteAnswer, type SendResult, type ServiceRequests, type WindowFocus } from '../core/api.js'
 import { CableFleet, testDialDiscovery, type CableFleetOptions } from '../cable/cableFleet.js'
@@ -113,6 +114,8 @@ export interface DevicesDeps {
   refresh?: () => Promise<void>
   /** Called with a function this part runs whenever its link to the core drops: the calls that core held have failed. */
   onCoreGone?: (run: () => void) => void
+  /** Old cores' private route calls, retained only in this service process until 2026-12-16. */
+  onLegacyCommands?: (handlers: ServiceRequests) => void
   /** An agent's conversation token totals, read fresh (not the 15 s cache); null when unknown or remote.
    *  Defaults to the core's `usageFresh`. */
   readUsage?: (agentId: string) => Promise<{ input?: number; cached?: number; output?: number } | null>
@@ -1592,6 +1595,17 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     tabReport = undefined
     if (cable.isConnected) log('[device] tab · skipped · not in front')
   }
+  // ⌘K in the window: a typed task, and which agent it belongs to, on any of the owner's machines.
+  const routeTask = async (text: string): Promise<RouteAnswer> => fleet ? fleet.routeTask(text) : unrouted(NO_AGENT_LIST)
+  // Committed, through the fleet's router — the dial's own dispatch — so a remote agent is reached on its
+  // own machine instead of being looked for in this computer's registry.
+  const routeSend = async (agentId: string, text: string): Promise<SendResult> => {
+    const sent = fleet?.routeSend(agentId, text) ?? { ok: false as const, machine: '', reason: NO_AGENT_LIST }
+    log(`[route] ⌘K → ${sid(agentId)} · bytes=${Buffer.byteLength(text, 'utf8')}`
+      + (sent.ok ? '' : ` · REFUSED: ${sent.reason}${sent.machine ? ` (${sent.machine})` : ''}`))
+    return sent
+  }
+
   const port: DevicesPort = {
     // A paneless session's hook event, as the core checked it: taken, and dropped here while the observed source is
     // switched off.
@@ -1664,16 +1678,6 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       windowForm.disconnected(connId)
       windowSelection.focusChanged()
     }),
-    // ⌘K in the window: a typed task, and which agent it belongs to, on any of the owner's machines.
-    routeTask: async (text) => fleet ? fleet.routeTask(text) : unrouted(NO_AGENT_LIST),
-    // Committed, through the fleet's router — the dial's own dispatch — so a remote agent is reached on its
-    // own machine instead of being looked for in this computer's registry.
-    routeSend: async (agentId, text): Promise<SendResult> => {
-      const sent = fleet?.routeSend(agentId, text) ?? { ok: false as const, machine: '', reason: NO_AGENT_LIST }
-      log(`[route] ⌘K → ${sid(agentId)} · bytes=${Buffer.byteLength(text, 'utf8')}`
-        + (sent.ok ? '' : ` · REFUSED: ${sent.reason}${sent.machine ? ` (${sent.machine})` : ''}`))
-      return sent
-    },
     // The Wi-Fi device borrows the dial's walk along the desk and its stroke, until it is one of the devices.
     stepFocus: (direction, currentAgentId) => cableHost.stepFocus(direction, currentAgentId),
     scroll: (phase, dy, velocity) => cableHost.scrolled(phase, dy, velocity),
@@ -1723,16 +1727,21 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    * task, whose states other than the three are dropped rather than guessed at: an answer this side cannot read must not
    * settle a spoken turn as though it had been understood. A window's only, on this computer.
    */
+  const ownerCommand = createOwnerCommands({ task: routeTask, send: routeSend, log })
+  deps.onLegacyCommands?.({
+    routeTask: async ({ text }) => ({ ...await routeTask(typeof text === 'string' ? text : '') }),
+    routeSend: ({ agentId, text }) => routeSend(typeof agentId === 'string' ? agentId : '', typeof text === 'string' ? text : ''),
+  })
   const windowFrame = async (payload: Record<string, unknown>, asker: { local?: boolean; owner: boolean }): Promise<Record<string, unknown>> => {
     if (!asker.local || !asker.owner) return { error: 'LOCAL_ONLY' }
     const frame = (payload.payload && typeof payload.payload === 'object' ? payload.payload : {}) as Record<string, unknown>
     const said = (field: string): string => (typeof frame[field] === 'string' ? frame[field] as string : '')
     if (payload.frame === 'route_task') {
       const task = said('text').trim()
-      return { ...(task ? await port.routeTask(task) : unrouted('empty task')) }
+      return { ...(task ? await routeTask(task) : unrouted('empty task')) }
     }
     if (payload.frame === 'route_send') {
-      const sent = said('agentId') && said('text') ? await port.routeSend(said('agentId'), said('text')) : { ok: false as const, machine: '', reason: 'nothing to send' }
+      const sent = said('agentId') && said('text') ? await routeSend(said('agentId'), said('text')) : { ok: false as const, machine: '', reason: 'nothing to send' }
       return sent.ok ? { ok: true } : { ok: false, machine: sent.machine, reason: sent.reason }
     }
     if (payload.frame === 'voice_route_reply') {
@@ -1749,6 +1758,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   return {
     harness_devices_list: answer('harness_devices_list'), harness_device_settings: answer('harness_device_settings'),
     pet_preview: local('pet_preview'), pet_apply: local('pet_apply'), pet_reset: local('pet_reset'), pet_status: local('pet_status'),
-    devices_ws: (payload, asker) => windowFrame(payload, asker),
+    devices_ws: (payload, asker, closed) => asker.rpcRoute === true
+      ? ownerCommand(typeof payload.frame === 'string' ? payload.frame : '',
+        payload.payload && typeof payload.payload === 'object' && !Array.isArray(payload.payload) ? payload.payload as Record<string, unknown> : {}, asker, closed)
+      : windowFrame(payload, asker),
   }
 }

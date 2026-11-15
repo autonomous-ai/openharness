@@ -1,6 +1,7 @@
 import { createClientStreams } from './core/clientStreams.js'
 import { removeRegistryAgent } from './testing/registryFixtures.js'
-import { USAGE_FALLBACKS } from './core/api.js'
+import { SERVICE_WS_FRAMES, USAGE_FALLBACKS } from './core/api.js'
+import { createServiceRoutes } from './core/serviceRoutes.js'
 import * as gitPullRequest from './lib/gitPullRequest.js'
 import * as sessionGitPullRequest from './lib/sessionGitPullRequest.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -428,11 +429,47 @@ describe('agent_update opened: one "last used" for every app', () => {
 })
 
 describe('viewer forwarding authentication', () => {
+  it('never logs the contents of a directly submitted service frame wrapper, including forged routing markers', async () => {
+    const socket = relaySocket('fixture')
+    socket.serviceRouter = (_type, _payload, _asker, reply) => { reply({ error: 'LOCAL_ONLY' }); return true }
+    vi.spyOn(gatewayOf(socket).e2ee, 'hasSession').mockReturnValue(true)
+    vi.spyOn(gatewayOf(socket).e2ee, 'sessionRole').mockReturnValue('web')
+    const clear = { type: 'devices_ws', payload: { requestId: 'raw', rpc: true, rpcRoute: true, selectedModel: 'private-wrapper-sentinel', frame: 'route_task', payload: { text: 'private-wrapper-sentinel' } } }
+    vi.spyOn(gatewayOf(socket).e2ee, 'unwrapDown').mockReturnValue(clear)
+    vi.spyOn(gatewayOf(socket).e2ee, 'wrapRpcReply').mockReturnValue({ type: 'devices_ws_result', payload: { __e2e: 'sealed' } })
+    const logged = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const was = env.LOG_FRAMES
+    try {
+      env.LOG_FRAMES = true
+      await dispatchDown(socket, { type: 'devices_ws', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'fixture' } } }, 'remote')
+      expect(JSON.stringify(logged.mock.calls)).not.toContain('private-wrapper-sentinel')
+    } finally { env.LOG_FRAMES = was; await socket.stop() }
+  })
+
+  it('keeps same-connection input moving while a declared owner command waits and keeps the reply id first', async () => {
+    const socket = relaySocket('token')
+    const frames: unknown[] = []
+    socket.registerLocalClient('local:owner', { sendFrame: frame => { frames.push(frame); return true }, sendBinary: () => true })
+    let finish!: (answer: Record<string, unknown>) => void
+    const routes = createServiceRoutes({ routes: [], frames: SERVICE_WS_FRAMES,
+      linked: { route: (_type, _payload, _asker, reply) => { finish = reply; return true } }, hosted: { route: () => false } })
+    socket.serviceRouter = routes.route
+    const input = vi.fn(async () => true)
+    socket.setTerminalStreamManager({ handleFrame: input, stop: vi.fn(async () => {}) } as unknown as TerminalStreamManager)
+    await dispatchDown(socket, { type: 'route_task', payload: { requestId: 'original', text: 'fixture' } }, 'local:owner')
+    expect(frames).toEqual([])
+    await dispatchDown(socket, { type: 'terminal_input', payload: { text: 'typed meanwhile' } }, 'local:owner')
+    expect(input).toHaveBeenCalledExactlyOnceWith('local:owner', 'terminal_input', { text: 'typed meanwhile' })
+    finish({ agentId: 'picked', requestId: 'forged' })
+    await vi.waitFor(() => expect(frames).toHaveLength(1))
+    expect(JSON.stringify(frames[0])).toBe('{"type":"route_task_result","payload":{"requestId":"original","agentId":"picked"}}')
+    await socket.stop()
+  })
+
   it('routes a sealed service request with its connection, who asked, and nothing in the clear', async () => {
     const socket = relaySocket('token')
     const routed: Array<{ type: string; asker: unknown }> = []
     socket.serviceRouter = (type, _payload, asker, reply) => { routed.push({ type, asker }); reply({ memories: [] }); return true }
-    const ownerCommands = vi.spyOn(socket.ownerCommands, 'request')
     vi.spyOn(gatewayOf(socket).e2ee, 'hasSession').mockReturnValue(true)
     const role = vi.spyOn(gatewayOf(socket).e2ee, 'sessionRole').mockReturnValue('web')
     const clear = { type: 'memory_snapshot', payload: { requestId: 'one' } }
@@ -450,14 +487,14 @@ describe('viewer forwarding authentication', () => {
       { type: 'memory_snapshot', asker: { local: false, owner: false, accountOwner: false, connection: 'remote', requestId: 'one' } },
       { type: 'memory_snapshot', asker: { local: false, owner: true, accountOwner: false, connection: 'remote', requestId: 'one' } },
     ])
-    expect(ownerCommands).not.toHaveBeenCalled()
     expect(sealedReply).toHaveBeenCalledWith('remote', 'memory_snapshot_result', 'one', { memories: [] })
     await socket.stop()
   })
 
   it.each(['route_task', 'route_send'])('requires a sealed owner session for %s', async type => {
     const socket = relaySocket('token'), internals = socket as any
-    const request = vi.spyOn(socket.ownerCommands, 'request').mockResolvedValue({ ok: true })
+    const request = vi.fn((_type, _payload, asker, reply) => { reply(asker.owner ? { ok: true } : { error: 'OWNER_REQUIRED' }); return true })
+    socket.serviceRouter = request
     vi.spyOn(gatewayOf(socket).e2ee, 'hasSession').mockReturnValue(true)
     const role = vi.spyOn(gatewayOf(socket).e2ee, 'sessionRole').mockReturnValue('web')
     const clear = { type, payload: { requestId: 'one', text: 'fixture task' } }
@@ -468,10 +505,11 @@ describe('viewer forwarding authentication', () => {
     const sealed = { type, payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'fixture' } } }
     role.mockReturnValue('device')
     await dispatchDown(socket, sealed, 'remote')
-    expect(request).not.toHaveBeenCalled()
+    expect(request).toHaveBeenCalledWith(type, clear.payload, expect.objectContaining({ owner: false, local: false }), expect.any(Function))
+    request.mockClear()
     role.mockReturnValue('web')
     await dispatchDown(socket, sealed, 'remote')
-    expect(request).toHaveBeenCalledWith('remote', type, clear.payload)
+    expect(request).toHaveBeenCalledWith(type, clear.payload, expect.objectContaining({ owner: true, local: false, connection: 'remote', requestId: 'one' }), expect.any(Function))
     expect(sealedReply).toHaveBeenCalledWith('remote', `${type}_result`, 'one', { ok: true })
     await socket.stop()
   })

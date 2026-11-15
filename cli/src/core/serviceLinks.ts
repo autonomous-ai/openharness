@@ -75,7 +75,7 @@ export interface ServiceLinksOptions {
   onDemand?: ReadonlySet<string>
   /** Of those, the ones whose requests also wait for them to come back after they connected and went (a crash, a
    *  kill, the master's restart for an update), as a first start is waited for: asked for again, within the same
-   *  start wait and then the request's own, at most `RESTART_HELD_MAX` at a time for each. The Store's and the engine
+   *  start wait and then the request's own, at most `SERVICE_REQUESTS_MAX` at a time for each. The Store's and the engine
    *  probe's (core/main.ts). */
   waitsThroughRestart?: ReadonlySet<string>
   /** How long a service on demand may take to connect from when it is first asked for (`ON_DEMAND_START_MS`), and, by service,
@@ -125,10 +125,9 @@ export const ON_DEMAND_START_MS = 20_000
  *  the 20 s of the others, which lost that message. */
 export const READER_START_MS = 45_000
 
-/** The most requests held at once for one service to come back after it went (`waitsThroughRestart`); past it,
- *  a request is answered SERVICE_UNAVAILABLE at once, as before. A window asks the Store a few things at a time
- *  (its list, an install): this is many windows' worth, and all a service that does not come back can pile up. */
-export const RESTART_HELD_MAX = 100
+/** The most outstanding requests per service, including first startup, restart and a connected process that hangs.
+ * The transport releases a slot when its answer settles; the service still bounds its own actual work. */
+export const SERVICE_REQUESTS_MAX = 100
 
 /** Who asks when the core itself asks a service (`call`): this machine's owner, on this machine. */
 const THE_CORE: Asker = { local: true, owner: true }
@@ -162,7 +161,7 @@ export function createServiceLinks(options: ServiceLinksOptions) {
   const startOver = (service: string): void => {
     starts.delete(service)
     unstarted.add(service)
-    // What waits for a service not connected waits for its start: what was sent to it was answered as it went (`heldFor`).
+    // What waits for a service not connected waits for its start: what was sent to it was answered as it went.
     for (const [id, entry] of waiting) if (entry.service === service) settle(id, entry, unavailable(service))
     for (const up of upWaiters.get(service) ?? []) up(false)
     upWaiters.delete(service)
@@ -173,6 +172,7 @@ export function createServiceLinks(options: ServiceLinksOptions) {
     options.want?.(service)
   }
   const waiting = new Map<string, Waiting>()
+  const waitingCounts = new Map<string, number>()
   /** What a service must hear even if it is down when it is said (a purge's forgetting), delivered on
    *  its next connection; bounded, the oldest dropped first. */
   const held = new Map<string, ServiceFrame[]>()
@@ -187,16 +187,11 @@ export function createServiceLinks(options: ServiceLinksOptions) {
 
   const settle = (id: string, entry: Waiting, result: Record<string, unknown>): void => {
     waiting.delete(id)
+    const remaining = waitingCounts.get(entry.service)! - 1
+    if (remaining) waitingCounts.set(entry.service, remaining)
+    else waitingCounts.delete(entry.service)
     clearTimer(entry.timer)
     entry.reply(result)
-  }
-
-  /** How many requests wait for `service`, which is down: all of them wait for it to connect, since what was sent to
-   *  it was answered as it went (`closed`, and `accept` for a replaced connection). */
-  const heldFor = (service: string): number => {
-    let count = 0
-    for (const entry of waiting.values()) if (entry.service === service) count++
-    return count
   }
 
   /** How long an answer from `service` to `type` is waited for: its own wait when it has one. */
@@ -208,16 +203,21 @@ export function createServiceLinks(options: ServiceLinksOptions) {
   /** Send `type` to `service`, its answer to `reply`, whatever becomes of the service. An experiment that is
    *  not connected is asked for, and the request goes once it connects: off, it costs nothing until asked. */
   const ask = (service: string, type: string, payload: Record<string, unknown>, asker: Asker, reply: (result: Record<string, unknown>) => void, waitMs?: number): void => {
+    const count = waitingCounts.get(service) ?? 0
+    if (count >= SERVICE_REQUESTS_MAX) {
+      log(`[services] ${service} SERVICE_REQUESTS_FULL`)
+      reply(unavailable(service)); return
+    }
     const link = links.get(service)
     const awaited = !link && !!options.onDemand?.has(service) && !unstarted.has(service)
     // Coming back after it connected: the Store, while the master restarts the viewers' process (a crash, an update's
     // handover), answered the windows' Store list SERVICE_UNAVAILABLE at once (7 times on 2026-10-16, a day of six
     // updates). Held as a first start is, in time and in number: a process that does not come back holds at most
-    // RESTART_HELD_MAX requests for one start wait, and none after it (`unstarted`). The other services are refused at
+    // SERVICE_REQUESTS_MAX requests for one start wait, and none after it (`unstarted`). The other services are refused at
     // once while down, as their callers expect: a viewer's rendered frame, an engine worker's answer, ⌘K's route
     // (e2e/viewersProcess, engineQuestionControl and devicesProcess).
     const starting = awaited && (!seen.has(service)
-      || (!!options.waitsThroughRestart?.has(service) && heldFor(service) < RESTART_HELD_MAX))
+      || !!options.waitsThroughRestart?.has(service))
     if (!link && !starting) { reply(unavailable(service)); return }
     const id = newId()
     const frame: ServiceFrame = { type, payload: { ...payload, requestId: id }, asker }
@@ -228,6 +228,7 @@ export function createServiceLinks(options: ServiceLinksOptions) {
     // Cleared whenever the entry is settled, so it only ever fires for one still waiting.
     entry.timer = setTimer(() => settle(id, entry, unavailable(service)), wait)
     waiting.set(id, entry)
+    waitingCounts.set(service, count + 1)
     if (starting) return
     if (!link!.sink.sendFrame(frame)) settle(id, entry, unavailable(service))
   }

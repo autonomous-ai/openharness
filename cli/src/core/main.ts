@@ -199,7 +199,7 @@ import { createStoreOf } from './transcripts/stores.js'
 import { createOtherStreams } from './engines/otherStreams.js'
 import { paneReadIdentity } from './transcripts/readIdentity.js'
 import { isOtherEngine, OTHER_ENGINE_STATES, OTHER_ENGINES_SERVICE } from '../engines/otherEngines.js'
-import { CLOUD_FALLBACKS, CLOUD_REQUESTS, type CloudCore, CONNECTORS_FALLBACKS, CONNECTORS_OFF, CONNECTORS_REQUESTS, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARED_MACHINES_REQUESTS, MEMORY_REQUESTS, ROUTER_REQUESTS, createCoreApi, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, MACHINE_ADDON_REQUESTS, HANDOFF_REQUESTS, EXPERIMENTS, LONG_ANSWERS, MODELS_FALLBACKS, MODELS_OFF, MODELS_REQUESTS, MONITOR_FALLBACKS, MONITOR_OFF, MONITOR_REQUESTS, ORCHESTRATOR_FALLBACKS, OS_DEVICE_REQUESTS, ORCHESTRATOR_REQUESTS, SHARE_REQUESTS, SHARING_FALLBACKS, PROJECTS_REQUESTS, SEARCH_FALLBACKS, SEARCH_REQUESTS, STORE_FALLBACKS, STORE_OFF, STORE_REQUESTS, MESSAGES_FALLBACKS, MESSAGES_REQUESTS, GOALS_REQUESTS, TURN_DELIVERERS, USAGE_FALLBACKS, USAGE_REQUESTS, VIEWERS_FALLBACKS, VIEWERS_UNAVAILABLE, WIFI_FALLBACKS, WINDOW_NAMES_REQUESTS, ENGINE_PROBE_REQUESTS, WORKSPACES_FALLBACKS, type GatewayAccount, type GatewayOps, type GatewayStatus, type RouteAnswer, type WindowFocus } from './api.js'
+import { CLOUD_FALLBACKS, CLOUD_REQUESTS, type CloudCore, CONNECTORS_FALLBACKS, CONNECTORS_OFF, CONNECTORS_REQUESTS, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARED_MACHINES_REQUESTS, MEMORY_REQUESTS, ROUTER_REQUESTS, createCoreApi, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, MACHINE_ADDON_REQUESTS, HANDOFF_REQUESTS, EXPERIMENTS, LONG_ANSWERS, MODELS_FALLBACKS, MODELS_OFF, MODELS_REQUESTS, MONITOR_FALLBACKS, MONITOR_OFF, MONITOR_REQUESTS, ORCHESTRATOR_FALLBACKS, OS_DEVICE_REQUESTS, ORCHESTRATOR_REQUESTS, SHARE_REQUESTS, SHARING_FALLBACKS, PROJECTS_REQUESTS, SEARCH_FALLBACKS, SEARCH_REQUESTS, STORE_FALLBACKS, STORE_OFF, STORE_REQUESTS, MESSAGES_FALLBACKS, MESSAGES_REQUESTS, GOALS_REQUESTS, TURN_DELIVERERS, USAGE_FALLBACKS, USAGE_REQUESTS, VIEWERS_FALLBACKS, VIEWERS_UNAVAILABLE, WIFI_FALLBACKS, WINDOW_NAMES_REQUESTS, ENGINE_PROBE_REQUESTS, WORKSPACES_FALLBACKS, type GatewayAccount, type GatewayOps, type GatewayStatus, type WindowFocus } from './api.js'
 import { createFrameParts } from './frameParts.js'
 import { testFaults } from './serviceHost.js'
 import { startStalls } from './stall.js'
@@ -1810,10 +1810,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     },
   })
   serviceLinksRef = serviceLinks
-  // A request a service declared goes to it: in its own process, or in this one (services/inlineHost.ts).
-  backend.serviceRouter = (type, payload, asker, reply) => serviceLinks.route(type, payload, asker, reply) || serviceHost?.route(type, payload, asker, reply) || false
-  // And a route of the door a service answers, the same way (core/serviceRoutes.ts).
+  // Every declared service route shares the same adapter, for the local door, windows and authenticated RPC.
   const serviceRoutes = createServiceRoutes({ routes: SERVICE_HTTP_ROUTES, frames: SERVICE_WS_FRAMES, linked: serviceLinks, hosted: serviceHost })
+  backend.serviceRouter = (type, payload, asker, reply) => serviceRoutes.route(type, payload, asker, reply)
+    || serviceLinks.route(type, payload, asker, reply) || serviceHost?.route(type, payload, asker, reply) || false
   // The connection that asked closed: the services abort what it asked, wherever they run.
   backend.onConnectionClosed = (connId) => { serviceLinks.closeConnection(connId); serviceHost?.closeConnection(connId) }
   // Session search (services/search.ts): in this process, or in its own (services/searchProcess.ts),
@@ -2383,14 +2383,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // device fault reaching here would disconnect the desktop, again on every pane change.
   /** Which window has the person's attention, as the devices are told it. */
   const windowFocus = (): WindowFocus => ({ voice: appVoiceFocus ?? null, form: appFormWindow ?? null })
-  /** ⌘K's answer with no devices to route through. */
-  const unrouted = (reason: string): RouteAnswer => ({ agentId: '', machineId: '', name: '', confidence: 0, reason, candidates: [], weighed: 0, machines: 0, via: '' })
-  const DEVICES_OFF = 'the devices service is unavailable'
-
-  // ⌘K from the owner's app away from this desk (lib/ownerCommands.ts): the fleet's, beside the dial in the devices, sent
-  // through its router and NOT straight into backend.onMessage, which would look for a remote agent in this registry.
-  backend.ownerCommands.onRouteTask = async (text) => ports.devices ? ports.devices.routeTask(text) : unrouted(DEVICES_OFF)
-  backend.ownerCommands.onRouteSend = async (agentId, text) => ports.devices ? ports.devices.routeSend(agentId, text) : { ok: false, machine: '', reason: DEVICES_OFF }
   const localWsServer = attachLocalWsServer(hookServer, {
     localSocketServer: localSocket?.server ?? null,
     // Over TCP the window, the CLI or a tool shows this user's 0600 credential (lib/localCredential.ts).

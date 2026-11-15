@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createServiceLinks, HELD_MAX, ON_DEMAND_START_MS, RESTART_HELD_MAX, type ServiceFrame } from './serviceLinks.js'
+import { createServiceLinks, HELD_MAX, ON_DEMAND_START_MS, SERVICE_REQUESTS_MAX, type ServiceFrame } from './serviceLinks.js'
 import { HANDOFF_DEADLINE_MS } from '../lib/handoffAuthority.js'
 
 const TOKEN = 'a'.repeat(48)
@@ -73,6 +73,28 @@ describe('service links', () => {
     links.accept('search', TOKEN, sink(), vi.fn())
     links.route('session_search', { agentId: 'a' }, ASKER, vi.fn())
     expect(authority.ownsRequest('route-3', 'session_search', {})).toBe(false)
+  })
+
+  it.each([false, true])('bounds all outstanding requests per service while connected=%s', (connected) => {
+    const want = vi.fn()
+    const links = make({ owned: { search: ['session_search'], store: ['dsh_list'] }, onDemand: new Set(['search', 'store']), want })
+    const search = sink()
+    if (connected) links.accept('search', TOKEN, search, vi.fn())
+    const held = vi.fn(), overflow = vi.fn()
+    for (let i = 0; i < SERVICE_REQUESTS_MAX; i++) links.route('session_search', { query: 'fixture' }, { ...ASKER, connection: `conn-${i}` }, held)
+    links.route('session_search', {}, ASKER, overflow)
+    expect(overflow).toHaveBeenCalledExactlyOnceWith({ error: 'SERVICE_UNAVAILABLE', service: 'search', retryable: true })
+    expect(held).not.toHaveBeenCalled()
+    const other = vi.fn()
+    links.route('dsh_list', {}, ASKER, other)
+    expect(other).not.toHaveBeenCalled()
+    // Releasing one transport slot neither releases another service's nor leaves a permanent full latch.
+    links.closeConnection('conn-0')
+    links.route('session_search', {}, ASKER, vi.fn())
+    const peer = connected ? undefined : links.accept('search', TOKEN, search, vi.fn())
+    expect(search.sent.filter(frame => frame.type === 'session_search')).toHaveLength(SERVICE_REQUESTS_MAX + (connected ? 1 : 0))
+    expect(search.sent.some(frame => (frame.asker as { connection?: string })?.connection === 'conn-0')).toBe(connected)
+    peer?.closed()
   })
 
   it('lets in only a service it runs out of process, with the master\'s token', () => {
@@ -368,16 +390,16 @@ describe('service links', () => {
     // What waits on another service is not counted against this one.
     links.accept('search', TOKEN, sink(), vi.fn())
     const searching = vi.fn()
-    for (let n = 0; n < RESTART_HELD_MAX; n++) links.route('session_search', {}, ASKER, searching)
+    for (let n = 0; n < SERVICE_REQUESTS_MAX; n++) links.route('session_search', {}, ASKER, searching)
     const held = vi.fn(), over = vi.fn()
-    for (let n = 0; n < RESTART_HELD_MAX; n++) links.route('dsh_list', {}, ASKER, held)
+    for (let n = 0; n < SERVICE_REQUESTS_MAX; n++) links.route('dsh_list', {}, ASKER, held)
     links.route('dsh_list', {}, ASKER, over)
     expect(held).not.toHaveBeenCalled()
     expect(searching).not.toHaveBeenCalled()
     expect(over).toHaveBeenCalledWith({ error: 'SERVICE_UNAVAILABLE', service: 'store', retryable: true })
     const store = sink()
     links.accept('store', TOKEN, store, vi.fn())
-    expect(store.sent).toHaveLength(RESTART_HELD_MAX)
+    expect(store.sent).toHaveLength(SERVICE_REQUESTS_MAX)
   })
 
   it('waits as long as a call says it may (a pairing), and answers SERVICE_UNAVAILABLE after', async () => {

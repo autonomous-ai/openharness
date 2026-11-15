@@ -75,7 +75,7 @@ export class RelayConnectError extends Error {
  */
 export const DAEMON_LOCAL_ONLY_TYPES: ReadonlySet<string> = new Set(['device_key_added', 'device_key_removed', 'device_conflict', 'device_keys_changed'])
 
-/** ⌘K's task delivery, which the devices answer (lib/ownerCommands.ts): the owner's commands, sealed and the
+/** ⌘K's task delivery, which the devices answer (services/ownerCommands.ts): the owner's commands, sealed and the
  *  owner's only. */
 export const ROUTE_COMMAND_TYPES: ReadonlySet<string> = new Set(['route_task', 'route_send'])
 /** The pair brain, machine to machine (daemons/BRAIN.md): retired, and refused (lib/e2ee/applicationFrames.ts). */

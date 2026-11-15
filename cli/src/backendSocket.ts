@@ -6,7 +6,7 @@ import type { MessageReceipt } from './lib/sessionInput.js'
 import { isLocalOnly, withoutUpdate } from './lib/cardUpdate.js'
 import { slimForRelay } from './lib/slimForRelay.js'
 import type { PurgeAgentService } from './lib/purgeAgentService.js'
-import { MESSAGES_REQUESTS, SHARE_REQUESTS, type Asker, type LocalWindows, type WindowSurface, type BackendNotice, type GatewayEvents, type GatewayPort, type UsageEvent, type ModelsPort, type RemoteClient, type RemoteRole, type RemoteTransport, type TabFrame } from './core/api.js'
+import { MESSAGES_REQUESTS, SHARE_REQUESTS, SERVICE_WS_FRAMES, type Asker, type LocalWindows, type WindowSurface, type BackendNotice, type GatewayEvents, type GatewayPort, type UsageEvent, type ModelsPort, type RemoteClient, type RemoteRole, type RemoteTransport, type TabFrame } from './core/api.js'
 import { ServiceUnavailableError } from './core/serviceHost.js'
 import { countWindows } from './lib/windowSurfaces.js'
 import type { ClientStreams } from './core/clientStreams.js'
@@ -43,7 +43,7 @@ import type { ProductUsageMetric } from './lib/productUsageContract.js'
 import { createUsageOutcomes } from './core/usageOutcomes.js'
 import type { AgentTokenUsage } from './lib/agentUsageWire.js'
 import { terminalHandoffRequest } from './lib/terminalHandoff.js'
-import { OwnerCommands, ROUTE_COMMAND_TYPES } from './lib/ownerCommands.js'
+import { ROUTE_COMMAND_TYPES } from './lib/relayFrames.js'
 import type { TerminalStreamManager } from './lib/terminalStreamManager.js'
 import { decodeTerminalLocal, encodeTerminalLocal, TerminalBinaryKind, type TerminalBinaryClear } from './lib/terminalBinary.js'
 import { BACKEND_ONLY_DOWN_TYPES, GATEWAY_REQUEST_TYPES, isLocalClientId, logSafeType, PAIR_REQUESTS, PLATE_REQUEST, rpcResultType, type DownTransport } from './lib/relayFrames.js'
@@ -76,6 +76,7 @@ const MESSAGE_REQUESTS: ReadonlySet<string> = new Set(MESSAGES_REQUESTS)
 const SHARE_REQUEST_TYPES: ReadonlySet<string> = new Set(SHARE_REQUESTS)
 /** The agent browser's frames are never logged, in or out: its settings carry a proxy's password, their replies the
  *  proxy's host, and a proxy test's the proxy's exit address (services/agentBrowser.ts). */
+const SERVICE_FRAME_TYPES = new Set(SERVICE_WS_FRAMES.map(route => route.type))
 const UNLOGGED_BROWSER = 'agent_browser_'
 /** Whether an outgoing frame goes to the frame log (`LOG_FRAMES`). */
 const logged = (frame: Frame): boolean => env.LOG_FRAMES && !String(frame.type).startsWith(UNLOGGED_BROWSER)
@@ -266,7 +267,6 @@ export class BackendSocket {
     if (local) return local.sendBinary(frame, quota)
     return this.throughGateway('stream', gateway => gateway.terminalBinary(connId, frame, quota), false)
   }
-  readonly ownerCommands = new OwnerCommands()
   /** Takes back a delivered turn not yet being written (core/deliveries.ts, cli.ts binds core/input.ts). */
   onCancelOrchestratorMessage: ((deliveryId: string) => boolean) | null = null
   /** Every frame sent to the apps, as it is sent: the orchestrator reads its Directors' turns from them
@@ -474,11 +474,11 @@ export class BackendSocket {
         return
       }
       if (!this.remoteClients.delete(connId)) return
-      this.clientStreams?.closed(connId); this.ownerCommands.closeConnection(connId); this.onConnectionClosed?.(connId)
+      this.clientStreams?.closed(connId); this.onConnectionClosed?.(connId)
     },
     disconnected: async (connId) => {
       this.remoteClients.delete(connId)
-      this.clientStreams?.closed(connId); this.ownerCommands.closeConnection(connId); this.onConnectionClosed?.(connId)
+      this.clientStreams?.closed(connId); this.onConnectionClosed?.(connId)
       await this.terminalStreams?.closeConnection(
         connId,
         'client connection closed',
@@ -496,7 +496,6 @@ export class BackendSocket {
     },
     linkDown: () => {
       this.observers?.closeAll()
-      this.ownerCommands.closeAll()
       for (const connId of this.remoteClients.keys()) {
         this.clientStreams?.closed(connId)
         this.onConnectionClosed?.(connId)
@@ -589,7 +588,7 @@ export class BackendSocket {
     this.closed = true
     this.sharesNotice.stop()
     this.closeAgentService?.dispose()
-    this.clientStreams?.closed(); this.ownerCommands.closeAll()
+    this.clientStreams?.closed()
     await this.terminalStreams?.stop()
     await this.gatewayPort?.stop()
   }
@@ -926,7 +925,7 @@ export class BackendSocket {
     this.dialWatchers.delete(connId)
     this.tuiClients.delete(connId)
     this.rowStateWindows.delete(connId)
-    this.clientStreams?.closed(connId); this.ownerCommands.closeConnection(connId); this.onConnectionClosed?.(connId)
+    this.clientStreams?.closed(connId); this.onConnectionClosed?.(connId)
     // The last one leaving before any link could hear it attach: nothing happened, as far as the backend
     // is concerned, and the gateway does not tell a later link otherwise.
     this.gatewayPort?.localClients(this.localWindows())
@@ -1072,7 +1071,7 @@ export class BackendSocket {
   private emitReply(connId: string, type: string, requestId: unknown, payload: Record<string, unknown>): void {
     const resultType = rpcResultType(type)
     // Before the E2EE wrap: an RPC reply is only readable here.
-    if (env.LOG_FRAMES && !MESSAGE_REQUESTS.has(type) && !ROUTE_COMMAND_TYPES.has(type) && !type.startsWith('viewer_') && !type.startsWith(UNLOGGED_BROWSER) && type !== 'phone_pair' && type !== 'api_connections' && type !== 'connectors' && type !== 'os_device' && type !== 'machine_addon' && type !== 'browser_open' && type !== 'browser_callback' && type !== 'orchestrator' && type !== 'input_ack' && !type.startsWith('grid_fleet_') && type !== 'agent_read_file' && type !== 'project_preview' && type !== 'git_project_info' && type !== 'scm_project_info' && type !== 'git_pull_request' && type !== 'git_pull_requests_status' && type !== 'agent_handoff_prepare' && !SHARE_REQUEST_TYPES.has(type) && !type.startsWith('pair')) logFrame('→', connId ? `conn:${sid(connId)}` : 'backend', { type: resultType, payload: { requestId, ...payload } })
+    if (env.LOG_FRAMES && !MESSAGE_REQUESTS.has(type) && !ROUTE_COMMAND_TYPES.has(type) && !SERVICE_FRAME_TYPES.has(type) && !type.startsWith('viewer_') && !type.startsWith(UNLOGGED_BROWSER) && type !== 'phone_pair' && type !== 'api_connections' && type !== 'connectors' && type !== 'os_device' && type !== 'machine_addon' && type !== 'browser_open' && type !== 'browser_callback' && type !== 'orchestrator' && type !== 'input_ack' && !type.startsWith('grid_fleet_') && type !== 'agent_read_file' && type !== 'project_preview' && type !== 'git_project_info' && type !== 'scm_project_info' && type !== 'git_pull_request' && type !== 'git_pull_requests_status' && type !== 'agent_handoff_prepare' && !SHARE_REQUEST_TYPES.has(type) && !type.startsWith('pair')) logFrame('→', connId ? `conn:${sid(connId)}` : 'backend', { type: resultType, payload: { requestId, ...payload } })
     if (this.localClients.has(connId)) {
       this.sendTo(connId, { type: resultType, payload: { requestId, ...payload } })
       return
@@ -1133,7 +1132,7 @@ export class BackendSocket {
     // actually asked for rather than as an opaque __e2e envelope.
     // Terminal frames contain raw keystrokes, paste text and screen bytes after
     // unwrap. Never pass them to the frame logger, even in diagnostic mode.
-    if (env.LOG_FRAMES && !MESSAGE_REQUESTS.has(type) && !ROUTE_COMMAND_TYPES.has(type) && !type.startsWith('terminal_') && !type.startsWith('viewer_') && !type.startsWith(UNLOGGED_BROWSER) && !type.startsWith('grid_fleet_') && type !== 'agent_read_file' && type !== 'project_preview' && type !== 'git_project_info' && type !== 'scm_project_info' && type !== 'git_pull_request' && type !== 'git_pull_requests_status' && type !== 'agent_handoff_prepare' && type !== 'orchestrator' && type !== 'input_ack' && type !== 'api_connections' && type !== 'connectors' && type !== 'os_device' && type !== 'machine_addon' && type !== 'browser_open' && type !== 'browser_callback' && type !== 'phone_pair' && !SHARE_REQUEST_TYPES.has(type) && !type.startsWith('pair')) {
+    if (env.LOG_FRAMES && !MESSAGE_REQUESTS.has(type) && !ROUTE_COMMAND_TYPES.has(type) && !SERVICE_FRAME_TYPES.has(type) && !type.startsWith('terminal_') && !type.startsWith('viewer_') && !type.startsWith(UNLOGGED_BROWSER) && !type.startsWith('grid_fleet_') && type !== 'agent_read_file' && type !== 'project_preview' && type !== 'git_project_info' && type !== 'scm_project_info' && type !== 'git_pull_request' && type !== 'git_pull_requests_status' && type !== 'agent_handoff_prepare' && type !== 'orchestrator' && type !== 'input_ack' && type !== 'api_connections' && type !== 'connectors' && type !== 'os_device' && type !== 'machine_addon' && type !== 'browser_open' && type !== 'browser_callback' && type !== 'phone_pair' && !SHARE_REQUEST_TYPES.has(type) && !type.startsWith('pair')) {
       logFrame('←', connId ? `conn:${sid(connId)}` : 'backend', frame)
     }
     // A request the usage report measures, and each of its answers, told the gateway as they are (core/usageOutcomes.ts).
@@ -1165,14 +1164,6 @@ export class BackendSocket {
         if (requestId !== undefined) reply(type, requestId, { error: verdict.error, message: GUEST_REFUSALS[verdict.error] })
         return
       }
-    }
-
-    // A paired owner can run the machine's orchestrator; observers and device sessions cannot.
-    // Both requests and replies are encrypted, including project artifacts.
-    if (ROUTE_COMMAND_TYPES.has(type)) {
-      if (!owner) { reply(type, requestId, { error: 'OWNER_REQUIRED' }); return }
-      void this.ownerCommands.request(connId, type, payload).then(result => reply(type, requestId, result))
-      return
     }
 
     // Retired optional-feature requests remain reserved. Never reinterpret one as an

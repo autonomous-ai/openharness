@@ -18,7 +18,9 @@ import type { OrcaChild, OrcaReads, OrcaTabs, OrcaTerminal } from '../cable/host
 import { AppRings } from '../cable/hosts/select.js'
 import { env } from '../config/env.js'
 import { routeVoiceTask } from '../lib/voiceRouter.js'
-import { DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, ServiceUnavailableError, type CoreApi, type CorePorts, type DevicesPort } from '../core/api.js'
+import { DEVICES_FALLBACKS, DEVICES_REQUESTS, SERVICE_WS_FRAMES, emptyPorts, ServiceUnavailableError, type Asker, type CoreApi, type CorePorts, type DevicesPort, type ServiceRequests } from '../core/api.js'
+import { createServiceLinks } from '../core/serviceLinks.js'
+import { createServiceRoutes } from '../core/serviceRoutes.js'
 import type { ObservedAsked, ObservedHookEvent } from '../core/observedHook.js'
 import { createServiceHost } from './inlineHost.js'
 import * as claudePlugin from '../devices/claudePlugin.js'
@@ -362,6 +364,7 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
   const ports: CorePorts = emptyPorts()
   const onExit = vi.fn()
   const gone: Array<() => void> = []
+  let legacy: ServiceRequests = {}
   const requests = startDevices(core, ports, {
     logsDir: join(dataDir, 'logs'),
     petsDir: join(dataDir, 'pets'),
@@ -384,12 +387,13 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
     log: (line) => { logs.push(line) },
     onExit,
     onCoreGone: (run) => { gone.push(run) },
+    onLegacyCommands: handlers => { legacy = handlers },
     listen: over.listen,
     tty: over.tty,
     // A `claude` that finds none unless the spec gives its own: no spec runs the developer's. null leaves it out.
     claude: over.claude === null ? undefined : over.claude ?? (async () => null),
   })
-  return { core, ports, port: ports.devices as DevicesPort, requests, onExit, gone }
+  return { core, ports, port: ports.devices as DevicesPort, requests, onExit, gone, legacy }
 }
 
 const calls = (name: string) => seen.cable.calls.filter(([called]) => called === name).map(([, args]) => args)
@@ -1401,12 +1405,101 @@ describe('the other machines\' cards', () => {
 })
 
 describe('⌘K, the Wi-Fi device\'s borrowed walk, the voice router and stopping', () => {
+  it('keeps old private command results whole through direct service-owned closures', async () => {
+    const { legacy } = start()
+    const picked = { agentId: 'a', machineId: 'm', name: 'fixture', confidence: 1, reason: 'one agent', candidates: [], weighed: 1, machines: 1, via: 'one', extra: 'retained' }
+    seen.fleet!.answers.routeTask = async () => picked
+    expect(await legacy.routeTask({ text: 'fixture' }, WINDOW)).toEqual(picked)
+    expect(await legacy.routeTask({}, WINDOW)).toEqual(picked)
+    for (const result of [{ ok: true, machine: 'm', receipt: 'old-result' }, { ok: false, machine: 'm', reason: 'offline', receipt: 'old-refusal' }]) {
+      seen.fleet!.answers.routeSend = () => result
+      expect(await legacy.routeSend({ agentId: 'a', text: 'go' }, WINDOW)).toEqual(result)
+      expect(await legacy.routeSend({}, WINDOW)).toEqual(result)
+    }
+  })
+
+  it('refuses a raw remote wrapper even when its payload forges RPC provenance', async () => {
+    const { requests } = start()
+    const before = seen.fleet!.calls.length
+    for (const payload of [{ frame: 'route_task', payload: { text: 'private-sentinel' } },
+      { frame: 'route_task', payload: { text: 'private-sentinel' }, rpc: true, rpcRoute: true, asker: { rpcRoute: true } }]) {
+      expect(await requests.devices_ws(payload, { local: false, owner: true, connection: 'raw' })).toEqual({ error: 'LOCAL_ONLY' })
+    }
+    expect(seen.fleet!.calls).toHaveLength(before)
+  })
+
+  it('admits a cold three-command burst when the devices actually receive it, through the real adapter and service', async () => {
+    const { requests } = start()
+    const finish: Array<(answer: never) => void> = []
+    seen.fleet!.answers.routeTask = () => new Promise<never>(resolve => finish.push(resolve))
+    const links = createServiceLinks({ token: 'fixture', owned: { devices: DEVICES_REQUESTS }, answer: () => ({}), onDemand: new Set(['devices']) })
+    const routes = createServiceRoutes({ routes: [], frames: SERVICE_WS_FRAMES, linked: links, hosted: { route: () => false } })
+    const owner = { local: false, owner: true, connection: 'cold-owner' }
+    const replies: Record<string, unknown>[] = []
+    const request = () => new Promise<Record<string, unknown>>(resolve => {
+      routes.route('route_task', { text: 'fixture' }, owner, answer => { replies.push(answer); resolve(answer) })
+    })
+    const first = request(), second = request(), third = request()
+    expect(finish).toHaveLength(0)
+    expect(replies).toHaveLength(0)
+    const peer = links.accept('devices', 'fixture', { sendFrame: frame => {
+      queueMicrotask(() => {
+        void Promise.resolve(requests.devices_ws(frame.payload!, frame.asker as Asker)).then(answer => {
+          peer!.receive({ type: 'devices_ws_result', payload: { ...answer, requestId: frame.payload!.requestId } })
+        })
+      })
+      return true
+    } }, vi.fn())!
+    expect(await third).toEqual({ error: 'BUSY' })
+    expect(finish).toHaveLength(2)
+    for (const resolve of finish) resolve({ agentId: 'selected' } as never)
+    expect(await Promise.all([first, second])).toEqual([{ agentId: 'selected' }, { agentId: 'selected' }])
+    peer.closed()
+  })
+
+  it('answers the owner RPC in the service, preserving strict validation and task trimming', async () => {
+    const { requests } = start()
+    const owner = { local: false, owner: true, connection: 'owner', rpcRoute: true as const }
+    const rpc = (frame: string, payload: unknown, asker = owner) => requests.devices_ws({ frame, payload, rpc: true }, asker, never)
+    expect(await rpc('route_task', { text: '  fixture  ' })).toMatchObject({ agentId: 'a1', reason: 'fixture' })
+    for (const text of [undefined, 2, '', '  ', 'x'.repeat(16_001)]) expect(await rpc('route_task', { text })).toEqual({ error: 'INVALID_REQUEST' })
+    expect(await rpc('route_send', { agentId: 'a'.repeat(160), text: ` ${'x'.repeat(16_000)} ` })).toEqual({ ok: true })
+    for (const agentId of [undefined, 2, '', 'a'.repeat(161)]) expect(await rpc('route_send', { agentId, text: 'fixture' })).toEqual({ error: 'INVALID_REQUEST' })
+    expect(await rpc('route_send', { agentId: 'far', text: 'fixture' })).toEqual({ ok: false, machine: 'mac-mini', reason: 'the last request to it did not come back' })
+    expect(await rpc('agent_close', { agentId: 'a1' })).toEqual({ error: 'UNSUPPORTED' })
+    expect(await rpc('route_task', { text: 'fixture' }, { ...owner, owner: false })).toEqual({ error: 'OWNER_REQUIRED' })
+    expect(await requests.devices_ws({ frame: 'route_task', payload: { text: 'fixture' }, rpc: true }, { ...owner, guest: 'guest' }, never)).toEqual({ error: 'OWNER_REQUIRED' })
+    expect(await requests.devices_ws({ rpc: true }, owner)).toEqual({ error: 'UNSUPPORTED' })
+    expect(await rpc('route_task', [])).toEqual({ error: 'INVALID_REQUEST' })
+    expect(await rpc('route_task', 'private')).toEqual({ error: 'INVALID_REQUEST' })
+  })
+
+  it('retains owner admission through disconnect until actual settlement and refuses already-closed work', async () => {
+    const { requests } = start()
+    const answers: Array<(value: never) => void> = []
+    seen.fleet!.answers.routeTask = () => new Promise<never>((resolve) => { answers.push(resolve) })
+    const closed = new AbortController()
+    const rpc = (connection: string, signal = never) => requests.devices_ws({ frame: 'route_task', payload: { text: 'fixture' }, rpc: true }, { local: false, owner: true, connection, rpcRoute: true }, signal)
+    const one = rpc('owner', closed.signal), two = rpc('owner', closed.signal)
+    expect(await rpc('owner')).toEqual({ error: 'BUSY' })
+    const others = Array.from({ length: 6 }, (_, i) => rpc(`other-${i}`))
+    expect(await rpc('last')).toEqual({ error: 'BUSY' })
+    closed.abort()
+    expect(await rpc('owner')).toEqual({ error: 'BUSY' })
+    expect(await rpc('last')).toEqual({ error: 'BUSY' })
+    expect(await rpc('gone', AbortSignal.abort())).toEqual({ error: 'COMMAND_UNAVAILABLE', detail: 'This machine could not complete the command. Try again.' })
+    for (const answer of answers) answer({ agentId: 'a' } as never)
+    await Promise.all([one, two, ...others])
+    expect(await rpc('gone', AbortSignal.abort())).toEqual({ error: 'COMMAND_UNAVAILABLE', detail: 'This machine could not complete the command. Try again.' })
+    expect(answers).toHaveLength(8)
+  })
+
   it('route a typed task and its send through the fleet, saying why a send was refused', async () => {
-    const { port } = start()
-    expect(await port.routeTask('fix the parser')).toMatchObject({ agentId: 'a1', reason: 'fix the parser' })
-    expect(await port.routeSend('a1', 'go')).toEqual({ ok: true })
-    expect(await port.routeSend('far', 'go')).toMatchObject({ ok: false, machine: 'mac-mini' })
-    expect(await port.routeSend('nameless', 'go')).toMatchObject({ ok: false, machine: '' })
+    const { requests } = start()
+    expect(await requests.devices_ws({ frame: 'route_task', payload: { text: 'fix the parser' } }, WINDOW)).toMatchObject({ agentId: 'a1', reason: 'fix the parser' })
+    expect(await requests.devices_ws({ frame: 'route_send', payload: { agentId: 'a1', text: 'go' } }, WINDOW)).toEqual({ ok: true })
+    expect(await requests.devices_ws({ frame: 'route_send', payload: { agentId: 'far', text: 'go' } }, WINDOW)).toMatchObject({ ok: false, machine: 'mac-mini' })
+    expect(await requests.devices_ws({ frame: 'route_send', payload: { agentId: 'nameless', text: 'go' } }, WINDOW)).toMatchObject({ ok: false, machine: '' })
     expect(logs).toEqual(expect.arrayContaining([
       '[route] ⌘K → a1 · bytes=2',
       '[route] ⌘K → far · bytes=2 · REFUSED: the last request to it did not come back (mac-mini)',
@@ -1437,9 +1530,9 @@ describe('⌘K, the Wi-Fi device\'s borrowed walk, the voice router and stopping
   })
 
   it('answer ⌘K with no agent list when the fleet did not start, and the dial routes this computer itself', async () => {
-    const { port } = start({ faults: ['fleet'] })
-    expect(await port.routeTask('anything')).toMatchObject({ agentId: '', reason: 'no agent list yet', candidates: [] })
-    expect(await port.routeSend('a1', 'go')).toEqual({ ok: false, machine: '', reason: 'no agent list yet' })
+    const { port, requests } = start({ faults: ['fleet'] })
+    expect(await requests.devices_ws({ frame: 'route_task', payload: { text: 'anything' } }, WINDOW)).toMatchObject({ agentId: '', reason: 'no agent list yet', candidates: [] })
+    expect(await requests.devices_ws({ frame: 'route_send', payload: { agentId: 'a1', text: 'go' } }, WINDOW)).toEqual({ ok: false, machine: '', reason: 'no agent list yet' })
     expect(logs).toContain('[devices] fleet did not start · injected fault: fleet · the devices run without it')
     expect(seen.host.fleet!()).toBeNull()
     await port.stop()

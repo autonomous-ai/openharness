@@ -32,8 +32,6 @@ function devicesPort() {
     seen: record('seen'), settings: record('settings'), windowFocus: record('windowFocus'), windowReply: record('windowReply'),
     windowGone: record('windowGone'), scroll: record('scroll'), engines: record('engines'),
     commanders: record('commanders'),
-    routeTask: vi.fn(async (text: string) => ({ agentId: 'a1', machineId: 'm1', name: 'api', confidence: 1, reason: text, candidates: [], weighed: 1, machines: 1, via: 'model' })),
-    routeSend: vi.fn(async () => ({ ok: true as const })),
     stepFocus: vi.fn(async (): Promise<{ machineId: string; agentId: string } | 'no_agents'> => ({ machineId: 'm1', agentId: 'a2' })),
     inboxPoll: vi.fn(async (_poll: unknown): Promise<{ text?: string; off?: true }> => ({ text: 'run the tests' })),
     inboxGone: record('inboxGone'),
@@ -46,10 +44,12 @@ function setup(over: { processEnv?: NodeJS.ProcessEnv; openListener?: DevicesSer
   const { port, calls } = devicesPort()
   let api!: CoreApi
   let deps!: DevicesDeps
-  const tab = { harness_devices_list: vi.fn(async () => ({ protocol: 1 })) }
+  const legacy = { routeTask: vi.fn(async () => ({ agentId: 'a1' })), routeSend: vi.fn(async () => ({ ok: true })) }
+  const tab = { harness_devices_list: vi.fn(async () => ({ protocol: 1 })), devices_ws: vi.fn(async () => ({ ok: true })) }
   const start = vi.fn((core: CoreApi, ports: CorePorts, given: DevicesDeps): ServiceRequests => {
     api = core
     deps = given
+    given.onLegacyCommands?.(legacy)
     ports.devices = port
     return tab
   })
@@ -73,7 +73,7 @@ function setup(over: { processEnv?: NodeJS.ProcessEnv; openListener?: DevicesSer
     notice: (kind, payload) => { notices.push([kind, payload]) },
   }
   return {
-    service, port, calls, api: () => api, deps: () => deps, options: () => options, stop, tab, queries, notices, connection,
+    service, port, calls, api: () => api, deps: () => deps, options: () => options, stop, tab, legacy, queries, notices, connection,
     answer: (query: string, value: unknown) => { answers = { ...answers, [query]: value } },
     connect: () => options.onConnected!(connection),
     event: (payload: Record<string, unknown>) => options.onEvent!(payload),
@@ -91,7 +91,7 @@ describe('the devices in their own process', () => {
     expect(Object.keys(f.deps())).not.toContain('identity')
     expect([...f.deps().faults!]).toEqual(['dial', 'fleet.knows'])
     // The Devices tab's requests are the devices' own, beside what only the core asks.
-    expect(Object.keys(f.options().requests).sort()).toEqual(['harness_devices_list', 'inboxPoll', 'routeSend', 'routeTask', 'stepFocus'])
+    expect(Object.keys(f.options().requests).sort()).toEqual(['devices_ws', 'harness_devices_list', 'inboxPoll', 'routeSend', 'routeTask', 'stepFocus'])
   })
 
   it('read no serials, dial or faults without them', () => {
@@ -420,14 +420,37 @@ describe('what the core tells the devices, reaching their port', () => {
 })
 
 describe('what the core asks of the devices', () => {
-  it('is ⌘K and the Wi-Fi device\'s step, answered from the devices\' port', async () => {
+  it('keeps the old private send success and failure objects whole', async () => {
+    let options!: ServiceProcessOptions
+    let result: Record<string, unknown> = { ok: true, machine: 'remote-fixture', receipt: 'old-result' }
+    const service = runDevicesService({ dataDir: '/data', socketPath: '/sock', machineId: 'fixture', token: 't', processEnv: {},
+      start: (_core, ports, deps) => {
+        ports.devices = devicesPort().port
+        ;(deps as DevicesDeps & { onLegacyCommands?: (handlers: ServiceRequests) => void }).onLegacyCommands?.({
+          routeTask: async () => result, routeSend: async () => result,
+        })
+        return { devices_ws: async () => result.ok ? { ok: true } : { ok: false, machine: result.machine, reason: result.reason } }
+      }, run: given => { options = given; return { stop: vi.fn() } } })
+    try {
+      expect(await options.requests.routeSend({ agentId: 'a', text: 'go' }, { local: true, owner: true })).toEqual(result)
+      result = { ok: false, machine: 'remote-fixture', reason: 'offline', receipt: 'old-refusal' }
+      expect(await options.requests.routeSend({ agentId: 'a', text: 'go' }, { local: true, owner: true })).toEqual(result)
+    } finally { service.stop() }
+  })
+
+  it('keeps the old core private aliases in the process, forwarding to service-owned direct handlers', async () => {
+    const f = setup()
+    const asker = { local: true, owner: true }
+    const closed = new AbortController().signal
+    for (const [type, frame, payload] of [['routeTask', 'route_task', { text: 'fixture' }], ['routeSend', 'route_send', { agentId: 'a1', text: 'go' }]] as const) {
+      await f.options().requests[type](payload, asker, closed)
+      expect(f.legacy[type]).toHaveBeenLastCalledWith(payload, asker, closed)
+    }
+  })
+  it('is the Wi-Fi device\'s step, answered from the devices\' port', async () => {
     const f = setup()
     const asker = { local: true, owner: true }
     const { requests } = f.options()
-    expect(await requests.routeTask({ text: 'fix it' }, asker)).toMatchObject({ agentId: 'a1', reason: 'fix it' })
-    expect(await requests.routeTask({}, asker)).toMatchObject({ reason: '' })
-    expect(await requests.routeSend({ agentId: 'a1', text: 'go' }, asker)).toEqual({ ok: true })
-    expect(f.port.routeSend).toHaveBeenCalledWith('a1', 'go')
     expect(await requests.stepFocus({ direction: 'previous', currentAgentId: 'a1' }, asker)).toEqual({ machineId: 'm1', agentId: 'a2' })
     expect(f.port.stepFocus).toHaveBeenLastCalledWith('previous', 'a1')
     f.port.stepFocus.mockResolvedValueOnce('no_agents')
