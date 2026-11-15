@@ -10,7 +10,7 @@ import { buildLaunchOverrides, prepareLaunchOverrides, validateLaunchOverrides, 
 import { DSH_SESSION_ENV } from '../dsh/launch.js'
 import { GRID_CONFLICTING_ENV_VARS, GRID_KEY_VAR, type GridLaunchOverride } from './gridLaunch.js'
 import { gridLaunchInProcess } from '../testing/gridLaunchInProcess.js'
-import { AGENT_ATTRIBUTION_LINE, HARNESS_INSTRUCTIONS } from './agentAttribution.js'
+import { HARNESS_INSTRUCTIONS } from './agentAttribution.js'
 import { writeMachineMcp } from './machineMcp.js'
 import { missingHookScript } from '../engines/kit/notifyHooks.js'
 import type { NativeLaunch } from '../engines/nativeLaunch.js'
@@ -385,6 +385,7 @@ describe('buildLaunchOverrides — a pane opened as a named agent comes back as 
 })
 
 describe('buildLaunchOverrides — retired PR branding', () => {
+  const retiredPrLine = '🤝 Started by another agent in [Harness](https://harness.autonomous.ai) — agents that run agents.'
   it('leaves native attribution alone even when an old account enabled Harness branding', async () => {
     setAgentSettingsForTest(env.ADAPTER_DATA_DIR, { pullRequestLine: true })
     const read = vi.fn(() => '{"attribution":{"pr":"Mine"}}')
@@ -392,9 +393,9 @@ describe('buildLaunchOverrides — retired PR branding', () => {
       const own = await buildLaunchOverrides(deps({ readAttribution: read }).d, engine, { startedBy: 'agent', cwd: '/workspace' }, 'a')
       const personal = await buildLaunchOverrides(deps({ readAttribution: read }).d, engine, { startedBy: null, cwd: '/workspace' }, 'a')
       expect(own).toEqual(personal)
-      expect(JSON.stringify(own)).not.toContain(AGENT_ATTRIBUTION_LINE)
+      expect(JSON.stringify(own)).not.toContain(retiredPrLine)
       const grid = await buildLaunchOverrides(deps({ readAttribution: read }).d, engine, { startedBy: 'agent', gridLaunch: GRID, cwd: null }, 'a')
-      expect(JSON.stringify(grid)).not.toContain(AGENT_ATTRIBUTION_LINE)
+      expect(JSON.stringify(grid)).not.toContain(retiredPrLine)
     }
     expect(read).not.toHaveBeenCalled()
   })

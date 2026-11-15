@@ -1,11 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   ControlCommandQueue,
-  decodeTmuxControlData,
   dropOldestHistoryRows,
   literalKeyCommands,
   normalizeTmuxHistoryLines,
-  normalizeTmuxCaptureLines,
   parseTmuxControlOutput,
   printInProgress,
   quoteForOldTmux,
@@ -70,12 +68,14 @@ describe('keystrokes for a tmux without send-keys -H', () => {
 
 describe('tmux control-mode output decoding', () => {
   it('decodes octal bytes without corrupting adjacent UTF-8', () => {
-    const decoded = decodeTmuxControlData('hello\\040世界\\015\\012\\033[31m')
-    expect(Buffer.from(decoded)).toEqual(Buffer.from('hello 世界\r\n\u001b[31m'))
+    const decoded = parseTmuxControlOutput(Buffer.from('%output %7 hello\\040世界\\015\\012\\033[31m'))
+    expect(decoded?.paneId).toBe('%7')
+    expect(Buffer.from(decoded!.data)).toEqual(Buffer.from('hello 世界\r\n\u001b[31m'))
   })
 
   it('preserves ordinary backslashes that are not octal escapes', () => {
-    expect(Buffer.from(decodeTmuxControlData('C:\\Users\\name')).toString()).toBe('C:\\Users\\name')
+    const decoded = parseTmuxControlOutput(Buffer.from('%output %7 C:\\Users\\name'))
+    expect(Buffer.from(decoded!.data).toString()).toBe('C:\\Users\\name')
   })
 
   it('preserves a UTF-8 scalar split across separate output records', () => {
@@ -98,17 +98,25 @@ describe('tmux control-mode output decoding', () => {
 })
 
 describe('tmux snapshot row normalization', () => {
-  it('turns capture-pane LF rows into VT CRLF and drops its final output delimiter', () => {
+  const meta = {
+    sessionId: '$1', windowId: '@1', windowPanes: 1,
+    windowWidth: 80, windowHeight: 3, paneWidth: 80, paneHeight: 3,
+    alternateOn: false, cursorX: 0, cursorY: 0, cursorVisible: true,
+    mouseStandard: false, mouseButton: false, mouseAll: false, mouseUtf8: false, mouseSgr: false,
+  }
+
+  it('places LF and CRLF capture rows without replaying their line delimiters', () => {
     const capture = Buffer.from('first\n\u001b[31m世界\nlast\r\n')
-    expect(Buffer.from(normalizeTmuxCaptureLines(capture))).toEqual(
-      Buffer.from('first\u001b[0m\r\n\u001b[31m世界\u001b[0m\r\nlast\u001b[0m'),
-    )
+    const snapshot = Buffer.from(synthesizeTmuxSnapshot(capture, meta)).toString()
+    expect(snapshot).toContain('\u001b[1;1Hfirst\u001b[0m\u001b[2;1H\u001b[31m世界\u001b[0m\u001b[3;1H\u001b[31mlast\u001b[0m')
+    expect(snapshot).not.toContain('\n')
+    expect(snapshot).not.toContain('\r')
   })
 
-  it('stops a styled trailing background from bleeding into the next blank row', () => {
+  it('resets each row and carries only the captured background until its explicit reset', () => {
     const capture = Buffer.from('\u001b[48;5;237mprompt   \n\n\u001b[49mreply\n')
-    expect(Buffer.from(normalizeTmuxCaptureLines(capture)).toString()).toBe(
-      '\u001b[48;5;237mprompt   \u001b[0m\r\n\u001b[0m\r\n\u001b[49mreply\u001b[0m',
+    expect(Buffer.from(synthesizeTmuxSnapshot(capture, meta)).toString()).toContain(
+      '\u001b[1;1H\u001b[48;5;237mprompt   \u001b[0m\u001b[2;1H\u001b[48;5;237m\u001b[0m\u001b[3;1H\u001b[48;5;237m\u001b[49mreply\u001b[0m',
     )
   })
 
