@@ -124,7 +124,9 @@ stream or no tty. The devices process records the tty and the time, for the echo
 **The tty** of an agent in one of the three apps is read once per pid: `ps -o tty= -p <pid>` through `execFile`, with a
 1 s timeout and a 256-byte output bound. It runs in the background when the agent is first known in that app (a hook
 event or the open scan), and again when its pid changes. `??` or anything that fails the tty check is no tty. Kept in
-memory with the agent and gone with it.
+memory with the agent and gone with it. A read that fails (a timeout, a spawn error, a non-zero exit) is not "no tty": the
+next hook event reads that pid again, at most once every 10 s per pid, and the log counts it (`[observed] tty · not
+read`). A `??` answer is final for that pid (PM, 2026-11-15).
 
 **Harness Device** receives `{"select":{app, tty}}` and checks both. It drops the line if the app is not running: an
 Apple Event would launch it. Otherwise it calls that app's fixed `select_tty(tty)` handler:
@@ -174,7 +176,9 @@ did not settle in front is dropped. Acting on a report:
 
 1. **Echo:** a select the dial itself sent for that tty in the last 2 s. Every select of the last 2 s is kept, at most
    8, not only the last one; otherwise a late report for A, after rests on A then B, would pull the dial back to A. The report is consumed and the dial stays, so a fast
-   swipe is not pulled back to a tab it passed.
+   swipe is not pulled back to a tab it passed. Each select excuses one report only: the select it matched is then
+   forgotten, so the person clicking that tab again within 2 s moves the dial (PM, 2026-11-15). A report that waited
+   for the settle is also set aside when the dial sent any select after it arrived: the dial moved since.
 2. **The agent:** the live agent outside Harness with that app and that tty, the most recently active one if two
    match. None (a plain shell tab, an agent in tmux): the dial stays.
 3. **The move:** the same path as a prompt the person submits (`CableSession.followPrompt`, through `followApp`). It
