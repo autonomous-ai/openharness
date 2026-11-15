@@ -21,7 +21,7 @@ import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import type { Fleet, FleetDeps } from './fleet.js'
 import type { DevicesDeps } from './devices.js'
-import { FRONT_MAX_BYTES, FRONT_PER_SECOND, REFUSED, type DevicesListener, type ListenerHandler } from './devicesListener.js'
+import { ATTACH_MAX_BYTES, ATTACH_PER_SECOND, FRONT_MAX_BYTES, FRONT_PER_SECOND, REFUSED, type DevicesListener, type ListenerHandler } from './devicesListener.js'
 
 const seen = vi.hoisted(() => ({
   host: null as unknown as CableHostWiring,
@@ -239,8 +239,8 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
 
 const calls = (name: string) => seen.cable.calls.filter(([called]) => called === name).map(([, args]) => args)
 
-/** The listener the devices process opens (devicesProcess.ts), stood in for: what it was handed, its close, and a front
- *  through its handler as `harness hardware watch` sends one. */
+/** The listener the devices process opens (devicesProcess.ts), stood in for: what it was handed, its close, a front
+ *  through its handler as `harness hardware watch` sends one, and an attach as the harness-device mod sends one. */
 function fakeListener() {
   const given: Array<{ handlers: Readonly<Record<string, ListenerHandler>>; log: (line: string) => void }> = []
   const close = vi.fn(async () => {})
@@ -249,7 +249,8 @@ function fakeListener() {
     return { close }
   })
   const front = (app: unknown): unknown => given[0].handlers.front.handle({ type: 'front', app }, new AbortController().signal)
-  return { given, close, listen, front }
+  const attach = (sessionId: unknown): unknown => given[0].handlers.attach.handle({ type: 'attach', sessionId }, new AbortController().signal)
+  return { given, close, listen, front, attach }
 }
 
 describe('the devices, as the core starts them', () => {
@@ -309,16 +310,19 @@ describe('the devices, as the core starts them', () => {
 })
 
 describe('the devices\' own listener (services/devicesListener.ts)', () => {
-  it('the devices open their listener once, with a front handler of 10 a second and 64 bytes', () => {
+  it('the devices open their listener once, with front and attach', () => {
     const listener = fakeListener()
     start({ listen: listener.listen })
     expect(listener.listen).toHaveBeenCalledTimes(1)
     const [{ handlers, log }] = listener.given
-    expect(Object.keys(handlers)).toEqual(['front'])
+    expect(Object.keys(handlers)).toEqual(['front', 'attach'])
     expect(handlers.front).toMatchObject({ maxBytes: FRONT_MAX_BYTES, perSecond: FRONT_PER_SECOND })
     expect([FRONT_MAX_BYTES, FRONT_PER_SECOND]).toEqual([64, 10])
-    // The listener's own front handler: a name that is no app id is refused there.
+    expect(handlers.attach).toMatchObject({ maxBytes: ATTACH_MAX_BYTES, perSecond: ATTACH_PER_SECOND })
+    expect([ATTACH_MAX_BYTES, ATTACH_PER_SECOND]).toEqual([96, 10])
+    // The listener's own handlers: a name that is no app id, and a session id that is no UUID, are refused there.
     expect(listener.front('Ghostty')).toBe(REFUSED)
+    expect(listener.attach('local_8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b')).toBe(REFUSED)
     // What the listener says goes to the devices' own log.
     log('[devices] listener open')
     expect(logs).toEqual(['[devices] listener open'])
@@ -2360,8 +2364,8 @@ describe('a person\'s prompt in the app in front turns the dial (docs/specs/2026
   it('a follow of a cause with no line writes none', () => {
     start({ faults: ['fleet'] })
     const before = logs.length
-    seen.host.localFollowed!('attach', 'moved')
-    seen.host.localFollowed!('attach', 'no-tile')
+    seen.host.localFollowed!('tab', 'moved')
+    seen.host.localFollowed!('tab', 'no-tile')
     expect(logs.slice(before)).toEqual([])
   })
 
@@ -2415,5 +2419,296 @@ describe('a person\'s prompt in the app in front turns the dial (docs/specs/2026
     await vi.waitFor(() => expect(logs).toContain('[devices] dial failed · dial unplugged'))
     port.observed(hook('turn-start'))
     expect(asked()).toEqual([[ID, 'prompt']])
+  })
+})
+
+describe('the session the Claude app shows turns the dial (docs/specs/2026-11-15-dial-claude-app-follow.md)', () => {
+  /** Claude Code's own session ids, as the mod posts them, and the Claude app's ids for the same two sessions. */
+  const SESSION = '0b7c2f4e-8a1d-4c3b-9e5f-6a7b8c9d0e1f'
+  const SECOND = '5d6e7f80-1a2b-4c3d-8e9f-0a1b2c3d4e5f'
+  const LOCAL = 'local_8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b'
+  const LOCAL_SECOND = 'local_2e3f4a5b-6c7d-4e8f-9a0b-1c2d3e4f5a6b'
+  const BUNDLE = 'com.anthropic.claudefordesktop'
+  const A = observedAgentId('claude', SESSION)
+  const B = observedAgentId('claude', SECOND)
+  /** A session no hook listed, and one listed in Orca. */
+  const UNLISTED = '11111111-2222-4333-8444-555555555555'
+  const IN_ORCA = '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d'
+  /** Claude Code in the Claude app, as its hook says. */
+  const hook = (event: ObservedHookEvent['event'], over: Partial<ObservedHookEvent> = {}): ObservedHookEvent => ({
+    engine: 'claude', sessionId: SESSION, event, cwd: '/work/api', callerPid: 4242, transcriptPath: `/t/${SESSION}.jsonl`,
+    hostHints: { __CFBundleIdentifier: BUNDLE, CLAUDE_CODE_HOST_SESSION_ID: LOCAL }, ...over,
+  })
+  const second = { sessionId: SECOND, hostHints: { __CFBundleIdentifier: BUNDLE, CLAUDE_CODE_HOST_SESSION_ID: LOCAL_SECOND } }
+  const host = () => seen.dial as unknown as DaemonCableHost
+  /** The fake timers' clock is the devices' too: the settle and the 2 s move together. */
+  const wait = (ms: number) => vi.advanceTimersByTimeAsync(ms)
+  /** A dial on the cable with no window, on macOS, the Claude app's two sessions listed, and `app` settled in front when
+   *  one is named. `front` is `harness hardware watch`'s, `attach` the harness-device mod's, each through the devices'
+   *  own listener. */
+  const dialWith = async (app?: string) => {
+    vi.useFakeTimers()
+    const listener = fakeListener()
+    const started = start({ faults: ['fleet'], listen: listener.listen, orca: { ...orca, platform: 'darwin' }, now: () => Date.now() })
+    const front = (to: string) => { expect(listener.front(to)).toBeUndefined() }
+    const attach = (sessionId: string) => { expect(listener.attach(sessionId)).toBeUndefined() }
+    started.port.observed(hook('session-start'))
+    started.port.observed(hook('session-start', second))
+    seen.host.watching!(true)
+    started.port.swarms(null)
+    if (app) {
+      front(app)
+      await wait(FRONT_SETTLE_MS)
+    }
+    return { ...started, front, attach }
+  }
+  /** A swipe that rests on a Claude app agent, with the app in front: its continue link runs. */
+  const rest = async (agentId: string) => {
+    host().swipeEnded(agentId, 'rest')
+    await wait(0)
+  }
+  /** A look away and back inside a second: the app settles in front again, 1 s later. */
+  const backInFront = async (front: (to: string) => void) => {
+    front('orca')
+    front('claude')
+    await wait(FRONT_SETTLE_MS)
+  }
+  const continued = (local: string): [string, string[], number] => ['/usr/bin/open', [`claude://code/continue?session=${local}`], 10_000]
+  const asked = () => calls('followLocal')
+  const attaches = () => logs.filter((line) => line.startsWith('[device] attach'))
+  const unlinked = (off: boolean) => { (seen.cable as unknown as { connected: boolean }).connected = !off }
+
+  it('an attach of a listed Claude app agent, with the app settled in front, asks the dials to follow it', async () => {
+    const { attach } = await dialWith('claude')
+    attach(SESSION)
+    expect(asked()).toEqual([[A, 'attach']])
+    // What the dials make of it is theirs to count.
+    expect(attaches()).toEqual([])
+  })
+
+  it('the dial\'s answer to an attach is counted: moved, and no tile', () => {
+    start({ faults: ['fleet'] })
+    seen.host.localFollowed!('attach', 'moved')
+    seen.host.localFollowed!('attach', 'no-tile')
+    expect(attaches()).toEqual(['[device] attach · moved', '[device] attach · skipped · no tile'])
+  })
+
+  it('another app in front, none, a front not yet settled and no front known: not in front', async () => {
+    const { front, attach } = await dialWith()
+    attach(SESSION)
+    for (const app of ['orca', 'none']) {
+      front(app)
+      await wait(FRONT_SETTLE_MS)
+      attach(SESSION)
+    }
+    front('claude')
+    await wait(FRONT_SETTLE_MS - 1)
+    attach(SESSION)
+    expect(asked()).toEqual([])
+    expect(attaches()).toEqual(Array(4).fill('[device] attach · skipped · not in front'))
+  })
+
+  it('a session the devices do not list, and one listed in another app: unknown agent, and the kept agent stays', async () => {
+    const { port, front, attach } = await dialWith('claude')
+    attach(SESSION)
+    port.observed(hook('session-start', { sessionId: IN_ORCA, hostHints: { ORCA_AGENT_SESSION_ID: 'orca-1' } }))
+    attach(UNLISTED)
+    attach(IN_ORCA)
+    expect(attaches()).toEqual(Array(2).fill('[device] attach · skipped · unknown agent'))
+    // The next settle asks for the agent the app showed before.
+    await backInFront(front)
+    expect(asked()).toEqual([[A, 'attach'], [A, 'attach']])
+  })
+
+  it('within 2 s of the dial\'s own link an attach of that agent is its echo, and after 2 s it is followed', async () => {
+    const { attach } = await dialWith('claude')
+    await rest(A)
+    expect(orcaRuns).toEqual([continued(LOCAL)])
+    await wait(1_999)
+    attach(SESSION)
+    expect(attaches()).toEqual(['[device] attach · skipped · echo'])
+    expect(asked()).toEqual([])
+    await wait(1)
+    attach(SESSION)
+    expect(asked()).toEqual([[A, 'attach']])
+  })
+
+  it('the echo is that agent\'s alone', async () => {
+    const { attach } = await dialWith('claude')
+    await rest(A)
+    attach(SECOND)
+    expect(asked()).toEqual([[B, 'attach']])
+    // A link 2 s later is the one that counts now.
+    await wait(2_000)
+    await rest(B)
+    attach(SESSION)
+    attach(SECOND)
+    expect(orcaRuns).toEqual([continued(LOCAL), continued(LOCAL_SECOND)])
+    expect(asked()).toEqual([[B, 'attach'], [A, 'attach']])
+    expect(attaches()).toEqual(['[device] attach · skipped · echo'])
+  })
+
+  it('the app settling in front moves the dial to the last attached agent', async () => {
+    const { front, attach } = await dialWith('orca')
+    attach(SESSION)
+    attach(SECOND)
+    expect(attaches()).toEqual(Array(2).fill('[device] attach · skipped · not in front'))
+    front('claude')
+    await wait(FRONT_SETTLE_MS)
+    expect(asked()).toEqual([[B, 'attach']])
+    expect(attaches().slice(2)).toEqual(['[device] attach · on settle'])
+  })
+
+  it('an attach skipped as the echo is still the session the app shows', async () => {
+    const { front, attach } = await dialWith('claude')
+    attach(SESSION)
+    await rest(B)
+    attach(SECOND)
+    expect(attaches()).toEqual(['[device] attach · skipped · echo'])
+    await wait(2_000)
+    front('orca')
+    await wait(FRONT_SETTLE_MS)
+    front('claude')
+    await wait(FRONT_SETTLE_MS)
+    expect(asked()).toEqual([[A, 'attach'], [B, 'attach']])
+  })
+
+  it.each([['another agent', B, LOCAL_SECOND], ['the kept agent', A, LOCAL]])('a settle within 2 s of the dial\'s link to %s moves nothing', async (_, linked, local) => {
+    // The app showed A while Orca was in front; then it comes in front, and a swipe rests on `linked`.
+    const { front, attach } = await dialWith('orca')
+    attach(SESSION)
+    front('claude')
+    await rest(linked)
+    expect(orcaRuns).toEqual([continued(local)])
+    // A look away puts the settle off: back 999 ms after the link, it settles 1 999 ms after it.
+    front('orca')
+    await wait(999)
+    front('claude')
+    await wait(FRONT_SETTLE_MS)
+    expect(asked()).toEqual([])
+    expect(attaches()).toEqual(['[device] attach · skipped · not in front', '[device] attach · skipped · echo'])
+    // The kept agent is still A: the next settle asks for it.
+    await backInFront(front)
+    expect(asked()).toEqual([[A, 'attach']])
+  })
+
+  it('a settle 2 s after the dial\'s last link moves the dial; of two links the younger counts', async () => {
+    const { front, attach } = await dialWith('orca')
+    attach(SESSION)
+    front('claude')
+    await rest(B)
+    front('orca')
+    await wait(1_000)
+    front('claude')
+    // 2 000 ms after the link.
+    await wait(FRONT_SETTLE_MS)
+    expect(asked()).toEqual([[A, 'attach']])
+    expect(attaches()).toEqual(['[device] attach · skipped · not in front', '[device] attach · on settle'])
+    // Two links, 2 500 ms and 1 000 ms old when the app settles.
+    await rest(B)
+    await wait(1_500)
+    await rest(A)
+    await backInFront(front)
+    expect(asked()).toEqual([[A, 'attach']])
+    expect(attaches().slice(2)).toEqual(['[device] attach · skipped · echo'])
+  })
+
+  it('the app shows what the swipe chose', async () => {
+    const { front, attach } = await dialWith('orca')
+    attach(SESSION)
+    front('claude')
+    await rest(B)
+    // The app settles 1 000 ms after the link, and the link's attach comes 500 ms later.
+    await wait(FRONT_SETTLE_MS)
+    await wait(500)
+    attach(SECOND)
+    expect(asked()).toEqual([])
+    expect(attaches()).toEqual(['[device] attach · skipped · not in front', ...Array(2).fill('[device] attach · skipped · echo')])
+    await wait(2_000)
+    await backInFront(front)
+    expect(asked()).toEqual([[B, 'attach']])
+  })
+
+  it('a session\'s end clears it, and another session\'s end does not', async () => {
+    const { port, front, attach } = await dialWith('orca')
+    attach(SECOND)
+    port.observed(hook('session-end'))
+    front('claude')
+    await wait(FRONT_SETTLE_MS)
+    expect(asked()).toEqual([[B, 'attach']])
+    // Still listed for 10 s once ended, but no longer shown in the app.
+    port.observed(hook('session-end', second))
+    await backInFront(front)
+    expect(asked()).toEqual([[B, 'attach']])
+  })
+
+  it('a kept agent resumed in another app is forgotten at the settle: nothing asked, nothing counted', async () => {
+    const { port, front, attach } = await dialWith('orca')
+    attach(SESSION)
+    port.observed(hook('session-start', { hostHints: { ORCA_AGENT_SESSION_ID: 'orca-1' } }))
+    front('claude')
+    await wait(FRONT_SETTLE_MS)
+    expect(asked()).toEqual([])
+    // Forgotten, not only passed over: back in the Claude app, the next settle asks for nothing either.
+    port.observed(hook('session-start'))
+    await backInFront(front)
+    expect(asked()).toEqual([])
+    expect(attaches()).toEqual(['[device] attach · skipped · not in front'])
+  })
+
+  it('a Cmd-Tab across the app moves nothing', async () => {
+    const { front, attach } = await dialWith('orca')
+    attach(SESSION)
+    front('claude')
+    await wait(FRONT_SETTLE_MS / 2)
+    front('orca')
+    await wait(FRONT_SETTLE_MS)
+    expect(asked()).toEqual([])
+    expect(attaches()).toEqual(['[device] attach · skipped · not in front'])
+  })
+
+  it('with no dial linked nothing is asked or counted, and the attach is still kept', async () => {
+    const { front, attach } = await dialWith('claude')
+    unlinked(true)
+    attach(SESSION)
+    attach(UNLISTED)
+    await backInFront(front)
+    expect(asked()).toEqual([])
+    expect(attaches()).toEqual([])
+    unlinked(false)
+    await backInFront(front)
+    expect(asked()).toEqual([[A, 'attach']])
+    expect(attaches()).toEqual(['[device] attach · on settle'])
+  })
+
+  it.each([['an attach', 'claude'], ['a settle', 'orca']])('%s whose follow throws is logged and the devices keep running', async (_, settled) => {
+    const { front, attach } = await dialWith(settled)
+    vi.spyOn(seen.cable as unknown as { followLocal: (agentId: string, cause: string) => Promise<void> }, 'followLocal')
+      .mockRejectedValueOnce(new Error('dial unplugged'))
+    attach(SESSION)
+    if (settled !== 'claude') {
+      front('claude')
+      await wait(FRONT_SETTLE_MS)
+    }
+    await wait(0)
+    expect(logs).toContain('[devices] dial failed · dial unplugged')
+    attach(SESSION)
+    expect(asked()).toEqual([[A, 'attach']])
+  })
+
+  it('no attach line names a session, an agent or an app', async () => {
+    const { front, attach } = await dialWith('orca')
+    attach(SESSION)
+    attach(UNLISTED)
+    front('claude')
+    await wait(FRONT_SETTLE_MS)
+    await rest(B)
+    attach(SECOND)
+    seen.host.localFollowed!('attach', 'moved')
+    seen.host.localFollowed!('attach', 'no-tile')
+    const six = ['moved', 'on settle', ...['echo', 'not in front', 'unknown agent', 'no tile'].map((why) => `skipped · ${why}`)]
+    expect([...attaches()].sort()).toEqual(six.map((line) => `[device] attach · ${line}`).sort())
+    const secrets = [SESSION, SECOND, UNLISTED, A, B, LOCAL, LOCAL_SECOND, BUNDLE]
+    expect(logs.filter((line) => secrets.some((secret) => line.includes(secret)))).toEqual([])
   })
 })
