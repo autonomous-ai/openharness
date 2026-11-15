@@ -307,6 +307,14 @@ describe('processes', () => {
     expect((await listProcesses(async () => [{ ...row, startTicks: 42 }]))[0].generation).toBe('linux:42')
   })
 
+  it('carries the whole command path where ps cut it, and adds none of its own', async () => {
+    const app = '/Users/someone/Library/Application Support/Claude/claude-code/2.1.325/485fdac4332e/claude.app/Contents/MacOS/claude'
+    const row = { pid: 5, parentPid: 1, executable: app.slice(0, 16), args: app, startMarker: 'Sun Nov 15 15:41:22 2026' }
+    const [cut, whole] = await listProcesses(async () => [row, { ...row, pid: 6, commandPath: app }])
+    expect(cut).not.toHaveProperty('commandPath')
+    expect(whole).toMatchObject({ pid: 6, executable: '/Users/someone/L', commandPath: app })
+  })
+
   it("knows Harness's own panes by their tmux session names, and by a daemon's tag wherever they moved", async () => {
     const out = '/dev/ttys001\tharness-claude-1\t\n/dev/ttys002\tmy-own\t\n\n/dev/ttys003\n'
       // A daemon's pane the person moved into a session of their own, and one another daemon tagged:
