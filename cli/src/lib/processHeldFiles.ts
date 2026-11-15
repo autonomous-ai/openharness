@@ -44,50 +44,59 @@ const KEPT_MOST = 256
 type Kept = { home: string } | { at: number; wait: number }
 const kept = new Map<string, Kept>()
 
+// Each outcome already said of a listing, by its key: once per process, forgotten all at once past the bound.
+const said = new Set<string>()
+
 export function clearHeldHomes(): void {
   kept.clear()
+  said.clear()
 }
 
+/** Why a listing gave no home: its message is the outcome the log line names, never a path, a name or a content. */
+class Unlisted extends Error {}
+
 /** The paths in `lsof -Fn` output, by process: each `n` line that starts with `/`, in the section its `p` line opens.
- *  Null when the output is cut (no last newline), when a process asked of has no section or one not asked of has one,
- *  and when one names over 4,096 descriptors (an `f` line each). */
-export function lsofPaths(output: string, pids: readonly number[]): Map<number, string[]> | null {
-  if (!output.endsWith('\n')) return null
+ *  Throws when the output is cut (no last newline), when a process asked of has no section or one not asked of has
+ *  one, and when one names over 4,096 descriptors (an `f` line each). */
+export function lsofPaths(output: string, pids: readonly number[]): Map<number, string[]> {
+  if (!output.endsWith('\n')) throw new Unlisted('lsof failed')
   const listed = new Map<number, string[]>()
   let paths: string[] | undefined
   let descriptors = 0
   for (const line of output.slice(0, -1).split('\n')) {
     if (line.startsWith('p')) {
       const pid = pids.find((asked) => line === `p${asked}`)
-      if (pid === undefined || listed.has(pid)) return null
+      if (pid === undefined || listed.has(pid)) throw new Unlisted('lsof failed')
       listed.set(pid, paths = [])
       descriptors = 0
-    } else if (!paths) return null
-    else if (line.startsWith('f') && ++descriptors > DESCRIPTORS_MOST) return null
+    } else if (!paths) throw new Unlisted('lsof failed')
+    else if (line.startsWith('f') && ++descriptors > DESCRIPTORS_MOST) throw new Unlisted('too many descriptors')
     else if (line.startsWith('n/')) paths.push(line.slice(1))
   }
-  return pids.every((pid) => listed.has(pid)) ? listed : null
+  if (!pids.every((pid) => listed.has(pid))) throw new Unlisted('lsof failed')
+  return listed
 }
 
 // When the process at `pid` started, in ticks since boot (ProcessIdentity.startTicks); null once none is there.
 const startTicks = (pid: number, proc: string): Promise<number | null> =>
   readFile(join(proc, String(pid), 'stat'), 'utf8').then((text) => linuxProcessStat(text, pid).startTicks).catch(() => null)
 
-// The folders one process's open files name, at the daemon's path of them. Null: it cannot be listed.
-async function linuxFolders(identity: ProcessIdentity, file: RegExp, proc: string): Promise<string[] | null> {
+// The folders one process's open files name, at the daemon's path of them. Throws when it cannot be listed.
+async function linuxFolders(identity: ProcessIdentity, file: RegExp, proc: string): Promise<string[]> {
   // The selected process may have ended since the discovery pass and its pid gone to another: the same start before
   // and after the listing says every file listed was the selected process's.
-  if (await startTicks(identity.pid, proc) !== identity.startTicks) return null
+  if (await startTicks(identity.pid, proc) !== identity.startTicks) throw new Unlisted('pid changed')
   const fd = join(proc, String(identity.pid), 'fd')
   const names: string[] = []
   try {
     for await (const entry of await opendir(fd)) {
-      if (names.length === DESCRIPTORS_MOST) return null
       names.push(entry.name)
+      if (names.length > DESCRIPTORS_MOST) break
     }
   } catch {
-    return null
+    throw new Unlisted('unreadable')
   }
+  if (names.length > DESCRIPTORS_MOST) throw new Unlisted('too many descriptors')
   const folders: string[] = []
   for (const name of names) {
     // A descriptor closed between the two reads says nothing.
@@ -96,11 +105,13 @@ async function linuxFolders(identity: ProcessIdentity, file: RegExp, proc: strin
     if (folder) folders.push(folder)
   }
   const view = await processView(identity, 'linux', proc)
-  if (await startTicks(identity.pid, proc) !== identity.startTicks || view.state === 'unreadable') return null
+  if (await startTicks(identity.pid, proc) !== identity.startTicks) throw new Unlisted('pid changed')
+  if (view.state === 'unreadable') throw new Unlisted('unreadable')
   if (view.state === 'same') return folders
   // A store with no path here is still a home the process holds: dropped, it would leave the other one picked.
   const mapped = folders.map((folder) => view.toHost(folder))
-  return mapped.every((folder) => folder !== null) ? mapped : null
+  if (!mapped.every((folder) => folder !== null)) throw new Unlisted('unmappable')
+  return mapped
 }
 
 // lsof escapes a name's bytes above ASCII (`\xc3\xa0`) and leaves a backslash as it is, so a path may be spelled two
@@ -124,20 +135,22 @@ const STEPS_OUT = /(?:^|\/)\.\.(?:\/|$)/
 
 // One lsof lists every process, not one each: its start is most of a listing's cost. It exits non-zero when any of them
 // cannot be listed.
-async function darwinFolders(pids: readonly number[], file: RegExp): Promise<string[] | null> {
+async function darwinFolders(pids: readonly number[], file: RegExp): Promise<string[]> {
   // Unlike on Linux, nothing checks the pid is still the selected process: its start is `ps lstart`, one more spawn a
   // listing. macOS hands out pids in turn up to 99,999 before it reuses one, and the pass selected it just before.
   // `-n -P`: no host or port names looked up. `-w`: a file system lsof cannot stat is a warning, and the process's own
   // files are listed regardless (engines/kit/nativeDescriptors.ts).
-  // The output's bound is a process's own, as when each had a listing.
-  const listed = await new Promise<Map<number, string[]> | null>((resolve) => {
+  // The output's bound is a process's own, as when each had a listing: past it, it has too many descriptors.
+  const output = await new Promise<string>((resolve, reject) => {
     probeExecFile(execFile)('lsof', ['-n', '-P', '-w', '-p', pids.join(','), '-Fn'],
       { timeout: 2_000, maxBuffer: pids.length << 20, env: psEnv(process.env) },
-      (error, stdout) => resolve(error ? null : lsofPaths(stdout, pids)))
+      (error, stdout, _stderr, outcome) => error
+        ? reject(new Unlisted(error.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' ? 'too many descriptors'
+          : outcome?.timedOut || error.killed ? 'lsof timed out' : 'lsof failed'))
+        : resolve(stdout))
   })
-  if (!listed) return null
   const folders: string[] = []
-  for (const paths of listed.values()) {
+  for (const paths of lsofPaths(output, pids).values()) {
     for (const path of paths) {
       const folder = await spelledFolder(path, file)
       if (folder) folders.push(folder)
@@ -149,28 +162,33 @@ async function darwinFolders(pids: readonly number[], file: RegExp): Promise<str
 // Where a process's open files can be listed.
 type Listable = 'linux' | 'darwin'
 
-// The folders every listed process's files name; null when one of them cannot be listed.
-async function heldFolders(listed: readonly ProcessIdentity[], file: RegExp, platform: Listable, proc: string): Promise<string[] | null> {
+// The folders every listed process's files name. Throws when one of them cannot be listed.
+async function heldFolders(listed: readonly ProcessIdentity[], file: RegExp, platform: Listable, proc: string): Promise<string[]> {
   // A pid goes into lsof's command line and a path under /proc: only a positive whole number may.
-  if (!listed.every(({ pid }) => Number.isSafeInteger(pid) && pid > 0)) return null
+  if (!listed.every(({ pid }) => Number.isSafeInteger(pid) && pid > 0)) throw new Unlisted('bad pid')
   if (platform === 'darwin') return darwinFolders(listed.map(({ pid }) => pid), file)
   const folders: string[] = []
-  for (const identity of listed) {
-    const held = await linuxFolders(identity, file, proc)
-    if (!held) return null
-    folders.push(...held)
-  }
+  for (const identity of listed) folders.push(...await linuxFolders(identity, file, proc))
   return folders
 }
 
 // Exactly one folder among every listed process's files is the answer: two are no answer, whichever process holds
-// which, and so is one process that cannot be listed.
+// which, and so is one process that cannot be listed. Undefined: none holds such a file yet.
 async function listedHome(listed: readonly ProcessIdentity[], file: RegExp, platform: Listable, proc: string): Promise<string | undefined> {
-  const held = await heldFolders(listed, file, platform, proc)
-  if (!held) return undefined
-  const folders = new Set(held)
+  const folders = new Set(await heldFolders(listed, file, platform, proc))
+  if (folders.size > 1) throw new Unlisted('two homes')
   const [home] = folders
-  return folders.size === 1 && !STEPS_OUT.test(home) ? home : undefined
+  if (home !== undefined && STEPS_OUT.test(home)) throw new Unlisted('home with ..')
+  return home
+}
+
+// One line for each outcome of each process's listings, however often it is listed.
+function say(key: string, pid: number, outcome: string): void {
+  const id = `${key}\u0000${outcome}`
+  if (said.has(id)) return
+  if (said.size >= KEPT_MOST) said.clear()
+  said.add(id)
+  console.warn(`[held-files] pid ${pid}: ${outcome}`)
 }
 
 /**
@@ -200,8 +218,14 @@ export async function heldHome(
   if (before && 'home' in before) return before.home
   const at = now()
   if (before && at - before.at < before.wait) return undefined
-  // The bound is the reader's own, whatever its caller gives: one listing reads one process to five.
-  const home = await listedHome([selected, ...children().slice(0, ENGINE_CHILDREN_MOST)], file, platform, proc)
+  let home: string | undefined
+  try {
+    // The bound is the reader's own, whatever its caller gives: one listing reads one process to five.
+    home = await listedHome([selected, ...children().slice(0, ENGINE_CHILDREN_MOST)], file, platform, proc)
+  } catch (error) {
+    if (!(error instanceof Unlisted)) throw error
+    say(key, selected.pid, error.message)
+  }
   if (!kept.has(key) && kept.size >= KEPT_MOST) kept.clear()
   kept.set(key, home !== undefined ? { home }
     : { at, wait: before ? Math.min(before.wait * 2, HELD_RETRY_MS.most) : HELD_RETRY_MS.first })
