@@ -44,7 +44,8 @@ export interface ResumeAgentServiceDeps {
   retainExitedSession(session: RegisteredSession, paneAlive: boolean): void
   announceSession(session: RegisteredSession): void
   relaunchOverrides(session: RegisteredSession, source: RegisteredSession, current: () => boolean): Promise<LaunchOverridesResult>
-  prepareSessionResume(session: RegisteredSession): void
+  /** Its history made resumable, replaced only while [current] holds; true when it was (core/agents/launch.ts). */
+  prepareSessionResume(session: RegisteredSession, current: () => boolean): Promise<boolean>
   /** Stops a Claude Code background job holding the session before `--resume`, in its worker (core/engines/backgroundJobs.ts). */
   stopBackgroundJob?: ClearBackgroundJob
   refreshGridWebSearch(agentId: string, overrides: LaunchOverrides): void
@@ -289,13 +290,17 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
           if (refusal) return { ok: false, ...refusal }
         }
         if (resumeSessionId) {
-          try { prepareSessionResume(saved) } catch (error) {
+          // Replaced only while this resume holds, and no other live harness has taken the conversation since.
+          let replaced: boolean
+          try { replaced = await prepareSessionResume(saved, () => current() && !(saved.sessionId && registry.bySession(saved.sessionId))) } catch (error) {
             if (error instanceof IdentityReadUnavailable) throw error
             return preparationFailed(sid(saved.agentId), error)
           }
-          // The confirmed synchronous repair may atomically replace this file.
-          // Earn a new proof of the same conversation before the next await.
-          transcript = sourceEvidence()
+          if (!current()) return resumeChanged
+          // A history the repair replaced, checked byte for byte against the one proven, earns a new proof of the same
+          // conversation before the next await; any other must still be the file proven before it.
+          if (replaced) transcript = sourceEvidence()
+          else transcript?.verify()
         }
         if (saved.sessionId && registry.bySession(saved.sessionId)) return { ok: false, error: 'AGENT_BUSY' }
         // Everything the engine writes from here on is its own, and live: the attach after it folds the
