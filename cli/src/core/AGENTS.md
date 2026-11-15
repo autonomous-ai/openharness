@@ -70,7 +70,9 @@ The core stays small and secure, in the code and at run time: read
   services that run in their own processes by default it imports only dynamically, through
   `../services/inline.ts`, and only when one runs in this process instead.
 - `api.ts`: the contract with services, their ports, fallbacks and requests. `serviceHost.ts`: services
-  in this process. `serviceLinks.ts`: services in their own processes. `viewersLink.ts`: what the core
+  in this process. `serviceLinks.ts`: services in their own processes. `serviceRoutes.ts`: a route of the local
+  door a service answers (`SERVICE_HTTP_ROUTES`), handed on as it came once the door let it in, with the route's own
+  wait and its own answer while that service is down. `viewersLink.ts`: what the core
   keeps of the viewers when they run in theirs. `viewerStreams.ts`: a client's viewer stream and rendered
   frames, handed to the viewers, refused at once while they are down, and held while they first start. `workspacesLink.ts`: what the core tells workspaces in
   theirs. `messagesLink.ts`: Agent Messages out of this process (the edge host): which of its deliveries may be

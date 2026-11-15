@@ -23,7 +23,7 @@ import { currentToken, RENEWAL_WAIT_MS, tokenOf } from '../lib/authSession.js'
 import { guestMachineList, withStaleMarker } from '../lib/machineListReply.js'
 import type { GatewayMachines } from './api.js'
 import type {
-  BackendNotice, GatewayEvents, LocalWindows, GatewayOps, GatewayPort, GatewayRefusal, GatewayStatus, HttpAnswer, LaneSeal,
+  BackendNotice, GatewayEvents, LocalWindows, GatewayOps, GatewayPort, GatewayStatus, HttpAnswer, LaneSeal,
   RemoteClient, RemoteRole, RemoteTransport, TabFrame, TabKey, TabRelay, WindowRelay, WindowRelaySession, WindowRelaySink,
 } from './api.js'
 import { askTabKey } from '../lib/tabKeyWire.js'
@@ -46,6 +46,9 @@ export interface GatewayLinkDeps {
   machines?(state: GatewayMachines): void
   /** Ask the master for the gateway's process (harnessd/coreLink.ts `want`): it runs on demand (core/gatewayWake.ts). */
   want?(): void
+  /** Whether the Wi-Fi device's service serves, its process asked for and waited for a while (core/wifi.ts `serving`):
+   *  the gateway's look for devices and its pairing wait for it, and only the core can ask for that process. */
+  wifiServing(): Promise<boolean>
   /** How long what waits for the gateway's first start waits (core/serviceLinks.ts `ON_DEMAND_START_MS`). */
   startWaitMs?: number
   newId?: () => string
@@ -320,15 +323,6 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
     devicesHistory: () => http(GATEWAY_CALLS.devicesHistory),
     devicesDismiss: (body) => http(GATEWAY_CALLS.devicesDismiss, { body }),
     devicesRebaseline: (confirm, head) => http(GATEWAY_CALLS.devicesRebaseline, { confirm, ...(head ? { head } : {}) }),
-    wifi: async (request) => {
-      const answer = await deps.call(GATEWAY_CALLS.wifi, request, request.op === 'pair' ? PAIR_WAIT_MS : undefined)
-      if (answer.result && typeof answer.result === 'object') return { result: answer.result as Record<string, unknown> }
-      const refused = record(answer.refused)
-      const why: GatewayRefusal = typeof refused.code === 'string'
-        ? { code: refused.code, message: text(refused.message) }
-        : { code: 'UNAVAILABLE', message: 'The Wi-Fi device link is not reachable on this computer right now. Try again.' }
-      return { refused: why }
-    },
     wifiService: (on) => { wifiService = on; if (on) need(); send('wifiService', { on }) },
     revokeIdentity: (identity) => { send('revokeIdentity', { identity }) },
     account: (next) => {
@@ -525,15 +519,16 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
   }
 
   /**
-   * What the gateway asks the core (`service_query`): the device key log's reads of the backend, and the harnesses
-   * shared with this account (the Share relay finds a share among them before it dials). Nothing else: the gateway
-   * is the relay, and the core's own REST reads are not its to make. Never a token: the gateway renews the sign-in
-   * itself, and the core asks it (`ops.accessToken`).
+   * What the gateway asks the core (`service_query`): the device key log's reads of the backend, the harnesses
+   * shared with this account (the Share relay finds a share among them before it dials), and whether the Wi-Fi device's
+   * service serves (`wifi_serving`). Nothing else: the gateway is the relay, and the core's own REST reads are not its
+   * to make. Never a token: the gateway renews the sign-in itself, and the core asks it (`ops.accessToken`).
    */
   const answer = async (query: string, payload: Record<string, unknown>): Promise<Record<string, unknown>> => {
     if (query === 'backend' && payload.method === 'GET' && (text(payload.path).startsWith('/api/device-keys') || payload.path === '/api/harness-shares')) {
       return { ...await deps.backend('GET', text(payload.path)) }
     }
+    if (query === 'wifi_serving') return { serving: await deps.wifiServing() }
     return { error: 'UNKNOWN_QUERY' }
   }
 

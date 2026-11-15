@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { autonomousDeviceLocalRequest, deviceAddonRoutes, type AutonomousDeviceManagement } from './deviceManagementHttp.js'
+import { autonomousDeviceLocalRequest, deviceRefusal, deviceRoutes, type AutonomousDeviceManagement } from './localHttp.js'
 
 const id = Buffer.alloc(32, 255).toString('base64')
 function fixture() {
@@ -110,12 +110,12 @@ describe('device local management validation', () => {
     for (const handler of Object.values(service)) expect(handler).not.toHaveBeenCalled()
   })
 
-  it('maps already-paired to conflict and hides unexpected internal errors', async () => {
+  it('maps already-paired to conflict and hides what an internal failure says', async () => {
     const service = fixture()
     service.pairStart.mockRejectedValue(Object.assign(new Error('A device is already paired'), { code: 'ALREADY_PAIRED' }))
     expect(await autonomousDeviceLocalRequest(service, 'POST', '/api/autonomous-device/pair/start', { code: 'ABC234', device: 'os._autonomous._tcp.local' }))
       .toEqual({ status: 409, body: { error: { code: 'ALREADY_PAIRED', message: 'A device is already paired' } } })
-    service.pairStart.mockRejectedValue(new Error('secret-file-content'))
+    service.pairStart.mockRejectedValue(deviceRefusal('INTERNAL', 'secret-file-content'))
     expect(await autonomousDeviceLocalRequest(service, 'POST', '/api/autonomous-device/pair/start', { code: 'ABC234', device: 'os._autonomous._tcp.local' }))
       .toEqual({ status: 500, body: { error: { code: 'INTERNAL_ERROR', message: 'Autonomous device management request failed' } } })
   })
@@ -173,25 +173,58 @@ describe('device add-on local routes', () => {
     expect(service.addonProposal).not.toHaveBeenCalled()
   })
 
-  it('maps the add-on layer and the service being down to HTTP answers', async () => {
-    const answers = [
-      { error: { code: 'RATE_LIMITED', message: 'slow down' } },
-      { error: { code: 'MISSING_TARGET', message: 'name one' } },
-      { error: { code: 'PAYLOAD_TOO_LARGE', message: 'too big' } },
-      { unavailable: true as const },
-      { error: { code: 'OUTCOME_UNKNOWN', message: 'maybe sent' } },
-      { error: { code: 'PROPOSAL_UNKNOWN', message: 'aged out' } },
-      { result: { proposal: null } },
-    ]
-    const routes = deviceAddonRoutes(async () => answers.shift()!)
-    const service = { ...fixture(), ...routes }
+  it('says a refusal under its code, an unknown code as internal, and throws on a failure with no code', async () => {
+    const service = fixture()
     const post = () => autonomousDeviceLocalRequest(service, 'POST', '/api/autonomous-device/addon/propose', {})
+    service.addonPropose.mockImplementationOnce(() => { throw deviceRefusal('RATE_LIMITED', 'slow down') })
     expect(await post()).toEqual({ status: 429, body: { error: { code: 'RATE_LIMITED', message: 'slow down' } } })
-    expect((await post()).status).toBe(409)
-    expect((await post()).status).toBe(413)
-    expect((await post()).body).toMatchObject({ error: { code: 'UNAVAILABLE' } })
-    expect((await post()).status).toBe(504)
-    expect((await post()).status).toBe(404)
-    expect(await post()).toEqual({ status: 200, body: { proposal: null } })
+    for (const [code, status] of [['MISSING_TARGET', 409], ['PAYLOAD_TOO_LARGE', 413], ['UNAVAILABLE', 503], ['OUTCOME_UNKNOWN', 504], ['PROPOSAL_UNKNOWN', 404]] as const) {
+      service.addonPropose.mockImplementationOnce(() => { throw deviceRefusal(code, code) })
+      expect((await post()).status, code).toBe(status)
+    }
+    service.addonPropose.mockImplementationOnce(() => { throw Object.assign({ message: 7 }, { code: 'UNAVAILABLE' }) })
+    expect(await post()).toEqual({ status: 503, body: { error: { code: 'UNAVAILABLE', message: 'Autonomous device management request failed' } } })
+    service.addonPropose.mockImplementationOnce(() => { throw deviceRefusal('EADDRINUSE', 'the port is taken') })
+    expect(await post()).toEqual({ status: 500, body: { error: { code: 'INTERNAL_ERROR', message: 'Autonomous device management request failed' } } })
+    // What failed may have been done: its route answers for it, as for a service that is down.
+    service.addonPropose.mockImplementationOnce(() => { throw new TypeError('a bug') })
+    await expect(post()).rejects.toThrow('a bug')
+    service.addonPropose.mockImplementationOnce(() => { throw 'not an error' })
+    await expect(post()).rejects.toBe('not an error')
+  })
+})
+
+describe('a service\'s device routes, as the door hands them on', () => {
+  const owner = { local: true, owner: true }
+  it('reads the body as the client sent it, and answers what its service answers', async () => {
+    const service = fixture()
+    const answer = deviceRoutes(service)
+    expect(await answer({ method: 'POST', target: '/api/autonomous-device/pair/start', body: '{"code":"ABC234","device":"os._autonomous._tcp.local"}' }, owner))
+      .toEqual({ status: 200, body: { state: 'running' } })
+    expect(await answer({ method: 'GET', target: '/api/autonomous-device/list' }, owner)).toEqual({ status: 200, body: { devices: [] } })
+    expect(await answer({ method: 'POST', target: '/api/autonomous-device/revoke', body: 'not json' }, owner))
+      .toEqual({ status: 400, body: { error: { code: 'BAD_REQUEST', message: 'Invalid JSON body' } } })
+    // An empty or cut body, as the door reads one past its bound, is no JSON.
+    expect((await answer({ method: 'POST', target: '/api/autonomous-device/revoke', body: '' }, owner)).status).toBe(400)
+    // A frame that says nothing of what it asks is no route.
+    expect(await answer({}, owner)).toEqual({ status: 400, body: { error: { code: 'BAD_REQUEST', message: 'Invalid device management request' } } })
+    expect(service.revoke).not.toHaveBeenCalled()
+  })
+
+  it('is this computer\'s owner\'s alone: anyone else is refused as the door refuses', async () => {
+    const service = fixture()
+    const answer = deviceRoutes(service)
+    const refused = { status: 403, body: { error: { code: 'FORBIDDEN', message: 'Authenticated native loopback client required' } } }
+    for (const asker of [{ local: false, owner: true, accountOwner: true }, { local: true, owner: false }, { local: true, owner: true, guest: 'g@example.com' }]) {
+      expect(await answer({ method: 'GET', target: '/api/autonomous-device/list' }, asker)).toEqual(refused)
+    }
+    expect(service.list).not.toHaveBeenCalled()
+  })
+
+  it('takes only the routes its service gives: another\'s is unknown here', async () => {
+    const answer = deviceRoutes({ list: () => ({ devices: [] }) })
+    expect(await answer({ method: 'GET', target: '/api/autonomous-device/receipt?deviceId=x&idempotencyKey=k' }, owner))
+      .toEqual({ status: 404, body: { error: { code: 'NOT_FOUND', message: 'Unknown device management endpoint' } } })
+    expect((await answer({ method: 'GET', target: '/api/autonomous-device/list' }, owner)).status).toBe(200)
   })
 })

@@ -186,6 +186,7 @@ Left since, with the core's process as `src/architecture.coreFiles.txt` lists it
 | The sign-in's renewal, the core's last call to another host: the gateway renews it, and the core asks it for a token. A test lists what in the core's process can open a connection, each to this computer (13 November) | 547 | 94,321 |
 | The Swarm's chat-file upload, the last call to another host with the Swarm on: the core keeps the file in its private uploads folder and the gateway sends it. The connection test reads every file of the core's process, the Swarm's door too. The core no longer loads the backend's address (`lib/backendHttpBase.ts`) at all (13 November) | 546 | 94,344 |
 | The Swarm, deleted: its door, its port and queries, and every list, relay and record the core kept for it (14 November) | 541 | 92,057 |
+| The Wi-Fi device's routes of the local door (`/api/autonomous-device/*`): the door checks the caller, then one adapter (`core/serviceRoutes.ts`) hands each route as it came to the service that answers it (the gateway, the Wi-Fi device's, the machine add-ons'), which checks it; a service down answers its route's own words at once. `lib/deviceManagementHttp.ts` left (15 November) | 543 | 93,002 |
 
 ### 1. Code the core loads for one helper (low risk, about a day each)
 
@@ -213,7 +214,7 @@ this platform uses leaves them out. Low risk on a Mac and Linux, medium on a Win
 
 | What | Lines | Where to | Risk |
 | --- | ---: | --- | --- |
-| **Feature routes in the two doors.** Pairing and keys, the account, desk and Store proxies, device and Wi-Fi routes, usage reports, voice, the relay to other machines (`hookServer.ts` 470, `localWsServer.ts` 430, `core/main.ts` about 320, `lib/deviceManagementHttp.ts` 199, `lib/storeProxy.ts` 48) | 1,470 | gateway, devices, edge, through one adapter that turns a route into a service request | medium |
+| **Feature routes in the two doors.** Pairing and keys, the account, desk and Store proxies, usage reports, voice, the relay to other machines (`hookServer.ts` 470, `localWsServer.ts` 430, `core/main.ts` about 300, `lib/storeProxy.ts` 48). The device and Wi-Fi routes left on 15 November, through the adapter the rest will use (`core/serviceRoutes.ts`) | 1,250 | gateway, devices, edge, through one adapter that turns a route into a service request | medium |
 | **Git.** A create clones a repository or adds a worktree inside the core; every agent frame runs git for its project and branch (`lib/gitProject.ts`, `agentProject.ts`, `projectFolder.ts`, `sessionGitHistory.ts`, `sessionGitContext.ts`, `worktreeDeletion.ts`, `sshHosts.ts`, `scm/`) | 1,900 | edge (workspaces): a create asks for its folder, a frame reads a reported cache | medium |
 | **The product usage vocabulary** and the mapping of each request's outcome to counter names (`lib/productUsageContract.ts`, `productUsageSignals.ts`, `productHealthContract.ts`, `appProductUsageReport.ts`) | 723 | gateway: the core sends one raw outcome | low |
 | **Paste uploads.** Up to 20 MB from a remote client into the core's memory, then files written and clipboard tools started (`lib/terminalStreamManager.ts:1003-1234`, with `lib/osClipboard.ts` and `lib/pasteDropFiles.ts`) | 240 to 465 | a paste service in the edge host | medium |

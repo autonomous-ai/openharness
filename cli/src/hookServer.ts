@@ -32,6 +32,8 @@ import { ENGINES, type AgentEngine } from './engines/types.js'
 import { isLoopbackRequest, loopbackHosts } from './lib/loopbackRequest.js'
 import { isTrustedLocal, listenLocalSocket, type LocalSocketServer } from './lib/localSocket.js'
 import { PTY_HOST_INSTANCE, PTY_HOST_PANE } from './lib/ptyHost/instance.js'
+import type { HttpAnswer } from './core/api.js'
+import type { ServiceHttpRequest } from './core/serviceRoutes.js'
 
 /**
  * Which agent does a hook belong to, given the two grades of evidence?
@@ -72,7 +74,9 @@ export interface HookServerHandlers {
   /** The mod's held poll for a spoken prompt (core/deviceHookCalls.ts). `gone` aborts when the client goes before its
    *  answer. */
   onInbox?: (body: unknown, gone: AbortSignal) => Promise<'invalid' | 'off' | { text?: string }>
-  onAutonomousDeviceRequest?: (method: string, target: string, body?: unknown) => Promise<{ status: number; body: unknown }>
+  /** A route a service answers, once the door let its request in (core/serviceRoutes.ts): its answer, or null when no
+   *  service answers `path`. */
+  onServiceRoute?: (path: string, request: ServiceHttpRequest) => Promise<HttpAnswer> | null
 
   onRegistered: (
     entry: RegisteredSession,
@@ -581,12 +585,11 @@ export function startHookServer(
         if (!loopback || req.headers.origin || !hookCredentialMatches(hookCredential, bearer) || !credentialOk) {
           json(403, { error: { code: 'FORBIDDEN', message: 'Authenticated native loopback client required' } }); return
         }
-        if (!handlers.onAutonomousDeviceRequest) { json(503, { error: { code: 'UNAVAILABLE', message: 'Autonomous device service unavailable' } }); return }
-        let body: unknown
-        if (req.method !== 'GET') {
-          try { body = JSON.parse(await readBody(req)) } catch { json(400, { error: { code: 'BAD_REQUEST', message: 'Invalid JSON body' } }); return }
-        }
-        const result = await handlers.onAutonomousDeviceRequest(req.method ?? '', req.url ?? '', body)
+        // The Wi-Fi device's services', as the client sent it: the gateway's, its service's and the machine add-ons'.
+        const body = req.method === 'GET' ? undefined : await readBody(req)
+        const answer = handlers.onServiceRoute?.(url, { method: req.method ?? '', target: req.url ?? '', ...(body === undefined ? {} : { body }) })
+        if (!answer) { json(503, { error: { code: 'UNAVAILABLE', message: 'Autonomous device service unavailable' } }); return }
+        const result = await answer
         json(result.status, result.body); return
       }
       if (req.method === 'GET' && url === '/api/health') {
