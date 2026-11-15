@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { classifyGridAssignment, gridAssignments, readPiGridAssignment } from './gridAssignment.js'
-import { gridAssignmentProcess } from './gridAssignmentWire.js'
+import { gridAssignmentEvidence, gridAssignmentProcess } from './gridAssignmentWire.js'
 import { buildGridEngineLaunch, gridCapableEngines, gridConfigHandOff, type GridLaunchOverride } from './gridLaunch.js'
 import type { AgentEngine } from '../engines/types.js'
 
@@ -50,9 +50,13 @@ describe('classifyGridAssignment', () => {
     // The point of the round trip: the read and the launcher must use the SAME knob, or an agent that IS on a grid
     // reports as being on none and gets pointlessly restarted.
     for (const engine of gridCapableEngines()) {
-      const process = gridAssignmentProcess('k', engine, launched(engine, OVERRIDE).args)
+      const { args } = launched(engine, OVERRIDE)
+      const process = gridAssignmentProcess('k', engine, args)
       if (engine !== 'codex' && engine !== 'pi') {
         expect(process, engine).toBeNull()
+        // No finding, so the row keeps the grid its launch recorded: every other engine a grid can launch is one
+        // whose grid is in no command line.
+        expect(gridAssignmentEvidence('k', engine, args), engine).toBeUndefined()
         continue
       }
       const [answer] = await gridAssignments([process!])
