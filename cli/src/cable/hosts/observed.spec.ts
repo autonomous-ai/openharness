@@ -1303,7 +1303,7 @@ describe('ObservedSource actions', () => {
     src.ingest(ev('session-start', { sessionId: 'plain' }))
     const agent = (sessionId: string) => src.list().find((a) => a.sessionId === sessionId)!
     expect(await src.focus(agent('orca'))).toBe(false)
-    expect(actions.open).toHaveBeenCalledWith(agent('orca').id, { bundle: 'com.stablyai.orca', pane: { app: 'orca', id: HANDLE } })
+    expect(actions.open).toHaveBeenCalledWith(agent('orca').id, { bundle: 'com.stablyai.orca', pane: { adapter: 'orca', id: HANDLE } })
     actions.open.mockResolvedValue(true)
     expect(await src.focus(agent('orca'))).toBe(true)
     expect(await src.focus(agent('plain'))).toBe(false)
@@ -1613,15 +1613,15 @@ describe('ObservedSource panes', () => {
       id: 'made-up',
       tap: 'before' as const,
       paneOf: vi.fn((place: Place) => (place.hints.MADE_UP === 'p1' ? PANE : undefined)),
-      canFocus: () => true,
+      canFocus: vi.fn((_pane: Pane) => true),
       focus: vi.fn(async (_pane: Pane) => true),
       canShow: vi.fn((_pane: Pane) => true),
       show: vi.fn(async (_pane: Pane, _agentId: string): Promise<PaneSwitch> => 'busy'),
       type: vi.fn(async (_pane: Pane, _text: string) => true),
     })
     /** A source that asks this adapter first, its agent after a turn-stop with these hints. */
-    const first = (adapter: HostAdapter, hostHints: Record<string, string>) => {
-      const { actions } = fakeActions()
+    const first = (adapter: HostAdapter, hostHints: Record<string, string>, over: Partial<Fakes> = {}) => {
+      const { actions } = fakeActions(over)
       const t = setup({ actions: { ...actions, adapters: [adapter, ...actions.adapters] } })
       t.src.ingest(t.ev('turn-stop', { hostHints }))
       return { src: t.src, actions, agent: t.src.list()[0] }
@@ -1662,6 +1662,40 @@ describe('ObservedSource panes', () => {
     const alone = first({ ...madeUp(), type: undefined }, { MADE_UP: 'p1' })
     expect(alone.src.capabilities(alone.agent)).toMatchObject({ voice: false })
     expect(await alone.src.send(alone.agent, 'next')).toEqual({ ok: false, reason: 'proj did not answer.' })
+
+    // A tap hands its pane to the opener, which brings it forward: the source runs none of its own.
+    const near = madeUp()
+    const tap = first(near, both)
+    expect(await tap.src.focus(tap.agent)).toBe(true)
+    expect(tap.actions.open.mock.calls).toEqual([[tap.agent.id, { pane: PANE }]])
+    expect(near.focus).not.toHaveBeenCalled()
+    // It cannot bring its pane forward here: Orca's terminal is the first that can.
+    near.canFocus.mockReturnValue(false)
+    expect(await tap.src.focus(tap.agent)).toBe(true)
+    expect(tap.actions.open.mock.calls[1]).toEqual([tap.agent.id, { pane: { adapter: 'orca', id: HANDLE } }])
+    expect(near.focus).not.toHaveBeenCalled()
+
+    // It comes after its app: Orca's terminal is the tap's pane, and its own is raised once the app came.
+    const late = { ...madeUp(), tap: 'after' as const }
+    let opened!: (yes: boolean) => void
+    const raised = first(late, both, { open: vi.fn(() => new Promise<boolean>((resolve) => { opened = resolve })) })
+    const raising = raised.src.focus(raised.agent)
+    expect(raised.actions.open.mock.calls).toEqual([[raised.agent.id, { pane: { adapter: 'orca', id: HANDLE } }]])
+    expect(late.focus).not.toHaveBeenCalled()
+    opened(true)
+    expect(await raising).toBe(true)
+    expect(late.focus.mock.calls).toEqual([[PANE]])
+    // Its app did not come: nothing is raised.
+    const unopened = { ...madeUp(), tap: 'after' as const }
+    const closed = first(unopened, both, { open: vi.fn(async () => false) })
+    expect(await closed.src.focus(closed.agent)).toBe(false)
+    expect(unopened.focus).not.toHaveBeenCalled()
+    // It cannot show its pane now: the pane a rest would show is Orca's, which comes before its app.
+    const unshown = { ...madeUp(), tap: 'after' as const }
+    unshown.canShow.mockReturnValue(false)
+    const behind = first(unshown, both)
+    expect(await behind.src.focus(behind.agent)).toBe(true)
+    expect(unshown.focus).not.toHaveBeenCalled()
   })
   // A rest shows a Claude app session in the app, only while that app is in front (docs/specs/2026-11-15-dial-claude-app-follow.md).
   const SESSION = 'local_8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b'
