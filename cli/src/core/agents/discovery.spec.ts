@@ -156,6 +156,18 @@ describe('discovery', () => {
       }
     })
 
+    it('mints a row with no DSH, and fills none from a process', async () => {
+      const run = setup()
+      await run.handlers.onDiscovered(seen({ dsh: 'blender' } as never))
+      expect(vi.mocked(run.deps.registry.openProcessAgent).mock.calls[0]![0]).not.toHaveProperty('dsh')
+      await run.handlers.onObserved(seen({ dsh: 'blender' } as never), row())
+      expect(run.deps.attachDsh).not.toHaveBeenCalled()
+      // A row Harness created as a DSH keeps its viewer.
+      run.rows.set('a1', row({ dsh: 'blender' } as Partial<RegisteredSession>))
+      await run.handlers.onObserved(seen(), row({ dsh: 'blender' } as Partial<RegisteredSession>))
+      expect(run.deps.attachDsh).toHaveBeenCalled()
+    })
+
     it('tells the registry a home Harness worked out, and marks a row that has that home without the mark', async () => {
       const observed = seen({ engine: 'hermes', args: 'hermes', hermesHome: '/data/agents/a1/.hermes', hermesHomeDerived: true } as Partial<DiscoveredTerminalAgent>)
       for (const current of [row({ engine: 'hermes' }), row({ engine: 'hermes', hermesHome: '/data/agents/a1/.hermes' } as Partial<RegisteredSession>)]) {
