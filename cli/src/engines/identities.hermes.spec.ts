@@ -66,6 +66,13 @@ describe('the home a Hermes process uses', () => {
     expect(heldHome).not.toHaveBeenCalled()
   })
 
+  it('takes no held home that could not be a home: relative, over 1,024 characters, or with a control character', async () => {
+    for (const held of ['h/.hermes', `/${'a'.repeat(1_024)}`, '/h/.her\nmes', '/h/.hermes\u007f']) {
+      heldHome.mockResolvedValue(held)
+      expect(await probeHermesHome(identity, 'hermes', children), JSON.stringify(held)).toBeUndefined()
+    }
+  })
+
   it('the pattern takes a file named state.db and nothing else', () => {
     expect(HERMES_HELD_STORE.exec('/h/.hermes/state.db')?.[1]).toBe('/h/.hermes')
     for (const path of ['/h/.hermes/state.db-wal', '/h/.hermes/state.db-shm', '/h/.hermes/state.db (deleted)', '/h/.hermes/mystate.db']) {
