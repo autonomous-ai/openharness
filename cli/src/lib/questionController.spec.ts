@@ -62,6 +62,33 @@ describe('asynchronous question evidence', () => {
     const question = { kind: 'question' as const, question: 'Drink?', multi: false, typeRow: null,
       rows: [{ number: '1', label: 'Tea', checked: false }, { number: '2', label: 'Coffee', checked: false }] }
     const answer = { agentId: 'agent', answers: { 'Drink?': 'Coffee' } }
+    it.each([
+      { stage: 'before input', reviewed: false, applies: [], views: [] },
+      { stage: 'before input', reviewed: true, applies: [], views: [] },
+      { stage: 'after a completed choice', reviewed: false, applies: [true], views: [question] },
+      { stage: 'after a completed choice', reviewed: true, applies: [true], views: [question] },
+      { stage: 'after an uncertain choice', reviewed: false, applies: [false], views: [question] },
+      { stage: 'after an uncertain choice', reviewed: true, applies: [false], views: [question] },
+      { stage: 'after an uncertain review', reviewed: false, applies: [true, false], views: [question, { kind: 'review', submitRow: 'Enter' }] },
+      { stage: 'after an uncertain review', reviewed: true, applies: [true, false], views: [question, { kind: 'review', submitRow: 'Enter' }] },
+    ])('refuses unreadable evidence $stage (reviewed: $reviewed)', async ({ reviewed, applies, views }) => {
+      const release = vi.fn(), apply = vi.fn(async () => false)
+      for (const result of applies) apply.mockResolvedValueOnce(result)
+      const readQuestion = vi.fn(async (): Promise<PaneView> => null)
+      for (const view of views) readQuestion.mockResolvedValueOnce(view as PaneView)
+      const read = vi.fn(async (): Promise<string | null> => null)
+      for (const _view of views) read.mockResolvedValueOnce(capture)
+      const controller = new AskQuestionController({ getSession: row, capture: read, readQuestion,
+        sendKey: vi.fn(), sendText: vi.fn(), wait: async () => {}, acquireControl: () => release,
+        questionControlFor: () => ({ apply, failure: () => 'uncertain' }) })
+      expect(await controller.answer({ ...answer, ...(reviewed ? {
+        expectedQuestions: [{ key: 'Drink?', q: 'Drink?', options: ['Tea', 'Coffee'], multi: false }],
+      } : {}) })).toEqual({ ok: false, error: 'ANSWER_FAILED', detail: 'The question could not be read.' })
+      expect(readQuestion).toHaveBeenCalledTimes(views.length)
+      expect(apply).toHaveBeenCalledTimes(applies.length)
+      expect(release).toHaveBeenCalledOnce()
+    })
+
     const run = async (failure: 'refused' | 'uncertain' | undefined, views: PaneView[], applies = [false]) => {
       const current = row(), release = vi.fn(), sendKey = vi.fn(async () => true), sendText = vi.fn(async () => true)
       const apply = vi.fn(async () => false)

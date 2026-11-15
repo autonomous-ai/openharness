@@ -13,7 +13,8 @@ import { buildWithLean } from './harness/release.js'
 const SESSION = 'dddddddd-2222-4333-8444-555555555555'
 const profile = (agent: string, effort = 'high') => `runtime-v1:${encodeURIComponent(agent)}:cursor:model-7@${effort}`
 const permission = ['────────────────────────────', ' $ printf fixture in .', '', ' Run this command?',
-  ' Not in allowlist: printf', ' → Run (once) (y)', ' Skip & tell the agent what to do instead (esc or n)'].join('\n')
+  ' Not in allowlist: printf', ' → Run (once) (y)', ' Add Shell(printf) to allowlist? (tab)',
+  ' Skip & tell the agent what to do instead (esc or n)'].join('\n')
 type Row = { id: string; sessionId: string; status: string; tmuxPane: string; selectedModel?: string | null }
 
 // The same checked bundle is used for the normal, damaged-core, older-master and explicit-inline paths.
@@ -62,7 +63,7 @@ process.stdin.on('data', data => { for (const key of data) {
  fs.appendFileSync(${JSON.stringify(join(d.root, 'keys.txt'))}, key);
  if (key === '\\x03') process.exit(0);
  if (key === 'q') { asking = true; process.stdout.write('\\x1b[2J\\x1b[H' + ${JSON.stringify(permission)} + '\\n'); }
- else if (asking && (key === 'y' || key === 'n')) { asking = false; fs.appendFileSync(${JSON.stringify(join(d.root, 'choices.txt'))}, key); idle('fixture choice ' + key); }
+ else if (asking && (key === 'y' || key === 'n' || key === '\\t')) { asking = false; fs.appendFileSync(${JSON.stringify(join(d.root, 'choices.txt'))}, key); idle('fixture choice ' + key); }
  else if (key === 't') process.stdout.write('\\nfixture terminal input\\n');
 } });
 idle('fixture-cursor-ready');
@@ -90,10 +91,10 @@ idle('fixture-cursor-ready');
     await d.tmux.run('send-keys', '-t', pane, '-l', 'q')
     return asked
   }
-  async function answer(c: LocalClient, id: string, asked: Frame): Promise<Record<string, any>> {
+  async function answer(c: LocalClient, id: string, asked: Frame, choice = 'Add Shell'): Promise<Record<string, any>> {
     const payload = asked.payload!, item = payload.questions[0]
     const reply = c.next(frame => frame.type === 'question_response_result' && frame.payload?.requestId === payload.requestId, 15_000, 'permission answer')
-    c.send('question_response', { requestId: payload.requestId, agentId: id, answers: { [item.q]: item.options.find((option: string) => option.startsWith('Skip')) } })
+    c.send('question_response', { requestId: payload.requestId, agentId: id, answers: { [item.q]: item.options.find((option: string) => option.startsWith(choice)) } })
     return (await reply).payload!
   }
   async function terminal(c: LocalClient, id: string) {
@@ -131,9 +132,18 @@ idle('fixture-cursor-ready');
     const asked = await question(d, c, id, pane)
     expect(asked.payload!.questions[0].q).toBe('Approve printf fixture')
     expect((await answer(c, id, asked)).error).toBeUndefined()
-    await until('only the approved hint reached Cursor', () => readFileSync(join(d.root, 'choices.txt'), 'utf8') === 'n' || null, 10_000, 100)
+    expect(readFileSync(join(d.root, 'choices.txt'), 'utf8')).toBe('\t')
     await viewOnly(c, id)
     expect(d.log()).not.toContain('[fixture] core optional reader loaded')
+    await stop(d, c, id)
+  }, 120_000)
+
+  it('preserves unsupported lowercase hint refusal without claiming the permission was answered', async () => {
+    const { d, c, id, pane } = await fresh()
+    expect(await answer(c, id, await question(d, c, id, pane), 'Skip')).toMatchObject({ error: 'ANSWER_FAILED' })
+    expect(readFileSync(join(d.root, 'keys.txt'), 'utf8')).toBe('q')
+    expect(readFileSync(join(d.root, 'choices.txt'), 'utf8')).toBe('')
+    expect(await d.capture(pane)).toContain('Run this command?')
     await stop(d, c, id)
   }, 120_000)
 
@@ -168,6 +178,7 @@ idle('fixture-cursor-ready');
     })
     const { d, c, id, pane } = await fresh(mode === 'inline' ? { HARNESSD_SERVICES: 'none' } : {}, script)
     expect((await answer(c, id, await question(d, c, id, pane))).error).toBeUndefined()
+    expect(readFileSync(join(d.root, 'choices.txt'), 'utf8')).toBe('\t')
     await viewOnly(c, id)
     if (mode === 'inline') expect(worker(d)).toBeUndefined()
     await stop(d, c, id)

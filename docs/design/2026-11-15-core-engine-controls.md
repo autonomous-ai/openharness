@@ -61,6 +61,9 @@ already present. Purge/export and setup/install/probe are separate work and rema
   parser exception content. Unavailable profile/screen reads provide no evidence. Model/question results
   distinguish refusal from potentially dispatched input using existing failure state. Killed/frozen/restarted
   worker tests prove terminal input and Stop remain available and late replies cannot regain authority.
+  An unavailable terminal capture cannot prove that a question was submitted, even after a possibly
+  dispatched write. Existing unsupported lowercase terminal hints retain their refusal behavior; this
+  extraction does not expand the generic terminal writer's supported keys.
 - Platforms: runtime behavior affects macOS, Linux and Windows. No new spawning mechanism is introduced;
   existing catalog subprocess readers keep their bounded launch behavior in the worker. Local validation
   uses Node 24.22.2 on macOS, temporary homes and private tmux fixtures. Linux/Windows execution must be
