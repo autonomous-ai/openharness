@@ -4587,6 +4587,36 @@ describe('the app filter', () => {
     } finally { await session.stop() }
   })
 
+  it("a list read that turns the view back to the tab lands the dial on the window's agent without stepping onto the one it left", async () => {
+    const { host, state } = appHost()
+    state.window = true
+    const { session, port } = await greeted(host)
+    try {
+      port.say({ t: 'focus', agentId: 'a1' })
+      await vi.waitFor(() => expect(host.focus).toHaveBeenCalledWith('a1'))
+      state.appView = true
+      await session.viewChanged()
+      state.focus = { machineId: 'mac-local', agentId: 'a2' }
+      port.sent.length = 0
+      // As the host does when the shown app's ring empties: the read turns the view, answers with the tab, and the wiring
+      // calls viewChanged on a microtask, after this very push has sent the tab's list.
+      const read = host.listAgentSnapshot!
+      let turned: Promise<void> | undefined
+      host.listAgentSnapshot = async (opts) => {
+        if (opts?.apps && state.appView) {
+          state.appView = false
+          queueMicrotask(() => { turned = session.viewChanged() })
+        }
+        return read(opts)
+      }
+      await session.syncAgents()
+      await vi.waitFor(() => expect(turned).toBeDefined())
+      await turned
+      expect(focuses(port).map((m) => m.agentId)).not.toContain('a1')
+      expect(focuses(port).at(-1)).toEqual({ t: 'focus', agentId: 'a2' })
+    } finally { await session.stop() }
+  })
+
   it("viewChanged sends an app's ring at once though a push of the tab was in flight as the view turned", async () => {
     vi.useFakeTimers({ toFake: ['Date', 'performance'] })
     const { host, state } = appHost()
