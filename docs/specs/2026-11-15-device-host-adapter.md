@@ -172,6 +172,50 @@ rows without `caps` (a window's tiles, an older daemon), stay as they are. Voice
 check. The daemon's refusal in `cableSession.ts` stays, for dials not flashed yet. The Harness Pro firmware does not
 read `caps` and is out of scope.
 
+### Added from #4331's review (PM, 2026-11-15)
+
+These two changes are behaviour fixes. They are coded after #4331 is on `main`.
+
+**F2. One record of what the dial just showed, for every kind of pane.**
+
+On `main` with #4326, and on #4331, each app keeps its own record of the dial's own moves, in
+`services/devices.ts`:
+- the Claude app side: `dialLinks`, `noteLink` and `linkedByDial`, for a continue link;
+- the tab side: `written` and `selects`, for a tab select.
+
+A settle checks only its own app's record. So a rest or a tap the dial made on another kind of pane, inside the settle
+of the app in front, is not seen, and the settle turns the dial back. Two cases:
+- Terminal has just come to the front and its tab report waits for the settle. The person swipes to an Orca agent: the
+  dial rests and Orca switches. The settle then follows the Terminal tab and pulls the dial back.
+- The same happens with the Claude app's settle and a tab select or an Orca switch.
+
+The fix is one record in the devices process: "the dial just showed an agent". It is noted at the single place every
+dial move now passes through: the observed source's `showPane` and `focus`, for every adapter (Orca switch, Claude
+link, tab select, a tap's raise).
+- A settle, the Claude app's or a tab app's, is set aside when the dial showed anything since the report it waits on
+  came. That holds whatever kind of pane the dial showed.
+- An app's own echo of the dial's move (a tab report for the tty the dial selected, an attach for the session the dial
+  linked) is still matched per agent and per tty, as today, within the same echo windows: `ATTACH_ECHO_MS` and
+  `ECHO_MS`.
+
+Red tests in `devices.spec.ts`, one for each case above: today they fail, because the dial is turned back.
+
+**F3. One form for the follow log lines.**
+
+The tab's skip lines take the form the prompt, attach and settle lines already use, `[device] <cause> · skipped ·
+<why>`:
+
+| Today | After |
+|---|---|
+| `[device] tab · no-tile` | `[device] tab · skipped · no tile` |
+| `[device] tab · echo` | `[device] tab · skipped · echo` |
+| `[device] tab · no-agent` | `[device] tab · skipped · unknown agent` |
+| `[device] tab · not-in-front` | `[device] tab · skipped · not in front` |
+
+`[device] tab · moved` stays. The terminal-follow spec (`docs/specs/2026-11-15-dial-terminal-follow.md`), the unit
+specs and the e2e that read these lines change with them. This is the one exception to "every log line stays byte for
+byte" above.
+
 ### Core, platforms, measures
 
 - **Core:** nothing in `src/core/` changes; every file is in the devices process or the firmware.
@@ -206,4 +250,7 @@ read `caps` and is out of scope.
 4. The `observed.spec.ts` test for one Orca session told of by its hook, then found by the scan, passes.
 5. Firmware: `test_touch_ui.py` shows an agent with `caps` `s` (and with `sv`) on a shown-only prompt with no [choices],
    and the answer actions ignored. Rows with `svfa`, and rows without `caps`, render as before. The firmware build passes.
-6. `npm run test:core` is green (100% per file under `src/services/`), and the PR records it.
+6. F2: a settle, the Claude app's or a tab app's, no longer turns the dial back after the dial showed another kind of
+   pane within it. A red-then-green test covers each case.
+7. F3: every tab skip line reads `[device] tab · skipped · <why>`, in code, specs, e2e and the terminal-follow spec.
+8. `npm run test:core` is green (100% per file under `src/services/`), and the PR records it.
