@@ -196,9 +196,10 @@ performance comparison, final closure measurement, push, PR and merge.
 
 ## Implementation evidence and limits
 
-Default source closure is 530 files / 88,317 lines, down from the clean eec base's 539 / 90,847.
-The same walk with legacy engine doors open (still excluding services/inline) is 674 / 108,406,
-versus 652 / 107,819; its growth includes both retained explicit legacy installation and the new
+Default source closure is 530 files / 88,394 lines, versus integrated parent
+`8a8ea5f037ac33eecf496438862fdaaec7c72a72` at 539 / 90,914.
+The same walk with legacy engine doors open (still excluding services/inline) is 674 / 108,483,
+versus that parent's 652 / 107,886; its growth includes both retained explicit legacy installation and the new
 boundary. The default core retains only small argument quoting, hook-script identity/refusal state,
 mandatory admission data, destination coordination and the generic publisher. Architecture assertions
 reject mixed hook contracts and vendor parser/template imports from default core.
@@ -304,3 +305,32 @@ The two retention regressions failed with the seventeenth request reaching its o
 of being admission-held. After charging callbacks through settlement, the affected attempts/publication/
 cold-caller batch passed 47 tests in three files and TypeScript passed. Final native/full/performance
 acceptance remains open on the corrected frozen source.
+
+## Remaining maintenance admission corrections (approved before runtime edit)
+
+The integrated `8d26b8c7404d4eb138f5701e7604023e773e94f3` bundle passed all eight native
+cases, including the second-client off/freeze pending checks. Its CLI SHA-256 was
+`4eba247bdee260fdaea112b9e7e6ad1d5bed6913d920f47daa2825ca79519d6f`; the result is scoped
+to that source. Root's official gates were interrupted after two independent review findings and are
+incomplete, not passing evidence.
+
+OpenCode has an existing coordinator above generic disk publication. Honor maintenance's
+`retainConflicts` before changing an occupied group's current installation, users or version probe.
+A competing optional refresh returns false immediately; it neither cancels a captured native launch
+nor waits behind it to publish older-version bytes. The actual startup-versus-NativeLaunch inverse
+overlap test first failed with the launch refused. No snapshot/default/identity semantics change.
+
+The adopted-home controller also had its own fan-out: eight saved homes occupied every setup slot and
+three default families were skipped in the bounded-link caller red. Drain at most one asynchronous
+home through its existing installs/inFlight/failures maps. Completion immediately advances to the next
+eligible home; failed entries retain their visible reason and retry eligibility in that same failure
+map until the existing retry tick. A failed home cannot spin or block later homes. No new queue or
+capacity increase, no default-family retry loop, and no catalog read unless restoration is needed.
+Closing revokes current ownership and prevents later homes starting. All native/full acceptance after
+these corrections remains source-scoped and must be selected again by the parent.
+
+Both new caller regressions are green. The maintenance/startup/adoption/version-golden batch passed
+92 tests in five files; the unchanged legacy OpenCode preparation/overlap checks passed 46 tests;
+TypeScript passed. Failure fairness retains its named reason through recovery, retries after the
+existing backoff, and shutdown while one home is held starts no queued home. The next checkpoint
+changes only these two reviewed maintenance paths and their evidence, not the native fault fixture.

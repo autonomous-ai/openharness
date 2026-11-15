@@ -28,6 +28,8 @@ export async function prepareOpencodeHooks(paths: readonly string[], port: numbe
   const reservation = JSON.stringify(routes.keys)
   if (opencodeInstallations.size >= 128 && !opencodeInstallations.has(reservation)) return false
   const previous = opencodeInstallations.get(reservation)?.current
+  // Optional maintenance cannot supersede or queue behind an admitted native launch.
+  if (previous && options.retainConflicts) return false
   const group = opencodeInstallations.get(reservation) ?? { current: installation, users: 0 }
   // Include callers waiting before the lower-level disk reservation. Overflow
   // cannot supersede an admitted owner or grow an unbounded promise chain.

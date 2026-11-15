@@ -154,3 +154,36 @@ it('never lets startup maintenance revoke or follow a live launch with a differe
     expect(calls).toBe(1)
   } finally { release(); startup.close(); await launch; vi.unstubAllEnvs() }
 })
+
+it('never lets OpenCode maintenance supersede or later overwrite a live native launch', async () => {
+  const plugin = join(root, 'opencode', 'plugin')
+  vi.stubEnv('HOME', root); vi.stubEnv('OPENCODE_PLUGIN_DIR', plugin)
+  let enter!: () => void, release!: () => void, calls = 0
+  const entered = new Promise<void>(resolve => { enter = resolve }), waiting = new Promise<void>(resolve => { release = resolve })
+  const setup = { probe: async (_executable: unknown, kind: string) => ({ code: 0, stdout: kind === 'version' ? '2.0.0' : '--permission-mode', stderr: '' }),
+    opencodeMajor: vi.fn(async () => 1), hermesKeepsRecord: async () => false,
+    prepareFiles: async (input: NativeHookInput, _request: string, current: () => boolean) => {
+      calls++; enter(); await waiting
+      return prepareNativeHookFiles(input, current)
+    },
+  }
+  vi.mocked(captureLaunchExecutable).mockResolvedValueOnce({ state: 'ready',
+    executable: { command: '/fixture/opencode', identity: 'opencode-v2', current: () => true },
+    environment: { HOME: root, OPENCODE_PLUGIN_DIR: plugin } })
+  const inspected = await inspectNativeLaunch('opencode', {}, { setup })
+  if (!inspected.ok) throw Error('fixture launch was held before hooks')
+  const launch = inspected.launch.prepareHooks(1234, () => true)
+  await entered
+  const startup = installEngineHooks(1234, { setup, only: new Set(['opencode']), environment: {} })
+  try {
+    // Release deliberately: obsolete maintenance must neither cancel this launch nor follow it with v1 bytes.
+    release()
+    expect(await launch).toBe(true)
+    await startup.settled
+    expect(setup.opencodeMajor).not.toHaveBeenCalled()
+    expect(calls).toBe(1)
+    expect(inspected.launch.current()).toBe(true)
+    expect(read(join(plugin, 'launcher-register.js'))).toBeNull()
+    expect(read(join(root, 'opencode', 'plugins', 'launcher-register', 'tui.js'))).not.toBeNull()
+  } finally { release(); startup.close(); await startup.settled; await launch; vi.unstubAllEnvs() }
+})

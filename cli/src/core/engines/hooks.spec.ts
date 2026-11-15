@@ -458,22 +458,32 @@ describe('installing every engine\'s hooks', () => {
   beforeEach(() => { vi.spyOn(console, 'warn').mockImplementation(() => {}) })
   afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks(); loading.stalled = false })
 
-  it('refreshes all thirteen through the bounded setup link after a cold renderer settles', async () => {
+  it.each([0, 8])('refreshes all thirteen through bounded setup while %s saved homes drain', async savedCount => {
     let release!: () => void, entered!: () => void
     const gate = new Promise<void>(resolve => { release = resolve })
     const first = new Promise<void>(resolve => { entered = resolve })
-    const rendered: string[] = []
+    const rendered: string[] = [], saved = Array.from({ length: savedCount }, (_, index) => `/fixture/saved-${index}`)
+    let savedFinished!: () => void, finished = 0
+    const savedDone = savedCount ? new Promise<void>(resolve => { savedFinished = resolve }) : Promise.resolve()
+    vi.mocked(recoverEngineHomes).mockReturnValue({ claude: saved, codex: [] })
     const worker: NativeSetup = {
       probe: async () => null, downloading: async () => false,
       opencodeMajor: async () => 2, hermesKeepsRecord: async () => true,
       installations: { ensure: async () => ({ complete: false, detail: 'unused' }), status: async () => null },
       prepareFiles: async input => {
-        rendered.push(input.engine); entered(); await gate
+        if (!input.files[0].file.endsWith('/settings.json')) rendered.push(input.engine)
+        entered(); await gate
         return { version: 1, files: [{ index: 0, content: '{}' }] }
       },
     }
     const service = startEngineSetup('/fixture', worker)
     const link = createNativeSetupLink((type, payload) => Promise.resolve(service.requests[type]!(payload, { local: true, owner: true })))
+    ;(engineHooks.claude.installIn as Mock).mockImplementation(async (_port: number, home: string, options: { current: () => boolean }) => {
+      const candidate = await link.prepareFiles!({ engine: 'claude', environment: {}, port: 4242,
+        files: [{ file: `${home}/settings.json`, directory: home, content: '{}' }] }, home, options.current)
+      if (++finished === savedCount) savedFinished()
+      return candidate !== null
+    })
     const engines: AgentEngine[] = ['claude', 'codex', 'cursor', 'opencode', 'kilo', 'pi', 'amp', 'hermes', 'devin', 'commandcode', 'grok', 'agy', 'copilot']
     const answers: boolean[] = []
     for (const [index, install] of installs.entries()) (install as Mock).mockImplementationOnce(async (...args: unknown[]) => {
@@ -488,11 +498,15 @@ describe('installing every engine\'s hooks', () => {
     try {
       await first
       release()
-      await controller.settled
+      await controller.settled; await savedDone
       expect(rendered).toEqual(engines)
       expect(answers).toEqual(engines.map(() => true))
-      expect(console.warn).not.toHaveBeenCalled()
-    } finally { release(); controller.close(); service.stop() }
+      expect(vi.mocked(console.warn).mock.calls.flat().some(line => /SETUP_BUSY|install skipped|preparation is unavailable/.test(String(line)))).toBe(false)
+    } finally {
+      release(); controller.close(); service.stop()
+      vi.mocked(recoverEngineHomes).mockReturnValue({ claude: [], codex: [] })
+      ;(engineHooks.claude.installIn as Mock).mockReset().mockReturnValue(true)
+    }
   })
 
   it('points all thirteen at the bound port without loading optional code', async () => {
@@ -670,16 +684,17 @@ describe('installing every engine\'s hooks', () => {
     vi.mocked(confirmHomes)
       .mockReturnValueOnce({ claude: '/m/claude', codex: null })
       .mockReturnValueOnce({ claude: null, codex: '/s/codex' })
-    void installEngineHooks(4242, { environment: own, loginShell: Promise.resolve(shell) })
+    const installed = installEngineHooks(4242, { environment: own, loginShell: Promise.resolve(shell) })
     expect(confirmHomes).toHaveBeenCalledWith(own)
     expect(engineHooks.claude.installIn).toHaveBeenCalledWith(4242, '/m/claude', { current: expect.any(Function), retainConflicts: true })
     await Promise.resolve()
     expect(log).toHaveBeenCalledWith('[hooks] Claude Code hooks installed in its adopted home')
-    await Promise.resolve()
+    await installed.settled
     expect(confirmHomes).toHaveBeenLastCalledWith(shell)
     expect(engineHooks.codex.installIn).toHaveBeenCalledWith(4242, '/s/codex', { current: expect.any(Function), retainConflicts: true })
     await Promise.resolve()
     expect(log).toHaveBeenCalledWith('[hooks] Codex hooks installed in its adopted home')
+    installed.close()
   })
 
   it('reads the daemon\'s own environment when none is given, and logs nothing when nothing moved', async () => {
