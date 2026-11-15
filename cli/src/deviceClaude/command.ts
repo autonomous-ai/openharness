@@ -55,7 +55,8 @@ export async function runDeviceCommand(argv: string[], deps: DeviceDeps): Promis
       const socketPath = localSocketRoute(deps.dataDir, deps.port, deps.platform)
       if (!socketPath || !claudePluginOn(claudeSettingsPath())) return 1
       // The mod posts its session id to the devices' listener: handed only when that socket is this account's own, never
-      // one another account made or can reach. None there (Windows, no dial yet): left out, and the mod sends nothing.
+      // one another account made or can reach. None there, or not private (no dial yet): left out, and the mod asks
+      // again at an attach.
       const devicesSocket = devicesListenerPath(deps.dataDir, deps.platform)
       deps.out(JSON.stringify(devicesSocket && socketIsPrivate(devicesSocket) ? { socketPath, devicesSocket } : { socketPath }))
       return 0

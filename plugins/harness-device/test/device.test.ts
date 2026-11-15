@@ -47,7 +47,7 @@ type World = {
  * Sets the world beneath the mod. `launchers` are the argv[0]s that start, and `exitCode` is what each exits with, as
  * the launcher's `link` exits 1 too while the plugin is off; `answers` are the daemon's answers, one per poll, the last
  * repeated. `configDir` is CLAUDE_CONFIG_DIR, and `settings: 'unreadable'` makes every read of a file fail. `devices` is
- the devices' socket the launcher prints, '' for none.
+ * the devices' socket the launcher prints, '' for none.
  */
 function world(
   on: On,

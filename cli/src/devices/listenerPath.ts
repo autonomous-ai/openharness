@@ -1,5 +1,5 @@
 /**
- * Where the devices process listens for the watch (the app in front on the dial). The listener and the watch both
+ * Where the devices process listens for the watch (the app in front on the dial). The listener, the watch and `link`
  * find it here from the daemon's data folder, so they agree. Outside the core: the core never opens this socket.
  */
 import { homedir } from 'node:os'

@@ -14,7 +14,7 @@ Voice: a prompt said at the dial goes to the session as yours, idle or working. 
 keeps one request open to the daemon, and the prompt comes back as its answer; Claude Code starts it once its turn is
 over. Nothing is kept for later.
 
-The mod also tells the daemon which session the Claude app shows, and the dial turns to it.
+The mod also tells the daemon which session the Claude app shows, and the dial turns to it while the app is in front.
 
 With no dial attached, no Harness daemon running, or no Harness CLI (`~/.local/bin/harness`, then `harness` on
 `PATH`), the hook tells nothing, and Claude Code carries on as it would without the plugin.
