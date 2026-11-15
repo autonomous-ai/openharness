@@ -1531,9 +1531,9 @@ describe('binding an OpenClaw pane, read from its screen', () => {
   })
 
   // Its own screen states are its to clear (above); a capture that failed is the binding's, and nothing let it go.
-  it.each(['screen-plain', null] as const)('a hold a failed capture set goes once the pane is read again: %s', async shown => {
+  it('a hold a failed capture set goes once the pane is read again', async () => {
     const capturePane = vi.fn<BindDeps['capturePane']>().mockRejectedValueOnce(new Error('the pane could not be captured'))
-      .mockResolvedValue(shown && screen(shown))
+      .mockResolvedValue(screen('screen-plain'))
     const run = setup({ capturePane })
     const row = pane({ sessionId: 'agent:main:plain' })
     run.byAgent.set('a1', row)
@@ -1547,6 +1547,23 @@ describe('binding an OpenClaw pane, read from its screen', () => {
     // Bound while held, its stream was never attached: let go, it is, as when the screen's own state clears.
     expect(run.deps.attachSession).toHaveBeenCalledTimes(1)
     expect(run.deps.attachSession).toHaveBeenCalledWith(row)
+  })
+
+  // A capture that answers null read nothing (the pane cannot be read), so it proves nothing (PM, 2026-11-15).
+  it('a hold a failed capture set stays when the next capture reads nothing', async () => {
+    const capturePane = vi.fn<BindDeps['capturePane']>().mockRejectedValueOnce(new Error('the pane could not be captured'))
+      .mockResolvedValue(null)
+    const run = setup({ capturePane })
+    const row = pane({ sessionId: 'agent:main:plain' })
+    run.byAgent.set('a1', row)
+    vi.mocked(run.deps.registry.byProcess).mockReturnValue(row)
+    await run.binding.bindObservedAgent(tui())
+    expect(row.identityHold).toBe('the pane could not be captured')
+    await run.binding.bindObservedAgent(tui())
+    expect(row.identityHold).toBe('the pane could not be captured')
+    expect(run.deps.announceSession).toHaveBeenCalledTimes(1)
+    expect(console.log).not.toHaveBeenCalledWith('[discovery] a1 binding released · its native evidence was read completely')
+    expect(run.deps.attachSession).not.toHaveBeenCalled()
   })
 
   it('a hold a failed capture set gives way to the screen\'s own state: let go on one pass, No Gateway said on the next', async () => {
