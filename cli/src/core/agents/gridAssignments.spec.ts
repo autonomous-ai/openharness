@@ -1,18 +1,17 @@
 import { afterEach, expect, it, vi } from 'vitest'
-import { readProcessEnv } from '../../lib/processEnv.js'
 import { processLaunchArgs } from '../../lib/processTable.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { DiscoveredTerminalAgent } from '../../lib/terminalAgentDiscovery.js'
 import { createGridAssignments } from './gridAssignments.js'
 
-vi.mock('../../lib/processEnv.js', () => ({ readProcessEnv: vi.fn(async () => ({ ANTHROPIC_BASE_URL: 'https://grid.example/relay' })) }))
 vi.mock('../../lib/processTable.js', () => ({ processLaunchArgs: vi.fn(async () => '') }))
 const assignment = { baseUrl: 'https://grid.example/relay', model: 'chosen' }
-const row = (id = 'a'): RegisteredSession => ({ agentId: id, engine: 'claude', sessionId: 'session', registeredAt: 1, boundAt: 2,
-  active: true, primaryRuntimeKey: 'tmux:%1', processIdentity: { pid: 123, startMarker: 'start', executable: 'claude' },
+const ON_GRID = `-c model_providers.grid.base_url="${assignment.baseUrl}" -m chosen`
+const row = (id = 'a'): RegisteredSession => ({ agentId: id, engine: 'codex', sessionId: 'session', registeredAt: 1, boundAt: 2,
+  active: true, primaryRuntimeKey: 'tmux:%1', processIdentity: { pid: 123, startMarker: 'start', executable: 'codex' },
   grid: assignment } as RegisteredSession)
 const observed = (session: RegisteredSession, marked = true): DiscoveredTerminalAgent => ({ engine: session.engine, processIdentity: session.processIdentity,
-  ...(marked ? { gridProcess: { key: 'old', engine: 'claude', env: { ANTHROPIC_BASE_URL: assignment.baseUrl }, args: '' } } : {}) } as DiscoveredTerminalAgent)
+  ...(marked ? { gridProcess: { key: 'old', engine: 'codex', args: `model_providers.grid.base_url="${assignment.baseUrl}"  -m chosen` } } : {}) } as DiscoveredTerminalAgent)
 const flush = async () => { for (let i = 0; i < 12; ++i) await Promise.resolve() }
 function setup() {
   let rows = [row()]
@@ -30,7 +29,7 @@ afterEach(() => { vi.clearAllMocks(); vi.useRealTimers() })
 
 it('batches fresh observations after binding, never blocks, and announces only changed assignments', async () => {
   const s = setup()
-  s.rows.push({ ...row('b'), processIdentity: { pid: 124, startMarker: 'start', executable: 'claude' }, grid: undefined })
+  s.rows.push({ ...row('b'), processIdentity: { pid: 124, startMarker: 'start', executable: 'codex' }, grid: undefined })
   expect(s.service.observe(s.rows.map(row => observed(row)))).toBeUndefined()
   await flush()
   expect(s.models.gridAssignments).toHaveBeenCalledOnce()
@@ -80,7 +79,7 @@ it.each(['removed', 'registration', 'engine', 'session', 'binding', 'route', 'ac
     const current = s.rows[0]
     if (change === 'removed') s.rows = []
     if (change === 'registration') current.registeredAt++
-    if (change === 'engine') current.engine = 'codex'
+    if (change === 'engine') current.engine = 'pi'
     if (change === 'session') current.sessionId = 'another'
     if (change === 'binding') current.boundAt = 3
     if (change === 'route') current.primaryRuntimeKey = 'tmux:%2'
@@ -105,16 +104,28 @@ it('does not ask for missing rows, unknown process reads or absent markers, and 
   expect(s.models.gridAssignments).not.toHaveBeenCalled()
 })
 
-it('refreshes a committed swap in the background, with the same stale-answer guards', async () => {
+it("refreshes a committed Codex swap in the background from its argv alone, with the same stale-answer guards", async () => {
   const s = setup()
+  vi.mocked(processLaunchArgs).mockResolvedValueOnce(`codex --prompt private ${ON_GRID}`)
   expect(s.service.refresh(s.rows[0])).toBeUndefined()
   s.service.refresh(s.rows[0])
   await flush()
-  expect(readProcessEnv).toHaveBeenCalledWith(s.rows[0].processIdentity)
-  expect(processLaunchArgs).toHaveBeenCalledWith(s.rows[0].processIdentity)
+  expect(processLaunchArgs).toHaveBeenCalledExactlyOnceWith(s.rows[0].processIdentity)
+  expect(s.pending[0].processes).toEqual([{ key: expect.any(String), engine: 'codex', args: `model_providers.grid.base_url="${assignment.baseUrl}"  -m chosen` }])
   s.answer()
   await flush()
   expect(s.rows[0].grid).toBeNull()
+})
+
+it('asks nothing of a Claude Code swap and leaves the grid its launch recorded', async () => {
+  const s = setup()
+  s.rows[0] = { ...s.rows[0], engine: 'claude', processIdentity: { pid: 123, startMarker: 'start', executable: 'claude' } }
+  vi.mocked(processLaunchArgs).mockResolvedValueOnce(`claude ${ON_GRID}`)
+  s.service.refresh(s.rows[0])
+  await flush()
+  expect(s.models.gridAssignments).not.toHaveBeenCalled()
+  expect(s.registry.updateProcessIdentity).not.toHaveBeenCalled()
+  expect(s.rows[0].grid).toEqual(assignment)
 })
 
 it('coalesces only unfinished identical observations so a slower-than-discovery answer eventually lands', async () => {
@@ -133,7 +144,7 @@ it('coalesces only unfinished identical observations so a slower-than-discovery 
   await flush()
   expect(s.models.gridAssignments).toHaveBeenCalledTimes(2)
   const changed = observed(s.rows[0])
-  changed.gridProcess!.env.ANTHROPIC_BASE_URL = 'https://other.example/relay'
+  changed.gridProcess!.args = 'model_providers.grid.base_url="https://other.example/relay"'
   s.service.observe([changed])
   await flush()
   s.answer(1)
@@ -144,9 +155,10 @@ it('coalesces only unfinished identical observations so a slower-than-discovery 
   expect(s.rows[0].grid).toBeNull()
 })
 
-it('an unreadable or rejected process read keeps the assignment; a confirmed plain launch clears it', async () => {
+it('a process that is gone or a rejected read keeps the assignment; a plain Codex launch clears it', async () => {
   const s = setup()
-  vi.mocked(readProcessEnv).mockResolvedValueOnce(null)
+  // '' is a table that could not be read, or a process no longer in it: no finding.
+  vi.mocked(processLaunchArgs).mockResolvedValueOnce('')
   s.service.refresh(s.rows[0])
   await flush()
   expect(s.rows[0].grid).toEqual(assignment)
@@ -154,28 +166,26 @@ it('an unreadable or rejected process read keeps the assignment; a confirmed pla
   s.service.refresh(s.rows[0])
   await flush()
   expect(s.rows[0].grid).toEqual(assignment)
-  vi.mocked(readProcessEnv).mockResolvedValueOnce({})
+  vi.mocked(processLaunchArgs).mockResolvedValueOnce('codex -m gpt-5')
   s.service.refresh(s.rows[0])
   await flush()
   expect(s.rows[0].grid).toBeNull()
   expect(s.models.gridAssignments).not.toHaveBeenCalled()
 })
 
-it("reads a Pi whose environment cannot be read from how it was launched, and only when that names a grid", async () => {
-  // Pi renames its process, and `ps` then shows neither its environment nor its argv (2026-10-14): what is left is
-  // its launcher's command line. Moved onto a grid, that names the extension, and the switch is confirmed at once.
+it('reads a Pi from how it was launched, and only when that names a grid', async () => {
+  // Pi renames its process, and `ps` then shows no argv (2026-10-14): what is left is its launcher's command line.
+  // Moved onto a grid, that names the extension, and the switch is confirmed at once.
   const s = setup()
   s.rows[0] = { ...s.rows[0], engine: 'pi', grid: undefined }
-  vi.mocked(readProcessEnv).mockResolvedValueOnce(null)
   vi.mocked(processLaunchArgs).mockResolvedValueOnce("zsh -lic . 'launch.sh' harness-engine /w /bin/pi --session s --model grid/chosen -e /c/grid-provider.ts")
   s.service.refresh(s.rows[0])
   await flush()
-  expect(s.pending[0].processes).toEqual([{ key: expect.any(String), engine: 'pi', env: {}, args: '-e /c/grid-provider.ts --model grid/chosen' }])
+  expect(s.pending[0].processes).toEqual([{ key: expect.any(String), engine: 'pi', args: '-e /c/grid-provider.ts --model grid/chosen' }])
   s.answer(0, assignment)
   await flush()
   expect(s.rows[0].grid).toEqual(assignment)
-  // A launch naming no grid says nothing about an environment that could not be read: still not known.
-  vi.mocked(readProcessEnv).mockResolvedValueOnce(null)
+  // A launch naming no extension (a Pi from before it) says nothing of its grid: still not known.
   vi.mocked(processLaunchArgs).mockResolvedValueOnce('zsh -lic . launch.sh harness-engine /w /bin/pi --session s')
   s.service.refresh(s.rows[0])
   await flush()

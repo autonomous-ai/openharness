@@ -14,10 +14,8 @@ import type { TerminalRootObservation, TerminalRuntimeRef } from './terminalType
  * (`gridAssignment.spec.ts` covers that).
  */
 
-const readProcessEnv = vi.hoisted(() => vi.fn())
 const processRows = vi.hoisted(() => vi.fn())
 
-vi.mock('./processEnv.js', () => ({ readProcessEnv }))
 vi.mock('./processTable.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('./processTable.js')>(),
   processRows,
@@ -31,7 +29,7 @@ const row = (pid: number, parentPid: number, executable: string, args = executab
 
 const TMUX_RUNTIME: TerminalRuntimeRef = { backend: 'tmux', paneId: '%1' }
 const SECOND_RUNTIME: TerminalRuntimeRef = { backend: 'tmux', paneId: '%2' }
-const ASSIGNMENT = { baseUrl: 'https://grid.autonomous.ai/grid-3378218621364f16/relay', model: 'GLM-4.7-Flash' }
+const ON_GRID = '-c model_providers.grid.base_url="https://grid.example/relay/v1" -m chosen'
 
 function backendWith(name: 'tmux', instanceId: string, roots: TerminalRootObservation[]): TerminalBackend {
   return {
@@ -41,18 +39,22 @@ function backendWith(name: 'tmux', instanceId: string, roots: TerminalRootObserv
   } as unknown as TerminalBackend
 }
 
+/** One pane rooted at pid 10, over [rows]; null for a process table that could not be read. */
+function probeOne(rows: ProcessRow[] | null) {
+  processRows.mockResolvedValue(rows)
+  return probeTerminalAgents([backendWith('tmux', 'tmux', [{ runtime: TMUX_RUNTIME, rootPid: 10, cwd: '/work' }])], ['tmux'], 999)
+}
+
 beforeEach(() => {
-  readProcessEnv.mockReset()
   processRows.mockReset()
 })
 
 describe('grid assignment on the live terminal discovery path', () => {
-  it('reports the grid for every pane, from the process rather than the pane', async () => {
+  it("reports the grid a Codex's command line names, in every pane, and none for an engine whose grid is in no command line", async () => {
     processRows.mockResolvedValue([
-      row(10, 1, 'bash'), row(30, 10, 'claude'),
-      row(20, 1, 'bash'), row(40, 20, 'codex', 'codex -c model_providers.grid.base_url="https://grid.example/relay/v1" -m chosen'),
+      row(10, 1, 'bash'), row(30, 10, 'claude', `claude ${ON_GRID}`),
+      row(20, 1, 'bash'), row(40, 20, 'codex', `codex --prompt private ${ON_GRID}`),
     ])
-    readProcessEnv.mockResolvedValue({ ANTHROPIC_BASE_URL: ASSIGNMENT.baseUrl, ANTHROPIC_MODEL: ASSIGNMENT.model, API_KEY: 'secret' })
 
     const probe = await probeTerminalAgents(
       [
@@ -65,51 +67,47 @@ describe('grid assignment on the live terminal discovery path', () => {
       999,
     )
 
-    expect(probe.agents).toHaveLength(2)
-    expect(probe.agents.every((agent) => agent.grid === undefined && agent.gridProcess)).toBe(true)
-    expect(JSON.stringify(probe.agents.map(a => a.gridProcess))).not.toContain('secret')
-    expect(readProcessEnv).toHaveBeenCalled()
-    for (const [identity] of readProcessEnv.mock.calls) {
-      expect(identity).toMatchObject({ startMarker: START })
-    }
+    const byEngine = new Map(probe.agents.map((agent) => [agent.engine, agent]))
+    expect([...byEngine.keys()].sort()).toEqual(['claude', 'codex'])
+    expect(byEngine.get('codex')!.grid).toBeUndefined()
+    expect(byEngine.get('codex')!.gridProcess).toEqual({
+      key: '', engine: 'codex', args: 'model_providers.grid.base_url="https://grid.example/relay/v1"  -m chosen',
+    })
+    // Claude Code's grid is in its environment, which is not read: its row keeps the grid its launch recorded.
+    expect(byEngine.get('claude')!.gridProcess).toBeUndefined()
+    expect(byEngine.get('claude')!.grid).toBeUndefined()
   })
 
-  it('reports null for an agent on its own login', async () => {
-    processRows.mockResolvedValue([row(10, 1, 'bash'), row(30, 10, 'claude')])
-    readProcessEnv.mockResolvedValue({})
-    const probe = await probeTerminalAgents(
-      [backendWith('tmux', 'tmux', [{ runtime: TMUX_RUNTIME, rootPid: 10, cwd: '/work' }])],
-      ['tmux'],
-      999,
-    )
+  it('a Claude Code started by hand has no grid to report', async () => {
+    const probe = await probeOne([row(10, 1, 'bash'), row(30, 10, 'claude')])
+    expect(probe.agents.map((agent) => agent.engine)).toEqual(['claude'])
+    expect(probe.agents[0].gridProcess).toBeUndefined()
+    expect(probe.agents[0].grid).toBeUndefined()
+  })
+
+  it('reports null for a Codex whose command line names no grid', async () => {
+    const probe = await probeOne([row(10, 1, 'bash'), row(30, 10, 'codex', 'codex -m gpt-5')])
+    expect(probe.agents.map((agent) => agent.engine)).toEqual(['codex'])
     expect(probe.agents[0].grid).toBeNull()
+    expect(probe.agents[0].gridProcess).toBeUndefined()
   })
 
   it("reads a renamed Pi from the launcher's command line, and calls it known only when that names a grid", async () => {
-    // Pi renames its process: `ps` shows `pi`, and its environment cannot be read (2026-10-14).
+    // Pi renames its process: `ps` shows `pi` with no arguments (2026-10-14), so its launcher's command line is read.
     const launcher = (args: string) => row(10, 1, 'zsh', `/bin/zsh -lic . '/d/launch/1.sh' harness-engine /work /n/bin/pi --session s ${args}`)
-    const probe = (rows: ProcessRow[]) => {
-      processRows.mockResolvedValue(rows)
-      return probeTerminalAgents([backendWith('tmux', 'tmux', [{ runtime: TMUX_RUNTIME, rootPid: 10, cwd: '/work' }])], ['tmux'], 999)
-        .then((result) => { expect(result.agents.map((agent) => agent.engine)).toEqual(['pi']); return result.agents[0] })
-    }
-    readProcessEnv.mockResolvedValue(null)
+    const probe = (rows: ProcessRow[]) => probeOne(rows)
+      .then((result) => { expect(result.agents.map((agent) => agent.engine)).toEqual(['pi']); return result.agents[0] })
     const onGrid = await probe([launcher('--model grid/m -e /c/grid-provider.ts'), row(30, 10, 'pi', 'pi       ')])
-    expect(onGrid.gridProcess).toEqual({ key: '', engine: 'pi', env: {}, args: '-e /c/grid-provider.ts --model grid/m' })
-    // Nothing naming a grid: an environment that could not be read may still hold one, so it stays unknown.
+    expect(onGrid.gridProcess).toEqual({ key: '', engine: 'pi', args: '-e /c/grid-provider.ts --model grid/m' })
+    // Nothing naming a grid: a Pi launched before its extension may still be on one, so it stays unknown.
     const unknown = await probe([launcher(''), row(30, 10, 'pi', 'pi       ')])
     expect(unknown.gridProcess).toBeUndefined()
     expect(unknown.grid).toBeUndefined()
   })
 
   it('does not probe when the process table is unavailable', async () => {
-    processRows.mockResolvedValue(null)
-    const probe = await probeTerminalAgents(
-      [backendWith('tmux', 'tmux', [{ runtime: TMUX_RUNTIME, rootPid: 10, cwd: '/work' }])],
-      ['tmux'],
-      999,
-    )
+    const probe = await probeOne(null)
     expect(probe.processTableAvailable).toBe(false)
-    expect(readProcessEnv).not.toHaveBeenCalled()
+    expect(probe.agents).toEqual([])
   })
 })
