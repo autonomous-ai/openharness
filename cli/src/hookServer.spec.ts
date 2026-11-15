@@ -624,6 +624,8 @@ describe('what a hook says of its own environment', () => {
   it('registers with the facts it took, and names a refused header without its value', async () => {
     const logged = (['log', 'warn', 'error', 'info', 'debug'] as const).map(level => vi.spyOn(console, level).mockImplementation(() => {}))
     const { register, post } = await registering('claude')
+    // What the start said (the dial's prompts are off with no Unix socket, as here) is not this request's.
+    vi.mocked(console.warn).mockClear()
     expect((await post({ [GATEWAY]: 'vendor', [HOME]: 'secret/place' })).status).toBe(200)
     await vi.waitFor(() => expect(register).toHaveBeenCalledOnce())
     expect(register.mock.calls[0][0]).not.toHaveProperty('gateway')
@@ -671,6 +673,8 @@ describe('what a hook says of its own environment', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const { base, headers } = await start({ onTurnStop, onSessionEnd, resolveHookAgent: async () => agent })
+    // The start's own line (no Unix socket here) is not these requests'.
+    warn.mockClear()
     for (const path of ['/api/hook/turn-stop', '/api/hook/session-end']) {
       const send = async (extra: Record<string, string>) => {
         const response = await fetch(`${base}${path}`, { method: 'POST', headers: { ...headers, ...extra },
