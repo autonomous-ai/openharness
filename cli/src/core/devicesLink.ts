@@ -5,8 +5,8 @@
  *
  * The core never waits on them. What it tells them (a card, the desk, a window's answer) is a notice on
  * their link, dropped while they are down, since the core keeps the state they need and says it again
- * when they connect. What it asks of them (⌘K, the Wi-Fi device's step along the desk) is a request on
- * the link with a deadline and an answer for when they do not give one: a hung devices process costs ⌘K
+ * when they connect. What it asks of them (the Wi-Fi device's step along the desk) is a request on
+ * the link with a deadline and an answer for when they do not give one: a hung devices process costs the caller
  * its answer, never a window's typing or an agent's turn.
  *
  * What they ask of the core is the core's API, as a service in the core's process would call it: this
@@ -19,7 +19,7 @@
 import type { AppSwarms } from '../cable/cableSession.js'
 import type { UnreadNotification } from '../lib/notificationRead.js'
 import type { ReviewedAnswer } from '../cable/questionInbox.js'
-import { DEVICES_FALLBACKS, readFallback, type CoreApi, type DeviceBridgeFrame, type DevicesPort, type DeviceWindowFrame, type InboxAnswer, type RouteAnswer, type SendResult, type WindowFocus } from './api.js'
+import { DEVICES_FALLBACKS, readFallback, type CoreApi, type DeviceBridgeFrame, type DevicesPort, type DeviceWindowFrame, type InboxAnswer, type WindowFocus } from './api.js'
 import { answerAccountQuery } from './accountQueries.js'
 import type { ServiceFrame } from './serviceLinks.js'
 
@@ -46,9 +46,7 @@ export interface DevicesLinkDeps {
   log?: (line: string) => void
 }
 
-/** How long ⌘K waits for the devices to pick an agent: the classifier has 20 s (services/fleet.ts). */
-export const ROUTE_TASK_WAIT_MS = 25_000
-/** How long anything else waits for them: a send, a step along the desk. */
+/** How long the Wi-Fi device waits for a step along the desk. */
 export const DEVICES_WAIT_MS = 5_000
 /** The mod's poll, past the devices' own 25 s hold: a hold that runs out is their empty answer, which the mod follows at once. */
 export const INBOX_CALL_MS = 27_000
@@ -79,9 +77,6 @@ export function createDevicesLink(deps: DevicesLinkDeps) {
     windowFocus: (focus) => event('windowFocus', { focus }),
     windowReply: (which, connId, machineId, reply) => event('windowReply', { which, connId, machineId, reply }),
     windowGone: (connId) => event('windowGone', { connId }),
-    routeTask: async (task) => answered(await deps.call('routeTask', { text: task }, ROUTE_TASK_WAIT_MS), 'routeTask', (answer) => answer as unknown as RouteAnswer),
-    routeSend: async (agentId, task) => answered(await deps.call('routeSend', { agentId, text: task }, DEVICES_WAIT_MS), 'routeSend',
-      (answer) => answer as unknown as SendResult),
     stepFocus: async (direction, currentAgentId) => answered(await deps.call('stepFocus', { direction, ...(currentAgentId ? { currentAgentId } : {}) }, DEVICES_WAIT_MS),
       'stepFocus', (answer) => (answer.step === 'no_agents' ? 'no_agents' : { machineId: text(answer.machineId), agentId: text(answer.agentId) })),
     scroll: (phase, dy, velocity) => event('scroll', { phase, dy, velocity }),

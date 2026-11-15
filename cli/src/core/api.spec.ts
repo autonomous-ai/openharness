@@ -459,8 +459,8 @@ describe('the core API services stand on', () => {
 
   it('answers ⌘K, when the devices fail, with no agent picked and nothing sent, saying why', async () => {
     const reason = 'the devices service is unavailable'
-    expect(await (readFallback(DEVICES_FALLBACKS.routeTask).value)).toMatchObject({ agentId: '', reason, candidates: [] })
-    expect(readFallback(DEVICES_FALLBACKS.routeSend)).toEqual({ deferred: true, value: { ok: false, machine: '', reason } })
+    expect(SERVICE_WS_FRAMES.find(route => route.frame === 'route_task')?.unanswered).toMatchObject({ agentId: '', reason, candidates: [] })
+    expect(SERVICE_WS_FRAMES.find(route => route.frame === 'route_send')?.unanswered).toEqual({ ok: false, machine: '', reason })
     // The Wi-Fi device finds no desk to walk; the dial and the window bridges hear nothing.
     expect(readFallback(DEVICES_FALLBACKS.stepFocus).value).toBe('no_agents')
     for (const member of ['card', 'desk', 'swarms', 'unread', 'appFocus', 'seen', 'settings', 'windowFocus', 'windowReply', 'windowGone', 'scroll', 'engines', 'commanders'] as const) {

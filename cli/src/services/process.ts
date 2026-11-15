@@ -236,7 +236,7 @@ export function runServiceProcess(options: ServiceProcessOptions): ServiceProces
       catch (error) { log(`[service ${options.name}] binary frame failed · ${describe(error)}`) }
       return
     }
-    let frame: { type?: unknown; payload?: Payload; asker?: { local?: unknown; owner?: unknown; accountOwner?: unknown; guest?: unknown; machine?: unknown; connection?: unknown; requestId?: unknown; door?: unknown } }
+    let frame: { type?: unknown; payload?: Payload; asker?: { local?: unknown; owner?: unknown; accountOwner?: unknown; guest?: unknown; machine?: unknown; connection?: unknown; requestId?: unknown; rpcRoute?: unknown; door?: unknown } }
     try { frame = JSON.parse(raw.toString()) as typeof frame } catch { return }
     const payload = frame.payload ?? {}
     if (frame.type === 'connected') {
@@ -286,6 +286,7 @@ export function runServiceProcess(options: ServiceProcessOptions): ServiceProces
       ...(machineOf(frame.asker?.machine) ? { machine: machineOf(frame.asker?.machine)! } : {}),
       ...(typeof frame.asker?.connection === 'string' ? { connection: frame.asker.connection } : {}),
       ...(typeof frame.asker?.requestId === 'string' ? { requestId: frame.asker.requestId } : {}),
+      ...(frame.asker?.rpcRoute === true ? { rpcRoute: true as const } : {}),
       // Asked through the local door over the daemon's own socket (core/serviceRoutes.ts): what only that socket may ask.
       ...(frame.asker?.door === 'socket' ? { door: 'socket' as const } : {}),
     }

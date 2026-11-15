@@ -409,7 +409,6 @@ lib/openFiles.ts
 lib/openTabProtection.ts
 lib/openclawStore.ts
 lib/osClipboard.ts
-lib/ownerCommands.ts
 lib/paneEngineProcess.ts
 lib/pasteDropFiles.ts
 lib/pasteOnScreen.ts

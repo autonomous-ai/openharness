@@ -259,7 +259,7 @@ describe('the core\'s start-up order (core/main.ts)', () => {
 // modules (the core boundary, docs/design/2026-10-03-harnessd.md) must keep these exactly.
 
 /** Every place `runForeground` binds a handler on the socket: a property, an owner command, a setter. */
-const BINDING = /\bbackend\.(?:ownerCommands\.)?(?:[A-Za-z_$][\w$]*\s*=(?!=)|set[A-Z][\w$]*\()/g
+const BINDING = /\bbackend\.(?:[A-Za-z_$][\w$]*\s*=(?!=)|set[A-Z][\w$]*\()/g
 
 /** The test-only hold the end-to-end harness uses for a start-up that hangs after binding. */
 const TEST_HOLD = "if (harnessd.HARNESSD_TEST_HOLD_READY === '1') await new Promise<never>(() => {})"
