@@ -2,6 +2,302 @@
 //! check, and when to ask an app for its selected tab. A tty is private like the app in front: it goes on the watch's
 //! stdin and into a fixed script's parameter, never into the log, an Event or the state file.
 
+use serde_json::Value;
+use std::sync::Arc;
+use std::time::Duration;
+
+/// How often the selected tab is asked for while a tab app is in front: no app pushes a change of tab.
+pub const POLL_EVERY: Duration = Duration::from_millis(500);
+/// Each Apple Event's timeout. Only macOS's consent prompt holds a call longer.
+pub const CALL_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// The apps whose tabs the dial follows, from Harness Device's own table: nothing of the daemon names a bundle.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TabApp {
+    Terminal,
+    Iterm,
+    Ghostty,
+}
+
+const TAB_APPS: [TabApp; 3] = [TabApp::Terminal, TabApp::Iterm, TabApp::Ghostty];
+
+impl TabApp {
+    /// The app id the daemon and the watch use.
+    pub fn id(self) -> &'static str {
+        match self {
+            TabApp::Terminal => "terminal-app",
+            TabApp::Iterm => "iterm",
+            TabApp::Ghostty => "ghostty",
+        }
+    }
+
+    pub fn bundle(self) -> &'static str {
+        match self {
+            TabApp::Terminal => "com.apple.Terminal",
+            TabApp::Iterm => "com.googlecode.iterm2",
+            TabApp::Ghostty => "com.mitchellh.ghostty",
+        }
+    }
+
+    /// The name the log says.
+    pub fn name(self) -> &'static str {
+        match self {
+            TabApp::Terminal => "Terminal",
+            TabApp::Iterm => "iTerm2",
+            TabApp::Ghostty => "Ghostty",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<TabApp> {
+        TAB_APPS.into_iter().find(|app| app.id() == id)
+    }
+
+    pub fn from_bundle(bundle: &str) -> Option<TabApp> {
+        TAB_APPS.into_iter().find(|app| app.bundle() == bundle)
+    }
+}
+
+/// `/dev/ttys` and one to four ASCII digits: the only text that ever reaches a script, as a parameter.
+pub fn tty_ok(tty: &str) -> bool {
+    tty.strip_prefix("/dev/ttys")
+        .is_some_and(|digits| (1..=4).contains(&digits.len()) && digits.bytes().all(|byte| byte.is_ascii_digit()))
+}
+
+/// `{"tab":{"app":"…","tty":"…"}}` for the watch's stdin, well under 140 bytes; None for a tty that fails the check.
+pub fn tab_line(app: TabApp, tty: &str) -> Option<String> {
+    tty_ok(tty).then(|| serde_json::json!({ "tab": { "app": app.id(), "tty": tty } }).to_string())
+}
+
+/// The app, tty and raise of a watch's `{"select":{…}}` line. A raise that is not a boolean drops the line: only a tap
+/// sends `true`, and a value that is neither must not pick the handler.
+pub fn select_of(line: &str) -> Option<(TabApp, String, bool)> {
+    let line: Value = serde_json::from_str(line).ok()?;
+    let select = line.get("select")?;
+    let app = TabApp::from_id(select.get("app")?.as_str()?)?;
+    let tty = select.get("tty")?.as_str()?;
+    let raise = match select.get("raise") {
+        None => false,
+        Some(Value::Bool(raise)) => *raise,
+        Some(_) => return None,
+    };
+    tty_ok(tty).then(|| (app, tty.to_string(), raise))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TabError {
+    /// The person said no to Automation for this app.
+    Denied,
+    /// The app's dictionary has no `tty` (a Ghostty older than its tty property).
+    NoTty,
+    /// The app quit, timed out, or anything else: the next call tries again.
+    Failed,
+}
+
+/// An AppleScript error number as a TabError.
+pub fn tab_error(app: TabApp, code: i64) -> TabError {
+    match code {
+        // errAEEventNotPermitted.
+        -1743 => TabError::Denied,
+        // No such property, or the handler failed on it: only Ghostty may lack `tty`, elsewhere it is a passing error.
+        -1728 | -10000 if app == TabApp::Ghostty => TabError::NoTty,
+        _ => TabError::Failed,
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Selected {
+    Done,
+    /// No tab of a visible window holds the tty.
+    NoTab,
+}
+
+/// The fixed scripts. A tty passed in has passed `tty_ok`.
+pub trait TabScripts: Send + Sync {
+    /// Whether the app runs: an Apple Event to one that does not would launch it.
+    fn running(&self, app: TabApp) -> bool;
+    /// The tty of the front window's selected tab; None with no visible window.
+    fn selected_tty(&self, app: TabApp) -> Result<Option<String>, TabError>;
+    /// A swipe's select. `frontmost` lets it raise the window, and lets Ghostty select at all.
+    fn select_tty(&self, app: TabApp, tty: &str, frontmost: bool) -> Result<Selected, TabError>;
+    /// A tap's select: `open -b` is bringing the app forward, so the window is always raised.
+    fn focus_tty(&self, app: TabApp, tty: &str) -> Result<Selected, TabError>;
+}
+
+/// Runs nothing: `running` is false, so no other call is made.
+pub struct NoTabs;
+
+impl TabScripts for NoTabs {
+    fn running(&self, _app: TabApp) -> bool {
+        false
+    }
+
+    fn selected_tty(&self, _app: TabApp) -> Result<Option<String>, TabError> {
+        Ok(None)
+    }
+
+    fn select_tty(&self, _app: TabApp, _tty: &str, _frontmost: bool) -> Result<Selected, TabError> {
+        Ok(Selected::NoTab)
+    }
+
+    fn focus_tty(&self, _app: TabApp, _tty: &str) -> Result<Selected, TabError> {
+        Ok(Selected::NoTab)
+    }
+}
+
+/// The scripts this platform has.
+pub fn system() -> Arc<dyn TabScripts> {
+    Arc::new(NoTabs)
+}
+
+/// A select to run now.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Select {
+    pub app: TabApp,
+    pub tty: String,
+    /// Whether its app is in front as it is taken.
+    pub frontmost: bool,
+    /// A tap's: `focus_tty` runs instead of `select_tty`.
+    pub raise: bool,
+}
+
+/// What a call's answer gives: a line for the watch, and lines for the log, none of which holds a tty.
+#[derive(Debug, Default)]
+pub struct Out {
+    pub line: Option<String>,
+    pub log: Vec<String>,
+}
+
+/// How often the failed polls are counted in the log, in seconds: a tick fails twice a second at most.
+const FAILED_EVERY: u64 = 60;
+
+/// When to ask for the selected tab, what to tell the watch, and the select waiting to run. It runs no script: the
+/// runner makes each call, one at a time, and hands its answer here.
+#[derive(Default)]
+pub struct TabFollow {
+    front: Option<TabApp>,
+    watching: bool,
+    attached: bool,
+    /// Denied or with no tty, until Harness Device starts again: asking again would only fail again.
+    off: Vec<TabApp>,
+    /// The tty the watch was told last, for the app polled now.
+    last: Option<(TabApp, String)>,
+    waiting: Option<(TabApp, String, bool)>,
+    failed: u64,
+    /// When the first failure not yet in the log came.
+    failed_since: Option<u64>,
+}
+
+impl TabFollow {
+    /// The bundle id of the app in front; any other value is no tab app.
+    pub fn front(&mut self, bundle: &str) {
+        self.front = TabApp::from_bundle(bundle);
+        self.restart();
+    }
+
+    /// A new watch has a dial of its own: it is detached until it says otherwise.
+    pub fn watching(&mut self, on: bool) {
+        self.watching = on;
+        self.attached = false;
+        self.restart();
+    }
+
+    pub fn attached(&mut self, on: bool) {
+        self.attached = on;
+        self.restart();
+    }
+
+    /// The app to ask for its selected tab now, if any.
+    pub fn polls(&self) -> Option<TabApp> {
+        let app = self.front?;
+        (self.watching && self.attached && !self.off.contains(&app)).then_some(app)
+    }
+
+    /// A `selected_tty` answer, `now` in seconds.
+    pub fn polled(&mut self, app: TabApp, answer: Result<Option<String>, TabError>, now: u64) -> Out {
+        let mut out = Out::default();
+        match answer {
+            Ok(Some(tty)) if self.polls() == Some(app) && tty_ok(&tty) => {
+                if self.last.as_ref().is_none_or(|(_, last)| *last != tty) {
+                    out.line = tab_line(app, &tty);
+                    self.last = Some((app, tty));
+                }
+            }
+            Ok(_) => {}
+            Err(TabError::Failed) => {
+                self.failed += 1;
+                self.failed_since.get_or_insert(now);
+            }
+            Err(error) => self.turn_off(app, error, &mut out.log),
+        }
+        if self.failed_since.is_some_and(|since| now.saturating_sub(since) >= FAILED_EVERY) {
+            out.log.push(format!("tabs: {} polls failed", self.failed));
+            self.failed = 0;
+            self.failed_since = None;
+        }
+        out
+    }
+
+    /// A select from the watch. It replaces any still waiting: only where the dial rests now matters.
+    pub fn select(&mut self, app: TabApp, tty: String, raise: bool) {
+        if !self.off.contains(&app) {
+            self.waiting = Some((app, tty, raise));
+        }
+    }
+
+    pub fn next_select(&mut self) -> Option<Select> {
+        let (app, tty, raise) = self.waiting.take()?;
+        Some(Select { app, tty, frontmost: self.front == Some(app), raise })
+    }
+
+    /// A `select_tty` or `focus_tty` answer.
+    pub fn selected(&mut self, app: TabApp, done: Result<Selected, TabError>) -> Out {
+        let mut out = Out::default();
+        let outcome = match done {
+            Ok(Selected::Done) => "ok",
+            Ok(Selected::NoTab) => "none",
+            Err(TabError::Failed) => "failed",
+            Err(error) => {
+                self.turn_off(app, error, &mut out.log);
+                return out;
+            }
+        };
+        out.log.push(format!("tabs: {} select {outcome}", app.name()));
+        out
+    }
+
+    /// How long the last call took. Only macOS's consent prompt holds one past CALL_TIMEOUT, and a select that came
+    /// meanwhile is for where the dial rested minutes ago.
+    pub fn waited(&mut self, call: Duration) {
+        if call > CALL_TIMEOUT {
+            self.waiting = None;
+        }
+    }
+
+    /// Says why once: a call already running when the app was turned off may answer the same.
+    fn turn_off(&mut self, app: TabApp, error: TabError, log: &mut Vec<String>) {
+        if self.off.contains(&app) {
+            return;
+        }
+        self.off.push(app);
+        if self.waiting.as_ref().is_some_and(|(waiting, _, _)| *waiting == app) {
+            self.waiting = None;
+        }
+        log.push(match error {
+            TabError::NoTty => format!("tabs: {} has no tty", app.name()),
+            _ => format!("tabs: {} not allowed", app.name()),
+        });
+        self.restart();
+    }
+
+    /// Each time polling turns to an app, its first answer is written: the watch may never have heard of that tab, or
+    /// the dial may have moved since.
+    fn restart(&mut self) {
+        if self.last.as_ref().map(|(app, _)| *app) != self.polls() {
+            self.last = None;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -84,8 +380,14 @@ mod tests {
 
     #[test]
     fn a_select_line_is_read_only_when_its_app_and_tty_pass() {
-        assert_eq!(select_of(r#"{"select":{"app":"terminal-app","tty":"/dev/ttys023"}}"#), Some((T, TTY.into(), false)));
-        assert_eq!(select_of(r#"{"select":{"app":"iterm","tty":"/dev/ttys0"}}"#), Some((TabApp::Iterm, "/dev/ttys0".into(), false)));
+        assert_eq!(
+            select_of(r#"{"select":{"app":"terminal-app","tty":"/dev/ttys023"}}"#),
+            Some((T, TTY.into(), false))
+        );
+        assert_eq!(
+            select_of(r#"{"select":{"app":"iterm","tty":"/dev/ttys0"}}"#),
+            Some((TabApp::Iterm, "/dev/ttys0".into(), false))
+        );
         assert_eq!(
             select_of(r#"{"select":{"app":"ghostty","tty":"/dev/ttys9999"}}"#),
             Some((TabApp::Ghostty, "/dev/ttys9999".into(), false))
@@ -118,7 +420,10 @@ mod tests {
             select_of(r#"{"select":{"app":"terminal-app","tty":"/dev/ttys023","raise":false}}"#),
             Some((T, TTY.into(), false))
         );
-        assert_eq!(select_of(r#"{"select":{"app":"terminal-app","tty":"/dev/ttys023"}}"#), Some((T, TTY.into(), false)));
+        assert_eq!(
+            select_of(r#"{"select":{"app":"terminal-app","tty":"/dev/ttys023"}}"#),
+            Some((T, TTY.into(), false))
+        );
     }
 
     #[test]
