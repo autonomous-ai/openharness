@@ -4991,6 +4991,23 @@ describe('what the dial cannot do for an agent', () => {
     } finally { vi.useRealTimers(); await session.stop() }
   })
 
+  // The host notes the move as the hand makes it, pane or none: a settle of the app in front must not turn the dial back
+  // in the 400 ms before a rest, or from an agent no rest shows.
+  it("a hand's turn tells the host at once, whatever the agent; a follow's echo does not", async () => {
+    const turned = vi.fn()
+    const { session, port, swipeEnded } = await resting({ turned })
+    try {
+      port.say({ t: 'focus', agentId: 'a1' })
+      expect(turned).toHaveBeenCalledTimes(1)
+      expect(swipeEnded).not.toHaveBeenCalled()
+      port.say({ t: 'focus', agentId: 'a2' })
+      expect(turned).toHaveBeenCalledTimes(2)
+      await session.followApp('', 'a3')
+      port.say({ t: 'focus', agentId: 'a3' })   // the dial's echo of the move
+      expect(turned).toHaveBeenCalledTimes(2)
+    } finally { vi.useRealTimers(); await session.stop() }
+  })
+
   it('a host without swipeSwitches behaves as today', async () => {
     const { session, port, host } = await resting({ swipeSwitches: undefined, swipeEnded: undefined })
     try {
