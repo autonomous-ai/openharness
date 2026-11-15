@@ -45,7 +45,7 @@ export function orcaDeps(): OrcaDeps {
   }
 }
 
-export function createOrcaActions(deps: OrcaDeps): { send(handle: string, text: string): Promise<boolean>; switchTo(handle: string): Promise<PaneSwitch> } {
+function createOrcaActions(deps: OrcaDeps): { send(handle: string, text: string): Promise<boolean>; switchTo(handle: string): Promise<PaneSwitch> } {
   // Per terminal, the switch under way: a second one is that same run. A swipe's rest runs a switch, and a tap 0.4 to 1 s
   // after it was refused as busy: on Linux the dial said Orca did not open the pane it had just shown.
   const switching = new Map<string, Promise<PaneSwitch>>()

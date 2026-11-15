@@ -266,8 +266,6 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   }
   const inbox = new Inbox({ now: monotonic, after: timerIn('inbox') })
   const apps = deps.orca ?? orcaDeps()
-  const orca = createOrcaAdapter(apps)
-  const opener = createOpenActions({ ...apps, orcaSwitch: (handle) => orca.focus({ adapter: orca.id, id: handle }), log })
   const claude = createClaudeAppAdapter({ ...apps, inFront: () => cableHost.latestFront() === 'claude' })
   // Harness's own Codex home, whose config `codex queue` loads; run from the home folder, so no project's .codex/ is read.
   const codexQueue = createCodexQueue({ ...(deps.codex ?? codexQueueDeps()), home: env.CODEX_HOME, cwd: homedir() })
@@ -290,7 +288,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const adapters: readonly HostAdapter[] = [
     createHerdrAdapter(apps),
     createWeztermAdapter(apps),
-    orca,
+    createOrcaAdapter(apps),
     // A rest's continue link: the app's attach that follows is the dial's own echo.
     { ...claude, show: (pane, agentId) => { noteLink(agentId); return claude.show(pane, agentId) } },
     createTabsAdapter({
@@ -302,6 +300,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       },
     }),
   ]
+  const opener = createOpenActions({ run: apps.run, platform: apps.platform, adapters, log })
   const observed = env.HARNESS_DEVICE_OBSERVED ? observedSource(core.dataDir, log, {
     adapters,
     modReady: (sessionId) => inbox.ready(sessionId),
@@ -309,7 +308,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     canOpen: opener.can,
     // A tap on a Claude app agent runs the continue link a rest runs: its attach is the dial's own echo too.
     open: (agentId, target) => {
-      if (target.pane?.app === 'claude' && opener.can(target)) noteLink(agentId)
+      if (target.pane?.adapter === claude.id && opener.can(target)) noteLink(agentId)
       return opener.open(agentId, target)
     },
     codexQueue,

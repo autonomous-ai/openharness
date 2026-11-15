@@ -11,7 +11,7 @@ import type { HostAdapter, Pane } from './adapter.js'
 import { CODEX_THREAD, type CodexQueue } from './codexQueue.js'
 import { detectApp, detectHost, hostDisplayName, UNKNOWN_APP } from './hostDetect.js'
 import type { Delivery } from './inbox.js'
-import { openTarget, type OpenTarget } from './open.js'
+import { bundleOf, type OpenTarget } from './open.js'
 import { MAX_TEXT } from './orca.js'
 import { isTabApp } from './tabs.js'
 import type { Caps, HostAgent, HostAgentState, HostSource, PaneSwitch, SendResult } from './types.js'
@@ -105,7 +105,7 @@ export interface ObservedActions {
   toMod(sessionId: string, text: string): Promise<Delivery>
   /** Whether a tap can open the target here: macOS brings an app forward, elsewhere only a pane's own command runs. */
   canOpen(target: OpenTarget): boolean
-  /** A tap: the agent's pane, then its app (open.ts). */
+  /** A tap: the agent's pane and its app, in the order the pane's adapter keeps (open.ts). */
   open(agentId: string, target: OpenTarget): Promise<boolean>
   /** Codex's own queue (codexQueue.ts): a thread runs its words as its next turn, and no terminal is typed into. */
   codexQueue: Pick<CodexQueue, 'can' | 'send'>
@@ -125,6 +125,9 @@ interface Located {
 const words = (adapter: HostAdapter): boolean => !!adapter.type
 /** A rest shows the first pane its app can show now, without coming forward. */
 const rest = (adapter: HostAdapter, pane: Pane): boolean => !!adapter.show && (adapter.canShow?.(pane) ?? true)
+/** A tap hands the opener the first pane its app brings forward here, before or instead of the app: one after it is
+ *  raised once the app came. */
+const tapped = (adapter: HostAdapter, pane: Pane): boolean => adapter.tap !== 'after' && adapter.canFocus(pane)
 
 interface Entry {
   agent: HostAgent
@@ -141,8 +144,8 @@ interface Entry {
   tty?: string
   /** When the read of ttyPid began, once that read failed. */
   ttyFailedAt?: number
-  /** What a tap opens, from its last event: none for a session the scan found, until its first. */
-  opens: OpenTarget
+  /** The app a tap brings forward, from its last event: none for a session the scan found, until its first. */
+  bundle?: string
   /** What the permission prompt it waits on asks, from its hook (deviceClaude/asked.ts): '' when it names nothing. */
   asked?: string
   /** The name the session gives itself, from its session-start or turn-start, or, for a session the scan found, the one
@@ -184,7 +187,7 @@ export class ObservedSource implements HostSource {
     return {
       status: true,
       voice: live && (!!this.first(e, words) || this.modReady(e, actions) || this.queueable(e, actions)),
-      focus: live && actions.canOpen(e.opens),
+      focus: live && actions.canOpen(this.target(e)),
       // Its prompts are answered in its own app: the dial only shows them.
       answer: false,
     }
@@ -309,8 +312,10 @@ export class ObservedSource implements HostSource {
   async focus(agent: HostAgent): Promise<boolean> {
     const e = this.entries.get(agent.id)
     const actions = this.deps.actions
-    if (!e || !actions || !this.live(e) || !actions.canOpen(e.opens)) return false
-    const opened = await actions.open(e.agent.id, e.opens)
+    if (!e || !actions || !this.live(e)) return false
+    const target = this.target(e)
+    if (!actions.canOpen(target)) return false
+    const opened = await actions.open(e.agent.id, target)
     // `open -b` brings the app forward on whichever tab it had: a pane that comes after its app (a tab) is raised once it
     // came. Read after the open, as an agent that ended or moved meanwhile has no such pane to raise.
     const shown = opened ? this.shown(agent) : undefined
@@ -334,6 +339,12 @@ export class ObservedSource implements HostSource {
   private shown(agent: HostAgent): Located | undefined {
     const e = this.entries.get(agent.id)
     return e && this.live(e) ? this.first(e, rest) : undefined
+  }
+
+  /** What a tap opens: its app, and the first of its panes the opener brings forward. Asked at each look, as a rest's. */
+  private target(e: Entry): OpenTarget {
+    const near = this.first(e, tapped)
+    return { ...(e.bundle ? { bundle: e.bundle } : {}), ...(near ? { pane: near.pane } : {}) }
   }
 
   /** Every pane its adapters know it by, afresh: a session resumed elsewhere keeps none it left. */
@@ -412,7 +423,7 @@ export class ObservedSource implements HostSource {
     // Every event's own: a session resumed elsewhere must not be typed into the terminal it left.
     entry.hints = e.hostHints
     this.locate(entry)
-    entry.opens = openTarget(a.host, e.hostHints)
+    entry.bundle = bundleOf(a.host, e.hostHints)
     if (e.cwd) a.cwd = e.cwd
     if (e.event === 'session-start' || e.event === 'turn-start') {
       if (e.title !== undefined) entry.title = e.title
@@ -534,7 +545,6 @@ export class ObservedSource implements HostSource {
       pid: init.pid,
       hints: {},
       panes: [],
-      opens: {},
       dialPrompts: [],
       ...(init.transcriptPath ? { transcriptPath: init.transcriptPath } : {}),
     }
