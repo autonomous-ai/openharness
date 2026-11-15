@@ -8,7 +8,7 @@ import { type fileStamp, within } from '../../lib/sessionSearch/externals/suppor
 import type { ExternalEngine, RunningProcess } from '../../lib/sessionSearch/externals/types.js'
 import { roundDrawable } from '../roundGlyphs.js'
 import type { HostAdapter, Pane } from './adapter.js'
-import { CODEX_THREAD, type CodexQueue } from './codexQueue.js'
+import { CODEX_THREAD, type CodexQueue, type CodexQueueFailure } from './codexQueue.js'
 import { detectApp, detectHost, hostDisplayName, UNKNOWN_APP } from './hostDetect.js'
 import type { Delivery } from './inbox.js'
 import { bundleOf, type OpenTarget } from './open.js'
@@ -111,8 +111,10 @@ export interface ObservedActions {
   codexQueue: Pick<CodexQueue, 'can' | 'send'>
   /** The Codex home Harness reads (env.CODEX_HOME): `codex queue` loads its config, so a hook's path never chooses it. */
   codexHome: string
-  /** The route (`codex`, `mod`, or the id of the adapter that typed) or the refusal, and a failed queue's reason. */
-  count(what: string): void
+  /** The route (`codex`, `mod`, or the adapter that typed, said by its fixed id) or the refusal, and a failed queue's
+   *  reason. Fixed words or an adapter only: a string from a hook, a pane's id, cannot reach the log line. */
+  count(what: 'mod' | 'waiting' | 'busy' | 'pending' | 'too-long' | 'no-answer' | 'codex' | 'codex-timeout'
+    | `codex-failed (${CodexQueueFailure})` | HostAdapter): void
 }
 
 /** One of an agent's panes, beside the adapter whose it is. */
@@ -277,7 +279,7 @@ export class ObservedSource implements HostSource {
       this.forgetDialPrompt(e, record)
       return noAnswer()
     }
-    actions.count(typer.adapter.id)
+    actions.count(typer.adapter)
     return { ok: true }
   }
 

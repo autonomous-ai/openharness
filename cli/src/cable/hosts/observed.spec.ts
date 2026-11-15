@@ -875,6 +875,10 @@ interface Fakes extends Omit<ObservedActions, 'adapters'> {
 
 /** Routes that answer as told, recording what each was handed. The adapters are the real ones for that platform, their
  *  verbs the fakes, and any command of their own goes to an inert runner. */
+/** What each count says, as devices.ts logs it: an adapter by its fixed id. */
+const counted = (count: { mock: { calls: Array<Parameters<ObservedActions['count']>> } }): string[] =>
+  count.mock.calls.map(([what]) => (typeof what === 'string' ? what : what.id))
+
 function fakeActions(over: Partial<Fakes> = {}, platform: NodeJS.Platform = 'darwin') {
   const ready = new Set<string>()
   const fakes = {
@@ -1037,7 +1041,7 @@ describe('ObservedSource actions', () => {
     src.ingest(ev('turn-start', { engine, ...withHandle }))
     expect(await after('turn-error', 'three')).toEqual({ ok: true })
     expect(actions.orcaSend.mock.calls).toEqual([[HANDLE, 'one'], [HANDLE, 'two'], [HANDLE, 'three']])
-    expect(actions.count.mock.calls.map(([what]) => what)).toEqual(['orca', 'busy', 'waiting', 'orca', 'orca'])
+    expect(counted(actions.count)).toEqual(['orca', 'busy', 'waiting', 'orca', 'orca'])
   })
 
   // No scan or transcript reads another engine's turn: it is at its prompt only once a hook said its turn ended.
@@ -1058,7 +1062,7 @@ describe('ObservedSource actions', () => {
     expect(await after('turn-start', 'four')).toEqual(busy)
     expect(await after('turn-error', 'five')).toEqual({ ok: true })
     expect(actions.orcaSend.mock.calls).toEqual([[HANDLE, 'two'], [HANDLE, 'three'], [HANDLE, 'five']])
-    expect(actions.count.mock.calls.map(([what]) => what)).toEqual(['busy', 'busy', 'waiting', 'orca', 'orca', 'busy', 'orca'])
+    expect(counted(actions.count)).toEqual(['busy', 'busy', 'waiting', 'orca', 'orca', 'busy', 'orca'])
   })
 
   // The scan lists another engine's agent idle though its turn may run: its first hook with a handle is no turn's end.
@@ -1327,7 +1331,7 @@ describe('ObservedSource actions', () => {
     await src.send(agent('asking'), 'x')
     await src.send(agent('none'), 'x'.repeat(2001))
     await src.send(agent('none'), 'x')
-    expect(actions.count.mock.calls.map(([what]) => what)).toEqual(['mod', 'orca', 'busy', 'waiting', 'too-long', 'no-answer'])
+    expect(counted(actions.count)).toEqual(['mod', 'orca', 'busy', 'waiting', 'too-long', 'no-answer'])
   })
 })
 
@@ -1414,18 +1418,18 @@ describe('ObservedSource and codex queue', () => {
   })
 
   it('failed falls back to Orca only when idle at a handle, with today\'s sentences', async () => {
-    const cases: Array<[Partial<ObservedHookEvent>, keyof typeof HOOKS, object, Parameters<ObservedActions['count']>[0]]> = [
+    const cases: Array<[Partial<ObservedHookEvent>, keyof typeof HOOKS, object, string]> = [
       [inOrca, 'idle', { ok: true }, 'orca'],
       [inOrca, 'working', { ok: false, reason: 'proj is busy. Say it when it is done.' }, 'busy'],
       [inOrca, 'needs-you', { ok: false, reason: 'proj is waiting for your answer in Orca.' }, 'waiting'],
       [cx, 'idle', { ok: false, reason: 'proj did not answer.' }, 'no-answer'],
     ]
-    for (const [session, state, sent, counted] of cases) {
+    for (const [session, state, sent, said] of cases) {
       const { src, actions } = given(session, state)
       actions.codexQueue.send.mockResolvedValue(FAILED)
       expect(await src.send(src.list()[0], 'next')).toEqual(sent)
-      expect(actions.orcaSend.mock.calls).toEqual(counted === 'orca' ? [[HANDLE, 'next']] : [])
-      expect(actions.count.mock.calls).toEqual([['codex-failed (exit 1)'], [counted]])
+      expect(actions.orcaSend.mock.calls).toEqual(said === 'orca' ? [[HANDLE, 'next']] : [])
+      expect(counted(actions.count)).toEqual(['codex-failed (exit 1)', said])
     }
   })
 
@@ -1597,7 +1601,7 @@ describe('ObservedSource panes', () => {
     expect(src.capabilities(agent)).toMatchObject({ voice: true, focus: true })
     expect(await src.send(agent, 'next')).toEqual({ ok: true })
     expect(actions.orcaSend.mock.calls).toEqual([[HANDLE, 'next']])
-    expect(actions.count).toHaveBeenLastCalledWith('orca')
+    expect(counted(actions.count).at(-1)).toBe('orca')
     expect(src.hasPane(agent)).toBe(true)
     expect(await src.showPane(agent)).toBe('ok')
     expect(actions.orcaSwitch.mock.calls).toEqual([[HANDLE]])
@@ -1634,7 +1638,7 @@ describe('ObservedSource panes', () => {
     expect(a.src.capabilities(a.agent)).toMatchObject({ voice: true })
     expect(await a.src.send(a.agent, 'next')).toEqual({ ok: true })
     expect(adapter.type.mock.calls).toEqual([[PANE, 'next']])
-    expect(a.actions.count).toHaveBeenLastCalledWith('made-up')
+    expect(counted(a.actions.count).at(-1)).toBe('made-up')
     expect(a.actions.orcaSend).not.toHaveBeenCalled()
     expect(await a.src.showPane(a.agent)).toBe('busy')
     expect(adapter.show.mock.calls).toEqual([[PANE, a.agent.id]])
@@ -1651,7 +1655,7 @@ describe('ObservedSource panes', () => {
     expect(mute.src.capabilities(mute.agent)).toMatchObject({ voice: true })
     expect(await mute.src.send(mute.agent, 'next')).toEqual({ ok: true })
     expect(mute.actions.orcaSend.mock.calls).toEqual([[HANDLE, 'next']])
-    expect(mute.actions.count).toHaveBeenLastCalledWith('orca')
+    expect(counted(mute.actions.count).at(-1)).toBe('orca')
 
     // Its pane alone: nothing is left to fall to.
     const hidden = madeUp()

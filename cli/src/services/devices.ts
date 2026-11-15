@@ -331,7 +331,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     codexQueue,
     codexHome: env.CODEX_HOME,
     // The route or the refusal, and why a queue failed: never the words, the session, the terminal or a path.
-    count: (what) => log(`[device] voice · ${what}`),
+    count: (what) => log(`[device] voice · ${typeof what === 'string' ? what : what.id}`),
   }, ttyOf) : null
   /** One of them, by the id the dial holds: what the dial asks of it is answered here, never by a door of the core. */
   const outside = (agentId: string): HostAgent | undefined => observed?.list().find((agent) => agent.id === agentId)
