@@ -2234,11 +2234,11 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
   // (docs/specs/2026-11-15-dial-terminal-follow.md, "1. A swipe selects the agent's tab").
   const TTY = '/dev/ttys023'
   /** The Claude Code agent in a Terminal tab, on macOS, its dial on the cable and its tty read. */
-  const inTab = async (over: Parameters<typeof start>[0] = {}) => {
+  const inTab = async (over: Parameters<typeof start>[0] = {}, hostHints: Record<string, string> = {}) => {
     const listener = fakeListener()
     const tty = vi.fn(async (_pid: number): Promise<string | undefined> => TTY)
     const started = startHere({ orca: mac, listen: listener.listen, tty, ...over })
-    started.port.observed(hook('session-start', { hostHints: { __CFBundleIdentifier: 'com.apple.Terminal' } }))
+    started.port.observed(hook('session-start', { hostHints: { __CFBundleIdentifier: 'com.apple.Terminal', ...hostHints } }))
     attach(started.port)
     // The source took each answer before this await resumes: its own was waiting on the same promise first.
     await Promise.all(tty.mock.results.map(({ value }) => value))
@@ -2327,6 +2327,30 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     await host().openAgent(ID)
     expect(said()).toEqual(['[device] swipe · ok', '[device] swipe · failed'])
     expect(logs.filter((line) => /ttys|4242/.test(line))).toEqual([])
+  })
+
+  // An agent may have a pane in more than one app: each verb takes the first in the devices' fixed order (herdr, WezTerm,
+  // Orca, the Claude app, tabs), wired here as in production.
+  it('a tap on an agent with a WezTerm pane and an Orca handle activates the WezTerm pane, then brings WezTerm forward', async () => {
+    const { port } = startHere({ orca: { ...mac, onPath: (name: string) => `/opt/${name}/bin/${name}` } })
+    port.observed(hook('session-start', { engine: 'codex', sessionId: 'cx-1',
+      hostHints: { TERM_PROGRAM: 'WezTerm', WEZTERM_PANE: '7', ORCA_TERMINAL_HANDLE: HANDLE } }))
+    attach(port)
+    expect(await host().openAgent(CODEX)).toBeUndefined()
+    expect(orcaRuns).toEqual([
+      ['/opt/wezterm/bin/wezterm', ['cli', 'activate-pane', '--pane-id', '7'], 10_000],
+      ['/usr/bin/open', ['-b', 'com.github.wez.wezterm'], 10_000],
+    ])
+  })
+
+  it('a rest on an agent with an Orca handle inside Terminal runs the Orca switch, and writes no select', async () => {
+    const { listener } = await inTab({}, { ORCA_TERMINAL_HANDLE: HANDLE })
+    const stream = listener.tabs()
+    expect(host().swipeSwitches(ID)).toBe(true)
+    host().swipeEnded(ID, 'rest')
+    await swiped('ok')
+    expect(orcaRuns).toEqual([switched])
+    expect(stream.lines).toEqual([])
   })
 
   it('no log line or backend request carries the command, a prompt\'s summary, a path, the transcript, a session id or a handle', async () => {
