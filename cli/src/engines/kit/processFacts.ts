@@ -23,13 +23,18 @@ function canonical(path: string): string {
   try { return realpathSync(path) } catch { return path }
 }
 
+/** Whether a path could be an engine's home: absolute, at most 1,024 characters, no control character. */
+export function homeShaped(home: string): boolean {
+  return isAbsolute(home) && home.length <= 1_024 && !/[\x00-\x1f\x7f]/.test(home)
+}
+
 /**
- * A reported profile home, when it could be one and is not the machine's default: absolute, at most 1,024 characters,
- * no control character, compared through real paths, as the same folder may be named two ways. `null` for the
- * default and for a value that could not be a home (never a guess).
+ * A reported profile home, when it could be one (`homeShaped`) and is not the machine's default, compared through real
+ * paths, as the same folder may be named two ways. `null` for the default and for a value that could not be a home
+ * (never a guess).
  */
 export function profileHome(profile: NonNullable<DiscoveryContract['profile']>, home: string, defaultHome: string): string | null {
-  if (!isAbsolute(home) || home.length > 1_024 || /[\x00-\x1f\x7f]/.test(home)) return null
+  if (!homeShaped(home)) return null
   const compared = (path: string) => canonical(profile.trimTrailingSlashes ? path.replace(/\/+$/, '') : path)
   return compared(home) === compared(defaultHome) ? null : home
 }

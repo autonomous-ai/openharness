@@ -4,6 +4,7 @@ import { CURSOR_TRANSCRIPT } from './cursor/contract.js'
 import { GROK_TRANSCRIPT } from './grok/contract.js'
 import { AGY_PROCESS_SESSION, AGY_TRANSCRIPT } from './agy/contract.js'
 import { COPILOT_PROCESS_SESSION, COPILOT_TRANSCRIPT } from './copilot/contract.js'
+import { homeShaped } from './kit/processFacts.js'
 import { locateProcessSession, locateTranscript } from './kit/sessionLocation.js'
 import { inspectTranscriptPath } from '../lib/registry.js'
 import { env } from '../config/env.js'
@@ -32,14 +33,15 @@ export function processSessionOf(engine: 'agy' | 'copilot', home: string, pid: n
 /**
  * The home a Hermes process works in, from the store it holds open, at the daemon's path of it. Null is the daemon's
  * default home, and another engine; undefined is a process that holds no store yet, one whose files cannot be
- * listed, or a sandbox's home with no path here, and must preserve an existing home. `children` names the selected
+ * listed, a sandbox's home with no path here, or a path that could not be a home (`homeShaped`), and must preserve an
+ * existing home. `children` names the selected
  * process's direct children that are Hermes's own binary (lib/processTable.ts `engineChildren`): no other process is
  * listed, and two homes among them are no home (lib/processHeldFiles.ts `heldHome`).
  */
 export async function probeHermesHome(selected: ProcessIdentity, engine: AgentEngine, children?: () => readonly ProcessIdentity[]): Promise<string | null | undefined> {
   if (engine !== 'hermes') return null
   const home = await heldHome(selected, HERMES_HELD_STORE, children)
-  if (home === undefined) return undefined
+  if (home === undefined || !homeShaped(home)) return undefined
   return await canonical(home) === await canonical(env.HERMES_HOME.replace(/\/+$/, '')) ? null : home
 }
 
