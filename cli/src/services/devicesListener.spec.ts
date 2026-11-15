@@ -122,6 +122,8 @@ const MINUTE = 60_000
 
 const LIVE = '{"type":"live"}'
 const TABS = '{"type":"tabs"}'
+const STANDBY = '{"type":"tabs","standby":true}'
+const REPLACED = '{"replaced":true}'
 const TAB: Tab = { app: 'terminal-app', tty: '/dev/ttys023' }
 
 /** A stream handler that keeps every stream it is handed. `answer` is what its open answers, or throws. */
@@ -614,7 +616,7 @@ describe.skipIf(process.platform === 'win32')('the devices listener', () => {
       expect(stream!.write({ n: 3 })).toBe(false)
     })
 
-    it('a second stream of the type ends the first and closes its connection; the second goes on', async () => {
+    it('a second stream of the type ends the first with a last line {"replaced":true} and closes its connection; the second goes on', async () => {
       const live = streamHandler()
       const other = streamHandler()
       const { path } = await open({ live: live.handler, other: other.handler })
@@ -627,10 +629,74 @@ describe.skipIf(process.platform === 'win32')('the devices listener', () => {
       expect(one!.write({ n: 1 })).toBe(false)
       expect(two!.write({ n: 2 })).toBe(true)
       expect(await second.got(1)).toEqual(['{"n":2}'])
-      expect(first.lines()).toEqual([])
+      expect(first.lines()).toEqual([REPLACED])
       // A stream of another type is its own.
       expect(other.opened[0]!.write({ n: 3 })).toBe(true)
       expect(await elsewhere.got(1)).toEqual(['{"n":3}'])
+    })
+
+    it('a replaced stream whose client reads its last line leaves no timer; one whose client does not is closed 2 s on', async () => {
+      const live = streamHandler()
+      const { path } = await open({ live: live.handler })
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      const reading = await asked(path, LIVE)
+      const stopped = bare(path, post(LIVE))
+      await reading.closed
+      expect(reading.lines()).toEqual([REPLACED])
+      // Its connection gone, its 2 s with it.
+      await vi.waitFor(() => expect(vi.getTimerCount()).toBe(0))
+
+      // A line waiting to drain: the last line waits behind it, and the connection goes 2 s after the newer stream opened.
+      stopped.socket.pause()
+      const [, older] = live.opened
+      expect(older!.write(UNDRAINABLE)).toBe(true)
+      const newer = await asked(path, LIVE)
+      expect(older!.ended.aborted).toBe(true)
+      vi.advanceTimersByTime(1_999)
+      expect(vi.getTimerCount()).toBe(1)
+      vi.advanceTimersByTime(1)
+      expect(vi.getTimerCount()).toBe(0)
+      stopped.socket.resume()
+      expect(await stopped.read).not.toContain('replaced')
+      expect(live.opened[2]!.write({ n: 1 })).toBe(true)
+      expect(await newer.got(1)).toEqual(['{"n":1}'])
+    })
+
+    it('a standby open is 409 while a stream of the type is open, and leaves it open; with none open it is a stream', async () => {
+      const live = streamHandler()
+      const { path, lines } = await open({ live: live.handler })
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      const kept = await asked(path, LIVE)
+      const refused = await asked(path, '{"type":"live","standby":true}')
+      expect(refused.status).toBe(409)
+      await refused.closed
+      expect(refused.lines()).toEqual([])
+      // standby is a boolean or nothing.
+      const sender = connection(path)
+      for (const standby of ['1', '"true"', 'null', '{}']) {
+        expect((await sender.send(`{"type":"live","standby":${standby}}`)).status, standby).toBe(400)
+      }
+      // None of them reached the handler, and the open stream goes on.
+      expect(live.opened).toHaveLength(1)
+      expect(live.opened[0]!.ended.aborted).toBe(false)
+      expect(live.opened[0]!.write({ n: 1 })).toBe(true)
+      expect(await kept.got(1)).toEqual(['{"n":1}'])
+
+      kept.close()
+      await endOf(live.opened[0]!)
+      const standing = await asked(path, '{"type":"live","standby":true}')
+      expect(standing).toMatchObject({ status: 200, type: 'application/x-ndjson' })
+      expect(live.opened[1]!.write({ n: 2 })).toBe(true)
+      expect(await standing.got(1)).toEqual(['{"n":2}'])
+      // standby false is an open like any other: it replaces the open one.
+      const normal = await asked(path, '{"type":"live","standby":false}')
+      await standing.closed
+      expect(standing.lines()).toEqual(['{"n":2}', REPLACED])
+      expect(live.opened[2]!.write({ n: 3 })).toBe(true)
+      expect(await normal.got(1)).toEqual(['{"n":3}'])
+      // The 409 is the answer a standing watch waits on, not a message dropped: only the four refused are counted.
+      vi.advanceTimersByTime(MINUTE)
+      expect(lines.at(-1)).toBe('[devices] listener in the last minute: 0 unknown, 0 oversized, 0 over rate, 4 refused, 0 failed')
     })
 
     it('a stream outlives the 2 s deadline, and still counts as one of the 16', async () => {
@@ -796,11 +862,29 @@ describe.skipIf(process.platform === 'win32')('the devices listener', () => {
       expect(tabs.isOpen()).toBe(true)
       expect(tabs.select(TAB, false)).toBe(true)
       expect(await newer.got(1)).toEqual(['{"app":"terminal-app","tty":"/dev/ttys023"}'])
-      expect(older.lines()).toEqual([])
+      expect(older.lines()).toEqual([REPLACED])
 
       newer.close()
       await endOf(opened.mock.calls[1]![1])
       expect(tabs.isOpen()).toBe(false)
+    })
+
+    it('a standby tabs request is 409 while a watch holds the stream; once that ends, the standby one is written to', async () => {
+      const tabs = tabsStream()
+      const opened = vi.spyOn(tabs.handler, 'open')
+      const { path } = await open({ tabs: tabs.handler })
+      const alive = await asked(path)
+      expect((await asked(path, STANDBY)).status).toBe(409)
+      expect(opened).toHaveBeenCalledOnce()
+      expect(tabs.select(TAB, false)).toBe(true)
+      expect(await alive.got(1)).toEqual(['{"app":"terminal-app","tty":"/dev/ttys023"}'])
+
+      alive.close()
+      await endOf(opened.mock.calls[0]![1])
+      const standing = await asked(path, STANDBY)
+      expect(standing.status).toBe(200)
+      expect(tabs.select(TAB, true)).toBe(true)
+      expect(await standing.got(1)).toEqual(['{"app":"terminal-app","tty":"/dev/ttys023","raise":true}'])
     })
 
     it('nothing logs or echoes a tty', async () => {
@@ -1008,11 +1092,13 @@ describe('tab', () => {
 })
 
 describe('tabs', () => {
-  it('the tabs stream is two a second on a connection, and its one message fits', () => {
+  it('the tabs stream is two a second on a connection, and its longest message, a standby false, fits', () => {
     const { handler } = tabsStream()
     expect(Object.keys(handler).sort()).toEqual(['maxBytes', 'open', 'perSecond'])
     expect(handler).toMatchObject({ maxBytes: TABS_MAX_BYTES, perSecond: TABS_PER_SECOND })
     expect([TABS_MAX_BYTES, TABS_PER_SECOND]).toEqual([32, 2])
-    expect(Buffer.byteLength(TABS)).toBeLessThanOrEqual(TABS_MAX_BYTES)
+    const longest = Buffer.byteLength('{"type":"tabs","standby":false}')
+    expect(longest).toBe(31)
+    expect(longest).toBeLessThanOrEqual(TABS_MAX_BYTES)
   })
 })

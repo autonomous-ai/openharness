@@ -100,6 +100,7 @@ const NOT_RUNNING = 'Harness is not running on this computer. Run: harness start
 const CLOSED = 'The connection to Harness on this computer closed.'
 const TOO_OLD = '{"error":"The Harness daemon on this computer is older than this command. Run: harness start --restart"}'
 type Told = Parameters<NonNullable<DialWatchDeps['tell']>>[0]
+type Asked = Parameters<NonNullable<DialWatchDeps['selects']>>[0]
 function watch(over: Partial<DialWatchDeps> = {}, argv = ['--json']) {
   const socket = Object.assign(new EventEmitter(), { send: vi.fn(), close: vi.fn() })
   const stdin = Object.assign(new EventEmitter(), { resume: vi.fn(), pause: vi.fn() })
@@ -108,7 +109,7 @@ function watch(over: Partial<DialWatchDeps> = {}, argv = ['--json']) {
   // The devices listener, faked: no test reaches a socket of its own. It takes every message unless a test says otherwise.
   const tell = vi.fn(async (_message: Told) => true)
   // Its stream of selects, faked as one held open, so no test ends the stream of a watch Harness Device runs.
-  const selects = vi.fn((_chunk: (data: Buffer) => void, _signal: AbortSignal) => new Promise<boolean>(() => {}))
+  const selects = vi.fn((_message: Asked, _chunk: (data: Buffer) => void, _signal: AbortSignal) => new Promise<boolean>(() => {}))
   const deps: DialWatchDeps = {
     port: 18473, machineId: async () => 'local', connect, stdin, tell, selects,
     print: line => { printed.push(line) }, printError: line => { errors.push(line) }, ...over,
@@ -658,10 +659,14 @@ const RAISE = '{"select":{"app":"terminal-app","tty":"/dev/ttys023","raise":true
 // A data folder with a listener path, so the watch opens its stream. Nothing in it is touched: the tells and the stream
 // are the test's.
 const LISTENING = '/tmp/hdw-none'
+const TABS = { type: 'tabs' }
+const STANDBY = { type: 'tabs', standby: true }
+const REPLACED = 'tabs stream replaced'
 /** The devices' stream of selects, faked: each open is held until the test ends it, saying whether it had opened. */
 function tabStreams() {
-  const opens: { chunk: (data: Buffer) => void; signal: AbortSignal; end: (hadOpened: boolean) => void }[] = []
-  const selects = vi.fn((chunk: (data: Buffer) => void, signal: AbortSignal) => new Promise<boolean>(end => { opens.push({ chunk, signal, end }) }))
+  const opens: { message: Asked; chunk: (data: Buffer) => void; signal: AbortSignal; end: (hadOpened: boolean) => void }[] = []
+  const selects = vi.fn((message: Asked, chunk: (data: Buffer) => void, signal: AbortSignal) =>
+    new Promise<boolean>(end => { opens.push({ message, chunk, signal, end }) }))
   // Lines on the stream opened last, in one chunk.
   const send = (...lines: string[]) => opens.at(-1)!.chunk(Buffer.from(lines.map(line => `${line}\n`).join('')))
   return { selects, opens, send }
@@ -833,6 +838,57 @@ describe('harness hardware watch: the selected tab', () => {
     await reopensAfter(true, 1_000)
     send('}')
     expect(run.printed).toEqual([])
+    // A watch no other has replaced asks for a stream as it always has.
+    for (const { message } of opens) expect(message).toStrictEqual(TABS)
+    expect(run.errors).toEqual([])
+    await stillRunning(run)
+  })
+  it('a stream that ends after {"replaced":true} says so once, and from then on asks only to stand by, on its usual wait', async () => {
+    const { run, opens, send } = await streaming()
+    expect(opens[0]!.message).toStrictEqual(TABS)
+    send('{"replaced":true}')
+    expect(run.printed).toEqual([])
+    opens[0]!.end(true)
+    await vi.advanceTimersByTimeAsync(999)
+    expect(run.errors).toEqual([REPLACED])
+    expect(opens).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(1)
+    // A 409 while the newer watch holds the stream is a try like any that does not open: 2 s, then 4 s, and nothing said.
+    for (const ms of [2_000, 4_000]) {
+      opens.at(-1)!.end(false)
+      await vi.advanceTimersByTimeAsync(ms)
+    }
+    expect(opens.map(({ message }) => message)).toStrictEqual([TABS, STANDBY, STANDBY, STANDBY])
+    // The dial attaching opens it at once, standing by too.
+    opens.at(-1)!.end(false)
+    await vi.advanceTimersByTimeAsync(0)
+    dial(run.socket, { attached: true })
+    expect(opens.map(({ message }) => message)).toStrictEqual([TABS, STANDBY, STANDBY, STANDBY, STANDBY])
+    expect(run.errors).toEqual([REPLACED])
+    expect(run.printed).toEqual(['{"attached":true}'])
+    await stillRunning(run)
+  })
+  it('a standby stream that opens is its own again: one that ends any other way is followed by a normal one, and a replace is said again', async () => {
+    const { run, opens, send } = await streaming()
+    send('{"replaced":true}')
+    opens[0]!.end(true)
+    await vi.advanceTimersByTimeAsync(1_000)
+    // The newer watch's stream had ended: the standby one opens, carries selects, and ends as any stream may.
+    expect(opens[1]!.message).toStrictEqual(STANDBY)
+    send('{"app":"terminal-app","tty":"/dev/ttys023"}')
+    expect(run.printed).toEqual([SELECT])
+    opens[1]!.end(true)
+    await vi.advanceTimersByTimeAsync(1_000)
+    opens[2]!.end(false)
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(opens.map(({ message }) => message)).toStrictEqual([TABS, STANDBY, TABS, TABS])
+    expect(run.errors).toEqual([REPLACED])
+    // Its own stream replaced again: said again, and it stands by again.
+    send('{"replaced":true}')
+    opens[3]!.end(true)
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(run.errors).toEqual([REPLACED, REPLACED])
+    expect(opens[4]!.message).toStrictEqual(STANDBY)
     await stillRunning(run)
   })
   it('the dial attaching opens it at once, and opens no second one', async () => {
