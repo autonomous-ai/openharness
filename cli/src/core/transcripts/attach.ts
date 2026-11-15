@@ -106,6 +106,43 @@ export function createAttach({
    * (agents/bind.ts): a session forgotten that way attaches as it did before. In memory only.
    */
   const supersededReads = new Map<string, { transcriptPath: string; offset: number }>()
+  /**
+   * The retries of an inline attach that left no tail: how many were started for the session, and the one waiting.
+   * The engine worker's path asks its link to attach again (core/engines/liveSessions.ts `retry`); inline, nothing
+   * did, and a session whose first attach was superseded was streamed only if a hook happened to attach it
+   * afterwards. In the two runs above the SessionStart hook's attach was that one.
+   */
+  const supersededRetries = new Map<string, { attempts: number; timer?: ReturnType<typeof setTimeout> }>()
+  const forgetSupersededRetry = (sessionId: string): void => {
+    clearTimeout(supersededRetries.get(sessionId)?.timer)
+    supersededRetries.delete(sessionId)
+  }
+  /**
+   * Attach the session again after 1, 2, 4, 8 and 16 seconds, one retry waiting at a time, then say so and stop
+   * until the next attach asks. A plain attach with the flags of the one it follows: it joins an attach already
+   * reading (lib/attachTracker.ts), and a first turn born after its agent is still replayed once.
+   */
+  const retrySuperseded = (session: RegisteredSession, transcriptPath: string, current: () => boolean, replayCursorFromStart: boolean, replayFromStart: boolean): void => {
+    const sessionId = session.sessionId
+    const retries = supersededRetries.get(sessionId) ?? { attempts: 0 }
+    if (retries.timer) return
+    if (retries.attempts === 5) {
+      supersededRetries.delete(sessionId)
+      console.warn(`[agent] ${sid(session.agentId)} transcript not tailed · its attach was superseded 5 times`)
+      return
+    }
+    supersededRetries.set(sessionId, retries)
+    retries.timer = setTimeout(() => {
+      retries.timer = undefined
+      // Only for the binding whose attach left no tail (`current`: its lifetime and its pane identity, which names
+      // the conversation and its transcript), and only while nothing tails it: a hook's attach, a new conversation
+      // or a forgotten session got there first.
+      if (!current() || watcher.tails(sessionId, transcriptPath)) return
+      void attachSession(resolve(session.agentId)!, false, replayCursorFromStart, replayFromStart).catch(error => console.error(
+        `[agent] ${sid(session.agentId)} attach retry failed: ${error instanceof Error ? error.message : error}`))
+    }, 1_000 * 2 ** retries.attempts++)
+    retries.timer.unref()
+  }
   const pendingAttaches = new Map<string, number>()
   const admissionStops = new Map<string, { sessionId: string }>()
   const captureAdmissionStop = (session: RegisteredSession): (() => boolean) => {
@@ -127,6 +164,7 @@ export function createAttach({
     clearTimeout(recoveryRetries.get(sessionId))
     recoveryRetries.delete(sessionId)
     supersededReads.delete(sessionId)
+    forgetSupersededRetry(sessionId)
   }
   const explainRecovery = (session: RegisteredSession, reason?: string): boolean => {
     if (!setInterpretationHold(session.agentId, session.evidenceRevision, reason)) return false
@@ -239,8 +277,10 @@ export function createAttach({
     if (!relaunch && !reset && normalizers.hasState(session.sessionId) && (!remote || remote.current(session))) {
       if (session.transcriptPath) {
         const unseen = neverFoldedHistory.delete(session.sessionId)
-        // The tail this starts has its own position: an older read's end is no longer where history ends.
+        // The tail this starts has its own position: an older read's end is no longer where history ends, and
+        // nothing is left to try again.
         supersededReads.delete(session.sessionId)
+        forgetSupersededRetry(session.sessionId)
         await watcher.addSession(
           { ...session, transcriptPath: session.transcriptPath },
           { fromStart: replayFromStart || unseen || (session.engine === 'cursor' && replayCursorFromStart) },
@@ -331,7 +371,12 @@ export function createAttach({
     const keepLiveNormalizer = (why: string): boolean => {
       console.warn(`[agent] ${sid(session.agentId)} ${session.interpretationHold ? 'transcript held' : 'kept its live normalizer'} · the re-read ${why}`)
       if (session.interpretationHold && current()) explainRecovery(session, `Waiting for transcript interpretation: the re-read ${why}.`)
-      if (handover.next !== null && leavesNoTail()) rememberRead(handover.next)
+      // No tail was left for this transcript. Inline, the next attach is asked for here; the engine worker's link
+      // asks for its own, and a recovery has its own retry.
+      if (leavesNoTail()) {
+        if (handover.next !== null) rememberRead(handover.next)
+        if (!remote) retrySuperseded(session, session.transcriptPath!, current, replayCursorFromStart, replayFromStart)
+      }
       handover.hold?.release()
       handover.next = null
       if (relaunch) remote?.retry(session)
@@ -650,8 +695,10 @@ export function createAttach({
     }
     if (session.transcriptPath) {
       neverFoldedHistory.delete(session.sessionId)
-      // A tail runs from here on, started below or taken over: what a superseded read left for this attach is spent.
+      // A tail runs from here on, started below or taken over: what a superseded read left for this attach is spent,
+      // and nothing is left to try again.
       supersededReads.delete(session.sessionId)
+      forgetSupersededRetry(session.sessionId)
       // Deliberately NOT `fromStart`, even when the caller asked for it: this branch has just folded the
       // file into the normalizer above, so replaying it from byte 0 emits every line a second time.
       // Measured: a claude turn opened, closed after 44ms and opened again, because the fold replayed the
