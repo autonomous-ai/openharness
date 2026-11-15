@@ -49,8 +49,9 @@ once-only authority, including when an installation finishes after its worker is
 
 Windows publishes an old-readable `failed` record with the original request key and an additive opaque `dispatch`
 token before spawning its existing hidden helper. Until resolved, the new controller holds both that request and a
-new request with a named recovery-needed state. The helper writes its own running/completion record under that
-same token; losing the parent cannot lose completion. A known spawn refusal or proven installer failure removes
+new request with a named recovery-needed state. The unresolved record keeps `state: failed` even while running; its additive PID/start fields let the new
+controller show progress without letting an older controller replay the original request after the helper dies.
+The helper writes those running fields and its final settled result under that same token; losing the parent cannot lose completion. A known spawn refusal or proven installer failure removes
 the uncertainty token so the existing explicit retry behavior remains. Finding a binary is never completion.
 
 The actual pre-extraction Windows controller is retained as a dated test fixture. It reads the new pre-dispatch
