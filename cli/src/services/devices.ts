@@ -33,6 +33,7 @@ import { LAST_ANSWER_DEADLINE_MS, LAST_ANSWER_MAX_BYTES, readLastAnswer } from '
 import { askedLine, hostDisplayName, observedAgentId, ObservedSource, type ObservedActions, type ObservedDeps, type PromptSource } from '../cable/hosts/observed.js'
 import { createOpenActions } from '../cable/hosts/open.js'
 import { createOrcaActions, orcaDeps, type OrcaDeps } from '../cable/hosts/orca.js'
+import { readRecordName } from '../cable/hosts/recordName.js'
 import { HostRegistry } from '../cable/hosts/registry.js'
 import { learnApps } from '../cable/hosts/scannedApp.js'
 import { readTty, type Tab } from '../cable/hosts/tabs.js'
@@ -160,6 +161,9 @@ function observedSource(dataDir: string, log: (line: string) => void, actions: O
     log,
     actions,
     apps: learnApps,
+    // Asked for Claude Code's sessions alone (observed.ts), and read only inside its own folders, worked out at each read:
+    // a home the person moved is adopted while the daemon runs.
+    recordName: (owner) => readRecordName(owner, { roots: claudeProjectsRoots(env.CLAUDE_PROJECTS_DIR) }),
     tty,
   })
 }

@@ -6,6 +6,7 @@
  * - the agent outside a pane goes idle, working, done with its answer, and waits for the person;
  * - the machine list keeps its order while an agent works, and a new agent comes last;
  * - it goes when its process does, and one already running when the dial is plugged in is listed;
+ * - one the scan finds reads the name the person gave it in its own record, and its folder for a name Claude Code made up;
  * - a window brings back its tab's list, and closing it the machine's;
  * - talking to it is refused kindly, and `HARNESS_DEVICE_OBSERVED=off` leaves only the Harness agent.
  */
@@ -196,6 +197,31 @@ describe('the device without the app', () => {
     const roster = await showing(dial, 'the agent already running listed', (r) => ids(r).includes(engine.id), 0, 15_000)
     // Named by its folder, read from its transcript as a terminal's Claude Code writes it.
     expect(roster.rows.find((r) => r.id === engine.id)).toMatchObject({ name: 'in-ghostty', engine: 'claude', host: 'terminal', caps: 's' })
+  })
+
+  it('an agent found by the scan reads the name the person gave it in its own record, one Claude Code made up reads its folder, and no log holds either', async () => {
+    const { d, desk } = await fresh()
+    // No device yet, so no devices process: their hooks reach nobody. A turn each, so their conversations are on disk.
+    const mine = await startOutside(d, 'scratch-2016a', { TERM_PROGRAM: 'ghostty' })
+    const made = await startOutside(d, 'scratch-2016b', { TERM_PROGRAM: 'ghostty' })
+    for (const engine of [mine, made]) {
+      engine.type('before the dial')
+      await until('its Stop hook to run', () => engine.ran(d, 'Stop'), 30_000, 100)
+    }
+    mine.named(d, 'Tho 7f3a91c2', 'user')
+    made.named(d, 'Fix login 5d2e8c41', 'derived')
+    const dial = await desk.plug('E2E-A', 'e2:e0:00:00:00:0a')
+    const roster = await showing(dial, 'both agents already running listed', (r) => ids(r).includes(mine.id) && ids(r).includes(made.id), 0, 15_000)
+    expect(roster.rows.find((r) => r.id === mine.id)).toMatchObject({ name: 'Tho 7f3a91c2' })
+    expect(roster.rows.find((r) => r.id === made.id)).toMatchObject({ name: 'scratch-2016b' })
+    // A count, and neither name.
+    expect(d.log()).toMatch(/\[observed\] scan · 2 found · \d+ app known · 1 named · \d+ ms/)
+    expect(d.log()).not.toContain('7f3a91c2')
+    expect(d.log()).not.toContain('5d2e8c41')
+    // Its next prompt's hook says no name: the hook has the last word.
+    const since = dial.messages.length
+    mine.type('again')
+    await showing(dial, 'mine named by its folder', (r) => r.rows.find((row) => row.id === mine.id)?.name === 'scratch-2016a', since)
   })
 
   it('opening a window brings back the tab\'s list; closing it brings the machine list', async () => {

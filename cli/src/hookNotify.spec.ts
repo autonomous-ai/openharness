@@ -7,7 +7,8 @@ import { tmpdir } from 'os'
 import { dirname, join } from 'path'
 import { fileURLToPath, pathToFileURL } from 'url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { MAX_HINTS } from './core/observedHook.js'
+import { observedTitle } from './cable/hosts/observedTitle.js'
+import { MAX_HINTS, MAX_TITLE, parseObservedHook } from './core/observedHook.js'
 import { ENGINES } from './engines/types.js'
 import { HARNESS_OWNER_OPTION, HARNESS_SESSION_PREFIX, harnessPaneOwner, ownerCommand, paneOwnerFormat } from './lib/harnessSessionLabel.js'
 import { hookRouteFile, publishHookRoute } from './lib/hookRoutes.js'
@@ -2527,6 +2528,96 @@ describe('hook notify: a session outside a pane', () => {
     expect(requests[0].body).not.toHaveProperty('cwd')
     expect(requests[0].body.hostHints).toEqual(wide)
   })
+
+  /** The one body a paneless hook posts for this input. */
+  const posted = async (input: Record<string, unknown>, env: Record<string, string> = noHints, engine?: 'codex'): Promise<Record<string, unknown>> => {
+    const { port, requests } = await collect()
+    await runHook({ port, env, engine, input: { session_id: 'sess-1', cwd: '/w', ...input } })
+    expect(requests.map((request) => request.url)).toEqual(['/api/hook/observed'])
+    return requests[0].body
+  }
+  /** Session names and the title each is posted as. */
+  const POSTED_TITLES: Array<[string, string]> = [
+    ['  Fix \t\n login   screen ', 'Fix login screen'],
+    ['x'.repeat(70), 'x'.repeat(64)],
+    // A cut inside a surrogate pair drops its first half.
+    [`${'x'.repeat(63)}😀tail`, 'x'.repeat(63)],
+    [`${'x'.repeat(62)}😀tail`, `${'x'.repeat(62)}😀`],
+    // A cut just after a space trims it.
+    [`${'x'.repeat(63)} yz`, 'x'.repeat(63)],
+    ['Thơ "gà" \\ 数学 🙂', 'Thơ "gà" \\ 数学 🙂'],
+  ]
+  /** Session names the core would refuse, or none at all: the title is left out. */
+  const LEFT_OUT_TITLES: unknown[] = ['', ' \t\n ', 'Th\u0007o', 'Th\u007fo', 7, { text: 'Tho' }, undefined]
+  const titled = (title: unknown) => ({ hook_event_name: 'UserPromptSubmit', ...(title === undefined ? {} : { session_title: title }) })
+
+  it.each([['SessionStart', 'session-start'], ['UserPromptSubmit', 'turn-start']])('a Claude %s with session_title posts title', async (name, event) => {
+    expect(await posted({ hook_event_name: name, session_title: 'Tho' })).toMatchObject({ event, title: 'Tho' })
+  })
+
+  it.each(POSTED_TITLES)('a title %j is posted as %j', async (title, expected) => {
+    expect((await posted(titled(title))).title).toBe(expected)
+  })
+
+  it.each(LEFT_OUT_TITLES.map((title) => [title]))('a title %j is left out, and the event is still posted', async (title) => {
+    const body = await posted(titled(title))
+    expect(body.event).toBe('turn-start')
+    expect(body).not.toHaveProperty('title')
+  })
+
+  it.each([
+    ['Stop', {}],
+    ['StopFailure', {}],
+    ['SessionEnd', {}],
+    ['Notification', { notification_type: 'permission_prompt' }],
+  ])('no title on %s', async (name, extra) => {
+    expect(await posted({ hook_event_name: name, session_title: 'Tho', ...extra })).not.toHaveProperty('title')
+  })
+
+  it('another engine\'s hook that sends session_title posts it too', async () => {
+    expect(await posted({ hook_event_name: 'UserPromptSubmit', session_title: 'Tho' }, noHints, 'codex'))
+      .toMatchObject({ engine: 'codex', event: 'turn-start', title: 'Tho' })
+  })
+
+  it('with an oversized body, transcriptPath goes, then cwd, and title stays', async () => {
+    const long = `/${'日'.repeat(1000)}`
+    const input = { hook_event_name: 'UserPromptSubmit', cwd: long, transcript_path: long, session_title: '日'.repeat(64) }
+    const narrow = await posted(input)
+    expect(narrow).not.toHaveProperty('transcriptPath')
+    expect(narrow).toMatchObject({ cwd: long, title: '日'.repeat(64) })
+    const wide = Object.fromEntries(HINTS.map((name) => [name, '日'.repeat(64)]))
+    const body = await posted(input, wide)
+    expect(body).not.toHaveProperty('transcriptPath')
+    expect(body).not.toHaveProperty('cwd')
+    expect(body).toMatchObject({ title: '日'.repeat(64), hostHints: wide })
+    expect(Buffer.byteLength(JSON.stringify(body))).toBeLessThanOrEqual(4096)
+  })
+
+  it('a body with every field at its bound keeps its title and both paths', async () => {
+    const hints = Object.fromEntries(HINTS.map((name) => [name, 'h'.repeat(64)]))
+    const path = `/${'d'.repeat(1023)}`
+    const body = await posted({
+      hook_event_name: 'UserPromptSubmit', session_id: 's'.repeat(128), cwd: path, transcript_path: path,
+      session_title: 'x'.repeat(64), prompt: '<cross-session-message from="a1">x',
+    }, hints)
+    expect(body).toMatchObject({ relayed: true, title: 'x'.repeat(64), cwd: path, transcriptPath: path, hostHints: hints })
+    expect(Buffer.byteLength(JSON.stringify(body))).toBeLessThan(4096)
+  })
+
+  // A title the hook cut that the core then refused would cost the named session its session-start and turn-start.
+  it('the hook cuts a title at the core\'s bound, and the core takes what it cut', async () => {
+    expect(Number(/const MAX_TITLE = (\d+)/.exec(readFileSync(HOOK, 'utf8'))?.[1])).toBe(MAX_TITLE)
+    const emoji = await posted(titled('😀'.repeat(40)))
+    expect(emoji.title).toBe('😀'.repeat(32))
+    const typed = await posted(titled('Thơ "gà" \\ 数学 🙂'))
+    for (const body of [emoji, typed]) expect(parseObservedHook(body)).toEqual(body)
+  })
+
+  // The hook cannot import the devices' cleaner (cable/hosts/observedTitle.ts): this keeps its copy of the rule the same.
+  it.each([...POSTED_TITLES.map(([title]) => title), ...LEFT_OUT_TITLES].map((title) => [title]))(
+    'the hook cleans a title %j as the devices\' cleaner does', async (title) => {
+      expect((await posted(titled(title))).title).toBe(observedTitle(title))
+    })
 
   it('the hook exits within 300 ms when the daemon never answers', async () => {
     const urls: string[] = []
