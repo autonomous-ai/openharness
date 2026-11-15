@@ -196,9 +196,9 @@ performance comparison, final closure measurement, push, PR and merge.
 
 ## Implementation evidence and limits
 
-Default source closure is 530 files / 88,394 lines, versus integrated parent
+Default source closure is 530 files / 88,397 lines, versus integrated parent
 `8a8ea5f037ac33eecf496438862fdaaec7c72a72` at 539 / 90,914.
-The same walk with legacy engine doors open (still excluding services/inline) is 674 / 108,483,
+The same walk with legacy engine doors open (still excluding services/inline) is 674 / 108,486,
 versus that parent's 652 / 107,886; its growth includes both retained explicit legacy installation and the new
 boundary. The default core retains only small argument quoting, hook-script identity/refusal state,
 mandatory admission data, destination coordination and the generic publisher. Architecture assertions
@@ -334,3 +334,30 @@ Both new caller regressions are green. The maintenance/startup/adoption/version-
 TypeScript passed. Failure fairness retains its named reason through recovery, retries after the
 existing backoff, and shutdown while one home is held starts no queued home. The next checkpoint
 changes only these two reviewed maintenance paths and their evidence, not the native fault fixture.
+
+## Captured Claude transcript location correction (approved before runtime edit)
+
+The exact-461 core gate exposed stale test composition: refusal tests mocked the former mixed
+notify module instead of the consumed hookScript leaf, and the explicitly local NativeLaunch fixture
+provided executable probes but no bounded file renderer. Correct all three stale refusal mocks and
+compose the existing real renderer explicitly in that fixture. Production unavailable-worker behavior
+stays held, and dispatch/owner assertions and checked-in golden bytes remain unchanged. The four core
+failures reproduced first; after these test-only corrections they pass.
+
+The expanded fixture consumers then exposed a separate runtime regression. Passing Claude's captured
+default settings home through the new boundary synthesized CLAUDE_CONFIG_DIR, changing a separately
+captured CLAUDE_PROJECTS_DIR to the default projects folder. Preserve the captured absent or empty
+CLAUDE_CONFIG_DIR when the selected home equals its captured settings home; only a different explicit
+home overrides it. Other engines, explicit profile authority, candidate bounds, complete-input join
+identity and publication checks remain unchanged. The original archive assertion fails for both absent
+and empty config values; the explicit-profile counterpart already passes. This changes no wire schema,
+durable data, capacity, lock, audience or retry behavior, and rollback needs no migration. It applies to
+all platforms' native launch preparation; focused evidence is macOS on pinned Node 24.22.2. Native and
+full-gate evidence is retained only for the source it previously covered.
+
+The affected launch/refusal/fixture and hook-publication caller batch passes 235 tests in ten files,
+including both archive regressions, explicit profile routing and startup/launch overlap; TypeScript
+passes. Golden files are unchanged. The only remaining notifyHooks mock intentionally exercises the
+legacy installers' re-export; the Windows real-engine fixture is opt-in and was not run on macOS.
+The earlier four-failure core gate and intermediate 213-pass/one-failure batch remain failed evidence,
+not passing receipts. Full gates, native acceptance selection and performance remain parent-owned.

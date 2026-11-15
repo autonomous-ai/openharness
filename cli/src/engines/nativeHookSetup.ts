@@ -18,7 +18,10 @@ function environment(options: NativeHookOptions, engine: AgentEngine, home?: str
     return typeof value === 'string' ? [[key, value]] : []
   }))
   captured.HOME ||= homedir()
-  if (home) captured[engine === 'claude' ? 'CLAUDE_CONFIG_DIR' : engine === 'codex' ? 'CODEX_HOME' : 'HERMES_HOME'] = home
+  // Synthesizing the default Claude config root would erase a separately captured transcript root.
+  if (home && (engine !== 'claude' || home !== nativeHookLocations(captured).CLAUDE_HOME)) {
+    captured[engine === 'claude' ? 'CLAUDE_CONFIG_DIR' : engine === 'codex' ? 'CODEX_HOME' : 'HERMES_HOME'] = home
+  }
   // Environment is a record: equivalent snapshots must not conflict because their keys arrived in another order.
   return Object.fromEntries(Object.entries(captured).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0))
 }

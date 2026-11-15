@@ -85,7 +85,8 @@ it('pins overridden locations even when the owner disabled hook installation', a
   expect(existsSync(selected)).toBe(false)
 })
 
-it('keeps Claude settings separate from a daemon transcript-root override', async () => {
+it.each([undefined, ''])('keeps Claude settings separate from a transcript-root override with config=%s', async config => {
+  vi.stubEnv('CLAUDE_CONFIG_DIR', config)
   const archive = join(root, 'archive', 'projects')
   vi.stubEnv('CLAUDE_PROJECTS_DIR', archive)
   const { inspectNativeLaunch } = await import('../testing/nativeSetupInProcess.js')
@@ -95,4 +96,17 @@ it('keeps Claude settings separate from a daemon transcript-root override', asyn
   expect(existsSync(join(home, '.claude/settings.json'))).toBe(true)
   expect(existsSync(join(root, 'archive/settings.json'))).toBe(false)
   expect(readFileSync(join(home, '.claude/settings.json'), 'utf8')).toContain(`--claude-projects-dir '${archive}'`)
+})
+
+it('keeps an explicit Claude profile’s settings and transcript root together', async () => {
+  const archive = join(root, 'archive', 'projects'), profile = join(root, 'explicit-profile')
+  vi.stubEnv('CLAUDE_PROJECTS_DIR', archive)
+  const { inspectNativeLaunch } = await import('../testing/nativeSetupInProcess.js')
+  const result = await inspectNativeLaunch('claude', { claudeHome: profile })
+  if (!result.ok) throw Error(result.detail)
+  expect(await result.launch.prepareHooks(19473, () => true)).toBe(true)
+  expect(result.launch.current()).toBe(true)
+  expect(existsSync(join(home, '.claude', 'settings.json'))).toBe(false)
+  expect(readFileSync(join(profile, 'settings.json'), 'utf8')).toContain(`--claude-projects-dir '${join(profile, 'projects')}'`)
+  expect(readFileSync(join(profile, 'settings.json'), 'utf8')).not.toContain(`--claude-projects-dir '${archive}'`)
 })

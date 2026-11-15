@@ -6,12 +6,12 @@ import { workspaceMissing } from '../../lib/workspaceCheck.js'
 import { createExternalPreflight } from './externalPreflight.js'
 import type { NativeLaunch } from '../../engines/nativeLaunch.js'
 import { WindowsBatchLaunchRefused } from '../../lib/windows/launch.js'
-import { missingHookScript } from '../../engines/kit/notifyHooks.js'
+import { missingHookScript } from '../../engines/kit/hookScript.js'
 vi.mock('../../engines/inProcess.js', () => ({ loadEngine: vi.fn(async () => ({})) }))
 vi.mock('../../engines/nativeHookSetup.js', () => ({ engineHookInstallations: { codex: { installIn: vi.fn(async () => true) } } }))
 vi.mock('../../lib/engineLaunch.js', () => ({ buildEngineCommandArgv: vi.fn(() => []), refusePermissionFlagIfUnsupported: vi.fn(async () => null) }))
 vi.mock('../../lib/workspaceCheck.js', () => ({ workspaceMissing: vi.fn(() => null) }))
-vi.mock('../../engines/kit/notifyHooks.js', async (real) => ({ ...await real<object>(), missingHookScript: vi.fn(() => null) }))
+vi.mock('../../engines/kit/hookScript.js', async (real) => ({ ...await real<object>(), missingHookScript: vi.fn(() => null) }))
 afterEach(() => { vi.clearAllMocks(); vi.mocked(refusePermissionFlagIfUnsupported).mockReset().mockResolvedValue(null) })
 const session = { sessionId: 'conversation', cwd: '/fixture/work', launchArgs: ['-p', 'work'] } as never
 const row = (engine = 'claude', extra = {}) => ({ engine, permissionMode: 'ask', bypassPermission: false, ...extra }) as never
