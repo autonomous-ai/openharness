@@ -4,7 +4,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { listenLocalSocket, type LocalSocketServer } from '../lib/localSocket.js'
 import { LISTENER_MAX_CONNECTIONS } from '../services/devicesListener.js'
 import { devicesListenerPath } from './listenerPath.js'
-import { tellDevices } from './listenerClient.js'
+import { streamDevices, tellDevices } from './listenerClient.js'
 
 const FRONT = { type: 'front', app: 'ghostty' }
 const dirs: string[] = []
@@ -120,6 +120,126 @@ describe('tellDevices, anywhere', () => {
     expect(await tellDevices('/tmp/hdc-none', FRONT, { platform: 'linux', fetch: rejects })).toBe(false)
     const throws = vi.fn<typeof globalThis.fetch>(() => { throw new TypeError('fetch failed') })
     expect(await tellDevices('/tmp/hdc-none', FRONT, { platform: 'linux', fetch: throws })).toBe(false)
+    expect(rejects).toHaveBeenCalledOnce()
+    expect(throws).toHaveBeenCalledOnce()
+  })
+})
+
+const TABS = { type: 'tabs' }
+const LINE = '{"app":"terminal-app","tty":"/dev/ttys023"}\n'
+const RAISE_LINE = '{"app":"iterm","tty":"/dev/ttys4","raise":true}\n'
+const open = () => new AbortController().signal
+
+/** A listener that answers each request with an NDJSON stream left open, for the test to write on and end. */
+async function streamer(dir: string) {
+  const answers: ServerResponse[] = []
+  const { heard } = await listener(dir, res => {
+    res.writeHead(200, { 'content-type': 'application/x-ndjson' }).flushHeaders()
+    answers.push(res)
+  })
+  return { heard, answers }
+}
+
+describe.skipIf(process.platform === 'win32')('streamDevices, on a socket', () => {
+  it('streamDevices posts the message and hands each chunk on until the listener ends the stream: true', async () => {
+    const dir = dataDir()
+    const { heard, answers } = await streamer(dir)
+    // A listener ends a stream's body, or destroys its connection (services/devicesListener.ts): either is its end.
+    const ends = [(res: ServerResponse) => res.end(), (res: ServerResponse) => res.destroy()]
+    for (const [i, end] of ends.entries()) {
+      const chunks: Buffer[] = []
+      const done = streamDevices(dir, TABS, data => { chunks.push(data) }, { signal: open() })
+      await vi.waitFor(() => expect(answers).toHaveLength(i + 1))
+      const res = answers[i]!
+      res.write(LINE)
+      await vi.waitFor(() => expect(Buffer.concat(chunks).toString()).toBe(LINE))
+      res.write(RAISE_LINE)
+      await vi.waitFor(() => expect(Buffer.concat(chunks).toString()).toBe(`${LINE}${RAISE_LINE}`))
+      expect(chunks.every(chunk => Buffer.isBuffer(chunk))).toBe(true)
+      end(res)
+      expect(await done).toBe(true)
+    }
+    expect(heard).toEqual([
+      { method: 'POST', url: '/', body: '{"type":"tabs"}' },
+      { method: 'POST', url: '/', body: '{"type":"tabs"}' },
+    ])
+  })
+
+  it('false for no socket, a socket of another account, a 404, a 429 and no answer in 2 s', async () => {
+    const chunk = vi.fn()
+    // No socket there: a listener of another data folder hears nothing.
+    const { heard: elsewhere } = await listener(dataDir())
+    expect(await streamDevices(dataDir(), TABS, chunk, { signal: open() })).toBe(false)
+    expect(elsewhere).toEqual([])
+    const dir = dataDir()
+    let status = 0, taken = () => {}
+    const { heard } = await listener(dir, res => { if (status) res.writeHead(status).end('{"error":"Not now."}'); else taken() })
+    const other = vi.spyOn(process, 'getuid').mockReturnValue(process.getuid!() + 1)
+    expect(await streamDevices(dir, TABS, chunk, { signal: open() })).toBe(false)
+    other.mockRestore()
+    expect(heard).toEqual([])
+    for (status of [404, 429]) expect(await streamDevices(dir, TABS, chunk, { signal: open() })).toBe(false)
+    expect(heard).toHaveLength(2)
+    // A listener that takes the request and never answers. Not vi.waitFor, which moves fake timers on as it waits.
+    status = 0
+    const reached = new Promise<void>(resolve => { taken = resolve })
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      const done = streamDevices(dir, TABS, chunk, { signal: open() })
+      await reached
+      await vi.advanceTimersByTimeAsync(1_999)
+      expect(await Promise.race([done, 'waiting'])).toBe('waiting')
+      await vi.advanceTimersByTimeAsync(1)
+      expect(await done).toBe(false)
+    } finally { vi.useRealTimers() }
+    expect(chunk).not.toHaveBeenCalled()
+  })
+
+  it('an abort ends it and lets its connection go', async () => {
+    const dir = dataDir()
+    const { answers } = await streamer(dir)
+    const abort = new AbortController()
+    const chunks: Buffer[] = []
+    const done = streamDevices(dir, TABS, data => { chunks.push(data) }, { signal: abort.signal })
+    await vi.waitFor(() => expect(answers).toHaveLength(1))
+    answers[0]!.write(LINE)
+    await vi.waitFor(() => expect(chunks).toHaveLength(1))
+    const gone = new Promise(resolve => answers[0]!.socket!.once('close', resolve))
+    abort.abort()
+    // It had opened.
+    expect(await done).toBe(true)
+    await gone
+    // Aborted before an answer: none had opened.
+    const quiet = dataDir()
+    const { heard } = await listener(quiet, () => {})
+    const before = new AbortController()
+    const unanswered = streamDevices(quiet, TABS, vi.fn(), { signal: before.signal })
+    await vi.waitFor(() => expect(heard).toHaveLength(1))
+    before.abort()
+    expect(await unanswered).toBe(false)
+  })
+})
+
+describe('streamDevices, anywhere', () => {
+  it('false on Windows without a call', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>()
+    expect(await streamDevices('C:\\Users\\me\\.harness', TABS, vi.fn(), { signal: open(), platform: 'win32', fetch })).toBe(false)
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('never throws', async () => {
+    const rejects = vi.fn<typeof globalThis.fetch>(async () => { throw new TypeError('fetch failed') })
+    expect(await streamDevices('/tmp/hdc-none', TABS, vi.fn(), { signal: open(), platform: 'linux', fetch: rejects })).toBe(false)
+    const throws = vi.fn<typeof globalThis.fetch>(() => { throw new TypeError('fetch failed') })
+    expect(await streamDevices('/tmp/hdc-none', TABS, vi.fn(), { signal: open(), platform: 'linux', fetch: throws })).toBe(false)
+    // A body that breaks part way, once its first chunk is read: the stream had opened, and that chunk was handed on.
+    let pulls = 0
+    const breaks = vi.fn<typeof globalThis.fetch>(async () => new Response(new ReadableStream({
+      pull(body) { if (pulls++ === 0) body.enqueue(Buffer.from(LINE)); else body.error(new Error('reset')) },
+    }), { status: 200 }))
+    const chunk = vi.fn()
+    expect(await streamDevices('/tmp/hdc-none', TABS, chunk, { signal: open(), platform: 'linux', fetch: breaks })).toBe(true)
+    expect(chunk.mock.calls.map(([data]) => String(data))).toEqual([LINE])
     expect(rejects).toHaveBeenCalledOnce()
     expect(throws).toHaveBeenCalledOnce()
   })

@@ -9,6 +9,7 @@ use harness_device::log::FileLog;
 use harness_device::loginitem::SystemLoginItem;
 use harness_device::runner::{Doors, Runner};
 use harness_device::state::{JsonStateFile, StateFile};
+use harness_device::tabs;
 use harness_device::types::{Action, Clock, Effect, Event, Log, MenuAction, MenuItem, SystemClock, View};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -86,6 +87,7 @@ fn start(handle: &AppHandle, events: Sender<Event>, queue: Receiver<Event>) -> t
             Arc::new(move |args: &[&str]| run_open(args, log.clone()))
         },
         front: front::system(log.clone()),
+        tabs: tabs::system(),
     };
 
     // A watch or a sign-in hands its events over holding a lock that stopping or cancelling it takes: `send` only

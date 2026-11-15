@@ -124,7 +124,9 @@ Continuation implementation:
 
 Continued in `/tmp/harness-core-secrets-continue`, branch `codex/core-secrets-continue`, on main `aad8dcd535`.
 Runtime head `803bd2f17f`; `b0f3fde523` corrects trusted fixtures to use private modes under umask `0002`.
-No original worktree was edited. Step 1 (#4322) must land before this branch; root owns integration, PR CI and merge.
+No original worktree was edited. Step 1 (#4322) merged as `690e9b4ae5`; this branch integrates that main.
+Root owns PR CI and merge. Integration preserves the validated runtime and fixtures exactly; the conflicts were
+the already-merged step 1 using `list()` versus step 2 using `saved()`, plus package status and notes.
 
 Observed on macOS with the pinned Node 24.22.2, isolated test homes:
 - The 28 migration tests on the preserved pre-fix sources: **9 failed, 19 passed**, from assertions about stale

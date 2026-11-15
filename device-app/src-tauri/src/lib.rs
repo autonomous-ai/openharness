@@ -18,6 +18,9 @@ pub mod loginitem;
 pub mod model;
 pub mod runner;
 pub mod state;
+pub mod tabs;
+#[cfg(target_os = "macos")]
+pub mod tabs_macos;
 pub mod types;
 pub mod watch;
 
