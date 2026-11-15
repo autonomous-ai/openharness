@@ -99,13 +99,14 @@ describe('the dial and the apps follow each other', () => {
   const said = (d: IsolatedDaemon, line: string): Promise<true> =>
     until(`"${line}" in the daemon's log`, () => d.log().includes(line), 30_000, 50)
 
-  /** [bundle] comes in front: the watch the Harness Device app runs, told on its stdin, which it holds open. */
-  const front = (d: IsolatedDaemon, bundle: string): void => {
+  /** [bundle] comes in front: the watch the Harness Device app runs, told on its stdin, which it holds open until it quits. */
+  const front = (d: IsolatedDaemon, bundle: string): ChildProcess => {
     const watch = spawn(process.execPath, [...CLI_ENTRY, 'hardware', 'watch', '--json'], {
       cwd: CLI_ROOT, env: { ...d.env, TMUX_PANE: '' }, stdio: ['pipe', 'ignore', 'ignore'],
     })
     children.push(watch)
     watch.stdin!.write(`${JSON.stringify({ front: bundle })}\n`)
+    return watch
   }
 
   /** The daemon's prompt lines, each from its `[device]` on: one for each turn's start while a dial is linked. */
@@ -211,6 +212,40 @@ describe('the dial and the apps follow each other', () => {
     await a.hook('UserPromptSubmit', { prompt: RELAYED })
     await said(d, '[device] prompt · skipped · relayed')
     // A's typed prompt then moves it, the one move since: a focus the relayed one sent late would come before it.
+    const typed = dial.messages.length
+    await typedUntilMoved(d, dial, a)
+    expect(dial.messages.slice(since, typed).filter((m) => m.t === 'focus' && m.agentId === a.id)).toEqual([])
+    expect(moved(d)).toBe(2)
+  })
+
+  it("a prompt does not move the dial once the watch's stdin ends, and does once a new watch has Orca in front", async () => {
+    const { d, dial } = await fresh({ capabilities: FILTER })
+    const a = inOrca(d, 'a').claude
+    const b = inOrca(d, 'b').claude
+    await turnedToFirst(d, dial, a, b)
+    const watch = front(d, ORCA)
+    await typedUntilMoved(d, dial, b)
+    expect(moved(d)).toBe(1)
+
+    // The Device app quits: the watch's stdin ends, and the watch tells none. B's prompt, the dial already on B, says
+    // nothing and moves nothing while Orca is still settled, so it waits out none's settle with no move to undo.
+    const since = dial.messages.length
+    const told = promptLines(d).length
+    watch.stdin!.end()
+    await until('none settled in front', async () => {
+      await b.hook('UserPromptSubmit', { prompt: 'run the tests' })
+      return promptLines(d).length > told
+    }, 60_000, 500)
+
+    // A's typed prompt is not in front: it moves nothing.
+    const skipped = promptLines(d).length
+    await a.hook('UserPromptSubmit', { prompt: 'run the tests' })
+    await until("A's prompt's line", () => promptLines(d).length > skipped, 30_000, 50)
+    expect(new Set(promptLines(d).slice(told))).toEqual(new Set(['[device] prompt · skipped · not in front']))
+
+    // A new watch has Orca in front: A's prompt moves the dial, the one move since. A focus the skipped one sent late
+    // would come before this one's.
+    front(d, ORCA)
     const typed = dial.messages.length
     await typedUntilMoved(d, dial, a)
     expect(dial.messages.slice(since, typed).filter((m) => m.t === 'focus' && m.agentId === a.id)).toEqual([])
