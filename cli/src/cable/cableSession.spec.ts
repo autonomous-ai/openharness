@@ -4105,16 +4105,21 @@ const row = (id: string, host: string, caps = 's'): CableAgent =>
   ({ id, name: id, engine: 'claude', machineId: 'mac-local', machine: 'MacBook Pro', host, caps })
 const NAMES: Record<string, string> = { ghostty: 'Ghostty', vscode: 'VS Code' }
 
-/** A host with the cable host's app answers: Ghostty (3) shown, VS Code (2, one waiting); v1 can be brought forward. */
+/** A host with the cable host's app answers: Ghostty (3) shown, VS Code (2, one waiting); v1 can be brought forward.
+ *  With a window, a dial that says appFilter holds the shown app's ring while `appView` is set, and the tab t1 (a1, a2)
+ *  otherwise; any other dial holds the tab. `focus` is the window's. */
 function appHost(over: Partial<CableHost> = {}) {
   const state = {
     shown: 'ghostty',
     window: false,
+    appView: false,
+    focus: undefined as { machineId: string; agentId: string } | undefined,
     rings: { ghostty: [row('g1', 'ghostty'), row('g2', 'ghostty'), row('g3', 'ghostty')], vscode: [row('v1', 'vscode', 'sf'), row('v2', 'vscode')] } as Record<string, CableAgent[]>,
     waiting: { vscode: 1 } as Record<string, number>,
   }
   const asked: Array<{ apps?: boolean } | undefined> = []
   const all = () => Object.values(state.rings).flat()
+  const onTab = (opts?: { apps?: boolean }) => state.window && !(opts?.apps && state.appView)
   const list = (): AppList => ({
     shown: state.shown,
     apps: Object.entries(state.rings).filter(([, r]) => r.length).map(([id, r]) => ({ id, name: NAMES[id], count: r.length, waiting: state.waiting[id] ?? 0 })),
@@ -4128,13 +4133,17 @@ function appHost(over: Partial<CableHost> = {}) {
   const host = makeHost({
     listAgentSnapshot: async (opts) => {
       asked.push(opts)
-      if (state.window) return { agents: AGENTS, tab: 't1', total: 2 }
+      if (onTab(opts)) return { agents: AGENTS, tab: 't1', total: 2 }
       if (!opts?.apps) return { agents: all(), tab: '', total: all().length, view: 'machine' as const }
       const rows = state.rings[state.shown] ?? []
       return { agents: rows, tab: '', total: rows.length, view: 'machine' as const, apps: list() }
     },
+    listSwarms: (opts) => onTab(opts) ? { selected: 't1', swarms: [{ id: 't1', name: 'Main', agents: 2, panes: 2 }], tiles: [] }
+      : { selected: '', swarms: [], tiles: [] },
+    activeSwarm: (opts) => onTab(opts) ? 't1' : '',
+    appFocus: (opts) => state.window && !onTab(opts) ? undefined : state.focus,
     pickApp,
-    appOf: (id) => state.window ? undefined : Object.entries(state.rings).find(([, r]) => r.some((a) => a.id === id))?.[0],
+    appOf: (id, opts) => onTab(opts) ? undefined : Object.entries(state.rings).find(([, r]) => r.some((a) => a.id === id))?.[0],
     capsOf: (id) => all().find((a) => a.id === id)?.caps,
     hostOf: (id) => all().find((a) => a.id === id)?.host,
     markSeen: vi.fn(),
@@ -4463,6 +4472,265 @@ describe('the app filter', () => {
       expect(localFollowed.mock.calls).toEqual([['prompt', 'moved']])
       expect(port.sent.filter((m) => m.t === 'focus')).toEqual([{ t: 'focus', agentId: 'v1' }])
     } finally { await session.stop() }
+  })
+
+  // With a window open (spec 2026-11-15-dial-follow-front-with-window).
+  const VIEW = new Set([...LIST, 'swarms', 'focus'])
+  const viewFrames = (port: LoopbackPort) => port.sent.filter((m) => VIEW.has(m.t as string))
+  const focuses = (port: LoopbackPort) => port.sent.filter((m) => m.t === 'focus')
+  const speak = (port: LoopbackPort, agentId: string, uploadId: string) => {
+    port.say({ t: 'voice.begin', agentId, lang: 'en', sr: 16000, uploadId })
+    port.pcm(Buffer.alloc(3200, 7))
+    port.say({ t: 'voice.end', uploadId })
+  }
+  const voiceAnswered = (port: LoopbackPort) => port.types().some((t) => t === 'voice.transcript' || t === 'voice.error')
+
+  /** The host's answers that differ by dial, watched from before the greeting. The dial then turns to g1 (no f), taps it
+   *  and stops it, which asks each of them. */
+  async function asking(appFilter: boolean, window: boolean) {
+    const { host, state } = appHost({ openAgent: vi.fn() })
+    state.window = state.appView = window
+    const spies = {
+      listSwarms: vi.spyOn(host, 'listSwarms'), capsOf: vi.spyOn(host, 'capsOf'), hostOf: vi.spyOn(host, 'hostOf'),
+      appOf: vi.spyOn(host, 'appOf'), markSeen: vi.spyOn(host, 'markSeen'), appFocus: vi.spyOn(host, 'appFocus'),
+    }
+    const c = await greeted(host, appFilter)
+    c.port.say({ t: 'focus', agentId: 'g1' })
+    c.port.say({ t: 'agent.open', agentId: 'g1' })
+    c.port.say({ t: 'turn.stop', agentId: 'g1' })
+    await vi.waitFor(() => expect(c.port.types()).toContain('toast'))
+    await settle()
+    return { ...c, state, spies }
+  }
+  const askedAs = (spies: Record<string, { mock: { calls: unknown[][] } }>, apps: boolean) => {
+    for (const [name, spy] of Object.entries(spies)) {
+      expect(spy.mock.calls.length, name).toBeGreaterThan(0)
+      for (const call of spy.mock.calls) expect(call.at(-1), name).toEqual({ apps })
+    }
+  }
+
+  it('a dial that says appFilter asks its host as itself', async () => {
+    const { session, spies } = await asking(true, false)
+    try {
+      askedAs(spies, true)
+    } finally { await session.stop() }
+  })
+
+  it('a dial without appFilter asks as itself, and follows the window as before', async () => {
+    const { session, port, spies } = await asking(false, true)
+    try {
+      // It never asks which app an agent is in.
+      const { appOf: _appOf, ...asks } = spies
+      askedAs(asks, false)
+      port.sent.length = 0
+      await session.followApp('mac-local', 'a2')
+      expect(focuses(port)).toEqual([{ t: 'focus', agentId: 'a2' }])
+    } finally { await session.stop() }
+  })
+
+  it("viewChanged on an app's ring: no tabs, then apps and the ring, inside the machine list's 1 s gap", async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    const { host, state, list } = appHost()
+    state.window = true
+    state.focus = { machineId: 'mac-local', agentId: 'a2' }
+    const { session, port } = await greeted(host)
+    try {
+      // The greeting pushed the tab.
+      port.sent.length = 0
+      vi.advanceTimersByTime(100)
+      state.appView = true
+      await session.viewChanged()
+      expect(viewFrames(port)).toEqual([
+        { t: 'swarms', selected: '', items: [], tiles: [] },
+        { t: 'apps', ...list() },
+        { t: 'agents.begin' },
+        ...['g1', 'g2', 'g3'].map((id) => ({ t: 'agent', id, name: id, engine: 'claude', model: '', effort: '', machineId: 'mac-local', machine: 'MacBook Pro', host: 'ghostty', caps: 's' })),
+        { t: 'agents.end', total: 3, tab: '', view: 'machine' },
+      ])
+    } finally { await session.stop(); vi.useRealTimers() }
+  })
+
+  it("viewChanged back on the tab: the tabs, the tab's list, then the focus on the window's agent", async () => {
+    const { host, state } = appHost()
+    state.window = state.appView = true
+    const { session, port } = await greeted(host)
+    try {
+      port.sent.length = 0
+      state.focus = { machineId: 'mac-local', agentId: 'a2' }
+      state.appView = false
+      await session.viewChanged()
+      const swarms = port.types().indexOf('swarms'), end = port.types().indexOf('agents.end')
+      const focus = port.sent.findIndex((m) => m.t === 'focus' && m.agentId === 'a2')
+      expect(swarms).toBeGreaterThanOrEqual(0)
+      expect(end).toBeGreaterThan(swarms)
+      expect(focus).toBeGreaterThan(end)
+    } finally { await session.stop() }
+  })
+
+  it('viewChanged with the list unchanged sends no list twice', async () => {
+    const { host, state } = appHost()
+    state.window = true
+    const { session, port } = await greeted(host)
+    try {
+      state.appView = true
+      await session.viewChanged()
+      port.sent.length = 0
+      await session.viewChanged()
+      expect(port.types()).not.toContain('agents.begin')
+    } finally { await session.stop() }
+  })
+
+  it('viewChanged on a dial without appFilter, or one not connected, sends nothing', async () => {
+    const without = appHost()
+    without.state.window = true
+    const old = await greeted(without.host, false)
+    try {
+      old.port.sent.length = 0
+      without.state.appView = true
+      without.state.focus = { machineId: 'mac-local', agentId: 'a2' }
+      await old.session.viewChanged()
+      expect(viewFrames(old.port)).toEqual([])
+    } finally { await old.session.stop() }
+    const { host, state } = appHost()
+    state.window = true
+    const { session, port } = await greeted(host)
+    try {
+      await port.close('unplugged')
+      port.sent.length = 0
+      state.appView = true
+      await session.viewChanged()
+      expect(viewFrames(port)).toEqual([])
+    } finally { await session.stop() }
+  })
+
+  it("a window focus off the ring of a dial on an app's ring does not move it", async () => {
+    const { host, state } = appHost()
+    state.window = state.appView = true
+    const { session, port } = await greeted(host)
+    try {
+      port.say({ t: 'focus', agentId: 'g2' })   // a hand put the dial on g2
+      await vi.waitFor(() => expect(host.markSeen).toHaveBeenCalled())
+      port.sent.length = 0
+      await session.followApp('mac-local', 'a2')
+      expect(focuses(port)).toEqual([])
+      expect(port.types()).not.toContain('agents.begin')
+      // The record still names g2.
+      await session.followLocal('g2', 'prompt')
+      expect(focuses(port)).toEqual([])
+      await session.followLocal('g3', 'prompt')
+      expect(focuses(port)).toEqual([{ t: 'focus', agentId: 'g3' }])
+    } finally { await session.stop() }
+  })
+
+  it('a window focus on that ring moves the dial', async () => {
+    const { host, state } = appHost()
+    state.window = state.appView = true
+    const { session, port } = await greeted(host)
+    try {
+      port.sent.length = 0
+      await session.followApp('mac-local', 'g3')
+      expect(focuses(port)).toEqual([{ t: 'focus', agentId: 'g3' }])
+    } finally { await session.stop() }
+  })
+
+  it("a dial plugged in while on an app's ring is not turned to the window's agent", async () => {
+    const { host, state } = appHost()
+    state.window = state.appView = true
+    state.focus = { machineId: 'mac-local', agentId: 'a2' }
+    const { session, port } = await greeted(host)
+    try {
+      await settle()
+      expect(focuses(port)).toEqual([])
+    } finally { await session.stop() }
+  })
+
+  it('a prompt for an agent the dial has not been sent yet still moves it', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    const { host, state } = appHost()
+    const { session, port } = await greeted(host)
+    try {
+      vi.advanceTimersByTime(1_100)
+      port.sent.length = 0
+      state.rings.ghostty.push(row('g4', 'ghostty'))
+      await session.followLocal('g4', 'prompt')
+      const end = port.types().indexOf('agents.end')
+      expect(end).toBeGreaterThanOrEqual(0)
+      expect(port.sent.findIndex((m) => m.t === 'focus' && m.agentId === 'g4')).toBeGreaterThan(end)
+    } finally { await session.stop(); vi.useRealTimers() }
+  })
+
+  it('a pick the host answers tabs sends nothing itself', async () => {
+    const pickApp = vi.fn((): AppPick => 'tabs')
+    const { host, state } = appHost({ pickApp })
+    state.window = state.appView = true
+    const { session, port } = await greeted(host)
+    try {
+      port.sent.length = 0
+      port.say({ t: 'app.pick', app: 'harness' })
+      await vi.waitFor(() => expect(pickApp).toHaveBeenCalledWith('harness'))
+      await settle()
+      expect(listFrames(port)).toEqual([])
+    } finally { await session.stop() }
+  })
+
+  it('a tapped notice whose pick answers tabs opens the agent', async () => {
+    const pickApp = vi.fn((): AppPick => 'tabs')
+    const { host, state } = appHost({ pickApp, appOf: () => 'harness', openAgent: vi.fn() })
+    state.window = state.appView = true
+    const { session, port } = await greeted(host)
+    try {
+      port.sent.length = 0
+      port.say({ t: 'agent.open', agentId: 'a1' })
+      await vi.waitFor(() => expect(host.openAgent).toHaveBeenCalledWith('a1', undefined))
+      await settle()
+      expect(pickApp.mock.calls).toEqual([['harness', 'notice']])
+      expect(listFrames(port)).toEqual([])
+    } finally { await session.stop() }
+  })
+
+  it("dictation on an app's ring goes to the agent on the dial's face", async () => {
+    const { host, state } = appHost({ transcribe: async () => 'run the tests' })
+    state.window = state.appView = true
+    state.focus = { machineId: 'mac-local', agentId: 'a2' }
+    state.rings.ghostty[1] = row('g2', 'ghostty', 'sv')
+    const { session, port } = await greeted(host)
+    try {
+      speak(port, 'g2', 'u1')
+      await vi.waitFor(() => expect(voiceAnswered(port)).toBe(true))
+      expect(vi.mocked(host.sendTurn).mock.calls).toEqual([['g2', 'run the tests']])
+      expect(port.sent.find((m) => m.t === 'voice.transcript')).toMatchObject({ uploadId: 'u1', agentId: 'g2' })
+    } finally { await session.stop() }
+  })
+
+  it("dictation to an agent there that takes no voice is refused in its app's name, and nothing goes to the window's agent", async () => {
+    const transcribe = vi.fn(async () => 'run the tests')
+    const { host, state } = appHost({ transcribe })
+    state.window = state.appView = true
+    state.focus = { machineId: 'mac-local', agentId: 'a2' }
+    const { session, port } = await greeted(host)
+    try {
+      speak(port, 'g1', 'u1')
+      await vi.waitFor(() => expect(voiceAnswered(port)).toBe(true))
+      expect(port.sent.find((m) => m.t === 'voice.error' || m.t === 'voice.transcript')).toEqual({ t: 'voice.error', uploadId: 'u1',
+        message: 'This agent is in Ghostty. Talking to it from the device comes in an update.' })
+      expect(transcribe).not.toHaveBeenCalled()
+      expect(host.sendTurn).not.toHaveBeenCalled()
+    } finally { await session.stop() }
+  })
+
+  it("on the tab, and for a dial without appFilter beside an app's ring, dictation goes to the window's focused agent", async () => {
+    for (const appFilter of [true, false]) {
+      const { host, state } = appHost()
+      state.window = true
+      state.appView = !appFilter
+      state.focus = { machineId: 'mac-local', agentId: 'a2' }
+      const { session, port } = await greeted(host, appFilter)
+      try {
+        speak(port, 'a1', 'u1')
+        await vi.waitFor(() => expect(voiceAnswered(port)).toBe(true))
+        expect(vi.mocked(host.sendTurn).mock.calls.map(([id]) => id), `appFilter ${appFilter}`).toEqual(['a2'])
+      } finally { await session.stop() }
+    }
   })
 })
 
@@ -4811,8 +5079,8 @@ describe('what the dial cannot do for an agent', () => {
       port.say({ t: 'focus', agentId: 'a1' })
       port.say({ t: 'focus', agentId: 'a2' })
       await vi.waitFor(() => expect(host.markSeen).toHaveBeenCalledTimes(2))
-      expect(host.markSeen).toHaveBeenNthCalledWith(1, 'a1')
-      expect(host.markSeen).toHaveBeenNthCalledWith(2, 'a2')
+      expect(host.markSeen).toHaveBeenNthCalledWith(1, 'a1', { apps: false })
+      expect(host.markSeen).toHaveBeenNthCalledWith(2, 'a2', { apps: false })
       await settle()
       expect(host.focus).not.toHaveBeenCalled()
       expect(toasts(port)).toEqual([])
@@ -4826,7 +5094,7 @@ describe('what the dial cannot do for an agent', () => {
     try {
       await session.focusAgent('a2')
       port.say({ t: 'focus', agentId: 'a1' })
-      await vi.waitFor(() => expect(host.markSeen).toHaveBeenCalledWith('a1'))
+      await vi.waitFor(() => expect(host.markSeen).toHaveBeenCalledWith('a1', { apps: false }))
       port.sent.length = 0
       agents = [...AGENTS, { id: 'a3', name: 'Release notes', engine: 'claude' }]
       await session.syncAgents()
@@ -4932,7 +5200,7 @@ describe('what the dial cannot do for an agent', () => {
     const { session, port, host, swipeEnded } = await resting()
     try {
       port.say({ t: 'focus', agentId: 'a1' })
-      expect(host.markSeen).toHaveBeenCalledWith('a1')
+      expect(host.markSeen).toHaveBeenCalledWith('a1', { apps: false })
       await vi.advanceTimersByTimeAsync(399)
       expect(swipeEnded).not.toHaveBeenCalled()
       await vi.advanceTimersByTimeAsync(1)
@@ -5034,7 +5302,7 @@ describe('what the dial cannot do for an agent', () => {
     try {
       port.say({ t: 'focus', agentId: 'a1' })
       port.say({ t: 'focus', agentId: 'a3' })
-      expect(host.markSeen).toHaveBeenCalledWith('a1')
+      expect(host.markSeen).toHaveBeenCalledWith('a1', { apps: false })
       expect(host.focus).toHaveBeenCalledWith('a3')
       expect(vi.getTimerCount()).toBe(0)
     } finally { vi.useRealTimers(); await session.stop() }
@@ -5127,7 +5395,7 @@ describe('a prompt in the app in front', () => {
     return { ...c, localFollowed }
   }
 
-  it('followLocal moves the dial through followApp: the list first, then the focus', async () => {
+  it("followLocal moves the dial as the window's follow does: the list first, then the focus", async () => {
     let agents: CableAgent[] = [AGENTS[0]]
     const selectMachine = vi.fn(async () => ({ ok: true as const }))
     const { session, port, localFollowed } = await greeted({ listAgents: async () => agents, selectMachine })
@@ -5229,27 +5497,28 @@ describe('a prompt in the app in front', () => {
         return new Promise<typeof snapshot>((resolve) => { release = () => resolve(snapshot) })
       },
     })
-    const followApp = vi.spyOn(c.session, 'followApp')
+    // The move itself, which the window's follow and a local one share.
+    const follow = vi.spyOn(c.session as unknown as { follow: (machineId: string, agentId: string) => Promise<void> }, 'follow')
     c.port.say({ t: 'focus', agentId: 'a1' })   // a hand put the dial on a1
-    return { ...c, followApp, holdNext: () => { hold = true }, release: () => release() }
+    return { ...c, follow, holdNext: () => { hold = true }, release: () => release() }
   }
 
   it('two prompts whose list reads end out of order: the later one wins', async () => {
-    const { session, port, localFollowed, followApp, holdNext, release } = await heldRead()
+    const { session, port, localFollowed, follow, holdNext, release } = await heldRead()
     try {
       holdNext()
       const first = session.followLocal('a2', 'prompt')
       await session.followLocal('a3', 'prompt')
       release()
       await first
-      expect(followApp.mock.calls).toEqual([['mac-local', 'a3']])
+      expect(follow.mock.calls).toEqual([['mac-local', 'a3']])
       expect(focuses(port)).toEqual([{ t: 'focus', agentId: 'a3' }])
       expect(localFollowed.mock.calls).toEqual([['prompt', 'moved']])
     } finally { await session.stop() }
   })
 
   it('a link that drops during the list read moves nothing and counts nothing', async () => {
-    const { session, port, localFollowed, followApp, holdNext, release } = await heldRead()
+    const { session, port, localFollowed, follow, holdNext, release } = await heldRead()
     try {
       holdNext()
       const following = session.followLocal('a2', 'prompt')
@@ -5257,19 +5526,19 @@ describe('a prompt in the app in front', () => {
       release()
       await following
       expect(localFollowed).not.toHaveBeenCalled()
-      expect(followApp).not.toHaveBeenCalled()
+      expect(follow).not.toHaveBeenCalled()
     } finally { await session.stop() }
   })
 
   it('a later prompt for the agent the dial shows keeps it there, though the earlier read ends after it', async () => {
-    const { session, port, localFollowed, followApp, holdNext, release } = await heldRead()
+    const { session, port, localFollowed, follow, holdNext, release } = await heldRead()
     try {
       holdNext()
       const first = session.followLocal('a2', 'prompt')
       await session.followLocal('a1', 'prompt')
       release()
       await first
-      expect(followApp).not.toHaveBeenCalled()
+      expect(follow).not.toHaveBeenCalled()
       expect(focuses(port)).toEqual([])
       expect(localFollowed).not.toHaveBeenCalled()
     } finally { await session.stop() }
@@ -5288,14 +5557,14 @@ describe('a prompt in the app in front', () => {
   })
 
   it("a later follow of another cause wins over an earlier one's read", async () => {
-    const { session, port, localFollowed, followApp, holdNext, release } = await heldRead()
+    const { session, port, localFollowed, follow, holdNext, release } = await heldRead()
     try {
       holdNext()
       const first = session.followLocal('a2', 'prompt')
       await session.followLocal('a3', 'tab')
       release()
       await first
-      expect(followApp.mock.calls).toEqual([['mac-local', 'a3']])
+      expect(follow.mock.calls).toEqual([['mac-local', 'a3']])
       expect(focuses(port)).toEqual([{ t: 'focus', agentId: 'a3' }])
       expect(localFollowed.mock.calls).toEqual([['tab', 'moved']])
     } finally { await session.stop() }
