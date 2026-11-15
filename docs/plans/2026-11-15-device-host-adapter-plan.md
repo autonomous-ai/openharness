@@ -6,7 +6,7 @@
 
 **Architecture:**
 - **Sources** (`HostSource`, unchanged) list agents. **Adapters** (`HostAdapter`, new) are the apps an outside agent runs in: each finds its own pane of an agent from the agent's latest hook event, and acts on that pane.
-- `ObservedSource` keeps the agents, their states and one pane per agent. It asks its adapters, in a fixed order, and holds no rule about any app. `open.ts` keeps what every app shares: the bundle id, `open -b`, one tap at a time per agent, the fallback line.
+- `ObservedSource` keeps the agents, their states and, for each agent, every pane an adapter recognises, in a fixed order. Each verb uses the first pane whose adapter can do it. The source holds no rule about any app. `open.ts` keeps what every app shares: the bundle id, `open -b`, one tap at a time per agent, the fallback line.
 - `services/devices.ts` builds the five adapters and hands them to the source and the opener. The echo notes of the two follow features stay there, as today.
 - The firmware reads the `a` letter it already parses: without it, a question shows its prompt and `[ later ]` only.
 - Nothing a person sees changes but those controls. Every command line, argument, timeout, guard, refusal sentence and log line stays as it is.
@@ -15,7 +15,7 @@
 
 **Spec:** `docs/specs/2026-11-15-device-host-adapter.md`. Read it with this plan, the root `AGENTS.md`, `cli/AGENTS.md` and `cli/src/services/AGENTS.md`.
 
-**Draft.** Six open questions are at the end. Each task carries the draft's answer, marked (Q1) to (Q6), so the plan can be built as it stands if they are answered "as drafted".
+**No open question.** The PM answered this plan's six on 2026-11-15; the answers are under "Decided here" at the end, and the spec's "The interface" section holds the two that changed it (`tap`, and every pane kept).
 
 ## Tasks at a glance
 
@@ -51,14 +51,15 @@ No file under `cli/src/core/` changes, and `src/architecture.coreFiles.txt` gain
 
 - **Base.** `main` with #4311 (`feat/dial-pane-follow`), #4326 (`feat/dial-claude-app-follow`) and #4331 (`feat/dial-terminal-follow`) merged, in that order. #4326 and #4331 conflict with each other in `observed.ts`, `open.ts`, `cableHost.ts` and `services/devices.ts`, so the merged files did not exist when this plan was written.
 - **Written against the union of both:** the Claude app pieces of #4326 (`claudeShow`, `claudeInFront`, `ShownPane` kind `'claude'`, the `open` wrapper and `noteLink` in `devices.ts`) and the tab pieces of #4331 (`tabs.ts`, `Entry.tty`, `learnTty`, `tabsOpen`, `tabSelect`, `byTab`, `ShownPane` kind `'tty'`, the tap's select with raise in `ObservedSource.focus`, `selected` in `devices.ts`).
+- **State, 2026-11-15:** #4311 is on `main` and in this branch. #4326 is in CI and #4331 follows it. Neither changes a file of Task 9 against `main`, so Task 9 starts now; every other task waits for Task 0.
 - Tasks name functions and what moves, never line numbers.
 
 ## Global Constraints
 
 - **Byte for byte.** Every command line, argument, timeout, one-at-a-time guard, refusal sentence and log line stays as it is: `orca terminal send|switch`, `wezterm cli activate-pane --pane-id`, `herdr agent focus`, `/usr/bin/open -b`, `/usr/bin/open claude://code/continue?session=…`, the 10 s `RUN_TIMEOUT_MS`, `[device] open · <app> · fallback`, `[device] voice · <what>`, `[observed] …`.
-- **The guard.** `devices.spec.ts`, `cableHost.spec.ts`, `cableSession.spec.ts` and the e2e suites are not edited: they pass before and after. In `observed.spec.ts`, `open.spec.ts` and `orca.spec.ts` only how the fakes are built changes, and the lines Tasks 7 and 8 name (Q4). **Any other expected value that has to change is a finding: stop and report it. It is never fixed by editing the test.**
-- **The order** panes are asked for: herdr, WezTerm, Orca, the Claude app, tabs.
-- **Hint sets.** A contract test's real hints are the ones the existing specs and e2e already hold for that app. Nothing is captured from a person's own apps (Q5).
+- **The guard.** `devices.spec.ts`, `cableHost.spec.ts`, `cableSession.spec.ts` and the e2e suites are not edited: they pass before and after. In `observed.spec.ts`, `open.spec.ts` and `orca.spec.ts` only how the fakes are built changes, and the three places Tasks 3, 7 and 8 name. **Any other expected value that has to change is a finding: stop and report it. It is never fixed by editing the test.**
+- **The order** an agent's panes are kept in: herdr, WezTerm, Orca, the Claude app, tabs. **Each verb uses the first pane whose adapter can do it:** words the first with `type`, a rest the first whose `canShow` says yes, a tap the first whose `canFocus` says yes. An agent two apps name keeps every route it has today.
+- **Hint sets.** A contract test's real hints are the ones the existing specs and e2e already hold for that app. Nothing is captured from a person's own apps.
 - **Outside text.** A hint is checked against its own form in its adapter's `paneOf`, and the pane's id again in each verb before it reaches a command. Every command runs with no shell, each value one argument. No log line holds a handle, a session id, a pane id or a tty.
 - **Not added:** an `onChange` or events member on `HostSource`; a registry merge by host identity; capability merging; an agent-route interface for the Claude Code mod; `cable_features`; any option, setting or member nobody calls.
 - **Core.** Nothing in `cli/src/core/`. `architecture.coreFiles.txt` is unchanged.
@@ -68,8 +69,8 @@ No file under `cli/src/core/` changes, and `src/architecture.coreFiles.txt` gain
 
 ## Review Focus
 
-1. **Hints that name two panes at once:** herdr or WezTerm inside an Orca terminal, or herdr inside Terminal, iTerm2 or Ghostty with a watch open. One pane, the first in the order; no words are typed into the Orca terminal around it. Task 7 (`hints that name two panes: the first adapter in the order holds the agent`) (Q3).
-2. **The same pane named again while the dial's words wait for the mod.** They are still typed: panes are compared by adapter and id, never by object. Task 7 (`an event from the same pane while the mod is waited for does not cancel the words`).
+1. **Hints that name two panes at once.** Each route is kept, as today: herdr or WezTerm inside an Orca terminal still takes the dial's words and a rest through Orca, and herdr inside Terminal, iTerm2 or Ghostty with a watch open still writes its tab select, on a rest and after a tap. Task 7's two corner pins.
+2. **The same pane named again while the dial's words wait for the mod.** They are still typed: the pane that types is compared by adapter and id, never by object. Task 7 (`an event from the same pane while the mod is waited for does not cancel the words`).
 3. **An agent that moved to another app's pane while a tap's `open -b` ran.** The tap answers what `open` answered and runs no second command. Task 7 (`an agent resumed in an Orca terminal while open ran gets no command`).
 4. **A pane whose adapter the opener was not given** (a list built wrong at the wiring, a wave 1 adapter added to one list only). Nothing throws; the app alone comes forward; no fallback line. Task 8 (`a pane of an adapter the opener does not hold is no pane`).
 5. **A dial row that loses `a` while its choices are open.** [select], [review] and [send] do nothing; [back] still leaves. Task 9 (the block's `STALE` lines).
@@ -97,7 +98,7 @@ No file under `cli/src/core/` changes, and `src/architecture.coreFiles.txt` gain
 - Modify: `cli/src/cable/hosts/open.ts` (`OPEN` gains `export`; nothing else)
 
 **Interfaces:**
-- Produces, in `adapter.ts`, the spec's interface and one member more, `tap` (Q2). Every comment the spec gives a type or a member is kept as the spec writes it; the block shows only the two comments that are new:
+- Produces, in `adapter.ts`, the spec's interface as the spec writes it ("The interface"): `Place`, `Pane` and `HostAdapter`, `tap` its last member, every comment the spec gives a type or a member kept word for word. One comment is added, on `id`; the block shows it and no other:
   ```ts
   import type { PaneSwitch } from './types.js'
 
@@ -117,21 +118,21 @@ No file under `cli/src/core/` changes, and `src/architecture.coreFiles.txt` gain
     /** Its app's short name, fixed in its file: the word its log lines say (`[device] open · <id> · fallback`,
      *  `[device] voice · <id>`), never a value from a hook. */
     readonly id: string
-    /** When a tap runs `focus`, against its app coming forward by its bundle id (open.ts): `before` it; `instead` of it,
-     *  as the focus brings the app forward itself, the bundle only when it fails; or `after` it came. */
-    readonly tap: 'before' | 'instead' | 'after'
     paneOf(place: Place): Pane | undefined
     canFocus(pane: Pane): boolean
     focus(pane: Pane): Promise<boolean>
     canShow?(pane: Pane): boolean
     show?(pane: Pane, agentId: string): Promise<PaneSwitch>
     type?(pane: Pane, text: string): Promise<boolean>
+    readonly tap: 'before' | 'instead' | 'after'
   }
   ```
-- The file's header says the two layers (sources list agents, adapters are their apps) and the three rules every adapter keeps:
+- `Pane` stays one adapter's handle on one agent. That an agent has several is the source's to keep (`Entry.panes`, Task 7), so no type here holds a list.
+- The file's header says the two layers (sources list agents, adapters are their apps) and the four rules every adapter keeps:
   1. `paneOf` checks each hint against its own form, and each verb checks the pane's id again before a command.
   2. An adapter is a plain object from a factory. No member uses `this`, so a caller may wrap one by spreading it.
   3. A verb that cannot run answers `false` or `'failed'`. It never throws.
+  4. An agent may have a pane in more than one adapter: the source keeps them all, and each verb uses the first whose adapter can do it. So `paneOf` answers from its own app's values alone, never from another app's being absent.
 - Produces, in `open.ts`: `export const OPEN = '/usr/bin/open'`, with its comment.
 
 - [ ] **Step 1: Write** `adapter.ts` and add the `export`.
@@ -180,7 +181,7 @@ No file under `cli/src/core/` changes, and `src/architecture.coreFiles.txt` gain
 **Interfaces:**
 - Consumes: `OPEN` (`open.ts`, Task 1), `RUN_TIMEOUT_MS` and `type OrcaDeps` (`orca.ts`), `APP_BUNDLES` (`hostDetect.ts`).
 - Produces: `export function createClaudeAppAdapter(deps: Pick<OrcaDeps, 'run' | 'platform'> & { inFront(): boolean }): HostAdapter & Required<Pick<HostAdapter, 'canShow' | 'show'>>`
-  - `id: 'claude'` (Q1), `tap: 'instead'`, no `type`.
+  - `id: 'claude'`, `tap: 'instead'`, no `type`.
   - `CLAUDE_SESSION = /^local_[A-Za-z0-9-]{1,64}$/`, with its comment from `open.ts`. The link is `OPEN` with the one argument `` `claude://code/continue?session=${pane.id}` ``, under `RUN_TIMEOUT_MS`.
   - `paneOf(place)`: only when `hints.__CFBundleIdentifier === APP_BUNDLES.claude` and `hints.CLAUDE_CODE_HOST_SESSION_ID` passes `CLAUDE_SESSION`.
   - `canFocus(pane)`: the platform is `darwin`.
@@ -292,7 +293,7 @@ No file under `cli/src/core/` changes, and `src/architecture.coreFiles.txt` gain
 
 ### Task 7: Words and rests ask the adapters
 
-**Layer:** devices service process. **Depends on:** Tasks 2, 3, 4, 5, 6. **Effort:** `xhigh` (which terminal the dial's words are typed into; three races it must keep).
+**Layer:** devices service process. **Depends on:** Tasks 2, 3, 4, 5, 6. **Effort:** `xhigh` (which terminal the dial's words are typed into; three races it must keep; an agent two apps name).
 
 **Red test:** `cli/src/cable/hosts/observed.spec.ts`.
 
@@ -306,7 +307,7 @@ No file under `cli/src/core/` changes, and `src/architecture.coreFiles.txt` gain
 - Produces, in `observed.ts`:
   ```ts
   export interface ObservedActions {
-    /** The apps an agent may run in, in the order their panes are asked for: the first that answers holds the agent. */
+    /** The apps an agent may run in, in the order its panes are kept: each verb uses the first pane whose adapter can do it. */
     adapters: readonly HostAdapter[]
     modReady(sessionId: string): boolean
     toMod(sessionId: string, text: string): Promise<Delivery>
@@ -317,17 +318,27 @@ No file under `cli/src/core/` changes, and `src/architecture.coreFiles.txt` gain
   }
   ```
   `orcaSend`, `orcaSwitch`, `claudeInFront`, `claudeShow`, `tabsOpen`, `tabSelect`, `ShownPane` and `shownPane` are gone. `canOpen`, `open` and `Entry.opens` stay as they are until Task 8.
-- `Entry.handle` goes. `Entry` gains `hints` (its latest event's, `{}` for a session the scan found) and `pane?: Pane`.
+- `Entry.handle` goes. `Entry` gains:
+  - `hints`: its latest event's, `{}` for a session the scan found;
+  - `panes: readonly { adapter: HostAdapter; pane: Pane }[]`: every pane an adapter recognises of it, each beside its adapter, in the adapters' order. `[]` with no `actions`, and for a session the scan found until its first event.
+- One private `first(e, can)`: the first of `e.panes` for which `can(adapter, pane)` is true. The verbs differ only in their `can`:
+
+  | Verb | `can(adapter, pane)` | Today's rule it is |
+  |---|---|---|
+  | Words | `!!adapter.type` | `e.handle`: an Orca terminal, whatever else names the agent |
+  | A rest | `!!adapter.show && (adapter.canShow?.(pane) ?? true)` | `shownPane`: Orca's, else the Claude app's in front, else a tab with a watch open |
+  | A tap's pane (Task 8) | `adapter.tap !== 'after' && adapter.canFocus(pane)` | `open.ts` `paneOf` and `paneOn` |
+
 - What moves, rule by rule:
 
   | Today | After |
   |---|---|
-  | `ingest` sets `entry.handle` from `ORCA_TERMINAL_HANDLE` | `ingest` sets `entry.hints`, then one private `locate(entry)`: the pane of the first adapter whose `paneOf({ host, app, hints, tty })` answers; none with no `actions`. On every event, a session's end too |
+  | `ingest` sets `entry.handle` from `ORCA_TERMINAL_HANDLE` | `ingest` sets `entry.hints`, then one private `locate(entry)`: every adapter is asked `paneOf({ host, app, hints, tty })`, and each answer is kept, in the adapters' order. On every event, a session's end too, and afresh each time: no pane of an earlier event stays |
   | `learnTty` sets and clears `entry.tty` | The same, and it calls `locate(entry)` each time the tty is cleared or a read lands |
-  | `capabilities().voice`: `!!e.handle` or the mod | The pane's adapter has `type`, or the mod |
-  | `send`: the handle read before the mod is waited for, `e.handle !== handle` after; `actions.orcaSend`; `count('orca')` | The pane read before, compared after by `adapter` and `id`; `adapter.type(pane, text)`; `count(adapter.id)`. Every refusal, its order and its sentence as they are |
-  | `hasPane`, `showPane`, `shownPane` and its `switch` | One private `shown(agent)`: the live entry's pane when its adapter has `show`, and `canShow` is absent or answers true. `showPane` is `adapter.show(pane, agent.id)`, else `'failed'` |
-  | `focus`: after `open` answered true, `shownPane` of kind `tty` writes `tabSelect(app, tty, true)` | After `open` answered true, the live entry's pane is read again: when its adapter's `tap` is `'after'` and `canFocus(pane)`, `await adapter.focus(pane)`. `focus` answers what `open` answered |
+  | `capabilities().voice`: `!!e.handle` or the mod | `first(e, words)` answers a pane, or the mod |
+  | `send`: the handle read before the mod is waited for, `e.handle !== handle` after; `actions.orcaSend`; `count('orca')` | The pane that types (`first(e, words)`) read before, and read again after: none now, or one whose `adapter` or `id` differs, is the refusal `e.handle !== handle` gave. Then `adapter.type(pane, text)` and `count(adapter.id)`. Every refusal, its order and its sentence as they are |
+  | `hasPane`, `showPane`, `shownPane` and its `switch` | One private `shown(agent)`: `first(e, rest)` of the live entry, asked at each look. `hasPane` is whether it answers; `showPane` is `adapter.show(pane, agent.id)`, else `'failed'` |
+  | `focus`: after `open` answered true, `shownPane` of kind `tty` writes `tabSelect(app, tty, true)` | After `open` answered true, `shown(agent)` is read again: when its adapter's `tap` is `'after'` and `canFocus(pane)`, `await adapter.focus(pane)`. Any other shown pane, or none, runs nothing. `focus` answers what `open` answered |
   | `byTab`, `learnTty`'s `isTabApp` gate, `waitingOn`, states, the scan, `tick`, `checkWorking` | Unchanged |
 
 - Produces, in `devices.ts` (the wiring only):
@@ -337,17 +348,31 @@ No file under `cli/src/core/` changes, and `src/architecture.coreFiles.txt` gain
   - `ObservedActions` is `{ adapters, modReady, toMod, canOpen, open, count }`. `canOpen`, `open` and its `noteLink` wrapper do not change.
   - Until Task 8 the opener is still `createOpenActions({ ...apps, orcaSwitch: (handle) => orca.focus({ adapter: orca.id, id: handle }), log })`.
 
-- [ ] **Step 1: Write the pins**, in `observed.spec.ts`, with `fakeActions` as it is. Run `cd cli && npx vitest run src/cable/hosts/observed.spec.ts`. Expected: PASS. One that fails means the base is not what this plan read: stop and report.
+- [ ] **Step 1: Write the pins**, in `observed.spec.ts`, with `fakeActions` as it is. Each states what the code does today. Run `cd cli && npx vitest run src/cable/hosts/observed.spec.ts`. Expected: PASS. One that fails means the base is not what this plan read: stop and report.
   - `one Orca session its hook told of, then the open scan found, is listed once and keeps its Orca pane` (the spec's Done when 4): a `session-start` with `{ ORCA_AGENT_SESSION_ID: 'x', ORCA_TERMINAL_HANDLE: HANDLE }`, then the same session in the scan's owners and rows, with an `apps` reader. After `scanOpen()`: one agent, `host: 'orca'`, no `appPending`, `apps` never called, `hasPane` true, `showPane` `'ok'` with `orcaSwitch` called `[[HANDLE]]`, capabilities `voice` and `focus` true.
   - `an event from the same pane while the mod is waited for does not cancel the words`: a `turn-stop` with the handle, a `send` held on `toMod`, a `session-start` with the same handle, then `'missed'`: `{ ok: true }`, and `orcaSend` called `[[HANDLE, 'run the tests']]`.
+  - `herdr or WezTerm inside an Orca terminal still takes the dial's words and a rest through Orca` (the first corner), once for `{ HERDR_PANE_ID: 'w1:p2', ORCA_TERMINAL_HANDLE: HANDLE }` and once for `{ WEZTERM_PANE: '7', ORCA_TERMINAL_HANDLE: HANDLE }`, after a `turn-stop`:
+    - capabilities `voice` and `focus` are true;
+    - `send(agent, 'next')` is `{ ok: true }`, `orcaSend` called `[[HANDLE, 'next']]`, `count` last called `'orca'`;
+    - `hasPane` is true, `showPane` is `'ok'`, `orcaSwitch` called `[[HANDLE]]`;
+    - a tap is true, `open` called once, and `open.mock.calls[0][1].pane?.id` is `'w1:p2'` (`'7'`): the multiplexer's pane, not the Orca terminal. Read by `id` alone, so the line stands when Task 8 renames the pane's other key.
+  - `herdr inside Ghostty with a watch open still writes its tab select, on a rest and after a tap` (the second corner), in `describe('ObservedSource tabs')` with its `tabs()` helper: a `session-start` with `{ HERDR_PANE_ID: 'w1:p2', __CFBundleIdentifier: 'com.mitchellh.ghostty' }`, its tty read answered `TTY`:
+    - `hasPane` is true, `showPane` is `'ok'`, `tabSelect` called `[['ghostty', TTY, false]]`;
+    - a tap is true: `open` called once, its target's pane `id` `'w1:p2'`, then `tabSelect` last called `['ghostty', TTY, true]`, two calls in all;
+    - `byTab('ghostty', TTY)` answers the agent; `orcaSend` and `orcaSwitch` are never called;
+    - with `tabsOpen` false: `hasPane` is false, `showPane` is `'failed'`, and a tap calls `open` and writes no select.
+  - Not written again: Orca over a tab. `an agent with an Orca handle is shown by Orca, whatever its app` and `with no stream a tap only opens; a tap on an agent with an Orca handle writes no select` hold it since #4331.
 
 - [ ] **Step 2: Write the failing tests.** `fakeActions` keeps every mock and its name, and builds `adapters` from them over the real factories with an inert runner (`ran`, a `vi.fn`):
   - herdr and WezTerm as they are; Orca with `type` and `show` replaced by `orcaSend(pane.id, text)` and `orcaSwitch(pane.id)`; the Claude app (built for the platform the helper is given, `darwin` by default, `inFront` from `claudeInFront`) with `show` replaced by `claudeShow(agentId, pane.id)`; tabs over `{ isOpen: tabsOpen, select: (tab, raise) => tabSelect(tab.app, tab.tty, raise) === 'ok' }`.
-  - No `it` body changes, but one: in `hasPane: a Claude app session, where a tap can open it, while the Claude app is in front`, the `canOpen` call assertion and the `canOpen.mockReturnValueOnce(false)` pair give way to "a source whose adapters were built for `linux` answers `hasPane` false for the same event" (Q4).
-  - Every suite that reads `fakeActions` now fails, the two pins too, as the source does not read `adapters` yet.
-  - `an app the source never heard of costs one adapter`: a made-up adapter first in the list (`id: 'made-up'`, `tap: 'before'`, `paneOf` answers `{ adapter: 'made-up', id: 'p1' }` for `hints.MADE_UP === 'p1'`, with `canShow`, `show`, `type` as mocks). After a `turn-stop` with `{ MADE_UP: 'p1', ORCA_TERMINAL_HANDLE: HANDLE }`: `paneOf` was last called with `{ host: 'terminal', app: 'terminal', hints }`; `voice` is true; `send` is `{ ok: true }`, `type` called `[[pane, 'next']]`, `count` last called `'made-up'`, `orcaSend` never; `showPane` answers what `show` said, called `[[pane, agent.id]]`; with `canShow` false, `hasPane` is false and `showPane` `'failed'`. With no `type` on it: `voice` false, and `send` is `'proj did not answer.'`.
-  - `hints that name two panes: the first adapter in the order holds the agent` (Q3): `{ HERDR_PANE_ID: 'w1:p2', ORCA_TERMINAL_HANDLE: HANDLE }` and `{ WEZTERM_PANE: '7', ORCA_TERMINAL_HANDLE: HANDLE }` give `voice` false, `send` `'proj did not answer.'`, `hasPane` false, and `orcaSend` and `orcaSwitch` never called. `{ HERDR_PANE_ID: 'w1:p2', __CFBundleIdentifier: 'com.mitchellh.ghostty' }` with its tty read and a watch open gives `hasPane` false, a tap that calls `open` once and `tabSelect` never, and `byTab('ghostty', TTY)` still answers the agent.
-  - `an agent resumed in an Orca terminal while open ran gets no command`: a tab agent with its tty, a tap held on `open`, a `turn-start` from the same pid with the Terminal bundle and `ORCA_TERMINAL_HANDLE`, then `open` answers true: the tap is true, and `tabSelect`, `orcaSwitch` and `ran` are never called.
+  - No `it` body changes, but one: in `hasPane: a Claude app session, where a tap can open it, while the Claude app is in front`, the `canOpen` call assertion and the `canOpen.mockReturnValueOnce(false)` pair give way to "a source whose adapters were built for `linux` answers `hasPane` false for the same event".
+  - Every suite that reads `fakeActions` now fails, the four pins too, as the source does not read `adapters` yet. The two corner pins are this task's red tests for the rule: a source that kept one pane per agent leaves both red.
+  - `an app the source never heard of costs one adapter, and what it cannot do falls to the next pane`: a made-up adapter first in the list (`id: 'made-up'`, `tap: 'before'`, `paneOf` answers `{ adapter: 'made-up', id: 'p1' }` for `hints.MADE_UP === 'p1'`, `canFocus` true, and `focus`, `canShow`, `show`, `type` as mocks, `canShow` true).
+    - After a `turn-stop` with `{ MADE_UP: 'p1', ORCA_TERMINAL_HANDLE: HANDLE }`: `paneOf` was last called with `{ host: 'terminal', app: 'terminal', hints }`; `voice` is true; `send` is `{ ok: true }`, `type` called `[[pane, 'next']]`, `count` last called `'made-up'`, `orcaSend` never; `showPane` answers what `show` said, called `[[pane, agent.id]]`, `orcaSwitch` never.
+    - With its `canShow` false: `hasPane` is still true, and `showPane` is `'ok'` through `orcaSwitch`, called `[[HANDLE]]`; `show` is not called again.
+    - Built with no `type`: `voice` is true, `send` is `{ ok: true }` through `orcaSend`, called `[[HANDLE, 'next']]`, and `count` last called `'orca'`.
+    - With `{ MADE_UP: 'p1' }` alone, no pane is left to fall to: `canShow` false gives `hasPane` false and `showPane` `'failed'`; no `type` gives `voice` false and `send` `'proj did not answer.'`.
+  - `an agent resumed in an Orca terminal while open ran gets no command`: a tab agent with its tty, a tap held on `open`, a `turn-start` from the same pid with the Terminal bundle and `ORCA_TERMINAL_HANDLE`, then `open` answers true: the tap is true, and `tabSelect`, `orcaSwitch` and `ran` are never called (the pane a rest would show is now Orca's, which does not tap after its app).
 - [ ] **Step 3: Run** the step 1 command. Expected: FAIL (`orcaSend` and the other old members are never called; the made-up adapter is never asked).
 - [ ] **Step 4: Implement** `observed.ts`, then the wiring in `devices.ts`.
 - [ ] **Step 5: Run** `cd cli && npx vitest run src/cable src/services/devices.spec.ts && npm run typecheck && npm run test:core`. Expected: PASS, with no edit to `devices.spec.ts`, `cableHost.spec.ts` or `cableSession.spec.ts`, and 100% for `services/devices.ts`.
@@ -355,7 +380,7 @@ No file under `cli/src/core/` changes, and `src/architecture.coreFiles.txt` gain
 
 ### Task 8: Taps ask the adapters
 
-**Layer:** devices service process. **Depends on:** Task 7. **Effort:** `xhigh` (hook text reaches command lines here; the order of a tap's commands).
+**Layer:** devices service process. **Depends on:** Task 7. **Effort:** `xhigh` (hook text reaches command lines here; the order of a tap's commands; which of an agent's panes a tap takes).
 
 **Red test:** `cli/src/cable/hosts/open.spec.ts`, `cli/src/cable/hosts/observed.spec.ts`.
 
@@ -380,13 +405,15 @@ No file under `cli/src/core/` changes, and `src/architecture.coreFiles.txt` gain
   |---|---|
   | `openTarget(host, hints)` | `bundleOf(host, hints)`: its bundle part, unchanged. `BUNDLES` stays |
   | `paneOf`, `WEZTERM_PANE`, `HERDR_PANE`, `CLAUDE_SESSION`, `APP_WEZTERM`, `Pane { app, id }`, the `focus` `switch`, `claudeShow` and its `showing` set, `OpenDeps.orcaSwitch` | Gone: each is in its adapter |
-  | `paneOn(target)`: the pane unless it is the Claude app's off macOS | The target's pane when the opener holds its adapter, its `tap` is not `'after'`, and `canFocus(pane)` |
+  | `paneOn(target)`: the pane unless it is the Claude app's off macOS | The target's pane when the opener holds its adapter, its `tap` is not `'after'`, and `canFocus(pane)`. The opener is handed one pane and never chooses among an agent's: the source does (below) |
   | `can(target)` | That pane, or on macOS a bundle |
   | After the pane's focus: `if (bundle && pane.app !== 'claude') forward(bundle)` | `if (bundle && adapter.tap === 'before') forward(bundle)` |
   | `` `[device] open · ${pane.app} · fallback` `` | `` `[device] open · ${adapter.id} · fallback` `` |
   | `running`, `forward`, `OPEN`, the order of `open` | Unchanged |
 
-- In `observed.ts`: `Entry.opens` goes and `Entry.bundle?: string` comes, from `bundleOf` where `opens` was set. One private `target(e)` builds `{ bundle?, pane? }`, the pane only when its adapter's `tap` is not `'after'`. `capabilities().focus` and `focus` hand it to `canOpen` and `open`. An `'after'` pane is still raised by Task 7's tail.
+- In `observed.ts`: `Entry.opens` goes and `Entry.bundle?: string` comes, from `bundleOf` where `opens` was set. One private `target(e)` builds `{ bundle?, pane? }`, asked at each look: its pane is `first(e, a tap's pane)` of Task 7's table, the first of the agent's panes whose adapter's `tap` is not `'after'` and whose `canFocus` says yes. `capabilities().focus` and `focus` hand it to `canOpen` and `open`.
+- A tap keeps its two parts, as today. Its pane goes to the opener, with the bundle. Then, once `open` answered true, Task 7's tail raises the pane a rest would show when that pane taps after its app. So for herdr inside Ghostty with a watch open the target's pane is herdr's and the tab's select is still written; for a tab app's agent that also has an Orca terminal the target's pane is Orca's and no select is written.
+- Today's choice is kept: `open.ts` took the first of herdr, WezTerm, Orca and the Claude app that the hints name, then dropped the Claude app's off macOS. The first three can always focus and the Claude app is asked last, so "the first whose `canFocus` says yes" picks the same pane.
 - In `devices.ts`: `opener = createOpenActions({ run: apps.run, platform: apps.platform, adapters, log })`. The `open` wrapper's test reads `target.pane?.adapter === claude.id && opener.can(target)`.
 - In `orca.ts`: `createOrcaActions` loses its `export`.
 
@@ -397,7 +424,12 @@ No file under `cli/src/core/` changes, and `src/architecture.coreFiles.txt` gain
   - `a pane that taps instead of its app: its focus alone; open -b and the line only when it fails`.
   - `a pane that taps after its app is not the opener's`: with a bundle, `open -b` alone, its `focus` never called, no line; with none, `can` is false and nothing runs.
   - `a pane of an adapter the opener does not hold is no pane`: with a bundle, `open -b` alone and no line; with none, `can` is false.
-  - `observed.spec.ts`: in `focus opens what its last event names…`, `pane: { app: 'orca', id: HANDLE }` reads `pane: { adapter: 'orca', id: HANDLE }` (Q4). The made-up adapter's test gains: a tap calls `open` with `[agent.id, { pane: { adapter: 'made-up', id: 'p1' } }]`; with `tap: 'after'` the target holds no pane, and its `focus` is called once after `open` answered true.
+  - `observed.spec.ts`: in `focus opens what its last event names…`, `pane: { app: 'orca', id: HANDLE }` reads `pane: { adapter: 'orca', id: HANDLE }`. Task 7's two corner pins stand as written: they read a target's pane by its `id`.
+  - The made-up adapter's test gains, for `{ MADE_UP: 'p1', ORCA_TERMINAL_HANDLE: HANDLE }`:
+    - a tap calls `open` with `[agent.id, { pane: { adapter: 'made-up', id: 'p1' } }]`, and its own `focus` is never called by the source;
+    - with its `canFocus` false, the target's pane is `{ adapter: 'orca', id: HANDLE }`: the first that can;
+    - built with `tap: 'after'`, the target's pane is Orca's too, and its `focus` is called once, with its pane, after `open` answered true; with `open` answering false, never;
+    - built with `tap: 'after'` and its `canShow` false, the pane a rest would show is Orca's, so its `focus` is never called.
 - [ ] **Step 2: Run** `cd cli && npx vitest run src/cable/hosts/open.spec.ts src/cable/hosts/observed.spec.ts`. Expected: FAIL (`bundleOf` is not exported; the opener reads no `adapters`).
 - [ ] **Step 3: Implement.** Then `git grep -n -E "openTarget|ShownPane|shownPane|claudeShow|claudeInFront|orcaSwitch|orcaSend|tabSelect|tabsOpen" -- 'cli/src/**/*.ts' ':!cli/src/**/*.spec.ts'` prints nothing.
 - [ ] **Step 4: Run** `cd cli && npx vitest run src/cable src/services/devices.spec.ts src/architecture.spec.ts src/leanEntry.spec.ts && npm run typecheck && npm run test:core`. Expected: PASS, with no edit to `devices.spec.ts`, and 100% for `services/devices.ts`.
@@ -598,7 +630,7 @@ No file under `cli/src/core/` changes, and `src/architecture.coreFiles.txt` gain
 - A person sees: three green jobs. In both `dial e2e` jobs every file passes with no expectation edited; on Linux `dialTerminalFollow` reads skipped, as it is macOS only. In `round dial firmware build`, `Project build complete` and `interns_commander.bin`.
 - If the macOS job fails for the runner's own reason (never run there before), say so and run the same eight files on this Mac: `cd cli && env -u TMUX -u TMUX_PANE E2E_BUNDLE=1 npx vitest run --config vitest.e2e.config.ts <the eight files>`. The build, on this Mac: `. ~/esp/esp-idf-5.5.4/export.sh && idf.py -C devices/harness-device/firmware -B "$TMPDIR/round-build" -D SDKCONFIG="$TMPDIR/round-build/sdkconfig" build`. A check that ran nowhere is reported as not verified, never as passed.
 - The repo's own workflow for the suite is Actions → CLI end to end → Run workflow (`cli-e2e.yml`): every file, Linux only, nine runners. It is not started for this change: the temporary job runs the files this change can reach on both systems, and the nightly run covers the rest on `main`.
-- After the pull request nothing of this check keeps running (Q6).
+- After the pull request nothing of this check keeps running, and no permanent workflow changes (PM, 2026-11-15).
 
 **2. The dial's screen, as a picture**
 - Run, on this Mac: `HABITAT_PREVIEW_DIR="$(mktemp -d)" python3 devices/harness-device/firmware/test/test_touch_ui.py`, then `sips -s format png "$HABITAT_PREVIEW_DIR/caps-question-no-answer.ppm" --out caps-question-no-answer.png`.
@@ -612,29 +644,33 @@ No file under `cli/src/core/` changes, and `src/architecture.coreFiles.txt` gain
 
 ## Open questions
 
-1. **The Claude app adapter's id.** The spec's table names it `claude-app`. The same spec keeps every log line, and `devices.spec.ts` and `open.spec.ts` expect `[device] open · claude · fallback`. Draft: the id is `claude`, in the file `claudeApp.ts`. As drafted?
-2. **A tap's order.** The spec's interface cannot say two things that must stay: the Claude app's link is not followed by `open -b`, and a tab is selected and raised after `open -b`, not before. Draft: one read-only member on `HostAdapter`, `tap: 'before' | 'instead' | 'after'`. As drafted, or another shape?
-3. **Hints that name two panes.** The spec keeps one pane per agent, in the order herdr, WezTerm, Orca, the Claude app, tabs, and calls that today's order. Today the order is only a tap's. Two corners change, and no test covers either:
-   - herdr or WezTerm inside an Orca terminal: today the dial's words are typed, and a rest switches, through Orca. After: neither (voice only by the mod).
-   - herdr inside Terminal, iTerm2 or Ghostty with a watch open: today a rest and a tap also write a tab select. After: they do not. A multiplexer's tty is not the tab's, so nothing a person sees changes.
+None. The six this plan asked are answered below.
 
-   Draft: follow the spec, pin both in Task 7, name them in the pull request. As drafted, or keep today's behaviour with a pane per verb?
-4. **"Expectations unchanged" in the unit specs.** `observed.spec.ts`, `open.spec.ts` and `orca.spec.ts` fake the seam the spec removes. Draft: every `it` body stays, only how the fakes are built changes, and three places change by name: the Claude `hasPane` test's `canOpen` assertions (Task 7), `pane: { app: 'orca' … }` reading `pane: { adapter: 'orca' … }` (Task 8), and the rest-on-Claude tests moving to `claudeApp.spec.ts` (Tasks 3 and 8). Anything else is a finding. Is that reading right?
-5. **"Recorded hint sets."** The repo holds no recording of an app's hints. Draft: each contract test uses the hint sets the existing specs and e2e already hold for that app, and nothing is captured from Diego's own apps. Enough?
-6. **After this pull request.** The round dial's ESP-IDF build and the dial's end-to-end suites on macOS have no workflow that keeps running: PR CI builds only the Harness Pro, and `cli-e2e.yml` is Linux only. The temporary workflow is removed. Should either stay as a check for later pull requests? Draft: no workflow changes here; it is a separate proposal.
+## Decided here
 
-## Decided here, where the spec was silent
+**The PM's answers to this plan's six questions (2026-11-15):**
+
+1. **The Claude app adapter's id** is `claude`, in the file `claudeApp.ts`: the word today's log line says (`[device] open · claude · fallback`). The spec says so now.
+2. **A tap's order** is one read-only member on `HostAdapter`, `tap: 'before' | 'instead' | 'after'`. It is in the spec's interface now.
+3. **Hints that name two panes.** No single pane per agent. `ObservedSource` keeps every pane an adapter recognises, in the order herdr, WezTerm, Orca, the Claude app, tabs, and each verb uses the first pane whose adapter can do it: words the first with `type`, a rest the first whose `canShow` says yes, a tap the first whose `canFocus` says yes. Today's behaviour is kept in both corners: herdr or WezTerm inside an Orca terminal still types and rests through Orca, and herdr inside Terminal, iTerm2 or Ghostty with a watch open still writes its tab select. Task 7 pins both.
+4. **"Expectations unchanged" in the unit specs.** Every `it` body stays and only how the fakes are built changes, but in three named places: the Claude `hasPane` test's `canOpen` assertions (Task 7), `pane: { app: 'orca' … }` reading `pane: { adapter: 'orca' … }` (Task 8), and the rest-on-Claude tests moving to `claudeApp.spec.ts` (Tasks 3 and 8). Anything else is a finding.
+5. **"Recorded hint sets."** Each contract test uses the hint sets the existing specs and e2e already hold for that app. Nothing is captured from Diego's own apps.
+6. **After this pull request.** No permanent workflow changes. The temporary workflow is removed before the pull request.
+
+**Where the spec was silent:**
 
 - **Two steps, not one.** Task 7 moves words and rests, Task 8 taps. Between them `open.ts` still finds a tap's pane itself, and `devices.ts` hands it Orca's `focus` as `orcaSwitch`. Task 8 removes both.
 - **An adapter task only adds.** Tasks 2 to 6 leave `open.ts` and its spec alone, so they run beside each other. The copies in `open.ts` go in Task 8.
 - **A tab's pane id** is `<app>:<tty>`. A select needs both, and `Pane` holds one id.
-- **`learnTty` and `byTab` stay in `observed.ts`**, as the spec's `Place.tty` comment names `learnTty` there. They are about where an agent is, not what an app does. `byTab` still matches by the agent's app and tty, whichever adapter holds its pane.
+- **An entry keeps each pane beside its adapter** (`Entry.panes`), so no verb looks an adapter up by a pane's `adapter` word. `Pane` itself stays as the spec writes it.
+- **`learnTty` and `byTab` stay in `observed.ts`**, as the spec's `Place.tty` comment names `learnTty` there. They are about where an agent is, not what an app does. `byTab` still matches by the agent's app and tty, whichever of its panes a verb uses.
 - **`count` takes the adapter's id** for the route that typed, so `[device] voice · orca` stays.
 - **The echo notes stay in `devices.ts`:** the Claude app's `show` is wrapped there for `noteLink`, the `open` wrapper stays, and `selected` rides in the tabs adapter's `select`. They belong to the two follow features, not to how an app is reached.
-- **An `'after'` pane is never in the opener's target.** The source raises it once `open` answered true, as today, and its answer is not the tap's.
+- **A tap has two parts, as today.** The opener gets the first pane that can focus among those that tap before or instead of their app. A pane that taps after its app is never in the opener's target: once `open` answered true, the source raises the pane a rest would show, when that pane taps after. That is today's `shownPane` of kind `tty`, and #4331's own test needs it (`a tap on an agent with an Orca handle writes no select`). Its answer is not the tap's.
+- **One corner gains a route, by the PM's rule.** Hints that name a herdr or WezTerm pane and a Claude app session at once: today a rest shows nothing, as `open.ts` names the multiplexer's pane first; after, the rest falls to the Claude app's link while that app is in front. No route is lost, and a tap is as today. The Claude app's own sessions carry no multiplexer's variable, so nobody should meet it; it has no test of its own, as `falls to the next pane` in Task 7 holds the rule.
 - **`OrcaDeps`, `orcaDeps`, `RUN_TIMEOUT_MS` and `MAX_TEXT` stay in `orca.ts`**, imported from there as `open.ts` does today. Renaming them is not this reshape.
 - **`Place.host` is in the spec's interface** and no adapter of this pull request reads it. It stays as the spec wrote it.
 - **The lone `[ later ]`** is the loading question's control, at the same place, so it does not move when the question loads. It sits 17 px left of the centre there today; that is not changed here.
 - **`A_QUESTION_SAY` is not blocked** in the firmware: the spec lists four actions and keeps voice's own check. `[say]` is not drawn for an agent without `a`.
 - **The end-to-end run** is the eight files this change can reach, on macOS and Linux, not the whole suite.
-- **The pins** in Task 7 pass before the change by design: a reshape's guard cannot fail first.
+- **The pins** in Task 7 pass before the change by design: a reshape's guard cannot fail first. They turn red once the fakes are built over adapters, and the two corner pins stay red for a source that keeps one pane per agent.
