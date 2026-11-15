@@ -118,7 +118,10 @@ export function createServiceRoutes(deps: ServiceRoutesDeps) {
       const requestId = typeof payload.requestId === 'string' ? payload.requestId : ''
       return ask(route.type, route.waitMs, { frame: route.frame, payload }, { ...OWNER_HERE, connection }).then((answer) => {
         if (!route.result) return null
-        return { type: route.result, payload: { ...(answer && typeof answer.error !== 'string' ? answer : route.unanswered), requestId } }
+        // Preserve the existing wire order while keeping correlation out of the service's control.
+        const result = { requestId, ...(answer && typeof answer.error !== 'string' ? answer : route.unanswered) }
+        result.requestId = requestId
+        return { type: route.result, payload: result }
       })
     },
   }

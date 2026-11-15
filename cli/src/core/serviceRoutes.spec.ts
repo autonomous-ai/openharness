@@ -219,6 +219,12 @@ describe('the door\'s routes a service answers', () => {
       linked: router(['devices_ws'], () => ({ requestId: 'other-request', agentId: 'a1' })), hosted: router([]) })
     expect(await doors.frame(conn, { type: 'route_task', payload: { requestId: 'original-request' } }))
       .toEqual({ type: 'route_result', payload: { requestId: 'original-request', agentId: 'a1' } })
+    const reply = await doors.frame(conn, { type: 'route_task', payload: { requestId: 'original-request' } })
+    expect(JSON.stringify(reply?.payload)).toBe('{"requestId":"original-request","agentId":"a1"}')
+    const ordinary = createServiceRoutes({ routes, frames,
+      linked: router(['devices_ws'], () => ({ agentId: 'a1' })), hosted: router([]) })
+    const normal = await ordinary.frame(conn, { type: 'route_task', payload: { requestId: 'original-request' } })
+    expect(JSON.stringify(normal?.payload)).toBe('{"requestId":"original-request","agentId":"a1"}')
   })
 
   it('answers a route\'s and a frame\'s own answer when its service cannot even be asked, and says so', async () => {
