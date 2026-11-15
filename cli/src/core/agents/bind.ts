@@ -109,7 +109,7 @@ interface BindPass {
   current: () => boolean
   hold: (error: unknown) => boolean
   commit: (input: Parameters<BindDeps['registry']['register']>[0]) => ReturnType<BindDeps['registry']['register']> | null
-  /** `empty` says when a completed read read nothing, so it counts as none: an OpenClaw pane that cannot be captured. */
+  /** `empty` says when a completed read read nothing, so it counts as none: an OpenClaw pane with no screen. */
   read: <T>(work: () => Promise<T>, empty?: (value: T) => boolean) => Promise<{ value: T } | null>
   mayClaim: (id: string) => boolean
 }
@@ -420,7 +420,7 @@ export function createBinding({
       // One a message was typed into is read on every pass until the message is confirmed: the run it starts shows on the
       // pane before the store, which may never show it (live.ts NO_SESSION_MS counts from the first pass that reads it).
       if (agent.sessionId && !openclawPaneDue(agent.sessionId) && !input.awaitingConfirmation(agent.agentId)) return
-      const captured = await read(() => capturePane(agent.agentId), (screen) => screen === null)
+      const captured = await read(() => capturePane(agent.agentId), (screen) => !screen)
       if (!captured?.value || !current()) return
       const screen = readOpenclawScreen(captured.value)
       // Told on every pass, the ones that say a state too: a pass that reads the Gateway gone is what lets the stream
