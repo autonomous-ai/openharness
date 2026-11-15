@@ -802,9 +802,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   /** The agent of the app's last attach that named a listed Claude app agent, moved to or not: the session on the app's
    *  screen, which the dials turn to once the app settles in front. Gone with its session. */
   let claudeAgent: string | undefined
-  /** What the latest 'attach' follow was asked for: an attach, or the app settling in front. The follow's cause is shared
-   *  with feat/dial-terminal-follow and stays the same there and here, so the settle's lines are told apart by this; a
-   *  dial answers only for its latest ask (cableSession.ts followLocal's generation), so its answer is this ask's. */
+  /** What the latest 'attach' follow was asked for: an attach, or the app settling in front. FollowCause is shared with
+   *  the tab follow and has no settle of its own, so this tells a settle's answer from an attach's; a dial answers only
+   *  for its latest ask (cableSession.ts followLocal's generation), so its answer is this ask's. */
   let attachAsk: 'attach' | 'settle' = 'attach'
   /** When the dial's own continue link to each agent started, by the devices' clock: at most one per listed agent. */
   const dialLinks = new Map<string, number>()
