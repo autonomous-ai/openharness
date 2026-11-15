@@ -3046,6 +3046,22 @@ describe('selecting a tab moves the dial (docs/specs/2026-11-15-dial-terminal-fo
     expect(asked()).toEqual([[agent(1), 'tab']])
   })
 
+  it('an echo forgets the selects before it: one that never ran (replaced while it waited) excuses no later report', async () => {
+    const { report, settle } = await dialWith(2)
+    await settle('terminal-app')
+    host().swipeEnded(agent(1), 'rest')
+    clock = 300
+    host().swipeEnded(agent(2), 'rest')
+    // Harness Device ran only the newest: Terminal reports the second tab alone.
+    clock = 600
+    report('terminal-app', ttyOf(2))
+    expect(tabLines()).toEqual(['[device] tab · echo'])
+    // The person selects the first tab in Terminal: the app has shown the second since that select, so it moves the dial.
+    clock = 1_000
+    report('terminal-app', ttyOf(1))
+    expect(asked()).toEqual([[agent(1), 'tab']])
+  })
+
   it('no agent with that tty, or one in another app: no-agent', async () => {
     const { report, settle } = await dialWith()
     await settle('terminal-app')
