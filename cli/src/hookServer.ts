@@ -30,7 +30,7 @@ import { isLoopbackRequest, loopbackHosts } from './lib/loopbackRequest.js'
 import { isTrustedLocal, listenLocalSocket, type LocalSocketServer } from './lib/localSocket.js'
 import { PTY_HOST_INSTANCE, PTY_HOST_PANE } from './lib/ptyHost/instance.js'
 import type { HttpAnswer } from './core/api.js'
-import type { ServiceHttpRequest } from './core/serviceRoutes.js'
+import type { DoorRequest } from './core/serviceRoutes.js'
 
 /**
  * Which agent does a hook belong to, given the two grades of evidence?
@@ -73,7 +73,7 @@ export interface HookServerHandlers {
   onInbox?: (body: unknown, gone: AbortSignal) => Promise<'invalid' | 'off' | { text?: string }>
   /** A route a service answers, once the door let its request in (core/serviceRoutes.ts): its answer, or null when no
    *  service answers `path`. */
-  onServiceRoute?: (path: string, request: ServiceHttpRequest, localOk: boolean) => Promise<HttpAnswer> | null
+  onServiceRoute?: (path: string, request: DoorRequest, localOk: boolean) => Promise<HttpAnswer> | null
 
   onRegistered: (
     entry: RegisteredSession,
@@ -515,6 +515,17 @@ export function startHookServer(
       // send it, can trigger actions. A local process could still call it — same trust level as the
       // CLI, which is acceptable on loopback.
       const localOk = req.headers['x-adapter-local'] === '1'
+      /** A route a service answers (core/serviceRoutes.ts), written as it answered, with the headers its route declares:
+       *  false when no service answers this path and method. Whether a write carries the local header is its route's to
+       *  ask, and its body is read only then, up to its route's bound. */
+      const serviceRoute = async (): Promise<boolean> => {
+        const routed = handlers.onServiceRoute?.(url, { method: req.method ?? '', target: req.url ?? '', readBody: (max) => readBody(req, max) }, localOk)
+        if (!routed) return false
+        const result = await routed
+        for (const [name, value] of Object.entries(result.headers ?? {})) res.setHeader(name, value)
+        json(result.status, result.body)
+        return true
+      }
       // An engine hook's token, which opens these hook routes and nothing else (lib/hookAuth.ts). The credential
       // is still taken here: an engine's loaded plugin keeps the copy it started with until its pane restarts. A
       // guest's harness will carry a token scoped to its own agent (docs/plans/2026-10-19-guest-machine-sharing-plan.md).
@@ -551,11 +562,8 @@ export function startHookServer(
           json(403, { error: { code: 'FORBIDDEN', message: 'Authenticated native loopback client required' } }); return
         }
         // The Wi-Fi device's services', as the client sent it: the gateway's, its service's and the machine add-ons'.
-        const body = req.method === 'GET' ? undefined : await readBody(req)
-        const answer = handlers.onServiceRoute?.(url, { method: req.method ?? '', target: req.url ?? '', ...(body === undefined ? {} : { body }) }, localOk)
-        if (!answer) { json(503, { error: { code: 'UNAVAILABLE', message: 'Autonomous device service unavailable' } }); return }
-        const result = await answer
-        json(result.status, result.body); return
+        if (!await serviceRoute()) json(503, { error: { code: 'UNAVAILABLE', message: 'Autonomous device service unavailable' } })
+        return
       }
       if (req.method === 'GET' && url === '/api/health') {
         json(200, { ok: true, version: VERSION }); return
@@ -1201,15 +1209,9 @@ export function startHookServer(
 
       // A route a service answers (core/api.ts `SERVICE_HTTP_ROUTES`): the account's (the desk, Agent Messages' tabs, the
       // account's name, the phone half of a sign-in, the usage reports and choice, a machine's rename and delete, the
-      // Store's ratings and reviews), each the gateway's. The door's checks above are done; a write's local header is its
-      // route's to ask (core/serviceRoutes.ts).
-      const body = req.method === 'GET' ? undefined : await readBody(req)
-      const routed = handlers.onServiceRoute?.(url, { method: req.method ?? '', target: req.url ?? '', ...(body === undefined ? {} : { body }) }, localOk)
-      if (routed) {
-        const result = await routed
-        for (const [name, value] of Object.entries(result.headers ?? {})) res.setHeader(name, value)
-        json(result.status, result.body); return
-      }
+      // Store's ratings and reviews), each the gateway's. The door's checks above are done. Never one of the paths open
+      // without the local credential (a hook's): a caller that has not shown it reaches no service here.
+      if (credentialOk && await serviceRoute()) return
       json(404, { error: 'not found' })
     })().catch((error: unknown) => {
       // Whatever a handler throws, the request is answered: an engine's hook that waits on this server

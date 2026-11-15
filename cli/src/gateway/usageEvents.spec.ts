@@ -4,11 +4,11 @@
  * before (backendSocket.ts, until this change), side by side, request by request, and then what each recorder sends the
  * backend (gateway/productUsage.ts).
  */
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterEach, describe, expect, it } from 'vitest'
-import { createUsageOutcomes } from '../core/usageOutcomes.js'
+import { createUsageOutcomes, MEASURED_REQUESTS } from '../core/usageOutcomes.js'
 import type { ProductUsageMetric } from '../lib/productUsageContract.js'
 import { messageReceipt, productObservation, productUsageIntent, productUsageLaunch, productUsageRequest, productUsageSource,
   type ProductUsageLaunchSignal } from '../lib/productUsageSignals.js'
@@ -130,6 +130,16 @@ async function reported(count: typeof before): Promise<Record<string, number>> {
 }
 
 describe('the usage counters, named in the gateway', () => {
+  it('are told for every request the reductions count, and only those: the core\'s list and the reductions\' agree', () => {
+    // The reductions' own list of requests (`actions` in lib/productUsageSignals.ts), read from its source: the core cannot
+    // load that file, so it keeps its own list (core/usageOutcomes.ts `MEASURED_REQUESTS`), and this holds the two equal.
+    const source = readFileSync(new URL('../lib/productUsageSignals.ts', import.meta.url), 'utf8')
+    const block = /const actions = \{([^}]*)\} as const/.exec(source)?.[1] ?? ''
+    const actions = [...block.matchAll(/(\w+): '/g)].map((match) => match[1])
+    expect(actions.length).toBeGreaterThan(15)
+    expect(new Set([...actions, 'message', 'agent_create_status', 'agent_create_cancel'])).toEqual(MEASURED_REQUESTS)
+  })
+
   it('are the names the core counted itself, in the same order, and the same launch signals', () => {
     const was = { counters: [] as string[], launches: [] as unknown[] }
     const now = { counters: [] as string[], launches: [] as unknown[] }

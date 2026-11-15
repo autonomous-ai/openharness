@@ -16,6 +16,12 @@ export const MEASURED_REQUESTS: ReadonlySet<string> = new Set(['agent_create', '
   'session_search', 'session_tail', 'dsh_list', 'dsh_install', 'dsh_update', 'dsh_remove', 'models_list', 'grid_models_list',
   'grid_fleet_model_download', 'grid_fleet_model_start', 'grid_fleet_model_stop', 'browser_open', 'message'])
 
+/** A durable create's status and its cancel: polls, which count nothing as they come and say only what became of its
+ *  launch, so one with no durable id is told nothing at all (lib/productUsageSignals.ts: polling adds no attempts). */
+const POLLS: ReadonlySet<string> = new Set(['agent_create_status', 'agent_create_cancel'])
+/** The requests a later reply is told for: what it says of a launch. Any other's counters count its first answer only. */
+const LAUNCHES: ReadonlySet<string> = new Set(['agent_create', ...POLLS])
+
 /** A code longer than any the report lists, which every reading of a code takes as one it does not list: a longer one is
  *  sent as this, so its text stays here. */
 const LONG_CODE = '-'.repeat(65)
@@ -90,14 +96,16 @@ export function createUsageOutcomes(deps: UsageOutcomesDeps) {
     request(type: string, payload: unknown, from: { local: boolean; tool: boolean; role: string | null }): MeasuredRequest | null {
       if (!MEASURED_REQUESTS.has(type)) return null
       const request = requestOf(type, payload, from)
-      deps.send({ kind: 'request', request })
+      const poll = POLLS.has(type)
+      if (poll && request.creationId === undefined) return null
+      if (!poll) deps.send({ kind: 'request', request })
       const started = now()
       let answered = false
-      /** Its first answer is the one its counters count; a later reply still says what became of a launch. */
-      const answer = (answer: UsageAnswer, launches: boolean): void => {
+      /** Its first answer is the one its counters count; a later reply says only what became of a launch. */
+      const answer = (answer: UsageAnswer, reply: boolean): void => {
         const first = !answered
         answered = true
-        if (first || launches) deps.send({ kind: 'answer', request, answer, first, elapsedMs: Math.max(0, now() - started) })
+        if (first || (reply && LAUNCHES.has(type))) deps.send({ kind: 'answer', request, answer, first, elapsedMs: Math.max(0, now() - started) })
       }
       return {
         answered: (reply) => { answer(answerOf(reply), true) },

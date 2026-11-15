@@ -12,7 +12,7 @@ import { readHookCredential } from './lib/hookAuth.js'
 import { ENGINES } from './engines/types.js'
 import { engineHooks } from './engines/hooks.js'
 import { pipeRequest } from './lib/windows/pipeClient.js'
-import type { ServiceHttpRequest } from './core/serviceRoutes.js'
+import type { DoorRequest } from './core/serviceRoutes.js'
 
 let server: Server | null = null
 
@@ -537,22 +537,34 @@ describe('process-owned hook server', () => {
   })
 
   it('hands a route a service answers on as it came, and writes its answer and the headers it declares', async () => {
-    const onServiceRoute = vi.fn((path: string) => (path === '/api/auth/me' || path === '/api/desk/ops'
-      ? Promise.resolve({ status: 504, body: { success: false, error: { code: 'BACKEND_TIMEOUT', message: 'slow' } }, headers: { 'x-harness-usage-vocabulary': '10' } })
+    const heard: unknown[] = []
+    const onServiceRoute = vi.fn((path: string, request: DoorRequest, localOk: boolean) => (path === '/api/auth/me' || path === '/api/desk/ops'
+      ? (async () => {
+        heard.push({ path, method: request.method, target: request.target, localOk, ...(request.method === 'GET' ? {} : { body: await request.readBody(4) }) })
+        return { status: 504, body: { success: false, error: { code: 'BACKEND_TIMEOUT', message: 'slow' } }, headers: { 'x-harness-usage-vocabulary': '10' } }
+      })()
       : null))
     const { base } = await start({ onServiceRoute })
     const response = await fetch(`${base}/api/auth/me?fresh=1`)
     expect(response.status).toBe(504)
     expect(response.headers.get('x-harness-usage-vocabulary')).toBe('10')
     expect(await response.json()).toEqual({ success: false, error: { code: 'BACKEND_TIMEOUT', message: 'slow' } })
-    expect(onServiceRoute).toHaveBeenLastCalledWith('/api/auth/me', { method: 'GET', target: '/api/auth/me?fresh=1' }, false)
-    // A write's body as text, and whether it carries the local header, which its route asks for.
-    await fetch(`${base}/api/desk/ops`, { method: 'POST', headers: { 'x-adapter-local': '1' }, body: '{"ops":[]}' })
-    expect(onServiceRoute).toHaveBeenLastCalledWith('/api/desk/ops', { method: 'POST', target: '/api/desk/ops', body: '{"ops":[]}' }, true)
+    // A write's body as text, read up to its route's bound (past it, empty), and whether it carries the local header.
+    await fetch(`${base}/api/desk/ops`, { method: 'POST', headers: { 'x-adapter-local': '1' }, body: '{}' })
+    await fetch(`${base}/api/desk/ops`, { method: 'POST', body: '{"ops":[]}' })
+    expect(heard).toEqual([
+      { path: '/api/auth/me', method: 'GET', target: '/api/auth/me?fresh=1', localOk: false },
+      { path: '/api/desk/ops', method: 'POST', target: '/api/desk/ops', localOk: true, body: '{}' },
+      { path: '/api/desk/ops', method: 'POST', target: '/api/desk/ops', localOk: false, body: '' },
+    ])
     // No service answers it: the door's own 404.
     const missing = await fetch(`${base}/api/nowhere`, { method: 'POST', body: '{}' })
     expect(missing.status).toBe(404)
     expect(await missing.json()).toEqual({ error: 'not found' })
+    // A path open without the credential (a hook's), asked without it, never reaches a service.
+    onServiceRoute.mockClear()
+    expect((await realFetch(`${base}/api/hook/unknown`, { method: 'POST', body: '{}' })).status).toBe(404)
+    expect(onServiceRoute).not.toHaveBeenCalled()
   })
 })
 
@@ -896,8 +908,10 @@ describe('the trust group endpoints', () => {
 
 describe('the Wi-Fi device\'s routes at the door', () => {
   it('hands each on as it came once its checks pass, and writes the answer its service gave', async () => {
-    const onServiceRoute = vi.fn((path: string, request: ServiceHttpRequest) =>
-      path === '/api/autonomous-device/nobody' ? null : Promise.resolve({ status: 207, body: { path, request } }))
+    const onServiceRoute = vi.fn((path: string, request: DoorRequest) => path === '/api/autonomous-device/nobody' ? null : (async () => {
+      const body = request.method === 'GET' ? undefined : await request.readBody()
+      return { status: 207, body: { path, request: { method: request.method, target: request.target, ...(body === undefined ? {} : { body }) } } }
+    })())
     const { base } = await start({ onServiceRoute })
     const bearer = { authorization: `Bearer ${readHookCredential(env.ADAPTER_DATA_DIR)}` }
     // A read: its query goes with it, and no body.

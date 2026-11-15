@@ -44,6 +44,10 @@ The core's files and lines: 543 / 93,160 before (main at 5c3703b042), 543 / 93,0
   longer takes those ops (only the core's old hop sent them), and refuses, as the routes do, while the machine's id is
   not known, in one place (`MachineAddons`), in both modes.
 
+### The cost (tools-free micro-benchmark on this Mac, the link's JSON counted)
+- A measured request (session_search, answered): 3.1 µs of the core's CPU and 5 frames to the gateway before; 2.0 µs
+  and 2 frames after. A frame the report does not measure (terminal input): 43 ns before, 8 ns after.
+
 ### Answers that differ (said in the PR)
 - `status` during a devices-process restart: before `connected:false`, `sessions:0` (the core's `up`); now the
   gateway's live direct sessions, whose frames the core holds through the restart.
@@ -70,8 +74,11 @@ core/usageOutcomes.ts.
 - `headers`: on every answer of the route, the door's 403 and `unanswered` too (the report's
   `x-harness-usage-vocabulary`, `APP_USAGE_VOCABULARY` in core/api.ts). `answerHeaders`: the ones a service's answer may
   set (`answer.headers`, one printable line of at most 128 characters each); the report's `retry-after`.
-- The door calls `onServiceRoute` for every path its own routes did not take, just before its 404 (the body read with
-  the door's 256 KiB bound, none for GET).
+- `maxBodyBytes`: the most of a body the door reads for the route (the report's 8 KiB, as before); the door's own
+  256 KiB bound when absent. The body is read only once a route took the request and let it in (`DoorRequest.readBody`).
+- The door asks `onServiceRoute` (one helper, `serviceRoute` in hookServer.ts, for the device branch too) for every path
+  its own routes did not take, just before its 404, and only with the local credential: an open path (a hook's) never
+  reaches a service.
 
 ### Where the routes went: `gateway_http` (gateway/accountRoutes.ts)
 - GET /api/desk, POST /api/desk/ops, GET /api/agent-messages, PATCH /api/agent-messages/tabs/:id, GET|PATCH /api/auth/me,
@@ -97,8 +104,11 @@ core/usageOutcomes.ts.
   role, and the facts its counters read: creationId, engine, startedBy, userAction, usageSurface, usageIntent, agentId,
   each bounded), one `answer` per reply (error, state, agent, ok, reason, held, raw and bounded; `first` for the one its
   counters count; elapsed on the core's clock), and `observed` for hn's `product_observe`. `usageLaunch` is gone.
+- Told only when it counts: a durable create's status and cancel (polls) send no `request` event and nothing at all
+  without a durable id; a later reply is told only for the three launch requests, whose later replies say what became
+  of a launch. `MEASURED_REQUESTS` (core) is held equal to the reductions' own list by gateway/usageEvents.spec.ts.
 - The gateway runs the same reductions, unchanged (lib/productUsageSignals.ts), and keeps nothing between a request and
-  its answer. gateway/usageEvents.spec.ts holds the old path and the new side by side: the same names in the same order,
+  its answer. A failed count is said in the gateway's log, at most once a minute. gateway/usageEvents.spec.ts holds the old path and the new side by side: the same names in the same order,
   the same launch signals, and the same report totals at the backend. The backendSocket specs' exact counter names pass
   unchanged through the real gateway.
 - Left in the core's process: lib/productUsageContract.ts and lib/productHealthContract.ts, only for the two allowlists
@@ -111,7 +121,12 @@ core/usageOutcomes.ts.
 
 ### Verified
 - e2e: accountRoutes (its fault test red on main in both modes, green after; goldens green before and after),
-  productUsage, deviceRoutes.
+  productUsage, deviceRoutes. Unit: core/serviceRoutes.spec.ts (its new cases red on main's adapter),
+  core/usageOutcomes.spec.ts, gateway/accountRoutes.spec.ts, gateway/usageEvents.spec.ts; the backendSocket specs'
+  exact counter names pass unchanged through the real gateway.
+- The vocabulary revision stays in the core's route table, on purpose: the door's own answers (its 403, and the answer
+  while the gateway is away) must carry it, because the Desktop reads it off every answer and one without it would stop
+  its newer names until the next report. appProductUsageReport.spec.ts reads it from core/api.ts beside the names.
 
 ## Step 3: pairing and keys, voice, the relay to other machines
 - /api/auth/handoff from step 2 (above: a socket-only door).

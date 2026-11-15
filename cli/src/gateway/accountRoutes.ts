@@ -6,7 +6,8 @@
  * 2026-11-12 (section 2) moved them, as they were: the core's door checks the caller and that a write carries the local
  * header (core/serviceRoutes.ts), and hands each on as it came; what each takes is checked here, what it forwards is
  * only what it took, and its answer is the backend's as it gave it. Each answers byte for byte as it did in the door, its
- * own words for a body that is not JSON included (e2e/accountRoutes.e2e.ts).
+ * own words for a body that is not JSON included (e2e/accountRoutes.e2e.ts), but one: a Store write without the local
+ * header to a path the Store refuses is the door's 403 now, which was a 400 BAD_PATH (the door asks before the path).
  */
 import type { HttpAnswer, ServiceRequest } from '../core/api.js'
 import { appProductUsageReport } from '../lib/appProductUsageReport.js'

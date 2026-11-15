@@ -20,7 +20,9 @@ function router(types: string[], answer: (type: string, payload: Record<string, 
   }
 }
 
-const read = (target: string) => ({ method: 'GET', target })
+/** A request as the door has it: [body] is what its read gives. */
+const asked = (method: string, target: string, body = '') => ({ method, target, readBody: vi.fn(async (_max?: number) => body) })
+const read = (target: string) => asked('GET', target)
 
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks() })
 
@@ -31,14 +33,14 @@ describe('the door\'s routes a service answers', () => {
     const setTimer = vi.fn()
     const doors = createServiceRoutes({ routes, linked, hosted, setTimer })
     const request = { method: 'POST', target: '/api/thing/save?x=1', body: '{"a":1}' }
-    expect(await doors.answer('/api/thing/save', request)).toEqual({ status: 201, body: { heard: request } })
+    expect(await doors.answer('/api/thing/save', asked('POST', '/api/thing/save?x=1', '{"a":1}'))).toEqual({ status: 201, body: { heard: request } })
     expect(linked.route).toHaveBeenCalledWith('thing_http', request, { local: true, owner: true }, expect.any(Function), 3_000)
     expect(hosted.route).not.toHaveBeenCalled()
     // Its link bounds the wait itself, a start first: no timer of the door's own.
     expect(setTimer).not.toHaveBeenCalled()
     // The first route that matches takes it; this process's service when none in its own owns it.
     expect(await doors.answer('/api/thing/slow', read('/api/thing/slow'))).toEqual({ status: 200, body: {} })
-    expect(hosted.route).toHaveBeenCalledWith('thing_slow_http', read('/api/thing/slow'), { local: true, owner: true }, expect.any(Function))
+    expect(hosted.route).toHaveBeenCalledWith('thing_slow_http', { method: 'GET', target: '/api/thing/slow' }, { local: true, owner: true }, expect.any(Function))
   })
 
   it('is not asked for a path no service answers', () => {
@@ -101,7 +103,9 @@ describe('the door\'s routes a service answers', () => {
     const linked = router(['account_http'], () => ({ status: 200, body: { ok: true } }))
     const doors = createServiceRoutes({ routes: [{ path: /^\/api\/desk$/, methods: ['GET'], type: 'account_http', waitMs: 1_000, unanswered: DOWN }], linked, hosted: router([]) })
     expect(await doors.answer('/api/desk', read('/api/desk'))).toEqual({ status: 200, body: { ok: true } })
-    expect(doors.answer('/api/desk', { method: 'POST', target: '/api/desk', body: '{}' })).toBeNull()
+    const post = asked('POST', '/api/desk', '{}')
+    expect(doors.answer('/api/desk', post)).toBeNull()
+    expect(post.readBody).not.toHaveBeenCalled()
   })
 
   it('refuses a write without the local header with the door\'s own 403, its route\'s headers on it, and never asks the service', async () => {
@@ -109,9 +113,11 @@ describe('the door\'s routes a service answers', () => {
     const route: ServiceHttpRoute = { path: /^\/api\/report$/, methods: ['GET', 'POST'], writes: ['POST'], type: 'account_http', waitMs: 1_000,
       unanswered: DOWN, headers: { 'x-vocabulary': '10' } }
     const doors = createServiceRoutes({ routes: [route], linked, hosted: router([]) })
-    const write = { method: 'POST', target: '/api/report', body: '{}' }
+    const write = asked('POST', '/api/report', '{}')
     expect(await doors.answer('/api/report', write)).toEqual({ status: 403, body: { error: 'FORBIDDEN' }, headers: { 'x-vocabulary': '10' } })
     expect(await doors.answer('/api/report', write, false)).toEqual({ status: 403, body: { error: 'FORBIDDEN' }, headers: { 'x-vocabulary': '10' } })
+    // Refused, its body is never read.
+    expect(write.readBody).not.toHaveBeenCalled()
     expect(linked.route).not.toHaveBeenCalled()
     // With it, the service answers; a read needs none.
     expect(await doors.answer('/api/report', write, true)).toEqual({ status: 200, body: { kept: true }, headers: { 'x-vocabulary': '10' } })
@@ -140,6 +146,17 @@ describe('the door\'s routes a service answers', () => {
     expect(await bare.answer('/api/report', read('/api/report'))).toEqual({ status: 200, body: {}, headers: { 'retry-after': '5' } })
     const none = createServiceRoutes({ routes: [{ ...route, headers: undefined, answerHeaders: undefined }], linked: router(['account_http'], () => ({ status: 200, body: {}, headers: { 'retry-after': '5' } })), hosted: router([]) })
     expect(await none.answer('/api/report', read('/api/report'))).toEqual({ status: 200, body: {} })
+  })
+
+  it('reads a body only once its route takes it, up to that route\'s own bound', async () => {
+    const linked = router(['thing_http'], (_type, payload) => ({ status: 200, body: { heard: payload } }))
+    const doors = createServiceRoutes({ routes: [{ path: /^\/api\/report$/, type: 'thing_http', waitMs: 1_000, unanswered: DOWN, maxBodyBytes: 8192 }, ...routes], linked, hosted: router([]) })
+    const report = asked('POST', '/api/report', '{"n":1}')
+    expect(await doors.answer('/api/report', report)).toEqual({ status: 200, body: { heard: { method: 'POST', target: '/api/report', body: '{"n":1}' } } })
+    expect(report.readBody).toHaveBeenCalledWith(8192)
+    const other = asked('PUT', '/api/thing/save', 'x')
+    await doors.answer('/api/thing/save', other)
+    expect(other.readBody).toHaveBeenCalledWith(undefined)
   })
 
   it('waits on real timers and says what is wrong on the console when not told otherwise', async () => {

@@ -1584,7 +1584,7 @@ import type { LocalWindows, WindowSurface } from '../lib/windowSurfaces.js'
 /**
  * A request the usage report measures, as the core saw it, raw and bounded (core/usageOutcomes.ts): which request, who
  * sent it, and what its answer said. The gateway turns it into the report's fixed counter names
- * (gateway/usageEvents.ts, lib/productUsageSignals.ts): the vocabulary is the backend's, not the core's. Nothing in it
+ * (gateway/usageEvents.ts, lib/productUsageSignals.ts): those names are the backend's vocabulary, which the core does not load. Nothing in it
  * goes into a report: a launch's and an agent's ids stay in the gateway's memory, as they did when the core sent them.
  */
 export interface UsageRequest {
@@ -1828,6 +1828,8 @@ export interface ServiceHttpRoute {
   headers?: Readonly<Record<string, string>>
   /** The headers its service's answer may set, lower case; any other is not written. */
   answerHeaders?: readonly string[]
+  /** The most of a body the door reads for it, in bytes: past it the body is empty (the door's own bound when absent). */
+  maxBodyBytes?: number
 }
 
 /** The gateway's routes of the door (gateway/start.ts): one request, by path. */
@@ -1893,7 +1895,8 @@ export const SERVICE_HTTP_ROUTES: readonly ServiceHttpRoute[] = [
   // The product usage feedback, choice and reports; a busy backend's Retry-After reaches the Desktop, which waits it out.
   account(/^\/api\/product-usage\/feedback$/, ['POST']),
   account(/^\/api\/product-usage\/settings$/, ['GET', 'POST']),
-  { ...account(/^\/api\/product-usage\/report$/, ['POST']), headers: { [APP_USAGE_VOCABULARY_HEADER]: String(APP_USAGE_VOCABULARY) }, answerHeaders: ['retry-after'] },
+  { ...account(/^\/api\/product-usage\/report$/, ['POST']), maxBodyBytes: 8192,
+    headers: { [APP_USAGE_VOCABULARY_HEADER]: String(APP_USAGE_VOCABULARY) }, answerHeaders: ['retry-after'] },
   // A machine's rename and delete, and the Store's ratings and reviews, which answers its other methods itself.
   account(/^\/api\/machines\//, ['PATCH', 'DELETE']),
   { path: /^\/api\/store\//, writes: ['PUT', 'DELETE'], type: 'gateway_http', waitMs: ACCOUNT_WAIT_MS, unanswered: GATEWAY_DOWN },

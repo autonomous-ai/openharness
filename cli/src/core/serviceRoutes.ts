@@ -12,6 +12,10 @@ import type { Asker, HttpAnswer, ServiceHttpRoute } from './api.js'
  *  and the body as text, for a method that carries one. */
 export interface ServiceHttpRequest { method: string; target: string; body?: string }
 
+/** A request as the door has it: its body is read only once a route takes it and lets it in, and only up to that
+ *  route's bound (the door's own when it has none); a body past it reads as empty, as the door's reads always were. */
+export interface DoorRequest { method: string; target: string; readBody(maxBytes?: number): Promise<string> }
+
 /** Where a request a service owns is answered. False when no service there owns `type`. */
 export interface ServiceRouter {
   route(type: string, payload: Record<string, unknown>, asker: Asker, reply: (result: Record<string, unknown>) => void, waitMs?: number): boolean
@@ -67,12 +71,14 @@ export function createServiceRoutes(deps: ServiceRoutesDeps) {
 
   return {
     /** The answer to [request] on [path] (its query left out), or null when no service answers that path and method.
-     *  [localOk]: the request carries the local header, which a route's write needs. */
-    answer(path: string, request: ServiceHttpRequest, localOk = false): Promise<HttpAnswer> | null {
-      const route = deps.routes.find((each) => each.path.test(path) && (!each.methods || each.methods.includes(request.method)))
+     *  [localOk]: the request carries the local header, which a route's write needs. Its body is read after both. */
+    answer(path: string, request: DoorRequest, localOk = false): Promise<HttpAnswer> | null {
+      const { method, target } = request
+      const route = deps.routes.find((each) => each.path.test(path) && (!each.methods || each.methods.includes(method)))
       if (!route) return null
-      if (route.writes?.includes(request.method) && !localOk) return Promise.resolve(headed(route, FORBIDDEN))
-      return ask(route, request).then((answer) => {
+      if (route.writes?.includes(method) && !localOk) return Promise.resolve(headed(route, FORBIDDEN))
+      const asked = (body?: string) => ask(route, { method, target, ...(body === undefined ? {} : { body }) })
+      return (method === 'GET' ? asked() : request.readBody(route.maxBodyBytes).then(asked)).then((answer) => {
         if (answer && Number.isInteger(answer.status) && (answer.status as number) >= 200 && (answer.status as number) <= 599 && isRecord(answer.body)) {
           return headed(route, { status: answer.status as number, body: answer.body }, answer.headers)
         }

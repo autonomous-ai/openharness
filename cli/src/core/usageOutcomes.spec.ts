@@ -78,7 +78,7 @@ describe('what the usage report counts of a request, told raw', () => {
     expect(JSON.stringify(sent)).not.toContain('PRIVATE')
   })
 
-  it('tells what became of a person\'s message once, as the first answer', () => {
+  it('tells what became of a person\'s message once, as the first answer, and nothing that comes after it', () => {
     const { usage, sent } = outcomes()
     const measured = usage.request('message', { agentId: 'a1', content: 'PRIVATE' }, LOCAL)!
     measured.receipt('held')
@@ -88,7 +88,20 @@ describe('what the usage report counts of a request, told raw', () => {
     expect(sent).toEqual([
       { kind: 'request', request },
       { kind: 'answer', request, first: true, elapsedMs: 0, answer: { message: 'held' } },
-      { kind: 'answer', request, first: false, elapsedMs: 0, answer: { error: 'LATE' } },
+    ])
+  })
+
+  it('tells a durable create\'s polls only by their answers, and nothing of one with no durable id', () => {
+    const { usage, sent } = outcomes()
+    expect(usage.request('agent_create_status', {}, LOCAL)).toBeNull()
+    expect(usage.request('agent_create_cancel', { creationId: 5 }, LOCAL)).toBeNull()
+    const poll = usage.request('agent_create_status', { creationId: 'c'.repeat(20) }, LOCAL)!
+    poll.answered({ state: 'pending' })
+    poll.answered({ state: 'created' })
+    const request = { type: 'agent_create_status', local: true, tool: false, role: null, creationId: 'c'.repeat(20) }
+    expect(sent).toEqual([
+      { kind: 'answer', request, first: true, elapsedMs: 0, answer: { state: 'pending' } },
+      { kind: 'answer', request, first: false, elapsedMs: 0, answer: { state: 'created' } },
     ])
   })
 

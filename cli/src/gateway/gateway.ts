@@ -308,10 +308,17 @@ export class RelayGateway implements GatewayPort {
     try { this.productUsage?.launch?.(signal) } catch { /* Optional measurement. */ }
   }
 
-  /** What the core tells of a request it measured, counted here under the report's names (gateway/usageEvents.ts). */
+  /** What the core tells of a request it measured, counted here under the report's names (gateway/usageEvents.ts). A
+   *  failure costs that event's counts and nothing else, said at most once a minute: work never waits for reporting. */
   usage(event: UsageEvent): void {
-    try { countUsage(event, (metric) => this.usageCounter(metric), (signal) => this.usageLaunch(signal)) } catch { /* Optional measurement. */ }
+    try { countUsage(event, (metric) => this.usageCounter(metric), (signal) => this.usageLaunch(signal)) } catch (error) {
+      const at = Date.now()
+      if (at - this.usageFailureSaidAt < 60_000) return
+      this.usageFailureSaidAt = at
+      console.warn(`[usage] a measured request could not be counted: ${error instanceof Error ? error.message : String(error)}`)
+    }
   }
+  private usageFailureSaidAt = -Infinity
 
   usageCounter(metric: ProductUsageMetric): void {
     try { this.productUsage?.counter?.(metric) } catch { /* Work never waits for reporting. */ }
