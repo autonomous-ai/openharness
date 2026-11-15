@@ -228,7 +228,7 @@ this platform uses leaves them out. Low risk on a Mac and Linux, medium on a Win
 | --- | ---: | --- | --- |
 | **A Codex resume reads its whole rollout on the core's loop,** twice when it repairs (`engines/kit/resumeRepair.ts`, from `core/agents/launch.ts`). The rollout of 3 October was 803 MB. Asynchronous since 15 November: a chunk at a time between turns of the loop, within a size, record and time bound, the history replaced only while its resume holds; a 200 MB rollout held the loop 2.4 s, now 8 ms (543 files, 93,160 lines). Left: the worker | 495 | Codex's worker | medium |
 | **Six engines' model switch drives their panes from the core** (`lib/runtimeControl.ts:229-663`), with their question key steps and readers. Claude Code and Codex already use a worker's grant | 715 | the other engines' worker | medium |
-| **The other fourteen engines run in the core:** their normalizers, readers and Stop rules (`core/transcripts/attach.ts:415-599`, `ingest.ts`, `history.ts`, `core/turns/turnHooks.ts:133-280`), and 16,055 more lines loaded once one of their sessions needs it | 2,584 + 16,055 | one worker for all fourteen, as the plan says ([other engines](2026-10-08-other-engines-out-of-core.md)) | medium, high on attach |
+| **The other fourteen engines run in the core:** their normalizers, readers and Stop rules (`core/transcripts/attach.ts:415-599`, `ingest.ts`, `history.ts`, `core/turns/turnHooks.ts:133-280`), and 16,055 more lines loaded once one of their sessions needs it. Their history and last turns are read in their worker, `engine-others`, since #PR_NUMBER; the live part is left | 2,584 + 16,055 | one worker for all fourteen, as the plan says ([other engines](2026-10-08-other-engines-out-of-core.md)) | medium, high on attach |
 | **Engine set-up:** installing engines, their hooks and plugins, probing binaries, the person's login shell (`engines/kit/native*.ts`, `hookSettings.ts`, `hookReview.ts`, `launchExecutable.ts`, `engines/nativeLaunch.ts`) | 4,436 | a set-up process: needs a ruling first | high |
 | Store engines: deletes on their databases at purge, a whole conversation read into the core at close. Codex's title index is read from its end, then only what Codex appends (15 November) | 483 | their worker | medium to high |
 
@@ -345,7 +345,7 @@ today that the rule says it should not, most serious first:
    `lib/agentCreationReceipt.ts`).
 5. **Children that are a feature's:** `git clone` inside `agent_create` (`lib/projectFolder.ts:241`), engine installers
    that run npm or curl (`engines/kit/nativeInstall.ts:357`), `amp threads export`, which calls Amp's servers
-   (`core/transcripts/history.ts:56`). The New dialog's login shells are the edge host's since 13 November.
+   (`core/transcripts/history.ts:56`; in the other engines' worker since #PR_NUMBER). The New dialog's login shells are the edge host's since 13 November.
 6. **Launch arguments, environment and files from models, the Store and shared machines are checked for shape
    only** (`core/modelsLink.ts:75-89`, `storeLink.ts:36-42`, `sharedMachinesLink.ts:22-25`).
 7. **Keys the core holds without need.** A grid's API key is kept on the registry row and copied into each

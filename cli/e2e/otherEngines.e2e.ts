@@ -168,9 +168,9 @@ console.log('fixture-pi-ready'); setInterval(() => {}, 1000);
   })
 
   // The numbers a change to how the core follows or reads these engines shows, before and after, on this one workload:
-  // OTHER_ENGINES_PERF=1 E2E_BUNDLE=1. Four Pi conversations of 500 turns each, attached again as a core starts; the
+  // OTHER_ENGINES_PERF=<report.json> E2E_BUNDLE=1. Four Pi conversations of 500 turns each, attached again as a core starts; the
   // core's CPU at rest with them; and 40 history reads, their latency and the core's CPU over them.
-  it.runIf(process.env.OTHER_ENGINES_PERF === '1')('measures attach, the core at rest and history reads', async () => {
+  it.runIf(!!process.env.OTHER_ENGINES_PERF)('measures attach, the core at rest and history reads', async () => {
     const { d, c } = await fresh()
     const TURNS = 500
     const agents = []
@@ -217,8 +217,8 @@ console.log('fixture-pi-ready'); setInterval(() => {}, 1000);
     }
     const readsCpu = await cpu() - readsFrom
     latencies.sort((a, b) => a - b)
-    console.log(`[perf] other engines ${JSON.stringify({ attachMs: attached, coreRestCpuPercent: Number(rest.toFixed(3)),
+    writeFileSync(process.env.OTHER_ENGINES_PERF!, JSON.stringify({ attachMs: attached, coreRestCpuPercent: Number(rest.toFixed(3)),
       historyMs: { p50: Math.round(latencies[19]), p95: Math.round(latencies[37]), max: Math.round(latencies[39]) },
-      coreCpuSecondsFor40Reads: Number(readsCpu.toFixed(2)), worker: harnessdProcesses(d).has('engine-others') })}`)
+      coreCpuSecondsFor40Reads: Number(readsCpu.toFixed(2)), worker: harnessdProcesses(d).has('engine-others') }, null, 1) + '\n')
   }, 300_000)
 })
