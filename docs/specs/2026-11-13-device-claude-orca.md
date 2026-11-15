@@ -218,7 +218,8 @@ dial shows the existing `voice.transcript` or `voice.error`.
 - **Open (`f`).** An agent with a handle has `f`. A tap (`agent.open` with no `reason`) runs `orca terminal switch
   --terminal <h> --json`, then on macOS `open -b com.stablyai.orca` so Orca comes forward. An `agent.open` with
   `reason: "question"` (a question screen that came up by itself) never switches Orca. A failure is a toast: "Orca did
-  not open it."
+  not open it." A turn of the dial that rests 400 ms on the agent switches the pane too, without `open -b`, so Orca is
+  not brought forward ([the dial and the apps follow each other](2026-11-14-dial-pane-follow.md)).
 - **Voice.** `orca terminal send --terminal <h> --text <t> --enter --wait-submit 5 --json`, under the rule above (an ended session is refused).
 - **The command.** `orca` on `PATH`, else `/Applications/Orca.app/Contents/Resources/bin/orca` on macOS. Run with
   `execFile` (no shell), 10 s timeout, text ≤ 2000 characters, at most one Orca command at a time per agent.

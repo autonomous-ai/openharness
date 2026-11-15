@@ -18,8 +18,8 @@
 // `{"say":"<text>"}` a user row and an answer in the session, `{"link":"<path>"}` its record replaced by a symlink to
 // that path, `{"pad":<bytes>}` its record rewritten that large.
 //
-// It keeps its own argv: with `process.title` set, macOS `ps` no longer shows a process's environment, and the daemon
-// reads a Hermes's home from it.
+// It keeps `<home>/state.db` open for its whole run, as Hermes does, and the daemon finds a Hermes's home from the store
+// its process holds open.
 import { execFileSync } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
 import { closeSync, mkdirSync, openSync, readSync, renameSync, rmSync, statSync, symlinkSync, watch, writeFileSync } from 'node:fs'

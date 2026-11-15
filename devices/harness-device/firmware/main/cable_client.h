@@ -189,6 +189,20 @@ bool cable_client_notification_read(const char *agent_id, const char *read_token
 // The user tapped a swarm. Not answered — see above.
 void cable_client_select_swarm(const char *swarm_id);
 
+// ── the apps, named by `appFilter:"v1"` in the hello (spec 2026-11-14-dial-app-filter) ────────────────
+// With no window the dial holds one app's agents (Harness, Orca, Ghostty, ...):
+//   in   apps {shown, apps:[{id, name, count, waiting}]}   ≤16, the daemon's order, in the machine view only
+//   out  app.pick {app}                                     the app to show; answered with `apps` and its ring
+// An id goes back in `app.pick`, so one that cannot be held whole is dropped, never cut.
+#define CABLE_MAX_APPS 16
+#define CABLE_APP_ID_MAX 16
+typedef struct {
+    char id[CABLE_APP_ID_MAX];
+    char name[24];
+    uint16_t count, waiting;   // its agents, and how many of them wait on the reader; 0..999
+} cable_app_t;
+void cable_client_pick_app(const char *app);
+
 // Send what the user asked for, into `agent_id`. Fire-and-forget: everything after this arrives back as
 // `turn.started` / `turn.done`, or as `turn.error` in words a person can act on.
 void cable_client_send_turn(const char *agent_id, const char *text);

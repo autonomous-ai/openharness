@@ -52,6 +52,11 @@ impl Fake {
         self.lines("ends.log")
     }
 
+    /// What every `@record` run read on its stdin, a line each.
+    pub fn stdin(&self) -> Vec<String> {
+        self.lines("stdin.log")
+    }
+
     pub fn pids(&self) -> Vec<i32> {
         self.lines("pids.log").iter().map(|pid| pid.parse().unwrap()).collect()
     }

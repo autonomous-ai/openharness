@@ -215,7 +215,7 @@ this platform uses leaves them out. Low risk on a Mac and Linux, medium on a Win
 | What | Lines | Where to | Risk |
 | --- | ---: | --- | --- |
 | **Feature routes in the two doors.** Pairing and keys, the account, desk and Store proxies, usage reports, voice, the relay to other machines (`hookServer.ts` 470, `localWsServer.ts` 430, `core/main.ts` about 300, `lib/storeProxy.ts` 48). The device and Wi-Fi routes left on 15 November, through the adapter the rest will use (`core/serviceRoutes.ts`) | 1,250 | gateway, devices, edge, through one adapter that turns a route into a service request | medium |
-| **Git.** A create clones a repository or adds a worktree inside the core; every agent frame runs git for its project and branch (`lib/gitProject.ts`, `agentProject.ts`, `projectFolder.ts`, `sessionGitHistory.ts`, `sessionGitContext.ts`, `worktreeDeletion.ts`, `sshHosts.ts`, `scm/`) | 1,900 | edge (workspaces): a create asks for its folder, a frame reads a reported cache | medium |
+| **Git.** Every agent frame runs git for its project and branch (`lib/gitProject.ts`, `agentProject.ts`, `sessionGitHistory.ts`, `sessionGitContext.ts`, `sshHosts.ts`, `scm/`). Half done on 15 November (#4319): a create's clone, worktree or branch, and a purge's worktree review and removal, are the workspaces service's (`lib/gitProjectFolder.ts`, `worktreeDeletion.ts`; core 541 files, 92,440 lines) | 1,900 | edge (workspaces): a create asks for its folder (done), a frame reads a reported cache | medium |
 | **The product usage vocabulary** and the mapping of each request's outcome to counter names (`lib/productUsageContract.ts`, `productUsageSignals.ts`, `productHealthContract.ts`, `appProductUsageReport.ts`) | 723 | gateway: the core sends one raw outcome | low |
 | **Paste uploads.** Up to 20 MB from a remote client into the core's memory, then files written and clipboard tools started (`lib/terminalStreamManager.ts:1003-1234`, with `lib/osClipboard.ts` and `lib/pasteDropFiles.ts`) | 240 to 465 | a paste service in the edge host | medium |
 | **The harness index and manifest,** read and parsed with zod on the frame path (`dsh/installed.ts`, `manifest.ts`, `compatibility.ts`) | 420 | viewers (the Store): a reported cache | medium |
@@ -344,15 +344,16 @@ today that the rule says it should not, most serious first:
    on since 13 November.) And work that grows with history: create receipts are
    never deleted and are scanned every minute, a bounded part at a time (493 on the Mac measured,
    `lib/agentCreationReceipt.ts`).
-5. **Children that are a feature's:** `git clone` inside `agent_create` (`lib/projectFolder.ts:241`), engine installers
+5. **Children that are a feature's:** `git clone` inside `agent_create` (the workspaces service's since 15 November), engine installers
    that run npm or curl (`engines/kit/nativeInstall.ts:357`), `amp threads export`, which calls Amp's servers
    (`core/transcripts/history.ts:56`; in the other engines' worker since #4317). The New dialog's login shells are the edge host's since 13 November.
 6. **Launch arguments, environment and files from models, the Store and shared machines are checked for shape
    only** (`core/modelsLink.ts:75-89`, `storeLink.ts:36-42`, `sharedMachinesLink.ts:22-25`).
 7. **Keys the core holds without need.** A grid's API key is kept on the registry row and copied into each
    stopped agent's file (`lib/registry.ts:145-153`, `lib/stoppedAgents.ts:147`). The whole environment of up to
-   256 agent processes is cached to find their sessions (`lib/processEnv.ts:121`), and an OpenRouter key is cached
-   and never read (`lib/gatewayRuntime.ts:100`). The saved-API store was parsed at every launch, keys included,
+   256 agent processes was cached to find their sessions (`lib/processEnv.ts`), and an OpenRouter key cached and
+   never read (`lib/gatewayRuntime.ts`), until 15 November: both went with the reads that filled them
+   (`src/architecture.environment.spec.ts`). The saved-API store was parsed at every launch, keys included,
    to learn whether one exists (`lib/apiConnectionMetadata.ts:33-52`), until 15 November: a launch reads a list
    without the keys now. A connected service's secret passes
    through the core in the clear (`lib/connectors/vaultOps.ts:22-25`).

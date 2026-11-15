@@ -1,8 +1,7 @@
 /** Optional model metadata follows discovery; it never owns a binding or delays session control. */
 import type { ModelsPort } from '../api.js'
-import { gridAssignmentAnswersIn, gridAssignmentEvidence, sameGridAssignment,
+import { gridAssignmentAnswersIn, gridAssignmentEvidence, gridOutsideArgv, sameGridAssignment,
   type GridAssignment, type GridAssignmentProcess } from '../../lib/gridAssignmentWire.js'
-import { readProcessEnv } from '../../lib/processEnv.js'
 import type { RegisteredSession, registry as Registry } from '../../lib/registry.js'
 import type { DiscoveredTerminalAgent } from '../../lib/terminalAgentDiscovery.js'
 import { sameProcessIdentity } from '../../lib/terminalRuntime.js'
@@ -76,14 +75,16 @@ export function createGridAssignments({ models, registry, revision, announce, wa
       }
       ask(inputs)
     },
-    /** A swap has already committed its process. Read metadata in the background, never under its route hold. */
+    /** A swap has already committed its process. Read metadata in the background, never under its route hold. An
+     *  engine whose grid is in no command line has its grid from the launch the swap committed: nothing to read. */
     refresh(session: RegisteredSession): void {
-      if (!session.processIdentity) return
+      if (!session.processIdentity || gridOutsideArgv(session.engine)) return
       const owner = ticket(session, 'refresh')
       if (!owner) return
-      const identity = session.processIdentity
-      void Promise.all([readProcessEnv(identity), processLaunchArgs(identity)]).then(([env, args]) => {
-        const process = gridAssignmentEvidence(owner.key, session.engine, env, args)
+      void processLaunchArgs(session.processIdentity).then(args => {
+        // '' is a command line that could not be read (no process table, the process gone, or a renamed Pi with no
+        // launcher of ours above it): no finding, and the row keeps its grid.
+        const process = args ? gridAssignmentEvidence(owner.key, session.engine, args) : undefined
         if (process) ask([{ owner, process }])
         else if (process === null) { owner.apply(null); owner.done() }
         else owner.done()

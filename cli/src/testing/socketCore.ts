@@ -10,7 +10,7 @@ import { env } from '../config/env.js'
 import { createCloseRequests } from '../core/agents/close.js'
 import { createHandoffRequest, type Handoff, type HandoffRequest } from '../services/handoffRequest.js'
 import { createLaunchRequests, type LaunchRequestDeps, type RestartAgent, type ResumeAgent } from '../core/agents/launches.js'
-import { MODELS_OFF } from '../core/api.js'
+import { MODELS_OFF, WORKSPACES_OFF, type PreparedFolder, type WorkspacesPort } from '../core/api.js'
 import { createPurgeRequest, createStopRequest } from '../core/agents/lifecycle.js'
 import { createAgentList, type AgentListDeps } from '../core/agents/list.js'
 import { createAgentUpdate } from '../core/agents/update.js'
@@ -131,16 +131,22 @@ export function bindHandoffRequest(socket: BackendSocket, prepare: ((req: Handof
   }
 }
 
-type Launcher = { resume: ResumeAgent | null; restart: RestartAgent | null; modelTarget: LaunchRequestDeps['modelTarget'] | null }
+type Launcher = { resume: ResumeAgent | null; restart: RestartAgent | null; modelTarget: LaunchRequestDeps['modelTarget'] | null; workspaces: WorkspacesPort | null }
 const launchers = new WeakMap<BackendSocket, Launcher>()
+
+/** Workspaces that make every folder a create asks git for with [prepare], and nothing else. */
+export const preparingWorkspaces = (prepare: WorkspacesPort['prepareFolder']): WorkspacesPort => ({ ...WORKSPACES_OFF, ready: () => true, prepareFolder: prepare })
+/** The answer of workspaces that made [cwd]. */
+export const prepared = (cwd: string, more: Partial<Extract<PreparedFolder, { ok: true }>> = {}): PreparedFolder => ({ ok: true, cwd, ...more })
+
 /** `agent_create`, `agent_create_status`, `agent_resume`, `agent_restart` and `agent_fork`
  *  (core/agents/launches.ts), over the socket's create and fork slots and receipts of their own. A spec
- *  that resumes, restarts or creates on a grid model says through what (with none, models reads as off);
- *  each call adds to what the last one said. */
+ *  that resumes, restarts, creates on a grid model or asks git for a folder says through what (with none, models and
+ *  workspaces read as off); each call adds to what the last one said. */
 export function bindLaunchRequests(socket: BackendSocket, over: Partial<Launcher> = {}): void {
   let launcher = launchers.get(socket)
   if (!launcher) {
-    const state: Launcher = { resume: null, restart: null, modelTarget: null }
+    const state: Launcher = { resume: null, restart: null, modelTarget: null, workspaces: null }
     launcher = state
     launchers.set(socket, state)
     const launches = createLaunchRequests({
@@ -149,6 +155,7 @@ export function bindLaunchRequests(socket: BackendSocket, over: Partial<Launcher
       resumeAgent: () => state.resume, restartAgent: () => state.restart,
       byAgent: (id) => registry.byAgent(id), stoppedAgent: (id) => stoppedAgents.get(id) ?? undefined, toProject: (s) => socket.toProject(s),
       modelTarget: (selection) => (state.modelTarget ?? MODELS_OFF.launchTarget)(selection),
+      workspaces: () => state.workspaces,
     })
     socket.createProvider = launches.create
     socket.createStatusProvider = launches.createStatus

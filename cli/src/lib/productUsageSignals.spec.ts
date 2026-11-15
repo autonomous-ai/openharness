@@ -322,7 +322,9 @@ it('keeps every refusal core/agents can answer named: in a fixed kind, or in the
   // These helpers answer through core/agents too. Scanning only that directory missed Windows' new
   // refusal and every Git worktree refusal (five unlisted launch failures on 2026-10-21).
   for (const [path, pattern] of [
-    ['projectFolder.ts', /new (?:ProjectFolderError|RepositoryAccessError)\('([A-Z][A-Z0-9_]*)'/g],
+    ['projectFolder.ts', /new ProjectFolderError\('([A-Z][A-Z0-9_]*)'/g],
+    // A clone's, a worktree's and a branch's refusals, made in the workspaces service and answered through a create.
+    ['gitProjectFolder.ts', /new (?:ProjectFolderError|RepositoryAccessError|RepositoryHostKeyError)\('([A-Z][A-Z0-9_]*)'/g],
     ['gitProject.ts', /new GitProjectError\('([A-Z][A-Z0-9_]*)'/g],
     ['windows/launch.ts', /error: '([A-Z][A-Z0-9_]*)'/g],
   ] as const) {

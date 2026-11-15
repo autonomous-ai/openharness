@@ -1,15 +1,16 @@
 /**
  * `harness device claude …` as the menu-bar app, the plugin's hook and its mod run it: a fake `claude` (a ClaudeRun that
- * answers from a table), Claude Code's settings in a throwaway CLAUDE_CONFIG_DIR, and a daemon listening on a socket in a
- * throwaway folder. The real `claude`, ~/.claude and the daemon are never touched.
+ * answers from a table), Claude Code's settings in a throwaway CLAUDE_CONFIG_DIR, and a daemon and the devices' listener on
+ * sockets in a throwaway folder. The real `claude`, ~/.claude and the daemon are never touched.
  */
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { unixSocketPath } from '../lib/localSocket.js'
+import { devicesListenerPath } from '../devices/listenerPath.js'
+import { listenLocalSocket, unixSocketPath } from '../lib/localSocket.js'
 import { DEVICE_USAGE, runDeviceCommand, type DeviceDeps } from './command.js'
 import type { ClaudeRun } from './plugin.js'
 
@@ -54,6 +55,16 @@ async function daemonAt(dataDir: string): Promise<string[]> {
   cleanup.push(() => new Promise<void>((resolve) => { server.closeAllConnections(); server.close(() => resolve()) }))
   await new Promise<void>((resolve) => { server.listen(unixSocketPath(dataDir, PORT)!, resolve) })
   return bodies
+}
+
+/** The devices' listener on its real socket in [dataDir], answering nothing: `link` only looks at the file. */
+async function devicesAt(dataDir: string): Promise<string> {
+  const path = devicesListenerPath(dataDir)!
+  // Beside the throwaway folder, never in the short folder under the real home.
+  expect(path.startsWith(dataDir)).toBe(true)
+  const served = await listenLocalSocket((_req, res) => res.end(), path)
+  cleanup.push(served.close)
+  return path
 }
 
 /** A `claude` 2.1.287 with nothing installed, whose calls answer from [answers] by their arguments. */
@@ -111,6 +122,28 @@ describe('harness device claude', () => {
     expect(await device(['claude', 'link', '--json'], { platform: 'win32' })).toEqual({ code: 1, out: [], err: [] })
   })
 
+  it('link --json prints devicesSocket beside the socket when the devices\' listener is this account\'s own', async () => {
+    const dataDir = folder()
+    const devicesSocket = await devicesAt(dataDir)
+    expect(await device(['claude', 'link', '--json'], { dataDir }))
+      .toEqual({ code: 0, err: [], out: [JSON.stringify({ socketPath: unixSocketPath(dataDir, PORT), devicesSocket })] })
+  })
+
+  // A socket another account could have put there, or could reach: the mod would post the session id to it.
+  it('link --json leaves devicesSocket out when the socket is not private', async () => {
+    const alone = (dataDir: string) => ({ code: 0, err: [], out: [JSON.stringify({ socketPath: unixSocketPath(dataDir, PORT) })] })
+    const open = folder()
+    chmodSync(await devicesAt(open), 0o666)
+    expect(await device(['claude', 'link', '--json'], { dataDir: open })).toEqual(alone(open))
+    const shared = folder()
+    await devicesAt(shared)
+    chmodSync(shared, 0o777)
+    expect(await device(['claude', 'link', '--json'], { dataDir: shared })).toEqual(alone(shared))
+    const plain = folder()
+    writeFileSync(devicesListenerPath(plain)!, '', { mode: 0o600 })
+    expect(await device(['claude', 'link', '--json'], { dataDir: plain })).toEqual(alone(plain))
+  })
+
   // The daemon, or anything that holds its socket, may answer allow: the client reads no answer and prints nothing, so the
   // prompt is always the app's.
   it('asked tells the daemon, prints nothing and exits 0 even when the daemon answers allow', async () => {
@@ -151,13 +184,19 @@ describe('harness device claude', () => {
     expect(JSON.parse(bodies[0]).sessionId).toBe('sess-on')
   })
 
-  it('link after disable exits 1 with no output, and after enable prints the socket again', async () => {
+  it('link after disable exits 1 with no output, a listener there or not, and after enable prints the socket again', async () => {
     const dataDir = folder()
     pluginOn(false)
     expect(await device(['claude', 'link', '--json'], { dataDir })).toEqual({ code: 1, out: [], err: [] })
     pluginOn(true)
     expect(await device(['claude', 'link', '--json'], { dataDir }))
       .toEqual({ code: 0, err: [], out: [JSON.stringify({ socketPath: unixSocketPath(dataDir, PORT) })] })
+    const devicesSocket = await devicesAt(dataDir)
+    pluginOn(false)
+    expect(await device(['claude', 'link', '--json'], { dataDir })).toEqual({ code: 1, out: [], err: [] })
+    pluginOn(true)
+    expect(await device(['claude', 'link', '--json'], { dataDir }))
+      .toEqual({ code: 0, err: [], out: [JSON.stringify({ socketPath: unixSocketPath(dataDir, PORT), devicesSocket })] })
   })
 
   it('asked with no daemon prints nothing and exits 0', async () => {

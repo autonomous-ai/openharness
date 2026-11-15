@@ -253,6 +253,9 @@ static void send_hello(void)
     // Named before anything else about this dial is believed. See CABLE_PRODUCT.
     msg_string(&root, "product", CABLE_PRODUCT);
     msg_number(&root, "proto", CABLE_PROTO_VERSION);
+    // With no window, one app's agents at a time (spec 2026-11-14-dial-app-filter): `apps` in (handle_apps), `app.pick`
+    // back. Older daemons ignore it and send the single ring.
+    msg_string(&root, "appFilter", "v1");
     // Which of the two dials this is (board.h) — informational, so a log or a bug report can say. A
     // daemon that predates the field ignores it.
     msg_string(&root, "hw", board()->name);
@@ -295,6 +298,15 @@ void cable_client_select_swarm(const char *swarm_id)
     cJSON *root = msg("swarm.select");
     if (!root) return;
     msg_string(&root, "swarmId", swarm_id);
+    send_json(root);
+}
+
+void cable_client_pick_app(const char *app)
+{
+    // Only an id this dial could have been sent whole (handle_apps).
+    if (!app || !app[0] || strlen(app) >= CABLE_APP_ID_MAX) return;
+    cJSON *root = msg("app.pick");
+    msg_string(&root, "app", app);
     send_json(root);
 }
 
@@ -793,6 +805,46 @@ static void handle_swarms(const cJSON *p)
     ui_swarms_replace(rows, n, selected);
 }
 
+// ── the apps ────────────────────────────────────────────────────────────────────────────────────────
+// A count on the dial: 0 to 999, anything else clamped, and a value that is not a number 0.
+static uint16_t count_of(const cJSON *o, const char *key)
+{
+    const cJSON *v = cJSON_GetObjectItemCaseSensitive(o, key);
+    return !cJSON_IsNumber(v) || !(v->valuedouble > 0) ? 0 : v->valuedouble > 999 ? 999 : (uint16_t)v->valuedouble;
+}
+// `apps` {shown, apps}: the whole list, replaced on arrival, and known even when empty, so the dial can tell "no apps"
+// from a daemon that sends none. A list that is not an array keeps the dial's apps, as every other malformed list does.
+// An id goes back in `app.pick`, so one that cannot be held whole is dropped, and so is a second row with the same id;
+// a name is only drawn, so it is cut on a character. A `shown` that is no entry's id is kept: the UI does not find it.
+static void handle_apps(const cJSON *p)
+{
+    const cJSON *list = cJSON_GetObjectItemCaseSensitive(p, "apps"), *it = NULL;
+    if (!cJSON_IsArray(list)) return;
+    static cable_app_t rows[CABLE_MAX_APPS];   // static: off the reader task's stack
+    int n = 0;
+    cJSON_ArrayForEach(it, list) {
+        if (n >= CABLE_MAX_APPS) break;
+        const char *id = str_of(it, "id"), *name = str_of(it, "name");
+        if (!id || !id[0] || strlen(id) >= sizeof rows[n].id) continue;
+        bool duplicate = false;
+        for (int i = 0; i < n; i++) if (!strcmp(rows[i].id, id)) duplicate = true;
+        if (duplicate) continue;
+        cable_app_t *a = &rows[n++];
+        memset(a, 0, sizeof *a);
+        memcpy(a->id, id, strlen(id));
+        size_t len = name ? strlen(name) : 0;
+        if (len >= sizeof a->name) {
+            len = sizeof a->name - 1;
+            while (len && ((uint8_t)name[len] & 0xc0) == 0x80) len--;   // never inside a letter
+        }
+        if (len) memcpy(a->name, name, len);
+        a->count = count_of(it, "count");
+        a->waiting = count_of(it, "waiting");
+    }
+    const char *shown = str_of(p, "shown");
+    ui_apps_replace(rows, n, shown && strlen(shown) < CABLE_APP_ID_MAX ? shown : "");
+}
+
 // `question` {agentId, id, questions}.
 static void handle_question(const cJSON *p, const char *agent_id)
 {
@@ -880,6 +932,9 @@ static void session_down(const char *why)
     // alone deliberately: a session that comes back on the same computer should land where it was.
     cable_machines_clear(&s_machines);
     ui_machines_clear();
+    // And the apps: the next daemon may be an older one that sends none, which must read as no apps, not as the last one's.
+    // Here only, not on a welcome: every keepalive greeting is welcomed, and a keepalive is sent no `apps` again.
+    ui_apps_forget();
     s_machine_name[0] = '\0';
     s_machine_id[0] = '\0';
     // Restore the plain console FIRST: whatever follows this point should be readable by a developer with
@@ -1167,6 +1222,7 @@ static void handle_message(const cJSON *root)
     if (strcmp(t, "agents.begin") == 0) { handle_agents_begin(); return; }
     if (strcmp(t, "agent") == 0) { handle_agent(p); return; }
     if (strcmp(t, "agents.end") == 0) { handle_agents_end(p); return; }
+    if (strcmp(t, "apps") == 0) { handle_apps(p); return; }
     if (strcmp(t, "machines.begin") == 0) { cable_machines_begin(&s_machines); return; }
     if (strcmp(t, "machine") == 0) { stage_machine(p, str_of(p, "id")); return; }
     if (strcmp(t, "machines.end") == 0) { handle_machines_end(p); return; }

@@ -4,14 +4,14 @@ import { CURSOR_TRANSCRIPT } from './cursor/contract.js'
 import { GROK_TRANSCRIPT } from './grok/contract.js'
 import { AGY_PROCESS_SESSION, AGY_TRANSCRIPT } from './agy/contract.js'
 import { COPILOT_PROCESS_SESSION, COPILOT_TRANSCRIPT } from './copilot/contract.js'
+import { homeShaped } from './kit/processFacts.js'
 import { locateProcessSession, locateTranscript } from './kit/sessionLocation.js'
 import { inspectTranscriptPath } from '../lib/registry.js'
 import { env } from '../config/env.js'
-import { readProcessEnv } from '../lib/processEnv.js'
+import { heldHome } from '../lib/processHeldFiles.js'
 import { processView } from '../lib/processMounts.js'
 import type { ProcessIdentity } from '../lib/terminalTypes.js'
-import { HERMES_HISTORY_ID_RE, HERMES_HOME_RULE, HERMES_SESSION_END, HERMES_SOURCE, HERMES_TERMINAL_RECORD, hermesDbPath } from './hermes/contract.js'
-import { homeFromEnvironment, homeIsNamed } from './kit/processHome.js'
+import { HERMES_HELD_STORE, HERMES_HISTORY_ID_RE, HERMES_SESSION_END, HERMES_SOURCE, HERMES_TERMINAL_RECORD, hermesDbPath } from './hermes/contract.js'
 import { readTerminalRecord, terminalRecordNames, terminalRecordStamp, type Terminal, type TerminalRecordRead } from './kit/terminalRecord.js'
 import { isInteractiveSource, readStoreSessionSource } from './kit/storeSource.js'
 import { IdentityReadUnavailable } from './kit/identityScan.js'
@@ -31,56 +31,32 @@ export function processSessionOf(engine: 'agy' | 'copilot', home: string, pid: n
 }
 
 /**
- * The home a Hermes process uses, by Hermes's rule from its own environment: a sandboxed Hermes with only a `HOME` of
- * its own keeps its store under that `HOME`, not under the daemon's. One in another mount namespace names it in its own
- * view, and the answer is the daemon's path of it. Null is the daemon's default home; undefined is evidence that cannot
- * say (a home with no path in the daemon's view too), and must preserve an existing home.
+ * The home a Hermes process works in, from the store it holds open, at the daemon's path of it. Null is the daemon's
+ * default home, and another engine; undefined is a process that holds no store yet, one whose files cannot be
+ * listed, a sandbox's home with no path here, or a path that could not be a home (`homeShaped`), and must preserve an
+ * existing home. `children` names the selected
+ * process's direct children that are Hermes's own binary (lib/processTable.ts `engineChildren`): no other process is
+ * listed, and two homes among them are no home (lib/processHeldFiles.ts `heldHome`).
  */
-export async function probeHermesHome(identity: ProcessIdentity, engine: AgentEngine): Promise<string | null | undefined> {
+export async function probeHermesHome(selected: ProcessIdentity, engine: AgentEngine, children?: () => readonly ProcessIdentity[]): Promise<string | null | undefined> {
   if (engine !== 'hermes') return null
-  const named = await namedHome(identity)
-  if (named === undefined) return undefined
-  const view = await processView(identity)
-  const home = view.state === 'sandbox' ? view.toHost(named) : named
-  if (home === null) return undefined
+  const home = await heldHome(selected, HERMES_HELD_STORE, children)
+  if (home === undefined || !homeShaped(home)) return undefined
   return await canonical(home) === await canonical(env.HERMES_HOME.replace(/\/+$/, '')) ? null : home
 }
 
 /**
- * Whether the home `probeHermesHome` answers is Harness's own working out, not the value of the process's own
- * `HERMES_HOME`: one from its `HOME`, or one it named that the daemon reads at another path. A relaunch must not export
- * such a home (registry.ts RegisteredSession.hermesHomeDerived): the relaunched process works its own out again.
- */
-export async function probeHermesHomeDerived(identity: ProcessIdentity, engine: AgentEngine): Promise<boolean> {
-  if (engine !== 'hermes') return false
-  const processEnv = await readProcessEnv(identity)
-  if (!processEnv) return false
-  if (!homeIsNamed(HERMES_HOME_RULE, processEnv)) return true
-  const home = homeFromEnvironment(HERMES_HOME_RULE, processEnv, process.platform)
-  const view = await processView(identity)
-  return view.state === 'sandbox' && home !== undefined && view.toHost(home) !== home
-}
-
-/**
- * A Hermes process in another mount namespace (a sandbox): its folder as it names it, the one Hermes writes, and the
- * daemon's path of it. 'unseen' when its home cannot be told, or its home or folder has no path in the daemon's view:
- * Harness cannot read what Hermes keeps there. Undefined for a process that sees the daemon's mounts, one whose
- * namespace cannot be read, and another engine.
+ * A Hermes process in another mount namespace: its folder as it names it, and the daemon's path of it. 'unseen' when
+ * that folder has no path in the daemon's view. Undefined for a process that sees the daemon's mounts, one whose
+ * namespace cannot be read, and another engine. Its home is not asked here: an unknown home holds nothing.
  */
 export async function probeHermesSandbox(identity: ProcessIdentity, engine: AgentEngine): Promise<{ cwd: string; hostCwd: string } | 'unseen' | undefined> {
   if (engine !== 'hermes') return undefined
   const view = await processView(identity)
   if (view.state !== 'sandbox') return undefined
-  const home = await namedHome(identity)
   const hostCwd = view.cwd === null ? null : view.toHost(view.cwd)
-  if (view.cwd === null || hostCwd === null || home === undefined || view.toHost(home) === null) return 'unseen'
+  if (view.cwd === null || hostCwd === null) return 'unseen'
   return { cwd: view.cwd, hostCwd }
-}
-
-// The home a Hermes process names, in its own view; undefined when its environment cannot be read or cannot say.
-async function namedHome(identity: ProcessIdentity): Promise<string | undefined> {
-  const processEnv = await readProcessEnv(identity)
-  return processEnv ? homeFromEnvironment(HERMES_HOME_RULE, processEnv, process.platform) : undefined
 }
 
 // The same home spelled differently (a symlinked `~`) is still the daemon's.

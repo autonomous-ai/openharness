@@ -13,6 +13,7 @@ import { chmodSync, constants, copyFileSync, mkdirSync, mkdtempSync, readFileSyn
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
+import { refuseRosettaNode } from '../src/testing/placeNode.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 
 /**
@@ -21,6 +22,9 @@ import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
  */
 const copies = ((): boolean => {
   if (process.platform === 'win32') return false
+  // Outside the try: under Rosetta this copy takes about 15 s to start against its 20 s, and each of the master's links
+  // of the managed copy as long again (testing/placeNode.ts). A skip or a timeout would not name the Node.
+  refuseRosettaNode()
   const dir = mkdtempSync(join(tmpdir(), 'harnessd-node-copy-'))
   try {
     copyFileSync(process.execPath, join(dir, 'node'), constants.COPYFILE_FICLONE)

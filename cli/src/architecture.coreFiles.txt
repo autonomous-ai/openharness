@@ -160,7 +160,6 @@ dsh/installed.ts
 dsh/launch.ts
 dsh/launchWire.ts
 dsh/manifest.ts
-dsh/probe.ts
 engines/agy/contract.ts
 engines/amp/contract.ts
 engines/claude/backgroundCommands.ts
@@ -228,7 +227,6 @@ engines/kit/notifyHooks.ts
 engines/kit/pane.ts
 engines/kit/pluginFetch.ts
 engines/kit/processFacts.ts
-engines/kit/processHome.ts
 engines/kit/processRecordEvidence.ts
 engines/kit/projectFolder.ts
 engines/kit/questionPane.ts
@@ -418,8 +416,8 @@ lib/pathContainment.ts
 lib/patientExec.ts
 lib/peerAccount.ts
 lib/piSessionHome.ts
-lib/processEnv.ts
 lib/processEvidence.ts
+lib/processHeldFiles.ts
 lib/processLiveness.ts
 lib/processMounts.ts
 lib/processProof.ts
@@ -536,7 +534,6 @@ lib/windows/shell.ts
 lib/windows/storeAppAlias.ts
 lib/windows/treeKill.ts
 lib/workspaceCheck.ts
-lib/worktreeDeletion.ts
 lib/wsLiveness.ts
 localWsServer.ts
 scm/gitScmProject.ts

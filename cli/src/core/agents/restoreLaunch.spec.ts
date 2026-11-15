@@ -40,6 +40,21 @@ describe('a restore launch Windows refuses', () => {
   })
 })
 
+describe('the grid a restore launch puts its engine on', () => {
+  it('is its launch record\'s, as refreshed for this launch, or none on the engine\'s own login, prepared or not', async () => {
+    const override = { networkId: 'api', networkName: 'Saved', baseUrl: 'https://saved.example/now/v1', apiKey: 'k', model: 'm' }
+    for (const prepare of [undefined, false] as const) {
+      const { deps, build } = setup()
+      deps.relaunchOverrides.mockResolvedValueOnce({ ok: true, overrides: { ...built.overrides, gridLaunchRecord: { override, webSearch: 'on' } } })
+      expect(await build(entry, { current: () => true, prepare })).toMatchObject({ grid: { baseUrl: 'https://saved.example/now/v1', model: 'm' } })
+      const { model: _model, ...modelless } = override
+      deps.relaunchOverrides.mockResolvedValueOnce({ ok: true, overrides: { ...built.overrides, gridLaunchRecord: { override: modelless, webSearch: 'on' } } })
+      expect(await build(entry, { current: () => true, prepare })).toMatchObject({ grid: { baseUrl: 'https://saved.example/now/v1', model: null } })
+      expect(await build(entry, { current: () => true, prepare })).toMatchObject({ grid: null })
+    }
+  })
+})
+
 describe('a launch built without preparation', () => {
   it('writes neither the conversation nor the row, and builds the same launch', async () => {
     const { deps, build } = setup()
@@ -49,7 +64,7 @@ describe('a launch built without preparation', () => {
     expect(deps.launch).toHaveBeenCalledWith(entry, { resumeSessionId: 'conversation', agentId: 'agent' }, built.overrides, { bypassPermission: false })
     const current = () => true
     const prepared = await build(entry, { resumeSessionId: 'conversation', current })
-    expect(prepared).toEqual({ argv: ['engine'] })
+    expect(prepared).toEqual({ argv: ['engine'], grid: null })
     // The history is replaced only while this restore holds.
     expect(deps.prepareSessionResume).toHaveBeenCalledWith(entry, current)
     expect(deps.refreshGridWebSearch).toHaveBeenCalledTimes(1)
@@ -108,7 +123,7 @@ describe('restore preparation keeps session authority in core', () => {
     if (stage === 'unknown flags') deps.downgradedPermission.mockResolvedValue({ bypassPermission: false, nativeHold: 'Waiting for executable help.' } as never)
     const result = await build(entry, { current: () => true })
     expect(deps.downgradedPermission).toHaveBeenCalledWith(entry, native)
-    if (stage === 'ready') expect(result).toEqual({ argv: ['engine'] })
+    if (stage === 'ready') expect(result).toEqual({ argv: ['engine'], grid: null })
     else {
       expect(result).toMatchObject({ held: 'native' })
       expect(deps.launch).not.toHaveBeenCalled()
@@ -133,7 +148,7 @@ describe('restore preparation keeps session authority in core', () => {
     })
     const { deps } = setup()
     const build = createRestoreLaunch({ ...deps, relaunchOverrides: helpers.relaunchOverrides })
-    expect(await build(requested, { current: () => true })).toEqual({ argv: ['engine'] })
+    expect(await build(requested, { current: () => true })).toEqual({ argv: ['engine'], grid: null })
     expect(apiNotes).toHaveBeenCalledWith('/workspace', requested.engine)
     expect(deps.launch).toHaveBeenCalledWith(requested, { agentId: requested.agentId }, expect.any(Object), expect.any(Object))
   })
@@ -162,7 +177,7 @@ describe('restore preparation keeps session authority in core', () => {
 
   it.each([undefined, 'conversation'])('applies confirmed preparation only to the current owner: resume %s', async resumeSessionId => {
     const { deps, build } = setup()
-    expect(await build(entry, { resumeSessionId, current: () => true })).toEqual({ argv: ['engine'] })
+    expect(await build(entry, { resumeSessionId, current: () => true })).toEqual({ argv: ['engine'], grid: null })
     expect(deps.prepareSessionResume).toHaveBeenCalledTimes(resumeSessionId ? 1 : 0)
     expect(deps.refreshGridWebSearch).toHaveBeenCalledWith('agent', built.overrides)
     expect(deps.launch).toHaveBeenCalledWith(entry, { resumeSessionId, agentId: 'agent' }, built.overrides, { bypassPermission: false })

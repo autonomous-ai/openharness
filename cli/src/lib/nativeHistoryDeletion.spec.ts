@@ -29,12 +29,15 @@ afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.resetModules(); f
 
 async function setup(over: Partial<PurgeDeps> = {}, rows = [row]) {
   const { PurgeAgentService } = await import('./purgeAgentService.js')
+  // The worktree's answers on the module a test spies on, as workspaces give them (lib/worktreeDeletion.ts).
+  const deletion = await import('./worktreeDeletion.js')
   const live = new Map(rows.map(entry => [entry.agentId, entry])), saved = new Map<string, RegisteredSession>()
   const deleted = vi.fn(), stop = vi.fn(async (id: string) => { saved.set(id, live.get(id)!); live.delete(id) })
   const service = new PurgeAgentService({ live: (id: string) => live.get(id), sessions: () => [...live.values(), ...saved.values()],
     stopped: { get: (id: string) => saved.get(id) ?? null, beginResume: () => 'fixture-reservation',
       finishResume: () => {}, remove: (id: string) => saved.delete(id) },
-    checkpoints: { deletionFiles: () => [] }, stop, restarting: () => false, deleted, ...over,
+    checkpoints: { deletionFiles: () => [] }, stop, restarting: () => false, deleted,
+    worktrees: () => deletion.worktreeAnswers(deletion), ...over,
   } as unknown as PurgeDeps)
   const request = { agentId: row.agentId, sessionId: row.sessionId, createdAt: row.registeredAt }
   return { service, live, saved, stop, deleted, request }

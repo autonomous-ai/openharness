@@ -22,7 +22,8 @@ vi.mock('../../engines/launchPrep.js', () => ({ folderTrust: (engine: string, pr
 }) }))
 vi.mock('../../lib/projectFolder.js', async original => ({ ...await original<object>(),
   projectsRoot: () => join(fixture.root, 'projects'),
-  prepareProjectFolder: async (request: unknown, options: { label: string }) => {
+  // A new project's empty folder, the one the core still makes itself (git's folders are the workspaces service's).
+  prepareNewFolder: async (request: unknown, options: { label: string }) => {
     fixture.events.push(['prepare-folder', request, options.label])
     const path = join(fixture.root, 'prepared'); mkdirSync(path); return path
   },
@@ -77,6 +78,7 @@ it.each(['linux', 'darwin'])('preserves healthy launch requests and durable rece
           fixture.events.push(['models', selection])
           return { networkId: 'fixture-grid', networkName: 'Fixture', baseUrl: 'http://fixture.invalid/v1', apiKey: 'fixture-key', model: 'fixture-model' }
         },
+        workspaces: () => null,
       }
       const requests = createLaunchRequests(deps)
       const payload: Record<string, unknown> = kind === 'fork'
