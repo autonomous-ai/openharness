@@ -2408,15 +2408,18 @@ describe('hook notify: a session outside a pane', () => {
   })
 
   // Claude Code types another session's message in as a prompt that starts so; the devices must not move the dial for it.
-  it('a prompt another session sent posts turn-start with relayed: true, and never the prompt', async () => {
-    const { port, requests } = await collect()
-    await runHook({ port, input: {
+  // Its gateway and Codex home are the registration's facts (src/hookServer.ts hookFacts); the devices take neither.
+  it('a prompt another session sent posts turn-start with relayed: true, and never the prompt or the facts', async () => {
+    const { port, requests, headers } = await collect()
+    await runHook({ port, env: { ANTHROPIC_BASE_URL: 'https://openrouter.ai/api', CODEX_HOME: '/x' }, input: {
       hook_event_name: 'UserPromptSubmit', session_id: 'sess-1', cwd: '/w',
       prompt: '<cross-session-message from="a1">prompt-secret</cross-session-message>',
     } })
     expect(requests).toHaveLength(1)
     expect(requests[0].body).toMatchObject({ event: 'turn-start', relayed: true })
     expect(JSON.stringify(requests[0].body)).not.toMatch(/cross-session|prompt-secret/)
+    expect(headers[0]).not.toHaveProperty('x-harness-hook-gateway')
+    expect(headers[0]).not.toHaveProperty('x-harness-hook-codex-home')
   })
 
   it('leading whitespace before it is still relayed', async () => {
