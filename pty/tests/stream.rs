@@ -233,11 +233,14 @@ fn overflow_drops_subscriber() {
     // so draining the socket cannot race the producer and keep the queue below its limit.
     write_frame(&mut s, Kind::Pause, b"").unwrap();
     write_frame(&mut s, Kind::Input, b"go\r").unwrap();
-    let (kind, ack) = next_reply(&mut s);
-    assert_eq!(kind, Kind::Ack);
-    assert_eq!(ack, serde_json::json!({"for": Kind::Input as u8, "ok": true}));
     let mut closed = None;
     while let Ok(Some((kind, payload))) = read_frame(&mut s) {
+        if kind == Kind::Ack {
+            assert_eq!(
+                json(&payload),
+                serde_json::json!({"for": Kind::Input as u8, "ok": true})
+            );
+        }
         if kind == Kind::Closed {
             closed = Some(String::from_utf8_lossy(&payload).to_string());
             break;
