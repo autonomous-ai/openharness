@@ -324,8 +324,12 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
     const fatal = (engine: string) => (): void => {
       if (stream.retired) return
       warn(`[${engine}] STORE_READER_FAILED`)
-      forget(stream.token)
-      lose(stream.token)
+      stream.retired = true
+      stream.reader?.stop()
+      if (bySession.get(session.sessionId) === stream) bySession.delete(session.sessionId)
+      // Accepted frames remain the core's to take, even when its wait is between replies. Keep them under the
+      // existing outbox budgets until the final acknowledgement, then report the reader gone and rebuild.
+      if (!stream.outbox.length) { forget(stream.token); lose(stream.token) }
       wake?.()
     }
     switch (session.engine) {
@@ -389,6 +393,8 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
     streams.delete(token)
     stream.retired = true
     queuedBytes -= stream.kept
+    stream.kept = 0
+    stream.outbox.length = 0
     stream.reader?.stop()
     if (bySession.get(stream.session.sessionId) === stream) {
       bySession.delete(stream.session.sessionId)
@@ -449,7 +455,7 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
       // Opened again: what the store held is history, and only the turn's difference from the core's is said.
       const said = stream.outbox.length
       await reader.start()
-      if (!current()) { reader.stop(); forget(ask.token); return null }
+      if (!current() || stream.retired) { reader.stop(); forget(ask.token); return null }
       if (resume) {
         const hydrated = stream.outbox.splice(said).map(entry => { stream.kept -= entry.bytes; queuedBytes -= entry.bytes; return entry.frame })
         const started = hydrated.flatMap(frame => frame.events).findLast(event => event.type === 'turn_started') ?? null
@@ -585,7 +591,10 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
   return {
     open,
     forget,
-    stream: (token: string): Stream | undefined => streams.get(token),
+    stream: (token: string): Stream | undefined => {
+      const stream = streams.get(token)
+      return stream?.retired ? undefined : stream
+    },
     /** A read now of what the session's transcript or store has that the stream has not delivered. Cursor's Tasks first,
      *  which are queued behind a drain of their own. */
     async drain(stream: Stream): Promise<void> {
@@ -620,7 +629,12 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
     ack(acks: Record<string, number>): string[] {
       for (const [token, serial] of Object.entries(acks)) {
         const stream = streams.get(token)
-        if (stream) { const before = stream.kept; stream.ack(serial); queuedBytes -= before - stream.kept }
+        if (stream) {
+          const before = stream.kept
+          stream.ack(serial)
+          queuedBytes -= before - stream.kept
+          if (stream.retired && !stream.outbox.length) { forget(token); lose(token) }
+        }
       }
       const gone = [...lost]
       lost.clear()

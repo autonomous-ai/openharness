@@ -35,7 +35,7 @@ class FakeReader {
   turnOpen = false
   started = 0
   polled = 0
-  constructor(readonly opts: { onEvents(events: LiveEvent[]): void; onTurnAborted?(message: string): void }) {}
+  constructor(readonly opts: { onEvents(events: LiveEvent[]): void; onTurnAborted?(message: string): void; onFatal?(error: Error): void }) {}
   async start(): Promise<void> { this.started++; if (hydrate.open) { this.turnOpen = true; this.opts.onEvents([started('running')]) } }
   stop(): void {}
   closeTurn(): void { this.turnOpen = false }
@@ -259,6 +259,98 @@ describe('the other engines\' live streams, in their worker', () => {
     fatal(new Error('late private store path'))
     expect(run.streams.stream('replacement')).toBeDefined()
     expect(run.streams.ack({})).not.toContain('failed-reader')
+    run.streams.clear()
+  })
+
+  it.each(['opencode', 'kilo', 'hermes', 'devin'] as const)('drains accepted %s frames before reporting fatal and rejects later callbacks and operations', async engine => {
+    const run = setup({ answerBytes: 1 })
+    await run.open('retiring', engine, null)
+    const reader = readers[0], stop = vi.spyOn(reader, 'stop')
+    reader.opts.onEvents([started('first')])
+    reader.opts.onEvents([started('last')])
+    reader.opts.onFatal!(new Error('failed'))
+    reader.opts.onEvents([started('too late')])
+    reader.opts.onTurnAborted?.('too late')
+    expect(stop).toHaveBeenCalled()
+    expect(run.streams.all()).toEqual([])
+    for (const op of ['close', 'drain', 'task']) {
+      expect(await run.ask(STREAM_OP, { token: 'retiring', op })).toMatchObject({ error: 'ENGINE_STREAM_GONE' })
+    }
+    const first = (await run.ask(STREAMS_WAIT, { acks: {} })).answer
+    expect(first).toMatchObject({ pages: [{ token: 'retiring', frames: [{ serial: 1, events: [started('first')] }] }], lost: [] })
+    const last = (await run.ask(STREAMS_WAIT, { acks: { retiring: 1 } })).answer
+    expect(last).toMatchObject({ pages: [{ token: 'retiring', frames: [{ serial: 2, events: [started('last')] }] }], lost: [] })
+    expect((await run.ask(STREAMS_WAIT, { acks: { retiring: 2 } })).answer).toEqual({ pages: [], lost: ['retiring'] })
+    expect(run.streams.pending()).toEqual([])
+    run.streams.clear()
+  })
+
+  it.each(['forget', 'clear'] as const)('bounds unacknowledged fatal frames and releases their budget once on %s', async cleanup => {
+    const run = setup({ limits: { totalBytes: 2_000 } })
+    const events: LiveEvent[] = [{ type: 'text_delta', payload: { content: 'x'.repeat(1_200) } }]
+    await run.open('retiring', 'opencode', null)
+    readers[0].opts.onEvents(events)
+    readers[0].opts.onFatal!(new Error('failed'))
+    const first = (await run.ask(STREAMS_WAIT, { acks: {} })).answer
+    expect(first).toMatchObject({ pages: [{ token: 'retiring', frames: [{ events }] }], lost: [] })
+    for (let i = 0; i < 3; i++) expect((await run.ask(STREAMS_WAIT, { acks: {} })).answer).toEqual(first)
+    await run.open('pressure', 'pi', null)
+    run.line('s-pressure', 'pi', { events })
+    expect(run.streams.stream('pressure')).toBeUndefined()
+    expect(run.streams.ack({})).toEqual(['pressure'])
+    if (cleanup === 'forget') { run.streams.forget('retiring'); run.streams.forget('retiring') }
+    else { run.streams.clear(); run.streams.clear() }
+    expect(run.streams.pending()).toEqual([])
+    await run.open('fresh', 'pi', null)
+    run.line('s-fresh', 'pi', { events })
+    expect(run.streams.stream('fresh')).toBeDefined()
+    await run.open('full', 'pi', null)
+    run.line('s-full', 'pi', { events })
+    expect(run.streams.stream('full')).toBeUndefined()
+    expect(run.streams.ack({})).toEqual(['full'])
+    run.streams.clear()
+  })
+
+  it('keeps a replacement reader when the retired reader drains and its final acknowledgement releases budget', async () => {
+    const run = setup({ limits: { totalBytes: 2_000 } })
+    const session = { agentId: 'a', sessionId: 'same', engine: 'devin', transcriptPath: null, store: '/db/x.db' }
+    const open = (token: string) => run.ask(STREAM_OPEN, { token, session, live: false, abandon: false, held: false })
+    const events: LiveEvent[] = [{ type: 'text_delta', payload: { content: 'x'.repeat(900) } }]
+    await open('old')
+    const old = readers[0]
+    old.opts.onEvents(events)
+    old.opts.onFatal!(new Error('failed'))
+    await open('replacement')
+    const replacement = readers[1], stop = vi.spyOn(replacement, 'stop')
+    replacement.opts.onEvents([started('replacement')])
+    const before = (await run.ask(STREAMS_WAIT, { acks: {} })).answer
+    expect(before.pages.map((page: { token: string }) => page.token)).toEqual(['old', 'replacement'])
+    expect(before.lost).toEqual([])
+    const after = (await run.ask(STREAMS_WAIT, { acks: { old: 1 } })).answer
+    expect(after).toMatchObject({ pages: [{ token: 'replacement', frames: [{ events: [started('replacement')] }] }], lost: ['old'] })
+    expect(run.streams.all().map(stream => stream.token)).toEqual(['replacement'])
+    expect(stop).not.toHaveBeenCalled()
+    old.opts.onFatal!(new Error('late failure'))
+    old.opts.onEvents([started('late events')])
+    run.streams.forget('old')
+    replacement.opts.onEvents(events)
+    expect(run.streams.stream('replacement')).toBeDefined()
+    expect(run.streams.ack({})).toEqual([])
+    replacement.opts.onEvents(events)
+    expect(run.streams.stream('replacement')).toBeUndefined()
+    expect(run.streams.ack({})).toEqual(['replacement'])
+    run.streams.clear()
+  })
+
+  it('refuses an open whose reader emits and fatals during initial hydration', async () => {
+    vi.spyOn(FakeReader.prototype, 'start').mockImplementationOnce(async function (this: FakeReader) {
+      this.opts.onEvents([started('not attached')])
+      this.opts.onFatal!(new Error('failed'))
+    })
+    const run = setup()
+    expect(await run.open('opening', 'opencode', null)).toMatchObject({ error: 'ENGINE_UNAVAILABLE' })
+    expect(run.streams.pending()).toEqual([])
+    expect(run.streams.all()).toEqual([])
     run.streams.clear()
   })
 
