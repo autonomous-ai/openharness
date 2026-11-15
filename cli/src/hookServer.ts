@@ -5,12 +5,13 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto'
-import { isAbsolute, join } from 'node:path'
+import { join } from 'node:path'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { admitHook, hooksFor } from './engines/hooks.js'
 import { HERMES_HOMES, HERMES_SESSION_PANE, HERMES_SOURCE } from './engines/hermes/contract.js'
 import { readStorePool } from './engines/kit/storePool.js'
+import { homeIsAbsolute } from './engines/kit/homeAdoption.js'
 import { isInteractiveSource, rowSessionSource, storeSourceQuery } from './engines/kit/storeSource.js'
 import { IdentityReadUnavailable } from './engines/kit/identityScan.js'
 import { createPendingAdmissions, type AdmissionDecision } from './core/engines/pendingAdmission.js'
@@ -225,7 +226,7 @@ const GATEWAY_HEADER = 'x-harness-hook-gateway', CODEX_HOME_HEADER = 'x-harness-
  * What a hook says of its own environment, in two headers: a daemon that does not read a header ignores it, where it
  * refuses a body with a field it does not list. Each is judged alone: a refused one is named, never the request.
  */
-export function hookFacts(req: Pick<http.IncomingMessage, 'headers'>): { gateway?: 'ori' | null; codexHome?: string; refused: string[] } {
+export function hookFacts(req: Pick<http.IncomingMessage, 'headers'>, platform?: NodeJS.Platform): { gateway?: 'ori' | null; codexHome?: string; refused: string[] } {
   const facts: { gateway?: 'ori' | null; codexHome?: string; refused: string[] } = { refused: [] }
   const gateway = req.headers[GATEWAY_HEADER]
   if (gateway === 'ori') facts.gateway = 'ori'
@@ -236,7 +237,9 @@ export function hookFacts(req: Pick<http.IncomingMessage, 'headers'>): { gateway
     // Percent-encoded by the hook: Node refuses a header value above U+00FF, and a path may hold any character.
     let decoded: string | undefined
     try { decoded = typeof home === 'string' ? decodeURIComponent(home) : undefined } catch { decoded = undefined }
-    if (decoded !== undefined && isAbsolute(decoded) && decoded.length <= 1_024 && !/[\u0000-\u001f\u007f]/.test(decoded)) facts.codexHome = decoded
+    // Absolute as agent_create takes a home: on Windows a drive's path. A share's or a device's would have the core's
+    // realpath open another computer's folder on every registration.
+    if (decoded !== undefined && homeIsAbsolute(decoded, platform) && decoded.length <= 1_024 && !/[\u0000-\u001f\u007f]/.test(decoded)) facts.codexHome = decoded
     else facts.refused.push(CODEX_HOME_HEADER)
   }
   return facts
