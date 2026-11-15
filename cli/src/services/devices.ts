@@ -502,6 +502,17 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     launchDesktop: opener.desktop,
     // A measure: the app's name only.
     desktopTimedOut: () => log('[device] open · harness · no window'),
+    // With a window open, the tab or the shown app's ring: a measure as `switched` is, a view and a cause, never an app.
+    // After the list read that can turn it, as a switch: every dial gets its tabs and list at once, the outside agents'
+    // questions are asked or closed by the gate, and on a ring its agents mid-turn are told again.
+    appView: (view, cause) => {
+      log(`[device] app filter: view ${view} · ${cause}`)
+      queueMicrotask(() => {
+        part.call('dial', () => cable.viewChanged())
+        part.call('dial', showWaits)
+        if (view === 'apps') part.call('dial', remind)
+      })
+    },
     // The settle of the app in front: a filter that throws costs the devices nothing, and the devices stopping cancels it.
     appTimer: timerIn('dial'),
   })
@@ -689,10 +700,13 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const busy = ({ agent }: HostEntry): boolean => agent.state === 'working' || agent.state === 'needs-you'
   /** Its turn, with the waiting line: the session's activity read right after it (`activityText` above) repeats the line. */
   const started = (entry: HostEntry): DialEvent => ({ kind: 'processing', agentId: entry.agent.id, text: waiting(entry) ?? '', recap: '', subagent: false })
-  /** A window is open (its tabs, not null): the dial shows the tab, as before there were agents outside a pane, and hears
-   *  nothing of them. What they do is still noted, so that only a later change is told once the window closes. */
+  /** A window is open (its tabs, not null). */
   let windowOpen = false
-  const tell = (event: DialEvent): void => { if (!windowOpen) toDial(event) }
+  /** The dials hold the window's tab, as before there were agents outside a pane, and hear nothing of them: on the tab, or
+   *  on an app's ring that no connected dial shows (an older dial or Harness Pro alone holds the tab). What they do is still
+   *  noted, so that only a later change is told once the gate opens. */
+  const heldOnTab = (): boolean => windowOpen && (cableHost.holdsTab() || !cable.wantsApps())
+  const tell = (event: DialEvent): void => { if (!heldOnTab()) toDial(event) }
   /**
    * The prompt an agent waits on, once its hook said what it asks, is also a question for the dial, which the dial only
    * shows (cableSession.ts SHOWN_ONLY_PREFIX): the round dial draws a line on its working face, a question on its asking
@@ -703,10 +717,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     shown.set(agentId, question)
     inOrder(agentId, () => { void cable.question(agentId, question.id, question.questions) })
   }
-  /** Asks what waits and closes what no longer does (or what a window covers): before a line, which it takes the place of. */
+  /** Asks what waits and closes what no longer does (or what a window's tab covers): before a line, which it takes the place of. */
   const showWaits = (): void => {
     const want = new Map<string, HostEntry>()
-    if (!windowOpen) {
+    if (!heldOnTab()) {
       for (const entry of outsideEntries()) if (entry.source === observed && observed.waitingOn(entry.agent.id) !== undefined) want.set(entry.agent.id, entry)
     }
     for (const [agentId, question] of shown) {
@@ -778,7 +792,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    *  says appFilter, read only while one is connected: that read can switch the app, which no older dial shows. */
   const remind = async (): Promise<void> => {
     const mid = outsideEntries().filter(busy)
-    if (!mid.length || windowOpen) return
+    if (!mid.length || heldOnTab()) return
     const apps = cable.wantsApps() ? [cableHost.listAgentSnapshot({ apps: true })] : []
     const lists = await Promise.all([cableHost.listAgentSnapshot(), ...apps])
     const listed = new Set(lists.flatMap((list) => list.agents.map((agent) => agent.id)))
@@ -789,6 +803,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const dialAttached = (on: boolean): void => {
     for (const timer of attached) clearInterval(timer)
     attached = []
+    // A dial that says appFilter coming or going can turn the gate (heldOnTab): what waits is asked, or closed, again.
+    if (!on) part.call('dial', showWaits)
     if (!observed || !herdr) return
     // Only with herdr installed, read at each attach, as a tap needs it (herdr.ts): with none, no folder is watched
     // (~/.config, or the home folder, recursive on macOS) for a socket that never comes.
@@ -798,6 +814,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     part.call('observed', () => observed.scanOpen())
     // Its questions were in its RAM: the ones still waiting are asked again, under their ids.
     part.call('dial', () => { for (const [agentId, question] of shown) ask(agentId, question) })
+    part.call('dial', showWaits)
     part.call('dial', remind)
     attached = [
       every(OPEN_SCAN_MS, () => observed.scanOpen()),
@@ -1027,14 +1044,15 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     },
     // Null is the window gone: an empty desk with a window behind it is an empty tab, with none a shut app.
     swarms: (swarms) => part.call('dial', () => {
-      const closed = windowOpen && swarms === null
+      const held = heldOnTab()
       windowOpen = swarms !== null
       cableHost.setSwarms(swarms)
       void cable.syncSwarms()
       void cable.syncAgents()
-      // An open window closes the questions of the agents outside it, as it covers their lines; closed, they are asked again.
+      // A window's tab closes the questions of the agents outside it, as it covers their lines; closed, they are asked again.
       showWaits()
-      if (closed) part.call('dial', remind)
+      // A window that closes from an app's ring left nothing to tell again: the view turning to that ring told it.
+      if (held && !heldOnTab()) part.call('dial', remind)
     }),
     // Held rather than acted on: the dial is handed it when it attaches, the one moment its drawer is known
     // to be empty.
