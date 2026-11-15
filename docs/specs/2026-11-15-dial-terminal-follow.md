@@ -217,8 +217,8 @@ an `NSAppleEventDescriptor` handler parameter.
 
 No tty, title, agent or session in any line.
 
-- **Devices log:** `[device] tab · moved | no-tile | not-in-front | no-agent | echo`, and the existing
-  `[device] swipe · <outcome>` for selects.
+- **Devices log:** `[device] tab · moved`, `[device] tab · skipped · no tile | not in front | unknown agent | echo`,
+  and the existing `[device] swipe · <outcome>` for selects.
 - **Harness Device log:** `tabs: <app> select ok | none | failed`, one line each. Poll failures as one count line a
   minute while there are any, and at once when polling stops. `not allowed`, `has no tty` and `has no scripting` once
   each. `watch: not reading` once when the watch's stdin is full.

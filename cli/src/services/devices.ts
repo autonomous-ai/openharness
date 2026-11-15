@@ -116,7 +116,7 @@ const FOLLOWED: Record<FollowCause | 'settle', Record<'moved' | 'no-tile', strin
   prompt: { moved: '[device] prompt · moved', 'no-tile': '[device] prompt · skipped · no tile' },
   attach: { moved: '[device] attach · moved', 'no-tile': '[device] attach · skipped · no tile' },
   settle: { moved: '[device] settle · moved', 'no-tile': '[device] settle · skipped · no tile' },
-  tab: { moved: '[device] tab · moved', 'no-tile': '[device] tab · no-tile' },
+  tab: { moved: '[device] tab · moved', 'no-tile': '[device] tab · skipped · no tile' },
 }
 /** A tab app reports back each tab the dial selects: a report within this long of a select of its tty is that select's
  *  echo. Every select of that long is kept, as a fast swipe's late report for a tab it passed must not pull the dial back,
@@ -871,15 +871,15 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     const { app, tty, at } = report
     // The dial selected a tab while the report waited for the settle: it names one the dial has left, and the app's
     // report of the tab selected is still to come.
-    if (report.written !== written) { log('[device] tab · echo'); return }
+    if (report.written !== written) { log('[device] tab · skipped · echo'); return }
     // By when the report came, not when its app settled: the wait for the settle must not age the dial's own select. It
     // excuses this report only: the person selecting that tab again soon after moves the dial. The app runs selects and
     // reports tabs in order, so a select before it will see no echo now (Harness Device replaced it while it waited, or
     // its tab was already shown): it goes too.
     const echo = selects.findIndex((sent) => sent.tty === tty && at - sent.at < TAB_ECHO_MS)
-    if (echo >= 0) { selects = selects.slice(echo + 1); log('[device] tab · echo'); return }
+    if (echo >= 0) { selects = selects.slice(echo + 1); log('[device] tab · skipped · echo'); return }
     const agent = observed?.byTab(app, tty)
-    if (!agent) { log('[device] tab · no-agent'); return }
+    if (!agent) { log('[device] tab · skipped · unknown agent'); return }
     return cable.followLocal(agent.id, 'tab')
   }
   const tabReported = (tab: Tab): Promise<void> | undefined => {
@@ -891,7 +891,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     if (!tabReport) return
     if (tabReport.app === app) return followTab(tabReport)
     tabReport = undefined
-    if (cable.isConnected) log('[device] tab · not-in-front')
+    if (cable.isConnected) log('[device] tab · skipped · not in front')
   }
   const port: DevicesPort = {
     // A paneless session's hook event, as the core checked it: taken, and dropped here while the observed source is
