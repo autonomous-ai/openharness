@@ -713,9 +713,11 @@ describe.skipIf(process.platform === 'win32')('the devices listener', () => {
       expect(stream!.write({ n: 2 })).toBe(true)
       expect(await client.got(2)).toEqual(['{"n":1}', '{"n":2}'])
 
-      const fifteen = Array.from({ length: LISTENER_MAX_CONNECTIONS - 1 }, () => connection(path))
-      for (const each of fifteen) expect((await each.front('ghostty')).status).toBe(204)
+      // Silent, so only the faked deadline could free their slots: a kept-alive answer's real 2 s timer would.
+      const fifteen = Array.from({ length: LISTENER_MAX_CONNECTIONS - 1 }, () => bare(path, ''))
+      await Promise.all(fifteen.map(({ socket }) => new Promise((connected) => socket.once('connect', connected))))
       expect(await bare(path, '').read).toBe('')
+      for (const { socket } of fifteen) expect(socket.destroyed).toBe(false)
       expect(stream!.ended.aborted).toBe(false)
     })
 
