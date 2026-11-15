@@ -27,7 +27,7 @@ vi.mock('./lib/transcriptTail.js', async (importOriginal) => {
 })
 
 import { BackendSocket } from './backendSocket.js'
-import { dispatchDown, relaySocket } from './testing/relaySocket.js'
+import { relaySocket } from './testing/relaySocket.js'
 import { registry } from './lib/registry.js'
 import { bindHistory } from './testing/socketCore.js'
 
@@ -68,8 +68,12 @@ describe('session_get past the cap, for an engine without pages', () => {
   }
   const ask = async (payload: Record<string, unknown>): Promise<Record<string, any>> => {
     const requestId = `c${++requests}`
-    await dispatchDown(socket, { type: 'session_get', payload: { requestId, ...payload } }, 'local:capped', 'local')
-    return frames.find((frame) => frame.type === 'session_get_result' && frame.payload.requestId === requestId)!.payload
+    socket.handleLocalFrame('local:capped', { type: 'session_get', payload: { requestId, ...payload } })
+    return vi.waitFor(() => {
+      const answer = frames.find((frame) => frame.type === 'session_get_result' && frame.payload.requestId === requestId)
+      expect(answer).toBeDefined()
+      return answer!.payload
+    }, { timeout: 5_000 })
   }
 
   it('says so in the whole read and the whole page, and leaves a transcript under the cap as it was', async () => {
