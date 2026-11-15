@@ -128,16 +128,22 @@ core/usageOutcomes.ts.
   while the gateway is away) must carry it, because the Desktop reads it off every answer and one without it would stop
   its newer names until the next report. appProductUsageReport.spec.ts reads it from core/api.ts beside the names.
 
-## Step 3, done (#PR, branch core-routes-4): the keys' routes and the phone's code to the gateway, ⌘K's frames to the devices
+## Step 3, done (#4324, branch core-routes-4): the keys' routes and the phone's code to the gateway, ⌘K's frames to the devices
 
-The core's files and lines: 542 / 92,562 before (main at 0b15482b55), CORE_AFTER after (tools/coreCount.mjs).
+The core's files and lines: 542 / 92,562 before (main at 0b15482b55), 542 / 92,283 after (tools/coreCount.mjs).
 
 ### The adapter, extended (core/serviceRoutes.ts, core/api.ts)
 - A door kind: `ServiceHttpRoute.door: 'socket'`. Over the TCP port the door answers its 403 `{error:'FORBIDDEN'}` before
   the service is asked; over the daemon's own socket (Windows: its pipe, with the token's proof) it asks with
   `asker.door: 'socket'` (`Asker.door`, set only by the door, for every route asked over the socket). No client of the
   local WebSocket is ever given it (backendSocket `askerFor`), so a `gateway_http` sent over the WebSocket for a socket's
-  route is refused by the service (gateway/accountRoutes.ts `gatewayHttp`). hookServer.ts passes `trustedLocal` as `socket`.
+  route is refused by the service: `gatewayHttp` passes `asker.door === 'socket'` to the handoff's own route, which reads
+  the path once and refuses without it (gateway/accountRoutes.ts). hookServer.ts passes `trustedLocal` as `socket`; a
+  service's own process keeps `door` when it rebuilds the asker (services/process.ts; the e2e found it dropped).
+- The adapter never rejects: a router that throws while asked is the route's own answer, logged (`could not be asked`).
+- Like step 2's, the keys' routes are ordinary requests a client of the local WebSocket may send, at the door's trust: no
+  browser can open the WebSocket (it refuses any Origin), and over TCP it takes the local credential from this account. The
+  local header, the door's guard against a browser page, is not asked there.
 - The WebSocket half: `SERVICE_WS_FRAMES` (`ServiceWsFrame`: `frame`, `type`, `result?`, `waitMs`, `unanswered?`) and
   `serviceRoutes.frame(frame, asker)`: the frame is asked of its service as `{ frame, payload }` (the window's payload as it
   came, nested: serviceLinks puts its own `requestId` on the request), off the connection's ordered chain, and the answer
