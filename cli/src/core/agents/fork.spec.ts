@@ -1,3 +1,4 @@
+import { opencodeMajorVersion } from '../../engines/opencode/version.js'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -26,7 +27,7 @@ vi.mock('../../engines/inProcess.js', async (real) => {
   const actual = await real<typeof import('../../engines/inProcess.js')>()
   return { ...actual, loadEngine: vi.fn(actual.loadEngine) }
 })
-vi.mock('../../engines/launchControl.js', () => ({ opencodeMajorVersion: vi.fn(() => 2) }))
+vi.mock('../../engines/opencode/version.js', () => ({ opencodeMajorVersion: vi.fn(() => 2) }))
 vi.mock('../../lib/createAgentPane.js', () => ({ createAndRegisterPane: vi.fn() }))
 vi.mock('../../lib/engineBin.js', async (real) => ({ ...await real<object>(), enginePathOverride: vi.fn(() => null) }))
 vi.mock('../../lib/engineInstall.js', async (real) => ({ ...await real<object>(), engineInstallRecipe: vi.fn(() => ({ install: 'recipe' })) }))
@@ -59,7 +60,7 @@ const source = (over: Partial<RegisteredSession> = {}): RegisteredSession =>
 const pending = { agentId: 'f1', sessionId: '', engine: 'claude' } as RegisteredSession
 
 function setup(row: RegisteredSession | null = source(), over: Partial<ForkAgentDeps> = {}) {
-  const deps: ForkAgentDeps = {
+  const deps: ForkAgentDeps = { opencodeMajor: opencodeMajorVersion,
     createBackend: {} as ForkAgentDeps['createBackend'],
     registry: { byAgent: vi.fn(() => row ?? undefined) } as unknown as ForkAgentDeps['registry'],
     mirror: {
@@ -186,7 +187,7 @@ describe('forking an agent', () => {
       executable: { command: '/fixture/engine', identity: 'fixture', current: () => true },
       environment: { HOME: root, PATH: '/fixture/bin' },
     })
-    const { inspectNativeLaunch } = await import('../../engines/nativeLaunch.js')
+    const { inspectNativeLaunch } = await import('../../testing/nativeSetupInProcess.js')
     const prepareNative = (native: NativeLaunch, current: () => boolean, environment?: Readonly<Record<string, string>>, clear?: readonly string[]) => native.prepareHooks(0, current, environment, clear)
     const helpers = createLaunchHelpers({ authority: () => () => true, prepareApiTools: vi.fn(), setGridLaunch: vi.fn(), prepareResume: async () => ({ repairedItems: 0 }),
       launchOverridesDeps: { native: (engine, source) => inspectNativeLaunch(engine, source), prepareNative,
@@ -380,6 +381,12 @@ describe('forking an agent', () => {
     const refused = vi.fn(async () => ({ ok: false as const, error: 'API_UNAVAILABLE', detail: 'gone' }))
     expect(await setup(source(), { relaunchOverrides: refused }).fork({ agentId: 'a1', name: null, prompt: null })).toEqual({ ok: false, error: 'API_UNAVAILABLE', detail: 'gone' })
     expect(createAndRegisterPane).not.toHaveBeenCalled()
+  })
+
+  it('keeps the existing unknown-version fork behavior while setup is unavailable', async () => {
+    const t = setup(source({ engine: 'opencode', agent: 'reviewer' }), { opencodeMajor: async () => null })
+    expect(await t.fork({ agentId: 'a1', name: null, prompt: null })).toMatchObject({ ok: true })
+    expect(supportsNamedAgent).toHaveBeenLastCalledWith('opencode', null)
   })
 
   it('forks OpenCode with eager version facts while optional code is unavailable', async () => {

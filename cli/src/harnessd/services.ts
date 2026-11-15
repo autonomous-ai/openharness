@@ -44,6 +44,9 @@ export type ServiceHostSpec = Omit<ServiceSpec, 'name'>
  * would cost that four times.
  */
 export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
+  // Installation journals and executable probes cannot block core or unrelated edge services. Older cores
+  // prepare launches inline and never ask; this process costs nothing until its first setup request.
+  engineSetup: { services: ['engineSetup'], heapLimitMiB: 128, rssLimitMiB: 384, onDemand: true, askedSince: 0 },
   // Engine workers have no older-core startup obligation: old cores run these facets inline and never ask.
   // Each holds at most four reads, a 128-entry pager and replies capped at 4 MiB. The heap limit
   // contains transient parsing; RSS additionally bounds file buffers outside V8's heap.
@@ -156,7 +159,7 @@ export const ENGINE_RESUME_REPAIR_ENV = 'HARNESSD_ENGINE_RESUME_REPAIR'
  * version its master says covers, and reads the rest in its own process, as under a master from before the worker.
  */
 export const ENGINE_OTHERS_ENV = 'HARNESSD_ENGINE_OTHERS'
-export const ENGINE_OTHERS_VERSION = 2
+export const ENGINE_OTHERS_VERSION = 3
 
 /**
  * What a master puts in its core's environment about the services it runs in their own processes: the

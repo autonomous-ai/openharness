@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { installedDsh } from '../../dsh/installed.js'
 import { dshSupportedEngines } from '../../dsh/manifest.js'
 import { loadEngine } from '../../engines/inProcess.js'
-import { opencodeMajorVersion } from '../../engines/launchControl.js'
+import { opencodeMajorVersion } from '../../engines/opencode/version.js'
 import type { NativeLaunchResult } from '../../engines/nativeLaunch.js'
 import { createNativeLaunchPreparer } from '../../engines/prepareNativeLaunch.js'
 import { AgentCreationReceiptError, AgentCreationReceipts, creationFingerprint, type AgentCreationOutcome } from '../../lib/agentCreationReceipt.js'
@@ -45,7 +45,7 @@ vi.mock('../../engines/inProcess.js', async (real) => {
   const actual = await real<typeof import('../../engines/inProcess.js')>()
   return { ...actual, loadEngine: vi.fn(actual.loadEngine) }
 })
-vi.mock('../../engines/launchControl.js', async (real) => ({ ...await real<object>(), opencodeMajorVersion: vi.fn(() => 1) }))
+vi.mock('../../engines/opencode/version.js', async (real) => ({ ...await real<object>(), opencodeMajorVersion: vi.fn(() => 1) }))
 vi.mock('../../lib/newAgentModel.js', async (real) => ({
   ...await real<object>(), parseNewAgentModel: vi.fn(() => ({ state: 'absent' })),
 }))
@@ -98,7 +98,7 @@ function setup(over: Partial<LaunchRequestDeps> = {}, launches: { create?: Creat
   const known = new Map([['new-agent', session('new-agent')], ['forked', session('forked')], ['a1', session('a1')]])
   // Workspaces in the edge host, which make every folder git makes (services/workspaces.ts).
   const workspaces = { ...WORKSPACES_OFF, ready: vi.fn(() => true), prepareFolder: vi.fn(async (project: GitProjectFolder, _options: { cloneFallback: boolean }) => gitFolder(project)) }
-  const deps: LaunchRequestDeps = {
+  const deps: LaunchRequestDeps = { opencodeMajor: opencodeMajorVersion,
     receipts: new AgentCreationReceipts(join(dir, `receipts-${++stores}`)),
     createAgent: () => create, forkAgent: () => fork, resumeAgent: () => resume, restartAgent: () => restart,
     byAgent: (id) => known.get(id), toProject: vi.fn(async (s: RegisteredSession) => frameOf(s)),
@@ -360,6 +360,14 @@ describe('agent_create, refused before any pane exists', () => {
     expect(create).not.toHaveBeenCalled()
   })
 
+  it('keeps unknown-version request validation when setup cannot answer', async () => {
+    const { ask, create } = setup()
+    vi.mocked(opencodeMajorVersion).mockResolvedValueOnce(null)
+    await ask({ engine: 'opencode', cwd: '/w', agent: 'reviewer' })
+    expect(supportsNamedAgent).toHaveBeenLastCalledWith('opencode', null)
+    expect(create).toHaveBeenCalledOnce()
+  })
+
   it('validates a named OpenCode launch without optional code', async () => {
     const { ask, create } = setup()
     vi.mocked(loadEngine).mockResolvedValue(null)
@@ -563,7 +571,7 @@ describe('agent_create with a receipt', () => {
     resolveNewAgentModel.mockRejectedValueOnce(new Error('disconnected'))
     await ask({ engine: 'claude', cwd, prompt: 'Keep this task', creationId: CREATION }, false)
     await vi.waitFor(() => expect(replies).toHaveLength(1))
-    const recovered = createLaunchRequests({ ...deps, receipts: new AgentCreationReceipts(join(dir, `receipts-${stores}`)) })
+    const recovered = createLaunchRequests({ opencodeMajor: opencodeMajorVersion, ...deps, receipts: new AgentCreationReceipts(join(dir, `receipts-${stores}`)) })
     stopRequests.push(recovered.stop)
     const target = { networkId: 'fixture-grid', networkName: 'Fixture', baseUrl: 'http://fixture.invalid/v1', apiKey: 'rotated-key' }
     resolveNewAgentModel.mockResolvedValue(target)
@@ -1520,7 +1528,7 @@ describe('agent_create_status and agent_create_cancel, by who created the launch
   it('treats a receipt written before creators were recorded as the owner\'s, and keeps a guest\'s across a restart', async () => {
     const run = withGuests()
     await guestMade(run, KIM)
-    const reloaded = createLaunchRequests({ ...run.deps, receipts: new AgentCreationReceipts(join(dir, `receipts-${stores}`)) })
+    const reloaded = createLaunchRequests({ opencodeMajor: opencodeMajorVersion, ...run.deps, receipts: new AgentCreationReceipts(join(dir, `receipts-${stores}`)) })
     stopRequests.push(reloaded.stop)
     const reread = async (guest: string | undefined, id: string) => {
       const answer = vi.fn(); await reloaded.createStatus({ creationId: id }, guest ? { local: false, guest } : { local: true }, answer); return answer.mock.calls.at(-1)![0]

@@ -54,7 +54,8 @@ it.each(['linux', 'darwin'])('preserves versioned native hook selection on %s', 
     vi.stubEnv('OPENCODE_PATH', '/fixture/bin/opencode'); vi.stubEnv('TZ', 'UTC')
     vi.resetModules()
     const { installOpencodePluginBeforeSpawn } = await import('../core/engines/hooks.js')
-    const { opencodeMajorVersion } = await import('./launchControl.js')
+    const { nativeSetupProbes } = await import('../services/nativeSetup.js')
+    const { opencodeMajorVersion } = await import('./opencode/version.js')
     const { OPENCODE_LEGACY_PLUGIN, OPENCODE_TUI_PLUGIN } = await import('./opencode/contract.js')
     const { VERSION } = await import('../version.js')
     const files = () => [OPENCODE_LEGACY_PLUGIN.file, OPENCODE_TUI_PLUGIN.file].map(file => ({
@@ -62,7 +63,7 @@ it.each(['linux', 'darwin'])('preserves versioned native hook selection on %s', 
     }))
     for (const [name, major, stamp] of [['v1', 1, 1], ['v2', 2, 2], ['downgrade-v1', 1, 3], ['current-v1', 1, 3]] as const) {
       native.major = major; native.stamp = stamp; native.calls.length = 0
-      const installed = await installOpencodePluginBeforeSpawn(4242)
+      const installed = await installOpencodePluginBeforeSpawn(4242, undefined, nativeSetupProbes)
       const first = await opencodeMajorVersion(), repeat = await opencodeMajorVersion()
       const key = `${platform}:${name}`
       observations[key] = JSON.parse(JSON.stringify({ installed, first, repeat, calls: native.calls, files: files() }).split(root).join('<root>'))

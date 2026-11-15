@@ -67,7 +67,9 @@ describe('which OpenCode the core asks for, for a named agent', () => {
       const { createLaunchRequests } = await import('../core/agents/launches.js')
       const { AgentCreationReceipts } = await import('../lib/agentCreationReceipt.js')
       const asked: unknown[] = []
+      const { opencodeMajorVersion } = await import('./opencode/version.js')
       const requests = createLaunchRequests({
+        opencodeMajor: opencodeMajorVersion,
         receipts: new AgentCreationReceipts(join(root, 'data', `receipts-${++receipts}`)),
         createAgent: () => async (request) => {
           asked.push({ engine: request.engine, agent: request.agent, name: request.name })

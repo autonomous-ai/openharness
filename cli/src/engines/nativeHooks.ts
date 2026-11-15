@@ -12,8 +12,8 @@ import { KILO_PLUGIN } from './kilo/contract.js'
 import { PI_EXTENSION } from './pi/contract.js'
 import { AMP_PLUGIN } from './amp/contract.js'
 import { HERMES_HOOK_SETTINGS, HERMES_HOOKS_SAID } from './hermes/contract.js'
-import { hermesHomeIsTui, hermesKeepsRecord, isRecordHome, rememberRecordHome } from './hermesRecord.js'
-import { opencodeMajorVersion, type OpencodeLaunchSnapshot } from './launchControl.js'
+import { hermesHomeIsTui, isRecordHome, rememberRecordHome } from './kit/hermesRecordHomes.js'
+import type { OpencodeLaunchSnapshot } from './launchControl.js'
 import { installNativePlugin, prepareNativePlugin, prepareNativePluginRemoval } from './kit/nativePlugin.js'
 import { installNativeYamlHooks, removeNativeYamlHooks } from './kit/nativeHookYaml.js'
 import { nativeHookHomes } from './kit/nativeHookHomes.js'
@@ -54,7 +54,7 @@ export async function installHermesHooks(port: number, selectedHome?: string, op
     const creates = !!selectedHome && !!options?.environment
     if (creates || homes.some(home => existsSync(join(home, HERMES_HOOK_SETTINGS.homes.file)))) {
       // Unknown: a home a record was read in keeps records, whatever its version reads as.
-      const keeps = await hermesKeepsRecord(options?.executable, options?.environment) ?? (!!selectedHome && isRecordHome(selectedHome))
+      const keeps = await options?.setup?.hermesKeepsRecord(options?.executable, options?.environment) ?? (!!selectedHome && isRecordHome(selectedHome))
       if (keeps) {
         const tui: string[] = [], cli: string[] = []
         for (const home of homes) (await hermesHomeIsTui(home) ? tui : cli).push(home)
@@ -161,7 +161,7 @@ export async function installOpencodePlugin(port: number, snapshot?: OpencodeLau
   try {
   installation.done = (async () => {
     const values = pluginValues(port)
-    const major = snapshot ? snapshot.major : await opencodeMajorVersion()
+    const major = snapshot ? snapshot.major : (await options.setup?.opencodeMajor() ?? null)
     installation.major = major
     // A newer request may have installed an upgraded/downgraded engine's hooks
     // while this probe waited. Only the latest request can change those files.

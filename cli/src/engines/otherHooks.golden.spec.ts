@@ -323,7 +323,9 @@ beforeAll(async () => {
   mkdirSync(join(root, 'data'), { recursive: true })
   mkdirSync(join(root, 'runtime'), { recursive: true })
   vi.resetModules()
-  ;({ installEngineHooks } = await import('../core/engines/hooks.js') as unknown as { installEngineHooks: typeof installEngineHooks })
+  const { installEngineHooks: install } = await import('../core/engines/hooks.js')
+  const { nativeSetupProbes } = await import('../services/nativeSetup.js')
+  installEngineHooks = (port, options) => install(port, { ...options, setup: nativeSetupProbes })
   const notify = await import('./kit/notifyHooks.js')
   const { VERSION } = await import('../version.js')
   // Longest first: the root is in every other path.

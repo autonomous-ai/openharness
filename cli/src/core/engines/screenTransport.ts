@@ -15,7 +15,7 @@ export function createScreenTransport(deps: ScreenTransportDeps) {
     disconnected: transport.disconnected,
     async read(engine: string, capture: string): Promise<ScreenReading> {
       if (!screenCapture(capture)) throw new EngineReadError('ENGINE_INVALID_REQUEST')
-      return await transport.read(engine, SCREEN_READ, { capture }, screenReading) as ScreenReading
+      return await transport.read(engine, SCREEN_READ, { capture }, answer => screenReading(answer, engine)) as ScreenReading
     },
   }
 }

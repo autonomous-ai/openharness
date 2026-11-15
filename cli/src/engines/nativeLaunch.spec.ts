@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { inspectNativeLaunch } from './nativeLaunch.js'
+import { inspectNativeLaunch as inspect } from './nativeLaunch.js'
+import { nativeSetupProbes } from '../services/nativeSetup.js'
+const inspectNativeLaunch: typeof inspect = (engine, source, deps) => inspect(engine, source, { setup: nativeSetupProbes, ...deps })
 import { captureLaunchExecutable } from './kit/launchExecutable.js'
 import { LAUNCH_LOCATION_VARIABLES, nativeHookLocations } from './kit/nativeLocations.js'
 import { engineHooks } from './hooks.js'
@@ -480,4 +482,26 @@ describe('the startup probe on Windows', () => {
     expect(codex.ok && codex.launch.startupArgs).toBeUndefined()
     expect(fixture.calls).toEqual(['/fixture/engine'])
   })
+})
+
+it('retains immutable installer recipe and location snapshots in the explicit inline path', async () => {
+  const recipe = { command: 'original', source: 'fixture', executable: { names: ['original'], homeRelativePaths: ['bin/original'], absolutePaths: ['/original'] } }
+  const environment = { HOME: '/fixture/original', PATH: '/fixture/bin' }
+  vi.mocked(captureLaunchExecutable).mockResolvedValueOnce({ state: 'install', recipe, environment })
+  const result = await inspectNativeLaunch('codex')
+  recipe.command = 'changed'; recipe.executable.names[0] = 'changed'; recipe.executable.homeRelativePaths[0] = 'changed'; recipe.executable.absolutePaths[0] = '/changed'; environment.HOME = '/changed'
+  expect(result).toMatchObject({ install: { command: 'original', executable: { names: ['original'], homeRelativePaths: ['bin/original'], absolutePaths: ['/original'] } }, environment: { HOME: '/fixture/original' } })
+  if (result.ok) throw Error('fixture was ready')
+  expect(Object.isFrozen(result.install)).toBe(true); expect(Object.isFrozen(result.install!.executable.names)).toBe(true); expect(Object.isFrozen(result.environment)).toBe(true)
+})
+
+it('retains the inline executable values independently of the provider object', async () => {
+  const executable = { command: '/fixture/approved', identity: 'immutable-inline', current: () => true }
+  vi.mocked(captureLaunchExecutable).mockResolvedValueOnce({ state: 'ready', executable, environment: { HOME: '/fixture/home', PATH: '/fixture/bin' } })
+  const result = await inspectNativeLaunch('claude')
+  executable.command = '/fixture/substituted'; executable.identity = 'changed'
+  expect(result.ok).toBe(true)
+  if (!result.ok) throw Error('fixture was held')
+  expect(result.launch.executable?.command).toBe('/fixture/approved'); expect(result.launch.executable?.identity).toBe('immutable-inline')
+  expect(Object.isFrozen(result.launch.executable)).toBe(true)
 })

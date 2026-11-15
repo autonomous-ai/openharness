@@ -1,7 +1,7 @@
 import type { ServiceRequests } from '../../core/api.js'
 import type { EngineRuntime } from '../facets/runtime.js'
 import { fillConfiguredEffort } from '../kit/runtime.js'
-import { type ReaderEngine } from './protocol.js'
+import { type WorkerEngine, type ReaderEngine } from './protocol.js'
 import { runtimeContext, runtimeOperation, RUNTIME_CAPABILITIES, RUNTIME_IN_FLIGHT, RUNTIME_READ,
   RUNTIME_REPLY_BYTES, RUNTIME_REQUEST_BYTES, RUNTIME_VERSION, RUNTIME_WAIT_MS, type RuntimeAnswer } from './runtimeProtocol.js'
 
@@ -10,14 +10,15 @@ const loadRuntime = {
   codex: async () => (await import('../codex/runtimeProfile.js')).runtime,
 }
 
+export type RuntimeReader = Omit<EngineRuntime, 'decode' | 'transcript' | 'reduce'> & Partial<Pick<EngineRuntime, 'reduce'>>
 export interface RuntimeRequestDeps {
-  load?: () => Promise<EngineRuntime>
+  load?: () => Promise<RuntimeReader>
   recycle?: () => void
 }
 
 /** Each operation starts from a supplied value, so reconnecting never loses an acknowledged profile. */
-export function engineRuntimeRequests(engine: ReaderEngine, deps: RuntimeRequestDeps = {}): ServiceRequests {
-  let loaded: Promise<EngineRuntime> | null = null
+export function engineRuntimeRequests(engine: WorkerEngine, deps: RuntimeRequestDeps = {}): ServiceRequests {
+  let loaded: Promise<RuntimeReader> | null = null
   let pending = 0
   const failure = (error: string) => ({ version: RUNTIME_VERSION, error,
     retryable: error !== 'ENGINE_INVALID_REQUEST' && error !== 'ENGINE_REPLY_TOO_LARGE' })
@@ -36,11 +37,21 @@ export function engineRuntimeRequests(engine: ReaderEngine, deps: RuntimeRequest
     })
     try {
       return await Promise.race([deadline, (async () => {
-        const adapter = await (loaded ??= (deps.load ?? loadRuntime[engine])().catch(error => { loaded = null; throw error }))
+        const adapter = await (loaded ??= (deps.load ?? loadRuntime[engine as ReaderEngine])().catch(error => { loaded = null; throw error }))
         const { session, state, control } = context
         const extra: Partial<RuntimeAnswer> = {}
-        if (operation.kind === 'records') for (const evidence of operation.records) adapter.reduce(context, evidence)
-        else if (operation.kind === 'pane') adapter.pane(context, operation.text)
+        if (operation.kind === 'records') {
+          if (!adapter.reduce) return failure('ENGINE_INVALID_REQUEST')
+          for (const evidence of operation.records) adapter.reduce(context, evidence)
+        }
+        else if (operation.kind === 'pane') {
+          const observed = await adapter.pane(context, operation.text)
+          if (observed === false) extra.observed = false
+          else if (observed?.refreshConfig) extra.refreshConfig = true
+        }
+        else if (operation.kind === 'config' && adapter.config) {
+          if (await adapter.config(context) === false) extra.observed = false
+        }
         else if (operation.kind === 'config' && adapter.configuredEffort) fillConfiguredEffort(state, await adapter.configuredEffort(session))
         else if (operation.kind === 'models') extra.models = await adapter.models(session, state)
         else if (operation.kind === 'catalog') extra.catalog = await adapter.catalog?.(session) ?? []
