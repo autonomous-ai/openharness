@@ -116,7 +116,7 @@ const FOLLOWED: Record<FollowCause | 'settle', Record<'moved' | 'no-tile', strin
 /** A tab app reports back each tab the dial selects: a report within this long of a select of its tty is that select's
  *  echo. Every select of that long is kept, as a fast swipe's late report for a tab it passed must not pull the dial back,
  *  and at most ECHO_KEPT of them. */
-const ECHO_MS = 2_000
+const TAB_ECHO_MS = 2_000
 const ECHO_KEPT = 8
 
 // The agents outside a pane: how often their processes are checked, the turns no hook moves are looked at, and, while a dial
@@ -269,7 +269,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const selected = (tty: string): void => {
     const at = monotonic()
     written++
-    selects = [...selects.filter((sent) => at - sent.at < ECHO_MS), { tty, at }].slice(-ECHO_KEPT)
+    selects = [...selects.filter((sent) => at - sent.at < TAB_ECHO_MS), { tty, at }].slice(-ECHO_KEPT)
   }
   const observed = env.HARNESS_DEVICE_OBSERVED ? observedSource(core.dataDir, log, {
     modReady: (sessionId) => inbox.ready(sessionId),
@@ -864,7 +864,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // excuses this report only: the person selecting that tab again soon after moves the dial. The app runs selects and
     // reports tabs in order, so a select before it will see no echo now (Harness Device replaced it while it waited, or
     // its tab was already shown): it goes too.
-    const echo = selects.findIndex((sent) => sent.tty === tty && at - sent.at < ECHO_MS)
+    const echo = selects.findIndex((sent) => sent.tty === tty && at - sent.at < TAB_ECHO_MS)
     if (echo >= 0) { selects = selects.slice(echo + 1); log('[device] tab · echo'); return }
     const agent = observed?.byTab(app, tty)
     if (!agent) { log('[device] tab · no-agent'); return }
