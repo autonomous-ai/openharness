@@ -248,7 +248,16 @@ Root review and integration:
 - A nine-round alternating localhost WebSocket workload found the inherited dispatch change added process CPU
   (6.196 to 6.310 microseconds per terminal frame, client and server together). The door now looks up declared
   handlers directly, so ordinary terminal frames never call the service adapter. The 95 affected adapter, key-route
-  and local WebSocket tests pass. Final matched performance and full acceptance are still pending.
+  and local WebSocket tests pass; typecheck passes. Full core coverage and process acceptance remain pending.
+- The direct-dispatch comparison used the same actual localhost WebSocket path, nine alternating rounds of 40,960
+  terminal acknowledgement/resize frames plus 1,000 measured round trips after warm-up. Main `6099a1a205` versus
+  runtime `7bb8820074`, Node 24.22.2, macOS: median process CPU 6.370 to 6.395 microseconds/frame (client and server
+  together), wall 6.349 to 6.375; round-trip p95 0.05003 to 0.04993 ms. The paired mean CPU difference was
+  -0.0765 microseconds/frame, with a bootstrap 95% interval [-0.1685, 0.0053]; no resolved regression in this
+  workload. These numbers do not claim every metric improved or isolate daemon CPU from the test client.
+  Reproduce with [routes-wire-bench.mjs](tools/routes-wire-bench.mjs); raw runs are
+  `/tmp/core-routes-wire-perf-final.json` (before the correction) and
+  `/tmp/core-routes-wire-perf-direct-dispatch.json` (after).
 
 ## Step 4: smaller items
 Phone sign-in relay (lib/loopbackGet.ts, core/terminals/browser.ts, 127 lines -> gateway), guest rules and a guest's
