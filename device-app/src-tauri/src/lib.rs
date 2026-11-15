@@ -18,6 +18,7 @@ pub mod loginitem;
 pub mod model;
 pub mod runner;
 pub mod state;
+pub mod tabs;
 pub mod types;
 pub mod watch;
 
