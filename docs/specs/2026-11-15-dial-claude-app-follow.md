@@ -137,6 +137,8 @@ count. A tap's continue link counts as the dial's own link for the echo, as a sw
   or a mod that has to ask the launcher again) is followed as the person's choice.
 - A swipe still waiting for its 400 ms rest when the app settles in front is overridden by the settle, as a prompt
   overrides it today.
+- A tap whose continue link fails brings the app forward on the session it already showed; the tap still counts as
+  the dial's own link, so a settle within 2 s does not turn the dial to that session.
 - Each well-formed attach writes one log line while a dial is linked, as each prompt does: a same-account process that
   posts attaches in a loop is held to the listener's rate (10 a second per connection).
 
