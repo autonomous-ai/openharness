@@ -14,7 +14,7 @@ export interface RecordNameOptions {
 
 /**
  * The name the person gave a Claude Code session, from the session's own process record, `<sessions>/<pid>.json`,
- * which the session writes itself. This is the one read the dial's naming allows of it (decision 5 of
+ * which the session writes itself. This is the one read the dial's naming allows of it (decisions 5 and 6 of
  * docs/specs/2026-11-15-dial-session-name.md): `name`, `nameSource` and `sessionId`, nothing else. Only a `user`
  * name is shown: a `derived` one can come from what was first asked. Never rejects, logs nothing and keeps nothing.
  */
