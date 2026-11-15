@@ -34,6 +34,18 @@ Also read in the code:
 
 ## Decided
 
+- **On #4341's host adapters** (PM, 2026-11-15, after #4341 merged): this work moves onto the per-app adapter structure
+  (`cli/src/cable/hosts/adapter.ts`, `docs/specs/2026-11-15-device-host-adapter.md`):
+  - F1's tap is a tmux adapter (`hosts/tmux.ts`).
+  - F3 is a VS Code adapter (`hosts/vscode.ts`), still in two commits of its own that revert alone.
+  - F2's Desktop launch stays in `open.ts`.
+  - The multiplexer rule holds for herdr, Rex, Zellij and tmux, so two of #4341's tests flip:
+    - herdr inside an Orca terminal takes no words or rest through Orca;
+    - herdr inside a tab app writes no tab select.
+
+    herdr inherits the `ORCA_TERMINAL_HANDLE` (and the tty) of the terminal it started in, so words typed through Orca
+    land in whichever herdr pane is focused, which may be another agent or a shell. The pull request says so.
+
 - **F1, F2 and F3 in one pull request, three tasks, each test first** (PM, 2026-11-15).
 - **F1 is in scope:** an agent in the person's own tmux is wave 1 #4's main case (PM, 2026-11-15).
 - The three checks on Diego's real dial and Macs (Verification) run in one session with Diego after the pull request
