@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { chmodSync, mkdtempSync, rmSync } from 'node:fs'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { listenLocalSocket, type LocalSocketServer } from '../lib/localSocket.js'
+import { LISTENER_MAX_CONNECTIONS } from '../services/devicesListener.js'
 import { devicesListenerPath } from './listenerPath.js'
 import { tellDevices } from './listenerClient.js'
 
@@ -60,13 +61,16 @@ describe.skipIf(process.platform === 'win32')('tellDevices, on a socket', () => 
     expect(heard).toHaveLength(5)
   })
 
-  it('an answer is never left unread: the connection is let go at once', async () => {
+  it('an answer is never left unread: more tells than the listener takes connections are all heard', async () => {
     const dir = dataDir()
-    const { server } = await listener(dir, res => { res.writeHead(429).end('{"error":"slow down"}') })
-    for (let i = 0; i < 3; i++) expect(await tellDevices(dir, FRONT)).toBe(false)
-    // The listener takes 16 connections at most: one held by each unread answer would soon refuse the watch.
-    const open = () => new Promise<number>((resolve, reject) => server.server.getConnections((error, count) => error ? reject(error) : resolve(count)))
-    await vi.waitFor(async () => expect(await open()).toBe(0))
+    // An answer larger than the stream buffers before it is read: a short one is taken whole unread, and its connection freed.
+    const { heard, server } = await listener(dir, res => { res.writeHead(429).end('x'.repeat(1 << 20)) })
+    // One connection held by each unread answer would refuse the tells past the cap. A connection let go is either
+    // closed or, on Node 24, kept alive for the next tell: both leave room, so the count of open ones proves nothing.
+    server.server.maxConnections = LISTENER_MAX_CONNECTIONS
+    const tells = LISTENER_MAX_CONNECTIONS + 4
+    for (let i = 0; i < tells; i++) expect(await tellDevices(dir, FRONT)).toBe(false)
+    expect(heard).toHaveLength(tells)
   })
 
   it('false with no socket there, and nothing is sent', async () => {
