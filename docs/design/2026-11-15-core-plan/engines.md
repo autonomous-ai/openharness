@@ -4,7 +4,6 @@ Task: move the 14 other engines (opencode, cursor, kilo, devin, hermes, amp, agy
 muse, pi, omp, openclaw) out of the daemon core into ONE worker, `engine-others`. Rules: ../2026-11-15-core-plan.md
 (read its lessons). Audit rows: docs/design/2026-11-12-core-audit.md section 3, security items 3 and 5.
 
-
 State (2026-11-15, the second agent): step 1 is split in two pull requests, as the lead allowed.
 
 - **Step 1a, done:** PR #PR_NUMBER from branch `core-engines-2` (the two WIP commits of `core-engines-1`, finished).
@@ -29,8 +28,9 @@ State (2026-11-15, the second agent): step 1 is split in two pull requests, as t
   core follows it, then read again once the master has it back; inline mode reads with no worker. Red on main.
   The golden passes unchanged. Its opt-in case `OTHER_ENGINES_PERF=<report.json> E2E_BUNDLE=1` is the workload for
   1b's before and after: four Pi conversations of 500 turns, attached again as the core starts, the core at rest for
-  30 s, 40 history reads. 1a: attach about 1.37 s each (core bound to attached, both), core at rest 0.87% (both),
-  the core's CPU for the 40 reads 0.06 s before, 0.01 s after; read p95 1 ms before, 2 ms after.
+  30 s, 400 history reads. 1a, two runs each on a shared Mac: attach 1.37 to 1.65 s before, 1.37 to 1.41 s after (core
+  bound to attached); the core at rest 0.87 to 1.0% before, 0.87% after; the core's CPU for the 400 reads 0.45 s
+  before, 0.10 s after; a read's p95 1.2 ms before, 1.4 ms after.
 - Core: 543 files, 93,160 lines before (main f8b67d66dc); 544 files, 93,019 lines after (+`engines/otherEngines.ts`).
   The door (`engines/inProcess.ts`) still adds 107 files, 16,037 lines once one of their sessions attaches: 1b is
   what takes that away.
@@ -58,14 +58,9 @@ The design is below ("Design S"). The order that keeps every commit testable:
    `core-inProcess-*` chunks and must change once those chunks leave the core.
 6. Numbers on the same workload (`OTHER_ENGINES_PERF`): attach, the core at rest, and per-line CPU on the live tail.
 
-## Update 2 (since the first notes)
+## Design S, for the live part (the first agent's, after reading every touchpoint)
 
-- The lead agreed: steps 1 and 2 below are ONE PR (the parsers cannot leave without their Stop rules).
-- Done since: `engines/others/readerRequests.spec.ts` passes (7 tests); harnessd/services.spec.ts passes (44 tests,
-  new case for `otherEnginesVersion`, parser made strict: `/^(\d+):([1-9]\d{0,5})$/`). ENGINE_OTHERS version 1 will
-  mean everything this one PR delivers (readers + live + Stop rules): no released worker exists yet, so no bump needed.
-- Still failing/not run: `src/leanEntry.spec.ts` (2 cases about the lean bundle's roles: give `engine-others` its own
-  entry like engine-claude; run it alone, it builds the bundle and takes minutes).
+- The lead agreed: the live parsers and their Stop rules are ONE pull request (the parsers cannot leave without them).
 - Design chosen for the live part (step 2), after reading all touchpoints: "Design S", worker-owned streams.
   - Why not the Claude/Codex pull protocol: Cursor's sub-agent manager (engines/cursor/subagent.ts) and the five
     store readers produce events with no file change the core could see, so the worker must be able to hand events
@@ -139,7 +134,7 @@ The design is below ("Design S"). The order that keeps every commit testable:
   never none/false; ask the worker before the first irreversible step.
 
 
-## The plan after step 1 (one PR each, branches core-engines-2, -3, ...)
+## The first agent's plan, kept for its detail (its 2 and 3 are step 1b now, its 4 step 2, its 5 step 3)
 
 2. Live state to the worker (security item 3). Because of the coupling above, the Stop-rule touchpoints come in the
    same PR:

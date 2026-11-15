@@ -105,8 +105,10 @@ console.log('fixture-pi-ready'); setInterval(() => {}, 1000);
       expect(answer.error).toBe('UNSUPPORTED')
     }
     const agent = await pi(d, c, 'other-cold')
-    const first = await until('the history the worker reads', async () => { const reply = await history(c, agent.id); return said(reply, 'other-cold') ? reply : null }, 30_000, 250)
+    // The first read starts the worker and waits for it: one request, answered.
+    const first = await history(c, agent.id)
     expect(first.error, JSON.stringify(first)).toBeUndefined()
+    expect(said(first, 'other-cold')).toBe(true)
     const pid = worker(d)!
     expect(alive(pid)).toBe(true)
     expect(d.log()).toContain('[services] engine-others connected')
@@ -169,7 +171,7 @@ console.log('fixture-pi-ready'); setInterval(() => {}, 1000);
 
   // The numbers a change to how the core follows or reads these engines shows, before and after, on this one workload:
   // OTHER_ENGINES_PERF=<report.json> E2E_BUNDLE=1. Four Pi conversations of 500 turns each, attached again as a core starts; the
-  // core's CPU at rest with them; and 40 history reads, their latency and the core's CPU over them.
+  // core's CPU at rest with them; and 400 history reads, their latency and the core's CPU over them.
   it.runIf(!!process.env.OTHER_ENGINES_PERF)('measures attach, the core at rest and history reads', async () => {
     const { d, c } = await fresh()
     const TURNS = 500
@@ -207,7 +209,7 @@ console.log('fixture-pi-ready'); setInterval(() => {}, 1000);
     const rest = 100 * (await cpu() - restFrom) / ((performance.now() - restAt) / 1000)
     const readsFrom = await cpu()
     const latencies: number[] = []
-    for (let round = 0; round < 10; round++) {
+    for (let round = 0; round < 100; round++) {
       for (const agent of agents) {
         const started = performance.now()
         const reply = await history(c2, agent.id)
@@ -218,7 +220,7 @@ console.log('fixture-pi-ready'); setInterval(() => {}, 1000);
     const readsCpu = await cpu() - readsFrom
     latencies.sort((a, b) => a - b)
     writeFileSync(process.env.OTHER_ENGINES_PERF!, JSON.stringify({ attachMs: attached, coreRestCpuPercent: Number(rest.toFixed(3)),
-      historyMs: { p50: Math.round(latencies[19]), p95: Math.round(latencies[37]), max: Math.round(latencies[39]) },
-      coreCpuSecondsFor40Reads: Number(readsCpu.toFixed(2)), worker: harnessdProcesses(d).has('engine-others') }, null, 1) + '\n')
+      historyMs: { p50: Number(latencies[199].toFixed(1)), p95: Number(latencies[379].toFixed(1)), max: Number(latencies[399].toFixed(1)) },
+      coreCpuSecondsFor400Reads: Number(readsCpu.toFixed(2)), worker: harnessdProcesses(d).has('engine-others') }, null, 1) + '\n')
   }, 300_000)
 })
