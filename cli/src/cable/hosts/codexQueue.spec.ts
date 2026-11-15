@@ -235,20 +235,47 @@ describe('codex queue', () => {
     expect(windows.calls).toEqual([])
   })
 
-  it('the binary is the Codex Harness launches, asked each time', () => {
+  it('the binary is the Codex Harness launches, looked for again after 30 s', () => {
+    vi.useFakeTimers({ toFake: ['performance'] })
+    onTestFinished(() => { vi.useRealTimers() })
     const { binary } = codexQueueDeps()
     vi.stubEnv('CODEX_PATH', '')
     vi.stubEnv('PATH', dir)
     expect(binary()).toBeNull()
     const onPath = executable(join(dir, 'codex'))
+    vi.advanceTimersByTime(30_000)
     expect(binary()).toBe(onPath)
 
     // Its own path, missing: Harness would not launch the codex on PATH, so neither does the queue.
     const own = join(dir, 'other', 'my-codex')
     vi.stubEnv('CODEX_PATH', own)
+    vi.advanceTimersByTime(30_000)
     expect(binary()).toBeNull()
     mkdirSync(join(dir, 'other'))
     executable(own)
+    vi.advanceTimersByTime(30_000)
     expect(binary()).toBe(own)
+  })
+
+  // The dial's list asks can() for each queue-able Codex row on every 1 s tick while a dial is connected (cableSession.ts
+  // `ticked`, cableHost.ts `machineSnapshot`): a walk of a 63-folder PATH took 0.36 ms with codex on it and 0.7 ms
+  // without (this Mac, 2026-11-15).
+  it('the binary is looked for once in 30 s: a codex installed or removed is seen after them', () => {
+    vi.useFakeTimers({ toFake: ['performance'] })
+    onTestFinished(() => { vi.useRealTimers() })
+    const { binary } = codexQueueDeps()
+    vi.stubEnv('CODEX_PATH', '')
+    vi.stubEnv('PATH', dir)
+    expect(binary()).toBeNull()
+    const onPath = executable(join(dir, 'codex'))
+    vi.advanceTimersByTime(29_999)
+    expect(binary()).toBeNull()
+    vi.advanceTimersByTime(1)
+    expect(binary()).toBe(onPath)
+    rmSync(onPath)
+    vi.advanceTimersByTime(29_999)
+    expect(binary()).toBe(onPath)
+    vi.advanceTimersByTime(1)
+    expect(binary()).toBeNull()
   })
 })
