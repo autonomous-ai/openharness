@@ -45,6 +45,9 @@ Also read in the code:
 
     herdr inherits the `ORCA_TERMINAL_HANDLE` (and the tty) of the terminal it started in, so words typed through Orca
     land in whichever herdr pane is focused, which may be another agent or a shell. The pull request says so.
+  - A Zellij or Rex agent inside an Orca terminal has no Orca pane either, so a tap on it runs no
+    `orca terminal switch`: on macOS Orca only comes forward, and on Linux it takes no tap (2026-11-15, the plan's open
+    question 1).
 
 - **F1, F2 and F3 in one pull request, three tasks, each test first** (PM, 2026-11-15).
 - **F1 is in scope:** an agent in the person's own tmux is wave 1 #4's main case (PM, 2026-11-15).
@@ -100,11 +103,12 @@ shows its pane in tmux and brings its terminal app forward. An agent in a tmux p
   `test_touch_ui.py` holds that table equal to the daemon's names). Nothing is flashed: a dial on the released firmware
   reads "See it in Terminal" for a tmux agent without voice, and "See it in tmux" from its next firmware release.
 
-**The tap** (`cable/hosts/open.ts`):
-- `paneOf` reads `TMUX_PANE` (`/^%[0-9]{1,9}$/`) as pane `{ app: 'tmux' }`, in the order `detectHost` reads hosts:
-  herdr, then tmux, then WezTerm and Orca (PM, 2026-11-15, after the final review). A tmux server keeps the environment it
-  started in, so in a tmux pane `WEZTERM_PANE` and `ORCA_TERMINAL_HANDLE` name the terminal the server began in, not
-  where the agent is; the same reason its Orca handle is dropped for voice.
+**The tap** (the tmux adapter, `cable/hosts/tmux.ts`):
+- `paneOf` reads `TMUX_PANE` (`/^%[0-9]{1,9}$/`) and the event's caller as pane `%<n>:<pid>`, and the devices ask the
+  adapters in the order `detectHost` reads hosts: herdr, then tmux, then WezTerm and Orca (PM, 2026-11-15, after the
+  final review). A tmux server keeps the environment it started in, so in a tmux pane `WEZTERM_PANE` and
+  `ORCA_TERMINAL_HANDLE` name the terminal the server began in, not where the agent is; the same reason its Orca handle
+  is dropped for voice.
 - Focus runs `tmux` with no shell, each value one argument, under `RUN_TIMEOUT_MS`:
   1. `tmux display-message -p -t <pane> '#{pane_pid}'`. The pane's process must be the agent's process or one of its
      parents (at most `WALK_PARENTS`, from the process table the open scan already reads). Otherwise this is not the
@@ -156,12 +160,13 @@ Code helper, which is wave 2.
 **Design:**
 - `HOST_HINTS` gains `CLAUDE_CODE_ENTRYPOINT`. The extension sets it to `claude-vscode`, read in the extension's code.
   It is not a secret: a fixed word naming how Claude Code was started. The hint cap above applies.
-- `open.ts` `paneOf` reads pane `{ app: 'vscode', id: <session id> }` only when all three hold:
+- The VS Code adapter's `paneOf` (`cable/hosts/vscode.ts`) reads pane `vscode` with the session id only when all three
+  hold:
   - `CLAUDE_CODE_ENTRYPOINT === 'claude-vscode'`;
   - the hook's own `__CFBundleIdentifier` is VS Code's (`com.microsoft.VSCode`): never Cursor's, never inferred;
   - the session id is a UUID.
 
-  `openTarget` takes the session id for this.
+  The adapter's `Place` carries the session id for this.
 - Focus runs `/usr/bin/open vscode://anthropic.claude-code/open?session=<uuid>`, then VS Code comes forward as for any
   pane. The link exits 0 when macOS has handed it on. As with the Claude app's link, a link that does nothing still
   leaves VS Code in front.

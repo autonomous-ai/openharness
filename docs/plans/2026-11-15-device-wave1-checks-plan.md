@@ -148,6 +148,7 @@ While planning, from #4341's code (say so if one is wrong):
    runs that switch (its `open.ts` read the handle apart from the words). herdr and tmux are not touched by this:
    they tap their own pane. Keeping the switch needs a new adapter member (a per-pane "can type"), or a rule in
    `observed.ts`. **The plan takes "no Orca handle" whole** (Task 11, its test's last three lines). Is that right?
+   **Answered (2026-11-15): yes.** The spec's Decided says so.
 
 ## When `main` moves
 
