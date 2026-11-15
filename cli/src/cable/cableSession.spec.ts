@@ -476,6 +476,32 @@ describe('cable session', () => {
     } finally { await session.stop() }
   })
 
+  it('a dial that says appFilter on an app\'s ring with a window open carries text to an agent of that ring', async () => {
+    const ring: CableAgent[] = [{ id: 'o1', name: 'scratch', engine: 'claude' }]
+    const host = makeHost({
+      selectPassage: async command => command.op === 'pin'
+        ? { ok: true, selectionId: 'p', revision: 2, rows: 1, extending: false, excerpt: 'source', text: 'source' }
+        : { ok: false, error: 'Closed' },
+      // The window's tab holds a1 and a2; the dial, on an app's ring, holds o1.
+      listAgentSnapshot: async (opts) => opts?.apps
+        ? { agents: ring, tab: '', total: ring.length, view: 'machine' as const }
+        : { agents: AGENTS, tab: 't1', total: AGENTS.length },
+      activeSwarm: (opts) => opts?.apps ? '' : 't1',
+      sendTurn: vi.fn(() => ({ ok: true as const })),
+    })
+    const { session, port } = await connect(host)
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', appFilter: 'v1' }); await settle()
+      port.say({ t: 'carry.prepare', carryId: 'carry-ring', requestId: 'r', agentId: 'a1', selectionId: 'p', revision: 1 })
+      await vi.waitFor(() => expect(port.types()).toContain('carry.state'))
+      port.say({ t: 'voice.begin', uploadId: 'ring', agentId: 'o1', carryId: 'carry-ring' })
+      port.pcm(Buffer.alloc(3200)); port.say({ t: 'voice.end' })
+      await vi.waitFor(() => expect(port.types()).toContain('voice.transcript'))
+      expect(vi.mocked(host.sendTurn).mock.calls[0]![0]).toBe('o1')
+      expect(port.types()).not.toContain('voice.error')
+    } finally { await session.stop() }
+  })
+
   it('routes form choices without terminal input and acknowledges the exact device request', async () => {
     const form = vi.fn<NonNullable<CableHost['form']>>(async () => ({
       ok: true, active: true, revision: 2, label: 'Codex', position: 1, total: 3, busy: false, enabled: true }))
