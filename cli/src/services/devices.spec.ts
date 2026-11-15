@@ -2485,14 +2485,6 @@ describe('a person\'s prompt in the app in front turns the dial (docs/specs/2026
     expect(prompts()).toEqual(['[device] prompt · moved', '[device] prompt · skipped · no tile'])
   })
 
-  it('a follow of a cause with no line writes none', () => {
-    start({ faults: ['fleet'] })
-    const before = logs.length
-    seen.host.localFollowed!('tab', 'moved')
-    seen.host.localFollowed!('tab', 'no-tile')
-    expect(logs.slice(before)).toEqual([])
-  })
-
   it('with no dial linked nothing is asked or counted, and the dial\'s prompt is still used up', async () => {
     const { port } = await dialWith('orca')
     await spokenByMod(port)

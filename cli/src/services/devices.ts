@@ -33,7 +33,7 @@ import { createOpenActions } from '../cable/hosts/open.js'
 import { createOrcaActions, orcaDeps, type OrcaDeps } from '../cable/hosts/orca.js'
 import { HostRegistry } from '../cable/hosts/registry.js'
 import { learnApps } from '../cable/hosts/scannedApp.js'
-import { readTty } from '../cable/hosts/tabs.js'
+import { readTty, type Tab } from '../cable/hosts/tabs.js'
 import type { HostAgent, HostAgentState } from '../cable/hosts/types.js'
 import { PetStore } from '../cable/pets/store.js'
 import { DialLog } from '../cable/dialLog.js'
@@ -51,7 +51,7 @@ import { fileStamp, listProcesses, processAlive } from '../lib/sessionSearch/ext
 import { setVoiceRouterDeviceConnected, setVoiceRouterSessions, shutdownVoiceRouter } from '../lib/voiceRouter.js'
 import { createTally, createTierDecider, type Tier, type TierDecision, type TierInput } from '../lib/notifyTier.js'
 import { createPartGuard } from './devicesGuard.js'
-import { attachHandler, frontHandler, tabsStream, type DevicesListener, type ListenerHandler, type ListenerStreamHandler } from './devicesListener.js'
+import { attachHandler, frontHandler, tabHandler, tabsStream, type DevicesListener, type ListenerHandler, type ListenerStreamHandler } from './devicesListener.js'
 import { FLEET_FALLBACKS, startFleet, type Fleet } from './fleet.js'
 
 export { DEVICES_REQUESTS }
@@ -106,12 +106,18 @@ const sid = (id: string): string => id.slice(0, 8)
 /** A card for the dial, and the machine it came from when another machine sent it (services/fleet.ts). */
 type DialEvent = NonNullable<ReturnType<typeof cableEventFor>> & { machineId?: string }
 /** What a dial made of a local follow, by its cause, or the settle's that asked it as an attach: the outcome only, never
- *  the app or the agent. A cause with no row writes nothing. */
-const FOLLOWED: Partial<Record<FollowCause | 'settle', Record<'moved' | 'no-tile', string>>> = {
+ *  the app or the agent. */
+const FOLLOWED: Record<FollowCause | 'settle', Record<'moved' | 'no-tile', string>> = {
   prompt: { moved: '[device] prompt · moved', 'no-tile': '[device] prompt · skipped · no tile' },
   attach: { moved: '[device] attach · moved', 'no-tile': '[device] attach · skipped · no tile' },
   settle: { moved: '[device] settle · moved', 'no-tile': '[device] settle · skipped · no tile' },
+  tab: { moved: '[device] tab · moved', 'no-tile': '[device] tab · no-tile' },
 }
+/** A tab app reports back each tab the dial selects: a report within this long of a select of its tty is that select's
+ *  echo. Every select of that long is kept, as a fast swipe's late report for a tab it passed must not pull the dial back,
+ *  and at most ECHO_KEPT of them. */
+const ECHO_MS = 2_000
+const ECHO_KEPT = 8
 
 // The agents outside a pane: how often their processes are checked, the turns no hook moves are looked at, and, while a dial
 // is attached, the open sessions are scanned (docs/specs/2026-11-13-device-without-the-app.md, "ObservedSource").
@@ -255,6 +261,12 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // by its tty: elsewhere no agent's is read, and none has a tab.
   const tabs = tabsStream()
   const ttyOf = apps.platform === 'darwin' ? deps.tty ?? readTty : undefined
+  /** The ttys the dial selected lately, a rest's and a tap's alike: the echoes a tab report is checked against. */
+  let selects: Array<{ tty: string; at: number }> = []
+  const selected = (tty: string): void => {
+    const at = monotonic()
+    selects = [...selects.filter((sent) => at - sent.at < ECHO_MS), { tty, at }].slice(-ECHO_KEPT)
+  }
   const observed = env.HARNESS_DEVICE_OBSERVED ? observedSource(core.dataDir, log, {
     modReady: (sessionId) => inbox.ready(sessionId),
     toMod: (sessionId, text) => inbox.deliver(sessionId, text),
@@ -272,7 +284,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       return opener.claudeShow(agentId, session)
     },
     tabsOpen: () => tabs.isOpen(),
-    tabSelect: (app, tty, raise) => (tabs.select({ app, tty }, raise) ? 'ok' : 'failed'),
+    tabSelect: (app, tty, raise) => {
+      if (!tabs.select({ app, tty }, raise)) return 'failed'
+      selected(tty)
+      return 'ok'
+    },
     // The route or the refusal only: never the words, the session or the terminal.
     count: (what) => log(`[device] voice · ${what}`),
   }, ttyOf) : null
@@ -344,10 +360,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     focused: (machineId, agentId) => core.clients.sendLocal({ type: 'dial_focus', payload: { machineId, agentId } }),
     // The outcome only: never the agent, its session or its terminal.
     swiped: (outcome) => log(`[device] swipe · ${outcome}`),
-    localFollowed: (cause, outcome) => {
-      const line = FOLLOWED[cause === 'attach' ? attachAsk : cause]?.[outcome]
-      if (line) log(line)
-    },
+    localFollowed: (cause, outcome) => log(FOLLOWED[cause === 'attach' ? attachAsk : cause][outcome]),
     swarmSelected: (swarmId) => core.clients.sendLocal({ type: 'dial_swarm', payload: { swarmId } }),
     scrolled: (phase, dy, velocity) => core.clients.sendLocal({ type: 'dial_scroll', payload: { phase, dy, velocity } }),
     // Gestures stay at this desk. The device inventory and its settings also reach the owner's other
@@ -386,6 +399,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     appPicked: () => log('[device] app filter: picker'),
     // The settle of the app in front: a filter that throws costs the devices nothing, and the devices stopping cancels it.
     appTimer: timerIn('dial'),
+    // Guarded on its own: the filter drops what this answers, so a follow that rejects would go unseen.
+    frontSettled: (app) => part.call('dial', () => tabSettled(app)),
   })
   // What the dial lists with no window: this computer's harness agents, and the ones outside a pane unless switched off.
   cableHost.setRegistry(new HostRegistry(observed ? [cableHost.harness, observed] : [cableHost.harness]))
@@ -695,6 +710,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const listening = deps.listen?.({
     front: frontHandler((app) => part.call('dial', () => cableHost.front(app))),
     attach: attachHandler((sessionId) => part.call('dial', () => claudeAttached(sessionId))),
+    tab: tabHandler((tab) => part.call('dial', () => tabReported(tab))),
     tabs: tabs.handler,
   }, log)
     .catch((): null => { log('[devices] listener not opened · failed'); return null })
@@ -819,6 +835,35 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     attachAsk = 'settle'
     return cable.followLocal(claudeAgent, 'attach')
   }
+  /**
+   * A tab selected in Terminal, iTerm2 or Ghostty turns the dials to its agent as a person's prompt does, once its app has
+   * settled in front (docs/specs/2026-11-15-dial-terminal-follow.md, "2. Selecting a tab moves the dial"): Harness Device
+   * reports as the app comes to the front, before it settles. The latest report waits for that settle, and another app
+   * settling drops it. Each line is an outcome, never the app, the tty or the agent.
+   */
+  type TabReport = Tab & { at: number }
+  let tabReport: TabReport | undefined
+  /** Uses up the report: with no dial linked nothing is followed or counted, as with a prompt. */
+  const followTab = ({ app, tty, at }: TabReport): Promise<void> | undefined => {
+    tabReport = undefined
+    if (!cable.isConnected) return
+    // By when the report came, not when its app settled: the wait for the settle must not age the dial's own select.
+    if (selects.some((sent) => sent.tty === tty && at - sent.at < ECHO_MS)) { log('[device] tab · echo'); return }
+    const agent = observed?.byTab(app, tty)
+    if (!agent) { log('[device] tab · no-agent'); return }
+    return cable.followLocal(agent.id, 'tab')
+  }
+  const tabReported = (tab: Tab): Promise<void> | undefined => {
+    const report = { ...tab, at: monotonic() }
+    if (cableHost.settledApp() === tab.app) return followTab(report)
+    tabReport = report
+  }
+  const tabSettled = (app: string): Promise<void> | undefined => {
+    if (!tabReport) return
+    if (tabReport.app === app) return followTab(tabReport)
+    tabReport = undefined
+    if (cable.isConnected) log('[device] tab · not-in-front')
+  }
   const port: DevicesPort = {
     // A paneless session's hook event, as the core checked it: taken, and dropped here while the observed source is
     // switched off.
@@ -919,6 +964,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       for (const timer of timers) clearInterval(timer)
       for (const timer of endings.values()) clearTimeout(timer)
       for (const timer of pending) clearTimeout(timer)
+      tabReport = undefined
+      selects = []
       endHookCalls()
       dialAttached(false)
       await cable.stop()
