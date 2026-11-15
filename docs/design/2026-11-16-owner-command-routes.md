@@ -64,7 +64,8 @@ the backend's ordinary service router remains the only dispatch path. No command
    device process failure without core restart, and same-client terminal input while classification is held.
 5. Coordinate a quiet, fixed-order performance comparison with root; record source/bundle hashes and raw results.
 
-Baseline: `db2d74421b686784b89b93e6fa5c3968a04f7a1c`. Implementation and evidence are pending.
+Initial baseline: `db2d74421b686784b89b93e6fa5c3968a04f7a1c`. Retained native comparison uses
+`706a43ad1d9a65014268c1847ccc488f4cf133b2`, whose production is unchanged and whose test environment isolates tmux.
 
 ## Shared transport bound, reviewed before implementation
 
