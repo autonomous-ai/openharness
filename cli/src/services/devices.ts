@@ -142,7 +142,7 @@ const ENDED_MS = 10_500
 /** How long the cable waits for the devices' listener to open: it opens in a few milliseconds. */
 const LISTENER_WAIT_MS = 1_000
 /** How long after the dial's own continue link to a Claude app session an attach is that link's echo: the app attaches
- *  the session it shows within about a second. */
+ *  the session it shows within about a second. Also how long any move of the dial sets the Claude app's settle aside. */
 const ATTACH_ECHO_MS = 2_000
 
 /** This computer's agents outside a pane, read with ⌘P's readers (services/externalSessions.ts), and how the dial's voice
@@ -896,8 +896,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     tabReport = undefined
     if (!cable.isConnected) return
     const { app, tty, at } = report
-    // The dial showed an agent while the report waited for the settle, in a tab or another app's pane: it names a tab the
-    // dial has left, and the app's report of a tab the dial selected is still to come.
+    // The dial moved while the report waited for the settle, to a tab, another app's pane or none: it names a tab the dial
+    // has left. When that move selected a tab, the app's report of it is still to come.
     if (report.moves !== dialMoves) { log('[device] tab · skipped · echo'); return }
     // By when the report came, not when its app settled: the wait for the settle must not age the dial's own select. It
     // excuses this report only: the person selecting that tab again soon after moves the dial. The app runs selects and

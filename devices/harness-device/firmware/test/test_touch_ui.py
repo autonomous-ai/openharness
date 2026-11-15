@@ -2058,7 +2058,7 @@ int main(int argc, char **argv) {
         assert(!scene_says("[choices]") && !scene_says("[say]") && !scene_says("[next]") && !scene_says("[later]"));
         assert(!action_enabled(A_QUESTION_CHOICES) && !action_enabled(A_QUESTION_SAY) && !action_enabled(A_QUESTION_REVIEW));
         if (!voice) portrait(dir,"caps-question-no-answer");
-        tap(2000,300,370); assert(s.view==QUESTION);                        // where [choices] was
+        tap(2000,350,370); assert(s.view==QUESTION);                        // where [choices] was
         #define STALE(k) dispatch((action_t){.kind=(k),.revision=s.q.revision,.dy=s.q.index,.id="a"})
         STALE(A_QUESTION_CHOICES); assert(s.view==QUESTION);
         s.view=CHOICE; STALE(A_CHOICE); assert(!s.q.item[0].selected);
