@@ -1012,12 +1012,16 @@ describe('attaching a session', () => {
       expect(inWorker(run, 'devin-s')?.reader).toBe(devin)
       for (const reader of [opencode, kilo, hermes, devin]) {
         reader.opts.onEvents([started()])
+        if (reader === devin) reader.opts.onTurnAborted('provider error')
         reader.opts.onFatal(new Error('store missing'))
       }
-      await vi.waitFor(() => expect(vi.mocked(run.deps.emit).mock.calls.map((call) => call[0])).toEqual(['opencode-s', 'kilo-s', 'hermes-s', 'devin-s']))
+      await vi.waitFor(() => expect(vi.mocked(run.deps.emit).mock.calls.map((call) => call[0])).toEqual(['opencode-s', 'kilo-s', 'hermes-s', 'devin-s', 'devin-s']))
       expect(warn).toHaveBeenCalledTimes(4)
-      devin.opts.onTurnAborted('provider error')
-      await vi.waitFor(() => expect(run.deps.emit).toHaveBeenLastCalledWith('devin-s', [{ type: 'turn_ended', payload: {} }]))
+      expect(run.deps.emit).toHaveBeenLastCalledWith('devin-s', [{ type: 'turn_ended', payload: {} }])
+      devin.opts.onEvents([started('too late')])
+      devin.opts.onTurnAborted('too late')
+      await run.others.streams.drainAll()
+      expect(run.deps.emit).toHaveBeenCalledTimes(5)
       // OpenCode and Devin name their model only in the pane.
       expect(vi.mocked(run.deps.captureTerminal).mock.calls).toEqual([['opencode-agent', 100], ['devin-agent', 60]])
       vi.mocked(run.deps.captureTerminal).mockResolvedValue(null)

@@ -3,6 +3,8 @@ import { mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import type { RegisteredSession } from './registry.js'
+import type { RuntimeProfileState } from './runtimeProfileState.js'
+import { transcriptEvidence } from '../engines/commandcode/profileReader.js'
 
 /**
  * Command Code agents were DISPLAY-ONLY between 2026-07-30 and CLI 1.6.0: switching had been built and
@@ -51,6 +53,12 @@ const session = (): RegisteredSession => ({
 const assistantLine = (model: string): string =>
   JSON.stringify({ type: 'message', model, message: { role: 'assistant', content: [{ type: 'text', text: 'hi' }] } })
 
+/** The parser now runs in the live worker; the core consumes the evidence it produces. */
+function ingest(manager: RuntimeProfileState, target: RegisteredSession, line: string): boolean {
+  const evidence = transcriptEvidence(JSON.parse(line))
+  return manager.evidence(target, evidence ? [evidence] : [])
+}
+
 /** Its global config — the ONLY place the reasoning level is recorded, keyed by full id. */
 const writeConfig = (config: unknown): void =>
   writeFileSync(join(commandcodeHome, 'config.json'), JSON.stringify(config))
@@ -72,7 +80,7 @@ describe('a Command Code agent', () => {
     })
     const manager = new RuntimeProfileManager()
     const target = session()
-    manager.ingest(target, assistantLine('deepseek/deepseek-v4-flash'))
+    ingest(manager, target, assistantLine('deepseek/deepseek-v4-flash'))
     await manager.ingestConfig(target, true)
 
     const profile = parseRuntimeProfile(manager.selectedModel(target))
@@ -89,9 +97,9 @@ describe('a Command Code agent', () => {
     writeConfig({ model: 'x/y', reasoningEffort: { 'moonshotai/kimi-k3': 'medium' } })
     const manager = new RuntimeProfileManager()
     const target = session()
-    manager.ingest(target, assistantLine('moonshotai/kimi-k3'))
+    ingest(manager, target, assistantLine('moonshotai/kimi-k3'))
     await manager.ingestConfig(target, true)
-    manager.ingest(target, assistantLine('moonshotai/kimi-k3'))
+    ingest(manager, target, assistantLine('moonshotai/kimi-k3'))
 
     expect(parseRuntimeProfile(manager.selectedModel(target))?.effort).toBe('medium')
   })
@@ -101,7 +109,7 @@ describe('a Command Code agent', () => {
     writeConfig({ model: 'deepseek/deepseek-v4-flash', reasoningEffort: { 'qwen/qwen3.7-plus': 'low' } })
     const manager = new RuntimeProfileManager()
     const target = session()
-    manager.ingest(target, assistantLine('deepseek/deepseek-v4-flash'))
+    ingest(manager, target, assistantLine('deepseek/deepseek-v4-flash'))
     await manager.ingestConfig(target, true)
 
     expect(parseRuntimeProfile(manager.selectedModel(target))?.effort).toBe('auto')
@@ -125,12 +133,12 @@ describe('a Command Code agent', () => {
     writeConfig({ model: 'deepseek/deepseek-v4-flash', reasoningEffort: { 'deepseek/deepseek-v4-flash': 'high' } })
     const manager = new RuntimeProfileManager()
     const target = session()
-    manager.ingest(target, assistantLine('deepseek/deepseek-v4-flash'))
+    ingest(manager, target, assistantLine('deepseek/deepseek-v4-flash'))
     await manager.ingestConfig(target, true)
     expect(parseRuntimeProfile(manager.selectedModel(target))?.effort).toBe('high')
 
-    manager.ingest(target, assistantLine('moonshotai/kimi-k3'))
-    manager.ingest(target, assistantLine('moonshotai/kimi-k3')) // one watcher batch can contain several replies
+    ingest(manager, target, assistantLine('moonshotai/kimi-k3'))
+    ingest(manager, target, assistantLine('moonshotai/kimi-k3')) // one watcher batch can contain several replies
     await vi.waitFor(() => {
       const profile = parseRuntimeProfile(manager.selectedModel(target))
       expect(profile?.model).toBe('kimi-k3')
@@ -147,7 +155,7 @@ describe('a Command Code agent', () => {
       const { RuntimeProfileManager } = await loadRuntimeProfile()
       const manager = new RuntimeProfileManager()
       const target = session()
-      manager.ingest(target, assistantLine('moonshotai/kimi-k3'))
+      ingest(manager, target, assistantLine('moonshotai/kimi-k3'))
       await expect(manager.modelsForSession(target)).resolves.toEqual([])
     } finally {
       process.env.PATH = realPath
@@ -169,7 +177,7 @@ describe('a Command Code agent', () => {
     const target = session()
     // Command Code stamps `"version": 3` on its session header — a SCHEMA number. Reading it as a CLI
     // version would invent a "3.0.0" build that no gate should ever act on.
-    manager.ingest(target, JSON.stringify({ type: 'session', version: 3, id: 'x', cwd: '/tmp' }))
+    ingest(manager, target, JSON.stringify({ type: 'session', version: 3, id: 'x', cwd: '/tmp' }))
     expect(target.cliVersion).toBeNull()
   })
 })
