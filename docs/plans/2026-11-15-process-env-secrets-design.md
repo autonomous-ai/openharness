@@ -160,8 +160,8 @@ The PR body repeats this section.
 - A hand-started agent on a grid relay URL: shows its own login instead of the grid. Accepted by the PM
   (2026-11-15) to keep rule 7: the core carries no grid field for the models component.
 - A Hermes with no hook and a home of its own, and a Codex started by hand under a `CODEX_HOME` with no Harness hooks:
-  bound from the store file they hold open. If the spike shows an engine does not keep that file open, that engine's
-  case is no longer bound, and this line names it.
+  bound from the store file they hold open (Hermes `state.db`, Codex its rollout; the spike measured both, on Linux
+  and macOS).
 - `ori hermes` where Hermes has no hook: no gateway report. No visible change: only Claude Code and Codex use
   `gateway` today.
 
