@@ -17,6 +17,8 @@ export interface ObservedHookEvent {
   hostHints: Record<string, string>
   /** On turn-start only: another session sent the prompt (hook/notify.mjs), so no person typed it. */
   relayed?: boolean
+  /** On session-start and turn-start only: the session's own name for itself, handed on and kept nowhere here. */
+  title?: string
 }
 
 /**
@@ -40,6 +42,8 @@ const EVENTS: readonly string[] = ['session-start', 'turn-start', 'needs-input',
 const MAX_SESSION_ID = 128
 const MAX_PATH = 1024
 const MAX_TOOL = 64
+/** UTF-16 units, as `bounded` counts them; the hook cuts a title to as many (hook/notify.mjs), so it never sends a longer one. */
+export const MAX_TITLE = 64
 /** Bytes, as the dial holds its line in a byte buffer. */
 const MAX_SUMMARY_BYTES = 200
 /** As many as the hook's list holds (hook/notify.mjs HOST_HINTS): an honest hook sends no more, and none it sends is cut. */
@@ -60,13 +64,15 @@ export const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 export function parseObservedHook(body: unknown): ObservedEvent | null {
   if (!isRecord(body)) return null
-  const { engine, sessionId, event, cwd, callerPid, transcriptPath, hostHints, tool, summary, relayed } = body
+  const { engine, sessionId, event, cwd, callerPid, transcriptPath, hostHints, tool, summary, relayed, title } = body
   if (typeof engine !== 'string' || !(ENGINES as readonly string[]).includes(engine)) return null
   if (!bounded(sessionId, MAX_SESSION_ID) || sessionId === '') return null
   if (typeof event !== 'string' || !EVENTS.includes(event)) return null
   if (cwd !== undefined && !bounded(cwd, MAX_PATH)) return null
   // Only a prompt's turn can have been relayed: anything else that says so is forged.
   if (relayed !== undefined && (event !== 'turn-start' || typeof relayed !== 'boolean')) return null
+  // Only the two events the hook says a title on carry one: anything else that does is forged.
+  if (title !== undefined && ((event !== 'session-start' && event !== 'turn-start') || !bounded(title, MAX_TITLE) || title === '')) return null
   if (event === 'asked') {
     if (tool !== undefined && !bounded(tool, MAX_TOOL)) return null
     if (summary !== undefined && (!bounded(summary, MAX_SUMMARY_BYTES) || Buffer.byteLength(summary) > MAX_SUMMARY_BYTES)) return null
@@ -89,7 +95,7 @@ export function parseObservedHook(body: unknown): ObservedEvent | null {
     engine: engine as AgentEngine, sessionId, event: event as ObservedEventName,
     ...(cwd === undefined ? {} : { cwd }), callerPid,
     ...(transcriptPath === undefined ? {} : { transcriptPath }), hostHints: hints,
-    ...(relayed === undefined ? {} : { relayed }),
+    ...(relayed === undefined ? {} : { relayed }), ...(title === undefined ? {} : { title }),
   }
 }
 
