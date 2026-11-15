@@ -3049,14 +3049,14 @@ describe('selecting a tab moves the dial (docs/specs/2026-11-15-dial-terminal-fo
     expect(asked()).toEqual([[ID, 'tab']])
   })
 
-  it('a report is dropped when another app settles, counted not-in-front, and is not acted on when its app settles later', async () => {
+  it('a report is dropped when another app settles, counted not in front, and is not acted on when its app settles later', async () => {
     const { report, settle } = await dialWith()
     report('terminal-app', TTY)
     await settle('vscode')
-    expect(tabLines()).toEqual(['[device] tab · not-in-front'])
+    expect(tabLines()).toEqual(['[device] tab · skipped · not in front'])
     await settle('terminal-app')
     expect(asked()).toEqual([])
-    expect(tabLines()).toEqual(['[device] tab · not-in-front'])
+    expect(tabLines()).toEqual(['[device] tab · skipped · not in front'])
   })
 
   it('the newest report is the one acted on', async () => {
@@ -3074,7 +3074,7 @@ describe('selecting a tab moves the dial (docs/specs/2026-11-15-dial-terminal-fo
     expect(stream.lines).toStrictEqual([{ app: 'terminal-app', tty: TTY }])
     clock = 1_999
     report('terminal-app', TTY)
-    expect(tabLines()).toEqual(['[device] tab · echo'])
+    expect(tabLines()).toEqual(['[device] tab · skipped · echo'])
     expect(asked()).toEqual([])
     clock = 2_000
     report('terminal-app', TTY)
@@ -3091,7 +3091,7 @@ describe('selecting a tab moves the dial (docs/specs/2026-11-15-dial-terminal-fo
     // Terminal's report of the tab the swipe passed comes late: the dial is not pulled back to it.
     clock = 900
     report('terminal-app', ttyOf(1))
-    expect(tabLines()).toEqual(['[device] tab · echo'])
+    expect(tabLines()).toEqual(['[device] tab · skipped · echo'])
     expect(asked()).toEqual([])
   })
 
@@ -3107,7 +3107,7 @@ describe('selecting a tab moves the dial (docs/specs/2026-11-15-dial-terminal-fo
     report('terminal-app', ttyOf(1))
     expect(asked()).toEqual([[agent(1), 'tab']])
     report('terminal-app', ttyOf(2))
-    expect(tabLines()).toEqual(['[device] tab · echo'])
+    expect(tabLines()).toEqual(['[device] tab · skipped · echo'])
     expect(asked()).toHaveLength(1)
   })
 
@@ -3120,7 +3120,7 @@ describe('selecting a tab moves the dial (docs/specs/2026-11-15-dial-terminal-fo
     expect(listener.front('terminal-app')).toBeUndefined()
     clock = 2_500
     await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
-    expect(tabLines()).toEqual(['[device] tab · echo'])
+    expect(tabLines()).toEqual(['[device] tab · skipped · echo'])
     expect(asked()).toEqual([])
   })
 
@@ -3136,7 +3136,7 @@ describe('selecting a tab moves the dial (docs/specs/2026-11-15-dial-terminal-fo
       expect(stream.lines).toHaveLength(1)
       await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
       expect(asked()).toEqual([])
-      expect(tabLines()).toEqual(['[device] tab · echo'])
+      expect(tabLines()).toEqual(['[device] tab · skipped · echo'])
     })
   }
 
@@ -3150,7 +3150,7 @@ describe('selecting a tab moves the dial (docs/specs/2026-11-15-dial-terminal-fo
     host().swipeEnded(agent(2), 'rest')
     clock = 700
     report('terminal-app', ttyOf(2))
-    expect(tabLines()).toEqual(['[device] tab · echo', '[device] tab · echo'])
+    expect(tabLines()).toEqual(['[device] tab · skipped · echo', '[device] tab · skipped · echo'])
     expect(asked()).toEqual([])
     // Back to the first tab in Terminal: its select was already used up by its own echo.
     clock = 1_000
@@ -3167,28 +3167,28 @@ describe('selecting a tab moves the dial (docs/specs/2026-11-15-dial-terminal-fo
     // Harness Device ran only the newest: Terminal reports the second tab alone.
     clock = 600
     report('terminal-app', ttyOf(2))
-    expect(tabLines()).toEqual(['[device] tab · echo'])
+    expect(tabLines()).toEqual(['[device] tab · skipped · echo'])
     // The person selects the first tab in Terminal: the app has shown the second since that select, so it moves the dial.
     clock = 1_000
     report('terminal-app', ttyOf(1))
     expect(asked()).toEqual([[agent(1), 'tab']])
   })
 
-  it('no agent with that tty, or one in another app: no-agent', async () => {
+  it('no agent with that tty, or one in another app: unknown agent', async () => {
     const { report, settle } = await dialWith()
     await settle('terminal-app')
     report('terminal-app', '/dev/ttys099')
     await settle('iterm')
     report('iterm', TTY)
-    expect(tabLines()).toEqual(['[device] tab · no-agent', '[device] tab · no-agent'])
+    expect(tabLines()).toEqual(['[device] tab · skipped · unknown agent', '[device] tab · skipped · unknown agent'])
     expect(asked()).toEqual([])
   })
 
-  it('the dial\'s answer is counted: tab · moved, and tab · no-tile', () => {
+  it('the dial\'s answer is counted: tab · moved, and tab · skipped · no tile', () => {
     start({ faults: ['fleet'] })
     seen.host.localFollowed!('tab', 'moved')
     seen.host.localFollowed!('tab', 'no-tile')
-    expect(tabLines()).toEqual(['[device] tab · moved', '[device] tab · no-tile'])
+    expect(tabLines()).toEqual(['[device] tab · moved', '[device] tab · skipped · no tile'])
   })
 
   it('with no dial linked nothing is asked or counted', async () => {
@@ -3219,7 +3219,13 @@ describe('selecting a tab moves the dial (docs/specs/2026-11-15-dial-terminal-fo
     report('terminal-app', TTY)
     report('iterm', TTY)
     await settle('vscode')
-    const five = ['moved', 'no-tile', 'not-in-front', 'no-agent', 'echo'].map((outcome) => `[device] tab · ${outcome}`)
+    const five = [
+      '[device] tab · moved',
+      '[device] tab · skipped · no tile',
+      '[device] tab · skipped · not in front',
+      '[device] tab · skipped · unknown agent',
+      '[device] tab · skipped · echo',
+    ]
     expect([...tabLines()].sort()).toEqual([...five].sort())
     expect(logs.filter((line) => [TTY, 'ttys', 'terminal-app', 'iterm', 'vscode', ID, 'sess-1'].some((secret) => line.includes(secret)))).toEqual([])
   })
@@ -3262,13 +3268,13 @@ describe('selecting a tab moves the dial (docs/specs/2026-11-15-dial-terminal-fo
     report('terminal-app', TTY)
     seen.host.appSettled!('claude')
     expect(asked()).toEqual([[ID, 'tab'], [observedAgentId('claude', SESSION), 'attach']])
-    expect(tabLines()).toEqual(['[device] tab · not-in-front'])
+    expect(tabLines()).toEqual(['[device] tab · skipped · not in front'])
     // The Claude app's follow throwing does not cost the tab report its settle.
     vi.spyOn(seen.cable as unknown as { followLocal: (agentId: string, cause: string) => Promise<void> }, 'followLocal')
       .mockImplementationOnce(() => { throw new Error('dial unplugged') })
     report('terminal-app', TTY)
     seen.host.appSettled!('claude')
     expect(logs).toContain('[devices] dial failed · dial unplugged')
-    expect(tabLines()).toEqual(['[device] tab · not-in-front', '[device] tab · not-in-front'])
+    expect(tabLines()).toEqual(['[device] tab · skipped · not in front', '[device] tab · skipped · not in front'])
   })
 })
