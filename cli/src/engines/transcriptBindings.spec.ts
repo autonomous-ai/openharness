@@ -258,8 +258,18 @@ it('does not infer an empty directory from an iterator acquired during an ancest
 })
 it('holds pool overflow, expired work and failed descriptor close', () => {
   const directory = join(root, 'wide'); fs.mkdirSync(directory)
-  for (let index = 0; index < 4097; index++) fs.writeFileSync(join(directory, String(index)), '')
+  // Thousands of real empty files made teardown time out under parallel validation. The real handle
+  // still proves closing on overflow; generated entries exercise the same limit without that disk load.
+  let next = 0
+  let closed: ReturnType<typeof vi.spyOn> | undefined
+  vi.mocked(fs.opendirSync).mockImplementationOnce(((...args: Parameters<typeof fs.opendirSync>) => {
+    const handle = Reflect.apply(actual.opendirSync, actual, args)
+    vi.spyOn(handle, 'readSync').mockImplementation(() => next < 4097 ? { name: String(next++) } as fs.Dirent : null)
+    closed = vi.spyOn(handle, 'closeSync')
+    return handle
+  }) as typeof fs.opendirSync)
   expect(() => new NativeFiles().entries(directory)).toThrow('entry limit')
+  expect(closed).toHaveBeenCalledTimes(1)
   expect(() => new NativeFiles(new NativeEvidenceBudget(-1)).file(file)).toThrow('deadline')
   vi.mocked(fs.closeSync).mockImplementation(fd => { actual.closeSync(fd); throw new Error('fixture close failed') })
   expect(() => new NativeFiles().file(file)).toThrow('could not be closed')
