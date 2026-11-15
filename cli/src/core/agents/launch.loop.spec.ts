@@ -55,7 +55,7 @@ it('a Codex resume repairs a 200 MB rollout without ever holding the core loop f
   const session = { agentId: 'a1', sessionId: SESSION, engine: 'codex', transcriptPath: file, codexHome: profile } as RegisteredSession
   vi.spyOn(console, 'log').mockImplementation(() => {})
   const hold = loopHold()
-  await prepareSessionResume(session)
+  await prepareSessionResume(session, () => true)
   const longest = hold.stop()
   // Repaired: both reads, the backup, the repaired copy and their flushes all ran, and the tail moved to its new end.
   expect(setTail).toHaveBeenCalledWith(SESSION, statSync(file).size)

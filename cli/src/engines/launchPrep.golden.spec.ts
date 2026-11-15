@@ -404,7 +404,7 @@ async function resumeCase(scenario: ResumeCase, where: Where): Promise<unknown> 
     // Only the profile's cases name paths of their own (setup, source); the others run in their own home.
     scenario.setup?.(dir)
     const source: ResumeSource = { engine: 'codex', sessionId: SESSION, transcriptPath: file, codexHome: where === 'profile' ? home : null, ...scenario.source?.(dir) }
-    const result = await settled(() => prepareResume(source))
+    const result = await settled(() => prepareResume(source, () => true))
     return { result: JSON.parse(normalize(JSON.stringify(result))), files: snapshot(dir) }
   } finally {
     env.CODEX_HOME = before

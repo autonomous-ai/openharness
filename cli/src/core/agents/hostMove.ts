@@ -99,10 +99,10 @@ export function hostMoveDeps(session: RegisteredSession, current: () => boolean,
       return made.state === 'succeeded' ? { ok: true, runtime: made.runtime } : { ok: false, reason: made.reason }
     },
     respawn: (runtime, built) => w.restore.respawn(runtime, built, { current: () => current() && built.current?.() !== false }),
-    prepareResume: async () => {
+    prepareResume: async (_row, waiting) => {
       const deferred = launch?.deferred
       if (!deferred) throw new Error('the launch was not built for a move')
-      await deferred.prepare()
+      await deferred.prepare(waiting)
       prepared = true
     },
     stopEngine: async () => {

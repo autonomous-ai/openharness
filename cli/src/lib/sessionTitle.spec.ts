@@ -144,7 +144,8 @@ describe('codexThreadName: Codex’s own name for a thread', () => {
     text += line('t-last', 'Named just now')
     writeFileSync(join(home, 'session_index.jsonl'), text)
     let name: string | null = null
-    expect(bytesRead(() => { name = codexThreadName('t-last', home) })).toBeLessThanOrEqual(1024 * 1024)
+    // Its last MiB, and the byte before it: a newline there makes the first line in it whole.
+    expect(bytesRead(() => { name = codexThreadName('t-last', home) })).toBeLessThanOrEqual(1024 * 1024 + 1)
     expect(name).toBe('Named just now')
     // Older than the end it read: no name from the index (the registry keeps the one it was given then).
     expect(bytesRead(() => { name = codexThreadName('t-first', home) })).toBe(0)
@@ -162,6 +163,28 @@ describe('codexThreadName: Codex’s own name for a thread', () => {
     writeFileSync(join(home, 'session_index.jsonl'), line('t-last', 'Rewritten'))
     expect(codexThreadName('t-last', home)).toBe('Rewritten')
     expect(codexThreadName('t-new', home)).toBeNull()
+  })
+
+  it('keeps the first line of its read when the read begins where a line does', () => {
+    // Lines of 128 bytes, about Codex's own, so the read of the last MiB begins exactly at the start of line 100.
+    const line = (i: number) => {
+      const text = JSON.stringify({ id: `t${i}`, thread_name: `Thread ${i}` })
+      return text.slice(0, -1) + ' '.repeat(127 - text.length) + '}\n'
+    }
+    let text = ''
+    for (let i = 0; i < 1024 * 1024 / 128 + 100; i++) text += line(i)
+    writeFileSync(join(home, 'session_index.jsonl'), text)
+    expect(codexThreadName('t100', home)).toBe('Thread 100')
+    expect(codexThreadName('t99', home)).toBeNull()
+  })
+
+  it('a line longer than a read costs that line alone, and the ones after it are read', () => {
+    writeFileSync(join(home, 'session_index.jsonl'), JSON.stringify({ id: 't1', thread_name: 'First' }) + '\n'
+      + `{"id":"t-long","thread_name":"${'x'.repeat(1_200_000)}`)
+    expect(codexThreadName('t1', home)).toBeNull()
+    appendFileSync(join(home, 'session_index.jsonl'), '"}\n' + JSON.stringify({ id: 't2', thread_name: 'After the long one' }) + '\n')
+    expect(codexThreadName('t2', home)).toBe('After the long one')
+    expect(codexThreadName('t-long', home)).toBeNull()
   })
 
   it('keeps each Codex home it reads, so agents in two homes do not read both again at every sweep', () => {

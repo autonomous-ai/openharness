@@ -10,7 +10,7 @@ import type { NativeLaunch } from '../../engines/nativeLaunch.js'
 import { join } from 'node:path'
 import { env } from '../../config/env.js'
 import { prepareResume, repairedItemsName } from '../../engines/launchPrep.js'
-import { REPAIR_LIMITS, type HistoryRepair, type Unrepaired } from '../../engines/kit/resumeRepair.js'
+import { REPAIR_LIMITS, type Unrepaired } from '../../engines/kit/resumeRepair.js'
 import { bringPiSessionHome } from '../../lib/piSessionHome.js'
 import { gridConfigRoot } from '../../lib/gridConfigDir.js'
 import { dropPermissionFlagIfUnsupported } from '../../lib/engineLaunch.js'
@@ -35,10 +35,11 @@ export function gridLaunchThrough(models: () => Pick<ModelsPort, 'gridLaunch'>) 
   }
 }
 
-/** Why a history resumes unrepaired, in the daemon log's words. */
-const UNREPAIRED: Record<Exclude<Unrepaired, 'cancelled'>, string> = {
+/** Why a history was left unrepaired, in the daemon log's words. */
+const UNREPAIRED: Record<Unrepaired, string> = {
   too_large: `its history is over ${REPAIR_LIMITS.maxBytes / 1024 ** 3} GiB, or a record over ${REPAIR_LIMITS.maxRecordBytes / 1024 ** 2} MiB`,
   timed_out: `the repair took over ${REPAIR_LIMITS.deadlineMs / 1000} s`,
+  cancelled: 'what asked for it stopped waiting',
 }
 
 export interface LaunchHelperDeps {
@@ -122,15 +123,12 @@ export function createLaunchHelpers({ authority, prepareApiTools, launchOverride
     return { ...choice, ...(nativeHold ? { nativeHold } : {}) }
   }
 
-  /** The repair under way for each conversation. A second one waits for it: a host move that gave up waiting on one
-   *  asks again as it falls back to the old pane, and two must never write the same history. */
-  const repairs = new Map<string, Promise<unknown>>()
   /**
-   * The conversation made resumable once its engine has stopped. `current` is the operation's own: the history is
-   * replaced only while it holds, and a cancelled one leaves it as it was. Throws when the history could not be
-   * prepared; one too large or too slow to read here resumes as it is, as the log says.
+   * The conversation made resumable once its engine has stopped; true when its history was replaced. `current` is the
+   * operation's own: the history is replaced only while it holds, and is left as it was once it does not. Throws when
+   * the history could not be prepared; one too large or too slow to read here is left as it is, as the log says.
    */
-  const prepareSessionResume = async (session: RegisteredSession, current: () => boolean = () => true): Promise<void> => {
+  const prepareSessionResume = async (session: RegisteredSession, current: () => boolean): Promise<boolean> => {
     if (session.engine === 'pi') {
       // A Pi an older grid launch moved into the daemon's own folder resumes from its own home now.
       const roots = [gridConfigRoot(), join(env.ADAPTER_DATA_DIR, 'grid-launch-config')]
@@ -144,16 +142,9 @@ export function createLaunchHelpers({ authority, prepareApiTools, launchOverride
         console.warn(`[resume] ${sid(session.agentId)} · could not bring pi's conversation home · ${error instanceof Error ? error.message : error}`)
       }
     }
-    const earlier = repairs.get(session.sessionId)
-    const run = (async () => {
-      await earlier?.catch(() => {})
-      return prepareResume(session, current)
-    })()
-    if (session.sessionId) repairs.set(session.sessionId, run)
-    let repair: HistoryRepair
-    try { repair = await run } finally { if (repairs.get(session.sessionId) === run) repairs.delete(session.sessionId) }
-    if (repair.unrepaired && repair.unrepaired !== 'cancelled') {
-      console.warn(`[resume] ${sid(session.agentId)} · ${repairedItemsName(session.engine)} not repaired: ${UNREPAIRED[repair.unrepaired]} · it resumes as it is`)
+    const repair = await prepareResume(session, current)
+    if (repair.unrepaired) {
+      console.warn(`[resume] ${sid(session.agentId)} · ${repairedItemsName(session.engine)} not repaired: ${UNREPAIRED[repair.unrepaired]} · the history is left as it is`)
     }
     if (repair.repairedItems) {
       // The rollout we tail was just shrunk in place. Move the tail to the repaired length now, before
@@ -162,6 +153,7 @@ export function createLaunchHelpers({ authority, prepareApiTools, launchOverride
       if (repair.repairedBytes !== undefined) setTail(session.sessionId, repair.repairedBytes)
       console.log(`[resume] repaired ${repair.repairedItems} ${repairedItemsName(session.engine)} · backup: ${repair.backupPath}`)
     }
+    return repair.repairedItems > 0
   }
   return { relaunchOverrides, refreshGridWebSearch, downgradedPermission, prepareSessionResume }
 }

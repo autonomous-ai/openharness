@@ -124,7 +124,7 @@ export function repairHistoryText(contract: ResumeRepairContract, history: strin
 /** What a repair may cost. Past any of these the resume goes on without it, on the history as it is: the engine reads
  *  its own file, as it did before there was a repair. */
 export interface RepairLimits {
-  /** Both reads, the copies and their flushes: checked between chunks. */
+  /** Both reads and the copies, checked before each read. The two flushes after the last read are not cut short. */
   deadlineMs: number
   /** The largest history read. Repairing one writes two more copies of it: the backup and the repaired history. */
   maxBytes: number
@@ -173,11 +173,10 @@ const flush = (fd: number) => new Promise<void>((resolve, reject) => {
   fsync(fd, (error) => { if (error) reject(error); else resolve() })
 })
 
-/** The backup and the prepared history, each written once a chunk has been read: the lines a chunk gave are views of
- *  its buffer, which the next read reuses. */
+/** The backup, the exact bytes of each chunk read, and the prepared history, its lines as repaired: both written once a
+ *  chunk is done, as the lines a chunk gave are views of its buffer, which the next read reuses. */
 function copies(contract: ResumeRepairContract, backup: number, output: number) {
-  let originals: Buffer[] = []
-  let repaired: Buffer[] = []
+  let lines: Buffer[] = []
   const writeAll = async (fd: number, bytes: Buffer): Promise<void> => {
     let written = 0
     while (written < bytes.length) {
@@ -187,13 +186,12 @@ function copies(contract: ResumeRepairContract, backup: number, output: number) 
     }
   }
   return {
-    add: (original: Buffer, output: Buffer) => { originals.push(original); repaired.push(output) },
-    write: async () => {
-      const [a, b] = [Buffer.concat(originals), Buffer.concat(repaired)]
-      originals = []
-      repaired = []
-      await writeAll(backup, a)
-      await writeAll(output, b)
+    add: (line: Buffer) => { lines.push(line) },
+    write: async (read: Buffer) => {
+      const repaired = Buffer.concat(lines)
+      lines = []
+      await writeAll(backup, read)
+      await writeAll(output, repaired)
     },
   }
 }
@@ -218,7 +216,7 @@ async function scanHistory(contract: ResumeRepairContract, fd: number, size: num
     const repaired = repair.line(original, !newline)
     const output = repaired === original ? bytes : Buffer.from(repaired + (newline ? '\n' : ''))
     repairedBytes += output.length
-    sink?.add(bytes, output)
+    sink?.add(output)
   }
   while (position < size) {
     step()
@@ -231,7 +229,6 @@ async function scanHistory(contract: ResumeRepairContract, fd: number, size: num
     while ((end = chunk.indexOf(10, start)) >= 0 && end < count) {
       const part = chunk.subarray(start, end + 1)
       if (fragments.length) {
-        if (fragmentBytes + part.length > limits.maxRecordBytes) throw new Abandoned('too_large')
         fragments.push(part)
         line(Buffer.concat(fragments, fragmentBytes + part.length))
         fragments = []
@@ -247,10 +244,10 @@ async function scanHistory(contract: ResumeRepairContract, fd: number, size: num
       if (fragmentBytes > limits.maxRecordBytes) throw new Abandoned('too_large')
       fragments.push(Buffer.from(chunk.subarray(start, count)))
     }
-    await sink?.write()
+    await sink?.write(chunk.subarray(0, count))
   }
   if (fragments.length) line(Buffer.concat(fragments))
-  await sink?.write()
+  await sink?.write(Buffer.alloc(0))
   return { repairedItems: repair.finish(), repairedBytes, digest: hash.digest('hex'), partialTail: repair.partialTail() }
 }
 
@@ -269,7 +266,7 @@ async function scanHistory(contract: ResumeRepairContract, fd: number, size: num
  * history resumes as it is (`unrepaired`), and so it does when the resume was cancelled.
  */
 export async function repairHistory(contract: ResumeRepairContract, sessionId: string, transcriptPath: string | null | undefined, sessionRoots: readonly string[],
-  current: () => boolean = () => true, limits: RepairLimits = REPAIR_LIMITS): Promise<HistoryRepair> {
+  current: () => boolean, limits: RepairLimits = REPAIR_LIMITS): Promise<HistoryRepair> {
   const byId = () => sessionRoots.reduce<string | null>((found, sessions) => found ?? findSessionFile(sessionId, sessions, contract.sessions), null)
   let file = transcriptPath || byId()
   // A missing history still follows the engine's existing resume/fresh fallback.

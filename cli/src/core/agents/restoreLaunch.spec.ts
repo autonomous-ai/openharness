@@ -77,6 +77,18 @@ describe('a launch built without preparation', () => {
     expect(deps.refreshGridWebSearch).toHaveBeenCalledTimes(2)
   })
 
+  it('hands the move\'s own wait to the repair: once the move stops waiting, the history is left as it is', async () => {
+    const { deps, build } = setup()
+    const launch = await build(entry, { resumeSessionId: 'conversation', current: () => true, prepare: false })
+    if (!('argv' in launch) || !launch.deferred) throw new Error('expected a deferred launch')
+    let waiting = true
+    await launch.deferred.prepare(() => waiting)
+    const holds = vi.mocked(deps.prepareSessionResume).mock.lastCall![1]
+    expect(holds()).toBe(true)
+    waiting = false
+    expect(holds()).toBe(false)
+  })
+
   it('writes no grid for a move that stopped holding while its history was prepared', async () => {
     const { deps, build } = setup()
     let current = true

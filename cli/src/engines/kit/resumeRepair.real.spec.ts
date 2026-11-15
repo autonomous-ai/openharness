@@ -71,7 +71,7 @@ it.skipIf(process.env.RUN_CODEX_RESUME_E2E !== '1')('resumes the same Codex conv
     expect(requests[0].input.find(item => item.type === 'reasoning')?.id).toBe(badId)
     expect(failed.stdout + failed.stderr).toContain('invalid_id_prefix')
 
-    expect((await prepareCodexResume({ engine: 'codex', sessionId: id, transcriptPath: file, codexHome: profile })).repairedItems).toBe(1)
+    expect((await prepareCodexResume({ engine: 'codex', sessionId: id, transcriptPath: file, codexHome: profile }, () => true)).repairedItems).toBe(1)
     const resumed = await run()
     expect(resumed.code, resumed.stderr).toBe(0)
     expect(resumed.stdout).toContain(`"thread_id":"${id}"`)

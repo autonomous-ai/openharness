@@ -49,6 +49,8 @@ export const MOVE_CREATE_TIMEOUT_MS = 5_000
 export const MOVE_STOP_TIMEOUT_MS = 10_000
 /** Each single host or core call while held: preparing the conversation, respawn, retarget, release, a pane's close. */
 export const MOVE_STEP_TIMEOUT_MS = 5_000
+/** What the conversation's repair leaves of its step's bound: a chunk read and the flushes after it. */
+const MOVE_PREPARE_MARGIN_MS = 1_000
 /** The old pane's relaunch: a restart's resume attempt and its fresh retry, each with its own wait for the engine. */
 export const MOVE_RELAUNCH_TIMEOUT_MS = 20_000
 
@@ -71,8 +73,9 @@ export interface MoveAgentDeps {
   buildLaunch: RestoreAgentsDeps['buildLaunch']
   /** What `buildLaunch` leaves out with `prepare: false`, run once the old engine is confirmed stopped, as a restart
    *  prepares after its kill: `prepareSessionResume` (the conversation's repair, a Pi session's copy) and
-   *  `refreshGridWebSearch`. Throws when the conversation could not be prepared. */
-  prepareResume(session: RegisteredSession): Promise<void>
+   *  `refreshGridWebSearch`. Throws when the conversation could not be prepared. [waiting] turns false a second before
+   *  the step's bound: the repair then leaves the history as it is. */
+  prepareResume(session: RegisteredSession, waiting: () => boolean): Promise<void>
   /** Stop the old engine and keep its pane, as `paneSwapDeps`' `terminate` does after its `holdOpen` (core/agents/
    *  swap.ts): a pane that is not held is closed with its process, and the fallback needs it. */
   stopEngine(session: RegisteredSession): Promise<TerminateOutcome>
@@ -335,7 +338,10 @@ export async function moveAgent(session: RegisteredSession, deps: MoveAgentDeps)
     if (!stop.done) return await recover(stop.reason)
     if (!KILL_CONFIRMED.has(stop.value)) return await recover(`could not confirm the old ${engine} process stopped (${stop.value})`)
     if (!deps.current()) return await recover(CANCELLED)
-    const prepared = await bounded(() => deps.prepareResume(session), MOVE_STEP_TIMEOUT_MS, `preparing the ${engine} conversation`)
+    // A long conversation's repair stops a second before the step's bound, and the agent moves with its history as it is
+    // (the old engine ran on it): left to run past the bound, it went on beside the fallback (engines/kit/resumeRepair.ts).
+    const preparing = Date.now() + MOVE_STEP_TIMEOUT_MS - MOVE_PREPARE_MARGIN_MS
+    const prepared = await bounded(() => deps.prepareResume(session, () => Date.now() < preparing), MOVE_STEP_TIMEOUT_MS, `preparing the ${engine} conversation`)
     if (!prepared.done) return await recover(prepared.reason)
     if (!deps.current()) return await recover(CANCELLED)
 

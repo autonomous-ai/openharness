@@ -75,9 +75,9 @@ const INDEX_READ_BYTES = 1024 * 1024
 const INDEX_NAMES = 10_000
 const INDEX_HOMES = 16
 
-/** What has been read of one home's index, the file `key` names: its lines up to `offset`, a line's start, when it
- *  was `size` long (-1 before any read). */
-interface IndexRead { key: string; offset: number; size: number; mtimeMs: number; names: Map<string, string> }
+/** What has been read of one home's index, the file `key` names: its lines up to `offset` when it was `size` long (-1
+ *  before any read). `offset` is a line's start unless `aligned` is false: the middle of a line longer than a read. */
+interface IndexRead { key: string; offset: number; aligned: boolean; size: number; mtimeMs: number; names: Map<string, string> }
 const codexIndexes = new Map<string, IndexRead>()
 
 /** The lines of `text` into `names`, later lines winning; a line that is not a name costs that line alone. */
@@ -111,22 +111,27 @@ export function codexThreadName(sessionId: string | null | undefined, codexHome?
   let index = codexIndexes.get(path)
   // Another file, or one rewritten rather than appended to, is read again from its end.
   if (!index || index.key !== key || stat.size < index.size || (stat.size === index.size && stat.mtimeMs !== index.mtimeMs)) {
-    index = { key, offset: 0, size: -1, mtimeMs: 0, names: new Map() }
+    index = { key, offset: 0, aligned: true, size: -1, mtimeMs: 0, names: new Map() }
   }
   if (stat.size !== index.size || stat.mtimeMs !== index.mtimeMs) {
     // Far behind, only the end is read: every line after the skip is newer than all it skips.
     const start = Math.max(index.offset, stat.size - INDEX_READ_BYTES)
-    let bytes = Buffer.alloc(stat.size - start)
+    // A read that may begin mid-line reads the byte before it too: a newline there makes the first line whole.
+    const mid = start > 0 && (start > index.offset || !index.aligned)
+    const at = mid ? start - 1 : start
+    let bytes = Buffer.alloc(stat.size - at)
     try {
       const fd = openSync(path, 'r')
-      try { bytes = bytes.subarray(0, readSync(fd, bytes, 0, bytes.length, start)) } finally { closeSync(fd) }
+      try { bytes = bytes.subarray(0, readSync(fd, bytes, 0, bytes.length, at)) } finally { closeSync(fd) }
     } catch { codexIndexes.delete(path); return null }
-    // Read from the middle of a line, its start is dropped. The end after the last newline is read again next time,
-    // whole by then, and taken now too: Codex's last name may have no newline yet.
+    // A line begun before the read is dropped. The end after the last newline is read again next time, whole by then,
+    // and taken now too: Codex's last name may have no newline yet.
     const first = bytes.indexOf(10)
-    const from = start > index.offset ? (first < 0 ? bytes.length : first + 1) : 0
+    const from = !mid ? 0 : first < 0 ? bytes.length : first + 1
+    const end = bytes.lastIndexOf(10) + 1
     readNames(bytes.subarray(from).toString('utf8'), index.names)
-    index.offset = start + Math.max(from, bytes.lastIndexOf(10) + 1)
+    index.offset = at + Math.max(from, end)
+    index.aligned = !mid || end > 0
     index.size = stat.size
     index.mtimeMs = stat.mtimeMs
   }

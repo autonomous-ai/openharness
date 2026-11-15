@@ -68,7 +68,7 @@ export interface ResumeSource {
  * set only when something was repaired, is the history's new length: a tail of that file moves there.
  * `current` is the resume's own: once it is false the history is left as it is (kit/resumeRepair.ts).
  */
-export async function prepareResume(source: ResumeSource, current?: () => boolean): Promise<HistoryRepair> {
+export async function prepareResume(source: ResumeSource, current: () => boolean): Promise<HistoryRepair> {
   const contract = launchContract(source.engine)?.resumeRepair
   if (!contract || !source.sessionId) return { repairedItems: 0 }
   // The agent's own profile, else every home the person moved too (lib/engineHomes.ts): a rollout in a moved

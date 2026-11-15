@@ -8,12 +8,14 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { launch as codex } from '../codex/launch.js'
-import { prepareResume as prepareCodexResume } from '../launchPrep.js'
+import { prepareResume, type ResumeSource } from '../launchPrep.js'
 import { REPAIR_LIMITS, repairHistory, repairHistoryText, ResumePreparationError, type RepairLimits } from './resumeRepair.js'
 
 // The former engines/codex/portableHistory.spec.ts, its cases unchanged, against Codex's declared repair
 // (`resumeRepair` in codex/launch.ts) applied by the kit, through the composition the resume calls.
 const portableCodexHistory = (history: string, sessionId: string) => repairHistoryText(codex.resumeRepair!, history, sessionId)
+/** The resume's composition, under a hold these cases never let go of. */
+const prepareCodexResume = (source: ResumeSource) => prepareResume(source, () => true)
 
 // Keep the real filesystem, with configurable exports for simulating a concurrent writer.
 vi.mock('node:fs', async importOriginal => ({ ...await importOriginal<typeof import('node:fs')>() }))
@@ -280,14 +282,14 @@ describe('preparing a stopped Codex session for resume', () => {
     homes.adoptEngineHomes({ CODEX_HOME: profile }, { claudeHome: '/nowhere/.claude', codexHome: '/nowhere/.codex' })
     try {
       const fresh = await import('../launchPrep.js')
-      expect((await fresh.prepareResume({ ...source(), codexHome: null })).repairedItems).toBe(1)
+      expect((await fresh.prepareResume({ ...source(), codexHome: null }, () => true)).repairedItems).toBe(1)
       // Found by its id there too, when the registry has no path for it.
       writeFileSync(file, history(badReasoning()))
-      expect((await fresh.prepareResume({ ...source(), codexHome: null, transcriptPath: null })).repairedItems).toBe(1)
+      expect((await fresh.prepareResume({ ...source(), codexHome: null, transcriptPath: null }, () => true)).repairedItems).toBe(1)
       // A file in no Codex home at all is still refused.
       const stray = join(profile, 'stray.jsonl')
       writeFileSync(stray, history(badReasoning()))
-      await expect(fresh.prepareResume({ ...source(), codexHome: null, transcriptPath: stray })).rejects.toThrow('outside the session profile')
+      await expect(fresh.prepareResume({ ...source(), codexHome: null, transcriptPath: stray }, () => true)).rejects.toThrow('outside the session profile')
     } finally {
       vi.unstubAllEnvs()
       clearEngineHomeFixture(process.env.ADAPTER_DATA_DIR!)
@@ -353,7 +355,7 @@ describe('the bounds of a resume preparation', () => {
     file = join(folder, `rollout-2026-09-15T13-42-38-${SESSION}.jsonl`)
   })
   afterEach(() => { vi.restoreAllMocks(); rmSync(profile, { recursive: true, force: true }) })
-  const repair = (current?: () => boolean, limits: Partial<RepairLimits> = {}) =>
+  const repair = (current: () => boolean = () => true, limits: Partial<RepairLimits> = {}) =>
     repairHistory(codex.resumeRepair!, SESSION, file, [join(profile, 'sessions')], current, { ...REPAIR_LIMITS, ...limits })
   /** A rollout with an item to repair after [bytes] of other records, a chunk being 1 MiB. */
   const rollout = (bytes = 0) => {
@@ -374,7 +376,7 @@ describe('the bounds of a resume preparation', () => {
     expect(read).not.toHaveBeenCalled()
     untouched(original)
     // Its refusals still come first: a file outside the profile is refused, whatever its size.
-    expect(await refused(() => repairHistory(codex.resumeRepair!, SESSION, file, [join(profile, 'elsewhere')], undefined, { ...REPAIR_LIMITS, maxBytes: 1 })))
+    expect(await refused(() => repairHistory(codex.resumeRepair!, SESSION, file, [join(profile, 'elsewhere')], () => true, { ...REPAIR_LIMITS, maxBytes: 1 })))
       .toMatchObject({ kind: 'not_owned_file' })
   })
 
