@@ -9,7 +9,7 @@ import { prepareInstructionWrites } from '../../scm/scmProjects.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { createLaunchHelpers, gridLaunchThrough, type LaunchHelperDeps } from './launch.js'
 
-vi.mock('../../engines/launchPrep.js', async (real) => ({ ...await real<object>(), prepareResume: vi.fn(() => ({ repairedItems: 0 })) }))
+vi.mock('../../engines/launchPrep.js', async (real) => ({ ...await real<object>(), prepareResume: vi.fn(async () => ({ repairedItems: 0 })) }))
 vi.mock('../../lib/piSessionHome.js', () => ({ bringPiSessionHome: vi.fn(() => null) }))
 vi.mock('../../lib/engineLaunch.js', async (real) => ({ ...await real<object>(), dropPermissionFlagIfUnsupported: vi.fn() }))
 // OpenCode's version is its own code, loaded for an OpenCode relaunch alone; a test may say it could not be.
@@ -23,6 +23,8 @@ vi.mock('../../scm/scmProjects.js', async (real) => {
 })
 vi.mock('../../lib/launchOverrides.js', async (real) => ({ ...await real<object>(), buildLaunchOverrides: vi.fn(async () => ({ ok: true })) }))
 
+/** The operation's hold, which these cases never let go of. */
+const held = () => true
 const session = (over: Partial<RegisteredSession> = {}): RegisteredSession =>
   ({ agentId: 'a1', sessionId: 's1', engine: 'claude', cwd: '/work', dsh: 'blender', dshRuntime: null, agent: 'reviewer', ...over }) as RegisteredSession
 
@@ -179,18 +181,19 @@ describe('relaunch helpers', () => {
     expect(warn).toHaveBeenCalledTimes(2)
   })
 
-  it('repairs a Codex rollout for resume and moves the tail to its new length', () => {
+  it('repairs a Codex rollout for resume and moves the tail to its new length', async () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     const { deps, helpers } = setup()
     // Only Codex declares a repair, and the log line names what it repaired in its words.
     const codex = session({ engine: 'codex' })
-    helpers.prepareSessionResume(codex)
+    // It says whether the history was replaced: a resume then proves the new file, and otherwise the one it proved.
+    expect(await helpers.prepareSessionResume(codex, held)).toBe(false)
     expect(deps.setTail).not.toHaveBeenCalled()
-    vi.mocked(prepareResume).mockReturnValueOnce({ repairedItems: 3, repairedBytes: 1_234, backupPath: '/b/rollout.bak' } as never)
-    helpers.prepareSessionResume(codex)
+    vi.mocked(prepareResume).mockResolvedValueOnce({ repairedItems: 3, repairedBytes: 1_234, backupPath: '/b/rollout.bak' })
+    expect(await helpers.prepareSessionResume(codex, held)).toBe(true)
     expect(deps.setTail).toHaveBeenCalledWith('s1', 1_234)
-    vi.mocked(prepareResume).mockReturnValueOnce({ repairedItems: 1, backupPath: '/b/rollout.bak' } as never)
-    helpers.prepareSessionResume(codex)
+    vi.mocked(prepareResume).mockResolvedValueOnce({ repairedItems: 1, backupPath: '/b/rollout.bak' })
+    await helpers.prepareSessionResume(codex, held)
     expect(deps.setTail).toHaveBeenCalledTimes(1)
     expect(log.mock.calls.map(([line]) => String(line))).toEqual([
       '[resume] repaired 3 Codex reasoning items · backup: /b/rollout.bak',
@@ -198,7 +201,29 @@ describe('relaunch helpers', () => {
     ])
   })
 
-  it("brings a Pi conversation an older grid launch left in the daemon's folder home before it resumes", () => {
+  it('repairs only while the operation holds, and says why a history is left as it is', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { deps, helpers } = setup()
+    const codex = session({ engine: 'codex' })
+    const current = () => true
+    await helpers.prepareSessionResume(codex, current)
+    expect(vi.mocked(prepareResume).mock.calls[0]).toEqual([codex, current])
+    vi.mocked(prepareResume).mockResolvedValueOnce({ repairedItems: 0, unrepaired: 'too_large' })
+    await helpers.prepareSessionResume(codex, held)
+    vi.mocked(prepareResume).mockResolvedValueOnce({ repairedItems: 0, unrepaired: 'timed_out' })
+    await helpers.prepareSessionResume(codex, held)
+    // A host move that stops waiting moves the agent with its history as it is (lib/hostMove/moveAgent.ts).
+    vi.mocked(prepareResume).mockResolvedValueOnce({ repairedItems: 0, unrepaired: 'cancelled' })
+    expect(await helpers.prepareSessionResume(codex, held)).toBe(false)
+    expect(deps.setTail).not.toHaveBeenCalled()
+    expect(warn.mock.calls.map(([line]) => String(line))).toEqual([
+      '[resume] a1 · Codex reasoning items not repaired: its history is over 1 GiB, or a record over 16 MiB · the history is left as it is',
+      '[resume] a1 · Codex reasoning items not repaired: the repair took over 60 s · the history is left as it is',
+      '[resume] a1 · Codex reasoning items not repaired: what asked for it stopped waiting · the history is left as it is',
+    ])
+  })
+
+  it("brings a Pi conversation an older grid launch left in the daemon's folder home before it resumes", async () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     const { helpers } = setup()
     const old = '/data/grid-launch-config/c88e/sessions/--w--/s1.jsonl'
@@ -206,21 +231,21 @@ describe('relaunch helpers', () => {
     vi.stubEnv('PI_CODING_AGENT_SESSION_DIR', '')
     vi.stubEnv('PI_CODING_AGENT_DIR', '')
     vi.mocked(bringPiSessionHome).mockReturnValueOnce('/home/.pi/agent/sessions/--w--/s1.jsonl')
-    helpers.prepareSessionResume(pi)
+    await helpers.prepareSessionResume(pi, held)
     const [path, roots, sessions] = vi.mocked(bringPiSessionHome).mock.calls[0]!
     expect(path).toBe(old)
     expect(roots.map((root) => root.split('/').at(-1))).toEqual(['grid-engine-config', 'grid-launch-config'])
     expect(sessions).toMatch(/\/agent\/sessions$/)
     // Pi's own variables move where it keeps sessions, as they move where Pi looks for them.
     vi.stubEnv('PI_CODING_AGENT_DIR', '/moved/agent')
-    helpers.prepareSessionResume(pi)
+    await helpers.prepareSessionResume(pi, held)
     expect(vi.mocked(bringPiSessionHome).mock.calls[1]![2]).toBe('/moved/agent/sessions')
     vi.stubEnv('PI_CODING_AGENT_SESSION_DIR', '/moved/sessions')
     vi.mocked(bringPiSessionHome).mockReturnValueOnce(old)
-    helpers.prepareSessionResume(pi)
+    await helpers.prepareSessionResume(pi, held)
     expect(vi.mocked(bringPiSessionHome).mock.calls[2]![2]).toBe('/moved/sessions')
     // Said once, for the copy; nothing for a conversation already home, or another engine's.
-    helpers.prepareSessionResume(session({ engine: 'codex' }))
+    await helpers.prepareSessionResume(session({ engine: 'codex' }), held)
     expect(bringPiSessionHome).toHaveBeenCalledTimes(3)
     expect(log.mock.calls.map(([line]) => String(line))).toEqual([
       "[resume] a1 · pi's conversation brought home · /home/.pi/agent/sessions/--w--/s1.jsonl",
@@ -228,9 +253,9 @@ describe('relaunch helpers', () => {
     // A copy that fails never costs the relaunch: it runs after the old Pi stopped.
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     vi.mocked(bringPiSessionHome).mockImplementationOnce(() => { throw new Error('EACCES') })
-    expect(() => helpers.prepareSessionResume(pi)).not.toThrow()
+    await expect(helpers.prepareSessionResume(pi, held)).resolves.toBe(false)
     vi.mocked(bringPiSessionHome).mockImplementationOnce(() => { throw 'odd' })
-    expect(() => helpers.prepareSessionResume(pi)).not.toThrow()
+    await expect(helpers.prepareSessionResume(pi, held)).resolves.toBe(false)
     expect(warn.mock.calls.map(([line]) => String(line))).toEqual([
       "[resume] a1 · could not bring pi's conversation home · EACCES",
       "[resume] a1 · could not bring pi's conversation home · odd",
