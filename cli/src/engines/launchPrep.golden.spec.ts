@@ -28,7 +28,8 @@ import { prepareHarnessLaunch } from '../dsh/runtime.js'
 import type { ApiConnections } from '../lib/apiConnections.js'
 import { prepareApiInstructions } from '../lib/apiInstructions.js'
 import { resetEngineHomes } from '../lib/engineHomes.js'
-import { folderTrust, prepareResume, type ResumeSource } from './launchPrep.js'
+import { folderTrust } from './launchPrep.js'
+import { prepareResume, type ResumeSource } from './resumePreparation.js'
 import { PROCESS_ENGINES, type AgentEngine } from './types.js'
 
 const GOLDEN = fileURLToPath(new URL('./__fixtures__/launch-prep.golden.json', import.meta.url))

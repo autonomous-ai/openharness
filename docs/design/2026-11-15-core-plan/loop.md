@@ -32,7 +32,7 @@ Run `tools/repair-bench.mts` with `SRC=$PWD/src MB=200 REPAIR=1 npx tsx <path>` 
 
 ### PR 2 (core-loop-2): the repair in Codex's worker (engine-codex)
 
-Goal: the core reads no rollout at all on a resume; it asks Codex's worker and takes a typed, bounded answer.
+Goal: the worker reads and rewrites the rollout body. Core retains only the existing bounded native header identity proof and publication authority.
 
 #### Design (15 November continuation; technically reviewed before implementation)
 
@@ -48,7 +48,10 @@ itself is not reused: its project documents and persisted conversation snapshots
    independently verifies the returned path is an owned regular file within its own derived profile roots, using
    canonical native path evidence and `staysInside` (including #4323's Windows drive containment). Existing native
    transcript evidence must also independently bind that file to the registered session: containment alone never
-   authorizes rewriting another conversation. No worker-supplied destination is accepted as write authority.
+   authorizes rewriting another conversation. Repair uses the evidence helper's candidate-only policy on the first
+   check and every later verification: a delegated/overwritten-child candidate is left unrepaired, never followed
+   into parent-pool discovery in core. Stop/binding retain their existing parent-repair policy. No worker-supplied
+   destination is accepted as write authority.
 2. Core captures the original identity/version and assigns a unique adjacent staging directory name. The worker
    reserves one of its two durable cleanup slots before creating that private directory exclusively, then records its
    identity before writing. It opens only two fixed private files, `backup` and `history`, once; a completed token is
@@ -72,17 +75,20 @@ itself is not reused: its project documents and persisted conversation snapshots
    surviving worker has publication authority.
 
 Growth: at most two preparations and four temporary history copies, each capped at 1 GiB; record cap remains 16 MiB.
-The Codex worker owns two bounded private cleanup receipts (directory path, parent evidence, identity and token only),
+The Codex worker owns two bounded private cleanup receipts (directory path, parent evidence, identity, token and owning worker PID),
 durably reserved before directory creation and removed after cleanup. Startup recovers only those two entries,
 never scans transcript trees. A crash between directory creation and durable recording of its identity leaves that
 slot reserved if the directory exists: cleanup never guesses ownership. An uncleanable or invalid receipt reserves
 its slot and reports `RESUME_REPAIR_CLEANUP_FAILED`, rather than letting abandoned files accumulate. Ready slots
 have a bounded expiry and may be released early by an acknowledgement; lost acknowledgements do not leak slots.
+Recovery never takes a still-live worker's slot. It rechecks only the two known slots on the next request after a
+handover, so a previous worker's eventual exit can free capacity without polling or a core restart. Cleanup also
+checks the exact recorded token before deleting a receipt, fencing late callbacks from newer work.
 Existing successful private backups retain their current policy. Core gains no durable repair state.
 
 Concurrency: core admission is by session and selected file, bounded globally to two; all original-file publication
 and Watcher cursor changes stay under core's captured authority. Worker generation fencing rejects old replies.
-Read cost: core reads no rollout bytes or repair receipts, only bounded native metadata. The worker reads the
+Read cost: core reads no rollout body or repair receipts. It retains bounded native metadata and the existing session header proof. The worker reads the
 selected file twice in 1 MiB chunks, no whole-history string, with the existing 60 s repair bound.
 Scale: at 10x request rate, overflow refuses repair and resumes unchanged; active preparations, failed preparation
 kind and maximum core loop hold are the first signals. No content, paths or account identifiers enter new metrics.

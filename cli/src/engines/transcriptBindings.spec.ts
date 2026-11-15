@@ -197,6 +197,22 @@ it('repairs a child overwrite only after proving the whole parent pool', () => {
   expect(() => held.verify()).toThrow('directory pool changed')
   expect(() => bindings.savedTranscriptEvidence('codex', A, path)).toThrow('more than one')
 })
+
+it('a repair verifies only its supplied candidate and never enumerates a child\'s parent pool', () => {
+  const path = child()
+  vi.mocked(fs.opendirSync).mockClear()
+  expect(() => bindings.controlTranscriptEvidence('codex', A, path, home, undefined, 'candidate-only')).toThrow('unavailable')
+  expect(fs.opendirSync).not.toHaveBeenCalled()
+})
+
+it('candidate-only binding stays strict on every later verification', () => {
+  const held = bindings.controlTranscriptEvidence('codex', A, file, home, undefined, 'candidate-only')
+  write(join(home, 'sessions', 'parent', `rollout-${A}.jsonl`))
+  fs.writeFileSync(file, record(B, { subagent: { thread_spawn: { parent_thread_id: A } } }))
+  vi.mocked(fs.opendirSync).mockClear()
+  expect(() => held.verify()).toThrow()
+  expect(fs.opendirSync).not.toHaveBeenCalled()
+})
 it.each(['file', 'directory'])('does not repair through an outside %s alias', kind => {
   const path = child(), outside = join(root, 'outside')
   fs.mkdirSync(outside); fs.renameSync(file, join(outside, `rollout-${A}.jsonl`))
