@@ -155,6 +155,19 @@ held the loop 980 -> 2.8 ms (wall 980 -> 788 ms); three 200 ms PTY version child
 An earlier async-access implementation increased ownership CPU and was rejected; the directory-name cache above
 is the measured fix. Core footprint at the original base: 539 files / 92,700 lines.
 
+#### Step 3 acceptance checkpoint
+
+The async probes are implemented in PR #4339; final integration/CI and merge remain. At clean `c3609c1276`,
+the official runner passed 4,455 core tests with 100% per-file coverage, all 14 real terminal-contract cases
+(including the locally built native macOS PTY), and ten real-shell startup cases. Newly combined process identity,
+discovery and architecture checks passed 49 tests; typecheck passed. Native Windows execution is not claimed.
+An initial runner invocation incorrectly supplied two worker-count flags to the terminal suite; its incomplete
+receipt was discarded, the invocation corrected, and the actual complete runner passed at unchanged source.
+
+Main `5fa7b95762` is integrated; its app adapters do not change probe runtime or the native PTY source. Final
+exact-head receipts belong in the PR. The matched performance above remains tied to its stated runtime and
+environment. Registry lock/save and creation-receipt retention are separate, unfinished steps.
+
 ### PR 4 (core-loop-4): the registry save never sleeps the loop
 
 - `lib/registry.ts:492-601` `withRegistryFileLock`: `mkdir` lock dir + `owner.json` (fsync), on `EEXIST` it waits with
