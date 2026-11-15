@@ -521,10 +521,15 @@ function ownGateway() {
   }) ? 'ori' : 'none'
 }
 
-/** This session's Codex home, as the core takes one (src/hookServer.ts hookFacts). The default is no home of its own. */
+/**
+ * This session's Codex home, as the core takes one (src/hookServer.ts hookFacts): absolute as this platform spells it,
+ * on Windows a drive's path, never a share's or a device's (src/engines/kit/homeAdoption.ts homeIsAbsolute). The
+ * default is no home of its own.
+ */
 function ownCodexHome() {
   const home = process.env.CODEX_HOME
-  return home && isAbsolute(home) && home.length <= 1_024 && !CONTROL.test(home) && home !== join(homedir(), '.codex')
+  const absolute = home && (process.platform === 'win32' ? /^[A-Za-z]:\\/.test(home) : home.startsWith('/'))
+  return absolute && home.length <= 1_024 && !CONTROL.test(home) && home !== join(homedir(), '.codex')
     ? home : undefined
 }
 
