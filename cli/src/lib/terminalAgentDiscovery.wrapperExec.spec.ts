@@ -9,7 +9,6 @@ import { terminalPlacementKey } from './terminalRuntime.js'
 import type { TerminalRootObservation } from './terminalTypes.js'
 
 const processRows = vi.hoisted(() => vi.fn())
-vi.mock('./processEnv.js', async (real) => ({ ...await real<object>(), readProcessEnv: vi.fn(async () => null) }))
 vi.mock('./processMounts.js', async (real) => ({ ...await real<object>(), processView: vi.fn(async () => ({ state: 'same' })) }))
 vi.mock('./processTable.js', async (real) => ({ ...await real<typeof import('./processTable.js')>(), processRows, enrichProcessRows: vi.fn(async (rows: unknown) => rows) }))
 
