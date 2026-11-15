@@ -5,7 +5,6 @@
  *
  * Moved verbatim out of `runForeground` (the core boundary, step 10: docs/design/2026-10-03-harnessd.md).
  */
-import type { CursorSubagentManager } from '../../engines/cursor/subagent.js'
 import { correlateAgentEvent } from '../../lib/agentEvent.js'
 import type { QuestionWatcher } from '../../lib/questionController.js'
 import type { WifiFeed } from '../wifi.js'
@@ -19,7 +18,6 @@ export interface CancelDeps {
   resolve: (id: string) => RegisteredSession | undefined
   beforeCancel?: (session: RegisteredSession) => void
   normalizers: Pick<SessionNormalizers, 'closeTurns'>
-  cursorSubagents: Pick<CursorSubagentManager, 'forget'>
   input: Pick<SessionInputController, 'cancel' | 'cancelConfirmed'>
   /** The Wi-Fi device's service, wherever it runs (core/wifi.ts). */
   device: () => Pick<WifiFeed, 'turnEnded'> | undefined
@@ -35,7 +33,7 @@ export interface CancelDeps {
 }
 
 export function createCancel({
-  resolve, normalizers, cursorSubagents, input, device, stopHeartbeat, questionWatcher, mirror, turnActivity, turnStartedAt,
+  resolve, normalizers, input, device, stopHeartbeat, questionWatcher, mirror, turnActivity, turnStartedAt,
   agentIdFor, clients, beforeCancel,
 }: CancelDeps) {
   // Web cancel (C-c) interrupts the turn — claude writes no end_turn line to close it, so stop the
@@ -46,8 +44,8 @@ export function createCancel({
     const record = resolve(id)
     const sessionId = record?.sessionId ?? id
     if (record) beforeCancel?.(record)
+    // Cursor's sub-agents end with its turn's cancel, in its worker (engines/others/streams.ts).
     normalizers.closeTurns(sessionId)
-    cursorSubagents.forget(sessionId)
     const cancelled = confirmed ? input.cancelConfirmed(record?.agentId ?? sessionId) : (input.cancel(record?.agentId ?? sessionId), Promise.resolve(true))
     device()?.turnEnded(record?.agentId ?? sessionId, true)
     stopHeartbeat(sessionId)

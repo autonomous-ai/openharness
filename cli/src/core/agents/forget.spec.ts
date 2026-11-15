@@ -1,12 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { removePendingCursorTasks } from '../engines/cursorTasks.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { createForgetSession, type ForgetDeps } from './forget.js'
 import { createRelaunchMarks } from '../transcripts/relaunch.js'
 import { createShortTurnGuard, type ShortTurnGuard } from '../turns/shortTurnGuard.js'
 
-// Cursor's queued Tasks are cleared through the core's own door to them (core/engines/cursorTasks.ts).
-vi.mock('../engines/cursorTasks.js', () => ({ removePendingCursorTasks: vi.fn(async () => {}) }))
 
 function setup() {
   const agents = new Map<string, RegisteredSession>([
@@ -31,7 +28,6 @@ function setup() {
     replayedFirstTurn: new Set(['s1', 'other']),
     clearAgyIdleWatch: vi.fn(),
     cursorDiscovery: { remove: vi.fn() },
-    cursorSubagents: { forget: vi.fn() },
     runtimeProfiles: { forget: vi.fn() },
     watcher: { removeSession: vi.fn(async () => {}) },
     stopHeartbeat: vi.fn(),
@@ -40,7 +36,6 @@ function setup() {
     ended: vi.fn(),
     mirror: { forget: vi.fn() },
     clients: { send: vi.fn(), sendCommander: vi.fn() },
-    dataDir: '/data',
   }
   return { deps, forgetSession: createForgetSession(deps) }
 }
@@ -59,8 +54,6 @@ function expectLetGo(deps: ForgetDeps, sessionId: string, agentId: string) {
   expect(shortTurns.holding('other')).toBeGreaterThan(0)
   expect(deps.clearAgyIdleWatch).toHaveBeenCalledWith(sessionId)
   expect(deps.cursorDiscovery.remove).toHaveBeenCalledWith(sessionId)
-  expect(deps.cursorSubagents.forget).toHaveBeenCalledWith(sessionId)
-  expect(removePendingCursorTasks).toHaveBeenCalledWith('/data', sessionId)
   expect(deps.runtimeProfiles.forget).toHaveBeenCalledWith(sessionId)
   expect(deps.watcher.removeSession).toHaveBeenCalledWith(sessionId)
   expect(deps.stopHeartbeat).toHaveBeenCalledWith(sessionId)
@@ -80,7 +73,7 @@ describe('forgetting a session', () => {
     expect(kept.deps.prompts.get('a1')).toBe('Fix it')
   })
 
-  afterEach(() => { vi.restoreAllMocks(); vi.mocked(removePendingCursorTasks).mockClear() })
+  afterEach(() => { vi.restoreAllMocks() })
 
   it.each(['bound', 'unbound', 'process'] as const)('archives the proven capture of an unchanged %s agent', mode => {
     const { deps, forgetSession } = setup()

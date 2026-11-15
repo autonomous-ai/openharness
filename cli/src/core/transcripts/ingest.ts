@@ -1,16 +1,16 @@
 /**
- * Ingest: each transcript line the watcher delivers, through its engine's normalizer, into the funnel.
- * Lines arrive live, or as a history batch (a catch-up, emitted as a replay); a transcript rewritten in
- * place with too much history to replay is attached again from its end.
+ * Ingest: each transcript line the watcher delivers, through its engine's parser, into the funnel; and each frame the
+ * other engines' worker made of theirs (core/engines/otherStreams.ts). Lines arrive live, or as a history batch (a
+ * catch-up, emitted as a replay); a transcript rewritten in place with too much history to replay is attached again
+ * from its end.
  *
- * The file engines' normalizers are created here lazily, on a session's first line; the database
- * engines' readers never are (they are attached, not tailed).
- *
- * Moved verbatim out of `runForeground` (the core boundary, step 9: docs/design/2026-10-03-harnessd.md).
+ * Moved verbatim out of `runForeground` (the core boundary, step 9: docs/design/2026-10-03-harnessd.md). The other
+ * fourteen engines' normalizers left for their worker (docs/design/2026-11-15-core-plan/engines.md, step 1b).
  */
-import type { CursorNormalizer } from '../../engines/cursor/normalizer.js'
 import type { LiveFor, LiveParser } from '../../engines/facets/live.js'
-import { engineNow } from '../../engines/inProcess.js'
+import { keepsStore } from '../../engines/otherEngines.js'
+import { OPENCLAW_STATES } from '../../engines/openclaw/contract.js'
+import type { StreamFrame } from '../../engines/others/streamProtocol.js'
 import type { WifiFeed } from '../wifi.js'
 import { sid } from '../../lib/log.js'
 import type { LiveEvent } from '../../engines/kit/events.js'
@@ -21,6 +21,10 @@ import type { SessionNormalizers } from './normalizers.js'
 import { createSideReads } from './sideReads.js'
 import type { LiveFrame } from '../../engines/worker/liveProtocol.js'
 
+/** What an OpenClaw store that cannot be read, or holds no session for a pane that is working, says on its agent: the
+ *  holds its stream sets, and the only ones it clears. */
+const OPENCLAW_STORE_HOLDS = new Set<string>([OPENCLAW_STATES.unsupported, OPENCLAW_STATES.harnessNode, OPENCLAW_STATES.noSessions])
+
 export interface IngestDeps {
   liveFor: LiveFor
   has: (sessionId: string) => boolean
@@ -28,20 +32,21 @@ export interface IngestDeps {
   tokenUsage: { changed(session: RegisteredSession): void }
   /** The Wi-Fi device's service, wherever it runs (core/wifi.ts): it proves its turns by the raw transcript. */
   device: () => Pick<WifiFeed, 'needsTranscript' | 'observeTranscript'> | undefined
-  runtimeProfiles: Pick<RuntimeProfileManager, 'ingest'>
-  normalizers: SessionNormalizers
+  runtimeProfiles: Pick<RuntimeProfileManager, 'ingest' | 'evidence'>
+  normalizers: Pick<SessionNormalizers, 'liveParsers'>
   announceTurnAborted: (sessionId: string, engine: string, message: string, deviceMessage?: string) => void
   emit: (sessionId: string, events: LiveEvent[], opts?: { replay?: boolean }) => void
   attachSession: (session: RegisteredSession, reset: boolean) => Promise<boolean>
+  /** What the agent says while its engine's store cannot be read (OpenClaw's named states); undefined clears it. */
+  setIdentityHold: (agentId: string, reason?: string) => boolean
+  announceSession: (session: RegisteredSession) => void
 }
 
 export function createIngest({
   liveFor, has, bySession, tokenUsage, device, runtimeProfiles, normalizers, announceTurnAborted, emit, attachSession,
+  setIdentityHold, announceSession,
 }: IngestDeps) {
-  const {
-    liveParsers, cursorNormalizers, museNormalizers, ampNormalizers, grokNormalizers, agyNormalizers,
-    copilotNormalizers, piNormalizers, ompNormalizers, commandcodeNormalizers,
-  } = normalizers
+  const { liveParsers } = normalizers
   const sideRead = createSideReads()
   // JSONL watcher → normalize each appended line → stream up. ONE lineToEvents pass feeds BOTH
   // audiences: web (send, ServerEvents) and device (mirror.ingest → curated commander_event cards).
@@ -61,78 +66,16 @@ export function createIngest({
     if (!profileAccepted) sideRead('runtime profile', evt.sessionId, () => runtimeProfiles.ingest(session, evt.text))
     return session
   }
-  const ingestLine = (evt: LineEvent): ReturnType<CursorNormalizer['ingest']> | null => {
+  const ingestLine = (evt: LineEvent): LiveEvent[] | null => {
     const session = observeLine(evt)
     if (!session) return null
-    let events: LiveEvent[]
     const adapter = liveFor(session.engine)
-    if (adapter) {
-      let parser = liveParsers.get(evt.sessionId)
-      if (!parser || parser.engine !== session.engine || !('ingest' in parser)) { parser = adapter.create(session); liveParsers.set(evt.sessionId, parser) }
-      const read = (parser as LiveParser).ingest(evt.text)
-      events = read.events
-      if (read.failure !== undefined) announceTurnAborted(evt.sessionId, session.engine, read.failure)
-    } else if (session.engine === 'cursor') {
-      // Each engine's normalizer is its own code, loaded before its tail started (the attach awaited it). One
-      // that could not load reads no events from its lines, as an engine with no normalizer does.
-      let normalizer = cursorNormalizers.get(evt.sessionId)
-      const cursor = normalizer ? null : engineNow('cursor', 'a transcript line came')
-      if (!normalizer && cursor) {
-        normalizer = new cursor.CursorNormalizer('live', evt.sessionId)
-        cursorNormalizers.set(evt.sessionId, normalizer)
-      }
-      events = normalizer ? normalizer.ingest(evt.text) : []
-    } else if (session.engine === 'muse') {
-      let normalizer = museNormalizers.get(evt.sessionId)
-      const muse = normalizer ? null : engineNow('muse', 'a transcript line came')
-      if (!normalizer && muse) { normalizer = new muse.MuseNormalizer(); museNormalizers.set(evt.sessionId, normalizer) }
-      events = normalizer ? normalizer.ingest(evt.text) : []
-    } else if (session.engine === 'amp') {
-      let normalizer = ampNormalizers.get(evt.sessionId)
-      const amp = normalizer ? null : engineNow('amp', 'a transcript line came')
-      if (!normalizer && amp) { normalizer = new amp.AmpNormalizer(); ampNormalizers.set(evt.sessionId, normalizer) }
-      events = normalizer ? normalizer.ingest(evt.text) : []
-    } else if (session.engine === 'grok') {
-      let normalizer = grokNormalizers.get(evt.sessionId)
-      const grok = normalizer ? null : engineNow('grok', 'a transcript line came')
-      if (!normalizer && grok) { normalizer = new grok.GrokNormalizer(); grokNormalizers.set(evt.sessionId, normalizer) }
-      events = normalizer ? normalizer.ingest(evt.text) : []
-    } else if (session.engine === 'agy') {
-      let normalizer = agyNormalizers.get(evt.sessionId)
-      const agy = normalizer ? null : engineNow('agy', 'a transcript line came')
-      if (!normalizer && agy) { normalizer = new agy.AgyNormalizer(); agyNormalizers.set(evt.sessionId, normalizer) }
-      events = normalizer ? normalizer.ingest(evt.text) : []
-    } else if (session.engine === 'copilot') {
-      let normalizer = copilotNormalizers.get(evt.sessionId)
-      const copilot = normalizer ? null : engineNow('copilot', 'a transcript line came')
-      if (!normalizer && copilot) { normalizer = new copilot.CopilotNormalizer(); copilotNormalizers.set(evt.sessionId, normalizer) }
-      events = normalizer ? normalizer.ingest(evt.text) : []
-    } else if (session.engine === 'pi') {
-      let normalizer = piNormalizers.get(evt.sessionId)
-      const pi = normalizer ? null : engineNow('pi', 'a transcript line came')
-      if (!normalizer && pi) { normalizer = new pi.PiNormalizer('live'); piNormalizers.set(evt.sessionId, normalizer) }
-      events = normalizer ? normalizer.ingest(evt.text) : []
-    } else if (session.engine === 'omp') {
-      let normalizer = ompNormalizers.get(evt.sessionId)
-      const omp = normalizer ? null : engineNow('omp', 'a transcript line came')
-      if (!normalizer && omp) { normalizer = new omp.OmpNormalizer('live'); ompNormalizers.set(evt.sessionId, normalizer) }
-      events = normalizer ? normalizer.ingest(evt.text) : []
-    } else if (session.engine === 'commandcode') {
-      const commandcode = engineNow('commandcode', 'a transcript line came')
-      let normalizer = commandcodeNormalizers.get(evt.sessionId)
-      if (!normalizer && commandcode) { normalizer = new commandcode.CommandCodeNormalizer('live'); commandcodeNormalizers.set(evt.sessionId, normalizer) }
-      events = normalizer ? normalizer.ingest(evt.text) : []
-      // Command Code fires no Stop hook for a failed turn: this record IS the notification. `ingest`
-      // already closed the turn (its turn_ended is in `events`, emitted just below) — announce the
-      // reason first so the web/device show the error ahead of the turn closing.
-      const runError = commandcode?.commandCodeRunError(evt.text) ?? null
-      if (runError !== null) {
-        announceTurnAborted(evt.sessionId, 'commandcode', runError, commandcode!.commandCodeRunErrorSummary(runError))
-      }
-    } else {
-      events = []
-    }
-    return events
+    if (!adapter) return []
+    let parser = liveParsers.get(evt.sessionId)
+    if (!parser || parser.engine !== session.engine || !('ingest' in parser)) { parser = adapter.create(session); liveParsers.set(evt.sessionId, parser) }
+    const read = (parser as LiveParser).ingest(evt.text)
+    if (read.failure !== undefined) announceTurnAborted(evt.sessionId, session.engine, read.failure)
+    return read.events
   }
   /** Feed what the watcher delivers through `ingestLine` into the funnel. */
   const wireWatcher = (watcher: Pick<Watcher, 'on'>): void => {
@@ -159,8 +102,7 @@ export function createIngest({
     })
     watcher.on('history', (batch: HistoryEvent) => {
       try {
-        type Events = ReturnType<CursorNormalizer['ingest']>
-        const all: Events = []
+        const all: LiveEvent[] = []
         for (const evt of batch.lines) {
           const events = ingestLine(evt)
           if (events) all.push(...events)
@@ -179,5 +121,35 @@ export function createIngest({
     if (frame.failure !== undefined) announceTurnAborted(sessionId, engine, frame.failure)
     emit(sessionId, frame.events, { replay: frame.replay })
   }
-  return { ingestLine, wireWatcher, acceptFrame }
+  /**
+   * A frame the other engines' worker made of one of their sessions: a file engine's taken as each of its lines was
+   * (only while the session is bound to it and not held), a database engine's as its reader's events were.
+   */
+  const acceptStreamFrame = (session: RegisteredSession, frame: StreamFrame): void => {
+    const latest = bySession(session.sessionId)
+    if (!latest || latest.engine !== session.engine) return
+    if (!keepsStore(session.engine)) {
+      if (!has(session.sessionId) || latest.identityHold || latest.interpretationHold) return
+      tokenUsage.changed(latest)
+    }
+    if (frame.hold !== undefined) {
+      // A hold another reason set is that reason's to clear.
+      const hold = frame.hold ?? undefined
+      if (latest.identityHold ? OPENCLAW_STORE_HOLDS.has(latest.identityHold) : hold !== undefined) {
+        if (setIdentityHold(latest.agentId, hold)) announceSession(bySession(session.sessionId)!)
+      }
+    }
+    if (frame.evidence) {
+      const evidence = frame.evidence
+      sideRead('runtime profile', session.sessionId, () => runtimeProfiles.evidence(latest, evidence))
+    }
+    if (frame.failure !== undefined) {
+      if (frame.failureSummary !== undefined) announceTurnAborted(session.sessionId, session.engine, frame.failure, frame.failureSummary)
+      else announceTurnAborted(session.sessionId, session.engine, frame.failure)
+    }
+    if (!frame.events.length) return
+    if (frame.replay) emit(session.sessionId, frame.events, { replay: true })
+    else emit(session.sessionId, frame.events)
+  }
+  return { ingestLine, wireWatcher, acceptFrame, acceptStreamFrame }
 }

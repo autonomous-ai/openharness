@@ -149,12 +149,13 @@ export const ENGINE_NATIVE_CONTROL_ENV = 'HARNESSD_ENGINE_NATIVE_CONTROL'
 export const ENGINE_BACKGROUND_JOB_ENV = 'HARNESSD_ENGINE_BACKGROUND_JOB'
 export const ENGINE_PROVIDER_MOVE_ENV = 'HARNESSD_ENGINE_PROVIDER_MOVE'
 /**
- * What the other engines' worker serves, as a version: `<master pid>:<version>`. 1 is their history and last turn.
+ * What the other engines' worker serves, as a version: `<master pid>:<version>`. 1 is their history and last turn; 2
+ * adds their live streams (engines/others/streams.ts), which a core under a master of 1 runs in its own process.
  * A version only grows, each one serving what the ones before it did: a core asks the worker only for what the
  * version its master says covers, and reads the rest in its own process, as under a master from before the worker.
  */
 export const ENGINE_OTHERS_ENV = 'HARNESSD_ENGINE_OTHERS'
-export const ENGINE_OTHERS_VERSION = 1
+export const ENGINE_OTHERS_VERSION = 2
 
 /**
  * What a master puts in its core's environment about the services it runs in their own processes: the

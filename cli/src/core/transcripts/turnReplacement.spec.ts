@@ -7,13 +7,14 @@ import type { LiveState } from '../../engines/facets/live.js'
 import { createSessionNormalizers } from './normalizers.js'
 import { createTurnReplacements } from './turnReplacement.js'
 import * as transcriptBoundary from '../../lib/transcriptBoundary.js'
+import { noOtherStreams } from '../../testing/otherStreams.js'
 
 const dirs: string[] = []
 const setup = (file = true) => {
   const dir = mkdtempSync(join(tmpdir(), 'replacement-control-')); dirs.push(dir)
   const transcriptPath = join(dir, 'session.jsonl'); writeFileSync(transcriptPath, '{}\n')
   const session = { agentId: 'agent', engine: 'claude', sessionId: 'session', transcriptPath: file ? transcriptPath : null } as RegisteredSession
-  const normalizers = createSessionNormalizers(), replacements = createTurnReplacements(normalizers)
+  const normalizers = createSessionNormalizers(noOtherStreams()), replacements = createTurnReplacements(normalizers)
   return { session, normalizers, replacements }
 }
 const parser = (): LiveState => ({ engine: 'claude', turnOpen: true,

@@ -1325,7 +1325,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       device: () => undefined,
       clients: { send: vi.fn(), sendCommander: vi.fn() },
       agentIdFor: (sessionId) => rows(sessionId)?.agentId ?? sessionId,
-      commandcode: () => undefined,
+      openTurn: async () => [],
       emit: vi.fn(),
     })
     const run = setup({
@@ -1548,7 +1548,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
         device: () => undefined,
         clients,
         agentIdFor: (sessionId) => rows(sessionId)?.agentId ?? sessionId,
-        commandcode: () => undefined,
+        openTurn: async () => [],
         emit: vi.fn(),
       })
       const run = handing(() => ready, { input: inputs.input, submitAgent: inputs.submitAgent })

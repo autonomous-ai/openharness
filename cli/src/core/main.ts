@@ -199,8 +199,8 @@ import { createAgentList } from './agents/list.js'
 import { createAgentUpdate } from './agents/update.js'
 import { createEngineHooks, installEngineHooks, installOpencodePluginBeforeSpawn } from './engines/hooks.js'
 import { createCursorDiscovery } from './engines/cursorDiscovery.js'
-import { createCursorTaskHooks, loadPendingCursorTasks } from './engines/cursorTasks.js'
-import { createStoreOf, hermesDb } from './transcripts/stores.js'
+import { createStoreOf } from './transcripts/stores.js'
+import { createOtherStreams } from './engines/otherStreams.js'
 import { OTHER_ENGINES_SERVICE } from '../engines/otherEngines.js'
 import { CLOUD_FALLBACKS, CLOUD_REQUESTS, type CloudCore, CONNECTORS_FALLBACKS, CONNECTORS_OFF, CONNECTORS_REQUESTS, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARED_MACHINES_REQUESTS, MEMORY_REQUESTS, ROUTER_REQUESTS, createCoreApi, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, MACHINE_ADDON_REQUESTS, HANDOFF_REQUESTS, EXPERIMENTS, LONG_ANSWERS, MODELS_FALLBACKS, MODELS_OFF, MODELS_REQUESTS, MONITOR_FALLBACKS, MONITOR_OFF, MONITOR_REQUESTS, ORCHESTRATOR_FALLBACKS, OS_DEVICE_REQUESTS, ORCHESTRATOR_REQUESTS, SHARE_REQUESTS, SHARING_FALLBACKS, PROJECTS_REQUESTS, SEARCH_FALLBACKS, SEARCH_REQUESTS, STORE_FALLBACKS, STORE_OFF, STORE_REQUESTS, MESSAGES_FALLBACKS, MESSAGES_REQUESTS, GOALS_REQUESTS, TURN_DELIVERERS, USAGE_FALLBACKS, USAGE_REQUESTS, VIEWERS_FALLBACKS, WIFI_FALLBACKS, WINDOW_NAMES_REQUESTS, ENGINE_PROBE_REQUESTS, WORKSPACES_FALLBACKS, type GatewayAccount, type GatewayOps, type GatewayStatus, type RouteAnswer, type WindowFocus } from './api.js'
 import { createServiceHost, testFaults } from './serviceHost.js'
@@ -749,9 +749,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const isolatedProviderMove = (engine: string): boolean => providerMoveHosted && isolatedLive(engine)
   const isolatedSubmission = (engine: string): boolean => submissionHosted && isolatedLive(engine)
   const isolatedRuntime = (engine: string): boolean => runtimeHosted && isolatedLive(engine)
-  // The other engines' worker reads their history and last turns (engines/others/), under a master that runs it.
+  // The other engines' worker reads their history and last turns (engines/others/), under a master that runs it; from
+  // its version 2 it follows their live conversations too, and under an older master their streams run in this process.
   const othersHosted = outOfProcess.has(OTHER_ENGINES_SERVICE) && otherEnginesVersion(harnessd, process.ppid) >= 1
-  const inline = knownServices.some((name) => !outOfProcess.has(name)) || !othersHosted || !runtimeHosted || !screenHosted || !modelControlHosted || !questionControlHosted || !submissionHosted || !nativeControlHosted || !backgroundJobHosted || !providerMoveHosted
+  const othersLive = othersHosted && otherEnginesVersion(harnessd, process.ppid) >= 2
+  const inline = knownServices.some((name) => !outOfProcess.has(name)) || !othersLive || !runtimeHosted || !screenHosted || !modelControlHosted || !questionControlHosted || !submissionHosted || !nativeControlHosted || !backgroundJobHosted || !providerMoveHosted
     ? await import('../services/inline.js') : null
   let serviceLinksRef: ServiceLinks | null = null
   const runtimeTransport = createRuntimeTransport({
@@ -1274,11 +1276,19 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   backend.terminalInfoProvider = terminalRequests.terminalInfo
   backend.themeProvider = terminalRequests.themeSet
 
+  // The other fourteen engines' live conversations, followed in their worker (core/engines/otherStreams.ts), or by its
+  // code in this process under a master too old to run it (services/inline.ts).
+  const inlineOthers = othersLive ? null : inline!.otherEngineRequests()
+  const otherStreams = createOtherStreams({
+    call: (type, payload, waitMs) => inlineOthers ? inlineOthers.call(type, payload, waitMs)
+      : serviceLinksRef?.call(OTHER_ENGINES_SERVICE, type, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }),
+    bySession: (id) => registry.bySession(id),
+    // Built further down: read when a frame comes, never now.
+    frame: (session, frame) => ingest.acceptStreamFrame(session, frame),
+    reattach: (session) => { void attachSession(session, true).catch((error) => console.error(`[agent] ${sid(session.agentId)} re-attach failed: ${error instanceof Error ? error.message : error}`)) },
+  })
   // Each session's engine state, in one table (core/transcripts/normalizers.ts).
-  const normalizers = createSessionNormalizers()
-  const cursorNormalizers = normalizers.cursorNormalizers
-  const agyNormalizers = normalizers.agyNormalizers
-  const commandcodeNormalizers = normalizers.commandcodeNormalizers
+  const normalizers = createSessionNormalizers(otherStreams)
   const sessionTurnState = normalizers.sessionTurnState
   const sessionTurnOpen = normalizers.sessionTurnOpen
   const { watcher, live: engineLive } = createLiveWatcher(new Watcher(), {
@@ -1289,7 +1299,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     frame: (session, frame) => ingest.acceptFrame(session.sessionId, session.engine, frame, runtimeProfiles.handles(session.engine)),
     reattach: (session) => attachSession(session, true),
     hold: (session, reason) => attach.holdInterpretation(session, reason),
-  })
+  }, otherStreams)
   // Whether a turn is really working, beyond its transcript (core/turns/activity.ts).
   const activity = createTurnActivity({
     readScreen: screens.read,
@@ -1344,28 +1354,27 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const relaunchMarks = createRelaunchMarks()
   // Following a session: its history read into its engine's normalizer, then its tail
   // (core/transcripts/attach.ts).
+  // Where a conversation kept in a database is: the core names the store its engine's reader reads (core/transcripts/stores.ts).
+  const storeOf = createStoreOf({ opencode: OPENCODE_DB, kilo: KILO_DB, devin: DEVIN_DB, openclaw: openclawSessionDb })
   const attach = createAttach({
     setInterpretationHold: registry.setInterpretationHold.bind(registry),
-    setIdentityHold: registry.setIdentityHold.bind(registry),
     announceSession,
     liveFor,
     resolve: id => registry.resolve(id),
     remoteLive: engineLive,
     terminalGone: terminalControl.terminalGone,
     normalizers,
+    others: otherStreams,
     watcher,
     cursorDiscovery,
     device: () => wifiCore.feed,
     runtimeProfiles,
     captureTerminal,
     emit: (sessionId, events, opts) => emitSessionEvents(sessionId, events, opts),
-    announceTurnAborted,
     // Built further down: read when an attach starts watching a pane, never now.
     questionWatcher: { start: (sessionId) => questionWatcher.start(sessionId) },
     terminalLabel: primaryTerminalLabel,
-    dbs: { opencode: OPENCODE_DB, kilo: KILO_DB, devin: DEVIN_DB, openclaw: openclawSessionDb },
-    devinHome: env.DEVIN_HOME,
-    hermesDb,
+    storeOf,
     concurrency: ATTACH_CONCURRENCY,
     relaunchMarks,
     // Built further down: told when an attach finds its last turn already over, never now.
@@ -1376,8 +1385,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const neverFoldedHistory = attach.neverFoldedHistory
   const replayedFirstTurn = attach.replayedFirstTurn
   // A conversation's history, a page at a time, and how long it is (core/transcripts/history.ts).
-  // Where a conversation kept in a database is: the core names the store its engine's reader reads (core/transcripts/stores.ts).
-  const storeOf = createStoreOf({ opencode: OPENCODE_DB, kilo: KILO_DB, devin: DEVIN_DB, openclaw: openclawSessionDb })
   const history = createHistory({ readerFor: engineReaders.forEngine, resolve: (id) => registry.resolve(id), stopped: () => stoppedAgents.list(),
     pages: new TranscriptPager(), storeOf })
   backend.historyProvider = history.sessionGet
@@ -1401,7 +1408,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     clients: backend,
     // Declared further down: read when an error is reported, never now.
     agentIdFor: (sessionId) => agentIdFor(sessionId),
-    commandcode: (sessionId) => commandcodeNormalizers.get(sessionId),
+    openTurn: (sessionId, text) => otherStreams.openTurn(sessionId, text),
     // Reassigned further down (the funnel): always the current one.
     emit: (sessionId, events) => emitSessionEvents(sessionId, events),
     // Declared further down: read as a prompt is typed, never now.
@@ -1427,7 +1434,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
   // agy's turn closed from its pane when its final Stop never comes (core/turns/agyBackstop.ts).
   const agyBackstop = createAgyBackstop({
-    agyNormalizers,
+    streams: otherStreams,
     bySession: (sessionId) => registry.bySession(sessionId),
     captureTerminal,
     drain: (sessionId) => watcher.pollSession(sessionId),
@@ -1652,6 +1659,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     notice: (service, payload) => { if (service === 'gateway') gatewayLink?.notice(payload); else if (service === 'devices') devicesLink.notice(payload); else if (service === 'wifi') wifiLink.notice(payload); else if (service === 'viewers') viewersLink.notice(payload); else if (service === 'recaps') recapsLink.notice(payload); else if (service === 'agentBrowser') agentBrowserLink.notice(payload) },
     binary: (service, bytes) => { if (service === 'gateway') gatewayLink?.binary(bytes); else if (service === 'agentBrowser') agentBrowserLink.binary(bytes) },
     connected: (service) => {
+      if (service === OTHER_ENGINES_SERVICE) otherStreams.connected()
       engineReaders.connected(service)
       liveTransport.connected(service)
       runtimeTransport.connected(service)
@@ -1679,6 +1687,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     disconnected: (service) => {
       if (service === 'search') searchGeneration++
       if (service === 'usage') usageLink.disconnected()
+      if (service === OTHER_ENGINES_SERVICE) otherStreams.disconnected()
       engineReaders.disconnected(service)
       liveTransport.disconnected(service)
       runtimeTransport.disconnected(service)
@@ -1900,11 +1909,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     shortTurns,
     quietTitles,
   })
-  // Cursor's Task hooks and the sub-agents they start (core/engines/cursorTasks.ts).
-  const cursorTasks = createCursorTaskHooks({ emitSessionEvents, watcher, registry, cursorNormalizers })
-  const cursorSubagents = cursorTasks.cursorSubagents
-  const cursorTaskHooks = cursorTasks.cursorTaskHooks
-  const onCursorTaskStart = cursorTasks.onCursorTaskStart
 
   // Release a session's binding, or remove a process-owned agent everywhere (core/agents/forget.ts).
   // One owner per conversation, stopped harnesses included; the conversations claimed twice so far settle now.
@@ -1926,7 +1930,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     replayedFirstTurn,
     clearAgyIdleWatch,
     cursorDiscovery,
-    cursorSubagents,
     runtimeProfiles,
     watcher,
     stopHeartbeat,
@@ -1935,7 +1938,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     ended: agentEnded,
     mirror,
     clients: backend,
-    dataDir: env.ADAPTER_DATA_DIR,
   })
 
   const retainExitedSession = createRetainExitedSession({
@@ -1976,14 +1978,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // the only place a Gateway on another host shows, a while longer into a conversation.
     capturePane: (agentId) => captureTerminal(agentId, 200),
     openclawPaneRead: (sessionId, reading, capture) => {
-      const stream = normalizers.openclawReaders.get(sessionId)
-      stream?.paneRead(reading)
+      const streamed = otherStreams.paneRead(sessionId, reading)
       const session = registry.bySession(sessionId)
       // As the footer poll beside the other engines' panes reads them: a profile that cannot be read leaves the chip as it was.
       if (session) void Promise.resolve(runtimeProfiles.ingestPane(session, capture)).catch(() => undefined)
-      return !!stream
+      return streamed
     },
-    openclawPaneDue: (sessionId) => normalizers.openclawReaders.get(sessionId)?.paneDue() ?? true,
+    openclawPaneDue: (sessionId) => otherStreams.paneDue(sessionId),
     openclawStateDir: (pid) => openclawStateDir(pid),
     hermesTerminal: createHermesTerminal({
       platform: process.platform,
@@ -2168,16 +2169,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     afterStop: attach.afterStop,
     resolve: (id) => registry.resolve(id),
     normalizers,
+    others: otherStreams,
     emit: (sessionId, events) => emitSessionEvents(sessionId, events),
     drain: (sessionId) => watcher.pollSession(sessionId),
-    onCursorTaskStart,
-    cursorTaskHooks,
-    cursorSubagents,
     announceTurnAborted,
     armAgyIdleWatch,
     clearAgyIdleWatch,
     mirror,
-    dataDir: env.ADAPTER_DATA_DIR,
   })
   // Which agent a hook belongs to, and what a SessionEnd means (core/engines/hooks.ts).
   const engineHooks = createEngineHooks({ get tmuxBackend() { return tmuxBackend }, ptyHostBackend, agentReconciler, registry, panePending: restorePanes.pending, syncSession })
@@ -2438,6 +2436,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     announceTurnAborted,
     emit: (sessionId, events, opts) => emitSessionEvents(sessionId, events, opts),
     attachSession: (session, reset) => attachSession(session, reset),
+    setIdentityHold: registry.setIdentityHold.bind(registry),
+    announceSession,
   })
   ingest.wireWatcher(watcher)
   // Nothing re-attaches the registry's agents here. Every one of them is dormant from the moment the
@@ -2668,15 +2668,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // And every agent whose Browser is on gets its browser back.
   for (const session of registry.list()) if (session.browser) agentBrowsers.attached(session)
   await agentReconciler.start(env.TERMINAL_RECONCILE_INTERVAL_MS ?? env.TMUX_REAP_INTERVAL_MS)
-  // A file lock and a JSON parse, neither of which is worth the daemon: an unreadable queue means no
-  // pending Cursor tasks this boot, not no daemon.
-  const pendingCursorTasks = await loadPendingCursorTasks(env.ADAPTER_DATA_DIR).catch((error) => {
-    console.warn(`[cursor] pending tasks skipped · ${error instanceof Error ? error.message : error}`)
-    return []
-  })
-  for (const task of pendingCursorTasks) {
-    onCursorTaskStart(task.sessionId, task.toolUseId, task.input)
-  }
 
   // Reconciliation is deliberately full: drain every transcript to EOF, inspect each live pane, then
   // publish every session even when Model/Effort did not change. Reconnect runs the same path, while
@@ -2765,7 +2756,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     beforeCancel: attach.beforeCancel,
     resolve: (id) => registry.resolve(id),
     normalizers,
-    cursorSubagents,
     input,
     device: () => wifiCore.feed,
     stopHeartbeat,
@@ -3177,7 +3167,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     ['the timers', () => { clearInterval(logTrimTimer); clearInterval(runtimeReconcileTimer); clearInterval(paneTitleSyncTimer) }],
     ['the question watchers', () => questionWatcher.stopAll()],
     ['the turn heartbeats', () => { for (const t of heartbeats.values()) clearInterval(t); heartbeats.clear() }],
-    ['the Cursor sub-agents', () => cursorSubagents.stop()], ['the normalizers', () => normalizers.stopPollers()],
+    ['the normalizers', () => normalizers.stopPollers()],
     ['Cursor discovery', () => cursorDiscovery.stop()], ['the runtime profiles', () => runtimeProfiles.stop()], ['the transcript watcher', () => watcher.stop()],
     // The FIXED hook port, released before the successor binds it (no fallback → EADDRINUSE otherwise).
     // Process-owned agents stay in the persisted registry and are revalidated by its first discovery passes.
@@ -3241,7 +3231,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     questionWatcher.stopAll()
     for (const t of heartbeats.values()) clearInterval(t)
     heartbeats.clear()
-    cursorSubagents.stop()
     normalizers.stopPollers()
     deadline.at('Cursor discovery')
     await cursorDiscovery.stop()

@@ -20,6 +20,9 @@ export interface LineEvent {
   text: string
   seq: number
   ts: number
+  /** The byte after the line: where a tail started again for the session resumes (engines/others/streams.ts). Cursor's
+   *  transcript is read whole each time, and its lines have none. */
+  next?: number
 }
 
 /**
@@ -412,6 +415,7 @@ export class Watcher extends EventEmitter {
         text,
         seq: state.seq++,
         ts: Date.now(),
+        next: start + newline + 1,
       }
       if (linePos < state.historicalUntil) { history.push(evt); continue }
       if (history.length) this.flushHistory(state, history)
