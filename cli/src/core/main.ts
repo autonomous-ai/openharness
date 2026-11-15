@@ -200,7 +200,8 @@ import { createAgentUpdate } from './agents/update.js'
 import { createEngineHooks, installEngineHooks, installOpencodePluginBeforeSpawn } from './engines/hooks.js'
 import { createCursorDiscovery } from './engines/cursorDiscovery.js'
 import { createCursorTaskHooks, loadPendingCursorTasks } from './engines/cursorTasks.js'
-import { databaseHistory, hermesDb } from './transcripts/databaseHistory.js'
+import { createStoreOf, hermesDb } from './transcripts/stores.js'
+import { OTHER_ENGINES_SERVICE } from '../engines/otherEngines.js'
 import { CLOUD_FALLBACKS, CLOUD_REQUESTS, type CloudCore, CONNECTORS_FALLBACKS, CONNECTORS_OFF, CONNECTORS_REQUESTS, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARED_MACHINES_REQUESTS, MEMORY_REQUESTS, ROUTER_REQUESTS, createCoreApi, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, MACHINE_ADDON_REQUESTS, HANDOFF_REQUESTS, EXPERIMENTS, LONG_ANSWERS, MODELS_FALLBACKS, MODELS_OFF, MODELS_REQUESTS, MONITOR_FALLBACKS, MONITOR_OFF, MONITOR_REQUESTS, ORCHESTRATOR_FALLBACKS, OS_DEVICE_REQUESTS, ORCHESTRATOR_REQUESTS, SHARE_REQUESTS, SHARING_FALLBACKS, PROJECTS_REQUESTS, SEARCH_FALLBACKS, SEARCH_REQUESTS, STORE_FALLBACKS, STORE_OFF, STORE_REQUESTS, MESSAGES_FALLBACKS, MESSAGES_REQUESTS, GOALS_REQUESTS, TURN_DELIVERERS, USAGE_FALLBACKS, USAGE_REQUESTS, VIEWERS_FALLBACKS, WIFI_FALLBACKS, WINDOW_NAMES_REQUESTS, ENGINE_PROBE_REQUESTS, WORKSPACES_FALLBACKS, type GatewayAccount, type GatewayOps, type GatewayStatus, type RouteAnswer, type WindowFocus } from './api.js'
 import { createServiceHost, testFaults } from './serviceHost.js'
 import { startStalls } from './stall.js'
@@ -230,7 +231,7 @@ import { answerSharedMachinesQuery } from './sharedMachinesQueries.js'
 import { inlineSharedMachinesPort } from '../lib/sharedMachinesPort.js'
 import { createOrchestratorLink } from './orchestratorLink.js'
 import { daemonCommand } from '../lib/daemonCommand.js'
-import { KNOWN_SERVICES, masterRunsEngineRuntime, masterRunsLiveEngines, servicesTheMasterRuns } from '../harnessd/services.js'
+import { KNOWN_SERVICES, masterRunsEngineRuntime, masterRunsLiveEngines, otherEnginesVersion, servicesTheMasterRuns } from '../harnessd/services.js'
 import { askForMessages, createMessagesLink } from './messagesLink.js'
 import { createDevicesLink } from './devicesLink.js'
 import { CORE_EXIT_STOP, CORE_EXIT_UPDATE, PROBE_COMMAND } from '../harnessd/protocol.js'
@@ -747,7 +748,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const isolatedProviderMove = (engine: string): boolean => providerMoveHosted && isolatedLive(engine)
   const isolatedSubmission = (engine: string): boolean => submissionHosted && isolatedLive(engine)
   const isolatedRuntime = (engine: string): boolean => runtimeHosted && isolatedLive(engine)
-  const inline = knownServices.some((name) => !outOfProcess.has(name)) || !runtimeHosted || !screenHosted || !modelControlHosted || !questionControlHosted || !submissionHosted || !nativeControlHosted || !backgroundJobHosted || !providerMoveHosted
+  // The other engines' worker reads their history and last turns (engines/others/), under a master that runs it.
+  const othersHosted = outOfProcess.has(OTHER_ENGINES_SERVICE) && otherEnginesVersion(harnessd, process.ppid) >= 1
+  const inline = knownServices.some((name) => !outOfProcess.has(name)) || !othersHosted || !runtimeHosted || !screenHosted || !modelControlHosted || !questionControlHosted || !submissionHosted || !nativeControlHosted || !backgroundJobHosted || !providerMoveHosted
     ? await import('../services/inline.js') : null
   let serviceLinksRef: ServiceLinks | null = null
   const runtimeTransport = createRuntimeTransport({
@@ -897,6 +900,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const tabRelay = tabRelayOf(() => gatewayOps.tabRelay)
   // The prompt of each agent's last turn start: what the one-line summary of a working agent says (turns/summaries.ts).
   const turnPrompts = new Map<string, string>()
+  // A conversation kept in a database, read whole, for a service in this process: the services' own code, which each
+  // service's process reads as it is (lib/databaseHistory.ts). The core reads no store of its own for one.
+  const databaseHistory = inline?.databaseHistory ?? ((): undefined => undefined)
   const coreApi = createCoreApi({
     cloud: cloudDoors,
     cloudRows: () => (cloudAgents?.dialRows() ?? []) as unknown as RegisteredSession[],
@@ -1127,7 +1133,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     paneState: (runtime) => terminals.backendFor(runtime)?.paneState(runtime) ?? Promise.resolve('unknown'),
     processState: checkPidRuntime }))
   const account = (s = readAuthSession()): GatewayAccount => ({ machineId: s?.machineId ?? null, signIn: signInOf(s?.signInEpoch, s?.signInAcct), autonomousEnv: s?.autonomousEnv ?? env.AUTONOMOUS_ENV })
-  const engineReaders = createEngineReaders({ isolated: outOfProcess, inline: inline?.engineTranscriptFor,
+  const engineReaders = createEngineReaders({ isolated: othersHosted ? outOfProcess : new Set([...outOfProcess].filter(name => name !== OTHER_ENGINES_SERVICE)), inline: inline?.engineTranscriptFor,
     call: (service, type, payload, waitMs) => serviceLinksRef?.call(service, type, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }) })
   const liveTransport = createLiveTransport({
     call: (service, type, payload, waitMs) => serviceLinksRef?.call(service, type, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }),
@@ -1365,9 +1371,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const neverFoldedHistory = attach.neverFoldedHistory
   const replayedFirstTurn = attach.replayedFirstTurn
   // A conversation's history, a page at a time, and how long it is (core/transcripts/history.ts).
+  // Where a conversation kept in a database is: the core names the store its engine's reader reads (core/transcripts/stores.ts).
+  const storeOf = createStoreOf({ opencode: OPENCODE_DB, kilo: KILO_DB, devin: DEVIN_DB, openclaw: openclawSessionDb })
   const history = createHistory({ readerFor: engineReaders.forEngine, resolve: (id) => registry.resolve(id), stopped: () => stoppedAgents.list(),
-    pages: new TranscriptPager(), dbs: { opencode: OPENCODE_DB, kilo: KILO_DB, devin: DEVIN_DB, openclaw: openclawSessionDb },
-    hermesDb })
+    pages: new TranscriptPager(), storeOf })
   backend.historyProvider = history.sessionGet
   backend.sessionsProvider = history.sessionsList
   // An agent whose turns keep ending at once has its automatic writes held a while (core/turns/shortTurnGuard.ts).
@@ -1466,8 +1473,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const readLastTurn = createLastTurnReader({
     readerFor: engineReaders.forEngine,
     bySession: (sessionId) => registry.bySession(sessionId),
-    dbs: { opencode: OPENCODE_DB, kilo: KILO_DB, devin: DEVIN_DB, openclaw: openclawSessionDb },
-    hermesDb,
+    storeOf,
   })
   // Recaps: turn cards, notifications, cut by the recaps (services/recaps.ts) from the lifecycle the core tells (core/turns/recaps.ts).
   const recaps = createRecaps({
@@ -1606,7 +1612,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // once needed: a request asks. Shell, Agent Messages and the engine probe are in the always-running edge host, but
     // a first request can beat that host's connection. Hold it through the same bounded startup gate; after any
     // disconnect, fail promptly as before. Under a master from before, Agent Messages' own process starts at its first request this way.
-    onDemand: new Set([...experiments, ...DEVICES_ON_DEMAND, ...VIEWERS_ON_DEMAND, ...Object.values(READER_SERVICES), 'models', 'gateway', 'shell', 'messages', 'agentBrowser', 'engineProbe']),
+    onDemand: new Set([...experiments, ...DEVICES_ON_DEMAND, ...VIEWERS_ON_DEMAND, ...Object.values(READER_SERVICES), OTHER_ENGINES_SERVICE, 'models', 'gateway', 'shell', 'messages', 'agentBrowser', 'engineProbe']),
     // But the Store's requests wait through its process's restart too: a window's Store list was answered unavailable
     // while the master restarted the viewers (core/serviceLinks.ts `waitsThroughRestart`). So does an engine probe
     // asked while the edge host is restarting: the core's own probe always answered while it ran in this process. One
@@ -1614,7 +1620,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // engine installed.
     waitsThroughRestart: new Set(['store', 'engineProbe']),
     // Claude Code's and Codex's readers may take longer to start: a person's first message waits for them (core/input.ts).
-    startWaits: Object.fromEntries(Object.values(READER_SERVICES).map(service => [service, READER_START_MS])),
+    startWaits: Object.fromEntries([...Object.values(READER_SERVICES), OTHER_ENGINES_SERVICE].map(service => [service, READER_START_MS])),
     want: (service) => experimentHooks.want(service),
     // The gateway's first: its `backend` reads (the device key log) were refused below as NOT_AN_EXPERIMENT.
     answer: async (service, query, payload, authority) => await questionControls.answer(service, query, payload) ?? await modelControls.answer(service, query, payload) ?? await nativeControls.answer(service, query, payload) ?? engineReaders.answer(service) ?? (service === 'gateway' && gatewayLink ? gatewayLink.answer(query, payload) : null) ?? deliveries.answer(service, query, payload)

@@ -21,7 +21,9 @@ import { messagesToEvents, windowRawLines } from '../../lib/normalize.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { HistoryPage, ThreadPages } from '../../lib/transcriptPages.js'
 import { tailFileCapped } from '../../lib/transcriptTail.js'
-import { createHistory, wholeHistoryPage } from './history.js'
+import { createHistory } from './history.js'
+import { wholeHistoryPage } from '../../engines/others/transcripts.js'
+import { createStoreOf } from './stores.js'
 import { loadEngine } from '../../engines/inProcess.js'
 
 /**
@@ -128,13 +130,15 @@ function setup(s?: RegisteredSession, kept: RegisteredSession[] = [], readerFor 
     page: vi.fn(async (path: string, rules: ThreadPages, opts: { limit?: number; before?: string }) => rules.cursor === 'record' ? claude(path, opts) : codex(path, opts)),
     lineCount: vi.fn(async (_path: string) => 0),
   }
+  // The stores are the core's to name (core/transcripts/stores.ts): Hermes's is its session's home's.
+  const hermesDb = vi.fn(async (_s: RegisteredSession) => '/profiles/work/state.db')
   const deps = {
     resolve: vi.fn((id: string) => (s && (id === s.sessionId || id === s.agentId) ? s : undefined)),
     stopped: vi.fn(() => kept),
     pages,
     readerFor,
-    dbs: { opencode: '/stores/opencode.db', kilo: '/stores/kilo.db', devin: '/stores/sessions.db', openclaw: async () => null },
-    hermesDb: vi.fn(async () => '/profiles/work/state.db'),
+    storeOf: createStoreOf({ opencode: '/stores/opencode.db', kilo: '/stores/kilo.db', devin: '/stores/sessions.db', openclaw: async () => null }, hermesDb),
+    hermesDb,
   }
   return { ...createHistory(deps), deps, pages }
 }
@@ -167,15 +171,17 @@ describe('an engine whose code could not be loaded', () => {
     expect(await setup(file).sessionGet({ sessionId: file.sessionId })).toStrictEqual({ ...about(file, MTIME), events: [], hasMore: false, oldestCursor: null })
   })
 
-  // Core reads no engine's lines itself: Claude Code's and Codex's replays are their readers'. A shell keeps no
-  // transcript (registry.engineKeepsTranscriptFile), so this is only what a row that somehow had one would get.
-  it('so does an engine with neither a reader nor code of its own here', async () => {
+  // Core reads no engine's lines itself: every engine's replays are its reader's. A shell keeps no transcript
+  // (registry.engineKeepsTranscriptFile), so this is only what a row that somehow had one would get: nothing of the
+  // file is read, not even when it was last written.
+  it('so does an engine with no reader', async () => {
     const s = session('terminal', { transcriptPath: transcript(['l0', 'l1']) })
     for (const ask of [{}, { limit: 2 }, { limit: 2, before: 'raw:1' }]) {
-      expect(await setup(s, [], () => undefined).sessionGet({ sessionId: s.sessionId, ...ask })).toStrictEqual({ ...about(s, MTIME), events: [], hasMore: false, oldestCursor: null })
+      expect(await setup(s, [], () => undefined).sessionGet({ sessionId: s.sessionId, ...ask })).toStrictEqual({ ...about(s, TOUCHED), events: [], hasMore: false, oldestCursor: null })
     }
     const claude = session('claude', { transcriptPath: transcript(['c0']) })
-    expect(await setup(claude, [], () => undefined).sessionGet({ sessionId: claude.sessionId, limit: 2 })).toStrictEqual({ ...about(claude, MTIME), events: [], hasMore: false, oldestCursor: null })
+    expect(await setup(claude, [], () => undefined).sessionGet({ sessionId: claude.sessionId, limit: 2 })).toStrictEqual({ ...about(claude, TOUCHED), events: [], hasMore: false, oldestCursor: null })
+    expect(tailFileCapped).not.toHaveBeenCalled()
     expect(messagesToEvents).not.toHaveBeenCalled()
     expect(windowRawLines).not.toHaveBeenCalled()
   })
@@ -275,11 +281,11 @@ describe('the engines that keep a conversation in a database', () => {
     expect((await sessionGet({ sessionId: s.sessionId, limit: 2, before: 'devin:2' })).events).toEqual([])
   })
 
-  it('a store that cannot be read fails the request, for the socket to answer', async () => {
+  it('a store that cannot be read answers unavailable, which can be asked again', async () => {
     const s = session('kilo')
     const { sessionGet } = setup(s)
     vi.mocked(readKiloMessages).mockRejectedValueOnce(new Error('no sqlite3'))
-    await expect(sessionGet({ sessionId: s.sessionId, limit: 2 })).rejects.toThrow('no sqlite3')
+    expect(await sessionGet({ sessionId: s.sessionId, limit: 2 })).toStrictEqual({ error: 'ENGINE_UNAVAILABLE', retryable: true })
   })
 })
 

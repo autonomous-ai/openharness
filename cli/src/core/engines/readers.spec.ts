@@ -105,15 +105,98 @@ describe('the core reader port', () => {
     expect(p.forEngine('claude')).toBe(inlineReader)
     expect(p.forEngine('codex')).not.toBe(inlineReader)
     expect(p.forEngine('constructor')).toBeUndefined()
-    expect(p.forEngine('pi')).toBeUndefined()
+    expect(p.forEngine('terminal')).toBeUndefined()
     expect(inline).toHaveBeenCalledExactlyOnceWith('claude')
+    // The other engines read in this process only while the master runs no worker of theirs that reads them.
+    expect(p.forEngine('pi')).toBe(inlineReader)
+    expect(inline).toHaveBeenLastCalledWith('pi')
+    expect(createEngineReaders({ isolated: new Set(), call }).forEngine('pi')).toBeUndefined()
     expect(createEngineReaders({ isolated: new Set(), call, inline: () => undefined }).forEngine('claude')).toBeDefined()
     expect(createEngineReaders({ isolated: new Set(), call }).forEngine('claude')).toBeDefined()
     p.connected('search'); p.disconnected('search')
     expect(p.answer('search')).toBeNull()
-    for (const name of Object.values(READER_SERVICES)) expect(p.answer(name)).toEqual({ error: 'READER_HAS_NO_CORE_CAPABILITIES' })
+    for (const name of [...Object.values(READER_SERVICES), 'engine-others']) expect(p.answer(name)).toEqual({ error: 'READER_HAS_NO_CORE_CAPABILITIES' })
     expect(new EngineReadError('ENGINE_UNAVAILABLE').retryable).toBe(true)
     expect(new EngineReadError('ENGINE_INVALID_REQUEST').retryable).toBe(false)
     expect(new EngineReadError('ENGINE_REPLY_TOO_LARGE').retryable).toBe(false)
+  })
+})
+
+describe('the other engines\' readers, in their one worker', () => {
+  const pi: TranscriptSession = { sessionId: 'pi-conversation', transcriptPath: '/private/pi.jsonl', touchedAt: 100 }
+  const store: TranscriptSession = { sessionId: 'ses_1', transcriptPath: null, touchedAt: 100, store: '/stores/opencode.db' }
+  function others() {
+    const replies: ReturnType<typeof deferred<Record<string, unknown>>>[] = []
+    const call = vi.fn((..._args: unknown[]) => { const reply = deferred<Record<string, unknown>>(); replies.push(reply); return reply.promise })
+    const inline = vi.fn(() => { throw new Error('isolated reads never fall back') })
+    const port = createEngineReaders({ isolated: new Set([...Object.values(READER_SERVICES), 'engine-others']), call, inline })
+    return { ...port, call, inline, replies }
+  }
+
+  it('sends the engine and the store the core named, and nothing else of the session', async () => {
+    const p = others()
+    const answer = p.forEngine('pi')!.historyPage({ ...pi, codexHome: '/not/sent' } as TranscriptSession, { limit: 2 }, pages)
+    expect(p.call).toHaveBeenCalledWith('engine-others', READER_HISTORY, { version: READER_VERSION,
+      session: { engine: 'pi', sessionId: 'pi-conversation', transcriptPath: '/private/pi.jsonl', touchedAt: 100, store: null },
+      ask: { limit: 2, before: undefined } }, READER_WAIT_MS)
+    p.connected('engine-others')
+    p.replies[0].resolve({ version: READER_VERSION, answer: { ...page, truncated: true } })
+    expect(await answer).toEqual({ ...page, truncated: true })
+    expect(p.forEngine('pi')).toBe(p.forEngine('pi'))
+    const last = p.forEngine('opencode')!.lastTurnText(store)
+    expect(p.call).toHaveBeenLastCalledWith('engine-others', READER_LAST_TURN, { version: READER_VERSION,
+      session: { engine: 'opencode', sessionId: 'ses_1', transcriptPath: null, touchedAt: 100, store: '/stores/opencode.db' } }, READER_WAIT_MS)
+    p.replies[1].resolve({ version: READER_VERSION, answer: turn })
+    expect(await last).toEqual(turn)
+    // A conversation with neither a transcript nor a store has no last turn, and wakes no worker.
+    expect(await p.forEngine('pi')!.lastTurnText({ ...pi, transcriptPath: null })).toBeNull()
+    expect(p.call).toHaveBeenCalledTimes(2)
+    expect(p.inline).not.toHaveBeenCalled()
+  })
+
+  it('waits for Amp\'s history as long as its export may take, and accepts a finished sub-agent in a replay', async () => {
+    const p = others(); p.connected('engine-others')
+    const answer = p.forEngine('amp')!.historyPage({ ...pi, sessionId: 'T-0123456789abcdef' }, {}, pages)
+    expect(p.call).toHaveBeenLastCalledWith('engine-others', READER_HISTORY, expect.anything(), 25_000)
+    const finished = { type: 'subagent_finished', payload: { id: 'tool-1', status: 'completed' } }
+    p.replies[0].resolve({ version: READER_VERSION, answer: { ...page, events: [finished] } })
+    expect(await answer).toEqual({ ...page, events: [finished] })
+    const last = p.forEngine('amp')!.lastTurnText(pi)
+    expect(p.call).toHaveBeenLastCalledWith('engine-others', READER_LAST_TURN, expect.anything(), READER_WAIT_MS)
+    p.replies[1].resolve({ version: READER_VERSION, answer: null })
+    expect(await last).toBeNull()
+  })
+
+  it('bounds reads per engine, so one busy engine holds back no other', async () => {
+    const p = others()
+    const busy = Array.from({ length: READER_IN_FLIGHT }, () => p.forEngine('pi')!.historyPage(pi, {}, pages))
+    const settled = Promise.allSettled(busy)
+    await expect(p.forEngine('pi')!.historyPage(pi, {}, pages)).rejects.toMatchObject({ code: 'ENGINE_BUSY' })
+    const cursor = p.forEngine('cursor')!.historyPage(pi, {}, pages)
+    p.connected('engine-others')
+    p.replies[READER_IN_FLIGHT].resolve({ version: READER_VERSION, answer: page })
+    expect(await cursor).toEqual(page)
+    for (const reply of p.replies.slice(0, READER_IN_FLIGHT)) reply.resolve({ error: 'SERVICE_UNAVAILABLE' })
+    expect((await settled).every(r => r.status === 'rejected')).toBe(true)
+  })
+
+  it.each<[Record<string, unknown>, string]>([
+    [{ version: 1, answer: { ...page, truncated: false } }, 'ENGINE_INVALID_REPLY'],
+    [{ version: 1, answer: { ...page, events: [{ type: 'subagent_finished', payload: { id: 1, status: 'completed' } }] } }, 'ENGINE_INVALID_REPLY'],
+    [{ version: 1, answer: { ...page, events: [{ type: 'turn_started', payload: { userMessage: 'live only' } }] } }, 'ENGINE_INVALID_REPLY'],
+    [{ error: 'SERVICE_UNAVAILABLE' }, 'ENGINE_UNAVAILABLE'],
+  ])('refuses %j from their worker', async (reply, code) => {
+    const p = others(); p.connected('engine-others')
+    const answer = p.forEngine('muse')!.historyPage(pi, {}, pages)
+    p.replies[0].resolve(reply)
+    await expect(answer).rejects.toMatchObject({ code })
+  })
+
+  it('rejects an answer from a worker that restarted under the read', async () => {
+    const p = others(); p.connected('engine-others')
+    const answer = p.forEngine('grok')!.historyPage(pi, {}, pages)
+    p.disconnected('engine-others'); p.connected('engine-others')
+    p.replies[0].resolve({ version: READER_VERSION, answer: page })
+    await expect(answer).rejects.toMatchObject({ code: 'ENGINE_STALE_REPLY' })
   })
 })

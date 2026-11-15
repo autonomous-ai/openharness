@@ -203,6 +203,8 @@ const EDGE: RegExp[] = [
   /^engines\/worker\/\w+Requests\.ts$/,
   // The pilot reader implementations and their host are never loaded by supervised core.
   /^engines\/(worker\/process|transcripts|(claude|codex)\/(transcript|\w+ReaderProcess))\.ts$/,
+  // Nor the other engines' worker: its readers, its requests and its process (docs/design/2026-11-12-core-audit.md, section 3).
+  /^engines\/others\//,
   // Nor their transcripts' normalizers, Codex's rollout and sub-agent readers, or what replays their history: their
   // readers' and live parsers', in their workers. Core reads only what they declare: adoption, activity and
   // their stores (docs/design/2026-10-08-engine-launch.md, (c5)). Search's normalizer table is search's.
@@ -273,7 +275,10 @@ const FACETS_FREE_OF_THEM: Array<[string, string]> = [
   ['core/transcripts/attach.ts', '(o3)'],
   ['core/transcripts/history.ts', '(o3)'],
   ['core/transcripts/lastTurn.ts', '(o3)'],
-  ['core/transcripts/databaseHistory.ts', '(o3)'],
+  ['core/transcripts/stores.ts', '(o3)'],
+  // Their history and last turns are their worker's (engines/others/): the core's port and its list of them hold none.
+  ['core/engines/readers.ts', 'the worker'],
+  ['engines/otherEngines.ts', 'the worker'],
   ['core/engines/cursorTasks.ts', '(o3)'],
   ['core/turns/agyBackstop.ts', '(o3)'],
   // What the core reads of their model and effort, and how a switch of theirs would be driven.

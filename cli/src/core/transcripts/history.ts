@@ -4,27 +4,22 @@
  * many lines it has (`sessions_list`). The socket hands each request here and sends back what comes out,
  * so every field of the replies is decided in this file.
  *
- * Claude Code and Codex read only the page asked for (lib/transcriptPages.ts), and the other file engines
- * at most the newest 64 MB of their transcripts (lib/transcriptTail.ts), because the whole history of one
- * long session is more memory than the daemon has (the crash of 2026-10-03). The database engines still
- * read a whole conversation from their stores and cut the page from it: bounding them is engine work
- * still to come (docs/design/2026-10-03-harnessd.md, "Next").
+ * Every engine's history is its reader's (`readerFor`): Claude Code's and Codex's in their workers, which read
+ * only the page asked for (lib/transcriptPages.ts), and the fourteen others' in theirs (engines/others/), which read
+ * at most the newest 64 MB of a transcript, or a conversation from its engine's store. The core reads none of it: it
+ * says which conversation and which store, and checks what comes back (core/engines/readers.ts).
  *
- * Moved verbatim out of the socket's request switch (docs/design/2026-10-03-harnessd.md), but for the
- * four database engines: each had its own copy of the same windowing, and they now share one.
+ * Moved verbatim out of the socket's request switch (docs/design/2026-10-03-harnessd.md); the other engines'
+ * reading left for their worker (docs/design/2026-11-12-core-audit.md, section 3).
  */
 import { withoutOutputTail } from '../../lib/cardUpdate.js'
-import { stat } from 'node:fs/promises'
 import type { EngineTranscript } from '../../engines/facets/transcript.js'
+import { keepsStore } from '../../engines/otherEngines.js'
 import { EngineReadError } from '../../engines/worker/protocol.js'
 import { transcriptReadIdentity } from './readIdentity.js'
-import { isOtherEngine, loadEngine, type InProcessModules, type OtherEngine } from '../../engines/inProcess.js'
-import { sid } from '../../lib/log.js'
 import { lastActivityAt } from '../../lib/agentFrame.js'
-import type { SessionEvent } from '../../engines/kit/events.js'
 import { projectDisplayName, type RegisteredSession } from '../../lib/registry.js'
 import type { TranscriptPager } from '../../lib/transcriptPages.js'
-import { tailFileCapped, WHOLE_READ_CAP_BYTES } from '../../lib/transcriptTail.js'
 
 export interface HistoryDeps {
   /** The registry's lookup, by agent or session id. */
@@ -35,96 +30,12 @@ export interface HistoryDeps {
   /** Line counts, and the explicit inline compatibility path's pages. Isolated readers own their indexes. */
   pages: Pick<TranscriptPager, 'page' | 'lineCount'>
   readerFor: (engine: string) => EngineTranscript | undefined
-  /** The database engines' stores. OpenClaw's is the state folder of the session's own TUI (lib/openclawStore.ts). */
-  dbs: { opencode: string; kilo: string; devin: string; openclaw: (key: string, pane: { pid: number; stateDir?: string | null }) => Promise<string | null> }
-  /** Hermes keeps a store per profile: the one this session's lives in. */
-  hermesDb: (session: RegisteredSession) => Promise<string>
+  /** The store a conversation kept in a database is in (core/transcripts/stores.ts); null for one that is in none. */
+  storeOf: (session: RegisteredSession) => Promise<string | null>
 }
 
-/**
- * Amp history comes from AMP's store, not from ours.
- *
- * The plugin's JSONL is a record of what the plugin saw; a thread that ran before the integration existed
- * — or in a pane still holding an older plugin — is simply not in it, and no local file can rebuild those
- * turns. `amp threads export` returns the thread complete, including the tools Amp runs server-side.
- *
- * The local file stays as the FALLBACK, because an export is a network call and a pane with no history at
- * all is worse than a partial one. Which source answered is logged either way: silently serving the lesser
- * record is exactly how the missing tool cards went unnoticed for a day.
- */
-async function ampHistory(amp: InProcessModules['amp'], sessionId: string, lines: string[]): Promise<SessionEvent[]> {
-  const messages = await amp.readAmpThread(sessionId)
-  if (messages) {
-    console.log(`[history] ${sessionId.slice(0, 12)} amp · ${messages.length} message(s) from amp's own store`)
-    return amp.ampThreadToEvents(messages)
-  }
-  console.warn(`[history] ${sessionId.slice(0, 12)} amp · export unavailable — falling back to the local transcript`)
-  return amp.ampMessagesToEvents(lines)
-}
-
-/** Grok, agy and Copilot have no transcript windower yet. Keep BOTH `session_get` shapes on the same real-record
- * replay: web always sends a limit, while legacy callers omit it. Returning the whole small transcript for a
- * page is honest (`hasMore:false`) and cannot fall through to Claude's incompatible line cursor. */
-export function wholeHistoryPage(events: SessionEvent[], paginated: boolean):
-  { events: SessionEvent[]; hasMore?: false; oldestCursor?: null } {
-  return paginated ? { events, hasMore: false, oldestCursor: null } : { events }
-}
-
-/** What a window asks for: `limit` records before the `before` cursor. No limit asks for all of them. */
-interface PageAsk { limit?: number; before?: string }
-
-/** One database engine's answer to `session_get`, about `s`, under the id it was asked by. */
-type DatabasePage = (s: RegisteredSession, sessionId: string, ask: PageAsk) => Promise<Record<string, unknown>>
-
-/**
- * An engine that keeps its conversations in a database, not a transcript file: the conversation read
- * from its store, then replayed whole or windowed, in the same shape as every other engine's answer.
- *
- * Both shapes are load-bearing: the web client always sends a `limit`, so answering only the whole
- * conversation opens an empty pane, the half-dispatch the socket was once caught on. Each windower
- * namespaces its cursors by engine (`kilo:<index>`), so a cursor from another engine reads as stale
- * rather than silently indexing into the wrong conversation.
- */
-function databasePage<M>(
-  read: (s: RegisteredSession) => Promise<M[]>,
-  toEvents: (messages: M[]) => SessionEvent[],
-  windowOf: (messages: M[], opts: { limit: number; before?: string }) =>
-    { window: M[]; hasMore: boolean; oldestCursor: string | null; staleCursor?: boolean },
-): DatabasePage {
-  return async (s, sessionId, { limit, before }) => {
-    const messages = await read(s)
-    const timestamp = new Date(s.touchedAt).toISOString()
-    if (!limit) {
-      return { id: sessionId, title: projectDisplayName(s), events: toEvents(messages), timestamp, engine: s.engine }
-    }
-    const w = windowOf(messages, { limit, before })
-    if (w.staleCursor) {
-      return { id: sessionId, title: projectDisplayName(s), events: [], timestamp, engine: s.engine, hasMore: false, oldestCursor: null, staleCursor: true }
-    }
-    const events = toEvents(w.window)
-    if (before && events[events.length - 1]?.type === 'done') events.pop()
-    return { id: sessionId, title: projectDisplayName(s), events, timestamp, engine: s.engine, hasMore: w.hasMore, oldestCursor: w.oldestCursor }
-  }
-}
-
-export function createHistory({ resolve, stopped, pages, dbs, hermesDb, readerFor }: HistoryDeps) {
-  // Devin, OpenCode and Kilo keep one store on this machine. Hermes keeps one per HOME, so its path is
-  // the session's own (`hermesDb`) rather than this machine's default, and OpenClaw's is its TUI's state folder.
-  // Each store's reader, replay and window are the engine's own code, loaded in this process (engines/inProcess.ts).
-  const databases = new Map<string, (s: RegisteredSession) => Promise<DatabasePage | null>>([
-    ['devin', async () => { const m = await loadEngine('devin'); return m && databasePage((s) => m.readDevinMessages(dbs.devin, s.sessionId), m.devinMessagesToEvents, m.windowDevinMessages) }],
-    ['hermes', async () => { const m = await loadEngine('hermes'); return m && databasePage(async (s) => m.readHermesMessages(await hermesDb(s), s.sessionId), m.hermesMessagesToEvents, m.windowHermesMessages) }],
-    ['opencode', async () => { const m = await loadEngine('opencode'); return m && databasePage((s) => m.readOpencodeMessages(dbs.opencode, s.sessionId), m.opencodeMessagesToEvents, m.windowOpencodeMessages) }],
-    ['kilo', async () => { const m = await loadEngine('kilo'); return m && databasePage((s) => m.readKiloMessages(dbs.kilo, s.sessionId), m.kiloMessagesToEvents, m.windowKiloMessages) }],
-    ['openclaw', async () => {
-      const m = await loadEngine('openclaw')
-      return m && databasePage(async (s) => {
-        const db = await dbs.openclaw(s.sessionId, { pid: s.processIdentity?.pid ?? 0, stateDir: s.openclawStateDir })
-        return db ? m.readOpenclawHistory(db, s.sessionId) : []
-      }, m.openclawMessagesToEvents, m.windowOpenclawEvents)
-    }],
-  ])
-  /** A conversation with nothing to show: no transcript yet, or its engine's code could not be loaded. */
+export function createHistory({ resolve, stopped, pages, readerFor, storeOf }: HistoryDeps) {
+  /** A conversation with nothing to show: no transcript yet, or no reader for its engine. */
   const emptyPage = (s: RegisteredSession, sessionId: string): Record<string, unknown> => ({
     id: sessionId,
     title: projectDisplayName(s),
@@ -160,133 +71,21 @@ export function createHistory({ resolve, stopped, pages, dbs, hermesDb, readerFo
     const rawLimit = payload.limit
     const limit = typeof rawLimit === 'number' && rawLimit > 0 ? Math.min(Math.floor(rawLimit), 500) : undefined
     const before = typeof payload.before === 'string' ? payload.before : undefined
-    const database = databases.get(s.engine)
-    if (database) {
-      const page = await database(s)
-      return page ? page(s, sessionId, { limit, before }) : emptyPage(s, sessionId)
-    }
-    if (!s.transcriptPath) return emptyPage(s, sessionId)
+    // A conversation kept in a store has no transcript: the store is read, and it is the core that says which one.
+    const store = keepsStore(s.engine)
+    if (!s.transcriptPath && !store) return emptyPage(s, sessionId)
     const reader = readerFor(s.engine)
-    if (reader) {
-      const identity = transcriptReadIdentity(s)
-      try {
-        const { events, timestamp, ...page } = await reader.historyPage(s, { limit, before }, pages)
-        if (transcriptReadIdentity(lookup(sessionId)) !== identity) throw new EngineReadError('ENGINE_STALE_REPLY')
-        return { id: sessionId, title: projectDisplayName(s), events, timestamp, engine: s.engine, ...page }
-      } catch (error) {
-        const failed = error instanceof EngineReadError ? error : new EngineReadError('ENGINE_UNAVAILABLE')
-        return { error: failed.code, retryable: failed.retryable }
-      }
-    }
-    // Read from the end and bounded: these engines have no pages of their own yet, and one huge
-    // transcript read whole would take the whole daemon down (lib/transcriptTail.ts). History past
-    // the cap is not shown, and the reply says so.
-    const { lines, truncated: capped } = await tailFileCapped(s.transcriptPath)
-    if (capped) console.warn(`[backend] session_get ${sid(sessionId)}: the transcript is over ${WHOLE_READ_CAP_BYTES / 1024 / 1024} MB · its oldest history is not shown`)
-    const truncated = capped ? { truncated: true } : {}
-    const st = await stat(s.transcriptPath).catch(() => null)
-    const timestamp = new Date(st?.mtimeMs ?? Date.now()).toISOString()
-    // The other file engines' replays and windows are their own code, loaded in this process: one that could
-    // not load shows an empty conversation, and so does an engine with no reader and no code of its own here.
-    // Claude Code and Codex always have a reader (core/engines/readers.ts), and a shell keeps no transcript
-    // (registry.engineKeepsTranscriptFile), so none reaches this: their replays are their readers', never core's.
-    const other = isOtherEngine(s.engine) ? await loadEngine(s.engine) : null
-    if (other === null) return { ...emptyPage(s, sessionId), timestamp }
-    const engine = <Name extends OtherEngine>(name: Name): InProcessModules[Name] => other as InProcessModules[Name]
-
-    if (!limit) {
-      const fullEvents = s.engine === 'cursor'
-          ? engine('cursor').cursorMessagesToEvents(lines, s.sessionId, await engine('cursor').loadCursorReplayTaskLinks(engine('cursor').cursorConfigDir(), s.sessionId, engine('cursor').cursorDataDir()))
-          : s.engine === 'muse'
-            ? engine('muse').museMessagesToEvents(lines)
-            : s.engine === 'amp'
-            ? await ampHistory(engine('amp'), s.sessionId, lines)
-            : s.engine === 'grok'
-              ? wholeHistoryPage(engine('grok').grokMessagesToEvents(lines), false).events
-            : s.engine === 'agy'
-              ? wholeHistoryPage(engine('agy').agyMessagesToEvents(lines), false).events
-            : s.engine === 'copilot'
-              ? wholeHistoryPage(engine('copilot').copilotMessagesToEvents(lines), false).events
-            : s.engine === 'pi'
-            ? engine('pi').piMessagesToEvents(lines)
-            : s.engine === 'omp'
-            ? engine('omp').ompMessagesToEvents(lines)
-            : engine('commandcode').commandcodeMessagesToEvents(lines)
-      return {
-        id: sessionId,
-        title: projectDisplayName(s),
-        events: fullEvents,
-        timestamp,
-        engine: s.engine,
-        ...truncated,
-      }
-    }
-
-    // Muse has no windower, so it must not fall through to the raw one: that pairs claude's
-    // line-uuid cursor with claude's normalizer, and a muse transcript comes back EMPTY — the web
-    // pane opened blank with no error anywhere. Until a muse window exists, answer the page with
-    // the whole transcript (`hasMore: false` ends the scroll honestly, and these sessions are
-    // small: a real one measured 271 lines).
-    // Amp is in the same position as muse and for the same reason: no windower, so falling
-    // through would pair claude's line-uuid cursor with claude's normalizer and return nothing.
-    if (s.engine === 'muse' || s.engine === 'amp' || s.engine === 'grok' || s.engine === 'agy' || s.engine === 'copilot') {
-      const wholePage = s.engine === 'grok'
-        ? wholeHistoryPage(engine('grok').grokMessagesToEvents(lines), true)
-        : s.engine === 'agy'
-          ? wholeHistoryPage(engine('agy').agyMessagesToEvents(lines), true)
-          : s.engine === 'copilot'
-            ? wholeHistoryPage(engine('copilot').copilotMessagesToEvents(lines), true)
-            : null
-      return {
-        id: sessionId,
-        title: projectDisplayName(s),
-        events: s.engine === 'amp'
-          ? await ampHistory(engine('amp'), s.sessionId, lines)
-          : wholePage
-            ? wholePage.events
-            : engine('muse').museMessagesToEvents(lines),
-        timestamp,
-        engine: s.engine,
-        hasMore: wholePage?.hasMore ?? false,
-        oldestCursor: wholePage?.oldestCursor ?? null,
-        ...truncated,
-      }
-    }
-    const w = s.engine === 'cursor'
-        ? engine('cursor').windowCursorLines(lines, { limit, before })
-        : s.engine === 'pi'
-          ? engine('pi').windowPiLines(lines, { limit, before })
-          : s.engine === 'omp'
-            ? engine('omp').windowOmpLines(lines, { limit, before })
-            : engine('commandcode').windowCommandCodeLines(lines, { limit, before })
-    if (w.staleCursor) {
-      return { id: sessionId, title: projectDisplayName(s), events: [], timestamp, engine: s.engine, hasMore: false, oldestCursor: null, staleCursor: true, ...truncated }
-    }
-    const events = s.engine === 'cursor'
-        ? engine('cursor').cursorMessagesToEvents(
-            w.window,
-            s.sessionId,
-            await engine('cursor').loadCursorReplayTaskLinks(engine('cursor').cursorConfigDir(), s.sessionId, engine('cursor').cursorDataDir()),
-            'startIndex' in w && typeof w.startIndex === 'number' ? w.startIndex : 0,
-            'initialTodos' in w && Array.isArray(w.initialTodos) ? w.initialTodos : [],
-          )
-        : s.engine === 'pi'
-          ? engine('pi').piMessagesToEvents(w.window)
-          : s.engine === 'omp'
-            ? engine('omp').ompMessagesToEvents(w.window)
-            : engine('commandcode').commandcodeMessagesToEvents(w.window)
-    // muse and amp are answered above and never reach here, so both are absent by design.
-    // Older pages must not inject a spurious end-of-transcript marker mid-scroll.
-    if (before && events[events.length - 1]?.type === 'done') events.pop()
-    return {
-      id: sessionId,
-      title: projectDisplayName(s),
-      events,
-      timestamp,
-      engine: s.engine,
-      hasMore: w.hasMore,
-      oldestCursor: w.oldestCursor,
-      ...truncated,
+    // No engine reaches this without a reader (a shell keeps no transcript: registry.engineKeepsTranscriptFile).
+    if (!reader) return emptyPage(s, sessionId)
+    const identity = transcriptReadIdentity(s)
+    try {
+      const read = store ? { ...s, store: await storeOf(s) } : s
+      const { events, timestamp, ...page } = await reader.historyPage(read, { limit, before }, pages)
+      if (transcriptReadIdentity(lookup(sessionId)) !== identity) throw new EngineReadError('ENGINE_STALE_REPLY')
+      return { id: sessionId, title: projectDisplayName(s), events, timestamp, engine: s.engine, ...page }
+    } catch (error) {
+      const failed = error instanceof EngineReadError ? error : new EngineReadError('ENGINE_UNAVAILABLE')
+      return { error: failed.code, retryable: failed.retryable }
     }
   }
 

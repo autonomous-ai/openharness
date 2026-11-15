@@ -73,13 +73,20 @@ export function sessionEvent(value: unknown): value is SessionEvent {
   }
 }
 
+/** An async sub-agent that finished, as agy's and Muse's replays of their history say it (kit/events.ts `LiveEvent`). */
+export function subagentFinished(value: unknown): boolean {
+  return record(value) && record(value.payload) && value.type === 'subagent_finished' && typeof value.payload.id === 'string'
+    && typeof value.payload.status === 'string' && (value.payload.summary === undefined || typeof value.payload.summary === 'string')
+}
+
 export function historyAnswer(value: unknown): value is HistoryAnswer {
-  return record(value) && Object.keys(value).every(key => ['events', 'timestamp', 'hasMore', 'oldestCursor', 'staleCursor'].includes(key))
+  return record(value) && Object.keys(value).every(key => ['events', 'timestamp', 'hasMore', 'oldestCursor', 'staleCursor', 'truncated'].includes(key))
     && typeof value.timestamp === 'string' && Number.isFinite(Date.parse(value.timestamp))
-    && Array.isArray(value.events) && value.events.every(sessionEvent)
+    && Array.isArray(value.events) && value.events.every(event => sessionEvent(event) || subagentFinished(event))
     && (value.hasMore === undefined || typeof value.hasMore === 'boolean')
     && (value.oldestCursor === undefined || value.oldestCursor === null || typeof value.oldestCursor === 'string')
     && (value.staleCursor === undefined || value.staleCursor === true)
+    && (value.truncated === undefined || value.truncated === true)
 }
 
 export function lastTurnAnswer(value: unknown): value is LastTurnText | null {
