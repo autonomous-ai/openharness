@@ -354,7 +354,7 @@ export class ObservedSource implements HostSource {
   /** Every pane its adapters know it by, afresh: a session resumed elsewhere keeps none it left. */
   private locate(entry: Entry): void {
     const place = { host: entry.agent.host, app: entry.agent.app, hints: entry.hints, tty: entry.tty, pid: entry.caller,
-      sessionId: entry.agent.sessionId }
+      sessionId: entry.agent.sessionId, engine: entry.agent.engine }
     entry.panes = (this.deps.actions?.adapters ?? []).flatMap((adapter) => {
       const pane = adapter.paneOf(place)
       return pane ? [{ adapter, pane }] : []

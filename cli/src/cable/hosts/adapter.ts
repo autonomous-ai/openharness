@@ -18,6 +18,7 @@ export interface Place {
   tty?: string                                  // its process's tty, read for a tab app (observed.ts learnTty)
   pid?: number                                  // its process: that event's caller
   sessionId?: string                            // the engine's own id of the session: the VS Code extension's link names it
+  engine?: string                               // whose session it is: that link names Claude Code's alone
 }
 
 /** One adapter's own handle on one agent: an Orca terminal, a Claude app session, a tab's tty, a pane id. */

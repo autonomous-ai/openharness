@@ -23,8 +23,10 @@ export function createVscodeAdapter(deps: Pick<OrcaDeps, 'run' | 'platform'>): H
       const { CLAUDE_CODE_ENTRYPOINT: entrypoint, __CFBundleIdentifier: bundle } = place.hints
       const session = place.sessionId
       // The link is VS Code's own extension's: Cursor runs the same extension, which says the same word, and an app known
-      // by TERM_PROGRAM alone may be another fork.
-      if (entrypoint !== 'claude-vscode' || bundle !== APP_BUNDLES.vscode || !session || !VSCODE_SESSION.test(session)) return undefined
+      // by TERM_PROGRAM alone may be another fork. It names Claude Code's sessions alone: an engine Claude Code's tools ran
+      // from the tab (`codex exec`) inherits the word and the bundle id, and a Codex thread id is a UUID too.
+      if (place.engine !== 'claude' || entrypoint !== 'claude-vscode' || bundle !== APP_BUNDLES.vscode || !session
+        || !VSCODE_SESSION.test(session)) return undefined
       return { adapter: 'vscode', id: session }
     },
     canFocus: () => mac,
