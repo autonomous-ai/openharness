@@ -19,7 +19,14 @@ mod: words that never touch the terminal and wait for the turn to end.
 - **Typing into Orca is the fallback**, only when the queue definitely failed (no `codex` binary, a non-zero exit) and
   only under today's rules (idle, at a known Orca handle).
 - **"Sent" on the dial means queued.** Codex starts the turn when it is free: within 0.5 s with Codex's local daemon,
-  within about 10 s with `--no-daemon`, after the running turn, or after the person answers the prompt in the app.
+  within about 10 s with `--no-daemon`, after the running turn, or after the person approves the prompt in the app.
+- **After the person cancels a turn, the dial's words wait for the person** (found in the real-Codex check, PM,
+  2026-11-15). Codex 0.167 holds its queue after an interrupt: answering an approval with No (its only No is Esc,
+  "tell Codex what to do differently") or pressing Esc in a working turn leaves the queued words waiting until the
+  person's next typed turn ends; they run right after it. This is Codex's queue, and nothing here forces it on
+  without typing into the terminal. In that case the dial's follow mark goes to the person's typed prompt, so the dial
+  does not turn for it, and turns for its own words when they run; the dial is usually on that agent already. Kept as
+  is, with no timer.
 - **Opening a thread with `codex://threads/<id>` is not in this run.** The Codex app is not installed on the build Mac,
   so nothing here can show which bundle id its sessions report or that its threads reach the dial. It is its own item,
   after Diego checks it on a Mac with the Codex app (about 5 minutes).
@@ -36,7 +43,8 @@ secret), Codex's TUI in a private tmux server. Nothing touched the account's rea
 | TUI idle, Codex's daemon (its default) | The queued message started a turn within 0.4 s |
 | TUI idle, `--no-daemon` (how Harness runs its own Codex) | The TUI reads the queue about every 10 s: the turn started within 10 s |
 | A turn running | The message waited and started as the turn ended |
-| An approval prompt open | A queued "yes" did **not** answer it; the message started after the person answered in the TUI |
+| An approval prompt open | A queued "yes" did **not** answer it; the message started 0.2 s after the person approved in the TUI. Answered No (Esc), the message waited for the person's next turn (real-Codex check) |
+| Esc in a working turn | The queued message waited for the person's next typed turn, then ran (real-Codex check) |
 | A half-typed draft in the composer | The draft stayed; the voice message ran as its own turn (typing would have joined the draft) |
 | Two lines; text starting with `--` | One message with its newline; the text must be joined to its flag (`--message=<text>`), or `--dash` is read as a flag |
 | A thread not in that home; a malformed id | Exit 1 with a message, nothing queued |
