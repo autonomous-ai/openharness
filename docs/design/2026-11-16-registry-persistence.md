@@ -622,3 +622,64 @@ publication, its durable archive, and post-commit fences that survive the method
 own ready/process update. In every unconfirmed case no old
 engine is relaunched beside a possible destination engine and no moved/ready success
 is emitted. Existing true-red and failure evidence remains retained.
+
+## Design checkpoint: Stop and forced forgetting
+
+Review pending; no production correction to these callers precedes review. The
+caller audit confirms Stop still calls `forgetSession` without awaiting it. Forget
+saves the archive synchronously, drops/unbinds the live row observationally, and
+emits deletion immediately. With asynchronous observations, successful Stop/Close
+can precede durable removal. This is the same authority-publication problem above.
+
+Make `forgetSession` return `Promise<void>`, rejecting with a fixed safe identity/
+publication error when it cannot confirm the selected transition. It captures the
+resolved owner before enqueue, keeps archive save before removal, and uses existing
+`confirmEngineExit(agentId, 'remove', authority)` for an actual live-row removal.
+Only a confirmed publication followed by the selected agent remaining absent may
+retire the per-session stores or emit `agent_deleted`. An unconfirmed publication
+never emits a successful deletion; the archive and existing uncertainty recovery
+remain available. There is no second queue, receipt store or arbitrary patch API.
+An explicit `agentId` must not resolve a reused session ID into a different agent.
+
+`keepAgent` means binding removal, not engine exit: add the narrow
+`confirmSessionUnbound(agentId, sessionId, authority)` using the same strict writer,
+owner guard, cloned candidate, `clearBinding` and receipt machinery. It preserves
+the selected process/routes/launch and removes only the exact selected binding.
+Bindings already removed by strict registration/revalidation need only local
+cleanup; they must never unbind another row that later acquired the old session.
+Already-absent eviction/cancellation notifications follow their existing strict
+group receipt, so they perform no extra disk mutation. No optimistic absence is
+invented for a queued removal.
+
+Stop awaits forgetting before resolving, releasing a pending resume reservation,
+or letting Close report success. Its existing selected owner/conversation and
+Close permission are carried to the final publication fence, with refreshed exact
+process-exit evidence and retained transcript verification after preparation.
+Terminal-only or initially unbound rows still require the successful owned pane
+termination already performed by Stop. After publication, do not reuse a predicate
+that requires the removed row; check the confirmed removal/absence and preserve
+the original cancellation generation independently where the caller supplies it.
+Failure keeps Stop's safe `STOP_UNCONFIRMED` category and releases no success signal.
+
+Forced caller inventory: `bind.handleRegistered` (rebound/evicted/orphaned), binding
+revalidation and OpenClaw folder changes, `discovery.onDiscovered` eviction,
+`discovery.onRemoved`, and external-adoption cancellation. The asynchronous callers
+await forgetting before dependent reset/announcement/browser transfer. Reconciler
+already awaits its removal callback; make that callback return the Promise and
+report failures through its existing bounded pass. External cancellation already
+strictly removed its row; await its cleanup/notification before answering. Preserve
+the no-await final publication/install section and recheck selected caller authority
+after any newly introduced wait before another native action or announcement.
+
+Purge's worktree and session branches already await Stop, then require no live row;
+their dependency inherits this durable boundary. It does **not** authorize the
+proposed purge worker: an old daemon can still restore a snapshot loaded before
+the new daemon's removal. No old-launcher fencing or global absence proof is claimed.
+
+After the quiet window, add real-registry held-image-fsync reds proving Stop's
+Promise, deletion frames, reservation release and a purge deletion dependency stay
+pending. Cover cancellation/owner replacement during preparation, late cleanup,
+peer ownership and directory-fsync failure; no success or duplicate launch after
+uncertain removal. Add binding-only and already-strictly-removed caller cases so
+this change neither deletes a replacement owner nor deadlocks a registration
+callback behind its own active writer cleanup.
