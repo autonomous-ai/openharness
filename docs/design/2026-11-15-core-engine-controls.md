@@ -45,6 +45,9 @@ already present. Purge/export and setup/install/probe are separate work and rema
 - Concurrency: binding/revision checks fence asynchronous observations. Control grants already fence
   connection generation, deadlines and active operation; admission remains held until revoked work can no
   longer issue writes. Stop does not await an unavailable worker. Failure never changes a newer session.
+  The shared model/question control binding also captures registry identity holds and evidence revision.
+  A hold, revised evidence, or hold/release cycle revokes delayed host writes; bookkeeping observations
+  such as touchedAt do not. This extends the existing captured scalar identity, without new authority state.
 - Read cost and scale: use existing snapshot requests and incremental live evidence; no polling of whole
   state or new core timers. Existing profile catalog TTLs remain worker-owned. At 10x load, bounded
   admission reports named busy/unavailable outcomes before queue or session caches grow without bound.
