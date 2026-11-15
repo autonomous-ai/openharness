@@ -38,7 +38,8 @@ Also read in the code:
 - **F1 is in scope:** an agent in the person's own tmux is wave 1 #4's main case (PM, 2026-11-15).
 - The three checks on Diego's real dial and Macs (Verification) run in one session with Diego after the pull request
   is done (PM, 2026-11-15).
-- No firmware change, no change to the core (cli/AGENTS.md rule 7), no change to Desktop.
+- No firmware change, no change to Desktop, and no change to the core (cli/AGENTS.md rule 7) but one comment line:
+  `MAX_HINTS`'s comment in `core/observedHook.ts` says the hook caps its own list (PM, 2026-11-15).
 - **Q1 = A** (PM, 2026-11-15): the devices process may switch a tmux client to the agent's pane. `services/AGENTS.md`
   says so in the same pull request:
   - a service never writes to Harness's tmux: no pane or session Harness made;
@@ -69,7 +70,11 @@ shows its pane in tmux and brings its terminal app forward. An agent in a tmux p
   - a pane tmux could not describe: `describePane` gave undefined, so the session is treated as in a pane, as today.
 - Such a session takes the path a paneless one takes: `observedBody` and `postObserved`, nothing registered, its
   `Notification` told. The pane is read with the same `tmux display-message` call `routeToPaneOwner` already makes,
-  cached for the hook's run: no new tmux call on the hook's path.
+  cached for the hook's run. One cost is new: a `Notification` in a pane used to return at once, and now asks tmux
+  whose pane it is first (`tmux -V` and one `display-message`). The pull request gives that number, measured.
+- A session in a tmux pane keeps no Orca handle (PM, 2026-11-15): a tmux started inside an Orca terminal passes
+  `ORCA_TERMINAL_HANDLE` to its panes, and words typed through Orca would land in tmux's active pane. Its voice is the
+  mod's only.
 - `HOST_HINTS` gains `TMUX_PANE`. The body sends at most `MAX_HINTS` (10) of the hints set, in the list's order, so it
   never sends more than the core's observed route takes (`core/observedHook.ts` refuses a body with more). The order puts
   the nearer hosts first.
@@ -77,7 +82,8 @@ shows its pane in tmux and brings its terminal app forward. An agent in a tmux p
 **Naming** (`cable/hosts/hostDetect.ts`):
 - `detectHost`: `TMUX_PANE` names host `tmux`, after herdr, Rex and Zellij and before kitty and WezTerm.
 - `detectApp`: the bundle id still decides first, so tmux in Ghostty is on Ghostty's page. `TERM_PROGRAM=tmux` with no
-  bundle id names the app `tmux` (its own page, "tmux"), not Other.
+  bundle id, or with a bundle id no table lists (tmux in Alacritty), names the app `tmux` (its own page, "tmux"),
+  not Other (PM, 2026-11-15). `tmux` is the 16th app id, the firmware's `CABLE_MAX_APPS`: the next one needs a decision.
 - The firmware's host table has no `tmux`, so "See it in" reads "See it in Terminal" for an agent without voice. That is
   accepted: no firmware change.
 
@@ -89,8 +95,10 @@ shows its pane in tmux and brings its terminal app forward. An agent in a tmux p
      parents (at most `WALK_PARENTS`, from the process table the open scan already reads). Otherwise this is not the
      agent's pane: a person's second tmux server (`-L`) can have a pane of the same id. Then nothing is switched, and one
      line is logged: `[device] open · tmux · not its pane`.
-  2. `tmux switch-client -t <pane>`. It makes that session, window and pane current in the client used last. No
-     attached client fails it, and the tap falls back to the app.
+  2. `tmux switch-client -c <client> -t <pane>`, which makes that session, window and pane current in that client. The
+     client is the one used last among those **not on a session Harness made** (PM, 2026-11-15): Harness's own
+     terminals (Desktop, a phone, `hn`) are control-mode clients on the same server, and a bare `switch-client` would move
+     the one used last, even one of those. With no such client, nothing is switched and only the app comes forward.
   3. Then, on macOS, the app's bundle comes forward (`open -b`), as for every pane.
 - The tmux is the daemon's: the same binary and server as `lib/tmux.ts`. The hook's `TMUX` (the socket path) is not
   sent: it is longer than a hint takes, and it is a path someone could shape.
@@ -150,7 +158,7 @@ Code helper, which is wave 2.
 |---|---|
 | tmux cannot describe the pane in the hook | The session is treated as in a pane, as today: not listed |
 | The pane's process is not the agent's | No switch; the app comes forward; one log line |
-| No tmux client attached | `switch-client` fails; the app comes forward |
+| No client of the person's on that server (none attached, or only Harness's) | Nothing is switched; the app comes forward |
 | A body with more than 10 hints set | The hook sends the first 10 in its order; the core takes it |
 | Desktop not installed | "Harness did not open it." on the dial |
 | Desktop starts but no window connects in 30 s | Desktop is in front, the agent is not opened; one log line |
@@ -162,7 +170,7 @@ Code helper, which is wave 2.
   word. Each command runs with no shell, every value one argument (`open.ts`'s rule).
 - No hint carries a secret. `TMUX` and VS Code's IPC paths are not read.
 - Log lines name the app only, never a pane, a session or a path.
-- The core is not changed: the observed route already takes these events.
+- The core's code is not changed (one comment line only): the observed route already takes these events.
 
 ## Measures
 
