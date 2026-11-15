@@ -43,11 +43,15 @@ export const APP_IDS: readonly string[] = Object.keys(NAMES)
 /** An agent in a terminal the daemon does not know. */
 export const UNKNOWN_APP = 'terminal'
 
-// The outermost app by its bundle id: each host's app, and Harness Desktop's, which stays out of APP_BUNDLES because
-// a tap never opens a Harness agent by its bundle id.
+/** Harness Desktop's bundle id. */
+export const HARNESS_BUNDLE = 'ai.autonomous.harness'
+
+// The outermost app by its bundle id: each host's app, and Harness Desktop's, which stays out of APP_BUNDLES because no
+// hint's bundle id ever opens Harness: a tap on a Harness agent with no window starts it by this id alone (open.ts
+// `desktop`).
 export const BUNDLE_APPS: Readonly<Record<string, string>> = {
   ...Object.fromEntries(Object.entries(APP_BUNDLES).map(([id, bundle]) => [bundle, id])),
-  'ai.autonomous.harness': 'harness',
+  [HARNESS_BUNDLE]: 'harness',
 }
 
 // kitty sets no TERM_PROGRAM: off macOS its own variable names it (detectApp).

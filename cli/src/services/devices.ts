@@ -449,6 +449,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       part.call('dial', () => tabSettled(app))
     },
     appPicked: () => log('[device] app filter: picker'),
+    // A tap on a Harness agent with no window starts Desktop, on macOS only (docs/specs/2026-11-15-device-wave1-checks.md,
+    // F2).
+    launchDesktop: opener.desktop,
+    // A measure: the app's name only.
+    desktopTimedOut: () => log('[device] open · harness · no window'),
     // The settle of the app in front: a filter that throws costs the devices nothing, and the devices stopping cancels it.
     appTimer: timerIn('dial'),
   })

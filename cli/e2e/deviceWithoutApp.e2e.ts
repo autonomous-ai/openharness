@@ -104,7 +104,8 @@ describe('the device without the app', () => {
     const engine = await startOutside(d, 'in-ghostty', { TERM_PROGRAM: 'ghostty' })
     const roster = await showing(dial, 'both agents on the machine list', (r) => ids(r).includes(harness) && ids(r).includes(engine.id))
     expect(roster.end).toMatchObject({ tab: '', view: 'machine', total: 2 })
-    expect(roster.rows.find((r) => r.id === harness)).toMatchObject({ host: 'harness', caps: 'sva' })
+    // On macOS a tap would start Harness Desktop: no test here taps it, as that would start the developer's own.
+    expect(roster.rows.find((r) => r.id === harness)).toMatchObject({ host: 'harness', caps: process.platform === 'darwin' ? 'svfa' : 'sva' })
     // On macOS a tap brings Ghostty forward by its bundle id (cable/hosts/open.ts); elsewhere it has no way in.
     const caps = process.platform === 'darwin' ? 'sf' : 's'
     expect(roster.rows.find((r) => r.id === engine.id)).toMatchObject({ name: 'in-ghostty', engine: 'claude', host: 'ghostty', caps })
