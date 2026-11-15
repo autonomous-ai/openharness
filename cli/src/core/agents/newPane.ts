@@ -173,7 +173,7 @@ export function createPaneWatcher({ registry, announceSession, triggerHint, capt
         // "Start failed" tile they cannot type into.
         if (paneState.engineExit !== null) {
           // Say what happened before the evidence goes. The pane is about to become an ordinary
-          // terminal and `releaseEngine` rewrites the launch to `ready`, so after this point nothing
+          // terminal and `confirmEngineExit` rewrites the launch to `ready`, so after this point nothing
           // anywhere — frame, registry, archive — records that an engine was ever meant to be here
           // or why it left. openharness#285 was exactly this: opencode printed its help over a flag
           // it did not know, and the only trace was one line saying the pane had become a terminal.

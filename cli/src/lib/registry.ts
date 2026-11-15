@@ -241,7 +241,7 @@ export interface RegisteredSession {
    */
   browser?: true
   /**
-   * On the shell an exit left (`releaseEngine(id, true)`): the agent whose engine ended in this pane. The pane's next
+   * On the shell an exit left (`confirmEngineExit(id, 'successor')`): the agent whose engine ended in this pane. The pane's next
    * agent takes that agent's browser (decision 19). A search of saved agents by pane is no proof of this: pane ids
    * restart with every tmux server. Gone once an engine is adopted here, and once that agent runs again under its own
    * id. Never in a saved record.
@@ -339,7 +339,7 @@ export interface RegisteredSession {
    * The pane was opened as a terminal (engine `terminal`, the desktop's New Terminal) rather than
    * for an engine. Set once at creation and kept for the row's whole life, whichever engine is
    * running in it now: this is what tells the reconciler that an engine exiting means "back to a
-   * shell" (`releaseEngine`) rather than "dormant", and what tells `restoreAgents` to bring back
+   * shell" (`confirmEngineExit`) rather than "dormant", and what tells `restoreAgents` to bring back
    * a shell rather than a `claude`. Not a type — `engine` still says what the pane IS right now.
    */
   terminalHost?: boolean
@@ -1293,13 +1293,6 @@ class Registry {
     }
   }
 
-  private releaseBinding(entry: RegisteredSession): void {
-    if (entry.sessionId && this.sessionIndex.get(entry.sessionId) === entry.agentId) {
-      this.sessionIndex.delete(entry.sessionId)
-    }
-    this.clearBinding(entry)
-  }
-
   private clearBinding(entry: RegisteredSession): void {
     delete entry.identityHold
     delete entry.interpretationHold
@@ -1787,11 +1780,13 @@ class Registry {
         }
         candidate = entry
       }
+      const previousLaunch = this.byAgent(agentId)?.launch
       const receipt = await this.persist(deadline, true, false, undefined, {
         agentId, candidate, displaced, verify, refresh: authority.refresh, allowTransaction: true,
       })
       const committed = this.committedOwner(agentId, receipt)
       if (!committed || launchIdentity(committed) !== launchIdentity(candidate)) return null
+      if (selected) this.traceLaunch(agentId, previousLaunch, committed.launch, 'openProcessAgent re-observed')
       for (const removed of displaced) if (!this.byAgent(removed.agentId)) this.terminalAvailableAgents.delete(removed.agentId)
       this.terminalAvailableAgents.add(agentId)
       return { entry: structuredClone(committed), isNew: !selected, evicted }
@@ -2076,9 +2071,9 @@ class Registry {
   }
 
   /** Retry only this saved binding. A failed read leaves all of its prior facts intact. */
-  async revalidateBinding(agentId: string): Promise<RegisteredSession | null> {
+  async revalidateBinding(agentId: string, authority: RegistryAuthority = {}): Promise<RegisteredSession | null> {
     this.writer.assertOpen()
-    const verifyOwner = this.ownerGuard(agentId)
+    const verifyOwner = this.ownerGuard(agentId, authority.current)
     return this.writer.run(async deadline => {
       verifyOwner()
       const entry = this.agents.get(agentId)
@@ -2415,27 +2410,6 @@ class Registry {
     })
   }
 
-  remove(sessionId: string): boolean {
-    this.writer.assertOpen()
-    const entry = this.bySession(sessionId)
-    if (!entry) return false
-    this.drop(entry)
-    this.terminalAvailableAgents.delete(entry.agentId)
-    this.save()
-    return true
-  }
-
-  /** Release only the mutable session binding; the process-backed agent remains addressable. */
-  unbindSession(sessionId: string): boolean {
-    this.writer.assertOpen()
-    const entry = this.bySession(sessionId)
-    if (!entry) return false
-    this.releaseBinding(entry)
-    entry.touchedAt = Date.now()
-    this.save()
-    return true
-  }
-
   /** A session reset is acknowledged only after its exact binding is durably released. */
   async confirmSessionUnbound(agentId: string, sessionId: string, authority: RegistryAuthority = {}): Promise<LaunchPublication> {
     this.writer.assertOpen()
@@ -2453,17 +2427,6 @@ class Registry {
       const committed = this.committedOwner(agentId, receipt)
       return { state: 'confirmed', entry: committed ? structuredClone(committed) : null }
     }, authority.expires)
-  }
-
-  /** Drop an agent outright, bound or not. */
-  removeAgent(agentId: string): boolean {
-    this.writer.assertOpen()
-    const entry = this.agents.get(agentId)
-    if (!entry) return false
-    this.drop(entry)
-    this.terminalAvailableAgents.delete(agentId)
-    this.save()
-    return true
   }
 
   has(sessionId: string): boolean {
@@ -2505,7 +2468,7 @@ class Registry {
    * Same agentId, same pane, same tile — the desktop only sees `engine` change on the next
    * `agent_synced`. The process identity is indexed under the NEW engine (the key is engine-scoped),
    * which is what lets the hook that follows (`register`, `byProcess(engine, …)`) land on this row
-   * rather than mint another. `terminalHost` stays set so the exit is recognised (`releaseEngine`).
+   * rather than mint another. `terminalHost` stays set so the exit is recognised (`confirmEngineExit`).
    * Refused for anything but a terminal: an agent already running one engine is never re-labelled.
    */
   /**
@@ -2582,37 +2545,6 @@ class Registry {
     }, authority.expires)
   }
 
-  /**
-   * The engine in this pane has exited and the pane is a shell now: the row is a terminal.
-   *
-   * For every agent, not only one that began as a terminal — an engine the app launched runs
-   * inside its pane's shell too (engineLaunch.ts `engineRunScript`), and `/exit` or Ctrl-C leaves
-   * that shell at its prompt with the engine's last screen above it.
-   *
-   * What goes is what described the PROCESS and its session — session id, transcript, pid,
-   * gateway, grid assignment, model, title — because the next thing typed into this shell may be a
-   * different engine, and the reconciler hands a pane's engine to a row by its route only when the row
-   * lacks a session or a process (`unboundRouteObservation`). What stays is what describes the PANE's
-   * launch — `gridLaunch`, `codexHome`, `dsh`, `agent`, the permission choice: the tmux session's
-   * environment still carries the grid endpoint and the Codex profile, the workspace is still that
-   * harness's, and a restart or a relaunch after a reboot puts the same engine back with the same shape. Dropping `gridLaunch` in particular made
-   * a released grid agent unrestorable ("credential not persisted"). The row itself, its id, its
-   * pane and its name stay: this is the opposite of dormant, the terminal is live. `terminalHost`
-   * is set from here on, since that is what the pane now is.
-   */
-  releaseEngine(agentId: string, separateShell = false): RegisteredSession | null {
-    this.writer.assertOpen()
-    const original = this.agents.get(agentId)
-    if (!original || (isTerminalEngine(original.engine) && !separateShell)) return null
-    this.drop(original)
-    this.terminalAvailableAgents.delete(agentId)
-    const entry = this.shellEntry(original, separateShell)
-    this.index(entry)
-    this.terminalAvailableAgents.add(entry.agentId)
-    this.save()
-    return entry
-  }
-
   /** Build the shell without changing the live ownership indices. */
   private shellEntry(original: RegisteredSession, separateShell: boolean): RegisteredSession {
     // The archived conversation owns the original Harness ID. Preserve the physical shell under
@@ -2640,7 +2572,7 @@ class Registry {
     entry.engine = 'terminal'
     entry.terminalHost = true
     entry.processIdentity = null
-    this.traceLaunch(entry.agentId, entry.launch, { state: 'ready' }, 'releaseEngine')
+    this.traceLaunch(entry.agentId, entry.launch, { state: 'ready' }, 'confirmEngineExit')
     entry.launch = { state: 'ready' }
     entry.active = true
     entry.gateway = null
@@ -3021,18 +2953,6 @@ class Registry {
     return true
   }
 
-  /** Remember the engine's own model an agent is leaving behind, so a later move back can restore it.
-   *  Kept even while the agent is on a grid — it is the only record that the previous choice existed. */
-  setSubscriptionModel(agentId: string, model: string | null): boolean {
-    this.writer.assertOpen()
-    const session = this.agents.get(agentId)
-    if (!session) return false
-    session.subscriptionModel = model
-    session.touchedAt = Date.now()
-    this.save()
-    return true
-  }
-
   /** Record the model and effort [agentId]'s session relaunches with (RegisteredSession.launchModel); null forgets it. */
   async setLaunchModel(agentId: string, launchModel: LaunchModel | null, authority: RegistryAuthority = {}): Promise<RegisteredSession | null> {
     this.writer.assertOpen()
@@ -3064,18 +2984,6 @@ class Registry {
     session.touchedAt = Date.now()
     this.save()
     return session
-  }
-
-  /** Save the extra launch words [agentId] relaunches with (RegisteredSession.launchArgs); an empty list removes them. */
-  setLaunchArgs(agentId: string, args: string[]): boolean {
-    this.writer.assertOpen()
-    const session = this.agents.get(agentId)
-    if (!session) return false
-    if (args.length) session.launchArgs = [...args]
-    else delete session.launchArgs
-    session.touchedAt = Date.now()
-    this.save()
-    return true
   }
 
   /**

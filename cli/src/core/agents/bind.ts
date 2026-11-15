@@ -340,15 +340,20 @@ export function createBinding({
     if (!found || changing(found.agentId) || isRecentlyDeleted(found.agentId)) return
     let agent: RegisteredSession = found
     if (agent.identityHold && agent.sessionId && agent.transcriptPath) {
+      const selected = paneReadIdentity(agent)
+      const lifecycle = () => !changing(agent.agentId) && !isRecentlyDeleted(agent.agentId)
+      const current = () => lifecycle() && paneReadIdentity(registry.byAgent(agent.agentId)) === selected
       try {
         const previous = agent.sessionId
-        const retried = await registry.revalidateBinding(agent.agentId)
-        if (!retried) return
+        const retried = await registry.revalidateBinding(agent.agentId, { current })
+        if (!retried || !lifecycle() || !matchesLaunchReceipt(registry.byAgent(agent.agentId), retried)) return
         agent = retried
         if (!agent.sessionId) await forgetSession(previous, { force: true, keepAgent: true, agentId: agent.agentId })
         else followRegistered(agent, { isNew: false, evicted: null, rebound: null, recovered: true })
+        if (!lifecycle() || !matchesLaunchReceipt(registry.byAgent(agent.agentId), retried)) return
         announceSession(agent)
       } catch (error) {
+        if (!current()) return
         const reason = error instanceof Error ? error.message : String(error)
         if (registry.setIdentityHold(agent.agentId, reason)) announceSession(agent)
         return
