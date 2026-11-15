@@ -588,7 +588,20 @@ describe('what a hook says of its own environment', () => {
     [{ [HOME]: '/cut%E0%A4%A' }, {}, [HOME]],
     [{ [HOME]: '' }, {}, [HOME]],
   ])('%j is taken as %j, refusing %j', (headers, taken, refused) => {
-    expect(hookFacts({ headers })).toEqual({ ...taken, refused })
+    expect(hookFacts({ headers }, 'linux')).toEqual({ ...taken, refused })
+  })
+
+  // A home on a share or a device would have the core open another computer's folder on every registration
+  // (cli/AGENTS.md rule 4): on Windows only a drive's path is taken, as agent_create takes one.
+  it.each([
+    ['C:\\Users\\u\\.codex-work', { codexHome: 'C:\\Users\\u\\.codex-work' }, []],
+    ['\\\\host\\share\\.codex', {}, [HOME]],
+    ['//host/share/.codex', {}, [HOME]],
+    ['\\\\?\\C:\\x', {}, [HOME]],
+    ['\\foo', {}, [HOME]],
+    ['/foo', {}, [HOME]],
+  ])('on Windows the home %j is taken as %j, refusing %j', (home, taken, refused) => {
+    expect(hookFacts({ headers: { [HOME]: encodeURIComponent(home) } }, 'win32')).toEqual({ ...taken, refused })
   })
 
   /** A session-start from the pane of a live agent of `engine`, which registers: `registry.register` is spied and
