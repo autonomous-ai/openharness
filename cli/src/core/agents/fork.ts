@@ -56,7 +56,8 @@ export interface ForkAgentDeps {
   pendingForkInherit: Map<string, string>
   watchNewPane: ReturnType<typeof createPaneWatcher>
   announceSession: (session: RegisteredSession) => void
-  attachDsh: (session: RegisteredSession) => void
+  /** A look at the new agent, for the services that follow agents (core/agentLife.ts `running`). */
+  attach: (session: RegisteredSession) => void
   prepareApiTools: (cwd: string | null | undefined, engine: string) => void
   /** What a restart or a resume relaunches the row with (launch.ts): its own login, model and profile. */
   relaunchOverrides: ReturnType<typeof createLaunchHelpers>['relaunchOverrides']
@@ -67,7 +68,7 @@ export interface ForkAgentDeps {
 
 export function createAgentForker({
   native: inspectNative, prepareNative, authority: captureAuthority,
-  createBackend, noBackendCode = 'TMUX_UNAVAILABLE', registry, mirror, pendingForkInherit, watchNewPane, announceSession, attachDsh, prepareApiTools, relaunchOverrides, gridName, dshLaunch,
+  createBackend, noBackendCode = 'TMUX_UNAVAILABLE', registry, mirror, pendingForkInherit, watchNewPane, announceSession, attach, prepareApiTools, relaunchOverrides, gridName, dshLaunch,
 }: ForkAgentDeps) {
   const prepare = async ({ agentId, name, prompt }: Parameters<ForkAgent>[0], authority: LaunchAuthority): Promise<LaunchPreparation<Awaited<ReturnType<ForkAgent>>>> => {
     const ownsSource = captureAuthority?.(agentId) ?? (() => true)
@@ -230,7 +231,7 @@ export function createAgentForker({
     // the source's transcript: memory in both places, not one. Settled when the engine names its session.
     if (source.sessionId) pendingForkInherit.set(pending.agentId, source.sessionId)
     announceSession(pending)
-    if (pending.dsh) attachDsh(pending)
+    attach(pending)
     void watchNewPane(engine, pending, spawned, command, installIfMissing)
     console.log(`[agent] fork pane open · ${engine} · ${plan.level} · ${source.agentId} → ${pending.agentId}`)
     return { ok: true, session: pending, level: plan.level }

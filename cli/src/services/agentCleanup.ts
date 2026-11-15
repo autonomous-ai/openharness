@@ -5,8 +5,8 @@
  *
  * - **With its starter.** A harness closed, by the person (a window, the phone, `harness close`) or by the agent that
  *   started it, closes the harnesses it started on this machine at once, working or not (`now`): nobody reads what an
- *   orphan does, and one that keeps working spends tokens for no one. The core tells this after every stop
- *   (core/agents/lifecycle.ts `stopped`).
+ *   orphan does, and one that keeps working spends tokens for no one. It hears each stop as every service that follows
+ *   agents does, once the stop is done (`CoreApi.agents.follow`, `stopped`), held for it while its process is down.
  * - **When idle.** A harness another agent started that has sat `IDLE_CLOSE_MS` after its last answer is closed, once
  *   its screen says it is idle (`idle`): never one that works, waits for the person or holds a draft. Looked at every
  *   `LOOK_EVERY_MS`, by when its conversation last moved (`CoreApi.agents.lastActivity`), so a look costs no screen
@@ -237,10 +237,13 @@ export function createAgentCleanup(core: CoreApi, deps: AgentCleanupDeps = {}) {
     void look().catch((error: unknown) => log(`[agent-cleanup] a look failed: ${reason(error)}`))
   })
 
+  // A harness closed or stopped (`agent_close`, Stop Harness, a purge): the harnesses it started close too. It follows no
+  // agent as it runs: the looks above ask for the live ones.
+  const unfollow = core.agents.follow?.((event) => {
+    if (event.kind !== 'stopped') return
+    void closeStartedBy(event.agentId).catch((error: unknown) => log(`[agent-cleanup] could not close what ${event.agentId.slice(0, 8)} started: ${reason(error)}`))
+  }, { running: false })
   const port: AgentCleanupPort = {
-    closed: (agentId) => {
-      void closeStartedBy(agentId).catch((error: unknown) => log(`[agent-cleanup] could not close what ${agentId.slice(0, 8)} started: ${reason(error)}`))
-    },
     typed: (id) => {
       const s = core.agents.resolve(id)
       // The person's own harness has nothing to keep; one not known here is the core's word (it sends only these).
@@ -267,6 +270,7 @@ export function createAgentCleanup(core: CoreApi, deps: AgentCleanupDeps = {}) {
     stop: () => {
       stopped = true
       unschedule()
+      unfollow?.()
     },
   }
   return { port, look, closeStartedBy }

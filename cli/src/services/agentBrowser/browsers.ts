@@ -160,9 +160,9 @@ export class Browsers {
   }
 
   /**
-   * [from]'s entry, its profile with it, becomes [to]'s (decision 19): [from]'s browser is stopped first, in both
-   * agents' queues. False, changing nothing, when [from] has no entry or is being deleted, or [to] has an entry of
-   * its own. Rejects when the state file cannot be written: both entries are as they were.
+   * [from]'s entry, its profile with it, becomes [to]'s (decision 19), and so does its Browser being on: [from]'s browser
+   * is stopped first, in both agents' queues. False, changing nothing, when [from] has no entry or is being deleted, or
+   * [to] has an entry of its own. Rejects when the state file cannot be written: both entries are as they were.
    */
   move(from: string, to: string): Promise<boolean> {
     return this.inQueues([from, to], async () => {
@@ -187,6 +187,13 @@ export class Browsers {
         // [from]'s mark goes with its entry, and [to] gets none: a new conversation, owed its ready line once its
         // browser is ready.
         delete s.told?.[from]
+        if (s.on?.[from]) {
+          s.on[to] = true
+          delete s.on[from]
+        }
+        // The flag [from]'s row may still carry from before the service kept it (services/agentBrowser.ts `adopt`) is
+        // never taken in after this: its browser went with the pane. Delete on or after 2026-12-18.
+        s.adopted = { ...s.adopted, [from]: true }
         moved = true
       })
       if (moved) this.deps.log(`agent browser ${to}: took the browser of ${from}`)
@@ -248,6 +255,25 @@ export class Browsers {
     this.died.add(agentId)
     // A starting browser's own start looks at it while it waits for the browser to be ready.
     if (shown === 'ready') void this.queue(agentId, async () => { await this.exitSeen(agentId) })
+  }
+
+  /**
+   * One look at what runs, as the service starts: a browser running for an agent [wanted] does not want (not here, not on)
+   * is stopped, and its profile kept. Its agent ended while the service could not hear it.
+   */
+  async stopAllBut(wanted: (agentId: string) => boolean): Promise<void> {
+    let running: string[]
+    try {
+      running = await this.deps.containers.running()
+    } catch (error) {
+      this.deps.log(`agent browser: could not list running browsers: ${(error as Error).message}`)
+      return
+    }
+    for (const agentId of running) {
+      if (wanted(agentId)) continue
+      this.deps.log(`agent browser ${agentId}: stopped, its agent is not here or its Browser is off`)
+      await this.stop(agentId)
+    }
   }
 
   /** After the event stream reconnects: one look at what runs, for an exit it missed. */
@@ -457,8 +483,10 @@ export class Browsers {
     if (profile !== null) await this.deps.containers.remove(profile)
     this.deps.state.update(s => {
       delete s.browsers[agentId]
-      // The agent is gone: nobody is left owing or owed its ready line (notices.ts).
+      // The agent is gone: nobody is left owing or owed its ready line (notices.ts), and nothing of it is on.
       delete s.told?.[agentId]
+      delete s.on?.[agentId]
+      delete s.adopted?.[agentId]
       s.deleting = s.deleting.filter(id => id !== agentId)
     })
   }

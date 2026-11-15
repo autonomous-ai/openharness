@@ -77,10 +77,8 @@ export interface CreateAgentDeps {
   externalResume: CreateAgent
   watchNewPane: ReturnType<typeof createPaneWatcher>
   announceSession: (session: RegisteredSession) => void
-  attachDsh: (session: RegisteredSession) => void
-  /** Its browser starts, for an agent whose Browser is on from the start: an older Desktop's create (core/api.ts
-   *  `AgentBrowserPort.attached`). */
-  attachBrowser?: (session: RegisteredSession) => void
+  /** A look at the new agent, for the services that follow agents (core/agentLife.ts `running`). */
+  attach: (session: RegisteredSession) => void
   prepareApiTools: (cwd: string | null | undefined, engine: string) => void
   /** The hook server's port, which installed engine hooks post to. */
   hookPort: number
@@ -117,7 +115,7 @@ function hooksHeld(engine: string, waiting: string) {
 }
 
 export function createAgentCreator({
-  native: inspectNative, publishConfig, createBackend: initialBackend, recoverBackend, noBackendCode = 'TMUX_UNAVAILABLE', registry, externalResume, watchNewPane, announceSession, attachDsh, attachBrowser,
+  native: inspectNative, publishConfig, createBackend: initialBackend, recoverBackend, noBackendCode = 'TMUX_UNAVAILABLE', registry, externalResume, watchNewPane, announceSession, attach,
   prepareApiTools, hookPort, hooksDisabled, installOpencodePlugin, gridLaunchMachine, buildGridLaunch, terminalHintMachineName, blocksFolder,
   gridSetup, privateGridName, dshLaunch, syncProfileHome,
 }: CreateAgentDeps) {
@@ -444,8 +442,7 @@ export function createAgentCreator({
       return { ok: true, session: ready }
     }
     announceSession(pending)
-    if (pending.dsh) attachDsh(pending)
-    if (pending.browser) attachBrowser?.(pending)
+    attach(pending)
 
     void watchNewPane(engine, pending, spawned, command, installIfMissing, undefined)
     console.log(`[agent] create pane open · ${engine} · agent ${pending.agentId}`)

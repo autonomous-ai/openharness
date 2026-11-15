@@ -11,16 +11,15 @@
  * whose terminal is attached goes out again. (A viewer that moved used to move the core's streams to it
  * too; they are the viewers' own now, and follow it in their process.)
  *
- * Attach and detach go to the process as notifications (`service_event`). A detach it missed would leave
- * a viewer running, so it is held until the process hears it. An attach it missed is caught up instead:
- * the process asks for every agent with a harness (`agents`) each time it connects, which a restarted
- * process needs anyway, since it starts holding nothing. Holding attaches as well would only pile up the
- * core's repeats (one per agent on every discovery pass) while the process is down.
+ * Which agents have a harness the process hears as every service that follows agents does (core/agentLife.ts): it
+ * follows those with a `dsh` at every look at them, and their end, and catches up each time it connects
+ * (`follow_agents`), which a restarted process needs anyway, since it starts holding nothing. An end it missed while
+ * down that catch-up finds, so nothing is held for it.
  *
- * The core keeps what it hears only for the agents it has attached and not since detached: what the
- * process says of an agent before it hears the agent's detach must not bring the forgotten agent's
- * viewer back. The process says everything again on each attach, which is how the core's first word on
- * an agent arrives after a core restart, when the process connects before the core has attached anyone.
+ * The core keeps what it hears only for the agents with a harness it was told of and not since told ended (it follows
+ * them here the same way): what the process says of an agent after its end must not bring the forgotten agent's viewer
+ * back. The process says everything again on each look it hears, which is how the core's first word on an agent arrives
+ * after a core restart, when the process connects before the core has looked at anyone.
  *
  * A client served a viewer over its connection (core/viewerStreams.ts): each frame of its stream is told
  * to the process as it comes, never held (a stream dies with the process that held it), and refused
@@ -40,7 +39,7 @@
  */
 import type { AgentDshContext } from '../lib/agentFrame.js'
 import { viewerStreamId } from '../lib/viewerFrames.js'
-import { VIEWERS_UNAVAILABLE, type CoreApi, type ViewersPort } from './api.js'
+import { VIEWERS_FOLLOW, VIEWERS_UNAVAILABLE, type CoreApi, type ViewersPort } from './api.js'
 import { ON_DEMAND_START_MS, type ServiceFrame } from './serviceLinks.js'
 import { NOT_SERVED } from './viewerStreams.js'
 
@@ -135,17 +134,6 @@ export function createViewersLink(core: Pick<CoreApi, 'agents' | 'clients'>, not
   }
 
   const port: ViewersPort = {
-    attach: (session) => {
-      if (!session.dsh) return
-      attached.add(session.agentId)
-      demand?.wake('a harness here')
-      notify({ type: 'service_event', payload: { kind: 'attach', session } })
-    },
-    detach: (agentId) => {
-      attached.delete(agentId)
-      known.delete(agentId)
-      notify({ type: 'service_event', payload: { kind: 'detach', agentId } }, { untilDelivered: true })
-    },
     frameContext: (session) => (session.dsh ? known.get(session.agentId)?.context ?? null : null),
     forwardingUrl: (agentId) => known.get(agentId)?.forwardingUrl ?? null,
     // The viewers are the process's: a core restarting or stopping leaves them running for the next core,
@@ -193,6 +181,20 @@ export function createViewersLink(core: Pick<CoreApi, 'agents' | 'clients'>, not
   return {
     port,
     notice,
+    /** Follow the agents with a harness (core/agentLife.ts): the ones the core keeps the process's word on, and a look
+     *  at one asks for the process, which runs only once there is one. Only while the viewers run in their own
+     *  process: in the core's, the service follows them itself. */
+    follow(): () => void {
+      return core.agents.follow?.((event) => {
+        if (event.kind === 'running') {
+          attached.add(event.session.agentId)
+          demand?.wake('a harness here')
+        } else if (event.kind === 'ended') {
+          attached.delete(event.agentId)
+          known.delete(event.agentId)
+        }
+      }, VIEWERS_FOLLOW) ?? (() => {})
+    },
     /** The process connected: the streams held for it go to it, in the order they came. */
     connected(): void {
       seen = true
@@ -201,8 +203,6 @@ export function createViewersLink(core: Pick<CoreApi, 'agents' | 'clients'>, not
     },
     /** The core's answers to the viewers' questions (core/serviceLinks.ts `answer`, for `viewers`). */
     answer(query: string, payload: Record<string, unknown>): Record<string, unknown> {
-      // Every agent the core has with a harness, dormant ones too: the ones it attaches at start.
-      if (query === 'agents') return { agents: core.agents.live().filter((session) => session.dsh) }
       if (query === 'context') return heard(payload)
       return { error: 'UNKNOWN_QUERY' }
     },
