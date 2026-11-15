@@ -9,17 +9,21 @@
  * hints.
  *
  * A name an end-to-end file turns out to need is added here, with its reason. Never a list of names to drop again.
- * What the harness sets, and what a test sets, are `own` and always win (e2e/harness/daemon.ts).
+ * What the harness sets, and what a test sets, are `own` and always win: for a daemon under test (e2e/harness/daemon.ts)
+ * and for a tmux server a test starts itself (isolatedTmux.ts).
  *
  * In capitals: Windows reads a name whatever its capitals, and its shells spell them differently (cmd hands a child
  * SystemRoot and Path, Git Bash SYSTEMROOT and PATH).
  */
 const INHERITED: ReadonlySet<string> = new Set([
-  // The tools the tests run: node, tmux, git, zsh. The harness puts its own bin folder first.
+  // The tools the tests run. Both callers set their own (testPath.ts): a daemon under test and a tmux server a test
+  // starts. Still inherited for a caller of this function that sets none.
   'PATH',
   // UTF-8 in tmux and in the panes, with every LC_* (below). CI sets LANG to C.UTF-8.
   'LANG', 'LC_ALL',
-  // The terminal tmux and the panes draw for, and the login shell a pane opens. CI sets SHELL to /bin/zsh.
+  // The terminal tmux and the panes draw for, and the login shell a pane opens. SHELL is still inherited for a tmux
+  // server a test starts itself, whose tmux would fall back to the account's shell anyway; a daemon's is pinned
+  // (e2e/harness/daemon.ts).
   'TERM', 'SHELL',
   // Who the process is. No state.
   'USER', 'LOGNAME',

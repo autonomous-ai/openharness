@@ -63,7 +63,7 @@ if (output !== undefined) {
   process.stdin.on('data', data => console.log('INPUT:' + data.toString()));
 }
 `, { mode: 0o755 })
-    server = await isolatedTmux({ ...process.env, ZDOTDIR: dir, CODEX_HOME: dir })
+    server = await isolatedTmux({ ZDOTDIR: dir, CODEX_HOME: dir })
     const launchOptions = { cwd: dir, permissionMode: 'auto', firstPrompt: prompt, extraArgs: ['--image', image, '--model', 'chosen-model'], ...options }
     const command = buildEngineLaunchArgv('codex', launchOptions, shell, undefined, 'grid', resolveBinaryOnPath('tmux'))
     command[command.indexOf('harness-engine') + 2] = binary
