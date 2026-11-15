@@ -4,7 +4,7 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
-import { createOrcaActions, ORCA_HANDLE, orcaDeps, type OrcaDeps } from './orca.js'
+import { createOrcaAdapter, ORCA_HANDLE, orcaDeps, type OrcaDeps } from './orca.js'
 
 // The real execFile, watched: a spec reads how the child of a run ended.
 vi.mock('node:child_process', async (original) => {
@@ -36,6 +36,20 @@ function fakeOrca(tail = 'exit 0'): { file: string; argv(): string[] } {
 }
 
 interface Call { file: string; args: string[]; timeoutMs: number }
+
+/** The adapter, called with the arguments the Orca actions took: a handle is its pane's id. */
+function createOrcaActions(deps: OrcaDeps) {
+  const adapter = createOrcaAdapter(deps)
+  return {
+    send: (handle: string, text: string) => adapter.type({ adapter: 'orca', id: handle }, text),
+    switchTo: (handle: string) => adapter.show({ adapter: 'orca', id: handle }, 'a1'),
+  }
+}
+
+/** Deps whose `run` runs nothing and exits 0. */
+function quietDeps(): OrcaDeps {
+  return { run: async () => ({ code: 0 }), onPath: () => FAKE_PATH_ORCA, exists: () => false, platform: 'darwin' }
+}
 
 /** A recording `run` that runs nothing: each call answers the next of [codes], then exit 0. */
 function recorder(over: Partial<OrcaDeps> = {}, codes: Array<number | null> = []) {
@@ -279,5 +293,73 @@ describe('Orca actions', () => {
     const { calls, orca } = recorder()
     expect(await orca.send(HANDLE, '')).toBe(false)
     expect(calls).toEqual([])
+  })
+})
+
+describe('Orca adapter', () => {
+  /** The adapter on a recording `run`: each call answers the next of [codes], then exit 0. */
+  function adapterRecorder(codes: Array<number | null> = []) {
+    const calls: Call[] = []
+    const adapter = createOrcaAdapter({
+      ...quietDeps(),
+      run: async (file, args, timeoutMs) => {
+        calls.push({ file, args, timeoutMs })
+        return { code: codes.length ? codes.shift()! : 0 }
+      },
+    })
+    return { calls, adapter }
+  }
+
+  it('its id is orca, it taps before its app, and can focus on every platform', () => {
+    for (const platform of ['darwin', 'linux', 'win32'] as const) {
+      const adapter = createOrcaAdapter({ ...quietDeps(), platform })
+      expect(adapter.id).toBe('orca')
+      expect(adapter.tap).toBe('before')
+      expect(adapter.canShow).toBeUndefined()
+      expect(adapter.canFocus({ adapter: 'orca', id: HANDLE })).toBe(true)
+    }
+  })
+
+  // The hint sets observed.spec.ts and the e2e suites already send for an Orca terminal.
+  it('paneOf takes a terminal handle in its own form, and refuses any other', () => {
+    const adapter = createOrcaAdapter(quietDeps())
+    const place = (hints: Record<string, string>) => ({ host: 'orca', app: 'orca', hints })
+    const pane = { adapter: 'orca', id: HANDLE }
+    expect(adapter.paneOf(place({ ORCA_AGENT_SESSION_ID: 'x', ORCA_TERMINAL_HANDLE: HANDLE }))).toEqual(pane)
+    expect(adapter.paneOf(place({ ORCA_AGENT_SESSION_ID: 'x', ORCA_TERMINAL_HANDLE: HANDLE, __CFBundleIdentifier: 'com.stablyai.orca' }))).toEqual(pane)
+    for (const handle of ['term_0f8e2c1a', `${HANDLE}; rm -rf /`, '--help', '']) {
+      expect(adapter.paneOf(place({ ORCA_AGENT_SESSION_ID: 'x', ORCA_TERMINAL_HANDLE: handle }))).toBeUndefined()
+    }
+    expect(adapter.paneOf(place({ ORCA_AGENT_SESSION_ID: 'x' }))).toBeUndefined()
+    expect(adapter.paneOf(place({ __CFBundleIdentifier: 'com.stablyai.orca' }))).toBeUndefined()
+    expect(adapter.paneOf(place({}))).toBeUndefined()
+    // Only the handle names the pane: the host, the app and a tty change nothing.
+    expect(adapter.paneOf({ host: 'terminal', app: 'terminal', hints: { ORCA_TERMINAL_HANDLE: HANDLE }, tty: '/dev/ttys004' })).toEqual(pane)
+    expect(adapter.paneOf({ host: 'orca', app: 'orca', hints: {}, tty: '/dev/ttys004' })).toBeUndefined()
+  })
+
+  it('focus is the switch: true only when it exits 0', async () => {
+    const { calls, adapter } = adapterRecorder()
+    expect(await adapter.focus({ adapter: 'orca', id: HANDLE })).toBe(true)
+    expect(calls).toEqual([{ file: FAKE_PATH_ORCA, args: ['terminal', 'switch', '--terminal', HANDLE, '--json'], timeoutMs: 10_000 }])
+
+    const refused = adapterRecorder([1])
+    expect(await refused.adapter.focus({ adapter: 'orca', id: HANDLE })).toBe(false)
+    expect(refused.calls).toHaveLength(1)
+
+    const outside = adapterRecorder()
+    expect(await outside.adapter.focus({ adapter: 'orca', id: `${HANDLE}; rm -rf /` })).toBe(false)
+    expect(outside.calls).toEqual([])
+  })
+
+  it('its members work when called apart from it', async () => {
+    const { calls, adapter } = adapterRecorder()
+    const { paneOf, focus, show, type } = adapter
+    const pane = paneOf({ host: 'orca', app: 'orca', hints: { ORCA_TERMINAL_HANDLE: HANDLE } })!
+    expect(pane).toEqual({ adapter: 'orca', id: HANDLE })
+    expect(await focus(pane)).toBe(true)
+    expect(await show(pane, 'a1')).toBe('ok')
+    expect(await type(pane, 'hi')).toBe(true)
+    expect(calls.map((call) => call.args[1])).toEqual(['switch', 'switch', 'send'])
   })
 })

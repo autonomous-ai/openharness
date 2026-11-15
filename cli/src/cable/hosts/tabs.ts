@@ -3,6 +3,9 @@
  * AppleScript handlers as a parameter, so every hop checks it against TAB_TTY and the app against TAB_APPS.
  */
 import { execFile } from 'node:child_process'
+// Types only: the CLI's watch loads this file, and it must load nothing of the daemon.
+import type { HostAdapter, Pane, Place } from './adapter.js'
+import type { PaneSwitch } from './types.js'
 
 export const TAB_APPS = ['terminal-app', 'iterm', 'ghostty'] as const
 export type TabApp = (typeof TAB_APPS)[number]
@@ -46,4 +49,39 @@ export async function readTty(pid: number, run: RunPs = runPs): Promise<string |
   if (out === null) throw new Error('ps failed')
   const tty = `/dev/${out.trim()}`
   return TAB_TTY.test(tty) ? tty : undefined
+}
+
+/** The tabs stream a watch holds open (services/devicesListener.ts tabsStream). */
+export interface TabsDeps {
+  isOpen(): boolean
+  /** One line for the watch to select the tab; false with no stream open. */
+  select(tab: Tab, raise: boolean): boolean
+}
+
+/** A tab's pane id, read back: the app before the first `:`, the tty after it, both checked again. */
+function paneTab(pane: Pane): Tab | null {
+  const at = pane.id.indexOf(':')
+  return at < 0 ? null : tabOf({ app: pane.id.slice(0, at), tty: pane.id.slice(at + 1) })
+}
+
+/** A tab of Terminal, iTerm2 or Ghostty, by its tty: a watch selects it, once its app is in front for a tap. */
+export function createTabsAdapter(deps: TabsDeps): HostAdapter & Required<Pick<HostAdapter, 'canShow' | 'show'>> {
+  const select = (pane: Pane, raise: boolean): boolean => {
+    const tab = paneTab(pane)
+    return tab !== null && deps.select(tab, raise)
+  }
+  return {
+    id: 'tabs',
+    tap: 'after',
+    paneOf(place: Place): Pane | undefined {
+      const tab = tabOf({ app: place.app, tty: place.tty })
+      return tab ? { adapter: 'tabs', id: `${tab.app}:${tab.tty}` } : undefined
+    },
+    // Asked at each look: a watch may have opened or closed the stream since the last one.
+    canFocus: () => deps.isOpen(),
+    canShow: () => deps.isOpen(),
+    // The line is written before the answer: a select is the watch's to run, and nothing waits on it.
+    focus: async (pane) => select(pane, true),
+    show: async (pane): Promise<PaneSwitch> => (select(pane, false) ? 'ok' : 'failed'),
+  }
 }
