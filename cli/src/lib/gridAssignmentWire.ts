@@ -12,6 +12,10 @@ export interface GridAssignmentAnswer { key: string; assignment: GridAssignment 
  * launch record Harness wrote on the row (`grid`) says where they are.
  */
 const GRID_OUTSIDE_ARGV = new Set<AgentEngine>(['claude', 'hermes', 'grok', 'copilot', 'opencode'])
+/** Whether [engine]'s grid is in no command line: nothing read off its process says where it is. */
+export function gridOutsideArgv(engine: AgentEngine): boolean {
+  return GRID_OUTSIDE_ARGV.has(engine)
+}
 const PROCESS_MEMBERS = new Set(['key', 'engine', 'args'])
 
 export const GRID_CODEX_ENDPOINT = /model_providers\.[A-Za-z0-9_-]+\.base_url=(?:"([^"]+)"|(\S+))/
@@ -35,7 +39,7 @@ export function piProviderExtensionIn(source: string): { id: string; provider: R
  * `--model`. Null when it holds none, and always for an engine whose grid is in no command line.
  */
 export function gridAssignmentProcess(key: string, engine: AgentEngine, args: string): GridAssignmentProcess | null {
-  if (GRID_OUTSIDE_ARGV.has(engine)) return null
+  if (gridOutsideArgv(engine)) return null
   const extension = engine === 'pi' ? GRID_PI_EXTENSION.exec(args) : null
   const provider = engine === 'pi' ? null : GRID_CODEX_ENDPOINT.exec(args)
   if (!(extension || provider)) return null
@@ -50,7 +54,7 @@ export function gridAssignmentProcess(key: string, engine: AgentEngine, args: st
  * and Pi, whose launch before its extension (#1318) named its grid nowhere in argv and stays unknown until relaunched.
  */
 export function gridAssignmentEvidence(key: string, engine: AgentEngine, args: string): GridAssignmentProcess | null | undefined {
-  return gridAssignmentProcess(key, engine, args) ?? (GRID_OUTSIDE_ARGV.has(engine) || engine === 'pi' ? undefined : null)
+  return gridAssignmentProcess(key, engine, args) ?? (gridOutsideArgv(engine) || engine === 'pi' ? undefined : null)
 }
 
 /**

@@ -1,6 +1,6 @@
 /** Optional model metadata follows discovery; it never owns a binding or delays session control. */
 import type { ModelsPort } from '../api.js'
-import { gridAssignmentAnswersIn, gridAssignmentEvidence, sameGridAssignment,
+import { gridAssignmentAnswersIn, gridAssignmentEvidence, gridOutsideArgv, sameGridAssignment,
   type GridAssignment, type GridAssignmentProcess } from '../../lib/gridAssignmentWire.js'
 import type { RegisteredSession, registry as Registry } from '../../lib/registry.js'
 import type { DiscoveredTerminalAgent } from '../../lib/terminalAgentDiscovery.js'
@@ -75,9 +75,10 @@ export function createGridAssignments({ models, registry, revision, announce, wa
       }
       ask(inputs)
     },
-    /** A swap has already committed its process. Read metadata in the background, never under its route hold. */
+    /** A swap has already committed its process. Read metadata in the background, never under its route hold. An
+     *  engine whose grid is in no command line has its grid from the launch the swap committed: nothing to read. */
     refresh(session: RegisteredSession): void {
-      if (!session.processIdentity) return
+      if (!session.processIdentity || gridOutsideArgv(session.engine)) return
       const owner = ticket(session, 'refresh')
       if (!owner) return
       void processLaunchArgs(session.processIdentity).then(args => {
