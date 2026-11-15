@@ -6,10 +6,13 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LEAN_CORE_ENTRY, readLeanBundle } from '../src/harnessd/leanBundle.js'
 import { TerminalBinaryKind } from '../src/lib/terminalBinary.js'
+import { b64e, newIdentity } from '../src/lib/e2ee/core.js'
 import { LocalClient, type Frame } from './harness/client.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
 import { harnessdProcesses } from './harness/endurance.js'
 import { buildWithLean } from './harness/release.js'
+import { FakeBackend } from './harness/fakeBackend.js'
+import { assertLocalOnly, remoteSettings, signIn, writeE2ee } from './harness/fleet.js'
 
 const SESSION = 'dddddddd-2222-4333-8444-555555555555'
 const profile = (agent: string, effort = 'high') => `runtime-v1:${encodeURIComponent(agent)}:cursor:model-7@${effort}`
@@ -21,8 +24,10 @@ type Row = { id: string; sessionId: string; status: string; tmuxPane: string; se
 // The same checked bundle is used for the normal, damaged-core, older-master and explicit-inline paths.
 describe.runIf(!!process.env.E2E_BUNDLE_PATH)('other-engine runtime and question isolation', () => {
   let daemon: IsolatedDaemon | undefined, client: LocalClient | undefined, scratch: string | undefined
+  let relay: FakeBackend | undefined
   afterEach(async () => {
     client?.close(); await daemon?.close(); client = undefined; daemon = undefined
+    await relay?.close(); relay = undefined
     if (scratch) rmSync(scratch, { recursive: true, force: true })
     scratch = undefined
   })
@@ -36,7 +41,7 @@ describe.runIf(!!process.env.E2E_BUNDLE_PATH)('other-engine runtime and question
     scratch = mkdtempSync(join(tmpdir(), 'other-runtime-controls-'))
     return buildWithLean(scratch, bundle, files)
   }
-  async function fresh(env: Record<string, string> = {}, scriptPath = process.env.E2E_BUNDLE_PATH!) {
+  async function fresh(env: Record<string, string> = {}, scriptPath = process.env.E2E_BUNDLE_PATH!, prepare?: (d: IsolatedDaemon) => Promise<void>) {
     const d = daemon = await IsolatedDaemon.create({ scriptPath, env: {
       HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '200', HARNESSD_SERVICE_MAX_BACKOFF_MS: '1000', ...env,
     } })
@@ -71,6 +76,7 @@ process.stdin.on('data', data => { for (const key of data) {
 } });
 idle('fixture-cursor-ready');
 `, { mode: 0o755 })
+    await prepare?.(d)
     await d.start()
     const c = client = await LocalClient.connect(d)
     const cwd = join(d.projectsDir, 'cursor'); mkdirSync(cwd, { recursive: true })
@@ -189,11 +195,18 @@ idle('fixture-cursor-ready');
 
   // One identical fixture runs against the parent and candidate bundles, in a reserved quiet interval.
   it.runIf(!!process.env.OTHER_RUNTIME_CONTROLS_PERF)('measures actual pane observations and approved question round trips', async () => {
-    const { d, c, id, pane } = await fresh()
+    const backend = relay = await FakeBackend.start(), identity = newIdentity()
+    const machine = { machineId: 'e8'.repeat(16), computerId: 'e2e-controls-profile', name: 'controls fixture', token: 'e2e-controls-token' }
+    backend.addMachine(machine)
+    const { d, c, id, pane } = await fresh({ ...remoteSettings(backend), ADAPTER_COMPUTER_ID: machine.computerId }, process.env.E2E_BUNDLE_PATH!, async d => {
+      assertLocalOnly(d.env, backend)
+      await signIn(d, machine)
+      await writeE2ee(d, { 'identity.json': { priv: b64e(identity.priv), pub: b64e(identity.pub) } })
+    })
     const refusalAt = performance.now(); await viewOnly(c, id)
     const refusalMs = performance.now() - refusalAt
     await until('on-demand services finished startup', () =>
-      d.log().includes('[services] models connected') && d.log().includes('[services] gateway connected') || null, 20_000, 100)
+      d.log().includes('[services] models connected') && backend.nodeUp(machine.machineId) || null, 20_000, 100)
     const sample = () => new Promise<{ cpu: number; rssMiB: number }>((done, fail) => {
       execFile('ps', ['-o', 'time=,rss=', '-p', String(d.corePid()!)], { timeout: 5000 }, (error, output) => {
         if (error) { fail(error); return }
@@ -211,7 +224,18 @@ idle('fixture-cursor-ready');
     for (let i = 0; i < 20; i++) {
       const effort = i % 2 === 0 ? 'low' : 'high', started = performance.now()
       await d.tmux.run('send-keys', '-t', pane, '-l', effort === 'low' ? 'l' : 'h')
-      await until('changed Cursor footer accepted', async () => (await row(c, id))?.selectedModel === profile(id, effort) || null, 10_000, 50)
+      await until('new footer painted', async () => (await d.capture(pane)).includes(`Model 7 ${effort === 'low' ? 'Low' : 'High'}`) || null, 5000, 50)
+      // Existing public recovery path: reconnect reconciles config, transcript and the actual pane.
+      // Ordinary footer polling is 15 s; this deliberately measures reconnect observations, not that timer.
+      const from = d.log().length
+      backend.dropAll()
+      let accepted: string | null | undefined
+      try {
+        await until('reconnected Cursor footer accepted', async () => {
+          accepted = (await row(c, id))?.selectedModel
+          return d.log().slice(from).includes('[cli] connected') && accepted === profile(id, effort) || null
+        }, 20_000, 50)
+      } catch { throw Error(`footer observation ${i + 1}: expected ${effort}, accepted ${accepted?.split('@').at(-1) ?? 'none'}`) }
       observations.push(performance.now() - started)
     }
     const afterProfiles = await sample(), profileMs = performance.now() - profileAt
@@ -231,7 +255,7 @@ idle('fixture-cursor-ready');
     }
     writeFileSync(process.env.OTHER_RUNTIME_CONTROLS_PERF!, JSON.stringify({
       idle: { ms: round(idleMs), coreCpuPercent: round(100 * (afterIdle.cpu - beforeIdle.cpu) / (idleMs / 1000)), coreRssMiB: round(afterIdle.rssMiB) },
-      profiles: { count: observations.length, ms: round(profileMs), observationMs: latency(observations), coreCpuSeconds: round(afterProfiles.cpu - afterIdle.cpu), coreRssMiB: round(afterProfiles.rssMiB) },
+      profiles: { trigger: 'backendReconnect', count: observations.length, ms: round(profileMs), observationMs: latency(observations), coreCpuSeconds: round(afterProfiles.cpu - afterIdle.cpu), coreRssMiB: round(afterProfiles.rssMiB) },
       questions: { count: answers.length, ms: round(questionsMs), detectionMs: latency(detections), answerMs: latency(answers), coreCpuSeconds: round(afterQuestions.cpu - afterProfiles.cpu), coreRssMiB: round(afterQuestions.rssMiB) },
       viewOnlyRefusalMs: round(refusalMs), initialCoreRssMiB: round(beforeIdle.rssMiB),
     }, null, 2) + '\n')
