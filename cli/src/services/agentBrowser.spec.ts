@@ -22,6 +22,8 @@ import type { ServiceProcessOptions } from './process.js'
 import { defaultSettings, type BrowserSettings } from './agentBrowser/settings.js'
 import { StateFile } from './agentBrowser/stateFile.js'
 import { resetAgentTmpSweep } from '../lib/agentTmp.js'
+import { Browsers } from './agentBrowser/browsers.js'
+import { Containers } from './agentBrowser/containers.js'
 import { AGENT_BROWSER_REQUESTS, daemonIdOf, startAgentBrowser, type AgentBrowserOptions } from './agentBrowser.js'
 
 vi.mock('node:child_process', async (importOriginal) =>
@@ -1746,6 +1748,57 @@ describe('the browser moves with its pane', () => {
     expect(Object.keys(savedState().browsers).sort()).toEqual(['a1', 'b1'])
     expect(turnedOn()).toEqual({ a1: true, b1: true })
     expect(sw.port.frameContext('kim')).toBeUndefined()
+  })
+
+  it('a destination purge during a pending move cannot recreate its saved profile', async () => {
+    saveState({ a1: defaultSettings(HOST) })
+    let looking!: () => void
+    const looked = new Promise<void>(resolve => { looking = resolve })
+    let answer!: (rows: RegisteredSession[]) => void
+    const pending = new Promise<RegisteredSession[]>(resolve => { answer = resolve })
+    let hold = false
+    const everyAgent = async () => {
+      if (!hold) return [session('a1')]
+      looking()
+      return pending
+    }
+    const move = vi.spyOn(Browsers.prototype, 'move')
+    const deleted = vi.spyOn(Browsers.prototype, 'delete')
+    const sw = startSwitching([session('b1', { browser: undefined })], { options: { everyAgent } })
+    const listing = `ps --filter label=harness.daemon=${daemonIdOf(dataDir)} --format json`
+    await eventually(() => expect(asked()).toContain(listing))
+    hold = true
+    sw.move('a1', 'b1')
+    await looked
+    sw.purge('b1')
+    answer([session('a1')])
+    await move.mock.results[0]!.value
+    await Promise.all(deleted.mock.results.map(result => result.value))
+    expect(savedState().browsers.b1).toBeUndefined()
+    expect(turnedOn()).toEqual({})
+    expect(sw.port.frameContext('b1')).toBeUndefined()
+    expect(created()).toHaveLength(0)
+  })
+
+  it('a destination purge while the source container stops removes the arriving profile', async () => {
+    const sw = startSwitching([session('a1'), session('b1', { browser: undefined })])
+    await ready(sw.port, 'a1')
+    let entered!: () => void, release!: () => void
+    const stopping = new Promise<void>(resolve => { entered = resolve })
+    const held = new Promise<void>(resolve => { release = resolve })
+    vi.spyOn(Containers.prototype, 'stop').mockImplementationOnce(async () => { entered(); await held })
+    const move = vi.spyOn(Browsers.prototype, 'move')
+    const deleted = vi.spyOn(Browsers.prototype, 'delete')
+    sw.move('a1', 'b1')
+    await stopping
+    sw.purge('b1')
+    release()
+    await move.mock.results[0]!.value
+    await Promise.all(deleted.mock.results.map(result => result.value))
+    expect(savedState().browsers.b1).toBeUndefined()
+    expect(turnedOn()).toEqual({})
+    expect(sw.port.frameContext('b1')).toBeUndefined()
+    expect(created()).toHaveLength(1)
   })
 
   // Its agent ran with its Browser on before the update, ended, and has not run since: its saved row still carries the

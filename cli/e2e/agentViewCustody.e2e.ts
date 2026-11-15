@@ -73,11 +73,10 @@ it('keeps grid launch custody in the real core while a viewer attaches, reads fr
     const catchUp = events.filter(event => event.kind === 'catch-up').at(-1)!
     expect(catchUp.agents).toEqual(expect.arrayContaining([expect.objectContaining({ agentId, dsh: id })]))
     expect(JSON.stringify(catchUp)).not.toContain('gridLaunch')
-    const snapshot = await connected!.query('agents', {})
-    const rows = snapshot.agents as Array<Record<string, unknown>>
+    const rows = catchUp.agents as Array<Record<string, unknown>>
     expect(rows.some(row => row.agentId === agentId && row.dsh === id)).toBe(true)
     expect(rows.every(row => !Object.hasOwn(row, 'gridLaunch'))).toBe(true)
-    expect(JSON.stringify(snapshot)).not.toContain(grid.apiKey)
+    expect(JSON.stringify(catchUp)).not.toContain(grid.apiKey)
     expect(daemon.corePid()).toBe(corePid)
 
     // A first turn completes the fixture's native conversation opening before Stop checks its identity.

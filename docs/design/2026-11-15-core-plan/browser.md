@@ -260,3 +260,22 @@ The bundled credential test now subscribes through `follow_agents` and verifies 
 reconnect catch-up. Its combined-source native run, independent review of the coordinator's changes, full required
 gates and updated performance comparison remain pending. Earlier #4349 native evidence covers its original direct
 attach path, not this replacement path.
+
+## Pending destination purge and reconnect fixture, 16 November
+
+Design before correction: an explicit purge must reserve deletion for work already queued for that agent, even
+when no settings entry or browser state has been published yet. The Browser service checks its existing per-agent
+queue and enters the existing durable delete path. That path invalidates the start generation, records the purge
+before waiting, then removes any profile delivered by the preceding move. No new queue, stored field, timer, core
+state or route is added. The same queue covers the legacy lookup, old-container stop and earlier queued work; both
+modern lifecycle and dated old-core deleted notices reach this handler. Unrelated agents and profiles keep their
+existing ownership checks. A purge of an agent with no browser and no queued work still creates no state file.
+Existing schema, rollback, identity/audience rules and macOS/Linux support are unchanged. Failed deletion retains
+its existing durable recovery marker and named log. Explicit barriers cover both move waits before correction.
+
+The native credential fixture uses the generic reconnect catch-up it already requested; its removed viewer-only
+`agents` query is replaced with the same row-presence, field-absence and synthetic-canary checks on that catch-up.
+No production API or credential projection changes. Both purge barriers failed first with the destination profile
+recreated (2 failed, 109 skipped, 3.46 seconds) and pass after the queue admission correction (2 passed, 109 skipped,
+3.22 seconds), on macOS with Node 24.22.2. Logs: `/tmp/core-browser-final-purge-red.log` and
+`/tmp/core-browser-final-purge-green.log`. Native fixture validation, typecheck and broader gates remain pending.

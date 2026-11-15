@@ -337,7 +337,7 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
       notices.ended(event.agentId)
       // One started and not yet in the file is deleted too, and so is one a file that cannot be read may hold: its delete
       // says why it could not be done.
-      if (attached.delete(event.agentId) || listed(event.agentId) !== false) void browsers.delete(event.agentId)
+      if (attached.delete(event.agentId) || listed(event.agentId) !== false || browsers.pending(event.agentId)) void browsers.delete(event.agentId)
       else forget(event.agentId)
     } else if (event.kind === 'taken') {
       // The agent that ended is typed nothing more, and keeps no browser. A guest's agent gets nothing of the owner's,
