@@ -48,13 +48,25 @@ export function clearHeldHomes(): void {
   kept.clear()
 }
 
-/** The paths in `lsof -Fn` output: each `n` line that starts with `/`. Null when the output is cut (no last newline)
- *  or names over 4,096 descriptors (an `f` line each). */
-export function lsofPaths(output: string): string[] | null {
+/** The paths in `lsof -Fn` output, by process: each `n` line that starts with `/`, in the section its `p` line opens.
+ *  Null when the output is cut (no last newline), when a process asked of has no section or one not asked of has one,
+ *  and when one names over 4,096 descriptors (an `f` line each). */
+export function lsofPaths(output: string, pids: readonly number[]): Map<number, string[]> | null {
   if (!output.endsWith('\n')) return null
-  const lines = output.slice(0, -1).split('\n')
-  if (lines.filter((line) => line.startsWith('f')).length > DESCRIPTORS_MOST) return null
-  return lines.filter((line) => line.startsWith('n/')).map((line) => line.slice(1))
+  const listed = new Map<number, string[]>()
+  let paths: string[] | undefined
+  let descriptors = 0
+  for (const line of output.slice(0, -1).split('\n')) {
+    if (line.startsWith('p')) {
+      const pid = pids.find((asked) => line === `p${asked}`)
+      if (pid === undefined || listed.has(pid)) return null
+      listed.set(pid, paths = [])
+      descriptors = 0
+    } else if (!paths) return null
+    else if (line.startsWith('f') && ++descriptors > DESCRIPTORS_MOST) return null
+    else if (line.startsWith('n/')) paths.push(line.slice(1))
+  }
+  return pids.every((pid) => listed.has(pid)) ? listed : null
 }
 
 // When the process at `pid` started, in ticks since boot (ProcessIdentity.startTicks); null once none is there.
@@ -110,20 +122,39 @@ async function spelledFolder(path: string, file: RegExp): Promise<string | undef
 // The kernel names a held file by its real path, which never has a `..` segment: one that does was decoded from a name.
 const STEPS_OUT = /(?:^|\/)\.\.(?:\/|$)/
 
-async function darwinFolders(pid: number, file: RegExp): Promise<string[] | null> {
+// One lsof lists every process, not one each: its start is most of a listing's cost. It exits non-zero when any of them
+// cannot be listed.
+async function darwinFolders(pids: readonly number[], file: RegExp): Promise<string[] | null> {
   // Unlike on Linux, nothing checks the pid is still the selected process: its start is `ps lstart`, one more spawn a
   // listing. macOS hands out pids in turn up to 99,999 before it reuses one, and the pass selected it just before.
   // `-n -P`: no host or port names looked up. `-w`: a file system lsof cannot stat is a warning, and the process's own
   // files are listed regardless (engines/kit/nativeDescriptors.ts).
-  const paths = await new Promise<string[] | null>((resolve) => {
-    probeExecFile(execFile)('lsof', ['-n', '-P', '-w', '-p', String(pid), '-Fn'], { timeout: 2_000, maxBuffer: 1 << 20, env: psEnv(process.env) },
-      (error, stdout) => resolve(error ? null : lsofPaths(stdout)))
+  // The output's bound is a process's own, as when each had a listing.
+  const listed = await new Promise<Map<number, string[]> | null>((resolve) => {
+    probeExecFile(execFile)('lsof', ['-n', '-P', '-w', '-p', pids.join(','), '-Fn'],
+      { timeout: 2_000, maxBuffer: pids.length << 20, env: psEnv(process.env) },
+      (error, stdout) => resolve(error ? null : lsofPaths(stdout, pids)))
   })
-  if (!paths) return null
+  if (!listed) return null
   const folders: string[] = []
-  for (const path of paths) {
-    const folder = await spelledFolder(path, file)
-    if (folder) folders.push(folder)
+  for (const paths of listed.values()) {
+    for (const path of paths) {
+      const folder = await spelledFolder(path, file)
+      if (folder) folders.push(folder)
+    }
+  }
+  return folders
+}
+
+// The folders every listed process's files name; null when one of them cannot be listed.
+async function heldFolders(listed: readonly ProcessIdentity[], file: RegExp, platform: NodeJS.Platform, proc: string): Promise<string[] | null> {
+  if (platform === 'darwin') return darwinFolders(listed.map(({ pid }) => pid), file)
+  if (platform !== 'linux') return null
+  const folders: string[] = []
+  for (const identity of listed) {
+    const held = await linuxFolders(identity, file, proc)
+    if (!held) return null
+    folders.push(...held)
   }
   return folders
 }
@@ -131,14 +162,9 @@ async function darwinFolders(pid: number, file: RegExp): Promise<string[] | null
 // Exactly one folder among every listed process's files is the answer: two are no answer, whichever process holds
 // which, and so is one process that cannot be listed.
 async function listedHome(listed: readonly ProcessIdentity[], file: RegExp, platform: NodeJS.Platform, proc: string): Promise<string | undefined> {
-  const folders = new Set<string>()
-  for (const identity of listed) {
-    const held = platform === 'linux' ? await linuxFolders(identity, file, proc)
-      : platform === 'darwin' ? await darwinFolders(identity.pid, file)
-        : null
-    if (!held) return undefined
-    for (const folder of held) folders.add(folder)
-  }
+  const held = await heldFolders(listed, file, platform, proc)
+  if (!held) return undefined
+  const folders = new Set(held)
   const [home] = folders
   return folders.size === 1 && !STEPS_OUT.test(home) ? home : undefined
 }
