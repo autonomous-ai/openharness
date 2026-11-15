@@ -472,6 +472,13 @@ describe('the daemon\'s shape', () => {
     }
   })
 
+  it('resume publication loads no history repair implementation in the default core', () => {
+    const implementations = new Set(['engines/kit/resumeRepair.ts', 'engines/resumePreparation.ts', 'engines/resumeRepairs.ts'])
+    for (const entry of ['core/main.ts', 'core/agents/launch.ts', 'lib/resumeAgentService.ts']) {
+      expect([...closureOf(entry).keys()].filter(file => implementations.has(file)), entry).toEqual([])
+    }
+  })
+
   it('the core loads the other engines\' code only through engines/inProcess.ts, but for the files still listed', () => {
     const closure = closureOf('core/main.ts')
     const reached = [...closure.keys()].filter(theirs).sort()

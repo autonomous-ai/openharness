@@ -142,7 +142,7 @@ describe('restore preparation keeps session authority in core', () => {
     const apiNotes = vi.fn()
     const helpers = createLaunchHelpers({
       authority: createLaunchAuthority({ byAgent: () => live, revision: () => 1, cancelled: () => false }),
-      prepareApiTools: apiNotes, setGridLaunch: vi.fn(), setTail: vi.fn(),
+      prepareApiTools: apiNotes, setGridLaunch: vi.fn(), prepareResume: async () => ({ repairedItems: 0 }),
       launchOverridesDeps: { machine: () => ({ hermesSystemManaged: false }), gridLaunch: vi.fn(),
         capabilities: async () => ({ sessionEnv: true }), writeGridConfigDir: vi.fn(), installCodexHooks: vi.fn(async () => true), readCodexConfig: () => null },
     })
@@ -160,7 +160,7 @@ describe('restore preparation keeps session authority in core', () => {
     const apiNotes = vi.fn()
     const helpers = createLaunchHelpers({
       authority: createLaunchAuthority({ byAgent: () => live, revision: () => 1, cancelled: () => false }),
-      prepareApiTools: apiNotes, setGridLaunch: vi.fn(), setTail: vi.fn(),
+      prepareApiTools: apiNotes, setGridLaunch: vi.fn(), prepareResume: async () => ({ repairedItems: 0 }),
       launchOverridesDeps: { machine: () => ({ hermesSystemManaged: false }), gridLaunch: vi.fn(),
         capabilities: async () => ({ sessionEnv: true }), writeGridConfigDir: vi.fn(), installCodexHooks: vi.fn(async () => true), readCodexConfig: () => null,
         dshLaunch: async () => { live.permissionMode = 'ask'; return { ok: true, launch: { env: {}, args: [] } } } },

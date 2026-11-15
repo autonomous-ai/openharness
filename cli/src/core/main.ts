@@ -25,6 +25,8 @@ import { masterRunsEngineBackgroundJob } from '../harnessd/services.js'
 import { createBackgroundJobs } from './engines/backgroundJobs.js'
 import { masterRunsEngineProviderMove } from '../harnessd/services.js'
 import { createProviderMoves } from './engines/providerMoves.js'
+import { createResumeRepairs } from './engines/resumeRepairs.js'
+import { masterRunsEngineResumeRepair } from '../harnessd/services.js'
 import { submissionPolicy } from '../engines/submissionPolicies.js'
 import { createSubmissionTransport } from './engines/submissionTransport.js'
 import { masterRunsEngineSubmission } from '../harnessd/services.js'
@@ -747,11 +749,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const isolatedBackgroundJob = (engine: string): boolean => backgroundJobHosted && isolatedLive(engine)
   const providerMoveHosted = masterRunsEngineProviderMove(harnessd, process.ppid)
   const isolatedProviderMove = (engine: string): boolean => providerMoveHosted && isolatedLive(engine)
+  const resumeRepairHosted = masterRunsEngineResumeRepair(harnessd, process.ppid)
+  const isolatedResumeRepair = (engine: string): boolean => resumeRepairHosted && isolatedLive(engine)
   const isolatedSubmission = (engine: string): boolean => submissionHosted && isolatedLive(engine)
   const isolatedRuntime = (engine: string): boolean => runtimeHosted && isolatedLive(engine)
   // The other engines' worker reads their history and last turns (engines/others/), under a master that runs it.
   const othersHosted = outOfProcess.has(OTHER_ENGINES_SERVICE) && otherEnginesVersion(harnessd, process.ppid) >= 1
-  const inline = knownServices.some((name) => !outOfProcess.has(name)) || !othersHosted || !runtimeHosted || !screenHosted || !modelControlHosted || !questionControlHosted || !submissionHosted || !nativeControlHosted || !backgroundJobHosted || !providerMoveHosted
+  const inline = knownServices.some((name) => !outOfProcess.has(name)) || !othersHosted || !runtimeHosted || !screenHosted || !modelControlHosted || !questionControlHosted || !submissionHosted || !nativeControlHosted || !backgroundJobHosted || !providerMoveHosted || !resumeRepairHosted
     ? await import('../services/inline.js') : null
   let serviceLinksRef: ServiceLinks | null = null
   const runtimeTransport = createRuntimeTransport({
@@ -783,6 +787,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const providerMoves = createProviderMoves({
     call: (service, type, payload, waitMs) => serviceLinksRef?.call(service, type, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }),
     handles: isolatedProviderMove, inline: engine => isolatedProviderMove(engine) ? undefined : inline?.providerMoveFor(engine),
+  })
+  const resumeRepairs = createResumeRepairs({
+    call: (service, type, payload, waitMs) => serviceLinksRef?.call(service, type, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }),
+    handles: isolatedResumeRepair, inline: inline?.prepareResume,
+    hold: (sessionId, file, timeoutMs) => watcher.hold(sessionId, file, timeoutMs),
+    setTail: (sessionId, offset) => watcher.setTail(sessionId, offset),
   })
   // Which engine workers are linked now: a close's read refused by a restart waits here for the new link.
   const engineLinks = createEngineLinks()
@@ -1663,6 +1673,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       nativeControls.connected(service)
       backgroundJobs.connected(service)
       providerMoves.connected(service)
+      resumeRepairs.connected(service)
       engineLinks.connected(service)
       modelControls.connected(service)
       questionControls.connected(service)
@@ -1690,6 +1701,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       nativeControls.disconnected(service)
       backgroundJobs.disconnected(service)
       providerMoves.disconnected(service)
+      resumeRepairs.disconnected(service)
       engineLinks.disconnected(service)
       modelControls.disconnected(service)
       questionControls.disconnected(service)
@@ -2492,7 +2504,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     prepareApiTools,
     launchOverridesDeps,
     setGridLaunch: (agentId, launch) => registry.setGridLaunch(agentId, launch),
-    setTail: (sessionId, offset) => watcher.setTail(sessionId, offset),
+    prepareResume: resumeRepairs.prepare,
   })
   const relaunchOverrides = launchHelpers.relaunchOverrides
   const refreshGridWebSearch = launchHelpers.refreshGridWebSearch
