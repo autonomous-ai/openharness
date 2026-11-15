@@ -54,6 +54,9 @@ export interface Caps {
 /** What a source's send answers: `reason` is the sentence the dial shows when it refused. */
 export type SendResult = { ok: true } | { ok: false; reason: string }
 
+/** What showing an agent's pane did: `busy` when words are still being typed into its terminal, and then nothing ran. */
+export type PaneSwitch = 'ok' | 'failed' | 'busy'
+
 export interface HostSource {
   /** 'harness' | 'observed' | a host adapter's name (wave 1). */
   readonly id: string
@@ -65,6 +68,10 @@ export interface HostSource {
   send?(agent: HostAgent, text: string): Promise<SendResult>
   /** A tap: bring the agent's terminal forward; false when it did not come. A source without it opens nothing. */
   focus?(agent: HostAgent): Promise<boolean>
+  /** Whether the agent has a pane its app can show without coming forward. A source without it has none. */
+  hasPane?(agent: HostAgent): boolean
+  /** Shows the agent's pane inside its app, which stays where it is. */
+  showPane?(agent: HostAgent): Promise<PaneSwitch>
 }
 
 /** The capabilities as letters, always in the order s v f a. */

@@ -355,6 +355,28 @@ describe('AppFilter', () => {
     expect(vi.getTimerCount()).toBe(0)
   })
 
+  it('settledApp is the app that has stayed in front for 1 s', () => {
+    const { filter, agents } = setup()
+    agents({ ghostty: 3, vscode: 1 })
+    expect(filter.settledApp()).toBeUndefined()
+    filter.front('orca')
+    vi.advanceTimersByTime(FRONT_SETTLE_MS - 1)
+    expect(filter.settledApp()).toBeUndefined()
+    vi.advanceTimersByTime(1)
+    expect(filter.settledApp()).toBe('orca')
+    filter.front('ghostty')
+    filter.front('vscode')
+    settle()
+    expect(filter.settledApp()).toBe('vscode')
+    filter.front('none')
+    settle()
+    expect(filter.settledApp()).toBe('none')
+    // An app with no agents settles all the same: the front is what the person looks at, not what the dial shows.
+    filter.front('cursor')
+    settle()
+    expect(filter.settledApp()).toBe('cursor')
+  })
+
   describe('agents not known yet', () => {
     it('the default counts known agents only: five not known yet lose to two in Ghostty', () => {
       const { filter, agents } = setup()

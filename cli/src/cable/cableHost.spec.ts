@@ -11,7 +11,7 @@ import { DeviceFleet } from '../device/deviceFleet.js'
 import { DeviceLink } from '../device/deviceLink.js'
 import { HostRegistry } from './hosts/registry.js'
 import { FRONT_SETTLE_MS } from './hosts/appFilter.js'
-import type { HostAgent, HostSource, SendResult } from './hosts/types.js'
+import type { HostAgent, HostSource, PaneSwitch, SendResult } from './hosts/types.js'
 import type { CableAgent } from './cableSession.js'
 
 // The voice router as it runs, watched: what it weighs, and the ranking it asks of the backend, leave this computer.
@@ -982,6 +982,51 @@ describe('the dial that shows one app at a time', () => {
     expect(appSwitched.mock.calls).toEqual([['front']])
   })
 
+  it('settledApp is undefined until an app settles in front, then that app', () => {
+    const settles: Array<() => void> = []
+    const host = setup(five(), { appTimer: (_ms, run) => { settles.push(run); return () => {} } })
+    expect(host.settledApp()).toBeUndefined()
+    host.front('orca')
+    expect(host.settledApp()).toBeUndefined()
+    settles[0]()
+    expect(host.settledApp()).toBe('orca')
+  })
+
+  it('a pick on the dial changes the shown app and not the settled one', async () => {
+    const settles: Array<() => void> = []
+    const host = setup([...five(), agent('o1', 'orca')], { appTimer: (_ms, run) => { settles.push(run); return () => {} } })
+    expect(await shown(host)).toBe('ghostty')
+    host.front('orca')
+    settles[0]()
+    expect(await shown(host)).toBe('orca')
+    expect(host.pickApp('vscode')).toBe('switched')
+    expect(host.settledApp()).toBe('orca')
+    expect(await shown(host)).toBe('vscode')
+  })
+
+  it('settledApp follows the app in front with a window open too', () => {
+    const settles: Array<() => void> = []
+    const host = setup(five(), { sessions, appTimer: (_ms, run) => { settles.push(run); return () => {} } })
+    onTab(host, ['h1'])
+    host.front('vscode')
+    settles[0]()
+    expect(host.settledApp()).toBe('vscode')
+  })
+
+  it('promptFollowed reaches the wiring', () => {
+    const promptFollowed = vi.fn()
+    const host = setup(five(), { promptFollowed })
+    host.promptFollowed('moved')
+    host.promptFollowed('no-tile')
+    expect(promptFollowed.mock.calls).toEqual([['moved'], ['no-tile']])
+  })
+
+  it('knows an agent outside Harness', () => {
+    const host = setup(five())
+    expect(host.knows('g1')).toBe(true)
+    expect(host.knows('nobody')).toBe(false)
+  })
+
   it('two reads in a row give the same shown app and the same order', async () => {
     const appRandom = vi.fn(() => 0.75)
     const host = setup([agent('g1', 'ghostty'), agent('v1', 'vscode'), agent('g2', 'ghostty'), agent('v2', 'vscode')], { appRandom })
@@ -1418,7 +1463,7 @@ describe('the dial reaches the fleet through the core\'s port', () => {
       lastActivityAt: 0, unseenDone: false }
     function setup(source: Partial<HostSource> = {}) {
       const fleet = port()
-      const w = wiring({ fleet: () => fleet, focused: vi.fn(), opened: vi.fn(), answerReviewed: vi.fn(async () => true) })
+      const w = wiring({ fleet: () => fleet, focused: vi.fn(), opened: vi.fn(), answerReviewed: vi.fn(async () => true), swiped: vi.fn() })
       const host = new DaemonCableHost(w)
       const observed = { send: vi.fn(async (_agent: HostAgent, _text: string): Promise<SendResult> => ({ ok: true })),
         focus: vi.fn(async (_agent: HostAgent) => true), markSeen: vi.fn() }
@@ -1498,11 +1543,73 @@ describe('the dial reaches the fleet through the core\'s port', () => {
       expect(JSON.stringify(heard())).not.toContain('o1')
     })
 
-    it('a swipe to an Orca agent marks it seen and never opens Orca', () => {
-      const { host, observed, heard } = setup()
+    /** A source whose agent has a pane, which it shows as `shown` says. */
+    function withPane(shown: () => Promise<PaneSwitch> = async () => 'ok', source: Partial<HostSource> = {}) {
+      const showPane = vi.fn((_agent: HostAgent) => shown())
+      const s = setup({ hasPane: vi.fn((_agent: HostAgent) => true), showPane, ...source })
+      return { ...s, showPane, swiped: s.w.swiped as ReturnType<typeof vi.fn> }
+    }
+
+    it('a swipe to an Orca agent marks it seen at once and brings nothing forward', () => {
+      const { host, observed, showPane, heard } = withPane()
       host.focus('o1')
       expect(observed.markSeen).toHaveBeenCalledWith('o1')
       expect(observed.focus).not.toHaveBeenCalled()
+      expect(showPane).not.toHaveBeenCalled()
+      expect(JSON.stringify(heard())).not.toContain('o1')
+    })
+
+    it('swipeSwitches is true only for an outside agent whose source has a pane for it', () => {
+      expect(withPane().host.swipeSwitches('o1')).toBe(true)
+      expect(setup({ hasPane: () => false }).host.swipeSwitches('o1')).toBe(false)
+      expect(setup().host.swipeSwitches('o1')).toBe(false)
+      AGENTS.push({ agentId: 'h1', registeredAt: 1, active: true, terminalAvailable: true, engine: 'claude' })
+      try {
+        expect(withPane().host.swipeSwitches('h1')).toBe(false)
+      } finally {
+        AGENTS.length = 0
+      }
+      expect(withPane().host.swipeSwitches('nobody')).toBe(false)
+    })
+
+    it('a rest shows the pane through source.showPane, never source.focus, and tells what came of it', async () => {
+      for (const outcome of ['ok', 'failed', 'busy'] as const) {
+        const { host, observed, showPane, swiped } = withPane(async () => outcome)
+        host.swipeEnded('o1', 'rest')
+        await vi.waitFor(() => expect(swiped).toHaveBeenCalledWith(outcome))
+        expect(showPane).toHaveBeenCalledWith(scratch)
+        expect(observed.focus).not.toHaveBeenCalled()
+      }
+    })
+
+    it('superseded tells superseded and runs nothing', () => {
+      const { host, observed, showPane, swiped } = withPane()
+      host.swipeEnded('o1', 'superseded')
+      expect(swiped).toHaveBeenCalledWith('superseded')
+      expect(showPane).not.toHaveBeenCalled()
+      expect(observed.focus).not.toHaveBeenCalled()
+    })
+
+    it('a rest on an agent that has gone, and a showPane that rejects, tell failed', async () => {
+      const gone = withPane(async () => 'ok', { list: () => [] })
+      gone.host.swipeEnded('o1', 'rest')
+      await vi.waitFor(() => expect(gone.swiped).toHaveBeenCalledWith('failed'))
+      expect(gone.showPane).not.toHaveBeenCalled()
+      const rejects = withPane(async () => { throw new Error('orca crashed') })
+      rejects.host.swipeEnded('o1', 'rest')
+      await vi.waitFor(() => expect(rejects.swiped).toHaveBeenCalledWith('failed'))
+      // A source that cannot show a pane runs nothing.
+      const none = withPane(async () => 'ok', { showPane: undefined })
+      none.host.swipeEnded('o1', 'rest')
+      await vi.waitFor(() => expect(none.swiped).toHaveBeenCalledWith('failed'))
+    })
+
+    it('nothing of a swipe reaches the fleet or the core\'s doors', async () => {
+      const { host, swiped, heard } = withPane()
+      host.focus('o1')
+      host.swipeEnded('o1', 'superseded')
+      host.swipeEnded('o1', 'rest')
+      await vi.waitFor(() => expect(swiped).toHaveBeenCalledTimes(2))
       expect(JSON.stringify(heard())).not.toContain('o1')
     })
   })

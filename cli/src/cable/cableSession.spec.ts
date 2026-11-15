@@ -14,7 +14,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { CABLE_MAX_FRAME, CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
 import { DaemonCableHost } from './cableHost.js'
 import type { MachineFleet } from './machineFleet.js'
-import { CableSession, SHOWN_ONLY_PREFIX, type CableAgent, type CableHost, type CableMachine, type CablePort, type SendOutcome } from './cableSession.js'
+import { CableSession, SHOWN_ONLY_PREFIX, SWIPE_REST_MS, type CableAgent, type CableHost, type CableMachine, type CablePort, type SendOutcome } from './cableSession.js'
 import { DialLog } from './dialLog.js'
 import type { PetStore } from './pets/store.js'
 import { HostRegistry } from './hosts/registry.js'
@@ -4432,6 +4432,37 @@ describe('the app filter', () => {
     await session.stop()
     expect(session.wantsApps).toBe(false)
   })
+
+  it("a prompt asks a dial that says appFilter for its own list: another app's agent has no tile there", async () => {
+    const promptFollowed = vi.fn()
+    const { host, asked } = appHost({ promptFollowed })
+    const { session, port } = await greeted(host)
+    try {
+      port.sent.length = 0
+      asked.length = 0
+      await session.followPrompt('v1')
+      await session.followPrompt('g2')
+      expect(asked.length).toBeGreaterThan(0)
+      expect(asked.every((opts) => opts?.apps === true)).toBe(true)
+      expect(promptFollowed.mock.calls).toEqual([['no-tile'], ['moved']])
+      expect(port.sent.filter((m) => m.t === 'focus')).toEqual([{ t: 'focus', agentId: 'g2' }])
+    } finally { await session.stop() }
+  })
+
+  it('a prompt asks a dial without appFilter for the single ring', async () => {
+    const promptFollowed = vi.fn()
+    const { host, asked } = appHost({ promptFollowed })
+    const { session, port } = await greeted(host, false)
+    try {
+      port.sent.length = 0
+      asked.length = 0
+      await session.followPrompt('v1')
+      expect(asked.length).toBeGreaterThan(0)
+      expect(asked.every((opts) => opts?.apps === false)).toBe(true)
+      expect(promptFollowed.mock.calls).toEqual([['moved']])
+      expect(port.sent.filter((m) => m.t === 'focus')).toEqual([{ t: 'focus', agentId: 'v1' }])
+    } finally { await session.stop() }
+  })
 })
 
 describe('what the dial cannot do for an agent', () => {
@@ -4832,6 +4863,326 @@ describe('what the dial cannot do for an agent', () => {
       port.say({ t: 'focus', agentId: 'h1' })
       await vi.waitFor(() => expect(host.harness.list()[0]).toMatchObject({ state: 'done', unseenDone: false }))
       expect(toasts(port)).toEqual([])
+    } finally { await session.stop() }
+  })
+
+  /** a1 and a3 have a pane a rest shows; a2 has none. The clock is faked after the greeting, so it holds only what a turn
+   *  starts, and vi.waitFor (which moves a fake clock) is not used while a rest is pending. */
+  async function resting(over: Partial<CableHost> = {}) {
+    const swipeSwitches = vi.fn((id: string) => id === 'a1' || id === 'a3')
+    const swipeEnded = vi.fn()
+    const c = await greeted(caps({ swipeSwitches, swipeEnded, ...over }))
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    return { ...c, swipeSwitches, swipeEnded }
+  }
+
+  it("a hand's turn to an agent with a pane rests after 400 ms, once", async () => {
+    const { session, port, host, swipeEnded } = await resting()
+    try {
+      port.say({ t: 'focus', agentId: 'a1' })
+      expect(host.markSeen).toHaveBeenCalledWith('a1')
+      await vi.advanceTimersByTimeAsync(399)
+      expect(swipeEnded).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(1)
+      expect(swipeEnded.mock.calls).toEqual([['a1', 'rest']])
+      await vi.advanceTimersByTimeAsync(SWIPE_REST_MS)
+      expect(swipeEnded).toHaveBeenCalledTimes(1)
+    } finally { vi.useRealTimers(); await session.stop() }
+  })
+
+  it('three turns within 400 ms: one rest, for the last agent', async () => {
+    const { session, port, swipeEnded } = await resting()
+    try {
+      port.say({ t: 'focus', agentId: 'a1' })
+      await vi.advanceTimersByTimeAsync(150)
+      port.say({ t: 'focus', agentId: 'a3' })
+      await vi.advanceTimersByTimeAsync(150)
+      port.say({ t: 'focus', agentId: 'a1' })
+      await vi.advanceTimersByTimeAsync(SWIPE_REST_MS)
+      expect(swipeEnded.mock.calls).toEqual([['a1', 'superseded'], ['a3', 'superseded'], ['a1', 'rest']])
+    } finally { vi.useRealTimers(); await session.stop() }
+  })
+
+  it('a turn away before 400 ms runs no rest for the first', async () => {
+    const { session, port, swipeEnded } = await resting()
+    try {
+      port.say({ t: 'focus', agentId: 'a1' })
+      await vi.advanceTimersByTimeAsync(100)
+      port.say({ t: 'focus', agentId: 'a2' })
+      expect(swipeEnded.mock.calls).toEqual([['a1', 'superseded']])
+      expect(vi.getTimerCount()).toBe(0)
+      await vi.advanceTimersByTimeAsync(SWIPE_REST_MS)
+      expect(swipeEnded).toHaveBeenCalledTimes(1)
+    } finally { vi.useRealTimers(); await session.stop() }
+  })
+
+  it('a second turn to the same agent restarts the rest and supersedes nothing', async () => {
+    const { session, port, swipeEnded } = await resting()
+    try {
+      port.say({ t: 'focus', agentId: 'a1' })
+      await vi.advanceTimersByTimeAsync(300)
+      port.say({ t: 'focus', agentId: 'a1' })
+      await vi.advanceTimersByTimeAsync(399)
+      expect(swipeEnded).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(1)
+      expect(swipeEnded.mock.calls).toEqual([['a1', 'rest']])
+    } finally { vi.useRealTimers(); await session.stop() }
+  })
+
+  it('an agent with no pane starts no timer', async () => {
+    const { session, port, swipeSwitches, swipeEnded } = await resting()
+    try {
+      port.say({ t: 'focus', agentId: 'a2' })
+      expect(swipeSwitches).toHaveBeenCalledWith('a2')
+      expect(vi.getTimerCount()).toBe(0)
+      await vi.advanceTimersByTimeAsync(SWIPE_REST_MS)
+      expect(swipeEnded).not.toHaveBeenCalled()
+    } finally { vi.useRealTimers(); await session.stop() }
+  })
+
+  it('a host without swipeSwitches behaves as today', async () => {
+    const { session, port, host } = await resting({ swipeSwitches: undefined, swipeEnded: undefined })
+    try {
+      port.say({ t: 'focus', agentId: 'a1' })
+      port.say({ t: 'focus', agentId: 'a3' })
+      expect(host.markSeen).toHaveBeenCalledWith('a1')
+      expect(host.focus).toHaveBeenCalledWith('a3')
+      expect(vi.getTimerCount()).toBe(0)
+    } finally { vi.useRealTimers(); await session.stop() }
+  })
+
+  it('a focus the echo guard drops starts nothing', async () => {
+    const { session, port, swipeSwitches } = await resting()
+    try {
+      await session.followApp('', 'a1')
+      port.say({ t: 'focus', agentId: 'a1' })
+      expect(swipeSwitches).not.toHaveBeenCalled()
+      expect(vi.getTimerCount()).toBe(0)
+      // The hand's next turn is the dial's own again.
+      port.say({ t: 'focus', agentId: 'a3' })
+      expect(swipeSwitches.mock.calls).toEqual([['a3']])
+    } finally { vi.useRealTimers(); await session.stop() }
+  })
+
+  it('the dial moved by the app before 400 ms: superseded', async () => {
+    const { session, port, swipeEnded } = await resting()
+    try {
+      port.say({ t: 'focus', agentId: 'a1' })
+      await vi.advanceTimersByTimeAsync(100)
+      await session.followApp('', 'a2')
+      port.say({ t: 'focus', agentId: 'a2' })   // the dial's echo of the move
+      await vi.advanceTimersByTimeAsync(SWIPE_REST_MS)
+      expect(swipeEnded.mock.calls).toEqual([['a1', 'superseded']])
+    } finally { vi.useRealTimers(); await session.stop() }
+  })
+
+  it('the link dropping, or stop, ends a pending rest', async () => {
+    const dropped = await resting()
+    try {
+      dropped.port.say({ t: 'focus', agentId: 'a1' })
+      expect(vi.getTimerCount()).toBe(1)
+      await dropped.port.close('unplugged')
+      expect(vi.getTimerCount()).toBe(0)
+      await vi.advanceTimersByTimeAsync(SWIPE_REST_MS)
+      expect(dropped.swipeEnded).not.toHaveBeenCalled()
+    } finally { vi.useRealTimers(); await dropped.session.stop() }
+
+    const stopped = await resting()
+    try {
+      stopped.port.say({ t: 'focus', agentId: 'a1' })
+      expect(vi.getTimerCount()).toBe(1)
+      // The serial link says it closed only once its stream has: stop ends the rest without waiting for that.
+      stopped.port.close = async () => { stopped.port.isOpen = false }
+      await stopped.session.stop()
+      expect(vi.getTimerCount()).toBe(0)
+      await vi.advanceTimersByTimeAsync(SWIPE_REST_MS)
+      expect(stopped.swipeEnded).not.toHaveBeenCalled()
+    } finally { vi.useRealTimers(); await stopped.session.stop() }
+  })
+
+  it('a new port ends a pending rest', async () => {
+    const { session, port, swipeEnded } = await resting()
+    try {
+      port.say({ t: 'focus', agentId: 'a1' })
+      expect(vi.getTimerCount()).toBe(1)
+      // The port died without a word, and the next tick opens another before the rest is due.
+      port.isOpen = false
+      vi.setSystemTime(Date.now() + 2_000)
+      await session['tick']()
+      expect(session['link']).not.toBe(port)
+      expect(vi.getTimerCount()).toBe(0)
+      await vi.advanceTimersByTimeAsync(SWIPE_REST_MS)
+      expect(swipeEnded).not.toHaveBeenCalled()
+    } finally { vi.useRealTimers(); await session.stop() }
+  })
+
+  it("a host that throws at the rest is the dial's fault", async () => {
+    const onFault = vi.fn()
+    const { session, port } = await resting({ swipeEnded: () => { throw new Error('orca is gone') }, onFault })
+    try {
+      port.say({ t: 'focus', agentId: 'a1' })
+      await vi.advanceTimersByTimeAsync(SWIPE_REST_MS)
+      expect(onFault).toHaveBeenCalledWith(expect.objectContaining({ message: 'orca is gone' }), false)
+    } finally { vi.useRealTimers(); await session.stop() }
+  })
+})
+
+describe('a prompt in the app in front', () => {
+  const focuses = (port: LoopbackPort) => port.sent.filter((m) => m.t === 'focus')
+  async function greeted(over: Partial<CableHost> = {}) {
+    const promptFollowed = vi.fn()
+    const c = await connect(makeHost({ promptFollowed, ...over }))
+    c.port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+    await vi.waitFor(() => expect(c.port.types()).toContain('agents.end'))
+    c.port.sent.length = 0
+    return { ...c, promptFollowed }
+  }
+
+  it('followPrompt moves the dial through followApp: the list first, then the focus', async () => {
+    let agents: CableAgent[] = [AGENTS[0]]
+    const selectMachine = vi.fn(async () => ({ ok: true as const }))
+    const { session, port, promptFollowed } = await greeted({ listAgents: async () => agents, selectMachine })
+    try {
+      // The prompt's agent has just appeared: its tile reaches the dial before the focus that lands on it.
+      agents = AGENTS
+      await session.followPrompt('a2')
+      expect(port.types().filter((t) => t === 'agents.end' || t === 'focus')[0]).toBe('agents.end')
+      expect(new Set(focuses(port).map((m) => m.agentId))).toEqual(new Set(['a2']))
+      expect(promptFollowed.mock.calls).toEqual([['moved']])
+      // On a ring the dial already holds, the move is one focus.
+      port.sent.length = 0
+      await session.followPrompt('a1')
+      expect(focuses(port)).toEqual([{ t: 'focus', agentId: 'a1' }])
+      expect(port.types()).not.toContain('agents.begin')
+      expect(selectMachine).not.toHaveBeenCalled()
+    } finally { await session.stop() }
+  })
+
+  it("the move's echo starts no Orca switch", async () => {
+    const swipeSwitches = vi.fn(() => true)
+    const markSeen = vi.fn()
+    const { session, port, host } = await greeted({ swipeSwitches, swipeEnded: vi.fn(), markSeen })
+    try {
+      await session.followPrompt('a2')
+      port.say({ t: 'focus', agentId: 'a2' })   // the dial's echo of the move
+      expect(host.focus).not.toHaveBeenCalled()
+      expect(markSeen).not.toHaveBeenCalled()
+      expect(swipeSwitches).not.toHaveBeenCalled()
+      // The hand's next turn is the dial's own again.
+      port.say({ t: 'focus', agentId: 'a1' })
+      expect(swipeSwitches.mock.calls).toEqual([['a1']])
+    } finally { await session.stop() }
+  })
+
+  it("an agent this dial's list lacks: nothing is sent and the dial's place is kept", async () => {
+    let agents = AGENTS
+    const { session, port, promptFollowed } = await greeted({ listAgents: async () => agents })
+    try {
+      port.say({ t: 'focus', agentId: 'a1' })   // a hand put the dial on a1
+      await session.followPrompt('a3')
+      expect(promptFollowed.mock.calls).toEqual([['no-tile']])
+      expect(focuses(port)).toEqual([])
+      expect(port.types()).not.toContain('agents.begin')
+      // The record still names a1: the next push says a1 again, though a3 now has a tile.
+      agents = [...AGENTS, { id: 'a3', name: 'Release notes', engine: 'claude' }]
+      await session.syncAgents()
+      expect(focuses(port)).toEqual([{ t: 'focus', agentId: 'a1' }])
+    } finally { await session.stop() }
+  })
+
+  it('an agent the dial already shows: nothing is sent or counted, and the list is not read', async () => {
+    const listAgents = vi.fn(async () => AGENTS)
+    const { session, port, promptFollowed } = await greeted({ listAgents })
+    try {
+      port.say({ t: 'focus', agentId: 'a1' })   // a hand put the dial on a1
+      const reads = listAgents.mock.calls.length
+      const following = session.followPrompt('a1')
+      expect(listAgents).toHaveBeenCalledTimes(reads)
+      await following
+      expect(promptFollowed).not.toHaveBeenCalled()
+      expect(focuses(port)).toEqual([])
+    } finally { await session.stop() }
+  })
+
+  it('not linked: nothing', async () => {
+    const promptFollowed = vi.fn()
+    const { session, port } = await connect(makeHost({ promptFollowed }))
+    try {
+      // The port is open and the dial has not said hello yet.
+      await session.followPrompt('a2')
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+      await vi.waitFor(() => expect(port.types()).toContain('agents.end'))
+      await port.close('unplugged')
+      await session.followPrompt('a2')
+      expect(promptFollowed).not.toHaveBeenCalled()
+      expect(focuses(port)).toEqual([])
+    } finally { await session.stop() }
+  })
+
+  it('two prompts in a row: the later one wins', async () => {
+    const { session, port } = await greeted()
+    try {
+      await Promise.all([session.followPrompt('a1'), session.followPrompt('a2')])
+      expect(focuses(port)).toEqual([{ t: 'focus', agentId: 'a2' }])
+    } finally { await session.stop() }
+  })
+
+  /** A list read the test holds out (it can read files for activity times) until `release`. */
+  async function heldRead() {
+    const rows: CableAgent[] = [...AGENTS, { id: 'a3', name: 'Release notes', engine: 'claude' }]
+    const snapshot = { agents: rows, tab: 't1', total: rows.length }
+    let hold = false
+    let release = () => {}
+    const c = await greeted({
+      listAgentSnapshot: async () => {
+        if (!hold) return snapshot
+        hold = false
+        return new Promise<typeof snapshot>((resolve) => { release = () => resolve(snapshot) })
+      },
+    })
+    const followApp = vi.spyOn(c.session, 'followApp')
+    c.port.say({ t: 'focus', agentId: 'a1' })   // a hand put the dial on a1
+    return { ...c, followApp, holdNext: () => { hold = true }, release: () => release() }
+  }
+
+  it('two prompts whose list reads end out of order: the later one wins', async () => {
+    const { session, port, promptFollowed, followApp, holdNext, release } = await heldRead()
+    try {
+      holdNext()
+      const first = session.followPrompt('a2')
+      await session.followPrompt('a3')
+      release()
+      await first
+      expect(followApp.mock.calls).toEqual([['mac-local', 'a3']])
+      expect(focuses(port)).toEqual([{ t: 'focus', agentId: 'a3' }])
+      expect(promptFollowed.mock.calls).toEqual([['moved']])
+    } finally { await session.stop() }
+  })
+
+  it('a link that drops during the list read moves nothing and counts nothing', async () => {
+    const { session, port, promptFollowed, followApp, holdNext, release } = await heldRead()
+    try {
+      holdNext()
+      const following = session.followPrompt('a2')
+      await port.close('unplugged')
+      release()
+      await following
+      expect(promptFollowed).not.toHaveBeenCalled()
+      expect(followApp).not.toHaveBeenCalled()
+    } finally { await session.stop() }
+  })
+
+  it('a later prompt for the agent the dial shows keeps it there, though the earlier read ends after it', async () => {
+    const { session, port, promptFollowed, followApp, holdNext, release } = await heldRead()
+    try {
+      holdNext()
+      const first = session.followPrompt('a2')
+      await session.followPrompt('a1')
+      release()
+      await first
+      expect(followApp).not.toHaveBeenCalled()
+      expect(focuses(port)).toEqual([])
+      expect(promptFollowed).not.toHaveBeenCalled()
     } finally { await session.stop() }
   })
 })

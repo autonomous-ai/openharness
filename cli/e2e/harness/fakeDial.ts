@@ -79,6 +79,11 @@ export class FakeDial {
     this.bridge.stdin!.write(encodeCableFrame(CableType.Json, Buffer.from(JSON.stringify(message), 'utf8')))
   }
 
+  /** One chunk of what its microphone heard, between a `voice.begin` and its `voice.end`, as the firmware sends it. */
+  audio(pcm: Buffer): void {
+    this.bridge.stdin!.write(encodeCableFrame(CableType.Pcm, pcm))
+  }
+
   /** The first message from the daemon that passes `test`, waiting up to `ms` for it. */
   async next(test: (message: DialMessage) => boolean, ms = 20_000, what = 'a message', since = 0): Promise<DialMessage> {
     const deadline = Date.now() + ms

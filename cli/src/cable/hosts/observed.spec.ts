@@ -4,6 +4,7 @@ import { STOP_HOOK_GRACE_MS } from '../../core/turns/turnHooks.js'
 import { type Delivery, Inbox } from './inbox.js'
 import { askedLine, observedAgentId, type ObservedActions, ObservedSource, type ObservedDeps } from './observed.js'
 import type { OpenTarget } from './open.js'
+import type { PaneSwitch } from './types.js'
 
 function setup(over: Partial<ObservedDeps> = {}) {
   const clock = { t: 1_000_000 }
@@ -664,6 +665,7 @@ function fakeActions(over: Partial<ObservedActions> = {}) {
     modReady: vi.fn((sessionId: string) => ready.has(sessionId)),
     toMod: vi.fn(async (_sessionId: string, _text: string): Promise<Delivery> => 'taken'),
     orcaSend: vi.fn(async (_handle: string, _text: string) => true),
+    orcaSwitch: vi.fn(async (_handle: string): Promise<PaneSwitch> => 'ok'),
     // As on macOS: an app or a pane is something a tap can open (open.ts).
     canOpen: vi.fn((target: OpenTarget) => !!target.bundle || !!target.pane),
     open: vi.fn(async (_agentId: string, _target: OpenTarget) => true),
@@ -1052,6 +1054,235 @@ describe('ObservedSource actions', () => {
     await src.send(agent('none'), 'x'.repeat(2001))
     await src.send(agent('none'), 'x')
     expect(actions.count.mock.calls.map(([what]) => what)).toEqual(['mod', 'orca', 'busy', 'waiting', 'too-long', 'no-answer'])
+  })
+})
+
+describe('ObservedSource panes', () => {
+  const OTHER = 'term_9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d'
+  const inOrca = (handle = HANDLE) => ({ hostHints: { ORCA_AGENT_SESSION_ID: 'x', ORCA_TERMINAL_HANDLE: handle } })
+
+  it('hasPane: an agent in an Orca terminal, while its session lives', () => {
+    const { actions } = fakeActions()
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('session-start', { sessionId: 'orca', ...inOrca() }))
+    src.ingest(ev('session-start', { sessionId: 'wez', hostHints: { WEZTERM_PANE: '3' } }))
+    src.ingest(ev('session-start', { sessionId: 'herdr', hostHints: { HERDR_PANE_ID: 'p1' } }))
+    src.ingest(ev('session-start', { sessionId: 'app', hostHints: { __CFBundleIdentifier: 'com.anthropic.claudefordesktop' } }))
+    const agent = (sessionId: string) => src.list().find((a) => a.sessionId === sessionId)!
+    expect(src.hasPane(agent('orca'))).toBe(true)
+    expect(src.hasPane(agent('wez'))).toBe(false)
+    expect(src.hasPane(agent('herdr'))).toBe(false)
+    expect(src.hasPane(agent('app'))).toBe(false)
+    src.ingest(ev('session-end', { sessionId: 'orca', ...inOrca() }))
+    expect(src.hasPane(agent('orca'))).toBe(false)
+
+    const bare = setup()
+    bare.src.ingest(bare.ev('session-start', inOrca()))
+    expect(bare.src.hasPane(bare.src.list()[0])).toBe(false)
+  })
+
+  it('showPane switches Orca to the terminal and answers what Orca said', async () => {
+    for (const said of ['ok', 'failed', 'busy'] as const) {
+      const { actions } = fakeActions({ orcaSwitch: vi.fn(async () => said) })
+      const { src, ev } = setup({ actions })
+      src.ingest(ev('turn-start', inOrca()))
+      expect(await src.showPane(src.list()[0])).toBe(said)
+      expect(actions.orcaSwitch.mock.calls).toEqual([[HANDLE]])
+      expect(actions.open).not.toHaveBeenCalled()
+    }
+  })
+
+  it('the handle is the latest event\'s', async () => {
+    const { actions } = fakeActions()
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('session-start', inOrca()))
+    // Resumed in another Orca terminal: the old one holds something else now.
+    src.ingest(ev('turn-start', inOrca(OTHER)))
+    const agent = src.list()[0]
+    expect(await src.showPane(agent)).toBe('ok')
+    expect(actions.orcaSwitch.mock.calls).toEqual([[OTHER]])
+    actions.orcaSwitch.mockClear()
+
+    // Its next event carries no handle: it runs elsewhere now.
+    src.ingest(ev('turn-stop', { hostHints: { TERM_PROGRAM: 'ghostty' } }))
+    expect(await src.showPane(agent)).toBe('failed')
+    src.ingest(ev('turn-start', inOrca()))
+    src.ingest(ev('session-end', inOrca()))
+    expect(await src.showPane(agent)).toBe('failed')
+    // One the source never listed.
+    expect(await src.showPane({ ...agent, id: 'gone' })).toBe('failed')
+    expect(actions.orcaSwitch).not.toHaveBeenCalled()
+    expect(actions.open).not.toHaveBeenCalled()
+  })
+})
+
+// Only a person's prompt moves the dial: not one another session sent, nor the turn of words the dial delivered.
+describe('ObservedSource and what a turn\'s start was', () => {
+  beforeEach(() => { vi.useFakeTimers() })
+  afterEach(() => { vi.useRealTimers() })
+  const withHandle = { hostHints: { ORCA_AGENT_SESSION_ID: 'x', ORCA_TERMINAL_HANDLE: HANDLE } }
+
+  it('a turn\'s start says what it was', () => {
+    const { src, ev } = setup()
+    expect(src.ingest(ev('session-start'))).toBeUndefined()
+    expect(src.ingest(ev('turn-start'))).toBe('person')
+    expect(src.ingest(ev('turn-start', { relayed: true }))).toBe('relayed')
+    expect(src.ingest(ev('turn-start', { relayed: false }))).toBe('person')
+    expect(src.ingest(ev('needs-input'))).toBeUndefined()
+    expect(src.ingest({ engine: 'claude', sessionId: 's1', event: 'asked', tool: 'Bash', summary: 'npm test' })).toBeUndefined()
+    expect(src.ingest(ev('turn-error'))).toBeUndefined()
+    expect(src.ingest(ev('turn-stop'))).toBeUndefined()
+    expect(src.ingest(ev('session-end'))).toBeUndefined()
+    // A session it does not list: Harness's own, and one with no room left.
+    expect(src.ingest(ev('turn-start', { sessionId: 'router', cwd: '/data/harness/voice-route-scratch' }))).toBeUndefined()
+    for (let i = 0; i < 50; i++) src.ingest(ev('turn-start', { sessionId: `busy${i}`, callerPid: 200 + i }))
+    expect(src.ingest(ev('turn-start', { sessionId: 'new', callerPid: 999 }))).toBeUndefined()
+  })
+
+  // Theirs is a model call or a tool call, not a prompt (hook/notify.mjs, observedEvent).
+  it('Command Code\'s and agy\'s turn-start say nothing', () => {
+    const { src, ev } = setup()
+    expect(src.ingest(ev('turn-start', { engine: 'commandcode' }))).toBeUndefined()
+    expect(src.ingest(ev('turn-start', { engine: 'agy' }))).toBeUndefined()
+    expect(src.list().map((a) => a.state)).toEqual(['working', 'working'])
+  })
+
+  it('the turn after the mod took the dial\'s words is the dial\'s, and the one after is the person\'s', async () => {
+    const { actions, ready } = fakeActions()
+    const { src, ev } = setup({ actions })
+    ready.add('s1')
+    src.ingest(ev('turn-stop'))
+    src.ingest(ev('turn-stop', { sessionId: 's2' }))
+    expect(await src.send(src.list().find((a) => a.sessionId === 's1')!, 'run the tests')).toEqual({ ok: true })
+    // Another session's turn is its own.
+    expect(src.ingest(ev('turn-start', { sessionId: 's2' }))).toBe('person')
+    expect(src.ingest(ev('turn-start'))).toBe('dial')
+    src.ingest(ev('turn-stop'))
+    expect(src.ingest(ev('turn-start'))).toBe('person')
+  })
+
+  it('the turn after orca terminal send is the dial\'s, and the one after is the person\'s', async () => {
+    const { actions } = fakeActions()
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('turn-stop', withHandle))
+    expect(await src.send(src.list()[0], 'run the tests')).toEqual({ ok: true })
+    expect(actions.orcaSend).toHaveBeenCalledTimes(1)
+    expect(src.ingest(ev('turn-start', withHandle))).toBe('dial')
+    src.ingest(ev('turn-stop', withHandle))
+    expect(src.ingest(ev('turn-start', withHandle))).toBe('person')
+  })
+
+  // Its `--wait-submit` returns once the prompt is submitted: the turn's hook can be heard first.
+  it('the turn that starts while orca terminal send still runs is the dial\'s', async () => {
+    let submitted!: (ok: boolean) => void
+    const { actions } = fakeActions({ orcaSend: vi.fn(() => new Promise<boolean>((resolve) => { submitted = resolve })) })
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('turn-stop', withHandle))
+    const sent = src.send(src.list()[0], 'run the tests')
+    expect(actions.orcaSend).toHaveBeenCalledTimes(1)
+    expect(src.ingest(ev('turn-start', withHandle))).toBe('dial')
+    submitted(true)
+    expect(await sent).toEqual({ ok: true })
+    src.ingest(ev('turn-stop', withHandle))
+    expect(src.ingest(ev('turn-start', withHandle))).toBe('person')
+  })
+
+  it('a send Orca refuses leaves no record', async () => {
+    const { actions } = fakeActions({ orcaSend: vi.fn(async () => false) })
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('turn-stop', withHandle))
+    expect(await src.send(src.list()[0], 'run the tests')).toEqual({ ok: false, reason: 'proj did not answer.' })
+    expect(src.ingest(ev('turn-start', withHandle))).toBe('person')
+  })
+
+  // The words the mod took are still to come: a refused send takes back its own record, which would outlive theirs.
+  it('a send Orca refuses takes back its own record, not the one the mod left before it', async () => {
+    /** The mod takes the first words; a minute later Orca refuses the next. */
+    const refused = async () => {
+      const { actions, ready } = fakeActions({
+        toMod: vi.fn(async (): Promise<Delivery> => 'missed').mockResolvedValueOnce('taken'),
+        orcaSend: vi.fn(async () => false),
+      })
+      const { src, clock, ev } = setup({ actions })
+      ready.add('s1')
+      src.ingest(ev('turn-stop', withHandle))
+      expect(await src.send(src.list()[0], 'run the tests')).toEqual({ ok: true })
+      clock.t += 60_000
+      expect(await src.send(src.list()[0], 'then deploy')).toEqual({ ok: false, reason: 'proj did not answer.' })
+      return { src, clock, turn: () => src.ingest(ev('turn-start', withHandle)) }
+    }
+    // One record is left.
+    const now = await refused()
+    expect(now.turn()).toBe('dial')
+    expect(now.turn()).toBe('person')
+    // It is the mod's: past its 10 minutes, though Orca's would still have a minute to go, the next turn is a person's.
+    const later = await refused()
+    later.clock.t += 540_000
+    expect(later.turn()).toBe('person')
+  })
+
+  it('a refused or missed delivery records nothing', async () => {
+    for (const [mod, before, hints, text, refused] of [
+      // The mod has not taken the last words yet.
+      ['busy', ['turn-stop'], withHandle.hostHints, 'next', 'pending'],
+      // The mod missed them, and no Orca terminal takes them instead.
+      ['missed', ['turn-stop'], {}, 'next', 'no-answer'],
+      [undefined, ['turn-start'], withHandle.hostHints, 'next', 'busy'],
+      [undefined, ['turn-start', 'needs-input'], withHandle.hostHints, 'next', 'waiting'],
+      [undefined, ['turn-stop'], withHandle.hostHints, 'x'.repeat(2001), 'too-long'],
+    ] as const) {
+      const { actions, ready } = fakeActions({ toMod: vi.fn(async (): Promise<Delivery> => mod ?? 'taken') })
+      const { src, ev } = setup({ actions })
+      if (mod) ready.add('s1')
+      for (const event of before) src.ingest(ev(event, { hostHints: hints }))
+      expect((await src.send(src.list()[0], text)).ok).toBe(false)
+      expect(actions.count).toHaveBeenLastCalledWith(refused)
+      expect(src.ingest(ev('turn-start', { hostHints: hints }))).toBe('person')
+    }
+  })
+
+  it('two prompts the mod took: the next two turns are the dial\'s, the third the person\'s', async () => {
+    const { actions, ready } = fakeActions()
+    const { src, ev } = setup({ actions })
+    ready.add('s1')
+    src.ingest(ev('turn-start'))
+    await src.send(src.list()[0], 'run the tests')
+    await src.send(src.list()[0], 'then deploy')
+    expect([1, 2, 3].map(() => src.ingest(ev('turn-start')))).toEqual(['dial', 'dial', 'person'])
+  })
+
+  // The mod holds the dial's words until a long turn is over, and no longer than this.
+  it('a dial prompt expires after 10 minutes', async () => {
+    const { actions, ready } = fakeActions()
+    const { src, clock, ev } = setup({ actions })
+    ready.add('s1')
+    src.ingest(ev('turn-start'))
+    await src.send(src.list()[0], 'run the tests')
+    clock.t += 599_999
+    expect(src.ingest(ev('turn-start'))).toBe('dial')
+    await src.send(src.list()[0], 'then deploy')
+    clock.t += 600_000
+    expect(src.ingest(ev('turn-start'))).toBe('person')
+  })
+
+  // Another session's message is not the dial's words: their turn is still to come.
+  it('a relayed turn does not use up the dial\'s prompt', async () => {
+    const { actions, ready } = fakeActions()
+    const { src, ev } = setup({ actions })
+    ready.add('s1')
+    src.ingest(ev('turn-stop'))
+    await src.send(src.list()[0], 'run the tests')
+    expect(src.ingest(ev('turn-start', { relayed: true }))).toBe('relayed')
+    expect(src.ingest(ev('turn-start'))).toBe('dial')
+  })
+
+  it('at most 8 are kept for a session', async () => {
+    const { actions, ready } = fakeActions()
+    const { src, ev } = setup({ actions })
+    ready.add('s1')
+    src.ingest(ev('turn-start'))
+    for (let i = 0; i < 9; i++) await src.send(src.list()[0], `step ${i}`)
+    expect(Array.from({ length: 9 }, () => src.ingest(ev('turn-start')))).toEqual([...Array(8).fill('dial'), 'person'])
   })
 })
 
