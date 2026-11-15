@@ -259,8 +259,9 @@ export const ATTACH_PER_SECOND = 10
 /** The message, `{"type":"attach","sessionId":"<uuid>"}`, is 68 bytes. */
 export const ATTACH_MAX_BYTES = 96
 
-/** Claude Code's session id: a UUID, hex in either case. */
-const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+/** Claude Code's session id: a UUID in lower case, as it makes them; the agent's id is hashed from the string as given,
+ *  so an upper-case one would name no session. */
+const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 /** The session the Claude app shows, from the harness-device mod: its own session id, handed on. It keeps nothing and
  *  logs nothing, as the id names a person's session. */
