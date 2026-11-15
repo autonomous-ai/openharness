@@ -6,7 +6,7 @@ import type { HistoryEvent, LineEvent, RewrittenEvent, Watcher } from '../../wat
 import { createIngest, type IngestDeps } from './ingest.js'
 import { createSessionNormalizers } from './normalizers.js'
 import type { LiveFrame } from '../../engines/worker/liveProtocol.js'
-import type { StreamFrame } from '../../engines/others/streamProtocol.js'
+import type { StreamFrame } from '../../engines/worker/otherStreamProtocol.js'
 import { OPENCLAW_STATES } from '../../engines/openclaw/contract.js'
 import { noOtherStreams } from '../../testing/otherStreams.js'
 

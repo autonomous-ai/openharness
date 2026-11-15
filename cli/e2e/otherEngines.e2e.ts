@@ -1,7 +1,8 @@
 /**
- * The other engines' worker (`engine-others`, engines/others/): a Pi conversation's history and last turn read in its
- * process, on demand, never in the core's; the worker killed or frozen while the agent works on, its reads answered
- * at once as unavailable, and read again once the master has it back. Explicit inline mode reads them in the core.
+ * The other engines' worker (`engine-others`, engines/others/): a Pi conversation followed live and its history and last
+ * turn read in its process, on demand, never in the core's; the worker killed or frozen while the agent works on, its
+ * reads answered at once as unavailable, the core saying so and holding the conversation where it took it, and the turn
+ * typed meanwhile arriving once, after the master has the worker back. Explicit inline mode runs them in the core.
  *
  * Pi is a fake of its own here, as eagerRepair.e2e.ts makes one: it takes its preallocated id from its process title,
  * keeps its conversation where Pi does (`PI_HOME/agent/sessions/--<cwd>--/<date>_<id>.jsonl`), writes a turn for each
@@ -105,7 +106,9 @@ console.log('fixture-pi-ready'); setInterval(() => {}, 1000);
       expect(answer.error).toBe('UNSUPPORTED')
     }
     const agent = await pi(d, c, 'other-cold')
-    // The first read starts the worker and waits for it: one request, answered.
+    // Its live conversation is followed in the worker, which its attach started: no read was needed for it.
+    await until('the worker following the conversation', () => worker(d) ?? null, 15_000, 100)
+    // A read is answered by the worker the attach started: one request, answered.
     const first = await history(c, agent.id)
     expect(first.error, JSON.stringify(first)).toBeUndefined()
     expect(said(first, 'other-cold')).toBe(true)
@@ -158,8 +161,13 @@ console.log('fixture-pi-ready'); setInterval(() => {}, 1000);
       process.kill(before, signal)
       const at = Date.now()
       const pending = history(c, agent.id)
-      // The pane and the core's own following of it go on while the worker is down.
+      // The pane goes on while the worker is down; the core holds the conversation where it took it, and the turn typed
+      // meanwhile arrives once the worker is back, from that byte, live and once.
       await live(d, c, agent, `during-${signal}`)
+      const starts = c.frames.filter((frame) => frame.type === 'turn_started' && frame.agentId === agent.id
+        && JSON.stringify(frame.payload ?? {}).includes(`during-${signal}`))
+      expect(starts).toHaveLength(1)
+      expect(d.log()).toContain("the other engines' worker is gone · 1 conversation(s) held")
       const answer = await pending
       if (answer.error) {
         expect(['ENGINE_UNAVAILABLE', 'ENGINE_STALE_REPLY']).toContain(answer.error)
@@ -167,6 +175,7 @@ console.log('fixture-pi-ready'); setInterval(() => {}, 1000);
       }
       expect(Date.now() - at).toBeLessThan(15_000)
       await until('the worker back', () => linked(d) > connections && worker(d) !== before || null, 30_000, 100)
+      expect(d.log()).toContain("the other engines' worker is back · following 1 conversation(s) again")
       const recovered = await until('a read once it is back', async () => { const reply = await history(c, agent.id); return said(reply, `during-${signal}`) ? reply : null }, 30_000, 250)
       expect(recovered.error, JSON.stringify(recovered)).toBeUndefined()
       if (signal === 'SIGSTOP') {

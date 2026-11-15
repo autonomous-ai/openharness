@@ -10,8 +10,8 @@
  */
 import type { LiveEvent } from '../kit/events.js'
 import type { ProfileEvidence } from '../facets/runtime.js'
-import { liveEvent } from '../worker/liveProtocol.js'
-import { record } from '../worker/protocol.js'
+import { liveEvent } from './liveProtocol.js'
+import { record } from './protocol.js'
 
 export const STREAM_VERSION = 1
 export const STREAM_OPEN = 'engine_stream_open'

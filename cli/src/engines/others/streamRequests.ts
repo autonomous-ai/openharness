@@ -1,6 +1,6 @@
 /**
  * The other engines' live streams on their worker's link (engines/others/streams.ts): open one, act on one, and the one
- * wait the core holds for all of them (engines/others/streamProtocol.ts). Each answer is checked and bounded by the core
+ * wait the core holds for all of them (engines/worker/otherStreamProtocol.ts). Each answer is checked and bounded by the core
  * as well (core/engines/otherStreams.ts); these check what the core sends, and answer only the core's own call.
  */
 import type { ServiceRequests } from '../../core/api.js'
@@ -10,7 +10,7 @@ import { readerPath } from '../worker/readerChecks.js'
 import { createReplyParts, type ReplyParts } from './readerRequests.js'
 import {
   STREAM_ANSWER_BYTES, STREAM_OP, STREAM_OPEN, STREAM_VERSION, STREAMS_WAIT, STREAMS_WAIT_MS, type StreamFrame, type StreamOp,
-} from './streamProtocol.js'
+} from '../worker/otherStreamProtocol.js'
 import type { OtherStreams, StreamOpen } from './streams.js'
 
 const OPS: readonly StreamOp[] = ['close', 'abort', 'cancel', 'open', 'drain', 'tail', 'task', 'pane', 'release', 'forget']

@@ -279,7 +279,6 @@ const FACETS_FREE_OF_THEM: Array<[string, string]> = [
   // Their history and last turns are their worker's (engines/others/): the core's port and its list of them hold none.
   ['core/engines/readers.ts', 'the worker'],
   ['engines/otherEngines.ts', 'the worker'],
-  ['core/engines/cursorTasks.ts', '(o3)'],
   ['core/turns/agyBackstop.ts', '(o3)'],
   // What the core reads of their model and effort, and how a switch of theirs would be driven.
   ['lib/runtimeProfileState.ts', '(o4)'],

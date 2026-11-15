@@ -5,7 +5,7 @@
  * own reader, which hydrates silently and then polls. Moved out of core/transcripts/attach.ts, ingest.ts and
  * normalizers.ts, core/turns/turnHooks.ts, agyBackstop.ts and core/engines/cursorTasks.ts, the readings as they were.
  *
- * What a stream makes is handed to the core as numbered frames (engines/others/streamProtocol.ts), kept until the core
+ * What a stream makes is handed to the core as numbered frames (engines/worker/otherStreamProtocol.ts), kept until the core
  * acknowledges them: the events, a failure to announce, what each record says of the profile (the five engines'
  * profile readers run here, over every line), a store's named state, and the turn it leaves. The core keeps the turn's
  * state, decides when to close it, and closes it itself when this process does not answer (core/engines/otherStreams.ts).
@@ -25,7 +25,7 @@ import { env } from '../../config/env.js'
 import { sid } from '../../lib/log.js'
 import { tailFileCapped, WHOLE_READ_CAP_BYTES } from '../../lib/transcriptTail.js'
 import type { HistoryEvent, LineEvent, RewrittenEvent, Watcher } from '../../watcher/watcher.js'
-import { STREAM_EVIDENCE, STREAM_KEPT_BYTES, STREAMS_MAX, type StreamFrame, type StreamOpened, type StreamTurn } from './streamProtocol.js'
+import { STREAM_EVIDENCE, STREAM_KEPT_BYTES, STREAMS_MAX, type StreamFrame, type StreamOpened, type StreamTurn } from '../worker/otherStreamProtocol.js'
 
 /** The session a stream reads: what the core sent of it, and nothing else. */
 export interface StreamSession {

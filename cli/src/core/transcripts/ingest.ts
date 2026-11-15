@@ -10,7 +10,7 @@
 import type { LiveFor, LiveParser } from '../../engines/facets/live.js'
 import { keepsStore } from '../../engines/otherEngines.js'
 import { OPENCLAW_STATES } from '../../engines/openclaw/contract.js'
-import type { StreamFrame } from '../../engines/others/streamProtocol.js'
+import type { StreamFrame } from '../../engines/worker/otherStreamProtocol.js'
 import type { WifiFeed } from '../wifi.js'
 import { sid } from '../../lib/log.js'
 import type { LiveEvent } from '../../engines/kit/events.js'

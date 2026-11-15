@@ -12,7 +12,7 @@ import type { LiveEvent } from '../../engines/kit/events.js'
 import {
   streamFrame, streamOpened, streamTurn, STREAM_OP, STREAM_OP_WAIT_MS, STREAM_OPEN, STREAM_OPEN_WAIT_MS, STREAM_VERSION, STREAMS_WAIT,
   STREAMS_WAIT_MS, type StreamFrame, type StreamOp, type StreamOpened, type StreamTurn,
-} from '../../engines/others/streamProtocol.js'
+} from '../../engines/worker/otherStreamProtocol.js'
 import { liveEvent } from '../../engines/worker/liveProtocol.js'
 import { READER_PART, READER_VERSION, record } from '../../engines/worker/protocol.js'
 import { sid } from '../../lib/log.js'
