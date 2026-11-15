@@ -316,7 +316,7 @@ describe('restore ownership across asynchronous work', () => {
     h.deps.probeProcess = () => probe.promise
     await restoreAgents(h.deps)
     const swap = createPaneSwap({ restartJobs, byAgent: h.deps.registry.byAgent,
-      prepareSessionResume: () => {}, keepAbandonedConversation: () => {}, stopNative: async () => {} })
+      prepareSessionResume: async () => {}, keepAbandonedConversation: () => {}, stopNative: async () => {} })
     expect(swap.restartJobs).toBe(restartJobs)
     probe.resolve(identity(8))
     await settled(h, 1, 1)
@@ -764,7 +764,7 @@ describe('restoreAgents — which agents get a pane back', () => {
       workspaceMissing: () => null,
       relaunchOverrides: async () => ({ ok: true, overrides: { env: {}, extraArgs: [], clearEnv: [] } }),
       downgradedPermission: async () => ({ bypassPermission: false }),
-      prepareSessionResume: () => {}, refreshGridWebSearch: () => {},
+      prepareSessionResume: async () => {}, refreshGridWebSearch: () => {},
       launch: (entry) => {
         if (entry.agentId === 'agent-a') throw new WindowsBatchLaunchRefused('claude', 'C:\\tools\\claude.cmd')
         return { argv: [entry.engine, '--resume', entry.sessionId] }

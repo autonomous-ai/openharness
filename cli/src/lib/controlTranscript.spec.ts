@@ -425,7 +425,7 @@ it.each(['before', 'configuration', 'history repair', 'permission', 'tmux dispat
     registry.removeAgent(row.agentId)
     const stopped = new StoppedAgentStore(join(root, 'stopped')); stopped.save(row)
     const writeConfiguration = vi.fn()
-    const prepare = vi.fn(() => { if (phase === 'history repair') writeFileSync(transcript, header(B)) })
+    const prepare = vi.fn(async () => { if (phase === 'history repair') writeFileSync(transcript, header(B)); return phase === 'history repair' })
     const create = vi.fn(async () => {
       writeFileSync(transcript, header(B))
       return { state: 'succeeded' as const, dispatch: 'executed' as const, runtime: { backend: 'tmux' as const, paneId: '%99' } }

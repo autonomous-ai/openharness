@@ -116,13 +116,10 @@ export function createWifiCore(deps: WifiCoreDeps) {
     const client = remoteClient(connId)
     return client?.role === 'device' && client.identity === identity
   }
-  const servingCount = (only: (client: RemoteClient) => boolean = () => true): number => {
+  const servingCount = (): number => {
     if (!up) return 0
     let count = 0
-    for (const [connId, identity] of helloed) {
-      const client = remoteClient(connId)
-      if (client && serving(connId, identity) && only(client)) count++
-    }
+    for (const [connId, identity] of helloed) if (serving(connId, identity)) count++
     return count
   }
   const forget = (connId: string): void => {
@@ -220,8 +217,6 @@ export function createWifiCore(deps: WifiCoreDeps) {
     /** Whether a device's app said hello on a session that is still its own: the core then makes the
      *  cards and recaps it shows. */
     connected: (): boolean => servingCount() > 0,
-    /** How many of those are on a direct link, for `harness device status`. */
-    directSessions: (): number => servingCount((client) => client.direct),
     /** The focus revision, as the service last said; none while it is off. */
     focusRevision: (): string | undefined => (up ? revision : undefined),
     /** The service is there (it started here, or its process connected): it is handed what the core holds,
@@ -249,7 +244,8 @@ export function createWifiCore(deps: WifiCoreDeps) {
       revision = undefined
     },
     /** Ask for the service and wait, at most `waitMs`, until it serves: a device's discovery and pairing go through
-     *  the gateway's direct links, which start only then. False when it did not in time. */
+     *  the gateway's direct links, which start only then, and the gateway asks (core/gatewayLink.ts `wifi_serving`).
+     *  False when it did not in time. */
     serving: (waitMs: number): Promise<boolean> => {
       if (up && serves) return Promise.resolve(true)
       if (!deps.want()) return Promise.resolve(false)

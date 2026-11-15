@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { projectDisplayName, type RegisteredSession } from '../lib/registry.js'
-import { AGENT_BROWSER_FALLBACKS, AGENT_BROWSER_REQUESTS, mayOpenBrowser, CLOUD_DOWN, CLOUD_FALLBACKS, CONNECTOR_VAULT_OFF, CONVERSATIONS_OFF, ACCOUNT_BACKEND_OFF, accountIdentity, AGENT_ACTIONS_OFF, AGENT_CLEANUP_FALLBACKS, createCoreApi, DAEMON_UNKNOWN, DELIVERIES_OFF, DEVICES_FALLBACKS, emptyPorts, LANE_OFF, LONG_ANSWERS, MODELS_OFF, STORE_OFF, MODELS_REQUESTS, MONITOR_OFF, OBSERVER_KEY_OFF, ORCHESTRATOR_FALLBACKS, RECAPS_FALLBACKS, resolveAgent, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARING_FALLBACKS, MESSAGES_FALLBACKS, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, TURN_DELIVERERS, WIFI_FALLBACKS, WIFI_OFF, type CoreApiDeps } from './api.js'
+import { AGENT_BROWSER_FALLBACKS, AGENT_BROWSER_REQUESTS, mayOpenBrowser, CLOUD_DOWN, CLOUD_FALLBACKS, CONNECTOR_VAULT_OFF, CONVERSATIONS_OFF, ACCOUNT_BACKEND_OFF, accountIdentity, AGENT_ACTIONS_OFF, AGENT_CLEANUP_FALLBACKS, createCoreApi, DAEMON_UNKNOWN, DELIVERIES_OFF, DEVICES_FALLBACKS, emptyPorts, GATEWAY_REQUESTS, LANE_OFF, MACHINE_ADDON_REQUESTS, SERVICE_HTTP_ROUTES, WIFI_REQUESTS, LONG_ANSWERS, MODELS_OFF, STORE_OFF, MODELS_REQUESTS, MONITOR_OFF, OBSERVER_KEY_OFF, ORCHESTRATOR_FALLBACKS, RECAPS_FALLBACKS, resolveAgent, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARING_FALLBACKS, MESSAGES_FALLBACKS, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, TURN_DELIVERERS, WIFI_FALLBACKS, WIFI_OFF, type CoreApiDeps } from './api.js'
 import { FAIL, readFallback } from './serviceHost.js'
 import { HACHI_ID } from '../dsh/builtinIds.js'
 
@@ -9,6 +9,22 @@ const row = (agentId: string) => ({ agentId, sessionId: `s-${agentId}`, engine: 
 describe('the core API services stand on', () => {
   it('allows a bounded batch of GitHub reads to finish outside the core', () => {
     expect(LONG_ANSWERS.projects).toEqual({ git_pull_requests_status: 120_000 })
+  })
+  it('sends each of the Wi-Fi device\'s routes to the service that answers it, as a request that service declares', () => {
+    const route = (path: string) => SERVICE_HTTP_ROUTES.find((each) => each.path.test(path))
+    for (const path of ['hello', 'publish', 'decision', 'proposals']) expect(route(`/api/autonomous-device/machine-addon/${path}`)?.type).toBe('machine_addons_http')
+    for (const path of ['receipt', 'addon/state', 'addon/propose', 'addon/proposal']) expect(route(`/api/autonomous-device/${path}`)?.type).toBe('wifi_http')
+    // The pairings and direct links, and any other path under them, which the gateway says it does not know.
+    for (const path of ['discover', 'pair/start', 'pair/status', 'list', 'status', 'revoke', 'receipts', 'pair/cancel']) {
+      expect(route(`/api/autonomous-device/${path}`)?.type, path).toBe('gateway_http')
+    }
+    expect(route('/api/status')).toBeUndefined()
+    const declared = new Set<string>([...GATEWAY_REQUESTS, ...WIFI_REQUESTS, ...MACHINE_ADDON_REQUESTS])
+    for (const each of SERVICE_HTTP_ROUTES) expect(declared.has(each.type), each.type).toBe(true)
+    // Not answered is not "not sent": a proposal may have reached the device.
+    expect(route('/api/autonomous-device/addon/propose')!.unanswered).toMatchObject({ status: 504, body: { error: { code: 'OUTCOME_UNKNOWN' } } })
+    // A pairing waits for the Wi-Fi device's service, then for its code's rounds (core/gatewayLink.ts PAIR_WAIT_MS).
+    expect(route('/api/autonomous-device/pair/start')!.waitMs).toBeGreaterThan(15_000 + 120_000)
   })
   it('gives a service with no lane of the core\'s nothing to seal with, and never its frame back in the clear', async () => {
     await expect(LANE_OFF.hello('m', 'pub')).rejects.toThrow(/no E2EE identity/)
@@ -420,8 +436,7 @@ describe('the core API services stand on', () => {
     expect(Object.keys(DEVICES_FALLBACKS).filter((member) => /approval/i.test(member))).toEqual([])
   })
 
-  it('answers, when the Wi-Fi device\'s service is off, nothing to its devices and "not running" to a receipt', () => {
-    expect(readFallback(WIFI_FALLBACKS.receipt)).toEqual({ deferred: true, value: { unavailable: true } })
+  it('answers, when the Wi-Fi device\'s service is off, nothing to its devices', () => {
     for (const member of ['request', 'resume', 'appFocus', 'stop'] as const) {
       expect(readFallback(WIFI_FALLBACKS[member]), member).toEqual({ deferred: true, value: undefined })
     }

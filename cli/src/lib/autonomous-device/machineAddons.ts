@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { Asker, ServiceRequests } from '../../core/api.js'
 import { DeviceAddonError, DeviceAddons, type AddonProposal, type ProposalSource } from './addons.js'
+import { deviceRefusal, deviceRoutes } from './localHttp.js'
 
 /**
  * Add-ons for a device that is itself a Harness machine (openharness#1654): the lampOS V2 lamp runs Harness and
@@ -15,11 +16,12 @@ import { DeviceAddonError, DeviceAddons, type AddonProposal, type ProposalSource
  * its proposals from a short inbox (`proposals`), waiting for the next one rather than polling.
  */
 export const MACHINE_ADDON_OPS = ['state', 'propose', 'proposal'] as const
-/** Only a process on this machine: the device's own service. */
-export const LOCAL_OPS = ['hello', 'publish', 'decision', 'proposals'] as const
 export type MachineAddonOp = typeof MACHINE_ADDON_OPS[number]
 /** Proposals kept for the device's service to take; older ones are past their 30 s hold long before. */
 export const INBOX_MAX = 32
+/** Said while this machine's id is not known: never served as `''`, a device named nothing, which would take no
+ *  proposal, be listed as no machine, and publish for none. */
+const UNKNOWN_ID = 'This machine\'s id is not known yet. Try again in a moment.'
 /** The longest a take waits for the next proposal. */
 export const TAKE_WAIT_MAX_MS = 20_000
 
@@ -54,7 +56,7 @@ export class MachineAddons {
     for (const wake of [...this.waiters]) wake()
   }
 
-  // ── the device's own service, over this machine's loopback (lib/deviceManagementHttp.ts) ─────────────
+  // ── the device's own service, over this machine's loopback (./localHttp.ts) ──────────────────────────
 
   /** The service started: what it published before is cleared, as a device's hello clears it. */
   hello(): Record<string, unknown> {
@@ -96,8 +98,8 @@ export class MachineAddons {
   // ── agents: on the person's other machines over the machine link, or on this one ────────────────────
 
   /** `machine_addon` {op, input}: who may ask, and the machine a proposal is said to come from, are the asker's. */
-  request(payload: Record<string, unknown>, asker: Asker): Answer | Promise<Answer> {
-    if ((LOCAL_OPS as readonly unknown[]).includes(payload.op)) return this.local(payload, asker)
+  request(payload: Record<string, unknown>, asker: Asker): Answer {
+    if (!this.self) return { error: { code: 'UNAVAILABLE', message: UNKNOWN_ID } }
     if (asker.guest !== undefined || !asker.owner || (!asker.local && asker.accountOwner !== true)) {
       return { error: { code: 'OWNER_REQUIRED', message: 'Only the owner\'s own machines may use this machine\'s add-ons.' } }
     }
@@ -124,23 +126,21 @@ export class MachineAddons {
     }
   }
 
-  private async local(payload: Record<string, unknown>, asker: Asker): Promise<Answer> {
-    if (!asker.local || !asker.owner) return { error: { code: 'LOCAL_ONLY', message: 'Only the device\'s own service, on this machine, publishes and decides.' } }
-    const input = object(payload.input) ? payload.input : {}
-    try {
-      if (payload.op === 'hello') return { result: this.hello() }
-      if (payload.op === 'publish') return { result: this.publish(input.values) }
-      if (payload.op === 'decision') return { result: this.decide({ proposalId: input.proposalId, decision: input.decision, reason: input.reason }) }
-      const whole = (value: unknown): number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : 0
-      const instance = typeof input.instance === 'string' ? input.instance : undefined
-      return { result: { ...await this.proposals(whole(input.after), whole(input.waitMs), instance) } }
-    } catch (error) {
-      if (error instanceof DeviceAddonError) return { error: { code: error.code, message: error.message } }
-      throw error
-    }
+  /** The device's own service's routes of the door, as the core hands them on (`machine_addons_http`, the one way it
+   *  publishes and decides): checked first, then refused while this machine's id is not known. */
+  private known(): void {
+    if (!this.self) throw deviceRefusal('UNAVAILABLE', UNKNOWN_ID)
   }
 
   requests(): ServiceRequests {
-    return { machine_addon: (payload, asker) => this.request(payload, asker) }
+    return {
+      machine_addon: (payload, asker) => this.request(payload, asker),
+      machine_addons_http: deviceRoutes({
+        machineAddonHello: () => { this.known(); return this.hello() },
+        machineAddonPublish: ({ values }) => { this.known(); return this.publish(values) },
+        machineAddonDecision: (input) => { this.known(); return this.decide(input) },
+        machineAddonProposals: ({ after, waitMs, instance }) => { this.known(); return this.proposals(after, waitMs, instance) },
+      }),
+    }
   }
 }

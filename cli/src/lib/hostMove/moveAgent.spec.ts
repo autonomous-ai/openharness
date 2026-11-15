@@ -4,7 +4,7 @@ import type { TerminalBackend } from '../terminalBackend.js'
 import type { ProcessIdentity, TerminalInventoryResult, TerminalRuntimeRef } from '../terminalTypes.js'
 import { terminalRouteKey } from '../terminalRuntime.js'
 import { MoveGate } from './gate.js'
-import { MOVE_MARKER_ENV, moveAgent, moveCreateRequest, removeOrphanMovePanes, type MoveAgentDeps, type MoveOutcome } from './moveAgent.js'
+import { MOVE_MARKER_ENV, MOVE_STEP_TIMEOUT_MS, moveAgent, moveCreateRequest, removeOrphanMovePanes, type MoveAgentDeps, type MoveOutcome } from './moveAgent.js'
 
 const OLD: TerminalRuntimeRef = { backend: 'ptyhost', instance: 'p2', paneId: '%1' }
 const NEW: TerminalRuntimeRef = { backend: 'ptyhost', instance: 'p2-1.2.3', paneId: '%7' }
@@ -320,6 +320,21 @@ describe('moveAgent', () => {
       expect(unconfirmed.deps.prepareResume).not.toHaveBeenCalled()
       expect(unconfirmed.deps.respawn).not.toHaveBeenCalled()
     }
+  })
+
+  // The repair reads a long conversation a chunk at a time now (engines/kit/resumeRepair.ts): left to run past the
+  // step's bound, it went on beside the fallback. It is told to stop a second before, and the agent moves as it is.
+  it('lets the conversation\'s repair run until a second before its step\'s bound, then has it stop', async () => {
+    const seen: boolean[] = []
+    const h = harness({ prepareResume: vi.fn(async (_session: RegisteredSession, waiting: () => boolean) => {
+      seen.push(waiting())
+      await after(MOVE_STEP_TIMEOUT_MS - 1_001, undefined)
+      seen.push(waiting())
+      await after(2, undefined)
+      seen.push(waiting())
+    }) })
+    expect(await run(h.deps)).toMatchObject({ moved: true })
+    expect(seen).toEqual([true, true, false])
   })
 
   it('a failed preparation falls back to the old pane', async () => {

@@ -12,7 +12,7 @@
  */
 import type { ProductUsageLaunchSignal } from '../lib/productUsageSignals.js'
 import type { ProductUsageMetric } from '../lib/productUsageContract.js'
-import type { GatewayAccount, GatewayEvents, WindowRelaySession } from '../core/api.js'
+import type { Asker, GatewayAccount, GatewayEvents, WindowRelaySession } from '../core/api.js'
 import { localWindowsOf, windowSurfaceOf } from '../lib/windowSurfaces.js'
 import { decodeGatewayBinary, encodeGatewayBinary, GatewayBinary, GATEWAY_CALLS } from '../lib/gatewayWire.js'
 import { RelayConnectError } from '../lib/relayFrames.js'
@@ -107,6 +107,8 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
       machineName: text(payload.machineName), hostname: text(payload.hostname),
       machines: (state) => notice('machines', { ...state }),
       account: (payload.account as GatewayAccount | null) ?? { machineId: null, signIn: null },
+      // Only the core can ask for the Wi-Fi device's process (core/gatewayLink.ts `wifi_serving`).
+      wifiServing: async () => (await core?.query('wifi_serving').catch(() => null))?.serving === true,
     })
     running = started
     // Held first, so that nothing the link brings in is answered before the core is ready.
@@ -246,9 +248,11 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
     [GATEWAY_CALLS.devicesRebaseline]: async (p: Payload) => ({
       ...await ops().devicesRebaseline(p.confirm === true, p.head as { seq: number; hash: string } | undefined),
     }),
-    [GATEWAY_CALLS.wifi]: async (p: Payload) => ({
-      ...await ops().wifi({ op: text(p.op) as 'discover' | 'pair' | 'pairStatus' | 'list' | 'revoke', device: text(p.device), code: text(p.code), id: text(p.id) }),
-    }),
+    // Its routes of the door (gateway/start.ts `requests`): the Wi-Fi device's pairings and direct links.
+    gateway_http: (p: Payload, asker: Asker) => {
+      if (!running) throw new Error('the gateway has not started')
+      return running.requests.gateway_http!(p, asker)
+    },
     // The fleet's lane's sessions (gateway/lane.ts). Each is answered from what it holds at once, so they
     // are taken in the order the core sent them.
     [GATEWAY_CALLS.lane]: async (p: Payload): Promise<Payload> => {

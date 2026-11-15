@@ -9,17 +9,21 @@
  * window's focus, so what it answers is as fresh as when it ran in the core. What the core reads in line
  * of it (which devices said hello, which transcripts and streams it follows, the focus revision) it is
  * told before anything that depends on it leaves here (core/wifi.ts).
+ *
+ * What a person asks of it on this computer (`harness device receipt`, `harness autonomous-device addon`) comes as its
+ * routes of the door, handed on by the core as they came (core/serviceRoutes.ts) and checked here
+ * (lib/autonomous-device/localHttp.ts).
  */
 import { join } from 'node:path'
-import type { CoreApi, CorePorts, RemoteClient, WifiPort, WifiView } from '../core/api.js'
+import type { CoreApi, CorePorts, RemoteClient, ServiceRequests, WifiPort, WifiView } from '../core/api.js'
 import { startDevicePart } from '../lib/autonomous-device/parts.js'
 import { deviceRelayOverGateway } from '../lib/autonomous-device/overGateway.js'
 import { DeviceResultJournal } from '../lib/autonomous-device/resultJournal.js'
 import { AutonomousDeviceService, type AutonomousDeviceFrame } from '../lib/autonomous-device/service.js'
-import { DeviceAddonError } from '../lib/autonomous-device/addons.js'
+import { deviceRefusal, deviceRoutes } from '../lib/autonomous-device/localHttp.js'
 import { createDeviceStore } from '../lib/autonomous-device/storeRuntime.js'
 
-export { WIFI_FALLBACKS } from '../core/api.js'
+export { WIFI_FALLBACKS, WIFI_REQUESTS } from '../core/api.js'
 
 export interface WifiDeps {
   /** Swapped in tests, to reach what the service and the Store are given. */
@@ -29,7 +33,7 @@ export interface WifiDeps {
 
 const same = (a: readonly string[], b: readonly string[]): boolean => a.length === b.length && a.every((item, i) => item === b[i])
 
-export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}): void {
+export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}): ServiceRequests {
   const machineId = core.machine.id()
   let view: WifiView = { agents: [], store: [], hasWindow: false }
   /** One ask of the core at a time: requests arriving together share it, and are answered in order. */
@@ -179,22 +183,23 @@ export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}):
       return moved
     },
     revealed: (operationId, agentId) => store.acknowledgeReveal(operationId, agentId),
-    receipt: async (deviceId, idempotencyKey) => ({ receipt: service.receipt(deviceId, idempotencyKey) }),
-    addon: async (op, input) => {
-      try {
-        if (op === 'state') return { result: { devices: service.addons.state(typeof input.deviceId === 'string' ? input.deviceId : undefined) } }
-        if (op === 'propose') return { result: { proposal: service.addons.propose(input) } }
-        const proposal = service.addons.proposal(typeof input.proposalId === 'string' ? input.proposalId : '')
-        // Never sent, or aged out: said as such, so a script can tell it from a proposal.
-        if (!proposal) return { error: { code: 'PROPOSAL_UNKNOWN', message: 'No such proposal: never sent, or aged out after ten minutes' } }
-        return { result: { proposal } }
-      } catch (error) {
-        if (error instanceof DeviceAddonError) return { error: { code: error.code, message: error.message } }
-        throw error
-      }
-    },
     stop: async () => store.stopUiDelivery(),
   }
   store.startUiDelivery()
   ports.wifi = port
+  // A refusal of the add-on layer is said under its own code (`DeviceAddonError`); any other failure fails the
+  // request, which its route answers as for a service that is down, since what failed may have been done.
+  return {
+    wifi_http: deviceRoutes({
+      receipt: ({ deviceId, idempotencyKey }) => ({ receipt: service.receipt(deviceId, idempotencyKey) }),
+      addonState: ({ deviceId }) => ({ devices: service.addons.state(deviceId) }),
+      addonPropose: (proposal) => ({ proposal: service.addons.propose(proposal) }),
+      addonProposal: ({ proposalId }) => {
+        const proposal = service.addons.proposal(proposalId)
+        // Never sent, or aged out: said as such, so a script can tell it from a proposal.
+        if (!proposal) throw deviceRefusal('PROPOSAL_UNKNOWN', 'No such proposal: never sent, or aged out after ten minutes')
+        return { proposal }
+      },
+    }),
+  }
 }

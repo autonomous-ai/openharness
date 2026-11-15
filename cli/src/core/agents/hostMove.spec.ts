@@ -173,9 +173,9 @@ describe('the move, wired to the core', () => {
     const prepare = vi.fn()
     const { w } = wiring({ buildLaunch: vi.fn(async () => deferredLaunch(prepare)) })
     const deps = hostMoveDeps(session(), () => true, w)
-    await expect(deps.prepareResume(session())).rejects.toThrow()
+    await expect(deps.prepareResume(session(), () => true)).rejects.toThrow()
     await deps.buildLaunch(session(), { resumeSessionId: 's1', current: () => true, prepare: false })
-    await deps.prepareResume(session())
+    await deps.prepareResume(session(), () => true)
     expect(prepare).toHaveBeenCalledTimes(1)
     expect(w.buildLaunch).toHaveBeenCalledTimes(1)
   })
@@ -187,7 +187,7 @@ describe('the move, wired to the core', () => {
     // No launch yet: nothing to relaunch with.
     expect(await deps.relaunchOld(row)).toBe(false)
     await deps.buildLaunch(row, { resumeSessionId: 's1', current: () => true, prepare: false })
-    await deps.prepareResume(row)
+    await deps.prepareResume(row, () => true)
     expect(await deps.relaunchOld(row)).toBe(true)
     const [, place, overrides, permissionMode] = vi.mocked(w.paneSwapDeps).mock.calls.at(-1)!
     expect(place).toEqual({ backend: old, runtime: OLD })

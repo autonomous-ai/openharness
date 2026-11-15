@@ -23,7 +23,7 @@ import type { AgentEngine } from '../engines/types.js'
 import type { ObservedEvent } from './observedHook.js'
 import type { AppSwarms } from '../cable/cableSession.js'
 import type { UnreadNotification } from '../lib/notificationRead.js'
-import type { AutonomousDeviceAgent, AutonomousDeviceDelivery, AutonomousDeviceReceipt } from '../lib/autonomous-device/service.js'
+import type { AutonomousDeviceAgent, AutonomousDeviceDelivery } from '../lib/autonomous-device/service.js'
 import type { StoreAgent } from '../lib/autonomous-device/store.js'
 import type { DshLaunchAnswer, DshLaunchRequest, DshMaterializeAnswer, DshMaterializeRequest } from '../dsh/launchWire.js'
 import type { AgentBrowserFrame, AgentDshContext } from '../lib/agentFrame.js'
@@ -745,8 +745,9 @@ export const SHARED_MACHINES_OFF: SharedMachinesCorePort = { guestLaunch: async 
  *  in the edge host (services/osDevice.ts). */
 export const OS_DEVICE_REQUESTS = ['os_device'] as const
 /** Add-ons for a device that is this Harness machine (lib/autonomous-device/machineAddons.ts): the owner's machines
- *  read what it published and propose to it, each proposal stamped with the machine it came from. */
-export const MACHINE_ADDON_REQUESTS = ['machine_addon'] as const
+ *  read what it published and propose to it, each proposal stamped with the machine it came from; and its own
+ *  service's routes of the door (`SERVICE_HTTP_ROUTES`). */
+export const MACHINE_ADDON_REQUESTS = ['machine_addon', 'machine_addons_http'] as const
 /**
  * Models (services/models.ts).
  *
@@ -1475,14 +1476,8 @@ export interface WifiResume {
   focus: { machineId: string; agentId: string; connId: string } | null
 }
 
-/** A receipt the device asked for by `harness device receipt`, or the service is not there to say. */
-export type WifiReceipt = { receipt: AutonomousDeviceReceipt | null } | { unavailable: true }
-
-/** `harness autonomous-device addon`: what devices published, a proposal sent, or one read back
- *  (lib/autonomous-device/addons.ts); refused with the add-on layer's own code, or the service is not there. */
-export const WIFI_ADDON_OPS = ['state', 'propose', 'proposal'] as const
-export type WifiAddonOp = typeof WIFI_ADDON_OPS[number]
-export type WifiAddon = { result: Record<string, unknown> } | { error: { code: string; message: string } } | { unavailable: true }
+/** The Wi-Fi device's routes of the door (`SERVICE_HTTP_ROUTES`): `harness device receipt` and its add-ons. */
+export const WIFI_REQUESTS = ['wifi_http'] as const
 
 /** What the core lists for the Wi-Fi device, read in line while it answers a request: the agents as it
  *  shows them, the Store's evidence on each, and whether a window is attached to show one. */
@@ -1495,7 +1490,8 @@ export interface WifiView {
 /**
  * The core's calls into the Wi-Fi device: its sessions and their requests, as the gateway hands them on,
  * and what the agents do that it follows (cards, turns, live text, its own deliveries into the panes and
- * the transcript lines that prove them). All notices but `receipt`, which a person asked for.
+ * the transcript lines that prove them). All notices: what a person asks of it (`harness device receipt`, its
+ * add-ons) are its routes (`SERVICE_HTTP_ROUTES`).
  */
 export interface WifiPort {
   /** A device session the gateway holds, as it changes (null: it lost its session). */
@@ -1526,10 +1522,6 @@ export interface WifiPort {
   appFocus(machineId: string, agentId: string | null, connId: string): Promise<void>
   /** A window opened the agent a device's Store preparation made. */
   revealed(operationId: string, agentId: string): void
-  /** `harness device receipt`: what became of one of a device's requests. */
-  receipt(deviceId: string, idempotencyKey: string): Promise<WifiReceipt>
-  /** `harness autonomous-device addon`: an agent reads what devices published, or proposes to one. */
-  addon(op: WifiAddonOp, input: Record<string, unknown>): Promise<WifiAddon>
   stop(): Promise<void>
 }
 
@@ -1546,14 +1538,13 @@ export const WIFI_OFF: CoreApi['wifi'] = {
 
 /**
  * What the core gets when the Wi-Fi device's service is off: its devices hear nothing (a request they sent
- * is unanswered, which they retry with the same key, as after a lost frame) and `harness device receipt`
- * says it is not running.
+ * is unanswered, which they retry with the same key, as after a lost frame).
  */
 export const WIFI_FALLBACKS: PortFallbacks<WifiPort> = {
   session: undefined, request: later(undefined), dropped: undefined, revoked: undefined, resume: later(undefined), card: undefined,
   turnStarted: undefined, turnEnded: undefined, stream: undefined, transcript: undefined, delivery: undefined,
   dispatched: undefined, inputStatus: undefined, agentGone: undefined, appFocus: later(undefined), revealed: undefined,
-  receipt: later({ unavailable: true }), addon: later({ unavailable: true }), stop: later(undefined),
+  stop: later(undefined),
 }
 
 /*
@@ -1780,16 +1771,53 @@ export interface GatewayMachines {
   fetchedAt: number
 }
 
-/** A Wi-Fi device operation refused, with the code the device's local API answers it under. */
-export interface GatewayRefusal {
-  code: string
-  message: string
+/**
+ * A route of the local door that a service answers (core/serviceRoutes.ts): asked of it as the request `type`, which
+ * that service declares with its others, carrying the method, the target as the client sent it and the body as text.
+ * The core holds where the route goes, how long it waits, and what it answers while its service is down or does not
+ * answer in time: never what the route does.
+ */
+export interface ServiceHttpRoute {
+  /** The paths it takes, its query left out. */
+  path: RegExp
+  type: string
+  waitMs: number
+  unanswered: HttpAnswer
 }
+
+/** The gateway's routes of the door (gateway/start.ts): one request, by path. */
+export const GATEWAY_REQUESTS = ['gateway_http'] as const
+
+const deviceDown = (status: number, code: string, message: string): HttpAnswer => ({ status, body: { error: { code, message } } })
+const DEVICE_LINK_DOWN = deviceDown(503, 'UNAVAILABLE', 'The Wi-Fi device link is not reachable on this computer right now. Try again.')
+
+/**
+ * The door's routes each service answers, the first that matches taking a request. Each says what it answered before
+ * it left the core's process, word for word, while its service is down (e2e/deviceRoutes.e2e.ts). The door's own
+ * checks come first (hookServer.ts).
+ */
+export const SERVICE_HTTP_ROUTES: readonly ServiceHttpRoute[] = [
+  // The add-ons of a device that is this machine (services/machineAddons.ts): its own service's take waits up to 20 s
+  // for the next proposal (lib/autonomous-device/machineAddons.ts `TAKE_WAIT_MAX_MS`).
+  { path: /^\/api\/autonomous-device\/machine-addon\//, type: 'machine_addons_http', waitMs: 25_000,
+    unanswered: deviceDown(503, 'UNAVAILABLE', 'The add-ons of this machine are not running. See the daemon\'s log.') },
+  // A proposal not answered may have reached the device: sent again with the same key, it is sent at most once.
+  { path: /^\/api\/autonomous-device\/addon\/propose$/, type: 'wifi_http', waitMs: 5_000,
+    unanswered: deviceDown(504, 'OUTCOME_UNKNOWN', 'No answer in time: the proposal may have been sent. Retry with the same key (--key) to send it at most once.') },
+  // `harness device receipt` and what the devices publish (services/wifi.ts).
+  { path: /^\/api\/autonomous-device\/(receipt$|addon\/)/, type: 'wifi_http', waitMs: 5_000,
+    unanswered: deviceDown(503, 'UNAVAILABLE', 'The Wi-Fi device service is not running on this computer. See the daemon\'s log.') },
+  // The device's pairings and direct links, the gateway's: a pairing waits for the Wi-Fi device's service to serve (15 s)
+  // and then for its code to be checked over the direct link, round by round (two minutes); a look for devices waits
+  // for the service, and listens for three seconds.
+  { path: /^\/api\/autonomous-device\/pair\/start$/, type: 'gateway_http', waitMs: 140_000, unanswered: DEVICE_LINK_DOWN },
+  { path: /^\/api\/autonomous-device\//, type: 'gateway_http', waitMs: 45_000, unanswered: DEVICE_LINK_DOWN },
+]
 
 /**
  * The daemon's own commands about the keys, which the gateway holds: `harness pair`, `unpair`,
- * `remote-password`, `link connect`, `group`, `devices`, and the Wi-Fi device's pairing. Each answers as
- * the hook server's route does; while the gateway is down, a 503.
+ * `remote-password`, `link connect`, `group` and `devices`. Each answers as the hook server's route does; while the
+ * gateway is down, a 503.
  */
 
 export interface GatewayOps {
@@ -1818,10 +1846,6 @@ export interface GatewayOps {
   /** `confirm`: "It's mine" for the one key named, shared with the account's other devices. */
   devicesDismiss(body: { pub?: string; pubs?: string[]; baseline?: boolean; confirm?: boolean }): Promise<HttpAnswer>
   devicesRebaseline(confirm: boolean, head?: { seq: number; hash: string }): Promise<HttpAnswer>
-  /** The Wi-Fi device's direct links: discovered devices, pairing one, and its pairings. A refusal is an
-   *  answer (`{ refused }`), as the device's local API words it. */
-  wifi(request: { op: 'discover' | 'pair' | 'pairStatus' | 'list' | 'revoke'; device?: string; code?: string; id?: string }):
-    Promise<{ result: Record<string, unknown> } | { refused: GatewayRefusal }>
   /** The Wi-Fi device service is up (its direct links start) or gone (they stop). */
   wifiService(on: boolean): void
   /** A Wi-Fi device asked to be unpaired, over its own authenticated session. */
