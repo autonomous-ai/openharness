@@ -40,9 +40,9 @@ export interface LaunchWorld {
   setGridLaunch: (agentId: string, record: unknown) => void
   /** This account's private grid, as the socket knows it (BackendSocket.gridName). */
   gridName?: () => string | null
-  /** Where Harness makes workspaces here (lib/projectFolder.ts `projectsRoot`, the core's): the saved APIs' note goes
-   *  only into a folder below it. */
-  projectsRoot?: string
+  /** Where Harness makes project folders here (lib/projectFolder.ts `projectsRoot`, the core's): the saved APIs' note
+   *  goes only into one. Named by each spec, so no launch reads the home of whoever runs it. */
+  projectsRoot: string
 }
 
 /** What `create` needs besides the launch: the spec's stubs for the pane, the registry and the rest. */

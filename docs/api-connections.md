@@ -28,12 +28,13 @@ outside Harness too. Multiple named connections to one provider are supported.
 ## Using a connection
 
 Harness adds a short **Saved APIs** instruction section when starting, restarting,
-or forking a local harness while connections exist, in a workspace Harness made
-(a folder in `~/harnesses`, where New Project, clones and worktrees go). A folder
-you chose yourself is never changed. It preserves existing project
-instructions and appends the section only once, in `AGENTS.md` (`CLAUDE.md` for
-Claude, `GEMINI.md` for Gemini). The section contains commands, never credentials.
-Any harness, in any folder and already running, can use those commands at once:
+or forking a local harness while connections exist, in a new project Harness made:
+a folder directly in `~/harnesses` (`~/projects` on Harness OS) that is not a Git
+repository. A folder you chose, a clone and a worktree are never changed. It
+preserves existing project instructions and appends the section only once, in
+`AGENTS.md` (`CLAUDE.md` for Claude, `GEMINI.md` for Gemini). The section contains
+commands, never credentials. Any harness, in any folder and already running, can
+use those commands at once:
 
 ```sh
 # Discover connection IDs and public settings. Keys are never listed.
