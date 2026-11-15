@@ -9,7 +9,7 @@ import { alive, harnessdProcesses } from './harness/endurance.js'
 import { fakeHermesScript } from './harness/fakeHermes.mjs'
 import { withFault } from './harness/release.js'
 
-type Row = { id: string; sessionId: string; createdAt: number; status: string }
+type Row = { id: string; sessionId: string; createdAt: string; status: string }
 type Write = { pid: number; path: string; event: 'opened' | 'closed' }
 let build: string, scriptPath: string
 let daemon: IsolatedDaemon | undefined, client: LocalClient | undefined, companion: LocalClient | undefined
@@ -116,6 +116,30 @@ async function fresh(env: Record<string, string> = {}, changeTerminalRouteOnSign
   }
   return { d, c, home, tell, rows, close, manifests, written, nativeSession, nativeState, enginePid, hold, signalMarker, resume, agent: () => agent }
 }
+
+it.each(['worker', 'inline', 'older master'] as const)('refuses database purge before effects through the %s', async mode => {
+  const r = await fresh(mode === 'inline' ? { HARNESSD_SERVICES: 'none' } : mode === 'older master' ? { E2E_STORAGE_OLD_MASTER: '1' } : {})
+  const original = { ...r.agent() }, core = r.d.corePid()
+  const engine = await until('the bound engine process was saved', () => r.enginePid() ?? null, 15_000, 50)
+  const target = { agentId: original.id, sessionId: original.sessionId, createdAt: Date.parse(original.createdAt) }
+  const refused = { error: 'DELETE_REFUSED', reason: 'STORAGE_PURGE_AUTHORITY_UNAVAILABLE', stopped: false, sessionDeleted: false, worktreeDeleted: false }
+  expect(await r.c.request('agent_purge', { ...target, mode: 'inspect' })).toMatchObject(refused)
+  const review = await r.c.request('agent_purge', { ...target, mode: 'inspect', includeWorktree: true })
+  expect(review).toMatchObject({ choices: { sessionData: { available: false, reason: expect.stringContaining('Delete this conversation in its engine.') } } })
+  expect(await r.c.request('agent_purge', { ...target, mode: 'delete', reviewId: review.reviewId,
+    path: join(r.d.projectsDir, 'hermes'), choices: { sessionData: true, worktreeData: true } })).toMatchObject(refused)
+  expect(alive(engine)).toBe(true)
+  expect(r.enginePid()).toBe(engine)
+  expect(r.nativeSession()).toBe(original.sessionId)
+  expect(r.nativeState(original.sessionId)).toMatchObject({ ended_at: null, end_reason: null })
+  expect(r.manifests()).toEqual([])
+  expect(r.written()).toEqual([])
+  r.tell({ say: 'alive after database purge was refused' })
+  await until('the engine accepts another turn after the refused purge', async () =>
+    JSON.stringify(await r.c.request('session_get', { sessionId: original.id, limit: 10 }, 15_000))
+      .includes('alive after database purge was refused') || null, 30_000, 100)
+  expect(r.d.corePid()).toBe(core)
+})
 
 it('refuses escalation after the native terminal-record directory route changes on SIGTERM', async () => {
   const r = await fresh({}, true)
