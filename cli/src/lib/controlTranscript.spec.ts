@@ -285,11 +285,10 @@ it('preserves a repaired parent through Stop and the final real forget archive',
   const stopped = new StoppedAgentStore(join(root, 'stopped'))
   const forget = createForgetSession({ registry, stoppedAgents: stopped, syncRecapPool: vi.fn(), normalizers: { forget: vi.fn() },
     forgetAttach: vi.fn(), turnStartedAt: new Map(), prompts: new Map(), neverFoldedHistory: new Set(), replayedFirstTurn: new Set(),
-    clearAgyIdleWatch: vi.fn(), cursorDiscovery: { remove: vi.fn() }, cursorSubagents: { forget: vi.fn() },
+    clearAgyIdleWatch: vi.fn(), cursorDiscovery: { remove: vi.fn() },
     runtimeProfiles: { forget: vi.fn() }, watcher: { removeSession: vi.fn(async () => {}) },
     stopHeartbeat: vi.fn(), input: { forget: vi.fn() }, deviceInput: { forget: vi.fn() },
-    ended: vi.fn(), mirror: { forget: vi.fn() }, clients: { send: vi.fn(), sendCommander: vi.fn() },
-    dataDir: join(root, 'ADAPTER_DATA_DIR') })
+    ended: vi.fn(), mirror: { forget: vi.fn() }, clients: { send: vi.fn(), sendCommander: vi.fn() } })
   const stop = createStopAgentService({ registry, stoppedAgents: stopped, restartJobs: new AgentRestartCoordinator(),
     stopJobs: new Map(), backendFor: () => ({ kill: vi.fn(async () => ({ state: 'succeeded' as const, dispatch: 'executed' as const })) }),
     agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), trigger: vi.fn(async () => {}) },

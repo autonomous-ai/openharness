@@ -1,7 +1,6 @@
 /**
- * A Codex resume prepares its history while the core's loop goes on: the rollout is read a chunk at a time, and the
- * core's other work runs between chunks (engines/kit/resumeRepair.ts). Read in line, a 200 MB rollout with an item to
- * repair held the loop 2.4 s on a Mac; the one of 3 October was 803 MB.
+ * A Codex resume prepares its history in a real subprocess while core retains only bounded identity evidence and
+ * publication. Read in line, a 200 MB rollout with an item to repair held the core loop 2.4 s on a Mac.
  *
  * What is measured is the CPU time of the loop's own thread between two turns of a 1 ms timer: the longest the loop
  * did one thing without letting the timer in. A busy machine that keeps the process off the CPU for a while does not
@@ -14,6 +13,8 @@ import { afterEach, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { appendCodexHistory, codexSessionMeta } from '../../testing/codexRollout.js'
 import { createLaunchHelpers } from './launch.js'
+import { createResumeRepairs } from '../engines/resumeRepairs.js'
+import { startResumeRepairWorker } from '../../testing/resumeRepairProcess.js'
 
 const SESSION = '01a0a3cd-a374-71f2-a11a-1fc1cc41b36d'
 
@@ -36,7 +37,9 @@ function loopHold(): { stop(): number } {
 }
 
 let profile = ''
-afterEach(() => {
+let worker: Awaited<ReturnType<typeof startResumeRepairWorker>> | undefined
+afterEach(async () => {
+  await worker?.stop(); worker = undefined
   vi.restoreAllMocks()
   if (profile) rmSync(profile, { recursive: true, force: true })
 })
@@ -49,8 +52,12 @@ it('a Codex resume repairs a 200 MB rollout without ever holding the core loop f
   writeFileSync(file, codexSessionMeta(SESSION))
   appendCodexHistory(file, 200 * 1024 ** 2)
   const setTail = vi.fn()
+  worker = await startResumeRepairWorker(profile)
+  const call = vi.fn(worker.call)
+  const repairs = createResumeRepairs({ call, handles: () => true, hold: async () => null, setTail })
+  repairs.connected('engine-codex')
   const { prepareSessionResume } = createLaunchHelpers({
-    authority: () => () => true, prepareApiTools: () => {}, launchOverridesDeps: {} as never, setGridLaunch: () => true, setTail,
+    authority: () => () => true, prepareApiTools: () => {}, launchOverridesDeps: {} as never, setGridLaunch: () => true, prepareResume: repairs.prepare,
   })
   const session = { agentId: 'a1', sessionId: SESSION, engine: 'codex', transcriptPath: file, codexHome: profile } as RegisteredSession
   vi.spyOn(console, 'log').mockImplementation(() => {})
@@ -59,5 +66,6 @@ it('a Codex resume repairs a 200 MB rollout without ever holding the core loop f
   const longest = hold.stop()
   // Repaired: both reads, the backup, the repaired copy and their flushes all ran, and the tail moved to its new end.
   expect(setTail).toHaveBeenCalledWith(SESSION, statSync(file).size)
+  expect(call.mock.calls.some(([, method]) => method === 'engine_resume_repair_prepare')).toBe(true)
   expect(longest).toBeLessThan(50)
 }, 120_000)

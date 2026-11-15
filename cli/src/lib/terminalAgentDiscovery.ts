@@ -2,6 +2,7 @@ import type { AgentEngine } from '../engines/types.js'
 import {
   agentAliasOwner,
   agentCommandOwnershipSnapshot,
+  agentCommandOwnershipSnapshotAsync,
   PROCESS_ENGINES,
   type AgentCommandOwnershipSnapshot,
 } from './engineBin.js'
@@ -316,7 +317,9 @@ export async function probeTerminalAgents(
   const enrichedRows = await enrichProcessRows(rows, processTreePids(rows, roots.map((root) => root.rootPid)))
   // One ownership snapshot for the pass, built only where a pane is: the walk and a launcher's children both use it,
   // and each snapshot walks PATH (#3880).
-  const ownership = roots.length ? agentCommandOwnershipSnapshot() : undefined
+  let ownership: AgentCommandOwnershipSnapshot | undefined
+  try { ownership = roots.length ? await agentCommandOwnershipSnapshotAsync() : undefined }
+  catch { return { processTableAvailable: false, targets, agents: [], ambiguousPlacements: new Set() } }
   const discovered = discoverTerminalAgentsFromSnapshot(
     roots,
     enrichedRows,

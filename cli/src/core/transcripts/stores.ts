@@ -4,9 +4,6 @@
  * keep one store on this machine; Hermes one per home, the session's own (`hermesDb`); OpenClaw one per TUI's state
  * folder (lib/openclawStore.ts), none for a key that is not OpenClaw's. Every other engine keeps none.
  */
-import { env } from '../../config/env.js'
-import { hermesDbPath } from '../../engines/hermes/contract.js'
-import { loadEngine } from '../../engines/inProcess.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 
 export interface Stores {
@@ -16,16 +13,8 @@ export interface Stores {
   openclaw: (key: string, pane: { pid: number; stateDir?: string | null }) => Promise<string | null>
 }
 
-/**
- * The store a Hermes session's history is in: its own home's, found by Hermes's code and kept on its row
- * (lib/hermesHome.ts), which is loaded with Hermes's. Read only once that code is there, for a Hermes session;
- * without it, the default home's, as when no home claims the session.
- */
-export const hermesDb = async (s: RegisteredSession): Promise<string> =>
-  await (await loadEngine('hermes'))?.hermesDbForSession(s) ?? hermesDbPath(env.HERMES_HOME)
-
 /** The store `s`'s conversation is in, or null for one in none. */
-export function createStoreOf(dbs: Stores, hermes: (s: RegisteredSession) => Promise<string> = hermesDb) {
+export function createStoreOf(dbs: Stores, hermes: (s: RegisteredSession) => Promise<string>) {
   return async (s: RegisteredSession): Promise<string | null> => {
     switch (s.engine) {
       case 'opencode': return dbs.opencode

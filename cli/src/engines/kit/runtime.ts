@@ -1,6 +1,30 @@
 /** Shared runtime value and formatting mechanics; no engine registry or profile manager. */
 import { readFile } from 'node:fs/promises'
-import type { EngineRuntime, RuntimeField, RuntimeModelOption, RuntimeProfile, RuntimeSession, RuntimeState } from '../facets/runtime.js'
+import type { EngineRuntime, ProfileEvidence, RuntimeControl, RuntimeField, RuntimeModelOption, RuntimeProfile, RuntimeSession, RuntimeState } from '../facets/runtime.js'
+
+/**
+ * One record's profile evidence (facets/runtime.ts `ProfileEvidence`), applied as the engine's own reader applied the
+ * record when it ran in the core: the model and effort it names, the version, an effort shown until one is known, a
+ * switch it confirms, and a configuration read again when the model changed.
+ */
+export function applyProfileEvidence(context: { session: { cliVersion: string | null }; state: RuntimeState; control?: RuntimeControl;
+  refreshConfig(): void }, evidence: ProfileEvidence): void {
+  const { session, state, control } = context
+  if (evidence.cliVersion) { session.cliVersion = evidence.cliVersion; state.cliVersion = evidence.cliVersion }
+  if (evidence.model) {
+    const before = state.model
+    state.model = evidence.model
+    if (evidence.effortUnset) state.effort ??= evidence.effortUnset
+    state.observedAt = Date.now()
+    if (evidence.confirms && control?.target.model === evidence.model) control.modelConfirmed = true
+    if (evidence.refresh && state.model !== before) context.refreshConfig()
+  }
+  if (evidence.effort) {
+    state.effort = evidence.effort
+    state.observedAt = Date.now()
+    if (evidence.confirms && control?.target.effort === evidence.effort) control.effortConfirmed = true
+  }
+}
 
 export const blankRuntimeState = (): RuntimeState => ({ model: null, effort: null, mode: 'unknown', cliVersion: null, observedAt: null })
 

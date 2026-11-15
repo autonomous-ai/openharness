@@ -10,6 +10,7 @@
  */
 import type { PaneInspection } from '../facets/screen.js'
 import type { InlineRuntimeContext, InlineRuntimeReader } from '../facets/inlineRuntime.js'
+import type { ProfileEvidence } from '../facets/runtime.js'
 import { RUNTIME_EFFORTS } from '../kit/runtime.js'
 import { OPENCLAW_RULE, openclawScreenLines, readOpenclawScreen } from './contract.js'
 
@@ -60,7 +61,6 @@ function workspaceOf(header: Record<string, unknown>): string | null {
 
 class ProfileReader {
   readonly engine = 'openclaw' as const
-  private readonly workspaces = new Map<string, string>()
   private readonly tokenCounts = new Map<string, string>()
 
   pane(context: InlineRuntimeContext, text: string): void | false {
@@ -75,23 +75,19 @@ class ProfileReader {
     else this.tokenCounts.delete(context.session.sessionId)
   }
 
-  /** The session header is the window's first record; any other record leaves the workspace as it was. */
-  transcript(context: InlineRuntimeContext, record: Record<string, unknown>): void {
-    const workspace = workspaceOf(record)
-    if (workspace) this.workspaces.set(context.session.sessionId, workspace)
-    else if (record.type === 'session') this.workspaces.delete(context.session.sessionId)
-  }
-
-  /** The agent's workspace path, for the frame's `workspace`; null until its header is read. */
-  workspace(sessionId: string): string | null { return this.workspaces.get(sessionId) ?? null }
-
   /** `<used>/<window>` as the footer last drew it. The count lags a turn behind, so it is a display, not a meter. */
   tokens(sessionId: string): string | null { return this.tokenCounts.get(sessionId) ?? null }
 
   forget(sessionId: string): void {
-    this.workspaces.delete(sessionId)
     this.tokenCounts.delete(sessionId)
   }
 }
 
 export function createRuntimeProfileReader(): InlineRuntimeReader & ProfileReader { return new ProfileReader() }
+
+/** The session header is the window's first record, read in the other engines' worker (engines/others/streams.ts): the
+ *  workspace it names, or none; any other record leaves the workspace as it was. */
+export function transcriptEvidence(record: Record<string, unknown>): ProfileEvidence | null {
+  const workspace = workspaceOf(record)
+  return workspace ? { workspace } : record.type === 'session' ? { workspace: null } : null
+}

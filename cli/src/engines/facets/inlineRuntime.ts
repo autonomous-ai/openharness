@@ -12,15 +12,14 @@ export interface InlineRuntimeContext extends RuntimeContext {
   session: RegisteredSession
   refreshConfig(silent?: boolean): void
 }
+/** Their transcripts' records are read in the other engines' worker, which hands the core only what each says of the
+ *  profile (facets/runtime.ts `ProfileEvidence`): a reader here reads the pane and the configuration. */
 export interface InlineRuntimeReaderBase {
-  transcript?(context: InlineRuntimeContext, record: Record<string, unknown>): void
   /** False means this screen must not participate in observation/confirmation. */
   pane?(context: InlineRuntimeContext, text: string): void | false
   /** False means a warm-up or unavailable read, with no state contribution. */
   config?(context: InlineRuntimeContext): Promise<boolean>
   models?(context: InlineRuntimeContext): Promise<RuntimeModelOption[]>
-  /** The folder the engine's own tools run in, when it is not the pane's (OpenClaw's workspace): a label on the agent. */
-  workspace?(sessionId: string): string | null
   forget?(sessionId: string): void
 }
 export type InlineRuntimeReader = InlineRuntimeReaderBase & (

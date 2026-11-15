@@ -4,6 +4,8 @@ import { join } from 'path'
 import { afterEach, beforeAll, describe, expect, it } from 'vitest'
 import type { RegisteredSession } from './registry.js'
 import { loadEngine, OTHER_ENGINES } from '../engines/inProcess.js'
+import { transcriptEvidence as cursorEvidence } from '../engines/cursor/profileReader.js'
+import { transcriptEvidence as grokEvidence } from '../engines/grok/profileReader.js'
 import {
   codexEffortAllowed,
   encodeRuntimeProfile,
@@ -238,7 +240,7 @@ describe('RuntimeProfileManager', () => {
     const value = session('cursor')
     manager.hydrate(value, [])
 
-    manager.ingest(value, JSON.stringify({ model: 'gpt-5.6-sol' }))
+    manager.evidence(value, [cursorEvidence({ model: 'gpt-5.6-sol' })!])
 
     expect(parseRuntimeProfile(manager.selectedModel(value))).toMatchObject({
       engine: 'cursor',
@@ -268,9 +270,9 @@ describe('RuntimeProfileManager', () => {
     const value = session('grok')
     manager.hydrate(value, [])
 
-    manager.ingest(value, JSON.stringify({
+    manager.evidence(value, [grokEvidence({
       params: { update: { _meta: { modelId: 'grok-4.5' } } },
-    }))
+    })!])
     manager.ingestPane(value, 'Grok 4.5 (medium) · always-approve')
 
     expect(parseRuntimeProfile(manager.selectedModel(value))).toMatchObject({

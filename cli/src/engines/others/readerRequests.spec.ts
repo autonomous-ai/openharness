@@ -6,7 +6,8 @@ import type { Asker } from '../../core/api.js'
 import type { EngineTranscript } from '../facets/transcript.js'
 import { createHash } from 'node:crypto'
 import { READER_HISTORY, READER_IN_FLIGHT, READER_LAST_TURN, READER_PART, READER_PARTED_BYTES } from '../worker/protocol.js'
-import { runOtherEngines } from './otherEnginesProcess.js'
+import { otherEngineRequests, runOtherEngines } from './otherEnginesProcess.js'
+import { STREAM_OPEN, STREAMS_WAIT, STREAM_VERSION } from '../worker/otherStreamProtocol.js'
 import { OTHER_READ_STUCK_MS, OTHER_READS_IN_FLIGHT, otherReaderRequests, type OtherReaderDeps } from './readerRequests.js'
 
 vi.mock('../../services/process.js', async (real) => ({ ...await real<object>(), runServiceProcess: vi.fn(() => ({ stop: vi.fn() })) }))
@@ -139,12 +140,12 @@ describe('the other engines\' readers in their worker', () => {
 
   it('says a reader that throws, and answers it unavailable', async () => {
     const t = setup()
-    t.reader.historyPage.mockRejectedValueOnce(new Error('no SQLite reader'))
+    t.reader.historyPage.mockRejectedValueOnce(new Error('PRIVATE_TRANSCRIPT_TOKEN:/home/person/session'))
     expect(await t.read()).toEqual(failed('ENGINE_UNAVAILABLE'))
-    expect(t.log).toHaveBeenLastCalledWith('[engine pi] history unreadable · no SQLite reader')
-    t.reader.lastTurnText.mockRejectedValueOnce('locked')
+    expect(t.log).toHaveBeenLastCalledWith('[engine pi] HISTORY_READ_FAILED')
+    t.reader.lastTurnText.mockRejectedValueOnce('PRIVATE_TRANSCRIPT_TOKEN:/home/person/session')
     expect(await t.requests[READER_LAST_TURN]({ version: 1, session }, asker)).toEqual(failed('ENGINE_UNAVAILABLE'))
-    expect(t.log).toHaveBeenLastCalledWith('[engine pi] last turn unreadable · locked')
+    expect(t.log).toHaveBeenLastCalledWith('[engine pi] LAST_TURN_READ_FAILED')
     expect(await t.read()).toEqual({ version: 1, answer: page })
   })
 
@@ -182,6 +183,31 @@ describe('the other engines\' readers in their worker', () => {
     expect(READER_PARTED_BYTES).toBe(64 * 1024 * 1024)
   })
 
+  it('clears a waiting inline call and finishes stopping before restarting the tailer', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'other-inline-'))
+    const file = join(dir, 'pi.jsonl')
+    writeFileSync(file, '')
+    const closed = deferred<void>()
+    const watcher = { on: vi.fn(), start: vi.fn(), addSession: vi.fn(async () => {}), removeSession: vi.fn(async () => {}),
+      pollSession: vi.fn(async () => {}), stop: vi.fn(() => closed.promise) }
+    const service = otherEngineRequests(watcher as never)
+    const open = (token: string) => service.call(STREAM_OPEN, { version: STREAM_VERSION, token, live: false, abandon: false, held: false,
+      session: { agentId: 'a', sessionId: 's', engine: 'pi', transcriptPath: file, store: null } }, 1_000)
+    try {
+      expect(await open('first')).toHaveProperty('answer')
+      const waiting = service.call(STREAMS_WAIT, { version: STREAM_VERSION, acks: {} }, 30_000)
+      await Promise.resolve(); await Promise.resolve()
+      service.clear()
+      expect(await waiting).toMatchObject({ answer: { pages: [], lost: [] } })
+      const next = open('next')
+      await Promise.resolve(); await Promise.resolve()
+      expect(watcher.addSession).toHaveBeenCalledOnce()
+      closed.resolve()
+      expect(await next).toHaveProperty('answer')
+      expect(watcher.start).toHaveBeenCalledTimes(2)
+    } finally { closed.resolve(); service.clear(); rmSync(dir, { recursive: true, force: true }) }
+  })
+
   it('reads with the engines\' own code by default, and runs as its own authenticated service', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'other-readers-'))
     try {
@@ -202,7 +228,7 @@ describe('the other engines\' readers in their worker', () => {
     const requests = setup().requests
     const run = vi.fn(() => ({ stop: vi.fn() }))
     expect(runOtherEngines({ ...opts, requests, run }).stop).toBeTypeOf('function')
-    expect(run).toHaveBeenLastCalledWith({ name: 'engine-others', socketPath: opts.socketPath, machineId: opts.machineId, token: opts.token, requests })
+    expect(run).toHaveBeenLastCalledWith({ name: 'engine-others', socketPath: opts.socketPath, machineId: opts.machineId, token: opts.token, requests, onDisconnected: expect.any(Function) })
     expect(runOtherEngines(opts).stop).toBeTypeOf('function')
   })
 })

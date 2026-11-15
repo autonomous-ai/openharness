@@ -8,8 +8,166 @@ State (2026-11-15, the second agent): step 1 is split in two pull requests, as t
 
 - **Step 1a, done:** PR #4317 from branch `core-engines-2` (the two WIP commits of `core-engines-1`, finished).
   The worker `engine-others` reads the fourteen engines' history and last turns; the core routes, bounds and checks.
-- **Step 1b, not started in code:** the live part below (attach, normalizers and readers, live parsers, their Stop
-  rules, and the five profile `transcript()` readers). Start it from `main` once 1a has landed, on `core-engines-3`.
+- **Step 1b, implementation done; merge pending:** attach, normalizers and readers, live parsing, Stop integration,
+  and the five profile transcript readers now run through the optional worker on `codex/core-engines-continue`.
+  Final integrated-head receipts, bundled shared-connection acceptance and the final performance confirmation remain
+  publication gates. Step 2 (pane/config/catalog/model controls) and step 3 (purge/export) are still open.
+
+## Continuation, 2026-11-15: live-worker implementation done; merge pending
+
+Worktree `/tmp/harness-core-engines-continue`, branch `codex/core-engines-continue`. Root owns integration,
+publication and review. The original `core-engines-3` worktree is untouched. Starting head was `9e3db0a932`,
+which already carried the live extraction and integrated main at `aad8dcd535`.
+
+The continuation finishes initial-open/reconnect/operation ownership, UTF-8 file boundaries, restart recovery,
+worker admission and memory bounds, visible failure state, and shutdown. The fourteen live parsers, store readers,
+Cursor Task queue and five profile transcript readers run in `engine-others`; core keeps validated turn handles,
+Stop authority and delivery. Hermes/OpenClaw store discovery also runs in the worker. Runtime pane/config/catalog/
+model-control work remains step 2; purge/export remains step 3. This is step 1b, not completion of the whole package.
+
+### Design
+
+- Growth: no new disk data. Existing stream tokens and turn handles are bounded at 512. Pending opens are separately
+  admitted at 512, with four concurrent folds through the existing `AttachTracker` and `READER_IN_FLIGHT` bound.
+  Each fold reads at most the newest 64 MiB; one unfinished record beyond that bound is refused. Cursor requires its whole rewrite snapshot to fit that same limit: a larger initial file is refused, and a growing file retires its stream before allocating or reading the oversized snapshot. The existing deliveryAllowed callback admits the measured file size; no new core state or timer is added. Queued opens keep
+  snapshots, not transcript buffers. Timeout/cancellation does not release admission until the work is discarded.
+- Resident frames: each stream retains at most 32 MiB, and the worker retains at most 128 MiB across all outboxes
+  (`LIVE_CACHE_BYTES`). Acknowledgement, forget, resume hydration and clear release the accounting. Overflow retires
+  that stream, marks its history uncertain and schedules bounded recovery; the core retains Stop authority.
+  This is not a whole-process RSS limit: four folds can hold 256 MiB of raw input plus decoded/parser state, and the
+  existing reply-parts cache separately holds at most four replies, at most 64 MiB each and 128 MiB total. The inherited history reader admits at most 16 reads across engines, separately from the four new folds. The master retains the existing 512 MiB heap / 1024 MiB RSS worker limits; exceeding a worker limit does not stop the core. None of the new allocations multiplies by 512.
+- Concurrency: initial opens and reconnects capture `transcriptReadIdentity`, worker generation and token. A newer
+  open/forget/stop/rebind wins; stale candidates are forgotten. Worker session opens serialize, queued cancellation
+  is retained, and late watcher registration checks ownership again. Cursor Task callbacks require the same normalizer.
+  A Stop fallback applies only to the turn identity it began with; stale operation answers cannot replace newer frames.
+- Read cost: fold and tail share the exact complete-line UTF-8 byte boundary, including Cursor/CRLF/incomplete tails.
+  The worker supplies the existing bounded file-stamp primitive to the generic watcher; core does not import its
+  implementation. Reconnect offsets carry device/inode/prefix/tail evidence and are checked before registration.
+  Append-only replay is contiguous and duplicate serials are ignored. A changed generation never receives the old offset.
+- Rewrite boundary: bounded stamps do not prove arbitrary in-place rewrites equivalent. On detected replacement or
+  incompatible rewrite, the core names the history uncertainty and rebuilds from the current file. Missed live deltas
+  across arbitrary rewrites are **not** claimed to be recoverable exactly once. Existing live Cursor prefix reconciliation
+  is preserved. Malformed/oversized worker replies are bounded and held, never accepted as valid turn evidence.
+- Scale: collection, decoded reply (64 MiB), recursion, event/frame and input bounds are checked before core use.
+  Open/wait retries use at most five exponential-backoff attempts. A fatal Opencode/Kilo/Hermes/Devin reader stops
+  immediately and rejects later callbacks and operations. Frames accepted before failure retain their existing outbox
+  budget and drain through normal pages/acks; only the final ack reports the lost token. Empty failures report it at
+  once. Forget/clear releases retained references and bytes exactly once; an old final ack cannot remove a replacement.
+  A reconnect resets retry admission; shutdown cancels
+  backoff, pending opens, Tasks, store readers, cleanup timers and the owned watcher. Pressure first shows as named
+  reader-unavailable/history-uncertain state and bounded admission failures, rather than unlimited allocations.
+- Compatibility: protocol 2 adds live work; protocol 1 remains history-only with live parsing inline. Explicit inline
+  mode calls the same worker implementation and awaits cleanup. No public request or stored schema changes; no disk
+  migration. Rollback is reverting this extraction. The 1,046-case golden fixture remains unchanged.
+- Audience/identity: only authenticated local core calls may open/read/operate streams. Client routes reject these
+  private methods. Files still belong to the same registered account/session; no other login is used. Store lookup
+  returning unavailable is not treated as absence, and a late Hermes lookup cannot update a rebound row.
+- Failure: outage, lost buffered history and changed transcript generation are visible named states using the existing
+  agent state field. Terminal and Stop remain usable. New live-boundary and existing worker history failures log fixed
+  codes only; sentinel tests ensure parser/SQLite/path/token text cannot escape through these catches.
+- Platforms: TypeScript behavior affects macOS, Linux and Windows. Local runtime/process acceptance is macOS using
+  pinned Node 24.22.2 and throwaway homes/private tmux fixtures. No new process-spawn implementation was added here.
+  Linux/Windows native runtime acceptance remains for coordinated CI/platform validation; do not claim it ran locally.
+
+### Validation
+
+Logs below are local `/tmp/core-engines-*.log`. Genuine clean-head receipts exist for the named checkpoints below;
+only the final integrated source's receipt and acceptance may authorize publication.
+
+- Red/green regressions cover initial/reconnect lifetime, pending-open interruption, operation/Stop ownership,
+  exact UTF-8 fold/tail gaps, queued Cursor Tasks, replacement between fold and registration, late tail cancellation,
+  store resume, serial/shape/byte limits, visible outage, aggregate outbox overflow and four-fold admission.
+  Named error sentinel tests also fail against the previous live/history logging and pass after sanitization.
+- Full core exploration: 4,391 tests passed / 248 files, 223.08 s. Its coverage gate correctly failed on two inherited
+  profile forwarding methods; added caller-visible evidence assertions. Final focused run: 476 tests / 18 files,
+  16.83 s, coordinator/attach/runtimeProfiles 100% statements, branches, functions and lines.
+- Harnessd: 369 passed / one skipped, 38.60 s, 100% in all dimensions. Architecture passed after replacing the Watcher's
+  worker-module import with injected callbacks; lean entry passed 19 tests. Final typecheck passed. Golden fixture
+  checksums are unchanged; the same 1,046 cases pass through the worker request transport.
+- Bundled isolated acceptance: `otherEngines`, `eagerRepair`, `eagerIdentity`, `lean`, `usageProcess`: 17 passed / one
+  opt-in performance skip, 270.67 s. Covers missing/frozen readers, killed/frozen worker, named outage/recovery,
+  exactly one missed append turn, unaffected core/pane, private routes, >4 MiB history and explicit inline mode.
+- Native launch cancellation/Stop/resume: three `eagerHooks` cases passed. New protocol-1/master capability acceptance
+  passed, 5.55 s: history worker restarts while live inline turns continue. Its initial no-worker assertion was corrected:
+  a live recap legitimately starts the history worker. Runtime source did not change for that test correction.
+- Final history privacy regression: eight reader-request tests passed, 0.975 s; final TypeScript check passed.
+- Four stopped-store-reader cases failed before the visibility fix; 48 worker/golden tests pass after it (5.46 s).
+  The saved-reader startup case failed against the frozen pre-fix bundle, then passed after the core requests the
+  existing worker at bind for a saved bound session under a capable master. Empty/inline/protocol-1 checks pass too.
+- First quiet matched workload, base `aad8dcd535` versus the candidate: attach 1310–1312 → 1468–1470 ms;
+  idle core 0.667 → 0.567%; history p95 1.4 → 1.4 ms; 400-read CPU 0.11 → 0.12 s; 400 live turns
+  143.8 → 186.1 ms and core CPU 0.13 → 0.16 s. This is **not a passing performance gate**. The startup correction
+  overlaps worker boot with terminal reconciliation. These first small-window figures are retained as the failed
+  investigation baseline, not replaced with a claim that they passed.
+  Diagnostic profiles that omit the settling window are not accepted measurements: the baseline's history read
+  correctly returned busy while startup recaps still occupied its slots.
+- The added unaffected-Claude assertion found same-connection request ordering: a pending other-engine history read
+  delayed that connection's next message. Root's independently reviewed #4337 fixes that boundary and is integrated.
+  A second connection's engine turn remains the separate process-wide isolation check; it does not excuse the
+  same-connection finding. Both variants await final bundled acceptance on this package's final integrated source.
+- The Cursor cap regression reproduced old-prefix replay after a capped fold; growing beyond the cap also left an
+  unbounded reader active. Both fail before the fix. Worker/watcher/golden: 96 passed (5.70 s); the two cap tests also
+  verify that an oversized snapshot causes zero content-read calls (1.13 s). Typecheck passed.
+- Independent-client isolation passed (13.50 s): a Claude turn ends while the other-worker PID is still frozen,
+  then the Pi append arrives once after recovery. This proves process-wide isolation separately from the pending
+  shared-client fix. Final runtime bundle: `/tmp/core-engines-confirm-bundle`.
+- Matched settled profiles rejected the extra-status/recap-coalescing hypothesis: both delivered exactly 4,000 each
+  of start/text/end and about 4.462 MB. Core work fell mainly in profile/session processing and filesystem/cloning work;
+  the generic reply bound was a small part. Profiling figures are diagnostic, not the final performance receipt.
+- Final **unprofiled**, quiet, same-workload confirmation uses 4,000 live turns to resolve the short-window CPU
+  quantization (the opt-in fixture now reports its explicit turn count). Base `aad8dcd535` → final candidate:
+
+  | Measure | Before | Final |
+  |---|---:|---:|
+  | Four saved sessions attached, from core bind | 1311–1313 ms | 1290–1304 ms |
+  | Idle core, 30-second window | 0.667% | 0.567% |
+  | 400 history reads, p95 | 1.4 ms | 1.3 ms |
+  | Core CPU for those reads | 0.10 s | 0.10 s |
+  | 4,000 live turns delivered | 2293.1 ms | 1124.1 ms |
+  | Core CPU for those live turns | 2.47 s | 1.17 s |
+
+  Both delivered exactly 4,000 start/text/end frames and about 4.462 MB. Runs took 45.17/43.95 s; reports are
+  `/tmp/core-engines-confirm-{before,after}.json` and logs of the same names. Before and final use the same pinned
+  Node, fixture source, fake agents and private daemon/tmux workload. No profiler was active in either run.
+- The first official run at `1388d989133aeb89865d57f8ac05cae4e02b6ec6` found a real retirement bug: a fatal reader
+  discarded accepted frames before its queued wait flushed. Core had 4,480 pass / one fail (227.65 s); the other three
+  gates passed. The failing pre-fatal event assertion was preserved. Seven new retirement tests failed before the fix;
+  267 worker/core/golden tests passed afterward (11.04 s), with TypeScript green. `7b1e240513ac689558cc6055423518f12c11c16b`
+  retains accepted pages until acknowledged, denies retired-token operations and protects cleanup/replacement.
+- The runtime-profile golden still called the removed raw core parser. Four named baseline cases failed. Its fixture
+  now obtains fold/live ProfileEvidence from the production worker and crosses it as JSON; all 482 original hashes
+  remain unchanged, and all 16 tests passed (6.26 s). Actual queued config-read promises replace its fixed 30 ms sleep.
+  A follow-up audit of every RuntimeProfileState/Manager caller found five stale assertions in three other fixtures;
+  629 other tests passed. Those callers now use the production Cursor/Grok/Pi/CommandCode evidence producers, with all
+  assertions retained. The corrected callers and full runtime golden passed 109 tests (26.52 s); TypeScript passed.
+- Clean checkpoints `7b1e240513` and `ec80da592f70b60c9841d09dcdbf8c8c779220a6` passed the actual local-check runner:
+  **core 4,481, harnessd 369, portability 1,066, resume 482**, all required coverage at 100%. The ec80 durations were
+  190.29 / 26.19 / 175.95 / 105.83 s. Existing skips: harnessd one; portability ten tests / two files. These receipts
+  precede the final caller-fixture/notes commit and current-main integration; the final exact-head receipt is still
+  required. Architecture/environment/lean entry passed 89 tests on 7b1e (156.07 s).
+- The successful 4,000-turn performance pair above covers the implementation before the retirement ack correction.
+  A final quiet, unprofiled pair on the same workload is reserved after bundled acceptance; the earlier pair remains
+  historical evidence, not a claim about unmeasured final source. Reports, exact receipt and final handoff are local
+  `/tmp/core-engines-*` artifacts; root owns publication. No source/docs commit should follow the final receipt.
+
+### Source boundary and remaining work
+
+The AST walk uses the architecture test's value-import rules: default excludes the `engines/inProcess.ts` dynamic
+door and inline services; warmed follows every engine door but still excludes inline services. Each default file set
+matches its checked-in inventory. These are source counts, not process memory or proof that every parser is unloaded.
+
+| Exact source | Default files / lines | Warmed files / lines |
+|---|---:|---:|
+| Performance baseline `aad8dcd5354246aa56898f6e73524f519cdaf0c7` | 539 / 92,691 | 645 / 108,723 |
+| Integrated history main `1c37a340a83b5d9803f21e5ee5b1b15d8694584f` | 539 / 92,861 | 645 / 108,894 |
+| Step 1b runtime at `7b1e240513ac689558cc6055423518f12c11c16b` | 539 / 93,092 | 645 / 109,104 |
+
+Against that integrated base, step 1b adds 231 default / 210 warmed lines, with file counts unchanged. Its bounded
+coordinator replaces direct live ownership, but the pane/runtime door still loads 106 additional files / 16,012 lines.
+Step 2 must remove that implementation dependency; step 3 must move purge/export. This is implementation completion
+of step 1b only, with merge pending. The whole package and daemon-core plan are not complete. Native runtime/process
+acceptance here is macOS only; native Windows/Linux acceptance is not claimed. Reproducer/results:
+`/tmp/core-engines-closure.cjs`, `/tmp/core-engines-closure-{before,final-base,final}.json`.
 
 ## Step 1a: what landed
 

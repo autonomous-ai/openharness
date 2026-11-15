@@ -629,59 +629,59 @@ const SEED_LINE = (version: string) => JSON.stringify({ version, protocol: PTY_P
 
 // The fake binary is a script with a shebang, which Windows cannot run.
 describe.skipIf(process.platform === 'win32')('targetHost', () => {
-  it('targetHost reads current-pty, and is installed', () => {
+  it('targetHost reads current-pty, and is installed', async () => {
     const runtime = tempDir('rt-')
     // The binary says another version than its folder: the installed CLI's pointer names the version.
     fakeBinary('serve', { file: path.join(runtime, 'pty', '0.4.21', exe), versionLine: SEED_LINE('0.4.21') })
     writeFileSync(path.join(runtime, 'pty', 'current-pty'), '0.4.21\n')
-    expect(targetHost({ env: {}, runtimeDir: runtime, besideDir: '/nowhere' })).toEqual({
+    expect((await targetHost({ env: {}, runtimeDir: runtime, besideDir: '/nowhere' }))).toEqual({
       protocol: PTY_PROTOCOL, version: '0.4.21', instance: `p${PTY_PROTOCOL}-0.4.21`, features: ['seed'], source: 'installed',
     })
     // HARNESS_PTY_BIN naming that very binary is still the installed one.
-    expect(targetHost({ env: { HARNESS_PTY_BIN: path.join(runtime, 'pty', '0.4.21', exe) }, runtimeDir: runtime, besideDir: '/nowhere' })?.source).toBe('installed')
+    expect((await targetHost({ env: { HARNESS_PTY_BIN: path.join(runtime, 'pty', '0.4.21', exe) }, runtimeDir: runtime, besideDir: '/nowhere' }))?.source).toBe('installed')
   })
 
-  it('targetHost asks a dev binary its version, and is binary', () => {
+  it('targetHost asks a dev binary its version, and is binary', async () => {
     const runtime = tempDir('rt-')
     const binary = fakeBinary('serve', { versionLine: SEED_LINE('9.9.9') })
-    expect(targetHost({ env: { HARNESS_PTY_BIN: binary }, runtimeDir: runtime, besideDir: '/nowhere' })).toEqual({
+    expect((await targetHost({ env: { HARNESS_PTY_BIN: binary }, runtimeDir: runtime, besideDir: '/nowhere' }))).toEqual({
       protocol: PTY_PROTOCOL, version: '9.9.9', instance: `p${PTY_PROTOCOL}-9.9.9`, features: ['seed'], source: 'binary',
     })
     // No current-pty: the binary beside the bundle, asked.
     const besideDir = tempDir('dist-')
     fakeBinary('serve', { file: path.join(besideDir, 'pty', exe), versionLine: SEED_LINE('0.4.21-dev.win1') })
-    expect(targetHost({ env: {}, runtimeDir: runtime, besideDir })).toMatchObject({ version: '0.4.21-dev.win1', instance: `p${PTY_PROTOCOL}-0.4.21-dev.win1`, source: 'binary' })
+    expect((await targetHost({ env: {}, runtimeDir: runtime, besideDir }))).toMatchObject({ version: '0.4.21-dev.win1', instance: `p${PTY_PROTOCOL}-0.4.21-dev.win1`, source: 'binary' })
     // A host from before versioned instances lists no features, and is still `p<protocol>`.
     const old = fakeBinary('serve', { versionLine: JSON.stringify({ version: '0.4.19', protocol: PTY_PROTOCOL }) })
-    expect(targetHost({ env: { HARNESS_PTY_BIN: old }, runtimeDir: runtime, besideDir: '/nowhere' })).toEqual({
+    expect((await targetHost({ env: { HARNESS_PTY_BIN: old }, runtimeDir: runtime, besideDir: '/nowhere' }))).toEqual({
       protocol: PTY_PROTOCOL, version: '0.4.19', instance: LEGACY, features: [], source: 'binary',
     })
   })
 
-  it('targetHost is null when neither is known', () => {
+  it('targetHost is null when neither is known', async () => {
     const runtime = tempDir('rt-')
-    expect(targetHost({ env: {}, runtimeDir: runtime, besideDir: '/nowhere' })).toBeNull()
+    expect((await targetHost({ env: {}, runtimeDir: runtime, besideDir: '/nowhere' }))).toBeNull()
     for (const line of ['', 'harness-pty 0.4.21', '{"version":"","protocol":2}', '{"version":"1","protocol":"2"}', '{"version":"1","protocol":2,"features":"seed"}']) {
       const binary = fakeBinary('serve', { versionLine: line })
-      expect(targetHost({ env: { HARNESS_PTY_BIN: binary }, runtimeDir: runtime, besideDir: '/nowhere' }), line).toBeNull()
+      expect((await targetHost({ env: { HARNESS_PTY_BIN: binary }, runtimeDir: runtime, besideDir: '/nowhere' })), line).toBeNull()
     }
     // A binary that is not there.
-    expect(targetHost({ env: { HARNESS_PTY_BIN: path.join(runtime, 'missing') }, runtimeDir: runtime, besideDir: '/nowhere' })).toBeNull()
+    expect((await targetHost({ env: { HARNESS_PTY_BIN: path.join(runtime, 'missing') }, runtimeDir: runtime, besideDir: '/nowhere' }))).toBeNull()
   })
 
-  it('targetHost is unknown, said once, for a host of a protocol this daemon does not speak: the newest supported host is used', () => {
+  it('targetHost is unknown, said once, for a host of a protocol this daemon does not speak: the newest supported host is used', async () => {
     const runtime = tempDir('rt-')
     // A paired host left in current-pty without its CLI build: above this daemon's protocol, or below every supported one.
     fakeBinary('serve', { file: path.join(runtime, 'pty', '0.5.0', exe), versionLine: JSON.stringify({ version: '0.5.0', protocol: PTY_PROTOCOL + 1, features: ['seed'] }) })
     writeFileSync(path.join(runtime, 'pty', 'current-pty'), '0.5.0\n')
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     try {
-      expect(targetHost({ env: {}, runtimeDir: runtime, besideDir: '/nowhere' })).toBeNull()
-      expect(targetHost({ env: {}, runtimeDir: runtime, besideDir: '/nowhere' })).toBeNull()
+      expect((await targetHost({ env: {}, runtimeDir: runtime, besideDir: '/nowhere' }))).toBeNull()
+      expect((await targetHost({ env: {}, runtimeDir: runtime, besideDir: '/nowhere' }))).toBeNull()
       const said = error.mock.calls.map((call) => String(call[0])).filter((line) => line.includes('0.5.0'))
       expect(said).toEqual([`[terminal] ptyhost: the host 0.5.0 speaks protocol ${PTY_PROTOCOL + 1}, which this daemon does not (it speaks ${SUPPORTED_PTY_PROTOCOLS.join(' and ')}): target unknown, the newest running host of protocol ${PTY_PROTOCOL} is used`])
       const old = fakeBinary('serve', { versionLine: JSON.stringify({ version: '0.0.9', protocol: 0, features: [] }) })
-      expect(targetHost({ env: { HARNESS_PTY_BIN: old }, runtimeDir: runtime, besideDir: '/nowhere' })).toBeNull()
+      expect((await targetHost({ env: { HARNESS_PTY_BIN: old }, runtimeDir: runtime, besideDir: '/nowhere' }))).toBeNull()
     } finally { error.mockRestore() }
   })
 
@@ -831,7 +831,7 @@ describe('reachable', () => {
 describe.skipIf(!process.env.HARNESS_PTY_BIN)('ensurePtyHost with the real harness-pty', () => {
   it('starts the host in a temporary home, lists no panes, and reports a pane\'s exit after its create', async () => {
     const dir = tempDir('h-')
-    const target = targetHost({ runtimeDir: tempDir('rt-') })
+    const target = (await targetHost({ runtimeDir: tempDir('rt-') }))
     if (!target) throw new Error('the real harness-pty did not say its version')
     cleanup.push(() => {
       const pid = readInstanceDiscovery(dir, target.instance)?.pid

@@ -34,6 +34,16 @@ export function resolveBinaryOnPath(command: string, env: NodeJS.ProcessEnv = pr
 const WINDOWS_PROGRAM = /\.(?:exe|cmd|bat|com)$/i
 const WINDOWS_LAUNCH_EXTENSIONS = ['.exe', '.cmd', '.bat', '.com']
 
+/** The shared Windows extension/PATH order, without filesystem work. */
+export function windowsLaunchCandidates(command: string, environment: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): string[] {
+  if (platform !== 'win32' || !command || WINDOWS_PROGRAM.test(command)) return []
+  const stem = command.replace(/\.ps1$/i, '')
+  const candidates = stem.includes('/') || stem.includes('\\')
+    ? [stem]
+    : (environment.PATH ?? environment.Path ?? '').split(';').filter(Boolean).map((dir) => join(dir, stem))
+  return candidates.flatMap(candidate => WINDOWS_LAUNCH_EXTENSIONS.map(extension => candidate + extension))
+}
+
 /**
  * The program a Windows launch names for [command]: its `.exe`, or else its `.cmd`/`.bat` shim, never its `.ps1`.
  * npm installs a global CLI as three shims (`codex`, a sh script; `codex.cmd`; `codex.ps1`), and PowerShell picks the
@@ -44,15 +54,8 @@ const WINDOWS_LAUNCH_EXTENSIONS = ['.exe', '.cmd', '.bat', '.com']
  * and when there is none, [command] is returned as it is: the launch then fails as it did.
  */
 export function windowsLaunchCommand(command: string, environment: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): string {
-  if (platform !== 'win32' || !command || WINDOWS_PROGRAM.test(command)) return command
-  const stem = command.replace(/\.ps1$/i, '')
-  const candidates = stem.includes('/') || stem.includes('\\')
-    ? [stem]
-    : (environment.PATH ?? environment.Path ?? '').split(';').filter(Boolean).map((dir) => join(dir, stem))
-  for (const candidate of candidates) {
-    for (const extension of WINDOWS_LAUNCH_EXTENSIONS) {
-      try { accessSync(candidate + extension, constants.F_OK); return candidate + extension } catch { /* next */ }
-    }
+  for (const candidate of windowsLaunchCandidates(command, environment, platform)) {
+    try { accessSync(candidate, constants.F_OK); return candidate } catch { /* next */ }
   }
   return command
 }

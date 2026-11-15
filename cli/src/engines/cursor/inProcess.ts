@@ -11,4 +11,4 @@ export { CursorTranscriptDiscovery, findCursorTranscript } from './discovery.js'
 export { loadCursorPendingTasks, removeCursorPendingTasks } from './pendingTasks.js'
 export { cursorProvider } from '../../lib/sessionSearch/externals/cursor.js'
 
-export { createRuntimeProfileReader } from './profileReader.js'
+export { createRuntimeProfileReader, transcriptEvidence } from './profileReader.js'
