@@ -1,8 +1,9 @@
 /**
  * The daemon never reads another process's environment (cli/AGENTS.md, Protect the core, rule 4). An API token, a
  * pairing code and every other secret a person exports is in one, and no system lets a reader take one variable of
- * it: `/proc/<pid>/environ`, `ps e` and `KERN_PROCARGS2` hand over all of it. So this reads every file of the daemon
- * and its hook, as code, so that a comment naming those is no finding.
+ * it: `/proc/<pid>/environ`, `ps e` and `KERN_PROCARGS2` hand over all of it. Nor the environment of the person's tmux
+ * server: `tmux show-environment` lists it whole, and the core unsets names in it instead (lib/tmuxBackend.ts). So this
+ * reads every file of the daemon and its hook, as code, so that a comment naming those is no finding.
  *
  * One reader is left, outside what this reads: the macOS helper `native/darwin-process-images.c` hashes another
  * process's `KERN_PROCARGS2`, environment included (lib/nativeProcessControl.ts runs it). It is a listed follow-up
@@ -36,6 +37,11 @@ const words = (node: ts.Expression): ts.Expression[] => {
 /** A `ps` option that takes the next word as its value: one ending in a letter that takes one (`-o`, `-wwp`), or a long one. */
 const takesValue = (word: string): boolean => /^-[A-Za-z]*[oOpPtuUgGCqsNM]$/.test(word) || /^--[^=]+$/.test(word)
 
+/** tmux's command that lists a server's or a session's environment, as tmux takes it: by name, by its alias, or by any
+ *  prefix only it has (`show-e`; `show-` could be six commands). */
+const isShowEnvironment = (word: string): boolean =>
+  word === 'showenv' || (word.length >= 'show-e'.length && 'show-environment'.startsWith(word))
+
 /** Each read of another process's environment in [code], one line a finding. Read as code: a comment names nothing. */
 function environmentReads(code: string, file = 'file.ts'): string[] {
   const kind = /\.[cm]?js$/.test(file) ? ts.ScriptKind.JS : /\.tsx$/.test(file) ? ts.ScriptKind.TSX : ts.ScriptKind.TS
@@ -47,7 +53,9 @@ function environmentReads(code: string, file = 'file.ts'): string[] {
   const visit = (node: ts.Node): void => {
     if ((ts.isStringLiteralLike(node) || ts.isTemplateHead(node) || ts.isTemplateMiddle(node) || ts.isTemplateTail(node))
       // Anywhere in the text, not only as a whole segment: a plugin's source, a shell line and a Python f-string are text.
-      && /(?:^|[/\\])environ(?![\w$])/.test(node.text)) report(node, JSON.stringify(node.text))
+      && (/(?:^|[/\\])environ(?![\w$])/.test(node.text) || node.text.split(/[\s;|&()'"`]+/).some(isShowEnvironment))) {
+      report(node, JSON.stringify(node.text))
+    }
     if ((ts.isIdentifier(node) || ts.isStringLiteralLike(node)) && /KERN_PROCARGS2|procargs/i.test(node.text)) report(node, node.text)
     if (ts.isCallExpression(node)) {
       node.arguments.forEach((argument, index) => {
@@ -130,5 +138,6 @@ it('no file of the daemon or its hook reads another process\'s environment', () 
   const found = files.flatMap((file) => environmentReads(readFileSync(join(CLI, file), 'utf8'), file).map((finding) => `${file}: ${finding}`))
   expect(found, 'The daemon never reads another process\'s environment (cli/AGENTS.md, Protect the core): an API token, a '
     + 'pairing code and every other secret is in one, and no system can read a single variable of it. A hook reads its own and '
-    + 'says what it derives (hook/notify.mjs HOST_HINTS, ownGateway); a launch is on the registry\'s row.').toEqual([])
+    + 'says what it derives (hook/notify.mjs HOST_HINTS, ownGateway); a launch is on the registry\'s row; a tmux server\'s '
+    + 'names are unset, never listed (lib/tmuxBackend.ts serverVariablesToUnset).').toEqual([])
 })
