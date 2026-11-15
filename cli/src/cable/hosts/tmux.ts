@@ -5,7 +5,7 @@
  * moves a client on a session Harness made: nothing is typed, made or closed (Q1). tmux is the daemon's: the name on its
  * PATH, with no `-L` or `-S`. Each value came from a hook, so it is checked against its form, and tmux runs with no shell.
  */
-import { HARNESS_OWNER_OPTION, isHarnessSession } from '../../lib/harnessSessionLabel.js'
+import { HARNESS_OWNER_OPTION, isHarnessSession, paneOwnerFormat } from '../../lib/harnessSessionLabel.js'
 import type { HostAdapter, Pane, Place } from './adapter.js'
 import { RUN_TIMEOUT_MS, type OrcaDeps } from './orca.js'
 import { parentChain, type ProcessName } from './scannedApp.js'
@@ -14,6 +14,13 @@ const TMUX_PANE_ID = /^%[0-9]{1,9}$/
 const PID = /^[1-9][0-9]{0,9}$/
 /** This adapter's pane: tmux's pane id and the agent's process, `%3:100`, as the hook's event named them. */
 const PANE_AND_PID = /^(%[0-9]{1,9}):([1-9][0-9]{0,9})$/
+/** The pane, in one call: its process, its session, and the tag of the daemon that made it, as the hook reads them
+ *  (`describePane`). The tag is the pane's option and, read on any tmux so no `tmux -V` is asked, the one its start
+ *  command carries before tmux 3.0 (a newer tmux never puts it there). Before 3.0 the option is the window's: it counts
+ *  wherever it is read, as not switching is the mistake that costs nothing. */
+const TMUX_PANE_FACTS = `#{pane_pid}|#{session_name}|#{${HARNESS_OWNER_OPTION}}${paneOwnerFormat(false)}`
+/** One line of TMUX_PANE_FACTS: the tag is last, cut at the last bar, as the hook cuts it; the session may hold a bar. */
+const TMUX_PANE_FACT = /^([1-9][0-9]{0,9})\|(.*)\|([^|]*)$/
 /** Each client: when it was used last, its name, the tag of the pane it shows, its session. The daemon's own names for
  *  the tag and the session prefix, which the hook mirrors. The session's name is last: it may hold a bar. */
 const TMUX_CLIENTS = `#{client_activity}|#{client_name}|#{${HARNESS_OWNER_OPTION}}|#{session_name}`
@@ -56,6 +63,12 @@ export function createTmuxAdapter(deps: TmuxDeps): HostAdapter {
     return last?.name
   }
 
+  /** A pane the tap may not switch to: another process's, or one Harness made. */
+  function notItsPane(): 'refused' {
+    deps.log('[device] open · tmux · not its pane')
+    return 'refused'
+  }
+
   return {
     id: 'tmux',
     tap: 'before',
@@ -66,20 +79,22 @@ export function createTmuxAdapter(deps: TmuxDeps): HostAdapter {
     },
     canFocus: () => true,
     /** The person's client is switched to the pane only once tmux names the pane's process and it is the agent's or one
-     *  of its parents: a second tmux server of theirs (`-L`) can have a pane of the same id. */
+     *  of its parents: a second tmux server of theirs (`-L`) can have a pane of the same id. And only while the pane is
+     *  still the person's: the hook checked that at its last event, and a pane can move into a session Harness made
+     *  since (Q1). */
     async focus(pane) {
       const ids = PANE_AND_PID.exec(pane.id)
       if (!ids) return false
       const [, id, agentPid] = ids
-      const said = await deps.run('tmux', ['display-message', '-p', '-t', id, '#{pane_pid}'], RUN_TIMEOUT_MS)
-      const panePid = said.stdout.trim()
-      if (said.code !== 0 || !PID.test(panePid)) return false
+      const said = await deps.run('tmux', ['display-message', '-p', '-t', id, TMUX_PANE_FACTS], RUN_TIMEOUT_MS)
+      const facts = TMUX_PANE_FACT.exec(said.stdout.trim())
+      if (said.code !== 0 || !facts) return false
+      const [, panePid, session, owner] = facts
+      // The rule the hook and the client filter hold: a daemon's tag, or a session Harness named.
+      if (owner || isHarnessSession(session)) return notItsPane()
       const chain = await chainOf(Number(agentPid)).catch(() => undefined)
       if (!chain) return false
-      if (!chain.has(Number(panePid))) {
-        deps.log('[device] open · tmux · not its pane')
-        return 'refused'
-      }
+      if (!chain.has(Number(panePid))) return notItsPane()
       const client = await personsClient()
       return !!client && (await deps.run('tmux', ['switch-client', '-c', client, '-t', id], RUN_TIMEOUT_MS)).code === 0
     },
