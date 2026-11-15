@@ -73,8 +73,9 @@ The core stays small and secure, in the code and at run time: read
 - `api.ts`: the contract with services, their ports, fallbacks and requests. `serviceHost.ts`: services
   in this process. `serviceLinks.ts`: services in their own processes. `serviceRoutes.ts`: a route of the local
   door a service answers (`SERVICE_HTTP_ROUTES`), handed on as it came once the door let it in, with the route's own
-  methods, its writes' local header, its wait, the headers its answers carry, and its own answer while that service is
-  down. `usageOutcomes.ts`: what the usage report counts of a request, told the gateway raw; the gateway names it. `viewersLink.ts`: what the core
+  methods, its writes' local header, whether only the daemon's own socket may ask it (`door`), its wait, the headers its
+  answers carry, and its own answer while that service is down; and a window's frame a service answers
+  (`SERVICE_WS_FRAMES`: ⌘K's), its answer sent back as the frame its route names. `usageOutcomes.ts`: what the usage report counts of a request, told the gateway raw; the gateway names it. `viewersLink.ts`: what the core
   keeps of the viewers when they run in theirs. `viewerStreams.ts`: a client's viewer stream and rendered
   frames, handed to the viewers, refused at once while they are down, and held while they first start. `workspacesLink.ts`: what the core tells workspaces in
   theirs. `messagesLink.ts`: Agent Messages out of this process (the edge host): which of its deliveries may be

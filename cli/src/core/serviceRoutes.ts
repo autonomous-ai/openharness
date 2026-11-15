@@ -58,12 +58,18 @@ export function createServiceRoutes(deps: ServiceRoutesDeps) {
   const clearTimer = deps.clearTimer ?? ((timer) => clearTimeout(timer as ReturnType<typeof setTimeout>))
 
   /** The service's answer, or null when none came in the route's time. A timer of its own here would run from the
-   *  request's arrival, and cut short a request that first waits for its service's process to start. */
+   *  request's arrival, and cut short a request that first waits for its service's process to start. Never rejects: a
+   *  window holds a spinner open on its frame's answer, and silence is the one reply it cannot recover from. */
   const ask = (type: string, waitMs: number, payload: Record<string, unknown>, asker: Asker): Promise<Record<string, unknown> | null> => new Promise((resolve) => {
-    if (deps.linked.route(type, payload, asker, resolve, waitMs)) return
-    const timer = setTimer(() => resolve(null), waitMs)
-    const reply = (result: Record<string, unknown>): void => { clearTimer(timer); resolve(result) }
-    if (!deps.hosted.route(type, payload, asker, reply)) reply({ error: 'SERVICE_UNAVAILABLE' })
+    try {
+      if (deps.linked.route(type, payload, asker, resolve, waitMs)) return
+      const timer = setTimer(() => resolve(null), waitMs)
+      const reply = (result: Record<string, unknown>): void => { clearTimer(timer); resolve(result) }
+      if (!deps.hosted.route(type, payload, asker, reply)) reply({ error: 'SERVICE_UNAVAILABLE' })
+    } catch (error) {
+      log(`[services] ${type} could not be asked: ${error instanceof Error ? error.message : String(error)}`)
+      resolve(null)
+    }
   })
 
   /** [answer] with the headers its route declares: those its service may set, as it gave them, then the route's own. */

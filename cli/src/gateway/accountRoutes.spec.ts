@@ -20,10 +20,14 @@ describe('the account\'s routes, answered by the gateway', () => {
     }
   })
 
-  it('mints Add Phone\'s code with an empty body, whatever the window sent, and not its query', async () => {
-    const routes = accountRoutes(echo())
-    expect(await routes('POST', '/api/auth/handoff?x=1', 'ignored')).toEqual({ status: 200, body: { method: 'POST', path: '/api/auth/handoff', body: {} } })
-    expect(await routes('GET', '/api/auth/handoff')).toEqual({ status: 404, body: { error: 'not found' } })
+  it('mints Add Phone\'s code with an empty body, whatever the window sent, and not its query, only for the door over the daemon\'s own socket', async () => {
+    const backend = echo()
+    const routes = accountRoutes(backend)
+    expect(await routes('POST', '/api/auth/handoff?x=1', 'ignored', true)).toEqual({ status: 200, body: { method: 'POST', path: '/api/auth/handoff', body: {} } })
+    // A client of the local WebSocket, or the door over its port: never the code, and the backend never asked.
+    for (const socket of [false, undefined]) expect(await routes('POST', '/api/auth/handoff', '{}', socket)).toEqual({ status: 403, body: { error: 'FORBIDDEN' } })
+    expect(backend).toHaveBeenCalledTimes(1)
+    expect(await routes('GET', '/api/auth/handoff', undefined, true)).toEqual({ status: 404, body: { error: 'not found' } })
   })
 
   it('forwards the desk\'s ops, a tab\'s switch and the account\'s name with their bodies, and says a body that is no JSON in their words', async () => {
@@ -161,7 +165,7 @@ describe('STORE_PATH_RE', () => {
 
 describe('the gateway\'s one request for its routes of the door', () => {
   const device = vi.fn(async () => ({ status: 200, body: { device: true } }))
-  const account = vi.fn(async (method: string, target: string, text?: string): Promise<HttpAnswer> => ({ status: 200, body: { method, target, ...(text === undefined ? {} : { text }) } }))
+  const account = vi.fn(async (method: string, target: string, text?: string, socket?: boolean): Promise<HttpAnswer> => ({ status: 200, body: { method, target, ...(text === undefined ? {} : { text }), ...(socket ? { socket } : {}) } }))
   const keys = vi.fn((method: string, path: string, text?: string): Promise<HttpAnswer> | null => (path === '/api/pairs' ? Promise.resolve({ status: 200, body: { keys: true, method, path, ...(text === undefined ? {} : { text }) } }) : null))
   const http = gatewayHttp(device, keys, account)
   const owner = { local: true, owner: true }
@@ -189,12 +193,9 @@ describe('the gateway\'s one request for its routes of the door', () => {
     expect(keys).toHaveBeenCalledTimes(1)
   })
 
-  it('hands the phone\'s sign-in code only to the door over the daemon\'s own socket, never to a client of the local WebSocket', async () => {
-    account.mockClear()
-    for (const asker of [owner, { ...owner, connection: 'local:w1' }, { local: false, owner: true, door: 'socket' as const }]) {
-      expect(await http({ method: 'POST', target: '/api/auth/handoff', body: '{}' }, asker), JSON.stringify(asker)).toEqual({ status: 403, body: { error: 'FORBIDDEN' } })
-    }
-    expect(account).not.toHaveBeenCalled()
-    expect(await http({ method: 'POST', target: '/api/auth/handoff?x=1', body: '' }, { ...owner, door: 'socket' })).toEqual({ status: 200, body: { method: 'POST', target: '/api/auth/handoff?x=1', text: '' } })
+  it('tells the account\'s routes whether the door over the daemon\'s own socket asked, and never a remote one', async () => {
+    expect(await http({ method: 'POST', target: '/api/auth/handoff?x=1', body: '' }, { ...owner, door: 'socket' })).toEqual({ status: 200, body: { method: 'POST', target: '/api/auth/handoff?x=1', text: '', socket: true } })
+    expect(await http({ method: 'POST', target: '/api/auth/handoff', body: '' }, { ...owner, connection: 'local:w1' })).toEqual({ status: 200, body: { method: 'POST', target: '/api/auth/handoff', text: '' } })
+    expect(await http({ method: 'POST', target: '/api/auth/handoff', body: '' }, { local: false, owner: true, door: 'socket' })).toEqual({ status: 403, body: { error: 'FORBIDDEN' } })
   })
 })

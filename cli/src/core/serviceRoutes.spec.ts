@@ -214,6 +214,18 @@ describe('the door\'s routes a service answers', () => {
     expect(await answer).toEqual({ type: 'route_result', payload: { requestId: 'q-3', agentId: '', reason: 'down' } })
   })
 
+  it('answers a route\'s and a frame\'s own answer when its service cannot even be asked, and says so', async () => {
+    const log = vi.fn()
+    const broken: ServiceRouter = { route: () => { throw new Error('the link is closing') } }
+    const doors = createServiceRoutes({ routes, frames, linked: broken, hosted: router([]), log })
+    expect(await doors.answer('/api/thing/save', read('/api/thing/save'))).toEqual(DOWN)
+    expect(await doors.frame(conn, { type: 'route_task', payload: { requestId: 'q-4' } })).toEqual({ type: 'route_result', payload: { requestId: 'q-4', agentId: '', reason: 'down' } })
+    const odd = createServiceRoutes({ routes, linked: router([]), hosted: { route: () => { throw 'not an error' } }, setTimer: () => 0, clearTimer: () => {}, log })
+    expect(await odd.answer('/api/thing/save', read('/api/thing/save'))).toEqual(DOWN)
+    expect(log.mock.calls).toEqual([['[services] thing_http could not be asked: the link is closing'], ['[services] devices_ws could not be asked: the link is closing'],
+      ['[services] thing_http could not be asked: not an error']])
+  })
+
   it('waits on real timers and says what is wrong on the console when not told otherwise', async () => {
     vi.useFakeTimers()
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})

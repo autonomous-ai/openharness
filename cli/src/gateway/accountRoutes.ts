@@ -48,7 +48,7 @@ const parsed = (text: string | undefined): { value: unknown } | null => {
 const recorded = (result: HttpAnswer): HttpAnswer =>
   (result.body && typeof result.body === 'object' && !Array.isArray(result.body) ? result : { ...result, body: {} })
 
-function routeOf(backend: AccountBackend, method: string, target: string, text: string | undefined): Route {
+function routeOf(backend: AccountBackend, method: string, target: string, text: string | undefined, socket: boolean): Route {
   const path = target.split('?')[0]
   const forward = (to: string, body?: unknown): Route => async () => recorded(await backend(method, to, body))
   /** The body as JSON, then what [then] makes of it; [bad] when it is not JSON, in the route's own words. */
@@ -57,9 +57,10 @@ function routeOf(backend: AccountBackend, method: string, target: string, text: 
     return read ? then(read.value) : bad
   }
   if (method === 'GET' && (path === '/api/desk' || path === '/api/agent-messages' || path === '/api/auth/me' || path === '/api/product-usage/settings')) return forward(path)
-  // Add Phone's code, minted by the backend against this computer's sign-in: asked of the gateway only over the daemon's
-  // own socket (`gatewayHttp`).
-  if (method === 'POST' && path === '/api/auth/handoff') return forward(path, {})
+  // Add Phone's code, minted by the backend against this computer's sign-in: the one answer that is a credential, so only
+  // for the door over the daemon's own socket (`asker.door`), never a client of the local WebSocket, whose door takes any
+  // process of this account over loopback TCP. Checked here, where the path is read, by the same reading.
+  if (method === 'POST' && path === '/api/auth/handoff') return socket ? forward(path, {}) : answer(403, { error: 'FORBIDDEN' })
   // The window's tab edits (backend routes/desk.ts), which it hears everyone else's as `desk_changed`, and the account's
   // name (`{ name }`, task #2654), which the backend checks and answers as GET does.
   if ((method === 'POST' && path === '/api/desk/ops') || (method === 'PATCH' && path === '/api/auth/me')) return json(INVALID_JSON, (value) => forward(path, value))
@@ -135,10 +136,10 @@ function report(backend: AccountBackend, text: string | undefined): Route {
  * gave, and a backend call that throws is the 502 its proxy gave, each said in this process's log.
  */
 export function accountRoutes(backend: AccountBackend, log: (line: string) => void = (line) => console.error(line)) {
-  return async (method: string, target: string, text?: string): Promise<HttpAnswer> => {
+  return async (method: string, target: string, text?: string, socket = false): Promise<HttpAnswer> => {
     const said = `${method} ${target.split('?')[0].slice(0, 80)}`
     let route: Route
-    try { route = routeOf(backend, method, target, text) } catch (error) {
+    try { route = routeOf(backend, method, target, text, socket) } catch (error) {
       log(`[gateway] ${said} failed: ${error instanceof Error ? error.message : String(error)}`)
       return answer(500, { error: 'INTERNAL' })
     }
@@ -153,19 +154,18 @@ export function accountRoutes(backend: AccountBackend, log: (line: string) => vo
 /**
  * The gateway's one request for its routes of the door (`gateway_http`, core/api.ts `GATEWAY_REQUESTS`): the Wi-Fi
  * device's to their own handler (lib/autonomous-device/localHttp.ts), the keys' to [keys] (gateway/keyRoutes.ts), the
- * account's to [account]. Only this computer's owner, on this computer: the door's caller, or a client of the local
+ * account's to [account], with whether the door over the daemon's own socket asked (`asker.door`), which the phone's
+ * sign-in code needs. Only this computer's owner, on this computer: the door's caller, or a client of the local
  * WebSocket, whose door asks the same (localWsServer.ts); a remote client or a guest is refused as the door refuses a
- * write. The phone's sign-in code only for the door over the daemon's own socket (`asker.door`), which no client of the
- * local WebSocket is: its door takes any process of this account over loopback TCP.
+ * write.
  */
 export function gatewayHttp(device: ServiceRequest, keys: ReturnType<typeof keyRoutes>, account: ReturnType<typeof accountRoutes>): ServiceRequest {
   return async (payload, asker, closed) => {
     const target = typeof payload.target === 'string' ? payload.target : ''
     if (target.startsWith('/api/autonomous-device/')) return device(payload, asker, closed)
-    const path = target.split('?')[0]
-    if (!asker.local || !asker.owner || asker.guest !== undefined || (path === '/api/auth/handoff' && asker.door !== 'socket')) return { status: 403, body: { error: 'FORBIDDEN' } }
+    if (!asker.local || !asker.owner || asker.guest !== undefined) return { status: 403, body: { error: 'FORBIDDEN' } }
     const method = typeof payload.method === 'string' ? payload.method : ''
     const body = typeof payload.body === 'string' ? payload.body : undefined
-    return { ...await (keys(method, path, body) ?? account(method, target, body)) }
+    return { ...await (keys(method, target.split('?')[0], body) ?? account(method, target, body, asker.door === 'socket')) }
   }
 }

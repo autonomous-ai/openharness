@@ -46,12 +46,10 @@ import type { SessionSearchIndex } from '../lib/sessionSearch/indexer.js'
 import type { StoppedAgentStore } from '../lib/stoppedAgents.js'
 import type { TerminalBinaryClear } from '../lib/terminalBinary.js'
 import { VIEWER_UP_TYPES } from '../lib/viewerFrames.js'
-import type { RouteAnswer } from '../localWsServer.js'
 import type { DeviceInputStatus } from './deviceInput.js'
 import type { DeviceHookPort } from './deviceHookCalls.js'
 import { FAIL, later, readFallback, ServiceUnavailableError, type PortFallbacks } from './serviceHost.js'
 
-export type { RouteAnswer }
 /** The mod's poll, as the core hands it to the devices: a service reads these types here alone. */
 export type { DeviceHookPort, InboxAnswer, InboxPoll } from './deviceHookCalls.js'
 /** What a service guards its own parts with, as the core guards a service (core/serviceHost.ts): the
@@ -1346,6 +1344,45 @@ export const CLOUD_FALLBACKS: PortFallbacks<CloudPort> = { create: later(CLOUD_D
 
 /** What a delivered turn answers: delivered, or refused with the machine's name and a reason a person can read. */
 export type SendResult = { ok: true } | { ok: false; machine: string; reason: string }
+
+/** One candidate, as the window draws it in the picker. */
+export interface RouteCandidate {
+  agentId: string
+  /** Which machine to open the pane on. Names are for reading; this is for acting. */
+  machineId: string
+  name: string
+  /** Which computer it runs on. The list spans every machine, and two agents called "api" on two of them
+   *  are otherwise the same row twice. */
+  machine: string
+  /** What it was last doing — the line under the name when the window has to ask. */
+  recent: string
+  /** Which CLI it runs on — 'claude', 'codex', … The window draws the same engine mark its rail does, so
+   *  a row in the picker and the same agent in the rail are recognisably one thing. */
+  engine: string
+  /** How well the router thought this one fits, 0..1. DISPLAY ONLY — the pick is [RouteAnswer.agentId]
+   *  and the number that gates it is [RouteAnswer.confidence]. 0 means the router said nothing about
+   *  this candidate, which the window draws as no bar rather than as an empty one. */
+  confidence: number
+}
+
+export interface RouteAnswer {
+  agentId: string
+  machineId: string
+  name: string
+  confidence: number
+  reason: string
+  /** The best few, most confident first. Only read when the window decides to ask. */
+  candidates: RouteCandidate[]
+  /** How many agents were weighed, and across how many computers — what the window shows while it waits.
+   *  The candidate list is capped, so this is the only place that says whether the right agent was even
+   *  in the running. */
+  weighed: number
+  machines: number
+  /** 'model' when a classifier answered, 'heuristic' when name matching stood in for it. Both land on a
+   *  low confidence by design; this is what lets the window say WHICH happened instead of showing the
+   *  same sentence for a router that was unsure and one that never ran. */
+  via: string
+}
 /** What a fork answers: the new agent's id, or why not. */
 export type ForkResult = { ok: true; agentId: string } | { ok: false; error: string; detail?: string }
 
