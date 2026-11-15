@@ -221,6 +221,7 @@ export async function listProcesses(read: typeof processRows = processRows): Pro
   return (rows ?? []).map((row) => {
     const started = Date.parse(row.startMarker)
     return { pid: row.pid, ppid: row.parentPid, executable: row.executable, args: row.args,
+      ...(row.commandPath !== undefined ? { commandPath: row.commandPath } : {}),
       ...(Number.isFinite(started) ? { started } : {}),
       ...(row.startTicks !== undefined ? { generation: `linux:${row.startTicks}` }
         : Number.isFinite(started) ? { generation: `ps:${started}` } : {}) }
