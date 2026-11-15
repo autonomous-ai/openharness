@@ -2279,6 +2279,26 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
         expect(calls('questionClose')).toEqual([[G1, id]])
       })
 
+      it('a Codex session in Harness\'s Codex home takes words through codex queue on Ghostty\'s ring, and after Harness settles its turn is held back while its words still go', async () => {
+        const THREAD = '01a1de76-a3b7-7270-b39e-1245893274c1'
+        const CODEX = observedAgentId('codex', THREAD)
+        const transcriptPath = join(env.CODEX_HOME, 'sessions', '2026', '11', '15', `rollout-2026-11-15T16-07-59-${THREAD}.jsonl`)
+        const codexHook = (event: ObservedHookEvent['event']) =>
+          hook(event, { engine: 'codex', sessionId: THREAD, transcriptPath, hostHints: { TERM_PROGRAM: 'ghostty' } })
+        const { port } = await windowed('ghostty')
+        seen.host.watching!(true)
+        port.observed(codexHook('session-start'))
+        expect(await host().sendTurn(CODEX, 'run the tests')).toEqual({ ok: true })
+        expect(codexRuns.map(([, args]) => args)).toEqual([['queue', '--thread', THREAD, '--message=run the tests']])
+        await settle('harness')
+        port.observed(codexHook('turn-start'))
+        await vi.advanceTimersByTimeAsync(20_000)
+        expect(calls('turnStarted').filter(([id]) => id === CODEX)).toEqual([])
+        // Words spoken on Ghostty's ring, delivered once Harness is in front.
+        expect(await host().sendTurn(CODEX, 'and lint')).toEqual({ ok: true })
+        expect(codexRuns.map(([, args]) => args).at(-1)).toEqual(['queue', '--thread', THREAD, '--message=and lint'])
+      })
+
       it('the window\'s focus is handed to the dials as before', async () => {
         const { port } = await windowed('ghostty')
         port.appFocus('m1', 'a1')
