@@ -22,6 +22,13 @@ already present. Purge/export and setup/install/probe are separate work and rema
   on this same view. An explicit `observed: false` fact on pane/config replies preserves ignored screens
   and config warmups: they do not install state, advance revision, or invalidate pending captures. It is
   absent from existing Claude/Codex replies. No second profile cache or engine-specific authority table is added to core.
+  The same View retains a separate profile identity containing every binding field except identityHold
+  and evidenceRevision. Parent bundled SIGKILL behavior retains accepted display evidence while that
+  exact engine, native conversation, process, transcript, route and profile home remain bound. On a full
+  authority identity transition with the same profile identity, revision and authority both increase,
+  the control clears, and only accepted state/selection/workspace survive. Captured old-row callers and
+  queued/in-flight reads still require the full current identity. A hold/release cycle never revives old
+  closures; a changed native binding discards the View. The display identity never authorizes a write.
 - Navigation: the existing generic question grant broker serves the worker. Core authorizes one
   captured session and approved target/answer; each write checks grant lifetime, connection generation,
   binding and the ordered writer. The worker cannot choose another session or revive a cancelled grant.
