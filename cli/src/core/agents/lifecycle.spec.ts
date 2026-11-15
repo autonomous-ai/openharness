@@ -159,12 +159,17 @@ describe('stopping, purging and resuming an agent', () => {
       expect(purge.restarting('a1')).toBe(true)
     })
 
-    it('forgets a deleted conversation\'s lines, search entries and names, and tells every window', () => {
+    it('forgets a deleted conversation\'s lines, search entries and names, and tells every window', async () => {
       const { deps, purge } = setup()
-      purge.deleted(row())
+      let saved!: () => void
+      vi.mocked(deps.registry.deleteSavedNames).mockImplementation(() => new Promise<void>(resolve => { saved = resolve }))
+      const deletion = purge.deleted(row())
       expect(deps.mirror.deleteHistory).toHaveBeenCalledWith('s1')
       expect(deps.sessionSearch?.deleteHistory).toHaveBeenCalledWith('s1')
       expect(deps.registry.deleteSavedNames).toHaveBeenCalledWith(['a1', 's1'])
+      expect(deps.send).not.toHaveBeenCalled()
+      saved()
+      await deletion
       expect(deps.send).toHaveBeenCalledWith({ type: 'agent_deleted', payload: { agentId: 'a1', retained: false } })
     })
 
@@ -215,11 +220,11 @@ describe('stopping, purging and resuming an agent', () => {
       expect(deps.send).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'agent_deleted' }))
     })
 
-    it('with no session yet, or no search index, forgets only what there is', () => {
+    it('with no session yet, or no search index, forgets only what there is', async () => {
       const { deps, purge } = setup({ sessionSearch: null })
-      purge.deleted(row())
+      await purge.deleted(row())
       expect(deps.mirror.deleteHistory).toHaveBeenCalledWith('s1')
-      purge.deleted(row({ sessionId: '' }))
+      await purge.deleted(row({ sessionId: '' }))
       expect(deps.mirror.deleteHistory).toHaveBeenCalledTimes(1)
       expect(deps.registry.deleteSavedNames).toHaveBeenLastCalledWith(['a1'])
     })
@@ -230,7 +235,7 @@ describe('stopping, purging and resuming an agent', () => {
       const { lifecycle, purge } = setup({ purged })
       await lifecycle.stopAgent('a1')
       expect(purged).not.toHaveBeenCalled()
-      purge.deleted(row())
+      await purge.deleted(row())
       expect(purged).toHaveBeenCalledWith('a1')
     })
   })

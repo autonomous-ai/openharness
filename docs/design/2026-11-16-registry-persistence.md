@@ -955,3 +955,35 @@ clock through real disk I/O, stops its rebuild resolver from returning deleted
 rows, and supplies complete adoption fixture records. TypeScript passed on this
 combined source with Node 24.22.2. No broad/native gate or timing comparison was
 run for this integration; those acceptance steps remain pending.
+
+### Final Stop publication: native hold versus uncertain storage
+
+The final caller audit reproduced two native-evidence changes after the physical
+Stop, while the removal image was prepared or its final process probe awaited.
+Both refuse publication, keep the durable/live owner and saved archive, and emit
+no deletion, but the new forget catch converts the operation's recorded
+`IdentityReadUnavailable` into `STOP_UNCONFIRMED`. That changes queued Close's
+established retryable native hold into a failed plan.
+
+The reviewed correction preserves only Stop's own `nativeIdentityError`, recorded
+by its existing transcript verifier, at this catch just as its native-control and
+termination catches already do. Arbitrary identity/owner errors, storage failures,
+deadlines and `AtomicWriteUnconfirmed` retain the fixed unconfirmed Stop outcome.
+That verifier runs in refresh/final verification before `prepared.publish`; its
+captured error therefore refuses publication. `AtomicWriteUnconfirmed` originates
+inside publication and cannot acquire that error classification. No guard, proof,
+publication timing, retry, queue, receipt or persisted format
+changes. The two deterministic held-image caller reds precede runtime changes;
+paired preparation-failure and post-rename directory-sync cases already confirm
+that the archive/reservation remains held and no success is announced. All
+existing growth, concurrency, audience, identity, platform and rollback rules in
+this Design continue unchanged; this correction adds no stored data or API.
+
+Fixture acceptance also now selects actual live rows rather than mutating cloned
+admission receipts, forwards Stop authority to strict removal, supplies explicit
+final native-process proof, and awaits async purge/name cleanup. A synthetic
+own-process lock identity remains the sole permitted process response in the
+Hermes store fixture; no host binary is launched. The obsolete fixed-sleep Stop
+retry is removed. Core and Resume broad-gate failures at `7211e3364d` remain
+recorded failures, not passing receipts; focused corrected-fixture results do not
+stand in for their pending final gates.

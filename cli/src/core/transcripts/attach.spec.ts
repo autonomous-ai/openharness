@@ -3,7 +3,8 @@ import { appendFileSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { RegisteredSession } from '../../lib/registry.js'
+import type { RegisteredSession, RegistryAuthority } from '../../lib/registry.js'
+import type { TerminalBackend } from '../../lib/terminalBackend.js'
 import { Watcher, type TailHold } from '../../watcher/watcher.js'
 import { createIngest } from './ingest.js'
 import { createCancel } from '../turns/cancel.js'
@@ -202,7 +203,11 @@ it.each(['same', 'repaired'] as const)('composes discovery, retry and inline att
   const run = setup({ settled: vi.fn() })
   const savedPath = transcript([{ events: [started('unconfirmed')], open: true }])
   const verifiedPath = outcome === 'same' ? savedPath : transcript([{ events: [started('verified')], open: true }, { close: true }])
-  const row = session('codex', savedPath, { active: false, registeredAt: 1, boundAt: 2, permissionMode: 'default' })
+  const runtime = { backend: 'tmux' as const, paneId: '%0' }
+  const processIdentity = { pid: 42, startMarker: 'fixture', executable: 'codex' }
+  const backend = { rootProcess: vi.fn(async () => processIdentity.pid) } as unknown as TerminalBackend
+  const row = session('codex', savedPath, { active: false, registeredAt: 1, boundAt: 2, permissionMode: 'default',
+    runtimes: [runtime], primaryRuntimeKey: 'tmux:%0', processIdentity })
   let previous: unknown
   if (outcome === 'repaired') {
     await run.attach.attachSession(row)
@@ -212,13 +217,14 @@ it.each(['same', 'repaired'] as const)('composes discovery, retry and inline att
   row.identityHold = 'header incomplete'
   let available = false
   const registry = {
-    byAgent: (id: string) => bindings.get(id), byProcess: () => row,
+    byAgent: (id: string) => bindings.get(id), byProcess: () => row, byRuntimeTerminal: () => undefined,
     updateRuntimes: vi.fn(), updateProcessIdentity: () => { row.active = true },
     setBypassPermission: vi.fn(), setLaunch: vi.fn(),
-    revalidateBinding: () => {
+    revalidateBinding: vi.fn(async (_id: string, { current }: RegistryAuthority) => {
+      expect(current?.()).toBe(true)
       if (!available) throw new Error('header incomplete')
-      row.transcriptPath = verifiedPath; delete row.identityHold; return row
-    },
+      row.transcriptPath = verifiedPath; delete row.identityHold; return structuredClone(row)
+    }),
     setIdentityHold: (_id: string, reason: string) => { row.identityHold = reason; return false },
     bySession: () => row,
   }
@@ -227,11 +233,13 @@ it.each(['same', 'repaired'] as const)('composes discovery, retry and inline att
   } as unknown as BindDeps)
   const discover = createDiscoveryHandlers({ registry, bindObservedAgent: bind.bindObservedAgent,
     attachSession: run.attach.attachSession, announceSession: vi.fn(), syncRecapPool: vi.fn(),
+    terminals: { backendFor: vi.fn(() => backend) },
   } as unknown as DiscoveryDeps)
-  const seen = { engine: 'codex', processIdentity: { pid: 42, startMarker: 'fixture' }, args: 'codex', runtimes: [] } as unknown as DiscoveredTerminalAgent
+  const seen = { engine: 'codex', processIdentity, args: 'codex', runtimes: [runtime], primaryRuntimeKey: 'tmux:%0' } as DiscoveredTerminalAgent
   vi.clearAllMocks()
   await discover.onObserved(seen, row)
-  await new Promise(resolve => setTimeout(resolve, 20))
+  expect(registry.revalidateBinding).toHaveBeenCalledOnce()
+  expect(backend.rootProcess).not.toHaveBeenCalled()
   expect(run.deps.terminalGone).not.toHaveBeenCalled()
   expect(run.deps.runtimeProfiles.beginHydrate).not.toHaveBeenCalled()
   expect(run.profile.commit).not.toHaveBeenCalled()

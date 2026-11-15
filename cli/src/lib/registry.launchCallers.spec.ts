@@ -353,6 +353,33 @@ it('Stop keeps its reply, deletion and resume reservation pending until removal 
   expect(persisted().some(entry => entry.agentId === row.agentId)).toBe(false)
 })
 
+it.each(['prepare', 'directory sync'] as const)('Stop keeps a failed %s removal unconfirmed with its archive and reservation retained', async phase => {
+  await releaseRegistryEngine(registry, row.agentId)
+  await registry.flush()
+  row = registry.byAgent(row.agentId)!
+  const store = new StoppedAgentStore(join(directory, 'failed-stop-archive')), send = vi.fn()
+  store.save(row); store.beginResume(row.agentId)
+  const forgetSession = createForgetSession({ registry, stoppedAgents: store, syncRecapPool: vi.fn(), normalizers: { forget: vi.fn() },
+    forgetAttach: vi.fn(), turnStartedAt: new Map(), prompts: new Map(), neverFoldedHistory: new Set(), replayedFirstTurn: new Set(),
+    clearAgyIdleWatch: vi.fn(), cursorDiscovery: { remove: vi.fn() }, runtimeProfiles: { forget: vi.fn() },
+    watcher: { removeSession: vi.fn(async () => {}) }, stopHeartbeat: vi.fn(), input: { forget: vi.fn() }, deviceInput: { forget: vi.fn() },
+    ended: vi.fn(), mirror: { forget: vi.fn() }, clients: { send, sendCommander: vi.fn() } })
+  const stop = createStopAgentService({ registry, stoppedAgents: store, restartJobs: new AgentRestartCoordinator(), stopJobs: new Map(),
+    backendFor: () => ({ kill: async () => ({ state: 'succeeded', dispatch: 'executed' }) }),
+    agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), trigger: async () => {} },
+    forgetSession, markDeleted: vi.fn(), clearDeleted: vi.fn(), stopNative: async () => {} })
+  if (phase === 'prepare') {
+    image.match = rows => !rows.some(entry => entry.agentId === row.agentId)
+    image.wait = async () => { throw Object.assign(new Error('fixture image sync failed'), { code: 'EIO' }) }
+  } else image.failSync = 1
+  await expect(stop(row.agentId)).rejects.toMatchObject({ code: 'STOP_UNCONFIRMED' })
+  expect(registry.byAgent(row.agentId)).toBeDefined()
+  expect(persisted().some(entry => entry.agentId === row.agentId)).toBe(phase === 'prepare')
+  expect(store.get(row.agentId)).not.toBeNull()
+  expect(store.resumeReservedAt(row.agentId)).not.toBeNull()
+  expect(send).not.toHaveBeenCalled()
+})
+
 it.each((['new owner', 'adopted shell', 'archived owner', 'starting owner'] as const).flatMap(mode => [false, true].map(uncertain => [mode, uncertain] as const)))('discovery keeps %s unpublished until its ownership image is durable (uncertain=%s)', async (mode, uncertain) => {
   const store = new StoppedAgentStore(join(directory, 'discovery-archive')), send = vi.fn(), moved = vi.fn(), forgotten = vi.fn(async () => {})
   let current = row

@@ -9,6 +9,7 @@ const faults = vi.hoisted(() => ({
   inspectedCheckpoint: undefined as (() => void) | undefined,
   openingSource: undefined as (() => () => void) | undefined,
   sourceFailure: undefined as 'open' | 'stat' | 'read' | 'close' | undefined,
+  preparedRegistry: undefined as (() => Promise<void>) | undefined,
 }))
 vi.mock('node:fs/promises', async original => {
   const actual = await original<typeof import('node:fs/promises')>()
@@ -21,6 +22,10 @@ vi.mock('node:fs/promises', async original => {
     if (source && faults.sourceFailure === 'open') throw Error('Source open unavailable')
     const restore = source ? faults.openingSource?.() : undefined
     const handle = await actual.open(...args).finally(() => restore?.())
+    if (String(args[0]).includes('registry.json.') && String(args[0]).endsWith('.tmp')) {
+      const sync = handle.sync.bind(handle)
+      handle.sync = async () => { await sync(); await faults.preparedRegistry?.() }
+    }
     if (source) {
       const stat = handle.stat.bind(handle), read = handle.read.bind(handle), close = handle.close.bind(handle)
       handle.close = async () => {
@@ -84,6 +89,7 @@ const files = () => Object.fromEntries(readdirSync(directory).map(name => [name,
 beforeEach(async () => {
   root = realpathSync(mkdtempSync(join(tmpdir(), 'control-transcript-')))
   faults.copied = undefined; faults.inspectedCheckpoint = undefined; faults.openingSource = undefined; faults.sourceFailure = undefined
+  faults.preparedRegistry = undefined
   for (const name of ['HOME', 'ADAPTER_DATA_DIR', 'ADAPTER_RUNTIME_DIR', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR',
     'PI_HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME']) {
     const path = join(root, name); mkdirSync(path, { recursive: true, mode: 0o700 }); vi.stubEnv(name, path)
@@ -96,7 +102,9 @@ beforeEach(async () => {
   writeFileSync(transcript, header())
   directory = join(root, 'checkpoints')
   vi.resetModules()
-  vi.mocked((await import('./deleteAgentFallback.js')).terminateDeletedAgent).mockReset().mockResolvedValue('gone')
+  const processChecks = await import('./deleteAgentFallback.js')
+  vi.mocked(processChecks.terminateDeletedAgent).mockReset().mockResolvedValue('gone')
+  vi.mocked(processChecks.checkPidRuntime).mockReset().mockResolvedValue({ state: 'gone', reason: 'fixture process ended' })
   ;({ registry } = await import('./registry.js'))
   capture = (await import('./captureResumeIdentity.js')).captureResumeIdentity
   checkpoints = new (await import('./sessionCheckpoint.js')).SessionCheckpointStore(directory)
@@ -109,6 +117,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await registry.flush({ exiting: true }).catch(() => {})
   faults.copied = undefined; faults.inspectedCheckpoint = undefined; faults.openingSource = undefined; faults.sourceFailure = undefined
+  faults.preparedRegistry = undefined
   vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.resetModules()
   rmSync(root, { recursive: true, force: true })
 })
@@ -304,21 +313,48 @@ it('preserves a repaired parent through Stop and the final real forget archive',
     expect(session.transcriptPath).toBe(parent)
     stopped.save({ ...row, title: 'A hook saved the stale child path' })
   }
-  // Other Linux shard fixtures create/remove siblings under /tmp. The native
-  // reader correctly refuses an ancestor changed during enumeration; retry the
-  // untouched Stop just as its caller can, rather than treating that hold as loss.
-  for (let attempt = 0; ; attempt++) {
-    try { await stop(row.agentId, { checkpoint }); break }
-    catch (error) {
-      if (attempt >= 2) throw error
-      expect(error).toMatchObject({ code: 'IDENTITY_UNAVAILABLE',
-        message: 'Conversation identity is held: a binding directory or ancestor changed during enumeration.' })
-      expect(registry.byAgent(row.agentId)?.sessionId).toBe(A)
-      await new Promise(done => setTimeout(done, 10))
-    }
-  }
+  await stop(row.agentId, { checkpoint })
+  const { checkPidRuntime } = await import('./deleteAgentFallback.js')
+  expect(checkPidRuntime).toHaveBeenCalledWith(expect.objectContaining({ agentId: row.agentId, processIdentity: row.processIdentity }))
   expect(registry.byAgent(row.agentId)).toBeUndefined()
   expect(stopped.get(row.agentId)).toMatchObject({ active: false, sessionId: A, transcriptPath: parent })
+})
+
+it.each(['prepared image', 'process refresh'] as const)('retains a typed Stop hold when native evidence changes during the %s', async phase => {
+  const { createStopAgentService } = await import('./stopAgentService.js')
+  const { createForgetSession } = await import('../core/agents/forget.js')
+  const { StoppedAgentStore } = await import('./stoppedAgents.js')
+  const { AgentRestartCoordinator } = await import('./restartAgent.js')
+  const { checkPidRuntime } = await import('./deleteAgentFallback.js')
+  const stopped = new StoppedAgentStore(join(root, 'stopped')), send = vi.fn()
+  const forget = createForgetSession({ registry, stoppedAgents: stopped, syncRecapPool: vi.fn(), normalizers: { forget: vi.fn() },
+    forgetAttach: vi.fn(), turnStartedAt: new Map(), prompts: new Map(), neverFoldedHistory: new Set(), replayedFirstTurn: new Set(),
+    clearAgyIdleWatch: vi.fn(), cursorDiscovery: { remove: vi.fn() }, runtimeProfiles: { forget: vi.fn() },
+    watcher: { removeSession: vi.fn(async () => {}) }, stopHeartbeat: vi.fn(), input: { forget: vi.fn() }, deviceInput: { forget: vi.fn() },
+    ended: vi.fn(), mirror: { forget: vi.fn() }, clients: { send, sendCommander: vi.fn() } })
+  const stop = createStopAgentService({ registry, stoppedAgents: stopped, restartJobs: new AgentRestartCoordinator(),
+    stopJobs: new Map(), backendFor: () => ({ kill: vi.fn(async () => ({ state: 'succeeded' as const, dispatch: 'executed' as const })) }),
+    agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), trigger: vi.fn(async () => {}) },
+    forgetSession: forget, markDeleted: vi.fn(), clearDeleted: vi.fn(), stopNative: async () => {} })
+  let prepared!: () => void, release!: () => void
+  const entered = new Promise<void>(resolve => { prepared = resolve })
+  const held = new Promise<void>(resolve => { release = resolve })
+  faults.preparedRegistry = async () => { faults.preparedRegistry = undefined; prepared(); await held }
+  const stopping = stop(row.agentId).catch(error => error)
+  await entered
+  if (phase === 'prepared image') writeFileSync(transcript, header(B))
+  else vi.mocked(checkPidRuntime).mockImplementationOnce(async () => {
+    writeFileSync(transcript, header(B))
+    return { state: 'gone', reason: 'fixture process ended' }
+  })
+  release()
+  const result = await stopping
+  expect(registry.byAgent(row.agentId)?.sessionId).toBe(A)
+  expect(JSON.parse(readFileSync(join(root, 'ADAPTER_DATA_DIR', 'registry.json'), 'utf8')))
+    .toEqual(expect.arrayContaining([expect.objectContaining({ agentId: row.agentId, sessionId: A })]))
+  expect(stopped.get(row.agentId)).toMatchObject({ sessionId: A, transcriptPath: transcript })
+  expect(send).not.toHaveBeenCalled()
+  expect(result).toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
 })
 
 it('retains a typed Stop hold when the native broker contains a failed grant check', async () => {
