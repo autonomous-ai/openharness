@@ -13,7 +13,8 @@ import { deviceAgentListItem, deviceAgentRow } from './core/agents/list.js'
 import { wholeHistoryPage } from './engines/others/transcripts.js'
 import { grokMessagesToEvents } from './engines/grok/normalizer.js'
 import { bindAgentList, bindAgentUpdate, bindCancelRequest, bindLaunchRequests, bindCloseRequests, bindMessageRequest, bindPurgeRequest, bindQuestionResponse, bindStopRequest, bindTerminalRequests, prepared, preparingWorkspaces } from './testing/socketCore.js'
-import { emptyPorts, MODELS_FALLBACKS, MODELS_OFF, MONITOR_FALLBACKS, type ModelsPort } from './core/api.js'
+import { emptyPorts, MODELS_FALLBACKS, MODELS_OFF, MONITOR_FALLBACKS, type ModelsPort, type UsageEvent } from './core/api.js'
+import { countUsage } from './gateway/usageEvents.js'
 import { createServiceHost, ServiceUnavailableError } from './core/serviceHost.js'
 import { MODELS_REQUESTS, startModels } from './services/models.js'
 import { SHELL_REQUESTS, startShell } from './services/shell.js'
@@ -4509,7 +4510,7 @@ describe('opening the app', () => {
     const socket = new BackendSocket('fixture')
     const counted: string[] = []
     socket.useGateway({ holdRequests: () => {}, serveThisComputerOnly: () => {}, localClients: () => {}, windowOpened: () => {},
-      usageCounter: (metric: string) => { counted.push(metric) } } as never)
+      usage: (event: UsageEvent) => countUsage(event, (metric) => { counted.push(metric) }, () => {}) } as never)
     const sink = { sendFrame: () => true, sendBinary: () => true }
     socket.registerLocalClient('local:tui', sink, { surface: 'tui' })
     socket.registerLocalClient('local:app', sink)
