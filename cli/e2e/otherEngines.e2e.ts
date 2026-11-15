@@ -205,7 +205,8 @@ console.log('fixture-pi-ready'); setInterval(() => {}, 1000);
     await until('a first read through the worker', async () => said(await history(c, agent.id), 'before-the-faults') || null, 30_000, 250)
     const bystander = await c.request('agent_create', { engine: 'claude', cwd: d.projectsDir, bypassPermission: true }, 60_000)
     expect(bystander.error).toBeUndefined()
-    await until('the unaffected engine bound', async () => (await rows(c)).find(row => row.id === bystander.agent.id && row.sessionId && row.status === 'active') || null, 30_000, 100)
+    await until('the unaffected engine bound', async () => (await rows(c)).find(row => row.id === bystander.agent.id
+      && row.sessionId && row.status === 'active') || null, 30_000, 100)
     const inputClient = connection === 'shared' ? c : companion = await LocalClient.connect(d)
     const core = d.corePid()
     const panePid = (await d.tmux.run('display-message', '-p', '-t', agent.pane, '#{pane_pid}')).trim()
@@ -216,7 +217,8 @@ console.log('fixture-pi-ready'); setInterval(() => {}, 1000);
       process.kill(before, signal)
       const at = Date.now()
       const pending = history(c, agent.id)
-      const unaffected = inputClient.next(frame => frame.type === 'turn_ended' && frame.agentId === bystander.agent.id && !frame.replay, 15_000, 'the unaffected engine still answers')
+      const unaffected = inputClient.next(frame => frame.type === 'turn_ended' && frame.agentId === bystander.agent.id && !frame.replay,
+        15_000, `input on the ${connection} connection passes the unavailable history reader`)
       inputClient.send('message', { agentId: bystander.agent.id, content: `unaffected-${signal}` })
       await unaffected
       if (signal === 'SIGSTOP') expect(worker(d)).toBe(before)
