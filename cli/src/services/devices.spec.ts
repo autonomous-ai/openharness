@@ -146,7 +146,8 @@ const readers = vi.hoisted(() => ({
   open: null as null | Record<string, unknown>,
   external: null as null | Record<string, unknown>,
   known: new Map<string, string>(),
-  owners: new Map<string, { engine: string; pid: number }>(),
+  // An owner's record path is its session id unless one is given.
+  owners: new Map<string, { engine: string; pid: number; record?: string }>(),
   rows: new Map<string, { cwd: string; transcriptPath: string | null }>(),
   working: new Map<string, boolean>(),
   scans: 0,
@@ -160,7 +161,7 @@ vi.mock('../lib/sessionSearch/external.js', async (real) => ({
     constructor(options: Record<string, unknown>) { readers.open = options }
     async owners() {
       readers.scans++
-      return new Map([...readers.known.keys()].flatMap((id) => readers.owners.has(id) ? [[id, { ...readers.owners.get(id)!, record: id }] as const] : []))
+      return new Map([...readers.known.keys()].flatMap((id) => readers.owners.has(id) ? [[id, { record: id, ...readers.owners.get(id)! }] as const] : []))
     }
     async busy(owner: { record: string }) { return readers.working.get(owner.record) !== false }
   },
@@ -1304,14 +1305,14 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     vi.useFakeTimers()
     const { port } = start({ faults: ['fleet'] })
     readers.known.set('sess-7', 'terminal')
-    readers.owners.set('sess-7', { engine: 'claude', pid: 78 })
+    readers.owners.set('sess-7', { engine: 'claude', pid: 78, record: '/s/78.json' })
     readers.rows.set('sess-7', { cwd: '/work/scratch-2016', transcriptPath: null })
-    readers.working.set('sess-7', false)
+    readers.working.set('/s/78.json', false)
     readers.name.mockResolvedValue('Tho')
     seen.host.watching!(true)
     await vi.waitFor(async () => expect((await machineList(port)).agents)
       .toEqual([expect.objectContaining({ id: observedAgentId('claude', 'sess-7'), name: 'Tho' })]))
-    expect(readers.name.mock.calls).toEqual([[{ pid: 78, record: 'sess-7', sessionId: 'sess-7' }, { roots: claudeProjectsRoots(env.CLAUDE_PROJECTS_DIR) }]])
+    expect(readers.name.mock.calls).toEqual([[{ pid: 78, record: '/s/78.json', sessionId: 'sess-7' }, { roots: claudeProjectsRoots(env.CLAUDE_PROJECTS_DIR) }]])
   })
 
   it('removes an ended session within 11 s, and ends a Codex turn within 3 s of its process going quiet', async () => {

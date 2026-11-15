@@ -16,7 +16,8 @@ function setup(over: Partial<ObservedDeps> = {}) {
     .filter((pid) => gens.get(pid) !== null).map((pid) => ({ pid, generation: gens.get(pid) ?? `g${pid}` })))
   const alive = vi.fn((_pid: number) => true)
   const open = new Map<string, 'terminal' | 'app' | 'harness' | 'maybe'>()
-  const owners = new Map<string, { pid: number; engine: string }>()
+  // An owner's record path is its session id unless one is given.
+  const owners = new Map<string, { pid: number; engine: string; record?: string }>()
   const working = new Map<string, boolean | null>()
   const externals = new Map<string, { cwd?: string; transcriptPath?: string | null }>()
   const answers = new Map<string, string>()
@@ -40,7 +41,7 @@ function setup(over: Partial<ObservedDeps> = {}) {
         await look()
         return new Map([...open].flatMap(([id, openIn]) => {
           const owner = owners.get(id)
-          return owner ? [[id, { ...owner, tty: null, record: id, ...(openIn === 'harness' ? { harness: true } : {}) }] as const] : []
+          return owner ? [[id, { record: id, ...owner, tty: null, ...(openIn === 'harness' ? { harness: true } : {}) }] as const] : []
         }))
       },
       // As OpenSessions says: busy unless the owner's record reads idle.
@@ -757,10 +758,10 @@ describe('ObservedSource and the name in a session\'s own record', () => {
   beforeEach(() => { vi.useFakeTimers() })
   afterEach(() => { vi.useRealTimers() })
 
-  /** A session found open in a terminal, its owner `pid`. */
+  /** A session found open in a terminal, its owner `pid`, whose record path is not its id: the reader must be told both. */
   const found = (s: ReturnType<typeof setup>, sessionId: string, pid: number, engine = 'claude'): void => {
     s.open.set(sessionId, 'terminal')
-    s.owners.set(sessionId, { pid, engine })
+    s.owners.set(sessionId, { pid, engine, record: `/s/${pid}.json` })
     s.externals.set(sessionId, { cwd: `/x/${sessionId}`, transcriptPath: `/t/${sessionId}.jsonl` })
   }
 
@@ -799,7 +800,7 @@ describe('ObservedSource and the name in a session\'s own record', () => {
     found(s, 'd', 15)
     await s.src.scanOpen()
     await s.src.scanOpen()
-    expect(recordName.mock.calls).toEqual([[{ pid: 11, record: 'a', sessionId: 'a' }], [{ pid: 15, record: 'd', sessionId: 'd' }]])
+    expect(recordName.mock.calls).toEqual([[{ pid: 11, record: '/s/11.json', sessionId: 'a' }], [{ pid: 15, record: '/s/15.json', sessionId: 'd' }]])
   })
 
   it('at most 50 are asked a look', async () => {
