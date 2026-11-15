@@ -386,6 +386,15 @@ test('an attach before the mod has linked is sent once it links, the latest only
   expect(w.attaches).toEqual([ATTACH])
 })
 
+test('a detach on another surface keeps the desktop attach held', async ($, on) => {
+  const w = world(on, { answers: [held(25_000)] })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await attach($)
+  await $.session.detach({ surface: 'mobile', clientId: 'mobile:default', reason: 'detach' })
+  await w.clock.settle()
+  expect(w.attaches).toEqual([ATTACH])
+})
+
 test('attached and detached again before the link: nothing is sent', async ($, on) => {
   const w = world(on, { answers: [held(25_000)] })
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
@@ -519,6 +528,28 @@ test('shown and left again while the launcher is asked: nothing is sent', async 
   expect(w.attaches).toEqual([ATTACH])
 })
 
+// The launcher read the plugin on before `disable`; the poll that read it off has unlinked the mod since.
+test('switched off while the launcher is asked: its answer sends nothing', async ($, on) => {
+  const w = world(on, { answers: [held(2_000)], devices: '' })
+  await start($, w)
+  let asked = 0
+  w.relink = async (clock) => {
+    asked += 1
+    if (asked > 1) return { exitCode: 1, stdout: '' }
+    await clock.sleep(5_000)
+    return withDevices
+  }
+  await attach($)
+  await w.clock.settle()
+  w.enabled = false
+  await w.clock.advance(2_000)
+  expect(w.runs).toHaveLength(3)
+  await w.clock.advance(3_000)
+  expect(w.attaches).toHaveLength(0)
+  await w.clock.advance(10 * MINUTE)
+  expect(w.attaches).toHaveLength(0)
+})
+
 test('an attach while the launcher is asked is told once, when it answers', async ($, on) => {
   const w = world(on, { answers: [held(25_000)], devices: '' })
   await start($, w)
@@ -565,6 +596,33 @@ test('with the plugin switched off nothing is sent', async ($, on) => {
   await attach($)
   await w.clock.advance(10 * MINUTE)
   expect(w.attaches).toHaveLength(0)
+})
+
+test('switched off while a poll is held: an attach sends nothing', async ($, on) => {
+  const w = world(on, { answers: [held(25_000)] })
+  await start($, w)
+  w.enabled = false
+  await attach($)
+  await w.clock.settle()
+  expect(w.attaches).toHaveLength(0)
+  await w.clock.advance(25_000)
+  await w.clock.advance(10 * MINUTE)
+  expect(w.attaches).toHaveLength(0)
+})
+
+test('an attach told is not told again once the plugin is switched off and on', async ($, on) => {
+  const w = world(on, { answers: [held(10_000)] })
+  await start($, w)
+  await attach($)
+  await w.clock.settle()
+  expect(w.attaches).toEqual([ATTACH])
+  w.enabled = false
+  await w.clock.advance(10_000)
+  expect(w.runs).toHaveLength(2)
+  w.enabled = true
+  await w.clock.advance(10 * MINUTE)
+  expect(w.runs).toHaveLength(3)
+  expect(w.attaches).toEqual([ATTACH])
 })
 
 test('switched off and on again: the session the app still shows is told once the mod links', async ($, on) => {
