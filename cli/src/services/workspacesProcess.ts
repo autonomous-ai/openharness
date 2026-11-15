@@ -48,9 +48,10 @@ function targetOf(value: unknown): WorkspaceTarget | null {
   }
   return target
 }
-/** The folders every other harness works in, as the core sent them; at most ten thousand. */
-const othersOf = (value: unknown): string[] =>
-  Array.isArray(value) ? value.filter((cwd): cwd is string => typeof cwd === 'string').slice(0, 10_000) : []
+/** The folders every other harness works in, as the core sent them: every one, or none and the request is refused. A
+ *  list cut short could leave out the harness whose files a removal would take. */
+const othersOf = (value: unknown): string[] | null =>
+  Array.isArray(value) && value.length <= 10_000 && value.every((cwd) => typeof cwd === 'string') ? value as string[] : null
 const refused = { ok: false, reason: 'The request to review this worktree was malformed.' }
 
 /**
@@ -130,19 +131,19 @@ export function runWorkspacesService(options: WorkspacesServiceOptions): Service
           : { ok: false, error: 'INVALID_PROJECT_SOURCE', detail: 'Choose a project.' }
       },
       describeWorkspace: async (payload) => {
-        const target = targetOf(payload.target)
-        return { workspace: target ? await workspaces.describeWorkspace(target, othersOf(payload.others)) : null }
+        const target = targetOf(payload.target), others = othersOf(payload.others)
+        return { workspace: target && others ? await workspaces.describeWorkspace(target, others) : null }
       },
       reviewWorktree: (payload) => {
-        const target = targetOf(payload.target)
-        return target ? workspaces.reviewWorktree(target, othersOf(payload.others)) : refused
+        const target = targetOf(payload.target), others = othersOf(payload.others)
+        return target && others ? workspaces.reviewWorktree(target, others) : refused
       },
       removeWorktree: (payload) => {
-        const target = targetOf(payload.target)
+        const target = targetOf(payload.target), others = othersOf(payload.others)
         // The review is checked against a fresh one of the same worktree before anything is removed
         // (lib/worktreeDeletion.ts `removeReviewedWorktree`): one that is not what it says removes nothing.
-        return target && payload.review && typeof payload.review === 'object'
-          ? workspaces.removeWorktree(payload.review as WorktreeReview, target, othersOf(payload.others), payload.discardChanges === true) : refused
+        return target && others && payload.review && typeof payload.review === 'object'
+          ? workspaces.removeWorktree(payload.review as WorktreeReview, target, others, payload.discardChanges === true) : refused
       },
     },
     onEvent: (payload) => {

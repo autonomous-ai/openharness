@@ -95,9 +95,6 @@ type CreateInput = Parameters<CreateAgent>[0]
  *  once they can. A restart of the edge host takes a few seconds; a create asked then waits for it rather than failing. */
 const WORKSPACES_HOLD = { service: 'workspaces', detail: 'Waiting for Harness\'s workspaces service to make the project folder. This request is saved and will continue when it is available.' }
 
-/** Whether [folder] is inside [parent], not [parent] itself. */
-const inside = (parent: string, folder: string): boolean => folder.startsWith(parent.endsWith(sep) ? parent : parent + sep)
-
 export function createLaunchRequests({ receipts, createAgent, prepareCreate, prepareEngine, forkAgent, resumeAgent, restartAgent, byAgent, stoppedAgent, toProject, modelTarget, guestCreate, claudeHomeListed, workspaces }: LaunchRequestDeps) {
   /** Git's folders wait for workspaces to be there: asked before a create's effect is claimed, so one held for it is
    *  never a launch that failed. */
@@ -159,7 +156,8 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
         // A Codex agent on its own profile reads its trust from that profile's config.toml, not ~/.codex.
         const engineTrust = folderTrust(input.engine, input.codexHome ?? input.claudeHome ?? null)
         if (engineTrust && (projectFolder.source === 'new'
-          || (projectFolder.source === 'worktree' && inside(join(projectsRoot(), 'worktrees'), preparedFolder) && engineTrust.trusts(projectFolder.gitSource)))) {
+          || (projectFolder.source === 'worktree' && preparedFolder.startsWith(join(projectsRoot(), 'worktrees') + sep)
+            && engineTrust.trusts(projectFolder.gitSource)))) {
           engineTrust.record(preparedFolder)
         }
       } catch (error) { console.warn(`[agent] pre-trust ${preparedFolder} · ${error instanceof Error ? error.message : error}`) }

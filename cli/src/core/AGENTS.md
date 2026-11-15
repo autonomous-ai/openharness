@@ -72,8 +72,9 @@ The core stays small and secure, in the code and at run time: read
 - `api.ts`: the contract with services, their ports, fallbacks and requests. `serviceHost.ts`: services
   in this process. `serviceLinks.ts`: services in their own processes. `viewersLink.ts`: what the core
   keeps of the viewers when they run in theirs. `viewerStreams.ts`: a client's viewer stream and rendered
-  frames, handed to the viewers, refused at once while they are down, and held while they first start. `workspacesLink.ts`: what the core tells workspaces in
-  theirs. `messagesLink.ts`: Agent Messages out of this process (the edge host): which of its deliveries may be
+  frames, handed to the viewers, refused at once while they are down, and held while they first start. `workspacesLink.ts`: workspaces in
+  theirs, which run the git the core runs none of: a create's folder and a purge's worktree, each asked with a deadline and
+  read as typed data, and the made-up branches they name. `messagesLink.ts`: Agent Messages out of this process (the edge host): which of its deliveries may be
   written, as it last said, the few things it may ask (`MESSAGES_QUERIES`: the agents, this daemon, the account
   signed in here, the account's backend, its log's notice for the windows, shared tabs' keys and relay, whether its
   harnesses work (`activity`, with a one-line summary of what each does when asked), and that a

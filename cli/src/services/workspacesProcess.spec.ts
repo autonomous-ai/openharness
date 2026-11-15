@@ -78,25 +78,27 @@ describe('workspaces in their own process', () => {
     const ask = (type: string, payload: Record<string, unknown>) => options.requests[type]!(payload, OWNER, CLOSED)
     const target = { cwd: '/h/harnesses/worktrees/repo/a1', transcriptPath: '/h/.claude/projects/x/s1.jsonl', codexHome: null, hermesHome: 7 }
     const read = { cwd: target.cwd, transcriptPath: target.transcriptPath }
-    const others = ['/h/code/repo', 7, null, '/h/code/other']
+    const others = ['/h/code/repo', '/h/code/other']
     expect(await ask('describeWorkspace', { target, others })).toEqual({ workspace: null })
-    expect(port.describeWorkspace).toHaveBeenLastCalledWith(read, ['/h/code/repo', '/h/code/other'])
-    expect(await ask('reviewWorktree', { target: { cwd: null }, others: 'all' })).toEqual({ ok: false, reason: 'No separate worktree. This folder is not a Git worktree.' })
+    expect(port.describeWorkspace).toHaveBeenLastCalledWith(read, others)
+    expect(await ask('reviewWorktree', { target: { cwd: null }, others: [] })).toEqual({ ok: false, reason: 'No separate worktree. This folder is not a Git worktree.' })
     expect(port.reviewWorktree).toHaveBeenLastCalledWith({ cwd: null }, [])
     const review = { path: target.cwd } as WorktreeReview
     expect(await ask('removeWorktree', { review, target, others, discardChanges: true })).toEqual({ ok: true })
-    expect(port.removeWorktree).toHaveBeenLastCalledWith(review, read, ['/h/code/repo', '/h/code/other'], true)
-    await ask('removeWorktree', { review, target, discardChanges: 'yes' })
+    expect(port.removeWorktree).toHaveBeenLastCalledWith(review, read, others, true)
+    await ask('removeWorktree', { review, target, others: [], discardChanges: 'yes' })
     expect(port.removeWorktree).toHaveBeenLastCalledWith(review, read, [], false)
-    // A harness or a review it cannot read is refused in words, and nothing of git runs for it.
+    // A harness, a review or the other harnesses' folders it cannot read whole is refused in words, and nothing of git
+    // runs for it: a list cut short could leave out the harness whose files a removal would take.
     const refused = { ok: false, reason: 'The request to review this worktree was malformed.' }
-    for (const bad of [undefined, 'a1', { cwd: 7 }, { transcriptPath: '/t' }]) {
-      expect(await ask('describeWorkspace', { target: bad })).toEqual({ workspace: null })
-      expect(await ask('reviewWorktree', { target: bad })).toEqual(refused)
-      expect(await ask('removeWorktree', { review, target: bad })).toEqual(refused)
+    for (const bad of [{ target: undefined, others }, { target: 'a1', others }, { target: { cwd: 7 }, others }, { target: { transcriptPath: '/t' }, others },
+      { target }, { target, others: 'all' }, { target, others: ['/h/code/repo', 7] }, { target, others: Array(10_001).fill('/h/code/repo') }]) {
+      expect(await ask('describeWorkspace', bad)).toEqual({ workspace: null })
+      expect(await ask('reviewWorktree', bad)).toEqual(refused)
+      expect(await ask('removeWorktree', { review, ...bad })).toEqual(refused)
     }
-    expect(await ask('removeWorktree', { review: 'r', target })).toEqual(refused)
-    expect(await ask('removeWorktree', { target })).toEqual(refused)
+    expect(await ask('removeWorktree', { review: 'r', target, others })).toEqual(refused)
+    expect(await ask('removeWorktree', { target, others })).toEqual(refused)
     expect(port.describeWorkspace).toHaveBeenCalledOnce()
     expect(port.reviewWorktree).toHaveBeenCalledOnce()
     expect(port.removeWorktree).toHaveBeenCalledTimes(2)

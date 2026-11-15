@@ -161,7 +161,7 @@ export interface RegisteredSession {
   /**
    * What the workspace's SCM needs re-applied to the pane on every relaunch (scm/types.ts) — the
    * SCM's half of `gridLaunch`. A git worktree's record only says it is one and asks for nothing.
-   * Written by `agent_create` from what `prepareProjectFolder` made, carried forward like
+   * Written by `agent_create` from what the workspaces service made (`prepareFolder`), carried forward like
    * `gridLaunch`, never re-derived. Absent on a row from before the seam and on a folder no SCM
    * prepared — absent, not null, so a row that never had one is written exactly as before.
    */
