@@ -1,0 +1,88 @@
+name: tmp device-host-adapter
+
+# TEMPORARY: removed before the pull request (docs/plans/2026-11-15-device-host-adapter-plan.md, Task 11).
+# The dial's end-to-end suites on macOS and Linux, and the round dial's ESP-IDF build, at every push to this
+# branch: PR CI runs no end-to-end suite and builds only the Harness Pro. No secret, nothing flashed, published
+# or written outside the run.
+on:
+  push:
+    branches: [feat/device-host-adapter]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tmp-device-host-adapter
+  cancel-in-progress: true
+
+env:
+  CLI_NODE_VERSION: 24.22.2
+
+jobs:
+  dial-e2e:
+    name: dial e2e (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: cli
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.CLI_NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: cli/package-lock.json
+      - name: tmux, the shells the tests launch through, and the locale (Linux, as cli-e2e.yml's shards)
+        if: runner.os == 'Linux'
+        run: |
+          echo "LANG=C.UTF-8" >> "$GITHUB_ENV"
+          echo "SHELL=/bin/zsh" >> "$GITHUB_ENV"
+          sudo bash ../scripts/apt-install.sh tmux zsh tcsh dash lsof
+          sudo sysctl -w fs.inotify.max_user_instances=1024 fs.inotify.max_user_watches=524288
+          insecure=$(zsh -fc 'autoload -U compaudit && compaudit' 2>/dev/null | grep '^/' | sort -u || true)
+          if [ -n "$insecure" ]; then
+            echo "$insecure" | xargs sudo chown root:root
+            echo "$insecure" | xargs sudo chmod g-w,o-w
+          fi
+      - name: tmux (macOS)
+        if: runner.os == 'macOS'
+        run: command -v tmux || brew install tmux
+      - run: npm ci --no-audit --no-fund
+      - name: The dial's end-to-end suites
+        env:
+          E2E_BUNDLE: '1'
+          E2E_ARTIFACTS_DIR: ${{ runner.temp }}/e2e-daemon-logs
+        run: >-
+          npx vitest run --config vitest.e2e.config.ts
+          e2e/deviceClaudeOrca.e2e.ts e2e/deviceWithoutApp.e2e.ts e2e/dialPaneFollow.e2e.ts
+          e2e/dialClaudeAppFollow.e2e.ts e2e/dialTerminalFollow.e2e.ts e2e/dialAppFilter.e2e.ts
+          e2e/dialAppFilterOnDial.e2e.ts e2e/devicesProcess.e2e.ts e2e/deviceCodex.e2e.ts
+      - name: Keep the failing tests' daemon logs
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: tmp-dial-e2e-daemon-logs-${{ matrix.os }}
+          path: ${{ runner.temp }}/e2e-daemon-logs/
+          if-no-files-found: ignore
+
+  round-firmware-build:
+    name: round dial firmware build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    # The ESP-IDF release the dials are built with, as ci.yml's pro-firmware-build.
+    container: espressif/idf:v5.5.4
+    defaults:
+      run:
+        shell: bash
+        working-directory: devices/harness-device/firmware
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build the ESP32-S3 firmware
+        run: |
+          . "$IDF_PATH/export.sh" > /dev/null
+          idf.py -B build build
