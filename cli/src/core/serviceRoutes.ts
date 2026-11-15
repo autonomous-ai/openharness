@@ -52,8 +52,6 @@ const isRecord = (value: unknown): value is Record<string, unknown> => !!value &
 
 export function createServiceRoutes(deps: ServiceRoutesDeps) {
   const log = deps.log ?? ((line: string) => console.warn(line))
-  // Looked up for every frame a window sends, a terminal's keystrokes' acknowledgements among them: one lookup.
-  const frames = new Map((deps.frames ?? []).map((each) => [each.frame, each]))
   const setTimer = deps.setTimer ?? ((run, ms) => setTimeout(run, ms))
   const clearTimer = deps.clearTimer ?? ((timer) => clearTimeout(timer as ReturnType<typeof setTimeout>))
 
@@ -85,7 +83,24 @@ export function createServiceRoutes(deps: ServiceRoutesDeps) {
     return Object.keys(headers).length ? { ...answer, headers } : answer
   }
 
+  // The door looks up a handler directly; ordinary terminal frames never enter the service adapter.
+  const frames = new Map((deps.frames ?? []).map(route => [route.frame,
+    (connection: string, frame: Record<string, unknown>): Promise<Record<string, unknown> | null> => {
+      const payload = isRecord(frame.payload) ? frame.payload : {}
+      const requestId = typeof payload.requestId === 'string' ? payload.requestId : ''
+      return ask(route.type, route.waitMs, { frame: route.frame, payload }, { ...OWNER_HERE, connection }).then((answer) => {
+        if (!route.result) return null
+        // Preserve the existing wire order while keeping correlation out of the service's control.
+        const result = { requestId, ...(answer && typeof answer.error !== 'string' ? answer : route.unanswered) }
+        result.requestId = requestId
+        return { type: route.result, payload: result }
+      })
+    },
+  ] as const))
+
   return {
+    /** Only declared frame types reach a handler; replies retain the originating connection and request id. */
+    frames,
     /** The answer to [request] on [path] (its query left out), or null when no service answers that path and method.
      *  [localOk]: the request carries the local header, which a route's write needs; [socket]: it came over the daemon's
      *  own socket, which a socket's route needs. Its body is read after both. */
@@ -107,22 +122,5 @@ export function createServiceRoutes(deps: ServiceRoutesDeps) {
       })
     },
 
-    /** A frame a window on this computer sent on its [connection] of the local WebSocket that a service answers: asked of
-     *  it as `{ frame, payload }`, as this computer's owner on that connection, and the frame its answer goes back as,
-     *  under the frame's request id, the route's own answer while its service gives none (down, failing, slow, or an
-     *  error); null for a frame that is told and never answered. Undefined when no service answers [frame]'s type. */
-    frame(connection: string, frame: Record<string, unknown>): Promise<Record<string, unknown> | null> | undefined {
-      const route = typeof frame.type === 'string' ? frames.get(frame.type) : undefined
-      if (!route) return undefined
-      const payload = isRecord(frame.payload) ? frame.payload : {}
-      const requestId = typeof payload.requestId === 'string' ? payload.requestId : ''
-      return ask(route.type, route.waitMs, { frame: route.frame, payload }, { ...OWNER_HERE, connection }).then((answer) => {
-        if (!route.result) return null
-        // Preserve the existing wire order while keeping correlation out of the service's control.
-        const result = { requestId, ...(answer && typeof answer.error !== 'string' ? answer : route.unanswered) }
-        result.requestId = requestId
-        return { type: route.result, payload: result }
-      })
-    },
   }
 }

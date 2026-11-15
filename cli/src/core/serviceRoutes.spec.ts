@@ -23,6 +23,8 @@ function router(types: string[], answer: (type: string, payload: Record<string, 
 /** A request as the door has it: [body] is what its read gives. */
 const asked = (method: string, target: string, body = '') => ({ method, target, readBody: vi.fn(async (_max?: number) => body) })
 const read = (target: string) => asked('GET', target)
+const frame = (doors: ReturnType<typeof createServiceRoutes>, connection: string, message: Record<string, unknown>) =>
+  doors.frames.get(message.type as string)?.(connection, message)
 
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks() })
 
@@ -189,27 +191,27 @@ describe('the door\'s routes a service answers', () => {
   it('hands a window\'s frame to its service as the window sent it, and its answer back under the frame\'s request id', async () => {
     const linked = router(['devices_ws'], (_type, payload) => (payload.frame === 'route_task' ? { agentId: 'a1', reason: 'named' } : {}))
     const doors = createServiceRoutes({ routes, frames, linked, hosted: router([]) })
-    expect(await doors.frame(conn, { type: 'route_task', payload: { requestId: 'q-1', text: ' fix ' } }))
+    expect(await frame(doors, conn, { type: 'route_task', payload: { requestId: 'q-1', text: ' fix ' } }))
       .toEqual({ type: 'route_result', payload: { requestId: 'q-1', agentId: 'a1', reason: 'named' } })
     expect(linked.route).toHaveBeenCalledWith('devices_ws', { frame: 'route_task', payload: { requestId: 'q-1', text: ' fix ' } }, window, expect.any(Function), 25_000)
     // Told, and never answered: nothing goes back.
-    expect(await doors.frame(conn, { type: 'voice_route_reply', payload: { voiceId: 'v1', state: 'taken' } })).toBeNull()
+    expect(await frame(doors, conn, { type: 'voice_route_reply', payload: { voiceId: 'v1', state: 'taken' } })).toBeNull()
     expect(linked.route).toHaveBeenLastCalledWith('devices_ws', { frame: 'voice_route_reply', payload: { voiceId: 'v1', state: 'taken' } }, window, expect.any(Function), 5_000)
     // A frame no service answers is the window's dispatch's, as ever, and so is every frame where none is declared.
-    expect(doors.frame(conn, { type: 'agents_list', payload: {} })).toBeUndefined()
-    expect(doors.frame(conn, { type: 7, payload: {} })).toBeUndefined()
-    expect(createServiceRoutes({ routes, linked, hosted: router([]) }).frame(conn, { type: 'route_task', payload: {} })).toBeUndefined()
+    expect(frame(doors, conn, { type: 'agents_list', payload: {} })).toBeUndefined()
+    expect(frame(doors, conn, { type: 7, payload: {} })).toBeUndefined()
+    expect(frame(createServiceRoutes({ routes, linked, hosted: router([]) }), conn, { type: 'route_task', payload: {} })).toBeUndefined()
   })
 
   it('sends a frame\'s own answer while its service gives none, at once, under the frame\'s request id or none', async () => {
     const down = createServiceRoutes({ routes, frames, linked: router(['devices_ws'], () => ({ error: 'SERVICE_UNAVAILABLE', service: 'devices' })), hosted: router([]) })
-    expect(await down.frame(conn, { type: 'route_task', payload: { requestId: 'q-2', text: 'x' } })).toEqual({ type: 'route_result', payload: { requestId: 'q-2', agentId: '', reason: 'down' } })
-    expect(await down.frame(conn, { type: 'route_task', payload: 'not a payload' })).toEqual({ type: 'route_result', payload: { requestId: '', agentId: '', reason: 'down' } })
-    expect(await down.frame(conn, { type: 'route_task', payload: { requestId: 7 } })).toEqual({ type: 'route_result', payload: { requestId: '', agentId: '', reason: 'down' } })
+    expect(await frame(down, conn, { type: 'route_task', payload: { requestId: 'q-2', text: 'x' } })).toEqual({ type: 'route_result', payload: { requestId: 'q-2', agentId: '', reason: 'down' } })
+    expect(await frame(down, conn, { type: 'route_task', payload: 'not a payload' })).toEqual({ type: 'route_result', payload: { requestId: '', agentId: '', reason: 'down' } })
+    expect(await frame(down, conn, { type: 'route_task', payload: { requestId: 7 } })).toEqual({ type: 'route_result', payload: { requestId: '', agentId: '', reason: 'down' } })
     // A service in this process that does not answer in the frame's time.
     let fire: (() => void) | undefined
     const slow = createServiceRoutes({ routes, frames, linked: router([]), hosted: router(['devices_ws']), setTimer: (run) => { fire = run }, clearTimer: () => {} })
-    const answer = slow.frame(conn, { type: 'route_task', payload: { requestId: 'q-3' } })
+    const answer = frame(slow, conn, { type: 'route_task', payload: { requestId: 'q-3' } })
     fire!()
     expect(await answer).toEqual({ type: 'route_result', payload: { requestId: 'q-3', agentId: '', reason: 'down' } })
   })
@@ -217,13 +219,13 @@ describe('the door\'s routes a service answers', () => {
   it('keeps request correlation when a service supplies a different request id', async () => {
     const doors = createServiceRoutes({ routes, frames,
       linked: router(['devices_ws'], () => ({ requestId: 'other-request', agentId: 'a1' })), hosted: router([]) })
-    expect(await doors.frame(conn, { type: 'route_task', payload: { requestId: 'original-request' } }))
+    expect(await frame(doors, conn, { type: 'route_task', payload: { requestId: 'original-request' } }))
       .toEqual({ type: 'route_result', payload: { requestId: 'original-request', agentId: 'a1' } })
-    const reply = await doors.frame(conn, { type: 'route_task', payload: { requestId: 'original-request' } })
+    const reply = await frame(doors, conn, { type: 'route_task', payload: { requestId: 'original-request' } })
     expect(JSON.stringify(reply?.payload)).toBe('{"requestId":"original-request","agentId":"a1"}')
     const ordinary = createServiceRoutes({ routes, frames,
       linked: router(['devices_ws'], () => ({ agentId: 'a1' })), hosted: router([]) })
-    const normal = await ordinary.frame(conn, { type: 'route_task', payload: { requestId: 'original-request' } })
+    const normal = await frame(ordinary, conn, { type: 'route_task', payload: { requestId: 'original-request' } })
     expect(JSON.stringify(normal?.payload)).toBe('{"requestId":"original-request","agentId":"a1"}')
   })
 
@@ -232,7 +234,7 @@ describe('the door\'s routes a service answers', () => {
     const broken: ServiceRouter = { route: () => { throw new Error('private-request-fixture') } }
     const doors = createServiceRoutes({ routes, frames, linked: broken, hosted: router([]), log })
     expect(await doors.answer('/api/thing/save', read('/api/thing/save'))).toEqual(DOWN)
-    expect(await doors.frame(conn, { type: 'route_task', payload: { requestId: 'q-4' } })).toEqual({ type: 'route_result', payload: { requestId: 'q-4', agentId: '', reason: 'down' } })
+    expect(await frame(doors, conn, { type: 'route_task', payload: { requestId: 'q-4' } })).toEqual({ type: 'route_result', payload: { requestId: 'q-4', agentId: '', reason: 'down' } })
     const odd = createServiceRoutes({ routes, linked: router([]), hosted: { route: () => { throw 'private-request-fixture' } }, setTimer: () => 0, clearTimer: () => {}, log })
     expect(await odd.answer('/api/thing/save', read('/api/thing/save'))).toEqual(DOWN)
     expect(log.mock.calls).toEqual([['[services] thing_http SERVICE_REQUEST_FAILED'], ['[services] devices_ws SERVICE_REQUEST_FAILED'],
@@ -246,7 +248,7 @@ describe('the door\'s routes a service answers', () => {
     const doors = createServiceRoutes({ routes, frames, linked: router([]), hosted: broken, log: vi.fn() })
     expect(await doors.answer('/api/thing/save', read('/api/thing/save'))).toEqual(DOWN)
     expect(vi.getTimerCount()).toBe(0)
-    expect(await doors.frame(conn, { type: 'route_task', payload: { requestId: 'q-5' } }))
+    expect(await frame(doors, conn, { type: 'route_task', payload: { requestId: 'q-5' } }))
       .toEqual({ type: 'route_result', payload: { requestId: 'q-5', agentId: '', reason: 'down' } })
     expect(vi.getTimerCount()).toBe(0)
   })

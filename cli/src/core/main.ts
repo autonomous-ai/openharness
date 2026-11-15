@@ -2364,7 +2364,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     },
     // A window's frames a service answers (core/api.ts `SERVICE_WS_FRAMES`): ⌘K's pick and its send, the fleet's beside the
     // dial in the devices (services/fleet.ts), and its answer to a spoken task.
-    onServiceFrame: serviceRoutes.frame,
+    serviceFrames: serviceRoutes.frames,
     // A window that connects after the dial did has missed the `dial_status` that announced it: the last one
     // the devices sent, kept here.
     dialStatus: () => lastDialStatus,

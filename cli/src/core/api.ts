@@ -2020,7 +2020,7 @@ export const SERVICE_HTTP_ROUTES: readonly ServiceHttpRoute[] = [
 ]
 
 /**
- * A frame of the local WebSocket that a service answers (core/serviceRoutes.ts `frame`): asked of it as the request
+ * A frame of the local WebSocket that a service answers (core/serviceRoutes.ts `frames`): asked of it as the request
  * `type`, carrying `{ frame, payload }` as the window sent them, off the connection's ordered chain, and its answer sent
  * back as the frame `result` under the frame's `requestId`. The core holds where it goes, how long it waits, and what is
  * sent back while its service is down, failing or slow: never what the frame does.

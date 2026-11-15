@@ -95,9 +95,8 @@ export interface LocalWsServerOptions {
   onAppSwarms?: (swarms: AppSwarms | null) => void
   /** Tab membership for cleanup, scoped to the reporting window, including local utility tabs. */
   onAppTabAgents?: (connection: string, agentIds: string[] | null) => void
-  /** A frame a service answers (core/api.ts `SERVICE_WS_FRAMES`, core/serviceRoutes.ts `frame`): the frame its answer
-   *  goes back as, or null for one that is told; undefined when no service answers its type. */
-  onServiceFrame?: (connId: string, frame: Frame) => Promise<Frame | null> | undefined
+  /** Handlers for declared service frames; unrelated traffic stays on the terminal path. */
+  serviceFrames?: ReadonlyMap<string, (connId: string, frame: Frame) => Promise<Frame | null>>
   /** The dial right now, sent to a window, or a tool that asked for the dial, the moment it connects — it may have
    *  missed the announcement. */
   dialStatus?: () => Record<string, unknown>
@@ -147,7 +146,7 @@ function rejectUpgrade(socket: Socket, status: number, reason: string, retryAfte
   )
 }
 
-function jsonFrame(raw: RawData, maxBytes = LOCAL_JSON_MAX_BYTES): Frame | null {
+function jsonFrame(raw: RawData, maxBytes = LOCAL_JSON_MAX_BYTES): (Frame & { type: string }) | null {
   const bytes = Buffer.isBuffer(raw)
     ? raw
     : raw instanceof ArrayBuffer
@@ -160,7 +159,7 @@ function jsonFrame(raw: RawData, maxBytes = LOCAL_JSON_MAX_BYTES): Frame | null 
     const value = JSON.parse(bytes.toString('utf8')) as unknown
     if (!value || typeof value !== 'object' || Array.isArray(value)) return null
     const frame = value as Frame
-    return typeof frame.type === 'string' && frame.type.length <= 100 ? frame : null
+    return typeof frame.type === 'string' && frame.type.length <= 100 ? frame as Frame & { type: string } : null
   } catch {
     return null
   }
@@ -624,9 +623,9 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
         // Answered OFF this connection's ordered chain, which carries the terminal's keystrokes: the answer is the
         // devices' (the fleet's router), in a process of their own, and one that hangs must not hold a window's typing until
         // the request times out. Nothing orders on the answer but its request id.
-        const served = !isBinary && parsed ? options.onServiceFrame?.(connId, parsed) : undefined
-        if (served) {
-          void served.then((reply) => { if (reply) sink.sendFrame(reply) })
+        const serve = parsed && options.serviceFrames?.get(parsed.type)
+        if (serve) {
+          void serve(connId, parsed!).then((reply) => { if (reply) sink.sendFrame(reply) })
           return
         }
         // THE PAIR BRAIN'S FRAMES. Local only, in both directions: never forwarded to a relayed machine,

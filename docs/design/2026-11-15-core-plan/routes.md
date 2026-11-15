@@ -166,7 +166,7 @@ The core's files and lines: 542 / 92,562 before (main at 0b15482b55), 542 / 92,2
   browser can open the WebSocket (it refuses any Origin), and over TCP it takes the local credential from this account. The
   local header, the door's guard against a browser page, is not asked there.
 - The WebSocket half: `SERVICE_WS_FRAMES` (`ServiceWsFrame`: `frame`, `type`, `result?`, `waitMs`, `unanswered?`) and
-  `serviceRoutes.frame(connection, frame)`: the frame is asked of its service as `{ frame, payload }` (the window's payload as it
+  `serviceRoutes.frames.get(frame.type)(connection, frame)`: the frame is asked of its service as `{ frame, payload }` (the window's payload as it
   came, nested: serviceLinks puts its own `requestId` on the request), off the connection's ordered chain, and the answer
   goes back as `{ type: result, payload: { requestId, ...answer } }` (the window's requestId, `''` when it sent none, first,
   as before). An answer with a string `error` (down, failing, slow) is the frame's `unanswered`. No `result`: told, nothing
@@ -243,6 +243,12 @@ Root review and integration:
   an intermediate run retained one old log-text expectation, corrected to the intentional content-free failure.
 - These fixes change neither stored data nor successful public replies. Existing declared fallback bodies remain;
   unknown exceptions are not copied into logs. Full core coverage and final process acceptance remain pending.
+- Main `6099a1a205` is integrated. A wire-order regression was observed red, then all 26 adapter/key-route cases passed;
+  requestId stays first in ordinary successful replies as well as when a service attempts to replace it.
+- A nine-round alternating localhost WebSocket workload found the inherited dispatch change added process CPU
+  (6.196 to 6.310 microseconds per terminal frame, client and server together). The door now looks up declared
+  handlers directly, so ordinary terminal frames never call the service adapter. The 95 affected adapter, key-route
+  and local WebSocket tests pass. Final matched performance and full acceptance are still pending.
 
 ## Step 4: smaller items
 Phone sign-in relay (lib/loopbackGet.ts, core/terminals/browser.ts, 127 lines -> gateway), guest rules and a guest's

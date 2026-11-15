@@ -571,9 +571,10 @@ describe('local CLI WebSocket', () => {
     const held = async () => { trace.push('route started'); entered.resolve(); await pending.promise; trace.push('route answered') }
     backend.handleLocalFrame = () => { trace.push('next') }
     const ws = new WebSocket(await start(backend, {
-      onServiceFrame: (_connId, frame) => frame.type === type
-        ? held().then(() => ({ type: type === 'route_task' ? 'route_result' : 'route_send_result', payload: { requestId: (frame.payload as { requestId?: unknown }).requestId } }))
-        : undefined,
+      serviceFrames: new Map([[type, (_connId, frame) => held().then(() => ({
+        type: type === 'route_task' ? 'route_result' : 'route_send_result',
+        payload: { requestId: (frame.payload as { requestId?: unknown }).requestId },
+      }))]]),
     }))
     await onceOpen(ws)
     const connected = onceMessage(ws)
@@ -1288,11 +1289,10 @@ describe('local CLI WebSocket', () => {
       backend,
       // ⌘K's pick is answered; the window's answer to a spoken task is told, and nothing goes back; any other frame is
       // no service's.
-      onServiceFrame: (connId, frame) => {
-        if (frame.type !== 'route_task' && frame.type !== 'voice_route_reply') return undefined
+      serviceFrames: new Map(['route_task', 'voice_route_reply'].map(type => [type, (connId: string, frame: Frame) => {
         asked.push({ connId, frame })
         return Promise.resolve(frame.type === 'route_task' ? { type: 'route_result', payload: { requestId: 'q-7', agentId: 'a1' } } : null)
-      },
+      }])),
     })
     await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve))
     const url = `ws://127.0.0.1:${(server.address() as AddressInfo).port}/api/local-ws`
