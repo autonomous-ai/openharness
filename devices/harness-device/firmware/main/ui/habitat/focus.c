@@ -70,10 +70,12 @@ enum { MARK_SIZE = 56, TITLE_BOTTOM = HT_ARC_Y + HT_ARC_CELL_HEIGHT, COL_X = 41,
  * 2026-10-02). It holds while that face stays up, so a redraw never swaps it. Each fits two lines of
  * inter_36 at EMPTY_W. The lines that teach the dial come up more often (owner, 2026-10-03): a line
  * listed k times is k times as likely — "Tap to talk" 10, "Hold to switch tabs" 5, "Tap the name to
- * switch panes" 5, every other line once.
+ * switch panes" 5, every other line once. Where a hold opens APPS, "Hold to switch tabs" names the apps, as often
+ * (the PM, 2026-11-15).
  */
 #define TAP_TO_TALK "Tap to talk"
 #define HOLD_FOR_TABS "Hold to switch tabs"
+#define HOLD_FOR_APPS "Hold to switch apps"   // HOLD_FOR_TABS where a hold opens APPS (resting_line)
 #define TAP_THE_NAME "Tap the name to switch panes"
 static const char *const RESTING[] = {
     "Let's build it", "Do anything", "What's next?", "Ready when you are",
@@ -90,6 +92,7 @@ static const char *const RESTING[] = {
  */
 #define TAP_TALK "Tap to talk"
 #define HOLD_TABS "Hold for tabs"
+#define HOLD_APPS "Hold for apps"   // HOLD_TABS where a hold opens APPS (relaxing_line)
 #define TAP_NAME "Tap name for panes"
 static const char *const RELAXING[] = {
     TAP_TALK, TAP_TALK, TAP_TALK, TAP_TALK, TAP_TALK, TAP_TALK, TAP_TALK, TAP_TALK, TAP_TALK, TAP_TALK,
@@ -105,6 +108,8 @@ static const char *const RESTING_MUTE[] = {HOLD_FOR_TABS, TAP_THE_NAME};
 static const char *const RELAXING_MUTE[] = {HOLD_TABS, TAP_NAME};
 static bool voice_ok = true;
 void ht_focus_set_voice(bool can_talk) { voice_ok = can_talk; }
+static bool hold_apps;
+void ht_focus_set_hold_apps(bool apps) { hold_apps = apps; }
 static struct {
     bool showing;           // the last home face drawn was a resting one
     char who[64];           // ... for this recipient
@@ -130,13 +135,16 @@ static const char *pick_line(const ht_character_face_t *f, const char *const *li
 }
 static const char *resting_line(const ht_character_face_t *f)
 {
-    if (!voice_ok) return pick_line(f, RESTING_MUTE, sizeof RESTING_MUTE / sizeof RESTING_MUTE[0]);
-    return pick_line(f, RESTING, sizeof RESTING / sizeof RESTING[0]);
+    const char *line = voice_ok ? pick_line(f, RESTING, sizeof RESTING / sizeof RESTING[0])
+                                : pick_line(f, RESTING_MUTE, sizeof RESTING_MUTE / sizeof RESTING_MUTE[0]);
+    return hold_apps && !strcmp(line, HOLD_FOR_TABS) ? HOLD_FOR_APPS : line;
 }
 static const char *relaxing_line(const ht_character_face_t *f)
 {
-    if (!voice_ok) return pick_line(f, RELAXING_MUTE, sizeof RELAXING_MUTE / sizeof RELAXING_MUTE[0]);
-    return pick_line(f, RELAXING, sizeof RELAXING / sizeof RELAXING[0]);
+    const char *line = voice_ok ? pick_line(f, RELAXING, sizeof RELAXING / sizeof RELAXING[0])
+                                : pick_line(f, RELAXING_MUTE, sizeof RELAXING_MUTE / sizeof RELAXING_MUTE[0]);
+    // The hint says what a hold does (the PM, 2026-11-15): where it opens APPS it names the apps, as often as the tabs.
+    return hold_apps && !strcmp(line, HOLD_TABS) ? HOLD_APPS : line;
 }
 
 /*

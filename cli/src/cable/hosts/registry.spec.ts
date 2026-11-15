@@ -7,7 +7,7 @@ function agent(over: Partial<HostAgent>): HostAgent {
     id: 'a',
     engine: 'claude',
     name: 'n',
-    host: 'terminal',
+    host: 'terminal', app: 'terminal',
     state: 'idle',
     lastActivityAt: 0,
     unseenDone: false,

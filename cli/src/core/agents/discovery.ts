@@ -29,7 +29,7 @@ import { bypassPermissionActive, permissionModeFromArgv } from '../../lib/proces
 export interface DiscoveryDeps {
   registry: Pick<typeof registry,
     'byRuntimeEngine' | 'openProcessAgent' | 'adoptEngine' | 'reinstateArchived' | 'updateRuntimes' | 'updateProcessIdentity' | 'setBypassPermission'
-    | 'setPermissionMode' | 'setCodexHome' | 'setHermesHome' | 'setDsh' | 'byAgent' | 'setLaunch' | 'setActive'
+    | 'setPermissionMode' | 'setCodexHome' | 'setHermesHome' | 'byAgent' | 'setLaunch' | 'setActive'
     | 'terminalAvailable' | 'setTerminalAvailable'>
   /** A look at a running agent, for the services that follow agents (core/agentLife.ts `running`). */
   attach: (session: RegisteredSession) => void
@@ -125,7 +125,6 @@ export function createDiscoveryHandlers({
       gateway: observed.gateway,
       grid: observed.grid,
       codexHome: observed.codexHome,
-      dsh: observed.dsh,
     })
     if (!opened) return
     attach(opened.entry)
@@ -157,8 +156,8 @@ export function createDiscoveryHandlers({
     if (externalResumePending(current.externalResume)) return
     if (observed.engine === 'openclaw' && current.engine !== 'openclaw' && !await showsOpenclaw(observed)) return
     const wasDormant = !current.active
-    // Read BEFORE the update, because the update is what overwrites it. `undefined` means the probe
-    // could not look, which never counts as a move — see `probeGridAssignment`'s three answers.
+    // Read BEFORE the update, because the update is what overwrites it. `undefined` means the command
+    // line says nothing of the grid, which never counts as a move (lib/gridAssignmentWire.ts `gridAssignmentEvidence`).
     const gridMoved = observed.grid !== undefined
       && !sameGridAssignment(current.grid ?? null, observed.grid)
     const wasLaunching = current.launch?.state !== undefined && current.launch.state !== 'ready'
@@ -210,17 +209,13 @@ export function createDiscoveryHandlers({
     // under learns it from the process, before the hook path validates a transcript against it.
     // Fill-only — a profile the row already knows is never re-derived.
     if (observed.codexHome && !current.codexHome) registry.setCodexHome(current.agentId, observed.codexHome)
-    // …and a Hermes home the same way, when the process names one. A row that learns it here never
-    // has to look its session up store by store (openharness#191). A home Harness worked out is marked, so a
-    // relaunch does not export it; a row that has it unmarked (an older daemon saved over the mark) is marked again.
-    if (observed.hermesHome && (!current.hermesHome || (observed.hermesHomeDerived && !current.hermesHomeDerived
-      && current.hermesHome === observed.hermesHome))) {
-      if (observed.hermesHomeDerived) registry.setHermesHome(current.agentId, observed.hermesHome, true)
-      else registry.setHermesHome(current.agentId, observed.hermesHome)
+    // …and a Hermes home the same way, from the store its process holds open. A row that learns it here never
+    // has to look its session up store by store (openharness#191). The daemon's path of a sandbox's home is marked, so
+    // a relaunch does not export it. A home the row has is never marked: a descriptor cannot tell an older daemon's
+    // row from one Harness launched by name, whose relaunch must export it.
+    if (observed.hermesHome && !current.hermesHome) {
+      registry.setHermesHome(current.agentId, observed.hermesHome, observed.hermesHomeDerived === true)
     }
-    // And the DSH: a row minted by discovery (or written before the field existed) learns it from
-    // the process's own `HARNESS_DSH`, and gets its viewer and verdict watch from here on.
-    if (observed.dsh && !current.dsh) registry.setDsh(current.agentId, observed.dsh)
     // And it is looked at again for the services that follow agents: whatever path brought this agent back to running,
     // it passes here (decision 14), and a viewer follows its harness's update. The registry's row now, not the scan's.
     const live = registry.byAgent(current.agentId)

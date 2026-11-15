@@ -17,7 +17,7 @@ import { DSH_ID_RE } from '../dsh/id.js'
 import { AGENT_NAME_RE } from './engineLaunch.js'
 import { resumesConversation } from './resumeCapability.js'
 import { namingTitle } from './sessionTitle.js'
-import { transcriptProject } from '../engines/discoveries.js'
+import { reportedProfileHome, transcriptProject } from '../engines/discoveries.js'
 import { automaticAgentName, engineLabel, isAutomaticName } from './agentNames.js'
 import {
   closeSync,
@@ -63,6 +63,7 @@ import type { StartedBy } from './agentAttribution.js'
 import { PTY_HOST_INSTANCE } from './ptyHost/instance.js'
 import { isKittyGraphicsCommand } from './terminalTitle.js'
 import { sid } from './log.js'
+import { HOOK_GATEWAY_ENGINES } from './gatewayRuntime.js'
 
 export type { ProcessIdentity } from './terminalTypes.js'
 
@@ -128,15 +129,18 @@ export interface RegisteredSession {
    * Set when the engine process is pointed at an OpenRouter endpoint (`ori claude`, `ori codex`, …).
    *
    * It is NOT a second engine: the engine stays `claude`/`codex`/… and every badge, icon and wire field
-   * keeps saying so. It only records HOW the pane's requests are billed, which decides two things — the
-   * runtime profile becomes display-only, and the daemon's recap/route calls go direct to OpenRouter
-   * instead of spawning a vendor CLI that has no credential. Re-derived from the live process on every
-   * discovery, so a pane restarted without the wrapper drops it on the next scan.
+   * keeps saying so. It only records HOW the pane's requests are billed, which makes the runtime profile
+   * display-only: the core types no `/model` into the pane. Never read from the process's environment:
+   * Codex's comes from its argv on every discovery; Claude Code's, OpenCode's and Hermes's from what their
+   * hook says of its own environment (`X-Harness-Hook-Gateway`), the only hooks that say it. A relaunch
+   * keeps it until the engine says it again, so a pane restarted without the wrapper drops it on the next
+   * scan or hook.
    */
   gateway?: 'ori' | null
   /**
-   * The grid this pane's engine is pointed at, if any — read off the live process on every discovery
-   * exactly like `gateway`, never declared. See `gridAssignment.ts`. Carries no credential; the
+   * The grid this pane's engine is pointed at, if any. Comes from the launch record (create and retarget
+   * write it) and from argv evidence that models classifies; unlike `gateway`, which comes from Codex's
+   * argv or a hook's header. See `gridAssignment.ts`. Carries no credential; the
    * launch that put the engine there, credential included, is `gridLaunch` below.
    */
   grid?: GridAssignment | null
@@ -207,10 +211,10 @@ export interface RegisteredSession {
    */
   previousAgentId?: string
   /**
-   * The CODEX_HOME folder this agent was launched against, if one was chosen instead of `~/.codex`.
-   * Codex only. Unlike `grid`, this is chosen once at creation and never re-derived from the live
-   * process — a running agent cannot be moved to a different profile the way it can be retargeted
-   * to a different grid.
+   * The CODEX_HOME folder this agent runs against, if it is not `~/.codex`. Codex only. Chosen at creation; a row
+   * that does not know it (a Codex started by hand) is filled once, from its hook's own CODEX_HOME when its transcript
+   * is under it, or from the rollout its process holds open. Unlike `grid`, never changed once known — a running
+   * agent cannot be moved to a different profile the way it can be retargeted to a different grid.
    */
   codexHome?: string | null
   /**
@@ -225,8 +229,9 @@ export interface RegisteredSession {
    *
    * Unlike `codexHome` this is not a launch choice the daemon makes: `hermes -p` is how a person starts
    * one, and the daemon meets the pane afterwards. So it is FOUND rather than recorded — by the session
-   * id, in whichever store holds its row (`engines/hermes/home.ts`) — and then kept here so the lookup
-   * happens once per agent instead of once per poll. Fill-only, like `codexHome`.
+   * id, in whichever store holds its row (`engines/hermes/home.ts`), or from the store its process holds
+   * open — and then kept here so the lookup happens once per agent instead of once per poll. Fill-only,
+   * like `codexHome`.
    *
    * Everything Hermes-shaped reads it: the live mirror, `agent_recent`, the recap fallback, the hook's
    * source check and the model/effort poll. Reading one fixed home instead is what left a profile
@@ -234,10 +239,10 @@ export interface RegisteredSession {
    */
   hermesHome?: string | null
   /**
-   * Only beside `hermesHome`: that path is Harness's own for the home (worked out from the process's `HOME`, or
-   * translated from a sandbox's view), not the value of the process's `HERMES_HOME`. A relaunch exports no
-   * `HERMES_HOME` for it, since the relaunched process works out the same home, in its own view. Stored, not kept in
-   * memory, so an agent resumed after the daemon that saw its process has gone still is not handed the daemon's path.
+   * Only beside `hermesHome`: that path is the daemon's path of a sandboxed process's home, not the one the process
+   * names it by. A relaunch exports no `HERMES_HOME` for it, since the relaunched process works out its own home, in
+   * its own view. Stored, not kept in memory, so an agent resumed after the daemon that saw its process has gone still
+   * is not handed the daemon's path.
    */
   hermesHomeDerived?: true
   /**
@@ -266,9 +271,8 @@ export interface RegisteredSession {
   /**
    * The domain-specific harness this agent was created as (`autonomous/copper`), or null for a plain
    * engine. NOT a second engine: `engine` stays the base (`claude`, `codex`, …) and every normalizer,
-   * probe and install path keys on that. Chosen at creation, carried forward, and re-read off the
-   * live process's `HARNESS_DSH` by discovery so a pane the daemon did not create (or had to mint
-   * again after a restart) is still labelled. Fill-only, like `codexHome`. See `src/dsh/`.
+   * probe and install path keys on that. Chosen at creation and carried by every relaunch: the launch
+   * record is the one source, so a row discovery mints has none. See `src/dsh/`.
    */
   dsh?: string | null
   /** Stable key of the session-scoped harness runtime; preserved by bind, restore and fork. */
@@ -406,6 +410,10 @@ export interface RegisterInput {
   hermesHome?: string
   /** `hermesHome` is one Harness worked out — see RegisteredSession.hermesHomeDerived. */
   hermesHomeDerived?: true
+  /** From the hook's own environment: undefined when the hook did not say. Taken for Claude Code, OpenCode and Hermes. */
+  gateway?: 'ori' | null
+  /** Codex only, the hook's own CODEX_HOME. Fill-only, and only when this session's transcript is under its sessions folder. */
+  codexHome?: string
 }
 
 /** Display name for a session's "project" tab/tile. A user rename (persisted override) is
@@ -1719,14 +1727,12 @@ class Registry {
     processIdentity: ProcessIdentity
     gateway?: 'ori' | null
     grid?: GridAssignment | null
-    /** Codex only: the CODEX_HOME the process was launched under, read off its environment. Fills a
+    /** Codex only: the CODEX_HOME the process runs under, from the rollout it holds open. Fills a
      *  row that does not know its profile yet; never overwrites one that does (see `codexHome`). */
     codexHome?: string | null
     /** The Hermes home this session's store lives in, if it is not the default. Fill-only. */
     hermesHome?: string | null
     claudeHome?: string | null
-    /** The DSH read off the process's `HARNESS_DSH`, if any. Fill-only, like `codexHome`. */
-    dsh?: string | null
   }):
     {
       entry: RegisteredSession
@@ -1784,14 +1790,13 @@ class Registry {
         existing.launch = { state: 'ready' }
         this.traceLaunch(existing.agentId, before, existing.launch, 'openProcessAgent re-observed')
       }
-      // Only a successful read speaks: an undefined probe (ps failed, /proc unreadable) keeps whatever
-      // the last good one said rather than silently downgrading a gateway agent to a vendor one.
+      // Only a finding speaks: an undefined gateway (an engine whose hook, not its argv, says it) or grid
+      // (a read that failed) keeps what the row knew rather than downgrading a gateway agent to a vendor one.
       if (input.gateway !== undefined) existing.gateway = input.gateway
       if (input.grid !== undefined) existing.grid = input.grid
       if (input.codexHome && !existing.codexHome) existing.codexHome = input.codexHome
       if (input.claudeHome && !existing.claudeHome) existing.claudeHome = input.claudeHome
       if (input.hermesHome && !existing.hermesHome) existing.hermesHome = input.hermesHome
-      if (input.dsh && !existing.dsh) existing.dsh = input.dsh
       if (rowFingerprint(persistedRow(existing)) !== before) existing.touchedAt = Date.now()
       this.index(existing)
       this.terminalAvailableAgents.add(existing.agentId)
@@ -1836,9 +1841,10 @@ class Registry {
       codexHome: input.codexHome ?? null,
       hermesHome: input.hermesHome ?? null,
       claudeHome: input.claudeHome ?? null,
-      dsh: input.dsh ?? null,
+      // A DSH is a launch fact Harness records when it creates the agent, never read off a process.
+      dsh: null,
       // A discovered pane's named agent is only visible in its argv; nothing here reads it, so the
-      // row cannot relaunch it as one. Fill-only, like `dsh`.
+      // row cannot relaunch it as one.
       agent: null,
       transcriptPath: null,
       projectDir: basename(input.cwd ?? '') || agentId,
@@ -2111,6 +2117,8 @@ class Registry {
      * cannot be opened. The caller announces the removal.
      */
     orphaned: { agentId: string; sessionId: string } | null
+    /** The `codexHome` the input named was not taken: this session's transcript was not found under it. */
+    refusedHome?: true
   } | null {
 
     if (this.writeBlocked) throw new IdentityReadUnavailable('the saved session registry is unavailable')
@@ -2210,8 +2218,18 @@ class Registry {
             : null
     const effectiveTranscriptPath = transcriptPath ?? (sameSession ? existing.transcriptPath : null) ?? derived ?? null
     // Native evidence is staged before terminal adoption, displacement or any live publication.
-    const proof = effectiveTranscriptPath ? transcriptEvidence(engine, effectiveTranscriptPath,
-      processAgent?.codexHome ?? undefined, !transcriptPath && derived === effectiveTranscriptPath ? 'derived' : false) : undefined
+    const evidenceUnder = (profile: string | undefined) => effectiveTranscriptPath ? transcriptEvidence(engine, effectiveTranscriptPath,
+      profile, !transcriptPath && derived === effectiveTranscriptPath ? 'derived' : false) : undefined
+    // A home the hook says of its own environment fills a row that has none, and only once this session's transcript
+    // is found under it. A home that does not hold it, or cannot be read, is no evidence: the transcript is taken as
+    // it would be without it, and the registration goes on.
+    const reportedHome = processAgent?.codexHome ? null : reportedProfileHome(engine, input.codexHome)
+    let proof: ReturnType<typeof evidenceUnder>
+    if (reportedHome) {
+      try { proof = evidenceUnder(reportedHome) } catch (error) { if (!(error instanceof IdentityReadUnavailable)) throw error }
+    }
+    const refusedHome = !!reportedHome && !proof?.valid
+    if (!reportedHome || refusedHome) proof = evidenceUnder(processAgent?.codexHome ?? undefined)
     if (proof && !proof.valid) {
       proof.verify()
       if (!proof.files.file(effectiveTranscriptPath!, true)) throw new IdentityReadUnavailable('the announced transcript is not yet available')
@@ -2273,10 +2291,10 @@ class Registry {
       sessionId,
       boundAt: isNew ? now : existing?.boundAt ?? now,
       engine,
-      // Both are facts about the live process the hook came from, re-read by discovery on every
-      // pass — but a bind must not blank them in between, or the very first SessionStart hook would
-      // announce a grid agent as "on no grid" until the next scan put it back.
-      gateway: existing?.gateway ?? null,
+      // A bind blanks neither, or the very first SessionStart hook would announce a grid agent as "on no grid" until
+      // the next scan put it back. An engine whose hook says its gateway takes the hook's word; a hook that says
+      // nothing (an older one) leaves the last word standing.
+      gateway: HOOK_GATEWAY_ENGINES.has(engine) && input.gateway !== undefined ? input.gateway : existing?.gateway ?? null,
       grid: existing?.grid ?? null,
       // The credential-bearing launch. Like codexHome: written once, carried forward, never re-derived.
       gridLaunch: existing?.gridLaunch ?? null,
@@ -2315,10 +2333,11 @@ class Registry {
       title: titleDisplayName(input.title ?? existing?.title ?? null),
       model: modelString(input.model) ?? existing?.model ?? null,
       cliVersion: input.cliVersion ?? existing?.cliVersion ?? null,
-      // Chosen once at agent_create time and never re-derived (unlike `grid`, which openProcessAgent
-      // re-reads off the live process on every discovery) — a hook-triggered bind must carry it
-      // forward or the very first SessionStart hook would silently wipe the agent's chosen profile.
-      codexHome: existing?.codexHome ?? null,
+      // Chosen at agent_create, or filled once for a row with none: from the home its hook reports, when
+      // this session's transcript is under it (above), or from the rollout its process holds open
+      // (openProcessAgent). Never changed once known — a hook-triggered bind must carry it forward or the
+      // very first SessionStart hook would silently wipe the agent's profile.
+      codexHome: existing?.codexHome ?? (refusedHome ? null : reportedHome),
       claudeHome: existing?.claudeHome ?? null,
       // The home the gate looked this session up in, or whatever the row already knew. Carried
       // forward like every field here: a bind REBUILDS the row, and a home dropped at the first hook
@@ -2375,7 +2394,7 @@ class Registry {
     if (orphaned) this.terminalAvailableAgents.delete(orphaned.agentId)
     if (promoted) this.terminalAvailableAgents.add(agentId)
     this.traceLaunch(agentId, previousLaunch, committed.launch, `register ${engine} (${isNew ? 'new session' : 're-register'})`)
-    return { entry: committed, isNew, evicted, rebound, orphaned }
+    return { entry: committed, isNew, evicted, rebound, orphaned, ...(refusedHome ? { refusedHome: true as const } : {}) }
   }
 
   remove(sessionId: string): boolean {
@@ -2764,11 +2783,12 @@ class Registry {
     const before = rowFingerprint(persistedRow(session))
     this.drop(session)
     session.processIdentity = processIdentity
-    // A record written before gateways existed, or by a pass whose probe failed, learns it here — the
-    // env cannot change under a running process, so a successful read is always the truth for this pid.
+    // A Codex's argv, which cannot change under a running process, is the truth for this pid, and an engine with no
+    // gateway Harness can see says null. Undefined (Claude Code, OpenCode and Hermes, whose hook says it, or a
+    // relaunch) keeps what the row knew.
     if (gateway !== undefined) session.gateway = gateway
-    // The grid is read from the same environment and follows the same rule. It matters most right
-    // after a retarget: the respawned pane is a new pid, and this is where its new grid lands.
+    // The grid follows the same rule. It matters most right after a retarget: the respawned pane is a new
+    // pid, and this is where its new grid lands.
     if (grid !== undefined) session.grid = grid
     if (rowFingerprint(persistedRow(session)) !== before) session.touchedAt = Date.now()
     this.index(session)
@@ -2814,8 +2834,6 @@ class Registry {
     return true
   }
 
-  /** Fill in the Codex profile a row did not know (discovery read it off the live process). Never
-   *  replaces one it already has — the profile is chosen once, see `codexHome`. */
   /** Put a row back in the folder its transcript belongs to (cwdRepair.ts). Any engine, any value:
    *  the caller has already proved the new folder from the transcript. */
   setCwd(agentId: string, cwd: string): boolean {
@@ -2827,8 +2845,9 @@ class Registry {
     return true
   }
 
-  /** Fill in the profile a row did not know (its CODEX_HOME), for an engine whose sessions follow one (its session
-   *  store's `sessions.profile`). Never overwrites. */
+  /** Fill in the profile a row did not know (its CODEX_HOME, which discovery found from the rollout its process holds
+   *  open), for an engine whose sessions follow one (its session store's `sessions.profile`). Never overwrites: the
+   *  profile is chosen once, see `codexHome`. */
   setCodexHome(agentId: string, codexHome: string): boolean {
     const session = this.agents.get(agentId)
     if (!session || !sessionStoreOf(session.engine)?.sessions.profile || session.codexHome) return false
@@ -2839,14 +2858,14 @@ class Registry {
   }
 
   /** Fill in the Hermes home a row did not know — found by looking for its session in each store, or
-   *  read off the live process. Never overwrites: like `setCodexHome`, a session does not move between
-   *  homes, and a later probe that could not read the process must not take the answer away. `derived`: the home is
-   *  one Harness worked out (RegisteredSession.hermesHomeDerived); a row that has this same home without the mark (an
-   *  older daemon saved over it) takes the mark alone. */
+   *  from the store its process holds open. Never overwrites: like `setCodexHome`, a session does not move between
+   *  homes, and a later probe that could not list the process must not take the answer away. `derived`: the home is
+   *  the daemon's path of a sandboxed process's home (RegisteredSession.hermesHomeDerived). A row that has a home is
+   *  never marked either: a descriptor cannot tell an older daemon's row from one Harness launched by name, whose
+   *  relaunch must export its home. */
   setHermesHome(agentId: string, hermesHome: string, derived = false): boolean {
     const session = this.agents.get(agentId)
-    if (!session || session.engine !== 'hermes') return false
-    if (session.hermesHome && !(derived && session.hermesHome === hermesHome && !session.hermesHomeDerived)) return false
+    if (!session || session.engine !== 'hermes' || session.hermesHome) return false
     session.hermesHome = hermesHome
     if (derived) session.hermesHomeDerived = true
     session.touchedAt = Date.now()
@@ -2860,17 +2879,6 @@ class Registry {
     // A `--local` row's store is its folder: a TUI seen elsewhere never moves it off.
     if (!session || session.engine !== 'openclaw' || session.openclawLocal || session.openclawStateDir === stateDir) return false
     session.openclawStateDir = stateDir
-    session.touchedAt = Date.now()
-    this.save()
-    return true
-  }
-
-  /** Fill in the DSH a row did not know (discovery read `HARNESS_DSH` off the live process). Never
-   *  replaces one it already has — the harness is chosen once, at creation. */
-  setDsh(agentId: string, dsh: string): boolean {
-    const session = this.agents.get(agentId)
-    if (!session || session.dsh || !DSH_ID_RE.test(dsh)) return false
-    session.dsh = dsh
     session.touchedAt = Date.now()
     this.save()
     return true

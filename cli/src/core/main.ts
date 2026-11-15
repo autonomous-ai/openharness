@@ -1374,6 +1374,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     relaunchMarks,
     // Built further down: told when an attach finds its last turn already over, never now.
     settled: (sessionId) => mirror.settled(sessionId),
+    // Built further down: asked when an attach has folded a transcript, never now.
+    tokenUsage: { changed: target => usageLink.port.changed(target) },
   })
   const attaches = attach.attaches
   const attachSession = attach.attachSession

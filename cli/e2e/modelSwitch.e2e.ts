@@ -11,6 +11,8 @@ import { IsolatedDaemon, until } from './harness/daemon.js'
 /** A grid as the models service resolves one (gridLaunchWire.ts GridLaunchOverride): the fake engine never calls it. */
 const GRID = { networkId: 'net-fixture', networkName: 'fixture-grid', baseUrl: 'https://fixture.invalid/g/net-fixture/relay',
   apiKey: 'fixture-key', model: 'deepseek-4.1-flash', contextWindow: 131072 }
+/** What an agent's row says of the grid it was launched on. */
+const ON_GRID = { baseUrl: GRID.baseUrl, model: GRID.model }
 
 let daemon: IsolatedDaemon | undefined, client: LocalClient | undefined
 afterEach(async () => { client?.close(); await daemon?.close(); client = undefined; daemon = undefined })
@@ -43,9 +45,14 @@ it('moves onto a grid model and back in the same conversation, whatever an older
 
   // Resumed: the same conversation on the grid, and the same one home.
   expect(await client.request('agent_retarget', { agentId, grid: GRID }, 60_000)).toMatchObject({ retargeted: true })
-  expect((await settled(agentId, id => id === s1, 'the resumed conversation on the grid')).sessionId).toBe(s1)
+  const resumed = await settled(agentId, id => id === s1, 'the resumed conversation on the grid')
+  expect(resumed.sessionId).toBe(s1)
+  // The row's grid is the one the retarget launched.
+  expect(resumed.grid).toMatchObject(ON_GRID)
   expect(await client.request('agent_retarget', { agentId, clearGrid: true }, 60_000)).toMatchObject({ retargeted: true })
-  expect((await settled(agentId, id => id === s1, 'the same conversation at home')).sessionId).toBe(s1)
+  const back = await settled(agentId, id => id === s1, 'the same conversation at home')
+  expect(back.sessionId).toBe(s1)
+  expect(back.grid ?? null).toBeNull()
 
   // A fresh move is no longer offered (#3901): a request that still asks for one resumes the conversation.
   // The fake engine records every launch's argv (e2e/harness/fakeEngine.mjs): the move's relaunch resumes s1.
@@ -55,10 +62,12 @@ it('moves onto a grid model and back in the same conversation, whatever an older
   await until('the move\'s relaunch', () => launches().length > before || null, 60_000, 200)
   expect(launches().at(-1)!.args).toEqual(expect.arrayContaining(['--resume', s1]))
   const onGrid = await settled(agentId, id => id === s1, 'the same conversation on the grid')
+  expect(onGrid.grid).toMatchObject(ON_GRID)
   await turn(agentId, 'A question for the shared model')
   expect(await client.request('agent_retarget', { agentId, clearGrid: true }, 60_000)).toMatchObject({ retargeted: true })
   const home = await settled(agentId, id => id === s1, 'the same conversation at home')
   expect([home.id, home.sessionId, onGrid.id]).toEqual([agentId, s1, agentId])
+  expect(home.grid ?? null).toBeNull()
   expect((await client.request<{ agents: Array<Record<string, any>> }>('agents_list', {}, 30_000)).agents.filter(a => a.status === 'active'))
     .toHaveLength(1)
 })

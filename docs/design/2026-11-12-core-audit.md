@@ -352,8 +352,9 @@ today that the rule says it should not, most serious first:
    only** (`core/modelsLink.ts:75-89`, `storeLink.ts:36-42`, `sharedMachinesLink.ts:22-25`).
 7. **Keys the core holds without need.** A grid's API key is kept on the registry row and copied into each
    stopped agent's file (`lib/registry.ts:145-153`, `lib/stoppedAgents.ts:147`). The whole environment of up to
-   256 agent processes is cached to find their sessions (`lib/processEnv.ts:121`), and an OpenRouter key is cached
-   and never read (`lib/gatewayRuntime.ts:100`). The saved-API store is parsed at every launch, keys included,
+   256 agent processes was cached to find their sessions (`lib/processEnv.ts`), and an OpenRouter key cached and
+   never read (`lib/gatewayRuntime.ts`), until 15 November: both went with the reads that filled them
+   (`src/architecture.environment.spec.ts`). The saved-API store is parsed at every launch, keys included,
    to learn whether one exists (`lib/apiConnectionMetadata.ts:33-52`). A connected service's secret passes
    through the core in the clear (`lib/connectors/vaultOps.ts:22-25`).
 8. **Any process of this OS user is the owner on both local doors, an agent's included** (`localWsServer.ts:474`,

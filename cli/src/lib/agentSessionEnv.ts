@@ -12,7 +12,7 @@
  *
  * A setting the person chose (CLAUDE_CODE_USE_BEDROCK, CODEX_HOME, …) is not a session's, and stays.
  */
-const AGENT_SESSION_VARIABLES: ReadonlySet<string> = new Set([
+export const AGENT_SESSION_VARIABLES: ReadonlySet<string> = new Set([
   'AI_AGENT', 'HARNESS_AGENT_SESSION',
   'CLAUDECODE', 'CLAUDE_PID', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_CHILD_SESSION',
   'CLAUDE_CODE_SESSION_ATTENDED', 'CLAUDE_CODE_EXECPATH', 'CLAUDE_CODE_MESSAGING_SOCKET', 'CLAUDE_CODE_MESSAGING_TOKEN',
@@ -21,6 +21,25 @@ const AGENT_SESSION_VARIABLES: ReadonlySet<string> = new Set([
   'CLAUDE_CODE_HOST_SESSION_ID',
   'CODEX_THREAD_ID', 'CODEX_CI', 'CODEX_SANDBOX', 'CODEX_SANDBOX_NETWORK_DISABLED', 'CODEX_ESCALATE_SOCKET',
 ])
+
+/**
+ * The ORCA_* names an Orca terminal has: those this repository knows, as Orca 1.4.256 names them (#4296's tests), and
+ * the names in an Orca 1.4.249 terminal's environment (read 2026-11-15, names only). Its secrets are among them: the
+ * pairing code and the hook, launch and spawn tokens. The core unsets these in a tmux server by name, as it never
+ * lists that server's environment (tmuxBackend.ts `serverVariablesToUnset`). A name a later Orca adds stays in a
+ * server started from an Orca terminal until it restarts: that is the follow-up "a new pane removes ORCA_* from its
+ * own environment".
+ */
+export const ORCA_VARIABLES: readonly string[] = [
+  'ORCA_AGENT_HOOK_ENDPOINT', 'ORCA_AGENT_HOOK_ENV', 'ORCA_AGENT_HOOK_OPENCODE_TUI', 'ORCA_AGENT_HOOK_PORT',
+  'ORCA_AGENT_HOOK_TOKEN', 'ORCA_AGENT_HOOK_TRANSPORT', 'ORCA_AGENT_HOOK_VERSION', 'ORCA_AGENT_LAUNCH',
+  'ORCA_AGENT_LAUNCH_TOKEN', 'ORCA_AGENT_PANE', 'ORCA_AGENT_SESSION_ID', 'ORCA_AGENT_SESSION_SPAWN_TOKEN',
+  'ORCA_APP_VERSION', 'ORCA_CLAUDE_AGENT_VIEW_PLUGIN_DIR', 'ORCA_CLAUDE_CONFIG_DIR', 'ORCA_CLAUDE_PROFILE_POINTER',
+  'ORCA_CLI_BIN_DIR', 'ORCA_ENVIRONMENT', 'ORCA_HISTFILE', 'ORCA_IMAGE_PROTOCOL', 'ORCA_OPENCODE_AGENT',
+  'ORCA_PAIRING_CODE', 'ORCA_PANE_KEY', 'ORCA_PI_SOURCE_AGENT_DIR', 'ORCA_RUNTIME_SOURCE_ID',
+  'ORCA_RUNTIME_SOURCE_INCARNATION', 'ORCA_RUNTIME_SOURCE_PROFILE_PATH', 'ORCA_TAB_ID', 'ORCA_TERMINAL_HANDLE',
+  'ORCA_USER_DATA_PATH', 'ORCA_WORKSPACE_ID', 'ORCA_WORKTREE_ID', 'ORCA_WSL_HOSTS_GATE_STATE',
+]
 
 /** Whether [name] names an agent's own session, never for a daemon or a pane it makes. */
 export function isAgentSessionVariable(name: string): boolean {

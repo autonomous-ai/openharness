@@ -212,6 +212,35 @@ describe('resuming a stopped harness with new launch words', () => {
   })
 })
 
+describe('the grid a resumed harness is on', () => {
+  // The saved API's endpoint as saved now: the record a relaunch refreshes (apiModels.ts `refreshApiLaunch`).
+  const override = { networkId: 'api', networkName: 'Saved', baseUrl: 'https://saved.example/now/v1', apiKey: 'k', model: 'm' }
+  const savedOnGrid = () => rewrite({ grid: { baseUrl: 'https://saved.example/then/v1', model: 'm' },
+    gridLaunch: { ...override, baseUrl: 'https://saved.example/then/v1' } })
+
+  it('is its launch record\'s, as this launch refreshed it, written with its process', async () => {
+    savedOnGrid()
+    vi.mocked(deps.relaunchOverrides).mockResolvedValueOnce({ ok: true, overrides: { env: {}, extraArgs: [], clearEnv: [],
+      gridLaunchRecord: { override, webSearch: 'on' } } })
+    expect(await start()).toMatchObject({ ok: true })
+    expect(registry.byAgent(saved.agentId)?.grid).toEqual({ baseUrl: 'https://saved.example/now/v1', model: 'm' })
+  })
+
+  it('is none for a launch with no record, whatever grid the saved row had', async () => {
+    savedOnGrid()
+    expect(await start()).toMatchObject({ ok: true })
+    expect(registry.byAgent(saved.agentId)?.grid).toBeNull()
+  })
+
+  it('is the launch record\'s on the row when an allocation the launch left unconfirmed is checked again', async () => {
+    // The launch wrote its record on the row (`refreshGridWebSearch`), and its engine was not confirmed then.
+    live({ grid: { baseUrl: 'https://saved.example/then/v1', model: 'm' }, gridLaunch: override })
+    expect(await start()).toMatchObject({ ok: true })
+    expect(create).not.toHaveBeenCalled()
+    expect(registry.byAgent(saved.agentId)?.grid).toEqual({ baseUrl: 'https://saved.example/now/v1', model: 'm' })
+  })
+})
+
 describe('production resume handler', () => {
   it('holds the reservation and restores cold history before checking its control identity', async () => {
     const restored = join(dir, 'restored.jsonl')

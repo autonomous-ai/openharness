@@ -14,6 +14,7 @@ export const APP_BUNDLES: Readonly<Record<string, string>> = {
   vscode: 'com.microsoft.VSCode',
   cursor: 'com.todesktop.230313mzl4w4u92',
   warp: 'dev.warp.Warp-Stable',
+  claude: 'com.anthropic.claudefordesktop',
 }
 
 const NAMES: Record<string, string> = {
@@ -30,11 +31,54 @@ const NAMES: Record<string, string> = {
   vscode: 'VS Code',
   cursor: 'Cursor',
   warp: 'Warp',
+  claude: 'Claude',
   terminal: 'Terminal',
+}
+
+/** The apps an agent can run in, the dial's pages: the hosts, in the order of their names. */
+export const APP_IDS: readonly string[] = Object.keys(NAMES)
+
+/** An agent in a terminal the daemon does not know. */
+export const UNKNOWN_APP = 'terminal'
+
+// The outermost app by its bundle id: each host's app, and Harness Desktop's, which stays out of APP_BUNDLES because
+// a tap never opens a Harness agent by its bundle id.
+export const BUNDLE_APPS: Readonly<Record<string, string>> = {
+  ...Object.fromEntries(Object.entries(APP_BUNDLES).map(([id, bundle]) => [bundle, id])),
+  'ai.autonomous.harness': 'harness',
+}
+
+// kitty sets no TERM_PROGRAM: off macOS its own variable names it (detectApp).
+const PROGRAM_APPS: Readonly<Record<string, string>> = {
+  'iTerm.app': 'iterm',
+  Apple_Terminal: 'terminal-app',
+  ghostty: 'ghostty',
+  vscode: 'vscode',
+  WarpTerminal: 'warp',
+  WezTerm: 'wezterm',
 }
 
 export function hostDisplayName(id: string): string {
   return NAMES[id] ?? 'Terminal'
+}
+
+/** "Other" for the unknown app, so its page never reads as Apple's Terminal; a host's own name for the rest. */
+export function appDisplayName(id: string): string {
+  return id === UNKNOWN_APP ? 'Other' : hostDisplayName(id)
+}
+
+/** The outermost app an agent runs in. The bundle id and TERM_PROGRAM name it, unlike a multiplexer's own variables,
+ *  which name the nearest host; with neither set, the nearest host is the only one known. */
+export function detectApp(hints: Record<string, string>): string {
+  const bundle = hints.__CFBundleIdentifier ?? ''
+  const program = hints.TERM_PROGRAM ?? ''
+  // Cursor is a VS Code fork and reports TERM_PROGRAM=vscode, so the bundle id decides first. A hint is outside text:
+  // only a table's own key names an app, never one an object inherits (`constructor`).
+  if (Object.hasOwn(BUNDLE_APPS, bundle)) return BUNDLE_APPS[bundle]
+  if (Object.hasOwn(PROGRAM_APPS, program)) return PROGRAM_APPS[program]
+  if (bundle || program) return UNKNOWN_APP
+  if (hints.KITTY_WINDOW_ID) return 'kitty'
+  return detectHost(hints)
 }
 
 export function detectHost(hints: Record<string, string>): string {
@@ -49,6 +93,7 @@ export function detectHost(hints: Record<string, string>): string {
   if (has('ORCA_AGENT_SESSION_ID') || bundle === APP_BUNDLES.orca) return 'orca'
   // Cursor is a VS Code fork and reports TERM_PROGRAM=vscode, so its bundle id decides first.
   if (bundle === APP_BUNDLES.cursor) return 'cursor'
+  if (bundle === APP_BUNDLES.claude) return 'claude'
   if (program === 'iTerm.app' || bundle === APP_BUNDLES.iterm) return 'iterm'
   if (program === 'Apple_Terminal' || bundle === APP_BUNDLES['terminal-app']) return 'terminal-app'
   if (program === 'ghostty' || bundle === APP_BUNDLES.ghostty) return 'ghostty'

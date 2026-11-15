@@ -9,7 +9,6 @@
 import { open, readlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { hostPath, parseMountinfo, type Mount } from './mountView.js'
-import { processEnvCacheKey } from './processEnv.js'
 import type { ProcessIdentity } from './terminalTypes.js'
 
 export type ProcessView =
@@ -24,6 +23,9 @@ const CACHE_LIMIT = 256
 // A process keeps its namespace for its life, and a sandbox mounts its folders before it runs the agent: one read per
 // process. "Could not look" is never kept, so it cannot harden into an answer.
 const views = new Map<string, ProcessView>()
+// A pid is reused: the start marker and executable make the key this process's.
+const viewKey = (identity: ProcessIdentity): string =>
+  `${identity.pid}\u0000${identity.startMarker}\u0000${identity.executable}`
 
 export function clearProcessViews(): void {
   views.clear()
@@ -54,7 +56,7 @@ async function readMounts(file: string): Promise<Mount[] | null> {
 export async function processView(identity: ProcessIdentity, platform: NodeJS.Platform = process.platform, proc = '/proc'): Promise<ProcessView> {
   // Mount namespaces are Linux's: elsewhere every process names a path as the daemon does.
   if (platform !== 'linux') return SAME
-  const key = processEnvCacheKey(identity)
+  const key = viewKey(identity)
   const kept = views.get(key)
   if (kept) return kept
   const theirs = join(proc, String(identity.pid)), ours = join(proc, 'self')
