@@ -143,7 +143,7 @@ describe('discovery', () => {
       const mode = permissionModeFromArgv('claude', observed.args)
       expect(vi.mocked(run.deps.registry.setPermissionMode).mock.calls).toEqual(mode ? [['a1', mode]] : [])
       expect(run.deps.registry.setCodexHome).toHaveBeenCalledWith('a1', '/codex')
-      expect(run.deps.registry.setHermesHome).toHaveBeenCalledWith('a1', '/hermes')
+      expect(run.deps.registry.setHermesHome).toHaveBeenCalledWith('a1', '/hermes', false)
       expect(run.deps.attachDsh).toHaveBeenCalled()
       expect(run.deps.bindObservedAgent).toHaveBeenCalledWith(observed)
       // A row that knows them already keeps its own.
@@ -166,18 +166,22 @@ describe('discovery', () => {
       expect(run.deps.attachDsh).toHaveBeenCalled()
     })
 
-    it('tells the registry a home Harness worked out, and marks a row that has that home without the mark', async () => {
-      const observed = seen({ engine: 'hermes', args: 'hermes', hermesHome: '/data/agents/a1/.hermes', hermesHomeDerived: true } as Partial<DiscoveredTerminalAgent>)
-      for (const current of [row({ engine: 'hermes' }), row({ engine: 'hermes', hermesHome: '/data/agents/a1/.hermes' } as Partial<RegisteredSession>)]) {
+    it('fills a Hermes home it did not have, with the mark discovery gave it, and never marks or moves one it has', async () => {
+      // Found outside a sandbox, then in one.
+      const outside = seen({ engine: 'hermes', args: 'hermes', hermesHome: '/x' } as Partial<DiscoveredTerminalAgent>)
+      const inside = seen({ engine: 'hermes', args: 'hermes', hermesHome: '/x', hermesHomeDerived: true } as Partial<DiscoveredTerminalAgent>)
+      for (const [observed, derived] of [[outside, false], [inside, true]] as const) {
         const run = setup()
-        await run.handlers.onObserved(observed, current)
-        expect(vi.mocked(run.deps.registry.setHermesHome).mock.calls).toEqual([['a1', '/data/agents/a1/.hermes', true]])
+        await run.handlers.onObserved(observed, row({ engine: 'hermes' }))
+        expect(vi.mocked(run.deps.registry.setHermesHome).mock.calls).toEqual([['a1', '/x', derived]])
       }
-      for (const current of [row({ engine: 'hermes', hermesHome: '/data/agents/a1/.hermes', hermesHomeDerived: true } as Partial<RegisteredSession>),
-        row({ engine: 'hermes', hermesHome: '/data/agents/b2/.hermes' } as Partial<RegisteredSession>)]) {
-        const run = setup()
-        await run.handlers.onObserved(observed, current)
-        expect(run.deps.registry.setHermesHome).not.toHaveBeenCalled()
+      for (const current of [row({ engine: 'hermes', hermesHome: '/x' } as Partial<RegisteredSession>),
+        row({ engine: 'hermes', hermesHome: '/y' } as Partial<RegisteredSession>)]) {
+        for (const observed of [outside, inside]) {
+          const run = setup()
+          await run.handlers.onObserved(observed, current)
+          expect(run.deps.registry.setHermesHome).not.toHaveBeenCalled()
+        }
       }
     })
 
