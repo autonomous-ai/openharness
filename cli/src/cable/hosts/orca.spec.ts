@@ -344,6 +344,13 @@ describe('Orca adapter', () => {
     expect(adapter.paneOf({ host: 'orca', app: 'orca', hints: {}, tty: '/dev/ttys004' })).toBeUndefined()
   })
 
+  it('in a multiplexer it has no pane: the handle names the terminal the multiplexer started in', () => {
+    const adapter = createOrcaAdapter(quietDeps())
+    const hints = { ORCA_AGENT_SESSION_ID: 'x', ORCA_TERMINAL_HANDLE: HANDLE }
+    for (const host of ['herdr', 'rex', 'zellij', 'tmux']) expect(adapter.paneOf({ host, app: 'orca', hints }), host).toBeUndefined()
+    for (const host of ['orca', 'wezterm', 'kitty', 'terminal']) expect(adapter.paneOf({ host, app: 'orca', hints }), host).toEqual({ adapter: 'orca', id: HANDLE })
+  })
+
   it('focus is the switch: true only when it exits 0', async () => {
     const { calls, adapter } = adapterRecorder()
     expect(await adapter.focus({ adapter: 'orca', id: HANDLE })).toBe(true)
