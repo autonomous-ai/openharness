@@ -69,14 +69,14 @@ PM, 2026-11-15, on the recommendation; Diego may still answer differently.
    folder with no path in the daemon's view holds.
 10. **`engines/kit/processHome.ts` goes** with its spec, `HERMES_HOME_RULE` and its coreFiles line: only the deleted
     probes used it.
+11. **Other readers are a separate item:** `cli/native/darwin-process-images.c` (`KERN_PROCARGS2`) and the test tools
+    are listed under Follow-ups.
 12. **Other environment reads in the daemon go too** (PM, 2026-11-15, from the final review): the core stops listing
     the person's tmux server environment (`tmux show-environment -g`) and unsets a fixed list of names instead, the
     same names the old filter removed, pinned by a test; `launchctl print gui/<uid>` keeps its exit status and drops
     its output, which holds launchd's environment block; `ps` runs with `COMMAND_MODE=unix2003`, so a person's
     `COMMAND_MODE=legacy` can never turn `ps -e` into an environment listing. The architecture test also flags
     `show-environment`.
-11. **Other readers are a separate item:** `cli/native/darwin-process-images.c` (`KERN_PROCARGS2`) and the test tools
-    are listed under Follow-ups.
 
 ## Design
 
