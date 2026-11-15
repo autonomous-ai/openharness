@@ -89,6 +89,9 @@ pub enum TabError {
     Denied,
     /// The app's dictionary has no `tty` (a Ghostty older than its tty property).
     NoTty,
+    /// The app's bundle declares no scripting at all (a Ghostty before 1.3): an event would bring macOS's consent
+    /// prompt for nothing, then fail at every tick.
+    NoScripting,
     /// The app quit, timed out, or anything else: the next call tries again.
     Failed,
 }
@@ -184,7 +187,7 @@ pub struct TabFollow {
     front: Option<TabApp>,
     watching: bool,
     attached: bool,
-    /// Denied or with no tty, until Harness Device starts again: asking again would only fail again.
+    /// Denied, with no tty or with no scripting, until Harness Device starts again: asking again would only fail again.
     off: Vec<TabApp>,
     /// The tty the watch was told last, for the app polled now.
     last: Option<(TabApp, String)>,
@@ -291,6 +294,7 @@ impl TabFollow {
         }
         log.push(match error {
             TabError::NoTty => format!("tabs: {} has no tty", app.name()),
+            TabError::NoScripting => format!("tabs: {} has no scripting", app.name()),
             _ => format!("tabs: {} not allowed", app.name()),
         });
         self.restart();

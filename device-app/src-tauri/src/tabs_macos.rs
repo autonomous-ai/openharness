@@ -8,9 +8,11 @@ use objc2::runtime::AnyObject;
 use objc2::{AnyThread, ClassType, msg_send};
 use objc2_app_kit::NSRunningApplication;
 use objc2_foundation::{
-    NSAppleEventDescriptor, NSAppleScript, NSAppleScriptErrorNumber, NSDictionary, NSNumber, NSString,
+    NSAppleEventDescriptor, NSAppleScript, NSAppleScriptErrorNumber, NSDictionary, NSError, NSNumber, NSString,
+    ns_string,
 };
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::thread;
 
@@ -242,20 +244,42 @@ fn call<T: Send + 'static>(
 pub struct MacTabs {
     /// Always `source`, but in tests, which stand a script that answers with no event in for an app's.
     source: fn(TabApp) -> &'static str,
+    /// Always `declares_scripting`, but in tests.
+    scripting: fn(&str) -> Option<bool>,
+    /// The running Ghostty was seen to declare scripting: its bundle is read once.
+    ghostty_scripted: AtomicBool,
 }
 
 impl Default for MacTabs {
     fn default() -> MacTabs {
-        MacTabs { source }
+        MacTabs { source, scripting: declares_scripting, ghostty_scripted: AtomicBool::new(false) }
     }
 }
 
 impl MacTabs {
+    /// Ghostty has AppleScript only since 1.3. An older one would get macOS's consent prompt for nothing, then fail at
+    /// every tick, so its bundle is read before its first event.
+    fn scripted(&self, app: TabApp) -> Result<(), TabError> {
+        if app != TabApp::Ghostty || self.ghostty_scripted.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        match (self.scripting)(app.bundle()) {
+            Some(true) => {
+                self.ghostty_scripted.store(true, Ordering::Relaxed);
+                Ok(())
+            }
+            Some(false) => Err(TabError::NoScripting),
+            // It quit as it was read: the next call reads it again.
+            None => Err(TabError::Failed),
+        }
+    }
+
     /// A swipe's or a tap's select. A tty that fails the check is refused before any descriptor is made.
     fn select(&self, app: TabApp, handler: &'static str, tty: &str, front: Option<bool>) -> Result<Selected, TabError> {
         if !tty_ok(tty) {
             return Err(TabError::Failed);
         }
+        self.scripted(app)?;
         let mut args = vec![Arg::Text(tty.to_string())];
         args.extend(front.map(Arg::Flag));
         let held = call((self.source)(app), handler, args, flag).map_err(tab_error)?;
@@ -269,6 +293,7 @@ impl TabScripts for MacTabs {
     }
 
     fn selected_tty(&self, app: TabApp) -> Result<Option<String>, TabError> {
+        self.scripted(app)?;
         let tty = call((self.source)(app), "selected_tty", Vec::new(), text).map_err(tab_error)?;
         Ok(Some(tty).filter(|tty| !tty.is_empty()))
     }
@@ -286,6 +311,20 @@ impl TabScripts for MacTabs {
 fn runs(bundle: &str) -> bool {
     autoreleasepool(|_| {
         !NSRunningApplication::runningApplicationsWithBundleIdentifier(&NSString::from_str(bundle)).is_empty()
+    })
+}
+
+/// Whether the running app with this bundle id declares a scripting dictionary (`OSAScriptingDefinition`) in its
+/// Info.plist, read from its bundle with no Apple Event; None when none runs.
+fn declares_scripting(bundle: &str) -> Option<bool> {
+    autoreleasepool(|_| {
+        let running = NSRunningApplication::runningApplicationsWithBundleIdentifier(&NSString::from_str(bundle));
+        let plist = running.firstObject()?.bundleURL()?.URLByAppendingPathComponent(ns_string!("Contents/Info.plist"))?;
+        // SAFETY: Foundation's class method with its own argument types; a file it cannot read is an error.
+        let info: Result<Retained<NSDictionary<NSString, AnyObject>>, Retained<NSError>> = unsafe {
+            msg_send![NSDictionary::<NSString, AnyObject>::class(), dictionaryWithContentsOfURL: &*plist, error: _]
+        };
+        Some(info.is_ok_and(|info| info.objectForKey(ns_string!("OSAScriptingDefinition")).is_some()))
     })
 }
 
