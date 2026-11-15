@@ -281,8 +281,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     const at = monotonic()
     selects = [...selects.filter((sent) => at - sent.at < TAB_ECHO_MS), { tty, at }].slice(-ECHO_KEPT)
   }
-  /** The dial's own moves on an agent outside Harness, a rest's and a tap's alike, whatever its pane: how many, and
-   *  when the latest started. A settle is set aside by one made within it. */
+  /** The dial's own moves, each as it starts: a hand's turn to any agent, a tap, and the pane a rest or a tap's raise
+   *  switches. How many, and when the latest started: a settle is set aside by one made within it. */
   let dialMoves = 0
   let dialMovedAt: number | undefined
   const noteMove = (): void => {
@@ -290,7 +290,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     dialMovedAt = monotonic()
   }
   /** That adapter, its `show` and its `focus` noting the dial's move as they start: busy or failed, the dial is on that
-   *  agent all the same. */
+   *  agent all the same. A hand's turn and a tap are noted as they are made (`turned`, `open`), but a rest switches the
+   *  pane 400 ms after its turn, and a tab is raised only once `open -b` brought its app: the app's report of the tab it
+   *  had can come between. */
   const noting = (adapter: HostAdapter): HostAdapter => {
     const { show, focus } = adapter
     const noted: HostAdapter = { ...adapter, focus: (pane) => { noteMove(); return focus(pane) } }
@@ -319,8 +321,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     modReady: (sessionId) => inbox.ready(sessionId),
     toMod: (sessionId, text) => inbox.deliver(sessionId, text),
     canOpen: opener.can,
-    // A tap on a Claude app agent runs the continue link a rest runs: its attach is the dial's own echo too.
+    // Noted before `open -b`, which can take a while, and for an app with no pane of its own. A tap on a Claude app agent
+    // runs the continue link a rest runs: its attach is the dial's own echo too.
     open: (agentId, target) => {
+      noteMove()
       if (target.pane?.adapter === claude.id && opener.can(target)) noteLink(agentId)
       return opener.open(agentId, target)
     },
@@ -397,6 +401,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     focused: (machineId, agentId) => core.clients.sendLocal({ type: 'dial_focus', payload: { machineId, agentId } }),
     // The outcome only: never the agent, its session or its terminal.
     swiped: (outcome) => log(`[device] swipe · ${outcome}`),
+    turned: noteMove,
     localFollowed: (cause, outcome) => log(FOLLOWED[cause === 'attach' ? attachAsk : cause][outcome]),
     swarmSelected: (swarmId) => core.clients.sendLocal({ type: 'dial_swarm', payload: { swarmId } }),
     scrolled: (phase, dy, velocity) => core.clients.sendLocal({ type: 'dial_scroll', payload: { phase, dy, velocity } }),
@@ -870,7 +875,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     if (claudeAgent === undefined || !cable.isConnected) return
     // Resumed in another app, or gone with no end: the app no longer shows it.
     if (outside(claudeAgent)?.app !== 'claude') { claudeAgent = undefined; return }
-    // Any move of the dial, to another agent or another app's pane too: a swipe that rests as the app comes in front shows
+    // Any move of the dial, to another agent, another app's pane or none: a turn as the app comes in front puts the dial on
     // that one, and the settle must not turn the dial back. A link's attach, a moment later, is kept and skipped as its own
     // echo. Within ATTACH_ECHO_MS, not since the attach kept: that can be minutes old after a look away and back.
     if (dialMovedAt !== undefined && monotonic() - dialMovedAt < ATTACH_ECHO_MS) { log('[device] settle · skipped · echo'); return }
