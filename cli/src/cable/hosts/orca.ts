@@ -21,7 +21,8 @@ export const MAX_TEXT = 2000
 const CONTROL = /\p{Cc}/gu
 
 export interface OrcaDeps {
-  run(file: string, args: string[], timeoutMs: number): Promise<{ code: number | null }>
+  /** Its stdout too: tmux's answer is what it printed (tmux.ts). */
+  run(file: string, args: string[], timeoutMs: number): Promise<{ code: number | null; stdout: string }>
   onPath(name: string): string | null
   exists(path: string): boolean
   platform: NodeJS.Platform
@@ -32,11 +33,11 @@ export function orcaDeps(): OrcaDeps {
     run: (file, args, timeoutMs) => new Promise((resolve) => {
       // The timeout's kill waits for the process to exit: one deaf to SIGTERM, or stuck where even SIGKILL waits, kept the
       // call and its terminal's one-command slot open for good. The deadline answers by itself.
-      const deadline = setTimeout(() => resolve({ code: null }), timeoutMs)
-      execFile(file, args, { timeout: timeoutMs, killSignal: 'SIGKILL' }, (error) => {
+      const deadline = setTimeout(() => resolve({ code: null, stdout: '' }), timeoutMs)
+      execFile(file, args, { timeout: timeoutMs, killSignal: 'SIGKILL' }, (error, stdout) => {
         clearTimeout(deadline)
         // A number is the exit code; a timeout's kill or a binary that could not start has none.
-        resolve({ code: error === null ? 0 : typeof error.code === 'number' ? error.code : null })
+        resolve({ code: error === null ? 0 : typeof error.code === 'number' ? error.code : null, stdout })
       })
     }),
     onPath: (name) => resolveBinaryOnPath(name),
