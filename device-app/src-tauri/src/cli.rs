@@ -768,6 +768,25 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn a_watch_logs_its_replaced_stream_as_it_comes_and_no_other_stderr() {
+        let fake = Fake::new();
+        fake.script(
+            "hardware watch --json",
+            &["@err tabs stream replaced", "@err /dev/ttys001 iterm", "@err tabs stream replaced!", "started", "@hang"],
+        );
+        let mut child = fake.cli().spawn(&WATCH).unwrap();
+        assert_eq!(child.line(WAIT), Ok(Some("started".into())));
+        // Its end waits for stderr's, so the line, logged as it is read, comes first.
+        child.killer().kill();
+        assert_eq!(child.exit(WAIT), Ok(None));
+        assert_eq!(
+            fake.log().lines(),
+            ["harness hardware watch --json: tabs stream replaced", "harness hardware watch --json: killed by a signal"]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn a_cli_that_cannot_start_is_one_log_line() {
         let home = tempfile::tempdir().unwrap();
         // There, and not executable.
