@@ -1,26 +1,33 @@
 /** Quiet macOS comparison of the real sealed owner path, using retained old/current bundles. Opt in with
  * OWNER_COMMANDS_BENCH_BASE and OWNER_COMMANDS_BENCH_REPORT; E2E_BUNDLE_PATH is the current bundle. The fixed workload
- * is one bound fake agent, valid task routing, refused sends to an unknown agent, and ordinary agent-list requests.
- * Six alternating rounds keep all samples. This does not replace the separate real P2P typing benchmark. */
+ * is one bound fake agent, valid task routing, validation-refused empty sends, and ordinary agent-list requests.
+ * A is baseline and B is current: BA,AB,BA,AB,BA,AB, with no adaptive retries. Core and devices CPU are separate and summed; all raw samples and partial failures are retained. This does not replace the separate real P2P typing benchmark. */
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { expect, it } from 'vitest'
 import { LocalClient } from './harness/client.js'
 import { CLI_ROOT, until } from './harness/daemon.js'
 import { startPhoneMachine, type PhoneMachine } from './harness/fleet.js'
 import { RelayPhone } from './harness/relayPhone.js'
+import { devicesPids } from './harness/desk.js'
 
 const BASE = process.env.OWNER_COMMANDS_BENCH_BASE
 const REPORT = process.env.OWNER_COMMANDS_BENCH_REPORT
 const COUNT = 500, ROUNDS = 6, WARMUP = 20
 const sha = (path: string) => createHash('sha256').update(readFileSync(path)).digest('hex')
-const cpuMs = (pid: number) => {
-  const value = execFileSync('ps', ['-o', 'cputime=', '-p', String(pid)], { encoding: 'utf8' }).trim()
-  if (!/^\d+:\d+(?:\.\d+)?$/.test(value)) throw new Error(`unexpected benchmark CPU format: ${value}`)
-  const [minutes, seconds] = value.split(':').map(Number)
-  return (minutes * 60 + seconds) * 1000
+const cpuMs = (core: number, devices: number) => {
+  const table = execFileSync('ps', ['-o', 'pid=,cputime=', '-p', `${core},${devices}`], { encoding: 'utf8' })
+  const readings = new Map<number, number>()
+  for (const line of table.trim().split('\n')) {
+    const parts = /^\s*(\d+)\s+(\d+):(\d+(?:\.\d+)?)$/.exec(line)
+    if (!parts) throw new Error('unexpected benchmark CPU format')
+    readings.set(Number(parts[1]), (Number(parts[2]) * 60 + Number(parts[3])) * 1000)
+  }
+  if (!readings.has(core) || !readings.has(devices)) throw new Error('a benchmark process disappeared')
+  return { core: readings.get(core)!, devices: readings.get(devices)! }
 }
 const percentile = (values: number[], at: number) => [...values].sort((a, b) => a - b)[Math.ceil(at * values.length) - 1]
 type Prepared = { world: PhoneMachine; window: LocalClient; phone: RelayPhone; agentId: string; core: number }
@@ -29,7 +36,14 @@ it.runIf(!!BASE && !!REPORT)('measures owner commands and ordinary RPCs on the s
   if (process.platform !== 'darwin') throw new Error('this benchmark uses macOS ps CPU accounting')
   const current = process.env.E2E_BUNDLE_PATH
   if (!current) throw new Error('E2E_BUNDLE_PATH must name the retained current bundle')
-  const fixtures: Prepared[] = []
+  const fixtures: Prepared[] = [], samples: Array<Record<string, unknown>> = []
+  const report: Record<string, unknown> = { schema: 2, node: process.version, platform: process.platform, arch: process.arch,
+    source: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: CLI_ROOT, encoding: 'utf8' }).trim(),
+    baselineSha256: sha(BASE!), currentSha256: sha(current), rigSha256: sha(fileURLToPath(import.meta.url)),
+    configSha256: sha(join(CLI_ROOT, 'vitest.e2e.config.ts')), count: COUNT, rounds: ROUNDS, warmup: WARMUP,
+    labels: { A: 'before', B: 'after' }, pairedOrder: ['BA', 'AB', 'BA', 'AB', 'BA', 'AB'],
+    cpuResolutionMs: 10, status: 'running', samples }
+  const save = () => writeFileSync(REPORT!, JSON.stringify(report, null, 2))
   const prepare = async (bundle: string): Promise<Prepared> => {
     const world = await startPhoneMachine({ scriptPath: bundle })
     let window: LocalClient | undefined, phone: RelayPhone | undefined
@@ -58,43 +72,65 @@ it.runIf(!!BASE && !!REPORT)('measures owner commands and ordinary RPCs on the s
   }
   const workloads = {
     route_task: { text: 'fixed owner command workload' },
-    route_send: { agentId: 'unknown-benchmark-agent', text: 'fixed refused send workload' },
+    route_send: { agentId: 'unknown-benchmark-agent', text: '' },
     agents_list: {},
   }
   try {
     const builds = { before: await prepare(BASE!), after: await prepare(current) }
     const ask = async (fixture: Prepared, type: keyof typeof workloads) => {
       const answer = await fixture.phone.request(type, workloads[type])
-      expect(answer.error).toBeUndefined()
-      if (type === 'route_task') expect(answer.agentId).toBe(fixture.agentId)
-      else if (type === 'route_send') expect(answer.ok).toBe(false)
-      else expect(answer.agents).toHaveLength(1)
+      if (type === 'route_send') {
+        expect(answer.error).toBe('INVALID_REQUEST')
+        expect(answer.ok).toBeUndefined()
+      } else {
+        expect(answer.error).toBeUndefined()
+        if (type === 'route_task') expect(answer.agentId).toBe(fixture.agentId)
+        else expect(answer.agents).toHaveLength(1)
+      }
     }
     const types = Object.keys(workloads) as Array<keyof typeof workloads>
     for (const fixture of Object.values(builds)) for (const type of types) for (let n = 0; n < WARMUP; n++) await ask(fixture, type)
-    const samples: Array<Record<string, unknown>> = []
+    const devices = Object.fromEntries(Object.entries(builds).map(([name, fixture]) => {
+      const pids = devicesPids(fixture.world.machine.daemon)
+      if (pids.length !== 1) throw new Error('expected exactly one benchmark devices process')
+      return [name, pids[0]]
+    }))
     for (let round = 0; round < ROUNDS; round++) {
-      const order = round % 2 ? ['after', 'before'] as const : ['before', 'after'] as const
+      const order = round % 2 ? ['before', 'after'] as const : ['after', 'before'] as const
       for (const name of order) for (const type of types) {
         const fixture = builds[name], latencyMs: number[] = []
-        const cpu = cpuMs(fixture.core), started = performance.now()
+        const sample: Record<string, unknown> = { round, name, type, n: 0, latencyMs }
+        samples.push(sample)
+        const cpu = cpuMs(fixture.core, devices[name]), started = performance.now()
         for (let n = 0; n < COUNT; n++) {
           const start = performance.now()
           await ask(fixture, type)
           latencyMs.push(performance.now() - start)
+          sample.n = latencyMs.length
         }
-        const wallMs = performance.now() - started, used = cpuMs(fixture.core) - cpu
+        const wallMs = performance.now() - started, end = cpuMs(fixture.core, devices[name])
+        const coreCpuMs = end.core - cpu.core, devicesCpuMs = end.devices - cpu.devices
+        const combinedCpuMs = coreCpuMs + devicesCpuMs
         expect(fixture.world.machine.daemon.corePid()).toBe(fixture.core)
-        samples.push({ round, name, type, n: COUNT, wallMs, coreCpuMs: used, coreCpuUsPerRequest: used * 1000 / COUNT,
-          p50Ms: percentile(latencyMs, .5), p95Ms: percentile(latencyMs, .95), latencyMs })
+        Object.assign(sample, { wallMs, coreCpuMs, devicesCpuMs, combinedCpuMs,
+          coreCpuUsPerRequest: coreCpuMs * 1000 / COUNT, devicesCpuUsPerRequest: devicesCpuMs * 1000 / COUNT,
+          combinedCpuUsPerRequest: combinedCpuMs * 1000 / COUNT,
+          p50Ms: percentile(latencyMs, .5), p95Ms: percentile(latencyMs, .95) })
+        save()
       }
     }
-    writeFileSync(REPORT!, JSON.stringify({ schema: 1, node: process.version, platform: process.platform, arch: process.arch,
-      source: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: CLI_ROOT, encoding: 'utf8' }).trim(),
-      baselineSha256: sha(BASE!), currentSha256: sha(current), count: COUNT, rounds: ROUNDS, warmup: WARMUP, samples }, null, 2))
+    report.status = 'passed'
+  } catch (error) {
+    report.status = 'failed'
+    report.failure = error instanceof Error ? error.name : 'BENCHMARK_FAILURE'
+    throw error
   } finally {
-    await Promise.allSettled(fixtures.map(async fixture => {
+    const cleanup = await Promise.allSettled(fixtures.map(async fixture => {
       fixture.phone.close(); fixture.window.close(); await fixture.world.close()
     }))
+    report.cleanup = cleanup.map(result => result.status)
+    if (cleanup.some(result => result.status === 'rejected')) report.status = 'cleanup_failed'
+    save()
+    if (report.status === 'cleanup_failed') throw new Error('benchmark cleanup failed')
   }
 }, 600_000)
