@@ -58,9 +58,10 @@ describe('a daemon under test', () => {
     }))).toBe('4321')
   })
 
-  // Removed roots on one Mac each kept a 19 MB runtime/grid-* (2026-11). What still asks, in models' process
-  // (`harnessd-models`): a managed grid's pin follow on every start, and grid's set-up, which the picker's Set up runs:
-  // installCli reads the managed grid's manifest, then runs grid's public installer when there is still no `grid`.
+  // Removed roots on one Mac each kept a 19 MB runtime/grid-* (2026-11-14). What can still ask, in models' process
+  // (`harnessd-models`): a managed grid following its pin on every start, and grid's set-up on a grid feature's first
+  // use (the picker's Set up, a Get, a Use): installCli reads the managed grid's manifest, then runs grid's public
+  // installer when there is still no `grid`.
   it('asks no grid manifest and runs no grid installer beyond the machine', async () => {
     daemon = await IsolatedDaemon.create()
     expect(daemon.env.ADAPTER_GRID_RUNTIME_METADATA_URL).toBe('http://127.0.0.1:9/grid.json')
@@ -72,10 +73,12 @@ describe('a daemon under test', () => {
     expect(own.env.DISABLE_GRID_INSTALL).toBe('false')
     await daemon.start()
     const client = await LocalClient.connect(daemon)
-    // The picker's Set up, signed out: answered once grid's set-up gave up, at 'no-cli' without a `grid` on PATH, at
-    // the grid name the unreachable backend never gives with one. Either way it ran, so the asserts below mean something.
+    // The picker's Set up, signed out: answered once grid's set-up gave up, at 'no-cli' without a `grid` on PATH, or at
+    // the grid name a signed-out daemon is never given with one. installCli runs before either (lib/gridAttach.ts): the
+    // manifest is asked and, with no `grid`, grid's installer.
     expect(await client.request('grid_fleet_models_list', { setup: true }, 60_000)).toMatchObject({ gridSetupError: expect.stringMatching(/\S/) })
     client.close()
+    // Models' own lines reach the log the asserts below read.
     expect(daemon.log()).toContain('[grid-attach] ')
     expect(daemon.log()).not.toContain('installing the Harness grid runtime')
     expect(daemon.log()).not.toMatch(/grid installer (exited|finished)|installed `grid` to/)

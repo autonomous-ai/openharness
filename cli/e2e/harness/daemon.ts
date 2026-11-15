@@ -358,9 +358,9 @@ export class IsolatedDaemon {
       BACKEND_WS_URL: 'ws://127.0.0.1:9',
       WEB_URL: 'http://127.0.0.1:9',
       // Nor grid's release server: removed roots on one Mac kept a 19 MB runtime/grid-0.3.63-darwin-arm64 each
-      // (2026-11). Grid's set-up (services/models.ts installCli, from the picker's Set up) installs the managed grid,
-      // and a managed grid already here follows its pin on every models start. With no manifest to read, installCli
-      // goes on to grid's public installer: that is switched off too.
+      // (2026-11-14). Grid's set-up on a grid feature's first use (services/models.ts installCli: the picker's Set up,
+      // a Get, a Use) installs the managed grid, and a managed grid already here follows its pin on every models start.
+      // With no manifest to read, installCli goes on to grid's public installer: that is switched off too.
       ADAPTER_GRID_RUNTIME_METADATA_URL: 'http://127.0.0.1:9/grid.json',
       DISABLE_GRID_INSTALL: 'true',
       // Claude Code's and Codex's hooks, installed as on a person's computer, into this home and CODEX_HOME
