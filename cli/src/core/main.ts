@@ -223,7 +223,7 @@ import { createRecapsLink } from './recapsLink.js'
 import { createAgentBrowserLink, wakeAgentBrowser } from './agentBrowserLink.js'
 import { createBrowserStreams, type BrowserStreams } from './browserStreams.js'
 import { createAgentCleanupLink } from './agentCleanupLink.js'
-import { AGENT_BROWSER_FALLBACKS, AGENT_BROWSER_REQUESTS, AGENT_CLEANUP_FALLBACKS, RECAPS_FALLBACKS, TERMINALS_OFF } from './api.js'
+import { agentView, AGENT_BROWSER_FALLBACKS, AGENT_BROWSER_REQUESTS, AGENT_CLEANUP_FALLBACKS, RECAPS_FALLBACKS, TERMINALS_OFF } from './api.js'
 import { answerAgentQuery } from './agentQueries.js'
 import { createDeliveries } from './deliveries.js'
 import { createTerminalWatch } from './terminalWatch.js'
@@ -1078,7 +1078,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // the core carries on without it (core/serviceHost.ts).
   const serviceHost = createServiceHost(ports, { faults: testFaults(harnessd.HARNESSD_TEST_FAULTS) })
   // The DSH companions: each harness agent's viewer and verdict watch (services/viewers.ts), started below.
-  dshFrameContextRef = (s) => ports.viewers?.frameContext(s) ?? null
+  dshFrameContextRef = (s) => ports.viewers?.frameContext(agentView(s)) ?? null
   // Models (services/models.ts), started below: what an agent's frame says of its grid, from memory.
   gridAnnotationRef = (grid) => (ports.models ?? MODELS_OFF).annotation(grid)
   // A look at a live agent, for the services that follow agents (core/agentLife.ts): a create, a fork, a resume, a
@@ -1894,7 +1894,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
   backend.runtimeProfileProvider = (session) => runtimeProfiles.selectedModel(session)
   backend.workspaceProvider = (session) => runtimeProfiles.workspace(session)
-  backend.dshFrameProvider = (s) => ports.viewers?.frameContext(s) ?? null
+  backend.dshFrameProvider = (s) => ports.viewers?.frameContext(agentView(s)) ?? null
   // `harness remote` names the tile it was typed in by its pane; the registry knows whose it is (lib/terminalHandoff.ts).
   backend.onTerminalHandoff = (pane) => handoffAgentId(registry.advertised(), pane)
   // A rename, a model and effort, or an app opening an agent (core/agents/update.ts).

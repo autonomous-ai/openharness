@@ -20,7 +20,7 @@
  * an idle daemon's scans cost it nothing. `having` narrows it to the agents whose row has those fields set (the viewers:
  * `dsh`). `ended` goes to a follower that was told the agent running.
  */
-import { FOLLOW_HAVING_MAX, type AgentLife, type FollowOptions, type HeldAgentLife } from './api.js'
+import { agentView, FOLLOW_HAVING_MAX, type AgentLife, type AgentView, type FollowOptions, type HeldAgentLife } from './api.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { ServiceFrame } from './serviceLinks.js'
 
@@ -95,11 +95,11 @@ export function createAgentLife(deps: AgentLifeDeps) {
     for (const id of follower.told) if (!live.has(id)) follower.told.delete(id)
   }
   /** The live agents [follower] follows, now told running: what it starts from. */
-  const catchUp = (follower: Follower): RegisteredSession[] => {
+  const catchUp = (follower: Follower): AgentView[] => {
     if (follower.options.running === false) return []
     const agents = deps.live().filter((session) => matches(follower.options, session))
     for (const session of agents) told(follower, session.agentId)
-    return agents
+    return agents.map(agentView)
   }
   // The scan visits every agent: keep its callback here, so each visit allocates no function.
   const look = (follower: Follower, session: RegisteredSession): void => {
@@ -108,7 +108,7 @@ export function createAgentLife(deps: AgentLifeDeps) {
     if (known && !follower.options.each) return
     if (!matches(follower.options, session)) return
     if (!known) told(follower, session.agentId)
-    follower.tell({ kind: 'running', session })
+    follower.tell({ kind: 'running', session: agentView(session) })
   }
 
   return {

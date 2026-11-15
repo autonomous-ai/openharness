@@ -5,9 +5,6 @@ import { agentInstructionArgs, launchContract, type AttributionPlace } from '../
 import { joinedSettings } from '../engines/kit/statusLine.js'
 import { readAgentSettings } from './agentSettings.js'
 
-/** The line: short and plain, as the engines' own are, and linked to Harness's site. */
-export const AGENT_ATTRIBUTION_LINE = '🤝 Started by another agent in [Harness](https://harness.autonomous.ai) — agents that run agents.'
-
 /** Who started a harness, as `agent_create` takes it and its row keeps it: another agent; absent, the person. */
 export type StartedBy = 'agent'
 

@@ -25,6 +25,58 @@ const toldTo = (notify: ReturnType<typeof setup>['notify'], service: string) =>
 describe('what happens to agents, for the services that follow them', () => {
   afterEach(() => vi.restoreAllMocks())
 
+  it.each(['inline', 'process'] as const)('keeps credentials out of %s catch-up and running notifications, including retained rows', (mode) => {
+    const override = { networkId: 'fixture', networkName: 'Fixture', baseUrl: 'https://fixture.invalid/v1', apiKey: 'synthetic-lifecycle-canary' }
+    const plain = agent('plain')
+    const keyed = agent('keyed', { gridLaunch: override })
+    const { hub, notify } = setup([plain, keyed])
+    const received: unknown[] = []
+    const connect = (each: boolean) => {
+      if (mode === 'inline') return hub.follow(event => { received.push(event) }, { each })
+      received.push(hub.followed('viewers', { each }))
+      return () => hub.disconnected('viewers')
+    }
+    const disconnect = connect(false)
+    const initial = JSON.stringify(received)
+    expect(initial).not.toContain('gridLaunch')
+    expect(initial).not.toContain(override.apiKey)
+    plain.gridLaunch = override
+    expect(JSON.stringify(received)).not.toContain('gridLaunch')
+    hub.running(agent('new', { gridLaunch: override }))
+    hub.running(agent('new', { gridLaunch: override }))
+    disconnect()
+    const end = connect(true)
+    hub.running(keyed)
+    hub.running(keyed)
+    end()
+    const all = [...received, ...notify.mock.calls]
+    expect(JSON.stringify(all)).not.toContain('gridLaunch')
+    expect(JSON.stringify(all)).not.toContain(override.apiKey)
+    expect(keyed.gridLaunch).toBe(override)
+    expect(plain.gridLaunch).toBe(override)
+    if (mode === 'process') expect(notify).toHaveBeenCalledTimes(3)
+    else expect(received).toHaveLength(7)
+  })
+
+  it('does not read credential fields for unobserved, filtered or already-known scans', () => {
+    const session = agent('known')
+    const read = vi.fn(() => undefined)
+    Object.defineProperty(session, 'gridLaunch', { get: read, enumerable: true })
+    const { hub } = setup([session])
+    hub.running(session)
+    hub.follow(() => {}, { having: ['dsh'] })
+    hub.follow(() => {}, { running: false })
+    hub.followed('filtered', { having: ['dsh'] })
+    hub.followed('quiet', { running: false })
+    hub.running(session)
+    expect(read).not.toHaveBeenCalled()
+    hub.follow(() => {})
+    hub.followed('once', {})
+    read.mockClear()
+    hub.running(session)
+    expect(read).not.toHaveBeenCalled()
+  })
+
   describe('a follower in the core\'s process', () => {
     it('is told every live agent it follows at once, then each look at a new one once a run, and its end', () => {
       const { hub, follower } = setup([agent('a1')])

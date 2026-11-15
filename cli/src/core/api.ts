@@ -94,12 +94,21 @@ export const TERMINALS_OFF: TerminalsPort = {
   watch: { frame: async () => {}, close: async () => {}, onOutput: () => () => {} },
 }
 
+/** Agent metadata a service may read; the saved credential belongs to launch/restore authority. */
+export type AgentView = Omit<RegisteredSession, 'gridLaunch'>
+
+/** Always copy: a row without a key now may acquire one after an inline service retains its view. */
+export function agentView(session: RegisteredSession): AgentView {
+  const { gridLaunch: _gridLaunch, ...view } = session
+  return view
+}
+
 /** Read-only conversation facts for the handoff in the edge host. Each lookup asks the core now;
  * a stopped record is never replaced by a stale live-agent list in another process. */
 export interface ConversationReads {
   publish(prepared: PreparedHandoff, permit: HandoffPermit): Promise<HandoffOutcome>
   /** A live agent by agent/session id, otherwise the stopped record by agent id. */
-  resolve(id: string): Promise<RegisteredSession | null>
+  resolve(id: string): Promise<AgentView | null>
   recentAsks(sessionId: string, n: number): Promise<string[]>
   lastFullText(sessionId: string): Promise<string | null>
   recaps(sessionId: string, n: number): Promise<string[]>
@@ -153,21 +162,21 @@ export interface CoreApi {
   conversations: ConversationReads
   agents: {
     /** Every agent on this machine: the live ones, then the stopped ones. */
-    all(): RegisteredSession[]
+    all(): AgentView[]
     /** The live agents. */
-    live(): RegisteredSession[]
+    live(): AgentView[]
     /** The name the apps show for an agent. */
     displayName(session: RegisteredSession): string
     /** A live agent, by its agent id. */
-    byAgent(agentId: string): RegisteredSession | undefined
+    byAgent(agentId: string): AgentView | undefined
     /** A live agent, by its agent id or its engine session id: whichever the apps asked by. */
-    resolve(id: string): RegisteredSession | undefined
+    resolve(id: string): AgentView | undefined
     /** The live agents the apps are shown. */
-    advertised(): RegisteredSession[]
+    advertised(): AgentView[]
     /** The running cloud harnesses (core/agents/cloud.ts) as rows an agent list reads: an id, a start, an
      *  engine and a name, with no pane, transcript or process. Only the lists that show them ask (the dial,
      *  the fleet); absent where a core or process offers none. */
-    cloud?(): RegisteredSession[]
+    cloud?(): AgentView[]
     /** Whether the agent's terminal is attached: a frame without one reads to the apps as "agent gone". */
     terminalAvailable(agentId: string): boolean
     /** Send the agent's frame to the apps again. */
@@ -608,7 +617,7 @@ export const TURN_SUMMARY_TYPES: ReadonlySet<string> = new Set(['turn_summary', 
 
 /** `agents.resolve` over a service process's own copy of the agents, as the registry answers it: by agent
  *  id, then by engine session id (an agent with none yet is never found by an empty one). */
-export function resolveAgent(agents: readonly RegisteredSession[], id: string): RegisteredSession | undefined {
+export function resolveAgent(agents: readonly AgentView[], id: string): AgentView | undefined {
   return agents.find((agent) => agent.agentId === id) ?? (id ? agents.find((agent) => agent.sessionId === id) : undefined)
 }
 
@@ -1091,7 +1100,7 @@ export const AGENT_CLEANUP_FALLBACKS: PortFallbacks<AgentCleanupPort> = { typed:
  */
 export type AgentLife =
   /** A live agent here, as the core looked at it: created, forked, resumed, restored at a start, or seen by a scan. */
-  | { kind: 'running'; session: RegisteredSession }
+  | { kind: 'running'; session: AgentView }
   /** It stopped running here: a stop or any other forget, or its engine's own exit. Told to a follower that was told it
    *  running. */
   | { kind: 'ended'; agentId: string }
@@ -1158,7 +1167,7 @@ export const AGENT_BROWSER_FALLBACKS: PortFallbacks<AgentBrowserPort> = {
  *  one they hear as every service that follows agents does (`AgentLife`, `VIEWERS_FOLLOW`). */
 export interface ViewersPort {
   /** What the agent's frame says about its DSH: its name, its viewer and its verdict. */
-  frameContext(session: RegisteredSession): AgentDshContext | null
+  frameContext(session: AgentView): AgentDshContext | null
   /** Where the windows' viewer pane for the agent forwards to. */
   forwardingUrl(agentId: string): string | null
   /** Stop every viewer and watch, for a restart or a shutdown. */
@@ -2275,13 +2284,13 @@ export function createCoreApi({
     machine,
     conversations,
     agents: {
-      all: () => [...registry.list(), ...stoppedAgents.list()],
-      live: () => registry.list(),
+      all: () => [...registry.list(), ...stoppedAgents.list()].map(agentView),
+      live: () => registry.list().map(agentView),
       displayName: projectDisplayName,
-      byAgent: (agentId) => registry.byAgent(agentId),
-      resolve: (id) => registry.resolve(id),
-      advertised: () => registry.advertised(),
-      ...(cloudRows ? { cloud: cloudRows } : {}),
+      byAgent: (agentId) => { const session = registry.byAgent(agentId); return session && agentView(session) },
+      resolve: (id) => { const session = registry.resolve(id); return session && agentView(session) },
+      advertised: () => registry.advertised().map(agentView),
+      ...(cloudRows ? { cloud: () => cloudRows().map(agentView) } : {}),
       terminalAvailable: (agentId) => registry.terminalAvailable(agentId),
       sync: syncSession,
       runtimeModels,

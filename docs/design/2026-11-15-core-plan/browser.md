@@ -239,3 +239,24 @@ loopback proxy fixtures received `listen EPERM`; its 216 passes and four failure
 `/tmp/core-browser-destination-stop-green.log`. The corrected native run is
 `/tmp/core-browser-destination-stop-native-green.log`, and the true behavior red is
 `/tmp/core-browser-destination-stop-red.log`. Current-main integration and final gates remain with the coordinator.
+
+## Credential boundary integration, 16 November
+
+The metadata projection in #4349 replaces Browser/viewer attach calls that this extraction removes. Keep the
+generic lifecycle instead: project matching catch-up rows and each emitted running event through `agentView`,
+after the existing known/filter checks. Authoritative input rows stay unchanged. A follower receives a copy even
+when the row has no key yet, so a later saved credential cannot enter its retained metadata. Unobserved scans,
+known once-only followers and excluded rows perform no projection. `taken` already carries only ids and an
+optional guest flag. Main's direct viewer frame-context callback also retains its projection.
+
+This combines the existing custody Design without adding storage, ports, timers or migration. Inline and process
+catch-up regressions failed first (2 failed, 1 unchanged scan case passed, 0.86 seconds). The resulting five-file
+integration selection passes 116 tests in 2.61 seconds; Node 24.22.2 typecheck passes. Two intermediate runs exposed
+obsolete test calls to the removed Browser reconnect and viewer agents-query adapters; both fixtures now exercise
+the generic follow path, with all output assertions retained. Logs: `/tmp/core-browser-custody-red.log`,
+`/tmp/core-browser-custody-green-combined.log`, `/tmp/core-browser-custody-typecheck-final.log`.
+
+The bundled credential test now subscribes through `follow_agents` and verifies the replacement running event and
+reconnect catch-up. Its combined-source native run, independent review of the coordinator's changes, full required
+gates and updated performance comparison remain pending. Earlier #4349 native evidence covers its original direct
+attach path, not this replacement path.
