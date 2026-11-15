@@ -63,7 +63,6 @@ export const GATEWAY_CALLS = {
   devicesHistory: 'gateway_devices_history',
   devicesDismiss: 'gateway_devices_dismiss',
   devicesRebaseline: 'gateway_devices_rebaseline',
-  wifi: 'gateway_wifi',
   lane: 'gateway_lane',
   observerKey: 'gateway_observer_key',
   tabKey: 'gateway_tab_key',

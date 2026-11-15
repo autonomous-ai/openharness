@@ -20,6 +20,11 @@ let several people build features at once without touching the core or each othe
    - While the service is off, its requests are answered `SERVICE_UNAVAILABLE`, never `UNSUPPORTED`
      (the apps read that as "update the CLI"). That is why the types are declared up front.
    - A handler that throws or rejects is answered `SERVICE_FAILED` and counts against the service.
+   - A route of the daemon's local HTTP door is one such request too: its paths, the request it becomes (one
+     `<name>_http` a service), how long it is waited for and what it answers while the service is down go in
+     `SERVICE_HTTP_ROUTES` (`src/core/api.ts`); the core hands it on as it came, once the door let it in
+     (`core/serviceRoutes.ts`), and the service answers `{ status, body }`, checking everything it carries
+     (`lib/autonomous-device/localHttp.ts` shows how). Never a route in `hookServer.ts`.
    - Work that belongs to the connection that asked (a limit on how many at once per connection, work to
      stop when the asker goes) is keyed by `asker.connection` and stops on `closed`, the handler's third
      argument: it is aborted when that connection closes, or when the core that routed it goes, wherever

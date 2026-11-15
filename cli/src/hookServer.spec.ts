@@ -12,6 +12,7 @@ import { readHookCredential } from './lib/hookAuth.js'
 import { ENGINES } from './engines/types.js'
 import { engineHooks } from './engines/hooks.js'
 import { pipeRequest } from './lib/windows/pipeClient.js'
+import type { ServiceHttpRequest } from './core/serviceRoutes.js'
 
 let server: Server | null = null
 
@@ -1126,6 +1127,35 @@ describe('the trust group endpoints', () => {
   })
 })
 
+describe('the Wi-Fi device\'s routes at the door', () => {
+  it('hands each on as it came once its checks pass, and writes the answer its service gave', async () => {
+    const onServiceRoute = vi.fn((path: string, request: ServiceHttpRequest) =>
+      path === '/api/autonomous-device/nobody' ? null : Promise.resolve({ status: 207, body: { path, request } }))
+    const { base } = await start({ onServiceRoute })
+    const bearer = { authorization: `Bearer ${readHookCredential(env.ADAPTER_DATA_DIR)}` }
+    // A read: its query goes with it, and no body.
+    const read = await realFetch(`${base}/api/autonomous-device/status?all=true`, { headers: bearer })
+    expect(read.status).toBe(207)
+    expect(await read.json()).toEqual({ path: '/api/autonomous-device/status', request: { method: 'GET', target: '/api/autonomous-device/status?all=true' } })
+    // A write: its body as text, whatever it holds, for its service to read.
+    const write = await realFetch(`${base}/api/autonomous-device/revoke`, { method: 'POST', headers: bearer, body: 'not json' })
+    expect(await write.json()).toEqual({ path: '/api/autonomous-device/revoke', request: { method: 'POST', target: '/api/autonomous-device/revoke', body: 'not json' } })
+    // No service answers the path.
+    const none = await realFetch(`${base}/api/autonomous-device/nobody`, { headers: bearer })
+    expect(none.status).toBe(503)
+    expect(await none.json()).toEqual({ error: { code: 'UNAVAILABLE', message: 'Autonomous device service unavailable' } })
+    // The door's own refusal comes first: nothing is handed on.
+    expect((await realFetch(`${base}/api/autonomous-device/status`)).status).toBe(403)
+    expect(onServiceRoute).toHaveBeenCalledTimes(3)
+  })
+
+  it('answers 503 when no service is wired to answer them', async () => {
+    const { base } = await start()
+    const reply = await realFetch(`${base}/api/autonomous-device/status`, { headers: { authorization: `Bearer ${readHookCredential(env.ADAPTER_DATA_DIR)}` } })
+    expect(reply.status).toBe(503)
+  })
+})
+
 describe('the daemon socket', () => {
   function viaSocket(socketPath: string, method: string, path: string, headers: Record<string, string> = {}): Promise<number> {
     return new Promise((resolve, reject) => {
@@ -1139,8 +1169,8 @@ describe('the daemon socket', () => {
     const dir = mkdtempSync('/tmp/hsock-')
     const socketPath = join(dir, 'daemon.sock')
     const onStatus = vi.fn(() => ({ ok: true }))
-    const onAutonomousDeviceRequest = vi.fn(async () => ({ status: 200, body: { ok: true } }))
-    const started = await startHookServer(0, { onRegistered: vi.fn(), onSessionEnd: vi.fn(), onStatus, onAutonomousDeviceRequest }, { socketPath })
+    const onServiceRoute = vi.fn(() => Promise.resolve({ status: 200, body: { ok: true } }))
+    const started = await startHookServer(0, { onRegistered: vi.fn(), onSessionEnd: vi.fn(), onStatus, onServiceRoute }, { socketPath })
     server = started.server
     try {
       expect(started.localSocket?.path).toBe(socketPath)
@@ -1152,7 +1182,7 @@ describe('the daemon socket', () => {
       const bearer = { authorization: `Bearer ${readHookCredential(env.ADAPTER_DATA_DIR)}` }
       expect(await viaSocket(socketPath, 'GET', '/api/autonomous-device/status', bearer)).toBe(200)
       expect(await viaSocket(socketPath, 'GET', '/api/autonomous-device/status')).toBe(403)
-      expect(onAutonomousDeviceRequest).toHaveBeenCalledTimes(1)
+      expect(onServiceRoute).toHaveBeenCalledTimes(1)
       // Mutations still need the CSRF header, hooks still need their credential.
       expect(await viaSocket(socketPath, 'POST', '/api/group/sync')).toBe(403)
       expect(await viaSocket(socketPath, 'POST', '/api/hook/session-start')).not.toBe(200)
@@ -1365,7 +1395,7 @@ describe('audit H1: what a secret heard on the daemon\'s port can do', () => {
   const serve = async (peerAccount: () => Promise<boolean | 'unanswered'>) => {
     const started = await startHookServer(0, {
       onRegistered: vi.fn(), onSessionEnd: vi.fn(), onStatus: async () => ({ supported: true, secretDetail: 'x' }),
-      onAutonomousDeviceRequest: async () => ({ status: 200, body: { ok: true } }),
+      onServiceRoute: () => Promise.resolve({ status: 200, body: { ok: true } }),
     }, { peerAccount })
     return { port: started.port, close: () => new Promise<void>((resolve) => { started.server.closeAllConnections(); started.server.close(() => resolve()) }) }
   }
