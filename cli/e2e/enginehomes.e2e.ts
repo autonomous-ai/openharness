@@ -14,7 +14,7 @@ import { basename, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
-import { assertHooksContained, CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
+import { assertHooksContained, CLI_ROOT, fakeEngineShim, IsolatedDaemon, until } from './harness/daemon.js'
 import { sharedCodex } from './harness/sharedCodex.js'
 import { Store } from '../src/lib/connectors/store.js'
 
@@ -479,7 +479,8 @@ describe('the person\'s engines keeping their data elsewhere', () => {
   }, 300_000)
 
   // A home named on the command line alone (`CODEX_HOME=<profile> codex`), which no shell profile names: the daemon
-  // learns it from what the engine says of itself, its hook's header or the rollout its process holds open.
+  // learns it from what the engine says of itself, its hook's header or the rollout its process holds open. Here the
+  // header alone: this Codex holds no rollout open (the next case is the rollout's).
   it('a Codex typed in with a CODEX_HOME of its own binds from its hook and keeps that home', async () => {
     const d = await IsolatedDaemon.create(); daemon = d
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`) })
@@ -497,6 +498,10 @@ describe('the person\'s engines keeping their data elsewhere', () => {
     expect(deleted.error, JSON.stringify(deleted)).toBeUndefined()
     await until('the profile agent to stop', async () => (await row(client, first.agent.id))?.status === 'stopped' || null, 45_000, 500)
     rmSync(join(profile, 'sessions'), { recursive: true, force: true })
+    // Whole or not at all: the daemon may run `codex` while it is written.
+    const wrapper = join(d.root, 'bin', 'codex')
+    writeFileSync(`${wrapper}.new`, fakeEngineShim('codex', { ...d.engineConfig, holdsRollout: false }), { mode: 0o755 })
+    renameSync(`${wrapper}.new`, wrapper)
     const opened = await client.request('agent_create', { engine: 'terminal', cwd: d.projectsDir }, 60_000)
     expect(opened.error, JSON.stringify(opened)).toBeUndefined()
     const tile = await until('the terminal tile to be up', async () => {
