@@ -4991,6 +4991,43 @@ describe('what the dial cannot do for an agent', () => {
     } finally { vi.useRealTimers(); await session.stop() }
   })
 
+  // The host notes the move as the hand makes it, pane or none: a settle of the app in front must not turn the dial back
+  // in the 400 ms before a rest, or from an agent no rest shows.
+  it("a hand's turn tells the host at once, whatever the agent; a follow's echo does not", async () => {
+    const turned = vi.fn()
+    const { session, port, swipeEnded } = await resting({ turned })
+    try {
+      port.say({ t: 'focus', agentId: 'a1' })
+      expect(turned).toHaveBeenCalledTimes(1)
+      expect(swipeEnded).not.toHaveBeenCalled()
+      port.say({ t: 'focus', agentId: 'a2' })
+      expect(turned).toHaveBeenCalledTimes(2)
+      await session.followApp('', 'a3')
+      port.say({ t: 'focus', agentId: 'a3' })   // the dial's echo of the move
+      expect(turned).toHaveBeenCalledTimes(2)
+    } finally { vi.useRealTimers(); await session.stop() }
+  })
+
+  // Past the echo's 750 ms but inside the switch's 1 s repaint: the stale tile the dial repaints is not a hand either.
+  it("a switch's repaint after its echo timed out does not tell the host", async () => {
+    let release!: () => void
+    let hold: Promise<void> | undefined
+    const turned = vi.fn()
+    const { session, port } = await resting({
+      turned,
+      listAgents: async () => { await hold; return AGENTS },
+    })
+    try {
+      hold = new Promise((resolve) => { release = resolve })
+      const following = session.followApp('', 'a3')   // held in its list push: the switch is running
+      await vi.advanceTimersByTimeAsync(800)
+      port.say({ t: 'focus', agentId: 'a1' })
+      expect(turned).not.toHaveBeenCalled()
+      release()
+      await following
+    } finally { vi.useRealTimers(); await session.stop() }
+  })
+
   it('a host without swipeSwitches behaves as today', async () => {
     const { session, port, host } = await resting({ swipeSwitches: undefined, swipeEnded: undefined })
     try {

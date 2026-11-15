@@ -2047,6 +2047,37 @@ int main(int argc, char **argv) {
     ui_project_set_host_caps("a","orca",CABLE_CAP_S|CABLE_CAP_A); scene_take();
     assert(!action_enabled(A_QUESTION_SAY) && !scene_says("[say]") && action_enabled(A_QUESTION_CHOICES));
     portrait(dir,"caps-question-no-say");
+    // a question of an agent without A: the prompt and [ later ] only, and its answer actions do nothing
+    for (int voice = 0; voice < 2; voice++) {
+        reset(); s.view=QUESTION; s.q.valid=s.q.supported=true; s.q.count=1; s.q.revision=1;
+        strcpy(s.q.agent,"a"); strcpy(s.q.token,"token-a"); strcpy(s.q.name,"Research helper");
+        strcpy(s.q.item[0].prompt,"Bash: git push \xc2\xb7 answer in Orca"); s.q.item[0].count=1; s.q.item[0].can_text=voice;
+        strcpy(s.q.item[0].options[0],"In Orca");
+        ui_project_set_host_caps("a","orca",CABLE_CAP_S|(voice ? CABLE_CAP_V : 0)); scene_take();
+        assert(scene_says("Bash: git push") && scene_says("[ later ]") && action_enabled(A_HOME));
+        assert(!scene_says("[choices]") && !scene_says("[say]") && !scene_says("[next]") && !scene_says("[later]"));
+        assert(!action_enabled(A_QUESTION_CHOICES) && !action_enabled(A_QUESTION_SAY) && !action_enabled(A_QUESTION_REVIEW));
+        if (!voice) portrait(dir,"caps-question-no-answer");
+        tap(2000,350,370); assert(s.view==QUESTION);                        // where [choices] was
+        #define STALE(k) dispatch((action_t){.kind=(k),.revision=s.q.revision,.dy=s.q.index,.id="a"})
+        STALE(A_QUESTION_CHOICES); assert(s.view==QUESTION);
+        s.view=CHOICE; STALE(A_CHOICE); assert(!s.q.item[0].selected);
+        s.q.item[0].selected=1; STALE(A_QUESTION_REVIEW); assert(s.view==CHOICE);
+        strcpy(s.q.item[0].answer,"In Orca"); s.view=ANSWER_REVIEW; STALE(A_ANSWER);
+        assert(!question_sends && !s.q.pending && s.view==ANSWER_REVIEW);
+        STALE(A_QUESTION_BACK); assert(s.view==CHOICE);                      // back still leaves
+        #undef STALE
+    }
+    // with every letter, and with no caps at all, the same question is as before
+    for (int all = 0; all < 2; all++) {
+        reset(); s.view=QUESTION; s.q.valid=s.q.supported=true; s.q.count=1; s.q.revision=1;
+        strcpy(s.q.agent,"a"); strcpy(s.q.token,"token-a"); strcpy(s.q.name,"Research helper");
+        strcpy(s.q.item[0].prompt,"Bash: git push \xc2\xb7 answer in Orca"); s.q.item[0].count=1;
+        strcpy(s.q.item[0].options[0],"In Orca");
+        if (all) ui_project_set_host_caps("a","orca",CABLE_CAPS_ALL);
+        scene_take(); assert(scene_says("[choices]") && action_enabled(A_QUESTION_CHOICES));
+        tap(2000,300,370); assert(s.view==CHOICE);
+    }
     // a notice tap on an agent without F opens no window: the dial goes to its face, the recap still on it
     reset(); ui_project_set_host_caps("b","orca",CABLE_CAP_S|CABLE_CAP_V|CABLE_CAP_A);
     ui_project_emit("b","sess","summary","The build is ready.","The build is ready.");

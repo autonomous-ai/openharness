@@ -1,6 +1,12 @@
-import { describe, expect, it } from 'vitest'
-import { detectHost } from './hostDetect.js'
-import { createOpenActions, openTarget, type OpenDeps } from './open.js'
+import { describe, expect, it, vi } from 'vitest'
+import type { HostAdapter, Pane } from './adapter.js'
+import { createClaudeAppAdapter } from './claudeApp.js'
+import { createHerdrAdapter } from './herdr.js'
+import { detectApp, detectHost } from './hostDetect.js'
+import { bundleOf, createOpenActions, type OpenTarget } from './open.js'
+import { createOrcaAdapter, type OrcaDeps } from './orca.js'
+import { createTabsAdapter } from './tabs.js'
+import { createWeztermAdapter } from './wezterm.js'
 
 const HANDLE = 'term_0f8e2c1a-3b4d-4e5f-8a9b-0c1d2e3f4a5b'
 const SESSION = 'local_8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b'
@@ -10,13 +16,19 @@ const APP_WEZTERM = '/Applications/WezTerm.app/Contents/MacOS/wezterm'
 
 interface Call { file: string; args: string[]; timeoutMs: number }
 
+/** What a test may set: the runner and the binaries it finds, Orca's switch, and the log. */
+interface Over extends OrcaDeps {
+  orcaSwitch(handle: string): Promise<boolean>
+  log(line: string): void
+}
+
 /** A recording runner that runs nothing, so no spec brings the developer's own apps forward: each call answers the next
- *  of [codes], then exit 0. */
-function recorder(over: Partial<OpenDeps> = {}, codes: Array<number | null> = []) {
+ *  of [codes], then exit 0. The opener holds the adapters over it, a tabs stream never open, and any [more]. */
+function recorder(over: Partial<Over> = {}, codes: Array<number | null> = [], more: readonly HostAdapter[] = []) {
   const calls: Call[] = []
   const switched: string[] = []
   const logs: string[] = []
-  const deps: OpenDeps = {
+  const deps: Over = {
     run: async (file, args, timeoutMs) => {
       calls.push({ file, args, timeoutMs })
       return { code: codes.length ? codes.shift()! : 0 }
@@ -24,15 +36,31 @@ function recorder(over: Partial<OpenDeps> = {}, codes: Array<number | null> = []
     onPath: (name) => `/fake/bin/${name}`,
     exists: () => false,
     platform: 'darwin',
-    orcaSwitch: async (handle) => { switched.push(handle); return true },
+    orcaSwitch: async () => true,
     log: (line) => { logs.push(line) },
     ...over,
   }
-  return { calls, switched, logs, opener: createOpenActions(deps) }
+  const claude = createClaudeAppAdapter({ ...deps, inFront: () => true })
+  const adapters: HostAdapter[] = [
+    createHerdrAdapter(deps),
+    createWeztermAdapter(deps),
+    { ...createOrcaAdapter(deps), focus: (pane) => { switched.push(pane.id); return deps.orcaSwitch(pane.id) } },
+    claude,
+    createTabsAdapter({ isOpen: () => false, select: () => false }),
+    ...more,
+  ]
+  return { calls, switched, logs, claude, opener: createOpenActions({ run: deps.run, platform: deps.platform, adapters, log: deps.log }) }
 }
 
+/** The adapters whose pane a tap takes, in the order the observed source keeps them: each reads the hints alone. */
+const inert: OrcaDeps = { run: async () => ({ code: 0 }), onPath: () => null, exists: () => false, platform: 'darwin' }
+const tapped = [createHerdrAdapter(inert), createWeztermAdapter(inert), createOrcaAdapter(inert), createClaudeAppAdapter({ ...inert, inFront: () => true })]
+
 /** What an agent's hook hints let a tap open, as the observed source reads them. */
-const target = (hints: Record<string, string>) => openTarget(detectHost(hints), hints)
+const target = (hints: Record<string, string>): OpenTarget => {
+  const place = { host: detectHost(hints), app: detectApp(hints), hints }
+  return { bundle: bundleOf(place.host, hints), pane: tapped.map((adapter) => adapter.paneOf(place)).find((pane) => pane) }
+}
 const run = (file: string, ...args: string[]): Call => ({ file, args, timeoutMs: 10_000 })
 const forward = (bundle: string): Call => run(OPEN, '-b', bundle)
 
@@ -221,10 +249,8 @@ describe('opening an agent outside Harness from the dial', () => {
         calls.push(args)
         return new Promise((resolve) => waiting.push(() => resolve({ code: 0 })))
       },
-      onPath: () => null,
-      exists: () => false,
       platform: 'darwin',
-      orcaSwitch: async () => true,
+      adapters: [],
       log: () => {},
     })
     const warp = target({ TERM_PROGRAM: 'WarpTerminal' })
@@ -242,77 +268,27 @@ describe('opening an agent outside Harness from the dial', () => {
   })
 })
 
+// A rest's link is the Claude app adapter's own (claudeApp.spec.ts); a tap's one-at-a-time is the opener's.
 describe('a rest on a Claude app session', () => {
   const link = (session: string): Call => run(OPEN, `claude://code/continue?session=${session}`)
-  const OTHER = 'local_0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d'
 
   /** The recorder, each command held until it is let go, so a link can be caught still running. */
   function holding() {
     const calls: Call[] = []
     const waiting: Array<() => void> = []
-    const { opener } = recorder({
+    const { claude, opener } = recorder({
       run: (file, args, timeoutMs) => {
         calls.push({ file, args, timeoutMs })
         return new Promise((resolve) => waiting.push(() => resolve({ code: 0 })))
       },
     })
-    return { calls, waiting, opener }
+    return { calls, waiting, claude, opener }
   }
 
-  it('claudeShow runs the continue link, and nothing else', async () => {
-    const { calls, switched, logs, opener } = recorder()
-    expect(await opener.claudeShow('a1', SESSION)).toBe('ok')
-    expect(calls).toEqual([link(SESSION)])
-    expect(switched).toEqual([])
-    expect(logs).toEqual([])
-  })
-
-  it('a link that exits non-zero, or never exits, is failed, and no app is brought forward', async () => {
-    for (const code of [1, null]) {
-      const { calls, logs, opener } = recorder({}, [code])
-      expect(await opener.claudeShow('a1', SESSION), String(code)).toBe('failed')
-      expect(calls).toEqual([link(SESSION)])
-      expect(logs).toEqual([])
-    }
-  })
-
-  it('an id not in the link\'s form never reaches open', async () => {
-    const { calls, opener } = recorder()
-    const bad = ['', 'local_', `local_${'a'.repeat(65)}`, 'local_a b', 'local_a&x=1', 'local_a/../b', '-b', '8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b']
-    for (const session of bad) expect(await opener.claudeShow('a1', session), session).toBe('failed')
-    expect(calls).toEqual([])
-  })
-
-  it('on Linux and Windows nothing runs', async () => {
-    for (const platform of ['linux', 'win32'] as const) {
-      const { calls, opener } = recorder({ platform })
-      expect(await opener.claudeShow('a1', SESSION), platform).toBe('failed')
-      expect(calls).toEqual([])
-    }
-  })
-
-  it('a link still running drops the next for that agent, and another agent\'s runs', async () => {
-    const { calls, waiting, opener } = holding()
-    const first = opener.claudeShow('a1', SESSION)
-    expect(await opener.claudeShow('a1', OTHER)).toBe('busy')
-    expect(calls).toEqual([link(SESSION)])
-    const other = opener.claudeShow('a2', OTHER)
-    expect(calls).toEqual([link(SESSION), link(OTHER)])
-    waiting[0]()
-    expect(await first).toBe('ok')
-    // Once its link has ended, the agent takes the next one.
-    const next = opener.claudeShow('a1', OTHER)
-    expect(calls).toEqual([link(SESSION), link(OTHER), link(OTHER)])
-    waiting[1]()
-    waiting[2]()
-    expect(await other).toBe('ok')
-    expect(await next).toBe('ok')
-  })
-
   it('a tap is not refused while a rest\'s link runs, and a rest is not busy while a tap runs', async () => {
-    const { calls, waiting, opener } = holding()
+    const { calls, waiting, claude, opener } = holding()
     const app = target({ __CFBundleIdentifier: CLAUDE, CLAUDE_CODE_HOST_SESSION_ID: SESSION })
-    const rest = opener.claudeShow('a1', SESSION)
+    const rest = claude.show({ adapter: 'claude', id: SESSION }, 'a1')
     const tap = opener.open('a1', app)
     expect(calls).toEqual([link(SESSION), link(SESSION)])
     for (const done of waiting.splice(0)) done()
@@ -320,10 +296,86 @@ describe('a rest on a Claude app session', () => {
     expect(await tap).toBe(true)
 
     const tapFirst = opener.open('a1', app)
-    const restAfter = opener.claudeShow('a1', SESSION)
+    const restAfter = claude.show({ adapter: 'claude', id: SESSION }, 'a1')
     expect(calls).toEqual([link(SESSION), link(SESSION), link(SESSION), link(SESSION)])
     for (const done of waiting.splice(0)) done()
     expect(await tapFirst).toBe(true)
     expect(await restAfter).toBe('ok')
+  })
+})
+
+// Each app says where its pane comes in a tap (adapter.ts `tap`): the opener keeps that order, knowing no app by name.
+describe('a tap in the order its pane\'s adapter keeps', () => {
+  const PANE: Pane = { adapter: 'made-up', id: 'p1' }
+  const TERMINAL = 'com.apple.Terminal'
+  const both: OpenTarget = { bundle: TERMINAL, pane: PANE }
+
+  /** The recorder, its opener holding one app more that no other test knows: its focus answers as told, and notes the
+   *  commands run before it. */
+  function withMadeUp(tap: HostAdapter['tap'], focused = true) {
+    const before: Call[][] = []
+    const adapter = {
+      id: 'made-up',
+      tap,
+      paneOf: () => PANE,
+      canFocus: () => true,
+      focus: vi.fn(async (_pane: Pane) => { before.push([...r.calls]); return focused }),
+    }
+    const r = recorder({}, [], [adapter])
+    return { ...r, adapter, before }
+  }
+
+  it('a pane that taps before its app: its focus, then open -b; its focus failing, the line and open -b', async () => {
+    const reached = withMadeUp('before')
+    expect(await reached.opener.open('a1', both)).toBe(true)
+    expect(reached.adapter.focus.mock.calls).toEqual([[PANE]])
+    expect(reached.before).toEqual([[]])
+    expect(reached.calls).toEqual([forward(TERMINAL)])
+    expect(reached.logs).toEqual([])
+
+    const failed = withMadeUp('before', false)
+    expect(await failed.opener.open('a1', both)).toBe(true)
+    expect(failed.before).toEqual([[]])
+    expect(failed.calls).toEqual([forward(TERMINAL)])
+    expect(failed.logs).toEqual(['[device] open · made-up · fallback'])
+  })
+
+  it('a pane that taps instead of its app: its focus alone; open -b and the line only when it fails', async () => {
+    const reached = withMadeUp('instead')
+    expect(await reached.opener.open('a1', both)).toBe(true)
+    expect(reached.adapter.focus.mock.calls).toEqual([[PANE]])
+    expect(reached.calls).toEqual([])
+    expect(reached.logs).toEqual([])
+
+    const failed = withMadeUp('instead', false)
+    expect(await failed.opener.open('a1', both)).toBe(true)
+    expect(failed.before).toEqual([[]])
+    expect(failed.calls).toEqual([forward(TERMINAL)])
+    expect(failed.logs).toEqual(['[device] open · made-up · fallback'])
+  })
+
+  // Its pane is raised once its app came (observed.ts focus): the opener brings the app alone.
+  it('a pane that taps after its app is not the opener\'s', async () => {
+    const r = withMadeUp('after')
+    expect(r.opener.can(both)).toBe(true)
+    expect(await r.opener.open('a1', both)).toBe(true)
+    expect(r.calls).toEqual([forward(TERMINAL)])
+    expect(r.logs).toEqual([])
+    expect(r.opener.can({ pane: PANE })).toBe(false)
+    expect(await r.opener.open('a1', { pane: PANE })).toBe(false)
+    expect(r.calls).toHaveLength(1)
+    expect(r.adapter.focus).not.toHaveBeenCalled()
+  })
+
+  // A list built wrong at the wiring: nothing throws, and the app alone comes forward.
+  it('a pane of an adapter the opener does not hold is no pane', async () => {
+    const r = recorder()
+    expect(await r.opener.open('a1', both)).toBe(true)
+    expect(r.calls).toEqual([forward(TERMINAL)])
+    expect(r.logs).toEqual([])
+    expect(r.opener.can({ pane: PANE })).toBe(false)
+    expect(await r.opener.open('a1', { pane: PANE })).toBe(false)
+    expect(r.calls).toHaveLength(1)
+    expect(r.switched).toEqual([])
   })
 })
