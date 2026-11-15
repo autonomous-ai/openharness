@@ -37,7 +37,7 @@
  */
 
 import { isTerminalEngine, type AgentEngine } from '../engines/types.js'
-import type { GridAssignment } from './gridAssignmentWire.js'
+import { launchedGrid, type GridAssignment } from './gridAssignmentWire.js'
 import type { LaunchOverrides } from './launchOverrides.js'
 import type { AgentLaunch, ProcessIdentity, RegisteredSession } from './registry.js'
 import type { TerminalDispatchControl, TerminalRuntimeRef } from './terminalTypes.js'
@@ -492,7 +492,8 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
         } else {
           const route = terminalRouteKey(runtime)
           const release = deps.holdRoute(route, (deps.budgetMs ?? DEFAULT_BUDGET_MS) + HOLD_SLACK_MS) ?? (() => deps.releaseRoute(route))
-          void watchRestoredPane(deps, entry, runtime, !!entry.sessionId, deps.budgetMs ?? DEFAULT_BUDGET_MS, current, release)
+          void watchRestoredPane(deps, entry, runtime, !!entry.sessionId, deps.budgetMs ?? DEFAULT_BUDGET_MS, current, release,
+            launchedGrid(entry.gridLaunch))
         }
       } else if (entry.externalResume?.phase === 'admitted' && entry.launch?.state === 'starting') {
         // The dispatch journal precedes tmux. If its exact waiting shell remains, no engine ran;
@@ -506,7 +507,8 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
         } else {
           const route = terminalRouteKey(runtime)
           const release = deps.holdRoute(route, (deps.budgetMs ?? DEFAULT_BUDGET_MS) + HOLD_SLACK_MS) ?? (() => deps.releaseRoute(route))
-          void watchRestoredPane(deps, entry, runtime, true, deps.budgetMs ?? DEFAULT_BUDGET_MS, current, release)
+          void watchRestoredPane(deps, entry, runtime, true, deps.budgetMs ?? DEFAULT_BUDGET_MS, current, release,
+            launchedGrid(entry.gridLaunch))
         }
       } else if (!isTerminalEngine(entry.engine)) {
         if (deps.retainStopped) deps.retainStopped(entry, true)
@@ -735,7 +737,8 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
   return summary
 }
 
-/** [launched]: the grid of the launch in [runtime], undefined for one an earlier daemon dispatched (the row keeps its own). */
+/** [launched]: the grid of the launch in [runtime]. For one an earlier daemon dispatched, its record is the row's: that
+ *  launch wrote it before it dispatched (`refreshGridWebSearch`). */
 async function watchRestoredPane(
   deps: RestoreAgentsDeps,
   entry: RegisteredSession,
@@ -744,7 +747,7 @@ async function watchRestoredPane(
   budgetMs: number,
   current: () => boolean,
   release: () => void,
-  launched?: GridAssignment | null,
+  launched: GridAssignment | null | undefined,
 ): Promise<void> {
   const { agentId, engine } = entry
   let grid = launched
