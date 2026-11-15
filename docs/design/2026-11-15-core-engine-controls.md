@@ -142,3 +142,36 @@ Parity tests precede the representation change and cover every field, copied cal
 semantics and exact route JSON behavior. Existing hold/ABA and delayed-control guards remain required.
 All other Design contracts above remain unchanged. Failed cost comparisons and diagnostic counts
 remain visible; a new fixed comparison is scheduled only after validation and review.
+
+## Validation and remaining cost
+
+The final measured source is `50546fe63e35e33bc05d52bb35afd4161d508188`; its CLI bundle SHA256 is
+`930ad93a278b8d2d660e77963606b6c6790a9357483f218d79658dafc85151cd`. The parent is `5cbb378db0`,
+bundle SHA256 `2edd751c1c4ca618a0fc4421ef9ce01cdfb8da2f87e336026a56c3b5e833adf8`. Both ran the same
+unchanged `cli/e2e/otherRuntimeControls.e2e.ts` workload on Node 24.22.2/macOS: ten private Cursor
+agents, 30 s idle, twenty actual Low/High footer observations in two batches, ten approved Tab
+answers confirmed by exact terminal bytes, and the existing unsupported-model refusal.
+
+All six fixed runs passed, in order candidate1,parent1 / parent2,candidate2 / candidate3,parent3.
+The profile-phase CPU deltas remain positive in every pair:
+
+| Pair | Parent core CPU | Candidate core CPU | Delta |
+| --- | ---: | ---: | ---: |
+| 1 | 0.74 s | 0.77 s | +0.03 s |
+| 2 | 0.74 s | 0.81 s | +0.07 s |
+| 3 | 0.75 s | 0.77 s | +0.02 s |
+
+Median profile CPU is 0.74 to 0.77 s (+4.1%). Idle CPU readings are 1.100/1.033/1.100% for the
+parent and 1.000/1.033/1.033% for the candidate: every parent run and two candidate runs exceed the
+1% limit; the first candidate value rounds to the limit. Median answer p95 is 1234.867 to 1232.124 ms.
+Native poll alignment affects observation latency and the number of existing inventory ticks inside
+a profile window; the operation-count diagnostic is retained separately. These facts do not establish
+performance acceptance or erase the positive CPU deltas. Earlier failed comparisons are also retained.
+
+At the measured source, 182 focused tests passed with runtimeSessions at 100% per-file coverage;
+typecheck, all 16 frozen runtime golden cases (482 unchanged hashes), and all eight unchanged bundled
+acceptance cases passed. Acceptance includes absent/stalled core reader chunks, killed/frozen workers,
+terminal/Stop isolation with the same frozen PID, lowercase-hint refusal, and inline/protocol1/2
+compatibility. Linux and Windows execution is not claimed. Current-main integration, required
+integrated-head gates/CI, and explicit disposition of the remaining cost are still outstanding; this
+evidence does not declare the extraction step complete.
