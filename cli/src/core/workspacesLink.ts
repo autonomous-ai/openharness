@@ -32,15 +32,28 @@ export type CallWorkspaces = (type: string, payload: Payload, waitMs: number) =>
  *  and its process going (killed, or hung and killed by the master's heartbeat watch) answers at once. A clone that keeps
  *  progressing may take long on a slow connection. */
 export const PREPARE_FOLDER_MS = 60 * 60_000
-/** How long a worktree's review waits: under the 30 s a window gives a purge's review, so it hears why. */
-export const WORKTREE_REVIEW_MS = 20_000
-/** And its removal: `git worktree remove` gets 30 s in the process, after the review it makes again. */
-export const WORKTREE_REMOVE_MS = 45_000
+/** How long a worktree's review waits: under the 30 s Desktop gives a purge's review, so it hears why. A review is several
+ *  git reads and a `du`; `git status` alone takes seconds on a large repository. */
+export const WORKTREE_REVIEW_MS = 25_000
+/** And its removal: the review it makes again, its turn in the repository (a worktree being added there can take ten
+ *  minutes), then `git worktree remove`'s own 30 s. Asked and not answered in time, whether the worktree went is not
+ *  known, and the core says so rather than that it was kept (`REMOVAL_UNKNOWN`). */
+export const WORKTREE_REMOVE_MS = 3 * 60_000
+
+/** A folder asked for and not answered: the process may have made some of it before it stopped, so a person is told. */
+const FOLDER_UNANSWERED: PreparedFolder = { ok: false, error: 'SERVICE_UNAVAILABLE',
+  detail: 'Could not make the project folder: Harness\'s workspaces service did not answer. A folder it began may still appear in your projects.' }
+/** A removal asked for and not answered: it may have run. */
+const REMOVAL_UNKNOWN = { ok: false as const,
+  reason: 'Harness could not tell whether the worktree was deleted: its workspaces service did not answer. Review this harness again.' }
 
 const MAX_PATH = 4096
 const path = (value: unknown): value is string =>
   typeof value === 'string' && isAbsolute(value) && value.length <= MAX_PATH && !/[\x00-\x1f\x7f]/.test(value)
 const text = (value: unknown, max: number): value is string => typeof value === 'string' && value.length > 0 && value.length <= max
+/** A file's device or inode number: Windows gives ones past 2^53, which a number holds only roughly, but the same way
+ *  each time the same file is read, which is all a review's check needs. */
+const fileId = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0
 
 /** A folder the process says git made, or why not, held to the shape a create reads. Anything else is not answered. */
 export function folderAnswer(answer: Payload): PreparedFolder | null {
@@ -72,7 +85,7 @@ export function reviewAnswer(answer: Payload): WorktreeAnswer | null {
   if (answer.ok !== true || !r || typeof r !== 'object' || !path(r.path) || !path(r.main) || (r.branch !== null && !text(r.branch, 1024))
     || !text(r.head, 128) || (r.bytes !== null && !Number.isSafeInteger(r.bytes)) || typeof r.dirty !== 'boolean'
     || !Array.isArray(r.changes) || r.changes.length > 12 || !r.changes.every((line) => text(line, MAX_PATH))
-    || !text(r.signature, 128) || !Number.isSafeInteger(r.dev) || !Number.isSafeInteger(r.ino)) return null
+    || !text(r.signature, 128) || !fileId(r.dev) || !fileId(r.ino)) return null
   const review: WorktreeReview = { path: r.path, main: r.main, branch: r.branch as string | null, head: r.head, bytes: r.bytes as number | null,
     dirty: r.dirty, changes: [...r.changes as string[]], signature: r.signature, dev: r.dev as number, ino: r.ino as number }
   return { ok: true, review }
@@ -87,24 +100,44 @@ export function createWorkspacesLink(
 ) {
   /** The process connected now said it makes folders: until it does, it is asked none of it. */
   let folders = false
-  const ask = (type: string, payload: Payload, waitMs: number): Promise<Payload> =>
-    folders ? call(type, payload, waitMs) : Promise.resolve({ error: 'SERVICE_UNAVAILABLE' })
+  /** [type]'s answer: `unasked` while the process has not said it makes folders, `unanswered` when it was asked and did
+   *  not answer in time or went meanwhile, so what it was asked may have been done. */
+  const ask = async (type: string, payload: Payload, waitMs: number): Promise<Payload | 'unasked' | 'unanswered'> => {
+    if (!folders) return 'unasked'
+    const answer = await call(type, payload, waitMs)
+    return answer.error === 'SERVICE_UNAVAILABLE' ? 'unanswered' : answer
+  }
+  /** An answer the core cannot read is taken as not answered, and said in the log: a build whose answers drifted from
+   *  this one's looks like an outage otherwise. Only the member is named, never what the answer held. */
+  const unread = <T>(member: string, fallback: T): T => {
+    console.warn(`[workspaces] ${member}: an answer the core cannot read, taken as not answered`)
+    return fallback
+  }
 
   const port: WorkspacesPort = {
     nameBranches: () => {
       notify({ type: 'service_event', payload: { kind: 'nameBranches', agents: core.agents.live() } })
     },
     ready: () => folders,
-    prepareFolder: async (project, options) =>
-      folderAnswer(await ask('prepareFolder', { project, cloneFallback: options.cloneFallback }, PREPARE_FOLDER_MS)) ?? await WORKSPACES_OFF.prepareFolder(project, options),
-    describeWorkspace: async (target, others) => inspectionAnswer(await ask('describeWorkspace', { target, others }, WORKTREE_REVIEW_MS)),
-    reviewWorktree: async (target, others) =>
-      reviewAnswer(await ask('reviewWorktree', { target, others }, WORKTREE_REVIEW_MS)) ?? await WORKSPACES_OFF.reviewWorktree(target, others),
+    prepareFolder: async (project, options) => {
+      const answer = await ask('prepareFolder', { project, cloneFallback: options.cloneFallback }, PREPARE_FOLDER_MS)
+      if (answer === 'unasked') return await WORKSPACES_OFF.prepareFolder(project, options)
+      return answer === 'unanswered' ? FOLDER_UNANSWERED : folderAnswer(answer) ?? unread('prepareFolder', FOLDER_UNANSWERED)
+    },
+    describeWorkspace: async (target, others) => {
+      const answer = await ask('describeWorkspace', { target, others }, WORKTREE_REVIEW_MS)
+      return typeof answer === 'string' ? null : inspectionAnswer(answer) ?? unread('describeWorkspace', null)
+    },
+    reviewWorktree: async (target, others) => {
+      const answer = await ask('reviewWorktree', { target, others }, WORKTREE_REVIEW_MS)
+      return (typeof answer === 'string' ? null : reviewAnswer(answer) ?? unread('reviewWorktree', null)) ?? await WORKSPACES_OFF.reviewWorktree(target, others)
+    },
     removeWorktree: async (review, target, others, discardChanges) => {
       const answer = await ask('removeWorktree', { review, target, others, discardChanges }, WORKTREE_REMOVE_MS)
+      if (answer === 'unasked') return await WORKSPACES_OFF.removeWorktree(review, target, others, discardChanges)
+      if (answer === 'unanswered') return REMOVAL_UNKNOWN
       if (answer.ok === true) return { ok: true }
-      return answer.ok === false && text(answer.reason, 2000) ? { ok: false, reason: answer.reason }
-        : await WORKSPACES_OFF.removeWorktree(review, target, others, discardChanges)
+      return answer.ok === false && text(answer.reason, 2000) ? { ok: false, reason: answer.reason } : unread('removeWorktree', REMOVAL_UNKNOWN)
     },
   }
 

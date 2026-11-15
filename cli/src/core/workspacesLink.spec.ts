@@ -113,18 +113,25 @@ describe('the git workspaces do for the core', () => {
     expect(await port.prepareFolder(worktree, { cloneFallback: false })).toEqual({ ok: true, cwd })
   })
 
-  it('takes a create\'s refusal in its own code and words, and anything else as not answered', async () => {
+  it('takes a create\'s refusal in its own code and words, and says a folder may yet appear when its ask went unanswered', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const refusal = { error: 'CLONE_FAILED', detail: 'Could not access this repository.', access: 'denied' }
     expect(await asking(refusal).port.prepareFolder(worktree, { cloneFallback: true })).toEqual({ ok: false, ...refusal })
     expect(await asking({ error: 'PROJECT_EXISTS', access: 'granted' }).port.prepareFolder(worktree, { cloneFallback: true }))
       .toEqual({ ok: false, error: 'PROJECT_EXISTS', detail: 'Could not prepare the project folder.' })
-    const unanswered = await WORKSPACES_OFF.prepareFolder(worktree, { cloneFallback: true })
-    expect(unanswered).toEqual({ ok: false, error: 'SERVICE_UNAVAILABLE', detail: expect.stringContaining('did not answer') })
-    for (const answer of [{ error: 'SERVICE_UNAVAILABLE', service: 'workspaces', retryable: true }, {}, { cwd: 'harnesses/repo' },
-      { cwd: '/h/a\nb' }, { cwd: `/${'a'.repeat(4096)}` }, { error: 'not a code' }, { error: 7 }, { error: 'CLONE_FAILED', detail: 'x'.repeat(2001) }]) {
-      const answered = await asking(answer).port.prepareFolder(worktree, { cloneFallback: true })
-      expect(answered).toEqual(answer.error === 'CLONE_FAILED' ? { ok: false, error: 'CLONE_FAILED', detail: 'Could not prepare the project folder.' } : unanswered)
+    expect(await asking({ error: 'CLONE_FAILED', detail: 'x'.repeat(2001) }).port.prepareFolder(worktree, { cloneFallback: true }))
+      .toEqual({ ok: false, error: 'CLONE_FAILED', detail: 'Could not prepare the project folder.' })
+    // Asked, and no answer in time: the process may have made some of it before it went.
+    const unanswered = { ok: false, error: 'SERVICE_UNAVAILABLE',
+      detail: 'Could not make the project folder: Harness\'s workspaces service did not answer. A folder it began may still appear in your projects.' }
+    expect(await asking({ error: 'SERVICE_UNAVAILABLE', service: 'workspaces', retryable: true }).port.prepareFolder(worktree, { cloneFallback: true })).toEqual(unanswered)
+    expect(warn).not.toHaveBeenCalled()
+    // An answer the core cannot read is taken as one that did not come, and said.
+    for (const answer of [{}, { cwd: 'harnesses/repo' }, { cwd: '/h/a\nb' }, { cwd: `/${'a'.repeat(4096)}` }, { error: 'not a code' }, { error: 7 }]) {
+      expect(await asking(answer).port.prepareFolder(worktree, { cloneFallback: true })).toEqual(unanswered)
     }
+    expect(warn).toHaveBeenCalledTimes(6)
+    expect(warn).toHaveBeenCalledWith('[workspaces] prepareFolder: an answer the core cannot read, taken as not answered')
   })
 
   it('reads where a harness works, for Inspect, only in the shape Inspect shows', async () => {
@@ -134,11 +141,13 @@ describe('the git workspaces do for the core', () => {
     expect(call).toHaveBeenCalledWith('describeWorkspace', { target, others: ['/h/code/other'] }, WORKTREE_REVIEW_MS)
     const none = { kind: 'unavailable', path: null, canDelete: false, reason: 'No working folder' }
     expect(await asking({ workspace: none }).port.describeWorkspace(target, [])).toEqual(none)
+    expect(await asking({ error: 'SERVICE_UNAVAILABLE' }).port.describeWorkspace(target, [])).toBeNull()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     for (const bad of [null, 'worktree', { ...workspace, kind: 'cloud' }, { ...workspace, path: 'repo' }, { ...workspace, canDelete: 'yes' },
       { ...workspace, reason: '' }, { ...workspace, worktreePath: 'repo' }, { ...workspace, mainPath: 'repo' }]) {
       expect(await asking({ workspace: bad }).port.describeWorkspace(target, [])).toBeNull()
     }
-    expect(await asking({ error: 'SERVICE_UNAVAILABLE' }).port.describeWorkspace(target, [])).toBeNull()
+    expect(warn).toHaveBeenCalledTimes(8)
   })
 
   it('keeps a worktree\'s review only in the shape its removal is held to, and its refusal in its words', async () => {
@@ -148,29 +157,39 @@ describe('the git workspaces do for the core', () => {
     expect(call).toHaveBeenCalledWith('reviewWorktree', { target, others: ['/h/code/other'] }, WORKTREE_REVIEW_MS)
     const plain = { ...review, branch: null, bytes: null, dirty: false, changes: [] }
     expect(await asking({ ok: true, review: plain }).port.reviewWorktree(target, [])).toEqual({ ok: true, review: plain })
+    // Windows' file ids pass 2^53: held roughly, but alike each time the same file is read.
+    const ntfs = { ...review, dev: 2_966_473_045, ino: 2.8e16 }
+    expect(await asking({ ok: true, review: ntfs }).port.reviewWorktree(target, [])).toEqual({ ok: true, review: ntfs })
     const reason = 'Another harness uses this worktree or an overlapping folder. Its files must be kept.'
     expect(await asking({ ok: false, reason }).port.reviewWorktree(target, [])).toEqual({ ok: false, reason })
     const unanswered = await WORKSPACES_OFF.reviewWorktree(target, [])
     expect(unanswered).toEqual({ ok: false, reason: expect.stringContaining('did not answer') })
-    for (const bad of [{ ok: false }, { ok: true }, { error: 'SERVICE_UNAVAILABLE' }, { ok: true, review: 'r' }, { ok: true, review: { ...review, path: 'w' } },
+    expect(await asking({ error: 'SERVICE_UNAVAILABLE' }).port.reviewWorktree(target, [])).toEqual(unanswered)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    for (const bad of [{ ok: false }, { ok: true }, { ok: true, review: 'r' }, { ok: true, review: { ...review, path: 'w' } },
       { ok: true, review: { ...review, main: 'm' } }, { ok: true, review: { ...review, branch: '' } }, { ok: true, review: { ...review, head: '' } },
       { ok: true, review: { ...review, bytes: 1.5 } }, { ok: true, review: { ...review, dirty: 'no' } }, { ok: true, review: { ...review, changes: 'a' } },
       { ok: true, review: { ...review, changes: Array(13).fill('a') } }, { ok: true, review: { ...review, changes: [7] } },
-      { ok: true, review: { ...review, signature: '' } }, { ok: true, review: { ...review, dev: '1' } }, { ok: true, review: { ...review, ino: -0.5 } }]) {
+      { ok: true, review: { ...review, signature: '' } }, { ok: true, review: { ...review, dev: '1' } }, { ok: true, review: { ...review, ino: -0.5 } },
+      { ok: true, review: { ...review, ino: Infinity } }]) {
       expect(await asking(bad).port.reviewWorktree(target, [])).toEqual(unanswered)
     }
+    expect(warn).toHaveBeenCalledTimes(16)
   })
 
-  it('removes a reviewed worktree only as the process says it did, and keeps it on any other answer', async () => {
+  it('removes a reviewed worktree as the process says, kept when it was never asked, and unknown when it did not answer', async () => {
     const { port, call } = asking({ ok: true })
     expect(await port.removeWorktree(review, target, ['/h/code/other'], true)).toEqual({ ok: true })
     expect(call).toHaveBeenCalledWith('removeWorktree', { review, target, others: ['/h/code/other'], discardChanges: true }, WORKTREE_REMOVE_MS)
     const reason = 'Confirm discarding the listed uncommitted files before deleting this worktree.'
     expect(await asking({ ok: false, reason }).port.removeWorktree(review, target, [], false)).toEqual({ ok: false, reason })
-    const kept = await WORKSPACES_OFF.removeWorktree(review, target, [], false)
-    expect(kept).toEqual({ ok: false, reason: expect.stringContaining('The worktree was kept.') })
-    for (const bad of [{ ok: false }, { ok: 'yes' }, { error: 'SERVICE_UNAVAILABLE' }]) {
-      expect(await asking(bad).port.removeWorktree(review, target, [], false)).toEqual(kept)
+    // Never asked (above, before it said it makes folders): kept. Asked and not answered: it may have gone.
+    const unknown = { ok: false, reason: 'Harness could not tell whether the worktree was deleted: its workspaces service did not answer. Review this harness again.' }
+    expect(await asking({ error: 'SERVICE_UNAVAILABLE' }).port.removeWorktree(review, target, [], false)).toEqual(unknown)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    for (const bad of [{ ok: false }, { ok: 'yes' }]) {
+      expect(await asking(bad).port.removeWorktree(review, target, [], false)).toEqual(unknown)
     }
+    expect(warn).toHaveBeenCalledWith('[workspaces] removeWorktree: an answer the core cannot read, taken as not answered')
   })
 })

@@ -37,7 +37,7 @@ import type { ScmLaunchRecord } from '../../scm/types.js'
 import { parentAgentIdOf, type RegisteredSession } from '../../lib/registry.js'
 import { buildHarnessSessionLabel } from '../../lib/harnessSessionLabel.js'
 import type { LaunchAuthority, LaunchPreparation } from '../../lib/launchPreparation.js'
-import { createPendingLaunches } from './pendingLaunches.js'
+import { createPendingLaunches, type PreparedCreation } from './pendingLaunches.js'
 import type { GuestCreate } from './guestCreate.js'
 
 /** Creates an agent (core/agents/create.ts). The orchestrator creates through the same one. */
@@ -94,11 +94,27 @@ type CreateInput = Parameters<CreateAgent>[0]
 /** What a create says while workspaces cannot make its folder: held, as a launch waiting for a model is, and continued
  *  once they can. A restart of the edge host takes a few seconds; a create asked then waits for it rather than failing. */
 const WORKSPACES_HOLD = { service: 'workspaces', detail: 'Waiting for Harness\'s workspaces service to make the project folder. This request is saved and will continue when it is available.' }
+/** How long a create waits for workspaces: a restart takes seconds, and one that never comes (parked, switched off, a
+ *  build from before that never says it makes folders) must not keep a create to start hours later, when nobody waits. */
+export const WORKSPACES_WAIT_MS = 10 * 60_000
+const WORKSPACES_GONE = { state: 'failed' as const, error: 'SERVICE_UNAVAILABLE',
+  detail: 'Could not make the project folder: Harness\'s workspaces service was not available for 10 minutes. Try again, or restart Harness.' }
 
 export function createLaunchRequests({ receipts, createAgent, prepareCreate, prepareEngine, forkAgent, resumeAgent, restartAgent, byAgent, stoppedAgent, toProject, modelTarget, guestCreate, claudeHomeListed, workspaces }: LaunchRequestDeps) {
-  /** Git's folders wait for workspaces to be there: asked before a create's effect is claimed, so one held for it is
-   *  never a launch that failed. */
-  const folderWaits = (projectFolder: ProjectFolder | null): boolean => !!projectFolder && projectFolder.source !== 'new' && !workspaces()?.ready()
+  /** Since when each create has waited for workspaces, by its creation id: in memory, as its hold is retried in this
+   *  core. An entry lasts only while its create waits: it goes when the create goes on, gives up or is cancelled. */
+  const waitingSince = new Map<string, number>()
+  /** A create's folder: asked for now (`go`), held while workspaces cannot make it, or refused once they were not there
+   *  for WORKSPACES_WAIT_MS. Decided before the create's effect is claimed, so one held for them is never a failed launch. */
+  const waitForFolder = (authority: Pick<CreationAuthority, 'id' | 'hold'>, projectFolder: ProjectFolder | null): 'go' | PreparedCreation => {
+    const { id } = authority
+    if (!projectFolder || projectFolder.source === 'new' || workspaces()?.ready()) { waitingSince.delete(id); return 'go' }
+    const since = waitingSince.get(id)
+    if (since !== undefined && Date.now() - since >= WORKSPACES_WAIT_MS) { waitingSince.delete(id); return async () => WORKSPACES_GONE }
+    if (since === undefined) waitingSince.set(id, Date.now())
+    authority.hold(WORKSPACES_HOLD)
+    return null
+  }
   const validateInstalled = async (input: CreateInput, known?: ReturnType<typeof installedDsh>): Promise<{ error: string; detail: string } | null> => {
     if (input.dsh) {
       const installed = known ?? installedDsh(input.dsh)
@@ -230,7 +246,8 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
           if (engine.refusal) return refused({ error: engine.refusal, detail: engine.detail })
           held(engine); return null
         }
-        if (folderWaits(projectFolder)) { authority.hold(WORKSPACES_HOLD); return null }
+        const folder = waitForFolder(authority, projectFolder)
+        if (folder !== 'go') return folder
         const invoke: CreateAgent = async (prepared) => {
           const ready = await prepareCreate(prepared, { ...authority, label }, { local })
           return ready.ok ? ready.dispatch() : { ok: false, error: ready.error, ...(ready.detail ? { detail: ready.detail } : {}) }
@@ -268,7 +285,8 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     if (!target) return null
     input.grid = target
     const projectFolder = (saved.projectFolder ?? null) as ProjectFolder | null
-    if (folderWaits(projectFolder)) { authority.hold(WORKSPACES_HOLD); return null }
+    const folder = waitForFolder(authority, projectFolder)
+    if (folder !== 'go') return folder
     return () => executeCreate(input, projectFolder, saved.local as boolean, invoke)
   } })
 
@@ -702,6 +720,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     try {
       // A guest cancels nothing of another's, and leaves no cancelled mark for an id that is not its own.
       if (hiddenFrom(asker, payload.creationId)) { reply({ creationId: payload.creationId, state: 'missing' }); return }
+      waitingSince.delete(payload.creationId)
       reply({ creationId: payload.creationId, ...await creationStatusPayload(receipts.cancelIntent(payload.creationId)) })
     }
     catch (error) { reply({ error: error instanceof AgentCreationReceiptError ? error.code : 'INTERNAL' }) }

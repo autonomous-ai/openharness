@@ -16,7 +16,7 @@ const OWNER = { local: true, owner: true, connection: 'core', requestId: 'r1' } 
 const CLOSED = new AbortController().signal
 
 describe('workspaces in their own process', () => {
-  afterEach(() => vi.clearAllMocks())
+  afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks() })
 
   const setup = (over: Partial<Parameters<typeof runWorkspacesService>[0]> = {}) => {
     let api: CoreApi | null = null
@@ -50,13 +50,18 @@ describe('workspaces in their own process', () => {
     expect(Object.keys(options.requests)).toEqual(['prepareFolder', 'describeWorkspace', 'reviewWorktree', 'removeWorktree'])
   })
 
-  it('says it makes folders each time it connects, so a core of this build asks it for them; a lost word costs nothing', async () => {
+  it('says it makes folders each time it connects, so a core of this build asks it for them; a word lost is said', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const { options } = setup()
     const { core, query } = connection()
     options.onConnected!(core)
     expect(query.mock.calls).toEqual([['folders']])
     options.onConnected!({ query: vi.fn(async () => { throw new Error('the core went away') }) })
+    options.onConnected!({ query: vi.fn(async () => { throw 'closed' }) })
     await flush()
+    expect(warn.mock.calls).toEqual([['[workspaces] could not tell the core this process makes folders · the core went away'],
+      ['[workspaces] could not tell the core this process makes folders · closed']])
+    warn.mockRestore()
   })
 
   it('makes the folder the core asks for, from a project it checks first', async () => {
@@ -117,6 +122,7 @@ describe('workspaces in their own process', () => {
   })
 
   it('asks the core to send a renamed agent\'s frame again, once connected; a lost word costs nothing', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
     const { api, options } = setup()
     api.agents.sync(agent('a1'))
     const core = connection()

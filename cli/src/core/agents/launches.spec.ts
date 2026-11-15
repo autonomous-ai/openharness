@@ -16,7 +16,7 @@ import { parseNewAgentModel } from '../../lib/newAgentModel.js'
 import { parseProjectFolder, prepareNewFolder, ProjectFolderError, type GitProjectFolder } from '../../lib/projectFolder.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { WORKSPACES_OFF, type PreparedFolder } from '../api.js'
-import { createLaunchRequests, type CreateAgent, type ForkAgent, type LaunchRequestDeps, type RestartAgent, type ResumeAgent } from './launches.js'
+import { createLaunchRequests, WORKSPACES_WAIT_MS, type CreateAgent, type ForkAgent, type LaunchRequestDeps, type RestartAgent, type ResumeAgent } from './launches.js'
 import * as pendingLaunches from './pendingLaunches.js'
 
 /**
@@ -748,6 +748,28 @@ describe('agent_create with a receipt', () => {
     workspaces.ready.mockReturnValue(false)
     await ask({ engine: 'claude', projectSource: 'new', creationId: `${CREATION}-new` })
     await vi.waitFor(() => expect(deps.receipts.status(`${CREATION}-new`)).toEqual({ state: 'created', agentId: 'new-agent' }))
+  })
+
+  it('refuses a create that waited ten minutes for workspaces, in words, with nothing of its launch done', async () => {
+    // A process that never comes (parked, switched off, a build that never says it makes folders) must not keep a create
+    // to start hours later, when nobody waits for it.
+    let clock = Date.now()
+    vi.spyOn(Date, 'now').mockImplementation(() => clock)
+    const prepareCreate = vi.fn<NonNullable<LaunchRequestDeps['prepareCreate']>>(async () => ({ ok: true, dispatch: vi.fn() }))
+    const prepareEngine = vi.fn<NonNullable<LaunchRequestDeps['prepareEngine']>>(async () => ({ ok: true, launch: {} as never }))
+    const { ask, requests, deps, workspaces } = setup({ prepareCreate, prepareEngine })
+    workspaces.ready.mockReturnValue(false)
+    await ask({ engine: 'claude', projectSource: 'worktree', gitSource: '/work/repo', branchRef: 'refs/heads/main', creationId: CREATION })
+    await vi.waitFor(() => expect(deps.receipts.status(CREATION)).toMatchObject({ state: 'pending', held: { service: 'workspaces' } }))
+    requests.open()
+    clock += WORKSPACES_WAIT_MS - 1_000; await requests.recover()
+    await vi.waitFor(() => expect(workspaces.ready).toHaveBeenCalledTimes(2))
+    expect(deps.receipts.status(CREATION)).toMatchObject({ state: 'pending', held: { service: 'workspaces' } })
+    clock += 3_000; await requests.recover()
+    await vi.waitFor(() => expect(deps.receipts.status(CREATION)).toMatchObject({ state: 'failed', error: 'SERVICE_UNAVAILABLE',
+      detail: 'Could not make the project folder: Harness\'s workspaces service was not available for 10 minutes. Try again, or restart Harness.' }))
+    expect(workspaces.prepareFolder).not.toHaveBeenCalled()
+    expect(prepareCreate).not.toHaveBeenCalled()
   })
 
   it('holds a create on a picked model for workspaces too, once its model is known, and while they are off', async () => {

@@ -14,7 +14,7 @@ import type { CoreApi, CorePorts } from '../core/api.js'
 import { gitFolderAnswer } from '../lib/gitProjectFolder.js'
 import { sid } from '../lib/log.js'
 import { sessionDisplayTitle } from '../lib/registry.js'
-import { inspectWorkspace, removeWorktree, reviewWorktree } from '../lib/worktreeDeletion.js'
+import { worktreeAnswers } from '../lib/worktreeDeletion.js'
 import { forgetScmProject, renameScmProject } from '../scm/scmProjects.js'
 
 export function startWorkspaces(core: CoreApi, ports: CorePorts): void {
@@ -40,8 +40,6 @@ export function startWorkspaces(core: CoreApi, ports: CorePorts): void {
     nameBranches: nameSessionBranches,
     ready: () => true,
     prepareFolder: gitFolderAnswer,
-    describeWorkspace: inspectWorkspace,
-    reviewWorktree,
-    removeWorktree,
+    ...worktreeAnswers(),
   }
 }

@@ -155,7 +155,11 @@ export function runWorkspacesService(options: WorkspacesServiceOptions): Service
     onConnected: (connection) => {
       core = connection
       // Said on every connection: a core of this build asks a process for folders only once it has said it makes them.
-      void connection.query('folders').catch(() => {})
+      // The core reads it as it arrives, so only a connection that ends loses it, and the next one says it again; a
+      // failure is still said, as creates that need git wait until it is heard.
+      void connection.query('folders').catch((error: unknown) => {
+        console.warn(`[workspaces] could not tell the core this process makes folders · ${error instanceof Error ? error.message : String(error)}`)
+      })
     },
   })
   return { stop: () => service.stop() }

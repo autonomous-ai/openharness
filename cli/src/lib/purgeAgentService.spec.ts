@@ -13,7 +13,6 @@ import { builtinSqlite } from './sqliteBuiltin.js'
 import type { StopAgentOptions } from './stopAgentService.js'
 import * as worktrees from './worktreeDeletion.js'
 import { WORKSPACES_OFF } from '../core/api.js'
-import { worktreesThrough } from '../testing/worktreesThrough.js'
 
 let root: string, session: RegisteredSession, stopped: StoppedAgentStore, checkpoints: SessionCheckpointStore
 let service: PurgeAgentService, target: Omit<PurgeRequest, 'mode'>, now: number
@@ -42,7 +41,7 @@ beforeEach(() => {
     registry.removeAgent(id)
   })
   deleted = vi.fn(); eraseRecords = vi.fn(async () => {}); eraseFirst = vi.fn(async () => {}); now = 1000
-  workspaces = worktreesThrough(worktrees)
+  workspaces = () => worktrees.worktreeAnswers(worktrees)
   service = new PurgeAgentService({ live: id => registry.byAgent(id), sessions: () => [...registry.list(), ...stopped.list()],
     worktrees: () => workspaces(), stopped, checkpoints, stop, restarting: () => false, deleted, eraseRecords, eraseFirst, now: () => now })
   target = { agentId: session.agentId, sessionId: session.sessionId, createdAt: session.registeredAt }
@@ -153,7 +152,7 @@ describe('selected session and worktree cleanup', () => {
       expect(stop).not.toHaveBeenCalled(); expect(eraseTree).not.toHaveBeenCalled(); expect(deleted).not.toHaveBeenCalled()
       expect(registry.byAgent(session.agentId)).toBeDefined()
       expect(existsSync(session.transcriptPath!)).toBe(true)
-      workspaces = worktreesThrough(worktrees); inspect.mockResolvedValue(tree)
+      workspaces = () => worktrees.worktreeAnswers(worktrees); inspect.mockResolvedValue(tree)
     }
   })
   it('holds remaining history after worktree deletion and retries only that remaining stage', async () => {

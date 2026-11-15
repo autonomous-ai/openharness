@@ -4,7 +4,6 @@ import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from './registry.js'
 import type { PurgeDeps } from './purgeAgentService.js'
-import { worktreesThrough } from '../testing/worktreesThrough.js'
 
 vi.mock('node:child_process', () => {
   const forbidden = () => { throw Error('Host binaries are forbidden in native history authority tests') }
@@ -104,7 +103,7 @@ it.each(['before Stop', 'during Stop', 'during Stop before worktree deletion'])(
   const removed = vi.fn(), deleted = vi.fn()
   const service = new PurgeAgentService({ live: () => live, sessions: () => [row],
     stopped: { get: () => saved, beginResume: () => 'fixture-reservation', finishResume: () => {}, remove: removed },
-    checkpoints: { deletionFiles: () => [] }, stop, restarting: () => false, deleted, worktrees: worktreesThrough(worktrees),
+    checkpoints: { deletionFiles: () => [] }, stop, restarting: () => false, deleted, worktrees: () => worktrees.worktreeAnswers(worktrees),
   } as unknown as PurgeDeps)
   const request = { agentId: row.agentId, sessionId: ID, createdAt: row.registeredAt }
   const plan = await service.request({ ...request, mode: 'inspect', includeWorktree: worktreeData })

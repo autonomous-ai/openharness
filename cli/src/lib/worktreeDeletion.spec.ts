@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { inspectWorkspace, inspectWorktree, removeReviewedWorktree, removeWorktree, reviewWorktree, type WorkspaceTarget } from './worktreeDeletion.js'
+import { inspectWorkspace, inspectWorktree, removeReviewedWorktree, worktreeAnswers, type WorkspaceTarget } from './worktreeDeletion.js'
 
 const exec = promisify(execFile)
 describe('explicit worktree deletion', { timeout: 30_000 }, () => {
@@ -85,6 +85,8 @@ describe('explicit worktree deletion', { timeout: 30_000 }, () => {
   })
 
   it('answers the workspaces service in words, never a throw, which would count against it', async () => {
+    const { describeWorkspace, reviewWorktree, removeWorktree } = worktreeAnswers()
+    expect(await describeWorkspace(session, [])).toMatchObject({ kind: 'worktree', canDelete: true })
     const reviewed = await reviewWorktree(session, [])
     expect(reviewed).toMatchObject({ ok: true, review: { path: tree, main: repo, branch: 'feature' } })
     expect(await reviewWorktree({ cwd: repo }, [])).toEqual({ ok: false, reason: expect.stringContaining('main project') })

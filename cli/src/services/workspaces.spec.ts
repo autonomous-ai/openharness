@@ -3,7 +3,6 @@ import { emptyPorts, type WorkspacesPort } from '../core/api.js'
 import { forgetAgentProject } from '../lib/agentProject.js'
 import { nameBranchAfterSession } from '../lib/branchNaming.js'
 import { gitFolderAnswer } from '../lib/gitProjectFolder.js'
-import { inspectWorkspace, removeWorktree, reviewWorktree } from '../lib/worktreeDeletion.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { startWorkspaces } from './workspaces.js'
@@ -12,11 +11,12 @@ import { startWorkspaces } from './workspaces.js'
 vi.mock('../lib/branchNaming.js', () => ({ nameBranchAfterSession: vi.fn(async () => null) }))
 vi.mock('../lib/agentProject.js', () => ({ forgetAgentProject: vi.fn() }))
 vi.mock('../lib/gitProjectFolder.js', () => ({ gitFolderAnswer: vi.fn(async () => ({ ok: true, cwd: '/h/harnesses/app' })) }))
-vi.mock('../lib/worktreeDeletion.js', () => ({
-  inspectWorkspace: vi.fn(async () => ({ kind: 'folder', path: '/work/tree', canDelete: false, reason: 'Not a worktree.' })),
-  reviewWorktree: vi.fn(async () => ({ ok: false, reason: 'No separate worktree.' })),
-  removeWorktree: vi.fn(async () => ({ ok: true })),
+const worktrees = vi.hoisted(() => ({
+  describeWorkspace: vi.fn(async () => ({ kind: 'folder' as const, path: '/work/tree', canDelete: false, reason: 'Not a worktree.' })),
+  reviewWorktree: vi.fn(async () => ({ ok: false as const, reason: 'No separate worktree.' })),
+  removeWorktree: vi.fn(async () => ({ ok: true as const })),
 }))
+vi.mock('../lib/worktreeDeletion.js', () => ({ worktreeAnswers: () => worktrees }))
 vi.mock('../lib/registry.js', async (real) => ({
   ...await real<object>(),
   sessionDisplayTitle: vi.fn((s: { title?: string }) => s.title ?? null),
@@ -80,7 +80,7 @@ describe('the workspaces service', () => {
     const { core, port } = setup([agent({ cwd: '/h/live' })])
     expect(Object.keys(port)).toEqual(['nameBranches', 'ready', 'prepareFolder', 'describeWorkspace', 'reviewWorktree', 'removeWorktree'])
     expect(core.agents.all).not.toHaveBeenCalled()
-    expect(removeWorktree).not.toHaveBeenCalled()
+    expect(worktrees.removeWorktree).not.toHaveBeenCalled()
   })
 
   // The audit of 2026-11-12: a clone ran git, ssh and their helpers as children of the core.
@@ -92,12 +92,12 @@ describe('the workspaces service', () => {
     expect(gitFolderAnswer).toHaveBeenCalledWith(project, { cloneFallback: true })
     const target = { cwd: '/work/tree' }
     expect(await port.describeWorkspace(target, ['/work/other'])).toEqual({ kind: 'folder', path: '/work/tree', canDelete: false, reason: 'Not a worktree.' })
-    expect(inspectWorkspace).toHaveBeenCalledWith(target, ['/work/other'])
+    expect(worktrees.describeWorkspace).toHaveBeenCalledWith(target, ['/work/other'])
     expect(await port.reviewWorktree(target, [])).toEqual({ ok: false, reason: 'No separate worktree.' })
-    expect(reviewWorktree).toHaveBeenCalledWith(target, [])
+    expect(worktrees.reviewWorktree).toHaveBeenCalledWith(target, [])
     const review = { path: '/work/tree' } as never
     expect(await port.removeWorktree(review, target, [], true)).toEqual({ ok: true })
-    expect(removeWorktree).toHaveBeenCalledWith(review, target, [], true)
+    expect(worktrees.removeWorktree).toHaveBeenCalledWith(review, target, [], true)
   })
 
 })

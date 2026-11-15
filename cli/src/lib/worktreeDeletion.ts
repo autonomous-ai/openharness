@@ -10,6 +10,7 @@ import { basename, dirname, join, resolve, sep } from 'node:path'
 import { createHash } from 'node:crypto'
 import { env } from '../config/env.js'
 import { inRepositoryTurn, insideGitCheckout } from './gitProject.js'
+import type { WorkspacesPort } from '../core/api.js'
 
 const exec = promisify(execFile)
 const within = (parent: string, path: string) => parent === path || path.startsWith(parent + sep)
@@ -132,15 +133,21 @@ export async function removeReviewedWorktree(review: WorktreeReview, s: Workspac
   await inRepositoryTurn(current.main, () => git(current.main, ['worktree', 'remove', ...(current.dirty && discardChanges ? ['--force'] : []), '--', current.path]))
 }
 
-/** [inspectWorktree] as the workspaces service answers it (core/api.ts `WorkspacesPort.reviewWorktree`): a refusal is an
- *  answer in its own words, never a throw, which would count against the service. */
-export async function reviewWorktree(s: WorkspaceTarget, others: readonly string[]): Promise<{ ok: true; review: WorktreeReview } | { ok: false; reason: string }> {
-  try { return { ok: true, review: await inspectWorktree(s, others) } }
-  catch (error) { return { ok: false, reason: error instanceof Error ? error.message : 'The worktree could not be verified.' } }
-}
+type WorktreeWork = { inspectWorkspace: typeof inspectWorkspace; inspectWorktree: typeof inspectWorktree; removeReviewedWorktree: typeof removeReviewedWorktree }
 
-/** [removeReviewedWorktree], answered the same way (`WorkspacesPort.removeWorktree`). */
-export async function removeWorktree(review: WorktreeReview, s: WorkspaceTarget, others: readonly string[], discardChanges: boolean): Promise<{ ok: true } | { ok: false; reason: string }> {
-  try { await removeReviewedWorktree(review, s, others, discardChanges); return { ok: true } }
-  catch (error) { return { ok: false, reason: error instanceof Error ? error.message : 'The worktree could not be deleted.' } }
+/**
+ * The worktree members of the workspaces service's port (core/api.ts `WorkspacesPort`), answered on [work]: a refusal is
+ * an answer in its own words, never a throw, which would count against the service. [work] is this module's own, or a
+ * spec's that watches it, each read as it is called.
+ */
+export function worktreeAnswers(work: WorktreeWork = { inspectWorkspace, inspectWorktree, removeReviewedWorktree }):
+  Pick<WorkspacesPort, 'describeWorkspace' | 'reviewWorktree' | 'removeWorktree'> {
+  const reason = (error: unknown, otherwise: string) => error instanceof Error ? error.message : otherwise
+  return {
+    describeWorkspace: (target, others) => work.inspectWorkspace(target, others),
+    reviewWorktree: (target, others) => work.inspectWorktree(target, others)
+      .then(review => ({ ok: true as const, review }), (error: unknown) => ({ ok: false as const, reason: reason(error, 'The worktree could not be verified.') })),
+    removeWorktree: (review, target, others, discardChanges) => work.removeReviewedWorktree(review, target, others, discardChanges)
+      .then(() => ({ ok: true as const }), (error: unknown) => ({ ok: false as const, reason: reason(error, 'The worktree could not be deleted.') })),
+  }
 }
