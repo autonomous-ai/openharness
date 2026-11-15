@@ -48,7 +48,7 @@ const fs = require('node:fs'), path = require('node:path');
 if (process.argv.includes('--version') || process.argv.includes('--help')) { console.log('2026.08.11'); process.exit(0) }
 const id = ${JSON.stringify(SESSION)}, cwd = process.cwd();
 process.title = ('cursor-agent --session-id ' + id).padEnd(160);
-const file = path.join(process.env.CURSOR_HOME, 'projects', 'fixture', 'agent-transcripts', id + '.jsonl');
+const file = path.join(process.env.CURSOR_HOME, 'projects', 'fixture', 'agent-transcripts', id, id + '.jsonl');
 fs.mkdirSync(path.dirname(file), { recursive: true });
 fs.writeFileSync(file, JSON.stringify({ type: 'assistant', model: 'model-7', sessionId: id, cwd, uuid: 'ready',
  message: { role: 'assistant', content: [{ type: 'text', text: 'fixture ready' }] } }) + '\\n');
