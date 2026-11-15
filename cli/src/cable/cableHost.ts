@@ -684,10 +684,14 @@ export class DaemonCableHost implements CableHost {
     return this.registry?.outside(agentId)
   }
 
-  /** The machine list's copy, with the source a tap or a swipe acts through. */
+  /** The machine list's copy, with the source a tap, a swipe or words act through. */
   private outsideEntry(agentId: string): HostEntry | undefined {
     const held = this.registry?.entries().find((e) => e.agent.id === agentId)
-    return held && held.source.id !== 'harness' ? held : undefined
+    if (!held || held.source.id === 'harness') return undefined
+    // The Harness source learns which session each Harness agent runs only when a machine list is read, which a dial on a
+    // window's tab never does: a session moved into a Harness pane since then is a Harness agent's, asked of the core now.
+    const session = held.agent.sessionId
+    return session && this.wiring.sessions().some((s) => s.sessionId === session) ? undefined : held
   }
 
   capsOf(agentId: string, opts: { apps?: boolean } = {}): string | undefined {
