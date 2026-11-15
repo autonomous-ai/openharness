@@ -17,7 +17,7 @@ import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { IsolatedDaemon } from './harness/daemon.js'
 import { Desk, devicesPids } from './harness/desk.js'
 import type { DialMessage, FakeDial } from './harness/fakeDial.js'
-import { InOrca } from './harness/inOrca.js'
+import { IN_ORCA, InOrca } from './harness/inOrca.js'
 
 /** At once, not a held hook's seconds: room for the CLI's own start on a loaded machine. */
 const AT_ONCE_MS = 30_000
@@ -112,7 +112,7 @@ describe('the dial shows Claude Code waiting outside Harness', () => {
     const drawer = dial.messages.findIndex((m) => m.t === 'notif.replace')
     expect(await dial.next((m) => m.t === 'question' && m.agentId === claude.id, 45_000, 'the question again', drawer + 1)).toMatchObject({ id: question.id, questions: shown })
     // Orca's secrets never left the hook.
-    expect(JSON.stringify(dial.messages)).not.toMatch(/pairing-e2e|spawn-e2e/)
+    for (const secret of [IN_ORCA.ORCA_PAIRING_CODE, IN_ORCA.ORCA_AGENT_SESSION_SPAWN_TOKEN]) expect(JSON.stringify(dial.messages)).not.toContain(secret)
     // Answered in Orca, the turn goes to its end: the session's Stop.
     const answered = dial.messages.length
     await claude.hook('Stop', { stop_hook_active: false })
