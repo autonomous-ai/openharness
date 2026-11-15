@@ -10,6 +10,12 @@ Branch `core-loop-1`. A Codex resume read its whole rollout synchronously on the
 with a size cap and a deadline, and a test holds the core's event loop on a large rollout made in a test home (it never
 blocks more than about 50 ms).
 
+Done (15 November, `core-loop-1`): 1 MiB at a time, within 1 GiB, a 16 MiB record and 60 s, the history replaced only
+while its caller holds. A 200 MB rollout with an item to repair held the loop 2.4 s; now 8 ms (`core/agents/
+launch.loop.spec.ts`), and 4.8 s to 134 ms on the real daemon at load 23 (`e2e/resumeRepair.e2e.ts`). Still holding
+a resume's loop past 50 ms: discovery's engine command lookup (`lib/engineBin.ts` `commandCandidates`, 180 to 220 ms)
+and the registry save (80 ms), for steps 3 and 4.
+
 ## Steps 2 to 5 (package 9)
 
 2. The repair runs in Codex's worker (engine-codex) under the launch's existing hold. The core takes its typed, bounded
