@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ObservedAsked, ObservedHookEvent } from '../../core/observedHook.js'
 import { STOP_HOOK_GRACE_MS } from '../../core/turns/turnHooks.js'
+import type { CodexQueueResult } from './codexQueue.js'
 import { type Delivery, Inbox } from './inbox.js'
-import { askedLine, observedAgentId, type ObservedActions, ObservedSource, type ObservedDeps } from './observed.js'
+import { askedLine, observedAgentId, type ObservedActions, ObservedSource, type ObservedDeps, type PromptSource } from './observed.js'
 import type { OpenTarget } from './open.js'
 import type { TabApp } from './tabs.js'
 import type { PaneSwitch } from './types.js'
@@ -675,6 +676,12 @@ function fakeActions(over: Partial<ObservedActions> = {}) {
     // A watch holds the tabs stream open, and takes each select.
     tabsOpen: vi.fn(() => true),
     tabSelect: vi.fn((_app: TabApp, _tty: string, _raise: boolean): PaneSwitch => 'ok'),
+    // Codex is there, and queues every message.
+    codexQueue: {
+      can: vi.fn(() => true),
+      send: vi.fn(async (_threadId: string, _text: string): Promise<CodexQueueResult> => ({ outcome: 'queued' })),
+    },
+    codexHome: '/home/u/.codex',
     count: vi.fn((_what: Parameters<ObservedActions['count']>[0]) => {}),
   }
   return { actions: { ...actions, ...over } as typeof actions, ready }
@@ -1060,6 +1067,202 @@ describe('ObservedSource actions', () => {
     await src.send(agent('none'), 'x'.repeat(2001))
     await src.send(agent('none'), 'x')
     expect(actions.count.mock.calls.map(([what]) => what)).toEqual(['mod', 'orca', 'busy', 'waiting', 'too-long', 'no-answer'])
+  })
+})
+
+const THREAD = '01a1de76-a3b7-7270-b39e-1245893274c1'
+const FAILED: CodexQueueResult = { outcome: 'failed', reason: 'exit 1' }
+
+// Codex outside Harness takes the dial's words through its own queue, in every state: a queued message types nothing and
+// answers no approval (docs/specs/2026-11-15-device-codex.md).
+describe('ObservedSource and codex queue', () => {
+  const cx = {
+    engine: 'codex' as const, sessionId: THREAD, hostHints: { TERM_PROGRAM: 'ghostty' },
+    transcriptPath: `/home/u/.codex/sessions/2026/11/15/rollout-2026-11-15T16-07-59-${THREAD}.jsonl`,
+  }
+  const inOrca = { ...cx, hostHints: { ORCA_AGENT_SESSION_ID: 'x', ORCA_TERMINAL_HANDLE: HANDLE } }
+  const HOOKS: Record<'idle' | 'working' | 'needs-you', ObservedHookEvent['event'][]> = {
+    idle: ['session-start'], working: ['turn-start'], 'needs-you': ['turn-start', 'needs-input'],
+  }
+  /** The routes as the fakes answer, and the session in that state, told by its hooks. */
+  const given = (session: Partial<ObservedHookEvent>, state: keyof typeof HOOKS = 'idle') => {
+    const { actions } = fakeActions()
+    const t = setup({ actions })
+    for (const event of HOOKS[state]) t.src.ingest(t.ev(event, session))
+    return { ...t, actions }
+  }
+  /** Its queue's run, held until the test ends it. */
+  const held = (actions: ReturnType<typeof fakeActions>['actions']) => {
+    let end!: (result: CodexQueueResult) => void
+    actions.codexQueue.send.mockImplementation(() => new Promise<CodexQueueResult>((resolve) => { end = resolve }))
+    return (result: CodexQueueResult) => end(result)
+  }
+
+  it('a queue-able Codex session in Ghostty lists voice, with no handle and no mod', () => {
+    const { src } = given(cx)
+    expect(src.capabilities(src.list()[0])).toEqual({ status: true, voice: true, focus: true, answer: false })
+  })
+
+  it('not queue-able: each lists no voice, and its words never reach the queue', async () => {
+    const cases: Array<{ session: Partial<ObservedHookEvent>; ended?: boolean; can?: boolean }> = [
+      { session: { ...cx, engine: 'claude' } },
+      { session: cx, ended: true },
+      // No hook named its transcript yet.
+      { session: { ...cx, transcriptPath: undefined } },
+      // Another Codex home's: `codex queue` would load that home's config.
+      { session: { ...cx, transcriptPath: `/other/.codex/sessions/2026/11/15/rollout-2026-11-15T16-07-59-${THREAD}.jsonl` } },
+      { session: { ...cx, transcriptPath: '/home/u/.codex/sessions/../../x/rollout.jsonl' } },
+      { session: { ...cx, transcriptPath: '/home/u/.codex/sessions-old/rollout.jsonl' } },
+      // `--thread` takes a session's name too: only a thread id may reach it.
+      { session: { ...cx, sessionId: 'cx' } },
+      { session: { ...cx, sessionId: THREAD.toUpperCase() } },
+      { session: cx, can: false },
+    ]
+    for (const { session, ended, can } of cases) {
+      const { src, ev, actions } = given(session)
+      if (ended) src.ingest(ev('session-end', session))
+      if (can === false) actions.codexQueue.can.mockReturnValue(false)
+      expect(src.capabilities(src.list()[0]).voice).toBe(false)
+      expect(await src.send(src.list()[0], 'next')).toEqual({ ok: false, reason: 'proj did not answer.' })
+      expect(actions.codexQueue.send).not.toHaveBeenCalled()
+    }
+  })
+
+  // Asked each time, it looks for the binary: never for a session the cheaper checks already turned away.
+  it('can() is asked last', async () => {
+    for (const session of [{ ...cx, engine: 'claude' as const }, { ...cx, transcriptPath: '/other/.codex/sessions/rollout.jsonl' }]) {
+      const { src, actions } = given(session)
+      src.capabilities(src.list()[0])
+      await src.send(src.list()[0], 'next')
+      expect(actions.codexQueue.can).not.toHaveBeenCalled()
+    }
+  })
+
+  it('idle, working and needs-you: the words go to the queue and nothing is typed', async () => {
+    for (const session of [cx, inOrca]) {
+      for (const state of ['idle', 'working', 'needs-you'] as const) {
+        const { src, actions } = given(session, state)
+        expect(src.list()[0].state).toBe(state)
+        expect(await src.send(src.list()[0], 'next')).toEqual({ ok: true })
+        expect(actions.codexQueue.send.mock.calls).toEqual([[THREAD, 'next']])
+        expect(actions.orcaSend).not.toHaveBeenCalled()
+        expect(actions.toMod).not.toHaveBeenCalled()
+        expect(actions.count.mock.calls).toEqual([['codex']])
+      }
+    }
+  })
+
+  it('failed falls back to Orca only when idle at a handle, with today\'s sentences', async () => {
+    const cases: Array<[Partial<ObservedHookEvent>, keyof typeof HOOKS, object, Parameters<ObservedActions['count']>[0]]> = [
+      [inOrca, 'idle', { ok: true }, 'orca'],
+      [inOrca, 'working', { ok: false, reason: 'proj is busy. Say it when it is done.' }, 'busy'],
+      [inOrca, 'needs-you', { ok: false, reason: 'proj is waiting for your answer in Orca.' }, 'waiting'],
+      [cx, 'idle', { ok: false, reason: 'proj did not answer.' }, 'no-answer'],
+    ]
+    for (const [session, state, sent, counted] of cases) {
+      const { src, actions } = given(session, state)
+      actions.codexQueue.send.mockResolvedValue(FAILED)
+      expect(await src.send(src.list()[0], 'next')).toEqual(sent)
+      expect(actions.orcaSend.mock.calls).toEqual(counted === 'orca' ? [[HANDLE, 'next']] : [])
+      expect(actions.count.mock.calls).toEqual([['codex-failed (exit 1)'], [counted]])
+    }
+  })
+
+  it('a failure is counted with its reason', async () => {
+    for (const reason of ['no binary', 'refused'] as const) {
+      const { src, actions } = given(cx)
+      actions.codexQueue.send.mockResolvedValue({ outcome: 'failed', reason })
+      expect(await src.send(src.list()[0], 'next')).toEqual({ ok: false, reason: 'proj did not answer.' })
+      expect(actions.count.mock.calls).toEqual([[`codex-failed (${reason})`], ['no-answer']])
+    }
+  })
+
+  // The message may be in the queue: typed too, it would run twice.
+  it('timeout never types', async () => {
+    const { src, actions } = given(inOrca)
+    actions.codexQueue.send.mockResolvedValue({ outcome: 'timeout' })
+    expect(await src.send(src.list()[0], 'next')).toEqual({ ok: false, reason: 'proj did not answer.' })
+    expect(actions.orcaSend).not.toHaveBeenCalled()
+    expect(actions.count.mock.calls).toEqual([['codex-timeout']])
+  })
+
+  it('busy says the last words are not taken yet, and types nothing', async () => {
+    const { src, actions } = given(inOrca)
+    actions.codexQueue.send.mockResolvedValue({ outcome: 'busy' })
+    expect(await src.send(src.list()[0], 'next')).toEqual({ ok: false, reason: 'proj has not taken your last words yet.' })
+    expect(actions.orcaSend).not.toHaveBeenCalled()
+    expect(actions.count.mock.calls).toEqual([['pending']])
+  })
+
+  it('a session that ended, or moved to another terminal, while the queue ran is not typed into', async () => {
+    const other = 'term_9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d'
+    for (const meanwhile of [
+      { event: 'session-end', session: inOrca },
+      { event: 'session-start', session: { ...inOrca, hostHints: { ORCA_TERMINAL_HANDLE: other } } },
+    ] as const) {
+      const { src, ev, actions } = given(inOrca)
+      const end = held(actions)
+      const sent = src.send(src.list()[0], 'next')
+      expect(actions.codexQueue.send).toHaveBeenCalledTimes(1)
+      src.ingest(ev(meanwhile.event, meanwhile.session))
+      end(FAILED)
+      expect(await sent).toEqual({ ok: false, reason: 'proj did not answer.' })
+      expect(actions.orcaSend).not.toHaveBeenCalled()
+    }
+  })
+
+  // Its message waits in the thread's queue for its next resume.
+  it('a session that ends while codex queue runs is still answered sent once it queued', async () => {
+    const { src, ev, actions } = given(cx)
+    const end = held(actions)
+    const sent = src.send(src.list()[0], 'next')
+    expect(actions.codexQueue.send).toHaveBeenCalledTimes(1)
+    src.ingest(ev('session-end', cx))
+    end({ outcome: 'queued' })
+    expect(await sent).toEqual({ ok: true })
+    expect(actions.count.mock.calls).toEqual([['codex']])
+  })
+
+  // An idle Codex starts the queued turn within 0.4 s, while `codex queue` may still run.
+  it('the turn that starts while codex queue still runs is the dial\'s', async () => {
+    const { src, ev, actions } = given(cx)
+    const end = held(actions)
+    const sent = src.send(src.list()[0], 'next')
+    expect(actions.codexQueue.send).toHaveBeenCalledTimes(1)
+    expect(src.ingest(ev('turn-start', cx))).toBe('dial')
+    end({ outcome: 'queued' })
+    expect(await sent).toEqual({ ok: true })
+    expect(src.ingest(ev('turn-start', cx))).toBe('person')
+  })
+
+  it('after queued the next turn is the dial\'s; after failed, timeout or busy it is a person\'s', async () => {
+    const cases: Array<[CodexQueueResult, PromptSource]> = [
+      [{ outcome: 'queued' }, 'dial'], [FAILED, 'person'], [{ outcome: 'timeout' }, 'person'], [{ outcome: 'busy' }, 'person'],
+    ]
+    for (const [result, turn] of cases) {
+      const { src, ev, actions } = given(cx)
+      actions.codexQueue.send.mockResolvedValue(result)
+      await src.send(src.list()[0], 'next')
+      expect(src.ingest(ev('turn-start', cx))).toBe(turn)
+    }
+  })
+
+  it('a Codex session the open scan found takes voice before its first hook', async () => {
+    const { actions } = fakeActions()
+    const { src, open, owners, externals } = setup({ actions })
+    open.set(THREAD, 'terminal')
+    owners.set(THREAD, { pid: 100, engine: 'codex' })
+    externals.set(THREAD, { cwd: '/work/proj', transcriptPath: cx.transcriptPath })
+    await src.scanOpen()
+    expect(src.capabilities(src.list()[0])).toMatchObject({ voice: true })
+    expect(await src.send(src.list()[0], 'next')).toEqual({ ok: true })
+    expect(actions.codexQueue.send.mock.calls).toEqual([[THREAD, 'next']])
+  })
+
+  it('a text over 2000 characters is refused before the queue', async () => {
+    const { src, actions } = given(cx)
+    expect(await src.send(src.list()[0], 'a'.repeat(2001))).toEqual({ ok: false, reason: 'Too long. Say it shorter.' })
+    expect(actions.codexQueue.send).not.toHaveBeenCalled()
   })
 })
 

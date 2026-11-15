@@ -76,6 +76,8 @@ export interface RunningProcess {
   ppid: number
   /** The command's name as the system reports it (`comm`). */
   executable: string
+  /** macOS: the whole `comm`, where `executable` is its first 16 bytes (lib/processTable.ts `commandPath`). */
+  commandPath?: string
   args: string
   /**
    * When it started, epoch ms to the second (`ps` lstart), when known. A record or lock older than

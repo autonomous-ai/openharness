@@ -18,7 +18,7 @@ import { basename, join } from 'node:path'
 
 import { copilotHistoryTurnOpen } from '../../../engines/copilot/normalizer.js'
 import { agentCommandOwnershipSnapshot } from '../../engineBin.js'
-import { argvTokens, engineProcessMatch } from '../../processTable.js'
+import { argvTokens, commandOf, engineProcessMatch } from '../../processTable.js'
 import { forEachLine } from '../../transcriptLines.js'
 import { absoluteFolder, entries, epochMs, fileStamp, parseLine, readTail, record, text, UUID } from './support.js'
 import type { ExternalOrigin, ExternalProvider, ExternalSession, OwnerClaim, ProcessView, RunningProcess, ScanContext } from './types.js'
@@ -283,7 +283,7 @@ export async function readCopilotSession(dir: string, sessionId: string): Promis
 /** What [row] is: the CLI, an editor's SDK runtime (or a CLI serving one), or not Copilot at all. */
 function copilotProcess(row: RunningProcess, ownership: ReturnType<typeof agentCommandOwnershipSnapshot>): 'cli' | 'server' | null {
   const tokens = argvTokens(row.args)
-  const runtime = [row.executable, tokens[0] ?? ''].some((path) => /^copilot-runtime(?:\.exe)?$/i.test(basename(path)))
+  const runtime = [commandOf(row), tokens[0] ?? ''].some((path) => /^copilot-runtime(?:\.exe)?$/i.test(basename(path)))
   if (!runtime && engineProcessMatch(row, 'copilot', ownership).score <= 0) return null
   return runtime || tokens.some((token) => SERVER_FLAGS.has(token)) ? 'server' : 'cli'
 }

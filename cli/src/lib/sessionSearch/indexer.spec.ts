@@ -1,10 +1,14 @@
-import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { LiveEvent } from '../normalize.js'
+import type { ProcessRow } from '../processTable.js'
+import { OpenSessions } from './external.js'
+import { claudeProvider } from './externals/claude.js'
+import { listProcesses, processView } from './externals/support.js'
 import { SessionSearchIndex, folderWords, type SearchSource, type SessionSearchIndexOptions } from './indexer.js'
 import { SessionSearchStore } from './store.js'
 import { builtinSqlite } from '../sqliteBuiltin.js'
@@ -280,6 +284,44 @@ describe('SessionSearchIndex', () => {
     await settle()
     expect(store.session('e2')).toBeUndefined()
     expect(store.session('e1')).toBeDefined()
+  })
+
+  // Cmd-P must not resume a conversation the Claude app still has open: two processes would write it. Desktop refuses
+  // a hit that is open in an app (swarm_search.dart `sessionUnavailable`), so the daemon has to say so. It did not:
+  // macOS `ps` cut the app's Claude Code to `/Users/<name>` and nothing matched it as Claude Code (2026-11-15).
+  it('says a conversation the Claude app has open is open in an app', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'session-search-claude-app-'))
+    dirs.push(root)
+    const sessionId = '33333333-3333-4333-8333-333333333333'
+    const path = '/Users/someone/Library/Application Support/Claude/claude-code/2.1.325/485fdac4332e/claude.app/Contents/MacOS/claude'
+    const startMarker = 'Sun Nov 15 15:41:22 2026'
+    // The row as macOS reads it: `comm` cut at 16 bytes, argv[0] split at the space, the whole path beside them.
+    const app: ProcessRow = { pid: 73704, parentPid: 73703, executable: path.slice(0, 16), startMarker,
+      args: `${path} --output-format stream-json`, commandPath: path }
+    // Claude Code's own record of the session it has open (engines/claude/adoption.ts).
+    mkdirSync(join(root, 'sessions'))
+    writeFileSync(join(root, 'sessions', '73704.json'), JSON.stringify({ pid: 73704, sessionId, status: 'idle', startedAt: Date.parse(startMarker) + 400 }))
+    const transcriptPath = join(root, `${sessionId}.jsonl`)
+    writeFileSync(transcriptPath, prompt('why does the dial scroll jump', 0) + answer('The delta is doubled.', 1))
+    const openSessions = new OpenSessions({
+      providers: [claudeProvider({ projectsDir: join(root, 'projects'), home: root })],
+      view: () => processView(async () => null, () => true, () => listProcesses(async () => [app])),
+      // The app's process has no terminal, and is in no pane of Harness's.
+      ttys: async (pids) => new Map(pids.map((pid) => [pid, null])),
+      harnessTtys: async () => new Set(),
+    })
+    const store = SessionSearchStore.open(':memory:')!
+    const index = new SessionSearchIndex({
+      store, agents: () => [], openSessions,
+      sources: () => [{ agentId: '', sessionId, engine: 'claude', transcriptPath, header: '', changedAt: 1,
+        external: { cwd: '/work/dial', origin: 'claude-app', title: '' } }],
+    })
+    cleanups.push(() => { index.stop(); store.close() })
+    index.sweep()
+    await vi.waitFor(() => { expect((index as unknown as { running: boolean }).running).toBe(false) })
+    // A search never waits for a process table: it reads the last look.
+    await openSessions.fresh()
+    expect(index.search('dial scroll').hits[0]).toMatchObject({ sessionId, agentId: '', external: { origin: 'claude-app', open: true, openIn: 'app' } })
   })
 
   it('starts over when the transcript was rewritten shorter', async () => {
