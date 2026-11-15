@@ -3301,7 +3301,8 @@ export class CableSession {
     // Already there: a stuck engine repeating its event costs no list read.
     if (agentId === this.desiredFocus && !this.appFocusUnsent) return
     const { agents } = await this.agentSnapshot()
-    if (generation !== this.promptGeneration) return
+    // Unplugged during the read: followApp would send nothing, and a move that never happened is not counted.
+    if (!this.isConnected || generation !== this.promptGeneration) return
     if (!agents.some((a) => a.id === agentId)) return this.host.promptFollowed?.('no-tile')
     this.host.promptFollowed?.('moved')
     await this.followApp(this.host.localMachine().id, agentId)
