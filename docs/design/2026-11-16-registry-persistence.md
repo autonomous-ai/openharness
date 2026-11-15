@@ -723,10 +723,18 @@ owners: extend the existing strict `displaced` representation to a list of those
 affected rows, bounded by the supplied routes and existing bounded registry image;
 do not create a global mutation framework. The existing whole-group peer validation,
 uncertain image/prior fingerprints, reconciliation and final atomic install cover
-the entire list. Preserve current returned eviction metadata/contract and final
+the entire list. Return the bounded removed-owner list to the sole internal caller and preserve final
 synchronous install before notifying. No route may be removed from another owner
 without its same-group durable update. If a smaller representation can cover the
 actual selected routes without weakening this contract, prefer it.
+
+Every fully removed owner receives its captured-id cleanup and deletion notice,
+including an existing selected owner taking more routes. Browser transfer retains
+the original first predecessor choice and occurs only for a new owner. A retained
+owner losing some routes is not deleted. Cleanup must not stop after one removed
+row merely because the new owner changes during an awaited cleanup; each old row
+is independently fenced by its captured identity, while transfer and new-owner
+announcement require the installed receipt.
 
 `onObserved`'s existing starting-to-ready success also goes through `confirmLaunch`
 after its observational metadata fills, with the original operation/owner and fresh
@@ -741,3 +749,55 @@ changes, peer writes, directory-fsync uncertainty and archive retention, includi
 multiple displaced routes and a strict commit inside a reconcile transaction.
 Benchmark only after source review in a reserved window; report any change in
 discovery latency separately from the original registry write baseline.
+
+Discovery's strict candidate also preserves the native observation's selected
+primary runtime and gateway when supplied. Extend the existing closed launch input
+with those actual optional fields, and give shell adoption the same closed route/
+gateway/grid projection. Undefined preserves the prior value, as the observational
+setters did. This avoids losing a selected non-first runtime or overwriting a hook's
+gateway merely because discovery's ready transition is now strict.
+
+## Design correction: explicit user choices require durable replies
+
+Review pending. `core/agents/update.ts` is the sole production caller of registry
+`rename` and `setLaunchModel`. Both presently acknowledge a person's requested
+choice after an observational queued write. This creates an extra crash window
+after making persistence asynchronous. `markOpened` is a throttled observation;
+its Close cancellation already awaits strict completion. Engine-observed model,
+title and timestamp updates remain observational.
+
+Make `rename` an awaited strict names publication through the existing writer.
+Capture the selected owner, engine session/name key and trimmed name before queue
+residence. Prepare the existing names file with that staged intent, check the
+same selected owner/key again before final publication, and expose the name in
+the existing in-memory map only after confirmed durability. Return a cloned
+matching row; no pane rename, reply or broadcast before that result. The file
+format stays compatible with old builds. Old names writers do not participate in
+the registry lock, so this increment cannot promise exclusion from a concurrently
+running old names writer; preserve the current merge behavior and do not invent a
+second persistent authority or silently strengthen that compatibility claim.
+
+Make `setLaunchModel` an awaited strict row publication of its existing closed
+model/effort field through `persist`, with the exact original owner selected by
+the caller before awaiting the native runtime-profile controller. If the runtime
+change succeeded but persistence is refused or uncertain, return an explicit
+safe failure rather than success; do not guess a rollback of the engine's model.
+Post-publication checks compare the returned receipt, not the pre-mutation row.
+Combined name/profile/open requests remain ordered; partial completed choices
+stay applied and the failed remaining choice is reported, as with the existing
+native runtime-profile error path. Do not introduce a two-file transaction.
+
+Both operations keep existing queue admission/expiry and publication-versus-
+cleanup semantics. Caller failures use fixed categories (`AGENT_CHANGED` for
+selected-owner revocation; `PERSISTENCE_UNCONFIRMED` for persistence failures)
+and fixed log text, without paths, names, model content or raw errors. A flush that
+swallowed a prior write failure is not evidence. Preserve unrelated queued name
+intent and same-value intent revisions. No new queue, store or retained receipt.
+
+Before runtime changes add real-registry caller reds for held names/model fsync,
+owner/session replacement during preparation and runtime-controller wait, queued
+expiry, write failure and post-rename uncertainty. Verify no reply/broadcast/pane
+rename on refusal, durable success before normal replies, and the existing
+combined-update order. Platforms remain macOS/Linux/Windows; there is no new
+native process or wire schema. Limits and migration are the existing bounded
+registry/names files, queue and backward-compatible atomic-file protocol.
