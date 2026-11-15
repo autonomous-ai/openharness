@@ -87,3 +87,37 @@ in core or add another feature queue outside it. Root accepted this admission-ti
 implied. The real adapter and device handler are tested together with three requests queued before service startup;
 successful wire replies, eight/two concurrent execution, and actual-settlement bounds are unchanged. A disconnected
 request queued for startup is never delivered. Bounds and cancellation apply to both callers of the shared adapter.
+
+
+## Quiet performance result (2026-11-16)
+
+Root measured retained production `8c568225c1f1b3c2cc7c7cccb77f4cd140334773` against
+`706a43ad1d9a65014268c1847ccc488f4cf133b2`, Node 24.22.2/macOS. Both private fixture worlds stayed resident.
+Six fixed pairs (BA, AB, BA, AB, BA, AB) each used 20 warmups and 500 requests/workload. All 36 samples passed;
+raw latencies and separate core/devices CPU are retained. CPU accounting resolves 10 ms per process, not sub-ms
+individual requests. These are medians across the six run summaries, not a statistical equivalence claim.
+
+| Workload | Core CPU/request, before → after | Core + devices CPU/request | Request p95, before → after |
+| --- | --- | --- | --- |
+| Valid route task | 400 → 370 µs | 590 → 570 µs | 0.962 → 0.919 ms |
+| Empty-send validation refusal | 50 → 100 µs | 50 → 140 µs | 0.415 → 0.465 ms |
+| Ordinary agent list | 210 → 190 µs | 210 → 190 µs | 0.664 → 0.620 ms |
+
+Rejection now crosses the optional worker boundary. Its measured +50 µs core CPU/request, +90 µs combined CPU/request
+and +0.051 ms p95 are a real cost; the no-slowdown requirement is not met on that path. No exception is accepted yet.
+Do not move validation back into core to hide the isolation cost. Valid routing and ordinary lists used less core CPU.
+The fixed P2P typing comparison (ABBA, 60 keys per phase/run) passed all four runs with no channel errors: median run
+p95 was 3.8 → 3.5 ms idle and 5.0 → 5.0 ms beside another pane's keyframe. No samples were discarded or adaptively retried.
+
+The first routing attempt failed during warmup, before any timed sample: its fixture assumed an unknown agent was
+refused, whereas the existing FleetRouter defaults it to local admission and returns `ok:true`. The corrected fixture
+uses an explicit empty-text refusal on both builds and asserts `INVALID_REQUEST`; no product behavior or threshold was
+changed. Both failed and corrected reports are retained. The checked-in opt-in rig now contains the corrected workload,
+fixed pairing order, separate worker CPU accounting, and partial-result/cleanup reporting used by the measured rig.
+
+Evidence: `/tmp/core-owner-commands-benchmark-manifest-v1.json` and `-v2.json`,
+`/tmp/core-owner-commands-bench.json` (failed warmup), `-v2.json` (all raw results), `-summary.json`,
+`/tmp/core-owner-commands-typing-{1-A,2-B,3-B,4-A}.json` and `-typing-summary.json`.
+Candidate bundle SHA-256: `f76797193f5645add0809e3bfd5758f1350ed91626bac20cd4ccaff2963c523a`;
+baseline: `516860c07f9349ab1df86f76ae3ec8dea6efc31734613a36bbf178c2226f8880`.
+The later main integration only brings the reviewed resume fixture isolation; production comparison remains unchanged.
