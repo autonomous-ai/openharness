@@ -153,6 +153,8 @@ describe('readProcessRows on macOS', () => {
   const SPLIT = '/Users/abcdefghé/Library/tool'
   // Byte 16 is the space: the table's parse drops it.
   const SPACE = '/Users/abcdefgh ij/tool'
+  // Byte 16 falls inside its last character: the cut has as many characters as the whole name, and is still cut.
+  const LAST = '/Users/someone/é'
   const table = [
     `  501     1 /Users/someone/L ${START}     ${APP} --resume x`,
     // Its pid went to another process between the two reads: the second table's start differs.
@@ -170,6 +172,7 @@ describe('readProcessRows on macOS', () => {
     `  509     1 codex            ${START}     codex --flags`,
     `  510     1 /Users/abcdefgh\uFFFD ${START}     ${SPLIT}`,
     `  511     1 /Users/abcdefgh  ${START}     ${SPACE}`,
+    `  512     1 /Users/someone/\uFFFD ${START}     ${LAST}`,
   ].join('\n') + '\n'
   const paths = [
     `  501 ${START}     ${APP}`,
@@ -183,6 +186,7 @@ describe('readProcessRows on macOS', () => {
     `  509 ${START}     codex --flags`,
     `  510 ${START}     ${SPLIT}`,
     `  511 ${START}     ${SPACE}`,
+    `  512 ${START}     ${LAST}`,
     'not a row',
   ].join('\n') + '\n'
   const cut = (pid: number, executable: string, args: string): ProcessRow => ({ pid, parentPid: 1, executable, startMarker: START, args })
@@ -190,7 +194,7 @@ describe('readProcessRows on macOS', () => {
     cut(501, '/Users/someone/L', `${APP} --resume x`), cut(502, '/Users/someone/L', OTHER), cut(503, '/usr/libexec/abc', '/usr/libexec/abc'),
     cut(504, '/sbin/launchd', '/sbin/launchd'), cut(505, '/Users/someone/L', OTHER), cut(506, '/Users/someone/L', OTHER),
     cut(508, '/Users/josé/Lib', `${ACCENT} --resume y`), cut(509, 'codex', 'codex --flags'),
-    cut(510, '/Users/abcdefgh\uFFFD', SPLIT), cut(511, '/Users/abcdefgh', SPACE),
+    cut(510, '/Users/abcdefgh\uFFFD', SPLIT), cut(511, '/Users/abcdefgh', SPACE), cut(512, '/Users/someone/\uFFFD', LAST),
   ]
   beforeEach(() => { writeFileSync(join(ps.dir(), 'rows'), table) })
 
@@ -198,7 +202,7 @@ describe('readProcessRows on macOS', () => {
     writeFileSync(join(ps.dir(), 'paths'), paths)
     const rows = await readProcessRows('darwin')
     expect(rows).toEqual([{ ...asRead[0], commandPath: APP }, ...asRead.slice(1, 6), { ...asRead[6], commandPath: ACCENT }, asRead[7],
-      { ...asRead[8], commandPath: SPLIT }, { ...asRead[9], commandPath: SPACE }])
+      { ...asRead[8], commandPath: SPLIT }, { ...asRead[9], commandPath: SPACE }, { ...asRead[10], commandPath: LAST }])
     expect(engineProcessMatch(rows![0], 'claude', NO_OWNERS).score).toBe(3)
     expect(engineProcessMatch(rows![6], 'claude', NO_OWNERS).score).toBe(3)
     // What is saved of it is the cut name, as before: a session bound before this read still compares equal.
