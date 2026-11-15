@@ -114,14 +114,18 @@ async function linuxFolders(identity: ProcessIdentity, file: RegExp, proc: strin
   return mapped
 }
 
+// The kernel names a held file by its real path, which never has a `..` segment: one that does was decoded from a name.
+const STEPS_OUT = /(?:^|\/)\.\.(?:\/|$)/
+
 // lsof escapes a name's bytes above ASCII (`\xc3\xa0`) and leaves a backslash as it is, so a path may be spelled two
 // ways (descriptorPaths), and a name holding `\x2f` decodes to a path of someone's choosing. The one spelling on disk
 // is the file, and it must match; with two or none on disk, the descriptor says nothing, as does a name too long to be
-// a path. A spelling is only looked up (lstat), never opened.
+// a path. A spelling is only looked up (lstat), never opened, and one with a `..` segment is not even that: it is no
+// file the kernel names, and its lookup could land anywhere (`/net`'s automounts among them).
 async function spelledFolder(path: string, file: RegExp): Promise<string | undefined> {
   let spellings: string[]
   try {
-    spellings = descriptorPaths(path)
+    spellings = descriptorPaths(path).filter((spelling) => !STEPS_OUT.test(spelling))
   } catch {
     return undefined
   }
@@ -129,9 +133,6 @@ async function spelledFolder(path: string, file: RegExp): Promise<string | undef
   const onDisk = (await Promise.all(spellings.map((spelling) => lstat(spelling).then(() => [spelling], () => [])))).flat()
   return onDisk.length === 1 ? file.exec(onDisk[0])?.[1] : undefined
 }
-
-// The kernel names a held file by its real path, which never has a `..` segment: one that does was decoded from a name.
-const STEPS_OUT = /(?:^|\/)\.\.(?:\/|$)/
 
 // One lsof lists every process, not one each: its start is most of a listing's cost. It exits non-zero when any of them
 // cannot be listed.
@@ -178,7 +179,6 @@ async function listedHome(listed: readonly ProcessIdentity[], file: RegExp, plat
   const folders = new Set(await heldFolders(listed, file, platform, proc))
   if (folders.size > 1) throw new Unlisted('two homes')
   const [home] = folders
-  if (home !== undefined && STEPS_OUT.test(home)) throw new Unlisted('home with ..')
   return home
 }
 
