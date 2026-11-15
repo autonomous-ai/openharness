@@ -74,6 +74,20 @@ cleanup callback, timer, state table or supervisor protocol is added. Real isola
 setup after a probe names its PID and prove that exact child disappears; cold helper overhead and cache hits need
 matched measurements before any performance claim.
 
+An unused keeper may have already answered cancellation or idle expiry while its exit reply is still queued.
+It must reject a later queued work message in either state, before any child spawn. Final executor shutdown
+also rejects delayed work with `SETUP_PROBE_CANCELLED`; it cannot start a new keeper or warmup.
+
+Service disconnect differs from final shutdown because the existing service transport reconnects in the same
+process. Disconnect revokes the captured execution function and cancels its children, then composes a fresh lazy
+local setup with a new execution function. Delayed metadata imports retain the old, revoked function even after
+reconnect. One executor and its actual-child set survive those generations: cancellation never releases a child
+slot before exit, and warmup is still once per process. Prepared claims and active request admission also remain
+in their existing maps until actual settlement. Final stop is permanent and refuses subsequent private requests
+as `SETUP_STOPPED`. No new core state, timer, endpoint or supervisor message is involved. Deterministic tests hold
+the keeper's exit reply, defer metadata work across disconnect/reconnect, and retain children after cancellation
+to prove revocation and admission separately; existing real killed/frozen-parent cleanup remains required.
+
 ## Design
 
 - **Growth:** Keep the POSIX 128-record journal and 256 KiB record cap. Do not delete or rewrite existing immutable
