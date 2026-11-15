@@ -559,6 +559,24 @@ test('switched off and on again: the session the app still shows is told once th
   expect(w.attaches).toEqual([ATTACH])
 })
 
+// The send noticing the plugin off before the poll does keeps the attach as the poll noticing it first would.
+test('switched off during a held poll, then an attach: told once the mod links again', async ($, on) => {
+  const w = world(on, { answers: [held(10_000)] })
+  await start($, w)
+  w.enabled = false
+  await attach($)
+  await w.clock.settle()
+  expect(w.attaches).toHaveLength(0)
+  await w.clock.advance(10_000)
+  expect(w.runs).toHaveLength(2)
+  w.enabled = true
+  await w.clock.advance(10 * MINUTE)
+  expect(w.runs).toHaveLength(3)
+  expect(w.attaches).toEqual([ATTACH])
+  await w.clock.advance(10_000)
+  expect(w.attaches).toEqual([ATTACH])
+})
+
 test("the polls go on the core's socket alone and the attach on the devices' alone", async ($, on) => {
   const w = world(on, { answers: [held(25_000)] })
   await start($, w)
