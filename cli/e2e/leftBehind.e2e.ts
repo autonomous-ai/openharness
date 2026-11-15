@@ -146,7 +146,8 @@ describe('a daemon under test', () => {
     const typed = async (line: string, file: string): Promise<string> => {
       await d.tmux.run('send-keys', '-t', pane, '-l', `${line} > ${file}.tmp; mv ${file}.tmp ${file}`)
       await d.tmux.run('send-keys', '-t', pane, 'Enter')
-      return until(`the tile to write ${file}`, () => existsSync(file) ? readFileSync(file, 'utf8') : null, 30_000, 100)
+      // Boxed: an empty answer is an answer too (`whence -p` of names it cannot find), and `until` waits for a truthy one.
+      return (await until(`the tile to write ${file}`, () => existsSync(file) ? { text: readFileSync(file, 'utf8') } : null, 30_000, 100)).text
     }
     // Deaf to the hangup its pane's end sends, and in a process group of its own: as an engine left running is.
     const left = [Number(await typed('nohup sleep 600 >/dev/null 2>&1 & echo $!', join(d.root, 'left.pid')))]
