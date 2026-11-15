@@ -256,15 +256,13 @@ impl TabFollow {
         }
     }
 
-    /// The waiting select, taken `now`, unless it waited past CALL_TIMEOUT.
+    /// The waiting select, taken `now`, unless it waited past CALL_TIMEOUT or is a swipe's for a Ghostty in the back:
+    /// Ghostty's `select tab` may bring it forward, and its script would select nothing.
     pub fn next_select(&mut self, now: Instant) -> Option<Select> {
         let (app, tty, raise, at) = self.waiting.take()?;
-        (now.saturating_duration_since(at) <= CALL_TIMEOUT).then(|| Select {
-            app,
-            tty,
-            frontmost: self.front == Some(app),
-            raise,
-        })
+        let frontmost = self.front == Some(app);
+        let runs = raise || frontmost || app != TabApp::Ghostty;
+        (runs && now.saturating_duration_since(at) <= CALL_TIMEOUT).then_some(Select { app, tty, frontmost, raise })
     }
 
     /// A `select_tty` or `focus_tty` answer.
@@ -558,6 +556,26 @@ mod tests {
         follow.select(T, TTY.into(), false, now);
         follow.front(VS_CODE);
         assert_eq!(follow.next_select(now), select(T, TTY, false, false));
+    }
+
+    #[test]
+    fn a_swipe_for_a_ghostty_in_the_back_is_dropped_and_a_tap_for_it_runs() {
+        let now = Instant::now();
+        let mut follow = polling();
+        let ghostty = TabApp::Ghostty;
+        // Its `select tab` may bring Ghostty forward: a swipe never selects a tab of a Ghostty in the back.
+        follow.select(ghostty, TTY.into(), false, now);
+        assert_eq!(follow.next_select(now), None);
+        follow.select(ghostty, TTY.into(), true, now);
+        assert_eq!(follow.next_select(now), select(ghostty, TTY, false, true));
+        follow.front(ghostty.bundle());
+        follow.select(ghostty, TTY.into(), false, now);
+        assert_eq!(follow.next_select(now), select(ghostty, TTY, true, false));
+        // Terminal and iTerm2 in the back select all the same.
+        for app in [T, TabApp::Iterm] {
+            follow.select(app, TTY.into(), false, now);
+            assert_eq!(follow.next_select(now), select(app, TTY, false, false));
+        }
     }
 
     #[test]

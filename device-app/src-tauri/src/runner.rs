@@ -1124,6 +1124,25 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn a_swipe_for_a_ghostty_in_the_back_makes_no_call_and_no_log_line() {
+        let scripts = Arc::new(Scripts::default());
+        let (w, _fronts) = world_with_tabs(VSCODE, &scripts);
+        let swipe = r#"{"select":{"app":"ghostty","tty":"/dev/ttys023"}}"#;
+        let tap = r#"{"select":{"app":"ghostty","tty":"/dev/ttys023","raise":true}}"#;
+        w.fake.script("hardware watch --json", &[r#"{"attached":false}"#, swipe, "@wait two", tap, "@stdin"]);
+        assert_eq!(w.answer(Effect::SpawnWatch), no_dial());
+        scripts.still(0);
+        // A tap's runs: its `open -b` is bringing Ghostty forward.
+        w.fake.touch("two");
+        assert_eq!(scripts.calls(2), ["running Ghostty", "focus_tty Ghostty /dev/ttys023"]);
+        let log = w.fake.log();
+        assert_eq!(w.rest(), [Event::WatchExit(Some(0))]);
+        let said: Vec<String> = log.lines().into_iter().filter(|line| line.starts_with("tabs:")).collect();
+        assert_eq!(said, ["tabs: Ghostty select ok"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn an_app_that_is_not_running_is_never_sent_an_event() {
         // A swipe's select_tty and a tap's focus_tty alike.
         let scripts = Arc::new(Scripts::default());
