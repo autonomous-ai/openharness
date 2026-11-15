@@ -40,19 +40,23 @@ failed in both jobs, so no Hermes ran: its rows wait for a second run.
 
 | Engine, release | System | Process that holds the file (selected, one of its engine children, another) | Held from | Held until | Run |
 | --- | --- | --- | --- | --- | --- |
-| Hermes | macOS | pending the second run | | | |
-| Hermes | Linux | pending the second run | | | |
-| Hermes, in `unshare` | Linux | pending the second run | | | |
+| Hermes 0.23.1 | macOS | The selected process (`python3`, pid 9167) holds `<HERMES_HOME>/state.db`; Hermes's shared gateway (`python3`, 9545, outside the pane's tree) holds it too | The first prompt: no file with the prompt drawn (8 s), held once a prompt was typed (164 s) | The session's end: still held 60 s later (225 s); after `/exit` only the gateway holds it | [43662213492](https://github.com/autonomous-ai/autonomous-harness/actions/runs/43662213492) |
+| Hermes 0.23.1 | Linux | The selected process (`hermes`, 3327) and its one direct engine child (`hermes`, 3506) | The first prompt: none at 6 s, held at 22 s | The session's end: still held at 82 s; after `/exit` the child, now outside the pane, still holds it | [43662213492](https://github.com/autonomous-ai/autonomous-harness/actions/runs/43662213492) |
+| Hermes, in `unshare` | Linux | Not run: the runner refused `unshare --user` | | | [43662213492](https://github.com/autonomous-ai/autonomous-harness/actions/runs/43662213492) |
 | Codex 0.169.0 (npm) | macOS | An engine child. The selected launcher (`codex`, pid 1437) has two direct children named `codex` (1505, 1546): 1505 holds the rollout; 1546 and the launcher hold none | The first prompt: no file with the prompt drawn (10 s), held once a prompt was typed (18 s) | The session's end: still held 60 s later (78 s), and by that child after `/quit` (81 s) | [43661610754](https://github.com/autonomous-ai/autonomous-harness/actions/runs/43661610754) |
 | Codex 0.169.0 (npm) | Linux | An engine child. The selected launcher (`codex`, pid 2301) has two direct children named `codex` (2368, 2459): 2368 holds the rollout; 2459 and the launcher hold none | The first prompt: no file with the prompt drawn (7 s), held once a prompt was typed (39 s) | The session's end: still held 60 s later (99 s), and by that child after `/quit` (102 s) | [43661610754](https://github.com/autonomous-ai/autonomous-harness/actions/runs/43661610754) |
 
-- **Hermes: pending** the second run. Task 11 and Task 13's Hermes cases wait on it (Branch A or Branch B).
+- **Hermes: held** on both systems (second run, [43662213492](https://github.com/autonomous-ai/autonomous-harness/actions/runs/43662213492)). Task 11 and Task 13 take Branch A.
+- On macOS the pattern `/state\.db$` also matched a system daemon outside the pane (`intelligenceplatformd`,
+  `~/Library/IntelligencePlatform/state.db`). It is never read: only selected processes and their direct engine
+  children are. The reader's pattern stays anchored to the engine's own process.
 - **Codex: held** on both systems. Task 9 and Task 13 take Branch A. The verdict holds under the reader of decision
   8 as the PM settled it after this run (2026-11-15): the selected process and its direct children that are the same
   engine's binary, four at most. Under "exactly one child", the rule this plan had before the run, neither child was
   named.
-- A sandboxed process's descriptor path is in **its own view / the daemon's view**: pending (Hermes in `unshare`, the
-  second run).
+- A sandboxed process's descriptor path, its own view or the daemon's: **not measured** (the runner refused
+  `unshare`). Task 14 maps a sandbox's path through `processMounts.ts` as planned, and its spec pins both readings
+  with a fixture (`fakeHermes.mjs` `'remapped'`); the end-to-end sandbox cases of Task 13 are the check.
 - **After `/quit` the child that holds the rollout outlives its launcher.** The pane's tree is the shell alone again,
   and that child, now outside it, still has the file open until the runner ends the job. It is Codex's own behavior,
   on both systems. It is never read: the reader lists the process a pane's discovery selected and that process's

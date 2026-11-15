@@ -208,7 +208,9 @@ Run https://github.com/autonomous-ai/autonomous-harness/actions/runs/43661610754
 - After `/quit`, the child that holds the rollout stays alive as an orphan, with the file still open, until the runner
   kills it. That is Codex's own behavior. The probe reads only processes the discovery pass selected (and their direct
   children), so an orphan outside a pane is never read.
-- Hermes: not measured on the first run (the workflow's installer step failed); a second run measures it.
+- Hermes 0.23.1, second run (https://github.com/autonomous-ai/autonomous-harness/actions/runs/43662213492): on Linux and macOS the selected Hermes
+  process holds `<HERMES_HOME>/state.db` from the first prompt for the whole session. Hermes's shared gateway holds it
+  too; it is never read. A sandboxed Hermes was not measured: the runner refused `unshare`.
 
 ## Follow-ups
 
