@@ -718,8 +718,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   /**
    * A turn's start outside a pane turns the dials to its agent only when a person typed its prompt in the app settled in
    * front (docs/specs/2026-11-14-dial-pane-follow.md). The front, never the app a dial shows: a pick on the dial leaves
-   * the front where it is, and a dial whose ring lacks the agent answers no tile itself. Each line is a reason, never the
-   * app, the agent or the session.
+   * the front where it is, and a dial whose ring lacks the agent answers no tile itself. Each prompt line is a reason,
+   * never the app, the agent or the session; the move's own line, followApp's, names the agent's id as it does for a
+   * Harness agent.
    */
   const followPrompt = (agentId: string, source: PromptSource): Promise<void> | undefined => {
     // No dial linked: nothing to turn or count. The turn still used up a dial's prompt, in `ingest`.
