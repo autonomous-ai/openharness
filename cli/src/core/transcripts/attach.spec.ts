@@ -159,7 +159,7 @@ function setup(over: Partial<AttachDeps> = {}) {
     } as AttachDeps['runtimeProfiles'],
     captureTerminal: vi.fn(async () => 'pane'),
     emit: vi.fn(),
-    tokenUsage: { changed: () => {} }, questionWatcher: { start: vi.fn() },
+    tokenUsage: { changed: vi.fn() }, questionWatcher: { start: vi.fn() },
     terminalLabel: () => 'tmux:%0',
     storeOf: async (s) => ({ opencode: '/db/opencode.db', kilo: '/db/kilo.db', devin: '/db/devin.db', hermes: `/db/hermes-${s.agentId}.db` } as Record<string, string>)[s.engine] ?? null,
     concurrency: 2,
@@ -436,7 +436,7 @@ it.each(['terminal probe', 'optional module'] as const)('attaches a newly locate
     expect(await first).toBe(false)
     expect(await replacement).toBe(true)
     expect(run.deps.watcher.addSession).toHaveBeenCalledOnce()
-    expect(run.deps.watcher.addSession).toHaveBeenCalledWith(expect.objectContaining({ transcriptPath: path }), {})
+    expect(run.deps.watcher.addSession).toHaveBeenCalledWith(expect.objectContaining({ transcriptPath: path }), expect.objectContaining({ fromOffset: 3 }))
   } finally { await discovery.stop() }
 })
 
@@ -647,7 +647,7 @@ describe('attaching a session', () => {
       await run.attach.attachSession(s)
       await run.attach.attachSession(s, false, false, true)
       expect(vi.mocked(run.deps.watcher.addSession).mock.calls.map((call) => call[1])).toEqual([
-        { fromStart: false }, { fromStart: true }, { fromStart: true },
+        { fromStart: false, stamp: expect.any(Function), current: expect.any(Function) }, { fromStart: true, stamp: expect.any(Function), current: expect.any(Function) }, { fromStart: true, stamp: expect.any(Function), current: expect.any(Function) },
       ])
       expect(run.attach.neverFoldedHistory.has(s.sessionId)).toBe(false)
     })
@@ -659,7 +659,7 @@ describe('attaching a session', () => {
       await run.attach.attachSession(withFile)
       vi.mocked(run.deps.watcher.addSession).mockClear()
       await run.attach.attachSession(withFile, false, true)
-      expect(vi.mocked(run.deps.watcher.addSession).mock.calls[0][1]).toEqual({ fromStart: true })
+      expect(vi.mocked(run.deps.watcher.addSession).mock.calls[0][1]).toEqual({ fromStart: true, stamp: expect.any(Function), current: expect.any(Function) })
       const noFile = session('cursor', undefined, { sessionId: 'cursor-2' })
       await run.attach.attachSession(noFile)
       await run.attach.attachSession(noFile)
@@ -1086,8 +1086,8 @@ describe('attaching a session', () => {
       if (written === 'half written') appendFileSync(file, answer.slice(0, 40))
       const emit = vi.fn(), usage = vi.fn()
       createIngest({ liveFor, has: () => true, bySession: () => row, device: () => undefined,
-        runtimeProfiles: { ingest: vi.fn() }, tokenUsage: { changed: usage }, normalizers: run.normalizers,
-        announceTurnAborted: vi.fn(), emit, attachSession: run.attach.attachSession }).wireWatcher(watcher)
+        runtimeProfiles: { ingest: vi.fn(), evidence: vi.fn() }, tokenUsage: { changed: usage }, normalizers: run.normalizers,
+        announceTurnAborted: vi.fn(), setIdentityHold: vi.fn(), announceSession: vi.fn(), emit, attachSession: run.attach.attachSession }).wireWatcher(watcher)
       try {
         supersede(run)
         expect(await run.attach.attachSession(row)).toBe(true)
@@ -1366,8 +1366,8 @@ describe('attaching a session', () => {
         const file = transcript([CLAUDE_PROMPT]), row = session('claude', file), end = statSync(file).size
         const emit = vi.fn(), usage = vi.fn()
         createIngest({ liveFor, has: () => true, bySession: () => row, device: () => undefined,
-          runtimeProfiles: { ingest: vi.fn() }, tokenUsage: { changed: usage }, normalizers: run.normalizers,
-          announceTurnAborted: vi.fn(), emit, attachSession: run.attach.attachSession }).wireWatcher(watcher)
+          runtimeProfiles: { ingest: vi.fn(), evidence: vi.fn() }, tokenUsage: { changed: usage }, normalizers: run.normalizers,
+          announceTurnAborted: vi.fn(), setIdentityHold: vi.fn(), announceSession: vi.fn(), emit, attachSession: run.attach.attachSession }).wireWatcher(watcher)
         try {
           supersede(run)
           expect(await run.attach.attachSession(row)).toBe(true)
@@ -1572,7 +1572,7 @@ describe('attaching a session', () => {
       expect(asked(run)).toHaveBeenCalledExactlyOnceWith(row)
       // The session has its normalizer now: this attach folds nothing.
       expect(await run.attach.attachSession(row)).toBe(true)
-      expect(run.deps.watcher.addSession).toHaveBeenLastCalledWith(expect.objectContaining({ sessionId: row.sessionId }), { fromStart: false })
+      expect(run.deps.watcher.addSession).toHaveBeenLastCalledWith(expect.objectContaining({ sessionId: row.sessionId }), { fromStart: false, ...(engine === 'pi' ? { stamp: expect.any(Function), current: expect.any(Function) } : {}) })
       expect(asked(run)).toHaveBeenCalledOnce()
       // A reset folds the transcript again.
       expect(await run.attach.attachSession(row, true)).toBe(true)
@@ -1647,7 +1647,7 @@ it.each(['config', 'watcher'] as const)('holds real watcher ingestion through de
   const emit = vi.fn(), ingestProfile = vi.fn(), token = vi.fn()
   const ingest = createIngest({ liveFor, has: () => true, bySession: () => row, device: () => undefined,
     runtimeProfiles: { ingest: ingestProfile, evidence: vi.fn() }, tokenUsage: { changed: token }, normalizers: run.normalizers,
-    announceTurnAborted: vi.fn(), emit, attachSession: run.attach.attachSession, setIdentityHold: vi.fn(), announceSession: vi.fn() })
+    announceTurnAborted: vi.fn(), setIdentityHold: vi.fn(), announceSession: vi.fn(), emit, attachSession: run.attach.attachSession })
   ingest.wireWatcher(watcher)
   try {
     await run.attach.attachSession(row)
@@ -2027,5 +2027,56 @@ it.each(['opencode', 'kilo', 'hermes', 'devin'])('keeps %s Cancel eager after re
   await run.attach.attachSession(row)
   expect(row.interpretationHold).toContain('no file cancellation boundary')
   expect(run.deps.emit).not.toHaveBeenCalled()
+  run.attach.forget(row.sessionId)
+})
+
+it.each(['missing', 'unavailable', 'rebound', 'failed-after-rebind'])('preserves the session when its store lookup is %s', async kind => {
+  const row = session('opencode', undefined)
+  const run = setup({ storeOf: async () => {
+    if (kind === 'rebound' || kind === 'failed-after-rebind') row.evidenceRevision = 1
+    if (kind === 'unavailable' || kind === 'failed-after-rebind') throw new Error('ENGINE_UNAVAILABLE')
+    return kind === 'missing' ? null : '/db/store'
+  } })
+  const unavailable = vi.spyOn(run.others.streams, 'unavailable')
+  const answer = await run.attach.attachSession(row)
+  expect(answer).toBe(kind !== 'rebound')
+  expect(unavailable).toHaveBeenCalledTimes(kind === 'unavailable' ? 1 : 0)
+  expect(inWorker(run, row.sessionId)).toBeUndefined()
+})
+
+it('keeps the existing parser when its profile refuses the final inline commit', async () => {
+  const run = setup(), row = session('claude', transcript([CLAUDE_PROMPT]))
+  vi.mocked(run.deps.runtimeProfiles.beginHydrate).mockReturnValueOnce({ ...run.profile, commitWith: () => false })
+  expect(await run.attach.attachSession(row)).toBe(true)
+  expect(run.normalizers.hasState(row.sessionId)).toBe(false)
+  expect(run.deps.emit).not.toHaveBeenCalled()
+  run.attach.forget(row.sessionId)
+})
+
+it.each(['accepted', 'superseded'])('closes relaunched agy history only when its worker close is %s', async result => {
+  const marks = createRelaunchMarks()
+  const run = setup({ relaunchMarks: marks, captureTerminal: async () => 'working\n esc to interrupt' })
+  const row = session('agy', transcript([{ events: [started()], open: true }]))
+  marks.note(row.sessionId, statSync(row.transcriptPath!).size, true)
+  if (result === 'superseded') vi.spyOn(run.others.streams, 'closeIf').mockResolvedValueOnce(false)
+  expect(await run.attach.attachSession(row)).toBe(true)
+  expect(run.deps.emit).not.toHaveBeenCalled()
+  expect(inWorker(run, row.sessionId)?.normalizer?.turnOpen).toBe(result === 'superseded')
+  run.attach.forget(row.sessionId)
+})
+
+it.each(['store-hold', 'binding', 'removed'])('keeps an initial worker reader only for its own %s', async change => {
+  const run = setup(), row = session('opencode', undefined)
+  const original = run.others.streams.open.bind(run.others.streams)
+  const forget = vi.spyOn(run.others.streams, 'forget')
+  vi.spyOn(run.others.streams, 'open').mockImplementationOnce(async (session, options) => {
+    const opened = await original(session, options)
+    if (change === 'removed') bindings.delete(row.agentId)
+    else row.identityHold = 'store unavailable'
+    if (change === 'binding') row.boundAt = 99
+    return { ...opened!, frames: change === 'removed' ? [] : [{ serial: 1, events: [], turn: opened!.turn, hold: 'store unavailable' }] }
+  })
+  await run.attach.attachSession(row)
+  expect(forget).toHaveBeenCalledTimes(change === 'store-hold' ? 0 : 1)
   run.attach.forget(row.sessionId)
 })

@@ -11,6 +11,12 @@ export function isOtherEngine(engine: string): engine is OtherEngine { return (O
 
 /** Their worker: one process for all fourteen, on demand (harnessd/services.ts `SERVICE_HOSTS`). */
 export const OTHER_ENGINES_SERVICE = 'engine-others'
+/** These optional-reader failures are named states, shown by every existing agent view. */
+export const OTHER_ENGINE_STATES = {
+  unavailable: 'Live view is waiting for its engine reader. The terminal and Stop still work.',
+  lost: 'Live view fell behind. Rebuilding from history; check its history for missed events.',
+  rewritten: 'Transcript changed while its reader was unavailable. Rebuilding the live view; check its history for missed events.',
+} as const
 
 /** The engines that keep a conversation in a database rather than a transcript file: their history is read from it. */
 export const STORE_ENGINES = ['opencode', 'kilo', 'hermes', 'devin', 'openclaw'] as const satisfies readonly OtherEngine[]

@@ -10,11 +10,12 @@
  */
 import type { LiveEvent } from '../kit/events.js'
 import type { ProfileEvidence } from '../facets/runtime.js'
-import { liveEvent } from './liveProtocol.js'
+import { liveEvent, liveStamp, type LiveStamp } from './liveProtocol.js'
 import { record } from './protocol.js'
 
 export const STREAM_VERSION = 1
 export const STREAM_OPEN = 'engine_stream_open'
+export const STREAM_STORE = 'engine_stream_store'
 export const STREAM_OP = 'engine_stream_op'
 export const STREAMS_WAIT = 'engine_streams_wait'
 /** How long the worker holds a wait with nothing to say: the core's whole cost at rest is one request this often. */
@@ -31,6 +32,9 @@ export const STREAM_KEPT_BYTES = 32 * 1024 * 1024
 export const STREAM_EVIDENCE = 256
 /** The streams a worker holds at most, every agent of theirs on the machine. */
 export const STREAMS_MAX = 512
+/** Collection bounds apply even to replies reassembled from parts. */
+export const STREAM_FRAMES_MAX = 65_536
+export const STREAM_EVENTS_MAX = 65_536
 
 export type StreamOp = 'close' | 'abort' | 'cancel' | 'open' | 'drain' | 'tail' | 'task' | 'pane' | 'release' | 'forget'
 
@@ -54,6 +58,7 @@ export interface StreamFrame {
   rewritten?: true
   /** Where the transcript's next record starts, once this frame is taken: a stream opened again resumes there. */
   offset?: number
+  stamp?: LiveStamp | null
   turn: StreamTurn
 }
 
@@ -76,6 +81,7 @@ export interface StreamOpened {
   /** Its fold cannot know that a turn ended: the core reads the pane (agy's). */
   paneCheck?: true
   offset?: number
+  stamp?: LiveStamp | null
 }
 
 const text = (value: unknown, max = 1024 * 1024): value is string => typeof value === 'string' && value.length <= max
@@ -96,22 +102,45 @@ export function profileEvidence(value: unknown): value is ProfileEvidence {
 
 const evidenceList = (value: unknown, max: number): boolean => Array.isArray(value) && value.length <= max && value.every(profileEvidence)
 
+export function streamEvents(value: unknown): value is LiveEvent[] {
+  return Array.isArray(value) && value.length <= STREAM_EVENTS_MAX && value.every(liveEvent)
+}
+
 export function streamFrame(value: unknown): value is StreamFrame {
-  return record(value) && count(value.serial) && value.serial > 0 && Array.isArray(value.events) && value.events.every(liveEvent)
+  return record(value) && count(value.serial) && value.serial > 0 && streamEvents(value.events)
     && (value.replay === undefined || value.replay === true)
     && (value.failure === undefined || text(value.failure, 4096)) && (value.failureSummary === undefined || text(value.failureSummary, 4096))
     && (value.evidence === undefined || evidenceList(value.evidence, STREAM_EVIDENCE))
     && (value.hold === undefined || value.hold === null || text(value.hold, 512))
     && (value.rewritten === undefined || value.rewritten === true)
-    && (value.offset === undefined || count(value.offset)) && streamTurn(value.turn)
+    && (value.offset === undefined || count(value.offset)) && (value.stamp === undefined || liveStamp(value.stamp)) && streamTurn(value.turn)
 }
 
 export function streamOpened(value: unknown): value is StreamOpened {
   return record(value) && streamTurn(value.turn) && typeof value.historyTurnOpen === 'boolean'
     && (value.lastStarted === null || (liveEvent(value.lastStarted) && value.lastStarted.type === 'turn_started'))
     && (value.lastEnded === null || (record(value.lastEnded) && typeof value.lastEnded.aborted === 'boolean'))
-    && Array.isArray(value.initial) && value.initial.every(liveEvent) && count(value.lines)
+    && streamEvents(value.initial) && count(value.lines)
     && evidenceList(value.evidence, STREAM_EVIDENCE) && typeof value.abandoned === 'boolean'
-    && Array.isArray(value.frames) && value.frames.every(streamFrame)
-    && (value.paneCheck === undefined || value.paneCheck === true) && (value.offset === undefined || count(value.offset))
+    && Array.isArray(value.frames) && value.frames.length <= STREAM_FRAMES_MAX && value.frames.every(streamFrame)
+    && (value.paneCheck === undefined || value.paneCheck === true) && (value.offset === undefined || count(value.offset)) && (value.stamp === undefined || liveStamp(value.stamp))
+}
+
+/** Count decoded bytes before traversing event payloads, including fields their schemas do not use. */
+export function boundedStreamReply(value: unknown, limit = 64 * 1024 * 1024): boolean {
+  let bytes = 0, nodes = 0
+  const visit = (item: unknown, depth: number): boolean => {
+    if (++nodes > 1_000_000 || depth > 32) return false
+    if (typeof item === 'string') bytes += Buffer.byteLength(item)
+    else if (item !== null && typeof item === 'object') {
+      const entries = Object.entries(item)
+      if (entries.length > STREAM_FRAMES_MAX) return false
+      for (const [key, child] of entries) {
+        bytes += Buffer.byteLength(key) + 4
+        if (bytes > limit || !visit(child, depth + 1)) return false
+      }
+    } else bytes += 8
+    return bytes <= limit
+  }
+  return visit(value, 0)
 }

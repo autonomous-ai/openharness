@@ -16,6 +16,7 @@ import { OTHER_ENGINES_SERVICE } from '../otherEngines.js'
 import { createReplyParts, otherReaderRequests } from './readerRequests.js'
 import { otherStreamRequests } from './streamRequests.js'
 import { createOtherStreams } from './streams.js'
+import { STREAM_OPEN, STREAM_VERSION } from '../worker/otherStreamProtocol.js'
 
 export interface OtherEnginesOptions extends ServiceProcessOptions {
   run?: typeof runServiceProcess
@@ -32,16 +33,38 @@ const THE_CORE = { owner: true, local: true } as const
 export function otherEngineRequests(watcher: Watcher = new Watcher()) {
   const parts = createReplyParts()
   const streams = createOtherStreams({ watcher })
-  const requests: ServiceRequests = { ...otherReaderRequests({ parts }), ...otherStreamRequests({ streams, parts }) }
+  const handlers: ServiceRequests = { ...otherReaderRequests({ parts }), ...otherStreamRequests({ streams, parts }) }
+  const active = new Set<AbortController>()
+  let stopping: Promise<void> = Promise.resolve()
+  const requests: ServiceRequests = Object.fromEntries(Object.entries(handlers).map(([name, handle]) => [name,
+    async (payload, asker, signal) => {
+      const closed = new AbortController()
+      const abort = () => closed.abort()
+      if (signal?.aborted) abort()
+      signal?.addEventListener('abort', abort, { once: true })
+      active.add(closed)
+      try {
+        // A reconnect may arrive while the old watcher is still closing its filesystem handles.
+        if (name === STREAM_OPEN) await stopping
+        if (closed.signal.aborted) return { version: STREAM_VERSION, error: 'ENGINE_UNAVAILABLE' }
+        return await handle(payload, asker, closed.signal)
+      } finally { active.delete(closed); signal?.removeEventListener('abort', abort) }
+    },
+  ]))
   return {
     requests,
-    clear: () => streams.clear(),
+    clear: () => {
+      for (const controller of active) controller.abort()
+      streams.clear()
+      stopping = watcher.stop()
+    },
     call(type: string, payload: Record<string, unknown>, waitMs: number): Promise<Record<string, unknown>> {
       const handle = Object.hasOwn(requests, type) ? requests[type] : undefined
       if (!handle) return Promise.resolve({ error: 'UNKNOWN_REQUEST' })
+      const closed = new AbortController()
       let timer: ReturnType<typeof setTimeout> | undefined
-      const late = new Promise<Record<string, unknown>>((resolve) => { timer = setTimeout(() => resolve({ error: 'SERVICE_UNAVAILABLE' }), waitMs) })
-      return Promise.race([Promise.resolve().then(() => handle(payload, THE_CORE)).then(
+      const late = new Promise<Record<string, unknown>>((resolve) => { timer = setTimeout(() => { closed.abort(); resolve({ error: 'SERVICE_UNAVAILABLE' }) }, waitMs) })
+      return Promise.race([Promise.resolve().then(() => handle(payload, THE_CORE, closed.signal)).then(
         (answer) => answer as Record<string, unknown>, () => ({ error: 'SERVICE_FAILED' })), late]).finally(() => clearTimeout(timer))
     },
   }

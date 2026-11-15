@@ -22,6 +22,13 @@ function session(grid: RegisteredSession['grid'], codexHome: RegisteredSession['
 const assignment = { baseUrl: 'https://grid.autonomous.ai/grid-abc/relay', model: 'DeepSeek-V4-Flash-0731' }
 
 describe('agentFrame', () => {
+  it.each(['Live view is waiting for its engine reader. The terminal and Stop still work.',
+    'Transcript changed while its reader was unavailable. Rebuilding the live view; check its history for missed events.'])
+  ('shows the reader state to the person: %s', async identityHold => {
+    const row = { ...session(null), engine: 'pi' as const, identityHold }
+    expect(await agentFrame(row, { selectedModel: null, terminalAvailable: true })).toMatchObject({ namedState: identityHold, status: 'active', terminal: { available: true } })
+  })
+
   it('exposes an unavailable identity reason while retaining the current session', async () => {
     const row = { ...session(null), identityHold: 'Waiting for the saved session homes.' }
     expect(await agentFrame(row, { selectedModel: null, terminalAvailable: true }))

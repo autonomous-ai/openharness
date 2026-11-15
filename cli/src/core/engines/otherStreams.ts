@@ -8,15 +8,17 @@
  * tail from its acknowledged byte, the turn as the core holds it (docs/design/2026-11-15-core-plan/engines.md).
  */
 import { randomUUID } from 'node:crypto'
+import { isAbsolute } from 'node:path'
+import type { LiveStamp } from '../../engines/worker/liveProtocol.js'
 import type { LiveEvent } from '../../engines/kit/events.js'
 import {
-  streamFrame, streamOpened, streamTurn, STREAM_OP, STREAM_OP_WAIT_MS, STREAM_OPEN, STREAM_OPEN_WAIT_MS, STREAM_VERSION, STREAMS_WAIT,
-  STREAMS_WAIT_MS, type StreamFrame, type StreamOp, type StreamOpened, type StreamTurn,
+  boundedStreamReply, streamFrame, streamOpened, streamTurn, STREAM_OP, STREAM_OP_WAIT_MS, STREAM_OPEN, STREAM_STORE, STREAM_OPEN_WAIT_MS, STREAM_VERSION, STREAMS_WAIT,
+  STREAMS_WAIT_MS, STREAMS_MAX, STREAM_FRAMES_MAX, streamEvents, type StreamFrame, type StreamOp, type StreamOpened, type StreamTurn,
 } from '../../engines/worker/otherStreamProtocol.js'
-import { liveEvent } from '../../engines/worker/liveProtocol.js'
 import { READER_PART, READER_VERSION, record } from '../../engines/worker/protocol.js'
 import { sid } from '../../lib/log.js'
 import type { RegisteredSession } from '../../lib/registry.js'
+import { transcriptReadIdentity } from '../transcripts/readIdentity.js'
 import { joinParts } from './readers.js'
 
 export interface OtherStreamsDeps {
@@ -27,6 +29,8 @@ export interface OtherStreamsDeps {
   frame(session: RegisteredSession, frame: StreamFrame): void
   /** Attach the session again from its transcript: rewritten in place, or given up by the worker. */
   reattach(session: RegisteredSession): void
+  /** The live view is waiting on its reader; panes and Stop remain usable. */
+  held?(session: RegisteredSession, held: boolean, rewritten?: boolean | 'lost'): void
   log?(line: string): void
   /** How long a failed wait or open waits before it is tried again. */
   retryMs?: number
@@ -57,6 +61,7 @@ interface Handle extends OtherStream {
   applied: number
   turn: StreamTurn
   offset: number | undefined
+  stamp: LiveStamp | null | undefined
   /** The worker that holds the stream is gone: nothing is asked of it until it is opened again. */
   orphan: boolean
   /** A close is on its way: what an older frame says of the turn does not open it again. */
@@ -71,30 +76,45 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
   const retryMs = deps.retryMs ?? 1_000
   const handles = new Map<string, Handle>()
   const byToken = new Map<string, Handle>()
+  const pending = new Map<string, string>()
   /** Sessions whose open was not answered: attached again once the worker is there. */
   const unopened = new Map<string, ReturnType<typeof setTimeout>>()
+  const attempts = new Map<string, number>()
   let connected = true
   /** One request, its answer put back together when it came in parts, all within the request's own wait. */
   const call = async (type: string, payload: Record<string, unknown>, waitMs: number): Promise<Record<string, unknown>> => {
     const deadline = performance.now() + waitMs
     const first = await deps.call(type, payload, waitMs)
-    if (first.part === undefined) return first
+    if (first.part === undefined) {
+      if (!boundedStreamReply(first)) throw new Error('ENGINE_INVALID_REPLY')
+      return first
+    }
     return joinParts(first, async (offset) => {
       const left = Math.ceil(deadline - performance.now())
       if (left <= 0) throw new Error('ENGINE_UNAVAILABLE')
       return deps.call(READER_PART, { version: READER_VERSION, part: first.part, offset }, left)
     })
   }
+  const ignored = () => undefined
+  const forgetToken = (token: string): void => {
+    void deps.call(STREAM_OP, { version: STREAM_VERSION, token, op: 'forget' }, STREAM_OP_WAIT_MS).catch(ignored)
+  }
   let generation = 0
   let waiting = false
   let stopped = false
+  let endBackoff: (() => void) | undefined
 
-  const apply = (handle: Handle, frames: readonly StreamFrame[]): void => {
+  const apply = (handle: Handle, frames: readonly StreamFrame[]): boolean => {
     for (const frame of frames) {
       if (frame.serial <= handle.applied || byToken.get(handle.token) !== handle) continue
+      if (frame.serial !== handle.applied + 1) {
+        log('[engine-others] live stream skipped a frame · attaching it again')
+        gone(handle)
+        return false
+      }
       handle.applied = frame.serial
-      if (frame.offset !== undefined) handle.offset = frame.offset
-      if (!handle.closing) handle.turn = frame.turn
+      if (frame.offset !== undefined) { handle.offset = frame.offset; handle.stamp = frame.stamp }
+      if (!handle.closing || frame.turn.identity !== handle.turn.identity) handle.turn = frame.turn
       handle.quietUntil = 0
       const session = deps.bySession(handle.sessionId)
       if (session && session.engine === handle.engine) {
@@ -102,9 +122,10 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
           log(`[watcher] ${sid(handle.sessionId)} transcript rewritten in place — attaching it again from its end`)
           deps.reattach(session)
         }
-        try { deps.frame(session, frame) } catch (error) { log(`[engine-others] ${sid(handle.sessionId)} frame failed · ${error instanceof Error ? error.message : error}`) }
+        try { deps.frame(session, frame) } catch { log(`[engine-others] ${sid(handle.sessionId)} frame could not be applied`); unavailable(session) }
       }
     }
+    return true
   }
   /** The answer's own checks: its version, its error, and only what an answer of the kind may hold. */
   const answerOf = (reply: Record<string, unknown>): Record<string, unknown> | null =>
@@ -112,66 +133,89 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
 
   const op = async (handle: Handle, kind: StreamOp, data: Record<string, unknown> = {}): Promise<Record<string, unknown> | null> => {
     if (handle.orphan || stopped) return null
-    const token = handle.token, at = generation
+    const token = handle.token, at = generation, applied = handle.applied
     let reply: Record<string, unknown>
     try { reply = await call(STREAM_OP, { version: STREAM_VERSION, token, op: kind, ...data }, STREAM_OP_WAIT_MS) } catch { return null }
     // A reconnect reuses the handle, but no result from its old connection belongs to the new stream.
     if (stopped || at !== generation || handle.token !== token || byToken.get(token) !== handle) return null
     const answer = answerOf(reply)
     if (!answer || !Object.keys(answer).every(key => ANSWER_KEYS.includes(key)) || !Array.isArray(answer.frames)
-      || !answer.frames.every(streamFrame) || (answer.turn !== undefined && !streamTurn(answer.turn))
-      || (answer.events !== undefined && !(Array.isArray(answer.events) && answer.events.every(liveEvent)))) {
+      || answer.frames.length > STREAM_FRAMES_MAX || !answer.frames.every(streamFrame) || !streamTurn(answer.turn)
+      || (['close', 'abort', 'cancel', 'open'].includes(kind) ? !streamEvents(answer.events) : answer.events !== undefined && !streamEvents(answer.events))) {
       if (reply.error === 'ENGINE_STREAM_GONE') gone(handle)
       return null
     }
-    apply(handle, answer.frames)
-    if (answer.turn && byToken.get(handle.token) === handle) handle.turn = answer.turn as StreamTurn
+    if (!apply(handle, answer.frames)) return null
+    const last = (answer.frames as StreamFrame[]).at(-1)?.serial ?? applied
+    if (handle.applied <= last && !(handle.closing && answer.turn.identity === data.identity)) handle.turn = answer.turn
     return answer
   }
 
   /** The worker lost a stream the core still follows: the session is attached again, from what is on disk. */
   const gone = (handle: Handle): void => {
-    if (byToken.get(handle.token) !== handle) return
     byToken.delete(handle.token)
-    handles.delete(handle.sessionId)
+    forgetToken(handle.token)
+    handle.orphan = true
     const session = deps.bySession(handle.sessionId)
     log(`[engine-others] ${sid(handle.sessionId)} its live stream was given up by the worker · attaching it again`)
-    if (session) deps.reattach(session)
+    if (!session) { handles.delete(handle.sessionId); return }
+    deps.held?.(session, true, 'lost')
+    retryLater(session)
   }
 
   const handleOf = (session: RegisteredSession, token: string, opened: StreamOpened, store: string | null): Handle => {
     const handle: Handle = {
       engine: session.engine, sessionId: session.sessionId, store, token, applied: 0, turn: opened.turn,
-      offset: opened.offset, orphan: false, closing: 0, quietUntil: 0,
+      offset: opened.offset, stamp: opened.stamp, orphan: false, closing: 0, quietUntil: 0,
       get turnOpen() { return handle.turn.turnOpen },
       closeTurn(reason) {
         handle.turn = { ...handle.turn, turnOpen: false }
         handle.closing++
-        void op(handle, reason === 'cancel' ? 'cancel' : 'close').finally(() => { handle.closing-- })
+        void op(handle, reason === 'cancel' ? 'cancel' : 'close', { identity: handle.turn.identity }).finally(() => { handle.closing-- })
       },
     }
     return handle
   }
 
-  const opening = async (session: RegisteredSession, token: string, payload: Record<string, unknown>): Promise<StreamOpened | null> => {
+  const opening = async (session: RegisteredSession, token: string, payload: Record<string, unknown>, current: () => boolean): Promise<StreamOpened | null> => {
     let reply: Record<string, unknown>
     try { reply = await call(STREAM_OPEN, { version: STREAM_VERSION, token, ...payload }, STREAM_OPEN_WAIT_MS) } catch { reply = {} }
     const answer = answerOf(reply)
-    if (answer && streamOpened(answer)) return answer
+    if (current() && answer && streamOpened(answer)) return answer
     // Not answered, or not checkable: the worker may hold a stream nobody follows; it is told to forget it.
-    void deps.call(STREAM_OP, { version: STREAM_VERSION, token, op: 'forget' }, STREAM_OP_WAIT_MS).catch(() => undefined)
-    if (reply.error === undefined || reply.error === 'ENGINE_UNAVAILABLE' || reply.error === 'SERVICE_UNAVAILABLE') retryLater(session)
+    forgetToken(token)
+    if (current() && reply.error === 'ENGINE_TRANSCRIPT_CHANGED') {
+      log('[engine-others] transcript changed while its reader was unavailable · rebuilding history; missed live events cannot be recovered')
+      deps.held?.(session, true, true)
+      retryLater(session)
+    }
+    if (current() && (reply.error === undefined || reply.error === 'ENGINE_UNAVAILABLE' || reply.error === 'SERVICE_UNAVAILABLE')) {
+      unavailable(session)
+    }
     return null
   }
   const retryLater = (session: RegisteredSession): void => {
     if (stopped || unopened.has(session.sessionId)) return
+    const count = attempts.get(session.sessionId) ?? 0
+    if (count >= 5) { log('[engine-others] live reader unavailable after 5 retries · waiting for its next connection'); return }
+    if (!attempts.has(session.sessionId) && attempts.size >= STREAMS_MAX) { log('[engine-others] live retry limit reached'); return }
+    attempts.set(session.sessionId, count + 1)
     const timer = setTimeout(() => {
+      if (!connected) return
       unopened.delete(session.sessionId)
       const latest = deps.bySession(session.sessionId)
-      if (latest && latest.engine === session.engine && connected) deps.reattach(latest)
-    }, retryMs)
+      if (latest && latest.engine === session.engine) {
+        deps.held?.(latest, false)
+        deps.reattach(deps.bySession(session.sessionId)!)
+      }
+    }, retryMs * 2 ** count)
     timer.unref?.()
     unopened.set(session.sessionId, timer)
+  }
+
+  const unavailable = (session: RegisteredSession): void => {
+    deps.held?.(session, true)
+    retryLater(session)
   }
 
   /** The one wait for what every stream made: running while any is followed, and the worker is there. */
@@ -179,6 +223,7 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
     if (waiting || stopped || !connected || !byToken.size) return
     waiting = true
     const at = generation
+    let failed = 0
     try {
       while (!stopped && connected && at === generation && byToken.size) {
         const acks = Object.fromEntries([...byToken.values()].map(handle => [handle.token, handle.applied]))
@@ -186,15 +231,36 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
         try { reply = await call(STREAMS_WAIT, { version: STREAM_VERSION, acks }, STREAMS_WAIT_MS + 10_000) } catch { reply = {} }
         if (stopped || at !== generation) return
         const answer = answerOf(reply)
-        if (!answer || !Array.isArray(answer.pages) || !Array.isArray(answer.lost)) {
-          // A worker that cannot answer is waited for, never asked in a loop.
-          await new Promise(resolve => setTimeout(resolve, retryMs).unref?.())
+        if (!answer || !Array.isArray(answer.pages) || answer.pages.length > STREAMS_MAX || !Array.isArray(answer.lost) || answer.lost.length > STREAMS_MAX) {
+          log('[engine-others] live wait unavailable or invalid · delivery held')
+          for (const handle of byToken.values()) {
+            const session = deps.bySession(handle.sessionId)
+            if (session) deps.held?.(session, true)
+          }
+          if (++failed === 5) return
+          await new Promise<void>(resolve => {
+            const timer = setTimeout(() => { endBackoff = undefined; resolve() }, retryMs * 2 ** (failed - 1))
+            timer.unref?.()
+            endBackoff = () => { clearTimeout(timer); endBackoff = undefined; resolve() }
+          })
           continue
         }
+        failed = 0
         for (const page of answer.pages) {
-          if (!record(page) || typeof page.token !== 'string' || !Array.isArray(page.frames) || !page.frames.every(streamFrame)) continue
+          if (!record(page) || typeof page.token !== 'string') continue
+          if (!Array.isArray(page.frames) || page.frames.length > STREAM_FRAMES_MAX || !page.frames.every(streamFrame)) {
+            const handle = byToken.get(page.token)
+            const session = handle && deps.bySession(handle.sessionId)
+            if (session) unavailable(session)
+            log('[engine-others] live page invalid · delivery held')
+            continue
+          }
           const handle = byToken.get(page.token)
-          if (handle) apply(handle, page.frames)
+          if (handle) {
+            const session = deps.bySession(handle.sessionId)
+            if (session) deps.held?.(session, false)
+            apply(handle, page.frames)
+          }
         }
         for (const token of answer.lost) {
           const handle = typeof token === 'string' ? byToken.get(token) : undefined
@@ -213,24 +279,53 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
   }
   const forgetHandle = (handle: Handle): void => {
     byToken.delete(handle.token)
-    if (!handle.orphan) void deps.call(STREAM_OP, { version: STREAM_VERSION, token: handle.token, op: 'forget' }, STREAM_OP_WAIT_MS).catch(() => undefined)
+    if (!handle.orphan) forgetToken(handle.token)
   }
 
   return {
+    unavailable,
+    /** Location is read by the worker; no answer is unavailable, never evidence of no store. */
+    async locateStore(session: Pick<RegisteredSession, 'sessionId' | 'engine' | 'hermesHome' | 'openclawStateDir' | 'processIdentity'>): Promise<{ store: string | null; home?: string }> {
+      const reply = await call(STREAM_STORE, { version: STREAM_VERSION, session: {
+        sessionId: session.sessionId, engine: session.engine, hermesHome: session.hermesHome,
+        openclawStateDir: session.openclawStateDir, pid: session.processIdentity?.pid ?? 0,
+      } }, STREAM_OP_WAIT_MS)
+      const answer = answerOf(reply)
+      const path = (value: unknown): value is string => typeof value === 'string' && value.length <= 32_768 && !value.includes('\0') && isAbsolute(value)
+      if (!answer || !(answer.store === null || path(answer.store)) || !(answer.home === undefined || path(answer.home))) throw new Error('ENGINE_UNAVAILABLE')
+      return { store: answer.store, ...(answer.home === undefined ? {} : { home: answer.home as string }) }
+    },
     /** Opens the session's stream: its fold, and the tail or the poll after it. Null when the worker did not answer. */
     async open(session: RegisteredSession, options: OtherStreamOpen): Promise<StreamOpened | null> {
+      if (stopped) return null
+      if (!handles.has(session.sessionId) && !pending.has(session.sessionId) && handles.size + pending.size >= STREAMS_MAX) {
+        log('[engine-others] live stream limit reached')
+        unavailable(session)
+        return null
+      }
       clearTimeout(unopened.get(session.sessionId))
       unopened.delete(session.sessionId)
-      const token = randomUUID()
+      const token = randomUUID(), at = generation
+      const binding = { ...session }, identity = transcriptReadIdentity(session)
+      pending.set(session.sessionId, token)
+      const current = (): boolean => {
+        const latest = deps.bySession(binding.sessionId)
+        return !stopped && at === generation && pending.get(binding.sessionId) === token && !!latest
+          && transcriptReadIdentity(latest) === identity
+      }
       const opened = await opening(session, token, { live: options.live, abandon: options.abandon, held: options.held,
-        session: { agentId: session.agentId, sessionId: session.sessionId, engine: session.engine, transcriptPath: session.transcriptPath ?? null, store: options.store } })
-      if (!opened || stopped) return null
+        session: { agentId: session.agentId, sessionId: session.sessionId, engine: session.engine, transcriptPath: session.transcriptPath ?? null, store: options.store } }, current)
+      const accepted = current()
+      if (pending.get(session.sessionId) === token) pending.delete(session.sessionId)
+      if (!opened || !accepted) return null
+      attempts.delete(session.sessionId)
       const handle = handleOf(session, token, opened, options.store)
       const previous = handles.get(session.sessionId)
       handles.set(session.sessionId, handle)
       byToken.set(token, handle)
       if (previous) forgetHandle(previous)
-      apply(handle, opened.frames)
+      deps.held?.(session, false)
+      if (!apply(handle, opened.frames)) return null
       void wait()
       return opened
     },
@@ -242,7 +337,7 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
       const handle = handles.get(sessionId)
       if (!handle) return []
       const identity = handle.turn.identity
-      const answer = await op(handle, how.abort ? 'abort' : 'close', { error: !!how.error, stop: !!how.stop })
+      const answer = await op(handle, how.abort ? 'abort' : 'close', { identity, error: !!how.error, stop: !!how.stop })
       if (answer) return answer.events as LiveEvent[]
       if (handles.get(sessionId) !== handle || handle.turn.identity !== identity || !closedHere(handle)) return []
       return [{ type: 'turn_ended', payload: how.abort || how.error ? { aborted: true } : {} }]
@@ -262,7 +357,7 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
     },
     async drainAll(): Promise<void> {
       if (!handles.size || !connected || stopped) return
-      await deps.call(STREAM_OP, { version: STREAM_VERSION, op: 'drain' }, STREAM_OP_WAIT_MS).catch(() => undefined)
+      await deps.call(STREAM_OP, { version: STREAM_VERSION, op: 'drain' }, STREAM_OP_WAIT_MS).catch(ignored)
     },
     async tail(sessionId: string, path: string, fromStart: boolean): Promise<void> {
       const handle = handles.get(sessionId)
@@ -299,8 +394,12 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
       if (handle) void op(handle, 'release')
     },
     forget(sessionId: string): void {
+      attempts.delete(sessionId)
       clearTimeout(unopened.get(sessionId))
       unopened.delete(sessionId)
+      const token = pending.get(sessionId)
+      pending.delete(sessionId)
+      if (token) forgetToken(token)
       const handle = handles.get(sessionId)
       if (!handle) return
       handles.delete(sessionId)
@@ -309,6 +408,7 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
     connected(): void {
       if (connected || stopped) return
       connected = true
+      attempts.clear()
       generation++
       waiting = false
       const at = generation
@@ -317,41 +417,51 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
       for (const handle of orphans) void (async () => {
         const session = deps.bySession(handle.sessionId)
         if (!session || session.engine !== handle.engine || handles.get(handle.sessionId) !== handle) return
-        const token = randomUUID()
+        const token = randomUUID(), identity = transcriptReadIdentity(session)
         const opened = await opening(session, token, { live: false, abandon: false, held: false,
-          resume: { turnOpen: handle.turnOpen, ...(handle.offset !== undefined ? { offset: handle.offset } : {}) },
-          session: { agentId: session.agentId, sessionId: session.sessionId, engine: session.engine, transcriptPath: session.transcriptPath ?? null, store: handle.store } })
+          resume: { turnOpen: handle.turnOpen, ...(handle.offset !== undefined ? { offset: handle.offset, ...(handle.stamp !== undefined ? { stamp: handle.stamp } : {}) } : {}) },
+          session: { agentId: session.agentId, sessionId: session.sessionId, engine: session.engine, transcriptPath: session.transcriptPath ?? null, store: handle.store } }, () => !stopped && at === generation && handles.get(handle.sessionId) === handle && transcriptReadIdentity(deps.bySession(handle.sessionId)) === identity)
         if (!opened) return
-        if (stopped || at !== generation || handles.get(handle.sessionId) !== handle) {
-          void deps.call(STREAM_OP, { version: STREAM_VERSION, token, op: 'forget' }, STREAM_OP_WAIT_MS).catch(() => undefined)
-          return
-        }
         byToken.delete(handle.token)
-        Object.assign(handle, { token, applied: 0, orphan: false, turn: opened.turn, offset: opened.offset ?? handle.offset })
+        Object.assign(handle, { token, applied: 0, orphan: false, turn: opened.turn, offset: opened.offset ?? handle.offset, stamp: opened.stamp })
         byToken.set(token, handle)
-        apply(handle, opened.frames)
+        deps.held?.(session, false)
+        if (!apply(handle, opened.frames)) return
         void wait()
       })()
       for (const [sessionId, timer] of unopened) {
         clearTimeout(timer)
         unopened.delete(sessionId)
         const session = deps.bySession(sessionId)
-        if (session) deps.reattach(session)
+        if (session) { deps.held?.(session, false); deps.reattach(deps.bySession(sessionId)!) }
       }
       void wait()
     },
     disconnected(): void {
       if (!connected) return
       connected = false
+      endBackoff?.()
       generation++
       waiting = false
+      for (const sessionId of pending.keys()) {
+        const session = deps.bySession(sessionId)
+        if (session) unavailable(session)
+      }
       if (!handles.size) return
-      for (const handle of handles.values()) handle.orphan = true
+      for (const handle of handles.values()) {
+        handle.orphan = true
+        const session = deps.bySession(handle.sessionId)
+        if (session) deps.held?.(session, true)
+      }
       log(`[engine-others] the other engines' worker is gone · ${handles.size} conversation(s) held at what the core took, their panes running on`)
     },
     stop(): void {
       stopped = true
+      endBackoff?.()
       generation++
+      for (const token of pending.values()) forgetToken(token)
+      pending.clear()
+      attempts.clear()
       for (const timer of unopened.values()) clearTimeout(timer)
       unopened.clear()
       for (const handle of handles.values()) forgetHandle(handle)

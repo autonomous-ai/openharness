@@ -12,8 +12,10 @@
  *
  * Each engine's code is loaded on its first stream (engines/inProcess.ts): one nobody runs costs this process nothing.
  */
+import { stampOf, sameStamp, stampAt } from '../worker/liveFiles.js'
+import type { LiveStamp } from '../worker/liveProtocol.js'
 import { access, open as openFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { join } from 'node:path'
 import type { ProfileEvidence } from '../facets/runtime.js'
 import type { LiveEvent } from '../kit/events.js'
 import { foldTranscript } from '../kit/transcriptFold.js'
@@ -21,9 +23,12 @@ import { loadEngine, type InProcessModules } from '../inProcess.js'
 import { PENDING_TASKS_FILE } from '../cursor/contract.js'
 import { OPENCLAW_STATES } from '../openclaw/contract.js'
 import { keepsStore, type OtherEngine } from '../otherEngines.js'
+import { AttachTracker } from '../../lib/attachTracker.js'
+import { READER_IN_FLIGHT } from '../worker/protocol.js'
+import { LIVE_CACHE_BYTES } from '../worker/liveProtocol.js'
 import { env } from '../../config/env.js'
 import { sid } from '../../lib/log.js'
-import { tailFileCapped, WHOLE_READ_CAP_BYTES } from '../../lib/transcriptTail.js'
+import { WHOLE_READ_CAP_BYTES } from '../../lib/transcriptTail.js'
 import type { HistoryEvent, LineEvent, RewrittenEvent, Watcher } from '../../watcher/watcher.js'
 import { STREAM_EVIDENCE, STREAM_KEPT_BYTES, STREAMS_MAX, type StreamFrame, type StreamOpened, type StreamTurn } from '../worker/otherStreamProtocol.js'
 
@@ -48,7 +53,7 @@ export interface StreamOpen {
   held: boolean
   /** Opened again after this process restarted: nothing replays, the tail goes on from where the core took it, and
    *  the turn is put back as the core holds it. */
-  resume?: { turnOpen: boolean; offset?: number }
+  resume?: { turnOpen: boolean; offset?: number; stamp?: LiveStamp | null }
 }
 
 type FileEngine = Exclude<OtherEngine, 'opencode' | 'kilo' | 'hermes' | 'devin' | 'openclaw'>
@@ -82,14 +87,16 @@ class Stream {
   outbox: Array<{ frame: StreamFrame; bytes: number }> = []
   kept = 0
   held: boolean
+  retired = false
   /** Where the transcript's next unread record starts, as the frames taken so far leave it. */
   offset: number | undefined
+  stamp: LiveStamp | null | undefined
   normalizer: Normalizer | null = null
   reader: StoreReader | null = null
   private lastTurnOpen = false
 
   constructor(readonly token: string, readonly session: StreamSession, readonly code: Code, held: boolean,
-    private readonly made: (stream: Stream) => void) {
+    private readonly made: (stream: Stream, added: number) => void) {
     this.held = held
   }
 
@@ -104,12 +111,13 @@ class Stream {
   }
 
   push(parts: Omit<StreamFrame, 'serial' | 'turn'>): void {
+    if (this.retired) return
     this.moved(parts.events)
     const frame: StreamFrame = { serial: ++this.serial, ...parts, turn: this.turn() }
-    const bytes = JSON.stringify(frame).length
+    const bytes = Buffer.byteLength(JSON.stringify(frame))
     this.outbox.push({ frame, bytes })
     this.kept += bytes
-    this.made(this)
+    this.made(this, bytes)
   }
 
   /** What the core has taken. */
@@ -128,6 +136,8 @@ export interface OtherStreamsDeps {
   warn?: (line: string) => void
   /** Where Cursor's hook queues Tasks while no daemon runs (engines/cursor/contract.ts). */
   dataDir?: string
+  /** A smaller budget for deterministic pressure tests; production uses the shared live-cache bound. */
+  limits?: { totalBytes?: number; foldBytes?: number }
 }
 
 /** One record's profile evidence, read by its engine's reader (engines/<engine>/profileReader.ts `transcriptEvidence`). */
@@ -148,15 +158,29 @@ function keepEvidence(list: ProfileEvidence[], next: ProfileEvidence | null): vo
 }
 
 /** The lines of a transcript up to `end`, the newest `cap` bytes of them: what a stream opened again folds. */
-async function linesTo(path: string, end: number, cap: number): Promise<string[]> {
-  const start = Math.max(0, end - cap)
+async function readFold(path: string, cap: number, end?: number, whole = false): Promise<{ lines: string[]; offset: number; stamp: LiveStamp | null }> {
   const handle = await openFile(path, 'r')
   try {
+    const info = await handle.stat(), size = info.size
+    if (whole && size > cap) throw new Error('ENGINE_TRANSCRIPT_TOO_LARGE')
+    end = Math.min(end ?? size, size)
+    const start = Math.max(0, end - cap)
     const buffer = Buffer.alloc(end - start)
     const { bytesRead } = await handle.read(buffer, 0, buffer.length, start)
-    const lines = buffer.subarray(0, bytesRead).toString('utf8').split('\n')
+    // A partial final record belongs to the tail, which will read it again after the writer completes it.
+    const last = buffer.subarray(0, bytesRead).lastIndexOf(10)
+    if (last < 0 && start > 0) throw new Error('ENGINE_TRANSCRIPT_RECORD_TOO_LARGE')
+    const offset = last < 0 ? 0 : start + last + 1
+    const lines = buffer.subarray(0, Math.max(0, last)).toString('utf8').split('\n')
     if (start > 0) lines.shift()
-    return lines.map(line => line.replace(/\r$/, '')).filter(line => line.trim())
+    const bytes = Math.min(offset, 512)
+    const first = Buffer.alloc(bytes), lastBytes = Buffer.alloc(bytes)
+    if (start === 0) buffer.copy(first, 0, 0, bytes)
+    else await handle.read(first, 0, bytes, 0)
+    if (offset - start >= bytes) buffer.copy(lastBytes, 0, offset - start - bytes, offset - start)
+    else await handle.read(lastBytes, 0, bytes, offset - bytes)
+    return { lines: lines.map(line => line.replace(/\r$/, '')).filter(line => line.trim()), offset,
+      stamp: offset ? stampOf(info.dev, info.ino, first, lastBytes) : null }
   } finally { await handle.close() }
 }
 
@@ -178,19 +202,33 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
   /** The stream each session's tail and hooks feed: the newest one opened for it. */
   const bySession = new Map<string, Stream>()
   const lost = new Set<string>()
+  const pending = new Map<string, string>()
+  const loading = new Set<string>()
+  const openings = new Map<string, Promise<void>>()
+  const cleanupTimers = new Set<ReturnType<typeof setTimeout>>()
+  let generation = 0
+  let queuedBytes = 0
+  const totalBytes = deps.limits?.totalBytes ?? LIVE_CACHE_BYTES
+  const admitted = new Set<string>(), cancelled = new Set<string>()
+  const folds = new AttachTracker<OtherEngine>({ concurrency: READER_IN_FLIGHT, onSlow: () => warn('[engine-others] LIVE_OPEN_SLOW') })
+  const lose = (token: string): void => {
+    lost.add(token)
+    if (lost.size > STREAMS_MAX) lost.delete(lost.values().next().value!)
+  }
   let wake: (() => void) | null = null
   let tailing = false
   const addSession: OtherStreamsDeps['watcher']['addSession'] = (session, options) => {
     if (!tailing) { tailing = true; deps.watcher.start?.() }
     return deps.watcher.addSession(session, options)
   }
-  const made = (stream: Stream): void => {
+  const made = (stream: Stream, added: number): void => {
+    queuedBytes += added
     // A core that takes nothing cannot make this process hold the session's whole conversation: the stream is given
     // up, and the core attaches the session again, from what is on disk.
-    if (stream.kept > STREAM_KEPT_BYTES) {
+    if (stream.kept > STREAM_KEPT_BYTES || queuedBytes > totalBytes) {
       warn(`[engine ${stream.engine}] ${sid(stream.session.sessionId)} live stream not taken by the core · ${Math.round(stream.kept / 1024 / 1024)} MB kept · given up`)
       forget(stream.token)
-      lost.add(stream.token)
+      lose(stream.token)
     }
     wake?.()
   }
@@ -209,8 +247,8 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
       drainTranscript: (sessionId) => deps.watcher.pollSession(sessionId),
       emit,
       register: (sessionId, hook, normalizer) => subagents.register(sessionId, hook, normalizer),
-      isActive: (sessionId) => bySession.get(sessionId)?.engine === 'cursor',
-      onError: (sessionId, error) => { warn(`[cursor] Task hook queue failed (${sessionId}): ${error instanceof Error ? error.message : error}`) },
+      isActive: (sessionId, normalizer) => bySession.get(sessionId)?.normalizer === normalizer,
+      onError: () => { warn('[cursor] CURSOR_TASK_QUEUE_FAILED') },
     })
     tasks = { subagents, queue }
     return tasks
@@ -243,11 +281,11 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
     // A single malformed line must never take the process down: contained per line, as the core's was.
     try {
       const read = ingest(stream, evt.text)
-      if (evt.next !== undefined) stream.offset = evt.next
+      if (evt.next !== undefined) { stream.offset = evt.next; stream.stamp = evt.stamp }
       stream.push({ events: read.events, ...(read.failure !== undefined ? { failure: read.failure, failureSummary: read.failureSummary } : {}),
-        ...(read.evidence ? { evidence: [read.evidence] } : {}), ...(stream.offset !== undefined ? { offset: stream.offset } : {}) })
-    } catch (error) {
-      warn(`[engine ${stream.engine}] line handler error (session ${evt.sessionId}): ${error instanceof Error ? error.message : error}`)
+        ...(read.evidence ? { evidence: [read.evidence] } : {}), ...(stream.offset !== undefined ? { offset: stream.offset, ...(stream.stamp !== undefined ? { stamp: stream.stamp } : {}) } : {}) })
+    } catch {
+      warn(`[engine ${stream.engine}] LIVE_RECORD_INVALID`)
     }
   })
   // A catch-up is history, an unfinished last turn included: one frame, which the core emits as a replay.
@@ -263,12 +301,12 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
         for (const event of read.events) events.push(event)
         keepEvidence(evidence, read.evidence ?? null)
         if (read.failure !== undefined) failure = { failure: read.failure, failureSummary: read.failureSummary }
-        if (evt.next !== undefined) stream.offset = evt.next
+        if (evt.next !== undefined) { stream.offset = evt.next; stream.stamp = evt.stamp }
       }
       stream.push({ events, replay: true, ...(failure ?? {}), ...(evidence.length ? { evidence } : {}),
-        ...(stream.offset !== undefined ? { offset: stream.offset } : {}) })
-    } catch (error) {
-      warn(`[engine ${stream.engine}] history handler error (session ${batch.sessionId}): ${error instanceof Error ? error.message : error}`)
+        ...(stream.offset !== undefined ? { offset: stream.offset, ...(stream.stamp !== undefined ? { stamp: stream.stamp } : {}) } : {}) })
+    } catch {
+      warn(`[engine ${stream.engine}] LIVE_HISTORY_INVALID`)
     }
   })
   // Rewritten in place with too much history to replay: its tail already starts at the new end, and the core attaches
@@ -283,7 +321,13 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
     const { session, code } = stream
     const dbPath = session.store!
     const onEvents = (events: LiveEvent[]): void => { stream.push({ events }) }
-    const fatal = (engine: string) => (error: Error): void => warn(`[${engine}] ${sid(session.sessionId)} ${error.message}`)
+    const fatal = (engine: string) => (): void => {
+      if (stream.retired) return
+      warn(`[${engine}] STORE_READER_FAILED`)
+      forget(stream.token)
+      lose(stream.token)
+      wake?.()
+    }
     switch (session.engine) {
       case 'opencode': return new (code as InProcessModules['opencode']).OpencodeReader({ dbPath, sessionId: session.sessionId, onEvents, onFatal: fatal('opencode') })
       case 'kilo': return new (code as InProcessModules['kilo']).KiloReader({ dbPath, sessionId: session.sessionId, onEvents, onFatal: fatal('kilo') })
@@ -313,8 +357,7 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
           },
           onRecovered: () => { stream.push({ events: [], hold: null }) },
           onSessionMissing: () => {
-            // The folder looked in is the person's to compare with the Gateway's: the local log, never the agent's row.
-            warn(`[openclaw] ${sid(session.agentId)} ${OPENCLAW_STATES.noSessions} · looked in ${dirname(dbPath)}`)
+            warn(`[openclaw] ${OPENCLAW_STATES.noSessions}`)
             stream.push({ events: [], hold: OPENCLAW_STATES.noSessions })
           },
           onSessionFound: () => { stream.push({ events: [], hold: null }) },
@@ -338,9 +381,14 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
   }
 
   function forget(token: string): void {
+    if (admitted.has(token)) cancelled.add(token)
+    loading.delete(token)
+    for (const [sessionId, opening] of pending) if (opening === token) pending.delete(sessionId)
     const stream = streams.get(token)
     if (!stream) return
     streams.delete(token)
+    stream.retired = true
+    queuedBytes -= stream.kept
     stream.reader?.stop()
     if (bySession.get(stream.session.sessionId) === stream) {
       bySession.delete(stream.session.sessionId)
@@ -356,17 +404,32 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
     await (stream.code as InProcessModules['cursor']).removeCursorPendingTasks(dataDir, stream.session.sessionId)
   }
 
-  async function open(ask: StreamOpen): Promise<StreamOpened | null> {
+  async function openNow(ask: StreamOpen): Promise<StreamOpened | null> {
     const { session } = ask
+    if (loading.size >= STREAMS_MAX) return null
+    const at = generation
+    pending.set(session.sessionId, ask.token)
+    loading.add(ask.token)
+    const current = () => at === generation && pending.get(session.sessionId) === ask.token && loading.has(ask.token)
     const code = await load(session.engine)
-    if (!code) return null
+    if (!code || !current()) { loading.delete(ask.token); return null }
+    const before = openings.get(session.sessionId)
+    let release!: () => void
+    const active = new Promise<void>(resolve => { release = resolve })
+    openings.set(session.sessionId, active)
+    if (before) await before
+    try {
+    if (!current()) return null
     if (streams.size >= STREAMS_MAX && !streams.has(ask.token)) {
       // The oldest stream gives way: the core opens it again should it still follow that session.
       const oldest = streams.keys().next().value!
       forget(oldest)
-      lost.add(oldest)
+      lose(oldest)
     }
     const replaced = bySession.get(session.sessionId)
+    // A fold and its tail replace the old pair together. No older tail feeds a half-folded parser.
+    if (replaced?.normalizer) await deps.watcher.removeSession(session.sessionId)
+    if (!current()) return null
     const stream = new Stream(ask.token, session, code, ask.held, made)
     streams.set(ask.token, stream)
     bySession.set(session.sessionId, stream)
@@ -386,9 +449,11 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
       // Opened again: what the store held is history, and only the turn's difference from the core's is said.
       const said = stream.outbox.length
       await reader.start()
+      if (!current()) { reader.stop(); forget(ask.token); return null }
       if (resume) {
-        const hydrated = stream.outbox.splice(said).map(entry => { stream.kept -= entry.bytes; return entry.frame })
+        const hydrated = stream.outbox.splice(said).map(entry => { stream.kept -= entry.bytes; queuedBytes -= entry.bytes; return entry.frame })
         const started = hydrated.flatMap(frame => frame.events).findLast(event => event.type === 'turn_started') ?? null
+        stream.serial = 0
         stream.revision++
         if (resume.turnOpen && !reader.turnOpen) stream.push({ events: [{ type: 'turn_ended', payload: {} }] })
         else if (!resume.turnOpen && reader.turnOpen && started) stream.push({ events: [started] })
@@ -398,14 +463,18 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
       const path = session.transcriptPath
       let read: string[] = []
       if (path) {
-        if (resume?.offset !== undefined && session.engine !== 'cursor') read = await linesTo(path, resume.offset, WHOLE_READ_CAP_BYTES).catch(() => [])
-        else {
-          // One huge transcript read whole would take the process down (the October 3 crash, on Codex): its oldest
-          // history past the cap is not folded; its last turns, which say whether it is working, are.
-          const capped = await tailFileCapped(path, WHOLE_READ_CAP_BYTES)
-          if (capped.truncated) warn(`[agent] ${sid(session.agentId)} transcript over ${Math.round(WHOLE_READ_CAP_BYTES / 1024 / 1024)} MB · folded from its newest ${Math.round(WHOLE_READ_CAP_BYTES / 1024 / 1024)} MB`)
-          read = capped.lines
+        const folded = await readFold(path, deps.limits?.foldBytes ?? WHOLE_READ_CAP_BYTES, resume?.offset, session.engine === 'cursor').catch((error: NodeJS.ErrnoException) => {
+          if (error.code === 'ENOENT') return { lines: [], offset: 0, stamp: null }
+          throw error
+        })
+        if (!current()) { forget(ask.token); return null }
+        if (resume?.stamp !== undefined && (resume.offset !== folded.offset || !sameStamp(resume.stamp, folded.stamp))) {
+          forget(ask.token)
+          throw new Error('ENGINE_TRANSCRIPT_CHANGED')
         }
+        read = folded.lines
+        stream.offset = folded.offset
+        stream.stamp = folded.stamp
       }
       lines = read.length
       for (const line of read) keepEvidence(evidence, evidenceOf(code, line))
@@ -429,29 +498,68 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
       if (session.engine === 'agy' && historyTurnOpen && !resume) paneCheck = true
       // Close the old engine's turn before starting the tail: the tail may deliver a new turn written after the resume
       // at once, and closing it afterward would abandon that new turn instead.
-      if (ask.abandon && historyTurnOpen && !resume) { normalizer.closeTurn(); abandoned = true }
+      if (ask.abandon && historyTurnOpen && !resume && !paneCheck) { normalizer.closeTurn(); abandoned = true }
       if (resume && normalizer.turnOpen && !resume.turnOpen) normalizer.closeTurn()
       stream.moved([])
       if (path) {
-        stream.offset = resume?.offset
         await addSession({ sessionId: session.sessionId, engine: session.engine, transcriptPath: path }, {
-          ...(resume?.offset !== undefined && session.engine !== 'cursor' ? { fromOffset: resume.offset } : {}),
-          ...(ask.held ? { deliveryAllowed: () => !stream.held } : {}),
+          fromOffset: stream.offset, stamp: stampOf, current, validate: async () => {
+            if (!sameStamp(stream.stamp!, await stampAt(path, stream.offset!))) throw new Error('ENGINE_TRANSCRIPT_CHANGED')
+          },
+          ...(session.engine === 'cursor' ? { cursorLines: read } : {}),
+          ...(session.engine === 'cursor' ? { deliveryAllowed: (size?: number) => {
+            if (!stream.retired && size !== undefined && size > (deps.limits?.foldBytes ?? WHOLE_READ_CAP_BYTES)) {
+              warn('[cursor] LIVE_TRANSCRIPT_TOO_LARGE')
+              forget(stream.token)
+              lose(stream.token)
+              wake?.()
+            }
+            return !stream.retired && !stream.held
+          } } : ask.held ? { deliveryAllowed: () => !stream.held } : {}),
         })
       }
+      if (!current()) { forget(ask.token); return null }
       if (resume && resume.turnOpen && !normalizer.turnOpen) stream.push({ events: [{ type: 'turn_ended', payload: {} }] })
       // The Tasks Cursor's hook queued while no daemon ran: followed once its session is.
       if (session.engine === 'cursor' && await cursorQueued(dataDir)) {
-        const pending = await (code as InProcessModules['cursor']).loadCursorPendingTasks(dataDir).catch((error: unknown) => {
-          warn(`[cursor] pending tasks skipped · ${error instanceof Error ? error.message : error}`)
+        const pending = await (code as InProcessModules['cursor']).loadCursorPendingTasks(dataDir).catch(() => {
+          warn('[cursor] CURSOR_TASKS_UNAVAILABLE')
           return []
         })
         for (const task of pending) if (task.sessionId === session.sessionId) enqueueTask(stream, task.toolUseId, task.input)
       }
     }
-    if (streams.get(ask.token) !== stream) return null
+    loading.delete(ask.token)
+    if (pending.get(session.sessionId) === ask.token) pending.delete(session.sessionId)
+    if (streams.get(ask.token) !== stream || bySession.get(session.sessionId) !== stream) return null
     return { turn: stream.turn(), historyTurnOpen, lastStarted, lastEnded, initial, lines, evidence, abandoned,
-      frames: stream.frames(), ...(paneCheck ? { paneCheck: true as const } : {}), ...(stream.offset !== undefined ? { offset: stream.offset } : {}) }
+      frames: stream.frames(), ...(paneCheck ? { paneCheck: true as const } : {}), ...(stream.offset !== undefined ? { offset: stream.offset, ...(stream.stamp !== undefined ? { stamp: stream.stamp } : {}) } : {}) }
+    } finally {
+      loading.delete(ask.token)
+      if (pending.get(session.sessionId) === ask.token) pending.delete(session.sessionId)
+      release()
+      if (openings.get(session.sessionId) === active) openings.delete(session.sessionId)
+    }
+  }
+
+  /** The resident stream bound is not a read bound: only four folds may allocate their read window at once.
+   * Queued requests retain only their bounded snapshots, and a timed-out request stays admitted until discarded. */
+  async function open(ask: StreamOpen): Promise<StreamOpened | null> {
+    if (admitted.has(ask.token) || admitted.size >= STREAMS_MAX) return null
+    admitted.add(ask.token)
+    const at = generation
+    let result: StreamOpened | null = null
+    try {
+      await folds.attach({ ...ask.session, sessionId: ask.token }, false, async () => {
+        if (at !== generation || cancelled.has(ask.token)) return false
+        result = await openNow(ask)
+        return result !== null
+      })
+      return result
+    } finally {
+      admitted.delete(ask.token); cancelled.delete(ask.token); loading.delete(ask.token)
+      if (pending.get(ask.session.sessionId) === ask.token) pending.delete(ask.session.sessionId)
+    }
   }
 
   /** The turn closed for the core: what the parser emits closing, which the core says (or not: a cancel's is not). A
@@ -464,7 +572,11 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
       else if (cursor && how.stop) tasks?.subagents.closeParent(stream.session.sessionId, !!how.error)
       events = (how.abort ? stream.normalizer.abortTurn?.() : stream.normalizer.closeTurn()) ?? []
       // A session's queued Tasks are dropped once its turn is over.
-      if (cursor && how.stop) setTimeout(() => void removeCursorTasks(stream), 2_500).unref?.()
+      if (cursor && how.stop) {
+        const timer = setTimeout(() => { cleanupTimers.delete(timer); void removeCursorTasks(stream) }, 2_500)
+        timer.unref?.()
+        cleanupTimers.add(timer)
+      }
     } else stream.reader?.closeTurn()
     stream.moved(events)
     return events
@@ -491,7 +603,7 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
     async tail(stream: Stream, path: string, fromStart: boolean): Promise<void> {
       if (!stream.normalizer) return
       stream.session.transcriptPath = path
-      await addSession({ sessionId: stream.session.sessionId, engine: stream.engine, transcriptPath: path }, { fromStart })
+      await addSession({ sessionId: stream.session.sessionId, engine: stream.engine, transcriptPath: path }, { fromStart, stamp: stampOf, current: () => bySession.get(stream.session.sessionId) === stream })
     },
     /** Cursor's Task hook: only a Cursor stream follows its sub-agents. */
     task(stream: Stream, toolUseId: string, input: unknown): void { if (stream.engine === 'cursor') enqueueTask(stream, toolUseId, input) },
@@ -506,7 +618,10 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
     },
     /** What the core took, by stream; and the streams given up since it last asked. */
     ack(acks: Record<string, number>): string[] {
-      for (const [token, serial] of Object.entries(acks)) streams.get(token)?.ack(serial)
+      for (const [token, serial] of Object.entries(acks)) {
+        const stream = streams.get(token)
+        if (stream) { const before = stream.kept; stream.ack(serial); queuedBytes -= before - stream.kept }
+      }
       const gone = [...lost]
       lost.clear()
       return gone
@@ -518,8 +633,15 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
     onMade(listener: (() => void) | null): void { wake = listener },
     /** The core went: what it followed is gone with it. */
     clear(): void {
+      generation++
+      tailing = false
+      loading.clear()
+      pending.clear()
+      for (const timer of cleanupTimers) clearTimeout(timer)
+      cleanupTimers.clear()
       for (const token of [...streams.keys()]) forget(token)
       tasks?.subagents.stop()
+      tasks = null
       lost.clear()
       log(`[engine-others] the core's live streams closed`)
     },

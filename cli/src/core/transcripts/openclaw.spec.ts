@@ -204,7 +204,7 @@ describe('an OpenClaw pane, through the core', () => {
     expect(run.announceSession).toHaveBeenCalledWith(row)
     const said = warn.mock.calls.filter(([line]) => String(line).includes(OPENCLAW_STATES.noSessions))
     expect(said).toHaveLength(1)
-    expect(said[0][0]).toContain(dirname(path))
+    expect(said[0][0]).not.toContain(dirname(path))
     // The Gateway writes the session after all: the next poll finds it, and the next pass clears the state.
     db.exec(fixture('plain'))
     await vi.advanceTimersByTimeAsync(1_500)

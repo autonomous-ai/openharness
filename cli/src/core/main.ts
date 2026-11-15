@@ -81,7 +81,7 @@ import { HERMES_SYSTEM_MANAGED_DIR, type GridLaunchMachine } from '../lib/gridLa
 import { writeGridConfigDir } from '../lib/gridConfigDir.js'
 import { clearDeleted, isRecentlyDeleted, markDeleted } from '../lib/deletedSessions.js'
 import { findLiveSession, findResumedTranscript } from '../lib/sessionRepair.js'
-import { openclawSessionDb, openclawStateDir } from '../lib/openclawStore.js'
+import { openclawStateDir } from '../lib/openclawStore.js'
 import { processSessionOf } from '../engines/sessionStores.js'
 import { createHandoffDependencies } from './handoffDependencies.js'
 import { TmuxBackend } from '../lib/tmuxBackend.js'
@@ -201,7 +201,8 @@ import { createEngineHooks, installEngineHooks, installOpencodePluginBeforeSpawn
 import { createCursorDiscovery } from './engines/cursorDiscovery.js'
 import { createStoreOf } from './transcripts/stores.js'
 import { createOtherStreams } from './engines/otherStreams.js'
-import { OTHER_ENGINES_SERVICE } from '../engines/otherEngines.js'
+import { transcriptReadIdentity } from './transcripts/readIdentity.js'
+import { isOtherEngine, OTHER_ENGINE_STATES, OTHER_ENGINES_SERVICE } from '../engines/otherEngines.js'
 import { CLOUD_FALLBACKS, CLOUD_REQUESTS, type CloudCore, CONNECTORS_FALLBACKS, CONNECTORS_OFF, CONNECTORS_REQUESTS, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARED_MACHINES_REQUESTS, MEMORY_REQUESTS, ROUTER_REQUESTS, createCoreApi, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, MACHINE_ADDON_REQUESTS, HANDOFF_REQUESTS, EXPERIMENTS, LONG_ANSWERS, MODELS_FALLBACKS, MODELS_OFF, MODELS_REQUESTS, MONITOR_FALLBACKS, MONITOR_OFF, MONITOR_REQUESTS, ORCHESTRATOR_FALLBACKS, OS_DEVICE_REQUESTS, ORCHESTRATOR_REQUESTS, SHARE_REQUESTS, SHARING_FALLBACKS, PROJECTS_REQUESTS, SEARCH_FALLBACKS, SEARCH_REQUESTS, STORE_FALLBACKS, STORE_OFF, STORE_REQUESTS, MESSAGES_FALLBACKS, MESSAGES_REQUESTS, GOALS_REQUESTS, TURN_DELIVERERS, USAGE_FALLBACKS, USAGE_REQUESTS, VIEWERS_FALLBACKS, WIFI_FALLBACKS, WINDOW_NAMES_REQUESTS, ENGINE_PROBE_REQUESTS, WORKSPACES_FALLBACKS, type GatewayAccount, type GatewayOps, type GatewayStatus, type RouteAnswer, type WindowFocus } from './api.js'
 import { createServiceHost, testFaults } from './serviceHost.js'
 import { startStalls } from './stall.js'
@@ -1283,9 +1284,16 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     call: (type, payload, waitMs) => inlineOthers ? inlineOthers.call(type, payload, waitMs)
       : serviceLinksRef?.call(OTHER_ENGINES_SERVICE, type, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }),
     bySession: (id) => registry.bySession(id),
+    held: (session, held, rewritten) => {
+      const reasons: readonly string[] = Object.values(OTHER_ENGINE_STATES)
+      const reason = rewritten === 'lost' ? OTHER_ENGINE_STATES.lost : rewritten ? OTHER_ENGINE_STATES.rewritten : OTHER_ENGINE_STATES.unavailable
+      const latest = registry.byAgent(session.agentId)
+      if (!latest || latest.sessionId !== session.sessionId || (latest.identityHold && !reasons.includes(latest.identityHold))) return
+      if (registry.setIdentityHold(session.agentId, held ? reason : undefined)) announceSession(registry.byAgent(session.agentId)!)
+    },
     // Built further down: read when a frame comes, never now.
     frame: (session, frame) => ingest.acceptStreamFrame(session, frame),
-    reattach: (session) => { void attachSession(session, true).catch((error) => console.error(`[agent] ${sid(session.agentId)} re-attach failed: ${error instanceof Error ? error.message : error}`)) },
+    reattach: (session) => { void attachSession(session, true).catch(() => console.error('[engine-others] LIVE_REATTACH_FAILED')) },
   })
   // Each session's engine state, in one table (core/transcripts/normalizers.ts).
   const normalizers = createSessionNormalizers(otherStreams)
@@ -1355,7 +1363,16 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Following a session: its history read into its engine's normalizer, then its tail
   // (core/transcripts/attach.ts).
   // Where a conversation kept in a database is: the core names the store its engine's reader reads (core/transcripts/stores.ts).
-  const storeOf = createStoreOf({ opencode: OPENCODE_DB, kilo: KILO_DB, devin: DEVIN_DB, openclaw: openclawSessionDb })
+  const storeOf = createStoreOf({ opencode: OPENCODE_DB, kilo: KILO_DB, devin: DEVIN_DB,
+    openclaw: async (sessionId, pane) => (await otherStreams.locateStore({ engine: 'openclaw', sessionId,
+      processIdentity: { pid: pane.pid } as RegisteredSession['processIdentity'], openclawStateDir: pane.stateDir })).store,
+  }, async session => {
+    const identity = transcriptReadIdentity(session)
+    const location = await otherStreams.locateStore(session)
+    if (!location.store) throw new Error('ENGINE_UNAVAILABLE')
+    if (location.home && transcriptReadIdentity(registry.byAgent(session.agentId)) === identity) registry.setHermesHome(session.agentId, location.home)
+    return location.store
+  })
   const attach = createAttach({
     setInterpretationHold: registry.setInterpretationHold.bind(registry),
     announceSession,
@@ -2272,6 +2289,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   if (coreLink.supervised) {
     coreLink.bound(hookPort)
     coreLink.startHeartbeat()
+    // Saved bindings will need their reader after terminal reconciliation. Start its process alongside that work;
+    // no transcript is read until the binding is confirmed and attached. Empty, inline and old-master cores ask for none.
+    if (othersLive && registry.list().some(session => session.sessionId && session.boundAt && isOtherEngine(session.engine))) coreLink.want(OTHER_ENGINES_SERVICE)
     // The experiments with saved state are on: their processes are asked for now, the master heeding a bound core
     // alone (core/experiments.ts). The others wait for their first request. Agent Messages is asked for too, which
     // starts a process only under a master from before it joined the edge host (core/messagesLink.ts).
@@ -3156,7 +3176,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     ['the timers', () => { clearInterval(logTrimTimer); clearInterval(runtimeReconcileTimer); clearInterval(paneTitleSyncTimer) }],
     ['the question watchers', () => questionWatcher.stopAll()],
     ['the turn heartbeats', () => { for (const t of heartbeats.values()) clearInterval(t); heartbeats.clear() }],
-    ['the normalizers', () => normalizers.stopPollers()],
+    ['the normalizers', () => { normalizers.stopPollers(); inlineOthers?.clear() }],
     ['Cursor discovery', () => cursorDiscovery.stop()], ['the runtime profiles', () => runtimeProfiles.stop()], ['the transcript watcher', () => watcher.stop()],
     // The FIXED hook port, released before the successor binds it (no fallback → EADDRINUSE otherwise).
     // Process-owned agents stay in the persisted registry and are revalidated by its first discovery passes.
@@ -3221,6 +3241,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     for (const t of heartbeats.values()) clearInterval(t)
     heartbeats.clear()
     normalizers.stopPollers()
+    inlineOthers?.clear()
     deadline.at('Cursor discovery')
     await cursorDiscovery.stop()
     deadline.at('the transcript watcher')

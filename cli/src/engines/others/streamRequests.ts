@@ -5,13 +5,17 @@
  */
 import type { ServiceRequests } from '../../core/api.js'
 import { isOtherEngine } from '../otherEngines.js'
+import { liveStamp } from '../worker/liveProtocol.js'
 import { record } from '../worker/protocol.js'
 import { readerPath } from '../worker/readerChecks.js'
 import { createReplyParts, type ReplyParts } from './readerRequests.js'
 import {
-  STREAM_ANSWER_BYTES, STREAM_OP, STREAM_OPEN, STREAM_VERSION, STREAMS_WAIT, STREAMS_WAIT_MS, type StreamFrame, type StreamOp,
+  STREAM_ANSWER_BYTES, STREAM_OP, STREAM_OPEN, STREAM_STORE, STREAMS_MAX, STREAM_VERSION, STREAMS_WAIT, STREAMS_WAIT_MS, type StreamFrame, type StreamOp,
 } from '../worker/otherStreamProtocol.js'
 import type { OtherStreams, StreamOpen } from './streams.js'
+import { env } from '../../config/env.js'
+import { hermesDbPath } from '../hermes/contract.js'
+import { openclawSessionDb } from '../../lib/openclawStore.js'
 
 const OPS: readonly StreamOp[] = ['close', 'abort', 'cancel', 'open', 'drain', 'tail', 'task', 'pane', 'release', 'forget']
 const id = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && value.length <= 200
@@ -24,7 +28,7 @@ function openOf(payload: Record<string, unknown>): StreamOpen | null {
     || (s.transcriptPath !== null && !readerPath(s.transcriptPath)) || (s.store !== null && !readerPath(s.store))
     || typeof payload.live !== 'boolean' || typeof payload.abandon !== 'boolean' || typeof payload.held !== 'boolean'
     || (resume !== undefined && !(record(resume) && typeof resume.turnOpen === 'boolean'
-      && (resume.offset === undefined || (Number.isSafeInteger(resume.offset) && (resume.offset as number) >= 0))))) return null
+      && (resume.offset === undefined || (Number.isSafeInteger(resume.offset) && (resume.offset as number) >= 0)) && (resume.stamp === undefined || liveStamp(resume.stamp))))) return null
   return { token: payload.token, live: payload.live, abandon: payload.abandon, held: payload.held,
     session: { agentId: s.agentId, sessionId: s.sessionId, engine: s.engine, transcriptPath: s.transcriptPath as string | null, store: s.store as string | null },
     ...(resume !== undefined ? { resume: resume as StreamOpen['resume'] } : {}) }
@@ -79,16 +83,38 @@ export function otherStreamRequests(deps: OtherStreamRequestDeps): ServiceReques
   })
 
   return {
+    [STREAM_STORE]: async (payload, asker) => {
+      const session = payload.session
+      if (!fromCore(payload, asker) || !record(session) || !id(session.sessionId)
+        || !['hermes', 'openclaw'].includes(session.engine as string)
+        || ![session.hermesHome, session.openclawStateDir].every(path => path === undefined || path === null || readerPath(path))
+        || (session.pid !== undefined && !(Number.isSafeInteger(session.pid) && (session.pid as number) >= 0))) return failure('ENGINE_INVALID_REQUEST')
+      try {
+        if (session.engine === 'hermes') {
+          const { findHermesHomeForSession } = await import('../hermes/home.js')
+          const home = session.hermesHome as string | undefined || await findHermesHomeForSession(session.sessionId) || env.HERMES_HOME
+          return answer({ store: hermesDbPath(home), home })
+        }
+        return answer({ store: await openclawSessionDb(session.sessionId, { pid: session.pid as number ?? 0, stateDir: session.openclawStateDir as string | null | undefined }) })
+      } catch {
+        console.warn('[engine-others] store lookup unavailable')
+        return failure('ENGINE_UNAVAILABLE')
+      }
+    },
     [STREAM_OPEN]: async (payload, asker, closed) => {
       if (!fromCore(payload, asker)) return failure('ENGINE_INVALID_REQUEST')
       const ask = openOf(payload)
       if (!ask) return failure('ENGINE_INVALID_REQUEST')
+      if (closed?.aborted) return failure('ENGINE_UNAVAILABLE')
+      const aborted = () => streams.forget(ask.token)
+      closed?.addEventListener('abort', aborted, { once: true })
       let opened
       try { opened = await streams.open(ask) } catch (error) {
-        console.warn(`[engine ${ask.session.engine}] live stream not opened · ${error instanceof Error ? error.message : String(error)}`)
+        const code = error instanceof Error && error.message === 'ENGINE_TRANSCRIPT_TOO_LARGE' ? 'LIVE_TRANSCRIPT_TOO_LARGE' : 'LIVE_OPEN_FAILED'
+        console.warn(`[engine ${ask.session.engine}] ${code}`)
         streams.forget(ask.token)
-        return failure('ENGINE_UNAVAILABLE')
-      }
+        return failure(error instanceof Error && error.message === 'ENGINE_TRANSCRIPT_CHANGED' ? 'ENGINE_TRANSCRIPT_CHANGED' : 'ENGINE_UNAVAILABLE')
+      } finally { closed?.removeEventListener('abort', aborted) }
       // A core that went while this opened has nobody to follow it for.
       if (closed?.aborted) { streams.forget(ask.token); return failure('ENGINE_UNAVAILABLE') }
       return opened ? answer(opened as unknown as Record<string, unknown>) : failure('ENGINE_UNAVAILABLE')
@@ -102,14 +128,14 @@ export function otherStreamRequests(deps: OtherStreamRequestDeps): ServiceReques
         return answer({ frames: [] })
       }
       if (!id(payload.token)) return failure('ENGINE_INVALID_REQUEST')
+      if (op === 'forget') { streams.forget(payload.token); return answer({ frames: [] }) }
       const stream = streams.stream(payload.token)
       if (!stream) return failure('ENGINE_STREAM_GONE')
-      if (op === 'forget') { streams.forget(stream.token); return answer({ frames: [] }) }
       const reply: Record<string, unknown> = {}
       switch (op) {
         case 'close': case 'abort': case 'cancel': {
           // A close about a turn the stream has since moved past is stale: the turn the core asked about is over.
-          if (payload.identity !== undefined && payload.identity !== stream.turn().identity) { reply.closed = false; break }
+          if (payload.identity !== undefined && payload.identity !== stream.turn().identity) { reply.closed = false; reply.events = []; break }
           const events = streams.close(stream, { abort: op === 'abort', cancel: op === 'cancel', error: payload.error === true, stop: payload.stop === true })
           reply.closed = true
           reply.events = events
@@ -127,7 +153,7 @@ export function otherStreamRequests(deps: OtherStreamRequestDeps): ServiceReques
           break
         }
         case 'task': {
-          if (!id(payload.toolUseId) || JSON.stringify(payload.input ?? null).length > TASK_INPUT_BYTES) return failure('ENGINE_INVALID_REQUEST')
+          if (!id(payload.toolUseId) || Buffer.byteLength(JSON.stringify(payload.input ?? null)) > TASK_INPUT_BYTES) return failure('ENGINE_INVALID_REQUEST')
           streams.task(stream, payload.toolUseId, payload.input)
           break
         }
@@ -145,9 +171,13 @@ export function otherStreamRequests(deps: OtherStreamRequestDeps): ServiceReques
       return answer({ ...reply, frames: stream.frames(), turn: stream.turn() })
     },
     [STREAMS_WAIT]: (payload, asker, closed) => {
-      if (!fromCore(payload, asker) || !record(payload.acks)) return failure('ENGINE_INVALID_REQUEST')
+      if (!fromCore(payload, asker) || !record(payload.acks) || Object.keys(payload.acks).length > STREAMS_MAX) return failure('ENGINE_INVALID_REQUEST')
       const acks: Record<string, number> = {}
-      for (const [token, serial] of Object.entries(payload.acks)) if (Number.isSafeInteger(serial)) acks[token] = serial as number
+      for (const [token, serial] of Object.entries(payload.acks)) {
+        if (!id(token) || !Number.isSafeInteger(serial) || (serial as number) < 0) return failure('ENGINE_INVALID_REQUEST')
+        acks[token] = serial as number
+      }
+      if (closed?.aborted) return answer({ pages: [], lost: [] })
       const gone = streams.ack(acks)
       waiting?.done({ pages: [], lost: [] })
       waiting = null

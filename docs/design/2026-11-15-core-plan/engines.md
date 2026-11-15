@@ -11,88 +11,119 @@ State (2026-11-15, the second agent): step 1 is split in two pull requests, as t
 - **Step 1b, carried implementation still WIP:** the live part below (attach, normalizers and readers, live parsers, their Stop
   rules, and the five profile `transcript()` readers). Start it from `main` once 1a has landed, on `core-engines-3`.
 
-## Continuation, 2026-11-15: carried WIP integrated; step 1b still not ready
+## Continuation, 2026-11-15: live-worker implementation and performance verified; final integration gates pending
 
-Worktree `/tmp/harness-core-engines-continue`, branch `codex/core-engines-continue`. This is a local handoff to
-root; no push, PR edit, merge or release was performed. The original `core-engines-3` worktree remains untouched.
+Worktree `/tmp/harness-core-engines-continue`, branch `codex/core-engines-continue`. Root owns integration,
+publication and review. The original `core-engines-3` worktree is untouched. Starting head was `9e3db0a932`,
+which already carried the live extraction and integrated main at `aad8dcd535`.
 
-- Started from `f3e1e35b05`. Preserved its complete tracked diff, including the protocol rename, as
-  `/tmp/core-refactor-engines-carried.patch` (SHA-256
-  `20f85a2e549e99e1e89ceadc263d4cb71cbadca61febf1a7249eb1b8d5f915a0`) and copied both untracked specs.
-  Local commits `26e6481d7e` and `b2057001f0` preserve them before integration.
-- Integrated `origin/main` at `aad8dcd535` in `675a98bc51`. Kept main's superseded-attach cursor/retry fix,
-  the worker-based attach path, and main's usage-service notifications. The worker's folded lines notify usage too.
-- The carried code already moves the fourteen live parsers, Stop rules, Task hooks and profile transcript evidence
-  to the worker. The golden fixture expectations are unchanged; its transport is the worker request path with JSON
-  round trips. It is substantial WIP, not a finished extraction.
-- This continuation fixes a bounded part of restart handling: retain a store's path across reconnect; fence op and
-  reconnect-open answers by worker generation/token; forget abandoned reconnect candidates; refuse an old Stop's
-  fallback close once a new turn has replaced it. Four new regression cases cover those behaviors.
-- Protocol 2 advertisement expectations now match `ENGINE_OTHERS_VERSION=2`, explicitly keeping version 1 as history
-  only. Core worker connection events no longer disconnect or reopen the inline live streams under a version-1 master.
+The continuation finishes initial-open/reconnect/operation ownership, UTF-8 file boundaries, restart recovery,
+worker admission and memory bounds, visible failure state, and shutdown. The fourteen live parsers, store readers,
+Cursor Task queue and five profile transcript readers run in `engine-others`; core keeps validated turn handles,
+Stop authority and delivery. Hermes/OpenClaw store discovery also runs in the worker. Runtime pane/config/catalog/
+model-control work remains step 2; purge/export remains step 3. This is step 1b, not completion of the whole package.
 
-### Design of this continuation
+### Design
 
-- Growth: one store-path reference on each existing session handle, removed with that handle. No new disk data or
-  collection. The inherited stream/handle bounds still need the review below; this continuation does not claim 1b's
-  whole bound is complete.
-- Concurrency: a reply belongs to the captured worker generation and token. Reconnect uses the existing session
-  handle; a stale candidate is forgotten. A Stop's fallback is restricted to the turn identity it began with.
-- Read cost: no new read or polling. A reconnect reuses the path already resolved at attach; reply checks are constant
-  time. Scale: the retained reference grows with attached sessions, as the existing handle map does; the worker's
-  stream count and pending-byte limits are the first pressure signals. 10x measurements remain pending.
-- Compatibility: no new public field or wire revision in this continuation. The carried protocol-2 change keeps
-  protocol-1 history working and live inline. Explicit inline, old-master/new-core and new-master/old-core e2e remain
-  required. No disk migration; rollback is reverting the code. No released tag or published contract was changed.
-- Audience: the existing owner/local/internal-caller and service-token checks still enforce access. Identity: the
-  same account/session and store path as the original attach; no other login is used.
-- Failure: stale replies are discarded and abandoned candidates are forgotten; a failed Stop closes only its own
-  turn, retaining the existing named warning. The inherited worker-unavailable visible-state work remains below.
-- Platforms: affects CLI on macOS, Linux and Windows. No runtime test was executed in this continuation yet; native
-  Windows and Linux remain unverified.
+- Growth: no new disk data. Existing stream tokens and turn handles are bounded at 512. Pending opens are separately
+  admitted at 512, with four concurrent folds through the existing `AttachTracker` and `READER_IN_FLIGHT` bound.
+  Each fold reads at most the newest 64 MiB; one unfinished record beyond that bound is refused. Cursor requires its whole rewrite snapshot to fit that same limit: a larger initial file is refused, and a growing file retires its stream before allocating or reading the oversized snapshot. The existing deliveryAllowed callback admits the measured file size; no new core state or timer is added. Queued opens keep
+  snapshots, not transcript buffers. Timeout/cancellation does not release admission until the work is discarded.
+- Resident frames: each stream retains at most 32 MiB, and the worker retains at most 128 MiB across all outboxes
+  (`LIVE_CACHE_BYTES`). Acknowledgement, forget, resume hydration and clear release the accounting. Overflow retires
+  that stream, marks its history uncertain and schedules bounded recovery; the core retains Stop authority.
+  This is not a whole-process RSS limit: four folds can hold 256 MiB of raw input plus decoded/parser state, and the
+  existing reply-parts cache separately holds at most four replies, at most 64 MiB each and 128 MiB total. The inherited history reader admits at most 16 reads across engines, separately from the four new folds. The master retains the existing 512 MiB heap / 1024 MiB RSS worker limits; exceeding a worker limit does not stop the core. None of the new allocations multiplies by 512.
+- Concurrency: initial opens and reconnects capture `transcriptReadIdentity`, worker generation and token. A newer
+  open/forget/stop/rebind wins; stale candidates are forgotten. Worker session opens serialize, queued cancellation
+  is retained, and late watcher registration checks ownership again. Cursor Task callbacks require the same normalizer.
+  A Stop fallback applies only to the turn identity it began with; stale operation answers cannot replace newer frames.
+- Read cost: fold and tail share the exact complete-line UTF-8 byte boundary, including Cursor/CRLF/incomplete tails.
+  The worker supplies the existing bounded file-stamp primitive to the generic watcher; core does not import its
+  implementation. Reconnect offsets carry device/inode/prefix/tail evidence and are checked before registration.
+  Append-only replay is contiguous and duplicate serials are ignored. A changed generation never receives the old offset.
+- Rewrite boundary: bounded stamps do not prove arbitrary in-place rewrites equivalent. On detected replacement or
+  incompatible rewrite, the core names the history uncertainty and rebuilds from the current file. Missed live deltas
+  across arbitrary rewrites are **not** claimed to be recoverable exactly once. Existing live Cursor prefix reconciliation
+  is preserved. Malformed/oversized worker replies are bounded and held, never accepted as valid turn evidence.
+- Scale: collection, decoded reply (64 MiB), recursion, event/frame and input bounds are checked before core use.
+  Open/wait retries use at most five exponential-backoff attempts. A fatal Opencode/Kilo/Hermes/Devin reader retires its stream and wakes the core with the existing lost token; a late fatal callback cannot retire a replacement. A reconnect resets retry admission; shutdown cancels
+  backoff, pending opens, Tasks, store readers, cleanup timers and the owned watcher. Pressure first shows as named
+  reader-unavailable/history-uncertain state and bounded admission failures, rather than unlimited allocations.
+- Compatibility: protocol 2 adds live work; protocol 1 remains history-only with live parsing inline. Explicit inline
+  mode calls the same worker implementation and awaits cleanup. No public request or stored schema changes; no disk
+  migration. Rollback is reverting this extraction. The 1,046-case golden fixture remains unchanged.
+- Audience/identity: only authenticated local core calls may open/read/operate streams. Client routes reject these
+  private methods. Files still belong to the same registered account/session; no other login is used. Store lookup
+  returning unavailable is not treated as absence, and a late Hermes lookup cannot update a rebound row.
+- Failure: outage, lost buffered history and changed transcript generation are visible named states using the existing
+  agent state field. Terminal and Stop remain usable. New live-boundary and existing worker history failures log fixed
+  codes only; sentinel tests ensure parser/SQLite/path/token text cannot escape through these catches.
+- Platforms: TypeScript behavior affects macOS, Linux and Windows. Local runtime/process acceptance is macOS using
+  pinned Node 24.22.2 and throwaway homes/private tmux fixtures. No new process-spawn implementation was added here.
+  Linux/Windows native runtime acceptance remains for coordinated CI/platform validation; do not claim it ran locally.
 
-### Validation status and exact next checks
+### Validation
 
-No compiler, build or test was run: `/tmp/core-refactor-perf.done` exists, but root held
-`/tmp/core-refactor-validation-lock` for Browser #4320 validation. Do not call this green or ready. `git diff --check`
-passed. `scripts/local-checks.py --list` selects `cli-core` and `cli-harnessd`; both must meet 100% per file.
-The shell's default Node is 26.7.0; CI pins 24.22.2, so select the pinned runtime for the checks.
+All logs below are local `/tmp/core-engines-*.log`; none is a published receipt until the clean-head check runs.
 
-1. Acquire the shared validation lock atomically; only remove it if this continuation owns it. Run the four new
-   restart cases red against `/tmp/core-refactor-engines-streams-before.ts` substituted for
-   `cli/src/core/engines/otherStreams.ts`, preserving/restoring the current file in `finally`; then run them green.
-   The filter is `reopens a store|ignores a turn operation|does not let an old Stop|does not restore an opening`.
-   The tests are written, but neither red nor green has been observed.
-2. Typecheck, architecture/lean tests, all changed core/engine tests, the unchanged 1,046-case golden; fix failures.
-   Then full `npm run test:core`, `npm run test:harnessd` and the clean-head local-check receipt. Do not waive uncovered
-   branches in the new core stream coordinator.
-3. E2E: `otherEngines`, `eagerRepair`, `eagerIdentity`, `lean`, `usageProcess`, affected native cancellation/attach
-   recovery, plus explicit protocol-1/master skew. Use isolated homes/daemon/tmux and the normal bundle runner.
-4. Independent review and the same-workload attach/idle/live-tail CPU comparison. The inherited `OTHER_ENGINES_PERF`
-   case measures history reads; it still needs the planned live-tail CPU workload. Listed closure only (not measured
-   process performance): `aad8dcd535` 539 files / 92,691 lines; this continuation 539 / 92,713 before this notes edit.
+- Red/green regressions cover initial/reconnect lifetime, pending-open interruption, operation/Stop ownership,
+  exact UTF-8 fold/tail gaps, queued Cursor Tasks, replacement between fold and registration, late tail cancellation,
+  store resume, serial/shape/byte limits, visible outage, aggregate outbox overflow and four-fold admission.
+  Named error sentinel tests also fail against the previous live/history logging and pass after sanitization.
+- Full core exploration: 4,391 tests passed / 248 files, 223.08 s. Its coverage gate correctly failed on two inherited
+  profile forwarding methods; added caller-visible evidence assertions. Final focused run: 476 tests / 18 files,
+  16.83 s, coordinator/attach/runtimeProfiles 100% statements, branches, functions and lines.
+- Harnessd: 369 passed / one skipped, 38.60 s, 100% in all dimensions. Architecture passed after replacing the Watcher's
+  worker-module import with injected callbacks; lean entry passed 19 tests. Final typecheck passed. Golden fixture
+  checksums are unchanged; the same 1,046 cases pass through the worker request transport.
+- Bundled isolated acceptance: `otherEngines`, `eagerRepair`, `eagerIdentity`, `lean`, `usageProcess`: 17 passed / one
+  opt-in performance skip, 270.67 s. Covers missing/frozen readers, killed/frozen worker, named outage/recovery,
+  exactly one missed append turn, unaffected core/pane, private routes, >4 MiB history and explicit inline mode.
+- Native launch cancellation/Stop/resume: three `eagerHooks` cases passed. New protocol-1/master capability acceptance
+  passed, 5.55 s: history worker restarts while live inline turns continue. Its initial no-worker assertion was corrected:
+  a live recap legitimately starts the history worker. Runtime source did not change for that test correction.
+- Final history privacy regression: eight reader-request tests passed, 0.975 s; final TypeScript check passed.
+- Four stopped-store-reader cases failed before the visibility fix; 48 worker/golden tests pass after it (5.46 s).
+  The saved-reader startup case failed against the frozen pre-fix bundle, then passed after the core requests the
+  existing worker at bind for a saved bound session under a capable master. Empty/inline/protocol-1 checks pass too.
+- First quiet matched workload, base `aad8dcd535` versus the candidate: attach 1310–1312 → 1468–1470 ms;
+  idle core 0.667 → 0.567%; history p95 1.4 → 1.4 ms; 400-read CPU 0.11 → 0.12 s; 400 live turns
+  143.8 → 186.1 ms and core CPU 0.13 → 0.16 s. This is **not a passing performance gate**. The startup correction
+  overlaps worker boot with terminal reconciliation. These first small-window figures are retained as the failed
+  investigation baseline, not replaced with a claim that they passed.
+  Diagnostic profiles that omit the settling window are not accepted measurements: the baseline's history read
+  correctly returned busy while startup recaps still occupied its slots.
+- The added unaffected-Claude assertion found same-connection request ordering: a pending other-engine history read
+  delays that connection's next message. Root owns that independent router investigation. A second connection's
+  engine turn is the separate process-wide isolation check; it does not excuse the same-connection finding.
+- The Cursor cap regression reproduced old-prefix replay after a capped fold; growing beyond the cap also left an
+  unbounded reader active. Both fail before the fix. Worker/watcher/golden: 96 passed (5.70 s); the two cap tests also
+  verify that an oversized snapshot causes zero content-read calls (1.13 s). Typecheck passed.
+- Independent-client isolation passed (13.50 s): a Claude turn ends while the other-worker PID is still frozen,
+  then the Pi append arrives once after recovery. This proves process-wide isolation separately from the pending
+  shared-client fix. Final runtime bundle: `/tmp/core-engines-confirm-bundle`.
+- Matched settled profiles rejected the extra-status/recap-coalescing hypothesis: both delivered exactly 4,000 each
+  of start/text/end and about 4.462 MB. Core work fell mainly in profile/session processing and filesystem/cloning work;
+  the generic reply bound was a small part. Profiling figures are diagnostic, not the final performance receipt.
+- Final **unprofiled**, quiet, same-workload confirmation uses 4,000 live turns to resolve the short-window CPU
+  quantization (the opt-in fixture now reports its explicit turn count). Base `aad8dcd535` → final candidate:
 
-### Remaining implementation review, found by reading (not reproduced yet)
+  | Measure | Before | Final |
+  |---|---:|---:|
+  | Four saved sessions attached, from core bind | 1311–1313 ms | 1290–1304 ms |
+  | Idle core, 30-second window | 0.667% | 0.567% |
+  | 400 history reads, p95 | 1.4 ms | 1.3 ms |
+  | Core CPU for those reads | 0.10 s | 0.10 s |
+  | 4,000 live turns delivered | 2293.1 ms | 1124.1 ms |
+  | Core CPU for those live turns | 2.47 s | 1.17 s |
 
-- Initial file opens do not retain the fold's byte boundary: `streams.ts` assigns `stream.offset = resume?.offset`
-  and starts an ordinary new tail at current EOF. A restart before the first live frame can fold missed writes as
-  history, and a write between fold and tail installation can be skipped. Cursor explicitly skips byte-offset resume
-  and snapshots the current rewritten file. Add deterministic first-open/restart/gap tests and preserve the legacy
-  rewrite semantics while fixing both paths.
-- `open()` in the core still needs the same lifetime protection as reconnect for forget, stop, rebind and competing
-  initial opens. Worker async opens also need cancellation/supersession review; timeout must not leave a late stream.
-- Enforce/check serial continuity and collection bounds on the core side. The inherited validators check shapes but
-  allow unbounded event/frame arrays, and operation validation accepts replies missing required `events`/`turn` fields.
-  Audit UTF-8 byte accounting (`JSON.stringify(...).length` currently counts code units), acks and lost-token bounds.
-- Worker failure currently logs that conversations are held, but the plan requires an actionable visible session
-  state. Its e2e currently checks the log. Prove Stop fallback and recovery exactly once on real isolated processes.
-- Finish lifecycle cleanup: main creates `inlineOthers` but does not clear it at shutdown, and the worker request
-  factory's `clear()` clears streams without stopping its owned Watcher. Review pending opens, polls, Tasks and timers.
-- The inherited core stream specs contain fixed sleeps (5/30 ms); replace them with controlled timers or observable
-  completion. Finish coverage and request-validator cases rather than treating the carried tests as evidence.
-- Hermes home/store discovery and OpenClaw store discovery remain in core (`transcripts/stores.ts` loads Hermes's
-  implementation). Reconcile their movement with step 1b's design. Runtime pane/config/catalog/model-control work
-  remains step 2; purge/export remains step 3.
+  Both delivered exactly 4,000 start/text/end frames and about 4.462 MB. Runs took 45.17/43.95 s; reports are
+  `/tmp/core-engines-confirm-{before,after}.json` and logs of the same names. Before and final use the same pinned
+  Node, fixture source, fake agents and private daemon/tmux workload. No profiler was active in either run.
+- Root integrates current main once this candidate is clean; exact final-head local receipts then require **core,
+  harnessd, portability and resume** (the last two selected by inherited mock-spec changes). All four gates are pending.
+  Final performance reports, receipt and handoff are local `/tmp/core-engines-*` artifacts; publication is root's.
 
 ## Step 1a: what landed
 

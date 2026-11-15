@@ -9,25 +9,34 @@
  * line typed into its pane, and is announced the way Pi's own extension announces it (engines/pi/contract.ts).
  */
 import { execFile } from 'node:child_process'
-import { appendFileSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
+import { appendFileSync, readFileSync, writeFileSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient } from './harness/client.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
 import { alive, harnessdProcesses } from './harness/endurance.js'
+import { buildWithLean } from './harness/release.js'
+import { LEAN_CORE_ENTRY, readLeanBundle } from '../src/harnessd/leanBundle.js'
 
 const PI_ID = 'aaaaaaaa-2222-4333-8444-555555555555'
 /** The conversation a Pi in a folder of this name keeps: each its own. */
 const PI_IDS: Record<string, string> = { 'pi-one': PI_ID, ...Object.fromEntries([0, 1, 2, 3].map(i => [`pi-${i}`, `bbbbbbb${i}-2222-4333-8444-555555555555`])) }
-type Row = { id: string; sessionId?: string | null; status?: string; tmuxPane?: string }
+type Row = { id: string; sessionId?: string | null; status?: string; tmuxPane?: string; namedState?: string }
 
 describe('the other engines\' worker', () => {
   let daemon: IsolatedDaemon | undefined
   let client: LocalClient | undefined
-  afterEach(async () => { client?.close(); await daemon?.close(); client = undefined; daemon = undefined })
+  let companion: LocalClient | undefined
+  let compatibilityBuild: string | undefined
+  afterEach(async () => {
+    client?.close(); companion?.close(); await daemon?.close(); client = undefined; companion = undefined; daemon = undefined
+    if (compatibilityBuild) rmSync(compatibilityBuild, { recursive: true, force: true })
+    compatibilityBuild = undefined
+  })
 
-  async function fresh(env: Record<string, string> = {}) {
-    const d = daemon = await IsolatedDaemon.create({ env: { HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '200', HARNESSD_SERVICE_MAX_BACKOFF_MS: '1000', ...env } })
+  async function fresh(env: Record<string, string> = {}, scriptPath?: string) {
+    const d = daemon = await IsolatedDaemon.create({ scriptPath, env: { HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '200', HARNESSD_SERVICE_MAX_BACKOFF_MS: '1000', ...env } })
     onTestFailed(() => console.log(d.log()))
     d.env.PI_HOME = join(d.root, 'pi')
     const bin = join(d.root, 'bin', 'pi')
@@ -101,7 +110,7 @@ console.log('fixture-pi-ready'); setInterval(() => {}, 1000);
   it('starts no worker for an empty core, reads a Pi conversation and its last turn in it, and keeps its requests off the client router', async () => {
     const { d, c } = await fresh()
     expect(worker(d)).toBeUndefined()
-    for (const type of ['engine_history_page', 'engine_last_turn', 'engine_reader_part']) {
+    for (const type of ['engine_history_page', 'engine_last_turn', 'engine_reader_part', 'engine_stream_store', 'engine_stream_open', 'engine_stream_op', 'engine_streams_wait']) {
       const answer = await c.request(type, { version: 1, session: { engine: 'pi', sessionId: PI_ID, transcriptPath: '/etc/passwd', touchedAt: 0 } })
       expect(answer.error).toBe('UNSUPPORTED')
     }
@@ -138,6 +147,19 @@ console.log('fixture-pi-ready'); setInterval(() => {}, 1000);
     expect(d.coresStarted()).toBe(1)
   })
 
+  it('starts a saved conversation reader while terminal reconciliation is still starting', async () => {
+    const { d, c } = await fresh()
+    await pi(d, c, 'saved-reader')
+    c.close()
+    const from = d.log().length
+    await d.restart()
+    const log = d.log().slice(from)
+    const started = log.indexOf('[harnessd] service engine-others started')
+    const ready = log.indexOf('[harnessd] core ready')
+    expect(started).toBeGreaterThanOrEqual(0)
+    expect(ready).toBeGreaterThan(started)
+  })
+
   it('reads them in the core, with no worker, in explicit inline mode', async () => {
     const { d, c } = await fresh({ HARNESSD_SERVICES: 'none' })
     const agent = await pi(d, c, 'other-inline')
@@ -147,26 +169,66 @@ console.log('fixture-pi-ready'); setInterval(() => {}, 1000);
     expect(worker(d)).toBeUndefined()
     expect(d.log()).not.toContain('[services] engine-others connected')
     expect(d.coresStarted()).toBe(1)
+    c.close(); await d.restart()
+    expect(worker(d)).toBeUndefined()
   })
 
-  it('answers at once while the worker is killed or frozen, the agent working on, and reads again once it is back', async () => {
+  it.runIf(!!process.env.E2E_BUNDLE_PATH)('keeps live parsing inline with a protocol-1 master while history uses its worker', async () => {
+    const bundle = process.env.E2E_BUNDLE_PATH!
+    const files = Object.fromEntries([...readLeanBundle(readFileSync(bundle))!.files]
+      .map(([name, bytes]) => [name, bytes.toString('utf8')]))
+    // Advertise the old master's authenticated history-only capability to the new core.
+    files[LEAN_CORE_ENTRY] = `process.env.HARNESSD_ENGINE_OTHERS = process.env.HARNESSD_ENGINE_OTHERS?.replace(/:[0-9]+$/, ':1');\n` + files[LEAN_CORE_ENTRY]
+    compatibilityBuild = mkdtempSync(join(tmpdir(), 'other-engines-protocol1-'))
+    const { d, c } = await fresh({}, buildWithLean(compatibilityBuild, bundle, files))
+    const agent = await pi(d, c, 'old-master')
+    await live(d, c, agent, 'old-master-inline')
+    expect(said(await history(c, agent.id), 'old-master-inline')).toBe(true)
+    const pid = worker(d)!
+    expect(alive(pid)).toBe(true)
+    const connections = linked(d)
+    process.kill(pid, 'SIGKILL')
+    await live(d, c, agent, 'old-master-still-inline')
+    await until('history worker connected again', () => linked(d) > connections && worker(d) !== pid || null, 30_000, 100)
+    expect(d.log()).not.toContain("conversation(s) held")
+    expect(d.coresStarted()).toBe(1)
+    c.close()
+    const from = d.log().length
+    await d.restart()
+    const restarted = d.log().slice(from)
+    expect(restarted.slice(0, restarted.indexOf('[harnessd] core ready'))).not.toContain('service engine-others started')
+  })
+
+  it.each(['shared', 'independent'] as const)('answers at once while the worker is killed or frozen, the agent working on, and reads again once it is back (%s connection)', async connection => {
     const { d, c } = await fresh({ HARNESSD_SERVICE_HEARTBEAT_TIMEOUT_MS: '4000', HARNESSD_SERVICE_STOP_GRACE_MS: '100' })
     const agent = await pi(d, c, 'before-the-faults')
     await until('a first read through the worker', async () => said(await history(c, agent.id), 'before-the-faults') || null, 30_000, 250)
+    const bystander = await c.request('agent_create', { engine: 'claude', cwd: d.projectsDir, bypassPermission: true }, 60_000)
+    expect(bystander.error).toBeUndefined()
+    await until('the unaffected engine bound', async () => (await rows(c)).find(row => row.id === bystander.agent.id && row.sessionId && row.status === 'active') || null, 30_000, 100)
+    const inputClient = connection === 'shared' ? c : companion = await LocalClient.connect(d)
     const core = d.corePid()
     const panePid = (await d.tmux.run('display-message', '-p', '-t', agent.pane, '#{pane_pid}')).trim()
     for (const signal of ['SIGKILL', 'SIGSTOP'] as const) {
       const before = worker(d)!
       const connections = linked(d)
+      const framesBeforeFault = c.frames.length
       process.kill(before, signal)
       const at = Date.now()
       const pending = history(c, agent.id)
+      const unaffected = inputClient.next(frame => frame.type === 'turn_ended' && frame.agentId === bystander.agent.id && !frame.replay, 15_000, 'the unaffected engine still answers')
+      inputClient.send('message', { agentId: bystander.agent.id, content: `unaffected-${signal}` })
+      await unaffected
+      if (signal === 'SIGSTOP') expect(worker(d)).toBe(before)
       // The pane goes on while the worker is down; the core holds the conversation where it took it, and the turn typed
       // meanwhile arrives once the worker is back, from that byte, live and once.
       await live(d, c, agent, `during-${signal}`)
       const starts = c.frames.filter((frame) => frame.type === 'turn_started' && frame.agentId === agent.id
         && JSON.stringify(frame.payload ?? {}).includes(`during-${signal}`))
       expect(starts).toHaveLength(1)
+      await c.waitFor(frame => frame.type === 'agent_synced' && frame.payload?.agent?.id === agent.id
+        && frame.payload.agent.namedState === 'Live view is waiting for its engine reader. The terminal and Stop still work.',
+      5_000, 'the visible reader outage', framesBeforeFault)
       expect(d.log()).toContain("the other engines' worker is gone · 1 conversation(s) held")
       const answer = await pending
       if (answer.error) {
@@ -178,6 +240,7 @@ console.log('fixture-pi-ready'); setInterval(() => {}, 1000);
       expect(d.log()).toContain("the other engines' worker is back · following 1 conversation(s) again")
       const recovered = await until('a read once it is back', async () => { const reply = await history(c, agent.id); return said(reply, `during-${signal}`) ? reply : null }, 30_000, 250)
       expect(recovered.error, JSON.stringify(recovered)).toBeUndefined()
+      await until('the reader outage cleared', async () => !(await rows(c)).find(row => row.id === agent.id)?.namedState || null, 5_000, 50)
       if (signal === 'SIGSTOP') {
         expect(d.log()).toContain('service engine-others sent no heartbeat')
         try { process.kill(before, 'SIGCONT') } catch { /* killed by its master */ }
@@ -239,9 +302,24 @@ console.log('fixture-pi-ready'); setInterval(() => {}, 1000);
       }
     }
     const readsCpu = await cpu() - readsFrom
+    const LIVE_TURNS = 1_000
+    const liveFrom = c2.frames.length, liveCpuFrom = await cpu(), liveAt = performance.now()
+    for (const agent of agents) {
+      let appended = ''
+      for (let turn = 0; turn < LIVE_TURNS; turn++) {
+        appended += JSON.stringify({ type: 'message', id: `live-u${turn}`, parentId: null, message: { role: 'user', content: [{ type: 'text', text: `live ${turn}` }] } }) + '\n'
+        appended += JSON.stringify({ type: 'message', id: `live-a${turn}`, parentId: `live-u${turn}`, message: { role: 'assistant', content: [{ type: 'text', text: `live answer ${turn}` }], stopReason: 'stop', model: 'fake/pi' } }) + '\n'
+      }
+      appendFileSync(agent.fake.file, appended)
+    }
+    await until('every live turn delivered', () => c2.frames.slice(liveFrom).filter(frame => frame.type === 'turn_ended' && !frame.replay).length >= LIVE_TURNS * agents.length || null, 30_000, 20)
+    const liveMs = performance.now() - liveAt, liveCpu = await cpu() - liveCpuFrom
+    const liveFrames = c2.frames.slice(liveFrom)
+    const liveFrameCounts = Object.fromEntries([...new Set(liveFrames.map(frame => frame.type))].sort()
+      .map(type => [type, liveFrames.filter(frame => frame.type === type).length]))
     latencies.sort((a, b) => a - b)
     writeFileSync(process.env.OTHER_ENGINES_PERF!, JSON.stringify({ attachMs: attached, coreRestCpuPercent: Number(rest.toFixed(3)),
       historyMs: { p50: Number(latencies[199].toFixed(1)), p95: Number(latencies[379].toFixed(1)), max: Number(latencies[399].toFixed(1)) },
-      coreCpuSecondsFor400Reads: Number(readsCpu.toFixed(2)), worker: harnessdProcesses(d).has('engine-others') }, null, 1) + '\n')
+      coreCpuSecondsFor400Reads: Number(readsCpu.toFixed(2)), liveTurns: LIVE_TURNS * agents.length, liveTurnsMs: Number(liveMs.toFixed(1)), coreCpuSecondsForLiveTurns: Number(liveCpu.toFixed(2)), liveFrameCounts, liveClientBytes: Buffer.byteLength(JSON.stringify(liveFrames)), worker: harnessdProcesses(d).has('engine-others') }, null, 1) + '\n')
   }, 300_000)
 })

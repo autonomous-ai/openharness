@@ -132,10 +132,10 @@ export function otherReaderRequests(deps: OtherReaderDeps = {}): ServiceRequests
       let answer: unknown
       try {
         answer = type === READER_HISTORY ? await reader.historyPage(session, ask, NO_PAGER) : await reader.lastTurnText(session)
-      } catch (error) {
+      } catch {
         // A store that cannot be read (locked past its wait, or no way to read SQLite here): said, and answered as
         // unavailable, which the core reports as an error it can retry.
-        log(`[engine ${engine}] ${kind} unreadable · ${error instanceof Error ? error.message : String(error)}`)
+        log(`[engine ${engine}] ${type === READER_HISTORY ? 'HISTORY_READ_FAILED' : 'LAST_TURN_READ_FAILED'}`)
         return failure('ENGINE_UNAVAILABLE')
       }
       // A read the core has already been answered for is not kept for parts nobody will ask for.

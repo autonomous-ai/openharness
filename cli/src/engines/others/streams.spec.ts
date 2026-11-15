@@ -4,14 +4,18 @@
  * core took it, and the turn ops a Stop, a cancel and an attach make. Each engine's own readings are the golden's
  * (engines/otherTranscripts.golden.spec.ts).
  */
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { open as openTranscript } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { LiveEvent } from '../kit/events.js'
 import { STREAM_OP, STREAM_OPEN, STREAM_VERSION, STREAMS_WAIT } from '../worker/otherStreamProtocol.js'
 import { otherStreamRequests } from './streamRequests.js'
 import { createOtherStreams } from './streams.js'
+import { stampAt } from '../worker/liveFiles.js'
+import { PENDING_TASKS_FILE } from '../cursor/contract.js'
+import { Watcher } from '../../watcher/watcher.js'
 
 const started = (userMessage: string): LiveEvent => ({ type: 'turn_started', payload: { userMessage } })
 /** A file engine's normalizer that reads JSON lines: `{"events":[…],"open":true|false}`. */
@@ -45,6 +49,8 @@ const code = {
   commandCodeRunError: (line: string) => line.includes('"failed"') ? 'Error: 500' : null, commandCodeRunErrorSummary: () => 'Error',
   transcriptEvidence: (raw: Record<string, unknown>) => typeof raw.model === 'string' ? { model: raw.model } : null,
   OpencodeReader: class extends FakeReader { constructor(opts: never) { super(opts); readers.push(this) } },
+  KiloReader: class extends FakeReader { constructor(opts: never) { super(opts); readers.push(this) } },
+  HermesReader: class extends FakeReader { constructor(opts: never) { super(opts); readers.push(this) } },
   DevinReader: class extends FakeReader { constructor(opts: never) { super(opts); readers.push(this) } },
   loadCursorPendingTasks: async () => [], removeCursorPendingTasks: async () => {},
 }
@@ -58,21 +64,22 @@ const file = (lines: unknown[]): string => {
   return path
 }
 
-function setup(over: { waitMs?: number; answerBytes?: number } = {}) {
+function setup(over: { waitMs?: number; answerBytes?: number; dataDir?: string; limits?: { totalBytes?: number; foldBytes?: number } } = {}) {
   const listeners = new Map<string, (event: unknown) => void>()
   const watcher = { on: vi.fn((name: string, listener: (event: unknown) => void) => { listeners.set(name, listener) }),
     addSession: vi.fn(async () => {}), removeSession: vi.fn(async () => {}), pollSession: vi.fn(async () => {}), start: vi.fn() }
   const warn = vi.fn()
-  const streams = createOtherStreams({ watcher: watcher as never, load: (async () => code) as never, warn, log: vi.fn(), dataDir: '/no/such/data' })
+  const load = vi.fn(async () => code)
+  const streams = createOtherStreams({ watcher: watcher as never, load: load as never, warn, log: vi.fn(), dataDir: over.dataDir ?? '/no/such/data', limits: over.limits })
   const requests = otherStreamRequests({ streams, waitMs: over.waitMs ?? 50, answerBytes: over.answerBytes })
   const CORE = { owner: true, local: true }
   const ask = async (type: string, payload: Record<string, unknown>) => await requests[type]({ version: STREAM_VERSION, ...payload }, CORE) as Record<string, any>
   const open = (token: string, engine: string, transcriptPath: string | null, over: Record<string, unknown> = {}) => ask(STREAM_OPEN, {
     token, live: false, abandon: false, held: false, ...over,
-    session: { agentId: `a-${token}`, sessionId: `s-${token}`, engine, transcriptPath, store: engine === 'opencode' || engine === 'devin' ? '/db/x.db' : null } })
+    session: { agentId: `a-${token}`, sessionId: `s-${token}`, engine, transcriptPath, store: ['opencode', 'kilo', 'hermes', 'devin'].includes(engine) ? '/db/x.db' : null } })
   const line = (sessionId: string, engine: string, record: unknown, next?: number) =>
     listeners.get('line')!({ sessionId, engine, text: JSON.stringify(record), ...(next !== undefined ? { next } : {}) })
-  return { streams, requests, ask, open, line, listeners, watcher, warn, CORE }
+  return { streams, requests, ask, open, line, listeners, watcher, load, warn, CORE }
 }
 
 describe('the other engines\' live streams, in their worker', () => {
@@ -99,7 +106,7 @@ describe('the other engines\' live streams, in their worker', () => {
     const path = file([{ events: [started('old')], open: true, model: 'm1' }])
     const reply = await run.open('t1', 'pi', path)
     expect(reply.answer).toMatchObject({ historyTurnOpen: true, lastStarted: started('old'), lastEnded: null, lines: 1, evidence: [{ model: 'm1' }], abandoned: false, frames: [] })
-    expect(run.watcher.addSession).toHaveBeenCalledWith({ sessionId: 's-t1', engine: 'pi', transcriptPath: path }, {})
+    expect(run.watcher.addSession).toHaveBeenCalledWith({ sessionId: 's-t1', engine: 'pi', transcriptPath: path }, { fromOffset: Buffer.byteLength(readFileSync(path)), validate: expect.any(Function), stamp: expect.any(Function), current: expect.any(Function) })
     expect(run.watcher.start).toHaveBeenCalledOnce()
     run.line('s-t1', 'pi', { events: [{ type: 'text_delta', payload: { content: 'hi' } }], model: 'm2' }, 99)
     run.line('s-t1', 'grok', { events: [started('other engine')] })
@@ -109,6 +116,235 @@ describe('the other engines\' live streams, in their worker', () => {
       events: [{ type: 'text_delta', payload: { content: 'hi' } }] })] }])
     // Acknowledged, it is not sent again; the wait then holds until its own end.
     expect((await run.ask(STREAMS_WAIT, { acks: { t1: 1 } })).answer).toEqual({ pages: [], lost: [] })
+  })
+
+  it.each(['forget', 'clear', 'request'])('does not finish a worker open after %s while its engine loads', async (change) => {
+    const run = setup()
+    let loaded!: (value: typeof code) => void
+    run.load.mockImplementationOnce(() => new Promise(resolve => { loaded = resolve }))
+    const opening = run.open('t1', 'pi', file([]))
+    if (change === 'request') await run.ask(STREAM_OP, { op: 'forget', token: 't1' })
+    else if (change === 'forget') run.streams.forget('t1')
+    else run.streams.clear()
+    loaded(code)
+    expect(await opening).toMatchObject({ error: 'ENGINE_UNAVAILABLE' })
+    expect(run.streams.all()).toEqual([])
+    expect(run.watcher.addSession).not.toHaveBeenCalled()
+  })
+
+  it('keeps the newest worker open when an older engine load finishes last', async () => {
+    const run = setup()
+    const path = file([])
+    let loaded!: (value: typeof code) => void
+    run.load.mockImplementationOnce(() => new Promise(resolve => { loaded = resolve }))
+    const session = { agentId: 'a', sessionId: 'same', engine: 'pi', transcriptPath: path, store: null }
+    const older = run.ask(STREAM_OPEN, { token: 'older', session, live: false, abandon: false, held: false })
+    await run.ask(STREAM_OPEN, { token: 'newer', session, live: false, abandon: false, held: false })
+    loaded(code)
+    expect(await older).toMatchObject({ error: 'ENGINE_UNAVAILABLE' })
+    expect(run.streams.all().map(stream => stream.token)).toEqual(['newer'])
+  })
+
+  it.each(['pi', 'cursor'])('keeps the fold boundary across %s startup, restart and the tail installation gap', async (engine) => {
+    const path = file([{ events: [started('old')], open: true }])
+    const boundary = Buffer.byteLength(readFileSync(path))
+    const watcher = new Watcher({ readChunkBytes: 17 })
+    const add = watcher.addSession.bind(watcher)
+    let append = true
+    vi.spyOn(watcher, 'addSession').mockImplementation(async (session, options) => {
+      if (append) {
+        append = false
+        appendFileSync(path, JSON.stringify({ events: [{ type: 'text_delta', payload: { content: 'gap界🙂' } }] }) + '\n')
+      }
+      return add(session, options)
+    })
+    const streams = createOtherStreams({ watcher, load: (async () => code) as never, log: vi.fn(), dataDir: '/no/such/data' })
+    const ask = { token: 't1', session: { agentId: 'a', sessionId: 's1', engine: engine as 'pi', transcriptPath: path, store: null }, live: false, abandon: false, held: false }
+    try {
+      const initial = await streams.open(ask)
+      expect(initial?.offset).toBe(boundary)
+      await streams.drain(streams.stream('t1')!)
+      expect(streams.stream('t1')!.frames().flatMap(frame => frame.events)).toEqual([{ type: 'text_delta', payload: { content: 'gap界🙂' } }])
+      for (const frame of streams.stream('t1')!.frames()) expect(frame.stamp).toEqual(await stampAt(path, frame.offset!))
+      streams.clear()
+      appendFileSync(path, JSON.stringify({ events: [{ type: 'text_delta', payload: { content: 'offline' } }] }) + '\n')
+      await streams.open({ ...ask, token: 't2', resume: { turnOpen: true, offset: boundary, stamp: initial!.stamp } })
+      await streams.drain(streams.stream('t2')!)
+      expect(streams.stream('t2')!.frames().flatMap(frame => frame.events)).toEqual([
+        { type: 'text_delta', payload: { content: 'gap界🙂' } }, { type: 'text_delta', payload: { content: 'offline' } },
+      ])
+    } finally { streams.clear(); await watcher.stop() }
+  })
+
+  it.each(['pi', 'cursor'])('refuses a %s resume into a replaced or rewritten file generation', async engine => {
+    const run = setup()
+    const path = file([{ events: [started('old')], open: true }])
+    const initial = (await run.open('t1', engine, path)).answer
+    writeFileSync(path, JSON.stringify({ events: [started('new')], open: true }) + '\n')
+    expect(await run.open('t2', engine, path, { resume: { turnOpen: true, offset: initial.offset, stamp: initial.stamp } }))
+      .toMatchObject({ error: 'ENGINE_TRANSCRIPT_CHANGED' })
+    expect(run.streams.stream('t2')).toBeUndefined()
+    run.streams.clear()
+  })
+
+  it('does not install a tail whose registration completes after the worker was cleared', async () => {
+    const watcher = new Watcher(), path = file([])
+    const add = watcher.addSession.bind(watcher)
+    let release!: () => void
+    const paused = new Promise<void>(resolve => { release = resolve })
+    const adding = vi.spyOn(watcher, 'addSession').mockImplementation(async (session, options) => { await paused; await add(session, options) })
+    const streams = createOtherStreams({ watcher, load: (async () => code) as never, log: vi.fn(), dataDir: '/no/such/data' })
+    try {
+      const opening = streams.open({ token: 'old', session: { agentId: 'a', sessionId: 's', engine: 'pi', transcriptPath: path, store: null }, live: false, abandon: false, held: false })
+      await vi.waitFor(() => expect(adding).toHaveBeenCalledOnce())
+      streams.clear()
+      release()
+      expect(await opening).toBeNull()
+      expect(watcher.tails('s', path)).toBe(false)
+    } finally { release(); streams.clear(); await watcher.stop() }
+  })
+
+  it('refuses a file replaced between its fold and tail registration', async () => {
+    const watcher = new Watcher(), path = file([{ events: [started('old')], open: true }])
+    const add = watcher.addSession.bind(watcher)
+    vi.spyOn(watcher, 'addSession').mockImplementation(async (session, options) => {
+      writeFileSync(path, JSON.stringify({ events: [started('new')], open: true }) + '\n')
+      await add(session, options)
+    })
+    const streams = createOtherStreams({ watcher, load: (async () => code) as never, log: vi.fn(), dataDir: '/no/such/data' })
+    try {
+      await expect(streams.open({ token: 't', session: { agentId: 'a', sessionId: 's', engine: 'pi', transcriptPath: path, store: null }, live: false, abandon: false, held: false }))
+        .rejects.toThrow('ENGINE_TRANSCRIPT_CHANGED')
+      expect(watcher.tails('s', path)).toBe(false)
+    } finally { streams.clear(); await watcher.stop() }
+  })
+
+  it('logs named failures without parser, store, or task error content', async () => {
+    const sentinel = 'secret-token /private/customer/conversation'
+    const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const path = file([]), dataDir = dirname(path)
+    writeFileSync(join(dataDir, PENDING_TASKS_FILE), '[]')
+    const run = setup({ dataDir })
+    run.load.mockRejectedValueOnce(new Error(sentinel))
+    expect(await run.open('failed', 'pi', null)).toMatchObject({ error: 'ENGINE_UNAVAILABLE' })
+    await run.open('t1', 'pi', null)
+    vi.spyOn(Fake.prototype, 'ingest').mockImplementation(() => { throw new Error(sentinel) })
+    run.line('s-t1', 'pi', {})
+    run.listeners.get('history')!({ sessionId: 's-t1', engine: 'pi', lines: [{ text: '{}' }] })
+    vi.spyOn(code, 'loadCursorPendingTasks').mockRejectedValueOnce(new Error(sentinel))
+    await run.open('cursor', 'cursor', null)
+    await run.open('store', 'opencode', null)
+    ;(readers[0].opts as unknown as { onFatal(error: Error): void }).onFatal(new Error(sentinel))
+    const logs = JSON.stringify([...consoleWarn.mock.calls, ...run.warn.mock.calls])
+    expect(logs).not.toContain(sentinel)
+    expect(logs).toContain('LIVE_OPEN_FAILED')
+    expect(logs).toContain('LIVE_RECORD_INVALID')
+    expect(logs).toContain('LIVE_HISTORY_INVALID')
+    expect(logs).toContain('CURSOR_TASKS_UNAVAILABLE')
+    expect(logs).toContain('STORE_READER_FAILED')
+    run.streams.clear()
+  })
+
+  it.each(['opencode', 'kilo', 'hermes', 'devin'] as const)('reports a stopped %s store reader to the core and ignores its late callbacks', async engine => {
+    const run = setup()
+    await run.open('failed-reader', engine, null)
+    const stop = vi.spyOn(readers[0], 'stop')
+    const fatal = (readers[0].opts as unknown as { onFatal(error: Error): void }).onFatal
+    const waiting = run.ask(STREAMS_WAIT, { acks: { 'failed-reader': 0 } })
+    fatal(new Error('private store path'))
+    expect((await waiting).answer.lost).toContain('failed-reader')
+    expect(run.streams.stream('failed-reader')).toBeUndefined()
+    expect(stop).toHaveBeenCalled()
+    await run.open('replacement', engine, null)
+    fatal(new Error('late private store path'))
+    expect(run.streams.stream('replacement')).toBeDefined()
+    expect(run.streams.ack({})).not.toContain('failed-reader')
+    run.streams.clear()
+  })
+
+  it('never primes a whole-file rewrite reader with only a capped Cursor prefix', async () => {
+    const path = file([{ events: [started('old-prefix')] }, { padding: 'x'.repeat(300) }, { events: [] }])
+    const watcher = new Watcher()
+    const streams = createOtherStreams({ watcher, load: async () => code as never, dataDir: dirname(path), limits: { foldBytes: 128 } })
+    const requests = otherStreamRequests({ streams })
+    try {
+      const reply = await requests[STREAM_OPEN]({ version: STREAM_VERSION, token: 'capped', live: false, abandon: false, held: false,
+        session: { agentId: 'a', sessionId: 'cursor', engine: 'cursor', transcriptPath: path, store: null } }, { owner: true, local: true })
+      if (!reply.error) {
+        appendFileSync(path, JSON.stringify({ events: [started('fresh')] }) + '\n')
+        await watcher.pollSession('cursor')
+        expect(JSON.stringify(streams.stream('capped')!.frames())).not.toContain('old-prefix')
+      }
+      expect(reply).toMatchObject({ error: 'ENGINE_UNAVAILABLE' })
+      expect(streams.stream('capped')).toBeUndefined()
+    } finally { streams.clear(); await watcher.stop() }
+  })
+
+  it('retires a Cursor rewrite reader before an oversized file is read', async () => {
+    const path = file([{ events: [] }])
+    const reads: Array<() => number> = []
+    const watcher = new Watcher({ openFile: async path => {
+      const handle = await openTranscript(path, 'r')
+      const spy = vi.spyOn(handle, 'read')
+      reads.push(() => spy.mock.calls.length)
+      return handle
+    } })
+    const streams = createOtherStreams({ watcher, load: async () => code as never, dataDir: dirname(path), limits: { foldBytes: 128 } })
+    try {
+      await streams.open({ token: 'grows', live: false, abandon: false, held: false,
+        session: { agentId: 'a', sessionId: 'cursor', engine: 'cursor', transcriptPath: path, store: null } })
+      appendFileSync(path, JSON.stringify({ events: [started('past-the-limit')], padding: 'x'.repeat(300) }) + '\n')
+      await watcher.pollSession('cursor')
+      expect(reads).not.toHaveLength(0)
+      expect(reads.every(count => count() === 0)).toBe(true)
+      expect(streams.ack({})).toEqual(['grows'])
+      expect(streams.stream('grows')).toBeUndefined()
+    } finally { streams.clear(); await watcher.stop() }
+  })
+
+  it('bounds aggregate queued bytes and recovers its budget after acknowledgements and forget', async () => {
+    const run = setup({ limits: { totalBytes: 2_000 } })
+    for (let i = 0; i < 4; i++) await run.open(`t${i}`, 'pi', null)
+    const event = { events: [{ type: 'text_delta', payload: { content: 'x'.repeat(600) } }] }
+    run.line('s-t0', 'pi', event); run.line('s-t1', 'pi', event); run.line('s-t2', 'pi', event)
+    expect(run.streams.stream('t2')).toBeUndefined()
+    expect((await run.ask(STREAMS_WAIT, { acks: { t0: 1 } })).answer.lost).toEqual(['t2'])
+    run.line('s-t3', 'pi', event)
+    expect(run.streams.stream('t3')).toBeDefined()
+    run.streams.forget('t1')
+    run.line('s-t3', 'pi', event)
+    expect(run.streams.stream('t3')).toBeDefined()
+    run.streams.clear()
+  })
+
+  it('bounds concurrent opens and cancels queued opens without allocating a fold', async () => {
+    const run = setup()
+    const loaded: Array<() => void> = []
+    run.load.mockImplementation(() => new Promise(resolve => { loaded.push(() => resolve(code)) }))
+    const opening = Array.from({ length: 8 }, (_, i) => run.open(`t${i}`, 'pi', null))
+    await vi.waitFor(() => expect(run.load).toHaveBeenCalledTimes(4))
+    await run.ask(STREAM_OP, { token: 't7', op: 'forget' })
+    for (const done of loaded.splice(0)) done()
+    await vi.waitFor(() => expect(run.load).toHaveBeenCalledTimes(7))
+    for (const done of loaded.splice(0)) done()
+    const answers = await Promise.all(opening)
+    expect(answers.slice(0, 7).every(answer => answer.answer)).toBe(true)
+    expect(answers[7]).toMatchObject({ error: 'ENGINE_UNAVAILABLE' })
+    run.streams.clear()
+  })
+
+  it('bounds acknowledgements and Task inputs by encoded bytes, and ends an already closed wait', async () => {
+    const run = setup()
+    await run.open('t1', 'pi', file([]))
+    for (const acks of [{ t1: -1 }, { t1: '1' }, Object.fromEntries(Array.from({ length: 513 }, (_, i) => [`t${i}`, 0]))]) {
+      expect(await run.ask(STREAMS_WAIT, { acks })).toMatchObject({ error: 'ENGINE_INVALID_REQUEST' })
+    }
+    expect(await run.ask(STREAM_OP, { token: 't1', op: 'task', toolUseId: 'tool', input: '界'.repeat(90_000) }))
+      .toMatchObject({ error: 'ENGINE_INVALID_REQUEST' })
+    const abort = new AbortController()
+    abort.abort()
+    expect(await run.requests[STREAMS_WAIT]({ version: STREAM_VERSION, acks: {} }, run.CORE, abort.signal))
+      .toEqual({ version: STREAM_VERSION, answer: { pages: [], lost: [] } })
   })
 
   it('holds a wait until a line comes, and answers the lines of one read together', async () => {
@@ -129,7 +365,7 @@ describe('the other engines\' live streams, in their worker', () => {
     const first = (await run.ask(STREAMS_WAIT, { acks: {} })).answer
     expect(first.pages[0].frames.map((f: { serial: number }) => f.serial)).toEqual([1])
     const second = (await run.ask(STREAMS_WAIT, { acks: { t1: 1 } })).answer
-    expect(second.pages[0].frames.map((f: { serial: number }) => f.serial)).toEqual([2, 3])
+    expect(second.pages[0].frames.map((f: { serial: number }) => f.serial)).toEqual([2])
   })
 
   it('takes a catch-up batch as one replayed frame, says a rewritten transcript, and contains a line that throws', async () => {
@@ -171,7 +407,7 @@ describe('the other engines\' live streams, in their worker', () => {
     expect((await run.ask(STREAM_OP, { op: 'abort', token: 't1' })).answer.events).toEqual([{ type: 'turn_ended', payload: { aborted: true } }])
     expect((await run.ask(STREAM_OP, { op: 'cancel', token: 't1' })).answer).toMatchObject({ closed: true })
     expect((await run.ask(STREAM_OP, { op: 'forget', token: 't1' })).answer).toEqual({ frames: [] })
-    expect(run.watcher.removeSession).not.toHaveBeenCalled()
+    expect(run.watcher.removeSession).toHaveBeenCalledWith('s-t1')
   })
 
   it('tails a transcript the session found later, from its start when asked, and lets a held stream go', async () => {
@@ -180,7 +416,7 @@ describe('the other engines\' live streams, in their worker', () => {
     expect(await run.ask(STREAM_OP, { op: 'tail', token: 't1', path: 'relative', fromStart: true })).toMatchObject({ error: 'ENGINE_INVALID_REQUEST' })
     const path = file([])
     await run.ask(STREAM_OP, { op: 'tail', token: 't1', path, fromStart: true })
-    expect(run.watcher.addSession).toHaveBeenCalledWith({ sessionId: 's-t1', engine: 'pi', transcriptPath: path }, { fromStart: true })
+    expect(run.watcher.addSession).toHaveBeenCalledWith({ sessionId: 's-t1', engine: 'pi', transcriptPath: path }, { fromStart: true, stamp: expect.any(Function), current: expect.any(Function) })
     // Held, its lines wait; let go, they are read.
     run.line('s-t1', 'pi', { events: [started('held')] })
     await run.ask(STREAM_OP, { op: 'release', token: 't1' })
@@ -213,7 +449,7 @@ describe('the other engines\' live streams, in their worker', () => {
     // The core took the first record, which opened a turn: folded to there, the tail goes on from it.
     const resumed = (await run.open('r1', 'pi', path, { resume: { turnOpen: true, offset } })).answer
     expect(resumed).toMatchObject({ historyTurnOpen: true, lines: 1, turn: { turnOpen: true }, offset, frames: [] })
-    expect(run.watcher.addSession).toHaveBeenLastCalledWith(expect.objectContaining({ transcriptPath: path }), { fromOffset: offset })
+    expect(run.watcher.addSession).toHaveBeenLastCalledWith(expect.objectContaining({ transcriptPath: path }), { fromOffset: offset, validate: expect.any(Function), stamp: expect.any(Function), current: expect.any(Function) })
     // The core closed it itself meanwhile: closed here too, silently.
     expect((await run.open('r2', 'pi', path, { resume: { turnOpen: false, offset } })).answer).toMatchObject({ turn: { turnOpen: false }, frames: [] })
     // It ended in what the core did not take: said, once.

@@ -248,7 +248,11 @@ function livePath(core: Core, session: RegisteredSession, pane: string | null) {
   const listeners = new Map<string, (event: unknown) => void>()
   const tailer = {
     on: (name: string, listener: (event: unknown) => void) => { listeners.set(name, listener); return tailer },
-    addSession: async (s: { sessionId: string }, options?: unknown) => { out.push(['tail', s.sessionId, options ?? null]) },
+    addSession: async (s: { sessionId: string }, options?: unknown) => {
+      // A byte cursor is worker transport state; the golden retains the caller-visible tail/replay contract.
+      const { fromOffset: _offset, cursorLines: _cursor, stamp: _stamp, current: _current, validate: _validate, deliveryAllowed: _delivery, ...tail } = (options ?? {}) as Record<string, unknown>
+      out.push(['tail', s.sessionId, tail])
+    },
     removeSession: async () => {}, pollSession: async () => {},
   }
   const worker = core.createWorkerStreams({ watcher: tailer as never, log: () => {}, warn: () => {} })

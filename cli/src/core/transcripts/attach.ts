@@ -43,7 +43,7 @@ export interface AttachDeps {
   terminalGone: (session: RegisteredSession) => Promise<boolean>
   normalizers: SessionNormalizers
   /** The other engines' streams, in their worker (core/engines/otherStreams.ts). */
-  others: Pick<OtherStreams, 'open' | 'get' | 'closeIf' | 'drain' | 'tail' | 'release' | 'forget'>
+  others: Pick<OtherStreams, 'open' | 'get' | 'closeIf' | 'drain' | 'tail' | 'release' | 'forget' | 'unavailable'>
   watcher: Pick<Watcher, 'addSession' | 'removeSession' | 'pollSession' | 'hold' | 'tails'>
   setInterpretationHold: (agentId: string, revision: number | undefined, reason?: string, create?: boolean) => boolean
   announceSession: (session: RegisteredSession) => void
@@ -357,7 +357,8 @@ export function createAttach({
       // No tail was left for this transcript. Inline, the next attach is asked for here; the engine worker's link
       // asks for its own, and a recovery has its own retry.
       if (leavesNoTail()) {
-        if (handover.next !== null) rememberRead(handover.next)
+        // Every current, unheld read reaches this path only after recording its completed boundary.
+        rememberRead(handover.next!)
         if (!remote) retrySuperseded(session, session.transcriptPath!, current, replayCursorFromStart, replayFromStart)
       }
       handover.hold?.release()
@@ -449,7 +450,12 @@ export function createAttach({
     // records said of the profile, never the records.
     let opened: StreamOpened | null = null
     if (other) {
-      const store = keepsStore(session.engine) ? await storeOf(session) : null
+      let store: string | null
+      try { store = keepsStore(session.engine) ? await storeOf(session) : null } catch {
+        if (current()) others.unavailable(session)
+        console.warn(`[agent] ${sid(session.agentId)} transcript held · engine=${session.engine} · its store reader is unavailable`)
+        return true
+      }
       if (!current()) return false
       if (keepsStore(session.engine) && !store) {
         console.warn(`[${session.engine}] ${sid(session.sessionId)} not a session its store holds · not read`)
@@ -459,7 +465,13 @@ export function createAttach({
         held: !!session.interpretationHold, store })
       // A stream opened for a binding that moved on meanwhile is not its: the attach that follows opens its own.
       if (!current()) {
-        if (opened) others.forget(session.sessionId)
+        // A store's own unavailable state arrives in its first frames. Keep its reader polling for recovery;
+        // only a different binding invalidates the stream that was just installed.
+        const latest = resolve(session.agentId)
+        const itsHold = opened?.frames.some(frame => frame.hold && frame.hold === latest?.identityHold)
+        if (opened && !(itsHold && latest && paneReadIdentity({ ...latest, identityHold: session.identityHold }) === paneReadIdentity(session))) {
+          others.forget(session.sessionId)
+        }
         return false
       }
       if (!opened) {
@@ -539,7 +551,7 @@ export function createAttach({
     const abandonedHistory = opened ? opened.abandoned || abandonedByCore : !closes && !historySuperseded && historyTurnOpen && relaunch?.engineStarted
     if (abandonedHistory) {
       console.log(`[agent] ${sid(session.agentId)} left the turn open at attach as history · it began before its engine was started again`)
-      if (!opened) (prepared?.state.handle ?? parser ?? liveParsers.get(session.sessionId))?.closeTurn('abandoned')
+      if (!opened) (prepared?.state.handle ?? parser)!.closeTurn('abandoned')
     }
     if (session.transcriptPath) {
       neverFoldedHistory.delete(session.sessionId)

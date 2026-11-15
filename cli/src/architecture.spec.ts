@@ -275,7 +275,6 @@ const FACETS_FREE_OF_THEM: Array<[string, string]> = [
   ['core/transcripts/attach.ts', '(o3)'],
   ['core/transcripts/history.ts', '(o3)'],
   ['core/transcripts/lastTurn.ts', '(o3)'],
-  ['core/transcripts/stores.ts', '(o3)'],
   // Their history and last turns are their worker's (engines/others/): the core's port and its list of them hold none.
   ['core/engines/readers.ts', 'the worker'],
   ['engines/otherEngines.ts', 'the worker'],
