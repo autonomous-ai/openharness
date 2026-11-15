@@ -12,6 +12,11 @@ const opened = (over: Partial<StreamOpened> = {}): StreamOpened => ({ turn: turn
   initial: [], lines: 0, evidence: [], abandoned: false, frames: [], ...over })
 const ok = (answer: unknown) => ({ version: STREAM_VERSION, answer })
 const OPEN = { live: false, abandon: false, held: false, store: null }
+function stopReservation() {
+  let resolve!: () => void, reject!: (error: Error) => void
+  const promise = new Promise<void>((done, failed) => { resolve = done; reject = failed })
+  return { promise, resolve: () => resolve(), reject: () => reject(new Error('Stop failed')) }
+}
 
 /** The worker, scripted: each request type answered by the test's own function; a wait held until the test answers it. */
 function setup(over: Partial<OtherStreamsDeps> = {}) {
@@ -664,6 +669,194 @@ describe('the other engines\' streams, as the core holds them', () => {
     expect(await run.streams.close('s1', {})).toEqual([{ type: 'turn_ended', payload: {} }])
     await vi.advanceTimersByTimeAsync(10)
     expect(run.deps.reattach).toHaveBeenCalledOnce()
+    run.streams.stop()
+  })
+
+  it.each(['resolve', 'reject'] as const)('resumes one reader recovery after the existing Stop promise %s settles', async outcome => {
+    vi.useFakeTimers()
+    const reservation = stopReservation(), observed = vi.spyOn(reservation.promise, 'then')
+    let stopping: Promise<void> | undefined
+    const run = setup({ stopping: () => stopping, held: vi.fn() })
+    await run.streams.open(row(), OPEN)
+    const token = run.answers.open.mock.calls[0][0].token
+    run.waits[0](ok({ pages: [], lost: [token] }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(run.deps.held).toHaveBeenLastCalledWith(row(), true, 'lost')
+    stopping = reservation.promise
+    await vi.advanceTimersByTimeAsync(10)
+    for (let i = 0; i < 20; i++) run.streams.unavailable(row())
+    expect(observed).toHaveBeenCalledOnce()
+    expect(run.deps.reattach).not.toHaveBeenCalled()
+    expect(run.deps.held).toHaveBeenLastCalledWith(row(), true, 'lost')
+    stopping = undefined
+    reservation[outcome]()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(run.deps.held).toHaveBeenLastCalledWith(row(), false)
+    expect(run.deps.reattach).toHaveBeenCalledExactlyOnceWith(row())
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(run.deps.reattach).toHaveBeenCalledOnce()
+    run.streams.stop()
+  })
+
+  it('defers optional page health and rewritten recovery, but delivers native frame evidence during Stop', async () => {
+    vi.useFakeTimers()
+    const reservation = stopReservation()
+    let stopping: Promise<void> | undefined
+    const run = setup({ stopping: () => stopping, held: vi.fn() })
+    await run.streams.open(row(), OPEN)
+    vi.mocked(run.deps.held!).mockClear()
+    stopping = reservation.promise
+    const token = run.answers.open.mock.calls[0][0].token
+    const native = frame(1, { rewritten: true, hold: 'The native store changed.' })
+    run.waits[0](ok({ pages: [{ token, frames: [native] }], lost: [] }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(run.deps.frame).toHaveBeenCalledExactlyOnceWith(row(), native)
+    expect(run.deps.held).not.toHaveBeenCalled()
+    expect(run.deps.reattach).not.toHaveBeenCalled()
+    stopping = undefined
+    reservation.resolve()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(run.deps.reattach).toHaveBeenCalledOnce()
+    run.streams.stop()
+  })
+
+  it.each(['removed', 'process', 'route', 'conversation', 'evidence'] as const)('drops recovery when the captured binding is %s during Stop', async change => {
+    vi.useFakeTimers()
+    const reservation = stopReservation()
+    let stopping: Promise<void> | undefined = reservation.promise
+    const run = setup({ stopping: () => stopping, held: vi.fn() })
+    expect(await run.streams.open(row(), OPEN)).toBeNull()
+    expect(run.answers.open).not.toHaveBeenCalled()
+    const latest = run.sessions.get('s1')!
+    if (change === 'removed') run.sessions.delete('s1')
+    else if (change === 'process') latest.processIdentity = { pid: 8, executable: 'pi', startMarker: 'replacement' }
+    else if (change === 'route') latest.runtimes = [{ backend: 'tmux', paneId: '%new' }]
+    else if (change === 'conversation') latest.sessionId = 'different'
+    else latest.evidenceRevision = 8
+    if (change === 'process' || change === 'route' || change === 'evidence') run.streams.unavailable(latest)
+    stopping = undefined
+    reservation.resolve()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(run.deps.held).not.toHaveBeenCalled()
+    expect(run.deps.reattach).not.toHaveBeenCalled()
+    run.streams.stop()
+  })
+
+  it('reports a recovery callback failure without rejecting the completed Stop', async () => {
+    vi.useFakeTimers()
+    const reservation = stopReservation()
+    let stopping: Promise<void> | undefined = reservation.promise
+    const run = setup({ stopping: () => stopping, reattach: vi.fn(() => { throw new Error('attachment failed') }) })
+    run.streams.unavailable(row())
+    stopping = undefined
+    reservation.resolve()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(run.deps.log).toHaveBeenCalledWith('[engine-others] LIVE_RECOVERY_FAILED')
+    run.streams.stop()
+  })
+
+  it('keeps recovery with a later Stop until that reservation actually settles', async () => {
+    vi.useFakeTimers()
+    const first = stopReservation(), second = stopReservation()
+    let stopping: Promise<void> | undefined = first.promise
+    const run = setup({ stopping: () => stopping, held: vi.fn() })
+    run.streams.unavailable(row())
+    stopping = second.promise
+    first.resolve()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(run.deps.held).not.toHaveBeenCalled()
+    expect(run.deps.reattach).not.toHaveBeenCalled()
+    stopping = undefined
+    second.reject()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(run.deps.reattach).toHaveBeenCalledExactlyOnceWith(row())
+    run.streams.stop()
+  })
+
+  it.each(['forget', 'stop', 'disconnect'] as const)('revokes deferred recovery on %s', async action => {
+    vi.useFakeTimers()
+    const reservation = stopReservation()
+    let stopping: Promise<void> | undefined = reservation.promise
+    const run = setup({ stopping: () => stopping, held: vi.fn() })
+    run.streams.unavailable(row())
+    if (action === 'forget') run.streams.forget('s1')
+    else if (action === 'stop') run.streams.stop()
+    else run.streams.disconnected()
+    stopping = undefined
+    reservation.resolve()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(run.deps.held).not.toHaveBeenCalled()
+    expect(run.deps.reattach).not.toHaveBeenCalled()
+    run.streams.stop()
+  })
+
+  it('keeps one cancelled reservation through repeated forget and open before Stop settles', async () => {
+    vi.useFakeTimers()
+    const reservation = stopReservation(), observed = vi.spyOn(reservation.promise, 'then')
+    let stopping: Promise<void> | undefined = reservation.promise
+    const run = setup({ stopping: () => stopping, held: vi.fn() })
+    for (let index = 0; index < 20; index++) {
+      expect(await run.streams.open(row(), OPEN)).toBeNull()
+      run.streams.forget('s1')
+    }
+    expect(await run.streams.open(row(), OPEN)).toBeNull()
+    expect(observed).toHaveBeenCalledOnce()
+    stopping = undefined
+    reservation.resolve()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(run.deps.reattach).toHaveBeenCalledExactlyOnceWith(row())
+    run.streams.stop()
+    run.streams.unavailable(row())
+    expect(observed).toHaveBeenCalledOnce()
+  })
+
+  it.each(['before', 'after'] as const)('resumes an orphan when its Stop settles %s reconnection', async when => {
+    vi.useFakeTimers()
+    const reservation = stopReservation()
+    const observed = vi.spyOn(reservation.promise, 'then')
+    let stopping: Promise<void> | undefined
+    const run = setup({ stopping: () => stopping, held: vi.fn() })
+    await run.streams.open(row(), OPEN)
+    stopping = reservation.promise
+    run.streams.disconnected()
+    if (when === 'after') {
+      run.streams.connected()
+      run.streams.disconnected()
+      run.streams.connected()
+    }
+    expect(observed).toHaveBeenCalledOnce()
+    stopping = undefined
+    reservation.resolve()
+    await vi.advanceTimersByTimeAsync(0)
+    if (when === 'before') {
+      expect(run.deps.held).toHaveBeenLastCalledWith(row(), true)
+      expect(run.deps.reattach).not.toHaveBeenCalled()
+      run.streams.connected()
+      await vi.advanceTimersByTimeAsync(0)
+    }
+    expect(run.deps.held).toHaveBeenLastCalledWith(row(), false)
+    expect(run.deps.reattach).toHaveBeenCalledOnce()
+    run.streams.stop()
+  })
+
+  it('bounds deferred recoveries and releases their slots when Stop settles', async () => {
+    vi.useFakeTimers()
+    const reservation = stopReservation()
+    let stopping: Promise<void> | undefined = reservation.promise
+    const run = setup({ stopping: () => stopping, held: vi.fn() })
+    for (let index = 0; index <= 512; index++) run.streams.unavailable(row(`held-${index}`))
+    expect(run.deps.log).toHaveBeenCalledWith('[engine-others] live recovery limit reached')
+    expect(run.deps.held).not.toHaveBeenCalled()
+    stopping = undefined
+    reservation.resolve()
+    await vi.advanceTimersByTimeAsync(0)
+    const next = stopReservation()
+    stopping = next.promise
+    run.streams.unavailable(row())
+    stopping = undefined
+    next.resolve()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(run.deps.reattach).toHaveBeenCalledExactlyOnceWith(row())
     run.streams.stop()
   })
 
