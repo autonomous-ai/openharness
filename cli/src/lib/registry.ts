@@ -128,12 +128,12 @@ export interface RegisteredSession {
    * Set when the engine process is pointed at an OpenRouter endpoint (`ori claude`, `ori codex`, …).
    *
    * It is NOT a second engine: the engine stays `claude`/`codex`/… and every badge, icon and wire field
-   * keeps saying so. It only records HOW the pane's requests are billed, which decides two things — the
-   * runtime profile becomes display-only, and the daemon's recap/route calls go direct to OpenRouter
-   * instead of spawning a vendor CLI that has no credential. Never read from the process's environment:
-   * Codex's comes from its argv on every discovery, every other engine's from what its hook says of its own
-   * environment (`X-Harness-Hook-Gateway`). A relaunch keeps it until the engine says it again, so a pane
-   * restarted without the wrapper drops it on the next scan or hook.
+   * keeps saying so. It only records HOW the pane's requests are billed, which makes the runtime profile
+   * display-only: the core types no `/model` into the pane. Never read from the process's environment:
+   * Codex's comes from its argv on every discovery; Claude Code's, OpenCode's and Hermes's from what their
+   * hook says of its own environment (`X-Harness-Hook-Gateway`), the only hooks that say it. A relaunch
+   * keeps it until the engine says it again, so a pane restarted without the wrapper drops it on the next
+   * scan or hook.
    */
   gateway?: 'ori' | null
   /**
@@ -2330,9 +2330,10 @@ class Registry {
       title: titleDisplayName(input.title ?? existing?.title ?? null),
       model: modelString(input.model) ?? existing?.model ?? null,
       cliVersion: input.cliVersion ?? existing?.cliVersion ?? null,
-      // Chosen once at agent_create time and never re-derived (unlike `grid`, which openProcessAgent
-      // re-reads off the live process on every discovery) — a hook-triggered bind must carry it
-      // forward or the very first SessionStart hook would silently wipe the agent's chosen profile.
+      // Chosen at agent_create, or filled once for a row with none: from the home its hook reports, when
+      // this session's transcript is under it (above), or from the rollout its process holds open
+      // (openProcessAgent). Never changed once known — a hook-triggered bind must carry it forward or the
+      // very first SessionStart hook would silently wipe the agent's profile.
       codexHome: existing?.codexHome ?? (refusedHome ? null : reportedHome),
       claudeHome: existing?.claudeHome ?? null,
       // The home the gate looked this session up in, or whatever the row already knew. Carried

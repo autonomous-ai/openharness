@@ -12,7 +12,6 @@ import type { ProcessIdentity } from './terminalTypes.js'
  */
 const processRows = vi.hoisted(() => vi.fn())
 const heldHome = vi.hoisted(() => vi.fn())
-vi.mock('./gridAssignment.js', () => ({ probeGridAssignment: vi.fn(async () => null) }))
 vi.mock('./processHeldFiles.js', async (real) => ({ ...await real<object>(), heldHome }))
 const processView = vi.hoisted(() => vi.fn())
 vi.mock('./processMounts.js', async (real) => ({ ...await real<object>(), processView }))

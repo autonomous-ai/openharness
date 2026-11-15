@@ -6,7 +6,6 @@
  */
 import { realpathSync } from 'node:fs'
 import { isAbsolute } from 'node:path'
-import type { DiscoveryContract } from '../facets/discovery.js'
 
 const escape = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
@@ -33,8 +32,7 @@ export function homeShaped(home: string): boolean {
  * paths, as the same folder may be named two ways. `null` for the default and for a value that could not be a home
  * (never a guess).
  */
-export function profileHome(profile: NonNullable<DiscoveryContract['profile']>, home: string, defaultHome: string): string | null {
+export function profileHome(home: string, defaultHome: string): string | null {
   if (!homeShaped(home)) return null
-  const compared = (path: string) => canonical(profile.trimTrailingSlashes ? path.replace(/\/+$/, '') : path)
-  return compared(home) === compared(defaultHome) ? null : home
+  return canonical(home) === canonical(defaultHome) ? null : home
 }

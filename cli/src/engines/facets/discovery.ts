@@ -31,7 +31,7 @@ export interface DiscoveryContract {
   /** The engine home a process runs under when launched under a profile: `held` matches the whole path of a file it
    *  holds open for its whole run, its first group the home; `setting` names this machine's default. The daemon reads
    *  no process's environment, so the variable that names the home is the hook's to read (cli/hook/notify.mjs). */
-  profile?: { setting: FolderSetting; held: RegExp; trimTrailingSlashes?: boolean }
+  profile?: { setting: FolderSetting; held: RegExp }
   /**
    * Transcripts kept by the folder the session began in, `<root>/<folder's directory name>/<id>`, never
    * moved: the directory name is the folder with every character `mangle` matches replaced by `with`, and

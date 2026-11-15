@@ -49,7 +49,7 @@ export const versionedInstalls: Readonly<Partial<Record<AgentEngine, (value: str
  */
 export function reportedProfileHome(engine: AgentEngine, home: string | undefined, defaultHome?: string): string | null {
   const profile = discoveryContract(engine)?.profile
-  return profile && home !== undefined ? profileHome(profile, home, defaultHome ?? env[profile.setting]) : null
+  return profile && home !== undefined ? profileHome(home, defaultHome ?? env[profile.setting]) : null
 }
 
 /**
@@ -63,7 +63,7 @@ export async function probeProfileHome(selected: ProcessIdentity, engine: AgentE
   const profile = discoveryContract(engine)?.profile
   if (!profile) return null
   const home = await heldHome(selected, profile.held, children)
-  return home === undefined ? undefined : profileHome(profile, home, env[profile.setting])
+  return home === undefined ? undefined : profileHome(home, env[profile.setting])
 }
 
 /** Which folder a transcript belongs to, for an engine that keeps transcripts by the folder they began in. */
