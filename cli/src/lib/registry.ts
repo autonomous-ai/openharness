@@ -3383,7 +3383,7 @@ class Registry {
       const beforeOwners = new Map(this.list().map(row => [row.agentId, ownershipIdentity(row)]))
       const beforeCommit = new Map([...currentRows].map(([id, row]) => [id, rowFingerprint(row)]))
       const capturedIntents = new Map(this.intended)
-      const intentRow = (row: RegisteredSession | null) => row ? { ...persistedRow(row), touchedAt: 0, boundAt: 0, lastHookAt: 0 } : null
+      const intentRow = (row: RegisteredSession | null) => row ? { ...persistedRow(row), touchedAt: 0, boundAt: 0, lastHookAt: 0, lastTranscriptAt: 0 } : null
       const intent = bindingCommit ? rowFingerprint({ candidate: intentRow(bindingCommit.candidate),
         displaced: bindingCommit.displaced?.map(row => ({ agentId: row.agentId, candidate: intentRow(row.candidate) })) }) : undefined
       let unconfirmed = this.unconfirmedBinding
