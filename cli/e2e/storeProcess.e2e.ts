@@ -173,7 +173,7 @@ describe('the Store in its own process, beside the viewers', () => {
     const profileBefore = JSON.stringify({ fixtureOwner: 'preserve' })
     writeFileSync(profileHooks, profileBefore)
     const apiDir = join(d.dataDir, 'api-connections')
-    mkdirSync(apiDir, { recursive: true })
+    mkdirSync(apiDir, { recursive: true, mode: 0o700 })
     writeFileSync(join(apiDir, 'connections.json'), JSON.stringify({ version: 1, connections: [{
       id: 'fixture', provider: 'fixture', name: 'Fixture API', baseUrl: 'http://127.0.0.1:9/v1',
       keyEnv: 'FIXTURE_API_KEY', authHeader: 'Authorization', authPrefix: 'Bearer', apiKey: 'fixture-key',

@@ -46,10 +46,10 @@ describe('what a launch reads of the saved APIs holds no key', () => {
   })
 
   it('refuses a list that carries a key, and reads nothing from it', () => {
-    mkdirSync(join(dir, 'api-connections'))
+    mkdirSync(join(dir, 'api-connections'), { mode: 0o700 })
     writeFileSync(join(dir, 'api-connections', 'list.json'), JSON.stringify({ version: 1, connections: [{ id: 'openrouter',
       provider: 'openrouter', name: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', keyEnv: 'OPENROUTER_API_KEY',
-      authHeader: 'Authorization', authPrefix: 'Bearer', apiKey: secret }] }))
+      authHeader: 'Authorization', authPrefix: 'Bearer', apiKey: secret }] }), { mode: 0o600 })
     expect(note).toThrow('Saved APIs could not be read')
     expect(noted()).toBe(false)
   })

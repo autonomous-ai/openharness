@@ -180,7 +180,7 @@ describe('saved API connections', () => {
   })
 
   it('refuses non-files, duplicate stored ids, oversized storage and too many connections', () => {
-    mkdirSync(join(directory, 'api-connections'))
+    mkdirSync(join(directory, 'api-connections'), { mode: 0o700 })
     expect(store.list()).toEqual([])
     const path = join(directory, 'api-connections', 'connections.json')
     mkdirSync(path)
