@@ -92,7 +92,9 @@ was that later attach; without it the agent would have shown nothing (PM, 2026-1
 - The retry re-reads the row as it is then (`resolve(session.agentId)`) and runs only while it is the same binding
   (same `sessionId` and `transcriptPath`, `paneReadIdentity` unchanged, its `lifetimes` entry the same) and the
   watcher still does not tail that transcript; otherwise it does nothing, and the count goes with that binding, so the
-  next binding's first superseded attach waits 1 s again. It calls `attachSession(latest, false,
+  next binding's first superseded attach waits 1 s again. That attach, superseded while an earlier binding's retry
+  still waits, replaces it with its own: the earlier one would do nothing, and finding it waiting, the attach would
+  start none. It calls `attachSession(latest, false,
   replayCursorFromStart, replayFromStart)` with the first attach's replay flags, so a first turn born after its agent
   is still replayed once. A plain attach joins one already in flight, so a retry and a hook's attach never fold twice.
 - Its read ends at the remembered X (above), so the retry loses no line either.

@@ -228,7 +228,9 @@ From the shape of the change:
    Changed in the final review: the count kept for the next binding made its first superseded attach wait two
    seconds, or, after a fifth retry that found the session bound anew, give up without trying, against the spec's
    "the next attach from any caller starts it again" (`counts from one second again for the session bound anew while
-   its retry waited`).
+   its retry waited`). Its retry still waiting is replaced, not joined, by a superseded attach of another binding:
+   joined, it did nothing when due and that attach was never tried again (`tries again the attach of the session
+   bound anew, superseded while the earlier binding's retry waited`).
 10. The line after the fifth retry is a `console.warn`, as `keepLiveNormalizer`'s own line is.
 11. `retrySuperseded` is handed the superseded attach's `current` and `transcriptPath` as arguments, so it reads
     nothing of an attach but what it is given.
