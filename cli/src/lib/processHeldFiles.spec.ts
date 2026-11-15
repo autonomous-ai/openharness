@@ -271,11 +271,29 @@ it('refuses a home whose path steps back out of a folder', async () => {
   expect(await mac(id(4242), ROLLOUT)).toBeUndefined()
 })
 
-it('lists nothing on Windows', async () => {
+it('lists nothing on Windows, asks for no children there, and keeps nothing of having been asked', async () => {
   hold(4242, 3, '/h/.hermes/state.db')
-  expect(await held.heldHome(id(4242), STORE, () => [id(4243)], { platform: 'win32', proc, now })).toBeUndefined()
+  const children = vi.fn(() => [id(4243)])
+  expect(await held.heldHome(id(4242), STORE, children, { platform: 'win32', proc, now })).toBeUndefined()
+  expect(children).not.toHaveBeenCalled()
   expect(mocks.execFile).not.toHaveBeenCalled()
   expect(calls).toEqual([])
+  // No wait was kept: the same process, at the same time, where it can be listed, is listed.
+  expect(await linux(id(4242), STORE)).toBe('/h/.hermes')
+})
+
+it('lists no process whose pid is not a positive whole number', async () => {
+  for (const pid of [0, -1, 1.5, Number.NaN]) {
+    expect(await linux(id(pid), STORE)).toBeUndefined()
+    expect(await mac(id(pid), STORE)).toBeUndefined()
+    expect(await mac(id(4242, `child ${pid}`), STORE, () => [id(pid)])).toBeUndefined()
+  }
+  expect(calls).toEqual([])
+  expect(mocks.execFile).not.toHaveBeenCalled()
+})
+
+it('takes no pattern with a g or y flag, whose exec would go on from where the last path matched', async () => {
+  for (const flags of ['g', 'y']) await expect(linux(id(4242), new RegExp(STORE.source, flags))).rejects.toThrow(TypeError)
 })
 
 it('reads the engine\'s children too, and answers nothing when the launcher disagrees or one cannot be listed', async () => {
