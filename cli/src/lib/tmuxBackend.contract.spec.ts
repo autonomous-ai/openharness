@@ -13,6 +13,12 @@ const enabled = process.env.RUN_TERMINAL_CONTRACT === '1' && process.platform !=
   vi.stubEnv('TMUX_PANE', undefined)
   vi.stubEnv('TMUX_TMPDIR', server.root)
   const cleanup = async () => { await server.close(); vi.unstubAllEnvs() }
+  // The fixture starts the server, and keeps it up while the cases kill their panes: the first client is the one whose
+  // environment every pane gets.
+  await server.run('new-session', '-d', '-s', 'fixture-anchor', '/bin/sleep', '600').catch(async (error: unknown) => {
+    await cleanup()
+    throw error
+  })
   const backend = new TmuxBackend(() => DEFAULT_HOST_THEME)
   // A backend that cannot be readied fails the suite saying why, and leaves no server or stubbed environment.
   const prepared = await backend.prepare({ ownedPanes: new Map() }).catch(async (error: unknown) => {
