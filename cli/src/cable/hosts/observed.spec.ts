@@ -1696,6 +1696,12 @@ describe('ObservedSource panes', () => {
     const behind = first(unshown, both)
     expect(await behind.src.focus(behind.agent)).toBe(true)
     expect(unshown.focus).not.toHaveBeenCalled()
+    // It is the pane a rest would show, but it cannot be brought forward here: nothing is raised.
+    const stuck = { ...madeUp(), tap: 'after' as const }
+    stuck.canFocus.mockReturnValue(false)
+    const fixed = first(stuck, both)
+    expect(await fixed.src.focus(fixed.agent)).toBe(true)
+    expect(stuck.focus).not.toHaveBeenCalled()
   })
   // A rest shows a Claude app session in the app, only while that app is in front (docs/specs/2026-11-15-dial-claude-app-follow.md).
   const SESSION = 'local_8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b'
