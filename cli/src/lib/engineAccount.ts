@@ -112,8 +112,9 @@ async function newestDay(sessions: string): Promise<number | null> {
 const CLAUDE_ENV = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX']
 
 /**
- * Whether an API saved here (Models ▸ APIs) sends its key as `Authorization: Bearer`, by the checked read every launch
- * holds the file to (./apiConnectionMetadata.ts): a file that read refuses has none.
+ * Whether an API saved here (Models ▸ APIs) sends its key as `Authorization: Bearer`, by the store's own checked read
+ * (./apiConnections.ts): a file that read refuses has none. The store, not the list a launch reads: a store from before
+ * the list has none until models first reads it, and this answer did not wait for that.
  *
  * That read brings zod, loaded here only where an API was ever saved. The New dialog's probe asks this in the edge host
  * (services/engineProbe.ts), whose services share one process that otherwise holds none (leanEntry.spec.ts).
@@ -121,7 +122,7 @@ const CLAUDE_ENV = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OA
 async function savedBearerApi(dataDir: string): Promise<boolean> {
   if (!existsSync(join(dataDir, 'api-connections', 'connections.json'))) return false
   try {
-    const { readApiConnectionStore } = await import('./apiConnectionMetadata.js')
+    const { readApiConnectionStore } = await import('./apiConnections.js')
     return readApiConnectionStore(dataDir).connections.some((row) => row.authHeader.toLowerCase() === 'authorization' && row.authPrefix.toLowerCase() === 'bearer')
   } catch { return false }
 }

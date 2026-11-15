@@ -11,10 +11,11 @@
  */
 import { createHash, randomUUID } from 'node:crypto'
 import { closeSync, constants, fstatSync, fsync, lstatSync, openSync, read, realpathSync, renameSync, rmSync, write, type Stats } from 'node:fs'
-import { isAbsolute, relative } from 'node:path'
+import { relative } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import type { ResumeRepairContract } from '../facets/launch.js'
 import type { ResumePreparationKind } from '../../lib/productHealthContract.js'
+import { staysInside } from '../../lib/pathContainment.js'
 import { findSessionFile } from './sessionRecords.js'
 
 type JsonObject = Record<string, unknown>
@@ -283,8 +284,7 @@ export async function repairHistory(contract: ResumeRepairContract, sessionId: s
   const inside = sessionRoots.some((sessions) => {
     let root: string
     try { root = realpathSync(sessions) } catch { return false }
-    const rel = relative(root, real)
-    return !isAbsolute(rel) && rel !== '..' && !rel.startsWith('../')
+    return staysInside(relative(root, real))
   })
   if (!before.isFile() || before.isSymbolicLink() || !inside
     || (typeof process.getuid === 'function' && before.uid !== process.getuid())) {

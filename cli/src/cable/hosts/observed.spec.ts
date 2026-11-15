@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ObservedAsked, ObservedHookEvent } from '../../core/observedHook.js'
 import { STOP_HOOK_GRACE_MS } from '../../core/turns/turnHooks.js'
+import type { CodexQueueResult } from './codexQueue.js'
 import { type Delivery, Inbox } from './inbox.js'
-import { askedLine, observedAgentId, type ObservedActions, ObservedSource, type ObservedDeps } from './observed.js'
+import { askedLine, observedAgentId, type ObservedActions, ObservedSource, type ObservedDeps, type PromptSource } from './observed.js'
 import type { OpenTarget } from './open.js'
+import type { TabApp } from './tabs.js'
 import type { PaneSwitch } from './types.js'
 
 function setup(over: Partial<ObservedDeps> = {}) {
@@ -671,6 +673,15 @@ function fakeActions(over: Partial<ObservedActions> = {}) {
     open: vi.fn(async (_agentId: string, _target: OpenTarget) => true),
     claudeInFront: vi.fn(() => true),
     claudeShow: vi.fn(async (_agentId: string, _session: string): Promise<PaneSwitch> => 'ok'),
+    // A watch holds the tabs stream open, and takes each select.
+    tabsOpen: vi.fn(() => true),
+    tabSelect: vi.fn((_app: TabApp, _tty: string, _raise: boolean): PaneSwitch => 'ok'),
+    // Codex is there, and queues every message.
+    codexQueue: {
+      can: vi.fn(() => true),
+      send: vi.fn(async (_threadId: string, _text: string): Promise<CodexQueueResult> => ({ outcome: 'queued' })),
+    },
+    codexHome: '/home/u/.codex',
     count: vi.fn((_what: Parameters<ObservedActions['count']>[0]) => {}),
   }
   return { actions: { ...actions, ...over } as typeof actions, ready }
@@ -1059,6 +1070,202 @@ describe('ObservedSource actions', () => {
   })
 })
 
+const THREAD = '01a1de76-a3b7-7270-b39e-1245893274c1'
+const FAILED: CodexQueueResult = { outcome: 'failed', reason: 'exit 1' }
+
+// Codex outside Harness takes the dial's words through its own queue, in every state: a queued message types nothing and
+// answers no approval (docs/specs/2026-11-15-device-codex.md).
+describe('ObservedSource and codex queue', () => {
+  const cx = {
+    engine: 'codex' as const, sessionId: THREAD, hostHints: { TERM_PROGRAM: 'ghostty' },
+    transcriptPath: `/home/u/.codex/sessions/2026/11/15/rollout-2026-11-15T16-07-59-${THREAD}.jsonl`,
+  }
+  const inOrca = { ...cx, hostHints: { ORCA_AGENT_SESSION_ID: 'x', ORCA_TERMINAL_HANDLE: HANDLE } }
+  const HOOKS: Record<'idle' | 'working' | 'needs-you', ObservedHookEvent['event'][]> = {
+    idle: ['session-start'], working: ['turn-start'], 'needs-you': ['turn-start', 'needs-input'],
+  }
+  /** The routes as the fakes answer, and the session in that state, told by its hooks. */
+  const given = (session: Partial<ObservedHookEvent>, state: keyof typeof HOOKS = 'idle') => {
+    const { actions } = fakeActions()
+    const t = setup({ actions })
+    for (const event of HOOKS[state]) t.src.ingest(t.ev(event, session))
+    return { ...t, actions }
+  }
+  /** Its queue's run, held until the test ends it. */
+  const held = (actions: ReturnType<typeof fakeActions>['actions']) => {
+    let end!: (result: CodexQueueResult) => void
+    actions.codexQueue.send.mockImplementation(() => new Promise<CodexQueueResult>((resolve) => { end = resolve }))
+    return (result: CodexQueueResult) => end(result)
+  }
+
+  it('a queue-able Codex session in Ghostty lists voice, with no handle and no mod', () => {
+    const { src } = given(cx)
+    expect(src.capabilities(src.list()[0])).toEqual({ status: true, voice: true, focus: true, answer: false })
+  })
+
+  it('not queue-able: each lists no voice, and its words never reach the queue', async () => {
+    const cases: Array<{ session: Partial<ObservedHookEvent>; ended?: boolean; can?: boolean }> = [
+      { session: { ...cx, engine: 'claude' } },
+      { session: cx, ended: true },
+      // No hook named its transcript yet.
+      { session: { ...cx, transcriptPath: undefined } },
+      // Another Codex home's: `codex queue` would load that home's config.
+      { session: { ...cx, transcriptPath: `/other/.codex/sessions/2026/11/15/rollout-2026-11-15T16-07-59-${THREAD}.jsonl` } },
+      { session: { ...cx, transcriptPath: '/home/u/.codex/sessions/../../x/rollout.jsonl' } },
+      { session: { ...cx, transcriptPath: '/home/u/.codex/sessions-old/rollout.jsonl' } },
+      // `--thread` takes a session's name too: only a thread id may reach it.
+      { session: { ...cx, sessionId: 'cx' } },
+      { session: { ...cx, sessionId: THREAD.toUpperCase() } },
+      { session: cx, can: false },
+    ]
+    for (const { session, ended, can } of cases) {
+      const { src, ev, actions } = given(session)
+      if (ended) src.ingest(ev('session-end', session))
+      if (can === false) actions.codexQueue.can.mockReturnValue(false)
+      expect(src.capabilities(src.list()[0]).voice).toBe(false)
+      expect(await src.send(src.list()[0], 'next')).toEqual({ ok: false, reason: 'proj did not answer.' })
+      expect(actions.codexQueue.send).not.toHaveBeenCalled()
+    }
+  })
+
+  // Asked each time, it looks for the binary: never for a session the cheaper checks already turned away.
+  it('can() is asked last', async () => {
+    for (const session of [{ ...cx, engine: 'claude' as const }, { ...cx, transcriptPath: '/other/.codex/sessions/rollout.jsonl' }]) {
+      const { src, actions } = given(session)
+      src.capabilities(src.list()[0])
+      await src.send(src.list()[0], 'next')
+      expect(actions.codexQueue.can).not.toHaveBeenCalled()
+    }
+  })
+
+  it('idle, working and needs-you: the words go to the queue and nothing is typed', async () => {
+    for (const session of [cx, inOrca]) {
+      for (const state of ['idle', 'working', 'needs-you'] as const) {
+        const { src, actions } = given(session, state)
+        expect(src.list()[0].state).toBe(state)
+        expect(await src.send(src.list()[0], 'next')).toEqual({ ok: true })
+        expect(actions.codexQueue.send.mock.calls).toEqual([[THREAD, 'next']])
+        expect(actions.orcaSend).not.toHaveBeenCalled()
+        expect(actions.toMod).not.toHaveBeenCalled()
+        expect(actions.count.mock.calls).toEqual([['codex']])
+      }
+    }
+  })
+
+  it('failed falls back to Orca only when idle at a handle, with today\'s sentences', async () => {
+    const cases: Array<[Partial<ObservedHookEvent>, keyof typeof HOOKS, object, Parameters<ObservedActions['count']>[0]]> = [
+      [inOrca, 'idle', { ok: true }, 'orca'],
+      [inOrca, 'working', { ok: false, reason: 'proj is busy. Say it when it is done.' }, 'busy'],
+      [inOrca, 'needs-you', { ok: false, reason: 'proj is waiting for your answer in Orca.' }, 'waiting'],
+      [cx, 'idle', { ok: false, reason: 'proj did not answer.' }, 'no-answer'],
+    ]
+    for (const [session, state, sent, counted] of cases) {
+      const { src, actions } = given(session, state)
+      actions.codexQueue.send.mockResolvedValue(FAILED)
+      expect(await src.send(src.list()[0], 'next')).toEqual(sent)
+      expect(actions.orcaSend.mock.calls).toEqual(counted === 'orca' ? [[HANDLE, 'next']] : [])
+      expect(actions.count.mock.calls).toEqual([['codex-failed (exit 1)'], [counted]])
+    }
+  })
+
+  it('a failure is counted with its reason', async () => {
+    for (const reason of ['no binary', 'refused'] as const) {
+      const { src, actions } = given(cx)
+      actions.codexQueue.send.mockResolvedValue({ outcome: 'failed', reason })
+      expect(await src.send(src.list()[0], 'next')).toEqual({ ok: false, reason: 'proj did not answer.' })
+      expect(actions.count.mock.calls).toEqual([[`codex-failed (${reason})`], ['no-answer']])
+    }
+  })
+
+  // The message may be in the queue: typed too, it would run twice.
+  it('timeout never types', async () => {
+    const { src, actions } = given(inOrca)
+    actions.codexQueue.send.mockResolvedValue({ outcome: 'timeout' })
+    expect(await src.send(src.list()[0], 'next')).toEqual({ ok: false, reason: 'proj did not answer.' })
+    expect(actions.orcaSend).not.toHaveBeenCalled()
+    expect(actions.count.mock.calls).toEqual([['codex-timeout']])
+  })
+
+  it('busy says the last words are not taken yet, and types nothing', async () => {
+    const { src, actions } = given(inOrca)
+    actions.codexQueue.send.mockResolvedValue({ outcome: 'busy' })
+    expect(await src.send(src.list()[0], 'next')).toEqual({ ok: false, reason: 'proj has not taken your last words yet.' })
+    expect(actions.orcaSend).not.toHaveBeenCalled()
+    expect(actions.count.mock.calls).toEqual([['pending']])
+  })
+
+  it('a session that ended, or moved to another terminal, while the queue ran is not typed into', async () => {
+    const other = 'term_9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d'
+    for (const meanwhile of [
+      { event: 'session-end', session: inOrca },
+      { event: 'session-start', session: { ...inOrca, hostHints: { ORCA_TERMINAL_HANDLE: other } } },
+    ] as const) {
+      const { src, ev, actions } = given(inOrca)
+      const end = held(actions)
+      const sent = src.send(src.list()[0], 'next')
+      expect(actions.codexQueue.send).toHaveBeenCalledTimes(1)
+      src.ingest(ev(meanwhile.event, meanwhile.session))
+      end(FAILED)
+      expect(await sent).toEqual({ ok: false, reason: 'proj did not answer.' })
+      expect(actions.orcaSend).not.toHaveBeenCalled()
+    }
+  })
+
+  // Its message waits in the thread's queue for its next resume.
+  it('a session that ends while codex queue runs is still answered sent once it queued', async () => {
+    const { src, ev, actions } = given(cx)
+    const end = held(actions)
+    const sent = src.send(src.list()[0], 'next')
+    expect(actions.codexQueue.send).toHaveBeenCalledTimes(1)
+    src.ingest(ev('session-end', cx))
+    end({ outcome: 'queued' })
+    expect(await sent).toEqual({ ok: true })
+    expect(actions.count.mock.calls).toEqual([['codex']])
+  })
+
+  // An idle Codex starts the queued turn within 0.4 s, while `codex queue` may still run.
+  it('the turn that starts while codex queue still runs is the dial\'s', async () => {
+    const { src, ev, actions } = given(cx)
+    const end = held(actions)
+    const sent = src.send(src.list()[0], 'next')
+    expect(actions.codexQueue.send).toHaveBeenCalledTimes(1)
+    expect(src.ingest(ev('turn-start', cx))).toBe('dial')
+    end({ outcome: 'queued' })
+    expect(await sent).toEqual({ ok: true })
+    expect(src.ingest(ev('turn-start', cx))).toBe('person')
+  })
+
+  it('after queued the next turn is the dial\'s; after failed, timeout or busy it is a person\'s', async () => {
+    const cases: Array<[CodexQueueResult, PromptSource]> = [
+      [{ outcome: 'queued' }, 'dial'], [FAILED, 'person'], [{ outcome: 'timeout' }, 'person'], [{ outcome: 'busy' }, 'person'],
+    ]
+    for (const [result, turn] of cases) {
+      const { src, ev, actions } = given(cx)
+      actions.codexQueue.send.mockResolvedValue(result)
+      await src.send(src.list()[0], 'next')
+      expect(src.ingest(ev('turn-start', cx))).toBe(turn)
+    }
+  })
+
+  it('a Codex session the open scan found takes voice before its first hook', async () => {
+    const { actions } = fakeActions()
+    const { src, open, owners, externals } = setup({ actions })
+    open.set(THREAD, 'terminal')
+    owners.set(THREAD, { pid: 100, engine: 'codex' })
+    externals.set(THREAD, { cwd: '/work/proj', transcriptPath: cx.transcriptPath })
+    await src.scanOpen()
+    expect(src.capabilities(src.list()[0])).toMatchObject({ voice: true })
+    expect(await src.send(src.list()[0], 'next')).toEqual({ ok: true })
+    expect(actions.codexQueue.send.mock.calls).toEqual([[THREAD, 'next']])
+  })
+
+  it('a text over 2000 characters is refused before the queue', async () => {
+    const { src, actions } = given(cx)
+    expect(await src.send(src.list()[0], 'a'.repeat(2001))).toEqual({ ok: false, reason: 'Too long. Say it shorter.' })
+    expect(actions.codexQueue.send).not.toHaveBeenCalled()
+  })
+})
+
 describe('ObservedSource panes', () => {
   const OTHER = 'term_9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d'
   const inOrca = (handle = HANDLE) => ({ hostHints: { ORCA_AGENT_SESSION_ID: 'x', ORCA_TERMINAL_HANDLE: handle } })
@@ -1189,6 +1396,279 @@ describe('ObservedSource panes', () => {
     expect(await src.showPane(agent)).toBe('failed')
     expect(actions.claudeShow).not.toHaveBeenCalled()
     expect(actions.open).not.toHaveBeenCalled()
+  })
+})
+
+// An agent in Terminal, iTerm2 or Ghostty has a tab a rest selects, by the tty of its process
+// (docs/specs/2026-11-15-dial-terminal-follow.md, "1. A swipe selects the agent's tab").
+describe('ObservedSource tabs', () => {
+  const TTY = '/dev/ttys023'
+  const inTerminal = { hostHints: { __CFBundleIdentifier: 'com.apple.Terminal' } }
+  /** Every answer a read was given has reached the source. */
+  const flushed = (): Promise<void> => new Promise((resolve) => { setImmediate(resolve) })
+
+  /** A source whose tty reads the test answers by hand, in the order they began, with a watch's stream open. */
+  function tabs(over: Partial<ObservedActions> = {}, deps: Partial<ObservedDeps> = {}) {
+    const reads: Array<{ answer(tty: string | undefined): Promise<void>; fail(): Promise<void> }> = []
+    const tty = vi.fn((_pid: number) => new Promise<string | undefined>((resolve, reject) => {
+      reads.push({
+        answer: (answered) => { resolve(answered); return flushed() },
+        fail: () => { reject(new Error('ps failed')); return flushed() },
+      })
+    }))
+    const { actions } = fakeActions(over)
+    const s = setup({ actions, tty, ...deps })
+    const agent = (sessionId = 's1') => s.src.list().find((a) => a.sessionId === sessionId)!
+    return { ...s, actions, tty, reads, agent }
+  }
+
+  it('an agent in Terminal gets its tty from one read for its pid', async () => {
+    const t = tabs()
+    t.src.ingest(t.ev('session-start', inTerminal))
+    expect(t.tty.mock.calls).toEqual([[100]])
+    expect(t.src.hasPane(t.agent())).toBe(false)
+    await t.reads[0].answer(TTY)
+    t.src.ingest(t.ev('turn-start', inTerminal))
+    t.src.ingest(t.ev('turn-stop', inTerminal))
+    t.src.ingest(t.ev('turn-start', inTerminal))
+    expect(t.tty.mock.calls).toEqual([[100]])
+    expect(t.src.hasPane(t.agent())).toBe(true)
+  })
+
+  it('iTerm2 and Ghostty are read too; Orca, VS Code and an unknown terminal are not', () => {
+    const t = tabs()
+    t.src.ingest(t.ev('session-start', { sessionId: 'iterm', callerPid: 101, hostHints: { TERM_PROGRAM: 'iTerm.app' } }))
+    t.src.ingest(t.ev('session-start', { sessionId: 'ghostty', callerPid: 102, hostHints: { TERM_PROGRAM: 'ghostty' } }))
+    t.src.ingest(t.ev('session-start', { sessionId: 'orca', callerPid: 103, hostHints: { __CFBundleIdentifier: 'com.stablyai.orca' } }))
+    t.src.ingest(t.ev('session-start', { sessionId: 'vscode', callerPid: 104, hostHints: { TERM_PROGRAM: 'vscode' } }))
+    t.src.ingest(t.ev('session-start', { sessionId: 'other', callerPid: 105, hostHints: { TERM_PROGRAM: 'Hyper' } }))
+    expect(t.tty.mock.calls).toEqual([[101], [102]])
+  })
+
+  it('no tty (??) is no pane', async () => {
+    const t = tabs()
+    t.src.ingest(t.ev('session-start', inTerminal))
+    await t.reads[0].answer(undefined)
+    expect(t.src.hasPane(t.agent())).toBe(false)
+    expect(await t.src.showPane(t.agent())).toBe('failed')
+    expect(t.actions.tabSelect).not.toHaveBeenCalled()
+  })
+
+  it('a new pid reads again, and the old tty is gone at once', async () => {
+    const t = tabs()
+    t.src.ingest(t.ev('session-start', inTerminal))
+    await t.reads[0].answer(TTY)
+    expect(t.src.hasPane(t.agent())).toBe(true)
+    // Resumed in another tab: the same session, in a process of its own.
+    t.src.ingest(t.ev('session-start', { ...inTerminal, callerPid: 101 }))
+    expect(t.tty.mock.calls).toEqual([[100], [101]])
+    expect(t.src.hasPane(t.agent())).toBe(false)
+    expect(t.src.byTab('terminal-app', TTY)).toBeUndefined()
+    await t.reads[1].answer('/dev/ttys024')
+    expect(await t.src.showPane(t.agent())).toBe('ok')
+    expect(t.actions.tabSelect.mock.calls).toEqual([['terminal-app', '/dev/ttys024', false]])
+  })
+
+  it('a read that ends after its agent went, or after a newer pid\'s began, is dropped', async () => {
+    // Either read may end first: only the newer pid's is its tty.
+    for (const order of [[0, 1], [1, 0]]) {
+      const t = tabs()
+      t.src.ingest(t.ev('session-start', inTerminal))
+      t.src.ingest(t.ev('session-start', { ...inTerminal, callerPid: 101 }))
+      for (const i of order) await t.reads[i].answer(i === 0 ? TTY : '/dev/ttys024')
+      expect(await t.src.showPane(t.agent())).toBe('ok')
+      expect(t.actions.tabSelect.mock.calls).toEqual([['terminal-app', '/dev/ttys024', false]])
+    }
+
+    // Gone from the list while its read ran: the session heard of again is listed anew, and waits for a read of its own.
+    const gone = tabs()
+    gone.src.ingest(gone.ev('session-start', inTerminal))
+    gone.src.ingest(gone.ev('session-end', inTerminal))
+    gone.clock.t += 10_000
+    await gone.src.tick()
+    expect(gone.src.list()).toEqual([])
+    gone.src.ingest(gone.ev('session-start', inTerminal))
+    await gone.reads[0].answer(TTY)
+    expect(gone.tty.mock.calls).toEqual([[100], [100]])
+    expect(gone.src.hasPane(gone.agent())).toBe(false)
+    await gone.reads[1].answer('/dev/ttys024')
+    expect(await gone.src.showPane(gone.agent())).toBe('ok')
+    expect(gone.actions.tabSelect.mock.calls).toEqual([['terminal-app', '/dev/ttys024', false]])
+  })
+
+  it('a read that fails is not no tty: a later event reads that pid again, 10 s on, and it is counted; ?? is final', async () => {
+    const t = tabs()
+    t.src.ingest(t.ev('session-start', inTerminal))
+    t.src.ingest(t.ev('session-start', { ...inTerminal, sessionId: 's2', callerPid: 101 }))
+    await t.reads[0].fail()
+    await t.reads[1].answer(undefined)
+    expect(t.src.hasPane(t.agent())).toBe(false)
+    expect(t.logs).toEqual(['[observed] tty · not read'])
+    // Under load each `ps` may time out: no pid is asked more often than once every 10 s.
+    t.clock.t += 9_999
+    t.src.ingest(t.ev('turn-start', inTerminal))
+    expect(t.tty.mock.calls).toEqual([[100], [101]])
+    t.clock.t += 1
+    t.src.ingest(t.ev('turn-start', inTerminal))
+    t.src.ingest(t.ev('turn-start', { ...inTerminal, sessionId: 's2', callerPid: 101 }))
+    expect(t.tty.mock.calls).toEqual([[100], [101], [100]])
+    await t.reads[2].answer(TTY)
+    expect(t.src.hasPane(t.agent())).toBe(true)
+    // Read once, it is not read again.
+    t.clock.t += 10_000
+    t.src.ingest(t.ev('turn-start', inTerminal))
+    expect(t.tty).toHaveBeenCalledTimes(3)
+  })
+
+  it('the open scan reads the tty of an agent whose parents name a tab app', async () => {
+    const t = tabs({}, { apps: async () => new Map([[11, 'terminal-app'], [12, 'vscode']]) })
+    for (const [sessionId, pid] of [['a', 11], ['b', 12], ['c', 13]] as const) {
+      t.open.set(sessionId, 'terminal')
+      t.owners.set(sessionId, { pid, engine: 'claude' })
+      t.externals.set(sessionId, { cwd: `/x/${sessionId}`, transcriptPath: `/t/${sessionId}.jsonl` })
+      t.working.set(sessionId, false)
+    }
+    await t.src.scanOpen()
+    expect(t.tty.mock.calls).toEqual([[11]])
+    await t.reads[0].answer(TTY)
+    expect(t.src.hasPane(t.agent('a'))).toBe(true)
+    // Their first hooks: the process read already is not read again; the one nothing named is read now.
+    t.src.ingest(t.ev('turn-start', { sessionId: 'a', callerPid: 11, ...inTerminal }))
+    t.src.ingest(t.ev('turn-start', { sessionId: 'c', callerPid: 13, ...inTerminal }))
+    expect(t.tty.mock.calls).toEqual([[11], [13]])
+  })
+
+  it('hasPane needs a tab app, a tty, a live session and an open stream', async () => {
+    const t = tabs()
+    t.src.ingest(t.ev('session-start', inTerminal))
+    await t.reads[0].answer(TTY)
+    expect(t.src.hasPane(t.agent())).toBe(true)
+    t.actions.tabsOpen.mockReturnValue(false)
+    expect(t.src.hasPane(t.agent())).toBe(false)
+    t.actions.tabsOpen.mockReturnValue(true)
+    t.src.ingest(t.ev('session-end', inTerminal))
+    expect(t.src.hasPane(t.agent())).toBe(false)
+    // Resumed in the same process: its tty is still its own.
+    t.src.ingest(t.ev('session-start', inTerminal))
+    expect(t.src.hasPane(t.agent())).toBe(true)
+    // The same process says another app now: no tab app holds it.
+    t.src.ingest(t.ev('turn-start', { hostHints: { TERM_PROGRAM: 'vscode' } }))
+    expect(t.src.hasPane(t.agent())).toBe(false)
+    expect(t.tty).toHaveBeenCalledTimes(1)
+
+    // No routes for the dial's voice and tap: status only.
+    const bare = setup({ tty: vi.fn(async () => TTY) })
+    bare.src.ingest(bare.ev('session-start', inTerminal))
+    await flushed()
+    expect(bare.src.hasPane(bare.src.list()[0])).toBe(false)
+  })
+
+  it('with no tty reader (off macOS) nothing is read and no agent has a tab', () => {
+    const { actions } = fakeActions()
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('session-start', inTerminal))
+    expect(src.hasPane(src.list()[0])).toBe(false)
+    expect(src.byTab('terminal-app', TTY)).toBeUndefined()
+  })
+
+  it('showPane writes one select that does not raise and answers ok, and failed with no stream', async () => {
+    const t = tabs()
+    t.src.ingest(t.ev('session-start', inTerminal))
+    await t.reads[0].answer(TTY)
+    expect(await t.src.showPane(t.agent())).toBe('ok')
+    expect(t.actions.tabSelect.mock.calls).toEqual([['terminal-app', TTY, false]])
+    expect(t.actions.orcaSwitch).not.toHaveBeenCalled()
+    expect(t.actions.open).not.toHaveBeenCalled()
+    // A line the stream did not take.
+    t.actions.tabSelect.mockReturnValue('failed')
+    expect(await t.src.showPane(t.agent())).toBe('failed')
+    t.actions.tabsOpen.mockReturnValue(false)
+    expect(await t.src.showPane(t.agent())).toBe('failed')
+    expect(t.actions.tabSelect).toHaveBeenCalledTimes(2)
+  })
+
+  it('an agent with an Orca handle is shown by Orca, whatever its app', async () => {
+    const t = tabs()
+    t.src.ingest(t.ev('session-start', { hostHints: { ...inTerminal.hostHints, ORCA_TERMINAL_HANDLE: HANDLE } }))
+    await t.reads[0].answer(TTY)
+    expect(await t.src.showPane(t.agent())).toBe('ok')
+    expect(t.actions.orcaSwitch.mock.calls).toEqual([[HANDLE]])
+    expect(t.actions.tabSelect).not.toHaveBeenCalled()
+  })
+
+  /** A tap's open, held until the test answers it. */
+  const heldOpen = () => {
+    let answer!: (opened: boolean) => void
+    const open = vi.fn((_agentId: string, _target: OpenTarget) => new Promise<boolean>((resolve) => { answer = resolve }))
+    return { open, answer: (opened: boolean) => answer(opened) }
+  }
+
+  it('a tap opens the app, then selects the tab with raise', async () => {
+    const held = heldOpen()
+    const t = tabs({ open: held.open })
+    t.src.ingest(t.ev('session-start', inTerminal))
+    await t.reads[0].answer(TTY)
+    const tap = t.src.focus(t.agent())
+    await flushed()
+    expect(held.open.mock.calls).toEqual([[t.agent().id, { bundle: 'com.apple.Terminal' }]])
+    expect(t.actions.tabSelect).not.toHaveBeenCalled()
+    held.answer(true)
+    expect(await tap).toBe(true)
+    expect(t.actions.tabSelect.mock.calls).toEqual([['terminal-app', TTY, true]])
+  })
+
+  it('a tap whose open fails selects nothing, and answers false', async () => {
+    const t = tabs({ open: vi.fn(async () => false) })
+    t.src.ingest(t.ev('session-start', inTerminal))
+    await t.reads[0].answer(TTY)
+    expect(await t.src.focus(t.agent())).toBe(false)
+    expect(t.actions.tabSelect).not.toHaveBeenCalled()
+  })
+
+  it('an agent that ended, or whose pid changed, while open ran gets no select', async () => {
+    for (const meanwhile of [{ event: 'session-end', pid: 100 }, { event: 'turn-start', pid: 101 }] as const) {
+      const held = heldOpen()
+      const t = tabs({ open: held.open })
+      t.src.ingest(t.ev('session-start', inTerminal))
+      await t.reads[0].answer(TTY)
+      const tap = t.src.focus(t.agent())
+      t.src.ingest(t.ev(meanwhile.event, { ...inTerminal, callerPid: meanwhile.pid }))
+      held.answer(true)
+      expect(await tap).toBe(true)
+      expect(t.actions.tabSelect).not.toHaveBeenCalled()
+    }
+  })
+
+  it('with no stream a tap only opens; a tap on an agent with an Orca handle writes no select', async () => {
+    const t = tabs({ tabsOpen: vi.fn(() => false) })
+    t.src.ingest(t.ev('session-start', inTerminal))
+    t.src.ingest(t.ev('session-start', { sessionId: 'orca', callerPid: 101, hostHints: { ...inTerminal.hostHints, ORCA_TERMINAL_HANDLE: HANDLE } }))
+    await t.reads[0].answer(TTY)
+    await t.reads[1].answer('/dev/ttys024')
+    expect(await t.src.focus(t.agent())).toBe(true)
+    t.actions.tabsOpen.mockReturnValue(true)
+    expect(await t.src.focus(t.agent('orca'))).toBe(true)
+    expect(t.actions.open).toHaveBeenCalledTimes(2)
+    expect(t.actions.tabSelect).not.toHaveBeenCalled()
+  })
+
+  it('byTab: the live agent of that app and tty, the most recently active of two, none for another app, an ended session or an unknown tty', async () => {
+    const t = tabs()
+    t.src.ingest(t.ev('session-start', { sessionId: 'a', callerPid: 100, ...inTerminal }))
+    t.clock.t += 1_000
+    t.src.ingest(t.ev('session-start', { sessionId: 'b', callerPid: 101, ...inTerminal }))
+    t.src.ingest(t.ev('session-start', { sessionId: 'c', callerPid: 102, hostHints: { TERM_PROGRAM: 'iTerm.app' } }))
+    for (const read of t.reads) await read.answer(TTY)
+    expect(t.src.byTab('terminal-app', TTY)).toMatchObject({ sessionId: 'b' })
+    t.clock.t += 1_000
+    t.src.ingest(t.ev('turn-start', { sessionId: 'a', callerPid: 100, ...inTerminal }))
+    expect(t.src.byTab('terminal-app', TTY)).toMatchObject({ sessionId: 'a' })
+    expect(t.src.byTab('iterm', TTY)).toMatchObject({ sessionId: 'c' })
+    expect(t.src.byTab('ghostty', TTY)).toBeUndefined()
+    expect(t.src.byTab('terminal-app', '/dev/ttys024')).toBeUndefined()
+    t.src.ingest(t.ev('session-end', { sessionId: 'a', callerPid: 100, ...inTerminal }))
+    t.src.ingest(t.ev('session-end', { sessionId: 'b', callerPid: 101, ...inTerminal }))
+    expect(t.src.byTab('terminal-app', TTY)).toBeUndefined()
   })
 })
 
