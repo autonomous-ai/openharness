@@ -63,6 +63,7 @@ import type { StartedBy } from './agentAttribution.js'
 import { PTY_HOST_INSTANCE } from './ptyHost/instance.js'
 import { isKittyGraphicsCommand } from './terminalTitle.js'
 import { sid } from './log.js'
+import { HOOK_GATEWAY_ENGINES } from './gatewayRuntime.js'
 
 export type { ProcessIdentity } from './terminalTypes.js'
 
@@ -411,9 +412,6 @@ export interface RegisterInput {
   /** Codex only, the hook's own CODEX_HOME. Fill-only, and only when this session's transcript is under its sessions folder. */
   codexHome?: string
 }
-
-/** The engines whose gateway only their hook can say: Codex's is in its argv (lib/gatewayRuntime.ts). */
-const HOOK_GATEWAY_ENGINES: ReadonlySet<AgentEngine> = new Set(['claude', 'opencode', 'hermes'])
 
 /** Display name for a session's "project" tab/tile. A user rename (persisted override) is
  *  authoritative and FIXED. Until there is one, a session is called what its engine calls it — the
@@ -2780,8 +2778,9 @@ class Registry {
     const before = rowFingerprint(persistedRow(session))
     this.drop(session)
     session.processIdentity = processIdentity
-    // A Codex's argv, which cannot change under a running process, is the truth for this pid. Undefined (any
-    // other engine, whose hook says it, or a relaunch) keeps what the row knew.
+    // A Codex's argv, which cannot change under a running process, is the truth for this pid, and an engine with no
+    // gateway Harness can see says null. Undefined (Claude Code, OpenCode and Hermes, whose hook says it, or a
+    // relaunch) keeps what the row knew.
     if (gateway !== undefined) session.gateway = gateway
     // The grid follows the same rule. It matters most right after a retarget: the respawned pane is a new
     // pid, and this is where its new grid lands.

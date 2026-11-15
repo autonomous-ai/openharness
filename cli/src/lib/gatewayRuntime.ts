@@ -20,8 +20,8 @@ export function argvNamesOpenRouterProvider(args: string): boolean {
     || /model_providers\.openrouter\./.test(args)
 }
 
-/** The engines whose hook says the gateway (registry.ts `HOOK_GATEWAY_ENGINES`): discovery never speaks over it. */
-const HOOK_GATEWAY_ENGINES: ReadonlySet<AgentEngine> = new Set(['claude', 'opencode', 'hermes'])
+/** The engines whose gateway only their hook can say: discovery never speaks over it, and a bind takes the hook's word. */
+export const HOOK_GATEWAY_ENGINES: ReadonlySet<AgentEngine> = new Set(['claude', 'opencode', 'hermes'])
 
 /**
  * What a command line says of the gateway: Codex's routing is its argv, so its absence there is a finding. An engine
