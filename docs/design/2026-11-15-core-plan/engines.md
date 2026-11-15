@@ -8,10 +8,12 @@ State (2026-11-15, the second agent): step 1 is split in two pull requests, as t
 
 - **Step 1a, done:** PR #4317 from branch `core-engines-2` (the two WIP commits of `core-engines-1`, finished).
   The worker `engine-others` reads the fourteen engines' history and last turns; the core routes, bounds and checks.
-- **Step 1b, carried implementation still WIP:** the live part below (attach, normalizers and readers, live parsers, their Stop
-  rules, and the five profile `transcript()` readers). Start it from `main` once 1a has landed, on `core-engines-3`.
+- **Step 1b, implementation done; merge pending:** attach, normalizers and readers, live parsing, Stop integration,
+  and the five profile transcript readers now run through the optional worker on `codex/core-engines-continue`.
+  Final integrated-head receipts, bundled shared-connection acceptance and the final performance confirmation remain
+  publication gates. Step 2 (pane/config/catalog/model controls) and step 3 (purge/export) are still open.
 
-## Continuation, 2026-11-15: live-worker implementation and performance verified; final integration gates pending
+## Continuation, 2026-11-15: live-worker implementation done; merge pending
 
 Worktree `/tmp/harness-core-engines-continue`, branch `codex/core-engines-continue`. Root owns integration,
 publication and review. The original `core-engines-3` worktree is untouched. Starting head was `9e3db0a932`,
@@ -47,7 +49,11 @@ model-control work remains step 2; purge/export remains step 3. This is step 1b,
   across arbitrary rewrites are **not** claimed to be recoverable exactly once. Existing live Cursor prefix reconciliation
   is preserved. Malformed/oversized worker replies are bounded and held, never accepted as valid turn evidence.
 - Scale: collection, decoded reply (64 MiB), recursion, event/frame and input bounds are checked before core use.
-  Open/wait retries use at most five exponential-backoff attempts. A fatal Opencode/Kilo/Hermes/Devin reader retires its stream and wakes the core with the existing lost token; a late fatal callback cannot retire a replacement. A reconnect resets retry admission; shutdown cancels
+  Open/wait retries use at most five exponential-backoff attempts. A fatal Opencode/Kilo/Hermes/Devin reader stops
+  immediately and rejects later callbacks and operations. Frames accepted before failure retain their existing outbox
+  budget and drain through normal pages/acks; only the final ack reports the lost token. Empty failures report it at
+  once. Forget/clear releases retained references and bytes exactly once; an old final ack cannot remove a replacement.
+  A reconnect resets retry admission; shutdown cancels
   backoff, pending opens, Tasks, store readers, cleanup timers and the owned watcher. Pressure first shows as named
   reader-unavailable/history-uncertain state and bounded admission failures, rather than unlimited allocations.
 - Compatibility: protocol 2 adds live work; protocol 1 remains history-only with live parsing inline. Explicit inline
@@ -65,7 +71,8 @@ model-control work remains step 2; purge/export remains step 3. This is step 1b,
 
 ### Validation
 
-All logs below are local `/tmp/core-engines-*.log`; none is a published receipt until the clean-head check runs.
+Logs below are local `/tmp/core-engines-*.log`. Genuine clean-head receipts exist for the named checkpoints below;
+only the final integrated source's receipt and acceptance may authorize publication.
 
 - Red/green regressions cover initial/reconnect lifetime, pending-open interruption, operation/Stop ownership,
   exact UTF-8 fold/tail gaps, queued Cursor Tasks, replacement between fold and registration, late tail cancellation,
@@ -95,8 +102,9 @@ All logs below are local `/tmp/core-engines-*.log`; none is a published receipt 
   Diagnostic profiles that omit the settling window are not accepted measurements: the baseline's history read
   correctly returned busy while startup recaps still occupied its slots.
 - The added unaffected-Claude assertion found same-connection request ordering: a pending other-engine history read
-  delays that connection's next message. Root owns that independent router investigation. A second connection's
-  engine turn is the separate process-wide isolation check; it does not excuse the same-connection finding.
+  delayed that connection's next message. Root's independently reviewed #4337 fixes that boundary and is integrated.
+  A second connection's engine turn remains the separate process-wide isolation check; it does not excuse the
+  same-connection finding. Both variants await final bundled acceptance on this package's final integrated source.
 - The Cursor cap regression reproduced old-prefix replay after a capped fold; growing beyond the cap also left an
   unbounded reader active. Both fail before the fix. Worker/watcher/golden: 96 passed (5.70 s); the two cap tests also
   verify that an oversized snapshot causes zero content-read calls (1.13 s). Typecheck passed.
@@ -121,9 +129,45 @@ All logs below are local `/tmp/core-engines-*.log`; none is a published receipt 
   Both delivered exactly 4,000 start/text/end frames and about 4.462 MB. Runs took 45.17/43.95 s; reports are
   `/tmp/core-engines-confirm-{before,after}.json` and logs of the same names. Before and final use the same pinned
   Node, fixture source, fake agents and private daemon/tmux workload. No profiler was active in either run.
-- Root integrates current main once this candidate is clean; exact final-head local receipts then require **core,
-  harnessd, portability and resume** (the last two selected by inherited mock-spec changes). All four gates are pending.
-  Final performance reports, receipt and handoff are local `/tmp/core-engines-*` artifacts; publication is root's.
+- The first official run at `1388d989133aeb89865d57f8ac05cae4e02b6ec6` found a real retirement bug: a fatal reader
+  discarded accepted frames before its queued wait flushed. Core had 4,480 pass / one fail (227.65 s); the other three
+  gates passed. The failing pre-fatal event assertion was preserved. Seven new retirement tests failed before the fix;
+  267 worker/core/golden tests passed afterward (11.04 s), with TypeScript green. `7b1e240513ac689558cc6055423518f12c11c16b`
+  retains accepted pages until acknowledged, denies retired-token operations and protects cleanup/replacement.
+- The runtime-profile golden still called the removed raw core parser. Four named baseline cases failed. Its fixture
+  now obtains fold/live ProfileEvidence from the production worker and crosses it as JSON; all 482 original hashes
+  remain unchanged, and all 16 tests passed (6.26 s). Actual queued config-read promises replace its fixed 30 ms sleep.
+  A follow-up audit of every RuntimeProfileState/Manager caller found five stale assertions in three other fixtures;
+  629 other tests passed. Those callers now use the production Cursor/Grok/Pi/CommandCode evidence producers, with all
+  assertions retained. The corrected callers and full runtime golden passed 109 tests (26.52 s); TypeScript passed.
+- Clean checkpoints `7b1e240513` and `ec80da592f70b60c9841d09dcdbf8c8c779220a6` passed the actual local-check runner:
+  **core 4,481, harnessd 369, portability 1,066, resume 482**, all required coverage at 100%. The ec80 durations were
+  190.29 / 26.19 / 175.95 / 105.83 s. Existing skips: harnessd one; portability ten tests / two files. These receipts
+  precede the final caller-fixture/notes commit and current-main integration; the final exact-head receipt is still
+  required. Architecture/environment/lean entry passed 89 tests on 7b1e (156.07 s).
+- The successful 4,000-turn performance pair above covers the implementation before the retirement ack correction.
+  A final quiet, unprofiled pair on the same workload is reserved after bundled acceptance; the earlier pair remains
+  historical evidence, not a claim about unmeasured final source. Reports, exact receipt and final handoff are local
+  `/tmp/core-engines-*` artifacts; root owns publication. No source/docs commit should follow the final receipt.
+
+### Source boundary and remaining work
+
+The AST walk uses the architecture test's value-import rules: default excludes the `engines/inProcess.ts` dynamic
+door and inline services; warmed follows every engine door but still excludes inline services. Each default file set
+matches its checked-in inventory. These are source counts, not process memory or proof that every parser is unloaded.
+
+| Exact source | Default files / lines | Warmed files / lines |
+|---|---:|---:|
+| Performance baseline `aad8dcd5354246aa56898f6e73524f519cdaf0c7` | 539 / 92,691 | 645 / 108,723 |
+| Integrated history main `1c37a340a83b5d9803f21e5ee5b1b15d8694584f` | 539 / 92,861 | 645 / 108,894 |
+| Step 1b runtime at `7b1e240513ac689558cc6055423518f12c11c16b` | 539 / 93,092 | 645 / 109,104 |
+
+Against that integrated base, step 1b adds 231 default / 210 warmed lines, with file counts unchanged. Its bounded
+coordinator replaces direct live ownership, but the pane/runtime door still loads 106 additional files / 16,012 lines.
+Step 2 must remove that implementation dependency; step 3 must move purge/export. This is implementation completion
+of step 1b only, with merge pending. The whole package and daemon-core plan are not complete. Native runtime/process
+acceptance here is macOS only; native Windows/Linux acceptance is not claimed. Reproducer/results:
+`/tmp/core-engines-closure.cjs`, `/tmp/core-engines-closure-{before,final-base,final}.json`.
 
 ## Step 1a: what landed
 

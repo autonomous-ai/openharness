@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { env } from '../config/env.js'
 import { runtime as claudeRuntime } from '../engines/claude/runtimeProfile.js'
+import { transcriptEvidence as piTranscriptEvidence } from '../engines/pi/profileReader.js'
 import type { RegisteredSession } from './registry.js'
 import { RuntimeProfileState } from './runtimeProfileState.js'
 import { RuntimeProfileManager } from './runtimeProfile.js'
@@ -19,6 +20,10 @@ vi.mock('../engines/inProcess.js', async (real) => {
 })
 
 const fixture = (name: string): string => readFileSync(join(import.meta.dirname, '__fixtures__', name), 'utf8')
+const piEvidence = (line: string) => {
+  const evidence = piTranscriptEvidence(JSON.parse(line))
+  return evidence ? [evidence] : []
+}
 const session = (engine: RegisteredSession['engine']): RegisteredSession => ({
   agentId: 'agent', sessionId: 'conversation', engine, model: 'registered-model', cliVersion: '1.0.0',
   cwd: '/tmp', transcriptPath: '/tmp/profile-recording.jsonl',
@@ -418,16 +423,16 @@ describe('runtime profiles without the pilot implementations', () => {
       '{"type":"thinking_level_change","id":"1da16955","parentId":"45215278","level":"medium"}',
     ]
     expect(lines.map(line => claudeRuntime.decode(JSON.parse(line)))).toEqual([null, null, null])
-    manager.hydrate(agent, lines)
+    manager.hydrateEvidence(agent, lines.flatMap(piEvidence))
     manager.ingestPane(agent, '0.0%/500k (auto)                    minimax/minimax-m3 • high', true)
     const before = manager.getState(agent.sessionId)
     expect(parseRuntimeProfile(manager.selectedModel(agent))).toMatchObject({
       engine: 'pi', model: 'minimax/minimax-m3', effort: 'high',
     })
     // An answer explaining another CLI uses ordinary text in Pi's recorded message envelope.
-    expect(manager.ingest(agent, JSON.stringify({ type: 'message', message: {
+    expect(manager.evidence(agent, piEvidence(JSON.stringify({ type: 'message', message: {
       role: 'assistant', content: [{ type: 'text', text: 'Set model to Opus 5\nSet effort level to low' }],
-    } }), true)).toBe(false)
+    } })), true)).toBe(false)
     expect(manager.getState(agent.sessionId)).toEqual(before)
   })
 
@@ -437,30 +442,30 @@ describe('runtime profiles without the pilot implementations', () => {
   it('reads Pi 1.0 model and thinking level from its session, never from the clipped footer', () => {
     const manager = new RuntimeProfileState(() => undefined)
     const agent = session('pi')
-    manager.hydrate(agent, [
+    manager.hydrateEvidence(agent, [
       '{"type":"session","version":3,"id":"s1","timestamp":"2026-10-15T03:00:00.000Z","cwd":"/tmp/pi"}',
       '{"type":"model_change","id":"m1","parentId":null,"timestamp":"2026-10-15T03:00:01.000Z","provider":"autonomous-ai","modelId":"DeepSeek-V4-Flash-0731"}',
       '{"type":"thinking_level_change","id":"t1","parentId":"m1","timestamp":"2026-10-15T03:00:01.000Z","thinkingLevel":"off"}',
-    ])
+    ].flatMap(piEvidence))
     expect(parseRuntimeProfile(manager.selectedModel(agent))).toMatchObject({ engine: 'pi', model: 'DeepSeek-V4-Flash-0731', effort: 'off' })
     expect(manager.ingestPane(agent, '↑14M ↓289k R21M CH0.0% 51.4%/256k (auto)                        DeepSeek-V4-Fla', true)).toBe(false)
     expect(parseRuntimeProfile(manager.selectedModel(agent))?.model).toBe('DeepSeek-V4-Flash-0731')
     // Every answer names the model that gave it.
-    expect(manager.ingest(agent, JSON.stringify({ type: 'message', message: {
+    expect(manager.evidence(agent, piEvidence(JSON.stringify({ type: 'message', message: {
       role: 'assistant', provider: 'autonomous-ai', model: 'Qwen/Qwen3.8-27B', content: [{ type: 'text', text: 'ok' }],
-    } }), true)).toBe(true)
+    } })), true)).toBe(true)
     expect(parseRuntimeProfile(manager.selectedModel(agent))?.model).toBe('Qwen/Qwen3.8-27B')
     // A person's message names none.
-    expect(manager.ingest(agent, JSON.stringify({ type: 'message', message: { role: 'user', model: 'other', content: [] } }), true)).toBe(false)
+    expect(manager.evidence(agent, piEvidence(JSON.stringify({ type: 'message', message: { role: 'user', model: 'other', content: [] } })), true)).toBe(false)
   })
 
   it('confirms a Pi switch from the model_change its /model writes', async () => {
     const manager = new RuntimeProfileState(() => undefined)
     const agent = session('pi')
-    manager.hydrate(agent, ['{"type":"model_change","provider":"autonomous-ai","modelId":"DeepSeek-V4-Flash-0731"}'])
+    manager.hydrateEvidence(agent, piEvidence('{"type":"model_change","provider":"autonomous-ai","modelId":"DeepSeek-V4-Flash-0731"}'))
     manager.beginControl(agent, { id: 'target', sessionId: agent.sessionId, engine: agent.engine, model: 'Qwen/Qwen3.8-27B', effort: 'auto' })
     const waiting = manager.waitForModel(agent.sessionId, 1000)
-    manager.ingest(agent, '{"type":"model_change","provider":"autonomous-ai","modelId":"Qwen/Qwen3.8-27B"}', true)
+    manager.evidence(agent, piEvidence('{"type":"model_change","provider":"autonomous-ai","modelId":"Qwen/Qwen3.8-27B"}'), true)
     expect(await waiting).toBe(true)
   })
 
