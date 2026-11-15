@@ -66,6 +66,73 @@ be reviewed before implementation. No engine store is newly deleted; OpenClaw's 
 - Platforms: TypeScript behavior affects macOS, Linux and Windows. Local native acceptance is macOS on pinned Node 24.22.2;
   no new process-spawn implementation. Native Windows/Linux acceptance is not claimed by local tests.
 
+## Native switch during Close: approved correction design
+
+Bundled acceptance at `ec9b5b6903` demonstrated a separate authority gap: Hermes changed its native terminal record
+while the worker's output descriptor was held, but Close still returned `closed: true`. `binding.whileChanging` correctly
+holds registry rebinding during Stop, so the registry-only current callback cannot see that switch. The first fixture
+incorrectly waited for that suppressed registry update; its corrected native-record rendezvous reproduced the failure
+in 9.39 seconds. Both runs are retained. `captureResumeIdentity` immediately accepts an already-bound database ID, and
+`stopAgentService` retains `verifyTranscript` only for file-backed histories. An extra asynchronous identity read would
+leave another unfenced wait and is not the proposed correction.
+
+The proposed seam is one operation-owned native proof, composed with existing binding/process/cancellation guards and
+passed from Stop into checkpoint publication and physical-signal callbacks. The core derives every inspected path from
+its captured engine/profile and trusted declarations; no worker result supplies path or SQL authority. A small generic
+verifier checks exact parent routes, file identities and generations, including absent WAL and rollback-journal names.
+Its immutable facts survive asynchronous work; each verification receives a fresh bounded read budget, as
+`controlTranscriptEvidence` does, rather than retaining an expired lookup budget.
+
+Target selection is factored once, before export. Static stores retain the existing captured profile/environment and
+declared filename semantics. OpenClaw retains the captured state directory (or the existing held-state discovery and
+default), extracts the agent from `OPENCLAW_KEY`, and applies the existing `agents.entries.<id>.agentDir` location rule.
+The core reads at most 1 MiB of `openclaw.json`, using a regular-file descriptor and exact route/identity/version proof;
+an absent config is retained as absent, while an unreadable, oversized or malformed config holds Close. The shared
+locator parses only this location declaration, never vendor database schema or rows, and adds no cache. Alias changes,
+config replacement and a formerly absent config appearing revoke the selection. The private export request carries
+the selected canonical database path and its file key. The worker reads only that target, validates its identity, and
+does not repeat profile/config discovery or accept a replacement path from a service answer. Where a declared path is
+an alias, the request also retains that core-selected spelling solely for the existing v1 `database` metadata bytes;
+it grants no second read target. Database/WAL/journal generation evidence and export thus refer to the same file.
+
+- Before the first Stop effect: capture the database, WAL and journal generations before export. Verify the same proof
+  before stage publication, manifest publication, and after every asynchronous wait before the first Stop effect.
+  The final proof/current check and a physical signal have no await between them. A switch, unreadable/replaced path or late
+  evidence refuses the attempt, leaving the process alive. All five database engines share this revocation rule.
+- Hermes has an exact declared terminal-record claim. Derive its names from the captured home and the verified terminal's
+  tty/pane, bind the bounded record bytes and identities, require the current ID to match, and retain that claim through
+  the same boundaries. A stale initial Hermes binding is also refused. Where a native process/session record already
+  supplies proof, retain it instead of dropping it after lookup. Missing/ambiguous/unreadable claims remain unknown.
+- A database generation fence detects mutations during this operation; it does **not** prove that OpenCode/Kilo/Devin's
+  initial cwd/time-derived binding was the active conversation. OpenClaw's key/location also does not itself prove the
+  terminal's active key. Their existing initial binding policy is unchanged by this scoped correction; it must not be
+  represented as upgraded native identity, nor replaced by permanent refusal just to make that claim.
+- Only after the first verified Stop effect succeeds may its pre-stop database generation retire. Normal termination
+  legitimately changes message rows and end markers. Existing process/binding/cancellation checks remain on escalation;
+  an exact native record naming a different conversation still revokes a live-process action. The first-effect seam
+  must be explicit, not an elapsed timeout or a promise that merely started. An effect includes native server Stop or
+  unload, as well as an OS signal; none of the five current database engines declares a shared server. A queued grant,
+  denied native action or throwing signal does not retire the generation. The successful effect boundary, rather than
+  an assumed engine kind, owns this transition.
+- After positively confirmed exit, capture fresh database generations for the final checkpoint. The prior generation
+  and a live-process record cannot be required after a legitimate exit. Final export includes flushed rows, is fenced
+  through publication by its new generation, and must be durable before Close is acknowledged.
+
+Shared database activity may conservatively refuse saving even when it belongs to another conversation. No other
+writer is locked or deleted, and no store is vacuumed. This availability cost must be measured alongside a quiet
+successful Close; a changing pool is a named visible hold, never a stale success. The data cap, four-slot growth bound,
+audience, identity, manifest/30-day client compatibility and rollback behavior above remain unchanged.
+
+Red plan: keep the real Hermes native-switch failure; exercise switches during export, between verification and
+publication, and after the last await before signal through the real Stop/checkpoint callers. Cover every database
+layout's main/WAL/journal mutation, replacement, absence becoming present, cancellation and unknown evidence. Prove
+unchanged stores still close, shared-writer mutations retain both conversations, ordinary exit flushes are included in
+the post-exit checkpoint, denied signals/native unloads retain their pre-effect proof, and expected native-record removal
+on confirmed exit does not make normal Close fail. Source/config/alias substitution tests prove the worker cannot
+redirect an export to another database. No
+production switch, registry refresh loop, worker SQL authority or second history cache is proposed. Runtime changes
+follow caller red tests; the proof API and source diff are reviewed before full gates or performance.
+
 ## Purge design still under review
 
 The existing stopped-agent `.resume` reservation is durable, but its stale takeover is based on age. A timeout or lost
