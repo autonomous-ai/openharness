@@ -1,3 +1,4 @@
+import { removeRegistryAgent } from '../testing/registryFixtures.js'
 import { screenFor } from '../engines/screens.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CloseAgentService, inspectCloseActivity as inspectCloseReading, type CloseActivity, type CloseAgentServiceDeps, type AgentCloseRequest } from './closeAgentService.js'
@@ -30,11 +31,11 @@ beforeEach(async () => {
       await options.checkpoint?.(row, 'before')
       await options.beforeStop?.(row)
       if (options.current?.() === false) throw new Error('cancelled')
-      registry.removeAgent(id)
+      ;(await removeRegistryAgent(registry, id))
     }) }
   service = new CloseAgentService(deps)
 })
-afterEach(async () => { service.dispose(); vi.useRealTimers(); vi.restoreAllMocks(); for (const s of registry.list()) registry.removeAgent(s.agentId); await registry.flush() })
+afterEach(async () => { service.dispose(); vi.useRealTimers(); vi.restoreAllMocks(); for (const s of registry.list()) (await removeRegistryAgent(registry, s.agentId)); await registry.flush() })
 
 it('backs up an idle session before stopping, without treating a tab switch as Close', async () => {
   service.start()
@@ -102,7 +103,7 @@ it.each(['capture', 'checkpoint'] as const)('a queued Pi Close retries real nati
     await options.checkpoint!(captured, 'before')
     await options.beforeStop!(captured)
     expect(options.current!()).toBe(true)
-    registry.removeAgent(id)
+    ;(await removeRegistryAgent(registry, id))
   })
   try {
     writeFileSync(native, '{partial')
@@ -390,7 +391,7 @@ it.each(['claude', 'codex'] as const)('closes an unused %s chat only after savin
     expect(JSON.parse(readFileSync(join(directory, manifest.file), 'utf8')).screen).toBe(screen)
     expect(options.current!()).toBe(true)
     await options.checkpoint!(row, 'after')
-    registry.removeAgent(id)
+    ;(await removeRegistryAgent(registry, id))
   })
   expect(await service.request(request('inspect'))).toEqual({ activity: 'idle' })
   expect(await service.request(request('idle'))).toEqual({ closed: true })
@@ -575,7 +576,7 @@ describe('a close of a harness still starting', () => {
       if (!options.withoutConversation) throw held()
       options.withoutConversation()
       unbound++
-      registry.removeAgent(id)
+      ;(await removeRegistryAgent(registry, id))
     })
     expect(await service.request(request('now'))).toEqual({ closed: true, withoutConversation: true })
     expect(unbound).toBe(1)
@@ -591,7 +592,7 @@ describe('a close of a harness still starting', () => {
     vi.mocked(deps.stop).mockImplementation(async (id, options) => {
       if (!options.withoutConversation) throw held()
       options.withoutConversation()
-      registry.removeAgent(id)
+      ;(await removeRegistryAgent(registry, id))
     })
     expect(await service.request(request('now'))).toMatchObject({ error: 'IDENTITY_UNAVAILABLE' })
     deps.atStartupQuestion = vi.fn(async () => false)
@@ -610,7 +611,7 @@ describe('a close of a harness still starting', () => {
     delete row.launch
     vi.mocked(deps.stop).mockImplementation(async (id, options) => {
       if (!options.withoutConversation) throw held()
-      registry.removeAgent(id)
+      ;(await removeRegistryAgent(registry, id))
     })
     deps.atStartupQuestion = vi.fn(async () => true)
     service = new CloseAgentService(deps)
@@ -620,7 +621,7 @@ describe('a close of a harness still starting', () => {
   it('a close that finds it idle stops it the same way; one that finds it working leaves it', async () => {
     vi.mocked(deps.stop).mockImplementation(async (id, options) => {
       if (!options.withoutConversation) throw held()
-      registry.removeAgent(id)
+      ;(await removeRegistryAgent(registry, id))
     })
     vi.mocked(deps.activity).mockResolvedValue('working')
     expect(await service.request(request('idle'))).toEqual({ error: 'SESSION_NOT_IDLE', activity: 'working' })
@@ -643,7 +644,7 @@ describe('a close of a harness still starting', () => {
       if (++calls === 9) bind()
       if (calls < 10) throw held()
       expect(options.withoutConversation).toBeUndefined()
-      registry.removeAgent(id)
+      ;(await removeRegistryAgent(registry, id))
     })
     expect(await service.request(request('now'))).toEqual({ closed: true })
     expect(calls).toBe(10)
@@ -688,7 +689,7 @@ describe('a close of a harness still starting', () => {
       if (change === 'reopened') await service.cancel(row.agentId)
       else if (change === 'replaced') row.processIdentity = { pid: 778, startMarker: 'reborn', executable: 'codex' }
       else if (change === 'disposed') service.dispose()
-      else registry.removeAgent(row.agentId)
+      else (await removeRegistryAgent(registry, row.agentId))
     })
     expect(await service.request(request('now'))).toEqual({ error: 'AGENT_CHANGED' })
     expect(stops()).toHaveLength(1)

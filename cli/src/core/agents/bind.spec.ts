@@ -393,6 +393,7 @@ describe('binding a running process to its session', () => {
   it.each([new Error('saved header is incomplete'), 'saved header is incomplete'])(
     'keeps a saved binding visibly held until its own evidence recovers: %s', async error => {
       const run = setup(), row = agent({ transcriptPath: '/t/s1.jsonl', identityHold: 'previous hold' })
+      run.byAgent.set(row.agentId, row)
       vi.mocked(run.deps.registry.byProcess).mockReturnValue(row)
       vi.mocked(run.deps.registry.revalidateBinding).mockImplementationOnce(() => { throw error })
         .mockImplementationOnce(() => { throw error })

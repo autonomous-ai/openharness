@@ -1,3 +1,4 @@
+import { removeRegistryAgent } from '../testing/registryFixtures.js'
 import type { Server } from 'node:http'
 import type { HookServerHandlers } from '../hookServer.js'
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
@@ -196,7 +197,7 @@ it('does not consume post-rename uncertainty as success after a local removal ch
   await expect((async () => (await registry.register(input())))()).rejects.toThrow('registry storage write failed')
   fault.directorySync = false
   const written = readFileSync(file, 'utf8')
-  registry.removeAgent(target)
+  ;(await removeRegistryAgent(registry, target))
   expect((await registry.register(input()))).toBeNull()
   expect(registry.byAgent(target)).toBeUndefined()
   const saved = JSON.parse(readFileSync(file, 'utf8')).find((row: { agentId: string }) => row.agentId === target)
@@ -265,8 +266,10 @@ it('rolls back only its unpublished image before a different local write and the
 it('contains another directory failure while reversing an unpublished binding for removal', async () => {
   fault.directorySync = true; fault.renamed = false
   await expect((async () => (await registry.register(input())))()).rejects.toThrow('registry storage write failed')
-  registry.removeAgent(target)
+  await expect(removeRegistryAgent(registry, target)).rejects.toThrow('registry storage write failed')
+  expect(registry.byAgent(target)).toBeDefined()
   fault.directorySync = false
+  await removeRegistryAgent(registry, target)
   ;(await registry.flush())
   expect((await registry.register(input()))).toBeNull()
   const saved = JSON.parse(readFileSync(file, 'utf8')).find((row: { agentId: string }) => row.agentId === target)
@@ -496,7 +499,7 @@ it('the actual Stop job blocks hook admission before its first asynchronous step
 })
 
 it('recovers a peer-changed fileless binding only after fresh native source admission', async () => {
-  registry.removeAgent(target)
+  ;(await removeRegistryAgent(registry, target))
   const agent = (await registry.openProcessAgent({ engine: 'hermes', tmuxPane: '%1', cwd: root,
     processIdentity: { pid: 6101, startMarker: 'fixture-start', executable: '<hermes>' } }))!.entry
   const body = { engine: 'hermes' as const, tmuxPane: '%1', sessionId: '20261010_050000_abcdef', cwd: root, processIdentity: agent.processIdentity! }

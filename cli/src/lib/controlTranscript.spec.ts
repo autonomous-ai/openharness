@@ -1,3 +1,4 @@
+import { removeRegistryAgent } from '../testing/registryFixtures.js'
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
@@ -427,7 +428,7 @@ it.each(['before', 'configuration', 'history repair', 'permission', 'tmux dispat
       if (phase === 'permission') writeFileSync(transcript, header(B))
       return { choice, droppedFlag: null }
     })
-    registry.removeAgent(row.agentId)
+    ;(await removeRegistryAgent(registry, row.agentId))
     const stopped = new StoppedAgentStore(join(root, 'stopped')); stopped.save(row)
     const writeConfiguration = vi.fn()
     const prepare = vi.fn(async () => { if (phase === 'history repair') writeFileSync(transcript, header(B)); return phase === 'history repair' })

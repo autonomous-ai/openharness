@@ -1,3 +1,4 @@
+import { removeRegistryAgent } from '../testing/registryFixtures.js'
 import { screenFor } from '../engines/screens.js'
 import { inlineNativeControls } from '../testing/inlineNativeControls.js'
 import { readFile, readdir, stat } from 'node:fs/promises'
@@ -82,7 +83,7 @@ it.runIf(process.env.RUN_REAL_TMUX_DISCOVERY === '1')('saves and closes an inact
     expect(await server.run('list-panes', '-t', 'terminal-close', '-F', '#{pane_id}')).toBe(neighbor)
   } finally {
     close?.dispose()
-    if (agentId) registry.removeAgent(agentId)
+    if (agentId) (await removeRegistryAgent(registry, agentId))
     vi.restoreAllMocks()
     vi.unstubAllEnvs()
     await server.close()

@@ -1,3 +1,4 @@
+import { removeRegistryAgent } from '../testing/registryFixtures.js'
 import { readInlineScreen } from '../testing/inlineScreen.js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { RuntimeActivityReader } from './runtimeActivity.js'
@@ -9,7 +10,7 @@ async function session(): Promise<RegisteredSession> {
   Object.assign(row, { sessionId: 'conversation', processIdentity: { pid: 78, startMarker: 'start', executable: 'codex' } })
   return row
 }
-afterEach(() => { for (const row of registry.list()) registry.removeAgent(row.agentId) })
+afterEach(async () => { for (const row of registry.list()) (await removeRegistryAgent(registry, row.agentId)) })
 async function control() {
   let now = 1000
   const row = (await session())

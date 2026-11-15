@@ -1,3 +1,4 @@
+import { removeRegistryAgent } from './testing/registryFixtures.js'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -61,7 +62,7 @@ describe.each([
   })
 
   afterEach(async () => {
-    registry.removeAgent(agentId)
+    ;(await removeRegistryAgent(registry, agentId))
     await socket.stop()
     rmSync(dir, { recursive: true, force: true })
   })
@@ -85,7 +86,7 @@ describe.each([
     const whole = (await ask('session_get', { sessionId })).events
     // What a stop, or a relaunch that had to leave the conversation for a new one, keeps of it.
     stoppedAgents.save(registry.resolve(sessionId)!)
-    registry.removeAgent(agentId)
+    ;(await removeRegistryAgent(registry, agentId))
     try {
       expect(registry.resolve(sessionId)).toBeUndefined()
       expect((await ask('session_get', { sessionId })).events).toEqual(whole)
@@ -177,6 +178,6 @@ describe.each([
       ;(await registry.register({ engine: 'opencode', sessionId: `ses_history${pane}`, tmuxPane: paneId, cwd: dir }))
       const reply = await ask('sessions_list', { agentId: store })
       expect(reply.sessions).toEqual([expect.objectContaining({ id: `ses_history${pane}`, messageCount: 0 })])
-    } finally { registry.removeAgent(store) }
+    } finally { (await removeRegistryAgent(registry, store)) }
   })
 })

@@ -1,3 +1,4 @@
+import { removeRegistryAgent } from '../testing/registryFixtures.js'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { link, mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -43,7 +44,7 @@ beforeEach(async () => {
   directory = join(root, 'checkpoints')
   store = new SessionCheckpointStore(directory)
 })
-afterEach(async () => { vi.restoreAllMocks(); for (const s of registry.list()) registry.removeAgent(s.agentId); await rm(root, { recursive: true, force: true }) })
+afterEach(async () => { vi.restoreAllMocks(); for (const s of registry.list()) (await removeRegistryAgent(registry, s.agentId)); await rm(root, { recursive: true, force: true }) })
 const manifest = async () => JSON.parse(await readFile(join(directory, (await readdir(directory)).find(f => /^[a-f0-9]{64}\.json$/.test(f))!), 'utf8'))
 
 async function piSession() {

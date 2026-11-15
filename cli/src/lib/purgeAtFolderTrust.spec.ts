@@ -1,3 +1,4 @@
+import { removeRegistryAgent } from '../testing/registryFixtures.js'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -58,7 +59,7 @@ beforeEach(async () => {
   vi.mocked(captureResumeIdentity).mockReset().mockRejectedValue(new IdentityReadUnavailable('the native control helper is unavailable'))
   vi.mocked(terminateDeletedAgent).mockReset().mockResolvedValue('gone')
 })
-afterEach(() => { for (const entry of registry.list()) registry.removeAgent(entry.agentId); rmSync(root, { recursive: true, force: true }); vi.restoreAllMocks() })
+afterEach(async () => { for (const entry of registry.list()) (await removeRegistryAgent(registry, entry.agentId)); rmSync(root, { recursive: true, force: true }); vi.restoreAllMocks() })
 
 it('deletes a Codex agent held at its folder-trust question, which has no conversation to keep', async () => {
   expect(await deleteIt(purge())).toMatchObject({ deleted: true })

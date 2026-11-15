@@ -1,3 +1,4 @@
+import { removeRegistryAgent } from '../testing/registryFixtures.js'
 /**
  * A guest's harness against an owner's, on a real Mac with guest access: the same program, run in the owner's tmux
  * as the owner and through the guest helper as a guest's own OS user (docs/plans/2026-10-19-guest-machine-sharing-plan.md).
@@ -147,7 +148,7 @@ real('a guest\'s harness against an owner\'s', () => {
       registry, stoppedAgents, restartJobs: new AgentRestartCoordinator(), stopJobs: new Map(),
       backendFor: (runtime) => runtime.backend === 'tmux' ? backend : undefined,
       agentReconciler: { suppress: () => {}, holdRoute: () => {}, releaseRoute: () => {}, trigger: async () => {} },
-      forgetSession: async (id) => { registry.removeAgent(id) }, markDeleted: () => {}, clearDeleted: () => {},
+      forgetSession: async (id) => { (await removeRegistryAgent(registry, id)) }, markDeleted: () => {}, clearDeleted: () => {},
       stopNative: async () => { throw new Error('a guest\'s engine is not this daemon\'s to unload') },
     })
     await stop(agent.agentId)

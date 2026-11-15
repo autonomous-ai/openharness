@@ -1,3 +1,4 @@
+import { removeRegistryAgent } from '../testing/registryFixtures.js'
 import { describe, expect, it, vi } from 'vitest'
 import { createRestoreLaunch } from '../core/agents/restoreLaunch.js'
 import { WindowsBatchLaunchRefused } from './windows/launch.js'
@@ -161,7 +162,7 @@ it('publishes the fresh fallback token before dispatch and recognizes its own gu
   const respawn = h.deps.respawn
   h.deps.respawn = async (runtime, launch, control) => {
     if (!launch.nativeToken) return respawn(runtime, launch, control)
-    control!.onDispatch!()
+    await control!.onDispatch!()
     expect(h.rows.get('agent-a')!.launch).toEqual({ state: 'starting', nativeToken: 'fresh-fallback' })
     expect(control!.current!()).toBe(true)
     return respawn(runtime, launch, { ...control!, onDispatch: undefined })
@@ -1407,7 +1408,7 @@ describe('missing held panes against the durable registry', () => {
       const committing = realRegistry.transaction(() => realRegistry.setLaunch(entries[0].agentId, heldLaunch('store')))
       await expect((async () => (await realRegistry.setClosePlan(entries[0].agentId, null)))()).resolves.not.toBeInstanceOf(Error)
       await committing
-    } finally { for (const entry of entries) realRegistry.removeAgent(entry.agentId) }
+    } finally { for (const entry of entries) (await removeRegistryAgent(realRegistry, entry.agentId)) }
   })
 
   it('an allocated waiting row stays inactive while a service answer is outstanding', async () => {
@@ -1425,7 +1426,7 @@ describe('missing held panes against the durable registry', () => {
       finish({ held: 'store' })
       await restoring
       expect(realRegistry.byAgent(entry.agentId)?.active).toBe(false)
-    } finally { realRegistry.removeAgent(entry.agentId) }
+    } finally { (await removeRegistryAgent(realRegistry, entry.agentId)) }
   })
 
   it('an unrelated live pane pin cannot block missing held recovery', async () => {

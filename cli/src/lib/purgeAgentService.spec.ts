@@ -1,3 +1,4 @@
+import { removeRegistryAgent } from '../testing/registryFixtures.js'
 import { existsSync, linkSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { execFileSync } from 'node:child_process'
@@ -38,7 +39,7 @@ beforeEach(async () => {
   stop = vi.fn(async (id, options) => {
     expect(options.current?.()).toBe(true)
     stopped.save(registry.byAgent(id)!)
-    registry.removeAgent(id)
+    ;(await removeRegistryAgent(registry, id))
   })
   deleted = vi.fn(); eraseRecords = vi.fn(async () => {}); eraseFirst = vi.fn(async () => {}); now = 1000
   workspaces = () => worktrees.worktreeAnswers(worktrees)
@@ -46,7 +47,7 @@ beforeEach(async () => {
     worktrees: () => workspaces(), stopped, checkpoints, stop, restarting: () => false, deleted, eraseRecords, eraseFirst, now: () => now })
   target = { agentId: session.agentId, sessionId: session.sessionId, createdAt: session.registeredAt }
 })
-afterEach(() => { for (const row of registry.list()) registry.removeAgent(row.agentId); rmSync(root, { recursive: true, force: true }); vi.restoreAllMocks() })
+afterEach(async () => { for (const row of registry.list()) (await removeRegistryAgent(registry, row.agentId)); rmSync(root, { recursive: true, force: true }); vi.restoreAllMocks() })
 const review = () => service.request({ ...target, mode: 'inspect' })
 const remove = (reviewId: unknown) => service.request({ ...target, mode: 'delete', reviewId: String(reviewId) })
 
@@ -350,7 +351,7 @@ describe('a harness still starting', () => {
 
 it('can explicitly review remaining checkpoints after an interrupted partial deletion', async () => {
   await checkpoints.save(session, { screen: 'keep until confirmed' })
-  stopped.save(session); registry.removeAgent(session.agentId)
+  stopped.save(session); (await removeRegistryAgent(registry, session.agentId))
   rmSync(session.transcriptPath!)
   const plan = await review()
   expect(plan.reviewId).toBeTypeOf('string')

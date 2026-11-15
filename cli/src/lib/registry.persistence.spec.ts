@@ -1,3 +1,4 @@
+import { removeRegistryAgent } from '../testing/registryFixtures.js'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { fork, type ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
@@ -101,13 +102,16 @@ it('awaits a durable close and preserves observations arriving while its lock is
   expect(rows()[0]).toMatchObject({ cwd: '/fixture/new-project', closePlan: plan })
 })
 
-it('does not publish a strict candidate after its live owner was removed while waiting', async () => {
+it('does not publish a strict candidate after its operation was cancelled while waiting', async () => {
   await locked()
-  const committed = registry.setClosePlan(input.agentId, plan)
+  let current = true
+  const committed = registry.setClosePlan(input.agentId, plan, { current: () => current })
   expect(committed).toBeInstanceOf(Promise)
-  registry.removeAgent(input.agentId)
+  current = false
+  const removed = removeRegistryAgent(registry, input.agentId)
   holder!.send('release')
   await expect(committed).rejects.toThrow()
+  await removed
   await registry.flush()
   expect(registry.byAgent(input.agentId)).toBeUndefined()
   expect(rows()).toEqual([])
@@ -174,7 +178,7 @@ it('owns its candidate values while preserving later edits through a live row al
 
 it('publishes a resumed owner only after durability and rejects cancelled resume authority', async () => {
   const saved = structuredClone(registry.byAgent(input.agentId)!)
-  registry.removeAgent(input.agentId)
+  ;(await removeRegistryAgent(registry, input.agentId))
   await registry.flush()
   await locked()
   let current = true
@@ -217,14 +221,15 @@ it('does not transfer a queued registration to a replacement route owner', async
   await locked()
   const first = registry.setClosePlan(input.agentId, plan).catch(error => error)
   const preceding = registry.flush()
+  const replaced = registry.openProcessAgent({ ...input, agentId: 'replacement-agent', engine: 'codex',
+    processIdentity: { ...input.processIdentity, pid: 102, startMarker: 'replacement' } })
   const registration = registry.register({ engine: 'claude', sessionId: 'queued-conversation', tmuxPane: '%1',
     transcriptPath: join(directory, 'queued-conversation.jsonl') })
   const settled = registration.catch(error => error)
-  registry.removeAgent(input.agentId)
-  ;(await registry.openProcessAgent({ ...input, agentId: 'replacement-agent', processIdentity: { ...input.processIdentity, pid: 102, startMarker: 'replacement' } }))
   holder!.send('release')
   await first
   await preceding
+  await replaced
   expect(String(await settled)).toContain('registry owner changed')
   expect(registry.byAgent('replacement-agent')?.sessionId).toBe('')
   expect(registry.byAgent('replacement-agent')?.processIdentity?.pid).toBe(102)

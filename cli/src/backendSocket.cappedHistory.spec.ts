@@ -1,3 +1,4 @@
+import { removeRegistryAgent } from './testing/registryFixtures.js'
 // `session_get` for an engine with no pages of its own reads its transcript from the end, bounded
 // (lib/transcriptTail.ts `tailFileCapped`): a transcript past the cap shows its newest history, and every
 // reply says so. A real file over the cap is 64 MB; the reader is made to cut short instead.
@@ -49,7 +50,7 @@ describe('session_get past the cap, for an engine without pages', () => {
   })
   afterEach(async () => {
     reader.cut = false
-    for (const agentId of agents.splice(0)) registry.removeAgent(agentId)
+    for (const agentId of agents.splice(0)) (await removeRegistryAgent(registry, agentId))
     await socket.stop()
     vi.restoreAllMocks()
   })

@@ -1,6 +1,7 @@
+import { releaseRegistryEngine, removeRegistryAgent } from '../testing/registryFixtures.js'
 /** Real registry images at the callers that release terminals or announce launches. */
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { env } from '../config/env.js'
@@ -17,6 +18,7 @@ import { StoppedAgentStore } from './stoppedAgents.js'
 import { MoveGate } from './hostMove/gate.js'
 import { AtomicWriteUnconfirmed } from './registryPersistence.js'
 import type { TerminalBackend } from './terminalBackend.js'
+import { createBinding } from '../core/agents/bind.js'
 import { createStopAgentService } from './stopAgentService.js'
 import { createForgetSession } from '../core/agents/forget.js'
 import { createDiscoveryHandlers, type DiscoveryDeps } from '../core/agents/discovery.js'
@@ -61,6 +63,7 @@ vi.mock('node:fs/promises', async original => {
   } }
 })
 vi.mock('./paneEngineProcess.js', async original => ({ ...await original<object>(), resolvePaneEngineProcess: vi.fn() }))
+vi.mock('./deleteAgentFallback.js', async original => ({ ...await original<object>(), checkPidRuntime: async () => ({ state: 'gone', reason: 'fixture terminated' }) }))
 vi.mock('./workspaceCheck.js', () => ({ workspaceMissing: () => null }))
 vi.mock('./captureResumeIdentity.js', () => ({ captureResumeIdentity: async (row: RegisteredSession) => row }))
 vi.mock('./launchOverrides.js', async original => ({ ...await original<object>(), validateLaunchOverrides: async () => ({ ok: true }) }))
@@ -107,7 +110,7 @@ afterEach(async () => {
   image.match = undefined; image.wait = undefined; image.release?.(); image.release = undefined
   image.failSync = 0; image.renamed = false; image.afterFailure = undefined
   image.names = false
-  for (const entry of registry.list()) registry.removeAgent(entry.agentId)
+  for (const entry of registry.list()) (await removeRegistryAgent(registry, entry.agentId))
   await registry.flush()
   rmSync(directory, { recursive: true, force: true })
 })
@@ -277,8 +280,50 @@ function restoreDeps(done: () => void): RestoreAgentsDeps {
   }
 }
 
+it('binding revalidation cannot change Stop evidence while its prepared image waits', async () => {
+  const sessionId = '44444444-4444-4444-8444-444444444444', home = join(directory, 'codex')
+  const transcript = join(home, 'sessions', `rollout-${sessionId}.jsonl`)
+  mkdirSync(join(home, 'sessions'), { recursive: true })
+  writeFileSync(transcript, JSON.stringify({ type: 'session_meta', payload: { id: sessionId, cwd: directory, source: 'cli' } }) + '\n')
+  const process = { ...oldProcess, executable: '/fixture/codex' }
+  Object.assign(row, { engine: 'codex', codexHome: home, sessionId, transcriptPath: transcript, boundAt: 1,
+    processIdentity: process, launch: { state: 'ready' } })
+  await registry.flush()
+  registry.setIdentityHold(row.agentId, 'waiting for evidence')
+  row = registry.byAgent(row.agentId)!
+  row.title = 'observed title pending publication'
+  const revision = row.evidenceRevision
+  const store = new StoppedAgentStore(join(directory, 'revalidation-stop')), jobs = new Map<string, Promise<void>>()
+  const binding = createBinding({ registry, mirror: { inheritSummary: vi.fn() }, forgetSession: vi.fn(), clients: { send: vi.fn() },
+    attachSession: vi.fn(async () => true), announceSession: announce, stoppedAgents: store, syncRecapPool: vi.fn(),
+    input: { forget: vi.fn(), awaitingConfirmation: () => false }, submitAgent: vi.fn(), deviceInput: { forget: vi.fn() },
+    homes: { copilot: directory, grok: directory, agy: directory }, capturePane: async () => null,
+    openclawPaneRead: vi.fn(), openclawPaneDue: () => false, openclawStateDir: async () => null })
+  binding.whileChanging(id => jobs.has(id))
+  const nativeEntered = deferred(), nativeDone = deferred(), deleted = vi.fn()
+  const stop = createStopAgentService({ registry, stoppedAgents: store, restartJobs: new AgentRestartCoordinator(), stopJobs: jobs,
+    backendFor: () => ({ kill: async () => ({ state: 'succeeded', dispatch: 'executed' }) }),
+    agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), trigger: async () => {} },
+    forgetSession: async (_id, options) => { await registry.confirmEngineExit(row.agentId, 'remove', options?.authority); deleted() },
+    markDeleted: vi.fn(), clearDeleted: vi.fn(), stopNative: async () => { nativeEntered.resolve(); await nativeDone.promise } })
+  const held = holdImage(rows => rows.some(entry => entry.agentId === row.agentId && entry.title === row.title))
+  const revalidating = binding.bindObservedAgent({ engine: 'codex', processIdentity: process, cwd: directory,
+    runtimes: [runtime], primaryRuntimeKey: row.primaryRuntimeKey, args: '', resumeSessionId: null } as DiscoveredTerminalAgent)
+  await held.entered
+  const stopping = stop(row.agentId).catch(error => error)
+  await nativeEntered.promise
+  held.release(); await revalidating
+  const afterRevision = registry.byAgent(row.agentId)?.evidenceRevision
+  nativeDone.resolve()
+  expect(await stopping).toBeUndefined()
+  expect(afterRevision).toBe(revision)
+  expect(announce).not.toHaveBeenCalled()
+  expect(deleted).toHaveBeenCalledOnce()
+  expect(persisted().some(entry => entry.agentId === row.agentId)).toBe(false)
+})
+
 it('Stop keeps its reply, deletion and resume reservation pending until removal is durable', async () => {
-  registry.releaseEngine(row.agentId)
+  ;(await releaseRegistryEngine(registry, row.agentId))
   await registry.flush()
   row = registry.byAgent(row.agentId)!
   const store = new StoppedAgentStore(join(directory, 'stop-archive'))
@@ -312,8 +357,8 @@ it.each((['new owner', 'adopted shell', 'archived owner', 'starting owner'] as c
   const store = new StoppedAgentStore(join(directory, 'discovery-archive')), send = vi.fn(), moved = vi.fn(), forgotten = vi.fn(async () => {})
   let current = row
   if (mode === 'new owner') row.sessionId = 'previous-session'
-  if (mode === 'adopted shell') current = registry.releaseEngine(row.agentId)!
-  if (mode === 'archived owner') { store.save(row); current = registry.releaseEngine(row.agentId, true)! }
+  if (mode === 'adopted shell') current = (await releaseRegistryEngine(registry, row.agentId))!
+  if (mode === 'archived owner') { store.save(row); current = (await releaseRegistryEngine(registry, row.agentId, true))! }
   if (mode === 'starting owner') registry.setLaunch(row.agentId, { state: 'starting', nativeToken: startingToken })
   await registry.flush()
   const identity = mode === 'archived owner' ? oldProcess : newProcess
@@ -542,8 +587,85 @@ it('restore journals the native dispatch before its backend may start the engine
   expect(dispatched).toBe(true)
 })
 
+it.each(['none', 'during', 'after'] as const)('fresh native fallback durably releases the old binding and accepts its %s dispatch hook', async hook => {
+  const freshId = '33333333-3333-4333-8333-333333333333'
+  const home = join(directory, 'codex'), transcript = join(home, 'sessions', `rollout-${freshId}.jsonl`)
+  mkdirSync(join(home, 'sessions'), { recursive: true })
+  writeFileSync(transcript, JSON.stringify({ type: 'session_meta', payload: { id: freshId, cwd: directory, source: 'cli' } }) + '\n')
+  Object.assign(row, { engine: 'codex', codexHome: home, sessionId: 'abandoned-conversation',
+    transcriptPath: join(directory, 'abandoned.jsonl'), boundAt: 1, source: 'fixture', processIdentity: null,
+    launch: { state: 'starting', nativeToken: startingToken } })
+  await registry.flush()
+  const done = deferred(), deps = restoreDeps(done.resolve)
+  let dispatched = false, hooked = false, beforeDispatch: RegisteredSession | undefined
+  const native = { ...newProcess, executable: '/fixture/codex' }
+  const bind = async () => {
+    hooked = true
+    expect(await registry.register({ engine: 'codex', sessionId: freshId, transcriptPath: transcript,
+      codexHome: home, cwd: directory, runtimes: [runtime], processIdentity: native })).not.toBeNull()
+  }
+  deps.probeProcess = async () => {
+    if (!dispatched) return null
+    if (hook === 'after' && !hooked) await bind()
+    return native
+  }
+  deps.paneState = async () => ({ dead: !dispatched, engineExit: dispatched ? null : 1 })
+  deps.respawn = async (_runtime, _launch, control) => {
+    await control?.onDispatch?.()
+    beforeDispatch = persisted().find(entry => entry.agentId === row.agentId)
+    dispatched = true
+    if (hook === 'during') await bind()
+    return { ok: true }
+  }
+  await restoreAgents(deps); await done.promise
+  expect(dispatched).toBe(true)
+  expect(beforeDispatch).toMatchObject({ sessionId: '', transcriptPath: null, boundAt: null, source: null })
+  expect(releaseHold).toHaveBeenCalledOnce()
+  expect(persisted().find(entry => entry.agentId === row.agentId)).toMatchObject({
+    sessionId: hook === 'none' ? '' : freshId, processIdentity: native, launch: { state: 'ready' },
+  })
+})
+
+it.each(['unbind', 'journal'] as const)('fresh fallback retains the terminal when its %s publication is unconfirmed', async phase => {
+  Object.assign(row, { sessionId: 'abandoned-conversation', transcriptPath: join(directory, 'abandoned.jsonl'),
+    processIdentity: null, boundAt: 1, launch: { state: 'starting', nativeToken: startingToken } })
+  await registry.flush()
+  const held = holdImage(rows => rows.some(entry => entry.agentId === row.agentId && !entry.sessionId
+    && (phase === 'unbind' || entry.launch?.state === 'starting' && entry.launch.nativeToken === replacementToken)))
+  const done = deferred(), deps = restoreDeps(done.resolve)
+  let dispatched = false
+  deps.probeProcess = async () => null
+  deps.paneState = async () => ({ dead: true, engineExit: 1 })
+  deps.respawn = async (_runtime, _launch, control) => { await control?.onDispatch?.(); dispatched = true; return { ok: true } }
+  await restoreAgents(deps); await held.entered
+  expect(dispatched).toBe(false)
+  expect(registry.byAgent(row.agentId)?.sessionId).toBe(phase === 'unbind' ? 'abandoned-conversation' : '')
+  image.renamed = false; image.failSync = 1
+  held.release(); await done.promise
+  expect(dispatched).toBe(false)
+  expect(releaseHold).not.toHaveBeenCalled()
+  expect(deps.log).toHaveBeenCalledWith(expect.stringContaining('registry publication unavailable'))
+})
+
+it('fresh fallback refuses a replacement binding during prepared readiness', async () => {
+  Object.assign(row, { sessionId: 'abandoned-conversation', processIdentity: null,
+    launch: { state: 'starting', nativeToken: startingToken } })
+  await registry.flush()
+  const held = holdImage(rows => rows.some(entry => entry.agentId === row.agentId && entry.launch?.state === 'ready'))
+  const done = deferred(), deps = restoreDeps(done.resolve)
+  let dispatched = false
+  deps.probeProcess = async () => dispatched ? newProcess : null
+  deps.paneState = async () => ({ dead: !dispatched, engineExit: dispatched ? null : 1 })
+  deps.respawn = async (_runtime, _launch, control) => { await control?.onDispatch?.(); dispatched = true; return { ok: true } }
+  await restoreAgents(deps); await held.entered
+  registry.byAgent(row.agentId)!.sessionId = 'replacement-conversation'
+  held.release(); await done.promise
+  expect(releaseHold).not.toHaveBeenCalled()
+  expect(registry.byAgent(row.agentId)?.sessionId).toBe('replacement-conversation')
+})
+
 it('restore publishes a recreated terminal before releasing its shell', async () => {
-  registry.releaseEngine(row.agentId)
+  ;(await releaseRegistryEngine(registry, row.agentId))
   await registry.flush()
   const held = holdImage(rows => rows.some(entry => entry.agentId === row.agentId && entry.engine === 'terminal' && entry.launch?.state === 'ready'))
   const deps = restoreDeps(() => {})

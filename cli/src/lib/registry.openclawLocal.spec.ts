@@ -1,3 +1,4 @@
+import { removeRegistryAgent } from '../testing/registryFixtures.js'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -44,7 +45,7 @@ it('a local row keeps its folder through a save, a load, a bind and a resume, an
   const again = (await load()).registry
   const saved = { ...again.byAgent(row.agentId)! }
   expect(saved).toMatchObject({ openclawLocal: '/run/skill-1', openclawStateDir: '/run/skill-1' })
-  again.removeAgent(row.agentId)
+  ;(await removeRegistryAgent(again, row.agentId))
   expect((await again.resumePendingAgent(saved, [{ backend: 'tmux', paneId: '%2' }]))).toMatchObject({ openclawLocal: '/run/skill-1' })
 })
 

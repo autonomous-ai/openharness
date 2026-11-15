@@ -1,3 +1,4 @@
+import { removeRegistryAgent } from '../../testing/registryFixtures.js'
 /**
  * The stop of a shared Codex conversation, end to end inside one process: the core's broker (rows, identity,
  * the grant's answers) with Codex's own control in process. These are the recorded cases of the former
@@ -42,7 +43,7 @@ beforeEach(async () => {
     connect: vi.fn(async () => ({ request, close })),
   }
 })
-afterEach(() => { for (const entry of registry.list()) registry.removeAgent(entry.agentId) })
+afterEach(async () => { for (const entry of registry.list()) (await removeRegistryAgent(registry, entry.agentId)) })
 it('stops only the named conversation and restores its disk history without restarting it', async () => {
   await stopSharedCodexSession(row, () => true, deps)
   expect(request.mock.calls.map(([method]) => method)).toEqual(['thread/read', 'thread/goal/get', 'thread/goal/set', 'thread/turns/list', 'turn/interrupt', 'thread/archive', 'thread/unarchive', 'thread/read'])

@@ -1,3 +1,4 @@
+import { removeRegistryAgent } from '../testing/registryFixtures.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -139,11 +140,11 @@ it('retains the reservation if terminal dispatch starts but loses its reply', as
 
 beforeEach(async () => {
   vi.clearAllMocks()
-  for (const row of registry.list()) registry.removeAgent(row.agentId)
+  for (const row of registry.list()) (await removeRegistryAgent(registry, row.agentId))
   dir = mkdtempSync(join(tmpdir(), 'resume-service-'))
   const original = (await registry.openPendingAgent({ engine: 'codex', runtimes: [{ backend: 'tmux', paneId: '%8' }], cwd: dir }))!
   saved = { ...original, sessionId: 'original-session', transcriptPath: join(dir, 'history.jsonl'), processIdentity: identity, launch: { state: 'ready' } }
-  registry.removeAgent(original.agentId)
+  ;(await removeRegistryAgent(registry, original.agentId))
   const store = new StoppedAgentStore(join(dir, 'saved'))
   store.save(saved)
   create.mockReset().mockResolvedValue({ state: 'succeeded', runtime: { backend: 'tmux', paneId: pane } })
@@ -178,7 +179,26 @@ beforeEach(async () => {
     attachSession: vi.fn(async () => true),
   }
 })
-afterEach(async () => { publication.wait = undefined; publication.release?.(); publication.release = undefined; publication.agent = ''; publication.temporary = ''; publication.published = false; publication.failSync = 0; publication.cleanupWait = undefined; vi.useRealTimers(); for (const row of registry.list()) registry.removeAgent(row.agentId); await registry.flush(); rmSync(dir, { recursive: true, force: true }) })
+afterEach(async () => { publication.wait = undefined; publication.release?.(); publication.release = undefined; publication.agent = ''; publication.temporary = ''; publication.published = false; publication.failSync = 0; publication.cleanupWait = undefined; vi.useRealTimers(); for (const row of registry.list()) (await removeRegistryAgent(registry, row.agentId)); await registry.flush(); rmSync(dir, { recursive: true, force: true }) })
+
+it.each(['stop', 'binding'] as const)('keeps the terminal hold when %s revokes Resume during backend release', async change => {
+  const entered = deferred<void>(), waiting = deferred<void>()
+  let released = false
+  releaseHold.mockImplementationOnce(async (_runtime, current?: () => boolean) => {
+    entered.resolve(); await waiting.promise
+    if (current?.() !== false) released = true
+  })
+  const result = start()
+  await entered.promise
+  vi.mocked(deps.announceSession).mockClear()
+  if (change === 'stop') deps.restartJobs.cancel(saved.agentId)
+  else registry.byAgent(saved.agentId)!.sessionId = 'replacement-conversation'
+  waiting.resolve()
+  expect(await result).toMatchObject({ ok: false, error: 'AGENT_CHANGED' })
+  expect(released).toBe(false)
+  expect(deps.announceSession).not.toHaveBeenCalled()
+  expect(deps.stoppedAgents.resumeReservedAt(saved.agentId)).not.toBeNull()
+})
 
 describe('resuming a stopped harness with new launch words', () => {
   const WORDS = ['--chrome']
@@ -578,14 +598,14 @@ describe('production resume handler', () => {
     expect(deps.attachSession).toHaveBeenCalledTimes(1)
     expect(deps.attachSession).toHaveBeenCalledWith(expect.objectContaining({ agentId: saved.agentId, sessionId: saved.sessionId, processIdentity: identity }))
 
-    for (const row of registry.list()) registry.removeAgent(row.agentId)
+    for (const row of registry.list()) (await removeRegistryAgent(registry, row.agentId))
     deps.stoppedAgents.finishResume(saved.agentId)
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     vi.mocked(deps.attachSession).mockRejectedValueOnce(new Error('transcript unreadable'))
     expect(await start()).toMatchObject({ ok: true })
     await vi.waitFor(() => expect(error).toHaveBeenCalledWith(`[resume] ${saved.agentId.slice(0, 8)} attach failed:`, 'transcript unreadable'))
     vi.mocked(deps.attachSession).mockRejectedValueOnce('gone')
-    for (const row of registry.list()) registry.removeAgent(row.agentId)
+    for (const row of registry.list()) (await removeRegistryAgent(registry, row.agentId))
     deps.stoppedAgents.finishResume(saved.agentId)
     expect(await start()).toMatchObject({ ok: true })
     await vi.waitFor(() => expect(error).toHaveBeenCalledWith(`[resume] ${saved.agentId.slice(0, 8)} attach failed:`, 'gone'))
@@ -882,7 +902,7 @@ describe('existing runtime and readiness verification', () => {
     const held = deferred<void>(), entered = deferred<void>()
     deps.retainExitedSession = vi.fn(async row => {
       entered.resolve(); await held.promise
-      registry.removeAgent(row.agentId)
+      ;(await removeRegistryAgent(registry, row.agentId))
       return { state: 'confirmed' as const, entry: null }
     })
     let settled = false
@@ -1005,7 +1025,7 @@ describe('existing runtime and readiness verification', () => {
   it.each(['missing row', 'exit dead pane', 'exit surviving pane', 'exit unknown process', 'mismatched session', 'failed hook', 'cancel process probe', 'cancel pane probe'] as const)('preserves work on %s', async mode => {
     ;(await live())
     vi.mocked(resolvePaneEngineProcess).mockImplementation(async () => {
-      if (mode === 'missing row') registry.removeAgent(saved.agentId)
+      if (mode === 'missing row') (await removeRegistryAgent(registry, saved.agentId))
       if (mode === 'mismatched session') registry.byAgent(saved.agentId)!.sessionId = 'other'
       if (mode === 'failed hook') registry.setLaunch(saved.agentId, { state: 'failed', error: 'RESUME_SESSION_MISMATCH', detail: 'fixture' })
       return null
@@ -1196,9 +1216,8 @@ it.each(['cancel', 'process', 'owner'] as const)('revokes resumed authority when
     if (change === 'cancel') deps.restartJobs.cancel(saved.agentId)
     else if (change === 'process') vi.mocked(resolvePaneEngineProcess).mockResolvedValue({ ...identity, startMarker: 'replacement-process' })
     else {
-      registry.removeAgent(saved.agentId)
-      ;(await registry.openProcessAgent({ agentId: saved.agentId, engine: 'codex', tmuxPane: pane, cwd: dir,
-        processIdentity: { ...identity, startMarker: 'replacement-owner' } }))
+      // A ready process observation can replace native ownership while the old image waits.
+      registry.updateProcessIdentity(saved.agentId, { ...identity, startMarker: 'replacement-owner' })
     }
   } finally { held.release() }
   const outcome = await result

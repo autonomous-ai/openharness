@@ -1,3 +1,4 @@
+import { releaseRegistryEngine } from '../testing/registryFixtures.js'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -94,7 +95,7 @@ it('inside a reconcile transaction it is taken only after the commit', async () 
 it('the shell an archived agent leaves behind carries no task', async () => {
   const { registry, row } = await bound()
   const archived = registry.byAgent(row.agentId)!
-  expect(registry.releaseEngine(row.agentId, true)!.firstTask).toBeUndefined()
+  expect((await releaseRegistryEngine(registry, row.agentId, true))!.firstTask).toBeUndefined()
   expect(archived.firstTask).toBe(TASK)
 })
 
@@ -102,7 +103,7 @@ it('the shell an archived agent leaves behind carries no task', async () => {
 // task waits for any OpenClaw the person starts in that shell, and one they typed it into themselves gets it twice.
 it('an agent whose engine exits to its shell drops the task, and says so', async () => {
   const { registry, row } = await pending()
-  expect(registry.releaseEngine(row.agentId)!.firstTask).toBeUndefined()
+  expect((await releaseRegistryEngine(registry, row.agentId))!.firstTask).toBeUndefined()
   await registry.flush()
   expect(disk()[0]).not.toHaveProperty('firstTask')
   expect(lines).toContain(`[agent] ${row.agentId.slice(0, 8)} first task dropped · its engine exited before it was typed`)

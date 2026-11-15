@@ -1,3 +1,4 @@
+import { removeRegistryAgent } from '../testing/registryFixtures.js'
 /** Healthy resume composition recorded from the former code, with no host engine or terminal. */
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -76,7 +77,7 @@ it.each(['linux', 'darwin'])('keeps healthy native resume composition on %s', as
       const original = (await registry.openPendingAgent({ engine, cwd: root, runtimes: [{ backend: 'tmux', paneId: `%${++pane}` }] }))!
       const saved = { ...original, sessionId: engine === 'terminal' ? '' : ID, transcriptPath: engine === 'terminal' ? null : file,
         processIdentity: { pid: 7000, executable: '<engine>', startMarker: 'prior-process' } }
-      registry.removeAgent(saved.agentId)
+      ;(await removeRegistryAgent(registry, saved.agentId))
       const stopped = new StoppedAgentStore(join(root, 'saved', engine)); stopped.save(saved)
       const events: unknown[] = []
       const terminal: ResumeAgentServiceDeps['createBackend'] & ReturnType<ResumeAgentServiceDeps['backendFor']> = {
@@ -104,7 +105,7 @@ it.each(['linux', 'darwin'])('keeps healthy native resume composition on %s', as
         sessionId: result.session.sessionId, source: result.session.source, launch: result.session.launch },
       reserved: stopped.resumeReservedAt(saved.agentId) !== null }
       if (!RECORD) expect({ key, value: captured[key] }).toEqual({ key, value: expected[key] })
-      registry.removeAgent(saved.agentId)
+      ;(await removeRegistryAgent(registry, saved.agentId))
     }
   } finally {
     await owned?.flush({ exiting: true }).catch(() => {})

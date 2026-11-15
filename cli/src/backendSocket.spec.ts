@@ -1,3 +1,4 @@
+import { removeRegistryAgent } from './testing/registryFixtures.js'
 import { USAGE_FALLBACKS } from './core/api.js'
 import * as gitPullRequest from './lib/gitPullRequest.js'
 import * as sessionGitPullRequest from './lib/sessionGitPullRequest.js'
@@ -90,7 +91,7 @@ describe('safe session close RPC', () => {
       await options.checkpoint(row, 'before')
       await options.beforeStop(row)
       expect(options.current()).toBe(true)
-      registry.removeAgent(row.agentId)
+      ;(await removeRegistryAgent(registry, row.agentId))
     })
     socket.closeAgentService = new CloseAgentService({
       registry, activity: async () => activity, checkpoint, stop, changed: () => {},
@@ -134,7 +135,7 @@ describe('safe session close RPC', () => {
       expect(stop).toHaveBeenCalledOnce()
       expect(registry.byAgent(row.agentId)).toBeUndefined()
     } finally {
-      registry.removeAgent(row.agentId)
+      ;(await removeRegistryAgent(registry, row.agentId))
       await socket.stop()
     }
   })
@@ -310,7 +311,7 @@ describe('agent_update opened: one "last used" for every app', () => {
   })
 
   afterEach(async () => {
-    registry.removeAgent(agentId)
+    ;(await removeRegistryAgent(registry, agentId))
     vi.useRealTimers()
     vi.restoreAllMocks()
     await socket.stop()

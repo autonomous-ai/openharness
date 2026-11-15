@@ -43,6 +43,11 @@ try {
   const { SYSTEM_BOOT_SOURCES } = await load('lib/bootId.ts')
   Object.assign(SYSTEM_BOOT_SOURCES, { linuxBootId: () => 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa', bootTimeSec: () => 1 })
   const { registry } = await load('lib/registry.ts')
+  // This historical workload also targets recorded pre-async CLI trees through CONTROL_COST_CLI.
+  const removeAgent = async (id: string) => {
+    if (typeof registry.confirmEngineExit === 'function') await registry.confirmEngineExit(id, 'remove')
+    else registry.removeAgent(id)
+  }
   const { captureResumeIdentity } = await load('lib/captureResumeIdentity.ts')
   const { SessionCheckpointStore } = await load('lib/sessionCheckpoint.ts')
   const { StoppedAgentStore } = await load('lib/stoppedAgents.ts')
@@ -65,7 +70,7 @@ try {
   const stop = createStopAgentService({ registry, stoppedAgents: stopped, restartJobs, stopJobs,
     tmuxBackend: { kill: async () => ({ state: 'succeeded', dispatch: 'executed' }) },
     agentReconciler: { suppress() {}, holdRoute() {}, releaseRoute() {}, trigger: async () => {} },
-    forgetSession: (target: string) => { registry.removeAgent(target) }, markDeleted() {}, clearDeleted() {}, stopNative: async () => {} })
+    forgetSession: removeAgent, markDeleted() {}, clearDeleted() {}, stopNative: async () => {} })
   const resume = createResumeAgentService({ registry, stoppedAgents: stopped, restartJobs, stopJobs, pinnedControls: new Set(),
     tmuxBackend: { create: forbidden, kill: forbidden }, retainExitedSession: forbidden, announceSession: forbidden,
     relaunchOverrides: async () => ({ ok: false, error: 'SERVICE_UNAVAILABLE', detail: 'Fixture dependency is unavailable.' }),
@@ -75,9 +80,9 @@ try {
   let cpuMs = 0, agent: import('../../src/lib/registry.js').RegisteredSession | undefined
   for (let i = 0; i < iterations; i++) {
     if (!agent || workload === 'stop' || workload === 'resume-held') {
-      agent = registry.openPendingAgent({ engine, cwd: root, runtimes: [{ backend: 'tmux', paneId: `%${i + 1}` }] })!
+      agent = (await registry.openPendingAgent({ engine, cwd: root, runtimes: [{ backend: 'tmux', paneId: `%${i + 1}` }] }))!
       Object.assign(agent, { sessionId: id, transcriptPath: file, processIdentity: null })
-      if (workload === 'resume-held') { registry.removeAgent(agent.agentId); stopped.save(agent) }
+      if (workload === 'resume-held') { await removeAgent(agent.agentId); stopped.save(agent) }
     }
     if (workload === 'checkpoint-reuse' && i === 0) await checkpoints.save(agent)
     if (workload.startsWith('checkpoint') && workload !== 'checkpoint-reuse') writeFileSync(file, contents + JSON.stringify({ turn: i }) + '\n')

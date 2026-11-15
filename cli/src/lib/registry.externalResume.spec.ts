@@ -1,3 +1,4 @@
+import { releaseRegistryEngine, removeRegistryAgent } from '../testing/registryFixtures.js'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -77,7 +78,7 @@ it('refuses process discovery and hooks for an inert route, across engines too',
 it('keeps a verified binding even when a provisional reservation appeared on disk after discovery', async () => {
   const { registry, row } = await pending()
   const provisional = disk()[0]
-  registry.removeAgent(row.agentId)
+  ;(await removeRegistryAgent(registry, row.agentId))
   const other = (await registry.openProcessAgent({ engine: 'claude', tmuxPane: '%2', cwd: root, processIdentity: { pid: 7002, executable: 'claude', startMarker: 'fixture' } }))!
   await registry.flush()
   write([...disk(), provisional])
@@ -209,7 +210,7 @@ it('blocks malformed persisted adoption instead of silently loading a fresh laun
 it('drops adoption constraints when its engine becomes a terminal', async () => {
   const { registry, row } = await pending()
   ;(await registry.setExternalResume(row.agentId, intent({ session: fact(), phase: 'admitted' })))
-  const shell = registry.releaseEngine(row.agentId)!
+  const shell = (await releaseRegistryEngine(registry, row.agentId))!
   expect(shell.engine).toBe('terminal')
   expect(shell.externalResume).toBeUndefined()
   expect(shell.resumeOnly).toBeUndefined()

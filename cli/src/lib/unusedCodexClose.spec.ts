@@ -1,3 +1,4 @@
+import { removeRegistryAgent } from '../testing/registryFixtures.js'
 import { screenFor } from '../engines/screens.js'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
@@ -64,10 +65,10 @@ beforeEach(async () => {
     checkpoint: (session, phase) => checkpoints.save(session, { screen: phase === 'before' ? screen : null }),
   })
 })
-afterEach(() => {
+afterEach(async () => {
   service.dispose()
   vi.restoreAllMocks()
-  for (const entry of registry.list()) registry.removeAgent(entry.agentId)
+  for (const entry of registry.list()) (await removeRegistryAgent(registry, entry.agentId))
 })
 
 it.each(['idle', 'now'] as const)('closes an unused companion with a shared Codex server after saving its terminal (%s)', async mode => {

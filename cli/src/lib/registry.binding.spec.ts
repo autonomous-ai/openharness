@@ -1,3 +1,4 @@
+import { unbindRegistrySession } from '../testing/registryFixtures.js'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -91,7 +92,7 @@ it('keeps holds transient and only retries bindings that still exist', async () 
   expect(registry.byAgent('fixture-0')?.identityHold).toHaveLength(1024)
   expect(registry.setIdentityHold('fixture-0', 'x'.repeat(2000))).toBe(false)
   expect(registry.setIdentityHold('fixture-0')).toBe(true)
-  registry.unbindSession(ids[0]!)
+  ;(await unbindRegistrySession(registry, ids[0]!))
   expect((await registry.revalidateBinding('fixture-0'))).toMatchObject({ sessionId: '', transcriptPath: null })
 })
 
@@ -194,7 +195,7 @@ it('retains monotonic recovery authority through register and save, and never pe
 
 it.each(['identity', 'interpretation', 'unbound'] as const)('does not transfer the old conversation’s %s obligation to a newly bound session', async hold => {
   const old = registry.byAgent('fixture-0')!
-  if (hold === 'unbound') registry.unbindSession(old.sessionId)
+  if (hold === 'unbound') (await unbindRegistrySession(registry, old.sessionId))
   registry.setIdentityHold(old.agentId, 'old header incomplete')
   if (hold === 'interpretation') (await registry.revalidateBinding(old.agentId))
   const revision = registry.byAgent(old.agentId)!.evidenceRevision

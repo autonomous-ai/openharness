@@ -1,3 +1,4 @@
+import { removeRegistryAgent } from '../testing/registryFixtures.js'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { captureResumeIdentity } from './captureResumeIdentity.js'
 import { createStopAgentService, type StopAgentServiceDeps } from './stopAgentService.js'
@@ -41,7 +42,7 @@ beforeEach(async () => {
   tmuxKill.mockReset().mockResolvedValue({ state: 'succeeded', dispatch: 'executed' })
   ptyKill.mockReset().mockResolvedValue({ state: 'succeeded', dispatch: 'executed' })
 })
-afterEach(async () => { vi.restoreAllMocks(); for (const entry of registry.list()) registry.removeAgent(entry.agentId); await registry.flush() })
+afterEach(async () => { vi.restoreAllMocks(); for (const entry of registry.list()) (await removeRegistryAgent(registry, entry.agentId)); await registry.flush() })
 
 it('saves history before removing the runtime, joins concurrent stops, and clears confirmed reservations', async () => {
   const token = stoppedAgents.beginResume(row.agentId); expect(token).toBeTruthy()
@@ -146,7 +147,7 @@ it('checks the saved guest process after its pane removes the registry row, with
   Object.assign(row, { guest: 'kim@example.com' })
   const identity = { ...row.processIdentity! }
   tmuxKill.mockImplementationOnce(async () => {
-    registry.removeAgent(row.agentId)
+    ;(await removeRegistryAgent(registry, row.agentId))
     return { state: 'succeeded', dispatch: 'executed' }
   })
   vi.mocked(checkPidRuntime).mockResolvedValueOnce({ state: 'alive' })
@@ -322,7 +323,7 @@ it('holds a conversation whose evidence fails at the pane close, as at every ear
 })
 it.each(['removed', 'replaced', 'conversation', 'route'] as const)('does not remove a target %s during termination', async mode => {
   vi.mocked(terminateDeletedAgent).mockImplementation(async () => {
-    if (mode === 'removed') registry.removeAgent(row.agentId)
+    if (mode === 'removed') (await removeRegistryAgent(registry, row.agentId))
     else if (mode === 'conversation') row.sessionId = 'different-conversation'
     else if (mode === 'route') row.runtimes = [{ backend: 'tmux', paneId: '%88' }]
     else row.processIdentity = { ...row.processIdentity!, pid: 88 }
@@ -424,7 +425,7 @@ it.each(['claude', 'codex'] as const)('captures an unbound %s conversation befor
 })
 it.each(['removed', 'replaced'] as const)('does not stop a process that was %s during identity capture', async mode => {
   vi.mocked(captureResumeIdentity).mockImplementation(async session => {
-    if (mode === 'removed') registry.removeAgent(row.agentId)
+    if (mode === 'removed') (await removeRegistryAgent(registry, row.agentId))
     else row.processIdentity = { ...row.processIdentity!, pid: 88 }
     return session
   })

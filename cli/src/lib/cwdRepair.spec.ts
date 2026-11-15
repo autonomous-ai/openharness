@@ -1,3 +1,4 @@
+import { removeRegistryAgent } from '../testing/registryFixtures.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -62,12 +63,12 @@ describe('repairProjectCwds (Claude Code rows)', () => {
     const archivedRow = (await bind((await open('d', '%4', project)), 'sess-d', [join(project, 'cli'), project]))
     registry.setCwd(archivedRow.agentId, join(project, 'cli'))
     store.save({ ...registry.byAgent(archivedRow.agentId)!, defaultName: 'harness Desktop' })
-    registry.removeAgent(archivedRow.agentId)
+    ;(await removeRegistryAgent(registry, archivedRow.agentId))
     const archivedBefore = store.get(archivedRow.agentId)!
     // A transcript-less fork of the drifted row, live and archived.
     const forkLive = (await open('e', '%5', join(project, 'cli'), { forkedFrom: { agentId: drifted.agentId, name: 'a' } }))
     const forkSaved = (await open('f', '%6', join(project, 'cli'), { forkedFrom: { agentId: archivedRow.agentId, name: 'd' } }))
-    store.save(forkSaved); registry.removeAgent(forkSaved.agentId)
+    store.save(forkSaved); (await removeRegistryAgent(registry, forkSaved.agentId))
     // A fork of a row that was never drifted keeps its own folder.
     const forkFine = (await open('g', '%7', join(project, 'cli'), { forkedFrom: { agentId: 'someone-else', name: 'x' } }))
 
