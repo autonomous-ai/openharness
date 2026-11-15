@@ -37,6 +37,7 @@
  */
 
 import { isTerminalEngine, type AgentEngine } from '../engines/types.js'
+import type { GridAssignment } from './gridAssignmentWire.js'
 import type { LaunchOverrides } from './launchOverrides.js'
 import type { AgentLaunch, ProcessIdentity, RegisteredSession } from './registry.js'
 import type { TerminalDispatchControl, TerminalRuntimeRef } from './terminalTypes.js'
@@ -59,6 +60,9 @@ export interface RestoreLaunch {
   /** The first task an engine takes typed, not in argv (engineLaunch.ts `typedFirstPrompt`): committed to the row with
    *  the dispatch (registry.ts `beginExternalDispatch`), so the bind pass types it once the pane is ready. */
   firstTask?: string
+  /** The grid this launch puts its engine on (`launchedGrid`), written on the row with the process it starts: null
+   *  on the engine's own login. Absent from a pane that only waits, which starts no engine. */
+  grid?: GridAssignment | null
 }
 
 export interface DeferredLaunch {
@@ -108,7 +112,8 @@ export interface RestoreAgentsDeps {
     updateRuntimes(agentId: string, runtimes: readonly TerminalRuntimeRef[], primaryRuntimeKey?: string): boolean
     setLaunch(agentId: string, launch: AgentLaunch): RegisteredSession | null
     beginExternalDispatch?(agentId: string, firstTask?: string): RegisteredSession | null
-    updateProcessIdentity(agentId: string, processIdentity: ProcessIdentity): boolean
+    /** A relaunch never says the gateway (the engine's hook or argv does); its grid is its launch's. */
+    updateProcessIdentity(agentId: string, processIdentity: ProcessIdentity, gateway?: undefined, grid?: GridAssignment | null): boolean
     unbindSession(sessionId: string): boolean
     inheritName(fromSessionId: string, toSessionId: string): void
     /** A terminal's adopted engine is gone: back to a shell (registry.ts). */
@@ -696,7 +701,7 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
                   const currentWatch = restoreOwner(deps, deps.registry.byAgent(entry.agentId)!)
                   const releaseWatch = release!
                   watching = true
-                  watches.push(() => watchRestoredPane(deps, entry, pane, true, budgetMs, currentWatch, releaseWatch))
+                  watches.push(() => watchRestoredPane(deps, entry, pane, true, budgetMs, currentWatch, releaseWatch, launch.grid))
                 }
               }
             }
@@ -721,7 +726,7 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
           const currentWatch = restoreOwner(deps, deps.registry.byAgent(entry.agentId)!)
           const releaseWatch = release!
           watching = true
-          watches.push(() => watchRestoredPane(deps, entry, created.runtime, !!resumeSessionId, budgetMs, currentWatch, releaseWatch))
+          watches.push(() => watchRestoredPane(deps, entry, created.runtime, !!resumeSessionId, budgetMs, currentWatch, releaseWatch, launch.grid))
         } finally { if (!watching) release?.() }
       }, undefined)
     }
@@ -730,6 +735,7 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
   return summary
 }
 
+/** [launched]: the grid of the launch in [runtime], undefined for one an earlier daemon dispatched (the row keeps its own). */
 async function watchRestoredPane(
   deps: RestoreAgentsDeps,
   entry: RegisteredSession,
@@ -738,8 +744,10 @@ async function watchRestoredPane(
   budgetMs: number,
   current: () => boolean,
   release: () => void,
+  launched?: GridAssignment | null,
 ): Promise<void> {
   const { agentId, engine } = entry
+  let grid = launched
   const key = terminalRouteKey(runtime)
   const sleep = deps.sleep ?? defaultSleep
   const fail = (error: string, detail: string): void => {
@@ -842,6 +850,7 @@ async function watchRestoredPane(
         fail('ENGINE_DID_NOT_START', `${engine} could not be relaunched fresh: ${spawned.reason ?? 'unknown reason'}`)
         return false
       }
+      grid = launch.grid
       return true
     }, false)
   }
@@ -853,7 +862,7 @@ async function watchRestoredPane(
       const identity = await deps.probeProcess(runtime, engine)
       if (!current()) return
       if (identity) {
-        deps.registry.updateProcessIdentity(agentId, identity)
+        deps.registry.updateProcessIdentity(agentId, identity, undefined, grid)
         // A resume the engine rejects does not fail to start — it starts, prints why, and exits a
         // few seconds later. Keep the pane (and the fallback) for a settling window before handing
         // it over; a pane let go at first sight of the process vanished with the engine and took

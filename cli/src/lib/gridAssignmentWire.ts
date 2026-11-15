@@ -1,5 +1,6 @@
 /** Core's declaration of the launch evidence models may classify: argument fragments alone. No keys, and no environment, cross this port. */
 import { ENGINES, type AgentEngine } from '../engines/types.js'
+import type { GridLaunchOverride } from './gridLaunchWire.js'
 
 export interface GridAssignment { baseUrl: string; model: string | null }
 export interface GridAssignmentProcess { key: string; engine: AgentEngine; args: string }
@@ -50,6 +51,15 @@ export function gridAssignmentProcess(key: string, engine: AgentEngine, args: st
  */
 export function gridAssignmentEvidence(key: string, engine: AgentEngine, args: string): GridAssignmentProcess | null | undefined {
   return gridAssignmentProcess(key, engine, args) ?? (GRID_OUTSIDE_ARGV.has(engine) || engine === 'pi' ? undefined : null)
+}
+
+/**
+ * The grid a launch on [override] (its launch record's) puts its engine on, as the row keeps it (`grid`). Every
+ * relaunch writes it with the process it starts: no process is read back for an engine whose grid is in no command
+ * line, so nothing else would correct the row. Null for a launch on the engine's own login.
+ */
+export function launchedGrid(override: GridLaunchOverride | null | undefined): GridAssignment | null {
+  return override ? { baseUrl: override.baseUrl, model: override.model ?? null } : null
 }
 
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value)

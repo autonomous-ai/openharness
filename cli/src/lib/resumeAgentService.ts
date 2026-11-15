@@ -19,6 +19,7 @@ import { workspaceMissing } from './workspaceCheck.js'
 import { buildHarnessSessionLabel } from './harnessSessionLabel.js'
 import { createAndRegisterPane, type CreateAgentPaneDeps } from './createAgentPane.js'
 import type { LaunchOverrides, LaunchOverridesResult } from './launchOverrides.js'
+import { launchedGrid, type GridAssignment } from './gridAssignmentWire.js'
 import type { AgentRestartCoordinator } from './restartAgent.js'
 import { missingBackendCode, terminalTargetOf, type TerminalBackend } from './terminalBackend.js'
 import { windowsLaunchRefusal } from './windows/launch.js'
@@ -103,7 +104,9 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
     stoppedAgents.finishResume(agentId)
     return stoppedAgents.beginResume(agentId)
   }
-  const waitForResume = async (entry: RegisteredSession, current: () => boolean) => {
+  /** [grid]: the one the resume's launch put its engine on, written with its process. Undefined on a later look at a
+   *  resume already launched, whose row keeps its own. */
+  const waitForResume = async (entry: RegisteredSession, current: () => boolean, grid?: GridAssignment | null) => {
     // Registry observations may update the same object; pin the route being verified.
     const saved = { ...entry }
     const ownsRoute = () => current() && registry.byAgent(saved.agentId)?.tmuxPane === saved.tmuxPane
@@ -131,7 +134,7 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
       // A probe proves the new PID but does not publish it. Persist that proof before readiness;
       // an engine whose hook is delayed or absent must still be attachable and stoppable now.
       if (!result.session.processIdentity
-        || !registry.updateProcessIdentity(saved.agentId, result.session.processIdentity)) return resumeChanged
+        || !registry.updateProcessIdentity(saved.agentId, result.session.processIdentity, undefined, grid)) return resumeChanged
       await terminal.releaseHold(runtime)
       if (!ownsRoute()) return resumeChanged
       stoppedAgents.finishResume(saved.agentId)
@@ -421,7 +424,7 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
         }
         if (pending.dsh) attachDsh(pending)
         if (pending.browser) attachBrowser?.(pending)
-        const waited = await waitForResume(pending, current)
+        const waited = await waitForResume(pending, current, launchedGrid(built.overrides.gridLaunchRecord?.override))
         if (waited.ok) keepLaunchArgs(waited.session)
         return waited
       } catch (error) {
