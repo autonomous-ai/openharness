@@ -157,8 +157,8 @@ export function createDiscoveryHandlers({
     if (externalResumePending(current.externalResume)) return
     if (observed.engine === 'openclaw' && current.engine !== 'openclaw' && !await showsOpenclaw(observed)) return
     const wasDormant = !current.active
-    // Read BEFORE the update, because the update is what overwrites it. `undefined` means the probe
-    // could not look, which never counts as a move — see `probeGridAssignment`'s three answers.
+    // Read BEFORE the update, because the update is what overwrites it. `undefined` means the command
+    // line says nothing of the grid, which never counts as a move (lib/gridAssignmentWire.ts `gridAssignmentEvidence`).
     const gridMoved = observed.grid !== undefined
       && !sameGridAssignment(current.grid ?? null, observed.grid)
     const wasLaunching = current.launch?.state !== undefined && current.launch.state !== 'ready'

@@ -18,8 +18,8 @@ export function gridAssignmentShapes(dataDir: string) {
   }, () => false).port
   return {
     remember: () => rememberSavedApis(store),
-    assignment: async (engine: AgentEngine, env: Record<string, string>, args = '') => {
-      const process = gridAssignmentProcess('golden', engine, env, args)
+    assignment: async (engine: AgentEngine, args = '') => {
+      const process = gridAssignmentProcess('golden', engine, args)
       return process ? (await port.gridAssignments([process]))[0].assignment : null
     },
     list: () => store.list(),

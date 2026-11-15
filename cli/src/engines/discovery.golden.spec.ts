@@ -7,7 +7,7 @@
  *    native install, help probes, Windows paths, decoys and every other engine's) against every engine:
  *    the match score and its evidence, and whether the row is an unresolved `agent`;
  *  - argv against every engine: the session id it resumes, and the permission mode and approval it names;
- *  - a grid launch's argv and environment: the model it was pointed at;
+ *  - a grid launch's argv: the model it was pointed at;
  *  - a process environment: the profile home it runs under;
  *  - Claude Code transcripts: whether one sits in a project directory, which folder it belongs to, the folder
  *    it names for itself (past one read, a character across reads, a limit), and the folder a row with a
@@ -158,20 +158,19 @@ function argvCases(): Record<string, unknown> {
 
 const RELAY = 'https://grid.example/relay/v1'
 function gridCases(): Record<string, unknown> {
-  const shapes: Array<[string, Record<string, string>, string]> = [
-    ['argv with a model', {}, `codex -c model_providers.grid.base_url="${RELAY}" -m gpt-5`],
-    ['argv, unquoted url', {}, `codex -c model_providers.grid.base_url=${RELAY} -m gpt-5`],
-    ['argv, no model', {}, `codex -c model_providers.grid.base_url="${RELAY}"`],
-    ['argv, the router', {}, `grok -c model_providers.grid.base_url="${RELAY}" -m Auto`],
-    ['argv, a model in a prompt', {}, `codex -c model_providers.grid.base_url="${RELAY}" "-m nope"`],
-    ['argv, not a relay', {}, 'codex -c model_providers.x.base_url="https://api.openai.com/v1" -m gpt-5'],
-    ['environment', { ANTHROPIC_BASE_URL: RELAY, ANTHROPIC_MODEL: 'qwen', OPENAI_BASE_URL: RELAY, OPENAI_MODEL: 'qwen' }, 'claude -m other'],
-    ['nothing', {}, 'codex -m gpt-5'],
+  const shapes: Array<[string, string]> = [
+    ['argv with a model', `codex -c model_providers.grid.base_url="${RELAY}" -m gpt-5`],
+    ['argv, unquoted url', `codex -c model_providers.grid.base_url=${RELAY} -m gpt-5`],
+    ['argv, no model', `codex -c model_providers.grid.base_url="${RELAY}"`],
+    ['argv, the router', `grok -c model_providers.grid.base_url="${RELAY}" -m Auto`],
+    ['argv, a model in a prompt', `codex -c model_providers.grid.base_url="${RELAY}" "-m nope"`],
+    ['argv, not a relay', 'codex -c model_providers.x.base_url="https://api.openai.com/v1" -m gpt-5'],
+    ['nothing', 'codex -m gpt-5'],
   ]
   const cases: Record<string, unknown> = {}
-  for (const [name, environment, args] of shapes) {
+  for (const [name, args] of shapes) {
     cases[name] = Object.fromEntries(ENGINES.flatMap((engine) => {
-      const found = classifyGridAssignment(engine, environment, args)
+      const found = classifyGridAssignment(engine, args)
       return found ? [[engine, found]] : []
     }))
   }

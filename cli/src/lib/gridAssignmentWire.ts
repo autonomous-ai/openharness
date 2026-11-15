@@ -1,16 +1,18 @@
-/** Core's declaration of the launch evidence models may classify. No keys cross this port. */
+/** Core's declaration of the launch evidence models may classify: argument fragments alone. No keys, and no environment, cross this port. */
 import { ENGINES, type AgentEngine } from '../engines/types.js'
 
 export interface GridAssignment { baseUrl: string; model: string | null }
-export interface GridAssignmentProcess { key: string; engine: AgentEngine; env: Record<string, string>; args: string }
+export interface GridAssignmentProcess { key: string; engine: AgentEngine; args: string }
 export interface GridAssignmentAnswer { key: string; assignment: GridAssignment | null }
 
-export const GRID_ENDPOINT_VARS: Partial<Record<AgentEngine, string>> = {
-  claude: 'ANTHROPIC_BASE_URL', hermes: 'OPENAI_BASE_URL', grok: 'GROK_MODELS_BASE_URL', copilot: 'COPILOT_PROVIDER_BASE_URL',
-}
-export const GRID_MODEL_VARS: Partial<Record<AgentEngine, string>> = {
-  claude: 'ANTHROPIC_MODEL', hermes: 'HERMES_INFERENCE_MODEL', copilot: 'COPILOT_MODEL',
-}
+/**
+ * Engines whose grid is in no command line: a launch hands it over their environment (Claude Code, Hermes, Grok,
+ * Copilot) or a config file an environment variable names (OpenCode). No process's environment is read, so the
+ * launch record Harness wrote on the row (`grid`) says where they are.
+ */
+const GRID_OUTSIDE_ARGV = new Set<AgentEngine>(['claude', 'hermes', 'grok', 'copilot', 'opencode'])
+const PROCESS_MEMBERS = new Set(['key', 'engine', 'args'])
+
 export const GRID_CODEX_ENDPOINT = /model_providers\.[A-Za-z0-9_-]+\.base_url=(?:"([^"]+)"|(\S+))/
 export const GRID_ARGV_MODEL = /(?:^|\s)-m\s+(\S+)/
 export const GRID_PI_MODEL = /(?:^|\s)--model\s+([A-Za-z0-9_-]+)\/(\S+)/
@@ -27,30 +29,27 @@ export function piProviderExtensionIn(source: string): { id: string; provider: R
   } catch { return null }
 }
 
-/** Null is positive evidence of no launch markers. An unreadable environment is handled by the caller. */
-export function gridAssignmentProcess(key: string, engine: AgentEngine, env: Record<string, string>, args: string): GridAssignmentProcess | null {
-  const endpoint = GRID_ENDPOINT_VARS[engine]
-  // A Pi launched before its provider extension was pointed at a whole config directory instead, and is read that way
-  // until it is relaunched.
-  const marker = engine === 'pi' ? 'PI_CODING_AGENT_DIR' : engine === 'opencode' ? 'OPENCODE_CONFIG' : endpoint
+/**
+ * The launch markers a command line holds: a provider block with its `-m`, or Pi's `-e …/grid-provider.ts` with its
+ * `--model`. Null when it holds none, and always for an engine whose grid is in no command line.
+ */
+export function gridAssignmentProcess(key: string, engine: AgentEngine, args: string): GridAssignmentProcess | null {
+  if (GRID_OUTSIDE_ARGV.has(engine)) return null
   const extension = engine === 'pi' ? GRID_PI_EXTENSION.exec(args) : null
-  const provider = marker ? null : GRID_CODEX_ENDPOINT.exec(args)
-  if (!(extension || (marker ? env[marker]?.trim() : provider))) return null
-  const picked: Record<string, string> = {}
-  for (const name of [marker, GRID_MODEL_VARS[engine]]) if (name && env[name] !== undefined) picked[name] = env[name]
+  const provider = engine === 'pi' ? null : GRID_CODEX_ENDPOINT.exec(args)
+  if (!(extension || provider)) return null
   // Never forward the command line: it may carry a prompt, token or unrelated tool arguments.
-  const model = engine === 'pi' ? GRID_PI_MODEL.exec(args)?.[0].trim()
-    : engine === 'codex' || engine === 'grok' ? GRID_ARGV_MODEL.exec(args)?.[0] : undefined
-  return { key, engine, env: picked, args: [provider?.[0], extension?.[0].trim(), model].filter(Boolean).join(' ') }
+  const model = engine === 'pi' ? GRID_PI_MODEL.exec(args)?.[0].trim() : engine === 'codex' ? GRID_ARGV_MODEL.exec(args)?.[0] : undefined
+  return { key, engine, args: [provider?.[0], extension?.[0].trim(), model].filter(Boolean).join(' ') }
 }
 
 /**
- * [gridAssignmentProcess] over what a process gave: its environment, or null when that could not be read. Without
- * one, only a launch command naming its grid counts (Pi's `-e` extension); a command naming none is not known, never
- * "on its own login", since the unread environment may hold the grid.
+ * What a command line says of its process's grid: the markers to classify, null for a command line that names none
+ * (a vendor login), and undefined where its absence is no finding. That is an engine whose grid is in no command line,
+ * and Pi, whose launch before its extension (#1318) named its grid nowhere in argv and stays unknown until relaunched.
  */
-export function gridAssignmentEvidence(key: string, engine: AgentEngine, env: Record<string, string> | null, args: string): GridAssignmentProcess | null | undefined {
-  return env ? gridAssignmentProcess(key, engine, env, args) : gridAssignmentProcess(key, engine, {}, args) ?? undefined
+export function gridAssignmentEvidence(key: string, engine: AgentEngine, args: string): GridAssignmentProcess | null | undefined {
+  return gridAssignmentProcess(key, engine, args) ?? (GRID_OUTSIDE_ARGV.has(engine) || engine === 'pi' ? undefined : null)
 }
 
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value)
@@ -58,9 +57,9 @@ export function gridAssignmentProcessesIn(value: unknown): GridAssignmentProcess
   if (!Array.isArray(value) || value.length > 4096) return null
   const out: GridAssignmentProcess[] = []
   for (const row of value) {
-    if (!record(row) || typeof row.key !== 'string' || typeof row.engine !== 'string' || !ENGINES.includes(row.engine as AgentEngine)
-      || typeof row.args !== 'string' || !record(row.env) || !Object.values(row.env).every(v => typeof v === 'string')) return null
-    const process = gridAssignmentProcess(row.key, row.engine as AgentEngine, row.env as Record<string, string>, row.args)
+    if (!record(row) || Object.keys(row).some(name => !PROCESS_MEMBERS.has(name)) || typeof row.key !== 'string'
+      || typeof row.engine !== 'string' || !ENGINES.includes(row.engine as AgentEngine) || typeof row.args !== 'string') return null
+    const process = gridAssignmentProcess(row.key, row.engine as AgentEngine, row.args)
     if (!process || out.some(previous => previous.key === row.key)) return null
     out.push(process)
   }

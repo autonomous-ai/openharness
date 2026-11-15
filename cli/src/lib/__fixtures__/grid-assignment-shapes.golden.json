@@ -67,214 +67,6 @@
       "baseUrl": "https://grid.example/g/home/relay/v1",
       "model": null
     },
-    "claude/env//": null,
-    "claude/env//chosen": null,
-    "claude/env//Auto": null,
-    "claude/env//aUtO": null,
-    "claude/env/ /": null,
-    "claude/env/ /chosen": null,
-    "claude/env/ /Auto": null,
-    "claude/env/ /aUtO": null,
-    "claude/env/not-a-url/": null,
-    "claude/env/not-a-url/chosen": null,
-    "claude/env/not-a-url/Auto": null,
-    "claude/env/not-a-url/aUtO": null,
-    "claude/env/https://other.example/v1/": null,
-    "claude/env/https://other.example/v1/chosen": null,
-    "claude/env/https://other.example/v1/Auto": null,
-    "claude/env/https://other.example/v1/aUtO": null,
-    "claude/env/https://grid.example/relayish/v1/": null,
-    "claude/env/https://grid.example/relayish/v1/chosen": null,
-    "claude/env/https://grid.example/relayish/v1/Auto": null,
-    "claude/env/https://grid.example/relayish/v1/aUtO": null,
-    "claude/env/https://grid.example/g/home/relay/v1/": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": null
-    },
-    "claude/env/https://grid.example/g/home/relay/v1/chosen": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "chosen"
-    },
-    "claude/env/https://grid.example/g/home/relay/v1/Auto": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "Auto"
-    },
-    "claude/env/https://grid.example/g/home/relay/v1/aUtO": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "aUtO"
-    },
-    "claude/env/ https://grid.example/g/home/relay/v1 /": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": null
-    },
-    "claude/env/ https://grid.example/g/home/relay/v1 /chosen": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "chosen"
-    },
-    "claude/env/ https://grid.example/g/home/relay/v1 /Auto": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "Auto"
-    },
-    "claude/env/ https://grid.example/g/home/relay/v1 /aUtO": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "aUtO"
-    },
-    "hermes/env//": null,
-    "hermes/env//chosen": null,
-    "hermes/env//Auto": null,
-    "hermes/env//aUtO": null,
-    "hermes/env/ /": null,
-    "hermes/env/ /chosen": null,
-    "hermes/env/ /Auto": null,
-    "hermes/env/ /aUtO": null,
-    "hermes/env/not-a-url/": null,
-    "hermes/env/not-a-url/chosen": null,
-    "hermes/env/not-a-url/Auto": null,
-    "hermes/env/not-a-url/aUtO": null,
-    "hermes/env/https://other.example/v1/": null,
-    "hermes/env/https://other.example/v1/chosen": null,
-    "hermes/env/https://other.example/v1/Auto": null,
-    "hermes/env/https://other.example/v1/aUtO": null,
-    "hermes/env/https://grid.example/relayish/v1/": null,
-    "hermes/env/https://grid.example/relayish/v1/chosen": null,
-    "hermes/env/https://grid.example/relayish/v1/Auto": null,
-    "hermes/env/https://grid.example/relayish/v1/aUtO": null,
-    "hermes/env/https://grid.example/g/home/relay/v1/": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": null
-    },
-    "hermes/env/https://grid.example/g/home/relay/v1/chosen": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "chosen"
-    },
-    "hermes/env/https://grid.example/g/home/relay/v1/Auto": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "Auto"
-    },
-    "hermes/env/https://grid.example/g/home/relay/v1/aUtO": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "aUtO"
-    },
-    "hermes/env/ https://grid.example/g/home/relay/v1 /": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": null
-    },
-    "hermes/env/ https://grid.example/g/home/relay/v1 /chosen": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "chosen"
-    },
-    "hermes/env/ https://grid.example/g/home/relay/v1 /Auto": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "Auto"
-    },
-    "hermes/env/ https://grid.example/g/home/relay/v1 /aUtO": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "aUtO"
-    },
-    "grok/env//": null,
-    "grok/env//chosen": null,
-    "grok/env//Auto": null,
-    "grok/env//aUtO": null,
-    "grok/env/ /": null,
-    "grok/env/ /chosen": null,
-    "grok/env/ /Auto": null,
-    "grok/env/ /aUtO": null,
-    "grok/env/not-a-url/": null,
-    "grok/env/not-a-url/chosen": null,
-    "grok/env/not-a-url/Auto": null,
-    "grok/env/not-a-url/aUtO": null,
-    "grok/env/https://other.example/v1/": null,
-    "grok/env/https://other.example/v1/chosen": null,
-    "grok/env/https://other.example/v1/Auto": null,
-    "grok/env/https://other.example/v1/aUtO": null,
-    "grok/env/https://grid.example/relayish/v1/": null,
-    "grok/env/https://grid.example/relayish/v1/chosen": null,
-    "grok/env/https://grid.example/relayish/v1/Auto": null,
-    "grok/env/https://grid.example/relayish/v1/aUtO": null,
-    "grok/env/https://grid.example/g/home/relay/v1/": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "argv-model"
-    },
-    "grok/env/https://grid.example/g/home/relay/v1/chosen": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "chosen"
-    },
-    "grok/env/https://grid.example/g/home/relay/v1/Auto": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": null
-    },
-    "grok/env/https://grid.example/g/home/relay/v1/aUtO": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": null
-    },
-    "grok/env/ https://grid.example/g/home/relay/v1 /": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "argv-model"
-    },
-    "grok/env/ https://grid.example/g/home/relay/v1 /chosen": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "chosen"
-    },
-    "grok/env/ https://grid.example/g/home/relay/v1 /Auto": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": null
-    },
-    "grok/env/ https://grid.example/g/home/relay/v1 /aUtO": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": null
-    },
-    "copilot/env//": null,
-    "copilot/env//chosen": null,
-    "copilot/env//Auto": null,
-    "copilot/env//aUtO": null,
-    "copilot/env/ /": null,
-    "copilot/env/ /chosen": null,
-    "copilot/env/ /Auto": null,
-    "copilot/env/ /aUtO": null,
-    "copilot/env/not-a-url/": null,
-    "copilot/env/not-a-url/chosen": null,
-    "copilot/env/not-a-url/Auto": null,
-    "copilot/env/not-a-url/aUtO": null,
-    "copilot/env/https://other.example/v1/": null,
-    "copilot/env/https://other.example/v1/chosen": null,
-    "copilot/env/https://other.example/v1/Auto": null,
-    "copilot/env/https://other.example/v1/aUtO": null,
-    "copilot/env/https://grid.example/relayish/v1/": null,
-    "copilot/env/https://grid.example/relayish/v1/chosen": null,
-    "copilot/env/https://grid.example/relayish/v1/Auto": null,
-    "copilot/env/https://grid.example/relayish/v1/aUtO": null,
-    "copilot/env/https://grid.example/g/home/relay/v1/": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": null
-    },
-    "copilot/env/https://grid.example/g/home/relay/v1/chosen": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "chosen"
-    },
-    "copilot/env/https://grid.example/g/home/relay/v1/Auto": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "Auto"
-    },
-    "copilot/env/https://grid.example/g/home/relay/v1/aUtO": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "aUtO"
-    },
-    "copilot/env/ https://grid.example/g/home/relay/v1 /": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": null
-    },
-    "copilot/env/ https://grid.example/g/home/relay/v1 /chosen": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "chosen"
-    },
-    "copilot/env/ https://grid.example/g/home/relay/v1 /Auto": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "Auto"
-    },
-    "copilot/env/ https://grid.example/g/home/relay/v1 /aUtO": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "aUtO"
-    },
     "codex/argv/": null,
     "codex/argv/-c model_providers.other.base_url=https://grid.example/g/home/relay/v1": {
       "baseUrl": "https://grid.example/g/home/relay/v1",
@@ -289,59 +81,8 @@
       "model": "Auto"
     },
     "codex/argv/-c model_providers.grid.base_url=\"bad\" -m chosen": null,
-    "pi/broken/": null,
-    "pi/broken/--model grid/chosen": null,
-    "pi/broken/--model grid/Auto": null,
-    "pi/broken/--model other/chosen": null,
-    "pi/absent/": null,
-    "pi/absent/--model grid/chosen": null,
-    "pi/absent/--model grid/Auto": null,
-    "pi/absent/--model other/chosen": null,
-    "pi/wrong/": null,
-    "pi/wrong/--model grid/chosen": null,
-    "pi/wrong/--model grid/Auto": null,
-    "pi/wrong/--model other/chosen": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "chosen"
-    },
-    "pi/direct/": null,
-    "pi/direct/--model grid/chosen": null,
-    "pi/direct/--model grid/Auto": null,
-    "pi/direct/--model other/chosen": null,
-    "pi/valid/": null,
-    "pi/valid/--model grid/chosen": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "chosen"
-    },
-    "pi/valid/--model grid/Auto": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "Auto"
-    },
-    "pi/valid/--model other/chosen": null,
-    "pi/missing-file": null,
-    "opencode/broken": null,
-    "opencode/absent": null,
-    "opencode/many": null,
-    "opencode/noModel": null,
-    "opencode/manyModels": null,
-    "opencode/direct": null,
-    "opencode/model": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "chosen"
-    },
-    "opencode/router": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": null
-    },
-    "opencode/missing-file": null,
-    "claude/launch-roundtrip/null": {
-      "baseUrl": "https://grid.example/g/home/relay",
-      "model": null
-    },
-    "claude/launch-roundtrip/chosen": {
-      "baseUrl": "https://grid.example/g/home/relay",
-      "model": "chosen"
-    },
+    "claude/launch-roundtrip/null": null,
+    "claude/launch-roundtrip/chosen": null,
     "codex/launch-roundtrip/null": {
       "baseUrl": "https://grid.example/g/home/relay/v1",
       "model": null
@@ -350,30 +91,12 @@
       "baseUrl": "https://grid.example/g/home/relay/v1",
       "model": "chosen"
     },
-    "opencode/launch-roundtrip/null": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": null
-    },
-    "opencode/launch-roundtrip/chosen": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "chosen"
-    },
-    "hermes/launch-roundtrip/null": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": null
-    },
-    "hermes/launch-roundtrip/chosen": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "chosen"
-    },
-    "grok/launch-roundtrip/null": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": null
-    },
-    "grok/launch-roundtrip/chosen": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "chosen"
-    },
+    "opencode/launch-roundtrip/null": null,
+    "opencode/launch-roundtrip/chosen": null,
+    "hermes/launch-roundtrip/null": null,
+    "hermes/launch-roundtrip/chosen": null,
+    "grok/launch-roundtrip/null": null,
+    "grok/launch-roundtrip/chosen": null,
     "pi/launch-roundtrip/null": {
       "baseUrl": "https://grid.example/g/home/relay/v1",
       "model": "Auto"
@@ -387,10 +110,7 @@
       "error": "GRID_MODEL_REQUIRED",
       "detail": "copilot will not start against a grid without a model. Pick one for Home and try again."
     },
-    "copilot/launch-roundtrip/chosen": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "chosen"
-    },
+    "copilot/launch-roundtrip/chosen": null,
     "saved/before-save": null,
     "saved/list": [
       {
@@ -546,214 +266,6 @@
       "baseUrl": "https://grid.example/g/home/relay/v1",
       "model": null
     },
-    "claude/env//": null,
-    "claude/env//chosen": null,
-    "claude/env//Auto": null,
-    "claude/env//aUtO": null,
-    "claude/env/ /": null,
-    "claude/env/ /chosen": null,
-    "claude/env/ /Auto": null,
-    "claude/env/ /aUtO": null,
-    "claude/env/not-a-url/": null,
-    "claude/env/not-a-url/chosen": null,
-    "claude/env/not-a-url/Auto": null,
-    "claude/env/not-a-url/aUtO": null,
-    "claude/env/https://other.example/v1/": null,
-    "claude/env/https://other.example/v1/chosen": null,
-    "claude/env/https://other.example/v1/Auto": null,
-    "claude/env/https://other.example/v1/aUtO": null,
-    "claude/env/https://grid.example/relayish/v1/": null,
-    "claude/env/https://grid.example/relayish/v1/chosen": null,
-    "claude/env/https://grid.example/relayish/v1/Auto": null,
-    "claude/env/https://grid.example/relayish/v1/aUtO": null,
-    "claude/env/https://grid.example/g/home/relay/v1/": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": null
-    },
-    "claude/env/https://grid.example/g/home/relay/v1/chosen": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "chosen"
-    },
-    "claude/env/https://grid.example/g/home/relay/v1/Auto": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "Auto"
-    },
-    "claude/env/https://grid.example/g/home/relay/v1/aUtO": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "aUtO"
-    },
-    "claude/env/ https://grid.example/g/home/relay/v1 /": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": null
-    },
-    "claude/env/ https://grid.example/g/home/relay/v1 /chosen": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "chosen"
-    },
-    "claude/env/ https://grid.example/g/home/relay/v1 /Auto": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "Auto"
-    },
-    "claude/env/ https://grid.example/g/home/relay/v1 /aUtO": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "aUtO"
-    },
-    "hermes/env//": null,
-    "hermes/env//chosen": null,
-    "hermes/env//Auto": null,
-    "hermes/env//aUtO": null,
-    "hermes/env/ /": null,
-    "hermes/env/ /chosen": null,
-    "hermes/env/ /Auto": null,
-    "hermes/env/ /aUtO": null,
-    "hermes/env/not-a-url/": null,
-    "hermes/env/not-a-url/chosen": null,
-    "hermes/env/not-a-url/Auto": null,
-    "hermes/env/not-a-url/aUtO": null,
-    "hermes/env/https://other.example/v1/": null,
-    "hermes/env/https://other.example/v1/chosen": null,
-    "hermes/env/https://other.example/v1/Auto": null,
-    "hermes/env/https://other.example/v1/aUtO": null,
-    "hermes/env/https://grid.example/relayish/v1/": null,
-    "hermes/env/https://grid.example/relayish/v1/chosen": null,
-    "hermes/env/https://grid.example/relayish/v1/Auto": null,
-    "hermes/env/https://grid.example/relayish/v1/aUtO": null,
-    "hermes/env/https://grid.example/g/home/relay/v1/": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": null
-    },
-    "hermes/env/https://grid.example/g/home/relay/v1/chosen": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "chosen"
-    },
-    "hermes/env/https://grid.example/g/home/relay/v1/Auto": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "Auto"
-    },
-    "hermes/env/https://grid.example/g/home/relay/v1/aUtO": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "aUtO"
-    },
-    "hermes/env/ https://grid.example/g/home/relay/v1 /": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": null
-    },
-    "hermes/env/ https://grid.example/g/home/relay/v1 /chosen": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "chosen"
-    },
-    "hermes/env/ https://grid.example/g/home/relay/v1 /Auto": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "Auto"
-    },
-    "hermes/env/ https://grid.example/g/home/relay/v1 /aUtO": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "aUtO"
-    },
-    "grok/env//": null,
-    "grok/env//chosen": null,
-    "grok/env//Auto": null,
-    "grok/env//aUtO": null,
-    "grok/env/ /": null,
-    "grok/env/ /chosen": null,
-    "grok/env/ /Auto": null,
-    "grok/env/ /aUtO": null,
-    "grok/env/not-a-url/": null,
-    "grok/env/not-a-url/chosen": null,
-    "grok/env/not-a-url/Auto": null,
-    "grok/env/not-a-url/aUtO": null,
-    "grok/env/https://other.example/v1/": null,
-    "grok/env/https://other.example/v1/chosen": null,
-    "grok/env/https://other.example/v1/Auto": null,
-    "grok/env/https://other.example/v1/aUtO": null,
-    "grok/env/https://grid.example/relayish/v1/": null,
-    "grok/env/https://grid.example/relayish/v1/chosen": null,
-    "grok/env/https://grid.example/relayish/v1/Auto": null,
-    "grok/env/https://grid.example/relayish/v1/aUtO": null,
-    "grok/env/https://grid.example/g/home/relay/v1/": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "argv-model"
-    },
-    "grok/env/https://grid.example/g/home/relay/v1/chosen": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "chosen"
-    },
-    "grok/env/https://grid.example/g/home/relay/v1/Auto": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": null
-    },
-    "grok/env/https://grid.example/g/home/relay/v1/aUtO": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": null
-    },
-    "grok/env/ https://grid.example/g/home/relay/v1 /": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "argv-model"
-    },
-    "grok/env/ https://grid.example/g/home/relay/v1 /chosen": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "chosen"
-    },
-    "grok/env/ https://grid.example/g/home/relay/v1 /Auto": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": null
-    },
-    "grok/env/ https://grid.example/g/home/relay/v1 /aUtO": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": null
-    },
-    "copilot/env//": null,
-    "copilot/env//chosen": null,
-    "copilot/env//Auto": null,
-    "copilot/env//aUtO": null,
-    "copilot/env/ /": null,
-    "copilot/env/ /chosen": null,
-    "copilot/env/ /Auto": null,
-    "copilot/env/ /aUtO": null,
-    "copilot/env/not-a-url/": null,
-    "copilot/env/not-a-url/chosen": null,
-    "copilot/env/not-a-url/Auto": null,
-    "copilot/env/not-a-url/aUtO": null,
-    "copilot/env/https://other.example/v1/": null,
-    "copilot/env/https://other.example/v1/chosen": null,
-    "copilot/env/https://other.example/v1/Auto": null,
-    "copilot/env/https://other.example/v1/aUtO": null,
-    "copilot/env/https://grid.example/relayish/v1/": null,
-    "copilot/env/https://grid.example/relayish/v1/chosen": null,
-    "copilot/env/https://grid.example/relayish/v1/Auto": null,
-    "copilot/env/https://grid.example/relayish/v1/aUtO": null,
-    "copilot/env/https://grid.example/g/home/relay/v1/": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": null
-    },
-    "copilot/env/https://grid.example/g/home/relay/v1/chosen": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "chosen"
-    },
-    "copilot/env/https://grid.example/g/home/relay/v1/Auto": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "Auto"
-    },
-    "copilot/env/https://grid.example/g/home/relay/v1/aUtO": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "aUtO"
-    },
-    "copilot/env/ https://grid.example/g/home/relay/v1 /": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": null
-    },
-    "copilot/env/ https://grid.example/g/home/relay/v1 /chosen": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "chosen"
-    },
-    "copilot/env/ https://grid.example/g/home/relay/v1 /Auto": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "Auto"
-    },
-    "copilot/env/ https://grid.example/g/home/relay/v1 /aUtO": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "aUtO"
-    },
     "codex/argv/": null,
     "codex/argv/-c model_providers.other.base_url=https://grid.example/g/home/relay/v1": {
       "baseUrl": "https://grid.example/g/home/relay/v1",
@@ -768,59 +280,8 @@
       "model": "Auto"
     },
     "codex/argv/-c model_providers.grid.base_url=\"bad\" -m chosen": null,
-    "pi/broken/": null,
-    "pi/broken/--model grid/chosen": null,
-    "pi/broken/--model grid/Auto": null,
-    "pi/broken/--model other/chosen": null,
-    "pi/absent/": null,
-    "pi/absent/--model grid/chosen": null,
-    "pi/absent/--model grid/Auto": null,
-    "pi/absent/--model other/chosen": null,
-    "pi/wrong/": null,
-    "pi/wrong/--model grid/chosen": null,
-    "pi/wrong/--model grid/Auto": null,
-    "pi/wrong/--model other/chosen": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "chosen"
-    },
-    "pi/direct/": null,
-    "pi/direct/--model grid/chosen": null,
-    "pi/direct/--model grid/Auto": null,
-    "pi/direct/--model other/chosen": null,
-    "pi/valid/": null,
-    "pi/valid/--model grid/chosen": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "chosen"
-    },
-    "pi/valid/--model grid/Auto": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "Auto"
-    },
-    "pi/valid/--model other/chosen": null,
-    "pi/missing-file": null,
-    "opencode/broken": null,
-    "opencode/absent": null,
-    "opencode/many": null,
-    "opencode/noModel": null,
-    "opencode/manyModels": null,
-    "opencode/direct": null,
-    "opencode/model": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "chosen"
-    },
-    "opencode/router": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": null
-    },
-    "opencode/missing-file": null,
-    "claude/launch-roundtrip/null": {
-      "baseUrl": "https://grid.example/g/home/relay",
-      "model": null
-    },
-    "claude/launch-roundtrip/chosen": {
-      "baseUrl": "https://grid.example/g/home/relay",
-      "model": "chosen"
-    },
+    "claude/launch-roundtrip/null": null,
+    "claude/launch-roundtrip/chosen": null,
     "codex/launch-roundtrip/null": {
       "baseUrl": "https://grid.example/g/home/relay/v1",
       "model": null
@@ -829,30 +290,12 @@
       "baseUrl": "https://grid.example/g/home/relay/v1",
       "model": "chosen"
     },
-    "opencode/launch-roundtrip/null": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": null
-    },
-    "opencode/launch-roundtrip/chosen": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "chosen"
-    },
-    "hermes/launch-roundtrip/null": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": null
-    },
-    "hermes/launch-roundtrip/chosen": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "chosen"
-    },
-    "grok/launch-roundtrip/null": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": null
-    },
-    "grok/launch-roundtrip/chosen": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "chosen"
-    },
+    "opencode/launch-roundtrip/null": null,
+    "opencode/launch-roundtrip/chosen": null,
+    "hermes/launch-roundtrip/null": null,
+    "hermes/launch-roundtrip/chosen": null,
+    "grok/launch-roundtrip/null": null,
+    "grok/launch-roundtrip/chosen": null,
     "pi/launch-roundtrip/null": {
       "baseUrl": "https://grid.example/g/home/relay/v1",
       "model": "Auto"
@@ -866,10 +309,7 @@
       "error": "GRID_MODEL_REQUIRED",
       "detail": "copilot will not start against a grid without a model. Pick one for Home and try again."
     },
-    "copilot/launch-roundtrip/chosen": {
-      "baseUrl": "https://grid.example/g/home/relay/v1",
-      "model": "chosen"
-    },
+    "copilot/launch-roundtrip/chosen": null,
     "saved/before-save": null,
     "saved/list": [
       {

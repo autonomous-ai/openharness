@@ -7,7 +7,6 @@ import {
 } from './engineBin.js'
 import { gatewayFromArgv } from './gatewayRuntime.js'
 import { gridAssignmentEvidence, type GridAssignment, type GridAssignmentProcess } from './gridAssignmentWire.js'
-import { readProcessEnv } from './processEnv.js'
 import { probeProfileHome } from '../engines/discoveries.js'
 import { probeHermesHome, probeHermesHomeDerived, probeHermesSandbox } from '../engines/identities.js'
 import type { TerminalBackend } from './terminalBackend.js'
@@ -50,8 +49,10 @@ export interface DiscoveredTerminalAgent {
    */
   gateway?: 'ori' | null
   /**
-   * The grid this engine process is pointed at, read from the same environment. null = a vendor login
-   * while undefined means the process or models could not be read and preserves the last assignment.
+   * The grid this engine process is pointed at, where its command line says it (Codex, Pi). null = a
+   * command line that names none, a vendor login. undefined is no finding and preserves the row's
+   * assignment: an engine whose grid is in no command line keeps the grid its launch recorded, and
+   * markers in `gridProcess` are classified by models after the pass.
    *
    * Backend-agnostic for the same reason `gateway` is: it is a fact about the process, not the pane.
    */
@@ -325,8 +326,7 @@ export async function probeTerminalAgents(
     // Only the marker read is core work. Models classifies it after reconciliation, without blocking binding.
     // Read from how it was launched, which for Pi is its launcher's command line (tmux.ts `launchArgs`).
     const row = enrichedRows.find((candidate) => sameProcessIdentity(candidate, agent.processIdentity))
-    const evidence = gridAssignmentEvidence('', agent.engine, await readProcessEnv(agent.processIdentity),
-      row ? launchArgs(enrichedRows, row) : agent.args)
+    const evidence = gridAssignmentEvidence('', agent.engine, row ? launchArgs(enrichedRows, row) : agent.args)
     if (evidence) agent.gridProcess = evidence
     else if (evidence === null) agent.grid = null
     // And, for Codex, the profile it runs under — a fact about the process the row cannot otherwise learn.
