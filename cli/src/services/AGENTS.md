@@ -324,4 +324,10 @@ from before (`src/harnessd/services.spec.ts`, `e2e/messagesSkew.e2e.ts`).
   401) or, to seal for one of the owner's other machines, the gateway's session with it (`lane`, as the
   fleet's lane does: `src/device/deviceLink.ts`). This machine's E2EE identity is the gateway's alone, and so is
   renewing the sign-in: the core asks the gateway for the token it hands you (`lib/authRefresh.ts`).
-- Do not write to tmux, the registry or another service's files.
+- Do not write to tmux, the registry or another service's files. A service never writes to Harness's tmux: no pane or
+  session Harness made. One thing is allowed in the person's own tmux (PM, 2026-11-15,
+  [the spec](../../../docs/specs/2026-11-15-device-wave1-checks.md)): the devices process may run `switch-client` (or
+  a select) to the pane a hook named, once it has checked that the pane's process is the agent's or one of its parents
+  (`cable/hosts/open.ts`). It names the client it moves, and never one on a session Harness made. It never types,
+  creates or closes anything there. Harness's panes and the person's can share one tmux server, so the rule is held
+  per pane and session, by the owner tag the hook reads (`hook/notify.mjs` `paneFacts`).
