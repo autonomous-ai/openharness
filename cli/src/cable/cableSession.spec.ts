@@ -4567,6 +4567,26 @@ describe('the app filter', () => {
     } finally { await session.stop() }
   })
 
+  it("viewChanged back on the tab lands on the window's agent without stepping onto the one the dial left the tab on", async () => {
+    const { host, state } = appHost()
+    state.window = true
+    const { session, port } = await greeted(host)
+    try {
+      // A hand put the dial on a1 on the tab; the view then turned to Ghostty's ring, which a1 is not on.
+      port.say({ t: 'focus', agentId: 'a1' })
+      await vi.waitFor(() => expect(host.focus).toHaveBeenCalledWith('a1'))
+      state.appView = true
+      await session.viewChanged()
+      port.sent.length = 0
+      // The window's agent is a2 when the tab comes back.
+      state.focus = { machineId: 'mac-local', agentId: 'a2' }
+      state.appView = false
+      await session.viewChanged()
+      expect(focuses(port).map((m) => m.agentId)).not.toContain('a1')
+      expect(focuses(port).at(-1)).toEqual({ t: 'focus', agentId: 'a2' })
+    } finally { await session.stop() }
+  })
+
   it('viewChanged with the list unchanged sends no list twice', async () => {
     const { host, state } = appHost()
     state.window = true
