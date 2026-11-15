@@ -93,7 +93,8 @@ request queued for startup is never delivered. Bounds and cancellation apply to 
 
 Root measured retained production `8c568225c1f1b3c2cc7c7cccb77f4cd140334773` against
 `706a43ad1d9a65014268c1847ccc488f4cf133b2`, Node 24.22.2/macOS. Both private fixture worlds stayed resident.
-Six fixed pairs (BA, AB, BA, AB, BA, AB) each used 20 warmups and 500 requests/workload. All 36 samples passed;
+Each build/workload had 20 warmups once, before six fixed pairs (BA, AB, BA, AB, BA, AB) of 500 requests/workload.
+All 36 timed samples passed;
 raw latencies and separate core/devices CPU are retained. CPU accounting resolves 10 ms per process, not sub-ms
 individual requests. These are medians across the six run summaries, not a statistical equivalence claim.
 
@@ -112,8 +113,14 @@ p95 was 3.8 → 3.5 ms idle and 5.0 → 5.0 ms beside another pane's keyframe. N
 The first routing attempt failed during warmup, before any timed sample: its fixture assumed an unknown agent was
 refused, whereas the existing FleetRouter defaults it to local admission and returns `ok:true`. The corrected fixture
 uses an explicit empty-text refusal on both builds and asserts `INVALID_REQUEST`; no product behavior or threshold was
-changed. Both failed and corrected reports are retained. The checked-in opt-in rig now contains the corrected workload,
-fixed pairing order, separate worker CPU accounting, and partial-result/cleanup reporting used by the measured rig.
+changed. Both failed and corrected reports are retained. The checked-in opt-in rig contains the corrected workload,
+fixed pairing order, separate worker CPU accounting, and partial-result reporting used by the measured rig.
+
+Review found that both measured routing and P2P typing rigs closed their private world through a fleet helper that
+discards daemon cleanup failures. Their timings and workload assertions remain source-scoped evidence, but those
+reports do not certify successful daemon cleanup. Their original reports and manifests remain unchanged. The routing
+rig now observes daemon and backend cleanup directly, including failures during partial fixture preparation, and
+records each cleanup outcome before rejecting the run. No new timing run is claimed for this reporting correction.
 
 Evidence: `/tmp/core-owner-commands-benchmark-manifest-v1.json` and `-v2.json`,
 `/tmp/core-owner-commands-bench.json` (failed warmup), `-v2.json` (all raw results), `-summary.json`,
