@@ -297,7 +297,10 @@ impl Shared {
                 }
             },
             move |app, tty, raise| {
-                if *selecting.lock().unwrap() == number {
+                // Held through the tell, as above: a newer watch cannot take its number in between and have this
+                // one's select run after it.
+                let current = selecting.lock().unwrap();
+                if *current == number {
                     selects.tell(|follow| follow.select(app, tty, raise, Instant::now()));
                 }
             },
