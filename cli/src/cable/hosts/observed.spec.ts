@@ -669,6 +669,8 @@ function fakeActions(over: Partial<ObservedActions> = {}) {
     // As on macOS: an app or a pane is something a tap can open (open.ts).
     canOpen: vi.fn((target: OpenTarget) => !!target.bundle || !!target.pane),
     open: vi.fn(async (_agentId: string, _target: OpenTarget) => true),
+    claudeInFront: vi.fn(() => true),
+    claudeShow: vi.fn(async (_agentId: string, _session: string): Promise<PaneSwitch> => 'ok'),
     count: vi.fn((_what: Parameters<ObservedActions['count']>[0]) => {}),
   }
   return { actions: { ...actions, ...over } as typeof actions, ready }
@@ -1112,6 +1114,80 @@ describe('ObservedSource panes', () => {
     // One the source never listed.
     expect(await src.showPane({ ...agent, id: 'gone' })).toBe('failed')
     expect(actions.orcaSwitch).not.toHaveBeenCalled()
+    expect(actions.open).not.toHaveBeenCalled()
+  })
+  // A rest shows a Claude app session in the app, only while that app is in front (docs/specs/2026-11-15-dial-claude-app-follow.md).
+  const SESSION = 'local_8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b'
+  const inClaude = (session = SESSION, bundle = 'com.anthropic.claudefordesktop') =>
+    ({ hostHints: { __CFBundleIdentifier: bundle, CLAUDE_CODE_HOST_SESSION_ID: session } })
+
+  it('hasPane: a Claude app session, where a tap can open it, while the Claude app is in front', () => {
+    const { actions } = fakeActions()
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('session-start', inClaude()))
+    src.ingest(ev('session-start', { sessionId: 'ghostty', ...inClaude(SESSION, 'com.mitchellh.ghostty') }))
+    src.ingest(ev('session-start', { sessionId: 'uuid', ...inClaude('8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b') }))
+    const agent = (sessionId: string) => src.list().find((a) => a.sessionId === sessionId)!
+    expect(src.hasPane(agent('s1'))).toBe(true)
+    expect(actions.canOpen).toHaveBeenLastCalledWith({ pane: { app: 'claude', id: SESSION } })
+    actions.claudeInFront.mockReturnValueOnce(false)
+    expect(src.hasPane(agent('s1'))).toBe(false)
+    actions.canOpen.mockReturnValueOnce(false)
+    expect(src.hasPane(agent('s1'))).toBe(false)
+    expect(src.hasPane(agent('ghostty'))).toBe(false)
+    expect(src.hasPane(agent('uuid'))).toBe(false)
+    src.ingest(ev('session-end', inClaude()))
+    expect(src.hasPane(agent('s1'))).toBe(false)
+
+    const bare = setup()
+    bare.src.ingest(bare.ev('session-start', inClaude()))
+    expect(bare.src.hasPane(bare.src.list()[0])).toBe(false)
+  })
+
+  it('showPane shows the session through claudeShow and answers what it said', async () => {
+    for (const said of ['ok', 'failed', 'busy'] as const) {
+      const { actions } = fakeActions({ claudeShow: vi.fn(async () => said) })
+      const { src, ev } = setup({ actions })
+      src.ingest(ev('turn-start', inClaude()))
+      const agent = src.list()[0]
+      expect(await src.showPane(agent)).toBe(said)
+      expect(actions.claudeShow.mock.calls).toEqual([[agent.id, SESSION]])
+      expect(actions.orcaSwitch).not.toHaveBeenCalled()
+      expect(actions.open).not.toHaveBeenCalled()
+    }
+  })
+
+  it('showPane asks the front again: no longer in front, it is failed and nothing runs', async () => {
+    const { actions } = fakeActions()
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('session-start', inClaude()))
+    const agent = src.list()[0]
+    expect(src.hasPane(agent)).toBe(true)
+    actions.claudeInFront.mockReturnValue(false)
+    expect(await src.showPane(agent)).toBe('failed')
+    expect(actions.claudeShow).not.toHaveBeenCalled()
+    expect(actions.open).not.toHaveBeenCalled()
+  })
+
+  it('the session is the latest event\'s', async () => {
+    const NEXT = 'local_0f1e2d3c-4b5a-4968-8776-655443322110'
+    const { actions } = fakeActions()
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('session-start', inClaude()))
+    // Resumed under another of the app's sessions: the old one shows something else now.
+    src.ingest(ev('turn-start', inClaude(NEXT)))
+    const agent = src.list()[0]
+    expect(await src.showPane(agent)).toBe('ok')
+    expect(actions.claudeShow.mock.calls).toEqual([[agent.id, NEXT]])
+    actions.claudeShow.mockClear()
+
+    // Its next event comes from another app: the Claude app no longer holds it.
+    src.ingest(ev('turn-stop', inClaude(NEXT, 'com.mitchellh.ghostty')))
+    expect(await src.showPane(agent)).toBe('failed')
+    src.ingest(ev('turn-start', inClaude()))
+    src.ingest(ev('session-end', inClaude()))
+    expect(await src.showPane(agent)).toBe('failed')
+    expect(actions.claudeShow).not.toHaveBeenCalled()
     expect(actions.open).not.toHaveBeenCalled()
   })
 })

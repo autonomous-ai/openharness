@@ -7,7 +7,7 @@ import { APP_IDS } from '../cable/hosts/hostDetect.js'
 import { FRONT_NONE } from '../cable/hosts/frontApp.js'
 import { listenLocalSocket } from '../lib/localSocket.js'
 import {
-  FRONT_MAX_BYTES, FRONT_PER_SECOND, frontHandler, LISTENER_DROPPED_PER_SECOND, LISTENER_MAX_CONNECTIONS, openDevicesListener, REFUSED, type DevicesListener,
+  ATTACH_MAX_BYTES, ATTACH_PER_SECOND, attachHandler, FRONT_MAX_BYTES, FRONT_PER_SECOND, frontHandler, LISTENER_DROPPED_PER_SECOND, LISTENER_MAX_CONNECTIONS, openDevicesListener, REFUSED, type DevicesListener,
   type ListenerHandler,
 } from './devicesListener.js'
 
@@ -544,5 +544,89 @@ describe('front', () => {
     const longest = Math.max(...[...APP_IDS, FRONT_NONE].map((app) => Buffer.byteLength(JSON.stringify({ type: 'front', app }))))
     expect(longest).toBe(37)
     expect(longest).toBeLessThanOrEqual(FRONT_MAX_BYTES)
+  })
+})
+
+describe('attach', () => {
+  const gone = new AbortController().signal
+  const ID = '0f8fad5b-d9cb-469f-a165-70867728950e'
+  const attachBody = (sessionId: unknown): string => JSON.stringify({ type: 'attach', sessionId })
+
+  it('attach takes a UUID sessionId and hands it on', () => {
+    const attached: string[] = []
+    const handler = attachHandler((sessionId) => attached.push(sessionId))
+    expect(handler.handle({ type: 'attach', sessionId: ID }, gone)).toBeUndefined()
+    expect(attached).toEqual([ID])
+  })
+
+  // Claude Code's ids are lower case, and the agent's id is hashed from the string as given: an upper-case one names
+  // no session.
+  it('attach refuses an upper-case UUID', () => {
+    const attach = vi.fn()
+    expect(attachHandler(attach).handle({ type: 'attach', sessionId: ID.toUpperCase() }, gone)).toBe(REFUSED)
+    expect(attach).not.toHaveBeenCalled()
+  })
+
+  it('attach refuses any other body', () => {
+    const attach = vi.fn()
+    const handler = attachHandler(attach)
+    for (const sessionId of [undefined, 7, '', 'session-1', 'local_0f8fad5b-d9cb-469f', `${ID} `, `${ID}\n`, `${ID}0`, [ID], '__proto__']) {
+      const message: Record<string, unknown> = sessionId === undefined ? { type: 'attach' } : { type: 'attach', sessionId }
+      expect(handler.handle(message, gone), String(sessionId)).toBe(REFUSED)
+    }
+    expect(attach).not.toHaveBeenCalled()
+  })
+
+  it('the attach handler holds nothing: it is its two limits and handle', () => {
+    const handler = attachHandler(() => {})
+    expect(Object.keys(handler).sort()).toEqual(['handle', 'maxBytes', 'perSecond'])
+    expect(handler).toMatchObject({ maxBytes: ATTACH_MAX_BYTES, perSecond: ATTACH_PER_SECOND })
+    expect([ATTACH_MAX_BYTES, ATTACH_PER_SECOND]).toEqual([96, 10])
+    expect(Buffer.byteLength(attachBody(ID))).toBe(68)
+  })
+
+  describe.skipIf(process.platform === 'win32')('on a real listener', () => {
+    /** An attach of ID padded to exactly `bytes`. */
+    function attachOf(bytes: number): string {
+      const unpadded = Buffer.byteLength(JSON.stringify({ type: 'attach', sessionId: ID, pad: '' }))
+      const body = JSON.stringify({ type: 'attach', sessionId: ID, pad: 'x'.repeat(bytes - unpadded) })
+      expect(Buffer.byteLength(body)).toBe(bytes)
+      return body
+    }
+
+    it('an attach of 97 bytes is 413 and the handler never runs', async () => {
+      const attached: string[] = []
+      const { path } = await open({ attach: attachHandler((sessionId) => attached.push(sessionId)) })
+      expect((await connection(path).send(attachOf(ATTACH_MAX_BYTES))).status).toBe(204)
+      expect((await connection(path).send(attachOf(ATTACH_MAX_BYTES + 1))).status).toBe(413)
+      expect(attached).toEqual([ID])
+    })
+
+    it('the 11th attach within a second on one connection is 429', async () => {
+      const attached: string[] = []
+      const { path } = await open({ attach: attachHandler((sessionId) => attached.push(sessionId)) }, { now: () => 0 })
+      const sender = connection(path)
+      for (let i = 0; i < ATTACH_PER_SECOND; i++) expect((await sender.send(attachBody(ID))).status).toBe(204)
+      expect((await sender.send(attachBody(ID))).status).toBe(429)
+      expect(attached).toEqual(Array(10).fill(ID))
+    })
+
+    it('a refused attach is 400, counted in the minute line, and no line or answer holds the id', async () => {
+      const attach = vi.fn()
+      const { path, lines } = await open({ attach: attachHandler(attach) }, { now: () => 0 })
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      const sender = connection(path)
+      const answers: string[] = []
+      for (const sessionId of [`${ID}\n`, 'local_0f8fad5b-d9cb-469f']) {
+        const { status, body } = await sender.send(attachBody(sessionId))
+        expect(status).toBe(400)
+        answers.push(body)
+      }
+      expect(attach).not.toHaveBeenCalled()
+      expect(answers).toEqual(['', ''])
+      vi.advanceTimersByTime(MINUTE)
+      expect(lines).toEqual(['[devices] listener open', '[devices] listener in the last minute: 0 unknown, 0 oversized, 0 over rate, 2 refused, 0 failed'])
+      for (const text of [...lines, ...answers]) expect(text).not.toMatch(/0f8fad5b/)
+    })
   })
 })

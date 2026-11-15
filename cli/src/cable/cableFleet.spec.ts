@@ -307,12 +307,15 @@ describe('USB dial fleet', () => {
     } finally { await f.fleet.stop() }
   })
 
-  it('followPrompt reaches each attached dial', async () => {
+  it('followLocal reaches each attached dial', async () => {
     const f = fixture()
     try {
       await f.start()
-      await f.fleet.followPrompt('a')
+      const localFollowed = vi.fn()
+      f.host.localFollowed = localFollowed
+      await f.fleet.followLocal('a', 'tab')
       for (const port of f.ports) expect(port.sent).toContainEqual({ t: 'focus', agentId: 'a' })
+      expect(localFollowed.mock.calls).toEqual([['tab', 'moved'], ['tab', 'moved']])
     } finally { await f.fleet.stop() }
   })
 

@@ -1,7 +1,8 @@
 /**
  * The devices' own local listener: the one way a local tool tells the devices process something, so the core never
- * hears it (cli/AGENTS.md, Protect the core, rule 7). `harness hardware watch` tells it the app in front; later device
- * routes register a handler of their own beside `front`, each with its own body and rate limit.
+ * hears it (cli/AGENTS.md, Protect the core, rule 7). `harness hardware watch` tells it the app in front, and the
+ * harness-device mod the session the Claude app shows (`attach`); later device routes register a handler of their own
+ * beside these, each with its own body and rate limit.
  *
  * Who may connect is the core's own answer (lib/localSocket.ts): a 0600 socket in a folder that is this account's
  * alone, so the kernel refuses another account's connect. Node reads no peer's uid. A client checks the socket's owner
@@ -250,6 +251,27 @@ export function frontHandler(front: (app: string) => void): ListenerHandler {
     handle: ({ app }) => {
       if (typeof app !== 'string' || !FRONT_APPS.has(app)) return REFUSED
       front(app)
+    },
+  }
+}
+
+export const ATTACH_PER_SECOND = 10
+/** The message, `{"type":"attach","sessionId":"<uuid>"}`, is 68 bytes. */
+export const ATTACH_MAX_BYTES = 96
+
+/** Claude Code's session id: a UUID in lower case, as it makes them; the agent's id is hashed from the string as given,
+ *  so an upper-case one would name no session. */
+const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+
+/** The session the Claude app shows, from the harness-device mod: its own session id, handed on. It keeps nothing and
+ *  logs nothing, as the id names a person's session. */
+export function attachHandler(attach: (sessionId: string) => void): ListenerHandler {
+  return {
+    maxBytes: ATTACH_MAX_BYTES,
+    perSecond: ATTACH_PER_SECOND,
+    handle: ({ sessionId }) => {
+      if (typeof sessionId !== 'string' || !SESSION_ID.test(sessionId)) return REFUSED
+      attach(sessionId)
     },
   }
 }
