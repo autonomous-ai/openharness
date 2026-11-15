@@ -1013,6 +1013,34 @@ describe('the dial that shows one app at a time', () => {
     expect(host.settledApp()).toBe('vscode')
   })
 
+  it('appSettled reaches the wiring each time an app settles, after appSwitched', async () => {
+    const settles: Array<() => void> = []
+    const told: string[] = []
+    const host = setup(five(), {
+      appSwitched: (cause) => { told.push(cause) },
+      appSettled: (app) => { told.push(`settled ${app}`) },
+      appTimer: (_ms, run) => { settles.push(run); return () => {} },
+    })
+    expect(await shown(host)).toBe('ghostty')
+    host.front('vscode')
+    settles[0]()
+    host.front('none')
+    settles[1]()
+    expect(told).toEqual(['front', 'settled vscode', 'settled none'])
+  })
+
+  it('latestFront is the app last reported, with a window open too', () => {
+    const settles: Array<() => void> = []
+    const host = setup(five(), { sessions, appTimer: (_ms, run) => { settles.push(run); return () => {} } })
+    expect(host.latestFront()).toBeUndefined()
+    host.front('claude')
+    expect(host.latestFront()).toBe('claude')
+    expect(host.settledApp()).toBeUndefined()
+    onTab(host, ['h1'])
+    host.front('orca')
+    expect(host.latestFront()).toBe('orca')
+  })
+
   it('promptFollowed reaches the wiring', () => {
     const promptFollowed = vi.fn()
     const host = setup(five(), { promptFollowed })
