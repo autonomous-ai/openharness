@@ -4,7 +4,8 @@ Design and implementation checkpoint, 16 November 2026. Package 6, step 3 of the
 following [the secrets notes](2026-11-15-core-plan/secrets.md) and
 [audit security 7](2026-11-12-core-audit.md#security).
 
-Source inspected: `d592d766627f53693e0e96ff7b89f95dd2d28334`. Worktree:
+Initial source inspected: `d592d766627f53693e0e96ff7b89f95dd2d28334`. The implementation also integrates
+deletion-only main `db2d74421b686784b89b93e6fa5c3968a04f7a1c` before the full core gate. Worktree:
 `/tmp/harness-core-secret-custody`, branch `codex/core-secret-custody`.
 The coordinating agent approved the Design and five-file main-based scope before implementation. The first
 implementation checkpoint is complete; broad validation, native E2E and performance measurements await coordination.
@@ -261,6 +262,8 @@ the pinned dependencies from the local cache. That setup failure is not red beha
 | Existing grid restore/resume cases, `-t grid` | 8 passed, 236 intentionally unselected, 2 files, 3.09 s | `/tmp/core-secret-custody-grid.log` |
 | `tsc --noEmit`, after fixture literal/optional-payload corrections | Passed, exit 0 | `/tmp/core-secret-custody-typecheck.log` |
 | `git diff --check` | Passed | Local diff |
+| Real-core native viewer custody case against d592d766 | Failed at direct attach retaining `gridLaunch` | `/tmp/core-secret-custody-native-red.log` |
+| Same native scenario with projection and completed fixture opening | 1 passed, 32.01 s total / 10.85 s test | `/tmp/core-secret-custody-native-green-final.log` |
 
 The new output test uses real CoreApi reads through generic agent/shown/device/workspace/viewer replies and
 Browser reconnect events. Browser lifecycle tests capture direct port arguments, including a retained no-key
@@ -269,8 +272,16 @@ discovery input, and a real fork preparation/publication with both source and pa
 The architecture test confirms no new loaded core file. Authoritative registry, stopped store and launch
 implementations are untouched; existing grid restore/resume tests still pass.
 
+`e2e/agentViewCustody.e2e.ts` runs a bundled real core under `IsolatedDaemon`, a private socket/tmux server and
+throwaway home, with only the authenticated viewers peer supplied by the test. It checks direct attach, viewer
+context through main's public frame callback, reconnect metadata, a real fixture turn and Stop preserving the
+exact synthetic override in the stopped record. No production hook or service is added. The first candidate run
+passed the metadata/frame checks but Stop refused the fake engine's incomplete native conversation opening;
+the fixture now completes its first turn before Stop. That was a test readiness correction, not a flaky retry.
+The baseline failure is before this added readiness step, at the unchanged direct-attach omission assertion.
+
 Still required before merge: the coordinated full core coverage gate and any checks selected by the final diff,
-native service/E2E validation (including the direct viewer wiring in `main.ts`), and before/after hot-path numbers.
+and before/after hot-path numbers. The native viewer scenario above validates main's direct wiring on macOS.
 No native old binary, Linux or Windows run is claimed. The Browser combination must also exercise generic
 catch-up/running projection at its resulting source head. The snapshot reads add copies, including copies before
 existing query augmentation spreads; there is no claim of zero cost before measurement.
