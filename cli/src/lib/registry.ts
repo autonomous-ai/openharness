@@ -137,8 +137,9 @@ export interface RegisteredSession {
    */
   gateway?: 'ori' | null
   /**
-   * The grid this pane's engine is pointed at, if any — read off the live process on every discovery
-   * exactly like `gateway`, never declared. See `gridAssignment.ts`. Carries no credential; the
+   * The grid this pane's engine is pointed at, if any. Comes from the launch record (create and retarget
+   * write it) and from argv evidence that models classifies; unlike `gateway`, which comes from Codex's
+   * argv or a hook's header. See `gridAssignment.ts`. Carries no credential; the
    * launch that put the engine there, credential included, is `gridLaunch` below.
    */
   grid?: GridAssignment | null
