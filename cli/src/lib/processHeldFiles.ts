@@ -6,7 +6,8 @@
  * only through the store it keeps open. What is read: the path of each open descriptor (`readlink` of
  * `/proc/<pid>/fd/<n>` on Linux, the `n` lines of `lsof -Fn` on macOS) of the engine process the discovery pass
  * selected and of its direct children that are the same engine's binary (processTable.ts `engineChildren`), five
- * processes at most. What never is: a file through its descriptor, any other field of a descriptor, any other process,
+ * processes at most. On macOS, the spellings of a path that matches are looked up (`lstat`), to tell which one is the
+ * file. What never is: a file through its descriptor or its path, any other field of a descriptor, any other process,
  * anything on Windows. A path that does not match the caller's pattern is dropped where it is read: never returned,
  * kept or logged.
  */
@@ -82,9 +83,10 @@ async function linuxFolders(identity: ProcessIdentity, file: RegExp, proc: strin
   return mapped.every((folder) => folder !== null) ? mapped : null
 }
 
-// lsof escapes a name's bytes above ASCII (`\xc3\xa0`), so a path may be spelled two ways (descriptorPaths). When
-// both match, the one on disk is the file; with both or neither, the descriptor says nothing, as does a name too long
-// to be a path.
+// lsof escapes a name's bytes above ASCII (`\xc3\xa0`) and leaves a backslash as it is, so a path may be spelled two
+// ways (descriptorPaths), and a name holding `\x2f` decodes to a path of someone's choosing. The one spelling on disk
+// is the file, and it must match; with two or none on disk, the descriptor says nothing, as does a name too long to be
+// a path. A spelling is only looked up (lstat), never opened.
 async function spelledFolder(path: string, file: RegExp): Promise<string | undefined> {
   let spellings: string[]
   try {
@@ -92,14 +94,13 @@ async function spelledFolder(path: string, file: RegExp): Promise<string | undef
   } catch {
     return undefined
   }
-  const matches = spellings.flatMap((spelling) => {
-    const folder = file.exec(spelling)?.[1]
-    return folder ? [{ spelling, folder }] : []
-  })
-  if (matches.length < 2) return matches[0]?.folder
-  const onDisk = await Promise.all(matches.map(({ spelling }) => lstat(spelling).then(() => true, () => false)))
-  return onDisk.filter(Boolean).length === 1 ? matches[onDisk.indexOf(true)].folder : undefined
+  if (!spellings.some((spelling) => file.test(spelling))) return undefined
+  const onDisk = (await Promise.all(spellings.map((spelling) => lstat(spelling).then(() => [spelling], () => [])))).flat()
+  return onDisk.length === 1 ? file.exec(onDisk[0])?.[1] : undefined
 }
+
+// The kernel names a held file by its real path, which never has a `..` segment: one that does was decoded from a name.
+const STEPS_OUT = /(?:^|\/)\.\.(?:\/|$)/
 
 async function darwinFolders(pid: number, file: RegExp): Promise<string[] | null> {
   // `-n -P`: no host or port names looked up. `-w`: a file system lsof cannot stat is a warning, and the process's own
@@ -128,7 +129,8 @@ async function listedHome(listed: readonly ProcessIdentity[], file: RegExp, plat
     if (!held) return undefined
     for (const folder of held) folders.add(folder)
   }
-  return folders.size === 1 ? [...folders][0] : undefined
+  const [home] = folders
+  return folders.size === 1 && !STEPS_OUT.test(home) ? home : undefined
 }
 
 /**
