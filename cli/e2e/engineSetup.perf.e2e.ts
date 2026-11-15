@@ -10,6 +10,8 @@ import { IsolatedDaemon } from './harness/daemon.js'
 import { harnessdProcesses } from './harness/endurance.js'
 
 const exec = promisify(execFile)
+// ps reports hundredths of a CPU second: this window resolves 0.033 percentage points of one core.
+const IDLE_MS = 30_000
 const stats = (values: number[]) => {
   const ordered = [...values].sort((a, b) => a - b)
   return { n: values.length, medianMs: ordered[Math.floor(ordered.length / 2)], p95Ms: ordered[Math.ceil(ordered.length * 0.95) - 1], valuesMs: values }
@@ -54,12 +56,12 @@ it.runIf(process.env.SETUP_PERF === '1')('measures cold setup, cached launch, co
     }
     const first = await usage(core), at = performance.now()
     // This is the measurement interval, not synchronization or a correctness assertion.
-    await new Promise<void>(done => setTimeout(done, 10_000))
+    await new Promise<void>(done => setTimeout(done, IDLE_MS))
     const last = await usage(core), elapsed = performance.now() - at
     const probes = readFileSync(probeLog, 'utf8').trim().split('\n').map(line => JSON.parse(line))
     writeFileSync(report, JSON.stringify({ schema: 1, node: process.version, platform: process.platform,
       bundleSha256: createHash('sha256').update(readFileSync(bundle)).digest('hex'), source: process.env.SETUP_PERF_SOURCE ?? null,
-      workload: { agents: 7, cachedLaunches: 6, requests: 50, turns: 10, idleMs: 10_000 },
+      workload: { agents: 7, cachedLaunches: 6, requests: 50, turns: 10, idleMs: IDLE_MS },
       setupBefore, setupAfter: harnessdProcesses(d).has('engineSetup'), coreStarts: d.coresStarted(),
       coldLaunchMs: launch[0], cachedLaunch: stats(launch.slice(1)), coreRequest: stats(requests), input: stats(input),
       idleCore: { durationMs: elapsed, cpuPercent: 100_000 * (last.cpuSeconds - first.cpuSeconds) / elapsed, rssKiB: last.rssKiB },
