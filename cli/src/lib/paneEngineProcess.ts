@@ -2,6 +2,7 @@
  * Which process in a pane is the engine — asked of whichever terminal backend holds the pane. The backend
  * answers only for the pane's own root process; the walk below it is the process table's (processTable.ts).
  */
+import { agentCommandOwnershipSnapshotAsync, type AgentCommandOwnershipSnapshot } from './engineBin.js'
 import type { AgentEngine } from '../engines/types.js'
 import { registry, type ProcessIdentity, type RegisteredSession } from './registry.js'
 import { comparableStartMarker, enrichProcessRows, processRows, processTreePids, selectEngineProcess, type ProcessRow } from './processTable.js'
@@ -43,7 +44,10 @@ export async function lookupPaneEngineProcess(
   if (!rows) return { ok: false, unknown: true, reason: 'the process table could not be read' }
   const panePids = processTreePids(rows, [rootPid])
   const enrichedRows = await enrichProcessRows(rows, panePids)
-  const process = selectEngineProcess(enrichedRows, rootPid, engine)
+  let ownership: AgentCommandOwnershipSnapshot
+  try { ownership = await agentCommandOwnershipSnapshotAsync() }
+  catch { return { ok: false, unknown: true, reason: 'ENGINE_LOOKUP_UNAVAILABLE: executable ownership could not be read' } }
+  const process = selectEngineProcess(enrichedRows, rootPid, engine, ownership)
   if (!process) {
     const paneProcesses = enrichedRows.filter((row) => panePids.has(row.pid)).map(processIdentityOf)
     return { ok: false, unknown: false, reason: `no ${engine} process under ${label}`, paneProcesses }

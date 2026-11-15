@@ -6,7 +6,7 @@ import { engineKeepsTranscriptFile, registry as liveRegistry, type RegisteredSes
 import { controlTranscriptEvidence } from '../engines/transcriptBindings.js'
 import { materializeResumeTranscript } from '../engines/resumeTranscript.js'
 import { IdentityReadUnavailable } from '../engines/kit/identityScan.js'
-import { ResumePreparationError } from '../engines/kit/resumeRepair.js'
+import { ResumePreparationError } from '../engines/facets/resumeRepair.js'
 import type { StoppedAgentStore } from './stoppedAgents.js'
 import { resumeStoppedAgent, waitForResumedAgent, resumeChanged, resumeUnconfirmed, RESUME_READINESS_BUDGET_MS } from './resumeStoppedAgent.js'
 import { checkPidRuntime } from './deleteAgentFallback.js'
