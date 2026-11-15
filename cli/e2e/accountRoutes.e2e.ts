@@ -182,6 +182,8 @@ describe('the account\'s routes of the door', () => {
       ['POST', '/api/product-usage/report', { body: '{}', local: false }, json(403, '{"error":"FORBIDDEN"}', VOCABULARY)],
       ['POST', '/api/desk/ops', { body: '{}', local: false }, FORBIDDEN],
     ]
+    // Each once, so that the gateway is up (it starts on demand beside the core); then again, each at once.
+    for (const [method, path, options, answer] of failing) expect.soft(await ask(d, method, path, options), `${method} ${path}`).toEqual(answer)
     for (const [method, path, options, answer] of failing) {
       const at = Date.now()
       expect.soft(await ask(d, method, path, options), `${method} ${path}`).toEqual(answer)

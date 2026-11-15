@@ -100,13 +100,13 @@ describe('the gateway in its own process, as the core sees it', () => {
     link.port.deviceClient('phone-1', 'PUB')
     link.port.windowOpened('tui')
     link.port.usageCounter?.('create_requests')
-    link.port.usageLaunch?.({ id: 'creation-fixture-1', phase: 'start' })
+    link.port.usage?.({ kind: 'observed', payload: { measure: 'collector_days' } })
     await link.port.local('local:w', { type: 'e2ee_pairings_list', payload: {} })
     expect(link.port.terminalBinary('phone-1', bytesOf('hi'))).toBe(true)
     // An id the binary frame cannot carry: refused, never sent half-framed.
     register(link, 'x'.repeat(300))
     expect(link.port.terminalBinary('x'.repeat(300), bytesOf('hi'))).toBe(false)
-    expect(kinds().slice(1)).toEqual(['broadcast', 'commander', 'user', 'reply', 'target', 'terminal', 'observer', 'device', 'deviceClient', 'windowOpened', 'usageCounter', 'usageLaunch', 'localFrame'])
+    expect(kinds().slice(1)).toEqual(['broadcast', 'commander', 'user', 'reply', 'target', 'terminal', 'observer', 'device', 'deviceClient', 'windowOpened', 'usageCounter', 'usage', 'localFrame'])
     expect(sent[4]).toEqual({ kind: 'reply', connId: 'phone-1', type: 'agents_list', requestId: 'r-1', payload: { agents: [] } })
     const framed = decodeGatewayBinary(binary[0])!
     expect(framed).toMatchObject({ kind: GatewayBinary.remote, id: 'phone-1' })
@@ -123,7 +123,7 @@ describe('the gateway in its own process, as the core sees it', () => {
     link.connected()
     setBuffered(GATEWAY_USAGE_BUFFER_LIMIT)
     link.port.usageCounter?.('create_requests')
-    link.port.usageLaunch?.({ id: 'creation-fixture-1', phase: 'start' })
+    link.port.usage?.({ kind: 'observed', payload: { measure: 'collector_days' } })
     link.port.broadcast({ type: 'turn_started' })
     expect(kinds()).toEqual(['start', 'broadcast'])
     // About a guest's harness: the gateway is told whose, to seal it for that guest's sessions.

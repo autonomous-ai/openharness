@@ -144,6 +144,7 @@ core/turns/turnHooks.ts
 core/updateHandoff.ts
 core/updaterBeside.ts
 core/usageLink.ts
+core/usageOutcomes.ts
 core/viewerStreams.ts
 core/viewersLink.ts
 core/viewersWake.ts
@@ -300,7 +301,6 @@ lib/agentTmp.ts
 lib/agentUsageWire.ts
 lib/apiConnectionMetadata.ts
 lib/apiInstructions.ts
-lib/appProductUsageReport.ts
 lib/attachTracker.ts
 lib/attachTranscript.ts
 lib/authSession.ts
@@ -427,7 +427,6 @@ lib/processTable.ts
 lib/processTree.ts
 lib/productHealthContract.ts
 lib/productUsageContract.ts
-lib/productUsageSignals.ts
 lib/projectFolder.ts
 lib/ptyHost/client.ts
 lib/ptyHost/drain.ts
@@ -481,7 +480,6 @@ lib/sqliteThread.ts
 lib/sshHosts.ts
 lib/stopAgentService.ts
 lib/stoppedAgents.ts
-lib/storeProxy.ts
 lib/subagentTranscript.ts
 lib/submitTiming.ts
 lib/subscriptionModel.ts

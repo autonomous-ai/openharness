@@ -97,6 +97,51 @@ describe('the door\'s routes a service answers', () => {
     expect(clearTimer).toHaveBeenCalledOnce()
   })
 
+  it('takes only the methods a route names, and leaves the others to the door', async () => {
+    const linked = router(['account_http'], () => ({ status: 200, body: { ok: true } }))
+    const doors = createServiceRoutes({ routes: [{ path: /^\/api\/desk$/, methods: ['GET'], type: 'account_http', waitMs: 1_000, unanswered: DOWN }], linked, hosted: router([]) })
+    expect(await doors.answer('/api/desk', read('/api/desk'))).toEqual({ status: 200, body: { ok: true } })
+    expect(doors.answer('/api/desk', { method: 'POST', target: '/api/desk', body: '{}' })).toBeNull()
+  })
+
+  it('refuses a write without the local header with the door\'s own 403, its route\'s headers on it, and never asks the service', async () => {
+    const linked = router(['account_http'], () => ({ status: 200, body: { kept: true } }))
+    const route: ServiceHttpRoute = { path: /^\/api\/report$/, methods: ['GET', 'POST'], writes: ['POST'], type: 'account_http', waitMs: 1_000,
+      unanswered: DOWN, headers: { 'x-vocabulary': '10' } }
+    const doors = createServiceRoutes({ routes: [route], linked, hosted: router([]) })
+    const write = { method: 'POST', target: '/api/report', body: '{}' }
+    expect(await doors.answer('/api/report', write)).toEqual({ status: 403, body: { error: 'FORBIDDEN' }, headers: { 'x-vocabulary': '10' } })
+    expect(await doors.answer('/api/report', write, false)).toEqual({ status: 403, body: { error: 'FORBIDDEN' }, headers: { 'x-vocabulary': '10' } })
+    expect(linked.route).not.toHaveBeenCalled()
+    // With it, the service answers; a read needs none.
+    expect(await doors.answer('/api/report', write, true)).toEqual({ status: 200, body: { kept: true }, headers: { 'x-vocabulary': '10' } })
+    expect(await doors.answer('/api/report', read('/api/report'))).toEqual({ status: 200, body: { kept: true }, headers: { 'x-vocabulary': '10' } })
+  })
+
+  it('writes only the headers a route declares: its own on every answer, and those its service may set, one short line each', async () => {
+    const answers: Record<string, unknown>[] = [
+      { status: 429, body: { busy: true }, headers: { 'retry-after': '91', 'set-cookie': 'x=1' } },
+      { status: 200, body: {}, headers: { 'retry-after': 'two\nlines' } },
+      { status: 200, body: {}, headers: { 'retry-after': 'x'.repeat(129) } },
+      { status: 200, body: {}, headers: { 'retry-after': 5 } },
+      { status: 200, body: {}, headers: 'retry-after: 5' },
+      { status: 200, body: {} },
+    ]
+    const linked = router(['account_http'], () => answers.shift())
+    const route: ServiceHttpRoute = { path: /^\/api\/report$/, type: 'account_http', waitMs: 1_000, unanswered: DOWN,
+      headers: { 'x-vocabulary': '10' }, answerHeaders: ['retry-after'] }
+    const doors = createServiceRoutes({ routes: [route], linked, hosted: router([]) })
+    expect(await doors.answer('/api/report', read('/api/report'))).toEqual({ status: 429, body: { busy: true }, headers: { 'retry-after': '91', 'x-vocabulary': '10' } })
+    for (let i = 0; i < 5; i++) expect(await doors.answer('/api/report', read('/api/report'))).toEqual({ status: 200, body: {}, headers: { 'x-vocabulary': '10' } })
+    // Its answer while its service is down carries its own headers too, and a route with none declares none.
+    const down = createServiceRoutes({ routes: [route], linked: router(['account_http'], () => ({ error: 'SERVICE_UNAVAILABLE' })), hosted: router([]) })
+    expect(await down.answer('/api/report', read('/api/report'))).toEqual({ ...DOWN, headers: { 'x-vocabulary': '10' } })
+    const bare = createServiceRoutes({ routes: [{ ...route, headers: undefined }], linked: router(['account_http'], () => ({ status: 200, body: {}, headers: { 'retry-after': '5' } })), hosted: router([]) })
+    expect(await bare.answer('/api/report', read('/api/report'))).toEqual({ status: 200, body: {}, headers: { 'retry-after': '5' } })
+    const none = createServiceRoutes({ routes: [{ ...route, headers: undefined, answerHeaders: undefined }], linked: router(['account_http'], () => ({ status: 200, body: {}, headers: { 'retry-after': '5' } })), hosted: router([]) })
+    expect(await none.answer('/api/report', read('/api/report'))).toEqual({ status: 200, body: {} })
+  })
+
   it('waits on real timers and says what is wrong on the console when not told otherwise', async () => {
     vi.useFakeTimers()
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})

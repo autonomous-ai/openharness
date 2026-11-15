@@ -2,9 +2,9 @@
  * The local door's routes that a service answers (core/api.ts `SERVICE_HTTP_ROUTES`). Once the door has let a request
  * in (hookServer.ts: the private socket or loopback, the credential, Host and Origin), it goes to the service its route
  * names, as the request that route is, wherever that service runs, and the service's answer is written as it gave it.
- * Generic: what the core holds of a route is where it goes, how long it waits, and what it answers while its service is
- * down or does not answer in time, at once, never a hang. What the route does, and every check of what it carries, is
- * the service's.
+ * Generic: what the core holds of a route is where it goes, which methods it takes and which of them write, how long it
+ * waits, the headers its answers carry, and what it answers while its service is down or does not answer in time, at
+ * once, never a hang. What the route does, and every check of what it carries, is the service's.
  */
 import type { Asker, HttpAnswer, ServiceHttpRoute } from './api.js'
 
@@ -32,6 +32,12 @@ export interface ServiceRoutesDeps {
 /** Who asks through the door: this computer's owner, as the door's checks established. */
 const OWNER_HERE: Asker = { local: true, owner: true }
 
+/** The door's answer to a write without the local header, as it always was. */
+const FORBIDDEN: HttpAnswer = { status: 403, body: { error: 'FORBIDDEN' } }
+
+/** A header value a service may give: one short line of printable characters. */
+const HEADER_VALUE = /^[\x20-\x7e]{1,128}$/
+
 const isRecord = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value)
 
 export function createServiceRoutes(deps: ServiceRoutesDeps) {
@@ -48,19 +54,32 @@ export function createServiceRoutes(deps: ServiceRoutesDeps) {
     if (!deps.hosted.route(route.type, { ...request }, OWNER_HERE, reply)) reply({ error: 'SERVICE_UNAVAILABLE' })
   })
 
+  /** [answer] with the headers its route declares: those its service may set, as it gave them, then the route's own. */
+  const headed = (route: ServiceHttpRoute, answer: HttpAnswer, given?: unknown): HttpAnswer => {
+    const headers: Record<string, string> = {}
+    for (const name of route.answerHeaders ?? []) {
+      const value = isRecord(given) ? given[name] : undefined
+      if (typeof value === 'string' && HEADER_VALUE.test(value)) headers[name] = value
+    }
+    Object.assign(headers, route.headers)
+    return Object.keys(headers).length ? { ...answer, headers } : answer
+  }
+
   return {
-    /** The answer to [request] on [path] (its query left out), or null when no service answers that path. */
-    answer(path: string, request: ServiceHttpRequest): Promise<HttpAnswer> | null {
-      const route = deps.routes.find((each) => each.path.test(path))
+    /** The answer to [request] on [path] (its query left out), or null when no service answers that path and method.
+     *  [localOk]: the request carries the local header, which a route's write needs. */
+    answer(path: string, request: ServiceHttpRequest, localOk = false): Promise<HttpAnswer> | null {
+      const route = deps.routes.find((each) => each.path.test(path) && (!each.methods || each.methods.includes(request.method)))
       if (!route) return null
+      if (route.writes?.includes(request.method) && !localOk) return Promise.resolve(headed(route, FORBIDDEN))
       return ask(route, request).then((answer) => {
         if (answer && Number.isInteger(answer.status) && (answer.status as number) >= 200 && (answer.status as number) <= 599 && isRecord(answer.body)) {
-          return { status: answer.status as number, body: answer.body }
+          return headed(route, { status: answer.status as number, body: answer.body }, answer.headers)
         }
         // Down, slow or failing is said where it is seen (core/serviceLinks.ts, core/serviceHost.ts); an answer that is
         // none is a service's mistake, said here.
         if (answer && typeof answer.error !== 'string') log(`[services] ${route.type} was answered with no HTTP answer: answered ${route.unanswered.status} instead`)
-        return route.unanswered
+        return headed(route, route.unanswered)
       })
     },
   }
