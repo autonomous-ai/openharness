@@ -120,6 +120,8 @@ interface RunHookOpts {
   grokHome?: string
   devinHome?: string
   input?: Record<string, unknown>
+  /** Run through a `/bin/sh -c` that stays the hook's parent, as dash does for every engine's hook on Linux. */
+  viaShell?: boolean
 }
 
 function runHook(opts: RunHookOpts): Promise<string> {
@@ -240,7 +242,11 @@ fs.readFileSync = (path, ...args) => {
       try { writeFileSync(join(hookDataDir, 'hook-credential'), `${'a'.repeat(43)}\n`, { mode: 0o600, flag: 'wx' }) } catch { /* already exists */ }
     }
     daemonSocketFor(opts.port, hookDataDir, env.HOME).then(() => {
-    const child = spawn(process.execPath, args, {
+    // `; exit $?` keeps any shell from exec'ing the hook, macOS's bash as well as dash.
+    const [command, argv] = opts.viaShell
+      ? ['/bin/sh', ['-c', '"$0" "$@"; exit $?', process.execPath, ...args]]
+      : [process.execPath, args]
+    const child = spawn(command, argv, {
       env,
       stdio: ['pipe', 'pipe', 'inherit'],
     })
@@ -2264,6 +2270,15 @@ describe('hook notify: a session outside a pane', () => {
         hostHints: expect.any(Object),
       },
     }])
+  })
+
+  // GitHub run 43721656615: Linux's dash keeps an engine's `sh -c` as the hook's parent, and it exits with the hook, so
+  // the devices kept a pid already gone, refused a tap on the agent's tmux pane and dropped the agent. The hook sees
+  // past it through /proc, which only Linux has; macOS's /bin/sh execs the hook, so its parent is the engine already.
+  it.runIf(process.platform === 'linux')('a hook run through a shell that stays its parent names the shell\'s parent', async () => {
+    const { port, requests } = await collect()
+    await runHook({ port, viaShell: true, input: { hook_event_name: 'Stop', session_id: 'sess-1', cwd: '/work/app' } })
+    expect(requests).toEqual([{ url: '/api/hook/observed', body: expect.objectContaining({ callerPid: process.pid }) }])
   })
 
   // Each waits for the person: a permission, an MCP server's question or link, or a resume after the quota.
