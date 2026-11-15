@@ -21,7 +21,10 @@ import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import type { Fleet, FleetDeps } from './fleet.js'
 import type { DevicesDeps } from './devices.js'
-import { ATTACH_MAX_BYTES, ATTACH_PER_SECOND, FRONT_MAX_BYTES, FRONT_PER_SECOND, REFUSED, TABS_MAX_BYTES, TABS_PER_SECOND, type DevicesListener, type ListenerHandler, type ListenerStreamHandler } from './devicesListener.js'
+import {
+  ATTACH_MAX_BYTES, ATTACH_PER_SECOND, FRONT_MAX_BYTES, FRONT_PER_SECOND, REFUSED, TAB_MAX_BYTES, TAB_PER_SECOND, TABS_MAX_BYTES, TABS_PER_SECOND,
+  type DevicesListener, type ListenerHandler, type ListenerStreamHandler,
+} from './devicesListener.js'
 
 const seen = vi.hoisted(() => ({
   host: null as unknown as CableHostWiring,
@@ -328,20 +331,23 @@ describe('the devices, as the core starts them', () => {
 })
 
 describe('the devices\' own listener (services/devicesListener.ts)', () => {
-  it('the devices open their listener once, with front, attach and the tabs stream', () => {
+  it('the devices open their listener once, with front, attach, the tab handler and the tabs stream', () => {
     const listener = fakeListener()
     start({ listen: listener.listen })
     expect(listener.listen).toHaveBeenCalledTimes(1)
     const [{ handlers, log }] = listener.given
-    expect(Object.keys(handlers)).toEqual(['front', 'attach', 'tabs'])
+    expect(Object.keys(handlers)).toEqual(['front', 'attach', 'tab', 'tabs'])
     expect(handlers.front).toMatchObject({ maxBytes: FRONT_MAX_BYTES, perSecond: FRONT_PER_SECOND })
     expect([FRONT_MAX_BYTES, FRONT_PER_SECOND]).toEqual([64, 10])
     expect(handlers.attach).toMatchObject({ maxBytes: ATTACH_MAX_BYTES, perSecond: ATTACH_PER_SECOND })
     expect([ATTACH_MAX_BYTES, ATTACH_PER_SECOND]).toEqual([96, 10])
+    expect(handlers.tab).toMatchObject({ maxBytes: TAB_MAX_BYTES, perSecond: TAB_PER_SECOND })
     expect(handlers.tabs).toMatchObject({ maxBytes: TABS_MAX_BYTES, perSecond: TABS_PER_SECOND })
-    // The listener's own handlers: a name that is no app id, and a session id that is no UUID, are refused there.
+    // The listener's own handlers: a name that is no app id, a session id that is no UUID, and an app with no tabs, are
+    // refused there.
     expect(listener.front('Ghostty')).toBe(REFUSED)
     expect(listener.attach('local_8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b')).toBe(REFUSED)
+    expect((handlers.tab as ListenerHandler).handle({ type: 'tab', app: 'orca', tty: '/dev/ttys023' }, new AbortController().signal)).toBe(REFUSED)
     // What the listener says goes to the devices' own log.
     log('[devices] listener open')
     expect(logs).toEqual(['[devices] listener open'])
@@ -2878,5 +2884,210 @@ describe('the session the Claude app shows turns the dial (docs/specs/2026-11-15
     expect([...attaches()].sort()).toEqual(lines.sort())
     const secrets = [SESSION, SECOND, UNLISTED, A, B, LOCAL, LOCAL_SECOND, BUNDLE]
     expect(logs.filter((line) => secrets.some((secret) => line.includes(secret)))).toEqual([])
+  })
+})
+
+describe('selecting a tab moves the dial (docs/specs/2026-11-15-dial-terminal-follow.md)', () => {
+  const agent = (n: number) => observedAgentId('claude', `sess-${n}`)
+  const ID = agent(1)
+  /** Each agent's tty: /dev/ttys023 for the first. */
+  const ttyOf = (n: number) => `/dev/ttys${String(22 + n).padStart(3, '0')}`
+  const TTY = ttyOf(1)
+  /** Claude Code in a Terminal tab of its own, as its hook says. */
+  const hook = (n: number): ObservedHookEvent => ({
+    engine: 'claude', sessionId: `sess-${n}`, event: 'session-start', cwd: '/work/api', callerPid: 4241 + n,
+    transcriptPath: `/t/sess-${n}.jsonl`, hostHints: { __CFBundleIdentifier: 'com.apple.Terminal' },
+  })
+  const host = () => seen.dial as unknown as DaemonCableHost
+  let clock = 0
+  /** A dial on the cable with no window, on macOS, `agents` agents in Terminal tabs with their ttys read, a watch's stream
+   *  open, no app settled in front, and the devices' monotonic clock at 0. `report` is a tab line through the listener's
+   *  handler, as `harness hardware watch` tells one; `settle` keeps an app in front for the settle. */
+  const dialWith = async (agents = 1) => {
+    vi.useFakeTimers()
+    clock = 0
+    const listener = fakeListener()
+    const tty = vi.fn(async (pid: number): Promise<string | undefined> => ttyOf(pid - 4241))
+    const started = start({ faults: ['fleet'], orca: { ...orca, platform: 'darwin' }, listen: listener.listen, tty, now: () => clock })
+    for (let n = 1; n <= agents; n++) started.port.observed(hook(n))
+    seen.host.watching!(true)
+    started.port.swarms(null)
+    await Promise.all(tty.mock.results.map(({ value }) => value))
+    const stream = listener.tabs()
+    const report = (app: string, tty: string): unknown =>
+      (listener.given[0].handlers.tab as ListenerHandler).handle({ type: 'tab', app, tty }, new AbortController().signal)
+    const settle = async (app: string) => {
+      expect(listener.front(app)).toBeUndefined()
+      await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+    }
+    return { ...started, listener, stream, report, settle }
+  }
+  const asked = () => calls('followLocal')
+  const tabLines = () => logs.filter((line) => line.startsWith('[device] tab'))
+  const unlinked = (off: boolean) => { (seen.cable as unknown as { connected: boolean }).connected = !off }
+
+  it('a tab report whose app has settled in front asks the dials to follow its agent, as a tab\'s follow', async () => {
+    const { report, settle } = await dialWith()
+    await settle('terminal-app')
+    expect(report('terminal-app', TTY)).toBeUndefined()
+    expect(asked()).toEqual([[ID, 'tab']])
+    // What the dials make of it is theirs to count.
+    expect(tabLines()).toEqual([])
+  })
+
+  it('a report before its app settles waits for the settle, then asks', async () => {
+    const { listener, report } = await dialWith()
+    expect(listener.front('terminal-app')).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS - 1)
+    report('terminal-app', TTY)
+    expect(asked()).toEqual([])
+    await vi.advanceTimersByTimeAsync(1)
+    expect(asked()).toEqual([[ID, 'tab']])
+  })
+
+  it('a report is dropped when another app settles, counted not-in-front, and is not acted on when its app settles later', async () => {
+    const { report, settle } = await dialWith()
+    report('terminal-app', TTY)
+    await settle('vscode')
+    expect(tabLines()).toEqual(['[device] tab · not-in-front'])
+    await settle('terminal-app')
+    expect(asked()).toEqual([])
+    expect(tabLines()).toEqual(['[device] tab · not-in-front'])
+  })
+
+  it('the newest report is the one acted on', async () => {
+    const { report, settle } = await dialWith(2)
+    report('terminal-app', ttyOf(1))
+    report('terminal-app', ttyOf(2))
+    await settle('terminal-app')
+    expect(asked()).toEqual([[agent(2), 'tab']])
+  })
+
+  it('the dial\'s own select for that tty in the last 2 s is its echo', async () => {
+    const { report, settle, stream } = await dialWith()
+    await settle('terminal-app')
+    host().swipeEnded(ID, 'rest')
+    expect(stream.lines).toStrictEqual([{ app: 'terminal-app', tty: TTY }])
+    clock = 1_999
+    report('terminal-app', TTY)
+    expect(tabLines()).toEqual(['[device] tab · echo'])
+    expect(asked()).toEqual([])
+    clock = 2_000
+    report('terminal-app', TTY)
+    expect(asked()).toEqual([[ID, 'tab']])
+  })
+
+  it('a report for a tty the dial selected before its latest select is still an echo', async () => {
+    const { report, settle, stream } = await dialWith(2)
+    await settle('terminal-app')
+    host().swipeEnded(agent(1), 'rest')
+    clock = 500
+    host().swipeEnded(agent(2), 'rest')
+    expect(stream.lines).toStrictEqual([{ app: 'terminal-app', tty: ttyOf(1) }, { app: 'terminal-app', tty: ttyOf(2) }])
+    // Terminal's report of the tab the swipe passed comes late: the dial is not pulled back to it.
+    clock = 900
+    report('terminal-app', ttyOf(1))
+    expect(tabLines()).toEqual(['[device] tab · echo'])
+    expect(asked()).toEqual([])
+  })
+
+  it('nine selects inside 2 s keep the newest eight', async () => {
+    const { report, settle, stream } = await dialWith(9)
+    await settle('terminal-app')
+    // A tap writes its select with no rest before it.
+    for (let n = 1; n <= 9; n++) {
+      clock = (n - 1) * 100
+      expect(await host().openAgent(agent(n))).toBeUndefined()
+    }
+    expect(stream.lines).toHaveLength(9)
+    report('terminal-app', ttyOf(1))
+    expect(asked()).toEqual([[agent(1), 'tab']])
+    report('terminal-app', ttyOf(2))
+    expect(tabLines()).toEqual(['[device] tab · echo'])
+    expect(asked()).toHaveLength(1)
+  })
+
+  it('a report held for the settle is judged by when it arrived', async () => {
+    const { listener, report, stream } = await dialWith()
+    host().swipeEnded(ID, 'rest')
+    expect(stream.lines).toHaveLength(1)
+    clock = 1_500
+    report('terminal-app', TTY)
+    expect(listener.front('terminal-app')).toBeUndefined()
+    clock = 2_500
+    await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+    expect(tabLines()).toEqual(['[device] tab · echo'])
+    expect(asked()).toEqual([])
+  })
+
+  it('no agent with that tty, or one in another app: no-agent', async () => {
+    const { report, settle } = await dialWith()
+    await settle('terminal-app')
+    report('terminal-app', '/dev/ttys099')
+    await settle('iterm')
+    report('iterm', TTY)
+    expect(tabLines()).toEqual(['[device] tab · no-agent', '[device] tab · no-agent'])
+    expect(asked()).toEqual([])
+  })
+
+  it('the dial\'s answer is counted: tab · moved, and tab · no-tile', () => {
+    start({ faults: ['fleet'] })
+    seen.host.localFollowed!('tab', 'moved')
+    seen.host.localFollowed!('tab', 'no-tile')
+    expect(tabLines()).toEqual(['[device] tab · moved', '[device] tab · no-tile'])
+  })
+
+  it('with no dial linked nothing is asked or counted', async () => {
+    const { report, settle } = await dialWith()
+    await settle('terminal-app')
+    unlinked(true)
+    report('terminal-app', TTY)
+    await settle('vscode')
+    report('terminal-app', TTY)
+    await settle('ghostty')
+    unlinked(false)
+    // Neither report waits on: the one acted on was used up, the other dropped.
+    await settle('terminal-app')
+    expect(asked()).toEqual([])
+    report('terminal-app', TTY)
+    expect(asked()).toEqual([[ID, 'tab']])
+    expect(tabLines()).toEqual([])
+  })
+
+  it('no tab line names a tty, an app, an agent or a session', async () => {
+    const { report, settle } = await dialWith()
+    await settle('terminal-app')
+    report('terminal-app', TTY)
+    seen.host.localFollowed!('tab', 'moved')
+    seen.host.localFollowed!('tab', 'no-tile')
+    report('terminal-app', '/dev/ttys099')
+    host().swipeEnded(ID, 'rest')
+    report('terminal-app', TTY)
+    report('iterm', TTY)
+    await settle('vscode')
+    const five = ['moved', 'no-tile', 'not-in-front', 'no-agent', 'echo'].map((outcome) => `[device] tab · ${outcome}`)
+    expect([...tabLines()].sort()).toEqual([...five].sort())
+    expect(logs.filter((line) => [TTY, 'ttys', 'terminal-app', 'iterm', 'vscode', ID, 'sess-1'].some((secret) => line.includes(secret)))).toEqual([])
+  })
+
+  it('a follow that throws is logged and the devices keep running', async () => {
+    const { report, settle } = await dialWith()
+    vi.spyOn(seen.cable as unknown as { followLocal: (agentId: string, cause: string) => Promise<void> }, 'followLocal')
+      .mockRejectedValueOnce(new Error('dial unplugged'))
+    // Acted on at the settle, inside the filter's timer.
+    report('terminal-app', TTY)
+    await settle('terminal-app')
+    await vi.waitFor(() => expect(logs).toContain('[devices] dial failed · dial unplugged'))
+    report('terminal-app', TTY)
+    expect(asked()).toEqual([[ID, 'tab']])
+  })
+
+  it('stop forgets the waiting report: a settle after it asks nothing', async () => {
+    const { port, report } = await dialWith()
+    report('terminal-app', TTY)
+    await port.stop()
+    seen.host.frontSettled!('terminal-app')
+    expect(asked()).toEqual([])
+    expect(tabLines()).toEqual([])
   })
 })
