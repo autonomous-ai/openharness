@@ -93,6 +93,19 @@ export function createAttach({
   const readerLoads = createReaderLoads(readerLoadWaitMs)
   const turnReplacements = createTurnReplacements(normalizers)
   const recoveryRetries = new Map<string, ReturnType<typeof setTimeout>>()
+  /**
+   * Where an attach read a session's transcript to, when it then installed no tail for it: its hydration was
+   * superseded by a write to the runtime profile, the engine worker refused its candidate, or its profile's config
+   * could not be read. The next attach found no tail to hold, so its history had no end: it folded the file to its
+   * end, silently, and tailed from there, and every line written between the two reads reached nobody. A new Codex
+   * agent's first `token_count` went that way, read to byte 199 by the bind's attach and folded to byte 385 by the
+   * SessionStart hook's (e2e/usageProcess.e2e.ts, "explicit inline usage follows the same aggregate boundary", CLI
+   * end to end runs 43672659842 shard 2 and 42225258676 shard 7); a message, a tool call or a turn's end goes the
+   * same way. So the next attach of that transcript folds only to this byte and tails from it. One entry per
+   * session, gone once a tail runs for it. At 256 the map starts over, as `openclawFolderReads` does
+   * (agents/bind.ts): a session forgotten that way attaches as it did before. In memory only.
+   */
+  const supersededReads = new Map<string, { transcriptPath: string; offset: number }>()
   const pendingAttaches = new Map<string, number>()
   const admissionStops = new Map<string, { sessionId: string }>()
   const captureAdmissionStop = (session: RegisteredSession): (() => boolean) => {
@@ -113,6 +126,7 @@ export function createAttach({
     for (const [agentId, token] of admissionStops) if (token.sessionId === sessionId) admissionStops.delete(agentId)
     clearTimeout(recoveryRetries.get(sessionId))
     recoveryRetries.delete(sessionId)
+    supersededReads.delete(sessionId)
   }
   const explainRecovery = (session: RegisteredSession, reason?: string): boolean => {
     if (!setInterpretationHold(session.agentId, session.evidenceRevision, reason)) return false
@@ -225,6 +239,8 @@ export function createAttach({
     if (!relaunch && !reset && normalizers.hasState(session.sessionId) && (!remote || remote.current(session))) {
       if (session.transcriptPath) {
         const unseen = neverFoldedHistory.delete(session.sessionId)
+        // The tail this starts has its own position: an older read's end is no longer where history ends.
+        supersededReads.delete(session.sessionId)
         await watcher.addSession(
           { ...session, transcriptPath: session.transcriptPath },
           { fromStart: replayFromStart || unseen || (session.engine === 'cursor' && replayCursorFromStart) },
@@ -299,20 +315,36 @@ export function createAttach({
     ].sort((a, b) => a.offset - b.offset) : undefined
     let recoveryInstall = () => replacement!.commit(recoveryPlan!)
     let recoveryReady = false
+    // Whether this attach leaves its session's transcript with no tail, held or running. Never a recovery: it replays
+    // its own boundaries (`closes`).
+    const leavesNoTail = (): boolean => !handover.hold && !session.interpretationHold && !!session.transcriptPath
+      && !watcher.tails(session.sessionId, session.transcriptPath)
+    // A read that ended here is as far as the session's history goes, and no tail was left to read on from it: the
+    // next attach folds to here and tails from here (`supersededReads`).
+    const rememberRead = (offset: number): void => {
+      if (supersededReads.size >= 256) supersededReads.clear()
+      supersededReads.set(session.sessionId, { transcriptPath: session.transcriptPath!, offset })
+    }
     // A reset keeps the normalizer it meant to replace when its read failed, or outlasted the hold on the
     // tail — which then let go, and delivery went back to that normalizer: it has seen every record since,
     // this one has not.
     const keepLiveNormalizer = (why: string): boolean => {
       console.warn(`[agent] ${sid(session.agentId)} ${session.interpretationHold ? 'transcript held' : 'kept its live normalizer'} · the re-read ${why}`)
       if (session.interpretationHold && current()) explainRecovery(session, `Waiting for transcript interpretation: the re-read ${why}.`)
+      if (handover.next !== null && leavesNoTail()) rememberRead(handover.next)
       handover.hold?.release()
       handover.next = null
       if (relaunch) remote?.retry(session)
       return true
     }
+    // An earlier attach of this transcript read it to here and installed no tail (`supersededReads`): history ends
+    // there, and what was written since is the tail's. One kept for another file is a conversation that moved on.
+    const remembered = supersededReads.get(session.sessionId)
+    if (remembered && remembered.transcriptPath !== session.transcriptPath) supersededReads.delete(session.sessionId)
+    const unreadFrom = supersededReads.get(session.sessionId)?.offset
     // A surviving shell can leave its old tail installed. Its cursor is the old engine's delivery
     // position; a newly started engine's history ends at the launch boundary instead.
-    const historyEnd = () => closes ? undefined : relaunch?.engineStarted ? relaunch.offset : handover.hold?.offset ?? relaunchedAt
+    const historyEnd = () => closes ? undefined : relaunch?.engineStarted ? relaunch.offset : handover.hold?.offset ?? unreadFrom ?? relaunchedAt
     if (remote) {
       if (session.transcriptPath) handover.hold = await watcher.hold(session.sessionId, session.transcriptPath)
       const live = replayLive && handover.hold === null
@@ -325,7 +357,12 @@ export function createAttach({
         }, profile.ingestFrames)
         if (current() && profile.config) await profile.config()
       } catch {
-        if (prepared) remote.discard(prepared)
+        if (prepared) {
+          // The worker read the transcript and the profile's config then could not be read: the candidate's cursor
+          // is where that read ended. A worker that could not be reached read nothing known.
+          if (leavesNoTail()) rememberRead(prepared.page.cursor.offset)
+          remote.discard(prepared)
+        }
         remote.retry(session)
         return handover.hold ? keepLiveNormalizer('could not reach its engine worker') : true
       }
@@ -357,10 +394,12 @@ export function createAttach({
         return keepLiveNormalizer(read.failed ? 'could not read the transcript' : 'outlasted its hold on the tail')
       }
       if (!current()) return false
+      // Set before the profile's config is read: a config that cannot be read leaves no tail either, and the read
+      // before it ended here all the same (`supersededReads`).
+      handover.next = read.next
       try { await profile.config?.() }
       catch { return keepLiveNormalizer('could not read its runtime profile') }
       fromEnd = read
-      handover.next = read.next
       historyTurnOpen = take(stream.finish())
       console.log(`[agent] ${sid(session.agentId)} read the transcript from its end · turn @${read.turnFrom} · profile @${read.profileFrom} · ${read.end} bytes${handover.hold ? ' · took over its tail' : ''}`)
     }
@@ -611,6 +650,8 @@ export function createAttach({
     }
     if (session.transcriptPath) {
       neverFoldedHistory.delete(session.sessionId)
+      // A tail runs from here on, started below or taken over: what a superseded read left for this attach is spent.
+      supersededReads.delete(session.sessionId)
       // Deliberately NOT `fromStart`, even when the caller asked for it: this branch has just folded the
       // file into the normalizer above, so replaying it from byte 0 emits every line a second time.
       // Measured: a claude turn opened, closed after 44ms and opened again, because the fold replayed the
