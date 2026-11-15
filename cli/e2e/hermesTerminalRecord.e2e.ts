@@ -4,7 +4,7 @@
  * `HERMES_PATH`, so the computer's own Hermes is never run. On Linux, the same fake in a sandbox of its own (`unshare`).
  */
 import { spawnSync } from 'node:child_process'
-import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient } from './harness/client.js'
@@ -42,8 +42,11 @@ async function rig() {
   mkdirSync(home, { recursive: true })
   const script = join(d.root, 'hermes-script.jsonl')
   writeFileSync(script, '')
-  const hermes = (options: Omit<Parameters<typeof fakeHermesScript>[0], 'script' | 'version'> & { version?: string } = {}) =>
-    writeFileSync(d.env.HERMES_PATH!, fakeHermesScript({ version: CURRENT, script, ...options }), { mode: 0o755 })
+  // Whole or not at all: a test may write another while the daemon runs `hermes --version`.
+  const hermes = (options: Omit<Parameters<typeof fakeHermesScript>[0], 'script' | 'version'> & { version?: string } = {}) => {
+    writeFileSync(`${d.env.HERMES_PATH}.new`, fakeHermesScript({ version: CURRENT, script, ...options }), { mode: 0o755 })
+    renameSync(`${d.env.HERMES_PATH}.new`, d.env.HERMES_PATH!)
+  }
   const tell = (step: Record<string, unknown>) => appendFileSync(script, `${JSON.stringify(step)}\n`)
   const connect = async () => { client?.close(); return client = await LocalClient.connect(d) }
   const folder = (name: string) => { const path = join(d.projectsDir, name); mkdirSync(path, { recursive: true }); return path }
@@ -346,6 +349,13 @@ describe.runIf(process.platform === 'linux' && unshareWorks())('in a sandbox', (
     const pane = String(created.agent.terminal?.runtimes?.[0]?.paneId ?? created.agent.tmuxPane)
     await until('the agent up', async () => (await row(c, agentId))?.status === 'active' || null, 30_000, 250)
     await until('the fake Hermes', async () => (await r.d.capture(pane)).includes('fake-hermes-ready') || null, 30_000, 100)
+    // Discovery has looked at its pane, shown by a Hermes started after it in a home the daemon sees: the pass that
+    // binds that one lists both processes, and the pass that follows its `/new` starts once that pass is done.
+    r.hermes()
+    const seen = await create(r, c, r.folder('p2'))
+    await boundTo(c, seen.agentId, seen.started.session)
+    r.tell({ new: true })
+    await boundTo(c, seen.agentId, await movedFrom(r.home, seen.started.terminal!, seen.started.session))
     const agent = await row(c, agentId)
     expect(agent?.identityHold).toBeFalsy()
     expect(agent?.sessionId).toBeFalsy()
