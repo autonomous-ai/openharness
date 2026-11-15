@@ -376,6 +376,9 @@ export interface CableHost {
   swipeSwitches?(agentId: string): boolean
   /** How a hand's turn to such an agent ended: the dial rested on it for SWIPE_REST_MS, or left it first. */
   swipeEnded?(agentId: string, how: 'rest' | 'superseded'): void
+  /** A hand turned the dial to an agent, whatever its pane or none, as it turned: never the dial's echo of a move the app
+   *  asked for, which the focus guard drops first. */
+  turned?(): void
   /** What a local follow did to this dial: turned it to the agent, or found no tile for it on the ring it walks. */
   localFollowed?(cause: FollowCause, outcome: 'moved' | 'no-tile'): void
   focus(agentId: string): void
@@ -1451,6 +1454,7 @@ export class CableSession {
           // above still names it: the next list push re-asserts it rather than turning the dial back.
           if (this.lacks(agentId, 'f')) this.host.markSeen?.(agentId)
           else this.host.focus(agentId)
+          this.host.turned?.()
           this.restOn(agentId)
         }
         return

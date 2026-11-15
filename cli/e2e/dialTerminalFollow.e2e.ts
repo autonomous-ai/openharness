@@ -137,7 +137,7 @@ describe.skipIf(process.platform !== 'darwin')('the dial and the terminal apps f
     const { d, dial, run } = await fresh()
     const since = dial.messages.length
     run.tab(NO_AGENT_TTY)
-    await said(d, '[device] tab · no-agent')
+    await said(d, '[device] tab · skipped · unknown agent')
     expect(dial.messages.slice(since).filter((m) => m.t === 'focus')).toEqual([])
   })
 
@@ -153,7 +153,7 @@ describe.skipIf(process.platform !== 'darwin')('the dial and the terminal apps f
     dial.send({ t: 'focus', agentId: w.id })
     const since = dial.messages.length
     run.tab(tty)
-    await said(d, '[device] tab · echo')
+    await said(d, '[device] tab · skipped · echo')
     expect(dial.messages.slice(since).filter((m) => m.t === 'focus' && m.agentId === a.id)).toEqual([])
   })
 
@@ -164,8 +164,8 @@ describe.skipIf(process.platform !== 'darwin')('the dial and the terminal apps f
     run.tab(ttyOf(b.pid))
     await said(d, '[device] tab · moved')
     run.tab(NO_AGENT_TTY)
-    await said(d, '[device] tab · no-agent')
-    expect(lines(d, '[device] tab').every((line) => /^\[device\] tab · [a-z-]+$/.test(line))).toBe(true)
+    await said(d, '[device] tab · skipped · unknown agent')
+    expect(lines(d, '[device] tab').every((line) => /^\[device\] tab · (moved|skipped · (no tile|echo|unknown agent|not in front))$/.test(line))).toBe(true)
     const log = d.log()
     // A tty by its name alone too: `ttys012` with no `/dev/` before it names the tab as well.
     for (const secret of [ttyName(a.pid), ttyName(b.pid), 'ttys9999', TERMINAL, a.sessionId, b.sessionId, w.sessionId]) {
