@@ -11,7 +11,6 @@
  */
 import { AutonomousDeviceInput, type DeviceInputDeps } from './deviceInput.js'
 import type { WifiFeed } from './wifi.js'
-import type { CommandCodeNormalizer } from '../engines/commandcode/normalizer.js'
 import { deviceErrorText } from './cardText.js'
 import { adaptSlashCommand } from '../lib/goalCommand.js'
 import { sid } from '../lib/log.js'
@@ -51,8 +50,8 @@ export interface InputDeps {
   /** The app (`send`) and the dial (`sendCommander`). */
   clients: { send(frame: Frame): void; sendCommander(frame: Frame): void }
   agentIdFor: (sessionId: string) => string
-  /** Command Code's normalizer for a session, which opens its turn on our paste. */
-  commandcode: (sessionId: string) => CommandCodeNormalizer | undefined
+  /** Command Code's turn opened on our paste, from outside its transcript, in its worker (core/engines/otherStreams.ts). */
+  openTurn: (sessionId: string, text: string) => Promise<LiveEvent[]>
   emit: (sessionId: string, events: LiveEvent[]) => void
   /** A prompt is about to be typed, and `capture` is the pane as read right before: what is on it belongs
    *  to the turns before the one it starts (the question watcher's, lib/askQuestion.ts `notePrompt`). */
@@ -170,7 +169,7 @@ export function sessionInputDeps(
   deps: InputDeps,
   deviceInput: () => Pick<AutonomousDeviceInput, 'legacyWrite'>,
 ): SessionInputDeps {
-  const { resolve, terminal, deliveries, device, clients, agentIdFor, commandcode, emit } = deps
+  const { resolve, terminal, deliveries, device, clients, agentIdFor, openTurn, emit } = deps
   const { captureTerminal, validateTerminal, keyTerminalAction } = terminal
   const writeMessage = messageWriter(deps)
   return {
@@ -214,9 +213,8 @@ export function sessionInputDeps(
       // the session id, and the normalizer map is keyed by session. Resolve before looking anything up.
       const session = resolve(id)
       if (session?.engine !== 'commandcode' || !session.sessionId) return
-      const normalizer = commandcode(session.sessionId)
-      if (!normalizer) return
-      emit(session.sessionId, normalizer.openTurn(content))
+      const sessionId = session.sessionId
+      void openTurn(sessionId, content).then(events => { if (events.length) emit(sessionId, events) })
     },
   }
 }

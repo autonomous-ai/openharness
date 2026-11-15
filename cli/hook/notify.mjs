@@ -586,11 +586,33 @@ function relayedPrompt(engine, event, input) {
   return engine === 'claude' && event === 'UserPromptSubmit' && typeof input.prompt === 'string' && CROSS_SESSION.test(input.prompt)
 }
 
+/** The core refuses an event whose title is longer (core/observedHook.ts): the hook cuts it to this instead. */
+const MAX_TITLE = 64
+
 /**
- * What a paneless session's hook tells the devices: which session, what happened and where, never its prompt. A path
- * the core would refuse (over 1024 characters, or with a control character) is left out rather than cost the whole
- * event (core/observedHook.ts), and so are the paths of a body over the 4096 bytes the core reads (hookServer.ts):
- * the transcript's first, as the devices can do without it, then the folder.
+ * The name the session gives itself, as the core takes one, or undefined for none. The same rule as the devices'
+ * cleaner (cable/hosts/observedTitle.ts): this file ships alone and cannot import it, and the hook's test holds the
+ * two copies together.
+ */
+function observedTitle(value) {
+  if (typeof value !== 'string') return undefined
+  let title = value.replace(/\s+/g, ' ').trim()
+  if (title.length > MAX_TITLE) {
+    title = title.slice(0, MAX_TITLE)
+    // A cut between the two halves of a surrogate pair would leave half a character.
+    if (/[\ud800-\udbff]$/.test(title)) title = title.slice(0, -1)
+    title = title.trim()
+  }
+  return title === '' || CONTROL.test(title) ? undefined : title
+}
+
+/**
+ * What a paneless session's hook tells the devices: which session, what happened and where, and the name it gives
+ * itself, never its prompt. A path the core would refuse (over 1024 characters, or with a control character) is left
+ * out rather than cost the whole event (core/observedHook.ts), and so are the paths of a body over the 4096 bytes the
+ * core reads (hookServer.ts): the transcript's first, as the devices can do without it, then the folder. The title is
+ * never dropped: at most 64 characters, it fits beside the hints and ids once both paths are gone, so a body without
+ * one always means the session said none.
  */
 function observedBody(engine, event, input) {
   const kind = observedEvent(engine, event, input)
@@ -606,6 +628,8 @@ function observedBody(engine, event, input) {
     transcriptPath: path(input.transcript_path || input.transcriptPath), hostHints: hostHints(),
   }
   if (relayedPrompt(engine, event, input)) body.relayed = true
+  const title = kind === 'session-start' || kind === 'turn-start' ? observedTitle(input.session_title) : undefined
+  if (title) body.title = title
   const fits = () => Buffer.byteLength(JSON.stringify(body)) <= 4096
   if (!fits()) delete body.transcriptPath
   if (!fits()) delete body.cwd

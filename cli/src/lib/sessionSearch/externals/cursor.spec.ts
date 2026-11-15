@@ -440,6 +440,18 @@ describe('cursorProvider.owners', () => {
     expect(claims.map((claim) => [claim.pid, claim.app ?? false])).toEqual([[80, true], [81, true], [82, false], [83, false]])
   })
 
+  // macOS `ps` cuts `comm` at 16 bytes and `args` is split at a space: under such a folder neither says `tmux`.
+  it("knows Cursor's tmux server under a folder with a space, by its whole path", async () => {
+    const { config, provider } = roots()
+    chat(config, CWD, ID)
+    const tmux = '/Users/someone/Library/Application Support/Tools/bin/tmux'
+    const cut: RunningProcess = { pid: 15, ppid: 1, executable: tmux.slice(0, 16), args: `${tmux} -L cursor-agent new-session -d` }
+    const app = async (server: RunningProcess) =>
+      (await provider().owners!(view([server, cursorRow(84, `--resume ${ID}`, 15)]).processes)).map((claim) => claim.app ?? false)
+    expect(await app(cut)).toEqual([false])
+    expect(await app({ ...cut, commandPath: tmux })).toEqual([true])
+  })
+
   it('looks only a few parents up for that tmux server', async () => {
     const { config, provider } = roots()
     chat(config, CWD, ID)

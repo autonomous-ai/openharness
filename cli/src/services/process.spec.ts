@@ -252,7 +252,10 @@ describe('a service in its own process', () => {
     socket().say({ type: 'session_search', payload: { requestId: 'r15' }, asker: { ...remote, machine: { machineId: 'm_desk', label: 7 } } })
     socket().say({ type: 'session_search', payload: { requestId: 'r16' }, asker: { ...remote, machine: { machineId: 'm_desk' } } })
     socket().say({ type: 'session_search', payload: { requestId: 'r17', machine: { machineId: 'm_payload', label: null } }, asker: { ...remote, machine: null } })
-    await vi.waitFor(() => expect(asked).toHaveLength(17))
+    // The door over the daemon's own socket, as the core said it: never a payload's, and nothing else is that door.
+    socket().say({ type: 'session_search', payload: { requestId: 'r18', door: 'socket' }, asker: { local: true, owner: true, door: 'socket' } })
+    socket().say({ type: 'session_search', payload: { requestId: 'r19', door: 'socket' }, asker: { local: true, owner: true, door: 'tcp' } })
+    await vi.waitFor(() => expect(asked).toHaveLength(19))
     expect(asked).toEqual([
       { local: true, owner: true }, { local: false, owner: false }, { local: false, owner: false },
       { local: true, owner: true, connection: 'local:1', requestId: 'cmd-1' }, { local: true, owner: true },
@@ -261,6 +264,7 @@ describe('a service in its own process', () => {
       { local: false, owner: false, guest: 'kim@acme.io' }, { local: false, owner: false },
       { ...remote, machine: { machineId: 'm_desk', label: 'Desk' } }, { ...remote, machine: { machineId: 'm_desk', label: null } },
       remote, remote, remote, remote, remote,
+      { local: true, owner: true, door: 'socket' }, { local: true, owner: true },
     ])
   })
 

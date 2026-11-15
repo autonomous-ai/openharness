@@ -2,19 +2,18 @@
  * A stopped conversation's history made resumable, as the engine's launch contract declares it
  * (facets/launch.ts `ResumeRepairContract`). Moved from engines/codex/portableHistory.ts, whose every write and
  * refusal this reproduces (engines/launchPrep.golden.spec.ts). A history is found by its session's id with the
- * kit's lookup (kit/sessionRecords.ts), which the session store uses too. A resume is session control: this runs
- * in core, with no worker.
- *
- * It reads a chunk at a time and gives the core's loop back between chunks, within the bounds below (core/AGENTS.md
- * rule 4). Read in line, a 200 MB rollout held the core's loop 0.7 s, and 2.4 s when it had something to repair; the
- * rollout of 3 October was 803 MB.
+ * kit's lookup (kit/sessionRecords.ts), which the session store uses too. The supervised worker stages its copies;
+ * core owns final publication and Watcher ordering. The dated inline compatibility entry alone publishes here.
  */
 import { createHash, randomUUID } from 'node:crypto'
 import { closeSync, constants, fstatSync, fsync, lstatSync, openSync, read, realpathSync, renameSync, rmSync, write, type Stats } from 'node:fs'
-import { isAbsolute, relative } from 'node:path'
+import { join, relative } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import type { ResumeRepairContract } from '../facets/launch.js'
-import type { ResumePreparationKind } from '../../lib/productHealthContract.js'
+import { REPAIR_LIMITS, ResumePreparationError, type HistoryRepair, type RepairLimits, type Unrepaired } from '../facets/resumeRepair.js'
+import { repairFile, sameRepairFile, type RepairFile, type RepairPrepared } from '../worker/resumeRepairProtocol.js'
+export { REPAIR_LIMITS, ResumePreparationError, type HistoryRepair, type RepairLimits, type Unrepaired } from '../facets/resumeRepair.js'
+import { staysInside } from '../../lib/pathContainment.js'
 import { findSessionFile } from './sessionRecords.js'
 
 type JsonObject = Record<string, unknown>
@@ -55,18 +54,6 @@ function valueAt(record: JsonObject, path: readonly string[]): unknown {
     value = (value as JsonObject)[key]
   }
   return value
-}
-
-/**
- * Why a history could not be prepared, by which check refused it: the resume reply and its counters carry the kind
- * (lib/resumeAgentService.ts). On 2026-10-26, 10 of 17 failed resumes were a preparation failure and nothing said
- * which. The message names the file and a line number only, never conversation text.
- */
-export class ResumePreparationError extends Error {
-  constructor(readonly kind: ResumePreparationKind, message: string) {
-    super(message)
-    this.name = 'ResumePreparationError'
-  }
 }
 
 /** Shared by the string helper and the file reader, which retains only one record at a time. */
@@ -121,39 +108,12 @@ export function repairHistoryText(contract: ResumeRepairContract, history: strin
   return { history: lines.join('\n'), repairedItems: repair.finish() }
 }
 
-/** What a repair may cost. Past any of these the resume goes on without it, on the history as it is: the engine reads
- *  its own file, as it did before there was a repair. */
-export interface RepairLimits {
-  /** Both reads and the copies, checked before each read. The two flushes after the last read are not cut short. */
-  deadlineMs: number
-  /** The largest history read. Repairing one writes two more copies of it: the backup and the repaired history. */
-  maxBytes: number
-  /** The largest record, decoded in one piece on the core's loop. */
-  maxRecordBytes: number
-}
-
-export const REPAIR_LIMITS: RepairLimits = {
-  // A 200 MB rollout with an item to repair takes about 2 s on a Mac: both reads, both copies and their flushes.
-  deadlineMs: 60_000,
-  maxBytes: 1024 ** 3,
-  // The largest record in 653 MB of rollouts on a working Mac was 11.6 MiB, and decoded in 20 ms.
-  maxRecordBytes: 16 * 1024 ** 2,
-}
-
-/** Why a history resumes as it is: larger than the core reads (or one of its records is), out of time, or its resume
- *  was cancelled. Nothing of the history was changed. */
-export type Unrepaired = 'too_large' | 'timed_out' | 'cancelled'
-
-/** `repairedBytes` and `backupPath` are set only when items were repaired; `unrepaired` only when the history was not
- *  read through. */
-export interface HistoryRepair { repairedItems: number; repairedBytes?: number; backupPath?: string; unrepaired?: Unrepaired }
-
 /** Thrown between chunks: the repair stops and the history is left as it is. */
 class Abandoned extends Error {
   constructor(readonly why: Unrepaired) { super(why) }
 }
 
-/** How much is read at once: the core's loop is given back after each, and holds at most this, or one record. */
+/** One chunk or one bounded record is retained, never a whole history. */
 const READ_BYTES = 1024 * 1024
 const changedDuring = (contract: ResumeRepairContract) =>
   new ResumePreparationError('changed_during', `${contract.names.file} changed during resume preparation; retry after its writer stops`)
@@ -216,6 +176,7 @@ async function scanHistory(contract: ResumeRepairContract, fd: number, size: num
     const repaired = repair.line(original, !newline)
     const output = repaired === original ? bytes : Buffer.from(repaired + (newline ? '\n' : ''))
     repairedBytes += output.length
+    if (repairedBytes > limits.maxBytes) throw new Abandoned('too_large')
     sink?.add(output)
   }
   while (position < size) {
@@ -265,31 +226,38 @@ async function scanHistory(contract: ResumeRepairContract, fd: number, size: num
  * `current` is the resume's own: once it is false the repair stops, and nothing is replaced. Past `limits` the
  * history resumes as it is (`unrepaired`), and so it does when the resume was cancelled.
  */
-export async function repairHistory(contract: ResumeRepairContract, sessionId: string, transcriptPath: string | null | undefined, sessionRoots: readonly string[],
-  current: () => boolean, limits: RepairLimits = REPAIR_LIMITS): Promise<HistoryRepair> {
+export function locateRepairHistory(contract: ResumeRepairContract, sessionId: string, transcriptPath: string | null | undefined, sessionRoots: readonly string[]) {
   const byId = () => sessionRoots.reduce<string | null>((found, sessions) => found ?? findSessionFile(sessionId, sessions, contract.sessions), null)
   let file = transcriptPath || byId()
   // A missing history still follows the engine's existing resume/fresh fallback.
-  if (!file) return { repairedItems: 0 }
+  if (!file) return null
   let before: ReturnType<typeof lstatSync>
   try { before = lstatSync(file) } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
     // The registry may still point at a history that was moved; the engine resolves the session by id.
     file = byId()
-    if (!file) return { repairedItems: 0 }
+    if (!file) return null
     before = lstatSync(file)
   }
   const real = realpathSync(file)
   const inside = sessionRoots.some((sessions) => {
     let root: string
     try { root = realpathSync(sessions) } catch { return false }
-    const rel = relative(root, real)
-    return !isAbsolute(rel) && rel !== '..' && !rel.startsWith('../')
+    return staysInside(relative(root, real))
   })
   if (!before.isFile() || before.isSymbolicLink() || !inside
     || (typeof process.getuid === 'function' && before.uid !== process.getuid())) {
     throw new ResumePreparationError('not_owned_file', `${contract.names.file} is outside the session profile or is not an owned regular file`)
   }
+  return { file, before }
+}
+
+/** A stage is private worker output. Only the legacy inline caller omits it and publishes here. */
+export async function repairHistory(contract: ResumeRepairContract, sessionId: string, transcriptPath: string | null | undefined, sessionRoots: readonly string[],
+  current: () => boolean, limits: RepairLimits = REPAIR_LIMITS, stage?: { directory: string; original: RepairFile }): Promise<HistoryRepair | RepairPrepared> {
+  const located = locateRepairHistory(contract, sessionId, transcriptPath, sessionRoots)
+  if (!located) return { repairedItems: 0 }
+  const { file, before } = located
   if (before.size > limits.maxBytes) return { repairedItems: 0, unrepaired: 'too_large' }
   const until = performance.now() + limits.deadlineMs
   const step = () => {
@@ -300,6 +268,7 @@ export async function repairHistory(contract: ResumeRepairContract, sessionId: s
   try {
     const unchanged = () => {
       if (!sameFile(before, fstatSync(input)) || !sameFile(before, lstatSync(file!))) throw changedDuring(contract)
+      if (stage && !sameRepairFile(stage.original, repairFile(fstatSync(input, { bigint: true })))) throw changedDuring(contract)
     }
     unchanged()
     const inspected = await scanHistory(contract, input, before.size, sessionId, limits, step)
@@ -308,14 +277,17 @@ export async function repairHistory(contract: ResumeRepairContract, sessionId: s
     if (!inspected.repairedItems) return { repairedItems: 0 }
 
     const suffix = randomUUID()
-    const backupPath = `${file}${contract.backup}${suffix}`
-    const temporary = `${file}${contract.temporary}${suffix}`
+    const backupPath = stage ? join(stage.directory, 'backup') : `${file}${contract.backup}${suffix}`
+    const temporary = stage ? join(stage.directory, 'history') : `${file}${contract.temporary}${suffix}`
     let backup: number | undefined
     let output: number | undefined
     let verifiedBackup = false
+    let staged = false
+    let createdOutput = false
     try {
       backup = openSync(backupPath, 'wx', 0o600)
       output = openSync(temporary, 'wx', 0o600)
+      createdOutput = true
       // Re-read into private files only after every record has validated. The digest proves the
       // backup and repaired output came from the exact bytes inspected, even across chunk reads.
       const copied = await scanHistory(contract, input, before.size, sessionId, limits, step, copies(contract, backup, output))
@@ -326,11 +298,22 @@ export async function repairHistory(contract: ResumeRepairContract, sessionId: s
       // history as it was. From here to the return nothing awaits.
       if (!current()) throw new Abandoned('cancelled')
       unchanged()
+      if (stage) {
+        // Windows finalizes a write's change time on close. Facts cross the process boundary only afterwards.
+        closeSync(output); output = undefined
+        closeSync(backup); backup = undefined
+        const answer: RepairPrepared = { repairedItems: copied.repairedItems, repairedBytes: copied.repairedBytes,
+          directoryKey: repairFile(lstatSync(stage.directory, { bigint: true })).key,
+          backup: repairFile(lstatSync(backupPath, { bigint: true })), history: repairFile(lstatSync(temporary, { bigint: true })) }
+        staged = true
+        return answer
+      }
       verifiedBackup = true
       renameSync(temporary, file)
       return { repairedItems: copied.repairedItems, repairedBytes: copied.repairedBytes, backupPath }
     } finally {
-      if (output !== undefined) { closeSync(output); rmSync(temporary, { force: true }) }
+      if (output !== undefined) closeSync(output)
+      if (createdOutput && !staged) rmSync(temporary, { force: true })
       if (backup !== undefined) {
         closeSync(backup)
         if (!verifiedBackup) rmSync(backupPath, { force: true })

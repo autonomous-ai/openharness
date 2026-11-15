@@ -3,7 +3,6 @@ import { inlineSubmission } from '../testing/inlineSubmission.js'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { CommandCodeNormalizer } from '../engines/commandcode/normalizer.js'
 import type { AutonomousDeviceInput } from './deviceInput.js'
 import { deviceErrorText } from './cardText.js'
 import type { RegisteredSession } from '../lib/registry.js'
@@ -41,7 +40,7 @@ function deps(over: Partial<InputDeps> = {}) {
     inputStatus: vi.fn(),
     agentGone: vi.fn(),
   }
-  const normalizer = { openTurn: vi.fn((text: string) => [{ type: 'turn_started', text }]) }
+  const normalizer = { openTurn: vi.fn(async (sessionId: string, text: string) => sessionId === 'cc-s' ? [{ type: 'turn_started', text }] as never[] : []) }
   let pane: string | null = READY_PANE
   const base: InputDeps = {
     readScreen: readInlineScreen,
@@ -62,7 +61,7 @@ function deps(over: Partial<InputDeps> = {}) {
     device: () => device,
     clients: { send: vi.fn(), sendCommander: vi.fn() },
     agentIdFor: (sessionId) => agents.get(sessionId)?.agentId ?? sessionId,
-    commandcode: (sessionId) => sessionId === 'cc-s' ? normalizer as unknown as CommandCodeNormalizer : undefined,
+    openTurn: normalizer.openTurn,
     emit: vi.fn(),
     ...over,
   }
@@ -398,14 +397,15 @@ describe('the session input controller\'s dependencies', () => {
     })
   })
 
-  it('opens a Command Code turn on our own paste, and nobody else\'s', () => {
+  it('opens a Command Code turn on our own paste, in its worker, and nobody else\'s', async () => {
     const { deps: given, normalizer } = deps()
     const wired = sessionInputDeps(given, () => lock([]))
     for (const id of ['a1', 'nobody', 'cc-new', 'cc-none']) wired.onSubmitted!(id, 'hi')
+    await Promise.resolve(); await Promise.resolve()
     expect(given.emit).not.toHaveBeenCalled()
     wired.onSubmitted!('cc', 'hi')
-    expect(normalizer.openTurn).toHaveBeenCalledWith('hi')
-    expect(given.emit).toHaveBeenCalledWith('cc-s', [{ type: 'turn_started', text: 'hi' }])
+    await vi.waitFor(() => expect(given.emit).toHaveBeenCalledWith('cc-s', [{ type: 'turn_started', text: 'hi' }]))
+    expect(normalizer.openTurn).toHaveBeenCalledWith('cc-s', 'hi')
   })
 })
 

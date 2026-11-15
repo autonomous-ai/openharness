@@ -34,6 +34,7 @@ import { isNameChosen, projectDisplayName, sessionDisplayTitle, type RegisteredS
 import { engineCanFork } from './forkAgent.js'
 import { resumeMode, type ResumeMode } from './resumeCapability.js'
 import type { DshVerdict } from '../dsh/verdict.js'
+import { OTHER_ENGINE_STATES } from '../engines/otherEngines.js'
 import { isOpenclawLocalStopped, OPENCLAW_STATES } from '../engines/openclaw/contract.js'
 
 /**
@@ -74,8 +75,7 @@ export type AgentFrame = {
   closeSupported: boolean
   launch: NonNullable<RegisteredSession['launch']>
   identityHold?: string
-  /** What stops the agent that only the person can fix, in words for them (the spec's named states, OpenClaw's);
-   *  absent when nothing does. The daemon's own waits stay in `identityHold` and are never shown. */
+  /** An engine or reader failure the person needs to see; absent for routine internal waits. */
   namedState?: string
   createdAt: string
   updatedAt: string
@@ -238,7 +238,7 @@ function frameTitle(s: RegisteredSession): string | null {
  * of the two.
  */
 const gitContexts = new SessionGitContextReader()
-const NAMED_STATES = new Set<string>(Object.values(OPENCLAW_STATES))
+const NAMED_STATES = new Set<string>([...Object.values(OPENCLAW_STATES), ...Object.values(OTHER_ENGINE_STATES)])
 
 export async function agentFrame(
   s: RegisteredSession,

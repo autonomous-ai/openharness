@@ -13,6 +13,7 @@ import { engineScreenRequests } from './screenRequests.js'
 import { engineSubmissionRequests } from './submissionRequests.js'
 import { engineBackgroundJobRequests } from './backgroundJobRequests.js'
 import { engineProviderMoveRequests } from './providerMoveRequests.js'
+import { engineResumeRepairRequests } from './resumeRepairRequests.js'
 import { engineNativeControlRequests } from './nativeControlRequests.js'
 import { engineRuntimeRequests } from './runtimeRequests.js'
 import {
@@ -91,7 +92,7 @@ export function runEngineReader(engine: ReaderEngine, options: EngineProcessOpti
       query: (query, payload) => core ? core.query(query, payload) : Promise.reject(new Error('core disconnected')),
     }), ...(engine === 'codex' ? engineNativeControlRequests(engine, {
       query: (query, payload) => core ? core.query(query, payload) : Promise.reject(new Error('core disconnected')),
-    }) : {}), ...(engine === 'claude' ? engineBackgroundJobRequests() : {}), ...(engine === 'codex' ? engineProviderMoveRequests() : {}) },
+    }) : {}), ...(engine === 'claude' ? engineBackgroundJobRequests() : {}), ...(engine === 'codex' ? { ...engineProviderMoveRequests(), ...engineResumeRepairRequests() } : {}) },
     onConnected: connected => { core = connected }, onDisconnected: () => { core = null },
   })
 }

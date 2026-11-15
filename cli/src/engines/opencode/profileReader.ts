@@ -6,7 +6,7 @@ import { env } from '../../config/env.js'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import * as opencode from './runtimeProfile.js'
-import { opencodeBin } from '../../lib/engineBin.js'
+import { opencodeBinAsync } from '../../lib/engineBin.js'
 import type { OpencodeModelTarget } from './runtimeProfile.js'
 
 const execFileAsync = promisify(execFile)
@@ -72,7 +72,7 @@ class ProfileReader {
     }
     let entries: OpencodeModelTarget[] = []
     try {
-      const result = await execFileAsync(opencodeBin(), ['models'], {
+      const result = await execFileAsync(await opencodeBinAsync(), ['models'], {
         env: process.env, timeout: 10_000, maxBuffer: 1024 * 1024,
       })
       entries = opencode.parseOpencodeModelsOutput(result.stdout)

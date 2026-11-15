@@ -14,10 +14,10 @@ import type { ProcessIdentity, TerminalRootObservation, TerminalRuntimeRef } fro
 
 const probeProfileHome = vi.hoisted(() => vi.fn())
 const processRows = vi.hoisted(() => vi.fn())
-const agentCommandOwnershipSnapshot = vi.hoisted(() => vi.fn())
+const agentCommandOwnershipSnapshotAsync = vi.hoisted(() => vi.fn())
 
 vi.mock('../engines/discoveries.js', async (real) => ({ ...await real<object>(), probeProfileHome }))
-vi.mock('./engineBin.js', async (real) => ({ ...await real<typeof import('./engineBin.js')>(), agentCommandOwnershipSnapshot }))
+vi.mock('./engineBin.js', async (real) => ({ ...await real<typeof import('./engineBin.js')>(), agentCommandOwnershipSnapshotAsync }))
 vi.mock('./processTable.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('./processTable.js')>(),
   processRows,
@@ -46,8 +46,8 @@ function backendWith(roots: TerminalRootObservation[]): TerminalBackend {
 beforeEach(() => {
   probeProfileHome.mockReset()
   processRows.mockReset()
-  agentCommandOwnershipSnapshot.mockReset()
-  agentCommandOwnershipSnapshot.mockReturnValue(OWNERSHIP)
+  agentCommandOwnershipSnapshotAsync.mockReset()
+  agentCommandOwnershipSnapshotAsync.mockReturnValue(OWNERSHIP)
 })
 
 describe('Codex profile on the live terminal discovery path', () => {
@@ -66,7 +66,7 @@ describe('Codex profile on the live terminal discovery path', () => {
       .toEqual([[30, 'codex', 'function'], [40, 'claude', 'function']])
     for (const [identity] of probeProfileHome.mock.calls) expect(identity).toMatchObject({ startMarker: START })
     // The pass's one ownership snapshot serves the walk and the children alike: building one walks PATH (#3880).
-    expect(agentCommandOwnershipSnapshot).toHaveBeenCalledOnce()
+    expect(agentCommandOwnershipSnapshotAsync).toHaveBeenCalledOnce()
   })
 
   it('passes an unreadable probe through as undefined, so the registry keeps what it knew', async () => {
@@ -74,7 +74,7 @@ describe('Codex profile on the live terminal discovery path', () => {
     probeProfileHome.mockResolvedValue(undefined)
     const probe = await probeTerminalAgents([backendWith([{ runtime: TMUX_RUNTIME, rootPid: 10, cwd: '/work' }])], ['tmux'], 999)
     expect(probe.agents[0]).toHaveProperty('codexHome', undefined)
-    expect(agentCommandOwnershipSnapshot).toHaveBeenCalledOnce()
+    expect(agentCommandOwnershipSnapshotAsync).toHaveBeenCalledOnce()
   })
 
   it('names a launcher\'s Codex children, and no other process', async () => {

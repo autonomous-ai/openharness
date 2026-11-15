@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { launch as codex } from '../codex/launch.js'
-import { prepareResume, type ResumeSource } from '../launchPrep.js'
+import { prepareResume, type ResumeSource } from '../resumePreparation.js'
 import { REPAIR_LIMITS, repairHistory, repairHistoryText, ResumePreparationError, type RepairLimits } from './resumeRepair.js'
 
 // The former engines/codex/portableHistory.spec.ts, its cases unchanged, against Codex's declared repair
@@ -281,7 +281,7 @@ describe('preparing a stopped Codex session for resume', () => {
     const homes = await import('../../lib/engineHomes.js')
     homes.adoptEngineHomes({ CODEX_HOME: profile }, { claudeHome: '/nowhere/.claude', codexHome: '/nowhere/.codex' })
     try {
-      const fresh = await import('../launchPrep.js')
+      const fresh = await import('../resumePreparation.js')
       expect((await fresh.prepareResume({ ...source(), codexHome: null }, () => true)).repairedItems).toBe(1)
       // Found by its id there too, when the registry has no path for it.
       writeFileSync(file, history(badReasoning()))
@@ -339,6 +339,21 @@ describe('preparing a stopped Codex session for resume', () => {
     expect(await prepareCodexResume({ ...source(), sessionId: '' })).toEqual({ repairedItems: 0 })
     expect(await prepareCodexResume(source())).toEqual({ repairedItems: 0 })
     expect(await prepareCodexResume({ ...source(), transcriptPath: null })).toEqual({ repairedItems: 0 })
+  })
+
+  it('never deletes an existing temporary name when exclusive creation is refused', async () => {
+    writeFileSync(file, history(badReasoning()))
+    const open = fs.openSync
+    let existing = ''
+    vi.spyOn(fs, 'openSync').mockImplementation((path, flags, mode) => {
+      if (String(path).includes('.reasoning-tmp-')) {
+        existing = String(path)
+        writeFileSync(existing, 'existing temporary')
+      }
+      return open(path, flags, mode)
+    })
+    await expect(prepareCodexResume(source())).rejects.toMatchObject({ code: 'EEXIST' })
+    expect(readFileSync(existing, 'utf8')).toBe('existing temporary')
   })
 })
 

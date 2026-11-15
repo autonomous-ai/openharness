@@ -1,30 +1,24 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { AgyNormalizer } from '../../engines/agy/normalizer.js'
-import { engineNow, loadEngine } from '../../engines/inProcess.js'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { OtherStream } from '../engines/otherStreams.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { createAgyBackstop, type AgyBackstopDeps } from './agyBackstop.js'
-
-// agy's code is loaded by its session's attach before any Stop can arm the backstop; a test may say it could not be.
-vi.mock('../../engines/inProcess.js', async (real) => {
-  const actual = await real<typeof import('../../engines/inProcess.js')>()
-  return { ...actual, engineNow: vi.fn(actual.engineNow) }
-})
-beforeAll(async () => { await loadEngine('agy') })
 
 const IDLE = 'done.\n\n  ? for shortcuts'
 const BUSY = 'thinking…\n\n  esc to cancel'
 
 function setup(over: Partial<AgyBackstopDeps> = {}) {
-  const normalizer = { turnOpen: true, closeTurn: vi.fn(() => { normalizer.turnOpen = false; return [{ type: 'turn_ended', payload: {} }] }) }
+  // agy's stream, as the core holds it: its close is its worker's, which says what agy's normalizer emits closing.
+  const normalizer = { turnOpen: true } as { turnOpen: boolean }
+  const close = vi.fn(async () => { normalizer.turnOpen = false; return [{ type: 'turn_ended' as const, payload: {} }] })
   const deps: AgyBackstopDeps = {
-    agyNormalizers: new Map([['s1', normalizer as unknown as AgyNormalizer]]),
+    streams: { get: (sessionId) => sessionId === 's1' ? normalizer as unknown as OtherStream : undefined, close },
     bySession: (sessionId) => sessionId === 's1' ? ({ agentId: 'a1', sessionId: 's1' } as RegisteredSession) : undefined,
     captureTerminal: vi.fn(async () => IDLE),
     drain: vi.fn(async () => {}),
     emit: vi.fn(),
     ...over,
   }
-  return { deps, normalizer, backstop: createAgyBackstop(deps) }
+  return { deps, normalizer, close, backstop: createAgyBackstop(deps) }
 }
 
 describe('the agy idle backstop', () => {
@@ -44,13 +38,13 @@ describe('the agy idle backstop', () => {
     expect(String(log.mock.calls[0][0])).toContain('closed by the agy idle backstop')
   })
 
-  it('stops watching, closing nothing, when agy\'s code could not be loaded', async () => {
-    const { deps, backstop } = setup()
-    vi.mocked(engineNow).mockReturnValueOnce(null)
+  it('closes through its stream: what it emits is what the worker\'s close, or the core\'s own, says', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const { deps, close, backstop } = setup()
     backstop.armAgyIdleWatch('s1')
-    await vi.advanceTimersByTimeAsync(15_000 * 3)
-    expect(deps.captureTerminal).toHaveBeenCalledTimes(1)
-    expect(deps.emit).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(15_000)
+    expect(close).toHaveBeenCalledWith('s1', {})
+    expect(deps.emit).toHaveBeenCalledOnce()
   })
 
   it('keeps watching a busy or unreadable pane, up to forty checks, then stops', async () => {

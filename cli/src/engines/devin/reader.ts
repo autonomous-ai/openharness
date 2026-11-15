@@ -154,6 +154,9 @@ export class DevinReader {
     this.timer = setInterval(() => { void this.tick() }, this.deps.pollMs ?? POLL_MS)
   }
 
+  /** A read of the store now, as its poll makes: what a drain of the session asks (engines/others/streams.ts). */
+  poll(): Promise<void> { return this.tick() }
+
   stop(): void {
     if (this.timer) { clearInterval(this.timer); this.timer = null }
   }

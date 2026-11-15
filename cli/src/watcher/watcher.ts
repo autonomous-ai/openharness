@@ -5,6 +5,7 @@ import { EventEmitter } from 'events'
 import chokidar, { type FSWatcher } from 'chokidar'
 import { open, readFile, stat } from 'fs/promises'
 import { basename, dirname } from 'path'
+import type { LiveStamp } from '../engines/worker/liveProtocol.js'
 import type { AgentEngine } from '../engines/types.js'
 
 export interface WatchedSession {
@@ -20,6 +21,10 @@ export interface LineEvent {
   text: string
   seq: number
   ts: number
+  /** The byte after the line: where a tail started again for the session resumes (engines/others/streams.ts). Cursor's
+   *  transcript is read whole each time; this is still its exact UTF-8 boundary. */
+  next?: number
+  stamp?: LiveStamp | null
 }
 
 /**
@@ -68,8 +73,9 @@ export const HISTORY_MAX_BYTES = 32 * 1024 * 1024
 export const HOLD_TIMEOUT_MS = 30_000
 
 interface FileState extends WatchedSession {
-  /** A replacement tail cannot consume bytes before its attachment commits. */
-  deliveryAllowed?: () => boolean
+  stamp?: (device: number, inode: number, first: Buffer, last: Buffer) => LiveStamp
+  /** The owner can hold delivery or refuse a whole-file snapshot before it is allocated. */
+  deliveryAllowed?: (size?: number) => boolean
   offset: number
   /** Bytes below this were on disk before the current read cursor was placed — history, not live. */
   historicalUntil: number
@@ -128,7 +134,7 @@ export class Watcher extends EventEmitter {
   /** Attach one trusted transcript. Runtime hydration is handled by cli.ts; the tail starts at EOF, or at
    *  `fromOffset` — where that hydration stopped reading — so a record written while it read is tailed
    *  rather than lost between the two. */
-  async addSession(session: WatchedSession, opts: { fromStart?: boolean; fromOffset?: number; deliveryAllowed?: () => boolean } = {}): Promise<void> {
+  async addSession(session: WatchedSession, opts: { fromStart?: boolean; fromOffset?: number; cursorLines?: readonly string[]; stamp?: FileState['stamp']; validate?: () => Promise<void>; current?: () => boolean; deliveryAllowed?: (size?: number) => boolean } = {}): Promise<void> {
     const oldPath = this.bySession.get(session.sessionId)
     if (oldPath && oldPath !== session.transcriptPath) await this.removeSession(session.sessionId)
 
@@ -140,9 +146,12 @@ export class Watcher extends EventEmitter {
       // A file that shrank since is a rewrite; its tail starts at the new end, as without an offset.
       offset = opts.fromOffset !== undefined && opts.fromOffset <= size ? opts.fromOffset : size
       if (session.engine === 'cursor') {
-        try { cursorLines = completeLines(await readFile(session.transcriptPath, 'utf8')) } catch { cursorLines = [] }
+        try { cursorLines = opts.cursorLines ? [...opts.cursorLines] : completeLines((await readFile(session.transcriptPath)).subarray(0, offset).toString('utf8')) } catch { cursorLines = [] }
       }
     }
+    if (opts.current?.() === false) return
+    if (opts.validate) await opts.validate()
+    if (opts.current?.() === false) return
     const existing = this.files.get(session.transcriptPath)
     if (existing) {
       existing.engine = session.engine
@@ -155,6 +164,7 @@ export class Watcher extends EventEmitter {
     console.log(`[watcher] tail ${session.engine} ${session.sessionId.slice(0, 8)} @${offset} · ${session.transcriptPath}`)
     this.files.set(session.transcriptPath, {
       ...session,
+      stamp: opts.stamp,
       deliveryAllowed: opts.deliveryAllowed,
       offset,
       // A `fromStart` tail of a file that already has content reads that content as history.
@@ -370,13 +380,18 @@ export class Watcher extends EventEmitter {
     try {
       const fh = await this.openFile(filePath)
       try {
+        const info = state.stamp ? await fh.stat() : null
+        const first = Buffer.alloc(info ? Math.min(512, size) : 0)
+        const prior = Buffer.alloc(info ? Math.min(512, state.offset) : 0)
+        if (info) { await fh.read(first, 0, first.length, 0); await fh.read(prior, 0, prior.length, state.offset - prior.length) }
+        const stamp = info ? { device: info.dev, inode: info.ino, first, last: prior } : undefined
         while (state.offset < size) {
           const start = state.offset
           const chunk = Buffer.alloc(Math.min(this.readChunkBytes, size - start))
           const { bytesRead } = await fh.read(chunk, 0, chunk.length, start)
           if (!bytesRead || this.files.get(filePath) !== state || state.deliveryAllowed?.() === false) break
           state.offset = start + bytesRead
-          this.takeChunk(filePath, state, chunk.subarray(0, bytesRead), start, history)
+          this.takeChunk(filePath, state, chunk.subarray(0, bytesRead), start, history, stamp)
           // A hold taken meanwhile stops the read here; `release` reads what is left.
           if (state.holds.size) break
         }
@@ -394,9 +409,10 @@ export class Watcher extends EventEmitter {
    * historical prefix of a read from its live rest: a file appended to between the cursor being placed
    * and this read has both. A line carried over from the last chunk began `partialBytes` before `start`.
    */
-  private takeChunk(filePath: string, state: FileState, chunk: Buffer, start: number, history: LineEvent[]): void {
+  private takeChunk(filePath: string, state: FileState, chunk: Buffer, start: number, history: LineEvent[], stamp?: { device: number; inode: number; first: Buffer; last: Buffer }): void {
     let lineStart = 0
     for (let newline = chunk.indexOf(10); newline >= 0; newline = chunk.indexOf(10, lineStart)) {
+      if (stamp) stamp.last = Buffer.concat([stamp.last, chunk.subarray(Math.max(lineStart, newline + 1 - 512), newline + 1)]).subarray(-512)
       const linePos = lineStart === 0 ? start - state.partialBytes : start + lineStart
       const piece = chunk.subarray(lineStart, newline)
       const bytes = state.partial.length ? Buffer.concat([...state.partial, piece]) : piece
@@ -412,11 +428,14 @@ export class Watcher extends EventEmitter {
         text,
         seq: state.seq++,
         ts: Date.now(),
+        next: start + newline + 1,
+        ...(stamp ? { stamp: state.stamp!(stamp.device, stamp.inode, stamp.first.subarray(0, Math.min(512, start + newline + 1)), stamp.last) } : {}),
       }
       if (linePos < state.historicalUntil) { history.push(evt); continue }
       if (history.length) this.flushHistory(state, history)
       this.emit('line', evt)
     }
+    if (stamp && lineStart < chunk.length) stamp.last = Buffer.concat([stamp.last, chunk.subarray(Math.max(lineStart, chunk.length - 512))]).subarray(-512)
     if (lineStart < chunk.length) {
       // A copy of a chunk's tail, so the rest of the chunk is not kept for it; a chunk that is all one
       // line is kept as read.
@@ -430,23 +449,50 @@ export class Watcher extends EventEmitter {
   }
 
   private async readCursor(filePath: string, state: FileState): Promise<void> {
-    let next: string[]
-    try { next = completeLines(await readFile(filePath, 'utf8')) } catch { return }
+    let content: string, bytes: Buffer, info: Awaited<ReturnType<typeof stat>>
+    try {
+      const handle = await this.openFile(filePath)
+      try {
+        info = await handle.stat()
+        if (state.deliveryAllowed?.(info.size) === false) return
+        // Stay inside the admitted snapshot even if the writer appends while this read is pending.
+        bytes = Buffer.alloc(info.size)
+        let offset = 0
+        while (offset < bytes.length) {
+          const { bytesRead } = await handle.read(bytes, offset, Math.min(this.readChunkBytes, bytes.length - offset), offset)
+          if (!bytesRead) break
+          offset += bytesRead
+        }
+        bytes = bytes.subarray(0, offset); content = bytes.toString('utf8')
+      } finally { await handle.close() }
+    } catch { return }
+    const records: Array<{ text: string; next: number }> = []
+    let offset = 0
+    const lines = content.split('\n')
+    lines.pop()
+    for (const line of lines) {
+      offset += Buffer.byteLength(line) + 1
+      const text = line.replace(/\r$/, '')
+      if (text.trim()) records.push({ text, next: offset })
+    }
+    const next = records.map(record => record.text)
     if (this.files.get(filePath) !== state || state.deliveryAllowed?.() === false) return
     let common = 0
     while (common < state.cursorLines.length && common < next.length && state.cursorLines[common] === next[common]) common++
     state.cursorLines = next
-    state.offset = 0
+    state.offset = offset
     state.partial = []
     state.partialBytes = 0
     state.historicalUntil = 0
     // `completeLines` has already dropped blank lines.
-    for (const text of next.slice(common)) {
+    for (const { text, next } of records.slice(common)) {
       this.emit('line', {
         sessionId: state.sessionId,
         engine: state.engine,
         projectDir: basename(dirname(filePath)),
         text,
+        next,
+        ...(state.stamp ? { stamp: state.stamp(info.dev, info.ino, bytes.subarray(0, Math.min(512, next)), bytes.subarray(Math.max(0, next - 512), next)) } : {}),
         seq: state.seq++,
         ts: Date.now(),
       } satisfies LineEvent)

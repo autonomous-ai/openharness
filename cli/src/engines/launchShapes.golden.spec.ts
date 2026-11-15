@@ -148,7 +148,7 @@ beforeAll(async () => {
   const { launchShapes } = await import('../testing/launchShapes.js')
   shapes = (machine) => launchShapes({
     dataDir: join(root, 'data'), machine: () => ({ ...machine }), capabilities: async () => ({ sessionEnv: pane.tmux }),
-    readCodexConfig: () => null, setGridLaunch: () => {},
+    readCodexConfig: () => null, setGridLaunch: () => {}, projectsRoot: join(root, 'work'),
   })
 })
 

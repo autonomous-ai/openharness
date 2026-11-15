@@ -431,7 +431,8 @@ export class OpenclawReader {
     return true
   }
 
-  private async tick(): Promise<void> {
+  /** A read of the store now, as its poll makes. */
+  async tick(): Promise<void> {
     if (this.polling) return
     const stamp = storeStamp(this.deps.db)
     if (stamp !== this.stamp) { this.stamp = stamp; this.changes++ }

@@ -25,10 +25,11 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { env } from '../config/env.js'
 import type { InstalledDsh } from '../dsh/installed.js'
 import { prepareHarnessLaunch } from '../dsh/runtime.js'
-import type { ApiConnections } from '../lib/apiConnections.js'
+import type { ApiConnectionMetadata } from '../lib/apiConnectionMetadata.js'
 import { prepareApiInstructions } from '../lib/apiInstructions.js'
 import { resetEngineHomes } from '../lib/engineHomes.js'
-import { folderTrust, prepareResume, type ResumeSource } from './launchPrep.js'
+import { folderTrust } from './launchPrep.js'
+import { prepareResume, type ResumeSource } from './resumePreparation.js'
 import { PROCESS_ENGINES, type AgentEngine } from './types.js'
 
 const GOLDEN = fileURLToPath(new URL('./__fixtures__/launch-prep.golden.json', import.meta.url))
@@ -484,8 +485,8 @@ function instructionCases(): Record<string, unknown> {
     cases[`harness · ${engine} · a symlinked instruction file`] = { first: attempt(() => prepareHarnessLaunch(harnessPackage(linked), lws, engine, 'runtime-1') && 'prepared'), after: instructionFiles(lws), shared: snapshot(linked)['shared.md'] }
   }
   // The saved APIs' note.
-  const withApis = { list: () => [{ id: 'openrouter' }] } as unknown as ApiConnections
-  const noApis = { list: () => [] } as unknown as ApiConnections
+  const withApis: Pick<ApiConnectionMetadata, 'saved'> = { saved: () => true }
+  const noApis: Pick<ApiConnectionMetadata, 'saved'> = { saved: () => false }
   const states: Record<string, (ws: string, file: string) => void> = {
     'no file': () => undefined,
     'a file of the person\'s': (ws, file) => write(join(ws, file), '# Mine\n\n\n'),
@@ -503,8 +504,8 @@ function instructionCases(): Record<string, unknown> {
         mkdirSync(ws)
         const file = engine === 'claude' ? 'CLAUDE.md' : engine === 'gemini' ? 'GEMINI.md' : 'AGENTS.md'
         setup(ws, file)
-        const first = attempt(() => { prepareApiInstructions(store, ws, engine); return 'done' })
-        const second = attempt(() => { prepareApiInstructions(store, ws, engine); return 'done' })
+        const first = attempt(() => { prepareApiInstructions(store, ws, engine, dir); return 'done' })
+        const second = attempt(() => { prepareApiInstructions(store, ws, engine, dir); return 'done' })
         cases[`apis · ${engine} · ${state} · ${apis}`] = { first, second, files: snapshot(dir) }
       }
     }

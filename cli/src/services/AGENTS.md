@@ -24,7 +24,10 @@ let several people build features at once without touching the core or each othe
      `<name>_http` a service), how long it is waited for and what it answers while the service is down go in
      `SERVICE_HTTP_ROUTES` (`src/core/api.ts`); the core hands it on as it came, once the door let it in
      (`core/serviceRoutes.ts`), and the service answers `{ status, body }`, checking everything it carries
-     (`lib/autonomous-device/localHttp.ts` shows how). Never a route in `hookServer.ts`.
+     (`lib/autonomous-device/localHttp.ts` shows how). Never a route in `hookServer.ts`. A route only the daemon's own
+     socket may ask (`door: 'socket'`) reaches its service with `asker.door`, which no client of the local WebSocket has.
+     A window's frame a service answers is one request too (`SERVICE_WS_FRAMES`, one `<name>_ws` a service): asked with
+     `{ frame, payload }`, its answer sent back as the frame its route names. Never a frame sniffed in `localWsServer.ts`.
    - Work that belongs to the connection that asked (a limit on how many at once per connection, work to
      stop when the asker goes) is keyed by `asker.connection` and stops on `closed`, the handler's third
      argument: it is aborted when that connection closes, or when the core that routed it goes, wherever
@@ -166,7 +169,8 @@ master too old to run it starts it beside itself, still in its own process (`src
   `core.terminals` (`core/shellQueries.ts`). A lost launch reply leaves an unconfirmed receipt and is
   never retried as a new launch. `e2e/shell.e2e.ts` keeps an attached terminal working across an edge crash.
 - The gateway owns account/backend HTTP and the single writer of `machines.json` (`gateway/accountHttp.ts`), and the
-  account's routes of the door: the desk, the usage reports and choice, the Store's ratings and reviews (`gateway/accountRoutes.ts`).
+  account's routes of the door: the desk, the usage reports and choice, the Store's ratings and reviews, the phone's sign-in
+  code (`gateway/accountRoutes.ts`), and the keys' (`harness pair`, `group`, `devices`, …, `gateway/keyRoutes.ts`).
   The core retains its reported list for stale replies during a restart, bound to the current account.
   The Store prepares bundled harnesses before reporting `prepared`; package agents wait held until
   preparation is available, after the core reports ready. The lean bundle shares one asset file, loaded by the Store and never by the core.
@@ -199,7 +203,11 @@ master too old to run it starts it beside itself, still in its own process (`src
   the process connects, and a dial attaching is shown the open questions and the working tiles. Inside,
   one device failing is that device's alone: its session's faults and a flood on its port drop it, and
   its port is looked at again later (src/cable/cableFleet.ts). `e2e/devicesProcess.e2e.ts` proves it,
-  with fake dials on pseudo-terminals. The Wi-Fi device runs beside them on a link of its own
+  with fake dials on pseudo-terminals. An app the dial reaches an outside agent through is one adapter file
+  under src/cable/hosts/ (`adapter.ts` has the interface), named once in src/services/devices.ts in the order
+  its panes are asked for; `observed.ts` and `open.ts` hold no rule about any app. Claude Code's mod and
+  `codex queue` are not adapters: they are the source's routes at the agent's own layer, asked before any pane.
+  The Wi-Fi device runs beside them on a link of its own
   (src/services/wifiProcess.ts, src/core/wifiLink.ts): its sessions are the gateway's, so the core hands
   their requests on in order and checks where each answer goes, and keeps what it reads in line of the
   service (who said hello, which transcripts and streams it follows, the focus revision) from what the
@@ -211,8 +219,9 @@ master too old to run it starts it beside itself, still in its own process (`src
   The core asks only while a dial watches, so a poll never starts their process; a client that goes
   first is told as a notice. What a local tool tells the devices (first the app in front, from `harness hardware
   watch`) goes to their own listener (src/services/devicesListener.ts), never through the core: a new message is a
-  handler registered there by its type, with its own body and rate limits, beside `front` and the mod's `attach`,
-  the session the Claude app shows (src/services/devices.ts).
+  handler registered there by its type, with its own body and rate limits, beside `front`, `tab` and the mod's
+  `attach`, the session the Claude app shows (src/services/devices.ts). The one handler of a second kind is `tabs`: a
+  stream it holds open, one across every connection, on which the devices tell the watch which terminal tab to select.
   Which path: a route of the core's local door, where the core checks who calls (the account's, the Wi-Fi device's,
   the add-ons'), is a `SERVICE_HTTP_ROUTES` route (above); what a tool on this computer tells the devices alone is a
   message on their listener, which the core never routes or reads.

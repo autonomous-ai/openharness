@@ -6,7 +6,8 @@
  * - the client prints nothing and exits at once, and with no dial nothing more happens: no devices process is started;
  * - with a dial, the agent waits with "<summary> · answer in Orca", also as a question the dial only shows (every answer
  *   to it refused, and asked again of a dial plugged in again), and the session's Stop ends the wait and closes it;
- * - the mod's inbox poll is refused with no dial and held with one.
+ * - the mod's inbox poll is refused with no dial and held with one;
+ * - the dial reads the agent by its folder, then by the name its hook says, renamed by a later prompt, and no log holds it.
  */
 import type { ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
@@ -119,6 +120,24 @@ describe('the dial shows Claude Code waiting outside Harness', () => {
     await dial.next((m) => m.t === 'question.close' && m.agentId === claude.id && m.id === question.id, 45_000, 'the question closed', answered)
     await dial.next((m) => m.t === 'turn.done' && m.agentId === claude.id, 45_000, 'its turn done', answered)
     expect(dial.messages.slice(answered).some((m) => m.agentId === claude.id && m.text === 'printf hi · answer in Orca')).toBe(false)
+  })
+
+  it('the dial reads a session by its folder, then by the name its hook says, and no log holds the name', async () => {
+    const { d, desk } = await fresh()
+    const dial = await plugged(desk)
+    const claude = new InOrca(d, 'scratch-2016', children)
+    const named = (name: string, what: string, since: number) =>
+      dial.next((m) => m.t === 'agent' && m.id === claude.id && m.name === name, 45_000, what, since)
+    await claude.hook('SessionStart', { source: 'startup' })
+    await named('scratch-2016', 'the agent by its folder', 0)
+    let since = dial.messages.length
+    await claude.hook('UserPromptSubmit', { prompt: 'say hi', session_title: 'Tho' })
+    await named('Tho', 'the agent by its name', since)
+    // The turn already runs, so the name is all this prompt changes.
+    since = dial.messages.length
+    await claude.hook('UserPromptSubmit', { prompt: 'again', session_title: 'Math 7f3a91c2' })
+    await named('Math 7f3a91c2', 'the agent renamed', since)
+    expect(d.log()).not.toContain('7f3a91c2')
   })
 
   it('the inbox route answers 503 with no dial, and holds a poll with one', async () => {

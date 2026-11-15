@@ -1,16 +1,19 @@
 import { createHash } from 'node:crypto'
-import { basename } from 'node:path'
+import { basename, join } from 'node:path'
 // Types only: the devices process must not load core code.
 import type { ObservedAsked, ObservedEvent, ObservedHookEvent } from '../../core/observedHook.js'
 import { truncateUtf8 } from '../../lib/deviceRecentTrim.js'
-import type { OpenSessions, SessionRows } from '../../lib/sessionSearch/external.js'
+import type { OpenSessions, SessionOwner, SessionRows } from '../../lib/sessionSearch/external.js'
 import { type fileStamp, within } from '../../lib/sessionSearch/externals/support.js'
 import type { ExternalEngine, RunningProcess } from '../../lib/sessionSearch/externals/types.js'
 import { roundDrawable } from '../roundGlyphs.js'
+import type { HostAdapter, Pane } from './adapter.js'
+import { CODEX_THREAD, type CodexQueue, type CodexQueueFailure } from './codexQueue.js'
 import { detectApp, detectHost, hostDisplayName, UNKNOWN_APP } from './hostDetect.js'
 import type { Delivery } from './inbox.js'
-import { openTarget, type OpenTarget } from './open.js'
-import { MAX_TEXT, ORCA_HANDLE } from './orca.js'
+import { bundleOf, type OpenTarget } from './open.js'
+import { MAX_TEXT } from './orca.js'
+import { isTabApp } from './tabs.js'
 import type { Caps, HostAgent, HostAgentState, HostSource, PaneSwitch, SendResult } from './types.js'
 
 export { detectHost, hostDisplayName } from './hostDetect.js'
@@ -31,6 +34,9 @@ const TURN_SETTLE_MS = 2_000
 const ASK_SETTLE_MS = 1_000
 /** The firmware's activity line, `activity[100]` (ui_habitat.c), less its terminating zero: it cuts a longer one there. */
 const LINE_BYTES = 99
+/** A tty read that failed (`ps` timed out under load, or did not run) is tried again on a later event, no sooner than this:
+ *  a busy machine is not handed one more `ps` per hook. */
+const TTY_RETRY_MS = 10_000
 
 /** What a turn's start was: a prompt a person typed, one another session sent, or the dial's own words. */
 export type PromptSource = 'person' | 'relayed' | 'dial'
@@ -60,6 +66,11 @@ export function observedAgentId(engine: string, sessionId: string): string {
   return `${x.slice(0, 8)}-${x.slice(8, 12)}-${x.slice(12, 16)}-${x.slice(16, 20)}-${x.slice(20, 32)}`
 }
 
+/** The name of an agent with no title: its folder's, else its engine (a folder such as `/` has no name). */
+function folderName(cwd: string | undefined, engine: string): string {
+  return (cwd && basename(cwd)) || engine
+}
+
 export interface ObservedDeps {
   now(): number
   /** The machine's processes, read once for every session (externals/support.ts listProcesses); none when unreadable. */
@@ -78,29 +89,47 @@ export interface ObservedDeps {
   actions?: ObservedActions
   /** The app each of these processes runs in, where its parents name one (scannedApp.ts); absent, nothing is learned. */
   apps?(pids: readonly number[]): Promise<ReadonlyMap<number, string>>
+  /** The name the person gave a Claude Code session, from its own process record (recordName.ts); one that rejects names
+   *  nothing. Absent, the scan names by folder. */
+  recordName?(owner: Pick<SessionOwner, 'pid' | 'record'> & { sessionId: string }): Promise<string | undefined>
+  /** The tty of a process in a tab app (tabs.ts readTty), rejecting when `ps` could not be read; absent (off macOS), no
+   *  agent has a tab. */
+  tty?(pid: number): Promise<string | undefined>
 }
 
 export interface ObservedActions {
+  /** The apps an agent may run in, in the order its panes are kept: each verb uses the first pane whose adapter can do it. */
+  adapters: readonly HostAdapter[]
   /** The session's mod has a poll open, or closed one moments ago. */
   modReady(sessionId: string): boolean
   toMod(sessionId: string, text: string): Promise<Delivery>
-  orcaSend(handle: string, text: string): Promise<boolean>
-  /** Picks the terminal inside Orca; Orca itself stays where it is. */
-  orcaSwitch(handle: string): Promise<PaneSwitch>
   /** Whether a tap can open the target here: macOS brings an app forward, elsewhere only a pane's own command runs. */
   canOpen(target: OpenTarget): boolean
-  /** A tap: the agent's pane, then its app (open.ts). */
+  /** A tap: the agent's pane and its app, in the order the pane's adapter keeps (open.ts). */
   open(agentId: string, target: OpenTarget): Promise<boolean>
-  /** The Claude app is the app most recently reported in front. */
-  claudeInFront(): boolean
-  /** A rest: the session in the Claude app, already in front (open.ts). */
-  claudeShow(agentId: string, session: string): Promise<PaneSwitch>
-  count(what: 'mod' | 'orca' | 'waiting' | 'busy' | 'pending' | 'too-long' | 'no-answer'): void
+  /** Codex's own queue (codexQueue.ts): a thread runs its words as its next turn, and no terminal is typed into. */
+  codexQueue: Pick<CodexQueue, 'can' | 'send'>
+  /** The Codex home Harness reads (env.CODEX_HOME): `codex queue` loads its config, so a hook's path never chooses it. */
+  codexHome: string
+  /** The route (`codex`, `mod`, or the adapter that typed, said by its fixed id) or the refusal, and a failed queue's
+   *  reason. Fixed words or an adapter only: a string from a hook, a pane's id, cannot reach the log line. */
+  count(what: 'mod' | 'waiting' | 'busy' | 'pending' | 'too-long' | 'no-answer' | 'codex' | 'codex-timeout'
+    | `codex-failed (${CodexQueueFailure})` | HostAdapter): void
 }
 
-/** A pane a rest can show without its app coming forward, by the app that holds it: a later kind is one member here, one
- *  line in shownPane, one case in showPane and its ObservedActions members. */
-type ShownPane = { kind: 'orca'; handle: string } | { kind: 'claude'; session: string }
+/** One of an agent's panes, beside the adapter whose it is. */
+interface Located {
+  adapter: HostAdapter
+  pane: Pane
+}
+
+/** The dial's words go to the first pane whose app types. */
+const words = (adapter: HostAdapter): boolean => !!adapter.type
+/** A rest shows the first pane its app can show now, without coming forward. */
+const rest = (adapter: HostAdapter, pane: Pane): boolean => !!adapter.show && (adapter.canShow?.(pane) ?? true)
+/** A tap hands the opener the first pane its app brings forward here, before or instead of the app: one after it is
+ *  raised once the app came. */
+const tapped = (adapter: HostAdapter, pane: Pane): boolean => adapter.tap !== 'after' && adapter.canFocus(pane)
 
 interface Entry {
   agent: HostAgent
@@ -108,12 +137,24 @@ interface Entry {
   since: number
   transcriptPath?: string
   pid: number
-  /** The Orca terminal its last event came from. */
-  handle?: string
-  /** What a tap opens, from its last event: none for a session the scan found, until its first. */
-  opens: OpenTarget
+  /** Its latest event's host hints: none for a session the scan found, until its first. */
+  hints: Readonly<Record<string, string>>
+  /** Every pane an adapter knows it by, from its latest event and its tty, in the adapters' order. */
+  panes: readonly Located[]
+  /** The process its tty was read for, its latest in a tab app, and that tty once read. */
+  ttyPid?: number
+  tty?: string
+  /** When the read of ttyPid began, once that read failed. */
+  ttyFailedAt?: number
+  /** The app a tap brings forward, from its last event: none for a session the scan found, until its first. */
+  bundle?: string
   /** What the permission prompt it waits on asks, from its hook (deviceClaude/asked.ts): '' when it names nothing. */
   asked?: string
+  /** The name the session gives itself, from its session-start or turn-start, or, for a session the scan found, the one
+   *  the person gave it in its own process record until then. Only Claude Code's event with none clears it: its hook
+   *  says the name on each of these while the session has one, while Command Code's turn-start is every tool call and
+   *  says none. */
+  title?: string
   generation?: string
   endAt?: number
   /** The read of the last answer, waiting out the grace. */
@@ -147,8 +188,8 @@ export class ObservedSource implements HostSource {
     const live = this.live(e)
     return {
       status: true,
-      voice: live && (!!e.handle || this.modReady(e, actions)),
-      focus: live && actions.canOpen(e.opens),
+      voice: live && (!!this.first(e, words) || this.modReady(e, actions) || this.queueable(e, actions)),
+      focus: live && actions.canOpen(this.target(e)),
       // Its prompts are answered in its own app: the dial only shows them.
       answer: false,
     }
@@ -159,10 +200,27 @@ export class ObservedSource implements HostSource {
     return e.agent.engine === 'claude' && actions.modReady(e.agent.sessionId!)
   }
 
+  /** The first of its panes whose adapter can do it. */
+  private first(e: Entry, can: (adapter: HostAdapter, pane: Pane) => boolean): Located | undefined {
+    return e.panes.find(({ adapter, pane }) => can(adapter, pane))
+  }
+
   /**
-   * The dial's words for the agent, and nothing is queued here: to its mod in every state, as a Harness agent's are
-   * (lib/sessionInput.ts), whose `$.prompt.submit` types nothing and starts them once the turn is over; else typed into its
-   * Orca terminal, only at its prompt.
+   * Whether Codex's queue takes a live session's words: a Codex session whose rollout is in Harness's own Codex home, its
+   * session id the thread id. Whether codex is there is asked last: it looks for the binary.
+   */
+  private queueable(e: Entry, actions: ObservedActions): boolean {
+    return e.agent.engine === 'codex' && !!e.transcriptPath && within(join(actions.codexHome, 'sessions'), e.transcriptPath)
+      && CODEX_THREAD.test(e.agent.sessionId!) && actions.codexQueue.can()
+  }
+
+  /**
+   * The dial's words for the agent, and nothing is held here. A Codex session's in Harness's own Codex home go to Codex's
+   * own queue first, in every state: a queued message types nothing and answers no approval, and runs once the turn is over
+   * (docs/specs/2026-11-15-device-codex.md, the spike). Claude Code's go to its mod in every state, as a Harness agent's
+   * are (lib/sessionInput.ts), whose `$.prompt.submit` types nothing and starts them once the turn is over. Else, and
+   * after a queue that definitely failed, they are typed into the first of its panes whose app types (an Orca terminal),
+   * only at its prompt.
    */
   async send(agent: HostAgent, text: string): Promise<SendResult> {
     const e = this.entries.get(agent.id)
@@ -176,7 +234,25 @@ export class ObservedSource implements HostSource {
     const noAnswer = (): SendResult => refuse('no-answer', `${name} did not answer.`)
     // Its session ended: its terminal holds a shell now, where these words would run.
     if (!e || !actions || !this.live(e)) return noAnswer()
-    const handle = e.handle
+    const typer = this.first(e, words)
+    if (this.queueable(e, actions)) {
+      // Recorded first: an idle Codex starts the queued turn, and its hook can be heard, before `codex queue` has exited.
+      const record = this.dialPrompt(e)
+      const queued = await actions.codexQueue.send(e.agent.sessionId!, text)
+      if (queued.outcome === 'queued') {
+        actions.count('codex')
+        return { ok: true }
+      }
+      this.forgetDialPrompt(e, record)
+      // The last words are still being queued: typed into Orca now, these would land before them.
+      if (queued.outcome === 'busy') return refuse('pending', `${name} has not taken your last words yet.`)
+      // A timeout: they may be queued, and typed too they would run twice. Only a definite failure goes on.
+      if (queued.outcome !== 'failed') {
+        actions.count('codex-timeout')
+        return { ok: false, reason: `${name} did not answer.` }
+      }
+      actions.count(`codex-failed (${queued.reason})`)
+    }
     if (this.modReady(e, actions)) {
       const delivery = await actions.toMod(e.agent.sessionId!, text)
       if (delivery === 'taken') {
@@ -188,7 +264,9 @@ export class ObservedSource implements HostSource {
       if (delivery === 'busy') return refuse('pending', `${name} has not taken your last words yet.`)
     }
     // In that wait the session may also have ended, moved to another terminal or gone: the old one holds something else.
-    if (!handle || !this.live(e) || e.handle !== handle) return noAnswer()
+    // Each event names its panes afresh, so the same pane is known by its adapter and id.
+    const still = this.first(e, words)
+    if (!typer || !this.live(e) || still?.pane.adapter !== typer.pane.adapter || still.pane.id !== typer.pane.id) return noAnswer()
     // A prompt open in the terminal takes what is typed as its answer: Enter there would allow what the dial only shows,
     // as the core never types into a Harness pane that shows one (lib/messageHolds.ts `permission_open`).
     if (e.agent.state === 'needs-you') return refuse('waiting', `${name} is waiting for your answer in ${hostDisplayName(e.agent.host)}.`)
@@ -197,13 +275,11 @@ export class ObservedSource implements HostSource {
     if (e.agent.state === 'working' || !this.idleKnown(e)) return refuse('busy', `${name} is busy. Say it when it is done.`)
     // Recorded first: `orca terminal send` returns once the prompt is submitted, and its turn's hook can be heard before.
     const record = this.dialPrompt(e)
-    if (!await actions.orcaSend(handle, text)) {
-      // Its own record only, if no turn took it meanwhile: an earlier one is the mod's, for words still to come.
-      const i = e.dialPrompts.indexOf(record)
-      if (i >= 0) e.dialPrompts.splice(i, 1)
+    if (!await typer.adapter.type!(typer.pane, text)) {
+      this.forgetDialPrompt(e, record)
       return noAnswer()
     }
-    actions.count('orca')
+    actions.count(typer.adapter)
     return { ok: true }
   }
 
@@ -212,6 +288,13 @@ export class ObservedSource implements HostSource {
     const record = { at: this.deps.now() }
     if (e.dialPrompts.push(record) > MAX_DIAL_PROMPTS) e.dialPrompts.shift()
     return record
+  }
+
+  /** Words that did not reach it: their own record only, if no turn took it meanwhile. An earlier one is the mod's, or
+   *  the queue's, for words still to come. */
+  private forgetDialPrompt(e: Entry, record: { at: number }): void {
+    const i = e.dialPrompts.indexOf(record)
+    if (i >= 0) e.dialPrompts.splice(i, 1)
   }
 
   /**
@@ -228,36 +311,86 @@ export class ObservedSource implements HostSource {
     return this.entries.get(e.agent.id) === e && e.endAt === undefined
   }
 
-  focus(agent: HostAgent): Promise<boolean> {
+  async focus(agent: HostAgent): Promise<boolean> {
     const e = this.entries.get(agent.id)
     const actions = this.deps.actions
-    return e && actions && this.live(e) && actions.canOpen(e.opens) ? actions.open(e.agent.id, e.opens) : Promise.resolve(false)
+    if (!e || !actions || !this.live(e)) return false
+    const target = this.target(e)
+    if (!actions.canOpen(target)) return false
+    const opened = await actions.open(e.agent.id, target)
+    // `open -b` brings the app forward on whichever tab it had: a pane that comes after its app (a tab) is raised once it
+    // came. Read after the open, as an agent that ended or moved meanwhile has no such pane to raise.
+    const shown = opened ? this.shown(agent) : undefined
+    if (shown?.adapter.tap === 'after' && shown.adapter.canFocus(shown.pane)) await shown.adapter.focus(shown.pane)
+    return opened
   }
 
-  /** Only an Orca terminal, or a Claude app session while that app is in front, is shown without its app coming forward. */
+  /** Only a pane whose app can show it now (an Orca terminal, a Claude app session while that app is in front, a tab a
+   *  watch can select) is shown without its app coming forward. */
   hasPane(agent: HostAgent): boolean {
-    return this.shownPane(agent) !== undefined
+    return this.shown(agent) !== undefined
   }
 
   showPane(agent: HostAgent): Promise<PaneSwitch> {
-    const pane = this.shownPane(agent)
-    if (!pane) return Promise.resolve('failed')
-    switch (pane.kind) {
-      case 'orca': return this.deps.actions!.orcaSwitch(pane.handle)
-      case 'claude': return this.deps.actions!.claudeShow(agent.id, pane.session)
-    }
+    const shown = this.shown(agent)
+    return shown ? shown.adapter.show!(shown.pane, agent.id) : Promise.resolve('failed')
   }
 
-  /** The pane of its latest event, while it lives: one it left, or an ended session's, holds something else now. A Claude
-   *  app session only while a tap could open it and that app is in front, asked at each look: the front moves. */
-  private shownPane(agent: HostAgent): ShownPane | undefined {
+  /** The pane a rest shows, from its latest event, while it lives: one it left, or an ended session's, holds something
+   *  else now. Asked at each look: the front moves, and a watch comes and goes. */
+  private shown(agent: HostAgent): Located | undefined {
     const e = this.entries.get(agent.id)
-    const actions = this.deps.actions
-    if (!e || !actions || !this.live(e)) return undefined
-    if (e.handle) return { kind: 'orca', handle: e.handle }
-    const pane = e.opens.pane
-    if (pane?.app === 'claude' && actions.canOpen({ pane }) && actions.claudeInFront()) return { kind: 'claude', session: pane.id }
-    return undefined
+    return e && this.live(e) ? this.first(e, rest) : undefined
+  }
+
+  /** What a tap opens: its app, and the first of its panes the opener brings forward. Asked at each look, as a rest's. */
+  private target(e: Entry): OpenTarget {
+    const near = this.first(e, tapped)
+    return { ...(e.bundle ? { bundle: e.bundle } : {}), ...(near ? { pane: near.pane } : {}) }
+  }
+
+  /** Every pane its adapters know it by, afresh: a session resumed elsewhere keeps none it left. */
+  private locate(entry: Entry): void {
+    const place = { host: entry.agent.host, app: entry.agent.app, hints: entry.hints, tty: entry.tty }
+    entry.panes = (this.deps.actions?.adapters ?? []).flatMap((adapter) => {
+      const pane = adapter.paneOf(place)
+      return pane ? [{ adapter, pane }] : []
+    })
+  }
+
+  /** The live agent in that app's tab: of two that read the same tty, the one heard from last. */
+  byTab(app: string, tty: string): HostAgent | undefined {
+    let found: Entry | undefined
+    for (const e of this.entries.values()) {
+      if (e.tty !== tty || e.agent.app !== app || !this.live(e)) continue
+      if (!found || e.agent.lastActivityAt > found.agent.lastActivityAt) found = e
+    }
+    return found && { ...found.agent }
+  }
+
+  /**
+   * Its tty, read once per process in the background: a session resumed in another tab runs in a process of its own, and
+   * the old tab holds something else now, so its tty goes at once. An answer lands only on its own entry, and only while
+   * that process is still its latest. A read that fails said nothing of the tty: a later event reads it again, `??` never.
+   */
+  private learnTty(entry: Entry, pid: number): void {
+    const now = this.deps.now()
+    if (entry.ttyPid === pid && (entry.ttyFailedAt === undefined || now - entry.ttyFailedAt < TTY_RETRY_MS)) return
+    entry.ttyPid = undefined
+    entry.tty = undefined
+    entry.ttyFailedAt = undefined
+    this.locate(entry)
+    if (!this.deps.tty || !isTabApp(entry.agent.app)) return
+    entry.ttyPid = pid
+    this.deps.tty(pid).then((tty) => {
+      if (entry.ttyPid !== pid) return
+      entry.tty = tty
+      this.locate(entry)
+    }, () => {
+      if (entry.ttyPid === pid) entry.ttyFailedAt = now
+      // A count only: never the pid or the session.
+      this.deps.log('[observed] tty · not read')
+    })
   }
 
   private emit(): void {
@@ -290,10 +423,15 @@ export class ObservedSource implements HostSource {
     a.app = detectApp(e.hostHints)
     delete a.appPending
     // Every event's own: a session resumed elsewhere must not be typed into the terminal it left.
-    const handle = e.hostHints.ORCA_TERMINAL_HANDLE
-    entry.handle = handle && ORCA_HANDLE.test(handle) ? handle : undefined
-    entry.opens = openTarget(a.host, e.hostHints)
-    if (e.cwd) { a.cwd = e.cwd; a.name = basename(e.cwd) || a.name }
+    entry.hints = e.hostHints
+    this.locate(entry)
+    entry.bundle = bundleOf(a.host, e.hostHints)
+    if (e.cwd) a.cwd = e.cwd
+    if (e.event === 'session-start' || e.event === 'turn-start') {
+      if (e.title !== undefined) entry.title = e.title
+      else if (e.engine === 'claude') entry.title = undefined
+    }
+    a.name = entry.title ?? folderName(a.cwd, a.engine)
     if (e.transcriptPath) entry.transcriptPath = e.transcriptPath
     if (e.event === 'session-end') {
       entry.endAt = now
@@ -303,6 +441,7 @@ export class ObservedSource implements HostSource {
     }
     // A session that comes back after its end (a resume) is a live one again.
     entry.endAt = undefined
+    this.learnTty(entry, e.callerPid)
     let source: PromptSource | undefined
     switch (e.event) {
       case 'session-start':
@@ -398,7 +537,7 @@ export class ObservedSource implements HostSource {
     const entry: Entry = {
       agent: {
         id, engine, sessionId, cwd: init.cwd,
-        name: (init.cwd && basename(init.cwd)) || engine,
+        name: folderName(init.cwd, engine),
         host: 'terminal',
         app: UNKNOWN_APP,
         appPending: true,
@@ -406,7 +545,8 @@ export class ObservedSource implements HostSource {
       },
       since: now,
       pid: init.pid,
-      opens: {},
+      hints: {},
+      panes: [],
       dialPrompts: [],
       ...(init.transcriptPath ? { transcriptPath: init.transcriptPath } : {}),
     }
@@ -461,14 +601,18 @@ export class ObservedSource implements HostSource {
     }
     if (!open.size) return
     const rows = await this.deps.sessionRows.find(open)
-    // Asked once, as a session is first listed: its next hook is the next word on where it runs.
-    const pids = [...open].filter(([sessionId, engine]) => rows.has(sessionId) && !this.entries.has(observedAgentId(engine, sessionId)))
-      .slice(0, MAX_SESSIONS).map(([sessionId]) => owners.get(sessionId)!.pid)
+    // Asked once, as a session is first listed, for the ones this look is about to list: a listed session is never looked
+    // at again, and its next hook is the next word on where it runs and what it is called.
+    const listing = [...open].filter(([sessionId, engine]) => rows.has(sessionId) && !this.entries.has(observedAgentId(engine, sessionId)))
+      .slice(0, MAX_SESSIONS)
     const learning = this.deps.now()
-    const apps = await this.appsOf(pids)
+    const apps = await this.appsOf(listing.map(([sessionId]) => owners.get(sessionId)!.pid))
     const ms = this.deps.now() - learning
+    // Read before the loop: its own check then sees a session a hook told of during the reads, which keeps what it said.
+    const names = await this.namesOf(listing, owners)
     let listed = 0
     let known = 0
+    let named = 0
     const now = this.deps.now()
     for (const [sessionId, engine] of open) {
       // No row, no folder to tell Harness's own from a person's (the voice router's transcript is a program's, in the data
@@ -479,6 +623,12 @@ export class ObservedSource implements HostSource {
       const entry = this.entry(engine, sessionId, now, { cwd: row.cwd, transcriptPath: row.transcriptPath, pid: owner.pid })
       if (!entry) continue
       listed++
+      const name = names.get(sessionId)
+      if (name) {
+        entry.title = name
+        entry.agent.name = name
+        named++
+      }
       // The app alone: its host and what a tap opens stay unknown until its first hook.
       const app = apps.get(owner.pid)
       if (app) {
@@ -486,15 +636,36 @@ export class ObservedSource implements HostSource {
         delete entry.agent.appPending
         known++
       }
+      this.learnTty(entry, owner.pid)
       // A turn it is in when found reads working, as checkWorking reads it, which ends it once its owner reads idle: listed
       // idle, its compaction's SessionStart (which moves no state) would give a running turn a handle to type into.
       if ((engine === 'claude' || engine === 'codex') && await this.deps.openSessions.busy(owner)
         && entry.agent.state === 'idle' && this.live(entry)) this.setState(entry, 'working', this.deps.now())
     }
     if (!listed) return
-    // Counts only: an app, a pid or a path would say whose session runs where.
-    this.deps.log(`[observed] scan · ${listed} found · ${known} app known · ${ms} ms`)
+    // Counts only: an app, a pid or a path would say whose session runs where, and a name is the person's own.
+    this.deps.log(`[observed] scan · ${listed} found · ${known} app known · ${named} named · ${ms} ms`)
     this.emit()
+  }
+
+  /** The name in each Claude Code session's own record, by session id, read one at a time; none when there is no reader.
+   *  A read that fails names nothing and logs nothing: its error can hold a path, and the session keeps its folder. */
+  private async namesOf(
+    listing: readonly [string, ExternalEngine][], owners: ReadonlyMap<string, SessionOwner>,
+  ): Promise<ReadonlyMap<string, string>> {
+    const names = new Map<string, string>()
+    if (!this.deps.recordName) return names
+    for (const [sessionId, engine] of listing) {
+      if (engine !== 'claude') continue
+      try {
+        const { pid, record } = owners.get(sessionId)!
+        const name = await this.deps.recordName({ pid, record, sessionId })
+        if (name) names.set(sessionId, name)
+      } catch {
+        // Named by its folder, as a session with no name is.
+      }
+    }
+    return names
   }
 
   /** None when there is no reader or it failed: every session is still listed, not known yet. */

@@ -4615,6 +4615,40 @@ describe('what the dial cannot do for an agent', () => {
     } finally { vi.restoreAllMocks(); await session.stop() }
   })
 
+  it('an agent outside Harness whose entry drops while the window decides still reaches neither the router nor the backend', async () => {
+    const sessions = () => [
+      { agentId: 'h1', registeredAt: 1, active: true, terminalAvailable: true, engine: 'claude', sessionId: 's-h1' },
+      { agentId: 'h2', registeredAt: 2, active: true, terminalAvailable: true, engine: 'codex', sessionId: 's-h2' },
+    ] as unknown as RegisteredSession[]
+    const sendTurn = vi.fn()
+    let listed = true
+    const host = new DaemonCableHost({
+      sessions, displayName: (s) => s.agentId, machineName: () => 'this-mac', machineId: () => 'mac-local', computerId: () => 'abc',
+      sendTurn, stopTurn: vi.fn(), answer: vi.fn(), recent: () => [], recentAsks: () => [], log: () => {},
+      // The window takes the words and leaves them to this computer; meanwhile the outside session ends.
+      routeInWindow: async () => { listed = false; return { t: 'unavailable' } },
+    })
+    const outside: HostAgent = { id: 'outside-7f3c', engine: 'claude', sessionId: 's-o', name: 'secret-folder', host: 'orca', app: 'orca',
+      state: 'idle', lastActivityAt: 0, unseenDone: false }
+    host.setRegistry(new HostRegistry([host.harness, { id: 'observed', list: () => listed ? [outside] : [],
+      capabilities: () => ({ status: true, voice: true, focus: true, answer: false }) }]))
+    vi.spyOn(host, 'transcribe').mockResolvedValue('fix the login screen')
+    const { session, port } = await connect(host)
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+      await vi.waitFor(() => expect(port.sent).toContainEqual({ t: 'agents.end', total: 3, tab: '', view: 'machine' }))
+      router.routed.length = 0
+      router.ranked.length = 0
+      port.say({ t: 'voice.begin', lang: 'en', sr: 16000, uploadId: 'u1' })
+      port.pcm(Buffer.alloc(3200, 7))
+      port.say({ t: 'voice.end', uploadId: 'u1' })
+      await vi.waitFor(() => expect(sendTurn).toHaveBeenCalledWith('h2', 'fix the login screen'))
+      const left = JSON.stringify([router.routed, router.ranked])
+      expect(left).toContain('h1')
+      for (const secret of [outside.id, outside.name]) expect(left).not.toContain(secret)
+    } finally { vi.restoreAllMocks(); await session.stop() }
+  })
+
   it.each([['a bare void', () => undefined], ['a sync { ok: true }', () => ({ ok: true as const })]])(
     'voice to a harness agent works as today (%s)', async (_, sent) => {
       const host = caps({ sendTurn: vi.fn(sent) })
@@ -4644,6 +4678,23 @@ describe('what the dial cannot do for an agent', () => {
       speak(port, 'a2', 'u2')
       port.say({ t: 'voice.end', uploadId: 'u2' })
       await vi.waitFor(() => expect(lines).toContain('cable: voice → error "Device firmware voice did not answer."'))
+    } finally { await session.stop() }
+  })
+
+  // A window that opens, or an entry that drops, while the words are on their way leaves the list without the agent.
+  it("an outside agent's refusal is not logged in its words when the list no longer holds it once the refusal comes", async () => {
+    const lines: string[] = []
+    let listed = true
+    const sendTurn = vi.fn(async (): Promise<SendOutcome> => { listed = false; return { ok: false, message: 'secret-session did not answer.' } })
+    const { session, port } = await greeted(caps({ capsOf: (id) => ({ ...CAPS, a1: 'svf' })[id],
+      hostOf: (id) => listed ? HOSTS[id] : undefined, sendTurn, log: (line) => { lines.push(line) } }))
+    try {
+      speak(port, 'a1', 'u1')
+      port.say({ t: 'voice.end', uploadId: 'u1' })
+      await vi.waitFor(() => expect(port.sent).toContainEqual({ t: 'voice.error', uploadId: 'u1',
+        message: 'secret-session did not answer.' }))
+      expect(lines).toContain('cable: voice → error (refused in Orca)')
+      expect(lines.filter((line) => line.includes('secret-session'))).toEqual([])
     } finally { await session.stop() }
   })
 
@@ -4937,6 +4988,43 @@ describe('what the dial cannot do for an agent', () => {
       expect(vi.getTimerCount()).toBe(0)
       await vi.advanceTimersByTimeAsync(SWIPE_REST_MS)
       expect(swipeEnded).not.toHaveBeenCalled()
+    } finally { vi.useRealTimers(); await session.stop() }
+  })
+
+  // The host notes the move as the hand makes it, pane or none: a settle of the app in front must not turn the dial back
+  // in the 400 ms before a rest, or from an agent no rest shows.
+  it("a hand's turn tells the host at once, whatever the agent; a follow's echo does not", async () => {
+    const turned = vi.fn()
+    const { session, port, swipeEnded } = await resting({ turned })
+    try {
+      port.say({ t: 'focus', agentId: 'a1' })
+      expect(turned).toHaveBeenCalledTimes(1)
+      expect(swipeEnded).not.toHaveBeenCalled()
+      port.say({ t: 'focus', agentId: 'a2' })
+      expect(turned).toHaveBeenCalledTimes(2)
+      await session.followApp('', 'a3')
+      port.say({ t: 'focus', agentId: 'a3' })   // the dial's echo of the move
+      expect(turned).toHaveBeenCalledTimes(2)
+    } finally { vi.useRealTimers(); await session.stop() }
+  })
+
+  // Past the echo's 750 ms but inside the switch's 1 s repaint: the stale tile the dial repaints is not a hand either.
+  it("a switch's repaint after its echo timed out does not tell the host", async () => {
+    let release!: () => void
+    let hold: Promise<void> | undefined
+    const turned = vi.fn()
+    const { session, port } = await resting({
+      turned,
+      listAgents: async () => { await hold; return AGENTS },
+    })
+    try {
+      hold = new Promise((resolve) => { release = resolve })
+      const following = session.followApp('', 'a3')   // held in its list push: the switch is running
+      await vi.advanceTimersByTimeAsync(800)
+      port.say({ t: 'focus', agentId: 'a1' })
+      expect(turned).not.toHaveBeenCalled()
+      release()
+      await following
     } finally { vi.useRealTimers(); await session.stop() }
   })
 

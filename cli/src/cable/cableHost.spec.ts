@@ -1013,10 +1013,11 @@ describe('the dial that shows one app at a time', () => {
     expect(host.settledApp()).toBe('vscode')
   })
 
-  it('appSettled reaches the wiring each time an app settles, after appSwitched', async () => {
+  it('appSettled reaches the wiring each time an app settles, after appSwitched, with a window open too', async () => {
     const settles: Array<() => void> = []
     const told: string[] = []
     const host = setup(five(), {
+      sessions,
       appSwitched: (cause) => { told.push(cause) },
       appSettled: (app) => { told.push(`settled ${app}`) },
       appTimer: (_ms, run) => { settles.push(run); return () => {} },
@@ -1027,6 +1028,11 @@ describe('the dial that shows one app at a time', () => {
     host.front('none')
     settles[1]()
     expect(told).toEqual(['front', 'settled vscode', 'settled none'])
+    onTab(host, ['h1'])
+    host.front('cursor')
+    expect(told).toHaveLength(3)
+    settles[2]()
+    expect(told.slice(3)).toEqual(['settled cursor'])
   })
 
   it('latestFront is the app last reported, with a window open too', () => {
