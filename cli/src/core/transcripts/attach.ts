@@ -43,7 +43,7 @@ export interface AttachDeps {
   terminalGone: (session: RegisteredSession) => Promise<boolean>
   normalizers: SessionNormalizers
   /** The other engines' streams, in their worker (core/engines/otherStreams.ts). */
-  others: Pick<OtherStreams, 'open' | 'get' | 'close' | 'tail' | 'release'>
+  others: Pick<OtherStreams, 'open' | 'get' | 'closeIf' | 'drain' | 'tail' | 'release' | 'forget'>
   watcher: Pick<Watcher, 'addSession' | 'removeSession' | 'pollSession' | 'hold' | 'tails'>
   setInterpretationHold: (agentId: string, revision: number | undefined, reason?: string, create?: boolean) => boolean
   announceSession: (session: RegisteredSession) => void
@@ -363,11 +363,15 @@ export function createAttach({
       }
       opened = await others.open(session, { live: replayLive, abandon: !closes && !!relaunch?.engineStarted,
         held: !!session.interpretationHold, store })
+      // A stream opened for a binding that moved on meanwhile is not its: the attach that follows opens its own.
+      if (!current()) {
+        if (opened) others.forget(session.sessionId)
+        return false
+      }
       if (!opened) {
         console.warn(`[agent] ${sid(session.agentId)} transcript held · engine=${session.engine} · its live stream is unavailable`)
         return true
       }
-      if (!current()) return false
       const evidence = opened.evidence
       sideRead('runtime profile', session.sessionId, () => runtimeProfiles.hydrateEvidence(session, evidence))
     } else if (!fromEnd) {
@@ -420,16 +424,17 @@ export function createAttach({
         const [, capture] = await Promise.all([runtimeProfiles.capturePane(session, () => capturing, paneLines, true), capturing])
         if (paneReadIdentity(resolve(agentId)) !== identity) return keepLiveNormalizer('changed binding while its pane was read')
         const closeHistory = async (): Promise<boolean> => {
-          await others.close(session.sessionId, { identity: turn })
-          if (others.get(session.sessionId)?.turnOpen !== false) { historySuperseded = true; return false }
-          historyTurnOpen = false
-          return true
+          if (await others.closeIf(session.sessionId, turn)) { historyTurnOpen = false; return true }
+          historySuperseded = true
+          return false
         }
         if (others.get(session.sessionId)?.turn.identity !== turn) historySuperseded = true
         else if (capture && agyPaneIdle(capture)) await closeHistory()
         // Closed as history only now: until its pane was read its fold could not say the turn was over.
         if (historyTurnOpen && !historySuperseded && !closes && relaunch?.engineStarted && await closeHistory()) abandonedByCore = true
+        // What its tail delivered meanwhile is in before the history is said: a newer record supersedes it.
         const settledTurn = others.get(session.sessionId)?.turn.identity
+        await others.drain(session.sessionId)
         historyCurrent = () => others.get(session.sessionId)?.turn.identity === settledTurn
       } else if (paneLines) await runtimeProfiles.capturePane(session, captureTerminal, paneLines, true)
     }

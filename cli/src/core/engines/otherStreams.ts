@@ -200,6 +200,13 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
     } finally { if (at === generation) waiting = false }
   }
 
+  /** The worker did not answer a close: the core closes the turn itself, and says so. */
+  const closedHere = (handle: Handle): boolean => {
+    if (!handle.turnOpen) return false
+    handle.turn = { ...handle.turn, turnOpen: false }
+    log(`[turn] ${sid(handle.sessionId)} closed by the core itself · the other engines' worker did not answer`)
+    return true
+  }
   const forgetHandle = (handle: Handle): void => {
     byToken.delete(handle.token)
     if (!handle.orphan) void deps.call(STREAM_OP, { version: STREAM_VERSION, token: handle.token, op: 'forget' }, STREAM_OP_WAIT_MS).catch(() => undefined)
@@ -227,16 +234,21 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
     has: (sessionId: string): boolean => handles.has(sessionId),
     /** A Stop's or a backstop's close: what the parser emits closing; when the worker does not answer, the core closes the
      *  turn itself and says so, so a Stop never leaves a turn open. */
-    async close(sessionId: string, how: { abort?: boolean; error?: boolean; stop?: boolean; identity?: string }): Promise<LiveEvent[]> {
+    async close(sessionId: string, how: { abort?: boolean; error?: boolean; stop?: boolean }): Promise<LiveEvent[]> {
       const handle = handles.get(sessionId)
       if (!handle) return []
-      const answer = await op(handle, how.abort ? 'abort' : 'close', { error: !!how.error, stop: !!how.stop,
-        ...(how.identity !== undefined ? { identity: how.identity } : {}) })
-      if (answer) return answer.closed === true ? answer.events as LiveEvent[] : []
-      if (!handle.turnOpen || (how.identity !== undefined && how.identity !== handle.turn.identity)) return []
-      handle.turn = { ...handle.turn, turnOpen: false }
-      log(`[turn] ${sid(sessionId)} closed by the core itself · the other engines' worker did not answer`)
+      const answer = await op(handle, how.abort ? 'abort' : 'close', { error: !!how.error, stop: !!how.stop })
+      if (answer) return answer.events as LiveEvent[]
+      if (!closedHere(handle)) return []
       return [{ type: 'turn_ended', payload: how.abort || how.error ? { aborted: true } : {} }]
+    },
+    /** A turn an attach's history left open, closed silently if it is still that turn: whether it was. */
+    async closeIf(sessionId: string, identity: string): Promise<boolean> {
+      const handle = handles.get(sessionId)
+      if (!handle || handle.turn.identity !== identity) return false
+      const answer = await op(handle, 'close', { identity })
+      if (answer) return answer.closed === true
+      return handle.turn.identity === identity && closedHere(handle)
     },
     /** A read now of what the session has that its stream has not delivered: best effort, bounded. */
     async drain(sessionId: string): Promise<void> {

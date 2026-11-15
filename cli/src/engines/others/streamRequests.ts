@@ -64,12 +64,12 @@ export function otherStreamRequests(deps: OtherStreamRequestDeps): ServiceReques
     }
     return { pages: out, lost: streams.ack({}) }
   }
-  // What one read made goes in one answer: the frames of a tick are taken together.
+  // What one read made goes in one answer: the frames its lines made at once, before anything else runs, together.
   let flushing = false
   streams.onMade(() => {
     if (!waiting || flushing) return
     flushing = true
-    setImmediate(() => {
+    queueMicrotask(() => {
       flushing = false
       const held = waiting
       if (!held || (!streams.pending().length && !streams.lost())) return
