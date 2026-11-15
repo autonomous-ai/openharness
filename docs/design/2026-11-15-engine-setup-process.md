@@ -118,6 +118,31 @@ matched measurements before any performance claim.
 
 ## Validation selected before implementation
 
+### Measured cold-start follow-up
+
+The fixed three-pair comparison of the async-probes baseline and setup extraction showed a repeated cold-launch
+increase (median 868 to 1,143 ms). The original pair and all repeated samples remain in the external handoff.
+A separate diagnostic trace measured 157 ms from setup spawn to its first marker reply and about 55 ms for the
+probe keeper to start. The setup entry's static import closure was 383,041 bytes in 31 chunks. Its roughly 97 ms
+between Node preload and first request includes imports, connection and scheduling; footprint alone does not
+attribute that entire interval to parsing. No setup calls occurred during the later ten turns. Their first-turn
+completion tail remains reported; submission/discovery is not changed based on that correlation.
+
+Two worker-owned changes address the observed sequential work. The common probe/download path loads neither
+platform's installation controller nor OpenCode/Hermes selection metadata eagerly. The needed installer module
+may load alongside an already requested executable probe, before the following status read. Preloading imports
+and constructs the existing controller only: it cannot inspect installation state, claim, install, spawn an
+installer or change a durable marker. Actual status/ensure calls keep their current authority and ordering.
+Import failures remain observed, and no inline implementation is added to default core.
+
+On the first real download request only, setup may start one otherwise unused probe keeper while the core does
+its trusted capture. This is after first use, never daemon startup. It consumes one of the existing eight actual
+child slots, exits after its own five-second idle deadline, and is not replenished on cached launches. The first
+actual probe may consume it; an expired/exited keeper cannot become evidence. IPC disconnect and the keeper's
+own timer still cover killed/frozen setup, with no new core timer, state, public endpoint or supervisor protocol.
+The same existing output, command, cancellation and actual-settlement bounds apply. Functional/import-order and
+real child-cleanup checks precede another fixed matched comparison; no performance improvement is assumed.
+
 1. Caller-visible red test: setup work must use the supervised service and a cancelled preparation must never
    commit. Reproduce before implementation. Cover cancellation after commit separately: install may complete,
    launch cannot start.
