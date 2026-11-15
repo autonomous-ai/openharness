@@ -105,6 +105,11 @@ export function createRuntimeSessions(deps: RuntimeSessionDeps) {
     if (valid(view)) return view
     return view.profileIdentity === profileIdentity(session) ? viewFor(session) : undefined
   }
+  const isCurrent = (s: RegisteredSession): boolean => {
+    const current = deps.resolve(s.agentId)
+    // A live row need not be serialized against itself; byId still checks its full identity against the View.
+    return s === current || binding(s) === binding(current)
+  }
   const notify = (view: View): void => {
     if (!view.sessionId) return
     const old = changes.get(view.sessionId)
@@ -257,7 +262,7 @@ export function createRuntimeSessions(deps: RuntimeSessionDeps) {
       evidence(s, records, true)
     },
     workspace(s: RegisteredSession): string | null {
-      return binding(s) === binding(deps.resolve(s.agentId)) ? byId(s.agentId)?.workspace ?? null : null
+      return isCurrent(s) ? byId(s.agentId)?.workspace ?? null : null
     },
     async capturePane(s: RegisteredSession, capture: (id: string, historyLines?: number) => Promise<string | null>,
       historyLines?: number, silent = false): Promise<string | null> {
@@ -281,7 +286,7 @@ export function createRuntimeSessions(deps: RuntimeSessionDeps) {
       return () => pending.commit()
     },
     selectedModel(s: RegisteredSession): string | null {
-      return s.sessionId && binding(s) === binding(deps.resolve(s.agentId)) ? byId(s.agentId)?.selected ?? null : null
+      return s.sessionId && isCurrent(s) ? byId(s.agentId)?.selected ?? null : null
     },
     getState(id: string): RuntimeState { return { ...(byId(id)?.state ?? blankRuntimeState()) } },
     async withoutChangeEvents<T>(run: () => Promise<T>): Promise<T> { suppressed++; try { return await run() } finally { suppressed-- } },
