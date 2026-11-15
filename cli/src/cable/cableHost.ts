@@ -866,7 +866,10 @@ export class DaemonCableHost implements CableHost {
     }
     this.waiting = tap
     if (await launch().catch(() => false)) return
-    if (this.waiting === tap) this.endWaiting()
+    // `open -b` failed or ran out its time: only a tap still waiting failed. A window that came meanwhile has the open,
+    // and a later tap answers for itself.
+    if (this.waiting !== tap) return
+    this.endWaiting()
     return { ok: false, error: `${hostDisplayName('harness')} did not open it.` }
   }
 
