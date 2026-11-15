@@ -559,6 +559,14 @@ add a kind there, not at the call site.
   colours with `integration_test/finder_native_test.dart`. Only `LocalFinderFiles`/`LocalFinderGit`
   exist, so other machines and the browser offer the row disabled (`canOpenFinderOn`) until the
   daemon serves listings, reads, writes and Git.
+- **An agent's Browser is a tile too** (`PaneKind.browser`, `lib/browser/`): its own Chrome, drawn
+  by `BrowserPanel` left of the agent's terminal as a viewer sits, and moving and closing with it.
+  The way in is the globe in the terminal's header (`BrowserButton`) and ⇧⌘P Toggle Browser, both
+  `AppNotifier.toggleBrowserPane`, offered by `offersBrowser`: a running agent on the person's own
+  machine, never a plain shell, the web build or Windows. It is never saved. `BrowserTiles` keeps
+  this run's opened and closed tiles, and the agent's frame says whether its browser is on, which is
+  what brings the tile back after a restart (`_syncBrowserPane`). Out of sight, a tile ends its
+  stream. Its requests go to the daemon's agentBrowser service; the daemon's core has no part in it.
 - `third_party/xterm` is a **vendored, patched** xterm 4.0.0 (atomic `replaceRange` fix for scroll
   regions — see its `README.autonomous.md`). Do not replace it with the pub package; the regression
   lives in `test/terminal_session_test.dart`.

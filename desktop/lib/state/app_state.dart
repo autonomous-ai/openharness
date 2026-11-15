@@ -1,6 +1,7 @@
 import '../browser/browser_availability.dart';
 import '../browser/browser_settings.dart';
 import '../browser/browser_stream.dart';
+import '../browser/browser_tiles.dart';
 import '../core/home_dir.dart';
 import '../usage/usage_account_key.dart';
 import '../measurement/product_measurement.dart';
@@ -13294,6 +13295,7 @@ class AppNotifier extends ChangeNotifier {
     _closeTabsEmptiedByStop(affected);
     _dismissedViewers.remove(_viewerKey(machineId, agentId));
     finderRoots.forget(machineId, agentId);
+    _browserTiles.forget(machineId, agentId);
     _persistLayout();
     _announceAppFocus();
     try {
@@ -13337,6 +13339,7 @@ class AppNotifier extends ChangeNotifier {
         viewerState != null &&
         _dismissedViewers[_viewerKey(machineId, agent.id)] == viewerState;
     var changed = _syncFinderPane(machineId, agent.id);
+    changed = _syncBrowserPane(machine, agent) || changed;
     // Tab by tab: wherever this agent's terminal is, its viewer is beside it,
     // and nowhere else. A terminal opened in a second tab gets a second
     // viewer; a tab whose terminal went loses its viewer.
@@ -13540,6 +13543,115 @@ class AppNotifier extends ChangeNotifier {
     _dismissedViewers.remove(_viewerKey(machineId, agentId));
     _syncViewerPane(machine, agent);
     notifyListeners();
+  }
+
+  // ── agent browsers ──────────────────────────────────────────────────────────
+
+  /// Which agents' Browser tiles are wanted, for this run: see [BrowserTiles].
+  final _browserTiles = BrowserTiles();
+
+  /// Whether [agent] on [machine] has a Browser: a running agent, not a plain
+  /// shell, on one of the person's own machines (a machine shared with them
+  /// is another person's, and so is the login in its browser), and never on
+  /// the web build or on Windows, which Browser does not cover.
+  bool _browserOffered(MachineState? machine, Agent? agent) => browserOffered(
+    web: kIsWeb,
+    windows: RuntimePlatform.isWindows,
+    offersBrowser:
+        machine != null &&
+        !machine.machine.isShared &&
+        !machine.machine.isSharedMachine &&
+        agent != null &&
+        !agent.isStopped &&
+        !agent.isCloud &&
+        !isTerminalEngine(agent.engine),
+  );
+
+  /// The tabs a Browser tile goes in: not the Store, Devices or companions,
+  /// whose panes are the tab, nor an orchestrator's, which lays out its own.
+  static bool _holdsBrowser(Swarm tab) => !tab.isUtility && !tab.isOrchestrator;
+
+  /// Whether the active tab offers [agentId]'s Browser: the terminal header's
+  /// globe and the palette's Toggle Browser.
+  bool offersBrowser(String machineId, String agentId) {
+    final machine = stateOf(machineId);
+    return _holdsBrowser(activeSwarm) &&
+        _browserOffered(
+          machine,
+          machine?.agents.where((a) => a.id == agentId).firstOrNull,
+        );
+  }
+
+  /// Whether the active tab shows [agentId]'s Browser beside its terminal.
+  bool browserPaneShown(String machineId, String agentId) => activeSwarm.panes
+      .any((pane) => pane.isBrowser && pane.viewsAgent(machineId, agentId));
+
+  /// The Browser control: closes [agentId]'s Browser tile in this tab (the
+  /// browser runs on), or opens one left of its terminal. It never moves the
+  /// focus: the person is typing in that terminal.
+  Future<void> toggleBrowserPane(String machineId, String agentId) async {
+    final tile = activeSwarm.panes
+        .where((pane) => pane.isBrowser && pane.viewsAgent(machineId, agentId))
+        .firstOrNull;
+    if (tile != null) return closePane(tile.id);
+    final machine = stateOf(machineId);
+    final agent = machine?.agents.where((a) => a.id == agentId).firstOrNull;
+    if (machine == null ||
+        agent == null ||
+        !offersBrowser(machineId, agentId)) {
+      return;
+    }
+    _browserTiles.opened(machineId, agentId);
+    if (_syncBrowserPane(machine, agent)) _persistLayout();
+    notifyListeners();
+  }
+
+  /// Keeps [agent]'s Browser tile beside its terminal in every tab that shows
+  /// that terminal, while it is wanted ([BrowserTiles]). A tile on screen stays
+  /// when its browser goes off: it shows Start. It goes with its terminal, by
+  /// hand, and where Browser is no longer offered (its agent stopped). Whether
+  /// a tile went in or out.
+  bool _syncBrowserPane(MachineState machine, Agent agent) {
+    final machineId = machine.machine.machineId;
+    final offered = _browserOffered(machine, agent);
+    final wanted =
+        _browserTiles.sync(machineId, agent.id, on: agent.browser != null) &&
+        offered;
+    var changed = false;
+    for (final swarm in swarms) {
+      final at = swarm.panes.indexWhere(
+        (pane) =>
+            !pane.isViewer &&
+            pane.machineId == machineId &&
+            pane.agentId == agent.id,
+      );
+      final tiles = [
+        for (final pane in swarm.panes)
+          if (pane.isBrowser && pane.viewsAgent(machineId, agent.id)) pane,
+      ];
+      if (at < 0 || !offered || !_holdsBrowser(swarm)) {
+        for (final tile in tiles) {
+          swarm.remove(tile);
+          changed = true;
+        }
+        continue;
+      }
+      if (!wanted || tiles.isNotEmpty || swarm.panes.length >= maxPanes) {
+        continue;
+      }
+      _insertViewer(
+        swarm,
+        at,
+        TerminalPane(
+          id: _nextPaneId++,
+          machineId: machineId,
+          kind: PaneKind.browser,
+          ownerAgentId: agent.id,
+        ),
+      );
+      changed = true;
+    }
+    return changed;
   }
 
   /// Every harness the person can see RIGHT NOW: each one with a pane on the tab
@@ -17306,6 +17418,7 @@ class AppNotifier extends ChangeNotifier {
       if (allPanes.contains(pane)) pane.ownerAgentId = nextId;
     }
     finderRoots.move(machineId, source.id, nextId);
+    _browserTiles.move(machineId, source.id, nextId);
     for (final swarm in swarms) {
       if (swarm.titleMachineId == machineId &&
           swarm.titleAgentId == source.id) {
@@ -19572,6 +19685,14 @@ class AppNotifier extends ChangeNotifier {
     // A Finder closed by hand stays closed: its chat no longer brings it back.
     if (pane.isFinder && pane.ownerAgentId != null) {
       finderRoots.forget(pane.machineId, pane.ownerAgentId!);
+    }
+    // A Browser closed by hand only hides it: the browser runs on, and its
+    // tile stays closed until it is opened again or the browser starts again.
+    if (pane.ownerAgentId case final owner? when pane.isBrowser) {
+      final agent = stateOf(pane.machineId)?.agents
+          .where((a) => a.id == owner)
+          .firstOrNull;
+      _browserTiles.closed(pane.machineId, owner, on: agent?.browser != null);
     }
     if (pane.isWeb) {
       // A viewer closed by hand stays closed for THIS page: the agent's next
