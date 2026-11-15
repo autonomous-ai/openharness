@@ -17,9 +17,10 @@ describe('argvNamesOpenRouterProvider', () => {
 })
 
 describe('gatewayFromArgv', () => {
-  it('says ori for a Codex whose argv names the provider, null for one whose argv does not, and nothing for another engine', () => {
+  it('says ori for a Codex whose argv names the provider, null for one whose argv does not, nothing for an engine whose hook says it, and null for any other', () => {
     expect(gatewayFromArgv('codex', 'codex -c model_provider=openrouter -c model_providers.openrouter.base_url="https://openrouter.ai/api/v1"')).toBe('ori')
     expect(gatewayFromArgv('codex', 'codex -m gpt-5')).toBeNull()
-    for (const engine of ['claude', 'opencode', 'hermes', 'grok'] as const) expect(gatewayFromArgv(engine, `${engine} -c model_provider=openrouter`)).toBeUndefined()
+    for (const engine of ['claude', 'opencode', 'hermes'] as const) expect(gatewayFromArgv(engine, `${engine} -c model_provider=openrouter`)).toBeUndefined()
+    for (const engine of ['pi', 'grok', 'kilo', 'cursor'] as const) expect(gatewayFromArgv(engine, `${engine} -c model_provider=openrouter`)).toBeNull()
   })
 })
