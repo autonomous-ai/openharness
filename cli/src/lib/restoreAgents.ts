@@ -62,9 +62,10 @@ export interface RestoreLaunch {
 }
 
 export interface DeferredLaunch {
-  /** The conversation's resume preparation, when it resumes one, and the row's grid web search. Throws when the
-   *  conversation could not be prepared. */
-  prepare(): void
+  /** The conversation's resume preparation, when it resumes one, and the row's grid web search. Rejects when the
+   *  conversation could not be prepared. [waiting]: whether its caller still waits for it; once not, the history is left
+   *  as it is (a move's step is bounded, hostMove/moveAgent.ts). */
+  prepare(waiting?: () => boolean): Promise<void>
   /** The overrides (`relaunchOverrides`) and the permission (`downgradedPermission`) the launch was built with. */
   overrides: LaunchOverrides
   permission: { permissionMode?: string | null; bypassPermission?: boolean }

@@ -83,6 +83,16 @@ describe('the pane-process swap', () => {
       expect(said).toHaveBeenCalledWith('[resume] stopped background job bg-1 holding session s1')
     } finally { said.mockRestore() }
   })
+  it('prepares the conversation only while the swap holds: its history is replaced under the same check', async () => {
+    const { deps, swap } = setup(session({ engine: 'codex' }))
+    let holds = true
+    await swap.paneSwapDeps(session({ engine: 'codex' }), place(), {}, null, () => holds).prepareResume!()
+    const [prepared, current] = vi.mocked(deps.prepareSessionResume).mock.lastCall!
+    expect(prepared).toEqual(session({ engine: 'codex' }))
+    expect(current()).toBe(true)
+    holds = false
+    expect(current()).toBe(false)
+  })
   it('skips the background-job check for a non-Claude engine', () => {
     const prepared = setup(session({ engine: 'codex' })).swap.paneSwapDeps(session({ engine: 'codex' }), place())
     expect(prepared.stopConflictingJob).toBeUndefined()
@@ -199,8 +209,10 @@ describe('the pane-process swap', () => {
   it('prepares the resume, holds the pane open and respawns it in the home folder, saying why when tmux will not', async () => {
     const { deps, tmuxBackend, swap } = setup()
     const swapDeps = swap.paneSwapDeps(session(), place(), { env: { GRID_KEY: 'k' } })
-    swapDeps.prepareResume?.()
-    expect(deps.prepareSessionResume).toHaveBeenCalledWith(session())
+    await swapDeps.prepareResume?.()
+    // With no hold of its own, the history is replaced as the restart's own checks allow.
+    expect(deps.prepareSessionResume).toHaveBeenCalledWith(session(), expect.any(Function))
+    expect(vi.mocked(deps.prepareSessionResume).mock.lastCall![1]()).toBe(true)
     swapDeps.keepAbandoned?.()
     expect(deps.keepAbandonedConversation).toHaveBeenCalledWith(session())
     // Asked of tmux with the relaunch's own environment, before anything is stopped.
