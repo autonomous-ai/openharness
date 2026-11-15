@@ -16,7 +16,7 @@ import { TerminalBackendCoordinator } from './terminalBackendCoordinator.js'
 import { TmuxBackend } from './tmuxBackend.js'
 
 it.runIf(process.env.RUN_REAL_TMUX_DISCOVERY === '1')('saves and closes an inactive shell without closing its neighboring pane', async () => {
-  const server = await isolatedTmux({ PATH: process.env.PATH, TERM: 'xterm-256color' })
+  const server = await isolatedTmux({ TERM: 'xterm-256color' })
   vi.stubEnv('TMUX', undefined)
   vi.stubEnv('TMUX_PANE', undefined)
   vi.stubEnv('TMUX_TMPDIR', server.root)

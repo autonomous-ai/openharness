@@ -159,7 +159,7 @@ export const ENGINE_RESUME_REPAIR_ENV = 'HARNESSD_ENGINE_RESUME_REPAIR'
  * version its master says covers, and reads the rest in its own process, as under a master from before the worker.
  */
 export const ENGINE_OTHERS_ENV = 'HARNESSD_ENGINE_OTHERS'
-export const ENGINE_OTHERS_VERSION = 2
+export const ENGINE_OTHERS_VERSION = 3
 
 /**
  * What a master puts in its core's environment about the services it runs in their own processes: the
