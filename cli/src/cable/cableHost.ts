@@ -100,6 +100,9 @@ export interface CableHostWiring {
   focused?: (machineId: string, agentId: string) => void
   /** What came of a swipe that rested on an agent of another app, or was superseded before it rested: for its count. */
   swiped?: (outcome: PaneSwitch | 'superseded') => void
+  /** A hand turned a dial to an agent, of any app or none, as it turned: a settle of the app in front then follows
+   *  nothing the dial has left. */
+  turned?: () => void
   /** What came of a local follow, by its cause: the dial moved to its agent, or its list had no tile for it. */
   localFollowed?: (cause: FollowCause, outcome: 'moved' | 'no-tile') => void
   /**
@@ -923,6 +926,10 @@ export class DaemonCableHost implements CableHost {
   swipeSwitches(agentId: string): boolean {
     const outside = this.outsideEntry(agentId)
     return outside?.source.hasPane?.(outside.agent) ?? false
+  }
+
+  turned(): void {
+    this.wiring.turned?.()
   }
 
   /** A swipe that rested shows the agent's pane, and its app stays where it is; one superseded runs nothing. */

@@ -1397,6 +1397,12 @@ static void render_question(ht_scene_t *f)
     text(f, FACE_CX(216), 109, 216, label, DIM);
     question_text(f, q->prompt);
     if (s.q.speech_error[0]) ui_wrap(f,FACE_CX(312),319,312,2,0,&ht_mono_20,ERROR,s.q.speech_error);
+    if (!agent_allows(s.q.agent, CABLE_CAP_A)) {
+        // Its app takes no answer from here, and the prompt names where to answer. The loading question's own
+        // [ later ], so it stays put when the question loads.
+        control(f, 122, 346, 187, "[ later ]", A_HOME, 0, true);
+        return;
+    }
     if (q->can_text && agent_allows(s.q.agent, CABLE_CAP_V)) {
         /*
      * UP TO y=336, AND THE RIM IS WHY.
@@ -2324,6 +2330,8 @@ static void dispatch(action_t a)
     case A_ANSWER:
         if (!question_view(s.view) || a.revision!=s.q.revision || a.dy!=s.q.index ||
             !s.q.valid || s.q.loading || s.q.pending || s.q.error[0] || strcmp(a.id,s.q.agent)) break;
+        // A choices screen opened before the agent lost A answers nothing; back still leaves it.
+        if (!agent_allows(s.q.agent, CABLE_CAP_A) && a.kind!=A_QUESTION_BACK && a.kind!=A_QUESTION_SAY) break;
         if (a.kind==A_QUESTION_SAY && s.q.item[s.q.index].can_text && agent_allows(s.q.agent, CABLE_CAP_V)) {
             a.kind=A_VOICE; a.value=4; copy(a.text,sizeof s.q.token,s.q.token);
             ht_gesture_guard(&gesture,ms()); dispatch(a);
