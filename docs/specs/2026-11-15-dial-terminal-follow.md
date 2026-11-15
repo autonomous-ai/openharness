@@ -200,8 +200,13 @@ an `NSAppleEventDescriptor` handler parameter.
 - **Denied** (`-1743`, errAEEventNotPermitted). That app's scripting stops until Harness Device starts again. The log
   says so in one line (`tabs: Terminal not allowed`). The dial still follows prompts, as in #4311. To allow it later:
   System Settings › Privacy & Security › Automation › Harness Device. No new UI.
-- **No `tty` in the app's dictionary** (an older Ghostty: `-1728` or `-10000` on the property). That app's scripting
-  stops the same way, with `tabs: Ghostty has no tty`.
+- **No `tty` in the app's dictionary** (an older Ghostty: `-1728` or `-10000` on the property). Ghostty's script
+  raises its own number (`1001`) for it only when the terminal it read is still there: a terminal or tab that closed
+  between two events fails the same way, and is a failed call. That app's scripting stops the same way, with
+  `tabs: Ghostty has no tty`.
+- **No scripting at all** (a Ghostty before 1.3). Before Ghostty's first event its running bundle's `Info.plist` is read
+  for `OSAScriptingDefinition`, which sends no event. Without it Ghostty is turned off the same way, with no consent
+  prompt, and `tabs: Ghostty has no scripting`.
 - **The app quits or times out** (`-600`, `-1712`). That call is counted as failed, and the next tick tries again.
 - **Debug builds** are signed ad hoc, so each rebuild may make macOS ask again.
 - **The entitlement.** A build signed with the hardened runtime sends no Apple Event unless it has
@@ -216,7 +221,8 @@ No tty, title, agent or session in any line.
 - **Devices log:** `[device] tab · moved | no-tile | not-in-front | no-agent | echo`, and the existing
   `[device] swipe · <outcome>` for selects.
 - **Harness Device log:** `tabs: <app> select ok | none | failed`, one line each. Poll failures as one count line a
-  minute while there are any. `not allowed` and `has no tty` once each.
+  minute while there are any, and at once when polling stops. `not allowed`, `has no tty` and `has no scripting` once
+  each. `watch: not reading` once when the watch's stdin is full.
 
 ## Out of scope
 
