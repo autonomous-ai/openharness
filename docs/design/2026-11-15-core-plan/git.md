@@ -4,7 +4,7 @@ Package: audit section 2, the "Git" row (docs/design/2026-11-12-core-audit.md) a
 `agent_create`). Read first: the plan's rules and lessons (../2026-11-15-core-plan.md), cli/AGENTS.md "Protect the core",
 cli/src/core/AGENTS.md, cli/src/services/AGENTS.md.
 
-## Step 1: a create's folder and a purge's worktree (done, branch `core-git-2`)
+## Step 1: a create's folder and a purge's worktree (done, #4319, branch `core-git-2`)
 
 The core runs no git for a create or a purge; the workspaces service in the edge host does.
 
