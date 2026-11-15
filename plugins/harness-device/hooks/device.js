@@ -1,6 +1,9 @@
 // The voice half of harness-device: it keeps one long poll open to the Harness daemon, and a prompt the person says
 // at the dial comes back as its answer and is submitted as theirs. A waiting prompt is the PermissionRequest hook's to tell.
+// When the Claude app shows this session, the mod posts its own session id, and nothing else, to the devices process's
+// own socket, so the dial can turn to it; never through the daemon's core.
 const INBOX = 'http://harness/api/hook/inbox'
+const DEVICES = 'http://harness/'
 const LINK = ['device', 'claude', 'link', '--json']
 // No launcher, no daemon, no dial watching: the daemon answers at once, so ask again only this often.
 const RETRY_MS = 60_000
@@ -9,28 +12,104 @@ const RETRY_MS = 60_000
 const OLD_HARNESS_MS = 10 * 60_000
 // An empty answer sooner than this was not held, and polling again at once would spin.
 const HELD_MS = 1_000
+// A link with no devices' socket (no dial attached yet, the daemon restarting) asks the launcher again at an attach, at
+// most this often, so the app switching sessions does not start a process each time.
+const RELINK_MS = 30_000
+// `link` reads one file and checks one socket, so it answers as the CLI starts; under RELINK_MS, so two never run at once.
+const RELINK_TIMEOUT_MS = 5_000
 const PLUGIN_ID = 'harness-device@openharness'
 
 /** @type {import('claude-code').Register} */
-export const register = (on) =>
+export const register = (on) => {
+  /** @type {State} */
+  const state = { linked: null, held: false, askedAt: null }
   on('session.start', async ($, e, next) => {
     const started = await next(e)
     // From a timer, not awaited here: the hook's budget would count the waits between polls.
-    $.clock.after(0, () => void link($))
+    $.clock.after(0, () => void link($, state))
     return started
   })
+  on('session.attach', { surface: 'desktop' }, async ($, e, next) => {
+    const attached = await next(e)
+    state.held = true
+    // Unlinked, the link sends it once it has a socket.
+    if (state.linked) $.clock.after(0, () => void send($, state))
+    return attached
+  })
+  on('session.detach', { surface: 'desktop' }, async ($, e, next) => {
+    const detached = await next(e)
+    // The app no longer shows it: an attach not sent yet must not be.
+    state.held = false
+    return detached
+  })
+}
 
 /** @typedef {import('claude-code').EngineInterface} Engine */
 
 /**
+ * The session's own, made in `register` so a reload starts it over. `linked`: the launcher's last answer with a socket,
+ * null before and once the plugin is off. `held`: the app shows this session and the devices have not been told.
+ * `askedAt`: when the launcher was last asked again for the devices' socket.
+ * @typedef {{ linked: Linked | null, held: boolean, askedAt: number | null }} State
+ */
+
+/**
  * Learns the daemon's socket from the launcher, then polls over it; without one, asks again later.
  * @param {Engine} $
+ * @param {State} state
  */
-async function link($) {
+async function link($, state) {
   // A call the engine refuses ($.env.get, say) is tried again later, not the end of the voice for the session.
   const found = await socketOf($).catch(() => ({ wait: RETRY_MS }))
-  if ('socketPath' in found) $.clock.after(0, () => void poll($, found))
-  else $.clock.after(found.wait, () => void link($))
+  if ('socketPath' in found) {
+    state.linked = found
+    $.clock.after(0, () => void poll($, state, found))
+    if (state.held) $.clock.after(0, () => void send($, state))
+  } else $.clock.after(found.wait, () => void link($, state))
+}
+
+/**
+ * Tells the devices the app shows this session, once; a failed send is dropped. Without their socket, asks the launcher
+ * that linked again, at most once in RELINK_MS, and sends once it prints one.
+ * @param {Engine} $
+ * @param {State} state
+ */
+async function send($, state) {
+  if (!state.held || !state.linked) return
+  const { devicesSocket, settingsPath, launcher } = state.linked
+  if (devicesSocket) {
+    state.held = false
+    if (!(await isOn($, settingsPath))) return
+    await $.http.fetch(DEVICES, {
+      method: 'POST',
+      socketPath: devicesSocket,
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ type: 'attach', sessionId: await $.session.id() }),
+    }).catch(() => {})
+    return
+  }
+  const now = await $.clock.now()
+  // Checked and set with no await between, so two attaches' timers ask once.
+  if (state.askedAt !== null && now - state.askedAt < RELINK_MS) return
+  state.askedAt = now
+  const found = await devicesSocketOf($, launcher).catch(() => '')
+  if (!found || !state.linked) return
+  state.linked = { ...state.linked, devicesSocket: found }
+  // Held still only if no detach came while the launcher ran.
+  await send($, state)
+}
+
+/**
+ * The devices' socket the launcher prints now, '' for none.
+ * @param {Engine} $
+ * @param {string} launcher
+ * @returns {Promise<string>}
+ */
+async function devicesSocketOf($, launcher) {
+  const out = await $.process.run([launcher, ...LINK], { timeoutMs: RELINK_TIMEOUT_MS })
+  if (out.exitCode !== 0) return ''
+  const { devicesSocket } = JSON.parse(out.stdout)
+  return typeof devicesSocket === 'string' ? devicesSocket : ''
 }
 
 /**
@@ -52,8 +131,9 @@ async function socketOf($) {
     }
     if (out.exitCode !== 0) return { wait: OLD_HARNESS_MS }
     try {
-      const { socketPath } = JSON.parse(out.stdout)
-      return typeof socketPath === 'string' && socketPath !== '' ? { socketPath, settingsPath } : { wait: RETRY_MS }
+      const { socketPath, devicesSocket } = JSON.parse(out.stdout)
+      if (typeof socketPath !== 'string' || socketPath === '') return { wait: RETRY_MS }
+      return { socketPath, settingsPath, devicesSocket: typeof devicesSocket === 'string' ? devicesSocket : '', launcher }
     } catch {
       return { wait: RETRY_MS }
     }
@@ -61,18 +141,24 @@ async function socketOf($) {
   return { wait: RETRY_MS }
 }
 
-/** @typedef {{ socketPath: string, settingsPath: string }} Linked */
+/**
+ * The launcher's answer: the daemon's socket, the devices' ('' when it printed none), and the launcher that answered.
+ * @typedef {{ socketPath: string, settingsPath: string, devicesSocket: string, launcher: string }} Linked
+ */
 
 /**
  * One poll, and the next from a timer, even one due at once: a reload cancels the module's timers, so no poll of the old
  * copy goes on beside the new one's. With the plugin off, the launcher is asked again, and answers off.
  * @param {Engine} $
+ * @param {State} state
  * @param {Linked} linked
  */
-async function poll($, linked) {
+async function poll($, state, linked) {
   const wait = await pollOnce($, linked).catch(() => RETRY_MS)
-  if (wait === null) $.clock.after(0, () => void link($))
-  else $.clock.after(wait, () => void poll($, linked))
+  if (wait === null) {
+    state.linked = null
+    $.clock.after(0, () => void link($, state))
+  } else $.clock.after(wait, () => void poll($, state, linked))
 }
 
 /**
