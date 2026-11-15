@@ -14,6 +14,7 @@ interface View {
   agentId: string
   sessionId: string
   identity: string
+  profileIdentity: string
   revision: number
   authority: number
   state: RuntimeState
@@ -36,6 +37,8 @@ export interface RuntimeStage {
 
 const binding = (s: RegisteredSession | undefined): string => s ? JSON.stringify([transcriptReadIdentity(s), s.cwd, !!s.gateway,
   s.active, s.hermesHome, s.tmuxPane, s.primaryRuntimeKey, s.runtimes]) : ''
+// A reader outage revokes authority without changing which native process/conversation supplied the displayed facts.
+const profileIdentity = (s: RegisteredSession): string => binding({ ...s, identityHold: undefined, evidenceRevision: undefined })
 // With the model and effort its process was launched with: an engine whose flags outrank its settings reads its configured
 // effort from them (claude/runtimeProfile.ts).
 const snapshot = (s: RegisteredSession): RuntimeSession => {
@@ -80,8 +83,16 @@ export function createRuntimeSessions(deps: RuntimeSessionDeps) {
     // A delayed caller holding the old binding must not evict a newer accepted view.
     if (stopped || identity !== binding(deps.resolve(s.agentId))) unavailable()
     if (previous?.identity === identity) return previous
+    const retained = profileIdentity(s)
+    if (previous?.profileIdentity === retained) {
+      previous.revision++; previous.authority++; previous.control = undefined
+      previous.identity = identity
+      wake(previous.sessionId)
+      return previous
+    }
     if (previous) forget(previous.agentId)
-    const view: View = { agentId: s.agentId, sessionId: s.sessionId, identity, revision: 0, authority: 0, state: blankRuntimeState(), selected: null }
+    const view: View = { agentId: s.agentId, sessionId: s.sessionId, identity, profileIdentity: retained,
+      revision: 0, authority: 0, state: blankRuntimeState(), selected: null }
     views.set(s.agentId, view)
     return view
   }
@@ -90,7 +101,9 @@ export function createRuntimeSessions(deps: RuntimeSessionDeps) {
     const session = deps.resolve(id)
     if (!session) return undefined
     const view = views.get(session.agentId)
-    return view && valid(view) ? view : undefined
+    if (!view) return undefined
+    if (valid(view)) return view
+    return view.profileIdentity === profileIdentity(session) ? viewFor(session) : undefined
   }
   const notify = (view: View): void => {
     if (!view.sessionId) return

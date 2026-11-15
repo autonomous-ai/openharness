@@ -57,6 +57,7 @@ fs.writeFileSync(${JSON.stringify(join(d.root, 'cursor.json'))}, JSON.stringify(
 fs.writeFileSync(${JSON.stringify(join(d.root, 'keys.txt'))}, '');
 fs.writeFileSync(${JSON.stringify(join(d.root, 'choices.txt'))}, '');
 let asking = false;
+process.stdout.write('\\x1b[?1049h');
 const idle = text => { process.stdout.write('\\x1b[2J\\x1b[H' + text + '\\nModel 7 High · 1%\\n'); };
 process.stdin.setRawMode(true); process.stdin.setEncoding('utf8'); process.stdin.resume();
 process.stdin.on('data', data => { for (const key of data) {
