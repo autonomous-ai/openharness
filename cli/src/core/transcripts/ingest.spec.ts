@@ -1,38 +1,22 @@
 import { liveFor } from '../../engines/live.js'
 import { EventEmitter } from 'node:events'
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
-import { AgyNormalizer } from '../../engines/agy/normalizer.js'
-import { AmpNormalizer } from '../../engines/amp/normalizer.js'
-import { CommandCodeNormalizer } from '../../engines/commandcode/normalizer.js'
-import { CopilotNormalizer } from '../../engines/copilot/normalizer.js'
-import { CursorNormalizer } from '../../engines/cursor/normalizer.js'
-import { GrokNormalizer } from '../../engines/grok/normalizer.js'
-import { MuseNormalizer } from '../../engines/muse/normalizer.js'
-import { OmpNormalizer } from '../../engines/omp/normalizer.js'
-import { PiNormalizer } from '../../engines/pi/normalizer.js'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { HistoryEvent, LineEvent, RewrittenEvent, Watcher } from '../../watcher/watcher.js'
 import { createIngest, type IngestDeps } from './ingest.js'
 import { createSessionNormalizers } from './normalizers.js'
 import type { LiveFrame } from '../../engines/worker/liveProtocol.js'
-import { engineNow, loadEngine, OTHER_ENGINES } from '../../engines/inProcess.js'
-
-// A test of the line path stands for an attach that has loaded the engines' code before their tails started
-// (core/transcripts/attach.ts); a test may say it is not there.
-vi.mock('../../engines/inProcess.js', async (real) => {
-  const actual = await real<typeof import('../../engines/inProcess.js')>()
-  return { ...actual, engineNow: vi.fn(actual.engineNow) }
-})
-beforeAll(async () => { for (const engine of OTHER_ENGINES) await loadEngine(engine) })
+import type { StreamFrame } from '../../engines/others/streamProtocol.js'
+import { OPENCLAW_STATES } from '../../engines/openclaw/contract.js'
+import { noOtherStreams } from '../../testing/otherStreams.js'
 
 const CODEX_FAILED = JSON.stringify({ type: 'event_msg', payload: { type: 'task_complete', error: { message: 'rate limited' } } })
-const COMMANDCODE_FAILED = JSON.stringify({ type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'Error: 500\nTrace ID: 932a' }] } })
 const CLAUDE_PROMPT = JSON.stringify({ type: 'user', message: { role: 'user', content: 'hello' } })
 
 function setup(engines: Record<string, string>, over: Partial<IngestDeps> = {}) {
   const sessions = new Map(Object.entries(engines).map(([sessionId, engine]) =>
     [sessionId, { agentId: `agent-${sessionId}`, sessionId, engine, transcriptPath: `/t/${sessionId}.jsonl` } as RegisteredSession]))
-  const normalizers = createSessionNormalizers()
+  const normalizers = createSessionNormalizers(noOtherStreams())
   const service = { needsTranscript: vi.fn(() => false), observeTranscript: vi.fn() }
   const deps: IngestDeps = {
     liveFor,
@@ -40,11 +24,13 @@ function setup(engines: Record<string, string>, over: Partial<IngestDeps> = {}) 
     bySession: (sessionId) => sessions.get(sessionId),
     tokenUsage: { changed: vi.fn() },
     device: () => service,
-    runtimeProfiles: { ingest: vi.fn() },
+    runtimeProfiles: { ingest: vi.fn(), evidence: vi.fn() },
     normalizers,
     announceTurnAborted: vi.fn(),
     emit: vi.fn(),
     attachSession: vi.fn(async () => true),
+    setIdentityHold: vi.fn(() => true),
+    announceSession: vi.fn(),
     ...over,
   }
   return { deps, sessions, normalizers, service, ingest: createIngest(deps) }
@@ -145,40 +131,6 @@ describe('ingesting a transcript line', () => {
     expect(vi.mocked(run.deps.emit).mock.calls).toEqual([['s1', expected, { replay: true }]])
   })
 
-  it('creates each file engine\'s normalizer on the session\'s first line, and keeps it', () => {
-    const engines = {
-      cursor: CursorNormalizer, muse: MuseNormalizer, amp: AmpNormalizer, grok: GrokNormalizer,
-      agy: AgyNormalizer, copilot: CopilotNormalizer, pi: PiNormalizer, omp: OmpNormalizer,
-      commandcode: CommandCodeNormalizer,
-    } as const
-    const run = setup(Object.fromEntries(Object.keys(engines).map((engine) => [engine, engine])))
-    const maps = {
-      cursor: run.normalizers.cursorNormalizers, muse: run.normalizers.museNormalizers,
-      amp: run.normalizers.ampNormalizers, grok: run.normalizers.grokNormalizers, agy: run.normalizers.agyNormalizers,
-      copilot: run.normalizers.copilotNormalizers, pi: run.normalizers.piNormalizers, omp: run.normalizers.ompNormalizers,
-      commandcode: run.normalizers.commandcodeNormalizers,
-    } as Record<keyof typeof engines, Map<string, unknown>>
-    for (const [engine, Normalizer] of Object.entries(engines) as Array<[keyof typeof engines, new (...args: never[]) => unknown]>) {
-      expect(run.ingest.ingestLine(line(engine, engine)), engine).toEqual(expect.any(Array))
-      const first = maps[engine].get(engine)
-      expect(first, engine).toBeInstanceOf(Normalizer)
-      run.ingest.ingestLine(line(engine, engine))
-      expect(maps[engine].get(engine), `${engine} keeps its normalizer`).toBe(first)
-    }
-  })
-
-  it('reads no events from a file engine\'s lines while its code is unavailable, and makes no normalizer', () => {
-    const engines = ['cursor', 'muse', 'amp', 'grok', 'agy', 'copilot', 'pi', 'omp', 'commandcode']
-    const run = setup(Object.fromEntries(engines.map((engine) => [engine, engine])))
-    vi.mocked(engineNow).mockReturnValue(null)
-    for (const engine of engines) {
-      expect(run.ingest.ingestLine(line(engine, engine, engine === 'commandcode' ? COMMANDCODE_FAILED : '{}')), engine).toEqual([])
-      expect(run.normalizers.hasState(engine), engine).toBe(false)
-    }
-    expect(run.deps.announceTurnAborted).not.toHaveBeenCalled()
-    vi.mocked(engineNow).mockReset()
-  })
-
   it('creates a live parser once, preserving the terminal fallback', () => {
     const run = setup({ s1: 'claude', s2: 'terminal' })
     const events = run.ingest.ingestLine(line('s1', 'claude', CLAUDE_PROMPT))!
@@ -190,22 +142,18 @@ describe('ingesting a transcript line', () => {
     expect(run.normalizers.liveParsers.has('s2')).toBe(true)
   })
 
-  it('announces the reason a Codex or Command Code turn failed', () => {
-    const run = setup({ cx: 'codex', cc: 'commandcode' })
+  it('announces the reason a Codex turn failed', () => {
+    const run = setup({ cx: 'codex' })
     run.ingest.ingestLine(line('cx', 'codex', CODEX_FAILED))
-    run.ingest.ingestLine(line('cc', 'commandcode', COMMANDCODE_FAILED))
     run.ingest.ingestLine(line('cx', 'codex', '{}'))
-    run.ingest.ingestLine(line('cc', 'commandcode', '{}'))
-    expect(vi.mocked(run.deps.announceTurnAborted).mock.calls).toEqual([
-      ['cx', 'codex', 'rate limited'],
-      ['cc', 'commandcode', 'Error: 500\nTrace ID: 932a', 'Error: 500'],
-    ])
+    expect(vi.mocked(run.deps.announceTurnAborted).mock.calls).toEqual([['cx', 'codex', 'rate limited']])
   })
 
-  it('leaves a database engine to its reader when a file line is delivered for it', () => {
-    const run = setup({ db: 'opencode' })
+  it('reads nothing of another engine\'s line: its worker does (engines/others/streams.ts)', () => {
+    const run = setup({ db: 'opencode', pi: 'pi' })
     expect(run.ingest.ingestLine(line('db', 'opencode', CLAUDE_PROMPT))).toEqual([])
-    expect(run.normalizers.hasState('db')).toBe(false)
+    expect(run.ingest.ingestLine(line('pi', 'pi', CLAUDE_PROMPT))).toEqual([])
+    expect(run.normalizers.hasState('pi')).toBe(false)
   })
 
   it('replaces a parser when the same session id is rebound to another engine', () => {
@@ -282,5 +230,57 @@ describe('the watcher wiring', () => {
     run.watcher.emit('rewritten', rewritten('s1', '/t/s1.jsonl'))
     await new Promise((done) => setTimeout(done, 0))
     expect(error.mock.calls.map((call) => call[1])).toEqual(['pane gone', 'tmux down'])
+  })
+})
+
+describe('a frame of another engine\'s stream', () => {
+  const frame = (over: Partial<StreamFrame> = {}): StreamFrame => ({ serial: 1, events: [{ type: 'text_delta', payload: { content: 'hi' } }],
+    turn: { identity: 't:1', turnOpen: true }, ...over })
+
+  it('takes a file engine\'s as its lines were: counted, its evidence read, its failure said first, its replay kept', () => {
+    const run = setup({ cc: 'commandcode' })
+    const cc = run.sessions.get('cc')!
+    run.ingest.acceptStreamFrame(cc, frame({ failure: 'Error: 500\nTrace ID: 932a', failureSummary: 'Error: 500', evidence: [{ model: 'm' }] }))
+    run.ingest.acceptStreamFrame(cc, frame({ failure: 'plain', replay: true }))
+    run.ingest.acceptStreamFrame(cc, frame({ events: [] }))
+    expect(run.deps.tokenUsage.changed).toHaveBeenCalledTimes(3)
+    expect(run.deps.runtimeProfiles.evidence).toHaveBeenCalledWith(cc, [{ model: 'm' }])
+    expect(vi.mocked(run.deps.announceTurnAborted).mock.calls).toEqual([['cc', 'commandcode', 'Error: 500\nTrace ID: 932a', 'Error: 500'], ['cc', 'commandcode', 'plain']])
+    expect(vi.mocked(run.deps.emit).mock.calls).toEqual([['cc', frame().events], ['cc', frame().events, { replay: true }]])
+  })
+
+  it('takes nothing for a session gone, rebound, unregistered, or held, as a line would', () => {
+    const run = setup({ pi: 'pi', held: 'pi', id: 'pi' }, { has: (id) => id !== 'gone' })
+    run.sessions.get('held')!.interpretationHold = 'held'
+    run.sessions.get('id')!.identityHold = 'held'
+    run.ingest.acceptStreamFrame({ sessionId: 'nobody', engine: 'pi' } as RegisteredSession, frame())
+    run.ingest.acceptStreamFrame({ ...run.sessions.get('pi')!, engine: 'grok' }, frame())
+    run.ingest.acceptStreamFrame(run.sessions.get('held')!, frame())
+    run.ingest.acceptStreamFrame(run.sessions.get('id')!, frame())
+    run.sessions.set('gone', { ...run.sessions.get('pi')!, sessionId: 'gone' })
+    run.ingest.acceptStreamFrame(run.sessions.get('gone')!, frame())
+    expect(run.deps.emit).not.toHaveBeenCalled()
+  })
+
+  it('takes a database engine\'s events as its reader gave them, and sets and clears OpenClaw\'s own holds only', () => {
+    const run = setup({ oc: 'openclaw' })
+    const oc = run.sessions.get('oc')!
+    run.ingest.acceptStreamFrame(oc, frame({ events: [], hold: OPENCLAW_STATES.unsupported }))
+    expect(run.deps.setIdentityHold).toHaveBeenLastCalledWith('agent-oc', OPENCLAW_STATES.unsupported)
+    expect(run.deps.announceSession).toHaveBeenCalledOnce()
+    oc.identityHold = OPENCLAW_STATES.unsupported
+    run.ingest.acceptStreamFrame(oc, frame({ hold: null }))
+    expect(run.deps.setIdentityHold).toHaveBeenLastCalledWith('agent-oc', undefined)
+    // A hold another reason set is that reason's to clear; with no hold there is nothing to clear.
+    oc.identityHold = 'another reason'
+    run.ingest.acceptStreamFrame(oc, frame({ events: [], hold: null }))
+    oc.identityHold = undefined
+    run.ingest.acceptStreamFrame(oc, frame({ events: [], hold: null }))
+    vi.mocked(run.deps.setIdentityHold).mockReturnValueOnce(false)
+    run.ingest.acceptStreamFrame(oc, frame({ events: [], hold: OPENCLAW_STATES.noSessions }))
+    expect(run.deps.setIdentityHold).toHaveBeenCalledTimes(3)
+    expect(run.deps.announceSession).toHaveBeenCalledTimes(2)
+    expect(run.deps.tokenUsage.changed).not.toHaveBeenCalled()
+    expect(vi.mocked(run.deps.emit).mock.calls).toEqual([['oc', frame().events]])
   })
 })
