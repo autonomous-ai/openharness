@@ -2241,8 +2241,10 @@ describe('hook notify posts over the daemon\'s pipe on Windows (W1)', () => {
 
 describe('hook notify: a session outside a pane', () => {
   /** The environment names the hook may send as host hints, and nothing else (spec: The hook). */
-  const HINTS = ['TERM_PROGRAM', '__CFBundleIdentifier', 'HERDR_PANE_ID', 'REX_BLOCK', 'ZELLIJ', 'KITTY_WINDOW_ID',
-    'WEZTERM_PANE', 'ORCA_AGENT_SESSION_ID', 'ORCA_TERMINAL_HANDLE', 'CLAUDE_CODE_HOST_SESSION_ID']
+  const HINTS = ['TERM_PROGRAM', '__CFBundleIdentifier', 'HERDR_PANE_ID', 'REX_BLOCK', 'ZELLIJ', 'TMUX_PANE',
+    'KITTY_WINDOW_ID', 'WEZTERM_PANE', 'ORCA_AGENT_SESSION_ID', 'ORCA_TERMINAL_HANDLE', 'CLAUDE_CODE_HOST_SESSION_ID']
+  /** The names a session outside a pane can set, as many as the hook sends: runHook sets no TMUX_PANE without a pane. */
+  const panelessHints = HINTS.filter((name) => name !== 'TMUX_PANE').slice(0, MAX_HINTS)
   /** The hint names unset, so the environment this test runs in sends none of its own. */
   const noHints = Object.fromEntries(HINTS.map((name) => [name, '']))
   const folder = (prefix: string): string => {
@@ -2293,6 +2295,55 @@ describe('hook notify: a session outside a pane', () => {
       hook_event_name: 'Notification', notification_type: 'permission_prompt', session_id: 'sess-1', cwd: '/w',
     } })
     expect(requests).toEqual([])
+  })
+
+  const own = { tmuxPane: '%7', paneSession: 'mine' }
+  const typed = { hook_event_name: 'UserPromptSubmit', session_id: 'sess-1', cwd: '/w', prompt: 'prompt-secret' }
+  const waits = { hook_event_name: 'Notification', notification_type: 'permission_prompt', session_id: 'sess-1', cwd: '/w' }
+  const urls = (requests: Array<{ url: string }>) => requests.map((request) => request.url)
+
+  it.each(['claude', 'codex'] as const)('%s in a tmux pane the person opened posts to /api/hook/observed with TMUX_PANE, and registers nothing', async (engine) => {
+    const { port, requests } = await collect()
+    await runHook({ port, engine, ...own, env: noHints, codexHome: folder('adapter-hook-own-codex-'), input: typed })
+    expect(urls(requests)).toEqual(['/api/hook/observed'])
+    expect(requests[0].body).toMatchObject({ engine, sessionId: 'sess-1', event: 'turn-start', callerPid: process.pid })
+    expect(requests[0].body.hostHints).toEqual({ TMUX_PANE: '%7' })
+    expect(JSON.stringify(requests[0].body)).not.toContain('prompt-secret')
+  })
+
+  it('its Notification is told, as a paneless session\'s is', async () => {
+    const { port, requests } = await collect()
+    await runHook({ port, ...own, env: noHints, input: waits })
+    expect(requests.map((request) => [request.url, request.body.event])).toEqual([['/api/hook/observed', 'needs-input']])
+  })
+
+  // The recorded prompt, as 'hook notify terminal scope' sends it.
+  it.each([
+    ['a Harness pane', { paneSession: 'harness-claude-1790000000000' }],
+    ['a pane another daemon tagged', { paneSession: 'mine', paneOwner: 'abcdef0123456789' }],
+    ['a pane in a session an older build named', { paneSession: 'claude-1790000000000' }],
+    ['a pane tmux cannot describe', {}],
+  ])('%s is in a pane, as before: its prompt goes to the daemon, its Notification nowhere', async (_what, pane) => {
+    const { port, requests } = await collect()
+    const recorded = JSON.parse(readFileSync(new URL('./lib/__fixtures__/prompt-hooks.json', import.meta.url), 'utf8')).claude.input
+    await runHook({ port, tmuxPane: '%7', ...pane, input: recorded })
+    await runHook({ port, tmuxPane: '%7', ...pane, input: waits })
+    expect(urls(requests)).toEqual(['/api/hook/session-start'])
+  })
+
+  // The shipped budget, so tmux's step limit is its 2 s: the shim answers after 3.
+  it('tmux too slow to answer: a Notification in a pane is still told to nobody', async () => {
+    const { port, requests } = await collect()
+    await runHook({ port, ...own, tmuxDelaySeconds: 3, env: { HARNESS_HOOK_DEADLINE_MS: '4500' }, input: waits })
+    expect(requests).toEqual([])
+  })
+
+  it('sends the first MAX_HINTS of the names set, in the list\'s order', async () => {
+    const { port, requests } = await collect()
+    const set = Object.fromEntries(HINTS.filter((name) => name !== 'TMUX_PANE').map((name, index) => [name, `hint-${index}`]))
+    await runHook({ port, ...own, env: set, input: typed })
+    expect(HINTS.length).toBeGreaterThan(MAX_HINTS)
+    expect(Object.keys(requests[0].body.hostHints as object)).toEqual(HINTS.slice(0, MAX_HINTS))
   })
 
   it('paneless codex subagent posts nothing', async () => {
@@ -2375,32 +2426,33 @@ describe('hook notify: a session outside a pane', () => {
 
   it('hostHints carries only the allowlist, ORCA_TERMINAL_HANDLE and CLAUDE_CODE_HOST_SESSION_ID among it: ORCA_PAIRING_CODE and ORCA_AGENT_SESSION_SPAWN_TOKEN set in the env are absent from the body', async () => {
     const { port, requests } = await collect()
-    const allowed: Record<string, string> = Object.fromEntries(HINTS.map((name, index) => [name, `hint-${index}`]))
+    const allowed: Record<string, string> = Object.fromEntries(panelessHints.map((name, index) => [name, `hint-${index}`]))
     await runHook({
       port,
       env: { ...allowed, ORCA_PAIRING_CODE: 'pairing-secret', ORCA_AGENT_SESSION_SPAWN_TOKEN: 'spawn-secret', ORCA_OTHER: 'other-secret' },
       input: { hook_event_name: 'UserPromptSubmit', session_id: 'sess-1', cwd: '/w', prompt: 'prompt-secret' },
     })
     expect(requests.map((request) => request.url)).toEqual(['/api/hook/observed'])
-    // Every name, all set at once: the core takes as many as the list holds (core/observedHook.ts), so none is cut.
+    // Every name a session outside a pane sets, all at once: the hook sends no more than the core takes
+    // (core/observedHook.ts), so none is cut.
     expect(requests[0].body.hostHints).toEqual(allowed)
     expect(JSON.stringify(requests[0].body)).not.toMatch(/PAIRING|SPAWN|ORCA_OTHER|secret/)
   })
 
   // The core reads 4096 bytes of a body at most (hookServer.ts): with every field at its bound, nothing is left out.
-  // The core refuses an event with more hints than it takes (core/observedHook.ts): every name set must still be taken,
-  // and the core takes no more than an honest hook sends.
-  it('lists as many hint names as the core takes', () => {
+  // The core refuses an event with more hints than it takes (core/observedHook.ts): the hook's list holds more names,
+  // and it sends the first that number of those set.
+  it('lists its hint names in this order, and sends no more than the core takes', () => {
     const literal = /const HOST_HINTS = \[([^\]]*)\]/.exec(readFileSync(HOOK, 'utf8'))?.[1]
     expect(literal, 'HOST_HINTS in hook/notify.mjs').toBeDefined()
     const listed = [...literal!.matchAll(/'([^']+)'/g)].map((match) => match[1])
     expect(listed).toEqual(HINTS)
-    expect(listed).toHaveLength(MAX_HINTS)
+    expect(Number(/const MAX_HINTS = (\d+)/.exec(readFileSync(HOOK, 'utf8'))?.[1])).toBe(MAX_HINTS)
   })
 
   it('the largest body the hook can build is under 4096 bytes', async () => {
     const { port, requests } = await collect()
-    const hints = Object.fromEntries(HINTS.map((name) => [name, 'h'.repeat(64)]))
+    const hints = Object.fromEntries(panelessHints.map((name) => [name, 'h'.repeat(64)]))
     const path = `/${'d'.repeat(1023)}`
     await runHook({ port, env: hints, input: { hook_event_name: 'Stop', session_id: 's'.repeat(128), cwd: path, transcript_path: path } })
     expect(requests).toHaveLength(1)
@@ -2463,7 +2515,7 @@ describe('hook notify: a session outside a pane', () => {
 
   it('a relayed body with every field at its bound keeps relayed and is under 4096 bytes', async () => {
     const { port, requests } = await collect()
-    const hints = Object.fromEntries(HINTS.map((name) => [name, 'h'.repeat(64)]))
+    const hints = Object.fromEntries(panelessHints.map((name) => [name, 'h'.repeat(64)]))
     const path = `/${'d'.repeat(1023)}`
     await runHook({ port, env: hints, input: {
       hook_event_name: 'UserPromptSubmit', session_id: 's'.repeat(128), cwd: path, transcript_path: path,
@@ -2521,7 +2573,7 @@ describe('hook notify: a session outside a pane', () => {
   it('leaves out cwd too when the body is still over 4096 bytes', async () => {
     const { port, requests } = await collect()
     const long = `/${'日'.repeat(1000)}`
-    const wide = Object.fromEntries(HINTS.map((name) => [name, '日'.repeat(64)]))
+    const wide = Object.fromEntries(panelessHints.map((name) => [name, '日'.repeat(64)]))
     await runHook({ port, env: wide, input: { hook_event_name: 'Stop', session_id: 'sess-1', cwd: long, transcript_path: long } })
     expect(requests).toHaveLength(1)
     expect(requests[0].body).not.toHaveProperty('transcriptPath')
@@ -2585,7 +2637,7 @@ describe('hook notify: a session outside a pane', () => {
     const narrow = await posted(input)
     expect(narrow).not.toHaveProperty('transcriptPath')
     expect(narrow).toMatchObject({ cwd: long, title: '日'.repeat(64) })
-    const wide = Object.fromEntries(HINTS.map((name) => [name, '日'.repeat(64)]))
+    const wide = Object.fromEntries(panelessHints.map((name) => [name, '日'.repeat(64)]))
     const body = await posted(input, wide)
     expect(body).not.toHaveProperty('transcriptPath')
     expect(body).not.toHaveProperty('cwd')
@@ -2594,7 +2646,7 @@ describe('hook notify: a session outside a pane', () => {
   })
 
   it('a body with every field at its bound keeps its title and both paths', async () => {
-    const hints = Object.fromEntries(HINTS.map((name) => [name, 'h'.repeat(64)]))
+    const hints = Object.fromEntries(panelessHints.map((name) => [name, 'h'.repeat(64)]))
     const path = `/${'d'.repeat(1023)}`
     const body = await posted({
       hook_event_name: 'UserPromptSubmit', session_id: 's'.repeat(128), cwd: path, transcript_path: path,
