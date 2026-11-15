@@ -9,7 +9,7 @@ import { homedir, tmpdir, userInfo } from 'os'
 import { env } from '../config/env.js'
 import { findCursorTranscript } from '../engines/cursor/discovery.js'
 import { cursorConfigDir, cursorDataDir } from '../engines/cursor/home.js'
-import { cursorRuntimeBin, opencodeBin } from './engineBin.js'
+import { cursorRuntimeBin, opencodeBinAsync } from './engineBin.js'
 import {
   DisposableOneShotPool,
   type ActiveEngineCounts,
@@ -474,13 +474,13 @@ class OpencodeWorker extends ProcessWorker {
     onAbort: () => void
   } | null = null
 
-  constructor(model?: string) {
+  constructor(binary: string, model?: string) {
     // `opencode run` reads the prompt from stdin (pipe → EOF), so the worker can be pre-warmed and fed
     // the prompt later. `--pure` skips external plugins (so the machine discovery plugin never
     // self-registers this ephemeral recap session). `--format json` streams `{type:'text',part:{text}}`.
     mkdirSync(OPENCODE_RECAP_DATA_DIR, { recursive: true, mode: 0o700 })
     const { args, env: processEnv } = opencodeOneShotSpawn(model, oneShotParentEnv(), OPENCODE_RECAP_DATA_DIR)
-    const child = spawnTied(opencodeBin(), args, {
+    const child = spawnTied(binary, args, {
       cwd: OPENCODE_RECAP_DATA_DIR, env: processEnv, ...ownProcessGroup(), stdio: ['pipe', 'pipe', 'pipe'],
     })
     super(child)
@@ -880,7 +880,7 @@ function createOneShotWorker(
             ? new CommandCodeWorker(cwd, model).ready()
             : engine === 'kilo'
               ? new KiloWorker(model).ready()
-              : new OpencodeWorker(model).ready()
+              : opencodeBinAsync().then(binary => new OpencodeWorker(binary, model).ready())
 }
 
 /** The measured Grok 1.0.0 headless invocation. A fresh GROK_HOME contains every persisted session. */

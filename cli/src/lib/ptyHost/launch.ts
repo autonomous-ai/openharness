@@ -3,7 +3,7 @@
  * and starting one when there is none. In production harnessd keeps the host running (sub-project B); this is how the
  * daemon gets one without it, in development and tests.
  */
-import { execFileSync, spawn } from 'node:child_process'
+import { execFile, execFileSync, spawn } from 'node:child_process'
 import { accessSync, constants, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
 import net from 'node:net'
 import path from 'node:path'
@@ -175,55 +175,105 @@ export interface PtyHostBinaryVersion { version: string; protocol: number; featu
 /** `binaryVersion`'s, with whether the build is from before features (and so before versioned instances). */
 type ReadVersion = PtyHostBinaryVersion & { legacy: boolean }
 
-/** `binaryVersion`'s answers, by path: kept while the file's mtime is the same, so each build is run once. */
-const versions = new Map<string, { mtimeMs: number; value: ReadVersion }>()
+/** At most 32 installed builds; a replacement at the same path invalidates its answer. */
+const versions = new Map<string, { stamp: string; value: ReadVersion }>()
+const versionFlights = new Map<string, Promise<ReadVersion | null>>()
+
+function binaryStamp(binary: string): string | null {
+  try {
+    const stat = statSync(binary, { bigint: true })
+    return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`
+  } catch { return null }
+}
+
+function parsedVersion(parsed: unknown): ReadVersion | null {
+  if (!parsed || typeof parsed !== 'object') return null
+  const value = parsed as Record<string, unknown>, features = value.features
+  if (typeof value.version !== 'string' || !value.version || !Number.isSafeInteger(value.protocol)
+    || (value.protocol as number) < 1 || (features !== undefined
+      && (!Array.isArray(features) || !features.every(name => typeof name === 'string')))) return null
+  return { version: value.version, protocol: value.protocol as number,
+    features: features === undefined ? [] : [...features as string[]], legacy: features === undefined }
+}
+
+function keepVersion(key: string, stamp: string, value: ReadVersion): void {
+  if (versions.size >= 32 && !versions.has(key)) versions.delete(versions.keys().next().value!)
+  versions.set(key, { stamp, value })
+}
 
 function readBinaryVersion(binary: string): ReadVersion | null {
-  const key = path.resolve(binary)
-  let mtimeMs: number
-  try {
-    mtimeMs = statSync(key).mtimeMs
-  } catch {
-    return null
-  }
+  const key = path.resolve(binary), stamp = binaryStamp(key)
+  if (!stamp) return null
   const known = versions.get(key)
-  if (known && known.mtimeMs === mtimeMs) return known.value
-  let value: ReadVersion | null = null
+  if (known?.stamp === stamp) return known.value
   try {
-    // Synchronous: once per build.
-    const parsed = JSON.parse(runVersionCommand(binary).trim()) as Record<string, unknown> | null
-    const features = parsed?.features
-    if (
-      parsed && typeof parsed === 'object'
-      && typeof parsed.version === 'string' && parsed.version !== ''
-      && Number.isSafeInteger(parsed.protocol) && (parsed.protocol as number) >= 1
-      && (features === undefined || (Array.isArray(features) && features.every((name) => typeof name === 'string')))
-    ) {
-      value = {
-        version: parsed.version, protocol: parsed.protocol as number,
-        features: features === undefined ? [] : [...features as string[]], legacy: features === undefined,
-      }
-    }
-  } catch {
-    // Did not run, timed out, or said something else: no version. Asked again next time.
+    const value = parsedVersion(JSON.parse(runVersionCommand(binary).trim()))
+    if (value && stamp === binaryStamp(key)) { keepVersion(key, stamp, value); return value }
+  } catch { /* CLI-only compatibility probe: unknown, retried next time. */ }
+  return null
+}
+
+function readBinaryVersionAsync(binary: string): Promise<ReadVersion | null> {
+  const key = path.resolve(binary), stamp = binaryStamp(key)
+  if (!stamp) return Promise.resolve(null)
+  const known = versions.get(key)
+  if (known?.stamp === stamp) return Promise.resolve(known.value)
+  const flight = versionFlights.get(key)
+  if (flight) return flight
+  if (versionFlights.size >= 4) {
+    console.error('[terminal] PTY_VERSION_BUSY: target unknown')
+    return Promise.resolve(null)
   }
-  if (value) versions.set(key, { mtimeMs, value })
-  return value
+  const reading = probeVersionLine(binary).then(parsed => {
+    const value = parsedVersion(parsed)
+    if (!value || binaryStamp(key) !== stamp) {
+      console.error('[terminal] PTY_VERSION_CHANGED_OR_INVALID: target unknown')
+      return null
+    }
+    keepVersion(key, stamp, value)
+    return value
+  }, () => {
+    console.error('[terminal] PTY_VERSION_UNAVAILABLE: target unknown')
+    return null
+  }).finally(() => { versionFlights.delete(key) })
+  versionFlights.set(key, reading)
+  return reading
+}
+
+/** Shared by target discovery and the updater canary. Completion never depends on inherited stdout closing. */
+export function probeVersionLine(binary: string): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    let child: ReturnType<typeof execFile> | undefined, settled = false
+    const finish = (error?: Error, stdout?: string): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      if (error) { child?.kill('SIGKILL'); child?.stdout?.destroy(); child?.stderr?.destroy(); reject(error); return }
+      try { resolve(JSON.parse(String(stdout).trim().split(/\r?\n/).filter(Boolean).pop() ?? '')) }
+      catch (error) { reject(error) }
+    }
+    const timer = setTimeout(() => finish(new Error('PTY_VERSION_TIMEOUT')), VERSION_TIMEOUT_MS)
+    try {
+      child = execFile(binary, [...VERSION_COMMAND.args], {
+        ...VERSION_COMMAND.options, killSignal: 'SIGKILL', maxBuffer: 64 * 1024,
+      }, (error, stdout) => finish(error ?? undefined, String(stdout)))
+      child.stdin?.end()
+    } catch { finish(new Error('PTY_VERSION_START_FAILED')) }
+  })
 }
 
 /**
  * How this CLI asks a PTY build what it is: `<binary> version`, an argument array so no shell reads the path, hidden
- * so no console flashes on Windows, within 5 s. One definition for `runVersionCommand` here (synchronous, the daemon's
- * `binaryVersion`) and the payload canary's asynchronous run (lib/windows/ptyPayload.ts `probeVersionLine`), which must
- * never block the updater's event loop.
+ * so no console flashes on Windows, within 5 s. Shared by the CLI-only synchronous `binaryVersion` and the
+ * asynchronous target/canary probe. The core never calls the synchronous version reader.
  */
-export const VERSION_COMMAND = {
+const VERSION_COMMAND = {
   args: ['version'] as readonly string[],
   options: { encoding: 'utf8', timeout: VERSION_TIMEOUT_MS, windowsHide: true } as const,
 }
 
 /** What `<binary> version` prints, or a throw when it fails to run, exits non-zero or takes longer than 5 s. */
-export function runVersionCommand(binary: string): string {
+function runVersionCommand(binary: string): string {
   return execFileSync(binary, [...VERSION_COMMAND.args], { ...VERSION_COMMAND.options, stdio: ['ignore', 'pipe', 'ignore'] })
 }
 
@@ -276,10 +326,10 @@ export interface PtyHostTarget {
  * in `current-pty` without the CLI build that needs it (spec §5, the pairing rule), which `ensurePtyHost` would only
  * find incompatible. Unknown, the daemon takes the newest running host it speaks, as it did before targets.
  */
-export function targetHost(options: PtyHostBinaryOptions = {}): PtyHostTarget | null {
+export async function targetHost(options: PtyHostBinaryOptions = {}): Promise<PtyHostTarget | null> {
   const binary = ptyHostBinary(options)
   if (!binary) return null
-  const read = readBinaryVersion(binary)
+  const read = await readBinaryVersionAsync(binary)
   if (!read) return null
   if (!SUPPORTED_PTY_PROTOCOLS.includes(read.protocol)) {
     const key = `${path.resolve(binary)}\u0000${read.version}`

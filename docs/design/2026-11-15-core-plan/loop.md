@@ -194,6 +194,60 @@ Both still run in the core on main (checked 15 November):
   discovery runs every pass. Measure before and after with the e2e profile (`tools/longblocks.mjs`).
 - Platforms: the login shell is macOS and Linux; `harness-pty` is Windows only (test it on Windows, or say why not).
 
+#### Step 3 design (15 November)
+
+Discovery must await its first complete ownership lookup without blocking other sessions. The synchronous
+compatibility helpers remain for pure callers; the core's terminal scan, pane lookup and native ownership read
+use bounded asynchronous filesystem work, deduplicated within each lookup, with no retained executable identity.
+Up to 128 directory generations cache candidate names only, at most 16,384 entries read per changed directory;
+larger/unreadable directories use the fixed command list. Positive candidates revalidate every pass, including
+chmod and symlink targets. A missing directory is checked again on the next pass.
+Discovery shares OpenCode's existing asynchronous PATH capture. It retains bash -ic / zsh -lic; the separate
+one-shot credential capture stays -lic, preserving which startup files run. Each capture is single-flight and
+limited to 5 seconds (PATH 64 KiB, credentials 1 MiB); changed shell/PATH invalidates it. A failed capture
+keeps daemon PATH and emits a named failure. PTY target discovery awaits the existing asynchronous version probe,
+with a hard deadline, bounded shared flights/cache and executable identity checked before publishing an answer.
+
+Design: no new stored or transmitted data. Growth is bounded transient work and cache only; no migration or
+rollback is needed. Concurrency is one shell capture and bounded filesystem/version probes. Reads inspect only
+configured command candidates, never a filesystem tree. The same discovery workload records loop delay and CPU
+before/after; timeout tests prove hung children cannot hold core. Published protocols and the last 30 days of
+clients are unchanged. All execution uses the daemon's existing account; no new audience or credentials.
+Failures remain unknown rather than evidence that a process died. Platforms: shell on macOS/Linux, hidden PTY
+probe on Windows; local validation on macOS, Windows-specific options checked in tests, native Windows recorded
+separately when available.
+
+Step 3 review (local commits `f3ca1c2857`, `d8041621e3`): the cached directory sets contain only requested command
+names, never unrelated entries. The Windows Hermes launcher uses the shared extension order with asynchronous
+checks too. A synchronous reader's old shell flight cannot answer a lookup for a changed PATH. Native conversation
+proof keeps its existing remaining 3-second budget while shared ownership work has its own deadline; expiration is
+unavailable evidence. Those four regressions were reproduced red, then 81 related tests passed. The earlier affected
+set passed 440 tests (6 platform/opt-in skips). The core, PTY, shell, architecture/lean-entry and isolated resume gates
+apply to the final integrated head; their results belong to its exact-head PR receipt. Publication and integration
+remain the coordinator's.
+
+Matched probe workload (`tools/probes-bench.mts`, Node 24.22.2, macOS, private home, 48 PATH directories), exact
+2458 source plus its package/TypeScript metadata versus integrated 055ad source: 100 ownership snapshots took
+1,281 -> 261 ms wall and 1,335 -> 412 ms core CPU; longest loop hold 18.3 -> 3.6 ms. A cold 200 ms fixture shell
+held the loop 980 -> 2.8 ms (wall 980 -> 788 ms); three 200 ms PTY version children held it 563 -> 2.2 ms
+(wall 1,633 -> 1,624 ms). PTY CPU was 35 -> 51 ms, not an improvement: the now-responsive 1 ms observer ran
+1,358 times instead of 6, and its cost is included. No native Windows performance claim is made.
+An earlier async-access implementation increased ownership CPU and was rejected; the directory-name cache above
+is the measured fix. Core footprint at the original base: 539 files / 92,700 lines.
+
+#### Step 3 acceptance checkpoint
+
+The async probes are implemented in PR #4339; final integration/CI and merge remain. At clean `c3609c1276`,
+the official runner passed 4,455 core tests with 100% per-file coverage, all 14 real terminal-contract cases
+(including the locally built native macOS PTY), and ten real-shell startup cases. Newly combined process identity,
+discovery and architecture checks passed 49 tests; typecheck passed. Native Windows execution is not claimed.
+An initial runner invocation incorrectly supplied two worker-count flags to the terminal suite; its incomplete
+receipt was discarded, the invocation corrected, and the actual complete runner passed at unchanged source.
+
+Main `5fa7b95762` is integrated; its app adapters do not change probe runtime or the native PTY source. Final
+exact-head receipts belong in the PR. The matched performance above remains tied to its stated runtime and
+environment. Registry lock/save and creation-receipt retention are separate, unfinished steps.
+
 ### PR 4 (core-loop-4): the registry save never sleeps the loop
 
 - `lib/registry.ts:492-601` `withRegistryFileLock`: `mkdir` lock dir + `owner.json` (fsync), on `EEXIST` it waits with
