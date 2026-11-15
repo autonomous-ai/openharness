@@ -70,7 +70,7 @@ idle('fixture-cursor-ready');
     await d.start()
     const c = client = await LocalClient.connect(d)
     const cwd = join(d.projectsDir, 'cursor'); mkdirSync(cwd, { recursive: true })
-    const created = await c.request('agent_create', { engine: 'cursor', cwd }, 60_000)
+    const created = await c.request('agent_create', { engine: 'cursor', cwd, permissionMode: 'ask', bypassPermission: false }, 60_000)
     expect(created.error, JSON.stringify(created)).toBeUndefined()
     const id = created.agent.id as string
     const pane = await until('Cursor pane created', async () => (await row(c, id))?.tmuxPane
