@@ -914,6 +914,25 @@ describe('the dial with no window: this computer\'s agents', () => {
       expect(vi.mocked(w.opened!).mock.calls).toEqual([['mine', 'h1']])
     })
 
+    // `open -b` that fails or runs out its time after the window came: the window has the open, and a later tap's own
+    // answer is its own.
+    it('a tap no longer waiting is answered nothing when Desktop\'s start fails', async () => {
+      const starts: Array<(ok: boolean) => void> = []
+      const { host, w } = await setup({ launchDesktop: () => new Promise<boolean>((resolve) => { starts.push(resolve) }) })
+      const taken = host.openAgent('h1')
+      onTab(host, [])
+      starts[0](false)
+      expect(await taken).toBeUndefined()
+      expect(vi.mocked(w.opened!).mock.calls).toEqual([['mine', 'h1']])
+      host.setSwarms(null)
+      const first = host.openAgent('h1')
+      const last = host.openAgent('h2')
+      starts[1](false)
+      expect(await first).toBeUndefined()
+      starts[2](false)
+      expect(await last).toEqual({ ok: false, error: 'Harness did not open it.' })
+    })
+
     it('no window in HARNESS_OPEN_WAIT_MS: the open ends, and is said once', async () => {
       const { host, w, timers } = await setup()
       await host.openAgent('h1')
