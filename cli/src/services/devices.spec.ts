@@ -154,6 +154,7 @@ const readers = vi.hoisted(() => ({
   answer: vi.fn(async (..._args: unknown[]): Promise<string | undefined> => undefined),
   apps: vi.fn(async (_pids: readonly number[]) => new Map<number, string>()),
   name: vi.fn(async (..._args: unknown[]): Promise<string | undefined> => undefined),
+  processes: vi.fn(async () => [] as Array<{ pid: number; ppid: number; executable: string }>),
 }))
 vi.mock('../lib/sessionSearch/external.js', async (real) => ({
   ...await real<typeof import('../lib/sessionSearch/external.js')>(),
@@ -178,8 +179,13 @@ vi.mock('../lib/sessionSearch/externals/support.js', async (real) => ({
   processAlive: () => true,
   fileStamp: async () => null,
 }))
-// Which app each session found runs in: from the made-up owners above, never this machine's processes.
-vi.mock('../cable/hosts/scannedApp.js', () => ({ learnApps: readers.apps }))
+// Which app each session found runs in, and the process table a tap on a tmux pane checks: made up, never this machine's
+// processes.
+vi.mock('../cable/hosts/scannedApp.js', async (real) => ({
+  ...await real<typeof import('../cable/hosts/scannedApp.js')>(),
+  learnApps: readers.apps,
+  readProcessNames: readers.processes,
+}))
 // The name in a session's own process record: never this machine's ~/.claude.
 vi.mock('../cable/hosts/recordName.js', () => ({ readRecordName: readers.name }))
 vi.mock('../cable/hosts/lastAnswer.js', async (real) => ({
@@ -221,6 +227,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   readers.answer.mockResolvedValue(undefined)
   readers.name.mockResolvedValue(undefined)
+  readers.processes.mockResolvedValue([])
 })
 afterEach(() => {
   rmSync(dataDir, { recursive: true, force: true })
@@ -2040,6 +2047,50 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     expect(await host().openAgent(ID)).toBeUndefined()
     expect(orcaRuns.slice(2)).toEqual([link])
     expect(logs.filter((line) => line.includes(SESSION) || line.includes('sess-1'))).toEqual([])
+  })
+
+  it('an agent in the person\'s own tmux lists f, and its tap checks the pane\'s process, then switches the person\'s client', async () => {
+    readers.processes.mockResolvedValue([{ pid: 4242, ppid: 4000, executable: 'claude' }, { pid: 4000, ppid: 1, executable: 'zsh' }])
+    const says = ['4000\n', '9999\n']
+    // A Harness terminal used last, and the person's own client.
+    const clients = '1794700100|client-501|abcdef0123456789|harness-claude-1790000000000-x\n1794700050|/dev/ttys004||work\n'
+    const { port } = startHere({ orca: { ...mac, run: async (file, args, timeoutMs) => {
+      orcaRuns.push([file, args, timeoutMs])
+      return { code: 0, stdout: args[0] === 'display-message' ? says.shift()! : args[0] === 'list-clients' ? clients : '' }
+    } } })
+    // Warp is no tab app: no tty is read.
+    port.observed(hook('session-start', { hostHints: { TMUX_PANE: '%3', TERM_PROGRAM: 'tmux', __CFBundleIdentifier: 'dev.warp.Warp-Stable' } }))
+    attach(port)
+    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
+    expect(await host().openAgent(ID)).toBeUndefined()
+    const asked: [string, string[], number] = ['tmux', ['display-message', '-p', '-t', '%3', '#{pane_pid}'], 10_000]
+    const clientsAsked: [string, string[], number] = ['tmux', ['list-clients', '-F', '#{client_activity}|#{client_name}|#{@harness_daemon}|#{session_name}'], 10_000]
+    const warp: [string, string[], number] = ['/usr/bin/open', ['-b', 'dev.warp.Warp-Stable'], 10_000]
+    expect(orcaRuns).toEqual([asked, clientsAsked, ['tmux', ['switch-client', '-c', '/dev/ttys004', '-t', '%3'], 10_000], warp])
+    expect(said()).toEqual([])
+    // The pane holds another process now: nothing is listed or switched.
+    expect(await host().openAgent(ID)).toBeUndefined()
+    expect(orcaRuns.slice(4)).toEqual([asked, warp])
+    expect(said()).toEqual(['[device] open · tmux · not its pane'])
+  })
+
+  // The order the panes are asked in: a tmux server keeps the environment it started in, so in its pane WezTerm's and
+  // Orca's values name the terminal the server began in.
+  it('a tap takes herdr\'s pane before tmux\'s, and tmux\'s before WezTerm\'s and Orca\'s', async () => {
+    readers.processes.mockResolvedValue([{ pid: 4242, ppid: 4000, executable: 'claude' }, { pid: 4000, ppid: 1, executable: 'zsh' }])
+    const { port } = startHere({ orca: { ...mac, run: async (file, args, timeoutMs) => {
+      orcaRuns.push([file, args, timeoutMs])
+      return { code: 0, stdout: args[0] === 'display-message' ? '4000\n' : args[0] === 'list-clients' ? '1794700050|/dev/ttys004||work\n' : '' }
+    } } })
+    const around = { WEZTERM_PANE: '7', ORCA_TERMINAL_HANDLE: HANDLE, __CFBundleIdentifier: 'dev.warp.Warp-Stable' }
+    port.observed(hook('session-start', { hostHints: { TMUX_PANE: '%3', ...around } }))
+    attach(port)
+    expect(await host().openAgent(ID)).toBeUndefined()
+    expect(orcaRuns.map(([, args]) => args[0])).toEqual(['display-message', 'list-clients', 'switch-client', '-b'])
+    orcaRuns.length = 0
+    port.observed(hook('session-start', { hostHints: { HERDR_PANE_ID: 'w1:p2', TMUX_PANE: '%3', ...around } }))
+    expect(await host().openAgent(ID)).toBeUndefined()
+    expect(orcaRuns.map(([, args]) => args.slice(0, 2))).toEqual([['agent', 'focus'], ['-b', 'dev.warp.Warp-Stable']])
   })
 
   // A swipe that rests on an agent in an Orca terminal shows its pane, and Orca stays where it is.

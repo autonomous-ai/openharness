@@ -10,6 +10,7 @@ import { askedLine, observedAgentId, type ObservedActions, ObservedSource, type 
 import type { OpenTarget } from './open.js'
 import { createOrcaAdapter, type OrcaDeps } from './orca.js'
 import { createTabsAdapter, type TabApp } from './tabs.js'
+import { createTmuxAdapter } from './tmux.js'
 import type { PaneSwitch } from './types.js'
 import { createWeztermAdapter } from './wezterm.js'
 
@@ -909,6 +910,7 @@ function fakeActions(over: Partial<Fakes> = {}, platform: NodeJS.Platform = 'dar
   const claude = createClaudeAppAdapter({ ...deps, inFront: () => fake.claudeInFront() })
   const adapters: HostAdapter[] = [
     createHerdrAdapter(deps),
+    createTmuxAdapter({ run: ran, processes: async () => [], log: () => {} }),
     createWeztermAdapter(deps),
     { ...orca, type: (pane, text) => fake.orcaSend(pane.id, text), show: (pane) => fake.orcaSwitch(pane.id) },
     { ...claude, show: (pane, agentId) => fake.claudeShow(agentId, pane.id) },
@@ -1333,6 +1335,15 @@ describe('ObservedSource actions', () => {
     await src.send(agent('none'), 'x')
     expect(counted(actions.count)).toEqual(['mod', 'orca', 'busy', 'waiting', 'too-long', 'no-answer'])
   })
+
+  it('the pane a tap opens is its latest event\'s, with that event\'s process', async () => {
+    const { actions } = fakeActions()
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('session-start', { callerPid: 100, hostHints: { TMUX_PANE: '%3' } }))
+    src.ingest(ev('session-start', { callerPid: 200, hostHints: { TMUX_PANE: '%9' } }))
+    expect(await src.focus(src.list()[0])).toBe(true)
+    expect(actions.open.mock.calls).toEqual([[src.list()[0].id, { pane: { adapter: 'tmux', id: '%9:200' } }]])
+  })
 })
 
 const THREAD = '01a1de76-a3b7-7270-b39e-1245893274c1'
@@ -1675,7 +1686,7 @@ describe('ObservedSource panes', () => {
 
     const adapter = madeUp()
     const a = first(adapter, both)
-    expect(adapter.paneOf).toHaveBeenLastCalledWith({ host: 'terminal', app: 'terminal', hints: both })
+    expect(adapter.paneOf).toHaveBeenLastCalledWith({ host: 'terminal', app: 'terminal', hints: both, pid: 100 })
     expect(a.src.capabilities(a.agent)).toMatchObject({ voice: true })
     expect(await a.src.send(a.agent, 'next')).toEqual({ ok: true })
     expect(adapter.type.mock.calls).toEqual([[PANE, 'next']])
@@ -1868,6 +1879,14 @@ describe('ObservedSource tabs', () => {
     t.src.ingest(t.ev('session-start', { sessionId: 'vscode', callerPid: 104, hostHints: { TERM_PROGRAM: 'vscode' } }))
     t.src.ingest(t.ev('session-start', { sessionId: 'other', callerPid: 105, hostHints: { TERM_PROGRAM: 'Hyper' } }))
     expect(t.tty.mock.calls).toEqual([[101], [102]])
+  })
+
+  it('an agent in tmux inside Terminal: a tap opens through its tmux pane', async () => {
+    const t = tabs()
+    t.src.ingest(t.ev('session-start', { hostHints: { ...inTerminal.hostHints, TMUX_PANE: '%3' } }))
+    await t.reads[0].answer('/dev/ttys031')
+    expect(await t.src.focus(t.agent())).toBe(true)
+    expect(t.actions.open.mock.calls).toEqual([[t.agent().id, { bundle: 'com.apple.Terminal', pane: { adapter: 'tmux', id: '%3:100' } }]])
   })
 
   it('no tty (??) is no pane', async () => {
