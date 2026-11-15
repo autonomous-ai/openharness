@@ -52,6 +52,8 @@ const isRecord = (value: unknown): value is Record<string, unknown> => !!value &
 
 export function createServiceRoutes(deps: ServiceRoutesDeps) {
   const log = deps.log ?? ((line: string) => console.warn(line))
+  // Looked up for every frame a window sends, a terminal's keystrokes' acknowledgements among them: one lookup.
+  const frames = new Map((deps.frames ?? []).map((each) => [each.frame, each]))
   const setTimer = deps.setTimer ?? ((run, ms) => setTimeout(run, ms))
   const clearTimer = deps.clearTimer ?? ((timer) => clearTimeout(timer as ReturnType<typeof setTimeout>))
 
@@ -97,16 +99,16 @@ export function createServiceRoutes(deps: ServiceRoutesDeps) {
       })
     },
 
-    /** A frame [asker] sent on the local WebSocket that a service answers: asked of it as `{ frame, payload }`, and the
-     *  frame its answer goes back as, under the frame's request id, the route's own answer while its service gives none
-     *  (down, failing, slow, or an error); null for a frame that is told and never answered. Undefined when no service
-     *  answers [frame]'s type. */
-    frame(frame: Record<string, unknown>, asker: Asker): Promise<Record<string, unknown> | null> | undefined {
-      const route = (deps.frames ?? []).find((each) => each.frame === frame.type)
+    /** A frame a window on this computer sent on its [connection] of the local WebSocket that a service answers: asked of
+     *  it as `{ frame, payload }`, as this computer's owner on that connection, and the frame its answer goes back as,
+     *  under the frame's request id, the route's own answer while its service gives none (down, failing, slow, or an
+     *  error); null for a frame that is told and never answered. Undefined when no service answers [frame]'s type. */
+    frame(connection: string, frame: Record<string, unknown>): Promise<Record<string, unknown> | null> | undefined {
+      const route = typeof frame.type === 'string' ? frames.get(frame.type) : undefined
       if (!route) return undefined
       const payload = isRecord(frame.payload) ? frame.payload : {}
       const requestId = typeof payload.requestId === 'string' ? payload.requestId : ''
-      return ask(route.type, route.waitMs, { frame: route.frame, payload }, asker).then((answer) => {
+      return ask(route.type, route.waitMs, { frame: route.frame, payload }, { ...OWNER_HERE, connection }).then((answer) => {
         if (!route.result) return null
         return { type: route.result, payload: { requestId, ...(answer && typeof answer.error !== 'string' ? answer : route.unanswered) } }
       })
