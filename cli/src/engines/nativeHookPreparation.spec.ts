@@ -369,9 +369,11 @@ it('cannot write through a route that changed during the version probe', async (
   const a = join(root, 'probe-a'), b = join(root, 'probe-b'), alias = join(root, 'probe-selected')
   mkdirSync(a); mkdirSync(b); symlinkSync(a, alias)
   const environment = { HOME: join(root, 'HOME'), OPENCODE_PLUGIN_DIR: join(alias, 'plugin') }
-  let release!: () => void
-  probe.beforeProbe = () => new Promise<void>(done => { release = done })
+  let release!: () => void, began!: () => void
+  const started = new Promise<void>(done => { began = done })
+  probe.beforeProbe = () => new Promise<void>(done => { release = done; began() })
   const preparing = install(4242, undefined, { environment })
+  await started
   unlinkSync(alias); symlinkSync(b, alias)
   release()
   expect(await preparing).toBe(false)

@@ -21,7 +21,7 @@ import { stopSessionOwner, type SessionOwner } from '../../lib/sessionSearch/ext
 import { createAgentCreator, type CreateAgentDeps } from './create.js'
 import { prepareInstructionWrites } from '../../scm/scmProjects.js'
 import { opencodeMajorVersion } from '../../engines/opencode/version.js'
-import { installOpencodePlugin } from '../../lib/hooks.js'
+import { installOpencodePlugin as installNativeOpencodePlugin } from '../../engines/nativeHooks.js'
 import { missingHookScript } from '../../engines/kit/notifyHooks.js'
 import type { NativeLaunch } from '../../engines/nativeLaunch.js'
 import { projectsRoot } from '../../lib/projectFolder.js'
@@ -133,6 +133,11 @@ const request = (over: Record<string, unknown> = {}) => ({
 
 const pending = { agentId: 'a1', sessionId: '', engine: 'claude' } as RegisteredSession
 const owner = { pid: 7, engine: 'claude' } as SessionOwner
+
+// Hook installation consumes the same setup port as the supervised core; the fixture owns its version replies.
+const installOpencodePlugin = (port: number) => installNativeOpencodePlugin(port, undefined, {
+  setup: { opencodeMajor: opencodeMajorVersion, hermesKeepsRecord: async () => null },
+})
 
 function setup(over: Partial<CreateAgentDeps> = {}) {
   const deps: CreateAgentDeps = { opencodeMajor: opencodeMajorVersion,
