@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BackendSocket } from './backendSocket.js'
-import { dispatchDown, relaySocket } from './testing/relaySocket.js'
+import { relaySocket } from './testing/relaySocket.js'
 import { codexMessagesToEvents, windowCodexLines } from './engines/codex/normalizer.js'
 import { messagesToEvents, subagentStatsFromRawLines, windowRawLines } from './lib/normalize.js'
 import { withoutOutputTail } from './lib/cardUpdate.js'
@@ -69,8 +69,12 @@ describe.each([
   let requests = 0
   async function ask(type: string, payload: Record<string, unknown>): Promise<Record<string, any>> {
     const requestId = `r${++requests}`
-    await dispatchDown(socket, { type, payload: { requestId, ...payload } }, 'local:history', 'local')
-    return frames.find((frame) => frame.type === `${type}_result` && frame.payload.requestId === requestId)!.payload
+    socket.handleLocalFrame('local:history', { type, payload: { requestId, ...payload } })
+    return vi.waitFor(() => {
+      const answer = frames.find((frame) => frame.type === `${type}_result` && frame.payload.requestId === requestId)
+      expect(answer).toBeDefined()
+      return answer!.payload
+    }, { timeout: 5_000 })
   }
 
   it('is bound to the transcript under test', () => {
