@@ -310,6 +310,18 @@ export class IsolatedDaemon {
       throw error
     }
     for (const dir of Object.values(dirs)) await mkdir(dir, { recursive: true })
+    // A tile's login zsh gets back the PATH it was handed. macOS's /etc/zprofile runs path_helper, which puts
+    // /etc/paths (/usr/local/bin first) and /etc/paths.d ahead of it, so `claude` or `codex` typed into a tile was the
+    // developer's real engine, under their login (audit of 2026-11-15; seven cases of enginehomes.e2e.ts on a
+    // developer's Mac). .zshenv is read before /etc/zprofile and notes the PATH; .zprofile is read right after it and
+    // sets it again, before any .zshrc and any later .zprofile line a test writes, which keep the last word. Noted, not
+    // written here: a daemon beside another shares this home and has a bin of its own. Not exported, so no child sees
+    // it. A test that types an engine's name appends to these two files and never truncates them. Only zsh is covered:
+    // a test that types one under bash or tcsh sets its PATH back itself.
+    if (!beside) {
+      await writeFile(join(dirs.home, '.zshenv'), 'HARNESS_E2E_PATH=$PATH\n', { flag: 'a' })
+      await writeFile(join(dirs.home, '.zprofile'), '[[ -n $HARNESS_E2E_PATH ]] && PATH=$HARNESS_E2E_PATH\n', { flag: 'a' })
+    }
     const config: EngineConfig = {
       port, dataDir: dirs.data, claudeProjectsDir: dirs.claudeProjects, codexHome: dirs.codexHome,
       claudeModel: options.claudeModel, codexModel: options.codexModel, modelControlGate: options.modelControlGate,
@@ -365,9 +377,16 @@ export class IsolatedDaemon {
       DSH_DIR: dirs.dsh,
       CLAUDE_PATH: join(dirs.bin, 'claude'),
       CODEX_PATH: join(dirs.bin, 'codex'),
+      // /usr/local/bin/hermes is the one recipe path outside any home (lib/engineInstall.ts), and a daemon looks at the
+      // recipe's paths only when no override is set: one that installs Hermes hooks ran that file's --version
+      // (engines/hermesRecord.ts). Missing until a test writes its own Hermes here.
+      HERMES_PATH: join(dirs.bin, 'hermes'),
       CLAUDE_PROJECTS_DIR: dirs.claudeProjects,
       CODEX_HOME: dirs.codexHome,
-      PATH: `${dirs.bin}:${process.env.PATH}`,
+      // Its fakes and stubs first, then the fixture's linked tools and the system's folders (src/testing/testPath.ts),
+      // never the worker's PATH: the developer's folders are absolute, so the throwaway home hid none of them, and
+      // every engine but the two pinned ones was theirs (audit of 2026-11-15).
+      PATH: `${dirs.bin}:${tmux.env.PATH}`,
       // Signed out, and nothing reaches beyond the machine.
       BACKEND_WS_URL: 'ws://127.0.0.1:9',
       WEB_URL: 'http://127.0.0.1:9',

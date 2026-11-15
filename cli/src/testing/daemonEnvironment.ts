@@ -16,7 +16,8 @@
  * SystemRoot and Path, Git Bash SYSTEMROOT and PATH).
  */
 const INHERITED: ReadonlySet<string> = new Set([
-  // The tools the tests run: node, tmux, git, zsh. The harness puts its own bin folder first.
+  // The tools the tests run. Both callers set their own (testPath.ts): a daemon under test and a tmux server a test
+  // starts. Still inherited for a caller of this function that sets none.
   'PATH',
   // UTF-8 in tmux and in the panes, with every LC_* (below). CI sets LANG to C.UTF-8.
   'LANG', 'LC_ALL',
