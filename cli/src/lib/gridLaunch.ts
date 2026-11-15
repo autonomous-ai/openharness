@@ -164,10 +164,8 @@ function opencodeGridConfig(
   // EXACTLY ONE model, and that is deliberate: it is what the agent was created with.
   //
   // Offering the router alongside it would let someone switch inside OpenCode, which reads as a
-  // kindness until you ask what the agent is running on. The probe that answers that
-  // (`readOpencodeGridAssignment`) reads this file, so a file naming two models can only say which
-  // one is live by parsing the engine's argv — and an argv is a live process's business, which it
-  // may rewrite. One model here makes the answer a fact about a file that cannot change under us.
+  // kindness until you ask what the agent is running on. The answer is the grid this launch recorded
+  // on the agent's row, as the process is not read back, so one model here keeps that record true.
   //
   // Choosing a different model is what every other engine here does too: per agent, at creation.
   const models: Record<string, { name: string; limit?: { context: number; output: number } }> = {

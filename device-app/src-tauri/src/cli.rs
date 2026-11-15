@@ -5,7 +5,8 @@ use std::collections::VecDeque;
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fs;
-use std::io::{self, BufRead, BufReader, Read};
+use std::io::{self, BufRead, BufReader, Read, Write};
+use std::os::fd::AsRawFd;
 use std::os::unix::process::CommandExt;
 use std::path::{Component, Path, PathBuf};
 use std::process::{ChildStdin, Command, Stdio};
@@ -229,7 +230,17 @@ impl Child {
         };
         let pid = child.id() as libc::pid_t;
         // Taken out, or `wait` below would close it.
-        let stdin = Arc::new(Mutex::new(child.stdin.take()));
+        let stdin = child.stdin.take();
+        if let Some(pipe) = &stdin {
+            // A StdinWriter writes on the thread the OS tells the app in front on: a child that stops reading must
+            // not hold it, nor a closer waiting on the same lock.
+            // SAFETY: fcntl only reads and sets the flags of the pipe this child's handle owns.
+            unsafe {
+                let flags = libc::fcntl(pipe.as_raw_fd(), libc::F_GETFL);
+                libc::fcntl(pipe.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK);
+            }
+        }
+        let stdin = Arc::new(Mutex::new(stdin));
         let stdout = child.stdout.take().expect("stdout is piped");
         let (send, lines) = mpsc::sync_channel(LINES_QUEUED);
         thread::spawn(move || read_lines(stdout, |line| send.send(line).is_ok()));
@@ -265,6 +276,10 @@ impl Child {
 
     pub fn stdin_closer(&self) -> StdinCloser {
         StdinCloser(Arc::downgrade(&self.stdin))
+    }
+
+    pub fn stdin_writer(&self) -> StdinWriter {
+        StdinWriter(Arc::downgrade(&self.stdin))
     }
 
     /// The exit code once it has exited; `Ok(None)`: it was ended by a signal.
@@ -330,6 +345,31 @@ impl StdinCloser {
     /// True when this call closed it.
     pub fn close(&self) -> bool {
         self.0.upgrade().is_some_and(|stdin| stdin.lock().unwrap().take().is_some())
+    }
+}
+
+/// Writes lines on a child's stdin from any thread. It holds the pipe weakly, as StdinCloser does.
+pub struct StdinWriter(Weak<Mutex<Option<ChildStdin>>>);
+
+/// Why a line was not written.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Unwritten {
+    /// Stdin is closed, or the child has gone.
+    Closed,
+    /// The pipe is full: the writer never waits (Child::start), and only a child that has stopped reading fills it.
+    Full,
+}
+
+impl StdinWriter {
+    /// The text and a newline.
+    pub fn line(&self, text: &str) -> Result<(), Unwritten> {
+        let stdin = self.0.upgrade().ok_or(Unwritten::Closed)?;
+        let mut stdin = stdin.lock().unwrap();
+        let pipe = stdin.as_mut().ok_or(Unwritten::Closed)?;
+        pipe.write_all(format!("{text}\n").as_bytes()).map_err(|error| match error.kind() {
+            io::ErrorKind::WouldBlock => Unwritten::Full,
+            _ => Unwritten::Closed,
+        })
     }
 }
 
@@ -634,6 +674,46 @@ mod tests {
         closer.close();
         drop(child);
         closer.close();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_writer_reaches_the_child_and_stops_when_stdin_is_closed() {
+        let fake = Fake::new();
+        fake.script("hardware watch --json", &["@record"]);
+        let mut child = fake.cli().spawn(&WATCH).unwrap();
+        let writer = child.stdin_writer();
+        assert_eq!(writer.line(r#"{"front":"a"}"#), Ok(()));
+        assert_eq!(writer.line(r#"{"front":"b"}"#), Ok(()));
+        assert!(child.stdin_closer().close());
+        assert_eq!(writer.line(r#"{"front":"c"}"#), Err(Unwritten::Closed));
+        assert_eq!(child.exit(WAIT), Ok(Some(0)));
+        assert_eq!(fake.stdin(), [r#"{"front":"a"}"#, r#"{"front":"b"}"#]);
+        drop(child);
+        assert_eq!(writer.line(r#"{"front":"d"}"#), Err(Unwritten::Closed));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_writer_never_waits_on_a_child_that_reads_nothing() {
+        // The app in front is written on the thread the OS tells it on, AppKit's main thread on a Mac: a stuck child
+        // must not hold it. Once its pipe is full, a line is dropped, and told apart from a closed pipe.
+        let fake = Fake::new();
+        fake.script("hardware watch --json", &["@hang"]);
+        let mut child = fake.cli().spawn(&WATCH).unwrap();
+        let writer = child.stdin_writer();
+        // On a thread, so a write that waits fails the test instead of hanging it.
+        let (send, dropped) = mpsc::channel();
+        thread::spawn(move || {
+            let line = "x".repeat(100);
+            // 1 MB, past any pipe's buffer.
+            let _ = send.send((0..10_000).find_map(|_| writer.line(&line).err()));
+        });
+        assert_eq!(dropped.recv_timeout(WAIT), Ok(Some(Unwritten::Full)));
+        // The closer is not held up either.
+        assert!(child.stdin_closer().close());
+        child.killer().kill();
+        assert_eq!(child.exit(WAIT), Ok(None));
     }
 
     #[cfg(unix)]

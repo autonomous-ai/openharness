@@ -750,7 +750,7 @@ describe('the models service', () => {
       it('recognises persisted API endpoints after models restarts and refuses unreadable vocabulary', async () => {
         const { port } = setup()
         apis.bases.mockReturnValueOnce(['https://old-api.example/v1'])
-        const process = { key: 'organic', engine: 'claude' as const, env: { ANTHROPIC_BASE_URL: 'https://old-api.example', ANTHROPIC_MODEL: 'm' }, args: '' }
+        const process = { key: 'organic', engine: 'codex' as const, args: '-c model_providers.grid.base_url="https://old-api.example" -m m' }
         expect(await port.gridAssignments([process])).toEqual([{ key: 'organic', assignment: { baseUrl: 'https://old-api.example', model: 'm' } }])
         apis.bases.mockImplementationOnce(() => { throw new Error('unreadable vocabulary') })
         expect(await port.gridAssignments([process])).toMatchObject([{ assignment: { baseUrl: 'https://old-api.example' } }])

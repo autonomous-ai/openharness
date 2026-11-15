@@ -25,6 +25,7 @@ in `src-tauri/`; the window's three screens are plain TypeScript in `ui/`.
 - **Thin over the CLI.** The app owns no daemon logic: it runs the `harness` CLI and reads its NDJSON.
 - **Fixed arguments.** The app runs only the CLI it found, the two install lines and `open`, each with arguments
   fixed in Rust. Nothing from the webview becomes a command line: it sends one of six action names.
+- **The app in front is private.** It is written to the watch's stdin and nowhere else (`front.rs`), and never logged.
 - **One log, redacted.** Every line passes `log::redact`; no email, token, URL query or path of the person's.
 - **No other component's path in a string.** `scripts/ci-plan.py` reads a quoted path of another component as a
   read of that folder: join path segments one by one, and name other components only in comments.

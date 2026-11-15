@@ -8,10 +8,9 @@
  * a database their sessions were not in, so no turn ever opened, nothing was ever recapped, and
  * `agent_recent` answered zero for the life of the agent (openharness#191).
  *
- * ⚠️ **THE SESSION ID IS THE ONLY EVIDENCE THAT NEEDS NO ASSUMPTION.** The obvious fix is to read
- * `HERMES_HOME` off the live process, the way `codexHomeProbe` reads `CODEX_HOME` — and
- * `probeHermesHome` (engines/identities.ts) does, because it is free when it works. But whether Hermes
- * exports it for a `-p` session is the engine's business and changes between versions, and a pane the
+ * ⚠️ **THE SESSION ID IS THE ONLY EVIDENCE THAT NEEDS NO ASSUMPTION.** The obvious fix is to ask the
+ * live process which store it holds open — and `probeHermesHome` (engines/identities.ts) does, because
+ * it is free when it works. But a Hermes opens its store only at its first prompt, and a pane the
  * daemon did not create may be gone by the time anyone asks. A session id is unique and its row exists in exactly one store, so "which home
  * holds this session" is answerable by looking, at the cost of one indexed lookup per home, once per
  * agent — the answer is then filled onto the registry row and never asked again (see

@@ -28,7 +28,7 @@ import type { FleetRouting } from '../services/fleet.js'
 import { ServiceUnavailableError } from '../core/serviceHost.js'
 
 import { PLAYER_STATES, type PlayerSession } from './playerLibrary.js'
-import type { ActivitySnapshot, AppSwarms, CableAgent, CableHost, CableMachine, CableMachineSource, CableSwarm, CableTile, DialStatus, OpenReason, RouteDecision, SendOutcome } from './cableSession.js'
+import type { ActivitySnapshot, AppSwarms, CableAgent, CableHost, CableMachine, CableMachineSource, CableSwarm, CableTile, DialStatus, FollowCause, OpenReason, RouteDecision, SendOutcome } from './cableSession.js'
 import type { WindowRoute } from './windowRoute.js'
 import type { SelectionCommand, SelectionResult } from './windowSelection.js'
 import type { VisitCommand, VisitResult } from './windowVisit.js'
@@ -38,10 +38,11 @@ import { LANE_SESSION_OVER, LANE_TOKEN_UNAVAILABLE, type MachineFleet } from './
 import type { ReviewedAnswer, AnswerReceipt } from './questionInbox.js'
 import { isTier, type Tier } from '../lib/notifyTier.js'
 import { HarnessSource } from './hosts/harness.js'
-import { hostDisplayName } from './hosts/hostDetect.js'
+import { AppFilter } from './hosts/appFilter.js'
+import { appDisplayName, hostDisplayName } from './hosts/hostDetect.js'
 import type { HostEntry, HostRegistry } from './hosts/registry.js'
-import { DialRing } from './hosts/select.js'
-import { capsLetters, type HostAgent } from './hosts/types.js'
+import { AppRings, DialRing } from './hosts/select.js'
+import { capsLetters, type AppList, type AppPick, type HostAgent, type PaneSwitch, type SwitchCause } from './hosts/types.js'
 
 /** One completed turn's recap, as the mirror keeps them. */
 
@@ -97,6 +98,10 @@ export interface CableHostWiring {
   listModels?: (agentId: string) => Promise<Array<{ id: string }>>
   /** The dial moved to another agent — the desktop window should show that agent on its own machine. */
   focused?: (machineId: string, agentId: string) => void
+  /** What came of a swipe that rested on an agent of another app, or was superseded before it rested: for its count. */
+  swiped?: (outcome: PaneSwitch | 'superseded') => void
+  /** What came of a local follow, by its cause: the dial moved to its agent, or its list had no tile for it. */
+  localFollowed?: (cause: FollowCause, outcome: 'moved' | 'no-tile') => void
   /**
    * A notification was tapped: the window gives that agent a tile of its own. With `reason`
    * `'question'` it was a question screen instead, and the window only brings the agent forward.
@@ -131,6 +136,24 @@ export interface CableHostWiring {
   fleet?: () => FleetRouting | null
   /** The custom pets kept on this computer; the dial's session reads the mapping and packs from it. */
   pets?: () => PetStore | null
+  /** The app a dial that says `appFilter` shows changed from one app to another, and why: its dials are told at once. */
+  appSwitched?: (cause: SwitchCause) => void
+  /** An app stayed in front for FRONT_SETTLE_MS, with or without a window, after any switch it caused. */
+  appSettled?: (app: string) => void
+  /** A dial sent a pick from its list of apps, whatever came of it: the picker's measure. A notice's pick is none. */
+  appPicked?: () => void
+  /** Runs `run` once after `ms` and returns its cancel: the settle of the app in front. The devices always give theirs,
+   *  which their stop cancels; absent (a test's host), an unref'd setTimeout. */
+  appTimer?: (ms: number, run: () => void) => () => void
+  /** In [0, 1): the draw between apps tied for the most agents. Absent, Math.random. */
+  appRandom?: () => number
+}
+
+/** The settle of the app in front when no timer is wired (a test's host): never what keeps the process up. */
+function unrefAfter(ms: number, run: () => void): () => void {
+  const timer = setTimeout(run, ms)
+  timer.unref()
+  return () => clearTimeout(timer)
 }
 
 /** Whether an id is the router's placeholder for a machine with no id yet (`cable:` and the computer id;
@@ -205,6 +228,17 @@ export class DaemonCableHost implements CableHost {
       displayName: (session) => wiring.displayName(session),
       desk: () => this.desk,
     }, fleet)
+    this.filter = new AppFilter({
+      after: wiring.appTimer ?? unrefAfter,
+      random: wiring.appRandom ?? Math.random,
+      // The registry's agents at each call, not the rings' last update: only a list read with no window updates the
+      // rings, so a settle with a window open or the dial unplugged, or a pick just after an app's last agent ended,
+      // would count the past. Harness's own agents still count as that read left them: the list read feeds their source
+      // (machineSnapshot).
+      counts: () => this.rings.counts(this.registry?.entries().map((e) => e.agent) ?? []),
+      switched: (cause) => wiring.appSwitched?.(cause),
+      settled: (app) => wiring.appSettled?.(app),
+    })
   }
 
   /**
@@ -503,6 +537,10 @@ export class DaemonCableHost implements CableHost {
   /** The machine list's ring: one for this host, so every dial here swipes through the same agents in the same order.
    *  In memory only: a restart of the devices process builds it again from the registry. */
   private readonly ring = new DialRing()
+  /** For a dial that says `appFilter`: one ring per app, and which app is shown. One of each for this host, so every such
+   *  dial here shows the same app and a pick on one turns them all. In memory only, as the ring. */
+  private readonly rings = new AppRings()
+  private readonly filter: AppFilter
 
   /** Its changes reach the dial on the session's next tick, which reads the list every second. */
   setRegistry(registry: HostRegistry | null): void {
@@ -535,6 +573,36 @@ export class DaemonCableHost implements CableHost {
 
   hostOf(agentId: string): string | undefined {
     return this.onMachine(agentId)?.agent.host
+  }
+
+  appOf(agentId: string): string | undefined {
+    return this.onMachine(agentId)?.agent.app
+  }
+
+  /** A pick from the dial's list of apps. With a window the dial holds the tab, so it changes nothing. */
+  pickApp(app: string, cause: 'pick' | 'notice' = 'pick'): AppPick {
+    if (cause === 'pick') this.wiring.appPicked?.()
+    return this.swarms === null ? this.filter.pick(app, cause) : 'ignored'
+  }
+
+  /** The app the person brought to the front. Followed with a window open too, so the dial shows it once the window
+   *  closes. */
+  front(app: string): void {
+    this.filter.front(app)
+  }
+
+  /** The app that settled in front, with or without a window. Not the shown app: the person may have picked another. */
+  settledApp(): string | undefined {
+    return this.filter.settledApp()
+  }
+
+  /** The app last reported in front, before it settles, with or without a window. */
+  latestFront(): string | undefined {
+    return this.filter.latestFront()
+  }
+
+  localFollowed(cause: FollowCause, outcome: 'moved' | 'no-tile'): void {
+    this.wiring.localFollowed?.(cause, outcome)
   }
 
   markSeen(agentId: string): void {
@@ -594,7 +662,9 @@ export class DaemonCableHost implements CableHost {
    *   - no window, and the devices have a registry → this computer's agents (Harness and any other app or
    *                                          terminal) with `host`, `caps` and `view: 'machine'`, in a fixed
    *                                          ring of at most sixteen where an agent keeps its place whatever its
-   *                                          state does (hosts/select.ts); `total` is every agent here.
+   *                                          state does (hosts/select.ts); `total` is every agent here. Asked
+   *                                          with `apps` (a dial that says `appFilter`), the shown app's ring
+   *                                          instead, `total` its agents, and `apps`, the list it picks from.
    *   - no window and no registry          → `[]`; the dial shows "Run OpenHarness on your computer".
    *   - a window with an empty tab         → `[]`; the dial shows "Nothing on this tab".
    *   - a window with panes                → those agents, in tile order; a tile whose machine dropped out
@@ -604,7 +674,7 @@ export class DaemonCableHost implements CableHost {
     return (await this.listAgentSnapshot()).agents
   }
 
-  async listAgentSnapshot(): Promise<{ agents: CableAgent[]; tab: string; total: number; view?: 'machine' }> {
+  async listAgentSnapshot(opts: { apps?: boolean } = {}): Promise<{ agents: CableAgent[]; tab: string; total: number; view?: 'machine'; apps?: AppList }> {
     const flat = await this.listAgentsFlat()
     const byId = new Map(flat.map((a) => [a.id, a]))
     // app_panes and app_swarms are separate messages. Never label the new panes
@@ -612,7 +682,7 @@ export class DaemonCableHost implements CableHost {
     // swarm announcement already contains membership in the same tile order.
     const app = this.swarms
     const registry = this.registry
-    if (app === null && registry) return this.machineSnapshot(registry, flat, byId)
+    if (app === null && registry) return this.machineSnapshot(registry, flat, byId, opts.apps === true)
     const tab = app?.active ?? ''
     const ids = app?.swarms.find(s => s.id === tab)?.agentIds ?? []
     const out = ids.map(id => byId.get(id)).filter((a): a is CableAgent => !!a)
@@ -628,8 +698,9 @@ export class DaemonCableHost implements CableHost {
     return { agents: out, tab, total: this.viaFleet((r) => r.agentTotal()) }
   }
 
-  /** The machine list: the registry's agents, bounded by the ring (the 78-agent reconnect above is not repeated). */
-  private async machineSnapshot(registry: HostRegistry, flat: CableAgent[], byId: Map<string, CableAgent>): Promise<{ agents: CableAgent[]; tab: string; total: number; view: 'machine' }> {
+  /** The machine list: the registry's agents, bounded by the ring (the 78-agent reconnect above is not repeated); with
+   *  `apps`, by the shown app's ring. */
+  private async machineSnapshot(registry: HostRegistry, flat: CableAgent[], byId: Map<string, CableAgent>, apps: boolean): Promise<{ agents: CableAgent[]; tab: string; total: number; view: 'machine'; apps?: AppList }> {
     const local = this.localMachine()
     // The engine session bound to each agent, so one that moved into a Harness pane is not listed again as observed.
     const bound = new Map(this.wiring.sessions().map((s) => [s.agentId, s.sessionId]))
@@ -638,14 +709,25 @@ export class DaemonCableHost implements CableHost {
     // Read once: each read merges every source's whole list.
     const entries = registry.entries()
     const sourceOf = new Map(entries.map((e) => [e.agent, e.source]))
-    const { rows, total } = this.ring.select(entries.map((e) => e.agent))
+    const listed = entries.map((e) => e.agent)
+    const list = apps ? this.appList(listed) : undefined
+    const { rows, total } = list ? this.rings.ring(list.shown) : this.ring.select(listed)
     const agents = rows.map((a): CableAgent => {
       // A Harness agent keeps the row the window would show (its chips too); another app's is drawn from what was heard.
       const row = byId.get(a.id) ?? { id: a.id, name: a.name, engine: a.engine, machineId: local.id, machine: local.name }
       // Every row is one of the entries.
       return { ...row, host: a.host, caps: capsLetters(sourceOf.get(a)!.capabilities(a)) }
     })
-    return { agents, tab: '', total, view: 'machine' }
+    return { agents, tab: '', total, view: 'machine', ...(list ? { apps: list } : {}) }
+  }
+
+  /** The apps of the machine list, in the order they appeared, and the one shown over these agents. */
+  private appList(agents: HostAgent[]): AppList {
+    this.rings.update(agents)
+    return {
+      shown: this.filter.shown() ?? '',
+      apps: this.rings.apps().map((a) => ({ id: a.id, name: appDisplayName(a.id), count: a.count, waiting: a.waiting })),
+    }
   }
 
   /** How many agents the account has across every machine — the overview's number, sent beside the
@@ -765,9 +847,10 @@ export class DaemonCableHost implements CableHost {
     })
   }
 
-  /** Whether this daemon's last list held that agent — see CableHost.knows. */
+  /** Whether this daemon's last list held that agent — see CableHost.knows. An agent outside Harness is the registry's,
+   *  never the router's: without it, followApp's log line would say the dial has no tile for it. */
   knows(agentId: string): boolean {
-    return this.viaFleet((r) => r.knows(agentId))
+    return this.outside(agentId) !== undefined || this.viaFleet((r) => r.knows(agentId))
   }
 
   /**
@@ -817,7 +900,8 @@ export class DaemonCableHost implements CableHost {
     // grew panes for remote machines. The hand is still at THIS desk; the pane it wants in front of it
     // may simply belong to a machine somewhere else, and the app is the side that decides what it can do
     // about an agent it does not have.
-    // Not for an agent of another app: the dial sends focus on every swipe, and only a tap may switch that app.
+    // Not for an agent of another app: the dial sends focus on every swipe, and only a tap brings that app forward.
+    // A swipe that rests on it shows its pane inside the app (swipeEnded); here it is only seen.
     const outside = this.outsideEntry(agentId)
     if (outside) { outside.source.markSeen?.(agentId); return }
     const machineId = this.machineOf(agentId)
@@ -832,6 +916,21 @@ export class DaemonCableHost implements CableHost {
     // only question the old arcs answered, and there is nothing left to replace.
     this.wiring.log(`cable: focus ${machineId}/${agentId}`)
     this.wiring.focused?.(machineId, agentId)
+  }
+
+  /** Whether a swipe that rests on the agent shows its pane: only one of another app, in a pane that app can show. */
+  swipeSwitches(agentId: string): boolean {
+    const outside = this.outsideEntry(agentId)
+    return outside?.source.hasPane?.(outside.agent) ?? false
+  }
+
+  /** A swipe that rested shows the agent's pane, and its app stays where it is; one superseded runs nothing. */
+  swipeEnded(agentId: string, how: 'rest' | 'superseded'): void {
+    if (how === 'superseded') { this.wiring.swiped?.('superseded'); return }
+    // The agent may have gone, or left its pane, since the dial turned to it.
+    const outside = this.outsideEntry(agentId)
+    const shown = outside?.source.showPane?.(outside.agent) ?? Promise.resolve<PaneSwitch>('failed')
+    void shown.catch((): PaneSwitch => 'failed').then((outcome) => this.wiring.swiped?.(outcome))
   }
 
   /**

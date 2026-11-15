@@ -165,10 +165,10 @@ describe('unchanged discovery observations', () => {
 
   it('persists newly learned launch metadata and an unbound folder exactly once', () => {
     const learned = { ...input, cwd: '/fixture/moved', codexHome: '/fixture/profile',
-      hermesHome: '/fixture/hermes', dsh: 'examples/hello-world', gateway: 'ori' as const }
+      hermesHome: '/fixture/hermes', gateway: 'ori' as const }
     registry.openProcessAgent(learned)
     expect(readRows()[0]).toMatchObject({ cwd: learned.cwd, codexHome: learned.codexHome,
-      hermesHome: learned.hermesHome, dsh: learned.dsh, gateway: 'ori' })
+      hermesHome: learned.hermesHome, dsh: null, gateway: 'ori' })
     expect(registryWrites()).toBe(1)
     clearCounts()
     registry.openProcessAgent(learned)

@@ -22,16 +22,16 @@ const cleanup: Array<() => unknown> = []
 afterEach(async () => { for (const step of cleanup.splice(0).reverse()) await step() })
 
 /** A data folder with the daemon's token and its record of a real pipe, the daemon's served on it, and a holder on the port. */
-async function daemon(): Promise<{ data: string; port: number; seen: Array<{ url: string; trusted: boolean; credential: unknown }>; heard: string[] }> {
+async function daemon(): Promise<{ data: string; port: number; seen: Array<{ url: string; trusted: boolean; credential: unknown; gateway: unknown }>; heard: string[] }> {
   const data = mkdtempSync(join(tmpdir(), 'w1-pipe-'))
   cleanup.push(() => rmSync(data, { recursive: true, force: true }))
   const token = randomBytes(32), pipe = newPipePath()
   writeFileSync(join(data, 'daemon-token'), `${token.toString('hex')}\n`)
-  const seen: Array<{ url: string; trusted: boolean; credential: unknown }> = []
+  const seen: Array<{ url: string; trusted: boolean; credential: unknown; gateway: unknown }> = []
   const served = await listenLocalSocket((req: IncomingMessage, res) => {
     req.resume()
     req.on('end', () => {
-      seen.push({ url: req.url ?? '', trusted: isTrustedLocal(req), credential: req.headers['x-harness-local'] ?? req.headers['x-harness-hook-token'] })
+      seen.push({ url: req.url ?? '', trusted: isTrustedLocal(req), credential: req.headers['x-harness-local'] ?? req.headers['x-harness-hook-token'], gateway: req.headers['x-harness-hook-gateway'] })
       res.writeHead(200, { 'content-type': 'application/json' })
       res.end('{}')
     })
@@ -52,10 +52,12 @@ describe.runIf(WINDOWS)('the daemon\'s clients over a real pipe on Windows', () 
     const env: NodeJS.ProcessEnv = { ...process.env, HARNESS_PANE: 'p1:%1', HARNESS_HOOK_DEADLINE_MS: '30000' }
     delete env.TMUX
     delete env.TMUX_PANE
+    // The runner's own endpoints never decide what the hook says of its gateway here.
+    for (const name of ['ANTHROPIC_BASE_URL', 'OPENAI_BASE_URL', 'OPENAI_API_BASE']) delete env[name]
     const hook = spawn(process.execPath, [HOOK, '--port', String(port), '--data-dir', data], { env, stdio: ['pipe', 'ignore', 'inherit'] })
     hook.stdin.end(JSON.stringify({ hook_event_name: 'SessionStart', session_id: '11111111-1111-4111-8111-111111111111', cwd: data }))
     await new Promise<void>((resolve) => { hook.on('exit', () => resolve()) })
-    expect(seen).toEqual([{ url: '/api/hook/session-start', trusted: true, credential: undefined }])
+    expect(seen).toEqual([{ url: '/api/hook/session-start', trusted: true, credential: undefined, gateway: 'none' }])
     expect(heard).toEqual([])
   }, 60_000)
 
@@ -63,7 +65,7 @@ describe.runIf(WINDOWS)('the daemon\'s clients over a real pipe on Windows', () 
     const { data, port, seen, heard } = await daemon()
     const answer = await daemonFetch(data, port)(`http://127.0.0.1:${port}/api/machines`, { headers: { 'x-adapter-local': '1' } })
     expect(answer.status).toBe(200)
-    expect(seen).toEqual([{ url: '/api/machines', trusted: true, credential: undefined }])
+    expect(seen).toEqual([{ url: '/api/machines', trusted: true, credential: undefined, gateway: undefined }])
     expect(heard).toEqual([])
   }, 60_000)
 })

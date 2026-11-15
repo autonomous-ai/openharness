@@ -215,3 +215,9 @@ architecture: safe, reliable, dependable.
   - A golden of every assignment shape first, from the former code (env, argv, Pi's and OpenCode's config files, a
     saved API's endpoint, the router id), then the move. Specs for down and slow models, and an e2e with models
     killed during discovery.
+- **Changed, 2026-11-15** ([the daemon never reads another process's environment](../plans/2026-11-15-process-env-secrets-design.md)).
+  The port carries argv markers only: Codex's `model_providers.….base_url` with its `-m`, and Pi's
+  `-e …/grid-provider.ts` with its `--model`. Claude Code, Hermes, Grok, Copilot and OpenCode have the grid of the
+  launch Harness recorded on the row (`grid`), written with the process by every launch and relaunch.
+  `probeGridAssignment` is gone: a discovery pass and a swap's refresh (`core/agents/gridAssignments.ts`) ask models
+  about Codex and Pi alone.
