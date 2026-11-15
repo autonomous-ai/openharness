@@ -15,12 +15,11 @@
  */
 import type { ScreenReading } from './facets/screen.js'
 import { terminalScreen } from './kit/screen.js'
-import { isTerminalEngine, type AgentEngine, type ProcessEngine } from './types.js'
+import { isOtherEngine, type OtherEngine } from './otherEngines.js'
+import { isTerminalEngine, type AgentEngine } from './types.js'
 
-/** The engines whose code the core loads only when one of their sessions needs it. */
-export const OTHER_ENGINES = ['opencode', 'cursor', 'kilo', 'devin', 'hermes', 'amp', 'agy', 'grok', 'copilot', 'commandcode', 'muse', 'pi', 'omp', 'openclaw'] as const satisfies readonly ProcessEngine[]
-export type OtherEngine = (typeof OTHER_ENGINES)[number]
-export function isOtherEngine(engine: string): engine is OtherEngine { return (OTHER_ENGINES as readonly string[]).includes(engine) }
+/** The engines whose code the core loads only when one of their sessions needs it (engines/otherEngines.ts). */
+export { OTHER_ENGINES, isOtherEngine, type OtherEngine } from './otherEngines.js'
 
 /** What the core may load, each the root of a file of its own in the bundle. */
 const MODULES = {
@@ -29,7 +28,8 @@ const MODULES = {
   screens: () => import('../lib/legacyScreen.js'),
   /** Legacy compatibility entry. Native installation is eager; core never requests this chunk. */
   hooks: () => import('../lib/hooks.js'),
-  /** The database engines' conversations read whole (lib/databaseHistory.ts), for what the core hands on. */
+  /** The database engines' conversations read whole (lib/databaseHistory.ts), for a service in the core's own process
+   *  (engines/storeHistory.ts). */
   databaseHistory: () => import('../lib/databaseHistory.js'),
   // Each engine's own: its transcript readers, history and last turn, loaded as one of its sessions enters.
   opencode: () => import('./opencode/inProcess.js'),

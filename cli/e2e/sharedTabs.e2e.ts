@@ -242,13 +242,12 @@ describe.skipIf(!process.env.HARNESS_E2E_SERVICES_DIR)('shared tabs across accou
     const sides: Side[] = []
     onTestFailed(() => failureLogs('1b', sides))
     const mark = (label: string, since: number) => times.push(`1b ${label} ${Date.now() - since}ms`)
-    // Alice's daemon runs the tab's tasks with a stub gh, which a test runner's VITEST would refuse (messages/tasks.ts).
-    const { A, B, lead, api, sharedTabId } = await sharedPair(alice1b, bob1b, '1b', sides, { owner: { VITEST: '' } })
+    const { A, B, lead, api, sharedTabId } = await sharedPair(alice1b, bob1b, '1b', sides)
     expect(A.d.env.HARNESSD_SERVICES, 'the default layout').toBeUndefined()
 
     // 1. Bob's second computer takes the pin from his first (A2), and adds a harness of its own.
     let t = Date.now()
-    const two = await signIn(backend, bob1b, { HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '200', VITEST: '' })
+    const two = await signIn(backend, bob1b, { HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '200' })
     const B2: Side = { who: bob1b, d: two.daemon, machineId: two.machineId, client: two.client }
     sides.push(B2)
     const held = await rosterOf(A, sharedTabId)
@@ -400,7 +399,7 @@ describe.skipIf(!process.env.HARNESS_E2E_SERVICES_DIR)('shared tabs across accou
     const mark = (label: string, since: number) => times.push(`activity ${label} ${Date.now() - since}ms`)
     let t = Date.now()
     for (const who of [aliceAct, bobAct]) {
-      const s = await signIn(backend, who, { HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '200', VITEST: '' })
+      const s = await signIn(backend, who, { HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '200' })
       sides.push({ who, d: s.daemon, machineId: s.machineId, client: s.client })
     }
     const [A, B] = sides

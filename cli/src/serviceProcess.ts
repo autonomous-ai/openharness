@@ -31,6 +31,7 @@ const BESIDE_THE_CORE: ReadonlySet<string> = new Set(['updater'])
 export const SERVICE_RUNNERS: ReadonlyMap<string, () => Promise<Runner>> = new Map<string, () => Promise<Runner>>([
   ['engine-claude', async () => (await import('./engines/claude/claudeReaderProcess.js')).runClaudeReader],
   ['engine-codex', async () => (await import('./engines/codex/codexReaderProcess.js')).runCodexReader],
+  ['engine-others', async () => (await import('./engines/others/otherEnginesProcess.js')).runOtherEngines],
   ['search', async () => (await import('./services/searchProcess.js')).runSearchService],
   ['viewers', async () => (await import('./services/viewersProcess.js')).runViewersService],
   ['workspaces', async () => (await import('./services/workspacesProcess.js')).runWorkspacesService],

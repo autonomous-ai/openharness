@@ -8,7 +8,8 @@
  *   transcript is read by every file engine, split at its start, its middle and its end. The database engines'
  *   readers start on half of a store, are handed the rest and poll once.
  * - **History and the last turn.** `createHistory(...).sessionGet`, whole, the latest page and each older one,
- *   and a stale cursor; `createLastTurnReader`.
+ *   and a stale cursor; `createLastTurnReader`. Both read through the core's reader port from the engines' worker
+ *   (engines/others/readerRequests.ts), every request and reply crossing as JSON, as they cross its link.
  * - **agy's idle backstop and Cursor's Task hooks**, which close a turn and follow a sub-agent.
  *
  * The inputs are the ones the repository has: the session fixtures in lib/__fixtures__, the stores built from
@@ -203,10 +204,19 @@ async function loadCore() {
   const { createIngest } = await import('../core/transcripts/ingest.js')
   const { createHistory } = await import('../core/transcripts/history.js')
   const { createLastTurnReader } = await import('../core/transcripts/lastTurn.js')
+  const { createEngineReaders } = await import('../core/engines/readers.js')
+  const { createStoreOf } = await import('../core/transcripts/stores.js')
+  const { otherReaderRequests } = await import('./others/readerRequests.js')
   const { createSessionNormalizers } = await import('../core/transcripts/normalizers.js')
   const { createAgyBackstop } = await import('../core/turns/agyBackstop.js')
   const { createCursorTaskHooks } = await import('../core/engines/cursorTasks.js')
-  return { createAttach, createIngest, createHistory, createLastTurnReader, createSessionNormalizers, createAgyBackstop, createCursorTaskHooks }
+  // The worker's readers behind the core's port, as engines/others/otherEnginesProcess.ts hosts them and core/main.ts reaches them.
+  const requests = otherReaderRequests()
+  const port = createEngineReaders({ isolated: new Set(['engine-others']), call: async (_service, type, payload) =>
+    JSON.parse(JSON.stringify(await requests[type](JSON.parse(JSON.stringify(payload)), { owner: true, local: true }))) })
+  port.connected('engine-others')
+  const reading = () => ({ readerFor: port.forEngine, storeOf: createStoreOf(dbs(), hermesDb) })
+  return { createAttach, createIngest, createHistory, createLastTurnReader, createSessionNormalizers, createAgyBackstop, createCursorTaskHooks, reading }
 }
 
 /** OpenClaw's store is found per session (lib/openclawStore.ts); here it is always the one the case built. */
@@ -384,7 +394,7 @@ describe('the other engines\' conversations, through the core', () => {
         const session = sessionOf(engine, path)
         const history = core.createHistory({
           resolve: () => session, stopped: () => [], pages: { lineCount: async () => transcript.lines.length } as never,
-          readerFor: () => undefined, dbs: dbs(), hermesDb,
+          ...core.reading(),
         })
         const out: unknown[] = []
         const events: Array<{ type?: string }> = []
@@ -398,7 +408,7 @@ describe('the other engines\' conversations, through the core', () => {
         for (let pages = 0; page.hasMore && typeof page.oldestCursor === 'string' && pages < 100; pages++) page = await ask({ limit: 3, before: page.oldestCursor })
         await ask({ limit: 3, before: 'a-stale-cursor' })
         out.push(['sessions', await history.sessionsList({ agentId: session.agentId })])
-        out.push(['last turn', await core.createLastTurnReader({ bySession: () => session, readerFor: () => undefined, dbs: dbs(), hermesDb })(session.sessionId)])
+        out.push(['last turn', await core.createLastTurnReader({ bySession: () => session, ...core.reading() })(session.sessionId)])
         await check(`${engine} history: ${transcript.id}`, { out, events })
       }
     }, 120_000)
@@ -469,7 +479,7 @@ describe('the other engines\' conversations, through the core', () => {
       }
       write(messages)
       const session = sessionOf(engine, null)
-      const history = core.createHistory({ resolve: () => session, stopped: () => [], pages: { lineCount: async () => 0 } as never, readerFor: () => undefined, dbs: dbs(), hermesDb })
+      const history = core.createHistory({ resolve: () => session, stopped: () => [], pages: { lineCount: async () => 0 } as never, ...core.reading() })
       const out: unknown[] = []
       const events: Array<{ type?: string }> = []
       const ask = async (payload: Record<string, unknown>) => {
@@ -481,7 +491,7 @@ describe('the other engines\' conversations, through the core', () => {
       let page = await ask({ limit: 2 })
       for (let pages = 0; page.hasMore && typeof page.oldestCursor === 'string' && pages < 100; pages++) page = await ask({ limit: 2, before: page.oldestCursor })
       await ask({ limit: 2, before: 'a-stale-cursor' })
-      out.push(['last turn', await core.createLastTurnReader({ bySession: () => session, readerFor: () => undefined, dbs: dbs(), hermesDb })(session.sessionId)])
+      out.push(['last turn', await core.createLastTurnReader({ bySession: () => session, ...core.reading() })(session.sessionId)])
       await check(`${engine} history`, { out, events })
     }, 120_000)
   }
@@ -512,7 +522,7 @@ describe('the other engines\' conversations, through the core', () => {
       await reader?.reader.tick()
       live.normalizers.stopPollers()
       await check(`openclaw live: ${scenario} @${half}/${last}`, live)
-      const history = core.createHistory({ resolve: () => session, stopped: () => [], pages: { lineCount: async () => 0 } as never, readerFor: () => undefined, dbs: dbs(), hermesDb })
+      const history = core.createHistory({ resolve: () => session, stopped: () => [], pages: { lineCount: async () => 0 } as never, ...core.reading() })
       const out: unknown[] = []
       const events: Array<{ type?: string }> = []
       const ask = async (payload: Record<string, unknown>) => {
@@ -524,7 +534,7 @@ describe('the other engines\' conversations, through the core', () => {
       let page = await ask({ limit: 4 })
       for (let pages = 0; page.hasMore && typeof page.oldestCursor === 'string' && pages < 100; pages++) page = await ask({ limit: 4, before: page.oldestCursor })
       await ask({ limit: 4, before: 'a-stale-cursor' })
-      out.push(['last turn', await core.createLastTurnReader({ bySession: () => session, readerFor: () => undefined, dbs: dbs(), hermesDb })(key)])
+      out.push(['last turn', await core.createLastTurnReader({ bySession: () => session, ...core.reading() })(key)])
       await check(`openclaw history: ${scenario}`, { out, events })
     }
   }, 120_000)

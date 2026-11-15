@@ -186,7 +186,7 @@ Left since, with the core's process as `src/architecture.coreFiles.txt` lists it
 | The sign-in's renewal, the core's last call to another host: the gateway renews it, and the core asks it for a token. A test lists what in the core's process can open a connection, each to this computer (13 November) | 547 | 94,321 |
 | The Swarm's chat-file upload, the last call to another host with the Swarm on: the core keeps the file in its private uploads folder and the gateway sends it. The connection test reads every file of the core's process, the Swarm's door too. The core no longer loads the backend's address (`lib/backendHttpBase.ts`) at all (13 November) | 546 | 94,344 |
 | The Swarm, deleted: its door, its port and queries, and every list, relay and record the core kept for it (14 November) | 541 | 92,057 |
-| The Agent Browser's lifecycle: one shape for every service that follows agents (`core/agentLife.ts`: each look at a live agent, its end, a stop, a purge, a pane's new agent), with the viewers' attach and detach, the agent cleanup's stops, search's purges and the browser on it and their port members gone; whose Browser is on is the browser's own; `lib/agentTmp.ts` went with it (15 November) | 543 | 92,936 |
+| The Agent Browser's lifecycle: one shape for every service that follows agents (`core/agentLife.ts`: each look at a live agent, its end, a stop, a purge, a pane's new agent), with the viewers' attach and detach, the agent cleanup's stops, search's purges and the browser on it and their port members gone; whose Browser is on is the browser's own; `lib/agentTmp.ts` went with it (15 November) | 544 | 92,859 |
 | The Wi-Fi device's routes of the local door (`/api/autonomous-device/*`): the door checks the caller, then one adapter (`core/serviceRoutes.ts`) hands each route as it came to the service that answers it (the gateway, the Wi-Fi device's, the machine add-ons'), which checks it; a service down answers its route's own words at once. `lib/deviceManagementHttp.ts` left (15 November) | 543 | 93,002 |
 
 ### 1. Code the core loads for one helper (low risk, about a day each)
@@ -230,7 +230,7 @@ this platform uses leaves them out. Low risk on a Mac and Linux, medium on a Win
 | --- | ---: | --- | --- |
 | **A Codex resume reads its whole rollout on the core's loop,** twice when it repairs (`engines/kit/resumeRepair.ts`, from `core/agents/launch.ts`). The rollout of 3 October was 803 MB. Asynchronous since 15 November: a chunk at a time between turns of the loop, within a size, record and time bound, the history replaced only while its resume holds; a 200 MB rollout held the loop 2.4 s, now 8 ms (543 files, 93,160 lines). Left: the worker | 495 | Codex's worker | medium |
 | **Six engines' model switch drives their panes from the core** (`lib/runtimeControl.ts:229-663`), with their question key steps and readers. Claude Code and Codex already use a worker's grant | 715 | the other engines' worker | medium |
-| **The other fourteen engines run in the core:** their normalizers, readers and Stop rules (`core/transcripts/attach.ts:415-599`, `ingest.ts`, `history.ts`, `core/turns/turnHooks.ts:133-280`), and 16,055 more lines loaded once one of their sessions needs it | 2,584 + 16,055 | one worker for all fourteen, as the plan says ([other engines](2026-10-08-other-engines-out-of-core.md)) | medium, high on attach |
+| **The other fourteen engines run in the core:** their normalizers, readers and Stop rules (`core/transcripts/attach.ts:415-599`, `ingest.ts`, `history.ts`, `core/turns/turnHooks.ts:133-280`), and 16,055 more lines loaded once one of their sessions needs it. Their history and last turns are read in their worker, `engine-others`, since #4317; the live part is left | 2,584 + 16,055 | one worker for all fourteen, as the plan says ([other engines](2026-10-08-other-engines-out-of-core.md)) | medium, high on attach |
 | **Engine set-up:** installing engines, their hooks and plugins, probing binaries, the person's login shell (`engines/kit/native*.ts`, `hookSettings.ts`, `hookReview.ts`, `launchExecutable.ts`, `engines/nativeLaunch.ts`) | 4,436 | a set-up process: needs a ruling first | high |
 | Store engines: deletes on their databases at purge, a whole conversation read into the core at close. Codex's title index is read from its end, then only what Codex appends (15 November) | 483 | their worker | medium to high |
 
@@ -347,7 +347,7 @@ today that the rule says it should not, most serious first:
    `lib/agentCreationReceipt.ts`).
 5. **Children that are a feature's:** `git clone` inside `agent_create` (`lib/projectFolder.ts:241`), engine installers
    that run npm or curl (`engines/kit/nativeInstall.ts:357`), `amp threads export`, which calls Amp's servers
-   (`core/transcripts/history.ts:56`). The New dialog's login shells are the edge host's since 13 November.
+   (`core/transcripts/history.ts:56`; in the other engines' worker since #4317). The New dialog's login shells are the edge host's since 13 November.
 6. **Launch arguments, environment and files from models, the Store and shared machines are checked for shape
    only** (`core/modelsLink.ts:75-89`, `storeLink.ts:36-42`, `sharedMachinesLink.ts:22-25`).
 7. **Keys the core holds without need.** A grid's API key is kept on the registry row and copied into each
