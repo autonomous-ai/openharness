@@ -1662,7 +1662,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     notice: (service, payload) => { if (service === 'gateway') gatewayLink?.notice(payload); else if (service === 'devices') devicesLink.notice(payload); else if (service === 'wifi') wifiLink.notice(payload); else if (service === 'viewers') viewersLink.notice(payload); else if (service === 'recaps') recapsLink.notice(payload); else if (service === 'agentBrowser') agentBrowserLink.notice(payload) },
     binary: (service, bytes) => { if (service === 'gateway') gatewayLink?.binary(bytes); else if (service === 'agentBrowser') agentBrowserLink.binary(bytes) },
     connected: (service) => {
-      if (service === OTHER_ENGINES_SERVICE) otherStreams.connected()
+      if (othersLive && service === OTHER_ENGINES_SERVICE) otherStreams.connected()
       engineReaders.connected(service)
       liveTransport.connected(service)
       runtimeTransport.connected(service)
@@ -1690,7 +1690,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     disconnected: (service) => {
       if (service === 'search') searchGeneration++
       if (service === 'usage') usageLink.disconnected()
-      if (service === OTHER_ENGINES_SERVICE) otherStreams.disconnected()
+      if (othersLive && service === OTHER_ENGINES_SERVICE) otherStreams.disconnected()
       engineReaders.disconnected(service)
       liveTransport.disconnected(service)
       runtimeTransport.disconnected(service)

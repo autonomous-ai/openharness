@@ -159,7 +159,7 @@ function setup(over: Partial<AttachDeps> = {}) {
     } as AttachDeps['runtimeProfiles'],
     captureTerminal: vi.fn(async () => 'pane'),
     emit: vi.fn(),
-    questionWatcher: { start: vi.fn() },
+    tokenUsage: { changed: () => {} }, questionWatcher: { start: vi.fn() },
     terminalLabel: () => 'tmux:%0',
     storeOf: async (s) => ({ opencode: '/db/opencode.db', kilo: '/db/kilo.db', devin: '/db/devin.db', hermes: `/db/hermes-${s.agentId}.db` } as Record<string, string>)[s.engine] ?? null,
     concurrency: 2,

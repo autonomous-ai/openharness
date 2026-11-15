@@ -327,6 +327,68 @@ describe('the other engines\' streams, as the core holds them', () => {
     }
   })
 
+  it('reopens a store stream against the same store after its worker restarts', async () => {
+    const run = setup()
+    const session = row('s1', 'opencode')
+    run.sessions.set('s1', session)
+    await run.streams.open(session, { ...OPEN, store: '/private-fixture/store.db' })
+    run.streams.disconnected()
+    run.streams.connected()
+    await vi.waitFor(() => expect(run.answers.open).toHaveBeenCalledTimes(2))
+    expect(run.answers.open.mock.calls[1][0]).toMatchObject({ session: { store: '/private-fixture/store.db' } })
+    run.streams.stop()
+  })
+
+  it('ignores a turn operation answered by the worker connection that has gone', async () => {
+    const run = setup()
+    await run.streams.open(row(), OPEN)
+    let answer!: (value: Record<string, unknown>) => void
+    run.answers.op.mockImplementationOnce(() => new Promise(resolve => { answer = resolve }))
+    const draining = run.streams.drain('s1')
+    run.streams.disconnected()
+    run.answers.open.mockResolvedValueOnce(ok(opened({ turn: turn('restarted', false) })))
+    run.streams.connected()
+    await vi.waitFor(() => expect(run.streams.get('s1')!.turn.identity).toBe('restarted'))
+    answer(ok({ frames: [frame(1)], turn: turn('old-worker', true) }))
+    await draining
+    expect(run.deps.frame).not.toHaveBeenCalled()
+    expect(run.streams.get('s1')!.turn).toEqual(turn('restarted', false))
+    run.streams.stop()
+  })
+
+  it('does not let an old Stop close a new turn after a worker restart', async () => {
+    const run = setup()
+    await run.streams.open(row(), OPEN)
+    let answer!: (value: Record<string, unknown>) => void
+    run.answers.op.mockImplementationOnce(() => new Promise(resolve => { answer = resolve }))
+    const closing = run.streams.close('s1', {})
+    run.streams.disconnected()
+    run.answers.open.mockResolvedValueOnce(ok(opened({ turn: turn('new-turn', true) })))
+    run.streams.connected()
+    await vi.waitFor(() => expect(run.streams.get('s1')!.turn.identity).toBe('new-turn'))
+    answer({ error: 'SERVICE_UNAVAILABLE' })
+    expect(await closing).toEqual([])
+    expect(run.streams.get('s1')!.turnOpen).toBe(true)
+    run.streams.stop()
+  })
+
+  it('does not restore an opening stream after a second disconnect', async () => {
+    const run = setup()
+    await run.streams.open(row(), OPEN)
+    run.streams.disconnected()
+    let answer!: (value: Record<string, unknown>) => void
+    run.answers.open.mockImplementationOnce(() => new Promise(resolve => { answer = resolve }))
+    run.streams.connected()
+    run.streams.disconnected()
+    answer(ok(opened({ frames: [frame(1)] })))
+    // The abandoned open is forgotten; it must not restore the orphan from the disconnected worker.
+    await vi.waitFor(() => expect(ops(run)).toContain('forget'))
+    run.streams.connected()
+    await vi.waitFor(() => expect(run.answers.open).toHaveBeenCalledTimes(3))
+    expect(run.deps.frame).not.toHaveBeenCalled()
+    run.streams.stop()
+  })
+
   it('stops: forgets every stream with the worker, retries nothing, and asks nothing more', async () => {
     const run = setup()
     await run.streams.open(row(), OPEN)

@@ -52,6 +52,7 @@ export interface OtherStream {
 }
 
 interface Handle extends OtherStream {
+  store: string | null
   token: string
   applied: number
   turn: StreamTurn
@@ -111,8 +112,11 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
 
   const op = async (handle: Handle, kind: StreamOp, data: Record<string, unknown> = {}): Promise<Record<string, unknown> | null> => {
     if (handle.orphan || stopped) return null
+    const token = handle.token, at = generation
     let reply: Record<string, unknown>
-    try { reply = await call(STREAM_OP, { version: STREAM_VERSION, token: handle.token, op: kind, ...data }, STREAM_OP_WAIT_MS) } catch { return null }
+    try { reply = await call(STREAM_OP, { version: STREAM_VERSION, token, op: kind, ...data }, STREAM_OP_WAIT_MS) } catch { return null }
+    // A reconnect reuses the handle, but no result from its old connection belongs to the new stream.
+    if (stopped || at !== generation || handle.token !== token || byToken.get(token) !== handle) return null
     const answer = answerOf(reply)
     if (!answer || !Object.keys(answer).every(key => ANSWER_KEYS.includes(key)) || !Array.isArray(answer.frames)
       || !answer.frames.every(streamFrame) || (answer.turn !== undefined && !streamTurn(answer.turn))
@@ -135,9 +139,9 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
     if (session) deps.reattach(session)
   }
 
-  const handleOf = (session: RegisteredSession, token: string, opened: StreamOpened): Handle => {
+  const handleOf = (session: RegisteredSession, token: string, opened: StreamOpened, store: string | null): Handle => {
     const handle: Handle = {
-      engine: session.engine, sessionId: session.sessionId, token, applied: 0, turn: opened.turn,
+      engine: session.engine, sessionId: session.sessionId, store, token, applied: 0, turn: opened.turn,
       offset: opened.offset, orphan: false, closing: 0, quietUntil: 0,
       get turnOpen() { return handle.turn.turnOpen },
       closeTurn(reason) {
@@ -221,7 +225,7 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
       const opened = await opening(session, token, { live: options.live, abandon: options.abandon, held: options.held,
         session: { agentId: session.agentId, sessionId: session.sessionId, engine: session.engine, transcriptPath: session.transcriptPath ?? null, store: options.store } })
       if (!opened || stopped) return null
-      const handle = handleOf(session, token, opened)
+      const handle = handleOf(session, token, opened, options.store)
       const previous = handles.get(session.sessionId)
       handles.set(session.sessionId, handle)
       byToken.set(token, handle)
@@ -237,9 +241,10 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
     async close(sessionId: string, how: { abort?: boolean; error?: boolean; stop?: boolean }): Promise<LiveEvent[]> {
       const handle = handles.get(sessionId)
       if (!handle) return []
+      const identity = handle.turn.identity
       const answer = await op(handle, how.abort ? 'abort' : 'close', { error: !!how.error, stop: !!how.stop })
       if (answer) return answer.events as LiveEvent[]
-      if (!closedHere(handle)) return []
+      if (handles.get(sessionId) !== handle || handle.turn.identity !== identity || !closedHere(handle)) return []
       return [{ type: 'turn_ended', payload: how.abort || how.error ? { aborted: true } : {} }]
     },
     /** A turn an attach's history left open, closed silently if it is still that turn: whether it was. */
@@ -306,6 +311,7 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
       connected = true
       generation++
       waiting = false
+      const at = generation
       const orphans = [...handles.values()].filter(handle => handle.orphan)
       if (orphans.length) log(`[engine-others] the other engines' worker is back · following ${orphans.length} conversation(s) again`)
       for (const handle of orphans) void (async () => {
@@ -314,8 +320,12 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
         const token = randomUUID()
         const opened = await opening(session, token, { live: false, abandon: false, held: false,
           resume: { turnOpen: handle.turnOpen, ...(handle.offset !== undefined ? { offset: handle.offset } : {}) },
-          session: { agentId: session.agentId, sessionId: session.sessionId, engine: session.engine, transcriptPath: session.transcriptPath ?? null, store: null } })
-        if (!opened || handles.get(handle.sessionId) !== handle) return
+          session: { agentId: session.agentId, sessionId: session.sessionId, engine: session.engine, transcriptPath: session.transcriptPath ?? null, store: handle.store } })
+        if (!opened) return
+        if (stopped || at !== generation || handles.get(handle.sessionId) !== handle) {
+          void deps.call(STREAM_OP, { version: STREAM_VERSION, token, op: 'forget' }, STREAM_OP_WAIT_MS).catch(() => undefined)
+          return
+        }
         byToken.delete(handle.token)
         Object.assign(handle, { token, applied: 0, orphan: false, turn: opened.turn, offset: opened.offset ?? handle.offset })
         byToken.set(token, handle)

@@ -39,7 +39,7 @@ function setup(replyEffort?: string) {
     terminalGone: async () => false, watcher: { removeSession: async () => {}, pollSession: async () => {}, hold: async () => hold, tails: () => true, addSession },
     cursorDiscovery: { add: async () => {} }, device: () => undefined,
     captureTerminal: async () => null, emit,
-    questionWatcher: { start: vi.fn() }, terminalLabel: () => 'private fixture',
+    tokenUsage: { changed: () => {} }, questionWatcher: { start: vi.fn() }, terminalLabel: () => 'private fixture',
     storeOf: async () => null, concurrency: 1,
   })
   const attaching = attach.attachSession(session, true)

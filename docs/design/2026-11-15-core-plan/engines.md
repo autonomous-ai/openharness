@@ -8,8 +8,91 @@ State (2026-11-15, the second agent): step 1 is split in two pull requests, as t
 
 - **Step 1a, done:** PR #4317 from branch `core-engines-2` (the two WIP commits of `core-engines-1`, finished).
   The worker `engine-others` reads the fourteen engines' history and last turns; the core routes, bounds and checks.
-- **Step 1b, not started in code:** the live part below (attach, normalizers and readers, live parsers, their Stop
+- **Step 1b, carried implementation still WIP:** the live part below (attach, normalizers and readers, live parsers, their Stop
   rules, and the five profile `transcript()` readers). Start it from `main` once 1a has landed, on `core-engines-3`.
+
+## Continuation, 2026-11-15: carried WIP integrated; step 1b still not ready
+
+Worktree `/tmp/harness-core-engines-continue`, branch `codex/core-engines-continue`. This is a local handoff to
+root; no push, PR edit, merge or release was performed. The original `core-engines-3` worktree remains untouched.
+
+- Started from `f3e1e35b05`. Preserved its complete tracked diff, including the protocol rename, as
+  `/tmp/core-refactor-engines-carried.patch` (SHA-256
+  `20f85a2e549e99e1e89ceadc263d4cb71cbadca61febf1a7249eb1b8d5f915a0`) and copied both untracked specs.
+  Local commits `26e6481d7e` and `b2057001f0` preserve them before integration.
+- Integrated `origin/main` at `aad8dcd535` in `675a98bc51`. Kept main's superseded-attach cursor/retry fix,
+  the worker-based attach path, and main's usage-service notifications. The worker's folded lines notify usage too.
+- The carried code already moves the fourteen live parsers, Stop rules, Task hooks and profile transcript evidence
+  to the worker. The golden fixture expectations are unchanged; its transport is the worker request path with JSON
+  round trips. It is substantial WIP, not a finished extraction.
+- This continuation fixes a bounded part of restart handling: retain a store's path across reconnect; fence op and
+  reconnect-open answers by worker generation/token; forget abandoned reconnect candidates; refuse an old Stop's
+  fallback close once a new turn has replaced it. Four new regression cases cover those behaviors.
+- Protocol 2 advertisement expectations now match `ENGINE_OTHERS_VERSION=2`, explicitly keeping version 1 as history
+  only. Core worker connection events no longer disconnect or reopen the inline live streams under a version-1 master.
+
+### Design of this continuation
+
+- Growth: one store-path reference on each existing session handle, removed with that handle. No new disk data or
+  collection. The inherited stream/handle bounds still need the review below; this continuation does not claim 1b's
+  whole bound is complete.
+- Concurrency: a reply belongs to the captured worker generation and token. Reconnect uses the existing session
+  handle; a stale candidate is forgotten. A Stop's fallback is restricted to the turn identity it began with.
+- Read cost: no new read or polling. A reconnect reuses the path already resolved at attach; reply checks are constant
+  time. Scale: the retained reference grows with attached sessions, as the existing handle map does; the worker's
+  stream count and pending-byte limits are the first pressure signals. 10x measurements remain pending.
+- Compatibility: no new public field or wire revision in this continuation. The carried protocol-2 change keeps
+  protocol-1 history working and live inline. Explicit inline, old-master/new-core and new-master/old-core e2e remain
+  required. No disk migration; rollback is reverting the code. No released tag or published contract was changed.
+- Audience: the existing owner/local/internal-caller and service-token checks still enforce access. Identity: the
+  same account/session and store path as the original attach; no other login is used.
+- Failure: stale replies are discarded and abandoned candidates are forgotten; a failed Stop closes only its own
+  turn, retaining the existing named warning. The inherited worker-unavailable visible-state work remains below.
+- Platforms: affects CLI on macOS, Linux and Windows. No runtime test was executed in this continuation yet; native
+  Windows and Linux remain unverified.
+
+### Validation status and exact next checks
+
+No compiler, build or test was run: `/tmp/core-refactor-perf.done` exists, but root held
+`/tmp/core-refactor-validation-lock` for Browser #4320 validation. Do not call this green or ready. `git diff --check`
+passed. `scripts/local-checks.py --list` selects `cli-core` and `cli-harnessd`; both must meet 100% per file.
+The shell's default Node is 26.7.0; CI pins 24.22.2, so select the pinned runtime for the checks.
+
+1. Acquire the shared validation lock atomically; only remove it if this continuation owns it. Run the four new
+   restart cases red against `/tmp/core-refactor-engines-streams-before.ts` substituted for
+   `cli/src/core/engines/otherStreams.ts`, preserving/restoring the current file in `finally`; then run them green.
+   The filter is `reopens a store|ignores a turn operation|does not let an old Stop|does not restore an opening`.
+   The tests are written, but neither red nor green has been observed.
+2. Typecheck, architecture/lean tests, all changed core/engine tests, the unchanged 1,046-case golden; fix failures.
+   Then full `npm run test:core`, `npm run test:harnessd` and the clean-head local-check receipt. Do not waive uncovered
+   branches in the new core stream coordinator.
+3. E2E: `otherEngines`, `eagerRepair`, `eagerIdentity`, `lean`, `usageProcess`, affected native cancellation/attach
+   recovery, plus explicit protocol-1/master skew. Use isolated homes/daemon/tmux and the normal bundle runner.
+4. Independent review and the same-workload attach/idle/live-tail CPU comparison. The inherited `OTHER_ENGINES_PERF`
+   case measures history reads; it still needs the planned live-tail CPU workload. Listed closure only (not measured
+   process performance): `aad8dcd535` 539 files / 92,691 lines; this continuation 539 / 92,713 before this notes edit.
+
+### Remaining implementation review, found by reading (not reproduced yet)
+
+- Initial file opens do not retain the fold's byte boundary: `streams.ts` assigns `stream.offset = resume?.offset`
+  and starts an ordinary new tail at current EOF. A restart before the first live frame can fold missed writes as
+  history, and a write between fold and tail installation can be skipped. Cursor explicitly skips byte-offset resume
+  and snapshots the current rewritten file. Add deterministic first-open/restart/gap tests and preserve the legacy
+  rewrite semantics while fixing both paths.
+- `open()` in the core still needs the same lifetime protection as reconnect for forget, stop, rebind and competing
+  initial opens. Worker async opens also need cancellation/supersession review; timeout must not leave a late stream.
+- Enforce/check serial continuity and collection bounds on the core side. The inherited validators check shapes but
+  allow unbounded event/frame arrays, and operation validation accepts replies missing required `events`/`turn` fields.
+  Audit UTF-8 byte accounting (`JSON.stringify(...).length` currently counts code units), acks and lost-token bounds.
+- Worker failure currently logs that conversations are held, but the plan requires an actionable visible session
+  state. Its e2e currently checks the log. Prove Stop fallback and recovery exactly once on real isolated processes.
+- Finish lifecycle cleanup: main creates `inlineOthers` but does not clear it at shutdown, and the worker request
+  factory's `clear()` clears streams without stopping its owned Watcher. Review pending opens, polls, Tasks and timers.
+- The inherited core stream specs contain fixed sleeps (5/30 ms); replace them with controlled timers or observable
+  completion. Finish coverage and request-validator cases rather than treating the carried tests as evidence.
+- Hermes home/store discovery and OpenClaw store discovery remain in core (`transcripts/stores.ts` loads Hermes's
+  implementation). Reconcile their movement with step 1b's design. Runtime pane/config/catalog/model-control work
+  remains step 2; purge/export remains step 3.
 
 ## Step 1a: what landed
 

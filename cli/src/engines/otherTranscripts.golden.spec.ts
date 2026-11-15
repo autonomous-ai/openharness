@@ -283,7 +283,7 @@ function livePath(core: Core, session: RegisteredSession, pane: string | null) {
     runtimeProfiles,
     captureTerminal: async () => pane,
     emit: emit as never,
-    questionWatcher: { start: (sessionId) => { out.push(['question watch', sessionId]) } },
+    tokenUsage: { changed: () => {} }, questionWatcher: { start: (sessionId) => { out.push(['question watch', sessionId]) } },
     terminalLabel: () => 'tmux:%0',
     storeOf: core.createStoreOf(dbs(), hermesDb),
     concurrency: 1,

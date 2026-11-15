@@ -116,7 +116,7 @@ function attachTo(db: string, row: RegisteredSession, emit: AttachDeps['emit']) 
     watcher: { addSession: vi.fn(async () => {}), removeSession: vi.fn(async () => {}), pollSession: vi.fn(async () => {}), hold: vi.fn(async () => null), tails: vi.fn(() => false) },
     setInterpretationHold: () => false, announceSession, cursorDiscovery: { add: vi.fn(async () => {}) }, device: () => undefined,
     runtimeProfiles: runtimeProfiles as unknown as AttachDeps['runtimeProfiles'], captureTerminal: vi.fn(async () => null), emit,
-    questionWatcher: { start: vi.fn() }, terminalLabel: () => 'tmux:%1',
+    tokenUsage: { changed: () => {} }, questionWatcher: { start: vi.fn() }, terminalLabel: () => 'tmux:%1',
     storeOf: createStoreOf({ opencode: '/db/opencode.db', kilo: '/db/kilo.db', devin: '/db/devin.db', openclaw: opened }, async () => '/db/hermes.db'),
     concurrency: 1,
   })

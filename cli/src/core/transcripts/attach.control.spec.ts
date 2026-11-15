@@ -58,7 +58,7 @@ function setup(mode: 'inline' | 'worker', content = prompt('T1')) {
     runtimeProfiles: { transcriptFields: () => [], beginHydrate: () => profile, hydrate: vi.fn(), hydrateEvidence: vi.fn(), ingest: () => false,
       ingestConfig: async () => false, ingestPane: () => false, capturePane: async () => null },
     cursorDiscovery: { add: async () => {} }, device: () => undefined, captureTerminal: async () => null,
-    emit, settled, questionWatcher: { start: vi.fn() }, terminalLabel: () => 'private fixture',
+    emit, settled, tokenUsage: { changed: () => {} }, questionWatcher: { start: vi.fn() }, terminalLabel: () => 'private fixture',
     storeOf: async () => null, concurrency: 1 })
   const ingest = createIngest({ liveFor, has: () => true, bySession: () => row, normalizers,
     tokenUsage: { changed: vi.fn() }, device: () => undefined, runtimeProfiles: { ingest: () => false, evidence: () => false },

@@ -56,6 +56,8 @@ export interface AttachDeps {
   }
   captureTerminal: (target: string, historyLines?: number) => Promise<string | null>
   emit: (sessionId: string, events: LiveEvent[], opts?: { resumed?: boolean }) => void
+  /** Tell the usage service when an attach has folded a transcript. */
+  tokenUsage: { changed(session: RegisteredSession): void }
   questionWatcher: Pick<QuestionWatcher, 'start'>
   /** How a session's terminal is named in the log. */
   terminalLabel: (session: RegisteredSession) => string
@@ -73,7 +75,7 @@ export interface AttachDeps {
 
 export function createAttach({
   liveFor, resolve, remoteLive, terminalGone, normalizers, others, watcher, cursorDiscovery, device, runtimeProfiles, captureTerminal, emit,
-  questionWatcher, terminalLabel, storeOf, concurrency, relaunchMarks,
+  tokenUsage, questionWatcher, terminalLabel, storeOf, concurrency, relaunchMarks,
   wholeReadCapBytes = WHOLE_READ_CAP_BYTES, settled, setInterpretationHold, announceSession,
 }: AttachDeps) {
   const { liveParsers } = normalizers
@@ -636,7 +638,7 @@ export function createAttach({
     // live line (e2e/usageProcess.e2e.ts, "explicit inline usage follows the same aggregate boundary", 6 runs of 6
     // on a loaded Mac, 2026-11-15). The link reads a session at most once in 15 s (core/usageLink.ts), however often
     // it is attached.
-    if (lines.length || fromEnd?.content) tokenUsage.changed(session)
+    if (lines.length || fromEnd?.content || opened?.lines) tokenUsage.changed(session)
     return true
   }
 
