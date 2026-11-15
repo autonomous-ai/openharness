@@ -49,11 +49,11 @@ export function clearHeldHomes(): void {
 }
 
 /** The paths in `lsof -Fn` output: each `n` line that starts with `/`. Null when the output is cut (no last newline)
- *  or has over 4,096 lines. */
+ *  or names over 4,096 descriptors (an `f` line each). */
 export function lsofPaths(output: string): string[] | null {
   if (!output.endsWith('\n')) return null
   const lines = output.slice(0, -1).split('\n')
-  if (lines.length > DESCRIPTORS_MOST) return null
+  if (lines.filter((line) => line.startsWith('f')).length > DESCRIPTORS_MOST) return null
   return lines.filter((line) => line.startsWith('n/')).map((line) => line.slice(1))
 }
 
