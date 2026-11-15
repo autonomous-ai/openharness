@@ -76,14 +76,15 @@ Rule 7 bars a core mechanism only one component uses. A generic shape is fine on
   `followed()` (not caught up -> `{error:'SERVICE_UNAVAILABLE', retryable:true}`, never read as "not running"), `live.get` ->
   NOT_RUNNING / NOT_ALLOWED (guest), `setOn(true)`, counts, `startFor`. Stop: stop line, `setOn(false)` (a write failure is
   logged, the browser still stops), stop. `byPerson` removed. Options `followed` and `everyAgent` (in its process:
-  `follow.ready(10 s)` and the generic `agents` query). `begin()` reconciles with `everyAgent` (deletes browsers of agents
-  in neither list, as before) and then `browsers.stopAllBut(attached || live&&on)` (new: stops a browser left running for
-  an agent that ended while both the process and the core restarted).
+  `follow.ready(10 s)` and the generic `agents` query). `begin()` finishes recorded purges, sweeps unlisted containers
+  without deleting volumes, then `browsers.stopAllBut(attached || live&&on)` stops a browser left running for an agent
+  that ended while both processes restarted. A readable agent list cannot authorize deleting an omitted profile.
 - `browsers.ts`: `move` also moves `on[from] -> on[to]` and marks `adopted[from]`; `remove` drops `on`/`adopted`;
   new `stopAllBut(wanted)`.
 - Process (`agentBrowserProcess.ts`): `followLink({})`; queries now only `browser_state`, `streams` (kept for PR 2),
   `agent_of_pane`, `count`, `agents` (all generic, answered by `core/agentQueries.ts`); removed `agent_ids`, `set_browser`,
-  `move_browser` and the old `attached/stopped/deleted/moved` events.
+  `move_browser` and the old events from the current protocol. A dated process-only adapter still accepts an older
+  core's `attached/stopped/deleted/moved`, including its `move_browser` handshake after a move.
 - Core link (`core/agentBrowserLink.ts`, until PR 2): only frame states + streams. It follows the hub in-process
   (`agentBrowserLink.follow()`, called in main.ts when the browser runs out of process): keeps states only for live
   agents; an `ended` drops the state and re-syncs the frame. Its unknown queries fall through to `answerAgentQuery`.
@@ -177,3 +178,41 @@ an agent already known to a follower is not reinserted or pruned at each look.
 Remaining before merge: final coverage receipts, integration checks, the exact-head CI run and the performance
 comparison. The earlier isolated scan measurement was slower than main; a full isolated-daemon comparison is being
 recorded as well. Package 2's frame parts and stream work remain step 2.
+
+## Review corrections, 2026-11-15
+
+Design before code:
+
+- Growth/deletion: a readable agent list is not a complete identity inventory: corrupt saved records are omitted.
+  Startup finishes only deletions already recorded in the Browser state file; an explicit purge still removes the
+  profile. A profile whose purge notice was lost across a full daemon outage is retained, rather than guessing that
+  its omitted record was deleted. Running containers without a live owner are stopped, retaining their volumes.
+  This intentionally favors preserving logins over reclaiming an uncertain orphan; no new core inventory or port.
+- Concurrency: pending Starts carry per-request identity, invalidated by a later Stop/end/purge. A person's Start or
+  Stop also completes legacy flag adoption, so a late row cannot reverse that choice. Both agents' move queues are
+  reserved before the migration lookup; consecutive pane changes stay ordered.
+- Read cost/scale: startup no longer queries/parses all agent rows to decide deletion. Pending intent is retained only
+  during the bounded catch-up wait. The existing per-agent queues serialize work; no poll or global lock is added.
+- Compatibility/migration/rollback: the dated old-core move adapter carries destination/on data and completes the
+  `move_browser` handshake before restoring the destination. It lives solely in the Browser service/process and can
+  go on 2026-12-18. Existing Browser state schema and older-build rollback stay unchanged.
+- Audience/identity: existing owner and guest checks remain authoritative. No credential or login is copied.
+- Failure: an unavailable legacy core leaves the moved profile stored and logs the existing named move failure.
+  Corrupt saved-agent metadata cannot trigger volume deletion.
+- Platforms: macOS/Linux Browser service; Windows remains unsupported. Isolated fake Podman/service fixtures cover
+  the races; bundled daemon e2e and core coverage are required before merge.
+
+Validation of these review corrections (before the parent's next main integration):
+
+- Node 24.22.2, macOS, isolated fake Podman/service fixtures. The five new regression cases failed on
+  `b9359d3ac9025838c2700f6a4cd2394b5fac7db2`: missing-profile deletion, Start/Stop, late legacy adoption, consecutive
+  pane moves, and the old-core move handshake. Raw red output: `/tmp/core-browser-review-red.log`.
+- Green: 218 tests in `agentBrowser.spec.ts`, `agentBrowserProcess.spec.ts`, `agentBrowser/browsers.spec.ts`, and
+  `agentBrowser/containers.spec.ts`; all four implementation files at 100% statements/branches/functions/lines
+  (934 statements, 570 branches, 224 functions, 709 lines). Raw output: `/tmp/core-browser-review-coverage.log`.
+  These include cancellation on end/purge/pane takeover/service stop, two pending Starts, malformed legacy moves,
+  unavailable/refused/timed-out/stale core replies, and keeping an off profile without starting it.
+- Node 24.22.2 typecheck passed; no core file or import was added. No full-suite receipt or final-head e2e is claimed:
+  the parent must integrate current main, review the combined change, and run the remaining required acceptance.
+- A second ordering issue exposed by the consecutive-move regression is fixed too: a queued Start for B, not yet
+  published as state, is cancelled when B's profile moves to C; it cannot recreate B after the move.

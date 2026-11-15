@@ -25,18 +25,21 @@ describe('the agent browser in its own process', () => {
     }
     const requests = { agent_browser_available: vi.fn() }
     const stop = vi.fn()
+    const move = vi.fn(async (_from: string, _session: RegisteredSession, _on: boolean) => true)
+    let unlegacy!: () => void
     const service = runAgentBrowserService({
       dataDir: '/data', socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't',
       run: (opts) => { options = opts; return { stop } },
       start: (core, ports: Pick<CorePorts, 'agentBrowser'>, opts) => {
         api = core
         given = opts
+        unlegacy = opts!.legacyMoves!(move)
         core.agents.follow!((event) => { heard.push(event) })
         ports.agentBrowser = port
         return requests
       },
     })
-    return { options: options!, api: api!, given: given!, port, requests, service, stop, heard }
+    return { options: options!, api: api!, given: given!, port, requests, service, stop, heard, move, unlegacy }
   }
 
   it('answers its requests and hears what the core tells it of agents, and nothing else', () => {
@@ -62,20 +65,102 @@ describe('the agent browser in its own process', () => {
   // on. A core from before still does (a newer master after a rollback): heard as what happens to agents now. Delete on
   // or after 2026-12-18.
   it('hears what a core from before tells of agents as what happens to them now, and drops what is not one', () => {
-    const { options, heard } = setup()
+    const { options, heard, move } = setup()
     const row = { agentId: 'a1', sessionId: 's1', browser: true } as RegisteredSession
     options.onEvent!({ kind: 'attached', session: row })
     options.onEvent!({ kind: 'stopped', agentId: 'a1' })
     options.onEvent!({ kind: 'deleted', agentId: 'a1' })
-    options.onEvent!({ kind: 'moved', from: 'a1', session: { agentId: 'b1' }, on: true })
+    options.onEvent!({ kind: 'moved', from: 'a1', session: { agentId: 'b1' }, on: false })
     options.onEvent!({ kind: 'moved', from: 'a1' })
     options.onEvent!({ kind: 'attached', session: { browser: true } })
     expect(heard).toEqual([
       { kind: 'running', session: row },
       { kind: 'ended', agentId: 'a1' },
       { kind: 'purged', agentId: 'a1', sessionIds: [] },
-      { kind: 'taken', from: 'a1', to: 'b1' },
     ])
+    expect(move).toHaveBeenCalledWith('a1', { agentId: 'b1' }, false)
+  })
+
+  it('finishes a legacy move before asking that core to move its flag and publishing the destination', async () => {
+    const { options, move, heard } = setup()
+    let moved!: (value: boolean) => void
+    move.mockReturnValue(new Promise(resolve => { moved = resolve }))
+    const query = vi.fn(async (name: string) => name === 'move_browser' ? { ok: true } : { agents: [] })
+    options.onConnected!({ query })
+    const session = { agentId: 'b1', sessionId: 's-b1' }
+    options.onEvent!({ kind: 'moved', from: 'a1', session, on: true })
+    expect(query.mock.calls.some(([name]) => name === 'move_browser')).toBe(false)
+    moved(true)
+    await vi.waitFor(() => expect(heard).toContainEqual({ kind: 'running', session: { ...session, browser: true } }))
+    expect(query).toHaveBeenCalledWith('move_browser', { from: 'a1', to: 'b1' })
+  })
+
+  it.each([false, true])('a legacy move that returns %s while off changes no core flag', async moved => {
+    const { options, move } = setup()
+    move.mockResolvedValue(moved)
+    const query = vi.fn(async (_name: string) => ({ agents: [] }))
+    options.onConnected!({ query })
+    options.onEvent!({ kind: 'moved', from: 'a1', session: { agentId: 'b1' }, on: false })
+    await Promise.resolve()
+    expect(query.mock.calls.some(args => args[0] === 'move_browser')).toBe(false)
+  })
+
+  it('drops malformed legacy moves and moves after the service unsubscribes', () => {
+    const { options, move, unlegacy } = setup()
+    const valid = { kind: 'moved', from: 'a1', session: { agentId: 'b1' }, on: true }
+    for (const payload of [{ ...valid, from: 2 }, { ...valid, from: '' }, { ...valid, session: null }, { ...valid, on: 'yes' }]) options.onEvent!(payload)
+    unlegacy()
+    options.onEvent!(valid)
+    expect(move).not.toHaveBeenCalled()
+  })
+
+  it.each(['missing', 'refused', 'throws', 'times out'] as const)('names a legacy move whose core answer %s without attaching the destination', async kind => {
+    vi.useFakeTimers()
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const { options, heard } = setup()
+    const query = vi.fn(async (name: string) => {
+      if (name !== 'move_browser') return { agents: [] }
+      if (kind === 'throws') throw new Error('disconnected')
+      if (kind === 'times out') return new Promise<Record<string, unknown>>(() => {})
+      return kind === 'refused' ? { error: 'NOT_RUNNING' } : {}
+    })
+    options.onConnected!({ query })
+    options.onEvent!({ kind: 'moved', from: 'a1', session: { agentId: 'b1' }, on: true })
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(log).toHaveBeenCalledWith(`agent browser b1: browser_move_failed (${kind === 'refused' ? 'not_running' : 'no_answer'})`)
+    expect(heard).toEqual([])
+    log.mockRestore()
+  })
+
+  it.each(['before connection', 'before move completes', 'before answer'] as const)('a legacy move disconnected %s never restores a stale destination', async when => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const { options, move, heard } = setup()
+    let moved!: (value: boolean) => void
+    move.mockReturnValue(new Promise(resolve => { moved = resolve }))
+    let answer!: (value: Record<string, unknown>) => void
+    const reply = new Promise<Record<string, unknown>>(resolve => { answer = resolve })
+    const query = vi.fn(async (name: string) => name === 'move_browser' ? reply : { agents: [] })
+    if (when !== 'before connection') options.onConnected!({ query })
+    options.onEvent!({ kind: 'moved', from: 'a1', session: { agentId: 'b1' }, on: true })
+    if (when === 'before move completes') options.onDisconnected!()
+    moved(true)
+    if (when === 'before answer') {
+      await vi.waitFor(() => expect(query).toHaveBeenCalledWith('move_browser', { from: 'a1', to: 'b1' }))
+      options.onDisconnected!()
+      answer({ ok: true })
+    }
+    await vi.waitFor(() => expect(log).toHaveBeenCalledWith('agent browser b1: browser_move_failed (no_answer)'))
+    expect(heard).toEqual([])
+    log.mockRestore()
+  })
+
+  it('names a legacy move handler failure without an unhandled rejection', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const { options, move } = setup()
+    move.mockRejectedValue(new Error('closing'))
+    options.onEvent!({ kind: 'moved', from: 'a1', session: { agentId: 'b1' }, on: true })
+    await vi.waitFor(() => expect(log).toHaveBeenCalledWith('agent browser b1: browser_move_failed (no_answer)'))
+    log.mockRestore()
   })
 
   it('asks to follow every agent each time it connects, and is caught up once the core answers, waiting 10 s at most', async () => {

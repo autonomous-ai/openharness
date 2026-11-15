@@ -161,10 +161,15 @@ export class Containers {
    * lists for it, never one made from its label: after a move, `harness-browser-<its agent>` can be another agent's
    * running browser.
    */
-  async sweep(listedAgentIds: Set<string>): Promise<number> {
-    const strays = (await this.mine(['-a'])).filter(container => !listedAgentIds.has(container.Labels!['harness.agent']!))
-    for (const stray of strays) await this.stop(stray.Names[0]!.slice(NAME.length))
-    return strays.length
+  async sweep(listed: (agentId: string) => boolean): Promise<number> {
+    let stopped = 0
+    for (const container of await this.mine(['-a'])) {
+      // A start or move may have claimed it while Podman listed containers or a previous stray was stopped.
+      if (listed(container.Labels!['harness.agent']!)) continue
+      await this.stop(container.Names[0]!.slice(NAME.length))
+      stopped++
+    }
+    return stopped
   }
 
   async running(): Promise<string[]> {

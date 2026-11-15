@@ -65,7 +65,7 @@ function rig() {
     }),
     stop: vi.fn(async (profile: string) => gone(profile)),
     remove: vi.fn(async (profile: string) => gone(profile)),
-    sweep: vi.fn(async (_listed: Set<string>) => 0),
+    sweep: vi.fn(async (_listed: (agentId: string) => boolean) => 0),
     running: vi.fn(async () => [...running]),
     ready: vi.fn(async (profile: string) => running.has(agentNamed(profile))),
     exitCode: vi.fn(async (agentId: string) => (running.has(agentId) ? null : exitCodes.get(agentId) ?? null)),
@@ -248,7 +248,7 @@ describe('Browsers', () => {
     r.availability.value = { state: 'needs_setup' }
     const run = deferred<void>()
     r.setup.run.mockReturnValueOnce(run.promise)
-    await r.browsers.resume(new Set())
+    await r.browsers.resume()
     expect(r.setup.run).toHaveBeenCalledWith(setup)
     await r.browsers.start('a1')
     expect(shown(r, 'a1')).toBe('setup/starting_podman')
@@ -260,7 +260,7 @@ describe('Browsers', () => {
     writeFileSync(path, JSON.stringify({ browsers: {}, deleting: [], setup: { step: 'installing' } }))
     const r = rig()
     r.availability.value = { state: 'needs_setup' }
-    await r.browsers.resume(new Set())
+    await r.browsers.resume()
     expect(r.setup.run).not.toHaveBeenCalled()
     await r.browsers.start('a1')
     expect(shown(r, 'a1')).toBe('failed/podman_install_failed')
@@ -618,7 +618,7 @@ describe('Browsers', () => {
     expect(r.state.read().deleting).toEqual(['a1'])
 
     const after = rig()
-    await after.browsers.resume(null)
+    await after.browsers.resume()
     expect(after.containers.remove).toHaveBeenCalledWith('a1')
     expect(after.state.read()).toEqual({ browsers: {}, deleting: [], setup: null })
   })
@@ -649,48 +649,44 @@ describe('Browsers', () => {
     expect(r.logged.at(-1)).toBe('agent browser: could not list running browsers: podman ps timed out after 30000 ms')
   })
 
-  it('browser of a gone agent is deleted at service start, and resume sweeps unlisted containers of this daemon', async () => {
+  it('startup keeps profiles until an explicit purge, and sweeps only unlisted containers', async () => {
     const settings = defaultSettings(host)
     writeFileSync(path, JSON.stringify({ browsers: { a1: settings, a2: settings }, deleting: [], setup: null }))
     const r = rig()
     r.containers.sweep.mockResolvedValue(2)
-    await r.browsers.resume(new Set(['a1']))
-    expect(r.containers.remove.mock.calls).toEqual([['a2']])
-    expect(Object.keys(r.state.read().browsers)).toEqual(['a1'])
-    expect(r.containers.sweep).toHaveBeenCalledWith(new Set(['a1']))
+    await r.browsers.resume()
+    expect(r.containers.remove).not.toHaveBeenCalled()
+    expect(Object.keys(r.state.read().browsers)).toEqual(['a1', 'a2'])
+    const listed = r.containers.sweep.mock.calls[0]![0]
+    expect(listed('a1')).toBe(true)
+    expect(listed('a2')).toBe(true)
+    expect(listed('other')).toBe(false)
+    r.state.update(state => { state.browsers.new = settings })
+    expect(listed('new')).toBe(true)
     expect(r.logged).toEqual([expect.stringContaining('2')])
   })
 
-  it('no answer from the core deletes nothing', async () => {
+  it('startup finishes only the purges already recorded', async () => {
     const settings = defaultSettings(host)
     writeFileSync(path, JSON.stringify({ browsers: { a1: settings, a2: settings }, deleting: ['a3'], setup: null }))
     const r = rig()
-    await r.browsers.resume(null)
+    await r.browsers.resume()
     expect(r.containers.remove.mock.calls).toEqual([['a3']])
-    expect(r.containers.sweep).not.toHaveBeenCalled()
+    expect(r.containers.sweep).toHaveBeenCalledOnce()
     expect(Object.keys(r.state.read().browsers)).toEqual(['a1', 'a2'])
-  })
-
-  it('an empty set from the core is believed', async () => {
-    const settings = defaultSettings(host)
-    writeFileSync(path, JSON.stringify({ browsers: { a1: settings, a2: settings }, deleting: [], setup: null }))
-    const r = rig()
-    await r.browsers.resume(new Set())
-    expect(r.containers.remove.mock.calls).toEqual([['a1'], ['a2']])
-    expect(r.state.read().browsers).toEqual({})
   })
 
   it('a sweep Podman cannot answer is logged', async () => {
     const r = rig()
     r.containers.sweep.mockRejectedValue(new PodmanError('podman_failed', 'podman ps failed: machine is not running'))
-    await r.browsers.resume(new Set())
+    await r.browsers.resume()
     expect(r.logged).toEqual([expect.stringContaining('machine is not running')])
   })
 
   it('an unreadable state file removes nothing and is named', async () => {
     writeFileSync(path, '{"browsers": {')
     const r = rig()
-    await r.browsers.resume(new Set())
+    await r.browsers.resume()
     await r.browsers.start('a1')
     await r.browsers.delete('a1')
     await r.browsers.start('a2')
@@ -1022,7 +1018,7 @@ describe('Browsers, named by a profile', () => {
     // Nor at the next service start, from a delete recorded before it was cut off.
     r.state.update(s => { s.deleting.push('a1') })
     const after = rig()
-    await after.browsers.resume(new Set(['a1', 'b1']))
+    await after.browsers.resume()
     expect(after.containers.remove).not.toHaveBeenCalled()
     expect(r.state.read().deleting).toEqual([])
     expect(Object.keys(r.state.read().browsers)).toEqual(['b1'])

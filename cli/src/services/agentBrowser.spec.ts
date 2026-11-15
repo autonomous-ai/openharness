@@ -17,6 +17,8 @@ import { fakePodman, type FakePodman } from './agentBrowser/fakePodman.js'
 import { imageTag } from './agentBrowser/image.js'
 import { READY_LINE, STOPPED_LINE } from './agentBrowser/notices.js'
 import { createPodman } from './agentBrowser/podman.js'
+import { runAgentBrowserService } from './agentBrowserProcess.js'
+import type { ServiceProcessOptions } from './process.js'
 import { defaultSettings, type BrowserSettings } from './agentBrowser/settings.js'
 import { StateFile } from './agentBrowser/stateFile.js'
 import { resetAgentTmpSweep } from '../lib/agentTmp.js'
@@ -698,18 +700,9 @@ describe('the agent browser service', () => {
     expect(asked().filter(line => / rm |^rm /.test(line))).toEqual([])
   })
 
-  it('service start resumes with the core\'s live and stopped agents, and with none when the core does not answer', async () => {
+  it('service start finishes recorded purges without treating the readable agent list as complete', async () => {
     const listed = { a1: defaultSettings(HOST), a2: defaultSettings(HOST), a3: defaultSettings(HOST) }
-    saveState(listed)
-    start(fakeCore({ dataDir }), { everyAgent: async () => [session('a1'), session('a2', { browser: undefined })] })
-    await eventually(() => expect(asked()).toContain('volume rm harness-browser-a3'))
-    // The delete ends in the state file: the file written next must not lose a3 to it.
-    await eventually(() => expect(Object.keys(savedState().browsers).sort()).toEqual(['a1', 'a2']))
-    expect(asked().filter(line => line.includes('harness-browser-a1') || line.includes('harness-browser-a2'))).toEqual([])
-
-    // No answer, a failed one, or a core that has no such call: only the delete already recorded is finished. Its end
-    // is the signal resume has run: a delete of a listed agent would record it in the same step.
-    for (const everyAgent of [async () => { throw new Error('timed out') }, async () => null]) {
+    for (const everyAgent of [async () => [session('a1')], async () => { throw new Error('timed out') }, async () => null]) {
       await stopAll()
       fake = fakePodman()
       fake.reply('ps', { stdout: '[]' })
@@ -718,16 +711,25 @@ describe('the agent browser service', () => {
       await eventually(() => expect(savedState().deleting).toEqual([]))
       expect(Object.keys(savedState().browsers).sort()).toEqual(['a1', 'a2', 'a3'])
       expect(asked()).toContain('volume rm harness-browser-a9')
-      // Startup lists running containers after resuming the recorded delete. Observe that step before asserting
-      // what it changed: on a faster host its read-only listing already arrived at the old assertion (#4320).
       const listing = `ps --filter label=harness.daemon=${daemonIdOf(dataDir)} --format json`
+      const sweeping = `ps -a --filter label=harness.daemon=${daemonIdOf(dataDir)} --format json`
       await eventually(() => expect(asked()).toContain(listing))
-      expect(asked().filter(line => line !== listing && !line.includes('harness-browser-a9') && !line.includes('harness-proxy-a9'))).toEqual([])
+      expect(asked().filter(line => line !== listing && line !== sweeping && !line.includes('harness-browser-a9') && !line.includes('harness-proxy-a9'))).toEqual([])
     }
   })
 
   // `harness browser`'s screenshots and long output where nothing sets a TMPDIR (agentClient/browserOutput.ts): the core
   // swept them at each launch until 2026-11-15.
+  it('keeps a profile omitted by an unreadable saved-agent record while finishing a recorded purge', async () => {
+    saveState({ archived: defaultSettings(HOST) }, ['purged'])
+    start(fakeCore({ dataDir }), { everyAgent: async () => [] })
+    await eventually(() => expect(savedState().deleting).toEqual([]))
+    const listing = `ps --filter label=harness.daemon=${daemonIdOf(dataDir)} --format json`
+    await eventually(() => expect(asked()).toContain(listing))
+    expect(asked().filter(line => line.startsWith('volume rm '))).toEqual(['volume rm harness-browser-purged'])
+    expect(Object.keys(savedState().browsers)).toEqual(['archived'])
+  })
+
   it('sweeps the agents\' folder of what nothing changed in for a week, as it begins', async () => {
     resetAgentTmpSweep()
     const shot = join(dataDir, 'agent-tmp', 'browser', 'shot.png')
@@ -741,12 +743,15 @@ describe('the agent browser service', () => {
     expect(existsSync(shot)).toBe(false)
   })
 
-  // In the core's process the service reads the registry itself: every agent, live and stopped.
-  it('in the core\'s process, which agents are here is the core\'s own list', async () => {
-    saveState({ a1: defaultSettings(HOST), a2: defaultSettings(HOST) })
-    start(fakeCore({ dataDir, agents: { all: () => [session('a1')] } }), { everyAgent: undefined })
-    await eventually(() => expect(asked()).toContain('volume rm harness-browser-a2'))
-    await eventually(() => expect(Object.keys(savedState().browsers)).toEqual(['a1']))
+  it('inline migration reads the legacy flag from the core list without using omissions to delete profiles', async () => {
+    saveState({ a1: defaultSettings(HOST), unreadable: defaultSettings(HOST) })
+    const all = vi.fn(() => [session('a1')])
+    const sw = startSwitching([session('b1', { browser: undefined })], { agents: { all }, options: { everyAgent: undefined } })
+    sw.move('a1', 'b1')
+    await ready(sw.port, 'b1')
+    expect(all).toHaveBeenCalledOnce()
+    expect(Object.keys(savedState().browsers).sort()).toEqual(['b1', 'unreadable'])
+    expect(asked().filter(call => call.startsWith('volume rm'))).toEqual([])
   })
 
   // In its own process, before the core has answered what it follows: it cannot tell an agent that ended from one it
@@ -821,7 +826,8 @@ describe('the agent browser service', () => {
     expect(everyAgent).not.toHaveBeenCalled()
     expect(fake.calls()).toEqual([])
     await requests.agent_browser_available!({}, LOCAL)
-    await eventually(() => expect(everyAgent).toHaveBeenCalledTimes(1))
+    expect(everyAgent).not.toHaveBeenCalled()
+    expect(asked()).toContain('info --format json')
   })
 
   it('a browser with no Podman here waits for setup, and its tools are told no path', async () => {
@@ -874,6 +880,59 @@ describe('the person\'s Start and Stop', () => {
     expect(await sw.requests.agent_browser_stop!({ agentId: 'a1' }, OTHER_DESKTOP)).toEqual({ ok: true })
     expect(turnedOn()).toEqual({})
     expect(sw.port.frameContext('a1')).toBeUndefined()
+  })
+
+  it('a Stop supersedes a Start waiting for catch-up, and a later Start can still turn it on', async () => {
+    let caughtUp!: (ready: boolean) => void
+    const pending = new Promise<boolean>(resolve => { caughtUp = resolve })
+    const sw = startSwitching(undefined, { options: { followed: () => pending } })
+    const first = sw.requests.agent_browser_start!({ agentId: 'a1' }, LOCAL)
+    await sw.requests.agent_browser_stop!({ agentId: 'a1' }, LOCAL)
+    caughtUp(true)
+    await first
+    expect(turnedOn()).toEqual({})
+    expect(sw.port.frameContext('a1')).toBeUndefined()
+    expect(asked().some(call => call.startsWith('create '))).toBe(false)
+    await sw.requests.agent_browser_start!({ agentId: 'a1' }, LOCAL)
+    await ready(sw.port, 'a1')
+  })
+
+  it('two Starts awaiting catch-up keep the newer intent until its own answer arrives', async () => {
+    const replies: Array<(ready: boolean) => void> = []
+    const sw = startSwitching(undefined, { options: { followed: () => new Promise(resolve => { replies.push(resolve) }) } })
+    const first = sw.requests.agent_browser_start!({ agentId: 'a1' }, LOCAL)
+    const second = sw.requests.agent_browser_start!({ agentId: 'a1' }, LOCAL)
+    replies[0]!(true)
+    await first
+    expect(existsSync(join(dataDir, 'agent-browser.json'))).toBe(false)
+    replies[1]!(true)
+    await second
+    await ready(sw.port, 'a1')
+  })
+
+  it.each(['ended', 'purged', 'taken', 'service stopped'] as const)('a Start waiting for catch-up is cancelled when %s', async kind => {
+    let answer!: (ready: boolean) => void
+    const pending = new Promise<boolean>(resolve => { answer = resolve })
+    const sw = startSwitching(undefined, { options: { followed: () => pending } })
+    const started = sw.requests.agent_browser_start!({ agentId: 'a1' }, LOCAL)
+    if (kind === 'ended') sw.end('a1')
+    else if (kind === 'purged') sw.purge('a1')
+    else if (kind === 'taken') sw.port.taken('a1', session('b1', { browser: undefined }))
+    else sw.port.stop()
+    answer(true)
+    await started
+    expect(sw.port.frameContext('a1')).toBeUndefined()
+    expect(asked().some(call => call.startsWith('create '))).toBe(false)
+  })
+
+  it('a Stop before the legacy row arrives is not undone by its Browser flag', async () => {
+    const sw = startSwitching([])
+    await sw.requests.agent_browser_stop!({ agentId: 'a1' }, LOCAL)
+    sw.rows.set('a1', session('a1'))
+    sw.attach('a1')
+    expect(turnedOn()).toEqual({})
+    expect(sw.port.frameContext('a1')).toBeUndefined()
+    expect(savedState()).toMatchObject({ adopted: { a1: true } })
   })
 
   it('start turns it on in the service\'s own state file, starts the browser and counts agent_browser_started; a second start does nothing', async () => {
@@ -1691,6 +1750,70 @@ describe('the browser moves with its pane', () => {
 
   // Its agent ran with its Browser on before the update, ended, and has not run since: its saved row still carries the
   // flag the core kept. Delete on or after 2026-12-18, with `adopt`.
+  it('consecutive pane moves reserve their queues before the legacy flag lookup', async () => {
+    saveState({ a1: defaultSettings(HOST) })
+    let looking!: () => void
+    const looked = new Promise<void>(resolve => { looking = resolve })
+    let answer!: (rows: RegisteredSession[]) => void
+    const pending = new Promise<RegisteredSession[]>(resolve => { answer = resolve })
+    let hold = false
+    const everyAgent = vi.fn(async () => {
+      if (!hold) return [session('a1')]
+      looking()
+      return pending
+    })
+    const sw = startSwitching([session('b1', { browser: undefined }), session('c1', { browser: undefined })], { options: { everyAgent } })
+    const listing = `ps --filter label=harness.daemon=${daemonIdOf(dataDir)} --format json`
+    await eventually(() => expect(asked()).toContain(listing))
+    hold = true
+    sw.move('a1', 'b1')
+    await looked
+    sw.move('b1', 'c1')
+    answer([session('a1')])
+    await eventually(() => expect(Object.keys(savedState().browsers)).toEqual(['c1']))
+    expect(savedState().browsers.c1).toMatchObject({ profile: 'a1' })
+    expect(turnedOn()).toEqual({ c1: true })
+    await ready(sw.port, 'c1')
+  })
+
+  it('an older core moves its Browser flag before the destination starts on the same profile', async () => {
+    saveState({ a1: defaultSettings(HOST) })
+    let processOptions!: ServiceProcessOptions
+    let port!: Port
+    const service = runAgentBrowserService({
+      dataDir, socketPath: '/unused', machineId: 'test', token: 'test',
+      run: options => { processOptions = options; return { stop: () => {} } },
+      start: (core, ports, options) => {
+        const started = start(core, options)
+        ports.agentBrowser = port = started.port
+        return started.requests
+      },
+    })
+    const query = vi.fn(async (name: string) => name === 'move_browser' ? { ok: true } : { error: 'UNKNOWN_QUERY' })
+    processOptions.onConnected!({ query })
+    processOptions.onEvent!({ kind: 'moved', from: 'a1', session: session('b1', { browser: undefined }), on: true })
+    await ready(port, 'b1')
+    expect(query).toHaveBeenCalledWith('move_browser', { from: 'a1', to: 'b1' })
+    expect(savedState().browsers.b1).toMatchObject({ profile: 'a1' })
+    expect(turnedOn()).toEqual({ b1: true })
+    expect(asked().filter(call => call.startsWith('create '))).toEqual([expect.stringContaining('--label harness.agent=b1')])
+    service.stop()
+  })
+
+  it('the legacy adapter preserves an off profile and refuses a guest or a destination already on', async () => {
+    saveState({ a1: defaultSettings(HOST) })
+    let move!: (from: string, session: RegisteredSession, on: boolean) => Promise<boolean>
+    const sw = startSwitching([session('b1', { browser: undefined })], { options: { legacyMoves: listener => { move = listener; return () => {} } } })
+    expect(await move('a1', session('guest', { guest: 'another account' }), true)).toBe(false)
+    await sw.requests.agent_browser_start!({ agentId: 'b1' }, LOCAL)
+    await ready(sw.port, 'b1')
+    expect(await move('a1', session('b1'), true)).toBe(false)
+    expect(await move('a1', session('c1', { browser: undefined }), false)).toBe(true)
+    expect(savedState().browsers.c1).toMatchObject({ profile: 'a1' })
+    expect(turnedOn()).toEqual({ b1: true })
+    expect(sw.port.frameContext('c1')).toBeUndefined()
+  })
+
   it('a stopped agent\'s flag from before goes with its pane', async () => {
     saveState({ a1: defaultSettings(HOST) })
     const sw = startSwitching([session('b1', { browser: undefined })], { options: { everyAgent: async () => [session('a1'), session('b1', { browser: undefined })] } })
@@ -1702,10 +1825,8 @@ describe('the browser moves with its pane', () => {
 
   it('a core that does not say which agents are here takes no flag in, and the entry still moves', async () => {
     saveState({ a1: defaultSettings(HOST) })
-    // As the service begins, a1 is here: its browser is kept.
     const everyAgent = vi.fn(async (): Promise<RegisteredSession[] | null> => [session('a1'), session('b1', { browser: undefined })])
     const sw = startSwitching([session('b1', { browser: undefined })], { options: { everyAgent } })
-    await eventually(() => expect(everyAgent).toHaveBeenCalled())
     everyAgent.mockRejectedValueOnce(new Error('no core'))
     sw.move('a1', 'b1')
     await eventually(() => expect(Object.keys(savedState().browsers)).toEqual(['b1']))

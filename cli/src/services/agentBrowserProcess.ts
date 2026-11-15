@@ -23,17 +23,18 @@
 import type { Asker, BrowserRoute, CoreApi, CorePorts } from '../core/api.js'
 import { decodeTerminalLocal, TerminalBinaryKind } from '../lib/terminalBinary.js'
 import type { ProductUsageMetric } from '../lib/productUsageContract.js'
+import type { RegisteredSession } from '../lib/registry.js'
 import { startAgentBrowser } from './agentBrowser.js'
 import type { BrowserState } from './agentBrowser/browsers.js'
 import { followLink, type FollowLink } from './followLink.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess } from './process.js'
-import { agentsIn, processCoreApi } from './processCoreApi.js'
+import { agentsIn, isSession, processCoreApi } from './processCoreApi.js'
 import { turnsLink } from './turnsLink.js'
 
 type Payload = Record<string, unknown>
 type Ask = (query: string, payload: Payload) => Promise<Payload>
 
-// The service's start waits on this before it deletes anything; no answer in time is no answer.
+// A legacy row lookup and the old core's move handshake are bounded; neither is authority to delete a profile.
 const AGENTS_TIMEOUT_MS = 10_000
 // The core reads the pane's process from tmux within 2 s. An agent's command waits on this answer: a core that does not
 // give it in time names no agent, and the command is refused rather than left hanging.
@@ -61,7 +62,6 @@ function olderAgentEvent(payload: Payload): Payload | null {
   if (payload.kind === 'attached') return { kind: 'running', session: payload.session }
   if (payload.kind === 'stopped') return { kind: 'ended', agentId: payload.agentId }
   if (payload.kind === 'deleted') return { kind: 'purged', agentId: payload.agentId, sessionIds: [] }
-  if (payload.kind === 'moved') return { kind: 'taken', from: payload.from, to: (payload.session as Payload | undefined)?.agentId }
   return null
 }
 
@@ -118,6 +118,7 @@ export function runAgentBrowserService(options: AgentBrowserServiceOptions): Ser
   const ports: Pick<CorePorts, 'agentBrowser'> = { agentBrowser: null }
   // Every agent as it starts and ends here, and a purge and a pane's new agent, held for it while it is down.
   const follow = followLink({})
+  let legacyMove: ((from: string, session: RegisteredSession, on: boolean) => Promise<boolean>) | undefined
   /** What each browser last showed: a new core, or the same one after this link dropped, hears all of it again. */
   const shown = new Map<string, BrowserState>()
   const tell = (agentId: string, state: BrowserState | undefined) => {
@@ -142,9 +143,14 @@ export function runAgentBrowserService(options: AgentBrowserServiceOptions): Ser
       tell(agentId, state)
     },
     followed: () => follow.ready(FOLLOWED_WAIT_MS),
-    // Every agent, live then stopped, as any service may ask (core/agentQueries.ts `agents`): no answer in time is none.
-    // Once this connection's catch-up is in: asked as the process starts, before it has connected, it was no answer, and a
-    // gone agent's browser was kept until the process started again.
+    // The rollback core still owns its Browser flags. Kept entirely in this process, never a new core port.
+    // Delete on or after 2026-12-18.
+    legacyMoves: listener => {
+      legacyMove = listener
+      return () => { legacyMove = undefined }
+    },
+    // Readable rows for settings and legacy flag migration, never a complete inventory for deletion.
+    // Wait for this connection's catch-up so a query before connection is not mistaken for an empty list.
     everyAgent: async () => (await follow.ready(AGENTS_TIMEOUT_MS)
       ? agentsIn(await within(AGENTS_TIMEOUT_MS, ask('agents', {})).catch(() => null))
       : null),
@@ -160,6 +166,25 @@ export function runAgentBrowserService(options: AgentBrowserServiceOptions): Ser
       if (deliveries.heard(payload) || follow.heard(payload)) return
       const older = olderAgentEvent(payload)
       if (older) return void follow.heard({ kind: 'agent', event: older })
+      if (payload.kind === 'moved') {
+        const { from, session, on } = payload
+        if (typeof from !== 'string' || !from || !isSession(session) || typeof on !== 'boolean' || !legacyMove) return
+        const source = core
+        void legacyMove(from, session, on).then(async moved => {
+          if (!moved || !on) return
+          // Only the core that sent the move may change its old registry flag. Its attached notice can arrive before
+          // the answer; the repeated running notice below is harmless and also handles a dropped attached notice.
+          const answer = source && source === core
+            ? await within(AGENTS_TIMEOUT_MS, source.query('move_browser', { from, to: session.agentId })).catch(() => null)
+            : null
+          if (answer?.ok === true && source === core) {
+            follow.heard({ kind: 'agent', event: { kind: 'running', session: { ...session, browser: true } } })
+          } else {
+            console.log(`agent browser ${session.agentId}: browser_move_failed (${typeof answer?.error === 'string' ? answer.error.toLowerCase() : 'no_answer'})`)
+          }
+        }).catch(() => { console.log(`agent browser ${session.agentId}: browser_move_failed (no_answer)`) })
+        return
+      }
       if (payload.kind === 'stream') {
         const { connId, type, asker } = payload
         if (typeof connId !== 'string' || typeof type !== 'string') return

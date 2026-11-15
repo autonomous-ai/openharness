@@ -164,13 +164,17 @@ export class Browsers {
    * is stopped first, in both agents' queues. False, changing nothing, when [from] has no entry or is being deleted, or
    * [to] has an entry of its own. Rejects when the state file cannot be written: both entries are as they were.
    */
-  move(from: string, to: string): Promise<boolean> {
+  move(from: string, to: string, prepare?: () => Promise<void>): Promise<boolean> {
     return this.inQueues([from, to], async () => {
+      await prepare?.()
       const movable = (s: BrowserStateData) => s.browsers[from] !== undefined && !s.deleting.includes(from) && s.browsers[to] === undefined
       const saved = this.deps.state.read()
       if (!movable(saved)) return false
-      if (this.states.has(from)) {
-        this.forget(from)
+      const running = this.states.has(from)
+      // A preceding move may have queued this agent's Start behind us without publishing state yet. Cancel it too:
+      // once its profile moves on, that queued Start must not recreate a fresh browser for the previous agent.
+      this.forget(from)
+      if (running) {
         this.deps.closeViewers(from)
         // The volume stays: it is what moves.
         await this.deps.containers.stop(saved.browsers[from]!.profile ?? from).catch((error: unknown) => {
@@ -291,10 +295,10 @@ export class Browsers {
   }
 
   /**
-   * At service start. `known` is the core's live and stopped agents, or null when it gave no answer: then only the
-   * deletes already recorded are finished, since a missing answer must never delete a person's login.
+   * At service start, finish only recorded purges. A readable agent list may omit an unreadable archive, so absence
+   * from it is never authority to erase an otherwise intact profile. Unlisted containers can be stopped safely.
    */
-  async resume(known: Set<string> | null): Promise<void> {
+  async resume(): Promise<void> {
     let saved
     try {
       saved = this.deps.state.read()
@@ -304,14 +308,11 @@ export class Browsers {
       return
     }
     for (const agentId of saved.deleting) await this.queue(agentId, () => this.remove(agentId))
-    if (known) {
-      for (const agentId of Object.keys(saved.browsers)) if (!known.has(agentId)) await this.delete(agentId)
-      try {
-        const swept = await this.deps.containers.sweep(new Set(Object.keys(this.deps.state.read().browsers)))
-        if (swept > 0) this.deps.log(`agent browser: removed ${swept} containers this daemon no longer lists`)
-      } catch (error) {
-        this.deps.log(`agent browser: could not sweep containers: ${(error as Error).message}`)
-      }
+    try {
+      const swept = await this.deps.containers.sweep(agentId => Object.hasOwn(this.deps.state.read().browsers, agentId))
+      if (swept > 0) this.deps.log(`agent browser: removed ${swept} containers this daemon no longer lists`)
+    } catch (error) {
+      this.deps.log(`agent browser: could not sweep containers: ${(error as Error).message}`)
     }
     // An install cut off is never run again by itself: it would raise the password dialog nobody asked for.
     if (saved.setup?.step === 'installing') {
