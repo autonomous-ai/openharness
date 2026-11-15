@@ -398,13 +398,17 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
         part.call('dial', remind)
       })
     },
-    // The Claude app settling in front: the dial turns to the session it last attached (docs/specs/2026-11-15-dial-claude-app-follow.md).
-    appSettled: (app) => { if (app === 'claude') part.call('dial', claudeSettled) },
+    // The settle of the app in front: the Claude app's turns the dial to the session it last attached
+    // (docs/specs/2026-11-15-dial-claude-app-follow.md), and any app's judges the tab report waiting on it. Each guarded on
+    // its own: the filter drops what this answers, so a follow that rejects would go unseen, and one that throws would
+    // cost the other its settle.
+    appSettled: (app) => {
+      if (app === 'claude') part.call('dial', claudeSettled)
+      part.call('dial', () => tabSettled(app))
+    },
     appPicked: () => log('[device] app filter: picker'),
     // The settle of the app in front: a filter that throws costs the devices nothing, and the devices stopping cancels it.
     appTimer: timerIn('dial'),
-    // Guarded on its own: the filter drops what this answers, so a follow that rejects would go unseen.
-    frontSettled: (app) => part.call('dial', () => tabSettled(app)),
   })
   // What the dial lists with no window: this computer's harness agents, and the ones outside a pane unless switched off.
   cableHost.setRegistry(new HostRegistry(observed ? [cableHost.harness, observed] : [cableHost.harness]))
