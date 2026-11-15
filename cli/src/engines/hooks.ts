@@ -1,22 +1,16 @@
 import type { EngineHooks, HookAdmission, HookContract, HookSession } from './facets/hooks.js'
-import { hooks as claude } from './claude/hookContract.js'
-import { hooks as codex } from './codex/hookContract.js'
-import { installHookSettings, type HookEngine } from './kit/hookSettings.js'
+import { hookAuthority as claude } from './claude/hookAuthority.js'
+import { hookAuthority as codex } from './codex/hookAuthority.js'
 import { isChildSession, knownTranscript } from './kit/hookRules.js'
 import { closeTurnOnStop } from './kit/stopHook.js'
 
 /**
- * The engines' hooks as they declare them: data only. Installation, the hook server and turn closing load
- * no engine code and wait on no engine worker: hooks are how sessions bind and turns close, which are the
+ * The engines' mandatory hooks load no installer and wait on no setup worker: hooks bind sessions and close turns, which are the
  * core's (docs/design/2026-10-08-engine-hooks.md).
  */
-export const hookContracts = { claude, codex } satisfies Record<string, HookContract>
-
 /** An engine's hooks as core calls them: the kit's mechanics, run on that engine's declaration. */
-function composed(engine: HookEngine, { settings, children, sessionFile, stopClosesTurns }: HookContract): EngineHooks {
+function composed({ children, sessionFile, stopClosesTurns }: Omit<HookContract, 'settings'>): EngineHooks {
   return {
-    install: (port, options) => installHookSettings(engine, settings, port, undefined, options),
-    installIn: (port, home, options) => installHookSettings(engine, settings, port, home, options),
     ...(sessionFile ? { transcriptFor: (body: HookSession, agent: HookSession | undefined) => knownTranscript(body, agent, sessionFile) } : {}),
     ...(children ? {
       admit: (body: HookSession): HookAdmission => body.transcriptPath && isChildSession(body.transcriptPath, children)
@@ -28,7 +22,7 @@ function composed(engine: HookEngine, { settings, children, sessionFile, stopClo
 }
 
 /** Hook-only lookup: installation and the HTTP door do not need history readers or launch code. */
-export const engineHooks = { claude: composed('claude', claude), codex: composed('codex', codex) }
+export const engineHooks = { claude: composed(claude), codex: composed(codex) }
 
 export function hooksFor(name: string | null | undefined): EngineHooks | undefined {
   return name && Object.hasOwn(engineHooks, name) ? engineHooks[name as keyof typeof engineHooks] : undefined

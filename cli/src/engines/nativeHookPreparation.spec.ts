@@ -32,7 +32,7 @@ async function fixture() {
   vi.spyOn(console, 'error').mockImplementation(() => {})
   vi.resetModules()
   const { installOpencodePlugin } = await import('../lib/hooks.js')
-  const { OPENCODE_LEGACY_PLUGIN, OPENCODE_TUI_PLUGIN } = await import('./opencode/contract.js')
+  const { OPENCODE_LEGACY_PLUGIN, OPENCODE_TUI_PLUGIN } = await import('./opencode/setup.js')
   return { root, install: installOpencodePlugin, legacy: OPENCODE_LEGACY_PLUGIN.file, tui: OPENCODE_TUI_PLUGIN.file }
 }
 
@@ -107,7 +107,7 @@ it('does not join installation for a different executable identity on the same p
 
 it('keeps mixed foreign commands when refreshing Claude and Codex hooks', async () => {
   const { root } = await fixture()
-  const { engineHooks } = await import('./hooks.js')
+  const { engineHookInstallations: engineHooks } = await import('./hookInstallations.js')
   const { command } = await import('./kit/notifyHooks.js')
   for (const engine of ['claude', 'codex'] as const) {
     const home = join(root, engine); mkdirSync(home)
@@ -126,7 +126,7 @@ it('keeps mixed foreign commands when refreshing Claude and Codex hooks', async 
 
 it('holds Codex before hook publication when its approval configuration is unconfirmed', async () => {
   const { root } = await fixture()
-  const { engineHooks } = await import('./hooks.js')
+  const { engineHookInstallations: engineHooks } = await import('./hookInstallations.js')
   const home = join(root, 'CODEX_HOME'), file = join(home, 'hooks.json'), config = join(home, 'config.toml')
   const original = JSON.stringify({ keep: true })
   writeFileSync(file, original); writeFileSync(config, 'hooks = { state = {} }\n')
@@ -141,7 +141,7 @@ it('holds Codex before hook publication when its approval configuration is uncon
 it.each(['{malformed', '{"approvals":{}}'])('preserves Hermes configuration when approvals are unreadable: %s', async approvals => {
   const { root } = await fixture()
   const { installHermesHooks } = await import('../lib/hooks.js')
-  const { HERMES_HOOK_SETTINGS: rule } = await import('./hermes/contract.js')
+  const { HERMES_HOOK_SETTINGS: rule } = await import('./hermes/setup.js')
   const home = join(root, 'HERMES_HOME'), file = join(home, rule.homes.file), allowlist = join(home, rule.allowlist)
   writeFileSync(file, 'model: fixture\n'); writeFileSync(allowlist, approvals)
   expect(await installHermesHooks(4242, home)).toBe(false)
@@ -157,7 +157,7 @@ it.each(['{malformed', '{"approvals":{}}'])('preserves Hermes configuration when
 it('preserves the rest of a Hermes document after a truncated or edited managed block', async () => {
   const { root } = await fixture()
   const { installHermesHooks } = await import('../lib/hooks.js')
-  const { HERMES_HOOK_SETTINGS: rule } = await import('./hermes/contract.js')
+  const { HERMES_HOOK_SETTINGS: rule } = await import('./hermes/setup.js')
   const home = join(root, 'HERMES_HOME'), file = join(home, rule.homes.file)
   for (const text of [
     `model: fixture\n${rule.begin}\nhooks:\n  foreign: keep\n`,
@@ -182,7 +182,7 @@ it('holds an upgrade whose legacy plugin is a shared alias', async () => {
 
 it('preserves foreign notify.mjs commands when adding managed hooks', async () => {
   const { root } = await fixture()
-  const { engineHooks } = await import('./hooks.js')
+  const { engineHookInstallations: engineHooks } = await import('./hookInstallations.js')
   const home = join(root, 'CODEX_HOME'), file = join(home, 'hooks.json')
   const foreign = { type: 'command', command: 'node /project/notify.mjs' }
   writeFileSync(file, JSON.stringify({ hooks: { SessionStart: [{ hooks: [foreign] }] } }))
@@ -192,7 +192,7 @@ it('preserves foreign notify.mjs commands when adding managed hooks', async () =
 
 it.each(['description = """', 'a=[1 #', '[invalid', 'same = 1\nsame = 2'])('holds malformed TOML before publishing hooks: %s', async malformed => {
   const { root } = await fixture()
-  const { engineHooks } = await import('./hooks.js')
+  const { engineHookInstallations: engineHooks } = await import('./hookInstallations.js')
   const home = join(root, 'CODEX_HOME'), file = join(home, 'hooks.json'), config = join(home, 'config.toml')
   writeFileSync(config, malformed)
   expect(await engineHooks.codex.installIn(4242, home)).toBe(false)
@@ -218,7 +218,7 @@ it.each(['codex', 'hermes'])('checks read-only %s approvals before writing hooks
   writeFileSync(hookFile, original)
   writeFileSync(config, engine === 'codex' ? 'model = "fixture"\n' : '{"approvals":[]}')
   chmodSync(config, 0o444)
-  const { engineHooks } = await import('./hooks.js')
+  const { engineHookInstallations: engineHooks } = await import('./hookInstallations.js')
   const { installHermesHooks } = await import('../lib/hooks.js')
   expect(engine === 'codex' ? await engineHooks.codex.installIn(4242, home) : await installHermesHooks(4242, home)).toBe(false)
   expect(readFileSync(hookFile, 'utf8')).toBe(original)
@@ -227,7 +227,7 @@ it.each(['codex', 'hermes'])('checks read-only %s approvals before writing hooks
 it('preserves marker-like text inside a foreign YAML scalar', async () => {
   const { root } = await fixture()
   const { installHermesHooks } = await import('../lib/hooks.js')
-  const { HERMES_HOOK_SETTINGS: rule } = await import('./hermes/contract.js')
+  const { HERMES_HOOK_SETTINGS: rule } = await import('./hermes/setup.js')
   const home = join(root, 'HERMES_HOME'), file = join(home, 'config.yaml')
   const config = `description: "text\n  ${rule.begin}\n  hooks:\n    foreign: keep\n  ${rule.end}\n  end"\n`
   writeFileSync(file, config)
@@ -264,7 +264,7 @@ it('does not join hook preparation across a managed Node command change', async 
   const { root } = await fixture()
   const runtime = await import('../lib/nodeRuntime.js')
   const node = vi.spyOn(runtime, 'managedNodePath').mockReturnValue('/fixture/node-before')
-  const { engineHooks } = await import('./hooks.js')
+  const { engineHookInstallations: engineHooks } = await import('./hookInstallations.js')
   const home = join(root, 'HOME'), file = join(home, 'settings.json')
   writeFileSync(file, '{}\n')
   let release!: () => void, started!: () => void
@@ -291,7 +291,7 @@ it.each([
   'node /foreign/notify.mjs --port 42 --data-dir /foreign?path',
 ])('preserves a foreign shell command during hook preparation: %s', async command => {
   const { root } = await fixture()
-  const { engineHooks } = await import('./hooks.js')
+  const { engineHookInstallations: engineHooks } = await import('./hookInstallations.js')
   const home = join(root, 'HOME'), file = join(home, 'settings.json')
   const foreign = { hooks: [{ type: 'command', command }] }
   writeFileSync(file, JSON.stringify({ hooks: { SessionStart: [foreign] } }))

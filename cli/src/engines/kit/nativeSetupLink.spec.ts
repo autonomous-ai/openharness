@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { createServiceLinks, type ServiceFrame } from '../../core/serviceLinks.js'
 import { createNativeSetupLink } from './nativeSetupLink.js'
 import { executableIdentity, retainedExecutable } from './nativeExecutable.js'
+import * as hookScript from './hookScript.js'
 
 let root: string, file: string
 beforeEach(() => { root = mkdtempSync(join(tmpdir(), 'setup-link-')); file = join(root, 'engine'); writeFileSync(file, 'fixture') })
@@ -80,4 +81,62 @@ it('uses generic service deadlines and generation fencing for off, frozen, kille
   next.receive({ type: 'setup_version_result', payload: { requestId, major: 2 } })
   expect(await waiting).toBe(2)
   expect(lines.length).toBeGreaterThan(0); next.closed()
+})
+
+it('keeps file candidates behind the original owner and bounded indexed destinations', async () => {
+  const input = { engine: 'claude' as const, environment, port: 1234,
+    files: [{ file: '/fixture/settings.json', directory: '/fixture', content: '{}' }] }
+  const candidate = { version: 1, files: [{ index: 0, content: '{"hooks":{}}' }] }
+  const call = vi.fn().mockResolvedValueOnce({ preparation: 'files-token' }).mockResolvedValue({ files: candidate })
+  const link = createNativeSetupLink(call)
+  expect(await link.prepareFiles!(input, 'r-files', () => true)).toEqual(candidate)
+  expect(call).toHaveBeenNthCalledWith(1, 'setup_files_prepare', { request: 'r-files', ...input })
+  expect(call).toHaveBeenLastCalledWith('setup_files_commit', { preparation: 'files-token',
+    engine: 'claude', request: 'r-files', allowed: true })
+
+  for (const files of [null, { ...candidate, version: 2 }, { ...candidate, files: [] },
+    { ...candidate, files: [{ index: 1, content: '{}' }] },
+    { ...candidate, files: [{ index: 0, content: '{}', file: '/another-profile/settings.json' }] },
+    { ...candidate, files: [{ index: 0, content: 'x'.repeat(1024 * 1024 + 1) }] }]) {
+    call.mockResolvedValueOnce({ preparation: 'files-token' }).mockResolvedValueOnce({ files })
+    expect(await link.prepareFiles!(input, 'r-files', () => true)).toBeNull()
+  }
+  call.mockClear()
+  expect(await link.prepareFiles!(input, 'r-files', () => false)).toBeNull()
+  expect(call).not.toHaveBeenCalled()
+  let current = true
+  call.mockImplementationOnce(async () => { current = false; return { preparation: 'files-token' } })
+    .mockResolvedValueOnce({ files: candidate })
+  expect(await link.prepareFiles!(input, 'r-files', () => current)).toBeNull()
+  expect(call).toHaveBeenLastCalledWith('setup_files_commit', { preparation: 'files-token',
+    engine: 'claude', request: 'r-files', allowed: false })
+  current = true
+  call.mockResolvedValueOnce({ preparation: 'files-token' }).mockImplementationOnce(async () => {
+    current = false; return { files: candidate }
+  })
+  expect(await link.prepareFiles!(input, 'r-files', () => current)).toBeNull()
+})
+
+it('holds file preparation with an old worker without calling its executable installer', async () => {
+  const call = vi.fn(async (_type: string, _payload: Record<string, unknown>) => ({ error: 'SERVICE_REQUEST_UNAVAILABLE' }))
+  const link = createNativeSetupLink(call)
+  expect(await link.prepareFiles!({ engine: 'codex', environment, port: 1234,
+    files: [{ file: '/fixture/hooks.json', directory: '/fixture', content: '{}' }] }, 'old-worker', () => true)).toBeNull()
+  expect(call).toHaveBeenCalledOnce()
+  expect(call.mock.calls[0]![0]).toBe('setup_files_prepare')
+})
+
+it('retains a missing-script refusal only for the current caller’s engine', async () => {
+  const refused = vi.spyOn(hookScript, 'noteMissingHookScript').mockImplementation(() => {})
+  const input = { engine: 'codex' as const, environment, port: 1234,
+    files: [{ file: '/fixture/hooks.json', directory: '/fixture', content: '{}' }] }
+  try {
+    const link = createNativeSetupLink(async () => ({ files: null, error: 'HOOK_SCRIPT_MISSING' }))
+    expect(await link.prepareFiles!(input, 'missing', () => true)).toBeNull()
+    expect(refused).toHaveBeenCalledExactlyOnceWith('codex')
+    let current = true
+    const stale = createNativeSetupLink(async () => { current = false; return { files: null, error: 'HOOK_SCRIPT_MISSING' } })
+    expect(await stale.prepareFiles!(input, 'stale', () => current)).toBeNull()
+    expect(refused).toHaveBeenCalledOnce()
+  } finally { refused.mockRestore() }
 })

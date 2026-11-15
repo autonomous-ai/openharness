@@ -194,7 +194,7 @@ interface Outcome { runs: Run[]; files: Record<string, Entry> }
 
 let root = ''
 const saved: Record<string, string | undefined> = {}
-let hooks: typeof import('./hooks.js')['engineHooks']
+let hooks: typeof import('./hookInstallations.js')['engineHookInstallations']
 let command: typeof import('./kit/notifyHooks.js')['command']
 let tokens: Array<[string, string]> = []
 const golden: Record<string, Outcome> = RECORD ? {} : JSON.parse(readFileSync(GOLDEN, 'utf8')) as Record<string, Outcome>
@@ -303,7 +303,7 @@ beforeAll(async () => {
   // A regression (a home that is not the throwaway one) must fail here, before any installer writes.
   expect(homedir()).toBe(join(root, 'home'))
   vi.resetModules()
-  ;({ engineHooks: hooks } = await import('./hooks.js'))
+  ;({ engineHookInstallations: hooks } = await import('./hookInstallations.js'))
   const notify = await import('./kit/notifyHooks.js')
   command = notify.command
   const all = homes()

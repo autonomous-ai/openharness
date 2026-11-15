@@ -2,7 +2,7 @@
  * What the core's start writes into the eleven other engines' settings and plugin files, byte for byte, in every
  * state those files are found in: recorded from main before their installers (lib/hooks.ts) left the core's
  * static imports (docs/design/2026-10-08-other-engines-out-of-core.md, (o2)). Each case installs twice through the
- * core's own entry, `installEngineHooks(port, { only })`, and keeps what each run logged and threw, and every
+ * existing scheduler with explicit legacy installer composition, and keeps what each run logged and threw, and every
  * file left behind: its bytes, its mode, a symlink kept or replaced, a temporary file left over. These files
  * belong to a person's engines, which is why a change in any of it matters.
  *
@@ -323,6 +323,12 @@ beforeAll(async () => {
   mkdirSync(join(root, 'data'), { recursive: true })
   mkdirSync(join(root, 'runtime'), { recursive: true })
   vi.resetModules()
+  // These historical goldens pin renderer bytes/modes and legacy diagnostics. The worker/core publication
+  // boundary is exercised separately in nativeHookSetup.spec.ts, without regenerating the old evidence.
+  vi.doMock('./nativeHookSetup.js', async () => ({
+    ...await import('./nativeHooks.js'),
+    engineHookInstallations: (await import('./hookInstallations.js')).engineHookInstallations,
+  }))
   const { installEngineHooks: install } = await import('../core/engines/hooks.js')
   const { nativeSetupProbes } = await import('../services/nativeSetup.js')
   installEngineHooks = (port, options) => install(port, { ...options, setup: nativeSetupProbes })
@@ -344,6 +350,7 @@ beforeAll(async () => {
 }, 60_000)
 
 afterAll(() => {
+  vi.doUnmock('./nativeHookSetup.js')
   Object.defineProperty(process, 'platform', platform)
   for (const [name, value] of Object.entries(saved)) if (value === undefined) delete process.env[name]; else process.env[name] = value
   if (root) { reset(); rmSync(root, { recursive: true, force: true }) }

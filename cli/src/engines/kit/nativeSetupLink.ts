@@ -1,6 +1,8 @@
 /** Native launch keeps its authority; setup replies are bounded observations, never dispatch commands. */
 import type { NativeInstallation } from './nativeInstall.js'
 import type { NativeSetup, NativeProbeOutput } from './nativeSetup.js'
+import { boundedHookInput, hookCandidate } from './nativeHookWire.js'
+import { noteMissingHookScript } from './hookScript.js'
 
 type Payload = Record<string, unknown>
 const held = (): NativeInstallation => ({ complete: false, detail: 'Waiting for engine setup.' })
@@ -16,6 +18,20 @@ const installation = (value: unknown): NativeInstallation => {
 
 export function createNativeSetupLink(call: (type: string, payload: Payload) => Promise<Payload>): NativeSetup {
   return {
+    async prepareFiles(input, request, current) {
+      if (!current() || !boundedHookInput(input)) return null
+      const captured = { ...input, environment: { ...input.environment }, files: input.files.map(file => ({ ...file })) }
+      const answer = await call('setup_files_prepare', { request, ...captured })
+      if (answer.error === 'HOOK_SCRIPT_MISSING' && current()) {
+        noteMissingHookScript(captured.engine)
+        console.warn('[hooks] HOOK_SCRIPT_MISSING')
+      }
+      if (!text(answer.preparation, 128) || !answer.preparation) return null
+      const allowed = current()
+      const result = await call('setup_files_commit', { preparation: answer.preparation,
+        engine: captured.engine, request, allowed })
+      return allowed && current() ? hookCandidate(result.files, captured.files.length, result) : null
+    },
     async probe(executable, kind, environment) {
       if (!executable.current()) return null
       const { output } = await call('setup_probe', { command: executable.command, identity: executable.identity, kind, environment })

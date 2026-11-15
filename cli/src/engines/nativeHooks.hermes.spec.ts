@@ -8,7 +8,7 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync,
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { HERMES_HOOK_SETTINGS } from './hermes/contract.js'
+import { HERMES_HOOK_SETTINGS } from './hermes/setup.js'
 
 const PERSON = 'model: anthropic/claude\nterminal:\n  client_env_passthrough: ["MY_VAR"]\n'
 const TUI = 'display:\n  interface: tui\n'

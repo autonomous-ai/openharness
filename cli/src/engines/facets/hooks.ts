@@ -1,8 +1,7 @@
-import type { NativeHookOptions } from '../kit/nativeLocations.js'
 import type { Env } from '../../config/env.js'
 import type { LiveEvent } from '../kit/events.js'
 import type { LiveTurn } from './live.js'
-import type { HookRunner } from '../kit/notifyHooks.js'
+import type { HookRunner } from '../kit/hookCommand.js'
 
 /** Only the session facts a hook needs; transport authentication and process binding stay in core. */
 export interface HookSession {
@@ -177,8 +176,6 @@ export interface HookContract {
 
 /** What core calls, composed from an engine's contract and the kit's mechanics (engines/hooks.ts). */
 export interface EngineHooks {
-  install(port: number, options?: NativeHookOptions): Promise<boolean>
-  installIn(port: number, home: string, options?: NativeHookOptions): Promise<boolean>
   transcriptFor?(body: HookSession, agent: HookSession | undefined): string | undefined
   admit?(body: HookSession): HookAdmission
   onStop?(context: HookTurnContext, body: HookStop): void | Promise<void>

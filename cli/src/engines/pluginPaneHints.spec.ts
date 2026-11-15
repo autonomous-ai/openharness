@@ -2,10 +2,10 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { KILO_PLUGIN } from './kilo/contract.js'
+import { KILO_PLUGIN } from './kilo/setup.js'
 import { nativePluginSource, type NativePlugin } from './kit/nativePlugin.js'
-import { OPENCODE_LEGACY_PLUGIN, OPENCODE_TUI_PLUGIN } from './opencode/contract.js'
-import { PI_EXTENSION } from './pi/contract.js'
+import { OPENCODE_LEGACY_PLUGIN, OPENCODE_TUI_PLUGIN } from './opencode/setup.js'
+import { PI_EXTENSION } from './pi/setup.js'
 
 const TOKEN = 'c'.repeat(43)
 let dir = ''

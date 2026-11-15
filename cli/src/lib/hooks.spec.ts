@@ -19,7 +19,7 @@ async function loadHooks() {
   process.env.COMMANDCODE_HOME = commandcodeHome
   process.env.DEVIN_CONFIG_PATH = devinConfigPath
   // Claude Code's and Codex's installers are their declared hook settings, applied by the kit (engines/hooks.ts).
-  const [hooks, { engineHooks }] = await Promise.all([import('./hooks.js'), import('../engines/hooks.js')])
+  const [hooks, { engineHookInstallations: engineHooks }] = await Promise.all([import('./hooks.js'), import('../engines/hookInstallations.js')])
   return { ...hooks, claude: engineHooks.claude, codex: engineHooks.codex }
 }
 

@@ -13,7 +13,7 @@ import { buildEngineLaunchArgv, engineLaunchEnv, namedAgentArgs, permissionModeF
 import { setUpWithin } from '../../lib/setUpWithin.js'
 import { writeGridConfigDir } from '../../lib/gridConfigDir.js'
 import type { GridLaunchAnswer, GridLaunchRequest } from '../../lib/gridLaunchWire.js'
-import { engineHooks } from '../../engines/hooks.js'
+import { engineHookInstallations as engineHooks } from '../../engines/nativeHookSetup.js'
 import { ENUMERATION_ATTEMPTS } from '../../engines/kit/nativeFiles.js'
 import { loadEngine } from '../../engines/inProcess.js'
 import type { RegisteredSession } from '../../lib/registry.js'
@@ -22,7 +22,7 @@ import { createAgentCreator, type CreateAgentDeps } from './create.js'
 import { prepareInstructionWrites } from '../../scm/scmProjects.js'
 import { opencodeMajorVersion } from '../../engines/opencode/version.js'
 import { installOpencodePlugin as installNativeOpencodePlugin } from '../../engines/nativeHooks.js'
-import { missingHookScript } from '../../engines/kit/notifyHooks.js'
+import { missingHookScript } from '../../engines/kit/hookScript.js'
 import type { NativeLaunch } from '../../engines/nativeLaunch.js'
 import { projectsRoot } from '../../lib/projectFolder.js'
 import { NativeFiles } from '../../engines/kit/nativeFiles.js'
@@ -57,7 +57,7 @@ vi.mock('../../engines/inProcess.js', async (real) => {
   const actual = await real<typeof import('../../engines/inProcess.js')>()
   return { ...actual, loadEngine: vi.fn(actual.loadEngine) }
 })
-vi.mock('../../engines/kit/notifyHooks.js', async (real) => ({ ...await real<object>(), missingHookScript: vi.fn(() => null) }))
+vi.mock('../../engines/kit/hookScript.js', async (real) => ({ ...await real<object>(), missingHookScript: vi.fn(() => null) }))
 vi.mock('../../engines/opencode/version.js', () => ({ opencodeMajorVersion: vi.fn(async () => 2) }))
 vi.mock('../../engines/kit/nativePlugin.js', () => ({
   prepareNativePlugin: vi.fn(() => ({ verify: () => {}, commit: async () => ({ verify: () => {} }) })),
@@ -106,9 +106,9 @@ vi.mock('../../lib/gridLaunchWire.js', async (real) => ({
 const buildGridLaunch = vi.fn(async (request: GridLaunchRequest): Promise<GridLaunchAnswer> => ({
   ok: true, launch: { env: { GRID_KEY: 'k' }, args: ['--grid'], webSearch: 'unsupported' }, override: request.override,
 }))
-vi.mock('../../engines/hooks.js', async (real) => {
-  const actual = await real<typeof import('../../engines/hooks.js')>()
-  return { ...actual, engineHooks: { ...actual.engineHooks, codex: { ...actual.engineHooks.codex, installIn: vi.fn(async () => true) } } }
+vi.mock('../../engines/nativeHookSetup.js', async (real) => {
+  const actual = await real<typeof import('../../engines/nativeHookSetup.js')>()
+  return { ...actual, engineHookInstallations: { ...actual.engineHookInstallations, codex: { ...actual.engineHookInstallations.codex, installIn: vi.fn(async () => true) } } }
 })
 // What the backend new panes are made on can do; every test's backend can give a session its own environment.
 const capabilities = vi.fn(async () => ({ sessionEnv: true }))

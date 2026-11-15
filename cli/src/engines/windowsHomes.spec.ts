@@ -2,9 +2,9 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { env } from '../config/env.js'
-import { COMMANDCODE_HOOK_SETTINGS } from './commandcode/contract.js'
-import { COPILOT_HOOK_SETTINGS } from './copilot/contract.js'
-import { hookContracts } from './hooks.js'
+import { COMMANDCODE_HOOK_SETTINGS } from './commandcode/setup.js'
+import { COPILOT_HOOK_SETTINGS } from './copilot/setup.js'
+import { hookContracts } from './hookInstallations.js'
 import { WINDOWS_ENGINE_HOMES } from './windowsHomes.js'
 
 describe('engine homes on Windows', () => {

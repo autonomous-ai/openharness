@@ -1,3 +1,4 @@
+import { hookPreparationFiles } from './hookPreparationFiles.js'
 /**
  * Harness's own hook blocks recorded as reviewed, where the engine asks a person to review a hook before it
  * first runs (facets/hooks.ts `HookReviewRecord`): Codex 0.162 shows "Hooks need review" in the first Codex
@@ -18,7 +19,7 @@ import { parse as parseToml } from 'smol-toml'
 import { createHash } from 'node:crypto'
 import { basename, join } from 'node:path'
 import type { HookReviewRecord } from '../facets/hooks.js'
-import { HookPreparationHeld, inspectHookFile, runHookPreparation, type HookPreparationAttempt } from './nativeHookFiles.js'
+import { HookPreparationHeld, inspectHookFile, runHookPreparation, type HookPreparationFiles, type HookPreparationAttempt } from './nativeHookFiles.js'
 import { isMessagesBlock } from './messagesHook.js'
 import { isOurs, type HookBlock, type Settings } from './notifyHooks.js'
 
@@ -208,8 +209,8 @@ export function withoutReviewRecords(text: string, record: HookReviewRecord, own
 /** Inspect approvals before publishing hooks. An unreadable or conflicting
  * config cannot authorize even the first write of the installation. */
 export function prepareReviewed(record: HookReviewRecord, home: string, settingsFile: string, settings: Settings,
-  platform: NodeJS.Platform = process.platform) {
-  const config = join(home, record.file), observed = inspectHookFile(config, 0o600)
+  platform: NodeJS.Platform = process.platform, files: HookPreparationFiles = hookPreparationFiles()) {
+  const config = join(home, record.file), observed = files.inspect(config, 0o600)
   // Codex uses the real home plus the literal hooks filename, even when that
   // leaf is an alias. The config's own leaf alias does not change that home.
   const records = reviewRecords(record, join(observed.directory, basename(settingsFile)), settings, platform)
@@ -227,7 +228,7 @@ export function prepareReviewed(record: HookReviewRecord, home: string, settings
     verify: observed.verify,
     commit: async (attempt: HookPreparationAttempt) => {
       const published = await observed.replace(next === 'unchanged' ? text : next, attempt)
-      if (next !== 'unchanged') console.log(record.messages.recorded.replace('{config}', config))
+      if (next !== 'unchanged') files.report('log', record.messages.recorded.replace('{config}', config))
       return published
     },
   }

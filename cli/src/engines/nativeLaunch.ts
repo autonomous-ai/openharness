@@ -6,11 +6,11 @@ import { engineName } from '../lib/agentNames.js'
 import { failureReason } from '../lib/failureReason.js'
 import { permissionFlagToVerify, type PermissionLaunchChoice } from '../lib/engineLaunch.js'
 import type { EngineInstallRecipe } from '../lib/engineInstall.js'
-import { engineHooks } from './hooks.js'
-import * as hooks from './nativeHooks.js'
+import { engineHookInstallations as engineHooks } from './nativeHookSetup.js'
+import * as hooks from './nativeHookSetup.js'
 import { LAUNCH_LOCATION_VARIABLES } from './kit/nativeLocations.js'
 import { captureLaunchExecutable } from './kit/launchExecutable.js'
-import type { NativeSetupProbes } from './kit/nativeSetup.js'
+import type { NativeSetup, NativeSetupProbes } from './kit/nativeSetup.js'
 import { homeIsNetworkOrDevice, networkHomeSentence } from './kit/homeAdoption.js'
 import { startupOwnedFlag } from './kit/launchStartup.js'
 import { launchContract } from './launches.js'
@@ -91,7 +91,7 @@ const ENGINE_LOCATIONS: Partial<Record<string, readonly string[]>> = {
 
 /** Probe only. No settings, workspace, model or process mutation occurs here. */
 export async function inspectNativeLaunch(engine: AgentEngine, source: NativeLaunchSource = {},
-  deps: { setup?: NativeSetupProbes; confirmHome?: (engine: 'claude' | 'codex', home: string) => void } = {},
+  deps: { setup?: NativeSetupProbes & Pick<NativeSetup, 'prepareFiles'>; confirmHome?: (engine: 'claude' | 'codex', home: string) => void } = {},
 ): Promise<NativeLaunchResult> {
   if (isTerminalEngine(engine)) return { ok: true, launch: { ...noNative, environment: {}, proofs: [] } }
   source = { ...source }
@@ -204,7 +204,7 @@ export async function inspectNativeLaunch(engine: AgentEngine, source: NativeLau
         if (Object.entries(chosen).some(([key, path]) => key !== 'PATH' && path && (!isAbsolute(path) || path.includes('\0') || path.length > 4096))) return false
         const homes = nativeHookLocations(chosen)
         const confirmed: HookPreparationProof[] = []
-        const options: NativeHookOptions = { environment: chosen,
+        const options: NativeHookOptions = { environment: chosen, setup,
           current: () => preparing && revision === attemptRevision && executable.current() && owner() && dependenciesCurrent(),
           confirmed: proof => confirmed.push(proof) }
         const home = engine === 'codex' ? homes.CODEX_HOME : engine === 'claude' ? homes.CLAUDE_HOME : homes.HERMES_HOME

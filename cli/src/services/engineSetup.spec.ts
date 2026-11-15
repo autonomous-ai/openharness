@@ -6,6 +6,7 @@ import { startEngineSetup } from './engineSetup.js'
 import { createNativeSetupLink } from '../engines/kit/nativeSetupLink.js'
 import { executableIdentity } from '../engines/kit/nativeExecutable.js'
 import type { NativeSetup } from '../engines/kit/nativeSetup.js'
+import { HookScriptMissing } from '../engines/kit/hookHeld.js'
 
 const owner = { local: true, owner: true }
 const environment = { HOME: '/fixture', PATH: '/fixture/bin' }
@@ -26,6 +27,54 @@ beforeEach(() => {
 afterEach(() => { service.stop(); vi.useRealTimers(); rmSync(root, { recursive: true, force: true }) })
 const request = (type: string, payload: Record<string, unknown> = {}, closed?: AbortSignal) => Promise.resolve(service.requests[type]!(payload, owner, closed))
 const prepare = (id = 'r1') => request('setup_prepare', { engine: 'codex', environment, request: id })
+
+it('uses the same revocable preparation slots for file candidates without running an installer', async () => {
+  const input = { engine: 'codex' as const, environment, port: 1234,
+    files: [{ file: '/fixture/hooks.json', directory: '/fixture', content: '{}' }] }
+  const candidate = { version: 1 as const, files: [{ index: 0, content: '{"hooks":{}}' }] }
+  setup.prepareFiles = vi.fn(async () => candidate)
+  const pending = await request('setup_files_prepare', { request: 'files-1', ...input })
+  expect(pending.preparation).toEqual(expect.any(String))
+  expect(setup.installations.ensure).not.toHaveBeenCalled()
+  expect(await request('setup_files_commit', { ...pending, engine: 'codex', request: 'files-1', allowed: true })).toEqual({ files: candidate })
+  expect(setup.prepareFiles).toHaveBeenCalledOnce()
+  const cancelled = await request('setup_files_prepare', { request: 'files-2', ...input })
+  service.disconnect()
+  expect(await request('setup_files_commit', { ...cancelled, engine: 'codex', request: 'files-2', allowed: true })).toMatchObject({ files: null })
+})
+
+it('rejects file tokens from another operation or a worker replaced between prepare and commit', async () => {
+  const input = { engine: 'codex' as const, environment, port: 1234,
+    files: [{ file: '/fixture/hooks.json', directory: '/fixture', content: '{}' }] }
+  const candidate = { version: 1 as const, files: [{ index: 0, content: '{"hooks":{}}' }] }
+  setup.prepareFiles = vi.fn(async () => candidate)
+  const files = await request('setup_files_prepare', { request: 'operation', ...input })
+  expect(await request('setup_commit', { ...files, engine: 'codex', request: 'operation', allowed: true }))
+    .toMatchObject({ installation: { complete: false } })
+  expect(await request('setup_commit', { ...files, engine: 'codex', request: 'operation', kind: 'files', allowed: true }))
+    .toMatchObject({ installation: { complete: false } })
+  const executable = await prepare('operation')
+  expect(await request('setup_files_commit', { ...executable, engine: 'codex', request: 'operation', allowed: true })).toEqual({ files: null })
+  const original = service
+  const link = createNativeSetupLink(async (type, payload) => {
+    const answer = await request(type, payload)
+    if (type === 'setup_files_prepare') {
+      service.stop()
+      service = startEngineSetup('/fixture', setup)
+    }
+    return answer
+  })
+  expect(await link.prepareFiles!(input, 'replacement', () => true)).toBeNull()
+  expect(await original.requests.setup_files_commit!({ ...files, engine: 'codex', request: 'operation', allowed: true }, owner))
+    .toMatchObject({ error: 'SETUP_STOPPED' })
+})
+
+it('reports a missing hook script without exposing the worker’s path', async () => {
+  setup.prepareFiles = vi.fn(async () => { throw new HookScriptMissing('/private/worker/notify.mjs') })
+  expect(await request('setup_files_prepare', { engine: 'codex', environment, port: 1234, request: 'missing-script',
+    files: [{ file: '/fixture/hooks.json', directory: '/fixture', content: '{}' }] }))
+    .toEqual({ files: null, error: 'HOOK_SCRIPT_MISSING' })
+})
 
 it('allows only the core to call private setup handlers', async () => {
   for (const handler of Object.values(service.requests)) for (const asker of [{ local: false, owner: true }, { local: true, owner: false }, { local: true, owner: true, connection: 'client-window' }]) {

@@ -5,8 +5,8 @@ import { nativeSetupProbes } from '../services/nativeSetup.js'
 const inspectNativeLaunch: typeof inspect = (engine, source, deps) => inspect(engine, source, { setup: nativeSetupProbes, ...deps })
 import { captureLaunchExecutable } from './kit/launchExecutable.js'
 import { LAUNCH_LOCATION_VARIABLES, nativeHookLocations } from './kit/nativeLocations.js'
-import { engineHooks } from './hooks.js'
-import * as hooks from './nativeHooks.js'
+import { engineHookInstallations as engineHooks } from './nativeHookSetup.js'
+import * as hooks from './nativeHookSetup.js'
 import { buildEngineLaunchArgv } from '../lib/engineLaunch.js'
 import { shellSingleQuote } from '../lib/shellQuote.js'
 import { launchScriptOf } from '../testing/launchScript.js'
@@ -24,10 +24,9 @@ vi.mock('node:child_process', () => ({ execFile: (command: string, args: string[
   if (fixture.stalled) fixture.pending.push(settle); else queueMicrotask(settle)
   return { stdin: { end: vi.fn(), destroy: vi.fn() } }
 } }))
-vi.mock('./hooks.js', () => ({ engineHooks: { claude: { installIn: vi.fn(async () => fixture.hooks) }, codex: { installIn: vi.fn(async () => fixture.hooks) } } }))
-vi.mock('./nativeHooks.js', () => Object.fromEntries(['installOpencodePlugin', 'installHermesHooks', 'installCursorHooks',
+vi.mock('./nativeHookSetup.js', () => ({ engineHookInstallations: { claude: { installIn: vi.fn(async () => fixture.hooks) }, codex: { installIn: vi.fn(async () => fixture.hooks) } }, ...Object.fromEntries(['installOpencodePlugin', 'installHermesHooks', 'installCursorHooks',
   'installCommandCodeHooks', 'installDevinHooks', 'installAmpPlugin', 'installKiloPlugin', 'installGrokHooks', 'installAgyHooks', 'installCopilotHooks', 'installPiExtension',
-].map(name => [name, vi.fn(async () => fixture.hooks)])))
+].map(name => [name, vi.fn(async () => fixture.hooks)])) }))
 let installs = 0
 beforeEach(() => { fixture.identity = `install-${++installs}`; fixture.current = true; fixture.hooks = true; fixture.version = '2.0.0'; fixture.help = '--auto --permission-mode --approve-for-me'; fixture.calls = []; fixture.pending = []; fixture.stalled = false; fixture.failed = false; fixture.environments = []; fixture.exit = 0; fixture.stderr = '' })
 afterEach(() => { vi.clearAllMocks(); vi.unstubAllEnvs() })

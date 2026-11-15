@@ -193,3 +193,9 @@ controlled probe at its explicit port. All 384 cases pass with the golden files 
 TypeScript passes. An audit also wires the Windows-only real-PTY fixture to the explicit local setup
 helper; native Windows execution has not been performed. Final-head receipts/CI and the documented
 cold-start cost disposition remain required.
+
+The next approved slice is documented in [engine setup files](2026-11-16-engine-setup-files.md):
+optional hook/configuration parsing and templates render bounded indexed candidates in this same
+process. The existing eight preparations and thirty-second expiry also cover those private file
+operations. Core keeps capture/staging/publication and launch proof; folder trust and inherited MCP
+remain a later slice. This does not claim completion of package 8 or blocking-I/O isolation.

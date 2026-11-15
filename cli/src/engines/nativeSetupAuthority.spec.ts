@@ -6,10 +6,10 @@ import { inspectNativeLaunch } from './nativeLaunch.js'
 import { createNativeSetupLink } from './kit/nativeSetupLink.js'
 import { captureLaunchExecutable } from './kit/launchExecutable.js'
 import { executableIdentity, retainedExecutable } from './kit/nativeExecutable.js'
-import { engineHooks } from './hooks.js'
+import { engineHookInstallations as engineHooks } from './nativeHookSetup.js'
 
 vi.mock('./kit/launchExecutable.js', () => ({ captureLaunchExecutable: vi.fn() }))
-vi.mock('./hooks.js', () => ({ engineHooks: { claude: { installIn: vi.fn(async () => true) } } }))
+vi.mock('./nativeHookSetup.js', async original => ({ ...await original<object>(), engineHookInstallations: { claude: { installIn: vi.fn(async () => true) } } }))
 let root = ''
 afterEach(() => { if (root) rmSync(root, { recursive: true, force: true }); vi.clearAllMocks() })
 

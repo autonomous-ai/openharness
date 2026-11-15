@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { loadEngine } from '../../engines/inProcess.js'
-import { engineHooks } from '../../engines/hooks.js'
+import { engineHookInstallations as engineHooks } from '../../engines/nativeHookSetup.js'
 import { buildEngineCommandArgv, refusePermissionFlagIfUnsupported } from '../../lib/engineLaunch.js'
 import { workspaceMissing } from '../../lib/workspaceCheck.js'
 import { createExternalPreflight } from './externalPreflight.js'
@@ -8,7 +8,7 @@ import type { NativeLaunch } from '../../engines/nativeLaunch.js'
 import { WindowsBatchLaunchRefused } from '../../lib/windows/launch.js'
 import { missingHookScript } from '../../engines/kit/notifyHooks.js'
 vi.mock('../../engines/inProcess.js', () => ({ loadEngine: vi.fn(async () => ({})) }))
-vi.mock('../../engines/hooks.js', () => ({ engineHooks: { codex: { installIn: vi.fn(async () => true) } } }))
+vi.mock('../../engines/nativeHookSetup.js', () => ({ engineHookInstallations: { codex: { installIn: vi.fn(async () => true) } } }))
 vi.mock('../../lib/engineLaunch.js', () => ({ buildEngineCommandArgv: vi.fn(() => []), refusePermissionFlagIfUnsupported: vi.fn(async () => null) }))
 vi.mock('../../lib/workspaceCheck.js', () => ({ workspaceMissing: vi.fn(() => null) }))
 vi.mock('../../engines/kit/notifyHooks.js', async (real) => ({ ...await real<object>(), missingHookScript: vi.fn(() => null) }))

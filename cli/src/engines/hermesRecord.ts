@@ -3,7 +3,8 @@
  * it rather than from a hook: v0.21.6 and later do; an older one does not, nor does a home set to the TUI, whose
  * interface writes none. Nothing here writes anything.
  */
-import { HERMES_HOOKS_SAID, HERMES_RECORD_SINCE, HERMES_VERSION } from './hermes/contract.js'
+import { HERMES_RECORD_SINCE, HERMES_VERSION } from './hermes/contract.js'
+import { HERMES_HOOKS_SAID } from './hermes/setup.js'
 import { captureLaunchExecutable } from './kit/launchExecutable.js'
 import { nativeProcessEnvironment } from './kit/nativeLocations.js'
 import { nativeVersionProbe, parseRelease, probedVersion, releaseAtLeast, type Release } from './kit/nativeVersion.js'
@@ -42,7 +43,8 @@ function unknown(file: string): null {
   return null
 }
 
-export { hermesHomeIsTui, rememberRecordHome, isRecordHome } from './kit/hermesRecordHomes.js'
+export { rememberRecordHome, isRecordHome } from './kit/hermesRecordHomes.js'
+export { hermesHomeIsTui } from './kit/hermesRecordSettings.js'
 import { forgetRecordHomes } from './kit/hermesRecordHomes.js'
 
 /** Test seam. */

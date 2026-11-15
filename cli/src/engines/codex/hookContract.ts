@@ -1,8 +1,9 @@
+import { hookAuthority } from './hookAuthority.js'
 import type { HookContract } from '../facets/hooks.js'
 
 /**
- * Codex's hooks, declared: data only, which core applies with the kit's installer and rules
- * (engines/hooks.ts). Copied from the former installHooks.ts and hooks.ts of this folder.
+ * Codex's hooks, declared: data for setup rendering and explicit CLI installation
+ * (hookAuthority.ts holds core admission). Copied from the former installHooks.ts and hooks.ts of this folder.
  */
 export const hooks: HookContract = {
   settings: {
@@ -70,9 +71,5 @@ export const hooks: HookContract = {
       },
     },
   },
-  // A delegated session (a Codex sub-agent) runs its hooks from its parent's pane, and its rollout's first
-  // record names it a child (`source.subagent`). Registered, it would take the parent's pane and transcript,
-  // and its prompt would be credited to the parent: refused before either (hookServer.ts, registry.register).
-  children: { type: 'session_meta', child: ['payload', 'source', 'subagent'], reason: 'codex_subagent' },
-  // Codex closes turns through its transcript, never a Stop hook.
+  ...hookAuthority,
 }

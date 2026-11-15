@@ -9,6 +9,8 @@ import type { NativeInstallation } from '../engines/kit/nativeInstall.js'
 import type { NativeSetup } from '../engines/kit/nativeSetup.js'
 import { engineInstallRecipe } from '../lib/engineInstall.js'
 import { createLocalNativeSetup } from './nativeSetup.js'
+import { HookScriptMissing } from '../engines/kit/hookHeld.js'
+import { boundedHookInput, hookCandidate, type NativeHookInput } from '../engines/kit/nativeHookWire.js'
 
 const MAX_PREPARED = 8
 const MAX_REQUESTS = 8
@@ -29,9 +31,10 @@ export function startEngineSetup(directory: string, given?: NativeSetup) {
   const probes = given ? undefined : createSetupProbeExecutor()
   let setup = given ?? createLocalNativeSetup(directory, probes!.execute), stopped = false
   interface Preparation {
+    kind: 'installation' | 'files'
     engine: AgentEngine; request: string; expiresAt: number; live: boolean; committed: boolean; finished: boolean
     decide(allowed: boolean): void
-    result: Promise<NativeInstallation>
+    result: Promise<Record<string, unknown>>
     timer: ReturnType<typeof setTimeout>
   }
   const prepared = new Map<string, Preparation>()
@@ -75,38 +78,69 @@ export function startEngineSetup(directory: string, given?: NativeSetup) {
     },
     setup_prepare: async (payload, _asker, closed) => {
       const engine = engineOf(payload.engine), environment = locations(payload.environment)
-      if (!engine || !string(payload.request) || !environment || closed?.aborted) return { installation: held() }
+      const kind = payload.kind === 'files' ? 'files' : 'installation'
+      const unavailable = () => kind === 'files' ? { files: null } : { installation: held() }
+      if (!engine || !string(payload.request) || !environment || closed?.aborted) return unavailable()
       const recipe = engineInstallRecipe(engine)
-      if (!recipe) return { installation: held() }
+      const input = { engine, environment, port: payload.port, files: payload.files,
+        ...(payload.major === undefined ? {} : { major: payload.major }),
+        ...(payload.keepsRecord === undefined ? {} : { keepsRecord: payload.keepsRecord }),
+        ...(payload.remove === undefined ? {} : { remove: payload.remove }),
+        ...(payload.createMissing === undefined ? {} : { createMissing: payload.createMissing }),
+        ...(payload.directories === undefined ? {} : { directories: payload.directories }),
+      } as NativeHookInput
+      if (kind === 'files' ? !setup.prepareFiles || !boundedHookInput(input) : !recipe) return unavailable()
       for (const [token, entry] of prepared) if (entry.finished) { clearTimeout(entry.timer); prepared.delete(token) }
       if (prepared.size >= MAX_PREPARED) return busy()
       const token = randomUUID(), request = payload.request
       let decide!: (allowed: boolean) => void, ready!: (value: Record<string, unknown>) => void
       const decision = new Promise<boolean>(resolve => { decide = resolve })
       const readiness = new Promise<Record<string, unknown>>(resolve => { ready = resolve })
-      const entry: Preparation = { engine, request, expiresAt: Date.now() + PREPARATION_MS, live: true, committed: false, finished: false, decide,
-        result: Promise.resolve(held()), timer: setTimeout(() => {
+      const entry: Preparation = { kind, engine, request, expiresAt: Date.now() + PREPARATION_MS, live: true, committed: false, finished: false, decide,
+        result: Promise.resolve(unavailable()), timer: setTimeout(() => {
           entry.live = false; entry.decide(false)
         }, PREPARATION_MS) }
       entry.timer.unref?.()
       prepared.set(token, entry)
       const current = () => entry.live && Date.now() < entry.expiresAt && !closed?.aborted
-      entry.result = setup.installations.ensure(engine, recipe, Object.freeze({ ...environment }), request, current,
-        () => { if (!current()) return Promise.resolve(false); ready({ preparation: token }); return decision })
-        .catch(() => { console.warn('[engine-setup] INSTALLATION_PREPARATION_FAILED'); return held() }).then(result => { entry.finished = true; return result })
-      return Promise.race([readiness, entry.result.then(installation => ({ installation }))])
+      entry.result = (kind === 'files'
+        ? setup.prepareFiles!(input, request, current).then(async candidate => {
+          const files = hookCandidate(candidate, input.files.length)
+          if (!files || !current()) return { files: null }
+          ready({ preparation: token })
+          return { files: await decision && current() ? files : null }
+        })
+        : setup.installations.ensure(engine, recipe!, Object.freeze({ ...environment }), request, current,
+          () => { if (!current()) return Promise.resolve(false); ready({ preparation: token }); return decision })
+          .then(installation => ({ installation })))
+        .catch(error => {
+          if (kind === 'files' && error instanceof HookScriptMissing) {
+            console.warn('[engine-setup] HOOK_SCRIPT_MISSING'); return { files: null, error: 'HOOK_SCRIPT_MISSING' }
+          }
+          console.warn(`[engine-setup] ${kind === 'files' ? 'FILE' : 'INSTALLATION'}_PREPARATION_FAILED`); return unavailable()
+        })
+        .then(result => { entry.finished = true; return result })
+      return Promise.race([readiness, entry.result])
     },
     setup_commit: async payload => {
+      const kind = payload.kind === 'files' ? 'files' : 'installation'
+      const unavailable = () => kind === 'files' ? { files: null } : { installation: held() }
       const entry = typeof payload.preparation === 'string' ? prepared.get(payload.preparation) : undefined
-      if (!entry || !entry.live || entry.engine !== payload.engine || entry.request !== payload.request) return { installation: held() }
+      if (!entry || !entry.live || entry.kind !== kind || entry.engine !== payload.engine || entry.request !== payload.request) return unavailable()
       if (Date.now() >= entry.expiresAt) {
         entry.live = false; entry.decide(false); clearTimeout(entry.timer)
-        return { installation: held() }
+        return unavailable()
       }
       if (!entry.committed) { entry.committed = true; entry.decide(payload.allowed === true) }
-      return { installation: await entry.result }
+      return await entry.result
     },
   }
+  // Distinct operations make old workers refuse file preparation instead of interpreting it as installation.
+  const prepare = requests.setup_prepare!, commit = requests.setup_commit!
+  requests.setup_prepare = (payload, asker, closed) => prepare({ ...payload, kind: 'installation' }, asker, closed)
+  requests.setup_commit = (payload, asker, closed) => commit({ ...payload, kind: 'installation' }, asker, closed)
+  requests.setup_files_prepare = (payload, asker, closed) => prepare({ ...payload, kind: 'files' }, asker, closed)
+  requests.setup_files_commit = (payload, asker, closed) => commit({ ...payload, kind: 'files' }, asker, closed)
   // Actual settlement releases request admission: timeouts/disconnects cannot free stuck reads or duplicate commits.
   let answering = 0
   // These handlers are private core calls, never client routes. Keep this check even for explicit inline composition.

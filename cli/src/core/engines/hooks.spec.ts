@@ -1,22 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
-import * as hooks from '../../engines/nativeHooks.js'
-import { engineHooks } from '../../engines/hooks.js'
+import * as hooks from '../../engines/nativeHookSetup.js'
+import { engineHookInstallations as engineHooks } from '../../engines/nativeHookSetup.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { processRows } from '../../lib/terminalAgentDiscovery.js'
 import { confirmHomes, recoverEngineHomes } from '../../lib/engineHomes.js'
 import { createEngineHooks, installEngineHooks, installOpencodePluginBeforeSpawn, PROCESS_RECORD_WAIT_MS, type EngineHookDeps } from './hooks.js'
 import { loadEngine } from '../../engines/inProcess.js'
 import { createPaneOperations } from '../agents/paneOperations.js'
-import { missingHookScript } from '../../engines/kit/notifyHooks.js'
+import { missingHookScript } from '../../engines/kit/hookScript.js'
 
-vi.mock('../../engines/hooks.js', async (real) => {
-  const actual = await real<typeof import('../../engines/hooks.js')>()
-  return { ...actual, engineHooks: {
-    claude: { ...actual.engineHooks.claude, install: vi.fn(() => true), installIn: vi.fn(() => true) },
-    codex: { ...actual.engineHooks.codex, install: vi.fn(() => true), installIn: vi.fn(() => true) },
-  } }
-})
-vi.mock('../../engines/kit/notifyHooks.js', async (real) => ({ ...await real<object>(), missingHookScript: vi.fn(() => null) }))
+vi.mock('../../engines/kit/hookScript.js', async (real) => ({ ...await real<object>(), missingHookScript: vi.fn(() => null) }))
 vi.mock('../../lib/engineHomes.js', () => ({
   confirmHomes: vi.fn(() => ({ claude: null, codex: null })),
   recoverEngineHomes: vi.fn(() => ({ claude: [], codex: [] })),
@@ -28,8 +21,12 @@ vi.mock('../../engines/inProcess.js', async (real) => {
   return { ...actual, loadEngine: vi.fn(() => loading.stalled ? new Promise(() => {}) : Promise.resolve(null)) }
 })
 vi.mock('../../lib/terminalAgentDiscovery.js', async (real) => ({ ...await real<object>(), processRows: vi.fn(async () => []) }))
-vi.mock('../../engines/nativeHooks.js', async (real) => ({
+vi.mock('../../engines/nativeHookSetup.js', async (real) => ({
   ...await real<object>(),
+  engineHookInstallations: {
+    claude: { install: vi.fn(() => true), installIn: vi.fn(() => true) },
+    codex: { install: vi.fn(() => true), installIn: vi.fn(() => true) },
+  },
   installCursorHooks: vi.fn(),
   installOpencodePlugin: vi.fn(),
   installKiloPlugin: vi.fn(),

@@ -15,11 +15,11 @@ const world = vi.hoisted(() => {
   }
   return { state, install }
 })
-vi.mock('../../engines/hooks.js', () => ({ engineHooks: {
+vi.mock('../../engines/nativeHookSetup.js', () => ({
+  engineHookInstallations: {
   claude: { install: (port: number) => world.install('claude', port), installIn: (port: number, home: string) => world.install('claude', port, home) },
   codex: { install: (port: number) => world.install('codex', port), installIn: (port: number, home: string) => world.install('codex', port, home) },
-} }))
-vi.mock('../../engines/nativeHooks.js', () => ({
+  },
   installCursorHooks: (port: number) => world.install('cursor', port),
   installOpencodePlugin: (port: number) => world.install('opencode', port),
   installKiloPlugin: (port: number) => world.install('kilo', port),

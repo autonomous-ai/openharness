@@ -4,13 +4,13 @@
  *
  * Moved verbatim out of `runForeground` (the core boundary, step 12: docs/design/2026-10-03-harnessd.md).
  */
-import { engineHooks } from '../../engines/hooks.js'
+import { engineHookInstallations as engineHooks } from '../../engines/nativeHookSetup.js'
 import { sessionStoreContracts } from '../../engines/sessionStoreContracts.js'
 import { chooseHookAgent, type HookServerHandlers } from '../../hookServer.js'
 import { confirmHomes, recoverEngineHomes } from '../../lib/engineHomes.js'
 import { createHomeAdoptions } from './homeAdoptions.js'
-import * as nativeHooks from '../../engines/nativeHooks.js'
-import { missingHookScript } from '../../engines/kit/notifyHooks.js'
+import * as nativeHooks from '../../engines/nativeHookSetup.js'
+import { missingHookScript } from '../../engines/kit/hookScript.js'
 import type { NativeHookOptions } from '../../engines/kit/nativeLocations.js'
 import type { OpencodeLaunchSnapshot } from '../../engines/launchControl.js'
 import { sid } from '../../lib/log.js'
@@ -321,7 +321,7 @@ export function installEngineHooks(port: number, options: InstallEngineHooksOpti
     confirm: confirmHomes,
     install: async (engine, home) => {
       if (options.only && !options.only.has(engine)) return
-      if (!await engineHooks[engine].installIn(port, home, { current: adoptions.current })) throw new Error(`${sessionStoreContracts[engine].product} hook preparation is unavailable`)
+      if (!await engineHooks[engine].installIn(port, home, { current: adoptions.current, ...(options.setup ? { setup: options.setup } : {}) })) throw new Error(`${sessionStoreContracts[engine].product} hook preparation is unavailable`)
       console.log(`[hooks] ${sessionStoreContracts[engine].product} hooks installed in its adopted home`)
     },
     held: reason => {
@@ -331,7 +331,7 @@ export function installEngineHooks(port: number, options: InstallEngineHooksOpti
   })
   adoptions.submit(options.environment ?? process.env)
   void options.loginShell?.then(adoptions.submit, error => console.warn(`[hooks] login-shell homes unavailable · ${error instanceof Error ? error.message : error}`))
-  const nativeOptions = { current: adoptions.current, setup: options.setup }
+  const nativeOptions = { current: adoptions.current, ...(options.setup ? { setup: options.setup } : {}) }
   for (const [engine, hooks] of Object.entries(engineHooks)) hookStep(engine, () => hooks.install(port, nativeOptions))
   for (const [vendor, install] of OTHER_INSTALLERS) hookStep(vendor, () => install(port, nativeOptions))
   return { close: adoptions.close, settled: Promise.all(pending).then(() => {}) }

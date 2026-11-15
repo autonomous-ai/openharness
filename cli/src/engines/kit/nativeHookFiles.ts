@@ -83,15 +83,15 @@ async function syncDirectoryChain(path: string, attempt: HookPreparationAttempt)
 
 /** Create only absent directories. The final leaf-to-root flush confirms every name. Existing
  * aliases are resolved before use; no directory is chmodded or replaced. */
-function ensureDirectory(path: string, attempt: HookPreparationAttempt): void {
+export function prepareHookDirectory(path: string, attempt: HookPreparationAttempt, mode?: number): void {
   attempt.check()
   try {
     if (!lstatSync(path).isDirectory()) throw new HookPreparationHeld('the configuration directory changed type')
   } catch (error) {
     if (!missing(error)) throw error
-    ensureDirectory(dirname(path), attempt)
+    prepareHookDirectory(dirname(path), attempt, mode)
     attempt.verify(); attempt.check()
-    try { mkdirSync(path) } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error }
+    try { mkdirSync(path, { mode }) } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error }
     directoryChanged(attempt, dirname(path))
   }
 }
@@ -173,7 +173,7 @@ export function inspectHookFile(file: string, defaultMode = 0o666) {
   }
   verify()
   return {
-    content, directory, stamp: before,
+    content, directory, mode, stamp: before,
     verify, prepare,
     async replace(next: string, attempt: HookPreparationAttempt, exclusive = false): Promise<HookFilePublication> {
       attempt.verify(); prepare(next)
@@ -204,7 +204,7 @@ export function inspectHookFile(file: string, defaultMode = 0o666) {
       // Resolve an existing ancestor before creating descendants; this preserves
       // relocated config homes without following a replaced alias at publish.
       const parent = directoryPath(dirname(target))
-      ensureDirectory(parent, attempt)
+      prepareHookDirectory(parent, attempt)
       const actual = join(parent, target.slice(dirname(target).length + 1))
       // Creation invalidates absent-ancestor facts; capture the new route and
       // still require the exact old leaf (or its observed absence).
@@ -292,6 +292,8 @@ export interface HookPreparationAttempt {
   flush(fd: number): Promise<void>
 }
 export interface HookPreparationOptions {
+  /** Setup renders against captured inputs; only the core's native publisher has real file effects. */
+  files?: HookPreparationFiles
   /** Join only the same port, executable, command and complete destination set. */
   identity?: string
   current?(): boolean
@@ -300,6 +302,13 @@ export interface HookPreparationOptions {
   retainConflicts?: boolean
   /** Evidence retained by this launch; never a global success cache. */
   confirmed?(proof: HookPreparationProof): void
+}
+export interface HookPreparationFiles {
+  report(stream: 'log' | 'warn' | 'error', ...args: unknown[]): void
+  inspect: typeof inspectHookFile
+  run: typeof runHookPreparation
+  directory(path: string, mode: number | undefined, attempt: HookPreparationAttempt): void
+  write(file: string, text: string, mode: number, attempt: HookPreparationAttempt): Promise<void>
 }
 interface PendingPreparation { identity?: string; keys: string[]; revoke(): void; reply: Promise<unknown>; waiters: number; proof?: HookPreparationProof }
 function preparationProof(files: readonly string[], verifyRoutes: () => void): HookPreparationProof {

@@ -8,7 +8,7 @@ import { createScreens } from './engines/screens.js'
 import { createScreenTransport } from './engines/screenTransport.js'
 import { terminalScreen } from '../engines/kit/screen.js'
 import { inspectNativeLaunch, type NativeLaunch } from '../engines/nativeLaunch.js'
-import { nativeHookLocations } from '../engines/kit/nativeLocations.js'
+import { nativeHookLocations, type NativeHookOptions } from '../engines/kit/nativeLocations.js'
 import { createNativeLaunchPreparer } from '../engines/prepareNativeLaunch.js'
 import { createNativeSetupLink } from '../engines/kit/nativeSetupLink.js'
 import { publishGridConfigDir } from '../lib/publishedGridConfig.js'
@@ -59,7 +59,7 @@ import { claudeHomeListed } from '../lib/claudeHomes.js'
 import { registry, projectDisplayName, validTranscriptPath, type RegisteredSession } from '../lib/registry.js'
 import { engineSessionTitle } from '../lib/sessionTitle.js'
 import { machineNames } from '../lib/machineNames.js'
-import { engineHooks as engineHookFacets } from '../engines/hooks.js'
+import { engineHookInstallations as engineHookFacets } from '../engines/nativeHookSetup.js'
 import type { LiveFor } from '../engines/facets/live.js'
 import { DAEMON_LOG_FILE, PID_FILE, daemonPort, isAlive, readPid, removePidFileIf, onError, LEGACY_LOG_FILE, MACHINE_NAME_FILE, tildify, computerId, thisDeviceLabel } from '../lib/daemonState.js'
 import { clearSafeModeMarker, safeModeDisposition, safeModeStatusBody, SafeModeRequest, writeSafeModeMarker } from '../lib/daemonSafeMode.js'
@@ -172,7 +172,7 @@ import { createForgetSession } from './agents/forget.js'
 import { createBinding } from './agents/bind.js'
 import { createHermesTerminal } from './agents/hermesTerminal.js'
 import { hermesSessionEndedSince, hermesSessionKind, hermesStoreStamp, hermesTerminalNames, hermesTerminalStamp, readHermesTerminal } from '../engines/identities.js'
-import { hermesRecordSeen } from '../engines/nativeHooks.js'
+import { hermesRecordSeen } from '../engines/nativeHookSetup.js'
 import { createDiscoveryHandlers } from './agents/discovery.js'
 import { createLaunchHelpers, gridLaunchThrough } from './agents/launch.js'
 import { createLaunchAuthority } from './agents/launchAuthority.js'
@@ -1992,6 +1992,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
 
   // Binding a session to its agent, and a running process to its session (core/agents/bind.ts).
+  let hookSetup: NativeHookOptions['setup']
+
   const binding = createBinding({
     owners: conversationOwners,
     registry,
@@ -2030,7 +2032,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       kind: hermesSessionKind,
       endedSince: hermesSessionEndedSince,
       storeStamp: hermesStoreStamp,
-      recordSeen: (home) => { void hermesRecordSeen(home) },
+      recordSeen: (home) => { void hermesRecordSeen(home, env.PORT, { setup: hookSetup }) },
       now: Date.now,
     }),
   })
@@ -2480,6 +2482,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const nativeSetup = outOfProcess.has('engineSetup')
     ? createNativeSetupLink((type, payload) => serviceLinks.call('engineSetup', type, payload))
     : inline!.createLocalNativeSetup(join(env.ADAPTER_DATA_DIR, 'native-installations'))
+  hookSetup = nativeSetup
   const prepareNativeLaunch = createNativeLaunchPreparer({
     installations: nativeSetup.installations,
     inspect: (engine, source) => inspectNativeLaunch(engine, source, {
@@ -2497,7 +2500,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     writeGridConfigDir,
     // No backend to make the pane on is not this check's to say: the launch answers the configured backend's code.
     capabilities: () => createBackend?.capabilities() ?? Promise.resolve({ sessionEnv: true }),
-    installCodexHooks: (codexHome) => env.DISABLE_HOOK_INSTALL ? true : engineHookFacets.codex.installIn(hookPort, codexHome),
+    installCodexHooks: (codexHome) => env.DISABLE_HOOK_INSTALL ? true : engineHookFacets.codex.installIn(hookPort, codexHome, { setup: nativeSetup }),
     dshLaunch: dshLaunch.relaunch,
   }
   // What a relaunch needs to bring a pane back (core/agents/launch.ts). Declared before the restore

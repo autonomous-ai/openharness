@@ -1,4 +1,4 @@
-# Engine setup files: boundary proposal
+# Engine setup files: bounded preparation boundary
 
 Status: narrow first slice approved by the parent coordinator; no runtime changes yet. Base:
 `eecac6575464119147cf140cdb177cf8a63eccec`. This continues package 8 of
@@ -40,9 +40,9 @@ Selected implementation sizes at the base, counted directly from these files (no
 | Generic `nativeHookFiles` publication/proof primitive | 459 |
 | Mixed `hooks`, `launchPrep`, `nativeLaunch` composition | 382 |
 
-The parent integration reports default closure 539 files / 90,847 lines, and opened engine doors
-652 / 107,819. These are inherited evidence, not a new measurement. Exact exclusive descendants and
-before/after closure will be measured after the parent's quiet benchmark window. The shared publication
+An independent measurement on the clean base confirms default closure 539 files / 90,847 lines, and
+opened engine doors 652 / 107,819. Cutting `nativeHooks.ts` and `hookSettings.ts` alone removes 15 exclusive
+files / 2,210 lines before adding the boundary code or extracting embedded templates. The shared publication
 primitive is also used by non-hook native configuration, so removing an installer import does not imply
 that all of its file machinery leaves core.
 
@@ -74,7 +74,7 @@ There are also gaps that cannot be moved unchanged:
   another process writing between the final check and rename. Process-local reservations do not solve
   that external-writer race. No implementation or test may claim stronger isolation than it provides.
 
-## Proposed smallest split
+## Approved smallest split
 
 Keep one generic core publisher; move vendor preparation into the existing `engineSetup` process.
 Do not create a new process, a worker-to-core filesystem RPC interpreter, a general transaction manager,
@@ -85,14 +85,14 @@ or per-engine state machines in core.
    failed setup capability calls an inline installer implicitly. Split optional plugin templates and
    installation declarations out of mixed vendor contracts so importing session identity does not
    import plugin implementation bytes.
-2. Reuse setup's bounded prepare/commit lifetime. Extend the private protocol with a versioned file
-   preparation kind while preserving existing installation requests. Core captures the engine,
+2. Reuse setup's bounded prepare/commit lifetime. Add distinct private file preparation operations
+   with a versioned candidate while preserving existing installation requests. Core captures the engine,
    explicit locations, current port/executable identity, owner and exact allowed destination manifest.
    The worker cannot select a different profile or destination from a late ambient environment.
-3. Worker preparation reads native files with the existing bounded path/owner/version discipline,
-   parses them, builds vendor-specific edits and stages bounded output. It does not rename, unlink,
-   chmod or create final configuration directories. The result identifies only the core-authorized
-   destinations, their observed source facts/versions, and candidate artifacts.
+3. Core captures bounded native input under its existing path/owner/version discipline. The worker
+   parses those immutable inputs and builds vendor-specific replacement bytes. It does not read,
+   rename, unlink, chmod or create final native configuration destinations. The result contains only
+   indexed candidate bytes; original source facts/versions remain in core.
 4. Core validates the complete manifest and native dependencies, retains the launch owner, and
    publishes only through the existing generic current-owner/version-fenced primitive. Staging and
    parsing failures cause no final mutation. Worker death revokes unaccepted candidates. After
@@ -114,9 +114,22 @@ script are the largest set; OpenCode and one Hermes home each need two. Hermes h
 one pair per preparation. Keep the existing 1 MiB per-file ceiling, add a 2 MiB aggregate UTF-8 candidate
 ceiling and a 4 MiB full serialized reply ceiling, including protocol metadata. The measured Hermes
 configuration documented in `nativeHookYaml.ts` is 134 KB; 2 MiB gives that real configuration over 10×
-headroom. Fixture corpus maxima will be recorded after the quiet benchmark window. Reuse the existing
+headroom. The checked-in golden corpora contain maximum UTF-8 strings of 5,558 bytes (Claude/Codex hook installers), 11,155 bytes (other hooks) and 3,871 bytes (native-version selection), measured without regenerating them. Reuse the existing
 eight admissions and deadline; do not add a second core queue or timer. An oversize candidate leaves
 the original files intact and names the held preparation.
+
+The wire reserves 4,096 bytes within the serialized ceiling for the service envelope and request
+metadata. Input metadata is checked before dispatch too: only the existing launch-location variable
+allowlist, 65,536 UTF-8 bytes of environment, typed optional flags, and one declared auxiliary directory.
+No worker may add a path or an output field to an indexed candidate.
+
+Messages' `hook.mjs` is one shared artifact across profiles. Including it in every profile's exclusive
+destination set would make unrelated healthy launches revoke each other. Publish that artifact through
+the **existing** `runHookPreparation`, keyed by its exact candidate bytes, and retain its exact file proof.
+Then publish the profile's own files under their existing reservation. Check the original caller/owner
+before and after both awaits; sharing artifact work grants no authority over another profile and cannot
+restore a cancelled caller. An incomplete shared publication supplies no launch proof. This adds no
+queue or reservation family. The parent approved this amendment before core wiring.
 
 The authenticated service transport accepts at most
 6 MiB + 4,096 bytes (`localWsServer.ts`, `lib/terminalBinary.ts`), while ordinary clients retain their
@@ -144,8 +157,13 @@ never answer an unknown workspace question on the worker's assertion.
 - Scale: cap concurrent preparation, file bytes, ancestor/path depth and actual outstanding flushes.
   Existing named busy/held outcomes report exhaustion without content, paths or account identifiers in
   metrics. Compare default-core loaded files, memory and owner/terminal responsiveness on the same workload.
-- Compatibility: additive private setup request kind/version; old request form still works. New core with
-  an old setup worker gets a held/unavailable preparation, never implicit inline fallback. Preserve the
+- Compatibility: distinct private `setup_files_prepare` / `setup_files_commit` operations share the
+  existing preparation map, deadline and actual-settlement admission. Merely adding `kind: files` to the
+  old installation operation was unsafe: the red-first service test showed the old handler ignored it
+  and entered executable installation. A capability preflight would still race worker replacement.
+  Unknown operation names are safely refused by an old worker, including replacement between calls;
+  the original installation requests remain unchanged. New core with an old setup worker gets a
+  held/unavailable preparation, never implicit inline fallback. Preserve the
   existing explicit old-master/debug composition through its documented 2026-12-15 date. Backend/public
   client contracts do not change; clients from the prior thirty days retain the same launch hold outcomes.
 - Migration/rollback: no native file schema migration, no new durable state. Generated bytes and file modes
@@ -171,3 +189,24 @@ Add red-first tests for stale owner, worker death/reconnect, oversized/malformed
 destination substitution, changed input, unavailable setup and old protocol. Exercise actual process
 isolation after focused tests. Parent owns full coverage gates, independent review, same-workload
 performance comparison, final closure measurement, push, PR and merge.
+
+## Implementation evidence and limits
+
+Default source closure is 530 files / 88,284 lines, down from the clean eec base's 539 / 90,847.
+The same walk with legacy engine doors open (still excluding services/inline) is 674 / 108,384,
+versus 652 / 107,819; its growth includes both retained explicit legacy installation and the new
+boundary. The default core retains only small argument quoting, hook-script identity/refusal state,
+mandatory admission data, destination coordination and the generic publisher. Architecture assertions
+reject mixed hook contracts and vendor parser/template imports from default core.
+
+Red-first checks exposed the old-operation executable-install skew, null metadata throwing, loss of
+missing-script diagnosis, and a null shared artifact incorrectly counting as complete publication.
+Focused checks cover worker replacement/operation mismatch, owner/input/alias changes, exact shared
+artifact joining and proof invalidation, partial publication without stale rollback, wire byte limits,
+and all thirteen native hook families. Historical byte/mode/foreign-content goldens stay on explicit
+legacy installer composition; native-version goldens and the thirteen-family integration exercise
+the new preparation/publication boundary without regenerating golden data.
+
+This is an integration checkpoint, not a full-gate, runtime-isolation, performance or signed Windows
+acceptance claim. Those checks and independent review belong to the final parent source. Folder trust,
+inherited MCP and remaining core filesystem I/O remain separate unfinished work.
