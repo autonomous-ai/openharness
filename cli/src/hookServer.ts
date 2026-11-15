@@ -74,7 +74,7 @@ export interface HookServerHandlers {
   onInbox?: (body: unknown, gone: AbortSignal) => Promise<'invalid' | 'off' | { text?: string }>
   /** A route a service answers, once the door let its request in (core/serviceRoutes.ts): its answer, or null when no
    *  service answers `path`. */
-  onServiceRoute?: (path: string, request: DoorRequest, localOk: boolean) => Promise<HttpAnswer> | null
+  onServiceRoute?: (path: string, request: DoorRequest, localOk: boolean, socket: boolean) => Promise<HttpAnswer> | null
 
   onRegistered: (
     entry: RegisteredSession,
@@ -136,46 +136,12 @@ export interface HookServerHandlers {
   /** For the end-to-end suite only: how long a Stop hook is held before it is acted on, as the hook's own
    *  verification can take under load (`HARNESSD_TEST_STOP_HOOK_DELAY_MS`). */
   stopHookDelayMs?: number
-  /** `harness pair <code>` from a second CLI process: run CPace toward the waiting browser. */
-  onPair?: (code: string) => Promise<PairOutcome>
-  /** `harness pairings` — list E2EE-paired browsers. */
-  onListPairs?: () => PairOutcome | Promise<PairOutcome>
-  /** `harness unpair <id>` — unpair one browser (by fingerprint/prefix/index). */
-  onRevoke?: (id: string) => PairOutcome | Promise<PairOutcome>
-  /** `harness unpair --all` — unpair every browser. */
-  onRevokeAll?: () => PairOutcome | Promise<PairOutcome>
-  /** `harness remote-password set` — stretch + persist a new persistent remote password on the
-   *  running daemon's live E2EE state. */
-  onSetRemotePassword?: (password: string) => Promise<PairOutcome>
-  /** `harness remote-password clear` — remove the persistent remote password. */
-  onClearRemotePassword?: () => PairOutcome | Promise<PairOutcome>
-  /** `harness remote-password status` — whether one is set, and its fingerprint. */
-  onRemotePasswordStatus?: () => PairOutcome | Promise<PairOutcome>
-  /** `harness link connect` — the machine this one just linked pinned it back, so trust that machine
-   *  here too (the mutual half of the link). Goes through the daemon: it holds paired.json in memory. */
-  onTrustLinkedPeer?: (peer: { pub: string; machineId: string; label: string }) => PairOutcome | Promise<PairOutcome>
-  /** `harness group list|sync|remove` — the trust group this machine belongs to (groupSyncer.ts). */
-  onGroupList?: () => PairOutcome | Promise<PairOutcome>
-  onGroupSync?: () => PairOutcome | Promise<PairOutcome>
-  onGroupRemove?: (selector: string) => PairOutcome | Promise<PairOutcome>
-  /** `harness devices list|remove|rebaseline` and the window's Devices list — the account's device key
-   *  log as this machine verified it (lib/e2ee/deviceLogSyncer.ts). */
-  onDevicesList?: () => Promise<PairOutcome>
-  onDevicesRemove?: (pub: string) => Promise<PairOutcome>
-  onDevicesRebaseline?: (confirm: boolean, head?: { seq: number; hash: string }) => Promise<PairOutcome>
-  /** `harness devices history` and the window's History — every add and remove, as this machine verified it. */
-  onDevicesHistory?: () => Promise<PairOutcome>
-  /** `harness devices dismiss` and the window's "It's mine" / "Got it" — mark new devices as seen. */
-  onDevicesDismiss?: (body: { pub?: string; pubs?: string[]; baseline?: boolean }) => PairOutcome | Promise<PairOutcome>
   /** The daemon's status (GET /api/status): what `harness status`, the desktop's discovery and scripts read. */
   onStatus?: () => Record<string, unknown> | Promise<Record<string, unknown>>
   /** GET /api/machines — the user's full machine list from the backend, through this daemon's own sign-in, so a local
    *  GUI client never needs a token of its own: the core's, which answers it from its own copy while the gateway is away
    *  and signed out without starting it (core/gatewayLink.ts `machines`). */
   onMachinesList?: () => Promise<PairOutcome>
-  /** POST /api/auth/handoff — a one-time code that signs a phone in to this account (the desktop's
-   *  Add Phone QR), minted by backend against this daemon's own session. */
-  onAuthHandoff?: () => Promise<PairOutcome>
   /** POST /api/daemon/stop — `harness stop` on Windows (core/daemonStopRoute.ts). Trusted local only: over TCP any
    *  process on the machine, another user's included, could stop this user's daemon. Given on Windows only; without
    *  it the route does not exist (404), as before on a Mac or Linux. */
@@ -542,10 +508,10 @@ export function startHookServer(
       // CLI, which is acceptable on loopback.
       const localOk = req.headers['x-adapter-local'] === '1'
       /** A route a service answers (core/serviceRoutes.ts), written as it answered, with the headers its route declares:
-       *  false when no service answers this path and method. Whether a write carries the local header is its route's to
-       *  ask, and its body is read only then, up to its route's bound. */
+       *  false when no service answers this path and method. Whether a write carries the local header, and whether it came
+       *  over the daemon's own socket, is its route's to ask, and its body is read only then, up to its route's bound. */
       const serviceRoute = async (): Promise<boolean> => {
-        const routed = handlers.onServiceRoute?.(url, { method: req.method ?? '', target: req.url ?? '', readBody: (max) => readBody(req, max) }, localOk)
+        const routed = handlers.onServiceRoute?.(url, { method: req.method ?? '', target: req.url ?? '', readBody: (max) => readBody(req, max) }, localOk, trustedLocal)
         if (!routed) return false
         const result = await routed
         for (const [name, value] of Object.entries(result.headers ?? {})) res.setHeader(name, value)
@@ -1027,143 +993,6 @@ export function startHookServer(
         return
       }
 
-      // `harness pair <code>` → run CPace toward the browser that is waiting to pair. Long-polls until
-      // the handshake completes/fails (bounded by the manager's round timers). Loopback-only; the PAKE
-      // itself is the security (a local process can trigger, but only the real code completes pairing).
-      if (req.method === 'POST' && url === '/api/pair') {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onPair) { json(503, { error: 'PAIRING_UNAVAILABLE' }); return }
-        let body: { code?: string }
-        try { body = JSON.parse(await readBody(req)) as { code?: string } } catch { json(400, { error: 'bad json' }); return }
-        if (!body.code) { json(400, { error: 'MISSING_CODE' }); return }
-        try { const out = await handlers.onPair(body.code); json(out.status, out.body) }
-        catch (e) { json(500, { error: e instanceof Error ? e.message : 'INTERNAL' }) }
-        return
-      }
-
-      // `harness remote-password set` → stretch + persist a new persistent remote password on the
-      // running daemon's live E2EE state (so an in-progress `harness link connect` from another
-      // machine sees it immediately, with no daemon restart needed).
-      if (req.method === 'POST' && url === '/api/remote-password/set') {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onSetRemotePassword) { json(503, { error: 'UNAVAILABLE' }); return }
-        let body: { password?: string }
-        try { body = JSON.parse(await readBody(req)) as { password?: string } } catch { json(400, { error: 'bad json' }); return }
-        if (!body.password) { json(400, { error: 'MISSING_PASSWORD' }); return }
-        try { const out = await handlers.onSetRemotePassword(body.password); json(out.status, out.body) }
-        catch (e) { json(500, { error: e instanceof Error ? e.message : 'INTERNAL' }) }
-        return
-      }
-
-      // `harness remote-password clear` → remove the persistent remote password.
-      if (req.method === 'POST' && url === '/api/remote-password/clear') {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onClearRemotePassword) { json(503, { error: 'UNAVAILABLE' }); return }
-        const out = await handlers.onClearRemotePassword(); json(out.status, out.body); return
-      }
-
-      // `harness link connect` → trust the machine just linked back, on the daemon's live E2EE state.
-      if (req.method === 'POST' && url === '/api/link/trust-peer') {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onTrustLinkedPeer) { json(503, { error: 'UNAVAILABLE' }); return }
-        let body: { pub?: unknown; machineId?: unknown; label?: unknown }
-        try { body = JSON.parse(await readBody(req)) as typeof body } catch { json(400, { error: 'bad json' }); return }
-        const isKey = typeof body.pub === 'string' && /^[A-Za-z0-9+/]{43}=$/.test(body.pub) // 32-byte Ed25519, base64
-        if (!isKey || typeof body.machineId !== 'string' || !/^[a-f0-9]{32}$/.test(body.machineId)) { json(400, { error: 'BAD_PEER' }); return }
-        const label = typeof body.label === 'string' && body.label.trim() ? body.label.trim().slice(0, 60) : body.machineId
-        const out = await handlers.onTrustLinkedPeer({ pub: body.pub as string, machineId: body.machineId, label })
-        json(out.status, out.body); return
-      }
-
-      // `harness group list` → the trust group's members. Read-only (keys and labels, no secrets).
-      if (req.method === 'GET' && url === '/api/group') {
-        if (!handlers.onGroupList) { json(503, { error: 'UNAVAILABLE' }); return }
-        const out = await handlers.onGroupList(); json(out.status, out.body); return
-      }
-      // `harness group sync` → compare rosters with every reachable member now.
-      if (req.method === 'POST' && url === '/api/group/sync') {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onGroupSync) { json(503, { error: 'UNAVAILABLE' }); return }
-        const out = await handlers.onGroupSync(); json(out.status, out.body); return
-      }
-      // `harness group remove <id|#|fp>` / `harness link unlink` → drop a member everywhere.
-      if (req.method === 'POST' && url === '/api/group/remove') {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onGroupRemove) { json(503, { error: 'UNAVAILABLE' }); return }
-        let body: { selector?: unknown }
-        try { body = JSON.parse(await readBody(req)) as typeof body } catch { json(400, { error: 'bad json' }); return }
-        if (typeof body.selector !== 'string' || !body.selector.trim()) { json(400, { error: 'MISSING_SELECTOR' }); return }
-        const out = await handlers.onGroupRemove(body.selector.trim()); json(out.status, out.body); return
-      }
-
-      // `harness devices list` / the window's Devices list → the account's devices, as this machine's
-      // verified copy of the device key log has them. Read-only (public keys and labels).
-      if (req.method === 'GET' && url === '/api/devices') {
-        if (!handlers.onDevicesList) { json(503, { error: 'UNAVAILABLE' }); return }
-        const out = await handlers.onDevicesList(); json(out.status, out.body); return
-      }
-      // `harness devices remove <fp>` / Remove in the window → out of the log, signed by this machine.
-      if (req.method === 'POST' && url === '/api/devices/remove') {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onDevicesRemove) { json(503, { error: 'UNAVAILABLE' }); return }
-        let body: { pub?: unknown }
-        try { body = JSON.parse(await readBody(req)) as typeof body } catch { json(400, { error: 'bad json' }); return }
-        if (typeof body.pub !== 'string' || !body.pub) { json(400, { error: 'MISSING_PUB' }); return }
-        const out = await handlers.onDevicesRemove(body.pub); json(out.status, out.body); return
-      }
-      // `harness devices rebaseline` → what trusting the backend's log again would change; `confirm`
-      // does it (the only way out of a frozen log).
-      if (req.method === 'POST' && url === '/api/devices/rebaseline') {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onDevicesRebaseline) { json(503, { error: 'UNAVAILABLE' }); return }
-        let body: { confirm?: unknown; head?: unknown }
-        try { body = JSON.parse(await readBody(req)) as typeof body } catch { json(400, { error: 'bad json' }); return }
-        if (!body || typeof body !== 'object') { json(400, { error: 'bad json' }); return }
-        // The head the person was shown in the preview: a confirm only goes ahead on that same list.
-        let head: { seq: number; hash: string } | undefined
-        if (body.head !== undefined) {
-          const h = body.head as { seq?: unknown; hash?: unknown } | null
-          if (!h || typeof h !== 'object' || typeof h.seq !== 'number' || !Number.isSafeInteger(h.seq) || h.seq < 0
-            || typeof h.hash !== 'string' || h.hash.length > 128) { json(400, { error: 'BAD_HEAD' }); return }
-          head = { seq: h.seq, hash: h.hash }
-        }
-        const out = await handlers.onDevicesRebaseline(body.confirm === true, head); json(out.status, out.body); return
-      }
-
-      // `harness devices history` → the log's adds and removes, newest first. Local only: it is the
-      // account's whole device story, and the fetch behind it is a backend call as this machine.
-      if (req.method === 'GET' && url === '/api/devices/history') {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onDevicesHistory) { json(503, { error: 'UNAVAILABLE' }); return }
-        const out = await handlers.onDevicesHistory(); json(out.status, out.body); return
-      }
-      // `harness devices dismiss [<fp>]` / "It's mine" / "Got it" → new devices marked as seen here.
-      if (req.method === 'POST' && url === '/api/devices/dismiss') {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onDevicesDismiss) { json(503, { error: 'UNAVAILABLE' }); return }
-        let body: { pub?: unknown; pubs?: unknown; baseline?: unknown; confirm?: unknown }
-        try { body = JSON.parse(await readBody(req)) as typeof body } catch { json(400, { error: 'bad json' }); return }
-        if (!body || typeof body !== 'object') { json(400, { error: 'bad json' }); return }
-        if (body.pub !== undefined && (typeof body.pub !== 'string' || !body.pub)) { json(400, { error: 'MISSING_PUB' }); return }
-        // The keys a window displayed, so a key accepted since the window read the list is not cleared unseen.
-        if (body.pubs !== undefined && (!Array.isArray(body.pubs) || body.pubs.length > 256
-          || body.pubs.some((k) => typeof k !== 'string' || !k || k.length > 256))) { json(400, { error: 'BAD_PUBS' }); return }
-        const out = await handlers.onDevicesDismiss({
-          ...(typeof body.pub === 'string' ? { pub: body.pub } : {}),
-          ...(Array.isArray(body.pubs) ? { pubs: body.pubs as string[] } : {}),
-          ...(body.baseline === true ? { baseline: true } : {}),
-          // "It's mine" for one device: the account's other devices are told too (deviceLogSyncer `dismiss`).
-          ...(body.confirm === true ? { confirm: true } : {}),
-        }); json(out.status, out.body); return
-      }
-
-      // `harness remote-password status` → whether one is set, and its fingerprint. Read-only, same
-      // gating tier as /api/pairs.
-      if (req.method === 'GET' && url === '/api/remote-password/status') {
-        if (!handlers.onRemotePasswordStatus) { json(503, { error: 'UNAVAILABLE' }); return }
-        const out = await handlers.onRemotePasswordStatus(); json(out.status, out.body); return
-      }
-
       // Local GUI clients (the desktop app): the full machine list and the harnesses shared with this account, through this
       // daemon's own sign-in, so the local caller never holds a bearer token itself. The account's other routes are the
       // gateway's (below, `onServiceRoute`).
@@ -1198,50 +1027,18 @@ export function startHookServer(
         try { body = JSON.parse(await readBody(req)) } catch { json(400, { error: { code: 'BAD_REQUEST', message: 'Invalid JSON body' } }); return }
         await proxied(() => handlers.onExperimentalWrite!(body)); return
       }
-      // Add Phone: a code that SIGNS A PHONE IN to this account — the one local route whose answer is
-      // a credential. So not the CSRF header, which any local process can send, but the daemon's
-      // owner-only socket: the filesystem has already said this is the user who signed in. Another
-      // account on a shared computer reaches the loopback port, never the socket. A client on TCP is
-      // refused, and the Add Phone QR goes without the code (the phone asks for an emailed one).
-      if (req.method === 'POST' && url === '/api/auth/handoff') {
-        if (!trustedLocal || !localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onAuthHandoff) { json(503, { error: 'UNAVAILABLE' }); return }
-        await proxied(handlers.onAuthHandoff); return
-      }
-      // Stopping the daemon ends every agent's link to it: like the phone code above, the daemon's own trusted
-      // endpoint only (the owner's socket; on Windows its pipe, with the token's proof, lib/localSocket.ts).
+      // Stopping the daemon ends every agent's link to it: like the phone's sign-in code (`ServiceHttpRoute.door`), the
+      // daemon's own trusted endpoint only (the owner's socket; on Windows its pipe, with the token's proof, lib/localSocket.ts).
       // Windows only: the route exists when its handler is given (core/daemonStopRoute.ts daemonStopRoute).
       if (req.method === 'POST' && url === '/api/daemon/stop' && handlers.onDaemonStop) {
         if (!trustedLocal || !localOk) { json(403, { error: 'FORBIDDEN' }); return }
         await proxied(handlers.onDaemonStop); return
       }
-      // `harness pairings` — list paired browsers.
-      if (req.method === 'GET' && url === '/api/pairs') {
-        if (!handlers.onListPairs) { json(503, { error: 'UNAVAILABLE' }); return }
-        const out = await handlers.onListPairs(); json(out.status, out.body); return
-      }
-
-      // `harness unpair <id>` — unpair one browser; signals it (if online) to re-pair.
-      if (req.method === 'POST' && url === '/api/revoke') {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onRevoke) { json(503, { error: 'UNAVAILABLE' }); return }
-        let body: { id?: string }
-        try { body = JSON.parse(await readBody(req)) as { id?: string } } catch { json(400, { error: 'bad json' }); return }
-        if (!body.id) { json(400, { error: 'MISSING_ID' }); return }
-        const out = await handlers.onRevoke(body.id); json(out.status, out.body); return
-      }
-
-      // `harness unpair --all` — unpair every browser.
-      if (req.method === 'POST' && url === '/api/revoke-all') {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        if (!handlers.onRevokeAll) { json(503, { error: 'UNAVAILABLE' }); return }
-        const out = await handlers.onRevokeAll(); json(out.status, out.body); return
-      }
-
       // A route a service answers (core/api.ts `SERVICE_HTTP_ROUTES`): the account's (the desk, Agent Messages' tabs, the
-      // account's name, the phone half of a sign-in, the usage reports and choice, a machine's rename and delete, the
-      // Store's ratings and reviews), each the gateway's. The door's checks above are done. Never one of the paths open
-      // without the local credential (a hook's): a caller that has not shown it reaches no service here.
+      // account's name, the phone half of a sign-in and the phone's sign-in code, the usage reports and choice, a machine's
+      // rename and delete, the Store's ratings and reviews) and the keys' (`harness pair`, `unpair`, `remote-password`,
+      // `link connect`, `group`, `devices`), each the gateway's. The door's checks above are done. Never one of the paths
+      // open without the local credential (a hook's): a caller that has not shown it reaches no service here.
       if (credentialOk && await serviceRoute()) return
       json(404, { error: 'not found' })
     })().catch((error: unknown) => {

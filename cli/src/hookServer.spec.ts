@@ -1017,40 +1017,6 @@ describe('requests must name this server', () => {
   })
 })
 
-describe('the trust group endpoints', () => {
-  const local = { 'x-adapter-local': '1', 'content-type': 'application/json' }
-  const key = Buffer.alloc(32, 7).toString('base64')
-  const machineId = 'a'.repeat(32)
-
-  it('trust-peer takes only a real key and machine id, and trims the label', async () => {
-    const onTrustLinkedPeer = vi.fn(() => ({ status: 200, body: { ok: true } }))
-    const { base } = await start({ onTrustLinkedPeer })
-    const post = (body: unknown, headers: Record<string, string> = local) =>
-      fetch(`${base}/api/link/trust-peer`, { method: 'POST', headers, body: JSON.stringify(body) })
-    for (const bad of [{ pub: 'x', machineId }, { pub: key, machineId: 'nope' }, { machineId }, { pub: `${key}AA`, machineId }]) {
-      expect((await post(bad)).status, JSON.stringify(bad)).toBe(400)
-    }
-    expect((await post({ pub: key, machineId }, { 'content-type': 'application/json' })).status).toBe(403)
-    expect((await post({ pub: key, machineId, label: `  ${'n'.repeat(80)} ` })).status).toBe(200)
-    expect(onTrustLinkedPeer).toHaveBeenCalledTimes(1)
-    expect(onTrustLinkedPeer).toHaveBeenCalledWith({ pub: key, machineId, label: 'n'.repeat(60) })
-  })
-
-  it('group remove and sync are local writes; list is readable', async () => {
-    const onGroupRemove = vi.fn(() => ({ status: 200, body: { label: 'b', fingerprint: 'fp' } }))
-    const onGroupSync = vi.fn(() => ({ status: 200, body: { ok: true } }))
-    const onGroupList = vi.fn(() => ({ status: 200, body: { members: [] } }))
-    const { base } = await start({ onGroupRemove, onGroupSync, onGroupList })
-    expect((await fetch(`${base}/api/group/remove`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"selector":"1"}' })).status).toBe(403)
-    expect((await fetch(`${base}/api/group/sync`, { method: 'POST' })).status).toBe(403)
-    expect((await fetch(`${base}/api/group/remove`, { method: 'POST', headers: local, body: '{"selector":"  "}' })).status).toBe(400)
-    expect((await fetch(`${base}/api/group/remove`, { method: 'POST', headers: local, body: '{"selector":" 1 "}' })).status).toBe(200)
-    expect(onGroupRemove).toHaveBeenCalledWith('1')
-    expect((await fetch(`${base}/api/group/sync`, { method: 'POST', headers: local })).status).toBe(200)
-    expect(await (await fetch(`${base}/api/group`)).json()).toEqual({ members: [] })
-  })
-})
-
 describe('the Wi-Fi device\'s routes at the door', () => {
   it('hands each on as it came once its checks pass, and writes the answer its service gave', async () => {
     const onServiceRoute = vi.fn((path: string, request: DoorRequest) => path === '/api/autonomous-device/nobody' ? null : (async () => {
@@ -1110,7 +1076,7 @@ describe('the daemon socket', () => {
       expect(await viaSocket(socketPath, 'GET', '/api/autonomous-device/status')).toBe(403)
       expect(onServiceRoute).toHaveBeenCalledTimes(1)
       // Mutations still need the CSRF header, hooks still need their credential.
-      expect(await viaSocket(socketPath, 'POST', '/api/group/sync')).toBe(403)
+      expect(await viaSocket(socketPath, 'PATCH', '/api/agent-settings')).toBe(403)
       expect(await viaSocket(socketPath, 'POST', '/api/hook/session-start')).not.toBe(200)
       // The TCP port is untouched: a foreign Host is still refused there.
       const port = (started.server.address() as { port: number }).port
@@ -1126,24 +1092,23 @@ describe('the daemon socket', () => {
     }
   })
 
-  it('hands out a phone sign-in code over the socket only — never on the loopback port', async () => {
+  it('says which requests came over the socket, for a route only the socket may ask (the phone\'s sign-in code)', async () => {
     const dir = mkdtempSync('/tmp/hsock-')
     const socketPath = join(dir, 'daemon.sock')
-    const onAuthHandoff = vi.fn(async () => ({ status: 200, body: { success: true, data: { code: 'hnh_x', expiresIn: 90 } } }))
-    const started = await startHookServer(0, { onRegistered: vi.fn(), onSessionEnd: vi.fn(), onAuthHandoff }, { socketPath })
+    const onServiceRoute = vi.fn((_path: string, _request: DoorRequest, _localOk: boolean, socket: boolean) => Promise.resolve({ status: socket ? 200 : 403, body: {} }))
+    const started = await startHookServer(0, { onRegistered: vi.fn(), onSessionEnd: vi.fn(), onServiceRoute }, { socketPath })
     server = started.server
     try {
       const local = { 'x-adapter-local': '1' }
       expect(await viaSocket(socketPath, 'POST', '/api/auth/handoff', local)).toBe(200)
-      expect(await viaSocket(socketPath, 'POST', '/api/auth/handoff')).toBe(403)
       const port = (started.server.address() as { port: number }).port
-      // Over the port: refused without the local credential, and still refused with it.
+      // Over the port: refused without the local credential before any route, and not the socket with it.
       const tcp = await fetch(`http://127.0.0.1:${port}/api/auth/handoff`, { method: 'POST', headers: local })
       expect(tcp.status).toBe(401)
       const credential = readHookCredential(env.ADAPTER_DATA_DIR) ?? ''
       const credentialed = await fetch(`http://127.0.0.1:${port}/api/auth/handoff`, { method: 'POST', headers: { ...local, 'x-harness-local': credential } })
       expect(credentialed.status).toBe(403)
-      expect(onAuthHandoff).toHaveBeenCalledTimes(1)
+      expect(onServiceRoute.mock.calls.map(([path, , localOk, socket]) => [path, localOk, socket])).toEqual([['/api/auth/handoff', true, true], ['/api/auth/handoff', true, false]])
     } finally {
       await started.localSocket?.close()
       rmSync(dir, { recursive: true, force: true })
@@ -1190,15 +1155,15 @@ describe('the daemon socket', () => {
     const dir = mkdtempSync('/tmp/hsock-')
     const socketPath = join(dir, `harness-${randomBytes(16).toString('hex')}`)
     const token = randomBytes(32)
-    const onAuthHandoff = vi.fn(async () => ({ status: 200, body: { success: true, data: { code: 'hnh_x', expiresIn: 90 } } }))
-    const started = await startHookServer(0, { onRegistered: vi.fn(), onSessionEnd: vi.fn(), onAuthHandoff }, { socketPath, pipeToken: token })
+    const onServiceRoute = vi.fn((_path: string, _request: DoorRequest, _localOk: boolean, socket: boolean) => Promise.resolve({ status: socket ? 200 : 403, body: {} }))
+    const started = await startHookServer(0, { onRegistered: vi.fn(), onSessionEnd: vi.fn(), onServiceRoute }, { socketPath, pipeToken: token })
     server = started.server
     try {
       const local = { 'x-adapter-local': '1' }
       // The route a Unix socket's file mode guards: here the token is what lets it through.
       expect((await pipeRequest({ pipe: socketPath, token }, { method: 'POST', path: '/api/auth/handoff', headers: local })).status).toBe(200)
       expect(await viaSocket(socketPath, 'POST', '/api/auth/handoff', local)).toBe(401)
-      expect(onAuthHandoff).toHaveBeenCalledTimes(1)
+      expect(onServiceRoute).toHaveBeenCalledTimes(1)
     } finally {
       await started.localSocket?.close()
       rmSync(dir, { recursive: true, force: true })
@@ -1242,60 +1207,6 @@ describe('the daemon socket', () => {
     }
   })
 })
-
-describe('the device history and dismiss endpoints', () => {
-  const local = { 'x-adapter-local': '1', 'content-type': 'application/json' }
-
-  it('history needs the local header', async () => {
-    const onDevicesHistory = vi.fn(async () => ({ status: 200, body: { rows: [], complete: true, frozen: null } }))
-    const { base } = await start({ onDevicesHistory })
-    expect((await fetch(`${base}/api/devices/history`)).status).toBe(403)
-    expect(onDevicesHistory).not.toHaveBeenCalled()
-    const ok = await fetch(`${base}/api/devices/history`, { headers: local })
-    expect(ok.status).toBe(200)
-    expect(await ok.json()).toEqual({ rows: [], complete: true, frozen: null })
-  })
-
-  it('dismiss needs the local header, parses the body and refuses bad JSON', async () => {
-    const onDevicesDismiss = vi.fn(() => ({ status: 200, body: { ok: true } }))
-    const { base } = await start({ onDevicesDismiss })
-    const post = (body: string, headers: Record<string, string> = local) => fetch(`${base}/api/devices/dismiss`, { method: 'POST', headers, body })
-    expect((await post('{}', { 'content-type': 'application/json' })).status).toBe(403)
-    expect(onDevicesDismiss).not.toHaveBeenCalled()
-    expect((await post('{bad')).status).toBe(400)
-    expect((await post(JSON.stringify({ pub: 5 }))).status).toBe(400)
-    expect((await post(JSON.stringify({ pub: 'k' }))).status).toBe(200)
-    expect(onDevicesDismiss).toHaveBeenLastCalledWith({ pub: 'k' })
-    expect((await post(JSON.stringify({ baseline: true }))).status).toBe(200)
-    expect(onDevicesDismiss).toHaveBeenLastCalledWith({ baseline: true })
-    expect((await post('{}')).status).toBe(200)
-    expect(onDevicesDismiss).toHaveBeenLastCalledWith({})
-    // The keys a window displayed: a list of strings, bounded.
-    expect((await post(JSON.stringify({ pubs: ['a', 'b'] }))).status).toBe(200)
-    expect(onDevicesDismiss).toHaveBeenLastCalledWith({ pubs: ['a', 'b'] })
-    expect((await post(JSON.stringify({ pubs: 'a' }))).status).toBe(400)
-    expect((await post(JSON.stringify({ pubs: ['a', 5] }))).status).toBe(400)
-    expect((await post(JSON.stringify({ pubs: Array.from({ length: 257 }, (_, i) => `k${i}`) }))).status).toBe(400)
-    // "It's mine": only a literal true asks for the other devices to be told.
-    expect((await post(JSON.stringify({ pubs: ['a'], confirm: true }))).status).toBe(200)
-    expect(onDevicesDismiss).toHaveBeenLastCalledWith({ pubs: ['a'], confirm: true })
-    expect((await post(JSON.stringify({ pub: 'k', confirm: 'yes' }))).status).toBe(200)
-    expect(onDevicesDismiss).toHaveBeenLastCalledWith({ pub: 'k' })
-  })
-
-  it('rebaseline passes the previewed head on, and refuses a malformed one', async () => {
-    const onDevicesRebaseline = vi.fn(async () => ({ status: 200, body: {} }))
-    const { base } = await start({ onDevicesRebaseline })
-    const post = (body: unknown) => fetch(`${base}/api/devices/rebaseline`, { method: 'POST', headers: local, body: JSON.stringify(body) })
-    expect((await post({ confirm: true, head: { seq: 3, hash: 'h' } })).status).toBe(200)
-    expect(onDevicesRebaseline).toHaveBeenLastCalledWith(true, { seq: 3, hash: 'h' })
-    expect((await post({ confirm: true })).status).toBe(200)
-    expect(onDevicesRebaseline).toHaveBeenLastCalledWith(true, undefined)
-    expect((await post({ confirm: true, head: { seq: -1, hash: 'h' } })).status).toBe(400)
-    expect((await post({ confirm: true, head: 'x' })).status).toBe(400)
-  })
-})
-
 
 it.each(['/api/hook/session-end', '/api/hook/turn-start', '/api/hook/tool-start', '/api/hook/turn-stop'])(
   'refuses a binding changed during process resolution on %s', async path => {

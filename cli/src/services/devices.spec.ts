@@ -257,6 +257,9 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
 }
 
 const calls = (name: string) => seen.cable.calls.filter(([called]) => called === name).map(([, args]) => args)
+/** A window on this computer, as the core names its asker, and a request it never takes back. */
+const WINDOW = { local: true, owner: true, connection: 'local:w1' }
+const never = new AbortController().signal
 /** A hand turning the dial to that agent, as its cable session tells the host (cableSession.ts 'focus'). The rest that
  *  follows 400 ms later, where the agent has a pane, is the spec's to run. */
 const turnTo = (agentId: string): void => {
@@ -570,12 +573,12 @@ describe('the window bridges, wired to the core', () => {
     expect(calls('followApp')).toEqual([['m1', 'a1']])
   })
 
-  it('hand each window\'s answer to its bridge, and tell them a window left', () => {
-    const { port } = start()
+  it('hand each window\'s answer to its bridge, and tell them a window left', async () => {
+    const { port, requests } = start()
     port.windowReply('selection', 'w1', 'm1', { a: 1 })
     port.windowReply('visit', 'w1', 'm1', { b: 2 })
     port.windowReply('form', 'w1', 'm1', { c: 3 })
-    port.voiceReply('v1', { t: 'taken' })
+    expect(await requests.devices_ws({ frame: 'voice_route_reply', payload: { voiceId: 'v1', state: 'taken' } }, WINDOW, never)).toEqual({})
     port.windowGone('w1')
     expect(seen.bridges.WindowSelection.calls).toEqual([['reply', ['w1', 'm1', { a: 1 }]], ['focusChanged', []]])
     expect(seen.bridges.WindowVisit.calls).toEqual([['reply', ['w1', 'm1', { b: 2 }]]])
@@ -1138,6 +1141,28 @@ describe('⌘K, the Wi-Fi device\'s borrowed walk, the voice router and stopping
       '[route] ⌘K → far · bytes=2 · REFUSED: the last request to it did not come back (mac-mini)',
       '[route] ⌘K → nameless · bytes=2 · REFUSED: no such agent',
     ]))
+  })
+
+  it('answer a window\'s ⌘K frames as the local WebSocket did: an empty task picks no agent, and nothing is sent without both', async () => {
+    const { requests } = start()
+    const frame = (name: string, payload: unknown) => requests.devices_ws({ frame: name, payload }, WINDOW, never)
+    expect(await frame('route_task', { text: '  fix the parser  ' })).toMatchObject({ agentId: 'a1', reason: 'fix the parser' })
+    expect(await frame('route_task', { text: '   ' })).toEqual({ agentId: '', machineId: '', name: '', confidence: 0, reason: 'empty task', candidates: [], weighed: 0, machines: 0, via: '' })
+    expect(await frame('route_task', 'not a payload')).toMatchObject({ agentId: '', reason: 'empty task' })
+    expect(await frame('route_send', { agentId: 'a1', text: 'go' })).toEqual({ ok: true })
+    expect(await frame('route_send', { agentId: 'far', text: 'go' })).toEqual({ ok: false, machine: 'mac-mini', reason: 'the last request to it did not come back' })
+    for (const payload of [{ agentId: 'a1' }, { text: 'go' }, { agentId: 5, text: 'go' }]) {
+      expect(await frame('route_send', payload), JSON.stringify(payload)).toEqual({ ok: false, machine: '', reason: 'nothing to send' })
+    }
+    // A spoken task's answer: the three states a window says, each to the router; one it cannot read, or one with no id, is dropped.
+    for (const state of ['sent', 'cancelled', 'guessed']) expect(await frame('voice_route_reply', { voiceId: 'v2', state, agentId: 'a1' })).toEqual({})
+    expect(await frame('voice_route_reply', { state: 'taken' })).toEqual({})
+    expect(seen.bridges.WindowRouter.calls).toEqual([['reply', ['v2', { t: 'sent', agentId: 'a1' }]], ['reply', ['v2', { t: 'cancelled' }]]])
+    expect(await frame('dial_settings', {})).toEqual({ error: 'UNKNOWN_FRAME' })
+    // A window's only: never a remote client's, whatever it sends.
+    for (const asker of [{ local: false, owner: true }, { local: true, owner: false }]) {
+      expect(await requests.devices_ws({ frame: 'route_task', payload: { text: 'x' } }, asker, never), JSON.stringify(asker)).toEqual({ error: 'LOCAL_ONLY' })
+    }
   })
 
   it('answer ⌘K with no agent list when the fleet did not start, and the dial routes this computer itself', async () => {
