@@ -32,7 +32,8 @@ describe.skipIf(!hasTmux)('real tmux test isolation', () => {
       vi.stubEnv('HOME', theirs)
       // As most developers: no ZDOTDIR, so zsh reads the home's (vitest.setup.ts gives the worker one of its own).
       vi.stubEnv('ZDOTDIR', undefined)
-      // Their folder, then only where tmux is: a failure then prints no folder of the real PATH.
+      // Their folder, then where tmux is (isolatedTmux finds it there) and the system's: a failure prints no other folder
+      // of the real PATH.
       vi.stubEnv('PATH', [theirs, dirname(resolveBinaryOnPath('tmux')!), '/usr/bin', '/bin'].join(':'))
     }
     /** What a pane of [made] has under each name, `unset` where it has none. Named one by one: never the pane's whole

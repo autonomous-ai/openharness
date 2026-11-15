@@ -4,7 +4,8 @@
  * interrupted. It prints the daemon's root, master, core and tmux socket once the daemon, its edge service (the one
  * that ran lsof forever) and its tmux server are up. With them, `escaped`: a hung Codex rate-limit read, its tie's
  * watcher and its child, out of the daemon's process groups (e2e/harness/hungCodex.ts); `left`: what its tmux pane left
- * running, as a real engine left in a tile, out of every group and naming nothing of the root, its working folder in it;
+ * running, as a real engine left in a tile, in no process group the worker registered and naming nothing of the root,
+ * its working folder in it;
  * and `readOnly`: a read-only folder in the root, as the managed grid's install leaves its bin/ (lib/runtimeInstall.ts).
  */
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
