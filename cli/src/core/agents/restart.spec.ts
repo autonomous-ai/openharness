@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { engineBin, enginePathOverride } from '../../lib/engineBin.js'
 import { engineInstallRecipe } from '../../lib/engineInstall.js'
 import { buildEngineLaunchArgv, commandAvailableInInteractiveShell } from '../../lib/engineLaunch.js'
-import { probeGatewayRuntime } from '../../lib/gatewayRuntime.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { AgentRestartCoordinator, bypassPermissionFor, restartAgent } from '../../lib/restartAgent.js'
 import { terminalRouteKey } from '../../lib/terminalRuntime.js'
@@ -521,9 +520,8 @@ describe('restarting an agent', () => {
       expect(swapDeps).toMatchObject({ swap: true })
       expect(swapDeps.isCurrent?.()).toBe(true)
       expect(run.deps.refreshGridWebSearch).toHaveBeenCalledWith('a1', { env: { GRID_KEY: 'k' } })
-      expect(probeGatewayRuntime).toHaveBeenCalledWith(newProcess)
       // Its command line, where a Codex or pi grid's address and model are: never its executable alone.
-      expect(run.deps.registry.updateProcessIdentity).toHaveBeenCalledWith('a1', newProcess, 'none')
+      expect(run.deps.registry.updateProcessIdentity).toHaveBeenCalledWith('a1', newProcess)
       expect(run.deps.registry.setActive).toHaveBeenCalledWith('a1', true)
       expect(releaseHold).toHaveBeenCalledWith(runtime)
       expect(run.deps.announceSession).toHaveBeenCalledWith(agent())
@@ -562,11 +560,6 @@ describe('restarting an agent', () => {
       expect(await swapped.restart('a1')).toEqual(changed)
       expect(swapped.deps.refreshGridWebSearch).not.toHaveBeenCalled()
       expect(swapped.deps.agentReconciler.releaseRoute).toHaveBeenCalledWith(routeKey)
-
-      const probed = setup()
-      vi.mocked(probeGatewayRuntime).mockImplementationOnce(async () => { probed.state.live = false; return { kind: 'none' } as never })
-      expect(await probed.restart('a1')).toEqual(changed)
-      expect(probed.deps.registry.updateProcessIdentity).not.toHaveBeenCalled()
 
       const cleared = setup()
       releaseHold.mockImplementationOnce(async () => { cleared.state.live = false })

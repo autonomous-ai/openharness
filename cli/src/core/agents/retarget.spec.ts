@@ -6,7 +6,6 @@ import { builtinSqlite } from '../../lib/sqliteBuiltin.js'
 import { validateLaunchOverrides } from '../../lib/launchOverrides.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { AgentRestartCoordinator, bypassPermissionFor, restartAgent } from '../../lib/restartAgent.js'
-import { probeGatewayRuntime } from '../../lib/gatewayRuntime.js'
 import { parseRuntimeProfile } from '../../lib/runtimeProfileWire.js'
 import { workspaceMissing } from '../../lib/workspaceCheck.js'
 import { TerminalAgentReconciler } from '../../lib/terminalAgentReconciler.js'
@@ -194,7 +193,7 @@ describe('retargeting an agent', () => {
       expect(run.deps.relaunchOverrides).not.toHaveBeenCalled()
       expect(restartAgent).not.toHaveBeenCalled()
     })
-    it.each(['validation', 'version', 'preparation', 'native-write', 'environment', 'bypass', 'permission', 'replacement', 'gateway', 'pane-option'] as const)(
+    it.each(['validation', 'version', 'preparation', 'native-write', 'environment', 'bypass', 'permission', 'replacement', 'pane-option'] as const)(
       'cannot publish or continue a retarget whose owner changes during %s', async phase => {
         const row = agent({ engine: 'opencode', subscriptionModel: 'fixture/model' })
         const run = setup(row, { relaunchOverrides: vi.fn(async () => ({ ok: true as const,
@@ -209,7 +208,6 @@ describe('retargeting an agent', () => {
           case 'bypass': vi.mocked(bypassPermissionFor).mockImplementationOnce(async () => { replace(); return true }); break
           case 'permission': vi.mocked(run.deps.downgradedPermission).mockImplementationOnce(async () => { replace(); return {} }); break
           case 'replacement': vi.mocked(restartAgent).mockImplementationOnce(async () => { replace(); return { ok: true, resumed: true, processIdentity: { pid: 2, executable: 'opencode', startMarker: 'new' } } }); break
-          case 'gateway': vi.mocked(probeGatewayRuntime).mockImplementationOnce(async () => { replace(); return { kind: 'none' } as never }); break
           case 'pane-option': vi.mocked(run.tmux.releaseHold).mockImplementationOnce(async () => { replace() }); break
         }
         const result = await createAgentRetargeter(run.deps)({ agentId: 'a1', grid: phase === 'environment' ? null : grid })
@@ -485,9 +483,9 @@ describe('retargeting an agent', () => {
 
     it('reports a replacement that started before a later non-Error exception', async () => {
       const run = setup()
-      vi.mocked(probeGatewayRuntime).mockRejectedValueOnce('fixture probe unavailable')
+      vi.mocked(run.tmux.releaseHold).mockRejectedValueOnce('fixture release unavailable')
       expect(await run.retarget({ agentId: 'a1', grid })).toMatchObject({ ok: false, error: 'RETARGET_FAILED',
-        detail: 'The replacement process started, but retarget did not complete. fixture probe unavailable' })
+        detail: 'The replacement process started, but retarget did not complete. fixture release unavailable' })
       expect(run.deps.registry.updateProcessIdentity).not.toHaveBeenCalled()
     })
 
@@ -504,7 +502,8 @@ describe('retargeting an agent', () => {
       expect(await run.retarget({ agentId: 'a1', grid })).toEqual({ ok: true })
       expect(run.deps.agentReconciler.holdRoute).toHaveBeenCalled()
       expect(restartAgent).toHaveBeenCalledWith({ engine: 'claude', sessionId: 's1' }, true, { isCurrent: expect.any(Function) })
-      expect(run.deps.registry.updateProcessIdentity).toHaveBeenCalledWith('a1', expect.objectContaining({ pid: 2 }), 'none', { baseUrl: grid.baseUrl, model: grid.model })
+      // No gateway: the row keeps the one it had, and the relaunched engine says it again (a hook, or Codex's argv).
+      expect(run.deps.registry.updateProcessIdentity).toHaveBeenCalledWith('a1', expect.objectContaining({ pid: 2 }), undefined, { baseUrl: grid.baseUrl, model: grid.model })
       expect(run.deps.registry.setGridLaunch).toHaveBeenCalledWith('a1', { override: grid, webSearch: 'off' })
       expect(run.deps.registry.setSubscriptionModel).toHaveBeenCalledWith('a1', 'opus')
       expect(run.deps.registry.setActive).toHaveBeenCalledWith('a1', true)

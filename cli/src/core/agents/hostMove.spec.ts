@@ -197,9 +197,9 @@ describe('the move, wired to the core', () => {
     // Prepared already, before the stop: not prepared twice.
     expect(prepare).toHaveBeenCalledTimes(1)
     expect(swapDeps.prepareResume).not.toHaveBeenCalled()
-    // Committed as a restart commits (`commitRelaunchedEngine`): gateway, active, the pane released, announced, and
-    // its grid assignment refreshed.
-    expect(w.registry.updateProcessIdentity).toHaveBeenCalledWith('a1', { ...OLD_ID, pid: 44 }, 'ori')
+    // Committed as a restart commits (`commitRelaunchedEngine`): its process with no gateway, active, the pane
+    // released, announced, and its grid assignment refreshed.
+    expect(w.registry.updateProcessIdentity).toHaveBeenCalledWith('a1', { ...OLD_ID, pid: 44 })
     expect(w.registry.setActive).toHaveBeenCalledWith('a1', true)
     expect(old.releaseHold).toHaveBeenCalledWith(OLD)
     expect(w.announce).toHaveBeenCalled()
