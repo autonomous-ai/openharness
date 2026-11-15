@@ -1,14 +1,18 @@
 import { describe, expect, it, vi } from 'vitest'
 import { BackendSocket } from './backendSocket.js'
 import { DEVICES_REQUESTS, type Asker } from './core/api.js'
+import { isEncryptedDownType, isEncryptedRpcResultType } from './lib/e2ee/core.js'
 import { dispatchDown, gatewayOf, relaySocket } from './testing/relaySocket.js'
 
 // The Devices tab's requests are the devices' own (services/devices.ts): the socket only routes them, with
 // who asked as it established it, and the devices answer the owner alone.
 describe('Devices host ownership', () => {
-  // The pet_* requests are local-only by design (services/devices.ts answers them to a local asker): they are not
-  // in the E2EE lists, so there is no sealed remote path to exercise here.
-  it.each(DEVICES_REQUESTS.filter(type => !type.startsWith('pet_')))('routes %s to the devices only sealed from afar, saying who asked, and replies to that connection', async type => {
+  // Pet requests and the local window-frame adapter are absent from the remote wire protocol.
+  it('keeps the internal window adapter local', () => {
+    expect(isEncryptedDownType('devices_ws')).toBe(false)
+    expect(isEncryptedRpcResultType('devices_ws_result')).toBe(false)
+  })
+  it.each(DEVICES_REQUESTS.filter(type => !type.startsWith('pet_') && type !== 'devices_ws'))('routes %s to the devices only sealed from afar, saying who asked, and replies to that connection', async type => {
     const socket: BackendSocket = relaySocket('fixture')
     const routed: Asker[] = []
     socket.serviceRouter = (asked, _payload, asker, reply) => {

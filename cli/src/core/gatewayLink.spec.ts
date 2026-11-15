@@ -3,8 +3,8 @@ import { clearAuthSession, RENEWAL_WAIT_MS, writeAuthSession } from '../lib/auth
 import { decodeGatewayBinary, encodeGatewayBinary, GatewayBinary, GATEWAY_CALLS } from '../lib/gatewayWire.js'
 import { RelayConnectError } from '../lib/relayFrames.js'
 import { decodeTerminalLocal, encodeTerminalLocal, TerminalBinaryKind, type TerminalBinaryClear } from '../lib/terminalBinary.js'
-import { TAB_KEY_OFF, type GatewayEvents, type LaneSeal, type TabKey, type TabRelay } from './api.js'
-import { createGatewayLink, GATEWAY_BUFFER_LIMIT, GATEWAY_USAGE_BUFFER_LIMIT, LANE_WAIT_MS, laneOf, OWED_MAX, tabKeyOf, tabRelayOf, PAIR_WAIT_MS, TAB_RELAY_WAIT_MS, WINDOW_GATEWAY_GONE } from './gatewayLink.js'
+import { PAIR_WAIT_MS, TAB_KEY_OFF, type GatewayEvents, type LaneSeal, type TabKey, type TabRelay } from './api.js'
+import { createGatewayLink, GATEWAY_BUFFER_LIMIT, GATEWAY_USAGE_BUFFER_LIMIT, LANE_WAIT_MS, laneOf, OWED_MAX, tabKeyOf, tabRelayOf, TAB_RELAY_WAIT_MS, WINDOW_GATEWAY_GONE } from './gatewayLink.js'
 import { ON_DEMAND_START_MS } from './serviceLinks.js'
 
 const STREAM = '00000000-0000-4000-8000-000000000001'
@@ -247,26 +247,14 @@ describe('the gateway in its own process, as the core sees it', () => {
     expect(link.port.terminal('phone-1', 'terminal_ready', {})).toBe(false)
   })
 
-  it('answers the daemon\'s own commands about the keys from the gateway, and 503 while it is down', async () => {
+  it('answers the account\'s HTTP from the gateway, a body that is no record as {}, and 503 while it is down', async () => {
     const answers: Record<string, Record<string, unknown>> = {
-      [GATEWAY_CALLS.pair]: { status: 200, body: { label: 'Phone' } },
-      [GATEWAY_CALLS.listPairs]: { error: 'SERVICE_UNAVAILABLE', service: 'gateway', retryable: true },
-      [GATEWAY_CALLS.devicesList]: { status: 200, body: 'not an object' },
+      '/api/desk': { error: 'SERVICE_UNAVAILABLE', service: 'gateway', retryable: true },
+      '/api/auth/me': { status: 200, body: 'not an object' },
     }
-    const { link, call } = setup({ call: async (type) => answers[type] ?? { status: 204, body: { type } } })
-    expect(await link.ops.pair('ABCD')).toEqual({ status: 200, body: { label: 'Phone' } })
-    expect(call).toHaveBeenCalledWith(GATEWAY_CALLS.pair, { code: 'ABCD' }, PAIR_WAIT_MS)
-    expect(await link.ops.listPairs()).toEqual({ status: 503, body: { error: 'GATEWAY_UNAVAILABLE' } })
-    expect(await link.ops.devicesList()).toEqual({ status: 200, body: {} })
-    const each = [
-      link.ops.revoke('1'), link.ops.revokeAll(), link.ops.setRemotePassword('pw'), link.ops.clearRemotePassword(),
-      link.ops.remotePasswordStatus(), link.ops.trustLinkedPeer({ pub: 'P', machineId: 'm', label: 'l' }), link.ops.groupList(),
-      link.ops.groupSync(), link.ops.groupRemove('2'), link.ops.devicesRemove('P'), link.ops.devicesHistory(),
-      link.ops.devicesDismiss({ pub: 'P' }), link.ops.devicesRebaseline(true, { seq: 1, hash: 'h' }), link.ops.devicesRebaseline(false),
-    ]
-    expect((await Promise.all(each)).map((answer) => answer.status)).toEqual(Array(each.length).fill(204))
-    expect(call).toHaveBeenCalledWith(GATEWAY_CALLS.devicesRebaseline, { confirm: true, head: { seq: 1, hash: 'h' } }, undefined)
-    expect(call).toHaveBeenCalledWith(GATEWAY_CALLS.devicesRebaseline, { confirm: false }, undefined)
+    const { link } = setup({ call: async (_type, payload) => answers[payload.path as string] })
+    expect(await link.ops.backend('GET', '/api/desk')).toEqual({ status: 503, body: { error: 'GATEWAY_UNAVAILABLE' } })
+    expect(await link.ops.backend('GET', '/api/auth/me')).toEqual({ status: 200, body: {} })
   })
 
   it('reads the gateway\'s status, with nothing to show while it is down, and never starts it for that', async () => {

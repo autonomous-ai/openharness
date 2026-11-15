@@ -21,7 +21,7 @@ import { decodeGatewayBinary, encodeGatewayBinary, GatewayBinary, GATEWAY_CALLS 
 import { decodeTerminalLocal, encodeTerminalLocal } from '../lib/terminalBinary.js'
 import { currentToken, RENEWAL_WAIT_MS, tokenOf } from '../lib/authSession.js'
 import { guestMachineList, withStaleMarker } from '../lib/machineListReply.js'
-import type { GatewayMachines } from './api.js'
+import { PAIR_WAIT_MS, type GatewayMachines } from './api.js'
 import type {
   BackendNotice, GatewayEvents, LocalWindows, GatewayOps, GatewayPort, GatewayStatus, HttpAnswer, LaneSeal,
   RemoteClient, RemoteRole, RemoteTransport, TabFrame, TabKey, TabRelay, WindowRelay, WindowRelaySession, WindowRelaySink,
@@ -63,9 +63,6 @@ export const GATEWAY_BUFFER_LIMIT = 16 * 1024 * 1024
 
 /** Optional counters yield long before relay traffic does. Never queue measurements for a restart. */
 export const GATEWAY_USAGE_BUFFER_LIMIT = 64 * 1024
-
-/** How long a pairing may take: the code is typed on one screen and checked over the relay, round by round. */
-export const PAIR_WAIT_MS = 120_000
 
 /** The close a window on another machine gets when the gateway it went through is gone: try again shortly. */
 export const WINDOW_GATEWAY_GONE = 1013
@@ -212,7 +209,7 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
     stop: async () => { send('stop') },
   }
 
-  const http = async (type: string, payload: Record<string, unknown> = {}, waitMs?: number): Promise<HttpAnswer> => {
+  const http = async (type: string, payload: Record<string, unknown>, waitMs: number): Promise<HttpAnswer> => {
     const answer = await deps.call(type, payload, waitMs)
     if (typeof answer.status !== 'number') return UNAVAILABLE
     // A busy answer's Retry-After (gateway/accountHttp.ts), which the daemon passes on to the Desktop's reports.
@@ -307,22 +304,6 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
         pending: answer.pending && typeof answer.pending === 'object' ? answer.pending as Record<string, unknown> : null,
       }
     },
-    pair: (code) => http(GATEWAY_CALLS.pair, { code }, PAIR_WAIT_MS),
-    listPairs: () => http(GATEWAY_CALLS.listPairs),
-    revoke: (id) => http(GATEWAY_CALLS.revoke, { id }),
-    revokeAll: () => http(GATEWAY_CALLS.revokeAll),
-    setRemotePassword: (password) => http(GATEWAY_CALLS.setRemotePassword, { password }),
-    clearRemotePassword: () => http(GATEWAY_CALLS.clearRemotePassword),
-    remotePasswordStatus: () => http(GATEWAY_CALLS.remotePasswordStatus),
-    trustLinkedPeer: (peer) => http(GATEWAY_CALLS.trustLinkedPeer, { peer }),
-    groupList: () => http(GATEWAY_CALLS.groupList),
-    groupSync: () => http(GATEWAY_CALLS.groupSync),
-    groupRemove: (selector) => http(GATEWAY_CALLS.groupRemove, { selector }),
-    devicesList: () => http(GATEWAY_CALLS.devicesList),
-    devicesRemove: (pub) => http(GATEWAY_CALLS.devicesRemove, { pub }),
-    devicesHistory: () => http(GATEWAY_CALLS.devicesHistory),
-    devicesDismiss: (body) => http(GATEWAY_CALLS.devicesDismiss, { body }),
-    devicesRebaseline: (confirm, head) => http(GATEWAY_CALLS.devicesRebaseline, { confirm, ...(head ? { head } : {}) }),
     wifiService: (on) => { wifiService = on; if (on) need(); send('wifiService', { on }) },
     revokeIdentity: (identity) => { send('revokeIdentity', { identity }) },
     account: (next) => {

@@ -21,7 +21,7 @@ import type { AppSwarms } from '../cable/cableSession.js'
 import type { RecentTurn } from '../cable/cableHost.js'
 import type { UnreadNotification } from '../lib/notificationRead.js'
 import { validUsage } from '../lib/agentUsageWire.js'
-import { AGENT_ACTIONS_OFF, DAEMON_UNKNOWN, DELIVERIES_OFF, emptyPorts, resolveAgent, TERMINALS_OFF, type CoreApi, type CorePorts, type DevicesPort, type ForkResult, type ServiceRequests, type VoiceRouteReply, type WindowFocus } from '../core/api.js'
+import { AGENT_ACTIONS_OFF, DAEMON_UNKNOWN, DELIVERIES_OFF, emptyPorts, resolveAgent, TERMINALS_OFF, type CoreApi, type CorePorts, type DevicesPort, type ForkResult, type ServiceRequests, type WindowFocus } from '../core/api.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { RuntimeModelOption } from '../lib/runtimeProfile.js'
 import { devicesListenerPath } from '../devices/listenerPath.js'
@@ -238,7 +238,6 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
     windowFocus: ({ focus }) => port.windowFocus(focusOf(focus)),
     windowReply: ({ which, connId, machineId, reply }) =>
       port.windowReply(which === 'form' ? 'form' : which === 'visit' ? 'visit' : 'selection', text(connId), text(machineId), object(reply)),
-    voiceReply: ({ voiceId, reply }) => port.voiceReply(text(voiceId), object(reply) as unknown as VoiceRouteReply),
     windowGone: ({ connId }) => port.windowGone(text(connId)),
     scroll: ({ phase, dy, velocity }) => { if (phase === 'down' || phase === 'move' || phase === 'up') port.scroll(phase, number(dy), number(velocity)) },
     engines: ({ engines }) => port.engines(strings(engines)),

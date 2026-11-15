@@ -78,7 +78,6 @@ export function createDevicesLink(deps: DevicesLinkDeps) {
     settings: (id, patch) => event('settings', { id, patch }),
     windowFocus: (focus) => event('windowFocus', { focus }),
     windowReply: (which, connId, machineId, reply) => event('windowReply', { which, connId, machineId, reply }),
-    voiceReply: (voiceId, reply) => event('voiceReply', { voiceId, reply }),
     windowGone: (connId) => event('windowGone', { connId }),
     routeTask: async (task) => answered(await deps.call('routeTask', { text: task }, ROUTE_TASK_WAIT_MS), 'routeTask', (answer) => answer as unknown as RouteAnswer),
     routeSend: async (agentId, task) => answered(await deps.call('routeSend', { agentId, text: task }, DEVICES_WAIT_MS), 'routeSend',

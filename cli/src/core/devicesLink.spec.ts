@@ -44,7 +44,6 @@ describe('what the core tells the devices', () => {
     port.settings('usb', { brightness: 3 })
     port.windowFocus({ voice: null, form: null })
     port.windowReply('form', 'w1', 'm1', { ok: true })
-    port.voiceReply('v1', { t: 'taken' })
     port.windowGone('w1')
     port.scroll('move', 2, 9)
     port.engines(['codex'])
@@ -60,7 +59,6 @@ describe('what the core tells the devices', () => {
       { kind: 'settings', id: 'usb', patch: { brightness: 3 } },
       { kind: 'windowFocus', focus: { voice: null, form: null } },
       { kind: 'windowReply', which: 'form', connId: 'w1', machineId: 'm1', reply: { ok: true } },
-      { kind: 'voiceReply', voiceId: 'v1', reply: { t: 'taken' } },
       { kind: 'windowGone', connId: 'w1' },
       { kind: 'scroll', phase: 'move', dy: 2, velocity: 9 },
       { kind: 'engines', engines: ['codex'] },

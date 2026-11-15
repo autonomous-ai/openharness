@@ -1,12 +1,14 @@
 /**
- * The local door's routes that a service answers (core/api.ts `SERVICE_HTTP_ROUTES`). Once the door has let a request
- * in (hookServer.ts: the private socket or loopback, the credential, Host and Origin), it goes to the service its route
+ * The local door's routes and the local WebSocket's frames that a service answers (core/api.ts `SERVICE_HTTP_ROUTES`,
+ * `SERVICE_WS_FRAMES`). Once the door has let a request in (hookServer.ts: the private socket or loopback, the
+ * credential, Host and Origin), or a window's connection is open (localWsServer.ts), it goes to the service its route
  * names, as the request that route is, wherever that service runs, and the service's answer is written as it gave it.
- * Generic: what the core holds of a route is where it goes, which methods it takes and which of them write, how long it
- * waits, the headers its answers carry, and what it answers while its service is down or does not answer in time, at
- * once, never a hang. What the route does, and every check of what it carries, is the service's.
+ * Generic: what the core holds of a route is where it goes, which methods it takes, which of them write and whether only
+ * the daemon's own socket may ask it, how long it waits, the headers its answers carry, and what it answers while its
+ * service is down or does not answer in time, at once, never a hang. What the route does, and every check of what it
+ * carries, is the service's.
  */
-import type { Asker, HttpAnswer, ServiceHttpRoute } from './api.js'
+import type { Asker, HttpAnswer, ServiceHttpRoute, ServiceWsFrame } from './api.js'
 
 /** An HTTP request as its route's service is asked it: the method, the target as the client sent it (its query too),
  *  and the body as text, for a method that carries one. */
@@ -23,6 +25,8 @@ export interface ServiceRouter {
 
 export interface ServiceRoutesDeps {
   routes: readonly ServiceHttpRoute[]
+  /** The local WebSocket's frames a service answers; none when absent. */
+  frames?: readonly ServiceWsFrame[]
   /** The services in their own processes (core/serviceLinks.ts), which bound the wait themselves: the route's, from when
    *  the request is sent, after the start of a service on demand that was not running. */
   linked: ServiceRouter
@@ -35,8 +39,10 @@ export interface ServiceRoutesDeps {
 
 /** Who asks through the door: this computer's owner, as the door's checks established. */
 const OWNER_HERE: Asker = { local: true, owner: true }
+/** The same, over the daemon's own socket, which the filesystem says is this computer's owner. */
+const OWNER_ON_THE_SOCKET: Asker = { ...OWNER_HERE, door: 'socket' }
 
-/** The door's answer to a write without the local header, as it always was. */
+/** The door's answer to a write without the local header, or a socket's route asked over the port, as it always was. */
 const FORBIDDEN: HttpAnswer = { status: 403, body: { error: 'FORBIDDEN' } }
 
 /** A header value a service may give: one short line of printable characters. */
@@ -50,12 +56,20 @@ export function createServiceRoutes(deps: ServiceRoutesDeps) {
   const clearTimer = deps.clearTimer ?? ((timer) => clearTimeout(timer as ReturnType<typeof setTimeout>))
 
   /** The service's answer, or null when none came in the route's time. A timer of its own here would run from the
-   *  request's arrival, and cut short a request that first waits for its service's process to start. */
-  const ask = (route: ServiceHttpRoute, request: ServiceHttpRequest): Promise<Record<string, unknown> | null> => new Promise((resolve) => {
-    if (deps.linked.route(route.type, { ...request }, OWNER_HERE, resolve, route.waitMs)) return
-    const timer = setTimer(() => resolve(null), route.waitMs)
-    const reply = (result: Record<string, unknown>): void => { clearTimer(timer); resolve(result) }
-    if (!deps.hosted.route(route.type, { ...request }, OWNER_HERE, reply)) reply({ error: 'SERVICE_UNAVAILABLE' })
+   *  request's arrival, and cut short a request that first waits for its service's process to start. Never rejects: a
+   *  window holds a spinner open on its frame's answer, and silence is the one reply it cannot recover from. */
+  const ask = (type: string, waitMs: number, payload: Record<string, unknown>, asker: Asker): Promise<Record<string, unknown> | null> => new Promise((resolve) => {
+    let timer: unknown
+    try {
+      if (deps.linked.route(type, payload, asker, resolve, waitMs)) return
+      timer = setTimer(() => resolve(null), waitMs)
+      const reply = (result: Record<string, unknown>): void => { clearTimer(timer); resolve(result) }
+      if (!deps.hosted.route(type, payload, asker, reply)) reply({ error: 'SERVICE_UNAVAILABLE' })
+    } catch {
+      if (timer !== undefined) clearTimer(timer)
+      log(`[services] ${type} SERVICE_REQUEST_FAILED`)
+      resolve(null)
+    }
   })
 
   /** [answer] with the headers its route declares: those its service may set, as it gave them, then the route's own. */
@@ -69,15 +83,34 @@ export function createServiceRoutes(deps: ServiceRoutesDeps) {
     return Object.keys(headers).length ? { ...answer, headers } : answer
   }
 
+  // The door looks up a handler directly; ordinary terminal frames never enter the service adapter.
+  const frames = new Map((deps.frames ?? []).map(route => [route.frame,
+    (connection: string, frame: Record<string, unknown>): Promise<Record<string, unknown> | null> => {
+      const payload = isRecord(frame.payload) ? frame.payload : {}
+      const requestId = typeof payload.requestId === 'string' ? payload.requestId : ''
+      return ask(route.type, route.waitMs, { frame: route.frame, payload }, { ...OWNER_HERE, connection }).then((answer) => {
+        if (!route.result) return null
+        // Preserve the existing wire order while keeping correlation out of the service's control.
+        const result = { requestId, ...(answer && typeof answer.error !== 'string' ? answer : route.unanswered) }
+        result.requestId = requestId
+        return { type: route.result, payload: result }
+      })
+    },
+  ] as const))
+
   return {
+    /** Only declared frame types reach a handler; replies retain the originating connection and request id. */
+    frames,
     /** The answer to [request] on [path] (its query left out), or null when no service answers that path and method.
-     *  [localOk]: the request carries the local header, which a route's write needs. Its body is read after both. */
-    answer(path: string, request: DoorRequest, localOk = false): Promise<HttpAnswer> | null {
+     *  [localOk]: the request carries the local header, which a route's write needs; [socket]: it came over the daemon's
+     *  own socket, which a socket's route needs. Its body is read after both. */
+    answer(path: string, request: DoorRequest, localOk = false, socket = false): Promise<HttpAnswer> | null {
       const { method, target } = request
       const route = deps.routes.find((each) => each.path.test(path) && (!each.methods || each.methods.includes(method)))
       if (!route) return null
-      if (route.writes?.includes(method) && !localOk) return Promise.resolve(headed(route, FORBIDDEN))
-      const asked = (body?: string) => ask(route, { method, target, ...(body === undefined ? {} : { body }) })
+      if ((route.writes?.includes(method) && !localOk) || (route.door === 'socket' && !socket)) return Promise.resolve(headed(route, FORBIDDEN))
+      const asker = socket ? OWNER_ON_THE_SOCKET : OWNER_HERE
+      const asked = (body?: string) => ask(route.type, route.waitMs, { method, target, ...(body === undefined ? {} : { body }) }, asker)
       return (method === 'GET' ? asked() : request.readBody(route.maxBodyBytes).then(asked)).then((answer) => {
         if (answer && Number.isInteger(answer.status) && (answer.status as number) >= 200 && (answer.status as number) <= 599 && isRecord(answer.body)) {
           return headed(route, { status: answer.status as number, body: answer.body }, answer.headers)
@@ -88,5 +121,6 @@ export function createServiceRoutes(deps: ServiceRoutesDeps) {
         return headed(route, route.unanswered)
       })
     },
+
   }
 }

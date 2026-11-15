@@ -52,6 +52,7 @@ import { openVault, sealVault } from '../lib/e2ee/connectorVault.js'
 import { shareWindows } from './share.js'
 import { createAccountHttp } from './accountHttp.js'
 import { accountRoutes, gatewayHttp } from './accountRoutes.js'
+import { keyRoutes, type KeyOps } from './keyRoutes.js'
 
 /** What the gateway needs of the core, in whichever process it runs. */
 export interface GatewayHost {
@@ -460,17 +461,9 @@ export function startGateway(given: GatewayHost): StartedGateway {
     .filter((m) => m.kind === 'machine' && !m.suspended && !m.pending)
     .map((m) => m.pub)
 
-  const ops: GatewayOps = {
-    accessToken: (options) => host.tokens.accessToken(options),
-    backend: (async (method: string, path: string, body?: unknown) => {
-      const answer = await accountHttp.backend(method, path, body)
-      // Whatever the answer: a request that timed out may still have changed the choice.
-      if (method === 'POST' && path === '/api/product-usage/settings') void usage?.choiceChanged()
-      return answer
-    }) as GatewayOps['backend'],
-    machines: accountHttp.machines,
-    mintGridName: accountHttp.mintGridName,
-    status: async () => ({ fingerprint: gateway.fingerprint(), pairs: gateway.listPairs(), pending: gateway.pendingPair() as Record<string, unknown> | null }),
+  /** The keys' routes of the door (gateway/keyRoutes.ts): `harness pair`, `unpair`, `remote-password`, `link connect`'s
+   *  mutual half, `group` and `devices`, and the window's Devices list. */
+  const keyOps: KeyOps = {
     // `harness pair <code>` → run CPace toward the waiting browser; map the result to an HTTP outcome.
     pair: async (code) => {
       const r = await gateway.pair(code)
@@ -527,6 +520,19 @@ export function startGateway(given: GatewayHost): StartedGateway {
       if (r && 'error' in r) return { status: 409, body: { error: r.error } }
       return r ? { status: 200, body: { ...r, applied: confirm } } : { status: 502, body: { error: 'LOG_UNAVAILABLE' } }
     },
+  }
+
+  const ops: GatewayOps = {
+    accessToken: (options) => host.tokens.accessToken(options),
+    backend: (async (method: string, path: string, body?: unknown) => {
+      const answer = await accountHttp.backend(method, path, body)
+      // Whatever the answer: a request that timed out may still have changed the choice.
+      if (method === 'POST' && path === '/api/product-usage/settings') void usage?.choiceChanged()
+      return answer
+    }) as GatewayOps['backend'],
+    machines: accountHttp.machines,
+    mintGridName: accountHttp.mintGridName,
+    status: async () => ({ fingerprint: gateway.fingerprint(), pairs: gateway.listPairs(), pending: gateway.pendingPair() as Record<string, unknown> | null }),
     wifiService: (on) => {
       if (on) { startDirect(); return }
       direct?.stop()
@@ -607,9 +613,10 @@ export function startGateway(given: GatewayHost): StartedGateway {
       return { revoked: 1 }
     }),
   })
-  // The account's (gateway/accountRoutes.ts), through `ops.backend`: a choice written there is read again at once.
+  // The keys' (gateway/keyRoutes.ts), and the account's (gateway/accountRoutes.ts), through `ops.backend`: a choice written
+  // there is read again at once.
   const requests: ServiceRequests = {
-    gateway_http: gatewayHttp(deviceHttp, accountRoutes((method, path, body) => ops.backend(method, path, body))),
+    gateway_http: gatewayHttp(deviceHttp, keyRoutes(keyOps), accountRoutes((method, path, body) => ops.backend(method, path, body))),
   }
 
   return {
