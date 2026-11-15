@@ -6,7 +6,9 @@ import { daemonFetch, openLocalWs } from '../lib/localTransport.js'
 import type { ClientSocket } from '../lib/clientSocket.js'
 import { deviceSettingsPatchSchema } from '../lib/harnessDevices.js'
 import { frontAppId } from '../cable/hosts/frontApp.js'
-import { tellDevices } from './listenerClient.js'
+import { REPLACED_LINE, tabOf, type Tab } from '../cable/hosts/tabs.js'
+import { streamDevices, tellDevices } from './listenerClient.js'
+import { devicesListenerPath } from './listenerPath.js'
 
 export interface DevicesClientDeps {
   port: number
@@ -60,7 +62,8 @@ export const DEVICES_USAGE = `harness hardware — your Harness hardware across 
 Offline computers never receive queued changes. A write is complete only when confirmed.`
 
 export interface DialWatchDeps extends Pick<DevicesClientDeps, 'port' | 'dataDir' | 'machineId' | 'connect'> {
-  /** The Harness Device app writes on it a `{"front":"<bundle id or exe name>"}` line each time the app in front changes. */
+  /** The Harness Device app writes on it a `{"front":"<bundle id or exe name>"}` line each time the app in front changes,
+   *  and a `{"tab":{"app","tty"}}` line each time the selected tab of a tab app in front does. */
   stdin: {
     on(event: 'end' | 'close', listener: () => void): unknown
     on(event: 'data', listener: (chunk: Buffer | string) => void): unknown
@@ -70,21 +73,33 @@ export interface DialWatchDeps extends Pick<DevicesClientDeps, 'port' | 'dataDir
   print(line: string): void
   /** stderr: stdout carries only the app's NDJSON. */
   printError(line: string): void
-  /** Tells the devices' own listener which app is in front: true when it took it. `tellDevices` by default. */
-  tell?: (message: { type: 'front'; app: string }) => Promise<boolean>
+  /** Tells the devices' own listener which app is in front, or which tab is selected in it: true when it took it.
+   *  `tellDevices` by default. */
+  tell?: (message: { type: 'front'; app: string } | { type: 'tab'; app: string; tty: string }) => Promise<boolean>
+  /** Opens the devices' stream of the tabs a swipe or a tap selects, handing on each chunk until it ends or [signal]
+   *  aborts: true when it had opened. One asked with `standby` opens only while no other watch holds it.
+   *  `streamDevices` by default. */
+  selects?: (message: { type: 'tabs'; standby?: true }, chunk: (data: Buffer) => void, signal: AbortSignal) => Promise<boolean>
 }
 
 const NOT_RUNNING = 'Harness is not running on this computer. Run: harness start'
 const CLOSED = 'The connection to Harness on this computer closed.'
 const DIAL_FIELDS = ['fw', 'hw', 'board', 'updating', 'problem'] as const
-// The app cuts the value to 128 characters, under 1 KiB as a JSON line even escaped: a longer line is no front line.
+// The app cuts the value to 128 characters, under 1 KiB as a JSON line even escaped: a longer line is no front line. A
+// tab line is under 140 bytes.
 const FRONT_LINE_MAX = 1024
-// The devices' listener takes ten fronts in any second on a connection, and the tells share one kept alive. Counted from
-// each answer, the listener has heard the tell before by then: a burst of changes (focus following the mouse) stays
-// within its ten, and the newest is not the one refused.
+// The devices' listener takes ten fronts and ten tabs in any second on a connection, and the tells share one kept alive.
+// Counted from each answer, the listener has heard the tell before by then: a burst of changes (focus following the
+// mouse) stays within its ten, and the newest is not the one refused.
 const TELL_GAP_MS = 100
 // tellDevices' own bound, held by the watch too, so an app that quits waits no longer on a listener that does not answer.
 const QUIT_TELL_MS = 2_000
+// A select on the devices' stream is `{"app","tty"}`, and a tap's `"raise":true` too, under 70 bytes: a longer line is none.
+const SELECT_LINE_MAX = 96
+// A stream that ends or does not open is opened again 1 s later, the wait doubling to 30 s while it does not open: a
+// devices process that is gone is not asked once a second.
+const STREAM_RETRY_MS = 1_000
+const STREAM_RETRY_MAX_MS = 30_000
 
 /** One call per line of at most [max] bytes; a longer line is dropped whole, its start included. */
 function lines(max: number, line: (text: string) => void): (chunk: Buffer | string) => void {
@@ -127,7 +142,8 @@ export function runDialWatch(argv: string[], deps: DialWatchDeps): Promise<numbe
     // The tell under way, and whether any app (not none) was ever sent: only then do the devices have one to forget.
     let under: Promise<boolean> | undefined, sentApp = false
     let gap: ReturnType<typeof setTimeout> | undefined
-    const tell = deps.tell ?? (message => tellDevices(deps.dataDir ?? env.ADAPTER_DATA_DIR, message))
+    const dataDir = deps.dataDir ?? env.ADAPTER_DATA_DIR
+    const tell = deps.tell ?? (message => tellDevices(dataDir, message))
     // One tell at a time, so the listener hears them in order and the newest last; the ones between are skipped. Each is
     // followed by a gap, and what came in it is told as it ends.
     const tellFront = (): void => {
@@ -149,12 +165,73 @@ export function runDialWatch(argv: string[], deps: DialWatchDeps): Promise<numbe
         }, TELL_GAP_MS)
       })
     }
+    // The selected tab not yet told. Its tells have a slot of their own, so a front tell under way holds none back: one
+    // at a time with a gap after each, the newest last. One not taken is not tried again: the next report is newer.
+    let tab: Tab | undefined, tabTelling = false
+    let tabGap: ReturnType<typeof setTimeout> | undefined
+    const tellTab = (): void => {
+      if (settled || tabTelling || tabGap || !tab) return
+      const { app, tty } = tab
+      tab = undefined
+      tabTelling = true
+      void tell({ type: 'tab', app, tty }).then(() => {
+        tabTelling = false
+        if (settled) return
+        tabGap = setTimeout(() => {
+          tabGap = undefined
+          tellTab()
+        }, TELL_GAP_MS)
+      })
+    }
+    // The devices' stream of selects, open or opening, and when it is opened again. Without a listener path there is
+    // nothing to open, and nothing is retried.
+    let stream: AbortController | undefined, reopen: ReturnType<typeof setTimeout> | undefined
+    let streamWait = STREAM_RETRY_MS
+    // Whether a newer watch took the stream, such as a second Harness Device's: this one then only stands by, taken while
+    // no stream is open, so the two do not take it from each other once a second.
+    let replaced = false
+    const listening = devicesListenerPath(dataDir) !== null
+    const selects = deps.selects ?? ((message, chunk, signal) => streamDevices(dataDir, message, chunk, { signal }))
+    // A select as Harness Device reads it: the tab, and `"raise":true` for a tap's. Nothing else of the line goes on.
+    const printSelect = (line: string): void => {
+      if (settled) return
+      let value: unknown
+      try { value = JSON.parse(line) } catch { return }
+      const selected = tabOf(value)
+      if (!selected) return
+      const { raise } = value as { raise?: unknown }
+      if (raise !== undefined && typeof raise !== 'boolean') return
+      deps.print(JSON.stringify({ select: raise ? { ...selected, raise } : selected }))
+    }
+    const openStream = (): void => {
+      if (settled || stream || !listening) return
+      clearTimeout(reopen)
+      stream = new AbortController()
+      let taken = false
+      // Lines of its own: the start of a line an ended stream left never joins the next stream's first.
+      const read = lines(SELECT_LINE_MAX, line => { if (line === REPLACED_LINE) taken = true; else printSelect(line) })
+      void selects(replaced ? { type: 'tabs', standby: true } : { type: 'tabs' }, read, stream.signal).then(hadOpened => {
+        stream = undefined
+        if (settled) return
+        if (hadOpened) {
+          streamWait = STREAM_RETRY_MS
+          // A stream of its own had opened, standing by or not: replaced only if it ended on that line, said once each.
+          replaced = taken
+          if (replaced) deps.printError('tabs stream replaced')
+        }
+        reopen = setTimeout(openStream, streamWait)
+        streamWait = Math.min(streamWait * 2, STREAM_RETRY_MAX_MS)
+      })
+    }
     const finish = (code: number, why?: string, last?: Promise<unknown>): void => {
       if (settled) return
       settled = true
       if (why) deps.printError(why)
       clearTimeout(deadline)
       clearTimeout(gap)
+      clearTimeout(tabGap)
+      clearTimeout(reopen)
+      stream?.abort()
       deps.stdin.pause()
       try { socket?.close() } catch { /* already closed */ }
       if (!last) return resolve(code)
@@ -179,11 +256,16 @@ export function runDialWatch(argv: string[], deps: DialWatchDeps): Promise<numbe
     deps.stdin.on('close', quit)
     deps.stdin.on('data', lines(FRONT_LINE_MAX, line => {
       if (settled) return
-      let value: unknown
-      try { value = (JSON.parse(line) as { front?: unknown } | null)?.front } catch { return }
-      if (typeof value !== 'string') return
-      front = frontAppId(value)
-      tellFront()
+      let value: { front?: unknown; tab?: unknown } | null
+      try { value = JSON.parse(line) } catch { return }
+      if (typeof value?.front === 'string') {
+        front = frontAppId(value.front)
+        return tellFront()
+      }
+      const reported = tabOf(value?.tab)
+      if (!reported) return
+      tab = reported
+      tellTab()
     }))
     deps.stdin.resume()
     deps.machineId().then(machineId => {
@@ -201,7 +283,7 @@ export function runDialWatch(argv: string[], deps: DialWatchDeps): Promise<numbe
         if (frame?.type === 'connected') {
           clearTimeout(deadline)
           const features = (frame.payload as { features?: unknown } | undefined)?.features
-          if (Array.isArray(features) && features.includes('dial-watch')) return
+          if (Array.isArray(features) && features.includes('dial-watch')) return openStream()
           deps.print(JSON.stringify({ error: 'The Harness daemon on this computer is older than this command. Run: harness start --restart' }))
           return finish(4)
         }
@@ -212,6 +294,9 @@ export function runDialWatch(argv: string[], deps: DialWatchDeps): Promise<numbe
         if ((frame.payload as { attached?: unknown }).attached === true) {
           owed = true
           tellFront()
+          // A new devices process may come with the dial: its stream is opened now, not after the wait.
+          streamWait = STREAM_RETRY_MS
+          openStream()
         }
         const line = dialWatchLine(frame.payload)
         if (line === last) return
