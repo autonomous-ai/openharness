@@ -248,7 +248,8 @@ import { wakeGateway } from './gatewayWake.js'
 import { createViewersWake, VIEWERS_ON_DEMAND, wakeViewers } from './viewersWake.js'
 import { createWifiLink } from './wifiLink.js'
 import { wifiDoors } from './wifiAgents.js'
-import { autonomousDeviceLocalRequest, deviceAddonRoutes, machineAddonRoutes } from '../lib/deviceManagementHttp.js'
+import { createServiceRoutes } from './serviceRoutes.js'
+import { GATEWAY_REQUESTS, SERVICE_HTTP_ROUTES, WIFI_REQUESTS } from './api.js'
 import { loadOrCreateHookCredential } from '../lib/hookAuth.js'
 import { attachLocalWsServer, LOCAL_WS_PATH, LOCAL_WS_PROTOCOL_VERSION } from '../localWsServer.js'
 import { TERMINAL_BINARY_VERSION } from '../lib/terminalBinary.js'
@@ -1089,7 +1090,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       }
     }
   }
-  let devicePartsBuilt = false
   let appFormWindow: { machineId: string; connId: string } | undefined
   let appVoiceFocus: { machineId: string; agentId: string; connId: string } | undefined
   let backendRef: BackendSocket | undefined
@@ -1141,12 +1141,17 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     start: () => ({ machineId: backend.machineId, computerId: computerId(), autonomousEnv, signedIn: !!session?.machineId, account: account(), machineName: terminalHintMachineName(), hostname: hostname() }),
     backend: (method, path) => proxyBackend(method, path), want: () => coreLink.want('gateway'),
     machines: ({ body }) => ports.models?.machines(body, computerId()),
+    wifiServing: () => wifiCore.serving(WIFI_START_MS),
   }) : null
-  const gateway = gatewayLink ?? inline!.startGateway({
+  const inlineGateway = gatewayLink ? null : inline!.startGateway({
     events: backend.fromGateway, machineId: backend.machineId, computerId: computerId(), autonomousEnv,
     signedIn: !!session?.machineId, account: account(), machineName: terminalHintMachineName(), hostname: hostname(),
     machines: ({ body }) => ports.models?.machines(body, computerId()),
+    wifiServing: () => wifiCore.serving(WIFI_START_MS),
   })
+  const gateway = gatewayLink ?? inlineGateway!
+  // Its routes of the door, in this process; in its own, its link takes them (core/serviceRoutes.ts).
+  if (inlineGateway) serviceHost.serve('gateway', () => inlineGateway.requests, coreApi, GATEWAY_REQUESTS)
   backend.useGateway(gateway.port)
   backend.useWifi(wifiCore.fromGateway)
   const gatewayOps = gateway.ops
@@ -1507,7 +1512,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
   // The requests each service that can run in its own process answers, as core/api.ts declares them.
   const requestsOf: Record<string, readonly string[]> = {
-    search: SEARCH_REQUESTS, store: STORE_REQUESTS, usage: USAGE_REQUESTS, monitor: MONITOR_REQUESTS, projects: PROJECTS_REQUESTS, models: MODELS_REQUESTS, handoff: HANDOFF_REQUESTS, connectors: CONNECTORS_REQUESTS, sharedMachines: SHARED_MACHINES_REQUESTS,
+    gateway: GATEWAY_REQUESTS, wifi: WIFI_REQUESTS, search: SEARCH_REQUESTS, store: STORE_REQUESTS, usage: USAGE_REQUESTS, monitor: MONITOR_REQUESTS, projects: PROJECTS_REQUESTS, models: MODELS_REQUESTS, handoff: HANDOFF_REQUESTS, connectors: CONNECTORS_REQUESTS, sharedMachines: SHARED_MACHINES_REQUESTS,
     devices: DEVICES_REQUESTS, windowNames: WINDOW_NAMES_REQUESTS, engineProbe: ENGINE_PROBE_REQUESTS, goals: GOALS_REQUESTS, shell: SHELL_REQUESTS, messages: MESSAGES_REQUESTS, osDevice: OS_DEVICE_REQUESTS, machineAddons: MACHINE_ADDON_REQUESTS,
     agentBrowser: AGENT_BROWSER_REQUESTS,
     ...Object.fromEntries(Object.entries(EXPERIMENTS).map(([name, experiment]) => [name, experiment.requests])),
@@ -1583,7 +1588,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const wifiLink = createWifiLink({
     core: coreApi,
     notify: (frame) => serviceLinks.notify('wifi', frame),
-    call: (type, payload, waitMs) => serviceLinks.call('wifi', type, payload, waitMs),
   })
   // Its port from the start: its process connects as soon as the socket answers, before the rest of the
   // core is wired, and is resumed through this port then (core/wifi.ts `started`).
@@ -1693,6 +1697,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   serviceLinksRef = serviceLinks
   // A request a service declared goes to it: in its own process, or in this one (core/serviceHost.ts).
   backend.serviceRouter = (type, payload, asker, reply) => serviceLinks.route(type, payload, asker, reply) || serviceHost.route(type, payload, asker, reply)
+  // And a route of the door a service answers, the same way (core/serviceRoutes.ts).
+  const serviceRoutes = createServiceRoutes({ routes: SERVICE_HTTP_ROUTES, routers: [serviceLinks, serviceHost] })
   // The connection that asked closed: the services abort what it asked, wherever they run.
   backend.onConnectionClosed = (connId) => { serviceLinks.closeConnection(connId); serviceHost.closeConnection(connId) }
   // Session search (services/search.ts): in this process, or in its own (services/searchProcess.ts),
@@ -2188,37 +2194,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Asked only while a dial is watching: a call to a devices process that is not running would start it.
   const deviceHookCalls = createDeviceHookCalls({ ready: cableWatchingLocal, devices: () => ports.devices ?? undefined, newId: randomUUID })
   const { server: hookServer, port: hookPort, localSocket } = await startHookServer(daemonPort(), {
-    onAutonomousDeviceRequest: async (method, target, body) => {
-      // Until the pieces below are built; after, a piece that could not be is refused by the requests
-      // that need it, and the rest (list, status, revoke) answer from the pairings.
-      if (!devicePartsBuilt) return { status: 503, body: { error: { code: 'UNAVAILABLE', message: 'Autonomous device service is starting' } } }
-      // The Wi-Fi device's pairings and direct links are the gateway's (gateway/start.ts); its receipts its
-      // service's, with the dials (services/wifi.ts).
-      const viaGateway = async (request: Parameters<GatewayOps['wifi']>[0]): Promise<Record<string, unknown>> => {
-        const answer = await gatewayOps.wifi(request)
-        if ('refused' in answer) throw Object.assign(new Error(answer.refused.message), { code: answer.refused.code })
-        return answer.result
-      }
-      return autonomousDeviceLocalRequest({
-        discover: async () => { await wifiCore.serving(WIFI_START_MS); return viaGateway({ op: 'discover' }) },
-        pairStart: async ({ code, device }) => { await wifiCore.serving(WIFI_START_MS); return viaGateway({ op: 'pair', code, device }) },
-        pairStatus: () => viaGateway({ op: 'pairStatus' }),
-        list: () => viaGateway({ op: 'list' }),
-        status: async () => ({ transport: 'direct', connected: wifiCore.directSessions() > 0,
-          paired: ((await viaGateway({ op: 'list' })).devices as unknown[]).length, sessions: wifiCore.directSessions(), proto: 1 }),
-        revoke: ({ id }) => viaGateway({ op: 'revoke', id }),
-        receipt: async (target) => {
-          const answer = await (ports.wifi?.receipt(target.deviceId, target.idempotencyKey) ?? { unavailable: true as const })
-          if ('unavailable' in answer) throw Object.assign(new Error('The Wi-Fi device service is not running on this computer. See the daemon\'s log.'), { code: 'UNAVAILABLE' })
-          return { receipt: answer.receipt }
-        },
-        ...deviceAddonRoutes((op, input) => ports.wifi?.addon(op, input) ?? Promise.resolve({ unavailable: true as const })),
-        // The device's own service, on this machine: the same `machine_addon` door, asked as a process here.
-        ...machineAddonRoutes((op, input, waitMs) => outOfProcess.has('machineAddons')
-          ? serviceLinks.call('machineAddons', 'machine_addon', { op, input }, waitMs + 5_000)
-          : new Promise((resolve) => { if (!serviceHost.route('machine_addon', { op, input }, { local: true, owner: true }, resolve)) resolve({ error: 'SERVICE_UNAVAILABLE' }) })),
-      }, method, target, body)
-    },
+    // The Wi-Fi device's routes: the gateway's (its pairings and direct links), its service's (its receipts and
+    // add-ons) and the machine add-ons' (core/api.ts `SERVICE_HTTP_ROUTES`).
+    onServiceRoute: (path, request) => serviceRoutes.answer(path, request),
     resolveHookAgent: engineHooks.resolveHookAgent,
     hookViaSharedProcess: engineHooks.hookViaSharedProcess,
     hookAdmissionBlocked: id => launchCancelled(id),
@@ -3348,10 +3326,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // The Wi-Fi device (services/wifi.ts), with the dials: in their process by default (core/wifiLink.ts,
   // resumed there as its link connects), or here.
   if (!outOfProcess.has('wifi')) {
-    serviceHost.start('wifi', inline!.startWifi, coreApi, WIFI_FALLBACKS)
+    serviceHost.start('wifi', inline!.startWifi, coreApi, WIFI_FALLBACKS, WIFI_REQUESTS)
     if (ports.wifi) wifiCore.started(appVoiceFocus ?? null)
   }
-  devicePartsBuilt = true
 
 
   // Every card bound for the Wi-Fi device goes to the devices too: the dial is told what the Wi-Fi device is,

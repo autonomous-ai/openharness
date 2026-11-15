@@ -2,8 +2,13 @@
  * The Wi-Fi device's local routes (`/api/autonomous-device/*`), on the real daemon, byte for byte as the clients of the
  * last 30 days read them: `harness autonomous-device` (lib/autonomous-device/command.ts, addonCommand.ts) and the add-on
  * service of a device that is this machine. Each answer is the one this suite recorded before the routes left the
- * core's process, in both modes: the services in their own processes, and every one in the core's
+ * core's process (its first commit), in both modes: the services in their own processes, and every one in the core's
  * (`HARNESSD_SERVICES=none`).
+ *
+ * The core's door checks the caller and hands each route on as it came (core/serviceRoutes.ts): the pairings and the
+ * direct links to the gateway, the receipts and add-ons to the Wi-Fi device's service, the machine's own add-ons to
+ * theirs. A service that fails a route, or cannot start, has the route answer its own words at once, and the core
+ * never restarts.
  */
 import http from 'node:http'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
@@ -90,6 +95,31 @@ describe('the Wi-Fi device\'s local routes', () => {
     else expect(discovered).toEqual(BLOCKED)
     const paired = await ask(d, 'POST', '/api/autonomous-device/pair/start', { body: '{"code":"ABC234","device":"nobody._autonomous._tcp.local"}' })
     expect([json(404, '{"error":{"code":"DEVICE_NOT_FOUND","message":"Selected device is no longer discoverable"}}'), BLOCKED]).toContainEqual(paired)
+    expect(d.coresStarted()).toBe(1)
+  })
+
+  // Each route is its service's, which checks it and answers it: a failure there is that route's, said at once with the
+  // route's own words, and costs the core nothing.
+  it.each([['in their own processes', {}], ['in the core\'s', { HARNESSD_SERVICES: 'none' }]] as const)(
+    'are answered by their services %s: one that fails them answers their own error at once', async (_where, env) => {
+    const d = await IsolatedDaemon.create({ env: { ...env, HARNESSD_TEST_FAULTS: 'gateway.gateway_http,wifi.wifi_http,machineAddons.machine_addons_http' } })
+    daemon = d
+    onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`) })
+    await d.start()
+    const failing: Array<[string, string, string | undefined, Answer]> = [
+      ['GET', '/api/autonomous-device/list', undefined, json(503, '{"error":{"code":"UNAVAILABLE","message":"The Wi-Fi device link is not reachable on this computer right now. Try again."}}')],
+      ['GET', `/api/autonomous-device/receipt?deviceId=${encodeURIComponent(DEVICE)}&idempotencyKey=k`, undefined, json(503, '{"error":{"code":"UNAVAILABLE","message":"The Wi-Fi device service is not running on this computer. See the daemon\'s log."}}')],
+      ['POST', '/api/autonomous-device/addon/propose', '{"addon":"x","idempotencyKey":"k","act":"light","holdsMs":5000}', json(504, '{"error":{"code":"OUTCOME_UNKNOWN","message":"No answer in time: the proposal may have been sent. Retry with the same key (--key) to send it at most once."}}')],
+      ['POST', '/api/autonomous-device/machine-addon/hello', '{}', json(503, '{"error":{"code":"UNAVAILABLE","message":"The add-ons of this machine are not running. See the daemon\'s log."}}')],
+    ]
+    // Each once, so that its service is up; then again, each at once.
+    for (const [method, path, body, answer] of failing) expect(await ask(d, method, path, { body }), `${method} ${path}`).toEqual(answer)
+    for (const [method, path, body, answer] of failing) {
+      const at = Date.now()
+      expect(await ask(d, method, path, { body }), `${method} ${path}`).toEqual(answer)
+      expect(Date.now() - at, `${method} ${path} answered at once`).toBeLessThan(2_000)
+    }
+    expect(d.log()).toContain('gateway_http failed · injected fault')
     expect(d.coresStarted()).toBe(1)
   })
 

@@ -915,6 +915,26 @@ describe('the Wi-Fi device, over the gateway\'s sessions', () => {
     await socket.stop()
   })
 
+  it('counts the sessions on a direct link whose app said hello, each still its identity\'s device: `harness autonomous-device status`', async () => {
+    const socket = relaySocket(MACHINE)
+    const gateway = gatewayOf(socket)
+    const dial = await pairedClient(socket, 'dial-1', { role: 'device', label: 'Desk dial' })
+    const phone = await pairedClient(socket, 'phone-1')
+    gateway.deviceClient('dial-1', dial.pub)
+    // Over the relay, not a direct link.
+    expect(gateway.directDeviceSessions()).toBe(0)
+    gateway.attachDirectDevice('dial-1', () => {})
+    expect(gateway.directDeviceSessions()).toBe(1)
+    // A hello said as another identity, or a phone's session, is not that device's.
+    gateway.deviceClient('dial-1', phone.pub)
+    gateway.attachDirectDevice('phone-1', () => {})
+    gateway.deviceClient('phone-1', phone.pub)
+    expect(gateway.directDeviceSessions()).toBe(0)
+    gateway.deviceClient('dial-1', null)
+    expect(gateway.directDeviceSessions()).toBe(0)
+    await socket.stop()
+  })
+
   it('opens a device\'s request only when the relay would, and hands it on with the frame as it came', async () => {
     const socket = relaySocket(MACHINE)
     const heard = vi.fn()

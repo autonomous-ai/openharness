@@ -38,7 +38,7 @@ function stubGateway() {
     trustLinkedPeer: vi.fn(async () => answer), groupList: vi.fn(async () => answer), groupSync: vi.fn(async () => answer),
     groupRemove: vi.fn(async () => answer), devicesList: vi.fn(async () => answer), devicesRemove: vi.fn(async () => answer),
     devicesHistory: vi.fn(async () => answer), devicesDismiss: vi.fn(async () => answer), devicesRebaseline: vi.fn(async () => answer),
-    wifi: vi.fn(async () => ({ result: { devices: [] } })), wifiService: vi.fn(), revokeIdentity: vi.fn(),
+    wifiService: vi.fn(), revokeIdentity: vi.fn(),
     account: vi.fn(), reachable: vi.fn(),
     lane: {
       hello: vi.fn(async (machineId: string) => ({ type: 'e2e_hello', machineId })), welcome: vi.fn(async () => true),
@@ -72,7 +72,8 @@ function stubGateway() {
       return session
     }),
   } satisfies WindowRelay
-  return { port, ops, windowRelay, sessions, stop: vi.fn(async () => {}) }
+  const requests = { gateway_http: vi.fn(async (payload: Record<string, unknown>) => ({ status: 200, body: { devices: [], asked: payload.target } })) }
+  return { port, ops, windowRelay, requests, sessions, stop: vi.fn(async () => {}) }
 }
 
 function wire() {
@@ -103,7 +104,7 @@ function wire() {
       try { return { ...await options.requests[type](payload, { local: true, owner: true }) } } catch { return { error: 'SERVICE_FAILED' } }
     },
     start: () => ({ machineId: 'machine-1', computerId: 'computer-1', autonomousEnv: 'prod', signedIn: true, account: { machineId: 'machine-1', signIn: null } }),
-    backend,
+    backend, wifiServing: async () => true,
   })
   const core: CoreConnection = {
     query: (query, payload = {}) => link.answer(query, payload),
@@ -332,8 +333,21 @@ describe('the gateway\'s process, spoken to by the core', () => {
     expect(ops.devicesRemove).toHaveBeenCalledWith('P')
     expect(ops.devicesDismiss).toHaveBeenCalledWith({ baseline: true })
     expect(ops.devicesRebaseline).toHaveBeenCalledWith(true, { seq: 2, hash: 'h' })
-    expect(await w.link.ops.wifi({ op: 'pair', device: 'dev', code: 'C' })).toEqual({ result: { devices: [] } })
-    expect(ops.wifi).toHaveBeenCalledWith({ op: 'pair', device: 'dev', code: 'C', id: '' })
+  })
+
+  it('answers its routes of the door from the gateway it runs, and asks the core whether the Wi-Fi device\'s service serves', async () => {
+    const w = wire()
+    const asker = { local: true, owner: true }
+    const route = { method: 'GET', target: '/api/autonomous-device/list' }
+    // Not started: the request fails, and its route answers for it (core/serviceRoutes.ts).
+    expect(() => w.options().requests.gateway_http!(route, asker)).toThrow('the gateway has not started')
+    w.connect()
+    expect(await w.options().requests.gateway_http!(route, asker)).toEqual({ status: 200, body: { devices: [], asked: '/api/autonomous-device/list' } })
+    expect(w.gateways[0].requests.gateway_http).toHaveBeenCalledWith(route, asker)
+    // Only the core can ask for that service's process: asked over the link, and no once the link is gone.
+    expect(await w.hosts[0].wifiServing!()).toBe(true)
+    w.disconnect()
+    expect(await w.hosts[0].wifiServing!()).toBe(false)
   })
 
   it('runs the fleet\'s lane\'s sessions in the gateway it runs, and seals nothing with none running', async () => {

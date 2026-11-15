@@ -73,6 +73,24 @@ describe('the add-ons of a device that is this machine, in their own process', (
     expect(await ask({ op: 'state' }, LOCAL)).toMatchObject({ result: { devices: [{ deviceId: 'm_account' }] } })
   })
 
+  it('answers its own service\'s routes of the door, checked first, and refused while the machine\'s id is not known', async () => {
+    const t = setup()
+    const route = t.wire().requests.machine_addons_http!
+    const hello = { method: 'POST', target: '/api/autonomous-device/machine-addon/hello', body: '{}' }
+    // Checked before anything: a bad request is said as such, known or not.
+    expect(await route({ ...hello, body: '{"x":1}' }, LOCAL)).toMatchObject({ status: 400 })
+    expect(await route(hello, LOCAL)).toEqual({ status: 503, body: { error: { code: 'UNAVAILABLE', message: 'This machine\'s id is not known yet. Try again in a moment.' } } })
+    t.wire().onConnected!({ query: t.query } as never)
+    expect(await route(hello, LOCAL)).toMatchObject({ status: 200, body: { topics: 0 } })
+    expect(await route({ method: 'POST', target: '/api/autonomous-device/machine-addon/publish', body: JSON.stringify({ values: PUBLISH.input.values }) }, LOCAL))
+      .toMatchObject({ status: 200, body: { topics: 1 } })
+    expect(await route({ method: 'GET', target: '/api/autonomous-device/machine-addon/proposals' }, LOCAL)).toMatchObject({ status: 200, body: { proposals: [], next: 0 } })
+    expect(await route({ method: 'POST', target: '/api/autonomous-device/machine-addon/decision', body: '{"proposalId":"0b6c3c3e-8f3a-4f5a-9d2b-6f1e2a3b4c5d","decision":"kept"}' }, LOCAL))
+      .toMatchObject({ status: 404, body: { error: { code: 'PROPOSAL_UNKNOWN' } } })
+    // The Wi-Fi device's are not its.
+    expect(await route({ method: 'GET', target: '/api/autonomous-device/list' }, LOCAL)).toMatchObject({ status: 404 })
+  })
+
   it('runs as a real service by default, answering every request the core routes to it', () => {
     runMachineAddonsService({ dataDir: '/data', socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't' })
     const options = vi.mocked(runServiceProcess).mock.calls.at(-1)![0]

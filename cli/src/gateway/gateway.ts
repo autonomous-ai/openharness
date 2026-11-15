@@ -1158,6 +1158,16 @@ export class RelayGateway implements GatewayPort {
     else this.deviceClients.delete(connId)
   }
 
+  /** The Wi-Fi device sessions on a direct link whose app said hello, each still its identity's device's session:
+   *  what `harness autonomous-device status` counts. */
+  directDeviceSessions(): number {
+    let count = 0
+    for (const [connId, identity] of this.deviceClients) {
+      if (this.directDeviceSinks.has(connId) && this.e2ee.sessionRole(connId) === 'device' && this.e2ee.sessionIdentity(connId) === identity) count++
+    }
+    return count
+  }
+
   /**
    * App-side revoke: tell the device while its authenticated session still exists (the E2eeManager drops
    * the session right after this), so it clears its own pin instead of showing "paired / disconnected"

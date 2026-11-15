@@ -44,6 +44,11 @@ export function runMachineAddonsService(options: MachineAddonsServiceOptions): S
         if (!daemon?.machineId()) return { error: { code: 'UNAVAILABLE', message: 'This machine\'s id is not known yet. Try again in a moment.' } }
         return requests.machine_addon!(payload, asker, closed)
       },
+      // The device's own service's routes of the door: refused there, after their checks, while the id is not known.
+      machine_addons_http: async (payload, asker, closed) => {
+        await known().catch(() => {})
+        return requests.machine_addons_http!(payload, asker, closed)
+      },
     },
     onConnected: (connection) => { core = connection; void known().catch(() => {}) },
     onDisconnected: () => { core = null },

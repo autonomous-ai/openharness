@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { Asker, ServiceRequests } from '../../core/api.js'
 import { DeviceAddonError, DeviceAddons, type AddonProposal, type ProposalSource } from './addons.js'
+import { deviceRefusal, deviceRoutes } from './localHttp.js'
 
 /**
  * Add-ons for a device that is itself a Harness machine (openharness#1654): the lampOS V2 lamp runs Harness and
@@ -54,7 +55,7 @@ export class MachineAddons {
     for (const wake of [...this.waiters]) wake()
   }
 
-  // ── the device's own service, over this machine's loopback (lib/deviceManagementHttp.ts) ─────────────
+  // ── the device's own service, over this machine's loopback (./localHttp.ts) ──────────────────────────
 
   /** The service started: what it published before is cleared, as a device's hello clears it. */
   hello(): Record<string, unknown> {
@@ -140,7 +141,21 @@ export class MachineAddons {
     }
   }
 
+  /** The device's own service's routes of the door, as the core hands them on: checked first, and refused while this
+   *  machine's id is not known, never as `''`, which would publish for no machine. */
+  private known(): void {
+    if (!this.self) throw deviceRefusal('UNAVAILABLE', 'This machine\'s id is not known yet. Try again in a moment.')
+  }
+
   requests(): ServiceRequests {
-    return { machine_addon: (payload, asker) => this.request(payload, asker) }
+    return {
+      machine_addon: (payload, asker) => this.request(payload, asker),
+      machine_addons_http: deviceRoutes({
+        machineAddonHello: () => { this.known(); return this.hello() },
+        machineAddonPublish: ({ values }) => { this.known(); return this.publish(values) },
+        machineAddonDecision: (input) => { this.known(); return this.decide(input) },
+        machineAddonProposals: ({ after, waitMs, instance }) => { this.known(); return this.proposals(after, waitMs, instance) },
+      }),
+    }
   }
 }

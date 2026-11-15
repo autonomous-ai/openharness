@@ -311,11 +311,12 @@ export function createServiceLinks(options: ServiceLinksOptions) {
     },
 
     /** Route a request a service owns: false when no service owns `type`, and the core answers it itself.
-     *  The asker goes beside the payload, never in it, so nothing a client writes can stand for it. */
-    route(type: string, payload: Record<string, unknown>, asker: Asker, reply: (result: Record<string, unknown>) => void): boolean {
+     *  The asker goes beside the payload, never in it, so nothing a client writes can stand for it. `waitMs`: how long
+     *  its answer is waited for, a door's route's own (core/serviceRoutes.ts); its type's wait otherwise. */
+    route(type: string, payload: Record<string, unknown>, asker: Asker, reply: (result: Record<string, unknown>) => void, waitMs?: number): boolean {
       const service = ownerOf.get(type)
       if (!service) return false
-      ask(service, type, payload, asker, reply)
+      ask(service, type, payload, asker, reply, waitMs)
       return true
     },
 
