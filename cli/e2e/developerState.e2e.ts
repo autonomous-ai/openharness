@@ -83,10 +83,11 @@ describe('a daemon under test knows nothing of the developer\'s own state', () =
   })
 
   it('has its profile under its own home, and its own tmux folder, temporary folder and Store catalog', async () => {
+    // The worker's own temporary folder, kept where it is: with no TMPDIR, as on CI's Linux runners, os.tmpdir() reads
+    // the made-up TMP below, a folder that does not exist, and the fixture could not make its root in it.
+    vi.stubEnv('TMPDIR', tmpdir())
     // A developer's shell that names every one of them: made-up folders, so a failure prints nothing real.
     for (const name of ['USERPROFILE', 'LOCALAPPDATA', 'APPDATA', 'TEMP', 'TMP']) vi.stubEnv(name, join(scratch, name))
-    // As on CI's Linux runners, whose shell names no TMPDIR.
-    vi.stubEnv('TMPDIR', undefined)
     vi.stubEnv('HARNESS_STORE_CATALOG_URL', 'https://store.invalid/catalog.json')
     const d = daemon = await IsolatedDaemon.create()
     const home = d.env.HOME!
