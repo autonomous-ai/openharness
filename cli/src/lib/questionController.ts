@@ -4,12 +4,8 @@ import type { RegisteredSession } from './registry.js'
 import type { AgentEngine } from '../engines/types.js'
 import type { ShapedQuestion, QuestionRow, QuestionView, ReviewView, PaneView } from '../engines/facets/screen.js'
 export type { ShapedQuestion, QuestionRow, QuestionView, ReviewView, PaneView, FoundDialog } from '../engines/facets/screen.js'
-import { contract as amp } from '../engines/amp/contract.js'
-import { contract as kilo } from '../engines/kilo/contract.js'
-import { isApprovalDialog, walkKeys } from '../engines/kit/questionPane.js'
-function multiSubmitKey(engine: AgentEngine): string { return engine === 'devin' ? 'Enter' : 'Tab' }
+import { isApprovalDialog } from '../engines/kit/questionPane.js'
 const STEP_MS = 350          // let the TUI repaint between keystrokes
-const TEXT_MS = 250
 const MAX_STEPS = 14         // hard bound on the drive loop (questions × keys), never spin on a stuck pane
 const CAPTURE_LINES = 60
 
@@ -41,21 +37,6 @@ export function shapeQuestions(questions: unknown): ShapedQuestion[] {
       multi: (q.allow_multiple as boolean) ?? (q.multiSelect as boolean) ?? (q.multi_select as boolean) ?? false,
     }
   })
-}
-
-/**
- * The engines whose every dialog numbers nothing, by how a row is reached: declared (engines/<name>/contract.ts),
- * so that answering one loads none of their code (docs/design/2026-10-08-other-engines-out-of-core.md).
- */
-const WALKS: Partial<Record<AgentEngine, NonNullable<QuestionRow['walk']>>> = { amp: amp.questionWalk, kilo: kilo.questionWalk }
-
-/** The keys that answer `row` of a dialog `engine` drew; exported for the golden that pins them (engines/otherScreens.golden.spec.ts). */
-export function rowKeys(engine: AgentEngine, row: QuestionRow): string[] {
-  // Amp's rows are stacked and Kilo's sit side by side (engines/{amp,kilo}/askQuestion.ts). For any other engine
-  // the ROW says how it is reached: opencode numbers its ask dialog but not its permission prompt, so a
-  // per-engine rule would break one of the two.
-  const walk = WALKS[engine] ?? row.walk
-  return walk === 'right' || walk === 'down' ? walkKeys(walk, row) : [row.number]
 }
 
 export function matchRow(rows: QuestionRow[], answer: string): QuestionRow | null {
@@ -218,7 +199,7 @@ export class AskQuestionController {
         console.warn(`[question] ${sessionId.slice(0, 8)} answer dropped · ${(error as Error).message}`)
         return failed('The answer could not be prepared. Nothing was typed.')
       }
-      const result = await this.drive(terminalTarget, answers, this.deps.getSession(sessionId)?.engine ?? 'claude', payload.allowPermissions !== false, { requestId, owners }, reviewed, native)
+      const result = await this.drive(terminalTarget, answers, payload.allowPermissions !== false, { requestId, owners }, reviewed, native)
       this.pending.delete(requestId)
       const outcome = result.ok ? 'submitted' : result.error === 'STALE_QUESTION' ? 'refused · STALE_QUESTION, nothing typed' : 'FAILED'
       console.log(`[question] ${sessionId.slice(0, 8)} answered from device · ${outcome} (req=${requestId || 'none'})`)
@@ -240,7 +221,6 @@ export class AskQuestionController {
   private async drive(
     terminalTarget: string,
     answers: Record<string, string>,
-    engine: AgentEngine,
     allowPermissions: boolean,
     asked: { requestId: string; owners: string[] },
     reviewed?: QuestionAnswerPayload,
@@ -250,7 +230,7 @@ export class AskQuestionController {
     // 'uncertain': a key had gone to the terminal before the engine's worker failed. The pane decides on the next
     // read (the dialog gone: the answer went in); nothing is typed again, since the port stays bound to that worker.
     const apply = async (step: QuestionStep): Promise<'done' | 'failed' | QuestionStepFailure> => {
-      if (!native) return await this.applyLegacyStep(terminalTarget, engine, step, wait) ? 'done' : 'failed'
+      if (!native) return 'refused'
       if (await native.apply(step).catch(() => false)) return 'done'
       return native.failure?.() ?? 'failed'
     }
@@ -269,10 +249,10 @@ export class AskQuestionController {
       const current = this.deps.getSession(terminalTarget)
       if (!current || generation !== questionCaptureGeneration(current)) return STALE_CHANGED
       const capture = await this.deps.capture(terminalTarget, CAPTURE_LINES)
-      if (reviewed && capture === null) return failed('The question could not be read.')
+      if (capture === null) return failed('The question could not be read.')
       if (generation !== questionCaptureGeneration(this.deps.getSession(terminalTarget))) return STALE_CHANGED
       let view: PaneView
-      try { view = await this.deps.readQuestion(current, capture ?? '') }
+      try { view = await this.deps.readQuestion(current, capture) }
       catch { return failed('The question could not be read.') }
       if (generation !== questionCaptureGeneration(this.deps.getSession(terminalTarget))) return STALE_CHANGED
       if (!view) {
@@ -392,42 +372,13 @@ export class AskQuestionController {
     return STUCK
   }
 
-  /** Other engines keep their existing navigation until their migration batch. */
-  private async applyLegacyStep(target: string, engine: AgentEngine, step: QuestionStep, wait: (ms: number) => Promise<void>): Promise<boolean> {
-    if (step.kind === 'review') return this.deps.sendKey(target, step.key)
-    if (step.kind === 'select') {
-      for (const key of rowKeys(engine, step.row)) {
-        if (!await this.deps.sendKey(target, key)) return false
-        await wait(TEXT_MS)
-      }
-    } else if (step.kind === 'text') {
-      if (!await this.typeFreeText(target, step.row, step.text, wait)) return false
-    } else {
-      for (const row of step.rows) {
-        if (!await this.deps.sendKey(target, row.number)) return false
-        await wait(TEXT_MS)
-      }
-      if (step.freeText && !await this.typeFreeText(target, step.freeText.row, step.freeText.text, wait)) return false
-      if (!await this.deps.sendKey(target, multiSubmitKey(engine))) return false
-    }
-    await wait(STEP_MS)
-    return true
-  }
-
   /** True while a dialog is being keyed — the watcher pauses so a half-driven dialog isn't re-announced. */
   isDriving(sessionId: string): boolean {
     const session = this.deps.getSession(sessionId)
     return this.driving.has(session?.agentId || session?.sessionId || sessionId)
   }
 
-  /** Free-text answer (a voice answer is always free text): open the "Type something." row, type, Enter. */
-  private async typeFreeText(terminalTarget: string, typeRow: QuestionRow, text: string, wait: (ms: number) => Promise<void>): Promise<boolean> {
-    if (!await this.deps.sendKey(terminalTarget, typeRow.number)) return false
-    await wait(TEXT_MS)
-    if (!await this.deps.sendText(terminalTarget, text)) return false
-    await wait(TEXT_MS)
-    return this.deps.sendKey(terminalTarget, 'Enter')
-  }
+
 }
 
 // ── watching a terminal for an open question ─────────────────────────────────────────────────────

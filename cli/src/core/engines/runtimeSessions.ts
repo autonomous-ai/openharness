@@ -1,23 +1,25 @@
 /** Core-owned profile snapshots and transactions. Vendor interpretation happens only in the worker. */
 import type { RuntimeAnswer, RuntimeOperation } from '../../engines/worker/runtimeProtocol.js'
 import { RUNTIME_RECORDS, RUNTIME_REQUEST_BYTES, RUNTIME_WAIT_MS } from '../../engines/worker/runtimeProtocol.js'
-import type { RuntimeContext, RuntimeControl, RuntimeProfile, RuntimeRecord, RuntimeSession, RuntimeState } from '../../engines/facets/runtime.js'
-import { blankRuntimeState, encodeRuntimeProfile, RUNTIME_EFFORTS } from '../../engines/kit/runtime.js'
-import { EngineReadError } from '../../engines/worker/protocol.js'
+import type { ProfileEvidence, RuntimeContext, RuntimeControl, RuntimeProfile, RuntimeRecord, RuntimeSession, RuntimeState } from '../../engines/facets/runtime.js'
+import { applyProfileEvidence, blankRuntimeState, encodeRuntimeProfile, RUNTIME_EFFORTS } from '../../engines/kit/runtime.js'
+import { EngineReadError, workerEngine, workerService } from '../../engines/worker/protocol.js'
 import { launchFlagsOf } from '../../lib/launchFlags.js'
 import type { RegisteredSession } from '../../lib/registry.js'
-import { transcriptReadIdentity } from '../transcripts/readIdentity.js'
+import { processIdentityKey } from '../../lib/terminalRuntime.js'
 import { parseRuntimeProfile } from '../../lib/runtimeProfileWire.js'
 import type { RuntimeTransport } from './runtimeTransport.js'
 
 interface View {
   agentId: string
   sessionId: string
-  identity: string
+  identity: ReturnType<typeof binding>
   revision: number
+  authority: number
   state: RuntimeState
   control?: RuntimeControl
   selected: string | null
+  workspace?: string | null
 }
 interface Waiter { check(): boolean; resolve(value: boolean): void; timer: ReturnType<typeof setTimeout> }
 export interface RuntimeSessionDeps {
@@ -32,14 +34,34 @@ export interface RuntimeStage {
   commit(install?: () => boolean): boolean
 }
 
-const binding = (s: RegisteredSession | undefined): string => s ? JSON.stringify([transcriptReadIdentity(s), s.cwd, !!s.gateway,
-  s.active, s.tmuxPane, s.primaryRuntimeKey, s.runtimes]) : ''
+const numberValue = (value: number | null | undefined): number | null => Number.isFinite(value) ? value! : null
+const processKey = (s: RegisteredSession): string | null => s.processIdentity ? processIdentityKey(s.engine, s.processIdentity) : null
+const revision = (s: RegisteredSession): number | null | undefined => s.evidenceRevision === undefined ? undefined : numberValue(s.evidenceRevision)
+// One immutable capture: scalar comparisons avoid serializing nested identities on every listed frame.
+// Routes retain their exact JSON representation, including property order and fields added later.
+const binding = (s: RegisteredSession) => Object.freeze({
+  agentId: s.agentId, sessionId: s.sessionId, engine: s.engine, transcriptPath: s.transcriptPath ?? null,
+  codexHome: s.codexHome ?? null, boundAt: numberValue(s.boundAt), process: processKey(s),
+  held: !!s.identityHold, evidenceRevision: revision(s), cwd: s.cwd ?? null, gateway: !!s.gateway,
+  active: s.active ?? null, hermesHome: s.hermesHome ?? null, pane: s.tmuxPane ?? null,
+  primary: s.primaryRuntimeKey ?? null, routes: JSON.stringify(s.runtimes ?? null),
+})
+// A reader outage revokes authority without changing which native process/conversation supplied displayed facts.
+const sameProfile = (key: ReturnType<typeof binding>, s: RegisteredSession | undefined): boolean => !!s
+  && key.agentId === s.agentId && key.sessionId === s.sessionId && key.engine === s.engine
+  && key.transcriptPath === (s.transcriptPath ?? null) && key.codexHome === (s.codexHome ?? null)
+  && key.boundAt === numberValue(s.boundAt) && key.process === processKey(s) && key.cwd === (s.cwd ?? null)
+  && key.gateway === !!s.gateway && key.active === (s.active ?? null) && key.hermesHome === (s.hermesHome ?? null)
+  && key.pane === (s.tmuxPane ?? null) && key.primary === (s.primaryRuntimeKey ?? null)
+  && key.routes === JSON.stringify(s.runtimes ?? null)
+const sameBinding = (key: ReturnType<typeof binding>, s: RegisteredSession | undefined): boolean => sameProfile(key, s)
+  && key.held === !!s!.identityHold && key.evidenceRevision === revision(s!)
 // With the model and effort its process was launched with: an engine whose flags outrank its settings reads its configured
 // effort from them (claude/runtimeProfile.ts).
 const snapshot = (s: RegisteredSession): RuntimeSession => {
   const launched = launchFlagsOf(s)
   return { agentId: s.agentId, sessionId: s.sessionId, engine: s.engine, model: typeof s.model === 'string' ? s.model : null,
-    cliVersion: s.cliVersion, cwd: s.cwd, transcriptPath: s.transcriptPath, codexHome: s.codexHome,
+    cliVersion: s.cliVersion, cwd: s.cwd, transcriptPath: s.transcriptPath, codexHome: s.codexHome, ...(s.hermesHome === undefined ? {} : { hermesHome: s.hermesHome }),
     ...(launched ? { launchModel: { model: launched.model, effort: launched.effort } } : {}) }
 }
 const controlCopy = (control: RuntimeControl | undefined): RuntimeControl | undefined => control && { ...control, target: { ...control.target } }
@@ -54,7 +76,7 @@ export function createRuntimeSessions(deps: RuntimeSessionDeps) {
   let suppressed = 0
   let stopped = false
 
-  const valid = (view: View): boolean => !stopped && views.get(view.agentId) === view && view.identity === binding(deps.resolve(view.agentId))
+  const valid = (view: View): boolean => !stopped && views.get(view.agentId) === view && sameBinding(view.identity, deps.resolve(view.agentId))
   const wake = (id: string): void => {
     for (const waiter of waiters.get(id) ?? []) if (waiter.check()) {
       clearTimeout(waiter.timer); waiters.get(id)!.delete(waiter); waiter.resolve(true)
@@ -74,12 +96,19 @@ export function createRuntimeSessions(deps: RuntimeSessionDeps) {
   }
   const viewFor = (s: RegisteredSession): View => {
     const previous = views.get(s.agentId)
-    const identity = binding(s)
     // A delayed caller holding the old binding must not evict a newer accepted view.
-    if (stopped || identity !== binding(deps.resolve(s.agentId))) unavailable()
-    if (previous?.identity === identity) return previous
+    if (stopped || !isCurrent(s)) unavailable()
+    if (previous && sameBinding(previous.identity, s)) return previous
+    const identity = binding(s)
+    if (previous && sameProfile(previous.identity, s)) {
+      previous.revision++; previous.authority++; previous.control = undefined
+      previous.identity = identity
+      wake(previous.sessionId)
+      return previous
+    }
     if (previous) forget(previous.agentId)
-    const view: View = { agentId: s.agentId, sessionId: s.sessionId, identity, revision: 0, state: blankRuntimeState(), selected: null }
+    const view: View = { agentId: s.agentId, sessionId: s.sessionId, identity,
+      revision: 0, authority: 0, state: blankRuntimeState(), selected: null }
     views.set(s.agentId, view)
     return view
   }
@@ -88,7 +117,14 @@ export function createRuntimeSessions(deps: RuntimeSessionDeps) {
     const session = deps.resolve(id)
     if (!session) return undefined
     const view = views.get(session.agentId)
-    return view && valid(view) ? view : undefined
+    if (!view) return undefined
+    if (valid(view)) return view
+    return sameProfile(view.identity, session) ? viewFor(session) : undefined
+  }
+  const isCurrent = (s: RegisteredSession): boolean => {
+    const current = deps.resolve(s.agentId)
+    // A live row need not be serialized against itself; byId still checks its full identity against the View.
+    return s === current || sameBinding(binding(s), current)
   }
   const notify = (view: View): void => {
     if (!view.sessionId) return
@@ -100,6 +136,8 @@ export function createRuntimeSessions(deps: RuntimeSessionDeps) {
     }, 120))
   }
   const slot = async <T>(engine: string, run: () => Promise<T>): Promise<T> => {
+    if (!workerEngine(engine)) throw new EngineReadError('ENGINE_INVALID_REQUEST')
+    engine = workerService(engine)
     if ((pending.get(engine) ?? 0) >= 256) throw new EngineReadError('ENGINE_BUSY')
     const deadline = performance.now() + RUNTIME_WAIT_MS
     pending.set(engine, (pending.get(engine) ?? 0) + 1)
@@ -137,13 +175,14 @@ export function createRuntimeSessions(deps: RuntimeSessionDeps) {
     if (!silent && !suppressed && before !== view.selected && !view.control) notify(view)
   }
   const read = (s: RegisteredSession, operation: RuntimeOperation, silent = false, stillCurrent = () => true): Promise<RuntimeAnswer> => {
-    const identity = binding(s), view = viewFor(s)
+    const view = viewFor(s), identity = view.identity, authority = view.authority
     return slot(s.engine, async () => {
-      if (!valid(view) || view.identity !== identity || !stillCurrent()) unavailable()
+      if (!valid(view) || view.identity !== identity || view.authority !== authority || !stillCurrent()) unavailable()
       const current = deps.resolve(view.agentId)!, version = current.cliVersion, revision = view.revision
       const answer = await deps.transport.read(current.engine, contextFor(current, view), operation)
       if (!valid(view) || revision !== view.revision || deps.resolve(view.agentId)?.cliVersion !== version) unavailable()
-      if (operation.kind === 'records' || operation.kind === 'pane' || operation.kind === 'config') accept(view, answer, silent)
+      if (answer.observed !== false && (operation.kind === 'records' || operation.kind === 'pane' || operation.kind === 'config')) accept(view, answer, silent)
+      if (answer.refreshConfig) refreshConfig(view, silent)
       return answer
     })
   }
@@ -163,8 +202,10 @@ export function createRuntimeSessions(deps: RuntimeSessionDeps) {
       if (!current()) unavailable()
       const next = await deps.transport.read(s.engine, context, operation)
       if (!current()) unavailable()
-      context.state = { ...next.state }; context.session.cliVersion = next.cliVersion
-      context.control = controlCopy(next.control ?? undefined); answer = next
+      if (next.observed !== false) {
+        context.state = { ...next.state }; context.session.cliVersion = next.cliVersion
+        context.control = controlCopy(next.control ?? undefined); answer = next
+      }
     }).catch(error => { failed = true; throw error })
     return {
       async ingest(records) {
@@ -202,8 +243,43 @@ export function createRuntimeSessions(deps: RuntimeSessionDeps) {
       const set = waiters.get(id) ?? new Set(); set.add(waiter); waiters.set(id, set)
     })
   }
+  const refreshConfig = (view: View, silent: boolean): void => {
+    const revision = view.revision
+    queueMicrotask(() => {
+      if (valid(view) && view.revision === revision) void read(deps.resolve(view.agentId)!, { kind: 'config' }, silent).catch(() => {
+        console.warn('[runtime-profile] ENGINE_UNAVAILABLE')
+      })
+    })
+  }
+  const evidence = (s: RegisteredSession, records: readonly ProfileEvidence[], silent = false): boolean => {
+    if (!s.sessionId || !records.length || !isCurrent(s)) return false
+    const view = viewFor(s), before = view.selected
+    let refresh = false
+    for (const record of records) {
+      if (record.workspace !== undefined) view.workspace = record.workspace
+      applyProfileEvidence({ session: deps.resolve(view.agentId)!, state: view.state, control: view.control,
+        refreshConfig: () => { refresh = true } }, record)
+    }
+    view.selected = view.state.model && view.state.effort ? encodeRuntimeProfile({ sessionId: s.agentId,
+      engine: s.engine, model: view.state.model, effort: view.state.effort }) : null
+    view.revision++; view.authority++; wake(view.sessionId)
+    if (!silent && !suppressed && before !== view.selected && !view.control) notify(view)
+    if (refresh) refreshConfig(view, silent)
+    return before !== view.selected
+  }
   return {
     read,
+    evidence,
+    hydrateEvidence(s: RegisteredSession, records: readonly ProfileEvidence[]): void {
+      if (!s.sessionId || !isCurrent(s)) return
+      const view = viewFor(s)
+      view.state = { ...blankRuntimeState(), model: typeof s.model === 'string' ? s.model : null, cliVersion: s.cliVersion }
+      view.selected = null; view.revision++; view.authority++
+      evidence(s, records, true)
+    },
+    workspace(s: RegisteredSession): string | null {
+      return isCurrent(s) ? byId(s.agentId)?.workspace ?? null : null
+    },
     async capturePane(s: RegisteredSession, capture: (id: string, historyLines?: number) => Promise<string | null>,
       historyLines?: number, silent = false): Promise<string | null> {
       const view = viewFor(s), revision = view.revision, version = deps.resolve(s.agentId)!.cliVersion
@@ -226,7 +302,7 @@ export function createRuntimeSessions(deps: RuntimeSessionDeps) {
       return () => pending.commit()
     },
     selectedModel(s: RegisteredSession): string | null {
-      return s.sessionId && binding(s) === binding(deps.resolve(s.agentId)) ? byId(s.agentId)?.selected ?? null : null
+      return s.sessionId && isCurrent(s) ? byId(s.agentId)?.selected ?? null : null
     },
     getState(id: string): RuntimeState { return { ...(byId(id)?.state ?? blankRuntimeState()) } },
     async withoutChangeEvents<T>(run: () => Promise<T>): Promise<T> { suppressed++; try { return await run() } finally { suppressed-- } },
@@ -236,20 +312,20 @@ export function createRuntimeSessions(deps: RuntimeSessionDeps) {
       const current = parseRuntimeProfile(view.selected)
       view.control = { target: { ...target }, before: view.selected,
         modelConfirmed: current?.model === target.model, effortConfirmed: current?.effort === target.effort }
-      view.revision++
+      view.revision++; view.authority++
       return true
     },
     cancelControl(id: string): void {
       const view = byId(id)
       if (!view) return
       const previous = view.control
-      view.control = undefined; view.revision++; wake(view.sessionId)
+      view.control = undefined; view.revision++; view.authority++; wake(view.sessionId)
       if (previous) notify(view)
     },
     finishControl(s: RegisteredSession): void {
       const view = byId(s.agentId)
-      if (!view || view.identity !== binding(s)) return
-      view.control = undefined; view.revision++; wake(view.sessionId); notify(view)
+      if (!view || !sameBinding(view.identity, s)) return
+      view.control = undefined; view.revision++; view.authority++; wake(view.sessionId); notify(view)
     },
     confirmEffort(id: string, effort: string): void {
       const view = byId(id)
@@ -262,7 +338,7 @@ export function createRuntimeSessions(deps: RuntimeSessionDeps) {
       const s = deps.resolve(view.agentId)!
       if (selection) view.selected = encodeRuntimeProfile({ sessionId: s.agentId, engine: s.engine, model: selection.model, effort })
       if (view.control) view.control.effortConfirmed = view.control.target.effort === effort
-      view.revision++; wake(view.sessionId)
+      view.revision++; view.authority++; wake(view.sessionId)
     },
     confirmControlProfile(target: RuntimeProfile): void {
       const view = byId(target.sessionId)
@@ -271,7 +347,7 @@ export function createRuntimeSessions(deps: RuntimeSessionDeps) {
       view.state = { ...state, model: target.model, effort: target.effort, observedAt: Date.now() }
       view.selected = encodeRuntimeProfile({ ...target, sessionId: view.agentId })
       if (view.control?.target.id === target.id) { view.control.modelConfirmed = true; view.control.effortConfirmed = true }
-      view.revision++; wake(view.sessionId)
+      view.revision++; view.authority++; wake(view.sessionId)
     },
     waitForModel(id: string, timeout: number): Promise<boolean> { return waitFor(id, () => byId(id)?.control?.modelConfirmed === true, timeout) },
     waitForProfile(id: string, timeout: number): Promise<boolean> { return waitFor(id, () => {

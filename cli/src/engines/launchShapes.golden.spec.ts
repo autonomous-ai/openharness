@@ -38,7 +38,7 @@ vi.mock('../lib/createAgentPane.js', () => ({
     return { ok: false, error: 'RECORDED', detail: 'the pane is not opened by this spec' }
   }),
 }))
-vi.mock('../engines/launchControl.js', async (real) => ({ ...await real<object>(), opencodeMajorVersion: vi.fn(() => 2) }))
+vi.mock('../engines/opencode/version.js', async (real) => ({ ...await real<object>(), opencodeMajorVersion: vi.fn(() => 2) }))
 vi.mock('../lib/engineBin.js', async (real) => ({ ...await real<object>(), enginePathOverride: vi.fn(() => null) }))
 
 const GOLDEN = fileURLToPath(new URL('./__fixtures__/launch-shapes.golden.json', import.meta.url))

@@ -13,16 +13,16 @@ import { buildEngineLaunchArgv, engineLaunchEnv, namedAgentArgs, permissionModeF
 import { setUpWithin } from '../../lib/setUpWithin.js'
 import { writeGridConfigDir } from '../../lib/gridConfigDir.js'
 import type { GridLaunchAnswer, GridLaunchRequest } from '../../lib/gridLaunchWire.js'
-import { engineHooks } from '../../engines/hooks.js'
+import { engineHookInstallations as engineHooks } from '../../engines/nativeHookSetup.js'
 import { ENUMERATION_ATTEMPTS } from '../../engines/kit/nativeFiles.js'
 import { loadEngine } from '../../engines/inProcess.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { SessionOwner } from '../../lib/sessionSearch/external.js'
 import { createAgentCreator, type CreateAgentDeps } from './create.js'
 import { prepareInstructionWrites } from '../../scm/scmProjects.js'
-import { opencodeMajorVersion } from '../../engines/launchControl.js'
-import { installOpencodePlugin } from '../../engines/nativeHooks.js'
-import { missingHookScript } from '../../engines/kit/notifyHooks.js'
+import { opencodeMajorVersion } from '../../engines/opencode/version.js'
+import { installOpencodePlugin as installNativeOpencodePlugin } from '../../engines/nativeHooks.js'
+import { missingHookScript } from '../../engines/kit/hookScript.js'
 import type { NativeLaunch } from '../../engines/nativeLaunch.js'
 import { projectsRoot } from '../../lib/projectFolder.js'
 import { NativeFiles } from '../../engines/kit/nativeFiles.js'
@@ -57,8 +57,8 @@ vi.mock('../../engines/inProcess.js', async (real) => {
   const actual = await real<typeof import('../../engines/inProcess.js')>()
   return { ...actual, loadEngine: vi.fn(actual.loadEngine) }
 })
-vi.mock('../../engines/kit/notifyHooks.js', async (real) => ({ ...await real<object>(), missingHookScript: vi.fn(() => null) }))
-vi.mock('../../engines/launchControl.js', () => ({ opencodeMajorVersion: vi.fn(async () => 2) }))
+vi.mock('../../engines/kit/hookScript.js', async (real) => ({ ...await real<object>(), missingHookScript: vi.fn(() => null) }))
+vi.mock('../../engines/opencode/version.js', () => ({ opencodeMajorVersion: vi.fn(async () => 2) }))
 vi.mock('../../engines/kit/nativePlugin.js', () => ({
   prepareNativePlugin: vi.fn(() => ({ verify: () => {}, commit: async () => ({ verify: () => {} }) })),
   prepareNativePluginRemoval: vi.fn(() => ({ verify: () => {}, commit: async () => ({ verify: () => {} }) })),
@@ -106,9 +106,9 @@ vi.mock('../../lib/gridLaunchWire.js', async (real) => ({
 const buildGridLaunch = vi.fn(async (request: GridLaunchRequest): Promise<GridLaunchAnswer> => ({
   ok: true, launch: { env: { GRID_KEY: 'k' }, args: ['--grid'], webSearch: 'unsupported' }, override: request.override,
 }))
-vi.mock('../../engines/hooks.js', async (real) => {
-  const actual = await real<typeof import('../../engines/hooks.js')>()
-  return { ...actual, engineHooks: { ...actual.engineHooks, codex: { ...actual.engineHooks.codex, installIn: vi.fn(async () => true) } } }
+vi.mock('../../engines/nativeHookSetup.js', async (real) => {
+  const actual = await real<typeof import('../../engines/nativeHookSetup.js')>()
+  return { ...actual, engineHookInstallations: { ...actual.engineHookInstallations, codex: { ...actual.engineHookInstallations.codex, installIn: vi.fn(async () => true) } } }
 })
 // What the backend new panes are made on can do; every test's backend can give a session its own environment.
 const capabilities = vi.fn(async () => ({ sessionEnv: true }))
@@ -133,8 +133,13 @@ const request = (over: Record<string, unknown> = {}) => ({
 const pending = { agentId: 'a1', sessionId: '', engine: 'claude' } as RegisteredSession
 const owner = { pid: 7, engine: 'claude' } as SessionOwner
 
+// Hook installation consumes the same setup port as the supervised core; the fixture owns its version replies.
+const installOpencodePlugin = (port: number) => installNativeOpencodePlugin(port, undefined, {
+  setup: { opencodeMajor: opencodeMajorVersion, hermesKeepsRecord: async () => null },
+})
+
 function setup(over: Partial<CreateAgentDeps> = {}) {
-  const deps: CreateAgentDeps = {
+  const deps: CreateAgentDeps = { opencodeMajor: opencodeMajorVersion,
     createBackend: { releaseHold: vi.fn(async () => {}), capabilities } as unknown as CreateAgentDeps['createBackend'],
     registry: { setLaunch: vi.fn(() => ({ ...pending, launch: { state: 'ready' } })) } as unknown as CreateAgentDeps['registry'],
     externalResume: vi.fn<CreateAgentDeps['externalResume']>(async () => ({ ok: true, session: pending })),
@@ -406,7 +411,7 @@ describe('creating an agent', () => {
       executable: { command: '/fixture/engine', identity: 'fixture', current: () => true },
       environment: { HOME: root, PATH: '/fixture/bin' },
     })
-    const { inspectNativeLaunch } = await import('../../engines/nativeLaunch.js')
+    const { inspectNativeLaunch } = await import('../../testing/nativeSetupInProcess.js')
     vi.mocked(installedDsh).mockReturnValue(installed() as never)
     const finalHome = join(root, 'harness-codex')
     launchDsh.mockResolvedValueOnce({ ok: true, launch: { env: { CODEX_HOME: finalHome }, args: [] } })
@@ -817,6 +822,12 @@ describe('creating an agent', () => {
       completions[0]!(2); completions[1]!(2)
       expect((await Promise.all([first, second])).map(result => result.ok)).toEqual([true, true])
       expect(createAndRegisterPane).toHaveBeenCalledTimes(2)
+    })
+
+    it('keeps the existing unknown-version launch behavior while setup is unavailable', async () => {
+      const t = setup({ opencodeMajor: async () => null })
+      expect(await t.create(request({ engine: 'opencode', agent: 'reviewer' }))).toMatchObject({ ok: true })
+      expect(namedAgentArgs).toHaveBeenLastCalledWith('opencode', 'reviewer', null)
     })
 
     it('creates OpenCode from eager facts when optional code cannot load', async () => {

@@ -1,9 +1,18 @@
 /** Private reader messages. These names are never added to the public request router. */
 import type { LastTurnText, SessionEvent } from '../../lib/normalize.js'
 import type { HistoryAnswer } from '../facets/transcript.js'
+import { isOtherEngine, OTHER_ENGINES_SERVICE, type OtherEngine } from '../otherEngines.js'
 
 export const READER_SERVICES = { claude: 'engine-claude', codex: 'engine-codex' } as const
 export type ReaderEngine = keyof typeof READER_SERVICES
+export type WorkerEngine = ReaderEngine | OtherEngine
+export const WORKER_SERVICES = [...Object.values(READER_SERVICES), OTHER_ENGINES_SERVICE]
+export function workerEngine(name: string): name is WorkerEngine { return readerEngine(name) || isOtherEngine(name) }
+export function workerService(engine: WorkerEngine): string { return isOtherEngine(engine) ? OTHER_ENGINES_SERVICE : READER_SERVICES[engine] }
+/** The shared worker needs an engine; the established single-engine payload stays unchanged. */
+export function workerPayload(engine: WorkerEngine, payload: Record<string, unknown>): Record<string, unknown> {
+  return isOtherEngine(engine) ? { ...payload, engine } : payload
+}
 export const READER_VERSION = 1
 export const READER_HISTORY = 'engine_history_page'
 export const READER_LAST_TURN = 'engine_last_turn'

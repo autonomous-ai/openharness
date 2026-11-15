@@ -14,5 +14,18 @@
  * v1 fallback; the hook installer waits for a confirmed v1 before writing the incompatible v1 plugin.
  */
 
-export { isOpencodeV2, opencodeMajorVersion, parseOpencodeMajor } from '../launchControl.js'
-export type { OpencodeVersionProbe } from '../launchControl.js'
+import { opencodeBinAsync } from '../../lib/engineBin.js'
+import { OPENCODE_VERSION } from './contract.js'
+import { majorVersion, nativeVersionProbe, parseMajor, type VersionProbe } from '../kit/nativeVersion.js'
+export { isOpencodeV2 } from './contract.js'
+
+export type OpencodeVersionProbe = VersionProbe
+const versionMemo = new Map<string, number | null>()
+export const parseOpencodeMajor = (output: string): number | null => parseMajor(OPENCODE_VERSION, output)
+export async function opencodeMajorVersion(probe?: VersionProbe, memo = versionMemo): Promise<number | null> {
+  if (!probe) {
+    const binary = await opencodeBinAsync()
+    probe = nativeVersionProbe(OPENCODE_VERSION, () => binary)
+  }
+  return majorVersion(OPENCODE_VERSION, probe, memo)
+}

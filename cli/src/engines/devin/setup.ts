@@ -1,4 +1,5 @@
 import { env as hookEnvironment } from '../../config/env.js'
+
 /** Native facts needed by session control without optional interpretation. */
 
 /** The vendor reads Claude's nested hook schema. Merge only Harness's blocks into its general config. */

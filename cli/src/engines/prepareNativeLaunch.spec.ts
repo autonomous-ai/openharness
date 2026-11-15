@@ -10,6 +10,15 @@ import type { NativeLaunch, NativeLaunchResult } from './nativeLaunch.js'
 const absent: NativeLaunchResult = { ok: false, error: 'NATIVE_LAUNCH_HELD', unavailable: 'native', detail: 'Not installed',
   install: { command: 'fixture-installer', source: 'fixture', executable: { names: ['fixture'] } }, environment: { HOME: '/fixture/home', PATH: '/fixture/bin' } }
 const ready: NativeLaunchResult = { ok: true, launch: { current: () => true } as NativeLaunch }
+
+it('starts a terminal without waiting for unavailable optional engine setup', async () => {
+  const downloading = vi.fn(async () => { throw Error('setup unavailable') })
+  const status = vi.fn(async () => ({ complete: false as const, detail: 'setup unavailable' }))
+  const prepare = createNativeLaunchPreparer({ installations: { ensure: vi.fn(), status }, inspect: async () => ready, downloading })
+  expect(await prepare('terminal', {}, { id: 'terminal', current: () => true })).toBe(ready)
+  expect(downloading).not.toHaveBeenCalled()
+  expect(status).not.toHaveBeenCalled()
+})
 /** No Desktop download running. */
 const none = async () => false
 it('installs under the saved request and requires a fresh post-install snapshot', async () => {

@@ -40,9 +40,9 @@ const recipe = vi.hoisted(() => ({ value: undefined as unknown }))
 vi.mock('../../lib/engineInstall.js', () => ({ engineInstallRecipe: () => recipe.value, engineInstallPaths: () => [] }))
 vi.mock('../../lib/engineLaunch.js', () => ({ engineShellArgv: () => [], interactiveEngineShell: () => null }))
 vi.mock('../../lib/nodeRuntime.js', () => ({ managedNodePath: () => 'C:\\harness\\node.exe' }))
-vi.mock('./nativeVersion.js', () => ({
-  nativeVersionProbe: (_rule: unknown, binary: () => string) => ({ command: binary }),
-  executableSnapshot: (probe: { command(): string }) => ({ command: probe.command() }),
+vi.mock('./nativeExecutable.js', () => ({
+  executableIdentity: (command: string) => command,
+  retainedExecutable: (command: string, identity: string) => ({ command, identity, current: () => true }),
 }))
 
 const platform = Object.getOwnPropertyDescriptor(process, 'platform')!

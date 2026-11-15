@@ -98,22 +98,25 @@ it('fences queued retries and late login-shell callbacks when the owning daemon 
   expect(vi.getTimerCount()).toBe(0)
 })
 
-it('keeps an asynchronous install pending, lets a sibling complete, and acknowledges only success', async () => {
+it('bounds asynchronous installation, advances after failure, and retries only after backoff', async () => {
   let reject!: (error: Error) => void
   const install = vi.fn<HomeAdoptionDeps['install']>()
     .mockImplementationOnce(() => new Promise<void>((_, fail) => { reject = fail }))
     .mockResolvedValue(undefined)
   const c = setup({ confirm: vi.fn(() => ({ claude: '/slow', codex: '/ready' })), install })
   c.submit({}); c.retry()
-  expect(install).toHaveBeenCalledTimes(2)
+  expect(install).toHaveBeenCalledTimes(1)
   expect(c.deps.held).toHaveBeenLastCalledWith('Waiting for hook installation in an adopted home.')
   await vi.advanceTimersByTimeAsync(0)
   c.retry()
-  expect(install).toHaveBeenCalledTimes(2)
+  expect(install).toHaveBeenCalledTimes(1)
   reject(new Error('disk unavailable'))
   await vi.advanceTimersByTimeAsync(0)
   expect(c.deps.held).toHaveBeenLastCalledWith('disk unavailable')
-  await vi.advanceTimersByTimeAsync(1_000)
+  expect(install.mock.calls).toEqual([['claude', '/slow'], ['codex', '/ready']])
+  await vi.advanceTimersByTimeAsync(999)
+  expect(install).toHaveBeenCalledTimes(2)
+  await vi.advanceTimersByTimeAsync(1)
   expect(install.mock.calls).toEqual([['claude', '/slow'], ['codex', '/ready'], ['claude', '/slow']])
   expect(c.deps.held).toHaveBeenLastCalledWith(null)
   expect(vi.getTimerCount()).toBe(0)
@@ -131,5 +134,18 @@ it.each([true, false])('revokes an in-flight home installation and ignores its l
   await vi.advanceTimersByTimeAsync(10_000)
   expect(c.current()).toBe(false)
   expect(c.deps.held).toHaveBeenCalledTimes(reports)
+  expect(vi.getTimerCount()).toBe(0)
+})
+
+
+it('starts no queued adopted home after shutdown during a held installation', async () => {
+  let finish!: () => void
+  const install = vi.fn(() => new Promise<void>(resolve => { finish = resolve }))
+  const c = setup({ read: () => ({ claude: ['/first', '/second'], codex: ['/third'] }), install })
+  c.retry()
+  expect(install.mock.calls).toEqual([['claude', '/first']])
+  c.close(); finish()
+  await vi.advanceTimersByTimeAsync(10_000)
+  expect(install.mock.calls).toEqual([['claude', '/first']])
   expect(vi.getTimerCount()).toBe(0)
 })

@@ -36,7 +36,7 @@ it('preserves native arguments, first messages and healthy installer effects', a
   const { buildEngineCommandArgv, buildEngineLaunchArgv } = await import('../lib/engineLaunch.js')
   const { engineBin } = await import('../lib/engineBin.js')
   const { env } = await import('../config/env.js')
-  const { inspectNativeLaunch } = await import('./nativeLaunch.js')
+  const { inspectNativeLaunch } = await import('../testing/nativeSetupInProcess.js')
   const { createNativeInstallations, NATIVE_INSTALL_WORKER } = await import('./kit/nativeInstall.js')
   const { launchScriptOf } = await import('../testing/launchScript.js')
   const actual: Record<string, unknown> = {}

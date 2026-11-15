@@ -36,10 +36,10 @@ export const PROBE_HANDOVER = 'takes a handover'
 export const PROBE_TIMEOUT_MS = 15_000
 
 /**
- * Handed by a master to a core it starts from the lean bundle (./leanBundle.ts): the cli.js that bundle
- * was read from. The core's own file is then the lean bundle's, which runs no command but the daemon's,
- * and everything the core hands on (the hooks it installs, the CLI it writes into agents' panes, a
- * successor it starts on an update) must name the CLI (leanCoreEntry.ts).
+ * Handed by a master to the core and services it starts from the lean bundle (./leanBundle.ts): the
+ * cli.js that bundle was read from. The entries consume it before importing their role's modules:
+ * helper assets and commands handed on must name the original CLI, not an extracted lean entry.
+ * The existing wire name stays compatible with older masters and cores.
  */
 export const LEAN_CORE_SCRIPT_ENV = 'HARNESSD_CORE_SCRIPT'
 

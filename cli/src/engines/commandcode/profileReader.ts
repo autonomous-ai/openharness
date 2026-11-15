@@ -109,8 +109,8 @@ class ProfileReader {
         env: process.env, timeout: 15_000, maxBuffer: 1024 * 1024,
       })
       entries = commandcode.parseCommandcodeModelsOutput(result.stdout)
-    } catch (err) {
-      console.warn('[runtime-profile] Command Code model catalog failed:', err instanceof Error ? err.message : err)
+    } catch {
+      console.warn('[runtime-profile] COMMANDCODE_CATALOG_UNAVAILABLE')
     }
     this.commandcodeCatalogCache = { key, entries, expiresAt: Date.now() + CATALOG_TTL_MS }
     return entries

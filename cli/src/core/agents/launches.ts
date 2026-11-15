@@ -18,7 +18,6 @@ import { DSH_ID_RE, dshSupportedEngines } from '../../dsh/manifest.js'
 import { homeIsAbsolute } from '../../engines/kit/homeAdoption.js'
 import { folderTrust } from '../../engines/launchPrep.js'
 import type { NativeLaunchResult, NativeLaunchSource } from '../../engines/nativeLaunch.js'
-import * as opencodeLaunch from '../../engines/launchControl.js'
 import { OPENCLAW_KEY, OPENCLAW_LOCAL } from '../../engines/openclaw/contract.js'
 import { ENGINES, isTerminalEngine, type AgentEngine } from '../../engines/types.js'
 import { parseLaunchArgs } from '../../lib/launchArgs.js'
@@ -66,6 +65,7 @@ export interface LaunchRequestDeps {
   prepareCreate?: (input: Parameters<CreateAgent>[0], authority: LaunchAuthority, context?: { local: boolean }) => Promise<LaunchPreparation<Awaited<ReturnType<CreateAgent>>>>
   /** The engine itself made ready, installed first when it is missing (engines/prepareNativeLaunch.ts): what a new
    *  project waits for before its folder is made. */
+  opencodeMajor?: () => Promise<number | null>
   prepareEngine?: (engine: CreateInput['engine'], source: NativeLaunchSource, authority: Pick<CreationAuthority, 'id' | 'current'>) => Promise<NativeLaunchResult>
   forkAgent: () => ForkAgent | null
   resumeAgent: () => ResumeAgent | null
@@ -100,7 +100,7 @@ export const WORKSPACES_WAIT_MS = 10 * 60_000
 const WORKSPACES_GONE = { state: 'failed' as const, error: 'SERVICE_UNAVAILABLE',
   detail: 'Could not make the project folder: Harness\'s workspaces service was not available for 10 minutes. Try again, or restart Harness.' }
 
-export function createLaunchRequests({ receipts, createAgent, prepareCreate, prepareEngine, forkAgent, resumeAgent, restartAgent, byAgent, stoppedAgent, toProject, modelTarget, guestCreate, claudeHomeListed, workspaces }: LaunchRequestDeps) {
+export function createLaunchRequests({ receipts, createAgent, prepareCreate, prepareEngine, opencodeMajor, forkAgent, resumeAgent, restartAgent, byAgent, stoppedAgent, toProject, modelTarget, guestCreate, claudeHomeListed, workspaces }: LaunchRequestDeps) {
   /** Since when each create has waited for workspaces, by its creation id: in memory, as its hold is retried in this
    *  core. An entry lasts only while its create waits: it goes when the create goes on, gives up or is cancelled. */
   const waitingSince = new Map<string, number>()
@@ -123,7 +123,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       if (!dshSupportedEngines(installed.manifest).includes(input.engine)) return { error: 'INVALID_DSH',
         detail: `${input.dsh} supports ${dshSupportedEngines(installed.manifest).join(', ')}; ${input.engine} is not compatible` }
     }
-    if (input.agent && !supportsNamedAgent(input.engine, input.engine === 'opencode' ? await opencodeLaunch.opencodeMajorVersion() : null)) {
+    if (input.agent && !supportsNamedAgent(input.engine, input.engine === 'opencode' ? (await opencodeMajor?.() ?? null) : null)) {
       return { error: 'AGENT_UNSUPPORTED', detail: new NamedAgentUnsupportedError(input.engine).message }
     }
     return null

@@ -11,8 +11,7 @@ export interface ScreenDeps {
   handles(engine: AgentEngine): boolean
   transport: Pick<ScreenTransport, 'read'>
   resolve(id: string): RegisteredSession | undefined
-  /** A screen no worker reads: Claude Code's and Codex's in an inline host, now; the other engines' once their
-   *  readers are loaded (engines/inProcess.ts `inProcessScreen`). `undefined` reads as unreadable. */
+  /** Terminal screens and explicit inline/older-master compatibility only. `undefined` reads as unreadable. */
   inline(engine: AgentEngine, capture: string | null): ScreenReading | undefined | Promise<ScreenReading | undefined>
 }
 

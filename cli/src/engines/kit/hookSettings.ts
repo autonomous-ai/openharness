@@ -1,3 +1,4 @@
+import { hookPreparationFiles } from './hookPreparationFiles.js'
 /**
  * The one installer of the engines' declared hook settings (facets/hooks.ts `HookSettings`): Harness's block
  * merged into the settings file an engine reads its hooks from, every other block left as it was.
@@ -5,16 +6,15 @@
  * It runs eagerly before launch. Unknown files are held, foreign commands are
  * preserved, and hook and approval destinations are inspected before publication.
  */
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { join } from 'node:path'
 import { env } from '../../config/env.js'
 import { HARNESS_AGENT_TOOLS, HARNESS_AGENT_VERBS, type HarnessAgentVerb, type HookSettings } from '../facets/hooks.js'
 import { prepareReviewed } from './hookReview.js'
 import { managedNodePath } from '../../lib/nodeRuntime.js'
-import { isMessagesBlock, messagesCommand, writeMessagesHook } from './messagesHook.js'
+import { isMessagesBlock, messagesCommand, MESSAGES_HOOK_SOURCE } from './messagesHook.js'
 import { HOOK_SCRIPT, hookArgv, hooksNotInstalled, hooksNotOnWindows, identitySettings, isManagedHook, requireHookScript, foreignHookBlocks, quoteHookCommand, type CommandHook, type HookBlock, type Settings } from './notifyHooks.js'
-import { HookPreparationHeld, inspectHookFile, runHookPreparation, type HookPreparationAttempt } from './nativeHookFiles.js'
+import { HookPreparationHeld, type HookPreparationFiles, type HookPreparationAttempt } from './nativeHookFiles.js'
 import type { NativeHookOptions } from './nativeLocations.js'
 import { hostPlatform } from './windowsFiles.js'
 
@@ -47,26 +47,27 @@ export async function installHookSettings(engine: HookEngine, settings: HookSett
   // Before the notify.mjs check, as in nativeHookSettings.ts: an engine with no Windows runner skips its hooks there whether
   // or not the file is (#3954 review).
   if (platform === 'win32' && !settings.win32Runner) return hooksNotOnWindows(engine)
+  const access = hookPreparationFiles(options)
   try {
     // Inside the try: a path the engine's Windows runner would misread is refused here (quoteHookCommand), and that
     // is a failed install with its reason, not a rejection (B4.1 review). So is a notify.mjs that is not there.
     requireHookScript(engine)
     const entry = notifyHookEntry(settings, hookArgv(port, engine, settings.commandNamesHome ? home : undefined, undefined, options.environment), platform)!
-    return await runHookPreparation(files, async attempt => {
-      await installNotifyHooks(settings, port, home, entry, attempt, platform)
+    return await access.run(files, async attempt => {
+      await installNotifyHooks(settings, port, home, entry, attempt, platform, access)
       // Windows: Agent Messages' block is a POSIX shell line, and the allowance names the POSIX launcher. Neither is
       // installed there yet (Phase B4 notes), so neither is the confirmation of the required files that stage uses.
       if (platform !== 'win32') {
-        const required = files.map(file => inspectHookFile(file))
+        const required = files.map(file => access.inspect(file))
         const verifyRequired = () => { attempt.verify(); for (const file of required) file.verify() }
-        if (settings.inbox || settings.allow) await installMessagesBlock(settings, home, attempt, verifyRequired)
+        if (settings.inbox || settings.allow) await installMessagesBlock(settings, home, attempt, verifyRequired, access)
       }
       return true
     }, { ...options, identity: JSON.stringify([engine, identitySettings(settings, platform), port, home, entry.args ? [entry.command, entry.args] : entry.command, env.HARNESS_AGENT_MESSAGES_DIR]) })
   } catch (err) {
     const line = hooksNotInstalled(engine, err, platform)
-    if (line) { console.error(line); return false }
-    console.error(settings.messages.failed.replace(/\{(file|script|port)\}/g, (_, name: string) =>
+    if (line) { access.report('error', line); return false }
+    access.report('error', settings.messages.failed.replace(/\{(file|script|port)\}/g, (_, name: string) =>
       name === 'file' ? files[0] : name === 'script' ? HOOK_SCRIPT : String(port)), err)
     return false
   }
@@ -80,7 +81,7 @@ export async function installHookSettings(engine: HookEngine, settings: HookSett
  * harmless only while the required hooks remain exactly as confirmed; an uncertain partial write holds launch.
  * A message can still reach an idle agent, typed, and a command not allowed asks, as before.
  */
-async function installMessagesBlock(settings: HookSettings, home: string, attempt: HookPreparationAttempt, verifyRequired: () => void): Promise<void> {
+async function installMessagesBlock(settings: HookSettings, home: string, attempt: HookPreparationAttempt, verifyRequired: () => void, access: HookPreparationFiles): Promise<void> {
   const file = join(home, settings.file)
   const root = env.HARNESS_AGENT_MESSAGES_DIR
   const inboxCommand = messagesCommand(root)
@@ -88,7 +89,7 @@ async function installMessagesBlock(settings: HookSettings, home: string, attemp
   let blockChanged = inbox !== undefined
   try {
     verifyRequired()
-    const observed = inspectHookFile(file)
+    const observed = access.inspect(file)
     const current = (observed.content === null ? {} : JSON.parse(observed.content)) as Settings
     if (!current || typeof current !== 'object' || Array.isArray(current) || !current.hooks || typeof current.hooks !== 'object'
       || Array.isArray(current.hooks) || (inbox && current.hooks[inbox.event] !== undefined && !Array.isArray(current.hooks[inbox.event]))) {
@@ -105,27 +106,27 @@ async function installMessagesBlock(settings: HookSettings, home: string, attemp
     }
     const changed = allowed || blockChanged
     const next = changed ? JSON.stringify(current, null, 2) + '\n' : observed.content!
-    const reviewed = settings.reviewed ? prepareReviewed(settings.reviewed, home, file, JSON.parse(next) as Settings) : null
+    const reviewed = settings.reviewed ? prepareReviewed(settings.reviewed, home, file, JSON.parse(next) as Settings, process.platform, access) : null
     reviewed?.verify()
     const published = await observed.replace(next, attempt)
     const approval = await reviewed?.commit(attempt)
     published.verify(); approval?.verify()
-    if (inbox) writeMessagesHook(root)
+    if (inbox) await access.write(join(root, 'hook.mjs'), MESSAGES_HOOK_SOURCE, 0o700, attempt)
   } catch (err) {
     const reason = err instanceof Error ? err.message : err
-    if (blockChanged) console.warn(`[hooks] Agent Messages' hook not installed in ${file} (messages reach its agents once they are idle):`, reason)
+    if (blockChanged) access.report('warn', `[hooks] Agent Messages' hook not installed in ${file} (messages reach its agents once they are idle):`, reason)
     else {
       // The hook was already in place and only the allowance was refused (a read-only file): its script is
       // still kept current, and the log names what failed rather than calling the hook missing.
-      console.warn(`[hooks] could not allow Harness's agent commands in ${file} (the engine asks before each one):`, reason)
-      if (inbox) try { writeMessagesHook(root) } catch { /* the hook runs nothing it cannot find; messages wait for idle */ }
+      access.report('warn', `[hooks] could not allow Harness's agent commands in ${file} (the engine asks before each one):`, reason)
+      if (inbox) try { await access.write(join(root, 'hook.mjs'), MESSAGES_HOOK_SOURCE, 0o700, attempt) } catch { /* the hook runs nothing it cannot find; messages wait for idle */ }
     }
     verifyRequired()
   }
   if (allow && 'file' in allow) {
     // Each path written as a Starlark string's contents: the file's rules are `prefix_rule(pattern=["…"])`.
-    try { writeRulesFile(join(home, allow.file), harnessRules(allow.rules, (path) => JSON.stringify(path).slice(1, -1)).flat().join('\n')) } catch (err) {
-      console.warn(`[hooks] could not allow Harness's agent commands in ${join(home, allow.file)} (the engine asks before each one):`, err instanceof Error ? err.message : err)
+    try { await access.write(join(home, allow.file), `${RULES_HEADER}${harnessRules(allow.rules, (path) => JSON.stringify(path).slice(1, -1)).flat().join('\n')}\n`, 0o600, attempt) } catch (err) {
+      access.report('warn', `[hooks] could not allow Harness's agent commands in ${join(home, allow.file)} (the engine asks before each one):`, err instanceof Error ? err.message : err)
     }
   }
 }
@@ -191,18 +192,8 @@ export const RULES_HEADER = `# Written by Harness, which rewrites it: do not edi
   + "# need Harness's daemon, which Codex's sandbox cannot reach, so they run outside it without asking. What each\n"
   + '# may do is for Harness to decide: Settings > Experimental, and an agent gives work to and closes only what it started.\n'
 
-/** A rules file Harness owns whole: written atomically, and only when it does not already say exactly this. */
-function writeRulesFile(file: string, rules: string): void {
-  const text = `${RULES_HEADER}${rules}\n`
-  try { if (readFileSync(file, 'utf8') === text) return } catch { /* not written yet */ }
-  mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
-  const temporary = `${file}.${process.pid}.tmp`
-  writeFileSync(temporary, text, { mode: 0o600 })
-  renameSync(temporary, file)
-}
-
 async function installNotifyHooks(settings: HookSettings, port: number, home: string, entry: { command: string; args?: string[] }, attempt: HookPreparationAttempt,
-  platform: NodeJS.Platform): Promise<boolean> {
+  platform: NodeJS.Platform, access: HookPreparationFiles): Promise<boolean> {
   const file = join(home, settings.file)
   const say = (line: string): string => line.replace(/\{(file|script|port)\}/g, (_, name: string) =>
     name === 'file' ? file : name === 'script' ? HOOK_SCRIPT : String(port))
@@ -214,7 +205,7 @@ async function installNotifyHooks(settings: HookSettings, port: number, home: st
   const sameHook = (hook: CommandHook | undefined): boolean => hook?.command === entry.command
     && ((platform !== 'win32' && entry.args === undefined) || JSON.stringify(hook.args) === JSON.stringify(entry.args))
   const { messages } = settings
-  const observed = inspectHookFile(file)
+  const observed = access.inspect(file)
   const current = (observed.content === null ? {} : JSON.parse(observed.content)) as Settings
   if (!current || typeof current !== 'object' || Array.isArray(current)
     || (current.hooks !== undefined && (!current.hooks || typeof current.hooks !== 'object' || Array.isArray(current.hooks)))) {
@@ -246,11 +237,11 @@ async function installNotifyHooks(settings: HookSettings, port: number, home: st
   }
 
   const next = changed ? JSON.stringify(current, null, 2) + '\n' : observed.content!
-  const reviewed = settings.reviewed ? prepareReviewed(settings.reviewed, home, file, JSON.parse(next) as Settings, platform) : null
+  const reviewed = settings.reviewed ? prepareReviewed(settings.reviewed, home, file, JSON.parse(next) as Settings, platform, access) : null
   reviewed?.verify()
   if (!changed) {
     const published = await observed.replace(next, attempt)
-    console.log(say(messages.current))
+    access.report('log', say(messages.current))
     // Installed by an earlier start, or by a release before the engine asked: recorded now, as the file has it.
     const approval = await reviewed?.commit(attempt)
     published.verify(); approval?.verify()
@@ -258,8 +249,8 @@ async function installNotifyHooks(settings: HookSettings, port: number, home: st
   }
 
   const published = await observed.replace(next, attempt)
-  console.log(say(updated && messages.updated ? messages.updated : messages.installed))
-  console.log(say(messages.after))
+  access.report('log', say(updated && messages.updated ? messages.updated : messages.installed))
+  access.report('log', say(messages.after))
   const approval = await reviewed?.commit(attempt)
   published.verify(); approval?.verify()
   return true

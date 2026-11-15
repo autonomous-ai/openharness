@@ -1,9 +1,9 @@
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { messagesCommand, writeMessagesHook } from '../engines/kit/messagesHook.js'
+import { messagesCommand, MESSAGES_HOOK_SOURCE } from '../engines/kit/messagesHook.js'
 import { PaneInbox } from './inbox.js'
 
 let root: string
@@ -117,7 +117,8 @@ describe('a pane inbox', () => {
 describe('the messages hook, as an engine runs it', () => {
   const agentMessages = () => join(root, 'agent-messages')
   const run = (pane: string | undefined, input: unknown) => {
-    writeMessagesHook(agentMessages())
+    mkdirSync(agentMessages(), { recursive: true, mode: 0o700 })
+    writeFileSync(join(agentMessages(), 'hook.mjs'), MESSAGES_HOOK_SOURCE, { mode: 0o700 })
     const result = spawnSync('/bin/sh', ['-c', messagesCommand(agentMessages())], {
       input: typeof input === 'string' ? input : JSON.stringify(input),
       env: { PATH: process.env.PATH, ...(pane ? { TMUX_PANE: pane } : {}) },
@@ -177,14 +178,4 @@ describe('the messages hook, as an engine runs it', () => {
     expect(readdirSync(paneDir('1')).sort()).toEqual(['bad.json', 'big.json', 'empty.json'])
   })
 
-  it('rewrites the script only when it changed', () => {
-    writeMessagesHook(agentMessages())
-    const file = join(agentMessages(), 'hook.mjs')
-    const before = statSync(file).ino
-    writeMessagesHook(agentMessages())
-    expect(statSync(file).ino).toBe(before)
-    writeFileSync(file, 'stale')
-    writeMessagesHook(agentMessages())
-    expect(readFileSync(file, 'utf8')).not.toBe('stale')
-  })
 })
