@@ -88,6 +88,17 @@ handler writes lines, and the stream ends when either side closes or the listene
 2-second deadline other connections have. It still counts as one of the 16. Its limits (checked by the PM):
 - **One watch at a time.** At most one stream is open across every connection. A newer `tabs` request ends the older
   stream, so the last watch Harness Device started owns it.
+- **A replaced watch stands by** (PM, 2026-11-15). A second Harness Device, such as a release and a debug build at
+  once, would otherwise take the stream back and forth about once a second.
+  - Before ending the older stream, the listener writes it one last line, `{"replaced":true}`.
+  - A watch that reads it logs one line (`tabs stream replaced`), once until its stream opens again. It does not open
+    a normal stream again.
+  - Instead it asks with `{"type":"tabs","standby":true}`. The listener takes a standby request only while no stream
+    is open; otherwise it answers `409` and leaves the open stream alone.
+  - The replaced watch keeps asking on its usual backoff (1 s, doubling to 30 s). So it gets the stream back only
+    once the newer watch's stream has ended for good, and never takes it from a watch that is alive.
+  - A watch that has not been replaced (a fresh start, or a stream that ended any other way) opens a normal stream, as
+    before.
 - **A dead connection is closed.** A stream whose socket closes, errors or stops draining is ended and forgotten at
   once. A write that the socket does not take within 2 s (backpressure) ends it.
 - **Bounded per connection.** One stream per connection. A connection that holds a stream sends no other message on
