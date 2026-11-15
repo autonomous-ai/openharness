@@ -189,11 +189,14 @@ of the app in front, is not seen, and the settle turns the dial back. Two cases:
   dial rests and Orca switches. The settle then follows the Terminal tab and pulls the dial back.
 - The same happens with the Claude app's settle and a tab select or an Orca switch.
 
-The fix is one record in the devices process: "the dial just showed an agent". It is noted at the single place every
-dial move now passes through: the observed source's `showPane` and `focus`, for every adapter (Orca switch, Claude
-link, tab select, a tap's raise).
+The fix is one record in the devices process: "the dial just moved". It is noted as each move of the dial starts:
+- a hand's turn to any agent (the cable session's dial `focus`, never a follow's echo);
+- a tap, before `open -b`;
+- every adapter's `show` and `focus` (Orca switch, Claude link, tab select, a tap's raise), which a rest runs 400 ms after
+  its turn and a tab's raise runs after `open -b`.
+
 - A settle is set aside after a dial move of any kind of pane:
-  - a tab app's settle, when the dial showed anything since the tab report it waits on came;
+  - a tab app's settle, when the dial moved since the tab report it waits on came;
   - the Claude app's settle, while the dial's latest move is younger than `ATTACH_ECHO_MS`. Its report is the app's
     last attach, which can be minutes old after a Cmd-Tab away and back; this is today's rule for a link, widened to
     every kind of pane.
