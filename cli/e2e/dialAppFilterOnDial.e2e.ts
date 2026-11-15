@@ -90,6 +90,18 @@ describe('the on-dial rig\'s scripts', () => {
       expectNamedOnly(script)
     }
   })
+
+  it('the rig\'s log check takes the view\'s lines and refuses one that names an app', () => {
+    expectFilterLines('[device] app filter: view apps · front\n[device] app filter: view tabs · pick\n' +
+      '[device] app filter: view tabs · empty\n[device] app filter: switched · front')
+    expect(() => expectFilterLines('[device] app filter: view apps · front ghostty')).toThrow()
+  })
+
+  it('the rig knows a greeting that says appFilter', () => {
+    expect(saysAppFilter('cable: dial aa:bb on fw 0.0.95 proto 2 caps swarms,recap,appFilter')).toBe(true)
+    expect(saysAppFilter('cable: dial aa:bb on fw 0.0.90 proto 2 caps swarms,recap')).toBe(false)
+    expect(saysAppFilter('cable: dial aa:bb on fw 0.0.90 proto 2')).toBe(false)
+  })
 })
 
 describe.skipIf(!PORT)('the dial\'s app filter on a real dial', () => {
