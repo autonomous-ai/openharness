@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { captureResumeIdentity } from './captureResumeIdentity.js'
 import { createStopAgentService, type StopAgentServiceDeps } from './stopAgentService.js'
+import { CloseAgentService } from './closeAgentService.js'
+import { createOtherStreams } from '../core/engines/otherStreams.js'
+import { OTHER_ENGINE_STATES } from '../engines/otherEngines.js'
+import { STREAM_OPEN, STREAM_OP, STREAMS_WAIT, STREAM_VERSION } from '../engines/worker/otherStreamProtocol.js'
 import { registry, type RegisteredSession } from './registry.js'
 import { setAgentSignaller } from './processSignals.js'
 import { stoppedAgents } from './stoppedAgents.js'
@@ -318,17 +322,89 @@ it('holds a conversation whose evidence fails at the pane close, as at every ear
   expect(registry.byAgent(row.agentId)).toBe(row)
   expect(deps.forgetSession).not.toHaveBeenCalled()
 })
-it.each(['removed', 'replaced', 'conversation', 'route'] as const)('does not remove a target %s during termination', async mode => {
+it.each(['removed', 'replaced', 'conversation', 'route', 'native hold'] as const)('does not remove a target %s during termination', async mode => {
   vi.mocked(terminateDeletedAgent).mockImplementation(async () => {
     if (mode === 'removed') registry.removeAgent(row.agentId)
     else if (mode === 'conversation') row.sessionId = 'different-conversation'
     else if (mode === 'route') row.runtimes = [{ backend: 'tmux', paneId: '%88' }]
+    else if (mode === 'native hold') registry.setIdentityHold(row.agentId, 'The native process evidence changed.')
     else row.processIdentity = { ...row.processIdentity!, pid: 88 }
     return 'terminated'
   })
   await expect(createStopAgentService(deps)(row.agentId)).rejects.toThrow('changed while pausing')
   expect(tmuxKill).not.toHaveBeenCalled()
   expect(deps.forgetSession).not.toHaveBeenCalled()
+})
+it('completes Close when the lost live reader recovers while the original process exits', async () => {
+  vi.useFakeTimers()
+  Object.assign(row, { engine: 'hermes', processIdentity: { pid: 77, executable: 'hermes', startMarker: 'fixture' } })
+  const target = () => JSON.stringify([row.agentId, row.sessionId, row.engine, row.registeredAt, row.boundAt,
+    row.transcriptPath, row.cwd, row.hermesHome, row.processIdentity, row.runtimes])
+  const original = target()
+  let token = '', answerWait: ((answer: Record<string, unknown>) => void) | undefined
+  const readerDeps = {
+    call: async (type: string, payload: Record<string, unknown>): Promise<Record<string, unknown>> => {
+      if (type === STREAM_OPEN) {
+        token = payload.token as string
+        return { version: STREAM_VERSION, answer: { turn: { identity: 'turn', turnOpen: false },
+          historyTurnOpen: false, lastStarted: null, lastEnded: null, initial: [], lines: 0,
+          evidence: [], abandoned: false, frames: [] } }
+      }
+      if (type === STREAM_OP) return { version: STREAM_VERSION, answer: {} }
+      expect(type).toBe(STREAMS_WAIT)
+      return new Promise(resolve => { answerWait = resolve })
+    },
+    bySession: (id: string) => {
+      const current = registry.byAgent(row.agentId)
+      return current?.sessionId === id ? current : undefined
+    },
+    frame: vi.fn(), reattach: vi.fn(), log: vi.fn(), retryMs: 10,
+    // The lifecycle already owns this promise; discovery observes the same reservation in main.ts.
+    stopping: (session: RegisteredSession) => deps.stopJobs.get(session.agentId),
+    held: (session: RegisteredSession, held: boolean, rewritten?: boolean | 'lost') => {
+      const latest = registry.byAgent(session.agentId)
+      const reasons: readonly string[] = Object.values(OTHER_ENGINE_STATES)
+      if (!latest || latest.sessionId !== session.sessionId || (latest.identityHold && !reasons.includes(latest.identityHold))) return
+      registry.setIdentityHold(session.agentId, held
+        ? rewritten === 'lost' ? OTHER_ENGINE_STATES.lost : rewritten ? OTHER_ENGINE_STATES.rewritten : OTHER_ENGINE_STATES.unavailable
+        : undefined)
+    },
+  }
+  const streams = createOtherStreams(readerDeps)
+  const checkpoint = vi.fn(async () => {})
+  const close = new CloseAgentService({ registry, activity: async () => 'idle', checkpoint,
+    changed: vi.fn(), stop: createStopAgentService(deps) })
+  const signal = vi.fn()
+  setAgentSignaller(signal)
+  try {
+    await streams.open(row, { live: false, abandon: false, held: false, store: '/fixture/history.db' })
+    expect(answerWait).toBeDefined()
+    answerWait!({ version: STREAM_VERSION, answer: { pages: [], lost: [token] } })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(row.identityHold).toBe(OTHER_ENGINE_STATES.lost)
+    const beforeRevision = row.evidenceRevision
+    let duringRecovery: { revision?: number; held: boolean } | undefined
+    vi.mocked(terminateDeletedAgent).mockImplementation(async (session, actions) => {
+      actions.kill(session.processIdentity!.pid, 'SIGTERM')
+      await vi.advanceTimersByTimeAsync(10)
+      duringRecovery = { revision: row.evidenceRevision, held: !!row.identityHold }
+      expect(target()).toBe(original)
+      return 'terminated'
+    })
+    vi.mocked(deps.forgetSession).mockImplementation(id => {
+      streams.forget(row.sessionId)
+      registry.removeAgent(id)
+    })
+    const result = await close.request({ agentId: row.agentId, sessionId: row.sessionId,
+      createdAt: new Date(row.registeredAt).toISOString(), mode: 'now' })
+    expect(signal).toHaveBeenCalledExactlyOnceWith(77, 'SIGTERM')
+    expect(result, JSON.stringify({ beforeRevision, duringRecovery, targetUnchanged: target() === original })).toEqual({ closed: true })
+    expect(checkpoint.mock.calls.map((call: unknown[]) => call[1])).toEqual(['before', 'after'])
+    expect(tmuxKill).toHaveBeenCalledOnce()
+    expect(registry.byAgent(row.agentId)).toBeUndefined()
+  } finally {
+    close.dispose(); streams.stop(); setAgentSignaller(null); vi.useRealTimers()
+  }
 })
 it.each(['capture', 'termination'] as const)('stops an agent still starting when its engine is identified during %s', async stage => {
   // Created, not yet bound to a process: the stop's snapshot has none.
