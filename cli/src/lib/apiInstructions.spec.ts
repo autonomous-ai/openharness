@@ -4,8 +4,8 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { prepareApiInstructions } from './apiInstructions.js'
 
-// A saved API as the metadata store lists it: the note needs only that one exists, never a key.
-const saved = () => ({ list: vi.fn(() => [{ id: 'fixture' }]) as never })
+// An API saved, as the list a launch reads says it: the note needs only that one is, never a key.
+const saved = () => ({ saved: vi.fn(() => true) })
 const MARKER = '<!-- harness:apis -->'
 
 // A start wrote the note into the instruction file of whatever folder it launched in, the person's own repository
@@ -35,7 +35,7 @@ describe('the saved APIs\' note goes only into a project folder Harness made', (
   it('reads no saved API for a folder the person chose', () => {
     const store = saved()
     prepareApiInstructions(store, mine, 'codex', root)
-    expect(store.list).not.toHaveBeenCalled()
+    expect(store.saved).not.toHaveBeenCalled()
   })
 
   it('takes a link in the projects root to a folder of the person\'s for that folder', () => {

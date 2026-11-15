@@ -17,6 +17,7 @@ import { storeLaunchPort } from '../services/storeLaunch.js'
 import { dshLaunchRequestIn, dshMaterializeRequestIn } from '../services/storeProcess.js'
 import { gridLaunchAnswerIn } from '../core/modelsLink.js'
 import { ApiConnections } from '../lib/apiConnections.js'
+import { ApiConnectionMetadata } from '../lib/apiConnectionMetadata.js'
 import { prepareApiInstructions } from '../lib/apiInstructions.js'
 import { apiTargetAnswer } from '../lib/apiModels.js'
 import { writeGridConfigDir } from '../lib/gridConfigDir.js'
@@ -52,10 +53,12 @@ export type ForkRest = Omit<ForkAgentDeps, 'prepareApiTools' | 'relaunchOverride
 
 export function launchShapes(world: LaunchWorld) {
   const savedApis = new ApiConnections(world.dataDir)
+  // What the core reads for the note (core/main.ts): the list without keys, never the store.
+  const savedApiList = new ApiConnectionMetadata(world.dataDir)
   const gridName = world.gridName ?? (() => null)
   const prepareApiTools = (cwd: string | null | undefined, engine: string): void => {
     if (!cwd) return
-    try { prepareApiInstructions(savedApis, cwd, engine, world.projectsRoot) }
+    try { prepareApiInstructions(savedApiList, cwd, engine, world.projectsRoot) }
     catch { console.warn('[apis] Tool instructions could not be added. Saved connections remain available through harness api.') }
   }
   // The models service's side of the launch port: what its port answers the core with (services/models.ts), across
