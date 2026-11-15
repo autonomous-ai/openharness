@@ -44,3 +44,24 @@ it('holds every hook family when the optional setup capability is unavailable', 
   }
   expect(existsSync(join(root, '.claude'))).toBe(false)
 })
+
+it('does not let an explicit caller identity join preparations with different missing-file authority', async () => {
+  const home = join(root, '.hermes')
+  let captured!: NativeHookInput, enter!: () => void, release!: () => void
+  const entered = new Promise<void>(resolve => { enter = resolve }), waiting = new Promise<void>(resolve => { release = resolve })
+  const setup = { opencodeMajor: async () => 1, hermesKeepsRecord: async () => false,
+    prepareFiles: async (input: NativeHookInput) => {
+      captured = input; enter(); await waiting
+      return { version: 1 as const, files: [{ index: 0, content: 'model: fixture\n' }, { index: 1, content: null }] }
+    },
+  }
+  const first = hooks.installHermesHooks(1234, home, { setup, identity: 'caller' })
+  await entered
+  expect(captured.createMissing).toBe(false)
+  const second = hooks.installHermesHooks(1234, home, { setup, identity: 'caller', environment: captured.environment })
+  await Promise.resolve(); release()
+  expect(await Promise.all([first, second])).toEqual([false, false])
+  expect(existsSync(join(home, 'config.yaml'))).toBe(false)
+  expect(await hooks.installHermesHooks(1234, home, { setup, identity: 'caller', environment: captured.environment })).toBe(true)
+  expect(captured.createMissing).toBe(true)
+})

@@ -51,10 +51,11 @@ async function install(engine: AgentEngine, port: number, options: NativeHookOpt
   extra: { major?: number | null; keepsRecord?: boolean | null; remove?: boolean } = {}): Promise<boolean> {
   const captured = environment(options, engine, home), locations = nativeHookLocations(captured)
   const targets = destinations(engine, locations)
-  return publishNativeHookFiles({ engine, port, environment: captured, ...extra,
+  const input = { engine, port, environment: captured, ...extra,
     ...(engine === 'amp' ? { directories: [{ path: env.AMP_SESSIONS_DIR, mode: 0o700 }] } : {}),
     ...(engine === 'hermes' ? { createMissing: !!home && !!options.environment } : {}),
-  }, targets, options.setup ?? {}, { ...options, identity: options.identity ?? JSON.stringify([engine, port, captured, extra]) })
+  }
+  return publishNativeHookFiles(input, targets, options.setup ?? {}, { ...options, identity: JSON.stringify([options.identity ?? null, input]) })
 }
 
 export const installClaudeHooks = (port: number, home?: string, options: NativeHookOptions = {}): Promise<boolean> => install('claude', port, options, home ?? join(homedir(), '.claude'))

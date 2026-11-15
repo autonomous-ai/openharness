@@ -130,6 +130,10 @@ Then publish the profile's own files under their existing reservation. Check the
 before and after both awaits; sharing artifact work grants no authority over another profile and cannot
 restore a cancelled caller. An incomplete shared publication supplies no launch proof. This adds no
 queue or reservation family. The parent approved this amendment before core wiring.
+Profile joins include the complete captured preparation input alongside any caller identity: an explicit
+identity cannot erase differences in `createMissing`, auxiliary directories, port or environment. The
+Hermes startup/launch regression first returned success for both differing requests; the corrected key
+refuses that overlap and lets a fresh authorized preparation proceed.
 
 The authenticated service transport accepts at most
 6 MiB + 4,096 bytes (`localWsServer.ts`, `lib/terminalBinary.ts`), while ordinary clients retain their
@@ -192,8 +196,8 @@ performance comparison, final closure measurement, push, PR and merge.
 
 ## Implementation evidence and limits
 
-Default source closure is 530 files / 88,284 lines, down from the clean eec base's 539 / 90,847.
-The same walk with legacy engine doors open (still excluding services/inline) is 674 / 108,384,
+Default source closure is 530 files / 88,285 lines, down from the clean eec base's 539 / 90,847.
+The same walk with legacy engine doors open (still excluding services/inline) is 674 / 108,385,
 versus 652 / 107,819; its growth includes both retained explicit legacy installation and the new
 boundary. The default core retains only small argument quoting, hook-script identity/refusal state,
 mandatory admission data, destination coordination and the generic publisher. Architecture assertions
