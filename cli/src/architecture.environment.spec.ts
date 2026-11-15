@@ -34,7 +34,7 @@ const takesValue = (word: string): boolean => /^-[A-Za-z]*[oOpPtuUgGCqsNM]$/.tes
 
 /** Each read of another process's environment in [code], one line a finding. Read as code: a comment names nothing. */
 function environmentReads(code: string, file = 'file.ts'): string[] {
-  const kind = /\.m?js$/.test(file) ? ts.ScriptKind.JS : ts.ScriptKind.TS
+  const kind = /\.[cm]?js$/.test(file) ? ts.ScriptKind.JS : /\.tsx$/.test(file) ? ts.ScriptKind.TSX : ts.ScriptKind.TS
   const source = ts.createSourceFile(file, code, ts.ScriptTarget.Latest, true, kind)
   const found: string[] = []
   const report = (node: ts.Node, what: string): void => {
@@ -113,7 +113,7 @@ it.each([
 it('no file of the daemon or its hook reads another process\'s environment', () => {
   const files = ['src', 'hook'].flatMap((folder) => readdirSync(join(CLI, folder), { recursive: true, encoding: 'utf8' })
     .map((name) => join(folder, name)))
-    .filter((file) => /\.(ts|mjs|js)$/.test(file) && !/\.(spec|test)\.ts$/.test(file))
+    .filter((file) => /\.([cm]?[jt]s|tsx)$/.test(file) && !/\.(spec|test)\.([cm]?ts|tsx)$/.test(file))
   const found = files.flatMap((file) => environmentReads(readFileSync(join(CLI, file), 'utf8'), file).map((finding) => `${file}: ${finding}`))
   expect(found, 'The daemon never reads another process\'s environment (cli/AGENTS.md, Protect the core): an API token, a '
     + 'pairing code and every other secret is in one, and no system can read a single variable of it. A hook reads its own and '
