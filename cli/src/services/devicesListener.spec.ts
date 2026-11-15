@@ -555,8 +555,16 @@ describe('attach', () => {
   it('attach takes a UUID sessionId and hands it on', () => {
     const attached: string[] = []
     const handler = attachHandler((sessionId) => attached.push(sessionId))
-    for (const sessionId of [ID, ID.toUpperCase()]) expect(handler.handle({ type: 'attach', sessionId }, gone), sessionId).toBeUndefined()
-    expect(attached).toEqual([ID, ID.toUpperCase()])
+    expect(handler.handle({ type: 'attach', sessionId: ID }, gone)).toBeUndefined()
+    expect(attached).toEqual([ID])
+  })
+
+  // Claude Code's ids are lower case, and the agent's id is hashed from the string as given: an upper-case one names
+  // no session.
+  it('attach refuses an upper-case UUID', () => {
+    const attach = vi.fn()
+    expect(attachHandler(attach).handle({ type: 'attach', sessionId: ID.toUpperCase() }, gone)).toBe(REFUSED)
+    expect(attach).not.toHaveBeenCalled()
   })
 
   it('attach refuses any other body', () => {
