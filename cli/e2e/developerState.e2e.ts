@@ -5,7 +5,8 @@
  * 2026-11-15, docs/plans/2026-11-15-e2e-daemon-isolation-design.md). A developer with HARNESS_CONNECTIONS_DIR set gave
  * every daemon under test their connected services' tokens, and one with Harness OS connections under XDG_DATA_HOME
  * had them copied into the test's root (lib/connectors/store.ts `adoptLegacy`). A daemon now inherits only an allowlist
- * (src/testing/daemonEnvironment.ts), and the harness names the rest (harness/daemon.ts).
+ * (src/testing/daemonEnvironment.ts), and the harness names the rest (harness/daemon.ts). A tmux server the test starts
+ * takes the same allowlist (src/testing/isolatedTmux.ts).
  *
  * Every path and value here is made up, in a folder of this test. `vi.stubEnv` puts them in this worker's environment
  * as a developer's shell would, and takes them out again: no real value of these variables is read or printed.
@@ -44,6 +45,27 @@ async function connected(d: IsolatedDaemon): Promise<string[]> {
     }, 60_000, 250)
     return cards.filter((card) => card.state !== 'not_connected').map((card) => card.connector).sort()
   } finally { client.close() }
+}
+
+/** A terminal tile of [d], up: its row. */
+async function tile(d: IsolatedDaemon, client: LocalClient, name: string): Promise<{ id: string; tmuxPane: string }> {
+  const cwd = join(d.projectsDir, name)
+  mkdirSync(cwd, { recursive: true })
+  const opened = await client.request('agent_create', { engine: 'terminal', cwd }, 60_000)
+  expect(opened.error, JSON.stringify(opened)).toBeUndefined()
+  return until('the terminal tile to be up', async () => {
+    const { agents } = await client.request<{ agents: Array<{ id: string; status: string; tmuxPane?: string }> }>('agents_list', { includeStopped: true }, 30_000)
+    const now = agents.find((agent) => agent.id === opened.agent.id)
+    return now?.status === 'active' && now.tmuxPane ? { id: now.id, tmuxPane: now.tmuxPane } : null
+  }, 60_000, 250)
+}
+
+/** What [line], typed into [pane], wrote into [file]: the tile's own answer, never its whole environment. The file is
+ *  moved into place whatever the line returned: `whence -p` returns 1 for a name it cannot find. */
+async function typed(d: IsolatedDaemon, pane: string, line: string, file: string): Promise<string> {
+  await d.tmux.run('send-keys', '-t', pane, '-l', `${line} > ${file}.tmp; mv ${file}.tmp ${file}`)
+  await d.tmux.run('send-keys', '-t', pane, 'Enter')
+  return until(`the tile to write ${file}`, () => existsSync(file) ? readFileSync(file, 'utf8') : null, 30_000, 100)
 }
 
 describe('a daemon under test knows nothing of the developer\'s own state', () => {
@@ -129,5 +151,19 @@ describe('a daemon under test knows nothing of the developer\'s own state', () =
     failed(d)
     await d.start()
     expect(await connected(d)).toEqual(['test_service'])
+  })
+
+  it('gives a tile nothing of the developer\'s when the test itself opened the first tmux session', async () => {
+    vi.stubEnv('FAKE_DEV_SECRET', 'e2e-not-a-secret')
+    const d = daemon = await IsolatedDaemon.create()
+    failed(d)
+    // The first client to reach a socket starts its server, and the server's environment is that client's.
+    await d.tmux.run('new-session', '-d', '-s', 'opened-by-the-test', '/bin/sleep', '600')
+    await d.start()
+    const client = await LocalClient.connect(d)
+    try {
+      const { tmuxPane } = await tile(d, client, 'own-session')
+      expect(await typed(d, tmuxPane, 'printf \'%s\\n\' "${FAKE_DEV_SECRET-unset}"', join(d.root, 'tile-secret'))).toBe('unset\n')
+    } finally { client.close() }
   })
 })
