@@ -59,15 +59,23 @@ describe('the agent browser in its own process', () => {
   })
 
   // Until 2026-11-15 the core told this process `attached`, `stopped`, `deleted` and `moved`, and kept whose Browser was
-  // on. Those it no longer reads: what happens to agents it hears as it follows them.
-  it('reads none of the agent events a core from before sent', () => {
+  // on. A core from before still does (a newer master after a rollback): heard as what happens to agents now. Delete on
+  // or after 2026-12-18.
+  it('hears what a core from before tells of agents as what happens to them now, and drops what is not one', () => {
     const { options, heard } = setup()
     const row = { agentId: 'a1', sessionId: 's1', browser: true } as RegisteredSession
     options.onEvent!({ kind: 'attached', session: row })
     options.onEvent!({ kind: 'stopped', agentId: 'a1' })
     options.onEvent!({ kind: 'deleted', agentId: 'a1' })
-    options.onEvent!({ kind: 'moved', from: 'a1', session: row, on: true })
-    expect(heard).toEqual([])
+    options.onEvent!({ kind: 'moved', from: 'a1', session: { agentId: 'b1' }, on: true })
+    options.onEvent!({ kind: 'moved', from: 'a1' })
+    options.onEvent!({ kind: 'attached', session: { browser: true } })
+    expect(heard).toEqual([
+      { kind: 'running', session: row },
+      { kind: 'ended', agentId: 'a1' },
+      { kind: 'purged', agentId: 'a1', sessionIds: [] },
+      { kind: 'taken', from: 'a1', to: 'b1' },
+    ])
   })
 
   it('asks to follow every agent each time it connects, and is caught up once the core answers, waiting 10 s at most', async () => {
@@ -237,9 +245,14 @@ describe('the agent browser in its own process', () => {
     expect(port.streamClosed).toHaveBeenCalledOnce()
   })
 
-  it('asks the core for every agent here, and a pane\'s agent, and gets no answer when the core cannot say', async () => {
+  it('asks the core for every agent here once caught up with it, and a pane\'s agent, and gets no answer when the core cannot say', async () => {
+    vi.useFakeTimers()
     const { options, api, given } = setup()
-    expect(await given.everyAgent!()).toBeNull()
+    // Not connected: no answer, after the wait for the catch-up.
+    const early = given.everyAgent!()
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(await early).toBeNull()
+    vi.useRealTimers()
     expect(await api.agents.ofPane!('%7', [4242])).toBeNull()
     const row = { agentId: 'a1', sessionId: 's1' } as RegisteredSession
     let answer: Record<string, unknown> = { agents: [row, 7] }

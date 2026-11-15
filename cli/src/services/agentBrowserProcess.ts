@@ -40,7 +40,7 @@ const AGENTS_TIMEOUT_MS = 10_000
 const PANE_TIMEOUT_MS = 10_000
 // A person's Start waits this long at most for what it follows of the agents to be caught up, as the process connects:
 // the core answers `follow_agents` as it is asked, so one that has not in this is not there to answer.
-export const FOLLOWED_WAIT_MS = 10_000
+const FOLLOWED_WAIT_MS = 10_000
 
 export interface AgentBrowserServiceOptions {
   dataDir: string
@@ -54,6 +54,16 @@ export interface AgentBrowserServiceOptions {
 }
 
 const ROUTES: ReadonlySet<string> = new Set(['direct', 'turn', 'relay'])
+
+/** What a core from before agents were followed (2026-11-15) tells this process, as what happens to agents now: an agent
+ *  whose Browser is on runs, one stopped, one purged, a pane's new agent. Delete on or after 2026-12-18. */
+function olderAgentEvent(payload: Payload): Payload | null {
+  if (payload.kind === 'attached') return { kind: 'running', session: payload.session }
+  if (payload.kind === 'stopped') return { kind: 'ended', agentId: payload.agentId }
+  if (payload.kind === 'deleted') return { kind: 'purged', agentId: payload.agentId, sessionIds: [] }
+  if (payload.kind === 'moved') return { kind: 'taken', from: payload.from, to: (payload.session as Payload | undefined)?.agentId }
+  return null
+}
 
 function within<T>(ms: number, work: Promise<T>): Promise<T> {
   let timer: NodeJS.Timeout | undefined
@@ -133,7 +143,11 @@ export function runAgentBrowserService(options: AgentBrowserServiceOptions): Ser
     },
     followed: () => follow.ready(FOLLOWED_WAIT_MS),
     // Every agent, live then stopped, as any service may ask (core/agentQueries.ts `agents`): no answer in time is none.
-    everyAgent: async () => agentsIn(await within(AGENTS_TIMEOUT_MS, ask('agents', {})).catch(() => null)),
+    // Once this connection's catch-up is in: asked as the process starts, before it has connected, it was no answer, and a
+    // gone agent's browser was kept until the process started again.
+    everyAgent: async () => (await follow.ready(AGENTS_TIMEOUT_MS)
+      ? agentsIn(await within(AGENTS_TIMEOUT_MS, ask('agents', {})).catch(() => null))
+      : null),
   })
   const port = ports.agentBrowser!
   const service = (options.run ?? runServiceProcess)({
@@ -144,6 +158,8 @@ export function runAgentBrowserService(options: AgentBrowserServiceOptions): Ser
     requests,
     onEvent: (payload) => {
       if (deliveries.heard(payload) || follow.heard(payload)) return
+      const older = olderAgentEvent(payload)
+      if (older) return void follow.heard({ kind: 'agent', event: older })
       if (payload.kind === 'stream') {
         const { connId, type, asker } = payload
         if (typeof connId !== 'string' || typeof type !== 'string') return

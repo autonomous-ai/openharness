@@ -127,10 +127,20 @@ agent browser sweeps `agent-tmp` as it begins and as an agent runs a command); s
   it after the date).
 
 Compatibility decided: a service of this build under a core from before (a newer master after a rollback) keeps
-working for the viewers (`agents` and `attach`/`detach`), the cleanup (`closed`) and search (`deleteHistory`), each
-dated 2026-12-18. The agent browser under a core from before answers its Start `SERVICE_UNAVAILABLE` (no released
-Desktop reaches it). A core of this build under services from before needs a master from before 2026-10-05 (re-exec,
-#791), outside the 30 days: not handled.
+working: the viewers (`agents` and `attach`/`detach`), the cleanup (`closed`), search (`deleteHistory`) and the agent
+browser (`attached`, `stopped`, `deleted`, `moved`), each dated 2026-12-18; only a new Start answers
+`SERVICE_UNAVAILABLE` there (no released Desktop reaches it). A core of this build under services from before needs a
+master that does not stop its services at an update, one from before 2026-10-05 (#791 re-executes the master with its
+services stopped first), outside the 30 days: not handled.
+
+From `/code-review high`, fixed: the browser's process waits for its catch-up before it asks which agents are here (as
+it started it asked before connecting, which was no answer, and kept gone agents' browsers); a stopped agent's flag from
+before goes with its pane (`move` takes it in first); a follower in the core's process that fails 5 times is dropped,
+said once; the browser's link answers only the generic questions its process uses; unused exports. Left, said why in
+the PR: `agent_of_pane` and the counters are generic (no data `live` does not give, and counters are measures); the
+state file read per new run (in the browser's own process by default); the old row flag still asks for the process
+until 2026-12-18 (a state file would anyway); `viewersProcess.ts` keeps its own catch-up beside `followLink.ts`: **PR 2
+moves it onto `followLink`**, with the viewers' e2e as the proof.
 
 ## PR 2, after PR 1 merges
 

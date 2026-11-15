@@ -253,8 +253,11 @@ describe('the agent browser in its own process, as the core sees it', () => {
     expect(await link.answer('agent_of_pane', { pane: '%8', ancestors: [4343] })).toEqual({ agentId: 'kim', guest: true })
     expect(await link.answer('agent_of_pane', { pane: '%9', ancestors: [4242] })).toEqual({ agentId: null })
     expect(ofPane.mock.calls).toEqual([['%7', [4242, 1]], ['%8', [4343]], ['%9', [4242]]])
-    // The core keeps no Browser switch and no list of its own for it.
-    for (const query of ['agent_ids', 'set_browser', 'move_browser']) expect(await link.answer(query, { agentId: 'a1', on: true, from: 'a', to: 'b' })).toEqual({ error: 'UNKNOWN_QUERY' })
+    // The core keeps no Browser switch and no list of its own for it, and answers nothing else any service may ask.
+    for (const query of ['agent_ids', 'set_browser', 'move_browser', 'live', 'hachi_goal_done']) {
+      expect(await link.answer(query, { agentId: 'a1', on: true, from: 'a', to: 'b' })).toEqual({ error: 'UNKNOWN_QUERY' })
+    }
+    expect(await link.answer('agents', {})).toEqual({ agents: [] })
   })
 
   it('hands on the agent browser\'s own counters, and no other', async () => {

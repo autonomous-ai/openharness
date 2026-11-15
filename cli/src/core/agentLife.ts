@@ -33,6 +33,9 @@ export const PURGED_SESSIONS_MAX = 256
 /** Past this many agents told running and not ended, a follower's are pruned to the live ones: an end that never came
  *  (a row gone some way that skipped its forget) costs it nothing for good. */
 export const TOLD_PRUNE_AT = 4096
+/** A follower in the core's process that fails this many times hears nothing more, as the service host switches off a
+ *  service that keeps failing (core/serviceHost.ts): one that follows each look would fail at every scan. */
+export const FOLLOWER_FAILURES_MAX = 5
 
 interface Follower {
   options: Readonly<FollowOptions>
@@ -128,12 +131,17 @@ export function createAgentLife(deps: AgentLifeDeps) {
 
     /** `CoreApi.agents.follow`, for a service in the core's process. */
     follow(listener: (event: AgentLife) => void, options: FollowOptions = {}): () => void {
+      let failures = 0
       const follower: Follower = {
         options,
         told: new Set(),
         tell: (event) => {
+          if (failures >= FOLLOWER_FAILURES_MAX) return
           try { listener(event) } catch (error) {
             log(`[agents] a follower failed on ${event.kind}: ${error instanceof Error ? error.message : String(error)}`)
+            if (++failures < FOLLOWER_FAILURES_MAX) return
+            listeners.delete(follower)
+            log(`[agents] a follower failed ${failures} times: it hears nothing more`)
           }
         },
       }
@@ -154,4 +162,3 @@ export function createAgentLife(deps: AgentLifeDeps) {
   }
 }
 
-export type AgentLifeHub = ReturnType<typeof createAgentLife>

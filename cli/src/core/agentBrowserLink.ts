@@ -16,8 +16,8 @@
  * core/browserStreams.ts, which holds each to the connection that opened the stream. A process says once it is connected that it takes streams (`streams`): one from before 2026-11-13 does
  * not, and a viewer's open is then refused at once rather than left unanswered.
  *
- * Whatever else the process asks it asks as any service may (core/agentQueries.ts): every agent, the agent of a pane,
- * a product counter.
+ * Whatever else the process asks it asks as any service may (core/agentQueries.ts), and only what it uses: every agent,
+ * the agent of a pane, a product counter.
  */
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
@@ -31,6 +31,8 @@ type Payload = Record<string, unknown>
 
 const STATES: ReadonlySet<string> = new Set(['setup', 'starting', 'ready', 'failed'])
 const INVALID = { error: 'INVALID_REQUEST' }
+/** The questions any service may ask (core/agentQueries.ts) that the process asks. */
+const ANSWERED: ReadonlySet<string> = new Set(['agents', 'agent_of_pane', 'count'])
 
 /** Only the shape the frame carries, so the process can put nothing else on it. */
 function browserState(value: unknown): AgentBrowserFrame | null {
@@ -99,7 +101,9 @@ export function createAgentBrowserLink(deps: {
       streams = true
       return { ok: true }
     }
-    return answerAgentQuery(core, query, payload)
+    // What else it asks it asks as any service may (core/agentQueries.ts), and only what it uses: every agent here (a
+    // browser of an agent in neither list is deleted), the agent of a pane, a product counter.
+    return ANSWERED.has(query) ? answerAgentQuery(core, query, payload) : { error: 'UNKNOWN_QUERY' }
   }
 
   return {

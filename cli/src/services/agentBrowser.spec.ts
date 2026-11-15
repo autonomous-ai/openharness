@@ -1685,15 +1685,27 @@ describe('the browser moves with its pane', () => {
     expect(sw.port.frameContext('kim')).toBeUndefined()
   })
 
+  // Its agent ran with its Browser on before the update, ended, and has not run since: its saved row still carries the
+  // flag the core kept. Delete on or after 2026-12-18, with `adopt`.
+  it('a stopped agent\'s flag from before goes with its pane', async () => {
+    saveState({ a1: defaultSettings(HOST) })
+    const sw = startSwitching([session('b1', { browser: undefined })], { options: { everyAgent: async () => [session('a1'), session('b1', { browser: undefined })] } })
+    sw.move('a1', 'b1')
+    await ready(sw.port, 'b1')
+    expect(turnedOn()).toEqual({ b1: true })
+    expect(savedState()).toMatchObject({ adopted: { a1: true } })
+  })
+
   it('a move of an agent with no entry makes no Podman call', async () => {
     const read = vi.spyOn(StateFile.prototype, 'read')
     const sw = startSwitching([session('a1', { browser: undefined }), session('b1', { browser: undefined })])
     read.mockClear()
     sw.move('a1', 'b1')
-    await until(() => read.mock.calls.length > 1)
-    // What is left of the move after its reads is one turn of promises: whether [to]'s Browser is on, and the entry.
+    await until(() => read.mock.calls.length > 2)
+    // What is left of the move after its reads is one turn of promises: whether [to]'s Browser is on, whether [from] has
+    // an entry whose flag from before is to be taken in, and the entry.
     await new Promise(done => setImmediate(done))
-    expect(read).toHaveBeenCalledTimes(2)
+    expect(read).toHaveBeenCalledTimes(3)
     expect(fake.calls()).toEqual([])
   })
 

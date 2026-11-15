@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../lib/registry.js'
-import { createAgentLife, followOptions, PURGED_SESSIONS_MAX, TOLD_PRUNE_AT } from './agentLife.js'
+import { createAgentLife, FOLLOWER_FAILURES_MAX, followOptions, PURGED_SESSIONS_MAX, TOLD_PRUNE_AT } from './agentLife.js'
 import { FOLLOW_HAVING_MAX, VIEWERS_FOLLOW, type AgentLife } from './api.js'
 
 const agent = (agentId: string, over: Partial<RegisteredSession> = {}) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', ...over }) as RegisteredSession
@@ -99,6 +99,18 @@ describe('what happens to agents, for the services that follow them', () => {
         ['[agents] a follower failed on stopped: not an error'],
       ])
       expect(after.map((event) => event.kind)).toEqual(['running', 'stopped'])
+    })
+
+    it('a follower that keeps failing hears nothing more, said once, as a service that keeps failing is switched off', () => {
+      const { hub, log } = setup([agent('a1')])
+      const listener = vi.fn(() => { throw new Error('boom') })
+      hub.follow(listener, VIEWERS_FOLLOW)
+      for (let i = 0; i < FOLLOWER_FAILURES_MAX + 3; i++) hub.running(agent('a1', { dsh: 'acme/blender' }))
+      expect(listener).toHaveBeenCalledTimes(FOLLOWER_FAILURES_MAX)
+      expect(log).toHaveBeenLastCalledWith(`[agents] a follower failed ${FOLLOWER_FAILURES_MAX} times: it hears nothing more`)
+      expect(log).toHaveBeenCalledTimes(FOLLOWER_FAILURES_MAX + 1)
+      hub.stopped('a1')
+      expect(listener).toHaveBeenCalledTimes(FOLLOWER_FAILURES_MAX)
     })
 
     it('says a failing follower in the core\'s log when it is given none', () => {
