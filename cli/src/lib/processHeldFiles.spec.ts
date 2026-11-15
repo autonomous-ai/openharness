@@ -4,7 +4,7 @@
  */
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { ProcessView } from './processMounts.js'
 import type { ProcessIdentity } from './terminalTypes.js'
@@ -61,6 +61,13 @@ function hold(pid: number, fd: number, target: string) {
   symlinkSync(target, join(folder, String(fd)))
 }
 const release = (pid: number, fd: number) => unlink(join(proc, String(pid), 'fd', String(fd)))
+// A path under the case's own folder, and a file made there: lsof names a file by its path, which is looked up.
+const disk = (path: string) => join(proc, 'disk', path)
+function file(path: string): string {
+  mkdirSync(dirname(disk(path)), { recursive: true })
+  writeFileSync(disk(path), '')
+  return disk(path)
+}
 const listedPids = () => mocks.state.ran.map((run) => run.pid)
 
 beforeEach(async () => {
@@ -134,16 +141,18 @@ it('picks no home in a sandbox when one store has a path here and another has no
 })
 
 it('lists a process on macOS with lsof -Fn, less and less often until it answers, and never after', async () => {
-  mocks.state.lsof.set('4242', 'p4242\nfcwd\nn/work\nf3\nn/h/.hermes/state.db\nf4\nn/h/.hermes/state.db-wal\n')
-  expect(await mac(id(4242), STORE)).toBe('/h/.hermes')
+  const store = file('h/.hermes/state.db')
+  mocks.state.lsof.set('4242', `p4242\nfcwd\nn/work\nf3\nn${store}\nf4\nn${store}-wal\n`)
+  expect(await mac(id(4242), STORE)).toBe(dirname(store))
   expect(mocks.execFile).toHaveBeenCalledWith('lsof', ['-n', '-P', '-w', '-p', '4242', '-Fn'],
     expect.objectContaining({ timeout: 2_000, maxBuffer: 1 << 20 }), expect.any(Function))
   for (let day = 1; day <= 3; day++) {
     mocks.state.t = day * 86_400_000
-    expect(await mac(id(4242), STORE)).toBe('/h/.hermes')
+    expect(await mac(id(4242), STORE)).toBe(dirname(store))
   }
   expect(mocks.execFile).toHaveBeenCalledTimes(1)
-  expect(calls).toEqual([])
+  // No file is opened or read through its path: at most looked up.
+  expect(calls.every((call) => call.startsWith('lstat '))).toBe(true)
 
   const start = mocks.state.t
   mocks.state.lsof.set('4243', 'p4243\nfcwd\nn/work\n')
@@ -178,8 +187,34 @@ it('takes the spelling that exists when lsof escapes a name', async () => {
   expect(await mac(id(4242, 'neither'), STORE)).toBeUndefined()
 
   // A name too long to be a path says nothing either, and the listing still answers.
-  mocks.state.lsof.set('4242', `p4242\nf3\nn/${'a'.repeat(16_400)}/state.db\nf4\nn/h/.hermes/state.db\n`)
-  expect(await mac(id(4242, 'long'), STORE)).toBe('/h/.hermes')
+  const store = file('h/.hermes/state.db')
+  mocks.state.lsof.set('4242', `p4242\nf3\nn/${'a'.repeat(16_400)}/state.db\nf4\nn${store}\n`)
+  expect(await mac(id(4242, 'long'), STORE)).toBe(dirname(store))
+})
+
+it('takes no folder from a spelling that is not on disk, nor from two that are', async () => {
+  // lsof leaves a backslash in a name as it is, so `evil\x2fsessions\x2frollout-1.jsonl`, one file's name, decodes to
+  // a rollout in a folder `evil`. That spelling is not on disk, and the name itself is no rollout.
+  const name = file('evil\\x2fsessions\\x2frollout-1.jsonl')
+  mocks.state.lsof.set('4242', `p4242\nfcwd\nn/work\nf3\nn${name}\n`)
+  expect(await mac(id(4242), ROLLOUT)).toBeUndefined()
+  // Both spellings of the one descriptor whose decoded name matches are looked up, and nothing else is.
+  expect([...calls].sort()).toEqual([`lstat ${name}`, `lstat ${disk('evil/sessions/rollout-1.jsonl')}`].sort())
+  // Both on disk: which one the process holds cannot be told.
+  file('evil/sessions/rollout-1.jsonl')
+  expect(await mac(id(4242, 'both'), ROLLOUT)).toBeUndefined()
+  // A rollout gone from disk while held says nothing, as its `(deleted)` path says nothing on Linux.
+  mocks.state.lsof.set('4243', `p4243\nf3\nn${disk('gone/sessions/rollout-1.jsonl')}\n`)
+  expect(await mac(id(4243), ROLLOUT)).toBeUndefined()
+})
+
+it('refuses a home whose path steps back out of a folder', async () => {
+  // `..\x2fc\x2fsessions\x2frollout-1.jsonl`, one file's name, decodes to a path out of `evil` and into `c`, where
+  // that rollout is on disk: the decoded spelling is the only one there, and its home is no home.
+  mkdirSync(disk('evil'), { recursive: true })
+  file('c/sessions/rollout-1.jsonl')
+  mocks.state.lsof.set('4242', `p4242\nf3\nn${disk('evil')}/..\\x2fc\\x2fsessions\\x2frollout-1.jsonl\n`)
+  expect(await mac(id(4242), ROLLOUT)).toBeUndefined()
 })
 
 it('lists nothing on Windows', async () => {
@@ -220,9 +255,9 @@ it('picks no home when two children hold files of two homes', async () => {
 })
 
 it('lists the selected process and the children it is given, and no other process', async () => {
-  mocks.state.lsof.set('4243', 'p4243\nfcwd\nn/work\nf7\nn/c/sessions/rollout-a.jsonl\n')
+  mocks.state.lsof.set('4243', `p4243\nfcwd\nn/work\nf7\nn${file('c/sessions/rollout-a.jsonl')}\n`)
   const children = vi.fn(() => [id(4243), id(4244)])
-  expect(await mac(id(4242), ROLLOUT, children)).toBe('/c')
+  expect(await mac(id(4242), ROLLOUT, children)).toBe(disk('c'))
   expect(listedPids()).toEqual(['4242', '4243', '4244'])
   expect(children).toHaveBeenCalledTimes(1)
 
@@ -237,9 +272,9 @@ it('lists the selected process and the children it is given, and no other proces
 })
 
 it('lists four children at most, and ignores a fifth', async () => {
-  mocks.state.lsof.set('4243', 'p4243\nf7\nn/c/sessions/rollout-a.jsonl\n')
-  mocks.state.lsof.set('4247', 'p4247\nf7\nn/e/sessions/rollout-z.jsonl\n')
-  expect(await mac(id(4242), ROLLOUT, () => [4243, 4244, 4245, 4246, 4247].map((pid) => id(pid)))).toBe('/c')
+  mocks.state.lsof.set('4243', `p4243\nf7\nn${file('c/sessions/rollout-a.jsonl')}\n`)
+  mocks.state.lsof.set('4247', `p4247\nf7\nn${file('e/sessions/rollout-z.jsonl')}\n`)
+  expect(await mac(id(4242), ROLLOUT, () => [4243, 4244, 4245, 4246, 4247].map((pid) => id(pid)))).toBe(disk('c'))
   expect(listedPids()).toEqual(['4242', '4243', '4244', '4245', '4246'])
 })
 
