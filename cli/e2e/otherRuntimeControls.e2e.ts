@@ -41,7 +41,7 @@ describe.runIf(!!process.env.E2E_BUNDLE_PATH)('other-engine runtime and question
     scratch = mkdtempSync(join(tmpdir(), 'other-runtime-controls-'))
     return buildWithLean(scratch, bundle, files)
   }
-  async function fresh(env: Record<string, string> = {}, scriptPath = process.env.E2E_BUNDLE_PATH!, prepare?: (d: IsolatedDaemon) => Promise<void>) {
+  async function fresh(env: Record<string, string> = {}, scriptPath = process.env.E2E_BUNDLE_PATH!, prepare?: (d: IsolatedDaemon) => Promise<string | void>) {
     const d = daemon = await IsolatedDaemon.create({ scriptPath, env: {
       HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '200', HARNESSD_SERVICE_MAX_BACKOFF_MS: '1000', ...env,
     } })
@@ -76,9 +76,9 @@ process.stdin.on('data', data => { for (const key of data) {
 } });
 idle('fixture-cursor-ready');
 `, { mode: 0o755 })
-    await prepare?.(d)
+    const machineId = await prepare?.(d)
     await d.start()
-    const c = client = await LocalClient.connect(d)
+    const c = client = await LocalClient.connect(d, machineId ? { machineId } : {})
     const cwd = join(d.projectsDir, 'cursor'); mkdirSync(cwd, { recursive: true })
     const created = await c.request('agent_create', { engine: 'cursor', cwd, permissionMode: 'ask', bypassPermission: false }, 60_000)
     expect(created.error, JSON.stringify(created)).toBeUndefined()
@@ -202,6 +202,7 @@ idle('fixture-cursor-ready');
       assertLocalOnly(d.env, backend)
       await signIn(d, machine)
       await writeE2ee(d, { 'identity.json': { priv: b64e(identity.priv), pub: b64e(identity.pub) } })
+      return machine.machineId
     })
     const refusalAt = performance.now(); await viewOnly(c, id)
     const refusalMs = performance.now() - refusalAt
