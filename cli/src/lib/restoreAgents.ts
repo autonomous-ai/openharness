@@ -780,7 +780,7 @@ async function watchRestoredPane(
   const { agentId, engine } = entry
   const generation = deps.revision?.(agentId)
   const lifecycle = () => !deps.cancelled?.(agentId) && deps.revision?.(agentId) === generation
-  const initial = structuredClone(deps.registry.byAgent(agentId) ?? entry)
+  let initial = structuredClone(deps.registry.byAgent(agentId) ?? entry)
   const origin = (row: RegisteredSession) => JSON.stringify([row.registeredAt, row.engine, row.cwd, row.runtimes,
     row.primaryRuntimeKey, row.codexHome, row.claudeHome, row.hermesHome, row.dsh, row.dshRuntime, row.gridLaunch])
   const original = origin(initial)
@@ -788,7 +788,7 @@ async function watchRestoredPane(
   const maySelectFirstHook = () => {
     const row = deps.registry.byAgent(agentId)
     return !initial.sessionId && !selectedFirstHook && lifecycle() && !!row && origin(row) === original
-      && (row.launch?.state === 'ready' || (row.launch?.state === 'starting'
+      && (!row.launch || row.launch.state === 'ready' || (row.launch.state === 'starting'
         && initial.launch?.state === 'starting' && row.launch.nativeToken === initial.launch.nativeToken))
   }
   const selectFirstHook = (identity: ProcessIdentity | null): boolean => {
@@ -893,17 +893,17 @@ async function watchRestoredPane(
       // conversation held here, including when a refused resume falls back to a fresh launch.
       deps.keepAbandoned?.({ ...entry })
       deps.registry.inheritName(entry.sessionId, agentId)
-      // A native dispatch journal clears this binding in its own strict publication.
-      // A launch without that journal needs the same durable release before respawn.
-      if (!launch.nativeToken) {
-        const publication = await deps.registry.confirmSessionUnbound(agentId, entry.sessionId, {
-          current: dispatchCurrent, refresh: async () => {
-            if (await deps.probeProcess(runtime, engine)) throw new IdentityReadUnavailable('the previous engine is not confirmed stopped')
-          },
-        })
-        if (publication.state !== 'confirmed' || !publication.entry) return false
-      }
-      current = restoreOwner(deps, deps.registry.byAgent(agentId)!)
+      const publication = await deps.registry.confirmSessionUnbound(agentId, entry.sessionId, {
+        current: dispatchCurrent, refresh: async () => {
+          if (await deps.probeProcess(runtime, engine)) throw new IdentityReadUnavailable('the previous engine is not confirmed stopped')
+        },
+      })
+      if (publication.state !== 'confirmed' || !publication.entry || !lifecycle()
+        || !matchesLaunchReceipt(deps.registry.byAgent(agentId), publication.entry)) return false
+      // Only this confirmed unbind opens a new first-hook selection for the fresh launch.
+      initial = structuredClone(publication.entry)
+      selectedFirstHook = false
+      current = restoreOwner(deps, publication.entry)
       let owns = restoreOwner(deps, deps.registry.byAgent(agentId)!, !!deps.paneOperation)
       // Renew before dispatch, so discovery cannot bind the new engine before its tmux reply.
       release = deps.holdRoute(key, budgetMs + HOLD_SLACK_MS) ?? (() => deps.releaseRoute(key))
@@ -911,11 +911,13 @@ async function watchRestoredPane(
         if (launch.nativeToken) {
           const committed = await deps.registry.beginNativeDispatch(agentId, launch.nativeToken, { current: dispatchCurrent })
           if (!committed) throw new Error('Native fallback dispatch could not be committed')
+          if (!lifecycle() || !matchesLaunchReceipt(deps.registry.byAgent(agentId), committed)) throw new RegistryOwnershipChanged('the native fallback owner changed before dispatch')
+          initial = structuredClone(committed)
           current = restoreOwner(deps, committed)
           owns = restoreOwner(deps, committed, !!deps.paneOperation)
         }
       } })
-      if (!owns()) return false
+      if (!owns() && !selectFirstHook(await deps.probeProcess(runtime, engine))) return false
       if (!spawned.ok) {
         fail('ENGINE_DID_NOT_START', `${engine} could not be relaunched fresh: ${spawned.reason ?? 'unknown reason'}`)
         return false
