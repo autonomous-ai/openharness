@@ -107,17 +107,19 @@ describe.skipIf(process.platform !== 'darwin')('the dial and the terminal apps f
   }
 
   /** The dial turns to W, then to A, again every 2 s until the watch prints A's select: the stream opens after
-   *  `connected`, with no frame to wait on. When the turn to A that printed it was sent, and the line. */
+   *  `connected`, with no frame to wait on. Looked for every 50 ms, so the select's 2 s echo window is still open when
+   *  it is found. When the turn to A that printed it was sent, and the line. */
   const swipedTo = async (dial: FakeDial, w: InOrca, a: Outside, run: ReturnType<typeof watch>) => {
     let before = 0
     const select = await until("A's select line", () => {
       const [line] = run.selects()
       if (line) return line
+      if (Date.now() - before < 2_000) return undefined
       dial.send({ t: 'focus', agentId: w.id })
       before = Date.now()
       dial.send({ t: 'focus', agentId: a.id })
       return undefined
-    }, 60_000, 2_000)
+    }, 60_000, 50)
     return { before, select }
   }
 
