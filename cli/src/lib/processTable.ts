@@ -424,6 +424,10 @@ export function processRows(): Promise<ProcessRow[] | null> {
   return processRowsInFlight
 }
 
+/**
+ * One read of the table. Callers go through `processRows`, which shares the read in flight; [os] is a parameter so
+ * the spec runs the macOS read on the Linux runner PR CI has.
+ */
 export async function readProcessRows(os: NodeJS.Platform = process.platform): Promise<ProcessRow[] | null> {
   const [rows, commandPaths] = await Promise.all([new Promise<ProcessRow[] | null>((resolve) => {
     run('ps', ['-axo', 'pid=,ppid=,comm=,lstart=,args='], { timeout: 3000, env: psEnv() }, (err, stdout) => {
