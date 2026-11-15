@@ -6,7 +6,7 @@ import { daemonFetch, openLocalWs } from '../lib/localTransport.js'
 import type { ClientSocket } from '../lib/clientSocket.js'
 import { deviceSettingsPatchSchema } from '../lib/harnessDevices.js'
 import { frontAppId } from '../cable/hosts/frontApp.js'
-import { tabOf, type Tab } from '../cable/hosts/tabs.js'
+import { REPLACED_LINE, tabOf, type Tab } from '../cable/hosts/tabs.js'
 import { streamDevices, tellDevices } from './listenerClient.js'
 import { devicesListenerPath } from './listenerPath.js'
 
@@ -100,8 +100,6 @@ const SELECT_LINE_MAX = 96
 // devices process that is gone is not asked once a second.
 const STREAM_RETRY_MS = 1_000
 const STREAM_RETRY_MAX_MS = 30_000
-// The listener's last line on a stream a newer watch took (services/devicesListener.ts).
-const REPLACED_LINE = '{"replaced":true}'
 
 /** One call per line of at most [max] bytes; a longer line is dropped whole, its start included. */
 function lines(max: number, line: (text: string) => void): (chunk: Buffer | string) => void {

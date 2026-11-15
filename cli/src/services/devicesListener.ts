@@ -23,7 +23,7 @@ import { dirname } from 'node:path'
 import { listenLocalSocket, type LocalSocketServer } from '../lib/localSocket.js'
 import { APP_IDS } from '../cable/hosts/hostDetect.js'
 import { FRONT_NONE } from '../cable/hosts/frontApp.js'
-import { tabOf, type Tab } from '../cable/hosts/tabs.js'
+import { REPLACED_LINE, tabOf, type Tab } from '../cable/hosts/tabs.js'
 
 /** Connections at once. Each type's rate across them is what this many could send at its rate on one, so a sender that
  *  opens one per message is held to that too. */
@@ -200,7 +200,7 @@ export async function openDevicesListener(
       if (!replaced) return void socket.destroy()
       const unread = setTimeout(() => socket.destroy(), LISTENER_TIMEOUT_MS).unref()
       socket.once('close', () => clearTimeout(unread))
-      res.end(`${JSON.stringify({ replaced: true })}\n`, () => socket.destroy())
+      res.end(`${REPLACED_LINE}\n`, () => socket.destroy())
     }
     let answer: typeof REFUSED | void
     try {

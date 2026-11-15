@@ -9,6 +9,9 @@ export type TabApp = (typeof TAB_APPS)[number]
 
 export const TAB_TTY = /^\/dev\/ttys[0-9]{1,4}$/
 
+/** The devices listener's last line on a stream a newer watch took, as its watch reads it. */
+export const REPLACED_LINE = '{"replaced":true}'
+
 export interface Tab {
   app: TabApp
   tty: string
