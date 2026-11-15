@@ -48,7 +48,8 @@ A discovery pass that read the agent's native evidence completely releases the h
   `[discovery] <agent> binding released · its native evidence was read completely`. A register refused in the words of
   the hold already there changes nothing on the row, so it changes no token, and that pass keeps the hold all the same.
   A read counts only when it read something: an OpenClaw pane capture that answers null (the pane cannot be read) is
-  no read, and a pass whose only read was that keeps the hold (PM, 2026-11-15).
+  no read, and a pass whose only read was that keeps the hold (PM, 2026-11-15). So is one that answers an empty
+  screen, which the pass reads no further either.
 - A released agent that already has a conversation (`sessionId`) has its stream attached (`attachSession`), as
   OpenClaw's own clear does (`bind.ts:380`): an agent bound while held never had its stream attached
   (`discovery.ts:245`), and released without it, its pane would work while the apps and devices showed nothing. An
@@ -120,8 +121,8 @@ stream attach per release of an agent with a conversation (not awaited by the pa
     is released and the agent announced once;
   - the same for a resume lookup that fails then completes and finds no transcript;
   - an OpenClaw agent whose pane capture fails, then succeeds: released;
-  - an OpenClaw agent whose pane capture fails, then comes back empty (`capturePane` answers null: the pane cannot be
-    read): kept, since nothing was read;
+  - an OpenClaw agent whose pane capture fails, then comes back empty (`capturePane` answers null, the pane cannot be
+    read, or an empty screen): kept, since nothing was read;
   - a released agent with a conversation has its stream attached once; one with none attaches nothing; an attach that
     rejects is logged and the release stands;
   - a hold from a refused register, the Hermes sandbox hold, or any hold the binding did not set: kept after a
