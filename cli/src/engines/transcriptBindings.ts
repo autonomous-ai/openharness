@@ -1,8 +1,9 @@
 /** Eager native transcript authority shared by binding, Stop and resume preflight. */
 import { homedir } from 'node:os'
-import { basename, dirname, isAbsolute, join, relative } from 'node:path'
+import { basename, dirname, join, relative } from 'node:path'
 import { env } from '../config/env.js'
 import { engineHomeSnapshot, sessionRoots, type EngineHomeSnapshot } from '../lib/engineHomes.js'
+import { staysInside } from '../lib/pathContainment.js'
 import { controlIdentity as claudeIdentity } from './claude/sessionStore.js'
 import { PI_CONTROL_IDENTITY } from './pi/contract.js'
 import { cursorDataDir } from './cursor/contract.js'
@@ -86,7 +87,7 @@ export function transcriptEvidence(engine: AgentEngine, path: string, profile?: 
       return nativeUnavailable('the announced transcript is not a proven absent leaf')
     }
     const member = relative(declared.path, actual)
-    return { valid: !!member && member !== '..' && !member.startsWith('../') && !isAbsolute(member), files,
+    return { valid: !!member && staysInside(member), files,
       matchingRoots: scope.directories,
       verify(selected = path): void { files.verify(selected); if (!roots) scope.verify() } }
   }
