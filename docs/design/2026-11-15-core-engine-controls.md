@@ -19,7 +19,9 @@ already present. Purge/export and setup/install/probe are separate work and rema
 - Accepted state: live `ProfileEvidence`, pane/config observations and control confirmations share the
   existing `RuntimeSessions` view for each captured binding. Evidence synchronously changes its revision;
   queued or in-flight older reads cannot overwrite that revision. OpenClaw workspace evidence is retained
-  on this same view. No second profile cache or engine-specific authority table is added to core.
+  on this same view. An explicit `observed: false` fact on pane/config replies preserves ignored screens
+  and config warmups: they do not install state, advance revision, or invalidate pending captures. It is
+  absent from existing Claude/Codex replies. No second profile cache or engine-specific authority table is added to core.
 - Navigation: the existing generic question grant broker serves the worker. Core authorizes one
   captured session and approved target/answer; each write checks grant lifetime, connection generation,
   binding and the ordered writer. The worker cannot choose another session or revive a cancelled grant.
@@ -31,10 +33,13 @@ already present. Purge/export and setup/install/probe are separate work and rema
   eviction/disconnect drops derived targets and does not erase core's accepted state. The shared worker's
   aggregate admission applies across all fourteen engines, rather than multiplying limits fourteen times.
   Runtime calls: 2 active, 1 MiB request/reply, 512 evidence records, 5 s deadline; the existing core runtime
-  queue retains at most 256 reservations per engine. Screens: 8 active, 64 FIFO queued, 256 KiB capture,
+  queue retains at most 256 reservations per worker service across its engines. Screens: 8 active, 64 FIFO queued, 256 KiB capture,
   1 MiB reply, 1 s total deadline. Questions: 16 active steps, 128 writes per grant, 30 s step deadline,
   5 s host query deadline, 99 rows and 32 KiB approved text. Worker profile-reader targets retain at most
   512 session entries across all fourteen engines, evicted using each reader's existing forget operation.
+  Cursor's synthetic footer targets also have a 128-entry / 64 KiB per-session cap (32 MiB across the
+  worker's 512 sessions); an evicted target is reconstructed from the next observed footer. The bound
+  does not enable model catalogs or controls, and unchanged golden observations verify reconstruction.
   These limits are independent of pre-existing history (16 aggregate reads) and live stream admission;
   their existing 128 MiB outbox and supervisor memory limits remain in force.
 - Concurrency: binding/revision checks fence asynchronous observations. Control grants already fence

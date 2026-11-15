@@ -450,3 +450,83 @@ describe('core runtime profile authority', () => {
     await vi.advanceTimersByTimeAsync(10); await expect(later).resolves.toBe(false)
   })
 })
+
+
+describe('live profile evidence shares runtime authority', () => {
+  it('seeds the captured model, keeps workspaces, and ignores unbound or replaced evidence', () => {
+    const t = setup(), { sessions: p, s } = t
+    s.engine = 'hermes'; s.hermesHome = '/tmp/profile'; s.model = 'launched'
+    p.hydrateEvidence(s, [])
+    expect(p.getState(s.agentId).model).toBe('launched')
+    expect(p.selectedModel(s)).toBeNull()
+    expect(p.workspace(s)).toBeNull()
+    expect(p.evidence(s, [])).toBe(false)
+    for (const old of [{ ...s, sessionId: '' }, { ...s, boundAt: 0 }]) {
+      p.hydrateEvidence(old, [{ model: 'stale' }])
+      expect(p.evidence(old, [{ model: 'stale' }])).toBe(false)
+    }
+    expect(p.getState(s.agentId).model).toBe('launched')
+    p.hydrateEvidence(s, [{ effort: 'high', workspace: '/tmp/work' }])
+    expect(p.selectedModel(s)).toBe(profile(s, 'launched').id)
+    expect(p.workspace(s)).toBe('/tmp/work')
+  })
+
+  it('refreshes configuration after accepted evidence or a pane requests it, with content-free failure', async () => {
+    const t = setup(), { sessions: p, s } = t
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    p.evidence(s, [{ model: 'live', refresh: true }])
+    await vi.waitFor(() => expect(p.getState(s.agentId).effort).toBe('auto'))
+    expect(t.read.mock.calls[0][2]).toEqual({ kind: 'config' })
+    s.hermesHome = '/tmp/profile'
+    t.read.mockImplementationOnce(async (_engine, context, operation) => ({ ...result(context, operation), refreshConfig: true }))
+    await p.read(s, { kind: 'pane', text: 'pane' })
+    await vi.waitFor(() => expect(t.read).toHaveBeenCalledTimes(3))
+    expect(t.read.mock.calls[1][1].session.hermesHome).toBe('/tmp/profile')
+    t.read.mockRejectedValueOnce(Error('secret path and pane text'))
+    p.evidence(s, [{ model: 'newer', refresh: true }])
+    await vi.waitFor(() => expect(warning).toHaveBeenCalledWith('[runtime-profile] ENGINE_UNAVAILABLE'))
+    expect(warning).toHaveBeenCalledTimes(1)
+    expect(p.getState(s.agentId).model).toBe('newer')
+  })
+
+  it.each(['newer evidence', 'forgotten binding'])('does not run a scheduled refresh after %s', async change => {
+    const t = setup(), { sessions: p, s } = t
+    p.evidence(s, [{ model: 'refresh-me', refresh: true }])
+    if (change === 'newer evidence') p.evidence(s, [{ model: 'replacement' }])
+    else p.forget(s.agentId)
+    await Promise.resolve()
+    expect(t.read).not.toHaveBeenCalled()
+  })
+
+  it('keeps silent evidence and active control observations out of change notifications', async () => {
+    vi.useFakeTimers()
+    const t = setup(), { sessions: p, s } = t
+    await p.withoutChangeEvents(async () => { p.evidence(s, [{ model: 'first', effort: 'low' }]) })
+    await vi.runAllTimersAsync()
+    expect(t.changed).not.toHaveBeenCalled()
+    p.beginControl(s, profile(s, 'second'))
+    p.evidence(s, [{ model: 'second', effort: 'high', confirms: true }])
+    await expect(p.waitForProfile(s.agentId, 100)).resolves.toBe(true)
+    await vi.runAllTimersAsync()
+    expect(t.changed).not.toHaveBeenCalled()
+  })
+})
+
+
+it('refuses unsupported runtime readers before reserving worker capacity', async () => {
+  const t = setup()
+  t.s.engine = 'terminal'
+  await expect(t.sessions.read(t.s, { kind: 'config' })).rejects.toThrow('ENGINE_INVALID_REQUEST')
+  expect(t.read).not.toHaveBeenCalled()
+})
+
+
+it('keeps staged evidence when a config warmup contributes no observation', async () => {
+  const t = setup()
+  const stage = t.sessions.stage(t.s, true, true)
+  await stage.ingest([{ model: 'from-record', effort: 'high' }])
+  t.read.mockImplementationOnce(async (_engine, context) => ({ ...result(context, { kind: 'config' }), observed: false }))
+  await stage.config()
+  expect(stage.commit()).toBe(true)
+  expect(t.sessions.selectedModel(t.s)).toBe(profile(t.s, 'from-record').id)
+})

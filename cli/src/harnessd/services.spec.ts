@@ -694,7 +694,7 @@ describe('which services the core leaves to its master', () => {
 
   it('says which version of the other engines\' worker the master runs, from the actual supervising parent alone', () => {
     const env = { ...supervised, ...serviceProcessesEnv([], 42) }
-    expect(otherEnginesVersion(env, 42)).toBe(2)
+    expect(otherEnginesVersion(env, 42)).toBe(3)
     // A 1a master advertises history only: a new core must keep its live streams inline.
     expect(otherEnginesVersion({ ...env, [ENGINE_OTHERS_ENV]: '42:1' }, 42)).toBe(1)
     expect(otherEnginesVersion({ ...env, [ENGINE_OTHERS_ENV]: '42:7' }, 42)).toBe(7)

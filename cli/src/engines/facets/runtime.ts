@@ -24,7 +24,7 @@ export interface RuntimeState {
 
 export type RuntimeField = 'model' | 'effort' | 'mode'
 export type RuntimeSession = Pick<RegisteredSession, 'agentId' | 'sessionId' | 'engine' | 'model'
-  | 'cliVersion' | 'cwd' | 'transcriptPath' | 'codexHome' | 'launchModel'>
+  | 'cliVersion' | 'cwd' | 'transcriptPath' | 'codexHome' | 'hermesHome' | 'launchModel'>
 
 /** The transaction belongs to core. An engine interprets evidence against a supplied snapshot. */
 export interface RuntimeControl {
@@ -75,7 +75,8 @@ export interface EngineRuntime {
   decode(record: Record<string, unknown>): RuntimeRecord | null
   reduce(context: RuntimeContext, record: RuntimeRecord): void
   transcript(context: RuntimeContext, record: Record<string, unknown>): void
-  pane(context: RuntimeContext, text: string): void
+  pane(context: RuntimeContext, text: string): void | false | { refreshConfig: true } | Promise<void | false | { refreshConfig: true }>
+  config?(context: RuntimeContext): Promise<void | false>
   /** The effort a session starts with: its launch flag's, else its engine's settings'. A default, which fills an effort the
    * session has not shown and never replaces one it has (a reply's, a pane's), as `fillConfiguredEffort` applies it. */
   configuredEffort?(session: RuntimeSession): Promise<string>

@@ -62,7 +62,7 @@ hang or leak costs only its process. A process per risk, not per feature (`SERVI
 | Process | Services | Why its own | Started |
 |---|---|---|---|
 | `engine-claude`, `engine-codex` | history, live parsers, runtime profiles, screens, submission readings, model control, question navigation and Codex's app-server connection (`src/engines/worker/`) | engine behavior outside core; snapshots and revocable model- and question-control grants | on demand |
-| `engine-others` | the other fourteen engines' history and last turns (`src/engines/others/`) | their transcript and store readers, `node:sqlite` and Amp's `threads export` out of the core; a read names its engine, and each engine's code loads on its first read | on demand |
+| `engine-others` | the other fourteen engines' history, live parsing, pane/config profiles, screens and question navigation (`src/engines/others/`) | captured observations and revocable question grants; each engine loads on first use; model controls remain view-only | on demand |
 | `search` | search | native `node:sqlite`, the index's memory | always |
 | `viewers` | viewers, store | the viewer servers, the remote viewer streams and rendered surfaces, minutes-long installs | on demand |
 | `edge` | workspaces, usage, monitor, projects, handoff, recaps, windowNames, shell, connectors, sharedMachines, agentCleanup, messages, osDevice, goals, hachi, engineProbe | light pure-JS services: isolated from the core, not from each other | always |

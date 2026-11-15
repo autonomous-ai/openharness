@@ -58,7 +58,7 @@ describe('question-control authority', () => {
     expect(await s.request({ kind: 'key', key: 'Enter' })).toEqual(denied)
   })
 
-  it('uses the grant in explicit inline mode, refuses a missing driver, and leaves other engines alone', async () => {
+  it('uses the grant in explicit inline mode, refuses a missing driver, and leaves terminal sessions alone', async () => {
     const s = setup('claude', false)
     let host!: QuestionControlHost
     s.native.apply = vi.fn(async (_step, value) => { host = value; return value.key('2') })
@@ -69,7 +69,7 @@ describe('question-control authority', () => {
     expect(await s.port().apply(step)).toBe(false)
     s.deps.inline.mockReturnValue(undefined)
     expect(await s.port().apply(step)).toBe(false)
-    expect(s.controls.forSession({ ...s.session(), engine: 'cursor' })).toBeUndefined()
+    expect(s.controls.forSession({ ...s.session(), engine: 'terminal' })).toBeUndefined()
     expect(s.controls.answer(s.service, 'live', {})).toBeNull()
   })
 
