@@ -2369,7 +2369,8 @@ export class CableSession {
     try {
       const submitted = await this.host.sendTurn(agentId, text)
       if (submitted && !submitted.ok) {
-        // Another app's words name its agent by the folder it runs in, which no log line carries: only the app is logged.
+        // Another app's words name its agent by the name the person gave its session or the folder it runs in, which no
+        // log line carries: only the app is logged.
         await reply({ t: 'voice.error', message: submitted.message ?? (carried
           ? 'Could not reach that harness. Your carried text is still here.'
           : 'Could not reach that harness. Check its connection and try again.') },

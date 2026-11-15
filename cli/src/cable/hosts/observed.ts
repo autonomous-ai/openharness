@@ -145,9 +145,10 @@ interface Entry {
   opens: OpenTarget
   /** What the permission prompt it waits on asks, from its hook (deviceClaude/asked.ts): '' when it names nothing. */
   asked?: string
-  /** The name the session gives itself, from its session-start or turn-start. Only Claude Code's event with none clears
-   *  it: its hook says the name on each of these while the session has one, while Command Code's turn-start is every
-   *  tool call and says none. */
+  /** The name the session gives itself, from its session-start or turn-start, or, for a session the scan found, the one
+   *  the person gave it in its own process record until then. Only Claude Code's event with none clears it: its hook
+   *  says the name on each of these while the session has one, while Command Code's turn-start is every tool call and
+   *  says none. */
   title?: string
   generation?: string
   endAt?: number
