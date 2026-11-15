@@ -44,6 +44,25 @@ export interface RuntimeContext {
 /** Engine-private evidence. Core transports it but never interprets its keys. */
 export type RuntimeRecord = Record<string, string | boolean | null>
 
+/**
+ * What one transcript record of another engine says of its session's profile, as that engine's reader reads it in their
+ * worker (engines/others/streams.ts): plain values the core applies to the state it keeps (kit/runtime.ts
+ * `applyProfileEvidence`), so no record of theirs is parsed in the core.
+ */
+export interface ProfileEvidence {
+  cliVersion?: string
+  model?: string
+  effort?: string
+  /** An effort to show while the session has shown none: Cursor names its effort only in its pane. */
+  effortUnset?: string
+  /** What this names confirms a switch in flight to it: Pi's and omp's records name what they switched to. */
+  confirms?: true
+  /** A model that changed reads the configuration again: Command Code keeps an effort per model. */
+  refresh?: true
+  /** The folder the engine's own tools run in (OpenClaw's session header), null when its header names none. */
+  workspace?: string | null
+}
+
 export interface RuntimeCatalogModel {
   slug: string
   displayName: string

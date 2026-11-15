@@ -1,7 +1,8 @@
 /**
  * OpenClaw through the core, on stores built from the recorded fixtures (`engines/openclaw/__fixtures__/`, OpenClaw
  * 2026.11.2): a bound pane's live stream, a phone message's acceptance, and the history and last turn a window and a
- * recap read. The engine's code is the real one, loaded as the core loads it. The fixtures need a Node whose SQLite
+ * recap read. The engine's code is the real one, loaded as the other engines' worker loads it, the worker's streams in
+ * this process (testing/otherStreamsInProcess.ts). The fixtures need a Node whose SQLite
  * has fts5 (22.23 or 24; 23.11 lacks it).
  */
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
@@ -23,6 +24,8 @@ import { createLastTurnReader } from './lastTurn.js'
 import { createStoreOf } from './stores.js'
 import { engineTranscriptFor } from '../../engines/transcripts.js'
 import { createSessionNormalizers } from './normalizers.js'
+import { createIngest } from './ingest.js'
+import { inProcessOtherStreams } from '../../testing/otherStreamsInProcess.js'
 
 vi.mock('../../lib/deletedSessions.js', () => ({ isRecentlyDeleted: () => false }))
 // A test may run the reader on a Node with no `node:sqlite`; the stores are built with the real one first.
@@ -36,12 +39,14 @@ const fixture = (name: string): string => readFileSync(join(FIXTURES, `${name}.s
 
 let dir = ''
 const open: DatabaseLike[] = []
+const stops: Array<() => Promise<void>> = []
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'openclaw-core-'))
   vi.spyOn(console, 'log').mockImplementation(() => {})
   vi.spyOn(console, 'error').mockImplementation(() => {})
 })
-afterEach(() => {
+afterEach(async () => {
+  for (const stop of stops.splice(0)) await stop()
   vi.useRealTimers()
   vi.mocked(builtinSqlite).mockReset()
   closeSqliteHandles()
@@ -88,8 +93,8 @@ function attachTo(db: string, row: RegisteredSession, emit: AttachDeps['emit']) 
   const runtimeProfiles = {
     transcriptFields: vi.fn(() => []), beginHydrate: vi.fn(() => profile), hydrate: vi.fn(), ingest: vi.fn(() => false),
     ingestConfig: vi.fn(async () => false), ingestPane: vi.fn(() => false), capturePane: vi.fn(async () => null),
+    evidence: vi.fn(() => false), hydrateEvidence: vi.fn(),
   }
-  const normalizers = createSessionNormalizers()
   const opened = vi.fn(async (_key: string, _pane: { pid: number }): Promise<string | null> => db)
   const setIdentityHold = vi.fn((_id: string, reason?: string) => {
     if (row.identityHold === reason) return false
@@ -98,16 +103,24 @@ function attachTo(db: string, row: RegisteredSession, emit: AttachDeps['emit']) 
     return true
   })
   const announceTurnAborted = vi.fn(), announceSession = vi.fn()
+  const bySession = (id: string) => (id === row.sessionId ? row : undefined)
+  let ingest!: ReturnType<typeof createIngest>
+  const others = inProcessOtherStreams({ bySession, frame: (session, frame) => ingest.acceptStreamFrame(session, frame) })
+  stops.push(others.stop)
+  const normalizers = createSessionNormalizers(others.streams)
+  ingest = createIngest({ liveFor, has: () => true, bySession, tokenUsage: { changed: vi.fn() }, device: () => undefined,
+    runtimeProfiles: runtimeProfiles as never, normalizers, announceTurnAborted, emit: emit as never, attachSession: vi.fn(async () => true),
+    setIdentityHold, announceSession })
   const attach = createAttach({
-    liveFor, resolve: (id) => (id === row.agentId ? row : undefined), terminalGone: async () => false, normalizers,
+    liveFor, resolve: (id) => (id === row.agentId ? row : undefined), terminalGone: async () => false, normalizers, others: others.streams,
     watcher: { addSession: vi.fn(async () => {}), removeSession: vi.fn(async () => {}), pollSession: vi.fn(async () => {}), hold: vi.fn(async () => null), tails: vi.fn(() => false) },
-    setInterpretationHold: () => false, setIdentityHold, announceSession, cursorDiscovery: { add: vi.fn(async () => {}) }, device: () => undefined,
+    setInterpretationHold: () => false, announceSession, cursorDiscovery: { add: vi.fn(async () => {}) }, device: () => undefined,
     runtimeProfiles: runtimeProfiles as unknown as AttachDeps['runtimeProfiles'], captureTerminal: vi.fn(async () => null), emit,
-    tokenUsage: { changed: vi.fn() }, announceTurnAborted, questionWatcher: { start: vi.fn() }, terminalLabel: () => 'tmux:%1',
-    dbs: { opencode: '/db/opencode.db', kilo: '/db/kilo.db', devin: '/db/devin.db', openclaw: opened },
-    devinHome: '/devin', hermesDb: async () => '/db/hermes.db', concurrency: 1,
+    tokenUsage: { changed: () => {} }, questionWatcher: { start: vi.fn() }, terminalLabel: () => 'tmux:%1',
+    storeOf: createStoreOf({ opencode: '/db/opencode.db', kilo: '/db/kilo.db', devin: '/db/devin.db', openclaw: opened }, async () => '/db/hermes.db'),
+    concurrency: 1,
   })
-  return { attach, normalizers, runtimeProfiles, opened, setIdentityHold, announceTurnAborted, announceSession }
+  return { attach, normalizers, runtimeProfiles, opened, setIdentityHold, announceTurnAborted, announceSession, streams: others.streams }
 }
 
 describe('an OpenClaw pane, through the core', () => {
@@ -121,7 +134,7 @@ describe('an OpenClaw pane, through the core', () => {
     expect(await run.attach.attachSession(row)).toBe(true)
     // The store is found from the TUI's process, and the session header feeds the workspace label.
     expect(run.opened).toHaveBeenCalledWith('agent:main:tool', { pid: 7714 })
-    expect(run.runtimeProfiles.ingest).toHaveBeenCalledWith(row, expect.stringContaining('"type":"session"'), true)
+    expect(Object.keys((run.runtimeProfiles.evidence.mock.calls[0] as unknown as [RegisteredSession, object[]])[1][0])).toEqual(['workspace'])
     expect(run.normalizers.hasState('agent:main:tool')).toBe(true)
     expect(events).toEqual([])
     writeRun()
@@ -184,19 +197,18 @@ describe('an OpenClaw pane, through the core', () => {
     const row = pane('agent:main:plain')
     const run = attachTo(path, row, () => {})
     await run.attach.attachSession(row)
-    const stream = run.normalizers.openclawReaders.get('agent:main:plain')!
-    stream.paneRead(RUNNING)
+    run.streams.paneRead('agent:main:plain', RUNNING); await vi.advanceTimersByTimeAsync(0)
     await vi.advanceTimersByTimeAsync(30_000)
-    stream.paneRead(RUNNING)
+    run.streams.paneRead('agent:main:plain', RUNNING); await vi.advanceTimersByTimeAsync(0)
     expect(run.setIdentityHold).toHaveBeenCalledWith('claw-agent', OPENCLAW_STATES.noSessions)
     expect(run.announceSession).toHaveBeenCalledWith(row)
     const said = warn.mock.calls.filter(([line]) => String(line).includes(OPENCLAW_STATES.noSessions))
     expect(said).toHaveLength(1)
-    expect(said[0][0]).toContain(dirname(path))
+    expect(said[0][0]).not.toContain(dirname(path))
     // The Gateway writes the session after all: the next poll finds it, and the next pass clears the state.
     db.exec(fixture('plain'))
     await vi.advanceTimersByTimeAsync(1_500)
-    stream.paneRead(RUNNING)
+    run.streams.paneRead('agent:main:plain', RUNNING); await vi.advanceTimersByTimeAsync(0)
     expect(run.setIdentityHold).toHaveBeenLastCalledWith('claw-agent', undefined)
     expect(row).not.toHaveProperty('identityHold')
     run.normalizers.forget('agent:main:plain')
@@ -212,14 +224,13 @@ describe('an OpenClaw pane, through the core', () => {
     // The bind pass could not read the pane: its own reason is on the agent before the store's.
     const other = 'the pane could not be read'
     row.identityHold = other
-    const stream = run.normalizers.openclawReaders.get('agent:main:plain')!
-    stream.paneRead(RUNNING)
+    run.streams.paneRead('agent:main:plain', RUNNING); await vi.advanceTimersByTimeAsync(0)
     await vi.advanceTimersByTimeAsync(30_000)
-    stream.paneRead(RUNNING)
+    run.streams.paneRead('agent:main:plain', RUNNING); await vi.advanceTimersByTimeAsync(0)
     expect(row.identityHold).toBe(other)
     db.exec(fixture('plain'))
     await vi.advanceTimersByTimeAsync(1_500)
-    stream.paneRead(RUNNING)
+    run.streams.paneRead('agent:main:plain', RUNNING); await vi.advanceTimersByTimeAsync(0)
     expect(row.identityHold).toBe(other)
     expect(run.announceSession).not.toHaveBeenCalled()
     run.normalizers.forget('agent:main:plain')
@@ -262,8 +273,8 @@ describe('an OpenClaw pane, through the core', () => {
     run.opened.mockResolvedValueOnce(null)
     expect(await run.attach.attachSession(row)).toBe(true)
     expect(run.opened).toHaveBeenCalledWith('not-a-key', { pid: 0 })
-    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/^\[openclaw\] \S+ not an OpenClaw session key · not read$/))
-    expect(run.normalizers.openclawReaders.has('not-a-key')).toBe(false)
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/^\[openclaw\] \S+ not a session its store holds · not read$/))
+    expect(run.normalizers.hasState('not-a-key')).toBe(false)
   })
 
   it('an attach whose pane changed while its store was being found reads nothing', async () => {
@@ -277,7 +288,7 @@ describe('an OpenClaw pane, through the core', () => {
     row.cwd = '/work/elsewhere'
     found(path)
     expect(await attached).toBe(false)
-    expect(run.normalizers.openclawReaders.has('agent:main:plain')).toBe(false)
+    expect(run.normalizers.hasState('agent:main:plain')).toBe(false)
   })
 
   it('stopping the pollers stops an openclaw reader: a run written after is not read', async () => {

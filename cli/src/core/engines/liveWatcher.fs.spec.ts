@@ -60,7 +60,7 @@ it('replays a Codex rewrite hidden by a rapid preceding file change', async () =
         } finally { hold?.release() }
         await liveWatcher!.watcher.addSession(watched)
       },
-    })
+    }, { drain: async () => {}, drainAll: async () => {} })
     liveWatcher.watcher.start()
     const prepared = await liveWatcher.live.prepare(session, { live: false }, () => {})
     expect(liveWatcher.live.install(prepared)).toBe(true)

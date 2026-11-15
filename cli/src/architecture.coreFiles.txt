@@ -64,7 +64,6 @@ core/engines/admissionOrder.ts
 core/engines/backgroundJobs.ts
 core/engines/controlTransport.ts
 core/engines/cursorDiscovery.ts
-core/engines/cursorTasks.ts
 core/engines/engineLinks.ts
 core/engines/homeAdoptions.ts
 core/engines/hooks.ts
@@ -73,6 +72,7 @@ core/engines/liveTransport.ts
 core/engines/liveWatcher.ts
 core/engines/modelControls.ts
 core/engines/nativeControls.ts
+core/engines/otherStreams.ts
 core/engines/pendingAdmission.ts
 core/engines/providerMoves.ts
 core/engines/questionControls.ts
@@ -128,7 +128,6 @@ core/transcripts/ingest.ts
 core/transcripts/lastTurn.ts
 core/transcripts/normalizers.ts
 core/transcripts/readIdentity.ts
-core/transcripts/readerLoads.ts
 core/transcripts/relaunch.ts
 core/transcripts/sideReads.ts
 core/transcripts/stores.ts
@@ -275,6 +274,7 @@ engines/worker/modelControlHost.ts
 engines/worker/modelControlProtocol.ts
 engines/worker/nativeControlHost.ts
 engines/worker/nativeControlProtocol.ts
+engines/worker/otherStreamProtocol.ts
 engines/worker/protocol.ts
 engines/worker/providerMoveProtocol.ts
 engines/worker/questionControlHost.ts

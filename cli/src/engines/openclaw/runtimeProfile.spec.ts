@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { inspectRuntimePane } from '../../lib/legacyPane.js'
 import { parseRuntimeProfile } from '../../lib/runtimeProfileWire.js'
 import {
-  createRuntimeProfileReader, parseOpenclawFooter, type OpenclawFooter,
+  createRuntimeProfileReader, parseOpenclawFooter, transcriptEvidence, type OpenclawFooter,
 } from './runtimeProfile.js'
 import { readOpenclawScreen } from './contract.js'
 
@@ -122,17 +122,11 @@ describe('OpenClaw runtime profile reader', () => {
     expect(ctx.state.model).toBeNull()
   })
 
-  it('keeps the workspace from the session header, per session', () => {
-    const reader = createRuntimeProfileReader()
-    const a = context('agent:main:a')
-    const b = context('agent:main:b')
-    reader.transcript?.(a, { type: 'session', cwd: '/root/.openclaw/workspace' })
-    reader.transcript?.(b, { type: 'session', cwd: '/' })
-    expect(reader.workspace('agent:main:a')).toBe('/root/.openclaw/workspace')
+  it('reads the workspace from the session header, and none from any other record', () => {
+    expect(transcriptEvidence({ type: 'session', cwd: '/root/.openclaw/workspace' })).toEqual({ workspace: '/root/.openclaw/workspace' })
     // `/` is the Gateway's own folder, which a session made by /model before any message records.
-    expect(reader.workspace('agent:main:b')).toBeNull()
-    reader.forget?.('agent:main:a')
-    expect(reader.workspace('agent:main:a')).toBeNull()
+    expect(transcriptEvidence({ type: 'session', cwd: '/' })).toEqual({ workspace: null })
+    expect(transcriptEvidence({ type: 'message', cwd: '/elsewhere' })).toBeNull()
   })
 })
 

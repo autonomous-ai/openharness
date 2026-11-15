@@ -5,21 +5,22 @@
  * `fullyIdle: true` once they report — measured, and that is the path a healthy turn takes. But one
  * measured run completed its sub-agents, wrote its summary, and sent nothing further; the turn stayed
  * open with no recap. The pane is the only other place the answer exists (`? for shortcuts` idle vs
- * `esc to cancel` busy), so a waiting Stop arms a bounded poll of it.
+ * `esc to cancel` busy, declared in agy's contract), so a waiting Stop arms a bounded poll of it.
  *
  * Bounded on purpose: it stops after AGY_IDLE_WATCH_MAX checks (~10 min) rather than polling a pane
- * forever, and any real Stop clears it first.
+ * forever, and any real Stop clears it first. Its close is the worker's (core/engines/otherStreams.ts), which the
+ * core makes itself when the worker does not answer.
  *
  * Moved verbatim out of `runForeground` (the core boundary, step 9: docs/design/2026-10-03-harnessd.md).
  */
-import type { AgyNormalizer } from '../../engines/agy/normalizer.js'
-import { engineNow } from '../../engines/inProcess.js'
+import { agyPaneIdle } from '../../engines/agy/contract.js'
 import { sid } from '../../lib/log.js'
 import type { LiveEvent } from '../../engines/kit/events.js'
 import type { RegisteredSession } from '../../lib/registry.js'
+import type { OtherStreams } from '../engines/otherStreams.js'
 
 export interface AgyBackstopDeps {
-  agyNormalizers: Map<string, AgyNormalizer>
+  streams: Pick<OtherStreams, 'get' | 'close'>
   bySession: (sessionId: string) => RegisteredSession | undefined
   captureTerminal: (target: string, historyLines?: number) => Promise<string | null>
   /** Read what the transcript has that the tail has not delivered yet (Watcher.pollSession). */
@@ -27,7 +28,7 @@ export interface AgyBackstopDeps {
   emit: (sessionId: string, events: LiveEvent[]) => void
 }
 
-export function createAgyBackstop({ agyNormalizers, bySession, captureTerminal, drain, emit }: AgyBackstopDeps) {
+export function createAgyBackstop({ streams, bySession, captureTerminal, drain, emit }: AgyBackstopDeps) {
   const AGY_IDLE_WATCH_MS = 15_000
   const AGY_IDLE_WATCH_MAX = 40
   const agyIdleWatch = new Map<string, { timer: NodeJS.Timeout; checks: number }>()
@@ -47,19 +48,16 @@ export function createAgyBackstop({ agyNormalizers, bySession, captureTerminal, 
     const timer = setTimeout(() => {
       void (async () => {
         agyIdleWatch.delete(sessionId)
-        const normalizer = agyNormalizers.get(sessionId)
-        if (!normalizer?.turnOpen) return
+        const stream = streams.get(sessionId)
+        if (!stream?.turnOpen) return
         const entry = bySession(sessionId)
         if (!entry) return
         const capture = await captureTerminal(entry.agentId, 60)
-        // Its pane is read with agy's own code, loaded since its session's attach: without it there is no backstop.
-        const agy = engineNow('agy', 'its idle backstop read the pane')
-        if (!agy) return
-        if (!capture || !agy.agyPaneIdle(capture)) { armAgyIdleWatch(sessionId, checks + 1); return }
+        if (!capture || !agyPaneIdle(capture)) { armAgyIdleWatch(sessionId, checks + 1); return }
         await drain(sessionId)
-        if (!normalizer.turnOpen) return
+        if (streams.get(sessionId) !== stream || !stream.turnOpen) return
         console.log(`[turn] ${sid(sessionId)} closed by the agy idle backstop · no final Stop arrived`)
-        emit(sessionId, normalizer.closeTurn())
+        emit(sessionId, await streams.close(sessionId, {}))
       })().catch((err) => {
         console.error('[agy] idle backstop failed:', err instanceof Error ? err.message : err)
       })

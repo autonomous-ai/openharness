@@ -18,6 +18,8 @@ export { engineTranscriptFor } from '../engines/transcripts.js'
 // each service's own process reads it (lib/databaseHistory.ts), loaded only once one asks (engines/inProcess.ts).
 export { databaseHistory } from '../engines/storeHistory.js'
 export { liveFor } from '../engines/live.js'
+// The other engines' live streams, and their reads, in this process: as their worker serves them.
+export { otherEngineRequests } from '../engines/others/otherEnginesProcess.js'
 export { screenFor } from '../engines/screens.js'
 export { submissionFor } from '../engines/submissions.js'
 export { nativeControlFor } from '../engines/nativeControls.js'

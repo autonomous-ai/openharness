@@ -8,7 +8,6 @@ function setup(over: Partial<CancelDeps> = {}) {
   const deps: CancelDeps = {
     resolve: (id) => id === 'a1' ? ({ agentId: 'a1', sessionId: 's1' } as RegisteredSession) : undefined,
     normalizers: { closeTurns: vi.fn((sessionId: string) => { calls.push(`close ${sessionId}`) }) },
-    cursorSubagents: { forget: vi.fn() },
     input: { cancel: vi.fn(), cancelConfirmed: vi.fn(async () => true) },
     device: () => service,
     stopHeartbeat: vi.fn(),
@@ -28,7 +27,6 @@ describe('cancelling a turn', () => {
     const { deps, service, cancelAgent } = setup()
     expect(await cancelAgent('a1')).toBe(true)
     expect(deps.normalizers.closeTurns).toHaveBeenCalledWith('s1')
-    expect(deps.cursorSubagents.forget).toHaveBeenCalledWith('s1')
     expect(deps.input.cancel).toHaveBeenCalledWith('a1')
     expect(deps.input.cancelConfirmed).not.toHaveBeenCalled()
     expect(service.turnEnded).toHaveBeenCalledWith('a1', true)
