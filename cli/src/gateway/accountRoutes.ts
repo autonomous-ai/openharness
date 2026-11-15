@@ -1,8 +1,8 @@
 /**
  * The account's routes of the daemon's local door (core/api.ts `SERVICE_HTTP_ROUTES`), answered here, by the gateway,
  * which holds the account's sign-in and makes every backend call: the desk and its tab edits, Agent Messages' tabs, the
- * account's name, the phone half of a sign-in, the product usage feedback, choice and reports, a machine's rename and
- * delete, and the Harness Store's ratings and reviews. They were the door's own (hookServer.ts) until the core audit of
+ * account's name, the phone half of a sign-in and Add Phone's code, the product usage feedback, choice and reports, a
+ * machine's rename and delete, and the Harness Store's ratings and reviews. They were the door's own (hookServer.ts) until the core audit of
  * 2026-11-12 (section 2) moved them, as they were: the core's door checks the caller and that a write carries the local
  * header (core/serviceRoutes.ts), and hands each on as it came; what each takes is checked here, what it forwards is
  * only what it took, and its answer is the backend's as it gave it. Each answers byte for byte as it did in the door, its
@@ -12,6 +12,7 @@
 import type { HttpAnswer, ServiceRequest } from '../core/api.js'
 import { appProductUsageReport } from '../lib/appProductUsageReport.js'
 import { PRODUCT_FEEDBACK } from '../lib/productUsageContract.js'
+import type { keyRoutes } from './keyRoutes.js'
 
 /** A call of the account's backend, as the gateway makes it (gateway/start.ts `ops.backend`). */
 export type AccountBackend = (method: string, path: string, body?: unknown) => Promise<HttpAnswer>
@@ -56,6 +57,9 @@ function routeOf(backend: AccountBackend, method: string, target: string, text: 
     return read ? then(read.value) : bad
   }
   if (method === 'GET' && (path === '/api/desk' || path === '/api/agent-messages' || path === '/api/auth/me' || path === '/api/product-usage/settings')) return forward(path)
+  // Add Phone's code, minted by the backend against this computer's sign-in: asked of the gateway only over the daemon's
+  // own socket (`gatewayHttp`).
+  if (method === 'POST' && path === '/api/auth/handoff') return forward(path, {})
   // The window's tab edits (backend routes/desk.ts), which it hears everyone else's as `desk_changed`, and the account's
   // name (`{ name }`, task #2654), which the backend checks and answers as GET does.
   if ((method === 'POST' && path === '/api/desk/ops') || (method === 'PATCH' && path === '/api/auth/me')) return json(INVALID_JSON, (value) => forward(path, value))
@@ -148,16 +152,20 @@ export function accountRoutes(backend: AccountBackend, log: (line: string) => vo
 
 /**
  * The gateway's one request for its routes of the door (`gateway_http`, core/api.ts `GATEWAY_REQUESTS`): the Wi-Fi
- * device's to their own handler (lib/autonomous-device/localHttp.ts), the account's to [account]. Only this computer's
- * owner, on this computer: the door's caller, or a client of the local WebSocket, whose door asks the same
- * (localWsServer.ts); a remote client or a guest is refused as the door refuses a write.
+ * device's to their own handler (lib/autonomous-device/localHttp.ts), the keys' to [keys] (gateway/keyRoutes.ts), the
+ * account's to [account]. Only this computer's owner, on this computer: the door's caller, or a client of the local
+ * WebSocket, whose door asks the same (localWsServer.ts); a remote client or a guest is refused as the door refuses a
+ * write. The phone's sign-in code only for the door over the daemon's own socket (`asker.door`), which no client of the
+ * local WebSocket is: its door takes any process of this account over loopback TCP.
  */
-export function gatewayHttp(device: ServiceRequest, account: ReturnType<typeof accountRoutes>): ServiceRequest {
+export function gatewayHttp(device: ServiceRequest, keys: ReturnType<typeof keyRoutes>, account: ReturnType<typeof accountRoutes>): ServiceRequest {
   return async (payload, asker, closed) => {
     const target = typeof payload.target === 'string' ? payload.target : ''
     if (target.startsWith('/api/autonomous-device/')) return device(payload, asker, closed)
-    if (!asker.local || !asker.owner || asker.guest !== undefined) return { status: 403, body: { error: 'FORBIDDEN' } }
+    const path = target.split('?')[0]
+    if (!asker.local || !asker.owner || asker.guest !== undefined || (path === '/api/auth/handoff' && asker.door !== 'socket')) return { status: 403, body: { error: 'FORBIDDEN' } }
     const method = typeof payload.method === 'string' ? payload.method : ''
-    return { ...await account(method, target, typeof payload.body === 'string' ? payload.body : undefined) }
+    const body = typeof payload.body === 'string' ? payload.body : undefined
+    return { ...await (keys(method, path, body) ?? account(method, target, body)) }
   }
 }

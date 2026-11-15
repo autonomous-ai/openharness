@@ -36,7 +36,6 @@ const LOCAL_IDLE_DEADLINE_MS = 40_000
 // the local frame header; ordinary JSON frames stay bounded by LOCAL_JSON_MAX_BYTES regardless.
 const MAX_WS_MESSAGE_BYTES = TERMINAL_LOCAL_PASTE_MAX_PAYLOAD_BYTES + 4_096
 
-import type { WindowVoiceReply } from './cable/windowRoute.js'
 import { LOCAL_JSON_MAX_BYTES } from './lib/localJsonLimit.js'
 
 export interface LocalWsBackend {
@@ -96,25 +95,9 @@ export interface LocalWsServerOptions {
   onAppSwarms?: (swarms: AppSwarms | null) => void
   /** Tab membership for cleanup, scoped to the reporting window, including local utility tabs. */
   onAppTabAgents?: (connection: string, agentIds: string[] | null) => void
-  /**
-   * The window asked WHICH AGENT a typed task belongs to (⌘K). Answers, and sends NOTHING.
-   *
-   * Two frames rather than one, and the split is the design: the window decides whether the answer is
-   * good enough to act on. Fold them together with a `commit` flag and the confidence threshold moves in
-   * here, where nothing knows what the person is looking at.
-   */
-  onRouteTask?: (text: string) => Promise<RouteAnswer>
-  /**
-   * The window committed to an agent — deliver the task, and SAY whether it could be delivered.
-   *
-   * It answers for the same reason `route_task` does. The remote leg carries no ack of its own, so a
-   * machine that has gone deaf takes the turn and nothing comes back; with the palette closing silently
-   * on a confident route, that is a spoken instruction that vanishes with no mark anywhere.
-   *
-   * Answered when the fleet's router has decided, which is beside the dial in the devices: in a process of
-   * their own that is a hop, so the answer is awaited off this connection's ordered chain.
-   */
-  onRouteSend?: (agentId: string, text: string) => Promise<{ ok: true } | { ok: false; machine: string; reason: string }>
+  /** A frame a service answers (core/api.ts `SERVICE_WS_FRAMES`, core/serviceRoutes.ts `frame`): the frame its answer
+   *  goes back as, or null for one that is told; undefined when no service answers its type. */
+  onServiceFrame?: (connId: string, frame: Frame) => Promise<Frame | null> | undefined
   /** The dial right now, sent to a window, or a tool that asked for the dial, the moment it connects — it may have
    *  missed the announcement. */
   dialStatus?: () => Record<string, unknown>
@@ -135,15 +118,6 @@ export interface LocalWsServerOptions {
     accept(service: string, token: string, sink: LocalClientSink & { buffered(): number }, close: (code: number, reason: string) => void, accepted: () => void):
       { receive(frame: Frame): void; receiveBinary(bytes: Uint8Array): void; closed(): void } | null
   }
-  /**
-   * The window answering a `voice_route_request` — words spoken into the dial that IT was asked to route.
-   *
-   * One-way and uncorrelated by `requestId`, unlike ⌘B above, because the question travelled the other
-   * way: the daemon asked, so the daemon holds the pending id (`voiceId`) and the window is simply
-   * reporting. `taken` first, then `sent` or `cancelled` — see cable/windowRoute.ts for why the ack is a
-   * separate frame rather than a flag on the answer.
-   */
-  onVoiceRouteReply?: (voiceId: string, reply: WindowVoiceReply) => void
   onSelectionReply?: (connId: string, machineId: string, payload: Record<string, unknown>) => void
   onVisitReply?: (connId: string, machineId: string, payload: Record<string, unknown>) => void
   onFormReply?: (connId: string, machineId: string, payload: Record<string, unknown>) => void
@@ -680,80 +654,19 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
             return
           }
         }
-        // ⌘K: the only REQUEST/RESPONSE pair this socket serves. Everything else on it is one-way.
+        // A frame a service answers (core/api.ts `SERVICE_WS_FRAMES`): ⌘K's pick and its send, and the window's answer to a
+        // spoken task. Consumed here like app_focus, on a connection relayed to another machine too: each describes a hand
+        // at this desk, not anything a machine could act on. ⌘K rides the app's own rpc convention, `payload.requestId`
+        // out and the same id back (ws_conn.dart `request()`), and an answer ALWAYS goes back: the window holds a spinner
+        // open on that id, and silence is the one reply it cannot recover from.
         //
-        // It rides the app's OWN rpc convention — `payload.requestId` out, the same id back — which the
-        // window already implements end to end: the pending map, the timeout, the queue-across-reconnect
-        // and the logging are all there (ws_conn.dart `request()`). Inventing a second correlation field
-        // here would have meant a second, thinner copy of all of it on the side that already had one.
-        //
-        // Consumed here like app_focus: it describes a hand at this desk, not anything the machine could
-        // act on.
-        //
-        // Answered OFF this connection's ordered chain, which carries the terminal's keystrokes: the answer
-        // is the devices' (the fleet's router), which may be in a process of their own, and one that hangs
-        // must not hold a window's typing until the request times out. Nothing orders on the answer but its
-        // request id.
-        if (!isBinary && (options.onRouteTask || options.onRouteSend || options.onVoiceRouteReply)) {
-          if (parsed?.type === 'route_task' && options.onRouteTask) {
-            const onRouteTask = options.onRouteTask
-            void (async () => {
-              const payload = parsed.payload as Record<string, unknown> | undefined
-              const requestId = typeof payload?.requestId === 'string' ? payload.requestId : ''
-              const text = typeof payload?.text === 'string' ? payload.text.trim() : ''
-              // An answer ALWAYS goes back, even for a question we cannot serve: the window is holding a
-              // spinner open on this id, and silence is the one reply it cannot recover from.
-              let answer: RouteAnswer = { agentId: '', machineId: '', name: '', confidence: 0, reason: 'empty task', candidates: [], weighed: 0, machines: 0, via: '' }
-              if (text) {
-                try {
-                  answer = await onRouteTask.call(options, text)
-                } catch (err) {
-                  answer = { agentId: '', machineId: '', name: '', confidence: 0, reason: (err as Error).message.slice(0, 120), candidates: [], weighed: 0, machines: 0, via: '' }
-                }
-              }
-              sink.sendFrame({ type: 'route_result', payload: { requestId, ...answer } })
-            })()
-            return
-          }
-          if (parsed?.type === 'voice_route_reply' && options.onVoiceRouteReply) {
-            const payload = parsed.payload as Record<string, unknown> | undefined
-            const voiceId = typeof payload?.voiceId === 'string' ? payload.voiceId : ''
-            const state = typeof payload?.state === 'string' ? payload.state : ''
-            const agentId = typeof payload?.agentId === 'string' ? payload.agentId : ''
-            // Unknown states are dropped rather than guessed at: an answer this side cannot read must
-            // not settle a spoken turn as though it had been understood.
-            if (voiceId) {
-              if (state === 'taken') options.onVoiceRouteReply(voiceId, { t: 'taken' })
-              else if (state === 'sent') options.onVoiceRouteReply(voiceId, { t: 'sent', agentId })
-              else if (state === 'cancelled') options.onVoiceRouteReply(voiceId, { t: 'cancelled' })
-            }
-            return
-          }
-          if (parsed?.type === 'route_send' && options.onRouteSend) {
-            const onRouteSend = options.onRouteSend
-            void (async () => {
-              const payload = parsed.payload as Record<string, unknown> | undefined
-              const requestId = typeof payload?.requestId === 'string' ? payload.requestId : ''
-              const agentId = typeof payload?.agentId === 'string' ? payload.agentId : ''
-              const text = typeof payload?.text === 'string' ? payload.text : ''
-              let sent: { ok: true } | { ok: false; machine: string; reason: string } =
-                { ok: false, machine: '', reason: 'nothing to send' }
-              if (agentId && text) {
-                try {
-                  sent = await onRouteSend.call(options, agentId, text)
-                } catch (err) {
-                  sent = { ok: false, machine: '', reason: (err as Error).message.slice(0, 120) }
-                }
-              }
-              sink.sendFrame({
-                type: 'route_send_result',
-                payload: sent.ok
-                  ? { requestId, ok: true }
-                  : { requestId, ok: false, machine: sent.machine, reason: sent.reason },
-              })
-            })()
-            return
-          }
+        // Answered OFF this connection's ordered chain, which carries the terminal's keystrokes: the answer is the
+        // devices' (the fleet's router), in a process of their own, and one that hangs must not hold a window's typing until
+        // the request times out. Nothing orders on the answer but its request id.
+        const served = !isBinary && parsed ? options.onServiceFrame?.(connId, parsed) : undefined
+        if (served) {
+          void served.then((reply) => { if (reply) sink.sendFrame(reply) })
+          return
         }
         // THE PAIR BRAIN'S FRAMES. Local only, in both directions: never forwarded to a relayed machine,
         // never dispatched into the backend socket (whose `send()` uploads). Not awaited on this chain — an

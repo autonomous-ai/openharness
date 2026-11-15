@@ -644,6 +644,11 @@ export interface Asker {
    *  a core from before it was given: then the request is its own connection. */
   connection?: string
   requestId?: string
+  /** It came through the local door over the daemon's own socket (on Windows its pipe, with the token's proof), where
+   *  the filesystem said it is this computer's owner: set by the door (core/serviceRoutes.ts), never by a payload, and
+   *  never for a client of the local WebSocket. A route only that socket may ask (`ServiceHttpRoute.door`) is refused
+   *  without it. */
+  door?: 'socket'
 }
 
 /**
@@ -1372,12 +1377,12 @@ export interface WindowFocus {
   form: { machineId: string; connId: string } | null
 }
 
-/** A window's answer to a spoken task it was offered (`voice_route_reply`). */
-export type VoiceRouteReply = { t: 'taken' } | { t: 'sent'; agentId: string } | { t: 'cancelled' }
 
 /** The Devices tab (services/devices.ts): the devices on this computer, and a device's settings. Only
  *  the owner, on this computer or through the owner's own app, may manage them. */
-export const DEVICES_REQUESTS = ['harness_devices_list', 'harness_device_settings', 'pet_preview', 'pet_apply', 'pet_reset', 'pet_status'] as const
+export const DEVICES_REQUESTS = ['harness_devices_list', 'harness_device_settings', 'pet_preview', 'pet_apply', 'pet_reset', 'pet_status',
+  // A window's frames they answer (`SERVICE_WS_FRAMES`): ⌘K's, and its answer to a spoken task.
+  'devices_ws'] as const
 
 /**
  * The core's calls into the devices: what the windows on this computer said that the dial follows, the
@@ -1404,13 +1409,12 @@ export interface DevicesPort extends DeviceHookPort {
   windowFocus(focus: WindowFocus): void
   /** A window's answer to a bridge's ask. */
   windowReply(kind: 'selection' | 'visit' | 'form', connId: string, machineId: string, payload: Record<string, unknown>): void
-  /** A window's answer to a spoken task it was offered. */
-  voiceReply(voiceId: string, reply: VoiceRouteReply): void
   /** A window left. */
   windowGone(connId: string): void
-  /** ⌘K: which agent a typed task belongs to, on any of the owner's machines. */
+  /** ⌘K from the owner's app away from this desk (lib/ownerCommands.ts): which agent a typed task belongs to, on any of
+   *  the owner's machines. A window's comes as its frame (`SERVICE_WS_FRAMES`). */
   routeTask(text: string): Promise<RouteAnswer>
-  /** ⌘K's send: the turn delivered on the agent's own machine, or refused with why. */
+  /** Its send: the turn delivered on the agent's own machine, or refused with why. */
   routeSend(agentId: string, text: string): Promise<SendResult>
   /** The Wi-Fi device borrowing the dial's walk along the desk, through the core (`CoreApi.wifi.stepFocus`). */
   stepFocus(direction: 'next' | 'previous', currentAgentId?: string): Promise<{ machineId: string; agentId: string } | 'no_agents'>
@@ -1428,6 +1432,9 @@ export interface DevicesPort extends DeviceHookPort {
 }
 
 const DEVICES_UNAVAILABLE = 'the devices service is unavailable'
+/** ⌘K's pick, and its send, while the devices give no answer: no agent picked, nothing sent. */
+const UNROUTED: RouteAnswer = { agentId: '', machineId: '', name: '', confidence: 0, reason: DEVICES_UNAVAILABLE, candidates: [], weighed: 0, machines: 0, via: '' }
+const UNSENT: SendResult = { ok: false, machine: '', reason: DEVICES_UNAVAILABLE }
 
 /**
  * What the core gets when the devices fail: the dial and the window bridges hear nothing, ⌘K says so,
@@ -1436,9 +1443,8 @@ const DEVICES_UNAVAILABLE = 'the devices service is unavailable'
  */
 export const DEVICES_FALLBACKS: PortFallbacks<DevicesPort> = {
   card: undefined, desk: undefined, swarms: undefined, unread: undefined, appFocus: undefined, seen: undefined,
-  settings: undefined, windowFocus: undefined, windowReply: undefined, voiceReply: undefined, windowGone: undefined,
-  routeTask: later({ agentId: '', machineId: '', name: '', confidence: 0, reason: DEVICES_UNAVAILABLE, candidates: [], weighed: 0, machines: 0, via: '' }),
-  routeSend: later({ ok: false, machine: '', reason: DEVICES_UNAVAILABLE }),
+  settings: undefined, windowFocus: undefined, windowReply: undefined, windowGone: undefined,
+  routeTask: later(UNROUTED), routeSend: later(UNSENT),
   stepFocus: later('no_agents'), scroll: undefined, engines: undefined, commanders: undefined, observed: false,
   // Off, not an empty hold: the mod asks again in a minute, not at once.
   inboxPoll: later({ off: true }), inboxGone: undefined,
@@ -1830,6 +1836,9 @@ export interface ServiceHttpRoute {
   answerHeaders?: readonly string[]
   /** The most of a body the door reads for it, in bytes: past it the body is empty (the door's own bound when absent). */
   maxBodyBytes?: number
+  /** 'socket': only over the daemon's own socket (its Windows pipe). The door answers one over its TCP port with its 403
+   *  before its service is asked, and asks with `asker.door`, which no client of the local WebSocket is given. */
+  door?: 'socket'
 }
 
 /** The gateway's routes of the door (gateway/start.ts): one request, by path. */
@@ -1862,6 +1871,12 @@ const ACCOUNT_WAIT_MS = 25_000
 /** A route of the account (gateway/accountRoutes.ts) that takes [methods], each but GET a write. */
 const account = (path: RegExp, methods: readonly string[]): ServiceHttpRoute =>
   ({ path, methods, writes: methods.filter((method) => method !== 'GET'), type: 'gateway_http', waitMs: ACCOUNT_WAIT_MS, unanswered: GATEWAY_DOWN })
+/** How long a pairing may take: the code is typed on one screen and checked over the relay, round by round. */
+export const PAIR_WAIT_MS = 120_000
+/** A route of the keys (gateway/keyRoutes.ts) that takes [method], [local] when it needs the local header; waited for as
+ *  the gateway's calls always were (core/serviceLinks.ts, 30 s). */
+const keys = (path: RegExp, method: string, local: boolean, waitMs = 30_000): ServiceHttpRoute =>
+  ({ path, methods: [method], ...(local ? { writes: [method] } : {}), type: 'gateway_http', waitMs, unanswered: GATEWAY_DOWN })
 
 /**
  * The door's routes each service answers, the first that matches taking a request. Each says what it answered before
@@ -1900,13 +1915,54 @@ export const SERVICE_HTTP_ROUTES: readonly ServiceHttpRoute[] = [
   // A machine's rename and delete, and the Store's ratings and reviews, which answers its other methods itself.
   account(/^\/api\/machines\//, ['PATCH', 'DELETE']),
   { path: /^\/api\/store\//, writes: ['PUT', 'DELETE'], type: 'gateway_http', waitMs: ACCOUNT_WAIT_MS, unanswered: GATEWAY_DOWN },
+  // Add Phone's code, which signs a phone in to this account: the one route whose answer is a credential. Not the local
+  // header, which any process here can send, but the daemon's own socket, where the filesystem said who this is; another
+  // account on a shared computer reaches the port, never the socket.
+  { ...account(/^\/api\/auth\/handoff$/, ['POST']), door: 'socket' },
+  // The keys, which the gateway holds (gateway/keyRoutes.ts, e2e/keyRoutes.e2e.ts): `harness pair`, `pairings`, `unpair`,
+  // `remote-password`, `link connect`'s mutual half, `group`, `devices` and the window's Devices list.
+  keys(/^\/api\/pair$/, 'POST', true, PAIR_WAIT_MS),
+  keys(/^\/api\/pairs$/, 'GET', false),
+  keys(/^\/api\/revoke(-all)?$/, 'POST', true),
+  keys(/^\/api\/remote-password\/(set|clear)$/, 'POST', true),
+  keys(/^\/api\/remote-password\/status$/, 'GET', false),
+  keys(/^\/api\/link\/trust-peer$/, 'POST', true),
+  keys(/^\/api\/group$/, 'GET', false),
+  keys(/^\/api\/group\/(sync|remove)$/, 'POST', true),
+  keys(/^\/api\/devices$/, 'GET', false),
+  keys(/^\/api\/devices\/(remove|rebaseline|dismiss)$/, 'POST', true),
+  // The account's whole device story, and a backend call as this machine behind it: a read, local only.
+  keys(/^\/api\/devices\/history$/, 'GET', true),
 ]
 
 /**
- * The daemon's own commands about the keys, which the gateway holds: `harness pair`, `unpair`,
- * `remote-password`, `link connect`, `group` and `devices`. Each answers as the hook server's route does; while the
- * gateway is down, a 503.
+ * A frame of the local WebSocket that a service answers (core/serviceRoutes.ts `frame`): asked of it as the request
+ * `type`, carrying `{ frame, payload }` as the window sent them, off the connection's ordered chain, and its answer sent
+ * back as the frame `result` under the frame's `requestId`. The core holds where it goes, how long it waits, and what is
+ * sent back while its service is down, failing or slow: never what the frame does.
  */
+export interface ServiceWsFrame {
+  /** The frame's type, as a window sends it. */
+  frame: string
+  type: string
+  /** The frame its answer goes back as; none for a frame the window tells, which nothing answers. */
+  result?: string
+  waitMs: number
+  /** What goes back while its service gives no answer. */
+  unanswered?: Record<string, unknown>
+}
+
+/** A window's frames each service answers, wherever the window's terminals are: they describe a hand at this desk. Each
+ *  says what was sent back before it left the core's process, word for word, while its service is down
+ *  (e2e/keyRoutes.e2e.ts). */
+export const SERVICE_WS_FRAMES: readonly ServiceWsFrame[] = [
+  // ⌘K: which agent a typed task belongs to, on any of the owner's machines; the classifier has 20 s (services/fleet.ts).
+  { frame: 'route_task', type: 'devices_ws', result: 'route_result', waitMs: 25_000, unanswered: { ...UNROUTED } },
+  // ⌘K's send, through the fleet's router: the turn delivered on the agent's own machine, or refused with why.
+  { frame: 'route_send', type: 'devices_ws', result: 'route_send_result', waitMs: 5_000, unanswered: { ...UNSENT } },
+  // The window's answer to a spoken task the devices offered it (cable/windowRoute.ts): taken, then sent or cancelled.
+  { frame: 'voice_route_reply', type: 'devices_ws', waitMs: 5_000 },
+]
 
 export interface GatewayOps {
   /** The account's token. The gateway renews the sign-in (lib/authRefresh.ts) and the core asks it, so the core calls
@@ -1917,23 +1973,6 @@ export interface GatewayOps {
   machines(fallback?: boolean): Promise<HttpAnswer>
   mintGridName(): Promise<string | null>
   status(): Promise<GatewayStatus>
-  pair(code: string): Promise<HttpAnswer>
-  listPairs(): Promise<HttpAnswer>
-  revoke(id: string): Promise<HttpAnswer>
-  revokeAll(): Promise<HttpAnswer>
-  setRemotePassword(password: string): Promise<HttpAnswer>
-  clearRemotePassword(): Promise<HttpAnswer>
-  remotePasswordStatus(): Promise<HttpAnswer>
-  trustLinkedPeer(peer: { pub: string; machineId: string; label: string }): Promise<HttpAnswer>
-  groupList(): Promise<HttpAnswer>
-  groupSync(): Promise<HttpAnswer>
-  groupRemove(selector: string): Promise<HttpAnswer>
-  devicesList(): Promise<HttpAnswer>
-  devicesRemove(pub: string): Promise<HttpAnswer>
-  devicesHistory(): Promise<HttpAnswer>
-  /** `confirm`: "It's mine" for the one key named, shared with the account's other devices. */
-  devicesDismiss(body: { pub?: string; pubs?: string[]; baseline?: boolean; confirm?: boolean }): Promise<HttpAnswer>
-  devicesRebaseline(confirm: boolean, head?: { seq: number; hash: string }): Promise<HttpAnswer>
   /** The Wi-Fi device service is up (its direct links start) or gone (they stop). */
   wifiService(on: boolean): void
   /** A Wi-Fi device asked to be unpaired, over its own authenticated session. */

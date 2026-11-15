@@ -3,8 +3,8 @@
 Package: the feature routes and the product usage code still in the daemon core's process (audit
 docs/design/2026-11-12-core-audit.md section 2: "Feature routes in the two doors", "The product usage vocabulary",
 "Smaller"). Follow the plan's rules and lessons (../2026-11-15-core-plan.md). One PR at a time, each on a branch of its
-own (core-routes-1 and -2 are step 1's, core-routes-3 step 2's: start step 3 on core-routes-4), worktrees at
-.claude/worktrees/<branch> from a fresh origin/main.
+own (core-routes-1 and -2 are step 1's, core-routes-3 step 2's, core-routes-4 step 3's: start step 4 on core-routes-5),
+worktrees at .claude/worktrees/<branch> from a fresh origin/main.
 
 Worktree setup: run `npm ci` in the worktree's `cli/`. The main checkout's `cli/node_modules` is incomplete (no
 @sindresorhus/slugify, yaml or pngjs), and the e2e daemon and bundle fail on a link to it.
@@ -128,18 +128,64 @@ core/usageOutcomes.ts.
   while the gateway is away) must carry it, because the Desktop reads it off every answer and one without it would stop
   its newer names until the next report. appProductUsageReport.spec.ts reads it from core/api.ts beside the names.
 
-## Step 3: pairing and keys, voice, the relay to other machines
-- /api/auth/handoff from step 2 (above: a socket-only door).
-- hookServer.ts: /api/pair, /api/pairs, /api/revoke, /api/revoke-all, /api/remote-password/(set|clear|status),
-  /api/link/trust-peer, /api/group, /api/group/(sync|remove), /api/devices, /api/devices/(remove|rebaseline|history|
-  dismiss): each a GatewayOps call today (gatewayLink `http(...)`, unanswered `{status:503, body:{error:
-  'GATEWAY_UNAVAILABLE'}}`, PAIR_WAIT_MS for pair). Move their validation into `gateway_http`; drop the GatewayOps
-  members and GATEWAY_CALLS the core no longer calls.
-- localWsServer.ts: route_task / route_send / voice_route_reply (to the devices; answered off the ordered chain) need
-  the WS half of the adapter: a frame type -> a service request, the reply as the result frame. The relay to other
-  machines (machine_select for another machine, shareId) stays transport through the gateway's WindowRelay: check what
-  can leave. Desk frames (app_panes, app_unread, app_swarms, agent_seen, app_focus, dial_settings, app_*_result) feed
-  core-held state the devices are told again on reconnect (devicesLink `state`): keep that state unless a better owner.
+## Step 3, done (#PR, branch core-routes-4): the keys' routes and the phone's code to the gateway, ⌘K's frames to the devices
+
+The core's files and lines: 542 / 92,562 before (main at 0b15482b55), CORE_AFTER after (tools/coreCount.mjs).
+
+### The adapter, extended (core/serviceRoutes.ts, core/api.ts)
+- A door kind: `ServiceHttpRoute.door: 'socket'`. Over the TCP port the door answers its 403 `{error:'FORBIDDEN'}` before
+  the service is asked; over the daemon's own socket (Windows: its pipe, with the token's proof) it asks with
+  `asker.door: 'socket'` (`Asker.door`, set only by the door, for every route asked over the socket). No client of the
+  local WebSocket is ever given it (backendSocket `askerFor`), so a `gateway_http` sent over the WebSocket for a socket's
+  route is refused by the service (gateway/accountRoutes.ts `gatewayHttp`). hookServer.ts passes `trustedLocal` as `socket`.
+- The WebSocket half: `SERVICE_WS_FRAMES` (`ServiceWsFrame`: `frame`, `type`, `result?`, `waitMs`, `unanswered?`) and
+  `serviceRoutes.frame(frame, asker)`: the frame is asked of its service as `{ frame, payload }` (the window's payload as it
+  came, nested: serviceLinks puts its own `requestId` on the request), off the connection's ordered chain, and the answer
+  goes back as `{ type: result, payload: { requestId, ...answer } }` (the window's requestId, `''` when it sent none, first,
+  as before). An answer with a string `error` (down, failing, slow) is the frame's `unanswered`. No `result`: told, nothing
+  goes back. localWsServer.ts's `onServiceFrame` takes it wherever the connection's terminals are (relayed ones too);
+  main.ts asks with `backend.askerFor(connId, true)`.
+- Convention: one `<service>_ws` request a service (`devices_ws` in `DEVICES_REQUESTS`), which dispatches by `frame`.
+
+### Where the routes went
+- Gateway, `gateway_http` -> gateway/keyRoutes.ts (`keyRoutes(KeyOps)`): POST /api/pair (wait PAIR_WAIT_MS, now in api.ts),
+  GET /api/pairs, POST /api/revoke, /api/revoke-all, /api/remote-password/(set|clear), GET /api/remote-password/status,
+  POST /api/link/trust-peer, GET /api/group, POST /api/group/(sync|remove), GET /api/devices, POST
+  /api/devices/(remove|rebaseline|dismiss), GET /api/devices/history (a read that needs the local header: `writes: ['GET']`).
+  Each validates in the door's words; a pairing's or a password's own failure is the old 500 `{error: message}`, any other
+  throw the old 500 INTERNAL, logged (never a throw: SERVICE_FAILED would count against the gateway). Unanswered: 503
+  `{error:'GATEWAY_UNAVAILABLE'}`, as gatewayLink's `http` answered; wait 30 s (serviceLinks' default) and 120 s for a pairing.
+  The 16 `GatewayOps` members, their `GATEWAY_CALLS`, gatewayLink's ops, gatewayProcess's handlers and hookServer's
+  handlers are deleted; gateway/start.ts holds them as `keyOps`.
+- POST /api/auth/handoff -> gateway/accountRoutes.ts (`forward('/api/auth/handoff', {})`), `door: 'socket'`, wait 25 s.
+- Devices, `devices_ws` (services/devices.ts `windowFrame`): `route_task` -> `route_result` (an empty task is the
+  'empty task' answer), `route_send` -> `route_send_result` (`nothing to send` without both), `voice_route_reply` (told; a
+  state other than taken/sent/cancelled, or no voiceId, is dropped). A window's only (`asker.local && owner`, else
+  `LOCAL_ONLY`). Unanswered: the old DEVICES_UNAVAILABLE answers. `DevicesPort.voiceReply`, its devicesLink event and
+  devicesProcess handler, `VoiceRouteReply`, and localWsServer's `onRouteTask`/`onRouteSend`/`onVoiceRouteReply` are deleted.
+
+### Stay in the core, said why
+- `DevicesPort.routeTask`/`routeSend`: lib/ownerCommands.ts (⌘K from the owner's app over the relay, `route_task_result`,
+  its BUSY bound and INVALID_REQUEST) still asks them; step 4 moves ownerCommands to a devices request and deletes both.
+- The relay to other machines (localWsServer's `machine_select` for another machine, `shareId`, `forceReconnect`,
+  `withLocalClient`): transport, the window's own WebSocket handed to the gateway's `WindowRelay` frame by frame. It can only
+  leave if the gateway held the window's socket itself, a door of a component's own: package 14's question.
+- The desk frames (app_panes, app_unread, app_swarms, agent_seen, app_focus, dial_settings, app_*_result): they feed state
+  the core holds and tells the devices again each time they connect (devicesLink `state`); no better owner yet.
+
+### Answers that differ (said in the PR)
+- A client of the local WebSocket sending `gateway_http` for /api/auth/handoff: 403 FORBIDDEN now, 404 not found before
+  (no such gateway route). Both refuse; the backend is never asked (e2e/keyRoutes).
+- Inline mode: the key routes are now bounded (30 s, 120 s for a pairing) by the adapter's timer; before, the door waited
+  for the gateway's call however long. Out of process: a key command that throws is the door's old 500 (inline's), not 503.
+- ⌘K's frames with a router that throws: the devices' DEVICES_UNAVAILABLE answer (as the guarded port gave in practice), not
+  localWsServer's old `reason: <the error>`, which nothing reached.
+
+### Verified
+- e2e/keyRoutes.e2e.ts: the goldens (every key route, the code over the socket, ⌘K's frames) green on main and after, in
+  both modes; the faults (`gateway.gateway_http`, `devices.devices_ws`) and the WebSocket's refusal red on main, green after.
+- Unit: core/serviceRoutes.spec.ts (socket door, frames), gateway/keyRoutes.spec.ts, gateway/accountRoutes.spec.ts,
+  services/devices.spec.ts, hookServer.spec.ts, localWsServer.spec.ts, core/api.spec.ts.
 
 ## Step 4: smaller items
 Phone sign-in relay (lib/loopbackGet.ts, core/terminals/browser.ts, 127 lines -> gateway), guest rules and a guest's

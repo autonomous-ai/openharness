@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { projectDisplayName, type RegisteredSession } from '../lib/registry.js'
-import { AGENT_BROWSER_FALLBACKS, AGENT_BROWSER_REQUESTS, mayOpenBrowser, CLOUD_DOWN, CLOUD_FALLBACKS, CONNECTOR_VAULT_OFF, CONVERSATIONS_OFF, ACCOUNT_BACKEND_OFF, accountIdentity, AGENT_ACTIONS_OFF, AGENT_CLEANUP_FALLBACKS, createCoreApi, DAEMON_UNKNOWN, DELIVERIES_OFF, DEVICES_FALLBACKS, emptyPorts, GATEWAY_REQUESTS, LANE_OFF, MACHINE_ADDON_REQUESTS, SERVICE_HTTP_ROUTES, WIFI_REQUESTS, LONG_ANSWERS, MODELS_OFF, STORE_OFF, MODELS_REQUESTS, MONITOR_OFF, OBSERVER_KEY_OFF, ORCHESTRATOR_FALLBACKS, RECAPS_FALLBACKS, resolveAgent, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARING_FALLBACKS, MESSAGES_FALLBACKS, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, TURN_DELIVERERS, WIFI_FALLBACKS, WIFI_OFF, type CoreApiDeps } from './api.js'
+import { AGENT_BROWSER_FALLBACKS, AGENT_BROWSER_REQUESTS, mayOpenBrowser, CLOUD_DOWN, CLOUD_FALLBACKS, CONNECTOR_VAULT_OFF, CONVERSATIONS_OFF, ACCOUNT_BACKEND_OFF, accountIdentity, AGENT_ACTIONS_OFF, AGENT_CLEANUP_FALLBACKS, createCoreApi, DAEMON_UNKNOWN, DELIVERIES_OFF, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, GATEWAY_REQUESTS, LANE_OFF, MACHINE_ADDON_REQUESTS, PAIR_WAIT_MS, SERVICE_HTTP_ROUTES, SERVICE_WS_FRAMES, WIFI_REQUESTS, LONG_ANSWERS, MODELS_OFF, STORE_OFF, MODELS_REQUESTS, MONITOR_OFF, OBSERVER_KEY_OFF, ORCHESTRATOR_FALLBACKS, RECAPS_FALLBACKS, resolveAgent, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARING_FALLBACKS, MESSAGES_FALLBACKS, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, TURN_DELIVERERS, WIFI_FALLBACKS, WIFI_OFF, type CoreApiDeps } from './api.js'
 import { FAIL, readFallback } from './serviceHost.js'
 import { HACHI_ID } from '../dsh/builtinIds.js'
 
@@ -23,8 +23,33 @@ describe('the core API services stand on', () => {
     for (const each of SERVICE_HTTP_ROUTES) expect(declared.has(each.type), each.type).toBe(true)
     // Not answered is not "not sent": a proposal may have reached the device.
     expect(route('/api/autonomous-device/addon/propose')!.unanswered).toMatchObject({ status: 504, body: { error: { code: 'OUTCOME_UNKNOWN' } } })
-    // A pairing waits for the Wi-Fi device's service, then for its code's rounds (core/gatewayLink.ts PAIR_WAIT_MS).
-    expect(route('/api/autonomous-device/pair/start')!.waitMs).toBeGreaterThan(15_000 + 120_000)
+    // A pairing waits for the Wi-Fi device's service, then for its code's rounds (PAIR_WAIT_MS).
+    expect(route('/api/autonomous-device/pair/start')!.waitMs).toBeGreaterThan(15_000 + PAIR_WAIT_MS)
+  })
+  it('sends the keys\' routes and the phone\'s sign-in code to the gateway, the code only over the daemon\'s own socket', () => {
+    const route = (method: string, path: string) => SERVICE_HTTP_ROUTES.find((each) => each.path.test(path) && (!each.methods || each.methods.includes(method)))
+    const keys = [['POST', '/api/pair'], ['GET', '/api/pairs'], ['POST', '/api/revoke'], ['POST', '/api/revoke-all'], ['POST', '/api/remote-password/set'],
+      ['POST', '/api/remote-password/clear'], ['GET', '/api/remote-password/status'], ['POST', '/api/link/trust-peer'], ['GET', '/api/group'],
+      ['POST', '/api/group/sync'], ['POST', '/api/group/remove'], ['GET', '/api/devices'], ['POST', '/api/devices/remove'],
+      ['POST', '/api/devices/rebaseline'], ['GET', '/api/devices/history'], ['POST', '/api/devices/dismiss'], ['POST', '/api/auth/handoff']] as const
+    for (const [method, path] of keys) {
+      expect(route(method, path), `${method} ${path}`).toMatchObject({ type: 'gateway_http', unanswered: { status: 503, body: { error: 'GATEWAY_UNAVAILABLE' } } })
+      // Each write needs the local header, and so does the device history, a read of the account's whole device story.
+      expect(route(method, path)!.writes ?? [], `${method} ${path}`).toEqual(method === 'POST' || path === '/api/devices/history' ? [method] : [])
+      expect(route(method, path)!.door, `${method} ${path}`).toBe(path === '/api/auth/handoff' ? 'socket' : undefined)
+    }
+    // A method the door never took is not taken: the door's 404, as before.
+    for (const [method, path] of [['GET', '/api/pair'], ['POST', '/api/pairs'], ['GET', '/api/auth/handoff'], ['GET', '/api/devices/remove']]) expect(route(method, path), `${method} ${path}`).toBeUndefined()
+    expect(route('POST', '/api/pair')!.waitMs).toBe(PAIR_WAIT_MS)
+    expect(route('GET', '/api/pairs')!.waitMs).toBe(30_000)
+  })
+  it('sends a window\'s ⌘K and its answer to a spoken task to the devices, as a request they declare', () => {
+    expect(SERVICE_WS_FRAMES.map((each) => [each.frame, each.type, each.result])).toEqual([
+      ['route_task', 'devices_ws', 'route_result'], ['route_send', 'devices_ws', 'route_send_result'], ['voice_route_reply', 'devices_ws', undefined]])
+    for (const each of SERVICE_WS_FRAMES) expect((DEVICES_REQUESTS as readonly string[]).includes(each.type)).toBe(true)
+    const reason = 'the devices service is unavailable'
+    expect(SERVICE_WS_FRAMES[0].unanswered).toEqual({ agentId: '', machineId: '', name: '', confidence: 0, reason, candidates: [], weighed: 0, machines: 0, via: '' })
+    expect(SERVICE_WS_FRAMES[1].unanswered).toEqual({ ok: false, machine: '', reason })
   })
   it('gives a service with no lane of the core\'s nothing to seal with, and never its frame back in the clear', async () => {
     await expect(LANE_OFF.hello('m', 'pub')).rejects.toThrow(/no E2EE identity/)
@@ -438,7 +463,7 @@ describe('the core API services stand on', () => {
     expect(readFallback(DEVICES_FALLBACKS.routeSend)).toEqual({ deferred: true, value: { ok: false, machine: '', reason } })
     // The Wi-Fi device finds no desk to walk; the dial and the window bridges hear nothing.
     expect(readFallback(DEVICES_FALLBACKS.stepFocus).value).toBe('no_agents')
-    for (const member of ['card', 'desk', 'swarms', 'unread', 'appFocus', 'seen', 'settings', 'windowFocus', 'windowReply', 'voiceReply', 'windowGone', 'scroll', 'engines', 'commanders'] as const) {
+    for (const member of ['card', 'desk', 'swarms', 'unread', 'appFocus', 'seen', 'settings', 'windowFocus', 'windowReply', 'windowGone', 'scroll', 'engines', 'commanders'] as const) {
       expect(DEVICES_FALLBACKS[member], member).toBeUndefined()
     }
     expect(readFallback(DEVICES_FALLBACKS.stop)).toEqual({ deferred: true, value: undefined })

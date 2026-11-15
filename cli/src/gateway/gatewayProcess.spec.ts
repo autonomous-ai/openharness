@@ -33,11 +33,6 @@ function stubGateway() {
     backend: vi.fn(async (_method: string, _path: string, _body?: unknown) => answer),
     machines: vi.fn(async (_fallback?: boolean) => answer), mintGridName: vi.fn(async (): Promise<string | null> => 'private-grid'),
     status: vi.fn(async () => ({ fingerprint: 'AB12', pairs: [], pending: null })),
-    pair: vi.fn(async () => answer), listPairs: vi.fn(async () => answer), revoke: vi.fn(async () => answer), revokeAll: vi.fn(async () => answer),
-    setRemotePassword: vi.fn(async () => answer), clearRemotePassword: vi.fn(async () => answer), remotePasswordStatus: vi.fn(async () => answer),
-    trustLinkedPeer: vi.fn(async () => answer), groupList: vi.fn(async () => answer), groupSync: vi.fn(async () => answer),
-    groupRemove: vi.fn(async () => answer), devicesList: vi.fn(async () => answer), devicesRemove: vi.fn(async () => answer),
-    devicesHistory: vi.fn(async () => answer), devicesDismiss: vi.fn(async () => answer), devicesRebaseline: vi.fn(async () => answer),
     wifiService: vi.fn(), revokeIdentity: vi.fn(),
     account: vi.fn(), reachable: vi.fn(),
     lane: {
@@ -312,27 +307,12 @@ describe('the gateway\'s process, spoken to by the core', () => {
     expect(heard.browserTransportError).toHaveBeenCalledTimes(1)
   })
 
-  it('answers the core\'s commands about the keys from the gateway it runs, and 503 with none running', async () => {
+  it('answers the core\'s calls from the gateway it runs, and 503 with none running', async () => {
     const w = wire()
-    expect(await w.link.ops.listPairs()).toEqual({ status: 503, body: { error: 'GATEWAY_UNAVAILABLE' } })
+    expect(await w.link.ops.backend('GET', '/api/desk')).toEqual({ status: 503, body: { error: 'GATEWAY_UNAVAILABLE' } })
     w.connect()
-    const { ops } = w.gateways[0]
     expect(await w.link.ops.status()).toEqual({ fingerprint: 'AB12', pairs: [], pending: null })
-    for (const ask of [
-      () => w.link.ops.pair('CODE'), () => w.link.ops.listPairs(), () => w.link.ops.revoke('1'), () => w.link.ops.revokeAll(),
-      () => w.link.ops.setRemotePassword('pw'), () => w.link.ops.clearRemotePassword(), () => w.link.ops.remotePasswordStatus(),
-      () => w.link.ops.trustLinkedPeer({ pub: 'P', machineId: 'm', label: 'l' }), () => w.link.ops.groupList(), () => w.link.ops.groupSync(),
-      () => w.link.ops.groupRemove('2'), () => w.link.ops.devicesList(), () => w.link.ops.devicesRemove('P'), () => w.link.ops.devicesHistory(),
-      () => w.link.ops.devicesDismiss({ baseline: true }), () => w.link.ops.devicesRebaseline(true, { seq: 2, hash: 'h' }),
-    ]) expect(await ask()).toEqual({ status: 200, body: { ok: true } })
-    expect(ops.pair).toHaveBeenCalledWith('CODE')
-    expect(ops.revoke).toHaveBeenCalledWith('1')
-    expect(ops.setRemotePassword).toHaveBeenCalledWith('pw')
-    expect(ops.trustLinkedPeer).toHaveBeenCalledWith({ pub: 'P', machineId: 'm', label: 'l' })
-    expect(ops.groupRemove).toHaveBeenCalledWith('2')
-    expect(ops.devicesRemove).toHaveBeenCalledWith('P')
-    expect(ops.devicesDismiss).toHaveBeenCalledWith({ baseline: true })
-    expect(ops.devicesRebaseline).toHaveBeenCalledWith(true, { seq: 2, hash: 'h' })
+    expect(await w.link.ops.backend('GET', '/api/desk')).toEqual({ status: 200, body: { ok: true } })
   })
 
   it('answers its routes of the door from the gateway it runs, and asks the core whether the Wi-Fi device\'s service serves', async () => {

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { HttpAnswer, ServiceHttpRoute } from './api.js'
+import type { HttpAnswer, ServiceHttpRoute, ServiceWsFrame } from './api.js'
 import { createServiceRoutes, type ServiceRouter } from './serviceRoutes.js'
 
 const DOWN: HttpAnswer = { status: 503, body: { error: { code: 'UNAVAILABLE', message: 'not running' } } }
@@ -157,6 +157,59 @@ describe('the door\'s routes a service answers', () => {
     const other = asked('PUT', '/api/thing/save', 'x')
     await doors.answer('/api/thing/save', other)
     expect(other.readBody).toHaveBeenCalledWith(undefined)
+  })
+
+  it('asks a socket\'s route only over the daemon\'s own socket, saying so to its service, and answers the port with the door\'s 403', async () => {
+    const linked = router(['account_http'], () => ({ status: 200, body: { code: 'hnh_x' } }))
+    const route: ServiceHttpRoute = { path: /^\/api\/auth\/handoff$/, methods: ['POST'], writes: ['POST'], door: 'socket', type: 'account_http', waitMs: 1_000, unanswered: DOWN }
+    const doors = createServiceRoutes({ routes: [route, { path: /^\/api\/desk$/, type: 'account_http', waitMs: 1_000, unanswered: DOWN }], linked, hosted: router([]) })
+    const write = asked('POST', '/api/auth/handoff', '{}')
+    // Over the port, with the local header or without, and over the socket without it: the door's 403, its body unread.
+    for (const [localOk, socket] of [[true, false], [false, false], [false, true]]) {
+      expect(await doors.answer('/api/auth/handoff', write, localOk, socket), `${localOk} ${socket}`).toEqual({ status: 403, body: { error: 'FORBIDDEN' } })
+    }
+    expect(write.readBody).not.toHaveBeenCalled()
+    expect(linked.route).not.toHaveBeenCalled()
+    expect(await doors.answer('/api/auth/handoff', write, true, true)).toEqual({ status: 200, body: { code: 'hnh_x' } })
+    expect(linked.route).toHaveBeenLastCalledWith('account_http', { method: 'POST', target: '/api/auth/handoff', body: '{}' }, { local: true, owner: true, door: 'socket' }, expect.any(Function), 1_000)
+    // Any route asked over the socket says so; over the port, none does.
+    await doors.answer('/api/desk', read('/api/desk'), false, true)
+    expect(linked.route).toHaveBeenLastCalledWith('account_http', { method: 'GET', target: '/api/desk' }, { local: true, owner: true, door: 'socket' }, expect.any(Function), 1_000)
+    await doors.answer('/api/desk', read('/api/desk'))
+    expect(linked.route).toHaveBeenLastCalledWith('account_http', { method: 'GET', target: '/api/desk' }, { local: true, owner: true }, expect.any(Function), 1_000)
+  })
+
+  const window = { local: true, owner: true, connection: 'local:w1' }
+  const frames: ServiceWsFrame[] = [
+    { frame: 'route_task', type: 'devices_ws', result: 'route_result', waitMs: 25_000, unanswered: { agentId: '', reason: 'down' } },
+    { frame: 'voice_route_reply', type: 'devices_ws', waitMs: 5_000 },
+  ]
+
+  it('hands a window\'s frame to its service as the window sent it, and its answer back under the frame\'s request id', async () => {
+    const linked = router(['devices_ws'], (_type, payload) => (payload.frame === 'route_task' ? { agentId: 'a1', reason: 'named' } : {}))
+    const doors = createServiceRoutes({ routes, frames, linked, hosted: router([]) })
+    expect(await doors.frame({ type: 'route_task', payload: { requestId: 'q-1', text: ' fix ' } }, window))
+      .toEqual({ type: 'route_result', payload: { requestId: 'q-1', agentId: 'a1', reason: 'named' } })
+    expect(linked.route).toHaveBeenCalledWith('devices_ws', { frame: 'route_task', payload: { requestId: 'q-1', text: ' fix ' } }, window, expect.any(Function), 25_000)
+    // Told, and never answered: nothing goes back.
+    expect(await doors.frame({ type: 'voice_route_reply', payload: { voiceId: 'v1', state: 'taken' } }, window)).toBeNull()
+    expect(linked.route).toHaveBeenLastCalledWith('devices_ws', { frame: 'voice_route_reply', payload: { voiceId: 'v1', state: 'taken' } }, window, expect.any(Function), 5_000)
+    // A frame no service answers is the window's dispatch's, as ever, and so is every frame where none is declared.
+    expect(doors.frame({ type: 'agents_list', payload: {} }, window)).toBeUndefined()
+    expect(createServiceRoutes({ routes, linked, hosted: router([]) }).frame({ type: 'route_task', payload: {} }, window)).toBeUndefined()
+  })
+
+  it('sends a frame\'s own answer while its service gives none, at once, under the frame\'s request id or none', async () => {
+    const down = createServiceRoutes({ routes, frames, linked: router(['devices_ws'], () => ({ error: 'SERVICE_UNAVAILABLE', service: 'devices' })), hosted: router([]) })
+    expect(await down.frame({ type: 'route_task', payload: { requestId: 'q-2', text: 'x' } }, window)).toEqual({ type: 'route_result', payload: { requestId: 'q-2', agentId: '', reason: 'down' } })
+    expect(await down.frame({ type: 'route_task', payload: 'not a payload' }, window)).toEqual({ type: 'route_result', payload: { requestId: '', agentId: '', reason: 'down' } })
+    expect(await down.frame({ type: 'route_task', payload: { requestId: 7 } }, window)).toEqual({ type: 'route_result', payload: { requestId: '', agentId: '', reason: 'down' } })
+    // A service in this process that does not answer in the frame's time.
+    let fire: (() => void) | undefined
+    const slow = createServiceRoutes({ routes, frames, linked: router([]), hosted: router(['devices_ws']), setTimer: (run) => { fire = run }, clearTimer: () => {} })
+    const answer = slow.frame({ type: 'route_task', payload: { requestId: 'q-3' } }, window)
+    fire!()
+    expect(await answer).toEqual({ type: 'route_result', payload: { requestId: 'q-3', agentId: '', reason: 'down' } })
   })
 
   it('waits on real timers and says what is wrong on the console when not told otherwise', async () => {
