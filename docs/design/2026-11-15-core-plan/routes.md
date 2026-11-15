@@ -259,6 +259,21 @@ Root review and integration:
   `/tmp/core-routes-wire-perf-final.json` (before the correction) and
   `/tmp/core-routes-wire-perf-direct-dispatch.json` (after).
 
+### Final integration evidence
+
+- The earlier pending statements above record prior checkpoints. Independent review cleared the route boundary;
+  the final direct-dispatch runtime passed all 47 bundled cases across the six route/gateway/device acceptance
+  files in 457.13 seconds. At `24f6c47aef`, the official core gate passed 4,464 tests with 100% per-file coverage.
+- Main `5fa7b95762` is now integrated. Its device adapter change overlaps only the route service's fixture helper
+  declarations: both the trusted-window fixture and the new dial-turn helper are preserved. The combined device,
+  cable session, observed/open adapters and architecture checks passed 762 tests; typecheck passed. Core route
+  dispatch and the measured terminal-frame path are unchanged by this integration.
+- The default closure at the prior main `1c37a340a8` was 539 files / 92,861 lines, versus 539 / 92,584 for this
+  extraction; warmed closure was 645 / 108,894 versus 645 / 108,617. These counts describe that exact comparison,
+  not unrelated adapter source added later. Native Windows execution remains unverified.
+- PR #4324 targets `core-routes-4`. Final exact-head receipt and automatic Linux CI are recorded in its body;
+  merge is pending. Step 4, including owner-command and phone sign-in relays, is not part of this step.
+
 ## Step 4: smaller items
 Phone sign-in relay (lib/loopbackGet.ts, core/terminals/browser.ts, 127 lines -> gateway), guest rules and a guest's
 engine install (core/agents/guestCreate.ts, lib/windows/guestEngine.ts -> edge shared machines), cloud agents' cards
