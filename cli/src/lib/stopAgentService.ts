@@ -249,6 +249,8 @@ export function createStopAgentService(deps: StopAgentServiceDeps) {
           } })
           if (registry.resolve(sessionId)) throw new AgentStopError('The harness changed while its stop was being published.')
         } catch {
+          // This verifier refuses before publication; storage uncertainty still keeps the generic Stop failure.
+          if (nativeIdentityError) throw nativeIdentityError
           throw new AgentStopError('The stopped harness could not be durably retired. Its saved conversation is safe. Try stopping again.')
         }
         stoppedAgents.finishResume(sessionId)

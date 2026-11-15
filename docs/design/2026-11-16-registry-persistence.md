@@ -987,3 +987,20 @@ Hermes store fixture; no host binary is launched. The obsolete fixed-sleep Stop
 retry is removed. Core and Resume broad-gate failures at `7211e3364d` remain
 recorded failures, not passing receipts; focused corrected-fixture results do not
 stand in for their pending final gates.
+
+The reviewed two-line Stop correction passes both retained native-change reds.
+`green-final-stop-authority.log` records 241 passing cases across six affected
+caller/fixture files, with the one explicitly enabled-only native tmux case skipped
+(Node 24.22.2, at most two workers, 106.09 seconds). TypeScript also passed on this
+source (`types-final-stop-authority.log`). The paired image-preparation
+and post-rename directory-sync faults still return `STOP_UNCONFIRMED` with archive
+and reservation retained. The corrected attachment and lifecycle fixtures passed
+in `final-authority-fixtures-first.log`; that run also retained six fixture failures,
+then corrected in the later focused runs. No failed run is presented as passing.
+
+Root's broad runner on the earlier `7211e3364d` exited 1: core had four failures and
+4,567 passes; portability had 1,066 passes and ten platform skips; Resume had one
+failure and 496 passes; shell had ten passes. Its PTY selection ran six tmux cases
+with two skips because `HARNESS_PTY_BIN` was omitted, so it is not a complete PTY
+receipt. Final gates must use the retained explicit PTY binary. No new broad gate,
+native acceptance or performance measurement is claimed by this correction.
