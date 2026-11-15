@@ -58,6 +58,8 @@ export interface AttachDeps {
   }
   captureTerminal: (target: string, historyLines?: number) => Promise<string | null>
   emit: (sessionId: string, events: LiveEvent[], opts?: { resumed?: boolean }) => void
+  /** The agent's token usage, which the usage service reads from the transcript (core/usageLink.ts): told to read it again. */
+  tokenUsage: { changed(session: RegisteredSession): void }
   announceTurnAborted: (sessionId: string, engine: string, message: string) => void
   questionWatcher: Pick<QuestionWatcher, 'start'>
   /** How a session's terminal is named in the log. */
@@ -81,7 +83,7 @@ export interface AttachDeps {
 
 export function createAttach({
   liveFor, resolve, remoteLive, terminalGone, normalizers, watcher, cursorDiscovery, device, runtimeProfiles, captureTerminal, emit,
-  announceTurnAborted, questionWatcher, terminalLabel, dbs, devinHome, hermesDb, concurrency, relaunchMarks,
+  tokenUsage, announceTurnAborted, questionWatcher, terminalLabel, dbs, devinHome, hermesDb, concurrency, relaunchMarks,
   wholeReadCapBytes = WHOLE_READ_CAP_BYTES, settled, readerLoadWaitMs, setInterpretationHold, setIdentityHold, announceSession,
 }: AttachDeps) {
   const {
@@ -784,6 +786,12 @@ export function createAttach({
     // that is no longer open is one that ended; a fold from the start keeps its end too, and says if it was killed.
     const last = historyEvents.findLast((event) => event.type === 'turn_started' || event.type === 'turn_ended')
     if (!historyExplicitlyClosed && !historySuperseded && !historyTurnOpen && last && !(last.type === 'turn_ended' && last.payload.aborted)) settled?.(session.sessionId)
+    // What this attach folded was never delivered as a line, and the usage is read again only for a line delivered
+    // live (ingest.ts): an agent listed before its first usage record was folded here kept no usage until its next
+    // live line (e2e/usageProcess.e2e.ts, "explicit inline usage follows the same aggregate boundary", 6 runs of 6
+    // on a loaded Mac, 2026-11-15). The link reads a session at most once in 15 s (core/usageLink.ts), however often
+    // it is attached.
+    if (lines.length || fromEnd?.content) tokenUsage.changed(session)
     return true
   }
 
