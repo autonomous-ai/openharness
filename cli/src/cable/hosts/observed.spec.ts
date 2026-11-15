@@ -4,6 +4,7 @@ import { STOP_HOOK_GRACE_MS } from '../../core/turns/turnHooks.js'
 import { type Delivery, Inbox } from './inbox.js'
 import { askedLine, observedAgentId, type ObservedActions, ObservedSource, type ObservedDeps } from './observed.js'
 import type { OpenTarget } from './open.js'
+import type { TabApp } from './tabs.js'
 import type { PaneSwitch } from './types.js'
 
 function setup(over: Partial<ObservedDeps> = {}) {
@@ -671,6 +672,9 @@ function fakeActions(over: Partial<ObservedActions> = {}) {
     open: vi.fn(async (_agentId: string, _target: OpenTarget) => true),
     claudeInFront: vi.fn(() => true),
     claudeShow: vi.fn(async (_agentId: string, _session: string): Promise<PaneSwitch> => 'ok'),
+    // A watch holds the tabs stream open, and takes each select.
+    tabsOpen: vi.fn(() => true),
+    tabSelect: vi.fn((_app: TabApp, _tty: string, _raise: boolean): PaneSwitch => 'ok'),
     count: vi.fn((_what: Parameters<ObservedActions['count']>[0]) => {}),
   }
   return { actions: { ...actions, ...over } as typeof actions, ready }
@@ -1189,6 +1193,279 @@ describe('ObservedSource panes', () => {
     expect(await src.showPane(agent)).toBe('failed')
     expect(actions.claudeShow).not.toHaveBeenCalled()
     expect(actions.open).not.toHaveBeenCalled()
+  })
+})
+
+// An agent in Terminal, iTerm2 or Ghostty has a tab a rest selects, by the tty of its process
+// (docs/specs/2026-11-15-dial-terminal-follow.md, "1. A swipe selects the agent's tab").
+describe('ObservedSource tabs', () => {
+  const TTY = '/dev/ttys023'
+  const inTerminal = { hostHints: { __CFBundleIdentifier: 'com.apple.Terminal' } }
+  /** Every answer a read was given has reached the source. */
+  const flushed = (): Promise<void> => new Promise((resolve) => { setImmediate(resolve) })
+
+  /** A source whose tty reads the test answers by hand, in the order they began, with a watch's stream open. */
+  function tabs(over: Partial<ObservedActions> = {}, deps: Partial<ObservedDeps> = {}) {
+    const reads: Array<{ answer(tty: string | undefined): Promise<void>; fail(): Promise<void> }> = []
+    const tty = vi.fn((_pid: number) => new Promise<string | undefined>((resolve, reject) => {
+      reads.push({
+        answer: (answered) => { resolve(answered); return flushed() },
+        fail: () => { reject(new Error('ps failed')); return flushed() },
+      })
+    }))
+    const { actions } = fakeActions(over)
+    const s = setup({ actions, tty, ...deps })
+    const agent = (sessionId = 's1') => s.src.list().find((a) => a.sessionId === sessionId)!
+    return { ...s, actions, tty, reads, agent }
+  }
+
+  it('an agent in Terminal gets its tty from one read for its pid', async () => {
+    const t = tabs()
+    t.src.ingest(t.ev('session-start', inTerminal))
+    expect(t.tty.mock.calls).toEqual([[100]])
+    expect(t.src.hasPane(t.agent())).toBe(false)
+    await t.reads[0].answer(TTY)
+    t.src.ingest(t.ev('turn-start', inTerminal))
+    t.src.ingest(t.ev('turn-stop', inTerminal))
+    t.src.ingest(t.ev('turn-start', inTerminal))
+    expect(t.tty.mock.calls).toEqual([[100]])
+    expect(t.src.hasPane(t.agent())).toBe(true)
+  })
+
+  it('iTerm2 and Ghostty are read too; Orca, VS Code and an unknown terminal are not', () => {
+    const t = tabs()
+    t.src.ingest(t.ev('session-start', { sessionId: 'iterm', callerPid: 101, hostHints: { TERM_PROGRAM: 'iTerm.app' } }))
+    t.src.ingest(t.ev('session-start', { sessionId: 'ghostty', callerPid: 102, hostHints: { TERM_PROGRAM: 'ghostty' } }))
+    t.src.ingest(t.ev('session-start', { sessionId: 'orca', callerPid: 103, hostHints: { __CFBundleIdentifier: 'com.stablyai.orca' } }))
+    t.src.ingest(t.ev('session-start', { sessionId: 'vscode', callerPid: 104, hostHints: { TERM_PROGRAM: 'vscode' } }))
+    t.src.ingest(t.ev('session-start', { sessionId: 'other', callerPid: 105, hostHints: { TERM_PROGRAM: 'Hyper' } }))
+    expect(t.tty.mock.calls).toEqual([[101], [102]])
+  })
+
+  it('no tty (??) is no pane', async () => {
+    const t = tabs()
+    t.src.ingest(t.ev('session-start', inTerminal))
+    await t.reads[0].answer(undefined)
+    expect(t.src.hasPane(t.agent())).toBe(false)
+    expect(await t.src.showPane(t.agent())).toBe('failed')
+    expect(t.actions.tabSelect).not.toHaveBeenCalled()
+  })
+
+  it('a new pid reads again, and the old tty is gone at once', async () => {
+    const t = tabs()
+    t.src.ingest(t.ev('session-start', inTerminal))
+    await t.reads[0].answer(TTY)
+    expect(t.src.hasPane(t.agent())).toBe(true)
+    // Resumed in another tab: the same session, in a process of its own.
+    t.src.ingest(t.ev('session-start', { ...inTerminal, callerPid: 101 }))
+    expect(t.tty.mock.calls).toEqual([[100], [101]])
+    expect(t.src.hasPane(t.agent())).toBe(false)
+    expect(t.src.byTab('terminal-app', TTY)).toBeUndefined()
+    await t.reads[1].answer('/dev/ttys024')
+    expect(await t.src.showPane(t.agent())).toBe('ok')
+    expect(t.actions.tabSelect.mock.calls).toEqual([['terminal-app', '/dev/ttys024', false]])
+  })
+
+  it('a read that ends after its agent went, or after a newer pid\'s began, is dropped', async () => {
+    // Either read may end first: only the newer pid's is its tty.
+    for (const order of [[0, 1], [1, 0]]) {
+      const t = tabs()
+      t.src.ingest(t.ev('session-start', inTerminal))
+      t.src.ingest(t.ev('session-start', { ...inTerminal, callerPid: 101 }))
+      for (const i of order) await t.reads[i].answer(i === 0 ? TTY : '/dev/ttys024')
+      expect(await t.src.showPane(t.agent())).toBe('ok')
+      expect(t.actions.tabSelect.mock.calls).toEqual([['terminal-app', '/dev/ttys024', false]])
+    }
+
+    // Gone from the list while its read ran: the session heard of again is listed anew, and waits for a read of its own.
+    const gone = tabs()
+    gone.src.ingest(gone.ev('session-start', inTerminal))
+    gone.src.ingest(gone.ev('session-end', inTerminal))
+    gone.clock.t += 10_000
+    await gone.src.tick()
+    expect(gone.src.list()).toEqual([])
+    gone.src.ingest(gone.ev('session-start', inTerminal))
+    await gone.reads[0].answer(TTY)
+    expect(gone.tty.mock.calls).toEqual([[100], [100]])
+    expect(gone.src.hasPane(gone.agent())).toBe(false)
+    await gone.reads[1].answer('/dev/ttys024')
+    expect(await gone.src.showPane(gone.agent())).toBe('ok')
+    expect(gone.actions.tabSelect.mock.calls).toEqual([['terminal-app', '/dev/ttys024', false]])
+  })
+
+  it('a read that fails is not no tty: a later event reads that pid again, 10 s on, and it is counted; ?? is final', async () => {
+    const t = tabs()
+    t.src.ingest(t.ev('session-start', inTerminal))
+    t.src.ingest(t.ev('session-start', { ...inTerminal, sessionId: 's2', callerPid: 101 }))
+    await t.reads[0].fail()
+    await t.reads[1].answer(undefined)
+    expect(t.src.hasPane(t.agent())).toBe(false)
+    expect(t.logs).toEqual(['[observed] tty · not read'])
+    // Under load each `ps` may time out: no pid is asked more often than once every 10 s.
+    t.clock.t += 9_999
+    t.src.ingest(t.ev('turn-start', inTerminal))
+    expect(t.tty.mock.calls).toEqual([[100], [101]])
+    t.clock.t += 1
+    t.src.ingest(t.ev('turn-start', inTerminal))
+    t.src.ingest(t.ev('turn-start', { ...inTerminal, sessionId: 's2', callerPid: 101 }))
+    expect(t.tty.mock.calls).toEqual([[100], [101], [100]])
+    await t.reads[2].answer(TTY)
+    expect(t.src.hasPane(t.agent())).toBe(true)
+    // Read once, it is not read again.
+    t.clock.t += 10_000
+    t.src.ingest(t.ev('turn-start', inTerminal))
+    expect(t.tty).toHaveBeenCalledTimes(3)
+  })
+
+  it('the open scan reads the tty of an agent whose parents name a tab app', async () => {
+    const t = tabs({}, { apps: async () => new Map([[11, 'terminal-app'], [12, 'vscode']]) })
+    for (const [sessionId, pid] of [['a', 11], ['b', 12], ['c', 13]] as const) {
+      t.open.set(sessionId, 'terminal')
+      t.owners.set(sessionId, { pid, engine: 'claude' })
+      t.externals.set(sessionId, { cwd: `/x/${sessionId}`, transcriptPath: `/t/${sessionId}.jsonl` })
+      t.working.set(sessionId, false)
+    }
+    await t.src.scanOpen()
+    expect(t.tty.mock.calls).toEqual([[11]])
+    await t.reads[0].answer(TTY)
+    expect(t.src.hasPane(t.agent('a'))).toBe(true)
+    // Their first hooks: the process read already is not read again; the one nothing named is read now.
+    t.src.ingest(t.ev('turn-start', { sessionId: 'a', callerPid: 11, ...inTerminal }))
+    t.src.ingest(t.ev('turn-start', { sessionId: 'c', callerPid: 13, ...inTerminal }))
+    expect(t.tty.mock.calls).toEqual([[11], [13]])
+  })
+
+  it('hasPane needs a tab app, a tty, a live session and an open stream', async () => {
+    const t = tabs()
+    t.src.ingest(t.ev('session-start', inTerminal))
+    await t.reads[0].answer(TTY)
+    expect(t.src.hasPane(t.agent())).toBe(true)
+    t.actions.tabsOpen.mockReturnValue(false)
+    expect(t.src.hasPane(t.agent())).toBe(false)
+    t.actions.tabsOpen.mockReturnValue(true)
+    t.src.ingest(t.ev('session-end', inTerminal))
+    expect(t.src.hasPane(t.agent())).toBe(false)
+    // Resumed in the same process: its tty is still its own.
+    t.src.ingest(t.ev('session-start', inTerminal))
+    expect(t.src.hasPane(t.agent())).toBe(true)
+    // The same process says another app now: no tab app holds it.
+    t.src.ingest(t.ev('turn-start', { hostHints: { TERM_PROGRAM: 'vscode' } }))
+    expect(t.src.hasPane(t.agent())).toBe(false)
+    expect(t.tty).toHaveBeenCalledTimes(1)
+
+    // No routes for the dial's voice and tap: status only.
+    const bare = setup({ tty: vi.fn(async () => TTY) })
+    bare.src.ingest(bare.ev('session-start', inTerminal))
+    await flushed()
+    expect(bare.src.hasPane(bare.src.list()[0])).toBe(false)
+  })
+
+  it('with no tty reader (off macOS) nothing is read and no agent has a tab', () => {
+    const { actions } = fakeActions()
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('session-start', inTerminal))
+    expect(src.hasPane(src.list()[0])).toBe(false)
+    expect(src.byTab('terminal-app', TTY)).toBeUndefined()
+  })
+
+  it('showPane writes one select that does not raise and answers ok, and failed with no stream', async () => {
+    const t = tabs()
+    t.src.ingest(t.ev('session-start', inTerminal))
+    await t.reads[0].answer(TTY)
+    expect(await t.src.showPane(t.agent())).toBe('ok')
+    expect(t.actions.tabSelect.mock.calls).toEqual([['terminal-app', TTY, false]])
+    expect(t.actions.orcaSwitch).not.toHaveBeenCalled()
+    expect(t.actions.open).not.toHaveBeenCalled()
+    // A line the stream did not take.
+    t.actions.tabSelect.mockReturnValue('failed')
+    expect(await t.src.showPane(t.agent())).toBe('failed')
+    t.actions.tabsOpen.mockReturnValue(false)
+    expect(await t.src.showPane(t.agent())).toBe('failed')
+    expect(t.actions.tabSelect).toHaveBeenCalledTimes(2)
+  })
+
+  it('an agent with an Orca handle is shown by Orca, whatever its app', async () => {
+    const t = tabs()
+    t.src.ingest(t.ev('session-start', { hostHints: { ...inTerminal.hostHints, ORCA_TERMINAL_HANDLE: HANDLE } }))
+    await t.reads[0].answer(TTY)
+    expect(await t.src.showPane(t.agent())).toBe('ok')
+    expect(t.actions.orcaSwitch.mock.calls).toEqual([[HANDLE]])
+    expect(t.actions.tabSelect).not.toHaveBeenCalled()
+  })
+
+  /** A tap's open, held until the test answers it. */
+  const heldOpen = () => {
+    let answer!: (opened: boolean) => void
+    const open = vi.fn((_agentId: string, _target: OpenTarget) => new Promise<boolean>((resolve) => { answer = resolve }))
+    return { open, answer: (opened: boolean) => answer(opened) }
+  }
+
+  it('a tap opens the app, then selects the tab with raise', async () => {
+    const held = heldOpen()
+    const t = tabs({ open: held.open })
+    t.src.ingest(t.ev('session-start', inTerminal))
+    await t.reads[0].answer(TTY)
+    const tap = t.src.focus(t.agent())
+    await flushed()
+    expect(held.open.mock.calls).toEqual([[t.agent().id, { bundle: 'com.apple.Terminal' }]])
+    expect(t.actions.tabSelect).not.toHaveBeenCalled()
+    held.answer(true)
+    expect(await tap).toBe(true)
+    expect(t.actions.tabSelect.mock.calls).toEqual([['terminal-app', TTY, true]])
+  })
+
+  it('a tap whose open fails selects nothing, and answers false', async () => {
+    const t = tabs({ open: vi.fn(async () => false) })
+    t.src.ingest(t.ev('session-start', inTerminal))
+    await t.reads[0].answer(TTY)
+    expect(await t.src.focus(t.agent())).toBe(false)
+    expect(t.actions.tabSelect).not.toHaveBeenCalled()
+  })
+
+  it('an agent that ended, or whose pid changed, while open ran gets no select', async () => {
+    for (const meanwhile of [{ event: 'session-end', pid: 100 }, { event: 'turn-start', pid: 101 }] as const) {
+      const held = heldOpen()
+      const t = tabs({ open: held.open })
+      t.src.ingest(t.ev('session-start', inTerminal))
+      await t.reads[0].answer(TTY)
+      const tap = t.src.focus(t.agent())
+      t.src.ingest(t.ev(meanwhile.event, { ...inTerminal, callerPid: meanwhile.pid }))
+      held.answer(true)
+      expect(await tap).toBe(true)
+      expect(t.actions.tabSelect).not.toHaveBeenCalled()
+    }
+  })
+
+  it('with no stream a tap only opens; a tap on an agent with an Orca handle writes no select', async () => {
+    const t = tabs({ tabsOpen: vi.fn(() => false) })
+    t.src.ingest(t.ev('session-start', inTerminal))
+    t.src.ingest(t.ev('session-start', { sessionId: 'orca', callerPid: 101, hostHints: { ...inTerminal.hostHints, ORCA_TERMINAL_HANDLE: HANDLE } }))
+    await t.reads[0].answer(TTY)
+    await t.reads[1].answer('/dev/ttys024')
+    expect(await t.src.focus(t.agent())).toBe(true)
+    t.actions.tabsOpen.mockReturnValue(true)
+    expect(await t.src.focus(t.agent('orca'))).toBe(true)
+    expect(t.actions.open).toHaveBeenCalledTimes(2)
+    expect(t.actions.tabSelect).not.toHaveBeenCalled()
+  })
+
+  it('byTab: the live agent of that app and tty, the most recently active of two, none for another app, an ended session or an unknown tty', async () => {
+    const t = tabs()
+    t.src.ingest(t.ev('session-start', { sessionId: 'a', callerPid: 100, ...inTerminal }))
+    t.clock.t += 1_000
+    t.src.ingest(t.ev('session-start', { sessionId: 'b', callerPid: 101, ...inTerminal }))
+    t.src.ingest(t.ev('session-start', { sessionId: 'c', callerPid: 102, hostHints: { TERM_PROGRAM: 'iTerm.app' } }))
+    for (const read of t.reads) await read.answer(TTY)
+    expect(t.src.byTab('terminal-app', TTY)).toMatchObject({ sessionId: 'b' })
+    t.clock.t += 1_000
+    t.src.ingest(t.ev('turn-start', { sessionId: 'a', callerPid: 100, ...inTerminal }))
+    expect(t.src.byTab('terminal-app', TTY)).toMatchObject({ sessionId: 'a' })
+    expect(t.src.byTab('iterm', TTY)).toMatchObject({ sessionId: 'c' })
+    expect(t.src.byTab('ghostty', TTY)).toBeUndefined()
+    expect(t.src.byTab('terminal-app', '/dev/ttys024')).toBeUndefined()
+    t.src.ingest(t.ev('session-end', { sessionId: 'a', callerPid: 100, ...inTerminal }))
+    t.src.ingest(t.ev('session-end', { sessionId: 'b', callerPid: 101, ...inTerminal }))
+    expect(t.src.byTab('terminal-app', TTY)).toBeUndefined()
   })
 })
 

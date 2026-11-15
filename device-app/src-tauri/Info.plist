@@ -10,5 +10,7 @@
 	<array>
 		<string>_autonomous._tcp</string>
 	</array>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Your dial follows your terminal tabs.</string>
 </dict>
 </plist>

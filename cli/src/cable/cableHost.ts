@@ -138,7 +138,8 @@ export interface CableHostWiring {
   pets?: () => PetStore | null
   /** The app a dial that says `appFilter` shows changed from one app to another, and why: its dials are told at once. */
   appSwitched?: (cause: SwitchCause) => void
-  /** An app stayed in front for FRONT_SETTLE_MS, with or without a window, after any switch it caused. */
+  /** An app stayed in front for FRONT_SETTLE_MS, with or without a window, after any switch it caused: the Claude app's
+   *  session and a tab report waiting on that app are followed then. */
   appSettled?: (app: string) => void
   /** A dial sent a pick from its list of apps, whatever came of it: the picker's measure. A notice's pick is none. */
   appPicked?: () => void
