@@ -105,6 +105,16 @@ describe('core runtime profile authority', () => {
     expect(t.sessions.selectedModel(t.s)).toBeNull()
   })
 
+  it.each(['boundAt', 'evidenceRevision'] as const)('retains JSON number normalization for %s', async field => {
+    const t = setup(); Object.assign(t.s, { [field]: NaN }); await t.seed()
+    const copied = structuredClone(t.s), pending = t.sessions.stage(t.s, false, false)
+    await pending.ingest([{ model: 'staged', effort: 'high' }])
+    Object.assign(t.s, { [field]: Infinity })
+    expect(t.sessions.selectedModel(copied)).toBe(profile(copied, 'old', 'low').id)
+    expect(pending.commit()).toBe(true)
+    expect(t.sessions.selectedModel(t.s)).toBe(profile(t.s, 'staged').id)
+  })
+
   it.each(['native', 'process', 'route', 'hold', 'revision', 'hold-cycle'] as const)(
     'rechecks displayed facts after a live registry object changes: %s', async change => {
       const t = setup(); t.s.runtimes = [{ backend: 'tmux', paneId: '%1' }]
