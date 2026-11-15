@@ -41,7 +41,8 @@ it is fixed in, is in [the audit](../docs/design/2026-11-12-core-audit.md): that
    another account's message, GitHub text, a web page, a device, a third-party harness) is parsed and checked in
    the component that faces it, and reaches the core as typed, bounded data. No process of the daemon, and no hook,
    reads another process's environment, by any means (`/proc/<pid>/environ`, `ps e`, `KERN_PROCARGS2`): a hook reads
-   its own and says only what it derives (`src/architecture.environment.spec.ts`).
+   its own and says only what it derives (`src/architecture.environment.spec.ts`). One reader is left, a listed
+   follow-up: the macOS helper `native/darwin-process-images.c` hashes `KERN_PROCARGS2`, environment included.
 5. **The core lends its authority narrowly.** It runs no command line a component hands it, and signs a backend
    call for a component only on a route that component declared (`MESSAGES_BACKEND_ROUTES`,
    `EXPERIMENT_BACKEND_ROUTES`).

@@ -4,6 +4,10 @@
  * it: `/proc/<pid>/environ`, `ps e` and `KERN_PROCARGS2` hand over all of it. So this reads every file of the daemon
  * and its hook, as code, so that a comment naming those is no finding.
  *
+ * One reader is left, outside what this reads: the macOS helper `native/darwin-process-images.c` hashes another
+ * process's `KERN_PROCARGS2`, environment included (lib/nativeProcessControl.ts runs it). It is a listed follow-up
+ * (docs/plans/2026-11-15-process-env-secrets-design.md, Follow-ups).
+ *
  * Its limits: it finds the patterns below and no more. A `ps` argument list built in a variable (`run(ps, args)`) and a
  * `ps` in a shell line (`sh -c 'ps eww …'`) are not reached; review is what catches those.
  */
