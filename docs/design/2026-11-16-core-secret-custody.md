@@ -205,6 +205,20 @@ The Browser extraction is in a separate branch. If it lands first, replace the l
 generic follow-agent dispatch, retaining projection before dispatch in both process and inline mode. Do not
 restore the old Browser lifecycle merely to make this patch apply. The coordinating agent chooses integration order.
 
+Read-only inspection of `/tmp/harness-core-browser-continue` confirms the exact integration points in
+`core/agentLife.ts`: `main.ts` constructs it with `live: () => registry.list()` and calls `running` with raw rows.
+`catchUp` returns those rows for both inline `follow` and process `followed` (`follow_agents`); `look` emits
+`{ kind: 'running', session }` to either kind of follower. Project the returned catch-up rows and the session
+in `look` only after its known/each/filter checks, before delivery. Do not add an allocation to a scan that emits
+nothing. Type `AgentLife`'s running session and `catchUp` as `AgentView`; retain authoritative input types.
+Browser stores the running row in its own `live` map, so this boundary removes a retained copy as well as transit.
+The branch's `taken` event already contains only `from`, `to` ids and optional `guest`; it does not need a row
+projection. Ended/stopped/purged events also contain no row. Keep the direct viewer frame-context projection in
+`main.ts` if that callback remains. Its old-service compatibility paths that return the ordinary agents query
+remain covered by CoreApi projection. Cover inline/process initial catch-up, every-look and once-only running
+notifications, reconnect and unobserved scans in the combined tests. This is an integration note, not a change to
+that other worktree or authorization to take over its work.
+
 Write failing tests before source changes, using synthetic canary keys only:
 
 1. Real `createCoreApi` reads for every method above omit the property, including present, null and absent
