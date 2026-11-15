@@ -105,6 +105,7 @@ core/questions.ts
 core/recapsLink.ts
 core/serviceHost.ts
 core/serviceLinks.ts
+core/serviceRoutes.ts
 core/sharedMachinesLink.ts
 core/sharedMachinesQueries.ts
 core/sharingLink.ts
@@ -326,7 +327,6 @@ lib/daemonSafeMode.ts
 lib/daemonState.ts
 lib/deleteAgentFallback.ts
 lib/deletedSessions.ts
-lib/deviceManagementHttp.ts
 lib/dialogEnd.ts
 lib/engineBin.ts
 lib/engineExitOption.ts

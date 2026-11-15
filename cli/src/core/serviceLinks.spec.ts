@@ -419,6 +419,21 @@ describe('service links', () => {
     expect(reply).toHaveBeenCalledWith({ error: 'SERVICE_UNAVAILABLE', service: 'search', retryable: true })
   })
 
+  it('waits for a routed request as long as its route of the door says, over its type\'s wait', () => {
+    const links = make({ waits: { search: { session_tail: 10_000 } } })
+    links.accept('search', TOKEN, sink(), vi.fn())
+    const short = vi.fn()
+    const long = vi.fn()
+    links.route('session_tail', {}, ASKER, short, 2_000)
+    links.route('session_search', {}, ASKER, long, 20_000)
+    vi.advanceTimersByTime(2_000)
+    expect(short).toHaveBeenCalledWith({ error: 'SERVICE_UNAVAILABLE', service: 'search', retryable: true })
+    vi.advanceTimersByTime(17_999)
+    expect(long).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(1)
+    expect(long).toHaveBeenCalledWith({ error: 'SERVICE_UNAVAILABLE', service: 'search', retryable: true })
+  })
+
   it('waits longer for the answers that take longer, by service and type, and the usual half minute for the rest', async () => {
     const links = make({
       owned: { search: ['session_search', 'session_tail'], models: ['grid_fleet_run'] },
