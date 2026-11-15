@@ -2548,6 +2548,20 @@ describe('the session the Claude app shows turns the dial (docs/specs/2026-11-15
     expect(attaches()).toEqual(['[device] attach · skipped · echo'])
   })
 
+  // A tap on a Claude app agent runs the rest's continue link: its attach is the dial's own as well.
+  it('an attach within 2 s of a tap\'s link is its echo', async () => {
+    const { attach } = await dialWith('claude')
+    expect(await host().openAgent(A)).toBeUndefined()
+    expect(orcaRuns).toEqual([continued(LOCAL)])
+    await wait(1_999)
+    attach(SESSION)
+    expect(attaches()).toEqual(['[device] attach · skipped · echo'])
+    expect(asked()).toEqual([])
+    await wait(1)
+    attach(SESSION)
+    expect(asked()).toEqual([[A, 'attach']])
+  })
+
   it('the app settling in front moves the dial to the last attached agent', async () => {
     const { front, attach } = await dialWith('orca')
     attach(SESSION)
@@ -2590,6 +2604,18 @@ describe('the session the Claude app shows turns the dial (docs/specs/2026-11-15
     // The kept agent is still A: the next settle asks for it.
     await backInFront(front)
     expect(asked()).toEqual([[A, 'attach']])
+  })
+
+  it('a settle within 2 s of a tap\'s link moves nothing', async () => {
+    // The app showed A while Orca was in front; a tap on B brings the app forward on B's session.
+    const { front, attach } = await dialWith('orca')
+    attach(SESSION)
+    expect(await host().openAgent(B)).toBeUndefined()
+    expect(orcaRuns).toEqual([continued(LOCAL_SECOND)])
+    front('claude')
+    await wait(FRONT_SETTLE_MS)
+    expect(asked()).toEqual([])
+    expect(attaches()).toEqual(['[device] attach · skipped · not in front', '[device] attach · skipped · echo'])
   })
 
   it('a settle 2 s after the dial\'s last link moves the dial; of two links the younger counts', async () => {
