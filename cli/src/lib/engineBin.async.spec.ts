@@ -2,7 +2,14 @@ import { chmodSync, mkdtempSync, mkdirSync, renameSync, symlinkSync, rmSync, wri
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
-const reads = vi.hoisted(() => ({ gate: null as Promise<void> | null, calls: 0, active: 0, most: 0, failure: '', large: '', entries: 0 }))
+const reads = vi.hoisted(() => ({ gate: null as Promise<void> | null, calls: 0, active: 0, most: 0, failure: '', large: '', entries: 0, forbidWindowsSync: false }))
+vi.mock('node:fs', async original => {
+ const fs = await original<typeof import('node:fs')>()
+ return { ...fs, accessSync: (...args: Parameters<typeof fs.accessSync>) => {
+  if (reads.forbidWindowsSync && /hermes\.(exe|cmd|bat|com)$/.test(String(args[0]))) throw new Error('synchronous Windows PATH scan')
+  return fs.accessSync(...args)
+ } }
+})
 vi.mock('node:fs/promises', async original => {
  const fs = await original<typeof import('node:fs/promises')>()
  return { ...fs, opendir: async (directory: string) => {
@@ -19,7 +26,7 @@ vi.mock('node:fs/promises', async original => {
 })
 import * as engineBin from './engineBin.js'
 const roots: string[] = []
-afterEach(() => { vi.useRealTimers(); reads.gate = null; reads.failure = ''; reads.large = ''; reads.entries = 0; reads.calls = reads.active = reads.most = 0; vi.unstubAllEnvs(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
+afterEach(() => { vi.useRealTimers(); reads.gate = null; reads.failure = ''; reads.large = ''; reads.entries = 0; reads.forbidWindowsSync = false; reads.calls = reads.active = reads.most = 0; vi.unstubAllEnvs(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
 function fixture() {
  const root = mkdtempSync(join(tmpdir(), 'ownership-async-')); roots.push(root)
  vi.stubEnv('PATH', root)
@@ -127,4 +134,19 @@ it('stops a huge PATH directory at its bound and uses fixed command probes inste
  reads.entries = 0
  expect((await engineBin.agentCommandOwnershipSnapshotAsync()).engineCandidates?.get('codex')?.[0]?.path).toBe(file)
  expect(reads.entries).toBe(0)
+})
+
+it('resolves the Windows Hermes launcher without a synchronous PATH scan', async () => {
+ const { root } = fixture(), install = join(root, 'hermes'), bin = join(install, 'bin')
+ mkdirSync(bin, { recursive: true }); mkdirSync(join(install, 'hermes-agent', 'hermes_cli'), { recursive: true })
+ writeFileSync(join(install, 'hermes-agent', 'hermes_cli', 'main.py'), '')
+ writeFileSync(join(bin, 'hermes.exe'), 'launcher', { mode: 0o700 })
+ const boot = join(bin, 'hermes-boot.py'); writeFileSync(boot, 'boot')
+ vi.stubEnv('PATH', bin); reads.forbidWindowsSync = true
+ const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+ Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
+ try {
+  const snapshot = await engineBin.agentCommandOwnershipSnapshotAsync()
+  expect(snapshot.engineFileKeys?.get('hermes')?.has(engineBin.executableFileIdentity(boot)!.fileKey)).toBe(true)
+ } finally { Object.defineProperty(process, 'platform', platform) }
 })

@@ -54,3 +54,13 @@ it.skipIf(process.platform === 'win32')('does not publish an old shell answer af
  answer(null, '__HARNESS_ENGINE_PATH__=\n')
  expect((await next).engineCandidates?.get('opencode')).toEqual([])
 })
+it.skipIf(process.platform === 'win32')('never joins a synchronous reader\'s old PATH capture as evidence for a new PATH', async () => {
+ const { bin, root } = fixture(), mod = await import('./engineBin.js')
+ mod.agentCommandOwnershipSnapshot()
+ expect(subprocess.exec).toHaveBeenCalledTimes(1)
+ vi.stubEnv('PATH', root)
+ const pending = mod.agentCommandOwnershipSnapshotAsync()
+ const changed = expect(pending).rejects.toThrow('ENGINE_PATH_CHANGED')
+ answer(null, `__HARNESS_ENGINE_PATH__=${bin}\n`)
+ try { await changed } finally { answer(null, '__HARNESS_ENGINE_PATH__=\n') }
+})

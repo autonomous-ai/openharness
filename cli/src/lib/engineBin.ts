@@ -9,12 +9,12 @@ import { execFile } from 'node:child_process'
 import { accessSync, constants, readlinkSync, realpathSync, statSync, type BigIntStats } from 'node:fs'
 import { access, opendir, readlink, realpath, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { basename, delimiter, isAbsolute, join, normalize, resolve, sep } from 'node:path'
+import { basename, delimiter, dirname, isAbsolute, join, normalize, resolve, sep } from 'node:path'
 import { env } from '../config/env.js'
 import { ENGINES, PROCESS_ENGINES, type AgentEngine } from '../engines/types.js'
 import { engineInstallPaths, engineInstallRecipe } from './engineInstall.js'
 import { currentUserShell } from './userShell.js'
-import { windowsLaunchCommand } from './binaryOnPath.js'
+import { windowsLaunchCandidates, windowsLaunchCommand } from './binaryOnPath.js'
 import { hermesBootFile, hermesRoot } from './windows/hermesLaunch.js'
 
 // Keep this historical import surface for callers, but never duplicate the
@@ -96,16 +96,19 @@ export const ENGINE_CLI_ALIASES: Readonly<Record<AgentEngine, readonly string[]>
 
 let interactivePathCache: { shell: string; daemonPath: string; value: string[]; retryAt: number } | null = null
 let interactivePathFlight: Promise<string[]> | null = null
+let interactivePathFlightKey = ''
 
 /** Match pane startup: bash reads -ic, zsh reads -lic. The one-shot credential capture has a different context. */
 function warmInteractivePath(): Promise<string[]> {
   if (process.env.NODE_ENV === 'test') return Promise.resolve([])
   const shell = currentUserShell(), daemonPath = process.env.PATH ?? ''
   if (!shell) return Promise.resolve([])
-  if (interactivePathFlight) return interactivePathFlight
+  const key = `${shell}\0${daemonPath}`
+  if (interactivePathFlight) return interactivePathFlightKey === key ? interactivePathFlight : Promise.reject(new Error('ENGINE_PATH_CHANGED'))
   if (interactivePathCache?.shell === shell && interactivePathCache.daemonPath === daemonPath && Date.now() < interactivePathCache.retryAt) {
     return Promise.resolve(interactivePathCache.value)
   }
+  interactivePathFlightKey = key
   interactivePathFlight = new Promise<string[]>(done => {
     let child: ReturnType<typeof execFile> | undefined, settled = false
     const finish = (value: string[], failure?: string): void => {
@@ -139,7 +142,7 @@ function warmInteractivePath(): Promise<string[]> {
 /** Synchronous compatibility readers never start a blocking shell. Async discovery awaits the first capture. */
 function interactivePathEntries(): string[] {
   if (process.env.NODE_ENV === 'test') return []
-  void warmInteractivePath()
+  void warmInteractivePath().catch(() => {})
   return interactivePathCache && interactivePathCache.shell === currentUserShell() && interactivePathCache.daemonPath === (process.env.PATH ?? '')
     ? interactivePathCache.value : []
 }
@@ -372,25 +375,29 @@ export function agentCommandOwnershipSnapshotAsync(): Promise<AgentCommandOwners
     if (key !== ownershipKey()) throw new Error('ENGINE_LOOKUP_CHANGED')
     const input = ownershipInput()
     if (input.paths.length > 1_024) throw new Error('ENGINE_LOOKUP_PATH_LIMIT')
-    const commands = new Set([...input.commands.values()].flat().concat(['agent', 'cursor-agent', 'grok', input.grokHome],
+    const windowsCandidates = windowsLaunchCandidates(input.hermes), windowsFiles = new Set(windowsCandidates)
+    const commands = new Set([...input.commands.values()].flat().concat(windowsCandidates, ['agent', 'cursor-agent', 'grok', input.grokHome],
       input.cursor ? [input.cursor] : [], input.grok ? [input.grok] : []))
-    const wanted = new Set([...commands].filter(command => !looksLikePath(command)).map(command => command.toLowerCase()))
+    const wanted = new Set([...commands].filter(command => !looksLikePath(command)).concat(windowsCandidates.map(file => basename(file))).map(command => command.toLowerCase()))
     const wantedKey = [...wanted].sort().join('\0'), names = new Map<string, Set<string> | null>()
     let directoryIndex = 0, directoryFailure: Error | undefined
     await Promise.all(Array.from({ length: Math.min(8, input.paths.length) }, async () => {
       while (!expired && directoryIndex < input.paths.length) {
         const directory = input.paths[directoryIndex++]
-        try { names.set(directory, await candidateNames(directory, wanted, wantedKey)) }
+        try { names.set(resolve(directory), await candidateNames(directory, wanted, wantedKey)) }
         catch { expired = true; directoryFailure = new Error('ENGINE_LOOKUP_FAILED') }
       }
     }))
     if (directoryFailure) throw directoryFailure
     if (expired) throw new Error('ENGINE_LOOKUP_TIMEOUT')
+    const visible = (directory: string, command: string) => {
+      const known = names.get(resolve(directory))
+      return !known || /[^\x00-\x7f]/.test(command) || known.has(command.toLowerCase())
+    }
     const byCommand = new Map([...commands].map(command => [command,
-      looksLikePath(command) ? [command] : input.paths.filter(entry => {
-        const known = names.get(entry)
-        return !known || /[^\x00-\x7f]/.test(command) || known.has(command.toLowerCase())
-      }).map(entry => join(entry, command))]))
+      looksLikePath(command)
+        ? (!windowsFiles.has(command) || visible(dirname(command), basename(command)) ? [command] : [])
+        : input.paths.filter(entry => visible(entry, command)).map(entry => join(entry, command))]))
     const paths = [...new Set([...byCommand.values()].flat())]
     if (paths.length > 32_768) throw new Error('ENGINE_LOOKUP_PATH_LIMIT')
     const identities = new Map<string, ExecutableFileIdentity>()
@@ -400,7 +407,7 @@ export function agentCommandOwnershipSnapshotAsync(): Promise<AgentCommandOwners
       while (!expired && next < paths.length) {
         const file = paths[next++]
         try {
-          await access(file, constants.X_OK)
+          await access(file, windowsFiles.has(file) ? constants.F_OK : constants.X_OK)
           const info = await stat(file, { bigint: true })
           if (!info.isFile()) continue
           let realPath: string
@@ -420,7 +427,7 @@ export function agentCommandOwnershipSnapshotAsync(): Promise<AgentCommandOwners
     if (expired) throw new Error('ENGINE_LOOKUP_TIMEOUT')
     if (key !== ownershipKey()) throw new Error('ENGINE_LOOKUP_CHANGED')
     return ownershipSnapshot(input, command => (byCommand.get(command) ?? []).flatMap(file => identities.get(file) ?? []),
-      hermesBootFileKey(windowsLaunchCommand(input.hermes)))
+      hermesBootFileKey(windowsCandidates.find(file => identities.has(file)) ?? input.hermes))
   })()
   // Do not start another pass while a timed-out filesystem read is still outstanding.
   let timer: ReturnType<typeof setTimeout>
