@@ -2738,7 +2738,7 @@ describe('a terminal: a pane that becomes an engine and back', () => {
   })
 
   // The path a restore takes when it cannot see a pane's engine: the harness is archived (`retainExitedSession` saves
-  // it), its pane goes to a new terminal row (`releaseEngine(…, true)`), and its engine runs on. Seen again, it comes
+  // it), its pane goes to a new terminal row (`confirmEngineExit(…, 'successor')`), and its engine runs on. Seen again, it comes
   // back on that pane under its own id (DESKTOP-0TFH0OJ, 2026-11-10, CLI 0.5.97 and Hermes).
   it('gives a pane back to the archived harness whose own engine never left it, and only then', async () => {
     const { registry } = await loadRegistryModule()

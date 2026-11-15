@@ -952,7 +952,7 @@ describe('existing runtime and readiness verification', () => {
     ;(await live()); expect(await start()).toMatchObject({ ok: true }); expect(create).not.toHaveBeenCalled()
     // Asked of the pane's own backend, about the pane the row records.
     expect(resolvePaneEngineProcess).toHaveBeenCalledWith(tmuxTerminal, { backend: 'tmux', paneId: pane }, 'codex')
-    expect(releaseHold).toHaveBeenCalledWith({ backend: 'tmux', paneId: pane })
+    expect(releaseHold).toHaveBeenCalledWith({ backend: 'tmux', paneId: pane }, expect.any(Function))
   })
   it('confirms nothing of a pending allocation with no tmux backend to ask', async () => {
     ;(await live()); noBackend()
@@ -993,10 +993,12 @@ describe('existing runtime and readiness verification', () => {
     expect(deps.announceSession).not.toHaveBeenCalled()
   })
   it('waits for a real readiness observation before replying', async () => {
-    vi.useFakeTimers()
     const inspected = deferred<void>()
     vi.mocked(resolvePaneEngineProcess).mockImplementationOnce(async () => { inspected.resolve(); return null })
-    const result = start(); await inspected.promise; await vi.advanceTimersByTimeAsync(500)
+    let replied = false
+    const result = start().then(value => { replied = true; return value })
+    await inspected.promise
+    expect(replied).toBe(false)
     expect(await result).toMatchObject({ ok: true })
     // No process, then ready, then the fresh proof at durable publication.
     expect(resolvePaneEngineProcess).toHaveBeenCalledTimes(3)
@@ -1115,14 +1117,14 @@ describe('resume on the pty host', () => {
     expect(buildEngineLaunchArgv).toHaveBeenCalledWith('codex', expect.objectContaining({ resumeSessionId: saved.sessionId }))
     expect(ptyCreate.mock.calls[0][0].command).toEqual(['fixture-engine'])
     expect(resolvePaneEngineProcess).toHaveBeenCalledWith(ptyTerminal, pty, 'codex')
-    expect(ptyReleaseHold).toHaveBeenCalledWith(pty)
+    expect(ptyReleaseHold).toHaveBeenCalledWith(pty, expect.any(Function))
     tmuxUntouched()
   })
 
   it('opens a stopped shell in a new pty host pane', async () => {
     rewrite({ engine: 'terminal', sessionId: '', transcriptPath: '' })
     expect(await start()).toMatchObject({ ok: true, session: { runtimes: [pty], launch: { state: 'ready' } } })
-    expect(ptyReleaseHold).toHaveBeenCalledWith(pty)
+    expect(ptyReleaseHold).toHaveBeenCalledWith(pty, expect.any(Function))
     tmuxUntouched()
   })
 
@@ -1155,7 +1157,7 @@ describe('resume on the pty host', () => {
     ;(await live({ runtimes: [pty] }))
     expect(await start()).toMatchObject({ ok: true }); expect(ptyCreate).not.toHaveBeenCalled()
     expect(resolvePaneEngineProcess).toHaveBeenCalledWith(ptyTerminal, pty, 'codex')
-    expect(ptyReleaseHold).toHaveBeenCalledWith(pty)
+    expect(ptyReleaseHold).toHaveBeenCalledWith(pty, expect.any(Function))
     tmuxUntouched()
   })
 
@@ -1181,7 +1183,7 @@ describe('resume on the pty host', () => {
     ;(await live({ runtimes: [pty, tmux] }))
     expect(await start()).toMatchObject({ ok: true })
     expect(resolvePaneEngineProcess).toHaveBeenCalledWith(tmuxTerminal, tmux, 'codex')
-    expect(releaseHold).toHaveBeenCalledWith(tmux)
+    expect(releaseHold).toHaveBeenCalledWith(tmux, expect.any(Function))
     expect(ptyReleaseHold).not.toHaveBeenCalled()
   })
 })
@@ -1240,7 +1242,11 @@ it('refuses resumed authority when a peer changes the selected durable row', asy
     expect(deps.stoppedAgents.resumeReservedAt(saved.agentId)).not.toBeNull()
     const persisted = JSON.parse(readFileSync(join(env.ADAPTER_DATA_DIR, 'registry.json'), 'utf8')) as RegisteredSession[]
     expect(persisted.find(row => row.agentId === saved.agentId)).toMatchObject({ closePlan: plan, processIdentity: null, launch: { state: 'starting' } })
-  } finally { await peer.flush({ exiting: true }) }
+  } finally {
+    await peer.flush({ exiting: true })
+    // The test deliberately published a peer owner; refresh before strict cleanup selects it.
+    await registry.flush()
+  }
 })
 
 it.each(['codex', 'terminal'] as const)('retains resumed authority for %s after post-rename uncertainty until the same candidate is confirmed', async engine => {

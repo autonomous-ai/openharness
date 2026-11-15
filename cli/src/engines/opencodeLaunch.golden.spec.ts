@@ -12,6 +12,9 @@ vi.mock('../lib/createAgentPane.js', () => ({ createAndRegisterPane: async (inpu
   captured.panes.push(input)
   return { ok: false, error: 'RECORDED', detail: 'No pane is opened by this golden.' }
 } }))
+vi.mock('../lib/paneEngineProcess.js', async real => ({ ...await real<object>(),
+  resolvePaneEngineProcess: async () => ({ pid: 4343, executable: 'opencode', startMarker: 'replacement' }),
+}))
 vi.mock('../lib/processTable.js', async real => ({ ...await real<object>(), processArgs: async () => '' }))
 vi.mock('../lib/binaryOnPath.js', async real => {
   const actual = await real<typeof import('../lib/binaryOnPath.js')>()
@@ -138,9 +141,21 @@ it('records create, fork, relaunch and actual retarget dispatch before the extra
           clearEnv: async (_pane: unknown, names: string[]) => { event(['clearEnv', names]); return { state: 'succeeded' } }, releaseHold: async () => {} }
         return { backendFor: () => tmux, instances: () => [tmux] }
       })(),
-      registry: { resolve: () => source, byAgent: () => source, updateProcessIdentity: (...args: unknown[]) => event(['process', ...args]),
-        setGridLaunch: (...args: unknown[]) => event(['grid', ...args]), setSubscriptionModel: (...args: unknown[]) => event(['subscription', ...args]),
-        setActive: (...args: unknown[]) => event(['active', ...args]) },
+      registry: { resolve: () => source, byAgent: () => source,
+        confirmLaunch: async (_id: string, input: Parameters<typeof import('../lib/registry.js').registry.confirmLaunch>[1],
+          authority: Parameters<typeof import('../lib/registry.js').registry.confirmLaunch>[2]) => {
+          if (authority?.current?.() === false) return { state: 'not-published' }
+          await authority?.refresh?.()
+          if (authority?.current?.() === false) return { state: 'not-published' }
+          Object.assign(source, { processIdentity: input.processIdentity, grid: input.grid,
+            gridLaunch: input.gridLaunchRecord?.override ?? null, gridWebSearch: input.gridLaunchRecord?.webSearch ?? null,
+            active: true, launch: { state: 'ready' } })
+          // Project one publication into the old fixture's events; native commands stay byte-for-byte golden.
+          event(['process', source.agentId, input.processIdentity, undefined, input.grid])
+          event(['grid', source.agentId, input.gridLaunchRecord])
+          event(['active', source.agentId, true])
+          return { state: 'confirmed', entry: structuredClone(source) }
+        } },
       runtimeProfiles: { selectedModel: () => null },
       launchOverridesDeps: { machine: world.machine, capabilities: world.capabilities },
       sessionTurnOpen: () => false,

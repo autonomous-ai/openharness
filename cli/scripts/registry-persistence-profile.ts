@@ -1,4 +1,4 @@
-/** Fixed disposable workload; run unchanged before and after the persistence refactor. */
+/** Fixed 83-sample workload; only untimed setup adapts to awaited authority admission. */
 import { fork } from 'node:child_process'
 import { once } from 'node:events'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -26,8 +26,8 @@ const sample = async (name: string, work: () => unknown) => {
 }
 try {
   for (const size of [16, 160]) {
-    await registry.transaction(() => {
-      for (let index = registry.list().length; index < size; index++) registry.openProcessAgent({
+    await registry.transaction(async () => {
+      for (let index = registry.list().length; index < size; index++) await registry.openProcessAgent({
         agentId: `agent-${index}`, engine: 'claude', tmuxPane: `%${index + 1}`,
         processIdentity: { pid: 1000 + index, executable: '/fixture/claude', startMarker: `fixture-${index}` },
       })
@@ -51,4 +51,4 @@ try {
     await exited
   }
   console.log(JSON.stringify({ node: process.version, platform: process.platform, samples }))
-} finally { await registry.flush(); rmSync(directory, { recursive: true, force: true }) }
+} finally { await registry.flush({ exiting: true }); rmSync(directory, { recursive: true, force: true }) }

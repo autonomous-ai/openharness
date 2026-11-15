@@ -264,8 +264,11 @@ Strict replies/releases now use selected-owner candidates and refreshed native p
 for hooks, Resume, Close plans, launch readiness, HostMove, Stop/unbind, discovery
 ownership and explicit core name/model choices. Discovery/restore exit proofs refresh
 after image preparation; every displaced owner receives cleanup. The local review
-checkpoint inventories remaining test-only API cleanup and observational component
-preferences. Caller audit and focused validation remain incomplete: no broad-gate or
+checkpoint inventories observational component preferences; the six obsolete
+synchronous APIs and their private release helper are removed. Four independent-review
+caller races have focused red/green evidence, including real native hooks after fresh
+fallback and Stop during revalidation. Final focused/native acceptance remains
+incomplete: no broad-gate or
 after-profile receipt is claimed. Unconfirmed rename retains whole-group recovery and
 cannot authorize success, an old-engine rollback or archive deletion. Exit seals
 admission and waits for actual settlement before listener/claim release.

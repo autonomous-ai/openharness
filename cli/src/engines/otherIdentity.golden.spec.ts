@@ -230,7 +230,7 @@ describe('where the core finds the other engines\' conversations', () => {
     const agents = new Map<string, Record<string, unknown>>()
     const binding = m.bind.createBinding({
       registry: {
-        inheritName: () => {}, unbindSession: () => true, byAgent: (id: string) => agents.get(id),
+        inheritName: () => {}, byAgent: (id: string) => agents.get(id),
         byProcess: (engine: string) => agents.get(engine), has: () => false, bySession: () => undefined,
         register: (input: unknown) => { registered.push(input); return null }, setOpenclawStateDir: () => false,
       } as never,

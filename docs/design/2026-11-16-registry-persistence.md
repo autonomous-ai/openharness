@@ -831,10 +831,11 @@ into asynchronous observation writes. Their mutation APIs do not grant a durable
 authority receipt. Synchronous transaction application and the existing peer
 three-way merge/rebase semantics remain; last-state-wins is not the algorithm.
 
-Remaining source/audit items exposed for review: the replaced synchronous
-`remove`, `removeAgent`, `unbindSession`, `releaseEngine`, `setLaunchArgs` and
-`setSubscriptionModel` currently have test-only callers. Their removal/fixture
-migration is pending, not an extra public API contract. Component preferences
+The replaced synchronous `remove`, `removeAgent`, `unbindSession`, `releaseEngine`,
+`setLaunchArgs` and `setSubscriptionModel` APIs and the private `releaseBinding`
+helper are removed. Test seeding uses existing strict transitions through a
+test-only helper; historical benchmark adaptation lives only in its fixture.
+Production reference search and TypeScript found no remaining callers. Component preferences
 `setBrowser` (lifecycle) and `setGridLaunch` (the existing service API) remain
 observational; this checkpoint does not assert a new durable component-preference
 acknowledgement contract. The core `agent_update` inventory has only name, explicit
@@ -896,3 +897,33 @@ between lease and key dispatch, and Resume cancellation while backend release wa
 The timestamp normalization fix at 91dbe0bf excludes only generated candidate
 `lastTranscriptAt`; genuine local changes still invalidate full affected-row
 fingerprints (five focused recovery checks pass). Full acceptance remains pending.
+
+
+The four review families now have retained true-red caller evidence and eight
+passing focused cases (`green-review-four-caller-gaps.log`). Actual native hooks
+omit `launch` to mean ready; the watcher accepts that existing form under its
+one first-hook selection. Additional unconfirmed-unbind/journal and replacement
+cases pass. The initial Resume fixture asserted no announcements including its
+legitimate pending announcement; corrected assertions begin at the held release.
+The legacy launch-transition log lost during strict discovery conversion is
+restored after confirmed publication (the pre-existing log regression test failed
+before this correction). The old lock fixtures now expect strict admission to
+reject directly rather than acknowledge and fail a later flush.
+
+
+Checkpoint validation after review corrections: the corrected five-file focused
+selector passed 545/545 (`review-fixtures-corrected.log`); the preceding seven-file
+run retained 588 passing cases and 14 failures plus one fake-clock rejection, so
+that earlier run is not a passing receipt. Its failures were addressed by real
+readiness waiting, refreshed peer-owner cleanup, and fixture receipt/guard
+expectations. The four untouched passing files in that run cover real launch
+callers, restore, coordinator and PTY backend. TypeScript passed at the checkpoint;
+subsequent changes are fixture/docs only. No full-suite receipt is implied.
+
+The untimed profile fixture now awaits each 16/160-row admission and exiting-flush
+settlement, so it cannot flood the bounded queue or remove a directory while lock
+cleanup still owns it. The exact same fixture must run on both sources (`await`
+accepts the old synchronous return), with the same 83 timed operations and 90-second
+outer cap. Original baseline evidence remains unchanged and source-scoped; no new
+profile has run. The remaining golden adapter migration preserves historical
+native-command snapshots rather than recording new expected native behavior.
