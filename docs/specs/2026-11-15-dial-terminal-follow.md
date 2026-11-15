@@ -177,7 +177,8 @@ did not settle in front is dropped. Acting on a report:
 1. **Echo:** a select the dial itself sent for that tty in the last 2 s. Every select of the last 2 s is kept, at most
    8, not only the last one; otherwise a late report for A, after rests on A then B, would pull the dial back to A. The report is consumed and the dial stays, so a fast
    swipe is not pulled back to a tab it passed. Each select excuses one report only: the select it matched is then
-   forgotten, so the person clicking that tab again within 2 s moves the dial (PM, 2026-11-15). A report that waited
+   forgotten, so the person clicking that tab again within 2 s moves the dial (PM, 2026-11-15). So is every select
+   before it: the app runs selects and reports tabs in order, so their echo will not come now. A report that waited
    for the settle is also set aside when the dial sent any select after it arrived: the dial moved since.
 2. **The agent:** the live agent outside Harness with that app and that tty, the most recently active one if two
    match. None (a plain shell tab, an agent in tmux): the dial stays.

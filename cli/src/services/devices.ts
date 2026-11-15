@@ -857,9 +857,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // report of the tab selected is still to come.
     if (report.written !== written) { log('[device] tab · echo'); return }
     // By when the report came, not when its app settled: the wait for the settle must not age the dial's own select. It
-    // excuses this report only: the person selecting that tab again soon after moves the dial.
+    // excuses this report only: the person selecting that tab again soon after moves the dial. The app runs selects and
+    // reports tabs in order, so a select before it will see no echo now (Harness Device replaced it while it waited, or
+    // its tab was already shown): it goes too.
     const echo = selects.findIndex((sent) => sent.tty === tty && at - sent.at < ECHO_MS)
-    if (echo >= 0) { selects.splice(echo, 1); log('[device] tab · echo'); return }
+    if (echo >= 0) { selects = selects.slice(echo + 1); log('[device] tab · echo'); return }
     const agent = observed?.byTab(app, tty)
     if (!agent) { log('[device] tab · no-agent'); return }
     return cable.followLocal(agent.id, 'tab')
