@@ -1,6 +1,6 @@
 import { execFileSync, spawn, spawnSync } from 'child_process'
 import { randomBytes } from 'crypto'
-import { createServer } from 'http'
+import { createServer, type IncomingHttpHeaders } from 'http'
 import { connect as netConnect, createServer as createNetServer } from 'net'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
@@ -173,7 +173,8 @@ function runHook(opts: RunHookOpts): Promise<string> {
       } else {
         // Hermes 0.22+: the hook comes from the shared gateway the pane's Hermes started, not from that Hermes.
         const gateway = opts.viaHermesGateway ? ` '7002 7001 python3 Mon Aug 10 10:00:02 2026 python3 -m hermes_cli.main gateway run --quiet --idle-exit'` : ''
-        writeFileSync(join(binDir, 'ps'), `#!/bin/sh\nprintf '%s\\n' '7000 1 zsh Mon Aug 10 10:00:00 2026 -zsh' ${shellQuote(`7001 7000 ${executable} Mon Aug 10 10:00:01 2026 ${processArgs}`)}${gateway} '${process.pid} ${opts.viaHermesGateway ? 7002 : 7001} node Mon Aug 10 10:00:02 2026 hook-parent'\n`, { mode: 0o755 })
+        // In macOS's legacy mode `ps -e` lists every process's environment; this one answers nothing in it instead.
+        writeFileSync(join(binDir, 'ps'), `#!/bin/sh\n[ "$COMMAND_MODE" = legacy ] && exit 1\nprintf '%s\\n' '7000 1 zsh Mon Aug 10 10:00:00 2026 -zsh' ${shellQuote(`7001 7000 ${executable} Mon Aug 10 10:00:01 2026 ${processArgs}`)}${gateway} '${process.pid} ${opts.viaHermesGateway ? 7002 : 7001} node Mon Aug 10 10:00:02 2026 hook-parent'\n`, { mode: 0o755 })
       }
       const nativeFixture = join(binDir, 'native-process.mjs')
       writeFileSync(nativeFixture, `import fs from 'node:fs'; import { syncBuiltinESMExports } from 'node:module';
@@ -257,9 +258,10 @@ fs.readFileSync = (path, ...args) => {
 }
 
 /** A throwaway localhost adapter that records every hook POST. */
-async function collect(response: Record<string, unknown> = {}, credential?: string): Promise<{ port: number; requests: Array<{ url: string; body: Record<string, unknown> }>; firedAts: Array<string | undefined> }> {
+async function collect(response: Record<string, unknown> = {}, credential?: string): Promise<{ port: number; requests: Array<{ url: string; body: Record<string, unknown> }>; firedAts: Array<string | undefined>; headers: IncomingHttpHeaders[] }> {
   const requests: Array<{ url: string; body: Record<string, unknown> }> = []
   const firedAts: Array<string | undefined> = []
+  const headers: IncomingHttpHeaders[] = []
   const server = createServer((req, res) => {
     // Local service discovery may probe a test port. Only hook POSTs belong to this fixture.
     if (req.method !== 'POST') { res.writeHead(405).end(); return }
@@ -269,6 +271,7 @@ async function collect(response: Record<string, unknown> = {}, credential?: stri
     req.on('end', () => {
       requests.push({ url: req.url ?? '', body: JSON.parse(raw) as Record<string, unknown> })
       firedAts.push(req.headers['x-harness-hook-fired-at'] as string | undefined)
+      headers.push(req.headers)
       res.end(JSON.stringify(response))
     })
   })
@@ -279,7 +282,7 @@ async function collect(response: Record<string, unknown> = {}, credential?: stri
   })
   const address = server.address()
   if (!address || typeof address === 'string') throw new Error('test server did not bind a TCP port')
-  return { port: address.port, requests, firedAts }
+  return { port: address.port, requests, firedAts, headers }
 }
 
 describe('hook notify terminal scope', () => {
@@ -743,6 +746,25 @@ describe('hook notify terminal scope', () => {
     expect(statSync(dataDir).mode & 0o777).toBe(0o700)
     expect(statSync(join(dataDir, 'registry.json')).mode & 0o777).toBe(0o600)
     expect(statSync(join(dataDir, 'registry-boot')).mode & 0o777).toBe(0o600)
+  })
+
+  it('runs ps in unix2003 mode whatever mode the person set, so it can never list an environment', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-command-mode-'))
+    tmpDirs.push(dir)
+    const claudeProjectsDir = join(dir, 'claude-projects')
+    const dataDir = join(dir, 'data')
+    const transcriptPath = join(claudeProjectsDir, 'demo', 'session-mode.jsonl')
+    mkdirSync(join(claudeProjectsDir, 'demo'), { recursive: true })
+    mkdirSync(dataDir, { recursive: true, mode: 0o700 })
+    writeFileSync(join(dataDir, 'registry.json'), '[]', { mode: 0o600 })
+    writeFileSync(transcriptPath, '{}\n')
+
+    await runHook({
+      port: 9, tmuxPane: '%7', processEngine: 'claude', dataDir, claudeProjectsDir, env: { COMMAND_MODE: 'legacy' },
+      input: { hook_event_name: 'SessionStart', session_id: 'session-mode', transcript_path: transcriptPath, cwd: '/tmp/demo' },
+    })
+
+    expect(JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf-8'))).toMatchObject([{ sessionId: 'session-mode', engine: 'claude', tmuxPane: '%7' }])
   })
 
   it('reads the process table from harness-pty on Windows, and registers offline with its identity', async () => {
@@ -2094,11 +2116,12 @@ describe('hook notify posts over the daemon\'s pipe on Windows (W1)', () => {
 
   /** The daemon's pipe server, as the daemon serves it (lib/localSocket.ts): every request proves the token. */
   async function pipeDaemon(socket: string, token: Buffer, answer: (res: import('http').ServerResponse) => void = (res) => res.end('{}')) {
-    const requests: Array<{ url: string; trusted: boolean; hookToken: unknown; credential: unknown }> = []
+    const requests: Array<{ url: string; trusted: boolean; hookToken: unknown; credential: unknown; codexHome: unknown }> = []
     const server = await listenLocalSocket((req, res) => {
       req.resume()
       req.on('end', () => {
-        requests.push({ url: req.url ?? '', trusted: isTrustedLocal(req), hookToken: req.headers['x-harness-hook-token'], credential: req.headers['x-harness-local'] })
+        requests.push({ url: req.url ?? '', trusted: isTrustedLocal(req), hookToken: req.headers['x-harness-hook-token'], credential: req.headers['x-harness-local'],
+          codexHome: req.headers['x-harness-hook-codex-home'] })
         answer(res)
       })
     }, socket, { token })
@@ -2117,6 +2140,24 @@ describe('hook notify posts over the daemon\'s pipe on Windows (W1)', () => {
     await run(tcp.port, dataDir, preload)
     expect(requests).toEqual([{ url: '/api/hook/session-start', trusted: true, hookToken: undefined, credential: undefined }])
     expect(tcp.requests).toEqual([])
+  })
+
+  // A Codex home on a share or a device would have the core open another computer's folder on every registration
+  // (src/hookServer.ts hookFacts): the hook says only a drive's path, as the core takes one.
+  it('sends a Codex home on a drive, and none on a share, a device or no drive', async () => {
+    const { dataDir, token, id, socket, preload } = windowsData()
+    const tcp = await collect()
+    record(dataDir, tcp.port, { pipe: `\\\\.\\pipe\\harness-${id}`, pid: process.pid })
+    const requests = await pipeDaemon(socket, token)
+    const codex = JSON.parse(readFileSync(new URL('./lib/__fixtures__/prompt-hooks.json', import.meta.url), 'utf8')).codex.input
+    const homes = ['C:\\Users\\u\\.codex-work', '\\\\host\\share\\.codex', '//host/share/.codex', '\\\\?\\C:\\x', '\\foo', '/foo']
+    for (const home of homes) {
+      await run(tcp.port, dataDir, preload, { engine: 'codex', input: codex,
+        env: { HARNESS_PANE: 'p1:%1', NODE_OPTIONS: `--import ${pathToFileURL(preload).href}`, CODEX_HOME: home } })
+    }
+    expect(requests.map((request) => request.url)).toEqual(homes.map(() => '/api/hook/session-start'))
+    expect(requests.map((request) => request.codexHome === undefined ? undefined : decodeURIComponent(String(request.codexHome))))
+      .toEqual([homes[0], undefined, undefined, undefined, undefined, undefined])
   })
 
   it('finds the daemon by its record when the hook was given the port it bound, not the one it was configured with', async () => {
@@ -2457,5 +2498,81 @@ describe('hook notify: a session outside a pane', () => {
     await runHook({ port: 9, dataDir: join(dir, 'down'), claudeProjectsDir, env, input })
     expect(existsSync(join(dir, 'down', 'registry.json'))).toBe(false)
     expect(existsSync(mark)).toBe(false)
+  })
+})
+
+// The gateway and the Codex home are the hook's to say, from its own environment: the daemon reads no other process's
+// (src/hookServer.ts hookFacts).
+describe('hook notify: what the hook says of its own environment', () => {
+  const GATEWAY_HEADER = 'x-harness-hook-gateway', CODEX_HOME_HEADER = 'x-harness-hook-codex-home'
+  const recordings = JSON.parse(readFileSync(new URL('./lib/__fixtures__/prompt-hooks.json', import.meta.url), 'utf8'))
+  /** What registers each engine's session in a pane: its UserPromptSubmit, and Hermes's session start. */
+  const registration = (engine: 'claude' | 'codex' | 'hermes') => engine === 'hermes'
+    ? { hook_event_name: 'on_session_start', session_id: '20260810_120000_a1b2c3' }
+    : recordings[engine].input
+  /** Only what a case sets: the endpoints and the Codex home of the machine running the specs never reach the hook. */
+  const own = (env: Record<string, string> = {}) => ({ ANTHROPIC_BASE_URL: '', OPENAI_BASE_URL: '', OPENAI_API_BASE: '', CODEX_HOME: '', ...env })
+
+  it.each<['claude' | 'hermes', Record<string, string>, string]>([
+    ['claude', { ANTHROPIC_BASE_URL: 'https://openrouter.ai/api' }, 'ori'],
+    ['claude', { OPENAI_API_BASE: 'https://eu.openrouter.ai/api/v1' }, 'ori'],
+    ['hermes', { OPENAI_BASE_URL: 'https://openrouter.ai/api/v1' }, 'ori'],
+    ['claude', {}, 'none'],
+    ['claude', { ANTHROPIC_BASE_URL: 'https://grid.example/relay' }, 'none'],
+    ['claude', { ANTHROPIC_BASE_URL: 'https://openrouter.ai.example.com/api' }, 'none'],
+    ['claude', { ANTHROPIC_BASE_URL: 'https://example.com/openrouter.ai' }, 'none'],
+    ['claude', { ANTHROPIC_BASE_URL: 'not a url' }, 'none'],
+  ])('%s with %j says gateway %s', async (engine, env, gateway) => {
+    const { port, headers } = await collect()
+    await runHook({ port, engine, tmuxPane: '%42', env: own(env), input: registration(engine) })
+    expect(headers).toHaveLength(1)
+    expect(headers[0][GATEWAY_HEADER]).toBe(gateway)
+  })
+
+  it('says nothing of the gateway for Codex, whose argv says it', async () => {
+    const { port, requests, headers } = await collect()
+    await runHook({ port, engine: 'codex', tmuxPane: '%42', env: own({ OPENAI_BASE_URL: 'https://openrouter.ai/api/v1' }), input: registration('codex') })
+    expect(requests.map((request) => request.url)).toEqual(['/api/hook/session-start'])
+    expect(headers[0][GATEWAY_HEADER]).toBeUndefined()
+  })
+
+  it('sends a Codex home of its own, whole, and none for its default, a relative one, one over 1,024 characters or one with a control character', async () => {
+    const home = shortHome()
+    // Past Latin-1, which Node refuses in a header value, and would end the hook.
+    const codexHome = join(home, 'nhà コード', '.codex-work')
+    const { port, requests, headers } = await collect()
+    await runHook({ port, engine: 'codex', tmuxPane: '%42', env: own({ HOME: home, CODEX_HOME: codexHome }), input: registration('codex') })
+    expect(decodeURIComponent(String(headers[0][CODEX_HOME_HEADER]))).toBe(codexHome)
+    for (const value of [join(home, '.codex'), 'relative', `/${'x'.repeat(1024)}`, '/bad\u0007x', '']) {
+      await runHook({ port, engine: 'codex', tmuxPane: '%42', env: own({ HOME: home, CODEX_HOME: value }), input: registration('codex') })
+    }
+    await runHook({ port, engine: 'claude', tmuxPane: '%42', env: own({ HOME: home, CODEX_HOME: codexHome }), input: registration('claude') })
+    expect(requests).toHaveLength(7)
+    expect(headers.slice(1).map((sent) => sent[CODEX_HOME_HEADER])).toEqual(Array(6).fill(undefined))
+  })
+
+  it('sends no value of a key or an endpoint, and no fact in the body', async () => {
+    const secret = 'sk-or-v1-secret'
+    const { port, requests, headers } = await collect()
+    await runHook({ port, engine: 'claude', tmuxPane: '%42', input: registration('claude'), env: own({
+      OPENROUTER_API_KEY: secret, ANTHROPIC_AUTH_TOKEN: secret, ANTHROPIC_API_KEY: secret, OPENAI_API_KEY: secret,
+      ANTHROPIC_BASE_URL: 'https://openrouter.ai/api',
+    }) })
+    expect(headers[0][GATEWAY_HEADER]).toBe('ori')
+    const sent = JSON.stringify([requests, headers])
+    expect(sent).not.toContain(secret)
+    expect(sent).not.toContain('openrouter.ai')
+    expect(requests[0].body).not.toHaveProperty('gateway')
+    expect(requests[0].body).not.toHaveProperty('codexHome')
+  })
+
+  it('says them on the registration alone', async () => {
+    const { port, requests, headers } = await collect()
+    const env = own({ ANTHROPIC_BASE_URL: 'https://openrouter.ai/api' })
+    await runHook({ port, engine: 'claude', tmuxPane: '%42', env, input: registration('claude') })
+    await runHook({ port, engine: 'claude', tmuxPane: '%42', env, input: { ...registration('claude'), hook_event_name: 'Stop' } })
+    expect(requests.map((request) => request.url)).toEqual(['/api/hook/session-start', '/api/hook/turn-stop'])
+    expect(headers[0][GATEWAY_HEADER]).toBe('ori')
+    expect([headers[1][GATEWAY_HEADER], headers[1][CODEX_HOME_HEADER]]).toEqual([undefined, undefined])
   })
 })

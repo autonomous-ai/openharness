@@ -15,7 +15,6 @@ import type { BackendSocket } from '../../backendSocket.js'
 import * as opencodeLaunch from '../../engines/launchControl.js'
 import { binaryOnPath } from '../../lib/binaryOnPath.js'
 import { builtinSqlite } from '../../lib/sqliteBuiltin.js'
-import { probeGatewayRuntime } from '../../lib/gatewayRuntime.js'
 import { describeGridLaunch, gridEnvVarNames } from '../../lib/gridLaunchWire.js'
 import { validateLaunchOverrides, type LaunchOverridesDeps, type LaunchSource } from '../../lib/launchOverrides.js'
 import { sid } from '../../lib/log.js'
@@ -318,11 +317,12 @@ export function createAgentRetargeter({
         return failed('RESPAWN_FAILED', outcome.detail)
       }
       // Commit the new process now. Optional grid metadata follows outside the route hold.
-      const gateway = await probeGatewayRuntime(outcome.processIdentity)
-      if (!current()) return changed()
       await backend.releaseHold(pane, current)
       if (!current()) return changed()
-      registry.updateProcessIdentity(session.agentId, outcome.processIdentity, gateway.kind)
+      // The row's grid is the launch Harness just wrote: the process is not read back for it. Nor for its gateway,
+      // which the row keeps until the relaunched engine says it again (its hook, or a Codex's argv on discovery).
+      registry.updateProcessIdentity(session.agentId, outcome.processIdentity, undefined,
+        grid ? { baseUrl: grid.baseUrl, model: grid.model ?? null } : null)
       // The launch that just worked is the one a restart or a post-reboot restore must repeat — and
       // what it decided about web search is what the app shows for this agent from now on. Null for
       // a move home: the block, and the status with it, leave the frame together.

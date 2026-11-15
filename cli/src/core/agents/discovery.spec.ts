@@ -38,7 +38,6 @@ function setup(over: Partial<DiscoveryDeps> = {}) {
       setPermissionMode: vi.fn(),
       setCodexHome: vi.fn(),
       setHermesHome: vi.fn(),
-      setDsh: vi.fn(),
       byAgent: vi.fn((agentId: string) => rows.get(agentId)),
       setLaunch: vi.fn(),
       setActive: vi.fn(),
@@ -135,7 +134,7 @@ describe('discovery', () => {
   describe('a row\'s own process', () => {
     it('updates the row from the live process, filling only what it does not know', async () => {
       const run = setup()
-      const observed = seen({ args: 'claude --dangerously-skip-permissions', codexHome: '/codex', hermesHome: '/hermes', dsh: 'blender' } as Partial<DiscoveredTerminalAgent>)
+      const observed = seen({ args: 'claude --dangerously-skip-permissions', codexHome: '/codex', hermesHome: '/hermes' } as Partial<DiscoveredTerminalAgent>)
       run.rows.set('a1', row({ dsh: 'blender' } as Partial<RegisteredSession>))
       await run.handlers.onObserved(observed, row())
       expect(run.deps.registry.updateRuntimes).toHaveBeenCalledWith('a1', observed.runtimes, 'tmux:%0')
@@ -144,30 +143,45 @@ describe('discovery', () => {
       const mode = permissionModeFromArgv('claude', observed.args)
       expect(vi.mocked(run.deps.registry.setPermissionMode).mock.calls).toEqual(mode ? [['a1', mode]] : [])
       expect(run.deps.registry.setCodexHome).toHaveBeenCalledWith('a1', '/codex')
-      expect(run.deps.registry.setHermesHome).toHaveBeenCalledWith('a1', '/hermes')
-      expect(run.deps.registry.setDsh).toHaveBeenCalledWith('a1', 'blender')
+      expect(run.deps.registry.setHermesHome).toHaveBeenCalledWith('a1', '/hermes', false)
       expect(run.deps.attachDsh).toHaveBeenCalled()
       expect(run.deps.bindObservedAgent).toHaveBeenCalledWith(observed)
       // A row that knows them already keeps its own.
       const known = setup()
-      await known.handlers.onObserved(observed, row({ permissionMode: 'plan', codexHome: '/mine', hermesHome: '/mine', dsh: 'mine' } as Partial<RegisteredSession>))
-      for (const setter of ['setPermissionMode', 'setCodexHome', 'setHermesHome', 'setDsh'] as const) {
+      await known.handlers.onObserved(observed, row({ permissionMode: 'plan', codexHome: '/mine', hermesHome: '/mine' } as Partial<RegisteredSession>))
+      for (const setter of ['setPermissionMode', 'setCodexHome', 'setHermesHome'] as const) {
         expect(known.deps.registry[setter], setter).not.toHaveBeenCalled()
       }
     })
 
-    it('tells the registry a home Harness worked out, and marks a row that has that home without the mark', async () => {
-      const observed = seen({ engine: 'hermes', args: 'hermes', hermesHome: '/data/agents/a1/.hermes', hermesHomeDerived: true } as Partial<DiscoveredTerminalAgent>)
-      for (const current of [row({ engine: 'hermes' }), row({ engine: 'hermes', hermesHome: '/data/agents/a1/.hermes' } as Partial<RegisteredSession>)]) {
+    it('mints a row with no DSH, and fills none from a process', async () => {
+      const run = setup()
+      await run.handlers.onDiscovered(seen({ dsh: 'blender' } as never))
+      expect(vi.mocked(run.deps.registry.openProcessAgent).mock.calls[0]![0]).not.toHaveProperty('dsh')
+      await run.handlers.onObserved(seen({ dsh: 'blender' } as never), row())
+      expect(run.deps.attachDsh).not.toHaveBeenCalled()
+      // A row Harness created as a DSH keeps its viewer.
+      run.rows.set('a1', row({ dsh: 'blender' } as Partial<RegisteredSession>))
+      await run.handlers.onObserved(seen(), row({ dsh: 'blender' } as Partial<RegisteredSession>))
+      expect(run.deps.attachDsh).toHaveBeenCalled()
+    })
+
+    it('fills a Hermes home it did not have, with the mark discovery gave it, and never marks or moves one it has', async () => {
+      // Found outside a sandbox, then in one.
+      const outside = seen({ engine: 'hermes', args: 'hermes', hermesHome: '/x' } as Partial<DiscoveredTerminalAgent>)
+      const inside = seen({ engine: 'hermes', args: 'hermes', hermesHome: '/x', hermesHomeDerived: true } as Partial<DiscoveredTerminalAgent>)
+      for (const [observed, derived] of [[outside, false], [inside, true]] as const) {
         const run = setup()
-        await run.handlers.onObserved(observed, current)
-        expect(vi.mocked(run.deps.registry.setHermesHome).mock.calls).toEqual([['a1', '/data/agents/a1/.hermes', true]])
+        await run.handlers.onObserved(observed, row({ engine: 'hermes' }))
+        expect(vi.mocked(run.deps.registry.setHermesHome).mock.calls).toEqual([['a1', '/x', derived]])
       }
-      for (const current of [row({ engine: 'hermes', hermesHome: '/data/agents/a1/.hermes', hermesHomeDerived: true } as Partial<RegisteredSession>),
-        row({ engine: 'hermes', hermesHome: '/data/agents/b2/.hermes' } as Partial<RegisteredSession>)]) {
-        const run = setup()
-        await run.handlers.onObserved(observed, current)
-        expect(run.deps.registry.setHermesHome).not.toHaveBeenCalled()
+      for (const current of [row({ engine: 'hermes', hermesHome: '/x' } as Partial<RegisteredSession>),
+        row({ engine: 'hermes', hermesHome: '/y' } as Partial<RegisteredSession>)]) {
+        for (const observed of [outside, inside]) {
+          const run = setup()
+          await run.handlers.onObserved(observed, current)
+          expect(run.deps.registry.setHermesHome).not.toHaveBeenCalled()
+        }
       }
     })
 
