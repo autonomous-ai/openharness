@@ -5159,6 +5159,19 @@ describe('a prompt in the app in front', () => {
     } finally { await session.stop() }
   })
 
+  it('a link that drops during the list read moves nothing and counts nothing', async () => {
+    const { session, port, promptFollowed, followApp, holdNext, release } = await heldRead()
+    try {
+      holdNext()
+      const following = session.followPrompt('a2')
+      await port.close('unplugged')
+      release()
+      await following
+      expect(promptFollowed).not.toHaveBeenCalled()
+      expect(followApp).not.toHaveBeenCalled()
+    } finally { await session.stop() }
+  })
+
   it('a later prompt for the agent the dial shows keeps it there, though the earlier read ends after it', async () => {
     const { session, port, promptFollowed, followApp, holdNext, release } = await heldRead()
     try {
