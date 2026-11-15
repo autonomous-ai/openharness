@@ -104,6 +104,15 @@ export interface BindDeps {
   hermesTerminal?: ReturnType<typeof createHermesTerminal>
 }
 
+/** What one pass over a process works with: its authority check, its holds, and its contained native reads and registrations. */
+interface BindPass {
+  current: () => boolean
+  hold: (error: unknown) => boolean
+  commit: (input: Parameters<BindDeps['registry']['register']>[0]) => ReturnType<BindDeps['registry']['register']> | null
+  read: <T>(work: () => Promise<T>) => Promise<{ value: T } | null>
+  mayClaim: (id: string) => boolean
+}
+
 export function createBinding({
   registry, mirror, forgetSession, clients, attachSession, announceSession, stoppedAgents, syncRecapPool,
   input, submitAgent, deviceInput, homes, owners, capturePane, openclawPaneRead, openclawPaneDue, openclawStateDir, hermesTerminal,
@@ -128,6 +137,34 @@ export function createBinding({
     if (openclawFolderReads.size >= 256) openclawFolderReads.clear()
     openclawFolderReads.set(agentId, tuiProcess(tui))
     return openclawStateDir(tui.pid)
+  }
+  /**
+   * The hold a failed native read set, agentId → that hold as the row stored it: its reason, and the row's
+   * `evidenceRevision` right after. Nothing else let that hold go: a Codex at its folder-trust question has no
+   * conversation to check or register, so one process read that failed while the npm wrapper was still starting its
+   * native child held it for good, and `harness wait` never saw the question (e2e/agentClient.e2e.ts, "an agent is told,
+   * not left waiting…", CLI end to end runs 43670913136 shard 5 and 43503224991). Every later change to the row's
+   * evidence raises its revision, so a hold another reason set since, or the same words set again by another path, is
+   * never this one. In memory only, as holds are.
+   */
+  const readHolds = new Map<string, { reason: string; revision: number | undefined }>()
+  /** The agent's row, while it still carries the hold remembered for it. */
+  const readHeld = (agentId: string): RegisteredSession | undefined => {
+    const remembered = readHolds.get(agentId)
+    if (!remembered) return undefined
+    const row = registry.byAgent(agentId)
+    return row?.identityHold === remembered.reason && row.evidenceRevision === remembered.revision ? row : undefined
+  }
+  /**
+   * First goes every entry whose agent is gone or whose row moved on, so none outlives its agent. At 256 the map starts
+   * over, as `openclawFolderReads` does: a hold forgotten that way stays until its own reason clears it, as every hold
+   * did before.
+   */
+  const rememberReadHold = (agentId: string): void => {
+    for (const id of readHolds.keys()) if (!readHeld(id)) readHolds.delete(id)
+    if (readHolds.size >= 256) readHolds.clear()
+    const row = registry.byAgent(agentId)
+    if (row?.identityHold) readHolds.set(agentId, { reason: row.identityHold, revision: row.evidenceRevision })
   }
 
   const handleRegistered = async (entry: RegisteredSession, meta: RegisteredMeta): Promise<void> => {
@@ -308,11 +345,14 @@ export function createBinding({
     const authority = paneReadIdentity(agent)
     const current = () => !changing(agent.agentId) && !isRecentlyDeleted(agent.agentId)
       && paneReadIdentity(registry.byProcess(observed.engine, observed.processIdentity)) === authority
-    const hold = (error: unknown) => {
-      if (!current()) return
+    /** Whether this set a hold on the row: one already there in the same words is left as it is. */
+    const hold = (error: unknown): boolean => {
+      if (!current()) return false
       const reason = error instanceof Error ? error.message : String(error)
-      if (registry.setIdentityHold(agent.agentId, reason)) announceSession(agent)
+      const set = registry.setIdentityHold(agent.agentId, reason)
+      if (set) announceSession(agent)
       console.log(`[discovery] ${sid(agent.agentId)} binding held · ${reason}`)
+      return set
     }
     const commit = (input: Parameters<typeof registry.register>[0]) => {
       try { return registry.register(input) }
@@ -320,10 +360,13 @@ export function createBinding({
     }
     // Only native reads are contained here. A rejected lookup cannot end the serial
     // discovery/readiness pass or bind an unwritten session as if evidence were absent.
+    let ran = false, failed = false
     const read = async <T>(work: () => Promise<T>): Promise<{ value: T } | null> => {
+      ran = true
       try { return { value: await work() } }
       catch (error) {
-        hold(error)
+        failed = true
+        if (hold(error)) rememberReadHold(agent.agentId)
         return null
       }
     }
@@ -335,7 +378,25 @@ export function createBinding({
       const ownerStarted = Date.parse(owner.processIdentity?.startMarker ?? '')
       return !Number.isFinite(ownerStarted) || (Number.isFinite(observedStarted) && observedStarted > ownerStarted)
     }
-
+    await bindPass(observed, agent, { current, hold, commit, read, mayClaim })
+    // A pass whose native reads all completed lets go of the hold an earlier pass's failed read set, and of no other: the
+    // row must still carry that very hold, and be the row this pass began with (`current`), so every read here began
+    // after the hold was set (core rule 6). A pass that read nothing, or that threw, proves nothing.
+    const row = readHeld(agent.agentId)
+    if (!row) { readHolds.delete(agent.agentId); return }
+    if (!ran || failed || !current()) return
+    readHolds.delete(agent.agentId)
+    registry.setIdentityHold(agent.agentId, undefined)
+    announceSession(row)
+    console.log(`[discovery] ${sid(agent.agentId)} binding released · its native evidence was read completely`)
+    // An agent bound or woken while held never had its stream attached: discovery skips a held agent as it wakes, and a
+    // held row attaches nothing. So it is attached now, with the hold gone and without waiting; one already attached is
+    // left as it is.
+    if (row.sessionId) void attachSession(row).catch((error) => console.error(
+      `[agent] ${sid(row.agentId)} transcript attachment is unavailable: ${error instanceof Error ? error.message : error}`))
+  }
+  /** One pass over a process an agent runs: what it reads, and the session it binds from that. */
+  const bindPass = async (observed: DiscoveredTerminalAgent, agent: RegisteredSession, { current, hold, commit, read, mayClaim }: BindPass): Promise<void> => {
     // Copilot can change session WITHOUT changing process: `/resume` inside the CLI opens another one,
     // and the pane then shows a conversation the daemon is not streaming. Every other engine here
     // starts a new process for that, which is why this path used to stop at `agent.sessionId`.
