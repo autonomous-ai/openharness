@@ -27,7 +27,8 @@ function environmentReads(code: string, file = 'file.ts'): string[] {
   }
   const visit = (node: ts.Node): void => {
     if ((ts.isStringLiteralLike(node) || ts.isTemplateHead(node) || ts.isTemplateMiddle(node) || ts.isTemplateTail(node))
-      && node.text.split(/[/\\]/).includes('environ')) report(node, JSON.stringify(node.text))
+      // Anywhere in the text, not only as a whole segment: a plugin's source, a shell line and a Python f-string are text.
+      && /(?:^|[/\\])environ(?![\w$])/.test(node.text)) report(node, JSON.stringify(node.text))
     if ((ts.isIdentifier(node) || ts.isStringLiteralLike(node)) && /KERN_PROCARGS2|procargs/i.test(node.text)) report(node, node.text)
     if (ts.isCallExpression(node)) {
       node.arguments.forEach((argument, index) => {
