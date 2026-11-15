@@ -28,11 +28,12 @@ import { cableEventFor, cableStepFor, cableQuestionCloseFor, cableQuestionFor, D
 import { CableSession, SHOWN_ONLY_PREFIX, type FollowCause } from '../cable/cableSession.js'
 import { Inbox } from '../cable/hosts/inbox.js'
 import { LAST_ANSWER_DEADLINE_MS, LAST_ANSWER_MAX_BYTES, readLastAnswer } from '../cable/hosts/lastAnswer.js'
-import { askedLine, hostDisplayName, observedAgentId, ObservedSource, type ObservedActions, type PromptSource } from '../cable/hosts/observed.js'
+import { askedLine, hostDisplayName, observedAgentId, ObservedSource, type ObservedActions, type ObservedDeps, type PromptSource } from '../cable/hosts/observed.js'
 import { createOpenActions } from '../cable/hosts/open.js'
 import { createOrcaActions, orcaDeps, type OrcaDeps } from '../cable/hosts/orca.js'
 import { HostRegistry } from '../cable/hosts/registry.js'
 import { learnApps } from '../cable/hosts/scannedApp.js'
+import { readTty } from '../cable/hosts/tabs.js'
 import type { HostAgent, HostAgentState } from '../cable/hosts/types.js'
 import { PetStore } from '../cable/pets/store.js'
 import { DialLog } from '../cable/dialLog.js'
@@ -50,7 +51,7 @@ import { fileStamp, listProcesses, processAlive } from '../lib/sessionSearch/ext
 import { setVoiceRouterDeviceConnected, setVoiceRouterSessions, shutdownVoiceRouter } from '../lib/voiceRouter.js'
 import { createTally, createTierDecider, type Tier, type TierDecision, type TierInput } from '../lib/notifyTier.js'
 import { createPartGuard } from './devicesGuard.js'
-import { attachHandler, frontHandler, type DevicesListener, type ListenerHandler } from './devicesListener.js'
+import { attachHandler, frontHandler, tabsStream, type DevicesListener, type ListenerHandler, type ListenerStreamHandler } from './devicesListener.js'
 import { FLEET_FALLBACKS, startFleet, type Fleet } from './fleet.js'
 
 export { DEVICES_REQUESTS }
@@ -93,7 +94,9 @@ export interface DevicesDeps {
   /** Opens the devices' own listener with these handlers (services/devicesListener.ts). Given by the devices process
    *  alone: inside the core's process (`HARNESSD_SERVICES=none`, Harness OS) there is none, so the core's process opens
    *  no socket for the devices, and the dial follows no app in front there. */
-  listen?: (handlers: Readonly<Record<string, ListenerHandler>>, log: (line: string) => void) => Promise<DevicesListener | null>
+  listen?: (handlers: Readonly<Record<string, ListenerHandler | ListenerStreamHandler>>, log: (line: string) => void) => Promise<DevicesListener | null>
+  /** For this service's tests: how an agent's tty is read; `ps` by default (cable/hosts/tabs.ts). */
+  tty?: (pid: number) => Promise<string | undefined>
 }
 
 /** ⌘K's answer while the fleet is not running: it never started, so there is no list to weigh. */
@@ -129,7 +132,7 @@ const ATTACH_ECHO_MS = 2_000
 
 /** This computer's agents outside a pane, read with ⌘P's readers (services/externalSessions.ts), and how the dial's voice
  *  and tap reach them. */
-function observedSource(dataDir: string, log: (line: string) => void, actions: ObservedActions): ObservedSource {
+function observedSource(dataDir: string, log: (line: string) => void, actions: ObservedActions, tty: ObservedDeps['tty']): ObservedSource {
   const providers = externalProviders()
   return new ObservedSource({
     now: Date.now,
@@ -147,6 +150,7 @@ function observedSource(dataDir: string, log: (line: string) => void, actions: O
     log,
     actions,
     apps: learnApps,
+    tty,
   })
 }
 
@@ -246,6 +250,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const apps = deps.orca ?? orcaDeps()
   const orca = createOrcaActions(apps)
   const opener = createOpenActions({ ...apps, orcaSwitch: (handle) => orca.switchTo(handle).then((done) => done === 'ok'), log })
+  // The stream a watch holds open on the devices' listener: a rest or a tap on an agent in Terminal, iTerm2 or Ghostty
+  // asks it to select that agent's tab (docs/specs/2026-11-15-dial-terminal-follow.md). Only macOS's apps select a tab
+  // by its tty: elsewhere no agent's is read, and none has a tab.
+  const tabs = tabsStream()
+  const ttyOf = apps.platform === 'darwin' ? deps.tty ?? readTty : undefined
   const observed = env.HARNESS_DEVICE_OBSERVED ? observedSource(core.dataDir, log, {
     modReady: (sessionId) => inbox.ready(sessionId),
     toMod: (sessionId, text) => inbox.deliver(sessionId, text),
@@ -262,9 +271,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       noteLink(agentId)
       return opener.claudeShow(agentId, session)
     },
+    tabsOpen: () => tabs.isOpen(),
+    tabSelect: (app, tty, raise) => (tabs.select({ app, tty }, raise) ? 'ok' : 'failed'),
     // The route or the refusal only: never the words, the session or the terminal.
     count: (what) => log(`[device] voice · ${what}`),
-  }) : null
+  }, ttyOf) : null
   /** One of them, by the id the dial holds: what the dial asks of it is answered here, never by a door of the core. */
   const outside = (agentId: string): HostAgent | undefined => observed?.list().find((agent) => agent.id === agentId)
   /** Its line while it waits on the person, where a harness agent shows its terminal's footer: what its permission prompt
@@ -684,6 +695,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const listening = deps.listen?.({
     front: frontHandler((app) => part.call('dial', () => cableHost.front(app))),
     attach: attachHandler((sessionId) => part.call('dial', () => claudeAttached(sessionId))),
+    tabs: tabs.handler,
   }, log)
     .catch((): null => { log('[devices] listener not opened · failed'); return null })
 

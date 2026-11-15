@@ -11,6 +11,7 @@ import { detectApp, detectHost, hostDisplayName, UNKNOWN_APP } from './hostDetec
 import type { Delivery } from './inbox.js'
 import { openTarget, type OpenTarget } from './open.js'
 import { MAX_TEXT, ORCA_HANDLE } from './orca.js'
+import { isTabApp, type TabApp } from './tabs.js'
 import type { Caps, HostAgent, HostAgentState, HostSource, PaneSwitch, SendResult } from './types.js'
 
 export { detectHost, hostDisplayName } from './hostDetect.js'
@@ -78,6 +79,8 @@ export interface ObservedDeps {
   actions?: ObservedActions
   /** The app each of these processes runs in, where its parents name one (scannedApp.ts); absent, nothing is learned. */
   apps?(pids: readonly number[]): Promise<ReadonlyMap<number, string>>
+  /** The tty of a process in a tab app (tabs.ts readTty); absent (off macOS), no agent has a tab. */
+  tty?(pid: number): Promise<string | undefined>
 }
 
 export interface ObservedActions {
@@ -95,12 +98,16 @@ export interface ObservedActions {
   claudeInFront(): boolean
   /** A rest: the session in the Claude app, already in front (open.ts). */
   claudeShow(agentId: string, session: string): Promise<PaneSwitch>
+  /** A watch holds the tabs stream open: a select has somewhere to go. */
+  tabsOpen(): boolean
+  /** One select line for the watch, a tap's raising its window too: ok once written, failed with no stream. */
+  tabSelect(app: TabApp, tty: string, raise: boolean): PaneSwitch
   count(what: 'mod' | 'orca' | 'waiting' | 'busy' | 'pending' | 'too-long' | 'no-answer'): void
 }
 
 /** A pane a rest can show without its app coming forward, by the app that holds it: a later kind is one member here, one
  *  line in shownPane, one case in showPane and its ObservedActions members. */
-type ShownPane = { kind: 'orca'; handle: string } | { kind: 'claude'; session: string }
+type ShownPane = { kind: 'orca'; handle: string } | { kind: 'claude'; session: string } | { kind: 'tty'; app: TabApp; tty: string }
 
 interface Entry {
   agent: HostAgent
@@ -110,6 +117,9 @@ interface Entry {
   pid: number
   /** The Orca terminal its last event came from. */
   handle?: string
+  /** The process its tty was read for, its latest in a tab app, and that tty once read. */
+  ttyPid?: number
+  tty?: string
   /** What a tap opens, from its last event: none for a session the scan found, until its first. */
   opens: OpenTarget
   /** What the permission prompt it waits on asks, from its hook (deviceClaude/asked.ts): '' when it names nothing. */
@@ -228,13 +238,20 @@ export class ObservedSource implements HostSource {
     return this.entries.get(e.agent.id) === e && e.endAt === undefined
   }
 
-  focus(agent: HostAgent): Promise<boolean> {
+  async focus(agent: HostAgent): Promise<boolean> {
     const e = this.entries.get(agent.id)
     const actions = this.deps.actions
-    return e && actions && this.live(e) && actions.canOpen(e.opens) ? actions.open(e.agent.id, e.opens) : Promise.resolve(false)
+    if (!e || !actions || !this.live(e) || !actions.canOpen(e.opens)) return false
+    const opened = await actions.open(e.agent.id, e.opens)
+    // `open -b` brings the app forward on whichever tab it had: its window and tab are raised once it came. Read after the
+    // open, as an agent that ended or moved meanwhile has no tab to raise.
+    const pane = opened ? this.shownPane(agent) : undefined
+    if (pane?.kind === 'tty') actions.tabSelect(pane.app, pane.tty, true)
+    return opened
   }
 
-  /** Only an Orca terminal, or a Claude app session while that app is in front, is shown without its app coming forward. */
+  /** Only an Orca terminal, a Claude app session while that app is in front, or a tab a watch can select, is shown without
+   *  its app coming forward. */
   hasPane(agent: HostAgent): boolean {
     return this.shownPane(agent) !== undefined
   }
@@ -245,11 +262,14 @@ export class ObservedSource implements HostSource {
     switch (pane.kind) {
       case 'orca': return this.deps.actions!.orcaSwitch(pane.handle)
       case 'claude': return this.deps.actions!.claudeShow(agent.id, pane.session)
+      // A rest never raises: the app stays where it is.
+      case 'tty': return Promise.resolve(this.deps.actions!.tabSelect(pane.app, pane.tty, false))
     }
   }
 
   /** The pane of its latest event, while it lives: one it left, or an ended session's, holds something else now. A Claude
-   *  app session only while a tap could open it and that app is in front, asked at each look: the front moves. */
+   *  app session only while a tap could open it and that app is in front, and a tab only while a watch holds the stream
+   *  open, each asked at each look: the front moves, and a watch comes and goes. */
   private shownPane(agent: HostAgent): ShownPane | undefined {
     const e = this.entries.get(agent.id)
     const actions = this.deps.actions
@@ -257,7 +277,32 @@ export class ObservedSource implements HostSource {
     if (e.handle) return { kind: 'orca', handle: e.handle }
     const pane = e.opens.pane
     if (pane?.app === 'claude' && actions.canOpen({ pane }) && actions.claudeInFront()) return { kind: 'claude', session: pane.id }
+    if (e.tty && isTabApp(e.agent.app) && actions.tabsOpen()) return { kind: 'tty', app: e.agent.app, tty: e.tty }
     return undefined
+  }
+
+  /** The live agent in that app's tab: of two that read the same tty, the one heard from last. */
+  byTab(app: string, tty: string): HostAgent | undefined {
+    let found: Entry | undefined
+    for (const e of this.entries.values()) {
+      if (e.tty !== tty || e.agent.app !== app || !this.live(e)) continue
+      if (!found || e.agent.lastActivityAt > found.agent.lastActivityAt) found = e
+    }
+    return found && { ...found.agent }
+  }
+
+  /**
+   * Its tty, read once per process in the background: a session resumed in another tab runs in a process of its own, and
+   * the old tab holds something else now, so its tty goes at once. An answer lands only on its own entry, and only while
+   * that process is still its latest; a read that fails is no tty.
+   */
+  private learnTty(entry: Entry, pid: number): void {
+    if (entry.ttyPid === pid) return
+    entry.ttyPid = undefined
+    entry.tty = undefined
+    if (!this.deps.tty || !isTabApp(entry.agent.app)) return
+    entry.ttyPid = pid
+    this.deps.tty(pid).then((tty) => { if (entry.ttyPid === pid) entry.tty = tty }, () => {})
   }
 
   private emit(): void {
@@ -303,6 +348,7 @@ export class ObservedSource implements HostSource {
     }
     // A session that comes back after its end (a resume) is a live one again.
     entry.endAt = undefined
+    this.learnTty(entry, e.callerPid)
     let source: PromptSource | undefined
     switch (e.event) {
       case 'session-start':
@@ -486,6 +532,7 @@ export class ObservedSource implements HostSource {
         delete entry.agent.appPending
         known++
       }
+      this.learnTty(entry, owner.pid)
       // A turn it is in when found reads working, as checkWorking reads it, which ends it once its owner reads idle: listed
       // idle, its compaction's SessionStart (which moves no state) would give a running turn a handle to type into.
       if ((engine === 'claude' || engine === 'codex') && await this.deps.openSessions.busy(owner)
