@@ -41,9 +41,10 @@ export interface DiscoveredTerminalAgent {
   runtimes: TerminalRuntimeRef[]
   primaryRuntimeKey: string
   /**
-   * Codex only: 'ori' when its argv names the OpenRouter provider (`ori codex`), null when it does not.
-   * undefined for every other engine, whose routing is not in its argv: the registry keeps what that
-   * engine's hook said (lib/gatewayRuntime.ts `gatewayFromArgv`).
+   * Codex: 'ori' when its argv names the OpenRouter provider (`ori codex`), null when it does not.
+   * undefined for Claude Code, OpenCode and Hermes, whose routing is not in their argv: the registry keeps
+   * what their hook said. null for any other engine, which has no gateway Harness can see
+   * (lib/gatewayRuntime.ts `gatewayFromArgv`).
    *
    * Deliberately NOT a property of the terminal: it is the engine's own command line, not anything the
    * pane says about itself.

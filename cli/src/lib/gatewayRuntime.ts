@@ -20,8 +20,15 @@ export function argvNamesOpenRouterProvider(args: string): boolean {
     || /model_providers\.openrouter\./.test(args)
 }
 
-/** What a command line says of the gateway: Codex's routing is its argv, so its absence there is a finding; another engine's is not in its argv to read. */
+/** The engines whose hook says the gateway (registry.ts `HOOK_GATEWAY_ENGINES`): discovery never speaks over it. */
+const HOOK_GATEWAY_ENGINES: ReadonlySet<AgentEngine> = new Set(['claude', 'opencode', 'hermes'])
+
+/**
+ * What a command line says of the gateway: Codex's routing is its argv, so its absence there is a finding. An engine
+ * whose hook says it has nothing to read here. Any other has no gateway Harness can see: null, so a row clears one an
+ * older build stored.
+ */
 export function gatewayFromArgv(engine: AgentEngine, args: string): 'ori' | null | undefined {
-  if (engine !== 'codex') return undefined
-  return argvNamesOpenRouterProvider(args) ? 'ori' : null
+  if (engine === 'codex') return argvNamesOpenRouterProvider(args) ? 'ori' : null
+  return HOOK_GATEWAY_ENGINES.has(engine) ? undefined : null
 }
