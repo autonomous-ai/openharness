@@ -1,6 +1,7 @@
 # Reader recovery during Close
 
-Status: proposed; caller regression red on current main `cfd2db421438b6b886d29e376cf7e953c0a36b6c`.
+Status: implemented; focused caller/stream tests pass, full required validation and native green pending.
+Caller regression red on current main `cfd2db421438b6b886d29e376cf7e953c0a36b6c`.
 This is separate from database storage extraction, on branch `codex/reader-close-recovery`.
 
 ## Failure
@@ -57,15 +58,18 @@ never waits for the optional reader.
 Merely skipping a timer or checking a deletion tombstone is insufficient: a failed Close would leave no reader
 recovery. Merely deleting `evidenceRevision` from Stop would discard a real authority fence. Neither is proposed.
 
-The pending map is bounded by `STREAMS_MAX` and each session has at most one continuation. Forget, disconnect and
-shutdown release its references. The continuation belongs to the already bounded lifecycle operation, adds no wait
+The existing `unopened` recovery map is bounded by `STREAMS_MAX` and each session has at most one continuation. Forget
+and disconnect revoke its authority but keep a cancelled marker until the actual Stop promise settles, so repeated
+forget/open or reconnect cannot accumulate callbacks on one Stop. A fresh observation of the same exact binding may
+authorize that marker again. Shutdown clears the table and admits no more recovery. The continuation belongs to the
+already bounded lifecycle operation, adds no wait
 to that operation, and cannot commit after the reservation ends or changes without rechecking authority. The final
 implementation must demonstrate cleanup on every failure path before it is accepted.
 
 ## Design
 
-- Growth: in-memory recovery entry only, at most one per followed session and `STREAMS_MAX` total; removed on release,
-  forget, disconnect or shutdown. No durable data is added.
+- Growth: in-memory recovery entry only, at most one per followed/closing session and `STREAMS_MAX` total. Forget and
+  disconnect revoke authority; actual Stop settlement or shutdown removes the marker. No durable data is added.
 - Concurrency: use the existing per-agent Stop promise and exact binding/generation fences. No native authority is
   suppressed, transferred to a replacement or reacquired from a worker reply.
 - Read cost: constant-time map lookups on reader state transitions. No new idle work or inventory scan.
@@ -102,6 +106,13 @@ private daemon-log cursor before Resume and await a new successful attach line f
 active public row with no hold. `agents_list` active and `session_get` alone do not prove live attachment finished.
 Record readiness duration separately; no fixed settling sleep. Await the same completion between measured cycles
 without changing the measured request-to-result interval.
+
+Native acceptance uses a private Hermes whose exit is held after its real SIGTERM. The test kills only its owned
+reader worker, waits for the core's disconnect observation, confirms the original engine is still alive, then releases
+the exit. Frozen baseline `a7683cd2ed2fd24756e67d9c1f3bc9856f810f53` fails with the same post-effect
+`STOP_UNCONFIRMED` (9.34 s, `/tmp/reader-close-native-red-v3.log`). Two earlier fixture-setup failures were retained:
+missing tmux on the test PATH, then an invalid fresh-create attachment-log assumption. The corrected fixture first
+uses an ordinary Close/Resume, a new completed attachment and a confirmed live turn before arming the fault.
 
 Keep the same three 40 MiB cycles, one 400 MiB cycle, byte totals, row counts, SHA-256 checks, sampling cadence,
 deadlines, process-set assertions and B,A,A,B,B,A order. Prove the corrected fixture against both frozen builds before
