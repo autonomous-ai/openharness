@@ -61,7 +61,7 @@ The core's files and lines: 543 / 93,160 before (main at 5c3703b042), 543 / 93,0
 - e2e: deviceRoutes (red on main in both modes, green after), wifiDevice, robustness, gatewayProcess, devicesOnDemand.
 - `npm run test:core` through `scripts/local-checks.py --run` (the PR's receipt).
 
-## Step 2, done (branch core-routes-3): the account's routes and the usage report's names, to the gateway
+## Step 2, done (#4321, branch core-routes-3): the account's routes and the usage report's names, to the gateway
 
 The core's files and lines: 544 / 92,925 before (main at 20534f8822), 542 / 92,562 after (tools/coreCount.mjs). Out of
 the core's process: lib/appProductUsageReport.ts, lib/productUsageSignals.ts, lib/storeProxy.ts (deleted). In:
