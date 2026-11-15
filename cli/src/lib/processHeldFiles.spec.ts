@@ -126,6 +126,13 @@ it('gives a sandbox\'s folder at the daemon\'s path, and nothing for one with no
   expect(await linux(id(4242, 'unreadable'), STORE)).toBeUndefined()
 })
 
+it('picks no home in a sandbox when one store has a path here and another has none', async () => {
+  mocks.state.view = () => ({ state: 'sandbox', cwd: '/work', toHost: (path) => path === '/data/project' ? path : null })
+  hold(4242, 3, '/tmp/home/.hermes/state.db')   // its own store, on a tmpfs the daemon has no path to
+  hold(4242, 4, '/data/project/state.db')       // another state.db, at the same path here
+  expect(await linux(id(4242), STORE)).toBeUndefined()
+})
+
 it('lists a process on macOS with lsof -Fn, less and less often until it answers, and never after', async () => {
   mocks.state.lsof.set('4242', 'p4242\nfcwd\nn/work\nf3\nn/h/.hermes/state.db\nf4\nn/h/.hermes/state.db-wal\n')
   expect(await mac(id(4242), STORE)).toBe('/h/.hermes')
