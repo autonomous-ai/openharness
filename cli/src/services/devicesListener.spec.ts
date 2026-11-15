@@ -699,6 +699,19 @@ describe.skipIf(process.platform === 'win32')('the devices listener', () => {
       expect(lines.at(-1)).toBe('[devices] listener in the last minute: 0 unknown, 0 oversized, 0 over rate, 4 refused, 0 failed')
     })
 
+    // Every end destroys its connection: a client that pools connections must not send a tell on one.
+    it('a stream\'s head closes its connection, though its client asked to keep it alive', async () => {
+      const live = streamHandler()
+      const { path } = await open({ live: live.handler })
+      const kept = bare(path, post(LIVE))
+      const head = await new Promise<string>((resolve) => {
+        let got = ''
+        kept.socket.on('data', (chunk: string) => { if ((got += chunk).includes('\r\n\r\n')) resolve(got) })
+      })
+      expect(head).toMatch(/^HTTP\/1\.1 200 /)
+      expect(head).toMatch(/\r\nConnection: close\r\n/)
+    })
+
     it('a stream outlives the 2 s deadline, and still counts as one of the 16', async () => {
       const live = streamHandler()
       const { path } = await open({ front: frontHandler(() => {}), live: live.handler })
