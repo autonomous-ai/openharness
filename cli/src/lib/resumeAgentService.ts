@@ -104,9 +104,8 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
     stoppedAgents.finishResume(agentId)
     return stoppedAgents.beginResume(agentId)
   }
-  /** [grid]: the one the resume's launch put its engine on, written with its process. Undefined on a later look at a
-   *  resume already launched, whose row keeps its own. */
-  const waitForResume = async (entry: RegisteredSession, current: () => boolean, grid?: GridAssignment | null) => {
+  /** [grid]: the one the resume's launch put its engine on, written with its process. */
+  const waitForResume = async (entry: RegisteredSession, current: () => boolean, grid: GridAssignment | null) => {
     // Registry observations may update the same object; pin the route being verified.
     const saved = { ...entry }
     const ownsRoute = () => current() && registry.byAgent(saved.agentId)?.tmuxPane === saved.tmuxPane
@@ -223,7 +222,8 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
       const { runtime } = target!
       retainExitedSession(entry, inventory.roots.some(root => sameTerminalPlacement(root.runtime, runtime)))
     },
-    waitForReady: saved => waitForResume(saved, current),
+    // A launch already made: its record is the row's, written when its pane was registered (`refreshGridWebSearch`).
+    waitForReady: saved => waitForResume(saved, current, launchedGrid(saved.gridLaunch)),
     canLaunch: async saved => {
       await stopJobs.get(agentId)
       return !registry.bySession(saved.sessionId) && (await checkPidRuntime(saved)).state === 'gone'
