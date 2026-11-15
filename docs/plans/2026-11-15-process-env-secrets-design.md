@@ -227,6 +227,11 @@ One item, high priority, right after this pull request merges:
 
 - `cli/native/darwin-process-images.c` reads `KERN_PROCARGS2` (argv and environment) of other processes and hashes
   it. It is product code.
+- `harness service status`, `start` and `stop` on macOS (`cli/src/harnessd/platform.ts` `inspect()`) read
+  `launchctl print gui/<uid>/<label>`, whose output holds the job's inherited environment. Only the pid, state and
+  last exit are taken from it; the rest is dropped at once, never logged or returned. It runs in the CLI, not in the
+  daemon. Replacing it changes what status shows (`launchctl list` has no state words and can see another domain
+  over SSH), so it is a product decision (PM, 2026-11-15).
 - Harness OS: `os/root/usr/lib/harness-os/open-updates` and `os/root/usr/lib/harness-os/screen-action` read
   `/proc/<pid>/environ` of the hn and tmux client processes. They are product code.
 - Test tools: `cli/scripts/remote-machine.sh` (the docker rig), `os/tests/vm.py`, `os/tests/fedora_session_vm.py`,
