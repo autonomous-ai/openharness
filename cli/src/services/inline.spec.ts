@@ -20,6 +20,7 @@ import { startEngineProbe } from './engineProbe.js'
 import { startHandoff } from './handoff.js'
 import * as inline from './inline.js'
 import { startModels } from './models.js'
+import { createLocalNativeSetup } from './nativeSetup.js'
 import { startMessagesInCore } from './messages.js'
 import { startMonitor } from './monitor.js'
 import { startOrchestrator } from './orchestrator.js'
@@ -44,6 +45,6 @@ import { startWorkspaces } from './workspaces.js'
 
 describe('the services the core runs in its own process only when they do not run in theirs', () => {
   it('are their own starts, unchanged: the same services either way', () => {
-    expect({ ...inline }).toEqual({ engineTranscriptFor, databaseHistory, liveFor, runtimeFor, screenFor, submissionFor, nativeControlFor, backgroundJobFor, providerMoveFor, modelControlFor, questionControlFor, startAgentBrowser, startAgentCleanup, startCloud, startConnectors, startDevices, startEngineProbe, startGoals, startHachiInCore, startHandoff, startGateway, startMemory, startModels, startMonitor, startOrchestrator, startOsDevice, startMachineAddons, startProjects, startRecaps, startRouter, startSearch, startSharedMachines, startSharing, startShell, startStoreInCore, startMessagesInCore, startUsageInCore, startViewers, startWifi, startWindowNames, startWorkspaces })
+    expect({ ...inline }).toEqual({ engineTranscriptFor, databaseHistory, liveFor, runtimeFor, screenFor, submissionFor, nativeControlFor, backgroundJobFor, providerMoveFor, modelControlFor, questionControlFor, createLocalNativeSetup, startAgentBrowser, startAgentCleanup, startCloud, startConnectors, startDevices, startEngineProbe, startGoals, startHachiInCore, startHandoff, startGateway, startMemory, startModels, startMonitor, startOrchestrator, startOsDevice, startMachineAddons, startProjects, startRecaps, startRouter, startSearch, startSharedMachines, startSharing, startShell, startStoreInCore, startMessagesInCore, startUsageInCore, startViewers, startWifi, startWindowNames, startWorkspaces })
   })
 })
