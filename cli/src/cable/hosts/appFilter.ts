@@ -19,6 +19,9 @@ export interface AppFilterDeps {
    *  the last read's. */
   counts(): AppCounts
   switched(cause: SwitchCause): void
+  /** An app stayed in front for FRONT_SETTLE_MS, told after any switch that caused: `none`, an app with no agents and
+   *  the same app again too, since what follows the front acts on the settle, not on what the dial shows. */
+  settled(app: string): void
 }
 
 const has = (counts: ReadonlyMap<string, number>, app: string): boolean => (counts.get(app) ?? 0) > 0
@@ -84,6 +87,11 @@ export class AppFilter {
     return this.settledFront
   }
 
+  /** The last app reported in front, at once: what the person looks at now, before the settle filters a Cmd-Tab out. */
+  latestFront(): string | undefined {
+    return this.lastFront
+  }
+
   pick(app: string, cause: 'pick' | 'notice' = 'pick'): AppPick {
     if (!has(this.deps.counts().all, app)) return 'ignored'
     // Done on the shown app is how a person leaves the picker without changing anything (the PM, D2): it holds nothing.
@@ -105,6 +113,7 @@ export class AppFilter {
       this.byDefault = false
       this.show(app, 'front')
     }
+    this.deps.settled(app)
   }
 
   /** A page the default chose, none of whose agents is known to be there, once an app has a known agent. */

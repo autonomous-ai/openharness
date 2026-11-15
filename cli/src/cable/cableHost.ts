@@ -138,6 +138,8 @@ export interface CableHostWiring {
   pets?: () => PetStore | null
   /** The app a dial that says `appFilter` shows changed from one app to another, and why: its dials are told at once. */
   appSwitched?: (cause: SwitchCause) => void
+  /** An app stayed in front for FRONT_SETTLE_MS, with or without a window, after any switch it caused. */
+  appSettled?: (app: string) => void
   /** A dial sent a pick from its list of apps, whatever came of it: the picker's measure. A notice's pick is none. */
   appPicked?: () => void
   /** Runs `run` once after `ms` and returns its cancel: the settle of the app in front. The devices always give theirs,
@@ -235,6 +237,7 @@ export class DaemonCableHost implements CableHost {
       // (machineSnapshot).
       counts: () => this.rings.counts(this.registry?.entries().map((e) => e.agent) ?? []),
       switched: (cause) => wiring.appSwitched?.(cause),
+      settled: (app) => wiring.appSettled?.(app),
     })
   }
 
@@ -591,6 +594,11 @@ export class DaemonCableHost implements CableHost {
   /** The app that settled in front, with or without a window. Not the shown app: the person may have picked another. */
   settledApp(): string | undefined {
     return this.filter.settledApp()
+  }
+
+  /** The app last reported in front, before it settles, with or without a window. */
+  latestFront(): string | undefined {
+    return this.filter.latestFront()
   }
 
   promptFollowed(outcome: 'moved' | 'no-tile'): void {
