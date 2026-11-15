@@ -46,7 +46,9 @@ normalizer, as it would have been had the first attach not been superseded.
   It is written in `keepLiveNormalizer` when the attach read the transcript (`handover.next !== null`), holds no tail
   (`handover.hold === null`) and the watcher does not tail that transcript for the session
   (`!watcher.tails(sessionId, transcriptPath)`), and the attach is not an interpretation-hold recovery (those use
-  their own boundaries, `closes`).
+  their own boundaries, `closes`) and is still the binding's (`current()`): an attach whose session was forgotten
+  while it read leaves nothing, so the same conversation bound again under its id inherits no byte and no retry
+  (`agents/forget.ts`).
 - `historyEnd()` uses it after a held tail and before a relaunch mark:
   `closes ? undefined : relaunch?.engineStarted ? relaunch.offset : handover.hold?.offset ?? unreadFrom ?? relaunchedAt`.
   It is used only when the entry's `transcriptPath` is the session's current one; an entry for another path is
@@ -89,7 +91,8 @@ was that later attach; without it the agent would have shown nothing (PM, 2026-1
   any caller (a hook, the reconcile) starts it again.
 - The retry re-reads the row as it is then (`resolve(session.agentId)`) and runs only while it is the same binding
   (same `sessionId` and `transcriptPath`, `paneReadIdentity` unchanged, its `lifetimes` entry the same) and the
-  watcher still does not tail that transcript; otherwise it does nothing. It calls `attachSession(latest, false,
+  watcher still does not tail that transcript; otherwise it does nothing, and the count goes with that binding, so the
+  next binding's first superseded attach waits 1 s again. It calls `attachSession(latest, false,
   replayCursorFromStart, replayFromStart)` with the first attach's replay flags, so a first turn born after its agent
   is still replayed once. A plain attach joins one already in flight, so a retry and a hook's attach never fold twice.
 - Its read ends at the remembered X (above), so the retry loses no line either.

@@ -156,7 +156,8 @@ changed, and the copy was removed after.
 - **A retry after a superseded reset of a session that has its parser** takes that same re-attach path: it only
   makes sure the tail runs. The spec leaves that path as it is.
 - **Four existing cases now start a retry:** `does not close or replay agy history after %s supersedes its capture`
-  (`attach.spec.ts:973`), for `binding`, `forgotten`, `later binding` and `later normalizer`, return through
+  (`attach.spec.ts:973`), for `binding`, `forgotten`, `later binding` and `later normalizer` (since the final
+  review's fence, Decision 7, only the two whose binding is unchanged start one), return through
   `keepLiveNormalizer('changed binding while its pane was read')` inline, with a transcript and no tail. Task 2 ends
   that test with `run.attach.forget(s.sessionId)`, as the recovery tests end theirs. No other existing test starts
   one: checked with a marker on the schedule across the six specs that build the real attach.
@@ -214,14 +215,20 @@ Read from the spec's own words, and pinned by a test each:
    `attach.ts:228` included, not only line 621 (`forgets it when an attach only makes sure the tail runs`). That path
    itself is unchanged.
 7. The retry's condition is the spec's, whatever reason the attach gave `keepLiveNormalizer`. So agy's
-   `changed binding while its pane was read` schedules one too, and its fence then decides.
+   `changed binding while its pane was read` schedules one too while the attach is still the binding's. Changed in
+   the final review: an attach no longer the binding's (`current()` false) remembers no byte and schedules no retry,
+   since one whose session was forgotten while it read its profile left both behind for the same id bound again
+   (`remembers nothing, and tries nothing again, for a read whose session was forgotten while its profile was read`).
 
 From the shape of the change:
 
 8. A retry whose attach rejects is logged with `console.error`, in the words of the reader retry beside it
    (`attach.ts:210`), and is not tried again: a rejected attach was not superseded.
-9. A retry that finds the binding changed, or the transcript tailed, does nothing, and the session's count stays as
-   it is until a tail starts or the session is forgotten. The spec: "otherwise it does nothing".
+9. A retry that finds the binding changed, or the transcript tailed, does nothing, and drops the session's count.
+   Changed in the final review: the count kept for the next binding made its first superseded attach wait two
+   seconds, or, after a fifth retry that found the session bound anew, give up without trying, against the spec's
+   "the next attach from any caller starts it again" (`counts from one second again for the session bound anew while
+   its retry waited`).
 10. The line after the fifth retry is a `console.warn`, as `keepLiveNormalizer`'s own line is.
 11. `retrySuperseded` is handed the superseded attach's `current` and `transcriptPath` as arguments, so it reads
     nothing of an attach but what it is given.
