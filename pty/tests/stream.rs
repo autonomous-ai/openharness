@@ -184,7 +184,7 @@ fn snapshot_seq_cuts_output() {
     }
 }
 
-// Unix only: it needs a child that writes 20 MB faster than a subscriber reads. ConPTY renders a
+// Unix only: it needs 20 MB of output queued for a paused subscriber. ConPTY renders a
 // child's output into screen frames, so on Windows what reaches the host is a few frames, not the
 // bytes written; the queue limit itself is covered by `stream`'s unit tests.
 #[cfg(unix)]
@@ -195,7 +195,7 @@ fn overflow_drops_subscriber() {
     let pane = create_with(
         &mut w,
         &mut r,
-        "sleep 0.3; yes 0123456789012345678901234567890123456789 | head -c 20000000; sleep 5",
+        "read -r start; yes 0123456789012345678901234567890123456789 | head -c 20000000; printf '\\noutput-complete\\n'; read -r finish",
         "",
         false,
     );
@@ -204,17 +204,38 @@ fn overflow_drops_subscriber() {
     // A second subscriber that reads gets all of it.
     let mut reading = stream(&disc);
     subscribe(&mut reading, &pane);
+    let (produced, complete) = std::sync::mpsc::sync_channel(1);
     let reader = std::thread::spawn(move || {
         let (mut bytes, mut last) = (0usize, None);
+        let mut tail = Vec::new();
+        let mut announced = false;
+        const DONE: &[u8] = b"output-complete";
         while let Ok(Some((kind, payload))) = read_frame(&mut reading) {
             match kind {
-                Kind::Output => bytes += payload.len() - 8,
+                Kind::Output => {
+                    bytes += payload.len() - 8;
+                    if !announced {
+                        tail.extend_from_slice(&payload[8..]);
+                        if tail.windows(DONE.len()).any(|part| part == DONE) {
+                            produced.send(()).unwrap();
+                            announced = true;
+                        }
+                        let discard = tail.len().saturating_sub(DONE.len() - 1);
+                        tail.drain(..discard);
+                    }
+                }
                 _ => last = Some((kind, json(&payload))),
             }
         }
         (bytes, last)
     });
-    std::thread::sleep(Duration::from_secs(2)); // do not read: the queue fills past 4 MiB
+    // Start only after both subscribers exist. Pause is ordered before Input on this connection,
+    // so draining the socket cannot race the producer and keep the queue below its limit.
+    write_frame(&mut s, Kind::Pause, b"").unwrap();
+    write_frame(&mut s, Kind::Input, b"go\r").unwrap();
+    let (kind, ack) = next_reply(&mut s);
+    assert_eq!(kind, Kind::Ack);
+    assert_eq!(ack, serde_json::json!({"for": Kind::Input as u8, "ok": true}));
     let mut closed = None;
     while let Ok(Some((kind, payload))) = read_frame(&mut s) {
         if kind == Kind::Closed {
@@ -228,6 +249,10 @@ fn overflow_drops_subscriber() {
     );
     // The host ends the connection after `Closed`.
     assert!(matches!(read_frame(&mut s), Ok(None) | Err(_)));
+    // Reattach once output ends, so the new subscriber is not itself dropped while checking recovery.
+    complete
+        .recv_timeout(Duration::from_secs(30))
+        .expect("the reading subscriber did not receive all output");
     let mut again = stream(&disc);
     subscribe(&mut again, &pane);
     write_frame(
@@ -236,18 +261,17 @@ fn overflow_drops_subscriber() {
         br#"{"id":2,"history":"none","historyLines":0}"#,
     )
     .unwrap();
-    let (frames, _) = read_until(&mut again, |_| false);
-    assert!(frames.iter().any(|(k, _)| *k == Kind::SnapshotReply));
-    // The pane went on.
+    let (kind, reply) = next_reply(&mut again);
+    assert_eq!(kind, Kind::SnapshotReply);
+    assert_eq!(reply["id"], 2);
+    // The child stays alive until this subscriber has proved the pane still works.
     let st = call(
         &mut w,
         &mut r,
         &serde_json::json!({"id": 2, "op": "paneState", "pane": pane}).to_string(),
     );
-    assert!(
-        st["state"] == "gone" || st["state"]["dead"] == false,
-        "{st}"
-    );
+    assert_eq!(st["state"]["dead"], false, "{st}");
+    write_frame(&mut again, Kind::Input, b"finish\r").unwrap();
     let (bytes, last) = reader.join().unwrap();
     assert!(bytes >= 20_000_000, "{bytes}");
     assert_eq!(
