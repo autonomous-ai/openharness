@@ -83,20 +83,30 @@ describe('a daemon under test knows nothing of the developer\'s own state', () =
 
   it('has its profile under its own home, and its own tmux folder, temporary folder and Store catalog', async () => {
     // A developer's shell that names every one of them: made-up folders, so a failure prints nothing real.
-    for (const name of ['USERPROFILE', 'LOCALAPPDATA', 'APPDATA']) vi.stubEnv(name, join(scratch, name))
+    for (const name of ['USERPROFILE', 'LOCALAPPDATA', 'APPDATA', 'TEMP', 'TMP']) vi.stubEnv(name, join(scratch, name))
     vi.stubEnv('HARNESS_STORE_CATALOG_URL', 'https://store.invalid/catalog.json')
     const d = daemon = await IsolatedDaemon.create()
     const home = d.env.HOME!
     expect({
       USERPROFILE: d.env.USERPROFILE, LOCALAPPDATA: d.env.LOCALAPPDATA, APPDATA: d.env.APPDATA,
-      TMUX_TMPDIR: d.env.TMUX_TMPDIR, TMPDIR: d.env.TMPDIR, HARNESS_STORE_CATALOG_URL: d.env.HARNESS_STORE_CATALOG_URL,
+      TMUX_TMPDIR: d.env.TMUX_TMPDIR, TMPDIR: d.env.TMPDIR, TEMP: d.env.TEMP, TMP: d.env.TMP,
+      HARNESS_STORE_CATALOG_URL: d.env.HARNESS_STORE_CATALOG_URL,
     }).toEqual({
       USERPROFILE: home, LOCALAPPDATA: join(home, 'AppData', 'Local'), APPDATA: join(home, 'AppData', 'Roaming'),
-      TMUX_TMPDIR: d.tmux.root, TMPDIR: join(d.root, 't'), HARNESS_STORE_CATALOG_URL: 'http://127.0.0.1:9/catalog.json',
+      TMUX_TMPDIR: d.tmux.root, TMPDIR: join(d.root, 't'), TEMP: join(d.root, 't'), TMP: join(d.root, 't'),
+      HARNESS_STORE_CATALOG_URL: 'http://127.0.0.1:9/catalog.json',
     })
     // A daemon beside another shares its home and its tmux server. Never started: the first one's close takes its folders.
     const beside = await IsolatedDaemon.create({ beside: d })
     expect([beside.env.HOME, beside.env.USERPROFILE, beside.env.TMUX_TMPDIR]).toEqual([home, home, d.tmux.root])
+  })
+
+  it('runs its tiles under /bin/zsh, whatever shell the developer uses, unless a test names another', async () => {
+    vi.stubEnv('SHELL', '/fake/bin/fish')
+    const d = daemon = await IsolatedDaemon.create()
+    expect(d.env.SHELL).toBe('/bin/zsh')
+    // Never started: it only shows whose word wins. Beside the first, whose close takes its folders.
+    expect((await IsolatedDaemon.create({ beside: d, env: { SHELL: '/bin/bash' } })).env.SHELL).toBe('/bin/bash')
   })
 
   it('takes nothing from the shell but what it needs to run', async () => {
