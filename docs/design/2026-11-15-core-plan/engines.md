@@ -6,7 +6,7 @@ muse, pi, omp, openclaw) out of the daemon core into ONE worker, `engine-others`
 
 State (2026-11-15, the second agent): step 1 is split in two pull requests, as the lead allowed.
 
-- **Step 1a, done:** PR #PR_NUMBER from branch `core-engines-2` (the two WIP commits of `core-engines-1`, finished).
+- **Step 1a, done:** PR #4317 from branch `core-engines-2` (the two WIP commits of `core-engines-1`, finished).
   The worker `engine-others` reads the fourteen engines' history and last turns; the core routes, bounds and checks.
 - **Step 1b, not started in code:** the live part below (attach, normalizers and readers, live parsers, their Stop
   rules, and the five profile `transcript()` readers). Start it from `main` once 1a has landed, on `core-engines-3`.
