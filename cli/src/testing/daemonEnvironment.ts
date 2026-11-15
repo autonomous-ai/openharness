@@ -9,7 +9,8 @@
  * hints.
  *
  * A name an end-to-end file turns out to need is added here, with its reason. Never a list of names to drop again.
- * What the harness sets, and what a test sets, are `own` and always win (e2e/harness/daemon.ts).
+ * What the harness sets, and what a test sets, are `own` and always win: for a daemon under test (e2e/harness/daemon.ts)
+ * and for a tmux server a test starts itself (isolatedTmux.ts).
  *
  * In capitals: Windows reads a name whatever its capitals, and its shells spell them differently (cmd hands a child
  * SystemRoot and Path, Git Bash SYSTEMROOT and PATH).

@@ -82,7 +82,7 @@ describe.skipIf(!hasTmux)('real tmux test isolation', () => {
       const pane = await parent.run('new-session', '-d', '-P', '-F', '#{pane_id}', '-s', 'sentinel', 'sleep 600')
       const pid = await parent.run('display-message', '-p', '-t', pane, '#{pid}')
       const inherited = { ...process.env, TMUX: `${parent.socket},${pid},0`, TMUX_PANE: pane }
-      child = await isolatedTmux(inherited)
+      child = await isolatedTmux({ TMUX: inherited.TMUX, TMUX_PANE: pane })
       // Reproduce the incident safely: TMPDIR alone still selects this disposable parent.
       const wrong = await exec('tmux', ['display-message', '-p', '-t', pane, '#{socket_path}'], {
         env: { ...inherited, TMUX_TMPDIR: child.root }, timeout: 5_000,
