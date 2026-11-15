@@ -819,7 +819,7 @@ integrated source/environment.
 | Resume, restart, retarget, new pane, restore | `confirmLaunch` publishes process/readiness/closed launch fields before terminal release or success. A first legitimate startup hook can supply the initially absent binding; it cannot replace a previously selected conversation/process. |
 | HostMove | The same immutable `confirmLaunch` candidate has at most one separately admitted recovery under the original expiry; uncertainty is sticky. Publication is followed synchronously by route/stream installation. Pending/refused holds fence queued and direct input/control, including handover. |
 | Stop/forget/exit | `confirmEngineExit` and `confirmSessionUnbound` precede deletion, reservation release and success; archive comes first. Session cleanup rechecks whether another owner acquired the old session. Attach-failure unbind also awaits strict completion. |
-| Restore fallbacks | Both shell conversions refresh engine absence after preparation. A fresh fallback without a native token strictly unbinds before respawn; a tokened fallback clears the binding inside its existing strict dispatch journal, with no preceding observational unbind. |
+| Restore fallbacks | Both shell conversions refresh engine absence after preparation. Every fresh fallback strictly unbinds before respawn. A native dispatch journal then publishes the already-unbound owner before native effect; it does not itself clear a conversation binding. |
 | Discovery | `openProcessAgent` atomically stages every affected route owner; every fully removed owner gets captured cleanup/deletion, with only the original first predecessor transferring its browser. `reinstateArchived` keeps the archive until confirmed live install; `adoptEngine` and starting readiness use strict receipts. Dormant retirement captures its selected owner/backend and refreshes native absence after image preparation. |
 | Explicit core `agent_update` choices | `rename` stages the exact name key/value until publication, and `setLaunchModel` strictly publishes only the selected relaunch model/effort after live control. Fixed failure replies expose native-change-but-save-unconfirmed without success or guessed rollback. A later queued deletion survives an older prepared rename through existing name revisions. |
 | Purge dependency | Existing callers await Stop and durable name deletion. No worker purge authorization or proof against an old daemon's stale pre-bind startup snapshot is introduced. |
@@ -858,3 +858,41 @@ runtime dependency, service door, process, datastore or unbounded receipt map is
 introduced. Startup load/migration/validation and the bounded final synchronous
 authority/rename/directory-fsync section still block. Package 9 step 5 receipt
 retention/scanning is untouched. None of those residuals is claimed complete.
+
+
+## Independent review corrections at c6c881f13b
+
+Four caller gaps remain scoped to the same persistence task. Existing authority,
+queue, receipts, limits and compatibility rules above apply; no new state store,
+wire field or process is introduced. Each correction requires a caller red before
+runtime changes and retained focused green evidence.
+
+1. Fresh restore fallback always awaits `confirmSessionUnbound`, including a
+   native-token launch. Native absence is refreshed after preparation; only its
+   confirmed exact-owner receipt permits the native dispatch journal. Unconfirmed
+   unbind/journal never dispatches. The watcher may reset its first-hook baseline
+   only to this confirmed unbound receipt and its subsequent dispatch receipt,
+   keeping the original lifecycle generation, watcher budget and one fresh retry.
+   A hook during the respawn reply or the next readiness probe must still match
+   the exact observed process and original route/home; selection remains once.
+2. Direct key control rechecks permanent move refusal after leased-terminal
+   acquisition and carries the same predicate through coordinator/backend dispatch.
+   Tmux `send-keys` and the PTY client write are synchronous effects with no wait
+   before dispatch; each checks the predicate immediately before invoking that
+   effect. Coordinator paths that await validation propagate the predicate too.
+3. Binding revalidation accepts the existing lifecycle/current predicate and
+   checks it at queue entry and final publication. A Stop that starts during image
+   preparation must not gain a later evidence revision or recovery announcement.
+   The caller rechecks the returned receipt and lifecycle after the await, including
+   before any late forget/attachment announcement. Failure handling cannot install
+   a hold after cancellation/replacement.
+4. Resume passes its existing `ownsRoute && confirmedResume(receipt)` callback to
+   `releaseHold`, which already checks at the physical backend effect. Cancellation
+   during a backend wait retains the hold and cannot complete Resume or announce.
+
+Acceptance includes real-registry held-fsync revalidation versus Stop, fresh native
+fallback durable unbind plus legitimate first hook/readiness, deterministic refusal
+between lease and key dispatch, and Resume cancellation while backend release waits.
+The timestamp normalization fix at 91dbe0bf excludes only generated candidate
+`lastTranscriptAt`; genuine local changes still invalidate full affected-row
+fingerprints (five focused recovery checks pass). Full acceptance remains pending.
