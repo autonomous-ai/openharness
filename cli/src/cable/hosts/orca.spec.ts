@@ -179,11 +179,11 @@ describe('Orca actions', () => {
   /** A `run` that holds each command until the test lets it end. */
   function held() {
     const calls: string[][] = []
-    const waiting: Array<() => void> = []
+    const waiting: Array<(code?: number) => void> = []
     const orca = createOrcaActions({
       run: (_file, args) => {
         calls.push(args)
-        return new Promise((resolve) => waiting.push(() => resolve({ code: 0 })))
+        return new Promise((resolve) => waiting.push((code = 0) => resolve({ code })))
       },
       onPath: () => FAKE_PATH_ORCA,
       exists: () => false,
@@ -208,23 +208,48 @@ describe('Orca actions', () => {
     expect(await next).toBe(true)
   })
 
-  it('a switch for a handle whose command still runs is busy and runs nothing; another handle\'s switch runs', async () => {
-    const sending = held()
-    const sent = sending.orca.send(HANDLE, 'one')
-    expect(await sending.orca.switchTo(HANDLE)).toBe('busy')
-    expect(sending.calls).toHaveLength(1)
-    sending.waiting[0]()
+  it('a switch for a handle whose words are still typed is busy and runs nothing', async () => {
+    const { calls, waiting, orca } = held()
+    const sent = orca.send(HANDLE, 'one')
+    expect(await orca.switchTo(HANDLE)).toBe('busy')
+    expect(calls).toHaveLength(1)
+    waiting[0]()
     expect(await sent).toBe(true)
+  })
 
-    const switching = held()
-    const switched = switching.orca.switchTo(HANDLE)
-    expect(await switching.orca.switchTo(HANDLE)).toBe('busy')
-    expect(switching.calls).toHaveLength(1)
-    const other = switching.orca.switchTo(OTHER)
-    expect(switching.calls.map((args) => args[3])).toEqual([HANDLE, OTHER])
-    for (const done of switching.waiting) done()
-    expect(await switched).toBe('ok')
+  // A tap 0.4 to 1 s after a swipe's rest meets the rest's switch: it is the tap's too, and then Orca comes forward.
+  it('a switch while a switch for the same handle runs is ok from that one run; another handle\'s runs', async () => {
+    const { calls, waiting, orca } = held()
+    const rest = orca.switchTo(HANDLE)
+    const tap = orca.switchTo(HANDLE)
+    const other = orca.switchTo(OTHER)
+    expect(calls.map((args) => args[3])).toEqual([HANDLE, OTHER])
+    for (const done of waiting) done()
+    expect(await rest).toBe('ok')
+    expect(await tap).toBe('ok')
     expect(await other).toBe('ok')
+
+    // Once it has ended, the next switch is a run of its own, with its own outcome.
+    const next = orca.switchTo(HANDLE)
+    expect(calls).toHaveLength(3)
+    waiting[2](1)
+    expect(await next).toBe('failed')
+  })
+
+  // A switch types nothing: the words wait for it to end, then are typed, and no other words go with them.
+  it('a send while a switch runs on its terminal waits for the switch, then types; a second send meanwhile is false', async () => {
+    const { calls, waiting, orca } = held()
+    const shown = orca.switchTo(HANDLE)
+    const sent = orca.send(HANDLE, 'one')
+    expect(await orca.send(HANDLE, 'two')).toBe(false)
+    await new Promise((resolve) => setImmediate(resolve))
+    expect(calls.map((args) => args[1])).toEqual(['switch'])
+    waiting[0]()
+    expect(await shown).toBe('ok')
+    await vi.waitFor(() => expect(calls.map((args) => args[1])).toEqual(['switch', 'send']))
+    expect(calls[1][4]).toBe('--text=one')
+    waiting[1]()
+    expect(await sent).toBe(true)
   })
 
   it('a text over 2000 characters runs nothing', async () => {

@@ -1998,6 +1998,22 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     expect(await words).toEqual({ ok: true })
   })
 
+  // The rest's switch still runs when the tap comes, 0.4 to 1 s after it: the tap is that switch's, not a refusal.
+  it('a tap right after a rest opens with the rest\'s switch, on Linux too: no "did not open"', async () => {
+    let shown = () => {}
+    inOrca({ orca: { ...orca, run: (file, args, timeoutMs) => {
+      orcaRuns.push([file, args, timeoutMs])
+      return new Promise((done) => { shown = () => done({ code: 0 }) })
+    } } })
+    host().swipeEnded(CODEX, 'rest')
+    await vi.waitFor(() => expect(orcaRuns).toHaveLength(1))
+    const tap = host().openAgent(CODEX)
+    shown()
+    expect(await tap).toBeUndefined()
+    await swiped('ok')
+    expect(orcaRuns).toEqual([switched])
+  })
+
   it('a superseded rest is counted and runs nothing', () => {
     inOrca()
     host().swipeEnded(CODEX, 'superseded')
