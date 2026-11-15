@@ -7,7 +7,7 @@
  *    native install, help probes, Windows paths, decoys and every other engine's) against every engine:
  *    the match score and its evidence, and whether the row is an unresolved `agent`;
  *  - argv against every engine: the session id it resumes, and the permission mode and approval it names;
- *  - a grid launch's argv: the model it was pointed at;
+ *  - a grid launch's argv, for each engine whose argv discovery reads for it: the model it was pointed at;
  *  - a hook's report of its own environment: the profile home it runs under;
  *  - Claude Code transcripts: whether one sits in a project directory, which folder it belongs to, the folder
  *    it names for itself (past one read, a character across reads, a limit), and the folder a row with a
@@ -28,6 +28,7 @@ import { env } from '../config/env.js'
 import { repairedCwd } from '../lib/cwdRepair.js'
 import type { AgentCommandOwnershipSnapshot } from '../lib/engineBin.js'
 import { classifyGridAssignment } from '../lib/gridAssignment.js'
+import { gridAssignmentProcess } from '../lib/gridAssignmentWire.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { ambiguousAgentProcess, bypassPermissionActive, engineProcessMatch, permissionModeFromArgv, resumeSessionId, type ProcessRow } from '../lib/processTable.js'
 import { reportedProfileHome, transcriptProject } from './discoveries.js'
@@ -170,7 +171,9 @@ function gridCases(): Record<string, unknown> {
   const cases: Record<string, unknown> = {}
   for (const [name, args] of shapes) {
     cases[name] = Object.fromEntries(ENGINES.flatMap((engine) => {
-      const found = classifyGridAssignment(engine, args)
+      // Only a command line discovery hands models: never one of an engine whose grid is in none, nor a Pi's without
+      // its extension.
+      const found = gridAssignmentProcess('golden', engine, args) && classifyGridAssignment(engine, args)
       return found ? [[engine, found]] : []
     }))
   }

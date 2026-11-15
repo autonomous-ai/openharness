@@ -1,7 +1,7 @@
 /** Composition kept at the boundary while assignment classification moves to models. */
 import type { AgentEngine } from '../engines/types.js'
 import { ApiConnectionMetadata } from '../lib/apiConnectionMetadata.js'
-import { gridAssignmentProcess, gridAssignmentProcessesIn } from '../lib/gridAssignmentWire.js'
+import { gridAssignmentEvidence, gridAssignmentProcessesIn } from '../lib/gridAssignmentWire.js'
 import { createModelsLink } from '../core/modelsLink.js'
 import { rememberSavedApis } from '../lib/gridAssignment.js'
 import { ApiConnections } from '../lib/apiConnections.js'
@@ -18,8 +18,11 @@ export function gridAssignmentShapes(dataDir: string) {
   }, () => false).port
   return {
     remember: () => rememberSavedApis(store),
+    /** Models' answer for a command line's markers, null for one that names none, and 'no evidence' where that is no
+     *  finding: the row keeps the grid its launch recorded (`gridAssignmentEvidence`). */
     assignment: async (engine: AgentEngine, args = '') => {
-      const process = gridAssignmentProcess('golden', engine, args)
+      const process = gridAssignmentEvidence('golden', engine, args)
+      if (process === undefined) return 'no evidence'
       return process ? (await port.gridAssignments([process]))[0].assignment : null
     },
     list: () => store.list(),

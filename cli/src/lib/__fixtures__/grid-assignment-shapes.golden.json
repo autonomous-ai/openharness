@@ -1,7 +1,7 @@
 {
   "darwin": {
-    "claude/plain": null,
-    "claude/provider-argument": null,
+    "claude/plain": "no evidence",
+    "claude/provider-argument": "no evidence",
     "codex/plain": null,
     "codex/provider-argument": {
       "baseUrl": "https://grid.example/g/home/relay/v1",
@@ -12,17 +12,17 @@
       "baseUrl": "https://grid.example/g/home/relay/v1",
       "model": null
     },
-    "opencode/plain": null,
-    "opencode/provider-argument": null,
-    "pi/plain": null,
-    "pi/provider-argument": null,
+    "opencode/plain": "no evidence",
+    "opencode/provider-argument": "no evidence",
+    "pi/plain": "no evidence",
+    "pi/provider-argument": "no evidence",
     "omp/plain": null,
     "omp/provider-argument": {
       "baseUrl": "https://grid.example/g/home/relay/v1",
       "model": null
     },
-    "hermes/plain": null,
-    "hermes/provider-argument": null,
+    "hermes/plain": "no evidence",
+    "hermes/provider-argument": "no evidence",
     "commandcode/plain": null,
     "commandcode/provider-argument": {
       "baseUrl": "https://grid.example/g/home/relay/v1",
@@ -48,15 +48,15 @@
       "baseUrl": "https://grid.example/g/home/relay/v1",
       "model": null
     },
-    "grok/plain": null,
-    "grok/provider-argument": null,
+    "grok/plain": "no evidence",
+    "grok/provider-argument": "no evidence",
     "agy/plain": null,
     "agy/provider-argument": {
       "baseUrl": "https://grid.example/g/home/relay/v1",
       "model": null
     },
-    "copilot/plain": null,
-    "copilot/provider-argument": null,
+    "copilot/plain": "no evidence",
+    "copilot/provider-argument": "no evidence",
     "openclaw/plain": null,
     "openclaw/provider-argument": {
       "baseUrl": "https://grid.example/g/home/relay/v1",
@@ -81,8 +81,8 @@
       "model": "Auto"
     },
     "codex/argv/-c model_providers.grid.base_url=\"bad\" -m chosen": null,
-    "claude/launch-roundtrip/null": null,
-    "claude/launch-roundtrip/chosen": null,
+    "claude/launch-roundtrip/null": "no evidence",
+    "claude/launch-roundtrip/chosen": "no evidence",
     "codex/launch-roundtrip/null": {
       "baseUrl": "https://grid.example/g/home/relay/v1",
       "model": null
@@ -91,12 +91,12 @@
       "baseUrl": "https://grid.example/g/home/relay/v1",
       "model": "chosen"
     },
-    "opencode/launch-roundtrip/null": null,
-    "opencode/launch-roundtrip/chosen": null,
-    "hermes/launch-roundtrip/null": null,
-    "hermes/launch-roundtrip/chosen": null,
-    "grok/launch-roundtrip/null": null,
-    "grok/launch-roundtrip/chosen": null,
+    "opencode/launch-roundtrip/null": "no evidence",
+    "opencode/launch-roundtrip/chosen": "no evidence",
+    "hermes/launch-roundtrip/null": "no evidence",
+    "hermes/launch-roundtrip/chosen": "no evidence",
+    "grok/launch-roundtrip/null": "no evidence",
+    "grok/launch-roundtrip/chosen": "no evidence",
     "pi/launch-roundtrip/null": {
       "baseUrl": "https://grid.example/g/home/relay/v1",
       "model": "Auto"
@@ -110,7 +110,7 @@
       "error": "GRID_MODEL_REQUIRED",
       "detail": "copilot will not start against a grid without a model. Pick one for Home and try again."
     },
-    "copilot/launch-roundtrip/chosen": null,
+    "copilot/launch-roundtrip/chosen": "no evidence",
     "saved/before-save": null,
     "saved/list": [
       {
@@ -199,8 +199,8 @@
     }
   },
   "linux": {
-    "claude/plain": null,
-    "claude/provider-argument": null,
+    "claude/plain": "no evidence",
+    "claude/provider-argument": "no evidence",
     "codex/plain": null,
     "codex/provider-argument": {
       "baseUrl": "https://grid.example/g/home/relay/v1",
@@ -211,17 +211,17 @@
       "baseUrl": "https://grid.example/g/home/relay/v1",
       "model": null
     },
-    "opencode/plain": null,
-    "opencode/provider-argument": null,
-    "pi/plain": null,
-    "pi/provider-argument": null,
+    "opencode/plain": "no evidence",
+    "opencode/provider-argument": "no evidence",
+    "pi/plain": "no evidence",
+    "pi/provider-argument": "no evidence",
     "omp/plain": null,
     "omp/provider-argument": {
       "baseUrl": "https://grid.example/g/home/relay/v1",
       "model": null
     },
-    "hermes/plain": null,
-    "hermes/provider-argument": null,
+    "hermes/plain": "no evidence",
+    "hermes/provider-argument": "no evidence",
     "commandcode/plain": null,
     "commandcode/provider-argument": {
       "baseUrl": "https://grid.example/g/home/relay/v1",
@@ -247,15 +247,15 @@
       "baseUrl": "https://grid.example/g/home/relay/v1",
       "model": null
     },
-    "grok/plain": null,
-    "grok/provider-argument": null,
+    "grok/plain": "no evidence",
+    "grok/provider-argument": "no evidence",
     "agy/plain": null,
     "agy/provider-argument": {
       "baseUrl": "https://grid.example/g/home/relay/v1",
       "model": null
     },
-    "copilot/plain": null,
-    "copilot/provider-argument": null,
+    "copilot/plain": "no evidence",
+    "copilot/provider-argument": "no evidence",
     "openclaw/plain": null,
     "openclaw/provider-argument": {
       "baseUrl": "https://grid.example/g/home/relay/v1",
@@ -280,8 +280,8 @@
       "model": "Auto"
     },
     "codex/argv/-c model_providers.grid.base_url=\"bad\" -m chosen": null,
-    "claude/launch-roundtrip/null": null,
-    "claude/launch-roundtrip/chosen": null,
+    "claude/launch-roundtrip/null": "no evidence",
+    "claude/launch-roundtrip/chosen": "no evidence",
     "codex/launch-roundtrip/null": {
       "baseUrl": "https://grid.example/g/home/relay/v1",
       "model": null
@@ -290,12 +290,12 @@
       "baseUrl": "https://grid.example/g/home/relay/v1",
       "model": "chosen"
     },
-    "opencode/launch-roundtrip/null": null,
-    "opencode/launch-roundtrip/chosen": null,
-    "hermes/launch-roundtrip/null": null,
-    "hermes/launch-roundtrip/chosen": null,
-    "grok/launch-roundtrip/null": null,
-    "grok/launch-roundtrip/chosen": null,
+    "opencode/launch-roundtrip/null": "no evidence",
+    "opencode/launch-roundtrip/chosen": "no evidence",
+    "hermes/launch-roundtrip/null": "no evidence",
+    "hermes/launch-roundtrip/chosen": "no evidence",
+    "grok/launch-roundtrip/null": "no evidence",
+    "grok/launch-roundtrip/chosen": "no evidence",
     "pi/launch-roundtrip/null": {
       "baseUrl": "https://grid.example/g/home/relay/v1",
       "model": "Auto"
@@ -309,7 +309,7 @@
       "error": "GRID_MODEL_REQUIRED",
       "detail": "copilot will not start against a grid without a model. Pick one for Home and try again."
     },
-    "copilot/launch-roundtrip/chosen": null,
+    "copilot/launch-roundtrip/chosen": "no evidence",
     "saved/before-save": null,
     "saved/list": [
       {
