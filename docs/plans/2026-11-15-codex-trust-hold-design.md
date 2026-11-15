@@ -38,13 +38,15 @@ A discovery pass that read the agent's native evidence completely releases the h
   every change). That pair is the hold's token: any later change to the row's evidence (another reason, a release, a
   register, a release and a hold set again) raises the revision, and the token no longer matches. A call that leaves
   the row as it was (the same reason set again) changes nothing, so it changes no token either.
-- The map stays small and never keeps an agent that is gone: each time an entry is written, the entries whose agent
-  the registry no longer has, or whose row no longer carries that token, are dropped first; at 256 entries it is
-  cleared, as `openclawFolderReads` is. An entry also goes when its hold is released and when the agent's row no
-  longer carries its token at the end of a pass.
-- Each pass notes whether it ran a native read through `read()` and whether any failed. A pass that ran at least one
-  and saw none fail, for an agent whose row still carries the recorded token, clears the hold, announces the agent and
-  logs `[discovery] <agent> binding released · its native evidence was read completely`.
+- The map stays small and keeps an agent that is gone only until the next write: each time an entry is written, the
+  entries whose agent the registry no longer has, or whose row no longer carries that token, are dropped first; at
+  256 entries it is cleared, as `openclawFolderReads` is. An entry also goes when its hold is released and when the
+  agent's row no longer carries its token at the end of a pass.
+- Each pass notes whether it ran a native read through `read()` and whether anything in it said to hold the agent (a
+  read that failed, a refused register, Hermes's follower). A pass that ran at least one read and that nothing held,
+  for an agent whose row still carries the recorded token, clears the hold, announces the agent and logs
+  `[discovery] <agent> binding released · its native evidence was read completely`. A register refused in the words of
+  the hold already there changes nothing on the row, so it changes no token, and that pass keeps the hold all the same.
 - A released agent that already has a conversation (`sessionId`) has its stream attached (`attachSession`), as
   OpenClaw's own clear does (`bind.ts:380`): an agent bound while held never had its stream attached
   (`discovery.ts:245`), and released without it, its pane would work while the apps and devices showed nothing. An
@@ -122,6 +124,7 @@ stream attach per release of an agent with a conversation (not awaited by the pa
     complete pass;
   - a pass that ran no read (repair throttled): nothing released;
   - a pass with one read that succeeds and one that fails: the hold stays;
+  - a pass whose reads complete and whose register is refused in the hold's own words: the hold stays;
   - a hold changed after the recorded one, to another reason or released and set again with the same reason text by
     another path (its revision moved): kept;
   - an agent forgotten while held: its entry is dropped on the next write, and the map never holds more than 256;

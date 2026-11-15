@@ -156,9 +156,9 @@ export function createBinding({
     return row?.identityHold === remembered.reason && row.evidenceRevision === remembered.revision ? row : undefined
   }
   /**
-   * First goes every entry whose agent is gone or whose row moved on, so none outlives its agent. At 256 the map starts
-   * over, as `openclawFolderReads` does: a hold forgotten that way stays until its own reason clears it, as every hold
-   * did before.
+   * First goes every entry whose agent is gone or whose row moved on, so one whose agent is gone lasts only until the
+   * next hold is remembered. At 256 the map starts over, as `openclawFolderReads` does: a hold forgotten that way stays
+   * until its own reason clears it, as every hold did before.
    */
   const rememberReadHold = (agentId: string): void => {
     for (const id of readHolds.keys()) if (!readHeld(id)) readHolds.delete(id)
