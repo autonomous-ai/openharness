@@ -19,7 +19,7 @@ export interface AppFilterDeps {
    *  the last read's. */
   counts(): AppCounts
   switched(cause: SwitchCause): void
-  /** An app stayed in front for FRONT_SETTLE_MS, told after any switch that caused: `none`, an app with no agents and
+  /** An app stayed in front for FRONT_SETTLE_MS, told after any switch it caused: `none`, an app with no agents and
    *  the same app again too, since what follows the front acts on the settle, not on what the dial shows. */
   settled(app: string): void
 }
