@@ -4587,6 +4587,29 @@ describe('the app filter', () => {
     } finally { await session.stop() }
   })
 
+  it("viewChanged sends an app's ring at once though a push of the tab was in flight as the view turned", async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    const { host, state } = appHost()
+    state.window = true
+    const { session, port } = await greeted(host)
+    try {
+      // A push of the tab (the dial's refresh) has read its list and not yet sent it.
+      const answer = host.listAgentSnapshot!
+      let release!: () => void
+      const held = new Promise<void>((resolve) => { release = resolve })
+      host.listAgentSnapshot = async (opts) => { const out = await answer(opts); await held; return out }
+      const inFlight = session.syncAgents(true)
+      await settle()
+      port.sent.length = 0
+      state.appView = true
+      const changed = session.viewChanged()
+      release()
+      await inFlight
+      await changed
+      expect(listFrames(port).filter((m) => m.t === 'agents.end').at(-1)).toEqual({ t: 'agents.end', total: 3, tab: '', view: 'machine' })
+    } finally { await session.stop(); vi.useRealTimers() }
+  })
+
   it('viewChanged with the list unchanged sends no list twice', async () => {
     const { host, state } = appHost()
     state.window = true
