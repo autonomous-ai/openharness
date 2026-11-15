@@ -174,6 +174,9 @@ overlap (Harness agents have a pane), but the rule and its tests land now, so wa
   who enters, at most 16 in one pass; those that enter go to the end in the registry's order, and one that found no
   place is no longer new. `total` is every agent on this computer. The bound is in the selection, not in name
   lengths: the 78-agent reconnect (`listAgentSnapshot`'s comment) is not repeated.
+- **Per app.** A dial that says `appFilter` in `hello` gets one ring per app, the shown app's, each kept by these
+  rules, and its `total` is the shown app's agent count
+  ([the dial's app filter](2026-11-14-dial-app-filter.md)).
 - **When.** Changes are coalesced for 1 s, and pushes are at least 1 s apart. The list is pushed only when its members or
   order change (`agentsKey`, as today); a state change inside the same list goes as the existing per-agent frames.
 - **With a window.** Exactly today's behaviour: an observed agent sends the dial no frame (no turn, answer or

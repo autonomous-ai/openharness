@@ -7,10 +7,9 @@
 import { APP_BUNDLES } from './hostDetect.js'
 import { ORCA_HANDLE, RUN_TIMEOUT_MS, type OrcaDeps } from './orca.js'
 
-const CLAUDE_APP = 'com.anthropic.claudefordesktop'
-/** Every app a tap brings forward. Alacritty and the Claude app are known by their bundle id alone: no other hint names
- *  them. Only one of these ever reaches `open`, never a hint's own value. */
-const BUNDLES: ReadonlySet<string> = new Set([...Object.values(APP_BUNDLES), 'org.alacritty', CLAUDE_APP])
+/** Every app a tap brings forward. Alacritty is known by its bundle id alone: no other hint names it. Only one of these
+ *  ever reaches `open`, never a hint's own value. */
+const BUNDLES: ReadonlySet<string> = new Set([...Object.values(APP_BUNDLES), 'org.alacritty'])
 /** `open`'s own path, so no `open` earlier on PATH runs instead. */
 const OPEN = '/usr/bin/open'
 const APP_WEZTERM = '/Applications/WezTerm.app/Contents/MacOS/wezterm'
@@ -46,7 +45,7 @@ function paneOf(hints: Readonly<Record<string, string>>): Pane | undefined {
   if (wezterm && WEZTERM_PANE.test(wezterm)) return { app: 'wezterm', id: wezterm }
   if (orca && ORCA_HANDLE.test(orca)) return { app: 'orca', id: orca }
   // The link is the Claude app's: a session id another app's agent carries opens no link.
-  if (hints.__CFBundleIdentifier === CLAUDE_APP && session && CLAUDE_SESSION.test(session)) return { app: 'claude', id: session }
+  if (hints.__CFBundleIdentifier === APP_BUNDLES.claude && session && CLAUDE_SESSION.test(session)) return { app: 'claude', id: session }
   return undefined
 }
 

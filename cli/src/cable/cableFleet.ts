@@ -124,6 +124,9 @@ export class CableFleet {
   /** Is any connected dial asking for `turn.stats`? */
   wantsStats(): boolean { return [...this.entries.values()].some(e => e.session.wantsStats) }
 
+  /** Is any connected dial showing one app's ring? */
+  wantsApps(): boolean { return [...this.entries.values()].some(e => e.session.wantsApps) }
+
   start(): void {
     if (!this.stopped) return
     this.stopped = false

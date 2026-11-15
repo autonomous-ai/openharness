@@ -7,7 +7,7 @@ import type { OpenSessions, SessionRows } from '../../lib/sessionSearch/external
 import { type fileStamp, within } from '../../lib/sessionSearch/externals/support.js'
 import type { ExternalEngine, RunningProcess } from '../../lib/sessionSearch/externals/types.js'
 import { roundDrawable } from '../roundGlyphs.js'
-import { detectHost, hostDisplayName } from './hostDetect.js'
+import { detectApp, detectHost, hostDisplayName, UNKNOWN_APP } from './hostDetect.js'
 import type { Delivery } from './inbox.js'
 import { openTarget, type OpenTarget } from './open.js'
 import { MAX_TEXT, ORCA_HANDLE } from './orca.js'
@@ -69,6 +69,8 @@ export interface ObservedDeps {
   log(line: string): void
   /** The routes for the dial's voice and tap; absent, an agent is status only. */
   actions?: ObservedActions
+  /** The app each of these processes runs in, where its parents name one (scannedApp.ts); absent, nothing is learned. */
+  apps?(pids: readonly number[]): Promise<ReadonlyMap<number, string>>
 }
 
 export interface ObservedActions {
@@ -221,8 +223,11 @@ export class ObservedSource implements HostSource {
     if (!entry) return
     const a = entry.agent
     a.lastActivityAt = now
-    // Only a hook says where a session runs: one the open scan found is a plain terminal until its first.
+    // A hook says where a session runs: one the open scan found is not known yet until its first, unless its parent
+    // processes named its app. A hook with no hints says it too: the session runs in a terminal nothing names.
     a.host = detectHost(e.hostHints)
+    a.app = detectApp(e.hostHints)
+    delete a.appPending
     // Every event's own: a session resumed elsewhere must not be typed into the terminal it left.
     const handle = e.hostHints.ORCA_TERMINAL_HANDLE
     entry.handle = handle && ORCA_HANDLE.test(handle) ? handle : undefined
@@ -322,6 +327,8 @@ export class ObservedSource implements HostSource {
         id, engine, sessionId, cwd: init.cwd,
         name: (init.cwd && basename(init.cwd)) || engine,
         host: 'terminal',
+        app: UNKNOWN_APP,
+        appPending: true,
         state: 'idle', lastActivityAt: now, unseenDone: false, callerPid: init.pid,
       },
       since: now,
@@ -380,23 +387,52 @@ export class ObservedSource implements HostSource {
     }
     if (!open.size) return
     const rows = await this.deps.sessionRows.find(open)
-    let changed = false
+    // Asked once, as a session is first listed: its next hook is the next word on where it runs.
+    const pids = [...open].filter(([sessionId, engine]) => rows.has(sessionId) && !this.entries.has(observedAgentId(engine, sessionId)))
+      .slice(0, MAX_SESSIONS).map(([sessionId]) => owners.get(sessionId)!.pid)
+    const learning = this.deps.now()
+    const apps = await this.appsOf(pids)
+    const ms = this.deps.now() - learning
+    let listed = 0
+    let known = 0
     const now = this.deps.now()
     for (const [sessionId, engine] of open) {
       // No row, no folder to tell Harness's own from a person's (the voice router's transcript is a program's, in the data
-      // folder) or to name it by. A hook may also have told of it while the rows were read.
+      // folder) or to name it by. A hook may also have told of it while the rows or the apps were read: it said more.
       const row = rows.get(sessionId)
       if (!row || this.entries.has(observedAgentId(engine, sessionId))) continue
       const owner = owners.get(sessionId)!
       const entry = this.entry(engine, sessionId, now, { cwd: row.cwd, transcriptPath: row.transcriptPath, pid: owner.pid })
       if (!entry) continue
-      changed = true
+      listed++
+      // The app alone: its host and what a tap opens stay unknown until its first hook.
+      const app = apps.get(owner.pid)
+      if (app) {
+        entry.agent.app = app
+        delete entry.agent.appPending
+        known++
+      }
       // A turn it is in when found reads working, as checkWorking reads it, which ends it once its owner reads idle: listed
       // idle, its compaction's SessionStart (which moves no state) would give a running turn a handle to type into.
       if ((engine === 'claude' || engine === 'codex') && await this.deps.openSessions.busy(owner)
         && entry.agent.state === 'idle' && this.live(entry)) this.setState(entry, 'working', this.deps.now())
     }
-    if (changed) this.emit()
+    if (!listed) return
+    // Counts only: an app, a pid or a path would say whose session runs where.
+    this.deps.log(`[observed] scan · ${listed} found · ${known} app known · ${ms} ms`)
+    this.emit()
+  }
+
+  /** None when there is no reader or it failed: every session is still listed, not known yet. */
+  private async appsOf(pids: readonly number[]): Promise<ReadonlyMap<number, string>> {
+    if (!this.deps.apps || !pids.length) return new Map()
+    try {
+      return await this.deps.apps(pids)
+    } catch {
+      // No error text: a path in it holds the account's name.
+      this.deps.log('[observed] scan · apps not read')
+      return new Map()
+    }
   }
 
   /** Removals: ended sessions, dead or reused pids, and sessions with no generation silent for 12 h. Called every 30 s by the owner. */

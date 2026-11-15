@@ -32,6 +32,7 @@ import { askedLine, hostDisplayName, observedAgentId, ObservedSource, type Obser
 import { createOpenActions } from '../cable/hosts/open.js'
 import { createOrcaActions, orcaDeps, type OrcaDeps } from '../cable/hosts/orca.js'
 import { HostRegistry } from '../cable/hosts/registry.js'
+import { learnApps } from '../cable/hosts/scannedApp.js'
 import type { HostAgent, HostAgentState } from '../cable/hosts/types.js'
 import { PetStore } from '../cable/pets/store.js'
 import { DialLog } from '../cable/dialLog.js'
@@ -49,6 +50,7 @@ import { fileStamp, listProcesses, processAlive } from '../lib/sessionSearch/ext
 import { setVoiceRouterDeviceConnected, setVoiceRouterSessions, shutdownVoiceRouter } from '../lib/voiceRouter.js'
 import { createTally, createTierDecider, type Tier, type TierDecision, type TierInput } from '../lib/notifyTier.js'
 import { createPartGuard } from './devicesGuard.js'
+import { frontHandler, type DevicesListener, type ListenerHandler } from './devicesListener.js'
 import { FLEET_FALLBACKS, startFleet, type Fleet } from './fleet.js'
 
 export { DEVICES_REQUESTS }
@@ -88,6 +90,10 @@ export interface DevicesDeps {
   /** For this service's tests: how `orca`, and the commands a tap runs to open an app (cable/hosts/open.ts), are found and
    *  run. */
   orca?: OrcaDeps
+  /** Opens the devices' own listener with these handlers (services/devicesListener.ts). Given by the devices process
+   *  alone: inside the core's process (`HARNESSD_SERVICES=none`, Harness OS) there is none, so the core's process opens
+   *  no socket for the devices, and the dial follows no app in front there. */
+  listen?: (handlers: Readonly<Record<string, ListenerHandler>>, log: (line: string) => void) => Promise<DevicesListener | null>
 }
 
 /** ⌘K's answer while the fleet is not running: it never started, so there is no list to weigh. */
@@ -108,6 +114,8 @@ const REMIND_MS = 20_000
 /** The observed source drops an ended session 10 s after its end, by the wall clock (observed.ts); looked at a beat later,
  *  as a timer can fire a little before the wall clock says it is due. */
 const ENDED_MS = 10_500
+/** How long the cable waits for the devices' listener to open: it opens in a few milliseconds. */
+const LISTENER_WAIT_MS = 1_000
 
 /** This computer's agents outside a pane, read with ⌘P's readers (services/externalSessions.ts), and how the dial's voice
  *  and tap reach them. */
@@ -128,6 +136,7 @@ function observedSource(dataDir: string, log: (line: string) => void, actions: O
     fileStamp,
     log,
     actions,
+    apps: learnApps,
   })
 }
 
@@ -214,11 +223,14 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // The dial's voice reaches them through their mod's long poll (Claude Code's), idle or working, or typed into their Orca
   // terminal when idle, and a tap brings its app forward, on its own pane where the app has a way in that asks for no new permission
   // (docs/specs/2026-11-13-device-claude-orca.md).
+  /** The part timers still to fire: the devices stopping cancels them, as a part with no stop of its own cannot. */
+  const pending = new Set<ReturnType<typeof setTimeout>>()
   /** A timer of one part, its run guarded as a notice into that part is, and never what keeps the process up. */
   const timerIn = (name: string) => (ms: number, run: () => void): (() => void) => {
-    const timer = setTimeout(() => part.call(name, run), ms)
+    const timer = setTimeout(() => { pending.delete(timer); part.call(name, run) }, ms)
     timer.unref()
-    return () => clearTimeout(timer)
+    pending.add(timer)
+    return () => { pending.delete(timer); clearTimeout(timer) }
   }
   const inbox = new Inbox({ now: monotonic, after: timerIn('inbox') })
   const apps = deps.orca ?? orcaDeps()
@@ -321,6 +333,20 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // started; a member that fails answers "unavailable", and the host routes this computer by itself.
     fleet: () => fleet,
     pets: () => pets,
+    // The app a dial that says appFilter shows (cable/hosts/appFilter.ts). Each line is a measure, read from the log as the
+    // notify tally is: a cause, never the app or an agent.
+    appSwitched: (cause) => {
+      log(`[device] app filter: switched · ${cause}`)
+      // After the list read that found it (an app emptying is found inside one), never from within it: the new ring goes
+      // to every dial, and its agents mid-turn, which the dial has heard nothing of, are told again.
+      queueMicrotask(() => {
+        part.call('dial', () => cable.syncAgents())
+        part.call('dial', remind)
+      })
+    },
+    appPicked: () => log('[device] app filter: picker'),
+    // The settle of the app in front: a filter that throws costs the devices nothing, and the devices stopping cancels it.
+    appTimer: timerIn('dial'),
   })
   // What the dial lists with no window: this computer's harness agents, and the ones outside a pane unless switched off.
   cableHost.setRegistry(new HostRegistry(observed ? [cableHost.harness, observed] : [cableHost.harness]))
@@ -578,12 +604,16 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     timer.unref()
     endings.set(agentId, timer)
   }
-  /** Each observed agent mid-turn that the dial lists (sixteen at most of the fifty), told again: the dial forgets a turn it
-   *  hears nothing of for 25 s, and one that just came, or whose window just closed, has heard nothing of it yet. */
+  /** Each observed agent mid-turn that a dial lists (sixteen at most of the fifty in each list), told again: the dial forgets
+   *  a turn it hears nothing of for 25 s, and one that just came, whose window just closed, or whose app the dial was just
+   *  turned to, has heard nothing of it yet. Both lists a dial can hold: the one ring, and the shown app's for a dial that
+   *  says appFilter, read only while one is connected: that read can switch the app, which no older dial shows. */
   const remind = async (): Promise<void> => {
     const mid = (observed?.list() ?? []).filter(busy)
     if (!mid.length || windowOpen) return
-    const listed = new Set((await cableHost.listAgentSnapshot()).agents.map((agent) => agent.id))
+    const apps = cable.wantsApps() ? [cableHost.listAgentSnapshot({ apps: true })] : []
+    const lists = await Promise.all([cableHost.listAgentSnapshot(), ...apps])
+    const listed = new Set(lists.flatMap((list) => list.agents.map((agent) => agent.id)))
     for (const agent of mid) if (listed.has(agent.id)) tell(started(agent))
   }
   /** The scan and the reminders, for an attached dial alone. */
@@ -619,8 +649,24 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // The core's calls failed to none when its link dropped: a transcript for a poll nobody holds would wait for nothing.
   deps.onCoreGone?.(endHookCalls)
 
+  // `harness hardware watch` tells the devices' own listener which app is in front, and the dial with no window follows it
+  // once it settles (cable/hosts/appFilter.ts): the core never hears it. Another message type is another key here. A
+  // rejection's text is not logged: it can hold the socket's path, and a path the account's name.
+  const listening = deps.listen?.({ front: frontHandler((app) => part.call('dial', () => cableHost.front(app))) }, log)
+    .catch((): null => { log('[devices] listener not opened · failed'); return null })
+
+  let stopped = false
   if (deps.cableDisabled) log('[cable] disabled (CABLE_DISABLE=true) — the serial port is left alone')
-  else cable.start()
+  else if (!listening) cable.start()
+  else {
+    // After the listener has opened, so a dial that attaches finds it open: the watch tells it the app in front once, as
+    // the dial attaches. One that has not opened in a second does not keep the dial off.
+    let bound: ReturnType<typeof setTimeout> | undefined
+    void Promise.race([listening, new Promise((resolve) => { bound = setTimeout(resolve, LISTENER_WAIT_MS).unref() })]).then(() => {
+      clearTimeout(bound)
+      if (!stopped) cable.start()
+    })
+  }
   ;(deps.onExit ?? ((run) => { process.once('exit', run) }))(() => shutdownVoiceRouter())
 
   /** A card bound for the devices, translated once for the cable. */
@@ -749,9 +795,15 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     inboxGone: (pollId) => inboxCalls?.inboxGone(pollId),
     // The serial ports first: a port left held makes esptool fail in a way that reads like dead hardware.
     stop: async () => {
+      // A cable still waiting on the listener never starts.
+      stopped = true
+      // The listener before anything, once it has opened: no front reaches a stopped cable or sets a timer after the
+      // timers below are cleared.
+      await (await listening)?.close()
       for (const agentId of [...replies.keys()]) endReplies(agentId, false)   // no timer may fire into a stopped cable
       for (const timer of timers) clearInterval(timer)
       for (const timer of endings.values()) clearTimeout(timer)
+      for (const timer of pending) clearTimeout(timer)
       endHookCalls()
       dialAttached(false)
       await cable.stop()

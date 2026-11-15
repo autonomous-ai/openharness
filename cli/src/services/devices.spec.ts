@@ -5,12 +5,15 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import type { CableHostWiring, DaemonCableHost } from '../cable/cableHost.js'
+import { AppFilter, FRONT_SETTLE_MS } from '../cable/hosts/appFilter.js'
 import { observedAgentId } from '../cable/hosts/observed.js'
+import { AppRings } from '../cable/hosts/select.js'
 import { env } from '../config/env.js'
 import { routeVoiceTask } from '../lib/voiceRouter.js'
 import { DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, ServiceUnavailableError, type CoreApi, type CorePorts, type DevicesPort } from '../core/api.js'
 import type { ObservedAsked, ObservedHookEvent } from '../core/observedHook.js'
 import { createServiceHost } from '../core/serviceHost.js'
+import { devicesListenerPath } from '../devices/listenerPath.js'
 import { STOP_HOOK_GRACE_MS } from '../core/turns/turnHooks.js'
 import type { FleetEvent } from '../cable/machineFleet.js'
 import { claudeProjectsRoots, codexHomeRoots } from '../lib/engineHomes.js'
@@ -18,13 +21,14 @@ import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import type { Fleet, FleetDeps } from './fleet.js'
 import type { DevicesDeps } from './devices.js'
+import { FRONT_MAX_BYTES, FRONT_PER_SECOND, REFUSED, type DevicesListener, type ListenerHandler } from './devicesListener.js'
 
 const seen = vi.hoisted(() => ({
   host: null as unknown as CableHostWiring,
   dial: null as unknown as { onDialStatus(status: unknown): void },
   cable: null as unknown as { args: unknown[]; calls: Array<[string, unknown[]]>; setSettings: (id: string, patch: unknown) => Promise<{ ok: boolean; error?: string }> },
   bridges: {} as Record<string, { wiring: Record<string, (...args: unknown[]) => unknown>; calls: Array<[string, unknown[]]> }>,
-  fleet: null as null | { deps: FleetDeps; events: ((event: FleetEvent) => void) | null; fail: boolean },
+  fleet: null as null | { deps: FleetDeps; events: ((event: FleetEvent) => void) | null; fail: boolean; calls: Array<[string, unknown[]]>; answers: Record<string, (...args: never[]) => unknown> },
   voice: { sessions: vi.fn(), connected: vi.fn(), shutdown: vi.fn() },
 }))
 
@@ -66,6 +70,8 @@ vi.mock('../cable/cableFleet.js', async (real) => {
     connected = true
     get isConnected() { return this.connected }
     wantsStats() { return this.wants }
+    apps = true
+    wantsApps() { return this.apps }
     petDial = () => ({ supported: false, held: [] as string[], sending: null })
     setSettings = vi.fn(async (id: string, _patch: unknown) => (id === 'usb' ? { ok: true } : { ok: false, error: 'That device is not plugged into this computer.' }))
   }
@@ -101,19 +107,23 @@ vi.mock('./fleet.js', async (real) => {
   return {
     ...actual,
     startFleet: (_core: CoreApi, deps: FleetDeps) => {
-      const state = { deps, events: null as ((event: FleetEvent) => void) | null, fail: false }
+      const state = { deps, events: null as ((event: FleetEvent) => void) | null, fail: false, calls: [] as Array<[string, unknown[]]>,
+        answers: {} as Record<string, (...args: never[]) => unknown> }
       seen.fleet = state
+      const member = (key: string | symbol): ((...args: never[]) => unknown) => {
+        if (typeof key === 'string' && Object.hasOwn(state.answers, key)) return state.answers[key]
+        if (key === 'onEvent') return (listener: (event: FleetEvent) => void) => { state.events = listener; return () => {} }
+        if (key === 'routeTask') return async (text: string) => ({ agentId: 'a1', machineId: 'm1', name: 'api', confidence: 1, reason: text, candidates: [], weighed: 1, machines: 1, via: 'model' })
+        if (key === 'routeSend') return (agentId: string) => agentId === 'far' ? { ok: false, machine: 'mac-mini', reason: 'the last request to it did not come back' }
+          : agentId === 'nameless' ? { ok: false, machine: '', reason: 'no such agent' } : { ok: true }
+        if (key === 'knows') return () => { if (state.fail) throw new Error('lost'); return true }
+        if (key === 'stop') return vi.fn()
+        // Any other routing member: unanswered here, and failing once the test says the fleet fails.
+        return () => { if (state.fail) throw new Error('lost') }
+      }
+      // Every call the devices make on the fleet, recorded: what crosses to the owner's other machines is read by a spec.
       const fleet = new Proxy({} as Fleet, {
-        get: (_t, key) => {
-          if (key === 'onEvent') return (listener: (event: FleetEvent) => void) => { state.events = listener; return () => {} }
-          if (key === 'routeTask') return async (text: string) => ({ agentId: 'a1', machineId: 'm1', name: 'api', confidence: 1, reason: text, candidates: [], weighed: 1, machines: 1, via: 'model' })
-          if (key === 'routeSend') return (agentId: string) => agentId === 'far' ? { ok: false, machine: 'mac-mini', reason: 'the last request to it did not come back' }
-            : agentId === 'nameless' ? { ok: false, machine: '', reason: 'no such agent' } : { ok: true }
-          if (key === 'knows') return () => { if (state.fail) throw new Error('lost'); return true }
-          if (key === 'stop') return vi.fn()
-          // Any other routing member: unanswered here, and failing once the test says the fleet fails.
-          return () => { if (state.fail) throw new Error('lost') }
-        },
+        get: (_t, key) => (...args: never[]) => { state.calls.push([String(key), args]); return member(key)(...args) },
       })
       return { fleet, router: null }
     },
@@ -136,6 +146,7 @@ const readers = vi.hoisted(() => ({
   working: new Map<string, boolean>(),
   scans: 0,
   answer: vi.fn(async (..._args: unknown[]): Promise<string | undefined> => undefined),
+  apps: vi.fn(async (_pids: readonly number[]) => new Map<number, string>()),
 }))
 vi.mock('../lib/sessionSearch/external.js', async (real) => ({
   ...await real<typeof import('../lib/sessionSearch/external.js')>(),
@@ -160,6 +171,8 @@ vi.mock('../lib/sessionSearch/externals/support.js', async (real) => ({
   processAlive: () => true,
   fileStamp: async () => null,
 }))
+// Which app each session found runs in: from the made-up owners above, never this machine's processes.
+vi.mock('../cable/hosts/scannedApp.js', () => ({ learnApps: readers.apps }))
 vi.mock('../cable/hosts/lastAnswer.js', async (real) => ({
   ...await real<typeof import('../cable/hosts/lastAnswer.js')>(),
   readLastAnswer: readers.answer,
@@ -198,7 +211,7 @@ afterEach(() => {
   vi.unstubAllEnvs()
 })
 
-function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; orca?: DevicesDeps['orca'] } = {}) {
+function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; orca?: DevicesDeps['orca']; listen?: DevicesDeps['listen'] } = {}) {
   const core = over.core ?? fakeCore({ dataDir })
   const ports: CorePorts = emptyPorts()
   const onExit = vi.fn()
@@ -218,11 +231,25 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
     log: (line) => { logs.push(line) },
     onExit,
     onCoreGone: (run) => { gone.push(run) },
+    listen: over.listen,
   })
   return { core, ports, port: ports.devices as DevicesPort, requests, onExit, gone }
 }
 
 const calls = (name: string) => seen.cable.calls.filter(([called]) => called === name).map(([, args]) => args)
+
+/** The listener the devices process opens (devicesProcess.ts), stood in for: what it was handed, its close, and a front
+ *  through its handler as `harness hardware watch` sends one. */
+function fakeListener() {
+  const given: Array<{ handlers: Readonly<Record<string, ListenerHandler>>; log: (line: string) => void }> = []
+  const close = vi.fn(async () => {})
+  const listen = vi.fn(async (handlers: Readonly<Record<string, ListenerHandler>>, log: (line: string) => void): Promise<DevicesListener | null> => {
+    given.push({ handlers, log })
+    return { close }
+  })
+  const front = (app: unknown): unknown => given[0].handlers.front.handle({ type: 'front', app }, new AbortController().signal)
+  return { given, close, listen, front }
+}
 
 describe('the devices, as the core starts them', () => {
   it('fill the devices port, start the dial, and stop the voice router\'s worker with the process', () => {
@@ -277,6 +304,85 @@ describe('the devices, as the core starts them', () => {
     startDevices(fakeCore({ dataDir }), emptyPorts(), { logsDir: dataDir, cableDisabled: true })
     expect(log).toHaveBeenCalledWith('[cable] disabled (CABLE_DISABLE=true) — the serial port is left alone')
     expect(once).toHaveBeenCalledWith('exit', expect.any(Function))
+  })
+})
+
+describe('the devices\' own listener (services/devicesListener.ts)', () => {
+  it('the devices open their listener once, with a front handler of 10 a second and 64 bytes', () => {
+    const listener = fakeListener()
+    start({ listen: listener.listen })
+    expect(listener.listen).toHaveBeenCalledTimes(1)
+    const [{ handlers, log }] = listener.given
+    expect(Object.keys(handlers)).toEqual(['front'])
+    expect(handlers.front).toMatchObject({ maxBytes: FRONT_MAX_BYTES, perSecond: FRONT_PER_SECOND })
+    expect([FRONT_MAX_BYTES, FRONT_PER_SECOND]).toEqual([64, 10])
+    // The listener's own front handler: a name that is no app id is refused there.
+    expect(listener.front('Ghostty')).toBe(REFUSED)
+    // What the listener says goes to the devices' own log.
+    log('[devices] listener open')
+    expect(logs).toEqual(['[devices] listener open'])
+  })
+
+  it('the listener is closed when the devices stop, before the cable is', async () => {
+    const listener = fakeListener()
+    const { port } = start({ listen: listener.listen })
+    let cableStopsAtClose: number | undefined
+    listener.close.mockImplementation(async () => { cableStopsAtClose = calls('stop').length })
+    await port.stop()
+    expect(listener.close).toHaveBeenCalledTimes(1)
+    expect(cableStopsAtClose).toBe(0)
+    expect(calls('stop')).toHaveLength(1)
+  })
+
+  it('stopping while the listener is still opening closes it once it has opened, and the cable never starts', async () => {
+    let opened!: (listener: DevicesListener) => void
+    const close = vi.fn(async () => {})
+    const { port } = start({ listen: () => new Promise((resolve) => { opened = resolve }) })
+    const stopping = port.stop()
+    await new Promise((resolve) => setImmediate(resolve))
+    // The cable waits behind the listener: a front may still arrive until it is closed.
+    expect(calls('stop')).toEqual([])
+    opened({ close })
+    await stopping
+    expect(close).toHaveBeenCalledTimes(1)
+    expect(calls('stop')).toHaveLength(1)
+    expect(calls('start')).toEqual([])
+  })
+
+  it('the cable starts after the listener opened', async () => {
+    let opened!: (listener: DevicesListener) => void
+    start({ listen: () => new Promise((resolve) => { opened = resolve }) })
+    await new Promise((resolve) => setImmediate(resolve))
+    // A dial attached means a listener open: the watch tells it the app in front as the dial attaches.
+    expect(calls('start')).toEqual([])
+    opened({ close: async () => {} })
+    await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
+  })
+
+  it('a listener that has not opened in a second does not keep the cable off, and opening later starts it no second time', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    let opened!: (listener: DevicesListener) => void
+    start({ listen: () => new Promise((resolve) => { opened = resolve }) })
+    await vi.advanceTimersByTimeAsync(999)
+    expect(calls('start')).toEqual([])
+    await vi.advanceTimersByTimeAsync(1)
+    expect(calls('start')).toHaveLength(1)
+    opened({ close: async () => {} })
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(calls('start')).toHaveLength(1)
+  })
+
+  it('a listener that cannot open is one log line, and the devices run on', async () => {
+    const { port } = start({ listen: async () => { throw new Error('listen EACCES /Users/someone/.harness/devices.sock') } })
+    await vi.waitFor(() => expect(logs).toEqual(['[devices] listener not opened · failed']))
+    expect(calls('start')).toHaveLength(1)
+    await port.stop()
+    expect(calls('stop')).toHaveLength(1)
+    // Nothing opened (Windows, a folder not private): the listener said why, and the devices add no line of their own.
+    logs.length = 0
+    const nothing = start({ listen: async () => null })
+    await nothing.port.stop()
+    expect(logs).toEqual([])
   })
 })
 
@@ -1138,6 +1244,18 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     expect(readers.scans).toBe(2)
   })
 
+  it('the scan asks which app each session it found runs in, by pid', async () => {
+    vi.useFakeTimers()
+    const { port } = start({ faults: ['fleet'] })
+    readers.known.set('sess-9', 'terminal')
+    readers.owners.set('sess-9', { engine: 'codex', pid: 77 })
+    readers.rows.set('sess-9', { cwd: '/work/web', transcriptPath: null })
+    readers.working.set('sess-9', false)
+    seen.host.watching!(true)
+    await vi.waitFor(async () => expect((await machineList(port)).agents).toHaveLength(1))
+    expect(readers.apps.mock.calls).toEqual([[[77]]])
+  })
+
   it('removes an ended session within 11 s, and ends a Codex turn within 3 s of its process going quiet', async () => {
     vi.useFakeTimers()
     const { port } = start({ faults: ['fleet'] })
@@ -1503,6 +1621,225 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     if (carried(printed.mock.calls)) leaks.push('console.log')
     if (logs.some((line) => line.includes('secret-target'))) leaks.push('log')
     expect(leaks).toEqual([])
+  })
+
+  describe('the app a dial that says appFilter shows (cable/hosts/appFilter.ts)', () => {
+    /** A Claude Code session in an app, its hook naming the app as the terminal's own variable does. */
+    const inApp = (port: DevicesPort, sessionId: string, app: string, event: ObservedHookEvent['event'] = 'session-start') =>
+      port.observed(hook(event, { sessionId, hostHints: { TERM_PROGRAM: app } }))
+    /** Ghostty 2, VS Code 1: Ghostty is shown. */
+    const twoApps = async (port: DevicesPort) => {
+      inApp(port, 'g-1', 'ghostty')
+      inApp(port, 'g-2', 'ghostty')
+      inApp(port, 'v-1', 'vscode')
+      expect((await appList(port))?.shown).toBe('ghostty')
+    }
+    /** The list a dial that says appFilter reads with no window. */
+    const appList = async (port: DevicesPort) => { port.swarms(null); return (await host().listAgentSnapshot({ apps: true })).apps }
+    const switches = () => logs.filter((line) => line.includes('app filter: switched'))
+
+    it('a switch logs "[device] app filter: switched · pick" and no app id or name', async () => {
+      const { port } = start({ faults: ['fleet'] })
+      await twoApps(port)
+      expect(host().pickApp('vscode')).toBe('switched')
+      await vi.waitFor(() => expect(switches()).toEqual(['[device] app filter: switched · pick']))
+      // The whole log: which app is shown is never written down.
+      expect(logs.filter((line) => /vscode|VS Code|ghostty|Ghostty/.test(line))).toEqual([])
+    })
+
+    it('a switch pushes the list to the dials at once', async () => {
+      const { port } = start({ faults: ['fleet'] })
+      await twoApps(port)
+      const pushed = calls('syncAgents').length
+      host().pickApp('vscode')
+      // Every dial here, not the picking one alone: a pick on one turns every dial that says appFilter.
+      await vi.waitFor(() => expect(calls('syncAgents').slice(pushed)).toEqual([[]]))
+    })
+
+    it('after a switch each mid-turn agent of the new ring is told again', async () => {
+      const { port } = start({ faults: ['fleet'] })
+      // Sixteen in Orca fill the one ring an older dial holds; the two in Ghostty, come later, are only in Ghostty's.
+      const orca = Array.from({ length: 16 }, (_, i) => { port.observed(hook('turn-start', { sessionId: `o-${i}` })); return observedAgentId('claude', `o-${i}`) })
+      await machineList(port)
+      inApp(port, 'g-1', 'ghostty', 'turn-start')
+      inApp(port, 'g-2', 'ghostty', 'turn-start')
+      const ghostty = [observedAgentId('claude', 'g-1'), observedAgentId('claude', 'g-2')]
+      expect((await machineList(port)).agents.map((a) => a.id)).toEqual(orca)
+      expect((await appList(port))?.shown).toBe('orca')
+      const told = calls('turnStarted').length
+      host().pickApp('ghostty')
+      // The dial was just turned to a ring whose agents it has heard nothing of: each is told its turn, as are the others.
+      await vi.waitFor(() => expect(calls('turnStarted').slice(told).map(([id]) => id).sort()).toEqual([...orca, ...ghostty].sort()))
+    })
+
+    it('the picker\'s use is one log line with no app in it', async () => {
+      const { port } = start({ faults: ['fleet'] })
+      await twoApps(port)
+      // Done on the app shown, a tap on another, one whose agents ended under the finger: each a use of the picker.
+      expect([host().pickApp('ghostty'), host().pickApp('vscode'), host().pickApp('cursor')]).toEqual(['same', 'switched', 'ignored'])
+      // A tapped notice turning the dial is no use of the picker.
+      host().pickApp('ghostty', 'notice')
+      expect(logs.filter((line) => line.includes('app filter: picker'))).toEqual(Array(3).fill('[device] app filter: picker'))
+    })
+
+    it('the settle timer is guarded: a filter that throws is logged and the devices keep running', async () => {
+      vi.useFakeTimers()
+      const { port } = start({ faults: ['fleet'] })
+      await twoApps(port)
+      vi.spyOn(AppRings.prototype, 'counts').mockImplementationOnce(() => { throw new Error('rings unreadable') })
+      host().front('vscode')
+      await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+      expect(logs).toContain('[devices] dial failed · rings unreadable')
+      // The next app in front settles as before.
+      host().front('ghostty')
+      host().front('vscode')
+      await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+      expect(switches()).toEqual(['[device] app filter: switched · front'])
+    })
+
+    it('the timer is cancelled when the service stops', async () => {
+      vi.useFakeTimers()
+      const { port } = start({ faults: ['fleet'] })
+      await twoApps(port)
+      const timers = vi.getTimerCount()
+      host().front('vscode')
+      expect(vi.getTimerCount()).toBe(timers + 1)
+      await port.stop()
+      expect(vi.getTimerCount()).toBe(0)
+    })
+
+    it('with no listen given (the devices inside the core\'s process) nothing is opened, and a pick still turns the dial', async () => {
+      // As core/main.ts starts the devices in the core's own process (HARNESSD_SERVICES=none, Harness OS): no listen.
+      const ports = emptyPorts()
+      createServiceHost(ports, { log: () => {} }).start('devices', (core, started) => startDevices(core, started, {
+        logsDir: join(dataDir, 'logs'), cableDisabled: true, faults: new Set(['fleet']), log: (line) => { logs.push(line) }, onExit: vi.fn(), orca,
+      }), fakeCore({ dataDir }), DEVICES_FALLBACKS, DEVICES_REQUESTS)
+      const port = ports.devices!
+      await twoApps(port)
+      expect(host().pickApp('vscode')).toBe('switched')
+      expect((await appList(port))?.shown).toBe('vscode')
+      const socket = devicesListenerPath(dataDir)
+      expect(socket !== null && existsSync(socket)).toBe(false)
+      expect(logs.filter((line) => line.includes('listener'))).toEqual([])
+      await port.stop()
+    })
+
+    it('a front through the listener\'s handler becomes the shown app 1 s later, and the dial is pushed apps', async () => {
+      vi.useFakeTimers()
+      const listener = fakeListener()
+      const { port } = start({ faults: ['fleet'], listen: listener.listen })
+      await twoApps(port)
+      const pushed = calls('syncAgents').length
+      // Taken: the listener answers 204.
+      expect(listener.front('vscode')).toBeUndefined()
+      await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS - 1)
+      expect(calls('syncAgents')).toHaveLength(pushed)
+      expect((await host().listAgentSnapshot({ apps: true })).apps?.shown).toBe('ghostty')
+      await vi.advanceTimersByTimeAsync(1)
+      // Every dial is pushed the list, and a dial that says appFilter its apps with it.
+      expect(calls('syncAgents')).toHaveLength(pushed + 1)
+      expect((await host().listAgentSnapshot({ apps: true })).apps?.shown).toBe('vscode')
+      expect(switches()).toEqual(['[device] app filter: switched · front'])
+    })
+
+    it('a front through the handler with a window open moves nothing on the dial, and is shown when the window closes', async () => {
+      vi.useFakeTimers()
+      const listener = fakeListener()
+      const { port } = start({ faults: ['fleet'], listen: listener.listen })
+      await twoApps(port)
+      port.swarms({ active: 't1', swarms: [], tiles: [] })
+      const tab = await host().listAgentSnapshot({ apps: true })
+      listener.front('vscode')
+      await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+      // The dial holds the window's tab, with no apps, as before.
+      expect(tab.apps).toBeUndefined()
+      expect(await host().listAgentSnapshot({ apps: true })).toEqual(tab)
+      // Followed meanwhile: once the window closes, the dial shows the app that settled in front.
+      port.swarms(null)
+      expect((await host().listAgentSnapshot({ apps: true })).apps?.shown).toBe('vscode')
+    })
+
+    it('across a run with fronts through the handler, nothing but the dial\'s own frames holds the app in front', async () => {
+      vi.useFakeTimers()
+      const core = fakeCore({ dataDir })
+      const listener = fakeListener()
+      // The fleet running: what goes to the owner's other machines is read too.
+      const { port } = start({ core, listen: listener.listen })
+      // A fleet of this computer alone, with no Harness agent on it.
+      seen.fleet!.answers = { listAgentsFlat: async () => [], activityTimes: async () => new Map(), agentTotal: () => 0 }
+      seen.host.watching!(true)
+      const fetched = vi.spyOn(globalThis, 'fetch')
+      const printed = vi.spyOn(console, 'log')
+      await twoApps(port)
+      for (const app of ['ghostty', 'none', 'vscode']) {
+        expect(listener.front(app)).toBeUndefined()
+        await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+      }
+      // The dial's own frame: the list it picks from names the app shown.
+      expect((await host().listAgentSnapshot({ apps: true })).apps).toMatchObject({ shown: 'vscode', apps: expect.arrayContaining([expect.objectContaining({ id: 'vscode', name: 'VS Code' })]) })
+
+      // Every call the devices made on the core's API (the windows and the gateway's lane among them), the window bridges,
+      // the fleet, the backend and the console.
+      const made: unknown[][] = []
+      const walk = (value: unknown): void => {
+        if (vi.isMockFunction(value)) { made.push(...value.mock.calls); return }
+        if (value && typeof value === 'object') for (const inner of Object.values(value)) walk(inner)
+      }
+      walk(core)
+      for (const bridge of Object.values(seen.bridges)) made.push(...bridge.calls.map(([, args]) => args))
+      made.push(...seen.fleet!.calls.map(([, args]) => args), ...fetched.mock.calls, ...printed.mock.calls)
+      expect(made.length).toBeGreaterThan(0)
+      const front = /ghostty|vscode|VS Code/i
+      expect(made.filter((args) => front.test(JSON.stringify(args)))).toEqual([])
+      expect(made.filter((args) => args.includes('none'))).toEqual([])
+      expect(logs.filter((line) => front.test(line))).toEqual([])
+    })
+
+    it('a cable host that throws on a front is logged as the dial\'s failure, and the handler returns as taken', async () => {
+      const listener = fakeListener()
+      start({ faults: ['fleet'], listen: listener.listen })
+      vi.spyOn(host(), 'front').mockImplementation(() => { throw new Error('rings unreadable') })
+      expect(listener.front('vscode')).toBeUndefined()
+      expect(logs).toContain('[devices] dial failed · rings unreadable')
+    })
+
+    it('an app that empties as a dial reads the list is pushed after that read, never from inside it', async () => {
+      const { port } = start({ faults: ['fleet'] })
+      await twoApps(port)
+      host().pickApp('vscode')
+      // VS Code's one session resumed in Ghostty: the next read finds the app shown empty, and shows another.
+      inApp(port, 'v-1', 'ghostty')
+      await vi.waitFor(() => expect(switches()).toHaveLength(1))
+      const pushed = calls('syncAgents').length
+      const shown = AppFilter.prototype.shown
+      const insideRead: number[] = []
+      vi.spyOn(AppFilter.prototype, 'shown').mockImplementation(function (this: AppFilter) {
+        const app = shown.call(this)
+        insideRead.push(calls('syncAgents').length - pushed)
+        return app
+      })
+      expect((await host().listAgentSnapshot({ apps: true })).apps?.shown).toBe('ghostty')
+      expect(insideRead).toEqual([0])
+      await vi.waitFor(() => expect(switches()).toEqual(['[device] app filter: switched · pick', '[device] app filter: switched · empty']))
+      await vi.waitFor(() => expect(calls('syncAgents').length - pushed).toBe(1))
+    })
+
+    it('with only an older dial attached, the reminder reads the one ring: an app that empties switches nothing', async () => {
+      vi.useFakeTimers()
+      const { port } = start({ faults: ['fleet'] })
+      await twoApps(port)
+      expect(host().pickApp('vscode')).toBe('switched')
+      // A dial that never said appFilter shows no app: nobody reads the shown app's list.
+      ;(seen.cable as unknown as { apps: boolean }).apps = false
+      seen.host.watching!(true)
+      // VS Code's one session resumes in Ghostty, mid-turn: the app shown is empty, and the reminders come.
+      inApp(port, 'v-1', 'ghostty', 'turn-start')
+      await vi.advanceTimersByTimeAsync(0)
+      const pushed = calls('syncAgents').length
+      await vi.advanceTimersByTimeAsync(20_000)
+      expect(switches()).toEqual(['[device] app filter: switched · pick'])
+      expect(calls('syncAgents')).toHaveLength(pushed)
+    })
   })
 })
 

@@ -10,12 +10,39 @@ export interface HostAgent {
   name: string
   /** 'harness' | 'orca' | 'herdr' | 'ghostty' | 'iterm' | 'vscode' | 'terminal' | ... */
   host: string
+  /** The outermost app, one of `APP_IDS`: the dial's page the agent is on. The unknown app's while `appPending`. */
+  app: string
+  /**
+   * Nothing has said where it runs yet: the open scan found it and no hook has told of it. It sits on the unknown app's
+   * page, so it can be reached, but is not known to be in that app, so it counts for nothing in the dial's default.
+   */
+  appPending?: true
   state: HostAgentState
   lastActivityAt: number
   /** The end of the last turn, cut to the card's length. */
   lastAnswer?: string
   unseenDone: boolean
 }
+
+/** One app in the dial's list: its agents, and how many of them wait on the person. */
+export interface AppEntry {
+  id: string
+  name: string
+  count: number
+  waiting: number
+}
+
+/** The apps the dial can show; `shown` is '' with no agents. */
+export interface AppList {
+  shown: string
+  apps: AppEntry[]
+}
+
+/** What a pick on the dial did. */
+export type AppPick = 'switched' | 'same' | 'ignored'
+
+/** Why the shown app changed. */
+export type SwitchCause = 'front' | 'pick' | 'empty' | 'notice'
 
 export interface Caps {
   status: boolean

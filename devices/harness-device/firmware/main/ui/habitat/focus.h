@@ -14,6 +14,8 @@ void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, u
  * lines that teach the dial, none that invite talking. A setting rather than a face field: only Focus reads it.
  */
 void ht_focus_set_voice(bool can_talk);
+// Whether a hold on the next face opens APPS rather than TABS: the relaxing face's hint then says "Hold for apps".
+void ht_focus_set_hold_apps(bool apps);
 
 /* One frame, no motion. The home face's only motion is the engine's pet, which runs on clock_ms, not on
  * these frames; the other thing that animates is the compositor's own shimmer. */
