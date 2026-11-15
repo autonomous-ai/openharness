@@ -57,3 +57,22 @@ the backend's ordinary service router remains the only dispatch path. No command
 5. Coordinate a quiet, fixed-order performance comparison with root; record source/bundle hashes and raw results.
 
 Baseline: `db2d74421b686784b89b93e6fa5c3968a04f7a1c`. Implementation and evidence are pending.
+
+## Shared transport bound, reviewed before implementation
+
+Inspection found `serviceLinks` limits only requests queued for a restarting service: first startup and a connected
+but hung service can retain unlimited requests. Moving admission into a service must not expose unbounded buffering
+in core. Apply the existing 100-request bound per service to every outstanding transport request, including first
+startup, restart and connected waits. Track the count beside the existing pending map, so admission is constant time
+and does not scan another service's work. Overflow takes the existing unavailable path; a successful answer, timeout,
+connection close or failed send releases the transport slot. This is a transport bound for every optional service,
+not proof that a timed-out operation has stopped. The device service's eight/two admission separately remains held
+until actual work settles. No new queue, command-specific core state or wire error is introduced.
+
+This exposes a real timing difference while the devices start: previously a third owner command on one connection
+received `BUSY` immediately in core. Now at most 100 service requests wait in the shared transport, and owner admission
+is applied when devices receives them. The third command may get `BUSY` then; if earlier operations already settled
+between deliveries, it may run sequentially instead. Preserving queue-residence admission would retain feature logic
+in core or add another feature queue outside it. This difference is explicit for root's architecture disposition;
+successful wire replies, eight/two concurrent execution, and actual-settlement bounds are unchanged. A disconnected
+request queued for startup is never delivered. Bounds and cancellation apply to both callers of the shared adapter.
