@@ -12,7 +12,7 @@ dispatch remain the core's authority.
 Add an on-demand supervised `engineSetup` process, separate from the edge host: a blocked filesystem or probe
 must not stall unrelated edge services. It starts only when needed, with the existing host/want transport and
 `askedSince: 0` convention of engine workers (older cores run inline and never ask). This introduces no setting,
-dependency or protocol message. The service owns discovery/probe caches and limits,
+dependency or protocol message. The service owns probe caches and limits,
 the existing installation controllers and their helper processes. It uses the existing authenticated service
 transport, request deadlines and supervisor. A worker crash, hang, malformed answer or connection replacement
 returns the existing native-launch hold; it never loads an inline implementation as failure recovery.
@@ -37,8 +37,7 @@ The core's final launch authority and executable/hook proof checks are unchanged
 
 The worker binds commit to the immutable claim, engine, original request, connection generation and unexpired
 preparation. It accepts one commit; duplicate or lost acknowledgements reconcile through the existing durable
-installation journal rather than reinstall. A replaced worker cannot accept an old preparation. Pending authorization
-is bounded and expires; disconnect resolves it as refused. Prepared claims that never receive commit remain inert
+installation journal rather than reinstall. A replaced worker cannot accept an old preparation. Pending authorization is bounded and expires; disconnect resolves it as refused. Expiry and disconnect revoke commit but keep their admission slots until the underlying ensure operation actually settles; a delayed filesystem operation cannot admit another batch. Commit checks the expiry directly even when its timer has been delayed. Prepared claims that never receive commit remain inert
 and can be settled by the existing cancellation recovery. The existing POSIX outside dispatch witness remains the
 once-only authority, including when an installation finishes after its worker is gone.
 
@@ -78,8 +77,7 @@ matched measurements before any performance claim.
 ## Design
 
 - **Growth:** Keep the POSIX 128-record journal and 256 KiB record cap. Do not delete or rewrite existing immutable
-  claims. Windows keeps one current record and log per engine, replacing the log on the next authorized attempt; its existing installer output file has no byte cap. The helper reads at most 64 KiB of that log when settling the result. Pending preparations are capped at eight, expire within
-  the service request deadline and are cleared on disconnect. Core's existing trusted selection keeps its ten-second environment cache as a stated residual; help keeps 32 successful entries for one minute in setup. Probe slots remain capped at eight and belong to actual
+  claims. Windows keeps one current record and log per engine, replacing the log on the next authorized attempt; its existing installer output file has no byte cap. The helper reads at most 64 KiB of that log when settling the result. Pending preparations are capped at eight; authorization expires within the service request deadline and is revoked on disconnect. Admission is released only after actual operation settlement, including across reconnects. A separate eight-request cap bounds every private handler that retains a promise, including status/download/version reads and duplicate commits waiting on one result; it also survives disconnect until those handlers settle. Saturation returns named SETUP_BUSY without changing once-only installation dispatch. Core's existing trusted selection keeps its ten-second environment cache as a stated residual; help keeps 32 successful entries for one minute in setup. Probe slots remain capped at eight and belong to actual
   child settlement. No new cache or pending state is added to core.
 - **Concurrency:** Preserve existing immutable claim, dispatch witness and result publication rules. Bind each
   preparation to one request and service connection generation; a repeated commit cannot cause a second dispatch.
@@ -138,6 +136,6 @@ matched measurements before any performance claim.
 ## Residual work
 
 This task does not complete package 8: hook/plugin file writers, hook installation, folder trust and their related
-proof/configuration implementations remain for the next original tasks. Trusted executable/location selection and its bounded shell capture also remain in core: independently authorizing live rc-derived locations cannot be replaced by trusting a setup reply. The separately owned async-probes work removes blocking shell/PATH work without changing this authority; root integrates it before final gates. Launch contracts, source identity,
+proof/configuration implementations remain for the next original tasks. Trusted executable/location selection and its bounded shell capture also remain in core: independently authorizing live rc-derived locations cannot be replaced by trusting a setup reply. The separately owned async-probes work removes blocking shell/PATH work without changing this authority; root integrates it before final gates. Shared installation string builders in lib/engineLaunch.ts remain in the import closure for standalone shell launching and legacy launch-script contracts; prepared native launches bypass them. This step moves the actual installation controller/journal/dispatch runtime, not every line of shared installation script construction. Launch contracts, source identity,
 restart/restore cancellation and process ownership stay core responsibilities. A file moving folders alone is not
 evidence of extraction: the default runtime import closure and failure behavior must demonstrate it.
