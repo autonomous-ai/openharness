@@ -38,7 +38,6 @@ function setup(over: Partial<DiscoveryDeps> = {}) {
       setPermissionMode: vi.fn(),
       setCodexHome: vi.fn(),
       setHermesHome: vi.fn(),
-      setDsh: vi.fn(),
       byAgent: vi.fn((agentId: string) => rows.get(agentId)),
       setLaunch: vi.fn(),
       setActive: vi.fn(),
@@ -135,7 +134,7 @@ describe('discovery', () => {
   describe('a row\'s own process', () => {
     it('updates the row from the live process, filling only what it does not know', async () => {
       const run = setup()
-      const observed = seen({ args: 'claude --dangerously-skip-permissions', codexHome: '/codex', hermesHome: '/hermes', dsh: 'blender' } as Partial<DiscoveredTerminalAgent>)
+      const observed = seen({ args: 'claude --dangerously-skip-permissions', codexHome: '/codex', hermesHome: '/hermes' } as Partial<DiscoveredTerminalAgent>)
       run.rows.set('a1', row({ dsh: 'blender' } as Partial<RegisteredSession>))
       await run.handlers.onObserved(observed, row())
       expect(run.deps.registry.updateRuntimes).toHaveBeenCalledWith('a1', observed.runtimes, 'tmux:%0')
@@ -145,13 +144,12 @@ describe('discovery', () => {
       expect(vi.mocked(run.deps.registry.setPermissionMode).mock.calls).toEqual(mode ? [['a1', mode]] : [])
       expect(run.deps.registry.setCodexHome).toHaveBeenCalledWith('a1', '/codex')
       expect(run.deps.registry.setHermesHome).toHaveBeenCalledWith('a1', '/hermes')
-      expect(run.deps.registry.setDsh).toHaveBeenCalledWith('a1', 'blender')
       expect(run.deps.attachDsh).toHaveBeenCalled()
       expect(run.deps.bindObservedAgent).toHaveBeenCalledWith(observed)
       // A row that knows them already keeps its own.
       const known = setup()
-      await known.handlers.onObserved(observed, row({ permissionMode: 'plan', codexHome: '/mine', hermesHome: '/mine', dsh: 'mine' } as Partial<RegisteredSession>))
-      for (const setter of ['setPermissionMode', 'setCodexHome', 'setHermesHome', 'setDsh'] as const) {
+      await known.handlers.onObserved(observed, row({ permissionMode: 'plan', codexHome: '/mine', hermesHome: '/mine' } as Partial<RegisteredSession>))
+      for (const setter of ['setPermissionMode', 'setCodexHome', 'setHermesHome'] as const) {
         expect(known.deps.registry[setter], setter).not.toHaveBeenCalled()
       }
     })

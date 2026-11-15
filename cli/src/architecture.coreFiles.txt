@@ -160,7 +160,6 @@ dsh/installed.ts
 dsh/launch.ts
 dsh/launchWire.ts
 dsh/manifest.ts
-dsh/probe.ts
 engines/agy/contract.ts
 engines/amp/contract.ts
 engines/claude/backgroundCommands.ts

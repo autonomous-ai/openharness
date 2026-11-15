@@ -263,9 +263,8 @@ export interface RegisteredSession {
   /**
    * The domain-specific harness this agent was created as (`autonomous/copper`), or null for a plain
    * engine. NOT a second engine: `engine` stays the base (`claude`, `codex`, …) and every normalizer,
-   * probe and install path keys on that. Chosen at creation, carried forward, and re-read off the
-   * live process's `HARNESS_DSH` by discovery so a pane the daemon did not create (or had to mint
-   * again after a restart) is still labelled. Fill-only, like `codexHome`. See `src/dsh/`.
+   * probe and install path keys on that. Chosen at creation and carried by every relaunch: the launch
+   * record is the one source, so a row discovery mints has none. See `src/dsh/`.
    */
   dsh?: string | null
   /** Stable key of the session-scoped harness runtime; preserved by bind, restore and fork. */
@@ -1729,8 +1728,6 @@ class Registry {
     /** The Hermes home this session's store lives in, if it is not the default. Fill-only. */
     hermesHome?: string | null
     claudeHome?: string | null
-    /** The DSH read off the process's `HARNESS_DSH`, if any. Fill-only, like `codexHome`. */
-    dsh?: string | null
   }):
     {
       entry: RegisteredSession
@@ -1795,7 +1792,6 @@ class Registry {
       if (input.codexHome && !existing.codexHome) existing.codexHome = input.codexHome
       if (input.claudeHome && !existing.claudeHome) existing.claudeHome = input.claudeHome
       if (input.hermesHome && !existing.hermesHome) existing.hermesHome = input.hermesHome
-      if (input.dsh && !existing.dsh) existing.dsh = input.dsh
       if (rowFingerprint(persistedRow(existing)) !== before) existing.touchedAt = Date.now()
       this.index(existing)
       this.terminalAvailableAgents.add(existing.agentId)
@@ -1840,9 +1836,10 @@ class Registry {
       codexHome: input.codexHome ?? null,
       hermesHome: input.hermesHome ?? null,
       claudeHome: input.claudeHome ?? null,
-      dsh: input.dsh ?? null,
+      // A DSH is a launch fact Harness records when it creates the agent, never read off a process.
+      dsh: null,
       // A discovered pane's named agent is only visible in its argv; nothing here reads it, so the
-      // row cannot relaunch it as one. Fill-only, like `dsh`.
+      // row cannot relaunch it as one.
       agent: null,
       transcriptPath: null,
       projectDir: basename(input.cwd ?? '') || agentId,
@@ -2874,17 +2871,6 @@ class Registry {
     // A `--local` row's store is its folder: a TUI seen elsewhere never moves it off.
     if (!session || session.engine !== 'openclaw' || session.openclawLocal || session.openclawStateDir === stateDir) return false
     session.openclawStateDir = stateDir
-    session.touchedAt = Date.now()
-    this.save()
-    return true
-  }
-
-  /** Fill in the DSH a row did not know (discovery read `HARNESS_DSH` off the live process). Never
-   *  replaces one it already has — the harness is chosen once, at creation. */
-  setDsh(agentId: string, dsh: string): boolean {
-    const session = this.agents.get(agentId)
-    if (!session || session.dsh || !DSH_ID_RE.test(dsh)) return false
-    session.dsh = dsh
     session.touchedAt = Date.now()
     this.save()
     return true

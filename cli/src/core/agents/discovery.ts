@@ -29,7 +29,7 @@ import { bypassPermissionActive, permissionModeFromArgv } from '../../lib/proces
 export interface DiscoveryDeps {
   registry: Pick<typeof registry,
     'byRuntimeEngine' | 'openProcessAgent' | 'adoptEngine' | 'reinstateArchived' | 'updateRuntimes' | 'updateProcessIdentity' | 'setBypassPermission'
-    | 'setPermissionMode' | 'setCodexHome' | 'setHermesHome' | 'setDsh' | 'byAgent' | 'setLaunch' | 'setActive'
+    | 'setPermissionMode' | 'setCodexHome' | 'setHermesHome' | 'byAgent' | 'setLaunch' | 'setActive'
     | 'terminalAvailable' | 'setTerminalAvailable'>
   attachDsh: (session: RegisteredSession) => void
   /** The agent browser's look at a running agent whose Browser is on (agents/lifecycle.ts `observed`). */
@@ -127,7 +127,6 @@ export function createDiscoveryHandlers({
       gateway: observed.gateway,
       grid: observed.grid,
       codexHome: observed.codexHome,
-      dsh: observed.dsh,
     })
     if (!opened) return
     if (opened.entry.dsh) attachDsh(opened.entry)
@@ -219,9 +218,7 @@ export function createDiscoveryHandlers({
       if (observed.hermesHomeDerived) registry.setHermesHome(current.agentId, observed.hermesHome, true)
       else registry.setHermesHome(current.agentId, observed.hermesHome)
     }
-    // And the DSH: a row minted by discovery (or written before the field existed) learns it from
-    // the process's own `HARNESS_DSH`, and gets its viewer and verdict watch from here on.
-    if (observed.dsh && !current.dsh) registry.setDsh(current.agentId, observed.dsh)
+    // A row Harness created as a DSH gets its viewer and verdict watch back from here on.
     const live = registry.byAgent(current.agentId)
     if (live?.dsh) attachDsh(live)
     // And its browser, if its person left it on, for the same reason: whatever path brought this agent back to running,

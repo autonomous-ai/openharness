@@ -10,7 +10,6 @@ import { gridAssignmentEvidence, type GridAssignment, type GridAssignmentProcess
 import { readProcessEnv } from './processEnv.js'
 import { probeProfileHome } from '../engines/discoveries.js'
 import { probeHermesHome, probeHermesHomeDerived, probeHermesSandbox } from '../engines/identities.js'
-import { probeDsh } from '../dsh/probe.js'
 import type { TerminalBackend } from './terminalBackend.js'
 import {
   ambiguousAgentProcess,
@@ -92,12 +91,6 @@ export interface DiscoveredTerminalAgent {
    * 'unseen': its home or folder has no path in the daemon's view, and `cwd` stays the pane's.
    */
   sandbox?: { cwd: string } | 'unseen'
-  /**
-   * The domain-specific harness this process was launched as, read off its `HARNESS_DSH`. null = a
-   * plain engine; undefined = the probe could not read the process, and the registry keeps what it
-   * already knows. See `src/dsh/probe.ts`.
-   */
-  dsh?: string | null
 }
 
 export interface TerminalTargetProbe {
@@ -351,8 +344,6 @@ export async function probeTerminalAgents(
       agent.sandbox = { cwd: sandbox.cwd }
       agent.cwd = sandbox.hostCwd
     }
-    // And the DSH it was created as — same read, so a pane the daemon did not create is labelled too.
-    agent.dsh = await probeDsh(agent.processIdentity)
     if (agent.engine === 'hermes') {
       const gateways = hermesGatewaysUnder(enrichedRows, agent.processIdentity)
       if (gateways.length) agent.formerProcesses = [...agent.formerProcesses ?? [], ...gateways]
