@@ -115,7 +115,7 @@ folders, so on the dial they cannot be told apart. The app's list and the dial s
 
 ## Design (docs/feature-design-rules.md)
 
-Reviewed revision: this spec's first commit on `fix/dial-session-name`  Reviewer: P1 builder-check + PM
+Reviewed revision: this spec's first commit on `fix/dial-session-name`, and decision 5 at `61b5dcc40d`  Reviewer: P1 builder-check + PM
 
 1. Growth: the name is one field of an agent the observed source already holds in memory (at most 50). It goes when
    the agent goes (session end, dead pid, 12 h silent). Nothing new is stored.
@@ -207,6 +207,8 @@ the core's refused and dropped counts already show a refused hook event. No coun
 **With Diego (joint test session, not this PR)**
 
 - A Claude app session renamed in the app reads its new name on the dial after the next prompt.
+- After `fix/process-table-full-comm` lands: with a named, idle Claude app session open, a dial plugged in (or a daemon
+  restarted) reads that name before any prompt.
 
 ## Order of work
 
