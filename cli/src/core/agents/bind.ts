@@ -109,7 +109,8 @@ interface BindPass {
   current: () => boolean
   hold: (error: unknown) => boolean
   commit: (input: Parameters<BindDeps['registry']['register']>[0]) => ReturnType<BindDeps['registry']['register']> | null
-  read: <T>(work: () => Promise<T>) => Promise<{ value: T } | null>
+  /** `empty` says when a completed read read nothing, so it counts as none: an OpenClaw pane that cannot be captured. */
+  read: <T>(work: () => Promise<T>, empty?: (value: T) => boolean) => Promise<{ value: T } | null>
   mayClaim: (id: string) => boolean
 }
 
@@ -345,9 +346,9 @@ export function createBinding({
     const authority = paneReadIdentity(agent)
     const current = () => !changing(agent.agentId) && !isRecentlyDeleted(agent.agentId)
       && paneReadIdentity(registry.byProcess(observed.engine, observed.processIdentity)) === authority
-    // Whether this pass ran a native read, and whether anything in it said to hold the agent: a read that failed, a
-    // refused register, Hermes's follower. A register refused in the words of the hold already there changes nothing on
-    // the row (its transcript check reads with the lookups' own scan), and still says to hold.
+    // Whether this pass completed a native read that read something, and whether anything in it said to hold the agent: a
+    // read that failed, a refused register, Hermes's follower. A register refused in the words of the hold already there
+    // changes nothing on the row (its transcript check reads with the lookups' own scan), and still says to hold.
     let ran = false, held = false
     /** Whether this set a hold on the row: one already there in the same words is left as it is. */
     const hold = (error: unknown): boolean => {
@@ -365,10 +366,12 @@ export function createBinding({
     }
     // Only native reads are contained here. A rejected lookup cannot end the serial
     // discovery/readiness pass or bind an unwritten session as if evidence were absent.
-    const read = async <T>(work: () => Promise<T>): Promise<{ value: T } | null> => {
-      ran = true
-      try { return { value: await work() } }
-      catch (error) {
+    const read = async <T>(work: () => Promise<T>, empty?: (value: T) => boolean): Promise<{ value: T } | null> => {
+      try {
+        const value = await work()
+        if (!empty?.(value)) ran = true
+        return { value }
+      } catch (error) {
         if (hold(error)) rememberReadHold(agent.agentId)
         return null
       }
@@ -417,7 +420,7 @@ export function createBinding({
       // One a message was typed into is read on every pass until the message is confirmed: the run it starts shows on the
       // pane before the store, which may never show it (live.ts NO_SESSION_MS counts from the first pass that reads it).
       if (agent.sessionId && !openclawPaneDue(agent.sessionId) && !input.awaitingConfirmation(agent.agentId)) return
-      const captured = await read(() => capturePane(agent.agentId))
+      const captured = await read(() => capturePane(agent.agentId), (screen) => screen === null)
       if (!captured?.value || !current()) return
       const screen = readOpenclawScreen(captured.value)
       // Told on every pass, the ones that say a state too: a pass that reads the Gateway gone is what lets the stream
