@@ -231,7 +231,8 @@ export async function openDevicesListener(
     streaming.add(socket)
     clearTimeout(deadlines.get(socket))
     res.once('close', end)
-    res.writeHead(200, { 'Content-Type': 'application/x-ndjson' }).flushHeaders()
+    // Every end destroys its connection, so a client must not keep it for another message.
+    res.writeHead(200, { 'Content-Type': 'application/x-ndjson', Connection: 'close' }).flushHeaders()
     writable = true
   }
 
