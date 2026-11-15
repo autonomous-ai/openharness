@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { projectDisplayName, type RegisteredSession } from '../lib/registry.js'
-import { AGENT_BROWSER_FALLBACKS, AGENT_BROWSER_REQUESTS, mayOpenBrowser, CLOUD_DOWN, CLOUD_FALLBACKS, CONNECTOR_VAULT_OFF, CONVERSATIONS_OFF, ACCOUNT_BACKEND_OFF, accountIdentity, AGENT_ACTIONS_OFF, AGENT_CLEANUP_FALLBACKS, createCoreApi, DAEMON_UNKNOWN, DELIVERIES_OFF, DEVICES_FALLBACKS, emptyPorts, GATEWAY_REQUESTS, LANE_OFF, MACHINE_ADDON_REQUESTS, SERVICE_HTTP_ROUTES, WIFI_REQUESTS, LONG_ANSWERS, MODELS_OFF, STORE_OFF, MODELS_REQUESTS, MONITOR_OFF, OBSERVER_KEY_OFF, ORCHESTRATOR_FALLBACKS, RECAPS_FALLBACKS, resolveAgent, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARING_FALLBACKS, MESSAGES_FALLBACKS, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, TURN_DELIVERERS, WIFI_FALLBACKS, WIFI_OFF, type CoreApiDeps } from './api.js'
+import { AGENT_BROWSER_FALLBACKS, AGENT_BROWSER_REQUESTS, mayOpenBrowser, CLOUD_DOWN, CLOUD_FALLBACKS, CONNECTOR_VAULT_OFF, CONVERSATIONS_OFF, ACCOUNT_BACKEND_OFF, accountIdentity, AGENT_ACTIONS_OFF, AGENT_CLEANUP_FALLBACKS, createCoreApi, DAEMON_UNKNOWN, DELIVERIES_OFF, DEVICES_FALLBACKS, emptyPorts, GATEWAY_REQUESTS, LANE_OFF, MACHINE_ADDON_REQUESTS, SERVICE_HTTP_ROUTES, WIFI_REQUESTS, LONG_ANSWERS, MODELS_OFF, STORE_OFF, MODELS_REQUESTS, MONITOR_OFF, OBSERVER_KEY_OFF, ORCHESTRATOR_FALLBACKS, RECAPS_FALLBACKS, resolveAgent, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARING_FALLBACKS, MESSAGES_FALLBACKS, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, TURN_DELIVERERS, WIFI_FALLBACKS, WIFI_OFF, WORKSPACES_FALLBACKS, WORKSPACES_OFF, WORKSPACES_UNAVAILABLE, type CoreApiDeps } from './api.js'
 import { FAIL, readFallback } from './serviceHost.js'
 import { HACHI_ID } from '../dsh/builtinIds.js'
 
@@ -561,6 +561,27 @@ describe('the core API services stand on', () => {
   it('answers the monitor\'s fallbacks while it is off: no readings, nothing measured to forget', async () => {
     await expect(MONITOR_OFF.resources()).rejects.toThrow('the monitor service is unavailable')
     expect(await MONITOR_OFF.storage([], true)).toEqual(new Map())
+  })
+
+  it('answers for workspaces while they are off: branches keep their names, a create waits, and no worktree is read or removed', async () => {
+    const project = { source: 'worktree' as const, gitSource: '/work/app' }
+    const target = { cwd: '/work/app-wt' }
+    expect(WORKSPACES_OFF.nameBranches()).toBeUndefined()
+    expect(WORKSPACES_OFF.ready()).toBe(false)
+    const folder = { ok: false, error: 'SERVICE_UNAVAILABLE', detail: `Could not make the project folder. ${WORKSPACES_UNAVAILABLE}` }
+    expect(await WORKSPACES_OFF.prepareFolder(project, { cloneFallback: true })).toEqual(folder)
+    expect(await WORKSPACES_OFF.describeWorkspace(target, [])).toBeNull()
+    const review = { ok: false, reason: `The worktree could not be checked. ${WORKSPACES_UNAVAILABLE}` }
+    expect(await WORKSPACES_OFF.reviewWorktree(target, [])).toEqual(review)
+    const removal = { ok: false, reason: `The worktree was kept. ${WORKSPACES_UNAVAILABLE}` }
+    expect(await WORKSPACES_OFF.removeWorktree({} as never, target, [], true)).toEqual(removal)
+    // A service that fails answers the same, and its create is never told it may go on.
+    expect(readFallback(WORKSPACES_FALLBACKS.nameBranches)).toEqual({ deferred: false, value: undefined })
+    expect(readFallback(WORKSPACES_FALLBACKS.ready)).toEqual({ deferred: false, value: false })
+    expect(readFallback(WORKSPACES_FALLBACKS.prepareFolder)).toEqual({ deferred: true, value: folder })
+    expect(readFallback(WORKSPACES_FALLBACKS.describeWorkspace)).toEqual({ deferred: true, value: null })
+    expect(readFallback(WORKSPACES_FALLBACKS.reviewWorktree)).toEqual({ deferred: true, value: review })
+    expect(readFallback(WORKSPACES_FALLBACKS.removeWorktree)).toEqual({ deferred: true, value: removal })
   })
 
   it('answers a guest\'s New Harness while shared machines is off: guest access unavailable, in words, and nothing to stop', async () => {

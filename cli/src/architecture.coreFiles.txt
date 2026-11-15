@@ -536,7 +536,6 @@ lib/windows/shell.ts
 lib/windows/storeAppAlias.ts
 lib/windows/treeKill.ts
 lib/workspaceCheck.ts
-lib/worktreeDeletion.ts
 lib/wsLiveness.ts
 localWsServer.ts
 scm/gitScmProject.ts

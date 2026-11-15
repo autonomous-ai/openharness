@@ -6,7 +6,8 @@ import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { agentProject } from '../lib/agentProject.js'
 import { readGitProject } from '../lib/gitProject.js'
-import { prepareProjectFolder } from '../lib/projectFolder.js'
+import { prepareGitFolder } from '../lib/gitProjectFolder.js'
+import { prepareNewFolder } from '../lib/projectFolder.js'
 import { GitScmProject } from './gitScmProject.js'
 import type { ScmProject } from './types.js'
 
@@ -70,8 +71,8 @@ describe('GitScmProject wraps the git path without changing it', { timeout: 30_0
     const branch = await git(cwd, 'branch', '--show-current')
     expect(await git(repo, 'config', `branch.${branch}.harness`)).toBe('placeholder')
     expect(await scm.describe(cwd)).toMatchObject({ kind: 'git', worktree: true, branchPending: true, branch })
-    // The same request through projectFolder.ts lands beside it, under the same repository folder.
-    const second = await prepareProjectFolder({ source: 'worktree', gitSource: repo, branchRef: 'refs/heads/main' }, { root: harnesses })
+    // The same request through gitProjectFolder.ts lands beside it, under the same repository folder.
+    const second = await prepareGitFolder({ source: 'worktree', gitSource: repo, branchRef: 'refs/heads/main' }, { root: harnesses })
     expect(second.startsWith(join(harnesses, 'worktrees', 'app') + '/')).toBe(true)
     expect(second).not.toBe(cwd)
   })
@@ -92,16 +93,16 @@ describe('GitScmProject wraps the git path without changing it', { timeout: 30_0
     expect(placeholder.launchRecord).toEqual({ kind: 'git' })
   })
 
-  it('prepareProjectFolder reports the record a worktree needs at relaunch, and nothing for the folder itself or a new one', async () => {
+  it('prepareGitFolder reports the record a worktree needs at relaunch, and nothing for the folder itself; a new one is not git\'s', async () => {
     const harnesses = join(root, 'harnesses')
     const reported: unknown[] = []
     const onPrepared = (prepared: unknown) => { reported.push(prepared) }
-    const cwd = await prepareProjectFolder({ source: 'worktree', gitSource: repo, branchRef: 'refs/heads/main' }, { root: harnesses, onPrepared })
+    const cwd = await prepareGitFolder({ source: 'worktree', gitSource: repo, branchRef: 'refs/heads/main' }, { root: harnesses, onPrepared })
     expect(reported).toEqual([{ cwd, scmLaunchRecord: { kind: 'git' } }])
     await git(repo, 'branch', 'aside')
-    expect(await prepareProjectFolder({ source: 'branch', gitSource: repo, branchRef: 'refs/heads/aside' }, { root: harnesses, onPrepared })).toBe(repo)
+    expect(await prepareGitFolder({ source: 'branch', gitSource: repo, branchRef: 'refs/heads/aside' }, { root: harnesses, onPrepared })).toBe(repo)
     expect(await git(repo, 'branch', '--show-current')).toBe('aside')
-    expect(await prepareProjectFolder({ source: 'new', name: 'fresh' }, { root: harnesses, onPrepared })).toBe(join(harnesses, 'fresh'))
+    expect(await prepareNewFolder({ source: 'new', name: 'fresh' }, { root: harnesses })).toBe(join(harnesses, 'fresh'))
     expect(reported).toHaveLength(1)
   })
 

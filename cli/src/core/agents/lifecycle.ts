@@ -14,6 +14,7 @@ import type { StoppedAgentStore } from '../../lib/stoppedAgents.js'
 import { AgentStopError, createStopAgentService, type StopAgentServiceDeps } from '../../lib/stopAgentService.js'
 import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
 
+import { WORKSPACES_OFF, type WorkspacesPort } from '../api.js'
 import type { ResumeAgent } from './launches.js'
 import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
 
@@ -49,6 +50,9 @@ export interface LifecycleDeps {
   /** And the requests of the creates that made it (lib/agentCreationReceipt.ts), after its conversation
    *  (`eraseRecords`): rejecting refuses the purge. */
   scrubCreated: (agentId: string) => Promise<unknown>
+  /** Workspaces, which read and remove a purged harness's worktree: the git is theirs (services/workspaces.ts). Null
+   *  while they are off. */
+  workspaces: () => WorkspacesPort | null
   /** To every connected window. */
   send: (frame: { type: string; payload: Record<string, unknown> }) => void
   pinnedControls: ResumeAgentServiceDeps['pinnedControls']
@@ -79,7 +83,7 @@ export const TOLD_NOT_ERASED = 'Harness could not erase what this harness was to
 
 export function createAgentLifecycle({
   registry, stoppedAgents, restartJobs, createBackend, noBackendCode, backendFor, agentReconciler, forgetSession, markDeleted, clearDeleted, stopNative, settlePane, cancelExternal,
-  sessionCheckpoints, mirror, forgetTold, scrubCreated, send, pinnedControls, retainExitedSession, announceSession,
+  sessionCheckpoints, mirror, forgetTold, scrubCreated, workspaces, send, pinnedControls, retainExitedSession, announceSession,
   relaunchOverrides, prepareSessionResume, stopBackgroundJob, refreshGridWebSearch, attach, attachSession, relaunchMarks, stopped, purged, atFolderTrust, atEmptyComposer, moveHeld,
 }: LifecycleDeps) {
   /**
@@ -103,6 +107,7 @@ export function createAgentLifecycle({
   }
   const purgeAgentService = new PurgeAgentService({
     live: id => registry.byAgent(id), sessions: () => [...registry.list(), ...stoppedAgents.list()],
+    worktrees: () => workspaces() ?? WORKSPACES_OFF,
     stopped: stoppedAgents, checkpoints: sessionCheckpoints, stop: stopAgent,
     restarting: id => restartJobs.busy(id) || stopJobs.has(id),
     atFolderTrust,

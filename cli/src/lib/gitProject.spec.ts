@@ -9,7 +9,8 @@ import { encryptDownFrame, encryptRpcResult } from './e2ee/applicationFrames.js'
 import { placeholderBranch, sessionBranchNames, worktreeFolderName } from './agentNames.js'
 import { nameBranchAfterSession } from './branchNaming.js'
 import { prepareGitProject, readGitProject, validGitPath } from './gitProject.js'
-import { parseProjectFolder, prepareProjectFolder } from './projectFolder.js'
+import { prepareGitFolder } from './gitProjectFolder.js'
+import { parseProjectFolder, type GitProjectFolder } from './projectFolder.js'
 import { engineSessionTitle, namingTitle } from './sessionTitle.js'
 
 const exec = promisify(execFile)
@@ -44,7 +45,7 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
   afterEach(async () => { vi.unstubAllEnvs(); await rm(root, { recursive: true, force: true }) })
   const options = () => ({ root: join(root, 'harnesses'), label: 'Codex', now: () => new Date(2026, 8, 21, 12, 0) })
   const prepare = (source: 'worktree' | 'branch', branchRef = 'refs/heads/feature', path = repo, extra: Record<string, unknown> = {}) =>
-    prepareProjectFolder(parseProjectFolder({ projectSource: source, gitSource: path, branchRef, ...extra })!, options())
+    prepareGitFolder(parseProjectFolder({ projectSource: source, gitSource: path, branchRef, ...extra }) as GitProjectFolder, options())
   const worktrees = () => join(root, 'harnesses', 'worktrees', 'project with spaces')
   const current = async (path: string) => (await exec('git', ['-C', path, 'branch', '--show-current'])).stdout.trim()
 
@@ -653,7 +654,7 @@ exec '${realGit}' "$@"
     await mkdir(empty)
     await exec('git', ['-C', empty, 'init', '-b', 'main'])
     expect(await read(empty)).toMatchObject({ isGit: true, branch: 'main', branches: [] })
-    await expect(prepareProjectFolder({ source: 'worktree', gitSource: empty }, options()))
+    await expect(prepareGitFolder({ source: 'worktree', gitSource: empty }, options()))
       .rejects.toMatchObject({ code: 'GIT_PROJECT_UNAVAILABLE' })
   })
 

@@ -38,6 +38,9 @@ import type { LastTurnText, LiveEvent } from '../engines/kit/events.js'
 import type { SessionRecaps } from '../lib/recapReads.js'
 import type { SessionInputDelivery } from '../lib/sessionInput.js'
 import type { AgentCloseRequest, AgentCloseResult } from '../lib/closeAgentService.js'
+import type { GitProjectFolder } from '../lib/projectFolder.js'
+import type { WorkspaceInspection, WorkspaceTarget, WorktreeReview } from '../lib/worktreeDeletion.js'
+import type { ScmLaunchRecord } from '../scm/types.js'
 import { projectDisplayName, type registry, type RegisteredSession } from '../lib/registry.js'
 import { sessionForPaneId } from '../lib/terminalRuntime.js'
 import type { RuntimeModelOption } from '../lib/runtimeProfile.js'
@@ -1295,15 +1298,59 @@ export const CONNECTORS_FALLBACKS: PortFallbacks<ConnectorsPort> = { syncProfile
 /** What the core calls while `ports.connectors` is null (connected services are off): its fallbacks' answer. */
 export const CONNECTORS_OFF: ConnectorsPort = { syncProfileHome: async () => [] }
 
-/** The core's call into workspaces: name made-up worktree branches after their sessions, on each terminal-title pass. No
- *  worktree is removed on a timer (#4166, #711): the daemon swept clean, week-idle ones twice a day, including those their
- *  person chose to keep and the gitignored files in them. */
+/** The folder git made for a create (`WorkspacesPort.prepareFolder`), with what its every relaunch needs and, for a clone,
+ *  the SSH alias it got in through; or why not, in the create's own code and words (`access: 'denied'`: GitHub refused
+ *  every way in, which the apps say in their own words). */
+export type PreparedFolder = { ok: true; cwd: string; scmLaunchRecord?: ScmLaunchRecord; clonedVia?: { alias: string } }
+  | { ok: false; error: string; detail: string; access?: 'denied' }
+/** A worktree reviewed for its removal (`WorkspacesPort.reviewWorktree`), or why it may not be removed. */
+export type WorktreeAnswer = { ok: true; review: WorktreeReview } | { ok: false; reason: string }
+
+/**
+ * The core's calls into workspaces (services/workspaces.ts), the folders agents work in. Each runs git, and git runs in
+ * the edge host, never in the core (the audit of 2026-11-12): the folder a create asks git for (a clone, a worktree, the
+ * folder itself on another branch), a harness's worktree read and removed at a purge, and the made-up worktree branches
+ * named after their sessions, on each terminal-title pass. No worktree is removed on a timer (#4166, #711): the daemon
+ * swept clean, week-idle ones twice a day, including those their person chose to keep and the gitignored files in them.
+ * A refusal is an answer, never a throw, which would count against the service and could switch it off.
+ */
 export interface WorkspacesPort {
   nameBranches(): void
+  /** Whether it can make a folder now: a create waits for it (held) while it cannot, rather than failing for the moment a
+   *  restart takes. */
+  ready(): boolean
+  /** The folder git makes for a create. `cloneFallback`: the computer owner's own start, which may try every way this
+   *  computer reaches GitHub (lib/gitProjectFolder.ts); a start whose address someone else chose never picks the owner's
+   *  accounts. */
+  prepareFolder(project: GitProjectFolder, options: { cloneFallback: boolean }): Promise<PreparedFolder>
+  /** Where a harness works, for Inspect: a worktree, the main checkout or a plain folder; null when nothing answered.
+   *  [others]: the folders every other harness here works in, live or stopped. */
+  describeWorkspace(target: WorkspaceTarget, others: readonly string[]): Promise<WorkspaceInspection | null>
+  /** A harness's linked worktree, reviewed for its removal: its path, branch, changes and the signature the removal is
+   *  held to. */
+  reviewWorktree(target: WorkspaceTarget, others: readonly string[]): Promise<WorktreeAnswer>
+  /** Removes a reviewed worktree, only while it is still exactly what was reviewed. Never its branch. */
+  removeWorktree(review: WorktreeReview, target: WorkspaceTarget, others: readonly string[], discardChanges: boolean): Promise<{ ok: true } | { ok: false; reason: string }>
 }
 
-/** What the core gets when workspaces fails: branches keep their names. */
-export const WORKSPACES_FALLBACKS: PortFallbacks<WorkspacesPort> = { nameBranches: undefined }
+/** What a create and a purge say when workspaces did not answer: down, restarting, switched off, or too old to know. */
+export const WORKSPACES_UNAVAILABLE = 'Harness\'s workspaces service did not answer. Try again in a moment.'
+const FOLDER_UNAVAILABLE: PreparedFolder = { ok: false, error: 'SERVICE_UNAVAILABLE', detail: `Could not make the project folder. ${WORKSPACES_UNAVAILABLE}` }
+const REVIEW_UNAVAILABLE: WorktreeAnswer = { ok: false, reason: `The worktree could not be checked. ${WORKSPACES_UNAVAILABLE}` }
+const REMOVAL_UNAVAILABLE = { ok: false as const, reason: `The worktree was kept. ${WORKSPACES_UNAVAILABLE}` }
+
+/** What the core gets when workspaces fails: branches keep their names, a create waits for its folder, and nothing of a
+ *  worktree is read or removed. */
+export const WORKSPACES_FALLBACKS: PortFallbacks<WorkspacesPort> = {
+  nameBranches: undefined, ready: false, prepareFolder: later(FOLDER_UNAVAILABLE), describeWorkspace: later(null),
+  reviewWorktree: later(REVIEW_UNAVAILABLE), removeWorktree: later(REMOVAL_UNAVAILABLE),
+}
+
+/** What the core calls while `ports.workspaces` is null (workspaces off): its fallbacks' answers. */
+export const WORKSPACES_OFF: WorkspacesPort = {
+  nameBranches: () => {}, ready: () => false, prepareFolder: async () => FOLDER_UNAVAILABLE, describeWorkspace: async () => null,
+  reviewWorktree: async () => REVIEW_UNAVAILABLE, removeWorktree: async () => REMOVAL_UNAVAILABLE,
+}
 
 /** The core's calls into Agent Messages: whether one of its typed deliveries (a `team:` id) may still be written,
  *  asked in line as it is written (core/input.ts); and that the core's copy of the account's switch changed
