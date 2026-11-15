@@ -3128,8 +3128,25 @@ describe('selecting a tab moves the dial (docs/specs/2026-11-15-dial-terminal-fo
     const { port, report } = await dialWith()
     report('terminal-app', TTY)
     await port.stop()
-    seen.host.frontSettled!('terminal-app')
+    seen.host.appSettled!('terminal-app')
     expect(asked()).toEqual([])
     expect(tabLines()).toEqual([])
+  })
+
+  it('one settle is one hook, and both the Claude app\'s follow and a waiting tab report act on it', async () => {
+    const { port, listener, report } = await dialWith()
+    expect(Object.keys(seen.host).filter((key) => /settled/i.test(key))).toEqual(['appSettled'])
+    report('terminal-app', TTY)
+    seen.host.appSettled!('terminal-app')
+    expect(asked()).toEqual([[ID, 'tab']])
+    // The session the Claude app shows, attached while it was not in front: kept for the app's settle.
+    const SESSION = '0b7c2f4e-8a1d-4c3b-9e5f-6a7b8c9d0e1f'
+    port.observed({
+      engine: 'claude', sessionId: SESSION, event: 'session-start', cwd: '/work/api', callerPid: 4300, transcriptPath: `/t/${SESSION}.jsonl`,
+      hostHints: { __CFBundleIdentifier: 'com.anthropic.claudefordesktop', CLAUDE_CODE_HOST_SESSION_ID: 'local_8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b' },
+    })
+    expect(listener.attach(SESSION)).toBeUndefined()
+    seen.host.appSettled!('claude')
+    expect(asked()).toEqual([[ID, 'tab'], [observedAgentId('claude', SESSION), 'attach']])
   })
 })
