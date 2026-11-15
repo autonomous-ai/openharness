@@ -6,6 +6,7 @@
 import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { resolveBinaryOnPath } from '../../lib/binaryOnPath.js'
+import type { HostAdapter } from './adapter.js'
 import type { PaneSwitch } from './types.js'
 
 export const ORCA_HANDLE = /^term_[0-9a-f-]{36}$/
@@ -87,5 +88,23 @@ export function createOrcaActions(deps: OrcaDeps): { send(handle: string, text: 
       switching.set(handle, run)
       return run
     },
+  }
+}
+
+/** An Orca terminal, by its handle: words are typed there, and a rest or a tap switches to it before Orca comes forward. */
+export function createOrcaAdapter(deps: OrcaDeps): HostAdapter & Required<Pick<HostAdapter, 'show' | 'type'>> {
+  const orca = createOrcaActions(deps)
+  return {
+    id: 'orca',
+    tap: 'before',
+    paneOf: (place) => {
+      const handle = place.hints.ORCA_TERMINAL_HANDLE
+      return handle && ORCA_HANDLE.test(handle) ? { adapter: 'orca', id: handle } : undefined
+    },
+    // `orca terminal switch` runs on every platform.
+    canFocus: () => true,
+    focus: async (pane) => (await orca.switchTo(pane.id)) === 'ok',
+    show: (pane) => orca.switchTo(pane.id),
+    type: (pane, text) => orca.send(pane.id, text),
   }
 }
