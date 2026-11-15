@@ -23,6 +23,7 @@ const RUNNER: Record<string, string> = { master: 'masterProcess', core: 'core-co
 for (const name of [...KNOWN_SERVICES, 'updater']) RUNNER[name] = `${name}Process`
 RUNNER['engine-claude'] = 'claudeReaderProcess'
 RUNNER['engine-codex'] = 'codexReaderProcess'
+RUNNER['engine-others'] = 'otherEnginesProcess'
 
 describe('the lean bundle a release carries', () => {
   let scratch = ''

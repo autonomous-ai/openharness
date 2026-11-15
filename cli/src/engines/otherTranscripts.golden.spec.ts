@@ -210,7 +210,7 @@ async function loadCore() {
   const { createSessionNormalizers } = await import('../core/transcripts/normalizers.js')
   const { createAgyBackstop } = await import('../core/turns/agyBackstop.js')
   const { createCursorTaskHooks } = await import('../core/engines/cursorTasks.js')
-  // The worker's readers behind the core's port, as engines/others/process.ts hosts them and core/main.ts reaches them.
+  // The worker's readers behind the core's port, as engines/others/otherEnginesProcess.ts hosts them and core/main.ts reaches them.
   const requests = otherReaderRequests()
   const port = createEngineReaders({ isolated: new Set(['engine-others']), call: async (_service, type, payload) =>
     JSON.parse(JSON.stringify(await requests[type](JSON.parse(JSON.stringify(payload)), { owner: true, local: true }))) })

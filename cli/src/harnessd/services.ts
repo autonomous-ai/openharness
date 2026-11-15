@@ -49,7 +49,7 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   // contains transient parsing; RSS additionally bounds file buffers outside V8's heap.
   'engine-claude': { services: ['engine-claude'], heapLimitMiB: 512, rssLimitMiB: 1_024, onDemand: true, askedSince: 0 },
   'engine-codex': { services: ['engine-codex'], heapLimitMiB: 512, rssLimitMiB: 1_024, onDemand: true, askedSince: 0 },
-  // The fourteen other engines in one worker (engines/others/process.ts): their conversations read from their
+  // The fourteen other engines in one worker (engines/others/otherEnginesProcess.ts): their conversations read from their
   // transcripts and stores, at most sixteen reads at once with replies capped at 4 MiB, each engine's code loaded
   // only once one of its sessions is read. Started on demand, as theirs are: a computer that runs none never pays.
   'engine-others': { services: ['engine-others'], heapLimitMiB: 512, rssLimitMiB: 1_024, onDemand: true, askedSince: 0 },

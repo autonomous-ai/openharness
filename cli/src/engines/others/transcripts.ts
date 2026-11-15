@@ -1,6 +1,6 @@
 /**
  * The fourteen engines' history and last turn: each conversation read from its transcript or its store, then
- * replayed and windowed by its engine's own code. They run in the engines' worker (engines/others/process.ts), and in
+ * replayed and windowed by its engine's own code. They run in the engines' worker (engines/others/otherEnginesProcess.ts), and in
  * the core's process only for explicit inline compatibility (services/inline.ts): an older master, or
  * `HARNESSD_SERVICES=none`. Moved out of core/transcripts/history.ts and lastTurn.ts (docs/design/2026-11-12-core-audit.md,
  * section 3), the readings as they were.
