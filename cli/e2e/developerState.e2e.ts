@@ -11,7 +11,7 @@
  * Every path and value here is made up, in a folder of this test. `vi.stubEnv` puts them in this worker's environment
  * as a developer's shell would, and takes them out again: no real value of these variables is read or printed.
  */
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, onTestFailed, vi } from 'vitest'
@@ -65,7 +65,8 @@ async function tile(d: IsolatedDaemon, client: LocalClient, name: string): Promi
 async function typed(d: IsolatedDaemon, pane: string, line: string, file: string): Promise<string> {
   await d.tmux.run('send-keys', '-t', pane, '-l', `${line} > ${file}.tmp; mv ${file}.tmp ${file}`)
   await d.tmux.run('send-keys', '-t', pane, 'Enter')
-  return until(`the tile to write ${file}`, () => existsSync(file) ? readFileSync(file, 'utf8') : null, 30_000, 100)
+  // Boxed: an empty answer is an answer too (`whence -p` of names it cannot find), and `until` waits for a truthy one.
+  return (await until(`the tile to write ${file}`, () => existsSync(file) ? { text: readFileSync(file, 'utf8') } : null, 30_000, 100)).text
 }
 
 describe('a daemon under test knows nothing of the developer\'s own state', () => {
@@ -174,6 +175,55 @@ describe('a daemon under test knows nothing of the developer\'s own state', () =
     try {
       const { tmuxPane } = await tile(d, client, 'own-session')
       expect(await typed(d, tmuxPane, 'printf \'%s\\n\' "${FAKE_DEV_SECRET-unset}"', join(d.root, 'tile-secret'))).toBe('unset\n')
+    } finally { client.close() }
+  })
+
+  it('finds its own engines first in a tile\'s login shell, whatever the system\'s profile puts ahead of them', async () => {
+    const d = daemon = await IsolatedDaemon.create()
+    failed(d)
+    // As macOS's /etc/zprofile does (path_helper), on any machine, and like it in a login shell only: a folder put
+    // ahead of the daemon's own, after the harness's line in .zshenv and before its line in .zprofile. Its engines
+    // only leave a mark, and nothing runs them.
+    const decoy = join(scratch, 'decoy'), mark = join(scratch, 'decoy-ran')
+    mkdirSync(decoy)
+    for (const name of ['claude', 'codex']) writeFileSync(join(decoy, name), `#!/bin/sh\necho ${name} >> ${mark}\n`, { mode: 0o755 })
+    appendFileSync(join(d.env.ZDOTDIR!, '.zshenv'), `[[ -o login ]] && path=(${decoy} $path)\n`)
+    // The startup lines are the home's, written once: a daemon beside the first adds no second.
+    await IsolatedDaemon.create({ beside: d })
+    expect(readFileSync(join(d.env.ZDOTDIR!, '.zprofile'), 'utf8').trim().split('\n')).toHaveLength(1)
+    await d.start()
+    const client = await LocalClient.connect(d)
+    try {
+      const { tmuxPane } = await tile(d, client, 'path')
+      // Asked, never typed: on a developer's Mac the name alone would start their real engine.
+      expect(await typed(d, tmuxPane, 'whence -p claude codex', join(d.root, 'resolved')))
+        .toBe(`${join(d.root, 'bin', 'claude')}\n${join(d.root, 'bin', 'codex')}\n`)
+      expect(existsSync(mark)).toBe(false)
+    } finally { client.close() }
+  })
+
+  it('finds no engine of the developer\'s by name: its PATH is its own bin, the linked tools and the system\'s folders', async () => {
+    // A folder of the developer's PATH with two engines in it, as ~/.opencode/bin and ~/.local/bin are: made up, and
+    // each would only leave a mark.
+    const theirs = join(scratch, 'their-bin'), mark = join(scratch, 'their-engine-ran')
+    mkdirSync(theirs)
+    for (const name of ['opencode', 'cursor-agent']) writeFileSync(join(theirs, name), `#!/bin/sh\necho ${name} >> ${mark}\n`, { mode: 0o755 })
+    vi.stubEnv('PATH', `${theirs}:${process.env.PATH}`)
+    const d = daemon = await IsolatedDaemon.create()
+    failed(d)
+    // A yes or a no, never the folders: at the base they are the developer's own.
+    const own = d.env.PATH!.split(':').filter((folder) => !['/usr/bin', '/bin', '/usr/sbin', '/sbin'].includes(folder))
+    expect(own.length === 2 && own[0] === join(d.root, 'bin') && own[1] === join(d.root, 'tools'), 'PATH: its bin, the linked tools, the system\'s folders').toBe(true)
+    // The one engine whose recipe names a path outside any home (/usr/local/bin/hermes, lib/engineInstall.ts): the
+    // daemon's Hermes is its own bin's, missing until a test writes one.
+    expect(d.env.HERMES_PATH).toBe(join(d.root, 'bin', 'hermes'))
+    await d.start()
+    const client = await LocalClient.connect(d)
+    try {
+      const { tmuxPane } = await tile(d, client, 'other-engines')
+      // Asked, never typed. `whence -p` prints nothing for a name it cannot find.
+      expect(await typed(d, tmuxPane, 'whence -p opencode cursor-agent', join(d.root, 'resolved-others'))).toBe('')
+      expect(existsSync(mark)).toBe(false)
     } finally { client.close() }
   })
 })
