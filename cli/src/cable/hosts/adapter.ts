@@ -40,6 +40,8 @@ export interface HostAdapter {
   /** Types a line at the agent's prompt and submits it. Only the source decides that the prompt is free. */
   type?(pane: Pane, text: string): Promise<boolean>
   /** A tap's order with the app's own `open -b`: the pane first (Orca, WezTerm, herdr), the pane alone (the Claude
-   *  app's link brings the app itself), or the app first (a tab is selected once its app is in front). */
+   *  app's link brings the app itself), or the app first (a tab is selected once its app is in front). A pane that comes
+   *  after its app is raised only when it is the pane a rest would show, so an adapter with `tap: 'after'` needs `show`:
+   *  without it, its `focus` never runs from a tap. */
   readonly tap: 'before' | 'instead' | 'after'
 }
