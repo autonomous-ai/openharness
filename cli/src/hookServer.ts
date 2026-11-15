@@ -5,7 +5,7 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto'
-import { join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { admitHook, hooksFor } from './engines/hooks.js'
@@ -217,6 +217,29 @@ function optionalBoundedJson(value: unknown, max: number): boolean {
 export function hookFiredAt(req: Pick<http.IncomingMessage, 'headers'>): number | undefined {
   const value = Number(req.headers['x-harness-hook-fired-at'])
   return Number.isSafeInteger(value) && value > 0 ? value : undefined
+}
+
+const GATEWAY_HEADER = 'x-harness-hook-gateway', CODEX_HOME_HEADER = 'x-harness-hook-codex-home'
+
+/**
+ * What a hook says of its own environment, in two headers: a daemon that does not read a header ignores it, where it
+ * refuses a body with a field it does not list. Each is judged alone: a refused one is named, never the request.
+ */
+export function hookFacts(req: Pick<http.IncomingMessage, 'headers'>): { gateway?: 'ori' | null; codexHome?: string; refused: string[] } {
+  const facts: { gateway?: 'ori' | null; codexHome?: string; refused: string[] } = { refused: [] }
+  const gateway = req.headers[GATEWAY_HEADER]
+  if (gateway === 'ori') facts.gateway = 'ori'
+  else if (gateway === 'none') facts.gateway = null
+  else if (gateway !== undefined) facts.refused.push(GATEWAY_HEADER)
+  const home = req.headers[CODEX_HOME_HEADER]
+  if (home !== undefined) {
+    // Percent-encoded by the hook: Node refuses a header value above U+00FF, and a path may hold any character.
+    let decoded: string | undefined
+    try { decoded = typeof home === 'string' ? decodeURIComponent(home) : undefined } catch { decoded = undefined }
+    if (decoded !== undefined && isAbsolute(decoded) && decoded.length <= 1_024 && !/[\u0000-\u001f\u007f]/.test(decoded)) facts.codexHome = decoded
+    else facts.refused.push(CODEX_HOME_HEADER)
+  }
+  return facts
 }
 
 function validHookBody(value: unknown): value is BoundHookBody {
@@ -590,6 +613,10 @@ export function startHookServer(
           if (!validHookBody(parsed)) { json(400, { error: 'invalid hook body' }); return }
           body = parsed
         } catch { json(400, { error: 'bad json' }); return }
+        // Only a refused header's name is logged: its value is a path or a word of the hook's own environment.
+        const refusedHeader = (name: string) => console.warn(`[hooks] ${sid(body.sessionId ?? '?')} ${body.hookEvent ?? 'session-start'} header refused · ${name}`)
+        const { refused, ...taken } = hookFacts(req)
+        for (const name of refused) refusedHeader(name)
         // Every rejection below says WHY, out loud. They used to be silent, and a hook that arrives and
         // is dropped looks exactly like a hook that never fired — which is precisely the confusion behind
         // "the agent is running in my terminal but the list does not show it".
@@ -798,7 +825,7 @@ export function startHookServer(
             return { kind: 'hold', reason: 'Waiting for the original hook pane to belong to its engine process.' }
           }
           inspectionIdentity = paneReadIdentity(row)
-          prepared = { ...body, processIdentity: row.processIdentity ? { ...row.processIdentity } : undefined,
+          prepared = { ...body, ...taken, processIdentity: row.processIdentity ? { ...row.processIdentity } : undefined,
             runtimes: row.runtimes.map(runtime => ({ ...runtime })), primaryRuntimeKey: row.primaryRuntimeKey,
             transcriptPath: knownTranscriptFor(body, row) }
           const admission = admitHook(engine, prepared)
@@ -813,6 +840,7 @@ export function startHookServer(
           const before = prior && { sessionId: prior.sessionId, transcriptPath: prior.transcriptPath,
             held: !!(prior.identityHold || prior.interpretationHold) }
           committed = registry.register(hermesHome ? { ...prepared, hermesHome } : prepared, { verifiedNativeSource: true })
+          if (committed?.refusedHome) refusedHeader(CODEX_HOME_HEADER)
           if (stopCurrent && !stopCurrent()) stopInvocationClaimed = true
           if (committed && carriesStop && !stopRetained && !stopInvocationClaimed) {
             stopUnmatched ||= deferred || before?.sessionId !== committed.entry.sessionId

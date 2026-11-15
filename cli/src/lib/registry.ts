@@ -17,7 +17,7 @@ import { DSH_ID_RE } from '../dsh/id.js'
 import { AGENT_NAME_RE } from './engineLaunch.js'
 import { resumesConversation } from './resumeCapability.js'
 import { namingTitle } from './sessionTitle.js'
-import { transcriptProject } from '../engines/discoveries.js'
+import { reportedProfileHome, transcriptProject } from '../engines/discoveries.js'
 import { automaticAgentName, engineLabel, isAutomaticName } from './agentNames.js'
 import {
   closeSync,
@@ -403,7 +403,14 @@ export interface RegisterInput {
   hermesHome?: string
   /** `hermesHome` is one Harness worked out — see RegisteredSession.hermesHomeDerived. */
   hermesHomeDerived?: true
+  /** From the hook's own environment: undefined when the hook did not say. Taken for Claude Code, OpenCode and Hermes. */
+  gateway?: 'ori' | null
+  /** Codex only, the hook's own CODEX_HOME. Fill-only, and only when this session's transcript is under its sessions folder. */
+  codexHome?: string
 }
+
+/** The engines whose gateway only their hook can say: Codex's is in its argv (lib/gatewayRuntime.ts). */
+const HOOK_GATEWAY_ENGINES: ReadonlySet<AgentEngine> = new Set(['claude', 'opencode', 'hermes'])
 
 /** Display name for a session's "project" tab/tile. A user rename (persisted override) is
  *  authoritative and FIXED. Until there is one, a session is called what its engine calls it — the
@@ -2107,6 +2114,8 @@ class Registry {
      * cannot be opened. The caller announces the removal.
      */
     orphaned: { agentId: string; sessionId: string } | null
+    /** The `codexHome` the input named was not taken: this session's transcript was not found under it. */
+    refusedHome?: true
   } | null {
 
     if (this.writeBlocked) throw new IdentityReadUnavailable('the saved session registry is unavailable')
@@ -2206,8 +2215,18 @@ class Registry {
             : null
     const effectiveTranscriptPath = transcriptPath ?? (sameSession ? existing.transcriptPath : null) ?? derived ?? null
     // Native evidence is staged before terminal adoption, displacement or any live publication.
-    const proof = effectiveTranscriptPath ? transcriptEvidence(engine, effectiveTranscriptPath,
-      processAgent?.codexHome ?? undefined, !transcriptPath && derived === effectiveTranscriptPath ? 'derived' : false) : undefined
+    const evidenceUnder = (profile: string | undefined) => effectiveTranscriptPath ? transcriptEvidence(engine, effectiveTranscriptPath,
+      profile, !transcriptPath && derived === effectiveTranscriptPath ? 'derived' : false) : undefined
+    // A home the hook says of its own environment fills a row that has none, and only once this session's transcript
+    // is found under it. A home that does not hold it, or cannot be read, is no evidence: the transcript is taken as
+    // it would be without it, and the registration goes on.
+    const reportedHome = processAgent?.codexHome ? null : reportedProfileHome(engine, input.codexHome)
+    let proof: ReturnType<typeof evidenceUnder>
+    if (reportedHome) {
+      try { proof = evidenceUnder(reportedHome) } catch (error) { if (!(error instanceof IdentityReadUnavailable)) throw error }
+    }
+    const refusedHome = !!reportedHome && !proof?.valid
+    if (!reportedHome || refusedHome) proof = evidenceUnder(processAgent?.codexHome ?? undefined)
     if (proof && !proof.valid) {
       proof.verify()
       if (!proof.files.file(effectiveTranscriptPath!, true)) throw new IdentityReadUnavailable('the announced transcript is not yet available')
@@ -2269,10 +2288,10 @@ class Registry {
       sessionId,
       boundAt: isNew ? now : existing?.boundAt ?? now,
       engine,
-      // Both are facts about the live process the hook came from, re-read by discovery on every
-      // pass — but a bind must not blank them in between, or the very first SessionStart hook would
-      // announce a grid agent as "on no grid" until the next scan put it back.
-      gateway: existing?.gateway ?? null,
+      // A bind blanks neither, or the very first SessionStart hook would announce a grid agent as "on no grid" until
+      // the next scan put it back. An engine whose hook says its gateway takes the hook's word; a hook that says
+      // nothing (an older one) leaves the last word standing.
+      gateway: HOOK_GATEWAY_ENGINES.has(engine) && input.gateway !== undefined ? input.gateway : existing?.gateway ?? null,
       grid: existing?.grid ?? null,
       // The credential-bearing launch. Like codexHome: written once, carried forward, never re-derived.
       gridLaunch: existing?.gridLaunch ?? null,
@@ -2313,7 +2332,7 @@ class Registry {
       // Chosen once at agent_create time and never re-derived (unlike `grid`, which openProcessAgent
       // re-reads off the live process on every discovery) — a hook-triggered bind must carry it
       // forward or the very first SessionStart hook would silently wipe the agent's chosen profile.
-      codexHome: existing?.codexHome ?? null,
+      codexHome: existing?.codexHome ?? (refusedHome ? null : reportedHome),
       claudeHome: existing?.claudeHome ?? null,
       // The home the gate looked this session up in, or whatever the row already knew. Carried
       // forward like every field here: a bind REBUILDS the row, and a home dropped at the first hook
@@ -2370,7 +2389,7 @@ class Registry {
     if (orphaned) this.terminalAvailableAgents.delete(orphaned.agentId)
     if (promoted) this.terminalAvailableAgents.add(agentId)
     this.traceLaunch(agentId, previousLaunch, committed.launch, `register ${engine} (${isNew ? 'new session' : 're-register'})`)
-    return { entry: committed, isNew, evicted, rebound, orphaned }
+    return { entry: committed, isNew, evicted, rebound, orphaned, ...(refusedHome ? { refusedHome: true as const } : {}) }
   }
 
   remove(sessionId: string): boolean {

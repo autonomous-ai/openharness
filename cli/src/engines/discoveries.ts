@@ -52,6 +52,12 @@ export function profileHomeFromEnv(engine: AgentEngine, processEnv: Record<strin
   return profile ? profileFromEnv(profile, processEnv, defaultHome ?? env[profile.setting]) : null
 }
 
+/** The profile home a hook reports for `engine`: null for an engine with no profile, a home over 1,024 characters, and this machine's default. */
+export function reportedProfileHome(engine: AgentEngine, home: string | undefined, defaultHome?: string): string | null {
+  const profile = discoveryContract(engine)?.profile
+  return profile && home && home.length <= 1_024 ? profileHomeFromEnv(engine, { [profile.variable]: home }, defaultHome) : null
+}
+
 /** The same, read from the live process: `undefined` when it could not be read, which never overwrites what
  *  the registry knows. One cached environment read per process, as the grid probe makes. */
 export async function probeProfileHome(identity: ProcessIdentity, engine: AgentEngine): Promise<string | null | undefined> {
