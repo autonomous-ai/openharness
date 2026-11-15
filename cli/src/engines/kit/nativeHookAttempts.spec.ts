@@ -281,3 +281,22 @@ it('spends the original deadline across settlement and its own publication', asy
   await release(); await previous
   expect(readFileSync(file, 'utf8')).toBe('before')
 })
+
+it.each(['settle', 'join'] as const)('keeps sixteen expired %s waiters charged until their underlying promise settles', async kind => {
+  const file = join(root, 'hooks'); writeFileSync(file, 'before')
+  const previous = runHookPreparation([file], attempt => inspectHookFile(file).replace('original', attempt), { identity: 'original', timeoutMs: 1_000 }).catch(error => error)
+  await drain()
+  const work = vi.fn(async () => true)
+  const options = { timeoutMs: 5, ...(kind === 'join' ? { identity: 'original' } : settlement) }
+  const waiting = Array.from({ length: 16 }, () => runHookPreparation([file], work, options).catch(error => error))
+  await vi.advanceTimersByTimeAsync(5)
+  expect((await Promise.all(waiting)).every(error => /deadline/.test(error.message))).toBe(true)
+  expect(disk.pending.size).toBe(1)
+  const overflow = runHookPreparation([file], work, options).catch(error => error)
+  await vi.advanceTimersByTimeAsync(5)
+  expect((await overflow).message).toMatch(/waiters.*occupied/)
+  expect(work).not.toHaveBeenCalled()
+  await release(); await previous
+  expect(await runHookPreparation([file], work, options)).toBe(true)
+  expect(work).toHaveBeenCalledOnce()
+})

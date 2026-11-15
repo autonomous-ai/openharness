@@ -332,9 +332,11 @@ async function joinPreparation<T>(pending: PendingPreparation, options: HookPrep
   if (options.current?.() === false) throw new HookPreparationHeld('the joining owner changed')
   if (pending.waiters >= 16) throw new HookPreparationHeld('the preparation waiters are occupied')
   pending.waiters++
+  // The callback still occupies this slot after a joining caller’s shorter deadline.
+  const reply = pending.reply.finally(() => { pending.waiters-- })
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
-    const result = await Promise.race([pending.reply, new Promise<never>((_, reject) => {
+    const result = await Promise.race([reply, new Promise<never>((_, reject) => {
       timer = setTimeout(() => reject(new HookPreparationHeld('the joining preparation exceeded its deadline')), options.timeoutMs ?? 5_000)
     })])
     verifyRoutes()
@@ -349,7 +351,7 @@ async function joinPreparation<T>(pending: PendingPreparation, options: HookPrep
     if (options.current?.() === false) throw new HookPreparationHeld('the joining owner changed')
     options.confirmed?.(proof)
     return result as T
-  } finally { clearTimeout(timer); pending.waiters-- }
+  } finally { clearTimeout(timer) }
 }
 /** Waiting grants no publication proof: the caller must acquire and capture its own reservation afterward. */
 async function settlePreparations(conflicts: PendingPreparation[], options: HookPreparationOptions, verifyRoutes: () => void, deadline: number): Promise<void> {
@@ -358,15 +360,19 @@ async function settlePreparations(conflicts: PendingPreparation[], options: Hook
   if (performance.now() >= deadline) throw new HookPreparationHeld('the preparation exceeded its deadline')
   if (conflicts.some(pending => pending.waiters >= 16)) throw new HookPreparationHeld('the preparation waiters are occupied')
   for (const pending of conflicts) { pending.waiters++; pending.revoke() }
+  // A timeout ends the reply, not the callbacks retained by hung actual I/O.
+  const settled = Promise.all(conflicts.map(pending => pending.settled)).then(() => {
+    for (const pending of conflicts) pending.waiters--
+  })
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
-    await Promise.race([Promise.all(conflicts.map(pending => pending.settled)), new Promise<never>((_, reject) => {
+    await Promise.race([settled, new Promise<never>((_, reject) => {
       timer = setTimeout(() => reject(new HookPreparationHeld('the preparation exceeded its deadline')), deadline - performance.now())
     })])
     verifyRoutes()
     if (options.current?.() === false) throw new HookPreparationHeld('the waiting owner changed')
     if (performance.now() >= deadline) throw new HookPreparationHeld('the preparation exceeded its deadline')
-  } finally { clearTimeout(timer); for (const pending of conflicts) pending.waiters-- }
+  } finally { clearTimeout(timer) }
 }
 const pendingPreparations = new Set<PendingPreparation>()
 const MAX_PREPARATIONS = 16

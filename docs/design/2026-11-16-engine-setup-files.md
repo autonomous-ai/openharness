@@ -196,8 +196,8 @@ performance comparison, final closure measurement, push, PR and merge.
 
 ## Implementation evidence and limits
 
-Default source closure is 530 files / 88,311 lines, down from the clean eec base's 539 / 90,847.
-The same walk with legacy engine doors open (still excluding services/inline) is 674 / 108,400,
+Default source closure is 530 files / 88,317 lines, down from the clean eec base's 539 / 90,847.
+The same walk with legacy engine doors open (still excluding services/inline) is 674 / 108,406,
 versus 652 / 107,819; its growth includes both retained explicit legacy installation and the new
 boundary. The default core retains only small argument quoting, hook-script identity/refusal state,
 mandatory admission data, destination coordination and the generic publisher. Architecture assertions
@@ -291,3 +291,16 @@ checks. TypeScript passed. Earlier unchanged entry/master checks passed four/two
 architecture passed 25. The corrected off native case passed; its accompanying cold rerun remains
 explicitly diagnostic. Final bundled acceptance of the new handoff and second-client pending assertion,
 full gates and performance evidence remain for the integrated checkpoint. No signed Windows claim.
+
+
+Review of the frozen handoff found that releasing a waiter's slot at its reply deadline left the
+callback on hung actual work uncharged. Keep that same existing slot until the underlying promise
+settles: actual I/O for conflict handoff, or the original bounded reply for a same-input join. A caller's
+shorter deadline ends only its reply. One settlement continuation releases the slot, so repeated expired
+requests cannot accumulate callbacks beyond the existing sixteen-waiter bound. Capacity recovers when
+that underlying promise settles. This changes neither publication authority nor the overall deadline.
+
+The two retention regressions failed with the seventeenth request reaching its own deadline instead
+of being admission-held. After charging callbacks through settlement, the affected attempts/publication/
+cold-caller batch passed 47 tests in three files and TypeScript passed. Final native/full/performance
+acceptance remains open on the corrected frozen source.
