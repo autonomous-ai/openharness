@@ -328,6 +328,31 @@ describe('the agent browser, as its agent starts and ends', () => {
   const browsers = (port: Port | null = { attached: vi.fn(), stopped: vi.fn(), moved: vi.fn() }, rows = liveRows(), saved = savedRows()) =>
     ({ port, rows, saved, lifecycle: createAgentBrowserLifecycle(() => port, rows, saved) })
 
+  it('keeps launch credentials out of direct browser attach and move calls, including retained inline rows', () => {
+    const override = { networkId: 'fixture', networkName: 'Fixture', baseUrl: 'https://fixture.invalid/v1', apiKey: 'synthetic-browser-canary' }
+    const observed = row({ agentId: 'observed', browser: true, gridLaunch: override })
+    const enabled = row({ agentId: 'enabled', gridLaunch: override })
+    const moved = row({ agentId: 'moved', gridLaunch: override })
+    const plain = row({ agentId: 'plain' })
+    const { port, lifecycle } = browsers(undefined, liveRows(observed, enabled, moved, plain))
+    lifecycle.attached(plain)
+    lifecycle.observed(observed)
+    lifecycle.set('enabled', true)
+    lifecycle.taken('old', moved, true)
+    lifecycle.move('old', 'moved')
+    const attachments = vi.mocked(port!.attached).mock.calls.map(([session]) => session)
+    const moves = vi.mocked(port!.moved).mock.calls.map(([, session]) => session)
+    expect(attachments.map(session => session.agentId)).toEqual(['plain', 'observed', 'enabled', 'moved'])
+    expect(moves.map(session => session.agentId)).toEqual(['moved'])
+    for (const session of [...attachments, ...moves]) {
+      expect(Object.hasOwn(session, 'gridLaunch')).toBe(false)
+      expect([plain, observed, enabled, moved].includes(session)).toBe(false)
+    }
+    plain.gridLaunch = override
+    expect(JSON.stringify([...attachments, ...moves])).not.toContain(override.apiKey)
+    for (const session of [observed, enabled, moved]) expect(session.gridLaunch).toBe(override)
+  })
+
   it('stops the browser of an agent whose engine exits by itself', () => {
     const { port, lifecycle } = browsers()
     lifecycle.attached(withBrowser)

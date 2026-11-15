@@ -1,12 +1,13 @@
 # Core secret custody: agent views
 
-Design/inventory only, 16 November 2026. Package 6, step 3 of the [core plan](2026-11-15-core-plan.md),
+Design and implementation checkpoint, 16 November 2026. Package 6, step 3 of the [core plan](2026-11-15-core-plan.md),
 following [the secrets notes](2026-11-15-core-plan/secrets.md) and
 [audit security 7](2026-11-12-core-audit.md#security).
 
 Source inspected: `d592d766627f53693e0e96ff7b89f95dd2d28334`. Worktree:
 `/tmp/harness-core-secret-custody`, branch `codex/core-secret-custody`.
-Implementation is pending the coordinating agent's source-scope review. No product files have changed.
+The coordinating agent approved the Design and five-file main-based scope before implementation. The first
+implementation checkpoint is complete; broad validation, native E2E and performance measurements await coordination.
 
 ## Proposed first pull request
 
@@ -193,9 +194,9 @@ Current `services/processCoreApi.ts:isSession` requires an object with `agentId`
 lifecycle readers use metadata fields. The supported old-source reader fixtures must also be exercised before
 merge. This inventory is source evidence, not a claim that a native old binary has already been tested.
 
-## Source scope and validation before implementation approval
+## Approved source scope and validation
 
-Expected product files: `cli/src/core/api.ts`, `core/conversationQueries.ts`, `core/main.ts`,
+Changed product files: `cli/src/core/api.ts`, `core/conversationQueries.ts`, `core/main.ts`,
 `core/agents/lifecycle.ts`, `services/processCoreApi.ts`. Existing read-only helper signatures can continue to
 accept structurally compatible metadata. Any necessary additional product file must be reported before widening
 the source scope. Registry, stopped store, engine storage, launch override and connector implementations are
@@ -244,6 +245,35 @@ Before/after benchmark on the same pinned Node 24 build and quiet machine: repea
 serialization for 16/160 rows and repeated single-row plus frame-context reads, synthetic 64-byte/8-KiB keys
 and rows without keys. Compare allocation/latency/bytes separately; no secret-shaped values in output, only
 counts and timing. No performance result is claimed yet and no heavy tests have been run for this Design.
+
+### Focused checkpoint evidence
+
+All runs used Node `v24.22.2`, macOS, and one Vitest worker in the isolated worktree. An initial dependency-copy
+attempt executed no tests because `@sindresorhus/slugify` was absent; `npm ci --offline --no-audit --no-fund` rebuilt
+the pinned dependencies from the local cache. That setup failure is not red behavior evidence.
+
+| Check | Result | Local receipt |
+| --- | --- | --- |
+| Seven new caller/output regressions before product edits | 7 failed, 248 intentionally unselected, 4 files, 4.99 s | `/tmp/core-secret-custody-red.log` |
+| Same seven cases after the implementation | 7 passed, 248 intentionally unselected, 4 files, 2.93 s | `/tmp/core-secret-custody-green.log` |
+| API, conversation queries, Browser lifecycle, process CoreApi, handoff service/process, agent queries, architecture | 162 passed, 8 files, 9.27 s | `/tmp/core-secret-custody-focused.log` |
+| API file after its fixture-only typing corrections | 46 passed, 1 file, 1.04 s | `/tmp/core-secret-custody-api-final.log` |
+| Existing grid restore/resume cases, `-t grid` | 8 passed, 236 intentionally unselected, 2 files, 3.09 s | `/tmp/core-secret-custody-grid.log` |
+| `tsc --noEmit`, after fixture literal/optional-payload corrections | Passed, exit 0 | `/tmp/core-secret-custody-typecheck.log` |
+| `git diff --check` | Passed | Local diff |
+
+The new output test uses real CoreApi reads through generic agent/shown/device/workspace/viewer replies and
+Browser reconnect events. Browser lifecycle tests capture direct port arguments, including a retained no-key
+inline row that acquires a key later. Handoff tests cover projected live/stopped resolve, unchanged authoritative
+discovery input, and a real fork preparation/publication with both source and parent fingerprints unchanged.
+The architecture test confirms no new loaded core file. Authoritative registry, stopped store and launch
+implementations are untouched; existing grid restore/resume tests still pass.
+
+Still required before merge: the coordinated full core coverage gate and any checks selected by the final diff,
+native service/E2E validation (including the direct viewer wiring in `main.ts`), and before/after hot-path numbers.
+No native old binary, Linux or Windows run is claimed. The Browser combination must also exercise generic
+catch-up/running projection at its resulting source head. The snapshot reads add copies, including copies before
+existing query augmentation spreads; there is no claim of zero cost before measurement.
 
 ## Remaining custody work stays open
 
