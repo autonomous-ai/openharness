@@ -27,17 +27,21 @@ import { isLocalOnly } from '../lib/cardUpdate.js'
 import { TurnStats, type TurnStatsFields } from '../cable/turnStats.js'
 import { cableEventFor, cableStepFor, cableQuestionCloseFor, cableQuestionFor, DaemonCableHost } from '../cable/cableHost.js'
 import { CableSession, SHOWN_ONLY_PREFIX, type FollowCause } from '../cable/cableSession.js'
+import type { HostAdapter } from '../cable/hosts/adapter.js'
+import { createClaudeAppAdapter } from '../cable/hosts/claudeApp.js'
 import { codexQueueDeps, createCodexQueue, type CodexQueueDeps } from '../cable/hosts/codexQueue.js'
+import { createHerdrAdapter } from '../cable/hosts/herdr.js'
 import { Inbox } from '../cable/hosts/inbox.js'
 import { LAST_ANSWER_DEADLINE_MS, LAST_ANSWER_MAX_BYTES, readLastAnswer } from '../cable/hosts/lastAnswer.js'
 import { askedLine, hostDisplayName, observedAgentId, ObservedSource, type ObservedActions, type ObservedDeps, type PromptSource } from '../cable/hosts/observed.js'
 import { createOpenActions } from '../cable/hosts/open.js'
-import { createOrcaActions, orcaDeps, type OrcaDeps } from '../cable/hosts/orca.js'
+import { createOrcaAdapter, orcaDeps, type OrcaDeps } from '../cable/hosts/orca.js'
 import { readRecordName } from '../cable/hosts/recordName.js'
 import { HostRegistry } from '../cable/hosts/registry.js'
 import { learnApps } from '../cable/hosts/scannedApp.js'
-import { readTty, type Tab } from '../cable/hosts/tabs.js'
+import { createTabsAdapter, readTty, type Tab } from '../cable/hosts/tabs.js'
 import type { HostAgent, HostAgentState } from '../cable/hosts/types.js'
+import { createWeztermAdapter } from '../cable/hosts/wezterm.js'
 import { PetStore } from '../cable/pets/store.js'
 import { DialLog } from '../cable/dialLog.js'
 import { DialVerdicts } from '../cable/dialPortVerdicts.js'
@@ -262,8 +266,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   }
   const inbox = new Inbox({ now: monotonic, after: timerIn('inbox') })
   const apps = deps.orca ?? orcaDeps()
-  const orca = createOrcaActions(apps)
-  const opener = createOpenActions({ ...apps, orcaSwitch: (handle) => orca.switchTo(handle).then((done) => done === 'ok'), log })
+  const orca = createOrcaAdapter(apps)
+  const opener = createOpenActions({ ...apps, orcaSwitch: (handle) => orca.focus({ adapter: orca.id, id: handle }), log })
+  const claude = createClaudeAppAdapter({ ...apps, inFront: () => cableHost.latestFront() === 'claude' })
   // Harness's own Codex home, whose config `codex queue` loads; run from the home folder, so no project's .codex/ is read.
   const codexQueue = createCodexQueue({ ...(deps.codex ?? codexQueueDeps()), home: env.CODEX_HOME, cwd: homedir() })
   // The stream a watch holds open on the devices' listener: a rest or a tap on an agent in Terminal, iTerm2 or Ghostty
@@ -281,27 +286,31 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     written++
     selects = [...selects.filter((sent) => at - sent.at < TAB_ECHO_MS), { tty, at }].slice(-ECHO_KEPT)
   }
+  /** The apps an outside agent runs in, in the order its panes are kept: each verb of the dial takes the first that can. */
+  const adapters: readonly HostAdapter[] = [
+    createHerdrAdapter(apps),
+    createWeztermAdapter(apps),
+    orca,
+    // A rest's continue link: the app's attach that follows is the dial's own echo.
+    { ...claude, show: (pane, agentId) => { noteLink(agentId); return claude.show(pane, agentId) } },
+    createTabsAdapter({
+      isOpen: () => tabs.isOpen(),
+      select: (tab, raise) => {
+        if (!tabs.select(tab, raise)) return false
+        selected(tab.tty)
+        return true
+      },
+    }),
+  ]
   const observed = env.HARNESS_DEVICE_OBSERVED ? observedSource(core.dataDir, log, {
+    adapters,
     modReady: (sessionId) => inbox.ready(sessionId),
     toMod: (sessionId, text) => inbox.deliver(sessionId, text),
-    orcaSend: orca.send,
-    orcaSwitch: orca.switchTo,
     canOpen: opener.can,
     // A tap on a Claude app agent runs the continue link a rest runs: its attach is the dial's own echo too.
     open: (agentId, target) => {
       if (target.pane?.app === 'claude' && opener.can(target)) noteLink(agentId)
       return opener.open(agentId, target)
-    },
-    claudeInFront: () => cableHost.latestFront() === 'claude',
-    claudeShow: (agentId, session) => {
-      noteLink(agentId)
-      return opener.claudeShow(agentId, session)
-    },
-    tabsOpen: () => tabs.isOpen(),
-    tabSelect: (app, tty, raise) => {
-      if (!tabs.select({ app, tty }, raise)) return 'failed'
-      selected(tty)
-      return 'ok'
     },
     codexQueue,
     codexHome: env.CODEX_HOME,
