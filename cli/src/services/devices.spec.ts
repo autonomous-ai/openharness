@@ -3133,7 +3133,7 @@ describe('selecting a tab moves the dial (docs/specs/2026-11-15-dial-terminal-fo
     expect(tabLines()).toEqual([])
   })
 
-  it('one settle is one hook, and both the Claude app\'s follow and a waiting tab report act on it', async () => {
+  it('one settle is one hook, and both the Claude app\'s follow and a waiting tab report act on it, each guarded on its own', async () => {
     const { port, listener, report } = await dialWith()
     expect(Object.keys(seen.host).filter((key) => /settled/i.test(key))).toEqual(['appSettled'])
     report('terminal-app', TTY)
@@ -3146,7 +3146,17 @@ describe('selecting a tab moves the dial (docs/specs/2026-11-15-dial-terminal-fo
       hostHints: { __CFBundleIdentifier: 'com.anthropic.claudefordesktop', CLAUDE_CODE_HOST_SESSION_ID: 'local_8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b' },
     })
     expect(listener.attach(SESSION)).toBeUndefined()
+    // A tab report waiting as the Claude app settles is judged too: not its app, so dropped.
+    report('terminal-app', TTY)
     seen.host.appSettled!('claude')
     expect(asked()).toEqual([[ID, 'tab'], [observedAgentId('claude', SESSION), 'attach']])
+    expect(tabLines()).toEqual(['[device] tab · not-in-front'])
+    // The Claude app's follow throwing does not cost the tab report its settle.
+    vi.spyOn(seen.cable as unknown as { followLocal: (agentId: string, cause: string) => Promise<void> }, 'followLocal')
+      .mockImplementationOnce(() => { throw new Error('dial unplugged') })
+    report('terminal-app', TTY)
+    seen.host.appSettled!('claude')
+    expect(logs).toContain('[devices] dial failed · dial unplugged')
+    expect(tabLines()).toEqual(['[device] tab · not-in-front', '[device] tab · not-in-front'])
   })
 })
