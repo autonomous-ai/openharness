@@ -921,8 +921,7 @@ describe('harnessd\'s variables in the tmux server\'s environment', () => {
     const removedBefore = (name: string) => isHarnessdVariable(name) || isAgentSessionVariable(name)
     // The server starts as one an earlier core started from an agent's shell in an Orca terminal did: with
     // harnessd's variables, that agent's session and Orca's secrets, beside the person's own key.
-    const inherited = Object.fromEntries(Object.entries(process.env).filter(([name]) => !removedBefore(name)))
-    const tmux = await isolatedTmux({ ...inherited, HOME: home, ZDOTDIR: home, HISTFILE: join(home, 'history'),
+    const tmux = await isolatedTmux({ HOME: home, ZDOTDIR: home, HISTFILE: join(home, 'history'),
       HARNESSD_SERVICE_TOKEN: 'fixture-token', HARNESSD_SUPERVISED: '1', HARNESSD_WATCHDOG_MS: '30000', CLAUDECODE: '1',
       ORCA_PAIRING_CODE: 'fixture-pairing', ORCA_AGENT_SESSION_SPAWN_TOKEN: 'fixture-spawn', OPENAI_API_KEY: 'fixture-key' })
     // The backend's own bare `tmux` reaches this private server and no other.
