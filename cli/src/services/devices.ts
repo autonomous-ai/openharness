@@ -102,11 +102,12 @@ const unrouted = (reason: string): RouteAnswer => ({ agentId: '', machineId: '',
 const sid = (id: string): string => id.slice(0, 8)
 /** A card for the dial, and the machine it came from when another machine sent it (services/fleet.ts). */
 type DialEvent = NonNullable<ReturnType<typeof cableEventFor>> & { machineId?: string }
-/** What a dial made of a local follow, by its cause: the outcome only, never the app or the agent. A cause with no row
- *  writes nothing. */
-const FOLLOWED: Partial<Record<FollowCause, Record<'moved' | 'no-tile', string>>> = {
+/** What a dial made of a local follow, by its cause, or the settle's that asked it as an attach: the outcome only, never
+ *  the app or the agent. A cause with no row writes nothing. */
+const FOLLOWED: Partial<Record<FollowCause | 'settle', Record<'moved' | 'no-tile', string>>> = {
   prompt: { moved: '[device] prompt · moved', 'no-tile': '[device] prompt · skipped · no tile' },
   attach: { moved: '[device] attach · moved', 'no-tile': '[device] attach · skipped · no tile' },
+  settle: { moved: '[device] settle · moved', 'no-tile': '[device] settle · skipped · no tile' },
 }
 
 // The agents outside a pane: how often their processes are checked, the turns no hook moves are looked at, and, while a dial
@@ -333,7 +334,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // The outcome only: never the agent, its session or its terminal.
     swiped: (outcome) => log(`[device] swipe · ${outcome}`),
     localFollowed: (cause, outcome) => {
-      const line = FOLLOWED[cause]?.[outcome]
+      const line = FOLLOWED[cause === 'attach' ? attachAsk : cause]?.[outcome]
       if (line) log(line)
     },
     swarmSelected: (swarmId) => core.clients.sendLocal({ type: 'dial_swarm', payload: { swarmId } }),
@@ -765,6 +766,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   /** The agent of the app's last attach that named a listed Claude app agent, moved to or not: the session on the app's
    *  screen, which the dials turn to once the app settles in front. Gone with its session. */
   let claudeAgent: string | undefined
+  /** What the latest 'attach' follow was asked for: an attach, or the app settling in front. The follow's cause is shared
+   *  with feat/dial-terminal-follow and stays the same there and here, so the settle's lines are told apart by this; a
+   *  dial answers only for its latest ask (cableSession.ts followLocal's generation), so its answer is this ask's. */
+  let attachAsk: 'attach' | 'settle' = 'attach'
   /** When the dial's own continue link to each agent started, by the devices' clock: at most one per listed agent. */
   const dialLinks = new Map<string, number>()
   /** A tap's or a rest's link, noted as it starts, as the app's attach can come before `open` exits: that attach is the
@@ -789,6 +794,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     if (!listed) { log('[device] attach · skipped · unknown agent'); return }
     if (linkedByDial(agentId)) { log('[device] attach · skipped · echo'); return }
     if (cableHost.settledApp() !== 'claude') { log('[device] attach · skipped · not in front'); return }
+    attachAsk = 'attach'
     return cable.followLocal(agentId, 'attach')
   }
   const claudeSettled = (): Promise<void> | undefined => {
@@ -797,8 +803,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     if (outside(claudeAgent)?.app !== 'claude') { claudeAgent = undefined; return }
     // Any link, to another agent too: a swipe that rests as the app comes in front shows that one, and the settle must not
     // turn the dial back. Its attach, a moment later, is kept and skipped as its own echo.
-    if (linkedByDial()) { log('[device] attach · skipped · echo'); return }
-    log('[device] attach · on settle')
+    if (linkedByDial()) { log('[device] settle · skipped · echo'); return }
+    attachAsk = 'settle'
     return cable.followLocal(claudeAgent, 'attach')
   }
   const port: DevicesPort = {
