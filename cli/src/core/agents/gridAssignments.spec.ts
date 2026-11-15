@@ -117,12 +117,12 @@ it("refreshes a committed Codex swap in the background from its argv alone, with
   expect(s.rows[0].grid).toBeNull()
 })
 
-it('asks nothing of a Claude Code swap and leaves the grid its launch recorded', async () => {
+it.each(['claude', 'hermes', 'grok', 'copilot', 'opencode'] as const)('reads no command line of %s after a swap, its grid being in none, and keeps the grid its launch recorded', async engine => {
   const s = setup()
-  s.rows[0] = { ...s.rows[0], engine: 'claude', processIdentity: { pid: 123, startMarker: 'start', executable: 'claude' } }
-  vi.mocked(processLaunchArgs).mockResolvedValueOnce(`claude ${ON_GRID}`)
+  s.rows[0] = { ...s.rows[0], engine, processIdentity: { pid: 123, startMarker: 'start', executable: engine } }
   s.service.refresh(s.rows[0])
   await flush()
+  expect(processLaunchArgs).not.toHaveBeenCalled()
   expect(s.models.gridAssignments).not.toHaveBeenCalled()
   expect(s.registry.updateProcessIdentity).not.toHaveBeenCalled()
   expect(s.rows[0].grid).toEqual(assignment)
