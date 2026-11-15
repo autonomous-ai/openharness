@@ -11,6 +11,9 @@
  * One message is one `POST /` whose body is a JSON object with a string `type`. A dropped one is answered with a status
  * and an empty body, and counted: what a sender wrote is never echoed or logged, since a front names the app a person
  * has in front of them.
+ *
+ * A stream type (`tabs`) is answered with NDJSON lines that stay open: the way the devices process says something to a
+ * watch without the watch asking each time. One of a type is open at once, across every connection.
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Socket } from 'node:net'
@@ -19,6 +22,7 @@ import { dirname } from 'node:path'
 import { listenLocalSocket, type LocalSocketServer } from '../lib/localSocket.js'
 import { APP_IDS } from '../cable/hosts/hostDetect.js'
 import { FRONT_NONE } from '../cable/hosts/frontApp.js'
+import { tabOf, type Tab } from '../cable/hosts/tabs.js'
 
 /** Connections at once. Each type's rate across them is what this many could send at its rate on one, so a sender that
  *  opens one per message is held to that too. */
@@ -44,10 +48,24 @@ export interface ListenerHandler {
   handle(message: Record<string, unknown>, gone: AbortSignal): unknown
 }
 
+export interface ListenerStream {
+  /** One NDJSON line. False, with nothing written, once the stream has ended or while an earlier line has not drained. */
+  write(line: unknown): boolean
+  /** Aborts when the stream ends. */
+  readonly ended: AbortSignal
+}
+
+export interface ListenerStreamHandler {
+  maxBytes: number
+  perSecond: number
+  /** `REFUSED` for a body that is not a message of its type. Otherwise the stream is open, and the handler's to write on. */
+  open(message: Record<string, unknown>, stream: ListenerStream): typeof REFUSED | void
+}
+
 export interface DevicesListenerOptions {
   /** devices/listenerPath.ts; null where there is no listener: Windows, or a data folder and a home both too long. */
   path: string | null
-  handlers: Readonly<Record<string, ListenerHandler>>
+  handlers: Readonly<Record<string, ListenerHandler | ListenerStreamHandler>>
   log(line: string): void
   /** Monotonic milliseconds. */
   now?: () => number
@@ -114,10 +132,13 @@ export async function openDevicesListener(
   // Each connection's deadline, gone with it.
   const deadlines = new WeakMap<Socket, NodeJS.Timeout>()
   const waiting = new Set<AbortController>()
+  // The open stream of each type, as how to end it; and the connections that hold one.
+  const streams = new Map<string, () => void>()
+  const streaming = new WeakSet<Socket>()
   let dropped = { ...NONE_DROPPED }
   let minute: NodeJS.Timeout | undefined
 
-  const drop = (res: ServerResponse, status: number, kind: Dropped, close = false): void => {
+  const count = (kind: Dropped): void => {
     dropped[kind]++
     droppedRate.take(now())
     minute ??= setTimeout(() => {
@@ -125,7 +146,19 @@ export async function openDevicesListener(
       log(`[devices] listener in the last minute: ${dropped.unknown} unknown, ${dropped.oversized} oversized, ${dropped.rate} over rate, ${dropped.refused} refused, ${dropped.failed} failed`)
       dropped = { ...NONE_DROPPED }
     }, MINUTE_MS).unref()
+  }
+
+  const drop = (res: ServerResponse, status: number, kind: Dropped, close = false): void => {
+    count(kind)
     res.writeHead(status, close ? { Connection: 'close' } : undefined).end()
+  }
+
+  // A connection that holds a stream sends nothing more on it: its answer would wait behind a stream that never ends.
+  const heldByStream = (socket: Socket): boolean => {
+    if (!streaming.has(socket)) return false
+    count('refused')
+    socket.destroy()
+    return true
   }
 
   const allowed = (socket: Socket, type: string, perSecond: number): boolean => {
@@ -141,7 +174,57 @@ export async function openDevicesListener(
     return true
   }
 
+  const openStream = (type: string, handler: ListenerStreamHandler, message: Record<string, unknown>, socket: Socket, res: ServerResponse): void => {
+    const ended = new AbortController()
+    // At most one line waits to drain, and only for the 2 s a connection has to answer: a client that stops reading
+    // would otherwise hold the stream and its buffered lines.
+    let writable = false
+    let stall: NodeJS.Timeout | undefined
+    const end = (): void => {
+      if (ended.signal.aborted) return
+      writable = false
+      ended.abort()
+      clearTimeout(stall)
+      streams.delete(type)
+      // Its connection has no deadline left to free its slot.
+      socket.destroy()
+    }
+    let answer: typeof REFUSED | void
+    try {
+      answer = handler.open(message, {
+        ended: ended.signal,
+        write: (line) => {
+          if (!writable) return false
+          writable = false
+          stall = setTimeout(end, LISTENER_TIMEOUT_MS).unref()
+          // Called once the socket has taken the line, or with an error once the stream ended: it stays unwritable then.
+          res.write(`${JSON.stringify(line)}\n`, () => {
+            clearTimeout(stall)
+            writable = !ended.signal.aborted
+          })
+          return true
+        },
+      })
+    } catch {
+      ended.abort()
+      return drop(res, 500, 'failed')
+    }
+    if (answer === REFUSED) {
+      ended.abort()
+      return drop(res, 400, 'refused')
+    }
+    streams.get(type)?.()
+    streams.set(type, end)
+    streaming.add(socket)
+    clearTimeout(deadlines.get(socket))
+    res.once('close', end)
+    res.writeHead(200, { 'Content-Type': 'application/x-ndjson' }).flushHeaders()
+    writable = true
+  }
+
   const settle = async (req: IncomingMessage, res: ServerResponse, body: Buffer): Promise<void> => {
+    // Sent in the same write as the message that opened its connection's stream, it came before the stream was open.
+    if (heldByStream(req.socket)) return
     const message = messageOf(body)
     if (!message) return drop(res, 400, 'refused')
     const type = message.type as string
@@ -149,6 +232,7 @@ export async function openDevicesListener(
     if (!handler) return drop(res, 404, 'unknown')
     if (body.length > handler.maxBytes) return drop(res, 413, 'oversized')
     if (!allowed(req.socket, type, handler.perSecond)) return drop(res, 429, 'rate')
+    if ('open' in handler) return openStream(type, handler, message, req.socket, res)
     const gone = new AbortController()
     waiting.add(gone)
     res.once('close', () => { if (!res.writableFinished) gone.abort() })
@@ -167,6 +251,7 @@ export async function openDevicesListener(
   }
 
   const onRequest = (req: IncomingMessage, res: ServerResponse): void => {
+    if (heldByStream(req.socket)) return
     // A next message on a connection kept alive has the same time, counted from this answer.
     res.once('finish', () => deadlines.get(req.socket)?.refresh())
     // Its body is never read, so the connection closes after the answer rather than reading through that body, of any
@@ -218,6 +303,7 @@ export async function openDevicesListener(
   return {
     close: () => closed ??= (async () => {
       clearTimeout(minute)
+      for (const end of streams.values()) end()
       const gone = listening.close()
       for (const each of waiting) each.abort()
       await gone
@@ -273,5 +359,54 @@ export function attachHandler(attach: (sessionId: string) => void): ListenerHand
       if (typeof sessionId !== 'string' || !SESSION_ID.test(sessionId)) return REFUSED
       attach(sessionId)
     },
+  }
+}
+
+export const TAB_PER_SECOND = 10
+/** The longest message tab takes, `{"type":"tab","app":"terminal-app","tty":"/dev/ttys9999"}`, is 57 bytes. */
+export const TAB_MAX_BYTES = 96
+
+/** The selected tab of the tab app in front, from `harness hardware watch`: its app and tty, handed on and nothing else.
+ *  It keeps nothing and logs nothing, as a tty is as private as the app in front. */
+export function tabHandler(report: (tab: Tab) => void): ListenerHandler {
+  return {
+    maxBytes: TAB_MAX_BYTES,
+    perSecond: TAB_PER_SECOND,
+    handle: (message) => {
+      const tab = tabOf(message)
+      if (!tab) return REFUSED
+      report(tab)
+    },
+  }
+}
+
+/** Two a second on a connection: a watch opens it again after it ends, and a loop cannot churn it. */
+export const TABS_PER_SECOND = 2
+/** Its one message, `{"type":"tabs"}`, is 15 bytes. */
+export const TABS_MAX_BYTES = 32
+
+export interface TabsStream {
+  handler: ListenerStreamHandler
+  isOpen(): boolean
+  /** One line for the watch to select the tab; a tap's raises its window too. False with no stream open. */
+  select(tab: Tab, raise: boolean): boolean
+}
+
+/** The stream a watch holds open to hear which tab to select. Nothing waits for one that is not open: a select then is
+ *  not sent. */
+export function tabsStream(): TabsStream {
+  let open: ListenerStream | undefined
+  return {
+    handler: {
+      maxBytes: TABS_MAX_BYTES,
+      perSecond: TABS_PER_SECOND,
+      open: (_message, stream) => {
+        open = stream
+        // A newer stream is the open one by the time the older ends.
+        stream.ended.addEventListener('abort', () => { if (open === stream) open = undefined })
+      },
+    },
+    isOpen: () => open !== undefined,
+    select: ({ app, tty }, raise) => open?.write(raise ? { app, tty, raise: true } : { app, tty }) ?? false,
   }
 }
