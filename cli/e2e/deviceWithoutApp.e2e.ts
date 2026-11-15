@@ -8,9 +8,12 @@
  * - it goes when its process does, and one already running when the dial is plugged in is listed;
  * - one the scan finds reads the name the person gave it in its own record, and its folder for a name Claude Code made up;
  * - a window brings back its tab's list, and closing it the machine's;
- * - talking to it is refused kindly, and `HARNESS_DEVICE_OBSERVED=off` leaves only the Harness agent.
+ * - talking to it is refused kindly, and `HARNESS_DEVICE_OBSERVED=off` leaves only the Harness agent;
+ * - Claude Code in a tmux session the person opened (harness/ownTmux.ts) is listed with host tmux, takes the dial's words
+ *   through its mod, and a tap moves the person's own tmux client to its pane, never one on a session Harness made.
  */
 import { mkdirSync, writeFileSync } from 'node:fs'
+import { request } from 'node:http'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
@@ -18,6 +21,7 @@ import { IsolatedDaemon, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
 import type { DialMessage, FakeDial } from './harness/fakeDial.js'
 import { Outside } from './harness/outsideAgent.js'
+import { controlClient, InOwnTmux, type ControlClient } from './harness/ownTmux.js'
 
 const row = async (client: LocalClient, agentId: string) =>
   ((await client.request<{ agents: Array<Record<string, any>> }>('agents_list', { includeStopped: true }, 30_000)).agents)
@@ -35,6 +39,19 @@ async function create(daemon: IsolatedDaemon, client: LocalClient, folder: strin
   return created.agent.id
 }
 const isTurn = (type: string, agentId: string) => (frame: Frame) => frame.type === type && frame.agentId === agentId
+
+/** The mod's poll over the daemon's socket, as the mod sends it: its status and what it was answered. */
+const inboxPoll = (d: IsolatedDaemon, sessionId: string): Promise<{ status: number; body: unknown }> =>
+  new Promise((resolve, reject) => {
+    const req = request({ socketPath: d.socketPath, path: '/api/hook/inbox', method: 'POST', headers: { 'Content-Type': 'application/json' } },
+      (res) => {
+        let said = ''
+        res.on('data', (chunk: Buffer) => { said += chunk.toString('utf8') })
+        res.on('end', () => resolve({ status: res.statusCode ?? 0, body: JSON.parse(said) }))
+      })
+    req.on('error', reject)
+    req.end(JSON.stringify({ sessionId }))
+  })
 
 /** One list the dial was sent: its rows, between `agents.begin` and `agents.end`, and the end. */
 interface Roster { rows: DialMessage[]; end: DialMessage }
@@ -60,7 +77,10 @@ describe('the device without the app', () => {
   let daemon: IsolatedDaemon | undefined
   let desk: Desk | undefined
   const outside: Outside[] = []
+  const clients: ControlClient[] = []
   afterEach(async () => {
+    // Before any session goes: before tmux 3.7 a control client beside a closing session can crash the server.
+    for (const client of clients.splice(0)) await client.close()
     for (const engine of outside.splice(0)) await engine.close()
     await desk?.close()
     await daemon?.close()
@@ -281,6 +301,60 @@ describe('the device without the app', () => {
     expect(ids(roster)).toEqual([harness])
     expect(roster.end).toMatchObject({ view: 'machine', total: 1 })
     expect(dial.messages.some((m) => m.agentId === engine.id || m.id === engine.id)).toBe(false)
+    client.close()
+  })
+
+  it('Claude Code in a tmux session the person opened is listed with host tmux, works, and takes the dial\'s words through its mod', async () => {
+    const { d, desk } = await fresh()
+    const dial = await desk.plug('E2E-A', 'e2:e0:00:00:00:0a')
+    await heard(dial, (m) => m.t === 'agents.end', 'the first list')
+    const engine = await InOwnTmux.start(d, 'own-claude', 'in-tmux')
+    const roster = await showing(dial, 'the agent listed', (r) => r.rows.find((row) => row.id === engine.id)?.host === 'tmux')
+    // No bundle id: a tap switches its pane and brings no app forward.
+    expect(roster.rows.find((r) => r.id === engine.id)).toMatchObject({ name: 'in-tmux', engine: 'claude', host: 'tmux', caps: 'sf' })
+    // Nothing was registered for the pane.
+    const client = await LocalClient.connect(d)
+    expect(((await client.request('agents_list', { includeStopped: true }, 30_000)).agents as Array<{ tmuxPane?: string }>)
+      .filter((agent) => agent.tmuxPane === engine.pane)).toEqual([])
+    client.close()
+    const since = dial.messages.length
+    await engine.type('hello from tmux')
+    await heard(dial, (m) => m.t === 'turn.started' && m.agentId === engine.id, 'its turn started', since)
+    await heard(dial, (m) => m.t === 'turn.done' && m.agentId === engine.id, 'its turn done', since)
+    const poll = inboxPoll(d, engine.sessionId)
+    await showing(dial, 'voice once its mod polls', (r) => r.rows.find((row) => row.id === engine.id)?.caps === 'svf')
+    dial.send({ t: 'turn.send', agentId: engine.id, text: 'from the dial' })
+    expect(await poll).toEqual({ status: 200, body: { text: 'from the dial' } })
+  })
+
+  it('a tap on it switches the person\'s tmux client to its pane, never one on a Harness session, and brings no app forward', async () => {
+    const { d, desk } = await fresh()
+    const client = await LocalClient.connect(d)
+    // A session Harness made: an agent's, tagged and named as the daemon does both.
+    const harness = await create(d, client, 'in-harness')
+    const harnessPane = String((await row(client, harness))?.tmuxPane)
+    const dial = await desk.plug('E2E-A', 'e2:e0:00:00:00:0a')
+    await showing(dial, 'the harness agent listed', (r) => ids(r).includes(harness))
+    const engine = await InOwnTmux.start(d, 'own-claude', 'in-tmux')
+    await d.tmux.run('new-session', '-d', '-s', 'own-other', 'sleep 600')
+    await showing(dial, 'the agent listed', (r) => r.rows.find((row) => row.id === engine.id)?.caps === 'sf')
+    // Every session is made; now the clients. The person's first, then one as Desktop's terminal on the Harness agent is:
+    // it attached later, so it is the client used last, the one a bare switch-client moves.
+    const person = await controlClient(d, 'own-other')
+    clients.push(person)
+    const terminal = await controlClient(d, harnessPane)
+    clients.push(terminal)
+    expect(await person.where()).toMatch(/^own-other /)
+    const stays = await terminal.where()
+    expect(stays.startsWith('harness-') && stays.endsWith(` ${harnessPane}`), stays).toBe(true)
+    const since = dial.messages.length
+    dial.send({ t: 'agent.open', agentId: engine.id })
+    await until('the person\'s client on the agent\'s pane', async () => (await person.where()) === `own-claude ${engine.pane}`, 30_000, 100)
+    await heard(dial, (m) => m.t === 'focus' && m.agentId === engine.id, 'the dial on the agent', since)
+    expect(await terminal.where()).toBe(stays)
+    expect(dial.messages.slice(since).some((m) => m.t === 'toast')).toBe(false)
+    // No app to bring forward and no pane refused: nothing was said.
+    expect(d.log()).not.toContain('[device] open · tmux')
     client.close()
   })
 })
