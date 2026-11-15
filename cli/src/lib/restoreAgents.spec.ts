@@ -760,6 +760,19 @@ describe('restoreAgents — which agents get a pane back', () => {
     expect(fresh.rows.get('gridded')!.grid).toBeNull()
   })
 
+  it('writes the grid an earlier daemon\'s launch left on the row once it finds that launch\'s engine', async () => {
+    // That launch wrote its record on the row before it dispatched (`refreshGridWebSearch`); its engine was never seen.
+    const entry = row({ agentId: 'gridded', grid: { baseUrl: 'https://grid.example/old/relay', model: null }, gridLaunch: { ...GRID, model: 'm' },
+      launch: { state: 'starting', nativeToken: 'original' } })
+    const h = harness([entry], { alivePanes: ['%3'] })
+    h.deps.waitingPane = vi.fn(async () => false)
+    h.probes.set('%3', [identity(9)])
+    await restoreAgents(h.deps)
+    await vi.waitFor(() => expect(h.calls).toContain('updateIdentity:gridded:9'))
+    expect(entry.grid).toEqual({ baseUrl: GRID.baseUrl, model: 'm' })
+    expect(h.launches).toEqual([])
+  })
+
   it('does not relaunch a grid agent whose credential was never persisted, and marks it so', async () => {
     // A row written before `gridLaunch` existed: it knows WHERE it pointed and nothing else. On the
     // engine's own login it would spend the wrong account while looking identical.
