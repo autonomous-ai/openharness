@@ -156,6 +156,8 @@ No file under `cli/src/core/` changes, and `cli/src/architecture.coreFiles.txt` 
   - `the binary is the Codex Harness launches, looked for again after 30 s`, on the real `codexQueueDeps().binary`, in a temp folder `dir`:
     - `vi.stubEnv('CODEX_PATH', '')` and `vi.stubEnv('PATH', dir)`: null; then `join(dir, 'codex')` once that file exists and can be run.
     - `vi.stubEnv('CODEX_PATH', join(dir, 'other', 'my-codex'))`: null while that file is missing, though `join(dir, 'codex')` is on `PATH`; then that path once it exists and can be run.
+    - Fake `performance`, 30 s on between looks.
+  - `the binary is looked for once in 30 s: a codex installed or removed is seen after them` (the final review), on the real `codexQueueDeps().binary` with a fake `performance`: null, and still null 29,999 ms after `join(dir, 'codex')` is installed, then that path at 30 s; the same path 29,999 ms after it is removed, then null at 30 s.
 - [ ] **Step 2: Run** `cd cli && npx vitest run src/cable/hosts/codexQueue.spec.ts`. Expected: FAIL (no `./codexQueue.js`).
 - [ ] **Step 3: Implement** `codexQueue.ts` as "Interfaces" says. The file's header says why the id and the text are checked here (the id came from a hook, the text from the dial), why Codex's output is never read, and why the file logs nothing (Codex's own error text names the thread and the home).
 - [ ] **Step 4: Run** the step 2 command, then `cd cli && npm run typecheck`. Expected: PASS.
