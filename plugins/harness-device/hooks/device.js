@@ -99,8 +99,8 @@ async function send($, state) {
   const found = await devicesSocketOf($, launcher).catch(() => '')
   if (!found || !state.linked) return
   state.linked = { ...state.linked, devicesSocket: found }
-  // Held still only if no detach came while the launcher ran.
-  await send($, state)
+  // Held still only if no detach came while the launcher ran. From a timer, so a reload while it ran cancels it.
+  $.clock.after(0, () => void send($, state))
 }
 
 /**
