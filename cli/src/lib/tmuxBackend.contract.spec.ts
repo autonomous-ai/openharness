@@ -8,11 +8,17 @@ const enabled = process.env.RUN_TERMINAL_CONTRACT === '1' && process.platform !=
 ;(enabled ? runTerminalBackendContract : () => describe.skip('tmux contract', () => {}))('tmux', async () => {
   // A private tmux server: the backend runs bare `tmux`, so the environment points it at the fixture's
   // socket directory and clears the variables that would reach the developer's own server.
-  const server = await isolatedTmux({ PATH: process.env.PATH, TERM: 'xterm-256color' })
+  const server = await isolatedTmux({ TERM: 'xterm-256color' })
   vi.stubEnv('TMUX', undefined)
   vi.stubEnv('TMUX_PANE', undefined)
   vi.stubEnv('TMUX_TMPDIR', server.root)
   const cleanup = async () => { await server.close(); vi.unstubAllEnvs() }
+  // The fixture starts the server, and keeps it up while the cases kill their panes: the first client is the one whose
+  // environment every pane gets.
+  await server.run('new-session', '-d', '-s', 'fixture-anchor', '/bin/sleep', '600').catch(async (error: unknown) => {
+    await cleanup()
+    throw error
+  })
   const backend = new TmuxBackend(() => DEFAULT_HOST_THEME)
   // A backend that cannot be readied fails the suite saying why, and leaves no server or stubbed environment.
   const prepared = await backend.prepare({ ownedPanes: new Map() }).catch(async (error: unknown) => {
@@ -22,6 +28,13 @@ const enabled = process.env.RUN_TERMINAL_CONTRACT === '1' && process.platform !=
   if (prepared.state !== 'ready') {
     await cleanup()
     throw new Error(`tmux contract: tmux is unavailable (${prepared.code}): ${prepared.reason}`)
+  }
+  // The backend's panes take the environment of the server they reach: the fixture's, with its PATH, never one the
+  // backend's own bare `tmux` started from the worker's (review of 2026-11-16).
+  const path = await server.run('show-environment', '-g', 'PATH').catch(() => 'no server')
+  if (path !== `PATH=${server.env.PATH}`) {
+    await cleanup()
+    throw new Error('tmux contract: the backend would start its own server, with the worker\'s environment')
   }
   return { backend, cleanup }
 })

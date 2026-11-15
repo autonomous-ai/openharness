@@ -5,12 +5,13 @@
  * 2026-11-15, docs/plans/2026-11-15-e2e-daemon-isolation-design.md). A developer with HARNESS_CONNECTIONS_DIR set gave
  * every daemon under test their connected services' tokens, and one with Harness OS connections under XDG_DATA_HOME
  * had them copied into the test's root (lib/connectors/store.ts `adoptLegacy`). A daemon now inherits only an allowlist
- * (src/testing/daemonEnvironment.ts), and the harness names the rest (harness/daemon.ts).
+ * (src/testing/daemonEnvironment.ts), and the harness names the rest (harness/daemon.ts). A tmux server the test starts
+ * takes the same allowlist (src/testing/isolatedTmux.ts).
  *
  * Every path and value here is made up, in a folder of this test. `vi.stubEnv` puts them in this worker's environment
  * as a developer's shell would, and takes them out again: no real value of these variables is read or printed.
  */
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, onTestFailed, vi } from 'vitest'
@@ -46,6 +47,28 @@ async function connected(d: IsolatedDaemon): Promise<string[]> {
   } finally { client.close() }
 }
 
+/** A terminal tile of [d], up: its row. */
+async function tile(d: IsolatedDaemon, client: LocalClient, name: string): Promise<{ id: string; tmuxPane: string }> {
+  const cwd = join(d.projectsDir, name)
+  mkdirSync(cwd, { recursive: true })
+  const opened = await client.request('agent_create', { engine: 'terminal', cwd }, 60_000)
+  expect(opened.error, JSON.stringify(opened)).toBeUndefined()
+  return until('the terminal tile to be up', async () => {
+    const { agents } = await client.request<{ agents: Array<{ id: string; status: string; tmuxPane?: string }> }>('agents_list', { includeStopped: true }, 30_000)
+    const now = agents.find((agent) => agent.id === opened.agent.id)
+    return now?.status === 'active' && now.tmuxPane ? { id: now.id, tmuxPane: now.tmuxPane } : null
+  }, 60_000, 250)
+}
+
+/** What [line], typed into [pane], wrote into [file]: the tile's own answer, never its whole environment. The file is
+ *  moved into place whatever the line returned: `whence -p` returns 1 for a name it cannot find. */
+async function typed(d: IsolatedDaemon, pane: string, line: string, file: string): Promise<string> {
+  await d.tmux.run('send-keys', '-t', pane, '-l', `${line} > ${file}.tmp; mv ${file}.tmp ${file}`)
+  await d.tmux.run('send-keys', '-t', pane, 'Enter')
+  // Boxed: an empty answer is an answer too (`whence -p` of names it cannot find), and `until` waits for a truthy one.
+  return (await until(`the tile to write ${file}`, () => existsSync(file) ? { text: readFileSync(file, 'utf8') } : null, 30_000, 100)).text
+}
+
 describe('a daemon under test knows nothing of the developer\'s own state', () => {
   let scratch = ''
   let daemon: IsolatedDaemon | undefined
@@ -60,21 +83,34 @@ describe('a daemon under test knows nothing of the developer\'s own state', () =
   })
 
   it('has its profile under its own home, and its own tmux folder, temporary folder and Store catalog', async () => {
+    // The worker's own temporary folder, kept where it is: with no TMPDIR, as on CI's Linux runners, os.tmpdir() reads
+    // the made-up TMP below, a folder that does not exist, and the fixture could not make its root in it.
+    vi.stubEnv('TMPDIR', tmpdir())
     // A developer's shell that names every one of them: made-up folders, so a failure prints nothing real.
-    for (const name of ['USERPROFILE', 'LOCALAPPDATA', 'APPDATA']) vi.stubEnv(name, join(scratch, name))
+    for (const name of ['USERPROFILE', 'LOCALAPPDATA', 'APPDATA', 'TEMP', 'TMP']) vi.stubEnv(name, join(scratch, name))
     vi.stubEnv('HARNESS_STORE_CATALOG_URL', 'https://store.invalid/catalog.json')
     const d = daemon = await IsolatedDaemon.create()
     const home = d.env.HOME!
     expect({
       USERPROFILE: d.env.USERPROFILE, LOCALAPPDATA: d.env.LOCALAPPDATA, APPDATA: d.env.APPDATA,
-      TMUX_TMPDIR: d.env.TMUX_TMPDIR, TMPDIR: d.env.TMPDIR, HARNESS_STORE_CATALOG_URL: d.env.HARNESS_STORE_CATALOG_URL,
+      TMUX_TMPDIR: d.env.TMUX_TMPDIR, TMPDIR: d.env.TMPDIR, TEMP: d.env.TEMP, TMP: d.env.TMP,
+      HARNESS_STORE_CATALOG_URL: d.env.HARNESS_STORE_CATALOG_URL,
     }).toEqual({
       USERPROFILE: home, LOCALAPPDATA: join(home, 'AppData', 'Local'), APPDATA: join(home, 'AppData', 'Roaming'),
-      TMUX_TMPDIR: d.tmux.root, TMPDIR: join(d.root, 't'), HARNESS_STORE_CATALOG_URL: 'http://127.0.0.1:9/catalog.json',
+      TMUX_TMPDIR: d.tmux.root, TMPDIR: join(d.root, 't'), TEMP: join(d.root, 't'), TMP: join(d.root, 't'),
+      HARNESS_STORE_CATALOG_URL: 'http://127.0.0.1:9/catalog.json',
     })
     // A daemon beside another shares its home and its tmux server. Never started: the first one's close takes its folders.
     const beside = await IsolatedDaemon.create({ beside: d })
     expect([beside.env.HOME, beside.env.USERPROFILE, beside.env.TMUX_TMPDIR]).toEqual([home, home, d.tmux.root])
+  })
+
+  it('runs its tiles under /bin/zsh, whatever shell the developer uses, unless a test names another', async () => {
+    vi.stubEnv('SHELL', '/fake/bin/fish')
+    const d = daemon = await IsolatedDaemon.create()
+    expect(d.env.SHELL).toBe('/bin/zsh')
+    // Never started: it only shows whose word wins. Beside the first, whose close takes its folders.
+    expect((await IsolatedDaemon.create({ beside: d, env: { SHELL: '/bin/bash' } })).env.SHELL).toBe('/bin/bash')
   })
 
   it('takes nothing from the shell but what it needs to run', async () => {
@@ -129,5 +165,68 @@ describe('a daemon under test knows nothing of the developer\'s own state', () =
     failed(d)
     await d.start()
     expect(await connected(d)).toEqual(['test_service'])
+  })
+
+  it('gives a tile nothing of the developer\'s when the test itself opened the first tmux session', async () => {
+    vi.stubEnv('FAKE_DEV_SECRET', 'e2e-not-a-secret')
+    const d = daemon = await IsolatedDaemon.create()
+    failed(d)
+    // The first client to reach a socket starts its server, and the server's environment is that client's.
+    await d.tmux.run('new-session', '-d', '-s', 'opened-by-the-test', '/bin/sleep', '600')
+    await d.start()
+    const client = await LocalClient.connect(d)
+    try {
+      const { tmuxPane } = await tile(d, client, 'own-session')
+      expect(await typed(d, tmuxPane, 'printf \'%s\\n\' "${FAKE_DEV_SECRET-unset}"', join(d.root, 'tile-secret'))).toBe('unset\n')
+    } finally { client.close() }
+  })
+
+  it('finds its own engines first in a tile\'s login shell, whatever the system\'s profile puts ahead of them', async () => {
+    const d = daemon = await IsolatedDaemon.create()
+    failed(d)
+    // As macOS's /etc/zprofile does (path_helper), on any machine, and like it in a login shell only: a folder put
+    // ahead of the daemon's own, after the harness's line in .zshenv and before its line in .zprofile. Its engines
+    // only leave a mark, and nothing runs them.
+    const decoy = join(scratch, 'decoy'), mark = join(scratch, 'decoy-ran')
+    mkdirSync(decoy)
+    for (const name of ['claude', 'codex']) writeFileSync(join(decoy, name), `#!/bin/sh\necho ${name} >> ${mark}\n`, { mode: 0o755 })
+    appendFileSync(join(d.env.ZDOTDIR!, '.zshenv'), `[[ -o login ]] && path=(${decoy} $path)\n`)
+    // The startup lines are the home's, written once: a daemon beside the first adds no second.
+    await IsolatedDaemon.create({ beside: d })
+    expect(readFileSync(join(d.env.ZDOTDIR!, '.zprofile'), 'utf8').trim().split('\n')).toHaveLength(1)
+    await d.start()
+    const client = await LocalClient.connect(d)
+    try {
+      const { tmuxPane } = await tile(d, client, 'path')
+      // Asked, never typed: on a developer's Mac the name alone would start their real engine.
+      expect(await typed(d, tmuxPane, 'whence -p claude codex', join(d.root, 'resolved')))
+        .toBe(`${join(d.root, 'bin', 'claude')}\n${join(d.root, 'bin', 'codex')}\n`)
+      expect(existsSync(mark)).toBe(false)
+    } finally { client.close() }
+  })
+
+  it('finds no engine of the developer\'s by name: its PATH is its own bin, the linked tools and the system\'s folders', async () => {
+    // A folder of the developer's PATH with two engines in it, as ~/.opencode/bin and ~/.local/bin are: made up, and
+    // each would only leave a mark.
+    const theirs = join(scratch, 'their-bin'), mark = join(scratch, 'their-engine-ran')
+    mkdirSync(theirs)
+    for (const name of ['opencode', 'cursor-agent']) writeFileSync(join(theirs, name), `#!/bin/sh\necho ${name} >> ${mark}\n`, { mode: 0o755 })
+    vi.stubEnv('PATH', `${theirs}:${process.env.PATH}`)
+    const d = daemon = await IsolatedDaemon.create()
+    failed(d)
+    // A yes or a no, never the folders: at the base they are the developer's own.
+    const own = d.env.PATH!.split(':').filter((folder) => !['/usr/bin', '/bin', '/usr/sbin', '/sbin'].includes(folder))
+    expect(own.length === 2 && own[0] === join(d.root, 'bin') && own[1] === join(d.root, 'tools'), 'PATH: its bin, the linked tools, the system\'s folders').toBe(true)
+    // The one engine whose recipe names a path outside any home (/usr/local/bin/hermes, lib/engineInstall.ts): the
+    // daemon's Hermes is its own bin's, missing until a test writes one.
+    expect(d.env.HERMES_PATH).toBe(join(d.root, 'bin', 'hermes'))
+    await d.start()
+    const client = await LocalClient.connect(d)
+    try {
+      const { tmuxPane } = await tile(d, client, 'other-engines')
+      // Asked, never typed. `whence -p` prints nothing for a name it cannot find.
+      expect(await typed(d, tmuxPane, 'whence -p opencode cursor-agent', join(d.root, 'resolved-others'))).toBe('')
+      expect(existsSync(mark)).toBe(false)
+    } finally { client.close() }
   })
 })
