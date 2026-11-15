@@ -98,6 +98,35 @@ describe('connectToMaster', () => {
     expect(channel.sent).toEqual([{ type: 'harnessd:want', service: 'orchestrator' }])
   })
 
+  it('waits for the master to attest an exact service process, without polling', async () => {
+    const channel = new FakeChannel(), link = connectToMaster(channel, supervised)
+    const proof = link.serviceProcess('engine-others', 42, 1000)
+    channel.say({ type: 'harnessd:status', status: { services: [{ name: 'engine-others', pid: 41 }] } })
+    expect(channel.sent).toEqual([{ type: 'harnessd:want', service: 'engine-others' }])
+    channel.say({ type: 'harnessd:status', status: { services: [{ name: 'engine-others', pid: 42 }] } })
+    expect(await proof).toBe(true)
+    expect(await link.serviceProcess('engine-others', 42, 1000)).toBe(true)
+    const unavailable = link.serviceProcess('engine-others', 43, 1000)
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(await unavailable).toBe(false)
+    expect(await connectToMaster(channel, {}).serviceProcess('engine-others', 42, 1000)).toBe(false)
+  })
+
+  it('bounds pending process attestations and refuses invalid, lost or closed evidence', async () => {
+    const channel = new FakeChannel(), link = connectToMaster(channel, supervised)
+    for (const [pid, wait] of [[42, 0], [0, 100], [1.5, 100]]) expect(await link.serviceProcess('engine-others', pid, wait)).toBe(false)
+    const pending = Array.from({ length: 4 }, () => link.serviceProcess('engine-others', 42, 1000))
+    expect(await link.serviceProcess('engine-others', 42, 1000)).toBe(false)
+    channel.say({ type: 'harnessd:status', status: {} })
+    channel.say({ type: 'harnessd:status', status: { services: [{ name: 'another', pid: 42 }] } })
+    channel.leave()
+    expect(await Promise.all(pending)).toEqual([false, false, false, false])
+    expect(await link.serviceProcess('engine-others', 42, 1000)).toBe(false)
+    const other = connectToMaster(new FakeChannel(), supervised)
+    const closing = other.serviceProcess('engine-others', 42, 1000)
+    other.close(); expect(await closing).toBe(false)
+  })
+
   it('asks its master to stop everything, and says when there is no master to ask', () => {
     const channel = new FakeChannel()
     expect(connectToMaster(channel, supervised).stopAll()).toBe(true)

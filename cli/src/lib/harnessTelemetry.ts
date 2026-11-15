@@ -6,7 +6,7 @@ import { readMacProcessGpu, type MacProcessGpu } from './macosProcessGpu.js'
 
 import type { RegisteredSession } from './registry.js'
 import { sessionCheckpoints } from './sessionCheckpoint.js'
-import { sessionDataBytes } from './purgeAgentService.js'
+import { sessionDataBytes } from '../engines/others/historySize.js'
 
 const exec = promisify(execFile)
 export type ProcessTelemetry = { readBytes: number | null; writeBytes: number | null; gpuMemoryBytes: number | null; gpuPercent?: number | null; macGpu?: MacProcessGpu }

@@ -13,6 +13,11 @@ import { terminalRouteKey } from './terminalRuntime.js'
 import { checkPidRuntime, terminateDeletedAgent } from './deleteAgentFallback.js'
 import { signalAgentProcess } from './processSignals.js'
 import { engineDescendants, treeSurvivors } from './processTree.js'
+import { databaseCheckpointEvidence, type DatabaseCheckpointProof } from './databaseCheckpoint.js'
+import { HERMES_TERMINAL_RECORD } from '../engines/hermes/contract.js'
+import { terminalRecordEvidence, terminalRecordNames } from '../engines/kit/terminalRecord.js'
+import { env } from '../config/env.js'
+import { START_SLACK_MS } from './sessionRepair.js'
 
 export interface StopAgentServiceDeps {
   settlePane?: (agentId: string) => Promise<void>
@@ -24,6 +29,7 @@ export interface StopAgentServiceDeps {
   /** The backend that holds [runtime] (`terminals.backendFor`): each of the row's panes is closed by its own. A pane on
    *  a backend this daemon does not have is left alone, as a tmux pane was with no tmux. */
   backendFor(runtime: TerminalRuntimeRef): Pick<TerminalBackend, 'kill'> | undefined
+  paneInfo?: TerminalBackend['paneInfo']
   agentReconciler: {
     suppress(session: RegisteredSession): void
     holdRoute(route: string): void
@@ -56,7 +62,7 @@ export interface StopAgentOptions {
   /** A Close must earn its permission again after saving, immediately before signalling. */
   beforeStop?(session: RegisteredSession): Promise<void>
   /** Retain native history before exit, then include anything the engine flushed while exiting. */
-  checkpoint?(session: RegisteredSession, phase: 'before' | 'after'): Promise<void>
+  checkpoint?(session: RegisteredSession, phase: 'before' | 'after', databaseProof?: DatabaseCheckpointProof): Promise<void>
   /** Fresh proof that an unbound chat has never started and its composer is empty. */
   confirmUnusedConversation?(session: RegisteredSession): Promise<boolean>
   /**
@@ -147,16 +153,38 @@ export function createStopAgentService(deps: StopAgentServiceDeps) {
       binding = bindingIdentity(current)
       const transcript = !guest && s.sessionId && s.transcriptPath && engineKeepsTranscriptFile(s.engine)
         ? controlTranscriptEvidence(s.engine, s.sessionId, s.transcriptPath, s.codexHome ?? undefined, s.cwd) : undefined
+      let databaseProof = !guest && s.sessionId && !engineKeepsTranscriptFile(s.engine) && !isTerminalEngine(s.engine)
+        ? await databaseCheckpointEvidence(s, () => sameTarget() && options.current?.() !== false) : undefined
+      let terminal: ReturnType<typeof terminalRecordEvidence> | undefined
+      // Windows binding uses hooks rather than the POSIX terminal record (core/agents/hermesTerminal.ts).
+      if (databaseProof && s.engine === 'hermes' && s.processIdentity && process.platform !== 'win32') {
+        const runtime = s.runtimes.find(one => terminalRouteKey(one) === s.primaryRuntimeKey) ?? s.runtimes[0]
+        const pane = runtime ? await deps.paneInfo?.(runtime).catch(() => null) : null
+        if (!pane || typeof pane.tty !== 'string') throw new IdentityReadUnavailable('the native terminal name is unavailable')
+        const tty = pane.tty || null
+        const names = terminalRecordNames(HERMES_TERMINAL_RECORD, { tty, tmuxPane: runtime?.backend === 'tmux' ? runtime.paneId : null })
+        terminal = terminalRecordEvidence(HERMES_TERMINAL_RECORD, s.hermesHome ?? env.HERMES_HOME, names,
+          Date.parse(s.processIdentity.startMarker) - START_SLACK_MS, s.sessionId)
+      }
+      let effect = false, exited = false
       let nativeIdentityError: IdentityReadUnavailable | undefined
       const verifyTranscript = () => {
-        try { transcript?.verify() } catch (error) {
+        try {
+          transcript?.verify()
+          if (!exited) terminal?.verify(effect)
+          if (!effect) databaseProof?.verify()
+        } catch (error) {
           if (error instanceof IdentityReadUnavailable) nativeIdentityError = error
           throw error
         }
       }
       // Saving precedes every mutation. A storage failure leaves the live agent alone.
+      verifyTranscript()
+      if (!sameTarget() || options.current?.() === false) {
+        throw new AgentStopError('Harness changed while saving its conversation. Try stopping again.')
+      }
       stoppedAgents.save(s)
-      await options.checkpoint?.(s, 'before')
+      await options.checkpoint?.(s, 'before', databaseProof && { ...databaseProof, verify: verifyTranscript })
       verifyTranscript()
       await options.beforeStop?.(s)
       verifyTranscript()
@@ -186,6 +214,7 @@ export function createStopAgentService(deps: StopAgentServiceDeps) {
               verifyTranscript()
               if (!sameTarget() || options.current?.() === false) throw new AgentStopError('The close request was cancelled or changed.')
               signalAgentProcess(pid, signal)
+              if (pid === s.processIdentity?.pid) effect = true
             },
             sleep: ms => new Promise(resolve => { const timer = setTimeout(resolve, ms); timer.unref?.() }),
             log: message => console.log(message),
@@ -199,12 +228,17 @@ export function createStopAgentService(deps: StopAgentServiceDeps) {
         if (termination === 'failed' || termination === 'not-ours') {
           throw new AgentStopError('Could not confirm that the harness stopped. Its saved conversation is safe. Try stopping again.')
         }
+        // The five database engines have no shared-server Stop. Only a successful signal or proven exit
+        // retires their pre-effect generation; a denied signal keeps it for every later attempt.
+        exited = true
+        effect = true
+        databaseProof = databaseProof?.fresh()
         // Never close a replacement's pane, even when our old process exited.
         if (!sameTarget() || options.current?.() === false) {
           throw new AgentStopError('The harness changed while pausing. Check its current state before trying again.')
         }
         verifyTranscript()
-        await options.checkpoint?.(s, 'after')
+        await options.checkpoint?.(s, 'after', databaseProof)
         verifyTranscript()
         if (!sameTarget() || options.current?.() === false) {
           throw new AgentStopError('The harness changed while pausing. Check its current state before trying again.')

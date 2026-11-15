@@ -99,6 +99,16 @@ export class NativePaths {
     this.budget.step()
     const separator = this.windows ? '\\' : '/'
     const retained = [...this.parts].filter(([path]) => path !== removedPath && !path.startsWith(removedPath + separator))
+    return this.retainParts(retained)
+  }
+
+  /** An operation never crosses reboot: retain device identity too, with a fresh budget for every fence. */
+  retain(): () => void {
+    this.verify()
+    return this.retainParts([...this.parts])
+  }
+
+  private retainParts(retained: [string, Part][]): () => void {
     return () => {
       const fresh = new NativePaths(new NativeEvidenceBudget(), this.windows ? 'win32' : 'linux')
       for (const [path, part] of retained) fresh.parts.set(path, part)

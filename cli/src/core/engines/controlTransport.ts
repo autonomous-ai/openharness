@@ -1,4 +1,4 @@
-import { readerEngine, READER_SERVICES, type ReaderEngine } from '../../engines/worker/protocol.js'
+import { workerEngine, workerService, workerPayload, WORKER_SERVICES, type WorkerEngine } from '../../engines/worker/protocol.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { sessionBinding } from './sessionBinding.js'
 
@@ -17,7 +17,7 @@ interface Contract {
   version: number
   capabilities: string
   inFlight: number
-  capable(reply: Record<string, unknown>, engine: ReaderEngine): boolean
+  capable(reply: Record<string, unknown>, engine: WorkerEngine): boolean
   result(reply: Record<string, unknown>): void
   unavailable(): Error
   error(error: unknown): Error
@@ -26,11 +26,11 @@ interface Contract {
 
 /** Shared control lifetime, not engine behavior. Binding and connection never follow a replacement. */
 export function createControlTransport(deps: ControlTransportDeps, contract: Contract) {
-  const states = new Map(Object.values(READER_SERVICES).map(service => [service as string, { generation: 0, connected: false, capable: false, pending: 0 }]))
+  const states = new Map(WORKER_SERVICES.map(service => [service as string, { generation: 0, connected: false, capable: new Set<string>(), pending: 0 }]))
   const bind = (registered: RegisteredSession) => {
     const engine = registered.engine
-    if (!readerEngine(engine)) return undefined
-    const session = structuredClone(registered), binding = sessionBinding(registered), service = READER_SERVICES[engine]
+    if (!workerEngine(engine)) return undefined
+    const session = structuredClone(registered), binding = sessionBinding(registered), service = workerService(engine)
     const isolated = deps.handles(engine), state = states.get(service)!
     const generation = state.generation + (state.connected ? 0 : 1)
     const sameSession = () => sessionBinding(deps.resolve(session.agentId)) === binding
@@ -42,18 +42,18 @@ export function createControlTransport(deps: ControlTransportDeps, contract: Con
       const deadline = performance.now() + ms
       const allowed = () => active && performance.now() < deadline && current()
       const call = async (method: string, payload: Record<string, unknown>) => {
-        const reply = await deps.call(service, method, { version: contract.version, ...payload }, Math.max(1, Math.ceil(deadline - performance.now())))
+        const reply = await deps.call(service, method, workerPayload(engine, { version: contract.version, ...payload }), Math.max(1, Math.ceil(deadline - performance.now())))
         if (!allowed()) throw contract.unavailable()
         contract.result(reply)
       }
       try {
         return await boundedControl((async () => {
-          if (isolated && !state.capable) {
+          if (isolated && !state.capable.has(engine)) {
             // A first startup can finish this intent; a reconnect cannot resume it.
             if (state.generation !== generation && (state.connected || state.generation !== generation - 1)) throw contract.unavailable()
-            const reply = await deps.call(service, contract.capabilities, { version: contract.version }, ms)
+            const reply = await deps.call(service, contract.capabilities, workerPayload(engine, { version: contract.version }), ms)
             if (!allowed() || !contract.capable(reply, engine)) throw contract.unavailable()
-            state.capable = true
+            state.capable.add(engine)
           }
           if (!allowed()) throw contract.unavailable()
           const value = await work(allowed, call)
@@ -67,7 +67,7 @@ export function createControlTransport(deps: ControlTransportDeps, contract: Con
   }
   const connection = (service: string, connected: boolean) => {
     const state = states.get(service)
-    if (state) { state.generation++; state.connected = connected; state.capable = false }
+    if (state) { state.generation++; state.connected = connected; state.capable.clear() }
     contract.connectionChanged(service)
   }
   return { bind, connected: (service: string) => connection(service, true), disconnected: (service: string) => connection(service, false) }

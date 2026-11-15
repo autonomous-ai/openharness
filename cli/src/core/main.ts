@@ -1,12 +1,13 @@
 import { createGridAssignments } from './agents/gridAssignments.js'
 import { createShortTurnGuard } from './turns/shortTurnGuard.js'
 import { createQuestionControls } from './engines/questionControls.js'
+import { createEngineStorage } from './engines/storage.js'
 import { masterRunsEngineQuestionControl } from '../harnessd/services.js'
 import { createModelControls } from './engines/modelControls.js'
 import { masterRunsEngineModelControl } from '../harnessd/services.js'
 import { createScreens } from './engines/screens.js'
 import { createScreenTransport } from './engines/screenTransport.js'
-import { inProcessScreen, preloadEngine } from '../engines/inProcess.js'
+import { terminalScreen } from '../engines/kit/screen.js'
 import { opencodeMajorVersion } from '../engines/launchControl.js'
 import { inspectNativeLaunch, type NativeLaunch } from '../engines/nativeLaunch.js'
 import { nativeHookLocations } from '../engines/kit/nativeLocations.js'
@@ -105,7 +106,7 @@ import { RESUME_READINESS_BUDGET_MS } from '../lib/resumeStoppedAgent.js'
 import { createConversationOwners } from './agents/conversationOwners.js'
 import { createQuietTitles } from './agents/quietTitles.js'
 import { OpenTabProtection } from '../lib/openTabProtection.js'
-import { sessionCheckpoints } from '../lib/sessionCheckpoint.js'
+import { SessionCheckpointStore } from '../lib/sessionCheckpoint.js'
 import { repairProjectCwds } from '../lib/cwdRepair.js'
 import { stoppedAgents } from '../lib/stoppedAgents.js'
 import { externalSessionAnswer, externalUnavailable } from '../lib/externalSessionWire.js'
@@ -272,7 +273,7 @@ import { forgetAgentProject } from '../lib/agentProject.js'
 import { createUsageLink } from './usageLink.js'
 import type { UsageSnapshots } from './usageLink.js'
 import { usageTarget, validUsage, validUsageTarget, type AgentUsageTarget } from '../lib/agentUsageWire.js'
-import { RuntimeProfileState, type RuntimeModelOption } from '../lib/runtimeProfileState.js'
+import type { RuntimeModelOption } from '../engines/facets/runtime.js'
 import { createRuntimeProfiles } from './engines/runtimeProfiles.js'
 import { createRuntimeTransport } from './engines/runtimeTransport.js'
 import { RuntimeProfileController } from '../lib/runtimeControl.js'
@@ -595,9 +596,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     catch { console.warn('[apis] Tool instructions could not be added. Saved connections remain available through harness api.') }
   }
 
-  // What a session of another engine reads starts loading as the session enters, from disk or later
-  // (engines/inProcess.ts).
-  registry.onEnter = preloadEngine
   registry.load()
   // Bindings can finish before full teardown exists, or during its awaits. Cover every owned exit,
   // including a staged update received during startup, without touching a different daemon's table.
@@ -738,11 +736,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const isolatedLive = (engine: string): boolean => liveHosted
     && readerEngine(engine) && outOfProcess.has(READER_SERVICES[engine])
   const questionControlHosted = masterRunsEngineQuestionControl(harnessd, process.ppid)
-  const isolatedQuestionControl = (engine: string): boolean => questionControlHosted && isolatedLive(engine)
+  const isolatedQuestionControl = (engine: string): boolean => (questionControlHosted && isolatedLive(engine)) || (othersRuntime && isOtherEngine(engine))
   const modelControlHosted = masterRunsEngineModelControl(harnessd, process.ppid)
   const isolatedModelControl = (engine: string): boolean => modelControlHosted && isolatedLive(engine)
   const screenHosted = masterRunsEngineScreen(harnessd, process.ppid)
-  const isolatedScreen = (engine: string): boolean => screenHosted && isolatedLive(engine)
+  const isolatedScreen = (engine: string): boolean => (screenHosted && isolatedLive(engine)) || (othersRuntime && isOtherEngine(engine))
   const submissionHosted = masterRunsEngineSubmission(harnessd, process.ppid)
   const nativeControlHosted = masterRunsEngineNativeControl(harnessd, process.ppid)
   const isolatedNativeControl = (engine: string): boolean => nativeControlHosted && isolatedLive(engine)
@@ -753,14 +751,28 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const resumeRepairHosted = masterRunsEngineResumeRepair(harnessd, process.ppid)
   const isolatedResumeRepair = (engine: string): boolean => resumeRepairHosted && isolatedLive(engine)
   const isolatedSubmission = (engine: string): boolean => submissionHosted && isolatedLive(engine)
-  const isolatedRuntime = (engine: string): boolean => runtimeHosted && isolatedLive(engine)
+  const isolatedRuntime = (engine: string): boolean => (runtimeHosted && isolatedLive(engine)) || (othersRuntime && isOtherEngine(engine))
   // The other engines' worker reads their history and last turns (engines/others/), under a master that runs it; from
   // its version 2 it follows their live conversations too, and under an older master their streams run in this process.
   const othersHosted = outOfProcess.has(OTHER_ENGINES_SERVICE) && otherEnginesVersion(harnessd, process.ppid) >= 1
   const othersLive = othersHosted && otherEnginesVersion(harnessd, process.ppid) >= 2
-  const inline = knownServices.some((name) => !outOfProcess.has(name)) || !othersLive || !runtimeHosted || !screenHosted || !modelControlHosted || !questionControlHosted || !submissionHosted || !nativeControlHosted || !backgroundJobHosted || !providerMoveHosted || !resumeRepairHosted
+  const othersRuntime = othersHosted && otherEnginesVersion(harnessd, process.ppid) >= 3
+  const othersStorage = othersHosted && otherEnginesVersion(harnessd, process.ppid) >= 4
+  // Compatibility with explicit inline mode and older masters, until 2026-12-15.
+  const inline = knownServices.some((name) => !outOfProcess.has(name)) || !othersStorage || !runtimeHosted || !screenHosted || !modelControlHosted || !questionControlHosted || !submissionHosted || !nativeControlHosted || !backgroundJobHosted || !providerMoveHosted || !resumeRepairHosted
     ? await import('../services/inline.js') : null
+  if (!othersRuntime) {
+    registry.onEnter = engine => inline?.preloadEngine(engine)
+    for (const session of registry.list()) inline?.preloadEngine(session.engine)
+  }
   let serviceLinksRef: ServiceLinks | null = null
+  const engineStorage = createEngineStorage({ isolated: othersStorage, inline: inline?.hermesBackground, inlineExport: inline?.exportDatabase,
+    serviceProcess: coreLink.serviceProcess,
+    ready: (engine, ms) => engineLinks.ready(engine, ms),
+    call: (service, type, payload, waitMs) => serviceLinksRef?.call(service, type, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }),
+  })
+  const sessionCheckpoints = new SessionCheckpointStore(undefined, { exportDatabase: engineStorage.exportDatabase })
+  await sessionCheckpoints.prepare()
   const runtimeTransport = createRuntimeTransport({
     call: (service, type, payload, waitMs) => serviceLinksRef?.call(service, type, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }),
   })
@@ -768,7 +780,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     call: (service, type, payload, waitMs) => serviceLinksRef?.call(service, type, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }),
   })
   const screens = createScreens({ handles: isolatedScreen, transport: screenTransport, resolve: id => registry.resolve(id),
-    inline: (engine, capture) => readerEngine(engine) ? capture === null ? undefined : inline?.screenFor(engine).inspect(capture) : inProcessScreen(engine, capture) })
+    inline: (engine, capture) => isTerminalEngine(engine) ? terminalScreen(capture) : capture === null ? undefined : inline?.screenFor(engine).inspect(capture) })
   const submissionTransport = createSubmissionTransport({
     call: (service, type, payload, waitMs) => serviceLinksRef?.call(service, type, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }),
   })
@@ -800,7 +812,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Which engine workers are linked now: a close's read refused by a restart waits here for the new link.
   const engineLinks = createEngineLinks()
   const runtimeProfiles = createRuntimeProfiles({
-    local: new RuntimeProfileState(engine => isolatedRuntime(engine) ? undefined : inline?.runtimeFor(engine), id => registry.resolve(id)),
+    local: inline ? new inline.RuntimeProfileState(engine => isolatedRuntime(engine) ? undefined : inline.runtimeFor(engine), id => registry.resolve(id)) : undefined,
     handles: isolatedRuntime,
     resolve: id => registry.resolve(id), transport: runtimeTransport })
   const questionControls = createQuestionControls({
@@ -1691,6 +1703,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     notice: (service, payload) => { if (service === 'gateway') gatewayLink?.notice(payload); else if (service === 'devices') devicesLink.notice(payload); else if (service === 'wifi') wifiLink.notice(payload); else if (service === 'viewers') viewersLink.notice(payload); else if (service === 'recaps') recapsLink.notice(payload); else if (service === 'agentBrowser') agentBrowserLink.notice(payload) },
     binary: (service, bytes) => { if (service === 'gateway') gatewayLink?.binary(bytes); else if (service === 'agentBrowser') agentBrowserLink.binary(bytes) },
     connected: (service) => {
+      engineStorage.connected(service)
       if (othersLive && service === OTHER_ENGINES_SERVICE) otherStreams.connected()
       engineReaders.connected(service)
       liveTransport.connected(service)
@@ -1718,6 +1731,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       void heldLaunches.restoreHeld(service)
     },
     disconnected: (service) => {
+      engineStorage.disconnected(service)
       if (service === 'search') searchGeneration++
       if (service === 'usage') usageLink.disconnected()
       if (othersLive && service === OTHER_ENGINES_SERVICE) otherStreams.disconnected()
@@ -2897,6 +2911,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const receipts = new AgentCreationReceipts(join(env.ADAPTER_DATA_DIR, 'agent-creations'))
   // Stopping, purging and resuming an agent (core/agents/lifecycle.ts).
   const lifecycle = createAgentLifecycle({
+    paneInfo: (runtime) => terminals.backendFor(runtime)?.paneInfo(runtime) ?? Promise.resolve(null),
     settlePane: restorePanes.settle,
     cancelExternal: externalResumes.cancel,
     registry,
@@ -2968,7 +2983,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     announceSession,
     engineReady: (engine, ms) => engineLinks.ready(engine, ms),
     stoppedAgents,
-    backgroundCommands: (s) => backgroundCommands(s),
+    backgroundCommands: (s) => backgroundCommands(s, { readHermes: engineStorage.background }),
   })
   backend.closeAgentService = closing.closeAgentService
   backend.closeAgentService.start()

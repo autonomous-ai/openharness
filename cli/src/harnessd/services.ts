@@ -152,11 +152,12 @@ export const ENGINE_RESUME_REPAIR_ENV = 'HARNESSD_ENGINE_RESUME_REPAIR'
 /**
  * What the other engines' worker serves, as a version: `<master pid>:<version>`. 1 is their history and last turn; 2
  * adds their live streams (engines/others/streams.ts), which a core under a master of 1 runs in its own process.
+ * 3 adds runtime controls; 4 adds storage inspection and checkpoint export.
  * A version only grows, each one serving what the ones before it did: a core asks the worker only for what the
  * version its master says covers, and reads the rest in its own process, as under a master from before the worker.
  */
 export const ENGINE_OTHERS_ENV = 'HARNESSD_ENGINE_OTHERS'
-export const ENGINE_OTHERS_VERSION = 2
+export const ENGINE_OTHERS_VERSION = 4
 
 /**
  * What a master puts in its core's environment about the services it runs in their own processes: the
