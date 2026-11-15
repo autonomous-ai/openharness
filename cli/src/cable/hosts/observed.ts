@@ -32,6 +32,9 @@ const TURN_SETTLE_MS = 2_000
 const ASK_SETTLE_MS = 1_000
 /** The firmware's activity line, `activity[100]` (ui_habitat.c), less its terminating zero: it cuts a longer one there. */
 const LINE_BYTES = 99
+/** A tty read that failed (`ps` timed out under load, or did not run) is tried again on a later event, no sooner than this:
+ *  a busy machine is not handed one more `ps` per hook. */
+const TTY_RETRY_MS = 10_000
 
 /** What a turn's start was: a prompt a person typed, one another session sent, or the dial's own words. */
 export type PromptSource = 'person' | 'relayed' | 'dial'
@@ -79,7 +82,8 @@ export interface ObservedDeps {
   actions?: ObservedActions
   /** The app each of these processes runs in, where its parents name one (scannedApp.ts); absent, nothing is learned. */
   apps?(pids: readonly number[]): Promise<ReadonlyMap<number, string>>
-  /** The tty of a process in a tab app (tabs.ts readTty); absent (off macOS), no agent has a tab. */
+  /** The tty of a process in a tab app (tabs.ts readTty), rejecting when `ps` could not be read; absent (off macOS), no
+   *  agent has a tab. */
   tty?(pid: number): Promise<string | undefined>
 }
 
@@ -120,6 +124,8 @@ interface Entry {
   /** The process its tty was read for, its latest in a tab app, and that tty once read. */
   ttyPid?: number
   tty?: string
+  /** When the read of ttyPid began, once that read failed. */
+  ttyFailedAt?: number
   /** What a tap opens, from its last event: none for a session the scan found, until its first. */
   opens: OpenTarget
   /** What the permission prompt it waits on asks, from its hook (deviceClaude/asked.ts): '' when it names nothing. */
@@ -294,15 +300,21 @@ export class ObservedSource implements HostSource {
   /**
    * Its tty, read once per process in the background: a session resumed in another tab runs in a process of its own, and
    * the old tab holds something else now, so its tty goes at once. An answer lands only on its own entry, and only while
-   * that process is still its latest; a read that fails is no tty.
+   * that process is still its latest. A read that fails said nothing of the tty: a later event reads it again, `??` never.
    */
   private learnTty(entry: Entry, pid: number): void {
-    if (entry.ttyPid === pid) return
+    const now = this.deps.now()
+    if (entry.ttyPid === pid && (entry.ttyFailedAt === undefined || now - entry.ttyFailedAt < TTY_RETRY_MS)) return
     entry.ttyPid = undefined
     entry.tty = undefined
+    entry.ttyFailedAt = undefined
     if (!this.deps.tty || !isTabApp(entry.agent.app)) return
     entry.ttyPid = pid
-    this.deps.tty(pid).then((tty) => { if (entry.ttyPid === pid) entry.tty = tty }, () => {})
+    this.deps.tty(pid).then((tty) => { if (entry.ttyPid === pid) entry.tty = tty }, () => {
+      if (entry.ttyPid === pid) entry.ttyFailedAt = now
+      // A count only: never the pid or the session.
+      this.deps.log('[observed] tty · not read')
+    })
   }
 
   private emit(): void {

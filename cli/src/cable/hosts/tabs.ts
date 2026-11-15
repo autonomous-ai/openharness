@@ -33,11 +33,14 @@ const runPs: RunPs = (args, bounds) => new Promise((resolve) => {
   execFile('/bin/ps', args, { ...bounds, killSignal: 'SIGKILL' }, (error, stdout) => resolve(error === null ? stdout : null))
 })
 
-/** The tty of a pid's terminal; an agent with none (`??`) or one the check refuses has no tab to follow. */
+/**
+ * The tty of a pid's terminal; an agent with none (`??`) or one the check refuses has no tab to follow. A run that failed
+ * (a timeout, a spawn error, a non-zero exit) rejects: it said nothing of the tty, so it may be asked again.
+ */
 export async function readTty(pid: number, run: RunPs = runPs): Promise<string | undefined> {
   if (!Number.isInteger(pid) || pid <= 0) return undefined
   const out = await run(['-o', 'tty=', '-p', String(pid)], { timeout: 1_000, maxBuffer: 256 })
-  if (out === null) return undefined
+  if (out === null) throw new Error('ps failed')
   const tty = `/dev/${out.trim()}`
   return TAB_TTY.test(tty) ? tty : undefined
 }
