@@ -51,6 +51,14 @@ folders, so on the dial they cannot be told apart. The app's list and the dial s
    diagnosing Diego's report that two idle Claude app sessions were missing from the dial (the scan's miss is its own
    fix, `fix/process-table-full-comm`).
 
+6. **The record must still name the session.** The scan's owners can be a few seconds old: a session that `/clear`s or
+   `/resume`s in that time leaves `<pid>.json` naming another session. The record's `sessionId` is read too, and its
+   name is taken only when that id is the listed session's (as `confirmOwner` in `engines/kit/adoption.ts` checks).
+   It is an id, not content. (The PM's recommendation, taken after 3 minutes, 2026-11-15, from the final review.)
+7. **A session first heard of by a hook other than a start keeps its folder until its next prompt** (after a daemon
+   restart, a busy session's first hook can be its Stop, and the scan does not list a session already known). Left as
+   a follow-up, not in this PR.
+
 ## Design
 
 ### The hook (`cli/hook/notify.mjs` `observedBody`)
@@ -96,7 +104,7 @@ folders, so on the dial they cannot be told apart. The app's list and the dial s
   (`engines/kit/adoption.ts`) claims from: an owner claimed from its arguments has no record, and a transcript is never
   opened here.
 - One read of at most 16 KiB (a record is about 1–2 KiB): a larger file, one that is not JSON, or one whose `name` is not
-  a string gives no name. `nameSource` must be the string `user`. The name is cleaned and cut as the hook's title is
+  a string gives no name. `nameSource` must be the string `user`, and `sessionId` the listed session's (decision 6). The name is cleaned and cut as the hook's title is
   (whitespace folded, trimmed, 64 UTF-16 units without splitting a surrogate pair, none with a control character).
 - Read in the devices process, by the scan's own reader, for the sessions it lists in that look (at most 50), after the
   rows and apps are read and under the same look: a session a hook told of meanwhile keeps what the hook said.
@@ -166,6 +174,7 @@ the core's refused and dropped counts already show a refused hook event. No coun
 - The scan missing Claude app sessions altogether (`ps` cuts their path, so their owner is never claimed): its own
   item, `fix/process-table-full-comm`. Until it lands, decision 5 names only the sessions the scan finds.
 - Engines other than Claude Code in the scan.
+- A session first heard of by a hook other than `session-start` or `turn-start` reading its record's name (decision 7).
 - A rename while the session is idle reaching the dial before the next prompt (Claude Code sends no hook for it).
 - Names of other engines' sessions whose hooks carry no title.
 - The firmware cutting a 40-byte name inside a multi-byte letter (true of every agent's name today).
@@ -182,7 +191,7 @@ the core's refused and dropped counts already show a refused hook event. No coun
   - a `session-start` with a title on a session the scan listed renames it;
   - a Claude session the scan lists whose record says `name: 'Tho', nameSource: 'user'` reads "Tho"; `derived`, a
     missing or non-string name, a record over 16 KiB, a read that fails, or a record path not shaped
-    `<sessions>/<pid>.json` read the folder; a hook that came while the scan read keeps its own name; a later Claude
+    `<sessions>/<pid>.json`, or a record whose `sessionId` is another session's, read the folder; a hook that came while the scan read keeps its own name; a later Claude
     `turn-start` with no title reads the folder; the scan's line counts the named ones;
   - another engine's `turn-start` with no title keeps its title.
 - `observedHook.spec.ts`: `title` is passed on for `session-start` and `turn-start`; a title over 64 UTF-16 units,
