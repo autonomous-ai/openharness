@@ -805,6 +805,38 @@ mod tests {
         );
     }
 
+    /// A stream that hands on each chunk it is sent, as one read, and ends once its sender is gone.
+    struct Chunks(mpsc::Receiver<Vec<u8>>);
+
+    impl Read for Chunks {
+        fn read(&mut self, into: &mut [u8]) -> io::Result<usize> {
+            let Ok(chunk) = self.0.recv() else { return Ok(0) };
+            into[..chunk.len()].copy_from_slice(&chunk);
+            Ok(chunk.len())
+        }
+    }
+
+    #[test]
+    fn the_replaced_line_is_found_across_reads_and_only_whole() {
+        let (send, chunks) = mpsc::channel();
+        let (done, ended) = mpsc::channel();
+        let (logged, said) = mpsc::channel();
+        tail(Chunks(chunks), done, move || logged.send(()).unwrap());
+        // Split across reads, and found before the stream ends.
+        send.send(b"tabs str".to_vec()).unwrap();
+        send.send(b"eam replaced\n".to_vec()).unwrap();
+        assert_eq!(said.recv_timeout(WAIT), Ok(()));
+        // A line that starts or ends with it, or holds it far into a long one, is not it.
+        send.send(b"tabs stream replaced!\nx tabs stream replaced\n".to_vec()).unwrap();
+        let long = [b"tabs stream replaced".repeat(400), b"\n".to_vec()].concat();
+        send.send(long[..4096].to_vec()).unwrap();
+        send.send(long[4096..].to_vec()).unwrap();
+        send.send(b"tabs stream replaced\n".to_vec()).unwrap();
+        drop(send);
+        assert_eq!(ended.recv_timeout(WAIT), Ok(()));
+        assert_eq!(said.try_iter().count(), 1);
+    }
+
     #[cfg(unix)]
     #[test]
     fn a_cli_that_cannot_start_is_one_log_line() {
