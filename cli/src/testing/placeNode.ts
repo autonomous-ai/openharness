@@ -14,6 +14,18 @@ export class RosettaNodeError extends Error {
 }
 
 /**
+ * Throws [RosettaNodeError] when [machine] says Rosetta runs this Node: it translates a binary again at each new path.
+ * On an M1 Pro (2026-11-15) the first run of a fresh x86_64 copy took 15.3 s and of a hard link of it 16.1 s, against
+ * 0.30 s for an arm64 copy. A test that runs two such paths outlasts master.spec.ts's 30 s waits (2 failed in 141 s; on
+ * an arm64 Node 60 of 60 in 23 s). No wait is long enough for that, so a test that copies its Node asks this first and
+ * fails by name. A symlink costs nothing (0.08 s), since it runs the file it names. [machine] is this Node's; a spec
+ * names another.
+ */
+export function refuseRosettaNode(machine: Machine = { platform: process.platform, arch: process.arch, cpu: cpus()[0]?.model }): void {
+  if (machine.platform === 'darwin' && machine.arch === 'x64' && machine.cpu?.startsWith('Apple')) throw new RosettaNodeError()
+}
+
+/**
  * A copy of this test's Node at [path] (a clone where the filesystem can), that starts from [path]'s folder and from each
  * of [runFrom], where a test hard-links it further.
  *
@@ -22,14 +34,10 @@ export class RosettaNodeError extends Error {
  * other specs' fake launchctl included ('Library not loaded: @rpath/libnode.147.dylib', #4395). So the copy gets that
  * library linked beside it in each folder it runs from; an official Node has none and needs nothing.
  *
- * Never a Node that Rosetta runs: it translates a binary again at each new path. On an M1 Pro (2026-11-15) the first
- * run of a fresh x86_64 copy took 15.3 s and of a hard link of it 16.1 s, against 0.30 s for an arm64 copy. A test
- * that runs two such paths outlasts master.spec.ts's 30 s waits (2 failed in 141 s; on an arm64 Node 60 of 60 in
- * 23 s). No wait is long enough for that, so [machine] is refused by name before anything is copied. A test names
- * another machine.
+ * Never a Node that Rosetta runs ([refuseRosettaNode], with [machine]): it is refused before anything is copied.
  */
-export function placeNode(path: string, runFrom: string[] = [], machine: Machine = { platform: process.platform, arch: process.arch, cpu: cpus()[0]?.model }): void {
-  if (machine.platform === 'darwin' && machine.arch === 'x64' && machine.cpu?.startsWith('Apple')) throw new RosettaNodeError()
+export function placeNode(path: string, runFrom: string[] = [], machine?: Machine): void {
+  refuseRosettaNode(machine)
   copyFileSync(process.execPath, path, constants.COPYFILE_FICLONE)
   chmodSync(path, 0o755)
   const lib = join(dirname(dirname(realpathSync(process.execPath))), 'lib')
