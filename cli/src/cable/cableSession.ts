@@ -3392,9 +3392,12 @@ export class CableSession {
     // did not change is not sent twice.
     this.agentsPushedAt = -Infinity
     await this.syncSwarms()
-    await this.syncAgents()
+    // Back on the tab the window's agent is followed before the tab's list goes: follow writes the record, then pushes the
+    // list, so the list's re-assert lands on that agent. Pushed first, the list re-asserted the agent the dial left the tab
+    // on, and the dial stepped onto it on its way to the window's.
     const focused = this.host.appFocus?.(this.asItself)
     if (focused) await this.followApp(focused.machineId, focused.agentId)
+    await this.syncAgents()
   }
 
   async toast(text: string): Promise<void> {
