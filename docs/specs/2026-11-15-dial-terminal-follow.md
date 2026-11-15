@@ -51,17 +51,16 @@ Earlier Diego chose to do Terminal, iTerm2 and Ghostty "via Harness Device Autom
 - **When Terminal comes to the front, the dial goes to the agent of its selected tab**, once the app in front settles
   (1 s, as `feat/dial-app-filter` settles it).
 - Poll every 500 ms. A tab report that matches the dial's own select within 2 s is that select's echo. macOS only.
-- **Coordination with `dial-claude-app-follow`** (same base, agreed 2026-11-15). That branch also changes the follow
-  code in the devices process. Two shared shapes; whichever branch lands first defines them, and the other rebases and
-  adds its own branch:
-  - `CableSession.followPrompt` becomes `followLocal(agentId, cause)`, with cause `'prompt' | 'tab' | 'attach'`.
-    `'attach'` is that branch's. This branch makes the rename, and the pane dispatch below, as one task of two
-    commits that touch only these shared shapes. That branch cherry-picks exactly those two commits (PM,
-    2026-11-15).
-  - The observed source's `hasPane` and `showPane` dispatch on the agent's pane kind (`orca`, `tty`, and that branch's
-    `claude`). Each kind has its own action in `ObservedActions`: `orcaSwitch` (as today) and this branch's `tabSelect`.
-  - That branch adds `attachHandler` next to `frontHandler` in `devicesListener.ts`, and registers it in `devices.ts`.
-    That does not overlap with this branch's stream handler.
+- **Coordination with `dial-claude-app-follow`** (#4326, agreed 2026-11-15). That branch also changes the follow code
+  in the devices process. It landed first with the shared shapes; this branch took them from main and dropped its own
+  copies:
+  - `CableSession.followPrompt` became `followLocal(agentId, cause)`, with cause `'prompt' | 'tab' | 'attach'`.
+    `'attach'` is #4326's.
+  - The observed source's `hasPane` and `showPane` dispatch on the agent's pane kind (`orca`, `tty` and `claude`).
+    Each kind has its own action in `ObservedActions`: `orcaSwitch` and this branch's `tabSelect`.
+  - #4326's `attachHandler` sits next to `frontHandler` in `devicesListener.ts`; it does not overlap with this
+    branch's stream handler.
+  - The settle of the app in front is one hook, `appSettled`, which the Claude app's follow and the tab follow share.
 
 ## Design
 
@@ -182,7 +181,7 @@ did not settle in front is dropped. Acting on a report:
    for the settle is also set aside when the dial sent any select after it arrived: the dial moved since.
 2. **The agent:** the live agent outside Harness with that app and that tty, the most recently active one if two
    match. None (a plain shell tab, an agent in tmux): the dial stays.
-3. **The move:** the same path as a prompt the person submits (`CableSession.followPrompt`, through `followApp`). It
+3. **The move:** the same path as a prompt the person submits (`CableSession.followLocal(agentId, 'tab')`, through `followApp`). It
    keeps that path's ring check (no tile, no move), its queue and its echo guard, and an agent the dial already shows
    sends nothing. The shared entry point, and its name, is agreed with `dial-claude-app-follow` (see Decided).
 

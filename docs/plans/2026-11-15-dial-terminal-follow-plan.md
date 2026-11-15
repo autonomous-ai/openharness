@@ -95,6 +95,7 @@ No file under `cli/src/core/` changes, and `src/architecture.coreFiles.txt` gain
   }
   ```
   `localFollowed` logs the cause's line, and nothing for a cause with no row. The local `followPrompt(agentId, source)` keeps its name and calls `cable.followLocal(agentId, 'prompt')`.
+  > Rebase onto main (after #4326): FOLLOWED is now a complete `Record<FollowCause | 'settle', …>`, a row for every cause; the partial table above is history.
 - Produces, in `observed.ts`, module-private:
   - `type ShownPane = { kind: 'orca'; handle: string }`
   - `private shownPane(agent: HostAgent): ShownPane | undefined`, which replaces `paneHandle`.
@@ -108,6 +109,7 @@ No file under `cli/src/core/` changes, and `src/architecture.coreFiles.txt` gain
   - `cableFleet.spec.ts`: `followLocal reaches each attached dial`, with its cause.
   - `cableHost.spec.ts`: `localFollowed reaches the wiring` (`[['prompt', 'moved'], ['tab', 'no-tile']]`).
   - `devices.spec.ts`: `FakeCable.followLocal = recorder('followLocal')`; a person's prompt asks `[[ID, 'prompt']]`; `seen.host.localFollowed!('prompt', …)` writes the two prompt lines as before; `a follow of a cause with no line writes none` (`'attach'`).
+    > Rebase onto main (after #4326): with the complete table every cause has a line, so this last test went.
 - [ ] **Step 2: Run** `cd cli && npx vitest run src/cable/cableSession.spec.ts src/cable/cableFleet.spec.ts src/cable/cableHost.spec.ts src/services/devices.spec.ts`. Expected: FAIL (`followLocal` is not a function).
 - [ ] **Step 3: Implement.** `git grep -n "followPrompt\|promptFollowed" -- cli/src cli/e2e` shows no use left but the local helper in `devices.ts`.
 - [ ] **Step 4: Run** the step 2 command, then `cd cli && npx vitest run src/cable/hosts/observed.spec.ts && npm run test:core && npm run typecheck`. Expected: PASS, 100% for `services/devices.ts`.
@@ -223,10 +225,12 @@ No file under `cli/src/core/` changes, and `src/architecture.coreFiles.txt` gain
 - Produces:
   - `AppFilterDeps.settled(app: string): void`, called at the end of each `settle(app)`, once `settledApp()` reads that app.
   - `CableHostWiring.frontSettled?: (app: string) => void`, which the host's filter calls through.
+  > Rebase onto main (after #4326): `frontSettled` is replaced by #4326's `appSettled`, one hook the Claude app's follow and the tab follow share.
 
 - [ ] **Step 1: Write the failing tests:**
   - `appFilter.spec.ts`: `settled is told each app that stays in front 1 s, and never one that left sooner`: `front('orca')` and 999 ms: none; at 1 s: `[['orca']]`; `front('ghostty')` then `front('vscode')` inside a second: `vscode` only; `front('none')`: `none`; at each call `settledApp()` already reads that app. The file stays at 100%.
   - `cableHost.spec.ts`: `frontSettled reaches the wiring when the app in front settles, with a window open too` (a scripted `appTimer`).
+    > Rebase onto main (after #4326): both tests repeated #4326's `appSettled` ones; the appFilter one went (its 999 ms check moved into `a front that does not stay 1 s tells no settle`), and this one is now the window-open case of `appSettled reaches the wiring each time an app settles`.
 - [ ] **Step 2: Run** `cd cli && npx vitest run src/cable/hosts/appFilter.spec.ts src/cable/cableHost.spec.ts`. Expected: FAIL.
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run** the step 2 command and `cd cli && npm run typecheck`. Expected: PASS.
