@@ -2446,7 +2446,11 @@ describe('hook notify: a session outside a pane', () => {
     ['cursor', 'beforeSubmitPrompt', [], { hook_event_name: 'beforeSubmitPrompt', session_id: 'sess-1' }],
     ['copilot', 'userPromptSubmitted', ['--copilot-event', 'userPromptSubmitted'], { sessionId: 'sess-1' }],
     ['claude', 'Stop', [], { hook_event_name: 'Stop', session_id: 'sess-1' }],
-  ] as const)('only UserPromptSubmit says it: %s %s posts no relayed', async (engine, _name, args, payload) => {
+    // Their prompt event has Claude Code's name, but only Claude Code types another session's message in so.
+    ['codex', 'UserPromptSubmit', [], { hook_event_name: 'UserPromptSubmit', session_id: 'sess-1' }],
+    ['grok', 'user_prompt_submit', [], { hookEventName: 'user_prompt_submit', sessionId: 'sess-1' }],
+    ['devin', 'UserPromptSubmit', [], { hook_event_name: 'UserPromptSubmit', session_id: 'sess-1' }],
+  ] as const)('only Claude Code\'s UserPromptSubmit says it: %s %s posts no relayed', async (engine, _name, args, payload) => {
     const { port, requests } = await collect()
     await runHook({ port, engine, args: [...args], input: { ...payload, prompt: '<cross-session-message from="a1">x' } })
     expect(requests).toHaveLength(1)
