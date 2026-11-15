@@ -140,7 +140,7 @@ The core learns nothing of the prompt and nothing of where the dial is: it lets 
 - Consumes: `ObservedHookEvent.relayed` (Task 3).
 - Produces:
   - `export type PromptSource = 'person' | 'relayed' | 'dial'`
-  - `export const DIAL_PROMPT_TTL_MS = 600_000`
+  - `const DIAL_PROMPT_TTL_MS = 600_000`, in the module alone: the spec pins the 10 minutes it names.
   - `ObservedSource.ingest(e: ObservedEvent): PromptSource | undefined` (was `void`; `services/devices.ts` compiles unchanged).
 - Rules:
   - A source is answered only for a `turn-start` of a session the source lists once the event is taken. Every other event, and a session it does not list (Harness's own folder, the 51st session), answers `undefined`.

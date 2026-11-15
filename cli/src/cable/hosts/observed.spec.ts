@@ -1057,8 +1057,6 @@ describe('ObservedSource actions', () => {
   })
 })
 
-// A permission prompt that waits (deviceClaude/asked.ts): the dial shows the agent waiting and for what, and the prompt is
-// answered in its own app.
 describe('ObservedSource panes', () => {
   const OTHER = 'term_9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d'
   const inOrca = (handle = HANDLE) => ({ hostHints: { ORCA_AGENT_SESSION_ID: 'x', ORCA_TERMINAL_HANDLE: handle } })
@@ -1288,6 +1286,8 @@ describe('ObservedSource and what a turn\'s start was', () => {
   })
 })
 
+// A permission prompt that waits (deviceClaude/asked.ts): the dial shows the agent waiting and for what, and the prompt is
+// answered in its own app.
 describe('ObservedSource and a waiting prompt', () => {
   const asked = (over: Partial<ObservedAsked> = {}): ObservedAsked => ({
     engine: 'claude', sessionId: 's1', event: 'asked', tool: 'Bash', summary: 'npm test', cwd: '/elsewhere', ...over,

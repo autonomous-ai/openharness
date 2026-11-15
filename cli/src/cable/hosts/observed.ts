@@ -35,7 +35,7 @@ const LINE_BYTES = 99
 /** What a turn's start was: a prompt a person typed, one another session sent, or the dial's own words. */
 export type PromptSource = 'person' | 'relayed' | 'dial'
 /** The mod holds the dial's words until a long turn is over: a turn that starts later than this is not theirs. */
-export const DIAL_PROMPT_TTL_MS = 600_000
+const DIAL_PROMPT_TTL_MS = 600_000
 /** The dial's words a session holds before a turn starts for them: one that never starts a turn holds no more. */
 const MAX_DIAL_PROMPTS = 8
 
