@@ -10,12 +10,10 @@ import type { TerminalRootObservation, TerminalRuntimeRef } from './terminalType
  * validation against the default profile. `engines/kit/processFacts.spec.ts` covers what the probe reads.
  */
 
-const probeGatewayRuntime = vi.hoisted(() => vi.fn())
 const probeGridAssignment = vi.hoisted(() => vi.fn())
 const probeProfileHome = vi.hoisted(() => vi.fn())
 const processRows = vi.hoisted(() => vi.fn())
 
-vi.mock('./gatewayRuntime.js', () => ({ probeGatewayRuntime }))
 vi.mock('./gridAssignment.js', () => ({ probeGridAssignment }))
 vi.mock('../engines/discoveries.js', async (real) => ({ ...await real<object>(), probeProfileHome }))
 vi.mock('./processTable.js', async (importOriginal) => ({
@@ -37,8 +35,6 @@ function backendWith(roots: TerminalRootObservation[]): TerminalBackend {
 }
 
 beforeEach(() => {
-  probeGatewayRuntime.mockReset()
-  probeGatewayRuntime.mockResolvedValue({ kind: null })
   probeGridAssignment.mockReset()
   probeGridAssignment.mockResolvedValue(null)
   probeProfileHome.mockReset()

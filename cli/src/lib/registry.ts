@@ -130,8 +130,10 @@ export interface RegisteredSession {
    * It is NOT a second engine: the engine stays `claude`/`codex`/… and every badge, icon and wire field
    * keeps saying so. It only records HOW the pane's requests are billed, which decides two things — the
    * runtime profile becomes display-only, and the daemon's recap/route calls go direct to OpenRouter
-   * instead of spawning a vendor CLI that has no credential. Re-derived from the live process on every
-   * discovery, so a pane restarted without the wrapper drops it on the next scan.
+   * instead of spawning a vendor CLI that has no credential. Never read from the process's environment:
+   * Codex's comes from its argv on every discovery, every other engine's from what its hook says of its own
+   * environment (`X-Harness-Hook-Gateway`). A relaunch keeps it until the engine says it again, so a pane
+   * restarted without the wrapper drops it on the next scan or hook.
    */
   gateway?: 'ori' | null
   /**
@@ -1785,8 +1787,8 @@ class Registry {
         existing.launch = { state: 'ready' }
         this.traceLaunch(existing.agentId, before, existing.launch, 'openProcessAgent re-observed')
       }
-      // Only a successful read speaks: an undefined probe (ps failed, /proc unreadable) keeps whatever
-      // the last good one said rather than silently downgrading a gateway agent to a vendor one.
+      // Only a finding speaks: an undefined gateway (an engine whose hook, not its argv, says it) or grid
+      // (a read that failed) keeps what the row knew rather than downgrading a gateway agent to a vendor one.
       if (input.gateway !== undefined) existing.gateway = input.gateway
       if (input.grid !== undefined) existing.grid = input.grid
       if (input.codexHome && !existing.codexHome) existing.codexHome = input.codexHome
@@ -2775,11 +2777,11 @@ class Registry {
     const before = rowFingerprint(persistedRow(session))
     this.drop(session)
     session.processIdentity = processIdentity
-    // A record written before gateways existed, or by a pass whose probe failed, learns it here — the
-    // env cannot change under a running process, so a successful read is always the truth for this pid.
+    // A Codex's argv, which cannot change under a running process, is the truth for this pid. Undefined (any
+    // other engine, whose hook says it, or a relaunch) keeps what the row knew.
     if (gateway !== undefined) session.gateway = gateway
-    // The grid is read from the same environment and follows the same rule. It matters most right
-    // after a retarget: the respawned pane is a new pid, and this is where its new grid lands.
+    // The grid follows the same rule. It matters most right after a retarget: the respawned pane is a new
+    // pid, and this is where its new grid lands.
     if (grid !== undefined) session.grid = grid
     if (rowFingerprint(persistedRow(session)) !== before) session.touchedAt = Date.now()
     this.index(session)

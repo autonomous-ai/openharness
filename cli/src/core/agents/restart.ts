@@ -9,7 +9,6 @@ import { engineBin, enginePathOverride } from '../../lib/engineBin.js'
 import { engineInstallRecipe } from '../../lib/engineInstall.js'
 import { buildEngineLaunchArgv, commandAvailableInInteractiveShell } from '../../lib/engineLaunch.js'
 import { windowsPaneLaunch } from '../../lib/windows/engineStart.js'
-import { probeGatewayRuntime } from '../../lib/gatewayRuntime.js'
 import { sid } from '../../lib/log.js'
 import type { ProcessIdentity, registry, RegisteredSession } from '../../lib/registry.js'
 import { bypassPermissionFor, restartAgent } from '../../lib/restartAgent.js'
@@ -56,17 +55,17 @@ export interface RelaunchCommitDeps {
 
 /**
  * The row learns the engine a restart relaunched in [place] (restart, and a move's fallback to the old pane:
- * core/agents/hostMove.ts): its process and gateway, active again, the pane handed back to its backend's default
- * disposal, then announced. Gateway is a core process fact; optional grid metadata follows the committed binding in the
+ * core/agents/hostMove.ts): its process, active again, the pane handed back to its backend's default disposal, then
+ * announced. The row keeps its gateway: no process is read for it, and the relaunched engine says it again (its hook,
+ * or a Codex's argv on the next discovery pass). Optional grid metadata follows the committed binding in the
  * background, so an unavailable models service cannot hold this route. 'changed' when [current] went false before the
  * row learned the engine, 'changed after commit' once it had, 'vanished' when the row is gone.
  */
 export async function commitRelaunchedEngine(
   deps: RelaunchCommitDeps, agentId: string, identity: ProcessIdentity, place: RestartTarget, current: () => boolean,
 ): Promise<RegisteredSession | 'changed' | 'changed after commit' | 'vanished'> {
-  const gateway = await probeGatewayRuntime(identity)
   if (!current()) return 'changed'
-  deps.registry.updateProcessIdentity(agentId, identity, gateway.kind)
+  deps.registry.updateProcessIdentity(agentId, identity)
   deps.registry.setActive(agentId, true)
   await place.backend.releaseHold(place.runtime)
   // The row has its new engine: cancelled from here on, the engine is still relaunched.

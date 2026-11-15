@@ -8,7 +8,6 @@ import type { TerminalBackend } from './terminalBackend.js'
  */
 const processRows = vi.hoisted(() => vi.fn())
 const readProcessEnv = vi.hoisted(() => vi.fn())
-vi.mock('./gatewayRuntime.js', () => ({ probeGatewayRuntime: vi.fn(async () => ({ kind: null })) }))
 vi.mock('./gridAssignment.js', () => ({ probeGridAssignment: vi.fn(async () => null) }))
 vi.mock('./processEnv.js', async (real) => ({ ...await real<object>(), readProcessEnv }))
 const processView = vi.hoisted(() => vi.fn())

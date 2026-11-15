@@ -5,7 +5,7 @@ import {
   PROCESS_ENGINES,
   type AgentCommandOwnershipSnapshot,
 } from './engineBin.js'
-import { probeGatewayRuntime } from './gatewayRuntime.js'
+import { gatewayFromArgv } from './gatewayRuntime.js'
 import { gridAssignmentEvidence, type GridAssignment, type GridAssignmentProcess } from './gridAssignmentWire.js'
 import { readProcessEnv } from './processEnv.js'
 import { probeProfileHome } from '../engines/discoveries.js'
@@ -41,12 +41,12 @@ export interface DiscoveredTerminalAgent {
   runtimes: TerminalRuntimeRef[]
   primaryRuntimeKey: string
   /**
-   * 'ori' when this engine process is pointed at an OpenRouter endpoint (`ori claude` and friends).
-   * undefined = the probe could not read the process; the registry then keeps whatever it already knew,
-   * rather than downgrading a gateway agent to a vendor one on one failed read.
+   * Codex only: 'ori' when its argv names the OpenRouter provider (`ori codex`), null when it does not.
+   * undefined for every other engine, whose routing is not in its argv: the registry keeps what that
+   * engine's hook said (lib/gatewayRuntime.ts `gatewayFromArgv`).
    *
-   * Deliberately NOT a property of the terminal: the probe reads the engine's own env and argv, not
-   * anything the pane says about itself.
+   * Deliberately NOT a property of the terminal: it is the engine's own command line, not anything the
+   * pane says about itself.
    */
   gateway?: 'ori' | null
   /**
@@ -318,12 +318,10 @@ export async function probeTerminalAgents(
     backendOrder,
     hints,
   )
-  // Which endpoint each agent's engine talks to. Cached per live process, so this is one read per agent
-  // for its whole life rather than one per pass — and a failed read leaves `gateway` undefined rather
-  // than false. Runs for every backend: the probe reads the process, not the pane.
+  // Which endpoint a Codex talks to, from its command line: no process is read for it. Runs for every
+  // backend, as argv is the process's, not the pane's.
   await Promise.all(discovered.agents.map(async (agent) => {
-    const runtime = await probeGatewayRuntime(agent.processIdentity, agent.args)
-    agent.gateway = runtime.kind
+    agent.gateway = gatewayFromArgv(agent.engine, agent.args)
     // Only the marker read is core work. Models classifies it after reconciliation, without blocking binding.
     // Read from how it was launched, which for Pi is its launcher's command line (tmux.ts `launchArgs`).
     const row = enrichedRows.find((candidate) => sameProcessIdentity(candidate, agent.processIdentity))

@@ -18,7 +18,6 @@ vi.mock('../../lib/engineLaunch.js', async (real) => ({
   buildEngineLaunchArgv: vi.fn(() => ['zsh', '-l']),
   commandAvailableInInteractiveShell: vi.fn(async () => true),
 }))
-vi.mock('../../lib/gatewayRuntime.js', async (real) => ({ ...await real<object>(), probeGatewayRuntime: vi.fn(async () => ({ kind: 'none' })) }))
 vi.mock('../../lib/restartAgent.js', async (real) => ({
   ...await real<object>(),
   bypassPermissionFor: vi.fn(async (_s: unknown, live: () => Promise<boolean>) => live()),
@@ -560,6 +559,11 @@ describe('restarting an agent', () => {
       expect(await swapped.restart('a1')).toEqual(changed)
       expect(swapped.deps.refreshGridWebSearch).not.toHaveBeenCalled()
       expect(swapped.deps.agentReconciler.releaseRoute).toHaveBeenCalledWith(routeKey)
+
+      const committing = setup()
+      vi.mocked(committing.deps.refreshGridWebSearch).mockImplementationOnce(() => { committing.state.live = false })
+      expect(await committing.restart('a1')).toEqual(changed)
+      expect(committing.deps.registry.updateProcessIdentity).not.toHaveBeenCalled()
 
       const cleared = setup()
       releaseHold.mockImplementationOnce(async () => { cleared.state.live = false })

@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
 
-vi.mock('../../lib/gatewayRuntime.js', async (real) => ({ ...await real<object>(), probeGatewayRuntime: vi.fn(async () => ({ kind: 'ori' })) }))
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { RestartAgentDeps } from '../../lib/restartAgent.js'
 import type { RestoreLaunch } from '../../lib/restoreAgents.js'

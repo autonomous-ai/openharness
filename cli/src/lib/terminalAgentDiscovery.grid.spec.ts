@@ -14,11 +14,9 @@ import type { TerminalRootObservation, TerminalRuntimeRef } from './terminalType
  * (`gridAssignment.spec.ts` covers that).
  */
 
-const probeGatewayRuntime = vi.hoisted(() => vi.fn())
 const readProcessEnv = vi.hoisted(() => vi.fn())
 const processRows = vi.hoisted(() => vi.fn())
 
-vi.mock('./gatewayRuntime.js', () => ({ probeGatewayRuntime }))
 vi.mock('./processEnv.js', () => ({ readProcessEnv }))
 vi.mock('./processTable.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('./processTable.js')>(),
@@ -44,8 +42,6 @@ function backendWith(name: 'tmux', instanceId: string, roots: TerminalRootObserv
 }
 
 beforeEach(() => {
-  probeGatewayRuntime.mockReset()
-  probeGatewayRuntime.mockResolvedValue({ kind: null })
   readProcessEnv.mockReset()
   processRows.mockReset()
 })
