@@ -1528,6 +1528,23 @@ describe('attaching a session', () => {
         run.attach.forget(row.sessionId)
       })
 
+      // The retry waiting was the earlier binding's: it finds the session bound anew and tries nothing, so the new
+      // binding's superseded attach, which found one waiting and started none, was never tried again.
+      it('tries again the attach of the session bound anew, superseded while the earlier binding\'s retry waited', async () => {
+        fakeTimers(); quiet()
+        const run = setup(), file = transcript([CLAUDE_PROMPT]), row = session('claude', file)
+        vi.mocked(run.deps.runtimeProfiles.beginHydrate).mockReturnValue({ ...run.profile, commitWith: () => false })
+        await run.attach.attachSession(row)
+        await run.attach.attachSession(session('claude', file, { boundAt: 2 }))
+        expect(reads(run)).toBe(2)
+        expect(vi.getTimerCount()).toBe(1)
+        await vi.advanceTimersByTimeAsync(1_000)
+        await until(() => !run.attach.attaches.attaching().length)
+        expect(reads(run)).toBe(3)
+        expect(vi.getTimerCount()).toBe(1)
+        run.attach.forget(row.sessionId)
+      })
+
       it('counts from one second again once a tail was installed, and waits no more once an attach made sure the tail runs', async () => {
         fakeTimers(); quiet()
         const run = setup(), row = session('claude', transcript([CLAUDE_PROMPT])), add = vi.mocked(run.deps.watcher.addSession)
