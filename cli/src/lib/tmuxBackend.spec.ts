@@ -849,6 +849,12 @@ describe('harnessd\'s variables in the tmux server\'s environment', () => {
     expect(unset).toHaveLength(new Set(unset).size)
   })
 
+  it('hold Orca\'s secrets by name, its hook and launch tokens among them, though this process has none', () => {
+    const secrets = ['ORCA_AGENT_HOOK_TOKEN', 'ORCA_AGENT_LAUNCH_TOKEN', 'ORCA_PAIRING_CODE', 'ORCA_AGENT_SESSION_SPAWN_TOKEN']
+    expect(ORCA_VARIABLES).toEqual(expect.arrayContaining(secrets))
+    expect(serverVariablesToUnset({})).toEqual(expect.arrayContaining(secrets))
+  })
+
   it('are, in an environment as a server keeps one, what its listing and the prefix filter removed, and no key of the person\'s', () => {
     // As an earlier boot's core and an agent's shell in an Orca terminal left a server, beside the person's own
     // settings and keys. ORCA_FUTURE_SETTING stands for a name Orca adds that this core finds in its own environment.
