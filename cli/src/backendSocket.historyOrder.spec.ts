@@ -3,7 +3,7 @@ import { BackendSocket } from './backendSocket.js'
 import { ServiceUnavailableError } from './core/serviceHost.js'
 
 const sockets: BackendSocket[] = []
-afterEach(async () => { await Promise.all(sockets.splice(0).map(socket => socket.stop())); vi.restoreAllMocks() })
+afterEach(async () => { await Promise.all(sockets.splice(0).map(socket => socket.stop())); vi.useRealTimers(); vi.restoreAllMocks() })
 function deferred<T>() {
   let resolve!: (value: T) => void, reject!: (reason: unknown) => void
   const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no })
@@ -106,4 +106,92 @@ it('keeps input moving for ten clients with history reads outstanding', async ()
   }
   try { await vi.waitFor(() => expect(delivered.size).toBe(10)) }
   finally { read.resolve({ events: [] }) }
+})
+
+it('bounds preparation and inline reads before entering any provider, while later input proceeds', async () => {
+  const { socket, frames, send } = fixture(), read = deferred<Record<string, unknown>>()
+  const log = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  socket.historyProvider = vi.fn(() => read.promise)
+  socket.messageProvider = vi.fn()
+  for (let i = 0; i < 17; i++) send('session_get', { requestId: `bounded-${i}`, sessionId: 'one' })
+  send('message', { agentId: 'two', content: 'still works' })
+  try {
+    await vi.waitFor(() => expect(socket.messageProvider).toHaveBeenCalledOnce())
+    expect(socket.historyProvider).toHaveBeenCalledTimes(16)
+    expect(frames).toEqual([{ type: 'session_get_result', payload: { requestId: 'bounded-16', error: 'ENGINE_BUSY', retryable: true } }])
+    expect(log).toHaveBeenCalledWith('[backend] HISTORY_READ_BUSY')
+  } finally { read.resolve({ events: [] }) }
+  await vi.waitFor(() => expect(frames).toHaveLength(17))
+  send('session_get', { requestId: 'admitted-again', sessionId: 'one' })
+  await vi.waitFor(() => expect(frames.at(-1)?.payload).toEqual({ requestId: 'admitted-again', events: [] }))
+})
+
+it.each(['resolved', 'rejected'])('expires the reply without freeing stuck work or sending a late %s reply', async outcome => {
+  vi.useFakeTimers()
+  const { socket, frames, send } = fixture(), read = deferred<Record<string, unknown>>()
+  vi.spyOn(console, 'warn').mockImplementation(() => {})
+  const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+  socket.historyProvider = vi.fn(() => read.promise)
+  for (let i = 0; i < 16; i++) send('session_get', { requestId: `timeout-${i}`, sessionId: 'one' })
+  await vi.advanceTimersByTimeAsync(0)
+  expect(socket.historyProvider).toHaveBeenCalledTimes(16)
+  await vi.advanceTimersByTimeAsync(60_000)
+  expect(frames).toHaveLength(16)
+  expect(frames.every(frame => frame.payload.error === 'ENGINE_UNAVAILABLE' && frame.payload.retryable === true)).toBe(true)
+  expect(log).toHaveBeenCalledWith('[backend] HISTORY_READ_TIMEOUT')
+  send('session_get', { requestId: 'still-occupied', sessionId: 'one' })
+  await vi.advanceTimersByTimeAsync(0)
+  expect(socket.historyProvider).toHaveBeenCalledTimes(16)
+  expect(frames.at(-1)?.payload).toEqual({ requestId: 'still-occupied', error: 'ENGINE_BUSY', retryable: true })
+  if (outcome === 'resolved') read.resolve({ events: ['late'] })
+  else read.reject(new Error('private-late-failure-fixture'))
+  await vi.advanceTimersByTimeAsync(0)
+  expect(frames).toHaveLength(17)
+  socket.historyProvider = async () => ({ events: ['next'] })
+  send('session_get', { requestId: 'recovered', sessionId: 'one' })
+  await vi.advanceTimersByTimeAsync(0)
+  expect(frames.at(-1)?.payload).toEqual({ requestId: 'recovered', events: ['next'] })
+  expect(log.mock.calls.flat().map(String).join(' ')).not.toContain('private-late-failure-fixture')
+  expect(vi.getTimerCount()).toBe(0)
+})
+
+it('retains admission after disconnect and releases it when a failed provider settles', async () => {
+  const { socket, send } = fixture(), read = deferred<Record<string, unknown>>()
+  vi.spyOn(console, 'warn').mockImplementation(() => {})
+  vi.spyOn(console, 'error').mockImplementation(() => {})
+  socket.historyProvider = vi.fn(() => read.promise)
+  for (let i = 0; i < 16; i++) send('session_get', { requestId: `gone-${i}`, sessionId: 'one' })
+  await vi.waitFor(() => expect(socket.historyProvider).toHaveBeenCalledTimes(16))
+  await socket.unregisterLocalClient('local:history')
+  const frames: Record<string, any>[] = []
+  socket.registerLocalClient('local:next', { sendFrame: frame => { frames.push(frame); return true }, sendBinary: () => true })
+  const next = (requestId: string) => socket.handleLocalFrame('local:next', { type: 'session_get', payload: { requestId, sessionId: 'one' } })
+  next('still-busy')
+  await vi.waitFor(() => expect(frames.at(-1)?.payload).toEqual({ requestId: 'still-busy', error: 'ENGINE_BUSY', retryable: true }))
+  read.reject(new Error('private-failure-fixture'))
+  await read.promise.catch(() => {})
+  await Promise.resolve()
+  socket.historyProvider = async () => ({ events: [] })
+  next('recovered')
+  await vi.waitFor(() => expect(frames.at(-1)?.payload).toEqual({ requestId: 'recovered', events: [] }))
+  expect(frames).toHaveLength(2)
+})
+
+it('keeps an overflowing reply-sink failure content-free too', async () => {
+  const { socket, send } = fixture(), read = deferred<Record<string, unknown>>()
+  const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+  vi.spyOn(console, 'warn').mockImplementation(() => {})
+  await socket.unregisterLocalClient('local:history')
+  socket.registerLocalClient('local:history', {
+    sendFrame: frame => {
+      if ((frame.payload as Record<string, unknown>).error === 'ENGINE_BUSY') throw new Error('private-busy-reply-fixture')
+      return true
+    }, sendBinary: () => true,
+  })
+  socket.historyProvider = () => read.promise
+  for (let i = 0; i < 17; i++) send('session_get', { requestId: `reply-${i}`, sessionId: 'one' })
+  try {
+    await vi.waitFor(() => expect(log).toHaveBeenCalled())
+    expect(log.mock.calls).toEqual([['[backend] HISTORY_REPLY_FAILED']])
+  } finally { read.resolve({ events: [] }) }
 })

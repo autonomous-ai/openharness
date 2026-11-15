@@ -54,6 +54,10 @@ export { isLocalClientId, type DownTransport }
 /** Requests one local connection may queue before the daemon is ready (see `openRequests`). The app
  *  sends a handful on connect; hundreds is a client looping, not a person. */
 const MAX_REQUESTS_BEFORE_READY = 256
+/** Bound detached history preparation too, before an engine reader's own admission applies. */
+const MAX_HISTORY_REQUESTS = 16
+/** Covers the longest reader's request and parts budgets (Amp: 25 seconds each), including preparation. */
+const HISTORY_WAIT_MS = 60_000
 
 /** Within how long this computer's windows hear an invitation given or taken back: the backend now answers the shares list in
  *  tens of milliseconds, and 10 s spreads every member's read of it over a hundred times that. */
@@ -93,6 +97,7 @@ export class BackendSocket {
   /** Whether the backend link is up, as the gateway last said. */
   private linkUp = false
   private readonly downChains = new Map<string, Promise<void>>()
+  private historyRequests = 0
   /** A remote client's terminal bytes, per connection and stream — see `enqueueTerminalBinary`. */
   private readonly streamLanes = new Map<string, Promise<void>>()
   /**
@@ -1169,18 +1174,42 @@ export class BackendSocket {
         // History rechecks its captured conversation identity before returning (core/transcripts/history.ts).
         case 'session_get': {
           const provider = this.historyProvider
-          if (!provider) { reply(type, requestId, { error: 'UNSUPPORTED' }); return }
-          void (async () => {
-            let result: Record<string, unknown>
-            try { result = await provider(payload) }
-            catch (error) {
-              console.error('[backend] HISTORY_READ_FAILED')
-              if (requestId === undefined) return
-              result = error instanceof ServiceUnavailableError
-                ? { error: 'SERVICE_UNAVAILABLE', service: error.service, retryable: true } : { error: 'INTERNAL' }
-            }
+          const answer = (result: Record<string, unknown>): void => {
             try { reply(type, requestId, result) }
             catch { console.error('[backend] HISTORY_REPLY_FAILED') }
+          }
+          if (!provider) { answer({ error: 'UNSUPPORTED' }); return }
+          if (this.historyRequests >= MAX_HISTORY_REQUESTS) {
+            console.warn('[backend] HISTORY_READ_BUSY')
+            answer({ error: 'ENGINE_BUSY', retryable: true })
+            return
+          }
+          this.historyRequests++
+          void (async () => {
+            const read = (async () => {
+              try { return await provider(payload) }
+              catch (error) {
+                console.error('[backend] HISTORY_READ_FAILED')
+                if (requestId === undefined) return
+                return error instanceof ServiceUnavailableError
+                  ? { error: 'SERVICE_UNAVAILABLE', service: error.service, retryable: true } : { error: 'INTERNAL' }
+              } finally {
+                // A timeout or disconnect cannot free admission while filesystem work is still outstanding.
+                this.historyRequests--
+              }
+            })()
+            let timer!: ReturnType<typeof setTimeout>
+            const expired = new Promise<Record<string, unknown>>(resolve => {
+              timer = setTimeout(() => {
+                console.error('[backend] HISTORY_READ_TIMEOUT')
+                resolve({ error: 'ENGINE_UNAVAILABLE', retryable: true })
+              }, HISTORY_WAIT_MS)
+              timer.unref()
+            })
+            const result = await Promise.race([read, expired])
+            clearTimeout(timer)
+            if (result === undefined) return
+            answer(result)
           })()
           return
         }
