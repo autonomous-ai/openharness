@@ -333,6 +333,13 @@ export class IsolatedDaemon {
     const env = daemonEnvironment(tmux.env, {
       NODE_ENV: 'test',
       HOME: dirs.home,
+      // Its profile, under that home too. On Windows os.homedir() follows USERPROFILE, not HOME, so every default
+      // under it was the developer's real profile (audit of 2026-11-15).
+      // No XDG_* is named: a daemon inherits none (src/testing/daemonEnvironment.ts), so each falls under this home.
+      // Naming XDG_CONFIG_HOME would also move Cursor's config folder to .config/cursor (engines/cursor/contract.ts).
+      USERPROFILE: dirs.home,
+      LOCALAPPDATA: join(dirs.home, 'AppData', 'Local'),
+      APPDATA: join(dirs.home, 'AppData', 'Roaming'),
       // A login shell in a pane must not load anyone's zsh configuration.
       ZDOTDIR: dirs.home,
       PORT: String(port),
@@ -343,6 +350,9 @@ export class IsolatedDaemon {
       // `harness browser` (1 MiB) outlived its test there. One letter: the daemon puts no socket here, and tmux has its
       // own (TMUX_TMPDIR), but a child's socket in it must fit too.
       TMPDIR: dirs.tmp,
+      // Its tmux server's folder, by name (src/testing/isolatedTmux.ts): the daemon's bare tmux calls must reach the
+      // fixture's private server, whatever else it inherits.
+      TMUX_TMPDIR: tmux.env.TMUX_TMPDIR,
       ADAPTER_DATA_DIR: dirs.data,
       ADAPTER_RUNTIME_DIR: dirs.runtime,
       ADAPTER_COMPUTER_ID: 'e2e-computer-0000-0000-000000000001',
@@ -357,6 +367,9 @@ export class IsolatedDaemon {
       // Signed out, and nothing reaches beyond the machine.
       BACKEND_WS_URL: 'ws://127.0.0.1:9',
       WEB_URL: 'http://127.0.0.1:9',
+      // Nor the Store's catalog on GitHub (dsh/catalog.ts): a published one turned a fixture registry of two into the
+      // live shelf of 23. Named here: the worker's own (vitest.setup.ts) is not inherited.
+      HARNESS_STORE_CATALOG_URL: 'http://127.0.0.1:9/catalog.json',
       // Nor grid's release server: removed roots on one Mac kept a 19 MB runtime/grid-0.3.63-darwin-arm64 each
       // (2026-11-14). Grid's set-up on a grid feature's first use (services/models.ts installCli: the picker's Set up,
       // a Get, a Use) installs the managed grid, and a managed grid already here follows its pin on every models start.
@@ -387,9 +400,6 @@ export class IsolatedDaemon {
       TERMINAL_RECONCILE_INTERVAL_MS: '5000',
       ...options.env,
     })
-    // A Claude Code home moved in the environment this run was started from is the person's: the daemon
-    // would adopt it and install its hooks there (lib/engineHomes.ts). Only a test may move one.
-    if (!options.env || !('CLAUDE_CONFIG_DIR' in options.env)) delete env.CLAUDE_CONFIG_DIR
     return new IsolatedDaemon(root, tmux, port, env, options, config)
   }
 

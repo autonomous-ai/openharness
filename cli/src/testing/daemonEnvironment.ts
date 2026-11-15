@@ -1,20 +1,35 @@
-import { isAgentSessionVariable } from '../lib/agentSessionEnv.js'
-
 /**
- * A test daemon starts its own supervisor; it must not inherit the host daemon's topology or token, nor the session of
- * an agent running the tests: its harnesses would all look like that agent (agentClient/model.ts `outsideCaller`), and
- * only on the developer's machine, never in CI.
+ * What a daemon under test takes from the shell that runs the tests: what it needs to run, and nothing that says
+ * where the developer keeps something or who they are to a service. Everything else is dropped, known or not. The
+ * audit of 2026-11-15 found two dozen names the daemon's code reads that named the developer's own state: their
+ * HARNESS_CONNECTIONS_DIR gave every daemon under test their connected services' tokens, and their XDG_DATA_HOME had
+ * their Harness OS tokens copied into the test's root. A list of names to drop would miss the next one, and
+ * SSH_AUTH_SOCK, AWS_* and NPM_TOKEN, which no code here reads but what a daemon runs can use. The lists this replaced
+ * are covered by it: the host supervisor's HARNESSD_*, an agent session's variables, a GitHub login, the host app's
+ * hints.
+ *
+ * A name an end-to-end file turns out to need is added here, with its reason. Never a list of names to drop again.
+ * What the harness sets, and what a test sets, are `own` and always win (e2e/harness/daemon.ts).
+ *
+ * In capitals: Windows reads a name whatever its capitals, and its shells spell them differently (cmd hands a child
+ * SystemRoot and Path, Git Bash SYSTEMROOT and PATH).
  */
-/** A GitHub login in the environment would let a test daemon's `gh` act as the developer. */
-const GITHUB_CREDENTIALS = ['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN']
-/** The app the tests run in, as the hook names it (hook/notify.mjs HOST_HINTS): a fake engine with the developer's
- *  ORCA_TERMINAL_HANDLE would have its daemon type into, or bring forward, the developer's own Orca terminal. Every
- *  ORCA_ variable and CLAUDE_CODE_HOST_SESSION_ID are an agent session's (lib/agentSessionEnv.ts), so only the others are
- *  named here. */
-const HOST_HINTS = ['TERM_PROGRAM', '__CFBundleIdentifier', 'HERDR_PANE_ID', 'REX_BLOCK', 'ZELLIJ', 'KITTY_WINDOW_ID', 'WEZTERM_PANE']
-const borrowed = (key: string) => key.startsWith('HARNESSD_') || isAgentSessionVariable(key) ||
-  GITHUB_CREDENTIALS.includes(key) || HOST_HINTS.includes(key)
+const INHERITED: ReadonlySet<string> = new Set([
+  // The tools the tests run: node, tmux, git, zsh. The harness puts its own bin folder first.
+  'PATH',
+  // UTF-8 in tmux and in the panes, with every LC_* (below). CI sets LANG to C.UTF-8.
+  'LANG', 'LC_ALL',
+  // The terminal tmux and the panes draw for, and the login shell a pane opens. CI sets SHELL to /bin/zsh.
+  'TERM', 'SHELL',
+  // Who the process is. No state.
+  'USER', 'LOGNAME',
+  // Times in logs and transcripts, and whether this is a CI run.
+  'TZ', 'CI',
+  // Windows: Node cannot start a child without these.
+  'SYSTEMROOT', 'COMSPEC', 'PATHEXT', 'WINDIR',
+])
+const needed = (key: string) => { const name = key.toUpperCase(); return INHERITED.has(name) || name.startsWith('LC_') }
 export function daemonEnvironment(inherited: NodeJS.ProcessEnv, own: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const clean = Object.fromEntries(Object.entries(inherited).filter(([key]) => !borrowed(key)))
-  return { ...clean, ...own }
+  const kept = Object.fromEntries(Object.entries(inherited).filter(([key]) => needed(key)))
+  return { ...kept, ...own }
 }
