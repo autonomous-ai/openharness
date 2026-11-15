@@ -927,3 +927,14 @@ accepts the old synchronous return), with the same 83 timed operations and 90-se
 outer cap. Original baseline evidence remains unchanged and source-scoped; no new
 profile has run. The remaining golden adapter migration preserves historical
 native-command snapshots rather than recording new expected native behavior.
+
+
+The historical control-transcript fixture now seeds the selected live row after
+admission (rather than mutating its cloned receipt), flushes that untimed seed,
+passes current backend dependencies while retaining the old fixture adapter, and
+forwards Stop authority through strict removal. A `--verify` mode performs one
+outcome with no performance collection/output. Stop and retryable Resume hold each
+passed once on the current source; own-process identity remains synthetic and every
+other host binary is forbidden. The earlier verification failures are retained,
+including the missing async synthetic identity before the two actual adapter reds.
+These are fixture correctness results, not new historical performance evidence.
