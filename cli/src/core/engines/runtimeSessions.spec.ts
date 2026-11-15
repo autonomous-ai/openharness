@@ -45,6 +45,144 @@ function setup() {
 afterEach(() => { active.splice(0).forEach(s => s.stop()); liveActive.splice(0).forEach(l => void l.stop()); vi.useRealTimers(); vi.restoreAllMocks() })
 
 describe('core runtime profile authority', () => {
+  it.each([
+    'agentId', 'sessionId', 'engine', 'transcriptPath', 'codexHome', 'boundAt', 'processPid', 'processStart',
+    'cwd', 'gateway', 'active', 'hermesHome', 'tmuxPane', 'primaryRuntimeKey', 'route', 'routeOrder', 'routePropertyOrder', 'routeExtra',
+  ] as const)('fences every captured runtime binding field: %s', async field => {
+    const t = setup()
+    Object.assign(t.s, { active: true, codexHome: '/codex', hermesHome: '/hermes', tmuxPane: '%1', primaryRuntimeKey: 'tmux\0%1',
+      processIdentity: { pid: 1, executable: 'claude', startMarker: 'original' },
+      runtimes: [{ backend: 'tmux', paneId: '%1' }, { backend: 'ptyhost', instance: 'p3', paneId: '%2' }] })
+    await t.seed(); t.sessions.evidence(t.s, [{ workspace: '/accepted-workspace' }])
+    const copied = structuredClone(t.s), pending = t.sessions.stage(t.s, false, false)
+    await pending.ingest([{ model: 'staged', effort: 'high' }])
+    if (field === 'agentId') t.s.agentId = 'replacement'
+    else if (field === 'sessionId') t.s.sessionId = 'replacement'
+    else if (field === 'engine') t.s.engine = 'codex'
+    else if (field === 'boundAt') t.s.boundAt = 2
+    else if (field === 'processPid') t.s.processIdentity!.pid = 2
+    else if (field === 'processStart') t.s.processIdentity!.startMarker = 'replacement'
+    else if (field === 'gateway') t.s.gateway = 'ori'
+    else if (field === 'active') t.s.active = false
+    else if (field === 'route') t.s.runtimes[0]!.paneId = '%3'
+    else if (field === 'routeOrder') t.s.runtimes.reverse()
+    else if (field === 'routePropertyOrder') t.s.runtimes[0] = { paneId: '%1', backend: 'tmux' }
+    else if (field === 'routeExtra') Object.assign(t.s.runtimes[0]!, { extra: true })
+    else t.s[field] = '/replacement'
+    for (const caller of [t.s, copied]) {
+      expect(t.sessions.selectedModel(caller)).toBeNull()
+      expect(t.sessions.workspace(caller)).toBeNull()
+    }
+    expect(pending.commit()).toBe(false)
+  })
+
+  it.each(['transcriptPath', 'codexHome', 'hermesHome', 'boundAt', 'cwd', 'tmuxPane', 'primaryRuntimeKey', 'active', 'runtimes'] as const)(
+    'preserves JSON null/undefined equivalence for %s', async field => {
+      const t = setup(); Object.assign(t.s, { [field]: undefined }); await t.seed()
+      const copied = structuredClone(t.s), pending = t.sessions.stage(t.s, false, false)
+      await pending.ingest([{ model: 'staged', effort: 'high' }])
+      Object.assign(t.s, { [field]: null })
+      expect(t.sessions.selectedModel(copied)).toBe(profile(copied, 'old', 'low').id)
+      expect(pending.commit()).toBe(true)
+      expect(t.sessions.selectedModel(t.s)).toBe(profile(t.s, 'staged').id)
+    },
+  )
+
+  it('preserves process-key and hold truthiness equivalence, but fences revised evidence and start ticks', async () => {
+    const t = setup()
+    t.s.processIdentity = { pid: 1, executable: 'claude', startMarker: 'original', startTicks: 11 }
+    t.s.identityHold = 'first detail'; await t.seed()
+    const copied = structuredClone(t.s), pending = t.sessions.stage(t.s, false, false)
+    await pending.ingest([{ model: 'staged', effort: 'high' }])
+    t.s.processIdentity.executable = 'renamed'; t.s.processIdentity.startMarker = 'clock moved'; t.s.identityHold = 'second detail'
+    expect(t.sessions.selectedModel(copied)).toBe(profile(copied, 'old', 'low').id)
+    expect(pending.commit()).toBe(true)
+    const absentRevision = structuredClone(t.s)
+    Object.assign(t.s, { evidenceRevision: null })
+    expect(t.sessions.selectedModel(absentRevision)).toBeNull()
+    expect(t.sessions.selectedModel(t.s)).toBe(profile(t.s, 'staged').id)
+    t.s.processIdentity.startTicks = 12
+    expect(t.sessions.selectedModel(t.s)).toBeNull()
+  })
+
+  it.each(['boundAt', 'evidenceRevision'] as const)('retains JSON number normalization for %s', async field => {
+    const t = setup(); Object.assign(t.s, { [field]: NaN }); await t.seed()
+    const copied = structuredClone(t.s), pending = t.sessions.stage(t.s, false, false)
+    await pending.ingest([{ model: 'staged', effort: 'high' }])
+    Object.assign(t.s, { [field]: Infinity })
+    expect(t.sessions.selectedModel(copied)).toBe(profile(copied, 'old', 'low').id)
+    expect(pending.commit()).toBe(true)
+    expect(t.sessions.selectedModel(t.s)).toBe(profile(t.s, 'staged').id)
+  })
+
+  it.each(['native', 'process', 'route', 'hold', 'revision', 'hold-cycle'] as const)(
+    'rechecks displayed facts after a live registry object changes: %s', async change => {
+      const t = setup(); t.s.runtimes = [{ backend: 'tmux', paneId: '%1' }]
+      await t.seed(); t.sessions.evidence(t.s, [{ workspace: '/accepted-workspace' }])
+      const copied = structuredClone(t.s), selected = profile(t.s, 'old', 'low').id
+      for (const caller of [t.s, copied]) {
+        expect(t.sessions.selectedModel(caller)).toBe(selected)
+        expect(t.sessions.workspace(caller)).toBe('/accepted-workspace')
+      }
+      if (change === 'native') t.s.sessionId = 'replacement-conversation'
+      if (change === 'process') t.s.processIdentity = { pid: 2, executable: 'claude', startMarker: 'new' }
+      if (change === 'route') t.s.runtimes[0]!.paneId = '%2'
+      if (change === 'hold' || change === 'hold-cycle') {
+        t.s.identityHold = 'Waiting for interpretation.'; t.s.evidenceRevision = 1
+      }
+      if (change === 'revision') t.s.evidenceRevision = 1
+      if (change === 'hold-cycle') {
+        expect(t.sessions.selectedModel(t.s)).toBe(selected)
+        delete t.s.identityHold; t.s.evidenceRevision = 2
+      }
+      const retained = change === 'hold' || change === 'revision' || change === 'hold-cycle'
+      expect(t.sessions.selectedModel(t.s)).toBe(retained ? selected : null)
+      expect(t.sessions.workspace(t.s)).toBe(retained ? '/accepted-workspace' : null)
+      expect(t.sessions.selectedModel(copied)).toBeNull()
+      expect(t.sessions.workspace(copied)).toBeNull()
+    },
+  )
+
+  it.each(['engine', 'native', 'process', 'route', 'codexHome', 'hermesHome', 'cwd', 'transcript'] as const)(
+    'does not retain displayed profile facts after a held %s replacement', async changed => {
+      const t = setup(); await t.seed()
+      t.sessions.evidence(t.s, [{ workspace: '/old-workspace' }])
+      const old = structuredClone(t.s)
+      t.s.identityHold = 'Waiting for interpretation.'; t.s.evidenceRevision = 1
+      if (changed === 'engine') t.s.engine = 'codex'
+      if (changed === 'native') t.s.sessionId = 'another-native-session'
+      if (changed === 'process') t.s.processIdentity = { pid: 2, executable: 'claude', startMarker: 'new' }
+      if (changed === 'route') t.s.tmuxPane = '%2'
+      if (changed === 'codexHome') t.s.codexHome = '/different-codex-home'
+      if (changed === 'hermesHome') t.s.hermesHome = '/different-hermes-home'
+      if (changed === 'cwd') t.s.cwd = '/different-project'
+      if (changed === 'transcript') t.s.transcriptPath = '/different-transcript'
+      expect(t.sessions.selectedModel(t.s)).toBeNull()
+      expect(t.sessions.workspace(t.s)).toBeNull()
+      expect(t.sessions.getState(t.s.agentId).model).toBeNull()
+      expect(t.sessions.selectedModel(old)).toBeNull()
+      expect(t.sessions.workspace(old)).toBeNull()
+      await t.sessions.read(t.s, { kind: 'describe' })
+      expect(t.read.mock.lastCall![1].state.model).toBeNull()
+    },
+  )
+
+  it('clears control authority while retaining facts and refuses an old completion after hold recovery', async () => {
+    const t = setup(); await t.seed()
+    const old = structuredClone(t.s), target = profile(t.s)
+    expect(t.sessions.beginControl(t.s, target)).toBe(true)
+    const stage = t.sessions.stage(t.s, false, false)
+    await stage.ingest([{ model: 'staged', effort: 'high' }])
+    t.s.identityHold = 'Waiting for interpretation.'; t.s.evidenceRevision = 1
+    expect(t.sessions.getState(t.s.agentId).model).toBe('old')
+    delete t.s.identityHold; t.s.evidenceRevision = 2
+    expect(t.sessions.selectedModel(t.s)).toBe(profile(t.s, 'old', 'low').id)
+    expect(stage.commit()).toBe(false)
+    expect(t.sessions.beginControl(t.s, target)).toBe(true)
+    t.sessions.finishControl(old)
+    expect(t.sessions.beginControl(t.s, target)).toBe(false)
+  })
+
   it.each(['binding', 'route', 'control', 'version', 'forget', 'unchanged'] as const)(
     'keeps pane capture tied to the authority that dispatched it: %s', async change => {
       const t = setup(); await t.seed()
@@ -449,4 +587,84 @@ describe('core runtime profile authority', () => {
     await vi.advanceTimersByTimeAsync(10); await expect(early).resolves.toBe(false)
     await vi.advanceTimersByTimeAsync(10); await expect(later).resolves.toBe(false)
   })
+})
+
+
+describe('live profile evidence shares runtime authority', () => {
+  it('seeds the captured model, keeps workspaces, and ignores unbound or replaced evidence', () => {
+    const t = setup(), { sessions: p, s } = t
+    s.engine = 'hermes'; s.hermesHome = '/tmp/profile'; s.model = 'launched'
+    p.hydrateEvidence(s, [])
+    expect(p.getState(s.agentId).model).toBe('launched')
+    expect(p.selectedModel(s)).toBeNull()
+    expect(p.workspace(s)).toBeNull()
+    expect(p.evidence(s, [])).toBe(false)
+    for (const old of [{ ...s, sessionId: '' }, { ...s, boundAt: 0 }]) {
+      p.hydrateEvidence(old, [{ model: 'stale' }])
+      expect(p.evidence(old, [{ model: 'stale' }])).toBe(false)
+    }
+    expect(p.getState(s.agentId).model).toBe('launched')
+    p.hydrateEvidence(s, [{ effort: 'high', workspace: '/tmp/work' }])
+    expect(p.selectedModel(s)).toBe(profile(s, 'launched').id)
+    expect(p.workspace(s)).toBe('/tmp/work')
+  })
+
+  it('refreshes configuration after accepted evidence or a pane requests it, with content-free failure', async () => {
+    const t = setup(), { sessions: p, s } = t
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    p.evidence(s, [{ model: 'live', refresh: true }])
+    await vi.waitFor(() => expect(p.getState(s.agentId).effort).toBe('auto'))
+    expect(t.read.mock.calls[0][2]).toEqual({ kind: 'config' })
+    s.hermesHome = '/tmp/profile'
+    t.read.mockImplementationOnce(async (_engine, context, operation) => ({ ...result(context, operation), refreshConfig: true }))
+    await p.read(s, { kind: 'pane', text: 'pane' })
+    await vi.waitFor(() => expect(t.read).toHaveBeenCalledTimes(3))
+    expect(t.read.mock.calls[1][1].session.hermesHome).toBe('/tmp/profile')
+    t.read.mockRejectedValueOnce(Error('secret path and pane text'))
+    p.evidence(s, [{ model: 'newer', refresh: true }])
+    await vi.waitFor(() => expect(warning).toHaveBeenCalledWith('[runtime-profile] ENGINE_UNAVAILABLE'))
+    expect(warning).toHaveBeenCalledTimes(1)
+    expect(p.getState(s.agentId).model).toBe('newer')
+  })
+
+  it.each(['newer evidence', 'forgotten binding'])('does not run a scheduled refresh after %s', async change => {
+    const t = setup(), { sessions: p, s } = t
+    p.evidence(s, [{ model: 'refresh-me', refresh: true }])
+    if (change === 'newer evidence') p.evidence(s, [{ model: 'replacement' }])
+    else p.forget(s.agentId)
+    await Promise.resolve()
+    expect(t.read).not.toHaveBeenCalled()
+  })
+
+  it('keeps silent evidence and active control observations out of change notifications', async () => {
+    vi.useFakeTimers()
+    const t = setup(), { sessions: p, s } = t
+    await p.withoutChangeEvents(async () => { p.evidence(s, [{ model: 'first', effort: 'low' }]) })
+    await vi.runAllTimersAsync()
+    expect(t.changed).not.toHaveBeenCalled()
+    p.beginControl(s, profile(s, 'second'))
+    p.evidence(s, [{ model: 'second', effort: 'high', confirms: true }])
+    await expect(p.waitForProfile(s.agentId, 100)).resolves.toBe(true)
+    await vi.runAllTimersAsync()
+    expect(t.changed).not.toHaveBeenCalled()
+  })
+})
+
+
+it('refuses unsupported runtime readers before reserving worker capacity', async () => {
+  const t = setup()
+  t.s.engine = 'terminal'
+  await expect(t.sessions.read(t.s, { kind: 'config' })).rejects.toThrow('ENGINE_INVALID_REQUEST')
+  expect(t.read).not.toHaveBeenCalled()
+})
+
+
+it('keeps staged evidence when a config warmup contributes no observation', async () => {
+  const t = setup()
+  const stage = t.sessions.stage(t.s, true, true)
+  await stage.ingest([{ model: 'from-record', effort: 'high' }])
+  t.read.mockImplementationOnce(async (_engine, context) => ({ ...result(context, { kind: 'config' }), observed: false }))
+  await stage.config()
+  expect(stage.commit()).toBe(true)
+  expect(t.sessions.selectedModel(t.s)).toBe(profile(t.s, 'from-record').id)
 })

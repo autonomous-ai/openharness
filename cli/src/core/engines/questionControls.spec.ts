@@ -58,7 +58,7 @@ describe('question-control authority', () => {
     expect(await s.request({ kind: 'key', key: 'Enter' })).toEqual(denied)
   })
 
-  it('uses the grant in explicit inline mode, refuses a missing driver, and leaves other engines alone', async () => {
+  it('uses the grant in explicit inline mode, refuses a missing driver, and leaves terminal sessions alone', async () => {
     const s = setup('claude', false)
     let host!: QuestionControlHost
     s.native.apply = vi.fn(async (_step, value) => { host = value; return value.key('2') })
@@ -69,7 +69,7 @@ describe('question-control authority', () => {
     expect(await s.port().apply(step)).toBe(false)
     s.deps.inline.mockReturnValue(undefined)
     expect(await s.port().apply(step)).toBe(false)
-    expect(s.controls.forSession({ ...s.session(), engine: 'cursor' })).toBeUndefined()
+    expect(s.controls.forSession({ ...s.session(), engine: 'terminal' })).toBeUndefined()
     expect(s.controls.answer(s.service, 'live', {})).toBeNull()
   })
 
@@ -203,7 +203,7 @@ describe('question-control authority', () => {
     expect(s.deps.key).toHaveBeenCalledOnce()
   })
 
-  it.each(['disconnect', 'rebind', 'overlap', 'completed', 'timeout'] as const)('revokes queued effects on %s', async reason => {
+  it.each(['disconnect', 'rebind', 'hold', 'revision', 'hold-cycle', 'unchanged', 'overlap', 'completed', 'timeout'] as const)('checks queued effects against %s', async reason => {
     const s = setup(), gate = deferred<void>(), entered = deferred<void>(), effects: string[] = []
     let permitted!: () => boolean
     s.deps.key.mockImplementation(async (_target, key, allowed) => {
@@ -223,11 +223,18 @@ describe('question-control authority', () => {
     await entered.promise
     if (reason === 'disconnect') s.controls.disconnected(s.service)
     if (reason === 'rebind') s.session().boundAt = 2
+    if (reason === 'hold') s.session().identityHold = 'Waiting for interpretation.'
+    if (reason === 'revision') s.session().evidenceRevision = 1
+    if (reason === 'hold-cycle') {
+      s.session().identityHold = 'Waiting for interpretation.'; s.session().evidenceRevision = 1
+      delete s.session().identityHold; s.session().evidenceRevision = 2
+    }
+    if (reason === 'unchanged') s.session().touchedAt = 123
     if (reason === 'timeout') await vi.advanceTimersByTimeAsync(QUESTION_CONTROL_WAIT_MS + 1)
     if (reason === 'completed') await outcome
-    expect(permitted()).toBe(false)
+    expect(permitted()).toBe(reason === 'unchanged')
     gate.resolve()
-    expect(await outcome).toBe(false)
-    expect(effects).toEqual([])
+    expect(await outcome).toBe(reason === 'unchanged')
+    expect(effects).toEqual(reason === 'unchanged' ? ['Enter'] : [])
   })
 })

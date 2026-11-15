@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto'
+import { readerEngine } from '../../engines/worker/protocol.js'
 import type { EngineModelControl } from '../../engines/facets/modelControl.js'
 import { RuntimeProfileControlError, type RuntimeProfileErrorCode } from '../../engines/facets/modelControl.js'
 import type { RuntimeCatalogModel, RuntimeProfile } from '../../engines/facets/runtime.js'
@@ -84,7 +85,7 @@ export function createModelControls(deps: ModelControlsDeps) {
   }
   const forSession: ModelControlFor = registered => {
     const bound = transport.bind(registered)
-    if (!bound) return undefined
+    if (!bound || !readerEngine(bound.engine)) return undefined
     const { engine, session, service, isolated, run } = bound
     let catalog: RuntimeCatalogModel[] = []
     return {

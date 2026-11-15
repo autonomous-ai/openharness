@@ -102,8 +102,8 @@ class ProfileReader {
         maxBuffer: 1024 * 1024,
       })
       entries = devin.parseDevinModelsOutput(result.stdout)
-    } catch (err) {
-      console.warn('[runtime-profile] Devin model catalog failed:', err instanceof Error ? err.message : err)
+    } catch {
+      console.warn('[runtime-profile] DEVIN_CATALOG_UNAVAILABLE')
     }
     this.devinCatalogCache = { key, entries, expiresAt: Date.now() + CATALOG_TTL_MS }
     return entries
