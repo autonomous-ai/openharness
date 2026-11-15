@@ -28,6 +28,43 @@ afterEach(() => { service.stop(); vi.useRealTimers(); rmSync(root, { recursive: 
 const request = (type: string, payload: Record<string, unknown> = {}, closed?: AbortSignal) => Promise.resolve(service.requests[type]!(payload, owner, closed))
 const prepare = (id = 'r1') => request('setup_prepare', { engine: 'codex', environment, request: id })
 
+it('preserves bounded file semantics and requires a positive commit before releasing candidates', async () => {
+  const input = { engine: 'hermes' as const, environment, port: 1234, major: null, keepsRecord: true,
+    remove: false, createMissing: true, directories: [{ path: '/fixture/sessions', mode: 0o700 }],
+    files: [{ file: '/fixture/config.yaml', directory: '/fixture', content: null }] }
+  setup.prepareFiles = vi.fn(async () => ({ version: 1 as const, files: [{ index: 0, content: 'model: fixture\n' }] }))
+  const pending = await request('setup_files_prepare', { request: 'semantics', ...input })
+  expect(setup.prepareFiles).toHaveBeenCalledWith(input, 'semantics', expect.any(Function))
+  expect(await request('setup_files_commit', { ...pending, engine: 'hermes', request: 'semantics', allowed: false })).toEqual({ files: null })
+  expect(setup.installations.ensure).not.toHaveBeenCalled()
+})
+
+it('holds unavailable and invalid file requests before rendering or installing', async () => {
+  const input = { engine: 'codex', environment, port: 1234, request: 'invalid',
+    files: [{ file: '/fixture/hooks.json', directory: '/fixture', content: null }] }
+  expect(await request('setup_files_prepare', input)).toEqual({ files: null })
+  setup.prepareFiles = vi.fn(async () => null)
+  expect(await request('setup_files_prepare', { ...input, port: 0 })).toEqual({ files: null })
+  expect(setup.prepareFiles).not.toHaveBeenCalled()
+  expect(setup.installations.ensure).not.toHaveBeenCalled()
+})
+
+it.each(['malformed', 'closed', 'exception'] as const)('never exposes a file preparation token after %s rendering', async failure => {
+  const closed = new AbortController(), warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  setup.prepareFiles = vi.fn(async () => {
+    if (failure === 'exception') throw Error('private fixture content')
+    if (failure === 'closed') closed.abort()
+    return { version: 1 as const, files: [{ index: failure === 'malformed' ? 9 : 0, content: '{}' }] }
+  })
+  try {
+    expect(await request('setup_files_prepare', { engine: 'codex', environment, port: 1234, request: failure,
+      files: [{ file: '/fixture/hooks.json', directory: '/fixture', content: null }] }, closed.signal)).toEqual({ files: null })
+    expect(setup.installations.ensure).not.toHaveBeenCalled()
+    if (failure === 'exception') expect(warning).toHaveBeenCalledExactlyOnceWith('[engine-setup] FILE_PREPARATION_FAILED')
+    else expect(warning).not.toHaveBeenCalled()
+  } finally { warning.mockRestore() }
+})
+
 it('uses the same revocable preparation slots for file candidates without running an installer', async () => {
   const input = { engine: 'codex' as const, environment, port: 1234,
     files: [{ file: '/fixture/hooks.json', directory: '/fixture', content: '{}' }] }

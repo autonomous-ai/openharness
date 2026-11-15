@@ -361,3 +361,23 @@ passes. Golden files are unchanged. The only remaining notifyHooks mock intentio
 legacy installers' re-export; the Windows real-engine fixture is opt-in and was not run on macOS.
 The earlier four-failure core gate and intermediate 213-pass/one-failure batch remain failed evidence,
 not passing receipts. Full gates, native acceptance selection and performance remain parent-owned.
+
+## Worker boundary coverage acceptance
+
+The exact-491 core run passed all 4,690 tests but failed its per-file coverage gate in engineSetup,
+hookCandidates, nativeSetup and nativeSetupFiles; it is not a passing core receipt. The isolated
+seven-file service run reproduced those gaps with 33 tests passing. Existing all-family checks outside
+the core suite did not cover this service-owned gate.
+
+Add service-owned tests of real bounded rendering for every supported family, unchanged-byte replay,
+OpenCode version migration and foreign-plugin refusal, Hermes record/TUI/alias cleanup and platform
+command selection, cancellation after rendering and missing notify artifacts. Collector tests cover
+exclusive creation, aliased removal, modes, observations, exact directory authority and input/output
+bounds. Private worker requests now exercise preserved optional semantics, refused commits, malformed
+or late candidates and content-free failure reports; local composition proves rendering neither loads
+installers nor writes native files. No runtime edits, coverage exclusions or golden changes.
+
+The focused gate passes 61 tests in seven files with all four runtime files at 100% statements,
+branches, functions and lines (298/298, 232/232, 75/75 and 199/199); TypeScript passes. A new fixture initially omitted
+captured HOME and failed; correcting that fixture input produced the passing run. Earlier source-scoped
+native evidence is unchanged; the parent's exact-source full gates remain authoritative.

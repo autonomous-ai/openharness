@@ -10,6 +10,10 @@ import { hermesKeepsRecord } from '../engines/hermesRecord.js'
 import { opencodeMajorVersion } from '../engines/opencode/version.js'
 import { OPENCODE_VERSION } from '../engines/opencode/contract.js'
 import { createLocalNativeSetup, nativeSetupProbes } from './nativeSetup.js'
+import { env } from '../config/env.js'
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
+import * as windows from '../engines/kit/windowsFiles.js'
 
 vi.mock('../engines/kit/launchExecutable.js', () => ({ captureLaunchExecutable: vi.fn() }))
 vi.mock('../engines/kit/downloadMarker.js', () => ({ engineDownloading: vi.fn(() => false) }))
@@ -21,6 +25,20 @@ vi.mock('../engines/hermesRecord.js', () => ({ hermesKeepsRecord: vi.fn(() => tr
 vi.mock('../engines/opencode/version.js', () => ({ opencodeMajorVersion: vi.fn(() => 2) }))
 afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks() })
 const executable = { command: '/fixture/engine', identity: 'fixture', current: () => true }, environment = { HOME: '/fixture' }
+
+it('composes bounded file rendering without loading installers or publishing native files', async () => {
+  vi.spyOn(windows, 'hostPlatform').mockReturnValue('linux')
+  const setup = createLocalNativeSetup(env.ADAPTER_DATA_DIR), home = join(env.ADAPTER_DATA_DIR, 'local-file-preparation')
+  const input = { engine: 'claude' as const, port: 1234, environment: { HOME: env.ADAPTER_DATA_DIR, CLAUDE_CONFIG_DIR: home },
+    files: [{ file: join(home, 'settings.json'), directory: home, content: null },
+      { file: join(env.HARNESS_AGENT_MESSAGES_DIR, 'hook.mjs'), directory: env.HARNESS_AGENT_MESSAGES_DIR, content: null }] }
+  const candidate = await setup.prepareFiles!(input, 'fixture-files', () => true)
+  expect(JSON.parse(candidate!.files[0].content!)).toHaveProperty('hooks.SessionStart')
+  expect(candidate!.files[1].content).toContain('Agent Messages')
+  expect(await setup.prepareFiles!(input, 'cancelled-files', () => false)).toBeNull()
+  expect(existsSync(input.files[0].file)).toBe(false)
+  expect(createNativeInstallations).not.toHaveBeenCalled(); expect(createWindowsInstallations).not.toHaveBeenCalled()
+})
 
 it.each(['linux', 'win32'] as const)('keeps explicit inline setup and the %s installer composition', async platform => {
   vi.spyOn(process, 'platform', 'get').mockReturnValue(platform)
