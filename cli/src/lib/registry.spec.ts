@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { processLockIdentity, processStartMarker } from './processLiveness.js'
@@ -1763,6 +1763,87 @@ describe('agent identity: the process owns the agent, the session is bound to it
       expect(result?.entry.codexHome).toBe(profile)
     } finally {
       rmSync(profile, { recursive: true, force: true })
+    }
+  })
+
+  it('takes the gateway a hook reports for Claude Code, OpenCode and Hermes, keeps it through a hook that says nothing, and leaves Codex\'s to its argv', async () => {
+    const { registry } = await loadRegistryModule()
+    registry.load()
+    const claude = { launcherId: 'agent-1', sessionId: 's1', transcriptPath: transcript('s1'), tmuxPane: '%1', cwd: '/tmp/demo' }
+    expect(registerProcess(registry, { ...claude, gateway: 'ori' })?.entry.gateway).toBe('ori')
+    // An older hook, or one that did not say: the row keeps what the last one said.
+    expect(registerProcess(registry, claude)?.entry.gateway).toBe('ori')
+    expect(registerProcess(registry, { ...claude, gateway: null })?.entry.gateway).toBeNull()
+    for (const [engine, pane] of [['opencode', '%2'], ['hermes', '%3']] as const) {
+      expect(registerProcess(registry, { engine, sessionId: `${engine}-1`, tmuxPane: pane, cwd: '/tmp/demo', gateway: 'ori' })?.entry.gateway).toBe('ori')
+    }
+    // Codex's argv says it, and its hook never speaks over that.
+    registry.openProcessAgent({ engine: 'codex', tmuxPane: '%4', cwd: '/tmp/demo', processIdentity: processIdentity(104), gateway: 'ori' })
+    const rollout = join(dataDir, 'sessions', 'rollout-codex-1.jsonl')
+    mkdirSync(join(rollout, '..'), { recursive: true })
+    writeFileSync(rollout, JSON.stringify({ type: 'session_meta', payload: { id: 'codex-1', cwd: '/tmp/demo', source: 'cli' } }) + '\n')
+    expect(registry.register({ engine: 'codex', sessionId: 'codex-1', transcriptPath: rollout, tmuxPane: '%4', cwd: '/tmp/demo',
+      processIdentity: processIdentity(104), gateway: null })?.entry.gateway).toBe('ori')
+  })
+
+  it('fills a Codex row\'s home from its hook when the transcript is under it, and from nothing else', async () => {
+    const { registry } = await loadRegistryModule()
+    registry.load()
+    const profile = mkdtempSync(join(tmpdir(), 'adapter-codex-profile-'))
+    const other = mkdtempSync(join(tmpdir(), 'adapter-codex-other-'))
+    const rollout = (home: string, id: string): string => {
+      const file = join(home, 'sessions', `rollout-${id}.jsonl`)
+      mkdirSync(join(file, '..'), { recursive: true })
+      writeFileSync(file, JSON.stringify({ type: 'session_meta', payload: { id, cwd: '/tmp/demo', source: 'cli' } }) + '\n')
+      return file
+    }
+    // A Codex discovery found in a pane, with no home of its own on the row.
+    let pid = 900
+    const discovered = (id: string, transcriptPath: string, codexHome: string) => {
+      const pane = `%${++pid}`
+      registry.openProcessAgent({ engine: 'codex', tmuxPane: pane, cwd: '/tmp/demo', processIdentity: processIdentity(pid) })
+      return registry.register({ engine: 'codex', sessionId: id, transcriptPath, tmuxPane: pane, cwd: '/tmp/demo',
+        processIdentity: processIdentity(pid), codexHome })
+    }
+    try {
+      const under = discovered('s-under', rollout(profile, 's-under'), profile)
+      expect(under?.entry.codexHome).toBe(profile)
+      expect(under?.refusedHome).toBeUndefined()
+      // The transcript is under the daemon's own home: the session binds, and the home it named is not taken.
+      const elsewhere = discovered('s-elsewhere', rollout(dataDir, 's-elsewhere'), profile)
+      expect(elsewhere?.entry.sessionId).toBe('s-elsewhere')
+      expect(elsewhere?.entry.codexHome).toBeNull()
+      expect(elsewhere?.refusedHome).toBe(true)
+      // The daemon's own home (CODEX_HOME, which exists), named another way: no home, and nothing refused.
+      const link = join(other, 'default-link')
+      symlinkSync(dataDir, link)
+      for (const [n, named] of [`${dataDir}/`, link].entries()) {
+        const own = discovered(`s-own-${n}`, rollout(dataDir, `s-own-${n}`), named)
+        expect(own?.entry.codexHome).toBeNull()
+        expect(own?.refusedHome).toBeUndefined()
+      }
+      // A home whose sessions folder is no folder cannot hold the registration up.
+      const broken = join(other, 'broken')
+      mkdirSync(broken)
+      writeFileSync(join(broken, 'sessions'), '')
+      const unreadable = discovered('s-broken', rollout(dataDir, 's-broken'), broken)
+      expect(unreadable?.entry.sessionId).toBe('s-broken')
+      expect(unreadable?.entry.codexHome).toBeNull()
+      expect(unreadable?.refusedHome).toBe(true)
+      // A row that has a home keeps it.
+      registry.openPendingAgent({ engine: 'codex', runtimes: [{ backend: 'tmux', paneId: '%99' }], cwd: '/tmp/demo', codexHome: profile })
+      const kept = registry.register({ engine: 'codex', sessionId: 's-kept', transcriptPath: rollout(profile, 's-kept'), tmuxPane: '%99',
+        cwd: '/tmp/demo', processIdentity: processIdentity(999), codexHome: other })
+      expect(kept?.entry.codexHome).toBe(profile)
+      expect(kept?.refusedHome).toBeUndefined()
+      // Claude Code has no such home.
+      const claude = registerProcess(registry, { launcherId: 'claude-1', sessionId: 'c1', transcriptPath: transcript('c1'), tmuxPane: '%1',
+        cwd: '/tmp/demo', codexHome: profile })
+      expect(claude?.entry.codexHome).toBeNull()
+      expect(claude).not.toHaveProperty('refusedHome')
+    } finally {
+      rmSync(profile, { recursive: true, force: true })
+      rmSync(other, { recursive: true, force: true })
     }
   })
 

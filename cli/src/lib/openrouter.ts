@@ -15,7 +15,6 @@
 import { readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import type { GatewayRuntime } from './gatewayRuntime.js'
 
 const ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions'
 /**
@@ -64,16 +63,10 @@ async function keyFromCredentialsFile(): Promise<string | null> {
   }
 }
 
-/**
- * First hit wins: the daemon's own env, then the key the AGENT's process was given, then `ori login`'s
- * file. The middle one matters most — it is per-agent, so a machine mixing gateway and vendor agents
- * bills each recap to whatever that agent already runs on.
- */
-export async function resolveOpenRouterKey(gateway?: GatewayRuntime): Promise<string | null> {
+/** First hit wins: the daemon's own env, then `ori login`'s file. */
+export async function resolveOpenRouterKey(): Promise<string | null> {
   const fromEnv = process.env.OPENROUTER_API_KEY?.trim()
   if (fromEnv) return fromEnv
-  const fromProcess = gateway?.apiKey?.trim()
-  if (fromProcess) return fromProcess
   return keyFromCredentialsFile()
 }
 

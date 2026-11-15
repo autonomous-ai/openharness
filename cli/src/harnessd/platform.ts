@@ -377,8 +377,8 @@ export interface CommandResult {
 
 /** Everything this file does to the operating system. */
 export interface PlatformDeps {
-  /** Run a command by name, without a shell, and wait for it. */
-  run(command: string, args: string[]): CommandResult
+  /** Run a command by name, without a shell, and wait for it. `stdout: 'ignore'`: what it prints there is never read. */
+  run(command: string, args: string[], options?: { stdout: 'ignore' }): CommandResult
   /** A file's text, or null when it cannot be read. */
   readFile(path: string): string | null
   /** Write whole and rename into place, making the folder first. `utf16le`: with its byte order mark, as
@@ -410,9 +410,11 @@ export function defaultPlatformDeps(options: { env?: NodeJS.ProcessEnv; uid?: nu
   const env = options.env ?? process.env
   const configHome = env.XDG_CONFIG_HOME
   return {
-    run: (command, args) => {
+    run: (command, args, output) => {
       // `launchctl print` lists the whole job, and a domain's listing runs to hundreds of kilobytes.
-      const result = spawnSync(command, args, { env, encoding: 'utf8', timeout: COMMAND_TIMEOUT_MS, maxBuffer: 32 * 1024 * 1024 })
+      const result = spawnSync(command, args, {
+        env, encoding: 'utf8', timeout: COMMAND_TIMEOUT_MS, maxBuffer: 32 * 1024 * 1024, stdio: ['pipe', output?.stdout ?? 'pipe', 'pipe'],
+      })
       return { status: result.status, stdout: result.stdout ?? '', stderr: result.stderr ?? '', ...(result.error ? { error: result.error.message } : {}) }
     },
     readFile: (path) => {
@@ -726,7 +728,7 @@ export class PlatformService {
       return result.error ? { ok: false, detail: `${failure('schtasks', args, result)} — Task Scheduler could not be asked` } : { ok: true }
     }
     if (this.platform === 'launchd') {
-      const result = this.launchctl('print', `gui/${this.deps.uid}`)
+      const result = this.known(`gui/${this.deps.uid}`)
       return result.status === 0 ? { ok: true } : { ok: false, detail: `${failure('launchctl', ['print', `gui/${this.deps.uid}`], result)} — launchd runs a user agent only for a user logged in at the screen` }
     }
     return this.systemctl('daemon-reload')
@@ -771,7 +773,7 @@ export class PlatformService {
       return this.checked('schtasks', ['/Run', '/TN', this.target])
     }
     if (this.platform === 'launchd') {
-      const loaded = this.launchctl('print', this.target).status === 0
+      const loaded = this.known(this.target).status === 0
       if (loaded && !refreshed) return this.checked('launchctl', ['kickstart', this.target])
       if (loaded) {
         const out = this.checked('launchctl', ['bootout', this.target])
@@ -809,7 +811,7 @@ export class PlatformService {
       return { ok: true }
     }
     if (this.platform === 'launchd') {
-      if (this.launchctl('print', this.target).status !== 0) return { ok: true }
+      if (this.known(this.target).status !== 0) return { ok: true }
       return this.checked('launchctl', ['bootout', this.target])
     }
     const main = Number(properties(this.deps.run('systemctl', ['--user', 'show', this.unit, '--property=MainPID']).stdout).MainPID)
@@ -888,6 +890,12 @@ export class PlatformService {
 
   private launchctl(...args: string[]): CommandResult {
     return this.deps.run('launchctl', args)
+  }
+
+  /** Whether launchd has [target], a domain or a job, by `launchctl print`'s exit status alone: its listing holds
+   *  launchd's environment, what a person set with `launchctl setenv` among it, and is never read. */
+  private known(target: string): CommandResult {
+    return this.deps.run('launchctl', ['print', target], { stdout: 'ignore' })
   }
 
   private systemctl(...args: string[]): Outcome {

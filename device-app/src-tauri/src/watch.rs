@@ -1,8 +1,10 @@
 //! The `harness hardware watch --json` child.
 
-use crate::cli::{Cli, Killer, StdinCloser, Timeout};
-use crate::types::{DialStatus, Event};
+use crate::cli::{Cli, Killer, StdinCloser, StdinWriter, Timeout, Unwritten};
+use crate::types::{DialStatus, Event, Log};
 use std::io;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 
@@ -15,11 +17,23 @@ const STOP_GRACE: Duration = Duration::from_secs(3);
 /// A running watch. Stopping it, or dropping it, closes the child's stdin: the child then exits 0 by itself.
 pub struct Watch {
     stdin: StdinCloser,
+    writer: StdinWriter,
     killer: Killer,
     grace: Duration,
+    log: Arc<dyn Log>,
+    /// Whether the log has said this watch stopped reading: once is enough to be seen.
+    not_reading: AtomicBool,
 }
 
 impl Watch {
+    /// A line of the app in front (front.rs) on the child's stdin. One that has ended takes nothing, and nothing of the
+    /// line is logged. One that has stopped reading drops it, and the log says so once, never with the line.
+    pub fn front(&self, line: &str) {
+        if self.writer.line(line) == Err(Unwritten::Full) && !self.not_reading.swap(true, Ordering::Relaxed) {
+            self.log.line("front: watch not reading");
+        }
+    }
+
     /// One that has not ended within the grace is killed, so a stop always ends it.
     pub fn stop(&self) {
         // Only the close that closed it: a stop and the drop after it start one kill, not two.
@@ -36,18 +50,19 @@ impl Drop for Watch {
 }
 
 /// Runs `hardware watch --json`: an `Event::WatchLine` for each status line it prints, then one `Event::WatchExit`.
-pub fn spawn_watch(cli: &dyn Cli, send: impl Fn(Event) + Send + 'static) -> io::Result<Watch> {
-    spawn_watch_within(cli, send, FIRST_LINE, STOP_GRACE)
+pub fn spawn_watch(cli: &dyn Cli, log: Arc<dyn Log>, send: impl Fn(Event) + Send + 'static) -> io::Result<Watch> {
+    spawn_watch_within(cli, log, send, FIRST_LINE, STOP_GRACE)
 }
 
 fn spawn_watch_within(
     cli: &dyn Cli,
+    log: Arc<dyn Log>,
     send: impl Fn(Event) + Send + 'static,
     first_line: Duration,
     grace: Duration,
 ) -> io::Result<Watch> {
     let mut child = cli.spawn(&["hardware", "watch", "--json"])?;
-    let (stdin, killer) = (child.stdin_closer(), child.killer());
+    let (stdin, writer, killer) = (child.stdin_closer(), child.stdin_writer(), child.killer());
     thread::spawn(move || {
         // After its first line the watch has no deadline: it runs until it is stopped or the daemon goes.
         // Duration::MAX waits without one.
@@ -72,7 +87,7 @@ fn spawn_watch_within(
         // An Err only if the thread that reaps the child died; the run is over either way.
         send(Event::WatchExit(child.exit(Duration::MAX).unwrap_or(None)));
     });
-    Ok(Watch { stdin, killer, grace })
+    Ok(Watch { stdin, writer, killer, grace, log, not_reading: AtomicBool::new(false) })
 }
 
 #[cfg(test)]
@@ -90,7 +105,7 @@ mod tests {
 
     fn start(fake: &Fake) -> (Watch, mpsc::Receiver<Event>) {
         let (send, events) = mpsc::channel();
-        let watch = spawn_watch(&fake.cli(), move |event| {
+        let watch = spawn_watch(&fake.cli(), fake.log(), move |event| {
             let _ = send.send(event);
         })
         .unwrap();
@@ -102,7 +117,7 @@ mod tests {
         let send = move |event| {
             let _ = send.send(event);
         };
-        (spawn_watch_within(&fake.cli(), send, first_line, grace).unwrap(), events)
+        (spawn_watch_within(&fake.cli(), fake.log(), send, first_line, grace).unwrap(), events)
     }
 
     fn dial(attached: bool, fw: Option<&str>, hw: Option<&str>) -> Event {
@@ -178,6 +193,44 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn a_front_line_reaches_the_watch() {
+        let (ghostty, vscode) = (r#"{"front":"com.mitchellh.ghostty"}"#, r#"{"front":"com.microsoft.VSCode"}"#);
+        let fake = Fake::new();
+        fake.script("hardware watch --json", &[r#"{"attached":false}"#, "@record"]);
+        let (watch, events) = start(&fake);
+        assert_eq!(events.recv_timeout(WAIT), Ok(dial(false, None, None)));
+        watch.front(ghostty);
+        watch.stop();
+        assert_eq!(events.recv_timeout(WAIT), Ok(Event::WatchExit(Some(0))));
+        assert_eq!(fake.stdin(), [ghostty]);
+        // A watch that has ended takes nothing, and the log says nothing of it.
+        watch.front(vscode);
+        assert_eq!(fake.stdin(), [ghostty]);
+        assert_eq!(fake.log().lines(), ["harness hardware watch --json: exit 0"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_watch_that_stops_reading_is_one_line_that_names_nothing() {
+        let fake = Fake::new();
+        // `@hang` never reads stdin: its pipe fills.
+        fake.script("hardware watch --json", &[r#"{"attached":false}"#, "@hang"]);
+        let (watch, events) = start_within(&fake, WAIT, SHORT);
+        assert_eq!(events.recv_timeout(WAIT), Ok(dial(false, None, None)));
+        let value = "com.example.secret".repeat(5);
+        // 1 MB, past any pipe's buffer.
+        for _ in 0..10_000 {
+            watch.front(&format!(r#"{{"front":"{value}"}}"#));
+        }
+        watch.stop();
+        assert_eq!(events.recv_timeout(WAIT), Ok(Event::WatchExit(None)));
+        let lines = fake.log().lines();
+        assert_eq!(lines.iter().filter(|line| *line == "front: watch not reading").count(), 1, "{lines:?}");
+        assert!(!lines.iter().any(|line| line.contains("example")), "{lines:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn a_watch_with_no_first_line_in_time_is_ended() {
         let fake = Fake::new();
         fake.script("hardware watch --json", &["@hang"]);
@@ -226,7 +279,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let missing = home.path().join("harness");
         let cli = HarnessCli::new(find_cli(home.path(), None, Some(&missing)).unwrap(), Arc::new(MemoryLog::default()));
-        let error = spawn_watch(&cli, |_| {}).err().expect("no CLI there");
+        let error = spawn_watch(&cli, Arc::new(MemoryLog::default()), |_| {}).err().expect("no CLI there");
         assert_eq!(error.kind(), io::ErrorKind::NotFound);
     }
 }

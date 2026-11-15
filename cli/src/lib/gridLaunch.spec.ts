@@ -523,10 +523,9 @@ describe('opencode declares the grid as a provider', () => {
     expect(launch().args).toEqual(['-m', 'autonomous-ai/Auto'])
   })
 
-  it('writes EXACTLY ONE model, which is what the probe reads back', () => {
-    // `readOpencodeGridAssignment` answers "which model is this agent on" from this file alone,
-    // precisely so it never has to parse a live process's argv — which flickered. A second entry
-    // here would leave that question unanswerable and the probe would go back to saying nothing.
+  it('writes EXACTLY ONE model, the one the agent was created with', () => {
+    // The row's grid is what this launch recorded, as the process is not read back. A second entry
+    // here would let the agent switch to a model that record does not name.
     expect(Object.keys(config('DeepSeek-V4-Flash-0731').provider['autonomous-ai'].models))
       .toEqual(['DeepSeek-V4-Flash-0731'])
     expect(Object.keys(config().provider['autonomous-ai'].models)).toEqual(['Auto'])

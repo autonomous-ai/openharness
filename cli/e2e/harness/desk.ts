@@ -22,8 +22,9 @@ export function devicesPids(d: IsolatedDaemon): number[] {
 /** The dials this daemon finds, written where its discovery reads them at every scan. */
 export class Desk {
   constructor(readonly file: string, private readonly plugged = new Map<string, FakeDial>()) {}
-  async plug(serial: string, mac: string): Promise<FakeDial> {
-    const dial = await FakeDial.open({ mac, settings: SETTINGS })
+  /** [capabilities]: what its greeting names, as a firmware that speaks them does (`appFilter: 'v1'`, …). */
+  async plug(serial: string, mac: string, capabilities?: Record<string, string>): Promise<FakeDial> {
+    const dial = await FakeDial.open({ mac, settings: SETTINGS, capabilities })
     this.plugged.set(serial, dial)
     this.write()
     dial.keepGreeting()

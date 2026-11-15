@@ -39,7 +39,11 @@ it is fixed in, is in [the audit](../docs/design/2026-11-12-core-audit.md): that
    the sign-in, and the core asks it to (`src/architecture.spec.ts` reads every file of the core's process and lists what can open a connection, each on
    this computer). Whatever someone other than this computer's owner can shape (a relay or backend frame,
    another account's message, GitHub text, a web page, a device, a third-party harness) is parsed and checked in
-   the component that faces it, and reaches the core as typed, bounded data.
+   the component that faces it, and reaches the core as typed, bounded data. No process of the daemon, and no hook,
+   reads another process's environment, by any means (`/proc/<pid>/environ`, `ps e`, `KERN_PROCARGS2`,
+   `tmux show-environment`): a hook reads its own and says only what it derives (`src/architecture.environment.spec.ts`).
+   One reader is left, a listed follow-up: the macOS helper `native/darwin-process-images.c` hashes `KERN_PROCARGS2`,
+   environment included.
 5. **The core lends its authority narrowly.** It runs no command line a component hands it, and signs a backend
    call for a component only on a route that component declared (`MESSAGES_BACKEND_ROUTES`,
    `EXPERIMENT_BACKEND_ROUTES`).
@@ -71,7 +75,7 @@ they show as `harnessd`, `harnessd-core` and `harnessd-<process>` (`src/harnessd
 | gateway | the relay and its E2EE (`src/gateway/`) | on demand: as the core starts when signed in or anything is paired here, or when something needs it (a pairing, a window's E2EE request, a key command, the Wi-Fi device) |
 | models | grid, local models, the Model Manager | on demand: once grid is in use here (a managed grid, saved grid pictures, local models), or on a models request |
 | updater | checks, downloads and stages a new build (`src/services/updaterProcess.ts`) | by the master, for the installed copy only |
-| devices | the dials, the window bridges, the fleet, the voice router, the Wi-Fi device, the agents outside a pane (from their hooks, `cable/hosts/observed.ts`), their waiting prompts and voice; on Windows the dial's port through `harness-serial.exe` (`cable/windowsSerial.ts`) | on demand: once there is a device; on Windows, starts unconditionally with the core when inline, or is requested once at startup by `core/devicesWake.ts` when out of process and cable support is enabled |
+| devices | the dials, the window bridges, the fleet, the voice router, the Wi-Fi device, the agents outside a pane (from their hooks, `cable/hosts/observed.ts`), their waiting prompts and voice, which app the dial shows and the app in front (in memory); the dial follows a prompt the person submits in the app in front and the session the Claude app shows, and a swipe switches Orca's pane or, while the Claude app is in front, shows the session there; their own local listener (`services/devicesListener.ts`), a private socket open only while the process runs, which the core neither opens nor knows; on Windows the dial's port through `harness-serial.exe` (`cable/windowsSerial.ts`) | on demand: once there is a device; on Windows, starts unconditionally with the core when inline, or is requested once at startup by `core/devicesWake.ts` when out of process and cable support is enabled |
 | orchestrator, sharing, memory, router, cloud (cloud agents) | the experiments | on demand: on a request, or saved state at start |
 | agentBrowser | the agent browser: Podman, its setup, one container per agent whose Browser is on, and the viewers' streams of each browser's screen (`src/services/agentBrowser.ts`) | on demand: an agent whose Browser is on, a request, or its state file at start |
 

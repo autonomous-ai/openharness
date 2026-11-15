@@ -1,17 +1,17 @@
 import { createHash } from 'node:crypto'
 import { basename } from 'node:path'
 // Types only: the devices process must not load core code.
-import type { ObservedAsked, ObservedEvent } from '../../core/observedHook.js'
+import type { ObservedAsked, ObservedEvent, ObservedHookEvent } from '../../core/observedHook.js'
 import { truncateUtf8 } from '../../lib/deviceRecentTrim.js'
 import type { OpenSessions, SessionRows } from '../../lib/sessionSearch/external.js'
 import { type fileStamp, within } from '../../lib/sessionSearch/externals/support.js'
 import type { ExternalEngine, RunningProcess } from '../../lib/sessionSearch/externals/types.js'
 import { roundDrawable } from '../roundGlyphs.js'
-import { detectHost, hostDisplayName } from './hostDetect.js'
+import { detectApp, detectHost, hostDisplayName, UNKNOWN_APP } from './hostDetect.js'
 import type { Delivery } from './inbox.js'
 import { openTarget, type OpenTarget } from './open.js'
 import { MAX_TEXT, ORCA_HANDLE } from './orca.js'
-import type { Caps, HostAgent, HostAgentState, HostSource, SendResult } from './types.js'
+import type { Caps, HostAgent, HostAgentState, HostSource, PaneSwitch, SendResult } from './types.js'
 
 export { detectHost, hostDisplayName } from './hostDetect.js'
 
@@ -31,6 +31,13 @@ const TURN_SETTLE_MS = 2_000
 const ASK_SETTLE_MS = 1_000
 /** The firmware's activity line, `activity[100]` (ui_habitat.c), less its terminating zero: it cuts a longer one there. */
 const LINE_BYTES = 99
+
+/** What a turn's start was: a prompt a person typed, one another session sent, or the dial's own words. */
+export type PromptSource = 'person' | 'relayed' | 'dial'
+/** The mod holds the dial's words until a long turn is over: a turn that starts later than this is not theirs. */
+const DIAL_PROMPT_TTL_MS = 600_000
+/** The dial's words a session holds before a turn starts for them: one that never starts a turn holds no more. */
+const MAX_DIAL_PROMPTS = 8
 
 /**
  * The dial's line for a prompt that waits: what it asks, and the app to answer it in. What the round dial cannot draw is a
@@ -69,6 +76,8 @@ export interface ObservedDeps {
   log(line: string): void
   /** The routes for the dial's voice and tap; absent, an agent is status only. */
   actions?: ObservedActions
+  /** The app each of these processes runs in, where its parents name one (scannedApp.ts); absent, nothing is learned. */
+  apps?(pids: readonly number[]): Promise<ReadonlyMap<number, string>>
 }
 
 export interface ObservedActions {
@@ -76,12 +85,22 @@ export interface ObservedActions {
   modReady(sessionId: string): boolean
   toMod(sessionId: string, text: string): Promise<Delivery>
   orcaSend(handle: string, text: string): Promise<boolean>
+  /** Picks the terminal inside Orca; Orca itself stays where it is. */
+  orcaSwitch(handle: string): Promise<PaneSwitch>
   /** Whether a tap can open the target here: macOS brings an app forward, elsewhere only a pane's own command runs. */
   canOpen(target: OpenTarget): boolean
   /** A tap: the agent's pane, then its app (open.ts). */
   open(agentId: string, target: OpenTarget): Promise<boolean>
+  /** The Claude app is the app most recently reported in front. */
+  claudeInFront(): boolean
+  /** A rest: the session in the Claude app, already in front (open.ts). */
+  claudeShow(agentId: string, session: string): Promise<PaneSwitch>
   count(what: 'mod' | 'orca' | 'waiting' | 'busy' | 'pending' | 'too-long' | 'no-answer'): void
 }
+
+/** A pane a rest can show without its app coming forward, by the app that holds it: a later kind is one member here, one
+ *  line in shownPane, one case in showPane and its ObservedActions members. */
+type ShownPane = { kind: 'orca'; handle: string } | { kind: 'claude'; session: string }
 
 interface Entry {
   agent: HostAgent
@@ -99,6 +118,8 @@ interface Entry {
   endAt?: number
   /** The read of the last answer, waiting out the grace. */
   answerTimer?: ReturnType<typeof setTimeout>
+  /** When the dial's words reached it, oldest first, each until a turn starts for it. */
+  dialPrompts: { at: number }[]
 }
 
 export class ObservedSource implements HostSource {
@@ -159,6 +180,7 @@ export class ObservedSource implements HostSource {
     if (this.modReady(e, actions)) {
       const delivery = await actions.toMod(e.agent.sessionId!, text)
       if (delivery === 'taken') {
+        this.dialPrompt(e)
         actions.count('mod')
         return { ok: true }
       }
@@ -173,9 +195,23 @@ export class ObservedSource implements HostSource {
     // A working turn may show a prompt not yet heard of: Codex's approval overlay, which takes `y` or Enter, has no hook, and
     // Claude Code's comes a few hundred ms after its prompt opens.
     if (e.agent.state === 'working' || !this.idleKnown(e)) return refuse('busy', `${name} is busy. Say it when it is done.`)
-    if (!await actions.orcaSend(handle, text)) return noAnswer()
+    // Recorded first: `orca terminal send` returns once the prompt is submitted, and its turn's hook can be heard before.
+    const record = this.dialPrompt(e)
+    if (!await actions.orcaSend(handle, text)) {
+      // Its own record only, if no turn took it meanwhile: an earlier one is the mod's, for words still to come.
+      const i = e.dialPrompts.indexOf(record)
+      if (i >= 0) e.dialPrompts.splice(i, 1)
+      return noAnswer()
+    }
     actions.count('orca')
     return { ok: true }
+  }
+
+  /** The dial's words reached the session: its next turn is theirs, not a person's. */
+  private dialPrompt(e: Entry): { at: number } {
+    const record = { at: this.deps.now() }
+    if (e.dialPrompts.push(record) > MAX_DIAL_PROMPTS) e.dialPrompts.shift()
+    return record
   }
 
   /**
@@ -198,6 +234,32 @@ export class ObservedSource implements HostSource {
     return e && actions && this.live(e) && actions.canOpen(e.opens) ? actions.open(e.agent.id, e.opens) : Promise.resolve(false)
   }
 
+  /** Only an Orca terminal, or a Claude app session while that app is in front, is shown without its app coming forward. */
+  hasPane(agent: HostAgent): boolean {
+    return this.shownPane(agent) !== undefined
+  }
+
+  showPane(agent: HostAgent): Promise<PaneSwitch> {
+    const pane = this.shownPane(agent)
+    if (!pane) return Promise.resolve('failed')
+    switch (pane.kind) {
+      case 'orca': return this.deps.actions!.orcaSwitch(pane.handle)
+      case 'claude': return this.deps.actions!.claudeShow(agent.id, pane.session)
+    }
+  }
+
+  /** The pane of its latest event, while it lives: one it left, or an ended session's, holds something else now. A Claude
+   *  app session only while a tap could open it and that app is in front, asked at each look: the front moves. */
+  private shownPane(agent: HostAgent): ShownPane | undefined {
+    const e = this.entries.get(agent.id)
+    const actions = this.deps.actions
+    if (!e || !actions || !this.live(e)) return undefined
+    if (e.handle) return { kind: 'orca', handle: e.handle }
+    const pane = e.opens.pane
+    if (pane?.app === 'claude' && actions.canOpen({ pane }) && actions.claudeInFront()) return { kind: 'claude', session: pane.id }
+    return undefined
+  }
+
   private emit(): void {
     for (const l of [...this.listeners]) l()
   }
@@ -207,7 +269,8 @@ export class ObservedSource implements HostSource {
     return this.entries.get(agentId)?.asked
   }
 
-  ingest(e: ObservedEvent): void {
+  /** Takes the event; for a turn's start of a session it lists, answers what started it. */
+  ingest(e: ObservedEvent): PromptSource | undefined {
     if (e.event === 'asked') {
       this.asked(e)
       return
@@ -221,8 +284,11 @@ export class ObservedSource implements HostSource {
     if (!entry) return
     const a = entry.agent
     a.lastActivityAt = now
-    // Only a hook says where a session runs: one the open scan found is a plain terminal until its first.
+    // A hook says where a session runs: one the open scan found is not known yet until its first, unless its parent
+    // processes named its app. A hook with no hints says it too: the session runs in a terminal nothing names.
     a.host = detectHost(e.hostHints)
+    a.app = detectApp(e.hostHints)
+    delete a.appPending
     // Every event's own: a session resumed elsewhere must not be typed into the terminal it left.
     const handle = e.hostHints.ORCA_TERMINAL_HANDLE
     entry.handle = handle && ORCA_HANDLE.test(handle) ? handle : undefined
@@ -237,6 +303,7 @@ export class ObservedSource implements HostSource {
     }
     // A session that comes back after its end (a resume) is a live one again.
     entry.endAt = undefined
+    let source: PromptSource | undefined
     switch (e.event) {
       case 'session-start':
         // A start must not undo a state a faster event already set.
@@ -246,6 +313,7 @@ export class ObservedSource implements HostSource {
         a.unseenDone = false
         // The last turn's answer is not this one's: cleared, the same answer at this turn's end is a change the dial hears.
         a.lastAnswer = undefined
+        source = this.promptSource(entry, e, now)
         break
       case 'needs-input':
         // In every state: the hook hears a prompt only (hook/notify.mjs, never the idle notice), and one can open in any.
@@ -265,6 +333,16 @@ export class ObservedSource implements HostSource {
         break
     }
     this.emit()
+    return source
+  }
+
+  private promptSource(entry: Entry, e: ObservedHookEvent, now: number): PromptSource | undefined {
+    // Their turn starts on a model call or a tool call (hook/notify.mjs, observedEvent): no prompt at all.
+    if (e.engine === 'agy' || e.engine === 'commandcode') return undefined
+    // Another session's message is not the dial's words: their turn is still to come.
+    if (e.relayed === true) return 'relayed'
+    entry.dialPrompts = entry.dialPrompts.filter((p) => now - p.at < DIAL_PROMPT_TTL_MS)
+    return entry.dialPrompts.shift() ? 'dial' : 'person'
   }
 
   /**
@@ -322,11 +400,14 @@ export class ObservedSource implements HostSource {
         id, engine, sessionId, cwd: init.cwd,
         name: (init.cwd && basename(init.cwd)) || engine,
         host: 'terminal',
+        app: UNKNOWN_APP,
+        appPending: true,
         state: 'idle', lastActivityAt: now, unseenDone: false, callerPid: init.pid,
       },
       since: now,
       pid: init.pid,
       opens: {},
+      dialPrompts: [],
       ...(init.transcriptPath ? { transcriptPath: init.transcriptPath } : {}),
     }
     this.entries.set(id, entry)
@@ -380,23 +461,52 @@ export class ObservedSource implements HostSource {
     }
     if (!open.size) return
     const rows = await this.deps.sessionRows.find(open)
-    let changed = false
+    // Asked once, as a session is first listed: its next hook is the next word on where it runs.
+    const pids = [...open].filter(([sessionId, engine]) => rows.has(sessionId) && !this.entries.has(observedAgentId(engine, sessionId)))
+      .slice(0, MAX_SESSIONS).map(([sessionId]) => owners.get(sessionId)!.pid)
+    const learning = this.deps.now()
+    const apps = await this.appsOf(pids)
+    const ms = this.deps.now() - learning
+    let listed = 0
+    let known = 0
     const now = this.deps.now()
     for (const [sessionId, engine] of open) {
       // No row, no folder to tell Harness's own from a person's (the voice router's transcript is a program's, in the data
-      // folder) or to name it by. A hook may also have told of it while the rows were read.
+      // folder) or to name it by. A hook may also have told of it while the rows or the apps were read: it said more.
       const row = rows.get(sessionId)
       if (!row || this.entries.has(observedAgentId(engine, sessionId))) continue
       const owner = owners.get(sessionId)!
       const entry = this.entry(engine, sessionId, now, { cwd: row.cwd, transcriptPath: row.transcriptPath, pid: owner.pid })
       if (!entry) continue
-      changed = true
+      listed++
+      // The app alone: its host and what a tap opens stay unknown until its first hook.
+      const app = apps.get(owner.pid)
+      if (app) {
+        entry.agent.app = app
+        delete entry.agent.appPending
+        known++
+      }
       // A turn it is in when found reads working, as checkWorking reads it, which ends it once its owner reads idle: listed
       // idle, its compaction's SessionStart (which moves no state) would give a running turn a handle to type into.
       if ((engine === 'claude' || engine === 'codex') && await this.deps.openSessions.busy(owner)
         && entry.agent.state === 'idle' && this.live(entry)) this.setState(entry, 'working', this.deps.now())
     }
-    if (changed) this.emit()
+    if (!listed) return
+    // Counts only: an app, a pid or a path would say whose session runs where.
+    this.deps.log(`[observed] scan · ${listed} found · ${known} app known · ${ms} ms`)
+    this.emit()
+  }
+
+  /** None when there is no reader or it failed: every session is still listed, not known yet. */
+  private async appsOf(pids: readonly number[]): Promise<ReadonlyMap<number, string>> {
+    if (!this.deps.apps || !pids.length) return new Map()
+    try {
+      return await this.deps.apps(pids)
+    } catch {
+      // No error text: a path in it holds the account's name.
+      this.deps.log('[observed] scan · apps not read')
+      return new Map()
+    }
   }
 
   /** Removals: ended sessions, dead or reused pids, and sessions with no generation silent for 12 h. Called every 30 s by the owner. */

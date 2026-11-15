@@ -4,7 +4,7 @@ import os
 import re
 import subprocess
 import tempfile
-from native_shapes import defines
+from native_shapes import MAIN, defines
 
 main = Path(__file__).resolve().parent / '../main'
 source = Path(os.environ.get('CABLE_OUTBOUND_SOURCE', main / 'cable_client.c')).read_text()
@@ -67,8 +67,15 @@ static void audio_client_copy_selection(char *out,size_t n,unsigned *revision) {
     snprintf(out,n,"selection-1234");*revision=8;
 }
 static bool audio_client_review_requested(void) {return review;}
+typedef struct { const char *name; } board_t;
+static const board_t *board(void) {static const board_t b={"dial-stub"};return &b;}
+static const char *cable_fw_version(void) {return "0.0.99";}
+static bool device_mac_str(char *out,size_t n) {snprintf(out,n,"aa:bb");return true;}
+static void msg_settings(cJSON **root) {(void)root;}
+static size_t pet_store_held(char ids[][17],size_t max) {(void)ids;(void)max;return 0;}
 '''
-code += defines('ID_MAX', 'CABLE_READ_TOKEN_MAX')
+code += defines('ID_MAX', 'CABLE_READ_TOKEN_MAX', 'CABLE_APP_ID_MAX', 'CABLE_PRODUCT', 'CABLE_PROTO_VERSION')
+code += defines('PET_STORE_MAX_PACKS', source=(MAIN / 'pet_store.h').read_text())
 for name in ['cable_client_supports', 'send_json', 'msg']:
     code += function(name)
 for name in ['msg_check', 'msg_string', 'msg_number', 'msg_bool', 'msg_array', 'msg_item']:
@@ -76,11 +83,11 @@ for name in ['msg_check', 'msg_string', 'msg_number', 'msg_bool', 'msg_array', '
 for name in ['select_machine', 'select_swarm', 'send_turn', 'stop_turn', 'send_focus', 'send_open',
              'notification_read', 'send_scroll', 'answer', 'question_read', 'answer_reviewed', 'agent_update',
              'voice_begin', 'carry', 'form', 'visit', 'select_text', 'draft', 'voice_end',
-             'voice_abort', 'voice_cancel', 'voice_confirm', 'fw_error', 'fw_progress']:
+             'voice_abort', 'voice_cancel', 'voice_confirm', 'fw_error', 'fw_progress', 'pick_app']:
     code += function('cable_client_' + name)
-code += function('cable_client_request_agents')
+code += function('cable_client_request_agents') + function('send_hello')
 code += r'''
-enum { CASES=26 };
+enum { CASES=27 };
 static void run(unsigned which) {
     static const uint8_t choices[]={1,2,4,8};
     static const char drafts[4][48]={"Keep the quoted \"text\".","", "Line 1\nLine 2", "é ↗"};
@@ -111,6 +118,7 @@ static void run(unsigned which) {
     case 23:cable_client_carry("carry-1234",NULL,NULL,0,0,true);break;
     case 24:cable_client_voice_begin(NULL,NULL,NULL,16000);break;
     case 25:cable_client_notification_read("target-agent","notice-42");break;
+    case 26:cable_client_pick_app("ghostty");break;
     default:assert(false);
     }
 }
@@ -130,6 +138,8 @@ int main(void) {
             assert(!sends||(wire_size==expected_size&&!memcmp(wire,expected,wire_size)));
         }
         fail_at=0;
+        // app.pick carries the app, and nothing else.
+        if(which==26) assert(!strcmp(expected,"{\"t\":\"app.pick\",\"app\":\"ghostty\"}"));
         if(which==0) {
             cJSON *begin=cJSON_Parse(expected);assert(begin);
             const cJSON *id=cJSON_GetObjectItemCaseSensitive(begin,"agentId");
@@ -140,6 +150,14 @@ int main(void) {
     cable_client_send_scroll((cable_scroll_phase_t)3,0,0);
     cable_client_send_scroll((cable_scroll_phase_t)INT_MIN,0,0);
     cable_client_send_scroll((cable_scroll_phase_t)INT_MAX,0,0);assert(!sends);
+    // No app, or an id the dial could not have been sent whole, is not picked.
+    cable_client_pick_app(NULL);cable_client_pick_app("");cable_client_pick_app("abcdefghijklmnop");assert(!sends);
+    cable_client_pick_app("abcdefghijklmno");assert(sends==1);sends=0;
+    // hello says appFilter v1: with no window the dial holds one app's agents, is sent `apps` and picks with `app.pick`.
+    send_hello();assert(sends==1);sends=0;
+    { cJSON *hello=cJSON_Parse(wire);assert(hello);
+      const cJSON *filter=cJSON_GetObjectItemCaseSensitive(hello,"appFilter");
+      assert(cJSON_IsString(filter)&&!strcmp(filter->valuestring,"v1"));cJSON_Delete(hello); }
     fail_send=true;assert(!send_json(msg("ping")));assert(live==retained);
     fail_send=false;
     // The shipping bridge has agents.list but ignores agents.refresh. Core tab

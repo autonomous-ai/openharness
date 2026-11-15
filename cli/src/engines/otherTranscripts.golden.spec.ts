@@ -255,6 +255,7 @@ function livePath(core: Core, session: RegisteredSession, pane: string | null) {
     } as never,
     captureTerminal: async () => pane,
     emit: emit as never,
+    tokenUsage: { changed: () => {} },
     announceTurnAborted,
     questionWatcher: { start: (sessionId) => { out.push(['question watch', sessionId]) } },
     terminalLabel: () => 'tmux:%0',

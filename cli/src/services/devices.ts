@@ -25,13 +25,14 @@ import { CableFleet, testDialDiscovery, type CableFleetOptions } from '../cable/
 import { isLocalOnly } from '../lib/cardUpdate.js'
 import { TurnStats, type TurnStatsFields } from '../cable/turnStats.js'
 import { cableEventFor, cableStepFor, cableQuestionCloseFor, cableQuestionFor, DaemonCableHost } from '../cable/cableHost.js'
-import { CableSession, SHOWN_ONLY_PREFIX } from '../cable/cableSession.js'
+import { CableSession, SHOWN_ONLY_PREFIX, type FollowCause } from '../cable/cableSession.js'
 import { Inbox } from '../cable/hosts/inbox.js'
 import { LAST_ANSWER_DEADLINE_MS, LAST_ANSWER_MAX_BYTES, readLastAnswer } from '../cable/hosts/lastAnswer.js'
-import { askedLine, hostDisplayName, observedAgentId, ObservedSource, type ObservedActions } from '../cable/hosts/observed.js'
+import { askedLine, hostDisplayName, observedAgentId, ObservedSource, type ObservedActions, type PromptSource } from '../cable/hosts/observed.js'
 import { createOpenActions } from '../cable/hosts/open.js'
 import { createOrcaActions, orcaDeps, type OrcaDeps } from '../cable/hosts/orca.js'
 import { HostRegistry } from '../cable/hosts/registry.js'
+import { learnApps } from '../cable/hosts/scannedApp.js'
 import type { HostAgent, HostAgentState } from '../cable/hosts/types.js'
 import { PetStore } from '../cable/pets/store.js'
 import { DialLog } from '../cable/dialLog.js'
@@ -49,6 +50,7 @@ import { fileStamp, listProcesses, processAlive } from '../lib/sessionSearch/ext
 import { setVoiceRouterDeviceConnected, setVoiceRouterSessions, shutdownVoiceRouter } from '../lib/voiceRouter.js'
 import { createTally, createTierDecider, type Tier, type TierDecision, type TierInput } from '../lib/notifyTier.js'
 import { createPartGuard } from './devicesGuard.js'
+import { attachHandler, frontHandler, type DevicesListener, type ListenerHandler } from './devicesListener.js'
 import { FLEET_FALLBACKS, startFleet, type Fleet } from './fleet.js'
 
 export { DEVICES_REQUESTS }
@@ -88,6 +90,10 @@ export interface DevicesDeps {
   /** For this service's tests: how `orca`, and the commands a tap runs to open an app (cable/hosts/open.ts), are found and
    *  run. */
   orca?: OrcaDeps
+  /** Opens the devices' own listener with these handlers (services/devicesListener.ts). Given by the devices process
+   *  alone: inside the core's process (`HARNESSD_SERVICES=none`, Harness OS) there is none, so the core's process opens
+   *  no socket for the devices, and the dial follows no app in front there. */
+  listen?: (handlers: Readonly<Record<string, ListenerHandler>>, log: (line: string) => void) => Promise<DevicesListener | null>
 }
 
 /** ⌘K's answer while the fleet is not running: it never started, so there is no list to weigh. */
@@ -96,6 +102,13 @@ const unrouted = (reason: string): RouteAnswer => ({ agentId: '', machineId: '',
 const sid = (id: string): string => id.slice(0, 8)
 /** A card for the dial, and the machine it came from when another machine sent it (services/fleet.ts). */
 type DialEvent = NonNullable<ReturnType<typeof cableEventFor>> & { machineId?: string }
+/** What a dial made of a local follow, by its cause, or the settle's that asked it as an attach: the outcome only, never
+ *  the app or the agent. A cause with no row writes nothing. */
+const FOLLOWED: Partial<Record<FollowCause | 'settle', Record<'moved' | 'no-tile', string>>> = {
+  prompt: { moved: '[device] prompt · moved', 'no-tile': '[device] prompt · skipped · no tile' },
+  attach: { moved: '[device] attach · moved', 'no-tile': '[device] attach · skipped · no tile' },
+  settle: { moved: '[device] settle · moved', 'no-tile': '[device] settle · skipped · no tile' },
+}
 
 // The agents outside a pane: how often their processes are checked, the turns no hook moves are looked at, and, while a dial
 // is attached, the open sessions are scanned (docs/specs/2026-11-13-device-without-the-app.md, "ObservedSource").
@@ -108,6 +121,11 @@ const REMIND_MS = 20_000
 /** The observed source drops an ended session 10 s after its end, by the wall clock (observed.ts); looked at a beat later,
  *  as a timer can fire a little before the wall clock says it is due. */
 const ENDED_MS = 10_500
+/** How long the cable waits for the devices' listener to open: it opens in a few milliseconds. */
+const LISTENER_WAIT_MS = 1_000
+/** How long after the dial's own continue link to a Claude app session an attach is that link's echo: the app attaches
+ *  the session it shows within about a second. */
+const ATTACH_ECHO_MS = 2_000
 
 /** This computer's agents outside a pane, read with ⌘P's readers (services/externalSessions.ts), and how the dial's voice
  *  and tap reach them. */
@@ -128,6 +146,7 @@ function observedSource(dataDir: string, log: (line: string) => void, actions: O
     fileStamp,
     log,
     actions,
+    apps: learnApps,
   })
 }
 
@@ -214,22 +233,35 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // The dial's voice reaches them through their mod's long poll (Claude Code's), idle or working, or typed into their Orca
   // terminal when idle, and a tap brings its app forward, on its own pane where the app has a way in that asks for no new permission
   // (docs/specs/2026-11-13-device-claude-orca.md).
+  /** The part timers still to fire: the devices stopping cancels them, as a part with no stop of its own cannot. */
+  const pending = new Set<ReturnType<typeof setTimeout>>()
   /** A timer of one part, its run guarded as a notice into that part is, and never what keeps the process up. */
   const timerIn = (name: string) => (ms: number, run: () => void): (() => void) => {
-    const timer = setTimeout(() => part.call(name, run), ms)
+    const timer = setTimeout(() => { pending.delete(timer); part.call(name, run) }, ms)
     timer.unref()
-    return () => clearTimeout(timer)
+    pending.add(timer)
+    return () => { pending.delete(timer); clearTimeout(timer) }
   }
   const inbox = new Inbox({ now: monotonic, after: timerIn('inbox') })
   const apps = deps.orca ?? orcaDeps()
   const orca = createOrcaActions(apps)
-  const opener = createOpenActions({ ...apps, orcaSwitch: orca.switchTo, log })
+  const opener = createOpenActions({ ...apps, orcaSwitch: (handle) => orca.switchTo(handle).then((done) => done === 'ok'), log })
   const observed = env.HARNESS_DEVICE_OBSERVED ? observedSource(core.dataDir, log, {
     modReady: (sessionId) => inbox.ready(sessionId),
     toMod: (sessionId, text) => inbox.deliver(sessionId, text),
     orcaSend: orca.send,
+    orcaSwitch: orca.switchTo,
     canOpen: opener.can,
-    open: opener.open,
+    // A tap on a Claude app agent runs the continue link a rest runs: its attach is the dial's own echo too.
+    open: (agentId, target) => {
+      if (target.pane?.app === 'claude' && opener.can(target)) noteLink(agentId)
+      return opener.open(agentId, target)
+    },
+    claudeInFront: () => cableHost.latestFront() === 'claude',
+    claudeShow: (agentId, session) => {
+      noteLink(agentId)
+      return opener.claudeShow(agentId, session)
+    },
     // The route or the refusal only: never the words, the session or the terminal.
     count: (what) => log(`[device] voice · ${what}`),
   }) : null
@@ -299,6 +331,12 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // The dial's Fork: the same path the window's `agent_fork` takes, then `forked` above lands on it.
     forkAgent: (agentId) => core.agents.fork(agentId),
     focused: (machineId, agentId) => core.clients.sendLocal({ type: 'dial_focus', payload: { machineId, agentId } }),
+    // The outcome only: never the agent, its session or its terminal.
+    swiped: (outcome) => log(`[device] swipe · ${outcome}`),
+    localFollowed: (cause, outcome) => {
+      const line = FOLLOWED[cause === 'attach' ? attachAsk : cause]?.[outcome]
+      if (line) log(line)
+    },
     swarmSelected: (swarmId) => core.clients.sendLocal({ type: 'dial_swarm', payload: { swarmId } }),
     scrolled: (phase, dy, velocity) => core.clients.sendLocal({ type: 'dial_scroll', payload: { phase, dy, velocity } }),
     // Gestures stay at this desk. The device inventory and its settings also reach the owner's other
@@ -321,6 +359,22 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // started; a member that fails answers "unavailable", and the host routes this computer by itself.
     fleet: () => fleet,
     pets: () => pets,
+    // The app a dial that says appFilter shows (cable/hosts/appFilter.ts). Each line is a measure, read from the log as the
+    // notify tally is: a cause, never the app or an agent.
+    appSwitched: (cause) => {
+      log(`[device] app filter: switched · ${cause}`)
+      // After the list read that found it (an app emptying is found inside one), never from within it: the new ring goes
+      // to every dial, and its agents mid-turn, which the dial has heard nothing of, are told again.
+      queueMicrotask(() => {
+        part.call('dial', () => cable.syncAgents())
+        part.call('dial', remind)
+      })
+    },
+    // The Claude app settling in front: the dial turns to the session it last attached (docs/specs/2026-11-15-dial-claude-app-follow.md).
+    appSettled: (app) => { if (app === 'claude') part.call('dial', claudeSettled) },
+    appPicked: () => log('[device] app filter: picker'),
+    // The settle of the app in front: a filter that throws costs the devices nothing, and the devices stopping cancels it.
+    appTimer: timerIn('dial'),
   })
   // What the dial lists with no window: this computer's harness agents, and the ones outside a pane unless switched off.
   cableHost.setRegistry(new HostRegistry(observed ? [cableHost.harness, observed] : [cableHost.harness]))
@@ -578,12 +632,16 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     timer.unref()
     endings.set(agentId, timer)
   }
-  /** Each observed agent mid-turn that the dial lists (sixteen at most of the fifty), told again: the dial forgets a turn it
-   *  hears nothing of for 25 s, and one that just came, or whose window just closed, has heard nothing of it yet. */
+  /** Each observed agent mid-turn that a dial lists (sixteen at most of the fifty in each list), told again: the dial forgets
+   *  a turn it hears nothing of for 25 s, and one that just came, whose window just closed, or whose app the dial was just
+   *  turned to, has heard nothing of it yet. Both lists a dial can hold: the one ring, and the shown app's for a dial that
+   *  says appFilter, read only while one is connected: that read can switch the app, which no older dial shows. */
   const remind = async (): Promise<void> => {
     const mid = (observed?.list() ?? []).filter(busy)
     if (!mid.length || windowOpen) return
-    const listed = new Set((await cableHost.listAgentSnapshot()).agents.map((agent) => agent.id))
+    const apps = cable.wantsApps() ? [cableHost.listAgentSnapshot({ apps: true })] : []
+    const lists = await Promise.all([cableHost.listAgentSnapshot(), ...apps])
+    const listed = new Set(lists.flatMap((list) => list.agents.map((agent) => agent.id)))
     for (const agent of mid) if (listed.has(agent.id)) tell(started(agent))
   }
   /** The scan and the reminders, for an attached dial alone. */
@@ -619,8 +677,28 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // The core's calls failed to none when its link dropped: a transcript for a poll nobody holds would wait for nothing.
   deps.onCoreGone?.(endHookCalls)
 
+  // `harness hardware watch` tells the devices' own listener which app is in front, and the dial with no window follows it
+  // once it settles (cable/hosts/appFilter.ts), and the harness-device mod tells it the session the Claude app shows: the
+  // core never hears either. Another message type is another key here. A rejection's text is not logged: it can hold the
+  // socket's path, and a path the account's name.
+  const listening = deps.listen?.({
+    front: frontHandler((app) => part.call('dial', () => cableHost.front(app))),
+    attach: attachHandler((sessionId) => part.call('dial', () => claudeAttached(sessionId))),
+  }, log)
+    .catch((): null => { log('[devices] listener not opened · failed'); return null })
+
+  let stopped = false
   if (deps.cableDisabled) log('[cable] disabled (CABLE_DISABLE=true) — the serial port is left alone')
-  else cable.start()
+  else if (!listening) cable.start()
+  else {
+    // After the listener has opened, so a dial that attaches finds it open: the watch tells it the app in front once, as
+    // the dial attaches. One that has not opened in a second does not keep the dial off.
+    let bound: ReturnType<typeof setTimeout> | undefined
+    void Promise.race([listening, new Promise((resolve) => { bound = setTimeout(resolve, LISTENER_WAIT_MS).unref() })]).then(() => {
+      clearTimeout(bound)
+      if (!stopped) cable.start()
+    })
+  }
   ;(deps.onExit ?? ((run) => { process.once('exit', run) }))(() => shutdownVoiceRouter())
 
   /** A card bound for the devices, translated once for the cable. */
@@ -664,14 +742,85 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     if (!event.subagent) cableHost.harness.noteCard(event.agentId, event.kind)
     toDial(event)
   }
+  /**
+   * A turn's start outside a pane turns the dials to its agent only when a person typed its prompt in the app settled in
+   * front (docs/specs/2026-11-14-dial-pane-follow.md). The front, never the app a dial shows: a pick on the dial leaves
+   * the front where it is, and a dial whose ring lacks the agent answers no tile itself. Each prompt line is a reason,
+   * never the app, the agent or the session; the move's own line, followApp's, names the agent's id as it does for a
+   * Harness agent.
+   */
+  const followPrompt = (agentId: string, source: PromptSource): Promise<void> | undefined => {
+    // No dial linked: nothing to turn or count. The turn still used up a dial's prompt, in `ingest`.
+    if (!cable.isConnected) return
+    if (source === 'relayed') { log('[device] prompt · skipped · relayed'); return }
+    if (source === 'dial') { log('[device] prompt · skipped · dial prompt'); return }
+    const front = cableHost.settledApp()
+    if (front === undefined || outside(agentId)?.app !== front) { log('[device] prompt · skipped · not in front'); return }
+    return cable.followLocal(agentId, 'prompt')
+  }
+  // ── the session the Claude app shows ───────────────────────────────────────────────────────────────
+  //
+  // The harness-device mod says which session the app attached, and the dials turn to its agent while the app has settled
+  // in front, by a prompt's rules (docs/specs/2026-11-15-dial-claude-app-follow.md). Each line is a reason, never the app,
+  // the agent or the session.
+  /** The agent of the app's last attach that named a listed Claude app agent, moved to or not: the session on the app's
+   *  screen, which the dials turn to once the app settles in front. Gone with its session. */
+  let claudeAgent: string | undefined
+  /** What the latest 'attach' follow was asked for: an attach, or the app settling in front. The follow's cause is shared
+   *  with feat/dial-terminal-follow and stays the same there and here, so the settle's lines are told apart by this; a
+   *  dial answers only for its latest ask (cableSession.ts followLocal's generation), so its answer is this ask's. */
+  let attachAsk: 'attach' | 'settle' = 'attach'
+  /** When the dial's own continue link to each agent started, by the devices' clock: at most one per listed agent. */
+  const dialLinks = new Map<string, number>()
+  /** A tap's or a rest's link, noted as it starts, as the app's attach can come before `open` exits: that attach is the
+   *  dial's own echo, not a session the person chose. Busy or failed, the dial is on that agent all the same. */
+  const noteLink = (agentId: string): void => {
+    const at = monotonic()
+    for (const [id, linked] of dialLinks) if (at - linked >= ATTACH_ECHO_MS) dialLinks.delete(id)
+    dialLinks.set(agentId, at)
+  }
+  /** Whether a link of the dial's own, to that agent or to any when none is named, is younger than ATTACH_ECHO_MS. Compared
+   *  each time: an older one stays in the map until the next link. */
+  const linkedByDial = (agentId?: string): boolean => {
+    const at = monotonic()
+    return [...dialLinks].some(([id, linked]) => (agentId === undefined || id === agentId) && at - linked < ATTACH_ECHO_MS)
+  }
+  const claudeAttached = (sessionId: string): Promise<void> | undefined => {
+    const agentId = observedAgentId('claude', sessionId)
+    const listed = outside(agentId)?.app === 'claude'
+    // Kept whatever follows: an echo, or an attach with another app in front, is still the session the app shows.
+    if (listed) claudeAgent = agentId
+    if (!cable.isConnected) return
+    if (!listed) { log('[device] attach · skipped · unknown agent'); return }
+    if (linkedByDial(agentId)) { log('[device] attach · skipped · echo'); return }
+    if (cableHost.settledApp() !== 'claude') { log('[device] attach · skipped · not in front'); return }
+    attachAsk = 'attach'
+    return cable.followLocal(agentId, 'attach')
+  }
+  const claudeSettled = (): Promise<void> | undefined => {
+    if (claudeAgent === undefined || !cable.isConnected) return
+    // Resumed in another app, or gone with no end: the app no longer shows it.
+    if (outside(claudeAgent)?.app !== 'claude') { claudeAgent = undefined; return }
+    // Any link, to another agent too: a swipe that rests as the app comes in front shows that one, and the settle must not
+    // turn the dial back. Its attach, a moment later, is kept and skipped as its own echo.
+    if (linkedByDial()) { log('[device] settle · skipped · echo'); return }
+    attachAsk = 'settle'
+    return cable.followLocal(claudeAgent, 'attach')
+  }
   const port: DevicesPort = {
     // A paneless session's hook event, as the core checked it: taken, and dropped here while the observed source is
     // switched off.
     observed: (event) => {
       part.call('observed', () => {
         if (!observed) return
-        observed.ingest(event)
-        if (event.event === 'session-end') dropEnded(observed, observedAgentId(event.engine, event.sessionId))
+        const source = observed.ingest(event)
+        if (event.event === 'session-end') {
+          const agentId = observedAgentId(event.engine, event.sessionId)
+          dropEnded(observed, agentId)
+          // Listed for a while once ended, but on no app's screen: a settle must not turn the dial to it.
+          if (agentId === claudeAgent) claudeAgent = undefined
+        }
+        if (source) part.call('dial', () => followPrompt(observedAgentId(event.engine, event.sessionId), source))
       })
       return true
     },
@@ -749,9 +898,15 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     inboxGone: (pollId) => inboxCalls?.inboxGone(pollId),
     // The serial ports first: a port left held makes esptool fail in a way that reads like dead hardware.
     stop: async () => {
+      // A cable still waiting on the listener never starts.
+      stopped = true
+      // The listener before anything, once it has opened: no front reaches a stopped cable or sets a timer after the
+      // timers below are cleared.
+      await (await listening)?.close()
       for (const agentId of [...replies.keys()]) endReplies(agentId, false)   // no timer may fire into a stopped cable
       for (const timer of timers) clearInterval(timer)
       for (const timer of endings.values()) clearTimeout(timer)
+      for (const timer of pending) clearTimeout(timer)
       endHookCalls()
       dialAttached(false)
       await cable.stop()
