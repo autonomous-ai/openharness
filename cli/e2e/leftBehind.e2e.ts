@@ -17,7 +17,7 @@ import { LocalClient } from './harness/client.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 import { hungRateLimitRead, writeHungCodex } from './harness/hungCodex.js'
 
-interface Started { root: string; master: number; core: number; socket: string; escaped: number[]; readOnly: string }
+interface Started { root: string; master: number; core: number; socket: string; escaped: number[]; left: number; readOnly: string }
 
 /** The master [pid] and the service processes it runs (`harnessd-<process>`): the short-lived probes they start
  *  (`lsof`, `ps`) are left out, as their pids can go to strangers while the test waits. */
@@ -40,6 +40,7 @@ describe('a daemon under test', () => {
     if (worker?.pid && alive(worker.pid)) { try { process.kill(-worker.pid, 'SIGKILL') } catch { /* gone */ } }
     for (const pid of watched) if (alive(pid)) { try { process.kill(pid, 'SIGKILL') } catch { /* gone */ } }
     if (started) {
+      if (alive(started.left)) { try { process.kill(started.left, 'SIGKILL') } catch { /* gone */ } }
       try { execFileSync('tmux', ['-S', started.socket, 'kill-server'], { stdio: 'ignore', timeout: 5_000 }) } catch { /* gone */ }
       try { chmodSync(started.readOnly, 0o755) } catch { /* gone */ }
       rmSync(started.root, { recursive: true, force: true })
@@ -196,5 +197,7 @@ describe('a daemon under test', () => {
     await until('every process of the daemon to be gone', () => watched.every((pid) => !alive(pid)) || null, 40_000, 100)
     // And its throwaway root.
     await until('the daemon\'s root to be removed', () => !existsSync(started!.root) || null, 10_000, 100)
+    // And what its pane left in the root's folders, which no process group and no command line reaches.
+    expect(alive(started.left), 'what the worker\'s pane left').toBe(false)
   }, 240_000)
 })
