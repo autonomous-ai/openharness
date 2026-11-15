@@ -2668,16 +2668,20 @@ describe('the session the Claude app shows turns the dial (docs/specs/2026-11-15
     hostHints: { __CFBundleIdentifier: BUNDLE, CLAUDE_CODE_HOST_SESSION_ID: LOCAL }, ...over,
   })
   const second = { sessionId: SECOND, hostHints: { __CFBundleIdentifier: BUNDLE, CLAUDE_CODE_HOST_SESSION_ID: LOCAL_SECOND } }
+  /** The Orca terminal of the agent listed in Orca, and its switch. */
+  const HANDLE = 'term_0123abcd-0000-4000-8000-0123456789ab'
+  const switched: [string, string[], number] = ['/opt/orca/bin/orca', ['terminal', 'switch', '--terminal', HANDLE, '--json'], 10_000]
   const host = () => seen.dial as unknown as DaemonCableHost
   /** The fake timers' clock is the devices' too: the settle and the 2 s move together. */
   const wait = (ms: number) => vi.advanceTimersByTimeAsync(ms)
   /** A dial on the cable with no window, on macOS, the Claude app's two sessions listed, and `app` settled in front when
    *  one is named. `front` is `harness hardware watch`'s, `attach` the harness-device mod's, each through the devices'
-   *  own listener. */
+   *  own listener. An agent in a Terminal tab reads /dev/ttys023. */
   const dialWith = async (app?: string) => {
     vi.useFakeTimers()
     const listener = fakeListener()
-    const started = start({ faults: ['fleet'], listen: listener.listen, orca: { ...orca, platform: 'darwin' }, now: () => Date.now() })
+    const started = start({ faults: ['fleet'], listen: listener.listen, orca: { ...orca, platform: 'darwin' }, now: () => Date.now(),
+      tty: async () => '/dev/ttys023' })
     const front = (to: string) => { expect(listener.front(to)).toBeUndefined() }
     const attach = (sessionId: string) => { expect(listener.attach(sessionId)).toBeUndefined() }
     started.port.observed(hook('session-start'))
@@ -2688,7 +2692,7 @@ describe('the session the Claude app shows turns the dial (docs/specs/2026-11-15
       front(app)
       await wait(FRONT_SETTLE_MS)
     }
-    return { ...started, front, attach }
+    return { ...started, listener, front, attach }
   }
   /** A swipe that rests on a Claude app agent, with the app in front: its continue link runs. */
   const rest = async (agentId: string) => {
@@ -2793,6 +2797,17 @@ describe('the session the Claude app shows turns the dial (docs/specs/2026-11-15
     expect(attaches()).toEqual(['[device] attach · skipped · echo'])
   })
 
+  it('an attach within 2 s of the dial showing an Orca terminal is followed', async () => {
+    const { port, attach } = await dialWith('claude')
+    port.observed(hook('session-start', { sessionId: IN_ORCA, hostHints: { ORCA_AGENT_SESSION_ID: 'orca-1', ORCA_TERMINAL_HANDLE: HANDLE } }))
+    await rest(observedAgentId('claude', IN_ORCA))
+    expect(orcaRuns).toEqual([switched])
+    attach(SESSION)
+    // An attach's echo is its own agent's link, never another pane's move.
+    expect(asked()).toEqual([[A, 'attach']])
+    expect(attaches()).toEqual([])
+  })
+
   // A tap on a Claude app agent runs the rest's continue link: its attach is the dial's own as well.
   it('an attach within 2 s of a tap\'s link is its echo', async () => {
     const { attach } = await dialWith('claude')
@@ -2863,6 +2878,48 @@ describe('the session the Claude app shows turns the dial (docs/specs/2026-11-15
     expect(asked()).toEqual([])
     expect(attaches()).toEqual(['[device] attach · skipped · not in front', '[device] settle · skipped · echo'])
   })
+
+  // The app comes in front, and inside its settle a swipe rests on an agent in another kind of pane: the dial shows that
+  // one, and the settle must not turn it back.
+  type Dial = Awaited<ReturnType<typeof dialWith>>
+  const elsewhere: ReadonlyArray<[string, (dial: Dial) => Promise<{ id: string; ran(): void }>]> = [
+    ['an Orca terminal', async ({ port }) => {
+      port.observed(hook('session-start', { sessionId: IN_ORCA, hostHints: { ORCA_AGENT_SESSION_ID: 'orca-1', ORCA_TERMINAL_HANDLE: HANDLE } }))
+      return { id: observedAgentId('claude', IN_ORCA), ran: () => expect(orcaRuns).toEqual([switched]) }
+    }],
+    ['a Terminal tab', async ({ port, listener }) => {
+      port.observed(hook('session-start', { sessionId: 'sess-tab', hostHints: { __CFBundleIdentifier: 'com.apple.Terminal' } }))
+      // Its tty read, and a watch's stream open.
+      await wait(0)
+      const stream = listener.tabs()
+      return {
+        id: observedAgentId('claude', 'sess-tab'),
+        ran: () => {
+          expect(stream.lines).toStrictEqual([{ app: 'terminal-app', tty: '/dev/ttys023' }])
+          expect(orcaRuns).toEqual([])
+        },
+      }
+    }],
+  ]
+  for (const [way, listed] of elsewhere) {
+    it(`a settle moves nothing when the dial showed another kind of pane inside it (${way})`, async () => {
+      const dial = await dialWith('orca')
+      dial.attach(SESSION)
+      const other = await listed(dial)
+      dial.front('claude')
+      await wait(500)
+      host().swipeEnded(other.id, 'rest')
+      await wait(0)
+      other.ran()
+      await wait(FRONT_SETTLE_MS - 500)
+      expect(asked()).toEqual([])
+      expect(attaches()).toEqual(['[device] attach · skipped · not in front', '[device] settle · skipped · echo'])
+      // The kept agent is still A: the next settle, once the dial's move is 2 s old, asks for it.
+      await wait(2_000)
+      await backInFront(dial.front)
+      expect(asked()).toEqual([[A, 'attach']])
+    })
+  }
 
   it('a settle 2 s after the dial\'s last link moves the dial; of two links the younger counts', async () => {
     const { front, attach } = await dialWith('orca')
@@ -3003,16 +3060,26 @@ describe('selecting a tab moves the dial (docs/specs/2026-11-15-dial-terminal-fo
     transcriptPath: `/t/sess-${n}.jsonl`, hostHints: { __CFBundleIdentifier: 'com.apple.Terminal' },
   })
   const host = () => seen.dial as unknown as DaemonCableHost
+  /** An agent in an Orca terminal, and one in the Claude app: other kinds of pane the dial shows. */
+  const HANDLE = 'term_0123abcd-0000-4000-8000-0123456789ab'
+  const switched: [string, string[], number] = ['/opt/orca/bin/orca', ['terminal', 'switch', '--terminal', HANDLE, '--json'], 10_000]
+  const ORCA_AGENT = observedAgentId('claude', 'sess-orca')
+  const inOrca: ObservedHookEvent = { ...hook(9), sessionId: 'sess-orca', hostHints: { ORCA_AGENT_SESSION_ID: 'orca-1', ORCA_TERMINAL_HANDLE: HANDLE } }
+  const LOCAL = 'local_8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b'
+  const CLAUDE_AGENT = observedAgentId('claude', 'sess-claude')
+  const inClaude: ObservedHookEvent = { ...hook(8), sessionId: 'sess-claude',
+    hostHints: { __CFBundleIdentifier: 'com.anthropic.claudefordesktop', CLAUDE_CODE_HOST_SESSION_ID: LOCAL } }
   let clock = 0
   /** A dial on the cable with no window, on macOS, `agents` agents in Terminal tabs with their ttys read, a watch's stream
    *  open, no app settled in front, and the devices' monotonic clock at 0. `report` is a tab line through the listener's
-   *  handler, as `harness hardware watch` tells one; `settle` keeps an app in front for the settle. */
-  const dialWith = async (agents = 1) => {
+   *  handler, as `harness hardware watch` tells one; `settle` keeps an app in front for the settle. `run`, when given, runs
+   *  the devices' commands. */
+  const dialWith = async (agents = 1, run?: typeof orca.run) => {
     vi.useFakeTimers()
     clock = 0
     const listener = fakeListener()
     const tty = vi.fn(async (pid: number): Promise<string | undefined> => ttyOf(pid - 4241))
-    const started = start({ faults: ['fleet'], orca: { ...orca, platform: 'darwin' }, listen: listener.listen, tty, now: () => clock })
+    const started = start({ faults: ['fleet'], orca: { ...orca, platform: 'darwin', run: run ?? orca.run }, listen: listener.listen, tty, now: () => clock })
     for (let n = 1; n <= agents; n++) started.port.observed(hook(n))
     seen.host.watching!(true)
     started.port.swarms(null)
@@ -3139,6 +3206,83 @@ describe('selecting a tab moves the dial (docs/specs/2026-11-15-dial-terminal-fo
       expect(tabLines()).toEqual(['[device] tab · skipped · echo'])
     })
   }
+
+  it('a report that came after the dial showed an Orca terminal moves the dial', async () => {
+    const { port, report, settle } = await dialWith()
+    port.observed(inOrca)
+    await settle('terminal-app')
+    host().swipeEnded(ORCA_AGENT, 'rest')
+    clock = 300
+    report('terminal-app', TTY)
+    expect(asked()).toEqual([[ID, 'tab']])
+    // The record sets aside a report that waited, never one that came later.
+    expect(tabLines()).toEqual([])
+  })
+
+  it('a tap\'s raise sets aside the report its app made as it came forward', async () => {
+    let began = () => {}
+    const opening = new Promise<void>((resolve) => { began = resolve })
+    let opened = () => {}
+    const { listener, report, stream } = await dialWith(2, (file, args, timeoutMs) => {
+      orcaRuns.push([file, args, timeoutMs])
+      began()
+      return new Promise((done) => { opened = () => done({ code: 0 }) })
+    })
+    const tapped = host().openAgent(agent(2))
+    await opening
+    expect(orcaRuns).toEqual([['/usr/bin/open', ['-b', 'com.apple.Terminal'], 10_000]])
+    // Terminal comes forward on the tab it had, and says so before the dial's raise.
+    expect(listener.front('terminal-app')).toBeUndefined()
+    report('terminal-app', ttyOf(1))
+    opened()
+    expect(await tapped).toBeUndefined()
+    expect(stream.lines).toStrictEqual([{ app: 'terminal-app', tty: ttyOf(2), raise: true }])
+    await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+    expect(asked()).toEqual([])
+    expect(tabLines()).toEqual(['[device] tab · skipped · echo'])
+  })
+
+  // Terminal's report waits for the settle; the dial showing an agent in another app inside it moved on from that tab.
+  for (const [way, move, ran] of [
+    ['a rest on an Orca terminal', () => { host().swipeEnded(ORCA_AGENT, 'rest') }, [switched]],
+    ['a tap on an Orca terminal', async () => { expect(await host().openAgent(ORCA_AGENT)).toBeUndefined() },
+      [switched, ['/usr/bin/open', ['-b', 'com.stablyai.orca'], 10_000]]],
+    ['a tap on a Claude app session', async () => { expect(await host().openAgent(CLAUDE_AGENT)).toBeUndefined() },
+      [['/usr/bin/open', [`claude://code/continue?session=${LOCAL}`], 10_000]]],
+  ] as const) {
+    it(`a report waiting for the settle is set aside by another kind of pane the dial showed since it came (${way})`, async () => {
+      const { port, listener, report, stream } = await dialWith()
+      port.observed(inOrca)
+      port.observed(inClaude)
+      expect(listener.front('terminal-app')).toBeUndefined()
+      report('terminal-app', TTY)
+      clock = 800
+      await move()
+      expect(orcaRuns).toEqual(ran)
+      expect(stream.lines).toEqual([])
+      await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+      expect(asked()).toEqual([])
+      expect(tabLines()).toEqual(['[device] tab · skipped · echo'])
+    })
+  }
+
+  it('a switch that failed sets the report aside all the same', async () => {
+    const { port, listener, report, stream } = await dialWith(1, async (file, args, timeoutMs) => {
+      orcaRuns.push([file, args, timeoutMs])
+      return { code: 1 }
+    })
+    port.observed(inOrca)
+    expect(listener.front('terminal-app')).toBeUndefined()
+    report('terminal-app', TTY)
+    clock = 800
+    host().swipeEnded(ORCA_AGENT, 'rest')
+    expect(orcaRuns).toEqual([switched])
+    expect(stream.lines).toEqual([])
+    await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+    expect(logs).toContain('[device] swipe · failed')
+    expect(asked()).toEqual([])
+    expect(tabLines()).toEqual(['[device] tab · skipped · echo'])
+  })
 
   it('each select excuses one report: the person selecting that tab again within 2 s moves the dial', async () => {
     const { report, settle } = await dialWith(2)
