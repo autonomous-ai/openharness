@@ -120,11 +120,68 @@ Continuation implementation:
 - `apiConnectionsMigration.spec.ts` covers old-format migration, old-build edits/additions/removals, malformed stores,
   unsafe entries and permissions, broken metadata, publication failure/recovery, and simulated Windows behavior.
 
-Validation at handoff: `git diff --check` passed. No compiler, build or test ran: the performance marker existed,
-but Browser held the shared validation lock through the final attempt. Red/green evidence remains pending, not
-passing. `/tmp/core-secrets-validate.py` preserves/restores the pre-fix source for the red run, then runs the selected
-checks and Store launch integration after acquiring that lock. The handoff lists remaining platform and performance
-checks. Root must obtain this evidence before publishing the continuation.
+### Step 2 validation and review (2026-11-15)
+
+Continued in `/tmp/harness-core-secrets-continue`, branch `codex/core-secrets-continue`, on main `aad8dcd535`.
+Runtime head `803bd2f17f`; `b0f3fde523` corrects trusted fixtures to use private modes under umask `0002`.
+No original worktree was edited. Step 1 (#4322) must land before this branch; root owns integration, PR CI and merge.
+
+Observed on macOS with the pinned Node 24.22.2, isolated test homes:
+- The 28 migration tests on the preserved pre-fix sources: **9 failed, 19 passed**, from assertions about stale
+  metadata, unsafe legacy entries/permissions, a dangling list and an oversized derivative read.
+- At `96059c1dea`: typecheck and **218 tests in 15 files passed**, including migration, API/model/account behavior,
+  launch/assignment goldens, instruction writes, architecture and environment boundaries. Clean-source receipt:
+  `.harness/validation/20261115T112927.792648Z-75543/receipt.json` in the continuation worktree.
+- A trusted API directory created with ambient modes failed under umask `0002` before fixture correction; **80 tests
+  passed afterward**. Store's legacy fixture now also uses `0700`, its key document `0600`.
+- At `b0f3fde523`: **19 lean-bundle tests passed**; both selected Store-at-boot cases (killed and hung) passed in
+  **98.2 s** with `E2E_BUNDLE=1` (the other three cases were filtered, not run).
+- The final stat-reuse optimization below: **90 API/migration/launch-note tests passed under umask `0002`**, and
+  typecheck passed. It adds no import or runtime state; the bundle boundary is unchanged.
+- `git diff --check` passed; `scripts/local-checks.py --run --base aad8dcd535` selects no local coverage gate.
+
+Independent review found no remaining runtime correctness defect. It checked migration, rollback, damaged/unsafe
+files, linked metadata, failure recovery, public replies and the core's import boundary. Root independently reviewed
+the final stat guard. Linux PR CI and native Windows remain unverified; Windows filesystem/root behavior passed in
+simulation. This evidence is not a claim that those platforms or CI ran.
+
+The core still imports `apiConnectionMetadata.ts` (metadata schema, zod, existing `secureState`) and
+`apiInstructions.ts` (the eligible project's note). It does **not** import `apiConnections.ts` or the key schema/reader.
+A launch reads only the checked metadata list, at most 100 rows / 1 MiB. Until 2026-12-15 the missing-list fallback
+stats the legacy key document and never opens it. Tests prove that a launch still works with the key file unreadable,
+and that the fallback reads no file contents. There is no timer, watcher or service dependency added. This step
+removes keys from core reads; moving the remaining saved-API note/schema knowledge out of core is not done here.
+
+The core closure remains **539 files**, **92,691 → 92,737 lines** against main `aad8dcd535` (both steps combined).
+
+### Launch-read performance
+
+Measured the old launch read (`ApiConnectionMetadata.list().length > 0`) against `saved()`, same private fixture
+files and Node 24.22.2 process, nine rounds of 1,000 calls, alternating order, after warm-up. Other workers paused
+compilers/tests. Values below are median per-call wall time across the nine batches, not request p95.
+
+The first profile found a small-store regression from reopening a directory just checked by `lstat`: an empty list
+49.28 → 67.01 µs and one API 62.37 → 75.19 µs. Syscall profiling identified that directory open, fstat and close.
+The final code reuses **this read's** fresh stat only for a real, owned `0700` POSIX directory. Legacy permissions,
+unsafe owners and Windows still use the existing checked helper. Every leaf-file check remains. Nothing is cached.
+
+| Fixture | Before µs | Final µs | Before CPU µs | Final CPU µs |
+| --- | ---: | ---: | ---: | ---: |
+| No API directory | 4.98 | 5.11 | 5.33 | 5.23 |
+| Existing empty list | 48.26 | 44.02 | 49.38 | 46.99 |
+| 1 API, 64-byte key | 61.85 | 51.12 | 63.73 | 51.48 |
+| 10 APIs, 64-byte keys | 110.91 | 77.17 | 110.87 | 77.24 |
+| 100 APIs, 64-byte keys | 610.78 | 343.03 | 610.71 | 342.84 |
+| 100 APIs, 8,192-byte keys | 1,965.40 | 338.92 | 1,968.62 | 338.86 |
+
+CPU cost fell for every fixture; all existing-store wall times improved. The absent-directory wall difference is
++0.14 µs, while its CPU cost decreased; the initial run showed the opposite small wall difference. That path does
+not enter the optimization. No claim that every wall-time sample improved is made. At the largest fixture, a launch
+reads **17,409 metadata bytes instead of 837,809 bytes containing keys**.
+
+Baseline `aad8dcd535`, final runtime `803bd2f17f`. Raw reports, syscall profiles, test logs and the standalone reproducer
+are listed in `/tmp/core-refactor-secrets-final-handoff.md`; the final benchmark took 34.1 s. No remote run, push,
+merge, release or live-daemon operation was performed by this continuation.
 
 ## Step 3, security 7: keys the core holds without need
 
