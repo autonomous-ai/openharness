@@ -120,8 +120,9 @@ export function createTerminalControl({ resolve, terminals, refused }: TerminalC
     if (!session) return terminalActionNotStarted('terminal session is unavailable')
     const lease = await leasedTerminal(session)
     if (!lease) return terminalActionNotStarted(TERMINAL_LEASE_REFUSED)
-    if (allowed && !allowed()) return terminalActionNotStarted('terminal control revoked')
-    const result = await terminals.sendLegacyKeyLease(lease.value, key)
+    const current = () => !refused?.(session.agentId) && allowed?.() !== false
+    if (!current()) return terminalActionNotStarted('terminal control revoked')
+    const result = await terminals.sendLegacyKeyLease(lease.value, key, current)
     if (result.state !== 'succeeded' && pinnedControls.has(session.agentId)) invalidateTerminalControl(session.agentId)
     return result
   }

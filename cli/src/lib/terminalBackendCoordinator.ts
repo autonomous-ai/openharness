@@ -339,11 +339,11 @@ export class TerminalBackendCoordinator {
     return last
   }
 
-  sendLegacyKeyLease(lease: TerminalControlLease, key: string): Promise<TerminalActionResult> {
+  sendLegacyKeyLease(lease: TerminalControlLease, key: string, allowed?: () => boolean): Promise<TerminalActionResult> {
     const backend = this.backendFor(lease.runtime)
     const logical = terminalLogicalKey(key)
     return backend && logical
-      ? backend.sendKey(lease.runtime, logical)
+      ? backend.sendKey(lease.runtime, logical, allowed)
       : Promise.resolve(terminalActionNotStarted(backend
         ? 'unsupported logical terminal key'
         : 'leased terminal backend is disabled'))
@@ -376,13 +376,13 @@ export class TerminalBackendCoordinator {
     return this.sideEffect(session, (backend, runtime) => backend.typeLiteral(runtime, text))
   }
 
-  sendKey(session: RegisteredSession, key: TerminalLogicalKey): Promise<TerminalActionResult> {
-    return this.sideEffect(session, (backend, runtime) => backend.sendKey(runtime, key))
+  sendKey(session: RegisteredSession, key: TerminalLogicalKey, allowed?: () => boolean): Promise<TerminalActionResult> {
+    return this.sideEffect(session, (backend, runtime) => backend.sendKey(runtime, key, allowed))
   }
 
-  sendLegacyKey(session: RegisteredSession, key: string): Promise<TerminalActionResult> {
+  sendLegacyKey(session: RegisteredSession, key: string, allowed?: () => boolean): Promise<TerminalActionResult> {
     const logical = terminalLogicalKey(key)
-    return logical ? this.sendKey(session, logical) : Promise.resolve(terminalActionNotStarted('unsupported logical terminal key'))
+    return logical ? this.sendKey(session, logical, allowed) : Promise.resolve(terminalActionNotStarted('unsupported logical terminal key'))
   }
 
   setTitle(session: RegisteredSession, title: string): Promise<TerminalActionResult> {

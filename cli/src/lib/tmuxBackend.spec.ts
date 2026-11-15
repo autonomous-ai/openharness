@@ -80,6 +80,12 @@ afterEach(async () => {
 })
 
 describe('TmuxBackend lifecycle', () => {
+  it('refuses a revoked key before invoking tmux', async () => {
+    const calls = recordingTmux()
+    expect(await new TmuxBackend().sendKey({ backend: 'tmux', paneId: '%4' }, 'enter', () => false)).toMatchObject({ state: 'failed' })
+    expect(calls()).toEqual([])
+  })
+
   it.each(['create', 'respawn'] as const)('waits for a durable journal and rechecks ownership before %s', async operation => {
     const calls = recordingTmux()
     let release!: () => void, entered!: () => void, current = true

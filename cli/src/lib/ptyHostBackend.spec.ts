@@ -437,6 +437,12 @@ describe('PtyHostBackend input', () => {
     expect(calls).toEqual([{ op: 'paste', pane: '%1', text: 'a\nb', bracketed: true }])
   })
 
+  it('refuses a revoked key before writing to the PTY host', async () => {
+    const { backend, calls } = await ready()
+    expect(await backend.sendKey(PANE, 'enter', () => false)).toMatchObject({ state: 'failed', dispatch: 'not_started' })
+    expect(calls).toEqual([])
+  })
+
   it('sendKey sends the tmux name of the key', async () => {
     const { backend, calls } = await ready()
     await backend.sendKey(PANE, 'backtab')

@@ -783,9 +783,10 @@ export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
     return actionOf(await client.call({ op: 'paste', pane: runtime.paneId, text, bracketed: true }))
   }
 
-  async sendKey(runtime: PtyRuntimeRef, key: TerminalLogicalKey): Promise<TerminalActionResult> {
+  async sendKey(runtime: PtyRuntimeRef, key: TerminalLogicalKey, allowed?: () => boolean): Promise<TerminalActionResult> {
     const client = this.clientFor(runtime)
     if (!client) return terminalActionNotStarted(UNAVAILABLE)
+    if (allowed?.() === false) return terminalActionNotStarted('terminal control revoked')
     return actionOf(await client.call({ op: 'key', pane: runtime.paneId, key: TMUX_KEYS[key] }))
   }
 

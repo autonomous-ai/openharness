@@ -64,6 +64,33 @@ describe('terminal control', () => {
     expect(control.pinTerminalControl('agent-1')).toBeNull()
   })
 
+  it('refuses a key when the move becomes uncertain after the lease returned', async () => {
+    const { terminals } = backend()
+    let refused = false, checks = 0
+    const control = createTerminalControl({ resolve, terminals, refused: () => {
+      if (++checks === 2) void Promise.resolve().then(() => { refused = true })
+      return refused
+    } })
+    expect(await control.keyTerminalAction('agent-1', 'Enter')).toMatchObject({ state: 'failed', dispatch: 'not_started' })
+    expect(terminals.sendLegacyKeyLease).not.toHaveBeenCalled()
+  })
+
+  it('carries permanent refusal through a waiting key backend', async () => {
+    const { terminals } = backend()
+    let refused = false, finish!: () => void, entered!: () => void, sent = false
+    const waiting = new Promise<void>(resolve => { finish = resolve }), started = new Promise<void>(resolve => { entered = resolve })
+    vi.mocked(terminals.sendLegacyKeyLease).mockImplementation((async (_lease: unknown, _key: string, allowed?: () => boolean) => {
+      entered(); await waiting
+      if (allowed?.() === false) return { state: 'failed', dispatch: 'not_started', reason: 'revoked' }
+      sent = true; return ok
+    }) as typeof terminals.sendLegacyKeyLease)
+    const control = createTerminalControl({ resolve, terminals, refused: () => refused })
+    const result = control.keyTerminalAction('agent-1', 'Enter')
+    await started; refused = true; finish()
+    expect(await result).toMatchObject({ state: 'failed', dispatch: 'not_started' })
+    expect(sent).toBe(false)
+  })
+
   beforeEach(() => vi.useFakeTimers())
   afterEach(() => vi.useRealTimers())
 
@@ -296,6 +323,7 @@ it.each(['key', 'submit'] as const)('checks revoked %s authority after awaited t
 it('passes a live submission guard through to paste/Enter, and permits a guarded key', async () => {
   const { terminals } = backend(), control = createTerminalControl({ resolve, terminals }), allowed = () => true
   expect(await control.submitTerminal('agent-1', '/model next', { allowed })).toBe(true)
-  expect(terminals.submitTextForLease).toHaveBeenCalledWith(session, expect.anything(), '/model next', { allowed })
+  expect(terminals.submitTextForLease).toHaveBeenCalledWith(session, expect.anything(), '/model next', { allowed: expect.any(Function) })
+  expect(vi.mocked(terminals.submitTextForLease).mock.calls[0]![3]!.allowed!()).toBe(true)
   expect(await control.keyTerminal('agent-1', 'Enter', allowed)).toBe(true)
 })

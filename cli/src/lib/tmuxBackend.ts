@@ -683,8 +683,9 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
     return terminalEnterWithheld(sent.withheld)
   }
 
-  async sendKey(runtime: TmuxRuntimeRef, key: TerminalLogicalKey): Promise<TerminalActionResult> {
-    return legacyActionResult(await sendKeyToTmux(runtime.paneId, TMUX_KEYS[key]), 'tmux key input')
+  async sendKey(runtime: TmuxRuntimeRef, key: TerminalLogicalKey, allowed?: () => boolean): Promise<TerminalActionResult> {
+    if (allowed?.() === false) return terminalActionNotStarted('terminal control revoked')
+    return legacyActionResult(await sendKeyToTmux(runtime.paneId, TMUX_KEYS[key], allowed), 'tmux key input')
   }
 
   async setTitle(runtime: TmuxRuntimeRef, title: string): Promise<TerminalActionResult> {
