@@ -60,7 +60,7 @@ import {
 
 import { ensureTmuxOnPath, type TmuxPathOutcome } from './tmuxOnPath.js'
 import { harnessdEnv, isHarnessdVariable } from './harnessdEnv.js'
-import { AGENT_SESSION_VARIABLES } from './agentSessionEnv.js'
+import { AGENT_SESSION_VARIABLES, ORCA_VARIABLES, isAgentSessionVariable } from './agentSessionEnv.js'
 import { LEAN_CORE_SCRIPT_ENV } from '../harnessd/protocol.js'
 import { serviceProcessesEnv } from '../harnessd/services.js'
 import { DEFAULT_HOST_THEME, windowStyleOf, type HostTheme } from './hostTheme.js'
@@ -117,13 +117,14 @@ export const HARNESSD_SET_VARIABLES: readonly string[] = [
 ]
 
 /**
- * What the core unsets in the tmux server's global environment: every agent session name, every `HARNESSD_*`
- * harnessd sets, and every `HARNESSD_*` [own] has, this process's as it was started by default, its names alone.
- * Named, never listed from the server: that environment is the person's, their keys among it. A `HARNESSD_*` only an
- * older build set stays until the server restarts.
+ * What the core unsets in the tmux server's global environment: every agent session name, Orca's known names, every
+ * `HARNESSD_*` harnessd sets, and every `HARNESSD_*` and `ORCA_*` [own] has, this process's as it was started by
+ * default, its names alone. Named, never listed from the server: that environment is the person's, their keys among
+ * it. A `HARNESSD_*` only an older build set, and an `ORCA_*` not in ORCA_VARIABLES, stay until the server restarts.
  */
 export function serverVariablesToUnset(own: NodeJS.ProcessEnv = harnessdEnv()): string[] {
-  return [...new Set([...AGENT_SESSION_VARIABLES, ...HARNESSD_SET_VARIABLES, ...Object.keys(own).filter(isHarnessdVariable)])]
+  const ownNames = Object.keys(own).filter((name) => isHarnessdVariable(name) || isAgentSessionVariable(name))
+  return [...new Set([...AGENT_SESSION_VARIABLES, ...ORCA_VARIABLES, ...HARNESSD_SET_VARIABLES, ...ownNames])]
 }
 
 /** How many names one tmux call unsets: tmux refuses a command line over 16 KiB ("command too long"), and 64 of

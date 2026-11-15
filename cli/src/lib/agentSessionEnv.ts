@@ -22,6 +22,18 @@ export const AGENT_SESSION_VARIABLES: ReadonlySet<string> = new Set([
   'CODEX_THREAD_ID', 'CODEX_CI', 'CODEX_SANDBOX', 'CODEX_SANDBOX_NETWORK_DISABLED', 'CODEX_ESCALATE_SOCKET',
 ])
 
+/**
+ * The ORCA_* names an Orca terminal has that this repository knows, as Orca 1.4.256 names them (read 2026-11-13): the
+ * terminal's handle and pane key, its agent session's id, the app's version, its secrets (the pairing code and the
+ * spawn token), and the two a person may set. The core unsets these in a tmux server by name, as it never lists that
+ * server's environment (tmuxBackend.ts `serverVariablesToUnset`): the rest of Orca's some thirty, and any it adds,
+ * stay in a server started from an Orca terminal until it restarts.
+ */
+export const ORCA_VARIABLES: readonly string[] = [
+  'ORCA_TERMINAL_HANDLE', 'ORCA_PANE_KEY', 'ORCA_AGENT_SESSION_ID', 'ORCA_APP_VERSION', 'ORCA_PAIRING_CODE',
+  'ORCA_AGENT_SESSION_SPAWN_TOKEN', 'ORCA_USER_DATA_PATH', 'ORCA_ENVIRONMENT',
+]
+
 /** Whether [name] names an agent's own session, never for a daemon or a pane it makes. */
 export function isAgentSessionVariable(name: string): boolean {
   // Orca sets some thirty ORCA_* in each terminal it opens (1.4.256): that terminal's handle, pane and tab, and secrets,
