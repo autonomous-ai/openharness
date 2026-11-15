@@ -6,6 +6,7 @@
  */
 import { APP_BUNDLES } from './hostDetect.js'
 import { ORCA_HANDLE, RUN_TIMEOUT_MS, type OrcaDeps } from './orca.js'
+import type { PaneSwitch } from './types.js'
 
 /** Every app a tap brings forward. Alacritty is known by its bundle id alone: no other hint names it. Only one of these
  *  ever reaches `open`, never a hint's own value. */
@@ -55,10 +56,17 @@ export interface OpenDeps extends OrcaDeps {
   log(line: string): void
 }
 
-export function createOpenActions(deps: OpenDeps): { can(target: OpenTarget): boolean; open(agentId: string, target: OpenTarget): Promise<boolean> } {
+export function createOpenActions(deps: OpenDeps): {
+  can(target: OpenTarget): boolean
+  open(agentId: string, target: OpenTarget): Promise<boolean>
+  claudeShow(agentId: string, session: string): Promise<PaneSwitch>
+} {
   const mac = deps.platform === 'darwin'
   // One command at a time per agent: a second tap while the first runs would only bring the same app forward twice.
   const running = new Set<string>()
+  // A rest's link at a time per agent, in a set of its own: a tap is not refused while a rest's link runs, nor a rest
+  // while a tap runs, and two opens of one link do no harm.
+  const showing = new Set<string>()
 
   // `open` and the Claude app's link are macOS's: elsewhere only a pane's own command runs.
   const paneOn = (target: OpenTarget): Pane | undefined => (target.pane && (mac || target.pane.app !== 'claude') ? target.pane : undefined)
@@ -107,6 +115,18 @@ export function createOpenActions(deps: OpenDeps): { can(target: OpenTarget): bo
         return await open(target)
       } finally {
         running.delete(agentId)
+      }
+    },
+    // A rest of the dial shows the session in the app, which is already in front: a link that fails brings no app
+    // forward, and its outcome is the swipe's own count. The id came from a hook, so its form is checked here too.
+    async claudeShow(agentId, session) {
+      if (!mac || !CLAUDE_SESSION.test(session)) return 'failed'
+      if (showing.has(agentId)) return 'busy'
+      showing.add(agentId)
+      try {
+        return (await focus({ app: 'claude', id: session })) ? 'ok' : 'failed'
+      } finally {
+        showing.delete(agentId)
       }
     },
   }
