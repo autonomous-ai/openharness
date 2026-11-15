@@ -76,8 +76,8 @@ class ProfileReader {
         env: process.env, timeout: 10_000, maxBuffer: 1024 * 1024,
       })
       entries = opencode.parseOpencodeModelsOutput(result.stdout)
-    } catch (err) {
-      console.warn('[runtime-profile] OpenCode model catalog failed:', err instanceof Error ? err.message : err)
+    } catch {
+      console.warn('[runtime-profile] OPENCODE_CATALOG_UNAVAILABLE')
     }
     this.opencodeCatalogCache = { key, entries, expiresAt: Date.now() + CATALOG_TTL_MS }
     return entries

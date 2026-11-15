@@ -298,8 +298,8 @@ class ProfileReader {
         })
         entries = parseCursorModelsOutput(result.stdout)
         this.cursorCatalogCache = { key, entries, expiresAt: Date.now() + CURSOR_CATALOG_TTL_MS }
-      } catch (err) {
-        console.warn('[runtime-profile] Cursor model catalog failed:', err instanceof Error ? err.message : err)
+      } catch {
+        console.warn('[runtime-profile] CURSOR_CATALOG_UNAVAILABLE')
         entries = []
       }
     }

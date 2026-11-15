@@ -78,8 +78,8 @@ class ProfileReader {
           maxBuffer: 1024 * 1024,
         })
         entries = pi.parsePiModelsOutput(result.stdout)
-      } catch (err) {
-        console.warn('[runtime-profile] Pi model catalog failed:', err instanceof Error ? err.message : err)
+      } catch {
+        console.warn('[runtime-profile] PI_CATALOG_UNAVAILABLE')
       }
       this.piCatalogCache = { key, entries, expiresAt: Date.now() + CATALOG_TTL_MS, names: new Set(entries.map(entry => entry.model)) }
       return entries

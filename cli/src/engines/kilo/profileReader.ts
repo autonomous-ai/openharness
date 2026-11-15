@@ -59,8 +59,8 @@ class ProfileReader {
         env: process.env, timeout: 10_000, maxBuffer: 1024 * 1024,
       })
       entries = kilo.parseKiloModelsOutput(result.stdout)
-    } catch (err) {
-      console.warn('[runtime-profile] Kilo model catalog failed:', err instanceof Error ? err.message : err)
+    } catch {
+      console.warn('[runtime-profile] KILO_CATALOG_UNAVAILABLE')
     }
     this.kiloCatalogCache = { key, entries, expiresAt: Date.now() + CATALOG_TTL_MS }
     return entries
