@@ -658,6 +658,101 @@ describe('ObservedSource and Harness\'s own sessions', () => {
   })
 })
 
+describe('ObservedSource and the name a session gives itself', () => {
+  beforeEach(() => { vi.useFakeTimers() })
+  afterEach(() => { vi.useRealTimers() })
+
+  it('a title names the agent, a new one renames it, a turn-stop keeps it, and a Claude turn-start with none reads the folder again', () => {
+    const { src, changes, ev } = setup()
+    src.ingest(ev('turn-start', { title: 'Tho', cwd: '/x/scratch-2016' }))
+    expect(src.list()[0]).toMatchObject({ name: 'Tho', cwd: '/x/scratch-2016' })
+    changes.mockClear()
+    src.ingest(ev('turn-start', { title: 'Math' }))
+    expect(src.list()[0].name).toBe('Math')
+    expect(changes).toHaveBeenCalled()
+    src.ingest(ev('turn-stop', { cwd: '/x/other' }))
+    expect(src.list()[0]).toMatchObject({ name: 'Math', cwd: '/x/other' })
+    src.ingest(ev('turn-start', { cwd: undefined }))
+    expect(src.list()[0].name).toBe('other')
+  })
+
+  it('a Claude turn-start with no title and a new folder reads that folder', () => {
+    const { src, ev } = setup()
+    src.ingest(ev('turn-start', { title: 'Tho' }))
+    src.ingest(ev('turn-start', { cwd: '/x/third' }))
+    expect(src.list()[0].name).toBe('third')
+  })
+
+  it('a Claude session-start with no title clears it too', () => {
+    const { src, ev } = setup()
+    src.ingest(ev('turn-start', { title: 'Tho' }))
+    src.ingest(ev('session-start'))
+    expect(src.list()[0].name).toBe('proj')
+  })
+
+  it('a session-start with a title renames a session the scan listed', async () => {
+    const { src, open, owners, externals, ev } = setup()
+    open.set('a', 'terminal')
+    owners.set('a', { pid: 11, engine: 'claude' })
+    externals.set('a', { cwd: '/x/alpha', transcriptPath: '/t/a.jsonl' })
+    await src.scanOpen()
+    expect(src.list()[0].name).toBe('alpha')
+    src.ingest(ev('session-start', { sessionId: 'a', callerPid: 11, cwd: '/x/alpha', title: 'Tho' }))
+    expect(src.list()[0].name).toBe('Tho')
+  })
+
+  it('another engine\'s turn-start with no title keeps its title', () => {
+    const { src, ev } = setup()
+    src.ingest(ev('turn-start', { engine: 'codex', sessionId: 'c1', title: 'Tho' }))
+    src.ingest(ev('turn-start', { engine: 'codex', sessionId: 'c1' }))
+    expect(src.list()[0].name).toBe('Tho')
+  })
+
+  it('needs-input, asked, turn-error and session-end leave the name', () => {
+    const { src, ev } = setup()
+    src.ingest(ev('turn-start', { title: 'Tho' }))
+    src.ingest(ev('needs-input'))
+    expect(src.list()[0].name).toBe('Tho')
+    src.ingest({ engine: 'claude', sessionId: 's1', event: 'asked', tool: 'Bash', summary: 'npm test', cwd: '/x/elsewhere' })
+    expect(src.list()[0].name).toBe('Tho')
+    src.ingest(ev('turn-error'))
+    expect(src.list()[0].name).toBe('Tho')
+    src.ingest(ev('session-end'))
+    expect(src.list()[0].name).toBe('Tho')
+  })
+
+  it('with no folder known, a cleared title reads the engine', () => {
+    const { src, ev } = setup()
+    src.ingest(ev('turn-start', { cwd: undefined, title: 'Tho' }))
+    expect(src.list()[0].name).toBe('Tho')
+    src.ingest(ev('turn-start', { cwd: undefined }))
+    expect(src.list()[0].name).toBe('claude')
+  })
+
+  // Claude Code's compaction starts a session again in the middle of a turn.
+  it('a session-start in the middle of a turn renames it and leaves it working', () => {
+    const { src, ev } = setup()
+    src.ingest(ev('turn-start', { title: 'Tho' }))
+    src.ingest(ev('session-start', { title: 'Math' }))
+    expect(src.list()[0]).toMatchObject({ name: 'Math', state: 'working' })
+  })
+
+  it('a refusal names the agent by its title', async () => {
+    const { src, ev } = setup()
+    src.ingest(ev('turn-start', { title: 'Tho' }))
+    expect(await src.send(src.list()[0], 'hi')).toEqual({ ok: false, reason: 'Tho did not answer.' })
+  })
+
+  it('no log line holds a title', () => {
+    const { src, ev, logs } = setup()
+    // Fifty working sessions fill the list: the fifty-first is dropped, and that is logged.
+    for (let i = 0; i <= 50; i++) src.ingest(ev('turn-start', { sessionId: `s${i}`, title: `Name ${i}` }))
+    src.ingest({ engine: 'claude', sessionId: 's0', event: 'asked', tool: 'Bash', summary: 'npm test' })
+    expect(logs).not.toEqual([])
+    expect(logs.join('\n')).not.toMatch(/Name \d/)
+  })
+})
+
 const HANDLE = 'term_0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b'
 
 /** Routes that answer as told, recording what each was handed. */
