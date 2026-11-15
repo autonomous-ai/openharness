@@ -2,6 +2,33 @@
 
 Packages 1 and 9 of [the plan](../2026-11-15-core-plan.md). Audit: section 3's first row and security 4.
 
+## History waits and input ordering (15 November)
+
+The engine-worker failure test exposed an existing coupling: `session_get` awaited its reader inside the
+connection's command chain, so a frozen optional worker delayed a later message to another agent on that connection.
+Start the read after the existing authorization and ordering gates, then let later commands proceed while the
+reader answers. Mutating commands keep their order. History retains its request id and originating connection;
+`core/transcripts/history.ts` rechecks the captured conversation identity before returning worker output.
+
+### Design
+
+- Growth and concurrency: no new persistent data, cache or queue. Admit at most 16 detached history requests
+  across all connections before calling the provider, including store discovery and inline compatibility. Excess
+  requests receive the existing `ENGINE_BUSY` error. One counter and at most 16 reply deadlines bound this work.
+  A timed-out or disconnected read keeps its slot until its underlying operation actually settles; it cannot
+  multiply filesystem work by retrying. A refused worker is never an inline fallback.
+- Read cost and scale: the same history request reads the same bounded page. Measure message dispatch with a held
+  history request before/after; unrelated input must proceed before that request settles, including at ten clients.
+- Compatibility, migration and rollback: successful replies and error bodies keep their existing shapes. Only
+  completion order changes for independent requests with their own ids. No stored format changes or migration.
+- Audience and identity: existing local/remote authorization runs before the read starts; reply routing retains
+  the original connection and drops replies to disconnected local clients. No new account or credential use.
+- Failure: rejected reads receive the existing error reply and a content-free named log. A 60-second outer
+  deadline bounds the reply even if store preparation hangs; it accommodates Amp's existing 25-second request
+  plus 25-second parts budget. Timed-out replies are `ENGINE_UNAVAILABLE`, late results are discarded, and the
+  existing worker timeout/restart still applies. None of those waits holds the connection's command chain.
+- Platforms: shared TypeScript on macOS, Linux and Windows; no process-launch or platform-specific change.
+
 ## Step 1 (package 1): Codex's rollout read, bounded and asynchronous
 
 Branch `core-loop-1`. A Codex resume read its whole rollout synchronously on the core's loop, twice when it repaired
