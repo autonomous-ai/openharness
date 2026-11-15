@@ -3012,6 +3012,40 @@ describe('selecting a tab moves the dial (docs/specs/2026-11-15-dial-terminal-fo
     expect(asked()).toEqual([])
   })
 
+  // Terminal reports the tab it shows as it comes forward; the dial selecting another inside the settle moved on from it.
+  for (const way of ['rest', 'tap'] as const) {
+    it(`a report waiting for the settle is set aside by a select the dial wrote since it came (a ${way})`, async () => {
+      const { listener, report, stream } = await dialWith(2)
+      expect(listener.front('terminal-app')).toBeUndefined()
+      report('terminal-app', ttyOf(1))
+      clock = 800
+      if (way === 'rest') host().swipeEnded(agent(2), 'rest')
+      else expect(await host().openAgent(agent(2))).toBeUndefined()
+      expect(stream.lines).toHaveLength(1)
+      await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+      expect(asked()).toEqual([])
+      expect(tabLines()).toEqual(['[device] tab · echo'])
+    })
+  }
+
+  it('each select excuses one report: the person selecting that tab again within 2 s moves the dial', async () => {
+    const { report, settle } = await dialWith(2)
+    await settle('terminal-app')
+    host().swipeEnded(agent(1), 'rest')
+    clock = 300
+    report('terminal-app', ttyOf(1))
+    clock = 500
+    host().swipeEnded(agent(2), 'rest')
+    clock = 700
+    report('terminal-app', ttyOf(2))
+    expect(tabLines()).toEqual(['[device] tab · echo', '[device] tab · echo'])
+    expect(asked()).toEqual([])
+    // Back to the first tab in Terminal: its select was already used up by its own echo.
+    clock = 1_000
+    report('terminal-app', ttyOf(1))
+    expect(asked()).toEqual([[agent(1), 'tab']])
+  })
+
   it('no agent with that tty, or one in another app: no-agent', async () => {
     const { report, settle } = await dialWith()
     await settle('terminal-app')
