@@ -1199,18 +1199,28 @@ describe('ObservedSource and what a turn\'s start was', () => {
 
   // The words the mod took are still to come: a refused send takes back its own record, which would outlive theirs.
   it('a send Orca refuses takes back its own record, not the one the mod left before it', async () => {
-    const { actions, ready } = fakeActions({
-      toMod: vi.fn(async (): Promise<Delivery> => 'missed').mockResolvedValueOnce('taken'),
-      orcaSend: vi.fn(async () => false),
-    })
-    const { src, clock, ev } = setup({ actions })
-    ready.add('s1')
-    src.ingest(ev('turn-stop', withHandle))
-    expect(await src.send(src.list()[0], 'run the tests')).toEqual({ ok: true })
-    clock.t += 60_000
-    expect(await src.send(src.list()[0], 'then deploy')).toEqual({ ok: false, reason: 'proj did not answer.' })
-    clock.t += 540_000
-    expect(src.ingest(ev('turn-start', withHandle))).toBe('person')
+    /** The mod takes the first words; a minute later Orca refuses the next. */
+    const refused = async () => {
+      const { actions, ready } = fakeActions({
+        toMod: vi.fn(async (): Promise<Delivery> => 'missed').mockResolvedValueOnce('taken'),
+        orcaSend: vi.fn(async () => false),
+      })
+      const { src, clock, ev } = setup({ actions })
+      ready.add('s1')
+      src.ingest(ev('turn-stop', withHandle))
+      expect(await src.send(src.list()[0], 'run the tests')).toEqual({ ok: true })
+      clock.t += 60_000
+      expect(await src.send(src.list()[0], 'then deploy')).toEqual({ ok: false, reason: 'proj did not answer.' })
+      return { src, clock, turn: () => src.ingest(ev('turn-start', withHandle)) }
+    }
+    // One record is left.
+    const now = await refused()
+    expect(now.turn()).toBe('dial')
+    expect(now.turn()).toBe('person')
+    // It is the mod's: past its 10 minutes, though Orca's would still have a minute to go, the next turn is a person's.
+    const later = await refused()
+    later.clock.t += 540_000
+    expect(later.turn()).toBe('person')
   })
 
   it('a refused or missed delivery records nothing', async () => {
