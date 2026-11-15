@@ -19,6 +19,7 @@ import { READY_LINE, STOPPED_LINE } from './agentBrowser/notices.js'
 import { createPodman } from './agentBrowser/podman.js'
 import { defaultSettings, type BrowserSettings } from './agentBrowser/settings.js'
 import { StateFile } from './agentBrowser/stateFile.js'
+import { resetAgentTmpSweep } from '../lib/agentTmp.js'
 import { AGENT_BROWSER_REQUESTS, daemonIdOf, startAgentBrowser, type AgentBrowserOptions } from './agentBrowser.js'
 
 vi.mock('node:child_process', async (importOriginal) =>
@@ -719,6 +720,58 @@ describe('the agent browser service', () => {
       expect(asked()).toContain('volume rm harness-browser-a9')
       expect(asked().filter(line => !line.includes('harness-browser-a9') && !line.includes('harness-proxy-a9'))).toEqual([])
     }
+  })
+
+  // `harness browser`'s screenshots and long output where nothing sets a TMPDIR (agentClient/browserOutput.ts): the core
+  // swept them at each launch until 2026-11-15.
+  it('sweeps the agents\' folder of what nothing changed in for a week, as it begins', async () => {
+    resetAgentTmpSweep()
+    const shot = join(dataDir, 'agent-tmp', 'browser', 'shot.png')
+    mkdirSync(join(dataDir, 'agent-tmp', 'browser'), { recursive: true })
+    writeFileSync(shot, 'png')
+    saveState({})
+    const log = vi.spyOn(console, 'log')
+    // A clock past the file's own change time by more than a week: what it holds is a week old.
+    start(fakeCore({ dataDir }), { now: () => new Date(Date.now() + 8 * 24 * 60 * 60_000) })
+    await eventually(() => expect(log).toHaveBeenCalledWith('[agent-tmp] removed 1 entries nothing had changed in for 7 days'))
+    expect(existsSync(shot)).toBe(false)
+  })
+
+  // In the core's process the service reads the registry itself: every agent, live and stopped.
+  it('in the core\'s process, which agents are here is the core\'s own list', async () => {
+    saveState({ a1: defaultSettings(HOST), a2: defaultSettings(HOST) })
+    start(fakeCore({ dataDir, agents: { all: () => [session('a1')] } }), { everyAgent: undefined })
+    await eventually(() => expect(asked()).toContain('volume rm harness-browser-a2'))
+    await eventually(() => expect(Object.keys(savedState().browsers)).toEqual(['a1']))
+  })
+
+  // In its own process, before the core has answered what it follows: it cannot tell an agent that ended from one it
+  // has not heard of yet, and stops nothing on a guess.
+  it('stops no browser as it starts until it has caught up with the core\'s agents', async () => {
+    saveState({ a1: defaultSettings(HOST) })
+    fake.reply('ps', { stdout: JSON.stringify([{ Names: ['harness-browser-a1'], Labels: { 'harness.agent': 'a1', 'harness.daemon': daemonIdOf(dataDir) }, State: 'running' }]) })
+    const followed = vi.fn(async () => false)
+    start(fakeCore({ dataDir }), { followed, everyAgent: async () => [session('a1')] })
+    await eventually(() => expect(followed).toHaveBeenCalled())
+    await new Promise(done => setImmediate(done))
+    expect(asked()).not.toContain('rm --force --time 10 harness-browser-a1')
+  })
+
+  // A stop of an agent's harness is the agent cleanup's to hear (core/agentLife.ts): an ended agent's browser stops on
+  // its end, never on its stop.
+  it('hears nothing in a stop of an agent: its end stops the browser', async () => {
+    const { port, hub } = start()
+    port.running(session('a1'))
+    await ready(port, 'a1')
+    hub.stopped('a1')
+    expect(port.frameContext('a1')).toEqual({ state: 'ready' })
+  })
+
+  it('a Stop when nothing was ever turned on answers ok', async () => {
+    saveState({ a1: defaultSettings(HOST) })
+    const { requests } = start()
+    expect(await requests.agent_browser_stop!({ agentId: 'a1' }, LOCAL)).toEqual({ ok: true })
+    expect(turnedOn()).toEqual({})
   })
 
   it('a failure that is not Podman\'s is the service\'s own, and counts against it', async () => {

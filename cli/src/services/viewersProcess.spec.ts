@@ -294,7 +294,7 @@ describe('the viewers in their own process', () => {
   it('runs on a core API of the agents the core attached, answering what the viewers never ask as nothing', async () => {
     const sessions = new Map([['a1', agent()]])
     const tell = vi.fn()
-    const api = viewersCoreApi('/data', sessions, tell)
+    const api = viewersCoreApi('/data', sessions, tell, () => false, () => () => {})
     expect(api.dataDir).toBe('/data')
     expect(api.agents.all()).toEqual([agent()])
     expect(api.agents.live()).toEqual([agent()])

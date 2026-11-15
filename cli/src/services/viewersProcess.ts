@@ -56,8 +56,8 @@ export function viewersCoreApi(
   dataDir: string,
   sessions: ReadonlyMap<string, RegisteredSession>,
   tell: (agentId: string) => void,
-  viewerFrame: CoreApi['clients']['viewerFrame'] = () => false,
-  follow: NonNullable<CoreApi['agents']['follow']> = () => () => {},
+  viewerFrame: CoreApi['clients']['viewerFrame'],
+  follow: NonNullable<CoreApi['agents']['follow']>,
 ): CoreApi {
   const attached = (): RegisteredSession[] => [...sessions.values()]
   return {

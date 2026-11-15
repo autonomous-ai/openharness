@@ -35,6 +35,9 @@ describe('the viewers in their own process, as the core keeps them', () => {
     const { notify, hub } = setup()
     hub.running(agent())
     hub.running(agent({ agentId: 'plain', dsh: undefined }))
+    // What else agents do is not the viewers' business.
+    hub.stopped('a1')
+    hub.purged('a1', ['s1'])
     hub.ended('a1')
     expect(notify).not.toHaveBeenCalled()
   })
