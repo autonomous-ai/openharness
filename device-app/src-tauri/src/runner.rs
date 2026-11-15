@@ -265,13 +265,15 @@ mod tests {
     use crate::install::{DESKTOP, HOST, NOT_INSTALLED, NOT_SUPPORTED, Shell};
     use crate::loginitem::LoginItem;
     use crate::state::StateFile;
+    use crate::tabs::{NoTabs, Selected, TabApp, TabError, TabScripts};
     use crate::testing::{Fake, alive, fake_harness, wait_gone};
     use crate::types::{ClaudeStatus, DialStatus, Effect, Event, LoginEvent, MenuItem, Output, Saved};
+    use std::collections::VecDeque;
     use std::fs;
     use std::io;
     use std::path::{Path, PathBuf};
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::{Arc, Mutex, mpsc};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::{Arc, Condvar, Mutex, mpsc};
     use std::thread;
     use std::time::Duration;
 
@@ -287,6 +289,16 @@ mod tests {
     const VSCODE_LINE: &str = r#"{"front":"com.microsoft.VSCode"}"#;
     /// A watch that keeps what it reads on its stdin until it is stopped.
     const RECORDING: [&str; 2] = [r#"{"attached":false}"#, "@record"];
+    /// The same, with the dial attached.
+    const ATTACHED: [&str; 2] = [r#"{"attached":true}"#, "@record"];
+    const TERMINAL: &str = "com.apple.Terminal";
+    const TERMINAL_LINE: &str = r#"{"front":"com.apple.Terminal"}"#;
+    const TTY: &str = "/dev/ttys023";
+    const OTHER: &str = "/dev/ttys024";
+    const SELECT: &str = r#"{"select":{"app":"terminal-app","tty":"/dev/ttys023"}}"#;
+    const RAISE: &str = r#"{"select":{"app":"terminal-app","tty":"/dev/ttys023","raise":true}}"#;
+    /// Every test runner's poll interval: short, so a test waits on calls, never on the clock.
+    const EVERY: Duration = Duration::from_millis(20);
 
     /// The doors besides the CLI. Each keeps what it was asked, and fails while `failing` is set.
     #[derive(Default)]
@@ -359,6 +371,86 @@ mod tests {
         }
     }
 
+    /// The tab scripts, as a test answers them: each call is kept as it starts, and waits while the gate is shut.
+    #[derive(Default)]
+    struct Scripts {
+        not_running: AtomicBool,
+        /// What selected_tty answers, in turn; the last one again once the others are used.
+        ttys: Mutex<VecDeque<Result<Option<String>, TabError>>>,
+        calls: Mutex<Vec<String>>,
+        called: Condvar,
+        shut: Mutex<bool>,
+        opened: Condvar,
+        /// The calls under way now, and the most there ever were at once.
+        inside: AtomicUsize,
+        most: AtomicUsize,
+    }
+
+    impl Scripts {
+        fn answering(ttys: &[&str]) -> Arc<Scripts> {
+            let scripts = Scripts::default();
+            *scripts.ttys.lock().unwrap() = ttys.iter().map(|tty| Ok(Some(tty.to_string()))).collect();
+            Arc::new(scripts)
+        }
+
+        /// Waits until the calls so far pass `done`, and gives them.
+        fn until(&self, done: impl Fn(&[String]) -> bool) -> Vec<String> {
+            let calls = self.calls.lock().unwrap();
+            let (calls, _) = self.called.wait_timeout_while(calls, WAIT, |calls| !done(calls)).unwrap();
+            assert!(done(&calls), "{calls:?}");
+            calls.clone()
+        }
+
+        /// Waits until `n` calls have started.
+        fn calls(&self, n: usize) -> Vec<String> {
+            self.until(|calls| calls.len() >= n)
+        }
+
+        /// No call starts for ten ticks: there are still `n`.
+        fn still(&self, n: usize) {
+            let calls = self.calls.lock().unwrap();
+            let (calls, _) = self.called.wait_timeout_while(calls, EVERY * 10, |calls| calls.len() == n).unwrap();
+            assert_eq!(calls.len(), n, "{calls:?}");
+        }
+
+        fn gate(&self, shut: bool) {
+            *self.shut.lock().unwrap() = shut;
+            self.opened.notify_all();
+        }
+
+        fn call(&self, call: String) {
+            self.calls.lock().unwrap().push(call);
+            self.called.notify_all();
+            let inside = self.inside.fetch_add(1, Ordering::SeqCst) + 1;
+            self.most.fetch_max(inside, Ordering::SeqCst);
+            drop(self.opened.wait_while(self.shut.lock().unwrap(), |shut| *shut).unwrap());
+            self.inside.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+
+    impl TabScripts for Scripts {
+        fn running(&self, app: TabApp) -> bool {
+            self.call(format!("running {}", app.name()));
+            !self.not_running.load(Ordering::SeqCst)
+        }
+
+        fn selected_tty(&self, app: TabApp) -> Result<Option<String>, TabError> {
+            self.call(format!("selected_tty {}", app.name()));
+            let mut ttys = self.ttys.lock().unwrap();
+            if ttys.len() > 1 { ttys.pop_front().unwrap() } else { ttys.front().cloned().unwrap_or(Ok(None)) }
+        }
+
+        fn select_tty(&self, app: TabApp, tty: &str, frontmost: bool) -> Result<Selected, TabError> {
+            self.call(format!("select_tty {} {tty} {}", app.name(), if frontmost { "front" } else { "back" }));
+            Ok(Selected::Done)
+        }
+
+        fn focus_tty(&self, app: TabApp, tty: &str) -> Result<Selected, TabError> {
+            self.call(format!("focus_tty {} {tty}", app.name()));
+            Ok(Selected::Done)
+        }
+    }
+
     /// A `harness` launcher in `home`'s `.local/bin` that says it is signed in: a link to the fake, with the folder it
     /// reads beside it. Linked, not written as a script: see testing::Fake on ETXTBSY.
     fn put_launcher(home: &Path) {
@@ -421,18 +513,28 @@ mod tests {
         (w, fronts)
     }
 
+    /// The same, with the tab scripts a test answers.
+    fn world_with_tabs(now: &str, scripts: &Arc<Scripts>) -> (World, Arc<Fronts>) {
+        let fronts = Arc::new(Fronts { now: now.into(), changed: Mutex::default() });
+        let (source, tabs) = (fronts.clone(), scripts.clone());
+        let w = world_where(move |doors| {
+            doors.front = source;
+            doors.tabs = tabs;
+        });
+        assert!(w.runner.find_cli());
+        (w, fronts)
+    }
+
     /// A fake CLI as the override, an empty home, the doubles, and a channel for what `send` is handed.
     fn world_where(change: impl FnOnce(&mut Doors)) -> World {
         let (fake, home, doubles) = (Fake::new(), tempfile::tempdir().unwrap(), Arc::new(Doubles::default()));
         let mut doors = doors(&fake, home.path(), &doubles);
         change(&mut doors);
         let (sender, events) = mpsc::channel();
-        let runner = Runner::new(
-            doors,
-            Arc::new(move |event| {
-                let _ = sender.send(event);
-            }),
-        );
+        let send = Arc::new(move |event| {
+            let _ = sender.send(event);
+        });
+        let runner = Runner::polling_every(doors, send, EVERY);
         World { fake, home, doubles, events, runner }
     }
 
@@ -450,6 +552,7 @@ mod tests {
             log: fake.log(),
             open: Arc::new(move |args: &[&str]| opener.open(args)),
             front: Arc::new(NoFront),
+            tabs: Arc::new(NoTabs),
         }
     }
 
@@ -463,6 +566,14 @@ mod tests {
 
     fn no_dial() -> Event {
         Event::WatchLine(DialStatus { attached: false, fw: None, hw: None, board: None, updating: None, problem: None })
+    }
+
+    fn a_dial() -> Event {
+        Event::WatchLine(DialStatus { attached: true, fw: None, hw: None, board: None, updating: None, problem: None })
+    }
+
+    fn tab(tty: &str) -> String {
+        format!(r#"{{"tab":{{"app":"terminal-app","tty":"{tty}"}}}}"#)
     }
 
     #[cfg(unix)]
@@ -725,6 +836,207 @@ mod tests {
         assert!(lines.iter().any(|line| line == "harness hardware watch --json: exit 0"), "{lines:?}");
         assert!(lines.iter().all(|line| !line.contains("ghostty") && !line.contains("VSCode")), "{lines:?}");
         assert!(doubles.saved.lock().unwrap().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_selected_tab_is_written_to_the_watch_with_terminal_in_front_and_the_dial_attached() {
+        let scripts = Scripts::answering(&[TTY]);
+        let (w, _fronts) = world_with_tabs(TERMINAL, &scripts);
+        w.fake.script("hardware watch --json", &ATTACHED);
+        assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
+        // The second call starts once the first one's line is written.
+        assert_eq!(scripts.calls(2)[..2], ["selected_tty Terminal", "selected_tty Terminal"]);
+        assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
+        assert_eq!(w.fake.stdin(), [TERMINAL_LINE.to_string(), tab(TTY)]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn nothing_is_asked_with_another_app_in_front_no_watch_or_no_dial() {
+        let scripts = Scripts::answering(&[TTY]);
+        let (w, fronts) = world_with_tabs(VSCODE, &scripts);
+        w.fake.script("hardware watch --json", &ATTACHED);
+        assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
+        scripts.still(0);
+        assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
+        // Terminal in front, and no watch.
+        fronts.tell(TERMINAL);
+        scripts.still(0);
+        // A watch, and no dial.
+        w.fake.script("hardware watch --json", &RECORDING);
+        assert_eq!(w.answer(Effect::SpawnWatch), no_dial());
+        scripts.still(0);
+        // All three: it asks.
+        w.fake.script("hardware watch --json", &ATTACHED);
+        assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
+        assert_eq!(scripts.calls(1)[..1], ["selected_tty Terminal"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_change_of_tab_is_one_line_and_a_repeat_none() {
+        let scripts = Scripts::answering(&[TTY, TTY, OTHER, OTHER]);
+        let (w, _fronts) = world_with_tabs(TERMINAL, &scripts);
+        w.fake.script("hardware watch --json", &ATTACHED);
+        assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
+        // The fifth starts once the first four answers are handled.
+        scripts.calls(5);
+        assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
+        assert_eq!(w.fake.stdin(), [TERMINAL_LINE.to_string(), tab(TTY), tab(OTHER)]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn asking_stops_when_another_app_comes_to_the_front() {
+        let scripts = Scripts::answering(&[TTY]);
+        let (w, fronts) = world_with_tabs(TERMINAL, &scripts);
+        w.fake.script("hardware watch --json", &ATTACHED);
+        scripts.gate(true);
+        assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
+        scripts.calls(1);
+        // The call under way as VS Code comes to the front is the last, and its answer is written nowhere.
+        fronts.tell(VSCODE);
+        scripts.gate(false);
+        scripts.still(1);
+        assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
+        assert_eq!(w.fake.stdin(), [TERMINAL_LINE, VSCODE_LINE]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn asking_stops_when_the_watch_ends_or_the_dial_detaches() {
+        let scripts = Scripts::answering(&[TTY]);
+        let (w, _fronts) = world_with_tabs(TERMINAL, &scripts);
+        w.fake.script("hardware watch --json", &[r#"{"attached":true}"#, "@wait end"]);
+        scripts.gate(true);
+        assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
+        scripts.calls(1);
+        w.fake.touch("end");
+        assert_eq!(w.next(), Event::WatchExit(Some(0)));
+        scripts.gate(false);
+        scripts.still(1);
+
+        let detaching = [r#"{"attached":true}"#, "@wait detach", r#"{"attached":false}"#, "@stdin"];
+        w.fake.script("hardware watch --json", &detaching);
+        scripts.gate(true);
+        assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
+        scripts.calls(2);
+        w.fake.touch("detach");
+        assert_eq!(w.next(), no_dial());
+        scripts.gate(false);
+        scripts.still(2);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_select_from_the_watch_runs_once_and_says_whether_its_app_is_in_front() {
+        let scripts = Arc::new(Scripts::default());
+        let (w, fronts) = world_with_tabs(TERMINAL, &scripts);
+        let selecting = [r#"{"attached":false}"#, "@wait one", SELECT, "@wait two", SELECT, "@stdin"];
+        w.fake.script("hardware watch --json", &selecting);
+        assert_eq!(w.answer(Effect::SpawnWatch), no_dial());
+        w.fake.touch("one");
+        assert_eq!(scripts.calls(2), ["running Terminal", "select_tty Terminal /dev/ttys023 front"]);
+        fronts.tell(VSCODE);
+        w.fake.touch("two");
+        assert_eq!(scripts.calls(4)[2..], ["running Terminal", "select_tty Terminal /dev/ttys023 back"]);
+        scripts.still(4);
+        assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
+        let log = w.fake.log();
+        assert_eq!(w.rest(), []);
+        let said: Vec<String> = log.lines().into_iter().filter(|line| line.starts_with("tabs:")).collect();
+        assert_eq!(said, ["tabs: Terminal select ok", "tabs: Terminal select ok"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_select_that_raises_runs_focus_tty_and_one_that_does_not_runs_select_tty() {
+        let scripts = Arc::new(Scripts::default());
+        // Another app in front: a tap's `open -b` is bringing Terminal forward.
+        let (w, _fronts) = world_with_tabs(VSCODE, &scripts);
+        w.fake.script("hardware watch --json", &[r#"{"attached":false}"#, RAISE, "@wait two", SELECT, "@stdin"]);
+        assert_eq!(w.answer(Effect::SpawnWatch), no_dial());
+        assert_eq!(scripts.calls(2), ["running Terminal", "focus_tty Terminal /dev/ttys023"]);
+        w.fake.touch("two");
+        assert_eq!(scripts.calls(4)[2..], ["running Terminal", "select_tty Terminal /dev/ttys023 back"]);
+        scripts.still(4);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_app_that_is_not_running_is_never_sent_an_event() {
+        let scripts = Arc::new(Scripts::default());
+        scripts.not_running.store(true, Ordering::SeqCst);
+        let (w, _fronts) = world_with_tabs(VSCODE, &scripts);
+        w.fake.script("hardware watch --json", &[r#"{"attached":false}"#, SELECT, "@wait two", RAISE, "@stdin"]);
+        assert_eq!(w.answer(Effect::SpawnWatch), no_dial());
+        assert_eq!(scripts.calls(1), ["running Terminal"]);
+        w.fake.touch("two");
+        assert_eq!(scripts.calls(2), ["running Terminal", "running Terminal"]);
+        scripts.still(2);
+        // No call was made, so no outcome is logged.
+        let log = w.fake.log();
+        assert_eq!(w.rest(), [Event::WatchExit(Some(0))]);
+        assert!(log.lines().iter().all(|line| !line.starts_with("tabs:")), "{:?}", log.lines());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn no_two_calls_overlap() {
+        let scripts = Scripts::answering(&[TTY]);
+        let (w, _fronts) = world_with_tabs(TERMINAL, &scripts);
+        w.fake.script("hardware watch --json", &[r#"{"attached":true}"#, "@wait go", SELECT, "@stdin"]);
+        scripts.gate(true);
+        assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
+        scripts.calls(1);
+        // Ticks pass and a select comes while the first call is held: neither starts a second.
+        w.fake.touch("go");
+        scripts.still(1);
+        scripts.gate(false);
+        let polls = |calls: &[String]| calls.iter().filter(|call| *call == "selected_tty Terminal").count();
+        let select = "select_tty Terminal /dev/ttys023 front";
+        scripts.until(|calls| calls.iter().any(|call| call == select) && polls(calls) >= 3);
+        assert_eq!(scripts.most.load(Ordering::SeqCst), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn nothing_of_a_tab_is_logged_but_its_outcome() {
+        let scripts = Scripts::answering(&[TTY, OTHER]);
+        let (w, _fronts) = world_with_tabs(TERMINAL, &scripts);
+        let selecting = [r#"{"attached":true}"#, "@wait go", SELECT, "@wait raise", RAISE, "@record"];
+        w.fake.script("hardware watch --json", &selecting);
+        assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
+        scripts.calls(3);
+        w.fake.touch("go");
+        scripts.until(|calls| calls.iter().any(|call| call.starts_with("select_tty")));
+        w.fake.touch("raise");
+        scripts.until(|calls| calls.iter().any(|call| call.starts_with("focus_tty")));
+        assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
+        let (log, doubles, stdin) = (w.fake.log(), w.doubles.clone(), w.fake.stdin());
+        assert_eq!(w.rest(), []);
+        // The ttys went to the watch, and nowhere else.
+        assert_eq!(stdin, [TERMINAL_LINE.to_string(), tab(TTY), tab(OTHER)]);
+        let lines = log.lines();
+        assert_eq!(lines.iter().filter(|line| *line == "tabs: Terminal select ok").count(), 2, "{lines:?}");
+        assert!(lines.iter().all(|line| !line.contains("ttys")), "{lines:?}");
+        assert!(doubles.saved.lock().unwrap().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_tab_thread_ends_with_the_runner() {
+        let scripts = Scripts::answering(&[TTY]);
+        let (w, _fronts) = world_with_tabs(TERMINAL, &scripts);
+        w.fake.script("hardware watch --json", &ATTACHED);
+        assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
+        scripts.calls(1);
+        // Every thread that could send has let it go: the tab thread too, which was polling.
+        assert_eq!(w.rest(), [Event::WatchExit(Some(0))]);
+        scripts.still(scripts.calls(0).len());
+        // Nothing holds the doors any more.
+        assert_eq!(Arc::strong_count(&scripts), 1);
     }
 
     #[cfg(unix)]
