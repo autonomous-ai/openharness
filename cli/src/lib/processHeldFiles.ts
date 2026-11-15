@@ -77,7 +77,9 @@ async function linuxFolders(identity: ProcessIdentity, file: RegExp, proc: strin
   const view = await processView(identity, 'linux', proc)
   if (view.state === 'unreadable') return null
   if (view.state === 'same') return folders
-  return folders.map((folder) => view.toHost(folder)).filter((folder) => folder !== null)
+  // A store with no path here is still a home the process holds: dropped, it would leave the other one picked.
+  const mapped = folders.map((folder) => view.toHost(folder))
+  return mapped.every((folder) => folder !== null) ? mapped : null
 }
 
 // lsof escapes a name's bytes above ASCII (`\xc3\xa0`), so a path may be spelled two ways (descriptorPaths). When
