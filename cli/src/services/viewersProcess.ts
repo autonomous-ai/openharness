@@ -205,6 +205,13 @@ export function runViewersService(options: ViewersServiceOptions): ServiceProces
           heard.add(event.agentId)
           detach(event.agentId)
         }
+      } else if (payload.kind === 'attach' && isSession(payload.session)) {
+        // A core from before agents were followed (2026-11-15) says each look and end so. Delete on or after 2026-12-18.
+        heard.add(payload.session.agentId)
+        attach(payload.session)
+      } else if (payload.kind === 'detach' && typeof payload.agentId === 'string') {
+        heard.add(payload.agentId)
+        detach(payload.agentId)
       }
     },
     onConnected: (connection) => {
@@ -213,7 +220,11 @@ export function runViewersService(options: ViewersServiceOptions): ServiceProces
       heard.clear()
       // The catch-up attaches every agent the core lists, and each attach tells the core that agent's
       // context: a new core hears everything, and one that only dropped the connection what changed.
-      void connection.query('follow_agents', { ...VIEWERS_FOLLOW }).then((answer) => { if (core === connection) catchUp(answer.agents) }, () => {})
+      // A core from before agents were followed (2026-11-15) does not know `follow_agents`, and answers the agents with a
+      // harness as it was always asked (`agents`). Delete on or after 2026-12-18.
+      void connection.query('follow_agents', { ...VIEWERS_FOLLOW })
+        .then((answer) => (answer.error === 'UNKNOWN_QUERY' ? connection.query('agents') : answer))
+        .then((answer) => { if (core === connection) catchUp(answer.agents) }, () => {})
     },
     // Every client's connection was that core's: their streams and surfaces end with it.
     onDisconnected: () => {

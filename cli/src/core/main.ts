@@ -1063,7 +1063,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   gridAnnotationRef = (grid) => (ports.models ?? MODELS_OFF).annotation(grid)
   // A look at a live agent, for the services that follow agents (core/agentLife.ts): a create, a fork, a resume, a
   // start's restore, every scan.
-  const attach = (s: RegisteredSession): void => agentLife.running(s)
+  const agentHere = (s: RegisteredSession): void => agentLife.running(s)
   // Every way an agent stops running here passes through this: a stop or other forget, and an engine's own exit.
   const agentEnded = (agentId: string): void => { agentLife.ended(agentId); quietTitles.ended(agentId) }
 
@@ -1600,7 +1600,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     (type, payload, waitMs) => serviceLinks.call('agentCleanup', type, payload, waitMs))
   // What the core tells the agent browser in its own process, keeps of what it says, and answers it (core/agentBrowserLink.ts).
   const agentBrowserLink = createAgentBrowserLink({ core: coreApi, notify: (frame) => serviceLinks.notify('agentBrowser', frame),
-    notifyBinary: (bytes) => serviceLinks.notifyBinary('agentBrowser', bytes), streamsGone: () => browserStreams.gone() })
+    notifyBinary: (bytes) => serviceLinks.notifyBinary('agentBrowser', bytes), streamsGone: () => browserStreams.gone(), want: () => coreLink.want('agentBrowser') })
   const usageLink = createUsageLink({ call: payload => ports.usage?.read(payload.target as AgentUsageTarget) ?? Promise.resolve({}), changed: agentEvents.onTokenUsageChanged })
   const serviceLinks = createServiceLinks({
     token: serviceToken,
@@ -2007,7 +2007,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // What the reconciler's scans mean for the registry (core/agents/discovery.ts).
   const discovery = createDiscoveryHandlers({
     registry,
-    attach,
+    attach: agentHere,
     taken: (from, to) => agentLife.taken(from, to),
     forgetSession,
     announceSession,
@@ -2690,7 +2690,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   })
   // Every agent the registry kept is looked at once more, restored or not: an agent whose pane is still up is still
   // that agent, and a DSH agent gets its viewer and verdict watch back, an agent whose Browser is on its browser.
-  for (const session of registry.list()) attach(session)
+  for (const session of registry.list()) agentHere(session)
   await agentReconciler.start(env.TERMINAL_RECONCILE_INTERVAL_MS ?? env.TMUX_REAP_INTERVAL_MS)
   // A file lock and a JSON parse, neither of which is worth the daemon: an unreadable queue means no
   // pending Cursor tasks this boot, not no daemon.
@@ -2851,7 +2851,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     externalResume: externalResumes.create,
     watchNewPane,
     announceSession,
-    attach,
+    attach: agentHere,
     prepareApiTools,
     hookPort,
     hooksDisabled: env.DISABLE_HOOK_INSTALL,
@@ -2883,7 +2883,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     pendingForkInherit,
     watchNewPane,
     announceSession,
-    attach,
+    attach: agentHere,
     prepareApiTools,
     relaunchOverrides,
     gridName: () => backend.gridName(),
@@ -2964,7 +2964,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     prepareSessionResume,
     stopBackgroundJob: backgroundJobs.stop,
     refreshGridWebSearch,
-    attach,
+    attach: agentHere,
     attachSession: (session) => attachSession(session),
     relaunchMarks,
     // A harness closed or stopped: the harnesses it started close with it (services/agentCleanup.ts). Its browser stops,

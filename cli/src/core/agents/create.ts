@@ -7,7 +7,6 @@ import type { NativeLaunch, NativeLaunchResult, NativeLaunchSource } from '../..
  *
  * Moved verbatim out of `runForeground` (the core boundary, step 11: docs/design/2026-10-03-harnessd.md).
  */
-import { sweepAgentTmpWhenDue } from '../../lib/agentTmp.js'
 import { randomUUID } from 'node:crypto'
 import { realpathSync, statSync } from 'node:fs'
 import { readdir } from 'node:fs/promises'
@@ -363,7 +362,6 @@ export function createAgentCreator({
     // The person's machine MCP servers (lib/machineMcp.ts, #1872), beside the grid's and their own: read at each launch,
     // as every relaunch reads them again (`buildLaunchOverrides`).
     const machineMcp = machineMcpLaunchArgs(engine, cwd)
-    sweepAgentTmpWhenDue()
     const extraArgs = joinedInstructions(engine, [...(gridLaunch?.args ?? []), ...dshArgs, ...(agent ? namedAgentArgs(engine, agent, native ? native.opencodeMajor : opencode ? await opencode.opencodeMajorVersion() : null) : []), ...machineMcp, ...told])
     // The first prompt is a launch option only — never part of `extraArgs`, which the registry row
     // carries into a relaunch (engineLaunch.ts, `firstPrompt`).

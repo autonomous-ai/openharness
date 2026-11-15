@@ -40,6 +40,7 @@ import { existsSync } from 'node:fs'
 import { availableParallelism, totalmem } from 'node:os'
 import { join, resolve } from 'node:path'
 import { AGENT_BROWSER_REQUESTS, mayOpenBrowser, type AgentLife, type Asker, type CoreApi, type CorePorts, type ServiceRequests } from '../core/api.js'
+import { sweepAgentTmpWhenDue } from '../lib/agentTmp.js'
 import { browserTools } from '../lib/browserToolsAsset.js'
 import type { ProductUsageMetric } from '../lib/productUsageContract.js'
 import { BROWSER_CHUNK_BYTES, encodeTerminalLocal } from '../lib/terminalBinary.js'
@@ -169,6 +170,10 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
   const tools: ReadonlySet<string> = new Set(browserTools().tools.map(tool => tool.name))
   const followed = options.followed ?? (async () => true)
   const everyAgent = options.everyAgent ?? (async () => core.agents.all())
+  /** The folder `harness browser` keeps its screenshots and long output in where nothing sets a TMPDIR
+   *  (agentClient/browserOutput.ts), swept of what nothing changed in for a week, at most once a day (lib/agentTmp.ts):
+   *  as this service begins, and as an agent runs a command. The core swept it at each launch until 2026-11-15. */
+  const sweepTmp = () => sweepAgentTmpWhenDue({ platform, dataDir: core.dataDir, log: line => log(`[agent-tmp] ${line}`), now: () => now().getTime() })
   // Built after setup, which tells it each step.
   let browsers: Browsers
   /**
@@ -336,6 +341,7 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
   const begin = () => {
     if (begun) return
     begun = true
+    sweepTmp()
     // Once looked for: a stream started before Podman's path is known fails and waits its backoff.
     void podman.path().catch(() => null).then(() => {
       if (stopped) return
@@ -497,6 +503,7 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
     // ready says what it is, and the agent asks its person.
     agent_browser_run: async (payload, asker, closed) => {
       if (!asker.local) return LOCAL_ONLY
+      sweepTmp()
       const agent = await paneAgent(payload)
       if (!agent) return { error: 'NO_AGENT' }
       // The machine's Podman, memory and network are its owner's.

@@ -132,6 +132,16 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
 /** Every service this build can run outside the core's process: what `HARNESSD_SERVICES` names. */
 export const KNOWN_SERVICES: readonly string[] = Object.values(SERVICE_HOSTS).flatMap((host) => host.services)
 
+/** What the core holds for each service of [outOfProcess] while it is down (`hears`), by service. A service in the
+ *  core's process is told as it happens, and none is held for it. */
+export function heldAgentLife(outOfProcess: ReadonlySet<string>, hosts: Readonly<Record<string, ServiceHostSpec>> = SERVICE_HOSTS): Record<string, readonly HeldAgentLife[]> {
+  const held: Record<string, readonly HeldAgentLife[]> = {}
+  for (const host of Object.values(hosts)) {
+    for (const [service, kinds] of Object.entries(host.hears ?? {})) if (outOfProcess.has(service)) held[service] = kinds
+  }
+  return held
+}
+
 /**
  * The updater's process (services/updaterProcess.ts): checks for a newer build of the CLI and of hn, and
  * downloads, verifies, canaries and stages it, then tells the master, which has the core hand over. Its own

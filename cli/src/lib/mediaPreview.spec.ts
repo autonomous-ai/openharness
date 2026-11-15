@@ -3,7 +3,12 @@ import { mkdir, mkdtemp, open, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { MEDIA_PREVIEW_CHUNK_BYTES, MEDIA_PREVIEW_MAX_BYTES, readMediaPreviewChunk } from './mediaPreview.js'
+import { agentTmpFolder } from './agentTmp.js'
+import { MEDIA_PREVIEW_CHUNK_BYTES, MEDIA_PREVIEW_MAX_BYTES, readMediaPreviewChunk, tempRoots } from './mediaPreview.js'
+
+it('names both temp directories, because macOS has a private one and agents still write /tmp, and the folder Harness keeps for its agents\' files, which the daemon\'s own tmpdir is not', () => {
+  expect(tempRoots()).toEqual([tmpdir(), '/tmp', ...(process.platform === 'win32' ? [] : [agentTmpFolder()])])
+})
 
 describe('remote media preview reads', () => {
   let root: string

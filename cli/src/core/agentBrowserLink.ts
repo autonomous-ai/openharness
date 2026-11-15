@@ -48,8 +48,14 @@ export function createAgentBrowserLink(deps: {
   notifyBinary: (bytes: Uint8Array) => boolean
   /** The process went: every stream it held is gone with it (core/browserStreams.ts `gone`). */
   streamsGone: () => void
+  /** Ask the master for the process (`coreLink.want`), for an agent whose row still carries the flag from before the
+   *  agent browser kept whose Browser is on (lib/registry.ts `browser`), which only that process takes in: a Desktop
+   *  from before Browser left New agent still sets it at a create. Delete on or after 2026-12-18, with the flag. */
+  want: () => void
 }) {
   const { core, notify } = deps
+  /** Whether the process is connected now. */
+  let up = false
   /** The agents told running here and not since told ended: the only ones a browser's state is kept for. */
   const live = new Set<string>()
   const states = new Map<string, AgentBrowserFrame>()
@@ -115,8 +121,10 @@ export function createAgentBrowserLink(deps: {
      *  which hears it too. Only while the agent browser runs in its own process: in the core's, the port is its own. */
     follow(): () => void {
       return core.agents.follow?.((life) => {
-        if (life.kind === 'running') live.add(life.session.agentId)
-        else if (life.kind === 'ended') {
+        if (life.kind === 'running') {
+          live.add(life.session.agentId)
+          if (life.session.browser && !up) deps.want()
+        } else if (life.kind === 'ended') {
           live.delete(life.agentId)
           if (!states.delete(life.agentId)) return
           const session = core.agents.byAgent(life.agentId)
@@ -127,10 +135,12 @@ export function createAgentBrowserLink(deps: {
     connected: () => {
       // The process before this one may have gone unseen: a link that is replaced is never said disconnected
       // (core/serviceLinks.ts). Whatever streams it held are gone with it, and this one has said nothing yet.
+      up = true
       streams = false
       deps.streamsGone()
     },
     disconnected: () => {
+      up = false
       streams = false
       deps.streamsGone()
     },
