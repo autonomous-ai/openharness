@@ -146,10 +146,14 @@ async function darwinFolders(pids: readonly number[], file: RegExp): Promise<str
   return folders
 }
 
+// Where a process's open files can be listed.
+type Listable = 'linux' | 'darwin'
+
 // The folders every listed process's files name; null when one of them cannot be listed.
-async function heldFolders(listed: readonly ProcessIdentity[], file: RegExp, platform: NodeJS.Platform, proc: string): Promise<string[] | null> {
+async function heldFolders(listed: readonly ProcessIdentity[], file: RegExp, platform: Listable, proc: string): Promise<string[] | null> {
+  // A pid goes into lsof's command line and a path under /proc: only a positive whole number may.
+  if (!listed.every(({ pid }) => Number.isSafeInteger(pid) && pid > 0)) return null
   if (platform === 'darwin') return darwinFolders(listed.map(({ pid }) => pid), file)
-  if (platform !== 'linux') return null
   const folders: string[] = []
   for (const identity of listed) {
     const held = await linuxFolders(identity, file, proc)
@@ -161,7 +165,7 @@ async function heldFolders(listed: readonly ProcessIdentity[], file: RegExp, pla
 
 // Exactly one folder among every listed process's files is the answer: two are no answer, whichever process holds
 // which, and so is one process that cannot be listed.
-async function listedHome(listed: readonly ProcessIdentity[], file: RegExp, platform: NodeJS.Platform, proc: string): Promise<string | undefined> {
+async function listedHome(listed: readonly ProcessIdentity[], file: RegExp, platform: Listable, proc: string): Promise<string | undefined> {
   const held = await heldFolders(listed, file, platform, proc)
   if (!held) return undefined
   const folders = new Set(held)
@@ -178,7 +182,7 @@ async function listedHome(listed: readonly ProcessIdentity[], file: RegExp, plat
  * gone) or when a sandbox's folder has no path in the daemon's view. Only paths are read (`readlink` of
  * `/proc/<pid>/fd/<n>`, the `n` lines of `lsof -Fn`), never a file through its descriptor, and a path that does not
  * match is dropped here: the daemon does not read another process's environment, and reads no more of its files than
- * where two of them are (cli/AGENTS.md, Protect the core). `file` has no `g` or `y` flag.
+ * where two of them are (cli/AGENTS.md, Protect the core). A `file` with a `g` or `y` flag throws.
  */
 export async function heldHome(
   selected: ProcessIdentity,
@@ -186,8 +190,11 @@ export async function heldHome(
   children: () => readonly ProcessIdentity[] = () => [],
   options: { platform?: NodeJS.Platform; proc?: string; now?: () => number } = {},
 ): Promise<string | undefined> {
+  // Either flag makes `exec` start where its last match ended, and a path would be skipped.
+  if (file.global || file.sticky) throw new TypeError('a held-file pattern has a g or y flag')
   // A wait is timed by a clock that setting the wall clock does not move.
   const { platform = process.platform, proc = '/proc', now = () => performance.now() } = options
+  if (platform !== 'linux' && platform !== 'darwin') return undefined
   const key = `${selected.pid}\u0000${selected.startMarker}\u0000${selected.executable}\u0000${file.source}`
   const before = kept.get(key)
   if (before && 'home' in before) return before.home
