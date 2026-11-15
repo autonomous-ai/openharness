@@ -311,8 +311,8 @@ describe('a tap in the order its pane\'s adapter keeps', () => {
   const both: OpenTarget = { bundle: TERMINAL, pane: PANE }
 
   /** The recorder, its opener holding one app more that no other test knows: its focus answers as told, and notes the
-   *  commands run before it. */
-  function withMadeUp(tap: HostAdapter['tap'], focused = true) {
+   *  commands run before it; each command answers the next of [codes]. */
+  function withMadeUp(tap: HostAdapter['tap'], focused: boolean | 'refused' = true, codes: Array<number | null> = []) {
     const before: Call[][] = []
     const adapter = {
       id: 'made-up',
@@ -321,7 +321,7 @@ describe('a tap in the order its pane\'s adapter keeps', () => {
       canFocus: () => true,
       focus: vi.fn(async (_pane: Pane) => { before.push([...r.calls]); return focused }),
     }
-    const r = recorder({}, [], [adapter])
+    const r = recorder({}, codes, [adapter])
     return { ...r, adapter, before }
   }
 
@@ -352,6 +352,24 @@ describe('a tap in the order its pane\'s adapter keeps', () => {
     expect(failed.before).toEqual([[]])
     expect(failed.calls).toEqual([forward(TERMINAL)])
     expect(failed.logs).toEqual(['[device] open · made-up · fallback'])
+  })
+
+  // The adapter said why in a line of its own (tmux: "not its pane"): the opener adds none, and the app still comes.
+  it('a pane its adapter refuses: open -b alone and no fallback line; false with no app, or when the app does not come', async () => {
+    const refused = withMadeUp('before', 'refused')
+    expect(await refused.opener.open('a1', both)).toBe(true)
+    expect(refused.adapter.focus.mock.calls).toEqual([[PANE]])
+    expect(refused.calls).toEqual([forward(TERMINAL)])
+    expect(refused.logs).toEqual([])
+    const bare = withMadeUp('before', 'refused')
+    expect(await bare.opener.open('a1', { pane: PANE })).toBe(false)
+    expect(bare.calls).toEqual([])
+    const instead = withMadeUp('instead', 'refused')
+    expect(await instead.opener.open('a1', both)).toBe(true)
+    expect(instead.calls).toEqual([forward(TERMINAL)])
+    expect(instead.logs).toEqual([])
+    const stuck = withMadeUp('before', 'refused', [1])
+    expect(await stuck.opener.open('a1', both)).toBe(false)
   })
 
   // Its pane is raised once its app came (observed.ts focus): the opener brings the app alone.
