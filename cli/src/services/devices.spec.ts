@@ -2475,7 +2475,8 @@ describe('the session the Claude app shows turns the dial (docs/specs/2026-11-15
   }
   const continued = (local: string): [string, string[], number] => ['/usr/bin/open', [`claude://code/continue?session=${local}`], 10_000]
   const asked = () => calls('followLocal')
-  const attaches = () => logs.filter((line) => line.startsWith('[device] attach'))
+  /** The attach lines, and the settle's. */
+  const attaches = () => logs.filter((line) => line.startsWith('[device] attach') || line.startsWith('[device] settle'))
   const unlinked = (off: boolean) => { (seen.cable as unknown as { connected: boolean }).connected = !off }
 
   it('an attach of a listed Claude app agent, with the app settled in front, asks the dials to follow it', async () => {
@@ -2491,6 +2492,22 @@ describe('the session the Claude app shows turns the dial (docs/specs/2026-11-15
     seen.host.localFollowed!('attach', 'moved')
     seen.host.localFollowed!('attach', 'no-tile')
     expect(attaches()).toEqual(['[device] attach · moved', '[device] attach · skipped · no tile'])
+  })
+
+  it('the dial\'s answer to a settle is the settle\'s, and to an attach asked after it the attach\'s', async () => {
+    const { front, attach } = await dialWith('orca')
+    attach(SESSION)
+    front('claude')
+    await wait(FRONT_SETTLE_MS)
+    expect(asked()).toEqual([[A, 'attach']])
+    // A dial answers only for its latest ask (cableSession.ts followLocal).
+    seen.host.localFollowed!('attach', 'moved')
+    seen.host.localFollowed!('attach', 'no-tile')
+    attach(SECOND)
+    seen.host.localFollowed!('attach', 'moved')
+    expect(asked()).toEqual([[A, 'attach'], [B, 'attach']])
+    expect(attaches()).toEqual(['[device] attach · skipped · not in front', '[device] settle · moved',
+      '[device] settle · skipped · no tile', '[device] attach · moved'])
   })
 
   it('another app in front, none, a front not yet settled and no front known: not in front', async () => {
@@ -2570,7 +2587,8 @@ describe('the session the Claude app shows turns the dial (docs/specs/2026-11-15
     front('claude')
     await wait(FRONT_SETTLE_MS)
     expect(asked()).toEqual([[B, 'attach']])
-    expect(attaches().slice(2)).toEqual(['[device] attach · on settle'])
+    // Its line is the dial's answer.
+    expect(attaches()).toEqual(Array(2).fill('[device] attach · skipped · not in front'))
   })
 
   it('an attach skipped as the echo is still the session the app shows', async () => {
@@ -2600,7 +2618,7 @@ describe('the session the Claude app shows turns the dial (docs/specs/2026-11-15
     front('claude')
     await wait(FRONT_SETTLE_MS)
     expect(asked()).toEqual([])
-    expect(attaches()).toEqual(['[device] attach · skipped · not in front', '[device] attach · skipped · echo'])
+    expect(attaches()).toEqual(['[device] attach · skipped · not in front', '[device] settle · skipped · echo'])
     // The kept agent is still A: the next settle asks for it.
     await backInFront(front)
     expect(asked()).toEqual([[A, 'attach']])
@@ -2615,7 +2633,7 @@ describe('the session the Claude app shows turns the dial (docs/specs/2026-11-15
     front('claude')
     await wait(FRONT_SETTLE_MS)
     expect(asked()).toEqual([])
-    expect(attaches()).toEqual(['[device] attach · skipped · not in front', '[device] attach · skipped · echo'])
+    expect(attaches()).toEqual(['[device] attach · skipped · not in front', '[device] settle · skipped · echo'])
   })
 
   it('a settle 2 s after the dial\'s last link moves the dial; of two links the younger counts', async () => {
@@ -2629,14 +2647,14 @@ describe('the session the Claude app shows turns the dial (docs/specs/2026-11-15
     // 2 000 ms after the link.
     await wait(FRONT_SETTLE_MS)
     expect(asked()).toEqual([[A, 'attach']])
-    expect(attaches()).toEqual(['[device] attach · skipped · not in front', '[device] attach · on settle'])
+    expect(attaches()).toEqual(['[device] attach · skipped · not in front'])
     // Two links, 2 500 ms and 1 000 ms old when the app settles.
     await rest(B)
     await wait(1_500)
     await rest(A)
     await backInFront(front)
     expect(asked()).toEqual([[A, 'attach']])
-    expect(attaches().slice(2)).toEqual(['[device] attach · skipped · echo'])
+    expect(attaches().slice(1)).toEqual(['[device] settle · skipped · echo'])
   })
 
   it('the app shows what the swipe chose', async () => {
@@ -2649,7 +2667,7 @@ describe('the session the Claude app shows turns the dial (docs/specs/2026-11-15
     await wait(500)
     attach(SECOND)
     expect(asked()).toEqual([])
-    expect(attaches()).toEqual(['[device] attach · skipped · not in front', ...Array(2).fill('[device] attach · skipped · echo')])
+    expect(attaches()).toEqual(['[device] attach · skipped · not in front', '[device] settle · skipped · echo', '[device] attach · skipped · echo'])
     await wait(2_000)
     await backInFront(front)
     expect(asked()).toEqual([[B, 'attach']])
@@ -2704,7 +2722,6 @@ describe('the session the Claude app shows turns the dial (docs/specs/2026-11-15
     unlinked(false)
     await backInFront(front)
     expect(asked()).toEqual([[A, 'attach']])
-    expect(attaches()).toEqual(['[device] attach · on settle'])
   })
 
   it.each([['an attach', 'claude'], ['a settle', 'orca']])('%s whose follow throws is logged and the devices keep running', async (_, settled) => {
@@ -2722,18 +2739,25 @@ describe('the session the Claude app shows turns the dial (docs/specs/2026-11-15
     expect(asked()).toEqual([[A, 'attach']])
   })
 
-  it('no attach line names a session, an agent or an app', async () => {
+  it('no attach or settle line names a session, an agent or an app', async () => {
     const { front, attach } = await dialWith('orca')
     attach(SESSION)
     attach(UNLISTED)
     front('claude')
     await wait(FRONT_SETTLE_MS)
-    await rest(B)
-    attach(SECOND)
     seen.host.localFollowed!('attach', 'moved')
     seen.host.localFollowed!('attach', 'no-tile')
-    const six = ['moved', 'on settle', ...['echo', 'not in front', 'unknown agent', 'no tile'].map((why) => `skipped · ${why}`)]
-    expect([...attaches()].sort()).toEqual(six.map((line) => `[device] attach · ${line}`).sort())
+    await rest(B)
+    attach(SECOND)
+    await backInFront(front)
+    await wait(2_000)
+    attach(SESSION)
+    seen.host.localFollowed!('attach', 'moved')
+    seen.host.localFollowed!('attach', 'no-tile')
+    const skipped = (...why: string[]) => why.map((reason) => `skipped · ${reason}`)
+    const lines = [...['moved', ...skipped('echo', 'not in front', 'unknown agent', 'no tile')].map((line) => `[device] attach · ${line}`),
+      ...['moved', ...skipped('echo', 'no tile')].map((line) => `[device] settle · ${line}`)]
+    expect([...attaches()].sort()).toEqual(lines.sort())
     const secrets = [SESSION, SECOND, UNLISTED, A, B, LOCAL, LOCAL_SECOND, BUNDLE]
     expect(logs.filter((line) => secrets.some((secret) => line.includes(secret)))).toEqual([])
   })

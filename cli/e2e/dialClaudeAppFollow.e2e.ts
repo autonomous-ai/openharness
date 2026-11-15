@@ -125,9 +125,10 @@ describe('the session the Claude app shows moves the dial', () => {
     return answer.status
   }
 
-  /** The daemon's attach lines, each read whole from its `[device]` on. */
+  /** The daemon's attach and settle lines, each read whole from its `[device]` on. */
   const attachLines = (d: IsolatedDaemon): string[] =>
-    d.log().split('\n').filter((line) => line.includes('[device] attach')).map((line) => line.slice(line.indexOf('[device]')))
+    d.log().split('\n').filter((line) => line.includes('[device] attach') || line.includes('[device] settle'))
+      .map((line) => line.slice(line.indexOf('[device]')))
   const lineAt = (d: IsolatedDaemon, n: number): Promise<string> =>
     until(`attach line ${n + 1}`, () => attachLines(d)[n], 30_000, 50)
 
@@ -178,8 +179,8 @@ describe('the session the Claude app shows moves the dial', () => {
     // The skipped attach sent none: a focus it sent late would come before the ring. The settle's one move may send
     // the focus more than once (its ring's push re-asserts it), so the move is counted by its line.
     expect(dial.messages.slice(since, ring).filter((m) => m.t === 'focus' && m.agentId === c1.id)).toEqual([])
-    expect(await lineAt(d, 2)).toBe('[device] attach · moved')
-    expect(attachLines(d)).toEqual(['[device] attach · skipped · not in front', '[device] attach · on settle', '[device] attach · moved'])
+    expect(await lineAt(d, 1)).toBe('[device] settle · moved')
+    expect(attachLines(d)).toEqual(['[device] attach · skipped · not in front', '[device] settle · moved'])
   })
 
   it("the daemon's log has no session id and no bundle id, and no swipe line", async () => {
