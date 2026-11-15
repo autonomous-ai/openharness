@@ -44,10 +44,14 @@ describe('tabs', () => {
     expect(run).toHaveBeenCalledWith(['-o', 'tty=', '-p', '4242'], { timeout: 1_000, maxBuffer: 256 })
   })
 
-  it('??, nothing, a failed run and a tty the check refuses are no tty', async () => {
-    for (const out of ['??\n', '', null, 'pts/3\n', 'ttys12345\n']) {
+  it('??, nothing and a tty the check refuses are no tty', async () => {
+    for (const out of ['??\n', '', 'pts/3\n', 'ttys12345\n']) {
       expect(await readTty(4242, async () => out)).toBeUndefined()
     }
+  })
+
+  it('a run that failed rejects: it is not no tty', async () => {
+    await expect(readTty(4242, async () => null)).rejects.toThrow('ps')
   })
 
   it('a pid that is not a positive integer is not asked', async () => {

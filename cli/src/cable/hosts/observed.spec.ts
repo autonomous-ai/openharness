@@ -1293,13 +1293,28 @@ describe('ObservedSource tabs', () => {
     expect(gone.actions.tabSelect.mock.calls).toEqual([['terminal-app', '/dev/ttys024', false]])
   })
 
-  it('a read that rejects is no tty, and the pid is not read again', async () => {
+  it('a read that fails is not no tty: a later event reads that pid again, 10 s on, and it is counted; ?? is final', async () => {
     const t = tabs()
     t.src.ingest(t.ev('session-start', inTerminal))
+    t.src.ingest(t.ev('session-start', { ...inTerminal, sessionId: 's2', callerPid: 101 }))
     await t.reads[0].fail()
-    t.src.ingest(t.ev('turn-start', inTerminal))
+    await t.reads[1].answer(undefined)
     expect(t.src.hasPane(t.agent())).toBe(false)
-    expect(t.tty.mock.calls).toEqual([[100]])
+    expect(t.logs).toEqual(['[observed] tty · not read'])
+    // Under load each `ps` may time out: no pid is asked more often than once every 10 s.
+    t.clock.t += 9_999
+    t.src.ingest(t.ev('turn-start', inTerminal))
+    expect(t.tty.mock.calls).toEqual([[100], [101]])
+    t.clock.t += 1
+    t.src.ingest(t.ev('turn-start', inTerminal))
+    t.src.ingest(t.ev('turn-start', { ...inTerminal, sessionId: 's2', callerPid: 101 }))
+    expect(t.tty.mock.calls).toEqual([[100], [101], [100]])
+    await t.reads[2].answer(TTY)
+    expect(t.src.hasPane(t.agent())).toBe(true)
+    // Read once, it is not read again.
+    t.clock.t += 10_000
+    t.src.ingest(t.ev('turn-start', inTerminal))
+    expect(t.tty).toHaveBeenCalledTimes(3)
   })
 
   it('the open scan reads the tty of an agent whose parents name a tab app', async () => {
