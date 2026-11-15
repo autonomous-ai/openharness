@@ -114,7 +114,7 @@ export function createAttach({
    * did, and a session whose first attach was superseded was streamed only if a hook happened to attach it
    * afterwards. In the two runs above the SessionStart hook's attach was that one.
    */
-  const supersededRetries = new Map<string, { attempts: number; timer?: ReturnType<typeof setTimeout> }>()
+  const supersededRetries = new Map<string, { attempts: number; current: () => boolean; timer?: ReturnType<typeof setTimeout> }>()
   const forgetSupersededRetry = (sessionId: string): void => {
     clearTimeout(supersededRetries.get(sessionId)?.timer)
     supersededRetries.delete(sessionId)
@@ -126,7 +126,10 @@ export function createAttach({
    */
   const retrySuperseded = (session: RegisteredSession, transcriptPath: string, current: () => boolean, replayCursorFromStart: boolean, replayFromStart: boolean): void => {
     const sessionId = session.sessionId
-    const retries = supersededRetries.get(sessionId) ?? { attempts: 0 }
+    // Retries kept for an earlier binding are that binding's: its waiting one would find the session bound anew and
+    // try nothing, and this attach, finding one waiting, would start none. Its count goes with it.
+    if (!supersededRetries.get(sessionId)?.current()) forgetSupersededRetry(sessionId)
+    const retries = supersededRetries.get(sessionId) ?? { attempts: 0, current }
     if (retries.timer) return
     if (retries.attempts === 5) {
       supersededRetries.delete(sessionId)
@@ -140,7 +143,7 @@ export function createAttach({
       // the conversation and its transcript), and only while nothing tails it: a hook's attach, a new conversation
       // or a forgotten session got there first. The count was that binding's and goes with it: kept, the next
       // binding's first superseded attach waited two seconds, or none at all after a fifth.
-      if (!current() || watcher.tails(sessionId, transcriptPath)) {
+      if (!retries.current() || watcher.tails(sessionId, transcriptPath)) {
         supersededRetries.delete(sessionId)
         return
       }
