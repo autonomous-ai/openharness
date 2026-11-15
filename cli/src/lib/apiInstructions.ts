@@ -23,13 +23,13 @@ Adding an API does not change this harness's model or subscription.
  * instructions are kept; no global agent settings or credentials are written into the project. A folder the person
  * chose is theirs, and the note is never written there: until 15 November any folder a harness started in got it, the
  * person's own repository included (core audit, security 9). */
-export function prepareApiInstructions(store: Pick<ApiConnectionMetadata, 'list'>, workspace: string, engine: string,
+export function prepareApiInstructions(store: Pick<ApiConnectionMetadata, 'saved'>, workspace: string, engine: string,
   root: string = projectsRoot()): void {
   // An engine that reads no instruction file in its folder (OpenClaw reads its own workspace's) gets none written there.
   const adapter: { instructionFiles: readonly string[] } | undefined = HARNESS_ADAPTERS[engine as keyof typeof HARNESS_ADAPTERS]
   if (engine === 'terminal' || adapter?.instructionFiles.length === 0) return
   const folder = harnessWorkspace(workspace, root)
-  if (!folder || !store.list().length) return
+  if (!folder || !store.saved()) return
   const name = instructionFileOf(engine) ?? (engine === 'gemini' ? 'GEMINI.md' : 'AGENTS.md')
   const file = join(folder, name)
   if (existsSync(file) && (!lstatSync(file).isFile() || lstatSync(file).isSymbolicLink())) return

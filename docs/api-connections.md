@@ -93,7 +93,11 @@ is built for Anthropic models; others may not work fully through it
 The local CLI stores keys in `api-connections/connections.json` inside its data
 directory (`~/.harness/cli/data` by default), with owner-only directory/file permissions
 (`0700`/`0600`). This is a local credential file, not an OS keychain. Writes are
-atomic, and unreadable/corrupt storage is never silently replaced.
+atomic, and unreadable/corrupt storage is never silently replaced. Only the models
+service, `harness api` and the New dialog's engine check open it. Beside it,
+`api-connections/list.json` (also `0600`) lists the same APIs without their keys:
+that list is all a harness's start reads, to know whether to add the Saved APIs
+section. The store rewrites the list whenever it changes or finds it out of step.
 
 Management requests use the local daemon connection; remote requests are refused.
 Keys are not returned to the UI, included in connection lists, or copied into project
