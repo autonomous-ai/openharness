@@ -50,6 +50,17 @@ by the app's own deep links from a script. Nothing of any other session was read
    screen. Not chosen (B): dropping that attach, so a click from another app would move nothing.
 7. **The swipe checks the front most recently reported**, not the settled one; a link still running for an agent drops
    the next one for it; the swipe's link is covered by unit tests only, never `/usr/bin/open` in an end-to-end test.
+8. **A mod that linked while the devices' listener was not there** (no dial attached yet, the daemon restarting) asks
+   the launcher again. When it holds a desktop attach and its last link answer had no `devicesSocket`, it runs
+   `harness device claude link --json` once more: at most once in 30 s for a session, the run killed after 5 s. Any
+   failure is silent: that attach is not sent, and the next attach after the 30 s may ask again. Not chosen: a session
+   that sends no attach until it restarts.
+9. **A settle of the Claude app in front moves nothing while any continue link of the dial's is younger than 2 s.**
+   A swipe that rests on another agent as the app comes in front shows that agent; the settle must not turn the dial
+   back to the one kept before.
+10. **For the dial check the PM, not Diego, points the `openharness` marketplace at the final combined worktree** when
+    preparing Diego's dial session (the released plugin sends no attach), and points it back at GitHub before that
+    worktree is removed.
 
 ## Design
 
@@ -61,8 +72,13 @@ its inbox poll already sends; nothing else goes. A detach, and an attach on any 
 
 - Where: the listener's socket, which `harness device claude link --json` now prints beside the core's
   (`{"socketPath":…,"devicesSocket":…}`), only when it is this account's own (`socketIsPrivate`, as
-  `listenerClient.ts` checks before it sends); no listener (Windows, a path too long): no `devicesSocket`, and the
-  mod sends no attach.
+  `listenerClient.ts` checks before it sends); no listener (Windows, a path too long, none running): no
+  `devicesSocket`.
+- No `devicesSocket` at an attach (8): the mod runs the launcher that linked once more, from the send's timer: at most
+  once in 30 s for a session, killed after 5 s (`link` reads one settings file and checks one socket; `hooks.json`
+  gives the launcher the same 5 s). An answer with a `devicesSocket` is kept and the attach is sent, unless the session
+  was detached meanwhile. Anything else is silent: that attach is not sent, nothing retries, the polls go on. A mod
+  that never linked (Windows, the plugin off) asks nothing.
 - When: at once, from a timer, never awaited in the hook. An attach before the mod has linked (the first one comes
   0.1 s after `session.start`, before the launcher answers) is held, the latest only, and sent once it links.
 - Failure: a send that fails is dropped; the next attach tries again. No retry loop.
@@ -86,7 +102,8 @@ dial's own report of the move starts no swipe rest. An agent the dial already sh
 **The app settling in front (6).** The devices keep the last attach that named a listed Claude app agent:
 one agent id, replaced by the next attach, cleared when that agent's session ends. The app filter tells the devices
 each time an app settles in front (a new `settled(app)` call beside `switched`); when the app is `claude` and an
-attached agent is held, the dial moves to it by the same rules (not an echo, the ring holds it). A Cmd-Tab across the
+attached agent is held, the dial moves to it by the same rules (the ring holds it), but not while any continue link
+of the dial's own, to that agent or to another, is younger than 2 s (9): it is skipped as an echo. A Cmd-Tab across the
 app settles nothing (`FRONT_SETTLE_MS`), so it moves nothing.
 
 ### 2. A swipe shows the session in the app
@@ -137,8 +154,10 @@ The app's sidebar order or the dial's ring order; a detach clearing the dial; a 
 **Tests**
 
 - Mod: an attach with surface `desktop` sends one `attach` with its own session id and nothing else; a detach and an
-  attach on any other surface send nothing; an attach before the link is sent once linked, the latest only; no `devicesSocket`,
-  nothing sent; a failed send is dropped.
+  attach on any other surface send nothing; an attach before the link is sent once linked, the latest only; a failed
+  send is dropped. Decided (8): an attach with no `devicesSocket` asks the launcher again and is sent once it prints
+  one; a second attach within 30 s does not ask again, and one after 30 s may; a launcher that fails or times out sends
+  nothing and the polls go on.
 - `harness device claude link --json` prints `devicesSocket` when the listener's socket is private, and leaves it out
   when it is missing, not this account's or on Windows.
 - Listener: `attach` takes a UUID `sessionId` only, refuses any other body, larger than 96 bytes, or past 10 a second.
@@ -146,7 +165,7 @@ The app's sidebar order or the dial's ring order; a detach clearing the dial; a 
   path; not with another app or none in front; not for an unknown or non-Claude agent; not for an agent with no tile;
   not within 2 s of the dial's own link to it, but again after; the echo of the move starts no swipe rest. Decided (6):
   the app settling in front moves the dial to the last attached agent; a session's end clears it; a Cmd-Tab moves
-  nothing.
+  nothing. Decided (9): a settle within 2 s of any continue link of the dial's moves nothing, and one after does.
 - Swipe: with the Claude app in front, a rest on a Claude app agent runs one continue link after 400 ms; three turns in
   400 ms run one, for the last; another app in front runs none, and a front that changes during the rest runs none;
   a link still running drops the next for that agent; a failed link logs and shows nothing; Orca agents keep their
@@ -157,7 +176,9 @@ The app's sidebar order or the dial's ring order; a detach clearing the dial; a 
   covered by the unit tests above, and the pull request says so.
 
 **On a dial** (Diego's Mac, asked for from the orchestrator first; the CLI from this branch with
-`make install-cli`, the release CLI put back afterwards; the stack's debug Harness Device build for the front app):
+`make install-cli`, the release CLI put back afterwards; the stack's debug Harness Device build for the front app;
+decided (10): the PM points the `openharness` marketplace at the final combined worktree before the check, and back at
+GitHub after it, before that worktree is removed):
 
 1. Two Claude Code sessions in the Claude app, the app in front: clicking either in the sidebar moves the dial to it.
 2. Swiping between them on the dial switches the app's session each time the dial rests.
@@ -171,6 +192,8 @@ The app's sidebar order or the dial's ring order; a detach clearing the dial; a 
   last link to it (at most one per listed agent, gone after 2 s). The mod sends only its own session id over the
   account's private socket.
 - **Cost.** Push only: one message per session switch in the app, one `open` per swipe rest on a Claude app agent.
+  Only while the launcher printed no `devicesSocket`: one launcher run at a session switch, at most one in 30 s for a
+  session and 5 s long.
 - **Security.** The listener checks the id's form; the link's id is checked against `CLAUDE_SESSION` and runs with
   `execFile`, no shell. A local process of the same account can post an attach and move the dial, as it can post a
   front today: the socket is the account's own.

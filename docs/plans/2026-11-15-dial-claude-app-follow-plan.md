@@ -5,7 +5,7 @@
 **Goal:** With the Claude app in front, selecting one of its sessions turns the round dial to that agent, and a swipe that rests on a Claude app agent shows its session in the app.
 
 **Architecture:**
-- The harness-device mod hears `session.attach` (surface `desktop`) and posts its own session id to the devices process's own listener, whose socket `harness device claude link --json` now prints. Nothing goes through the core.
+- The harness-device mod hears `session.attach` (surface `desktop`) and posts its own session id to the devices process's own listener, whose socket `harness device claude link --json` now prints. A mod the launcher handed no such socket asks it again at an attach, at most once in 30 s. Nothing goes through the core.
 - In the devices process a new `attach` handler names the observed agent. The devices keep the Claude app's last attached agent and turn the dial to it through the existing `cable.followPrompt`: when an attach comes with the app settled in front, or when the app settles in front (a new `settled(app)` call from the app filter).
 - A rest of the dial on a Claude app agent runs the app's continue link through `/usr/bin/open`, only while the app most recently reported in front is the Claude app. The devices remember that link for 2 s, so its own attach is not followed back.
 - Everything is in memory, in the devices process. No firmware, no Desktop UI, no core file, no change to `cableSession.ts`.
@@ -46,20 +46,21 @@ Not changed: anything under `cli/src/core` (`src/architecture.coreFiles.txt` kee
 - **Only attach, only the desktop surface.** The mod acts on `session.attach` with `surface: 'desktop'`. A detach, and an attach on any other surface, send nothing.
 - **The mod sends only its own session id**, `$.session.id()`: `{"type":"attach","sessionId":"<id>"}`. No other session's id, no title, no content.
 - **Rule 7.** The attach goes from the mod to the devices process's own listener (`services/devicesListener.ts`), never through the core. No file under `cli/src/core` changes.
-- **`link --json`** prints `{"socketPath":…,"devicesSocket":…}`; `devicesSocket` only when `socketIsPrivate` says the listener's socket is this account's own. No listener (Windows, a path too long, none running): no `devicesSocket`, and the mod sends no attach.
+- **`link --json`** prints `{"socketPath":…,"devicesSocket":…}`; `devicesSocket` only when `socketIsPrivate` says the listener's socket is this account's own. No listener (Windows, a path too long, none running): no `devicesSocket`.
+- **No `devicesSocket` at an attach.** The mod runs the launcher that linked once more (`link --json`): at most once in 30 s for a session, killed after 5 s. An answer with a `devicesSocket` is kept and that attach is sent. Any failure is silent: that attach is not sent, nothing retries, the polls go on. A mod that never linked (Windows, the plugin off) asks nothing.
 - **The listener's `attach`:** a body of at most 96 bytes whose `sessionId` is a UUID; 10 a second per connection. Anything else is refused and counted by the listener's own minute line. The id is never logged.
 - **An attach moves the dial** only when all hold: the observed source lists `observedAgentId('claude', sessionId)` and its app is `claude`; it is not the echo of the dial's own link to that agent within the last 2 s; `cableHost.settledApp() === 'claude'`; a dial is linked and its ring holds the agent. The move is `cable.followPrompt(agentId)`, unchanged: its queue, its list before its focus, its echo guard. An agent the dial already shows: nothing is sent.
-- **The kept agent.** One agent id, in memory: the last attach that named a listed Claude app agent. Cleared when that agent's session ends. When the Claude app settles in front, the dial moves to it by the same rules. A Cmd-Tab across the app settles nothing and moves nothing.
+- **The kept agent.** One agent id, in memory: the last attach that named a listed Claude app agent. Cleared when that agent's session ends. When the Claude app settles in front, the dial moves to it by the same rules. A settle moves nothing while any continue link of the dial's own is younger than 2 s. A Cmd-Tab across the app settles nothing and moves nothing.
 - **A swipe.** A Claude app session (`opens.pane` `{ app: 'claude', id: 'local_…' }`) is a pane only on macOS and only while the app most recently reported in front is `claude` (`AppFilter`'s last `front`, not the settled one). After #4311's 400 ms rest the front is asked again, then `/usr/bin/open claude://code/continue?session=<local_…>` runs: `execFile`, no shell, 10 s timeout, the id checked against `CLAUDE_SESSION` (`/^local_[A-Za-z0-9-]{1,64}$/`). Front no longer `claude`: nothing runs, outcome `failed`, nothing on the dial. A link still running for that agent drops the next: `busy`. Orca agents keep #4311's switch.
 - **Measures** are daemon log lines with no content and no identifier: `[device] attach · moved`, `[device] attach · moved on settle`, `[device] attach · skipped · echo | not in front | unknown agent | no tile`, and the swipe's link through #4311's `[device] swipe · ok | failed | busy | superseded`.
-- **Memory only, push only.** Nothing is written to disk. The daemon gains no timer: the echo is a time compared when an attach comes.
+- **Memory only, push only.** Nothing is written to disk. The daemon gains no timer: the echo is a time compared when an attach or a settle comes. Nor does the mod: its 30 s is a time compared at an attach.
 - **No end-to-end test may reach `/usr/bin/open`.** No end-to-end session carries `CLAUDE_CODE_HOST_SESSION_ID` (without it the observed source holds no Claude pane, on any platform), and no end-to-end test taps. The swipe's link is covered by unit tests only, with a recording runner.
 - **Platforms.** macOS: tested, and on a dial. Linux: the attach path's unit and end-to-end tests; no Claude app, so a rest runs no link. Windows: no listener and no link, nothing changes.
 - **Repo rules.** Tests never touch the developer's real `~/.claude`, daemon (port 18473), Claude app or dial. No fixed sleeps: fake timers, a scripted clock, or a wait on a condition.
 
 ## Review Focus
 
-1. **A session shown and left again before its mod linked** (its first moments, or the plugin switched off and on): the app no longer shows it, so no attach is sent for it once the mod links. Task 1 (`attached and detached again before the link: nothing is sent`).
+1. **A session shown and left again before its mod linked, or while the launcher is asked again** (its first moments, the plugin switched off and on, a launcher slow to answer): the app no longer shows it, so no attach is sent for it once the mod links or the launcher answers. Task 1 (`attached and detached again before the link: nothing is sent`, `shown and left again while the launcher is asked: nothing is sent`).
 2. **An attach that moved nothing is still the session the app shows.** One skipped as the dial's own echo, or with another app in front, replaces the kept agent: the next settle goes to it, never to an older one. Task 7 (`an attach skipped as the echo is still the session the app shows`).
 3. **A dial whose ring lacks the agent** (a pick on the dial, a Harness window, a second dial): it stays, and its answer is counted as the attach's `no tile`, not as a prompt's. Task 7 (`a dial's answer is counted under what it was last asked for`).
 4. **A session id that is not the link's form, or a session resumed outside the Claude app since the dial turned to it:** nothing reaches `/usr/bin/open`. Task 5 (`an id not in the link's form never reaches open`), Task 6 (`the session is the latest event's`).
@@ -72,27 +73,42 @@ Not changed: anything under `cli/src/core` (`src/architecture.coreFiles.txt` kee
 **Layer:** plugin (the mod, inside Claude Code). **Depends on:** none. **Effort:** `high`.
 
 **Files:**
-- Modify: `plugins/harness-device/hooks/device.js` (`register`, `link`, `socketOf`, `poll`; its header comment)
-- Test: `plugins/harness-device/test/device.test.ts` (`world` gains the launcher's `devicesSocket` and a list of what was sent on it)
+- Modify: `plugins/harness-device/hooks/device.js` (`register`, `link`, `socketOf`, `poll`; two constants beside `RETRY_MS`; its header comment)
+- Test: `plugins/harness-device/test/device.test.ts` (`world` gains the launcher's `devicesSocket` and what it does once the mod has linked, both a test's to change, each launcher run's `init`, and a list of what was sent on the devices' socket)
 
 **Interfaces:**
 - Consumes: the launcher's answer `{"socketPath":…,"devicesSocket":…}` (Task 2 prints the second key; here the test's launcher does). The engine's events `session.attach` and `session.detach`, input `{ surface, clientId }`, registered with the matcher `{ surface: 'desktop' }`. A test raises them with `$.session.attach({ surface: 'desktop', clientId: 'desktop:default' })` and `$.session.detach({ surface: 'desktop', clientId: 'desktop:default', reason: 'detach' })`.
 - Produces, the one message: `$.http.fetch('http://harness/', { method: 'POST', socketPath: <devicesSocket>, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'attach', sessionId: await $.session.id() }) })`.
-- State: one object made in `register` and handed to the hooks and to `link`, no module variable: `linked` (the launcher's last answer with a socket, `devicesSocket` `''` when it printed none; `null` before, and again once a poll finds the plugin off) and `held` (a desktop attach not yet handled).
+- Produces, the launcher asked again: `$.process.run([linked.launcher, 'device', 'claude', 'link', '--json'], { timeoutMs: RELINK_TIMEOUT_MS })`. The engine kills the run at `timeoutMs` and the call rejects.
+- Constants:
+  - `RELINK_MS = 30_000`: the least time between two such asks of one session.
+  - `RELINK_TIMEOUT_MS = 5_000`. Why 5 s: `link` reads one settings file and checks one socket, with no network and no daemon call, so it is done in the time the CLI takes to start; `hooks.json` gives the same launcher 5 s for `asked`; and it is under `RELINK_MS`, which the engine's own 30 s is not, so a launcher that hangs is gone before the next ask and two never run at once.
+- State: one object made in `register` and handed to the hooks and to `link`, no module variable:
+  - `linked`: the launcher's last answer with a socket (`socketPath`, `settingsPath`, `devicesSocket`, `''` when it printed none, and `launcher`, the `argv[0]` that answered). `null` before, and again once a poll finds the plugin off.
+  - `held`: the app shows this session and the devices have not been told. Set by a desktop attach; cleared by a desktop detach, and as the send goes.
+  - `askedAt`: `$.clock.now()` when the launcher was last asked again; `null` before the first.
 - Rules:
   1. `session.attach`, desktop: answers `await next(e)` unchanged; sets `held`; when `linked`, starts one `$.clock.after(0, …)` for the send. Never awaited in the hook.
   2. `session.detach`, desktop: answers `next(e)`; clears `held`. It sends nothing.
   3. `link`, on a socket: sets `linked`; when `held`, starts one `$.clock.after(0, …)` for the send, beside the poll's. With nothing held it starts no timer more (`every poll is sent from a timer of its own` keeps its exact steps).
-  4. The send, from its timer: nothing unless `held` and `linked`; clears `held`; no `devicesSocket`: nothing; the plugin's setting read once (`isOn`), off: nothing; else the one fetch above. Its answer is not read and its failure is dropped: no retry.
-  5. A poll that finds the plugin off sets `linked` to `null` before the launcher is asked again.
+  4. The send, from its timer: nothing unless `held` and `linked`. With a `devicesSocket`: clears `held`; the plugin's setting read once (`isOn`), off: nothing; else the one fetch above. Its answer is not read and its failure is dropped: no retry.
+  5. The send with no `devicesSocket`: nothing when `askedAt` is less than `RELINK_MS` ago (29 999 ms: no; 30 000 ms: asked), and `held` stays. Else `askedAt` is now, and the launcher is asked again (above), in this timer, never in a hook. Exit 0 with a `devicesSocket` that is a non-empty string: kept in `linked` when one is still set, and rule 4 runs again, so a detach meanwhile sends nothing. Anything else (it cannot start, it is killed at 5 s, a non-zero exit, no JSON, no `devicesSocket`): nothing. No timer, no retry, no line; `linked` and the polls are as they were.
+  6. Only `linked.launcher` is asked again: no second launcher is tried, and `HOME` is not read again.
+  7. A poll that finds the plugin off sets `linked` to `null` before the launcher is asked again.
 
-- [ ] **Step 1: Write the failing tests** (`DEVICES = '/tmp/harnessd/devices.sock'`; `w.polls` stays the fetches on the core's socket, `w.attaches` is the fetches on the devices'):
+- [ ] **Step 1: Write the failing tests** (`DEVICES = '/tmp/harnessd/devices.sock'`; `w.polls` stays the fetches on the core's socket, `w.attaches` is the fetches on the devices'; `w.devices` is the `devicesSocket` the launcher prints, `''` for none; `w.runs` stays each run's argv and `w.inits` is each run's `init`):
   - `an attach on the desktop surface tells the devices its own session id, and nothing else`: `w.attaches` equals the one `{ url: 'http://harness/', init: { method: 'POST', socketPath: DEVICES, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'attach', sessionId: SESSION }) } }`.
   - `the attach is sent from a timer, never inside the hook`: after `await $.session.attach(…)`, `w.attaches` is empty; after `w.clock.settle()`, it holds one.
   - `a detach, and an attach on the mobile, vscode or terminal surface, send nothing`.
   - `an attach before the mod has linked is sent once it links, the latest only`: `$.session.start(…)`, two desktop attaches, then `settle()`: one in `w.attaches`.
   - `attached and detached again before the link: nothing is sent`.
-  - `no devicesSocket: nothing is sent, and the polls go on` (the launcher prints `socketPath` alone).
+  - `an attach with no devicesSocket asks the launcher again, and the devices are told once it prints one`: linked with `w.devices` `''`, then `w.devices = DEVICES`; a desktop attach and `settle()`: one run more, `[LOCAL, 'device', 'claude', 'link', '--json']` with `init` `{ timeoutMs: 5_000 }`; `w.attaches` holds the one message. A next attach is sent with no run more.
+  - `only the launcher that linked is asked again` (`launchers: ['harness']`: the one run more is `['harness', …]`; `w.envAsked` gains nothing).
+  - `a second attach within 30 s does not ask again, and one after 30 s does`: the launcher prints no `devicesSocket` throughout; an attach: one run more; an attach 29 999 ms later: none; one at 30 000 ms: a second. `w.attaches` stays empty.
+  - `a launcher that fails or is killed at its 5 s sends nothing, and the polls go on`, each of: exit 1; it cannot start; stdout `'{'`; `socketPath` alone; a run that rejects after `clock.sleep(5_000)`, as the engine does at `timeoutMs`. `w.attaches` is empty, nothing throws, no other launcher is run, and the next poll is sent when it would be with no attach.
+  - `shown and left again while the launcher is asked: nothing is sent`: the run held; a desktop detach; the run prints `DEVICES`: `w.attaches` is empty. A next attach is sent with no run more.
+  - `an attach while the launcher is asked is told once, when it answers`.
+  - `a mod that never linked asks nothing at an attach` (`exitCode: 1`: `w.runs` is the link's alone).
   - `a failed send is dropped`: the devices' fetch refused; after 10 minutes of clock still one try; a second attach is a second try.
   - `with the plugin switched off nothing is sent` (off while a poll is held, then an attach), and `switched off and on again: the session the app still shows is told once the mod links`.
   - `the polls go on the core's socket alone and the attach on the devices' alone`; `only HOME and CLAUDE_CONFIG_DIR are read` with an attach sent.
@@ -254,7 +270,7 @@ Not changed: anything under `cli/src/core` (`src/architecture.coreFiles.txt` kee
   - `appSettled: (app) => { if (app === 'claude') part.call('dial', claudeSettled) }`.
   - `claudeShow: (agentId, session) => …`: notes the dial's own link to `agentId` at `monotonic()`, as the link starts, then `opener.claudeShow(agentId, session)`. Each note drops the links older than `ATTACH_ECHO_MS`.
   - `let claudeAgent: string | undefined`: the kept agent.
-  - `const dialLinks = new Map<string, number>()` and `linkedByDial(agentId: string): boolean`: whether the dial's own link to that agent is younger than `ATTACH_ECHO_MS`.
+  - `const dialLinks = new Map<string, number>()` and `linkedByDial(agentId?: string): boolean`: whether the dial's own link to that agent, or to any agent when none is named, is younger than `ATTACH_ECHO_MS`. It compares each time kept: a link older than that may still be in the map.
   - `let followedFor: 'prompt' | 'attach' | 'settle' = 'prompt'`: what the dials were last asked to follow for. `followPrompt` sets `'prompt'` before its `cable.followPrompt`. A dial answers only for its latest ask (`cableSession.ts`, `promptGeneration`), so `promptFollowed` counts its answer under this: the prompt's two lines as today; `'attach'`: `[device] attach · moved`, `[device] attach · skipped · no tile`; `'settle'`: `[device] attach · moved on settle`, `[device] attach · skipped · no tile`.
 - Rules of `claudeAttached(sessionId)`, in this order:
   1. `agentId = observedAgentId('claude', sessionId)`. Listed with app `claude` (`outside(agentId)?.app === 'claude'`): `claudeAgent = agentId`, whatever follows.
@@ -266,7 +282,7 @@ Not changed: anything under `cli/src/core` (`src/architecture.coreFiles.txt` kee
 - Rules of `claudeSettled()`, in this order:
   1. No kept agent, or no dial linked: nothing.
   2. The kept agent is no longer listed with app `claude`: it is forgotten, nothing more.
-  3. `linkedByDial(claudeAgent)`: `[device] attach · skipped · echo`.
+  3. `linkedByDial()`, any link of the dial's, to the kept agent or to another: `[device] attach · skipped · echo`. The kept agent stays. Why any: a swipe that rests on another agent as the app comes in front shows that one, and its attach, a moment later, is skipped as its own echo.
   4. Else `followedFor = 'settle'`, and `cable.followPrompt(claudeAgent)` is returned.
 - `port.observed`: a `session-end` of the kept agent's session clears `claudeAgent`.
 - Not here: "the echo of the move starts no swipe rest" is `cableSession.spec.ts`'s `the move's echo starts no Orca switch`, which holds for every `followPrompt` (#4311's, unchanged).
@@ -281,7 +297,9 @@ Not changed: anything under `cli/src/core` (`src/architecture.coreFiles.txt` kee
   - `the echo is that agent's alone`: after a link to `ID`, an attach of a second Claude app agent asks the dials at once.
   - `the app settling in front moves the dial to the last attached agent`: Orca settled, two attaches (`A`, then `B`): two `not in front` lines; `claude` settles: `[[B]]` is asked; the dial's `moved` is `[device] attach · moved on settle`.
   - `an attach skipped as the echo is still the session the app shows`: kept `A`; a link to `B` and `B`'s attach (`echo`); 2 s later away to Orca and back: the settle asks for `B`.
-  - `a settle within 2 s of the dial's own link to the kept agent is its echo`.
+  - `a settle within 2 s of any link of the dial's moves nothing`: kept `A`, Orca settled; `claude` reported in front; a rest on `B` runs its link; the app settles 1 999 ms after that link: `[device] attach · skipped · echo`, nothing asked, and the kept agent is still `A`. The same with the link to `A` itself.
+  - `a settle 2 s after the dial's last link moves the dial`: the same link, the app settling 2 000 ms after it: `[[A]]` is asked. With two links, 2 500 ms and 1 000 ms old: skipped, the younger counts.
+  - `the app shows what the swipe chose`: kept `A`; the app settles 1 000 ms after the link to `B` (skipped), and `B`'s attach comes 500 ms later: `skipped · echo`, and the kept agent is `B` (away and back after 2 s: the settle asks for `B`).
   - `a session's end clears it`; `a kept agent resumed in another app is forgotten at the settle`: nothing asked, nothing counted.
   - `a Cmd-Tab across the app moves nothing`: with an agent kept, `claude` then `orca` inside a second; Orca settles and nothing is asked.
   - `with no dial linked nothing is asked or counted, and the attach is still kept` (linked again, the next settle asks for it).
@@ -346,13 +364,12 @@ Not changed: anything under `cli/src/core` (`src/architecture.coreFiles.txt` kee
 - The end-to-end fake mod asks the real launcher for the socket, so `link`'s check runs against the socket the real devices process made.
 - A new end-to-end file, not more cases in `dialPaneFollow.e2e.ts`: the other branch writes that one.
 
-## Open questions
+### The PM's answers to this plan's three questions (2026-11-15)
 
-Drafted as the spec says; each answer names the task it would change.
-
-1. **A session whose mod links while the devices' listener is not there.** The mod asks the launcher once, as its session starts. With no dial attached yet, or the daemon restarting at that moment, `link` prints no `devicesSocket` (the spec: "leaves it out when it is missing"), and that session sends no attach until it restarts. Drafted: as the spec says (Task 1, and check 3 reopens the Claude app). Options: (a) keep that; (b) the mod asks the launcher again at an attach while it holds no `devicesSocket`: one `harness device claude link` run per session switch in the app, only while no listener is there; (c) `link` prints the path whenever its folder is this account's own, socket or not, and a send with no listener fails and is dropped. Recommended: (b). It changes Task 1 only.
-2. **The app settling in front while the dial's own link is on its way.** Rare: the app comes back in front and, inside that same second, a swipe rests on another of its agents. The link shows `B`; the settle then moves the dial to the kept agent `A` (not the echo: the link was to `B`); `B`'s attach comes a moment later and is skipped as the echo. The app shows `B` and the dial `A`, until the next attach or swipe. Drafted: as the spec says (the echo is the linked agent's alone). Option: a settle moves nothing while any link of the dial's is younger than 2 s. Recommended: that option. It changes Task 7's `claudeSettled` rule 3 and one test.
-3. **The plugin on Diego's Mac for the on-dial check.** The released `harness-device` sends no attach, so the check needs this checkout's plugin: the `openharness` marketplace pointed at this worktree and the plugin installed again from it, both put back afterwards, before the worktree is removed (#4296's check did the same; a worktree removed under such a marketplace broke the plugin on 2026-11-15). The spec's "On a dial" names the CLI and the Harness Device build, not this. Drafted: check 3 does it. Confirm, or name another way.
+1. **A session whose mod linked while the devices' listener was not there** (no dial attached yet, the daemon restarting). The mod asks the launcher again when it holds a desktop attach and its last answer had no `devicesSocket`: at most once in 30 s for a session, the run killed after 5 s, any failure silent. That attach is then not sent, and the next attach after the 30 s may ask again. Task 1 alone; no file and no dependency changed.
+   - Decided here, within that answer: the 30 s is between two such asks, so the first attach after a link with no `devicesSocket` asks at once. A session's own time: a reload of the mod starts it over. Only the launcher that linked is run, so one ask is one process and at most 5 s. An attach that found no socket stays held: a detach drops it, and an answer or a next link sends it.
+2. **The app settling in front while the dial's own link is on its way.** Accepted: a settle of the Claude app in front moves nothing while any continue link of the dial's is younger than 2 s, counted as `[device] attach · skipped · echo`. Task 7's `claudeSettled` rule 3 and its tests; no file and no dependency changed.
+3. **The plugin on Diego's Mac for the on-dial check.** Accepted, with a change: the PM, not Diego, points the `openharness` marketplace at the final combined worktree when preparing Diego's dial session, and points it back at GitHub before that worktree is removed. Check 3's steps, before and after.
 
 ## Verification
 
@@ -371,7 +388,7 @@ Drafted as the spec says; each answer names the task it would change.
 
 **Temporary workflow:** none. The one long check runs in the repo's own **CLI end to end** workflow, and the new file joins that suite's nightly run as every file in `cli/e2e` does.
 
-**Turns.** The tester asks the orchestrator for a runner turn before the one hand-started run on GitHub (check 1), and starts nothing until it is granted. The dial is Diego's own: check 3 is not a tester step.
+**Turns.** The tester asks the orchestrator for a runner turn before the one hand-started run on GitHub (check 1), and starts nothing until it is granted. The dial is Diego's own: check 3 is not a tester step. The PM prepares it and puts the Mac back; Diego's hand does the four steps.
 
 **1. The real daemon, a fake dial, a fake front app, a fake mod**
 - Run: `cd cli && npx vitest run --config vitest.e2e.config.ts e2e/dialClaudeAppFollow.e2e.ts e2e/dialPaneFollow.e2e.ts e2e/deviceClaudeOrca.e2e.ts e2e/dialAppFilter.e2e.ts e2e/devicesProcess.e2e.ts e2e/hardwareWatch.e2e.ts`, on a Mac or a Linux box, at the final head.
@@ -386,22 +403,28 @@ Drafted as the spec says; each answer names the task it would change.
 - On GitHub: none, and no CI job is added (#4296's answer 4). Both results go in the pull request.
 
 **3. On a dial: the app moves the dial, a swipe moves the app** (the spec's "On a dial" 1 to 4). **Diego's check, on his return.**
-- Who: Diego. It needs his hand on the dial and on the Claude app's sidebar, so no tester runs it, and nobody reports it as passed for him. Nothing below starts before the orchestrator's go.
+- Who: Diego, for the four steps. They need his hand on the dial and on the Claude app's sidebar, so no tester runs them, and nobody reports them as passed for him. The PM prepares his dial session (**Before the check**) and puts the Mac back (**After the check**). Nothing below starts before the orchestrator's go.
 - When: after every task and the final review, on the final head.
 - Where: Diego's Mac, his round dial on the firmware it has (none is flashed), the real Claude app and Claude Code, the everyday daemon. The Harness window closed, so the dial lists this computer's agents.
 - Why not an isolated daemon: the Claude app's sessions run the real `~/.claude` plugin and hooks, which reach only the daemon that installed them. These steps call no backend: every frame stays between the mod, the daemon, `open`, the Claude app and the dial on this Mac.
 - **Nobody speaks to the dial in this check:** a spoken word would ask production for its transcript.
-- Before anything changes, save `harness version`, `claude plugin marketplace list --json` and `claude plugin list --json`.
-- Build: `make install-cli` at the final head (a local install; nothing is published).
-- The plugin from this checkout, as the released one sends no attach (open question 3): `harness device claude disable`, `claude plugin marketplace remove openharness`, `claude plugin marketplace add <this checkout>`, `harness device claude enable`. `harness device claude status --json` says `installed` and `enabled`.
-- The front app: the Harness Device app built from this stack, the only source of the app in front. `(cd device-app/ui && npm ci && npm run build) && (cd device-app/src-tauri && cargo build --locked)`, then `target/debug/harness-device`, with the released Harness Device app quit.
-- With the dial attached, `harness device claude link --json` prints a `devicesSocket`. Then quit and reopen the Claude app: a session's mod links once, as it starts, and one that linked before the listener was open sends no attach (open question 1).
-- A person does and sees:
+- **Before the check**, in this order:
+  1. Before anything changes, save `harness version`, `claude plugin marketplace list --json` and `claude plugin list --json`.
+  2. Build: `make install-cli` in the final combined worktree, at the final head (a local install; nothing is published).
+  3. **The PM, not Diego, points the `openharness` marketplace at the final combined worktree** (the PM's answer 3; the released plugin sends no attach): `harness device claude disable`, `claude plugin marketplace remove openharness`, `claude plugin marketplace add <the final combined worktree>`, `harness device claude enable`. `harness device claude status --json` says `installed` and `enabled`. From here until **After the check** step 1, that worktree is not removed (a worktree removed under such a marketplace broke the plugin on 2026-11-15).
+  4. The front app: the Harness Device app built from this stack, the only source of the app in front. `(cd device-app/ui && npm ci && npm run build) && (cd device-app/src-tauri && cargo build --locked)`, then `target/debug/harness-device`, with the released Harness Device app quit.
+  5. With the dial attached, `harness device claude link --json` prints a `devicesSocket`. Then quit and reopen the Claude app: a session started before step 3 still runs the released mod, which sends no attach.
+- Diego does and sees:
   1. Two Claude Code sessions in the Claude app, the app in front: clicking either in the sidebar moves the dial to it.
   2. Swiping between them on the dial switches the app's session each time the dial rests.
   3. With Orca in front, swiping on the Claude page of the dial does not bring the app forward.
   4. With Orca in front, clicking a session in the Claude app's sidebar moves the dial to it once the app has settled, about a second.
 - Evidence: the daemon log's `[device] attach · moved`, `[device] attach · moved on settle` and `[device] swipe · ok` lines, and a photo of the dial for steps 1 and 4.
-- **Afterwards,** before this worktree is removed (the marketplace points into it): `harness device claude disable`; `claude plugin marketplace remove openharness`; add back the marketplace the saved list had (`claude plugin marketplace add autonomous-ai/openharness --sparse .claude-plugin plugins` when it was GitHub's); `harness device claude enable` if the saved list had the plugin on. Both `claude` lists read as saved. Quit the debug Harness Device app and start the released one if it ran before. Put the release CLI back with the public installer (`curl -fsSL https://harness.autonomous.ai/cli/install.sh | bash`); `harness version` reads as saved, with no `-dev.`. Tell the orchestrator the dial is free.
+- Not asked of Diego: the mod asking the launcher again (the PM's answer 1). Step 5 above has the listener open before the app's sessions start, so every mod links with a `devicesSocket`; check 2's tests cover the ask.
+- **After the check**, in this order:
+  1. **The PM points the `openharness` marketplace back at GitHub, before the final combined worktree is removed** (the marketplace points into it): `harness device claude disable`; `claude plugin marketplace remove openharness`; `claude plugin marketplace add autonomous-ai/openharness --sparse .claude-plugin plugins`; `harness device claude enable` if the saved list had the plugin on. `claude plugin marketplace list --json` shows `openharness` from GitHub, and `claude plugin list --json` reads as saved. Only then may that worktree be removed.
+  2. Quit the debug Harness Device app and start the released one if it ran before.
+  3. Put the release CLI back with the public installer (`curl -fsSL https://harness.autonomous.ai/cli/install.sh | bash`); `harness version` reads as saved, with no `-dev.`.
+  4. Tell the orchestrator the dial is free.
 - Not done, for whatever reason: report it as not verified, never as passed.
 - On GitHub: none. It needs a real dial and the Claude app.
