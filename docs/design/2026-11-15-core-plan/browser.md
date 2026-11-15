@@ -216,3 +216,26 @@ Validation of these review corrections (before the parent's next main integratio
   the parent must integrate current main, review the combined change, and run the remaining required acceptance.
 - A second ordering issue exposed by the consecutive-move regression is fixed too: a queued Start for B, not yet
   published as state, is cancelled when B's profile moves to C; it cannot recreate B after the move.
+
+
+## Stop during a pending move, 16 November
+
+Design before correction: a move may wait for the legacy flag lookup or the old container to stop. A Stop of its
+destination during either wait must remain off after the profile moves. Keep the profile transfer and its ordered
+queues; transfer the source's on flag only while the destination's existing start generation is current. A Stop
+also reaches a queued browser operation even before that operation has published a browser state. Reuse the existing
+queue and generation maps; add no retained intent table, timer, stored field or core mechanism. The later Stop stays
+in the existing state file, so older-build rollback sees it too. Owner/guest checks, private profile ownership,
+process boundaries and macOS/Linux support are unchanged. Test both waits with explicit barriers before changing
+production code; existing move/Stop coverage and required gates must pass. This fixes the extraction's cancellation
+boundary; it adds no Browser feature. No new read, poll or frame-path work is introduced.
+
+
+The two destination-Stop regressions failed against c7a8992f99 (3.51 s): both waits restored `on.b1` after Stop.
+The correction reuses the destination generation and notices queued work before state exists. Native targeted
+validation passes all 220 cases across the same four files at 100% coverage (937 statements, 573 branches,
+225 functions, 711 lines); Node 24.22.2 typecheck passes. The first broader attempt was sandbox-invalid: four
+loopback proxy fixtures received `listen EPERM`; its 216 passes and four failures remain in
+`/tmp/core-browser-destination-stop-green.log`. The corrected native run is
+`/tmp/core-browser-destination-stop-native-green.log`, and the true behavior red is
+`/tmp/core-browser-destination-stop-red.log`. Current-main integration and final gates remain with the coordinator.

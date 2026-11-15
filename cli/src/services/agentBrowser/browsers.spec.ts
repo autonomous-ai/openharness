@@ -921,6 +921,24 @@ describe('Browsers, named by a profile', () => {
     expect(r.state.read().browsers).toEqual({ a1: defaultSettings(host), b1: own })
   })
 
+  it('a destination Stop during the old container wait keeps the moved profile off', async () => {
+    const r = rig()
+    await r.browsers.start('a1')
+    r.state.update(s => { s.on = { a1: true }; s.adopted = { b1: true } })
+    const entered = deferred<void>(), release = deferred<void>()
+    r.containers.stop.mockImplementationOnce(async () => { entered.resolve(); await release.promise })
+    const moved = r.browsers.move('a1', 'b1')
+    await entered.promise
+    r.state.update(s => { delete s.on?.b1 })
+    const stopped = r.browsers.stop('b1')
+    release.resolve()
+    expect(await moved).toBe(true)
+    await stopped
+    expect(r.state.read().browsers.b1).toMatchObject({ profile: 'a1' })
+    expect(r.state.read().on).toEqual({})
+    expect(shown(r, 'b1')).toBe('none')
+  })
+
   it('a move that cannot write the state file rejects, and both entries are as they were', async () => {
     const r = rig()
     await r.browsers.start('a1')

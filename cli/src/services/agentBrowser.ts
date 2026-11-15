@@ -539,7 +539,7 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
       try { changed = setOn(agentId, false) } catch (error) {
         log(`agent browser ${agentId}: its Stop was not kept: ${(error as Error).message}`)
       }
-      if (attached.delete(agentId) || browsers.state(agentId)) void browsers.stop(agentId)
+      if (attached.delete(agentId) || browsers.state(agentId) || browsers.pending(agentId)) void browsers.stop(agentId)
       if (changed) count('agent_browser_stopped')
       return { ok: true }
     },

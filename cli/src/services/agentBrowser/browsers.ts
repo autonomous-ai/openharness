@@ -139,6 +139,9 @@ export class Browsers {
     if (step) this.showSetup({ state: 'setup', step })
   }
 
+  /** A move or Start may be queued before it has a visible browser state. */
+  pending(agentId: string): boolean { return this.queues.has(agentId) }
+
   stop(agentId: string): Promise<void> {
     this.forget(agentId)
     this.deps.closeViewers(agentId)
@@ -165,6 +168,7 @@ export class Browsers {
    * [to] has an entry of its own. Rejects when the state file cannot be written: both entries are as they were.
    */
   move(from: string, to: string, prepare?: () => Promise<void>): Promise<boolean> {
+    const destinationGeneration = this.generation(to)
     return this.inQueues([from, to], async () => {
       await prepare?.()
       const movable = (s: BrowserStateData) => s.browsers[from] !== undefined && !s.deleting.includes(from) && s.browsers[to] === undefined
@@ -192,7 +196,8 @@ export class Browsers {
         // browser is ready.
         delete s.told?.[from]
         if (s.on?.[from]) {
-          s.on[to] = true
+          // A later Stop of the destination keeps its choice while receiving the profile.
+          if (this.generation(to) === destinationGeneration) s.on[to] = true
           delete s.on[from]
         }
         // The flag [from]'s row may still carry from before the service kept it (services/agentBrowser.ts `adopt`) is

@@ -1750,6 +1750,35 @@ describe('the browser moves with its pane', () => {
 
   // Its agent ran with its Browser on before the update, ended, and has not run since: its saved row still carries the
   // flag the core kept. Delete on or after 2026-12-18, with `adopt`.
+  it('a destination Stop while a move reads its legacy flag remains off after the profile arrives', async () => {
+    saveState({ a1: defaultSettings(HOST) })
+    let looking!: () => void
+    const looked = new Promise<void>(resolve => { looking = resolve })
+    let answer!: (rows: RegisteredSession[]) => void
+    const pending = new Promise<RegisteredSession[]>(resolve => { answer = resolve })
+    let hold = false
+    const everyAgent = async () => {
+      if (!hold) return [session('a1')]
+      looking()
+      return pending
+    }
+    const sw = startSwitching([session('b1', { browser: undefined })], { options: { everyAgent } })
+    const listing = `ps --filter label=harness.daemon=${daemonIdOf(dataDir)} --format json`
+    await eventually(() => expect(asked()).toContain(listing))
+    // Already adopted: comparing only the migration mark cannot detect the later Stop.
+    await sw.requests.agent_browser_stop!({ agentId: 'b1' }, LOCAL)
+    hold = true
+    sw.move('a1', 'b1')
+    await looked
+    expect(await sw.requests.agent_browser_stop!({ agentId: 'b1' }, LOCAL)).toEqual({ ok: true })
+    answer([session('a1')])
+    await eventually(() => expect(Object.keys(savedState().browsers)).toEqual(['b1']))
+    expect(savedState().browsers.b1).toMatchObject({ profile: 'a1' })
+    expect(turnedOn()).toEqual({})
+    expect(sw.port.frameContext('b1')).toBeUndefined()
+    expect(created()).toHaveLength(0)
+  })
+
   it('consecutive pane moves reserve their queues before the legacy flag lookup', async () => {
     saveState({ a1: defaultSettings(HOST) })
     let looking!: () => void
