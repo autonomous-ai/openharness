@@ -22,7 +22,7 @@ const clear: TerminalBinaryClear = { kind: TerminalBinaryKind.input, streamId: S
 
 function stubGateway() {
   const port = {
-    usageLaunch: vi.fn(), usageCounter: vi.fn(), connect: vi.fn(), serveThisComputerOnly: vi.fn(), holdRequests: vi.fn(), openRequests: vi.fn(), connected: vi.fn(() => true),
+    usage: vi.fn(), usageCounter: vi.fn(), connect: vi.fn(), serveThisComputerOnly: vi.fn(), holdRequests: vi.fn(), openRequests: vi.fn(), connected: vi.fn(() => true),
     broadcast: vi.fn(), commander: vi.fn(), user: vi.fn(), reply: vi.fn(), target: vi.fn(() => true), terminal: vi.fn(() => true),
     terminalBinary: vi.fn(() => true), observer: vi.fn(() => true), windowOpened: vi.fn(), localClients: vi.fn(), local: vi.fn(async () => {}),
     device: vi.fn(() => true), deviceClient: vi.fn(), stop: vi.fn(async () => {}),
@@ -134,8 +134,8 @@ describe('the gateway\'s process, spoken to by the core', () => {
     expect(gateway.ops.reachable).toHaveBeenCalledWith(['m2'])
     expect(gateway.ops.wifiService).toHaveBeenCalledWith(true)
     expect(gateway.port.connect).toHaveBeenCalled()
-    w.link.port.usageLaunch?.({ id: 'creation-fixture-1', phase: 'start' })
-    expect(gateway.port.usageLaunch).toHaveBeenCalledWith({ id: 'creation-fixture-1', phase: 'start' })
+    w.link.port.usage?.({ kind: 'observed', payload: { measure: 'collector_days' } })
+    expect(gateway.port.usage).toHaveBeenCalledWith({ kind: 'observed', payload: { measure: 'collector_days' } })
     w.link.port.usageCounter?.('create_failed')
     expect(gateway.port.usageCounter).toHaveBeenCalledWith('create_failed')
     // Its tokens are its process's own to renew, one renewal for every start (the core audit of 2026-11-12, decision

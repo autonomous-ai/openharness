@@ -2,20 +2,9 @@ import { cleanUsageContext, HEALTH_MEASURES, CLI_REPORT_FAILURES } from './produ
 import { PRODUCT_USAGE_ADD_PHONE_METRICS, PRODUCT_USAGE_ADD_PHONE_PAIRED_METRICS, PRODUCT_USAGE_HACHI_METRICS, PRODUCT_USAGE_PHONE_OFFER_SKIP_METRICS, PRODUCT_USAGE_METRICS, PRODUCT_USAGE_UI_METRICS,
   type ProductUsageReport } from './productUsageContract.js'
 
-/** The contract revision this proxy forwards, sent on each of its answers as `x-harness-usage-vocabulary`.
- * 2: the Desktop's frame-phase counters (`frame_slow_*`, `frame_long_collector`). 3: its Add Phone card
- * (`ui_desktop_phone_offer_*`) and the ways Add Phone opened (`ui_desktop_add_phone_*`). 4: the card offered
- * after work or after time away (`ui_desktop_phone_offer_after_work_*`, `ui_desktop_phone_offer_away_*`). The
- * Desktop sends a name newer than revision 1 only once a proxy has announced it, so an older CLI never sees one.
- * 5: first-arrival episodes and shared-tab invitation outcomes.
- * 6: returning-account phone offers, offer skip reasons and Add Phone pairing sources.
- * 7: Import an agent running on this Mac (`ui_desktop_agent_import_*`, task #2379).
- * 8: How a Team account's removal from the computer ended (`ui_desktop_team_account_removal_*`, 2026-11-10).
- * 9: an agent's Browser panel opened (`agent_browser_opened`).
- * 10: Hachi's window counters (`APP_HACHI_METRICS`, docs/design/2026-11-12-hachi.md, Measures).
- * Raise it with each name the Desktop gates on it (`ProductHealthMeasure.vocabulary`, `ProductFlow.vocabulary`). */
-export const APP_USAGE_VOCABULARY = 10
-export const APP_USAGE_VOCABULARY_HEADER = 'x-harness-usage-vocabulary'
+// The revision of the names this check forwards is on every answer of its route, the door's own too (core/api.ts
+// `APP_USAGE_VOCABULARY`): raise it there with each name the Desktop gates on it, beside the names here. The gateway
+// runs this check (gateway/accountRoutes.ts); the core's process loads none of it.
 
 /** The Hachi counters a window counts; the rest of `PRODUCT_USAGE_HACHI_METRICS` are the daemon's own. */
 const APP_HACHI_METRICS = [
