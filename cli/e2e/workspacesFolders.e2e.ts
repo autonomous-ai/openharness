@@ -65,7 +65,7 @@ function children(log: string): Array<{ pid: number; verb: string }> {
 }
 /** What a create's folder or a purge's worktree takes, and a frame's reads never do. */
 const GIT_WORK = new Set(['clone', 'worktree add', 'worktree remove', 'worktree unlock', 'switch', 'checkout', 'branch', 'remote get-url', 'config (write)', 'du', 'ssh'])
-/** How many of each [verb] [pid] started, for the record. */
+/** How many of each [verb] [pid] started. */
 const counted = (seen: Array<{ pid: number; verb: string }>, pid: number) =>
   Object.fromEntries([...new Set(seen.filter((child) => child.pid === pid).map((child) => child.verb))].sort()
     .map((verb) => [verb, seen.filter((child) => child.pid === pid && child.verb === verb).length]))
@@ -95,13 +95,14 @@ async function create(client: LocalClient, creationId: string, source: Record<st
 /** Whether [path] is inside [folder], however either is spelled (macOS's /tmp is /private/tmp). */
 const inside = (folder: string, path: string) => realpathSync(path).startsWith(realpathSync(folder) + '/')
 const same = (a: string, b: string) => realpathSync(a) === realpathSync(b)
-/** The created agent, once it runs in its folder with its conversation bound. */
+/** The created agent, once it runs in its folder with its conversation bound; `cwd` is where its frame says it works. */
 async function bound(client: LocalClient, created: Record<string, any>): Promise<Record<string, any>> {
   expect(created, JSON.stringify(created)).toMatchObject({ state: 'created' })
-  return until(`${created.agent.id} to bind its conversation`, async () => {
-    const agent = await row(client, created.agent.id)
-    return agent?.sessionId && agent.status === 'active' && agent.tmuxPane ? agent : null
+  const agent = await until(`${created.agent.id} to bind its conversation`, async () => {
+    const listed = await row(client, created.agent.id)
+    return listed?.sessionId && listed.status === 'active' && listed.tmuxPane ? listed : null
   }, 60_000, 250)
+  return { ...agent, cwd: agent.project?.cwd ?? agent.cwd }
 }
 async function turn(client: LocalClient, agentId: string, content: string): Promise<void> {
   const ended = client.next((frame: Frame) => frame.type === 'turn_ended' && frame.agentId === agentId, 45_000, `turn_ended (${content})`)
@@ -125,6 +126,8 @@ describe('the folders git makes for a create, and a purge\'s worktree, in the wo
   it('a worktree, a clone and a branch are made, and a worktree is reviewed and removed, by the edge host\'s git and none of the core\'s', async () => {
     const log = join('/tmp', `workspaces-folders-${process.pid}-${Date.now()}.log`)
     const d = await fresh({}, (d) => shims(d, log))
+    // Which git each process ran, by subcommand: on a failure, what to look at first.
+    onTestFailed(() => { console.log(`[git children] ${JSON.stringify({ core: counted(children(log), d.corePid() ?? 0), edge: counted(children(log), edgePid(d) ?? 0) })}`) })
     await until('workspaces to connect to the core', () => connected(d) >= 1 || null, 30_000, 100)
     const client = await LocalClient.connect(d)
     const alpha = repository(d, 'alpha'), gamma = repository(d, 'gamma')
@@ -145,7 +148,9 @@ describe('the folders git makes for a create, and a purge\'s worktree, in the wo
     expect(same(branch.cwd, gamma), branch.cwd).toBe(true)
     expect(git(d, gamma, 'branch', '--show-current')).toBe('feature')
 
-    // Inspect says where the worktree's harness works; Delete reviews it and removes it with the conversation.
+    // Inspect says where the worktree's harness works; Delete reviews it and removes it with the conversation, which a
+    // first turn opened.
+    await turn(client, tree.id, 'a first turn in the worktree')
     expect(await client.request('agent_worktree_delete', { ...identity(tree), mode: 'describe' }, 60_000))
       .toMatchObject({ workspace: { kind: 'worktree', canDelete: true, mainPath: realpathSync(alpha) } })
     const review = await client.request('agent_purge', { ...identity(tree), mode: 'inspect', includeWorktree: true }, 60_000)
@@ -160,7 +165,6 @@ describe('the folders git makes for a create, and a purge\'s worktree, in the wo
 
     const core = d.corePid()!, edge = edgePid(d)!
     const seen = children(log)
-    console.log(`[git children] ${JSON.stringify({ core: counted(seen, core), edge: counted(seen, edge) })}`)
     expect(seen.filter((child) => child.pid === core && GIT_WORK.has(child.verb)).map((child) => child.verb)).toEqual([])
     // The shims saw the work, so a git of the core's would have been seen too.
     for (const verb of ['clone', 'worktree add', 'switch', 'du', 'worktree remove']) {
@@ -236,6 +240,7 @@ describe('the folders git makes for a create, and a purge\'s worktree, in the wo
     const created = await client.request('agent_create', { engine: 'claude', cwd, bypassPermission: true }, 90_000)
     expect(created.error, JSON.stringify(created)).toBeUndefined()
     const agent = await bound(client, { state: 'created', agent: created.agent })
+    await turn(client, agent.id, 'workspaces are parked and nothing else cares')
     const review = await client.request('agent_purge', { ...identity(agent), mode: 'inspect', includeWorktree: true }, 60_000)
     expect(review, JSON.stringify(review)).toMatchObject({ choices: { sessionData: { available: true },
       worktreeData: { available: false, reason: expect.stringContaining('did not answer') } } })
@@ -248,7 +253,7 @@ describe('the folders git makes for a create, and a purge\'s worktree, in the wo
     expect(asked.state, JSON.stringify(asked)).toBe('pending')
     await until('the create to wait for workspaces', async () =>
       (await client.request('agent_create_status', { creationId: 'parked-worktree-0001' }, 30_000)).held?.service === 'workspaces' || null, 30_000, 250)
-    await turn(client, agent.id, 'workspaces are parked and nothing else cares')
+    await turn(client, agent.id, 'and a create waits for them')
     expect(existsSync(cwd)).toBe(true)
     expect(d.coresStarted()).toBe(1)
     client.close()
