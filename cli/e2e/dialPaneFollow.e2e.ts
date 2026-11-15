@@ -236,12 +236,19 @@ describe('the dial and the apps follow each other', () => {
       await b.hook('UserPromptSubmit', { prompt: 'run the tests' })
       return promptLines(d).length > told
     }, 60_000, 500)
+    // The hook exits before the daemon reads its post, so the last of B's lines may still be on its way, and it reads as
+    // A's would. A relayed prompt always has a line, and the lines come in the order the prompts were sent: once its line
+    // is there, none of B's is still to come.
+    const relayed = promptLines(d).length
+    await b.hook('UserPromptSubmit', { prompt: RELAYED })
+    await until('the relayed line', () => promptLines(d).slice(relayed).includes('[device] prompt · skipped · relayed'), 30_000, 50)
 
-    // A's typed prompt is not in front: it moves nothing.
+    // A's typed prompt is not in front: its own line says so, and it moves nothing.
     const skipped = promptLines(d).length
     await a.hook('UserPromptSubmit', { prompt: 'run the tests' })
-    await until("A's prompt's line", () => promptLines(d).length > skipped, 30_000, 50)
-    expect(new Set(promptLines(d).slice(told))).toEqual(new Set(['[device] prompt · skipped · not in front']))
+    expect(await until("A's prompt's line", () => promptLines(d)[skipped], 30_000, 50)).toBe('[device] prompt · skipped · not in front')
+    expect(new Set(promptLines(d).slice(told)))
+      .toEqual(new Set(['[device] prompt · skipped · not in front', '[device] prompt · skipped · relayed']))
 
     // A new watch has Orca in front: A's prompt moves the dial, the one move since. A focus the skipped one sent late
     // would come before this one's.
