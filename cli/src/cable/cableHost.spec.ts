@@ -455,6 +455,22 @@ describe('DaemonCableHost.listAgentsFlat across machines, and the tab the dial g
     expect(launchDesktop).not.toHaveBeenCalled()
   })
 
+  // The last tap wins, whatever machine it is on: Desktop's window must not open the first agent after the second tap.
+  it('a tap on another machine\'s agent ends a tap still waiting for Desktop\'s window', async () => {
+    AGENTS.length = 0
+    AGENTS.push({ agentId: 'a1', registeredAt: 1, active: true, terminalAvailable: true, engine: 'claude' })
+    const opened = vi.fn()
+    const launchDesktop = vi.fn(async () => true)
+    const host = new DaemonCableHost(wiring({ opened, launchDesktop }), crossFleet({ other: [] }))
+    await settled(host)
+    host.noteAgent('other', 'r9')
+    await host.openAgent('a1')
+    expect(launchDesktop).toHaveBeenCalledTimes(1)
+    host.openAgent('r9')
+    onTab(host, [])
+    expect(opened.mock.calls).toEqual([['other', 'r9', undefined]])
+  })
+
   it('forks a local agent through the daemon and opens the fork in the window', async () => {
     AGENTS.length = 0
     AGENTS.push({ agentId: 'a1', registeredAt: 1, active: true, terminalAvailable: true, engine: 'claude' })
@@ -950,6 +966,24 @@ describe('the dial with no window: this computer\'s agents', () => {
       expect(timers.map((timer) => timer.cancelled)).toEqual([true, false])
       onTab(host, [])
       expect(vi.mocked(w.opened!).mock.calls).toEqual([['mine', 'h2']])
+    })
+
+    // The app a later tap brought forward must not be covered by Desktop's window opening the first agent. A question
+    // screen that came up by itself is no tap.
+    it('a later tap on an agent outside Harness ends the wait; a question screen does not', async () => {
+      const focus = vi.fn(async (_agent: HostAgent) => true)
+      const { host, w, timers } = await setup()
+      host.setRegistry(new HostRegistry([host.harness, { ...observed([observedAgent({ id: 'o1' })]), focus,
+        capabilities: () => ({ status: true, voice: false, focus: true, answer: false }) }]))
+      await host.listAgentSnapshot()
+      await host.openAgent('h1')
+      host.openAgent('h2', 'question')
+      expect(timers[0].cancelled).toBe(false)
+      expect(await host.openAgent('o1')).toBeUndefined()
+      expect(focus).toHaveBeenCalledTimes(1)
+      expect(timers[0].cancelled).toBe(true)
+      onTab(host, [])
+      expect(vi.mocked(w.opened!).mock.calls).toEqual([['mine', 'h2', 'question']])
     })
 
     it('an agent that leaves the list is not opened', async () => {
