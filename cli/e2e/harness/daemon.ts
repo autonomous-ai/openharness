@@ -368,7 +368,7 @@ export class IsolatedDaemon {
       BACKEND_WS_URL: 'ws://127.0.0.1:9',
       WEB_URL: 'http://127.0.0.1:9',
       // Nor the Store's catalog on GitHub (dsh/catalog.ts): a published one turned a fixture registry of two into the
-      // live shelf of 23. Until now this reached a daemon only from the worker's environment (vitest.setup.ts).
+      // live shelf of 23. Named here: the worker's own (vitest.setup.ts) is not inherited.
       HARNESS_STORE_CATALOG_URL: 'http://127.0.0.1:9/catalog.json',
       // Nor grid's release server: removed roots on one Mac kept a 19 MB runtime/grid-0.3.63-darwin-arm64 each
       // (2026-11-14). Grid's set-up on a grid feature's first use (services/models.ts installCli: the picker's Set up,
