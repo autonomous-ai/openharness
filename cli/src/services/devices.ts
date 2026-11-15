@@ -985,7 +985,6 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     },
     windowReply: (kind, connId, machineId, payload) => part.call('window', () =>
       (kind === 'form' ? windowForm : kind === 'visit' ? windowVisit : windowSelection).reply(connId, machineId, payload)),
-    voiceReply: (voiceId, reply) => part.call('window', () => windowRouter.reply(voiceId, reply)),
     windowGone: (connId) => part.call('window', () => {
       windowForm.disconnected(connId)
       windowSelection.focusChanged()
@@ -1043,11 +1042,38 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   }
   const answer = (type: string) => (payload: Record<string, unknown>, asker: { local?: boolean; owner: boolean }) =>
     asker.owner ? harnessDevicesRequest(tab, type, payload) : { error: 'OWNER_REQUIRED' }
+  /**
+   * A window's frames (core/api.ts `SERVICE_WS_FRAMES`), checked as the local WebSocket checked them before they left the
+   * core: ⌘K's pick (an empty task picks no agent), its send (nothing to send without both), and its answer to a spoken
+   * task, whose states other than the three are dropped rather than guessed at: an answer this side cannot read must not
+   * settle a spoken turn as though it had been understood. A window's only, on this computer.
+   */
+  const windowFrame = async (payload: Record<string, unknown>, asker: { local?: boolean; owner: boolean }): Promise<Record<string, unknown>> => {
+    if (!asker.local || !asker.owner) return { error: 'LOCAL_ONLY' }
+    const frame = (payload.payload && typeof payload.payload === 'object' ? payload.payload : {}) as Record<string, unknown>
+    const said = (field: string): string => (typeof frame[field] === 'string' ? frame[field] as string : '')
+    if (payload.frame === 'route_task') {
+      const task = said('text').trim()
+      return { ...(task ? await port.routeTask(task) : unrouted('empty task')) }
+    }
+    if (payload.frame === 'route_send') {
+      const sent = said('agentId') && said('text') ? await port.routeSend(said('agentId'), said('text')) : { ok: false as const, machine: '', reason: 'nothing to send' }
+      return sent.ok ? { ok: true } : { ok: false, machine: sent.machine, reason: sent.reason }
+    }
+    if (payload.frame === 'voice_route_reply') {
+      const voiceId = said('voiceId'), state = said('state')
+      const reply = state === 'taken' ? { t: 'taken' as const } : state === 'sent' ? { t: 'sent' as const, agentId: said('agentId') } : state === 'cancelled' ? { t: 'cancelled' as const } : null
+      if (voiceId && reply) part.call('window', () => windowRouter.reply(voiceId, reply))
+      return {}
+    }
+    return { error: 'UNKNOWN_FRAME' }
+  }
   // Pets name files on this computer by path, so they are answered to a process here only, never the owner's relayed app.
   const local = (type: string) => (payload: Record<string, unknown>, asker: { local?: boolean; owner: boolean }) =>
     !asker.owner ? { error: 'OWNER_REQUIRED' } : asker.local ? harnessDevicesRequest(tab, type, payload) : { error: 'LOCAL_ONLY' }
   return {
     harness_devices_list: answer('harness_devices_list'), harness_device_settings: answer('harness_device_settings'),
     pet_preview: local('pet_preview'), pet_apply: local('pet_apply'), pet_reset: local('pet_reset'), pet_status: local('pet_status'),
+    devices_ws: (payload, asker) => windowFrame(payload, asker),
   }
 }

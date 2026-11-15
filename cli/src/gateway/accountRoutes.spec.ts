@@ -20,6 +20,16 @@ describe('the account\'s routes, answered by the gateway', () => {
     }
   })
 
+  it('mints Add Phone\'s code with an empty body, whatever the window sent, and not its query, only for the door over the daemon\'s own socket', async () => {
+    const backend = echo()
+    const routes = accountRoutes(backend)
+    expect(await routes('POST', '/api/auth/handoff?x=1', 'ignored', true)).toEqual({ status: 200, body: { method: 'POST', path: '/api/auth/handoff', body: {} } })
+    // A client of the local WebSocket, or the door over its port: never the code, and the backend never asked.
+    for (const socket of [false, undefined]) expect(await routes('POST', '/api/auth/handoff', '{}', socket)).toEqual({ status: 403, body: { error: 'FORBIDDEN' } })
+    expect(backend).toHaveBeenCalledTimes(1)
+    expect(await routes('GET', '/api/auth/handoff', undefined, true)).toEqual({ status: 404, body: { error: 'not found' } })
+  })
+
   it('forwards the desk\'s ops, a tab\'s switch and the account\'s name with their bodies, and says a body that is no JSON in their words', async () => {
     const routes = accountRoutes(echo())
     expect(await routes('POST', '/api/desk/ops', '{"ops":[]}')).toEqual({ status: 200, body: { method: 'POST', path: '/api/desk/ops', body: { ops: [] } } })
@@ -155,8 +165,9 @@ describe('STORE_PATH_RE', () => {
 
 describe('the gateway\'s one request for its routes of the door', () => {
   const device = vi.fn(async () => ({ status: 200, body: { device: true } }))
-  const account = vi.fn(async (method: string, target: string, text?: string): Promise<HttpAnswer> => ({ status: 200, body: { method, target, ...(text === undefined ? {} : { text }) } }))
-  const http = gatewayHttp(device, account)
+  const account = vi.fn(async (method: string, target: string, text?: string, socket?: boolean): Promise<HttpAnswer> => ({ status: 200, body: { method, target, ...(text === undefined ? {} : { text }), ...(socket ? { socket } : {}) } }))
+  const keys = vi.fn((method: string, path: string, text?: string): Promise<HttpAnswer> | null => (path === '/api/pairs' ? Promise.resolve({ status: 200, body: { keys: true, method, path, ...(text === undefined ? {} : { text }) } }) : null))
+  const http = gatewayHttp(device, keys, account)
   const owner = { local: true, owner: true }
 
   it('hands the Wi-Fi device\'s routes to their own handler, whoever asks: it checks them itself', async () => {
@@ -173,5 +184,18 @@ describe('the gateway\'s one request for its routes of the door', () => {
       expect(await http({ method: 'GET', target: '/api/desk' }, asker), JSON.stringify(asker)).toEqual({ status: 403, body: { error: 'FORBIDDEN' } })
     }
     expect(account).toHaveBeenCalledTimes(2)
+  })
+
+  it('hands the keys\' routes to their own handler, with the path its query left out, and the rest to the account\'s', async () => {
+    keys.mockClear()
+    expect(await http({ method: 'GET', target: '/api/pairs?all=1' }, owner)).toEqual({ status: 200, body: { keys: true, method: 'GET', path: '/api/pairs' } })
+    expect(await http({ method: 'GET', target: '/api/pairs', body: 'x' }, { local: true, owner: false })).toEqual({ status: 403, body: { error: 'FORBIDDEN' } })
+    expect(keys).toHaveBeenCalledTimes(1)
+  })
+
+  it('tells the account\'s routes whether the door over the daemon\'s own socket asked, and never a remote one', async () => {
+    expect(await http({ method: 'POST', target: '/api/auth/handoff?x=1', body: '' }, { ...owner, door: 'socket' })).toEqual({ status: 200, body: { method: 'POST', target: '/api/auth/handoff?x=1', text: '', socket: true } })
+    expect(await http({ method: 'POST', target: '/api/auth/handoff', body: '' }, { ...owner, connection: 'local:w1' })).toEqual({ status: 200, body: { method: 'POST', target: '/api/auth/handoff', text: '' } })
+    expect(await http({ method: 'POST', target: '/api/auth/handoff', body: '' }, { local: false, owner: true, door: 'socket' })).toEqual({ status: 403, body: { error: 'FORBIDDEN' } })
   })
 })

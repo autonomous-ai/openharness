@@ -663,7 +663,7 @@ export class E2eeManager {
     reply(result.ok ? { ok: true, label: result.label, fingerprint: result.fingerprint } : { error: result.error })
   }
 
-  /** Called by the hook server when the user runs `harness pair <code>`. Resolves when done/failed. */
+  /** Called by the gateway's route of the door when the user runs `harness pair <code>` (gateway/keyRoutes.ts). Resolves when done/failed. */
   onPair(code: string): Promise<PairResult> {
     return new Promise<PairResult>((resolve) => {
       // rate limit

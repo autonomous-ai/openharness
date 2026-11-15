@@ -571,16 +571,10 @@ describe('local CLI WebSocket', () => {
     const held = async () => { trace.push('route started'); entered.resolve(); await pending.promise; trace.push('route answered') }
     backend.handleLocalFrame = () => { trace.push('next') }
     const ws = new WebSocket(await start(backend, {
-      async onRouteTask(this: LocalWsServerOptions) {
-        expect(this.machineId).toBe(machineId)
-        await held()
-        return { agentId: '', machineId: '', name: '', confidence: 0, reason: '', candidates: [], weighed: 0, machines: 0, via: '' }
-      },
-      async onRouteSend(this: LocalWsServerOptions) {
-        expect(this.machineId).toBe(machineId)
-        await held()
-        return { ok: true as const }
-      },
+      serviceFrames: new Map([[type, (_connId, frame) => held().then(() => ({
+        type: type === 'route_task' ? 'route_result' : 'route_send_result',
+        payload: { requestId: (frame.payload as { requestId?: unknown }).requestId },
+      }))]]),
     }))
     await onceOpen(ws)
     const connected = onceMessage(ws)
@@ -1286,14 +1280,19 @@ describe('local CLI WebSocket', () => {
     }
   })
 
-  it('carries the window\'s answer about a spoken task, and keeps it off the wire', async () => {
+  it('hands a frame a service answers to it, sends back what it answers, and keeps the frame off the wire', async () => {
     const backend = new FakeBackend()
-    const replies: Array<{ voiceId: string; reply: unknown }> = []
+    const asked: Array<{ connId: string; frame: Frame }> = []
     server = http.createServer((_req, res) => { res.statusCode = 404; res.end() })
     local = attachLocalWsServer(server, {
       machineId,
       backend,
-      onVoiceRouteReply: (voiceId, reply) => replies.push({ voiceId, reply }),
+      // ⌘K's pick is answered; the window's answer to a spoken task is told, and nothing goes back; any other frame is
+      // no service's.
+      serviceFrames: new Map(['route_task', 'voice_route_reply'].map(type => [type, (connId: string, frame: Frame) => {
+        asked.push({ connId, frame })
+        return Promise.resolve(frame.type === 'route_task' ? { type: 'route_result', payload: { requestId: 'q-7', agentId: 'a1' } } : null)
+      }])),
     })
     await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve))
     const url = `ws://127.0.0.1:${(server.address() as AddressInfo).port}/api/local-ws`
@@ -1305,152 +1304,17 @@ describe('local CLI WebSocket', () => {
     await connected
 
     ws.send(JSON.stringify({ type: 'voice_route_reply', payload: { voiceId: 'v1', state: 'taken' } }))
-    ws.send(JSON.stringify({ type: 'voice_route_reply', payload: { voiceId: 'v1', state: 'sent', agentId: 'a7' } }))
-    ws.send(JSON.stringify({ type: 'voice_route_reply', payload: { voiceId: 'v2', state: 'cancelled' } }))
-    // Neither of these is an answer: one names no request, the other a state this side cannot read.
-    // Guessing at either would settle a spoken turn on something nobody said.
-    ws.send(JSON.stringify({ type: 'voice_route_reply', payload: { state: 'sent', agentId: 'a9' } }))
-    ws.send(JSON.stringify({ type: 'voice_route_reply', payload: { voiceId: 'v3', state: 'maybe' } }))
-    await new Promise((resolve) => setTimeout(resolve, 20))
-
-    expect(replies).toEqual([
-      { voiceId: 'v1', reply: { t: 'taken' } },
-      { voiceId: 'v1', reply: { t: 'sent', agentId: 'a7' } },
-      { voiceId: 'v2', reply: { t: 'cancelled' } },
-    ])
-    // It describes a hand at this desk. The machine has no use for it.
-    expect(backend.frames).toEqual([])
-    ws.close()
-  })
-
-  it('answers a routed task on the id it was asked with, and sends nothing', async () => {
-    const backend = new FakeBackend()
-    const asked: string[] = []
-    server = http.createServer((_req, res) => { res.statusCode = 404; res.end() })
-    local = attachLocalWsServer(server, {
-      machineId,
-      backend,
-      onRouteTask: async (text) => {
-        asked.push(text)
-        return {
-          agentId: 'a1', machineId: 'm-local', name: 'auth-api', confidence: 0.86, reason: 'name matches',
-          weighed: 4, machines: 2, via: 'model',
-          candidates: [{ agentId: 'a1', machineId: 'm-local', name: 'auth-api', machine: 'this computer', engine: 'claude', recent: 'token rotation', confidence: 0.86 }],
-        }
-      },
-    })
-    await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve))
-    const url = `ws://127.0.0.1:${(server.address() as AddressInfo).port}/api/local-ws`
-
-    const ws = new WebSocket(url)
-    await onceOpen(ws)
-    const connected = onceMessage(ws)
-    ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1 } }))
-    await connected
-
     const answered = onceMessage(ws)
     ws.send(JSON.stringify({ type: 'route_task', payload: { requestId: 'q-7', text: '  fix the retry  ' } }))
-    const reply = await answered   // onceMessage already parses
-    // The requestId comes back UNTOUCHED — it is the window's own rpc id, and the only thing tying this
-    // answer to the spinner it is holding open.
-    expect(reply.type).toBe('route_result')
-    expect(reply.payload).toMatchObject({ requestId: 'q-7', agentId: 'a1', machineId: 'm-local', name: 'auth-api', confidence: 0.86 })
-    expect(asked).toEqual(['fix the retry'])
-    // Asking is not sending. Nothing reached the machine.
-    expect(backend.frames.map((frame) => frame.type)).toEqual([])
-    ws.close()
-  })
-
-  it('still answers when there is nothing to answer with', async () => {
-    // The window holds a spinner on the id it asked with, so silence is the one reply it cannot recover
-    // from — an empty task and a router that throws must both come back as frames.
-    const backend = new FakeBackend()
-    server = http.createServer((_req, res) => { res.statusCode = 404; res.end() })
-    local = attachLocalWsServer(server, {
-      machineId,
-      backend,
-      onRouteTask: async () => { throw new Error('router unavailable') },
-    })
-    await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve))
-    const url = `ws://127.0.0.1:${(server.address() as AddressInfo).port}/api/local-ws`
-
-    const ws = new WebSocket(url)
-    await onceOpen(ws)
-    const connected = onceMessage(ws)
-    ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1 } }))
-    await connected
-
-    const blank = onceMessage(ws)
-    ws.send(JSON.stringify({ type: 'route_task', payload: { requestId: 'q-empty', text: '   ' } }))
-    expect((await blank).payload).toMatchObject({ requestId: 'q-empty', agentId: '', reason: 'empty task' })
-
-    const failed = onceMessage(ws)
-    ws.send(JSON.stringify({ type: 'route_task', payload: { requestId: 'q-throw', text: 'anything' } }))
-    expect((await failed).payload).toMatchObject({ requestId: 'q-throw', agentId: '', reason: 'router unavailable' })
-    ws.close()
-  })
-
-  it('delivers a committed route, and keeps the frame off the wire', async () => {
-    const backend = new FakeBackend()
-    const sent: Array<{ agentId: string; text: string }> = []
-    server = http.createServer((_req, res) => { res.statusCode = 404; res.end() })
-    local = attachLocalWsServer(server, {
-      machineId,
-      backend,
-      onRouteSend: async (agentId, text) => {
-        sent.push({ agentId, text })
-        return { ok: true as const }
-      },
-    })
-    await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve))
-    const url = `ws://127.0.0.1:${(server.address() as AddressInfo).port}/api/local-ws`
-
-    const ws = new WebSocket(url)
-    await onceOpen(ws)
-    const connected = onceMessage(ws)
-    ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1 } }))
-    await connected
-
-    const delivered = onceMessage(ws)
-    ws.send(JSON.stringify({ type: 'route_send', payload: { requestId: 's-1', agentId: 'a2', text: 'do the thing' } }))
-    expect((await delivered).payload).toMatchObject({ requestId: 's-1', ok: true })
-
-    // The half-formed one is dropped rather than delivered to whoever sorts first — and it is REFUSED
-    // out loud, because the window is waiting on this id either way.
-    const refused = onceMessage(ws)
-    ws.send(JSON.stringify({ type: 'route_send', payload: { requestId: 's-2', agentId: '', text: 'nobody' } }))
-    expect((await refused).payload).toMatchObject({ requestId: 's-2', ok: false })
-
-    expect(sent).toEqual([{ agentId: 'a2', text: 'do the thing' }])
-    expect(backend.frames.map((frame) => frame.type)).toEqual([])
-    ws.close()
-  })
-
-  it('says so when the agent could not be delivered to', async () => {
-    // The remote leg carries no ack of its own: a machine that has gone deaf takes the turn and nothing
-    // comes back. With the palette closing silently on a confident route, that is a task that vanishes
-    // without a mark anywhere — so the refusal has to travel.
-    const backend = new FakeBackend()
-    server = http.createServer((_req, res) => { res.statusCode = 404; res.end() })
-    local = attachLocalWsServer(server, {
-      machineId,
-      backend,
-      onRouteSend: async () => ({ ok: false as const, machine: 'mac-mini', reason: 'the last request to it did not come back' }),
-    })
-    await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve))
-    const url = `ws://127.0.0.1:${(server.address() as AddressInfo).port}/api/local-ws`
-
-    const ws = new WebSocket(url)
-    await onceOpen(ws)
-    const connected = onceMessage(ws)
-    ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1 } }))
-    await connected
-
-    const answered = onceMessage(ws)
-    ws.send(JSON.stringify({ type: 'route_send', payload: { requestId: 's-3', agentId: 'a9', text: 'work' } }))
-    expect((await answered).payload).toMatchObject({
-      requestId: 's-3', ok: false, machine: 'mac-mini', reason: 'the last request to it did not come back',
-    })
+    expect(await answered).toEqual({ type: 'route_result', payload: { requestId: 'q-7', agentId: 'a1' } })
+    expect(asked.map(({ frame }) => frame)).toEqual([
+      { type: 'voice_route_reply', payload: { voiceId: 'v1', state: 'taken' } },
+      { type: 'route_task', payload: { requestId: 'q-7', text: '  fix the retry  ' } },
+    ])
+    expect(asked[0].connId).toMatch(/^local:/)
+    // They describe a hand at this desk: the machine has no use for them. Any other frame goes on as ever.
+    ws.send(JSON.stringify({ type: 'agents_list', payload: { requestId: 'r-1' } }))
+    await vi.waitFor(() => expect(backend.frames.map((frame) => frame.type)).toEqual(['agents_list']))
     ws.close()
   })
 

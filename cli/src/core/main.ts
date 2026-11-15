@@ -250,7 +250,7 @@ import { createViewersWake, VIEWERS_ON_DEMAND, wakeViewers } from './viewersWake
 import { createWifiLink } from './wifiLink.js'
 import { wifiDoors } from './wifiAgents.js'
 import { createServiceRoutes } from './serviceRoutes.js'
-import { GATEWAY_REQUESTS, SERVICE_HTTP_ROUTES, WIFI_REQUESTS } from './api.js'
+import { GATEWAY_REQUESTS, SERVICE_HTTP_ROUTES, SERVICE_WS_FRAMES, WIFI_REQUESTS } from './api.js'
 import { loadOrCreateHookCredential } from '../lib/hookAuth.js'
 import { attachLocalWsServer, LOCAL_WS_PATH, LOCAL_WS_PROTOCOL_VERSION } from '../localWsServer.js'
 import { TERMINAL_BINARY_VERSION } from '../lib/terminalBinary.js'
@@ -1743,7 +1743,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // A request a service declared goes to it: in its own process, or in this one (core/serviceHost.ts).
   backend.serviceRouter = (type, payload, asker, reply) => serviceLinks.route(type, payload, asker, reply) || serviceHost.route(type, payload, asker, reply)
   // And a route of the door a service answers, the same way (core/serviceRoutes.ts).
-  const serviceRoutes = createServiceRoutes({ routes: SERVICE_HTTP_ROUTES, linked: serviceLinks, hosted: serviceHost })
+  const serviceRoutes = createServiceRoutes({ routes: SERVICE_HTTP_ROUTES, frames: SERVICE_WS_FRAMES, linked: serviceLinks, hosted: serviceHost })
   // The connection that asked closed: the services abort what it asked, wherever they run.
   backend.onConnectionClosed = (connId) => { serviceLinks.closeConnection(connId); serviceHost.closeConnection(connId) }
   // Session search (services/search.ts): in this process, or in its own (services/searchProcess.ts),
@@ -2229,8 +2229,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const deviceHookCalls = createDeviceHookCalls({ ready: cableWatchingLocal, devices: () => ports.devices ?? undefined, newId: randomUUID })
   const { server: hookServer, port: hookPort, localSocket } = await startHookServer(daemonPort(), {
     // The routes services answer (core/api.ts `SERVICE_HTTP_ROUTES`): the Wi-Fi device's, its service's and the machine
-    // add-ons', and the account's, the gateway's (the desk, the usage reports, the Store's ratings and reviews, …).
-    onServiceRoute: (path, request, localOk) => serviceRoutes.answer(path, request, localOk),
+    // add-ons', and the account's and the keys', the gateway's (the desk, the usage reports, the Store's ratings and
+    // reviews, the phone's sign-in code, `harness pair`, `group`, `devices`, …).
+    onServiceRoute: (path, request, localOk, socket) => serviceRoutes.answer(path, request, localOk, socket),
     resolveHookAgent: engineHooks.resolveHookAgent,
     hookViaSharedProcess: engineHooks.hookViaSharedProcess,
     hookAdmissionBlocked: id => launchCancelled(id),
@@ -2248,27 +2249,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     onInbox: deviceHookCalls.onInbox,
     onPromptHook: turnHooks.onPromptHook,
     stopHookDelayMs: Number(harnessd.HARNESSD_TEST_STOP_HOOK_DELAY_MS) || 0,
-    // `harness pair`, `unpair`, `remote-password`, `link connect`, `group` and `devices`: the keys are the
-    // gateway's, and so are these answers (gateway/start.ts).
-    onPair: (code) => gatewayOps.pair(code),
-    onListPairs: () => gatewayOps.listPairs(),
-    onRevoke: (id) => gatewayOps.revoke(id),
-    onRevokeAll: () => gatewayOps.revokeAll(),
-    onSetRemotePassword: (password) => gatewayOps.setRemotePassword(password),
-    onClearRemotePassword: () => gatewayOps.clearRemotePassword(),
-    onRemotePasswordStatus: () => gatewayOps.remotePasswordStatus(),
-    onTrustLinkedPeer: (peer) => gatewayOps.trustLinkedPeer(peer),
-    onGroupList: () => gatewayOps.groupList(),
-    onGroupSync: () => gatewayOps.groupSync(),
-    onGroupRemove: (selector) => gatewayOps.groupRemove(selector),
-    onDevicesList: () => gatewayOps.devicesList(),
-    onDevicesRemove: (pub) => gatewayOps.devicesRemove(pub),
-    onDevicesHistory: () => gatewayOps.devicesHistory(),
-    onDevicesDismiss: (body) => gatewayOps.devicesDismiss(body),
-    onDevicesRebaseline: (confirm, head) => gatewayOps.devicesRebaseline(confirm, head),
     onStatus: async () => statusBody(await gatewayOps.status()),
     onMachinesList: () => gatewayOps.machines(true),
-    onAuthHandoff: () => proxyBackend('POST', '/api/auth/handoff', {}),
     ...daemonStopRoute({ askMaster: () => coreLink.stopAll(), stopHere: () => daemonBoot.stopHere('harness stop') }),
     // Signed out there is nothing shared WITH this computer and nobody to ask: a share is made on the
     // account. Answered as an empty list rather than proxied into the backend's 401, which is the one
@@ -2336,6 +2318,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const unrouted = (reason: string): RouteAnswer => ({ agentId: '', machineId: '', name: '', confidence: 0, reason, candidates: [], weighed: 0, machines: 0, via: '' })
   const DEVICES_OFF = 'the devices service is unavailable'
 
+  // ⌘K from the owner's app away from this desk (lib/ownerCommands.ts): the fleet's, beside the dial in the devices, sent
+  // through its router and NOT straight into backend.onMessage, which would look for a remote agent in this registry.
+  backend.ownerCommands.onRouteTask = async (text) => ports.devices ? ports.devices.routeTask(text) : unrouted(DEVICES_OFF)
+  backend.ownerCommands.onRouteSend = async (agentId, text) => ports.devices ? ports.devices.routeSend(agentId, text) : { ok: false, machine: '', reason: DEVICES_OFF }
   const localWsServer = attachLocalWsServer(hookServer, {
     localSocketServer: localSocket?.server ?? null,
     // Over TCP the window, the CLI or a tool shows this user's 0600 credential (lib/localCredential.ts).
@@ -2403,10 +2389,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       openPaneAgents = next
       if (changed) console.log(`[cable] window tiles: ${next.size ? [...next].map(sid).join(' ') : '(none)'}`)
     },
-    // ⌘K in the window: a typed task, and which agent it belongs to, on any of the owner's machines. The
-    // fleet's to answer, beside the dial in the devices (services/fleet.ts routeTask), so it answers with
-    // the dial absent or off.
-    onRouteTask: backend.ownerCommands.onRouteTask = async (text) => ports.devices ? ports.devices.routeTask(text) : unrouted(DEVICES_OFF),
+    // A window's frames a service answers (core/api.ts `SERVICE_WS_FRAMES`): ⌘K's pick and its send, the fleet's beside the
+    // dial in the devices (services/fleet.ts), and its answer to a spoken task.
+    serviceFrames: serviceRoutes.frames,
     // A window that connects after the dial did has missed the `dial_status` that announced it: the last one
     // the devices sent, kept here.
     dialStatus: () => lastDialStatus,
@@ -2420,12 +2405,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
      */
     onDialSettings: (id, patch) => ports.devices?.settings(id, patch),
     openQuestions: () => [...openQuestions.values()],
-    // Committed. Sent through the fleet's router — the dial's own dispatch — and NOT straight into
-    // backend.onMessage: that resolves the id against THIS computer's registry, so a remote agent would land
-    // as "This harness is no longer available", an error about an agent alive on another machine.
-    onRouteSend: backend.ownerCommands.onRouteSend = async (agentId, text) =>
-      ports.devices ? ports.devices.routeSend(agentId, text) : { ok: false, machine: '', reason: DEVICES_OFF },
-    onVoiceRouteReply: (voiceId, reply) => ports.devices?.voiceReply(voiceId, reply),
     machineId: backend.machineId,
     backend,
     relayPool: gateway.windowRelay,
