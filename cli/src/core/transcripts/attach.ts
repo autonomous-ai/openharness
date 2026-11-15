@@ -138,8 +138,12 @@ export function createAttach({
       retries.timer = undefined
       // Only for the binding whose attach left no tail (`current`: its lifetime and its pane identity, which names
       // the conversation and its transcript), and only while nothing tails it: a hook's attach, a new conversation
-      // or a forgotten session got there first.
-      if (!current() || watcher.tails(sessionId, transcriptPath)) return
+      // or a forgotten session got there first. The count was that binding's and goes with it: kept, the next
+      // binding's first superseded attach waited two seconds, or none at all after a fifth.
+      if (!current() || watcher.tails(sessionId, transcriptPath)) {
+        supersededRetries.delete(sessionId)
+        return
+      }
       void attachSession(resolve(session.agentId)!, false, replayCursorFromStart, replayFromStart).catch(error => console.error(
         `[agent] ${sid(session.agentId)} attach retry failed: ${error instanceof Error ? error.message : error}`))
     }, 1_000 * 2 ** retries.attempts++)
