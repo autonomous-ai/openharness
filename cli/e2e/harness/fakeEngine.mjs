@@ -121,6 +121,9 @@ const heldHookUrl = new URL('./heldHook.mjs', import.meta.url).href
  */
 async function codexWrapper(config) {
   const child = spawn(process.execPath, [fileURLToPath(import.meta.url), ...process.argv.slice(2)], {
+    // Named `codex` from its start, as the native binary npm's launcher runs is: the daemon reads the rollout a
+    // launcher's child holds open only from a child of the engine's own name (processTable.ts `engineChildren`).
+    argv0: 'codex',
     stdio: 'inherit',
     env: { ...process.env, [CODEX_NATIVE]: JSON.stringify(config) },
   })

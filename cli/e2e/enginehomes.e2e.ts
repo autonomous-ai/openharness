@@ -115,7 +115,6 @@ describe('the person\'s engines keeping their data elsewhere', () => {
 
   it.each(['claude', 'codex'] as const)('%s model picker follows the login shell home', async engine => {
     const d = await IsolatedDaemon.create(); daemon = d
-    d.env.NODE_OPTIONS = `--import=${pathToFileURL(join(CLI_ROOT, 'e2e/harness/hiddenProcessEnv.mjs')).href}`
     onTestFailed(() => console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`))
     const home = join(d.root, `${engine}-models`)
     mkdirSync(home)
@@ -169,9 +168,8 @@ describe('the person\'s engines keeping their data elsewhere', () => {
     await until('the moved home to receive hooks', () => existsSync(join(home, 'hooks.json')), 30_000)
   })
 
-  it.each(['activity', 'resources', 'close'] as const)('a moved shared Codex server supplies %s when process environment discovery is unavailable', async operation => {
+  it.each(['activity', 'resources', 'close'] as const)('a moved shared Codex server supplies %s', async operation => {
     const d = await IsolatedDaemon.create(); daemon = d
-    d.env.NODE_OPTIONS = `--import=${pathToFileURL(join(CLI_ROOT, 'e2e/harness/hiddenProcessEnv.mjs')).href}`
     onTestFailed(() => console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`))
     const home = join(d.root, 'codex-shared')
     mkdirSync(home)
@@ -216,7 +214,6 @@ describe('the person\'s engines keeping their data elsewhere', () => {
 
   it('a moved Codex home supplies the thread name shown on its agent', async () => {
     const d = await IsolatedDaemon.create(); daemon = d
-    d.env.NODE_OPTIONS = `--import=${pathToFileURL(join(CLI_ROOT, 'e2e/harness/hiddenProcessEnv.mjs')).href}`
     onTestFailed(() => console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`))
     const home = join(d.root, 'codex-names')
     mkdirSync(home)
@@ -261,7 +258,7 @@ describe('the person\'s engines keeping their data elsewhere', () => {
     const child = readdirSync(folder).find(file => file.endsWith('.jsonl') && !file.includes(agent.sessionId))!
     // Reproduce the on-disk damage an older hook left; current hooks already reject child bindings.
     parent.transcriptPath = join(folder, child)
-    parent.codexHome = null // A legacy row from before successful process-environment discovery.
+    parent.codexHome = null // A legacy row with no home.
     writeFileSync(registryFile, JSON.stringify(saved), { mode: 0o600 })
     await d.start()
     expect(d.log()).toContain(`[registry] repaired Codex parent ${agent.sessionId.slice(0, 8)}`)
@@ -478,6 +475,69 @@ describe('the person\'s engines keeping their data elsewhere', () => {
     }, 45_000, 500)
     expect(back.sessionId).toBe(sessionId)
     expect(back.status).toBe('active')
+    client.close()
+  }, 300_000)
+
+  // A home named on the command line alone (`CODEX_HOME=<profile> codex`), which no shell profile names: the daemon
+  // learns it from what the engine says of itself, its hook's header or the rollout its process holds open.
+  it('a Codex typed in with a CODEX_HOME of its own binds from its hook and keeps that home', async () => {
+    const d = await IsolatedDaemon.create(); daemon = d
+    onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`) })
+    const profile = join(d.root, 'codex-typed-hooked')
+    mkdirSync(profile, { recursive: true })
+    await d.start()
+    const client = await LocalClient.connect(d)
+    // An agent on the profile puts Harness's hooks there; once it is gone, its conversation goes with it, so the
+    // profile holds only the one typed in.
+    const first = await client.request('agent_create', { engine: 'codex', cwd: d.projectsDir, codexHome: profile, bypassPermission: true }, 90_000)
+    expect(first.error, JSON.stringify(first)).toBeUndefined()
+    await until('the profile agent to bind', async () => (await row(client, first.agent.id))?.sessionId, 45_000)
+    expect(existsSync(join(profile, 'hooks.json'))).toBe(true)
+    const deleted = await client.request('agent_delete', { agentId: first.agent.id }, 60_000)
+    expect(deleted.error, JSON.stringify(deleted)).toBeUndefined()
+    await until('the profile agent to stop', async () => (await row(client, first.agent.id))?.status === 'stopped' || null, 45_000, 500)
+    rmSync(join(profile, 'sessions'), { recursive: true, force: true })
+    const opened = await client.request('agent_create', { engine: 'terminal', cwd: d.projectsDir }, 60_000)
+    expect(opened.error, JSON.stringify(opened)).toBeUndefined()
+    const tile = await until('the terminal tile to be up', async () => {
+      const now = await row(client, opened.agent.id)
+      return now?.status === 'active' && now.tmuxPane ? now : null
+    }, 60_000, 250)
+    await type(d, tile.tmuxPane, `CODEX_HOME=${profile} codex`)
+    const sessionId = await until('the conversation to be written in the profile', async () => conversationIn('codex', profile), 30_000, 250)
+    const back = await until('the tile to bind from its hook', async () => {
+      const now = await row(client, tile.id)
+      return now?.engine === 'codex' && now.sessionId ? now : null
+    }, 45_000, 500)
+    expect(back.sessionId).toBe(sessionId)
+    expect(back.codexHome).toBe(profile)
+    expect(d.log()).toContain(`[hooks] ${sessionId.slice(0, 8)} `)
+    client.close()
+  }, 300_000)
+
+  // npm's Codex: the wrapper the pane started, and the child that holds the rollout (fakeEngine.mjs `codexWrapper`).
+  it('a Codex typed in under a CODEX_HOME with no hook in it binds from the rollout it holds open', async () => {
+    const d = await IsolatedDaemon.create({ env: { HOOK_INSTALL_ENGINES: 'claude' } }); daemon = d
+    onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`) })
+    const profile = join(d.root, 'codex-typed-unhooked')
+    mkdirSync(profile, { recursive: true })
+    await d.start()
+    const client = await LocalClient.connect(d)
+    const opened = await client.request('agent_create', { engine: 'terminal', cwd: d.projectsDir }, 60_000)
+    expect(opened.error, JSON.stringify(opened)).toBeUndefined()
+    const tile = await until('the terminal tile to be up', async () => {
+      const now = await row(client, opened.agent.id)
+      return now?.status === 'active' && now.tmuxPane ? now : null
+    }, 60_000, 250)
+    await type(d, tile.tmuxPane, `CODEX_HOME=${profile} codex`)
+    const sessionId = await until('the conversation to be written in the profile', async () => conversationIn('codex', profile), 30_000, 250)
+    const back = await until('the tile to bind from the rollout its process holds', async () => {
+      const now = await row(client, tile.id)
+      return now?.engine === 'codex' && now.sessionId ? now : null
+    }, 45_000, 500)
+    expect(back.sessionId).toBe(sessionId)
+    expect(back.codexHome).toBe(profile)
+    expect(d.log()).not.toContain(`[hooks] ${sessionId.slice(0, 8)} `)
     client.close()
   }, 300_000)
 

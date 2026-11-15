@@ -248,7 +248,7 @@ it('keeps the hook of a home set to the TUI', async () => {
   expect(readFileSync(r.config, 'utf8')).toBe(installed)
 })
 
-it('follows a Hermes that only has a HOME of its own, and starts it again without naming that home', async () => {
+it('follows a Hermes that only has a HOME of its own, and starts it again in that home', async () => {
   const r = await rig()
   const folder = join(r.d.root, 'agents', 'a1')
   const own = join(folder, '.hermes')
@@ -261,22 +261,22 @@ it('follows a Hermes that only has a HOME of its own, and starts it again withou
   const a = await create(r, c, r.folder('p1'), own)
   expect(recorded(own, a.started.terminal!)).toBe(a.started.session)
   await boundTo(c, a.agentId, a.started.session)
-  await until('the home marked on the saved row', () => saved(r.d, a.agentId)?.hermesHomeDerived || null, 15_000)
-  expect(saved(r.d, a.agentId)?.hermesHome).toBe(own)
+  // In no sandbox, the store its process holds open is the home it really uses: it is not marked.
+  await until('the home on the saved row', () => saved(r.d, a.agentId)?.hermesHome === own || null, 15_000)
+  expect(saved(r.d, a.agentId)?.hermesHomeDerived).toBeUndefined()
   await logged(r.d, mark, `${REMOVED}${ownConfig}`)
   expect(readFileSync(ownConfig, 'utf8')).toBe(PERSON)
 
-  // Started again, it is given what its first start was given, never the home Harness worked out.
+  // Started again, it is handed that home as HERMES_HOME, as a `HERMES_HOME=/x hermes` typed by hand would be.
   const restart = async (via: LocalClient) => {
     const again = await startedAgain(own, async () =>
       expect((await via.request('agent_restart', { agentId: a.agentId }, 90_000)).error).toBeUndefined())
-    expect(again.given).toBe(a.started.given)
-    expect(again.given).not.toBe(own)
+    expect(again.given).toBe(own)
     await boundTo(via, a.agentId, again.session)
-    expect(saved(r.d, a.agentId)?.hermesHomeDerived).toBe(true)
+    expect(saved(r.d, a.agentId)?.hermesHomeDerived).toBeUndefined()
   }
   await restart(c)
-  // The mark was saved: a daemon started again does not name the home either.
+  // The home was saved: a daemon started again hands it back too.
   await r.d.restart()
   const after = await r.connect()
   await until('the agent back', async () => (await row(after, a.agentId))?.sessionId || null, 30_000, 250)
@@ -333,8 +333,9 @@ describe.runIf(process.platform === 'linux' && unshareWorks())('in a sandbox', (
     await boundTo(c, a.agentId, again.session)
   })
 
-  it('holds a Hermes whose home is on a filesystem of the sandbox\'s own, and leaves its pane working', async () => {
+  it('leaves alone a Hermes whose home it cannot know, and its pane working', async () => {
     const r = await rig()
+    // Only its home is on the sandbox's own filesystem: no path the daemon can see names its store.
     r.hermes({ home: join(r.d.root, 'agents', 'a1'), sandbox: 'unseen' })
     await r.d.start()
     const c = await r.connect()
@@ -343,12 +344,12 @@ describe.runIf(process.platform === 'linux' && unshareWorks())('in a sandbox', (
     expect(created.error, JSON.stringify(created)).toBeUndefined()
     const agentId: string = created.agent.id
     const pane = String(created.agent.terminal?.runtimes?.[0]?.paneId ?? created.agent.tmuxPane)
-    const hold = 'Hermes runs in a sandbox whose folder Harness cannot see'
-    await until('the hold', async () => (await row(c, agentId))?.identityHold === hold || null, 30_000, 250)
-    expect((await row(c, agentId))?.sessionId).toBeFalsy()
-    await logged(r.d, mark, `binding held · ${hold}`)
-    expect(r.d.log().slice(mark).split(`binding held · ${hold}`)).toHaveLength(2)
-    expect(await r.d.capture(pane)).toContain('fake-hermes-ready')
+    await until('the agent up', async () => (await row(c, agentId))?.status === 'active' || null, 30_000, 250)
+    await until('the fake Hermes', async () => (await r.d.capture(pane)).includes('fake-hermes-ready') || null, 30_000, 100)
+    const agent = await row(c, agentId)
+    expect(agent?.identityHold).toBeFalsy()
+    expect(agent?.sessionId).toBeFalsy()
+    expect(r.d.log().slice(mark)).not.toContain('binding held')
   })
 })
 
