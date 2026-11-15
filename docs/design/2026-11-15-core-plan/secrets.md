@@ -76,6 +76,40 @@ Rollback: an older build reads and writes `connections.json` as before and never
 the store's next read rewrites the list from the store. Until then a launch may read a list an older build left
 stale; the note is only guidance, and `harness api list` reads the store itself.
 
+### Step 2 continuation Design (2026-11-15)
+
+Continue on `codex/core-secrets-continue`, from `c6d421b1d2` plus current main. Keep the September key-store
+format and the metadata-only launch reader. No feature state, rule, service port or file is added to core.
+
+- Growth: the authoritative store remains limited to 100 connections / 2 MiB; its derivative list to 1 MiB.
+  Removing a connection removes its metadata on the same call. Repair replaces the list atomically and cleans only
+  its own temporary file. Removing the legacy store also clears a stale list at the next store read.
+- Concurrency: each document is published by atomic rename; there is no cross-file transaction or new lock.
+  The key store remains authoritative. A concurrent legacy writer or interrupted list publication can leave guidance
+  stale until the next successful store read. This does not change key-store writers' existing concurrency contract.
+- Read cost: launches read the bounded list only; a missing-list fallback checks the legacy file's stat, never its
+  contents. Repair checks a regular bounded file before reading it; directories, FIFOs, links and oversized lists
+  cannot turn the new repair path into an unbounded read. Unchanged lists are not rewritten.
+- Scale: 10x stays within the existing 100-connection bound for accounts with at most ten connections; the explicit
+  capacity error warns first. No new telemetry or cardinality is introduced; filesystem errors stay content-free.
+- Compatibility: backend N/A, machine-local files only; wire contracts and the old key store are unchanged.
+  The existing missing-list fallback remains until 2026-12-15. Last-30-day clients continue through existing APIs.
+- Migration and rollback: only a successfully validated key store can produce metadata. Malformed or unsafe key
+  storage fails without changing it or the list. Existing owner-controlled files use the existing private-state
+  hardening rules; group/world writable storage is refused. A damaged derivative is safely replaced from the store.
+  Rollback reads/writes the unchanged key document; upgrading again repairs old-build additions, edits and removals.
+- Audience: local OS user, as before; no server data or access changes. POSIX ownership and writable-mode checks
+  use existing private-state helpers. Windows keeps its existing profile/configured-data-root boundary.
+- Identity: all reads/writes run as the existing local owner; no other person's login or process is accessed.
+- Failure: store errors remain `API_CONNECTIONS_FAILED` with a content-free detail. A derivative-write failure keeps
+  the committed key and emits the existing `[apis]` warning; the next store read repairs it. No silent key loss.
+- Platforms: macOS, Linux and Windows CLI. Local evidence is macOS; Linux CI and native Windows remain root's gates.
+
+Selected validation: migration/rollback/security regressions first (red then green), affected API/engine-account and
+launch-golden unit files, architecture boundary tests, typecheck, and the existing Store launch end-to-end test.
+The full CLI unit suite is required from automatic PR CI. No core/service source is changed by this continuation.
+All local test homes are isolated. Validation waits for the performance marker and owns the shared validation lock.
+
 ## Step 3, security 7: keys the core holds without need
 
 Not started: a grid's API key on the registry row and in each stopped agent's file (`lib/registry.ts`,
