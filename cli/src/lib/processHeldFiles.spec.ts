@@ -24,7 +24,8 @@ vi.mock('node:fs/promises', async (original) => {
     : value]))
 })
 
-// The case's clock, the view each process is given, what the fake lsof prints for a pid, and each run of it.
+// The case's clock, the view each process is given, what the fake lsof prints for a pid, and each pid it was run for.
+// One run for several pids prints each one's section in turn, and fails when any of them does.
 const mocks = vi.hoisted(() => {
   const state = {
     t: 0,
@@ -33,11 +34,12 @@ const mocks = vi.hoisted(() => {
     ran: [] as Array<{ pid: string; at: number }>,
   }
   const execFile = vi.fn((_file: string, args: string[], _options: unknown, done: (error: Error | null, stdout: string, stderr: string) => void) => {
-    const pid = args[args.indexOf('-p') + 1]!
-    state.ran.push({ pid, at: state.t })
-    const output = state.lsof.get(pid) ?? `p${pid}\nfcwd\nn/work\n`
-    if (output instanceof Error) done(output, '', '')
-    else done(null, output, '')
+    const pids = args[args.indexOf('-p') + 1]!.split(',')
+    state.ran.push(...pids.map((pid) => ({ pid, at: state.t })))
+    const outputs = pids.map((pid) => state.lsof.get(pid) ?? `p${pid}\nfcwd\nn/work\n`)
+    const error = outputs.find((output) => output instanceof Error)
+    if (error) done(error, '', '')
+    else done(null, outputs.join(''), '')
   })
   return { state, execFile, processView: vi.fn(async () => state.view()) }
 })
@@ -328,10 +330,30 @@ it('refuses a process with more than 4,096 descriptors, and keeps at most 256 pr
   expect(await linux(nth(0), STORE)).toBeUndefined()
 })
 
-it('lsofPaths keeps the n lines that are paths', async () => {
-  expect(held.lsofPaths('p1\nf3\nn/a/b\nf4\nnpipe\nf5\nn/c d\n')).toEqual(['/a/b', '/c d'])
-  expect(held.lsofPaths('p1\nf3\nn/a/b')).toBeNull()
-  // The bound is on descriptors, as on Linux, and each one has an `f` line and an `n` line.
-  expect(held.lsofPaths(`p1\n${'f3\nn/a\n'.repeat(4_096)}`)).toHaveLength(4_096)
-  expect(held.lsofPaths(`p1\n${'f3\nn/a\n'.repeat(4_097)}`)).toBeNull()
+it('lists a launcher and its children with one lsof, and answers nothing when it leaves one out', async () => {
+  mocks.state.lsof.set('4243', `p4243\nf7\nn${file('c/sessions/rollout-a.jsonl')}\n`)
+  expect(await mac(id(4242), ROLLOUT, () => [id(4243), id(4244)])).toBe(disk('c'))
+  expect(mocks.execFile).toHaveBeenCalledTimes(1)
+  expect(mocks.execFile).toHaveBeenCalledWith('lsof', ['-n', '-P', '-w', '-p', '4242,4243,4244', '-Fn'],
+    expect.objectContaining({ timeout: 2_000 }), expect.any(Function))
+  // It exits 0 with no section for one of them: that one could not be listed.
+  mocks.state.lsof.set('4244', '')
+  expect(await mac(id(4242, 'one left out'), ROLLOUT, () => [id(4243), id(4244)])).toBeUndefined()
+  // It fails for one of them: none is listed.
+  mocks.state.lsof.set('4244', Object.assign(new Error('Command failed: lsof'), { code: 1 }))
+  expect(await mac(id(4242, 'one failed'), ROLLOUT, () => [id(4243), id(4244)])).toBeUndefined()
+})
+
+it('lsofPaths keeps the n lines that are paths, by process', async () => {
+  expect(held.lsofPaths('p1\nf3\nn/a/b\nf4\nnpipe\np2\nf5\nn/c d\n', [1, 2])).toEqual(new Map([[1, ['/a/b']], [2, ['/c d']]]))
+  expect(held.lsofPaths('p1\nf3\nn/a/b', [1])).toBeNull()
+  // Each process asked of has a section of its own, and no other process has one.
+  expect(held.lsofPaths('p1\nf3\nn/a/b\n', [1, 2])).toBeNull()
+  expect(held.lsofPaths('p1\np2\n', [1])).toBeNull()
+  expect(held.lsofPaths('p1\np1\n', [1])).toBeNull()
+  expect(held.lsofPaths('f3\nn/a/b\np1\n', [1])).toBeNull()
+  // The bound is on one process's descriptors, as on Linux, and each one has an `f` line and an `n` line.
+  expect(held.lsofPaths(`p1\n${'f3\nn/a\n'.repeat(4_096)}`, [1])?.get(1)).toHaveLength(4_096)
+  expect(held.lsofPaths(`p1\n${'f3\nn/a\n'.repeat(4_097)}`, [1])).toBeNull()
+  expect(held.lsofPaths(`p1\n${'f3\nn/a\n'.repeat(4_096)}p2\n${'f3\nn/a\n'.repeat(4_096)}`, [1, 2])?.get(2)).toHaveLength(4_096)
 })
