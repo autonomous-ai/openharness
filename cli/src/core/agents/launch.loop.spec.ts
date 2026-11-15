@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../../lib/registry.js'
-import { appendCodexHistory, codexSessionMeta } from '../../testing/codexRollout.js'
+import { codexSessionMeta } from '../../testing/codexRollout.js'
 import { createLaunchHelpers } from './launch.js'
 import { createResumeRepairs } from '../engines/resumeRepairs.js'
 import { startResumeRepairWorker } from '../../testing/resumeRepairProcess.js'
@@ -50,9 +50,13 @@ it('a Codex resume repairs a 200 MB rollout without ever holding the core loop f
   mkdirSync(folder, { recursive: true })
   const file = join(folder, `rollout-2026-11-15T08-00-00-${SESSION}.jsonl`)
   writeFileSync(file, codexSessionMeta(SESSION))
-  appendCodexHistory(file, 200 * 1024 ** 2)
   const setTail = vi.fn()
   worker = await startResumeRepairWorker(profile)
+  // Fixture allocation belongs to the engine's heap too: its GC must not be charged to the measured core loop.
+  const fixture = await worker.call('fixture', 'fixture_append_codex_history', { file, bytes: 200 * 1024 ** 2 })
+  expect(fixture.pid).toBe(worker.child.pid)
+  expect(fixture.pid).not.toBe(process.pid)
+  expect(statSync(file).size).toBeGreaterThanOrEqual(200 * 1024 ** 2)
   const call = vi.fn(worker.call)
   const repairs = createResumeRepairs({ call, handles: () => true, hold: async () => null, setTail })
   repairs.connected('engine-codex')

@@ -91,7 +91,7 @@ describe.skipIf(!zsh)('agent startup in a real zsh login shell', () => {
 describe.skipIf(!zsh || process.env.RUN_REAL_TMUX_DISCOVERY !== '1' || !resolveBinaryOnPath('tmux'))('startup prompts in an isolated real tmux terminal', () => {
   it.each(engines)('%s starts and accepts input even when the normal shell would wait for an update', async engine => {
     const f = fixture()
-    server = await isolatedTmux()
+    server = await isolatedTmux({ ZDOTDIR: f.dir, DISABLE_AUTO_UPDATE: 'false' })
     const pane = await server.run('new-session', '-d', '-P', '-F', '#{pane_id}', '-s', 'startup', zsh!, '-lic', 'echo SHOULD_NOT_RUN')
     const screen = () => server!.run('capture-pane', '-p', '-t', pane)
     const waitFor = async (text: string) => {
