@@ -110,12 +110,27 @@ launch-golden unit files, architecture boundary tests, typecheck, and the existi
 The full CLI unit suite is required from automatic PR CI. No core/service source is changed by this continuation.
 All local test homes are isolated. Validation waits for the performance marker and owns the shared validation lock.
 
+Continuation implementation:
+- Existing private-state readers enforce ownership and writable-mode rules before any key bytes are read, and
+  harden safe legacy modes. Dangling links and non-files are errors, not missing stores.
+- The missing-list fallback checks only the key file's stat. Launches still never open that file. Linked metadata
+  is rejected, including a hard-link alias, and damaged derivatives are repaired only from a validated key store.
+- Repair skips reads of oversized/non-regular lists, preserves the authoritative store on publication failure,
+  and clears stale metadata after a legacy store is removed. Unchanged metadata is not rewritten.
+- `apiConnectionsMigration.spec.ts` covers old-format migration, old-build edits/additions/removals, malformed stores,
+  unsafe entries and permissions, broken metadata, publication failure/recovery, and simulated Windows behavior.
+
+Validation at handoff: `git diff --check` passed. No compiler, build or test ran: the performance marker existed,
+but Browser held the shared validation lock through the final attempt. Red/green evidence remains pending, not
+passing. `/tmp/core-secrets-validate.py` preserves/restores the pre-fix source for the red run, then runs the selected
+checks and Store launch integration after acquiring that lock. The handoff lists remaining platform and performance
+checks. Root must obtain this evidence before publishing the continuation.
+
 ## Step 3, security 7: keys the core holds without need
 
-Not started: a grid's API key on the registry row and in each stopped agent's file (`lib/registry.ts`,
-`lib/stoppedAgents.ts`); the whole environment of up to 256 agent processes cached (`lib/processEnv.ts`); an
-OpenRouter key cached and never read (`lib/gatewayRuntime.ts`); a connected service's secret through the core in the
-clear (`lib/connectors/vaultOps.ts`).
+Still open: a grid's API key on the registry row and in each stopped agent's file (`lib/registry.ts`,
+`lib/stoppedAgents.ts`), and a connected service's secret through the core in the clear (`lib/connectors/vaultOps.ts`).
+Main already removed the process-environment cache and unused OpenRouter key in #4327; the continuation preserves it.
 
 ## Step 4, security 6: what models, the Store and shared machines may set
 

@@ -1,12 +1,13 @@
 /** Machine-local API connections. Only child tools receive credentials; model/subscription
  * selection and the daemon's own environment are never changed by saving a key. */
-import { chmodSync, closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 
-import { API_CONNECTIONS_DIR, API_LIST_FILE, UNREADABLE, baseUrl, id, metadata, ApiConnectionError,
+import { API_CONNECTIONS_DIR, API_LIST_FILE, API_LIST_MAX_BYTES, UNREADABLE, baseUrl, id, metadata, ApiConnectionError,
   type ApiConnection } from './apiConnectionMetadata.js'
+import { readPrivateStateFile, secureStateDirectory } from './secureState.js'
 export { ApiConnectionError, type ApiConnection } from './apiConnectionMetadata.js'
 
 const stored = metadata.extend({ apiKey: z.string().trim().min(1).max(8192).regex(/^[^\s\x00-\x1f\x7f]+$/) })
@@ -21,12 +22,14 @@ export function readApiConnectionStore(dataDir: string): z.infer<typeof storeSch
   const dir = join(dataDir, API_CONNECTIONS_DIR)
   const file = join(dir, 'connections.json')
   try {
-    if (!existsSync(dir)) return { version: 1, connections: [] }
-    if (!lstatSync(dir).isDirectory() || lstatSync(dir).isSymbolicLink()) throw new Error()
-    if (!existsSync(file)) return { version: 1, connections: [] }
-    const stat = lstatSync(file)
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 2 * 1024 * 1024) throw new Error()
-    const parsed = storeSchema.parse(JSON.parse(readFileSync(file, 'utf8')))
+    const directory = lstatSync(dir, { throwIfNoEntry: false })
+    if (!directory) return { version: 1, connections: [] }
+    if (!directory.isDirectory() || directory.isSymbolicLink()) throw new Error()
+    secureStateDirectory(dir, false)
+    const stat = lstatSync(file, { throwIfNoEntry: false })
+    if (!stat) return { version: 1, connections: [] }
+    if (!stat.isFile() || stat.nlink !== 1 || stat.size > 2 * 1024 * 1024) throw new Error()
+    const parsed = storeSchema.parse(JSON.parse(readPrivateStateFile(file, 2 * 1024 * 1024)))
     if (new Set(parsed.connections.map(row => row.id)).size !== parsed.connections.length) throw new Error()
     return parsed
   } catch { throw new ApiConnectionError(UNREADABLE) }
@@ -67,7 +70,7 @@ export class ApiConnections {
    *  and a store from before the list has none until it is first read here (models reads it as it starts). */
   private read(): StoredConnection[] {
     const connections = readApiConnectionStore(this.dataDir).connections
-    if (existsSync(this.file)) this.keepList(connections)
+    if (existsSync(this.dir)) this.keepList(connections)
     return connections
   }
 
@@ -82,7 +85,7 @@ export class ApiConnections {
       if (Buffer.byteLength(contents) > 2 * 1024 * 1024) throw new Error('API store is full')
       mkdirSync(this.dir, { recursive: true, mode: 0o700 })
       if (lstatSync(this.dir).isSymbolicLink()) throw new Error()
-      chmodSync(this.dir, 0o700)
+      secureStateDirectory(this.dir, false)
       this.replace('connections', this.file, contents)
     } catch { message('This API could not be saved. Try again.') }
     this.keepList(connections)
@@ -114,7 +117,13 @@ export class ApiConnections {
     // Their metadata only: `metadata` drops the key (./apiConnectionMetadata.ts reads it back, strictly).
     const contents = JSON.stringify({ version: 1, connections: connections.map(publicConnection) })
     try {
-      if (existsSync(this.listFile) && !lstatSync(this.listFile).isSymbolicLink() && readFileSync(this.listFile, 'utf8') === contents) return
+      try {
+        const stat = lstatSync(this.listFile, { throwIfNoEntry: false })
+        // Never open an unbounded or non-regular derivative (a FIFO would hang every API read). A link may alias
+        // the key store; replace the directory entry instead, without reading or changing its target.
+        if (stat?.isFile() && stat.nlink === 1 && stat.size <= API_LIST_MAX_BYTES
+          && readPrivateStateFile(this.listFile, API_LIST_MAX_BYTES) === contents) return
+      } catch { /* A damaged derivative is replaced from the already validated key store. */ }
       this.replace('list', this.listFile, contents)
     } catch { console.warn('[apis] The list of saved APIs a launch reads could not be written; the next read of them writes it.') }
   }
