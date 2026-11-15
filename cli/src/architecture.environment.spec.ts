@@ -92,6 +92,11 @@ it.each([
   "run('ps', ['-ww', 'e', '-p', String(pid)])",
   'sysctl([CTL_KERN, KERN_PROCARGS2, pid])',
   "const name = 'kern.procargs2'",
+  "run('tmux', ['show-environment', '-g'])",
+  "execFile('tmux', ['showenv', '-g'], done)",
+  "run('tmux', ['show-env'])",
+  "const line = 'tmux show-e -g | grep KEY'",
+  'const script = `tmux -L ${socket} show-environment -t ${session}`',
 ])('finds %s', (code) => expect(environmentReads(code)).not.toEqual([]))
 
 it.each([
@@ -112,6 +117,10 @@ it.each([
   "readFileSync(`/proc/${pid}/${field}`, 'utf8')",
   "readlink(join(proc, String(pid), 'fd', name))",
   "run('lsof', ['-n', '-P', '-w', '-p', String(pid), '-Fn'])",
+  '// never runs tmux show-environment',
+  "run('tmux', ['set-environment', '-g', '-u', name])",
+  "run('tmux', ['show-options', '-g'])",
+  "const style = 'show-error'",
 ])('passes %s', (code) => expect(environmentReads(code)).toEqual([]))
 
 it('no file of the daemon or its hook reads another process\'s environment', () => {
