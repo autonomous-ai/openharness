@@ -15,10 +15,12 @@ export interface RecordNameOptions {
 /**
  * The name the person gave a Claude Code session, from the session's own process record, `<sessions>/<pid>.json`,
  * which the session writes itself. This is the one read the dial's naming allows of it (decision 5 of
- * docs/specs/2026-11-15-dial-session-name.md): `name` and `nameSource`, nothing else. Only a `user` name is
- * shown: a `derived` one can come from what was first asked. Never rejects, logs nothing and keeps nothing.
+ * docs/specs/2026-11-15-dial-session-name.md): `name`, `nameSource` and `sessionId`, nothing else. Only a `user`
+ * name is shown: a `derived` one can come from what was first asked. Never rejects, logs nothing and keeps nothing.
  */
-export async function readRecordName(owner: Pick<SessionOwner, 'pid' | 'record'>, opts: RecordNameOptions): Promise<string | undefined> {
+export async function readRecordName(
+  owner: Pick<SessionOwner, 'pid' | 'record'> & { sessionId: string }, opts: RecordNameOptions,
+): Promise<string | undefined> {
   // The very string recordOwners (engines/kit/adoption.ts) builds for this pid: any other path is not this
   // session's own record, so it is never opened.
   if (!opts.roots.some((root) => owner.record === join(root, '..', 'sessions', `${owner.pid}.json`))) return undefined
@@ -45,6 +47,8 @@ export async function readRecordName(owner: Pick<SessionOwner, 'pid' | 'record'>
     return undefined
   }
   if (!row || typeof row !== 'object') return undefined
-  const { name, nameSource } = row as Record<string, unknown>
-  return nameSource === 'user' ? observedTitle(name) : undefined
+  const { name, nameSource, sessionId } = row as Record<string, unknown>
+  // The owner can be seconds old: a /clear or /resume since rewrote the record for another session (decision 6), as
+  // confirmOwner (engines/kit/adoption.ts) checks.
+  return nameSource === 'user' && sessionId === owner.sessionId ? observedTitle(name) : undefined
 }

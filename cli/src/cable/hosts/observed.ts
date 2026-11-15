@@ -90,7 +90,7 @@ export interface ObservedDeps {
   apps?(pids: readonly number[]): Promise<ReadonlyMap<number, string>>
   /** The name the person gave a Claude Code session, from its own process record (recordName.ts); one that rejects names
    *  nothing. Absent, the scan names by folder. */
-  recordName?(owner: Pick<SessionOwner, 'pid' | 'record'>): Promise<string | undefined>
+  recordName?(owner: Pick<SessionOwner, 'pid' | 'record'> & { sessionId: string }): Promise<string | undefined>
   /** The tty of a process in a tab app (tabs.ts readTty), rejecting when `ps` could not be read; absent (off macOS), no
    *  agent has a tab. */
   tty?(pid: number): Promise<string | undefined>
@@ -635,7 +635,8 @@ export class ObservedSource implements HostSource {
     for (const [sessionId, engine] of listing) {
       if (engine !== 'claude') continue
       try {
-        const name = await this.deps.recordName(owners.get(sessionId)!)
+        const { pid, record } = owners.get(sessionId)!
+        const name = await this.deps.recordName({ pid, record, sessionId })
         if (name) names.set(sessionId, name)
       } catch {
         // Named by its folder, as a session with no name is.
