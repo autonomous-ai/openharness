@@ -1,5 +1,6 @@
 /** Other-engine profiles, permissions, and terminal/Stop isolation through the published daemon boundary. */
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { execFile } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
@@ -56,16 +57,17 @@ fs.writeFileSync(file, JSON.stringify({ type: 'assistant', model: 'model-7', ses
 fs.writeFileSync(${JSON.stringify(join(d.root, 'cursor.json'))}, JSON.stringify({ pid: process.pid, file }));
 fs.writeFileSync(${JSON.stringify(join(d.root, 'keys.txt'))}, '');
 fs.writeFileSync(${JSON.stringify(join(d.root, 'choices.txt'))}, '');
-let asking = false;
+let asking = false, asks = 0, effort = 'High';
 process.stdout.write('\\x1b[?1049h');
-const idle = text => { process.stdout.write('\\x1b[2J\\x1b[H' + text + '\\nModel 7 High · 1%\\n'); };
+const idle = text => { process.stdout.write('\\x1b[2J\\x1b[H' + text + '\\nModel 7 ' + effort + ' · 1%\\n'); };
 process.stdin.setRawMode(true); process.stdin.setEncoding('utf8'); process.stdin.resume();
 process.stdin.on('data', data => { for (const key of data) {
  fs.appendFileSync(${JSON.stringify(join(d.root, 'keys.txt'))}, key);
  if (key === '\\x03') process.exit(0);
- if (key === 'q') { asking = true; process.stdout.write('\\x1b[2J\\x1b[H' + ${JSON.stringify(permission)} + '\\n'); }
+ if (key === 'q') { asking = true; const next = asks++ ? 'printf fixture ' + asks : 'printf fixture'; process.stdout.write('\\x1b[2J\\x1b[H' + ${JSON.stringify(permission)}.replace('printf fixture', next) + '\\n'); }
  else if (asking && (key === 'y' || key === 'n' || key === '\\t')) { asking = false; fs.appendFileSync(${JSON.stringify(join(d.root, 'choices.txt'))}, key); idle('fixture choice ' + key); }
  else if (key === 't') process.stdout.write('\\nfixture terminal input\\n');
+ else if (key === 'l' || key === 'h') { effort = key === 'l' ? 'Low' : 'High'; idle('fixture profile observed'); }
 } });
 idle('fixture-cursor-ready');
 `, { mode: 0o755 })
@@ -184,4 +186,54 @@ idle('fixture-cursor-ready');
     if (mode === 'inline') expect(worker(d)).toBeUndefined()
     await stop(d, c, id)
   }, 120_000)
+
+  // One identical fixture runs against the parent and candidate bundles, in a reserved quiet interval.
+  it.runIf(!!process.env.OTHER_RUNTIME_CONTROLS_PERF)('measures actual pane observations and approved question round trips', async () => {
+    const { d, c, id, pane } = await fresh()
+    const refusalAt = performance.now(); await viewOnly(c, id)
+    const refusalMs = performance.now() - refusalAt
+    await until('on-demand services finished startup', () =>
+      d.log().includes('[services] models connected') && d.log().includes('[services] gateway connected') || null, 20_000, 100)
+    const sample = () => new Promise<{ cpu: number; rssMiB: number }>((done, fail) => {
+      execFile('ps', ['-o', 'time=,rss=', '-p', String(d.corePid()!)], { timeout: 5000 }, (error, output) => {
+        if (error) { fail(error); return }
+        const [time, rss] = output.trim().split(/\s+/)
+        const cpu = time.split(':').reverse().reduce((sum, part, i) => sum + Number(part) * 60 ** i, 0)
+        const rssMiB = Number(rss) / 1024
+        if (!Number.isFinite(cpu) || !Number.isFinite(rssMiB) || rssMiB <= 0) { fail(Error('invalid core resource sample')); return }
+        done({ cpu, rssMiB })
+      })
+    })
+    const beforeIdle = await sample(), idleAt = performance.now()
+    await new Promise(done => setTimeout(done, 30_000)) // The defined idle measurement interval, not fixture settling.
+    const afterIdle = await sample(), idleMs = performance.now() - idleAt
+    const observations: number[] = [], profileAt = performance.now()
+    for (let i = 0; i < 20; i++) {
+      const effort = i % 2 === 0 ? 'low' : 'high', started = performance.now()
+      await d.tmux.run('send-keys', '-t', pane, '-l', effort === 'low' ? 'l' : 'h')
+      await until('changed Cursor footer accepted', async () => (await row(c, id))?.selectedModel === profile(id, effort) || null, 10_000, 50)
+      observations.push(performance.now() - started)
+    }
+    const afterProfiles = await sample(), profileMs = performance.now() - profileAt
+    const detections: number[] = [], answers: number[] = [], questionsAt = performance.now()
+    for (let i = 0; i < 10; i++) {
+      const started = performance.now(), asked = await question(d, c, id, pane)
+      const answeringAt = performance.now(); detections.push(answeringAt - started)
+      expect((await answer(c, id, asked)).error).toBeUndefined()
+      expect(readFileSync(join(d.root, 'choices.txt'), 'utf8')).toBe('\t'.repeat(i + 1))
+      answers.push(performance.now() - answeringAt)
+    }
+    const afterQuestions = await sample(), questionsMs = performance.now() - questionsAt
+    const round = (n: number) => Number(n.toFixed(3))
+    const latency = (values: number[]) => {
+      values.sort((a, b) => a - b)
+      return { p50: round(values[Math.ceil(values.length * .5) - 1]), p95: round(values[Math.ceil(values.length * .95) - 1]), max: round(values.at(-1)!) }
+    }
+    writeFileSync(process.env.OTHER_RUNTIME_CONTROLS_PERF!, JSON.stringify({
+      idle: { ms: round(idleMs), coreCpuPercent: round(100 * (afterIdle.cpu - beforeIdle.cpu) / (idleMs / 1000)), coreRssMiB: round(afterIdle.rssMiB) },
+      profiles: { count: observations.length, ms: round(profileMs), observationMs: latency(observations), coreCpuSeconds: round(afterProfiles.cpu - afterIdle.cpu), coreRssMiB: round(afterProfiles.rssMiB) },
+      questions: { count: answers.length, ms: round(questionsMs), detectionMs: latency(detections), answerMs: latency(answers), coreCpuSeconds: round(afterQuestions.cpu - afterProfiles.cpu), coreRssMiB: round(afterQuestions.rssMiB) },
+      viewOnlyRefusalMs: round(refusalMs), initialCoreRssMiB: round(beforeIdle.rssMiB),
+    }, null, 2) + '\n')
+  }, 300_000)
 })
