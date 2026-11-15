@@ -178,3 +178,18 @@ This task does not complete package 8: hook/plugin file writers, hook installati
 proof/configuration implementations remain for the next original tasks. Trusted executable/location selection and its bounded shell capture also remain in core: independently authorizing live rc-derived locations cannot be replaced by trusting a setup reply. The separately owned async-probes work removes blocking shell/PATH work without changing this authority; root integrates it before final gates. Shared installation string builders in lib/engineLaunch.ts remain in the import closure for standalone shell launching and legacy launch-script contracts; prepared native launches bypass them. This step moves the actual installation controller/journal/dispatch runtime, not every line of shared installation script construction. Launch contracts, source identity,
 restart/restore cancellation and process ownership stay core responsibilities. A file moving folders alone is not
 evidence of extraction: the default runtime import closure and failure behavior must demonstrate it.
+
+
+## Integrated CI fixture correction, 16 November
+
+The integrated core and harnessd gates passed (4,572 core and 371 harnessd cases, one existing
+harnessd skip, 100% per file), and six bundled setup/repair acceptance cases passed. Linux unit CI
+exposed callers in older fixtures that still depended on implicit in-core setup: the hook goldens,
+discovery plugin tests, native launch/Claude identity checks, named OpenCode launch and retarget tests.
+The Windows path fixture also mocked the old location of executable retention, and the startup-order
+assertion omitted the explicit setup dependency. Reproduction failed in all eight files (15 cases
+and one suite failed). The fixtures now inject the actual local setup implementation or their existing
+controlled probe at its explicit port. All 384 cases pass with the golden files unchanged, and
+TypeScript passes. An audit also wires the Windows-only real-PTY fixture to the explicit local setup
+helper; native Windows execution has not been performed. Final-head receipts/CI and the documented
+cold-start cost disposition remain required.

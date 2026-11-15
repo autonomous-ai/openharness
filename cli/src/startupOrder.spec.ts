@@ -315,7 +315,7 @@ describe('the core\'s request gate (core/main.ts)', () => {
     // start their dependency recovery only after the master knows core is ready.
     expect(tail).toEqual(['backend.openRequests()', 'daemonBoot.openRequests = null', 'coreLink.ready()', "console.log('[cli] ready')",
       'installedHooks = env.DISABLE_HOOK_INSTALL ? undefined',
-      ': installEngineHooks(hookPort, { only: env.HOOK_INSTALL_ENGINES, loginShell: loginShellEnvPromise })',
+      ': installEngineHooks(hookPort, { only: env.HOOK_INSTALL_ENGINES, loginShell: loginShellEnvPromise, setup: nativeSetup })',
       'void heldLaunches.restoreHeld()', 'externalResumes.open()', 'launches.open()'])
     expect(logged).toBeGreaterThan(ready)
   })
