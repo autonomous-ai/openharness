@@ -2284,6 +2284,10 @@ export class CableSession {
       await reply({ t: 'voice.error', message: 'Choose a recipient before drafting.' }); return
     }
     if (!agentId) {
+      // Only Harness agents the dial may talk to: the router sends each one's id and name to the backend, and nothing of
+      // an agent outside Harness leaves this computer, though it may take voice (an Orca handle, its mod's poll). Taken
+      // with the list, before the window decides: an entry that drops meanwhile is no longer known as outside.
+      const routable = agents.filter((a) => !this.lacks(a.id, 'v') && !this.outsideHarness(a.id))
       // NOBODY NAMED, SO THE WINDOW DECIDES. It opens its palette with these words already in the field
       // and runs the route a typed task would have run — the same fifteen candidates, the same trimmed
       // recaps, the same threshold, and the same picker when the answer is not good enough to act on.
@@ -2322,9 +2326,7 @@ export class CableSession {
         return
       }
       try {
-        // Only Harness agents the dial may talk to: the router sends each one's id and name to the backend, and nothing of
-        // an agent outside Harness leaves this computer, though it may take voice (an Orca handle, its mod's poll).
-        const decision = await this.host.route(transcript, agents.filter((a) => !this.lacks(a.id, 'v') && !this.outsideHarness(a.id)))
+        const decision = await this.host.route(transcript, routable)
         if (!current()) return
         agentId = decision.agentId
         this.log(`cable: routed → ${agentId} (${decision.reason})`)
@@ -2366,14 +2368,16 @@ export class CableSession {
     }
     const text = carried ? withCarriedPassage(instruction, carried)
       : selection?.ok && selection.text ? withSelectedPassage(instruction, selection.text) : instruction
+    // Another app's words name its agent by the name the person gave its session or the folder it runs in, which no log
+    // line carries: only the app is logged. Decided before the words go: a window that opens or an entry that drops
+    // while they are on their way leaves the list without the agent by the time it refuses.
+    const refusedIn = this.outsideHarness(agentId) ? `(refused in ${this.hostName(agentId)})` : undefined
     try {
       const submitted = await this.host.sendTurn(agentId, text)
       if (submitted && !submitted.ok) {
-        // Another app's words name its agent by the folder it runs in, which no log line carries: only the app is logged.
         await reply({ t: 'voice.error', message: submitted.message ?? (carried
           ? 'Could not reach that harness. Your carried text is still here.'
-          : 'Could not reach that harness. Check its connection and try again.') },
-        this.outsideHarness(agentId) ? `(refused in ${this.hostName(agentId)})` : undefined)
+          : 'Could not reach that harness. Check its connection and try again.') }, refusedIn)
         return
       }
     } catch (_) {

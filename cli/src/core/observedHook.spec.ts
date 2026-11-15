@@ -128,6 +128,77 @@ describe('parseObservedHook: relayed', () => {
     })
 })
 
+// The hook says the session's own name for itself (hook/notify.mjs); the core lets that one bounded string through, on
+// session-start and turn-start only, and keeps none of it.
+describe('parseObservedHook: title', () => {
+  afterEach(() => { vi.useRealTimers() })
+
+  const named = (event: string, title: unknown) => ({ ...full, event, title })
+
+  it.each(['session-start', 'turn-start'])('takes a title on %s and hands it on', (event) => {
+    const body = named(event, 'Tho')
+    expect(parseObservedHook(body)).toStrictEqual(body)
+    const forward = vi.fn(() => true)
+    expect(createObservedHook({ forward, now: () => 7 }).onObserved(body)).toBe('ok')
+    expect(forward).toHaveBeenCalledWith(body)
+  })
+
+  it('takes 64 UTF-16 units, letters outside ASCII and JSON\'s own characters', () => {
+    for (const title of ['x'.repeat(64), '😀'.repeat(32), 'Thơ "gà" \\ 数学']) {
+      const body = named('turn-start', title)
+      expect(parseObservedHook(body)).toStrictEqual(body)
+    }
+  })
+
+  it('takes a title beside relayed', () => {
+    const body = { ...named('turn-start', 'Tho'), relayed: true }
+    expect(parseObservedHook(body)).toStrictEqual(body)
+  })
+
+  it('an event without a title has no such key', () => {
+    const body = { ...full, event: 'session-start' }
+    expect(parseObservedHook(body)).toStrictEqual(body)
+  })
+
+  const bad: ReadonlyArray<readonly [string, unknown]> = [
+    ['of 65 characters', 'x'.repeat(65)],
+    ['of 66 UTF-16 units', '😀'.repeat(33)],
+    ['that is empty', ''],
+    ['with a bell', 'Th\u0007o'],
+    ['with a newline', 'Th\no'],
+    ['with a delete', 'Th\u007fo'],
+    ['that is a number', 7],
+    ['that is null', null],
+    ['that is true', true],
+    ['that is an object', { text: 'Tho' }],
+    ['that is an array', ['Tho']],
+  ]
+  it.each(['session-start', 'turn-start'].flatMap((event) => bad.map(([name, title]) => [name, event, title] as const)))(
+    'rejects a title %s on %s', (_name, event, title) => {
+      expect(parseObservedHook(named(event, title))).toBeNull()
+    })
+
+  const others = [
+    ...['needs-input', 'turn-stop', 'turn-error', 'session-end'].map((event) => ({ ...full, event })),
+    { engine: 'claude', sessionId: 's1', event: 'asked' },
+  ]
+  it.each(others.map((body) => [body.event, body] as const))('rejects a title on %s', (_event, body) => {
+    expect(parseObservedHook(body)).toStrictEqual(body)
+    expect(parseObservedHook({ ...body, title: 'Tho' })).toBeNull()
+  })
+
+  it('counts a refused title and logs none of it', () => {
+    vi.useFakeTimers()
+    const log = vi.fn()
+    const hook = createObservedHook({ forward: () => true, now: () => 0, log })
+    expect(hook.onObserved(named('turn-start', 'secret-title'))).toBe('ok')
+    expect(hook.onObserved(named('turn-stop', 'secret-title'))).toBe('invalid')
+    expect(hook.onObserved(named('turn-start', 'secret\u0007title'))).toBe('invalid')
+    vi.advanceTimersByTime(60_000)
+    expect(log.mock.calls).toEqual([['[devices] paneless hook events in the last minute: 2 refused, 0 dropped']])
+  })
+})
+
 describe('createObservedHook', () => {
   afterEach(() => { vi.useRealTimers() })
 

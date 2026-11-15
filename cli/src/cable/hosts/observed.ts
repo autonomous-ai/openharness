@@ -3,7 +3,7 @@ import { basename, join } from 'node:path'
 // Types only: the devices process must not load core code.
 import type { ObservedAsked, ObservedEvent, ObservedHookEvent } from '../../core/observedHook.js'
 import { truncateUtf8 } from '../../lib/deviceRecentTrim.js'
-import type { OpenSessions, SessionRows } from '../../lib/sessionSearch/external.js'
+import type { OpenSessions, SessionOwner, SessionRows } from '../../lib/sessionSearch/external.js'
 import { type fileStamp, within } from '../../lib/sessionSearch/externals/support.js'
 import type { ExternalEngine, RunningProcess } from '../../lib/sessionSearch/externals/types.js'
 import { roundDrawable } from '../roundGlyphs.js'
@@ -65,6 +65,11 @@ export function observedAgentId(engine: string, sessionId: string): string {
   return `${x.slice(0, 8)}-${x.slice(8, 12)}-${x.slice(12, 16)}-${x.slice(16, 20)}-${x.slice(20, 32)}`
 }
 
+/** The name of an agent with no title: its folder's, else its engine (a folder such as `/` has no name). */
+function folderName(cwd: string | undefined, engine: string): string {
+  return (cwd && basename(cwd)) || engine
+}
+
 export interface ObservedDeps {
   now(): number
   /** The machine's processes, read once for every session (externals/support.ts listProcesses); none when unreadable. */
@@ -83,6 +88,9 @@ export interface ObservedDeps {
   actions?: ObservedActions
   /** The app each of these processes runs in, where its parents name one (scannedApp.ts); absent, nothing is learned. */
   apps?(pids: readonly number[]): Promise<ReadonlyMap<number, string>>
+  /** The name the person gave a Claude Code session, from its own process record (recordName.ts); one that rejects names
+   *  nothing. Absent, the scan names by folder. */
+  recordName?(owner: Pick<SessionOwner, 'pid' | 'record'> & { sessionId: string }): Promise<string | undefined>
   /** The tty of a process in a tab app (tabs.ts readTty), rejecting when `ps` could not be read; absent (off macOS), no
    *  agent has a tab. */
   tty?(pid: number): Promise<string | undefined>
@@ -137,6 +145,11 @@ interface Entry {
   opens: OpenTarget
   /** What the permission prompt it waits on asks, from its hook (deviceClaude/asked.ts): '' when it names nothing. */
   asked?: string
+  /** The name the session gives itself, from its session-start or turn-start, or, for a session the scan found, the one
+   *  the person gave it in its own process record until then. Only Claude Code's event with none clears it: its hook
+   *  says the name on each of these while the session has one, while Command Code's turn-start is every tool call and
+   *  says none. */
+  title?: string
   generation?: string
   endAt?: number
   /** The read of the last answer, waiting out the grace. */
@@ -391,7 +404,12 @@ export class ObservedSource implements HostSource {
     const handle = e.hostHints.ORCA_TERMINAL_HANDLE
     entry.handle = handle && ORCA_HANDLE.test(handle) ? handle : undefined
     entry.opens = openTarget(a.host, e.hostHints)
-    if (e.cwd) { a.cwd = e.cwd; a.name = basename(e.cwd) || a.name }
+    if (e.cwd) a.cwd = e.cwd
+    if (e.event === 'session-start' || e.event === 'turn-start') {
+      if (e.title !== undefined) entry.title = e.title
+      else if (e.engine === 'claude') entry.title = undefined
+    }
+    a.name = entry.title ?? folderName(a.cwd, a.engine)
     if (e.transcriptPath) entry.transcriptPath = e.transcriptPath
     if (e.event === 'session-end') {
       entry.endAt = now
@@ -497,7 +515,7 @@ export class ObservedSource implements HostSource {
     const entry: Entry = {
       agent: {
         id, engine, sessionId, cwd: init.cwd,
-        name: (init.cwd && basename(init.cwd)) || engine,
+        name: folderName(init.cwd, engine),
         host: 'terminal',
         app: UNKNOWN_APP,
         appPending: true,
@@ -560,14 +578,18 @@ export class ObservedSource implements HostSource {
     }
     if (!open.size) return
     const rows = await this.deps.sessionRows.find(open)
-    // Asked once, as a session is first listed: its next hook is the next word on where it runs.
-    const pids = [...open].filter(([sessionId, engine]) => rows.has(sessionId) && !this.entries.has(observedAgentId(engine, sessionId)))
-      .slice(0, MAX_SESSIONS).map(([sessionId]) => owners.get(sessionId)!.pid)
+    // Asked once, as a session is first listed, for the ones this look is about to list: a listed session is never looked
+    // at again, and its next hook is the next word on where it runs and what it is called.
+    const listing = [...open].filter(([sessionId, engine]) => rows.has(sessionId) && !this.entries.has(observedAgentId(engine, sessionId)))
+      .slice(0, MAX_SESSIONS)
     const learning = this.deps.now()
-    const apps = await this.appsOf(pids)
+    const apps = await this.appsOf(listing.map(([sessionId]) => owners.get(sessionId)!.pid))
     const ms = this.deps.now() - learning
+    // Read before the loop: its own check then sees a session a hook told of during the reads, which keeps what it said.
+    const names = await this.namesOf(listing, owners)
     let listed = 0
     let known = 0
+    let named = 0
     const now = this.deps.now()
     for (const [sessionId, engine] of open) {
       // No row, no folder to tell Harness's own from a person's (the voice router's transcript is a program's, in the data
@@ -578,6 +600,12 @@ export class ObservedSource implements HostSource {
       const entry = this.entry(engine, sessionId, now, { cwd: row.cwd, transcriptPath: row.transcriptPath, pid: owner.pid })
       if (!entry) continue
       listed++
+      const name = names.get(sessionId)
+      if (name) {
+        entry.title = name
+        entry.agent.name = name
+        named++
+      }
       // The app alone: its host and what a tap opens stay unknown until its first hook.
       const app = apps.get(owner.pid)
       if (app) {
@@ -592,9 +620,29 @@ export class ObservedSource implements HostSource {
         && entry.agent.state === 'idle' && this.live(entry)) this.setState(entry, 'working', this.deps.now())
     }
     if (!listed) return
-    // Counts only: an app, a pid or a path would say whose session runs where.
-    this.deps.log(`[observed] scan · ${listed} found · ${known} app known · ${ms} ms`)
+    // Counts only: an app, a pid or a path would say whose session runs where, and a name is the person's own.
+    this.deps.log(`[observed] scan · ${listed} found · ${known} app known · ${named} named · ${ms} ms`)
     this.emit()
+  }
+
+  /** The name in each Claude Code session's own record, by session id, read one at a time; none when there is no reader.
+   *  A read that fails names nothing and logs nothing: its error can hold a path, and the session keeps its folder. */
+  private async namesOf(
+    listing: readonly [string, ExternalEngine][], owners: ReadonlyMap<string, SessionOwner>,
+  ): Promise<ReadonlyMap<string, string>> {
+    const names = new Map<string, string>()
+    if (!this.deps.recordName) return names
+    for (const [sessionId, engine] of listing) {
+      if (engine !== 'claude') continue
+      try {
+        const { pid, record } = owners.get(sessionId)!
+        const name = await this.deps.recordName({ pid, record, sessionId })
+        if (name) names.set(sessionId, name)
+      } catch {
+        // Named by its folder, as a session with no name is.
+      }
+    }
+    return names
   }
 
   /** None when there is no reader or it failed: every session is still listed, not known yet. */

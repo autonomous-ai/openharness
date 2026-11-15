@@ -16,7 +16,8 @@ function setup(over: Partial<ObservedDeps> = {}) {
     .filter((pid) => gens.get(pid) !== null).map((pid) => ({ pid, generation: gens.get(pid) ?? `g${pid}` })))
   const alive = vi.fn((_pid: number) => true)
   const open = new Map<string, 'terminal' | 'app' | 'harness' | 'maybe'>()
-  const owners = new Map<string, { pid: number; engine: string }>()
+  // An owner's record path is its session id unless one is given.
+  const owners = new Map<string, { pid: number; engine: string; record?: string }>()
   const working = new Map<string, boolean | null>()
   const externals = new Map<string, { cwd?: string; transcriptPath?: string | null }>()
   const answers = new Map<string, string>()
@@ -40,7 +41,7 @@ function setup(over: Partial<ObservedDeps> = {}) {
         await look()
         return new Map([...open].flatMap(([id, openIn]) => {
           const owner = owners.get(id)
-          return owner ? [[id, { ...owner, tty: null, record: id, ...(openIn === 'harness' ? { harness: true } : {}) }] as const] : []
+          return owner ? [[id, { record: id, ...owner, tty: null, ...(openIn === 'harness' ? { harness: true } : {}) }] as const] : []
         }))
       },
       // As OpenSessions says: busy unless the owner's record reads idle.
@@ -604,7 +605,7 @@ describe('ObservedSource and the app the scan learns', () => {
     found(s, 'a', 11)
     found(s, 'b', 12)
     await s.src.scanOpen()
-    expect(s.logs).toEqual(['[observed] scan · 2 found · 1 app known · 7 ms'])
+    expect(s.logs).toEqual(['[observed] scan · 2 found · 1 app known · 0 named · 7 ms'])
     for (const word of ['ghostty', 'terminal', '11', '12', '/x/', '/t/']) expect(s.logs.join('\n')).not.toContain(word)
   })
 
@@ -655,6 +656,203 @@ describe('ObservedSource and Harness\'s own sessions', () => {
     src.ingest(ev('turn-start', { cwd: scratch }))
     expect(src.list()).toEqual([])
     expect(changes).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('ObservedSource and the name a session gives itself', () => {
+  beforeEach(() => { vi.useFakeTimers() })
+  afterEach(() => { vi.useRealTimers() })
+
+  it('a title names the agent, a new one renames it, a turn-stop keeps it, and a Claude turn-start with none reads the folder again', () => {
+    const { src, changes, ev } = setup()
+    src.ingest(ev('turn-start', { title: 'Tho', cwd: '/x/scratch-2016' }))
+    expect(src.list()[0]).toMatchObject({ name: 'Tho', cwd: '/x/scratch-2016' })
+    changes.mockClear()
+    src.ingest(ev('turn-start', { title: 'Math' }))
+    expect(src.list()[0].name).toBe('Math')
+    expect(changes).toHaveBeenCalled()
+    src.ingest(ev('turn-stop', { cwd: '/x/other' }))
+    expect(src.list()[0]).toMatchObject({ name: 'Math', cwd: '/x/other' })
+    src.ingest(ev('turn-start', { cwd: undefined }))
+    expect(src.list()[0].name).toBe('other')
+  })
+
+  it('a Claude turn-start with no title and a new folder reads that folder', () => {
+    const { src, ev } = setup()
+    src.ingest(ev('turn-start', { title: 'Tho' }))
+    src.ingest(ev('turn-start', { cwd: '/x/third' }))
+    expect(src.list()[0].name).toBe('third')
+  })
+
+  it('a Claude session-start with no title clears it too', () => {
+    const { src, ev } = setup()
+    src.ingest(ev('turn-start', { title: 'Tho' }))
+    src.ingest(ev('session-start'))
+    expect(src.list()[0].name).toBe('proj')
+  })
+
+  it('a session-start with a title renames a session the scan listed', async () => {
+    const { src, open, owners, externals, ev } = setup()
+    open.set('a', 'terminal')
+    owners.set('a', { pid: 11, engine: 'claude' })
+    externals.set('a', { cwd: '/x/alpha', transcriptPath: '/t/a.jsonl' })
+    await src.scanOpen()
+    expect(src.list()[0].name).toBe('alpha')
+    src.ingest(ev('session-start', { sessionId: 'a', callerPid: 11, cwd: '/x/alpha', title: 'Tho' }))
+    expect(src.list()[0].name).toBe('Tho')
+  })
+
+  it('another engine\'s turn-start with no title keeps its title', () => {
+    const { src, ev } = setup()
+    src.ingest(ev('turn-start', { engine: 'codex', sessionId: 'c1', title: 'Tho' }))
+    src.ingest(ev('turn-start', { engine: 'codex', sessionId: 'c1' }))
+    expect(src.list()[0].name).toBe('Tho')
+  })
+
+  it('needs-input, asked, turn-error and session-end leave the name', () => {
+    const { src, ev } = setup()
+    src.ingest(ev('turn-start', { title: 'Tho' }))
+    src.ingest(ev('needs-input'))
+    expect(src.list()[0].name).toBe('Tho')
+    src.ingest({ engine: 'claude', sessionId: 's1', event: 'asked', tool: 'Bash', summary: 'npm test', cwd: '/x/elsewhere' })
+    expect(src.list()[0].name).toBe('Tho')
+    src.ingest(ev('turn-error'))
+    expect(src.list()[0].name).toBe('Tho')
+    src.ingest(ev('session-end'))
+    expect(src.list()[0].name).toBe('Tho')
+  })
+
+  it('with no folder known, a cleared title reads the engine', () => {
+    const { src, ev } = setup()
+    src.ingest(ev('turn-start', { cwd: undefined, title: 'Tho' }))
+    expect(src.list()[0].name).toBe('Tho')
+    src.ingest(ev('turn-start', { cwd: undefined }))
+    expect(src.list()[0].name).toBe('claude')
+  })
+
+  // Claude Code's compaction starts a session again in the middle of a turn.
+  it('a session-start in the middle of a turn renames it and leaves it working', () => {
+    const { src, ev } = setup()
+    src.ingest(ev('turn-start', { title: 'Tho' }))
+    src.ingest(ev('session-start', { title: 'Math' }))
+    expect(src.list()[0]).toMatchObject({ name: 'Math', state: 'working' })
+  })
+
+  it('a refusal names the agent by its title', async () => {
+    const { src, ev } = setup()
+    src.ingest(ev('turn-start', { title: 'Tho' }))
+    expect(await src.send(src.list()[0], 'hi')).toEqual({ ok: false, reason: 'Tho did not answer.' })
+  })
+
+  it('no log line holds a title', () => {
+    const { src, ev, logs } = setup()
+    // Fifty working sessions fill the list: the fifty-first is dropped, and that is logged.
+    for (let i = 0; i <= 50; i++) src.ingest(ev('turn-start', { sessionId: `s${i}`, title: `Name ${i}` }))
+    src.ingest({ engine: 'claude', sessionId: 's0', event: 'asked', tool: 'Bash', summary: 'npm test' })
+    expect(logs).not.toEqual([])
+    expect(logs.join('\n')).not.toMatch(/Name \d/)
+  })
+})
+
+describe('ObservedSource and the name in a session\'s own record', () => {
+  beforeEach(() => { vi.useFakeTimers() })
+  afterEach(() => { vi.useRealTimers() })
+
+  /** A session found open in a terminal, its owner `pid`, whose record path is not its id: the reader must be told both. */
+  const found = (s: ReturnType<typeof setup>, sessionId: string, pid: number, engine = 'claude'): void => {
+    s.open.set(sessionId, 'terminal')
+    s.owners.set(sessionId, { pid, engine, record: `/s/${pid}.json` })
+    s.externals.set(sessionId, { cwd: `/x/${sessionId}`, transcriptPath: `/t/${sessionId}.jsonl` })
+  }
+
+  it('a Claude session the scan lists reads the name its record gives', async () => {
+    const s = setup({ recordName: async () => 'Tho' })
+    found(s, 'a', 11)
+    await s.src.scanOpen()
+    expect(s.src.list()[0]).toMatchObject({ name: 'Tho', cwd: '/x/a' })
+    expect(s.changes).toHaveBeenCalled()
+  })
+
+  it.each<[string, ObservedDeps['recordName']]>([
+    ['gives none', async () => undefined],
+    ['fails', async () => { throw new Error('EACCES /Users/someone/.claude/sessions/11.json') }],
+  ])('a reader that %s still lists the session by its folder', async (_what, recordName) => {
+    const s = setup({ recordName })
+    found(s, 'a', 11)
+    await s.src.scanOpen()
+    expect(s.src.list()[0].name).toBe('a')
+    expect(s.logs).toEqual(['[observed] scan · 1 found · 0 app known · 0 named · 0 ms'])
+    expect(s.logs.join('\n')).not.toContain('someone')
+  })
+
+  it('the reader is asked once, for the Claude sessions the scan is about to list', async () => {
+    const recordName = vi.fn(async (_owner: unknown): Promise<string | undefined> => undefined)
+    const s = setup({ recordName })
+    found(s, 'a', 11)
+    found(s, 'b', 12, 'codex')
+    // No row: never listed.
+    found(s, 'c', 13)
+    s.externals.delete('c')
+    // Harness's own pane.
+    found(s, 'h', 14)
+    s.open.set('h', 'harness')
+    await s.src.scanOpen()
+    found(s, 'd', 15)
+    await s.src.scanOpen()
+    await s.src.scanOpen()
+    expect(recordName.mock.calls).toEqual([[{ pid: 11, record: '/s/11.json', sessionId: 'a' }], [{ pid: 15, record: '/s/15.json', sessionId: 'd' }]])
+  })
+
+  it('at most 50 are asked a look', async () => {
+    const recordName = vi.fn(async (_owner: unknown): Promise<string | undefined> => undefined)
+    const s = setup({ recordName })
+    for (let i = 0; i < 51; i++) found(s, `s${i}`, 200 + i)
+    await s.src.scanOpen()
+    expect(recordName).toHaveBeenCalledTimes(50)
+  })
+
+  it.each<[Partial<ObservedHookEvent>, string]>([[{ title: 'Math' }, 'Math'], [{}, 'a']])(
+    'a hook that came while the names were read keeps what it said (%j)', async (over, name) => {
+      let answer: (recorded: string | undefined) => void = () => {}
+      const recordName = vi.fn(() => new Promise<string | undefined>((resolve) => { answer = resolve }))
+      const s = setup({ recordName })
+      found(s, 'a', 11)
+      const scan = s.src.scanOpen()
+      await vi.waitFor(() => expect(recordName).toHaveBeenCalled())
+      s.src.ingest(s.ev('turn-start', { sessionId: 'a', callerPid: 11, cwd: '/x/a', ...over }))
+      answer('Tho')
+      await scan
+      expect(s.src.list()).toHaveLength(1)
+      expect(s.src.list()[0].name).toBe(name)
+    })
+
+  it('the record\'s name holds until a hook says otherwise', async () => {
+    const s = setup({ recordName: async () => 'Tho' })
+    found(s, 'a', 11)
+    await s.src.scanOpen()
+    expect(s.src.list()[0].name).toBe('Tho')
+    s.src.ingest(s.ev('turn-stop', { sessionId: 'a', callerPid: 11, cwd: '/x/moved' }))
+    expect(s.src.list()[0]).toMatchObject({ name: 'Tho', cwd: '/x/moved' })
+    s.src.ingest(s.ev('turn-start', { sessionId: 'a', callerPid: 11, cwd: '/x/moved' }))
+    expect(s.src.list()[0].name).toBe('moved')
+    s.src.ingest(s.ev('session-start', { sessionId: 'a', callerPid: 11, cwd: '/x/moved', title: 'Math' }))
+    expect(s.src.list()[0].name).toBe('Math')
+  })
+
+  it('the scan\'s line counts the named ones and holds no name', async () => {
+    const s = setup({ recordName: async (owner) => (owner.pid === 11 ? 'Tho 7f3a91c2' : undefined) })
+    found(s, 'a', 11)
+    found(s, 'b', 12)
+    await s.src.scanOpen()
+    expect(s.logs).toEqual(['[observed] scan · 2 found · 0 app known · 1 named · 0 ms'])
+  })
+
+  it('with no reader the scan names by folder', async () => {
+    const s = setup()
+    found(s, 'a', 11)
+    await s.src.scanOpen()
+    expect(s.src.list()[0].name).toBe('a')
+    expect(s.logs).toEqual(['[observed] scan · 1 found · 0 app known · 0 named · 0 ms'])
   })
 })
 
