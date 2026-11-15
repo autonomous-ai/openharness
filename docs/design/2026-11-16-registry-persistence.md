@@ -683,3 +683,61 @@ peer ownership and directory-fsync failure; no success or duplicate launch after
 uncertain removal. Add binding-only and already-strictly-removed caller cases so
 this change neither deletes a replacement owner nor deadlocks a registration
 callback behind its own active writer cleanup.
+
+## Design correction: discovery ownership is not yet a durable receipt
+
+Review pending. The preceding inventory was wrong for discovery eviction:
+`openProcessAgent` is synchronous and observational, as are `reinstateArchived` and
+`adoptEngine`. Their only production caller is `core/agents/discovery.ts`.
+`onDiscovered` announces its new owner and forgets an evicted row before queued save;
+`onObserved` removes a stopped archive and announces its revived owner before queued
+save, or promotes an adopted/starting process to ready observationally. Those
+branches remain incomplete and must not use an absent live row as a receipt.
+
+Proposed narrow correction: make these three ownership-changing registry methods
+awaited strict transitions at their existing sole production caller, preserving the
+observational setters used for ordinary already-ready refreshes. Do not add a
+second observation API or convert every setter. Each method selects/captures its
+exact original owner(s) before queue residence, stages clones without dropping live
+indices, refreshes the observed engine in its exact backend/runtime after image
+preparation, and uses the same final owner/lock/native fence and durable receipt.
+Discovery already returns Promises to the reconciler, which awaits them. The
+methods may publish within the existing transaction via `allowTransaction`;
+awaiting `afterTransaction` from inside that transaction would deadlock and is not
+the proposed solution. A strict group can include current unrelated observations,
+which still use the existing merge and rebase checks.
+
+`reinstateArchived` stages the saved owner and removal of its terminal holder as
+the existing candidate/displaced pair. The stopped archive stays until a confirmed
+non-null installed owner matches its cloned receipt. Then, synchronously, remove
+that archive, notify the terminal successor and continue observation. Refusal or
+uncertainty leaves the archive and old live owner intact and reports a fixed held
+reason; no guessed rollback and no archive deletion. `adoptEngine` stages the exact
+terminal's engine/process/ready transition; only its receipt authorizes browser
+transfer, readiness notification and subsequent binding.
+
+`openProcessAgent` stages its selected existing row or a new unbound row, plus the
+prior owners whose routes it takes. Selection and displacement must not happen on
+live objects before publication. Multiple normalized routes can affect multiple
+owners: extend the existing strict `displaced` representation to a list of those
+affected rows, bounded by the supplied routes and existing bounded registry image;
+do not create a global mutation framework. The existing whole-group peer validation,
+uncertain image/prior fingerprints, reconciliation and final atomic install cover
+the entire list. Preserve current returned eviction metadata/contract and final
+synchronous install before notifying. No route may be removed from another owner
+without its same-group durable update. If a smaller representation can cover the
+actual selected routes without weakening this contract, prefer it.
+
+`onObserved`'s existing starting-to-ready success also goes through `confirmLaunch`
+after its observational metadata fills, with the original operation/owner and fresh
+exact native proof. A post-commit predicate compares the receipt and selected backend
+rather than the pre-commit row. Ordinary already-ready liveness/model/title refresh
+remains observational. No success notification or stopped archive deletion follows
+a swallowed observation failure or `flush()` alone.
+
+Add caller-level held-fsync tests for new discovery, displacement, shell adoption,
+archive revival and starting readiness. Cover cancellation/owner/backend/process
+changes, peer writes, directory-fsync uncertainty and archive retention, including
+multiple displaced routes and a strict commit inside a reconcile transaction.
+Benchmark only after source review in a reserved window; report any change in
+discovery latency separately from the original registry write baseline.
