@@ -11,8 +11,10 @@ dispatch remain the core's authority.
 
 ## Boundary
 
-Add `engineSetup` to the existing supervised edge host, which already hosts `engineProbe` and its login-shell
-probes. This introduces no new process, setting or dependency. The service owns discovery/probe caches and limits,
+Add an on-demand supervised `engineSetup` process, separate from the edge host: a blocked filesystem or probe
+must not stall unrelated edge services. It starts only when needed, with the existing host/want transport and
+`askedSince: 0` convention of engine workers (older cores run inline and never ask). This introduces no setting,
+dependency or protocol message. The service owns discovery/probe caches and limits,
 the existing installation controllers and their helper processes. It uses the existing authenticated service
 transport, request deadlines and supervisor. A worker crash, hang, malformed answer or connection replacement
 returns the existing native-launch hold; it never loads an inline implementation as failure recovery.
