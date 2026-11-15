@@ -5008,6 +5008,26 @@ describe('what the dial cannot do for an agent', () => {
     } finally { vi.useRealTimers(); await session.stop() }
   })
 
+  // Past the echo's 750 ms but inside the switch's 1 s repaint: the stale tile the dial repaints is not a hand either.
+  it("a switch's repaint after its echo timed out does not tell the host", async () => {
+    let release!: () => void
+    let hold: Promise<void> | undefined
+    const turned = vi.fn()
+    const { session, port } = await resting({
+      turned,
+      listAgents: async () => { await hold; return AGENTS },
+    })
+    try {
+      hold = new Promise((resolve) => { release = resolve })
+      const following = session.followApp('', 'a3')   // held in its list push: the switch is running
+      await vi.advanceTimersByTimeAsync(800)
+      port.say({ t: 'focus', agentId: 'a1' })
+      expect(turned).not.toHaveBeenCalled()
+      release()
+      await following
+    } finally { vi.useRealTimers(); await session.stop() }
+  })
+
   it('a host without swipeSwitches behaves as today', async () => {
     const { session, port, host } = await resting({ swipeSwitches: undefined, swipeEnded: undefined })
     try {

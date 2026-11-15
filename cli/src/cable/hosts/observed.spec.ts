@@ -873,12 +873,12 @@ interface Fakes extends Omit<ObservedActions, 'adapters'> {
   tabSelect(app: TabApp, tty: string, raise: boolean): PaneSwitch
 }
 
-/** Routes that answer as told, recording what each was handed. The adapters are the real ones for that platform, their
- *  verbs the fakes, and any command of their own goes to an inert runner. */
 /** What each count says, as devices.ts logs it: an adapter by its fixed id. */
 const counted = (count: { mock: { calls: Array<Parameters<ObservedActions['count']>> } }): string[] =>
   count.mock.calls.map(([what]) => (typeof what === 'string' ? what : what.id))
 
+/** Routes that answer as told, recording what each was handed. The adapters are the real ones for that platform, their
+ *  verbs the fakes, and any command of their own goes to an inert runner. */
 function fakeActions(over: Partial<Fakes> = {}, platform: NodeJS.Platform = 'darwin') {
   const ready = new Set<string>()
   const fakes = {
