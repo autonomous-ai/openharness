@@ -186,7 +186,8 @@ export async function heldHome(
   children: () => readonly ProcessIdentity[] = () => [],
   options: { platform?: NodeJS.Platform; proc?: string; now?: () => number } = {},
 ): Promise<string | undefined> {
-  const { platform = process.platform, proc = '/proc', now = Date.now } = options
+  // A wait is timed by a clock that setting the wall clock does not move.
+  const { platform = process.platform, proc = '/proc', now = () => performance.now() } = options
   const key = `${selected.pid}\u0000${selected.startMarker}\u0000${selected.executable}\u0000${file.source}`
   const before = kept.get(key)
   if (before && 'home' in before) return before.home
