@@ -34,6 +34,80 @@ Run `tools/repair-bench.mts` with `SRC=$PWD/src MB=200 REPAIR=1 npx tsx <path>` 
 
 Goal: the core reads no rollout at all on a resume; it asks Codex's worker and takes a typed, bounded answer.
 
+#### Design (15 November continuation; technically reviewed before implementation)
+
+The worker must never rename the live history. A deadline is not revocable authority: a worker can publish after
+Stop, lose its reply after publishing, or publish after a Watcher hold expired. Instead, the worker locates and
+prepares; core validates and publishes. The existing snapshot transport supplies bounded, generation-fenced reads;
+the native path evidence used by handoff publication supplies path and file identity checks. The handoff transaction
+itself is not reused: its project documents and persisted conversation snapshots do not describe a history repair.
+
+1. Core captures the resume's authority and an overall deadline. Only Codex's declared repair is supported. Two
+   preparations may run, no queue, and another preparation for the same session/file is refused. A first bounded
+   worker request locates the history in the session's profile, including the existing moved-home fallback. Core
+   independently verifies the returned path is an owned regular file within its own derived profile roots, using
+   canonical native path evidence and `staysInside` (including #4323's Windows drive containment). Existing native
+   transcript evidence must also independently bind that file to the registered session: containment alone never
+   authorizes rewriting another conversation. No worker-supplied destination is accepted as write authority.
+2. Core captures the original identity/version and assigns a unique adjacent staging directory name. The worker
+   reserves one of its two durable cleanup slots before creating that private directory exclusively, then records its
+   identity before writing. It opens only two fixed private files, `backup` and `history`, once; a completed token is
+   never recreated. Its existing two bounded scans validate session metadata and every complete JSONL record, compare the
+   scans' digests, preserve the partial final line, write the exact backup and repaired history, flush both and close
+   their handles before answering. The answer contains only counts and the two files' identities/versions.
+3. Only after a valid answer does core acquire `Watcher.hold`, so an expensive preparation never suspends delivery.
+   The hold drains old-file reads. Core then checks its deadline, current resume/binding authority, hold expiry,
+   original path/version, staging directory identity and both fixed files (owned regular files, private modes,
+   one link, bounded lengths, reported identities/versions). It hard-links the backup to the existing unique backup
+   name without overwriting an existing file, then
+   atomically renames the prepared history and calls `setTail` in the same synchronous turn, before releasing the
+   hold. No worker request or other await occurs between the last authority check and publication/tail adjustment.
+4. A failed/lost/stale/oversized reply, worker death or hang, changed source, cancelled resume or expired hold cannot
+   publish. Worker cleanup deletes only its staging files/directory after rechecking their retained identity, never
+   the source or the final backup name. A lost completion acknowledgement therefore cannot delete published history
+   or its backup. Cleanup racing publication either leaves the original unchanged (and possibly an extra valid
+   backup) or removes only the private names after successful publication. A late worker may finish a private
+   preparation but can never change the original. Duplicate replies do not repeat publication; a retried resume reads the current original, and the
+   existing repair is idempotent. A core process crash after rename follows the existing restart/reattach path; no
+   surviving worker has publication authority.
+
+Growth: at most two preparations and four temporary history copies, each capped at 1 GiB; record cap remains 16 MiB.
+The Codex worker owns two bounded private cleanup receipts (directory path, parent evidence, identity and token only),
+durably reserved before directory creation and removed after cleanup. Startup recovers only those two entries,
+never scans transcript trees. A crash between directory creation and durable recording of its identity leaves that
+slot reserved if the directory exists: cleanup never guesses ownership. An uncleanable or invalid receipt reserves
+its slot and reports `RESUME_REPAIR_CLEANUP_FAILED`, rather than letting abandoned files accumulate. Ready slots
+have a bounded expiry and may be released early by an acknowledgement; lost acknowledgements do not leak slots.
+Existing successful private backups retain their current policy. Core gains no durable repair state.
+
+Concurrency: core admission is by session and selected file, bounded globally to two; all original-file publication
+and Watcher cursor changes stay under core's captured authority. Worker generation fencing rejects old replies.
+Read cost: core reads no rollout bytes or repair receipts, only bounded native metadata. The worker reads the
+selected file twice in 1 MiB chunks, no whole-history string, with the existing 60 s repair bound.
+Scale: at 10x request rate, overflow refuses repair and resumes unchanged; active preparations, failed preparation
+kind and maximum core loop hold are the first signals. No content, paths or account identifiers enter new metrics.
+Compatibility: this is private versioned IPC, with no public client contract change. Missing worker capability means
+explicitly unrepaired, never inline fallback. Explicit inline/older-master mode retains the existing implementation
+behind a dynamic import outside the default core closure, with review/removal date 15 December 2026. No migration
+of conversations is needed; rollback reads the same native history and successful backup formats.
+Audience and identity: only an authenticated local owner/core request can prepare a repair; roots come from the
+registered session's own profile, never another account's login. Core revalidates worker path claims locally.
+Failure: unavailable repair is a named logged outcome and the resume proceeds unchanged; invalid/foreign/changed
+history keeps its existing preparation refusal. Cleanup failures name the repair failure without logging content or
+paths. No code guesses whether publication occurred from a lost worker reply, because only core publishes.
+Platforms: macOS/Linux/Windows use the existing supervised engine-codex process and no new process launcher.
+Windows handles close before metadata is returned; final fences must not compare close-sensitive change times.
+
+Validation selected before code: failing behavior tests for late completion after cancellation/disconnect, lost reply,
+duplicate/stale reply, original/stage substitution, hold expiry, cleanup/recovery and bounded overload; unchanged
+repair/launch golden corpus; worker request and real-file preparation tests; 100% per-file changed core coverage;
+architecture and lean-entry checks proving the parser/rewriter leave default core; isolated worker kill/hang resume
+integration and a matched 200 MiB repair loop benchmark. Heavy runs use the shared validation lock, after engine
+completion's turn. Native Windows execution is reported separately if no Windows test host is available.
+
+The original hand-over below is historical guidance. The reviewed staging design above supersedes its suggestion
+that the worker rename the original under a deadline.
+
 - Copy the provider move, which is the same shape (a Codex file operation at resume/retarget time, in Codex's worker):
   `core/engines/providerMoves.ts` (core side), `engines/worker/providerMoveProtocol.ts` (version, capability name,
   in-flight, queued, wait, reply bytes, `accepts`/`valid` guards), `engines/worker/providerMoveRequests.ts` (worker
