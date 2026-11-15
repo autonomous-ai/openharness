@@ -178,7 +178,7 @@ The core learns nothing of the prompt and nothing of where the dial is: it lets 
 - Produces, in `types.ts`:
   - `export type PaneSwitch = 'ok' | 'failed' | 'busy'`
   - On `HostSource`: `hasPane?(agent: HostAgent): boolean` and `showPane?(agent: HostAgent): Promise<PaneSwitch>`.
-- Produces, in `orca.ts`: `switchTo(handle: string): Promise<PaneSwitch>` (was `Promise<boolean>`). `'busy'` when a command already runs on that handle: nothing runs and nothing is queued. `'ok'` when the switch exits 0. `'failed'` otherwise: a handle that is not `term_<uuid>`, no `orca`, a non-zero exit, the 10 s timeout. The command line is unchanged.
+- Produces, in `orca.ts`: `switchTo(handle: string): Promise<PaneSwitch>` (was `Promise<boolean>`). `'busy'` when words are being typed into that terminal: nothing runs and nothing is queued. A switch that meets one under way for the same terminal is that run, with its outcome, and words for it wait for the switch to end. `'ok'` when the switch exits 0. `'failed'` otherwise: a handle that is not `term_<uuid>`, no `orca`, a non-zero exit, the 10 s timeout. The command line is unchanged.
 - Produces, in `observed.ts`:
   - `ObservedActions.orcaSwitch(handle: string): Promise<PaneSwitch>`
   - `ObservedSource.hasPane(agent)`: true when the source has actions, the session is live, and its latest event carried an Orca handle.
@@ -537,7 +537,7 @@ Waited on, outside this plan: the base SHA (Task 1); the dial-app-filter tasks n
 - An agent the dial already shows is not counted as a move.
 - A second turn to the same agent restarts its rest and is not counted as superseded. A pulled cable ends a pending rest and counts nothing.
 - A rest on an agent that has gone, ended or left Orca since the turn counts `failed` and runs nothing.
-- A tap does not cancel a pending rest. A rest that meets the tap's own switch is `busy`.
+- A tap does not cancel a pending rest. A tap 0.4 to 1 s after a rest meets the rest's switch: it waits for that one run, then Orca comes forward (the PM, after the final review). No false `busy`.
 - `switchTo` answers `'ok' | 'failed' | 'busy'`: one command, one answer. The tap's opener keeps its boolean.
 - `relayed` on an `asked` event is refused, as on every event but `turn-start`.
 - Grok's prompt event is named `UserPromptSubmit` by the hook, so its rule is Claude Code's.

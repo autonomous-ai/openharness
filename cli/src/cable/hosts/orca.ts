@@ -45,36 +45,47 @@ export function orcaDeps(): OrcaDeps {
 }
 
 export function createOrcaActions(deps: OrcaDeps): { send(handle: string, text: string): Promise<boolean>; switchTo(handle: string): Promise<PaneSwitch> } {
-  // One command at a time per terminal: two transcripts typed at once would mix in its prompt.
-  const running = new Set<string>()
+  // Per terminal, the switch under way: a second one is that same run. A swipe's rest runs a switch, and a tap 0.4 to 1 s
+  // after it was refused as busy: on Linux the dial said Orca did not open the pane it had just shown.
+  const switching = new Map<string, Promise<PaneSwitch>>()
+  // Per terminal, the words being typed or waiting to be: two transcripts typed at once would mix in its prompt.
+  const sending = new Set<string>()
 
   const orcaBinary = (): string | null =>
     deps.onPath('orca') ?? (deps.platform === 'darwin' && deps.exists(APP_ORCA) ? APP_ORCA : null)
 
-  // Busy runs nothing and queues nothing: a later command for the terminal is asked for again, never stacked behind.
-  async function alone(handle: string, args: string[]): Promise<PaneSwitch> {
-    if (!ORCA_HANDLE.test(handle)) return 'failed'
-    if (running.has(handle)) return 'busy'
-    const orca = orcaBinary()
-    if (!orca) return 'failed'
-    running.add(handle)
-    try {
-      return (await deps.run(orca, args, RUN_TIMEOUT_MS)).code === 0 ? 'ok' : 'failed'
-    } finally {
-      running.delete(handle)
-    }
-  }
-
   return {
     async send(handle, text) {
-      if (text === '' || text.length > MAX_TEXT) return false
+      if (text === '' || text.length > MAX_TEXT || !ORCA_HANDLE.test(handle)) return false
+      // Busy queues nothing: the dial asks again, never stacked behind.
+      if (sending.has(handle)) return false
+      const orca = orcaBinary()
+      if (!orca) return false
       const line = text.replace(CONTROL, ' ')
-      // Joined to its flag: orca reads a separate argument that starts with -- as the next flag, not as the text.
-      return (await alone(handle, ['terminal', 'send', '--terminal', handle, `--text=${line}`, '--enter', '--wait-submit', '5', '--json'])) === 'ok'
+      sending.add(handle)
+      try {
+        // A switch types nothing: the words wait for one under way, then are typed, never beside it.
+        const shown = switching.get(handle)
+        if (shown) await shown
+        // Joined to its flag: orca reads a separate argument that starts with -- as the next flag, not as the text.
+        return (await deps.run(orca, ['terminal', 'send', '--terminal', handle, `--text=${line}`, '--enter', '--wait-submit', '5', '--json'], RUN_TIMEOUT_MS)).code === 0
+      } finally {
+        sending.delete(handle)
+      }
     },
-    // Picks the terminal inside Orca, under the same one-at-a-time as the words typed into it.
-    switchTo(handle) {
-      return alone(handle, ['terminal', 'switch', '--terminal', handle, '--json'])
+    // Picks the terminal inside Orca. Words being typed there make it busy: it runs nothing and queues nothing.
+    async switchTo(handle) {
+      if (!ORCA_HANDLE.test(handle)) return 'failed'
+      const under = switching.get(handle)
+      if (under) return under
+      if (sending.has(handle)) return 'busy'
+      const orca = orcaBinary()
+      if (!orca) return 'failed'
+      const run = deps.run(orca, ['terminal', 'switch', '--terminal', handle, '--json'], RUN_TIMEOUT_MS)
+        .then(({ code }): PaneSwitch => (code === 0 ? 'ok' : 'failed'))
+        .finally(() => switching.delete(handle))
+      switching.set(handle, run)
+      return run
     },
   }
 }

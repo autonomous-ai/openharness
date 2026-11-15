@@ -54,7 +54,7 @@ export interface Caps {
 /** What a source's send answers: `reason` is the sentence the dial shows when it refused. */
 export type SendResult = { ok: true } | { ok: false; reason: string }
 
-/** What showing an agent's pane did: `busy` when its terminal still runs a command, and then nothing ran. */
+/** What showing an agent's pane did: `busy` when words are still being typed into its terminal, and then nothing ran. */
 export type PaneSwitch = 'ok' | 'failed' | 'busy'
 
 export interface HostSource {
