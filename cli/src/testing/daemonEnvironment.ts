@@ -20,7 +20,9 @@ const INHERITED: ReadonlySet<string> = new Set([
   'PATH',
   // UTF-8 in tmux and in the panes, with every LC_* (below). CI sets LANG to C.UTF-8.
   'LANG', 'LC_ALL',
-  // The terminal tmux and the panes draw for, and the login shell a pane opens. CI sets SHELL to /bin/zsh.
+  // The terminal tmux and the panes draw for, and the login shell a pane opens. SHELL is still inherited for a tmux
+  // server a test starts itself, whose tmux would fall back to the account's shell anyway; a daemon's is pinned
+  // (e2e/harness/daemon.ts).
   'TERM', 'SHELL',
   // Who the process is. No state.
   'USER', 'LOGNAME',

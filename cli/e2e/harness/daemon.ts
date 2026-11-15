@@ -249,6 +249,11 @@ export const until = async <T>(what: string, probe: () => Promise<T | null | und
   throw new Error(`timed out after ${ms}ms waiting for ${what}${last ? ` (last error: ${String(last)})` : ''}`)
 }
 
+/** The shell of every tile, the same on every machine and never the developer's choice: under theirs, a bash, fish or
+ *  tcsh user ran every tile in it, and bash and fish run path_helper too. CI installs zsh and macOS ships it. No second
+ *  shell to fall back to: that would be a second rule to keep true. */
+const TILE_SHELL = '/bin/zsh'
+
 /** How many daemons have been started beside another in this process: each gets its own folder. */
 let besideCount = 0
 
@@ -285,32 +290,26 @@ export class IsolatedDaemon {
     // names: the socket lives in the data folder, and a Unix socket's path has room for 96 bytes.
     const own = beside ? join(root, `b${++besideCount}`) : root
     const dirs = {
-      home: join(root, 'home'), data: options.dataDir ?? join(own, beside ? 'd' : 'data'), runtime: join(own, 'runtime'), auth: join(own, 'auth'),
+      home: tmux.env.HOME!, data: options.dataDir ?? join(own, beside ? 'd' : 'data'), runtime: join(own, 'runtime'), auth: join(own, 'auth'),
       bin: join(own, 'bin'), dsh: join(own, 'dsh'), claudeProjects: join(root, 'claude', 'projects'), codexHome: join(root, 'codex'),
       projects: join(root, 'projects'), tmp: join(own, 't'),
     }
-    // A data folder the harness gives a daemon under a TMPDIR too long for its socket falls back to one under the
-    // test's home, as long, and the test failed later with `EINVAL connect` and no word of why: refused here, before
-    // anything is made in the root. A test's own data folder is not measured: where it sits is that test's subject
-    // (noSocket.e2e.ts passes one too long on purpose).
-    if (options.dataDir === undefined) {
-      try {
-        assertSocketPathFits(join(dirs.data, `daemon-${port}.sock`))
-      } catch (error) {
-        // A daemon beside another made nothing yet, and the root it shares is the other's.
-        if (!beside) {
-          await tmux.close()
-          forgetTmux(tmux.socket)
-        }
-        throw error
+    try {
+      if (!existsSync(TILE_SHELL)) throw new Error(`${TILE_SHELL} is required: a daemon under test runs its tiles under zsh`)
+      // A data folder the harness gives a daemon under a TMPDIR too long for its socket falls back to one under the
+      // test's home, as long, and the test failed later with `EINVAL connect` and no word of why: refused here, before
+      // anything is made in the root. A test's own data folder is not measured: where it sits is that test's subject
+      // (noSocket.e2e.ts passes one too long on purpose).
+      if (options.dataDir === undefined) assertSocketPathFits(join(dirs.data, `daemon-${port}.sock`))
+    } catch (error) {
+      // A daemon beside another made nothing yet, and the root it shares is the other's.
+      if (!beside) {
+        await tmux.close()
+        forgetTmux(tmux.socket)
       }
+      throw error
     }
     for (const dir of Object.values(dirs)) await mkdir(dir, { recursive: true })
-    // A zsh user as most are, with a .zshrc of their own (empty: nothing of anyone's). With none, the zsh
-    // of Debian, Ubuntu and Fedora opens its new-user setup menu in every terminal tile and every shell an
-    // engine leaves behind, and a test typing into one types into the menu. The person with no startup
-    // files at all has their own case (shells.e2e.ts). Appended, never truncated: a test's own stays.
-    await writeFile(join(dirs.home, '.zshrc'), '', { flag: 'a' })
     const config: EngineConfig = {
       port, dataDir: dirs.data, claudeProjectsDir: dirs.claudeProjects, codexHome: dirs.codexHome,
       claudeModel: options.claudeModel, codexModel: options.codexModel, modelControlGate: options.modelControlGate,
@@ -342,6 +341,8 @@ export class IsolatedDaemon {
       APPDATA: join(dirs.home, 'AppData', 'Roaming'),
       // A login shell in a pane must not load anyone's zsh configuration.
       ZDOTDIR: dirs.home,
+      // Its tiles' shell, not the developer's: a test that wants another names it in its own env.
+      SHELL: TILE_SHELL,
       PORT: String(port),
       // A bridge port of its own: on 51793, the developer's daemon's, one daemon under test left running took the
       // port from it, and another asked `lsof` every 5.5 s which account held it (2026-11-11).
@@ -350,6 +351,9 @@ export class IsolatedDaemon {
       // `harness browser` (1 MiB) outlived its test there. One letter: the daemon puts no socket here, and tmux has its
       // own (TMUX_TMPDIR), but a child's socket in it must fit too.
       TMPDIR: dirs.tmp,
+      // The same folder for Windows' os.tmpdir(), which reads these and not TMPDIR: with neither, a daemon there fell
+      // back to %SystemRoot%\temp, outside its root (PM, 2026-11-15).
+      TEMP: dirs.tmp, TMP: dirs.tmp,
       // Its tmux server's folder, by name (src/testing/isolatedTmux.ts): the daemon's bare tmux calls must reach the
       // fixture's private server, whatever else it inherits.
       TMUX_TMPDIR: tmux.env.TMUX_TMPDIR,
