@@ -1,11 +1,16 @@
 import { open } from 'node:fs/promises'
 import { join } from 'node:path'
-// Types only: the devices process must not load core code.
+// Data the devices process already loads (lib/engineHomes.ts), and types only: it must not load core code.
+import { sessionStoreContracts } from '../../engines/sessionStoreContracts.js'
 import type { SessionOwner } from '../../lib/sessionSearch/external.js'
 import { observedTitle } from './observedTitle.js'
 
 /** A record is about 1–2 KiB; a larger file is not read. */
 export const MAX_RECORD_BYTES = 16 * 1024
+
+const { live } = sessionStoreContracts.claude
+/** Claude Code's process record, `<folder>/<pid><suffix>` beside each projects folder, as its store declares it. */
+const declared = 'record' in live ? live.record : undefined
 
 export interface RecordNameOptions {
   /** Claude Code's projects folders (claudeProjectsRoots); its process records are in `sessions` beside each. */
@@ -21,9 +26,11 @@ export interface RecordNameOptions {
 export async function readRecordName(
   owner: Pick<SessionOwner, 'pid' | 'record'> & { sessionId: string }, opts: RecordNameOptions,
 ): Promise<string | undefined> {
-  // The very string recordOwners (engines/kit/adoption.ts) builds for this pid: any other path is not this
-  // session's own record, so it is never opened.
-  if (!opts.roots.some((root) => owner.record === join(root, '..', 'sessions', `${owner.pid}.json`))) return undefined
+  // The very string recordOwners (engines/kit/adoption.ts) builds for this pid, from the same declaration: any other
+  // path is not this session's own record, so it is never opened.
+  if (!declared) return undefined
+  const { folder, suffix } = declared
+  if (!opts.roots.some((root) => owner.record === join(root, '..', folder, `${owner.pid}${suffix}`))) return undefined
   let text: string
   try {
     const file = await open(owner.record, 'r')
