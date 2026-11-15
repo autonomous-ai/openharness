@@ -248,6 +248,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     orcaSwitch: orca.switchTo,
     canOpen: opener.can,
     open: opener.open,
+    claudeInFront: () => cableHost.latestFront() === 'claude',
+    claudeShow: opener.claudeShow,
     // The route or the refusal only: never the words, the session or the terminal.
     count: (what) => log(`[device] voice · ${what}`),
   }) : null

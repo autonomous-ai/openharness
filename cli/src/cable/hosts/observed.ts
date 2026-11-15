@@ -91,12 +91,16 @@ export interface ObservedActions {
   canOpen(target: OpenTarget): boolean
   /** A tap: the agent's pane, then its app (open.ts). */
   open(agentId: string, target: OpenTarget): Promise<boolean>
+  /** The Claude app is the app most recently reported in front. */
+  claudeInFront(): boolean
+  /** A rest: the session in the Claude app, already in front (open.ts). */
+  claudeShow(agentId: string, session: string): Promise<PaneSwitch>
   count(what: 'mod' | 'orca' | 'waiting' | 'busy' | 'pending' | 'too-long' | 'no-answer'): void
 }
 
 /** A pane a rest can show without its app coming forward, by the app that holds it: a later kind is one member here, one
- *  line in shownPane, one case in showPane and one ObservedActions member. */
-type ShownPane = { kind: 'orca'; handle: string }
+ *  line in shownPane, one case in showPane and its ObservedActions members. */
+type ShownPane = { kind: 'orca'; handle: string } | { kind: 'claude'; session: string }
 
 interface Entry {
   agent: HostAgent
@@ -230,7 +234,7 @@ export class ObservedSource implements HostSource {
     return e && actions && this.live(e) && actions.canOpen(e.opens) ? actions.open(e.agent.id, e.opens) : Promise.resolve(false)
   }
 
-  /** Only an Orca terminal can be shown without its app coming forward. */
+  /** Only an Orca terminal, or a Claude app session while that app is in front, is shown without its app coming forward. */
   hasPane(agent: HostAgent): boolean {
     return this.shownPane(agent) !== undefined
   }
@@ -240,13 +244,20 @@ export class ObservedSource implements HostSource {
     if (!pane) return Promise.resolve('failed')
     switch (pane.kind) {
       case 'orca': return this.deps.actions!.orcaSwitch(pane.handle)
+      case 'claude': return this.deps.actions!.claudeShow(agent.id, pane.session)
     }
   }
 
-  /** The terminal of its latest event, while it lives: one it left, or an ended session's, holds something else now. */
+  /** The pane of its latest event, while it lives: one it left, or an ended session's, holds something else now. A Claude
+   *  app session only while a tap could open it and that app is in front, asked at each look: the front moves. */
   private shownPane(agent: HostAgent): ShownPane | undefined {
     const e = this.entries.get(agent.id)
-    return e?.handle && this.deps.actions && this.live(e) ? { kind: 'orca', handle: e.handle } : undefined
+    const actions = this.deps.actions
+    if (!e || !actions || !this.live(e)) return undefined
+    if (e.handle) return { kind: 'orca', handle: e.handle }
+    const pane = e.opens.pane
+    if (pane?.app === 'claude' && actions.canOpen({ pane }) && actions.claudeInFront()) return { kind: 'claude', session: pane.id }
+    return undefined
   }
 
   private emit(): void {
