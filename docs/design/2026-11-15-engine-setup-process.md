@@ -47,11 +47,19 @@ is bounded and expires; disconnect resolves it as refused. Prepared claims that 
 and can be settled by the existing cancellation recovery. The existing POSIX outside dispatch witness remains the
 once-only authority, including when an installation finishes after its worker is gone.
 
-Windows currently records a running installer after spawning it and keeps its completion callback in the parent.
-The extraction must not turn this gap into a replay after worker replacement: the helper must not begin installing
-before durable dispatch evidence exists, and uncertain dispatch must hold instead of being retried. Preserve the
-documented hidden runner pattern and existing records. The exact Windows publication protocol and its regression
-evidence must be recorded here before its implementation is accepted.
+Windows publishes an old-readable `failed` record with the original request key and an additive opaque `dispatch`
+token before spawning its existing hidden helper. Until resolved, the new controller holds both that request and a
+new request with a named recovery-needed state. The helper writes its own running/completion record under that
+same token; losing the parent cannot lose completion. A known spawn refusal or proven installer failure removes
+the uncertainty token so the existing explicit retry behavior remains. Finding a binary is never completion.
+
+The actual pre-extraction Windows controller is retained as a dated test fixture. It reads the new pre-dispatch
+failed record and refuses the **same saved request** without installing again: `CreationAuthority.id` survives
+recovery/rollback. An older binary separately asked for a **new request** still performs its legacy retry of a failed
+record. Additive evidence cannot make old code enforce the new all-request hold. This limitation is explicit; no
+core rollback machinery or promise of universal old-binary enforcement is introduced. Settled old records retain
+their current interpretation. Tests cover both request keys through the actual older implementation, interrupted
+publication/dispatch, and helper-owned results after parent replacement.
 
 ## Design
 
@@ -79,8 +87,9 @@ evidence must be recorded here before its implementation is accepted.
   service and uses its existing installation path; there is no new public protocol version.
 - **Migration and rollback:** Reuse installation directory and existing claim/result schema. No account/session data
   migration. A worker restart reconstructs installation status from durable evidence; an uncertain dispatch is not
-  replayed. Rollback uses the same old journal. Any Windows additive publication record must be safe when an older
-  controller reads the directory; document and test its exact interpretation before accepting that change.
+  replayed. Rollback uses the same old journal. Windows records remain readable by an older
+  controller: the original saved request cannot replay; a separately requested new launch retains the older
+  controller's legacy retry behavior, as detailed above.
 - **Audience:** Only authenticated core-to-service private calls may prepare or commit; no route is published to
   clients. Inputs are checked and bounded at the worker. Returned paths/identity/environment are local capability
   data and never go into telemetry. Errors retain the existing caller-visible installation reason; new logs carry
