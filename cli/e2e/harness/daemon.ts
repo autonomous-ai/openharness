@@ -335,6 +335,8 @@ export class IsolatedDaemon {
       HOME: dirs.home,
       // Its profile, under that home too. On Windows os.homedir() follows USERPROFILE, not HOME, so every default
       // under it was the developer's real profile (audit of 2026-11-15).
+      // No XDG_* is named: a daemon inherits none (src/testing/daemonEnvironment.ts), so each falls under this home.
+      // Naming XDG_CONFIG_HOME would also move Cursor's config folder to .config/cursor (engines/cursor/contract.ts).
       USERPROFILE: dirs.home,
       LOCALAPPDATA: join(dirs.home, 'AppData', 'Local'),
       APPDATA: join(dirs.home, 'AppData', 'Roaming'),
@@ -398,9 +400,6 @@ export class IsolatedDaemon {
       TERMINAL_RECONCILE_INTERVAL_MS: '5000',
       ...options.env,
     })
-    // A Claude Code home moved in the environment this run was started from is the person's: the daemon
-    // would adopt it and install its hooks there (lib/engineHomes.ts). Only a test may move one.
-    if (!options.env || !('CLAUDE_CONFIG_DIR' in options.env)) delete env.CLAUDE_CONFIG_DIR
     return new IsolatedDaemon(root, tmux, port, env, options, config)
   }
 
