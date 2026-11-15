@@ -485,6 +485,25 @@ end focus_tty
     }
 
     #[test]
+    fn every_handler_that_tells_its_app_first_checks_that_it_runs() {
+        // `tell application id` launches an app that is not running, and the app may have quit since the runner asked.
+        for app in APPS {
+            let handlers: Vec<&str> = source(app).split("\non ").skip(1).collect();
+            assert_eq!(handlers.len(), 3, "{app:?}");
+            for handler in handlers {
+                if !handler.contains("tell application") {
+                    // It sends no event of its own: it calls one that checks.
+                    assert!(!handler.contains('«'), "{app:?}: {handler}");
+                    continue;
+                }
+                let answer = if handler.starts_with("selected_tty()") { r#""""# } else { "false" };
+                let first = handler.lines().nth(1).unwrap_or_default().trim();
+                assert_eq!(first, format!("if not (running of application id app_id) then return {answer}"), "{app:?}");
+            }
+        }
+    }
+
+    #[test]
     fn each_source_tells_only_its_own_app_within_the_call_timeout() {
         assert_eq!(CALL_TIMEOUT, Duration::from_secs(2));
         for app in APPS {
