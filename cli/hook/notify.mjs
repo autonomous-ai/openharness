@@ -403,7 +403,7 @@ function hookRoute(port) {
   return socketPath ? tokenRoute({ socketPath }, readHookCredential()) : null
 }
 
-function post(port, path, body, onResponse) {
+function post(port, path, body, onResponse, facts = {}) {
   return new Promise((resolve) => {
     const payload = JSON.stringify(body)
     const route = hookRoute(port)
@@ -418,6 +418,8 @@ function post(port, path, body, onResponse) {
           'Content-Type': 'application/json',
           'Content-Length': Buffer.byteLength(payload),
           ...route.headers,
+          // Headers, not body fields: a daemon that does not read one ignores it, where it refuses an unknown field.
+          ...facts,
           // When the engine ran this hook: this process's start, not its arrival, which can be seconds later on
           // a loaded machine, after the engine has moved on to its next prompt (src/hookServer.ts hookFiredAt).
           'X-Harness-Hook-Fired-At': String(FIRED_AT),
@@ -507,6 +509,34 @@ function hostHints() {
     if (value && !CONTROL.test(value)) hints[name] = value
   }
   return hints
+}
+
+/** The endpoint variables that say an engine is routed through OpenRouter: these names exactly. Their values never leave this process. */
+const GATEWAY_URLS = ['ANTHROPIC_BASE_URL', 'OPENAI_BASE_URL', 'OPENAI_API_BASE']
+
+/** By the endpoint's host alone: one that only looks like OpenRouter's (openrouter.ai.example.com, a path) is not. */
+function ownGateway() {
+  return GATEWAY_URLS.some((name) => {
+    try { return /(?:^|\.)openrouter\.ai$/i.test(new URL(process.env[name] ?? '').hostname) } catch { return false }
+  }) ? 'ori' : 'none'
+}
+
+/** This session's Codex home, as the core takes one (src/hookServer.ts hookFacts). The default is no home of its own. */
+function ownCodexHome() {
+  const home = process.env.CODEX_HOME
+  return home && isAbsolute(home) && home.length <= 1_024 && !CONTROL.test(home) && home !== join(homedir(), '.codex')
+    ? home : undefined
+}
+
+/**
+ * What this hook says of its session's environment: it reads its own, so the daemon need read no other process's. The
+ * gateway for Claude Code and Hermes (Codex's argv says its own), the home for Codex; nothing for another engine.
+ */
+function ownFacts(engine) {
+  if (engine === 'claude' || engine === 'hermes') return { 'X-Harness-Hook-Gateway': ownGateway() }
+  const home = engine === 'codex' ? ownCodexHome() : undefined
+  // Percent-encoded: Node refuses a header value above U+00FF, and that would end the hook before it registers.
+  return home ? { 'X-Harness-Hook-Codex-Home': encodeURIComponent(home) } : {}
 }
 
 /** Each engine's name for these moments, as main() reads them in a pane: Claude Code's and the engines that copy it
@@ -2216,13 +2246,15 @@ async function main() {
     model: modelName(input.model),
     cliVersion: input.cli_version || input.cursor_version || input.version,
   }
-  let ok = await post(port, '/api/hook/session-start', body)
+  // The daemon reads them on this registration alone (src/hookServer.ts hookFacts).
+  const facts = ownFacts(engine)
+  let ok = await post(port, '/api/hook/session-start', body, undefined, facts)
   let held = ok === 'held'
   // A live core's bounded admission queue owns the existing candidates. Retry this
   // delivery within the hook budget, never reconstruct registry state behind it.
   for (let attempt = 0; engine === 'hermes' && ok === 'held' && attempt < 3 && remainingBudget() > 750; attempt++) {
     await new Promise(resolve => setTimeout(resolve, 250))
-    ok = await post(port, '/api/hook/session-start', body)
+    ok = await post(port, '/api/hook/session-start', body, undefined, facts)
     held ||= ok === 'held'
   }
   if (held && ok !== true) process.stderr.write('[harness] Hermes admission is held; this delivery could not be confirmed. The current conversation is unchanged.\n')
