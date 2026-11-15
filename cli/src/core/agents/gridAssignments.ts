@@ -82,7 +82,8 @@ export function createGridAssignments({ models, registry, revision, announce, wa
       const owner = ticket(session, 'refresh')
       if (!owner) return
       void processLaunchArgs(session.processIdentity).then(args => {
-        // '' is a process table that could not be read, or a process no longer in it: no finding.
+        // '' is a command line that could not be read (no process table, the process gone, or a renamed Pi with no
+        // launcher of ours above it): no finding, and the row keeps its grid.
         const process = args ? gridAssignmentEvidence(owner.key, session.engine, args) : undefined
         if (process) ask([{ owner, process }])
         else if (process === null) { owner.apply(null); owner.done() }
