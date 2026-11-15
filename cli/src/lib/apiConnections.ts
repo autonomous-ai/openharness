@@ -1,11 +1,39 @@
 /** Machine-local API connections. Only child tools receive credentials; model/subscription
  * selection and the daemon's own environment are never changed by saving a key. */
-import { chmodSync, closeSync, fsyncSync, lstatSync, mkdirSync, openSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { z } from 'zod'
 
-import { id, metadata, stored, readApiConnectionStore, ApiConnectionError, type ApiConnection, type StoredConnection } from './apiConnectionMetadata.js'
+import { API_CONNECTIONS_DIR, API_LIST_FILE, API_LIST_MAX_BYTES, UNREADABLE, baseUrl, id, metadata, ApiConnectionError,
+  type ApiConnection } from './apiConnectionMetadata.js'
+import { readPrivateStateFile, secureStateDirectory } from './secureState.js'
 export { ApiConnectionError, type ApiConnection } from './apiConnectionMetadata.js'
+
+const stored = metadata.extend({ apiKey: z.string().trim().min(1).max(8192).regex(/^[^\s\x00-\x1f\x7f]+$/) })
+const storeSchema = z.object({ version: z.literal(1), connections: z.array(stored).max(100), recognizedBases: z.array(baseUrl).optional() })
+type StoredConnection = z.infer<typeof stored>
+
+/** The store with the keys, `connections.json`, checked: read only here, by the models service and `harness api`, and by
+ *  the engine probe for the authentication it names (./engineAccount.ts). A launch reads the list without them
+ *  (./apiConnectionMetadata.ts). Its shape is the one every build since September reads, so an older build put back
+ *  reads and writes it as before. */
+export function readApiConnectionStore(dataDir: string): z.infer<typeof storeSchema> {
+  const dir = join(dataDir, API_CONNECTIONS_DIR)
+  const file = join(dir, 'connections.json')
+  try {
+    const directory = lstatSync(dir, { throwIfNoEntry: false })
+    if (!directory) return { version: 1, connections: [] }
+    if (!directory.isDirectory() || directory.isSymbolicLink()) throw new Error()
+    secureStateDirectory(dir, false)
+    const stat = lstatSync(file, { throwIfNoEntry: false })
+    if (!stat) return { version: 1, connections: [] }
+    if (!stat.isFile() || stat.nlink !== 1 || stat.size > 2 * 1024 * 1024) throw new Error()
+    const parsed = storeSchema.parse(JSON.parse(readPrivateStateFile(file, 2 * 1024 * 1024)))
+    if (new Set(parsed.connections.map(row => row.id)).size !== parsed.connections.length) throw new Error()
+    return parsed
+  } catch { throw new ApiConnectionError(UNREADABLE) }
+}
 export type ApiPreset = Omit<ApiConnection, 'id'> & { keyUrl: string; docsUrl: string }
 
 /** Defaults verified against each provider's public authentication docs. Custom APIs use the
@@ -31,17 +59,22 @@ export function servesModels(connection: Pick<ApiConnection, 'authHeader' | 'aut
 export class ApiConnections {
   private readonly dir: string
   private readonly file: string
+  private readonly listFile: string
   constructor(private readonly dataDir: string) {
-    this.dir = join(dataDir, 'api-connections')
+    this.dir = join(dataDir, API_CONNECTIONS_DIR)
     this.file = join(this.dir, 'connections.json')
+    this.listFile = join(this.dir, API_LIST_FILE)
   }
 
-  private read(): StoredConnection[] { return readApiConnectionStore(this.dataDir).connections }
+  /** Every read keeps the list a launch reads in step with the store: an older build, put back, writes only the store,
+   *  and a store from before the list has none until it is first read here (models reads it as it starts). */
+  private read(): StoredConnection[] {
+    const connections = readApiConnectionStore(this.dataDir).connections
+    if (existsSync(this.dir)) this.keepList(connections)
+    return connections
+  }
 
   private write(connections: StoredConnection[]): void {
-    const temporary = join(this.dir, `.connections-${randomUUID()}.tmp`)
-    let fd: number | undefined
-    let created = false
     try {
       const previous = readApiConnectionStore(this.dataDir)
       // Endpoint recognition must survive a models restart, even before an organic agent's first scan.
@@ -52,19 +85,47 @@ export class ApiConnections {
       if (Buffer.byteLength(contents) > 2 * 1024 * 1024) throw new Error('API store is full')
       mkdirSync(this.dir, { recursive: true, mode: 0o700 })
       if (lstatSync(this.dir).isSymbolicLink()) throw new Error()
-      chmodSync(this.dir, 0o700)
+      secureStateDirectory(this.dir, false)
+      this.replace('connections', this.file, contents)
+    } catch { message('This API could not be saved. Try again.') }
+    this.keepList(connections)
+  }
+
+  /** [file] replaced by [contents] at once, owner-only: a crash leaves the old file or the new, never half of one. */
+  private replace(name: string, file: string, contents: string): void {
+    const temporary = join(this.dir, `.${name}-${randomUUID()}.tmp`)
+    let fd: number | undefined
+    let created = false
+    try {
       fd = openSync(temporary, 'wx', 0o600)
       created = true
       writeFileSync(fd, contents)
       fsyncSync(fd)
       closeSync(fd)
       fd = undefined
-      renameSync(temporary, this.file)
-    } catch { message('This API could not be saved. Try again.') }
-    finally {
+      renameSync(temporary, file)
+      created = false
+    } finally {
       if (fd !== undefined) closeSync(fd)
       if (created) rmSync(temporary, { force: true })
     }
+  }
+
+  /** The list without keys, rewritten when it is not what the store holds. The store is already saved, so a list that
+   *  cannot be written is said, not thrown: the next read writes it. */
+  private keepList(connections: readonly StoredConnection[]): void {
+    // Their metadata only: `metadata` drops the key (./apiConnectionMetadata.ts reads it back, strictly).
+    const contents = JSON.stringify({ version: 1, connections: connections.map(publicConnection) })
+    try {
+      try {
+        const stat = lstatSync(this.listFile, { throwIfNoEntry: false })
+        // Never open an unbounded or non-regular derivative (a FIFO would hang every API read). A link may alias
+        // the key store; replace the directory entry instead, without reading or changing its target.
+        if (stat?.isFile() && stat.nlink === 1 && stat.size <= API_LIST_MAX_BYTES
+          && readPrivateStateFile(this.listFile, API_LIST_MAX_BYTES) === contents) return
+      } catch { /* A damaged derivative is replaced from the already validated key store. */ }
+      this.replace('list', this.listFile, contents)
+    } catch { console.warn('[apis] The list of saved APIs a launch reads could not be written; the next read of them writes it.') }
   }
 
   recognizedBases(): string[] {
