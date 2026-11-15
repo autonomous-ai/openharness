@@ -3,8 +3,8 @@
 Package: the feature routes and the product usage code still in the daemon core's process (audit
 docs/design/2026-11-12-core-audit.md section 2: "Feature routes in the two doors", "The product usage vocabulary",
 "Smaller"). Follow the plan's rules and lessons (../2026-11-15-core-plan.md). One PR at a time, each on a branch of its
-own (core-routes-1 and -2 are step 1's, core-routes-3 step 2's: start step 3 on core-routes-4), worktrees at
-.claude/worktrees/<branch> from a fresh origin/main.
+own (core-routes-1 and -2 are step 1's, core-routes-3 step 2's, core-routes-4 step 3's: start step 4 on core-routes-5),
+worktrees at .claude/worktrees/<branch> from a fresh origin/main.
 
 Worktree setup: run `npm ci` in the worktree's `cli/`. The main checkout's `cli/node_modules` is incomplete (no
 @sindresorhus/slugify, yaml or pngjs), and the e2e daemon and bundle fail on a link to it.
@@ -128,18 +128,151 @@ core/usageOutcomes.ts.
   while the gateway is away) must carry it, because the Desktop reads it off every answer and one without it would stop
   its newer names until the next report. appProductUsageReport.spec.ts reads it from core/api.ts beside the names.
 
-## Step 3: pairing and keys, voice, the relay to other machines
-- /api/auth/handoff from step 2 (above: a socket-only door).
-- hookServer.ts: /api/pair, /api/pairs, /api/revoke, /api/revoke-all, /api/remote-password/(set|clear|status),
-  /api/link/trust-peer, /api/group, /api/group/(sync|remove), /api/devices, /api/devices/(remove|rebaseline|history|
-  dismiss): each a GatewayOps call today (gatewayLink `http(...)`, unanswered `{status:503, body:{error:
-  'GATEWAY_UNAVAILABLE'}}`, PAIR_WAIT_MS for pair). Move their validation into `gateway_http`; drop the GatewayOps
-  members and GATEWAY_CALLS the core no longer calls.
-- localWsServer.ts: route_task / route_send / voice_route_reply (to the devices; answered off the ordered chain) need
-  the WS half of the adapter: a frame type -> a service request, the reply as the result frame. The relay to other
-  machines (machine_select for another machine, shareId) stays transport through the gateway's WindowRelay: check what
-  can leave. Desk frames (app_panes, app_unread, app_swarms, agent_seen, app_focus, dial_settings, app_*_result) feed
-  core-held state the devices are told again on reconnect (devicesLink `state`): keep that state unless a better owner.
+## Step 3, draft (#4324, branch core-routes-4): the keys' routes and the phone's code to the gateway, ⌘K's frames to the devices
+
+### Design
+- Growth: no new persistent records. Pending requests retain the existing service-link bounds; inline deadlines release
+  their timers on an answer or a failure. Request bodies retain the door's 256 KiB bound and WebSocket frame limit.
+- Concurrency: the gateway remains the sole key-state writer. This changes transport, not the key store's locks.
+  Window replies remain correlated by request id and never block the connection's terminal-input chain.
+- Read cost: one request and answer per command, with no new scan or polling. A frame type has one map lookup.
+- Scale: the routing tables are fixed by the build; ten times the traffic adds requests, not retained per-agent state.
+  Service deadlines, unavailable replies and request latency expose saturation first.
+- Compatibility: existing clients retain their paths, methods, result frames and byte-for-byte answers, except the
+  explicitly listed differences below. No backend contract changes. The master starts core and services from one build;
+  the socket provenance field is internal to that build, never supplied by a client payload.
+- Migration and rollback: no disk migration or backend rollout is needed; reverting restores the old route owners.
+- Audience: the local door still checks socket/credential, loopback, Host, Origin and the local-write header before
+  routing. The gateway separately refuses remote/guest callers and grants a phone code only for socket provenance.
+- Identity: commands use this daemon owner's existing gateway identity. No account fallback or agent launch changes.
+- Failure: unavailable, slow or failed services get the route's named fallback; router exceptions are logged. A service
+  failure never stops the core. No new retries or replay of key writes.
+- Platforms: macOS/Linux sockets and Windows pipes keep the same public contract. macOS validation is local; Linux CI
+  and native Windows acceptance must be recorded separately.
+
+The core's files and lines: 542 / 92,562 before (main at 0b15482b55), 542 / 92,283 after (tools/coreCount.mjs).
+
+### The adapter, extended (core/serviceRoutes.ts, core/api.ts)
+- A door kind: `ServiceHttpRoute.door: 'socket'`. Over the TCP port the door answers its 403 `{error:'FORBIDDEN'}` before
+  the service is asked; over the daemon's own socket (Windows: its pipe, with the token's proof) it asks with
+  `asker.door: 'socket'` (`Asker.door`, set only by the door, for every route asked over the socket). No client of the
+  local WebSocket is ever given it (backendSocket `askerFor`), so a `gateway_http` sent over the WebSocket for a socket's
+  route is refused by the service: `gatewayHttp` passes `asker.door === 'socket'` to the handoff's own route, which reads
+  the path once and refuses without it (gateway/accountRoutes.ts). hookServer.ts passes `trustedLocal` as `socket`; a
+  service's own process keeps `door` when it rebuilds the asker (services/process.ts; the e2e found it dropped).
+- The adapter never rejects: a router that throws while asked is the route's own answer, logged (`SERVICE_REQUEST_FAILED`),
+  without the exception's potentially private content.
+- Like step 2's, the keys' routes are ordinary requests a client of the local WebSocket may send, at the door's trust: no
+  browser can open the WebSocket (it refuses any Origin), and over TCP it takes the local credential from this account. The
+  local header, the door's guard against a browser page, is not asked there.
+- The WebSocket half: `SERVICE_WS_FRAMES` (`ServiceWsFrame`: `frame`, `type`, `result?`, `waitMs`, `unanswered?`) and
+  `serviceRoutes.frames.get(frame.type)(connection, frame)`: the frame is asked of its service as `{ frame, payload }` (the window's payload as it
+  came, nested: serviceLinks puts its own `requestId` on the request), off the connection's ordered chain, and the answer
+  goes back as `{ type: result, payload: { requestId, ...answer } }` (the window's requestId, `''` when it sent none, first,
+  as before). An answer with a string `error` (down, failing, slow) is the frame's `unanswered`. No `result`: told, nothing
+  goes back. localWsServer.ts's `onServiceFrame` takes it wherever the connection's terminals are (relayed ones too);
+  main.ts asks with `backend.askerFor(connId, true)`.
+- Convention: one `<service>_ws` request a service (`devices_ws` in `DEVICES_REQUESTS`), which dispatches by `frame`.
+
+### Where the routes went
+- Gateway, `gateway_http` -> gateway/keyRoutes.ts (`keyRoutes(KeyOps)`): POST /api/pair (wait PAIR_WAIT_MS, now in api.ts),
+  GET /api/pairs, POST /api/revoke, /api/revoke-all, /api/remote-password/(set|clear), GET /api/remote-password/status,
+  POST /api/link/trust-peer, GET /api/group, POST /api/group/(sync|remove), GET /api/devices, POST
+  /api/devices/(remove|rebaseline|dismiss), GET /api/devices/history (a read that needs the local header: `writes: ['GET']`).
+  Each validates in the door's words; a pairing's or a password's own failure is the old 500 `{error: message}`, any other
+  throw the old 500 INTERNAL, logged (never a throw: SERVICE_FAILED would count against the gateway). Unanswered: 503
+  `{error:'GATEWAY_UNAVAILABLE'}`, as gatewayLink's `http` answered; wait 30 s (serviceLinks' default) and 120 s for a pairing.
+  The 16 `GatewayOps` members, their `GATEWAY_CALLS`, gatewayLink's ops, gatewayProcess's handlers and hookServer's
+  handlers are deleted; gateway/start.ts holds them as `keyOps`.
+- POST /api/auth/handoff -> gateway/accountRoutes.ts (`forward('/api/auth/handoff', {})`), `door: 'socket'`, wait 25 s.
+- Devices, `devices_ws` (services/devices.ts `windowFrame`): `route_task` -> `route_result` (an empty task is the
+  'empty task' answer), `route_send` -> `route_send_result` (`nothing to send` without both), `voice_route_reply` (told; a
+  state other than taken/sent/cancelled, or no voiceId, is dropped). A window's only (`asker.local && owner`, else
+  `LOCAL_ONLY`). Unanswered: the old DEVICES_UNAVAILABLE answers. `DevicesPort.voiceReply`, its devicesLink event and
+  devicesProcess handler, `VoiceRouteReply`, and localWsServer's `onRouteTask`/`onRouteSend`/`onVoiceRouteReply` are deleted.
+
+### Stay in the core, said why
+- `DevicesPort.routeTask`/`routeSend`: lib/ownerCommands.ts (⌘K from the owner's app over the relay, `route_task_result`,
+  its BUSY bound and INVALID_REQUEST) still asks them; step 4 moves ownerCommands to a devices request and deletes both.
+- The relay to other machines (localWsServer's `machine_select` for another machine, `shareId`, `forceReconnect`,
+  `withLocalClient`): transport, the window's own WebSocket handed to the gateway's `WindowRelay` frame by frame. It can only
+  leave if the gateway held the window's socket itself, a door of a component's own: package 14's question.
+- The desk frames (app_panes, app_unread, app_swarms, agent_seen, app_focus, dial_settings, app_*_result): they feed state
+  the core holds and tells the devices again each time they connect (devicesLink `state`); no better owner yet.
+
+### Answers that differ (said in the PR)
+- A client of the local WebSocket sending `gateway_http` for /api/auth/handoff: 403 FORBIDDEN now, 404 not found before
+  (no such gateway route). Both refuse; the backend is never asked (e2e/keyRoutes).
+- Inline mode: the key routes are now bounded (30 s, 120 s for a pairing) by the adapter's timer; before, the door waited
+  for the gateway's call however long. Out of process: a key command that throws is the door's old 500 (inline's), not 503.
+- ⌘K's frames with a router that throws: the devices' DEVICES_UNAVAILABLE answer (as the guarded port gave in practice), not
+  localWsServer's old `reason: <the error>`, which nothing reached.
+
+### Verified
+- e2e/keyRoutes.e2e.ts: the goldens (every key route, the code over the socket, ⌘K's frames) green on main and after, in
+  both modes; the faults (`gateway.gateway_http`, `devices.devices_ws`) and the WebSocket's refusal red on main, green after.
+- Unit: core/serviceRoutes.spec.ts (socket door, frames), gateway/keyRoutes.spec.ts, gateway/accountRoutes.spec.ts,
+  services/devices.spec.ts, hookServer.spec.ts, localWsServer.spec.ts, core/api.spec.ts.
+
+### Continuation (2026-11-15)
+- Worktree `/tmp/harness-core-routes-continue`, branch `codex/core-routes-continue`, from `core-routes-4` at
+  `18523b4710`. Integrated main `aad8dcd535` in `e7f7509005`. The API spec keeps both sets of imports; the shared plan
+  table keeps main's version for the coordinating root to update.
+- Review found the adapter left its inline deadline armed when a router threw. The timeout is now cleared on that
+  path, with a regression checking HTTP and WebSocket answers and zero pending timers.
+- The preceding Verified section records the original step's evidence, not fresh validation of this continuation.
+  No tests or compilers ran here: after the performance marker appeared, root held the shared validation lock for
+  Browser #4320. Red/green for the added regression, typecheck, the affected unit/architecture tests, `test:core`, and
+  isolated route e2e remain pending. The regression against `e7f7509005` should demonstrate the retained timer first.
+- `scripts/local-checks.py --list` selects `cli-core` only. Run its exact-head receipt after the final source commit.
+  The public route contracts also need `keyRoutes`, `accountRoutes`, `deviceRoutes`, `gatewayProcess`, `devicesProcess`
+  and `devicesOnDemand` e2e. Full Linux unit CI, independent review and native Windows acceptance remain unverified.
+- Current core count: main `aad8dcd535` has 539 files / 92,691 lines; this continuation has 539 / 92,414. No new file
+  enters the core. The original PR's frame microbenchmark reports 5.9 → 8.0 ns; it is not evidence of no regression.
+  Root must resolve or accept that measured increase explicitly before calling the hot-path requirement satisfied.
+- PR #4324 is still a draft with no CI runs. Root alone updates its body (currently containing `E2E_RESULTS`,
+  `CORE_AFTER` and `RECEIPTS` placeholders), pushes, marks ready, merges and publishes. Step 4 remains out of scope.
+
+Root review and integration:
+- Main `690e9b4ae5` is integrated, preserving the concurrent devices terminal-tab work. No Browser feature work is
+  included; this package removes feature dispatch from core's doors.
+- The timer regression was observed red (one retained timer), then passed with all 16 adapter cases.
+- Review found that a service could overwrite the window's request id and that boundary exceptions could put private
+  request or key-store content in logs. Three focused regressions failed first. Core now keeps the request id, and the
+  adapter/key-route catch paths log only their static route and named failure. All 26 adapter/key-route cases pass;
+  an intermediate run retained one old log-text expectation, corrected to the intentional content-free failure.
+- These fixes change neither stored data nor successful public replies. Existing declared fallback bodies remain;
+  unknown exceptions are not copied into logs. Full core coverage and final process acceptance remain pending.
+- Main `6099a1a205` is integrated. A wire-order regression was observed red, then all 26 adapter/key-route cases passed;
+  requestId stays first in ordinary successful replies as well as when a service attempts to replace it.
+- A nine-round alternating localhost WebSocket workload found the inherited dispatch change added process CPU
+  (6.196 to 6.310 microseconds per terminal frame, client and server together). The door now looks up declared
+  handlers directly, so ordinary terminal frames never call the service adapter. The 95 affected adapter, key-route
+  and local WebSocket tests pass; typecheck passes. Full core coverage and process acceptance remain pending.
+- The direct-dispatch comparison used the same actual localhost WebSocket path, nine alternating rounds of 40,960
+  terminal acknowledgement/resize frames plus 1,000 measured round trips after warm-up. Main `6099a1a205` versus
+  runtime `7bb8820074`, Node 24.22.2, macOS: median process CPU 6.370 to 6.395 microseconds/frame (client and server
+  together), wall 6.349 to 6.375; round-trip p95 0.05003 to 0.04993 ms. The paired mean CPU difference was
+  -0.0765 microseconds/frame, with a bootstrap 95% interval [-0.1685, 0.0053]; no resolved regression in this
+  workload. These numbers do not claim every metric improved or isolate daemon CPU from the test client.
+  Reproduce with [routes-wire-bench.mjs](tools/routes-wire-bench.mjs); raw runs are
+  `/tmp/core-routes-wire-perf-final.json` (before the correction) and
+  `/tmp/core-routes-wire-perf-direct-dispatch.json` (after).
+
+### Final integration evidence
+
+- The earlier pending statements above record prior checkpoints. Independent review cleared the route boundary;
+  the final direct-dispatch runtime passed all 47 bundled cases across the six route/gateway/device acceptance
+  files in 457.13 seconds. At `24f6c47aef`, the official core gate passed 4,464 tests with 100% per-file coverage.
+- Main `5fa7b95762` is now integrated. Its device adapter change overlaps only the route service's fixture helper
+  declarations: both the trusted-window fixture and the new dial-turn helper are preserved. The combined device,
+  cable session, observed/open adapters and architecture checks passed 762 tests; typecheck passed. Core route
+  dispatch and the measured terminal-frame path are unchanged by this integration.
+- The default closure at the prior main `1c37a340a8` was 539 files / 92,861 lines, versus 539 / 92,584 for this
+  extraction; warmed closure was 645 / 108,894 versus 645 / 108,617. These counts describe that exact comparison,
+  not unrelated adapter source added later. Native Windows execution remains unverified.
+- PR #4324 targets `core-routes-4`. Final exact-head receipt and automatic Linux CI are recorded in its body;
+  merge is pending. Step 4, including owner-command and phone sign-in relays, is not part of this step.
 
 ## Step 4: smaller items
 Phone sign-in relay (lib/loopbackGet.ts, core/terminals/browser.ts, 127 lines -> gateway), guest rules and a guest's

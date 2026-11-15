@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { expect, it } from 'vitest'
-import { prepareResume as prepareCodexResume } from '../launchPrep.js'
+import { prepareResume as prepareCodexResume } from '../resumePreparation.js'
 
 it.skipIf(process.env.RUN_CODEX_RESUME_E2E !== '1')('resumes the same Codex conversation after a rejected reasoning id is repaired', async () => {
   const profile = mkdtempSync(join(tmpdir(), 'codex-resume-wire-'))

@@ -32,27 +32,6 @@ export type TmuxPathOutcome =
   /** Not resolvable either way — tmux is genuinely absent, or there is no usable login shell. */
   | { state: 'absent'; reason: string }
 
-export type AvailableTmuxPathOutcome = Exclude<TmuxPathOutcome, { state: 'absent' }>
-
-/**
- * Refuse to start over a tmux that cannot be found.
- *
- * ⚠️ NOT used by the daemon any more. A daemon that will not start is a daemon that cannot be fixed
- * — its own updater lives inside the boot it never finishes — and a machine that merely lost tmux
- * from its PATH does not need that. `runForeground` records the reason and runs without a tmux
- * backend instead, which every caller already handles (`TMUX_UNAVAILABLE`). Kept for callers that
- * genuinely have nothing to do without terminals, and for its tests.
- */
-export function requireTmuxAvailable(outcome: TmuxPathOutcome): AvailableTmuxPathOutcome {
-  if (outcome.state === 'absent') {
-    throw new Error(
-      `tmux is required but unavailable: ${outcome.reason}. `
-      + 'Install tmux, verify `tmux -V`, then run `harness start` again.',
-    )
-  }
-  return outcome
-}
-
 /**
  * The tmux the installer put under ~/.harness/runtime, recorded in `current-tmux` exactly as the
  * managed Node is recorded in `current-node` — on a Mac that had no tmux and no Homebrew, the

@@ -26,6 +26,8 @@ import { masterRunsEngineBackgroundJob } from '../harnessd/services.js'
 import { createBackgroundJobs } from './engines/backgroundJobs.js'
 import { masterRunsEngineProviderMove } from '../harnessd/services.js'
 import { createProviderMoves } from './engines/providerMoves.js'
+import { createResumeRepairs } from './engines/resumeRepairs.js'
+import { masterRunsEngineResumeRepair } from '../harnessd/services.js'
 import { submissionPolicy } from '../engines/submissionPolicies.js'
 import { createSubmissionTransport } from './engines/submissionTransport.js'
 import { masterRunsEngineSubmission } from '../harnessd/services.js'
@@ -252,7 +254,7 @@ import { createViewersWake, VIEWERS_ON_DEMAND, wakeViewers } from './viewersWake
 import { createWifiLink } from './wifiLink.js'
 import { wifiDoors } from './wifiAgents.js'
 import { createServiceRoutes } from './serviceRoutes.js'
-import { GATEWAY_REQUESTS, SERVICE_HTTP_ROUTES, WIFI_REQUESTS } from './api.js'
+import { GATEWAY_REQUESTS, SERVICE_HTTP_ROUTES, SERVICE_WS_FRAMES, WIFI_REQUESTS } from './api.js'
 import { loadOrCreateHookCredential } from '../lib/hookAuth.js'
 import { attachLocalWsServer, LOCAL_WS_PATH, LOCAL_WS_PROTOCOL_VERSION } from '../localWsServer.js'
 import { TERMINAL_BINARY_VERSION } from '../lib/terminalBinary.js'
@@ -626,7 +628,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // target's host, the build this daemon would start; any other host, still running from before an update, is a
   // drain backend beside it (lib/ptyHost/drain.ts). The target is read here once, for this core's life: it runs the
   // binary (`harness-pty version`, up to 5 s), and an update that moves it starts a new core.
-  const ptyTarget = terminalConfig.backends.includes('ptyhost') ? targetHost() : null
+  const ptyTarget = terminalConfig.backends.includes('ptyhost') ? await targetHost() : null
   if (terminalConfig.backends.includes('ptyhost')) {
     console.log(ptyTarget ? `[terminal] ptyhost: target ${ptyTarget.instance}` : '[terminal] ptyhost: target unknown')
   }
@@ -746,6 +748,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const isolatedBackgroundJob = (engine: string): boolean => backgroundJobHosted && isolatedLive(engine)
   const providerMoveHosted = masterRunsEngineProviderMove(harnessd, process.ppid)
   const isolatedProviderMove = (engine: string): boolean => providerMoveHosted && isolatedLive(engine)
+  const resumeRepairHosted = masterRunsEngineResumeRepair(harnessd, process.ppid)
+  const isolatedResumeRepair = (engine: string): boolean => resumeRepairHosted && isolatedLive(engine)
   const isolatedSubmission = (engine: string): boolean => submissionHosted && isolatedLive(engine)
   const isolatedRuntime = (engine: string): boolean => (runtimeHosted && isolatedLive(engine)) || (othersRuntime && isOtherEngine(engine))
   // The other engines' worker reads their history and last turns (engines/others/), under a master that runs it; from
@@ -755,7 +759,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const othersRuntime = othersHosted && otherEnginesVersion(harnessd, process.ppid) >= 3
   const othersStorage = othersHosted && otherEnginesVersion(harnessd, process.ppid) >= 4
   // Compatibility with explicit inline mode and older masters, until 2026-12-15.
-  const inline = knownServices.some((name) => !outOfProcess.has(name)) || !othersStorage || !runtimeHosted || !screenHosted || !modelControlHosted || !questionControlHosted || !submissionHosted || !nativeControlHosted || !backgroundJobHosted || !providerMoveHosted
+  const inline = knownServices.some((name) => !outOfProcess.has(name)) || !othersStorage || !runtimeHosted || !screenHosted || !modelControlHosted || !questionControlHosted || !submissionHosted || !nativeControlHosted || !backgroundJobHosted || !providerMoveHosted || !resumeRepairHosted
     ? await import('../services/inline.js') : null
   if (!othersRuntime) {
     registry.onEnter = engine => inline?.preloadEngine(engine)
@@ -797,6 +801,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const providerMoves = createProviderMoves({
     call: (service, type, payload, waitMs) => serviceLinksRef?.call(service, type, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }),
     handles: isolatedProviderMove, inline: engine => isolatedProviderMove(engine) ? undefined : inline?.providerMoveFor(engine),
+  })
+  const resumeRepairs = createResumeRepairs({
+    call: (service, type, payload, waitMs) => serviceLinksRef?.call(service, type, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }),
+    handles: isolatedResumeRepair, inline: inline?.prepareResume,
+    hold: (sessionId, file, timeoutMs) => watcher.hold(sessionId, file, timeoutMs),
+    setTail: (sessionId, offset) => watcher.setTail(sessionId, offset),
   })
   // Which engine workers are linked now: a close's read refused by a restart waits here for the new link.
   const engineLinks = createEngineLinks()
@@ -1700,6 +1710,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       nativeControls.connected(service)
       backgroundJobs.connected(service)
       providerMoves.connected(service)
+      resumeRepairs.connected(service)
       engineLinks.connected(service)
       modelControls.connected(service)
       questionControls.connected(service)
@@ -1729,6 +1740,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       nativeControls.disconnected(service)
       backgroundJobs.disconnected(service)
       providerMoves.disconnected(service)
+      resumeRepairs.disconnected(service)
       engineLinks.disconnected(service)
       modelControls.disconnected(service)
       questionControls.disconnected(service)
@@ -1747,7 +1759,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // A request a service declared goes to it: in its own process, or in this one (core/serviceHost.ts).
   backend.serviceRouter = (type, payload, asker, reply) => serviceLinks.route(type, payload, asker, reply) || serviceHost.route(type, payload, asker, reply)
   // And a route of the door a service answers, the same way (core/serviceRoutes.ts).
-  const serviceRoutes = createServiceRoutes({ routes: SERVICE_HTTP_ROUTES, linked: serviceLinks, hosted: serviceHost })
+  const serviceRoutes = createServiceRoutes({ routes: SERVICE_HTTP_ROUTES, frames: SERVICE_WS_FRAMES, linked: serviceLinks, hosted: serviceHost })
   // The connection that asked closed: the services abort what it asked, wherever they run.
   backend.onConnectionClosed = (connId) => { serviceLinks.closeConnection(connId); serviceHost.closeConnection(connId) }
   // Session search (services/search.ts): in this process, or in its own (services/searchProcess.ts),
@@ -2233,8 +2245,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const deviceHookCalls = createDeviceHookCalls({ ready: cableWatchingLocal, devices: () => ports.devices ?? undefined, newId: randomUUID })
   const { server: hookServer, port: hookPort, localSocket } = await startHookServer(daemonPort(), {
     // The routes services answer (core/api.ts `SERVICE_HTTP_ROUTES`): the Wi-Fi device's, its service's and the machine
-    // add-ons', and the account's, the gateway's (the desk, the usage reports, the Store's ratings and reviews, …).
-    onServiceRoute: (path, request, localOk) => serviceRoutes.answer(path, request, localOk),
+    // add-ons', and the account's and the keys', the gateway's (the desk, the usage reports, the Store's ratings and
+    // reviews, the phone's sign-in code, `harness pair`, `group`, `devices`, …).
+    onServiceRoute: (path, request, localOk, socket) => serviceRoutes.answer(path, request, localOk, socket),
     resolveHookAgent: engineHooks.resolveHookAgent,
     hookViaSharedProcess: engineHooks.hookViaSharedProcess,
     hookAdmissionBlocked: id => launchCancelled(id),
@@ -2252,27 +2265,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     onInbox: deviceHookCalls.onInbox,
     onPromptHook: turnHooks.onPromptHook,
     stopHookDelayMs: Number(harnessd.HARNESSD_TEST_STOP_HOOK_DELAY_MS) || 0,
-    // `harness pair`, `unpair`, `remote-password`, `link connect`, `group` and `devices`: the keys are the
-    // gateway's, and so are these answers (gateway/start.ts).
-    onPair: (code) => gatewayOps.pair(code),
-    onListPairs: () => gatewayOps.listPairs(),
-    onRevoke: (id) => gatewayOps.revoke(id),
-    onRevokeAll: () => gatewayOps.revokeAll(),
-    onSetRemotePassword: (password) => gatewayOps.setRemotePassword(password),
-    onClearRemotePassword: () => gatewayOps.clearRemotePassword(),
-    onRemotePasswordStatus: () => gatewayOps.remotePasswordStatus(),
-    onTrustLinkedPeer: (peer) => gatewayOps.trustLinkedPeer(peer),
-    onGroupList: () => gatewayOps.groupList(),
-    onGroupSync: () => gatewayOps.groupSync(),
-    onGroupRemove: (selector) => gatewayOps.groupRemove(selector),
-    onDevicesList: () => gatewayOps.devicesList(),
-    onDevicesRemove: (pub) => gatewayOps.devicesRemove(pub),
-    onDevicesHistory: () => gatewayOps.devicesHistory(),
-    onDevicesDismiss: (body) => gatewayOps.devicesDismiss(body),
-    onDevicesRebaseline: (confirm, head) => gatewayOps.devicesRebaseline(confirm, head),
     onStatus: async () => statusBody(await gatewayOps.status()),
     onMachinesList: () => gatewayOps.machines(true),
-    onAuthHandoff: () => proxyBackend('POST', '/api/auth/handoff', {}),
     ...daemonStopRoute({ askMaster: () => coreLink.stopAll(), stopHere: () => daemonBoot.stopHere('harness stop') }),
     // Signed out there is nothing shared WITH this computer and nobody to ask: a share is made on the
     // account. Answered as an empty list rather than proxied into the backend's 401, which is the one
@@ -2340,6 +2334,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const unrouted = (reason: string): RouteAnswer => ({ agentId: '', machineId: '', name: '', confidence: 0, reason, candidates: [], weighed: 0, machines: 0, via: '' })
   const DEVICES_OFF = 'the devices service is unavailable'
 
+  // ⌘K from the owner's app away from this desk (lib/ownerCommands.ts): the fleet's, beside the dial in the devices, sent
+  // through its router and NOT straight into backend.onMessage, which would look for a remote agent in this registry.
+  backend.ownerCommands.onRouteTask = async (text) => ports.devices ? ports.devices.routeTask(text) : unrouted(DEVICES_OFF)
+  backend.ownerCommands.onRouteSend = async (agentId, text) => ports.devices ? ports.devices.routeSend(agentId, text) : { ok: false, machine: '', reason: DEVICES_OFF }
   const localWsServer = attachLocalWsServer(hookServer, {
     localSocketServer: localSocket?.server ?? null,
     // Over TCP the window, the CLI or a tool shows this user's 0600 credential (lib/localCredential.ts).
@@ -2407,10 +2405,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       openPaneAgents = next
       if (changed) console.log(`[cable] window tiles: ${next.size ? [...next].map(sid).join(' ') : '(none)'}`)
     },
-    // ⌘K in the window: a typed task, and which agent it belongs to, on any of the owner's machines. The
-    // fleet's to answer, beside the dial in the devices (services/fleet.ts routeTask), so it answers with
-    // the dial absent or off.
-    onRouteTask: backend.ownerCommands.onRouteTask = async (text) => ports.devices ? ports.devices.routeTask(text) : unrouted(DEVICES_OFF),
+    // A window's frames a service answers (core/api.ts `SERVICE_WS_FRAMES`): ⌘K's pick and its send, the fleet's beside the
+    // dial in the devices (services/fleet.ts), and its answer to a spoken task.
+    serviceFrames: serviceRoutes.frames,
     // A window that connects after the dial did has missed the `dial_status` that announced it: the last one
     // the devices sent, kept here.
     dialStatus: () => lastDialStatus,
@@ -2424,12 +2421,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
      */
     onDialSettings: (id, patch) => ports.devices?.settings(id, patch),
     openQuestions: () => [...openQuestions.values()],
-    // Committed. Sent through the fleet's router — the dial's own dispatch — and NOT straight into
-    // backend.onMessage: that resolves the id against THIS computer's registry, so a remote agent would land
-    // as "This harness is no longer available", an error about an agent alive on another machine.
-    onRouteSend: backend.ownerCommands.onRouteSend = async (agentId, text) =>
-      ports.devices ? ports.devices.routeSend(agentId, text) : { ok: false, machine: '', reason: DEVICES_OFF },
-    onVoiceRouteReply: (voiceId, reply) => ports.devices?.voiceReply(voiceId, reply),
     machineId: backend.machineId,
     backend,
     relayPool: gateway.windowRelay,
@@ -2525,7 +2516,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     prepareApiTools,
     launchOverridesDeps,
     setGridLaunch: (agentId, launch) => registry.setGridLaunch(agentId, launch),
-    setTail: (sessionId, offset) => watcher.setTail(sessionId, offset),
+    prepareResume: resumeRepairs.prepare,
   })
   const relaunchOverrides = launchHelpers.relaunchOverrides
   const refreshGridWebSearch = launchHelpers.refreshGridWebSearch

@@ -180,6 +180,53 @@ it('keeps a captured pane queued behind an ignored read valid', async () => {
   } finally { released(); profiles.stop(); served.clear() }
 })
 
+it.each(['hold', 'revision', 'hold-cycle'] as const)('retains accepted profile display but fences old evidence across %s', async change => {
+  const row = { ...session(), engine: 'cursor' as const }
+  const served = otherRuntimeRequests({ query: async () => ({}), recycle: vi.fn() })
+  let released!: () => void, entered!: () => void
+  const held = new Promise<void>(done => { released = done }), ready = new Promise<void>(done => { entered = done })
+  const transport = createRuntimeTransport({ call: async (_service, method, payload) => {
+    const answer = await served.requests[method](payload, { owner: true, local: true }) as Record<string, unknown>
+    if ((payload.operation as { kind?: string } | undefined)?.kind === 'config') { entered(); await held }
+    return answer
+  } })
+  transport.connected('engine-others')
+  const profiles = createRuntimeProfiles({ handles: () => true,
+    resolve: id => [row.agentId, row.sessionId].includes(id) ? row : undefined, transport })
+  try {
+    await profiles.ingestPane(row, 'Model 7 High · 1%')
+    profiles.evidence(row, [{ workspace: '/captured-workspace' }])
+    const selected = profiles.selectedModel(row), state = profiles.getState(row.sessionId), old = structuredClone(row)
+    const pending = profiles.ingestConfig(row).then(() => 'accepted', e => e.message)
+    await ready
+    const captured = profiles.capturePane(row, async () => 'Model 8 Low · 1%')
+    await Promise.resolve()
+    row.evidenceRevision = 1
+    if (change !== 'revision') row.identityHold = 'Waiting for interpretation.'
+    expect(profiles.selectedModel(row)).toBe(selected)
+    expect(profiles.getState(row.sessionId)).toEqual(state)
+    expect(profiles.workspace(row)).toBe('/captured-workspace')
+    if (change === 'hold-cycle') {
+      delete row.identityHold; row.evidenceRevision = 2
+      expect(profiles.selectedModel(row)).toBe(selected)
+    }
+    expect(profiles.selectedModel(old)).toBeNull()
+    expect(profiles.workspace(old)).toBeNull()
+    released()
+    expect(await pending).toBe('ENGINE_STALE_REPLY')
+    expect(await captured).toBeNull()
+    expect(profiles.getState(row.sessionId)).toEqual(state)
+    await profiles.ingestPane(row, 'Model 9 Low · 1%')
+    expect(profiles.getState(row.sessionId)).toMatchObject({ model: 'model-9', effort: 'low' })
+    const oldSessionId = row.sessionId
+    row.sessionId = 'replacement'; row.boundAt = 2
+    expect(profiles.getState(oldSessionId).model).toBeNull()
+    expect(profiles.getState(row.agentId).model).toBeNull()
+    expect(profiles.selectedModel(row)).toBeNull()
+    expect(profiles.workspace(row)).toBeNull()
+  } finally { released(); profiles.stop(); served.clear() }
+})
+
 
 it('revokes a question grant if its worker asks for a different literal hint', async () => {
   const row = { ...session(), engine: 'cursor' as const }, key = vi.fn(async () => true)

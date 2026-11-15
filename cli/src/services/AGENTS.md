@@ -24,7 +24,10 @@ let several people build features at once without touching the core or each othe
      `<name>_http` a service), how long it is waited for and what it answers while the service is down go in
      `SERVICE_HTTP_ROUTES` (`src/core/api.ts`); the core hands it on as it came, once the door let it in
      (`core/serviceRoutes.ts`), and the service answers `{ status, body }`, checking everything it carries
-     (`lib/autonomous-device/localHttp.ts` shows how). Never a route in `hookServer.ts`.
+     (`lib/autonomous-device/localHttp.ts` shows how). Never a route in `hookServer.ts`. A route only the daemon's own
+     socket may ask (`door: 'socket'`) reaches its service with `asker.door`, which no client of the local WebSocket has.
+     A window's frame a service answers is one request too (`SERVICE_WS_FRAMES`, one `<name>_ws` a service): asked with
+     `{ frame, payload }`, its answer sent back as the frame its route names. Never a frame sniffed in `localWsServer.ts`.
    - Work that belongs to the connection that asked (a limit on how many at once per connection, work to
      stop when the asker goes) is keyed by `asker.connection` and stops on `closed`, the handler's third
      argument: it is aborted when that connection closes, or when the core that routed it goes, wherever
@@ -158,7 +161,8 @@ master too old to run it starts it beside itself, still in its own process (`src
   `core.terminals` (`core/shellQueries.ts`). A lost launch reply leaves an unconfirmed receipt and is
   never retried as a new launch. `e2e/shell.e2e.ts` keeps an attached terminal working across an edge crash.
 - The gateway owns account/backend HTTP and the single writer of `machines.json` (`gateway/accountHttp.ts`), and the
-  account's routes of the door: the desk, the usage reports and choice, the Store's ratings and reviews (`gateway/accountRoutes.ts`).
+  account's routes of the door: the desk, the usage reports and choice, the Store's ratings and reviews, the phone's sign-in
+  code (`gateway/accountRoutes.ts`), and the keys' (`harness pair`, `group`, `devices`, …, `gateway/keyRoutes.ts`).
   The core retains its reported list for stale replies during a restart, bound to the current account.
   The Store prepares bundled harnesses before reporting `prepared`; package agents wait held until
   preparation is available, after the core reports ready. The lean bundle shares one asset file, loaded by the Store and never by the core.

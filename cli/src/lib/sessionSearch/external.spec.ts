@@ -1,14 +1,7 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { describe, expect, it } from 'vitest'
 
-import { afterEach, describe, expect, it } from 'vitest'
-
-import { ExternalSessions, foregroundJob, OpenSessions, SessionRows, stopSessionOwner, TERMINAL_RESTORE, writeTty } from './external.js'
+import { ExternalSessions, OpenSessions, SessionRows } from './external.js'
 import type { ExternalEngine, ExternalProvider, ExternalSession, OwnerClaim, ProcessView } from './externals/types.js'
-
-const dirs: string[] = []
-afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
 
 const session = (sessionId: string, engine: ExternalEngine, mtime: number, extra: Partial<ExternalSession> = {}): ExternalSession => ({
   sessionId, engine, cwd: `/work/${sessionId}`, origin: 'terminal', title: '', mtime, transcriptPath: `/t/${sessionId}.jsonl`, ...extra,
@@ -247,74 +240,5 @@ describe('OpenSessions', () => {
     expect(await sessions.working('guess')).toBeNull()
     expect(await sessions.working('error')).toBeNull()
     expect(await sessions.working('closed')).toBe(false)
-  })
-})
-
-describe('stopSessionOwner', () => {
-  it('asks it to quit, makes it after five seconds, and gives the terminal back', async () => {
-    const signals: string[] = []
-    const written: string[] = []
-    let living = true
-    let slept = 0
-    const opts = {
-      alive: () => living,
-      job: async () => null,
-      kill: (_pid: number, signal: NodeJS.Signals) => { signals.push(signal); if (signal === 'SIGTERM' && slept === 0) return; living = false },
-      sleep: async (ms: number) => { slept += ms },
-      writeTty: async (tty: string, text: string) => { written.push(`${tty} ${JSON.stringify(text)}`) },
-    }
-    expect(await stopSessionOwner({ pid: 7, tty: '/dev/ttys009' }, opts)).toBe(true)
-    expect(signals).toEqual(['SIGTERM', 'SIGKILL'])
-    expect(slept).toBe(5_000)
-    expect(written).toEqual([`/dev/ttys009 ${JSON.stringify(TERMINAL_RESTORE)}`])
-
-    // One that quits when asked is not made to; one that will not quit at all is reported.
-    signals.length = 0; living = true; slept = 1
-    expect(await stopSessionOwner({ pid: 7, tty: null }, opts)).toBe(true)
-    expect(signals).toEqual(['SIGTERM'])
-    expect(await stopSessionOwner({ pid: 8, tty: null }, { ...opts, alive: () => true, kill: () => { throw new Error('EPERM') } })).toBe(false)
-    // A terminal that cannot be written to is left as it is.
-    living = true; slept = 1
-    expect(await stopSessionOwner({ pid: 7, tty: '/dev/gone' }, { ...opts, writeTty: async () => { throw new Error('ENOENT') } })).toBe(true)
-  })
-
-  it("signals the whole foreground job an engine leads, and only the engine otherwise", async () => {
-    const targets: number[] = []
-    let living = true
-    const opts = { alive: () => living, sleep: async () => undefined, kill: (pid: number) => { targets.push(pid); living = false } }
-    expect(await stopSessionOwner({ pid: 40, tty: null }, { ...opts, job: async () => 40 })).toBe(true)
-    living = true
-    expect(await stopSessionOwner({ pid: 41, tty: null }, { ...opts, job: async () => { throw new Error('ps failed') } })).toBe(true)
-    expect(targets).toEqual([-40, 41])
-    // Leading its group, and that group in front: the job. Anything else: none.
-    const ps = (out: string | null) => async () => out
-    expect(await foregroundJob(40, ps('  40   40\n'))).toBe(40)
-    expect(await foregroundJob(40, ps('  12   40\n'))).toBeNull()
-    expect(await foregroundJob(40, ps('  40   -1\n'))).toBeNull()
-    expect(await foregroundJob(40, ps(null))).toBeNull()
-    // This process leads no foreground job of a terminal.
-    expect(await foregroundJob(process.pid)).toBeNull()
-  })
-
-  it('stops a real process, and writes the terminal back to a real file', async () => {
-    const { spawn } = await import('node:child_process')
-    const child = spawn('sleep', ['30'], { stdio: 'ignore' })
-    const exited = new Promise((resolve) => child.on('exit', resolve))
-    const dir = mkdtempSync(join(tmpdir(), 'external-stop-'))
-    dirs.push(dir)
-    const tty = join(dir, 'tty')
-    writeFileSync(tty, '')
-    // The child is ours, so it lingers as a zombie until reaped: count it gone once it has exited.
-    let done = false
-    void exited.then(() => { done = true })
-    expect(await stopSessionOwner({ pid: child.pid!, tty }, { alive: () => !done })).toBe(true)
-    expect(readFileSync(tty, 'utf8')).toBe(TERMINAL_RESTORE)
-    await expect(writeTty(join(dir, 'missing', 'tty'), 'x')).rejects.toThrow()
-  })
-
-  it("stops a process that is not this one's child, as a terminal's never is", async () => {
-    const { execFileSync } = await import('node:child_process')
-    const pid = Number(execFileSync('/bin/sh', ['-c', 'sleep 30 >/dev/null 2>&1 & echo $!']).toString().trim())
-    expect(await stopSessionOwner({ pid, tty: null })).toBe(true)
   })
 })

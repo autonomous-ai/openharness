@@ -181,7 +181,7 @@ describe('model-control authority', () => {
     expect(s.deps.key).not.toHaveBeenCalled()
   })
 
-  it.each(['timeout', 'disconnect', 'rebind', 'completed'] as const)('revokes delayed terminal validation on %s', async reason => {
+  it.each(['timeout', 'disconnect', 'rebind', 'hold', 'revision', 'hold-cycle', 'unchanged', 'completed'] as const)('checks delayed terminal validation against %s', async reason => {
     const s = setup(), p = s.port(), dispatched: string[] = [], done = deferred<void>(), started = deferred<void>()
     let permitted!: () => boolean
     s.deps.key.mockImplementation(async (_id, key, allowed) => {
@@ -202,11 +202,18 @@ describe('model-control authority', () => {
     if (reason === 'timeout') await vi.advanceTimersByTimeAsync(MODEL_CONTROL_WAIT_MS + 1)
     if (reason === 'disconnect') s.controls.disconnected(s.service)
     if (reason === 'rebind') s.session().processIdentity = { pid: 999, startTime: 'new' } as any
+    if (reason === 'hold') s.session().identityHold = 'Waiting for interpretation.'
+    if (reason === 'revision') s.session().evidenceRevision = 1
+    if (reason === 'hold-cycle') {
+      s.session().identityHold = 'Waiting for interpretation.'; s.session().evidenceRevision = 1
+      delete s.session().identityHold; s.session().evidenceRevision = 2
+    }
+    if (reason === 'unchanged') s.session().touchedAt = 123
     if (reason === 'completed') await outcome
-    expect(permitted()).toBe(false)
+    expect(permitted()).toBe(reason === 'unchanged')
     done.resolve()
-    expect(await outcome).toBe('BUSY')
-    expect(dispatched).toEqual([])
+    expect(await outcome).toBe(reason === 'unchanged' ? 'ok' : 'BUSY')
+    expect(dispatched).toEqual(reason === 'unchanged' ? ['Enter'] : [])
   })
 
   it('bounds the complete operation even when the worker never answers, then denies its late query', async () => {

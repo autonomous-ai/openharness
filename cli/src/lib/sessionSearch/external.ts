@@ -156,7 +156,7 @@ type OpenAnswer = { at: number; owners: Map<string, SessionOwner>; open: Map<str
 /**
  * Which sessions are open in a running process right now, so Cmd-P does not open one a second time
  * beside a terminal that still has it: both would write the same conversation. One open in a
- * terminal can be taken over instead (`owner`, `stopSessionOwner`).
+ * terminal can be taken over instead (`owner`, core/agents/externalOwner.ts).
  *
  * Only exact evidence counts: a process's own record, a lock it holds, a file it has open, the id in
  * its arguments. A guess from a folder is never enough to stop a process.
@@ -252,5 +252,3 @@ export class OpenSessions {
     return owners
   }
 }
-
-export { foregroundJob, stopSessionOwner, writeTty, TERMINAL_RESTORE, type StopOptions } from '../externalOwnerControl.js'

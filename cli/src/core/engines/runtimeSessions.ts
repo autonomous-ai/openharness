@@ -6,14 +6,14 @@ import { applyProfileEvidence, blankRuntimeState, encodeRuntimeProfile, RUNTIME_
 import { EngineReadError, workerEngine, workerService } from '../../engines/worker/protocol.js'
 import { launchFlagsOf } from '../../lib/launchFlags.js'
 import type { RegisteredSession } from '../../lib/registry.js'
-import { transcriptReadIdentity } from '../transcripts/readIdentity.js'
+import { processIdentityKey } from '../../lib/terminalRuntime.js'
 import { parseRuntimeProfile } from '../../lib/runtimeProfileWire.js'
 import type { RuntimeTransport } from './runtimeTransport.js'
 
 interface View {
   agentId: string
   sessionId: string
-  identity: string
+  identity: ReturnType<typeof binding>
   revision: number
   authority: number
   state: RuntimeState
@@ -34,8 +34,28 @@ export interface RuntimeStage {
   commit(install?: () => boolean): boolean
 }
 
-const binding = (s: RegisteredSession | undefined): string => s ? JSON.stringify([transcriptReadIdentity(s), s.cwd, !!s.gateway,
-  s.active, s.hermesHome, s.tmuxPane, s.primaryRuntimeKey, s.runtimes]) : ''
+const numberValue = (value: number | null | undefined): number | null => Number.isFinite(value) ? value! : null
+const processKey = (s: RegisteredSession): string | null => s.processIdentity ? processIdentityKey(s.engine, s.processIdentity) : null
+const revision = (s: RegisteredSession): number | null | undefined => s.evidenceRevision === undefined ? undefined : numberValue(s.evidenceRevision)
+// One immutable capture: scalar comparisons avoid serializing nested identities on every listed frame.
+// Routes retain their exact JSON representation, including property order and fields added later.
+const binding = (s: RegisteredSession) => Object.freeze({
+  agentId: s.agentId, sessionId: s.sessionId, engine: s.engine, transcriptPath: s.transcriptPath ?? null,
+  codexHome: s.codexHome ?? null, boundAt: numberValue(s.boundAt), process: processKey(s),
+  held: !!s.identityHold, evidenceRevision: revision(s), cwd: s.cwd ?? null, gateway: !!s.gateway,
+  active: s.active ?? null, hermesHome: s.hermesHome ?? null, pane: s.tmuxPane ?? null,
+  primary: s.primaryRuntimeKey ?? null, routes: JSON.stringify(s.runtimes ?? null),
+})
+// A reader outage revokes authority without changing which native process/conversation supplied displayed facts.
+const sameProfile = (key: ReturnType<typeof binding>, s: RegisteredSession | undefined): boolean => !!s
+  && key.agentId === s.agentId && key.sessionId === s.sessionId && key.engine === s.engine
+  && key.transcriptPath === (s.transcriptPath ?? null) && key.codexHome === (s.codexHome ?? null)
+  && key.boundAt === numberValue(s.boundAt) && key.process === processKey(s) && key.cwd === (s.cwd ?? null)
+  && key.gateway === !!s.gateway && key.active === (s.active ?? null) && key.hermesHome === (s.hermesHome ?? null)
+  && key.pane === (s.tmuxPane ?? null) && key.primary === (s.primaryRuntimeKey ?? null)
+  && key.routes === JSON.stringify(s.runtimes ?? null)
+const sameBinding = (key: ReturnType<typeof binding>, s: RegisteredSession | undefined): boolean => sameProfile(key, s)
+  && key.held === !!s!.identityHold && key.evidenceRevision === revision(s!)
 // With the model and effort its process was launched with: an engine whose flags outrank its settings reads its configured
 // effort from them (claude/runtimeProfile.ts).
 const snapshot = (s: RegisteredSession): RuntimeSession => {
@@ -56,7 +76,7 @@ export function createRuntimeSessions(deps: RuntimeSessionDeps) {
   let suppressed = 0
   let stopped = false
 
-  const valid = (view: View): boolean => !stopped && views.get(view.agentId) === view && view.identity === binding(deps.resolve(view.agentId))
+  const valid = (view: View): boolean => !stopped && views.get(view.agentId) === view && sameBinding(view.identity, deps.resolve(view.agentId))
   const wake = (id: string): void => {
     for (const waiter of waiters.get(id) ?? []) if (waiter.check()) {
       clearTimeout(waiter.timer); waiters.get(id)!.delete(waiter); waiter.resolve(true)
@@ -76,12 +96,19 @@ export function createRuntimeSessions(deps: RuntimeSessionDeps) {
   }
   const viewFor = (s: RegisteredSession): View => {
     const previous = views.get(s.agentId)
-    const identity = binding(s)
     // A delayed caller holding the old binding must not evict a newer accepted view.
-    if (stopped || identity !== binding(deps.resolve(s.agentId))) unavailable()
-    if (previous?.identity === identity) return previous
+    if (stopped || !isCurrent(s)) unavailable()
+    if (previous && sameBinding(previous.identity, s)) return previous
+    const identity = binding(s)
+    if (previous && sameProfile(previous.identity, s)) {
+      previous.revision++; previous.authority++; previous.control = undefined
+      previous.identity = identity
+      wake(previous.sessionId)
+      return previous
+    }
     if (previous) forget(previous.agentId)
-    const view: View = { agentId: s.agentId, sessionId: s.sessionId, identity, revision: 0, authority: 0, state: blankRuntimeState(), selected: null }
+    const view: View = { agentId: s.agentId, sessionId: s.sessionId, identity,
+      revision: 0, authority: 0, state: blankRuntimeState(), selected: null }
     views.set(s.agentId, view)
     return view
   }
@@ -90,7 +117,14 @@ export function createRuntimeSessions(deps: RuntimeSessionDeps) {
     const session = deps.resolve(id)
     if (!session) return undefined
     const view = views.get(session.agentId)
-    return view && valid(view) ? view : undefined
+    if (!view) return undefined
+    if (valid(view)) return view
+    return sameProfile(view.identity, session) ? viewFor(session) : undefined
+  }
+  const isCurrent = (s: RegisteredSession): boolean => {
+    const current = deps.resolve(s.agentId)
+    // A live row need not be serialized against itself; byId still checks its full identity against the View.
+    return s === current || sameBinding(binding(s), current)
   }
   const notify = (view: View): void => {
     if (!view.sessionId) return
@@ -141,7 +175,7 @@ export function createRuntimeSessions(deps: RuntimeSessionDeps) {
     if (!silent && !suppressed && before !== view.selected && !view.control) notify(view)
   }
   const read = (s: RegisteredSession, operation: RuntimeOperation, silent = false, stillCurrent = () => true): Promise<RuntimeAnswer> => {
-    const identity = binding(s), view = viewFor(s), authority = view.authority
+    const view = viewFor(s), identity = view.identity, authority = view.authority
     return slot(s.engine, async () => {
       if (!valid(view) || view.identity !== identity || view.authority !== authority || !stillCurrent()) unavailable()
       const current = deps.resolve(view.agentId)!, version = current.cliVersion, revision = view.revision
@@ -218,7 +252,7 @@ export function createRuntimeSessions(deps: RuntimeSessionDeps) {
     })
   }
   const evidence = (s: RegisteredSession, records: readonly ProfileEvidence[], silent = false): boolean => {
-    if (!s.sessionId || !records.length || binding(s) !== binding(deps.resolve(s.agentId))) return false
+    if (!s.sessionId || !records.length || !isCurrent(s)) return false
     const view = viewFor(s), before = view.selected
     let refresh = false
     for (const record of records) {
@@ -237,14 +271,14 @@ export function createRuntimeSessions(deps: RuntimeSessionDeps) {
     read,
     evidence,
     hydrateEvidence(s: RegisteredSession, records: readonly ProfileEvidence[]): void {
-      if (!s.sessionId || binding(s) !== binding(deps.resolve(s.agentId))) return
+      if (!s.sessionId || !isCurrent(s)) return
       const view = viewFor(s)
       view.state = { ...blankRuntimeState(), model: typeof s.model === 'string' ? s.model : null, cliVersion: s.cliVersion }
       view.selected = null; view.revision++; view.authority++
       evidence(s, records, true)
     },
     workspace(s: RegisteredSession): string | null {
-      return binding(s) === binding(deps.resolve(s.agentId)) ? byId(s.agentId)?.workspace ?? null : null
+      return isCurrent(s) ? byId(s.agentId)?.workspace ?? null : null
     },
     async capturePane(s: RegisteredSession, capture: (id: string, historyLines?: number) => Promise<string | null>,
       historyLines?: number, silent = false): Promise<string | null> {
@@ -268,7 +302,7 @@ export function createRuntimeSessions(deps: RuntimeSessionDeps) {
       return () => pending.commit()
     },
     selectedModel(s: RegisteredSession): string | null {
-      return s.sessionId && binding(s) === binding(deps.resolve(s.agentId)) ? byId(s.agentId)?.selected ?? null : null
+      return s.sessionId && isCurrent(s) ? byId(s.agentId)?.selected ?? null : null
     },
     getState(id: string): RuntimeState { return { ...(byId(id)?.state ?? blankRuntimeState()) } },
     async withoutChangeEvents<T>(run: () => Promise<T>): Promise<T> { suppressed++; try { return await run() } finally { suppressed-- } },
@@ -290,7 +324,7 @@ export function createRuntimeSessions(deps: RuntimeSessionDeps) {
     },
     finishControl(s: RegisteredSession): void {
       const view = byId(s.agentId)
-      if (!view || view.identity !== binding(s)) return
+      if (!view || !sameBinding(view.identity, s)) return
       view.control = undefined; view.revision++; view.authority++; wake(view.sessionId); notify(view)
     },
     confirmEffort(id: string, effort: string): void {

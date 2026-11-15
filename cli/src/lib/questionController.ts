@@ -249,10 +249,10 @@ export class AskQuestionController {
       const current = this.deps.getSession(terminalTarget)
       if (!current || generation !== questionCaptureGeneration(current)) return STALE_CHANGED
       const capture = await this.deps.capture(terminalTarget, CAPTURE_LINES)
-      if (reviewed && capture === null) return failed('The question could not be read.')
+      if (capture === null) return failed('The question could not be read.')
       if (generation !== questionCaptureGeneration(this.deps.getSession(terminalTarget))) return STALE_CHANGED
       let view: PaneView
-      try { view = await this.deps.readQuestion(current, capture ?? '') }
+      try { view = await this.deps.readQuestion(current, capture) }
       catch { return failed('The question could not be read.') }
       if (generation !== questionCaptureGeneration(this.deps.getSession(terminalTarget))) return STALE_CHANGED
       if (!view) {

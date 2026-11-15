@@ -24,7 +24,7 @@ import { parseOpencodeModelsOutput } from '../engines/opencode/runtimeProfile.js
 import { isTerminalEngine } from '../engines/types.js'
 import { isAutomaticName } from '../lib/agentNames.js'
 import type { OneShotEngine } from '../lib/disposableOneShotPool.js'
-import { opencodeBin } from '../lib/engineBin.js'
+import { opencodeBinAsync } from '../lib/engineBin.js'
 import { runRouterOneShot } from '../lib/oneshot.js'
 import { describeScmProject } from '../scm/scmProjects.js'
 import { internalOnThrow } from './requestErrors.js'
@@ -121,7 +121,7 @@ const run = promisify(execFile)
  * (none named here; OpenCode not installed, none), then each of the window's engines that can answer once,
  * with its small model — Claude's `haiku`, Codex at low effort, the others as they are set.
  */
-export async function defaultNamers(engines: readonly string[], list: () => Promise<string> = async () => (await run(opencodeBin(), ['models'], { timeout: 10_000, maxBuffer: 1024 * 1024 })).stdout): Promise<Namer[]> {
+export async function defaultNamers(engines: readonly string[], list: () => Promise<string> = async () => (await run(await opencodeBinAsync(), ['models'], { timeout: 10_000, maxBuffer: 1024 * 1024 })).stdout): Promise<Namer[]> {
   const free = await list().then((out) => parseOpencodeModelsOutput(out).map((m) => m.id).filter((id) => /-free$/.test(id)), () => [])
   const own: Namer[] = engines.flatMap((engine): Namer[] => engine === 'claude' ? [{ engine: 'claude', model: 'haiku', effort: 'low' }]
     : engine === 'codex' ? [{ engine: 'codex', effort: 'low' }]

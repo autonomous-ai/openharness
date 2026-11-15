@@ -419,10 +419,14 @@ describe('AskQuestionController — refusing before anything is typed', () => {
     expect(r.keys).toEqual([])
   })
 
-  it('a capture that fails reads as nothing on screen', async () => {
+  it('refuses an unreadable capture without typing or treating the question as gone', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
-    const r = rig([null])
-    expect(await r.controller.answer(drink('Tea'))).toMatchObject({ ok: false, error: 'STALE_QUESTION' })
+    const r = rig([null, DRINK, CLOSED])
+    expect(await r.controller.answer(drink('Tea'))).toMatchObject({ ok: false, error: 'ANSWER_FAILED' })
+    expect(r.keys).toEqual([])
+    expect(r.texts).toEqual([])
+    expect(await r.controller.answer(drink('Tea'))).toEqual({ ok: true })
+    expect(r.keys).toEqual(['1'])
   })
 })
 
