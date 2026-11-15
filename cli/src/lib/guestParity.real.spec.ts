@@ -73,7 +73,7 @@ real('a guest\'s harness against an owner\'s', () => {
   }, { timeout: 15_000, interval: 200 })
 
   beforeAll(async () => {
-    server = await isolatedTmux({ PATH: process.env.PATH, TERM: 'xterm-256color', LANG: 'en_US.UTF-8' })
+    server = await isolatedTmux({ TERM: 'xterm-256color', LANG: 'en_US.UTF-8' })
     vi.stubEnv('TMUX', undefined)
     vi.stubEnv('TMUX_PANE', undefined)
     vi.stubEnv('TMUX_TMPDIR', server.root)
