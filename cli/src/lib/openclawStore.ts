@@ -13,12 +13,13 @@
  * The agent's folder is `<stateDir>/agents/<agentId>/agent/` unless `openclaw.json` moves it
  * (`agents.entries.<id>.agentDir`). The config is read, never written.
  */
-import { readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join } from 'node:path'
 import { env } from '../config/env.js'
 import { OPENCLAW_KEY, openclawAgentDb } from '../engines/openclaw/contract.js'
 import { nativeOpenFiles } from './nativeConversation.js'
+import { observeNativeFile } from '../engines/kit/nativeFileObservation.js'
+import { nativeText, nativeUnavailable } from '../engines/kit/nativeEvidence.js'
 
 /** A TUI keeps its state folder for its whole life; a pid read again after this long may be another process. */
 const CACHE_MS = 60_000
@@ -58,20 +59,15 @@ export async function openclawStateDir(pid: number, openFiles: (pid: number) => 
 }
 
 /** `agents.entries.<id>.agentDir` from the state folder's config, when the person moved the agent's folder. */
-async function configuredAgentDir(stateDir: string, agentId: string): Promise<string | null> {
-  const path = join(stateDir, 'openclaw.json')
-  let text: string
-  try { text = await readFile(path, 'utf8') } catch { return null }
+function configuredAgentDir(text: string | undefined, stateDir: string, agentId: string): string | null {
+  if (text === undefined) return null
   try {
     const config = JSON.parse(text) as { agents?: { entries?: Record<string, { agentDir?: unknown }> } }
     const dir = config.agents?.entries?.[agentId]?.agentDir
     if (typeof dir !== 'string' || !dir.trim()) return null
     const expanded = dir.startsWith('~/') ? join(homedir(), dir.slice(2)) : dir
     return isAbsolute(expanded) ? expanded : join(stateDir, expanded)
-  } catch (error) {
-    once(`[openclaw] ${path} unreadable · ${error instanceof Error ? error.name : 'unknown'} · using the default agent folder`)
-    return null
-  }
+  } catch { return nativeUnavailable('the OpenClaw location config could not be read completely') }
 }
 
 /**
@@ -83,8 +79,24 @@ export async function openclawSessionDb(
   pane: { pid: number; stateDir?: string | null },
   openFiles?: (pid: number) => Promise<string[]>,
 ): Promise<string | null> {
+  return (await openclawSessionLocation(key, pane, openFiles))?.path ?? null
+}
+
+/** One location rule for readers and retained Close authority; no database content is inspected. */
+export async function openclawSessionLocation(
+  key: string, pane: { pid: number; stateDir?: string | null }, openFiles?: (pid: number) => Promise<string[]>,
+): Promise<{ path: string; verify(): void } | null> {
   const agentId = OPENCLAW_KEY.exec(key)?.[1]
   if (!agentId) return null
   const stateDir = pane.stateDir || (await openclawStateDir(pane.pid, openFiles) ?? env.OPENCLAW_STATE_DIR)
-  return openclawAgentDb(stateDir, agentId, await configuredAgentDir(stateDir, agentId))
+  try {
+    const config = observeNativeFile(join(stateDir, 'openclaw.json'), { maxBytes: 1 << 20, missingOkay: true })
+    return { path: openclawAgentDb(stateDir, agentId, configuredAgentDir(config.bytes && nativeText(config.bytes), stateDir, agentId)),
+      verify: config.verify }
+  } catch (error) {
+    // Existing optional readers use the default on unreadable config. Close must call verify and cannot borrow
+    // that fallback as location authority. No content or path from the config reaches this fixed diagnostic.
+    once('[openclaw] LOCATION_CONFIG_UNAVAILABLE · using the default agent folder for optional reads')
+    return { path: openclawAgentDb(stateDir, agentId), verify: () => { throw error } }
+  }
 }

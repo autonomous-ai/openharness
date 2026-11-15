@@ -4,7 +4,7 @@ import type { RegisteredSession } from '../../lib/registry.js'
 import { backgroundCount, STORAGE_BACKGROUND, STORAGE_BACKGROUND_WAIT_MS, STORAGE_CAPABILITIES,
   STORAGE_IN_FLIGHT, STORAGE_REPLY_BYTES, STORAGE_VERSION, STORAGE_EXPORT, STORAGE_EXPORT_WAIT_MS, STORAGE_ENGINES,
   STORAGE_LIFETIME, storageLifetime, exportReceipt, type ExportStage, type ExportReceipt, type ExportOwnership,
-  type StorageEngine, type StorageLifetime, type StorageSession } from '../../engines/worker/storageProtocol.js'
+  type StorageEngine, type StorageLifetime, type StorageSession, type ExportSource } from '../../engines/worker/storageProtocol.js'
 import { createSnapshotTransport, type SnapshotTransportDeps } from './snapshotTransport.js'
 import { boundedControl } from './controlTransport.js'
 
@@ -12,7 +12,7 @@ export interface EngineStorageDeps extends SnapshotTransportDeps {
   isolated: boolean
   serviceProcess?(service: string, pid: number, waitMs: number): Promise<boolean>
   inline?(session: StorageSession): Promise<number | null>
-  inlineExport?(engine: StorageEngine, session: StorageSession, stage: ExportStage, current: () => boolean): Promise<ExportReceipt>
+  inlineExport?(engine: StorageEngine, session: StorageSession, stage: ExportStage, source: ExportSource, current: () => boolean): Promise<ExportReceipt>
 }
 export function createEngineStorage(deps: EngineStorageDeps) {
   let pending = 0
@@ -28,7 +28,7 @@ export function createEngineStorage(deps: EngineStorageDeps) {
   return {
     connected: (service: string) => { transport.connected(service); exports.connected(service) },
     disconnected: (service: string) => { transport.disconnected(service); exports.disconnected(service) },
-    async exportDatabase(session: RegisteredSession, stage: ExportStage, ownership: ExportOwnership): Promise<ExportReceipt> {
+    async exportDatabase(session: RegisteredSession, stage: ExportStage, ownership: ExportOwnership, source: ExportSource): Promise<ExportReceipt> {
       if (!STORAGE_ENGINES.includes(session.engine as StorageEngine) || !session.sessionId) throw new Error('checkpoint engine unsupported')
       const captured: StorageSession = { sessionId: session.sessionId, hermesHome: session.hermesHome,
         openclawStateDir: session.openclawStateDir, pid: session.processIdentity?.pid ?? 0 }
@@ -47,8 +47,8 @@ export function createEngineStorage(deps: EngineStorageDeps) {
           await ownership.writer(lifetime?.pid ?? process.pid)
           if (!current()) throw new Error('checkpoint unavailable')
           return deps.isolated
-            ? await exports.read(session.engine, STORAGE_EXPORT, { session: captured, stage, lifetime }, exportReceipt) as ExportReceipt
-            : await deps.inlineExport?.(session.engine as StorageEngine, captured, stage, current)
+            ? await exports.read(session.engine, STORAGE_EXPORT, { session: captured, stage, source, lifetime }, exportReceipt) as ExportReceipt
+            : await deps.inlineExport?.(session.engine as StorageEngine, captured, stage, source, current)
         }), Math.max(0, Math.ceil(deadline - performance.now())), () => new Error('checkpoint unavailable'))
         if (!current() || !exportReceipt(receipt)) throw new Error('checkpoint unavailable')
         ownership.settled()

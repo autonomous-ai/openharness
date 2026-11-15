@@ -15,6 +15,8 @@ export const STORAGE_CHUNK_BYTES = 128 * 1024
 export const STORAGE_ENGINES = ['opencode', 'kilo', 'hermes', 'devin', 'openclaw'] as const
 export type StorageEngine = typeof STORAGE_ENGINES[number]
 export interface ExportStage { path: string; key: string }
+/** Both paths are core-selected: only path is opened; database preserves the legacy JSON metadata spelling. */
+export interface ExportSource { path: string; key: string; database: string }
 export interface ExportReceipt { bytes: number; sha256: string }
 /** Core-only callbacks; these never cross IPC or grant worker publication authority. */
 export interface ExportOwnership { readonly deadline: number; writer(pid: number): Promise<void>; settled(): void }
@@ -30,6 +32,12 @@ export function exportStage(value: unknown): value is ExportStage {
   const v = value as Record<string, unknown>
   return Object.keys(v).every(k => k === 'path' || k === 'key') && typeof v.path === 'string' && v.path.length > 0
     && v.path.length <= 32_768 && !v.path.includes('\0') && typeof v.key === 'string' && v.key.length > 0 && v.key.length <= 200
+}
+export function exportSource(value: unknown): value is ExportSource {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const v = value as Record<string, unknown>
+  return Object.keys(v).every(k => ['path', 'key', 'database'].includes(k)) && exportStage({ path: v.path, key: v.key })
+    && typeof v.database === 'string' && v.database.length > 0 && v.database.length <= 32_768 && !v.database.includes('\0')
 }
 export function exportReceipt(value: unknown): value is ExportReceipt {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false

@@ -76,12 +76,16 @@ async function fresh(env: Record<string, string> = {}) {
   const manifests = () => existsSync(directory) ? readdirSync(directory).filter(name => /^[a-f0-9]{64}\.json$/.test(name))
     .map(name => readFileSync(join(directory, name), 'utf8')).sort() : []
   const written = (): Write[] => readFileSync(writes, 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line))
+  const nativeSession = () => {
+    const started = JSON.parse(readFileSync(join(home, 'started.json'), 'utf8')) as { terminal: string }
+    return JSON.parse(readFileSync(join(home, 'terminal-sessions', started.terminal), 'utf8')).session_id as string
+  }
   const resume = async () => {
     const answer = await c.request('agent_resume', { agentId: agent.id }, 90_000)
     expect(answer.error, JSON.stringify(answer)).toBeUndefined()
     agent = await bound()
   }
-  return { d, c, home, tell, rows, close, manifests, written, hold, resume, agent: () => agent }
+  return { d, c, home, tell, rows, close, manifests, written, nativeSession, hold, resume, agent: () => agent }
 }
 
 it.each(['worker', 'inline', 'older master'] as const)('saves the existing checkpoint format through the %s and never exposes private storage requests', async mode => {
@@ -121,8 +125,7 @@ it.each(['kill', 'freeze', 'cancel', 'rebind'] as const)('retains saved history 
       createdAt: original.createdAt, mode: 'cancel' })).toMatchObject({ cancelled: true })
     if (fault === 'rebind') {
       r.tell({ new: true }); r.tell({ say: 'replacement conversation stays open' })
-      await until('the same agent rebound before the export returns', async () => (await r.rows(observer)).find(row => row.id === original.id
-        && row.sessionId !== original.sessionId && row.sessionId) ?? null, 25_000, 100)
+      await until('the native terminal record changed before the export returns', () => r.nativeSession() !== original.sessionId || null, 15_000, 50)
     }
     if (fault === 'cancel' || fault === 'rebind') rmSync(r.hold)
     const answer = await closing

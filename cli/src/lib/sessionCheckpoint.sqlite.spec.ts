@@ -8,7 +8,7 @@ import { builtinSqlite, closeSqliteHandles, type DatabaseLike } from './sqliteBu
 import { sqliteReadAll } from './sqliteRead.js'
 import type { StorageEngine } from '../engines/worker/storageProtocol.js'
 import type { CheckpointDeps } from './sessionCheckpoint.js'
-const workerExport: CheckpointDeps = { exportDatabase: async (s, stage) => (await import('../engines/others/checkpoint.js')).exportDatabase(s.engine as StorageEngine, { sessionId: s.sessionId, hermesHome: s.hermesHome, openclawStateDir: s.openclawStateDir, pid: s.processIdentity?.pid }, stage) }
+const workerExport: CheckpointDeps = { exportDatabase: async (s, stage, _ownership, source) => (await import('../engines/others/checkpoint.js')).exportDatabase(s.engine as StorageEngine, { sessionId: s.sessionId, hermesHome: s.hermesHome, openclawStateDir: s.openclawStateDir, pid: s.processIdentity?.pid }, stage, source) }
 import { enableOffThreadSqlite, resetOffThreadSqlite } from './sqliteThread.js'
 
 // The real reads, seen: a conversation table is read in pages (#4188). vi.resetModules() keeps this mock, and with it

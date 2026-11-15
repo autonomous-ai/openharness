@@ -11,7 +11,8 @@ import { nativeFileKey } from '../engines/kit/nativePaths.js'
 import { readPrivateStateFile, secureStateDirectory } from './secureState.js'
 import { findResumedTranscript } from './sessionRepair.js'
 import { CheckpointStages, type CheckpointStage } from './checkpointStages.js'
-import type { ExportStage, ExportReceipt, ExportOwnership } from '../engines/worker/storageProtocol.js'
+import { databaseCheckpointEvidence, type DatabaseCheckpointProof } from './databaseCheckpoint.js'
+import type { ExportStage, ExportReceipt, ExportOwnership, ExportSource } from '../engines/worker/storageProtocol.js'
 
 export class SessionCheckpointError extends Error {
   readonly code = 'HISTORY_NOT_SAVED'
@@ -36,7 +37,7 @@ type Checkpoint = {
 }
 
 export interface CheckpointDeps {
-  exportDatabase?(session: RegisteredSession, stage: ExportStage, ownership: ExportOwnership): Promise<ExportReceipt>
+  exportDatabase?(session: RegisteredSession, stage: ExportStage, ownership: ExportOwnership, source: ExportSource): Promise<ExportReceipt>
 }
 export class SessionCheckpointStore {
   private readonly stages: CheckpointStages
@@ -66,7 +67,7 @@ export class SessionCheckpointStore {
     return [...files, ...(existsSync(history) ? [history] : []), manifest]
   }
 
-  async save(s: RegisteredSession, options: { screen?: string | null; current?: () => boolean } = {}): Promise<void> {
+  async save(s: RegisteredSession, options: { screen?: string | null; current?: () => boolean; databaseProof?: DatabaseCheckpointProof } = {}): Promise<void> {
     secureStateDirectory(dirname(this.directory))
     secureStateDirectory(this.directory)
     const key = this.key(s)
@@ -75,9 +76,11 @@ export class SessionCheckpointStore {
     let temporary = join(this.directory, `${file}.tmp`)
     let stage: CheckpointStage | undefined
     let databaseStageRequested = false
+    let databaseProof = options.databaseProof
     const current = () => {
       if (stage && performance.now() >= stage.deadline) throw Object.assign(new Error('checkpoint disk wait expired'), { code: 'CHECKPOINT_STAGE_TIMEOUT' })
       if (options.current?.() === false) throw new SessionCheckpointError('The session changed while saving. Its previous checkpoint is kept.')
+      databaseProof?.verify()
     }
     const destination = join(this.directory, file)
     let committed = false
@@ -161,8 +164,11 @@ export class SessionCheckpointStore {
         if (!this.deps.exportDatabase) throw new SessionCheckpointError('Could not read the saved conversation. The session has not been closed.')
         databaseStageRequested = true
         stage = await this.stages.acquire()
+        databaseProof ??= await databaseCheckpointEvidence(s)
+        if (!databaseProof) throw new SessionCheckpointError('The conversation location is unavailable. The session has not been closed.')
+        current()
         temporary = stage.stage.path
-        const receipt = await this.deps.exportDatabase(s, stage.stage, stage).catch(() => {
+        const receipt = await this.deps.exportDatabase(s, stage.stage, stage, databaseProof.source).catch(() => {
           throw new SessionCheckpointError('Could not read the saved conversation. The session has not been closed.')
         })
         current()

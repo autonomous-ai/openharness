@@ -209,6 +209,7 @@ engines/kit/launchStartup.ts
 engines/kit/messagesHook.ts
 engines/kit/nativeDescriptors.ts
 engines/kit/nativeEvidence.ts
+engines/kit/nativeFileObservation.ts
 engines/kit/nativeFiles.ts
 engines/kit/nativeHeader.ts
 engines/kit/nativeHookFiles.ts
@@ -326,6 +327,7 @@ lib/daemonCommand.ts
 lib/daemonRecord.ts
 lib/daemonSafeMode.ts
 lib/daemonState.ts
+lib/databaseCheckpoint.ts
 lib/deleteAgentFallback.ts
 lib/deletedSessions.ts
 lib/dialogEnd.ts

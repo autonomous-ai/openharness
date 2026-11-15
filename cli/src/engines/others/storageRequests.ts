@@ -3,7 +3,7 @@ import type { ServiceRequests } from '../../core/api.js'
 import { randomUUID } from 'node:crypto'
 import { env } from '../../config/env.js'
 import { backgroundCount, storageSession, STORAGE_BACKGROUND, STORAGE_BACKGROUND_WAIT_MS, STORAGE_CAPABILITIES,
-  exportStage, exportReceipt, storageLifetime, STORAGE_LIFETIME, STORAGE_EXPORT, STORAGE_EXPORT_WAIT_MS, STORAGE_ENGINES, STORAGE_IN_FLIGHT, STORAGE_REPLY_BYTES, STORAGE_VERSION, type StorageSession, type StorageEngine } from '../worker/storageProtocol.js'
+  exportStage, exportSource, exportReceipt, storageLifetime, STORAGE_LIFETIME, STORAGE_EXPORT, STORAGE_EXPORT_WAIT_MS, STORAGE_ENGINES, STORAGE_IN_FLIGHT, STORAGE_REPLY_BYTES, STORAGE_VERSION, type StorageSession, type StorageEngine } from '../worker/storageProtocol.js'
 import { exportDatabase } from './checkpoint.js'
 
 export async function hermesBackground(session: StorageSession): Promise<number | null> {
@@ -23,10 +23,10 @@ export function otherStorageRequests(deps: { background?: typeof hermesBackgroun
     const failure = (error = 'ENGINE_UNAVAILABLE') => ({ version: STORAGE_VERSION, error })
     if (!privateRequest(payload, asker) || !storageSession(payload.session)
       || (background ? payload.engine !== 'hermes' : !STORAGE_ENGINES.includes(payload.engine as StorageEngine)
-        || !exportStage(payload.stage) || !storageLifetime(payload.lifetime)
+        || !exportStage(payload.stage) || !exportSource(payload.source) || !storageLifetime(payload.lifetime)
         || payload.lifetime.pid !== lifetime.pid || payload.lifetime.nonce !== lifetime.nonce)
       || Object.keys(payload).some(key => !(background ? ['version', 'engine', 'session', 'requestId']
-        : ['version', 'engine', 'session', 'stage', 'lifetime', 'requestId']).includes(key))) return failure('ENGINE_INVALID_REQUEST')
+        : ['version', 'engine', 'session', 'stage', 'source', 'lifetime', 'requestId']).includes(key))) return failure('ENGINE_INVALID_REQUEST')
     if (closed?.aborted) return failure()
     if (pending >= STORAGE_IN_FLIGHT) return failure('ENGINE_BUSY')
     pending++
@@ -41,7 +41,7 @@ export function otherStorageRequests(deps: { background?: typeof hermesBackgroun
     const work = Promise.resolve().then<unknown>(() => background
       ? (deps.background ?? hermesBackground)(payload.session as StorageSession)
       : (deps.export ?? exportDatabase)(payload.engine as StorageEngine, payload.session as StorageSession,
-        payload.stage as never, () => active && performance.now() < deadline))
+        payload.stage as never, payload.source as never, () => active && performance.now() < deadline))
       .then(answer => {
         if (!active) return failure()
         const valid = background ? backgroundCount(answer) : exportReceipt(answer)

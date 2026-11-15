@@ -2,15 +2,12 @@
 import { constants } from 'node:fs'
 import { open } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
-import { join } from 'node:path'
-import { env } from '../../config/env.js'
 import { nativeFileKey } from '../kit/nativePaths.js'
+import { observeNativeFile } from '../kit/nativeFileObservation.js'
 import { readStorePage, utf8Bytes, type PageColumn } from '../../lib/sqlitePage.js'
 import { sqliteReadAll, type SqliteParam, type SqliteRow } from '../../lib/sqliteRead.js'
-import { hermesDbPath } from '../hermes/contract.js'
 import { OPENCLAW_COLUMNS } from '../openclaw/contract.js'
-import { openclawSessionDb } from '../../lib/openclawStore.js'
-import { STORAGE_CHUNK_BYTES, STORAGE_STAGE_BYTES, type ExportStage, type ExportReceipt, type StorageEngine, type StorageSession } from '../worker/storageProtocol.js'
+import { STORAGE_CHUNK_BYTES, STORAGE_STAGE_BYTES, type ExportSource, type ExportStage, type ExportReceipt, type StorageEngine, type StorageSession } from '../worker/storageProtocol.js'
 
 /** A column of the paged table `t`, by its name. */
 const column = (name: string): PageColumn => ({ as: name, sql: `t."${name.replace(/"/g, '""')}"` })
@@ -45,28 +42,22 @@ async function* pagedRows(database: string, table: string, where: string, sessio
 
 /** Native SQLite files can have live WAL writers. Export this conversation's rows through a
  * read-only connection; never copy an incomplete .db or replace an engine's shared store. */
-async function* databaseHistory(s: StorageSession & { engine: StorageEngine }): AsyncGenerator<string> {
-  let database: string
+async function* databaseHistory(s: StorageSession & { engine: StorageEngine }, source: ExportSource): AsyncGenerator<string> {
+  const database = source.path
   /** Table and filter; a conversation table is paged, the others hold one row. */
   let selections: [string, string, Paged?][]
   switch (s.engine) {
     case 'opencode': case 'kilo':
-      database = s.engine === 'opencode' ? join(env.OPENCODE_DATA_DIR, 'opencode.db') : join(env.KILO_DATA_DIR, 'kilo.db')
       selections = [['session', 'id = ?'], ['message', 'session_id = ?', true],
         ['part', 'message_id IN (SELECT id FROM message WHERE session_id = ?)', true]]
       break
     case 'hermes':
-      database = hermesDbPath(s.hermesHome ?? env.HERMES_HOME)
       selections = [['sessions', 'id = ?'], ['messages', 'session_id = ?', true]]
       break
     case 'devin':
-      database = join(env.DEVIN_HOME, 'sessions.db')
       selections = [['sessions', 'id = ?'], ['message_nodes', 'session_id = ?', true]]
       break
     case 'openclaw': {
-      const found = await openclawSessionDb(s.sessionId, { pid: s.pid ?? 0, stateDir: s.openclawStateDir })
-      if (!found) throw new Error('Could not read the saved conversation. The session has not been closed.')
-      database = found
       // Every window the key has had, with each row as the reader reads it. A compressed row is kept as hex: JSON has
       // no bytes. It is sized as twice its blob: sizing the hex itself would read every blob.
       const events = OPENCLAW_COLUMNS.transcript_events
@@ -87,7 +78,7 @@ async function* databaseHistory(s: StorageSession & { engine: StorageEngine }): 
     if (!v2.ok || (held && !held.ok)) throw new Error('Could not read the saved conversation. The session has not been closed.')
     if (held?.rows.length) selections = [['session_v2', 'id = ?'], ['session_message', 'session_id = ?', true]]
   }
-  yield JSON.stringify({ version: 1, sessionId: s.sessionId, engine: s.engine, database }).slice(0, -1) + ',"tables":{'
+  yield JSON.stringify({ version: 1, sessionId: s.sessionId, engine: s.engine, database: source.database }).slice(0, -1) + ',"tables":{'
   let firstTable = true
   for (const [table, where, paged] of selections) {
     yield (firstTable ? '' : ',') + JSON.stringify(table) + ':['
@@ -145,7 +136,9 @@ function* rowJson(row: SqliteRow): Generator<string> {
 }
 
 /** The supplied inode is the only write target; output is bounded before each write. */
-export async function exportDatabase(engine: StorageEngine, session: StorageSession, stage: ExportStage, current: () => boolean = () => true): Promise<ExportReceipt> {
+export async function exportDatabase(engine: StorageEngine, session: StorageSession, stage: ExportStage, source: ExportSource, current: () => boolean = () => true): Promise<ExportReceipt> {
+  const input = observeNativeFile(source.path)
+  if (input.path !== source.path || input.key !== source.key) throw new Error('checkpoint source refused')
   const output = await open(stage.path, constants.O_WRONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
   let bytes = 0, used = 0
   const buffer = Buffer.alloc(STORAGE_CHUNK_BYTES)
@@ -164,7 +157,7 @@ export async function exportDatabase(engine: StorageEngine, session: StorageSess
     const before = await output.stat({ bigint: true })
     if (!current() || !before.isFile() || before.nlink !== 1n || before.size !== 0n || (process.platform !== 'win32' && (before.mode & 0o777n) !== 0o600n)
       || nativeFileKey(before) !== stage.key || (process.getuid && before.uid !== BigInt(process.getuid()))) throw new Error('checkpoint stage refused')
-    for await (const text of databaseHistory({ ...session, engine })) {
+    for await (const text of databaseHistory({ ...session, engine }, source)) {
       if (!current()) throw new Error('checkpoint cancelled')
       const data = Buffer.from(text)
       if (bytes + used + data.length > STORAGE_STAGE_BYTES) throw new Error('checkpoint too large')
@@ -176,6 +169,7 @@ export async function exportDatabase(engine: StorageEngine, session: StorageSess
     }
     if (used) await flush()
     if (!current()) throw new Error('checkpoint cancelled')
+    input.verify()
     return { bytes, sha256: hash.digest('hex') }
   } finally { await output.close() }
 }

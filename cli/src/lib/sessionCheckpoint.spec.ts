@@ -44,6 +44,7 @@ vi.mock('node:fs/promises', async importOriginal => {
   } }
 })
 vi.mock('./sqliteRead.js', () => ({ sqliteReadAll: vi.fn() }))
+const originalStoreHomes = { HERMES_HOME: env.HERMES_HOME, OPENCODE_DATA_DIR: env.OPENCODE_DATA_DIR, KILO_DATA_DIR: env.KILO_DATA_DIR, DEVIN_HOME: env.DEVIN_HOME }
 let root: string
 let history: string
 let directory: string
@@ -58,6 +59,8 @@ beforeEach(async () => {
   faults.stageClosing = undefined
   faults.stageClosed = undefined
   root = await mkdtemp(join(tmpdir(), 'harness-close-checkpoint-'))
+  for (const key of Object.keys(originalStoreHomes) as (keyof typeof originalStoreHomes)[]) env[key] = root
+  for (const file of ['state.db', 'opencode.db', 'kilo.db', 'sessions.db']) await writeFile(join(root, file), 'fixture store', { mode: 0o600 })
   const home = join(root, 'profile')
   await mkdir(join(home, 'sessions'), { recursive: true, mode: 0o700 })
   history = join(home, 'sessions', 'conversation.jsonl')
@@ -65,9 +68,9 @@ beforeEach(async () => {
   row = registry.openPendingAgent({ engine: 'codex', cwd: '/tmp', codexHome: home, runtimes: [{ backend: 'tmux', paneId: '%777' }] })!
   Object.assign(row, { sessionId: 'conversation', transcriptPath: history })
   directory = join(root, 'checkpoints')
-  store = new SessionCheckpointStore(directory, { exportDatabase: (s, stage) => exportDatabase(s.engine as StorageEngine, s, stage) })
+  store = new SessionCheckpointStore(directory, { exportDatabase: (s, stage, _ownership, source) => exportDatabase(s.engine as StorageEngine, s, stage, source) })
 })
-afterEach(async () => { vi.restoreAllMocks(); for (const s of registry.list()) registry.removeAgent(s.agentId); await rm(root, { recursive: true, force: true }) })
+afterEach(async () => { Object.assign(env, originalStoreHomes); vi.restoreAllMocks(); for (const s of registry.list()) registry.removeAgent(s.agentId); await rm(root, { recursive: true, force: true }) })
 const manifest = async () => JSON.parse(await readFile(join(directory, (await readdir(directory)).find(f => /^[a-f0-9]{64}\.json$/.test(f))!), 'utf8'))
 
 async function piSession() {
@@ -288,6 +291,7 @@ it.each(['opencode', 'kilo', 'hermes', 'devin'] as const)('exports %s through re
 
 it('preserves legacy checkpoint bytes across string and binary chunk boundaries', async () => {
   const home = join(root, 'hermes')
+  await mkdir(home); await writeFile(join(home, 'state.db'), 'fixture store', { mode: 0o600 })
   Object.assign(row, { engine: 'hermes', transcriptPath: null, hermesHome: home })
   const session = { id: row.sessionId, title: 'saved conversation' }
   const message = { id: 'm1', body: 'x'.repeat(16_383) + '😀\u0000\n"\\' + '\ud800' + 'y'.repeat(16_384) + '\udc00',
@@ -469,6 +473,30 @@ it('bounds held verification reads without releasing any of the four live slots 
   }
   expect(reads).toBe(4)
   expect(await manifest()).toEqual(previous)
+})
+
+it('checks native generation after the final descriptor close and before staged publication', async () => {
+  Object.assign(row, { engine: 'hermes', transcriptPath: null })
+  const { createHash } = await import('node:crypto')
+  const contents = 'retained rows'
+  const delegated = new SessionCheckpointStore(directory, { exportDatabase: async (_session, stage, ownership) => {
+    await ownership.writer(process.pid)
+    await writeFile(stage.path, contents)
+    ownership.settled()
+    return { bytes: contents.length, sha256: createHash('sha256').update(contents).digest('hex') }
+  } })
+  await delegated.save(row)
+  const previous = await manifest()
+  faults.stageRead = async () => {
+    faults.stageRead = undefined
+    faults.stageClosed = () => {
+      faults.stageClosed = undefined
+      writeFileSync(join(root, 'state.db'), 'new conversation after the last awaited close')
+    }
+  }
+  await expect(delegated.save(row)).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
+  expect(await manifest()).toEqual(previous)
+  expect((await readdir(directory)).filter(name => name.endsWith('.history'))).toEqual([previous.file])
 })
 
 it.each(['acquisition', 'descriptor close'] as const)('bounds a held %s and closes the exact late descriptor without publishing', async phase => {

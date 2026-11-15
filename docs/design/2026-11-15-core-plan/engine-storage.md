@@ -138,6 +138,18 @@ follow caller red tests; the proof API and source diff are reviewed before full 
 Hermes versions/interfaces without terminal records retain their existing initial binding policy. Capture the absence
 of the declared record names, so a record appearing during saving revokes that attempt. Present malformed, unreadable or
 mismatching records hold identity; absence alone is not represented as proof that the saved ID is currently active.
+On POSIX the terminal backend must first supply authoritative pane information: an unavailable lookup cannot be
+interpreted as an absent record. Windows retains its existing hook-based initial policy and the database generation
+fence, without claiming POSIX tty evidence. The preferred declared record wins; only absent higher-priority names and
+that selected record need retaining. A successful signal to a descendant or process group never retires the captured
+engine's generation when its own signal was denied.
+
+The correction's first caller run recorded eight expected failures and one passing exit-flush case in 4.74 seconds
+(`native-proof-red`). After implementation those nine passed in 3.59 seconds. Review added two true red cases for an
+unavailable PTY name and a successful child signal after a denied engine signal (`proof-review-red`, 2.13 seconds).
+The expanded run passed all 36 database Close cases, including those corrections and real source/config/alias fences;
+its three unrelated fixture failures are retained (two optional-argument expectations, one incomplete OpenClaw row).
+Full acceptance and same-workload measurements remain pending; no native-switch success is claimed from unit results.
 
 ## Purge design still under review
 

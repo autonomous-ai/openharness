@@ -2917,6 +2917,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const receipts = new AgentCreationReceipts(join(env.ADAPTER_DATA_DIR, 'agent-creations'))
   // Stopping, purging and resuming an agent (core/agents/lifecycle.ts).
   const lifecycle = createAgentLifecycle({
+    paneInfo: (runtime) => terminals.backendFor(runtime)?.paneInfo(runtime) ?? Promise.resolve(null),
     settlePane: restorePanes.settle,
     cancelExternal: externalResumes.cancel,
     registry,

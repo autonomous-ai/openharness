@@ -161,6 +161,12 @@ describe('closing agents no window shows', () => {
   })
 
   describe('the checkpoint around a close', () => {
+    it('carries the retained native proof through terminal capture into publication', async () => {
+      const { deps, close } = setup()
+      const proof = { source: { path: '/selected.db', key: '1:2', database: '/declared.db' }, verify: vi.fn(), fresh: vi.fn() }
+      await close.checkpoint(row(), 'before', () => true, proof)
+      expect(vi.mocked(deps.sessionCheckpoints.save).mock.calls[0][1]?.databaseProof).toBe(proof)
+    })
     it('carries the close cancellation fence through terminal capture to checkpoint publication', async () => {
       const { deps, close } = setup()
       let active = true

@@ -39,7 +39,7 @@ it('shares admission and retains timed-out export slots until their actual work 
   const release: Array<(result: { bytes: number; sha256: string }) => void> = []
   const requests = otherStorageRequests({ export: () => new Promise(resolve => { release.push(resolve) }), background: async () => 0, recycle: vi.fn() })
   const lifetime = (await requests[STORAGE_LIFETIME]({ version: 1, engine: 'hermes' }, core)).answer
-  const ask = { ...payload, lifetime, stage: { path: '/private/stage', key: '1:2' } }
+  const ask = { ...payload, lifetime, source: { path: '/private/db', key: '2:3', database: '/private/db' }, stage: { path: '/private/stage', key: '1:2' } }
   const operations = Array.from({ length: 4 }, () => requests[STORAGE_EXPORT](ask, core))
   await vi.advanceTimersByTimeAsync(0)
   expect(release).toHaveLength(4)
