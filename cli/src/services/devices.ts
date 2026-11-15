@@ -261,10 +261,14 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // by its tty: elsewhere no agent's is read, and none has a tab.
   const tabs = tabsStream()
   const ttyOf = apps.platform === 'darwin' ? deps.tty ?? readTty : undefined
-  /** The ttys the dial selected lately, a rest's and a tap's alike: the echoes a tab report is checked against. */
+  /** The ttys the dial selected lately, a rest's and a tap's alike: the echoes a tab report is checked against, each
+   *  excusing one. */
   let selects: Array<{ tty: string; at: number }> = []
+  /** Every select written, counted: a report that waits for the settle is set aside once the dial wrote one since. */
+  let written = 0
   const selected = (tty: string): void => {
     const at = monotonic()
+    written++
     selects = [...selects.filter((sent) => at - sent.at < ECHO_MS), { tty, at }].slice(-ECHO_KEPT)
   }
   const observed = env.HARNESS_DEVICE_OBSERVED ? observedSource(core.dataDir, log, {
@@ -841,20 +845,27 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    * reports as the app comes to the front, before it settles. The latest report waits for that settle, and another app
    * settling drops it. Each line is an outcome, never the app, the tty or the agent.
    */
-  type TabReport = Tab & { at: number }
+  /** A tab report, when it came and how many selects the dial had written by then. */
+  type TabReport = Tab & { at: number; written: number }
   let tabReport: TabReport | undefined
   /** Uses up the report: with no dial linked nothing is followed or counted, as with a prompt. */
-  const followTab = ({ app, tty, at }: TabReport): Promise<void> | undefined => {
+  const followTab = (report: TabReport): Promise<void> | undefined => {
     tabReport = undefined
     if (!cable.isConnected) return
-    // By when the report came, not when its app settled: the wait for the settle must not age the dial's own select.
-    if (selects.some((sent) => sent.tty === tty && at - sent.at < ECHO_MS)) { log('[device] tab · echo'); return }
+    const { app, tty, at } = report
+    // The dial selected a tab while the report waited for the settle: it names one the dial has left, and the app's
+    // report of the tab selected is still to come.
+    if (report.written !== written) { log('[device] tab · echo'); return }
+    // By when the report came, not when its app settled: the wait for the settle must not age the dial's own select. It
+    // excuses this report only: the person selecting that tab again soon after moves the dial.
+    const echo = selects.findIndex((sent) => sent.tty === tty && at - sent.at < ECHO_MS)
+    if (echo >= 0) { selects.splice(echo, 1); log('[device] tab · echo'); return }
     const agent = observed?.byTab(app, tty)
     if (!agent) { log('[device] tab · no-agent'); return }
     return cable.followLocal(agent.id, 'tab')
   }
   const tabReported = (tab: Tab): Promise<void> | undefined => {
-    const report = { ...tab, at: monotonic() }
+    const report = { ...tab, at: monotonic(), written }
     if (cableHost.settledApp() === tab.app) return followTab(report)
     tabReport = report
   }
