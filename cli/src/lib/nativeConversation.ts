@@ -1,4 +1,5 @@
 /** Eager native conversation authority. Legacy search/listing helpers cannot authorize control. */
+import { agentCommandOwnershipSnapshotAsync } from './engineBin.js'
 import { basename } from 'node:path'
 import type { BigIntStats } from 'node:fs'
 import { sessionStoreOf } from '../engines/sessionStoreContracts.js'
@@ -44,7 +45,8 @@ async function conversationDescriptors(engine: AgentEngine, pid: number, budget:
     return [parent.executable, parent.nativeArgv?.[0] ?? argvTokens(parent.args)[0] ?? '']
       .some(path => live.open.launcher.test(basename(path)))
   }, expected)
-  const children = process.children.filter(row => engineProcessMatchScore(row, engine) > 0)
+  const ownership = process.children.length ? await agentCommandOwnershipSnapshotAsync() : undefined
+  const children = process.children.filter(row => engineProcessMatchScore(row, engine, ownership) > 0)
   if (children.length > 1) return nativeUnavailable('more than one native child could own the conversation')
   if (children.length) pools.push({ pid: children[0].pid, proof: await sources.descriptors(children[0].pid, budget) })
   return { descriptors: pools.flatMap(pool => pool.proof.descriptors), verify: async () => {

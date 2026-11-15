@@ -87,6 +87,29 @@ Both still run in the core on main (checked 15 November):
   discovery runs every pass. Measure before and after with the e2e profile (`tools/longblocks.mjs`).
 - Platforms: the login shell is macOS and Linux; `harness-pty` is Windows only (test it on Windows, or say why not).
 
+#### Step 3 design (15 November, implementation in progress)
+
+Discovery must await its first complete ownership lookup without blocking other sessions. The synchronous
+compatibility helpers remain for pure callers; the core's terminal scan, pane lookup and native ownership read
+use bounded asynchronous filesystem work, deduplicated within each lookup, with no retained executable identity.
+Up to 128 directory generations cache candidate names only, at most 16,384 entries read per changed directory;
+larger/unreadable directories use the fixed command list. Positive candidates revalidate every pass, including
+chmod and symlink targets. A missing directory is checked again on the next pass.
+Discovery shares OpenCode's existing asynchronous PATH capture. It retains bash -ic / zsh -lic; the separate
+one-shot credential capture stays -lic, preserving which startup files run. Each capture is single-flight and
+limited to 5 seconds (PATH 64 KiB, credentials 1 MiB); changed shell/PATH invalidates it. A failed capture
+keeps daemon PATH and emits a named failure. PTY target discovery awaits the existing asynchronous version probe,
+with a hard deadline, bounded shared flights/cache and executable identity checked before publishing an answer.
+
+Design: no new stored or transmitted data. Growth is bounded transient work and cache only; no migration or
+rollback is needed. Concurrency is one shell capture and bounded filesystem/version probes. Reads inspect only
+configured command candidates, never a filesystem tree. The same discovery workload records loop delay and CPU
+before/after; timeout tests prove hung children cannot hold core. Published protocols and the last 30 days of
+clients are unchanged. All execution uses the daemon's existing account; no new audience or credentials.
+Failures remain unknown rather than evidence that a process died. Platforms: shell on macOS/Linux, hidden PTY
+probe on Windows; local validation on macOS, Windows-specific options checked in tests, native Windows recorded
+separately when available.
+
 ### PR 4 (core-loop-4): the registry save never sleeps the loop
 
 - `lib/registry.ts:492-601` `withRegistryFileLock`: `mkdir` lock dir + `owner.json` (fsync), on `EEXIST` it waits with

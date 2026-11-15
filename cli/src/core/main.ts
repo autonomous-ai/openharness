@@ -627,7 +627,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // target's host, the build this daemon would start; any other host, still running from before an update, is a
   // drain backend beside it (lib/ptyHost/drain.ts). The target is read here once, for this core's life: it runs the
   // binary (`harness-pty version`, up to 5 s), and an update that moves it starts a new core.
-  const ptyTarget = terminalConfig.backends.includes('ptyhost') ? targetHost() : null
+  const ptyTarget = terminalConfig.backends.includes('ptyhost') ? await targetHost() : null
   if (terminalConfig.backends.includes('ptyhost')) {
     console.log(ptyTarget ? `[terminal] ptyhost: target ${ptyTarget.instance}` : '[terminal] ptyhost: target unknown')
   }

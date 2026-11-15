@@ -1,6 +1,6 @@
 import { expect, it, vi } from 'vitest'
 import { mkdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
-import { opencodeBin, opencodeBinAsync } from '../lib/engineBin.js'
+import { opencodeBinAsync } from '../lib/engineBin.js'
 import { loadEngine } from './inProcess.js'
 
 vi.mock('node:fs', async real => ({ ...await real<object>(),
@@ -10,7 +10,6 @@ vi.mock('node:fs', async real => ({ ...await real<object>(),
   writeFileSync: vi.fn(() => { throw new Error('file written while importing native hooks') }),
 }))
 vi.mock('../lib/engineBin.js', () => ({
-  opencodeBin: vi.fn(() => { throw new Error('native executable resolved during import') }),
   opencodeBinAsync: vi.fn(() => { throw new Error('native executable resolved during import') }),
 }))
 vi.mock('./inProcess.js', () => ({ loadEngine: vi.fn(() => { throw new Error('optional code requested during import') }) }))
@@ -18,5 +17,5 @@ vi.mock('./inProcess.js', () => ({ loadEngine: vi.fn(() => { throw new Error('op
 it('composes hook declarations without probing, installing or requesting optional code', async () => {
   const hooks = await import('./nativeHooks.js')
   expect(Object.keys(hooks)).toHaveLength(12)
-  for (const operation of [opencodeBin, opencodeBinAsync, loadEngine, mkdirSync, renameSync, unlinkSync, writeFileSync]) expect(operation).not.toHaveBeenCalled()
+  for (const operation of [opencodeBinAsync, loadEngine, mkdirSync, renameSync, unlinkSync, writeFileSync]) expect(operation).not.toHaveBeenCalled()
 })
