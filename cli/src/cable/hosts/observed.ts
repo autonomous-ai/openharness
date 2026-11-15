@@ -94,6 +94,10 @@ export interface ObservedActions {
   count(what: 'mod' | 'orca' | 'waiting' | 'busy' | 'pending' | 'too-long' | 'no-answer'): void
 }
 
+/** A pane a rest can show without its app coming forward, by the app that holds it: a later kind is one member here, one
+ *  line in shownPane, one case in showPane and one ObservedActions member. */
+type ShownPane = { kind: 'orca'; handle: string }
+
 interface Entry {
   agent: HostAgent
   /** When its state began (a turn's start renews it): how long a turn has run, and since when an agent waits. */
@@ -228,18 +232,21 @@ export class ObservedSource implements HostSource {
 
   /** Only an Orca terminal can be shown without its app coming forward. */
   hasPane(agent: HostAgent): boolean {
-    return this.paneHandle(agent) !== undefined
+    return this.shownPane(agent) !== undefined
   }
 
   showPane(agent: HostAgent): Promise<PaneSwitch> {
-    const handle = this.paneHandle(agent)
-    return handle ? this.deps.actions!.orcaSwitch(handle) : Promise.resolve('failed')
+    const pane = this.shownPane(agent)
+    if (!pane) return Promise.resolve('failed')
+    switch (pane.kind) {
+      case 'orca': return this.deps.actions!.orcaSwitch(pane.handle)
+    }
   }
 
   /** The terminal of its latest event, while it lives: one it left, or an ended session's, holds something else now. */
-  private paneHandle(agent: HostAgent): string | undefined {
+  private shownPane(agent: HostAgent): ShownPane | undefined {
     const e = this.entries.get(agent.id)
-    return e && this.deps.actions && this.live(e) ? e.handle : undefined
+    return e?.handle && this.deps.actions && this.live(e) ? { kind: 'orca', handle: e.handle } : undefined
   }
 
   private emit(): void {

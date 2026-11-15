@@ -25,7 +25,7 @@ import { CableFleet, testDialDiscovery, type CableFleetOptions } from '../cable/
 import { isLocalOnly } from '../lib/cardUpdate.js'
 import { TurnStats, type TurnStatsFields } from '../cable/turnStats.js'
 import { cableEventFor, cableStepFor, cableQuestionCloseFor, cableQuestionFor, DaemonCableHost } from '../cable/cableHost.js'
-import { CableSession, SHOWN_ONLY_PREFIX } from '../cable/cableSession.js'
+import { CableSession, SHOWN_ONLY_PREFIX, type FollowCause } from '../cable/cableSession.js'
 import { Inbox } from '../cable/hosts/inbox.js'
 import { LAST_ANSWER_DEADLINE_MS, LAST_ANSWER_MAX_BYTES, readLastAnswer } from '../cable/hosts/lastAnswer.js'
 import { askedLine, hostDisplayName, observedAgentId, ObservedSource, type ObservedActions, type PromptSource } from '../cable/hosts/observed.js'
@@ -102,6 +102,11 @@ const unrouted = (reason: string): RouteAnswer => ({ agentId: '', machineId: '',
 const sid = (id: string): string => id.slice(0, 8)
 /** A card for the dial, and the machine it came from when another machine sent it (services/fleet.ts). */
 type DialEvent = NonNullable<ReturnType<typeof cableEventFor>> & { machineId?: string }
+/** What a dial made of a local follow, by its cause: the outcome only, never the app or the agent. A cause with no row
+ *  writes nothing. */
+const FOLLOWED: Partial<Record<FollowCause, Record<'moved' | 'no-tile', string>>> = {
+  prompt: { moved: '[device] prompt · moved', 'no-tile': '[device] prompt · skipped · no tile' },
+}
 
 // The agents outside a pane: how often their processes are checked, the turns no hook moves are looked at, and, while a dial
 // is attached, the open sessions are scanned (docs/specs/2026-11-13-device-without-the-app.md, "ObservedSource").
@@ -314,8 +319,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     focused: (machineId, agentId) => core.clients.sendLocal({ type: 'dial_focus', payload: { machineId, agentId } }),
     // The outcome only: never the agent, its session or its terminal.
     swiped: (outcome) => log(`[device] swipe · ${outcome}`),
-    // What a dial made of a person's prompt it was asked to follow: the outcome only, never the app or the agent.
-    promptFollowed: (outcome) => log(outcome === 'moved' ? '[device] prompt · moved' : '[device] prompt · skipped · no tile'),
+    localFollowed: (cause, outcome) => {
+      const line = FOLLOWED[cause]?.[outcome]
+      if (line) log(line)
+    },
     swarmSelected: (swarmId) => core.clients.sendLocal({ type: 'dial_swarm', payload: { swarmId } }),
     scrolled: (phase, dy, velocity) => core.clients.sendLocal({ type: 'dial_scroll', payload: { phase, dy, velocity } }),
     // Gestures stay at this desk. The device inventory and its settings also reach the owner's other
@@ -729,7 +736,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     if (source === 'dial') { log('[device] prompt · skipped · dial prompt'); return }
     const front = cableHost.settledApp()
     if (front === undefined || outside(agentId)?.app !== front) { log('[device] prompt · skipped · not in front'); return }
-    return cable.followPrompt(agentId)
+    return cable.followLocal(agentId, 'prompt')
   }
   const port: DevicesPort = {
     // A paneless session's hook event, as the core checked it: taken, and dropped here while the observed source is

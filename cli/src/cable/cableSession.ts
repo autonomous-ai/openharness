@@ -281,6 +281,10 @@ export interface AppSwarms {
 export type CableMachineSource = 'backend' | 'local' | 'signed-out'
 /** Why the dial sent an `agent.open`: a tap (absent) or a question screen that came up on its own. */
 export type OpenReason = 'question'
+
+/** What turned the dial to an agent from this computer: a person's prompt, a terminal tab they selected, or a Claude app
+ *  they attached to. The outcome's log line is the cause's own. */
+export type FollowCause = 'prompt' | 'tab' | 'attach'
 /** What a send answers. `message` is a sentence for the dial, shown in place of the generic one. */
 export type SendOutcome = { ok: true } | { ok: false; machine?: string; reason?: string; message?: string }
 
@@ -372,8 +376,8 @@ export interface CableHost {
   swipeSwitches?(agentId: string): boolean
   /** How a hand's turn to such an agent ended: the dial rested on it for SWIPE_REST_MS, or left it first. */
   swipeEnded?(agentId: string, how: 'rest' | 'superseded'): void
-  /** What a person's prompt did to this dial: turned it to the agent, or found no tile for it on the ring it walks. */
-  promptFollowed?(outcome: 'moved' | 'no-tile'): void
+  /** What a local follow did to this dial: turned it to the agent, or found no tile for it on the ring it walks. */
+  localFollowed?(cause: FollowCause, outcome: 'moved' | 'no-tile'): void
   focus(agentId: string): void
   /**
    * "Put this one in front of me" — a NOTIFICATION was tapped.
@@ -718,8 +722,8 @@ export class CableSession {
   /** A remote attachment can take seconds. It must not hold the next pane's focus behind it. */
   private appMachineTail: Promise<void> = Promise.resolve()
   private appFocusGeneration = 0
-  /** The latest person's prompt: one whose list read ends after a later prompt came does nothing. */
-  private promptGeneration = 0
+  /** The latest local follow, of any cause: one whose list read ends after a later follow came does nothing. */
+  private followGeneration = 0
   /** When the app-driven switch began — see APP_SWITCH_REPAINT_MS. */
   private drivingSince = 0
   /** While the app is rebuilding the dial's machine/list state, focus reports describe that rebuild. */
@@ -3287,24 +3291,25 @@ export class CableSession {
   }
 
   /**
-   * A person's prompt in the app in front: the dial turns to its agent the way it follows the window, through followApp,
-   * so the move keeps its queue, its list before its focus and its echo guard (no swipe rest starts from the echo).
+   * A person's prompt, or another local cause, in the app in front: the dial turns to its agent the way it follows the
+   * window, through followApp, so the move keeps its queue, its list before its focus and its echo guard (no swipe rest
+   * starts from the echo).
    *
    * Only a dial whose ring holds the agent moves. One that walks another app's ring (a pick on the dial), a window's tab
    * or a second dial's other ring keeps its place and its record: a focus it has no tile for would land on nothing.
    */
-  async followPrompt(agentId: string): Promise<void> {
+  async followLocal(agentId: string, cause: FollowCause): Promise<void> {
     if (!this.isConnected) return
-    // Taken before the read: reads can end out of order, and an earlier prompt's must not land after a later prompt's,
-    // even a later one for the agent already shown.
-    const generation = ++this.promptGeneration
+    // Taken before the read: reads can end out of order, and an earlier follow's must not land after a later one's, of
+    // any cause, even a later one for the agent already shown.
+    const generation = ++this.followGeneration
     // Already there: a stuck engine repeating its event costs no list read.
     if (agentId === this.desiredFocus && !this.appFocusUnsent) return
     const { agents } = await this.agentSnapshot()
     // Unplugged during the read: followApp would send nothing, and a move that never happened is not counted.
-    if (!this.isConnected || generation !== this.promptGeneration) return
-    if (!agents.some((a) => a.id === agentId)) return this.host.promptFollowed?.('no-tile')
-    this.host.promptFollowed?.('moved')
+    if (!this.isConnected || generation !== this.followGeneration) return
+    if (!agents.some((a) => a.id === agentId)) return this.host.localFollowed?.(cause, 'no-tile')
+    this.host.localFollowed?.(cause, 'moved')
     await this.followApp(this.host.localMachine().id, agentId)
   }
 

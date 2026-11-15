@@ -28,7 +28,7 @@ import type { FleetRouting } from '../services/fleet.js'
 import { ServiceUnavailableError } from '../core/serviceHost.js'
 
 import { PLAYER_STATES, type PlayerSession } from './playerLibrary.js'
-import type { ActivitySnapshot, AppSwarms, CableAgent, CableHost, CableMachine, CableMachineSource, CableSwarm, CableTile, DialStatus, OpenReason, RouteDecision, SendOutcome } from './cableSession.js'
+import type { ActivitySnapshot, AppSwarms, CableAgent, CableHost, CableMachine, CableMachineSource, CableSwarm, CableTile, DialStatus, FollowCause, OpenReason, RouteDecision, SendOutcome } from './cableSession.js'
 import type { WindowRoute } from './windowRoute.js'
 import type { SelectionCommand, SelectionResult } from './windowSelection.js'
 import type { VisitCommand, VisitResult } from './windowVisit.js'
@@ -100,8 +100,8 @@ export interface CableHostWiring {
   focused?: (machineId: string, agentId: string) => void
   /** What came of a swipe that rested on an agent of another app, or was superseded before it rested: for its count. */
   swiped?: (outcome: PaneSwitch | 'superseded') => void
-  /** What came of a person's prompt in the app in front: the dial moved to its agent, or its list had no tile for it. */
-  promptFollowed?: (outcome: 'moved' | 'no-tile') => void
+  /** What came of a local follow, by its cause: the dial moved to its agent, or its list had no tile for it. */
+  localFollowed?: (cause: FollowCause, outcome: 'moved' | 'no-tile') => void
   /**
    * A notification was tapped: the window gives that agent a tile of its own. With `reason`
    * `'question'` it was a question screen instead, and the window only brings the agent forward.
@@ -601,8 +601,8 @@ export class DaemonCableHost implements CableHost {
     return this.filter.latestFront()
   }
 
-  promptFollowed(outcome: 'moved' | 'no-tile'): void {
-    this.wiring.promptFollowed?.(outcome)
+  localFollowed(cause: FollowCause, outcome: 'moved' | 'no-tile'): void {
+    this.wiring.localFollowed?.(cause, outcome)
   }
 
   markSeen(agentId: string): void {
