@@ -725,4 +725,28 @@ mod tests {
             assert_eq!(NoTabs.focus_tty(app, TTY), Ok(Selected::NoTab));
         }
     }
+
+    /// macOS shows this sentence when it asks the person to let Harness Device control a terminal app.
+    #[test]
+    fn the_bundle_says_why_it_sends_apple_events() {
+        // One line per tag, so the plist's indentation does not matter.
+        let plist: String = include_str!("../Info.plist").lines().map(str::trim).collect();
+        let entry = "<key>NSAppleEventsUsageDescription</key><string>Your dial follows your terminal tabs.</string>";
+        assert!(plist.contains(entry), "{plist}");
+    }
+
+    /// A build signed with the hardened runtime sends no Apple Event without this entitlement: every app would answer
+    /// "not allowed", with no prompt. Here, not in tabs_macos.rs, so it runs on Linux too.
+    #[test]
+    fn the_bundle_may_send_apple_events() {
+        let config: Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        assert_eq!(config["bundle"]["macOS"]["entitlements"], "Entitlements.plist");
+        let entitlements: String = include_str!("../Entitlements.plist").lines().map(str::trim).collect();
+        assert!(
+            entitlements.contains("<key>com.apple.security.automation.apple-events</key><true/>"),
+            "{entitlements}"
+        );
+        // That key and no other.
+        assert_eq!(entitlements.matches("<key>").count(), 1, "{entitlements}");
+    }
 }
