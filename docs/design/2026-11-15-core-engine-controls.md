@@ -120,3 +120,25 @@ Growth, storage, migration, audience, platform and failure contracts are unchang
 cache, timer, process, protocol or dependency. The getter guard tests are preservation coverage;
 an unsafe shortcut is a mutation check, not a pre-fix production failure. After scoped checks and
 bundled acceptance, repeat the same fixed comparison under a newly reserved quiet interval.
+
+The corrected comparison still measured a profile CPU regression (median 0.75 to 0.81 s) and two
+idle readings above 1%. Further phase profiles attribute 19 ms to the remaining nested binding
+serialization. Count-only diagnostics found equal native captures: 220 in 22 clients at idle and
+140 in 14 clients during the profile phase. Capability negotiation does not repeat in either phase.
+One additional existing inventory tick falls inside the candidate's profile window; that timing
+difference is retained in the evidence, not treated as duplicated capture work.
+
+Replace the View's serialized identity with one immutable record of the same scalar fields and the
+same processIdentityKey. Keep freshly serialized runtime routes for every comparison, preserving
+all route fields, property order, extra properties and in-place mutations. Optional scalar null and
+undefined remain equivalent where the original JSON array made them so; evidenceRevision retains
+its separate absent/present meaning. The held flag retains its existing truthiness semantics.
+Remove the duplicate profile identity: display retention compares this one record while ignoring
+only the held flag and evidence revision. Full identity transitions still replace the record and
+increment revision and authority before waking callers. Pending reads retain the old immutable
+record and existing counters. There is no mutable registry alias, result cache or new authority map.
+
+Parity tests precede the representation change and cover every field, copied callers, process start
+semantics and exact route JSON behavior. Existing hold/ABA and delayed-control guards remain required.
+All other Design contracts above remain unchanged. Failed cost comparisons and diagnostic counts
+remain visible; a new fixed comparison is scheduled only after validation and review.
