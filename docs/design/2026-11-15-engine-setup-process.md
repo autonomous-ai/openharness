@@ -1,6 +1,6 @@
 # Engine setup outside the daemon core
 
-Status: design before implementation. Package 8, step 1 of the
+Status: implementation checkpoint; integration and official validation pending. Design was committed before code. Package 8, step 1 of the
 [core audit](2026-11-12-core-audit.md); implements the owner's 2026-11-13 decision 2.
 
 Engine installation, Desktop download checks and executable help/version/runtime probes currently run in the core's process. Their subprocesses, caches and installation journals belong to an optional component. Trusted executable and location selection, including its existing bounded login-shell capture, remains core launch authority in this step. An unavailable component must hold only the launch that needs it; input and unrelated
@@ -101,7 +101,7 @@ matched measurements before any performance claim.
   replayed. Rollback uses the same old journal. Windows records remain readable by an older
   controller: the original saved request cannot replay; a separately requested new launch retains the older
   controller's legacy retry behavior, as detailed above.
-- **Audience:** Only authenticated core-to-service private calls may prepare or commit; no route is published to
+- **Audience:** Only authenticated core-to-service private calls without a client connection may prepare or commit; no route is published to
   clients. Inputs are checked and bounded at the worker. Core-selected paths/identity/environment are local capability data and never go into telemetry; the worker cannot replace them. Errors retain the existing caller-visible installation reason; new logs carry
   operation/failure names, not environment contents or paths.
 - **Identity:** The worker runs under the same team/account identity that owns the daemon. It never adopts another

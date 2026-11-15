@@ -516,6 +516,16 @@ describe('installing every engine\'s hooks', () => {
     expect(await installOpencodePluginBeforeSpawn(4242)).toBe(false)
   })
 
+  it('passes optional version observations into hook preparation without loading their implementation', async () => {
+    const setup = { opencodeMajor: async () => 1, hermesKeepsRecord: async () => true }
+    expect(await installOpencodePluginBeforeSpawn(4242, undefined, setup)).toBe(true)
+    expect(hooks.installOpencodePlugin).toHaveBeenLastCalledWith(4242, undefined, { setup })
+    const installed = installEngineHooks(4242, { environment: {}, setup })
+    await installed.settled
+    expect(hooks.installCursorHooks).toHaveBeenCalledWith(4242, expect.objectContaining({ setup }))
+    installed.close()
+  })
+
   it('passes the confirmed executable through to native preparation', async () => {
     const snapshot = { command: '/fixture/opencode', identity: 'file-v2', major: 2, current: () => true }
     vi.mocked(hooks.installOpencodePlugin).mockResolvedValueOnce(true)

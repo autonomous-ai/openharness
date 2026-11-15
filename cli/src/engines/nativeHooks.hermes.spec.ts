@@ -35,8 +35,9 @@ beforeEach(async () => {
   // The mock outlives the reset, so it and what it remembers start again here.
   vi.resetModules()
   const record = await import('./hermesRecord.js')
-  ;({ hermesKeepsRecord, rememberRecordHome } = record)
-  ;({ installHermesHooks, hermesRecordSeen } = await import('./nativeHooks.js'))
+  ;({ hermesKeepsRecord } = record)
+  ;({ rememberRecordHome } = await import('./kit/hermesRecordHomes.js'))
+  ;({ installHermesHooks, hermesRecordSeen } = await import('../lib/hooks.js'))
   record.forgetHermesRecord(); vi.mocked(hermesKeepsRecord).mockReset()
   // What an older Hermes's home holds once Harness installed its hook.
   writeFileSync(config, PERSON); await installHermesHooks(18473)

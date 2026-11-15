@@ -33,12 +33,12 @@ export const DOWNLOAD_NAME = 'harness-download'
 export const DOWNLOAD_HOLD_MS = 600_000
 
 /** Whether Desktop Harness is downloading `engine` now. Never rejects. */
-export async function engineDownloading(engine: AgentEngine, home: string = homedir(), now: () => number = Date.now): Promise<boolean> {
+export async function engineDownloading(engine: AgentEngine, home: string = homedir(), now: () => number = Date.now, execute: typeof execFile = execFile): Promise<boolean> {
   const pid = await markedPid(join(home, '.harness', 'run', `downloading-${engine.replace(/[^a-z0-9-]/g, '')}`), now)
   if (pid === null) return false
   // As `kill -0`: a process of another user answers EPERM, which the pane's check reads as gone too.
   try { process.kill(pid, 0) } catch { return false }
-  return (await commandLine(pid))?.includes(DOWNLOAD_NAME) ?? false
+  return (await commandLine(pid, execute))?.includes(DOWNLOAD_NAME) ?? false
 }
 
 async function markedPid(file: string, now: () => number): Promise<number | null> {
@@ -64,10 +64,10 @@ async function markedPid(file: string, now: () => number): Promise<number | null
 }
 
 /** `ps -p <pid> -o command=`, as the pane asks it: the whole command line when it does not print to a terminal. */
-function commandLine(pid: number): Promise<string | null> {
+function commandLine(pid: number, execute: typeof execFile): Promise<string | null> {
   return new Promise((resolve) => {
     try {
-      probeExecFile(execFile)('ps', ['-p', String(pid), '-o', 'command='], { timeout: 2_000, killSignal: 'SIGKILL', maxBuffer: 1 << 20 },
+      probeExecFile(execute)('ps', ['-p', String(pid), '-o', 'command='], { timeout: 2_000, killSignal: 'SIGKILL', maxBuffer: 1 << 20 },
         (error, stdout) => resolve(error ? null : stdout))
     } catch { resolve(null) }
   })

@@ -1,5 +1,6 @@
 /** Paths observed in the launch shell, used without changing daemon globals. */
 import { isAbsolute, join } from 'node:path'
+import type { NativeSetupProbes } from './nativeSetup.js'
 import type { HookPreparationOptions } from './nativeHookFiles.js'
 
 // Capture only launch locations, never vendor credentials. Pin these locations
@@ -28,6 +29,7 @@ export function nativeOpencodeStore(vars: Readonly<Record<string, string>>): str
 }
 
 export interface NativeHookOptions extends HookPreparationOptions {
+  setup?: Pick<NativeSetupProbes, 'opencodeMajor' | 'hermesKeepsRecord'>
   environment?: Readonly<Record<string, string>>
   /** The executable a launch runs, whose version decides an engine's hooks (Hermes); absent, the one a launch would run. */
   executable?: { command: string }

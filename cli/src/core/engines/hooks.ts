@@ -248,11 +248,13 @@ export function createEngineHooks(deps: EngineHookDeps) {
  * from 1.x to 2.x under a running daemon, and its new TUI must not find the old server plugin. Installation
  * never depends on loading its optional interpreter.
  */
-export async function installOpencodePluginBeforeSpawn(port: number, snapshot?: OpencodeLaunchSnapshot): Promise<boolean> {
-  return await (snapshot ? nativeHooks.installOpencodePlugin(port, snapshot) : nativeHooks.installOpencodePlugin(port)) !== false
+export async function installOpencodePluginBeforeSpawn(port: number, snapshot?: OpencodeLaunchSnapshot, setup?: NativeHookOptions['setup']): Promise<boolean> {
+  return await (setup ? nativeHooks.installOpencodePlugin(port, snapshot, { setup })
+    : snapshot ? nativeHooks.installOpencodePlugin(port, snapshot) : nativeHooks.installOpencodePlugin(port)) !== false
 }
 
 export interface InstallEngineHooksOptions {
+  setup?: NativeHookOptions['setup']
   /** Only these engines' hooks (`HOOK_INSTALL_ENGINES`); every engine's when absent. */
   only?: ReadonlySet<string> | null
   /** The daemon's own environment, for the homes it moves; `process.env` when absent. */
@@ -329,7 +331,7 @@ export function installEngineHooks(port: number, options: InstallEngineHooksOpti
   })
   adoptions.submit(options.environment ?? process.env)
   void options.loginShell?.then(adoptions.submit, error => console.warn(`[hooks] login-shell homes unavailable · ${error instanceof Error ? error.message : error}`))
-  const nativeOptions = { current: adoptions.current }
+  const nativeOptions = { current: adoptions.current, setup: options.setup }
   for (const [engine, hooks] of Object.entries(engineHooks)) hookStep(engine, () => hooks.install(port, nativeOptions))
   for (const [vendor, install] of OTHER_INSTALLERS) hookStep(vendor, () => install(port, nativeOptions))
   return { close: adoptions.close, settled: Promise.all(pending).then(() => {}) }

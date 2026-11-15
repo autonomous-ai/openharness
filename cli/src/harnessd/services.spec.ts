@@ -334,6 +334,17 @@ describe('ServiceSupervisor', () => {
     expect(supervisor.status().map((status) => status.state)).toEqual(['stopped', 'stopped'])
   })
 
+  it('keeps setup off for older inline cores and starts its own process once a current core asks', () => {
+    const specs = serviceSpecs({}, SERVICE_HOSTS).filter(spec => spec.name === 'engineSetup')
+    const supervisor = make(specs)
+    supervisor.start()
+    for (const protocol of [0, 1, 2, 3, 4, 5, 6, 7]) supervisor.unasked(protocol)
+    expect(children).toHaveLength(0)
+    supervisor.want('engineSetup'); supervisor.want('engineSetup')
+    expect(children.map(child => child.spec.services)).toEqual([['engineSetup']])
+    expect(supervisor.status()[0]!.state).toBe('starting')
+  })
+
   it('leaves the new reader workers off for old cores that already read inline, and starts only the requested engine', () => {
     const specs = serviceSpecs({}, SERVICE_HOSTS).filter(spec => spec.name.startsWith('engine-'))
     expect(specs.map(spec => spec.name)).toEqual(['engine-claude', 'engine-codex', 'engine-others'])

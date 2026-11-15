@@ -177,6 +177,9 @@ const DECLARED = new Set(['engines/claude/hookContract.ts', 'engines/codex/hookC
 
 /** What is not the core's, by path: each goes to a service or its own process, in the plan's order. */
 const EDGE: RegExp[] = [
+  // Setup owns installation and engine probes; trusted executable/location selection remains core launch authority.
+  /^engines\/kit\/(downloadMarker|nativeInstall|nativeVersion|nativeProbe|windowsInstall|setupProbe)\.ts$/,
+  /^engines\/hermesRecord\.ts$/, /^engines\/opencode\/version\.ts$/,
   /^engines\/(claude|codex)\/(screen|composer|activity|stoppedGoal|modelControl|modelPicker|questionControl|submission|nativeControl)\.ts$/,
   // Claude Code's and Codex's hooks are declared data (hookContract.ts) that the kit applies in core: no hook code
   // of theirs is the core's, and none runs in a worker either (docs/design/2026-10-08-engine-hooks.md).

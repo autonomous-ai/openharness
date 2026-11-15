@@ -55,3 +55,5 @@ export { startWifi } from './wifi.js'
 export { startWindowNames } from './windowNames.js'
 export { startEngineProbe } from './engineProbe.js'
 export { startWorkspaces } from './workspaces.js'
+
+export { createLocalNativeSetup } from './nativeSetup.js'

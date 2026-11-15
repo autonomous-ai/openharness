@@ -9,7 +9,6 @@ vi.mock('./inProcess.js', () => ({ loadEngine: vi.fn(() => { throw new Error('op
 
 it('imports native control without probing an executable, reading a store or loading interpretation', async () => {
   const control = await import('./launchControl.js')
-  expect(control.parseOpencodeMajor('opencode v2.0.18')).toBe(2)
   expect(control.parseOpencodeModelId('fixture/model')).toEqual({ providerID: 'fixture', modelID: 'model' })
   expect(opencodeBin).not.toHaveBeenCalled()
   expect(opencodeBinAsync).not.toHaveBeenCalled()

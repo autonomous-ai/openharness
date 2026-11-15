@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 
 const probe = vi.hoisted(() => ({ major: 1 as number | null, beforeProbe: undefined as (() => Promise<void>) | undefined, failSync: false, failRemove: false, beforeSync: undefined as (() => Promise<void>) | undefined, onStat: undefined as ((path: unknown) => void) | undefined }))
-vi.mock('./launchControl.js', () => ({ opencodeMajorVersion: async () => { await probe.beforeProbe?.(); return probe.major } }))
+vi.mock('./opencode/version.js', () => ({ opencodeMajorVersion: async () => { await probe.beforeProbe?.(); return probe.major } }))
 vi.mock('node:fs', async original => {
   const fs = await original<typeof import('node:fs')>()
   return { ...fs,
@@ -31,7 +31,7 @@ async function fixture() {
   vi.spyOn(console, 'log').mockImplementation(() => {})
   vi.spyOn(console, 'error').mockImplementation(() => {})
   vi.resetModules()
-  const { installOpencodePlugin } = await import('./nativeHooks.js')
+  const { installOpencodePlugin } = await import('../lib/hooks.js')
   const { OPENCODE_LEGACY_PLUGIN, OPENCODE_TUI_PLUGIN } = await import('./opencode/contract.js')
   return { root, install: installOpencodePlugin, legacy: OPENCODE_LEGACY_PLUGIN.file, tui: OPENCODE_TUI_PLUGIN.file }
 }
@@ -140,7 +140,7 @@ it('holds Codex before hook publication when its approval configuration is uncon
 
 it.each(['{malformed', '{"approvals":{}}'])('preserves Hermes configuration when approvals are unreadable: %s', async approvals => {
   const { root } = await fixture()
-  const { installHermesHooks } = await import('./nativeHooks.js')
+  const { installHermesHooks } = await import('../lib/hooks.js')
   const { HERMES_HOOK_SETTINGS: rule } = await import('./hermes/contract.js')
   const home = join(root, 'HERMES_HOME'), file = join(home, rule.homes.file), allowlist = join(home, rule.allowlist)
   writeFileSync(file, 'model: fixture\n'); writeFileSync(allowlist, approvals)
@@ -156,7 +156,7 @@ it.each(['{malformed', '{"approvals":{}}'])('preserves Hermes configuration when
 
 it('preserves the rest of a Hermes document after a truncated or edited managed block', async () => {
   const { root } = await fixture()
-  const { installHermesHooks } = await import('./nativeHooks.js')
+  const { installHermesHooks } = await import('../lib/hooks.js')
   const { HERMES_HOOK_SETTINGS: rule } = await import('./hermes/contract.js')
   const home = join(root, 'HERMES_HOME'), file = join(home, rule.homes.file)
   for (const text of [
@@ -202,7 +202,7 @@ it.each(['description = """', 'a=[1 #', '[invalid', 'same = 1\nsame = 2'])('hold
 
 it.each(['hooks: {foreign: [{command: "foreign"}]}\n', '"hooks": {}\n', "'hooks': {}\n", 'model: [unfinished'])('holds foreign or incomplete YAML: %s', async config => {
   const { root } = await fixture()
-  const { installHermesHooks } = await import('./nativeHooks.js')
+  const { installHermesHooks } = await import('../lib/hooks.js')
   const home = join(root, 'HERMES_HOME'), file = join(home, 'config.yaml')
   writeFileSync(file, config)
   expect(await installHermesHooks(4242, home)).toBe(false)
@@ -219,14 +219,14 @@ it.each(['codex', 'hermes'])('checks read-only %s approvals before writing hooks
   writeFileSync(config, engine === 'codex' ? 'model = "fixture"\n' : '{"approvals":[]}')
   chmodSync(config, 0o444)
   const { engineHooks } = await import('./hooks.js')
-  const { installHermesHooks } = await import('./nativeHooks.js')
+  const { installHermesHooks } = await import('../lib/hooks.js')
   expect(engine === 'codex' ? await engineHooks.codex.installIn(4242, home) : await installHermesHooks(4242, home)).toBe(false)
   expect(readFileSync(hookFile, 'utf8')).toBe(original)
 })
 
 it('preserves marker-like text inside a foreign YAML scalar', async () => {
   const { root } = await fixture()
-  const { installHermesHooks } = await import('./nativeHooks.js')
+  const { installHermesHooks } = await import('../lib/hooks.js')
   const { HERMES_HOOK_SETTINGS: rule } = await import('./hermes/contract.js')
   const home = join(root, 'HERMES_HOME'), file = join(home, 'config.yaml')
   const config = `description: "text\n  ${rule.begin}\n  hooks:\n    foreign: keep\n  ${rule.end}\n  end"\n`
@@ -237,7 +237,7 @@ it('preserves marker-like text inside a foreign YAML scalar', async () => {
 
 it('holds a large YAML structure before parsing or modifying it', async () => {
   const { root } = await fixture()
-  const { installHermesHooks } = await import('./nativeHooks.js')
+  const { installHermesHooks } = await import('../lib/hooks.js')
   const home = join(root, 'HERMES_HOME'), file = join(home, 'config.yaml')
   const config = Array.from({ length: 60_000 }, (_, index) => `key${index}: value`).join('\n')
   writeFileSync(file, config)
@@ -254,7 +254,7 @@ it('installs every healthy Hermes profile beyond the asynchronous preparation po
     const profile = join(home, 'profiles', String(n)); mkdirSync(profile, { recursive: true })
     writeFileSync(join(profile, 'config.yaml'), 'model: fixture\n')
   }
-  const { installHermesHooks } = await import('./nativeHooks.js')
+  const { installHermesHooks } = await import('../lib/hooks.js')
   expect(await installHermesHooks(4242)).toBe(true)
   for (let n = 0; n < 18; n++) expect(readFileSync(join(home, 'profiles', String(n), 'config.yaml'), 'utf8')).toContain('--port 4242')
 }, 20_000)
@@ -302,7 +302,7 @@ it.each([
 
 it('does not credit a newer OpenCode installation to a revoked older caller', async () => {
   const { install } = await fixture()
-  const control = await import('./launchControl.js')
+  const control = await import('./opencode/version.js')
   let release!: (major: number) => void, current = true
   vi.spyOn(control, 'opencodeMajorVersion').mockImplementationOnce(() => new Promise(resolve => { release = resolve }))
   const first = install(4242, undefined, { current: () => current })
