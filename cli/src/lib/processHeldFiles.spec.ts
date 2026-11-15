@@ -277,6 +277,9 @@ it('refuses a home whose path steps back out of a folder', async () => {
   file('c/sessions/rollout-1.jsonl')
   mocks.state.lsof.set('4242', `p4242\nf3\nn${disk('evil')}/..\\x2fc\\x2fsessions\\x2frollout-1.jsonl\n`)
   expect(await mac(id(4242), ROLLOUT)).toBeUndefined()
+  // Nor is that spelling looked up: a lookup that steps out of the folder may land anywhere, `/net`'s automounts
+  // among them, and the file the kernel names is never spelled with a `..`.
+  expect(calls.filter((call) => call.startsWith('lstat '))).toEqual([])
 })
 
 it('lists nothing on Windows, asks for no children there, and keeps nothing of having been asked', async () => {
