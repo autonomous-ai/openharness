@@ -67,9 +67,9 @@ export function createServiceRoutes(deps: ServiceRoutesDeps) {
       timer = setTimer(() => resolve(null), waitMs)
       const reply = (result: Record<string, unknown>): void => { clearTimer(timer); resolve(result) }
       if (!deps.hosted.route(type, payload, asker, reply)) reply({ error: 'SERVICE_UNAVAILABLE' })
-    } catch (error) {
+    } catch {
       if (timer !== undefined) clearTimer(timer)
-      log(`[services] ${type} could not be asked: ${error instanceof Error ? error.message : String(error)}`)
+      log(`[services] ${type} SERVICE_REQUEST_FAILED`)
       resolve(null)
     }
   })
@@ -118,7 +118,7 @@ export function createServiceRoutes(deps: ServiceRoutesDeps) {
       const requestId = typeof payload.requestId === 'string' ? payload.requestId : ''
       return ask(route.type, route.waitMs, { frame: route.frame, payload }, { ...OWNER_HERE, connection }).then((answer) => {
         if (!route.result) return null
-        return { type: route.result, payload: { requestId, ...(answer && typeof answer.error !== 'string' ? answer : route.unanswered) } }
+        return { type: route.result, payload: { ...(answer && typeof answer.error !== 'string' ? answer : route.unanswered), requestId } }
       })
     },
   }

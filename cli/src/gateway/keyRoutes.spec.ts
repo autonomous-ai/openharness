@@ -64,8 +64,8 @@ describe('the keys\' routes, answered by the gateway', () => {
     expect(await routes('GET', '/api/pairs', undefined)).toEqual({ status: 500, body: { error: 'INTERNAL' } })
     // A body of JSON that holds no record, reached for a field, as the door's catch-all answered it.
     expect(await routes('POST', '/api/pair', 'null')).toEqual({ status: 500, body: { error: 'INTERNAL' } })
-    expect(log.mock.calls).toEqual([['[gateway] POST /api/group/sync failed: roster unreadable'], ['[gateway] GET /api/pairs failed: gone'],
-      [expect.stringMatching(/^\[gateway\] POST \/api\/pair failed: /)]])
+    expect(log.mock.calls).toEqual([['[gateway] POST /api/group/sync KEY_ROUTE_FAILED'], ['[gateway] GET /api/pairs KEY_ROUTE_FAILED'],
+      ['[gateway] POST /api/pair KEY_ROUTE_FAILED']])
   })
 
   it('trusts a linked peer only with a real key and machine id, and trims its label', async () => {
@@ -122,9 +122,10 @@ describe('the keys\' routes, answered by the gateway', () => {
   it('says what failed on the console when not told otherwise', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     const ops = commands()
-    ops.devicesList.mockRejectedValueOnce(new Error('log unreadable'))
+    ops.devicesList.mockRejectedValueOnce(new Error('private-key-fixture'))
     expect(await keyRoutes(asOps(ops))('GET', '/api/devices', undefined)).toEqual({ status: 500, body: { error: 'INTERNAL' } })
-    expect(error).toHaveBeenCalledWith('[gateway] GET /api/devices failed: log unreadable')
+    expect(error).toHaveBeenCalledWith('[gateway] GET /api/devices KEY_ROUTE_FAILED')
+    expect(JSON.stringify(error.mock.calls)).not.toContain('private-key-fixture')
     error.mockRestore()
   })
 })

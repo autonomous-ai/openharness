@@ -214,16 +214,24 @@ describe('the door\'s routes a service answers', () => {
     expect(await answer).toEqual({ type: 'route_result', payload: { requestId: 'q-3', agentId: '', reason: 'down' } })
   })
 
+  it('keeps request correlation when a service supplies a different request id', async () => {
+    const doors = createServiceRoutes({ routes, frames,
+      linked: router(['devices_ws'], () => ({ requestId: 'other-request', agentId: 'a1' })), hosted: router([]) })
+    expect(await doors.frame(conn, { type: 'route_task', payload: { requestId: 'original-request' } }))
+      .toEqual({ type: 'route_result', payload: { requestId: 'original-request', agentId: 'a1' } })
+  })
+
   it('answers a route\'s and a frame\'s own answer when its service cannot even be asked, and says so', async () => {
     const log = vi.fn()
-    const broken: ServiceRouter = { route: () => { throw new Error('the link is closing') } }
+    const broken: ServiceRouter = { route: () => { throw new Error('private-request-fixture') } }
     const doors = createServiceRoutes({ routes, frames, linked: broken, hosted: router([]), log })
     expect(await doors.answer('/api/thing/save', read('/api/thing/save'))).toEqual(DOWN)
     expect(await doors.frame(conn, { type: 'route_task', payload: { requestId: 'q-4' } })).toEqual({ type: 'route_result', payload: { requestId: 'q-4', agentId: '', reason: 'down' } })
-    const odd = createServiceRoutes({ routes, linked: router([]), hosted: { route: () => { throw 'not an error' } }, setTimer: () => 0, clearTimer: () => {}, log })
+    const odd = createServiceRoutes({ routes, linked: router([]), hosted: { route: () => { throw 'private-request-fixture' } }, setTimer: () => 0, clearTimer: () => {}, log })
     expect(await odd.answer('/api/thing/save', read('/api/thing/save'))).toEqual(DOWN)
-    expect(log.mock.calls).toEqual([['[services] thing_http could not be asked: the link is closing'], ['[services] devices_ws could not be asked: the link is closing'],
-      ['[services] thing_http could not be asked: not an error']])
+    expect(log.mock.calls).toEqual([['[services] thing_http SERVICE_REQUEST_FAILED'], ['[services] devices_ws SERVICE_REQUEST_FAILED'],
+      ['[services] thing_http SERVICE_REQUEST_FAILED']])
+    expect(JSON.stringify(log.mock.calls)).not.toContain('private-request-fixture')
   })
 
   it('clears the inline deadline when a router throws before answering', async () => {

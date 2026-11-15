@@ -160,12 +160,13 @@ The core's files and lines: 542 / 92,562 before (main at 0b15482b55), 542 / 92,2
   route is refused by the service: `gatewayHttp` passes `asker.door === 'socket'` to the handoff's own route, which reads
   the path once and refuses without it (gateway/accountRoutes.ts). hookServer.ts passes `trustedLocal` as `socket`; a
   service's own process keeps `door` when it rebuilds the asker (services/process.ts; the e2e found it dropped).
-- The adapter never rejects: a router that throws while asked is the route's own answer, logged (`could not be asked`).
+- The adapter never rejects: a router that throws while asked is the route's own answer, logged (`SERVICE_REQUEST_FAILED`),
+  without the exception's potentially private content.
 - Like step 2's, the keys' routes are ordinary requests a client of the local WebSocket may send, at the door's trust: no
   browser can open the WebSocket (it refuses any Origin), and over TCP it takes the local credential from this account. The
   local header, the door's guard against a browser page, is not asked there.
 - The WebSocket half: `SERVICE_WS_FRAMES` (`ServiceWsFrame`: `frame`, `type`, `result?`, `waitMs`, `unanswered?`) and
-  `serviceRoutes.frame(frame, asker)`: the frame is asked of its service as `{ frame, payload }` (the window's payload as it
+  `serviceRoutes.frame(connection, frame)`: the frame is asked of its service as `{ frame, payload }` (the window's payload as it
   came, nested: serviceLinks puts its own `requestId` on the request), off the connection's ordered chain, and the answer
   goes back as `{ type: result, payload: { requestId, ...answer } }` (the window's requestId, `''` when it sent none, first,
   as before). An answer with a string `error` (down, failing, slow) is the frame's `unanswered`. No `result`: told, nothing
@@ -231,6 +232,17 @@ The core's files and lines: 542 / 92,562 before (main at 0b15482b55), 542 / 92,2
   Root must resolve or accept that measured increase explicitly before calling the hot-path requirement satisfied.
 - PR #4324 is still a draft with no CI runs. Root alone updates its body (currently containing `E2E_RESULTS`,
   `CORE_AFTER` and `RECEIPTS` placeholders), pushes, marks ready, merges and publishes. Step 4 remains out of scope.
+
+Root review and integration:
+- Main `690e9b4ae5` is integrated, preserving the concurrent devices terminal-tab work. No Browser feature work is
+  included; this package removes feature dispatch from core's doors.
+- The timer regression was observed red (one retained timer), then passed with all 16 adapter cases.
+- Review found that a service could overwrite the window's request id and that boundary exceptions could put private
+  request or key-store content in logs. Three focused regressions failed first. Core now keeps the request id, and the
+  adapter/key-route catch paths log only their static route and named failure. All 26 adapter/key-route cases pass;
+  an intermediate run retained one old log-text expectation, corrected to the intentional content-free failure.
+- These fixes change neither stored data nor successful public replies. Existing declared fallback bodies remain;
+  unknown exceptions are not copied into logs. Full core coverage and final process acceptance remain pending.
 
 ## Step 4: smaller items
 Phone sign-in relay (lib/loopbackGet.ts, core/terminals/browser.ts, 127 lines -> gateway), guest rules and a guest's

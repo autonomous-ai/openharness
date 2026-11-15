@@ -118,8 +118,8 @@ export function keyRoutes(ops: KeyOps, log: (line: string) => void = (line) => c
         let body: Record<string, unknown>
         try { body = JSON.parse(text ?? '') as Record<string, unknown> } catch { return BAD_JSON }
         return await route.body!(body)
-      } catch (error) {
-        log(`[gateway] ${method} ${path} failed: ${error instanceof Error ? error.message : String(error)}`)
+      } catch {
+        log(`[gateway] ${method} ${path} KEY_ROUTE_FAILED`)
         return answer(500, { error: 'INTERNAL' })
       }
     })()
