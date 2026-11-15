@@ -48,7 +48,11 @@ export class ApiConnectionMetadata {
       const directory = lstatSync(dir, { throwIfNoEntry: false })
       if (!directory) return false
       if (!directory.isDirectory() || directory.isSymbolicLink()) throw new Error()
-      secureStateDirectory(dir, false)
+      // The fresh lstat already proves an owned, private POSIX directory. Opening it again costs every launch;
+      // keep the checked helper for legacy modes/owners and Windows' profile-root check. No state is cached.
+      const uid = typeof process.getuid === 'function' ? process.getuid() : null
+      if (process.platform === 'win32' || (directory.mode & 0o777) !== 0o700
+        || (uid !== null && directory.uid !== uid)) secureStateDirectory(dir, false)
       // A store an older build wrote has no list until the store is first read in this one (models reads it as it
       // starts, and so does `harness api`). Until then its being there answers, unread: it holds an API, or did. Until
       // 2026-12-15, when the builds without the list are a month old.
