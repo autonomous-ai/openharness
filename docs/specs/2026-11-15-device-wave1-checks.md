@@ -38,7 +38,7 @@ Also read in the code:
 - **F1 is in scope:** an agent in the person's own tmux is wave 1 #4's main case (PM, 2026-11-15).
 - The three checks on Diego's real dial and Macs (Verification) run in one session with Diego after the pull request
   is done (PM, 2026-11-15).
-- No firmware change, no change to Desktop, and no change to the core (cli/AGENTS.md rule 7) but one comment line:
+- No firmware behavior change (one line in its host table, below), no change to Desktop, and no change to the core (cli/AGENTS.md rule 7) but one comment line:
   `MAX_HINTS`'s comment in `core/observedHook.ts` says the hook caps its own list (PM, 2026-11-15).
 - **Q1 = A** (PM, 2026-11-15): the devices process may switch a tmux client to the agent's pane. `services/AGENTS.md`
   says so in the same pull request:
@@ -84,8 +84,9 @@ shows its pane in tmux and brings its terminal app forward. An agent in a tmux p
 - `detectApp`: the bundle id still decides first, so tmux in Ghostty is on Ghostty's page. `TERM_PROGRAM=tmux` with no
   bundle id, or with a bundle id no table lists (tmux in Alacritty), names the app `tmux` (its own page, "tmux"),
   not Other (PM, 2026-11-15). `tmux` is the 16th app id, the firmware's `CABLE_MAX_APPS`: the next one needs a decision.
-- The firmware's host table has no `tmux`, so "See it in" reads "See it in Terminal" for an agent without voice. That is
-  accepted: no firmware change.
+- The firmware's host table gains `{"tmux", "tmux"}` (PM, 2026-11-15, late: the firmware contract
+  `test_touch_ui.py` holds that table equal to the daemon's names). Nothing is flashed: a dial on the released firmware
+  reads "See it in Terminal" for a tmux agent without voice, and "See it in tmux" from its next firmware release.
 
 **The tap** (`cable/hosts/open.ts`):
 - `paneOf` reads `TMUX_PANE` (`/^%[0-9]{1,9}$/`) as pane `{ app: 'tmux' }`, in the order `detectHost` reads hosts:
@@ -232,7 +233,7 @@ content or ids.
 
 - Typing into a person's tmux pane for an agent without a mod (`tmux send-keys`).
 - Choosing VS Code's integrated terminal (needs a VS Code helper), Cursor's extension tab (`cursor://`).
-- The face tap that opens (dial-tap-focus, wave 2), any firmware change.
+- The face tap that opens (dial-tap-focus, wave 2), any firmware change beyond the host table's line.
 - F2 on Linux and Windows.
 
 ## Open questions
