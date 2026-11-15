@@ -556,7 +556,7 @@ export class DaemonCableHost implements CableHost {
   readonly harness: HarnessSource
 
   /** A tap on a Harness agent that started Desktop, until its window comes (setSwarms), and its timer's cancel. One at
-   *  a time: the last tap wins. In memory only. */
+   *  a time: the last tap on any agent wins (openAgent). In memory only. */
   private waiting: { machineId: string; agentId: string; cancel: () => void } | null = null
 
   private endWaiting(): void {
@@ -831,6 +831,9 @@ export class DaemonCableHost implements CableHost {
   }
 
   openAgent(agentId: string, reason?: OpenReason): void | Promise<void | { ok: false; error: string }> {
+    // The last tap wins, whatever agent it is on: a tap still waiting for Desktop's window would open its agent over the
+    // app this one brings forward. A question screen that came up by itself is no tap.
+    if (!reason) this.endWaiting()
     const outside = this.outsideEntry(agentId)
     if (outside) {
       // Only a person's tap switches the other app: a question screen that came up by itself never does.
@@ -856,7 +859,6 @@ export class DaemonCableHost implements CableHost {
 
   /** The tap waits from now, before Desktop is asked: a window that connects while it is still being started finds it. */
   private async startDesktop(machineId: string, agentId: string, launch: () => Promise<boolean>): Promise<void | { ok: false; error: string }> {
-    this.endWaiting()
     const tap = {
       machineId, agentId,
       cancel: (this.wiring.appTimer ?? unrefAfter)(HARNESS_OPEN_WAIT_MS, () => {
