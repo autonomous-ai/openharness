@@ -628,10 +628,25 @@ describe('Browsers', () => {
     const r = rig()
     await r.browsers.start('a1')
     await r.browsers.start('a2')
-    r.state.update(s => { s.told = { a1: true, a2: true } })
+    r.state.update(s => { s.told = { a1: true, a2: true }; s.on = { a1: true, a2: true }; s.adopted = { a1: true } })
     await r.browsers.delete('a1')
     expect(Object.keys(r.state.read().browsers)).toEqual(['a2'])
-    expect(r.state.read().told).toEqual({ a2: true })
+    expect(r.state.read()).toMatchObject({ told: { a2: true }, on: { a2: true }, adopted: {} })
+  })
+
+  // Its agent ended while the service could not hear it (its process and the core both restarted).
+  it('stops every running browser its service does not want, keeps their profiles, and says why; a listing that fails stops nothing', async () => {
+    const r = rig()
+    await r.browsers.start('a1')
+    await r.browsers.start('a2')
+    await r.browsers.stopAllBut(agentId => agentId === 'a1')
+    expect(r.containers.stop.mock.calls).toEqual([['a2']])
+    expect(r.containers.remove).not.toHaveBeenCalled()
+    expect(r.logged).toContain('agent browser a2: stopped, its agent is not here or its Browser is off')
+    r.containers.running.mockRejectedValueOnce(new PodmanError('podman_failed', 'podman ps timed out after 30000 ms'))
+    await r.browsers.stopAllBut(() => false)
+    expect(r.containers.stop).toHaveBeenCalledTimes(1)
+    expect(r.logged.at(-1)).toBe('agent browser: could not list running browsers: podman ps timed out after 30000 ms')
   })
 
   it('browser of a gone agent is deleted at service start, and resume sweeps unlisted containers of this daemon', async () => {
@@ -810,12 +825,15 @@ describe('Browsers, named by a profile', () => {
     await r.browsers.saveSettings('a1', kept)
     await r.browsers.start('a1')
     const secretId = r.state.read().browsers.a1!.proxy as { secretId?: string }
-    r.state.update(s => { s.told = { a1: true, a2: true } })
+    r.state.update(s => { s.told = { a1: true, a2: true }; s.on = { a1: true, a2: true } })
     expect(await r.browsers.move('a1', 'b1')).toBe(true)
     const saved = r.state.read()
     expect(Object.keys(saved.browsers)).toEqual(['b1'])
     expect(saved.browsers.b1).toEqual({ ...kept, proxy: { ...proxy, secretId: secretId.secretId }, profile: 'a1' })
     expect(saved.told).toEqual({ a2: true })
+    // Its Browser being on goes with it, and the flag the previous agent's row may still carry is never taken in after.
+    expect(saved.on).toEqual({ a2: true, b1: true })
+    expect(saved.adopted).toEqual({ a1: true })
     expect(r.containers.remove).not.toHaveBeenCalled()
     // One line, with nothing of the settings in it.
     expect(r.logged).toEqual(['agent browser b1: took the browser of a1'])

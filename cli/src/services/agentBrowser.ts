@@ -174,6 +174,11 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
    *  (agentClient/browserOutput.ts), swept of what nothing changed in for a week, at most once a day (lib/agentTmp.ts):
    *  as this service begins, and as an agent runs a command. The core swept it at each launch until 2026-11-15. */
   const sweepTmp = () => sweepAgentTmpWhenDue({ platform, dataDir: core.dataDir, log: line => log(`[agent-tmp] ${line}`), now: () => now().getTime() })
+  /** Whether the agent's Browser is on: its person's Start, until their Stop. A state file that cannot be read has none
+   *  on, and every browser that tries to start says so. */
+  const isOn = (agentId: string): boolean => {
+    try { return state.read().on?.[agentId] === true } catch { return false }
+  }
   // Built after setup, which tells it each step.
   let browsers: Browsers
   /**
@@ -240,12 +245,6 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
   const listed = (agentId: string): boolean | null => {
     try { return Object.hasOwn(state.read().browsers, agentId) } catch { return null }
   }
-  const hasBrowser = (agentId: string) => attached.has(agentId) || listed(agentId) === true
-  /** Whether the agent's Browser is on: its person's Start, until their Stop. A state file that cannot be read has none
-   *  on, and every browser that tries to start says so. */
-  const isOn = (agentId: string): boolean => {
-    try { return state.read().on?.[agentId] === true } catch { return false }
-  }
   /** Turn the agent's Browser on or off in the state file: whether that changed it. Rejects when the file cannot be
    *  written, with nothing changed. */
   const setOn = (agentId: string, on: boolean): boolean => {
@@ -279,6 +278,8 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
     if (session.guest || attached.has(session.agentId) || !isOn(session.agentId)) return
     begin()
     attached.add(session.agentId)
+    // Once per agent: its settings are in the state file from its first start on.
+    if (listed(session.agentId) === false) count('agent_browser_enabled')
     void browsers.start(session.agentId)
   }
 
@@ -312,8 +313,9 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
     } else if (event.kind === 'purged') {
       live.delete(event.agentId)
       notices.ended(event.agentId)
-      attached.delete(event.agentId)
-      if (hasBrowser(event.agentId)) void browsers.delete(event.agentId)
+      // One started and not yet in the file is deleted too, and so is one a file that cannot be read may hold: its delete
+      // says why it could not be done.
+      if (attached.delete(event.agentId) || listed(event.agentId) !== false) void browsers.delete(event.agentId)
       else forget(event.agentId)
     } else if (event.kind === 'taken') {
       // The agent that ended is typed nothing more, and keeps no browser. A guest's agent gets nothing of the owner's,
@@ -324,14 +326,18 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
       if (!event.guest && !isOn(event.to)) void move(event.from, event.to)
     }
   }
-  /** A purged agent with no entry may still have been turned on, or taken in: nothing of it stays. */
+  /** A purged agent with no entry may still have been turned on, or taken in: nothing of it stays. The file is written
+   *  only when it holds something of it: a purge of an agent that never had a Browser makes no state file, which would
+   *  start this service's process at every start of the core (core/agentBrowserLink.ts `wakeAgentBrowser`). */
   const forget = (agentId: string): void => {
     try {
+      const saved = state.read()
+      if (!saved.on?.[agentId] && !saved.adopted?.[agentId]) return
       state.update(s => {
-        if (s.on) delete s.on[agentId]
-        if (s.adopted) delete s.adopted[agentId]
+        delete s.on?.[agentId]
+        delete s.adopted?.[agentId]
       })
-    } catch { /* an unreadable file holds nothing to forget */ }
+    } catch { /* unreadable or unwritable: what is left names an agent that never runs again, and starts nothing */ }
   }
 
   let begun = false
@@ -474,11 +480,8 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
       const session = live.get(agentId)
       if (!session) return { error: 'NOT_RUNNING' }
       if (session.guest) return { error: 'NOT_ALLOWED' }
-      // Once per agent: its settings are in the state file from its first start on.
-      const first = listed(agentId) === false
       let changed: boolean
       try { changed = setOn(agentId, true) } catch (error) { return named(error) }
-      if (first) count('agent_browser_enabled')
       if (changed) count('agent_browser_started')
       startFor(session)
       return { ok: true }

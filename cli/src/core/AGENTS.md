@@ -87,7 +87,7 @@ The core stays small and secure, in the code and at run time: read
   process to write a profile home's connections as an agent launches there, waited on for a few seconds at most. `recapsLink.ts`: the recaps in their process,
   told each turn's lifecycle and never waited on, and read back from what they last said
   (`turns/recaps.ts` is the core's whole side of them). `storeLink.ts`: what the Store in its
-  process tells the core. `agentCleanupLink.ts`: the agent cleanup in its process, told every stop and the person
+  process tells the core. `agentCleanupLink.ts`: the agent cleanup in its process, told the person
   typing into a harness another agent started, answered what it may close, and asked to erase what a harness being
   deleted was told (the agent ledger is its to read and lock, never the core's). `modelsLink.ts`: what the core keeps of models in its process for frames and
   keystrokes, and how it asks it the rest. `agentQueries.ts`: what a service in its own process may ask of the agents;
@@ -111,8 +111,11 @@ The core stays small and secure, in the code and at run time: read
   sends a device); `wifiAgents.ts`: its doors into the core (the agents as it lists them, a prompt, an
   agent made for a Store harness); `wifiLink.ts`: its service in the devices' process. `devicesWake.ts`: when
   that process is asked for, once there is a device (a dial's port in /dev, a paired Wi-Fi device).
-  `agentBrowserLink.ts`: the agent browser in its own process: what the core tells it of agents, each browser's
-  state as it last said, and its viewers' streams passed on. `browserStreams.ts`: the core's side of a browser's
+  `agentLife.ts`: what happens to agents (each look at a live one, its end, a stop, a purge, a pane's new agent), for the
+  services that follow them (`CoreApi.agents.follow`, `follow_agents` from a service's process); it names no service, and
+  holds for one in its own process only the kinds its process says it hears (`harnessd/services.ts` `hears`).
+  `agentBrowserLink.ts`: the agent browser in its own process: each browser's state as it last said, kept only for the
+  agents running here, and its viewers' streams passed on. `browserStreams.ts`: the core's side of a browser's
   stream, and nothing of the stream itself: who may open one, whose each is, its own bounds (an open the service does
   not answer, bytes a viewer has not read), and that it is closed when its service goes. The core starts no command
   for a browser, reads none of a viewer's VNC bytes, and sends the service's screen frames on as they came.

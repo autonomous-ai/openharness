@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  ENGINE_LIVE_ENV, ENGINE_RUNTIME_ENV, ENGINE_SCREEN_ENV, ENGINE_MODEL_CONTROL_ENV, masterRunsEngineModelControl, ENGINE_QUESTION_CONTROL_ENV, masterRunsEngineQuestionControl, ENGINE_SUBMISSION_ENV, masterRunsEngineSubmission, ENGINE_NATIVE_CONTROL_ENV, masterRunsEngineNativeControl, ENGINE_BACKGROUND_JOB_ENV, masterRunsEngineBackgroundJob, ENGINE_PROVIDER_MOVE_ENV, masterRunsEngineProviderMove, KNOWN_SERVICES, SERVICE_HOSTS, SERVICE_PROCESSES_ENV, UPDATER_HOST, masterRunsLiveEngines, masterRunsEngineRuntime, masterRunsEngineScreen, serviceProcessesEnv, serviceSpecs, servicesTheMasterRuns,
+  ENGINE_LIVE_ENV, ENGINE_RUNTIME_ENV, ENGINE_SCREEN_ENV, ENGINE_MODEL_CONTROL_ENV, masterRunsEngineModelControl, ENGINE_QUESTION_CONTROL_ENV, masterRunsEngineQuestionControl, ENGINE_SUBMISSION_ENV, masterRunsEngineSubmission, ENGINE_NATIVE_CONTROL_ENV, masterRunsEngineNativeControl, ENGINE_BACKGROUND_JOB_ENV, masterRunsEngineBackgroundJob, ENGINE_PROVIDER_MOVE_ENV, masterRunsEngineProviderMove, heldAgentLife, KNOWN_SERVICES, SERVICE_HOSTS, SERVICE_PROCESSES_ENV, UPDATER_HOST, masterRunsLiveEngines, masterRunsEngineRuntime, masterRunsEngineScreen, serviceProcessesEnv, serviceSpecs, servicesTheMasterRuns,
   type ServiceSpec,
 } from './services.js'
 import { DEFAULT_SERVICE_OPTIONS, ServiceSupervisor, serviceOptions, type ServiceSupervisorDeps, type ServiceSupervisorOptions } from './serviceSupervisor.js'
@@ -578,6 +578,19 @@ describe('ServiceSupervisor', () => {
     supervisor.want('messages')
     supervisor.want('messages')
     expect(children.filter((child) => child.spec.services.includes('messages')).map((child) => [child.spec.name, child.spec.services])).toEqual([['messages', ['messages']]])
+  })
+})
+
+// What the core holds for a service in its own process while it is down (core/agentLife.ts): a harness's children left
+// open, a deleted conversation left searchable, a browser's logins left with an agent that ended.
+describe('what the core holds of agents for the services out of its process', () => {
+  it('is each process\'s `hears`, by service, for the services out of the core\'s process only', () => {
+    expect(heldAgentLife(new Set(KNOWN_SERVICES))).toEqual({ search: ['purged'], agentCleanup: ['stopped'], agentBrowser: ['purged', 'taken'] })
+    expect(heldAgentLife(new Set(['search', 'viewers']))).toEqual({ search: ['purged'] })
+    expect(heldAgentLife(new Set())).toEqual({})
+    // A process that hears nothing holds nothing, and one names only its own services.
+    expect(heldAgentLife(new Set(['a', 'b']), { one: { services: ['a'], heapLimitMiB: 1, rssLimitMiB: 0 }, two: { services: ['b'], heapLimitMiB: 1, rssLimitMiB: 0, hears: { b: ['taken'] } } }))
+      .toEqual({ b: ['taken'] })
   })
 })
 

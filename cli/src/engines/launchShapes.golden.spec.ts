@@ -177,7 +177,7 @@ const pending = { agentId: 'created', sessionId: '', engine: 'claude' } as Regis
 const rest = () => ({
   createBackend: { capabilities: async () => ({ sessionEnv: pane.tmux }) } as never, registry: { setLaunch: () => pending } as never,
   adoptableSession: async () => ({ ok: false, error: 'UNUSED' }) as never, heldBy: async () => 'none' as const, takeOverWhenIdle: async () => {},
-  watchNewPane: (async () => {}) as never, announceSession: () => {}, attachDsh: () => {}, hookPort: 4242, hooksDisabled: true,
+  watchNewPane: (async () => {}) as never, announceSession: () => {}, attach: () => {}, hookPort: 4242, hooksDisabled: true,
   installOpencodePlugin: async () => true, terminalHintMachineName: () => 'this-mac', blocksFolder: () => false, gridSetup: () => null,
   privateGridName: async () => null,
 })
