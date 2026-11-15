@@ -8,13 +8,15 @@ use crate::front::{FrontFeed, FrontSource};
 use crate::install::{self, NOT_SUPPORTED, Shell};
 use crate::loginitem::LoginItem;
 use crate::state::StateFile;
+use crate::tabs::{Out, POLL_EVERY, Select, TabApp, TabFollow, TabScripts};
 use crate::types::{Effect, Event, Log, LoginEvent};
 use crate::watch::{self, Watch};
 use std::ffi::OsString;
 use std::io;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
+use std::time::{Duration, Instant};
 
 /// What the runner reaches outside itself.
 pub struct Doors {
@@ -31,6 +33,8 @@ pub struct Doors {
     pub open: Arc<dyn Fn(&[&str]) -> io::Result<()> + Send + Sync>,
     /// Which app is in front (`front::system`), started once with the runner.
     pub front: Arc<dyn FrontSource>,
+    /// The terminal apps' tab scripts (`tabs::system`), which only the runner's tab thread calls.
+    pub tabs: Arc<dyn TabScripts>,
 }
 
 pub struct Runner(Arc<Shared>);
@@ -48,12 +52,83 @@ struct Shared {
     login: Mutex<Option<Login>>,
     /// What the watches have been told of the app in front. Taken inside `watch`, never around it.
     front: Mutex<FrontFeed>,
+    /// The tab rules, apart: a watch's thread tells them too, and must not keep the runner.
+    tabs: Arc<Tabs>,
+}
+
+/// The tab rules, and the word that they changed. Their lock is taken last, and never held across a script call, a
+/// write or `send`.
+#[derive(Default)]
+struct Tabs {
+    state: Mutex<TabState>,
+    changed: Condvar,
+}
+
+#[derive(Default)]
+struct TabState {
+    follow: TabFollow,
+    /// The runner has gone: the tab thread ends.
+    ended: bool,
+}
+
+/// The tab thread's next call.
+enum Call {
+    Select(Select),
+    Poll(TabApp),
+}
+
+impl Tabs {
+    /// A change to the rules, and a word to the tab thread: it may have something to do now.
+    fn tell(&self, change: impl FnOnce(&mut TabFollow)) {
+        change(&mut self.state.lock().unwrap().follow);
+        self.changed.notify_one();
+    }
+
+    fn end(&self) {
+        self.state.lock().unwrap().ended = true;
+        self.changed.notify_one();
+    }
+
+    /// Waits for the next call: a waiting select first, else a poll `every` after the last one began. With neither to
+    /// do it waits with no timer. None once the runner has gone.
+    fn next(&self, every: Duration, polled_at: Option<Instant>) -> Option<Call> {
+        let mut state = self.state.lock().unwrap();
+        loop {
+            if state.ended {
+                return None;
+            }
+            if let Some(select) = state.follow.next_select() {
+                return Some(Call::Select(select));
+            }
+            let Some(app) = state.follow.polls() else {
+                state = self.changed.wait(state).unwrap();
+                continue;
+            };
+            // After a call that ran past a tick, one poll at once: the ticks it missed are not made up.
+            let wait = polled_at.map_or(Duration::ZERO, |at| (at + every).saturating_duration_since(Instant::now()));
+            if wait.is_zero() {
+                return Some(Call::Poll(app));
+            }
+            state = self.changed.wait_timeout(state, wait).unwrap().0;
+        }
+    }
+
+    /// A call's answer, with how long the call took.
+    fn answer(&self, call: Duration, answer: impl FnOnce(&mut TabFollow) -> Out) -> Out {
+        let follow = &mut self.state.lock().unwrap().follow;
+        follow.waited(call);
+        answer(follow)
+    }
 }
 
 impl Runner {
     /// `send` hands the event to the app's loop and returns. It never runs an effect itself: a watch or a sign-in
     /// calls it holding a lock that stopping or cancelling it takes.
     pub fn new(doors: Doors, send: Arc<dyn Fn(Event) + Send + Sync>) -> Runner {
+        Runner::polling_every(doors, send, POLL_EVERY)
+    }
+
+    fn polling_every(doors: Doors, send: Arc<dyn Fn(Event) + Send + Sync>, every: Duration) -> Runner {
         let shared = Arc::new(Shared {
             doors,
             send,
@@ -62,6 +137,7 @@ impl Runner {
             watching: Arc::default(),
             login: Mutex::new(None),
             front: Mutex::default(),
+            tabs: Arc::default(),
         });
         // Weakly: the source keeps its callback for as long as it runs, and the runner must still go.
         let weak = Arc::downgrade(&shared);
@@ -70,6 +146,8 @@ impl Runner {
                 shared.front_changed(&value);
             }
         }));
+        let following = shared.clone();
+        thread::spawn(move || following.follow_tabs(every));
         Runner(shared)
     }
 
@@ -90,6 +168,7 @@ impl Runner {
             Effect::StopWatch => {
                 let watch = shared.watch.lock().unwrap().take();
                 if let Some(watch) = watch {
+                    shared.tabs.tell(|follow| follow.watching(false));
                     watch.stop();
                 }
             }
@@ -149,6 +228,13 @@ impl Runner {
     }
 }
 
+/// The tab thread ends with the runner, once a call under way has answered.
+impl Drop for Runner {
+    fn drop(&mut self) {
+        self.0.tabs.end();
+    }
+}
+
 impl Shared {
     fn answer(&self, event: Event) {
         (self.send)(event);
@@ -182,19 +268,37 @@ impl Shared {
         let number = {
             let mut current = self.watching.lock().unwrap();
             *current += 1;
+            // Before it can print: its first `attached` must not be undone by this.
+            self.tabs.tell(|follow| follow.watching(true));
             *current
         };
         if let Some(old) = watch.take() {
             old.stop();
         }
-        let (watching, send) = (self.watching.clone(), self.send.clone());
-        let spawned = watch::spawn_watch(&*cli, self.doors.log.clone(), move |event| {
-            // Held while the event is handed on, so once a newer watch has its number nothing more of this one is sent.
-            let current = watching.lock().unwrap();
-            if *current == number {
-                send(event);
-            }
-        });
+        let (watching, send, tabs) = (self.watching.clone(), self.send.clone(), self.tabs.clone());
+        let (selecting, selects) = (self.watching.clone(), self.tabs.clone());
+        let spawned = watch::spawn_watch(
+            &*cli,
+            self.doors.log.clone(),
+            move |event| {
+                // Held while the event is handed on, so once a newer watch has its number nothing more of this one is
+                // sent.
+                let current = watching.lock().unwrap();
+                if *current == number {
+                    match &event {
+                        Event::WatchLine(status) => tabs.tell(|follow| follow.attached(status.attached)),
+                        Event::WatchExit(_) => tabs.tell(|follow| follow.watching(false)),
+                        _ => {}
+                    }
+                    send(event);
+                }
+            },
+            move |app, tty, raise| {
+                if *selecting.lock().unwrap() == number {
+                    selects.tell(|follow| follow.select(app, tty, raise));
+                }
+            },
+        );
         match spawned {
             Ok(started) => {
                 // A change meanwhile waits on `watch`, held here: this watch is told the app in front once, by one of
@@ -207,6 +311,7 @@ impl Shared {
             Err(error) => {
                 // No lock is held across `send`.
                 drop(watch);
+                self.tabs.tell(|follow| follow.watching(false));
                 // A CLI that went away is removed. One that is there and cannot run is a watch that ended: the
                 // keep-alive tries it again in its own time, where a removed CLI is found again at every tick.
                 self.answer(if error.kind() == io::ErrorKind::NotFound {
@@ -221,11 +326,48 @@ impl Shared {
     /// Each value the source tells, on its thread: the line, when it is new, to the watch running now. The value goes
     /// nowhere else.
     fn front_changed(&self, value: &str) {
+        self.tabs.tell(|follow| follow.front(value));
         // `watch` first, as spawn_watch takes them.
         let watch = self.watch.lock().unwrap();
         let Some(line) = self.front.lock().unwrap().changed(value) else { return };
         if let Some(watch) = watch.as_ref() {
             watch.front(&line);
+        }
+    }
+
+    /// The tab thread: one call at a time, until the runner goes. A tab line goes to the watch running now, and only
+    /// each answer's outcome to the log.
+    fn follow_tabs(&self, every: Duration) {
+        let (scripts, started_at) = (&self.doors.tabs, Instant::now());
+        let mut polled_at = None;
+        while let Some(call) = self.tabs.next(every, polled_at) {
+            let start = Instant::now();
+            let out = match call {
+                Call::Select(Select { app, tty, frontmost, raise }) => {
+                    // An Apple Event to an app that is not running would launch it.
+                    if !scripts.running(app) {
+                        continue;
+                    }
+                    let done =
+                        if raise { scripts.focus_tty(app, &tty) } else { scripts.select_tty(app, &tty, frontmost) };
+                    self.tabs.answer(start.elapsed(), |follow| follow.selected(app, done))
+                }
+                Call::Poll(app) => {
+                    polled_at = Some(start);
+                    let answer = scripts.selected_tty(app);
+                    // `watch` first, and held through the write: the line goes to the watch it was asked for.
+                    let watch = self.watch.lock().unwrap();
+                    let now = started_at.elapsed().as_secs();
+                    let out = self.tabs.answer(start.elapsed(), |follow| follow.polled(app, answer, now));
+                    if let (Some(line), Some(watch)) = (&out.line, watch.as_ref()) {
+                        watch.tab(line);
+                    }
+                    out
+                }
+            };
+            for line in out.log {
+                self.doors.log.line(&line);
+            }
         }
     }
 

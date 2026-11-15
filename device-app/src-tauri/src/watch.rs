@@ -1,6 +1,7 @@
 //! The `harness hardware watch --json` child.
 
 use crate::cli::{Cli, Killer, StdinCloser, StdinWriter, Timeout, Unwritten};
+use crate::tabs::{TabApp, select_of};
 use crate::types::{DialStatus, Event, Log};
 use std::io;
 use std::sync::Arc;
@@ -26,9 +27,19 @@ pub struct Watch {
 }
 
 impl Watch {
-    /// A line of the app in front (front.rs) on the child's stdin. One that has ended takes nothing, and nothing of the
-    /// line is logged. One that has stopped reading drops it, and the log says so once, never with the line.
+    /// A line of the app in front (front.rs) on the child's stdin.
     pub fn front(&self, line: &str) {
+        self.write(line);
+    }
+
+    /// A line of the selected tab (tabs.rs) on the child's stdin: a tty is as private as the app in front.
+    pub fn tab(&self, line: &str) {
+        self.write(line);
+    }
+
+    /// One that has ended takes nothing, and nothing of the line is logged. One that has stopped reading drops it, and
+    /// the log says so once, never with the line: both kinds of line fill the same pipe.
+    fn write(&self, line: &str) {
         if self.writer.line(line) == Err(Unwritten::Full) && !self.not_reading.swap(true, Ordering::Relaxed) {
             self.log.line("front: watch not reading");
         }
@@ -50,14 +61,21 @@ impl Drop for Watch {
 }
 
 /// Runs `hardware watch --json`: an `Event::WatchLine` for each status line it prints, then one `Event::WatchExit`.
-pub fn spawn_watch(cli: &dyn Cli, log: Arc<dyn Log>, send: impl Fn(Event) + Send + 'static) -> io::Result<Watch> {
-    spawn_watch_within(cli, log, send, FIRST_LINE, STOP_GRACE)
+/// Each select line it prints goes to `select` with its app, tty and raise, and is no Event: a tty is never one.
+pub fn spawn_watch(
+    cli: &dyn Cli,
+    log: Arc<dyn Log>,
+    send: impl Fn(Event) + Send + 'static,
+    select: impl Fn(TabApp, String, bool) + Send + 'static,
+) -> io::Result<Watch> {
+    spawn_watch_within(cli, log, send, select, FIRST_LINE, STOP_GRACE)
 }
 
 fn spawn_watch_within(
     cli: &dyn Cli,
     log: Arc<dyn Log>,
     send: impl Fn(Event) + Send + 'static,
+    select: impl Fn(TabApp, String, bool) + Send + 'static,
     first_line: Duration,
     grace: Duration,
 ) -> io::Result<Watch> {
@@ -70,8 +88,10 @@ fn spawn_watch_within(
         loop {
             match child.line(wait) {
                 Ok(Some(line)) => {
-                    // A line without a boolean `attached` (an `{"error":…}`, anything else) is not a status.
-                    if let Ok(status) = serde_json::from_str::<DialStatus>(&line) {
+                    // A line without a boolean `attached` (an `{"error":…}`, a select, anything else) is not a status.
+                    if let Some((app, tty, raise)) = select_of(&line) {
+                        select(app, tty, raise);
+                    } else if let Ok(status) = serde_json::from_str::<DialStatus>(&line) {
                         send(Event::WatchLine(status));
                     }
                     wait = Duration::MAX;
