@@ -32,7 +32,7 @@ export const register = (on) => {
   on('session.attach', { surface: 'desktop' }, async ($, e, next) => {
     const attached = await next(e)
     state.held = true
-    // Unlinked, the link sends it once it has a socket.
+    // Unlinked, the link sends it if it has a devices' socket.
     if (state.linked) $.clock.after(0, () => void send($, state))
     return attached
   })
@@ -64,7 +64,8 @@ async function link($, state) {
   if ('socketPath' in found) {
     state.linked = found
     $.clock.after(0, () => void poll($, state, found))
-    if (state.held) $.clock.after(0, () => void send($, state))
+    // With no devices' socket the launcher just said so: the attach stays held, and the next asks again.
+    if (state.held && found.devicesSocket) $.clock.after(0, () => void send($, state))
   } else $.clock.after(found.wait, () => void link($, state))
 }
 
