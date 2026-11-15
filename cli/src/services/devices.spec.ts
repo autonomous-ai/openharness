@@ -2041,6 +2041,118 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     expect(orcaRuns).toEqual([switched, ['/usr/bin/open', ['-b', 'com.stablyai.orca'], 10_000]])
   })
 
+  // A swipe that rests on a Claude app agent shows its session there, while that app is in front
+  // (docs/specs/2026-11-15-dial-claude-app-follow.md).
+  const SESSION = 'local_8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b'
+  const continued: [string, string[], number] = ['/usr/bin/open', [`claude://code/continue?session=${SESSION}`], 10_000]
+  /** Claude Code in the Claude app on macOS, its dial on the cable once the listener opened; `front` tells the devices'
+   *  own listener the app in front, as `harness hardware watch` does. */
+  const inClaudeApp = async (over: Parameters<typeof start>[0] = {}) => {
+    vi.useFakeTimers()
+    const listener = fakeListener()
+    const started = startHere({ orca: mac, listen: listener.listen, ...over })
+    started.port.observed(hook('session-start', { hostHints: { __CFBundleIdentifier: 'com.anthropic.claudefordesktop', CLAUDE_CODE_HOST_SESSION_ID: SESSION } }))
+    attach(started.port)
+    await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
+    const front = (app: string) => { expect(listener.front(app)).toBeUndefined() }
+    return { ...started, front }
+  }
+  it('with the Claude app in front, a rest on a Claude app agent runs one continue link, and no open -b', async () => {
+    const { front } = await inClaudeApp()
+    front('claude')
+    expect(host().swipeSwitches(ID)).toBe(true)
+    host().swipeEnded(ID, 'rest')
+    await swiped('ok')
+    expect(orcaRuns).toEqual([continued])
+    expect(said()).toEqual(['[device] swipe · ok'])
+  })
+
+  it('the front that counts is the one last reported, not the settled one', async () => {
+    const { front } = await inClaudeApp()
+    front('orca')
+    await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+    front('claude')
+    expect(host().settledApp()).toBe('orca')
+    expect(host().swipeSwitches(ID)).toBe(true)
+    await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+    front('orca')
+    expect(host().settledApp()).toBe('claude')
+    expect(host().swipeSwitches(ID)).toBe(false)
+  })
+
+  it('another app in front, none, or no front known: no rest is asked for', async () => {
+    const { front } = await inClaudeApp()
+    expect(host().swipeSwitches(ID)).toBe(false)
+    for (const app of ['orca', 'none']) {
+      front(app)
+      expect(host().swipeSwitches(ID)).toBe(false)
+    }
+  })
+
+  it('a front that changes during the rest runs none', async () => {
+    const { front } = await inClaudeApp()
+    front('claude')
+    expect(host().swipeSwitches(ID)).toBe(true)
+    front('orca')
+    const sent = seen.cable.calls.length
+    host().swipeEnded(ID, 'rest')
+    await swiped('failed')
+    expect(orcaRuns).toEqual([])
+    expect(seen.cable.calls).toHaveLength(sent)
+  })
+
+  it('a link still running drops the next for that agent: busy', async () => {
+    let shown = () => {}
+    const { front } = await inClaudeApp({ orca: { ...mac, run: (file, args, timeoutMs) => {
+      orcaRuns.push([file, args, timeoutMs])
+      return new Promise((done) => { shown = () => done({ code: 0 }) })
+    } } })
+    front('claude')
+    host().swipeEnded(ID, 'rest')
+    await vi.waitFor(() => expect(orcaRuns).toHaveLength(1))
+    host().swipeEnded(ID, 'rest')
+    await swiped('busy')
+    expect(orcaRuns).toEqual([continued])
+    shown()
+    await swiped('ok')
+    expect(said()).toEqual(['[device] swipe · busy', '[device] swipe · ok'])
+  })
+
+  it('a link that fails is one line and the dial is sent nothing', async () => {
+    const { front } = await inClaudeApp({ orca: { ...mac, run: async (file, args, timeoutMs) => { orcaRuns.push([file, args, timeoutMs]); return { code: 1 } } } })
+    front('claude')
+    const sent = seen.cable.calls.length
+    host().swipeEnded(ID, 'rest')
+    await swiped('failed')
+    expect(orcaRuns).toEqual([continued])
+    expect(said()).toEqual(['[device] swipe · failed'])
+    expect(seen.cable.calls).toHaveLength(sent)
+  })
+
+  it('on Linux a Claude app agent has no pane', async () => {
+    const { front } = await inClaudeApp({ orca })
+    front('claude')
+    expect(host().swipeSwitches(ID)).toBe(false)
+    host().swipeEnded(ID, 'rest')
+    await swiped('failed')
+    expect(orcaRuns).toEqual([])
+  })
+
+  it('no swipe line carries the session', async () => {
+    const codes = [0, 1]
+    const { front } = await inClaudeApp({ orca: { ...mac, run: async (file, args, timeoutMs) => {
+      orcaRuns.push([file, args, timeoutMs])
+      return { code: codes.shift() ?? 0 }
+    } } })
+    front('claude')
+    host().swipeEnded(ID, 'rest')
+    await swiped('ok')
+    host().swipeEnded(ID, 'rest')
+    await swiped('failed')
+    expect(said()).toEqual(['[device] swipe · ok', '[device] swipe · failed'])
+    expect(logs.filter((line) => [SESSION, 'sess-1', ID].some((secret) => line.includes(secret)))).toEqual([])
+  })
+
   it('no swipe line carries a handle, a session or an agent', async () => {
     const codes = [0, 1]
     inOrca({ orca: { ...orca, run: async (file, args, timeoutMs) => { orcaRuns.push([file, args, timeoutMs]); return { code: codes.shift() ?? 0 } } } })
