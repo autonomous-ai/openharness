@@ -148,6 +148,7 @@ export const ENGINE_SUBMISSION_ENV = 'HARNESSD_ENGINE_SUBMISSION'
 export const ENGINE_NATIVE_CONTROL_ENV = 'HARNESSD_ENGINE_NATIVE_CONTROL'
 export const ENGINE_BACKGROUND_JOB_ENV = 'HARNESSD_ENGINE_BACKGROUND_JOB'
 export const ENGINE_PROVIDER_MOVE_ENV = 'HARNESSD_ENGINE_PROVIDER_MOVE'
+export const ENGINE_RESUME_REPAIR_ENV = 'HARNESSD_ENGINE_RESUME_REPAIR'
 /**
  * What the other engines' worker serves, as a version: `<master pid>:<version>`. 1 is their history and last turn.
  * A version only grows, each one serving what the ones before it did: a core asks the worker only for what the
@@ -166,7 +167,7 @@ export function serviceProcessesEnv(specs: readonly ServiceSpec[], masterPid: nu
   // The services, not the processes: a core knows what it routes by service, and one from before the
   // edge host still finds the services it knows here (workspaces) and runs the rest itself.
   const names = specs.flatMap((spec) => spec.services).join(',')
-  return { [SERVICE_PROCESSES_ENV]: names, HARNESSD_SERVICES: names || 'none', [ENGINE_LIVE_ENV]: `${masterPid}:1`, [ENGINE_RUNTIME_ENV]: `${masterPid}:1`, [ENGINE_SCREEN_ENV]: `${masterPid}:1`, [ENGINE_MODEL_CONTROL_ENV]: `${masterPid}:1`, [ENGINE_QUESTION_CONTROL_ENV]: `${masterPid}:1`, [ENGINE_SUBMISSION_ENV]: `${masterPid}:1`, [ENGINE_NATIVE_CONTROL_ENV]: `${masterPid}:1`, [ENGINE_BACKGROUND_JOB_ENV]: `${masterPid}:1`, [ENGINE_PROVIDER_MOVE_ENV]: `${masterPid}:1`, [ENGINE_OTHERS_ENV]: `${masterPid}:${ENGINE_OTHERS_VERSION}` }
+  return { [SERVICE_PROCESSES_ENV]: names, HARNESSD_SERVICES: names || 'none', [ENGINE_LIVE_ENV]: `${masterPid}:1`, [ENGINE_RUNTIME_ENV]: `${masterPid}:1`, [ENGINE_SCREEN_ENV]: `${masterPid}:1`, [ENGINE_MODEL_CONTROL_ENV]: `${masterPid}:1`, [ENGINE_QUESTION_CONTROL_ENV]: `${masterPid}:1`, [ENGINE_SUBMISSION_ENV]: `${masterPid}:1`, [ENGINE_NATIVE_CONTROL_ENV]: `${masterPid}:1`, [ENGINE_BACKGROUND_JOB_ENV]: `${masterPid}:1`, [ENGINE_PROVIDER_MOVE_ENV]: `${masterPid}:1`, [ENGINE_RESUME_REPAIR_ENV]: `${masterPid}:1`, [ENGINE_OTHERS_ENV]: `${masterPid}:${ENGINE_OTHERS_VERSION}` }
 }
 
 /**
@@ -254,6 +255,11 @@ export function masterRunsEngineBackgroundJob(env: NodeJS.ProcessEnv, parentPid:
 /** A new core must not ask an older worker host for a provider move its Codex worker does not serve. */
 export function masterRunsEngineProviderMove(env: NodeJS.ProcessEnv, parentPid: number): boolean {
   return masterRunsLiveEngines(env, parentPid) && env[ENGINE_PROVIDER_MOVE_ENV] === `${parentPid}:1`
+}
+
+/** Compatibility with masters before 2026-11-15; review inline repair removal on 2026-12-15. */
+export function masterRunsEngineResumeRepair(env: NodeJS.ProcessEnv, parentPid: number): boolean {
+  return masterRunsLiveEngines(env, parentPid) && env[ENGINE_RESUME_REPAIR_ENV] === `${parentPid}:1`
 }
 
 /** A new core must not send an older worker host a stop its Codex worker cannot speak. */

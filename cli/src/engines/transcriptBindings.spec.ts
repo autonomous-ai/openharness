@@ -197,6 +197,22 @@ it('repairs a child overwrite only after proving the whole parent pool', () => {
   expect(() => held.verify()).toThrow('directory pool changed')
   expect(() => bindings.savedTranscriptEvidence('codex', A, path)).toThrow('more than one')
 })
+
+it('a repair verifies only its supplied candidate and never enumerates a child\'s parent pool', () => {
+  const path = child()
+  vi.mocked(fs.opendirSync).mockClear()
+  expect(() => bindings.controlTranscriptEvidence('codex', A, path, home, undefined, 'candidate-only')).toThrow('unavailable')
+  expect(fs.opendirSync).not.toHaveBeenCalled()
+})
+
+it('candidate-only binding stays strict on every later verification', () => {
+  const held = bindings.controlTranscriptEvidence('codex', A, file, home, undefined, 'candidate-only')
+  write(join(home, 'sessions', 'parent', `rollout-${A}.jsonl`))
+  fs.writeFileSync(file, record(B, { subagent: { thread_spawn: { parent_thread_id: A } } }))
+  vi.mocked(fs.opendirSync).mockClear()
+  expect(() => held.verify()).toThrow()
+  expect(fs.opendirSync).not.toHaveBeenCalled()
+})
 it.each(['file', 'directory'])('does not repair through an outside %s alias', kind => {
   const path = child(), outside = join(root, 'outside')
   fs.mkdirSync(outside); fs.renameSync(file, join(outside, `rollout-${A}.jsonl`))
@@ -242,8 +258,18 @@ it('does not infer an empty directory from an iterator acquired during an ancest
 })
 it('holds pool overflow, expired work and failed descriptor close', () => {
   const directory = join(root, 'wide'); fs.mkdirSync(directory)
-  for (let index = 0; index < 4097; index++) fs.writeFileSync(join(directory, String(index)), '')
+  // Thousands of real empty files made teardown time out under parallel validation. The real handle
+  // still proves closing on overflow; generated entries exercise the same limit without that disk load.
+  let next = 0
+  let closed: ReturnType<typeof vi.spyOn> | undefined
+  vi.mocked(fs.opendirSync).mockImplementationOnce(((...args: Parameters<typeof fs.opendirSync>) => {
+    const handle = Reflect.apply(actual.opendirSync, actual, args)
+    vi.spyOn(handle, 'readSync').mockImplementation(() => next < 4097 ? { name: String(next++) } as fs.Dirent : null)
+    closed = vi.spyOn(handle, 'closeSync')
+    return handle
+  }) as typeof fs.opendirSync)
   expect(() => new NativeFiles().entries(directory)).toThrow('entry limit')
+  expect(closed).toHaveBeenCalledTimes(1)
   expect(() => new NativeFiles(new NativeEvidenceBudget(-1)).file(file)).toThrow('deadline')
   vi.mocked(fs.closeSync).mockImplementation(fd => { actual.closeSync(fd); throw new Error('fixture close failed') })
   expect(() => new NativeFiles().file(file)).toThrow('could not be closed')
