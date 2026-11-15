@@ -11,6 +11,7 @@
 import { spawn } from 'node:child_process'
 import { existsSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { isDeepStrictEqual } from 'node:util'
 import { createInterface } from 'node:readline'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { devicesListenerPath } from '../src/devices/listenerPath.js'
@@ -49,7 +50,10 @@ const ids = (roster: Roster): unknown[] => roster.rows.map((r) => r.id)
 const idsOf = (agents: Outside[]): string[] => agents.map((a) => a.id)
 /** Each app's count, in a form that compares whole. */
 const counts = (apps: Apps): Record<string, number> => Object.fromEntries(apps.apps.map((a) => [a.id, a.count]))
-const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b)
+/** Lists in their order, an object's keys in any: apps found in one scan come in the order of their session records'
+ *  names (`<pid>.json`, read sorted as text), so VS Code's came first once its agent's pid had a digit more (10073 after
+ *  9962), and a comparison by key order missed counts that were right. */
+const same = (a: unknown, b: unknown): boolean => isDeepStrictEqual(a, b)
 
 /** The last `apps` and the last list the dial was sent after [since], once both pass [test]. */
 const showing = (dial: FakeDial, what: string, test: (apps: Apps, roster: Roster) => boolean, since = 0, ms = 45_000): Promise<{ apps: Apps; roster: Roster }> =>
