@@ -152,8 +152,10 @@ function parentTranscript(files: NativeFiles, engine: AgentEngine, id: string,
 }
 
 /** Validate a saved binding and repair a conclusively identified child overwrite before committing. */
+type BindingPolicy = 'repair-parent' | 'candidate-only'
 export function savedTranscriptEvidence(engine: AgentEngine, sessionId: string, path: string,
   profile?: string, snapshot?: EngineHomeSnapshot, roots?: ReturnType<typeof transcriptRootEvidence>,
+  policy: BindingPolicy = 'repair-parent',
 ) {
   const proof = transcriptEvidence(engine, path, profile, false, snapshot, roots)
   let selected: string | null = proof.valid ? path : null
@@ -161,7 +163,7 @@ export function savedTranscriptEvidence(engine: AgentEngine, sessionId: string, 
   if (selected && store?.first) {
     const meta = proof.files.header(selected, store.first)
     if (meta.isSubagent) {
-      selected = store.repairsOverwrittenParent && meta.parentThreadId === sessionId
+      selected = policy === 'repair-parent' && store.repairsOverwrittenParent && meta.parentThreadId === sessionId
         ? parentTranscript(proof.files, engine, sessionId, proof.matchingRoots) : null
     } else if (meta.id !== sessionId) {
       return nativeUnavailable('the saved transcript names a different conversation')
@@ -173,9 +175,12 @@ export function savedTranscriptEvidence(engine: AgentEngine, sessionId: string, 
 
 /** Keep immutable identity across awaits, not a lookup's expiring work budget.
  * Each control boundary earns fresh header, root and catalog evidence before acting. */
-export function controlTranscriptEvidence(engine: AgentEngine, sessionId: string, path: string, profile?: string, cwd?: string | null) {
+export function controlTranscriptEvidence(engine: AgentEngine, sessionId: string, path: string, profile?: string, cwd?: string | null,
+  policy: BindingPolicy = 'repair-parent') {
   const read = () => {
-    const proof = savedTranscriptEvidence(engine, sessionId, path, profile)
+    // Repair workers supply candidates, never permission to discover a replacement in core. Keep that policy on
+    // every verification; a header may become a child overwrite after the first proof was captured.
+    const proof = savedTranscriptEvidence(engine, sessionId, path, profile, undefined, undefined, policy)
     if (!proof.path) return nativeUnavailable('the saved conversation file is unavailable')
     const rule: ControlIdentityRule | undefined = engine === 'claude' ? claudeIdentity : engine === 'pi' ? PI_CONTROL_IDENTITY : undefined
     if (rule) {

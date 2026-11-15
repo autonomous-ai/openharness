@@ -281,7 +281,7 @@ describe('production resume handler', () => {
     const apiNotes = vi.fn()
     const helpers = createLaunchHelpers({
       authority: createLaunchAuthority({ byAgent: id => registry.byAgent(id), revision: id => deps.restartJobs.revision(id), cancelled: id => deps.stopJobs.has(id) }),
-      prepareApiTools: apiNotes, setGridLaunch: vi.fn(), setTail: vi.fn(),
+      prepareApiTools: apiNotes, setGridLaunch: vi.fn(), prepareResume: async () => ({ repairedItems: 0 }),
       launchOverridesDeps: { machine: () => ({ hermesSystemManaged: false }), gridLaunch: vi.fn(),
         capabilities: async () => ({ sessionEnv: true }), writeGridConfigDir: vi.fn(), installCodexHooks: vi.fn(async () => true), readCodexConfig: () => null },
     })

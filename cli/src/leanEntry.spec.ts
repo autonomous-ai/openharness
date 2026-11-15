@@ -121,6 +121,12 @@ describe('the lean bundle a release carries', () => {
     expect([...files.keys()].some(name => name.startsWith('core-hooks-'))).toBe(true)
   })
 
+  it('keeps rollout parsing and rewriting outside the default core bundle closure', () => {
+    const repair = 'changed during resume preparation; retry after its writer stops'
+    expect([...files.values()].some(code => code.includes(repair))).toBe(true)
+    expect([...loads('core')].some(name => files.get(name)!.includes(repair))).toBe(false)
+  })
+
   it('gives the core its own code and none of the CLI\'s commands, which parsing cli.js cost it', () => {
     const core = loads('core')
     const text = [...core].map((name) => files.get(name)!).join('\n')

@@ -9,8 +9,8 @@ import type { NativeLaunch } from '../../engines/nativeLaunch.js'
  */
 import { join } from 'node:path'
 import { env } from '../../config/env.js'
-import { prepareResume, repairedItemsName } from '../../engines/launchPrep.js'
-import { REPAIR_LIMITS, type Unrepaired } from '../../engines/kit/resumeRepair.js'
+import { repairedItemsName } from '../../engines/launchPrep.js'
+import { REPAIR_LIMITS, type HistoryRepair, type ResumeSource, type Unrepaired } from '../../engines/facets/resumeRepair.js'
 import { bringPiSessionHome } from '../../lib/piSessionHome.js'
 import { gridConfigRoot } from '../../lib/gridConfigDir.js'
 import { dropPermissionFlagIfUnsupported } from '../../lib/engineLaunch.js'
@@ -40,6 +40,9 @@ const UNREPAIRED: Record<Unrepaired, string> = {
   too_large: `its history is over ${REPAIR_LIMITS.maxBytes / 1024 ** 3} GiB, or a record over ${REPAIR_LIMITS.maxRecordBytes / 1024 ** 2} MiB`,
   timed_out: `the repair took over ${REPAIR_LIMITS.deadlineMs / 1000} s`,
   cancelled: 'what asked for it stopped waiting',
+  unavailable: 'Codex\'s worker did not provide a usable preparation',
+  busy: 'the bounded repair capacity is in use',
+  cleanup_failed: 'RESUME_REPAIR_CLEANUP_FAILED: private staging needs recovery',
 }
 
 export interface LaunchHelperDeps {
@@ -49,11 +52,11 @@ export interface LaunchHelperDeps {
   prepareApiTools: (cwd: string | null | undefined, engine: string) => void
   launchOverridesDeps: LaunchOverridesDeps
   setGridLaunch: typeof registry.setGridLaunch
-  /** Moves a session's tail to a byte (Watcher.setTail). */
-  setTail: (sessionId: string, offset: number) => void
+  /** The publication coordinator moves the tail in the same turn as its atomic replacement. */
+  prepareResume: (source: ResumeSource, current: () => boolean) => Promise<HistoryRepair>
 }
 
-export function createLaunchHelpers({ authority, prepareApiTools, launchOverridesDeps, setGridLaunch, setTail }: LaunchHelperDeps) {
+export function createLaunchHelpers({ authority, prepareApiTools, launchOverridesDeps, setGridLaunch, prepareResume }: LaunchHelperDeps) {
   // Whatever the source (the row itself, or a grid override the desktop just sent), the agent's DSH,
   // workspace, named agent and who started it come from the row: a retarget must not silently drop the harness
   // the agent is, or bring a pane opened as `harness-compute` back as a general session.
@@ -147,11 +150,8 @@ export function createLaunchHelpers({ authority, prepareApiTools, launchOverride
       console.warn(`[resume] ${sid(session.agentId)} · ${repairedItemsName(session.engine)} not repaired: ${UNREPAIRED[repair.unrepaired]} · the history is left as it is`)
     }
     if (repair.repairedItems) {
-      // The rollout we tail was just shrunk in place. Move the tail to the repaired length now, before
-      // the resumed engine appends, or the watcher would read the whole repaired history as new lines
-      // and the live normalizer would replay the conversation into web/device. See Watcher.setTail.
-      if (repair.repairedBytes !== undefined) setTail(session.sessionId, repair.repairedBytes)
-      console.log(`[resume] repaired ${repair.repairedItems} ${repairedItemsName(session.engine)} · backup: ${repair.backupPath}`)
+      // Publication already moved Watcher's cursor in the rename's turn, before another reader or the engine runs.
+      console.log(`[resume] repaired ${repair.repairedItems} ${repairedItemsName(session.engine)} · private backup kept`)
     }
     return repair.repairedItems > 0
   }

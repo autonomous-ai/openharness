@@ -59,7 +59,87 @@ Run `tools/repair-bench.mts` with `SRC=$PWD/src MB=200 REPAIR=1 npx tsx <path>` 
 
 ### PR 2 (core-loop-2): the repair in Codex's worker (engine-codex)
 
-Goal: the core reads no rollout at all on a resume; it asks Codex's worker and takes a typed, bounded answer.
+Goal: the worker reads and rewrites the rollout body. Core retains only the existing bounded native header identity proof and publication authority.
+
+#### Design (15 November continuation; technically reviewed before implementation)
+
+The worker must never rename the live history. A deadline is not revocable authority: a worker can publish after
+Stop, lose its reply after publishing, or publish after a Watcher hold expired. Instead, the worker locates and
+prepares; core validates and publishes. The existing snapshot transport supplies bounded, generation-fenced reads;
+the native path evidence used by handoff publication supplies path and file identity checks. The handoff transaction
+itself is not reused: its project documents and persisted conversation snapshots do not describe a history repair.
+
+1. Core captures the resume's authority and an overall deadline. Only Codex's declared repair is supported. Two
+   preparations may run, no queue, and another preparation for the same session/file is refused. A first bounded
+   worker request locates the history in the session's profile, including the existing moved-home fallback. Core
+   independently verifies the returned path is an owned regular file within its own derived profile roots, using
+   canonical native path evidence and `staysInside` (including #4323's Windows drive containment). Existing native
+   transcript evidence must also independently bind that file to the registered session: containment alone never
+   authorizes rewriting another conversation. Repair uses the evidence helper's candidate-only policy on the first
+   check and every later verification: a delegated/overwritten-child candidate is left unrepaired, never followed
+   into parent-pool discovery in core. Stop/binding retain their existing parent-repair policy. No worker-supplied
+   destination is accepted as write authority.
+2. Core captures the original identity/version and assigns a unique adjacent staging directory name. The worker
+   reserves one of its two durable cleanup slots before creating that private directory exclusively, then records its
+   identity before writing. It opens only two fixed private files, `backup` and `history`, once; a completed token is
+   never recreated. Its existing two bounded scans validate session metadata and every complete JSONL record, compare the
+   scans' digests, preserve the partial final line, write the exact backup and repaired history, flush both and close
+   their handles before answering. The answer contains only counts and the two files' identities/versions.
+3. Only after a valid answer does core acquire `Watcher.hold`, so an expensive preparation never suspends delivery.
+   The hold drains old-file reads. Core then checks its deadline, current resume/binding authority, hold expiry,
+   original path/version, staging directory identity and both fixed files (owned regular files, private modes,
+   one link, bounded lengths, reported identities/versions). It hard-links the backup to the existing unique backup
+   name without overwriting an existing file, then
+   atomically renames the prepared history and calls `setTail` in the same synchronous turn, before releasing the
+   hold. No worker request or other await occurs between the last authority check and publication/tail adjustment.
+4. A failed/lost/stale/oversized reply, worker death or hang, changed source, cancelled resume or expired hold cannot
+   publish. Worker cleanup deletes only its staging files/directory after rechecking their retained identity, never
+   the source or the final backup name. A lost completion acknowledgement therefore cannot delete published history
+   or its backup. Cleanup racing publication either leaves the original unchanged (and possibly an extra valid
+   backup) or removes only the private names after successful publication. A late worker may finish a private
+   preparation but can never change the original. Duplicate replies do not repeat publication; a retried resume reads the current original, and the
+   existing repair is idempotent. A core process crash after rename follows the existing restart/reattach path; no
+   surviving worker has publication authority.
+
+Growth: at most two preparations and four temporary history copies, each capped at 1 GiB; record cap remains 16 MiB.
+The Codex worker owns two bounded private cleanup receipts (directory path, parent evidence, identity, token and owning worker PID),
+durably reserved before directory creation and removed after cleanup. Startup recovers only those two entries,
+never scans transcript trees. A crash between directory creation and durable recording of its identity leaves that
+slot reserved if the directory exists: cleanup never guesses ownership. An uncleanable or invalid receipt reserves
+its slot and reports `RESUME_REPAIR_CLEANUP_FAILED`, rather than letting abandoned files accumulate. Ready slots
+have a bounded expiry and may be released early by an acknowledgement; lost acknowledgements do not leak slots.
+Recovery never takes a still-live worker's slot. It rechecks only the two known slots on the next request after a
+handover, so a previous worker's eventual exit can free capacity without polling or a core restart. Cleanup also
+checks the exact recorded token before deleting a receipt, fencing late callbacks from newer work.
+Existing successful private backups retain their current policy. Core gains no durable repair state.
+
+Concurrency: core admission is by session and selected file, bounded globally to two; all original-file publication
+and Watcher cursor changes stay under core's captured authority. Worker generation fencing rejects old replies.
+Read cost: core reads no rollout body or repair receipts. It retains bounded native metadata and the existing session header proof. The worker reads the
+selected file twice in 1 MiB chunks, no whole-history string, with the existing 60 s repair bound.
+Scale: at 10x request rate, overflow refuses repair and resumes unchanged; active preparations, failed preparation
+kind and maximum core loop hold are the first signals. No content, paths or account identifiers enter new metrics.
+Compatibility: this is private versioned IPC, with no public client contract change. Missing worker capability means
+explicitly unrepaired, never inline fallback. Explicit inline/older-master mode retains the existing implementation
+behind a dynamic import outside the default core closure, with review/removal date 15 December 2026. No migration
+of conversations is needed; rollback reads the same native history and successful backup formats.
+Audience and identity: only an authenticated local owner/core request can prepare a repair; roots come from the
+registered session's own profile, never another account's login. Core revalidates worker path claims locally.
+Failure: unavailable repair is a named logged outcome and the resume proceeds unchanged; invalid/foreign/changed
+history keeps its existing preparation refusal. Cleanup failures name the repair failure without logging content or
+paths. No code guesses whether publication occurred from a lost worker reply, because only core publishes.
+Platforms: macOS/Linux/Windows use the existing supervised engine-codex process and no new process launcher.
+Windows handles close before metadata is returned; final fences must not compare close-sensitive change times.
+
+Validation selected before code: failing behavior tests for late completion after cancellation/disconnect, lost reply,
+duplicate/stale reply, original/stage substitution, hold expiry, cleanup/recovery and bounded overload; unchanged
+repair/launch golden corpus; worker request and real-file preparation tests; 100% per-file changed core coverage;
+architecture and lean-entry checks proving the parser/rewriter leave default core; isolated worker kill/hang resume
+integration and a matched 200 MiB repair loop benchmark. Heavy runs use the shared validation lock, after engine
+completion's turn. Native Windows execution is reported separately if no Windows test host is available.
+
+The original hand-over below is historical guidance. The reviewed staging design above supersedes its suggestion
+that the worker rename the original under a deadline.
 
 - Copy the provider move, which is the same shape (a Codex file operation at resume/retarget time, in Codex's worker):
   `core/engines/providerMoves.ts` (core side), `engines/worker/providerMoveProtocol.ts` (version, capability name,
@@ -113,6 +193,60 @@ Both still run in the core on main (checked 15 November):
   candidates per (command, PATH) for a short time, or resolve them with `fs.promises.access` off the frame path;
   discovery runs every pass. Measure before and after with the e2e profile (`tools/longblocks.mjs`).
 - Platforms: the login shell is macOS and Linux; `harness-pty` is Windows only (test it on Windows, or say why not).
+
+#### Step 3 design (15 November)
+
+Discovery must await its first complete ownership lookup without blocking other sessions. The synchronous
+compatibility helpers remain for pure callers; the core's terminal scan, pane lookup and native ownership read
+use bounded asynchronous filesystem work, deduplicated within each lookup, with no retained executable identity.
+Up to 128 directory generations cache candidate names only, at most 16,384 entries read per changed directory;
+larger/unreadable directories use the fixed command list. Positive candidates revalidate every pass, including
+chmod and symlink targets. A missing directory is checked again on the next pass.
+Discovery shares OpenCode's existing asynchronous PATH capture. It retains bash -ic / zsh -lic; the separate
+one-shot credential capture stays -lic, preserving which startup files run. Each capture is single-flight and
+limited to 5 seconds (PATH 64 KiB, credentials 1 MiB); changed shell/PATH invalidates it. A failed capture
+keeps daemon PATH and emits a named failure. PTY target discovery awaits the existing asynchronous version probe,
+with a hard deadline, bounded shared flights/cache and executable identity checked before publishing an answer.
+
+Design: no new stored or transmitted data. Growth is bounded transient work and cache only; no migration or
+rollback is needed. Concurrency is one shell capture and bounded filesystem/version probes. Reads inspect only
+configured command candidates, never a filesystem tree. The same discovery workload records loop delay and CPU
+before/after; timeout tests prove hung children cannot hold core. Published protocols and the last 30 days of
+clients are unchanged. All execution uses the daemon's existing account; no new audience or credentials.
+Failures remain unknown rather than evidence that a process died. Platforms: shell on macOS/Linux, hidden PTY
+probe on Windows; local validation on macOS, Windows-specific options checked in tests, native Windows recorded
+separately when available.
+
+Step 3 review (local commits `f3ca1c2857`, `d8041621e3`): the cached directory sets contain only requested command
+names, never unrelated entries. The Windows Hermes launcher uses the shared extension order with asynchronous
+checks too. A synchronous reader's old shell flight cannot answer a lookup for a changed PATH. Native conversation
+proof keeps its existing remaining 3-second budget while shared ownership work has its own deadline; expiration is
+unavailable evidence. Those four regressions were reproduced red, then 81 related tests passed. The earlier affected
+set passed 440 tests (6 platform/opt-in skips). The core, PTY, shell, architecture/lean-entry and isolated resume gates
+apply to the final integrated head; their results belong to its exact-head PR receipt. Publication and integration
+remain the coordinator's.
+
+Matched probe workload (`tools/probes-bench.mts`, Node 24.22.2, macOS, private home, 48 PATH directories), exact
+2458 source plus its package/TypeScript metadata versus integrated 055ad source: 100 ownership snapshots took
+1,281 -> 261 ms wall and 1,335 -> 412 ms core CPU; longest loop hold 18.3 -> 3.6 ms. A cold 200 ms fixture shell
+held the loop 980 -> 2.8 ms (wall 980 -> 788 ms); three 200 ms PTY version children held it 563 -> 2.2 ms
+(wall 1,633 -> 1,624 ms). PTY CPU was 35 -> 51 ms, not an improvement: the now-responsive 1 ms observer ran
+1,358 times instead of 6, and its cost is included. No native Windows performance claim is made.
+An earlier async-access implementation increased ownership CPU and was rejected; the directory-name cache above
+is the measured fix. Core footprint at the original base: 539 files / 92,700 lines.
+
+#### Step 3 acceptance checkpoint
+
+The async probes are implemented in PR #4339; final integration/CI and merge remain. At clean `c3609c1276`,
+the official runner passed 4,455 core tests with 100% per-file coverage, all 14 real terminal-contract cases
+(including the locally built native macOS PTY), and ten real-shell startup cases. Newly combined process identity,
+discovery and architecture checks passed 49 tests; typecheck passed. Native Windows execution is not claimed.
+An initial runner invocation incorrectly supplied two worker-count flags to the terminal suite; its incomplete
+receipt was discarded, the invocation corrected, and the actual complete runner passed at unchanged source.
+
+Main `5fa7b95762` is integrated; its app adapters do not change probe runtime or the native PTY source. Final
+exact-head receipts belong in the PR. The matched performance above remains tied to its stated runtime and
+environment. Registry lock/save and creation-receipt retention are separate, unfinished steps.
 
 ### PR 4 (core-loop-4): the registry save never sleeps the loop
 
