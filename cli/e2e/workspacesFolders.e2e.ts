@@ -124,8 +124,9 @@ describe('the folders git makes for a create, and a purge\'s worktree, in the wo
   }
 
   it('a worktree, a clone and a branch are made, and a worktree is reviewed and removed, by the edge host\'s git and none of the core\'s', async () => {
-    const log = join('/tmp', `workspaces-folders-${process.pid}-${Date.now()}.log`)
-    const d = await fresh({}, (d) => shims(d, log))
+    // In the daemon's own folder, which goes with it.
+    let log = ''
+    const d = await fresh({}, (d) => { log = join(d.root, 'children.log'); shims(d, log) })
     // Which git each process ran, by subcommand: on a failure, what to look at first.
     onTestFailed(() => { console.log(`[git children] ${JSON.stringify({ core: counted(children(log), d.corePid() ?? 0), edge: counted(children(log), edgePid(d) ?? 0) })}`) })
     await until('workspaces to connect to the core', () => connected(d) >= 1 || null, 30_000, 100)
