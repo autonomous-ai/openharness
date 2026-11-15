@@ -23,8 +23,16 @@ import { agentTmpRoot } from './agentTmp.js'
  * `relative()` rather than `startsWith`, because `/a/bc` starts with `/a/b` and is not inside it.
  */
 export function within(root: string, path: string): boolean {
-  const rel = relative(root, path)
-  return rel === '' || (rel !== '..' && !rel.startsWith('../') && !isAbsolute(rel))
+  return staysInside(relative(root, path))
+}
+
+/**
+ * Whether a `relative()` answer stays inside the folder it was taken from: `''` is the folder itself. Not `..` nor
+ * under it, with either separator, since Windows answers `..\Windows`; checked for `../` alone, every folder on the
+ * home's drive counted as inside the home (15 November). Nor another drive, which Windows answers as an absolute path.
+ */
+export function staysInside(rel: string): boolean {
+  return !/^\.\.(?:[\\/]|$)/.test(rel) && !isAbsolute(rel)
 }
 
 /**
