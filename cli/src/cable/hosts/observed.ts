@@ -65,6 +65,11 @@ export function observedAgentId(engine: string, sessionId: string): string {
   return `${x.slice(0, 8)}-${x.slice(8, 12)}-${x.slice(12, 16)}-${x.slice(16, 20)}-${x.slice(20, 32)}`
 }
 
+/** The name of an agent with no title: its folder's, else its engine (a folder such as `/` has no name). */
+function folderName(cwd: string | undefined, engine: string): string {
+  return (cwd && basename(cwd)) || engine
+}
+
 export interface ObservedDeps {
   now(): number
   /** The machine's processes, read once for every session (externals/support.ts listProcesses); none when unreadable. */
@@ -137,6 +142,10 @@ interface Entry {
   opens: OpenTarget
   /** What the permission prompt it waits on asks, from its hook (deviceClaude/asked.ts): '' when it names nothing. */
   asked?: string
+  /** The name the session gives itself, from its session-start or turn-start. Only Claude Code's event with none clears
+   *  it: its hook says the name on each of these while the session has one, while Command Code's turn-start is every
+   *  tool call and says none. */
+  title?: string
   generation?: string
   endAt?: number
   /** The read of the last answer, waiting out the grace. */
@@ -391,7 +400,12 @@ export class ObservedSource implements HostSource {
     const handle = e.hostHints.ORCA_TERMINAL_HANDLE
     entry.handle = handle && ORCA_HANDLE.test(handle) ? handle : undefined
     entry.opens = openTarget(a.host, e.hostHints)
-    if (e.cwd) { a.cwd = e.cwd; a.name = basename(e.cwd) || a.name }
+    if (e.cwd) a.cwd = e.cwd
+    if (e.event === 'session-start' || e.event === 'turn-start') {
+      if (e.title !== undefined) entry.title = e.title
+      else if (e.engine === 'claude') entry.title = undefined
+    }
+    a.name = entry.title ?? folderName(a.cwd, a.engine)
     if (e.transcriptPath) entry.transcriptPath = e.transcriptPath
     if (e.event === 'session-end') {
       entry.endAt = now
@@ -497,7 +511,7 @@ export class ObservedSource implements HostSource {
     const entry: Entry = {
       agent: {
         id, engine, sessionId, cwd: init.cwd,
-        name: (init.cwd && basename(init.cwd)) || engine,
+        name: folderName(init.cwd, engine),
         host: 'terminal',
         app: UNKNOWN_APP,
         appPending: true,
