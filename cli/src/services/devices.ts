@@ -50,7 +50,7 @@ import { fileStamp, listProcesses, processAlive } from '../lib/sessionSearch/ext
 import { setVoiceRouterDeviceConnected, setVoiceRouterSessions, shutdownVoiceRouter } from '../lib/voiceRouter.js'
 import { createTally, createTierDecider, type Tier, type TierDecision, type TierInput } from '../lib/notifyTier.js'
 import { createPartGuard } from './devicesGuard.js'
-import { frontHandler, type DevicesListener, type ListenerHandler } from './devicesListener.js'
+import { attachHandler, frontHandler, type DevicesListener, type ListenerHandler } from './devicesListener.js'
 import { FLEET_FALLBACKS, startFleet, type Fleet } from './fleet.js'
 
 export { DEVICES_REQUESTS }
@@ -106,6 +106,7 @@ type DialEvent = NonNullable<ReturnType<typeof cableEventFor>> & { machineId?: s
  *  writes nothing. */
 const FOLLOWED: Partial<Record<FollowCause, Record<'moved' | 'no-tile', string>>> = {
   prompt: { moved: '[device] prompt · moved', 'no-tile': '[device] prompt · skipped · no tile' },
+  attach: { moved: '[device] attach · moved', 'no-tile': '[device] attach · skipped · no tile' },
 }
 
 // The agents outside a pane: how often their processes are checked, the turns no hook moves are looked at, and, while a dial
@@ -121,6 +122,9 @@ const REMIND_MS = 20_000
 const ENDED_MS = 10_500
 /** How long the cable waits for the devices' listener to open: it opens in a few milliseconds. */
 const LISTENER_WAIT_MS = 1_000
+/** How long after the dial's own continue link to a Claude app session an attach is that link's echo: the app attaches
+ *  the session it shows within about a second. */
+const ATTACH_ECHO_MS = 2_000
 
 /** This computer's agents outside a pane, read with ⌘P's readers (services/externalSessions.ts), and how the dial's voice
  *  and tap reach them. */
@@ -249,7 +253,14 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     canOpen: opener.can,
     open: opener.open,
     claudeInFront: () => cableHost.latestFront() === 'claude',
-    claudeShow: opener.claudeShow,
+    // Noted as the link starts, as the app's attach can come before `open` exits: that attach is the dial's own echo, not
+    // a session the person chose. Busy or failed, the dial is on that agent all the same.
+    claudeShow: (agentId, session) => {
+      const at = monotonic()
+      for (const [id, linked] of dialLinks) if (at - linked >= ATTACH_ECHO_MS) dialLinks.delete(id)
+      dialLinks.set(agentId, at)
+      return opener.claudeShow(agentId, session)
+    },
     // The route or the refusal only: never the words, the session or the terminal.
     count: (what) => log(`[device] voice · ${what}`),
   }) : null
@@ -358,6 +369,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
         part.call('dial', remind)
       })
     },
+    // The Claude app settling in front: the dial turns to the session it last attached (docs/specs/2026-11-15-dial-claude-app-follow.md).
+    appSettled: (app) => { if (app === 'claude') part.call('dial', claudeSettled) },
     appPicked: () => log('[device] app filter: picker'),
     // The settle of the app in front: a filter that throws costs the devices nothing, and the devices stopping cancels it.
     appTimer: timerIn('dial'),
@@ -664,9 +677,13 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   deps.onCoreGone?.(endHookCalls)
 
   // `harness hardware watch` tells the devices' own listener which app is in front, and the dial with no window follows it
-  // once it settles (cable/hosts/appFilter.ts): the core never hears it. Another message type is another key here. A
-  // rejection's text is not logged: it can hold the socket's path, and a path the account's name.
-  const listening = deps.listen?.({ front: frontHandler((app) => part.call('dial', () => cableHost.front(app))) }, log)
+  // once it settles (cable/hosts/appFilter.ts), and the harness-device mod tells it the session the Claude app shows: the
+  // core never hears either. Another message type is another key here. A rejection's text is not logged: it can hold the
+  // socket's path, and a path the account's name.
+  const listening = deps.listen?.({
+    front: frontHandler((app) => part.call('dial', () => cableHost.front(app))),
+    attach: attachHandler((sessionId) => part.call('dial', () => claudeAttached(sessionId))),
+  }, log)
     .catch((): null => { log('[devices] listener not opened · failed'); return null })
 
   let stopped = false
@@ -740,6 +757,43 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     if (front === undefined || outside(agentId)?.app !== front) { log('[device] prompt · skipped · not in front'); return }
     return cable.followLocal(agentId, 'prompt')
   }
+  // ── the session the Claude app shows ───────────────────────────────────────────────────────────────
+  //
+  // The harness-device mod says which session the app attached, and the dials turn to its agent while the app has settled
+  // in front, by a prompt's rules (docs/specs/2026-11-15-dial-claude-app-follow.md). Each line is a reason, never the app,
+  // the agent or the session.
+  /** The agent of the app's last attach that named a listed Claude app agent, moved to or not: the session on the app's
+   *  screen, which the dials turn to once the app settles in front. Gone with its session. */
+  let claudeAgent: string | undefined
+  /** When the dial's own continue link to each agent started, by the devices' clock: at most one per listed agent. */
+  const dialLinks = new Map<string, number>()
+  /** Whether a link of the dial's own, to that agent or to any when none is named, is younger than ATTACH_ECHO_MS. Compared
+   *  each time: an older one stays in the map until the next link. */
+  const linkedByDial = (agentId?: string): boolean => {
+    const at = monotonic()
+    return [...dialLinks].some(([id, linked]) => (agentId === undefined || id === agentId) && at - linked < ATTACH_ECHO_MS)
+  }
+  const claudeAttached = (sessionId: string): Promise<void> | undefined => {
+    const agentId = observedAgentId('claude', sessionId)
+    const listed = outside(agentId)?.app === 'claude'
+    // Kept whatever follows: an echo, or an attach with another app in front, is still the session the app shows.
+    if (listed) claudeAgent = agentId
+    if (!cable.isConnected) return
+    if (!listed) { log('[device] attach · skipped · unknown agent'); return }
+    if (linkedByDial(agentId)) { log('[device] attach · skipped · echo'); return }
+    if (cableHost.settledApp() !== 'claude') { log('[device] attach · skipped · not in front'); return }
+    return cable.followLocal(agentId, 'attach')
+  }
+  const claudeSettled = (): Promise<void> | undefined => {
+    if (claudeAgent === undefined || !cable.isConnected) return
+    // Resumed in another app, or gone with no end: the app no longer shows it.
+    if (outside(claudeAgent)?.app !== 'claude') { claudeAgent = undefined; return }
+    // Any link, to another agent too: a swipe that rests as the app comes in front shows that one, and the settle must not
+    // turn the dial back. Its attach, a moment later, is kept and skipped as its own echo.
+    if (linkedByDial()) { log('[device] attach · skipped · echo'); return }
+    log('[device] attach · on settle')
+    return cable.followLocal(claudeAgent, 'attach')
+  }
   const port: DevicesPort = {
     // A paneless session's hook event, as the core checked it: taken, and dropped here while the observed source is
     // switched off.
@@ -747,7 +801,12 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       part.call('observed', () => {
         if (!observed) return
         const source = observed.ingest(event)
-        if (event.event === 'session-end') dropEnded(observed, observedAgentId(event.engine, event.sessionId))
+        if (event.event === 'session-end') {
+          const agentId = observedAgentId(event.engine, event.sessionId)
+          dropEnded(observed, agentId)
+          // Listed for a while once ended, but on no app's screen: a settle must not turn the dial to it.
+          if (agentId === claudeAgent) claudeAgent = undefined
+        }
         if (source) part.call('dial', () => followPrompt(observedAgentId(event.engine, event.sessionId), source))
       })
       return true
