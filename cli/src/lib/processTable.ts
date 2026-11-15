@@ -466,12 +466,14 @@ function readCommandPaths(): Promise<ReadonlyMap<number, { startMarker: string; 
 }
 
 /**
- * What the table reads of [comm]. macOS `ps` cuts a column that is not the last at 16 bytes, wherever they fall:
- * a character cut in two reads back as U+FFFD, and a cut ending in a space loses it in the parse (measured
- * 2026-11-15: `/Users/abcdefghé/…` reads `/Users/abcdefgh\uFFFD`).
+ * What the table reads of [comm] where it cuts it; null where it reads it whole. macOS `ps` cuts a column that is
+ * not the last at 16 bytes, wherever they fall: a character cut in two reads back as U+FFFD, and a cut ending in a
+ * space loses it in the parse (measured 2026-11-15: `/Users/abcdefghé/…` reads `/Users/abcdefgh\uFFFD`). Counted
+ * in bytes, not characters: a cut inside the last character has as many characters as the whole name.
  */
-function cutComm(comm: string): string {
-  return Buffer.from(comm).subarray(0, 16).toString().trimEnd()
+function cutComm(comm: string): string | null {
+  const bytes = Buffer.from(comm)
+  return bytes.length > 16 ? bytes.subarray(0, 16).toString().trimEnd() : null
 }
 
 /**
@@ -480,8 +482,7 @@ function cutComm(comm: string): string {
  * that ran another program, between the two reads must not be matched as that program.
  */
 function withCommandPath(row: ProcessRow, read: { startMarker: string; comm: string } | undefined): ProcessRow {
-  if (!read || read.startMarker !== row.startMarker || read.comm.length <= row.executable.length
-    || cutComm(read.comm) !== row.executable) return row
+  if (!read || read.startMarker !== row.startMarker || cutComm(read.comm) !== row.executable) return row
   // Owns its storage, as `parseProcessRow`'s fields do: a slice would keep the whole `ps` output alive.
   return { ...row, commandPath: Buffer.from(read.comm, 'utf16le').toString('utf16le') }
 }
