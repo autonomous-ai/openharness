@@ -516,7 +516,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // The settle of the app in front: a filter that throws costs the devices nothing, and the devices stopping cancels it.
     appTimer: timerIn('dial'),
   })
-  // What the dial lists with no window: this computer's harness agents, and the ones outside a pane unless switched off.
+  // What the dial lists with no window, or with one in the apps view: this computer's harness agents, and the ones outside
+  // a pane unless switched off.
   const registry = new HostRegistry(observed && herdr ? [cableHost.harness, observed, herdr] : [cableHost.harness])
   cableHost.setRegistry(registry)
   // The dial's log lives with the app's, one file a day (dialLog.ts). The old unbounded `dial.log` in the
@@ -840,10 +841,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // The core's calls failed to none when its link dropped: a transcript for a poll nobody holds would wait for nothing.
   deps.onCoreGone?.(endHookCalls)
 
-  // `harness hardware watch` tells the devices' own listener which app is in front, and the dial with no window follows it
-  // once it settles (cable/hosts/appFilter.ts), and the harness-device mod tells it the session the Claude app shows: the
-  // core never hears either. Another message type is another key here. A rejection's text is not logged: it can hold the
-  // socket's path, and a path the account's name.
+  // `harness hardware watch` tells the devices' own listener which app is in front, and the dial follows it once it
+  // settles, with no window or with one in the apps view (cable/hosts/appFilter.ts), and the harness-device mod tells it
+  // the session the Claude app shows: the core never hears either. Another message type is another key here. A
+  // rejection's text is not logged: it can hold the socket's path, and a path the account's name.
   const listening = deps.listen?.({
     front: frontHandler((app) => part.call('dial', () => cableHost.front(app))),
     attach: attachHandler((sessionId) => part.call('dial', () => claudeAttached(sessionId))),
