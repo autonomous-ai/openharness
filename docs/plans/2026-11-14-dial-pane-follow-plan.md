@@ -93,7 +93,7 @@ The core learns nothing of the prompt and nothing of where the dial is: it lets 
 - Test: `cli/src/hookNotify.spec.ts` (`describe('hook notify: a session outside a pane')`)
 
 **Interfaces:**
-- Produces: the body posted to `/api/hook/observed` carries `relayed: true` when the event's name, as `observedEvent` resolves it, is `UserPromptSubmit`, `input.prompt` is a string, and `/^\s*<cross-session-message /` matches it. Otherwise the body has no `relayed` key. Nothing else of the prompt is read or sent. `relayed` is never among the fields dropped to fit 4096 bytes.
+- Produces: the body posted to `/api/hook/observed` carries `relayed: true` when the engine is Claude Code, its event is `UserPromptSubmit`, `input.prompt` is a string, and `/^\s*<cross-session-message /` matches it. Otherwise the body has no `relayed` key. Nothing else of the prompt is read or sent. `relayed` is never among the fields dropped to fit 4096 bytes.
 
 - [ ] **Step 1: Write the failing tests:**
   - `a prompt another session sent posts turn-start with relayed: true, and never the prompt`: prompt `<cross-session-message from="a1">prompt-secret</cross-session-message>`; the body matches `{ event: 'turn-start', relayed: true }`; its JSON matches neither `cross-session` nor `prompt-secret`.
@@ -540,7 +540,7 @@ Waited on, outside this plan: the base SHA (Task 1); the dial-app-filter tasks n
 - A tap does not cancel a pending rest. A tap 0.4 to 1 s after a rest meets the rest's switch: it waits for that one run, then Orca comes forward (the PM, after the final review). No false `busy`.
 - `switchTo` answers `'ok' | 'failed' | 'busy'`: one command, one answer. The tap's opener keeps its boolean.
 - `relayed` on an `asked` event is refused, as on every event but `turn-start`.
-- Grok's prompt event is named `UserPromptSubmit` by the hook, so its rule is Claude Code's.
+- `relayed` is Claude Code's alone: Codex, Grok and Devin name their prompt event `UserPromptSubmit` too, but only Claude Code types another session's message in as `<cross-session-message …>` (the final review).
 - `DaemonCableHost.knows` is true for an agent outside Harness, so `followApp`'s log line does not say the dial has no tile for it.
 - The end-to-end test takes 395 ms as the earliest a switch may run: Node may fire a timer a millisecond early. The exact 400 is the unit test's.
 - The fake speech to text is a route of the suite's fake backend (`POST /api/voice/stt`), not a switch in the daemon: the daemon's own `transcribe` runs unchanged against it. The suite had no such fake: its voice cases sent no audio.

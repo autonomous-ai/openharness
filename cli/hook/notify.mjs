@@ -585,9 +585,10 @@ function observedEvent(engine, event, input) {
 /** How Claude Code types in a message another session sent; the start is all that is read of the prompt. */
 const CROSS_SESSION = /^\s*<cross-session-message /
 
-/** A prompt another session sent, not one the person typed: the devices do not move the dial for it. */
+/** A prompt another session sent, not one the person typed: the devices do not move the dial for it. Codex, Grok and
+ *  Devin name their prompt event as Claude Code does, but only Claude Code types another session's message in so. */
 function relayedPrompt(engine, event, input) {
-  return engineEventName(engine, event) === 'UserPromptSubmit' && typeof input.prompt === 'string' && CROSS_SESSION.test(input.prompt)
+  return engine === 'claude' && event === 'UserPromptSubmit' && typeof input.prompt === 'string' && CROSS_SESSION.test(input.prompt)
 }
 
 /**
