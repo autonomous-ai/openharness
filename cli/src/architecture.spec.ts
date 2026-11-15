@@ -703,6 +703,8 @@ describe('the daemon\'s shape', () => {
     expect(closureOf('entry.ts').has('cli.ts')).toBe(true)
     expect(closureOf('core/main.ts').has('core/api.ts')).toBe(true)
     expect(closureOf('core/main.ts').has('cli.ts')).toBe(false)
+    // All optional engine implementations are now behind the dated inline compatibility composition.
+    expect(closureOf('core/main.ts').has('engines/inProcess.ts')).toBe(false)
     // The core loads the services' own code only when they run in its process: imported dynamically, and
     // only from its entry, the import is not followed. Any other import of it is.
     const main = importsFor('core/main.ts', readFileSync(join(SRC, 'core', 'main.ts'), 'utf8')).filter(({ from }) => from === '../services/inline.js')

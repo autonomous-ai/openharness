@@ -20,6 +20,7 @@ export { databaseHistory } from '../engines/storeHistory.js'
 export { liveFor } from '../engines/live.js'
 // The other engines' live streams, and their reads, in this process: as their worker serves them.
 export { otherEngineRequests } from '../engines/others/otherEnginesProcess.js'
+export { hermesBackground } from '../engines/others/storageRequests.js'
 export { screenFor } from '../engines/screens.js'
 export { submissionFor } from '../engines/submissions.js'
 export { nativeControlFor } from '../engines/nativeControls.js'

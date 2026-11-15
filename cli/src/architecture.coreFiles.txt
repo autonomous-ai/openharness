@@ -84,6 +84,7 @@ core/engines/screenTransport.ts
 core/engines/screens.ts
 core/engines/sessionBinding.ts
 core/engines/snapshotTransport.ts
+core/engines/storage.ts
 core/engines/submissionTransport.ts
 core/engines/submissions.ts
 core/experimentQueries.ts
@@ -184,7 +185,6 @@ engines/hermes/contract.ts
 engines/hermesRecord.ts
 engines/hooks.ts
 engines/identities.ts
-engines/inProcess.ts
 engines/kilo/contract.ts
 engines/kit/attribution.ts
 engines/kit/continuation.ts
@@ -280,6 +280,7 @@ engines/worker/questionControlHost.ts
 engines/worker/questionControlProtocol.ts
 engines/worker/runtimeProtocol.ts
 engines/worker/screenProtocol.ts
+engines/worker/storageProtocol.ts
 engines/worker/submissionProtocol.ts
 harnessd/baseNode.ts
 harnessd/coreLink.ts

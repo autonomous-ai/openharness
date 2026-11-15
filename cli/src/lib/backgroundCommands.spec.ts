@@ -45,10 +45,21 @@ it.each(['codex', 'openclaw', 'opencode', 'terminal'] as const)('%s is not known
 })
 
 it('Hermes: its own list, in the home that holds the session', async () => {
-  const module = { hermesHomeForSession: vi.fn(async () => '/h/profiles/p'), hermesBackgroundCommands: vi.fn(async () => 3) }
+  const readHermes = vi.fn(async () => 3)
   const session = { engine: 'hermes', agentId: 'a2', sessionId: '20261112_100000_bbbbbb', hermesHome: '/h/profiles/p', processIdentity: null } as const
-  expect(await backgroundCommands(session, { hermes: async () => module })).toBe(3)
-  expect(module.hermesBackgroundCommands).toHaveBeenCalledWith('/h/profiles/p', '20261112_100000_bbbbbb')
-  expect(await backgroundCommands({ ...session, sessionId: '' }, { hermes: async () => module })).toBeNull()   // not bound yet
-  expect(await backgroundCommands(session, { hermes: async () => null })).toBeNull()                           // its code could not load
+  expect(await backgroundCommands(session, { readHermes })).toBe(3)
+  expect(readHermes).toHaveBeenCalledWith(session)
+  expect(await backgroundCommands({ ...session, sessionId: '' }, { readHermes })).toBeNull()
+  expect(await backgroundCommands(session)).toBeNull()
+})
+
+it('reads Hermes through the injected worker without loading its implementation', async () => {
+  const session = { engine: 'hermes', agentId: 'a2', sessionId: '20261112_100000_bbbbbb', hermesHome: '/h/profiles/p', processIdentity: null } as const
+  const readHermes = vi.fn(async () => 3)
+  const hermes = vi.fn(async () => null)
+  expect(await backgroundCommands(session, { readHermes, hermes } as never)).toBe(3)
+  expect(readHermes).toHaveBeenCalledWith(session)
+  expect(hermes).not.toHaveBeenCalled()
+  readHermes.mockRejectedValueOnce(new Error('worker unavailable'))
+  expect(await backgroundCommands(session, { readHermes, hermes } as never)).toBeNull()
 })

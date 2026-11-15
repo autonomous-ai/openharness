@@ -17,6 +17,7 @@ import { createReplyParts, otherReaderRequests } from './readerRequests.js'
 import { otherStreamRequests } from './streamRequests.js'
 import { createOtherStreams } from './streams.js'
 import { otherRuntimeRequests } from './runtimeRequests.js'
+import { otherStorageRequests } from './storageRequests.js'
 import { STREAM_OPEN, STREAM_VERSION } from '../worker/otherStreamProtocol.js'
 
 export interface OtherEnginesOptions extends ServiceProcessOptions {
@@ -35,7 +36,7 @@ export function otherEngineRequests(watcher: Watcher = new Watcher(), query: (qu
   const runtime = otherRuntimeRequests({ query })
   const parts = createReplyParts()
   const streams = createOtherStreams({ watcher })
-  const handlers: ServiceRequests = { ...otherReaderRequests({ parts }), ...otherStreamRequests({ streams, parts }), ...runtime.requests }
+  const handlers: ServiceRequests = { ...otherReaderRequests({ parts }), ...otherStreamRequests({ streams, parts }), ...runtime.requests, ...otherStorageRequests() }
   const active = new Set<AbortController>()
   let stopping: Promise<void> = Promise.resolve()
   const requests: ServiceRequests = Object.fromEntries(Object.entries(handlers).map(([name, handle]) => [name,

@@ -1,6 +1,7 @@
 import { createGridAssignments } from './agents/gridAssignments.js'
 import { createShortTurnGuard } from './turns/shortTurnGuard.js'
 import { createQuestionControls } from './engines/questionControls.js'
+import { createEngineStorage } from './engines/storage.js'
 import { masterRunsEngineQuestionControl } from '../harnessd/services.js'
 import { createModelControls } from './engines/modelControls.js'
 import { masterRunsEngineModelControl } from '../harnessd/services.js'
@@ -752,14 +753,18 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const othersHosted = outOfProcess.has(OTHER_ENGINES_SERVICE) && otherEnginesVersion(harnessd, process.ppid) >= 1
   const othersLive = othersHosted && otherEnginesVersion(harnessd, process.ppid) >= 2
   const othersRuntime = othersHosted && otherEnginesVersion(harnessd, process.ppid) >= 3
+  const othersStorage = othersHosted && otherEnginesVersion(harnessd, process.ppid) >= 4
   // Compatibility with explicit inline mode and older masters, until 2026-12-15.
-  const inline = knownServices.some((name) => !outOfProcess.has(name)) || !othersRuntime || !runtimeHosted || !screenHosted || !modelControlHosted || !questionControlHosted || !submissionHosted || !nativeControlHosted || !backgroundJobHosted || !providerMoveHosted
+  const inline = knownServices.some((name) => !outOfProcess.has(name)) || !othersStorage || !runtimeHosted || !screenHosted || !modelControlHosted || !questionControlHosted || !submissionHosted || !nativeControlHosted || !backgroundJobHosted || !providerMoveHosted
     ? await import('../services/inline.js') : null
   if (!othersRuntime) {
     registry.onEnter = engine => inline?.preloadEngine(engine)
     for (const session of registry.list()) inline?.preloadEngine(session.engine)
   }
   let serviceLinksRef: ServiceLinks | null = null
+  const engineStorage = createEngineStorage({ isolated: othersStorage, inline: inline?.hermesBackground,
+    call: (service, type, payload, waitMs) => serviceLinksRef?.call(service, type, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }),
+  })
   const runtimeTransport = createRuntimeTransport({
     call: (service, type, payload, waitMs) => serviceLinksRef?.call(service, type, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }),
   })
@@ -1682,6 +1687,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     notice: (service, payload) => { if (service === 'gateway') gatewayLink?.notice(payload); else if (service === 'devices') devicesLink.notice(payload); else if (service === 'wifi') wifiLink.notice(payload); else if (service === 'viewers') viewersLink.notice(payload); else if (service === 'recaps') recapsLink.notice(payload); else if (service === 'agentBrowser') agentBrowserLink.notice(payload) },
     binary: (service, bytes) => { if (service === 'gateway') gatewayLink?.binary(bytes); else if (service === 'agentBrowser') agentBrowserLink.binary(bytes) },
     connected: (service) => {
+      engineStorage.connected(service)
       if (othersLive && service === OTHER_ENGINES_SERVICE) otherStreams.connected()
       engineReaders.connected(service)
       liveTransport.connected(service)
@@ -1708,6 +1714,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       void heldLaunches.restoreHeld(service)
     },
     disconnected: (service) => {
+      engineStorage.disconnected(service)
       if (service === 'search') searchGeneration++
       if (service === 'usage') usageLink.disconnected()
       if (othersLive && service === OTHER_ENGINES_SERVICE) otherStreams.disconnected()
@@ -2977,7 +2984,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     announceSession,
     engineReady: (engine, ms) => engineLinks.ready(engine, ms),
     stoppedAgents,
-    backgroundCommands: (s) => backgroundCommands(s),
+    backgroundCommands: (s) => backgroundCommands(s, { readHermes: engineStorage.background }),
   })
   backend.closeAgentService = closing.closeAgentService
   backend.closeAgentService.start()
