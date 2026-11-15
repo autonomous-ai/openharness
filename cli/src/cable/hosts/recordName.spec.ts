@@ -25,7 +25,7 @@ function record(pid: number, content: object | string, dir = sessions): string {
 }
 
 const named = { pid: 11, sessionId: 's', cwd: '/x', status: 'idle', name: 'Tho', nameSource: 'user' }
-const read = (path: string, pid = 11, roots = [projects]) => readRecordName({ pid, record: path }, { roots })
+const read = (path: string, pid = 11, roots = [projects]) => readRecordName({ pid, record: path, sessionId: 's' }, { roots })
 
 describe('readRecordName', () => {
   it('reads the name the person gave', async () => {
@@ -45,6 +45,9 @@ describe('readRecordName', () => {
     ['no nameSource', () => record(11, { ...named, nameSource: undefined })],
     ['a nameSource of 7', () => record(11, { ...named, nameSource: 7 })],
     ['a nameSource of User', () => record(11, { ...named, nameSource: 'User' })],
+    ['a record a /clear moved to another session', () => record(11, { ...named, sessionId: 't' })],
+    ['no sessionId', () => record(11, { ...named, sessionId: undefined })],
+    ['a sessionId of 7', () => record(11, { ...named, sessionId: 7 })],
     ['no name', () => record(11, { ...named, name: undefined })],
     ['a name of 7', () => record(11, { ...named, name: 7 })],
     ['a null name', () => record(11, { ...named, name: null })],

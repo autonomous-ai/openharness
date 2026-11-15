@@ -799,7 +799,7 @@ describe('ObservedSource and the name in a session\'s own record', () => {
     found(s, 'd', 15)
     await s.src.scanOpen()
     await s.src.scanOpen()
-    expect(recordName.mock.calls).toEqual([[expect.objectContaining({ pid: 11, record: 'a' })], [expect.objectContaining({ pid: 15, record: 'd' })]])
+    expect(recordName.mock.calls).toEqual([[{ pid: 11, record: 'a', sessionId: 'a' }], [{ pid: 15, record: 'd', sessionId: 'd' }]])
   })
 
   it('at most 50 are asked a look', async () => {

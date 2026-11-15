@@ -1311,7 +1311,7 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     seen.host.watching!(true)
     await vi.waitFor(async () => expect((await machineList(port)).agents)
       .toEqual([expect.objectContaining({ id: observedAgentId('claude', 'sess-7'), name: 'Tho' })]))
-    expect(readers.name.mock.calls).toEqual([[expect.objectContaining({ pid: 78, record: 'sess-7' }), { roots: claudeProjectsRoots(env.CLAUDE_PROJECTS_DIR) }]])
+    expect(readers.name.mock.calls).toEqual([[{ pid: 78, record: 'sess-7', sessionId: 'sess-7' }, { roots: claudeProjectsRoots(env.CLAUDE_PROJECTS_DIR) }]])
   })
 
   it('removes an ended session within 11 s, and ends a Codex turn within 3 s of its process going quiet', async () => {
