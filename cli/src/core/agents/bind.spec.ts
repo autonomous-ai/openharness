@@ -1549,10 +1549,11 @@ describe('binding an OpenClaw pane, read from its screen', () => {
     expect(run.deps.attachSession).toHaveBeenCalledWith(row)
   })
 
-  // A capture that answers null read nothing (the pane cannot be read), so it proves nothing (PM, 2026-11-15).
-  it('a hold a failed capture set stays when the next capture reads nothing', async () => {
+  // A capture that answers null read nothing (the pane cannot be read), so it proves nothing (PM, 2026-11-15); nor does
+  // one that answers an empty screen, which the pass reads no further either.
+  it.each([null, ''])('a hold a failed capture set stays when the next capture reads nothing: %j', async (shown) => {
     const capturePane = vi.fn<BindDeps['capturePane']>().mockRejectedValueOnce(new Error('the pane could not be captured'))
-      .mockResolvedValue(null)
+      .mockResolvedValue(shown)
     const run = setup({ capturePane })
     const row = pane({ sessionId: 'agent:main:plain' })
     run.byAgent.set('a1', row)
