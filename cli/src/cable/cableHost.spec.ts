@@ -2055,15 +2055,15 @@ describe('the dial reaches the fleet through the core\'s port', () => {
       expect(observed.send).not.toHaveBeenCalled()
     })
 
-    it('with a window open, voice to an observed agent reaches no source.send', async () => {
+    it('with a window open on the tab, its words still reach source.send, and nothing of it the core', async () => {
       const { host, observed, heard } = setup()
       onTab(host, ['r1'])
-      expect(await host.sendTurn('o1', 'ship it')).toMatchObject({ ok: false })
-      expect(observed.send).not.toHaveBeenCalled()
+      expect(await host.sendTurn('o1', 'ship it')).toEqual({ ok: true })
+      expect(observed.send).toHaveBeenCalledWith(scratch, 'ship it')
       expect(JSON.stringify(heard())).not.toContain('o1')
     })
 
-    it('with a window, its words are delivered on an app\'s ring and refused on the tab', async () => {
+    it('with a window, words spoken on an app\'s ring are delivered though Harness settles in front before they are sent', async () => {
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
       try {
         const { host, observed, heard } = setup()
@@ -2072,11 +2072,11 @@ describe('the dial reaches the fleet through the core\'s port', () => {
         onTab(host, ['r1'])
         expect(host.holdsTab()).toBe(false)
         expect(await host.sendTurn('o1', 'ship it')).toEqual({ ok: true })
-        expect(observed.send).toHaveBeenCalledWith(scratch, 'ship it')
         host.front('harness')
         vi.advanceTimersByTime(FRONT_SETTLE_MS)
-        expect(await host.sendTurn('o1', 'ship it')).toMatchObject({ ok: false })
-        expect(observed.send).toHaveBeenCalledOnce()
+        expect(host.holdsTab()).toBe(true)
+        expect(await host.sendTurn('o1', 'and test it')).toEqual({ ok: true })
+        expect(observed.send).toHaveBeenLastCalledWith(scratch, 'and test it')
         expect(JSON.stringify(heard())).not.toContain('o1')
       } finally { vi.useRealTimers() }
     })
