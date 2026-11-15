@@ -1266,6 +1266,22 @@ describe('binding a running process to its session', () => {
       expect(run.deps.announceSession).toHaveBeenCalledTimes(1)
     })
 
+    // A read that fails while the agent is changing sets nothing, and still read nothing completely: a change over by the
+    // end of the pass does not make it one that lets go.
+    it('stays through a pass whose read failed while the agent was changing, the change over before the pass ended', async () => {
+      const run = setup(), row = inRegistry(run)
+      vi.mocked(findLiveSession).mockRejectedValueOnce(unsettled)
+      await run.binding.bindObservedAgent(codex())
+      // The change is seen once, by the hold the failed read asks for.
+      let changing = false
+      run.binding.whileChanging(() => { const seen = changing; changing = false; return seen })
+      vi.mocked(findLiveSession).mockImplementationOnce(async () => { changing = true; throw new Error('another failure') })
+      await run.binding.bindObservedAgent(codex())
+      expect(changing).toBe(false)
+      expect(row.identityHold).toBe('a native child changed during inspection')
+      expect(run.deps.announceSession).toHaveBeenCalledTimes(1)
+    })
+
     // Core rule 6: a read that began before the hold cannot undo it.
     it('stays when the pass that read completely began before the hold was set', async () => {
       const run = setup(), row = inRegistry(run)
