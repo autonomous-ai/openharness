@@ -1374,9 +1374,9 @@ knows as Codex's, as the real children are named `codex`). Delete `cli/e2e/harne
   Hermes's home from it") is no longer true. Branch A: it says the fake keeps its store open for its whole run, as
   Hermes does, and that the daemon finds its home from that. Branch B: the paragraph goes.
 - [ ] **Step 7: Run what changed once, on this Mac,** one file at a time, as Verification's check 2 runs a file:
-  `enginehomes`, `engineModelControl` and `modelSwitch` whole; `serviceProcesses` with
+  `engineModelControl` and `modelSwitch` whole; `serviceProcesses` with
   `-t "models killed during discovery"`; `hermesTerminalRecord` whole (its sandbox cases are skipped off Linux and
-  run in check 5). Then `git grep -n hiddenProcessEnv -- cli` prints nothing.
+  run in check 5). `enginehomes` runs in check 5 only (check 2 says why). Then `git grep -n hiddenProcessEnv -- cli` prints nothing.
 - [ ] **Step 8: Commit.** `CLI e2e: the facts a process's environment gave come from hooks, launches and held files`.
 
 ---
@@ -1593,15 +1593,18 @@ Local, on this Mac, in `cli/`:
 
    ```bash
    export TMPDIR=/private/tmp/claude-503/pes-v/ && mkdir -p "$TMPDIR"
-   for file in enginehomes engineModelControl modelSwitch hermesTerminalRecord; do
+   for file in engineModelControl modelSwitch hermesTerminalRecord; do
      caffeinate -i npx vitest run --config vitest.e2e.config.ts "e2e/$file.e2e.ts"
    done
    ```
 
+   `enginehomes` is not run on this Mac: its login zsh can reach the person's PATH and start the real `claude` or
+   `codex` (the isolation hole `fix/e2e-isolation-2` fixes), and its no-hook Codex case needs the native helper, which
+   only a bundle built with `HARNESS_PROCESS_IMAGES_ARTIFACT` carries. Its evidence is check 5 on Linux: the typed
+   Codex's row has its own home, from its hook and, with no hook, from the rollout its child holds (open question 1).
+
    To see: each file passes. In `engineModelControl`, the Claude Code typed in with the OpenRouter endpoint lists no
-   model of its own and the plain one does; in `enginehomes`, the typed Codex's row has its own home, from its hook
-   and, with no hook, from the rollout its child holds (open question 1); in `modelSwitch`, the row's grid after each
-   move; in
+   model of its own and the plain one does; in `modelSwitch`, the row's grid after each move; in
    `hermesTerminalRecord` (Hermes held), the Hermes with a `HOME` of its own, in no sandbox, is bound, its saved row
    has the home and no mark, and its restart is handed that home as `HERMES_HOME` and resumes there (a
    `HERMES_HOME=/x hermes` typed by hand, restarted from Harness). `serviceProcesses` changes nothing that differs on macOS, and
