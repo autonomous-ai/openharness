@@ -179,7 +179,7 @@ describe('Orca actions', () => {
   /** A `run` that holds each command until the test lets it end. */
   function held() {
     const calls: string[][] = []
-    const waiting: Array<(code?: number) => void> = []
+    const waiting: Array<(code?: number | null) => void> = []
     const orca = createOrcaActions({
       run: (_file, args) => {
         calls.push(args)
@@ -250,6 +250,21 @@ describe('Orca actions', () => {
     expect(calls[1][4]).toBe('--text=one')
     waiting[1]()
     expect(await sent).toBe(true)
+  })
+
+  // The words name their terminal: a switch that failed or timed out (the run's 10 s deadline answers no code) shows
+  // nothing, and they are typed all the same.
+  it('a send behind a switch that fails or times out still types, and a switch while it types is busy', async () => {
+    const { calls, waiting, orca } = held()
+    const shown = orca.switchTo(HANDLE)
+    const sent = orca.send(HANDLE, 'one')
+    waiting[0](null)
+    expect(await shown).toBe('failed')
+    await vi.waitFor(() => expect(calls.map((args) => args[1])).toEqual(['switch', 'send']))
+    expect(await orca.switchTo(HANDLE)).toBe('busy')
+    waiting[1]()
+    expect(await sent).toBe(true)
+    expect(calls).toHaveLength(2)
   })
 
   it('a text over 2000 characters runs nothing', async () => {
