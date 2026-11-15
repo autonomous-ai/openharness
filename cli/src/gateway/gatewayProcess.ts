@@ -217,7 +217,7 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
     else running?.port.terminalBinary(decoded.id, clear)
   }
 
-  /** The core's commands about the keys (`GatewayOps`), answered as their routes answer them. */
+  /** What the core asks of the gateway (`GatewayOps`), each answered from its gateway once that has started. */
   const ops = () => {
     if (!running) throw new Error('the gateway has not started')
     return running.ops
@@ -229,25 +229,8 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
     [GATEWAY_CALLS.machines]: async (p: Payload) => ({ ...await ops().machines(p.fallback === true) }),
     [GATEWAY_CALLS.mintGridName]: async () => ({ name: await ops().mintGridName() }),
     [GATEWAY_CALLS.status]: async () => ({ ...await ops().status() }),
-    [GATEWAY_CALLS.pair]: async (p: Payload) => ({ ...await ops().pair(text(p.code)) }),
-    [GATEWAY_CALLS.listPairs]: async () => ({ ...await ops().listPairs() }),
-    [GATEWAY_CALLS.revoke]: async (p: Payload) => ({ ...await ops().revoke(text(p.id)) }),
-    [GATEWAY_CALLS.revokeAll]: async () => ({ ...await ops().revokeAll() }),
-    [GATEWAY_CALLS.setRemotePassword]: async (p: Payload) => ({ ...await ops().setRemotePassword(text(p.password)) }),
-    [GATEWAY_CALLS.clearRemotePassword]: async () => ({ ...await ops().clearRemotePassword() }),
-    [GATEWAY_CALLS.remotePasswordStatus]: async () => ({ ...await ops().remotePasswordStatus() }),
-    [GATEWAY_CALLS.trustLinkedPeer]: async (p: Payload) => ({ ...await ops().trustLinkedPeer(record(p.peer) as { pub: string; machineId: string; label: string }) }),
-    [GATEWAY_CALLS.groupList]: async () => ({ ...await ops().groupList() }),
-    [GATEWAY_CALLS.groupSync]: async () => ({ ...await ops().groupSync() }),
-    [GATEWAY_CALLS.groupRemove]: async (p: Payload) => ({ ...await ops().groupRemove(text(p.selector)) }),
-    [GATEWAY_CALLS.devicesList]: async () => ({ ...await ops().devicesList() }),
-    [GATEWAY_CALLS.devicesRemove]: async (p: Payload) => ({ ...await ops().devicesRemove(text(p.pub)) }),
-    [GATEWAY_CALLS.devicesHistory]: async () => ({ ...await ops().devicesHistory() }),
-    [GATEWAY_CALLS.devicesDismiss]: async (p: Payload) => ({ ...await ops().devicesDismiss(record(p.body)) }),
-    [GATEWAY_CALLS.devicesRebaseline]: async (p: Payload) => ({
-      ...await ops().devicesRebaseline(p.confirm === true, p.head as { seq: number; hash: string } | undefined),
-    }),
-    // Its routes of the door (gateway/start.ts `requests`): the Wi-Fi device's pairings and direct links.
+    // Its routes of the door (gateway/start.ts `requests`): the Wi-Fi device's pairings and direct links, the account's and
+    // the keys'.
     gateway_http: (p: Payload, asker: Asker) => {
       if (!running) throw new Error('the gateway has not started')
       return running.requests.gateway_http!(p, asker)
