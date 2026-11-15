@@ -1,14 +1,15 @@
 import type { execFile, ExecFileException } from 'node:child_process'
 import * as processes from 'node:child_process'
 import { once } from 'node:events'
-import { afterEach, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { createSetupProbeExecutor } from './setupProbe.js'
 
 vi.mock('node:child_process', async original => {
   const actual = await original<typeof import('node:child_process')>()
   return { ...actual, spawn: vi.fn(actual.spawn) }
 })
-const executor = createSetupProbeExecutor()
+let executor: ReturnType<typeof createSetupProbeExecutor>
+beforeEach(() => { executor = createSetupProbeExecutor() })
 afterEach(() => { executor.close(); vi.restoreAllMocks(); vi.clearAllMocks() })
 function run(script: string, options: { maxBuffer?: number; timeout?: number } = {}) {
   let child!: ReturnType<typeof execFile>

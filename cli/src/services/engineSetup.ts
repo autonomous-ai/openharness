@@ -27,7 +27,7 @@ function locations(value: unknown): Record<string, string> | null {
 
 export function startEngineSetup(directory: string, given?: NativeSetup) {
   const probes = given ? undefined : createSetupProbeExecutor()
-  const setup = given ?? createLocalNativeSetup(directory, probes!.execute)
+  let setup = given ?? createLocalNativeSetup(directory, probes!.execute), stopped = false
   interface Preparation {
     engine: AgentEngine; request: string; expiresAt: number; live: boolean; committed: boolean; finished: boolean
     decide(allowed: boolean): void
@@ -36,9 +36,17 @@ export function startEngineSetup(directory: string, given?: NativeSetup) {
   }
   const prepared = new Map<string, Preparation>()
   // Revocation never releases admission: even disconnected work owns its slot until ensure settles.
-  const stop = () => {
-    probes?.close()
+  const revoke = () => {
     for (const entry of prepared.values()) { entry.live = false; entry.decide(false); clearTimeout(entry.timer) }
+  }
+  const disconnect = () => {
+    if (stopped) return
+    revoke()
+    if (probes) setup = createLocalNativeSetup(directory, probes.reset())
+  }
+  const stop = () => {
+    if (stopped) return
+    stopped = true; probes?.close(); revoke()
   }
   const requests: Record<string, ServiceRequests[string]> = {
     setup_probe: async payload => {
@@ -104,10 +112,11 @@ export function startEngineSetup(directory: string, given?: NativeSetup) {
   // These handlers are private core calls, never client routes. Keep this check even for explicit inline composition.
   for (const [type, handler] of Object.entries(requests)) requests[type] = async (payload, asker, closed) => {
     if (!asker.local || !asker.owner || asker.connection !== undefined) return { error: 'SETUP_OWNER_REQUIRED' }
+    if (stopped) { console.warn('[engine-setup] SETUP_STOPPED'); return { error: 'SETUP_STOPPED', installation: held() } }
     if (answering >= MAX_REQUESTS) return busy()
     answering++
     try { return await handler!(payload, asker, closed) }
     finally { answering-- }
   }
-  return { requests, stop }
+  return { requests, disconnect, stop }
 }

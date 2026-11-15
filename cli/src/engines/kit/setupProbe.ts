@@ -31,7 +31,7 @@ process.on('disconnect', cancel);
 process.on('uncaughtException', cancel);
 process.on('message', message => {
   if (message.cancel) { cancel(); return; }
-  if (started) return; started = true; clearTimeout(deadline);
+  if (started || answered || cancelling) return; started = true; clearTimeout(deadline);
   const { file, args, options, group } = message;
   try {
     child = spawn(file, args, { env: options.env, cwd: options.cwd, ...group, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -56,7 +56,7 @@ export function createSetupProbeExecutor() {
   const children = new Set<ChildProcess>()
   type Callback = (error: ExecFileException | null, stdout: string, stderr: string) => void
   interface Keeper { child: ChildProcess; answered: boolean; callback?: Callback }
-  let spare: Keeper | undefined, warmed = false
+  let spare: Keeper | undefined, warmed = false, closed = false, generation = 0
   const start = (): Keeper => {
     // The documented Windows hidden runner pattern: cleanup must outlive setup to observe IPC disconnect.
     // Only this small runner is detached; it starts real work hidden, under ownProcessGroup's platform rules.
@@ -89,14 +89,18 @@ export function createSetupProbeExecutor() {
     return keeper
   }
   const warmOnce = () => {
-    if (warmed) return
+    if (warmed || closed) return
     warmed = true
     // One speculative keeper after first use, within the same admission; its own timer expires it unused.
     if (children.size < 8) {
       try { spare = start() } catch { console.warn('[engine-setup] SETUP_PROBE_WARMUP_UNAVAILABLE') }
     }
   }
-  const execute = (file: string, args: string[], options: ExecFileOptions, callback: Callback): ChildProcess => {
+  const execute = (captured: number, file: string, args: string[], options: ExecFileOptions, callback: Callback): ChildProcess => {
+    if (closed || captured !== generation) {
+      queueMicrotask(() => callback(Object.assign(Error('Setup probe was cancelled'), { code: 'SETUP_PROBE_CANCELLED', killed: true }), '', ''))
+      return new ChildProcess()
+    }
     const ready = spare && !spare.answered && spare.child.connected ? spare : undefined
     spare = undefined
     if (!ready && children.size >= 8) {
@@ -116,6 +120,10 @@ export function createSetupProbeExecutor() {
     })
     return child
   }
-  return { execute: execute as typeof execFile, warmOnce,
-    close() { spare = undefined; for (const child of children) child.kill('SIGKILL') } }
+  const capture = () => execute.bind(undefined, generation) as typeof execFile
+  const cancel = () => { spare = undefined; for (const child of children) child.kill('SIGKILL') }
+  return { execute: capture(), warmOnce,
+    // Old metadata work keeps its revoked function; reconnect shares the actual-child admission set.
+    reset() { generation++; cancel(); return capture() },
+    close() { closed = true; generation++; cancel() } }
 }

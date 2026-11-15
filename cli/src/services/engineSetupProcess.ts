@@ -9,7 +9,7 @@ export function runEngineSetupService(options: {
   const setup = (options.start ?? startEngineSetup)(join(options.dataDir, 'native-installations'))
   const service = (options.run ?? runServiceProcess)({
     name: 'engineSetup', socketPath: options.socketPath, machineId: options.machineId, token: options.token,
-    requests: setup.requests, onDisconnected: setup.stop,
+    requests: setup.requests, onDisconnected: setup.disconnect,
   })
   return { stop() { setup.stop(); return service.stop() } }
 }

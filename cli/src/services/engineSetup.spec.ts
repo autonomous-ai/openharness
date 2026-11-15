@@ -123,7 +123,7 @@ it('contains failed, completed and disconnected preparations without starting an
   for (const payload of [{}, { engine: 'codex', environment, request: '' }, { engine: 'codex', environment: null, request: 'r' },
     { engine: 'terminal', environment, request: 'r' }]) expect(await request('setup_prepare', payload)).toMatchObject({ installation: { complete: false } })
   const pending = await prepare('disconnect')
-  service.stop()
+  service.disconnect()
   expect(await request('setup_commit', { ...pending, engine: 'codex', request: 'disconnect', allowed: true })).toMatchObject({ installation: { complete: false } })
 })
 
@@ -131,7 +131,8 @@ it('owns protected probes only in its process and cancels them on disconnect', a
   const executors = await import('../engines/kit/setupProbe.js')
   const local = await import('./nativeSetup.js')
   const execute = vi.fn() as unknown as ReturnType<typeof executors.createSetupProbeExecutor>['execute'], close = vi.fn(), warmOnce = vi.fn()
-  const probes = vi.spyOn(executors, 'createSetupProbeExecutor').mockReturnValue({ execute, close, warmOnce })
+  const reset = vi.fn(() => execute)
+  const probes = vi.spyOn(executors, 'createSetupProbeExecutor').mockReturnValue({ execute, close, warmOnce, reset })
   const create = vi.spyOn(local, 'createLocalNativeSetup').mockReturnValue(setup)
   const actual = startEngineSetup('/fixture')
   expect(create).toHaveBeenCalledWith('/fixture', execute)
@@ -140,6 +141,8 @@ it('owns protected probes only in its process and cancels them on disconnect', a
   expect(warmOnce).not.toHaveBeenCalled()
   expect(await actual.requests.setup_download!({ engine: 'codex' }, owner)).toEqual({ downloading: false })
   expect(warmOnce).toHaveBeenCalledOnce()
+  actual.disconnect(); expect(reset).toHaveBeenCalledOnce()
+  expect(create).toHaveBeenCalledTimes(2)
   actual.stop(); expect(close).toHaveBeenCalledOnce()
   probes.mockRestore(); create.mockRestore()
 })
@@ -170,7 +173,7 @@ it.each(['expiry', 'disconnect'] as const)('retains pending installation slots t
   const pending = Array.from({ length: 8 }, (_, index) => prepare(`pending-${index}`))
   expect(release).toHaveLength(8)
   if (failure === 'expiry') await vi.advanceTimersByTimeAsync(30_001)
-  else service.stop()
+  else service.disconnect()
   let ninth: Record<string, unknown> | undefined
   const more = prepare('ninth').then(reply => { ninth = reply })
   await Promise.resolve()
@@ -192,7 +195,7 @@ it('bounds every retained read across disconnect until actual filesystem settlem
   const pending = Array.from({ length: 8 }, (_, index) => request('setup_status', { engine: 'codex', request: `read-${index}` }))
   expect(release).toHaveLength(8)
   expect(await request('setup_version', { engine: 'opencode' })).toMatchObject({ error: 'SETUP_BUSY' })
-  service.stop()
+  service.disconnect()
   expect(await request('setup_download', { engine: 'codex' })).toMatchObject({ error: 'SETUP_BUSY' })
   release[0]!(); await pending[0]
   expect(await request('setup_version', { engine: 'opencode' })).toEqual({ major: 2 })
