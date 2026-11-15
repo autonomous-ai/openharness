@@ -604,7 +604,7 @@ describe('ObservedSource and the app the scan learns', () => {
     found(s, 'a', 11)
     found(s, 'b', 12)
     await s.src.scanOpen()
-    expect(s.logs).toEqual(['[observed] scan · 2 found · 1 app known · 7 ms'])
+    expect(s.logs).toEqual(['[observed] scan · 2 found · 1 app known · 0 named · 7 ms'])
     for (const word of ['ghostty', 'terminal', '11', '12', '/x/', '/t/']) expect(s.logs.join('\n')).not.toContain(word)
   })
 
@@ -750,6 +750,108 @@ describe('ObservedSource and the name a session gives itself', () => {
     src.ingest({ engine: 'claude', sessionId: 's0', event: 'asked', tool: 'Bash', summary: 'npm test' })
     expect(logs).not.toEqual([])
     expect(logs.join('\n')).not.toMatch(/Name \d/)
+  })
+})
+
+describe('ObservedSource and the name in a session\'s own record', () => {
+  beforeEach(() => { vi.useFakeTimers() })
+  afterEach(() => { vi.useRealTimers() })
+
+  /** A session found open in a terminal, its owner `pid`. */
+  const found = (s: ReturnType<typeof setup>, sessionId: string, pid: number, engine = 'claude'): void => {
+    s.open.set(sessionId, 'terminal')
+    s.owners.set(sessionId, { pid, engine })
+    s.externals.set(sessionId, { cwd: `/x/${sessionId}`, transcriptPath: `/t/${sessionId}.jsonl` })
+  }
+
+  it('a Claude session the scan lists reads the name its record gives', async () => {
+    const s = setup({ recordName: async () => 'Tho' })
+    found(s, 'a', 11)
+    await s.src.scanOpen()
+    expect(s.src.list()[0]).toMatchObject({ name: 'Tho', cwd: '/x/a' })
+    expect(s.changes).toHaveBeenCalled()
+  })
+
+  it.each<[string, ObservedDeps['recordName']]>([
+    ['gives none', async () => undefined],
+    ['fails', async () => { throw new Error('EACCES /Users/someone/.claude/sessions/11.json') }],
+  ])('a reader that %s still lists the session by its folder', async (_what, recordName) => {
+    const s = setup({ recordName })
+    found(s, 'a', 11)
+    await s.src.scanOpen()
+    expect(s.src.list()[0].name).toBe('a')
+    expect(s.logs).toEqual(['[observed] scan · 1 found · 0 app known · 0 named · 0 ms'])
+    expect(s.logs.join('\n')).not.toContain('someone')
+  })
+
+  it('the reader is asked once, for the Claude sessions the scan is about to list', async () => {
+    const recordName = vi.fn(async (_owner: unknown): Promise<string | undefined> => undefined)
+    const s = setup({ recordName })
+    found(s, 'a', 11)
+    found(s, 'b', 12, 'codex')
+    // No row: never listed.
+    found(s, 'c', 13)
+    s.externals.delete('c')
+    // Harness's own pane.
+    found(s, 'h', 14)
+    s.open.set('h', 'harness')
+    await s.src.scanOpen()
+    found(s, 'd', 15)
+    await s.src.scanOpen()
+    await s.src.scanOpen()
+    expect(recordName.mock.calls).toEqual([[expect.objectContaining({ pid: 11, record: 'a' })], [expect.objectContaining({ pid: 15, record: 'd' })]])
+  })
+
+  it('at most 50 are asked a look', async () => {
+    const recordName = vi.fn(async (_owner: unknown): Promise<string | undefined> => undefined)
+    const s = setup({ recordName })
+    for (let i = 0; i < 51; i++) found(s, `s${i}`, 200 + i)
+    await s.src.scanOpen()
+    expect(recordName).toHaveBeenCalledTimes(50)
+  })
+
+  it.each<[Partial<ObservedHookEvent>, string]>([[{ title: 'Math' }, 'Math'], [{}, 'a']])(
+    'a hook that came while the names were read keeps what it said (%j)', async (over, name) => {
+      let answer: (recorded: string | undefined) => void = () => {}
+      const recordName = vi.fn(() => new Promise<string | undefined>((resolve) => { answer = resolve }))
+      const s = setup({ recordName })
+      found(s, 'a', 11)
+      const scan = s.src.scanOpen()
+      await vi.waitFor(() => expect(recordName).toHaveBeenCalled())
+      s.src.ingest(s.ev('turn-start', { sessionId: 'a', callerPid: 11, cwd: '/x/a', ...over }))
+      answer('Tho')
+      await scan
+      expect(s.src.list()).toHaveLength(1)
+      expect(s.src.list()[0].name).toBe(name)
+    })
+
+  it('the record\'s name holds until a hook says otherwise', async () => {
+    const s = setup({ recordName: async () => 'Tho' })
+    found(s, 'a', 11)
+    await s.src.scanOpen()
+    expect(s.src.list()[0].name).toBe('Tho')
+    s.src.ingest(s.ev('turn-stop', { sessionId: 'a', callerPid: 11, cwd: '/x/moved' }))
+    expect(s.src.list()[0]).toMatchObject({ name: 'Tho', cwd: '/x/moved' })
+    s.src.ingest(s.ev('turn-start', { sessionId: 'a', callerPid: 11, cwd: '/x/moved' }))
+    expect(s.src.list()[0].name).toBe('moved')
+    s.src.ingest(s.ev('session-start', { sessionId: 'a', callerPid: 11, cwd: '/x/moved', title: 'Math' }))
+    expect(s.src.list()[0].name).toBe('Math')
+  })
+
+  it('the scan\'s line counts the named ones and holds no name', async () => {
+    const s = setup({ recordName: async (owner) => (owner.pid === 11 ? 'Tho 7f3a91c2' : undefined) })
+    found(s, 'a', 11)
+    found(s, 'b', 12)
+    await s.src.scanOpen()
+    expect(s.logs).toEqual(['[observed] scan · 2 found · 0 app known · 1 named · 0 ms'])
+  })
+
+  it('with no reader the scan names by folder', async () => {
+    const s = setup()
+    found(s, 'a', 11)
+    await s.src.scanOpen()
+    expect(s.src.list()[0].name).toBe('a')
+    expect(s.logs).toEqual(['[observed] scan · 1 found · 0 app known · 0 named · 0 ms'])
   })
 })
 

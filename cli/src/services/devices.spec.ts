@@ -152,6 +152,7 @@ const readers = vi.hoisted(() => ({
   scans: 0,
   answer: vi.fn(async (..._args: unknown[]): Promise<string | undefined> => undefined),
   apps: vi.fn(async (_pids: readonly number[]) => new Map<number, string>()),
+  name: vi.fn(async (..._args: unknown[]): Promise<string | undefined> => undefined),
 }))
 vi.mock('../lib/sessionSearch/external.js', async (real) => ({
   ...await real<typeof import('../lib/sessionSearch/external.js')>(),
@@ -178,6 +179,8 @@ vi.mock('../lib/sessionSearch/externals/support.js', async (real) => ({
 }))
 // Which app each session found runs in: from the made-up owners above, never this machine's processes.
 vi.mock('../cable/hosts/scannedApp.js', () => ({ learnApps: readers.apps }))
+// The name in a session's own process record: never this machine's ~/.claude.
+vi.mock('../cable/hosts/recordName.js', () => ({ readRecordName: readers.name }))
 vi.mock('../cable/hosts/lastAnswer.js', async (real) => ({
   ...await real<typeof import('../cable/hosts/lastAnswer.js')>(),
   readLastAnswer: readers.answer,
@@ -216,6 +219,7 @@ beforeEach(() => {
   readers.scans = 0
   vi.clearAllMocks()
   readers.answer.mockResolvedValue(undefined)
+  readers.name.mockResolvedValue(undefined)
 })
 afterEach(() => {
   rmSync(dataDir, { recursive: true, force: true })
@@ -1294,6 +1298,20 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     seen.host.watching!(true)
     await vi.waitFor(async () => expect((await machineList(port)).agents).toHaveLength(1))
     expect(readers.apps.mock.calls).toEqual([[[77]]])
+  })
+
+  it('the scan asks a Claude session\'s own record for its name, inside Claude Code\'s folders', async () => {
+    vi.useFakeTimers()
+    const { port } = start({ faults: ['fleet'] })
+    readers.known.set('sess-7', 'terminal')
+    readers.owners.set('sess-7', { engine: 'claude', pid: 78 })
+    readers.rows.set('sess-7', { cwd: '/work/scratch-2016', transcriptPath: null })
+    readers.working.set('sess-7', false)
+    readers.name.mockResolvedValue('Tho')
+    seen.host.watching!(true)
+    await vi.waitFor(async () => expect((await machineList(port)).agents)
+      .toEqual([expect.objectContaining({ id: observedAgentId('claude', 'sess-7'), name: 'Tho' })]))
+    expect(readers.name.mock.calls).toEqual([[expect.objectContaining({ pid: 78, record: 'sess-7' }), { roots: claudeProjectsRoots(env.CLAUDE_PROJECTS_DIR) }]])
   })
 
   it('removes an ended session within 11 s, and ends a Codex turn within 3 s of its process going quiet', async () => {
