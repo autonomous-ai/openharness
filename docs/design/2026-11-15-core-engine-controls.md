@@ -175,3 +175,16 @@ terminal/Stop isolation with the same frozen PID, lowercase-hint refusal, and in
 compatibility. Linux and Windows execution is not claimed. Current-main integration, required
 integrated-head gates/CI, and explicit disposition of the remaining cost are still outstanding; this
 evidence does not declare the extraction step complete.
+
+
+## Integrated CI fixture correction, 16 November
+
+The integrated core and harnessd coverage gates passed (4,630 core cases and 370 harnessd cases,
+one existing skip, both 100% per file), as did ten bundled control/repair acceptance cases.
+Linux unit CI then exposed two stale test contracts: a failed screen capture was still expected to
+mean the question disappeared, and the worker composition assertion omitted its new connection hook.
+Both failures reproduced locally before correcting the fixtures (71 passed, two failed). The revised
+73 cases pass: unavailable capture types nothing, reports ANSWER_FAILED, and the same question can
+be answered after a readable capture. The authenticated worker assertion retains all fields and
+includes both connection hooks. Production behavior and golden files are unchanged by this correction.
+Final-head receipts and CI remain required; the measured CPU cost above remains unaccepted.
