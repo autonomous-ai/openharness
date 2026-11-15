@@ -21,7 +21,7 @@ import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import type { Fleet, FleetDeps } from './fleet.js'
 import type { DevicesDeps } from './devices.js'
-import { ATTACH_MAX_BYTES, ATTACH_PER_SECOND, FRONT_MAX_BYTES, FRONT_PER_SECOND, REFUSED, type DevicesListener, type ListenerHandler } from './devicesListener.js'
+import { ATTACH_MAX_BYTES, ATTACH_PER_SECOND, FRONT_MAX_BYTES, FRONT_PER_SECOND, REFUSED, TABS_MAX_BYTES, TABS_PER_SECOND, type DevicesListener, type ListenerHandler, type ListenerStreamHandler } from './devicesListener.js'
 
 const seen = vi.hoisted(() => ({
   host: null as unknown as CableHostWiring,
@@ -212,7 +212,7 @@ afterEach(() => {
   vi.unstubAllEnvs()
 })
 
-function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; orca?: DevicesDeps['orca']; listen?: DevicesDeps['listen'] } = {}) {
+function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; orca?: DevicesDeps['orca']; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty'] } = {}) {
   const core = over.core ?? fakeCore({ dataDir })
   const ports: CorePorts = emptyPorts()
   const onExit = vi.fn()
@@ -233,6 +233,7 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
     onExit,
     onCoreGone: (run) => { gone.push(run) },
     listen: over.listen,
+    tty: over.tty,
   })
   return { core, ports, port: ports.devices as DevicesPort, requests, onExit, gone }
 }
@@ -240,17 +241,34 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
 const calls = (name: string) => seen.cable.calls.filter(([called]) => called === name).map(([, args]) => args)
 
 /** The listener the devices process opens (devicesProcess.ts), stood in for: what it was handed, its close, a front
- *  through its handler as `harness hardware watch` sends one, and an attach as the harness-device mod sends one. */
+ *  through its handler as `harness hardware watch` sends one, an attach as the harness-device mod sends one, and the tabs
+ *  stream a watch holds open. */
 function fakeListener() {
-  const given: Array<{ handlers: Readonly<Record<string, ListenerHandler>>; log: (line: string) => void }> = []
+  type Handlers = Readonly<Record<string, ListenerHandler | ListenerStreamHandler>>
+  const given: Array<{ handlers: Handlers; log: (line: string) => void }> = []
   const close = vi.fn(async () => {})
-  const listen = vi.fn(async (handlers: Readonly<Record<string, ListenerHandler>>, log: (line: string) => void): Promise<DevicesListener | null> => {
+  const listen = vi.fn(async (handlers: Handlers, log: (line: string) => void): Promise<DevicesListener | null> => {
     given.push({ handlers, log })
     return { close }
   })
-  const front = (app: unknown): unknown => given[0].handlers.front.handle({ type: 'front', app }, new AbortController().signal)
-  const attach = (sessionId: unknown): unknown => given[0].handlers.attach.handle({ type: 'attach', sessionId }, new AbortController().signal)
-  return { given, close, listen, front, attach }
+  const front = (app: unknown): unknown => (given[0].handlers.front as ListenerHandler).handle({ type: 'front', app }, new AbortController().signal)
+  const attach = (sessionId: unknown): unknown => (given[0].handlers.attach as ListenerHandler).handle({ type: 'attach', sessionId }, new AbortController().signal)
+  /** The lines the devices write on the stream, its end, and whether it takes a line: one not drained yet does not. */
+  const tabs = () => {
+    const lines: unknown[] = []
+    const ended = new AbortController()
+    const stream = { takes: true, lines, end: () => ended.abort() }
+    expect((given[0].handlers.tabs as ListenerStreamHandler).open({ type: 'tabs' }, {
+      write: (line) => {
+        if (ended.signal.aborted || !stream.takes) return false
+        lines.push(line)
+        return true
+      },
+      ended: ended.signal,
+    })).toBeUndefined()
+    return stream
+  }
+  return { given, close, listen, front, attach, tabs }
 }
 
 describe('the devices, as the core starts them', () => {
@@ -310,16 +328,17 @@ describe('the devices, as the core starts them', () => {
 })
 
 describe('the devices\' own listener (services/devicesListener.ts)', () => {
-  it('the devices open their listener once, with front and attach', () => {
+  it('the devices open their listener once, with front, attach and the tabs stream', () => {
     const listener = fakeListener()
     start({ listen: listener.listen })
     expect(listener.listen).toHaveBeenCalledTimes(1)
     const [{ handlers, log }] = listener.given
-    expect(Object.keys(handlers)).toEqual(['front', 'attach'])
+    expect(Object.keys(handlers)).toEqual(['front', 'attach', 'tabs'])
     expect(handlers.front).toMatchObject({ maxBytes: FRONT_MAX_BYTES, perSecond: FRONT_PER_SECOND })
     expect([FRONT_MAX_BYTES, FRONT_PER_SECOND]).toEqual([64, 10])
     expect(handlers.attach).toMatchObject({ maxBytes: ATTACH_MAX_BYTES, perSecond: ATTACH_PER_SECOND })
     expect([ATTACH_MAX_BYTES, ATTACH_PER_SECOND]).toEqual([96, 10])
+    expect(handlers.tabs).toMatchObject({ maxBytes: TABS_MAX_BYTES, perSecond: TABS_PER_SECOND })
     // The listener's own handlers: a name that is no app id, and a session id that is no UUID, are refused there.
     expect(listener.front('Ghostty')).toBe(REFUSED)
     expect(listener.attach('local_8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b')).toBe(REFUSED)
@@ -2167,6 +2186,105 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     host().swipeEnded(CODEX, 'superseded')
     expect(said()).toEqual(['[device] swipe · ok', '[device] swipe · failed', '[device] swipe · superseded'])
     expect(logs.filter((line) => [HANDLE, 'orca-1', 'cx-1', CODEX].some((secret) => line.includes(secret)))).toEqual([])
+  })
+
+  // A swipe that rests on an agent in Terminal, iTerm2 or Ghostty selects its tab, on the stream a watch holds open
+  // (docs/specs/2026-11-15-dial-terminal-follow.md, "1. A swipe selects the agent's tab").
+  const TTY = '/dev/ttys023'
+  /** The Claude Code agent in a Terminal tab, on macOS, its dial on the cable and its tty read. */
+  const inTab = async (over: Parameters<typeof start>[0] = {}) => {
+    const listener = fakeListener()
+    const tty = vi.fn(async (_pid: number): Promise<string | undefined> => TTY)
+    const started = startHere({ orca: mac, listen: listener.listen, tty, ...over })
+    started.port.observed(hook('session-start', { hostHints: { __CFBundleIdentifier: 'com.apple.Terminal' } }))
+    attach(started.port)
+    // The source took each answer before this await resumes: its own was waiting on the same promise first.
+    await Promise.all(tty.mock.results.map(({ value }) => value))
+    return { ...started, listener, tty }
+  }
+
+  it('a rest on an agent in Terminal writes one select on the stream, and runs no orca and no open', async () => {
+    const { listener, tty } = await inTab()
+    const stream = listener.tabs()
+    expect(host().swipeSwitches(ID)).toBe(true)
+    host().swipeEnded(ID, 'rest')
+    await swiped('ok')
+    expect(stream.lines).toStrictEqual([{ app: 'terminal-app', tty: TTY }])
+    expect(tty.mock.calls).toEqual([[4242]])
+    expect(orcaRuns).toEqual([])
+    expect(said()).toEqual(['[device] swipe · ok'])
+  })
+
+  it('with no stream open a turn starts no rest', async () => {
+    const { listener } = await inTab()
+    expect(host().swipeSwitches(ID)).toBe(false)
+    listener.tabs()
+    expect(host().swipeSwitches(ID)).toBe(true)
+  })
+
+  it('a stream that ended since the turn is failed, and so is a line it does not take', async () => {
+    const { listener } = await inTab()
+    const ended = listener.tabs()
+    expect(host().swipeSwitches(ID)).toBe(true)
+    ended.end()
+    host().swipeEnded(ID, 'rest')
+    await swiped('failed')
+    // A newer watch's stream, its last line not drained yet.
+    const draining = listener.tabs()
+    draining.takes = false
+    host().swipeEnded(ID, 'rest')
+    await vi.waitFor(() => expect(said()).toEqual(['[device] swipe · failed', '[device] swipe · failed']))
+    expect([...ended.lines, ...draining.lines]).toEqual([])
+  })
+
+  it('off macOS no agent has a tab, and its tty is never read', async () => {
+    const { listener, tty } = await inTab({ orca })
+    listener.tabs()
+    expect(host().swipeSwitches(ID)).toBe(false)
+    expect(tty).not.toHaveBeenCalled()
+  })
+
+  it('with no listen given no agent has a tab', async () => {
+    const { tty } = await inTab({ listen: undefined })
+    expect(tty.mock.calls).toEqual([[4242]])
+    expect(host().swipeSwitches(ID)).toBe(false)
+  })
+
+  it('a tap runs open -b, then writes the select with raise:true', async () => {
+    let exited = (_code: number) => {}
+    const { listener } = await inTab({ orca: { ...mac, run: (file, args, timeoutMs) => {
+      orcaRuns.push([file, args, timeoutMs])
+      return new Promise((done) => { exited = (code) => done({ code }) })
+    } } })
+    const stream = listener.tabs()
+    const tap = host().openAgent(ID)
+    await vi.waitFor(() => expect(orcaRuns).toEqual([['/usr/bin/open', ['-b', 'com.apple.Terminal'], 10_000]]))
+    expect(stream.lines).toEqual([])
+    exited(0)
+    expect(await tap).toBeUndefined()
+    expect(stream.lines).toStrictEqual([{ app: 'terminal-app', tty: TTY, raise: true }])
+    expect(said()).toEqual([])
+  })
+
+  it('a tap whose open -b fails writes no select', async () => {
+    const { listener } = await inTab({ orca: { ...mac, run: async (file, args, timeoutMs) => { orcaRuns.push([file, args, timeoutMs]); return { code: 1 } } } })
+    const stream = listener.tabs()
+    expect(await host().openAgent(ID)).toEqual({ ok: false, error: 'Terminal did not open it.' })
+    expect(orcaRuns).toEqual([['/usr/bin/open', ['-b', 'com.apple.Terminal'], 10_000]])
+    expect(stream.lines).toEqual([])
+  })
+
+  it('no swipe line carries a tty', async () => {
+    const { listener } = await inTab()
+    const stream = listener.tabs()
+    host().swipeEnded(ID, 'rest')
+    await swiped('ok')
+    stream.end()
+    host().swipeEnded(ID, 'rest')
+    await swiped('failed')
+    await host().openAgent(ID)
+    expect(said()).toEqual(['[device] swipe · ok', '[device] swipe · failed'])
+    expect(logs.filter((line) => /ttys|4242/.test(line))).toEqual([])
   })
 
   it('no log line or backend request carries the command, a prompt\'s summary, a path, the transcript, a session id or a handle', async () => {
