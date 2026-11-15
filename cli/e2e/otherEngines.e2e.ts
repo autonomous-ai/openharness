@@ -100,7 +100,7 @@ console.log('fixture-pi-ready'); setInterval(() => {}, 1000);
   it('starts no worker for an empty core, reads a Pi conversation and its last turn in it, and keeps its requests off the client router', async () => {
     const { d, c } = await fresh()
     expect(worker(d)).toBeUndefined()
-    for (const type of ['engine_history_page', 'engine_last_turn']) {
+    for (const type of ['engine_history_page', 'engine_last_turn', 'engine_reader_part']) {
       const answer = await c.request(type, { version: 1, session: { engine: 'pi', sessionId: PI_ID, transcriptPath: '/etc/passwd', touchedAt: 0 } })
       expect(answer.error).toBe('UNSUPPORTED')
     }
@@ -119,6 +119,18 @@ console.log('fixture-pi-ready'); setInterval(() => {}, 1000);
     const second = await history(c, agent.id)
     expect(second.error, JSON.stringify(second)).toBeUndefined()
     expect(said(second, 'other-recap')).toBe(true)
+    // A whole conversation past one frame of the worker's link comes back whole, in parts (engines/others/readerRequests.ts).
+    const words = 'x'.repeat(20_000)
+    let text = ''
+    for (let turn = 0; turn < 300; turn++) {
+      text += JSON.stringify({ type: 'message', id: `lu${turn}`, parentId: null, message: { role: 'user', content: [{ type: 'text', text: `long ${turn}` }] } }) + '\n'
+      text += JSON.stringify({ type: 'message', id: `la${turn}`, parentId: `lu${turn}`, message: { role: 'assistant', content: [{ type: 'text', text: `pi says ${turn} ${words}` }], stopReason: 'stop' } }) + '\n'
+    }
+    appendFileSync(agent.fake.file, text)
+    const whole = await c.request('session_get', { sessionId: agent.id }, 60_000)
+    expect(whole.error, JSON.stringify(whole).slice(0, 300)).toBeUndefined()
+    expect(JSON.stringify(whole.events).length).toBeGreaterThan(5 * 1024 * 1024)
+    expect(said(whole, `299 ${words}`)).toBe(true)
     expect(worker(d)).toBe(pid)
     expect(d.coresStarted()).toBe(1)
   })

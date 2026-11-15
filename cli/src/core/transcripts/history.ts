@@ -18,6 +18,7 @@ import { keepsStore } from '../../engines/otherEngines.js'
 import { EngineReadError } from '../../engines/worker/protocol.js'
 import { transcriptReadIdentity } from './readIdentity.js'
 import { lastActivityAt } from '../../lib/agentFrame.js'
+import { sid } from '../../lib/log.js'
 import { projectDisplayName, type RegisteredSession } from '../../lib/registry.js'
 import type { TranscriptPager } from '../../lib/transcriptPages.js'
 
@@ -85,6 +86,8 @@ export function createHistory({ resolve, stopped, pages, readerFor, storeOf }: H
       return { id: sessionId, title: projectDisplayName(s), events, timestamp, engine: s.engine, ...page }
     } catch (error) {
       const failed = error instanceof EngineReadError ? error : new EngineReadError('ENGINE_UNAVAILABLE')
+      // The window shows the error; the log says whose history it was, so a pane left empty can be traced.
+      console.warn(`[engine ${s.engine}] history unavailable · ${failed.code} · ${sid(s.sessionId)}`)
       return { error: failed.code, retryable: failed.retryable }
     }
   }

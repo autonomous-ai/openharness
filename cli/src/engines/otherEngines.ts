@@ -17,8 +17,10 @@ export const STORE_ENGINES = ['opencode', 'kilo', 'hermes', 'devin', 'openclaw']
 export function keepsStore(engine: string): boolean { return (STORE_ENGINES as readonly string[]).includes(engine) }
 
 /**
- * How long a history read of `engine` may take, in its worker and in the core waiting for it. Amp's history is Amp's
- * own export, a network call of about 1.5 s that its command gives up on at 20 s (engines/amp/threadExport.ts); every
- * other read is a bounded file or store read, held to the readers' five seconds (engines/worker/protocol.ts).
+ * How long a read of one of their conversations may take, in their worker and in the core waiting for it. Amp's history
+ * is Amp's own export, a network call of about 1.5 s that its command gives up on at 20 s (engines/amp/threadExport.ts).
+ * Every other read is of up to 64 MB of a transcript, or a whole conversation in a store, which may first wait 5 s for
+ * the store's lock (lib/sqliteRead.ts), and then replayed: the core waited as long as one took while it read them
+ * itself, so theirs get three times the five seconds Claude Code's and Codex's paged reads do.
  */
-export function historyWaitMs(engine: string, readerWaitMs: number): number { return engine === 'amp' ? 25_000 : readerWaitMs }
+export function readWaitMs(engine: string, history: boolean): number { return engine === 'amp' && history ? 25_000 : 15_000 }

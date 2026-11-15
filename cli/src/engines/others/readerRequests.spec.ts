@@ -4,9 +4,10 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Asker } from '../../core/api.js'
 import type { EngineTranscript } from '../facets/transcript.js'
-import { READER_HISTORY, READER_IN_FLIGHT, READER_LAST_TURN, READER_REPLY_BYTES, READER_WAIT_MS } from '../worker/protocol.js'
-import { runOtherEngines } from './process.js'
-import { OTHER_READS_IN_FLIGHT, otherReaderRequests } from './readerRequests.js'
+import { createHash } from 'node:crypto'
+import { READER_HISTORY, READER_IN_FLIGHT, READER_LAST_TURN, READER_PART, READER_PARTED_BYTES } from '../worker/protocol.js'
+import { runOtherEngines } from './otherEnginesProcess.js'
+import { OTHER_READ_STUCK_MS, OTHER_READS_IN_FLIGHT, otherReaderRequests, type OtherReaderDeps } from './readerRequests.js'
 
 vi.mock('../../services/process.js', async (real) => ({ ...await real<object>(), runServiceProcess: vi.fn(() => ({ stop: vi.fn() })) }))
 const asker: Asker = { owner: true, local: true }
@@ -17,12 +18,12 @@ const payload = { version: 1, session, ask: { limit: 3, before: 'cursor' } }
 const deferred = <T>() => { let resolve!: (value: T) => void; const promise = new Promise<T>((r) => { resolve = r }); return { promise, resolve } }
 const failed = (error: string, retryable = true) => ({ version: 1, error, retryable })
 
-function setup() {
+function setup(limits?: OtherReaderDeps['limits']) {
   const reader = { historyPage: vi.fn(async (): Promise<typeof page> => page), lastTurnText: vi.fn(async (): Promise<typeof answer | null> => answer) }
   const transcriptFor = vi.fn((_engine: string): EngineTranscript => reader as unknown as EngineTranscript)
   const recycle = vi.fn()
   const log = vi.fn()
-  const requests = otherReaderRequests({ transcriptFor, recycle, log })
+  const requests = otherReaderRequests({ transcriptFor, recycle, log, limits })
   return { requests, reader, transcriptFor, recycle, log,
     read: (data: Record<string, unknown> = payload, who = asker, signal?: AbortSignal) => requests[READER_HISTORY](data, who, signal) }
 }
@@ -84,27 +85,45 @@ describe('the other engines\' readers in their worker', () => {
     expect(await t.read()).toEqual({ version: 1, answer: page })
   })
 
-  it('recycles the worker for a read that outlasts its deadline, Amp\'s history its own export\'s, never the core', async () => {
+  it('answers a read past its deadline unavailable and keeps its place until it ends, recycling only one that is stuck', async () => {
     vi.useFakeTimers()
     const t = setup(); const work = deferred<typeof page>()
     t.reader.historyPage.mockImplementation(() => work.promise)
-    const read = t.read()
-    await vi.advanceTimersByTimeAsync(READER_WAIT_MS - 1)
-    expect(t.recycle).not.toHaveBeenCalled()
+    const reads = Array.from({ length: READER_IN_FLIGHT }, () => t.read())
+    await vi.advanceTimersByTimeAsync(15_000 - 1)
+    expect(t.log).not.toHaveBeenCalled()
     await vi.advanceTimersByTimeAsync(1)
-    expect(await read).toEqual(failed('ENGINE_UNAVAILABLE'))
-    expect(t.recycle).toHaveBeenCalledOnce()
+    for (const read of await Promise.all(reads)) expect(read).toEqual(failed('ENGINE_UNAVAILABLE'))
+    expect(t.log).toHaveBeenLastCalledWith('[engine pi] history not read within 15 s · answered unavailable')
+    // Still reading: Pi's places are taken, and no other engine's read is cut short for it.
+    expect(await t.read()).toEqual(failed('ENGINE_BUSY'))
+    const kilo = t.read({ ...payload, session: { ...session, engine: 'kilo' } })
+    expect(t.recycle).not.toHaveBeenCalled()
+    work.resolve(page)
+    expect(await kilo).toEqual({ version: 1, answer: page })
+    await vi.advanceTimersByTimeAsync(0)
+    t.reader.historyPage.mockImplementation(async () => page)
+    expect(await t.read()).toEqual({ version: 1, answer: page })
+    await vi.advanceTimersByTimeAsync(OTHER_READ_STUCK_MS)
+    expect(t.recycle).not.toHaveBeenCalled()
+    // Amp's history waits for its export; a read still running a minute past its deadline is stuck.
+    t.reader.historyPage.mockImplementation(() => new Promise(() => {}))
     const amp = t.read({ ...payload, session: { ...session, engine: 'amp', sessionId: 'T-0123456789abcdef' } })
     await vi.advanceTimersByTimeAsync(24_999)
-    expect(t.recycle).toHaveBeenCalledOnce()
+    expect(t.log).not.toHaveBeenLastCalledWith('[engine amp] history not read within 25 s · answered unavailable')
     await vi.advanceTimersByTimeAsync(1)
     expect(await amp).toEqual(failed('ENGINE_UNAVAILABLE'))
-    expect(t.recycle).toHaveBeenCalledTimes(2)
-    const last = t.requests[READER_LAST_TURN]({ version: 1, session: { ...session, engine: 'amp' } }, asker)
+    expect(t.log).toHaveBeenLastCalledWith('[engine amp] history not read within 25 s · answered unavailable')
+    await vi.advanceTimersByTimeAsync(OTHER_READ_STUCK_MS - 1)
+    expect(t.recycle).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(t.log).toHaveBeenLastCalledWith('[engine amp] history still read 85 s after it began · recycling this worker')
+    expect(t.recycle).toHaveBeenCalledOnce()
     t.reader.lastTurnText.mockImplementation(() => new Promise(() => {}))
-    await vi.advanceTimersByTimeAsync(READER_WAIT_MS)
-    await last
-    work.resolve(page)
+    const last = t.requests[READER_LAST_TURN]({ version: 1, session: { ...session, engine: 'amp' } }, asker)
+    await vi.advanceTimersByTimeAsync(15_000)
+    expect(await last).toEqual(failed('ENGINE_UNAVAILABLE'))
+    expect(t.log).toHaveBeenLastCalledWith('[engine amp] last turn not read within 15 s · answered unavailable')
   })
 
   it('says a reader that throws, and answers it unavailable', async () => {
@@ -118,10 +137,38 @@ describe('the other engines\' readers in their worker', () => {
     expect(await t.read()).toEqual({ version: 1, answer: page })
   })
 
-  it('refuses an oversized serialized reply before it reaches the core', async () => {
-    const t = setup()
-    t.reader.lastTurnText.mockResolvedValue({ ...answer, assistantText: '😺'.repeat(READER_REPLY_BYTES / 4) })
-    expect(await t.requests[READER_LAST_TURN]({ version: 1, session }, asker)).toEqual(failed('ENGINE_REPLY_TOO_LARGE', false))
+  it('sends a reply past one frame in parts, each once, keeping a few, and refuses one past the parts\' bound', async () => {
+    const t = setup({ inline: 64, part: 50, parted: 400 })
+    const big = { events: [{ type: 'text_delta', payload: { content: 'x'.repeat(100) } }], timestamp: page.timestamp }
+    t.reader.historyPage.mockResolvedValue(big as never)
+    const whole = Buffer.from(JSON.stringify({ version: 1, answer: big }))
+    const hash = createHash('sha256').update(whole).digest('hex')
+    const first = await t.read()
+    expect(first).toEqual({ version: 1, part: expect.any(String), offset: 0, bytes: whole.length, hash, data: whole.subarray(0, 50).toString('base64') })
+    const next = (offset: number, part = first.part) => t.requests[READER_PART]({ version: 1, part, offset }, asker)
+    let taken = Buffer.from(first.data as string, 'base64')
+    while (taken.length < whole.length) {
+      const reply = await next(taken.length)
+      expect(reply).toMatchObject({ version: 1, part: first.part, offset: taken.length, bytes: whole.length, hash })
+      taken = Buffer.concat([taken, Buffer.from(reply.data as string, 'base64')])
+    }
+    expect(taken.equals(whole)).toBe(true)
+    // Its last part let it go.
+    expect(await next(0)).toEqual(failed('ENGINE_STALE_REPLY'))
+    for (const bad of [{ part: 7, offset: 0 }, { part: first.part, offset: -1 }, { part: first.part, offset: 1.5 }, { part: first.part }]) {
+      expect(await t.requests[READER_PART]({ version: 1, ...bad }, asker)).toEqual(failed('ENGINE_INVALID_REQUEST', false))
+    }
+    expect(await t.requests[READER_PART]({ version: 2, part: first.part, offset: 0 }, asker)).toEqual(failed('ENGINE_INVALID_REQUEST', false))
+    expect(await t.requests[READER_PART]({ version: 1, part: first.part, offset: 0 }, { ...asker, connection: 'client' })).toEqual(failed('ENGINE_INVALID_REQUEST', false))
+    // A few kept at once: a fifth lets the oldest go.
+    const kept = [] as Array<Record<string, unknown>>
+    for (let i = 0; i < 5; i++) kept.push(await t.read())
+    expect(await next(50, kept[0].part)).toEqual(failed('ENGINE_STALE_REPLY'))
+    expect(await next(50, kept[4].part)).toMatchObject({ part: kept[4].part, offset: 50 })
+    expect(await next(whole.length, kept[4].part)).toEqual(failed('ENGINE_STALE_REPLY'))
+    t.reader.historyPage.mockResolvedValue({ ...big, events: [{ type: 'text_delta', payload: { content: 'x'.repeat(400) } }] } as never)
+    expect(await t.read()).toEqual(failed('ENGINE_REPLY_TOO_LARGE', false))
+    expect(READER_PARTED_BYTES).toBe(64 * 1024 * 1024)
   })
 
   it('reads with the engines\' own code by default, and runs as its own authenticated service', async () => {

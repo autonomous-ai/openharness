@@ -9,6 +9,14 @@ export const READER_HISTORY = 'engine_history_page'
 export const READER_LAST_TURN = 'engine_last_turn'
 /** Below the local service transport's 6 MiB ceiling, including its envelope and request id. */
 export const READER_REPLY_BYTES = 4 * 1024 * 1024
+/**
+ * A reply past that is taken in parts, each asked for by its offset (`READER_PART`), up to `READER_PARTED_BYTES`. The
+ * other engines have no pages of their own, or none for some asks, so one of their histories can be a conversation's
+ * whole replay, which the core used to send on as it was (engines/others/readerRequests.ts).
+ */
+export const READER_PART = 'engine_reader_part'
+export const READER_PART_BYTES = 3 * 1024 * 1024
+export const READER_PARTED_BYTES = 64 * 1024 * 1024
 export const READER_IN_FLIGHT = 4
 /** The existing link bounds cold start and execution separately: at most twice this when cold. */
 export const READER_WAIT_MS = 5_000
@@ -79,14 +87,25 @@ export function subagentFinished(value: unknown): boolean {
     && typeof value.payload.status === 'string' && (value.payload.summary === undefined || typeof value.payload.summary === 'string')
 }
 
-export function historyAnswer(value: unknown): value is HistoryAnswer {
-  return record(value) && Object.keys(value).every(key => ['events', 'timestamp', 'hasMore', 'oldestCursor', 'staleCursor', 'truncated'].includes(key))
-    && typeof value.timestamp === 'string' && Number.isFinite(Date.parse(value.timestamp))
-    && Array.isArray(value.events) && value.events.every(event => sessionEvent(event) || subagentFinished(event))
+/** One event of a replayed history: what a window is shown of a conversation. */
+export function historyEvent(value: unknown): value is HistoryAnswer['events'][number] {
+  return sessionEvent(value) || subagentFinished(value)
+}
+
+/**
+ * A history answer with the events the core can check, and how many it left out; null for an answer that is not one.
+ * An event that fails the check costs only itself: an engine's replay of a conversation from the field can hold one odd
+ * event among thousands, and the whole page refused for it would show the window nothing.
+ */
+export function checkedHistory(value: unknown): { answer: HistoryAnswer; dropped: number } | null {
+  if (!(record(value) && Object.keys(value).every(key => ['events', 'timestamp', 'hasMore', 'oldestCursor', 'staleCursor', 'truncated'].includes(key))
+    && typeof value.timestamp === 'string' && Number.isFinite(Date.parse(value.timestamp)) && Array.isArray(value.events)
     && (value.hasMore === undefined || typeof value.hasMore === 'boolean')
     && (value.oldestCursor === undefined || value.oldestCursor === null || typeof value.oldestCursor === 'string')
     && (value.staleCursor === undefined || value.staleCursor === true)
-    && (value.truncated === undefined || value.truncated === true)
+    && (value.truncated === undefined || value.truncated === true))) return null
+  const events = value.events.filter(historyEvent)
+  return { answer: { ...value, events } as HistoryAnswer, dropped: value.events.length - events.length }
 }
 
 export function lastTurnAnswer(value: unknown): value is LastTurnText | null {

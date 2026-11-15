@@ -28,7 +28,8 @@ const MODULES = {
   screens: () => import('../lib/legacyScreen.js'),
   /** Legacy compatibility entry. Native installation is eager; core never requests this chunk. */
   hooks: () => import('../lib/hooks.js'),
-  /** The database engines' conversations read whole (lib/databaseHistory.ts), for what the core hands on. */
+  /** The database engines' conversations read whole (lib/databaseHistory.ts), for a service in the core's own process
+   *  (engines/storeHistory.ts). */
   databaseHistory: () => import('../lib/databaseHistory.js'),
   // Each engine's own: its transcript readers, history and last turn, loaded as one of its sessions enters.
   opencode: () => import('./opencode/inProcess.js'),
