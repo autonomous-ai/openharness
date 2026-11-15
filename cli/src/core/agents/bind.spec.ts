@@ -1159,6 +1159,25 @@ describe('binding a running process to its session', () => {
       expect(run.deps.announceSession).toHaveBeenCalledTimes(1)
     })
 
+    // A lookup and the register's own check of the transcript read it with the same scan (engines/kit/identityScan.ts),
+    // so they fail in the same words: the register that refuses changes nothing on the row, and still says to hold.
+    it('stays through a pass whose reads complete and whose register is refused in the same words', async () => {
+      const run = setup(), row = inRegistry(run), seen = codex({ resumeSessionId: 'resumed' })
+      const changed = new Error('the native record changed during the read')
+      vi.mocked(findResumedTranscript).mockRejectedValueOnce(changed)
+      await run.binding.bindObservedAgent(seen)
+      expect(row.identityHold).toBe('the native record changed during the read')
+      vi.mocked(run.deps.registry.register).mockImplementationOnce(() => { throw changed })
+      await run.binding.bindObservedAgent(seen)
+      expect(row.identityHold).toBe('the native record changed during the read')
+      expect(run.deps.announceSession).toHaveBeenCalledTimes(1)
+      expect(said().at(-1)).toBe('[discovery] a1 binding held · the native record changed during the read')
+      // Nothing refuses on the next pass: let go.
+      await run.binding.bindObservedAgent(seen)
+      expect(row).not.toHaveProperty('identityHold')
+      expect(run.deps.announceSession).toHaveBeenCalledTimes(2)
+    })
+
     it.each([
       ['hermes', HERMES_SANDBOX_HOLD],
       ['codex', 'Waiting for native evidence after a concurrent binding write.'],
