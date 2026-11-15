@@ -2599,6 +2599,18 @@ export class CableSession {
     // Before the ring, which the dial draws under the app it names.
     if (sendApps) await this.send({ t: 'apps', shown: apps.shown, apps: apps.apps })
     if (!sendRing) return
+    // A dial that says `appFilter` back on the window's tab from an app's ring (its last list a machine list, by the key):
+    // the record still names the agent it left the tab on, and the window's agent is where it lands (viewChanged follows
+    // it). Re-asserting the record stepped the dial onto it on the way. The read that turns the view is often this push's
+    // own (the shown ring left empty), before viewChanged runs, so the record is moved here, for whichever push brings
+    // the tab back.
+    if (this.appFilter && tab && this.lastAgentsKey.startsWith('machine|')) {
+      const landing = this.host.appFocus?.(this.asItself)?.agentId
+      if (landing && landing !== this.desiredFocus && agents.some((a) => a.id === landing)) {
+        this.desiredFocus = landing
+        this.appFocusUnsent = true
+      }
+    }
     this.lastAgentsKey = key
     // Every push, and only pushes. The dial showing a different number from the daemon is a question this
     // line answers in one look: either the daemon never said it, or it said it and the dial disagreed.
@@ -3389,18 +3401,16 @@ export class CableSession {
   async viewChanged(): Promise<void> {
     if (!this.wantsApps) return
     await this.syncSwarms()
-    // Back on the tab the window's agent is followed before the tab's list goes: follow writes the record, then pushes the
-    // list, so the list's re-assert lands on that agent. Pushed first, the list re-asserted the agent the dial left the tab
-    // on, and the dial stepped onto it on its way to the window's.
-    const focused = this.host.appFocus?.(this.asItself)
-    if (focused) await this.followApp(focused.machineId, focused.agentId)
     // At once: a machine list is otherwise held a second after the last push. The gap is opened in the queue, just before
     // this push, as a push still in flight when the view turned would close it again. Let through, not forced, so a list
-    // that did not change is not sent twice.
+    // that did not change is not sent twice. Back on the tab, the push that brings it lands on the window's agent when the
+    // tab holds it (syncAgentsNow); the follow after it brings the machine, and the focus for one the tab does not hold.
     await this.queued(() => {
       this.agentsPushedAt = -Infinity
       return this.syncAgentsNow(false)
     })
+    const focused = this.host.appFocus?.(this.asItself)
+    if (focused) await this.followApp(focused.machineId, focused.agentId)
   }
 
   async toast(text: string): Promise<void> {
