@@ -5,11 +5,15 @@ import { delimiter, join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { execFile, type ExecFileException } from 'node:child_process'
-import { TmuxBackend, clearEnvArgs, serverVariables, tmuxScript, tmuxWord, unsetServerEnvArgs } from './tmuxBackend.js'
+import { HARNESSD_SET_VARIABLES, TmuxBackend, clearEnvArgs, serverVariablesToUnset, tmuxScript, tmuxWord, unsetServerEnvArgs } from './tmuxBackend.js'
 import { clearPaneRemainOnExit, forgetTmuxServer } from './tmux.js'
 import { tmuxControlGate } from './tmuxControlGate.js'
 import { assumeTmuxVersion, resetTmuxVersionCache, tmuxFeatures } from './tmuxVersion.js'
 import { isHarnessdVariable } from './harnessdEnv.js'
+import { AGENT_SESSION_VARIABLES, isAgentSessionVariable } from './agentSessionEnv.js'
+import { BUNDLE_ENV, BUNDLE_SHA256_ENV, LEAN_FINGERPRINT_ENV } from '../masterProcess.js'
+import { RESUME_ENV } from '../harnessd/reexec.js'
+import { PLATFORM_ENV } from '../harnessd/platform.js'
 import { resolveBinaryOnPath } from './binaryOnPath.js'
 import { isolatedTmux, type IsolatedTmux } from '../testing/isolatedTmux.js'
 import { DEFAULT_HOST_THEME } from './hostTheme.js'
@@ -836,15 +840,32 @@ describe('clearEnv command shape', () => {
 
 // A tmux server copies the environment it was started with into every pane it makes. One started by a core
 // before it held harnessd's variables back (lib/harnessdEnv.ts) gave them to every agent and terminal, the
-// service token among them (found 2026-10-11: `env` in an agent's pane listed every one).
+// service token among them (found 2026-10-11: `env` in an agent's pane listed every one). The core names what
+// it unsets and never lists the server's environment: that is the person's, their keys among it.
 describe('harnessd\'s variables in the tmux server\'s environment', () => {
-  const LISTING = 'HOME=/home/someone\nHARNESSD_SERVICE_TOKEN=fixture-token\n-HARNESSD_RESTARTS\nHARNESSD_SUPERVISED=1\nMY_HARNESSD_NOTE=kept\nHARNESSD_SUPERVISED=1\n'
+  it('are the agent session names, harnessd\'s own, and every HARNESSD_* this process has, once each', () => {
+    const unset = serverVariablesToUnset({ HARNESSD_TEST_FAULTS: 'fixture', OPENAI_API_KEY: 'fixture-key', PATH: '/bin' })
+    expect(new Set(unset)).toEqual(new Set([...AGENT_SESSION_VARIABLES, ...HARNESSD_SET_VARIABLES, 'HARNESSD_TEST_FAULTS']))
+    expect(unset).toHaveLength(new Set(unset).size)
+  })
 
-  it('are the ones the server lists with a value, once each, and none it already removes', () => {
-    expect(serverVariables(LISTING, isHarnessdVariable)).toEqual(['HARNESSD_SERVICE_TOKEN', 'HARNESSD_SUPERVISED'])
-    expect(serverVariables('', isHarnessdVariable)).toEqual([])
-    // A value with a newline in it: what follows is not a name.
-    expect(serverVariables('NOTE=one\n two=HARNESSD_X\n', isHarnessdVariable)).toEqual([])
+  it('are, in an environment as a server keeps one, what its listing and the prefix filter removed, and no key of the person\'s', () => {
+    // As an earlier boot's core and an agent's shell left a server, beside the person's own settings and keys.
+    const server = ['HOME', 'PATH', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'MY_HARNESSD_NOTE',
+      'AI_AGENT', 'CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_MESSAGING_TOKEN', 'CODEX_THREAD_ID', 'CODEX_SANDBOX',
+      'HARNESSD_SERVICE_TOKEN', 'HARNESSD_SUPERVISED', 'HARNESSD_RESTARTS', 'HARNESSD_WATCHDOG_MS', 'HARNESSD_JUDGES_SUPERSEDED',
+      'HARNESSD_UPDATES', 'HARNESSD_LAST_EXIT', 'HARNESSD_SAFE_MODE', 'HARNESSD_SERVICES', 'HARNESSD_SERVICE_PROCESSES',
+      'HARNESSD_ENGINE_LIVE', 'HARNESSD_ENGINE_PROVIDER_MOVE', 'HARNESSD_CORE_SCRIPT', 'HARNESSD_JUDGES_PTY', 'HARNESSD_SERVICE',
+      'HARNESSD_BUNDLE', 'HARNESSD_BUNDLE_SHA256', 'HARNESSD_LEAN_FINGERPRINT', 'HARNESSD_RESUME', 'HARNESSD_PLATFORM',
+      'HARNESSD_TEST_X']
+    const listedAndFiltered = server.filter((name) => isHarnessdVariable(name) || isAgentSessionVariable(name))
+    const unset = new Set(serverVariablesToUnset({ HARNESSD_TEST_X: '1', OPENAI_API_KEY: 'fixture-key' }))
+    expect(server.filter((name) => unset.has(name))).toEqual(listedAndFiltered)
+    expect([...unset]).not.toContain('OPENAI_API_KEY')
+  })
+
+  it('hold the names harnessd\'s files outside the core give as constants, as those files spell them', () => {
+    expect(HARNESSD_SET_VARIABLES).toEqual(expect.arrayContaining([BUNDLE_ENV, BUNDLE_SHA256_ENV, LEAN_FINGERPRINT_ENV, RESUME_ENV, PLATFORM_ENV]))
   })
 
   it('are removed from the global environment in one invocation', () => {
@@ -853,7 +874,7 @@ describe('harnessd\'s variables in the tmux server\'s environment', () => {
     ])
   })
 
-  /** A tmux that lists [listing] for the global environment, or answers as one with no server; and records each call. */
+  /** A tmux that runs [script], as one with no server or one that takes every call; and records each call. */
   const fakeTmux = (script: string): () => string[] => {
     const dir = mkdtempSync(join(tmpdir(), 'tmux-backend-env-'))
     dirs.push(dir)
@@ -864,55 +885,56 @@ describe('harnessd\'s variables in the tmux server\'s environment', () => {
     return () => existsSync(calls) ? readFileSync(calls, 'utf8').trim().split('\n') : []
   }
 
-  it('are unset, and named, when the server has them', async () => {
-    const calls = fakeTmux(`[ "$1" = show-environment ] && printf '${LISTING.replace(/\n/g, '\\n')}'\nexit 0`)
-    await expect(new TmuxBackend().unsetServerEnvironment(isHarnessdVariable)).resolves.toEqual(['HARNESSD_SERVICE_TOKEN', 'HARNESSD_SUPERVISED'])
-    expect(calls()).toEqual([
-      'show-environment -g',
-      'set-environment -g -u HARNESSD_SERVICE_TOKEN ; set-environment -g -u HARNESSD_SUPERVISED',
-    ])
+  it('are unset in one call, never listed first, and counted', async () => {
+    const calls = fakeTmux('exit 0')
+    await expect(new TmuxBackend().unsetServerEnvironment(['HARNESSD_SERVICE_TOKEN', 'CLAUDECODE'])).resolves.toBe(2)
+    expect(calls()).toEqual(['set-environment -g -u HARNESSD_SERVICE_TOKEN ; set-environment -g -u CLAUDECODE'])
   })
 
-  it('cost one call when the server has none, and one when there is no server: the next starts without them', async () => {
-    const none = fakeTmux(`[ "$1" = show-environment ] && printf 'HOME=/home/someone\\n'\nexit 0`)
-    await expect(new TmuxBackend().unsetServerEnvironment(isHarnessdVariable)).resolves.toEqual([])
-    expect(none()).toEqual(['show-environment -g'])
+  it('go 64 to a call, as tmux refuses a command line over 16 KiB', async () => {
+    const calls = fakeTmux('exit 0')
+    const names = Array.from({ length: 130 }, (_, i) => `HARNESSD_TEST_${i}`)
+    await expect(new TmuxBackend().unsetServerEnvironment(names)).resolves.toBe(130)
+    expect(calls().map((call) => call.split(' ; ').length)).toEqual([64, 64, 2])
+    expect(calls().flatMap((call) => call.split(' ; ').map((command) => command.split(' ').at(-1)))).toEqual(names)
+  })
+
+  it('cost one call when there is no server, and count none: the next starts without them', async () => {
     const noServer = fakeTmux(`echo 'no server running on /tmp/tmux-501/default' >&2\nexit 1`)
-    await expect(new TmuxBackend().unsetServerEnvironment(isHarnessdVariable)).resolves.toEqual([])
-    expect(noServer()).toEqual(['show-environment -g'])
+    await expect(new TmuxBackend().unsetServerEnvironment(Array.from({ length: 130 }, (_, i) => `HARNESSD_TEST_${i}`))).resolves.toBe(0)
+    expect(noServer()).toHaveLength(1)
   })
 
-  it('are named as removed only when tmux removed them', async () => {
-    const calls = fakeTmux(`[ "$1" = show-environment ] && { printf 'HARNESSD_SERVICE_TOKEN=fixture-token\\n'; exit 0; }\nexit 1`)
-    await expect(new TmuxBackend().unsetServerEnvironment(isHarnessdVariable)).resolves.toEqual([])
-    expect(calls()).toEqual(['show-environment -g', 'set-environment -g -u HARNESSD_SERVICE_TOKEN'])
-  })
-
-  it.skipIf(!resolveBinaryOnPath('tmux'))('reach no pane a real server makes once they are unset, though the panes before have them', async () => {
+  it.skipIf(!resolveBinaryOnPath('tmux'))('reach no pane a real server makes once they are unset, though the panes before have them, and the person\'s keys stay', async () => {
     const home = mkdtempSync(join(tmpdir(), 'tmux-backend-env-home-'))
     dirs.push(home)
-    // The server starts as one an earlier core started did: from an environment with harnessd's variables.
-    const inherited = Object.fromEntries(Object.entries(process.env).filter(([name]) => !isHarnessdVariable(name)))
+    const removedBefore = (name: string) => isHarnessdVariable(name) || isAgentSessionVariable(name)
+    // The server starts as one an earlier core started from an agent's shell did: with harnessd's variables and
+    // that agent's session, beside the person's own key.
+    const inherited = Object.fromEntries(Object.entries(process.env).filter(([name]) => !removedBefore(name)))
     const tmux = await isolatedTmux({ ...inherited, HOME: home, ZDOTDIR: home, HISTFILE: join(home, 'history'),
-      HARNESSD_SERVICE_TOKEN: 'fixture-token', HARNESSD_SUPERVISED: '1', HARNESSD_WATCHDOG_MS: '30000' })
+      HARNESSD_SERVICE_TOKEN: 'fixture-token', HARNESSD_SUPERVISED: '1', HARNESSD_WATCHDOG_MS: '30000', CLAUDECODE: '1',
+      OPENAI_API_KEY: 'fixture-key' })
     // The backend's own bare `tmux` reaches this private server and no other.
     vi.stubEnv('TMUX', undefined)
     vi.stubEnv('TMUX_PANE', undefined)
     vi.stubEnv('TMUX_TMPDIR', tmux.root)
-    const harnessdIn = async (session: string): Promise<string[]> => {
+    const paneHas = async (session: string): Promise<string[]> => {
       const file = join(home, `${session}.env`)
       await tmux.run('new-session', '-d', '-s', session, '/bin/sh', '-c', `env > ${file}.tmp && mv ${file}.tmp ${file}; sleep 60`)
       for (let i = 0; i < 200 && !existsSync(file); i++) await new Promise((resolve) => setTimeout(resolve, 25))
-      return readFileSync(file, 'utf8').split('\n').map((line) => line.split('=')[0]).filter(isHarnessdVariable).sort()
+      return readFileSync(file, 'utf8').split('\n').map((line) => line.split('=')[0])
+        .filter((name) => removedBefore(name) || name === 'OPENAI_API_KEY').sort()
     }
     try {
-      expect(await harnessdIn('before')).toEqual(['HARNESSD_SERVICE_TOKEN', 'HARNESSD_SUPERVISED', 'HARNESSD_WATCHDOG_MS'])
-      await expect(new TmuxBackend().unsetServerEnvironment(isHarnessdVariable)).resolves.toEqual(['HARNESSD_SERVICE_TOKEN', 'HARNESSD_SUPERVISED', 'HARNESSD_WATCHDOG_MS'])
+      expect(await paneHas('before')).toEqual(['CLAUDECODE', 'HARNESSD_SERVICE_TOKEN', 'HARNESSD_SUPERVISED', 'HARNESSD_WATCHDOG_MS', 'OPENAI_API_KEY'])
+      const names = serverVariablesToUnset()
+      await expect(new TmuxBackend().unsetServerEnvironment(names)).resolves.toBe(names.length)
       // The client that asks for a pane still has them: tmux gives a new pane none of the client's own but
-      // those `update-environment` names, so the pane has none.
-      expect(await harnessdIn('after')).toEqual([])
-      // And a second core finds nothing left to remove.
-      await expect(new TmuxBackend().unsetServerEnvironment(isHarnessdVariable)).resolves.toEqual([])
+      // those `update-environment` names, so the pane has none, and the person's key as before.
+      expect(await paneHas('after')).toEqual(['OPENAI_API_KEY'])
+      // And a second core unsets them again, gone or not: tmux takes the unset of a name it lacks.
+      await expect(new TmuxBackend().unsetServerEnvironment(names)).resolves.toBe(names.length)
     } finally {
       vi.unstubAllEnvs()
       await tmux.close()
@@ -936,8 +958,9 @@ describe('readying tmux at daemon start', () => {
     const dir = mkdtempSync(join(tmpdir(), 'tmux-backend-prepare-'))
     dirs.push(dir)
     const calls = join(dir, 'calls')
+    // It would answer a listing of the server's environment, which the core never asks for.
     writeFileSync(join(dir, 'tmux'), `#!/bin/sh
-printf '%s\\n' "$1" >> "$TMUX_BACKEND_CALLS"
+printf '%s\\n' "$*" >> "$TMUX_BACKEND_CALLS"
 case "$1" in
   list-panes) printf '%%7|4242|claude-1790000000000|/work|\\n' ;;
   show-environment) printf 'HOME=/home/someone\\nTERM=xterm-256color\\nHARNESSD_SERVICE_TOKEN=fixture-token\\nCLAUDECODE=1\\nORCA_TERMINAL_HANDLE=term_1\\nORCA_PAIRING_CODE=fixture-pairing\\nORCA_AGENT_SESSION_SPAWN_TOKEN=fixture-spawn\\n' ;;
@@ -951,16 +974,21 @@ exit 0
       const backend = new TmuxBackend(undefined, () => 'daemon-a', () => {}, undefined,
         { ensureOnPath: async () => ({ state: 'adopted', path: '/opt/tmux/bin/tmux', from: '/opt/tmux/bin' }) })
       expect(await backend.prepare({ ownedPanes: new Map([['%7', 'claude']]) })).toEqual({ state: 'ready' })
+      const commands = readFileSync(calls, 'utf8').trim().split('\n').map((call) => call.split(' '))
+      const first = (command: string) => commands.findIndex(([word]) => word === command)
+      expect(first('show-environment')).toBe(-1)
+      const names = serverVariablesToUnset()
       expect(log.mock.calls.map(([line]) => line)).toEqual([
         '[tmux] not on the daemon PATH · adopted /opt/tmux/bin/tmux · /opt/tmux/bin',
         expect.stringMatching(/^\[terminal\] renamed tmux session claude-1790000000000 → harness-claude-\d+-[0-9a-f-]+ \(pane %7\) · named by a build before the harness- prefix$/),
-        '[terminal] tmux: removed HARNESSD_SERVICE_TOKEN, CLAUDECODE, ORCA_TERMINAL_HANDLE, ORCA_PAIRING_CODE, ORCA_AGENT_SESSION_SPAWN_TOKEN from the environment new panes start with',
+        `[terminal] tmux: unset ${names.length} harnessd and agent session names in the environment new panes start with`,
         // The renamed session is still `claude-…` in this fake, so the inventory whitelists none of it.
         '[terminal] tmux: available',
       ])
-      const commands = readFileSync(calls, 'utf8').trim().split('\n')
-      expect(commands.indexOf('rename-session')).toBeLessThan(commands.indexOf('show-environment'))
-      expect(commands.lastIndexOf('list-panes')).toBeGreaterThan(commands.indexOf('set-environment'))
+      const unsets = commands.filter(([word]) => word === 'set-environment')
+      expect(unsets.flatMap((call) => call.join(' ').split(' ; ').map((command) => command.split(' ').at(-1)))).toEqual(names)
+      expect(first('rename-session')).toBeLessThan(first('set-environment'))
+      expect(commands.findLastIndex(([word]) => word === 'list-panes')).toBeGreaterThan(first('set-environment'))
     } finally { log.mockRestore() }
   })
 
@@ -973,7 +1001,10 @@ exit 0
     try {
       const backend = new TmuxBackend(undefined, () => 'daemon-a', () => {}, undefined, { ensureOnPath: async () => ({ state: 'present' }) })
       expect(await backend.prepare({ ownedPanes: new Map() })).toEqual({ state: 'ready' })
-      expect(log.mock.calls).toEqual([['[terminal] tmux: unavailable (tmux listed no panes)']])
+      expect(log.mock.calls).toEqual([
+        [`[terminal] tmux: unset ${serverVariablesToUnset().length} harnessd and agent session names in the environment new panes start with`],
+        ['[terminal] tmux: unavailable (tmux listed no panes)'],
+      ])
     } finally { log.mockRestore() }
   })
 
