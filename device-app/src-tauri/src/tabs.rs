@@ -197,6 +197,8 @@ pub struct TabFollow {
     failed: u64,
     /// When the first failure not yet in the log came.
     failed_since: Option<u64>,
+    /// Lines for the log that no answer carries, for the runner to take.
+    said: Vec<String>,
 }
 
 impl TabFollow {
@@ -241,12 +243,22 @@ impl TabFollow {
             }
             Err(error) => self.turn_off(app, error, &mut out.log),
         }
-        if self.failed_since.is_some_and(|since| now.saturating_sub(since) >= FAILED_EVERY) {
-            out.log.push(format!("tabs: {} polls failed", self.failed));
-            self.failed = 0;
-            self.failed_since = None;
+        // A call under way as polling stopped is counted as it answers.
+        if self.polls().is_none() || self.failed_since.is_some_and(|since| now.saturating_sub(since) >= FAILED_EVERY) {
+            out.log.extend(self.failed_line());
         }
         out
+    }
+
+    /// The lines for the log that came with no answer.
+    pub fn said(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.said)
+    }
+
+    /// The failed polls not yet in the log, as one line.
+    fn failed_line(&mut self) -> Option<String> {
+        self.failed_since.take()?;
+        Some(format!("tabs: {} polls failed", std::mem::take(&mut self.failed)))
     }
 
     /// A select from the watch, which came `at`. It replaces any still waiting: only where the dial rests now matters.
@@ -301,8 +313,14 @@ impl TabFollow {
     /// Each time polling turns to an app, its first answer is written: the watch may never have heard of that tab, or
     /// the dial may have moved since.
     fn restart(&mut self) {
-        if self.last.as_ref().map(|(app, _)| *app) != self.polls() {
+        let polls = self.polls();
+        if self.last.as_ref().map(|(app, _)| *app) != polls {
             self.last = None;
+        }
+        // No answer comes while polling is off, maybe for hours: the count does not wait for one.
+        if polls.is_none() {
+            let line = self.failed_line();
+            self.said.extend(line);
         }
     }
 }
@@ -724,6 +742,39 @@ mod tests {
         // A failed select is no failed poll.
         assert_eq!(follow.selected(T, Err(TabError::Failed)).log, ["tabs: Terminal select failed"]);
         assert!(follow.polled(T, Ok(None), 2_000).log.is_empty());
+    }
+
+    #[test]
+    fn the_failed_polls_are_counted_when_polling_stops() {
+        // No answer comes while another app is in front, maybe for hours: the count does not wait for one.
+        let mut follow = polling();
+        assert!(follow.polled(T, Err(TabError::Failed), 100).log.is_empty());
+        assert!(follow.polled(T, Err(TabError::Failed), 101).log.is_empty());
+        assert!(follow.said().is_empty());
+        follow.front(VS_CODE);
+        assert_eq!(follow.said(), ["tabs: 2 polls failed"]);
+        assert!(follow.said().is_empty());
+        // A call under way as it stopped is counted as it answers.
+        assert_eq!(follow.polled(T, Err(TabError::Failed), 102).log, ["tabs: 1 polls failed"]);
+        // Each stop says it once, and a stop with no failure says nothing.
+        let stops: [fn(&mut TabFollow); 3] =
+            [|follow| follow.attached(false), |follow| follow.watching(false), |follow| follow.front(VS_CODE)];
+        for stop in stops {
+            let mut follow = polling();
+            stop(&mut follow);
+            assert!(follow.said().is_empty());
+            let mut follow = polling();
+            follow.polled(T, Err(TabError::Failed), 300);
+            stop(&mut follow);
+            assert_eq!(follow.said(), ["tabs: 1 polls failed"]);
+            stop(&mut follow);
+            assert!(follow.said().is_empty());
+        }
+        // Turned off, its own line comes with the answer and the count after it.
+        let mut follow = polling();
+        follow.polled(T, Err(TabError::Failed), 300);
+        assert_eq!(follow.polled(T, Err(TabError::Denied), 301).log, ["tabs: Terminal not allowed"]);
+        assert_eq!(follow.said(), ["tabs: 1 polls failed"]);
     }
 
     #[test]

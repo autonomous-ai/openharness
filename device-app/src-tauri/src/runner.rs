@@ -71,10 +71,11 @@ struct TabState {
     ended: bool,
 }
 
-/// The tab thread's next call.
+/// The tab thread's next call, or the lines for the log that came with none.
 enum Call {
     Select(Select),
     Poll(TabApp),
+    Said(Vec<String>),
 }
 
 impl Tabs {
@@ -90,10 +91,14 @@ impl Tabs {
     }
 
     /// Waits for the next call: a waiting select first, else a poll `every` after the last one began. With neither to
-    /// do it waits with no timer. None once the runner has gone.
+    /// do it waits with no timer. None once the runner has gone, and what the rules said before it went is taken first.
     fn next(&self, every: Duration, polled_at: Option<Instant>) -> Option<Call> {
         let mut state = self.state.lock().unwrap();
         loop {
+            let said = state.follow.said();
+            if !said.is_empty() {
+                return Some(Call::Said(said));
+            }
             if state.ended {
                 return None;
             }
@@ -341,17 +346,19 @@ impl Shared {
         while let Some(call) = self.tabs.next(every, polled_at) {
             let start = Instant::now();
             let app = match &call {
-                Call::Select(select) => select.app,
+                Call::Select(select) => Some(select.app),
                 Call::Poll(app) => {
                     polled_at = Some(start);
-                    *app
+                    Some(*app)
                 }
+                Call::Said(_) => None,
             };
             // An Apple Event to an app that is not running would launch it, and the app in front may have just quit.
-            if !scripts.running(app) {
+            if app.is_some_and(|app| !scripts.running(app)) {
                 continue;
             }
             let out = match call {
+                Call::Said(log) => Out { line: None, log },
                 Call::Select(Select { app, tty, frontmost, raise }) => {
                     let done =
                         if raise { scripts.focus_tty(app, &tty) } else { scripts.select_tty(app, &tty, frontmost) };
@@ -1193,6 +1200,26 @@ mod tests {
         let select = "select_tty Terminal /dev/ttys023 front";
         scripts.until(|calls| calls.iter().any(|call| call == select) && polls(calls) >= 3);
         assert_eq!(scripts.most.load(Ordering::SeqCst), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_failed_polls_are_counted_in_the_log_when_another_app_comes_to_the_front() {
+        let scripts = Arc::new(Scripts::default());
+        scripts.ttys.lock().unwrap().push_back(Err(TabError::Failed));
+        let (w, fronts) = world_with_tabs(TERMINAL, &scripts);
+        w.fake.script("hardware watch --json", &ATTACHED);
+        assert_eq!(w.answer(Effect::SpawnWatch), a_dial());
+        scripts.polls(2);
+        fronts.tell(VSCODE);
+        let log = w.fake.log();
+        assert_eq!(w.rest(), [Event::WatchExit(Some(0))]);
+        // Every poll made is counted, well before a minute: one line as it stopped, and one for a call then under way.
+        let polls = scripts.calls(0).iter().filter(|call| call.starts_with("selected_tty")).count();
+        let said: Vec<String> = log.lines().into_iter().filter(|line| line.starts_with("tabs:")).collect();
+        let count = |line: &String| line.strip_prefix("tabs: ")?.strip_suffix(" polls failed")?.parse::<usize>().ok();
+        let counted: Option<Vec<usize>> = said.iter().map(count).collect();
+        assert_eq!(counted.map(|counts| counts.iter().sum()), Some(polls), "{said:?}");
     }
 
     #[cfg(unix)]
