@@ -994,6 +994,7 @@ describe('attaching a session', () => {
         expect(close).not.toHaveBeenCalled()
         expect(run.deps.emit).not.toHaveBeenCalled()
         expect(run.deps.settled).not.toHaveBeenCalled()
+        run.attach.forget(s.sessionId)
       },
     )
 
@@ -1354,6 +1355,180 @@ describe('attaching a session', () => {
       expect(askedEnd(p)).toBeUndefined()
       await p.attach.attachSession(rows[256]!, true)
       expect(askedEnd(p)).toBe(20)
+    })
+
+    // Without an engine worker nothing asked again: in both runs only the SessionStart hook's attach, which happened to
+    // follow, gave the agent a stream at all. The worker's path has its link's retry (core/engines/liveSessions.ts).
+    describe('inline, it is attached again', () => {
+      const fakeTimers = () => vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      /** Lets a real read finish while the fake clock stands still. */
+      const until = async (done: () => boolean): Promise<void> => { do await new Promise(resolve => setImmediate(resolve)); while (!done()) }
+      const reads = (run: ReturnType<typeof setup>) => vi.mocked(run.deps.runtimeProfiles.beginHydrate).mock.calls.length
+      /** The session has been read this many times, and no attach is still running. */
+      const read = (run: ReturnType<typeof setup>, times: number) => until(() => reads(run) === times && !run.attach.attaches.attaching().length)
+      const quiet = () => { vi.spyOn(console, 'log').mockImplementation(() => {}); return vi.spyOn(console, 'warn').mockImplementation(() => {}) }
+
+      it('a second later, to where its read stopped: a line written meanwhile is delivered live', async () => {
+        fakeTimers(); quiet()
+        const watcher = new Watcher(), add = vi.spyOn(watcher, 'addSession')
+        const run = setup({ watcher })
+        const file = transcript([CLAUDE_PROMPT]), row = session('claude', file), end = statSync(file).size
+        const emit = vi.fn(), usage = vi.fn()
+        createIngest({ liveFor, has: () => true, bySession: () => row, device: () => undefined,
+          runtimeProfiles: { ingest: vi.fn() }, tokenUsage: { changed: usage }, normalizers: run.normalizers,
+          announceTurnAborted: vi.fn(), emit, attachSession: run.attach.attachSession }).wireWatcher(watcher)
+        try {
+          supersede(run)
+          expect(await run.attach.attachSession(row)).toBe(true)
+          appendFileSync(file, JSON.stringify(ANSWER) + '\n')
+          expect(vi.getTimerCount()).toBe(1)
+          await vi.advanceTimersByTimeAsync(999)
+          expect(reads(run)).toBe(1)
+          await vi.advanceTimersByTimeAsync(1)
+          await read(run, 2)
+          expect(add).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ sessionId: row.sessionId }), { fromOffset: end })
+          await watcher.pollSession(row.sessionId)
+          expect(usage).toHaveBeenCalledExactlyOnceWith(row)
+          expect(emit).toHaveBeenCalledExactlyOnceWith(row.sessionId, expect.arrayContaining([expect.objectContaining({ type: 'turn_ended' })]))
+        } finally { await watcher.stop() }
+      })
+
+      it('with the replay flags of the attach it follows: a first turn born after its agent is replayed, once', async () => {
+        fakeTimers(); quiet()
+        const run = setup(), row = session('claude', transcript([CLAUDE_PROMPT]))
+        supersede(run)
+        await run.attach.attachSession(row, false, false, true)
+        expect(run.deps.emit).not.toHaveBeenCalled()
+        expect(vi.getTimerCount()).toBe(1)
+        await vi.advanceTimersByTimeAsync(1_000)
+        await read(run, 2)
+        expect(run.deps.emit).toHaveBeenCalledExactlyOnceWith(row.sessionId, [expect.objectContaining({ type: 'turn_started' })])
+        expect(run.attach.replayedFirstTurn.has(row.sessionId)).toBe(true)
+      })
+
+      it('five times at most, 1, 2, 4, 8 and 16 seconds apart, says so once, and starts over with the next attach', async () => {
+        fakeTimers()
+        const warn = quiet()
+        const run = setup(), row = session('claude', transcript([CLAUDE_PROMPT]))
+        vi.mocked(run.deps.runtimeProfiles.beginHydrate).mockReturnValue({ ...run.profile, commitWith: () => false })
+        const gaveUp = () => warn.mock.calls.filter(([line]) => line === '[agent] claude-a transcript not tailed · its attach was superseded 5 times')
+        await run.attach.attachSession(row)
+        for (const [retry, wait] of [1_000, 2_000, 4_000, 8_000, 16_000].entries()) {
+          expect(gaveUp()).toHaveLength(0)
+          expect(vi.getTimerCount()).toBe(1)
+          await vi.advanceTimersByTimeAsync(wait - 1)
+          expect(reads(run)).toBe(retry + 1)
+          await vi.advanceTimersByTimeAsync(1)
+          await read(run, retry + 2)
+        }
+        expect(gaveUp()).toHaveLength(1)
+        expect(vi.getTimerCount()).toBe(0)
+        // A hook's attach, or the reconcile's, superseded in its turn: the count starts again.
+        await run.attach.attachSession(row)
+        expect(reads(run)).toBe(7)
+        expect(vi.getTimerCount()).toBe(1)
+        await vi.advanceTimersByTimeAsync(1_000)
+        await read(run, 8)
+        expect(gaveUp()).toHaveLength(1)
+        run.attach.forget(row.sessionId)
+        expect(vi.getTimerCount()).toBe(0)
+      })
+
+      it('one at a time for a session, and it joins an attach already reading', async () => {
+        fakeTimers(); quiet()
+        const run = setup(), row = session('claude', transcript([CLAUDE_PROMPT]))
+        supersede(run); supersede(run)
+        await run.attach.attachSession(row)
+        // A hook's reset, superseded as well: the retry already waiting is the session's one.
+        await run.attach.attachSession(row, true)
+        expect(vi.getTimerCount()).toBe(1)
+        let finish!: () => void
+        vi.mocked(run.deps.terminalGone).mockImplementationOnce(() => new Promise(resolve => { finish = () => resolve(false) }))
+        const hooked = run.attach.attachSession(row)
+        await vi.advanceTimersByTimeAsync(1_000)
+        finish()
+        expect(await hooked).toBe(true)
+        await read(run, 3)
+        expect(run.deps.watcher.addSession).toHaveBeenCalledOnce()
+        expect(vi.getTimerCount()).toBe(0)
+      })
+
+      it.each(['tailed', 'rebound', 'forgotten'] as const)('never once the session is %s', async change => {
+        fakeTimers(); quiet()
+        const run = setup(), row = session('claude', transcript([CLAUDE_PROMPT]))
+        supersede(run)
+        await run.attach.attachSession(row)
+        if (change === 'tailed') vi.mocked(run.deps.watcher.tails).mockReturnValue(true)
+        if (change === 'rebound') bindings.set(row.agentId, { ...row, boundAt: 2 })
+        if (change === 'forgotten') run.attach.forget(row.sessionId)
+        expect(vi.getTimerCount()).toBe(change === 'forgotten' ? 0 : 1)
+        await vi.advanceTimersByTimeAsync(60_000)
+        expect(run.deps.terminalGone).toHaveBeenCalledOnce()
+        expect(vi.getTimerCount()).toBe(0)
+      })
+
+      it('counts from one second again once a tail was installed, and waits no more once an attach made sure the tail runs', async () => {
+        fakeTimers(); quiet()
+        const run = setup(), row = session('claude', transcript([CLAUDE_PROMPT])), add = vi.mocked(run.deps.watcher.addSession)
+        supersede(run)
+        await run.attach.attachSession(row)
+        expect(vi.getTimerCount()).toBe(1)
+        // The hook's attach installs the tail before the retry is due.
+        await run.attach.attachSession(row, true)
+        expect(add).toHaveBeenCalledOnce()
+        expect(vi.getTimerCount()).toBe(0)
+        // Later a reset is superseded with that tail gone. Its retry is one second away, not two; the session has its
+        // parser, so the retry only makes sure the tail runs.
+        supersede(run)
+        await run.attach.attachSession(row, true)
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(vi.getTimerCount()).toBe(0)
+        await until(() => add.mock.calls.length === 2)
+        expect(add).toHaveBeenLastCalledWith(expect.objectContaining({ sessionId: row.sessionId }), { fromStart: false })
+        expect(reads(run)).toBe(3)
+        // Superseded once more, and a hook's attach makes sure the tail runs before the retry is due.
+        supersede(run)
+        await run.attach.attachSession(row, true)
+        expect(vi.getTimerCount()).toBe(1)
+        await run.attach.attachSession(row)
+        expect(add).toHaveBeenCalledTimes(3)
+        expect(vi.getTimerCount()).toBe(0)
+      })
+
+      it('never for an engine worker\'s attach, a tail it held, or an interpretation recovery', async () => {
+        fakeTimers(); quiet()
+        const worker = remoteSetup(), s = session('claude', '/private/transcript')
+        vi.mocked(worker.remote.install).mockReturnValueOnce(false)
+        await worker.attach.attachSession(s)
+        expect(vi.getTimerCount()).toBe(0)
+        const held = setup(), tailed = session('claude', transcript([CLAUDE_PROMPT]), { agentId: 'held', sessionId: 'held-s' })
+        supersede(held)
+        vi.mocked(held.deps.watcher.hold).mockResolvedValueOnce({ offset: 1_000_000, expired: false, release: vi.fn() })
+        await held.attach.attachSession(tailed, true)
+        expect(vi.getTimerCount()).toBe(0)
+        const recovery = setup(), pending = session('claude', transcript([]), { agentId: 'recovery', sessionId: 'recovery-s', evidenceRevision: 2, interpretationHold: 'pending' })
+        vi.mocked(recovery.deps.runtimeProfiles.beginHydrate).mockReturnValue({ ...recovery.profile, commitWith: () => false })
+        await recovery.attach.attachSession(pending)
+        expect(pending.interpretationHold).toContain('superseded during watcher installation')
+        // The recovery's own retry, one per conversation, and no other.
+        expect(vi.getTimerCount()).toBe(1)
+        recovery.attach.forget(pending.sessionId)
+        expect(vi.getTimerCount()).toBe(0)
+      })
+
+      it.each([new Error('probe failed'), 'probe failed'])('says when it fails: %s', async error => {
+        fakeTimers(); quiet()
+        const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+        const run = setup(), row = session('claude', transcript([CLAUDE_PROMPT]))
+        supersede(run)
+        await run.attach.attachSession(row)
+        expect(vi.getTimerCount()).toBe(1)
+        vi.mocked(run.deps.terminalGone).mockRejectedValueOnce(error)
+        await vi.advanceTimersByTimeAsync(1_000)
+        await until(() => log.mock.calls.length > 0)
+        expect(log.mock.calls).toEqual([['[agent] claude-a attach retry failed: probe failed']])
+        expect(vi.getTimerCount()).toBe(0)
+      })
     })
   })
 })
