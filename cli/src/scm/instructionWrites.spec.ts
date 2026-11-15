@@ -60,7 +60,7 @@ describe('the files an SCM is asked to prepare before Harness writes instruction
       rmSync(ws, { recursive: true, force: true })
       mkdirSync(ws)
       const before = snapshot()
-      prepareApiInstructions(store, ws, engine)
+      prepareApiInstructions(store, ws, engine, root)
       const written = touched(before)
       // OpenClaw reads its own workspace's instructions, never the pane folder's: it gets no notes there.
       if (engine === 'openclaw') { expect(written).toEqual([]); continue }

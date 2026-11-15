@@ -36,6 +36,9 @@ const LINES_QUEUED: usize = 16;
 /// How long a child's end waits for its stderr to end too, so the log has its last line. The stream ends with the child
 /// unless something it left behind holds it open.
 const STDERR_GRACE: Duration = Duration::from_secs(1);
+/// The one line of a child's stderr its log carries as it comes: the watch says only there that a newer one took its
+/// tabs stream, and goes on. Any other stderr is outside text and stays out of the log but for a failure's last line.
+const LOGGED_STDERR: &str = "tabs stream replaced";
 
 /// How to run the CLI: `program`, then `prefix`, then the arguments, with `env` on top of the app's own.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -137,8 +140,8 @@ pub fn run(mut command: Command, deadline: Duration) -> io::Result<Output> {
     };
     let pid = child.id() as libc::pid_t;
     let (done, finished) = mpsc::channel();
-    let stdout = tail(child.stdout.take().expect("stdout is piped"), done.clone());
-    let stderr = tail(child.stderr.take().expect("stderr is piped"), done.clone());
+    let stdout = tail(child.stdout.take().expect("stdout is piped"), done.clone(), || {});
+    let stderr = tail(child.stderr.take().expect("stderr is piped"), done.clone(), || {});
     thread::spawn(move || {
         exited(pid);
         let _ = done.send(());
@@ -245,7 +248,8 @@ impl Child {
         let (send, lines) = mpsc::sync_channel(LINES_QUEUED);
         thread::spawn(move || read_lines(stdout, |line| send.send(line).is_ok()));
         let (stderr_done, stderr_ended) = mpsc::channel();
-        let stderr = tail(child.stderr.take().expect("stderr is piped"), stderr_done);
+        let logged = (log.clone(), format!("{name}: {LOGGED_STDERR}"));
+        let stderr = tail(child.stderr.take().expect("stderr is piped"), stderr_done, move || logged.0.line(&logged.1));
         let killer = Killer(Arc::new(Unreaped { pid: Mutex::new(Some(pid)), reaped: Condvar::new() }));
         let unreaped = killer.0.clone();
         let (send_exit, exit) = mpsc::channel();
@@ -391,16 +395,29 @@ fn kill_group(pid: libc::pid_t) {
 
 type Tail = Arc<Mutex<VecDeque<u8>>>;
 
-/// Reads `stream` to its end on a thread, keeping its last TAIL_MAX bytes, then says so on `done`.
-fn tail(mut stream: impl Read + Send + 'static, done: mpsc::Sender<()>) -> Tail {
+/// Reads `stream` to its end on a thread, keeping its last TAIL_MAX bytes, then says so on `done`. `logged` is called
+/// for each line that is LOGGED_STDERR exactly.
+fn tail(mut stream: impl Read + Send + 'static, done: mpsc::Sender<()>, logged: impl Fn() + Send + 'static) -> Tail {
     let kept = Tail::default();
     let writer = kept.clone();
     thread::spawn(move || {
         let mut chunk = [0; 8192];
+        // The line so far, held only to one byte past LOGGED_STDERR: a longer line is not it.
+        let mut line = Vec::with_capacity(LOGGED_STDERR.len() + 1);
         loop {
             match stream.read(&mut chunk) {
                 Ok(0) => break,
                 Ok(read) => {
+                    for &byte in &chunk[..read] {
+                        if byte == b'\n' {
+                            if line == LOGGED_STDERR.as_bytes() {
+                                logged();
+                            }
+                            line.clear();
+                        } else if line.len() <= LOGGED_STDERR.len() {
+                            line.push(byte);
+                        }
+                    }
                     let mut kept = writer.lock().unwrap();
                     kept.extend(&chunk[..read]);
                     let over = kept.len().saturating_sub(TAIL_MAX);
@@ -764,6 +781,60 @@ mod tests {
         let mut child = fake.cli().spawn(&WATCH).unwrap();
         assert_eq!(child.exit(WAIT), Ok(Some(3)));
         assert_eq!(fake.log().lines(), ["harness hardware watch --json: exit 3: gone"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_watch_logs_its_replaced_stream_as_it_comes_and_no_other_stderr() {
+        let fake = Fake::new();
+        fake.script(
+            "hardware watch --json",
+            &["@err tabs stream replaced", "@err /dev/ttys001 iterm", "@err tabs stream replaced!", "started", "@hang"],
+        );
+        let mut child = fake.cli().spawn(&WATCH).unwrap();
+        assert_eq!(child.line(WAIT), Ok(Some("started".into())));
+        // Its end waits for stderr's, so the line, logged as it is read, comes first.
+        child.killer().kill();
+        assert_eq!(child.exit(WAIT), Ok(None));
+        assert_eq!(
+            fake.log().lines(),
+            [
+                "harness hardware watch --json: tabs stream replaced",
+                "harness hardware watch --json: killed by a signal"
+            ]
+        );
+    }
+
+    /// A stream that hands on each chunk it is sent, as one read, and ends once its sender is gone.
+    struct Chunks(mpsc::Receiver<Vec<u8>>);
+
+    impl Read for Chunks {
+        fn read(&mut self, into: &mut [u8]) -> io::Result<usize> {
+            let Ok(chunk) = self.0.recv() else { return Ok(0) };
+            into[..chunk.len()].copy_from_slice(&chunk);
+            Ok(chunk.len())
+        }
+    }
+
+    #[test]
+    fn the_replaced_line_is_found_across_reads_and_only_whole() {
+        let (send, chunks) = mpsc::channel();
+        let (done, ended) = mpsc::channel();
+        let (logged, said) = mpsc::channel();
+        tail(Chunks(chunks), done, move || logged.send(()).unwrap());
+        // Split across reads, and found before the stream ends.
+        send.send(b"tabs str".to_vec()).unwrap();
+        send.send(b"eam replaced\n".to_vec()).unwrap();
+        assert_eq!(said.recv_timeout(WAIT), Ok(()));
+        // A line that starts or ends with it, or holds it far into a long one, is not it.
+        send.send(b"tabs stream replaced!\nx tabs stream replaced\n".to_vec()).unwrap();
+        let long = [b"tabs stream replaced".repeat(400), b"\n".to_vec()].concat();
+        send.send(long[..4096].to_vec()).unwrap();
+        send.send(long[4096..].to_vec()).unwrap();
+        send.send(b"tabs stream replaced\n".to_vec()).unwrap();
+        drop(send);
+        assert_eq!(ended.recv_timeout(WAIT), Ok(()));
+        assert_eq!(said.try_iter().count(), 1);
     }
 
     #[cfg(unix)]
