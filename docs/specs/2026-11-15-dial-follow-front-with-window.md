@@ -106,7 +106,8 @@ or that app". The settle reaches the host through a callback, so the view change
 Today `voice.begin` sends plain dictation to the agent the window has in focus whenever the window reports one
 (`cableSession.ts`, `host.appFocus()`), whatever agent the dial shows. In the `apps` view the words go to the agent on
 the dial's face, as with no window: the host answers no window focus for an `appFilter` dial in the `apps` view. In the
-`tabs` view, and for an older dial, nothing changes.
+`tabs` view, and for an older dial, nothing changes. Words spoken to an agent reach it whatever the view when they are
+delivered: Harness settling in front between the words and their delivery does not refuse them (the PM, 2026-11-15).
 
 ### The agents outside a pane (`devices.ts`)
 

@@ -1038,11 +1038,11 @@ export class DaemonCableHost implements CableHost {
    * the refusal for a machine whose last request did not come back. See the router's sendTurn.
    */
   sendTurn(agentId: string, text: string): SendOutcome | Promise<SendOutcome> {
-    // A Promise only when another app's source delivers the words, which it answers once they are typed or refused. Not
-    // asked per dial: such an agent takes words while the dials that say `appFilter` are on an app's ring, and none on
-    // the window's tab.
-    const on = this.onMachine(agentId, { apps: true })
-    if (on && on.source.id !== 'harness' && on.source.send) {
+    // A Promise only when another app's source delivers the words, which it answers once they are typed or refused.
+    // Whatever the view when they are delivered: words spoken on an app's ring still reach their agent after Harness
+    // settles in front, as a tap (focus) and a swipe (swipeEnded) do.
+    const on = this.outsideEntry(agentId)
+    if (on?.source.send) {
       return on.source.send(on.agent, text).then((sent) => sent.ok ? sent : { ok: false, machine: '', reason: sent.reason, message: sent.reason })
     }
     if (this.outside(agentId)) return { ok: false, machine: this.wiring.machineName(), reason: 'it runs outside Harness' }
