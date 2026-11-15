@@ -74,7 +74,7 @@ shows its pane in tmux and brings its terminal app forward. An agent in a tmux p
   whose pane it is first (`tmux -V` and one `display-message`). The pull request gives that number, measured.
 - A session in a tmux pane keeps no Orca handle (PM, 2026-11-15): a tmux started inside an Orca terminal passes
   `ORCA_TERMINAL_HANDLE` to its panes, and words typed through Orca would land in tmux's active pane. Its voice is the
-  mod's only.
+  mod's (Claude Code) or `codex queue`'s (Codex, #4334) only.
 - `HOST_HINTS` gains `TMUX_PANE`. The body sends at most `MAX_HINTS` (10) of the hints set, in the list's order, so it
   never sends more than the core's observed route takes (`core/observedHook.ts` refuses a body with more). The order puts
   the nearer hosts first.
@@ -109,8 +109,9 @@ shows its pane in tmux and brings its terminal app forward. An agent in a tmux p
   gets a terminal tab only while the tab app is its nearest host, so no tab select is sent for it; the tmux pane
   decides (final review, 2026-11-15).
 
-**Voice.** Through the mod only, as for any agent outside a pane (`ObservedSource.send`). Nothing is typed into a tmux
-pane the person owns: `tmux send-keys` for an agent with no mod is not in this work.
+**Voice.** As for any agent outside a pane (`ObservedSource.send`): Claude Code's through its mod, Codex's through
+`codex queue` (#4334, which types nothing). Nothing is typed into a tmux pane the person owns: `tmux send-keys` for an
+agent with neither is not in this work.
 
 ## F2. A tap opens a Harness agent with the app closed
 
