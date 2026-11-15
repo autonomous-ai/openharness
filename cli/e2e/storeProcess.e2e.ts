@@ -10,7 +10,7 @@
  */
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
@@ -51,8 +51,10 @@ const disconnected = (d: IsolatedDaemon) => d.log().split('[services] store disc
 const row = async (client: LocalClient, agentId: string) =>
   ((await client.request<{ agents: Array<Record<string, any>> }>('agents_list', { includeStopped: true }, 30_000)).agents)
     .find((agent) => agent.id === agentId)
+/** A workspace where Harness makes them (lib/projectFolder.ts `projectsRoot`); a folder elsewhere is the person's. */
+const madeByHarness = (d: IsolatedDaemon, folder: string): string => join(d.env.HOME!, 'harnesses', folder)
 async function create(d: IsolatedDaemon, client: LocalClient, folder: string, dsh?: string, engine: 'claude' | 'codex' = 'claude', codexHome?: string): Promise<Record<string, any>> {
-  const cwd = join(d.projectsDir, folder)
+  const cwd = isAbsolute(folder) ? folder : join(d.projectsDir, folder)
   mkdirSync(cwd, { recursive: true })
   const created = await client.request('agent_create', { engine, cwd, bypassPermission: true, ...(dsh ? { dsh } : {}), ...(codexHome ? { codexHome } : {}) }, 90_000)
   expect(created.error, JSON.stringify(created)).toBeUndefined()
@@ -154,7 +156,7 @@ describe('the Store in its own process, beside the viewers', () => {
     expect(await client.request('dsh_install', { url: repository(d) }, 180_000)).toMatchObject({ ok: true })
     const profile = join(d.root, 'held-codex-profile')
     mkdirSync(profile)
-    const agents = [await create(d, client, 'held-claude', HARNESS), await create(d, client, 'held-codex', HARNESS, 'codex', profile)]
+    const agents = [await create(d, client, madeByHarness(d, 'held-claude'), HARNESS), await create(d, client, 'held-codex', HARNESS, 'codex', profile)]
     const stopped = await create(d, client, 'stop-while-store-is-held', HARNESS)
     for (const agent of [...agents, stopped]) await turn(client, agent.id, 'before the reboot')
     const hold = join(d.root, 'hold-store')
@@ -165,7 +167,7 @@ describe('the Store in its own process, beside the viewers', () => {
     await d.tmux.run('kill-server')
     // Make pending instruction/profile work observable. Neither a Store outage nor a held retry
     // may perform it before the package preparation succeeds. Every path is private to this daemon.
-    const instructionFiles = [join(d.projectsDir, 'held-claude', 'CLAUDE.md'), join(d.projectsDir, 'held-codex', 'AGENTS.md')]
+    const instructionFiles = [join(madeByHarness(d, 'held-claude'), 'CLAUDE.md'), join(d.projectsDir, 'held-codex', 'AGENTS.md')]
     const instructionsBefore = instructionFiles.map(file => readFileSync(file, 'utf8'))
     const profileHooks = join(profile, 'hooks.json')
     const profileBefore = JSON.stringify({ fixtureOwner: 'preserve' })
@@ -210,7 +212,10 @@ describe('the Store in its own process, beside the viewers', () => {
       }, 90_000, 250)
       await turn(client, agent.id, 'after Store recovery')
     }
-    for (const file of instructionFiles) expect(readFileSync(file, 'utf8')).toContain('<!-- harness:apis -->')
+    // The saved APIs' note goes into the workspace Harness made, and never into the folder the person chose (core
+    // audit, security 9).
+    expect(readFileSync(instructionFiles[0], 'utf8')).toContain('<!-- harness:apis -->')
+    expect(readFileSync(instructionFiles[1], 'utf8')).not.toContain('<!-- harness:apis -->')
     expect(readFileSync(profileHooks, 'utf8')).toContain('SessionStart')
     expect(await row(client, stopped.id)).toMatchObject({ status: 'stopped', sessionId: stopped.sessionId })
     expect(d.log()).not.toContain('could not build its launch')

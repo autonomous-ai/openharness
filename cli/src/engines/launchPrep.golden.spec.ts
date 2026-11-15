@@ -503,8 +503,8 @@ function instructionCases(): Record<string, unknown> {
         mkdirSync(ws)
         const file = engine === 'claude' ? 'CLAUDE.md' : engine === 'gemini' ? 'GEMINI.md' : 'AGENTS.md'
         setup(ws, file)
-        const first = attempt(() => { prepareApiInstructions(store, ws, engine); return 'done' })
-        const second = attempt(() => { prepareApiInstructions(store, ws, engine); return 'done' })
+        const first = attempt(() => { prepareApiInstructions(store, ws, engine, dir); return 'done' })
+        const second = attempt(() => { prepareApiInstructions(store, ws, engine, dir); return 'done' })
         cases[`apis · ${engine} · ${state} · ${apis}`] = { first, second, files: snapshot(dir) }
       }
     }

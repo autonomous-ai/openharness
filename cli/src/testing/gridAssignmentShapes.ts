@@ -23,6 +23,7 @@ export function gridAssignmentShapes(dataDir: string) {
       return process ? (await port.gridAssignments([process]))[0].assignment : null
     },
     list: () => store.list(),
-    instructions: (workspace: string, engine: string) => prepareApiInstructions(store, workspace, engine),
+    // The spec's workspaces are made in its data folder, which stands for where Harness makes them.
+    instructions: (workspace: string, engine: string) => prepareApiInstructions(store, workspace, engine, dataDir),
   }
 }

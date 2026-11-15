@@ -40,6 +40,9 @@ export interface LaunchWorld {
   setGridLaunch: (agentId: string, record: unknown) => void
   /** This account's private grid, as the socket knows it (BackendSocket.gridName). */
   gridName?: () => string | null
+  /** Where Harness makes workspaces here (lib/projectFolder.ts `projectsRoot`, the core's): the saved APIs' note goes
+   *  only into a folder below it. */
+  projectsRoot?: string
 }
 
 /** What `create` needs besides the launch: the spec's stubs for the pane, the registry and the rest. */
@@ -52,7 +55,7 @@ export function launchShapes(world: LaunchWorld) {
   const gridName = world.gridName ?? (() => null)
   const prepareApiTools = (cwd: string | null | undefined, engine: string): void => {
     if (!cwd) return
-    try { prepareApiInstructions(savedApis, cwd, engine) }
+    try { prepareApiInstructions(savedApis, cwd, engine, world.projectsRoot) }
     catch { console.warn('[apis] Tool instructions could not be added. Saved connections remain available through harness api.') }
   }
   // The models service's side of the launch port: what its port answers the core with (services/models.ts), across
