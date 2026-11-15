@@ -36,6 +36,9 @@ const LINES_QUEUED: usize = 16;
 /// How long a child's end waits for its stderr to end too, so the log has its last line. The stream ends with the child
 /// unless something it left behind holds it open.
 const STDERR_GRACE: Duration = Duration::from_secs(1);
+/// The one line of a child's stderr its log carries as it comes: the watch says only there that a newer one took its
+/// tabs stream, and goes on. Any other stderr is outside text and stays out of the log but for a failure's last line.
+const LOGGED_STDERR: &str = "tabs stream replaced";
 
 /// How to run the CLI: `program`, then `prefix`, then the arguments, with `env` on top of the app's own.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -137,8 +140,8 @@ pub fn run(mut command: Command, deadline: Duration) -> io::Result<Output> {
     };
     let pid = child.id() as libc::pid_t;
     let (done, finished) = mpsc::channel();
-    let stdout = tail(child.stdout.take().expect("stdout is piped"), done.clone());
-    let stderr = tail(child.stderr.take().expect("stderr is piped"), done.clone());
+    let stdout = tail(child.stdout.take().expect("stdout is piped"), done.clone(), || {});
+    let stderr = tail(child.stderr.take().expect("stderr is piped"), done.clone(), || {});
     thread::spawn(move || {
         exited(pid);
         let _ = done.send(());
@@ -245,7 +248,8 @@ impl Child {
         let (send, lines) = mpsc::sync_channel(LINES_QUEUED);
         thread::spawn(move || read_lines(stdout, |line| send.send(line).is_ok()));
         let (stderr_done, stderr_ended) = mpsc::channel();
-        let stderr = tail(child.stderr.take().expect("stderr is piped"), stderr_done);
+        let logged = (log.clone(), format!("{name}: {LOGGED_STDERR}"));
+        let stderr = tail(child.stderr.take().expect("stderr is piped"), stderr_done, move || logged.0.line(&logged.1));
         let killer = Killer(Arc::new(Unreaped { pid: Mutex::new(Some(pid)), reaped: Condvar::new() }));
         let unreaped = killer.0.clone();
         let (send_exit, exit) = mpsc::channel();
@@ -391,16 +395,29 @@ fn kill_group(pid: libc::pid_t) {
 
 type Tail = Arc<Mutex<VecDeque<u8>>>;
 
-/// Reads `stream` to its end on a thread, keeping its last TAIL_MAX bytes, then says so on `done`.
-fn tail(mut stream: impl Read + Send + 'static, done: mpsc::Sender<()>) -> Tail {
+/// Reads `stream` to its end on a thread, keeping its last TAIL_MAX bytes, then says so on `done`. `logged` is called
+/// for each line that is LOGGED_STDERR exactly.
+fn tail(mut stream: impl Read + Send + 'static, done: mpsc::Sender<()>, logged: impl Fn() + Send + 'static) -> Tail {
     let kept = Tail::default();
     let writer = kept.clone();
     thread::spawn(move || {
         let mut chunk = [0; 8192];
+        // The line so far, held only to one byte past LOGGED_STDERR: a longer line is not it.
+        let mut line = Vec::with_capacity(LOGGED_STDERR.len() + 1);
         loop {
             match stream.read(&mut chunk) {
                 Ok(0) => break,
                 Ok(read) => {
+                    for &byte in &chunk[..read] {
+                        if byte == b'\n' {
+                            if line == LOGGED_STDERR.as_bytes() {
+                                logged();
+                            }
+                            line.clear();
+                        } else if line.len() <= LOGGED_STDERR.len() {
+                            line.push(byte);
+                        }
+                    }
                     let mut kept = writer.lock().unwrap();
                     kept.extend(&chunk[..read]);
                     let over = kept.len().saturating_sub(TAIL_MAX);
@@ -781,7 +798,10 @@ mod tests {
         assert_eq!(child.exit(WAIT), Ok(None));
         assert_eq!(
             fake.log().lines(),
-            ["harness hardware watch --json: tabs stream replaced", "harness hardware watch --json: killed by a signal"]
+            [
+                "harness hardware watch --json: tabs stream replaced",
+                "harness hardware watch --json: killed by a signal"
+            ]
         );
     }
 
