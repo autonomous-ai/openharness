@@ -81,7 +81,7 @@ No file under `cli/src/core/` changes, and `cli/src/architecture.coreFiles.txt` 
 
 ## Review Focus
 
-1. **`CODEX_PATH` names a file that is gone, while another `codex` is on `PATH`.** Harness would not launch that other one, so the queue must not run it either: Codex keeps today's route. And a `codex` installed later is found with no restart. Task 1, `the binary is the Codex Harness launches, asked each time`. (A `codex` only on the login shell's `PATH` keeps today's route: decided, PM.)
+1. **`CODEX_PATH` names a file that is gone, while another `codex` is on `PATH`.** Harness would not launch that other one, so the queue must not run it either: Codex keeps today's route. And a `codex` installed later is found with no restart. Task 1, `the binary is the Codex Harness launches, looked for again after 30 s`. (A `codex` only on the login shell's `PATH` keeps today's route: decided, PM.)
 2. **The queued words' turn starts before `codex queue` has exited** (a turn within 0.4 s with Codex's daemon; the command runs 0.1 to 0.45 s). Its hook must find the dial's prompt already recorded, or the dial turns to its own words. Task 2, `the turn that starts while codex queue still runs is the dial's`.
 3. **`codex` ends with no exit code and no deadline:** killed by a signal, or its output over the buffer. That is not a definite failure, so nothing is typed. Task 1, `a codex killed by a signal answers timeout, never failed`.
 4. **A Codex session the open scan found, before any hook.** It has its row's transcript and no handle. It takes voice. Task 2, `a Codex session the open scan found takes voice before its first hook`.
@@ -153,7 +153,7 @@ No file under `cli/src/core/` changes, and `cli/src/architecture.coreFiles.txt` 
   - `run ends its codex's stdin at once`: `fakeCodex('cat > /dev/null')` answers `0`.
   - `a second send for the same thread while one runs is busy and runs nothing; another thread's runs; the thread is free again after queued, failed and timeout`: the second answer is `{ outcome: 'busy' }`.
   - `can() is whether the binary is there, asked each time, and false on Windows`: a `binary` that answers null, then a path; `platform: 'win32'` is false, and `send` there is `{ outcome: 'failed', reason: 'no binary' }` with no run.
-  - `the binary is the Codex Harness launches, asked each time`, on the real `codexQueueDeps().binary`, in a temp folder `dir`:
+  - `the binary is the Codex Harness launches, looked for again after 30 s`, on the real `codexQueueDeps().binary`, in a temp folder `dir`:
     - `vi.stubEnv('CODEX_PATH', '')` and `vi.stubEnv('PATH', dir)`: null; then `join(dir, 'codex')` once that file exists and can be run.
     - `vi.stubEnv('CODEX_PATH', join(dir, 'other', 'my-codex'))`: null while that file is missing, though `join(dir, 'codex')` is on `PATH`; then that path once it exists and can be run.
 - [ ] **Step 2: Run** `cd cli && npx vitest run src/cable/hosts/codexQueue.spec.ts`. Expected: FAIL (no `./codexQueue.js`).
