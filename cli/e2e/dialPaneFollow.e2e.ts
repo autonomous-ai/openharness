@@ -31,6 +31,8 @@ interface Run { args: string; at: number }
 // How `harness hardware watch` is started: the run's bundle when there is one (E2E_BUNDLE), as the daemon runs.
 const CLI_ENTRY = process.env.E2E_BUNDLE_PATH ? [process.env.E2E_BUNDLE_PATH] : ['--import', 'tsx', 'src/cli.ts']
 
+/** What the round dial's firmware says in its greeting: it holds one app's ring (docs/specs/2026-11-14-dial-app-filter.md). */
+const FILTER = { appFilter: 'v1' }
 const ORCA = 'com.stablyai.orca'
 const CLAUDE_APP = 'com.anthropic.claudefordesktop'
 const RELAYED = '<cross-session-message from="b">hi</cross-session-message>'
@@ -53,8 +55,8 @@ describe('the dial and the apps follow each other', () => {
   })
 
   /** A daemon of its own, the fake `orca` in its `bin` before it starts, and the dial on the desk shown its first list.
-   *  [env] and [before], run on the created daemon before it starts, are a case's own. */
-  const fresh = async ({ env = {}, before }: { env?: Record<string, string>; before?: (d: IsolatedDaemon) => void } = {}) => {
+   *  [env] and [before], run on the created daemon before it starts, and what the dial's greeting names, are a case's own. */
+  const fresh = async ({ env = {}, before, capabilities }: { env?: Record<string, string>; before?: (d: IsolatedDaemon) => void; capabilities?: Record<string, string> } = {}) => {
     const d = await IsolatedDaemon.create({ env: { CABLE_DISABLE: 'false', ...env } })
     daemon = d
     const file = join(d.root, 'dials.json')
@@ -68,7 +70,7 @@ describe('the dial and the apps follow each other', () => {
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-200).join('\n')}`) })
     before?.(d)
     await d.start()
-    const dial = await desk.plug('E2E-A', 'e2:e0:00:00:00:0a')
+    const dial = await desk.plug('E2E-A', 'e2:e0:00:00:00:0a', capabilities)
     await dial.next((m) => m.t === 'agents.end', 45_000, 'the first list')
     const runs = (): Run[] => readdirSync(runsDir).map((name) => {
       const path = join(runsDir, name)
@@ -106,14 +108,22 @@ describe('the dial and the apps follow each other', () => {
     watch.stdin!.write(`${JSON.stringify({ front: bundle })}\n`)
   }
 
-  /** [claude]'s typed prompt, again every 500 ms until the dial hears its agent's focus. The front settles 1 s after the
-   *  watch's line, with no frame to wait on: a prompt before it is skipped, and one after the move finds the dial there. */
-  const typedUntilMoved = (dial: FakeDial, claude: InOrca): Promise<true> => {
+  /** The daemon's prompt lines, each from its `[device]` on: one for each turn's start while a dial is linked. */
+  const promptLines = (d: IsolatedDaemon): string[] =>
+    d.log().split('\n').filter((line) => line.includes('[device] prompt · ')).map((line) => line.slice(line.indexOf('[device]')))
+  const moved = (d: IsolatedDaemon): number => promptLines(d).filter((line) => line === '[device] prompt · moved').length
+
+  /** [claude]'s typed prompt, again each time its line says it was skipped, until one moves the dial, then its focus. The
+   *  front settles 1 s after the watch's line, with no frame to wait on. Each prompt waits for its own line, so a retry is
+   *  never sent while a move is under way, and the call counts one move. */
+  const typedUntilMoved = async (d: IsolatedDaemon, dial: FakeDial, claude: InOrca): Promise<void> => {
     const since = dial.messages.length
-    return until("the dial turned to the prompt's agent", async () => {
+    await until("the prompt's move", async () => {
+      const told = promptLines(d).length
       await claude.hook('UserPromptSubmit', { prompt: 'run the tests' })
-      return dial.messages.slice(since).some((m) => m.t === 'focus' && m.agentId === claude.id)
+      return await until("the prompt's line", () => promptLines(d)[told], 30_000, 50) === '[device] prompt · moved'
     }, 60_000, 500)
+    await dial.next((m) => m.t === 'focus' && m.agentId === claude.id, 30_000, "the prompt's agent's focus", since)
   }
 
   /** Two sessions in Orca terminals, listed, and the dial turned to the first by hand, its rest over. */
@@ -180,47 +190,59 @@ describe('the dial and the apps follow each other', () => {
   })
 
   it('a prompt typed in Orca, with Orca in front, moves the dial to its agent', async () => {
-    const { d, dial } = await fresh()
+    const { d, dial } = await fresh({ capabilities: FILTER })
     const a = inOrca(d, 'a').claude
     const b = inOrca(d, 'b').claude
     await turnedToFirst(d, dial, a, b)
     front(d, ORCA)
-    await typedUntilMoved(dial, b)
-    await said(d, '[device] prompt · moved')
+    await typedUntilMoved(d, dial, b)
+    expect(moved(d)).toBe(1)
   })
 
   it('a message from another session does not move it', async () => {
-    const { d, dial } = await fresh()
+    const { d, dial } = await fresh({ capabilities: FILTER })
     const a = inOrca(d, 'a').claude
     const b = inOrca(d, 'b').claude
     await turnedToFirst(d, dial, a, b)
     front(d, ORCA)
     // Orca has settled in front and the dial is on B: A's typed prompt would move it now.
-    await typedUntilMoved(dial, b)
+    await typedUntilMoved(d, dial, b)
     const since = dial.messages.length
     await a.hook('UserPromptSubmit', { prompt: RELAYED })
     await said(d, '[device] prompt · skipped · relayed')
-    expect(dial.messages.slice(since).filter((m) => m.t === 'focus' && m.agentId === a.id)).toEqual([])
+    // A's typed prompt then moves it, the one move since: a focus the relayed one sent late would come before it.
+    const typed = dial.messages.length
+    await typedUntilMoved(d, dial, a)
+    expect(dial.messages.slice(since, typed).filter((m) => m.t === 'focus' && m.agentId === a.id)).toEqual([])
+    expect(moved(d)).toBe(2)
   })
 
   it('a prompt in the Claude app, with the Claude app in front, moves the dial', async () => {
-    const { d, dial } = await fresh()
+    const { d, dial } = await fresh({ capabilities: FILTER })
     const a = inOrca(d, 'a').claude
     // The Claude app's own session: no Orca terminal around it.
     const c = new InOrca(d, 'c', children, { __CFBundleIdentifier: CLAUDE_APP, ORCA_AGENT_SESSION_ID: '' })
-    await turnedToFirst(d, dial, a, c)
+    // The dial on A, in Orca's ring, by hand.
+    await listed(dial, a)
+    dial.send({ t: 'focus', agentId: a.id })
+    await said(d, '[device] swipe · ok')
+    // C has a ring of its own: the dial is shown it once the Claude app has settled in front.
+    const since = dial.messages.length
+    await c.hook('SessionStart', { source: 'startup' })
     front(d, CLAUDE_APP)
-    await typedUntilMoved(dial, c)
-    await said(d, '[device] prompt · moved')
+    await dial.next((m) => m.t === 'apps' && m.shown === 'claude', 45_000, "the Claude app's ring", since)
+    await dial.next((m) => m.t === 'agent' && m.id === c.id, 45_000, 'C listed', since)
+    await typedUntilMoved(d, dial, c)
+    expect(moved(d)).toBe(1)
   })
 
   it("the daemon's log has no bundle id, no session id, no handle and no word of a prompt", async () => {
-    const { d, dial } = await fresh()
+    const { d, dial } = await fresh({ capabilities: FILTER })
     const a = inOrca(d, 'a')
     const b = inOrca(d, 'b')
     await turnedToFirst(d, dial, a.claude, b.claude)
     front(d, ORCA)
-    await typedUntilMoved(dial, b.claude)
+    await typedUntilMoved(d, dial, b.claude)
     await a.claude.hook('UserPromptSubmit', { prompt: RELAYED })
     await said(d, '[device] prompt · skipped · relayed')
     const log = d.log()
@@ -236,6 +258,7 @@ describe('the dial and the apps follow each other', () => {
     relay.speech = 'run the spoken tests'
     const { d, dial, runs } = await fresh({
       env: { BACKEND_WS_URL: relay.wsUrl, WEB_URL: relay.httpUrl, ADAPTER_COMPUTER_ID: ME.computerId },
+      capabilities: FILTER,
       // Signed in as ME: the session `harness login` leaves, which the core reads at start.
       before: (d) => writeFileSync(join(d.root, 'auth', 'session.json'), JSON.stringify({ version: 1, accessToken: ME.token,
         autonomousEnv: 'prod', computerId: ME.computerId, machineId: ME.machineId,
@@ -245,7 +268,6 @@ describe('the dial and the apps follow each other', () => {
     const a = inOrca(d, 'a')
     const b = inOrca(d, 'b')
     const switchesTo = (handle: string): number => runs().filter((run) => run.args === `terminal switch --terminal ${handle} --json`).length
-    const moved = (): number => d.log().split('\n').filter((line) => line.includes('[device] prompt · moved')).length
 
     // 1. The dial on B, by hand.
     await listed(dial, a.claude, b.claude)
@@ -254,7 +276,8 @@ describe('the dial and the apps follow each other', () => {
 
     // 2. Orca settled in front: A's typed prompt moves the dial. Then its turn ends: Orca's route types only at an idle prompt.
     front(d, ORCA)
-    await typedUntilMoved(dial, a.claude)
+    await typedUntilMoved(d, dial, a.claude)
+    expect(moved(d)).toBe(1)
     // The tile it centred, reported as the firmware does: the daemon drops the dial's turns until it hears it (750 ms).
     dial.send({ t: 'focus', agentId: a.claude.id })
     let since = dial.messages.length
@@ -281,14 +304,14 @@ describe('the dial and the apps follow each other', () => {
     // 5. The turn Orca's typing starts is the dial's: the dial stays on B.
     await a.claude.hook('UserPromptSubmit', { prompt: 'run the spoken tests' })
     await said(d, '[device] prompt · skipped · dial prompt')
-    expect(dial.messages.slice(since).filter((m) => m.t === 'focus' && m.agentId === a.claude.id)).toEqual([])
-    expect(moved()).toBe(1)
 
-    // 6. The next prompt typed at A is the person's: the dial moves to it again.
+    // 6. The next prompt typed at A is the person's: the dial moves to it again, the one move since step 2. A focus the
+    // dial's turn sent late would come before this one's.
     await a.claude.hook('Stop')
-    await a.claude.hook('UserPromptSubmit', { prompt: 'and again' })
-    await dial.next((m) => m.t === 'focus' && m.agentId === a.claude.id, 30_000, "A's focus", since)
-    await until('a second move in the log', () => moved() === 2, 30_000, 50)
+    const typed = dial.messages.length
+    await typedUntilMoved(d, dial, a.claude)
+    expect(dial.messages.slice(since, typed).filter((m) => m.t === 'focus' && m.agentId === a.claude.id)).toEqual([])
+    expect(moved(d)).toBe(2)
 
     // 7. No word of it, no handle and no session id in the daemon's log.
     const log = d.log()
