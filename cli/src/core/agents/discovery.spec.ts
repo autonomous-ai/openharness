@@ -12,7 +12,8 @@ const paneState = vi.fn<TerminalBackend['paneState']>(async () => 'gone')
 const paneBackend = { paneState } as unknown as TerminalBackend
 
 const row = (over: Partial<RegisteredSession> = {}): RegisteredSession =>
-  ({ agentId: 'a1', sessionId: 's1', engine: 'claude', active: true, ...over }) as RegisteredSession
+  ({ agentId: 'a1', sessionId: 's1', engine: 'claude', active: true,
+    runtimes: [{ backend: 'tmux', paneId: '%0' }], primaryRuntimeKey: 'tmux:%0', ...over }) as RegisteredSession
 const seen = (over: Partial<DiscoveredTerminalAgent> = {}): DiscoveredTerminalAgent => ({
   engine: 'claude',
   cwd: '/work',
@@ -25,13 +26,25 @@ const seen = (over: Partial<DiscoveredTerminalAgent> = {}): DiscoveredTerminalAg
 
 function setup(over: Partial<DiscoveryDeps> = {}) {
   const rows = new Map<string, RegisteredSession>()
+  const published = <T extends ReturnType<typeof vi.fn>>(mock: T, select: (value: any) => RegisteredSession | null = value => value): T => new Proxy(mock, {
+    apply: async (call, receiver, args) => {
+      const value = await Reflect.apply(call, receiver, args)
+      const entry = select(value)
+      if (entry) rows.set(entry.agentId, structuredClone(entry))
+      return value
+    },
+  })
   let restoreDegraded: (agentId: string) => boolean = () => false
   const deps: DiscoveryDeps = {
     registry: {
       byRuntimeEngine: vi.fn(() => undefined),
-      openProcessAgent: vi.fn(() => null),
-      adoptEngine: vi.fn(() => row()),
-      reinstateArchived: vi.fn(() => null),
+      byRuntimeTerminal: vi.fn(() => undefined),
+      openProcessAgent: published(vi.fn(async () => null), value => value?.entry),
+      adoptEngine: published(vi.fn(async (id: string) => rows.get(id) ?? row())),
+      reinstateArchived: published(vi.fn(async () => null)),
+      confirmLaunch: published(vi.fn(async (id, input) => ({ state: 'confirmed', entry: {
+        ...(rows.get(id) ?? row()), ...input, active: true, launch: { state: 'ready' },
+      } })), value => value.entry),
       updateRuntimes: vi.fn(),
       updateProcessIdentity: vi.fn(),
       setBypassPermission: vi.fn(),
@@ -57,7 +70,7 @@ function setup(over: Partial<DiscoveryDeps> = {}) {
     deviceInput: { forget: vi.fn() },
     questionWatcher: { stop: vi.fn() },
     stopHeartbeat: vi.fn(),
-    retainExitedSession: vi.fn(),
+    retainExitedSession: vi.fn(async () => ({ state: 'confirmed' as const, entry: null })),
     stoppedAgents: { finishResume: vi.fn(), get: vi.fn(() => null), list: vi.fn(() => []), remove: vi.fn(), resumeReservedAt: vi.fn(() => null) },
     send: vi.fn(),
     restoreDegraded: (agentId) => restoreDegraded(agentId),
@@ -81,9 +94,9 @@ describe('discovery', () => {
     it('opens an agent for it, announces it and binds its session', async () => {
       const run = setup()
       const opened = row({ agentId: 'new' })
-      vi.mocked(run.deps.registry.openProcessAgent).mockReturnValue({ entry: opened, isNew: true, evicted: null } as never)
+      vi.mocked(run.deps.registry.openProcessAgent).mockResolvedValue({ entry: opened, isNew: true, evicted: [] } as never)
       await run.handlers.onDiscovered(seen())
-      expect(run.deps.registry.openProcessAgent).toHaveBeenCalledWith(expect.objectContaining({ engine: 'claude', primaryRuntimeKey: 'tmux:%0' }))
+      expect(run.deps.registry.openProcessAgent).toHaveBeenCalledWith(expect.objectContaining({ engine: 'claude', primaryRuntimeKey: 'tmux:%0' }), expect.any(Object))
       expect(run.deps.announceSession).toHaveBeenCalledWith(opened)
       expect(run.deps.bindObservedAgent).toHaveBeenCalled()
       expect(run.deps.attachDsh).not.toHaveBeenCalled()
@@ -93,15 +106,15 @@ describe('discovery', () => {
       const run = setup()
       const opened = row({ agentId: 'a2', dsh: 'blender' } as Partial<RegisteredSession>)
       vi.mocked(run.deps.registry.byRuntimeEngine).mockReturnValue(row({ launch: { state: 'starting' } } as Partial<RegisteredSession>))
-      vi.mocked(run.deps.registry.openProcessAgent).mockReturnValue({ entry: opened, isNew: false, evicted: row({ agentId: 'old', sessionId: '' }) } as never)
+      vi.mocked(run.deps.registry.openProcessAgent).mockResolvedValue({ entry: opened, isNew: false, evicted: [row({ agentId: 'old', sessionId: '' })] } as never)
       await run.handlers.onDiscovered(seen())
       expect(run.deps.attachDsh).toHaveBeenCalledWith(opened)
-      expect(run.deps.forgetSession).toHaveBeenCalledWith('old', { force: true, agentId: 'old' })
+      expect(run.deps.forgetSession).toHaveBeenCalledWith('old', expect.objectContaining({ force: true, agentId: 'old', captured: expect.any(Object) }))
       expect(run.deps.announceSession).toHaveBeenCalledWith(opened)
-      vi.mocked(run.deps.registry.openProcessAgent).mockReturnValue({ entry: row(), isNew: false, evicted: row({ agentId: 'old', sessionId: 'old-s' }) } as never)
+      vi.mocked(run.deps.registry.openProcessAgent).mockResolvedValue({ entry: row(), isNew: false, evicted: [row({ agentId: 'old', sessionId: 'old-s' })] } as never)
       vi.mocked(run.deps.registry.byRuntimeEngine).mockReturnValue(row({ launch: { state: 'ready' } } as Partial<RegisteredSession>))
       await run.handlers.onDiscovered(seen())
-      expect(run.deps.forgetSession).toHaveBeenLastCalledWith('old-s', { force: true, agentId: 'old' })
+      expect(run.deps.forgetSession).toHaveBeenLastCalledWith('old-s', expect.objectContaining({ force: true, agentId: 'old', captured: expect.any(Object) }))
       expect(run.deps.announceSession).toHaveBeenCalledTimes(1)
     })
 
@@ -116,16 +129,16 @@ describe('discovery', () => {
     it('a process that takes a bound agent\'s pane takes its browser: the move is told after the evicted agent is forgotten, with the flag the evicted row had', async () => {
       const run = setup()
       const opened = row({ agentId: 'new', sessionId: '' })
-      vi.mocked(run.deps.registry.openProcessAgent).mockReturnValue({ entry: opened, isNew: true,
-        evicted: { agentId: 'old', sessionId: 'old-s', browser: true } } as never)
+      vi.mocked(run.deps.registry.openProcessAgent).mockResolvedValue({ entry: opened, isNew: true,
+        evicted: [row({ agentId: 'old', sessionId: 'old-s', browser: true })] } as never)
       await run.handlers.onDiscovered(seen())
-      expect(run.deps.forgetSession).toHaveBeenCalledWith('old-s', { force: true, agentId: 'old' })
+      expect(run.deps.forgetSession).toHaveBeenCalledWith('old-s', expect.objectContaining({ force: true, agentId: 'old', captured: expect.any(Object) }))
       expect(vi.mocked(run.deps.moveBrowser).mock.calls).toEqual([['old', opened, true]])
       expect(vi.mocked(run.deps.forgetSession).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(run.deps.moveBrowser).mock.invocationCallOrder[0]!)
       expect(run.deps.attachBrowser).not.toHaveBeenCalled()
       // An evicted agent whose Browser was off still gives its settings and its profile to the pane.
-      vi.mocked(run.deps.registry.openProcessAgent).mockReturnValue({ entry: opened, isNew: true,
-        evicted: { agentId: 'off', sessionId: '' } } as never)
+      vi.mocked(run.deps.registry.openProcessAgent).mockResolvedValue({ entry: opened, isNew: true,
+        evicted: [row({ agentId: 'off', sessionId: '' })] } as never)
       await run.handlers.onDiscovered(seen())
       expect(vi.mocked(run.deps.moveBrowser).mock.calls.at(-1)).toEqual(['off', opened, false])
     })
@@ -209,7 +222,7 @@ describe('discovery', () => {
       const run = setup({ terminals: { backendFor: vi.fn(() => ({ paneState, capture }) as unknown as TerminalBackend) } })
       run.rows.set('a1', row({ engine: 'openclaw', sessionId: '' }))
       const openclaw = seen({ engine: 'openclaw', args: 'openclaw' })
-      vi.mocked(run.deps.registry.openProcessAgent).mockReturnValue({ entry: row({ agentId: 'new', engine: 'openclaw' }), isNew: true, evicted: null } as never)
+      vi.mocked(run.deps.registry.openProcessAgent).mockResolvedValue({ entry: row({ agentId: 'new', engine: 'openclaw' }), isNew: true, evicted: [] } as never)
       await run.handlers.onObserved(openclaw, row({ engine: 'terminal' } as Partial<RegisteredSession>))
       await run.handlers.onDiscovered(openclaw)
       expect(capture).toHaveBeenCalledWith({ backend: 'tmux', paneId: '%0' })
@@ -219,7 +232,7 @@ describe('discovery', () => {
       // The TUI, drawn: taken.
       screen = tui
       await run.handlers.onObserved(openclaw, row({ engine: 'terminal' } as Partial<RegisteredSession>))
-      expect(run.deps.registry.adoptEngine).toHaveBeenCalledWith('a1', 'openclaw', expect.anything())
+      expect(run.deps.registry.adoptEngine).toHaveBeenCalledWith('a1', 'openclaw', expect.anything(), expect.any(Object), expect.any(Object))
       await run.handlers.onDiscovered(openclaw)
       expect(run.deps.registry.openProcessAgent).toHaveBeenCalled()
       // A row OpenClaw already has is never asked again: an overlay over its footer does not make it look gone.
@@ -248,7 +261,7 @@ describe('discovery', () => {
       const adopted = row({ engine: 'claude', sessionId: '' })
       run.rows.set('a1', adopted)
       await run.handlers.onObserved(seen(), row({ engine: 'terminal' } as Partial<RegisteredSession>))
-      expect(run.deps.registry.adoptEngine).toHaveBeenCalledWith('a1', 'claude', expect.anything())
+      expect(run.deps.registry.adoptEngine).toHaveBeenCalledWith('a1', 'claude', expect.anything(), expect.any(Object), expect.any(Object))
       expect(run.deps.syncRecapPool).toHaveBeenCalled()
       expect(run.deps.announceSession).toHaveBeenCalledWith(adopted)
       expect(String(log.mock.calls[0][0])).toContain('terminal → claude')
@@ -274,9 +287,9 @@ describe('discovery', () => {
       const run = setup()
       const agent = row({ sessionId: '', browser: true })
       run.rows.set('a1', agent)
-      vi.mocked(run.deps.registry.adoptEngine).mockReturnValue(agent)
+      vi.mocked(run.deps.registry.adoptEngine).mockResolvedValue(agent)
       await run.handlers.onObserved(seen(), row({ engine: 'terminal', sessionId: '', browser: true } as Partial<RegisteredSession>))
-      expect(run.deps.registry.adoptEngine).toHaveBeenCalledWith('a1', 'claude', expect.anything())
+      expect(run.deps.registry.adoptEngine).toHaveBeenCalledWith('a1', 'claude', expect.anything(), expect.any(Object), expect.any(Object))
       expect(vi.mocked(run.deps.attachBrowser).mock.calls).toEqual([[agent]])
     })
 
@@ -291,7 +304,7 @@ describe('discovery', () => {
         const shell = shellOf()
         run.rows.set('shell', adopted)
         // As the registry does to its live row.
-        vi.mocked(run.deps.registry.adoptEngine).mockImplementation(() => { delete shell.previousAgentId; return adopted })
+        vi.mocked(run.deps.registry.adoptEngine).mockImplementation(async () => { delete shell.previousAgentId; return adopted })
         vi.mocked(run.deps.stoppedAgents.get).mockImplementation((agentId: string) => (agentId === 'ended' ? saved : null))
         Object.assign(run.deps.stoppedAgents, over)
         return { ...run, adopted, shell }
@@ -304,7 +317,7 @@ describe('discovery', () => {
         const run = typed(row({ agentId: 'ended', ...(on ? { browser: true as const } : {}) }))
         // Any engine typed there takes it, not only the one that left.
         await run.handlers.onObserved(seen({ engine }), run.shell)
-        expect(run.deps.registry.adoptEngine).toHaveBeenCalledWith('shell', engine, expect.anything())
+        expect(run.deps.registry.adoptEngine).toHaveBeenCalledWith('shell', engine, expect.anything(), expect.any(Object), expect.any(Object))
         expect(run.deps.stoppedAgents.get).toHaveBeenCalledWith('ended')
         expect(vi.mocked(run.deps.moveBrowser).mock.calls).toEqual([['ended', run.adopted, on]])
         // Nothing is attached here: the flag moves when the agent browser asks for it.
@@ -345,7 +358,7 @@ describe('discovery', () => {
       const back = setup()
       vi.mocked(back.deps.stoppedAgents.list).mockReturnValue([saved])
       vi.mocked(back.deps.stoppedAgents.get).mockReturnValue(saved)
-      vi.mocked(back.deps.registry.reinstateArchived).mockReturnValue({ ...saved, active: true } as RegisteredSession)
+      vi.mocked(back.deps.registry.reinstateArchived).mockResolvedValue({ ...saved, active: true } as RegisteredSession)
       await back.handlers.onObserved(seen(), row({ agentId: 'shell', engine: 'terminal', sessionId: '', runtimes: [PANE],
         previousAgentId: 'ended' } as Partial<RegisteredSession>))
       expect(back.deps.registry.reinstateArchived).toHaveBeenCalled()
@@ -355,8 +368,8 @@ describe('discovery', () => {
       await inPlace.handlers.onObserved(seen(), row({ browser: true }))
       await inPlace.handlers.onObserved(seen(), row({ engine: 'terminal', sessionId: '' } as Partial<RegisteredSession>))
       // A row a scan opens again in its own pane, evicting another from it, is not a new agent taking that pane.
-      vi.mocked(inPlace.deps.registry.openProcessAgent).mockReturnValue({ entry: row(), isNew: false,
-        evicted: { agentId: 'old', sessionId: 'old-s', browser: true } } as never)
+      vi.mocked(inPlace.deps.registry.openProcessAgent).mockResolvedValue({ entry: row(), isNew: false,
+        evicted: [row({ agentId: 'old', sessionId: 'old-s', browser: true })] } as never)
       await inPlace.handlers.onDiscovered(seen())
       expect(inPlace.deps.forgetSession).toHaveBeenCalled()
       expect(inPlace.deps.moveBrowser).not.toHaveBeenCalled()
@@ -379,10 +392,10 @@ describe('discovery', () => {
         const saved = archived()
         const live = { ...saved, active: true, processIdentity: HERMES }
         vi.mocked(run.deps.stoppedAgents.list).mockReturnValue([archived({ agentId: 'other', runtimes: [{ ...PANE, paneId: '%2009' }] }), saved])
-        vi.mocked(run.deps.registry.reinstateArchived).mockReturnValue(live as RegisteredSession)
+        vi.mocked(run.deps.registry.reinstateArchived).mockResolvedValue(live as RegisteredSession)
         run.rows.set('bcdaa2eb', live as RegisteredSession)
         await run.handlers.onObserved(hermesSeen(), shell)
-        expect(run.deps.registry.reinstateArchived).toHaveBeenCalledWith('0e375534', saved, HERMES)
+        expect(run.deps.registry.reinstateArchived).toHaveBeenCalledWith('0e375534', saved, HERMES, expect.any(Object))
         expect(run.deps.stoppedAgents.remove).toHaveBeenCalledWith('bcdaa2eb')
         expect(run.deps.send).toHaveBeenCalledWith({ type: 'agent_deleted', payload: { agentId: '0e375534', successor: 'bcdaa2eb' } })
         expect(run.deps.announceSession).toHaveBeenCalledWith(live)
@@ -396,7 +409,7 @@ describe('discovery', () => {
         const saved = archived({ browser: true })
         const live = { ...saved, active: true } as RegisteredSession
         vi.mocked(run.deps.stoppedAgents.list).mockReturnValue([saved])
-        vi.mocked(run.deps.registry.reinstateArchived).mockReturnValue(live)
+        vi.mocked(run.deps.registry.reinstateArchived).mockResolvedValue(live)
         run.rows.set('bcdaa2eb', live)
         await run.handlers.onObserved(hermesSeen(), shell)
         expect(vi.mocked(run.deps.attachBrowser).mock.calls).toEqual([[live]])
@@ -411,7 +424,7 @@ describe('discovery', () => {
         vi.mocked(run.deps.stoppedAgents.list).mockReturnValue([saved])
         await run.handlers.onObserved(observed, shell)
         expect(run.deps.registry.reinstateArchived).not.toHaveBeenCalled()
-        expect(run.deps.registry.adoptEngine).toHaveBeenCalledWith('0e375534', observed.engine, observed.processIdentity)
+        expect(run.deps.registry.adoptEngine).toHaveBeenCalledWith('0e375534', observed.engine, observed.processIdentity, expect.any(Object), expect.any(Object))
       })
 
       it('waits for a resume already under way, and adopts when the archive cannot be read or the registry refuses', async () => {
@@ -432,7 +445,7 @@ describe('discovery', () => {
         vi.mocked(refused.deps.stoppedAgents.list).mockReturnValue([archived()])
         await refused.handlers.onObserved(hermesSeen(), shell)
         expect(refused.deps.stoppedAgents.remove).not.toHaveBeenCalled()
-        expect(refused.deps.registry.adoptEngine).toHaveBeenCalled()
+        expect(refused.deps.registry.adoptEngine).not.toHaveBeenCalled()
       })
 
       it('also from a terminal row that adopted that engine already, while no conversation is bound to it; looked up once', async () => {
@@ -441,9 +454,9 @@ describe('discovery', () => {
         vi.mocked(run.deps.stoppedAgents.list).mockReturnValue([saved])
         const adopted = row({ agentId: '0e375534', engine: 'hermes', terminalHost: true, sessionId: '', runtimes: [PANE],
           processIdentity: HERMES } as Partial<RegisteredSession>)
-        vi.mocked(run.deps.registry.reinstateArchived).mockReturnValue({ ...saved, active: true } as RegisteredSession)
+        vi.mocked(run.deps.registry.reinstateArchived).mockResolvedValue({ ...saved, active: true } as RegisteredSession)
         await run.handlers.onObserved(hermesSeen(), adopted)
-        expect(run.deps.registry.reinstateArchived).toHaveBeenCalledWith('0e375534', saved, HERMES)
+        expect(run.deps.registry.reinstateArchived).toHaveBeenCalledWith('0e375534', saved, HERMES, expect.any(Object))
 
         const bound = setup()
         vi.mocked(bound.deps.stoppedAgents.list).mockReturnValue([saved])
@@ -479,7 +492,7 @@ describe('discovery', () => {
         const busy = setup()
         vi.mocked(busy.deps.stoppedAgents.list).mockReturnValue([archived()])
         vi.mocked(busy.deps.stoppedAgents.remove).mockImplementation(() => { throw 'EBUSY' })
-        vi.mocked(busy.deps.registry.reinstateArchived).mockReturnValue({ ...archived(), active: true } as RegisteredSession)
+        vi.mocked(busy.deps.registry.reinstateArchived).mockResolvedValue({ ...archived(), active: true } as RegisteredSession)
         await busy.handlers.onObserved(hermesSeen(), shell)
         expect(warn).toHaveBeenCalledWith(expect.stringContaining('archive could not be removed: EBUSY'))
       })
@@ -489,7 +502,7 @@ describe('discovery', () => {
         const run = setup()
         vi.mocked(run.deps.stoppedAgents.list).mockReturnValue([archived()])
         vi.mocked(run.deps.stoppedAgents.remove).mockImplementation(() => { throw new Error('EBUSY') })
-        vi.mocked(run.deps.registry.reinstateArchived).mockReturnValue({ ...archived(), active: true } as RegisteredSession)
+        vi.mocked(run.deps.registry.reinstateArchived).mockResolvedValue({ ...archived(), active: true } as RegisteredSession)
         await run.handlers.onObserved(hermesSeen(), shell)
         expect(warn).toHaveBeenCalledWith(expect.stringContaining('archive could not be removed'))
         expect(run.deps.send).toHaveBeenCalled()
@@ -524,10 +537,10 @@ describe('discovery', () => {
       const run = setup()
       run.rows.set('a1', row())
       await run.handlers.onObserved(seen(), row({ launch: { state: 'starting' } } as Partial<RegisteredSession>))
-      expect(run.deps.registry.setLaunch).toHaveBeenCalledWith('a1', { state: 'ready' })
+      expect(run.deps.registry.confirmLaunch).toHaveBeenCalledWith('a1', expect.objectContaining({ processIdentity: seen().processIdentity }), expect.any(Object))
       expect(run.deps.attachSession).toHaveBeenCalled()
       await run.handlers.onObserved(seen(), row({ launch: { state: 'ready' } } as Partial<RegisteredSession>))
-      expect(run.deps.registry.setLaunch).toHaveBeenCalledTimes(1)
+      expect(run.deps.registry.confirmLaunch).toHaveBeenCalledTimes(1)
     })
 
     it('a start that went dormant and wakes, and a launch that turns ready, are told too', async () => {
@@ -537,7 +550,7 @@ describe('discovery', () => {
       await run.handlers.onObserved(seen(), row({ active: false, browser: true }))
       await run.handlers.onObserved(seen(), row({ launch: { state: 'starting' }, browser: true } as Partial<RegisteredSession>))
       await settle()
-      expect(vi.mocked(run.deps.attachBrowser).mock.calls).toEqual([[awake], [awake]])
+      expect(vi.mocked(run.deps.attachBrowser).mock.calls).toEqual([[awake], [expect.objectContaining({ agentId: 'a1', browser: true, launch: { state: 'ready' } })]])
     })
 
     it.each(['held', 'removed', 'rebound'] as const)('cannot retire or announce an attachment whose binding became %s', async state => {
@@ -579,14 +592,14 @@ describe('discovery', () => {
       expect(run.deps.deviceInput.forget).toHaveBeenCalledWith('a1')
       expect(run.deps.questionWatcher.stop).toHaveBeenCalledWith('s1')
       expect(run.deps.stopHeartbeat).toHaveBeenCalledWith('s1')
-      expect(run.deps.retainExitedSession).toHaveBeenCalledWith(exited, true)
+      expect(run.deps.retainExitedSession).toHaveBeenCalledWith(exited, true, expect.any(Object))
       expect(run.deps.stoppedAgents.finishResume).toHaveBeenCalledWith('a1')
     })
 
     it('keeps the conversation of an agent that was not a resume, with nothing to finish', async () => {
       const run = setup()
       await run.handlers.onDormant(row(), 'engine exited')
-      expect(run.deps.retainExitedSession).toHaveBeenCalledWith(row(), true)
+      expect(run.deps.retainExitedSession).toHaveBeenCalledWith(row(), true, expect.any(Object))
       expect(run.deps.stoppedAgents.finishResume).not.toHaveBeenCalled()
     })
 
@@ -641,7 +654,7 @@ describe('discovery', () => {
   it('removes a row whose pane is gone, unless restore never ran this boot', () => {
     const run = setup()
     run.handlers.onRemoved(row(), 'pane gone')
-    expect(run.deps.forgetSession).toHaveBeenCalledWith('a1', { force: true })
+    expect(run.deps.forgetSession).toHaveBeenCalledWith('a1', { force: true, captured: row() })
     run.degrade()
     run.handlers.onRemoved(row(), 'pane gone')
     expect(run.deps.forgetSession).toHaveBeenCalledTimes(1)
@@ -655,7 +668,7 @@ describe('discovery', () => {
     const run = setup()
     run.degrade('a2')
     run.handlers.onRemoved(row(), 'pane gone')
-    expect(run.deps.forgetSession).toHaveBeenCalledWith('a1', { force: true })
+    expect(run.deps.forgetSession).toHaveBeenCalledWith('a1', { force: true, captured: row() })
     run.handlers.onRemoved({ ...row(), agentId: 'a2' }, 'pane gone')
     expect(run.deps.forgetSession).toHaveBeenCalledTimes(1)
     expect(run.deps.registry.setActive).toHaveBeenCalledWith('a2', false)

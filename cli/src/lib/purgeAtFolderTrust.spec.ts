@@ -34,7 +34,7 @@ const purge = () => new PurgeAgentService({
   checkpoints: new SessionCheckpointStore(join(root, 'checkpoints')), restarting: () => false, deleted: vi.fn(), atFolderTrust, atEmptyComposer,
   stop: createStopAgentService({ registry, stoppedAgents: stopped, restartJobs: new AgentRestartCoordinator(), stopJobs: new Map(),
     backendFor: () => ({ kill }), agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), trigger: vi.fn(async () => {}) },
-    forgetSession: id => registry.removeAgent(id), markDeleted: vi.fn(), clearDeleted: vi.fn(), stopNative }),
+    forgetSession: async id => { await registry.confirmEngineExit(id, 'remove') }, markDeleted: vi.fn(), clearDeleted: vi.fn(), stopNative }),
 })
 const target = () => ({ agentId: row.agentId, sessionId: null, createdAt: row.registeredAt })
 async function deleteIt(service: PurgeAgentService) {
@@ -42,10 +42,10 @@ async function deleteIt(service: PurgeAgentService) {
   return service.request({ ...target(), mode: 'delete', reviewId: String(review.reviewId) })
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   root = mkdtempSync(join(tmpdir(), 'harness-purge-trust-'))
   stopped = new StoppedAgentStore(join(root, 'stopped'))
-  row = registry.openPendingAgent({ engine: 'codex', cwd: join(root, 'worktree'), runtimes: [{ backend: 'tmux', paneId: '%44' }] })!
+  row = (await registry.openPendingAgent({ engine: 'codex', cwd: join(root, 'worktree'), runtimes: [{ backend: 'tmux', paneId: '%44' }] }))!
   Object.assign(row, { launch: { state: 'ready' }, processIdentity: { pid: 77, executable: 'codex', startMarker: 'fixture' } })
   kill = vi.fn(async () => ({ state: 'succeeded' as const, dispatch: 'executed' as const }))
   atFolderTrust = vi.fn(async () => true)

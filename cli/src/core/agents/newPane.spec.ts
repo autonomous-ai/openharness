@@ -24,22 +24,35 @@ const releaseHold = vi.fn<TerminalBackend['releaseHold']>(async () => {})
 const backend = { paneState, releaseHold } as unknown as TerminalBackend
 
 /** The pane's own backend, answering whether it holds the launch's inert shell (`TerminalBackend.isHeld`). */
-const holding = (isHeld: TerminalBackend['isHeld']): Partial<PaneWatcherDeps> => ({ terminals: { backendFor: vi.fn(() => ({ ...backend, isHeld }) as TerminalBackend) } })
+const holding = (isHeld: TerminalBackend['isHeld']): Partial<PaneWatcherDeps> => {
+  const held = { ...backend, isHeld } as TerminalBackend
+  return { terminals: { backendFor: vi.fn(() => held) } }
+}
 
 function setup(over: Partial<PaneWatcherDeps> = {}) {
-  const rows = new Map<string, RegisteredSession>([['a1', pending]])
+  const rows = new Map<string, RegisteredSession>([['a1', structuredClone(pending)]])
   const deps: PaneWatcherDeps = {
     registry: {
       byAgent: vi.fn((agentId: string) => rows.get(agentId)),
-      updateProcessIdentity: vi.fn(),
+      confirmLaunch: vi.fn<PaneWatcherDeps['registry']['confirmLaunch']>(async (id, input) => {
+        const row = rows.get(id)
+        if (!row) return { state: 'not-published' }
+        const ready = { ...row, ...input, runtimes: [...(input.runtimes ?? row.runtimes)], active: true, launch: { state: 'ready' as const } }
+        rows.set(id, ready)
+        return { state: 'confirmed', entry: structuredClone(ready) }
+      }),
       setLaunch: vi.fn((_agentId: string, launch: { state: string }) => ({ ...pending, launch }) as RegisteredSession),
       setTerminalAvailable: vi.fn(() => true),
-      releaseEngine: vi.fn(() => ({ ...pending, engine: 'terminal' }) as RegisteredSession),
+      confirmEngineExit: vi.fn<PaneWatcherDeps['registry']['confirmEngineExit']>(async (id) => {
+        const shell = { ...rows.get(id)!, engine: 'terminal' as const, sessionId: '', launch: { state: 'ready' as const } }
+        rows.set(id, shell)
+        return { state: 'confirmed', entry: structuredClone(shell) }
+      }),
     } as unknown as PaneWatcherDeps['registry'],
     announceSession: vi.fn(),
     triggerHint: vi.fn(async () => {}),
     captureTerminal: vi.fn(async () => 'error: unknown flag --plan'),
-    retainExitedSession: vi.fn(),
+    retainExitedSession: vi.fn(async () => ({ state: 'confirmed' as const, entry: null })),
     terminals: { backendFor: vi.fn(() => backend) },
     holdRoute: vi.fn(() => vi.fn()),
     ...over,
@@ -58,7 +71,7 @@ describe('watching a new pane', () => {
     await vi.advanceTimersByTimeAsync(50)
     await watching
     expect(deps.retainExitedSession).not.toHaveBeenCalled()
-    expect(deps.registry.releaseEngine).not.toHaveBeenCalled()
+    expect(deps.registry.confirmEngineExit).not.toHaveBeenCalled()
     if (result === 'held' || result === 'row removed') {
       expect(deps.registry.setLaunch).toHaveBeenCalledWith('a1', expect.objectContaining({ state: 'held', service: 'native', nativeToken: 'fixture-native' }))
       expect(deps.announceSession).toHaveBeenCalledTimes(result === 'held' ? 1 : 0)
@@ -137,8 +150,10 @@ describe('watching a new pane', () => {
       await vi.advanceTimersByTimeAsync(50)
       await watching
       expect(deps.registry.setLaunch).not.toHaveBeenCalled()
-      expect(deps.registry.updateProcessIdentity).not.toHaveBeenCalled()
-      expect(deps.registry.releaseEngine).not.toHaveBeenCalled()
+      expect(deps.registry.confirmLaunch).not.toHaveBeenCalled()
+      if (stage === 'clear') expect(deps.registry.confirmEngineExit).toHaveBeenCalledOnce()
+      else expect(deps.registry.confirmEngineExit).not.toHaveBeenCalled()
+      expect(deps.announceSession).not.toHaveBeenCalled()
       expect(deps.retainExitedSession).not.toHaveBeenCalled()
     })
 
@@ -148,12 +163,12 @@ describe('watching a new pane', () => {
     const done = watch('claude', pending, spawned, ['claude'], undefined)
     await vi.advanceTimersByTimeAsync(50)
     await done
-    expect(deps.registry.updateProcessIdentity).toHaveBeenCalledWith('a1', identity)
-    expect(deps.registry.setLaunch).toHaveBeenCalledWith('a1', { state: 'ready' })
+    expect(deps.registry.confirmLaunch).toHaveBeenCalledWith('a1', { processIdentity: identity }, expect.any(Object))
+    expect(deps.registry.confirmLaunch).toHaveBeenCalledWith('a1', expect.any(Object), expect.any(Object))
     expect(deps.terminals.backendFor).toHaveBeenCalledWith(runtime)
     expect(resolvePaneEngineProcess).toHaveBeenCalledWith(backend, runtime, 'claude')
     expect(paneState).toHaveBeenCalledWith(runtime)
-    expect(releaseHold).toHaveBeenCalledWith(runtime)
+    expect(releaseHold).toHaveBeenCalledWith(runtime, expect.any(Function))
     expect(deps.announceSession).toHaveBeenCalledWith(expect.objectContaining({ launch: { state: 'ready' } }))
     expect(deps.triggerHint).toHaveBeenCalledWith(runtime, 'claude')
   })
@@ -161,7 +176,7 @@ describe('watching a new pane', () => {
   it('says so when the background bind fails, and announces nothing for a row the registry no longer has', async () => {
     const warn = vi.mocked(console.warn)
     const { deps, watch } = setup({ triggerHint: vi.fn(async () => { throw new Error('scan failed') }) })
-    vi.mocked(deps.registry.setLaunch).mockReturnValueOnce(null)
+    vi.mocked(deps.registry.confirmLaunch).mockResolvedValueOnce({ state: 'confirmed', entry: null })
     vi.mocked(resolvePaneEngineProcess).mockResolvedValueOnce(identity as never)
     await watch('claude', pending, spawned, ['claude'], undefined)
     await vi.advanceTimersByTimeAsync(0)
@@ -171,7 +186,6 @@ describe('watching a new pane', () => {
     await worse.watch('claude', pending, spawned, ['claude'], undefined)
     await vi.advanceTimersByTimeAsync(0)
     expect(warn.mock.calls.map(([line]) => String(line)).filter((line) => line.includes('background bind failed'))).toEqual([
-      '[agent] background bind failed · claude · scan failed',
       '[agent] background bind failed · claude · worse',
     ])
   })
@@ -201,7 +215,7 @@ describe('watching a new pane', () => {
     await vi.advanceTimersByTimeAsync(50)
     await done
     expect(deps.registry.setTerminalAvailable).not.toHaveBeenCalled()
-    expect(deps.registry.setLaunch).toHaveBeenCalledWith('a1', { state: 'ready' })
+    expect(deps.registry.confirmLaunch).toHaveBeenCalledWith('a1', expect.any(Object), expect.any(Object))
   })
 
   it('fails a launch whose pane died: not installed, or did not start', async () => {
@@ -222,7 +236,7 @@ describe('watching a new pane', () => {
     const { deps, rows, watch } = setup()
     paneState.mockResolvedValue({ dead: false, engineExit: 2 } as never)
     await watch('claude', pending, spawned, ['claude'], undefined)
-    expect(deps.registry.releaseEngine).toHaveBeenCalledWith('a1')
+    expect(deps.registry.confirmEngineExit).toHaveBeenCalledWith('a1', 'shell', expect.any(Object))
     expect(deps.announceSession).toHaveBeenCalledWith(expect.objectContaining({ engine: 'terminal' }))
     expect(releaseHold).toHaveBeenCalledWith(runtime, expect.any(Function))
     expect(warn.mock.calls.map(([line]) => String(line)).some((line) => line.includes('exited (2) before ready · agent a1 kept as a terminal'))).toBe(true)
@@ -230,11 +244,11 @@ describe('watching a new pane', () => {
     rows.set('a1', { ...pending, sessionId: 's1' } as RegisteredSession)
     vi.mocked(deps.captureTerminal).mockResolvedValueOnce(null)
     await watch('claude', pending, spawned, ['claude'], undefined)
-    expect(deps.retainExitedSession).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 's1' }), true)
-    expect(deps.registry.releaseEngine).toHaveBeenCalledTimes(1)
+    expect(deps.retainExitedSession).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 's1' }), true, expect.any(Object))
+    expect(deps.registry.confirmEngineExit).toHaveBeenCalledTimes(1)
     // Released into nothing: nothing to announce.
     rows.set('a1', pending)
-    vi.mocked(deps.registry.releaseEngine).mockReturnValueOnce(null)
+    vi.mocked(deps.registry.confirmEngineExit).mockResolvedValueOnce({ state: 'not-published' })
     vi.mocked(deps.announceSession).mockClear()
     await watch('claude', pending, spawned, ['claude'], undefined)
     expect(deps.announceSession).not.toHaveBeenCalled()
@@ -277,8 +291,8 @@ describe('watching a new pane', () => {
       await done
       expect(deps.captureTerminal).toHaveBeenCalledTimes(3)
       expect(deps.captureTerminal).toHaveBeenCalledWith('a1', 40)
-      expect(deps.registry.setLaunch).toHaveBeenCalledExactlyOnceWith('a1', { state: 'ready' })
-      expect(deps.registry.updateProcessIdentity).toHaveBeenCalledOnce()
+      expect(deps.registry.confirmLaunch).toHaveBeenCalledWith('a1', { processIdentity: identity }, expect.any(Object))
+      expect(deps.registry.confirmLaunch).toHaveBeenCalledOnce()
     })
 
     it('stops looking at a launch superseded while its screen was read', async () => {
@@ -292,7 +306,7 @@ describe('watching a new pane', () => {
       })
       await watch('openclaw', entry, spawned, ['openclaw'], undefined)
       expect(deps.registry.setLaunch).not.toHaveBeenCalled()
-      expect(deps.registry.updateProcessIdentity).not.toHaveBeenCalled()
+      expect(deps.registry.confirmLaunch).not.toHaveBeenCalled()
     })
 
     it("that left on OpenClaw's lock says another OpenClaw is using the folder", async () => {
@@ -307,7 +321,7 @@ describe('watching a new pane', () => {
       await done
       expect(deps.registry.setLaunch).toHaveBeenCalledExactlyOnceWith('a1', { state: 'failed', error: 'OPENCLAW_FOLDER_IN_USE',
         detail: 'Another OpenClaw is using this folder. Give each run its own --local folder.' })
-      expect(deps.registry.releaseEngine).not.toHaveBeenCalled()
+      expect(deps.registry.confirmEngineExit).not.toHaveBeenCalled()
       expect(deps.retainExitedSession).not.toHaveBeenCalled()
       expect(vi.mocked(deps.announceSession).mock.calls.at(-1)![0].launch).toMatchObject({ state: 'failed', error: 'OPENCLAW_FOLDER_IN_USE' })
       expect(logLines()).toContain('[agent] create failed · openclaw · Another OpenClaw is using this folder. Give each run its own --local folder.')
@@ -329,8 +343,8 @@ describe('watching a new pane', () => {
       // A pane that could not be read says nothing of a lock.
       vi.mocked(deps.captureTerminal).mockResolvedValueOnce(null)
       await watch('openclaw', local, spawned, ['openclaw'], undefined)
-      expect(deps.registry.releaseEngine).toHaveBeenCalledTimes(2)
-      expect(deps.registry.releaseEngine).toHaveBeenCalledWith('a1')
+      expect(deps.registry.confirmEngineExit).toHaveBeenCalledOnce()
+      expect(deps.registry.confirmEngineExit).toHaveBeenCalledWith('a1', 'shell', expect.any(Object))
       expect(deps.registry.setLaunch).not.toHaveBeenCalled()
     })
 
@@ -364,10 +378,10 @@ describe('watching a new pane', () => {
       await vi.advanceTimersByTimeAsync(50)
       await done
       expect(logLines().find((line) => line.includes('create ready'))).toMatch(/^\[agent\] create ready · openclaw · local · agent a1 · /)
-      expect(releaseHold).toHaveBeenCalledWith(runtime)
+      expect(releaseHold).toHaveBeenCalledWith(runtime, expect.any(Function))
       expect(deps.triggerHint).toHaveBeenCalledWith(runtime, 'openclaw')
-      expect(deps.registry.setLaunch).toHaveBeenCalledExactlyOnceWith('a1', { state: 'ready' })
-      expect(rows.get('a1')).toBe(starting)
+      expect(deps.registry.confirmLaunch).toHaveBeenCalledWith('a1', { processIdentity: identity }, expect.any(Object))
+      expect(rows.get('a1')).toMatchObject({ agentId: 'a1', launch: { state: 'ready' }, processIdentity: identity })
       expect(holdRoute).toHaveBeenCalledExactlyOnceWith(terminalRouteKey(runtime))
       // The pane is discovery's again before the pass the watcher asks for, which binds it.
       expect(released.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(deps.triggerHint).mock.invocationCallOrder[0]!)
@@ -386,7 +400,7 @@ describe('watching a new pane', () => {
       await done
       expect(deps.registry.setLaunch).toHaveBeenCalledExactlyOnceWith('a1', { state: 'failed', error: 'OPENCLAW_FOLDER_IN_USE',
         detail: 'Another OpenClaw is using this folder. Give each run its own --local folder.' })
-      expect(deps.registry.releaseEngine).not.toHaveBeenCalled()
+      expect(deps.registry.confirmEngineExit).not.toHaveBeenCalled()
       expect(released).toHaveBeenCalledOnce()
     })
 
@@ -425,12 +439,14 @@ describe('watching a new pane', () => {
   })
 
   it('is ready as soon as its process is seen when the launch has no folder', async () => {
-    const { deps, watch } = setup()
+    const { deps, rows, watch } = setup()
+    const entry = { ...pending, engine: 'openclaw' } as RegisteredSession
+    rows.set('a1', entry)
     vi.mocked(resolvePaneEngineProcess).mockResolvedValueOnce(identity as never)
-    await watch('openclaw', { ...pending, engine: 'openclaw' } as RegisteredSession, spawned, ['openclaw'], undefined)
+    await watch('openclaw', entry, spawned, ['openclaw'], undefined)
     expect(deps.captureTerminal).not.toHaveBeenCalled()
     expect(deps.holdRoute).not.toHaveBeenCalled()
-    expect(deps.registry.setLaunch).toHaveBeenCalledExactlyOnceWith('a1', { state: 'ready' })
+    expect(deps.registry.confirmLaunch).toHaveBeenCalledWith('a1', { processIdentity: identity }, expect.any(Object))
     expect(vi.mocked(console.log).mock.calls.map(([line]) => String(line)).find((line) => line.includes('create ready'))).toMatch(/^\[agent\] create ready · openclaw · agent a1 · /)
   })
 
@@ -440,7 +456,7 @@ describe('watching a new pane', () => {
     await watch('claude', pending, spawned, ['claude'], undefined)
     expect(resolvePaneEngineProcess).not.toHaveBeenCalled()
     expect(deps.registry.setLaunch).not.toHaveBeenCalled()
-    expect(warn.mock.calls.map(([line]) => String(line))).toEqual(['[agent] create watch failed · claude · no terminal backend for tmux:%7'])
+    expect(warn.mock.calls.map(([line]) => String(line))).toEqual(['[agent] create watch failed · claude · readiness publication unavailable'])
   })
 
   it('reports a watch that fails', async () => {
@@ -450,8 +466,8 @@ describe('watching a new pane', () => {
     await watch('claude', pending, spawned, ['claude'], undefined)
     await watch('claude', pending, spawned, ['claude'], undefined)
     expect(warn.mock.calls.map(([line]) => String(line))).toEqual([
-      '[agent] create watch failed · claude · ps failed',
-      '[agent] create watch failed · claude · worse',
+      '[agent] create watch failed · claude · readiness publication unavailable',
+      '[agent] create watch failed · claude · readiness publication unavailable',
     ])
   })
 })

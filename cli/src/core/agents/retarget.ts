@@ -18,7 +18,9 @@ import { builtinSqlite } from '../../lib/sqliteBuiltin.js'
 import { describeGridLaunch, gridEnvVarNames } from '../../lib/gridLaunchWire.js'
 import { validateLaunchOverrides, type LaunchOverridesDeps, type LaunchSource } from '../../lib/launchOverrides.js'
 import { sid } from '../../lib/log.js'
-import type { registry, RegisteredSession } from '../../lib/registry.js'
+import { matchesLaunchReceipt, type registry, type RegisteredSession } from '../../lib/registry.js'
+import { resolvePaneEngineProcess } from '../../lib/paneEngineProcess.js'
+import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
 import { bypassPermissionFor, restartAgent } from '../../lib/restartAgent.js'
 import type { RuntimeProfileManager } from '../../lib/runtimeProfile.js'
 import { parseRuntimeProfile } from '../../lib/runtimeProfileWire.js'
@@ -29,7 +31,7 @@ import type { MoveConversation } from '../../engines/facets/providerMove.js'
 import { engineBin } from '../../lib/engineBin.js'
 import { sessionCodexHome } from '../../lib/engineHomes.js'
 import type { TerminalBackendCoordinator } from '../../lib/terminalBackendCoordinator.js'
-import { terminalRouteKey } from '../../lib/terminalRuntime.js'
+import { sameProcessIdentity, terminalRouteKey } from '../../lib/terminalRuntime.js'
 import { workspaceMissing } from '../../lib/workspaceCheck.js'
 import type { createLaunchHelpers } from './launch.js'
 import type { PaneSwap } from './swap.js'
@@ -204,6 +206,7 @@ export function createAgentRetargeter({
     if (!release) return { ok: false, error: 'AGENT_BUSY' }
     // The old restore watcher stays cancelled after this control pin is released.
     restartJobs.cancel(session.agentId)
+    const revision = restartJobs.revision(session.agentId)
     current = captureAuthority()
     const routeKey = terminalRouteKey(pane)
     let releaseRoute: (() => void) | undefined
@@ -316,23 +319,23 @@ export function createAgentRetargeter({
         console.warn(`[grid] retarget ${sid(session.agentId)} failed · ${outcome.detail}`)
         return failed('RESPAWN_FAILED', outcome.detail)
       }
-      // Commit the new process now. Optional grid metadata follows outside the route hold.
-      await backend.releaseHold(pane, current)
-      if (!current()) return changed()
-      // The row's grid is the launch Harness just wrote: the process is not read back for it. Nor for its gateway,
-      // which the row keeps until the relaunched engine says it again (its hook, or a Codex's argv on discovery).
-      registry.updateProcessIdentity(session.agentId, outcome.processIdentity, undefined,
-        grid ? { baseUrl: grid.baseUrl, model: grid.model ?? null } : null)
-      // The launch that just worked is the one a restart or a post-reboot restore must repeat — and
-      // what it decided about web search is what the app shows for this agent from now on. Null for
-      // a move home: the block, and the status with it, leave the frame together.
-      registry.setGridLaunch(session.agentId, built.overrides.gridLaunchRecord ?? null)
-      // Persisted only on the way OUT, and only once the move actually succeeded — a refused move
-      // must not overwrite the model the agent is still sitting on. Survives a daemon restart, so an
-      // agent left on a grid for a week still knows where it came from.
-      if (grid && remembered) registry.setSubscriptionModel(session.agentId, remembered)
-      registry.setActive(session.agentId, true)
-      const refreshed = registry.byAgent(session.agentId)
+      const publication = await registry.confirmLaunch(session.agentId, { processIdentity: outcome.processIdentity,
+        grid: grid ? { baseUrl: grid.baseUrl, model: grid.model ?? null } : null,
+        gridLaunchRecord: built.overrides.gridLaunchRecord ?? null, ...(grid && remembered ? { subscriptionModel: remembered } : {}),
+      }, { current: dispatchCurrent, refresh: async () => {
+        const observed = await resolvePaneEngineProcess(backend, pane, session.engine)
+        if (!sameProcessIdentity(observed, outcome.processIdentity) || observed?.executable !== outcome.processIdentity.executable) {
+          throw new IdentityReadUnavailable('the retargeted process changed before publication')
+        }
+      } })
+      const refreshed = publication.state === 'confirmed' ? publication.entry : null
+      const committed = () => !!refreshed && restartJobs.revision(session.agentId) === revision
+        && terminals.backendFor(pane) === backend
+        && matchesLaunchReceipt(registry.byAgent(session.agentId), refreshed)
+        && native?.current() !== false && built.overrides.native?.current() !== false
+      if (!committed()) return changed()
+      await backend.releaseHold(pane, committed)
+      if (!committed()) return changed()
       // The app decides whether to still offer a move from what it is told here, so a silent success
       // would leave the banner up over an agent that had already been moved.
       if (refreshed) { announceSession(refreshed); refreshGridAssignment(refreshed) }

@@ -31,8 +31,8 @@ it.runIf(process.env.RUN_REAL_TMUX_DISCOVERY === '1')('saves and closes an inact
     const backend = new TmuxBackend()
     const terminals = new TerminalBackendCoordinator([backend], ['tmux'])
     const control = createTerminalControl({ resolve: id => registry.resolve(id), terminals })
-    const row = registry.openPendingAgent({ engine: 'terminal', cwd: env.ADAPTER_DATA_DIR,
-      runtimes: [{ backend: 'tmux', paneId: pane }] })!
+    const row = (await registry.openPendingAgent({ engine: 'terminal', cwd: env.ADAPTER_DATA_DIR,
+      runtimes: [{ backend: 'tmux', paneId: pane }] }))!
     agentId = row.agentId
     // Registry reloads can leave a perfectly live shell inactive: no engine is
     // running to rediscover. Its retained pane is still visible in the app.
@@ -63,7 +63,7 @@ it.runIf(process.env.RUN_REAL_TMUX_DISCOVERY === '1')('saves and closes an inact
     const stop = createStopAgentService({ registry, stoppedAgents,
       restartJobs: new AgentRestartCoordinator(), stopJobs: new Map(), backendFor: () => backend,
       agentReconciler: { suppress() {}, holdRoute() {}, releaseRoute() {}, trigger: async () => {} },
-      forgetSession: id => registry.removeAgent(id), markDeleted() {}, clearDeleted() {}, stopNative: inlineNativeControls().stop,
+      forgetSession: async id => { await registry.confirmEngineExit(id, 'remove') }, markDeleted() {}, clearDeleted() {}, stopNative: inlineNativeControls().stop,
     })
     close = new CloseAgentService({ registry, stop, changed() {},
       activity: async session => inspectCloseActivity(session, await control.captureTerminal(session.agentId), undefined, false),

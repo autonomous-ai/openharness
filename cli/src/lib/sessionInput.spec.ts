@@ -1728,6 +1728,52 @@ describe('what became of a person\'s message, for its measurement', () => {
 })
 
 describe('while the agent changes host', () => {
+  it('refuses messages and control after the transient hold is removed from an uncertain move', async () => {
+    let refused = false
+    const gate = new MoveGate(() => refused), inject = vi.fn(async () => true), onDelivery = vi.fn(), receipt = vi.fn()
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+      getSession: () => session(), validateRuntime: async () => true, inject, sendKey: async () => true,
+      capture: async () => codexComposer(''), onError: vi.fn(), onDelivery, moveGate: gate })
+    gate.hold('h1'); refused = true; await gate.release('h1')
+    controller.submit('s1', 'held message', 'fixture:held', receipt)
+    expect(controller.acquireControl('s1')).toBeNull()
+    await vi.waitFor(() => expect(receipt).toHaveBeenCalledWith('held'))
+    expect(onDelivery).toHaveBeenLastCalledWith({ sessionId: 's1', deliveryId: 'fixture:held', state: 'rejected', reason: 'held' })
+    expect(inject).not.toHaveBeenCalled()
+    controller.forget('s1')
+  })
+
+  it('settles every earlier queued delivery when its pending drain is refused', async () => {
+    let refused = false
+    const gate = new MoveGate(() => refused), inject = vi.fn(async () => true), onDelivery = vi.fn()
+    const receipts = [vi.fn(), vi.fn()]
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+      getSession: () => session('commandcode'), validateRuntime: async () => true, inject, sendKey: async () => true,
+      onError: vi.fn(), onDelivery, moveGate: gate })
+    controller.setTurnOpen('s1', true)
+    receipts.forEach((receipt, i) => controller.submit('s1', `queued ${i}`, `fixture:${i}`, receipt))
+    gate.hold('h1'); controller.onTurnEnded('s1'); refused = true; await gate.release('h1')
+    for (const receipt of receipts) expect(receipt).toHaveBeenCalledExactlyOnceWith('held')
+    expect(onDelivery.mock.calls.filter(([event]) => event.state === 'rejected' && event.reason === 'held')).toHaveLength(2)
+    expect(inject).not.toHaveBeenCalled()
+    controller.forget('s1')
+  })
+
+  it('rechecks refusal after runtime validation before the first native write', async () => {
+    let refused = false, validated!: () => void, finish!: () => void
+    const entered = new Promise<void>(resolve => { validated = resolve })
+    const pending = new Promise<void>(resolve => { finish = resolve })
+    const gate = new MoveGate(() => refused), inject = vi.fn(async () => true), receipt = vi.fn()
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+      getSession: () => session(), validateRuntime: async () => { validated(); await pending; return true }, inject,
+      sendKey: async () => true, capture: async () => codexComposer(''), onError: vi.fn(), moveGate: gate })
+    controller.submit('s1', 'pending validation', undefined, receipt)
+    await entered; refused = true; finish()
+    await vi.waitFor(() => expect(receipt).toHaveBeenCalledWith('held'))
+    expect(inject).not.toHaveBeenCalled()
+    controller.forget('s1')
+  })
+
   const controllerWith = (gate: MoveGate, inject: (target: string, content: string) => Promise<boolean>) =>
     new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
       getSession: (id) => id === 's1' ? session() : id === 's2' ? { ...session(), sessionId: 's2', agentId: 'h2' } : undefined,

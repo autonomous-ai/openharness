@@ -23,28 +23,30 @@ const tmuxKill = vi.fn<NonNullable<ReturnType<StopAgentServiceDeps['backendFor']
 const ptyKill = vi.fn<NonNullable<ReturnType<StopAgentServiceDeps['backendFor']>>['kill']>()
 const withPtyHost = () => { deps.backendFor = runtime => ({ kill: runtime.backend === 'tmux' ? tmuxKill : ptyKill }) }
 const pty = { backend: 'ptyhost' as const, instance: 'p1', paneId: '%1' }
-beforeEach(() => {
+beforeEach(async () => {
   vi.clearAllMocks()
   vi.mocked(controlTranscriptEvidence).mockReset().mockImplementation((_engine, _id, path) => ({ path, verify: vi.fn() }))
   vi.mocked(captureResumeIdentity).mockReset().mockImplementation(async session => session)
-  row = registry.openPendingAgent({ engine: 'codex', runtimes: [{ backend: 'tmux', paneId: '%44' }], cwd: '/tmp' })!
+  row = (await registry.openPendingAgent({ engine: 'codex', runtimes: [{ backend: 'tmux', paneId: '%44' }], cwd: '/tmp' }))!
+  row = registry.byAgent(row.agentId)!
   Object.assign(row, { sessionId: 'saved', processIdentity: { pid: 77, executable: 'codex', startMarker: 'fixture' } })
   deps = { registry, stoppedAgents, restartJobs: new AgentRestartCoordinator(), stopJobs: new Map(),
     backendFor: runtime => runtime.backend === 'tmux' ? { kill: tmuxKill } : undefined,
     agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), trigger: vi.fn(async () => {}) },
-    forgetSession: vi.fn(id => registry.removeAgent(id)), markDeleted: vi.fn(), clearDeleted: vi.fn(),
+    forgetSession: vi.fn(async (id, options) => { await registry.confirmEngineExit(id, 'remove', options.authority) }), markDeleted: vi.fn(), clearDeleted: vi.fn(),
     stopNative: vi.fn(async () => {}),
   }
+  vi.mocked(checkPidRuntime).mockReset().mockResolvedValue({ state: 'gone', reason: 'fixture' })
   vi.mocked(terminateDeletedAgent).mockResolvedValue('gone')
   tmuxKill.mockReset().mockResolvedValue({ state: 'succeeded', dispatch: 'executed' })
   ptyKill.mockReset().mockResolvedValue({ state: 'succeeded', dispatch: 'executed' })
 })
-afterEach(() => { vi.restoreAllMocks(); for (const entry of registry.list()) registry.removeAgent(entry.agentId) })
+afterEach(async () => { vi.restoreAllMocks(); for (const entry of registry.list()) registry.removeAgent(entry.agentId); await registry.flush() })
 
 it('saves history before removing the runtime, joins concurrent stops, and clears confirmed reservations', async () => {
   const token = stoppedAgents.beginResume(row.agentId); expect(token).toBeTruthy()
   const original = row.agentId
-  vi.mocked(deps.forgetSession).mockImplementation(id => { expect(stoppedAgents.get(id)?.sessionId).toBe('saved'); registry.removeAgent(id) })
+  vi.mocked(deps.forgetSession).mockImplementation(async (id, options) => { expect(stoppedAgents.get(id)?.sessionId).toBe('saved'); await registry.confirmEngineExit(id, 'remove', options.authority) })
   const stop = createStopAgentService(deps); const one = stop(original); expect(stop(original)).toBe(one); await one
   expect(stoppedAgents.get(original)).toMatchObject({ active: false, sessionId: 'saved' })
   expect(registry.byAgent(original)).toBeUndefined(); expect(deps.stopJobs.size).toBe(0)
@@ -357,7 +359,7 @@ it.each(['capture', 'termination'] as const)('accepts a hook rebuilding the same
   if (stage === 'capture') vi.mocked(captureResumeIdentity).mockImplementation(async session => { rebuild(); return session })
   else vi.mocked(terminateDeletedAgent).mockImplementation(async () => { rebuild(); return 'terminated' })
   await createStopAgentService(deps)(row.agentId)
-  expect(deps.forgetSession).toHaveBeenCalledExactlyOnceWith(row.agentId, { force: true, captured: expect.objectContaining({ sessionId: 'saved' }) })
+  expect(deps.forgetSession).toHaveBeenCalledExactlyOnceWith(row.agentId, { force: true, captured: expect.objectContaining({ sessionId: 'saved' }), authority: expect.objectContaining({ current: expect.any(Function), refresh: expect.any(Function) }) })
   expect(registry.byAgent(row.agentId)).toBeUndefined()
   expect(stoppedAgents.get(row.agentId)?.sessionId).toBe('saved')
 })
@@ -390,8 +392,8 @@ it("a terminal and a guest's harness list no tree", async () => {
   deps.wait = vi.fn(async () => {})
   Object.assign(row, { engine: 'terminal', sessionId: '' })
   await createStopAgentService(deps)(row.agentId)
-  const guest = registry.openPendingAgent({ engine: 'codex', runtimes: [{ backend: 'tmux', paneId: '%45' }], cwd: '/tmp' })!
-  Object.assign(guest, { guest: 'kim@example.com', sessionId: 'saved', processIdentity: { pid: 78, executable: 'codex', startMarker: 'fixture' } })
+  const guest = (await registry.openPendingAgent({ engine: 'codex', runtimes: [{ backend: 'tmux', paneId: '%45' }], cwd: '/tmp' }))!
+  Object.assign(registry.byAgent(guest.agentId)!, { guest: 'kim@example.com', sessionId: 'saved', processIdentity: { pid: 78, executable: 'codex', startMarker: 'fixture' } })
   await createStopAgentService(deps)(guest.agentId)
   expect(registry.byAgent(row.agentId)).toBeUndefined()
   expect(registry.byAgent(guest.agentId)).toBeUndefined()

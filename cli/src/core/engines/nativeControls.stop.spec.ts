@@ -24,8 +24,9 @@ let deps: CodexStopDeps
 let request: ReturnType<typeof vi.fn<(method: string, params?: Record<string, unknown>) => Promise<any>>>
 let close: ReturnType<typeof vi.fn<() => void>>
 let loaded: boolean
-beforeEach(() => {
-  row = registry.openPendingAgent({ engine: 'codex', runtimes: [{ backend: 'tmux', paneId: '%500' }], cwd: '/tmp', codexHome: '/tmp/fixture-home' })!
+beforeEach(async () => {
+  row = (await registry.openPendingAgent({ engine: 'codex', runtimes: [{ backend: 'tmux', paneId: '%500' }], cwd: '/tmp', codexHome: '/tmp/fixture-home' }))!
+  row = registry.byAgent(row.agentId)!
   Object.assign(row, { sessionId: 'conversation' })
   loaded = true
   request = vi.fn(async (method: string) => {

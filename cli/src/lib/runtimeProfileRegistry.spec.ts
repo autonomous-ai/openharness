@@ -25,8 +25,8 @@ it('fences deferred config, staged history and detached pane observations agains
   registry.load()
   const input = { engine: 'hermes' as const, sessionId: '20261009_060000_abc123', tmuxPane: '%81', cwd: root,
     hermesHome: join(root, 'first') }
-  registry.openProcessAgent({ ...input, processIdentity: { pid: 7001, executable: 'hermes', startMarker: 'fixture' } })
-  const old = registry.register(input)!.entry
+  ;(await registry.openProcessAgent({ ...input, processIdentity: { pid: 7001, executable: 'hermes', startMarker: 'fixture' } }))
+  const old = (await registry.register(input))!.entry
   let finish!: (effort: string) => void
   const configuredEffort = vi.fn(() => new Promise<string>(resolve => { finish = resolve }))
   const pane = vi.fn(({ state }) => { state.model = 'from-pane' })
@@ -36,7 +36,7 @@ it('fences deferred config, staged history and detached pane observations agains
   const before = profiles.getState(old.sessionId)
   const pending = profiles.ingestConfig(old), staged = profiles.beginHydrate(old)
   staged.ingest(JSON.stringify({ type: 'assistant', version: '9.9.9', message: { model: 'claude-opus-5' } }))
-  const current = registry.register({ ...input, hermesHome: join(root, 'second') })!.entry
+  const current = (await registry.register({ ...input, hermesHome: join(root, 'second') }))!.entry
   expect(current).not.toBe(old)
   expect(current.agentId).toBe(old.agentId)
   expect(old.hermesHome).toBe(input.hermesHome)
@@ -68,8 +68,8 @@ it('drops an optional config refresh queued by a row replaced before the refresh
   registry.load()
   const input = { engine: 'hermes' as const, sessionId: '20261009_060001_abc123', tmuxPane: '%82', cwd: root,
     hermesHome: join(root, 'first') }
-  registry.openProcessAgent({ ...input, processIdentity: { pid: 7002, executable: 'hermes', startMarker: 'fixture' } })
-  const old = registry.register(input)!.entry
+  ;(await registry.openProcessAgent({ ...input, processIdentity: { pid: 7002, executable: 'hermes', startMarker: 'fixture' } }))
+  const old = (await registry.register(input))!.entry
   const config = vi.fn(async () => true)
   const reader = { engine: 'hermes', target: () => null, config,
     pane: ({ state, refreshConfig }: InlineRuntimeContext) => { state.model = 'observed'; refreshConfig() } }
@@ -78,7 +78,7 @@ it('drops an optional config refresh queued by a row replaced before the refresh
   vi.mocked(loadEngine).mockResolvedValue(module as never)
   const profiles = new RuntimeProfileState(() => undefined, id => registry.resolve(id))
   profiles.ingestPane(old, 'old pane', true)
-  const current = registry.register({ ...input, hermesHome: join(root, 'second') })!.entry
+  const current = (await registry.register({ ...input, hermesHome: join(root, 'second') }))!.entry
   expect(current).not.toBe(old)
   await Promise.resolve()
   expect(config).not.toHaveBeenCalled()

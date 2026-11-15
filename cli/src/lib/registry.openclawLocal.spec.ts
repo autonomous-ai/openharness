@@ -23,29 +23,29 @@ async function load() { vi.resetModules(); const mod = await import('./registry.
 const disk = (): RegisteredSession[] => JSON.parse(readFileSync(join(root, 'registry.json'), 'utf8'))
 async function pending() {
   const { registry, strictPersistedRow } = await load()
-  const row = registry.openPendingAgent({ engine: 'openclaw', cwd: root, runtimes })!
+  const row = (await registry.openPendingAgent({ engine: 'openclaw', cwd: root, runtimes }))!
   expect(row).toBeTruthy()
   return { registry, row, strictPersistedRow }
 }
 async function bound() {
   const made = await pending()
-  expect(made.registry.register({ engine: 'openclaw', sessionId: SESSION, runtimes, cwd: root })).toBeTruthy()
+  expect((await made.registry.register({ engine: 'openclaw', sessionId: SESSION, runtimes, cwd: root }))).toBeTruthy()
   return made
 }
 
 it('a local row keeps its folder through a save, a load, a bind and a resume, and reads its store there from the start', async () => {
   const { registry, strictPersistedRow } = await load()
-  const row = registry.openPendingAgent({ engine: 'openclaw', cwd: root, runtimes, openclawLocal: '/run/skill-1' })!
+  const row = (await registry.openPendingAgent({ engine: 'openclaw', cwd: root, runtimes, openclawLocal: '/run/skill-1' }))!
   expect(row).toMatchObject({ openclawLocal: '/run/skill-1', openclawStateDir: '/run/skill-1' })
   expect(strictPersistedRow(disk()[0])).toMatchObject({ openclawLocal: '/run/skill-1', openclawStateDir: '/run/skill-1' })
-  expect(registry.register({ engine: 'openclaw', sessionId: SESSION, runtimes, cwd: root })!.entry)
+  expect((await registry.register({ engine: 'openclaw', sessionId: SESSION, runtimes, cwd: root }))!.entry)
     .toMatchObject({ openclawLocal: '/run/skill-1', openclawStateDir: '/run/skill-1' })
   expect(registry.setOpenclawStateDir(row.agentId, '/elsewhere')).toBe(false)
   const again = (await load()).registry
   const saved = { ...again.byAgent(row.agentId)! }
   expect(saved).toMatchObject({ openclawLocal: '/run/skill-1', openclawStateDir: '/run/skill-1' })
   again.removeAgent(row.agentId)
-  expect(again.resumePendingAgent(saved, [{ backend: 'tmux', paneId: '%2' }])).toMatchObject({ openclawLocal: '/run/skill-1' })
+  expect((await again.resumePendingAgent(saved, [{ backend: 'tmux', paneId: '%2' }]))).toMatchObject({ openclawLocal: '/run/skill-1' })
 })
 
 it('a row with no folder has no field, and its state folder is still set off the TUI', async () => {
@@ -56,10 +56,10 @@ it('a row with no folder has no field, and its state folder is still set off the
 
 it('keeps the session keys a harness moved off, newest first, at most 32, across a load', async () => {
   const { registry, row } = await bound()
-  const move = (key: string) => registry.register({ engine: 'openclaw', sessionId: key, runtimes, cwd: root })!.entry
-  expect(move('agent:main:tui-2').earlierSessionIds).toEqual([SESSION])
-  expect(move('agent:main:tui-3').earlierSessionIds).toEqual(['agent:main:tui-2', SESSION])
-  for (let i = 4; i < 44; i++) move(`agent:main:tui-${i}`)
+  const move = async (key: string) => (await registry.register({ engine: 'openclaw', sessionId: key, runtimes, cwd: root }))!.entry
+  expect((await move('agent:main:tui-2')).earlierSessionIds).toEqual([SESSION])
+  expect((await move('agent:main:tui-3')).earlierSessionIds).toEqual(['agent:main:tui-2', SESSION])
+  for (let i = 4; i < 44; i++) (await move(`agent:main:tui-${i}`))
   const kept = (await load()).registry.byAgent(row.agentId)!.earlierSessionIds!
   expect(kept).toHaveLength(32)
   expect(kept[0]).toBe('agent:main:tui-42')

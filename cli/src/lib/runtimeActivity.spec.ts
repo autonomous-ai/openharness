@@ -4,15 +4,15 @@ import { RuntimeActivityReader } from './runtimeActivity.js'
 import { composedCodex } from '../testing/inlineNativeControls.js'
 import { registry, type RegisteredSession } from './registry.js'
 
-function session(): RegisteredSession {
-  const row = registry.openPendingAgent({ engine: 'codex', runtimes: [{ backend: 'tmux', paneId: '%600' }], cwd: '/tmp', codexHome: '/tmp/activity-fixture' })!
+async function session(): Promise<RegisteredSession> {
+  const row = (await registry.openPendingAgent({ engine: 'codex', runtimes: [{ backend: 'tmux', paneId: '%600' }], cwd: '/tmp', codexHome: '/tmp/activity-fixture' }))!
   Object.assign(row, { sessionId: 'conversation', processIdentity: { pid: 78, startMarker: 'start', executable: 'codex' } })
   return row
 }
 afterEach(() => { for (const row of registry.list()) registry.removeAgent(row.agentId) })
-function control() {
+async function control() {
   let now = 1000
-  const row = session()
+  const row = (await session())
   const request = vi.fn(async (_method: string, _params: Record<string, unknown>): Promise<any> => ({ thread: { id: row.sessionId, status: { type: 'active' } } }))
   const close = vi.fn()
   const rows = vi.fn(async () => [{ ...row.processIdentity!, parentPid: 1, args: 'codex resume conversation' }])
@@ -24,23 +24,23 @@ function control() {
 describe('Codex activity RPC', () => {
   it.each([['active', 'working'], ['idle', 'idle'], ['notLoaded', 'unknown'], ['systemError', 'unknown']])(
     'reads %s without mutating or resuming the conversation', async (state, expected) => {
-      const t = control(); t.request.mockResolvedValue({ thread: { id: t.row.sessionId, status: { type: state } } })
+      const t = (await control()); t.request.mockResolvedValue({ thread: { id: t.row.sessionId, status: { type: state } } })
       expect(await t.reader.read(t.row)).toBe(expected)
       expect(t.request.mock.calls).toEqual([['thread/read', { threadId: t.row.sessionId }]])
       t.reader.close(); await Promise.resolve(); expect(t.close).toHaveBeenCalledOnce()
     })
   it.each(['--no-daemon', '--remote=ws://example.invalid'])('does not query the wrong server for %s', async option => {
-    const t = control(); t.rows.mockResolvedValue([{ ...t.row.processIdentity!, parentPid: 1, args: `codex ${option} resume conversation` }])
+    const t = (await control()); t.rows.mockResolvedValue([{ ...t.row.processIdentity!, parentPid: 1, args: `codex ${option} resume conversation` }])
     expect(await t.reader.read(t.row)).toBe('unknown'); expect(t.connect).not.toHaveBeenCalled()
   })
   it('rejects PID reuse and a different thread', async () => {
-    const t = control(); t.rows.mockResolvedValueOnce([{ ...t.row.processIdentity!, startMarker: 'different', parentPid: 1, args: 'codex' }])
+    const t = (await control()); t.rows.mockResolvedValueOnce([{ ...t.row.processIdentity!, startMarker: 'different', parentPid: 1, args: 'codex' }])
     expect(await t.reader.read(t.row)).toBe('unknown'); expect(t.connect).not.toHaveBeenCalled()
     t.advance(); t.request.mockResolvedValue({ thread: { id: 'other', status: { type: 'active' } } })
     expect(await t.reader.read(t.row)).toBe('unknown'); t.reader.close()
   })
   it('shares connections and backs off unavailable servers', async () => {
-    const t = control()
+    const t = (await control())
     await Promise.all([t.reader.read(t.row), t.reader.read(t.row)])
     expect(t.connect).toHaveBeenCalledOnce(); expect(t.rows).toHaveBeenCalledOnce()
     t.request.mockRejectedValueOnce(new Error('socket hangup'))
@@ -52,7 +52,7 @@ describe('Codex activity RPC', () => {
 })
 describe('live terminal fallback', () => {
   it('requires changing busy indicators and refuses a frozen footer or prose', async () => {
-    const row = session()
+    const row = (await session())
     const capture = vi.fn(async () => '• Working (30s · esc to interrupt)\n› \x1b[2mAsk Codex to do anything\x1b[0m\n? for shortcuts')
     const reader = new RuntimeActivityReader({ readScreen: readInlineScreen, codex: async () => 'unknown', capture })
     expect(await reader.read(row)).toBe('unknown')
@@ -63,7 +63,7 @@ describe('live terminal fallback', () => {
     expect(await reader.read(row)).toBe('unknown')
   })
   it('recognizes the actual cmd p stopped goal without requiring or generating a transcript end', async () => {
-    const row = session()
+    const row = (await session())
     const capture = vi.fn(async () => '■ Conversation interrupted\n› \x1b[2mAsk Codex to do anything\x1b[0m\n  GPT-6-Astra max · ~/work Goal stalled (/goal resume)\n? for shortcuts')
     const reader = new RuntimeActivityReader({ readScreen: readInlineScreen, codex: async () => 'unknown', capture })
     expect(await reader.read(row)).toBe('unknown')
@@ -74,7 +74,7 @@ describe('live terminal fallback', () => {
     expect(await reader.read(row)).toBe('unknown')
   })
   it('prefers structured status and leaves unsupported engines unknown', async () => {
-    const row = session(); const capture = vi.fn(async () => null)
+    const row = (await session()); const capture = vi.fn(async () => null)
     const codex = vi.fn(async () => 'working' as const)
     const reader = new RuntimeActivityReader({ readScreen: readInlineScreen, codex, capture })
     expect(await reader.read(row)).toBe('working'); expect(capture).not.toHaveBeenCalled()

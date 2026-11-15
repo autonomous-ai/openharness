@@ -801,3 +801,60 @@ rename on refusal, durable success before normal replies, and the existing
 combined-update order. Platforms remain macOS/Linux/Windows; there is no new
 native process or wire schema. Limits and migration are the existing bounded
 registry/names files, queue and backward-compatible atomic-file protocol.
+
+## Local review checkpoint: caller inventory and remaining acceptance
+
+This is a WIP review checkpoint, not acceptance or completion of package 9. The
+following boundaries are implemented through the existing single writer; the
+new full caller surface needs independent review and final validation at its
+integrated source/environment.
+
+| Caller family | Durable boundary and authority |
+| --- | --- |
+| Create/pending admission | `openPendingAgent` / `resumePendingAgent` publish before callers use the new owner. |
+| Hooks and binding evidence | `register` / `revalidateBinding` preserve exact native-home/source proof, selected owner and peer ownership; hook replies await confirmed publication. Hermes refreshes the indexed source after preparation and verifies it in the final fence. |
+| External Resume | `setExternalResume`, `beginExternalDispatch`, `finishExternalCancellation` retain the original operation/owner fences and await their durable journal/cancellation. |
+| Native dispatch and first task | `beginNativeDispatch` publishes before native effect; `takeFirstTask` durably consumes the selected task before typing. |
+| Close | `setClosePlan` persists intent/cancellation and checks plan revision through queued reason/status writes. |
+| Resume, restart, retarget, new pane, restore | `confirmLaunch` publishes process/readiness/closed launch fields before terminal release or success. A first legitimate startup hook can supply the initially absent binding; it cannot replace a previously selected conversation/process. |
+| HostMove | The same immutable `confirmLaunch` candidate has at most one separately admitted recovery under the original expiry; uncertainty is sticky. Publication is followed synchronously by route/stream installation. Pending/refused holds fence queued and direct input/control, including handover. |
+| Stop/forget/exit | `confirmEngineExit` and `confirmSessionUnbound` precede deletion, reservation release and success; archive comes first. Session cleanup rechecks whether another owner acquired the old session. Attach-failure unbind also awaits strict completion. |
+| Restore fallbacks | Both shell conversions refresh engine absence after preparation. A fresh fallback without a native token strictly unbinds before respawn; a tokened fallback clears the binding inside its existing strict dispatch journal, with no preceding observational unbind. |
+| Discovery | `openProcessAgent` atomically stages every affected route owner; every fully removed owner gets captured cleanup/deletion, with only the original first predecessor transferring its browser. `reinstateArchived` keeps the archive until confirmed live install; `adoptEngine` and starting readiness use strict receipts. Dormant retirement captures its selected owner/backend and refreshes native absence after image preparation. |
+| Explicit core `agent_update` choices | `rename` stages the exact name key/value until publication, and `setLaunchModel` strictly publishes only the selected relaunch model/effort after live control. Fixed failure replies expose native-change-but-save-unconfirmed without success or guessed rollback. A later queued deletion survives an older prepared rename through existing name revisions. |
+| Purge dependency | Existing callers await Stop and durable name deletion. No worker purge authorization or proof against an old daemon's stale pre-bind startup snapshot is introduced. |
+| Exit/handover | Producer shutdown precedes terminal writer admission seal; listener/claim ownership lasts through actual settlement or the bounded process-exit deadline. Ordinary flush retains durable-result semantics. |
+
+Ordinary process/liveness observations, terminal availability, title/model reads,
+timestamps and throttled `lastOpenedAt` remain synchronous in memory and folded
+into asynchronous observation writes. Their mutation APIs do not grant a durable
+authority receipt. Synchronous transaction application and the existing peer
+three-way merge/rebase semantics remain; last-state-wins is not the algorithm.
+
+Remaining source/audit items exposed for review: the replaced synchronous
+`remove`, `removeAgent`, `unbindSession`, `releaseEngine`, `setLaunchArgs` and
+`setSubscriptionModel` currently have test-only callers. Their removal/fixture
+migration is pending, not an extra public API contract. Component preferences
+`setBrowser` (lifecycle) and `setGridLaunch` (the existing service API) remain
+observational; this checkpoint does not assert a new durable component-preference
+acknowledgement contract. The core `agent_update` inventory has only name, explicit
+model and opened choices; engine-observed models remain ordinary observations.
+
+Evidence is retained under `.harness/validation/registry-persistence/`. True reds
+include all launch/HostMove/input families, Stop, discovery adoption/revival and
+multi-route cleanup, late session reuse, explicit name/model held fsync, a later
+name deletion, attach-failure unbind and dormant/restore native reappearance.
+Invalid/unfinished fixtures remain recorded: the first dormant fixture used a
+starting row, which correctly took the held-start path and timed out; the corrected
+ready-owner fixture failed on the actual premature deletion. Queue-expiry coverage
+uses the real bounded writer deadline; interrupted/fake-clock attempts are not
+timing evidence. Fixture migration runs with failing old API assertions are not
+passing suite receipts. A full integrated test selection, coverage/native gates,
+crash/two-process acceptance and quiet after-profile comparison are still pending.
+
+The closure delta remains exactly one added runtime file,
+`lib/registryPersistence.ts`, required for every session's durable registry. No new
+runtime dependency, service door, process, datastore or unbounded receipt map is
+introduced. Startup load/migration/validation and the bounded final synchronous
+authority/rename/directory-fsync section still block. Package 9 step 5 receipt
+retention/scanning is untouched. None of those residuals is claimed complete.

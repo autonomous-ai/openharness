@@ -292,10 +292,10 @@ export class TerminalBackendCoordinator {
     return { state: 'failed', reason }
   }
 
-  typeLiteralLease(lease: TerminalControlLease, text: string): Promise<TerminalActionResult> {
+  typeLiteralLease(lease: TerminalControlLease, text: string, allowed?: () => boolean): Promise<TerminalActionResult> {
     const backend = this.backendFor(lease.runtime)
     return backend
-      ? backend.typeLiteral(lease.runtime, text)
+      ? backend.typeLiteral(lease.runtime, text, allowed)
       : Promise.resolve(terminalActionNotStarted('leased terminal backend is disabled'))
   }
 

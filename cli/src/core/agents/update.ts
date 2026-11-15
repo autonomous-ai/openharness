@@ -9,7 +9,7 @@ import type { BackendSocket } from '../../backendSocket.js'
 import type { AgentFrame } from '../../lib/agentFrame.js'
 import type { CloseAgentService } from '../../lib/closeAgentService.js'
 import { preview, sid } from '../../lib/log.js'
-import type { registry, RegisteredSession } from '../../lib/registry.js'
+import { matchesLaunchReceipt, RegistryOwnershipChanged, type registry, type RegisteredSession } from '../../lib/registry.js'
 import { RuntimeProfileControlError, type RuntimeProfileErrorCode } from '../../lib/runtimeControl.js'
 import { pickedLaunchModel } from '../../lib/launchModel.js'
 import { parseRuntimeProfile } from '../../lib/runtimeProfileWire.js'
@@ -20,7 +20,7 @@ import { parseRuntimeProfile } from '../../lib/runtimeProfileWire.js'
 export const AGENT_OPENED_THROTTLE_MS = 3_000
 
 export interface AgentUpdateDeps {
-  registry: Pick<typeof registry, 'resolve' | 'rename' | 'markOpened' | 'terminalAvailable' | 'setLaunchModel'>
+  registry: Pick<typeof registry, 'resolve' | 'rename' | 'markOpened' | 'terminalAvailable' | 'setLaunchModel' | 'displayName'>
   /** Moves an agent onto a model and effort (lib/runtimeProfileController.ts), or null while nothing can. */
   onRuntimeProfileUpdate: ((sessionId: string, selectedModel: string) => Promise<void>) | null
   /** Names the agent's pane after it, or null while nothing does. */
@@ -56,6 +56,13 @@ export function createAgentUpdate({
     if (hasName && !name) { reply({ error: 'MISSING_NAME' }); return }
     let s = registry.resolve(projectId)
     if (!s) { reply({ error: 'AGENT_NOT_FOUND' }); return }
+    s = structuredClone(s)
+    const current = () => matchesLaunchReceipt(registry.resolve(s!.agentId), s!)
+      && JSON.stringify(registry.resolve(s!.agentId)?.launchModel) === JSON.stringify(s!.launchModel)
+    const persistenceFailed = (error: unknown) => {
+      console.error('[agent_update] explicit choice publication failed')
+      reply({ error: error instanceof RegistryOwnershipChanged ? 'AGENT_CHANGED' : 'PERSISTENCE_UNCONFIRMED' })
+    }
     if (hasProfile) {
       if (typeof payload.selectedModel !== 'string' || !onRuntimeProfileUpdate) {
         reply({ error: 'INVALID_RUNTIME_PROFILE' })
@@ -63,10 +70,6 @@ export function createAgentUpdate({
       }
       try {
         await onRuntimeProfileUpdate(projectId, payload.selectedModel)
-        // The person's pick is what its session relaunches with from now on, not the model it was launched with, which
-        // a reopen would otherwise put back (lib/launchOverrides.ts, task #3395).
-        const picked = parseRuntimeProfile(payload.selectedModel)
-        if (picked) registry.setLaunchModel(s.agentId, pickedLaunchModel(s.engine, picked.model, picked.effort))
       } catch (error) {
         if (!(error instanceof RuntimeProfileControlError)) {
           const name = error instanceof Error ? preview(error.name, 80) : 'UnknownError'
@@ -77,9 +80,24 @@ export function createAgentUpdate({
         reply({ error: code })
         return
       }
+      try {
+        if (!current()) throw new RegistryOwnershipChanged('the selected agent changed during model control')
+        // A successful live change is not a promise that its relaunch choice reached disk.
+        const picked = parseRuntimeProfile(payload.selectedModel)
+        if (picked) {
+          const saved = await registry.setLaunchModel(s.agentId, pickedLaunchModel(s.engine, picked.model, picked.effort), { current })
+          if (!saved) throw new RegistryOwnershipChanged('the selected model owner was removed')
+          s = saved
+        }
+      } catch (error) { persistenceFailed(error); return }
     }
     if (hasName) {
-      s = registry.rename(projectId, name) ?? s
+      try {
+        const saved = await registry.rename(s.agentId, name, { current })
+        if (!saved) throw new RegistryOwnershipChanged('the selected name owner was removed')
+        s = saved
+      } catch (error) { persistenceFailed(error); return }
+      if (!current()) { persistenceFailed(new RegistryOwnershipChanged('the renamed owner changed')); return }
       onAgentRename?.(s, name)
     }
     // Throttled on the stamp the row already carries, so a repeat inside the window is answered
@@ -87,14 +105,19 @@ export function createAgentUpdate({
     // clock was set back) never throttles: the next open corrects it.
     let opened = false
     if (hasOpened) {
-      closeAgentService()?.cancel(s.agentId)
+      await closeAgentService()?.cancel(s.agentId)
+      if (!current()) { persistenceFailed(new RegistryOwnershipChanged('the opened owner changed')); return }
       const since = Date.now() - (s.lastOpenedAt ?? 0)
       if (!s.lastOpenedAt || since < 0 || since >= AGENT_OPENED_THROTTLE_MS) {
-        s = registry.markOpened(s.agentId) ?? s
+        s = structuredClone(registry.markOpened(s.agentId) ?? s)
         opened = true
       }
     }
     const agent = await toProject(s)
+    if (!current() || (hasName && registry.displayName(s) !== name)) {
+      persistenceFailed(new RegistryOwnershipChanged('the updated owner changed before its reply'))
+      return
+    }
     reply({ agent })
     // Every app sorts by the same stamp, so every app hears it: the web audience — the phone,
     // other desktops, and this computer's own windows — through `send`. Not the device: the dial

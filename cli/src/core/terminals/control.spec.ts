@@ -49,6 +49,21 @@ const resolve = (target: string): RegisteredSession | undefined =>
   target === 'agent-1' || target === 'session-1' ? session : undefined
 
 describe('terminal control', () => {
+  it.each(['submit', 'type', 'key'] as const)('refuses %s after a pending lease is superseded by an uncertain move', async action => {
+    const { terminals } = backend()
+    let refused = false, finish!: () => void, entered!: () => void
+    const pending = new Promise<void>(resolve => { finish = resolve }), started = new Promise<void>(resolve => { entered = resolve })
+    vi.mocked(terminals.acquireLease).mockImplementation(async () => { entered(); await pending; return { state: 'succeeded', value: { id: 1 } } as never })
+    const control = createTerminalControl({ resolve, terminals, refused: () => refused })
+    const result = action === 'submit' ? control.submitTerminalAction('agent-1', 'held')
+      : action === 'type' ? control.typeTerminal('agent-1', 'held') : control.keyTerminalAction('agent-1', 'Enter')
+    await started; refused = true; finish(); await result
+    expect(terminals.submitTextForLease).not.toHaveBeenCalled()
+    expect(terminals.typeLiteralLease).not.toHaveBeenCalled()
+    expect(terminals.sendLegacyKeyLease).not.toHaveBeenCalled()
+    expect(control.pinTerminalControl('agent-1')).toBeNull()
+  })
+
   beforeEach(() => vi.useFakeTimers())
   afterEach(() => vi.useRealTimers())
 

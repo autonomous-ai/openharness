@@ -192,6 +192,26 @@ function harness(rows: RegisteredSession[], opts: { livePanes?: string[]; aliveP
   const note = (name: string) => { h.calls.push(`${name}${h.transactionDepth ? '@tx' : ''}`) }
   h.deps = {
     registry: {
+      confirmLaunch: async (id, input) => {
+        const row = h.rows.get(id)
+        if (!row) return { state: 'not-published' }
+        if (input.processIdentity) note(`updateIdentity:${id}:${input.processIdentity.pid}`)
+        Object.assign(row, input, { launch: { state: 'ready' }, active: true })
+        return { state: 'confirmed', entry: structuredClone(row) }
+      },
+      beginNativeDispatch: async (id, nativeToken) => {
+        const row = h.rows.get(id)
+        if (!row) return null
+        row.launch = { state: 'starting', nativeToken }; row.active = true
+        return structuredClone(row)
+      },
+      confirmEngineExit: async (id) => {
+        note(`releaseEngine:${id}`)
+        const row = h.rows.get(id)
+        if (!row) return { state: 'not-published' }
+        row.engine = 'terminal'; row.sessionId = ''; row.processIdentity = null; row.launch = { state: 'ready' }; row.active = true
+        return { state: 'confirmed', entry: structuredClone(row) }
+      },
       list: () => [...h.rows.values()],
       byAgent: (id) => h.rows.get(id),
       transaction: async (apply) => {
@@ -216,14 +236,8 @@ function harness(rows: RegisteredSession[], opts: { livePanes?: string[]; aliveP
         if (r) { r.processIdentity = pi; if (grid !== undefined) r.grid = grid }
         return !!r
       },
-      unbindSession: (sid) => { note(`unbind:${sid}`); return true },
+      confirmSessionUnbound: async (id, sid) => { note(`unbind:${sid}`); const row = h.rows.get(id); if (!row) return { state: 'not-published' }; row.sessionId = ''; return { state: 'confirmed', entry: structuredClone(row) } },
       inheritName: (from, to) => { note(`inheritName:${from}->${to}`) },
-      releaseEngine: (id) => {
-        note(`releaseEngine:${id}`)
-        const r = h.rows.get(id); if (!r || !r.terminalHost) return null
-        r.engine = 'terminal'; r.sessionId = ''; r.processIdentity = null; r.launch = { state: 'ready' }; r.active = true
-        return r
-      },
     },
     livePane: async (runtime) => (opts.alivePanes ?? []).includes(runtime.paneId),
     liveProcess: async (_entry, runtime) => live.has(runtime.paneId) ? identity(1000 + Number(runtime.paneId.slice(1))) : null,
@@ -244,14 +258,14 @@ function harness(rows: RegisteredSession[], opts: { livePanes?: string[]; aliveP
       h.launched.push({ agentId: entry.agentId, launch })
       h.paneCreates++
       if (opts.failCreate) return { ok: false, reason: 'tmux said no' }
-      control?.onDispatch?.()
+      await control?.onDispatch?.()
       return { ok: true, runtime: { backend: 'tmux', paneId: h.nextPane.shift() ?? '%99' } }
     },
     respawn: async (runtime, launch, control) => {
       note(`respawn:${runtime.paneId}:${launch.argv.join(' ')}`)
       h.launched.push({ agentId: 'respawn', launch })
       h.respawns++
-      control?.onDispatch?.()
+      await control?.onDispatch?.()
       return { ok: true }
     },
     probeProcess: async (runtime) => {
@@ -390,7 +404,7 @@ describe('restore ownership across asynchronous work', () => {
     else h.deps.respawn = async (_runtime, _launch, control) => {
       expect(operations.busy('agent-a')).toBe(true)
       expect(control?.current?.()).toBe(true)
-      control?.onDispatch?.()
+      await control?.onDispatch?.()
       expect(mark).toHaveBeenCalledWith('session-a')
       expect(h.calls).toContain('hold:tmux\u0000%3')
       dispatched()
@@ -603,7 +617,7 @@ describe('restoreAgents — which agents get a pane back', () => {
       'triggerHint:%0',
       'release:tmux\u0000%0', // the finally, idempotent by contract
     ])
-    expect(h.rows.get('agent-a')?.launch).toEqual({ state: 'starting' })
+    expect(h.rows.get('agent-a')?.launch).toEqual({ state: 'ready' })
   })
 
   it('launches fresh when the row has no session to resume', async () => {
@@ -653,7 +667,7 @@ describe('restoreAgents — which agents get a pane back', () => {
     h.deps.restorable = (runtime) => runtime.backend === 'ptyhost'
     const created: TerminalRuntimeRef[] = []
     h.deps.createPane = async (entry, launch, control) => {
-      h.paneCreates++; h.launched.push({ agentId: entry.agentId, launch }); control?.onDispatch?.()
+      h.paneCreates++; h.launched.push({ agentId: entry.agentId, launch }); await control?.onDispatch?.()
       const runtime = pty(`%${10 + h.paneCreates}`); created.push(runtime)
       return { ok: true, runtime }
     }
@@ -972,7 +986,7 @@ describe('restoreAgents — held until the service a launch asks is ready', () =
     const h = harness([gridRow('gridded', { launch: HELD, resumeOnly: true })])
     withModels(h)
     h.deps.defer = true
-    h.deps.retainStopped = vi.fn()
+    h.deps.retainStopped = vi.fn(async () => ({ state: 'confirmed' as const, entry: null }))
     const summary = await restoreAgents(h.deps)
     expect(summary.held).toEqual(['gridded'])
     expect(summary.skipped).toEqual([])
@@ -1093,7 +1107,7 @@ describe('restoreAgents — waiting for the engine', () => {
     const tail = h.calls.slice(7)
     expect(tail.slice(0, 4)).toEqual(['inheritName:session-a->agent-a', 'unbind:session-a', 'hold:tmux\u0000%0', 'respawn:%0:claude'])
     expect(tail).toContain('updateIdentity:agent-a:9')
-    expect(h.rows.get('agent-a')?.launch).toEqual({ state: 'starting' })
+    expect(h.rows.get('agent-a')?.launch).toEqual({ state: 'ready' })
   })
 
   it('keeps the conversation the fresh launch leaves, before it is unbound', async () => {
@@ -1122,12 +1136,13 @@ describe('restoreAgents — waiting for the engine', () => {
     expect(h.respawns).toBe(2)
     expect(h.launches.map((l) => l.resumeSessionId ?? 'fresh')).toEqual(['session-a', 'fresh'])
     const tail = h.calls.slice(7)
-    expect(tail.slice(0, 5)).toEqual(['updateIdentity:agent-a:7', 'inheritName:session-a->agent-a', 'unbind:session-a', 'hold:tmux\u0000%0', 'respawn:%0:claude'])
+    expect(tail.slice(0, 4)).toEqual(['inheritName:session-a->agent-a', 'unbind:session-a', 'hold:tmux\u0000%0', 'respawn:%0:claude'])
+    expect(h.calls).not.toContain('updateIdentity:agent-a:7')
     expect(tail).toContain('updateIdentity:agent-a:8')
     expect(tail).toContain('clearRemainOnExit:%0')
     // remain-on-exit was NOT cleared before the first engine died — that is what kept the pane.
     expect(tail.indexOf('clearRemainOnExit:%0')).toBeGreaterThan(tail.indexOf('respawn:%0:claude'))
-    expect(h.rows.get('agent-a')?.launch).toEqual({ state: 'starting' })
+    expect(h.rows.get('agent-a')?.launch).toEqual({ state: 'ready' })
   })
 
   it('fails a fresh engine that exits inside the settling window', async () => {
@@ -1229,7 +1244,7 @@ describe('restoreAgents — terminals', () => {
     expect(h.launches).toEqual([{ agentId: 'term-1' }])
     expect(h.calls).toEqual([
       'createPane:term-1', 'updateRuntimes:term-1:%0@tx', 'setLaunch:term-1:held@tx',
-      'clearIdentity:term-1', 'respawn:%0:terminal', 'setLaunch:term-1:ready', 'clearRemainOnExit:%0',
+      'clearIdentity:term-1', 'respawn:%0:terminal', 'clearRemainOnExit:%0',
     ])
     expect(h.rows.get('term-1')?.launch).toEqual({ state: 'ready' })
   })
@@ -1315,9 +1330,9 @@ describe('restoreAgents — terminals', () => {
 it('retains a missing strict-resume pane whose resume was never confirmed for explicit Open', async () => {
   const entry = row({ resumeOnly: true, launch: { state: 'starting' } })
   const h = harness([entry])
-  h.deps.retainStopped = vi.fn((saved, _paneAlive) => { h.rows.delete(saved.agentId) })
+  h.deps.retainStopped = vi.fn(async (saved, _paneAlive) => { h.rows.delete(saved.agentId); return { state: 'confirmed' as const, entry: null } })
   const summary = await restoreAgents(h.deps)
-  expect(h.deps.retainStopped).toHaveBeenCalledWith(entry, false)
+  expect(h.deps.retainStopped).toHaveBeenCalledWith(entry, false, expect.objectContaining({ current: expect.any(Function) }))
   expect(summary.restored).toEqual([])
   expect(h.paneCreates).toBe(0)
   expect(h.respawns).toBe(0)
@@ -1326,7 +1341,7 @@ it('retains a missing strict-resume pane whose resume was never confirmed for ex
 it('restores a confirmed strict-resume pane by exact resume, and never falls back to fresh', async () => {
   const entry = row({ resumeOnly: true, launch: { state: 'ready' } })
   const h = harness([entry])
-  h.deps.retainStopped = vi.fn()
+  h.deps.retainStopped = vi.fn(async () => ({ state: 'confirmed' as const, entry: null }))
   h.probes.set('%0', [null, null])
   h.states.set('%0', [{ dead: true }])
   const summary = await restoreAgents(h.deps)
@@ -1343,18 +1358,31 @@ it('restores a confirmed strict-resume pane by exact resume, and never falls bac
 it('archives an engine that exited while the daemon was down without overwriting its shell', async () => {
   const entry = row()
   const h = harness([entry], { alivePanes: ['%3'] })
-  h.deps.retainStopped = vi.fn()
+  h.deps.retainStopped = vi.fn(async () => ({ state: 'confirmed' as const, entry: null }))
   await restoreAgents(h.deps)
-  expect(h.deps.retainStopped).toHaveBeenCalledWith(entry, true)
+  expect(h.deps.retainStopped).toHaveBeenCalledWith(entry, true, expect.objectContaining({ current: expect.any(Function) }))
   expect(h.paneCreates).toBe(0)
   expect(h.respawns).toBe(0)
+})
+
+it('awaits an exited engine publication before completing restore', async () => {
+  const h = harness([row()], { alivePanes: ['%3'] })
+  let release!: () => void, entered!: () => void
+  const held = new Promise<void>(resolve => { release = resolve })
+  const called = new Promise<void>(resolve => { entered = resolve })
+  h.deps.retainStopped = vi.fn(async () => { entered(); await held; return { state: 'confirmed' as const, entry: null } })
+  let settled = false
+  const pending = restoreAgents(h.deps).finally(() => { settled = true })
+  await called
+  try { await Promise.resolve(); await Promise.resolve(); expect(settled).toBe(false) }
+  finally { release(); await pending }
 })
 
 
 describe('missing held panes against the durable registry', () => {
   it.each([['cycle', false], ['chain failure', false], ['cycle', true], ['chain failure', true], ['outside selection', true]] as const)('preserves every row through a recycled route %s (held pass %s)', async (mode, only) => {
     const old = mode === 'cycle' ? ['%1', '%0'] : mode === 'chain failure' ? ['%2', '%0', '%1'] : ['%3', '%0']
-    const entries = old.map(paneId => realRegistry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId }], cwd: '/tmp' })!)
+    const entries = await Promise.all(old.map(async paneId => (await realRegistry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId }], cwd: '/tmp' }))!))
     try {
       for (const entry of entries) realRegistry.setLaunch(entry.agentId, heldLaunch('store'))
       const h = harness(entries)
@@ -1377,13 +1405,13 @@ describe('missing held panes against the durable registry', () => {
       if (mode === 'chain failure') expect(result.failed).toHaveLength(1)
       // The synchronous batch has released durable writes before its returned Promise settles.
       const committing = realRegistry.transaction(() => realRegistry.setLaunch(entries[0].agentId, heldLaunch('store')))
-      expect(() => realRegistry.setClosePlan(entries[0].agentId, null)).not.toThrow()
+      await expect((async () => (await realRegistry.setClosePlan(entries[0].agentId, null)))()).resolves.not.toBeInstanceOf(Error)
       await committing
     } finally { for (const entry of entries) realRegistry.removeAgent(entry.agentId) }
   })
 
   it('an allocated waiting row stays inactive while a service answer is outstanding', async () => {
-    const entry = realRegistry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%44' }] })!
+    const entry = (await realRegistry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%44' }] }))!
     let finish!: (value: RestoreLaunchResult) => void
     try {
       realRegistry.setLaunch(entry.agentId, heldLaunch('store'))
@@ -1464,7 +1492,7 @@ describe('external adoption crash boundaries', () => {
     launch: starting ? { state: 'starting' } : heldLaunch('search'),
   })
   function dispatch(h: Harness) {
-    h.deps.registry.beginExternalDispatch = id => {
+    h.deps.registry.beginExternalDispatch = async id => {
       const row = h.rows.get(id)!
       expect(row.launch?.state).toBe('held')
       h.calls.push('journal:dispatch')
@@ -1486,7 +1514,7 @@ describe('external adoption crash boundaries', () => {
       h.deps.waitingPane = vi.fn(async () => true)
       h.deps.respawn = vi.fn(async (_pane, launch, control) => {
         expect(control?.expectedHeldToken).toBe(h.rows.get('agent-a')?.externalResume?.token)
-        control?.onDispatch?.()
+        await control?.onDispatch?.()
         expect(h.rows.get('agent-a')).toMatchObject({ launch: { state: 'starting' }, externalResume: { dispatched: true } })
         expect(control?.current?.()).toBe(true)
         expect(launch.argv).toContain('imported-session')
@@ -1513,7 +1541,7 @@ describe('external adoption crash boundaries', () => {
       h.probes.set('%3', [identity(12)])
       expect((await restoreAgents(h.deps)).restored).toEqual(['agent-a'])
       await settled(h, 1, 1)
-      expect(begin).toHaveBeenCalledWith('agent-a', firstTask)
+      expect(begin).toHaveBeenCalledWith('agent-a', firstTask, { current: expect.any(Function) })
     }
   })
 
@@ -1538,7 +1566,7 @@ describe('external adoption crash boundaries', () => {
       h.deps.waitingPane = async () => failure === 'before-tmux'
       const executed = vi.fn()
       h.deps.respawn = async (_pane, _launch, control) => {
-        control?.onDispatch?.(); executed(); return { ok: false, reason: 'lost tmux reply' }
+        await control?.onDispatch?.(); executed(); return { ok: false, reason: 'lost tmux reply' }
       }
       h.probes.set('%3', [identity(11)])
       const summary = await restoreAgents(h.deps)
@@ -1557,7 +1585,7 @@ describe('external adoption crash boundaries', () => {
   it('resumes a committed external conversation after tmux loss, retaining strict identity without search or a fresh fallback', async () => {
     const h = harness([imported('admitted', true)])
     dispatch(h)
-    h.deps.retainStopped = vi.fn()
+    h.deps.retainStopped = vi.fn(async () => ({ state: 'confirmed' as const, entry: null }))
     h.deps.waitingLaunch = () => ({ argv: ['waiting-shell'] })
     h.states.set('%0', [{ dead: true }])
     expect((await restoreAgents(h.deps)).restored).toEqual(['agent-a'])
@@ -1575,7 +1603,7 @@ describe('restoreAgents — a pane that holds only the recorded process (#4259)'
     const gone = row({ agentId: 'gone', sessionId: 'session-b', tmuxPane: '%4', runtimes: [{ backend: 'tmux', paneId: '%4' }],
       primaryRuntimeKey: 'tmux\u0000%4', processIdentity: identity(21) })
     const h = harness([kept, gone])
-    const retainStopped = h.deps.retainStopped = vi.fn()
+    const retainStopped = h.deps.retainStopped = vi.fn<NonNullable<RestoreAgentsDeps['retainStopped']>>(async () => ({ state: 'confirmed' as const, entry: null }))
     const panes: TerminalRuntimeRef[] = [{ backend: 'tmux', paneId: '%3' }, { backend: 'tmux', paneId: '%4' }]
     h.deps.survey = () => terminalSurvey(async () => ({ ok: true, panes }), async (runtime) => ({
       ok: false, unknown: false,

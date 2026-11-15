@@ -80,6 +80,22 @@ afterEach(async () => {
 })
 
 describe('TmuxBackend lifecycle', () => {
+  it.each(['create', 'respawn'] as const)('waits for a durable journal and rechecks ownership before %s', async operation => {
+    const calls = recordingTmux()
+    let release!: () => void, entered!: () => void, current = true
+    const journal = new Promise<void>(resolve => { release = resolve })
+    const preparing = new Promise<void>(resolve => { entered = resolve })
+    const backend = new TmuxBackend(undefined, () => 'private-test-owner', () => {})
+    const request = { command: ['never-executed'], current: () => current, onDispatch: () => { entered(); return journal } }
+    const dispatched = operation === 'create' ? backend.create(request)
+      : backend.respawn({ backend: 'tmux', paneId: '%42' }, request)
+    await preparing
+    current = false
+    release()
+    expect(await dispatched).toMatchObject({ state: 'failed', dispatch: 'not_started' })
+    expect(calls().some(call => call.includes('new-session') || call.includes('respawn-pane'))).toBe(false)
+  })
+
   it('keeps environment writes out of a pane revoked during session lookup', async () => {
     const calls = recordingTmux('', '$4')
     let current = true

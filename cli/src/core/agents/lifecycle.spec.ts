@@ -328,18 +328,18 @@ describe('the agent browser, as its agent starts and ends', () => {
   const browsers = (port: Port | null = { attached: vi.fn(), stopped: vi.fn(), moved: vi.fn() }, rows = liveRows(), saved = savedRows()) =>
     ({ port, rows, saved, lifecycle: createAgentBrowserLifecycle(() => port, rows, saved) })
 
-  it('stops the browser of an agent whose engine exits by itself', () => {
+  it('stops the browser of an agent whose engine exits by itself', async () => {
     const { port, lifecycle } = browsers()
     lifecycle.attached(withBrowser)
     expect(port!.attached).toHaveBeenCalledWith(withBrowser)
     const archive = new Map<string, RegisteredSession>()
     const retain = createRetainExitedSession({
       stoppedAgents: { save: (s) => { archive.set(s.agentId, s) }, get: (id) => archive.get(id) ?? null },
-      registry: { releaseEngine: () => null, removeAgent: () => true },
+      registry: { confirmEngineExit: async () => ({ state: 'confirmed', entry: null }) },
       send: () => {}, publishStoppedAgent: async () => {}, announceSession: () => {}, invalidateTerminalControl: () => {},
       forgetInput: () => {}, ended: lifecycle.ended, syncRecapPool: () => {}, warn: () => {},
     })
-    retain(withBrowser, false)
+    await retain(withBrowser, false)
     expect(port!.stopped).toHaveBeenCalledWith('a1')
   })
 

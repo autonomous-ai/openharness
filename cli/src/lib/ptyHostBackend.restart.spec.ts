@@ -184,7 +184,7 @@ const screen = async (backend: PtyHostBackend, runtime: PtyRuntimeRef): Promise<
         if (typeof root !== 'number' || !child) throw new Error(`no process tree: root=${String(root)} child=${child}`)
         expect(running(root) && running(child)).toBe(true)
 
-        const row = registry.openPendingAgent({ engine: 'terminal', runtimes: [pane], cwd: dir })!
+        const row = (await registry.openPendingAgent({ engine: 'terminal', runtimes: [pane], cwd: dir }))!
         registry.setLaunch(row.agentId, { state: 'ready' })
         const stoppedAgents = new StoppedAgentStore(join(dir, 'saved'))
         const restartJobs = new AgentRestartCoordinator()
@@ -194,7 +194,7 @@ const screen = async (backend: PtyHostBackend, runtime: PtyRuntimeRef): Promise<
         const stop = createStopAgentService({
           registry, stoppedAgents, restartJobs, stopJobs, backendFor,
           agentReconciler: { suppress() {}, holdRoute() {}, releaseRoute() {}, trigger: async () => {} },
-          forgetSession: (id) => { registry.removeAgent(id) }, markDeleted() {}, clearDeleted() {}, stopNative: async () => {},
+          forgetSession: async (id) => { registry.removeAgent(id) }, markDeleted() {}, clearDeleted() {}, stopNative: async () => {},
         })
         await stop(row.agentId)
         expect(registry.byAgent(row.agentId)).toBeUndefined()

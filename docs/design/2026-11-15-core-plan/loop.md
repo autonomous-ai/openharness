@@ -250,14 +250,41 @@ environment. Registry lock/save and creation-receipt retention are separate, unf
 
 ### PR 4 (core-loop-4): the registry save never sleeps the loop
 
+Status, 2026-11-16: bounded first increment in development; not complete or merged.
+The reviewed implementation contract is [registry persistence](../2026-11-16-registry-persistence.md).
+It supersedes the old last-state-wins sketch below: saves merge competing snapshots
+under the old mkdir/owner.json exclusion and rebase captured field intents without
+losing peer updates. Lock wait/read/owner publication/temp write/fsync are asynchronous;
+one active operation and at most 64 queued operations retain ownership through actual
+I/O cleanup. Durable result delivery is separate from cleanup settlement. The five-second
+queue/pre-publication deadline revokes an unentered write; it cannot interrupt the
+remaining synchronous final authority/rename/directory-fsync section.
+
+Strict replies/releases now use selected-owner candidates and refreshed native proof
+for hooks, Resume, Close plans, launch readiness, HostMove, Stop/unbind, discovery
+ownership and explicit core name/model choices. Discovery/restore exit proofs refresh
+after image preparation; every displaced owner receives cleanup. The local review
+checkpoint inventories remaining test-only API cleanup and observational component
+preferences. Caller audit and focused validation remain incomplete: no broad-gate or
+after-profile receipt is claimed. Unconfirmed rename retains whole-group recovery and
+cannot authorize success, an old-engine rollback or archive deletion. Exit seals
+admission and waits for actual settlement before listener/claim release.
+
+Core import closure delta for this task: one added file, `lib/registryPersistence.ts`;
+no new process, runtime dependency or feature door. Startup load and final synchronous
+publication/fsync still block and remain explicit residual work. Step 5 receipt expiry/
+incremental scanning is untouched and remains open. Before/after profiling requires a
+reserved quiet interval; the original 83-sample baseline and invalid sandbox run are
+retained separately in the task's validation receipts.
+
 - `lib/registry.ts:492-601` `withRegistryFileLock`: `mkdir` lock dir + `owner.json` (fsync), on `EEXIST` it waits with
   `sleepSync(20)` (`Atomics.wait`, line 501) up to `LOCK_BUDGET_MS` 2 s. `atomicWriteJson` (line 627): temp file
   fsync + rename + `syncStateDirectory` (`lib/secureState.ts:82`, a directory fsync). That is the three fsyncs.
 - Who else takes this lock (the exclusion between processes must stay): `grep -rn "withRegistryFileLock\|LOCK_DIR"`;
   other daemons on one machine (`e2e/twodaemons.e2e.ts`), an older core during a handover (`e2e/updates.e2e.ts`), CLI
   commands. A new core must still exclude an older one, and the reverse (compatibility rule in the plan).
-- Plan: an async lock (same `mkdir` lock dir and owner file, so old builds still see it), waiting with timers, never
-  `Atomics.wait`; saves queued in the process (one writer at a time in-process, coalesced: the last state wins).
+- Historical sketch (superseded by the reviewed Design above): an async lock using the same
+  `mkdir` lock dir and owner file, waiting with timers, never `Atomics.wait`.
   `registry.transaction` callers expect the row change to apply synchronously (see `core/agents/hostMove.ts` `swap`):
   keep the in-memory change synchronous, make only the disk write async, and say what a crash in between loses.
 - fsyncs: the temp file's fsync before the rename is what makes the rename durable (keep); the directory fsync makes

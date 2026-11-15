@@ -173,16 +173,24 @@ describe('the core\'s start-up order (core/main.ts)', () => {
       .toEqual([])
   })
 
-  it('protects acknowledged bindings on every exit after registry ownership, before startup can yield', () => {
+  it('drains durable registry work after producers stop and before releasing successor ownership', () => {
     const source = code(SOURCE)
-    const owned = source.indexOf('await refuseServedDataFolder(')
-    const loaded = source.indexOf('registry.load()')
-    const exiting = source.indexOf("process.on('exit', () => registry.flush({ exiting: true }))")
-    expect(loaded).toBeGreaterThan(owned)
-    expect(exiting).toBeGreaterThan(loaded)
-    // An update can exit before full teardown is constructed. Install the synchronous safeguard
-    // before the first yield after load, while a duplicate daemon still exits without touching disk.
-    expect(exiting).toBeLessThan(source.indexOf('\n  await ', loaded))
+    expect(source.indexOf('registry.load()')).toBeGreaterThan(source.indexOf('await refuseServedDataFolder('))
+    // A process exit event cannot await storage; every acknowledged authority operation is already durable.
+    expect(source).not.toContain("process.on('exit', () => registry.flush(")
+    const update = source.slice(source.indexOf('const updateTeardown ='), source.indexOf('daemonBoot.applyStagedUpdate ='))
+    const shutdown = source.slice(source.indexOf('const shutdown ='), source.indexOf('daemonBoot.stopHere = (why)'))
+    for (const teardown of [update, shutdown]) {
+      const flushed = teardown.indexOf('registry.flush({ exiting: true })')
+      for (const stopped of ['agentReconciler.stop()', 'questionWatcher.stopAll()', 'cursorDiscovery.stop()',
+        'runtimeProfiles.stop()', 'watcher.stop()', 'localWsServer.close()', 'hookServer.close()', 'backend.stop()']) {
+        expect(teardown.indexOf(stopped), stopped).toBeGreaterThan(-1)
+        expect(teardown.indexOf(stopped), stopped).toBeLessThan(flushed)
+      }
+      expect(flushed).toBeGreaterThan(-1)
+      expect(teardown.indexOf('dataFolderClaim?.release()')).toBeGreaterThan(flushed)
+      expect(teardown.indexOf('localSocket?.close()')).toBeGreaterThan(flushed)
+    }
   })
 
   it('on Windows, claims the data folder once no daemon serves it, before reading or listening, and gives it up with the socket', () => {

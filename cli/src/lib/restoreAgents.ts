@@ -18,9 +18,8 @@
  *      never make another row surrender its route; all such conversations remain held.
  *   2. The new route is HELD in the reconciler until the engine process is bound here. Otherwise the
  *      reconciler's discovery half sees an unclaimed engine process and mints a fresh agentId for it.
- *   3. The row keeps `launch: starting` and only gets its process identity from here. The reconcile
- *      pass after the release then matches the process, sees a launch in progress, and does the
- *      full ready → attach → announce sequence it already does for `agent_create`.
+ *   3. The settled process and ready state are published durably before the terminal hold releases.
+ *      Discovery can then attach and announce the verified owner.
  *
  * A grid agent comes back onto its grid: the registry kept the launch it was created or retargeted
  * with (`gridLaunch`, credential included), and `buildLaunch` turns that back into the same env and
@@ -39,10 +38,11 @@
 import { isTerminalEngine, type AgentEngine } from '../engines/types.js'
 import { launchedGrid, type GridAssignment } from './gridAssignmentWire.js'
 import type { LaunchOverrides } from './launchOverrides.js'
-import type { AgentLaunch, ProcessIdentity, RegisteredSession } from './registry.js'
+import { matchesLaunchReceipt, RegistryOwnershipChanged, type AgentLaunch, type LaunchPublication, type ProcessIdentity, type RegisteredSession, type RegistryAuthority, type registry } from './registry.js'
+import { IdentityReadUnavailable } from '../engines/kit/identityScan.js'
 import type { TerminalDispatchControl, TerminalRuntimeRef } from './terminalTypes.js'
 import type { WindowsPaneLaunch } from './windows/engineStart.js'
-import { processAmong, sameTerminalPlacement, terminalInstanceId, terminalRouteKey } from './terminalRuntime.js'
+import { processAmong, sameProcessIdentity, sameTerminalPlacement, terminalInstanceId, terminalRouteKey } from './terminalRuntime.js'
 import { resumesConversation } from './resumeCapability.js'
 
 export interface RestoreLaunch {
@@ -100,24 +100,25 @@ export interface RestoreAgentsDeps {
   /** A missing-pane group reserves every possible stale route owner until its synchronous commit. */
   paneBusy?: (agentId: string) => boolean
   paneAllocations?: <T>(agentIds: readonly string[], operation: () => Promise<T>) => Promise<T>
-  retainStopped?: (entry: RegisteredSession, paneAlive: boolean) => void
+  retainStopped?: (entry: RegisteredSession, paneAlive: boolean, authority?: RegistryAuthority) => Promise<LaunchPublication>
   /** Keeps a conversation the restore had to leave for a new one as a stopped harness (keepAbandonedConversation.ts). */
   keepAbandoned?: (left: RegisteredSession) => void
 
   registry: {
+    confirmLaunch: typeof registry.confirmLaunch
+    confirmEngineExit: typeof registry.confirmEngineExit
+    beginNativeDispatch: typeof registry.beginNativeDispatch
     list(): RegisteredSession[]
     byAgent(agentId: string): RegisteredSession | undefined
     transaction<T>(apply: () => T | Promise<T>): Promise<T>
     clearProcessIdentity(agentId: string): boolean
     updateRuntimes(agentId: string, runtimes: readonly TerminalRuntimeRef[], primaryRuntimeKey?: string): boolean
     setLaunch(agentId: string, launch: AgentLaunch): RegisteredSession | null
-    beginExternalDispatch?(agentId: string, firstTask?: string): RegisteredSession | null
+    beginExternalDispatch?(agentId: string, firstTask?: string, authority?: { current?: () => boolean }): Promise<RegisteredSession | null>
     /** A relaunch never says the gateway (the engine's hook or argv does); its grid is its launch's. */
     updateProcessIdentity(agentId: string, processIdentity: ProcessIdentity, gateway?: undefined, grid?: GridAssignment | null): boolean
-    unbindSession(sessionId: string): boolean
+    confirmSessionUnbound: typeof registry.confirmSessionUnbound
     inheritName(fromSessionId: string, toSessionId: string): void
-    /** A terminal's adopted engine is gone: back to a shell (registry.ts). */
-    releaseEngine(agentId: string): RegisteredSession | null
   }
   /**
    * Whether the row's PANE is still there — a live pane in a session this daemon created. Every
@@ -152,7 +153,7 @@ export interface RestoreAgentsDeps {
    *  `engineExit` set: the engine left and the pane is a shell now (`ENGINE_EXIT_PANE_OPTION`), which for
    *  a restore is the same news as `dead`. */
   paneState: (runtime: TerminalRuntimeRef) => Promise<{ dead: boolean; engineExit?: number | null } | 'gone' | 'unknown'>
-  clearRemainOnExit: (runtime: TerminalRuntimeRef) => Promise<void>
+  clearRemainOnExit: (runtime: TerminalRuntimeRef, current?: () => boolean) => Promise<void>
   holdRoute: (routeKey: string, autoReleaseMs: number) => void | (() => void)
   releaseRoute: (routeKey: string) => void
   triggerHint: (runtime: TerminalRuntimeRef, engine: AgentEngine) => Promise<void>
@@ -511,8 +512,18 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
             launchedGrid(entry.gridLaunch))
         }
       } else if (!isTerminalEngine(entry.engine)) {
-        if (deps.retainStopped) deps.retainStopped(entry, true)
-        else deps.registry.releaseEngine(entry.agentId)
+        if (deps.retainStopped) {
+          const retained = await deps.retainStopped(entry, true, { current, refresh: async () => {
+            if (await deps.liveProcess(entry, runtime)) throw new IdentityReadUnavailable('the previous engine is not confirmed stopped')
+          } })
+          if (retained.state !== 'confirmed') { summary.skipped.push({ agentId: entry.agentId, reason: 'engine exit publication is held' }); continue }
+        }
+        else {
+          const publication = await deps.registry.confirmEngineExit(entry.agentId, 'shell', { current, refresh: async () => {
+            if (await deps.liveProcess(entry, runtime)) throw new IdentityReadUnavailable('the previous engine is not confirmed stopped')
+          } })
+          if (publication.state !== 'confirmed' || !publication.entry) { summary.skipped.push({ agentId: entry.agentId, reason: 'engine exit publication is held' }); continue }
+        }
         deps.log(`[restore] ${entry.engine} → terminal · agent ${entry.agentId} · its engine exited while the daemon was down`)
       }
       continue
@@ -532,7 +543,8 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
     // catalog, then `harness stop` + `tmux kill-server` + app relaunch — every other tile came
     // back, this one sat on "no verified terminal pane" with nothing to press.
     if (entry.resumeOnly && !entry.externalResume && entry.launch?.state !== 'ready' && deps.retainStopped) {
-      deps.retainStopped(entry, false)
+      const retained = await deps.retainStopped(entry, false, { current })
+      if (retained.state !== 'confirmed') { summary.skipped.push({ agentId: entry.agentId, reason: 'engine exit publication is held' }); continue }
       summary.skipped.push({ agentId: entry.agentId, reason: 'saved conversation awaits explicit Open' })
       continue
     }
@@ -543,7 +555,12 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
     // every reboot as a bare prompt with the conversation unbound, while Claude came back. A resume
     // the engine refuses falls back to the shell, never a fresh engine (`relaunchFresh`).
     if (entry.terminalHost && !resumesConversation(entry.engine, entry.sessionId)) {
-      if (!isTerminalEngine(entry.engine)) deps.registry.releaseEngine(entry.agentId)
+      if (!isTerminalEngine(entry.engine)) {
+        const publication = await deps.registry.confirmEngineExit(entry.agentId, 'shell', { current, refresh: async () => {
+          if (await deps.liveProcess(entry, runtime)) throw new IdentityReadUnavailable('the previous engine is not confirmed stopped')
+        } })
+        if (publication.state !== 'confirmed' || !publication.entry) { summary.skipped.push({ agentId: entry.agentId, reason: 'engine exit publication is held' }); continue }
+      }
       const shell = deps.registry.byAgent(entry.agentId) ?? entry
       missing.push({ entry: { ...shell }, runtime, current: restoreOwner(deps, shell) })
       continue
@@ -667,14 +684,14 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
         }
         let watching = false
         try {
-          const control = { current: dispatchCurrent, ...(entry.externalResume ? { expectedHeldToken: entry.externalResume.token } : entry.launch?.state === 'held' && entry.launch.nativeToken ? { expectedHeldToken: entry.launch.nativeToken } : {}), onDispatch: () => {
+          const control = { current: dispatchCurrent, ...(entry.externalResume ? { expectedHeldToken: entry.externalResume.token } : entry.launch?.state === 'held' && entry.launch.nativeToken ? { expectedHeldToken: entry.launch.nativeToken } : {}), onDispatch: async () => {
             if (entry.externalResume?.phase === 'admitted') {
-              const committed = deps.registry.beginExternalDispatch?.(entry.agentId, launch.firstTask)
+              const committed = await deps.registry.beginExternalDispatch?.(entry.agentId, launch.firstTask, { current: dispatchCurrent })
               if (!committed) throw new Error('External resume dispatch could not be committed')
               owns = restoreOwner(deps, committed, !!deps.paneOperation)
             }
             if (launch.nativeToken) {
-              const committed = deps.registry.setLaunch(entry.agentId, { state: 'starting', nativeToken: launch.nativeToken })
+              const committed = await deps.registry.beginNativeDispatch(entry.agentId, launch.nativeToken, { current: dispatchCurrent })
               if (!committed) throw new Error('Native launch dispatch could not be committed')
               owns = restoreOwner(deps, committed, !!deps.paneOperation)
             }
@@ -714,8 +731,19 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
           const key = terminalRouteKey(created.runtime)
           if (!isTerminalEngine(entry.engine)) release ??= deps.holdRoute(key, budgetMs + HOLD_SLACK_MS) ?? (() => deps.releaseRoute(key))
           if (isTerminalEngine(entry.engine)) {
-            deps.registry.setLaunch(entry.agentId, { state: 'ready' })
-            await deps.clearRemainOnExit(created.runtime)
+            const revision = deps.revision?.(entry.agentId)
+            const publication = await deps.registry.confirmLaunch(entry.agentId, { processIdentity: null }, {
+              current: owns, refresh: async () => {
+                const pane = await deps.paneState(created.runtime)
+                if (pane === 'gone' || pane === 'unknown' || pane.dead) throw new IdentityReadUnavailable('the restored shell could not be confirmed')
+              },
+            })
+            const ready = publication.state === 'confirmed' ? publication.entry : null
+            const committed = () => !!ready && !deps.cancelled?.(entry.agentId) && deps.revision?.(entry.agentId) === revision
+              && matchesLaunchReceipt(deps.registry.byAgent(entry.agentId), ready)
+            if (!committed()) return
+            await deps.clearRemainOnExit(created.runtime, committed)
+            if (!committed()) return
             summary.restored.push(entry.agentId)
             deps.log(`[restore] terminal · agent ${entry.agentId} · pane ${dead.paneId} → ${created.runtime.paneId}`)
             return
@@ -750,6 +778,28 @@ async function watchRestoredPane(
   launched: GridAssignment | null | undefined,
 ): Promise<void> {
   const { agentId, engine } = entry
+  const generation = deps.revision?.(agentId)
+  const lifecycle = () => !deps.cancelled?.(agentId) && deps.revision?.(agentId) === generation
+  const initial = structuredClone(deps.registry.byAgent(agentId) ?? entry)
+  const origin = (row: RegisteredSession) => JSON.stringify([row.registeredAt, row.engine, row.cwd, row.runtimes,
+    row.primaryRuntimeKey, row.codexHome, row.claudeHome, row.hermesHome, row.dsh, row.dshRuntime, row.gridLaunch])
+  const original = origin(initial)
+  let selectedFirstHook = false
+  const maySelectFirstHook = () => {
+    const row = deps.registry.byAgent(agentId)
+    return !initial.sessionId && !selectedFirstHook && lifecycle() && !!row && origin(row) === original
+      && (row.launch?.state === 'ready' || (row.launch?.state === 'starting'
+        && initial.launch?.state === 'starting' && row.launch.nativeToken === initial.launch.nativeToken))
+  }
+  const selectFirstHook = (identity: ProcessIdentity | null): boolean => {
+    const row = deps.registry.byAgent(agentId)
+    if (!maySelectFirstHook() || !row?.sessionId || !identity || !sameProcessIdentity(identity, row.processIdentity)
+      || identity.executable !== row.processIdentity?.executable) return false
+    selectedFirstHook = true
+    const owner = restoreOwner(deps, row)
+    current = () => lifecycle() && owner()
+    return current()
+  }
   let grid = launched
   const key = terminalRouteKey(runtime)
   const sleep = deps.sleep ?? defaultSleep
@@ -804,8 +854,6 @@ async function watchRestoredPane(
       const dispatchCurrent = () => current() && launch.current?.() !== false
       return inPane(deps, entry, dispatchCurrent, async () => {
         deps.keepAbandoned?.({ ...entry })
-        deps.registry.releaseEngine(agentId)
-        current = restoreOwner(deps, deps.registry.byAgent(agentId)!)
         const owns = restoreOwner(deps, deps.registry.byAgent(agentId)!, !!deps.paneOperation)
         const spawned = await deps.respawn(runtime, launch, { current: dispatchCurrent })
         if (!owns()) return false
@@ -813,8 +861,18 @@ async function watchRestoredPane(
           fail('ENGINE_DID_NOT_START', `The terminal could not be reopened: ${spawned.reason ?? 'unknown reason'}`)
           return false
         }
-        deps.registry.setLaunch(agentId, { state: 'ready' })
-        await deps.clearRemainOnExit(runtime)
+        const publication = await deps.registry.confirmEngineExit(agentId, 'shell', {
+          current: owns, refresh: async () => {
+            const pane = await deps.paneState(runtime)
+            if (pane === 'gone' || pane === 'unknown' || pane.dead || await deps.probeProcess(runtime, engine)) {
+              throw new IdentityReadUnavailable('the fallback shell changed before publication')
+            }
+          },
+        })
+        const shell = publication.state === 'confirmed' ? publication.entry : null
+        const committed = () => lifecycle() && !!shell && matchesLaunchReceipt(deps.registry.byAgent(agentId), shell)
+        if (!committed()) return false
+        await deps.clearRemainOnExit(runtime, committed)
         return false
       }, false)
     }
@@ -835,14 +893,23 @@ async function watchRestoredPane(
       // conversation held here, including when a refused resume falls back to a fresh launch.
       deps.keepAbandoned?.({ ...entry })
       deps.registry.inheritName(entry.sessionId, agentId)
-      deps.registry.unbindSession(entry.sessionId)
+      // A native dispatch journal clears this binding in its own strict publication.
+      // A launch without that journal needs the same durable release before respawn.
+      if (!launch.nativeToken) {
+        const publication = await deps.registry.confirmSessionUnbound(agentId, entry.sessionId, {
+          current: dispatchCurrent, refresh: async () => {
+            if (await deps.probeProcess(runtime, engine)) throw new IdentityReadUnavailable('the previous engine is not confirmed stopped')
+          },
+        })
+        if (publication.state !== 'confirmed' || !publication.entry) return false
+      }
       current = restoreOwner(deps, deps.registry.byAgent(agentId)!)
       let owns = restoreOwner(deps, deps.registry.byAgent(agentId)!, !!deps.paneOperation)
       // Renew before dispatch, so discovery cannot bind the new engine before its tmux reply.
       release = deps.holdRoute(key, budgetMs + HOLD_SLACK_MS) ?? (() => deps.releaseRoute(key))
-      const spawned = await deps.respawn(runtime, launch, { current: dispatchCurrent, onDispatch: () => {
+      const spawned = await deps.respawn(runtime, launch, { current: dispatchCurrent, onDispatch: async () => {
         if (launch.nativeToken) {
-          const committed = deps.registry.setLaunch(agentId, { state: 'starting', nativeToken: launch.nativeToken })
+          const committed = await deps.registry.beginNativeDispatch(agentId, launch.nativeToken, { current: dispatchCurrent })
           if (!committed) throw new Error('Native fallback dispatch could not be committed')
           current = restoreOwner(deps, committed)
           owns = restoreOwner(deps, committed, !!deps.paneOperation)
@@ -861,24 +928,43 @@ async function watchRestoredPane(
     const startedAt = Date.now()
     let delayMs = 50
     while (Date.now() - startedAt < budgetMs) {
-      if (!current()) return
+      if (!current() && !maySelectFirstHook()) return
       const identity = await deps.probeProcess(runtime, engine)
-      if (!current()) return
+      if (!current() && !selectFirstHook(identity)) return
       if (identity) {
-        deps.registry.updateProcessIdentity(agentId, identity, undefined, grid)
+        const selected = deps.registry.byAgent(agentId)?.processIdentity
+        if ((initial.processIdentity && (!sameProcessIdentity(initial.processIdentity, identity) || initial.processIdentity.executable !== identity.executable))
+          || (selected && (!sameProcessIdentity(selected, identity) || selected.executable !== identity.executable))) return
         // A resume the engine rejects does not fail to start — it starts, prints why, and exits a
         // few seconds later. Keep the pane (and the fallback) for a settling window before handing
         // it over; a pane let go at first sight of the process vanished with the engine and took
         // the agent with it (measured: claude resuming a conversation another client still held).
         const settled = await waitForSettle(deps, runtime, settleMs)
-        if (!current()) return
+        if (!current() && !selectFirstHook(identity)) return
         if (settled === 'gone') {
           if (!await relaunchFresh()) return
           delayMs = 50
           continue
         }
-        await deps.clearRemainOnExit(runtime)
-        if (!current()) return
+        const expires = performance.now() + Math.min(5_000, Math.max(0, budgetMs - (Date.now() - startedAt)))
+        const refresh = async () => {
+            const observed = await deps.probeProcess(runtime, engine)
+            if (!sameProcessIdentity(identity, observed) || observed?.executable !== identity.executable) {
+              throw new IdentityReadUnavailable('the restored process changed before publication')
+            }
+        }
+        let publication: LaunchPublication
+        try { publication = await deps.registry.confirmLaunch(agentId, { processIdentity: identity, grid }, { current, refresh, expires }) }
+        catch (error) {
+          if (!(error instanceof RegistryOwnershipChanged) || !selectFirstHook(identity)) throw error
+          await refresh()
+          publication = await deps.registry.confirmLaunch(agentId, { processIdentity: identity, grid }, { current, refresh, expires })
+        }
+        const ready = publication.state === 'confirmed' ? publication.entry : null
+        const committed = () => lifecycle() && !!ready && matchesLaunchReceipt(deps.registry.byAgent(agentId), ready)
+        if (!committed()) return
+        await deps.clearRemainOnExit(runtime, committed)
+        if (!committed()) return
         // Release BEFORE the hint: the pass it triggers is the one that must see this route again.
         release()
         await deps.triggerHint(runtime, engine)
@@ -919,7 +1005,7 @@ async function watchRestoredPane(
     }
     fail('START_TIMEOUT', `${engine} did not expose an engine process within ${Math.round(budgetMs / 60_000)} minutes. The terminal remains available.`)
   } catch (error) {
-    deps.log(`[restore] ${engine} · agent ${agentId} · watch failed · ${error instanceof Error ? error.message : error}`)
+    deps.log(`[restore] ${engine} · agent ${agentId} · watch failed · registry publication unavailable`)
   } finally {
     release()
   }

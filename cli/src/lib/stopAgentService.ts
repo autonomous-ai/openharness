@@ -4,7 +4,7 @@ import { captureResumeIdentity } from './captureResumeIdentity.js'
 import { isTerminalEngine } from '../engines/types.js'
 import { IdentityReadUnavailable, ObservedConversationUnavailable } from '../engines/kit/identityScan.js'
 import { controlTranscriptEvidence, engineKeepsTranscriptFile } from '../engines/transcriptBindings.js'
-import { withHermesHome, type registry as liveRegistry, type RegisteredSession } from './registry.js'
+import { withHermesHome, type registry as liveRegistry, type RegisteredSession, type RegistryAuthority } from './registry.js'
 import type { StoppedAgentStore } from './stoppedAgents.js'
 import type { AgentRestartCoordinator } from './restartAgent.js'
 import type { TerminalBackend } from './terminalBackend.js'
@@ -30,7 +30,7 @@ export interface StopAgentServiceDeps {
     releaseRoute(route: string): void
     trigger(): Promise<unknown>
   }
-  forgetSession(agentId: string, options: { force: true; captured?: RegisteredSession }): void
+  forgetSession(agentId: string, options: { force: true; captured?: RegisteredSession; authority?: RegistryAuthority }): Promise<void>
   markDeleted(agentId: string): void
   clearDeleted(agentId: string): void
   /**
@@ -232,11 +232,26 @@ export function createStopAgentService(deps: StopAgentServiceDeps) {
         if (!sameTarget() || options.current?.() === false) {
           throw new AgentStopError('The harness changed while pausing. Check its current state before trying again.')
         }
-        stoppedAgents.finishResume(sessionId)
         if (s.processIdentity) agentReconciler.suppress(s)
         // This publishes agent_deleted. It must follow confirmed termination, or a
         // desktop can display Paused and allow Resume while the old process runs.
-        forgetSession(sessionId, { force: true, captured: s })
+        try {
+          await forgetSession(sessionId, { force: true, captured: s, authority: {
+            current: () => { verifyTranscript(); return sameTarget() && options.current?.() !== false },
+            refresh: async () => {
+              verifyTranscript()
+              const selected = registry.resolve(sessionId)
+              if (selected?.processIdentity && !isTerminalEngine(selected.engine) && (await checkPidRuntime(selected)).state !== 'gone') {
+                throw new AgentStopError('The stopped process could not be confirmed before publication.')
+              }
+              verifyTranscript()
+            },
+          } })
+          if (registry.resolve(sessionId)) throw new AgentStopError('The harness changed while its stop was being published.')
+        } catch {
+          throw new AgentStopError('The stopped harness could not be durably retired. Its saved conversation is safe. Try stopping again.')
+        }
+        stoppedAgents.finishResume(sessionId)
       } finally {
         clearDeleted(sessionId)
         if (s.sessionId) clearDeleted(s.sessionId)

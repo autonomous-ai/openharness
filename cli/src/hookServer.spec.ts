@@ -612,7 +612,7 @@ describe('what a hook says of its own environment', () => {
       processIdentity: { pid: 4242, startMarker: 'fixture', executable: `<${engine}>` } } as RegisteredSession
     vi.spyOn(registry, 'byAgent').mockReturnValue(agent)
     const register = vi.spyOn(registry, 'register')
-      .mockReturnValue({ entry: agent, isNew: true, evicted: null, rebound: null, orphaned: null, ...result })
+      .mockResolvedValue({ entry: agent, isNew: true, evicted: null, rebound: null, orphaned: null, ...result })
     const { base, headers } = await start({ resolveHookAgent: async () => agent })
     const post = (extra: Record<string, string>) => fetch(`${base}/api/hook/session-start`, {
       method: 'POST', headers: { ...headers, ...extra },

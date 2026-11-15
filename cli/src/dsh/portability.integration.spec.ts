@@ -139,7 +139,7 @@ for (const engine of HARNESS_ENGINES) it(`${engine}: prepare → spawn → tool 
   const created = await createAndRegisterPane({ engine, cwd: workspace, sessionLabel: 'created',
     argv: [process.execPath, fixture], env: launch.env, dsh: pkg.id, dshRuntime: 'created',
     tmuxBackend: { create: async input => { run(input.env!); return { state: 'succeeded', dispatch: 'executed', runtime: { backend: 'tmux', paneId: '%1' } } }, kill: async () => ({ state: 'succeeded', dispatch: 'executed' }) },
-    registry: { openPendingAgent: input => { recorded = input; return { ...input, agentId: 'registered' } as RegisteredSession } } })
+    registry: { openPendingAgent: async input => { recorded = input; return { ...input, agentId: 'registered' } as RegisteredSession } } })
   expect(created.ok).toBe(true)
   expect(recorded).toMatchObject({ engine, dsh: pkg.id, dshRuntime: 'created', cwd: workspace })
   expect(JSON.parse(readFileSync(join(workspace, '.harness/verdict.json'), 'utf8'))).toEqual({ ready: true, artifact: 'scene.txt' })

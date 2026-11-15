@@ -60,7 +60,7 @@ beforeEach(async () => {
   for (const key of ['ADAPTER_DATA_DIR', 'CLAUDE_PROJECTS_DIR', 'CODEX_HOME', 'CURSOR_HOME']) vi.stubEnv(key, directory)
   registry = (await import('./registry.js')).registry
   registry.load()
-  expect(registry.openProcessAgent(input)).not.toBeNull()
+  expect((await registry.openProcessAgent(input))).not.toBeNull()
   clearCounts()
   tick()
 })
@@ -75,7 +75,7 @@ afterEach(() => {
 
 describe('key-order-insensitive row comparison', () => {
   it('adopts another writer\'s nested change while idle, then stays quiet', async () => {
-    registry.setClosePlan(input.agentId, plan)
+    ;(await registry.setClosePlan(input.agentId, plan))
     const [saved] = readRows()
     const external = { ...saved, closePlan: { ...plan, state: 'failed', detail: 'external' } }
     writeRows([reversedDeep(external)])
@@ -92,8 +92,8 @@ describe('key-order-insensitive row comparison', () => {
     expect(readRows()[0]).toEqual(external)
   })
 
-  it('does not bring back a close plan another process removed when a different field changes here', () => {
-    registry.setClosePlan(input.agentId, plan)
+  it('does not bring back a close plan another process removed when a different field changes here', async () => {
+    ;(await registry.setClosePlan(input.agentId, plan))
     const [saved] = readRows()
     const { closePlan: _removed, ...withoutPlan } = saved
     writeRows([reversedDeep(withoutPlan)])

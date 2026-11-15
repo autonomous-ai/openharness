@@ -44,7 +44,7 @@ export interface TerminalBackend<Ref extends TerminalRuntimeRef = TerminalRuntim
   titles(): Promise<TerminalReadResult<Map<string, string>>>
   validate(runtime: Ref, expected: TerminalProcessExpectation): Promise<RuntimeValidation>
   capture(runtime: Ref, options?: TerminalCaptureOptions): Promise<TerminalReadResult<string>>
-  typeLiteral(runtime: Ref, text: string): Promise<TerminalActionResult>
+  typeLiteral(runtime: Ref, text: string, allowed?: () => boolean): Promise<TerminalActionResult>
   submitText(runtime: Ref, text: string, options?: SubmitOptions): Promise<TerminalActionResult>
   sendKey(runtime: Ref, key: TerminalLogicalKey): Promise<TerminalActionResult>
   /** Raw bytes into the pane, as a stream's input frame writes them, with no stream open: what was typed while

@@ -63,10 +63,12 @@ function wiring(overrides: Partial<HostMoveWiring> = {}) {
   const w: HostMoveWiring = {
     registry: {
       byAgent: vi.fn(() => row),
-      transaction: vi.fn(async (apply: () => unknown) => apply()) as unknown as HostMoveWiring['registry']['transaction'],
-      updateRuntimes: vi.fn((_id: string, runtimes: readonly TerminalRuntimeRef[]) => { row.runtimes = [...runtimes]; return true }),
-      updateProcessIdentity: vi.fn((_id: string, identity: ProcessIdentity) => { row.processIdentity = identity; return true }),
-      setActive: vi.fn(() => true),
+      confirmLaunch: vi.fn<HostMoveWiring['registry']['confirmLaunch']>(async (_id, input, authority) => {
+        if (authority?.current?.() === false) return { state: 'not-published' }
+        Object.assign(row, input, { active: true, launch: { state: 'ready' } })
+        if (input.runtimes) row.primaryRuntimeKey = terminalRouteKey(input.runtimes[0]!)
+        return { state: 'confirmed', entry: structuredClone(row) }
+      }),
     },
     terminals: {
       backendFor: vi.fn((runtime: TerminalRuntimeRef) => terminalRouteKey(runtime) === terminalRouteKey(OLD) ? old : target),
@@ -130,15 +132,17 @@ describe('the move, wired to the core', () => {
     expect(control.current!()).toBe(false)
   })
 
-  it('switches the row in one transaction, and an announce that fails after it is logged, not thrown', () => {
-    const { w, row } = wiring({ announce: vi.fn(() => { throw new Error('socket closed') }) })
+  it('publishes the row before completion announces it', async () => {
+    const { w, row } = wiring()
     const deps = hostMoveDeps(session(), () => true, w)
-    expect(() => deps.swap('a1', NEW, NEW_ID)).not.toThrow()
+    expect(await deps.swap('a1', NEW, NEW_ID)).toMatchObject({ state: 'confirmed' })
     expect(row.runtimes).toEqual([NEW])
     expect(row.processIdentity).toEqual(NEW_ID)
-    expect(w.registry.updateRuntimes).toHaveBeenCalledWith('a1', [NEW], terminalRouteKey(NEW))
+    expect(w.registry.confirmLaunch).toHaveBeenCalledWith('a1', expect.objectContaining({ runtimes: [NEW], processIdentity: NEW_ID }), expect.anything())
     expect(w.invalidateControl).toHaveBeenCalledWith('a1')
-    expect(vi.mocked(w.log).mock.calls.flat().join('\n')).toContain('[terminal] move a1: ')
+    expect(w.announce).not.toHaveBeenCalled()
+    deps.complete()
+    expect(w.announce).toHaveBeenCalledWith(row)
   })
 
   it('writes on the row the grid the move\'s launch puts the engine on, in the new pane or back in the old', async () => {
@@ -146,30 +150,28 @@ describe('the move, wired to the core', () => {
       const moved = wiring({ buildLaunch: vi.fn(async () => deferredLaunch(vi.fn(), grid)) })
       const deps = hostMoveDeps(moved.row, () => true, moved.w)
       await deps.buildLaunch(moved.row, { resumeSessionId: 's1', current: () => true, prepare: false })
-      deps.swap('a1', NEW, NEW_ID)
-      expect(moved.w.registry.updateProcessIdentity).toHaveBeenCalledWith('a1', NEW_ID, undefined, grid)
+      await deps.swap('a1', NEW, NEW_ID)
+      expect(moved.w.registry.confirmLaunch).toHaveBeenCalledWith('a1', expect.objectContaining({ processIdentity: NEW_ID, grid }), expect.anything())
       const back = wiring({ buildLaunch: vi.fn(async () => deferredLaunch(vi.fn(), grid)) })
       const fallback = hostMoveDeps(back.row, () => true, back.w)
       await fallback.buildLaunch(back.row, { resumeSessionId: 's1', current: () => true, prepare: false })
       expect(await fallback.relaunchOld(back.row)).toBe(true)
-      expect(back.w.registry.updateProcessIdentity).toHaveBeenCalledWith('a1', { ...OLD_ID, pid: 44 }, undefined, grid)
+      expect(back.w.registry.confirmLaunch).toHaveBeenCalledWith('a1', expect.objectContaining({ processIdentity: { ...OLD_ID, pid: 44 }, grid }), expect.anything())
     }
   })
 
-  it('throws when the row was not switched', () => {
+  it('does not announce an unpublished row', async () => {
     const { w } = wiring()
-    vi.mocked(w.registry.updateRuntimes).mockReturnValue(false)
+    vi.mocked(w.registry.confirmLaunch).mockResolvedValue({ state: 'not-published' })
     const deps = hostMoveDeps(session(), () => true, w)
-    expect(() => deps.swap('a1', NEW, NEW_ID)).toThrow()
-    expect(w.registry.updateProcessIdentity).not.toHaveBeenCalled()
+    expect(await deps.swap('a1', NEW, NEW_ID)).toEqual({ state: 'not-published' })
+    deps.complete()
     expect(w.announce).not.toHaveBeenCalled()
   })
 
   it('stops the process the row recorded when the move began, keeping its pane', async () => {
     const { w, row, swapDeps, old } = wiring()
     const deps = hostMoveDeps(row, () => true, w)
-    // Discovery records another process for the row after the move began: the move still targets the one it saw.
-    row.processIdentity = { ...OLD_ID, pid: 99 }
     expect(await deps.stopEngine(row)).toBe('terminated')
     const [target, place] = vi.mocked(w.paneSwapDeps).mock.calls[0]!
     expect(target.processIdentity).toEqual(OLD_ID)
@@ -183,6 +185,14 @@ describe('the move, wired to the core', () => {
     swapDeps.holdOpen.mockResolvedValue({ ok: false, reason: 'gone' } as never)
     const deps = hostMoveDeps(session(), () => true, w)
     expect(await deps.stopEngine(session())).toBe('failed')
+    expect(swapDeps.terminate).not.toHaveBeenCalled()
+  })
+
+  it('does not stop a selected process after its owner changes while the pane hold is acquired', async () => {
+    const { w, row, swapDeps } = wiring()
+    const deps = hostMoveDeps(row, () => true, w)
+    swapDeps.holdOpen.mockImplementationOnce(async () => { row.processIdentity = { ...OLD_ID, pid: 99 }; return { ok: true } })
+    expect(await deps.stopEngine(row)).toBe('failed')
     expect(swapDeps.terminate).not.toHaveBeenCalled()
   })
 
@@ -216,9 +226,9 @@ describe('the move, wired to the core', () => {
     expect(swapDeps.prepareResume).not.toHaveBeenCalled()
     // Committed as a restart commits (`commitRelaunchedEngine`): its process with no gateway and the launch's grid,
     // active, the pane released, announced, and its grid assignment refreshed.
-    expect(w.registry.updateProcessIdentity).toHaveBeenCalledWith('a1', { ...OLD_ID, pid: 44 }, undefined, GRID)
-    expect(w.registry.setActive).toHaveBeenCalledWith('a1', true)
-    expect(old.releaseHold).toHaveBeenCalledWith(OLD)
+    expect(w.registry.confirmLaunch).toHaveBeenCalledWith('a1', expect.objectContaining({ processIdentity: { ...OLD_ID, pid: 44 }, grid: GRID }), expect.anything())
+    expect(w.registry.confirmLaunch).toHaveBeenCalledWith('a1', expect.anything(), expect.anything())
+    expect(old.releaseHold).toHaveBeenCalledWith(OLD, expect.any(Function))
     expect(w.announce).toHaveBeenCalled()
     expect(w.refreshGridAssignment).toHaveBeenCalledWith(row)
   })
@@ -230,7 +240,7 @@ describe('the move, wired to the core', () => {
     const deps = hostMoveDeps(row, () => live, w)
     await deps.buildLaunch(row, { resumeSessionId: 's1', current: () => true, prepare: false })
     expect(await deps.relaunchOld(row)).toBe(true)
-    expect(w.registry.updateProcessIdentity).toHaveBeenCalled()
+    expect(w.registry.confirmLaunch).toHaveBeenCalled()
     expect(w.announce).not.toHaveBeenCalled()
   })
 
@@ -240,7 +250,7 @@ describe('the move, wired to the core', () => {
     const deps = hostMoveDeps(row, () => true, w)
     await deps.buildLaunch(row, { resumeSessionId: 's1', current: () => true, prepare: false })
     expect(await deps.relaunchOld(row)).toBe(false)
-    expect(w.registry.updateProcessIdentity).not.toHaveBeenCalled()
+    expect(w.registry.confirmLaunch).not.toHaveBeenCalled()
   })
 
   it('closes a pane on its own backend, and says whether it is gone', async () => {
@@ -250,7 +260,7 @@ describe('the move, wired to the core', () => {
     vi.mocked(target.kill).mockResolvedValue({ state: 'failed', dispatch: 'rejected', reason: 'busy' })
     expect(await deps.killPane(NEW)).toBe(false)
     await deps.releaseHold(NEW)
-    expect(target.releaseHold).toHaveBeenCalledWith(NEW)
+    expect(target.releaseHold).toHaveBeenCalledWith(NEW, expect.any(Function))
   })
 
   it('the new pane waits printing nothing over its seed', () => {
@@ -295,19 +305,22 @@ describe('the move, wired to the core: the paths that do not go through', () => 
     expect(vi.mocked(w.log).mock.calls.flat().join('\n')).toContain('(unknown reason)')
   })
 
-  it('a switch whose save fails is logged, and a row gone after it or no grid refresh is not an error', async () => {
-    for (const thrown of [new Error('disk full'), 'plain']) {
-      const { w } = wiring({ registry: { ...wiring().w.registry, transaction: vi.fn(async () => { throw thrown }) as never } })
-      expect(() => hostMoveDeps(session(), () => true, w).swap('a1', NEW, NEW_ID)).toThrow('the row is gone')
-      await new Promise((done) => setImmediate(done))
-      expect(vi.mocked(w.log).mock.calls.flat().join('\n')).toContain(`saving the switch failed: ${thrown instanceof Error ? thrown.message : thrown}`)
-    }
+  it('preserves a publication failure and refuses a confirmed row that is no longer owned', async () => {
+    const failed = wiring()
+    const error = new Error('registry publication unavailable')
+    vi.mocked(failed.w.registry.confirmLaunch).mockRejectedValue(error)
+    await expect(hostMoveDeps(session(), () => true, failed.w).swap('a1', NEW, NEW_ID)).rejects.toBe(error)
+    expect(failed.w.announce).not.toHaveBeenCalled()
     const gone = wiring()
-    vi.mocked(gone.w.registry.byAgent).mockReturnValue(undefined)
-    hostMoveDeps(session(), () => true, gone.w).swap('a1', NEW, NEW_ID)
+    vi.mocked(gone.w.registry.confirmLaunch).mockResolvedValue({ state: 'confirmed', entry: null })
+    const deps = hostMoveDeps(session(), () => true, gone.w)
+    await deps.swap('a1', NEW, NEW_ID)
+    deps.complete()
     expect(gone.w.announce).not.toHaveBeenCalled()
     const plain = wiring({ refreshGridAssignment: undefined })
-    hostMoveDeps(session(), () => true, plain.w).swap('a1', NEW, NEW_ID)
+    const ready = hostMoveDeps(session(), () => true, plain.w)
+    await ready.swap('a1', NEW, NEW_ID)
+    ready.complete()
     expect(plain.w.announce).toHaveBeenCalled()
   })
 
@@ -330,11 +343,11 @@ describe('the move, wired to the core: the paths that do not go through', () => 
     // The row is gone once the engine is back: not a failure of the relaunch.
     vi.mocked(w.registry.byAgent).mockReturnValue(undefined)
     expect(await deps.relaunchOld(row)).toBe(false)
-    expect(vi.mocked(w.paneSwapDeps).mock.calls[0]![3]).toBeNull()
-    expect(prepare).toHaveBeenCalledTimes(1)
+    expect(w.paneSwapDeps).not.toHaveBeenCalled()
+    expect(prepare).not.toHaveBeenCalled()
     // A relaunch cancelled before the row learned the engine.
     expect(await hostMoveDeps(row, () => false, w).relaunchOld(row)).toBe(false)
-    expect(swapDeps.waitForProcess).toHaveBeenCalled()
+    expect(swapDeps.waitForProcess).not.toHaveBeenCalled()
   })
 
   it('has nothing to relaunch without a conversation, or for a pane with no backend', async () => {

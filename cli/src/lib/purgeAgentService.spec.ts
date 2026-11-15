@@ -22,11 +22,11 @@ let eraseRecords = vi.fn<(session: RegisteredSession) => Promise<void>>()
 let eraseFirst = vi.fn<(session: RegisteredSession) => Promise<void>>()
 /** Workspaces as the purge finds them at each call: up, on this module's functions, unless a test takes them down. */
 let workspaces: PurgeDeps['worktrees']
-beforeEach(() => {
+beforeEach(async () => {
   root = mkdtempSync(join(tmpdir(), 'harness-purge-'))
   const codexHome = join(root, 'profile'), cwd = join(root, 'project')
   mkdirSync(join(codexHome, 'sessions'), { recursive: true }); mkdirSync(cwd)
-  session = registry.openPendingAgent({ engine: 'codex', cwd, codexHome, runtimes: [{ backend: 'tmux', paneId: '%77' }] })!
+  session = (await registry.openPendingAgent({ engine: 'codex', cwd, codexHome, runtimes: [{ backend: 'tmux', paneId: '%77' }] }))!
   Object.assign(session, { sessionId: 'selected-session', launch: { state: 'ready' }, transcriptPath: join(codexHome, 'sessions', 'selected-session.jsonl') })
   writeFileSync(session.transcriptPath!, JSON.stringify({ type: 'session_meta', payload: {
     id: session.sessionId, cwd, source: 'cli',

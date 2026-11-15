@@ -52,7 +52,11 @@ vi.mock('node:fs/promises', async original => {
 })
 vi.mock('node:child_process', () => {
   const forbidden = () => { throw Error('Host binaries are forbidden in the transcript authority fixture') }
-  return { exec: forbidden, execSync: forbidden, execFile: forbidden, execFileSync: forbidden,
+  return { exec: forbidden, execSync: forbidden,
+    execFile: (command: string, args: string[], _options: unknown, done: (error: null, value: string) => void) => {
+      if (command !== 'ps' || JSON.stringify(args) !== JSON.stringify(['-p', String(process.pid), '-o', 'lstart='])) forbidden()
+      done(null, 'fixture-start')
+    }, execFileSync: forbidden,
     spawn: forbidden, spawnSync: forbidden, fork: forbidden }
 })
 vi.mock('./loginShellEnv.js', () => ({ loginShellEnvironment: () => ({}) }))
@@ -95,12 +99,14 @@ beforeEach(async () => {
   ;({ registry } = await import('./registry.js'))
   capture = (await import('./captureResumeIdentity.js')).captureResumeIdentity
   checkpoints = new (await import('./sessionCheckpoint.js')).SessionCheckpointStore(directory)
-  row = registry.openPendingAgent({ engine: 'codex', cwd: root, runtimes: [{ backend: 'tmux', paneId: '%1' }] })!
+  row = (await registry.openPendingAgent({ engine: 'codex', cwd: root, runtimes: [{ backend: 'tmux', paneId: '%1' }] }))!
+  row = registry.byAgent(row.agentId)!
   Object.assign(row, { sessionId: A, transcriptPath: transcript,
     processIdentity: { pid: 7001, executable: '<codex>', startMarker: 'fixture-start' } })
-  registry.flush()
+  ;(await registry.flush())
 })
-afterEach(() => {
+afterEach(async () => {
+  await registry.flush({ exiting: true }).catch(() => {})
   faults.copied = undefined; faults.inspectedCheckpoint = undefined; faults.openingSource = undefined; faults.sourceFailure = undefined
   vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.resetModules()
   rmSync(root, { recursive: true, force: true })
@@ -435,8 +441,8 @@ it.each(['before', 'configuration', 'history repair', 'permission', 'tmux dispat
     const backend = phase === 'tmux dispatch' || phase === 'conversation ownership' ? new TmuxBackend(undefined, () => 'fixture-owner', () => {}, async () => {
       // The backend has accepted the request, but has not crossed its actual process-dispatch gate.
       if (phase === 'conversation ownership') {
-        const other = registry.openPendingAgent({ engine: 'codex', cwd: root, runtimes: [{ backend: 'tmux', paneId: '%88' }] })!
-        const admitted = registry.register({ engine: 'codex', cwd: root, tmuxPane: '%88', sessionId: A, transcriptPath: transcript })!
+        const other = (await registry.openPendingAgent({ engine: 'codex', cwd: root, runtimes: [{ backend: 'tmux', paneId: '%88' }] }))!
+        const admitted = (await registry.register({ engine: 'codex', cwd: root, tmuxPane: '%88', sessionId: A, transcriptPath: transcript }))!
         expect(admitted.entry.agentId).toBe(other.agentId)
         newOwner = other.agentId
       } else writeFileSync(transcript, header(B))

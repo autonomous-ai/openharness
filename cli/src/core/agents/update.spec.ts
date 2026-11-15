@@ -16,10 +16,11 @@ function setup(over: Partial<AgentUpdateDeps> = {}, agent: RegisteredSession | n
   const deps: AgentUpdateDeps = {
     registry: {
       resolve: vi.fn(() => agent ?? undefined),
-      rename: vi.fn((_id: string, name: string) => row({ ...agent, defaultName: name })),
+      rename: vi.fn(async (_id: string, name: string) => { agent = row({ ...agent, defaultName: name }); return structuredClone(agent) }),
+      displayName: vi.fn(s => s.defaultName ?? 'Agent'),
       markOpened: vi.fn(() => row({ ...agent, lastOpenedAt: NOW })),
       terminalAvailable: vi.fn(() => true),
-      setLaunchModel: vi.fn(() => true),
+      setLaunchModel: vi.fn(async (_id, launchModel) => { if (!agent) return null; if (launchModel) agent.launchModel = launchModel; else delete agent.launchModel; return structuredClone(agent) }),
     },
     onRuntimeProfileUpdate: vi.fn(async () => {}),
     onAgentRename: vi.fn(),
@@ -70,12 +71,12 @@ describe('a model and effort', () => {
   it('records the pick as the model its session relaunches with, its effort only where the engine takes it', async () => {
     const { ask, deps } = setup()
     await ask({ agentId: 'a1', selectedModel: 'runtime-v1:s1:claude:sonnet@high' })
-    expect(deps.registry.setLaunchModel).toHaveBeenCalledWith('a1', { model: 'sonnet', effort: 'high' })
+    expect(deps.registry.setLaunchModel).toHaveBeenCalledWith('a1', { model: 'sonnet', effort: 'high' }, expect.any(Object))
     await ask({ agentId: 'a1', selectedModel: 'runtime-v1:s1:claude:opus@ultracode' })
-    expect(deps.registry.setLaunchModel).toHaveBeenLastCalledWith('a1', { model: 'opus', effort: null })
+    expect(deps.registry.setLaunchModel).toHaveBeenLastCalledWith('a1', { model: 'opus', effort: null }, expect.any(Object))
     const codex = setup({}, row({ engine: 'codex' }))
     await codex.ask({ agentId: 'a1', selectedModel: 'runtime-v1:s1:codex:gpt-6@high' })
-    expect(codex.deps.registry.setLaunchModel).toHaveBeenCalledWith('a1', null)
+    expect(codex.deps.registry.setLaunchModel).toHaveBeenCalledWith('a1', null, expect.any(Object))
     // A pick the wire cannot read was the controller's to judge; nothing is recorded for it.
     const unread = setup()
     await unread.ask({ agentId: 'a1', selectedModel: 'runtime-v1:x' })
@@ -119,19 +120,19 @@ describe('a rename', () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     const { heard, ask, deps } = setup()
     await ask({ agentId: 'a1', name: '  Release notes  ' })
-    expect(deps.registry.rename).toHaveBeenCalledWith('a1', 'Release notes')
+    expect(deps.registry.rename).toHaveBeenCalledWith('a1', 'Release notes', expect.any(Object))
     expect(deps.onAgentRename).toHaveBeenCalledWith(expect.objectContaining({ defaultName: 'Release notes' }), 'Release notes')
     const renamed = { type: 'agent_renamed', payload: { agentId: 'a1', name: 'Release notes', engine: 'claude' } }
     expect(heard).toEqual([['reply', { agent: { id: 'a1', name: 'Release notes', lastOpenedAt: null } }], ['send', renamed], ['device', renamed]])
     expect(log).toHaveBeenCalledWith('[rename] a1 → "Release notes" · broadcast to web + device')
   })
 
-  it('keeps the row it had when the registry renames nothing, and titles no pane when nothing does', async () => {
+  it('reports a refused rename without claiming success or titling a pane', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     const { heard, ask, deps } = setup({ onAgentRename: null })
-    vi.mocked(deps.registry.rename).mockReturnValueOnce(null)
+    vi.mocked(deps.registry.rename).mockResolvedValueOnce(null)
     await ask({ agentId: 'a1', name: 'Kept' })
-    expect(heard[0]).toEqual(['reply', { agent: { id: 'a1', name: 'Agent', lastOpenedAt: null } }])
+    expect(heard).toEqual([['reply', { error: 'AGENT_CHANGED' }]])
   })
 })
 

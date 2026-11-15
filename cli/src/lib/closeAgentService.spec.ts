@@ -16,9 +16,10 @@ let deps: CloseAgentServiceDeps
 let time: number
 const request = (mode: AgentCloseRequest['mode'] = 'idle'): AgentCloseRequest => ({ agentId: row.agentId,
   sessionId: row.sessionId, createdAt: new Date(row.registeredAt).toISOString(), mode })
-beforeEach(() => {
+beforeEach(async () => {
   time = 10_000
-  row = registry.openPendingAgent({ engine: 'codex', runtimes: [{ backend: 'tmux', paneId: '%88' }], cwd: '/tmp' })!
+  const pending = (await registry.openPendingAgent({ engine: 'codex', runtimes: [{ backend: 'tmux', paneId: '%88' }], cwd: '/tmp' }))!
+  row = registry.byAgent(pending.agentId)!
   Object.assign(row, { sessionId: 'history', processIdentity: { pid: 777, startMarker: 'born', executable: 'codex' } })
   const home = join(env.ADAPTER_DATA_DIR, 'close-history', row.agentId)
   mkdirSync(join(home, 'sessions'), { recursive: true })
@@ -33,7 +34,7 @@ beforeEach(() => {
     }) }
   service = new CloseAgentService(deps)
 })
-afterEach(() => { service.dispose(); vi.useRealTimers(); vi.restoreAllMocks(); for (const s of registry.list()) registry.removeAgent(s.agentId) })
+afterEach(async () => { service.dispose(); vi.useRealTimers(); vi.restoreAllMocks(); for (const s of registry.list()) registry.removeAgent(s.agentId); await registry.flush() })
 
 it('backs up an idle session before stopping, without treating a tab switch as Close', async () => {
   service.start()
@@ -157,7 +158,7 @@ it('joins repeated clicks and cancels a pending close when reopened during its b
   const first = service.request(request())
   expect(service.request(request())).toBe(first)
   await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
-  service.cancel(row.agentId)
+  await service.cancel(row.agentId)
   finish()
   expect((await first).error).toBeTruthy()
   expect(registry.byAgent(row.agentId)).toBe(row)
@@ -451,7 +452,7 @@ it.each(['unavailable', 'untyped', 'cancelled', 'disposed'] as const)('keeps a q
   await service.request(request('after_task'))
   const plan = row.closePlan!
   vi.mocked(deps.activity).mockImplementationOnce(async () => {
-    if (phase === 'cancelled') service.cancel(row.agentId)
+    if (phase === 'cancelled') await service.cancel(row.agentId)
     if (phase === 'disposed') service.dispose()
     throw phase === 'untyped' ? null : new Error('The conversation reader is unavailable.')
   })
@@ -511,7 +512,7 @@ it('never automatically closes a shell on an empty composer alone', async () => 
   expect(deps.stop).not.toHaveBeenCalled()
 })
 it('retains the pane if cancellation arrives during the final activity check', async () => {
-  vi.mocked(deps.activity).mockResolvedValueOnce('idle').mockImplementationOnce(async () => { service.cancel(row.agentId); return 'idle' })
+  vi.mocked(deps.activity).mockResolvedValueOnce('idle').mockImplementationOnce(async () => { await service.cancel(row.agentId); return 'idle' })
   expect((await service.request(request())).error).toBe('CLOSE_FAILED')
   expect(registry.byAgent(row.agentId)).toBeTruthy()
 })
@@ -521,7 +522,7 @@ it('returns a useful error when storage throws a non-Error value', async () => {
 })
 it('does not stop a cancelled deferred plan after its activity read finishes', async () => {
   await service.request(request('after_task'))
-  vi.mocked(deps.activity).mockImplementationOnce(async () => { service.cancel(row.agentId); return 'idle' })
+  vi.mocked(deps.activity).mockImplementationOnce(async () => { await service.cancel(row.agentId); return 'idle' })
   await service.tick()
   expect(deps.stop).not.toHaveBeenCalled()
 })
@@ -684,7 +685,7 @@ describe('a close of a harness still starting', () => {
     vi.mocked(deps.stop).mockRejectedValue(held())
     vi.mocked(deps.sleep!).mockImplementationOnce(async ms => {
       time += ms
-      if (change === 'reopened') service.cancel(row.agentId)
+      if (change === 'reopened') await service.cancel(row.agentId)
       else if (change === 'replaced') row.processIdentity = { pid: 778, startMarker: 'reborn', executable: 'codex' }
       else if (change === 'disposed') service.dispose()
       else registry.removeAgent(row.agentId)
@@ -714,8 +715,8 @@ describe('a close of a harness still starting', () => {
     bind()
     expect(await service.request(asked)).toEqual({ closed: true })
     // Not once it is past starting, nor for a conversation it moved on from.
-    const later = registry.openPendingAgent({ engine: 'codex', runtimes: [{ backend: 'tmux', paneId: '%89' }], cwd: '/tmp' })!
-    Object.assign(later, { sessionId: 'second' })
+    const later = (await registry.openPendingAgent({ engine: 'codex', runtimes: [{ backend: 'tmux', paneId: '%89' }], cwd: '/tmp' }))!
+    Object.assign(registry.byAgent(later.agentId)!, { sessionId: 'second' })
     time = later.registeredAt + 60_000
     expect(await service.request({ agentId: later.agentId, sessionId: '', createdAt: new Date(later.registeredAt).toISOString(), mode: 'now' }))
       .toEqual({ error: 'AGENT_CHANGED' })
@@ -813,3 +814,49 @@ describe('background commands', () => {
   })
 })
 
+
+it.each(['result-error', 'activity-error'] as const)('does not resurrect a cancelled close from a queued %s reason', async path => {
+  await service.request(request('after_task'))
+  await service.tick(); time += 5_000
+  let release!: () => void, queued!: () => void
+  const held = new Promise<void>(resolve => { release = resolve })
+  const entered = new Promise<void>(resolve => { queued = resolve })
+  const save = registry.setClosePlan.bind(registry)
+  vi.spyOn(registry, 'setClosePlan').mockImplementation(async (id, plan, authority) => {
+    if (plan) queued()
+    await held
+    return save(id, plan, authority)
+  })
+  let cancelled: Promise<void> | undefined
+  if (path === 'result-error') vi.spyOn(service, 'request').mockImplementation(async () => {
+    cancelled = service.cancel(row.agentId)
+    return { error: 'CLOSE_FAILED', detail: 'fixture result failure' }
+  })
+  else vi.mocked(deps.activity).mockImplementation(async () => {
+    cancelled = service.cancel(row.agentId)
+    throw new Error('fixture activity failure')
+  })
+  const tick = service.tick()
+  await Promise.race([entered, tick])
+  release()
+  await tick; await cancelled
+  expect(registry.byAgent(row.agentId)?.closePlan).toBeUndefined()
+})
+
+it.each(['result-error', 'activity-error'] as const)('does not update a disposed close from a queued %s reason', async path => {
+  await service.request(request('after_task'))
+  await service.tick(); time += 5_000
+  const before = structuredClone(row.closePlan)
+  vi.mocked(deps.changed).mockClear()
+  if (path === 'result-error') vi.spyOn(service, 'request').mockImplementation(async () => {
+    service.dispose()
+    return { error: 'CLOSE_FAILED', detail: 'fixture result failure' }
+  })
+  else vi.mocked(deps.activity).mockImplementation(async () => {
+    service.dispose()
+    throw new Error('fixture activity failure')
+  })
+  await service.tick()
+  expect(registry.byAgent(row.agentId)?.closePlan).toEqual(before)
+  expect(deps.changed).not.toHaveBeenCalled()
+})

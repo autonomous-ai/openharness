@@ -86,7 +86,7 @@ describe('the web-search status on the per-agent frame', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     install({ mcp: { exit: 2, stderr: "grid: error: invalid choice: 'mcp'\n" } })
     const registry = await loadRegistry()
-    const row = registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%1' }], cwd: '/tmp/demo' })!
+    const row = (await registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%1' }], cwd: '/tmp/demo' }))!
 
     expect(await retargetOntoGrid(registry, row.agentId, 'GLM-4.7-Flash')).toBe('unavailable')
 
@@ -97,7 +97,7 @@ describe('the web-search status on the per-agent frame', () => {
   it('carries "on" when the config was obtained and the engine wired it', async () => {
     install()
     const registry = await loadRegistry()
-    const row = registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%1' }], cwd: '/tmp/demo' })!
+    const row = (await registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%1' }], cwd: '/tmp/demo' }))!
 
     expect(await retargetOntoGrid(registry, row.agentId, 'GLM-4.7-Flash')).toBe('on')
 
@@ -111,7 +111,7 @@ describe('the web-search status on the per-agent frame', () => {
   it('carries no grid block, and so no status, once the agent is back on its own login', async () => {
     install()
     const registry = await loadRegistry()
-    const row = registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%1' }], cwd: '/tmp/demo' })!
+    const row = (await registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%1' }], cwd: '/tmp/demo' }))!
     await retargetOntoGrid(registry, row.agentId, 'GLM-4.7-Flash')
 
     // The move home: the respawned process reads as "on no grid", and the launch is cleared.
@@ -126,7 +126,7 @@ describe('the web-search status on the per-agent frame', () => {
   it('survives a daemon restart — the status is on the row, not in memory', async () => {
     install()
     let registry = await loadRegistry()
-    const row = registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%1' }], cwd: '/tmp/demo' })!
+    const row = (await registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%1' }], cwd: '/tmp/demo' }))!
     await retargetOntoGrid(registry, row.agentId, 'GLM-4.7-Flash')
 
     registry = await loadRegistry()
@@ -137,13 +137,13 @@ describe('the web-search status on the per-agent frame', () => {
   it('survives the first hook bind, which rebuilds the row', async () => {
     install()
     const registry = await loadRegistry()
-    const row = registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%1' }], cwd: '/tmp/demo' })!
+    const row = (await registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%1' }], cwd: '/tmp/demo' }))!
     await retargetOntoGrid(registry, row.agentId, 'GLM-4.7-Flash')
 
     // The engine's SessionStart hook: a real transcript, bound onto the pane the launch opened.
     const transcriptPath = join(dataDir, 'session-1.jsonl')
     writeFileSync(transcriptPath, '{}\n')
-    const bound = registry.register({ sessionId: 'session-1', transcriptPath, tmuxPane: '%1', cwd: '/tmp/demo' })
+    const bound = (await registry.register({ sessionId: 'session-1', transcriptPath, tmuxPane: '%1', cwd: '/tmp/demo' }))
     expect(bound?.entry.agentId).toBe(row.agentId)
     const frame = await agentFrame(bound!.entry, { selectedModel: null, terminalAvailable: true })
     expect(frame.grid).toMatchObject({ webSearch: 'on' })
@@ -153,13 +153,13 @@ describe('the web-search status on the per-agent frame', () => {
     // Someone ran `ANTHROPIC_BASE_URL=… claude` by hand: the daemon sees the grid on the process but
     // built no launch, so it has no status to report — and must not invent one.
     const registry = await loadRegistry()
-    const opened = registry.openProcessAgent({
+    const opened = (await registry.openProcessAgent({
       engine: 'claude',
       processIdentity: IDENTITY,
       runtimes: [{ backend: 'tmux', paneId: '%2' }],
       cwd: '/tmp/demo',
       grid: { baseUrl: BASE_URL, model: null },
-    })
+    }))
     const frame = await agentFrame(opened!.entry, { selectedModel: null, terminalAvailable: true })
     expect(frame.grid).toEqual({ baseUrl: BASE_URL, model: null })
   })

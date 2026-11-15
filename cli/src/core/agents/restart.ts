@@ -11,7 +11,10 @@ import { buildEngineLaunchArgv, commandAvailableInInteractiveShell } from '../..
 import { launchedGrid, type GridAssignment } from '../../lib/gridAssignmentWire.js'
 import { windowsPaneLaunch } from '../../lib/windows/engineStart.js'
 import { sid } from '../../lib/log.js'
-import type { ProcessIdentity, registry, RegisteredSession } from '../../lib/registry.js'
+import { matchesLaunchReceipt, type LaunchPublicationInput, type ProcessIdentity, type registry, type RegisteredSession } from '../../lib/registry.js'
+import { resolvePaneEngineProcess } from '../../lib/paneEngineProcess.js'
+import { sameProcessIdentity } from '../../lib/terminalRuntime.js'
+import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
 import { bypassPermissionFor, restartAgent } from '../../lib/restartAgent.js'
 import type { TerminalAgentReconciler } from '../../lib/terminalAgentReconciler.js'
 import { restartTargetOf, type RestartTarget } from '../../lib/terminalBackend.js'
@@ -49,7 +52,7 @@ async function engineInstalled(engine: AgentEngine): Promise<boolean | null> {
 type RestartAgentHandler = RestartAgent
 
 export interface RelaunchCommitDeps {
-  registry: Pick<typeof registry, 'updateProcessIdentity' | 'setActive' | 'byAgent'>
+  registry: Pick<typeof registry, 'confirmLaunch' | 'byAgent'>
   announceSession: (session: RegisteredSession) => void
   refreshGridAssignment: (session: RegisteredSession) => void
 }
@@ -64,16 +67,35 @@ export interface RelaunchCommitDeps {
  * is gone.
  */
 export async function commitRelaunchedEngine(
-  deps: RelaunchCommitDeps, agentId: string, identity: ProcessIdentity, grid: GridAssignment | null | undefined, place: RestartTarget,
-  current: () => boolean,
+  deps: RelaunchCommitDeps, agentId: string, identity: ProcessIdentity | null, grid: GridAssignment | null | undefined, place: RestartTarget,
+  current: () => boolean, input: Pick<LaunchPublicationInput, 'launchArgs' | 'gridLaunchRecord'> = {},
+  operationCurrent: () => boolean = current,
 ): Promise<RegisteredSession | 'changed' | 'changed after commit' | 'vanished'> {
   if (!current()) return 'changed'
-  deps.registry.updateProcessIdentity(agentId, identity, undefined, grid)
-  deps.registry.setActive(agentId, true)
-  await place.backend.releaseHold(place.runtime)
+  const selected = deps.registry.byAgent(agentId)
+  if (!selected) return 'vanished'
+  const engine = selected.engine
+  const publication = await deps.registry.confirmLaunch(agentId, { ...input, processIdentity: identity, grid }, {
+    current,
+    refresh: async () => {
+      if (identity) {
+        const observed = await resolvePaneEngineProcess(place.backend, place.runtime, engine)
+        if (!sameProcessIdentity(identity, observed) || observed?.executable !== identity.executable) {
+          throw new IdentityReadUnavailable('the replacement process changed before publication')
+        }
+      } else {
+        const pane = await place.backend.paneState(place.runtime)
+        if (pane === 'gone' || pane === 'unknown' || pane.dead) throw new IdentityReadUnavailable('the replacement shell could not be confirmed')
+      }
+    },
+  })
+  if (publication.state !== 'confirmed') return 'changed'
+  const refreshed = publication.entry
+  const owns = () => operationCurrent() && !!refreshed && matchesLaunchReceipt(deps.registry.byAgent(agentId), refreshed)
+  if (!owns()) return 'changed after commit'
+  await place.backend.releaseHold(place.runtime, owns)
   // The row has its new engine: cancelled from here on, the engine is still relaunched.
-  if (!current()) return 'changed after commit'
-  const refreshed = deps.registry.byAgent(agentId)
+  if (!owns()) return 'changed after commit'
   if (!refreshed) return 'vanished'
   deps.announceSession(refreshed)
   deps.refreshGridAssignment(refreshed)
@@ -99,7 +121,6 @@ export interface RestartDeps {
   refreshGridAssignment: (session: RegisteredSession) => void
   relaunchOverrides: LaunchHelpers['relaunchOverrides']
   downgradedPermission: LaunchHelpers['downgradedPermission']
-  refreshGridWebSearch: LaunchHelpers['refreshGridWebSearch']
   liveBypassPermission: PaneSwap['liveBypassPermission']
   paneSwapDeps: PaneSwap['paneSwapDeps']
   /** A held agent runs no engine to swap: its restart is its launch, now (core/agents/heldLaunches.ts). Null for
@@ -112,7 +133,7 @@ export interface RestartDeps {
 export function createAgentRestarter({
   native: inspectNative,
   restartJobs, registry, purgeBusy, stopJobs, pinnedControls, terminals, sameRestartTarget, agentReconciler,
-  terminalHintMachineName, announceSession, refreshGridAssignment, relaunchOverrides, downgradedPermission, refreshGridWebSearch,
+  terminalHintMachineName, announceSession, refreshGridAssignment, relaunchOverrides, downgradedPermission,
   liveBypassPermission, paneSwapDeps, restartHeld, moveHeld,
 }: RestartDeps) {
   /**
@@ -161,8 +182,9 @@ export function createAgentRestarter({
     const place = restartTargetOf(session, (candidate) => terminals.backendFor(candidate))
     if (!place) return { ok: false, error: 'RESTART_UNSUPPORTED_BACKEND' }
     const { backend, runtime } = place
-    const target = { ...session }
-    const current = () => operationCurrent() && sameRestartTarget(target)
+    const target = structuredClone(session)
+    const operation = () => operationCurrent() && terminals.backendFor(runtime) === backend
+    const current = () => operation() && sameRestartTarget(target) && matchesLaunchReceipt(registry.byAgent(target.agentId), target)
     const changed = { ok: false, error: 'AGENT_CHANGED', detail: 'The harness changed or stopped during restart.' } as const
     if (!current()) return changed
     // Both branches below `cd` into the row's folder before they exec, and both have already killed
@@ -188,12 +210,9 @@ export function createAgentRestarter({
         const respawned = await backend.respawn(runtime, { command, cwd: homedir(), ...windowsPaneLaunch(engine, { cwd: session.cwd }) })
         if (!current()) return changed
         if (respawned.state !== 'succeeded') return { ok: false, error: 'RESTART_FAILED', detail: respawned.reason }
-        await backend.releaseHold(runtime)
-        if (!current()) return changed
-        registry.setActive(session.agentId, true)
-        const refreshed = registry.byAgent(session.agentId)
-        if (!refreshed) return { ok: false, error: 'RESTART_FAILED', detail: 'agent vanished from the registry mid-restart' }
-        announceSession(refreshed)
+        const refreshed = await commitRelaunchedEngine({ registry, announceSession, refreshGridAssignment },
+          session.agentId, null, null, place, current, {}, operation)
+        if (typeof refreshed === 'string') return changed
         console.log(`[restart] ${sid(session.agentId)} terminal · fresh shell`)
         return { ok: true, session: refreshed, resumed: false }
       } finally {
@@ -243,15 +262,13 @@ export function createAgentRestarter({
       if (!current()) return changed
       // A refused relaunch (Windows: a batch-file engine cmd.exe would misread) stopped nothing: its own code.
       if (!outcome.ok) return { ok: false, error: outcome.error ?? 'RESTART_FAILED', detail: outcome.detail }
-      refreshGridWebSearch(session.agentId, built.overrides)
-      // The engine is back with the words: now they are the record's, as `launchModel` is committed.
-      if (launchArgs) registry.setLaunchArgs(session.agentId, launchArgs)
 
       // Address the CANONICAL agentId from the resolved session, not the raw RPC input — `resolve()`
       // accepts either an agentId or a bare sessionId, but `setActive`/`byAgent` only ever key on the
       // real agentId.
       const refreshed = await commitRelaunchedEngine({ registry, announceSession, refreshGridAssignment }, session.agentId, outcome.processIdentity,
-        launchedGrid(built.overrides.gridLaunchRecord?.override), place, current)
+        launchedGrid(built.overrides.gridLaunchRecord?.override), place, dispatchCurrent,
+        { launchArgs, ...(built.overrides.gridLaunchRecord ? { gridLaunchRecord: built.overrides.gridLaunchRecord } : {}) }, operation)
       if (refreshed === 'changed' || refreshed === 'changed after commit') return changed
       if (refreshed === 'vanished') return { ok: false, error: 'RESTART_FAILED', detail: 'agent vanished from the registry mid-restart' }
       console.log(`[restart] ${sid(session.agentId)} ${engine} · ${outcome.resumed ? 'resumed' : 'fresh session'}`

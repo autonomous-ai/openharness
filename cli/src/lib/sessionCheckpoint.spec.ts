@@ -38,7 +38,7 @@ beforeEach(async () => {
   await mkdir(join(home, 'sessions'), { recursive: true, mode: 0o700 })
   history = join(home, 'sessions', 'conversation.jsonl')
   await writeFile(history, transcript('{"history":"retained conversation"}\n'), { mode: 0o600 })
-  row = registry.openPendingAgent({ engine: 'codex', cwd: '/tmp', codexHome: home, runtimes: [{ backend: 'tmux', paneId: '%777' }] })!
+  row = (await registry.openPendingAgent({ engine: 'codex', cwd: '/tmp', codexHome: home, runtimes: [{ backend: 'tmux', paneId: '%777' }] }))!
   Object.assign(row, { sessionId: 'conversation', transcriptPath: history })
   directory = join(root, 'checkpoints')
   store = new SessionCheckpointStore(directory)

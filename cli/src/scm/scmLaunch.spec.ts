@@ -49,17 +49,17 @@ describe('the SCM launch record on the registry row', () => {
   it('is written at create, survives a reload and the first hook bind, and is absent — not null — when nothing prepared the folder', async () => {
     const { registry } = await loadRegistryModule()
     registry.load()
-    const prepared = registry.openPendingAgent({
+    const prepared = (await registry.openPendingAgent({
       engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%9' }], cwd: '/tmp/demo', scmLaunchRecord: GIT,
-    })!
+    }))!
     expect(prepared.scmLaunch).toEqual(GIT)
-    const plain = registry.openPendingAgent({
+    const plain = (await registry.openPendingAgent({
       engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%10' }], cwd: '/tmp/plain',
-    })!
+    }))!
     expect(plain).not.toHaveProperty('scmLaunch')
-    const nulled = registry.openPendingAgent({
+    const nulled = (await registry.openPendingAgent({
       engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%11' }], cwd: '/tmp/nulled', scmLaunchRecord: null,
-    })!
+    }))!
     expect(nulled).not.toHaveProperty('scmLaunch')
 
     const { registry: reloaded } = await loadRegistryModule()
@@ -71,7 +71,7 @@ describe('the SCM launch record on the registry row', () => {
     // disk while memory has already forgotten it.
     const transcriptPath = join(dataDir, 'session-scm.jsonl')
     writeFileSync(transcriptPath, '{}\n')
-    const bound = reloaded.register({ sessionId: 'session-scm', transcriptPath, tmuxPane: '%9', cwd: '/tmp/demo' })
+    const bound = (await reloaded.register({ sessionId: 'session-scm', transcriptPath, tmuxPane: '%9', cwd: '/tmp/demo' }))
     expect(bound?.entry.agentId).toBe(prepared.agentId)
     expect(bound?.entry.scmLaunch).toEqual(GIT)
     const saved = JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf-8')) as Array<Record<string, unknown>>
@@ -82,7 +82,7 @@ describe('the SCM launch record on the registry row', () => {
   it('drops an unrecognised or half-formed record from disk rather than relaunching with it', async () => {
     const { registry } = await loadRegistryModule()
     registry.load()
-    const row = registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%3' }], cwd: '/tmp/demo', scmLaunchRecord: GIT })!
+    const row = (await registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%3' }], cwd: '/tmp/demo', scmLaunchRecord: GIT }))!
     const saved = JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf-8')) as Array<Record<string, unknown>>
     const damaged = saved.map(entry => entry.agentId === row.agentId ? { ...entry, scmLaunch: { kind: 'svn', url: 'x' } } : entry)
     writeFileSync(join(dataDir, 'registry.json'), JSON.stringify(damaged))

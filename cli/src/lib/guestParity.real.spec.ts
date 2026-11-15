@@ -140,14 +140,14 @@ real('a guest\'s harness against an owner\'s', () => {
     expect(() => process.kill(panes.guest.pid, 'SIGTERM')).toThrow(/EPERM/)
     // The daemon's own Stop on the guest's row, through tmux, as in production (stopAgentService's guest path).
     const row = (await processRows())!.find((r) => r.pid === panes.guest.pid)!
-    const agent = registry.openPendingAgent({ engine: 'claude', cwd: work, runtimes: [{ backend: 'tmux', paneId: panes.guest.pane }] })!
-    Object.assign(agent, { guest: 'parity@example.com', sessionId: '', processIdentity: { pid: row.pid, executable: row.executable, startMarker: row.startMarker } })
+    const agent = (await registry.openPendingAgent({ engine: 'claude', cwd: work, runtimes: [{ backend: 'tmux', paneId: panes.guest.pane }] }))!
+    Object.assign(registry.byAgent(agent.agentId)!, { guest: 'parity@example.com', sessionId: '', processIdentity: { pid: row.pid, executable: row.executable, startMarker: row.startMarker } })
     const backend = new TmuxBackend()
     const stop = createStopAgentService({
       registry, stoppedAgents, restartJobs: new AgentRestartCoordinator(), stopJobs: new Map(),
       backendFor: (runtime) => runtime.backend === 'tmux' ? backend : undefined,
       agentReconciler: { suppress: () => {}, holdRoute: () => {}, releaseRoute: () => {}, trigger: async () => {} },
-      forgetSession: (id) => { registry.removeAgent(id) }, markDeleted: () => {}, clearDeleted: () => {},
+      forgetSession: async (id) => { registry.removeAgent(id) }, markDeleted: () => {}, clearDeleted: () => {},
       stopNative: async () => { throw new Error('a guest\'s engine is not this daemon\'s to unload') },
     })
     await stop(agent.agentId)

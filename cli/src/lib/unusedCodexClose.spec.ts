@@ -31,9 +31,9 @@ let screen: string | null
 let checkpointDirectory: string
 const killPane = vi.fn<TmuxBackend['kill']>(async () => ({ state: 'succeeded' as const, dispatch: 'executed' as const }))
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.clearAllMocks()
-  row = registry.openPendingAgent({ engine: 'codex', runtimes: [{ backend: 'tmux', paneId: '%500' }], cwd: '/tmp/companions' })!
+  row = (await registry.openPendingAgent({ engine: 'codex', runtimes: [{ backend: 'tmux', paneId: '%500' }], cwd: '/tmp/companions' }))!
   Object.assign(row, {
     launch: { state: 'ready' },
     dsh: 'autonomous/pair',
@@ -52,7 +52,7 @@ beforeEach(() => {
     registry, stoppedAgents, restartJobs: new AgentRestartCoordinator(), stopJobs: new Map(),
     backendFor: () => ({ kill: killPane }),
     agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), trigger: vi.fn(async () => {}) },
-    forgetSession: id => registry.removeAgent(id), markDeleted: vi.fn(), clearDeleted: vi.fn(),
+    forgetSession: async id => { await registry.confirmEngineExit(id, 'remove') }, markDeleted: vi.fn(), clearDeleted: vi.fn(),
     // The real chain: the core's broker, Codex's own control in process, the process table mocked above.
     stopNative: inlineNativeControls({ rows: processRows }).stop,
   })

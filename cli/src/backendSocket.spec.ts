@@ -83,7 +83,7 @@ describe('safe session close RPC', () => {
         sendBinary: () => true,
       })
     }
-    const row = registry.openPendingAgent({ engine: 'codex', runtimes: [{ backend: 'tmux', paneId: '%7302' }], cwd: '/tmp' })!
+    const row = (await registry.openPendingAgent({ engine: 'codex', runtimes: [{ backend: 'tmux', paneId: '%7302' }], cwd: '/tmp' }))!
     row.sessionId = sessionId
     const checkpoint = vi.fn(async () => {})
     const stop = vi.fn(async (_agentId, options) => {
@@ -297,7 +297,7 @@ describe('agent_update opened: one "last used" for every app', () => {
   let frames: any[]
   let agentId = ''
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.restoreAllMocks()
     // Only the clock: the dispatch queue and vi.waitFor still run on real timers.
     vi.useFakeTimers({ toFake: ['Date'] })
@@ -306,7 +306,7 @@ describe('agent_update opened: one "last used" for every app', () => {
     bindAgentUpdate(socket)
     frames = []
     socket.registerLocalClient('local:opened', { sendFrame: frame => { frames.push(frame); return true }, sendBinary: () => true })
-    agentId = registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%7301' }], cwd: '/tmp/opened' })!.agentId
+    agentId = (await registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%7301' }], cwd: '/tmp/opened' }))!.agentId
   })
 
   afterEach(async () => {

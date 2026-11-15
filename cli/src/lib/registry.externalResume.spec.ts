@@ -8,6 +8,7 @@ import { createExternalResumes } from '../core/agents/externalResume.js'
 import { stopExternalOwner } from '../core/agents/externalOwner.js'
 vi.mock('./bootId.js', async original => ({ ...await original<object>(), currentBootId: () => 'linux:12345678-1234-1234-1234-123456789012' }))
 
+const instances = new Set<typeof import('./registry.js')['registry']>()
 let root: string
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'registry-adoption-'))
@@ -16,18 +17,18 @@ beforeEach(() => {
   writeFileSync(join(root, 'record.jsonl'), '{}\n')
   vi.spyOn(console, 'error').mockImplementation(() => {})
 })
-afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); rmSync(root, { recursive: true, force: true }) })
+afterEach(async () => { for (const instance of instances) await instance.flush({ exiting: true }).catch(() => {}); instances.clear(); vi.restoreAllMocks(); vi.unstubAllEnvs(); rmSync(root, { recursive: true, force: true }) })
 const intent = (extra: Partial<ExternalResumeIntent> = {}): ExternalResumeIntent => ({
   token: '12345678-1234-1234-1234-123456789012', request: { engine: 'claude', sessionId: 'alias' }, takeOver: null, phase: 'waiting', ...extra,
 })
 const fact = () => ({ engine: 'claude' as const, sessionId: 'canonical', aliases: ['alias', 'other-alias'], cwd: root,
   origin: 'terminal' as const, title: 'Saved conversation', mtime: 1, transcriptPath: join(root, 'record.jsonl') })
-async function load() { vi.resetModules(); const mod = await import('./registry.js'); mod.registry.load(); return mod.registry }
+async function load() { vi.resetModules(); const mod = await import('./registry.js'); instances.add(mod.registry); mod.registry.load(); return mod.registry }
 const disk = (): RegisteredSession[] => JSON.parse(readFileSync(join(root, 'registry.json'), 'utf8'))
 const write = (rows: RegisteredSession[]) => writeFileSync(join(root, 'registry.json'), JSON.stringify(rows), { mode: 0o600 })
 const pending = async (extra: Partial<ExternalResumeIntent> = {}) => {
   const registry = await load()
-  const row = registry.openPendingAgent({ engine: 'claude', cwd: null, runtimes: [{ backend: 'tmux', paneId: '%1' }], externalResume: intent(extra) })!
+  const row = (await registry.openPendingAgent({ engine: 'claude', cwd: null, runtimes: [{ backend: 'tmux', paneId: '%1' }], externalResume: intent(extra) }))!
   expect(row).toBeTruthy()
   return { registry, row }
 }
@@ -39,18 +40,18 @@ it('persists an unbound held intent atomically, reserves all aliases and survive
   registry = await load(); row = registry.byAgent(row.agentId)!
   expect(registry.externalConflict(['alias'])).toBe(row)
   const pinned = intent({ session: fact() })
-  expect(registry.setExternalResume(row.agentId, pinned)).toBeTruthy()
+  expect((await registry.setExternalResume(row.agentId, pinned))).toBeTruthy()
   for (const id of ['canonical', 'alias', 'other-alias']) {
     expect(registry.externalConflict([id])?.agentId).toBe(row.agentId)
-    expect(registry.openPendingAgent({ engine: 'claude', cwd: null, runtimes: [{ backend: 'tmux', paneId: '%2' }], externalResume: intent({ request: { engine: 'claude', sessionId: id } }) })).toBeNull()
+    expect((await registry.openPendingAgent({ engine: 'claude', cwd: null, runtimes: [{ backend: 'tmux', paneId: '%2' }], externalResume: intent({ request: { engine: 'claude', sessionId: id } }) }))).toBeNull()
   }
-  const admitted = registry.setExternalResume(row.agentId, { ...pinned, phase: 'admitted' })!
+  const admitted = (await registry.setExternalResume(row.agentId, { ...pinned, phase: 'admitted' }))!
   expect(admitted).toMatchObject({ sessionId: 'canonical', cwd: root, resumeOnly: true, launch: { state: 'held' } })
   registry = await load()
   expect(registry.externalConflict(['alias'])?.agentId).toBe(row.agentId)
-  expect(registry.beginExternalDispatch(row.agentId)).toMatchObject({ launch: { state: 'starting' }, externalResume: { dispatched: true } })
+  expect((await registry.beginExternalDispatch(row.agentId))).toMatchObject({ launch: { state: 'starting' }, externalResume: { dispatched: true } })
   expect(disk()[0]).toMatchObject({ launch: { state: 'starting' }, externalResume: { dispatched: true } })
-  expect(registry.beginExternalDispatch(row.agentId)).toBeNull()
+  expect((await registry.beginExternalDispatch(row.agentId))).toBeNull()
   registry = await load()
   expect(registry.byAgent(row.agentId)).toMatchObject({ sessionId: 'canonical', resumeOnly: true, externalResume: { phase: 'admitted', dispatched: true } })
 })
@@ -58,28 +59,29 @@ it('persists an unbound held intent atomically, reserves all aliases and survive
 it('refuses process discovery and hooks for an inert route, across engines too', async () => {
   const { registry, row } = await pending()
   for (const engine of ['claude', 'codex'] as const) {
-    expect(registry.openProcessAgent({ engine, tmuxPane: '%1', cwd: root, processIdentity: { pid: 7001, executable: engine, startMarker: 'fixture' } })).toBeNull()
-    expect(registry.register({ engine, sessionId: 'unexpected', tmuxPane: '%1', cwd: root, transcriptPath: join(root, 'record') })).toBeNull()
+    expect((await registry.openProcessAgent({ engine, tmuxPane: '%1', cwd: root, processIdentity: { pid: 7001, executable: engine, startMarker: 'fixture' } }))).toBeNull()
+    expect((await registry.register({ engine, sessionId: 'unexpected', tmuxPane: '%1', cwd: root, transcriptPath: join(root, 'record') }))).toBeNull()
   }
   expect(registry.byAgent(row.agentId)).toMatchObject({ sessionId: '', processIdentity: null, launch: { state: 'held' } })
-  registry.setExternalResume(row.agentId, intent({ session: fact() }))
-  const other = registry.openProcessAgent({ engine: 'claude', tmuxPane: '%2', cwd: root, processIdentity: { pid: 7002, executable: 'claude', startMarker: 'fixture' } })!
-  expect(registry.register({ engine: 'claude', sessionId: 'canonical', tmuxPane: '%2', transcriptPath: join(root, 'record.jsonl') })?.entry.agentId).toBe(other.entry.agentId)
+  ;(await registry.setExternalResume(row.agentId, intent({ session: fact() })))
+  const other = (await registry.openProcessAgent({ engine: 'claude', tmuxPane: '%2', cwd: root, processIdentity: { pid: 7002, executable: 'claude', startMarker: 'fixture' } }))!
+  expect((await registry.register({ engine: 'claude', sessionId: 'canonical', tmuxPane: '%2', transcriptPath: join(root, 'record.jsonl') }))?.entry.agentId).toBe(other.entry.agentId)
   expect(registry.byAgent(other.entry.agentId)?.sessionId).toBe('canonical')
   expect(disk()).toEqual(expect.arrayContaining([
     expect.objectContaining({ agentId: row.agentId, sessionId: '', externalResume: expect.objectContaining({ phase: 'waiting' }) }),
     expect.objectContaining({ agentId: other.entry.agentId, sessionId: 'canonical' }),
   ]))
-  expect(registry.setExternalResume(row.agentId, intent({ session: fact(), phase: 'admitted' }))).toBeNull()
+  expect((await registry.setExternalResume(row.agentId, intent({ session: fact(), phase: 'admitted' })))).toBeNull()
 })
 
 it('keeps a verified binding even when a provisional reservation appeared on disk after discovery', async () => {
   const { registry, row } = await pending()
   const provisional = disk()[0]
   registry.removeAgent(row.agentId)
-  const other = registry.openProcessAgent({ engine: 'claude', tmuxPane: '%2', cwd: root, processIdentity: { pid: 7002, executable: 'claude', startMarker: 'fixture' } })!
+  const other = (await registry.openProcessAgent({ engine: 'claude', tmuxPane: '%2', cwd: root, processIdentity: { pid: 7002, executable: 'claude', startMarker: 'fixture' } }))!
+  await registry.flush()
   write([...disk(), provisional])
-  expect(registry.register({ engine: 'claude', sessionId: 'alias', tmuxPane: '%2', transcriptPath: join(root, 'record.jsonl') })?.entry.agentId).toBe(other.entry.agentId)
+  expect((await registry.register({ engine: 'claude', sessionId: 'alias', tmuxPane: '%2', transcriptPath: join(root, 'record.jsonl') }))?.entry.agentId).toBe(other.entry.agentId)
   expect(disk()).toHaveLength(2)
   expect(registry.byAgent(row.agentId)?.externalResume?.phase).toBe('waiting')
   expect(registry.bySession('alias')?.agentId).toBe(other.entry.agentId)
@@ -87,13 +89,13 @@ it('keeps a verified binding even when a provisional reservation appeared on dis
 
 it('transfers an admitted canonical binding normally and releases its old aliases atomically', async () => {
   const { registry, row } = await pending()
-  registry.setExternalResume(row.agentId, intent({ session: fact(), phase: 'admitted' }))
+  ;(await registry.setExternalResume(row.agentId, intent({ session: fact(), phase: 'admitted' })))
   const original = { pid: 7001, executable: 'claude', startMarker: 'fixture' }
   registry.updateProcessIdentity(row.agentId, original)
   registry.setActive(row.agentId, true)
-  expect(registry.register({ engine: 'claude', sessionId: 'canonical', tmuxPane: '%1', transcriptPath: join(root, 'record.jsonl'), processIdentity: original })).toBeTruthy()
-  const other = registry.openProcessAgent({ engine: 'claude', tmuxPane: '%2', cwd: root, processIdentity: { pid: 7002, executable: 'claude', startMarker: 'fixture' } })!
-  expect(registry.register({ engine: 'claude', sessionId: 'canonical', tmuxPane: '%2', transcriptPath: join(root, 'record.jsonl') })?.entry.agentId).toBe(other.entry.agentId)
+  expect((await registry.register({ engine: 'claude', sessionId: 'canonical', tmuxPane: '%1', transcriptPath: join(root, 'record.jsonl'), processIdentity: original }))).toBeTruthy()
+  const other = (await registry.openProcessAgent({ engine: 'claude', tmuxPane: '%2', cwd: root, processIdentity: { pid: 7002, executable: 'claude', startMarker: 'fixture' } }))!
+  expect((await registry.register({ engine: 'claude', sessionId: 'canonical', tmuxPane: '%2', transcriptPath: join(root, 'record.jsonl') }))?.entry.agentId).toBe(other.entry.agentId)
   expect(registry.byAgent(row.agentId)?.externalResume).toBeUndefined()
   expect(registry.externalConflict(['alias'])).toBeUndefined()
   const reboot = await load()
@@ -103,16 +105,16 @@ it('transfers an admitted canonical binding normally and releases its old aliase
 
 it('never revives a cancelled intent, changes its request or escalates its takeover consent', async () => {
   const { registry, row } = await pending()
-  expect(registry.setExternalResume(row.agentId, intent({ takeOver: 'now' }))).toBeNull()
-  expect(registry.setExternalResume(row.agentId, intent({ request: { engine: 'claude', sessionId: 'different' } }))).toBeNull()
-  expect(registry.setExternalResume(row.agentId, intent({ phase: 'cancelled' }))).toBeTruthy()
-  expect(registry.setExternalResume(row.agentId, intent())).toBeNull()
+  expect((await registry.setExternalResume(row.agentId, intent({ takeOver: 'now' })))).toBeNull()
+  expect((await registry.setExternalResume(row.agentId, intent({ request: { engine: 'claude', sessionId: 'different' } })))).toBeNull()
+  expect((await registry.setExternalResume(row.agentId, intent({ phase: 'cancelled' })))).toBeTruthy()
+  expect((await registry.setExternalResume(row.agentId, intent()))).toBeNull()
   expect(registry.externalConflict(['alias'])).toBeUndefined()
   const reboot = await load()
   expect(reboot.byAgent(row.agentId)?.externalResume?.phase).toBe('cancelled')
-  expect(reboot.finishExternalCancellation(row.agentId)).toBe(true)
+  expect(await reboot.finishExternalCancellation(row.agentId)).toBe(true)
   expect(disk()).toEqual([])
-  expect(reboot.finishExternalCancellation(row.agentId)).toBe(false)
+  expect(await reboot.finishExternalCancellation(row.agentId)).toBe(false)
 })
 
 it.each(['waiting', 'quitting', 'prepared', 'sent', 'admitted'] as const)('refuses an alias claimed on disk before %s, leaving both durable owners untouched', async phase => {
@@ -123,8 +125,8 @@ it.each(['waiting', 'quitting', 'prepared', 'sent', 'admitted'] as const)('refus
     runtimes: [{ backend: 'tmux' as const, paneId: '%2' }], primaryRuntimeKey: 'tmux\u0000%2', tmuxPane: '%2', launch: { state: 'ready' as const }, active: true }
   write([previous, foreign])
   const before = readFileSync(join(root, 'registry.json'), 'utf8')
-  expect(() => registry.setExternalResume(row.agentId, { ...pinned, phase: phase === 'prepared' || phase === 'sent' ? 'quitting' : phase,
-    ...(phase === 'prepared' || phase === 'sent' ? { signal: phase } : {}) })).toThrow('another durable owner')
+  await expect((async () => (await registry.setExternalResume(row.agentId, { ...pinned, phase: phase === 'prepared' || phase === 'sent' ? 'quitting' : phase,
+    ...(phase === 'prepared' || phase === 'sent' ? { signal: phase } : {}) })))()).rejects.toThrow('another durable owner')
   expect(readFileSync(join(root, 'registry.json'), 'utf8')).toBe(before)
   expect(registry.byAgent(row.agentId)).toMatchObject({ sessionId: '', externalResume: { phase: 'waiting' } })
 })
@@ -133,10 +135,10 @@ it('never overwrites a concurrent durable cancellation or commits dispatch again
   const { registry, row } = await pending()
   const previous = disk()[0]
   write([{ ...previous, externalResume: intent({ phase: 'cancelled' }) }])
-  expect(() => registry.setExternalResume(row.agentId, intent({ session: fact(), phase: 'admitted' }))).toThrow('durable adoption changed')
+  await expect((async () => (await registry.setExternalResume(row.agentId, intent({ session: fact(), phase: 'admitted' }))))()).rejects.toThrow('durable adoption changed')
   expect(disk()[0].externalResume?.phase).toBe('cancelled')
   const next = await load()
-  expect(next.finishExternalCancellation(row.agentId)).toBe(true)
+  expect((await next.finishExternalCancellation(row.agentId))).toBe(true)
 })
 
 it('refuses KILL when another writer durably binds the conversation during the TERM grace period', async () => {
@@ -145,7 +147,7 @@ it('refuses KILL when another writer durably binds the conversation during the T
   const kill = vi.fn(), launch = vi.fn()
   let written = false
   const controller = createExternalResumes({ registry, backend: null, backendFor: () => undefined, stopped: () => [], cancelled: () => false,
-    generation: () => 1, waiting: async () => true, preflight: async () => null, announce: () => {}, forget: () => {}, launch,
+    generation: () => 1, waiting: async () => true, preflight: async () => null, announce: () => {}, forget: async () => {}, launch,
     inspect: async request => ({ ok: true, request, session: fact(), owner, generation: 'ps:1', busy: false }),
     stopOwner: (target, control) => stopExternalOwner(target, { ...control, exists: () => true, generation: () => 'ps:1',
       job: async () => null, kill, sleep: async () => {
@@ -170,25 +172,25 @@ it('rolls back strict persistence failures before acknowledging admission, dispa
   const { registry, row } = await pending()
   const old = disk()
   writeFileSync(join(root, 'registry.json'), '{unreadable', { mode: 0o600 })
-  expect(() => registry.setExternalResume(row.agentId, intent({ phase: 'admitted', session: fact() }))).toThrow()
+  await expect((async () => (await registry.setExternalResume(row.agentId, intent({ phase: 'admitted', session: fact() }))))()).rejects.toThrow()
   expect(registry.byAgent(row.agentId)?.externalResume?.phase).toBe('waiting')
   write(old)
-  registry.setExternalResume(row.agentId, intent({ phase: 'admitted', session: fact() }))
+  ;(await registry.setExternalResume(row.agentId, intent({ phase: 'admitted', session: fact() })))
   const admitted = disk()
   writeFileSync(join(root, 'registry.json'), '{unreadable', { mode: 0o600 })
-  expect(() => registry.beginExternalDispatch(row.agentId)).toThrow()
+  await expect((async () => (await registry.beginExternalDispatch(row.agentId)))()).rejects.toThrow()
   expect(registry.byAgent(row.agentId)).toMatchObject({ launch: { state: 'held' }, active: false, externalResume: { phase: 'admitted' } })
   expect(registry.byAgent(row.agentId)?.externalResume?.dispatched).toBeUndefined()
   write(admitted)
   const reloaded = await load()
-  expect(reloaded.setExternalResume(row.agentId, intent({ phase: 'cancelled' }))).toBeNull()
+  expect((await reloaded.setExternalResume(row.agentId, intent({ phase: 'cancelled' })))).toBeNull()
   // A separate unadmitted intent has a durable cleanup boundary too.
-  const other = reloaded.openPendingAgent({ engine: 'claude', cwd: null, runtimes: [{ backend: 'tmux', paneId: '%2' }], externalResume: intent({ request: { engine: 'claude', sessionId: 'second' } }) })!
-  reloaded.setExternalResume(other.agentId, { ...other.externalResume!, phase: 'cancelled' })
+  const other = (await reloaded.openPendingAgent({ engine: 'claude', cwd: null, runtimes: [{ backend: 'tmux', paneId: '%2' }], externalResume: intent({ request: { engine: 'claude', sessionId: 'second' } }) }))!
+  ;(await reloaded.setExternalResume(other.agentId, { ...other.externalResume!, phase: 'cancelled' }))
   writeFileSync(join(root, 'registry.json'), '{unreadable', { mode: 0o600 })
-  expect(() => reloaded.finishExternalCancellation(other.agentId)).toThrow()
+  await expect((async () => (await reloaded.finishExternalCancellation(other.agentId)))()).rejects.toThrow()
   expect(reloaded.byAgent(other.agentId)?.externalResume?.phase).toBe('cancelled')
-  expect(reloaded.openPendingAgent({ engine: 'claude', cwd: null, runtimes: [{ backend: 'tmux', paneId: '%3' }], externalResume: intent({ request: { engine: 'claude', sessionId: 'third' } }) })).toBeNull()
+  expect((await reloaded.openPendingAgent({ engine: 'claude', cwd: null, runtimes: [{ backend: 'tmux', paneId: '%3' }], externalResume: intent({ request: { engine: 'claude', sessionId: 'third' } }) }))).toBeNull()
   expect(reloaded.byPaneEngine('%3', 'claude')).toBeUndefined()
 })
 
@@ -199,18 +201,19 @@ it('blocks malformed persisted adoption instead of silently loading a fresh laun
     const before = readFileSync(join(root, 'registry.json'), 'utf8')
     const registry = await load()
     expect(registry.list()).toEqual([])
-    expect(registry.openPendingAgent({ engine: 'claude', cwd: null, runtimes: [{ backend: 'tmux', paneId: '%2' }] })).toBeNull()
+    expect((await registry.openPendingAgent({ engine: 'claude', cwd: null, runtimes: [{ backend: 'tmux', paneId: '%2' }] }))).toBeNull()
     expect(readFileSync(join(root, 'registry.json'), 'utf8')).toBe(before)
   }
 })
 
 it('drops adoption constraints when its engine becomes a terminal', async () => {
   const { registry, row } = await pending()
-  registry.setExternalResume(row.agentId, intent({ session: fact(), phase: 'admitted' }))
+  ;(await registry.setExternalResume(row.agentId, intent({ session: fact(), phase: 'admitted' })))
   const shell = registry.releaseEngine(row.agentId)!
   expect(shell.engine).toBe('terminal')
   expect(shell.externalResume).toBeUndefined()
   expect(shell.resumeOnly).toBeUndefined()
+  await registry.flush()
   const reboot = await load()
   expect(reboot.byAgent(row.agentId)?.engine).toBe('terminal')
   expect(reboot.externalConflict(['alias'])).toBeUndefined()
@@ -218,17 +221,17 @@ it('drops adoption constraints when its engine becomes a terminal', async () => 
 
 it('a dispatch that carries a first task commits both together', async () => {
   const { registry, row } = await pending()
-  registry.setExternalResume(row.agentId, intent({ phase: 'admitted', session: fact() }))
+  ;(await registry.setExternalResume(row.agentId, intent({ phase: 'admitted', session: fact() })))
   const admitted = disk()
   writeFileSync(join(root, 'registry.json'), '{unreadable', { mode: 0o600 })
-  expect(() => registry.beginExternalDispatch(row.agentId, 'continue')).toThrow()
+  await expect((async () => (await registry.beginExternalDispatch(row.agentId, 'continue')))()).rejects.toThrow()
   expect(registry.byAgent(row.agentId)).not.toHaveProperty('firstTask')
   expect(registry.byAgent(row.agentId)?.externalResume?.dispatched).toBeUndefined()
   write(admitted)
-  expect(registry.beginExternalDispatch(row.agentId, 'continue')).toMatchObject({ firstTask: 'continue', externalResume: { dispatched: true } })
+  expect((await registry.beginExternalDispatch(row.agentId, 'continue'))).toMatchObject({ firstTask: 'continue', externalResume: { dispatched: true } })
   expect(disk()[0]).toMatchObject({ firstTask: 'continue', externalResume: { dispatched: true } })
   write(admitted)
   const again = await load()
-  expect(again.beginExternalDispatch(row.agentId)).not.toHaveProperty('firstTask')
+  expect((await again.beginExternalDispatch(row.agentId))).not.toHaveProperty('firstTask')
   expect(disk()[0]).not.toHaveProperty('firstTask')
 })

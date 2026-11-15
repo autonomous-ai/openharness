@@ -427,7 +427,7 @@ async function stopFixture() {
   const { terminateDeletedAgent } = await import('../../lib/deleteAgentFallback.js')
   const processIdentity = { pid: 4242, executable: 'hermes', startMarker: '2026-10-09T11:59:00Z' }
   control.processes = [{ ...processIdentity, args: 'hermes', parentPid: 1 }]
-  const live = registry.openProcessAgent({ engine: 'hermes', cwd: '/fixture/work', tmuxPane: '%77', processIdentity })!.entry
+  const live = (await registry.openProcessAgent({ engine: 'hermes', cwd: '/fixture/work', tmuxPane: '%77', processIdentity }))!.entry
   const forgetSession = createForgetSession({
     registry, stoppedAgents, syncRecapPool: vi.fn(), normalizers: { forget: vi.fn() },
     forgetAttach: vi.fn(), turnStartedAt: new Map(), prompts: new Map(), neverFoldedHistory: new Set(), replayedFirstTurn: new Set(),

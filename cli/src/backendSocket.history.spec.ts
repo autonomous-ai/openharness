@@ -38,7 +38,7 @@ describe.each([
   let file: string
   let pane = 7400
 
-  beforeEach(() => {
+  beforeEach(async () => {
     const root = engine === 'claude' ? roots.claude : roots.codex
     mkdirSync(root, { recursive: true })
     dir = mkdtempSync(join(root, 'history-'))
@@ -56,8 +56,8 @@ describe.each([
     bindHistory(socket)
     frames = []
     socket.registerLocalClient('local:history', { sendFrame: (frame) => { frames.push(frame as never); return true }, sendBinary: () => true })
-    agentId = registry.openPendingAgent({ engine, runtimes: [{ backend: 'tmux', paneId }], cwd: dir })!.agentId
-    expect(registry.register({ engine, sessionId, transcriptPath: file, tmuxPane: paneId, cwd: dir })).not.toBeNull()
+    agentId = (await registry.openPendingAgent({ engine, runtimes: [{ backend: 'tmux', paneId }], cwd: dir }))!.agentId
+    expect((await registry.register({ engine, sessionId, transcriptPath: file, tmuxPane: paneId, cwd: dir }))).not.toBeNull()
   })
 
   afterEach(async () => {
@@ -172,9 +172,9 @@ describe.each([
 
   it('counts nothing for an agent whose engine keeps no transcript file', async () => {
     const paneId = `%${++pane}`
-    const store = registry.openPendingAgent({ engine: 'opencode', runtimes: [{ backend: 'tmux', paneId }], cwd: dir })!.agentId
+    const store = (await registry.openPendingAgent({ engine: 'opencode', runtimes: [{ backend: 'tmux', paneId }], cwd: dir }))!.agentId
     try {
-      registry.register({ engine: 'opencode', sessionId: `ses_history${pane}`, tmuxPane: paneId, cwd: dir })
+      ;(await registry.register({ engine: 'opencode', sessionId: `ses_history${pane}`, tmuxPane: paneId, cwd: dir }))
       const reply = await ask('sessions_list', { agentId: store })
       expect(reply.sessions).toEqual([expect.objectContaining({ id: `ses_history${pane}`, messageCount: 0 })])
     } finally { registry.removeAgent(store) }

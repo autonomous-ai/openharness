@@ -197,7 +197,7 @@ describe('saved catalog reads', () => {
 async function fixture() {
   const { registry } = await import('./registry.js')
   const { StoppedAgentStore } = await import('./stoppedAgents.js')
-  const entry = registry.openPendingAgent({ engine: 'codex', runtimes: [{ backend: 'tmux', paneId: '%8' }], cwd: '/tmp/work', defaultName: 'My work', codexHome: '/tmp/profile', dsh: 'autonomous/fixture', permissionMode: 'plan' })!
+  const entry = (await registry.openPendingAgent({ engine: 'codex', runtimes: [{ backend: 'tmux', paneId: '%8' }], cwd: '/tmp/work', defaultName: 'My work', codexHome: '/tmp/profile', dsh: 'autonomous/fixture', permissionMode: 'plan' }))!
   const saved: RegisteredSession = { ...entry, sessionId: 'conversation-123', title: 'Continue my work', processIdentity: { pid: 98765, executable: 'codex', startMarker: 'old-process' } }
   const store = new StoppedAgentStore(join(directory, 'stopped-agents'))
   return { registry, StoppedAgentStore, saved, store }
@@ -277,14 +277,14 @@ describe('stopped harness persistence', () => {
     registry.removeAgent(saved.agentId)
     const archived = new StoppedAgentStore(join(directory, 'stopped-agents')).get(saved.agentId)!
     expect(archived.lastOpenedAt).toBe(opened)
-    const resumed = registry.resumePendingAgent(archived, [{ backend: 'tmux', paneId: '%77' }])!
+    const resumed = (await registry.resumePendingAgent(archived, [{ backend: 'tmux', paneId: '%77' }]))!
     expect(resumed.lastOpenedAt).toBe(opened)
     expect(registry.byAgent(saved.agentId)?.lastOpenedAt).toBe(opened)
   })
 
   it('the archive keeps a local row\'s folder and its earlier session keys', async () => {
     const { registry, StoppedAgentStore, store } = await fixture()
-    const local = registry.openPendingAgent({ engine: 'openclaw', runtimes: [{ backend: 'tmux', paneId: '%11' }], cwd: '/tmp/work', openclawLocal: '/run/skill-1' })!
+    const local = (await registry.openPendingAgent({ engine: 'openclaw', runtimes: [{ backend: 'tmux', paneId: '%11' }], cwd: '/tmp/work', openclawLocal: '/run/skill-1' }))!
     store.save({ ...local, sessionId: 'agent:main:tui-2', earlierSessionIds: ['agent:main:harness-1'], active: false })
     expect(new StoppedAgentStore(join(directory, 'stopped-agents')).get(local.agentId)).toMatchObject({
       openclawLocal: '/run/skill-1', openclawStateDir: '/run/skill-1', earlierSessionIds: ['agent:main:harness-1'] })
@@ -293,7 +293,7 @@ describe('stopped harness persistence', () => {
   it('T1 keeps a fork origin with its parent session through save, get and list', async () => {
     const { registry, StoppedAgentStore, store } = await fixture()
     const origin = { agentId: 'p', name: 'Parent', sessionId: 'p-sess', transcriptPath: '/x/p-sess.jsonl' }
-    const fork = registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%9' }], cwd: '/tmp/work', forkedFrom: origin })!
+    const fork = (await registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%9' }], cwd: '/tmp/work', forkedFrom: origin }))!
     store.save({ ...fork, sessionId: 'fork-sess', active: false })
     const fresh = new StoppedAgentStore(join(directory, 'stopped-agents'))
     expect(fresh.get(fork.agentId)?.forkedFrom).toEqual(origin)
@@ -302,8 +302,8 @@ describe('stopped harness persistence', () => {
 
   it('reads a stopped fork saved by an older daemon, and drops a malformed origin without failing the read', async () => {
     const { registry, StoppedAgentStore, store } = await fixture()
-    const fork = registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%10' }], cwd: '/tmp/work',
-      forkedFrom: { agentId: 'p', name: 'Parent' } })!
+    const fork = (await registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%10' }], cwd: '/tmp/work',
+      forkedFrom: { agentId: 'p', name: 'Parent' } }))!
     store.save({ ...fork, active: false })
     const file = join(directory, 'stopped-agents', `${fork.agentId}.json`)
     const rewrite = (forkedFrom: unknown) => {
@@ -374,9 +374,9 @@ describe('stopped harness persistence', () => {
     const { registry, saved, store } = await fixture()
     store.save(saved)
     registry.removeAgent(saved.agentId)
-    const resumed = registry.resumePendingAgent(store.get(saved.agentId)!, [{ backend: 'tmux', paneId: '%99' }])!
+    const resumed = (await registry.resumePendingAgent(store.get(saved.agentId)!, [{ backend: 'tmux', paneId: '%99' }]))!
     expect(resumed).toMatchObject({ agentId: saved.agentId, sessionId: saved.sessionId, tmuxPane: '%99', processIdentity: null, launch: { state: 'starting' }, permissionMode: 'plan', codexHome: '/tmp/profile' })
-    expect(registry.resumePendingAgent(saved, [{ backend: 'tmux', paneId: '%100' }])).toBeNull()
+    expect((await registry.resumePendingAgent(saved, [{ backend: 'tmux', paneId: '%100' }]))).toBeNull()
     expect(registry.advertised()).toHaveLength(1)
   })
 
@@ -410,7 +410,7 @@ it('keeps the original identity searchable while preserving the surviving shell 
   expect(registry.byAgent(saved.agentId)).toBeUndefined()
   expect(registry.bySession(saved.sessionId)).toBeUndefined()
   expect(store.available(registry.list()).map(row => row.agentId)).toEqual([saved.agentId])
-  const resumed = registry.resumePendingAgent(store.get(saved.agentId)!, [{ backend: 'tmux', paneId: '%99' }])!
+  const resumed = (await registry.resumePendingAgent(store.get(saved.agentId)!, [{ backend: 'tmux', paneId: '%99' }]))!
   expect(resumed.agentId).toBe(saved.agentId)
   expect(registry.byRuntimeTerminal({ backend: 'tmux', paneId: '%8' })?.agentId).toBe(shell.agentId)
   expect(registry.list()).toHaveLength(2)
