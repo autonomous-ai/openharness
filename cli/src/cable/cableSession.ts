@@ -2387,10 +2387,15 @@ export class CableSession {
     }
     const instruction = turn.cmd ? `/${turn.cmd} ${transcript}` : transcript
     const carried = turn.carry?.ok ? turn.carry.passage : undefined
-    // An explicit target that vanished never becomes an inferred recipient.
-    if (carried && !agents.some(a => a.id === agentId)) {
-      await reply({ t: 'voice.error', message: 'That recipient is no longer available. Choose it again.' })
-      return
+    // An explicit target that vanished never becomes an inferred recipient. Looked for in the list this dial holds: on an
+    // app's ring with a window open, its agent is on no tile of the window's tab.
+    if (carried) {
+      const held = (await this.agentSnapshot()).agents
+      if (!current()) return
+      if (!held.some(a => a.id === agentId)) {
+        await reply({ t: 'voice.error', message: 'That recipient is no longer available. Choose it again.' })
+        return
+      }
     }
     if (review) {
       const recipient = agentId
