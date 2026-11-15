@@ -1165,10 +1165,25 @@ export class BackendSocket {
           reply(type, requestId, this.sessionsProvider ? await this.sessionsProvider(payload) : { error: 'UNSUPPORTED' })
           return
 
-        // A conversation's history, a page at a time (core/transcripts/history.ts, bound by cli.ts).
-        case 'session_get':
-          reply(type, requestId, this.historyProvider ? await this.historyProvider(payload) : { error: 'UNSUPPORTED' })
+        // Start after earlier commands, but never hold later input behind a reader's bounded worker wait.
+        // History rechecks its captured conversation identity before returning (core/transcripts/history.ts).
+        case 'session_get': {
+          const provider = this.historyProvider
+          if (!provider) { reply(type, requestId, { error: 'UNSUPPORTED' }); return }
+          void (async () => {
+            let result: Record<string, unknown>
+            try { result = await provider(payload) }
+            catch (error) {
+              console.error('[backend] HISTORY_READ_FAILED')
+              if (requestId === undefined) return
+              result = error instanceof ServiceUnavailableError
+                ? { error: 'SERVICE_UNAVAILABLE', service: error.service, retryable: true } : { error: 'INTERNAL' }
+            }
+            try { reply(type, requestId, result) }
+            catch { console.error('[backend] HISTORY_REPLY_FAILED') }
+          })()
           return
+        }
 
         case 'remote_terminal_handoff': {
           // `harness remote`, typed INSIDE one of this machine's terminal tiles, opened a terminal on
