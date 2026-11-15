@@ -15,6 +15,7 @@ import 'package:xterm/xterm.dart';
 
 import 'window_chrome.dart';
 
+import '../browser/browser_panel.dart';
 import '../clipboard/image_bytes.dart';
 import '../core/runtime_platform.dart';
 import '../core/dsh_catalog.dart' show DshEntry;
@@ -549,6 +550,10 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
       canSplitDown:
           app.preparePaneSplit(PaneResizeAxis.y, paneId: pane.id) != null,
       composer: pane.composerVisible,
+      // The header's Browser: offered, and open in this tab.
+      browser: agent == null || !app.offersBrowser(pane.machineId, agent.id)
+          ? null
+          : app.browserPaneShown(pane.machineId, agent.id),
       blocked:
           app.questionFor(pane.machineId, pane.agentId ?? session.agentId) !=
           null,
@@ -1482,7 +1487,7 @@ class _PaneCell extends StatelessWidget {
 
   Widget _clipContent({required Widget child}) {
     // GTK overlays cannot render under a rounded Flutter clip.
-    if (RuntimePlatform.isLinux && pane.isWeb) {
+    if (RuntimePlatform.isLinux && (pane.isWeb || pane.isBrowser)) {
       return ClipRect(child: child);
     }
     // Keep terminal backgrounds inside the pane rim.
@@ -1750,6 +1755,29 @@ class _PaneContent extends StatelessWidget {
       );
     }
 
+    // An agent's own Chrome, left of its terminal (lib/browser/). Its × only
+    // hides the tile: the browser runs on.
+    if (pane.ownerAgentId case final owner? when pane.isBrowser) {
+      return LayoutBuilder(
+        builder: (context, constraints) => BrowserPanel(
+          // The stream is its agent's: a tile that became another agent's (a
+          // Change agent) is a new panel.
+          key: ValueKey('browser-pane-${pane.id}/$owner'),
+          app: notifier,
+          machineId: pane.machineId,
+          agentId: owner,
+          thisComputer: machine?.isLocalMachine == true,
+          visible: visible,
+          compactHeader: swarmMode,
+          paneDrag: carry(constraints),
+          onClose: () {
+            if (notifier.activeSwarmId != swarmId) return;
+            unawaited(notifier.closePane(pane.id));
+          },
+        ),
+      );
+    }
+
     // A harness's viewer: the one tile that is not a terminal and not about a
     // machine. Decided first, before anything below reads `agentId` — which a
     // viewer keeps null on purpose (see TerminalPane.ownerAgentId).
@@ -2011,6 +2039,11 @@ class _PaneContent extends StatelessWidget {
                 wantedAgentId,
               ).joining !=
               null;
+      // The agent's Browser, opened left of this terminal from its header.
+      final browser =
+          agent != null && notifier.offersBrowser(pane.machineId, agent.id)
+          ? agent
+          : null;
       final panel = LayoutBuilder(
         builder: (context, constraints) => TerminalPanel(
           notifier: notifier,
@@ -2051,6 +2084,15 @@ class _PaneContent extends StatelessWidget {
               !agent.terminalAvailable,
           notice: notice,
           onToggleComposer: () => notifier.toggleComposer(pane.id),
+          onToggleBrowser: browser == null
+              ? null
+              : () => unawaited(
+                  notifier.toggleBrowserPane(pane.machineId, browser.id),
+                ),
+          browserOpen:
+              browser != null &&
+              notifier.browserPaneShown(pane.machineId, browser.id),
+          browserRunning: browser?.browser?.state == 'ready',
           onClose: single && !swarmMode ? null : close,
           onOpenModels: onOpenModels == null
               ? null
