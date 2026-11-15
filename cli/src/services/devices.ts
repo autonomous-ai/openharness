@@ -18,6 +18,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import { existsSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { env } from '../config/env.js'
 import { DEVICES_FALLBACKS, DEVICES_REQUESTS, type CoreApi, type CorePorts, type DeviceHookPort, type DevicesPort, type RouteAnswer, type SendResult, type ServiceRequests, type WindowFocus } from '../core/api.js'
@@ -26,6 +27,7 @@ import { isLocalOnly } from '../lib/cardUpdate.js'
 import { TurnStats, type TurnStatsFields } from '../cable/turnStats.js'
 import { cableEventFor, cableStepFor, cableQuestionCloseFor, cableQuestionFor, DaemonCableHost } from '../cable/cableHost.js'
 import { CableSession, SHOWN_ONLY_PREFIX, type FollowCause } from '../cable/cableSession.js'
+import { codexQueueDeps, createCodexQueue, type CodexQueueDeps } from '../cable/hosts/codexQueue.js'
 import { Inbox } from '../cable/hosts/inbox.js'
 import { LAST_ANSWER_DEADLINE_MS, LAST_ANSWER_MAX_BYTES, readLastAnswer } from '../cable/hosts/lastAnswer.js'
 import { askedLine, hostDisplayName, observedAgentId, ObservedSource, type ObservedActions, type ObservedDeps, type PromptSource } from '../cable/hosts/observed.js'
@@ -91,6 +93,8 @@ export interface DevicesDeps {
   /** For this service's tests: how `orca`, and the commands a tap runs to open an app (cable/hosts/open.ts), are found and
    *  run. */
   orca?: OrcaDeps
+  /** For this service's tests: how `codex` is found and run (cable/hosts/codexQueue.ts). */
+  codex?: Pick<CodexQueueDeps, 'run' | 'binary' | 'platform'>
   /** Opens the devices' own listener with these handlers (services/devicesListener.ts). Given by the devices process
    *  alone: inside the core's process (`HARNESSD_SERVICES=none`, Harness OS) there is none, so the core's process opens
    *  no socket for the devices, and the dial follows no app in front there. */
@@ -240,9 +244,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // open sessions are read here. Nothing of them leaves this computer: the core, a window and the gateway hear none of it
   // (docs/specs/2026-11-13-device-without-the-app.md). `HARNESS_DEVICE_OBSERVED=off` is the kill switch.
   //
-  // The dial's voice reaches them through their mod's long poll (Claude Code's), idle or working, or typed into their Orca
-  // terminal when idle, and a tap brings its app forward, on its own pane where the app has a way in that asks for no new permission
-  // (docs/specs/2026-11-13-device-claude-orca.md).
+  // The dial's voice reaches them through their mod's long poll (Claude Code's) or Codex's own queue, idle or working, or
+  // typed into their Orca terminal when idle, and a tap brings its app forward, on its own pane where the app has a way in
+  // that asks for no new permission (docs/specs/2026-11-13-device-claude-orca.md, docs/specs/2026-11-15-device-codex.md).
   /** The part timers still to fire: the devices stopping cancels them, as a part with no stop of its own cannot. */
   const pending = new Set<ReturnType<typeof setTimeout>>()
   /** A timer of one part, its run guarded as a notice into that part is, and never what keeps the process up. */
@@ -256,6 +260,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const apps = deps.orca ?? orcaDeps()
   const orca = createOrcaActions(apps)
   const opener = createOpenActions({ ...apps, orcaSwitch: (handle) => orca.switchTo(handle).then((done) => done === 'ok'), log })
+  // Harness's own Codex home, whose config `codex queue` loads; run from the home folder, so no project's .codex/ is read.
+  const codexQueue = createCodexQueue({ ...(deps.codex ?? codexQueueDeps()), home: env.CODEX_HOME, cwd: homedir() })
   // The stream a watch holds open on the devices' listener: a rest or a tap on an agent in Terminal, iTerm2 or Ghostty
   // asks it to select that agent's tab (docs/specs/2026-11-15-dial-terminal-follow.md). Only macOS's apps select a tab
   // by its tty: elsewhere no agent's is read, and none has a tab.
@@ -293,7 +299,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       selected(tty)
       return 'ok'
     },
-    // The route or the refusal only: never the words, the session or the terminal.
+    codexQueue,
+    codexHome: env.CODEX_HOME,
+    // The route or the refusal, and why a queue failed: never the words, the session, the terminal or a path.
     count: (what) => log(`[device] voice · ${what}`),
   }, ttyOf) : null
   /** One of them, by the id the dial holds: what the dial asks of it is answered here, never by a door of the core. */

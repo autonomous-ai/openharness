@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { basename } from 'node:path'
+import { basename, join } from 'node:path'
 // Types only: the devices process must not load core code.
 import type { ObservedAsked, ObservedEvent, ObservedHookEvent } from '../../core/observedHook.js'
 import { truncateUtf8 } from '../../lib/deviceRecentTrim.js'
@@ -7,6 +7,7 @@ import type { OpenSessions, SessionRows } from '../../lib/sessionSearch/external
 import { type fileStamp, within } from '../../lib/sessionSearch/externals/support.js'
 import type { ExternalEngine, RunningProcess } from '../../lib/sessionSearch/externals/types.js'
 import { roundDrawable } from '../roundGlyphs.js'
+import { CODEX_THREAD, type CodexQueue, type CodexQueueFailure } from './codexQueue.js'
 import { detectApp, detectHost, hostDisplayName, UNKNOWN_APP } from './hostDetect.js'
 import type { Delivery } from './inbox.js'
 import { openTarget, type OpenTarget } from './open.js'
@@ -106,7 +107,13 @@ export interface ObservedActions {
   tabsOpen(): boolean
   /** One select line for the watch, a tap's raising its window too: ok once written, failed with no stream. */
   tabSelect(app: TabApp, tty: string, raise: boolean): PaneSwitch
-  count(what: 'mod' | 'orca' | 'waiting' | 'busy' | 'pending' | 'too-long' | 'no-answer'): void
+  /** Codex's own queue (codexQueue.ts): a thread runs its words as its next turn, and no terminal is typed into. */
+  codexQueue: Pick<CodexQueue, 'can' | 'send'>
+  /** The Codex home Harness reads (env.CODEX_HOME): `codex queue` loads its config, so a hook's path never chooses it. */
+  codexHome: string
+  /** The route or the refusal, and a failed queue's reason. */
+  count(what: 'mod' | 'orca' | 'waiting' | 'busy' | 'pending' | 'too-long' | 'no-answer' | 'codex' | 'codex-timeout'
+    | `codex-failed (${CodexQueueFailure})`): void
 }
 
 /** A pane a rest can show without its app coming forward, by the app that holds it: a later kind is one member here, one
@@ -163,7 +170,7 @@ export class ObservedSource implements HostSource {
     const live = this.live(e)
     return {
       status: true,
-      voice: live && (!!e.handle || this.modReady(e, actions)),
+      voice: live && (!!e.handle || this.modReady(e, actions) || this.queueable(e, actions)),
       focus: live && actions.canOpen(e.opens),
       // Its prompts are answered in its own app: the dial only shows them.
       answer: false,
@@ -176,9 +183,20 @@ export class ObservedSource implements HostSource {
   }
 
   /**
-   * The dial's words for the agent, and nothing is queued here: to its mod in every state, as a Harness agent's are
-   * (lib/sessionInput.ts), whose `$.prompt.submit` types nothing and starts them once the turn is over; else typed into its
-   * Orca terminal, only at its prompt.
+   * Whether Codex's queue takes a live session's words: a Codex session whose rollout is in Harness's own Codex home, its
+   * session id the thread id. Whether codex is there is asked last: it looks for the binary.
+   */
+  private queueable(e: Entry, actions: ObservedActions): boolean {
+    return e.agent.engine === 'codex' && !!e.transcriptPath && within(join(actions.codexHome, 'sessions'), e.transcriptPath)
+      && CODEX_THREAD.test(e.agent.sessionId!) && actions.codexQueue.can()
+  }
+
+  /**
+   * The dial's words for the agent, and nothing is held here. A Codex session's in Harness's own Codex home go to Codex's
+   * own queue first, in every state: a queued message types nothing and answers no approval, and runs once the turn is over
+   * (docs/specs/2026-11-15-device-codex.md, the spike). Claude Code's go to its mod in every state, as a Harness agent's
+   * are (lib/sessionInput.ts), whose `$.prompt.submit` types nothing and starts them once the turn is over. Else, and
+   * after a queue that definitely failed, they are typed into its Orca terminal, only at its prompt.
    */
   async send(agent: HostAgent, text: string): Promise<SendResult> {
     const e = this.entries.get(agent.id)
@@ -193,6 +211,24 @@ export class ObservedSource implements HostSource {
     // Its session ended: its terminal holds a shell now, where these words would run.
     if (!e || !actions || !this.live(e)) return noAnswer()
     const handle = e.handle
+    if (this.queueable(e, actions)) {
+      // Recorded first: an idle Codex starts the queued turn, and its hook can be heard, before `codex queue` has exited.
+      const record = this.dialPrompt(e)
+      const queued = await actions.codexQueue.send(e.agent.sessionId!, text)
+      if (queued.outcome === 'queued') {
+        actions.count('codex')
+        return { ok: true }
+      }
+      this.forgetDialPrompt(e, record)
+      // The last words are still being queued: typed into Orca now, these would land before them.
+      if (queued.outcome === 'busy') return refuse('pending', `${name} has not taken your last words yet.`)
+      // A timeout: they may be queued, and typed too they would run twice. Only a definite failure goes on.
+      if (queued.outcome !== 'failed') {
+        actions.count('codex-timeout')
+        return { ok: false, reason: `${name} did not answer.` }
+      }
+      actions.count(`codex-failed (${queued.reason})`)
+    }
     if (this.modReady(e, actions)) {
       const delivery = await actions.toMod(e.agent.sessionId!, text)
       if (delivery === 'taken') {
@@ -214,9 +250,7 @@ export class ObservedSource implements HostSource {
     // Recorded first: `orca terminal send` returns once the prompt is submitted, and its turn's hook can be heard before.
     const record = this.dialPrompt(e)
     if (!await actions.orcaSend(handle, text)) {
-      // Its own record only, if no turn took it meanwhile: an earlier one is the mod's, for words still to come.
-      const i = e.dialPrompts.indexOf(record)
-      if (i >= 0) e.dialPrompts.splice(i, 1)
+      this.forgetDialPrompt(e, record)
       return noAnswer()
     }
     actions.count('orca')
@@ -228,6 +262,13 @@ export class ObservedSource implements HostSource {
     const record = { at: this.deps.now() }
     if (e.dialPrompts.push(record) > MAX_DIAL_PROMPTS) e.dialPrompts.shift()
     return record
+  }
+
+  /** Words that did not reach it: their own record only, if no turn took it meanwhile. An earlier one is the mod's, or
+   *  the queue's, for words still to come. */
+  private forgetDialPrompt(e: Entry, record: { at: number }): void {
+    const i = e.dialPrompts.indexOf(record)
+    if (i >= 0) e.dialPrompts.splice(i, 1)
   }
 
   /**

@@ -20,6 +20,8 @@ in the app, so the face grows no buttons", `ui_habitat.c`). So Diego decided, re
   with the plugin's mod takes the words, which `$.prompt.submit` queues for after its turn without typing anything.
   Typing into a terminal (Orca) is only for an idle agent, of any engine. A working agent with no mod (Codex, Claude
   Code without the plugin) is told busy. An ended session is refused (its terminal may hold a shell by then).
+  Since [the dial talks to Codex through `codex queue`](2026-11-15-device-codex.md), a Codex session in Harness's own
+  Codex home takes voice in every state.
 - **Opening an agent from the dial opens its app and focuses its pane,** with no new permission:
   - **Every host with a known bundle id** at least comes forward (`open -b <bundle id>` on macOS), Warp, Alacritty,
     VS Code and Cursor included.
@@ -45,6 +47,8 @@ to do next.
 ## Decided (Diego, 2026-11-13)
 
 - **Scope.** The Claude Code plugin and the Orca adapter. Codex's own adapter (`codex queue`) and herdr come later.
+  Codex's adapter came in [its own spec](2026-11-15-device-codex.md): a Codex session in Harness's own Codex home now
+  takes voice in every state.
 - **The dial shows a waiting permission prompt; it never answers one** (Diego, 2026-11-14; above).
 - **A plugin of its own,** `harness-device`, in this repository's marketplace (`.claude-plugin/marketplace.json`,
   `plugins/harness-device/`), not inside the `harness` plugin. It holds the permission hook and the mod; one install, one
