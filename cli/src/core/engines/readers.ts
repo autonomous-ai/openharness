@@ -27,34 +27,36 @@ function route(engine: string, session: TranscriptSession): { service: string; s
     touchedAt: session.touchedAt, store: session.store ?? null } }
 }
 
+/**
+ * A reply its worker sent in parts, put back together: each part asked for by its offset, all of them within a wait
+ * as long as the read's, and the whole held to the core's own bound before any of it is kept. The other engines' live
+ * streams' answers come back the same way (core/engines/otherStreams.ts).
+ */
+export async function joinParts(first: Record<string, unknown>, ask: (offset: number) => Promise<Record<string, unknown>>): Promise<Record<string, unknown>> {
+  const id = first.part, size = first.bytes, hash = first.hash
+  if (typeof id !== 'string' || !id || id.length > 200 || typeof size !== 'number' || !Number.isSafeInteger(size)
+    || size <= 0 || size > READER_PARTED_BYTES || typeof hash !== 'string' || !/^[a-f0-9]{64}$/.test(hash)) throw new EngineReadError('ENGINE_INVALID_REPLY')
+  const body = Buffer.allocUnsafe(size)
+  let offset = 0, reply = first
+  for (;;) {
+    if (reply.part !== id || reply.bytes !== size || reply.hash !== hash || reply.offset !== offset || typeof reply.data !== 'string'
+      || reply.data.length > Math.ceil(READER_PART_BYTES / 3) * 4) throw new EngineReadError('ENGINE_INVALID_REPLY')
+    const part = Buffer.from(reply.data, 'base64')
+    if (!part.length || part.length > size - offset || part.toString('base64') !== reply.data) throw new EngineReadError('ENGINE_INVALID_REPLY')
+    part.copy(body, offset); offset += part.length
+    if (offset === size) break
+    reply = await ask(offset)
+  }
+  if (createHash('sha256').update(body).digest('hex') !== hash) throw new EngineReadError('ENGINE_INVALID_REPLY')
+  try { return JSON.parse(body.toString('utf8')) as Record<string, unknown> } catch { throw new EngineReadError('ENGINE_INVALID_REPLY') }
+}
+
 export function createEngineReaders(deps: EngineReaderDeps) {
   const log = deps.log ?? ((line: string) => console.warn(line))
   const services = [...Object.values(READER_SERVICES), OTHER_ENGINES_SERVICE]
   const states = new Map(services.map((service) => [service as string, { generation: 0, connected: false }]))
   // Per engine: the other engines share one worker, and one busy engine must not hold another's reads back.
   const pending = new Map<string, number>()
-  /**
-   * A reply its worker sent in parts, put back together: each part asked for by its offset, all of them within a wait
-   * as long as the read's, and the whole held to the core's own bound before any of it is kept.
-   */
-  const joined = async (first: Record<string, unknown>, ask: (offset: number) => Promise<Record<string, unknown>>): Promise<Record<string, unknown>> => {
-    const id = first.part, size = first.bytes, hash = first.hash
-    if (typeof id !== 'string' || !id || id.length > 200 || typeof size !== 'number' || !Number.isSafeInteger(size)
-      || size <= 0 || size > READER_PARTED_BYTES || typeof hash !== 'string' || !/^[a-f0-9]{64}$/.test(hash)) throw new EngineReadError('ENGINE_INVALID_REPLY')
-    const body = Buffer.allocUnsafe(size)
-    let offset = 0, reply = first
-    for (;;) {
-      if (reply.part !== id || reply.bytes !== size || reply.hash !== hash || reply.offset !== offset || typeof reply.data !== 'string'
-        || reply.data.length > Math.ceil(READER_PART_BYTES / 3) * 4) throw new EngineReadError('ENGINE_INVALID_REPLY')
-      const part = Buffer.from(reply.data, 'base64')
-      if (!part.length || part.length > size - offset || part.toString('base64') !== reply.data) throw new EngineReadError('ENGINE_INVALID_REPLY')
-      part.copy(body, offset); offset += part.length
-      if (offset === size) break
-      reply = await ask(offset)
-    }
-    if (createHash('sha256').update(body).digest('hex') !== hash) throw new EngineReadError('ENGINE_INVALID_REPLY')
-    try { return JSON.parse(body.toString('utf8')) as Record<string, unknown> } catch { throw new EngineReadError('ENGINE_INVALID_REPLY') }
-  }
   const read = async (engine: string, type: string, session: TranscriptSession, ask?: HistoryAsk): Promise<unknown> => {
     const { service, session: snapshot } = route(engine, session)
     const state = states.get(service)!
@@ -80,7 +82,7 @@ export function createEngineReaders(deps: EngineReaderDeps) {
       }, waitMs))
       if (reply.part !== undefined) {
         const part = reply.part, deadline = performance.now() + waitMs
-        reply = answered(await joined(reply, async (offset) => {
+        reply = answered(await joinParts(reply, async (offset) => {
           const left = Math.ceil(deadline - performance.now())
           if (left <= 0) throw new EngineReadError('ENGINE_UNAVAILABLE')
           return answered(await deps.call(service, READER_PART, { version: READER_VERSION, part, offset }, left))

@@ -189,7 +189,7 @@ describe('forking an agent', () => {
     })
     const { inspectNativeLaunch } = await import('../../testing/nativeSetupInProcess.js')
     const prepareNative = (native: NativeLaunch, current: () => boolean, environment?: Readonly<Record<string, string>>, clear?: readonly string[]) => native.prepareHooks(0, current, environment, clear)
-    const helpers = createLaunchHelpers({ authority: () => () => true, prepareApiTools: vi.fn(), setGridLaunch: vi.fn(), setTail: vi.fn(),
+    const helpers = createLaunchHelpers({ authority: () => () => true, prepareApiTools: vi.fn(), setGridLaunch: vi.fn(), prepareResume: async () => ({ repairedItems: 0 }),
       launchOverridesDeps: { native: (engine, source) => inspectNativeLaunch(engine, source), prepareNative,
         machine: () => ({ hermesSystemManaged: false }), gridLaunch: vi.fn(), writeGridConfigDir: vi.fn(),
         capabilities: async () => ({ sessionEnv: true }), installCodexHooks: async () => true,

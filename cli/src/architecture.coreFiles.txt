@@ -64,7 +64,6 @@ core/engines/admissionOrder.ts
 core/engines/backgroundJobs.ts
 core/engines/controlTransport.ts
 core/engines/cursorDiscovery.ts
-core/engines/cursorTasks.ts
 core/engines/engineLinks.ts
 core/engines/homeAdoptions.ts
 core/engines/hooks.ts
@@ -73,10 +72,12 @@ core/engines/liveTransport.ts
 core/engines/liveWatcher.ts
 core/engines/modelControls.ts
 core/engines/nativeControls.ts
+core/engines/otherStreams.ts
 core/engines/pendingAdmission.ts
 core/engines/providerMoves.ts
 core/engines/questionControls.ts
 core/engines/readers.ts
+core/engines/resumeRepairs.ts
 core/engines/runtimeProfiles.ts
 core/engines/runtimeSessions.ts
 core/engines/runtimeTransport.ts
@@ -127,7 +128,6 @@ core/transcripts/ingest.ts
 core/transcripts/lastTurn.ts
 core/transcripts/normalizers.ts
 core/transcripts/readIdentity.ts
-core/transcripts/readerLoads.ts
 core/transcripts/relaunch.ts
 core/transcripts/sideReads.ts
 core/transcripts/stores.ts
@@ -180,6 +180,7 @@ engines/devin/contract.ts
 engines/discoveries.ts
 engines/facets/hooks.ts
 engines/facets/modelControl.ts
+engines/facets/resumeRepair.ts
 engines/grok/contract.ts
 engines/hermes/contract.ts
 engines/hooks.ts
@@ -229,7 +230,6 @@ engines/kit/processFacts.ts
 engines/kit/processRecordEvidence.ts
 engines/kit/projectFolder.ts
 engines/kit/questionPane.ts
-engines/kit/resumeRepair.ts
 engines/kit/runtime.ts
 engines/kit/screen.ts
 engines/kit/sessionIdentity.ts
@@ -273,10 +273,12 @@ engines/worker/modelControlHost.ts
 engines/worker/modelControlProtocol.ts
 engines/worker/nativeControlHost.ts
 engines/worker/nativeControlProtocol.ts
+engines/worker/otherStreamProtocol.ts
 engines/worker/protocol.ts
 engines/worker/providerMoveProtocol.ts
 engines/worker/questionControlHost.ts
 engines/worker/questionControlProtocol.ts
+engines/worker/resumeRepairProtocol.ts
 engines/worker/runtimeProtocol.ts
 engines/worker/screenProtocol.ts
 engines/worker/submissionProtocol.ts

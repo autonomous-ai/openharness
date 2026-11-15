@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { prepareResume } from '../../engines/launchPrep.js'
+import { prepareResume } from '../../engines/resumePreparation.js'
 import { bringPiSessionHome } from '../../lib/piSessionHome.js'
 import type { GridLaunchAnswer, GridLaunchOverride, GridLaunchRequest } from '../../lib/gridLaunchWire.js'
 import { dropPermissionFlagIfUnsupported } from '../../lib/engineLaunch.js'
@@ -9,7 +9,7 @@ import { prepareInstructionWrites } from '../../scm/scmProjects.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { createLaunchHelpers, gridLaunchThrough, type LaunchHelperDeps } from './launch.js'
 
-vi.mock('../../engines/launchPrep.js', async (real) => ({ ...await real<object>(), prepareResume: vi.fn(async () => ({ repairedItems: 0 })) }))
+vi.mock('../../engines/resumePreparation.js', async (real) => ({ ...await real<object>(), prepareResume: vi.fn(async () => ({ repairedItems: 0 })) }))
 vi.mock('../../lib/piSessionHome.js', () => ({ bringPiSessionHome: vi.fn(() => null) }))
 vi.mock('../../lib/engineLaunch.js', async (real) => ({ ...await real<object>(), dropPermissionFlagIfUnsupported: vi.fn() }))
 // OpenCode's version is its own code, loaded for an OpenCode relaunch alone; a test may say it could not be.
@@ -34,13 +34,24 @@ function setup() {
     prepareApiTools: vi.fn(),
     launchOverridesDeps: { marker: 'deps' } as unknown as LaunchOverridesDeps,
     setGridLaunch: vi.fn(() => true),
-    setTail: vi.fn(),
+    prepareResume,
   }
   return { deps, helpers: createLaunchHelpers(deps) }
 }
 
 describe('relaunch helpers', () => {
   afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks() })
+
+  it('delegates repair to the injected coordinator without reading history in launch helpers', async () => {
+    const { deps } = setup()
+    const repair = vi.fn(async () => ({ repairedItems: 0, unrepaired: 'unavailable' as const }))
+    const helpers = createLaunchHelpers({ ...deps, prepareResume: repair } as LaunchHelperDeps)
+    const codex = session({ engine: 'codex' })
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(await helpers.prepareSessionResume(codex, held)).toBe(false)
+    expect(repair).toHaveBeenCalledWith(codex, held)
+    expect(prepareResume).not.toHaveBeenCalled()
+  })
 
   it('preserves an unknown native permission observation as a launch hold', async () => {
     const { helpers } = setup()
@@ -188,16 +199,13 @@ describe('relaunch helpers', () => {
     const codex = session({ engine: 'codex' })
     // It says whether the history was replaced: a resume then proves the new file, and otherwise the one it proved.
     expect(await helpers.prepareSessionResume(codex, held)).toBe(false)
-    expect(deps.setTail).not.toHaveBeenCalled()
     vi.mocked(prepareResume).mockResolvedValueOnce({ repairedItems: 3, repairedBytes: 1_234, backupPath: '/b/rollout.bak' })
     expect(await helpers.prepareSessionResume(codex, held)).toBe(true)
-    expect(deps.setTail).toHaveBeenCalledWith('s1', 1_234)
     vi.mocked(prepareResume).mockResolvedValueOnce({ repairedItems: 1, backupPath: '/b/rollout.bak' })
     await helpers.prepareSessionResume(codex, held)
-    expect(deps.setTail).toHaveBeenCalledTimes(1)
     expect(log.mock.calls.map(([line]) => String(line))).toEqual([
-      '[resume] repaired 3 Codex reasoning items · backup: /b/rollout.bak',
-      '[resume] repaired 1 Codex reasoning items · backup: /b/rollout.bak',
+      '[resume] repaired 3 Codex reasoning items · private backup kept',
+      '[resume] repaired 1 Codex reasoning items · private backup kept',
     ])
   })
 
@@ -215,7 +223,6 @@ describe('relaunch helpers', () => {
     // A host move that stops waiting moves the agent with its history as it is (lib/hostMove/moveAgent.ts).
     vi.mocked(prepareResume).mockResolvedValueOnce({ repairedItems: 0, unrepaired: 'cancelled' })
     expect(await helpers.prepareSessionResume(codex, held)).toBe(false)
-    expect(deps.setTail).not.toHaveBeenCalled()
     expect(warn.mock.calls.map(([line]) => String(line))).toEqual([
       '[resume] a1 · Codex reasoning items not repaired: its history is over 1 GiB, or a record over 16 MiB · the history is left as it is',
       '[resume] a1 · Codex reasoning items not repaired: the repair took over 60 s · the history is left as it is',

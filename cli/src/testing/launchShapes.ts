@@ -102,7 +102,7 @@ export function launchShapes(world: LaunchWorld) {
   const helpers = createLaunchHelpers({
     authority: () => () => true,
     prepareApiTools, launchOverridesDeps,
-    setGridLaunch: world.setGridLaunch as never, setTail: () => {},
+    setGridLaunch: world.setGridLaunch as never, prepareResume: async () => ({ repairedItems: 0 }),
   })
   return {
     create: (rest: CreateRest) => createAgentCreator({ opencodeMajor: opencodeMajorVersion, ...rest, gridLaunchMachine: world.machine, buildGridLaunch: gridLaunch, prepareApiTools, dshLaunch }),

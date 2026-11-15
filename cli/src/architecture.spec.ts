@@ -278,11 +278,9 @@ const FACETS_FREE_OF_THEM: Array<[string, string]> = [
   ['core/transcripts/attach.ts', '(o3)'],
   ['core/transcripts/history.ts', '(o3)'],
   ['core/transcripts/lastTurn.ts', '(o3)'],
-  ['core/transcripts/stores.ts', '(o3)'],
   // Their history and last turns are their worker's (engines/others/): the core's port and its list of them hold none.
   ['core/engines/readers.ts', 'the worker'],
   ['engines/otherEngines.ts', 'the worker'],
-  ['core/engines/cursorTasks.ts', '(o3)'],
   ['core/turns/agyBackstop.ts', '(o3)'],
   // What the core reads of their model and effort, and how a switch of theirs would be driven.
   ['lib/runtimeProfileState.ts', '(o4)'],
@@ -472,6 +470,13 @@ describe('the daemon\'s shape', () => {
     for (const entry of ['core/agents/create.ts', 'core/agents/fork.ts', 'core/agents/restart.ts', 'core/agents/swap.ts',
       'core/agents/launch.ts', 'core/agents/launches.ts', 'lib/resumeAgentService.ts']) {
       expect([...closureOf(entry).keys()].filter(file => /^engines\/(claude|codex)\//.test(file) && !declared.has(file)), entry).toEqual([])
+    }
+  })
+
+  it('resume publication loads no history repair implementation in the default core', () => {
+    const implementations = new Set(['engines/kit/resumeRepair.ts', 'engines/resumePreparation.ts', 'engines/resumeRepairs.ts'])
+    for (const entry of ['core/main.ts', 'core/agents/launch.ts', 'lib/resumeAgentService.ts']) {
+      expect([...closureOf(entry).keys()].filter(file => implementations.has(file)), entry).toEqual([])
     }
   })
 

@@ -29,6 +29,22 @@ function renderOrder(events: Array<LiveEvent | SessionEvent>): string[] {
 }
 
 describe('CursorTaskHookQueue', () => {
+  it('drops a queued hook after the same session installs a different normalizer', async () => {
+    const old = new CursorNormalizer('live', 'session')
+    let active = old, release!: () => void
+    const draining = new Promise<void>(resolve => { release = resolve })
+    const events: LiveEvent[] = [], registered: CursorTaskHook[] = []
+    const queue = new CursorTaskHookQueue({ drainTranscript: () => draining,
+      emit: (_id, batch) => events.push(...batch), register: (_id, hook) => registered.push(hook),
+      isActive: (_id, normalizer) => normalizer === active })
+    queue.enqueue('session', { toolUseId: 'old-task', input: { description: 'old', prompt: 'old' } }, old)
+    active = new CursorNormalizer('live', 'session')
+    release()
+    await queue.wait('session')
+    expect(events).toEqual([])
+    expect(registered).toEqual([])
+  })
+
   it('makes live watcher order match transcript replay for parallel Task launches', async () => {
     const sessionId = 'session'
     const prompt = 'Run three reports in parallel'

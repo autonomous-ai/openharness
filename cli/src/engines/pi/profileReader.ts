@@ -1,5 +1,5 @@
 import type { InlineRuntimeContext, InlineRuntimeReader } from '../facets/inlineRuntime.js'
-import type { RuntimeModelOption } from '../facets/runtime.js'
+import type { ProfileEvidence, RuntimeModelOption } from '../facets/runtime.js'
 import { addOption, record, text } from '../kit/runtime.js'
 import { confirmObserved } from '../kit/runtimeReader.js'
 import { env } from '../../config/env.js'
@@ -41,31 +41,6 @@ class ProfileReader {
     const cache = this.piCatalogCache
     if (!cache || cache.key !== env.PI_HOME || cache.expiresAt <= Date.now()) void this.piCatalog()
     return cache?.key === env.PI_HOME ? cache.names : null
-  }
-
-  /**
-   * Pi's session file says which model answers and how deep it thinks: a `model_change` when `/model`
-   * moves it, every assistant message's `model`, and a `thinking_level_change`. Pi 1.0 no longer prints
-   * `model • level` in its footer (its right edge clips a long model name, and a footer extension can
-   * replace it), so without this no pi harness had a model and a switch could never be confirmed.
-   */
-  transcript(context: InlineRuntimeContext, raw: Record<string, unknown>): void {
-    const { state, control } = context
-    const message = record(raw.message)
-    // Pi 1.0 writes `modelId`/`thinkingLevel`; 0.82 wrote `model`/`level`.
-    const model = raw.type === 'model_change' ? text(raw.modelId) || text(raw.model)
-      : raw.type === 'message' && message?.role === 'assistant' ? text(message.model) : null
-    const effort = raw.type === 'thinking_level_change' ? text(raw.thinkingLevel) || text(raw.level) : null
-    if (model) {
-      state.model = model
-      state.observedAt = Date.now()
-      if (control && control.target.model === model) control.modelConfirmed = true
-    }
-    if (effort && pi.PI_EFFORTS.has(effort)) {
-      state.effort = effort
-      state.observedAt = Date.now()
-      if (control && control.target.effort === effort) control.effortConfirmed = true
-    }
   }
 
   async models(context: InlineRuntimeContext): Promise<RuntimeModelOption[]> {
@@ -114,3 +89,20 @@ class ProfileReader {
 }
 
 export function createRuntimeProfileReader(): InlineRuntimeReader & { engine: 'pi' } { return new ProfileReader() }
+
+/**
+ * Pi's session file says which model answers and how deep it thinks: a `model_change` when `/model` moves it, every
+ * assistant message's `model`, and a `thinking_level_change`. Pi 1.0 no longer prints `model • level` in its footer (its
+ * right edge clips a long model name, and a footer extension can replace it), so without this no pi harness had a model
+ * and a switch could never be confirmed. Read in the other engines' worker (engines/others/streams.ts).
+ */
+export function transcriptEvidence(raw: Record<string, unknown>): ProfileEvidence | null {
+  const message = record(raw.message)
+  // Pi 1.0 writes `modelId`/`thinkingLevel`; 0.82 wrote `model`/`level`.
+  const model = raw.type === 'model_change' ? text(raw.modelId) || text(raw.model)
+    : raw.type === 'message' && message?.role === 'assistant' ? text(message.model) : null
+  const level = raw.type === 'thinking_level_change' ? text(raw.thinkingLevel) || text(raw.level) : null
+  const effort = level && pi.PI_EFFORTS.has(level) ? level : null
+  if (!model && !effort) return null
+  return { ...(model ? { model } : {}), ...(effort ? { effort } : {}), confirms: true }
+}

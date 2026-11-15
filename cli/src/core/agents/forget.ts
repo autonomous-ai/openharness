@@ -5,9 +5,7 @@
  *
  * Moved verbatim out of `runForeground` (the core boundary, step 10: docs/design/2026-10-03-harnessd.md).
  */
-import { removePendingCursorTasks } from '../engines/cursorTasks.js'
 import type { CursorTranscriptDiscovery } from '../../engines/cursor/discovery.js'
-import type { CursorSubagentManager } from '../../engines/cursor/subagent.js'
 import type { AutonomousDeviceInput } from '../deviceInput.js'
 import type { TurnRecaps } from '../turns/recaps.js'
 import type { ShortTurnGuard } from '../turns/shortTurnGuard.js'
@@ -44,7 +42,6 @@ export interface ForgetDeps {
   relaunchMarks?: Pick<RelaunchMarks, 'forget'>
   clearAgyIdleWatch: (sessionId: string) => void
   cursorDiscovery: Pick<CursorTranscriptDiscovery, 'remove'>
-  cursorSubagents: Pick<CursorSubagentManager, 'forget'>
   runtimeProfiles: Pick<RuntimeProfileManager, 'forget'>
   watcher: Pick<Watcher, 'removeSession'>
   stopHeartbeat: (sessionId: string) => void
@@ -55,13 +52,12 @@ export interface ForgetDeps {
   mirror: Pick<TurnRecaps, 'forget'>
   /** The app (`send`) and the dial (`sendCommander`). */
   clients: { send(frame: Frame): void; sendCommander(frame: Frame): void }
-  dataDir: string
 }
 
 export function createForgetSession({
   registry, stoppedAgents, syncRecapPool, normalizers, forgetAttach, turnStartedAt, prompts, neverFoldedHistory, replayedFirstTurn, relaunchMarks,
-  clearAgyIdleWatch, cursorDiscovery, cursorSubagents, runtimeProfiles, watcher, stopHeartbeat, input,
-  deviceInput, ended, mirror, clients, dataDir, onRemoved, owners, shortTurns,
+  clearAgyIdleWatch, cursorDiscovery, runtimeProfiles, watcher, stopHeartbeat, input,
+  deviceInput, ended, mirror, clients, onRemoved, owners, shortTurns,
 }: ForgetDeps) {
   /** Release a mutable session binding, or remove the process-owned agent everywhere. */
   const forgetSession = (
@@ -116,8 +112,6 @@ export function createForgetSession({
     relaunchMarks?.forget(sessionId)
     clearAgyIdleWatch(sessionId)
     cursorDiscovery.remove(sessionId)
-    cursorSubagents.forget(sessionId)
-    void removePendingCursorTasks(dataDir, sessionId)
     runtimeProfiles.forget(sessionId)
     void watcher.removeSession(sessionId)
     stopHeartbeat(sessionId)

@@ -42,30 +42,16 @@ function readOf(value: unknown): { engine: OtherEngine; session: TranscriptSessi
     touchedAt: value.touchedAt, store: (value.store as string | null | undefined) ?? null } }
 }
 
-export interface OtherReaderDeps {
-  transcriptFor?: (engine: string) => EngineTranscript | undefined
-  /** A read still running long past its deadline holds what it read: recycle this worker, never the core. */
-  recycle?: () => void
-  log?: (line: string) => void
-  /** Small bounds let a test take a reply in parts without building megabytes. */
-  limits?: { inline?: number; part?: number; parted?: number }
-}
-
-/** Their readers keep no pager: none of them pages a transcript by line, and what they read whole is bounded. */
-const NO_PAGER = { page: () => Promise.reject(new Error('the other engines read no pages')) }
-
-export function otherReaderRequests(deps: OtherReaderDeps = {}): ServiceRequests {
-  const transcriptFor = deps.transcriptFor ?? otherTranscriptFor
-  const recycle = deps.recycle ?? (() => process.exit(1))
-  const log = deps.log ?? ((line: string) => console.warn(line))
-  const inlineBytes = deps.limits?.inline ?? READER_REPLY_BYTES
-  const partBytes = deps.limits?.part ?? READER_PART_BYTES
-  const partedBytes = deps.limits?.parted ?? READER_PARTED_BYTES
-  const pending = new Map<OtherEngine, number>()
-  let total = 0
+/**
+ * Replies past one frame of the link, kept for the core to take in parts (`READER_PART`): the reads' and the live
+ * streams' (engines/others/streamRequests.ts), through the one part request.
+ */
+export function createReplyParts(limits: { inline?: number; part?: number; parted?: number } = {}) {
+  const inlineBytes = limits.inline ?? READER_REPLY_BYTES
+  const partBytes = limits.part ?? READER_PART_BYTES
+  const partedBytes = limits.parted ?? READER_PARTED_BYTES
   const kept = new Map<string, { bytes: Buffer; hash: string }>()
   let keptBytes = 0
-  const failure = (code: ReaderErrorCode) => ({ version: READER_VERSION, error: code, retryable: new EngineReadError(code).retryable })
   const forget = (id: string): void => {
     const reply = kept.get(id)
     if (reply) { kept.delete(id); keptBytes -= reply.bytes.length }
@@ -76,17 +62,50 @@ export function otherReaderRequests(deps: OtherReaderDeps = {}): ServiceRequests
     return { version: READER_VERSION, part: id, offset, bytes: reply.bytes.length, hash: reply.hash,
       data: reply.bytes.subarray(offset, offset + partBytes).toString('base64') }
   }
-  /** The reply, or its first part. Serialized and counted here, before it can cost the core's memory. */
-  const send = (result: Record<string, unknown>): Record<string, unknown> => {
-    const bytes = Buffer.from(JSON.stringify(result))
-    if (bytes.length <= inlineBytes) return result
-    if (bytes.length > partedBytes) return failure('ENGINE_REPLY_TOO_LARGE')
-    while (kept.size >= KEPT_REPLIES || keptBytes + bytes.length > KEPT_BYTES) forget(kept.keys().next().value!)
-    const id = randomUUID()
-    const reply = { bytes, hash: createHash('sha256').update(bytes).digest('hex') }
-    kept.set(id, reply); keptBytes += bytes.length
-    return part(id, reply, 0)
+  return {
+    /** The reply, or its first part. Serialized and counted here, before it can cost the core's memory. */
+    send(result: Record<string, unknown>): Record<string, unknown> {
+      const bytes = Buffer.from(JSON.stringify(result))
+      if (bytes.length <= inlineBytes) return result
+      if (bytes.length > partedBytes) return { version: READER_VERSION, error: 'ENGINE_REPLY_TOO_LARGE', retryable: new EngineReadError('ENGINE_REPLY_TOO_LARGE').retryable }
+      while (kept.size >= KEPT_REPLIES || keptBytes + bytes.length > KEPT_BYTES) forget(kept.keys().next().value!)
+      const id = randomUUID()
+      const reply = { bytes, hash: createHash('sha256').update(bytes).digest('hex') }
+      kept.set(id, reply); keptBytes += bytes.length
+      return part(id, reply, 0)
+    },
+    /** The next part of a reply kept, by its offset; stale once it was let go. */
+    next(id: string, offset: number): Record<string, unknown> | null {
+      const reply = kept.get(id)
+      return reply && offset < reply.bytes.length ? part(id, reply, offset) : null
+    },
   }
+}
+export type ReplyParts = ReturnType<typeof createReplyParts>
+
+export interface OtherReaderDeps {
+  transcriptFor?: (engine: string) => EngineTranscript | undefined
+  /** A read still running long past its deadline holds what it read: recycle this worker, never the core. */
+  recycle?: () => void
+  log?: (line: string) => void
+  /** Small bounds let a test take a reply in parts without building megabytes. */
+  limits?: { inline?: number; part?: number; parted?: number }
+  /** The replies kept in parts, shared with the live streams' (engines/others/streamRequests.ts). */
+  parts?: ReplyParts
+}
+
+/** Their readers keep no pager: none of them pages a transcript by line, and what they read whole is bounded. */
+const NO_PAGER = { page: () => Promise.reject(new Error('the other engines read no pages')) }
+
+export function otherReaderRequests(deps: OtherReaderDeps = {}): ServiceRequests {
+  const transcriptFor = deps.transcriptFor ?? otherTranscriptFor
+  const recycle = deps.recycle ?? (() => process.exit(1))
+  const log = deps.log ?? ((line: string) => console.warn(line))
+  const parts = deps.parts ?? createReplyParts(deps.limits)
+  const pending = new Map<OtherEngine, number>()
+  let total = 0
+  const failure = (code: ReaderErrorCode) => ({ version: READER_VERSION, error: code, retryable: new EngineReadError(code).retryable })
+  const send = parts.send
   // Only core.call supplies an owner without a client connection. These methods are not public routes.
   const fromCore = (payload: Record<string, unknown>, asker: Parameters<ServiceRequests[string]>[1]): boolean =>
     asker.owner && asker.local && asker.connection === undefined && payload.version === READER_VERSION
@@ -113,10 +132,10 @@ export function otherReaderRequests(deps: OtherReaderDeps = {}): ServiceRequests
       let answer: unknown
       try {
         answer = type === READER_HISTORY ? await reader.historyPage(session, ask, NO_PAGER) : await reader.lastTurnText(session)
-      } catch (error) {
+      } catch {
         // A store that cannot be read (locked past its wait, or no way to read SQLite here): said, and answered as
         // unavailable, which the core reports as an error it can retry.
-        log(`[engine ${engine}] ${kind} unreadable · ${error instanceof Error ? error.message : String(error)}`)
+        log(`[engine ${engine}] ${type === READER_HISTORY ? 'HISTORY_READ_FAILED' : 'LAST_TURN_READ_FAILED'}`)
         return failure('ENGINE_UNAVAILABLE')
       }
       // A read the core has already been answered for is not kept for parts nobody will ask for.
@@ -141,8 +160,7 @@ export function otherReaderRequests(deps: OtherReaderDeps = {}): ServiceRequests
   const nextPart: ServiceRequests[string] = async (payload, asker) => {
     if (!fromCore(payload, asker) || typeof payload.part !== 'string' || typeof payload.offset !== 'number'
       || !Number.isSafeInteger(payload.offset) || payload.offset < 0) return failure('ENGINE_INVALID_REQUEST')
-    const reply = kept.get(payload.part)
-    return reply && payload.offset < reply.bytes.length ? part(payload.part, reply, payload.offset) : failure('ENGINE_STALE_REPLY')
+    return parts.next(payload.part, payload.offset) ?? failure('ENGINE_STALE_REPLY')
   }
   return { [READER_HISTORY]: handle(READER_HISTORY), [READER_LAST_TURN]: handle(READER_LAST_TURN), [READER_PART]: nextPart }
 }

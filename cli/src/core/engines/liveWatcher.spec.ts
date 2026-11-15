@@ -23,11 +23,12 @@ function setup() {
   let deps!: LiveSessionDeps
   mocks.factory.mockImplementation((value: LiveSessionDeps) => { deps = value; return live })
   mocks.watch.mockReturnValue(signals)
+  const others = { drain: vi.fn(async () => {}), drainAll: vi.fn(async () => {}) }
   const wrapper = createLiveWatcher(local as unknown as Watcher, {
     handles: engine => engine === 'claude', bySession, transport: {} as LiveSessionDeps['transport'],
     frame: vi.fn(), reattach: vi.fn(),
-  })
-  return { ...wrapper, local, remote: live, signals, events, session, bySession, deps }
+  }, others)
+  return { ...wrapper, local, remote: live, signals, events, session, bySession, deps, others }
 }
 
 afterEach(() => vi.clearAllMocks())
@@ -87,7 +88,10 @@ describe('live file signals', () => {
     await p.watcher.pollSession('s'); await p.watcher.pollAll()
     expect(p.local.pollSession).toHaveBeenCalledWith('s')
     expect(p.remote.pollSession).toHaveBeenCalledWith('s')
+    // The other engines' transcripts are their worker's to read: a drain asks it.
+    expect(p.others.drain).toHaveBeenCalledWith('s')
     expect(p.local.pollAll).toHaveBeenCalledOnce()
     expect(p.remote.pollAll).toHaveBeenCalledOnce()
+    expect(p.others.drainAll).toHaveBeenCalledOnce()
   })
 })

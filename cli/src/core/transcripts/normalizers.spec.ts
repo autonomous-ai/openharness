@@ -1,97 +1,58 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createSessionNormalizers, type SessionNormalizers } from './normalizers.js'
+import type { LiveState } from '../../engines/facets/live.js'
+import type { OtherStream } from '../engines/otherStreams.js'
+import { createSessionNormalizers } from './normalizers.js'
 
-/** Every engine map in the table, in the order a turn's state is looked up. */
-const ENGINE_MAPS = [
-  'liveParsers', 'cursorNormalizers', 'opencodeReaders', 'kiloReaders', 'piNormalizers', 'ompNormalizers', 'museNormalizers',
-  'ampNormalizers', 'grokNormalizers', 'agyNormalizers', 'copilotNormalizers', 'hermesReaders', 'devinReaders',
-  'commandcodeNormalizers',
-] as const
-type EngineMap = typeof ENGINE_MAPS[number]
-const DATABASE_READERS: EngineMap[] = ['opencodeReaders', 'kiloReaders', 'hermesReaders', 'devinReaders']
-
-/** A normalizer or reader with only what the table touches. */
-const fake = (turnOpen: boolean | undefined = false) => ({ turnOpen, closeTurn: vi.fn(() => []), stop: vi.fn() })
-type Fake = ReturnType<typeof fake>
-
-function put(table: SessionNormalizers, map: EngineMap, sessionId: string, entry: Fake): void {
-  (table[map] as Map<string, unknown>).set(sessionId, entry)
+/** A live parser, or another engine's stream, with only what the table touches. */
+const parser = (turnOpen = false): LiveState => ({ engine: 'claude', turnOpen, snapshot: vi.fn(), closeTurn: vi.fn() })
+const stream = (turnOpen = false) => ({ turnOpen, closeTurn: vi.fn() }) as unknown as OtherStream
+function others(entries: Record<string, OtherStream> = {}) {
+  return { get: (id: string) => entries[id], has: (id: string) => id in entries, forget: vi.fn(), stop: vi.fn() }
 }
 
 describe('the session normalizer table', () => {
-  it('has state for a session that any engine map holds, and none for one that none does', () => {
-    const table = createSessionNormalizers()
-    expect(table.hasState('s')).toBe(false)
-    for (const map of ENGINE_MAPS) {
-      const one = createSessionNormalizers()
-      put(one, map, 's', fake())
-      expect(one.hasState('s'), map).toBe(true)
-      expect(one.hasState('other'), map).toBe(false)
-    }
+  it('has state for a session with a live parser or another engine\'s stream, and none for one with neither', () => {
+    expect(createSessionNormalizers(others()).hasState('s')).toBe(false)
+    const table = createSessionNormalizers(others({ o: stream() }))
+    table.liveParsers.set('p', parser())
+    expect([table.hasState('p'), table.hasState('o'), table.hasState('none')]).toEqual([true, true, false])
   })
 
-  it('reads whether a turn is open from each parser or reader', () => {
-    const table = createSessionNormalizers()
-    expect(table.sessionTurnState('s')).toBeUndefined()
-    expect(table.sessionTurnOpen('s')).toBe(false)
-    for (const map of ENGINE_MAPS) {
-      const one = createSessionNormalizers()
-      put(one, map, 's', fake(true))
-      expect(one.sessionTurnState('s'), map).toBe(true)
-      expect(one.sessionTurnOpen('s'), map).toBe(true)
-    }
-    // A closed live parser is authoritative even when an old reader still reports an open turn.
-    put(table, 'liveParsers', 's', fake(false))
-    put(table, 'cursorNormalizers', 's', fake(true))
+  it('reads whether a turn is open from the parser, else the stream, the parser first', () => {
+    const table = createSessionNormalizers(others({ s: stream(true), o: stream(true) }))
+    expect(table.sessionTurnState('none')).toBeUndefined()
+    expect(table.sessionTurnOpen('none')).toBe(false)
+    expect(table.sessionTurnState('o')).toBe(true)
+    // A closed live parser is authoritative even when an old stream still reports an open turn.
+    table.liveParsers.set('s', parser(false))
     expect(table.sessionTurnState('s')).toBe(false)
-    table.liveParsers.delete('s')
-    expect(table.sessionTurnState('s')).toBe(true)
+    expect(table.sessionTurnOpen('o')).toBe(true)
   })
 
-  it('forgets a session in every map, stopping its database readers, and leaves other sessions alone', () => {
-    const table = createSessionNormalizers()
-    const entries = new Map<EngineMap, Fake>()
-    for (const map of ENGINE_MAPS) {
-      entries.set(map, fake())
-      put(table, map, 's', entries.get(map)!)
-      put(table, map, 'keep', fake())
-    }
+  it('forgets a session\'s parser and its stream, and leaves other sessions alone', () => {
+    const streams = others({ s: stream() })
+    const table = createSessionNormalizers(streams)
+    table.liveParsers.set('s', parser())
+    table.liveParsers.set('keep', parser())
     table.forget('s')
-    expect(table.hasState('s')).toBe(false)
-    for (const map of ENGINE_MAPS) {
-      expect(table[map].has('keep'), map).toBe(true)
-      expect(entries.get(map)!.stop, map).toHaveBeenCalledTimes(DATABASE_READERS.includes(map) ? 1 : 0)
-    }
-    expect(() => table.forget('never-seen')).not.toThrow()
+    expect(table.liveParsers.has('s')).toBe(false)
+    expect(table.liveParsers.has('keep')).toBe(true)
+    expect(streams.forget).toHaveBeenCalledWith('s')
   })
 
-  it('closes a cancelled turn in every engine', () => {
-    const table = createSessionNormalizers()
-    const entries = new Map<EngineMap, Fake>()
-    for (const map of ENGINE_MAPS) {
-      entries.set(map, fake(true))
-      put(table, map, 's', entries.get(map)!)
-    }
+  it('closes a cancelled turn in the parser and the stream, as a cancel', () => {
+    const live = parser(true), other = stream(true)
+    const table = createSessionNormalizers(others({ s: other }))
+    table.liveParsers.set('s', live)
     table.closeTurns('s')
-    for (const map of ENGINE_MAPS) {
-      // Kilo's included: it used to be missed, so a cancelled Kilo agent could go on showing as working.
-      expect(entries.get(map)!.closeTurn, map).toHaveBeenCalledTimes(1)
-      if (map === 'liveParsers') expect(entries.get(map)!.closeTurn).toHaveBeenCalledWith('cancel')
-    }
+    expect(live.closeTurn).toHaveBeenCalledWith('cancel')
+    expect(other.closeTurn).toHaveBeenCalledWith('cancel')
     expect(() => table.closeTurns('never-seen')).not.toThrow()
   })
 
-  it('stops every database reader\'s poller on shutdown, and touches nothing else', () => {
-    const table = createSessionNormalizers()
-    const entries = new Map<EngineMap, Fake>()
-    for (const map of ENGINE_MAPS) {
-      entries.set(map, fake())
-      put(table, map, 's', entries.get(map)!)
-    }
-    table.stopPollers()
-    for (const map of ENGINE_MAPS) {
-      // Kilo's included: it used to be missed, and its poller ran on through the update handoff.
-      expect(entries.get(map)!.stop, map).toHaveBeenCalledTimes(DATABASE_READERS.includes(map) ? 1 : 0)
-    }
+  it('stops following every other engine\'s stream on shutdown', () => {
+    const streams = others()
+    createSessionNormalizers(streams).stopPollers()
+    expect(streams.stop).toHaveBeenCalledOnce()
   })
 })
