@@ -2211,9 +2211,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Asked only while a dial is watching: a call to a devices process that is not running would start it.
   const deviceHookCalls = createDeviceHookCalls({ ready: cableWatchingLocal, devices: () => ports.devices ?? undefined, newId: randomUUID })
   const { server: hookServer, port: hookPort, localSocket } = await startHookServer(daemonPort(), {
-    // The Wi-Fi device's routes: the gateway's (its pairings and direct links), its service's (its receipts and
-    // add-ons) and the machine add-ons' (core/api.ts `SERVICE_HTTP_ROUTES`).
-    onServiceRoute: (path, request) => serviceRoutes.answer(path, request),
+    // The routes services answer (core/api.ts `SERVICE_HTTP_ROUTES`): the Wi-Fi device's, its service's and the machine
+    // add-ons', and the account's, the gateway's (the desk, the usage reports, the Store's ratings and reviews, …).
+    onServiceRoute: (path, request, localOk) => serviceRoutes.answer(path, request, localOk),
     resolveHookAgent: engineHooks.resolveHookAgent,
     hookViaSharedProcess: engineHooks.hookViaSharedProcess,
     hookAdmissionBlocked: id => launchCancelled(id),
@@ -2251,10 +2251,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     onDevicesRebaseline: (confirm, head) => gatewayOps.devicesRebaseline(confirm, head),
     onStatus: async () => statusBody(await gatewayOps.status()),
     onMachinesList: () => gatewayOps.machines(true),
-    onMachineRename: (machineId, name) => proxyBackend('PATCH', `/api/machines/${encodeURIComponent(machineId)}`, { name }),
-    onMachineDelete: (machineId) => proxyBackend('DELETE', `/api/machines/${encodeURIComponent(machineId)}`),
-    onAuthMe: () => proxyBackend('GET', '/api/auth/me'),
-    onAuthMeUpdate: (body) => proxyBackend('PATCH', '/api/auth/me', body),
     onAuthHandoff: () => proxyBackend('POST', '/api/auth/handoff', {}),
     ...daemonStopRoute({ askMaster: () => coreLink.stopAll(), stopHere: () => daemonBoot.stopHere('harness stop') }),
     // Signed out there is nothing shared WITH this computer and nobody to ask: a share is made on the
@@ -2263,24 +2259,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     onSharedHarnesses: () => readAuthSession()
       ? proxyBackend('GET', '/api/harness-shares')
       : Promise.resolve({ status: 200, body: { success: true, data: { machines: [] } } }),
-    // The account's desk — see backend routes/desk.ts. The window edits its tabs through the ops
-    // route and hears about everyone else's edits as `desk_changed` (backendSocket.ts).
-    onDeskRead: () => proxyBackend('GET', '/api/desk'),
-    onDeskOps: (body) => proxyBackend('POST', '/api/desk/ops', body),
-    // The account's tabs for Agent Messages (backend routes/agentMessages.ts). A tab's flag is an older window's only:
-    // the account's experiment decides, so its switch is passed on and wakes nothing.
-    onAgentMessagesRead: () => proxyBackend('GET', '/api/agent-messages'),
-    onAgentMessagesWrite: (tabId, body) => proxyBackend('PATCH', `/api/agent-messages/tabs/${tabId}`, body),
     onExperimentalRead: () => agentSettings.experimentalRead(),
     onExperimentalWrite: (body) => agentSettings.experimentalWrite(body),
     onAgentSettingsRead: () => agentSettings.settingsRead(),
     onAgentSettingsWrite: (body) => agentSettings.settingsWrite(body),
-    onProductFeedback: (body) => proxyBackend('POST', '/api/product-usage/feedback', body),
-    onSignInAnswer: (action, body) => proxyBackend('POST', `/api/auth/qr/${action}`, body),
-    onProductUsageReport: (body) => proxyBackend('POST', '/api/product-usage/report', body),
-    onProductUsageRead: () => proxyBackend('GET', '/api/product-usage/settings'),
-    onProductUsageWrite: (body) => proxyBackend('POST', '/api/product-usage/settings', body),
-    onStore: (method, path, body) => proxyBackend(method, path, body),
   }, { socketPath: localSocketListenPath(env.ADAPTER_DATA_DIR, env.PORT), pipeToken, allowPortFallback: true })
   // On Windows the record also names the pipe and this core's pid: both are new on each start, so clients read them here.
   try { writeDaemonRecord(env.ADAPTER_DATA_DIR, env.PORT, hookPort, pipeToken && localSocket ? { pipe: localSocket.path, pid: process.pid } : undefined) } catch (error) {
