@@ -80,12 +80,21 @@ async function fresh(env: Record<string, string> = {}) {
     const started = JSON.parse(readFileSync(join(home, 'started.json'), 'utf8')) as { terminal: string }
     return JSON.parse(readFileSync(join(home, 'terminal-sessions', started.terminal), 'utf8')).session_id as string
   }
+  const enginePid = () => (JSON.parse(readFileSync(join(d.dataDir, 'registry.json'), 'utf8')) as
+    { agentId: string; processIdentity?: { pid: number } }[]).find(row => row.agentId === agent.id)?.processIdentity?.pid
+  const nativeState = (sessionId: string) => {
+    const { DatabaseSync } = process.getBuiltinModule('node:sqlite') as any
+    const database = new DatabaseSync(join(home, 'state.db'), { readOnly: true })
+    try { return database.prepare('SELECT ended_at, end_reason FROM sessions WHERE id = ?').get(sessionId) as
+      { ended_at: number | null; end_reason: string | null } | undefined }
+    finally { database.close() }
+  }
   const resume = async () => {
     const answer = await c.request('agent_resume', { agentId: agent.id }, 90_000)
     expect(answer.error, JSON.stringify(answer)).toBeUndefined()
     agent = await bound()
   }
-  return { d, c, home, tell, rows, close, manifests, written, nativeSession, hold, resume, agent: () => agent }
+  return { d, c, home, tell, rows, close, manifests, written, nativeSession, nativeState, enginePid, hold, resume, agent: () => agent }
 }
 
 it.each(['worker', 'inline', 'older master'] as const)('saves the existing checkpoint format through the %s and never exposes private storage requests', async mode => {
@@ -111,6 +120,7 @@ it.each(['kill', 'freeze', 'cancel', 'rebind'] as const)('retains saved history 
   await r.resume()
   const observer = companion = await LocalClient.connect(r.d)
   const original = { ...r.agent() }, core = r.d.corePid(), from = r.written().length
+  const engine = await until('the bound engine process was saved', () => r.enginePid() ?? null, 15_000, 50)
   writeFileSync(r.hold, 'hold')
   const closing = r.close()
   void closing.catch(() => {})
@@ -133,6 +143,20 @@ it.each(['kill', 'freeze', 'cancel', 'rebind'] as const)('retains saved history 
     expect(answer.error).toBe('HISTORY_NOT_SAVED')
     expect(r.manifests()).toEqual(before)
     expect((await r.rows()).some(row => row.id === original.id && row.status === 'active')).toBe(true)
+    expect(alive(engine)).toBe(true)
+    expect(r.enginePid()).toBe(engine)
+    expect(r.nativeState(r.nativeSession())).toMatchObject({ ended_at: null, end_reason: null })
+    if (fault === 'rebind') {
+      const replacement = r.nativeSession()
+      expect(replacement).not.toBe(original.sessionId)
+      expect(r.nativeState(original.sessionId)).toMatchObject({ end_reason: 'new_session' })
+      // A successful turn after refusal proves that the engine, not just a stale registry row, survived Close.
+      r.tell({ say: 'still running after Close was refused' })
+      await until('the replacement conversation accepts another turn after refusal', async () =>
+        JSON.stringify(await observer.request('session_get', { sessionId: original.id, limit: 10 }, 15_000))
+          .includes('still running after Close was refused') || null, 30_000, 100)
+      expect(r.nativeSession()).toBe(replacement)
+    }
     expect(r.d.corePid()).toBe(core)
   } finally {
     rmSync(r.hold, { force: true })
