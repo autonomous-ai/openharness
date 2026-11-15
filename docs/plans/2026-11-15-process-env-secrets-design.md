@@ -72,8 +72,11 @@ PM, 2026-11-15, on the recommendation; Diego may still answer differently.
 11. **Other readers are a separate item:** `cli/native/darwin-process-images.c` (`KERN_PROCARGS2`) and the test tools
     are listed under Follow-ups.
 12. **Other environment reads in the daemon go too** (PM, 2026-11-15, from the final review): the core stops listing
-    the person's tmux server environment (`tmux show-environment -g`) and unsets a fixed list of names instead, the
-    same names the old filter removed, pinned by a test; `launchctl print gui/<uid>` keeps its exit status and drops
+    the person's tmux server environment (`tmux show-environment -g`) and unsets names instead: the 16 agent session
+    names, the `HARNESSD_*` names the daemon sets, and every `HARNESSD_*` name in the daemon's OWN environment (names
+    only, no value read for this or logged). A test pins that, for a representative environment, these are the names
+    the old prefix filter removed. Left: a `HARNESSD_*` name only an older build set and this daemon lacks stays in
+    the tmux server until it restarts; `launchctl print gui/<uid>` keeps its exit status and drops
     its output, which holds launchd's environment block; `ps` runs with `COMMAND_MODE=unix2003`, so a person's
     `COMMAND_MODE=legacy` can never turn `ps -e` into an environment listing. The architecture test also flags
     `show-environment`.
