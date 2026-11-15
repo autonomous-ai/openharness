@@ -9,97 +9,14 @@ import { controlTranscriptEvidence } from '../engines/transcriptBindings.js'
 import { IdentityReadUnavailable } from '../engines/kit/identityScan.js'
 import { nativeFileKey } from '../engines/kit/nativePaths.js'
 import { readPrivateStateFile, secureStateDirectory } from './secureState.js'
-import { readStorePages, utf8Bytes, type PageColumn } from './sqlitePage.js'
-import { sqliteReadAll, type SqliteRow } from './sqliteRead.js'
-import { hermesDbPath } from '../engines/hermes/contract.js'
-import { OPENCLAW_COLUMNS } from '../engines/openclaw/contract.js'
-import { openclawSessionDb } from './openclawStore.js'
 import { findResumedTranscript } from './sessionRepair.js'
+import { CheckpointStages, type CheckpointStage } from './checkpointStages.js'
+import type { ExportStage, ExportReceipt, ExportOwnership } from '../engines/worker/storageProtocol.js'
 
 export class SessionCheckpointError extends Error {
   readonly code = 'HISTORY_NOT_SAVED'
 }
 
-/** A column of the paged table `t`, by its name. */
-const column = (name: string): PageColumn => ({ as: name, sql: `t."${name.replace(/"/g, '""')}"` })
-
-/** How a conversation table is read: every column, or these, with their size. */
-type Paged = true | { columns: PageColumn[]; size: string }
-
-/**
- * A conversation table's rows of this session, read in pages bounded by bytes (#4188): read whole against the 32 MiB
- * reply limit, a longer conversation could not be checkpointed, so its session could not be closed. A page follows the
- * table's primary key (its rowid when it declares none), so a row added between pages is still read. Each row holds
- * exactly the selected columns, in their order. Null when a page is not answered or a row is over the row cap: a
- * checkpoint holds every row or none.
- */
-async function pagedRows(database: string, table: string, where: string, sessionId: string, paged: Paged): Promise<SqliteRow[] | null> {
-  const declared = await sqliteReadAll(database, 'SELECT name, pk FROM pragma_table_xinfo(?) WHERE hidden <> 1 ORDER BY cid', [table])
-  if (!declared.ok || !declared.rows.length) return null
-  const pk = declared.rows.filter((row) => Number(row.pk) > 0).sort((a, b) => Number(a.pk) - Number(b.pk)).map((row) => String(row.name))
-  const selected = paged === true ? declared.rows.map((row) => column(String(row.name))) : paged.columns
-  const read = await readStorePages(database, { table, where, params: [sessionId],
-    key: pk.length ? pk.map(column) : [{ as: 'rowid', sql: 't.rowid' }],
-    columns: selected.filter((c) => !pk.includes(c.as)), ...(paged !== true && { size: paged.size }) })
-  if (!read.ok || read.rows.some((row) => Number(row.page_big))) return null
-  return read.rows.map((row) => Object.fromEntries(selected.map((c) => [c.as, row[c.as]])))
-}
-
-/** Native SQLite files can have live WAL writers. Export this conversation's rows through a
- * read-only connection; never copy an incomplete .db or replace an engine's shared store. */
-async function databaseHistory(s: RegisteredSession): Promise<Record<string, unknown>> {
-  let database: string
-  /** Table and filter; a conversation table is paged, the others hold one row. */
-  let selections: [string, string, Paged?][]
-  switch (s.engine) {
-    case 'opencode': case 'kilo':
-      database = s.engine === 'opencode' ? join(env.OPENCODE_DATA_DIR, 'opencode.db') : join(env.KILO_DATA_DIR, 'kilo.db')
-      selections = [['session', 'id = ?'], ['message', 'session_id = ?', true],
-        ['part', 'message_id IN (SELECT id FROM message WHERE session_id = ?)', true]]
-      break
-    case 'hermes':
-      database = hermesDbPath(s.hermesHome ?? env.HERMES_HOME)
-      selections = [['sessions', 'id = ?'], ['messages', 'session_id = ?', true]]
-      break
-    case 'devin':
-      database = join(env.DEVIN_HOME, 'sessions.db')
-      selections = [['sessions', 'id = ?'], ['message_nodes', 'session_id = ?', true]]
-      break
-    case 'openclaw': {
-      const found = await openclawSessionDb(s.sessionId, { pid: s.processIdentity?.pid ?? 0, stateDir: s.openclawStateDir })
-      if (!found) throw new SessionCheckpointError('Could not read the saved conversation. The session has not been closed.')
-      database = found
-      // Every window the key has had, with each row as the reader reads it. A compressed row is kept as hex: JSON has
-      // no bytes. It is sized as twice its blob: sizing the hex itself would read every blob.
-      const events = OPENCLAW_COLUMNS.transcript_events
-      const columns = events.map((name) => name === 'event_zstd' ? { as: 'event_zstd_hex', sql: 'hex(t.event_zstd)' } : column(name))
-      const size = events.map((name) => name === 'event_zstd' ? '2 * coalesce(length(t.event_zstd), 0)' : `coalesce(${utf8Bytes(column(name).sql)}, 0)`).join(' + ')
-      selections = [['session_nodes', 'session_key = ?'], ['session_windows', 'session_key = ?'],
-        ['transcript_events', 'session_id IN (SELECT session_id FROM session_windows WHERE session_key = ?)', { columns, size }]]
-      break
-    }
-    default: throw new SessionCheckpointError('This engine has no supported history checkpoint yet. The session is still open.')
-  }
-  // OpenCode 2 keeps a conversation in `session_v2` and `session_message`; the v1 tables stay in the same file with
-  // only older conversations, so a v2 one read there was "not found" and could never be closed (2026-10-14). Read the
-  // v2 tables when they hold this session, as purgeAgentService does.
-  if (s.engine === 'opencode') {
-    const v2 = await sqliteReadAll(database, "SELECT name FROM sqlite_master WHERE type='table' AND name='session_v2';")
-    const held = v2.ok && v2.rows.length ? await sqliteReadAll(database, 'SELECT id FROM session_v2 WHERE id = ?;', [s.sessionId]) : null
-    if (!v2.ok || (held && !held.ok)) throw new SessionCheckpointError('Could not read the saved conversation. The session has not been closed.')
-    if (held?.rows.length) selections = [['session_v2', 'id = ?'], ['session_message', 'session_id = ?', true]]
-  }
-  const tables: Record<string, unknown[]> = {}
-  for (const [table, where, paged] of selections) {
-    const rows = paged ? await pagedRows(database, table, where, s.sessionId, paged)
-      : await sqliteReadAll(database, `SELECT * FROM ${table} WHERE ${where};`, [s.sessionId]).then((read) => read.ok ? read.rows : null)
-    if (!rows || (table === selections[0][0] && rows.length !== 1)) {
-      throw new SessionCheckpointError('Could not read the saved conversation. The session has not been closed.')
-    }
-    tables[table] = rows
-  }
-  return { database, tables }
-}
 
 type Checkpoint = {
   version: 1
@@ -118,8 +35,16 @@ type Checkpoint = {
   bytes: number
 }
 
+export interface CheckpointDeps {
+  exportDatabase?(session: RegisteredSession, stage: ExportStage, ownership: ExportOwnership): Promise<ExportReceipt>
+}
 export class SessionCheckpointStore {
-  constructor(private readonly directory = join(env.ADAPTER_DATA_DIR, 'session-checkpoints')) {}
+  private readonly stages: CheckpointStages
+  constructor(private readonly directory = join(env.ADAPTER_DATA_DIR, 'session-checkpoints'), private readonly deps: CheckpointDeps = {}) {
+    this.stages = new CheckpointStages(join(directory, '.stages'))
+  }
+  /** The core calls once before it accepts any close or purge. */
+  prepare(): Promise<void> { return this.stages.prepare() }
 
   private key(s: RegisteredSession): string {
     return createHash('sha256').update(JSON.stringify([s.agentId, s.engine, s.codexHome ?? null, s.sessionId])).digest('hex')
@@ -141,17 +66,24 @@ export class SessionCheckpointStore {
     return [...files, ...(existsSync(history) ? [history] : []), manifest]
   }
 
-  async save(s: RegisteredSession, options: { screen?: string | null } = {}): Promise<void> {
+  async save(s: RegisteredSession, options: { screen?: string | null; current?: () => boolean } = {}): Promise<void> {
     secureStateDirectory(dirname(this.directory))
     secureStateDirectory(this.directory)
     const key = this.key(s)
     const manifest = join(this.directory, `${key}.json`)
     const file = `${key}-${randomUUID()}.history`
-    const temporary = join(this.directory, `${file}.tmp`)
+    let temporary = join(this.directory, `${file}.tmp`)
+    let stage: CheckpointStage | undefined
+    let databaseStageRequested = false
+    const current = () => {
+      if (stage && performance.now() >= stage.deadline) throw Object.assign(new Error('checkpoint disk wait expired'), { code: 'CHECKPOINT_STAGE_TIMEOUT' })
+      if (options.current?.() === false) throw new SessionCheckpointError('The session changed while saving. Its previous checkpoint is kept.')
+    }
     const destination = join(this.directory, file)
     let committed = false
     let previous: Checkpoint | null = null
     try {
+      current()
       try { previous = JSON.parse(readPrivateStateFile(manifest, 16384)) as Checkpoint } catch (e) {
         if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e
       }
@@ -160,7 +92,7 @@ export class SessionCheckpointStore {
       const authority = s.sessionId && source && engineKeepsTranscriptFile(s.engine)
         ? controlTranscriptEvidence(s.engine, s.sessionId, source, s.codexHome ?? undefined, s.cwd) : undefined
       if (authority) source = authority.path
-      const saveScreen = () => { if (options.screen != null && s.sessionId) {
+      const saveScreen = () => { current(); if (options.screen != null && s.sessionId) {
         // Save even when the native transcript is unchanged: a newly typed draft
         // belongs to the terminal, not to that transcript. Never submit it.
         atomicWriteJson(join(this.directory, `${key}.screen.json`), { version: 1, agentId: s.agentId,
@@ -226,22 +158,34 @@ export class SessionCheckpointStore {
         } finally { await input.close().catch(() => { throw new IdentityReadUnavailable('the source transcript could not be closed') }) }
         if (reuseCheckpoint) { authority!.verify(); saveScreen(); return }
       } else {
-        const history = await databaseHistory(s)
-        const handle = await open(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
-        try { await handle.writeFile(JSON.stringify({ version: 1, sessionId: s.sessionId, engine: s.engine, ...history })) }
-        finally { await handle.close() }
+        if (!this.deps.exportDatabase) throw new SessionCheckpointError('Could not read the saved conversation. The session has not been closed.')
+        databaseStageRequested = true
+        stage = await this.stages.acquire()
+        temporary = stage.stage.path
+        const receipt = await this.deps.exportDatabase(s, stage.stage, stage).catch(() => {
+          throw new SessionCheckpointError('Could not read the saved conversation. The session has not been closed.')
+        })
+        current()
+        await stage.verify(receipt)
+        checkpoint.bytes = receipt.bytes
       }
-      const handle = await open(temporary, constants.O_RDWR | constants.O_NOFOLLOW)
-      try {
-        const copied = await handle.stat()
-        if (!copied.isFile() || copied.nlink !== 1) throw new Error('unsafe checkpoint')
-        checkpoint.bytes = copied.size
-        await handle.sync()
-      } finally { await handle.close() }
-      await rename(temporary, destination)
+      if (stage) await stage.publish(destination, current)
+      else {
+        const handle = await open(temporary, constants.O_RDWR | constants.O_NOFOLLOW)
+        try {
+          const copied = await handle.stat()
+          if (!copied.isFile() || copied.nlink !== 1) throw new Error('unsafe checkpoint')
+          checkpoint.bytes = copied.size
+          await handle.sync()
+        } finally { await handle.close() }
+        current()
+        await rename(temporary, destination)
+      }
+      current()
       authority?.verify()
       saveScreen()
       // Publish only after data is durable. A failed save keeps the preceding checkpoint intact.
+      current()
       atomicWriteJson(manifest, checkpoint)
       committed = true
       if (previous?.file && previous.file !== file && previousFileSafe(previous.file)) {
@@ -249,10 +193,18 @@ export class SessionCheckpointStore {
       }
     } catch (error) {
       if (error instanceof SessionCheckpointError || (error as { code?: unknown } | null)?.code === 'IDENTITY_UNAVAILABLE') throw error
+      if ((error as { code?: unknown } | null)?.code === 'CHECKPOINT_STAGES_BUSY') {
+        throw new SessionCheckpointError('History saving is held by unfinished operations. Stop and restart Harness; if it remains held, contact support. Its existing history is kept.')
+      }
+      if ((error as { code?: unknown } | null)?.code === 'CHECKPOINT_STAGE_TIMEOUT') {
+        console.error('[checkpoint] STAGE_OPERATION_TIMEOUT')
+        throw new SessionCheckpointError('History saving timed out while waiting for disk. Its existing history is kept; try again.')
+      }
       throw new SessionCheckpointError('Could not back up this conversation to disk. Check free space and try again; its existing history is kept.')
     } finally {
-      await rm(temporary, { force: true }).catch(() => {})
-      if (!committed) await rm(destination, { force: true }).catch(() => {})
+      if (stage) await stage.close()
+      else if (!databaseStageRequested) await rm(temporary, { force: true }).catch(() => {})
+      if (!databaseStageRequested && !committed) await rm(destination, { force: true }).catch(() => {})
     }
   }
 }

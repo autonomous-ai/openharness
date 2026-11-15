@@ -94,9 +94,9 @@ export function createAgentClosing({
     idleCurrent: s => ready(s) && (!s.sessionId || sessionTurnState(s.sessionId) === false) && !openQuestions.has(s.sessionId),
     // The question the engine asks before any conversation, as its pane shows it now (lib/closeAgentService.ts).
     atStartupQuestion: async s => (await readScreen(s, await captureTerminal(s.agentId, 80)))?.messageHold === 'trust_open',
-    checkpoint: async (s, phase) => {
+    checkpoint: async (s, phase, current) => {
       const captured = phase === 'before' ? await terminals.captureRetained(s, { historyLines: 2000 }) : null
-      await sessionCheckpoints.save(s, { screen: captured?.state === 'succeeded' ? captured.value : null })
+      await sessionCheckpoints.save(s, { screen: captured?.state === 'succeeded' ? captured.value : null, ...(current && { current }) })
     },
     stop: stopAgent,
     changed: announceSession,

@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { otherStorageRequests } from './storageRequests.js'
-import { STORAGE_BACKGROUND, STORAGE_BACKGROUND_WAIT_MS, STORAGE_CAPABILITIES, storageSession } from '../worker/storageProtocol.js'
+import { STORAGE_BACKGROUND, STORAGE_BACKGROUND_WAIT_MS, STORAGE_CAPABILITIES, STORAGE_LIFETIME, STORAGE_EXPORT, STORAGE_EXPORT_WAIT_MS, storageSession } from '../worker/storageProtocol.js'
 
 const core = { owner: true, local: true }
 const payload = { version: 1, engine: 'hermes', session: { sessionId: '20261112_100000_bbbbbb', hermesHome: '/profile' } }
@@ -32,4 +32,22 @@ it('rejects malformed and overlong identity fields', () => {
     { sessionId: 'x', hermesHome: 3 }, { sessionId: 'x', hermesHome: '\0' }, { sessionId: 'x', hermesHome: 'x'.repeat(32_769) },
     { sessionId: 'x', extra: true }]) expect(storageSession(value)).toBe(false)
   for (const hermesHome of [undefined, null, '/profile']) expect(storageSession({ sessionId: 'x', hermesHome })).toBe(true)
+})
+
+it('shares admission and retains timed-out export slots until their actual work settles', async () => {
+  vi.useFakeTimers()
+  const release: Array<(result: { bytes: number; sha256: string }) => void> = []
+  const requests = otherStorageRequests({ export: () => new Promise(resolve => { release.push(resolve) }), background: async () => 0, recycle: vi.fn() })
+  const lifetime = (await requests[STORAGE_LIFETIME]({ version: 1, engine: 'hermes' }, core)).answer
+  const ask = { ...payload, lifetime, stage: { path: '/private/stage', key: '1:2' } }
+  const operations = Array.from({ length: 4 }, () => requests[STORAGE_EXPORT](ask, core))
+  await vi.advanceTimersByTimeAsync(0)
+  expect(release).toHaveLength(4)
+  expect(await requests[STORAGE_BACKGROUND](payload, core)).toMatchObject({ error: 'ENGINE_BUSY' })
+  await vi.advanceTimersByTimeAsync(STORAGE_EXPORT_WAIT_MS)
+  expect(await Promise.all(operations)).toEqual(Array.from({ length: 4 }, () => ({ version: 1, error: 'ENGINE_UNAVAILABLE' })))
+  expect(await requests[STORAGE_EXPORT](ask, core)).toMatchObject({ error: 'ENGINE_BUSY' })
+  for (const done of release) done({ bytes: 1, sha256: 'a'.repeat(64) })
+  await vi.advanceTimersByTimeAsync(0)
+  expect(await requests[STORAGE_BACKGROUND](payload, core)).toEqual({ version: 1, answer: 0 })
 })

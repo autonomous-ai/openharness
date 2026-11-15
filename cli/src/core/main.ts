@@ -104,7 +104,7 @@ import { RESUME_READINESS_BUDGET_MS } from '../lib/resumeStoppedAgent.js'
 import { createConversationOwners } from './agents/conversationOwners.js'
 import { createQuietTitles } from './agents/quietTitles.js'
 import { OpenTabProtection } from '../lib/openTabProtection.js'
-import { sessionCheckpoints } from '../lib/sessionCheckpoint.js'
+import { SessionCheckpointStore } from '../lib/sessionCheckpoint.js'
 import { repairProjectCwds } from '../lib/cwdRepair.js'
 import { stoppedAgents } from '../lib/stoppedAgents.js'
 import { externalSessionAnswer, externalUnavailable } from '../lib/externalSessionWire.js'
@@ -762,9 +762,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     for (const session of registry.list()) inline?.preloadEngine(session.engine)
   }
   let serviceLinksRef: ServiceLinks | null = null
-  const engineStorage = createEngineStorage({ isolated: othersStorage, inline: inline?.hermesBackground,
+  const engineStorage = createEngineStorage({ isolated: othersStorage, inline: inline?.hermesBackground, inlineExport: inline?.exportDatabase,
+    serviceProcess: coreLink.serviceProcess,
     call: (service, type, payload, waitMs) => serviceLinksRef?.call(service, type, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }),
   })
+  const sessionCheckpoints = new SessionCheckpointStore(undefined, { exportDatabase: engineStorage.exportDatabase })
+  await sessionCheckpoints.prepare()
   const runtimeTransport = createRuntimeTransport({
     call: (service, type, payload, waitMs) => serviceLinksRef?.call(service, type, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }),
   })

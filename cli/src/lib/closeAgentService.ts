@@ -109,7 +109,7 @@ export interface CloseAgentServiceDeps {
   activity(s: RegisteredSession): Promise<CloseActivity>
   /** Cheap revocation after the final activity read, at each physical Stop boundary. */
   idleCurrent?(s: RegisteredSession): boolean
-  checkpoint(s: RegisteredSession, phase: 'before' | 'after'): Promise<void>
+  checkpoint(s: RegisteredSession, phase: 'before' | 'after', current?: () => boolean): Promise<void>
   stop(agentId: string, options: StopAgentOptions): Promise<void>
   changed(s: RegisteredSession): void
   openTabs?: { assertHidden(s: RegisteredSession): Promise<void>; isHidden(s: RegisteredSession): boolean }
@@ -324,7 +324,7 @@ export class CloseAgentService {
           if (this.deps.idleCurrent?.(latest) === false) idleRevoked = true
           return !idleRevoked
         },
-        checkpoint: (s, phase) => this.deps.checkpoint(s, phase),
+        checkpoint: (s, phase) => this.deps.checkpoint(s, phase, () => !!current()),
         confirmUnusedConversation: async captured => {
           // A missing ID alone could be failed discovery of active work. Only
           // an unused chat with a freshly observed empty composer can skip the

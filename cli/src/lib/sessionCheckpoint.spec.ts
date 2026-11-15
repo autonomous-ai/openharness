@@ -1,17 +1,36 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { readdirSync, renameSync, writeFileSync } from 'node:fs'
 import { link, mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { SessionCheckpointStore } from './sessionCheckpoint.js'
+import { exportDatabase } from '../engines/others/checkpoint.js'
+import type { StorageEngine } from '../engines/worker/storageProtocol.js'
+import { STORAGE_EXPORT_WAIT_MS } from '../engines/worker/storageProtocol.js'
 import { registry, type RegisteredSession } from './registry.js'
 import { sqliteReadAll } from './sqliteRead.js'
 import { env } from '../config/env.js'
 import { piSessionFolder } from './sessionSearch/externals/pi.js'
-const faults = vi.hoisted(() => ({ wrote: undefined as ((path: string) => Promise<void>) | undefined }))
+const faults = vi.hoisted(() => ({ wrote: undefined as ((path: string) => Promise<void>) | undefined,
+  checked: undefined as ((path: string) => Promise<void>) | undefined,
+  stageOpened: undefined as (() => Promise<void>) | undefined,
+  stageRead: undefined as (() => Promise<void>) | undefined,
+  stageClosing: undefined as (() => Promise<void>) | undefined,
+  stageClosed: undefined as (() => void) | undefined }))
 vi.mock('node:fs/promises', async importOriginal => {
   const real = await importOriginal<typeof import('node:fs/promises')>()
-  return { ...real, rm: vi.fn(real.rm), open: async (...args: Parameters<typeof real.open>) => {
+  return { ...real, rm: vi.fn(real.rm), lstat: async (...args: Parameters<typeof real.lstat>) => {
+    const found = await real.lstat(...args)
+    await faults.checked?.(String(args[0]))
+    return found
+  }, open: async (...args: Parameters<typeof real.open>) => {
     const handle = await real.open(...args)
+    if (/[\\/]history\.tmp$/.test(String(args[0]))) {
+      const read = handle.read.bind(handle), close = handle.close.bind(handle)
+      handle.read = (async (...values: Parameters<typeof read>) => { await faults.stageRead?.(); return read(...values) }) as typeof handle.read
+      handle.close = async () => { await faults.stageClosing?.(); await close(); faults.stageClosed?.() }
+      await faults.stageOpened?.()
+    }
     if (String(args[0]).endsWith('.history.tmp')) {
       const write = handle.write.bind(handle)
       handle.write = (async (...values: Parameters<typeof write>) => {
@@ -33,6 +52,11 @@ let store: SessionCheckpointStore
 const transcript = (body: string) => JSON.stringify({ type: 'session_meta', payload: { id: 'conversation', cwd: '/tmp', source: 'cli' } }) + '\n' + body
 beforeEach(async () => {
   faults.wrote = undefined
+  faults.checked = undefined
+  faults.stageOpened = undefined
+  faults.stageRead = undefined
+  faults.stageClosing = undefined
+  faults.stageClosed = undefined
   root = await mkdtemp(join(tmpdir(), 'harness-close-checkpoint-'))
   const home = join(root, 'profile')
   await mkdir(join(home, 'sessions'), { recursive: true, mode: 0o700 })
@@ -41,7 +65,7 @@ beforeEach(async () => {
   row = registry.openPendingAgent({ engine: 'codex', cwd: '/tmp', codexHome: home, runtimes: [{ backend: 'tmux', paneId: '%777' }] })!
   Object.assign(row, { sessionId: 'conversation', transcriptPath: history })
   directory = join(root, 'checkpoints')
-  store = new SessionCheckpointStore(directory)
+  store = new SessionCheckpointStore(directory, { exportDatabase: (s, stage) => exportDatabase(s.engine as StorageEngine, s, stage) })
 })
 afterEach(async () => { vi.restoreAllMocks(); for (const s of registry.list()) registry.removeAgent(s.agentId); await rm(root, { recursive: true, force: true }) })
 const manifest = async () => JSON.parse(await readFile(join(directory, (await readdir(directory)).find(f => /^[a-f0-9]{64}\.json$/.test(f))!), 'utf8'))
@@ -265,14 +289,14 @@ it('treats a locked or missing database as a save failure, never an empty succes
   row.engine = 'hermes'
   vi.mocked(sqliteReadAll).mockResolvedValue({ ok: false, reason: 'transient' })
   await expect(store.save(row)).rejects.toThrow('Could not read')
-  expect(await readdir(directory)).toEqual([])
+  expect((await readdir(directory)).filter(name => name !== '.stages')).toEqual([])
   // OpenCode's look for its v2 tables fails the same way, whether at the table or at this session.
   row.engine = 'opencode'
   await expect(store.save(row)).rejects.toThrow('Could not read')
   vi.mocked(sqliteReadAll).mockReset().mockResolvedValueOnce({ ok: true, via: 'builtin', rows: [{ name: 'session_v2' }] })
     .mockResolvedValueOnce({ ok: false, reason: 'transient' })
   await expect(store.save(row)).rejects.toThrow('Could not read')
-  expect(await readdir(directory)).toEqual([])
+  expect((await readdir(directory)).filter(name => name !== '.stages')).toEqual([])
 })
 
 it('rebuilds a missing backup and refuses a missing terminal snapshot', async () => {
@@ -321,4 +345,149 @@ it('reports the save failure even if cleanup also fails', async () => {
   row.transcriptPath = null
   vi.mocked(rm).mockRejectedValueOnce(new Error('temporary busy')).mockRejectedValueOnce(new Error('destination busy'))
   await expect(store.save(row)).rejects.toThrow('conversation file is unavailable')
+})
+
+it('does not publish a checkpoint after the close operation is cancelled while copying', async () => {
+  await store.save(row)
+  const before = await manifest()
+  await writeFile(history, transcript('new state\n'))
+  let current = true
+  faults.wrote = async () => { current = false }
+  await expect(store.save(row, { current: () => current } as never)).rejects.toThrow()
+  expect(await manifest()).toEqual(before)
+})
+
+it('delegates database export into a core-created stage and publishes only its verified bytes', async () => {
+  Object.assign(row, { engine: 'hermes', transcriptPath: null })
+  const contents = JSON.stringify({ version: 1, sessionId: row.sessionId, engine: 'hermes', database: '/profile/state.db', tables: { sessions: [{ id: row.sessionId }], messages: [] } })
+  const exportDatabase = vi.fn(async (_session, stage) => {
+    expect((await stat(stage.path)).size).toBe(0)
+    await writeFile(stage.path, contents)
+    const { createHash } = await import('node:crypto')
+    return { bytes: Buffer.byteLength(contents), sha256: createHash('sha256').update(contents).digest('hex') }
+  })
+  const delegated = new (SessionCheckpointStore as any)(directory, { exportDatabase })
+  await delegated.save(row)
+  expect(exportDatabase).toHaveBeenCalledOnce()
+  expect(await readFile(join(directory, (await manifest()).file), 'utf8')).toBe(contents)
+})
+
+it('refuses a stage substituted after verification instead of publishing unverified bytes', async () => {
+  await store.save(row)
+  const previous = await manifest()
+  Object.assign(row, { engine: 'hermes', transcriptPath: null })
+  const contents = '{"version":1,"tables":{}}'
+  let checks = 0
+  const delegated = new SessionCheckpointStore(directory, { exportDatabase: async (_session, stage) => {
+    await writeFile(stage.path, contents)
+    faults.checked = async path => {
+      if (path !== stage.path || ++checks !== 2) return
+      await rm(stage.path)
+      await writeFile(stage.path, 'unverified replacement', { mode: 0o600 })
+    }
+    const { createHash } = await import('node:crypto')
+    return { bytes: Buffer.byteLength(contents), sha256: createHash('sha256').update(contents).digest('hex') }
+  } })
+  await expect(delegated.save(row)).rejects.toThrow()
+  expect(await manifest()).toEqual(previous)
+})
+
+it('keeps a substituted publication target when cancellation enters staged cleanup', async () => {
+  Object.assign(row, { engine: 'hermes', transcriptPath: null })
+  const contents = '{"version":1,"tables":{}}'
+  const { createHash } = await import('node:crypto')
+  const delegated = new SessionCheckpointStore(directory, { exportDatabase: async (_session, stage) => {
+    await writeFile(stage.path, contents)
+    return { bytes: Buffer.byteLength(contents), sha256: createHash('sha256').update(contents).digest('hex') }
+  } })
+  await delegated.save(row)
+  const previous = await manifest()
+  let replacement: string | undefined
+  await expect(delegated.save(row, { current: () => {
+    const next = readdirSync(directory).find(file => file.endsWith('.history') && file !== previous.file)
+    if (!next) return true
+    replacement = join(directory, next)
+    renameSync(replacement, `${replacement}.held`)
+    writeFileSync(replacement, 'another operation owns this file', { mode: 0o600 })
+    return false
+  } })).rejects.toThrow('changed while saving')
+  expect(replacement).toBeDefined()
+  expect(await readFile(replacement!, 'utf8')).toBe('another operation owns this file')
+  expect(await manifest()).toEqual(previous)
+})
+
+it('bounds held verification reads without releasing any of the four live slots or publishing late', async () => {
+  Object.assign(row, { engine: 'hermes', transcriptPath: null })
+  const contents = 'x'.repeat(300_000), { createHash } = await import('node:crypto')
+  const exportDatabase = vi.fn(async (_session, stage, ownership) => {
+    await ownership.writer(process.pid)
+    await writeFile(stage.path, contents)
+    ownership.settled()
+    return { bytes: Buffer.byteLength(contents), sha256: createHash('sha256').update(contents).digest('hex') }
+  })
+  const delegated = new SessionCheckpointStore(directory, { exportDatabase })
+  await delegated.save(row)
+  const previous = await manifest()
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date', 'performance'] })
+  let release!: () => void, entered!: () => void, closed!: () => void, reads = 0, closes = 0
+  const held = new Promise<void>(resolve => { release = resolve })
+  const allReading = new Promise<void>(resolve => { entered = resolve })
+  const allClosed = new Promise<void>(resolve => { closed = resolve })
+  faults.stageRead = async () => { if (++reads === 4) entered(); await held }
+  faults.stageClosed = () => { if (++closes === 4) closed() }
+  const answers: unknown[] = []
+  const saves = Array.from({ length: 4 }, () => delegated.save(row).then(() => answers.push('published'), error => answers.push(error)))
+  try {
+    await allReading
+    await vi.advanceTimersByTimeAsync(STORAGE_EXPORT_WAIT_MS)
+    expect(answers).toHaveLength(4)
+    expect(answers.every(error => (error as { code: string }).code === 'HISTORY_NOT_SAVED')).toBe(true)
+    await expect(delegated.save(row)).rejects.toThrow('held by unfinished operations')
+    expect(exportDatabase).toHaveBeenCalledTimes(5)
+    expect(await manifest()).toEqual(previous)
+  } finally {
+    release(); await Promise.all(saves); await allClosed
+    vi.useRealTimers()
+  }
+  expect(reads).toBe(4)
+  expect(await manifest()).toEqual(previous)
+})
+
+it.each(['acquisition', 'descriptor close'] as const)('bounds a held %s and closes the exact late descriptor without publishing', async phase => {
+  Object.assign(row, { engine: 'hermes', transcriptPath: null })
+  const contents = 'history', { createHash } = await import('node:crypto')
+  const exportDatabase = vi.fn(async (_session, stage, ownership) => {
+    await ownership.writer(process.pid)
+    await writeFile(stage.path, contents)
+    ownership.settled()
+    return { bytes: contents.length, sha256: createHash('sha256').update(contents).digest('hex') }
+  })
+  const delegated = new SessionCheckpointStore(directory, { exportDatabase })
+  await delegated.save(row)
+  const previous = await manifest()
+  vi.mocked(rm).mockClear()
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date', 'performance'] })
+  let release!: () => void, entered!: () => void, closed!: () => void
+  const held = new Promise<void>(resolve => { release = resolve })
+  const waiting = new Promise<void>(resolve => { entered = resolve })
+  const completedClose = new Promise<void>(resolve => { closed = resolve })
+  const pause = async () => { entered(); await held }
+  if (phase === 'acquisition') faults.stageOpened = pause
+  else faults.stageClosing = pause
+  faults.stageClosed = closed
+  let answer: unknown
+  const saving = delegated.save(row).then(() => { answer = 'published' }, error => { answer = error })
+  try {
+    await waiting
+    await vi.advanceTimersByTimeAsync(STORAGE_EXPORT_WAIT_MS)
+    expect(answer).toMatchObject({ code: 'HISTORY_NOT_SAVED' })
+    expect(await manifest()).toEqual(previous)
+    // Database ownership includes acquisition: native-path cleanup cannot add an unbounded disk wait after expiry.
+    expect(rm).not.toHaveBeenCalled()
+    expect(exportDatabase).toHaveBeenCalledTimes(phase === 'acquisition' ? 1 : 2)
+  } finally {
+    release(); await saving; await completedClose
+    vi.useRealTimers()
+  }
+  expect(await manifest()).toEqual(previous)
 })

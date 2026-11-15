@@ -47,6 +47,8 @@ export interface CoreLink {
   /** Ask the master to start the process on demand that runs [service]: an experiment that is on (protocol 3),
    *  or the devices, models or the gateway, now that they are needed (protocol 4, before `bound` too). */
   want(service: string): void
+  /** Confirm the exact child on a master status push, within the caller's remaining deadline. */
+  serviceProcess(service: string, pid: number, waitMs: number): Promise<boolean>
   /** Tell the master, every `heartbeatInterval`, that this core is alive and how big it is. */
   startHeartbeat(): void
   /** The master is gone. A core without one stops, so nothing is left holding the port. */
@@ -83,6 +85,7 @@ export function connectToMaster(
   const supervised = env.HARNESSD_SUPERVISED === '1' && typeof channel.send === 'function'
   let heartbeat: ReturnType<typeof setInterval> | null = null
   let status: SupervisorStatus | null = null
+  const processWaiters = new Set<() => void>()
   // A send on a channel the master closed throws; the master is gone and `onMasterGone` says so.
   const send = (message: CoreMessage): void => {
     if (!supervised) return
@@ -98,7 +101,7 @@ export function connectToMaster(
   if (supervised) {
     channel.on('message', (message) => {
       if (!isMasterMessage(message)) return
-      if (message.type === 'harnessd:status') { status = message.status; return }
+      if (message.type === 'harnessd:status') { status = message.status; for (const check of processWaiters) check(); return }
       if (message.type === 'harnessd:shutdown') {
         if (shutdownAsked) return
         shutdownAsked = true
@@ -120,6 +123,7 @@ export function connectToMaster(
   if (supervised) {
     channel.once('disconnect', () => {
       masterGone = true
+      for (const check of processWaiters) check()
       for (const listener of goneListeners.splice(0)) listener()
     })
   }
@@ -129,6 +133,18 @@ export function connectToMaster(
     bound: (port) => send({ type: 'harnessd:bound', protocol: HARNESSD_PROTOCOL, port }),
     ready: (safeMode) => send(safeMode === undefined ? { type: 'harnessd:ready' } : { type: 'harnessd:ready', safeMode }),
     want: (service) => send({ type: 'harnessd:want', service }),
+    serviceProcess: async (service, pid, waitMs) => {
+      if (!supervised || masterGone || processWaiters.size >= 4 || waitMs <= 0 || !Number.isSafeInteger(pid) || pid <= 0) return false
+      const matches = () => Array.isArray(status?.services) && status.services.some(row => row.name === service && row.pid === pid)
+      if (matches()) return true
+      return new Promise<boolean>(resolve => {
+        const finish = (answer: boolean) => { clearTimeout(timer); processWaiters.delete(check); resolve(answer) }
+        const check = () => { if (masterGone || matches()) finish(!masterGone) }
+        const timer = setTimeout(() => finish(false), waitMs)
+        processWaiters.add(check)
+        send({ type: 'harnessd:want', service })
+      })
+    },
     startHeartbeat: () => {
       if (!supervised || heartbeat) return
       const beat = (): void => {
@@ -165,6 +181,8 @@ export function connectToMaster(
     },
     status: () => status,
     close: () => {
+      masterGone = true
+      for (const check of processWaiters) check()
       if (heartbeat) clearInterval(heartbeat)
       heartbeat = null
     },

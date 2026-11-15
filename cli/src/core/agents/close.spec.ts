@@ -161,6 +161,16 @@ describe('closing agents no window shows', () => {
   })
 
   describe('the checkpoint around a close', () => {
+    it('carries the close cancellation fence through terminal capture to checkpoint publication', async () => {
+      const { deps, close } = setup()
+      let active = true
+      const current = () => active
+      await close.checkpoint(row(), 'before', current)
+      const options = vi.mocked(deps.sessionCheckpoints.save).mock.calls[0][1]!
+      expect(options.current).toBe(current)
+      active = false
+      expect(options.current!()).toBe(false)
+    })
     it('before: keeps two thousand lines of the pane with the conversation', async () => {
       const { deps, close } = setup()
       await close.checkpoint(row(), 'before')

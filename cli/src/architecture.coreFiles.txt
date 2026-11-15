@@ -312,6 +312,7 @@ lib/browserShim.ts
 lib/captureResumeIdentity.ts
 lib/cardUpdate.ts
 lib/cellAdvance.ts
+lib/checkpointStages.ts
 lib/childLocale.ts
 lib/claudeHomes.ts
 lib/closeAgentService.ts
@@ -473,7 +474,6 @@ lib/slimForRelay.ts
 lib/spreadNotice.ts
 lib/sqliteAvailability.ts
 lib/sqliteBuiltin.ts
-lib/sqlitePage.ts
 lib/sqliteRead.ts
 lib/sqliteThread.ts
 lib/sshHosts.ts
