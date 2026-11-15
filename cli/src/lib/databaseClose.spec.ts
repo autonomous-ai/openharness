@@ -248,6 +248,43 @@ it('holds an unknown PTY terminal name instead of treating its unread live recor
   expect(exportedSource).toBeUndefined()
 })
 
+it.each(['no runtime', 'failed lookup'] as const)('holds Hermes before saving when terminal naming has %s', async why => {
+  if (why === 'no runtime') row.runtimes = []
+  else deps.paneInfo = vi.fn(async () => { throw new Error('terminal unavailable') })
+  await expect(stop()).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
+  expect(signalled).not.toHaveBeenCalled()
+  expect(stoppedAgents.get(row.agentId)).toBeNull()
+  expect(deps.forgetSession).not.toHaveBeenCalled()
+})
+
+it.each(['cancel', 'rebind'] as const)('holds Close before saving when %s arrives during terminal naming', async change => {
+  let current = true
+  deps.paneInfo = vi.fn(async () => {
+    if (change === 'cancel') current = false
+    else row.sessionId = '20261116_120001_abcdef'
+    return { tty: '/dev/ttys044', command: 'hermes', path: root, pid: 77 }
+  })
+  await expect(createStopAgentService(deps)(row.agentId, { current: () => current,
+    checkpoint: async (s, _phase, databaseProof) => store.save(s, { databaseProof }),
+  })).rejects.toMatchObject({ code: 'STOP_UNCONFIRMED' })
+  expect(signalled).not.toHaveBeenCalled()
+  expect(stoppedAgents.get(row.agentId)).toBeNull()
+  expect(deps.forgetSession).not.toHaveBeenCalled()
+})
+
+it('keeps known TUI absence working on its captured PTY and default Hermes home', async () => {
+  row.runtimes = [{ backend: 'ptyhost', instance: 'owned', paneId: 'terminal' }]
+  row.primaryRuntimeKey = ''
+  row.hermesHome = null
+  rmSync(record)
+  deps.paneInfo = vi.fn(async () => ({ tty: '', command: 'hermes', path: root, pid: 77 }))
+  await stop()
+  expect(deps.paneInfo).toHaveBeenCalledWith(row.runtimes[0])
+  expect(signalled).toHaveBeenCalledOnce()
+  expect(deps.forgetSession).toHaveBeenCalledOnce()
+  expect(manifests()).toHaveLength(1)
+})
+
 it('does not retire a denied engine signal generation when a child signal succeeds', async () => {
   source('opencode')
   signalled.mockImplementationOnce(() => { throw new Error('EPERM') })
