@@ -358,8 +358,10 @@ export function createAttach({
     let recoveryInstall = () => replacement!.commit(recoveryPlan!)
     let recoveryReady = false
     // Whether this attach leaves its session's transcript with no tail, held or running. Never a recovery: it replays
-    // its own boundaries (`closes`).
-    const leavesNoTail = (): boolean => !handover.hold && !session.interpretationHold && !!session.transcriptPath
+    // its own boundaries (`closes`). Nor an attach no longer the binding's: one whose session was forgotten while it
+    // read its profile left a byte and a retry behind, and the same conversation bound again under its id later folded
+    // only to that byte and delivered the lines after it live, old as they were (agents/forget.ts).
+    const leavesNoTail = (): boolean => current() && !handover.hold && !session.interpretationHold && !!session.transcriptPath
       && !watcher.tails(session.sessionId, session.transcriptPath)
     // A read that ended here is as far as the session's history goes, and no tail was left to read on from it: the
     // next attach folds to here and tails from here (`supersededReads`).
