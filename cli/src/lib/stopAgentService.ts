@@ -154,7 +154,7 @@ export function createStopAgentService(deps: StopAgentServiceDeps) {
       const transcript = !guest && s.sessionId && s.transcriptPath && engineKeepsTranscriptFile(s.engine)
         ? controlTranscriptEvidence(s.engine, s.sessionId, s.transcriptPath, s.codexHome ?? undefined, s.cwd) : undefined
       let databaseProof = !guest && s.sessionId && !engineKeepsTranscriptFile(s.engine) && !isTerminalEngine(s.engine)
-        ? await databaseCheckpointEvidence(s) : undefined
+        ? await databaseCheckpointEvidence(s, () => sameTarget() && options.current?.() !== false) : undefined
       let terminal: ReturnType<typeof terminalRecordEvidence> | undefined
       // Windows binding uses hooks rather than the POSIX terminal record (core/agents/hermesTerminal.ts).
       if (databaseProof && s.engine === 'hermes' && s.processIdentity && process.platform !== 'win32') {

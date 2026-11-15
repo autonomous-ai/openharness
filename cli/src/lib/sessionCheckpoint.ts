@@ -164,7 +164,7 @@ export class SessionCheckpointStore {
         if (!this.deps.exportDatabase) throw new SessionCheckpointError('Could not read the saved conversation. The session has not been closed.')
         databaseStageRequested = true
         stage = await this.stages.acquire()
-        databaseProof ??= await databaseCheckpointEvidence(s)
+        databaseProof ??= await databaseCheckpointEvidence(s, () => { current(); return true })
         if (!databaseProof) throw new SessionCheckpointError('The conversation location is unavailable. The session has not been closed.')
         current()
         temporary = stage.stage.path

@@ -9,7 +9,8 @@ import { constants } from 'node:fs'
 import { lstat, open } from 'node:fs/promises'
 import { join } from 'node:path'
 import { observeNativeFile } from './nativeFileObservation.js'
-import { nativeUnavailable } from './nativeEvidence.js'
+import { NativeEvidenceBudget, nativeUnavailable } from './nativeEvidence.js'
+import { NativePaths } from './nativePaths.js'
 
 export interface TerminalRecordRule {
   directory: string
@@ -110,6 +111,9 @@ function terminalRecordValue(rule: TerminalRecordRule, bytes: Buffer, sinceMs: n
 /** Retained exact records before Stop; after its first signal only a current conflicting claim revokes escalation. */
 export function terminalRecordEvidence(rule: TerminalRecordRule, home: string, names: readonly string[], sinceMs: number, sessionId: string) {
   if (names.length > rule.names.length || !Number.isFinite(sinceMs)) return nativeUnavailable('the native terminal identity is unavailable')
+  const paths = new NativePaths(new NativeEvidenceBudget())
+  paths.resolveSync(join(home, rule.directory), true)
+  const verifyRoute = paths.retain()
   const capture = () => {
     const files = []
     for (const name of names) {
@@ -130,7 +134,8 @@ export function terminalRecordEvidence(rule: TerminalRecordRule, home: string, n
   const files = capture()
   matches(files)
   return { verify(afterEffect = false): void {
-    if (afterEffect) matches(capture())
+    verifyRoute()
+    if (afterEffect) { matches(capture()); verifyRoute() }
     else for (const file of files) file.verify()
   } }
 }

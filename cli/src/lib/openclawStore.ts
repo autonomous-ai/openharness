@@ -17,9 +17,10 @@ import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join } from 'node:path'
 import { env } from '../config/env.js'
 import { OPENCLAW_KEY, openclawAgentDb } from '../engines/openclaw/contract.js'
-import { nativeOpenFiles } from './nativeConversation.js'
+import { nativeHeldFiles, nativeOpenFiles } from './nativeConversation.js'
 import { observeNativeFile } from '../engines/kit/nativeFileObservation.js'
 import { nativeText, nativeUnavailable } from '../engines/kit/nativeEvidence.js'
+import type { ProcessIdentity } from './terminalTypes.js'
 
 /** A TUI keeps its state folder for its whole life; a pid read again after this long may be another process. */
 const CACHE_MS = 60_000
@@ -79,20 +80,43 @@ export async function openclawSessionDb(
   pane: { pid: number; stateDir?: string | null },
   openFiles?: (pid: number) => Promise<string[]>,
 ): Promise<string | null> {
-  return (await openclawSessionLocation(key, pane, openFiles))?.path ?? null
+  if (!OPENCLAW_KEY.test(key)) return null
+  const stateDir = pane.stateDir || (await openclawStateDir(pane.pid, openFiles) ?? env.OPENCLAW_STATE_DIR)
+  return (await openclawSessionLocation(key, { pid: pane.pid, stateDir }))?.path ?? null
 }
 
 /** One location rule for readers and retained Close authority; no database content is inspected. */
 export async function openclawSessionLocation(
-  key: string, pane: { pid: number; stateDir?: string | null }, openFiles?: (pid: number) => Promise<string[]>,
+  key: string, pane: { pid: number; stateDir?: string | null; processIdentity?: ProcessIdentity | null },
 ): Promise<{ path: string; verify(): void } | null> {
   const agentId = OPENCLAW_KEY.exec(key)?.[1]
   if (!agentId) return null
-  const stateDir = pane.stateDir || (await openclawStateDir(pane.pid, openFiles) ?? env.OPENCLAW_STATE_DIR)
+  let stateDir = pane.stateDir
+  let verifyState = () => {}
+  if (!stateDir) {
+    // Windows has no native descriptor discovery; its documented initial location is the configured default.
+    // On POSIX, only a complete current process/descriptor read can establish that no held profile overrides it.
+    if (process.platform === 'win32') stateDir = env.OPENCLAW_STATE_DIR
+    else {
+      if (!pane.processIdentity || pane.pid !== pane.processIdentity.pid) return nativeUnavailable('the OpenClaw process identity is unavailable')
+      const held = await nativeHeldFiles(pane.processIdentity, path => stateDirOfOpenFiles([path]) !== null)
+      verifyState = held.verify
+      const states = new Set<string>()
+      for (const path of held.paths) {
+        const selected = stateDirOfOpenFiles([path])
+        if (!selected) return nativeUnavailable('the held OpenClaw state location is invalid')
+        states.add(selected)
+      }
+      if (states.size > 1) return nativeUnavailable('the OpenClaw process holds more than one state folder')
+      stateDir = states.values().next().value ?? env.OPENCLAW_STATE_DIR
+    }
+  }
+  verifyState()
   try {
     const config = observeNativeFile(join(stateDir, 'openclaw.json'), { maxBytes: 1 << 20, missingOkay: true })
-    return { path: openclawAgentDb(stateDir, agentId, configuredAgentDir(config.bytes && nativeText(config.bytes), stateDir, agentId)),
-      verify: config.verify }
+    const path = openclawAgentDb(stateDir, agentId, configuredAgentDir(config.bytes && nativeText(config.bytes), stateDir, agentId))
+    verifyState()
+    return { path, verify: () => { verifyState(); config.verify() } }
   } catch (error) {
     // Existing optional readers use the default on unreadable config. Close must call verify and cannot borrow
     // that fallback as location authority. No content or path from the config reaches this fixed diagnostic.

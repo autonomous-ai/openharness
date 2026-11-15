@@ -2,7 +2,7 @@
 import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, type BigIntStats } from 'node:fs'
 import { IdentityReadUnavailable } from './identityScan.js'
 import { NativeEvidenceBudget, nativeUnavailable } from './nativeEvidence.js'
-import { NativePaths, nativeFileKey, verifyNativePathFacts } from './nativePaths.js'
+import { NativePaths, nativeFileKey } from './nativePaths.js'
 
 const version = (info: BigIntStats) => `${nativeFileKey(info)}:${info.mode}:${info.uid}:${info.nlink}:${info.size}:${info.mtimeNs}:${info.ctimeNs}`
 export interface NativeFileObservation {
@@ -47,9 +47,9 @@ export function observeNativeFile(path: string, options: { maxBytes?: number; mi
       if (fd !== undefined) { try { closeSync(fd) } catch { nativeUnavailable('the native file could not be closed') } }
     }
   }
-  const facts = paths.snapshot()
+  const verifyRoute = paths.retain()
   const verify = () => {
-    verifyNativePathFacts(facts)
+    verifyRoute()
     if (location) {
       try {
         if (version(lstatSync(location.path, { bigint: true })) !== before) nativeUnavailable('the native file changed while saving')

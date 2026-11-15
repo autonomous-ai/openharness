@@ -86,6 +86,20 @@ Its immutable facts survive asynchronous work; each verification receives a fres
 Target selection is factored once, before export. Static stores retain the existing captured profile/environment and
 declared filename semantics. OpenClaw retains the captured state directory (or the existing held-state discovery and
 default), extracts the agent from `OPENCLAW_KEY`, and applies the existing `agents.entries.<id>.agentDir` location rule.
+Close never treats the optional reader's 60-second PID-only cache or its failed-probe fallback as authority. Without a
+captured state directory on POSIX, the captured process identity brackets a fresh bounded descriptor read and a joined
+final process/descriptor verification; a complete empty claim permits the existing default, while missing process
+identity, unreadable/incomplete evidence, an ambiguous pool or a deleted held state file refuses Close. The request's
+current/cancellation guard is checked before and after that awaited lookup. Windows retains its documented configured
+default where native descriptor discovery is unavailable. Optional readers keep their existing cache/default behavior.
+Once chosen, the same path is retained through exit and the final checkpoint; a dead PID is never rediscovered.
+The strict read retains at most 64 matching held state descriptors, requiring regular-file device/inode identity and
+an exact canonical pathname match. It snapshots the matching files' ancestor/alias routes before the final joined
+process/descriptor check and verifies those facts afterward, during config/agent-DB selection, and at publication.
+Replacing a held state path or its directory cannot turn a fresh path string into authority for a different store.
+This retained lookup replaces the strict path-only lookup; optional discovery remains the existing cached reader.
+Operation-local paths use the existing `retainOutside` retention mechanism factored as `retainParts`, preserving full
+device/inode identity with a fresh bounded verifier each time. Persisted reboot-compatible path facts are unchanged.
 The core reads at most 1 MiB of `openclaw.json`, using a regular-file descriptor and exact route/identity/version proof;
 an absent config is retained as absent, while an unreadable, oversized or malformed config holds Close. The shared
 locator parses only this location declaration, never vendor database schema or rows, and adds no cache. Alias changes,
@@ -143,6 +157,8 @@ interpreted as an absent record. Windows retains its existing hook-based initial
 fence, without claiming POSIX tty evidence. The preferred declared record wins; only absent higher-priority names and
 that selected record need retaining. A successful signal to a descendant or process group never retires the captured
 engine's generation when its own signal was denied.
+After a successful engine signal, the terminal-record directory and every ancestor/alias remain the original route;
+only its leaf record may be replaced or removed as part of exit. A fresh leaf read cannot grant a different home.
 
 The correction's first caller run recorded eight expected failures and one passing exit-flush case in 4.74 seconds
 (`native-proof-red`). After implementation those nine passed in 3.59 seconds. Review added two true red cases for an

@@ -13,9 +13,14 @@ import { AgentRestartCoordinator } from './restartAgent.js'
 import { terminateDeletedAgent } from './deleteAgentFallback.js'
 import { setAgentSignaller, type AgentSignal } from './processSignals.js'
 import type { ExportSource, StorageEngine } from '../engines/worker/storageProtocol.js'
+import { openclawSessionDb, openclawStateDir } from './openclawStore.js'
+import { nativeHeldFiles, nativeOpenFiles } from './nativeConversation.js'
+import { IdentityReadUnavailable } from '../engines/kit/identityScan.js'
+import { databaseCheckpointEvidence } from './databaseCheckpoint.js'
 
 vi.mock('./captureResumeIdentity.js', () => ({ captureResumeIdentity: vi.fn(async session => session) }))
 vi.mock('./deleteAgentFallback.js', () => ({ checkPidRuntime: vi.fn(), terminateDeletedAgent: vi.fn() }))
+vi.mock('./nativeConversation.js', async original => ({ ...await original<object>(), nativeOpenFiles: vi.fn(), nativeHeldFiles: vi.fn() }))
 
 let root: string
 let directory: string
@@ -28,7 +33,7 @@ let exportedSource: ExportSource | undefined
 let deps: StopAgentServiceDeps
 let signalled: ReturnType<typeof vi.fn<(pid: number, signal: AgentSignal) => void>>
 const oldEnv = { OPENCODE_DATA_DIR: env.OPENCODE_DATA_DIR, KILO_DATA_DIR: env.KILO_DATA_DIR,
-  HERMES_HOME: env.HERMES_HOME, DEVIN_HOME: env.DEVIN_HOME }
+  HERMES_HOME: env.HERMES_HOME, DEVIN_HOME: env.DEVIN_HOME, OPENCLAW_STATE_DIR: env.OPENCLAW_STATE_DIR }
 
 function source(engine: StorageEngine): void {
   const paths = { opencode: join(root, 'opencode.db'), kilo: join(root, 'kilo.db'), hermes: join(root, 'state.db'),
@@ -52,6 +57,8 @@ beforeEach(async () => {
   writeFileSync(record, JSON.stringify({ session_id: row.sessionId, ts: Date.now() / 1_000 }), { mode: 0o600 })
   duringExport = undefined
   exportedSource = undefined
+  vi.mocked(nativeOpenFiles).mockReset()
+  vi.mocked(nativeHeldFiles).mockReset()
   store = new SessionCheckpointStore(directory, { exportDatabase: async (_s, stage, ownership, source) => {
     exportedSource = source
     const bytes = readFileSync(database)
@@ -254,4 +261,110 @@ it('does not retire a denied engine signal generation when a child signal succee
   await expect(stop()).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
   expect(signalled).toHaveBeenCalledTimes(2)
   expect(deps.forgetSession).not.toHaveBeenCalled()
+})
+
+it('retains the original terminal home route during escalation after a successful engine signal', async () => {
+  const alias = join(root, 'profile-alias'), other = join(root, 'other')
+  symlinkSync(root, alias)
+  row.hermesHome = alias
+  mkdirSync(join(other, 'terminal-sessions'), { recursive: true })
+  writeFileSync(join(other, 'terminal-sessions', 'tty-dev-ttys044'), JSON.stringify({ session_id: row.sessionId, ts: Date.now() / 1_000 }))
+  signalled.mockImplementationOnce(() => {
+    rmSync(alias); symlinkSync(other, alias)
+    writeFileSync(record, JSON.stringify({ session_id: '20261116_120001_abcdef', ts: Date.now() / 1_000 }))
+  })
+  vi.mocked(terminateDeletedAgent).mockImplementation(async (_s, controls) => {
+    controls.kill(77, 'SIGTERM')
+    controls.kill(77, 'SIGKILL')
+    return 'terminated'
+  })
+  await expect(stop()).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
+  expect(signalled).toHaveBeenCalledTimes(1)
+  expect(deps.forgetSession).not.toHaveBeenCalled()
+})
+
+it('selects the current OpenClaw held store rather than a populated PID-only cache', async () => {
+  source('openclaw')
+  row.openclawStateDir = null
+  row.processIdentity!.pid = 84_101
+  const stale = join(root, 'stale'), fresh = join(root, 'fresh')
+  for (const state of [stale, fresh]) {
+    mkdirSync(join(state, 'agents', 'main', 'agent'), { recursive: true })
+    writeFileSync(join(state, 'agents', 'main', 'agent', 'openclaw-agent.sqlite'), 'original rows')
+  }
+  await openclawStateDir(84_101, async () => [join(stale, 'state', 'openclaw.sqlite')])
+  vi.mocked(nativeHeldFiles).mockResolvedValue({ paths: [join(fresh, 'state', 'openclaw.sqlite')], verify: vi.fn() })
+  await store.save(row)
+  expect(exportedSource?.path).toBe(realpathSync(join(fresh, 'agents', 'main', 'agent', 'openclaw-agent.sqlite')))
+  expect(nativeHeldFiles).toHaveBeenCalledWith(row.processIdentity, expect.any(Function))
+  expect(await openclawSessionDb(row.sessionId, { pid: 84_101 })).toBe(join(stale, 'agents', 'main', 'agent', 'openclaw-agent.sqlite'))
+  expect(nativeHeldFiles).toHaveBeenCalledOnce()
+})
+
+it.each(['cached', 'uncached'] as const)('holds a failed current OpenClaw descriptor read with an %s optional lookup', async cached => {
+  source('openclaw')
+  row.openclawStateDir = null
+  row.processIdentity!.pid = cached === 'cached' ? 84_102 : 84_103
+  if (cached === 'cached') await openclawStateDir(84_102, async () => [join(root, 'state', 'openclaw.sqlite')])
+  vi.mocked(nativeHeldFiles).mockRejectedValue(new IdentityReadUnavailable('the descriptor read is incomplete'))
+  await expect(store.save(row)).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
+  expect(exportedSource).toBeUndefined()
+})
+
+it('does not infer a POSIX default store from a missing current process identity', async () => {
+  source('openclaw')
+  row.openclawStateDir = null
+  row.processIdentity = null
+  await expect(store.save(row)).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
+  expect(exportedSource).toBeUndefined()
+})
+
+it('permits the documented default only after a verified empty current descriptor read', async () => {
+  source('openclaw'); row.openclawStateDir = null
+  vi.mocked(nativeHeldFiles).mockResolvedValue({ paths: [], verify: vi.fn() })
+  await store.save(row)
+  expect(exportedSource?.path).toBe(realpathSync(database))
+  expect(nativeHeldFiles).toHaveBeenCalledWith(row.processIdentity, expect.any(Function))
+})
+
+it('keeps optional OpenClaw readers on their existing failed-probe default rule', async () => {
+  source('openclaw')
+  vi.mocked(nativeOpenFiles).mockRejectedValue(new IdentityReadUnavailable('the descriptor read is incomplete'))
+  expect(await openclawSessionDb(row.sessionId, { pid: 84_104 })).toBe(database)
+})
+
+it.each(['cancel', 'rebind'] as const)('rejects an OpenClaw location arriving after %s', async change => {
+  source('openclaw'); row.openclawStateDir = null
+  let current = true
+  vi.mocked(nativeHeldFiles).mockImplementation(async () => {
+    if (change === 'cancel') current = false
+    else row.sessionId = 'agent:main:replacement'
+    return { paths: [join(root, 'state', 'openclaw.sqlite')], verify: vi.fn() }
+  })
+  await expect(createStopAgentService(deps)(row.agentId, { current: () => current,
+    checkpoint: async (s, _phase, databaseProof) => store.save(s, { databaseProof }),
+  })).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
+  expect(exportedSource).toBeUndefined()
+  expect(signalled).not.toHaveBeenCalled()
+})
+
+it.each(['ambiguous', 'deleted'] as const)('holds an %s OpenClaw held-state claim', async how => {
+  source('openclaw'); row.openclawStateDir = null
+  vi.mocked(nativeHeldFiles).mockResolvedValue({ paths: how === 'deleted' ? [join(root, 'state', 'openclaw.sqlite') + ' (deleted)']
+    : [join(root, 'state', 'openclaw.sqlite'), join(root, 'other', 'state', 'openclaw.sqlite')], verify: vi.fn() })
+  await expect(store.save(row)).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
+  expect(exportedSource).toBeUndefined()
+})
+
+it('retains the documented Windows default without claiming native descriptor evidence', async () => {
+  source('openclaw'); row.openclawStateDir = null; row.processIdentity = null
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+  Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
+  try {
+    const proof = await databaseCheckpointEvidence(row)
+    proof!.verify()
+    expect(proof?.source.path).toBe(realpathSync(database))
+    expect(nativeOpenFiles).not.toHaveBeenCalled()
+    expect(nativeHeldFiles).not.toHaveBeenCalled()
+  } finally { Object.defineProperty(process, 'platform', platform) }
 })

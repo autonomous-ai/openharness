@@ -4,7 +4,7 @@ import { env } from '../config/env.js'
 import { hermesDbPath } from '../engines/hermes/contract.js'
 import { observeNativeFile } from '../engines/kit/nativeFileObservation.js'
 import { NativeEvidenceBudget, nativeUnavailable } from '../engines/kit/nativeEvidence.js'
-import { NativePaths, nativeFileKey, verifyNativePathFacts } from '../engines/kit/nativePaths.js'
+import { NativePaths, nativeFileKey } from '../engines/kit/nativePaths.js'
 import type { ExportSource } from '../engines/worker/storageProtocol.js'
 import { openclawSessionLocation } from './openclawStore.js'
 import type { RegisteredSession } from './registry.js'
@@ -16,7 +16,8 @@ export interface DatabaseCheckpointProof {
   fresh(): DatabaseCheckpointProof
 }
 
-export async function databaseCheckpointEvidence(s: RegisteredSession): Promise<DatabaseCheckpointProof | undefined> {
+export async function databaseCheckpointEvidence(s: RegisteredSession, current: () => boolean = () => true): Promise<DatabaseCheckpointProof | undefined> {
+  if (!current()) return nativeUnavailable('the checkpoint request is no longer current')
   let declared: string, locationProof: (() => void) | undefined
   switch (s.engine) {
     case 'opencode': declared = join(env.OPENCODE_DATA_DIR, 'opencode.db'); break
@@ -24,7 +25,9 @@ export async function databaseCheckpointEvidence(s: RegisteredSession): Promise<
     case 'hermes': declared = hermesDbPath(s.hermesHome ?? env.HERMES_HOME); break
     case 'devin': declared = join(env.DEVIN_HOME, 'sessions.db'); break
     case 'openclaw': {
-      const location = await openclawSessionLocation(s.sessionId, { pid: s.processIdentity?.pid ?? 0, stateDir: s.openclawStateDir })
+      const location = await openclawSessionLocation(s.sessionId, { pid: s.processIdentity?.pid ?? 0,
+        stateDir: s.openclawStateDir, processIdentity: s.processIdentity })
+      if (!current()) return nativeUnavailable('the checkpoint request changed during native location discovery')
       if (!location) return nativeUnavailable('the OpenClaw conversation location is unavailable')
       declared = location.path; locationProof = location.verify; break
     }
@@ -32,13 +35,13 @@ export async function databaseCheckpointEvidence(s: RegisteredSession): Promise<
   }
   const paths = new NativePaths(new NativeEvidenceBudget())
   const location = paths.resolveSync(declared)!
-  const route = paths.snapshot()
+  const verifyRoute = paths.retain()
   const source = { path: location.path, key: nativeFileKey(location.info), database: declared }
   const fresh = (): DatabaseCheckpointProof => {
-    locationProof?.(); verifyNativePathFacts(route)
+    locationProof?.(); verifyRoute()
     const files = [source.path, source.path + '-wal', source.path + '-journal']
       .map((path, index) => observeNativeFile(path, { missingOkay: index > 0 }))
-    const verify = () => { locationProof?.(); verifyNativePathFacts(route); for (const file of files) file.verify() }
+    const verify = () => { locationProof?.(); verifyRoute(); for (const file of files) file.verify() }
     verify()
     return { source, verify, fresh }
   }
