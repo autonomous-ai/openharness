@@ -4,11 +4,12 @@
 
 use serde_json::Value;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// How often the selected tab is asked for while a tab app is in front: no app pushes a change of tab.
 pub const POLL_EVERY: Duration = Duration::from_millis(500);
-/// Each Apple Event's timeout. Only macOS's consent prompt holds a call longer.
+/// Each Apple Event's timeout. Only macOS's consent prompt holds a call longer, so a select that waited longer is for
+/// where the dial rested back then.
 pub const CALL_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// The apps whose tabs the dial follows, from Harness Device's own table: nothing of the daemon names a bundle.
@@ -191,7 +192,8 @@ pub struct TabFollow {
     off: Vec<TabApp>,
     /// The tty the watch was told last, for the app polled now.
     last: Option<(TabApp, String)>,
-    waiting: Option<(TabApp, String, bool)>,
+    /// The select to run next, and when it came.
+    waiting: Option<(TabApp, String, bool, Instant)>,
     failed: u64,
     /// When the first failure not yet in the log came.
     failed_since: Option<u64>,
@@ -247,16 +249,22 @@ impl TabFollow {
         out
     }
 
-    /// A select from the watch. It replaces any still waiting: only where the dial rests now matters.
-    pub fn select(&mut self, app: TabApp, tty: String, raise: bool) {
+    /// A select from the watch, which came `at`. It replaces any still waiting: only where the dial rests now matters.
+    pub fn select(&mut self, app: TabApp, tty: String, raise: bool, at: Instant) {
         if !self.off.contains(&app) {
-            self.waiting = Some((app, tty, raise));
+            self.waiting = Some((app, tty, raise, at));
         }
     }
 
-    pub fn next_select(&mut self) -> Option<Select> {
-        let (app, tty, raise) = self.waiting.take()?;
-        Some(Select { app, tty, frontmost: self.front == Some(app), raise })
+    /// The waiting select, taken `now`, unless it waited past CALL_TIMEOUT.
+    pub fn next_select(&mut self, now: Instant) -> Option<Select> {
+        let (app, tty, raise, at) = self.waiting.take()?;
+        (now.saturating_duration_since(at) <= CALL_TIMEOUT).then(|| Select {
+            app,
+            tty,
+            frontmost: self.front == Some(app),
+            raise,
+        })
     }
 
     /// A `select_tty` or `focus_tty` answer.
@@ -275,21 +283,13 @@ impl TabFollow {
         out
     }
 
-    /// How long the last call took. Only macOS's consent prompt holds one past CALL_TIMEOUT, and a select that came
-    /// meanwhile is for where the dial rested minutes ago.
-    pub fn waited(&mut self, call: Duration) {
-        if call > CALL_TIMEOUT {
-            self.waiting = None;
-        }
-    }
-
     /// Says why once: a call already running when the app was turned off may answer the same.
     fn turn_off(&mut self, app: TabApp, error: TabError, log: &mut Vec<String>) {
         if self.off.contains(&app) {
             return;
         }
         self.off.push(app);
-        if self.waiting.as_ref().is_some_and(|(waiting, _, _)| *waiting == app) {
+        if self.waiting.as_ref().is_some_and(|(waiting, ..)| *waiting == app) {
             self.waiting = None;
         }
         log.push(match error {
@@ -312,7 +312,6 @@ impl TabFollow {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Instant;
 
     const T: TabApp = TabApp::Terminal;
     const TTY: &str = "/dev/ttys023";

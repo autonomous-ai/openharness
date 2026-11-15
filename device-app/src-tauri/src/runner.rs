@@ -97,7 +97,7 @@ impl Tabs {
             if state.ended {
                 return None;
             }
-            if let Some(select) = state.follow.next_select() {
+            if let Some(select) = state.follow.next_select(Instant::now()) {
                 return Some(Call::Select(select));
             }
             let Some(app) = state.follow.polls() else {
@@ -113,11 +113,9 @@ impl Tabs {
         }
     }
 
-    /// A call's answer, with how long the call took.
-    fn answer(&self, call: Duration, answer: impl FnOnce(&mut TabFollow) -> Out) -> Out {
-        let follow = &mut self.state.lock().unwrap().follow;
-        follow.waited(call);
-        answer(follow)
+    /// A call's answer.
+    fn answer(&self, answer: impl FnOnce(&mut TabFollow) -> Out) -> Out {
+        answer(&mut self.state.lock().unwrap().follow)
     }
 }
 
@@ -295,7 +293,7 @@ impl Shared {
             },
             move |app, tty, raise| {
                 if *selecting.lock().unwrap() == number {
-                    selects.tell(|follow| follow.select(app, tty, raise));
+                    selects.tell(|follow| follow.select(app, tty, raise, Instant::now()));
                 }
             },
         );
@@ -357,14 +355,14 @@ impl Shared {
                 Call::Select(Select { app, tty, frontmost, raise }) => {
                     let done =
                         if raise { scripts.focus_tty(app, &tty) } else { scripts.select_tty(app, &tty, frontmost) };
-                    self.tabs.answer(start.elapsed(), |follow| follow.selected(app, done))
+                    self.tabs.answer(|follow| follow.selected(app, done))
                 }
                 Call::Poll(app) => {
                     let answer = scripts.selected_tty(app);
                     // `watch` first, and held through the write: the line goes to the watch it was asked for.
                     let watch = self.watch.lock().unwrap();
                     let now = started_at.elapsed().as_secs();
-                    let out = self.tabs.answer(start.elapsed(), |follow| follow.polled(app, answer, now));
+                    let out = self.tabs.answer(|follow| follow.polled(app, answer, now));
                     if let (Some(line), Some(watch)) = (&out.line, watch.as_ref()) {
                         watch.tab(line);
                     }
