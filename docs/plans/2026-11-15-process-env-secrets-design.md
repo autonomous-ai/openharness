@@ -72,11 +72,13 @@ PM, 2026-11-15, on the recommendation; Diego may still answer differently.
 11. **Other readers are a separate item:** `cli/native/darwin-process-images.c` (`KERN_PROCARGS2`) and the test tools
     are listed under Follow-ups.
 12. **Other environment reads in the daemon go too** (PM, 2026-11-15, from the final review): the core stops listing
-    the person's tmux server environment (`tmux show-environment -g`) and unsets names instead: the 16 agent session
-    names, the `HARNESSD_*` names the daemon sets, and every `HARNESSD_*` name in the daemon's OWN environment (names
-    only, no value read for this or logged). A test pins that, for a representative environment, these are the names
-    the old prefix filter removed. Left: a `HARNESSD_*` name only an older build set and this daemon lacks stays in
-    the tmux server until it restarts; `launchctl print gui/<uid>` keeps its exit status and drops
+    the person's tmux server environment (`tmux show-environment -g`) and unsets names instead: the 17 agent session
+    names, the `HARNESSD_*` names the daemon sets, a fixed list of Orca's `ORCA_*` names (`ORCA_VARIABLES`, taken from
+    the repo and from an Orca 1.4.249 terminal's names), and every `HARNESSD_*` and `ORCA_*` name in the daemon's OWN
+    environment (names only, no value read for this or logged). A test pins that, for a representative environment,
+    these are the names the old prefix filters removed (main's #4296 made `ORCA_*` a prefix). Left: a `HARNESSD_*` name
+    only an older build set, or an `ORCA_*` name a later Orca adds, stays in a tmux server started outside the daemon
+    until it restarts (PM, 2026-11-15, option A+B); `launchctl print gui/<uid>` keeps its exit status and drops
     its output, which holds launchd's environment block; `ps` runs with `COMMAND_MODE=unix2003`, so a person's
     `COMMAND_MODE=legacy` can never turn `ps -e` into an environment listing. The architecture test also flags
     `show-environment`.
@@ -224,6 +226,11 @@ Run https://github.com/autonomous-ai/autonomous-harness/actions/runs/43661610754
 ## Follow-ups
 
 One item, high priority, right after this pull request merges:
+
+- A new pane removes the `ORCA_*` and `HARNESSD_*` names from its OWN environment as it starts (a process may read
+  its own), so a name a later Orca adds never reaches an agent through a tmux server started from an Orca terminal.
+  Today the fixed list covers the names known on 2026-11-15; the daemon's own-environment part rarely adds any,
+  because `dropAgentSessionEnv()` clears `ORCA_*` from the master and the core before the tmux cleanup runs.
 
 - `cli/native/darwin-process-images.c` reads `KERN_PROCARGS2` (argv and environment) of other processes and hashes
   it. It is product code.
