@@ -132,13 +132,15 @@ describe.skipIf(!hasTmux)('real tmux test isolation', () => {
 })
 
 // The parameter was the whole environment to inherit, and four callers spread the worker's into it: a server they
-// started had the developer's variables again (audit of 2026-11-15). It is now what the caller sets on top.
-it('no caller hands it a copy of another environment', () => {
+// started had the developer's variables again (audit of 2026-11-15). It is now what the caller sets on top. And three
+// named the worker's PATH, over the one it pins: every folder of the developer's PATH, and every engine in them, was on
+// their panes' again (review of 2026-11-16). What a caller needs of the worker's goes on the allowlist, with its reason.
+it('no caller hands it a copy of another environment, or anything of the worker\'s', () => {
   const cli = join(import.meta.dirname, '..', '..')
   const spreads = (folder: string) => readdirSync(join(cli, folder), { recursive: true, withFileTypes: true })
     .filter((entry) => entry.isFile() && entry.name.endsWith('.ts'))
     .map((entry) => join(entry.parentPath, entry.name))
-    .filter((file) => /isolatedTmux\(\s*\{[^}]*\.\.\./.test(readFileSync(file, 'utf8')))
+    .filter((file) => /isolatedTmux\(\s*(?:\{[^}]*(?:\.\.\.|process\.env)|process\.env)/.test(readFileSync(file, 'utf8')))
     .map((file) => relative(cli, file))
   expect([...spreads('src'), ...spreads('e2e')]).toEqual([])
 })
