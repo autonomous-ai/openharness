@@ -33,15 +33,12 @@ afterEach(() => {
 })
 
 describe('resolveOpenRouterKey', () => {
-  it('prefers the daemon env, then the agent process, then the credentials file', async () => {
+  it('prefers the daemon env, then the credentials file', async () => {
     process.env.ORI_CREDENTIALS_PATH = credentialsFile(JSON.stringify({ key: KEY }))
     process.env.OPENROUTER_API_KEY = 'sk-or-v1-daemon'
-    expect(await resolveOpenRouterKey({ kind: 'ori', apiKey: 'sk-or-v1-process' })).toBe('sk-or-v1-daemon')
+    expect(await resolveOpenRouterKey()).toBe('sk-or-v1-daemon')
 
     delete process.env.OPENROUTER_API_KEY
-    expect(await resolveOpenRouterKey({ kind: 'ori', apiKey: 'sk-or-v1-process' })).toBe('sk-or-v1-process')
-
-    expect(await resolveOpenRouterKey({ kind: 'ori' })).toBe(KEY)
     expect(await resolveOpenRouterKey()).toBe(KEY)
   })
 
