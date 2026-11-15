@@ -156,6 +156,25 @@ it('asks again of a process that held nothing 5 s later, and never again of one 
   expect(await linux(id(4242), STORE)).toBe('/h/.hermes')
 })
 
+it('waits by a clock that a step of the wall clock does not move', async () => {
+  const monotonic = vi.spyOn(performance, 'now').mockReturnValue(1_000_000)
+  const wall = vi.spyOn(Date, 'now').mockReturnValue(0)
+  try {
+    const ask = () => held.heldHome(id(4242), STORE, undefined, { platform: 'linux', proc })
+    hold(4242, 0, '/dev/pts/3')
+    expect(await ask()).toBeUndefined()
+    hold(4242, 3, '/h/.hermes/state.db')
+    // The wall clock is set a day ahead: no time has passed, and the wait is not over.
+    wall.mockReturnValue(86_400_000)
+    expect(await ask()).toBeUndefined()
+    monotonic.mockReturnValue(1_005_000)
+    expect(await ask()).toBe('/h/.hermes')
+  } finally {
+    monotonic.mockRestore()
+    wall.mockRestore()
+  }
+})
+
 it('gives a sandbox\'s folder at the daemon\'s path, and nothing for one with no path here or a namespace it cannot read', async () => {
   mocks.state.view = () => ({ state: 'sandbox', cwd: '/work', toHost: (path) => path === '/tmp/home/.hermes' ? '/data/agents/a1/.hermes' : null })
   hold(4242, 3, '/tmp/home/.hermes/state.db')
