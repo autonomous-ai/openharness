@@ -62,6 +62,24 @@ core rollback machinery or promise of universal old-binary enforcement is introd
 their current interpretation. Tests cover both request keys through the actual older implementation, interrupted
 publication/dispatch, and helper-owned results after parent replacement.
 
+## Probe lifetime
+
+The existing master kills only its direct service PID. An in-process or worker-thread timeout disappears with that
+PID, so moving a probe alone can leave its child behind after SIGKILL. Setup therefore starts at most eight lazy,
+disposable Node probe helpers. The existing Node IPC-disconnect signal binds each helper to setup; it owns the
+five-second probe deadline and kills its captured child's process group when setup disconnects. A frozen setup
+cannot freeze that timer. The helpers contain no public command API: only the component's prescribed capture,
+version/help/runtime and download-marker commands reach them. Executable snapshots are checked before and after
+probing. Output retains each operation's existing cap (64 KiB for engine probes; 1 MiB for the marker's ps).
+
+Use the existing POSIX process-group primitive for the actual probe and the documented Windows hidden runner
+pattern for the helper, so Windows does not terminate the cleanup helper before it can handle its parent's death.
+The helper starts real work hidden. Helpers stop after one bounded operation; they hold no durable data and are
+separate from authorized installation helpers, which deliberately survive setup through their journal. No core
+cleanup callback, timer, state table or supervisor protocol is added. Real isolated fixtures must kill and freeze
+setup after a probe names its PID and prove that exact child disappears; cold helper overhead and cache hits need
+matched measurements before any performance claim.
+
 ## Design
 
 - **Growth:** Keep the POSIX 128-record journal and 256 KiB record cap. Do not delete or rewrite existing immutable
