@@ -312,6 +312,7 @@ impl TabFollow {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Instant;
 
     const T: TabApp = TabApp::Terminal;
     const TTY: &str = "/dev/ttys023";
@@ -545,64 +546,71 @@ mod tests {
 
     #[test]
     fn the_newest_waiting_select_replaces_the_one_before() {
+        let now = Instant::now();
         let mut follow = polling();
-        assert_eq!(follow.next_select(), None);
-        follow.select(T, TTY.into(), false);
-        follow.select(TabApp::Iterm, OTHER.into(), false);
-        assert_eq!(follow.next_select(), select(TabApp::Iterm, OTHER, false, false));
-        assert_eq!(follow.next_select(), None);
+        assert_eq!(follow.next_select(now), None);
+        follow.select(T, TTY.into(), false, now);
+        follow.select(TabApp::Iterm, OTHER.into(), false, now);
+        assert_eq!(follow.next_select(now), select(TabApp::Iterm, OTHER, false, false));
+        assert_eq!(follow.next_select(now), None);
         // Whether its app is in front is read when it is taken.
-        follow.select(T, TTY.into(), false);
-        assert_eq!(follow.next_select(), select(T, TTY, true, false));
-        follow.select(T, TTY.into(), false);
+        follow.select(T, TTY.into(), false, now);
+        assert_eq!(follow.next_select(now), select(T, TTY, true, false));
+        follow.select(T, TTY.into(), false, now);
         follow.front(VS_CODE);
-        assert_eq!(follow.next_select(), select(T, TTY, false, false));
+        assert_eq!(follow.next_select(now), select(T, TTY, false, false));
     }
 
     #[test]
     fn a_waiting_select_keeps_its_raise_and_a_newer_one_brings_its_own() {
+        let now = Instant::now();
         let mut follow = polling();
-        follow.select(T, TTY.into(), true);
-        assert_eq!(follow.next_select(), select(T, TTY, true, true));
-        follow.select(T, TTY.into(), true);
-        follow.select(T, OTHER.into(), false);
-        assert_eq!(follow.next_select(), select(T, OTHER, true, false));
-        assert_eq!(follow.next_select(), None);
-        follow.select(T, OTHER.into(), false);
-        follow.select(T, TTY.into(), true);
-        assert_eq!(follow.next_select(), select(T, TTY, true, true));
+        follow.select(T, TTY.into(), true, now);
+        assert_eq!(follow.next_select(now), select(T, TTY, true, true));
+        follow.select(T, TTY.into(), true, now);
+        follow.select(T, OTHER.into(), false, now);
+        assert_eq!(follow.next_select(now), select(T, OTHER, true, false));
+        assert_eq!(follow.next_select(now), None);
+        follow.select(T, OTHER.into(), false, now);
+        follow.select(T, TTY.into(), true, now);
+        assert_eq!(follow.next_select(now), select(T, TTY, true, true));
     }
 
     #[test]
-    fn a_select_that_waited_behind_a_call_over_two_seconds_is_dropped() {
+    fn a_select_runs_unless_it_waited_past_the_call_timeout() {
         assert_eq!(CALL_TIMEOUT, Duration::from_secs(2));
         assert_eq!(POLL_EVERY, Duration::from_millis(500));
         let mut follow = polling();
-        follow.select(T, TTY.into(), false);
-        follow.waited(Duration::from_millis(2_000));
-        assert_eq!(follow.next_select(), select(T, TTY, true, false));
-
-        follow.select(T, TTY.into(), true);
-        follow.waited(Duration::from_millis(2_001));
-        assert_eq!(follow.next_select(), None);
+        let came = Instant::now();
+        // It came 50 ms before a call that timed out after 2 s ended: the call was slow, the select did not wait.
+        follow.select(T, TTY.into(), false, came);
+        assert_eq!(follow.next_select(came + Duration::from_millis(50)), select(T, TTY, true, false));
+        follow.select(T, TTY.into(), false, came);
+        assert_eq!(follow.next_select(came + CALL_TIMEOUT), select(T, TTY, true, false));
+        // One that waited behind macOS's consent prompt is for where the dial rested back then.
+        follow.select(T, TTY.into(), true, came);
+        assert_eq!(follow.next_select(came + CALL_TIMEOUT + Duration::from_millis(1)), None);
+        let later = came + Duration::from_secs(60);
+        assert_eq!(follow.next_select(later), None);
         // A select that comes after it runs, and polling goes on: only the consent prompt held that call.
-        follow.select(T, OTHER.into(), false);
-        assert_eq!(follow.next_select(), select(T, OTHER, true, false));
+        follow.select(T, OTHER.into(), false, later);
+        assert_eq!(follow.next_select(later), select(T, OTHER, true, false));
         assert_eq!(follow.polls(), Some(T));
         assert_eq!(follow.polled(T, tty(TTY), 0).line, tab_line(T, TTY));
     }
 
     #[test]
     fn denied_turns_that_app_off_and_says_so_once() {
+        let now = Instant::now();
         let mut follow = polling();
-        follow.select(T, TTY.into(), false);
+        follow.select(T, TTY.into(), false, now);
         let out = follow.polled(T, Err(TabError::Denied), 0);
         assert_eq!((out.line, out.log), (None, vec!["tabs: Terminal not allowed".to_string()]));
         assert_eq!(follow.polls(), None);
         // The select that waited is dropped, and none waits for it again.
-        assert_eq!(follow.next_select(), None);
-        follow.select(T, TTY.into(), true);
-        assert_eq!(follow.next_select(), None);
+        assert_eq!(follow.next_select(now), None);
+        follow.select(T, TTY.into(), true, now);
+        assert_eq!(follow.next_select(now), None);
         // Nothing turns it back on but a new start of Harness Device.
         follow.front(VS_CODE);
         follow.front(T.bundle());
@@ -618,20 +626,21 @@ mod tests {
         let mut follow = polling();
         assert_eq!(follow.selected(T, Err(TabError::Denied)).log, ["tabs: Terminal not allowed"]);
         assert_eq!(follow.polls(), None);
-        follow.select(T, TTY.into(), false);
-        assert_eq!(follow.next_select(), None);
+        follow.select(T, TTY.into(), false, now);
+        assert_eq!(follow.next_select(now), None);
     }
 
     #[test]
     fn the_other_apps_go_on() {
+        let now = Instant::now();
         let mut follow = polling();
         follow.polled(T, Err(TabError::Denied), 0);
         for app in [TabApp::Iterm, TabApp::Ghostty] {
             follow.front(app.bundle());
             assert_eq!(follow.polls(), Some(app));
             assert_eq!(follow.polled(app, tty(TTY), 0).line, tab_line(app, TTY));
-            follow.select(app, OTHER.into(), false);
-            assert_eq!(follow.next_select(), select(app, OTHER, true, false));
+            follow.select(app, OTHER.into(), false, now);
+            assert_eq!(follow.next_select(now), select(app, OTHER, true, false));
         }
     }
 
@@ -658,15 +667,16 @@ mod tests {
 
     #[test]
     fn a_ghostty_with_no_scripting_is_turned_off_and_says_so_once() {
+        let now = Instant::now();
         let mut follow = polling();
         follow.front(TabApp::Ghostty.bundle());
-        follow.select(TabApp::Ghostty, TTY.into(), true);
+        follow.select(TabApp::Ghostty, TTY.into(), true, now);
         let out = follow.polled(TabApp::Ghostty, Err(TabError::NoScripting), 0);
         assert_eq!((out.line, out.log), (None, vec!["tabs: Ghostty has no scripting".to_string()]));
         assert_eq!(follow.polls(), None);
-        assert_eq!(follow.next_select(), None);
-        follow.select(TabApp::Ghostty, TTY.into(), true);
-        assert_eq!(follow.next_select(), None);
+        assert_eq!(follow.next_select(now), None);
+        follow.select(TabApp::Ghostty, TTY.into(), true, now);
+        assert_eq!(follow.next_select(now), None);
         assert!(follow.selected(TabApp::Ghostty, Err(TabError::NoScripting)).log.is_empty());
         // A tap's select finds it out the same way.
         let mut follow = polling();
@@ -716,6 +726,7 @@ mod tests {
 
     #[test]
     fn no_log_line_holds_a_tty() {
+        let now = Instant::now();
         let mut follow = polling();
         let mut said = Vec::new();
         for (now, answer) in [
@@ -730,8 +741,8 @@ mod tests {
         }
         follow.front(TabApp::Ghostty.bundle());
         for done in [Ok(Selected::Done), Ok(Selected::NoTab), Err(TabError::Failed), Err(TabError::NoTty)] {
-            follow.select(TabApp::Ghostty, TTY.into(), false);
-            follow.next_select();
+            follow.select(TabApp::Ghostty, TTY.into(), false, now);
+            follow.next_select(now);
             said.extend(follow.selected(TabApp::Ghostty, done).log);
         }
         assert_eq!(said.len(), 6, "{said:?}");
