@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { createEngineStorage } from './storage.js'
 import { STORAGE_BACKGROUND, STORAGE_BACKGROUND_WAIT_MS, STORAGE_CAPABILITIES, STORAGE_LIFETIME, STORAGE_EXPORT, STORAGE_EXPORT_WAIT_MS } from '../../engines/worker/storageProtocol.js'
 import type { RegisteredSession } from '../../lib/registry.js'
+import { EngineReadError } from '../../engines/worker/protocol.js'
 
 const source = { path: '/profile/state.db', key: '2:3', database: '/profile/state.db' }
 const lifetime = { pid: 42, nonce: 'a'.repeat(36) }
@@ -16,6 +17,82 @@ function setup(answer: unknown = 3) {
   return { storage, call, inline }
 }
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks() })
+
+it.each(['ENGINE_UNAVAILABLE', 'ENGINE_STALE_REPLY'] as const)('waits once for a replacement before assigning a checkpoint writer after %s', async code => {
+  const receipt = { bytes: 17, sha256: 'b'.repeat(64) }, stage = { path: '/stage', key: '1:2' }, owner = ownership()
+  let reconnect!: () => void
+  const linked = new Promise<void>(resolve => { reconnect = resolve })
+  const ready = vi.fn(() => linked)
+  let lifetimes = 0
+  const call = vi.fn(async (_service: string, method: string) => {
+    if (method === STORAGE_CAPABILITIES) return { version: 1, engine: 'hermes', storage: 1 }
+    if (method === STORAGE_LIFETIME && ++lifetimes === 1) throw new EngineReadError(code)
+    return { version: 1, answer: method === STORAGE_LIFETIME ? lifetime : receipt }
+  })
+  const storage = createEngineStorage({ isolated: true, call, ready, serviceProcess: async () => true })
+  storage.connected('engine-others')
+  const pending = storage.exportDatabase(session as RegisteredSession, stage, owner, source)
+  void pending.catch(() => {})
+  await vi.waitFor(() => expect(ready).toHaveBeenCalledOnce())
+  expect(owner.writer).not.toHaveBeenCalled()
+  expect(call.mock.calls.some(([, method]) => method === STORAGE_EXPORT)).toBe(false)
+  storage.disconnected('engine-others'); storage.connected('engine-others'); reconnect()
+  expect(await pending).toEqual(receipt)
+  expect(ready).toHaveBeenCalledWith('hermes', expect.any(Number))
+  expect(owner.writer).toHaveBeenCalledExactlyOnceWith(lifetime.pid)
+  expect(call.mock.calls.filter(([, method]) => method === STORAGE_EXPORT)).toHaveLength(1)
+  expect(owner.settled).toHaveBeenCalledOnce()
+})
+
+it('keeps reconnect waits inside the original deadline and admission until actual settlement', async () => {
+  vi.useFakeTimers()
+  let reconnect!: () => void
+  const linked = new Promise<void>(resolve => { reconnect = resolve }), ready = vi.fn(() => linked)
+  const call = vi.fn(async () => ({ error: 'SERVICE_UNAVAILABLE' }))
+  const storage = createEngineStorage({ isolated: true, call, ready, serviceProcess: async () => true })
+  const owners = Array.from({ length: 4 }, ownership)
+  const pending = owners.map(owner => storage.exportDatabase(session as RegisteredSession, { path: '/stage', key: '1:2' }, owner, source).catch(error => error))
+  await vi.advanceTimersByTimeAsync(0)
+  expect(ready).toHaveBeenCalledTimes(4)
+  await vi.advanceTimersByTimeAsync(STORAGE_EXPORT_WAIT_MS)
+  expect((await Promise.all(pending)).every(error => error.message === 'checkpoint unavailable')).toBe(true)
+  await expect(storage.exportDatabase(session as RegisteredSession, { path: '/stage', key: '1:2' }, ownership(), source)).rejects.toThrow('busy')
+  const before = call.mock.calls.length
+  reconnect(); await vi.advanceTimersByTimeAsync(0)
+  expect(call).toHaveBeenCalledTimes(before)
+  expect(owners.every(owner => owner.writer.mock.calls.length === 0 && owner.settled.mock.calls.length === 0)).toBe(true)
+})
+
+it.each(['malformed', 'export', 'repeat'] as const)('never replays %s failure after the one observational recovery', async phase => {
+  const ready = vi.fn(async () => {}), owner = ownership()
+  const call = vi.fn(async (_service: string, method: string) => {
+    if (method === STORAGE_CAPABILITIES) return { version: 1, engine: 'hermes', storage: 1 }
+    if (phase === 'malformed') return { version: 1, answer: {} }
+    if (phase === 'repeat' || method === STORAGE_EXPORT) throw new EngineReadError('ENGINE_UNAVAILABLE')
+    return { version: 1, answer: lifetime }
+  })
+  const storage = createEngineStorage({ isolated: true, call, ready, serviceProcess: async () => true })
+  storage.connected('engine-others')
+  await expect(storage.exportDatabase(session as RegisteredSession, { path: '/stage', key: '1:2' }, owner, source)).rejects.toThrow()
+  expect(ready).toHaveBeenCalledTimes(phase === 'repeat' ? 1 : 0)
+  expect(call.mock.calls.filter(([, method]) => method === STORAGE_LIFETIME)).toHaveLength(phase === 'repeat' ? 2 : 1)
+  expect(call.mock.calls.filter(([, method]) => method === STORAGE_EXPORT)).toHaveLength(phase === 'export' ? 1 : 0)
+  expect(owner.settled).not.toHaveBeenCalled()
+})
+
+it('does not wait for a replacement when the failed observation consumed the deadline', async () => {
+  const now = vi.spyOn(performance, 'now').mockReturnValue(0), ready = vi.fn(), owner = ownership()
+  const call = vi.fn(async (_service: string, method: string) => {
+    if (method === STORAGE_CAPABILITIES) return { version: 1, engine: 'hermes', storage: 1 }
+    now.mockReturnValue(STORAGE_EXPORT_WAIT_MS)
+    throw new EngineReadError('ENGINE_UNAVAILABLE')
+  })
+  const storage = createEngineStorage({ isolated: true, call, ready })
+  storage.connected('engine-others')
+  await expect(storage.exportDatabase(session as RegisteredSession, { path: '/stage', key: '1:2' }, owner, source)).rejects.toThrow('checkpoint unavailable')
+  expect(ready).not.toHaveBeenCalled()
+  expect(owner.writer).not.toHaveBeenCalled()
+})
 
 it('sends only captured Hermes identity and returns the worker count', async () => {
   const t = setup()

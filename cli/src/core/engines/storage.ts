@@ -11,6 +11,7 @@ import { boundedControl } from './controlTransport.js'
 export interface EngineStorageDeps extends SnapshotTransportDeps {
   isolated: boolean
   serviceProcess?(service: string, pid: number, waitMs: number): Promise<boolean>
+  ready?(engine: string, waitMs: number): Promise<void>
   inline?(session: StorageSession): Promise<number | null>
   inlineExport?(engine: StorageEngine, session: StorageSession, stage: ExportStage, source: ExportSource, current: () => boolean): Promise<ExportReceipt>
 }
@@ -40,7 +41,17 @@ export function createEngineStorage(deps: EngineStorageDeps) {
           if (!current()) throw new Error('checkpoint unavailable')
           let lifetime: StorageLifetime | undefined
           if (deps.isolated) {
-            lifetime = await exports.read(session.engine, STORAGE_LIFETIME, {}, storageLifetime) as StorageLifetime
+            try { lifetime = await exports.read(session.engine, STORAGE_LIFETIME, {}, storageLifetime) as StorageLifetime }
+            catch (error) {
+              const code = (error as { code?: unknown } | null)?.code
+              if (!deps.ready || (code !== 'ENGINE_UNAVAILABLE' && code !== 'ENGINE_STALE_REPLY')) throw error
+              if (!current()) throw new Error('checkpoint unavailable')
+              // A replacement may be starting after the engine exits. No writer has been assigned yet:
+              // only this lifetime observation may repeat, within the stage's original deadline.
+              await deps.ready(session.engine, Math.ceil(deadline - performance.now()))
+              if (!current()) throw new Error('checkpoint unavailable')
+              lifetime = await exports.read(session.engine, STORAGE_LIFETIME, {}, storageLifetime) as StorageLifetime
+            }
             if (!current() || !await deps.serviceProcess?.('engine-others', lifetime.pid, Math.ceil(deadline - performance.now()))) throw new Error('checkpoint writer unavailable')
           }
           if (!current()) throw new Error('checkpoint unavailable')

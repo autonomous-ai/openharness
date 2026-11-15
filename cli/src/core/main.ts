@@ -768,6 +768,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   let serviceLinksRef: ServiceLinks | null = null
   const engineStorage = createEngineStorage({ isolated: othersStorage, inline: inline?.hermesBackground, inlineExport: inline?.exportDatabase,
     serviceProcess: coreLink.serviceProcess,
+    ready: (engine, ms) => engineLinks.ready(engine, ms),
     call: (service, type, payload, waitMs) => serviceLinksRef?.call(service, type, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }),
   })
   const sessionCheckpoints = new SessionCheckpointStore(undefined, { exportDatabase: engineStorage.exportDatabase })

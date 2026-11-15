@@ -66,6 +66,29 @@ be reviewed before implementation. No engine store is newly deleted; OpenClaw's 
 - Platforms: TypeScript behavior affects macOS, Linux and Windows. Local native acceptance is macOS on pinned Node 24.22.2;
   no new process-spawn implementation. Native Windows/Linux acceptance is not claimed by local tests.
 
+## Worker restart before a new export
+
+Native integration at `94f3d0f6` passed all eleven storage fault cases but failed the reader-loss Close case:
+the pre-stop checkpoint was durable, the original engine exited, then the post-exit export began while its reader
+process was restarting. The first lifetime observation received `SERVICE_UNAVAILABLE` before any writer assignment.
+The new storage route must preserve the existing successful Close contract across this gap.
+
+Reuse the existing engine-link readiness wait for all worker engines. Only a failed lifetime observation with
+`ENGINE_UNAVAILABLE` or `ENGINE_STALE_REPLY` may wait once for the replacement and repeat that observation. It stays
+inside the original stage deadline and four-operation admission. No assigned writer, export, failed write or malformed
+answer is retried. The replacement still needs fresh capability, lifetime and independent master-process evidence;
+the original source proof, cancellation and publication guards stay in force. Timed-out readiness waiters must remove
+themselves from the existing link list, so an absent worker cannot accumulate retained callbacks. There is no new queue,
+cache, polling or fallback. Growth, audience, stored/public compatibility, rollback and platforms are unchanged.
+
+Caller reds will cover the reconnect gap, exactly one observational retry, original deadline and admission retention,
+no replay after writer assignment, malformed evidence, and all engine-link mappings. The unchanged native reader-loss
+fixture is the integration acceptance; the failed log remains `/tmp/core-storage-main8fc-native.log`.
+
+The four new caller cases failed before implementation (12 existing passed, 2.70 s). After correction, 47 focused
+storage/link/Close cases passed, then all 20 storage/link cases reached 100% coverage with the original-deadline refusal
+case included (0.66 s). TypeScript passed. These are focused results, not native or full-gate acceptance.
+
 ## Native switch during Close: approved correction design
 
 Bundled acceptance at `ec9b5b6903` demonstrated a separate authority gap: Hermes changed its native terminal record
