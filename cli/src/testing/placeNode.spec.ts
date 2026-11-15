@@ -3,7 +3,7 @@ import { linkSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, st
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { placeNode, RosettaNodeError } from './placeNode.js'
+import { placeNode, refuseRosettaNode, RosettaNodeError } from './placeNode.js'
 
 describe('placeNode', () => {
   let dir: string
@@ -45,6 +45,12 @@ describe('placeNode', () => {
     expect(String(refusal)).toBe('RosettaNodeError: This Node is an x86_64 build, so Rosetta runs it and translates it again at each new path, about 15 s for every copy or link a test starts. Run the tests with an arm64 Node.')
     expect(refusal).toBeInstanceOf(RosettaNodeError)
     expect(readdirSync(dir)).toEqual([])
+  })
+
+  // nodeReferences.e2e.ts copies its Node itself, laid out as an install is, and asks before it does.
+  it('refuses the same Node to a test that copies its Node itself', () => {
+    expect(() => refuseRosettaNode({ platform: 'darwin', arch: 'x64', cpu: 'Apple M1 Pro' })).toThrow(RosettaNodeError)
+    expect(() => refuseRosettaNode({ platform: 'darwin', arch: 'arm64', cpu: 'Apple M1 Pro' })).not.toThrow()
   })
 
   it.each([
