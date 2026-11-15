@@ -60,9 +60,10 @@ PM, 2026-11-15, on the recommendation; Diego may still answer differently.
    never logs a header's value.
 8. **Homes from the files a process holds open** (Hermes `state.db`, Codex `sessions/**/rollout-*.jsonl`) when no hook
    reports them. The daemon reads only the PATH of each open descriptor, never a file's content through it, and only
-   for the engine processes the discovery pass selected, plus, for a launcher, its one direct child that is the same
-   engine's binary (an npm-installed Codex), never further down and never any other process. A spike first confirms
-   that each engine keeps that file open.
+   for the engine processes the discovery pass selected, plus, for a launcher, its direct children that are the same
+   engine's binary (at most 4; an npm-installed Codex has two), never further down and never any other process. When
+   those processes point at two different homes, the home is unknown: none is picked. A spike first confirms that each
+   engine keeps that file open.
    If the spike fails for an engine, that engine's case is accepted as lost and listed under "What changes for users".
 9. **Unseen, as read:** an unknown Hermes home holds no binding. The default home and its profiles are scanned. Only a
    folder with no path in the daemon's view holds.
@@ -197,6 +198,17 @@ Each behavior gets a failing test first, at its layer:
 - Hermes: no environment read, a sandbox with no report is 'unseen';
 - DSH from the launch record only;
 - the architecture test fails on a planted `/proc/<pid>/environ` and a planted `ps eww`.
+
+## Spike findings
+
+Run https://github.com/autonomous-ai/autonomous-harness/actions/runs/43661610754 (2026-11-15):
+
+- Codex 0.169.0 from npm, on Linux and macOS: the selected launcher has two direct children named `codex`. One of
+  them holds `<CODEX_HOME>/sessions/YYYY/MM/DD/rollout-*.jsonl` open from the first prompt for the whole session.
+- After `/quit`, the child that holds the rollout stays alive as an orphan, with the file still open, until the runner
+  kills it. That is Codex's own behavior. The probe reads only processes the discovery pass selected (and their direct
+  children), so an orphan outside a pane is never read.
+- Hermes: not measured on the first run (the workflow's installer step failed); a second run measures it.
 
 ## Follow-ups
 

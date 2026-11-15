@@ -22,35 +22,51 @@ TypeScript compiler API in the architecture test, `lsof -Fn` (macOS) and `/proc/
 **Spec:** [docs/plans/2026-11-15-process-env-secrets-design.md](2026-11-15-process-env-secrets-design.md). Read it with
 this plan, the root `AGENTS.md`, `cli/AGENTS.md` ("Protect the core", rules 6 and 7), `docs/feature-design-rules.md` and
 `docs/validation-and-release.md`. The PM's eleven decisions (2026-11-15) are fixed, and so are the three answers of
-the same day, which the spec carries (decision 8, "Hermes home") and the tasks follow: a launcher's one engine child
-may be listed and nothing below or beside it (Tasks 9, 11, 14); a Hermes home from a descriptor is marked only in a
-sandbox (Task 11); the spike's workflow has fixed limits and one push, the main session's (Task 0). Decision 8 has two
-outcomes for each engine, and Tasks 9, 11 and 13 are written for both: Task 0 says which one each takes, and nothing
-is planned again. No question is open.
+the same day, which the spec carries (decision 8, "Hermes home") and the tasks follow: a launcher's direct children
+that are the same engine's binary may be listed, four at most, and nothing below or beside them (Tasks 9, 11, 14: "one
+child" until the spike's first run found a Codex launcher with two; PM, 2026-11-15); a Hermes home from a descriptor
+is marked only in a sandbox (Task 11); the spike's workflow has fixed limits, and its pushes are the main session's
+(Task 0). Decision 8 has two outcomes for each engine, and Tasks 9, 11 and 13 are written for both. Codex's is known:
+held, so its tasks take Branch A. Hermes's waits on the spike's second run, and nothing is planned again when it
+comes. One question is open, for the main session: the fake Codex's child (Task 13, Step 1).
 
 ## Spike result
 
 Task 0 writes here, and no later task starts on a guess. One row for each engine and system, then one verdict for
 each engine.
 
-| Engine, release | System | Process that holds the file (selected, its one engine child, another) | Held from | Held until | Run |
+First run, 2026-11-15: [43661610754](https://github.com/autonomous-ai/autonomous-harness/actions/runs/43661610754). Codex was measured on both systems. The workflow's "Install Hermes" step
+failed in both jobs, so no Hermes ran: its rows wait for a second run.
+
+| Engine, release | System | Process that holds the file (selected, one of its engine children, another) | Held from | Held until | Run |
 | --- | --- | --- | --- | --- | --- |
-| Hermes | macOS | | | | |
-| Hermes | Linux | | | | |
-| Hermes, in `unshare` | Linux | | | | |
-| Codex | macOS | | | | |
-| Codex | Linux | | | | |
+| Hermes | macOS | pending the second run | | | |
+| Hermes | Linux | pending the second run | | | |
+| Hermes, in `unshare` | Linux | pending the second run | | | |
+| Codex 0.169.0 (npm) | macOS | An engine child. The selected launcher (`codex`, pid 1437) has two direct children named `codex` (1505, 1546): 1505 holds the rollout; 1546 and the launcher hold none | The first prompt: no file with the prompt drawn (10 s), held once a prompt was typed (18 s) | The session's end: still held 60 s later (78 s), and by that child after `/quit` (81 s) | [43661610754](https://github.com/autonomous-ai/autonomous-harness/actions/runs/43661610754) |
+| Codex 0.169.0 (npm) | Linux | An engine child. The selected launcher (`codex`, pid 2301) has two direct children named `codex` (2368, 2459): 2368 holds the rollout; 2459 and the launcher hold none | The first prompt: no file with the prompt drawn (7 s), held once a prompt was typed (39 s) | The session's end: still held 60 s later (99 s), and by that child after `/quit` (102 s) | [43661610754](https://github.com/autonomous-ai/autonomous-harness/actions/runs/43661610754) |
 
-- **Hermes: held / lost** (Task 11 and Task 13 take Branch A / Branch B).
-- **Codex: held / lost** (Task 9 and Task 13 take Branch A / Branch B).
-- A sandboxed process's descriptor path is in **its own view / the daemon's view**.
+- **Hermes: pending** the second run. Task 11 and Task 13's Hermes cases wait on it (Branch A or Branch B).
+- **Codex: held** on both systems. Task 9 and Task 13 take Branch A. The verdict holds under the reader of decision
+  8 as the PM settled it after this run (2026-11-15): the selected process and its direct children that are the same
+  engine's binary, four at most. Under "exactly one child", the rule this plan had before the run, neither child was
+  named.
+- A sandboxed process's descriptor path is in **its own view / the daemon's view**: pending (Hermes in `unshare`, the
+  second run).
+- **After `/quit` the child that holds the rollout outlives its launcher.** The pane's tree is the shell alone again,
+  and that child, now outside it, still has the file open until the runner ends the job. It is Codex's own behavior,
+  on both systems. It is never read: the reader lists the process a pane's discovery selected and that process's
+  direct children, and a child whose launcher is gone is neither (Task 14's `engineChildren` case pins it).
+- How to read the run's log: its script named an "engine child" only when a launcher had exactly one, so each line
+  says `engine_child=none` and `holders=other:codex:<pid>`. The tree printed above each line shows that holder's
+  parent is the selected process.
 
-The verdict's rule. **Held:** on at least one of the two systems the selected process, or its one engine child
-(decision 8), holds the file from no later than the end of its first prompt until it exits. Where that is true on one
-system only, the engine is still held (the reader answers nothing where no file is held), and the spec's line under
-"What changes for users" names the system where the case is lost. **Lost:** on neither system, or the file is held
-only by a process that is neither (Hermes's shared gateway): the spec's line names the engine, and its tasks take
-Branch B.
+The verdict's rule. **Held:** on at least one of the two systems the selected process, or one of the engine children
+the reader lists (decision 8: its direct children that are the same engine's binary, four at most), holds the file
+from no later than the end of its first prompt until the selected process exits. Where that is true on one system
+only, the engine is still held (the reader answers nothing where no file is held), and the spec's line under "What
+changes for users" names the system where the case is lost. **Lost:** on neither system, or the file is held only by
+a process that is neither (Hermes's shared gateway): the spec's line names the engine, and its tasks take Branch B.
 
 ## Global Constraints
 
@@ -69,10 +85,13 @@ Branch B.
   `<home>/sessions/**/rollout-*.jsonl` (Codex). A path that matches neither is dropped where it is read: never
   returned, kept or logged. A sandbox's path maps through `lib/processMounts.ts`.
 - Decision 8, whose descriptors. The engine process the discovery pass selected, and, when that process is a
-  launcher, exactly one more: its one direct child that is the same engine's binary (npm's Node launcher of Codex
-  and the native `codex` under it). Never a level further down, never a second child, never any other process: not a
-  shell, a tool, an MCP server, a parent or a sibling. A launcher with two children that are the engine's has none
-  listed. One listing reads at most those two processes (PM, 2026-11-15).
+  launcher, its direct children that are the same engine's binary: all of them up to four, and with more the four
+  with the lowest pids (a fifth is never listed). An npm-installed Codex 0.169.0 has two, and one of them holds the
+  rollout ("Spike result"). Never a level further down, never any other process: not a shell, a tool, an MCP server,
+  a parent, a sibling, or an engine process a `/quit` left behind outside its pane. One listing reads at most those
+  five processes (PM, 2026-11-15).
+- Decision 8, two homes. When the files those processes hold name two different homes, the home is unknown
+  (`undefined`): none is picked, not the selected process's, not the first one read (PM, 2026-11-15).
 - Decision 8, the mark. A Hermes home found from a descriptor is marked `hermesHomeDerived` only when its process is
   in a sandbox (another mount namespace, so its path was mapped through `lib/processMounts.ts`): a relaunch is not
   handed the daemon's path of it. Outside a sandbox it is never marked: it is the store the process really uses, a
@@ -80,8 +99,8 @@ Branch B.
   session after a restart from Harness (PM, 2026-11-15).
 - `undefined` means "could not look" and never overwrites what the registry knows. `null` is a finding.
 - Rule 7: the core grows no record, rule, list or field for grid or DSH. `cli/src/architecture.coreFiles.txt` loses
-  three lines (`lib/processEnv.ts`, `dsh/probe.ts`, `engines/kit/processHome.ts`) and gains at most one,
-  `lib/processHeldFiles.ts`, and only when an engine is held; the pull request says why every session needs it (rule
+  three lines (`lib/processEnv.ts`, `dsh/probe.ts`, `engines/kit/processHome.ts`) and gains one,
+  `lib/processHeldFiles.ts` (Codex is held: Task 9 adds it); the pull request says why every session needs it (rule
   6: a Codex or a Hermes a person started is bound only once its home is known, and the file takes the place of
   `lib/processEnv.ts`).
 - A refused header is dropped, the registration goes on, and one line says so by the header's name alone:
@@ -91,8 +110,9 @@ Branch B.
   process that held no such file 5 s later, then after twice as long each time, up to 60 s. The pull request gives the
   numbers: before, one `ps eww` for each agent each minute on macOS and one read of `/proc/<pid>/environ` on Linux,
   for as long as the agent runs; after, for a Codex or a Hermes process alone, `lsof` (macOS) or a read of
-  `/proc/<pid>/fd` (Linux) four times in its first minute and once a minute after, until its file is seen, then never
-  (Task 14's spec counts them).
+  `/proc/<pid>/fd` (Linux) for each process listed (the selected one and its engine children: three for an npm Codex,
+  five at most), four times in its first minute and once a minute after, until its file is seen, then never (Task
+  14's spec counts them).
 - 100% coverage per file in `src/core/` and `src/services/` (`npm run test:core`).
 - Tests use the suite's throwaway home and data folder (`vitest.setup.ts`): never the real `~/.claude`, `~/.codex`,
   `~/.hermes`, the daemon on port 18473 or the person's tmux server. No fixed sleep; a wait has a condition and a bound.
@@ -126,8 +146,8 @@ Checked at `e93eadfaf1`.
   `GRID_MODEL_VARS` (Task 8); `DiscoveryContract.profile.variable` (Task 9); `registry.setDsh` and
   `openProcessAgent`'s `dsh` input (Task 10); `cli/e2e/harness/hiddenProcessEnv.mjs` (Task 13). Dead today, with no
   caller: `engines/hermes/homeProbe.ts` and its line in `hermes/inProcess.ts` (Task 11). Dead only where an engine is
-  lost: `registry.setCodexHome` and `openProcessAgent`'s `codexHome` input (Task 9, Branch B); `setHermesHome`'s
-  `derived` argument and `RegisterInput.hermesHomeDerived` (Task 11, Branch B).
+  lost: `registry.setCodexHome` and `openProcessAgent`'s `codexHome` input (Task 9, Branch B: not taken, Codex is
+  held, so both stay); `setHermesHome`'s `derived` argument and `RegisterInput.hermesHomeDerived` (Task 11, Branch B).
 - **An older daemon ignores a header it does not read, and refuses a body with a field it does not list.**
   `validHookBody` answers 400 for one unknown field (`hookServer.ts:254`). Headers are read by name alone:
   `req.headers['x-harness-hook-fired-at']` (`:246`), `['x-adapter-local']` (`:545`), `['x-harness-hook-token']`
@@ -156,10 +176,10 @@ Checked at `e93eadfaf1`.
 - **`lsof` escapes a name's bytes above ASCII** (`\xc3\xa0`), so a home is named two ways on macOS;
   `kit/nativeDescriptors.ts` `descriptorPaths` gives both, and the one that exists on disk is the home (Task 14).
 - **`architecture.spec.ts` fails on a listed file the core does not load,** so the line `lib/processHeldFiles.ts` is
-  added in the commit that first imports the file: Task 9 on its Branch A, else Task 11 on its Branch A.
+  added in the commit that first imports the file: Task 9 (Codex is held).
 - **`engineProcessMatchScore` builds a PATH snapshot when it is given none** (`lib/processTable.ts:794`), which was
-  most of an idle core's CPU (#3880). The pass builds one snapshot, as today, and a launcher's one child (decision 8) is
-  looked for with it, and only when no answer is kept.
+  most of an idle core's CPU (#3880). The pass builds one snapshot, as today, and a launcher's children (decision 8)
+  are looked for with it, and only when no answer is kept.
 - **What the mark means from now on.** Today `hermesHomeDerived` says the process's own `HERMES_HOME` did not name
   the home (`identities.ts` `probeHermesHomeDerived`: worked out from its `HOME`, or named at another path in a
   sandbox). No descriptor says which variable named a home. So the mark says one thing only: the home is the
@@ -176,11 +196,18 @@ Checked at `e93eadfaf1`.
   `registry.setHermesHome`). A descriptor cannot tell that from a home Harness launched by name, in a sandbox that
   sees it at the same path, and marking it would stop a relaunch from exporting a home it must export. That clause
   goes (Task 11, Branch A).
-- **Both fakes hold their file open,** as their engines are said to: `e2e/harness/fakeHermes.mjs` never closes its
-  `DatabaseSync`, and `fakeEngine.mjs` keeps its rollout open (`held = openSync(transcript, 'r')`). So on Branch A the
-  end-to-end cases reach the new source as they are written. A real Codex that did not hold its rollout would also
-  break the repair of today (`lib/nativeConversation.ts` `nativeOpenFileSession`): Task 0 reports that, and it is not
-  this work.
+- **Both fakes hold their file open,** as Codex does and Hermes is said to: `e2e/harness/fakeHermes.mjs` never
+  closes its `DatabaseSync`, and `fakeEngine.mjs` keeps its rollout open (`held = openSync(transcript, 'r')`). The
+  real Codex holds its rollout ("Spike result"), so the repair of today (`lib/nativeConversation.ts`
+  `nativeOpenFileSession`) keeps its ground.
+- **The fake Codex's child is not one the reader would name** (found 2026-11-15, read in the code and not yet run).
+  The fake is shaped as npm's Codex: a wrapper, which discovery selects (`CODEX_PATH` names it), and one child that
+  runs the engine and holds the rollout (`fakeEngine.mjs` `codexWrapper`). That child is
+  `node …/e2e/harness/fakeEngine.mjs`: no name or entrypoint of `codex/discoveryContract.ts` and no `CODEX_PATH`
+  matches it, so `engineProcessMatchScore` gives it 0 for Codex, where the real children are named `codex`. As the
+  fake is, `engineChildren` names nothing under the wrapper, and Task 13's case of a Codex with no hook finds no
+  home. `cli/e2e/harness/fakeEngine.mjs` joins Task 13's files (option (a), Task 13, Step 1). The specs of
+  Tasks 9 and 14 do not depend on it.
 - **`ps` argument lists in the tree hold format words with an `e`** (`'ppid=,state=,comm=,lstart=,args='`,
   `'pid=,ppid=,rss=,time=,lstart='`). The test's rule is therefore a word of letters alone holding `e`, not the value
   of an option before it (Task 12).
@@ -219,18 +246,21 @@ Checked at `e93eadfaf1`.
 | `cli/src/core/agents/discovery.ts`, `discovery.spec.ts` | a comment (8); the Codex home (9), no DSH (10), the Hermes home (11) | 8, 9, 10, 11 |
 | `cli/src/engines/kit/processFacts.ts`, `processFacts.spec.ts`, `facets/discovery.ts`, `codex/discoveryContract.ts` | the reported home's rule; the held rollout's pattern | 9 |
 | `cli/src/dsh/probe.ts`, `probe.spec.ts`, `launch.spec.ts` | deleted; the launch's own variable | 10 |
-| `cli/src/architecture.coreFiles.txt` | `lib/processHeldFiles.ts` added (9 on Branch A, else 11 on Branch A); lines deleted (10, 11, 12) | 9, 10, 11, 12 |
+| `cli/src/architecture.coreFiles.txt` | `lib/processHeldFiles.ts` added (9); lines deleted (10, 11, 12) | 9, 10, 11, 12 |
 | `cli/src/engines/identities.ts`, `identities.hermes.spec.ts`, `hermes/homeProbe.ts`, `hermes/inProcess.ts`, `hermes/home.ts`, `hermes/contract.ts`, `kit/processHome.ts`, `kit/processHome.spec.ts`, `otherAdmission.golden.spec.ts`, `__fixtures__/other-admission.golden.json`, `cli/src/core/agents/bind.ts`, `bind.spec.ts`, `hermesTerminal.ts`, `hermesTerminal.spec.ts`, `cli/src/lib/registry.hermesHome.spec.ts` | Hermes | 11 |
 | `cli/src/architecture.environment.spec.ts` (new), `cli/src/lib/processEnv.ts`, `processEnv.spec.ts`, `offThreadExec.spec.ts`, `cli/AGENTS.md`, `cli/docker/remote-machine/Dockerfile` | the test; the file goes | 12 |
 | `cli/e2e/enginehomes.e2e.ts`, `harness/hiddenProcessEnv.mjs`, `harness/fakeHermes.mjs`, `engineModelControl.e2e.ts`, `modelSwitch.e2e.ts`, `serviceProcesses.e2e.ts`, `hermesTerminalRecord.e2e.ts` | the end-to-end suite | 13 |
-| `cli/src/lib/processHeldFiles.ts` (new), `processHeldFiles.spec.ts` (new), `cli/src/lib/processTable.ts`, `processTable.engineChild.spec.ts` (new) | the paths of the files a process holds open | 14 |
+| `cli/src/lib/processHeldFiles.ts` (new), `processHeldFiles.spec.ts` (new), `cli/src/lib/processTable.ts`, `processTable.engineChildren.spec.ts` (new) | the paths of the files a process holds open | 14 |
 
-**Order.** Tasks 0, 1, 2, 3, 7 and 10 need nothing. 4 and 5 need 3; 6 needs 2; 8 needs 7; 14 needs 0 (and is not done
-when both engines are lost); 9 needs 0 and 3, and on its Branch A also 14; 11 needs 0, on its Branch A also 14, and 9
-when both engines are held (9 adds the wiring both use); 12 needs 1, 6, 8, 9, 10 and 11; 13 needs 0, 4 and 12. Tasks
-that share a file above never run together, in either order: each is written against what the other leaves. Task 14 is
-written after Task 13 below and is not last: its number only keeps the numbers of the first draft. Longest chain, both
-engines held: 0 → 14 → 9 → 11 → 12 → 13.
+**Order.** Tasks 0, 1, 2, 3, 7 and 10 need nothing. Task 0 is done for Codex (held) and open for Hermes alone, until
+the spike's second run. 4 and 5 need 3; 6 needs 2; 8 needs 7; 14 needs Task 0's Codex verdict alone (done), for its
+Codex pattern, and may start now; 9 needs Task 0's Codex verdict (held: done), 3 and 14 (it takes Branch A); 11 needs
+Task 0's Hermes verdict (pending), and on its Branch A also 14 and 9 (Codex is held: 9 adds the wiring both use); 12
+needs 1, 6, 8, 9, 10 and 11; 13 needs 0 (Hermes's verdict too), 4 and 12. Tasks that share a file above never run
+together, in either order: each is written against what the other leaves. Task 14 is written after Task 13 below and
+is not last: its number only keeps the numbers of the first draft. Longest chain, Hermes held:
+0 → 14 → 9 → 11 → 12 → 13. Task 0's Codex half of it is done, so what is left to run is 14 → 9 → 11 → 12 → 13, with
+Task 0's Hermes verdict joining at 11.
 
 ## Review Focus
 
@@ -246,9 +276,12 @@ Each line is pinned by a test in the task that owns the code.
   (a trailing slash, a symlinked home): no home on the row, and no refusal logged. Tasks 3 and 4.
 - A process that holds two files of the pattern in two folders (a Hermes with its own `state.db` and a project's, a
   launcher with another profile's rollout): no home, never the first one read. Task 14.
-- A launcher with two children that are the engine's, the engine's binary a level further down, a shell or a tool
-  that holds a file of the pattern: none of them is listed, and only the selected process and its one engine child
-  ever are. Task 14 (and the wiring's case in Task 9).
+- A launcher with two children that are the engine's (npm's Codex 0.169.0): both are listed, and the home is the one
+  the rollout names. Two of them whose files name two homes: no home, never one of the two. More than four: the four
+  lowest pids are listed and a fifth never is, whatever it holds. Task 14 (and the wiring's case in Task 9).
+- The engine's binary a level further down, a shell or a tool that holds a file of the pattern, the `codex` a `/quit`
+  left behind outside its pane: none of them is listed. Only the selected process and its direct engine children
+  ever are. Task 14.
 - A Hermes home found from a descriptor outside a sandbox (`HERMES_HOME=/x hermes` typed by hand, or only a `HOME`
   of its own): no mark, and a restart exports it. In a sandbox: marked, and a restart does not. No home, no mark.
   Task 11, and end to end in Task 13.
@@ -263,14 +296,22 @@ Each line is pinned by a test in the task that owns the code.
 **Depends on:** nothing. **Effort:** high. **Test first:** none: spike. A temporary workflow: one commit, removed
 before the pull request. No product code is written or kept: nothing under `cli/` changes.
 
+**State (2026-11-15, after the first run): done for Codex, open for Hermes alone.** Codex's rows and verdict are in
+"Spike result": held, on both systems. The run's "Install Hermes" step failed in both jobs (`curl: (23)`, in the
+step's own script), so no Hermes ran. A second run measures Hermes: the fix of that step is a second temporary commit,
+and the fix and its push are the main session's (PM, 2026-11-15). This task's agent then reads that run (Step 2b) and
+writes Hermes's rows, the sandbox's line and Hermes's verdict. Tasks 9 and 14 do not wait for it; Task 11 and Task
+13's Hermes cases do.
+
 **Limits (PM, 2026-11-15), none of them this task's to loosen:**
 - At most one macOS job and one Linux job: two jobs, no matrix. `timeout-minutes: 20` on each.
 - `permissions: contents: read`, and no secret.
 - No cache and no artifact written outside the run: no `actions/cache`, no `cache:` input on `actions/setup-node`
   (it saves one), no `actions/upload-artifact`. What the script finds is in the job's log.
-- One push, and it is the main session's: an early push the PM approved for this spike. This task's agent never
-  pushes.
-- One run. If it fails for an infrastructure reason, report to the main session and stop: no second push.
+- Two pushes at most, both the main session's: the early one the PM approved for this spike (done: Codex), and one
+  more for Hermes once the installer's step is fixed (PM, 2026-11-15). This task's agent never pushes.
+- One run for each push. If the second fails for an infrastructure reason, report to the main session and stop: no
+  third push.
 - Removed before the pull request: `git diff origin/main...HEAD -- .github/workflows/` shows no `tmp-` file.
 
 **Files:**
@@ -281,7 +322,7 @@ before the pull request. No product code is written or kept: nothing under `cli/
 **What it answers,** for Hermes 0.21.6 or later and for Codex, on macOS and on Linux: which process of the pane's tree
 holds `<home>/state.db` (Hermes) or `<home>/sessions/**/rollout-*.jsonl` (Codex) open, from when, and until when.
 
-- [ ] **Step 1: Write the workflow.** `name: tmp process-env-secrets spike (temporary)`;
+- [x] **Step 1: Write the workflow.** `name: tmp process-env-secrets spike (temporary)`;
   `on: push: branches: [fix/process-env-secrets]` and no other trigger; `permissions: contents: read` at the top;
   no `secrets.*` and no `environment`; nothing released, published or deployed. No `actions/checkout` (the script
   is inline and reads nothing of the repo), no `actions/cache`, no `actions/upload-artifact`, and
@@ -306,7 +347,7 @@ holds `<home>/state.db` (Hermes) or `<home>/sessions/**/rollout-*.jsonl` (Codex)
     its `HOME` at `/tmp/home`, bound from a folder of the root (the `'remapped'` shape of
     `cli/e2e/harness/fakeHermes.mjs`), listed from outside: the path is printed as read. Where the runner refuses
     `unshare`, the row says "not run".
-- [ ] **Step 2: Commit, and read the one run.** `tmp: spike, which process holds an engine's store open (temporary)`.
+- [x] **Step 2: Commit, and read the one run** (the first: done). `tmp: spike, which process holds an engine's store open (temporary)`.
   Before the commit, read the file against the limits above, line by line: a wrong workflow costs the one run. Then
   tell the main session the commit is ready: it pushes the branch, once. Read the run: `gh run watch`, then
   `gh run view --log`.
@@ -315,9 +356,14 @@ holds `<home>/state.db` (Hermes) or `<home>/sessions/**/rollout-*.jsonl` (Codex)
   the run's link and the failing step, and stop. No second push, no `gh run rerun`, no empty commit to start it
   again. A run that fails because the script is wrong is reported the same way, with the fix proposed: another
   commit and push are the main session's to decide.
+- [ ] **Step 2b: Read the second run, for Hermes alone.** The main session fixes the "Install Hermes" step and
+  pushes; this task's agent edits no workflow now. Read that run as Step 2 says, with the same rule for a run that
+  fails. Codex runs again in it: its rows are left as written, unless that run contradicts them, and then stop and
+  report.
 - [ ] **Step 3: Write "Spike result"** in this plan: a row for each engine and system (the release, the process that
-  holds the file as the selected one, its one engine child or another, from when, until when, the run's link), the
-  line on a sandbox's path, and one verdict for each engine by the rule written there.
+  holds the file as the selected one, one of its engine children or another, from when, until when, the run's link),
+  the line on a sandbox's path, and one verdict for each engine by the rule written there. Codex's rows and verdict
+  are written (first run); Hermes's three rows, the sandbox's line and Hermes's verdict follow the second run.
 - [ ] **Step 4: The spec's line,** only for an engine that is lost or held on one system only. Under "What changes for
   users", the line that starts "A Hermes with no hook and a home of its own" becomes one line for each engine:
   - held: "`<engine case>`: bound from the `<file>` it holds open."
@@ -326,7 +372,8 @@ holds `<home>/state.db` (Hermes) or `<home>/sessions/**/rollout-*.jsonl` (Codex)
   - lost: "`<engine case>`: no longer bound. `<release>` does not keep `<file>` open (spike of 2026-11-15)."
 
   The engine cases are the spec's own words: "A Hermes with no hook and a home of its own" and "A Codex started by
-  hand under a `CODEX_HOME` with no Harness hooks".
+  hand under a `CODEX_HOME` with no Harness hooks". Codex is held on both systems, so its half of the line stands as
+  the spec has it; only Hermes's verdict can still change the line.
 - [ ] **Step 5: Report** the two verdicts and the run's link. The workflow stays on the branch until diegodev
   removes it before the pull request; then `git diff origin/main...HEAD -- .github/workflows/` shows no `tmp-`
   file (Verification). Stop and report instead of choosing when: an engine
@@ -800,16 +847,19 @@ Pi) and what is not.
 
 ### Task 9: A Codex home is never read from the environment
 
-**Depends on:** Task 0 (its verdict for Codex) and Task 3 (`reportedProfileHome`, which this task gives its own
-body); on Branch A also Task 14 (`heldHome`, `engineChild`). **Effort:** xhigh.
+**Depends on:** Task 0 (Codex verdict: held (done)), Task 3 (`reportedProfileHome`, which this task gives its own
+body) and, Branch A being taken, Task 14 (`heldHome`, `engineChildren`). **Effort:** xhigh.
 
-**Whose descriptors (decision 8; PM, 2026-11-15).** The selected Codex process, and exactly one more when it is a
-launcher: its one direct child that is Codex's own binary (`engineChild`). Never a level further down, never a second
-child, never any other process. This task passes `heldHome` that one function and no other way to name a process.
+**Whose descriptors (decision 8; PM, 2026-11-15).** The selected Codex process and, when it is a launcher, its direct
+children that are Codex's own binary (`engineChildren`: all of them up to four, the lowest pids; npm's Codex 0.169.0
+has two, and one of them holds the rollout). Never a level further down, never any other process. When their files
+name two homes, there is no home: `heldHome` answers `undefined`, and this task picks none. This task passes
+`heldHome` that one function and no other way to name a process.
 
-**Branch A** when "Spike result" says Codex is held: the home comes from the rollout the process holds open.
-**Branch B** when it says lost: discovery reports no Codex home at all, and the hook and the launch are its only
-sources. Read the verdict first; a line below with no branch named is for both.
+**Branch A is the one taken:** "Spike result" says Codex is held, so the home comes from the rollout a process of
+that Codex holds open. **Branch B** was for a Codex that is lost (discovery reports no Codex home at all, and the hook
+and the launch are its only sources): it is not done, and every line below marked Branch B is skipped. A line with no
+branch named is done.
 
 **Files:**
 - Modify: `cli/src/engines/discoveries.ts` (`:7-8`, `:45-62`), `cli/src/engines/kit/processFacts.ts` (`:26-36`), `cli/src/engines/facets/discovery.ts` (`:30-32`), `cli/src/engines/codex/discoveryContract.ts` (`:16-22`)
@@ -844,18 +894,19 @@ profile: { setting: 'CODEX_HOME', held: /^(.+)\/sessions\/(?:[^/]+\/)*rollout-[^
  * path, `null` for the default (or an engine with no such profile), `undefined` when it holds none yet or its files
  * cannot be listed, which never overwrites what the registry knows.
  */
-export async function probeProfileHome(selected: ProcessIdentity, engine: AgentEngine, child?: () => ProcessIdentity | undefined): Promise<string | null | undefined>
+export async function probeProfileHome(selected: ProcessIdentity, engine: AgentEngine, children?: () => readonly ProcessIdentity[]): Promise<string | null | undefined>
 ```
 
-- `probeProfileHome`: no `profile` is `null`; `heldHome(selected, profile.held, child)` undefined is `undefined`;
-  else `profileHome(profile, home, env[profile.setting])`.
+- `probeProfileHome`: no `profile` is `null`; `heldHome(selected, profile.held, children)` undefined is `undefined`
+  (no file yet, a process that cannot be listed, or two homes among the processes listed); else
+  `profileHome(profile, home, env[profile.setting])`.
 - `probeTerminalAgents` builds the pass's ownership snapshot once, where a pane exists
   (`roots.length ? agentCommandOwnershipSnapshot() : undefined`), hands it to
   `discoverTerminalAgentsFromSnapshot` (its sixth parameter, which builds its own only when given none) and to
-  `engineChild`. Then
-  `agent.codexHome = await probeProfileHome(agent.processIdentity, agent.engine, () => engineChild(enrichedRows, agent.engine, agent.processIdentity, ownership))`.
-  The function is given the agent's own engine and its own selected process, so the child it names is that
-  launcher's one direct child of the same engine, or nothing.
+  `engineChildren`. Then
+  `agent.codexHome = await probeProfileHome(agent.processIdentity, agent.engine, () => engineChildren(enrichedRows, agent.engine, agent.processIdentity, ownership))`.
+  The function is given the agent's own engine and its own selected process, so the children it names are that
+  launcher's direct children of the same engine, four at most, or none.
 - Stay as they are: `DiscoveredTerminalAgent.codexHome` (its doc now says "from the rollout it holds open"),
   `registry.setCodexHome`, `openProcessAgent`'s `codexHome` input, and the fill in `core/agents/discovery.ts`.
 
@@ -872,8 +923,8 @@ input, the fill in `core/agents/discovery.ts`.
     ```ts
     it('names a Codex home from the rollout its process holds open, and never the default', async () => {
       heldHome.mockResolvedValue('/home/u/.codex-work')
-      expect(await probeProfileHome(identity, 'codex', child)).toBe('/home/u/.codex-work')
-      expect(heldHome).toHaveBeenCalledWith(identity, discoveryContract('codex')!.profile!.held, child)
+      expect(await probeProfileHome(identity, 'codex', children)).toBe('/home/u/.codex-work')
+      expect(heldHome).toHaveBeenCalledWith(identity, discoveryContract('codex')!.profile!.held, children)
       heldHome.mockResolvedValue(env.CODEX_HOME); expect(await probeProfileHome(identity, 'codex')).toBeNull()
       heldHome.mockResolvedValue(undefined); expect(await probeProfileHome(identity, 'codex')).toBeUndefined()
       expect(await probeProfileHome(identity, 'claude')).toBeNull()
@@ -889,10 +940,10 @@ input, the fill in `core/agents/discovery.ts`.
 
     `terminalAgentDiscovery.codexHome.spec.ts`, its two cases kept with the new call: the probe is called with the
     agent's `processIdentity`, its engine and a function; `agentCommandOwnershipSnapshot` is called once in a pass.
-    One new case, "names a launcher's one Codex child, and no other process": with a Node launcher row, one native
-    `codex` under it and a shell beside that one, the function returns the native child's identity; with two native
-    children under the launcher, and with the native binary under the shell (a level further down), it returns
-    `undefined`.
+    One new case, "names a launcher's Codex children, and no other process": with a launcher row, two `codex` rows
+    under it (npm's Codex 0.169.0) and a shell beside them, the function the probe is given returns the two
+    children's identities, lowest pid first, and never the shell's; with the one `codex` under that shell instead (a
+    level further down), it returns `[]`.
   - Branch B, `discovery.spec.ts`: in "updates the row from the live process", `seen()` carries no `codexHome` and
     the registry stand-in has no `setCodexHome`; a new line: `onDiscovered`'s `openProcessAgent` argument has no
     `codexHome` property. `registry.spec.ts` `:2370-2386`: the case that fills a home through `openProcessAgent` and
@@ -956,8 +1007,9 @@ has one.
 
 ### Task 11: A Hermes's home is never read from its environment
 
-**Depends on:** Task 0 (its verdict for Hermes); on Branch A also Task 14 (`heldHome`, `engineChild`), and Task 9
-when Codex is held too (it adds the wiring both use). **Effort:** xhigh.
+**Depends on:** Task 0 (its verdict for Hermes, pending the spike's second run: this task does not start before
+it); on Branch A also Task 14 (`heldHome`, `engineChildren`) and Task 9 (Codex is held: it adds the wiring both use).
+**Effort:** xhigh.
 
 **Branch A** when "Spike result" says Hermes is held: the home comes from the `state.db` the process holds open.
 **Branch B** when it says lost: discovery reports no Hermes home, and a Hermes with no hook is found store by store
@@ -970,15 +1022,16 @@ export the daemon's path of it. Outside a sandbox it is not marked: a relaunch e
 Hermes started by hand as `HERMES_HOME=/x hermes` resumes its session after a restart from Harness. Branch B: no
 home comes from a descriptor, so discovery marks nothing; a mark a saved row already has is kept, as written below.
 
-**Whose descriptors (decision 8; PM, 2026-11-15).** Branch A: the selected Hermes process, and exactly one more when
-it is a launcher: its one direct child that is Hermes's own binary (`engineChild`). Never a level further down, never
-a second child, never any other process: not the shared gateway, which `engineChild` never names
-(`processTable.ts:765`: `engineProcessMatch` gives a Hermes gateway a score of 0).
+**Whose descriptors (decision 8; PM, 2026-11-15).** Branch A: the selected Hermes process and, when it is a
+launcher, its direct children that are Hermes's own binary (`engineChildren`: all of them up to four, the lowest
+pids). Never a level further down, never any other process: not the shared gateway, which `engineChildren` never
+names (`processTable.ts:765`: `engineProcessMatch` gives a Hermes gateway a score of 0). When their files name two
+homes, there is no home: `heldHome` answers `undefined`, and nothing is marked.
 
 **Files:**
 - Modify: `cli/src/engines/identities.ts` (`:10`, `:14`, `:33-84`), `cli/src/engines/hermes/inProcess.ts` (`:12`), `cli/src/engines/hermes/home.ts` (comment `:11-15`), `cli/src/engines/hermes/contract.ts` (`HERMES_HOME_RULE` `:128-132`)
 - Delete: `cli/src/engines/hermes/homeProbe.ts`, `cli/src/engines/kit/processHome.ts`, `cli/src/engines/kit/processHome.spec.ts`
-- Modify: `cli/src/lib/terminalAgentDiscovery.ts` (`:12`, `:75-94`, `:343-352`), `cli/src/core/agents/discovery.ts` (`:214-221`), `cli/src/lib/registry.ts` (`setHermesHome` `:2836-2850`, the fields' docs `:218-239`), `cli/src/architecture.coreFiles.txt` (the `engines/kit/processHome.ts` line; on Branch A the `lib/processHeldFiles.ts` line when Task 9 did not add it)
+- Modify: `cli/src/lib/terminalAgentDiscovery.ts` (`:12`, `:75-94`, `:343-352`), `cli/src/core/agents/discovery.ts` (`:214-221`), `cli/src/lib/registry.ts` (`setHermesHome` `:2836-2850`, the fields' docs `:218-239`), `cli/src/architecture.coreFiles.txt` (the `engines/kit/processHome.ts` line; the `lib/processHeldFiles.ts` line is Task 9's, Codex being held)
 - Branch A, modify: `cli/src/core/agents/bind.ts` (the comment `:590` alone)
 - Branch B, modify: `cli/src/core/agents/bind.ts` (`:589-591`), `cli/src/core/agents/hermesTerminal.ts` (`:38`, `:101`), `cli/src/lib/registry.ts` (`RegisterInput.hermesHomeDerived` `:404-405`, `register()` `:2255-2259`)
 - Test: `cli/src/engines/identities.hermes.spec.ts` (`:14-15`, `:48-112`), `cli/src/lib/terminalAgentDiscovery.hermesHome.spec.ts`, `cli/src/core/agents/discovery.spec.ts` (`:159-170`), `cli/src/lib/registry.hermesHome.spec.ts`, `cli/src/engines/otherAdmission.golden.spec.ts` (`:28-38`, `:183-213`); Branch B also `cli/src/core/agents/bind.spec.ts` (`:885-912`), `cli/src/core/agents/hermesTerminal.spec.ts`
@@ -1014,19 +1067,19 @@ export const HERMES_HELD_STORE = /^(.+)\/state\.db$/
  * default home, and another engine; undefined is a process that holds no store yet, one whose files cannot be
  * listed, or a sandbox's home with no path here, and must preserve an existing home.
  */
-export async function probeHermesHome(selected: ProcessIdentity, engine: AgentEngine, child?: () => ProcessIdentity | undefined): Promise<string | null | undefined>
+export async function probeHermesHome(selected: ProcessIdentity, engine: AgentEngine, children?: () => readonly ProcessIdentity[]): Promise<string | null | undefined>
 // registry: fill-only, whatever `derived` says. A row that has a home returns false. `derived` is true only for
 // the daemon's path of a sandboxed process's home.
 setHermesHome(agentId: string, hermesHome: string, derived = false): boolean
 ```
 
-- `probeHermesHome`: another engine is `null`; `heldHome(selected, HERMES_HELD_STORE, child)` undefined is
-  `undefined`; a home whose real path is that of `env.HERMES_HOME` (trailing slashes off) is `null`; else the home.
-  It no longer asks `processView`: `heldHome` gives the daemon's path.
-- Discovery: `agent.hermesHome = await probeHermesHome(agent.processIdentity, agent.engine, child)`, with the `child`
-  function and the pass's one ownership snapshot of Task 9's Branch A (when Codex is lost, this task adds those
-  lines, as Task 9 words them, with its case "names a launcher's one Hermes child, and no other process" in
-  `terminalAgentDiscovery.hermesHome.spec.ts`).
+- `probeHermesHome`: another engine is `null`; `heldHome(selected, HERMES_HELD_STORE, children)` undefined is
+  `undefined` (no store yet, a process that cannot be listed, or two homes among the processes listed); a home whose
+  real path is that of `env.HERMES_HOME` (trailing slashes off) is `null`; else the home. It no longer asks
+  `processView`: `heldHome` gives the daemon's path.
+- Discovery: `agent.hermesHome = await probeHermesHome(agent.processIdentity, agent.engine, children)`, with the
+  `children` function (`() => engineChildren(enrichedRows, agent.engine, agent.processIdentity, ownership)`) and the
+  pass's one ownership snapshot, both of which Task 9 added (Codex is held).
 - The mark, in discovery, after the sandbox probe the pass already makes:
 
   ```ts
@@ -1083,8 +1136,8 @@ record in `agent.hermesHome ?? deps.defaultHome`.
     ```ts
     it('names the home of the store a Hermes holds open, null for the daemon\'s own, and nothing when it holds none', async () => {
       heldHome.mockResolvedValue('/data/agents/a1/.hermes')
-      expect(await probeHermesHome(identity, 'hermes', child)).toBe('/data/agents/a1/.hermes')
-      expect(heldHome).toHaveBeenCalledWith(identity, HERMES_HELD_STORE, child)
+      expect(await probeHermesHome(identity, 'hermes', children)).toBe('/data/agents/a1/.hermes')
+      expect(heldHome).toHaveBeenCalledWith(identity, HERMES_HELD_STORE, children)
       heldHome.mockResolvedValue(linkToDefault)        // a symbolic link to env.HERMES_HOME
       expect(await probeHermesHome(identity, 'hermes')).toBeNull()
       heldHome.mockResolvedValue(undefined)
@@ -1253,13 +1306,15 @@ not reached, and the pull request says so.
 
 ### Task 13: The end-to-end suite follows
 
-**Depends on:** Task 0 (which branch each engine's cases take), Tasks 4 and 12 (and through 12, Tasks 6 to 11).
+**Depends on:** Task 0 (which branch Hermes's cases take; Codex's take Branch A), Tasks 4 and 12 (and through 12,
+Tasks 6 to 11).
 **Effort:** high. **Test first:** none: no behavior (end-to-end cases; each behavior has its red spec in Tasks 3 to
 12 and 14).
 
 **Files:** Modify `cli/e2e/enginehomes.e2e.ts`, `cli/e2e/engineModelControl.e2e.ts`, `cli/e2e/modelSwitch.e2e.ts`,
 `cli/e2e/serviceProcesses.e2e.ts`, `cli/e2e/hermesTerminalRecord.e2e.ts`, `cli/e2e/harness/fakeHermes.mjs` (its
-header's last paragraph). Delete `cli/e2e/harness/hiddenProcessEnv.mjs`.
+header's last paragraph), `cli/e2e/harness/fakeEngine.mjs` (`codexWrapper`: its child runs under a name the daemon
+knows as Codex's, as the real children are named `codex`). Delete `cli/e2e/harness/hiddenProcessEnv.mjs`.
 
 - [ ] **Step 1: `enginehomes.e2e.ts`.** The three `d.env.NODE_OPTIONS = …hiddenProcessEnv.mjs` lines (`:118`, `:174`,
   `:219`) and the preload file go: nothing reads what it hid. The case at `:172` is named "a moved shared Codex
@@ -1268,11 +1323,19 @@ header's last paragraph). Delete `cli/e2e/harness/hiddenProcessEnv.mjs`.
   keeps that home": an agent created with `codexHome: profile` puts Harness's hooks in the profile and is deleted;
   `CODEX_HOME=<profile> codex` is typed into a terminal tile; the tile binds, its row's `codexHome` is the profile and
   `conversationIn('codex', profile)` is its session.
-  **Codex held (Branch A),** one more: "a Codex typed in under a `CODEX_HOME` with no hook in it binds from the
-  rollout it holds open": the daemon runs with `HOOK_INSTALL_ENGINES: 'claude'`, the profile is a new folder that no
-  shell profile names, `CODEX_HOME=<profile> codex` is typed into a terminal tile; the tile binds to
+  **Codex is held (Branch A),** so one more: "a Codex typed in under a `CODEX_HOME` with no hook in it binds from
+  the rollout it holds open": the daemon runs with `HOOK_INSTALL_ENGINES: 'claude'`, the profile is a new folder that
+  no shell profile names, `CODEX_HOME=<profile> codex` is typed into a terminal tile; the tile binds to
   `conversationIn('codex', profile)`, its row's `codexHome` is the profile, and the log has no `[hooks]` line for
-  that session. **Codex lost (Branch B):** no such case.
+  that session. The fake runs as npm's Codex does, a wrapper and the child that holds the rollout, so this is the
+  children's path end to end.
+  **Open question 1, for the main session, before this case is written:** as the fake is, its child is
+  `node …/fakeEngine.mjs`, which the daemon does not score as Codex ("Found while reading the code"), so
+  `engineChildren` names nothing and the case finds no home. Either (a) the wrapper starts its child under a name
+  the daemon knows as Codex's, as the real children are named `codex` (`cli/e2e/harness/fakeEngine.mjs`
+  `codexWrapper`, a file no task lists: it would join this task's files), or (b) this case goes, and the children's
+  path rests on the specs of Tasks 9 and 14 and on the spike's run. **Chosen: (a)** (main session, 2026-11-15):
+  `fakeEngine.mjs` is in this task's files.
 - [ ] **Step 2: `engineModelControl.e2e.ts`.** One new case: "a Claude Code typed in with an OpenRouter endpoint is
   display-only from its first hook". `ANTHROPIC_BASE_URL=https://openrouter.ai/api claude` typed into a terminal tile:
   once bound, `models_list { agentId }` holds no `runtime-v1:<id>:claude:` entry. A plain `claude` typed into a second
@@ -1316,22 +1379,32 @@ header's last paragraph). Delete `cli/e2e/harness/hiddenProcessEnv.mjs`.
 
 ### Task 14: The paths of the files a process holds open
 
-**Depends on:** Task 0. Not done when both engines are lost: nothing would call it. **Effort:** xhigh.
+**Depends on:** Task 0's Codex verdict alone (held: done), for the Codex pattern its specs use: it may start now.
+Hermes's verdict changes nothing here (the reader takes the pattern it is given), and Codex being held, the task is
+done whatever Hermes's is. **Effort:** xhigh.
 
-**Whose descriptors (decision 8; PM, 2026-11-15).** One listing reads the descriptor paths of at most two processes:
-the selected one, and exactly one direct child of it that is the same engine's binary, which makes the selected one
-that engine's launcher (npm's `node …/@openai/codex/bin/codex.js` and the native `codex` under it). Never more than
-one level down, never a second child, never any other process: not a shell, a tool, an MCP server, a parent or a
-sibling, whatever it holds open. `heldHome` has no other way to be given a process, and `engineChild` no other way
-to name one.
+**Whose descriptors (decision 8; PM, 2026-11-15).** One listing reads the descriptor paths of at most five processes:
+the selected one, and its direct children that are the same engine's binary, all of them up to four
+(`ENGINE_CHILDREN_MOST`), and with more the four with the lowest pids: a fifth is ignored, whatever it holds. A
+selected process with such children is that engine's launcher (npm's Codex 0.169.0: `codex`, with two `codex`
+processes under it, one of which holds the rollout; "Spike result"). Never more than one level down, never any other
+process: not a shell, a tool, an MCP server, a parent or a sibling, whatever it holds open, and not an engine process
+whose launcher is gone (the `codex` a `/quit` leaves behind). `heldHome` has no other way to be given a process, and
+`engineChildren` no other way to name one.
+
+**Two homes (PM, 2026-11-15).** When the files those processes hold name two different homes, the answer is
+`undefined`: no home is picked, not the selected process's, not the first one read, not the one most of them name.
+
+**The sandbox's path.** It is mapped as written below. The spike's row for a sandbox waits on the second run; if that
+run shows a sandbox's path in the daemon's view, Task 0 stops and reports (its Step 5), and that rule is planned again.
 
 **Files:**
 - Create: `cli/src/lib/processHeldFiles.ts`
 - Modify: `cli/src/lib/processTable.ts` (beside `hermesGatewaysUnder` `:186-199`)
-- Test (new): `cli/src/lib/processHeldFiles.spec.ts`, `cli/src/lib/processTable.engineChild.spec.ts`
+- Test (new): `cli/src/lib/processHeldFiles.spec.ts`, `cli/src/lib/processTable.engineChildren.spec.ts`
 
 Not in this task: the line of `architecture.coreFiles.txt`. The test fails on a listed file the core does not load,
-so the line goes in with the first import (Task 9 on its Branch A, else Task 11 on its Branch A).
+so the line goes in with the first import (Task 9).
 
 **Interfaces:** Produces:
 
@@ -1344,10 +1417,11 @@ export const HELD_RETRY_MS = { first: 5_000, most: 60_000 } as const
 
 /**
  * The folder a file `selected` holds open says it works in, at the daemon's path of it: the first group of `file`,
- * tried against the whole path of each open descriptor of `selected` and of the one process `child()` names (a
- * launcher's one direct child that is the same engine's binary; no other process is ever listed). Undefined when no
- * path matches, when two name different folders, when a process cannot be listed (Windows, another account's process, one
- * that is gone) or when a sandbox's folder has no path in the daemon's view. Only paths are read (`readlink` of
+ * tried against the whole path of each open descriptor of `selected` and of the processes `children()` names (a
+ * launcher's direct children that are the same engine's binary, ENGINE_CHILDREN_MOST at most; no other process is
+ * ever listed). Undefined when no path matches, when two name different folders, in one process or across them (no
+ * home is ever picked from two), when a process cannot be listed (Windows, another account's process, one that is
+ * gone) or when a sandbox's folder has no path in the daemon's view. Only paths are read (`readlink` of
  * `/proc/<pid>/fd/<n>`, the `n` lines of `lsof -Fn`), never a file through its descriptor, and a path that does not
  * match is dropped here: the daemon does not read another process's environment, and reads no more of its files than
  * where two of them are (cli/AGENTS.md, Protect the core).
@@ -1355,7 +1429,7 @@ export const HELD_RETRY_MS = { first: 5_000, most: 60_000 } as const
 export async function heldHome(
   selected: ProcessIdentity,
   file: RegExp,
-  child: () => ProcessIdentity | undefined = () => undefined,
+  children: () => readonly ProcessIdentity[] = () => [],
   options: { platform?: NodeJS.Platform; proc?: string; now?: () => number } = {},
 ): Promise<string | undefined>
 export function clearHeldHomes(): void
@@ -1363,12 +1437,18 @@ export function clearHeldHomes(): void
 export function lsofPaths(output: string): string[] | null
 
 // lib/processTable.ts
+/** The most direct children of one launcher whose open files are listed. npm's Codex 0.169.0 has two (the spike of
+ *  2026-11-15); the bound keeps one listing to five processes whatever a launcher starts (decision 8). */
+export const ENGINE_CHILDREN_MOST = 4
+
 /**
- * The one process right under `selected` that is `engine`'s too: npm's Node launcher starts Codex's native binary
- * there, and that child holds the rollout (engines/codex/sessionStore.ts). Undefined with none, and with more than
- * one. A direct child only: a process further down is never named, whatever it is.
+ * The processes right under `selected` that are `engine`'s too, lowest pid first, ENGINE_CHILDREN_MOST at most:
+ * npm's launcher of Codex starts two `codex` processes there, and one of them holds the rollout
+ * (docs/plans/2026-11-15-process-env-secrets-plan.md, "Spike result"). With more, the lowest pids are named and the
+ * rest never are. Empty with none. Direct children only: a process further down is never named, whatever it is, nor
+ * one whose launcher is gone (the `codex` a `/quit` leaves behind).
  */
-export function engineChild(rows: readonly ProcessRow[], engine: AgentEngine, selected: ProcessIdentity, ownership: AgentCommandOwnershipSnapshot): ProcessIdentity | undefined
+export function engineChildren(rows: readonly ProcessRow[], engine: AgentEngine, selected: ProcessIdentity, ownership: AgentCommandOwnershipSnapshot): ProcessIdentity[]
 ```
 
 Rules, all of them:
@@ -1380,18 +1460,22 @@ Rules, all of them:
 - A folder from a path: `file.exec(path)?.[1]`. `file` has no `g` or `y` flag. On macOS each path has the spellings
   `descriptorPaths` gives (`engines/kit/nativeDescriptors.ts`); with two that match, the one whose whole path exists
   (`lstat`) is taken, and with both or neither that descriptor says nothing.
-- The answer: `selected` is listed, and the process `child()` names when it names one; `child` is called once for
-  a listing, and nothing it does not return is listed: one listing reads one process or two. One that cannot be
-  listed: no answer. The distinct folders of both: exactly one is the answer.
+- The answer: `selected` is listed, and each process `children()` names, the first `ENGINE_CHILDREN_MOST` of them
+  as given and never another (the reader's bound does not rest on its caller: `engineChildren` says which four,
+  `heldHome` never lists a fifth). `children` is called once for a listing, and nothing it does not return is
+  listed: one listing reads one process to five. One that cannot be listed: no answer. The distinct folders of all
+  of them: exactly one is the answer; two or more are no answer, whichever process holds which. A listing with no
+  answer is asked again as the next rule says, so a home is found once the processes agree.
 - What is kept, by `selected`'s `pid`, `startMarker` and `executable` and `file.source`: an answer, for as long as the
   module lives (a process keeps its home), and for no answer the time it was asked and the wait before the next
   listing: `HELD_RETRY_MS.first`, then doubled each time, never over `HELD_RETRY_MS.most` (listings at 0, 5, 15, 35,
-  75 and 135 s, then each minute). At most 256 keys; the 257th drops them all (`processMounts.ts`'s rule). `child` is
-  called only when a listing is made.
-- `engineChild`: rows whose `parentPid` is `selected.pid` and whose `engineProcessMatchScore(row, engine, ownership)`
-  is above 0; exactly one is the answer, as `processIdentityOf` gives it. It looks one level down and no further:
-  `parentPid` alone, never `processTreePids`. A child that is another engine's, a shell or a tool scores 0 and is
-  never named. `ownership` is never defaulted here: the default walks PATH (#3880).
+  75 and 135 s, then each minute). At most 256 keys; the 257th drops them all (`processMounts.ts`'s rule).
+  `children` is called only when a listing is made.
+- `engineChildren`: rows whose `parentPid` is `selected.pid` and whose
+  `engineProcessMatchScore(row, engine, ownership)` is above 0, sorted by pid, the first `ENGINE_CHILDREN_MOST` of
+  them, each as `processIdentityOf` gives it. It looks one level down and no further: `parentPid` alone, never
+  `processTreePids`. A child that is another engine's, a shell or a tool scores 0 and is never named.
+  `ownership` is never defaulted here: the default walks PATH (#3880).
 
 - [ ] **Step 1: Write the failing tests.** `processHeldFiles.spec.ts` mocks `./processMounts.js` (`processView`
   answers `{ state: 'same' }` unless a case says otherwise) and `node:child_process`, builds a `/proc` of its own
@@ -1420,30 +1504,47 @@ Rules, all of them:
   it('takes the spelling that exists when lsof escapes a name', …)
   //   <tmp>/nhà/.hermes/state.db exists; lsof prints 'n<tmp>/nh\\xc3\\xa0/.hermes/state.db': '<tmp>/nhà/.hermes'.
   it('lists nothing on Windows', …)   // undefined, execFile not called
-  it('reads the engine\'s one child too, and answers nothing when the two disagree or one cannot be listed', …)
-  //   The launcher 4242 holds none, 4243 holds /c/sessions/2026/11/15/rollout-a.jsonl: heldHome(4242, ROLLOUT, () => 4243) === '/c'.
-  //   4242 also holds /other/sessions/rollout-b.jsonl: undefined. 4243 has no fd folder: undefined.
-  //   While '/c' is kept, child is not called again.
-  it('lists the selected process and the one child it is given, and no other process', …)
-  //   macOS: lsof for 4242 answers no rollout, for 4243 '/c/sessions/rollout-a.jsonl'. heldHome(4242, ROLLOUT, () => 4243)
-  //   === '/c'; execFile ran twice, its '-p' values '4242' and '4243', and child was called once.
-  //   Linux: <proc>/4244/fd (a process under 4243) holds /d/sessions/rollout-z.jsonl, and so does <proc>/4245/fd
-  //   (a shell beside 4243): heldHome(4242, ROLLOUT, () => 4243) === '/c', and with no child, undefined.
+  it('reads the engine\'s children too, and answers nothing when the launcher disagrees or one cannot be listed', …)
+  //   npm's Codex 0.169.0: the launcher 4242 holds none, 4243 holds /c/sessions/2026/11/15/rollout-a.jsonl, 4244
+  //   holds none: heldHome(4242, ROLLOUT, () => [4243, 4244]) === '/c'.
+  //   4242 also holds /other/sessions/rollout-b.jsonl: undefined. 4244 has no fd folder: undefined.
+  //   While '/c' is kept, children is not called again.
+  it('picks no home when two children hold files of two homes', …)
+  //   4243 holds /c/sessions/rollout-a.jsonl, 4244 holds /d/sessions/rollout-b.jsonl, the launcher none:
+  //   heldHome(4242, ROLLOUT, () => [4243, 4244]) is undefined, and so is it with the two given the other way
+  //   round (a new `selected`): never '/c', never '/d'. Both hold /c/sessions/… (two rollouts of one home): '/c'.
+  it('lists the selected process and the children it is given, and no other process', …)
+  //   macOS: lsof for 4242 and 4244 answers no rollout, for 4243 '/c/sessions/rollout-a.jsonl'.
+  //   heldHome(4242, ROLLOUT, () => [4243, 4244]) === '/c'; execFile ran three times, its '-p' values '4242', '4243'
+  //   and '4244', and children was called once.
+  //   Linux: <proc>/4250/fd (a process under 4243) holds /d/sessions/rollout-z.jsonl, and so does <proc>/4251/fd
+  //   (a shell beside 4243): heldHome(4242, ROLLOUT, () => [4243, 4244]) === '/c', and with no children, undefined.
+  it('lists four children at most, and ignores a fifth', …)
+  //   macOS, five given, [4243, 4244, 4245, 4246, 4247]: 4243 holds '/c/sessions/rollout-a.jsonl' and the fifth,
+  //   4247, '/e/sessions/rollout-z.jsonl'. The answer is '/c', not undefined; execFile ran five times, its '-p'
+  //   values '4242' and the first four, never '4247'.
   it('refuses a process with more than 4,096 descriptors, and keeps at most 256 processes', …)
   it('lsofPaths keeps the n lines that are paths', …)
   //   'p1\nf3\nn/a/b\nf4\nnpipe\nf5\nn/c d\n' → ['/a/b', '/c d']; no last newline → null; 4,097 lines → null.
   ```
 
-  `processTable.engineChild.spec.ts`, with rows and an ownership snapshot built as
-  `processTable.hermesGateway.spec.ts` builds its own: a Node launcher of Codex with its native child and a shell
-  under it gives the native child; two native children, none, and one a level further down (the native binary under
-  that shell) give `undefined`; a Claude Code under a Codex launcher gives `undefined`; and a Hermes with its shared
-  gateway under it gives `undefined` for `'hermes'`.
-- [ ] **Step 2: Red.** `npx vitest run src/lib/processHeldFiles.spec.ts src/lib/processTable.engineChild.spec.ts`:
-  neither module export exists.
+  `processTable.engineChildren.spec.ts`, with rows and an ownership snapshot built as
+  `processTable.hermesGateway.spec.ts` builds its own:
+  - a launcher of Codex with two `codex` children and a shell under it (npm's Codex 0.169.0) gives the two, lowest
+    pid first, with the rows given highest pid first; with one such child, that one; with none, `[]`;
+  - "names four children at most, the lowest pids": six `codex` children give the four lowest pids, in order, and
+    the two highest are not in the answer;
+  - a `codex` a level further down (under that shell) is not named, and neither is a `codex` whose parent is pid 1
+    (the one a `/quit` left behind, "Spike result");
+  - a Claude Code under a Codex launcher is not named; and a Hermes with its shared gateway under it gives `[]` for
+    `'hermes'`.
+- [ ] **Step 2: Red.** `npx vitest run src/lib/processHeldFiles.spec.ts src/lib/processTable.engineChildren.spec.ts`:
+  neither module export exists. The red output shows the two cases of the PM's decision failing by name: "picks no
+  home when two children hold files of two homes" and "lists four children at most, and ignores a fifth" (with
+  "names four children at most, the lowest pids" in the other spec).
 - [ ] **Step 3: Implement** the interfaces and rules above. The file's header says what is read and what never is,
   with decision 8's date.
-- [ ] **Step 4: Green.** `npx vitest run src/lib/processHeldFiles.spec.ts src/lib/processTable.engineChild.spec.ts src/lib/processTable.hermesGateway.spec.ts src/lib/processMounts.spec.ts && npx tsc --noEmit`.
+- [ ] **Step 4: Green.** `npx vitest run src/lib/processHeldFiles.spec.ts src/lib/processTable.engineChildren.spec.ts src/lib/processTable.hermesGateway.spec.ts src/lib/processMounts.spec.ts && npx tsc --noEmit`.
   `src/architecture.spec.ts` is not run here: no file of the core imports the new one yet.
 - [ ] **Step 5: Commit.** Red: `CLI: specs for the paths of the files a process holds open (red)`. Code:
   `CLI: where an engine's store is, from the path of the file its process holds open`.
@@ -1468,7 +1569,7 @@ Local, on this Mac, in `cli/`:
    npx vitest run src/architecture.spec.ts src/architecture.environment.spec.ts src/hookNotify.spec.ts src/hookServer.spec.ts \
      src/hookServer.hermes.spec.ts src/hookAdmission.golden.spec.ts src/lib/registry.spec.ts src/lib/registry.hermesHome.spec.ts \
      src/lib/registryAdmission.golden.spec.ts src/lib/gatewayRuntime.spec.ts src/lib/openrouter.spec.ts src/lib/processMounts.spec.ts \
-     src/lib/processHeldFiles.spec.ts src/lib/processTable.engineChild.spec.ts \
+     src/lib/processHeldFiles.spec.ts src/lib/processTable.engineChildren.spec.ts \
      src/lib/gridAssignment.spec.ts src/lib/gridAssignmentWire.spec.ts src/lib/gridAssignmentShapes.golden.spec.ts src/lib/apiModels.spec.ts \
      src/lib/terminalAgentDiscovery src/lib/terminalAgentReconciler.wrapperExec.spec.ts src/lib/offThreadExec.spec.ts \
      src/engines/pluginPosts.spec.ts src/engines/otherHooks.golden.spec.ts src/engines/nativeVersion.golden.spec.ts \
@@ -1478,8 +1579,9 @@ Local, on this Mac, in `cli/`:
    git grep -n -E "processEnv\.js|readProcessEnv|probeGatewayRuntime|probeGridAssignment|profileHomeFromEnv|probeDsh|probeHermesHomeDerived|homeFromEnvironment|hiddenProcessEnv" -- cli/src cli/hook cli/e2e
    ```
 
-   A spec file a lost engine's branch did not make (`processHeldFiles`, `processTable.engineChild`, `discoveries`) is
-   left out of the list. To see: every file passes, none of the new cases skipped; the `git grep` prints nothing.
+   Codex is held, so every file of the list exists whatever Hermes's verdict is. To see: every file passes, none of
+   the new cases skipped (in `processHeldFiles`: two children of two homes give no home, a fifth child is never
+   listed); the `git grep` prints nothing.
 
 2. **macOS, end to end** (the workflow below runs these on Linux only, and macOS is where `ps eww` ran and where
    `lsof` now runs). One file at a time, with a short TMPDIR of the run's own (an agent's TMPDIR on this Mac is too
@@ -1494,7 +1596,8 @@ Local, on this Mac, in `cli/`:
 
    To see: each file passes. In `engineModelControl`, the Claude Code typed in with the OpenRouter endpoint lists no
    model of its own and the plain one does; in `enginehomes`, the typed Codex's row has its own home, from its hook
-   and (Codex held) from its rollout with no hook; in `modelSwitch`, the row's grid after each move; in
+   and, with no hook, from the rollout its child holds (open question 1); in `modelSwitch`, the row's grid after each
+   move; in
    `hermesTerminalRecord` (Hermes held), the Hermes with a `HOME` of its own, in no sandbox, is bound, its saved row
    has the home and no mark, and its restart is handed that home as `HERMES_HOME` and resumes there (a
    `HERMES_HOME=/x hermes` typed by hand, restarted from Harness). `serviceProcesses` changes nothing that differs on macOS, and
@@ -1539,7 +1642,8 @@ On GitHub:
 
 **Temporary workflow:** one, `.github/workflows/tmp-process-env-secrets.yml` (Task 0: the spike, one macOS job and
 one Linux job of at most 20 minutes each, `permissions: contents: read`, no secret, no account, no cache and no
-artifact, run once from the main session's one push). It is removed before the pull request, and on the final head
+artifact, run once for each of the main session's pushes: the first measured Codex, the second measures Hermes). It is
+removed before the pull request, and on the final head
 
 ```bash
 git diff origin/main...HEAD -- .github/workflows/
