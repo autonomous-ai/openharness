@@ -4,7 +4,7 @@
  * test asks, by a fake of that app above it, as the open scan reads its parents (src/cable/hosts/scannedApp.ts).
  */
 import { spawn, type ChildProcess } from 'node:child_process'
-import { existsSync, mkdirSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, symlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { observedAgentId } from '../../src/cable/hosts/observed.js'
 import { until, type IsolatedDaemon } from './daemon.js'
@@ -112,6 +112,18 @@ export class Outside {
   type(text: string): void {
     this.tab.stdin!.write(text)
     this.tab.stdin!.write('\r')
+  }
+
+  /**
+   * Named as Claude Code names a session in its own process record: [nameSource] `user` for a name the person gave it,
+   * `derived` for one Claude Code made up. The record is the one the engine wrote as it started (fakeEngine.mjs
+   * announceProcess), which nothing rewrites later; written beside it and renamed over, so the daemon never reads half.
+   */
+  named(d: IsolatedDaemon, name: string, nameSource: 'user' | 'derived'): void {
+    const record = join(dirname(d.env.CLAUDE_PROJECTS_DIR!), 'sessions', `${this.pid}.json`)
+    const row = JSON.parse(readFileSync(record, 'utf8')) as Record<string, unknown>
+    writeFileSync(`${record}.tmp`, JSON.stringify({ ...row, name, nameSource }))
+    renameSync(`${record}.tmp`, record)
   }
 
   /** Whether its hook for [event] has run since the engine started, as the engine noted it. */
