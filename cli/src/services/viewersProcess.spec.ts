@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { CoreApi, CorePorts, ViewersPort } from '../core/api.js'
+import type { AgentLife, CoreApi, CorePorts, ViewersPort } from '../core/api.js'
 import type { AgentDshContext } from '../lib/agentFrame.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcessOptions } from './process.js'
@@ -11,13 +11,14 @@ vi.mock('./process.js', () => ({ runServiceProcess: vi.fn(() => ({ stop: vi.fn()
 const agent = (agentId = 'a1', over: Partial<RegisteredSession> = {}) =>
   ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', dsh: 'acme/blender', cwd: `/work/${agentId}`, ...over }) as RegisteredSession
 
-/** Viewers that start nothing: what each agent's frame says is whatever the test sets. */
+/** Viewers that start nothing: what each agent's frame says is whatever the test sets, and what they hear of agents
+ *  (`attach`, `detach`) is recorded. */
 function fakeViewers() {
   const contexts = new Map<string, AgentDshContext>()
   const urls = new Map<string, string>()
+  const attach = vi.fn((_session: RegisteredSession) => {})
+  const detach = vi.fn((_agentId: string) => {})
   const port = {
-    attach: vi.fn(),
-    detach: vi.fn(),
     frameContext: vi.fn((session: RegisteredSession) => contexts.get(session.agentId) ?? null),
     forwardingUrl: vi.fn((agentId: string) => urls.get(agentId) ?? null),
     stop: vi.fn(async () => {}),
@@ -25,12 +26,26 @@ function fakeViewers() {
     surface: vi.fn(async (_connId: string, payload: Record<string, unknown>) => ({ data: 'jpeg', asked: payload })),
     closed: vi.fn((_connId?: string) => {}),
   } satisfies ViewersPort
-  return { port, contexts, urls }
+  /** As services/viewers.ts follows agents: each look at one with a harness, and its end. */
+  const start = (core: CoreApi, ports: CorePorts) => {
+    core.agents.follow?.((event: AgentLife) => {
+      if (event.kind === 'running') attach(event.session)
+      else if (event.kind === 'ended') detach(event.agentId)
+    })
+    ports.viewers = port
+  }
+  return { port, contexts, urls, attach, detach, start }
 }
 
-/** A connection to the core that records what it is told and answers `agents` with `listed`. */
-function connection(listed: unknown = { agents: [] }) {
-  const query = vi.fn(async (name: string, _payload?: Record<string, unknown>) => (name === 'agents' ? listed : { kept: true }) as Record<string, unknown>)
+/** What the core tells a service of agents (core/agentLife.ts): a look at one, and its end. */
+const running = (session: unknown) => ({ kind: 'agent', event: { kind: 'running', session } })
+const ended = (agentId: unknown) => ({ kind: 'agent', event: { kind: 'ended', agentId } })
+
+/** A connection to the core that records what it is told and answers the agents it follows with `listed`. A core from
+ *  before agents were followed (`older`) does not know `follow_agents`, and answers `agents` so. */
+function connection(listed: unknown = { agents: [] }, older = false) {
+  const query = vi.fn(async (name: string, _payload?: Record<string, unknown>) => (
+    name === 'follow_agents' ? (older ? { error: 'UNKNOWN_QUERY' } : listed) : name === 'agents' ? listed : { kept: true }) as Record<string, unknown>)
   const told = () => query.mock.calls.filter(([name]) => name === 'context').map(([, payload]) => payload)
   return { core: { query } satisfies CoreConnection, query, told }
 }
@@ -48,7 +63,7 @@ describe('the viewers in their own process', () => {
     const handle = runViewersService({
       dataDir: '/data', socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't',
       run: (given) => { options = given; return service },
-      start: (core: CoreApi, ports: CorePorts) => { api = core; ports.viewers = viewers.port },
+      start: (core: CoreApi, ports: CorePorts) => { api = core; viewers.start(core, ports) },
       ...over,
     })
     return { viewers, api: api!, options: options!, service, handle }
@@ -109,13 +124,13 @@ describe('the viewers in their own process', () => {
     options.onConnected!(core.core)
     await flush()
     viewers.contexts.set('a1', { id: 'acme/blender', name: 'Blender', viewerUrl: null, viewerName: 'Blender Viewer', verdict: null })
-    options.onEvent!({ kind: 'attach', session: agent() })
-    expect(viewers.port.attach).toHaveBeenCalledWith(agent())
+    options.onEvent!(running(agent()))
+    expect(viewers.attach).toHaveBeenCalledWith(agent())
     expect(api.agents.byAgent('a1')).toEqual(agent())
     expect(api.agents.resolve('a1')).toEqual(agent())
     expect(core.told()).toEqual([{ agentId: 'a1', context: viewers.contexts.get('a1'), forwardingUrl: null }])
-    options.onEvent!({ kind: 'detach', agentId: 'a1' })
-    expect(viewers.port.detach).toHaveBeenCalledWith('a1')
+    options.onEvent!(ended('a1'))
+    expect(viewers.detach).toHaveBeenCalledWith('a1')
     expect(api.agents.byAgent('a1')).toBeUndefined()
     // What a stopping viewer says after its detach is not the core's to hear.
     api.clients.viewerChanged('a1')
@@ -126,7 +141,7 @@ describe('the viewers in their own process', () => {
     const { viewers, api, options } = setup()
     const core = connection()
     options.onConnected!(core.core)
-    options.onEvent!({ kind: 'attach', session: agent() })
+    options.onEvent!(running(agent()))
     // A viewer came up: its URL, and where the windows' pane forwards.
     viewers.contexts.set('a1', { id: 'acme/blender', name: 'Blender', viewerUrl: 'http://127.0.0.1:7001/', verdict: null })
     viewers.urls.set('a1', 'http://127.0.0.1:7001/')
@@ -141,15 +156,15 @@ describe('the viewers in their own process', () => {
     api.agents.sync(agent())
     expect(core.told()).toHaveLength(3)
     // Said again on every attach, changed or not: a core that restarted keeps nothing until it attaches.
-    options.onEvent!({ kind: 'attach', session: agent() })
+    options.onEvent!(running(agent()))
     expect(core.told()).toHaveLength(4)
   })
 
   it('says nothing before it is connected, then everything the core lists once it has caught up', async () => {
     const { viewers, options } = setup()
     viewers.contexts.set('a1', { id: 'acme/blender', name: 'Blender', viewerUrl: null, verdict: null })
-    options.onEvent!({ kind: 'attach', session: agent() })
-    expect(viewers.port.attach).toHaveBeenCalledOnce()
+    options.onEvent!(running(agent()))
+    expect(viewers.attach).toHaveBeenCalledOnce()
     const core = connection({ agents: [agent()] })
     options.onConnected!(core.core)
     expect(core.told()).toEqual([])
@@ -159,45 +174,70 @@ describe('the viewers in their own process', () => {
 
   it('catches up with the core\'s agents on every connection: attaches what is missing, detaches what is gone', async () => {
     const { viewers, api, options } = setup()
-    options.onEvent!({ kind: 'attach', session: agent('gone') })
-    options.onEvent!({ kind: 'attach', session: agent('kept') })
+    options.onEvent!(running(agent('gone')))
+    options.onEvent!(running(agent('kept')))
     const core = connection({ agents: [agent('kept'), agent('new'), { not: 'an agent' }, null] })
     options.onConnected!(core.core)
     await flush()
-    expect(viewers.port.attach).toHaveBeenCalledWith(agent('new'))
-    expect(viewers.port.detach).toHaveBeenCalledWith('gone')
-    expect(viewers.port.detach).toHaveBeenCalledTimes(1)
+    expect(viewers.attach).toHaveBeenCalledWith(agent('new'))
+    expect(viewers.detach).toHaveBeenCalledWith('gone')
+    expect(viewers.detach).toHaveBeenCalledTimes(1)
     expect(api.agents.all().map((session) => session.agentId).sort()).toEqual(['kept', 'new'])
     expect(api.agents.live()).toHaveLength(2)
   })
 
+  it('asks to follow the agents with a harness at every look at them, as it connects', async () => {
+    const { options } = setup()
+    const core = connection()
+    options.onConnected!(core.core)
+    await flush()
+    expect(core.query).toHaveBeenCalledWith('follow_agents', { each: true, having: ['dsh'] })
+    expect(core.query).not.toHaveBeenCalledWith('agents')
+  })
+
+  // A core from before agents were followed (2026-11-15), under a master of this build: it says each look and end as
+  // `attach` and `detach`, and answers the agents with a harness as it was always asked. Delete on or after 2026-12-18.
+  it('under a core from before agents were followed, catches up from `agents` and hears its attach and detach', async () => {
+    const { viewers, api, options } = setup()
+    const core = connection({ agents: [agent('kept')] }, true)
+    options.onConnected!(core.core)
+    await flush()
+    expect(core.query).toHaveBeenCalledWith('agents')
+    expect(viewers.attach).toHaveBeenCalledWith(agent('kept'))
+    options.onEvent!({ kind: 'attach', session: agent('new') })
+    options.onEvent!({ kind: 'detach', agentId: 'kept' })
+    expect(viewers.attach).toHaveBeenCalledWith(agent('new'))
+    expect(viewers.detach).toHaveBeenCalledWith('kept')
+    expect(api.agents.all().map((session) => session.agentId)).toEqual(['new'])
+  })
+
   it('leaves an agent heard of since it asked: news newer than the core\'s answer', async () => {
     const { viewers, api, options } = setup()
-    options.onEvent!({ kind: 'attach', session: agent('a1') })
+    options.onEvent!(running(agent('a1')))
     let answer: (value: Record<string, unknown>) => void = () => {}
-    const query = vi.fn((name: string) => (name === 'agents' ? new Promise<Record<string, unknown>>((done) => { answer = done }) : Promise.resolve({ kept: true })))
+    const query = vi.fn((name: string) => (name === 'follow_agents' ? new Promise<Record<string, unknown>>((done) => { answer = done }) : Promise.resolve({ kept: true })))
     options.onConnected!({ query })
     // While the question is out: a new agent attached, an old one detached.
-    options.onEvent!({ kind: 'attach', session: agent('a4') })
-    options.onEvent!({ kind: 'detach', agentId: 'a1' })
+    options.onEvent!(running(agent('a4')))
+    options.onEvent!(ended('a1'))
     answer({ agents: [agent('a1')] })
     await flush()
     expect(api.agents.all().map((session) => session.agentId)).toEqual(['a4'])
     // Attached once, before the question: the answer naming it did not bring it back.
-    expect(viewers.port.attach.mock.calls.filter(([session]) => session.agentId === 'a1')).toHaveLength(1)
+    expect(viewers.attach.mock.calls.filter(([session]) => session.agentId === 'a1')).toHaveLength(1)
   })
 
   it('ignores an older connection\'s answer, an answer that names no agents, and a core that cannot answer', async () => {
     const { viewers, options } = setup()
     let answer: (value: Record<string, unknown>) => void = () => {}
-    const older = vi.fn((name: string) => (name === 'agents' ? new Promise<Record<string, unknown>>((done) => { answer = done }) : Promise.resolve({})))
+    const older = vi.fn((name: string) => (name === 'follow_agents' ? new Promise<Record<string, unknown>>((done) => { answer = done }) : Promise.resolve({})))
     options.onConnected!({ query: older })
     options.onConnected!(connection({ error: 'UNKNOWN_QUERY' }).core)
     answer({ agents: [agent('late')] })
     await flush()
     options.onConnected!({ query: vi.fn(async () => { throw new Error('the core went away') }) })
     await flush()
-    expect(viewers.port.attach).not.toHaveBeenCalled()
+    expect(viewers.attach).not.toHaveBeenCalled()
   })
 
   it('a word lost with its connection is said again on the next one', async () => {
@@ -208,7 +248,7 @@ describe('the viewers in their own process', () => {
     })
     viewers.contexts.set('a1', { id: 'acme/blender', name: 'Blender', viewerUrl: 'http://127.0.0.1:7001/', verdict: null })
     options.onConnected!({ query: lost })
-    options.onEvent!({ kind: 'attach', session: agent() })
+    options.onEvent!(running(agent()))
     await flush()
     const core = connection({ agents: [agent()] })
     options.onConnected!(core.core)
@@ -219,11 +259,16 @@ describe('the viewers in their own process', () => {
   it('ignores what it is told that it does not act on', () => {
     const { viewers, options } = setup()
     options.onEvent!({ kind: 'touch', sessionId: 's1' })
+    options.onEvent!({ kind: 'agent' })
+    options.onEvent!(running(undefined))
+    options.onEvent!(running({ dsh: 'acme/blender' }))
+    options.onEvent!(ended(7))
+    // What else agents do is not the viewers' business.
+    options.onEvent!({ kind: 'agent', event: { kind: 'stopped', agentId: 'a1' } })
     options.onEvent!({ kind: 'attach' })
-    options.onEvent!({ kind: 'attach', session: { dsh: 'acme/blender' } })
     options.onEvent!({ kind: 'detach', agentId: 7 })
-    expect(viewers.port.attach).not.toHaveBeenCalled()
-    expect(viewers.port.detach).not.toHaveBeenCalled()
+    expect(viewers.attach).not.toHaveBeenCalled()
+    expect(viewers.detach).not.toHaveBeenCalled()
   })
 
   it('stops its viewer servers when its process stops it, and only once, however often asked', async () => {

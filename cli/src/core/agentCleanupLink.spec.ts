@@ -20,10 +20,11 @@ function setup() {
 }
 
 describe('the agent cleanup in its own process, as the core sees it', () => {
-  it('tells it every stop, held until it hears it', () => {
-    const { link, notify } = setup()
-    link.port.closed('lead')
-    expect(notify).toHaveBeenCalledWith({ type: 'service_event', payload: { kind: 'closed', agentId: 'lead' } }, { untilDelivered: true })
+  // A stop it hears as every service that follows agents does, held for it while it is down (core/agentLife.ts,
+  // harnessd/services.ts `hears`): nothing of it is said here.
+  it('has no stop of its own to tell', () => {
+    const { link } = setup()
+    expect(Object.keys(link.port).sort()).toEqual(['forgetTold', 'stop', 'typed'])
   })
 
   it('tells it once that the person typed into a harness another agent started, by its agent id, and nothing of the rest', () => {

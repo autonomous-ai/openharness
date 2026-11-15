@@ -133,7 +133,7 @@ beforeEach(() => {
     stopJobs: new Map(), pinnedControls: new Set(),
     retainExitedSession: vi.fn((row, alive) => { store.save(row); if (alive) registry.releaseEngine(row.agentId, true); else registry.removeAgent(row.agentId) }),
     announceSession: vi.fn(), relaunchOverrides: vi.fn(async () => ({ ok: true as const, overrides: { env: {}, extraArgs: [], clearEnv: [] } })),
-    prepareSessionResume: vi.fn(), stopBackgroundJob: vi.fn(async () => {}), refreshGridWebSearch: vi.fn(), clearDeleted: vi.fn(), attachDsh: vi.fn(),
+    prepareSessionResume: vi.fn(), stopBackgroundJob: vi.fn(async () => {}), refreshGridWebSearch: vi.fn(), clearDeleted: vi.fn(), attach: vi.fn(),
     attachSession: vi.fn(async () => true),
   }
 })
@@ -378,12 +378,11 @@ describe('production resume handler', () => {
     expect(registry.byAgent(saved.agentId)?.permissionMode).toBe('ask')
   })
 
-  // Its browser and its login were kept while it was stopped: the resume starts it again.
-  it('attaches the browser of an agent whose Browser is on', async () => {
-    const attachBrowser = vi.fn()
+  // Its browser and its login were kept while it was stopped: the resume is a look at it, which starts it again.
+  it('looks at the resumed agent for the services that follow agents, its row as it was saved', async () => {
     rewrite({ browser: true })
-    expect(await createResumeAgentService({ ...deps, attachBrowser })(saved.agentId)).toMatchObject({ ok: true })
-    expect(attachBrowser).toHaveBeenCalledWith(expect.objectContaining({ agentId: saved.agentId, browser: true }))
+    expect(await createResumeAgentService(deps)(saved.agentId)).toMatchObject({ ok: true })
+    expect(deps.attach).toHaveBeenCalledWith(expect.objectContaining({ agentId: saved.agentId, browser: true }))
   })
 
   it('does not join concurrent Open requests with different permission choices', async () => {
@@ -405,7 +404,7 @@ describe('production resume handler', () => {
     expect(buildEngineLaunchArgv).toHaveBeenCalledWith(engine, expect.objectContaining({ resumeSessionId: saved.sessionId, cwd: dir, permissionMode: 'plan', bypassPermission: true, extraArgs: ['--fixture'], clearEnv: ['OLD'], harnessNode: true, installIfMissing: undefined }))
     expect(create).toHaveBeenCalledTimes(1)
     expect(create.mock.calls[0][0].env).toEqual({ CODEX_HOME: '/profile', HARNESS_DSH: 'fixture' })
-    expect(deps.attachDsh).toHaveBeenCalledTimes(1)
+    expect(deps.attach).toHaveBeenCalledTimes(1)
     expect(deps.stoppedAgents.get(saved.agentId)?.sessionId).toBe(saved.sessionId)
     expect(deps.stoppedAgents.beginResume(saved.agentId)).not.toBeNull()
     const disk = JSON.parse(readFileSync(join(env.ADAPTER_DATA_DIR, 'registry.json'), 'utf8'))

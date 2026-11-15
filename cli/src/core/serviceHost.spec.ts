@@ -14,15 +14,15 @@ class FakeSearch {
   async tail(sessionId: string) { return { sessionId } as never }
   stop(): void { this.calls.push('stop') }
 }
-// The search port as these tests drive it: two more members, whose fallback is to fail, sync and async —
-// the shapes of a member a request needs answered. The host guards whatever the fallbacks name.
-type TestPort = SearchPort & { search(query: string, options: object): unknown; tail(sessionId: string, options: object): Promise<unknown> }
+// The search port as these tests drive it: three more members, a notice, and two whose fallback is to fail, sync and
+// async — the shapes of a member a request needs answered. The host guards whatever the fallbacks name.
+type TestPort = SearchPort & { deleteHistory(sessionId: string): void; search(query: string, options: object): unknown; tail(sessionId: string, options: object): Promise<unknown> }
 const SEARCH = {
   touch: undefined, deleteHistory: undefined, session: undefined, search: FAIL, tail: later(FAIL), stop: undefined,
 } as unknown as PortFallbacks<SearchPort>
 const testPort = (h: { ports: CorePorts }): TestPort => h.ports.search as unknown as TestPort
 const VIEWERS: PortFallbacks<ViewersPort> = {
-  attach: undefined, detach: undefined, frameContext: null, forwardingUrl: null, stop: later(undefined),
+  frameContext: null, forwardingUrl: null, stop: later(undefined),
   stream: false, surface: later({}), closed: undefined,
 }
 /** The viewer streams' members, which these tests never call. */
@@ -122,7 +122,7 @@ describe('hosting services so one that fails cannot take the core down', () => {
       const h = host()
       let viewersStop: () => Promise<void> = async () => { throw new Error('viewer hung') }
       h.services.start('viewers', (_core, ports) => {
-        ports.viewers = { attach: vi.fn(), detach: vi.fn(), frameContext: vi.fn(() => null), forwardingUrl: vi.fn(() => null), stop: () => viewersStop(), ...STREAMS }
+        ports.viewers = { frameContext: vi.fn(() => null), forwardingUrl: vi.fn(() => null), stop: () => viewersStop(), ...STREAMS }
       }, fakeCore(), VIEWERS)
       await expect(h.ports.viewers!.stop()).resolves.toBeUndefined()
       viewersStop = () => { throw new Error('sync throw in async member') }
@@ -133,7 +133,7 @@ describe('hosting services so one that fails cannot take the core down', () => {
     it('passes a promise that resolves straight through', async () => {
       const h = host()
       h.services.start('viewers', (_core, ports) => {
-        ports.viewers = { attach: vi.fn(), detach: vi.fn(), frameContext: vi.fn(() => null), forwardingUrl: vi.fn(() => 'http://v'), stop: async () => {}, ...STREAMS }
+        ports.viewers = { frameContext: vi.fn(() => null), forwardingUrl: vi.fn(() => 'http://v'), stop: async () => {}, ...STREAMS }
       }, fakeCore(), VIEWERS)
       expect(h.ports.viewers!.forwardingUrl('a1')).toBe('http://v')
       await expect(h.ports.viewers!.stop()).resolves.toBeUndefined()
@@ -196,9 +196,9 @@ describe('hosting services so one that fails cannot take the core down', () => {
 
       const async = host({ maxFailures: 1 })
       async.services.start('viewers', (_core, ports) => {
-        ports.viewers = { attach: () => { throw new Error('x') }, detach: vi.fn(), frameContext: vi.fn(() => null), forwardingUrl: vi.fn(() => null), stop: async () => { throw new Error('viewer stuck') }, ...STREAMS }
+        ports.viewers = { frameContext: () => { throw new Error('x') }, forwardingUrl: vi.fn(() => null), stop: async () => { throw new Error('viewer stuck') }, ...STREAMS }
       }, fakeCore(), VIEWERS)
-      async.ports.viewers!.attach({} as never)
+      async.ports.viewers!.frameContext({} as never)
       await new Promise((resolve) => setImmediate(resolve))
       expect(async.services.isOff('viewers')).toBe(true)
 
@@ -377,7 +377,7 @@ describe('hosting services so one that fails cannot take the core down', () => {
       const member = host({ faults: testFaults('search.touch') })
       const real = startSearch(member, new FakeSearch()) as unknown as FakeSearch
       member.ports.search!.touch('s1')
-      member.ports.search!.deleteHistory('s1')
+      testPort(member).deleteHistory('s1')
       expect(real.calls).toEqual(['delete s1'])
       expect(member.lines).toEqual(['[services] search.touch failed · injected fault: search.touch'])
     })

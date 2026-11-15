@@ -1,13 +1,20 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdir, mkdtemp, open, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { agentTmpFolder } from './agentTmp.js'
+import { agentTmpRoot } from './agentTmp.js'
 import { MEDIA_PREVIEW_CHUNK_BYTES, MEDIA_PREVIEW_MAX_BYTES, readMediaPreviewChunk, tempRoots } from './mediaPreview.js'
 
-it('names both temp directories, because macOS has a private one and agents still write /tmp, and the folder Harness keeps for its agents\' files, which the daemon\'s own tmpdir is not', () => {
-  expect(tempRoots()).toEqual([tmpdir(), '/tmp', ...(process.platform === 'win32' ? [] : [agentTmpFolder()])])
+it('names both temp directories, because macOS has a private one and agents still write /tmp', () => {
+  expect(tempRoots()).toContain(tmpdir())
+  expect(tempRoots()).toContain('/tmp')
+})
+
+it('adds the folder Harness keeps for its agents\' files where there is one, as the daemon\'s own tmpdir is not it', () => {
+  vi.mocked(agentTmpRoot).mockReturnValueOnce('/data/agent-tmp')
+  expect(tempRoots()).toEqual([tmpdir(), '/tmp', '/data/agent-tmp'])
+  expect(tempRoots()).toEqual([tmpdir(), '/tmp'])
 })
 
 describe('remote media preview reads', () => {

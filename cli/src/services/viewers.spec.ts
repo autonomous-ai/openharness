@@ -1,7 +1,7 @@
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { env } from '../config/env.js'
-import { emptyPorts, type ViewersPort } from '../core/api.js'
+import { emptyPorts, VIEWERS_FOLLOW, type AgentLife, type ViewersPort } from '../core/api.js'
 import { catalogEntry } from '../dsh/catalog.js'
 import { installedDsh } from '../dsh/installed.js'
 import { dshViewerName } from '../dsh/manifest.js'
@@ -65,12 +65,17 @@ const agent = (over: Partial<RegisteredSession> = {}) =>
 
 function setup(live: RegisteredSession | null = agent(), terminalAvailable = true) {
   built.ledger.length = 0; built.viewers.length = 0; built.verdicts.length = 0; built.order.length = 0; built.forwarders.length = 0; built.surfaces.length = 0
+  // What the core tells the service of agents (core/agentLife.ts), as it follows them.
+  let heard: (event: AgentLife) => void = () => {}
+  const unfollow = vi.fn()
+  const follow = vi.fn((listener: (event: AgentLife) => void) => { heard = listener; return unfollow })
   const core = fakeCore({
-    agents: { byAgent: vi.fn(() => live ?? undefined), terminalAvailable: vi.fn(() => terminalAvailable), sync: vi.fn() },
+    agents: { byAgent: vi.fn(() => live ?? undefined), terminalAvailable: vi.fn(() => terminalAvailable), sync: vi.fn(), follow },
   })
   const ports = emptyPorts()
   startViewers(core, ports)
-  return { core, port: ports.viewers as ViewersPort, ledger: built.ledger[0], viewers: built.viewers[0], verdicts: built.verdicts[0], forwarder: built.forwarders[0], surfaces: built.surfaces[0] }
+  return { core, port: ports.viewers as ViewersPort, ledger: built.ledger[0], viewers: built.viewers[0], verdicts: built.verdicts[0], forwarder: built.forwarders[0], surfaces: built.surfaces[0],
+    follow, unfollow, attach: (session: RegisteredSession) => heard({ kind: 'running', session }), detach: (agentId: string) => heard({ kind: 'ended', agentId }), heard: (event: AgentLife) => heard(event) }
 }
 
 describe('the DSH viewers service', () => {
@@ -153,53 +158,67 @@ describe('the DSH viewers service', () => {
   })
 
   describe('attaching and detaching', () => {
+    // A look at each agent with a harness, and its end, as every service that follows agents hears them.
+    it('follows the agents with a harness, and stops following as it stops', async () => {
+      const { follow, unfollow, port, viewers, verdicts, heard } = setup()
+      expect(follow).toHaveBeenCalledWith(expect.any(Function), VIEWERS_FOLLOW)
+      // What else agents do is not the viewers' business.
+      heard({ kind: 'stopped', agentId: 'a1' })
+      heard({ kind: 'purged', agentId: 'a1', sessionIds: ['s1'] })
+      heard({ kind: 'taken', from: 'a1', to: 'a2' })
+      expect(viewers.start).not.toHaveBeenCalled()
+      expect(verdicts.unwatch).not.toHaveBeenCalled()
+      await port.stop()
+      expect(unfollow).toHaveBeenCalled()
+    })
+
     it('watches the verdict file in the agent\'s folder and starts its viewer', () => {
-      const { port, viewers, verdicts } = setup()
-      port.attach(agent())
+      const { port, viewers, verdicts, attach, detach } = setup()
+      attach(agent())
       expect(verdicts.watch).toHaveBeenCalledWith('a1', join('/work/scene', '.harness/verdict.json'))
       expect(viewers.start).toHaveBeenCalledWith('a1', blender, '/work/scene')
     })
 
     it('watches only the verdict of a harness with no viewer', () => {
-      const { port, viewers, verdicts } = setup()
+      const { port, viewers, verdicts, attach, detach } = setup()
       vi.mocked(installedDsh).mockReturnValueOnce({ id: 'cad', manifest: { name: 'CAD' } } as never)
-      port.attach(agent({ dsh: 'cad' }))
+      attach(agent({ dsh: 'cad' }))
       expect(verdicts.watch).toHaveBeenCalled()
       expect(viewers.start).not.toHaveBeenCalled()
     })
 
     it('says once per harness when it is not installed, and attaches nothing', () => {
-      const { port, verdicts } = setup()
+      const { port, verdicts, attach, detach } = setup()
       vi.mocked(installedDsh).mockReturnValue(undefined)
-      port.attach(agent())
-      port.attach(agent({ agentId: 'a2' }))
+      attach(agent())
+      attach(agent({ agentId: 'a2' }))
       expect(console.warn).toHaveBeenCalledTimes(1)
       expect(console.warn).toHaveBeenCalledWith('[dsh] blender is not installed on this machine · agent a1 runs as plain claude (no viewer, no verdict)')
       expect(verdicts.watch).not.toHaveBeenCalled()
     })
 
     it('attaches nothing for an agent with no harness or no folder', () => {
-      const { port, verdicts } = setup()
-      port.attach(agent({ dsh: undefined }))
-      port.attach(agent({ cwd: undefined }))
+      const { port, verdicts, attach, detach } = setup()
+      attach(agent({ dsh: undefined }))
+      attach(agent({ cwd: undefined }))
       expect(installedDsh).not.toHaveBeenCalled()
       expect(verdicts.watch).not.toHaveBeenCalled()
     })
 
     it('says why a viewer failed to start', async () => {
-      const { port, viewers } = setup()
+      const { port, viewers, attach, detach } = setup()
       viewers.start.mockRejectedValueOnce(new Error('port in use')).mockRejectedValueOnce('no python')
-      port.attach(agent())
-      port.attach(agent())
+      attach(agent())
+      attach(agent())
       await vi.waitFor(() => expect(console.warn).toHaveBeenCalledTimes(2))
       expect(console.warn).toHaveBeenCalledWith('[dsh] blender viewer failed to start · port in use')
       expect(console.warn).toHaveBeenCalledWith('[dsh] blender viewer failed to start · no python')
     })
 
     it('detaching stops the watch and the viewer and forgets what the frame said', () => {
-      const { port, viewers, verdicts } = setup()
+      const { port, viewers, verdicts, attach, detach } = setup()
       viewers.deps.onUrl('a1', 'http://127.0.0.1:7000')
-      port.detach('a1')
+      detach('a1')
       expect(verdicts.unwatch).toHaveBeenCalledWith('a1')
       expect(viewers.stop).toHaveBeenCalledWith('a1')
       expect(port.frameContext(agent())).toMatchObject({ viewerUrl: null })

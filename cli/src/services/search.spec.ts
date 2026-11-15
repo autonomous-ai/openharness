@@ -1,5 +1,6 @@
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createAgentLife } from '../core/agentLife.js'
 import { emptyPorts, type CoreApi } from '../core/api.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { SessionSearchIndexOptions } from '../lib/sessionSearch/indexer.js'
@@ -39,8 +40,10 @@ const ASKER = { local: false, owner: true }
 function setup(agents: RegisteredSession[] = [], external: unknown[] = [], owned: string[] = []) {
   const store = { ownedSessionIds: vi.fn(() => new Set(owned)) }
   vi.mocked(SessionSearchStore.open).mockReturnValue(store as never)
+  // What happens to agents, as the core tells whoever follows them (core/agentLife.ts): a purge.
+  const hub = createAgentLife({ live: () => [], notify: () => true, hears: {} })
   const core = fakeCore({
-    agents: { all: vi.fn(() => agents), displayName: vi.fn((s: RegisteredSession) => `name of ${s.agentId}`) },
+    agents: { all: vi.fn(() => agents), displayName: vi.fn((s: RegisteredSession) => `name of ${s.agentId}`), follow: hub.follow },
     transcripts: { databaseHistory: vi.fn((s: RegisteredSession) => (s.engine === 'opencode' ? reader : undefined)) },
 
   })
@@ -49,7 +52,7 @@ function setup(agents: RegisteredSession[] = [], external: unknown[] = [], owned
   vi.mocked(createExternalSessions).mockReturnValue(readers as never)
   const ports = emptyPorts()
   const requests = startSearch(core, ports)
-  return { core, ports, store, requests, readers, index: captures.index as Recorded }
+  return { core, ports, store, requests, readers, hub, index: captures.index as Recorded & { deleteHistory: ReturnType<typeof vi.fn> } }
 }
 
 describe('the session search service', () => {
@@ -222,7 +225,7 @@ it('keeps external inspection available without SQLite and sends every port thro
   expect(readers.inspect).toHaveBeenCalledWith(request)
   const options = vi.mocked(createExternalSessions).mock.calls.at(-1)![0]
   expect(options.title?.('conversation')).toBe('Indexed')
-  ports.search!.touch('conversation'); ports.search!.deleteHistory('conversation'); ports.search!.session('conversation'); ports.search!.stop()
+  ports.search!.touch('conversation'); ports.search!.session('conversation'); ports.search!.stop()
   vi.mocked(SessionSearchStore.open).mockReturnValueOnce(null)
   const offline = startSearch(core, ports, { providers: [], title: id => id === 'named' ? 'Name' : undefined })
   const withoutIndex = vi.mocked(createExternalSessions).mock.calls.at(-1)![0]
@@ -230,5 +233,24 @@ it('keeps external inspection available without SQLite and sends every port thro
   expect(withoutIndex.title?.('unnamed')).toBeUndefined()
   expect(offline).toEqual({})
   expect(await ports.search!.inspect(request)).toEqual({ ok: true })
-  ports.search!.touch('conversation'); ports.search!.deleteHistory('conversation'); expect(ports.search!.session('conversation')).toBeUndefined(); ports.search!.stop()
+  ports.search!.touch('conversation'); expect(ports.search!.session('conversation')).toBeUndefined(); ports.search!.stop()
+})
+
+// A purge is held for search while its process is down (harnessd/services.ts `hears`), so it is heard once in any case.
+it('forgets every conversation of a purged harness as it hears the purge, and nothing else it hears, until it stops', () => {
+  const { ports, hub, index } = setup()
+  hub.purged('a1', ['k2', 'k1'])
+  expect(index.deleteHistory.mock.calls).toEqual([['k2'], ['k1']])
+  hub.stopped('a1')
+  hub.taken('a1', row({ agentId: 'a2' }))
+  hub.running(row({}))
+  expect(index.deleteHistory).toHaveBeenCalledTimes(2)
+  ports.search!.stop()
+  hub.purged('a3', ['k3'])
+  expect(index.deleteHistory).toHaveBeenCalledTimes(2)
+  // With no index to forget from, a purge is heard and nothing is done.
+  vi.mocked(SessionSearchStore.open).mockReturnValueOnce(null)
+  const offline = createAgentLife({ live: () => [], notify: () => true, hears: {} })
+  startSearch(fakeCore({ agents: { follow: offline.follow } }), emptyPorts(), { providers: [] })
+  expect(() => offline.purged('a4', ['k4'])).not.toThrow()
 })
