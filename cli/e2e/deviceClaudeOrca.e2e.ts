@@ -44,10 +44,9 @@ class InOrca {
 
   get id(): string { return observedAgentId('claude', this.sessionId) }
 
+  /** d.env names no tmux or Harness pane (testing/daemonEnvironment.ts): only IN_ORCA says where this runs. */
   private env(): NodeJS.ProcessEnv {
-    const env: NodeJS.ProcessEnv = { ...this.d.env, ...IN_ORCA }
-    for (const name of ['TMUX', 'TMUX_PANE', 'HARNESS_PANE']) delete env[name]
-    return env
+    return { ...this.d.env, ...IN_ORCA }
   }
 
   private run(file: string, args: string[], input: Record<string, unknown>, cwd = this.cwd): Promise<{ stdout: string; stderr: string; code: number | null; ms: number }> {

@@ -48,7 +48,7 @@ export type SqliteReadResult =
   | { ok: false; reason: 'missing' | 'transient'; error?: Error }
 
 /** The engines that keep a conversation in a store; here, not beside the binding, for the handoff. */
-export const SQLITE_BACKED_ENGINES = ['opencode', 'kilo', 'hermes', 'devin', 'openclaw'] as const
+export { STORE_ENGINES as SQLITE_BACKED_ENGINES } from '../engines/otherEngines.js'
 
 const DEFAULT_BUSY_TIMEOUT_MS = 250
 const DEFAULT_TIMEOUT_MS = 5_000

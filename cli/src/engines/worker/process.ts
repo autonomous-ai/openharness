@@ -2,12 +2,12 @@ import { engineQuestionControlRequests } from './questionControlRequests.js'
 import type { CoreConnection } from '../../services/process.js'
 import { engineModelControlRequests } from './modelControlRequests.js'
 /** One engine's facets, hosted by the master's existing service supervisor. */
-import { isAbsolute } from 'node:path'
 import type { ServiceRequests } from '../../core/api.js'
 import { TranscriptPager } from '../../lib/transcriptPages.js'
 import { runServiceProcess, type ServiceProcess } from '../../services/process.js'
 import type { ServiceProcessOptions } from '../../serviceProcess.js'
-import type { EngineTranscript, HistoryAsk, TranscriptSession } from '../facets/transcript.js'
+import type { EngineTranscript, TranscriptSession } from '../facets/transcript.js'
+import { askOf, readerPath as path } from './readerChecks.js'
 import { engineLiveRequests } from './liveRequests.js'
 import { engineScreenRequests } from './screenRequests.js'
 import { engineSubmissionRequests } from './submissionRequests.js'
@@ -24,9 +24,6 @@ const loadReader = {
   claude: async () => (await import('../claude/transcript.js')).transcript,
   codex: async () => (await import('../codex/transcript.js')).transcript,
 }
-const path = (value: unknown): value is string => typeof value === 'string' && value.length <= 32_768
-  && !value.includes('\0') && isAbsolute(value)
-
 function sessionOf(value: unknown): TranscriptSession | null {
   if (!record(value) || (typeof value.sessionId !== 'string' || value.sessionId.length > 200)
     || (value.transcriptPath !== null && !path(value.transcriptPath))
@@ -34,13 +31,6 @@ function sessionOf(value: unknown): TranscriptSession | null {
     || (value.codexHome != null && !path(value.codexHome))) return null
   return { sessionId: value.sessionId, transcriptPath: value.transcriptPath,
     touchedAt: value.touchedAt, ...(value.codexHome === undefined ? {} : { codexHome: value.codexHome }) }
-}
-
-function askOf(value: unknown): HistoryAsk | null {
-  if (value === undefined) return {}
-  if (!record(value) || (value.limit !== undefined && (typeof value.limit !== 'number' || !Number.isInteger(value.limit) || value.limit < 1 || value.limit > 500))
-    || (value.before !== undefined && (typeof value.before !== 'string' || value.before.length > 2_000))) return null
-  return { limit: value.limit as number | undefined, before: value.before as string | undefined }
 }
 
 export interface ReaderRequestDeps {

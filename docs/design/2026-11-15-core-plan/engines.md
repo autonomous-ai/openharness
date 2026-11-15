@@ -4,18 +4,70 @@ Task: move the 14 other engines (opencode, cursor, kilo, devin, hermes, amp, agy
 muse, pi, omp, openclaw) out of the daemon core into ONE worker, `engine-others`. Rules: ../2026-11-15-core-plan.md
 (read its lessons). Audit rows: docs/design/2026-11-12-core-audit.md section 3, security items 3 and 5.
 
-State: worktree `.claude/worktrees/core-engines-1`, branch `core-engines-1`, two
-WIP commits (`ac64e94c79`, `d71bb11e2f`) on origin/main `d50957ac3c`, PUSHED to origin/core-engines-1. No PR.
-`npm ci` done in cli/.
+State (2026-11-15, the second agent): step 1 is split in two pull requests, as the lead allowed.
 
-## Update 2 (since the first notes)
+- **Step 1a, done:** PR #4317 from branch `core-engines-2` (the two WIP commits of `core-engines-1`, finished).
+  The worker `engine-others` reads the fourteen engines' history and last turns; the core routes, bounds and checks.
+- **Step 1b, not started in code:** the live part below (attach, normalizers and readers, live parsers, their Stop
+  rules, and the five profile `transcript()` readers). Start it from `main` once 1a has landed, on `core-engines-3`.
 
-- The lead agreed: steps 1 and 2 below are ONE PR (the parsers cannot leave without their Stop rules).
-- Done since: `engines/others/readerRequests.spec.ts` passes (7 tests); harnessd/services.spec.ts passes (44 tests,
-  new case for `otherEnginesVersion`, parser made strict: `/^(\d+):([1-9]\d{0,5})$/`). ENGINE_OTHERS version 1 will
-  mean everything this one PR delivers (readers + live + Stop rules): no released worker exists yet, so no bump needed.
-- Still failing/not run: `src/leanEntry.spec.ts` (2 cases about the lean bundle's roles: give `engine-others` its own
-  entry like engine-claude; run it alone, it builds the bundle and takes minutes).
+## Step 1a: what landed
+
+- Worker: `engines/others/otherEnginesProcess.ts` (named so the lean bundle gives it a file of its own, as
+  `claudeReaderProcess` is: `leanEntry.spec.ts` `RUNNER`), `readerRequests.ts`, `transcripts.ts` (history and last
+  turn of all fourteen, moved verbatim from core history.ts and lastTurn.ts, Amp's `threads export` with them).
+- Core: `core/engines/readers.ts` routes the fourteen to the worker with per-engine bounds; `history.ts` and
+  `lastTurn.ts` are generic; `core/transcripts/stores.ts` (was databaseHistory.ts) names a store; `engines/otherEngines.ts`
+  is the plain list (it stays in the core after 1b too). Inline (`HARNESSD_SERVICES=none`, an older master): the
+  same readers through `services/inline.ts`. `HARNESSD_ENGINE_OTHERS=<master pid>:1`: **version 1 means history and last
+  turn only.** Step 1b must bump `ENGINE_OTHERS_VERSION` to 2 and ask the worker for live only at 2 or more: a
+  1a master runs a 1a worker, which serves no live requests.
+- Proof: `e2e/otherEngines.e2e.ts` (a fake Pi that writes a turn for each line typed in its pane, announced as Pi's
+  extension does): no worker for an empty core; history and a live turn's recap (its last turn) read in the worker;
+  SIGKILL and SIGSTOP of the worker answer a read at once as unavailable (retryable) while the pane works on and the
+  core follows it, then read again once the master has it back; inline mode reads with no worker. Red on main.
+  The golden passes unchanged. Its opt-in case `OTHER_ENGINES_PERF=<report.json> E2E_BUNDLE=1` is the workload for
+  1b's before and after: four Pi conversations of 500 turns, attached again as the core starts, the core at rest for
+  30 s, 400 history reads. 1a, two runs each on a shared Mac: attach 1.37 to 1.65 s before, 1.37 to 1.41 s after (core
+  bound to attached); the core at rest 0.87 to 1.0% before, 0.87% after; the core's CPU for the 400 reads 0.45 s
+  before, 0.10 s after; a read's p95 1.2 ms before, 1.4 ms after.
+- From its review: a history past one frame of the link (4 MiB) comes back in parts the core asks for by offset
+  (`READER_PART`, up to 64 MiB): these engines have no pages, or none for some asks, and the core used to send a
+  whole replay on. A read past its deadline (15 s, Amp's history 25 s) is answered unavailable and keeps its place
+  until it ends; only one still running a minute later recycles the worker (one recycle fails every engine's reads).
+  An event the core cannot check is left out and counted, never the whole page. 1b's live pages can reuse the parts.
+- Still in the core after 1a, for 1b: Hermes's home lookup (`core/transcripts/stores.ts` `hermesDb`, which loads
+  Hermes's code and asks each profile's store, as attach does), and OpenClaw's store lookup (`lib/openclawStore.ts`).
+- Core: 543 files, 93,002 lines before (main 85d8e61897); 544 files, 92,925 lines after (+`engines/otherEngines.ts`).
+  The door (`engines/inProcess.ts`) still adds 107 files, 16,037 lines once one of their sessions attaches: 1b is
+  what takes that away.
+
+## Step 1b: what is left (one pull request)
+
+The design is below ("Design S"). The order that keeps every commit testable:
+
+1. Worker streams (`engines/others/streams.ts`): per session, the legacy `Watcher` in the worker plus the engine's
+   normalizer (file engines) or reader (store engines), Cursor's Task queue and sub-agent manager, OpenClaw's
+   holds, header and failed, Devin's turn aborted, copilot's `copilotHistoryTurnOpen` at open, agy's idle answer
+   at open (the core captures the pane and sends it), commandcode's run error as a frame `failure` and
+   `failureSummary`. The five profile `transcript()` readers (cursor, commandcode, pi, omp, grok) run over each line
+   in the worker and frames carry only their compact evidence (`frame.runtime`, as Claude Code's and Codex's).
+2. The protocol and its spec (`engines/others/streamRequests.ts`), with the core's validator.
+3. The core: `core/engines/otherStreams.ts` (handles, the one long-poll, re-open after a restart), then attach.ts,
+   ingest.ts, normalizers.ts and readerLoads.ts lose the fourteen; turnHooks.ts, input.ts (commandcode's open),
+   cursorTasks.ts (forwards the Task hook) and agyBackstop.ts (pane check in core, close through the worker) use the
+   handle; Stop rules as declared data with the core's own fallback close.
+4. The golden through the worker's stream with JSON round trips, unchanged; `watcher.addSession` cases become the
+   worker stream's tail starts, the same options.
+5. e2e: extend `otherEngines.e2e.ts`: live turns through the worker; the worker killed or frozen: the pane works
+   on, the agent says its live view is held (the core says so), and the turn typed meanwhile arrives once, after
+   the worker is back. Plus `eagerRepair.e2e.ts`, `eagerIdentity.e2e.ts` and `lean.e2e.ts`, which delete or stall
+   `core-inProcess-*` chunks and must change once those chunks leave the core.
+6. Numbers on the same workload (`OTHER_ENGINES_PERF`): attach, the core at rest, and per-line CPU on the live tail.
+
+## Design S, for the live part (the first agent's, after reading every touchpoint)
+
+- The lead agreed: the live parsers and their Stop rules are ONE pull request (the parsers cannot leave without them).
 - Design chosen for the live part (step 2), after reading all touchpoints: "Design S", worker-owned streams.
   - Why not the Claude/Codex pull protocol: Cursor's sub-agent manager (engines/cursor/subagent.ts) and the five
     store readers produce events with no file change the core could see, so the worker must be able to hand events
@@ -49,6 +101,7 @@ WIP commits (`ac64e94c79`, `d71bb11e2f`) on origin/main `d50957ac3c`, PUSHED to 
     `config()`, `models()`, targets and catalogs can stay in the core until the model-switch PR). Decide this first.
   - Measure before/after on the same workload: attach time per engine, core CPU at rest with N sessions of these
     engines (e2e/perf.e2e.ts), and per-line core CPU on the live tail.
+
 
 ## What I found (decides the plan)
 
@@ -87,45 +140,8 @@ WIP commits (`ac64e94c79`, `d71bb11e2f`) on origin/main `d50957ac3c`, PUSHED to 
 - Lessons that apply: measure the hop on attach and the live tail; core keeps its own bounds; "no answer" = unknown,
   never none/false; ask the worker before the first irreversible step.
 
-## Done in the WIP commit (core-engines-1, step 1 of the plan)
 
-- `engines/otherEngines.ts`: OTHER_ENGINES, isOtherEngine, OTHER_ENGINES_SERVICE='engine-others', STORE_ENGINES,
-  keepsStore, historyWaitMs. inProcess.ts and lib/sqliteRead.ts re-export (one list).
-- Worker: `engines/others/transcripts.ts` (history + last turn of all 14, moved verbatim from core history.ts and
-  lastTurn.ts; engine code loaded through the same lazy door, in the worker), `engines/others/readerRequests.ts`
-  (private `engine_history_page`/`engine_last_turn`, v1, engine named per read, 4 per engine / 16 total, 5 s deadline,
-  25 s for Amp history, recycle on timeout, 4 MiB reply cap), `engines/others/process.ts` (`runOtherEngines`),
-  registered in serviceProcess.ts.
-- harnessd/services.ts: host `engine-others` (onDemand, askedSince 0, 512/1024 MiB), `ENGINE_OTHERS_ENV`
-  (`HARNESSD_ENGINE_OTHERS=<pid>:1`), `otherEnginesVersion(env, ppid)` (0 = none).
-- Core: readers.ts routes the 14 to engine-others (per-engine bounds, denies the worker's queries), history.ts and
-  lastTurn.ts are generic (`readerFor` + `storeOf`), `core/transcripts/stores.ts` (renamed from databaseHistory.ts:
-  hermesDb + createStoreOf), main.ts wiring (othersHosted, isolated set, onDemand, startWaits, storeOf, inline
-  databaseHistory). Protocol: HistoryAnswer gains `truncated?`, events may be `subagent_finished`.
-- Specs updated and passing: history, lastTurn, openclaw (core/transcripts), stores, lib/databaseHistory (new),
-  readers (new cases), engines/registry, architecture (coreFiles +stores.ts +otherEngines.ts -databaseHistory.ts,
-  EDGE `^engines/others/`), and the golden passes unchanged through the worker port with JSON round trips.
-- `engines/others/readerRequests.spec.ts` written, NOT yet run.
-
-## Left for step 1 (finish before the PR)
-
-1. Run `npx vitest run src/engines/others/readerRequests.spec.ts` and fix.
-2. harnessd/services.spec.ts: 2 failures — the reader-worker list test and `serviceProcessesEnv` expectations need
-   `engine-others` and `[ENGINE_OTHERS_ENV]: '42:1'`; add tests for `otherEnginesVersion` (100% gate: test:harnessd).
-3. leanEntry.spec.ts: 2 failures (roles of the lean bundle): the new service process must be its own entry like
-   engine-claude; read the failure (it builds the bundle; takes minutes; run alone).
-4. e2e: new `cli/e2e/otherEngines.e2e.ts` copying engineReaders.e2e.ts: a fake Pi (eagerRepair.e2e.ts pattern) with a
-   written session file; `session_get` through the worker; no worker for an empty core; SIGKILL and SIGSTOP the
-   `engine-others` worker -> history ENGINE_UNAVAILABLE fast, core pid same, Pi pane alive, worker back, reads again;
-   `HARNESSD_SERVICES=none` reads inline with no worker process. Add the private types to the "UNSUPPORTED on the
-   client router" list. Run lean.e2e.ts, eagerRepair.e2e.ts, engineReaders.e2e.ts, history.e2e.ts, hermes*.e2e.ts.
-5. Docs: services/AGENTS.md table and cli/AGENTS.md process table get `engine-others`; audit doc: mark the rows'
-   progress (only my rows). Update the October plan doc's header if needed.
-6. Gates: `npx tsc --noEmit -p .`, `npm run test:core`, `npm run test:harnessd`, `python3 scripts/local-checks.py --list`
-   then `--run --base origin/main` from the clean committed head; `/code-review high` on the diff; PR (draft, receipt
-   in body, then ready). Core files/lines before: 547 files (coreFiles.txt), closure 543 files / 92,994 lines.
-
-## The plan after step 1 (one PR each, branches core-engines-2, -3, ...)
+## The first agent's plan, kept for its detail (its 2 and 3 are step 1b now, its 4 step 2, its 5 step 3)
 
 2. Live state to the worker (security item 3). Because of the coupling above, the Stop-rule touchpoints come in the
    same PR:
