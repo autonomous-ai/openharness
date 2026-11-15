@@ -58,8 +58,9 @@ vendor CLI — `ori claude`, an `env`-prefixed alias, a shell function — produ
 *wrapped* engine, with that engine's name, icon and normalizer. Discovery reads through the wrapper
 (and most wrappers, ori included, `exec` themselves away entirely), so there is nothing to add here
 for one. What a gateway launcher does change is billing: a session on one is display-only for
-model/effort. Codex's gateway is read from its argv (`lib/gatewayRuntime.ts`); every other engine's hook
-says its own in a header (`hookServer.ts` `hookFacts`).
+model/effort. Codex's gateway is read from its argv (`lib/gatewayRuntime.ts`); the hooks of Claude Code,
+OpenCode and Hermes say theirs in a header (`hookServer.ts` `hookFacts`). Any other engine has none Harness
+can see.
 
 ---
 
