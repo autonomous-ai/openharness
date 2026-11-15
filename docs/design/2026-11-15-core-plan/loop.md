@@ -110,6 +110,14 @@ Failures remain unknown rather than evidence that a process died. Platforms: she
 probe on Windows; local validation on macOS, Windows-specific options checked in tests, native Windows recorded
 separately when available.
 
+Step 3 review (local commits `f3ca1c2857`, `d8041621e3`): the cached directory sets contain only requested command
+names, never unrelated entries. The Windows Hermes launcher uses the shared extension order with asynchronous
+checks too. A synchronous reader's old shell flight cannot answer a lookup for a changed PATH. Native conversation
+proof keeps its existing remaining 3-second budget while shared ownership work has its own deadline; expiration is
+unavailable evidence. Those four regressions were reproduced red, then 81 related tests passed. The earlier affected
+set passed 440 tests (6 platform/opt-in skips); full gates and final matching-module benchmark acceptance are pending.
+Core footprint at the original base: 539 files / 92,700 lines. Publication and integration remain the coordinator's.
+
 ### PR 4 (core-loop-4): the registry save never sleeps the loop
 
 - `lib/registry.ts:492-601` `withRegistryFileLock`: `mkdir` lock dir + `owner.json` (fsync), on `EEXIST` it waits with
