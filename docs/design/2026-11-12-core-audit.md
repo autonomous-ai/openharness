@@ -362,7 +362,11 @@ today that the rule says it should not, most serious first:
 9. **It writes into the person's folder.** A start appends a "Saved APIs" block to the instruction file of the
    folder it launches in, once the person has saved an API (`lib/apiInstructions.ts:23-32`, from
    `core/agents/create.ts:426`, `launch.ts:68`, `fork.ts:180`). Its comment says only workspaces Harness made; the
-   code does not check. To confirm with a test, then fix.
+   code does not check. Fixed on 15 November: the note goes only into a project folder Harness made, directly in
+   the projects root (`~/harnesses`, `lib/projectFolder.ts` `projectsRoot`) as resolved on disk, and no Git checkout.
+   For a folder the person chose, the note is not written and the saved APIs are not read
+   (`lib/apiInstructions.spec.ts`, `e2e/storeProcess.e2e.ts`). A Store harness's own bootstrap still goes into the
+   folder it runs in (`dsh/runtime.ts`): that is how its instructions reach its engine.
 10. **Test hooks ship in the core** (`core/stall.ts`, `core/main.ts:2076, 3460`). They stay (13 November): a fault
     that holds the core's event loop has to run in the core's process, and each does nothing unless
     `HARNESSD_TEST_FAULTS` names it, which only whoever starts the daemon sets.
