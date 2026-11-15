@@ -28,9 +28,9 @@ function recorder(over: Partial<Deps> = {}, codes: Array<number | null> = []) {
   return { calls, logs, adapter, opener: createOpenActions({ run: deps.run, platform: deps.platform, adapters: [adapter], log }) }
 }
 
-/** What an agent's hook hints let a tap open, as the observed source reads them, for the hook's session. */
-const target = (hints: Record<string, string>, sessionId = UUID): OpenTarget => {
-  const place = { host: detectHost(hints), app: detectApp(hints), hints, sessionId }
+/** What an agent's hook hints let a tap open, as the observed source reads them, for the hook's session and engine. */
+const target = (hints: Record<string, string>, sessionId = UUID, engine = 'claude'): OpenTarget => {
+  const place = { host: detectHost(hints), app: detectApp(hints), hints, sessionId, engine }
   return { bundle: bundleOf(place.host, hints), pane: recorder().adapter.paneOf(place) }
 }
 const run = (file: string, ...args: string[]): Call => ({ file, args, timeoutMs: 10_000 })
@@ -94,6 +94,18 @@ describe('a tap on a session in the VS Code extension\'s tab (docs/specs/2026-11
       expect(tap.pane, JSON.stringify([hints, sessionId])).toBeUndefined()
       expect(await opener.open('a1', tap)).toBe(true)
       expect(calls, JSON.stringify([hints, sessionId])).toEqual([forward(bundle)])
+    }
+  })
+
+  // Claude Code hands its environment to what its tools run: a Codex session started from the extension's tab says the
+  // same word and VS Code's bundle id, and a Codex thread id is a UUID too. The link names Claude Code's sessions only.
+  it('another engine\'s session started from the extension\'s tab opens no link', async () => {
+    for (const engine of ['codex', 'gemini']) {
+      const { calls, opener } = recorder()
+      const tap = target(TAB, UUID, engine)
+      expect(tap.pane, engine).toBeUndefined()
+      expect(await opener.open('a1', tap)).toBe(true)
+      expect(calls, engine).toEqual([forward(VSCODE)])
     }
   })
 
