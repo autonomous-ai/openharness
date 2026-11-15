@@ -76,7 +76,8 @@ dial voice ──▶ devices: ObservedSource.send(agent, text)
 - **The binary is the Codex Harness itself launches** (PM, 2026-11-15): `engineBin('codex')` (`lib/engineBin.ts`:
   `CODEX_PATH`, else `codex`), resolved with `resolveBinaryOnPath` on the daemon's `PATH`. No login-shell probe: where
   Harness can launch Codex, the queue finds it.
-- `can()`: that binary resolves.
+- `can()`: that binary resolves. A look holds 30 s: the dial's list asks it for each Codex row every second while a
+  dial is connected, and a walk of `PATH` took 0.24 to 0.7 ms on this Mac (review, 2026-11-15).
 - `send` checks before it runs anything: the thread id is a UUID (`/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/`),
   the text is 1 to `MAX_TEXT` (2,000) characters. The text is passed as is (newlines stay: they do not submit anything
   in a queue), joined to its flag.

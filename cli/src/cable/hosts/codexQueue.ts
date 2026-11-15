@@ -13,6 +13,10 @@ import { MAX_TEXT } from './orca.js'
 // `--thread` also takes a session's name: only a thread id may reach it.
 export const CODEX_THREAD = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 export const QUEUE_TIMEOUT_MS = 10_000
+/** How long one look for codex holds. The dial's list asks can() for each queue-able Codex row on every 1 s tick while a
+ *  dial is connected, and a walk of a 63-folder PATH took 0.24 to 0.36 ms with codex on it and 0.7 ms without (this Mac,
+ *  2026-11-15). A codex installed or removed is seen within it, with no restart. */
+const BINARY_LOOK_MS = 30_000
 
 /** Why a send failed, as the log line names it: codex's exit code; 'no binary' when it is not there or could not
  *  start; 'refused' for a thread id or a text the queue will not run. */
@@ -35,6 +39,8 @@ export interface CodexQueueDeps {
 export interface CodexQueue { can(): boolean; send(threadId: string, text: string): Promise<CodexQueueResult> }
 
 export function codexQueueDeps(): Pick<CodexQueueDeps, 'run' | 'binary' | 'platform'> {
+  // The last look, on the monotonic clock: a wall clock set back would keep an old answer for as long.
+  let looked: { at: number; path: string | null } | undefined
   return {
     run: (file, args, { cwd, env, timeoutMs }) => new Promise((resolve) => {
       // The timeout's kill waits for the process to exit, and one stuck where even SIGKILL waits would keep its thread
@@ -57,8 +63,12 @@ export function codexQueueDeps(): Pick<CodexQueueDeps, 'run' | 'binary' | 'platf
       }
     }),
     // As a launch finds it: CODEX_PATH, else codex, on the daemon's PATH. A CODEX_PATH that is gone finds nothing, as a
-    // launch would.
-    binary: () => resolveBinaryOnPath(engineBin('codex')),
+    // launch would. A path that went since its look does not start: a definite failure, so today's route answers.
+    binary: () => {
+      const now = performance.now()
+      if (!looked || now - looked.at >= BINARY_LOOK_MS) looked = { at: now, path: resolveBinaryOnPath(engineBin('codex')) }
+      return looked.path
+    },
     platform: process.platform,
   }
 }

@@ -64,7 +64,7 @@ No file under `cli/src/core/` changes, and `cli/src/architecture.coreFiles.txt` 
 ## Global Constraints
 
 - **The command.** `execFile(codex, ['queue', '--thread', <id>, `--message=${text}`])`. No shell. The text is one argument, joined to its flag, passed as is: newlines stay.
-- **The binary** is the Codex Harness launches (PM, 2026-11-15): `resolveBinaryOnPath(engineBin('codex'))`, so `CODEX_PATH`, else `codex` on the daemon's `PATH`. No login-shell probe. Asked each time, never kept.
+- **The binary** is the Codex Harness launches (PM, 2026-11-15): `resolveBinaryOnPath(engineBin('codex'))`, so `CODEX_PATH`, else `codex` on the daemon's `PATH`. No login-shell probe. A look holds 30 s (the final review, below).
 - **Its surroundings.** `cwd` is the home directory, so no project's `.codex/` config is read. `CODEX_HOME` is `env.CODEX_HOME`. 10 s, `killSignal: 'SIGKILL'`, and a deadline that answers by itself, as `orca.ts` does.
 - **The thread id** is a UUID: `/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/`. `--thread` also takes "an exact session name" (`codex queue --help`, 0.167.0), so nothing else may reach it.
 - **The text** is 1 to `MAX_TEXT` (2,000) characters.
@@ -127,7 +127,7 @@ No file under `cli/src/core/` changes, and `cli/src/architecture.coreFiles.txt` 
   export function createCodexQueue(deps: CodexQueueDeps): CodexQueue
   ```
 - Rules:
-  - `can()`: not Windows, and `deps.binary()` is not null. Asked each time, never kept.
+  - `can()`: not Windows, and `deps.binary()` is not null.
   - `send`, in this order:
     1. A thread id that fails `CODEX_THREAD`, an empty text, a text over `MAX_TEXT`, or a text with a NUL: `failed`, `refused`. Nothing runs.
     2. A run under way for that thread: `busy`. Nothing runs.
@@ -366,7 +366,7 @@ The draft is written on the answer marked **Draft**.
 - **A failure's reason is the text the log shows** (`exit 1`, `no binary`), made once, in the queue. `count` takes it inside its route, so the devices' log line stays as it is and nothing formats it a second time.
 - **`CODEX_PATH` that names a missing file** answers no binary: the queue does not look for another `codex`, as a launch would not.
 - **`run`'s `env`** is what is set over the process's own environment, so a test names `CODEX_HOME` alone. The real `run` ends the child's stdin at once.
-- **`can()` is asked last and never kept.** The cost is one look for the binary (one file check with `CODEX_PATH`, else one walk of `PATH`) for each queue-able Codex session each time the dial's list is built, and a `codex` installed or removed is seen at the next look.
+- **`can()` is asked last, and a look for the binary holds 30 s** (the final review). The dial's list is built on every 1 s tick while a dial is connected, and a walk of `PATH` cost 0.24 to 0.7 ms on a 63-folder `PATH`, for each queue-able Codex row. A `codex` installed or removed is seen within 30 s.
 - **`timeout` is counted once**, as `codex-timeout`, with no `no-answer` beside it.
 - **`CODEX_THREAD` lives in `codexQueue.ts`**, and `observed.ts` imports it, as it imports `ORCA_HANDLE`. `MAX_TEXT` stays in `orca.ts`.
 - **`DevicesDeps.codex`** stands beside `DevicesDeps.orca`, so no spec of the service runs the developer's real `codex`.

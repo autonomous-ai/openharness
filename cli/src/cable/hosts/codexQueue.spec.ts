@@ -258,7 +258,7 @@ describe('codex queue', () => {
   })
 
   // The dial's list asks can() for each queue-able Codex row on every 1 s tick while a dial is connected (cableSession.ts
-  // `ticked`, cableHost.ts `machineSnapshot`): a walk of a 63-folder PATH took 0.36 ms with codex on it and 0.7 ms
+  // `ticked`, cableHost.ts `machineSnapshot`): a walk of a 63-folder PATH took 0.24 to 0.36 ms with codex on it and 0.7 ms
   // without (this Mac, 2026-11-15).
   it('the binary is looked for once in 30 s: a codex installed or removed is seen after them', () => {
     vi.useFakeTimers({ toFake: ['performance'] })
