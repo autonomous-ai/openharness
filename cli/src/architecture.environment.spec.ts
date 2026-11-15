@@ -4,8 +4,8 @@
  * it: `/proc/<pid>/environ`, `ps e` and `KERN_PROCARGS2` hand over all of it. So this reads every file of the daemon
  * and its hook, as code, so that a comment naming those is no finding.
  *
- * Its limits: it finds the patterns below and no more. A `ps` whose binary or argument list is built in a variable
- * (`run(ps, args)`) and a shell line (`sh -c 'ps eww …'`) are not reached; review is what catches those.
+ * Its limits: it finds the patterns below and no more. A `ps` argument list built in a variable (`run(ps, args)`) and a
+ * `ps` in a shell line (`sh -c 'ps eww …'`) are not reached; review is what catches those.
  */
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -14,8 +14,23 @@ import { expect, it } from 'vitest'
 
 const CLI = join(__dirname, '..')
 
-/** `ps`, or a path to it (`/bin/ps`). */
-const isPs = (node: ts.Node | undefined): boolean => !!node && ts.isStringLiteralLike(node) && /(^|\/)ps$/.test(node.text)
+/** `ps`, a path to it (`/bin/ps`), or a variable named `ps` that holds one. */
+const isPs = (node: ts.Node | undefined): boolean => !!node
+  && ((ts.isStringLiteralLike(node) && /(^|\/)ps$/.test(node.text)) || (ts.isIdentifier(node) && node.text === 'ps'))
+
+const unwrap = (node: ts.Expression): ts.Expression =>
+  ts.isAsExpression(node) || ts.isSatisfiesExpression(node) || ts.isParenthesizedExpression(node) ? unwrap(node.expression) : node
+
+/** The words of an argument list in order, into its spreads and both branches of a condition. */
+const words = (node: ts.Expression): ts.Expression[] => {
+  const inner = unwrap(node)
+  if (ts.isArrayLiteralExpression(inner)) return inner.elements.flatMap((element) => words(ts.isSpreadElement(element) ? element.expression : element))
+  if (ts.isConditionalExpression(inner)) return [...words(inner.whenTrue), ...words(inner.whenFalse)]
+  return [inner]
+}
+
+/** A `ps` option that takes the next word as its value: one ending in a letter that takes one (`-o`, `-wwp`), or a long one. */
+const takesValue = (word: string): boolean => /^-[A-Za-z]*[oOpPtuUgGCqsNM]$/.test(word) || /^--[^=]+$/.test(word)
 
 /** Each read of another process's environment in [code], one line a finding. Read as code: a comment names nothing. */
 function environmentReads(code: string, file = 'file.ts'): string[] {
@@ -32,13 +47,14 @@ function environmentReads(code: string, file = 'file.ts'): string[] {
     if ((ts.isIdentifier(node) || ts.isStringLiteralLike(node)) && /KERN_PROCARGS2|procargs/i.test(node.text)) report(node, node.text)
     if (ts.isCallExpression(node)) {
       node.arguments.forEach((argument, index) => {
-        const list = node.arguments[index + 1]
-        if (!isPs(argument) || !list || !ts.isArrayLiteralExpression(list)) return
-        list.elements.forEach((element, at) => {
+        const list = node.arguments[index + 1] && unwrap(node.arguments[index + 1])
+        if (!isPs(argument) || !list || !(ts.isArrayLiteralExpression(list) || ts.isConditionalExpression(list))) return
+        const all = words(list)
+        all.forEach((element, at) => {
           if (!ts.isStringLiteralLike(element)) return
-          const before = list.elements[at - 1]
-          // A word after an option is that option's value (`-o etime`), not a BSD-style option of its own.
-          const value = !!before && ts.isStringLiteralLike(before) && before.text.startsWith('-')
+          const before = all[at - 1]
+          // A word after an option that takes one is its value (`-o etime`), not a BSD-style option of its own.
+          const value = !!before && ts.isStringLiteralLike(before) && takesValue(before.text)
           if ((/^[A-Za-z]*e[A-Za-z]*$/.test(element.text) && !value) || /^-[A-Za-z]*E[A-Za-z]*$/.test(element.text)) {
             report(element, `ps ${element.text}`)
           }
