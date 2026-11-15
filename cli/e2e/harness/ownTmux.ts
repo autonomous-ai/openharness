@@ -22,7 +22,7 @@ function hintsToBlank(): string[] {
 /** Claude Code (the fake engine) in a tmux session the test opened on the daemon's private server, as a person opens
  *  one by hand: not a session Harness made, so its hooks tell the devices and register nothing. */
 export class InOwnTmux {
-  private constructor(private readonly d: IsolatedDaemon, readonly pane: string, readonly pid: number, readonly sessionId: string) {}
+  private constructor(private readonly d: IsolatedDaemon, readonly pane: string, readonly sessionId: string) {}
 
   /** The dial's id for it. */
   get id(): string { return observedAgentId('claude', this.sessionId) }
@@ -38,22 +38,16 @@ export class InOwnTmux {
       ...ENGINE_ENV.flatMap((name) => ['-e', `${name}=${d.env[name]}`]),
       ...hintsToBlank().flatMap((name) => ['-e', `${name}=`]),
       d.env.CLAUDE_PATH!)
-    // Its conversation and its process, as its SessionStart hook named them: the only engine starting now.
-    const [, pid, sessionId] = await until(`${folder} to run its SessionStart hook`,
-      () => /claude pid=(\d+) SessionStart\(startup\) session=(\S+) ran/.exec(d.hookLog().slice(from)), 30_000, 100)
-    return new InOwnTmux(d, pane, Number(pid), sessionId)
+    // Its conversation, as its SessionStart hook named it: the only engine starting now.
+    const [, sessionId] = await until(`${folder} to run its SessionStart hook`,
+      () => /claude pid=\d+ SessionStart\(startup\) session=(\S+) ran/.exec(d.hookLog().slice(from)), 30_000, 100)
+    return new InOwnTmux(d, pane, sessionId)
   }
 
   /** Typed at its prompt, then Enter, as e2e/hookclient.e2e.ts types. */
   async type(text: string): Promise<void> {
     await this.d.tmux.run('send-keys', '-t', this.pane, '-l', text)
     await this.d.tmux.run('send-keys', '-t', this.pane, 'Enter')
-  }
-
-  /** Whether its hook for [event] has run since the engine started, as the engine noted it. */
-  ran(event: string, times = 1): boolean {
-    const line = new RegExp(`claude pid=${this.pid} ${event}\\S* session=${this.sessionId} ran`, 'g')
-    return (this.d.hookLog().match(line)?.length ?? 0) >= times
   }
 }
 
