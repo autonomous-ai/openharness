@@ -10,12 +10,13 @@
 - `services/devices.ts` builds the five adapters and hands them to the source and the opener. The echo notes of the two follow features stay there, as today.
 - The firmware reads the `a` letter it already parses: without it, a question shows its prompt and `[ later ]` only.
 - Nothing a person sees changes but those controls. Every command line, argument, timeout, guard, refusal sentence and log line stays as it is.
+- Two fixes from #4331's review ride on the reshape, and are the only exceptions to the line above (the spec, "Added from #4331's review"). F2: the devices keep one record of the dial's own moves, so no settle turns the dial back after it showed another kind of pane (Task 12). F3: the tab's skip log lines take the form the other follow lines have (Task 13).
 
 **Tech Stack:** TypeScript daemon (Node, vitest, `cli/`); C firmware for ESP32-S3 (`devices/harness-device/firmware`, ESP-IDF 5.5.4), its host contracts in Python and C.
 
 **Spec:** `docs/specs/2026-11-15-device-host-adapter.md`. Read it with this plan, the root `AGENTS.md`, `cli/AGENTS.md` and `cli/src/services/AGENTS.md`.
 
-**No open question.** The PM answered this plan's six on 2026-11-15; the answers are under "Decided here" at the end, and the spec's "The interface" section holds the two that changed it (`tap`, and every pane kept).
+**One open question**, on Task 12: it is under "Open questions" at the end, and the task is written on the reading the merged tests force. The PM answered this plan's first six on 2026-11-15; the answers are under "Decided here" at the end, and the spec's "The interface" section holds the two that changed it (`tap`, and every pane kept).
 
 ## Tasks at a glance
 
@@ -32,9 +33,16 @@
 | 8 Taps ask the adapters | `cli/src/cable/hosts/open.ts`, `open.spec.ts`, `observed.ts`, `observed.spec.ts`, `orca.ts`, `cli/src/services/devices.ts`, `devices.spec.ts` | 7 | xhigh | `open.spec.ts`, `observed.spec.ts` |
 | 9 The dial answers only where it can | `devices/harness-device/firmware/main/ui/habitat/ui_habitat.c`, `firmware/test/test_touch_ui.py`, `firmware/test/test_question_ui.py` | none | high | `test_touch_ui.py` |
 | 10 Say it in the docs | `cli/AGENTS.md`, `cli/src/services/AGENTS.md` | 8 | medium | none: no behavior |
-| 11 Temporary workflow | `.github/workflows/tmp-device-host-adapter.yml` (new) | 8, 9 | medium | none: a temporary workflow, one commit |
+| 11 Temporary workflow | `.github/workflows/tmp-device-host-adapter.yml` (new) | 8, 9, 12, 13 | medium | none: a temporary workflow, one commit |
+| 12 One record of what the dial just showed (F2) | `cli/src/services/devices.ts`, `devices.spec.ts` | 8, 13 | xhigh | `devices.spec.ts` |
+| 13 The tab's skip lines in one form (F3) | `cli/src/services/devices.ts`, `devices.spec.ts`, `cli/e2e/dialTerminalFollow.e2e.ts`, `docs/specs/2026-11-15-dial-terminal-follow.md` | 0 | medium | `devices.spec.ts` |
 
-Longest chain: 1, 2 (or 3 to 6), 7, 8, 11. Tasks 2 to 6 share no file and run beside each other. Task 9 shares no file with any task and can start at once.
+Longest chain: 1, 2 (or 3 to 6), 7, 8, 12, 11. Tasks 2 to 6 share no file and run beside each other. Task 9 shares no file with any task and can start at once.
+
+`services/devices.ts` and `devices.spec.ts` are shared by Tasks 7, 8, 12 and 13, so no two of them run at once:
+- **Task 13 needs none of the others.** It renames four strings in the tab follow, which Tasks 7 and 8 do not touch, so it can start as soon as Task 0 is done, beside Tasks 1 to 6 and 9. If Task 7 is running, it waits for the file.
+- **Task 12 waits for Task 8 and Task 13.** For Task 8, because only then does every rest and every tap of an outside agent pass one list of adapters and one `open` in `devices.ts`; before it they pass four per-app members that Tasks 7 and 8 rewrite, and those tasks' wiring says nothing of a note to carry. For Task 13, because its tests read the tab's skip line in Task 13's form.
+- **Task 11 waits for both**, for its own reason: every push starts its three jobs, so it goes in last.
 
 ## Layers
 
@@ -44,6 +52,8 @@ Longest chain: 1, 2 (or 3 to 6), 7, 8, 11. Tasks 2 to 6 share no file and run be
 | `cli/src/services/devices.ts` | **Devices service process** | 100% per file (`npm run test:core`) |
 | `devices/harness-device/firmware/main/ui/habitat/ui_habitat.c` | The round dial's firmware | Host contracts (`firmware/test/test_*.py`, PR CI `firmware-checks`); the ESP-IDF build |
 | `cli/AGENTS.md`, `cli/src/services/AGENTS.md` | Repo files, no process | none |
+| `cli/e2e/dialTerminalFollow.e2e.ts` (Task 13) | The end-to-end suite: the real daemon, macOS only | Verification 1 |
+| `docs/specs/2026-11-15-dial-terminal-follow.md` (Task 13) | Repo file, no process | none |
 
 No file under `cli/src/core/` changes, and `src/architecture.coreFiles.txt` gains no line. `cable/hosts/types.ts`, `registry.ts`, `cableHost.ts` and `cableSession.ts` do not change.
 
@@ -53,11 +63,13 @@ No file under `cli/src/core/` changes, and `src/architecture.coreFiles.txt` gain
 - **Written against the union of both:** the Claude app pieces of #4326 (`claudeShow`, `claudeInFront`, `ShownPane` kind `'claude'`, the `open` wrapper and `noteLink` in `devices.ts`) and the tab pieces of #4331 (`tabs.ts`, `Entry.tty`, `learnTty`, `tabsOpen`, `tabSelect`, `byTab`, `ShownPane` kind `'tty'`, the tap's select with raise in `ObservedSource.focus`, `selected` in `devices.ts`).
 - **State, 2026-11-15:** #4311 is on `main` and in this branch. #4326 is in CI and #4331 follows it. Neither changes a file of Task 9 against `main`, so Task 9 starts now; every other task waits for Task 0.
 - Tasks name functions and what moves, never line numbers.
+- **Tasks 12 and 13** were written on 2026-11-15 against `origin/main` at aad8dcd535 (#4326: `dialLinks`, `noteLink`, `linkedByDial`, `claudeAttached`, `claudeSettled`, `ATTACH_ECHO_MS`) and #4331's head c6f5b7ecd6 (`selects`, `written`, `selected`, `TabReport`, `tabReported`, `followTab`, `tabSettled`, `FOLLOWED.tab`, `ECHO_MS`). #4331 still had review fixes to come. Task 0's rule holds for them: a name that differs, use the merged one; a behaviour that differs, stop and report.
 
 ## Global Constraints
 
 - **Byte for byte.** Every command line, argument, timeout, one-at-a-time guard, refusal sentence and log line stays as it is: `orca terminal send|switch`, `wezterm cli activate-pane --pane-id`, `herdr agent focus`, `/usr/bin/open -b`, `/usr/bin/open claude://code/continue?session=…`, the 10 s `RUN_TIMEOUT_MS`, `[device] open · <app> · fallback`, `[device] voice · <what>`, `[observed] …`.
 - **The guard.** `devices.spec.ts`, `cableHost.spec.ts`, `cableSession.spec.ts` and the e2e suites are not edited: they pass before and after. In `observed.spec.ts`, `open.spec.ts` and `orca.spec.ts` only how the fakes are built changes, and the three places Tasks 3, 7 and 8 name. **Any other expected value that has to change is a finding: stop and report it. It is never fixed by editing the test.**
+- **The two fixes are the exception to both lines above, and only as far as their task says.** Task 13 changes four tab log lines, and their expectations in `devices.spec.ts` and `dialTerminalFollow.e2e.ts`. Task 12 adds tests to `devices.spec.ts` and changes how two of its helpers are built. No other expectation changes in either: one that has to is a finding.
 - **The order** an agent's panes are kept in: herdr, WezTerm, Orca, the Claude app, tabs. **Each verb uses the first pane whose adapter can do it:** words the first with `type`, a rest the first whose `canShow` says yes, a tap the first whose `canFocus` says yes. An agent two apps name keeps every route it has today.
 - **Hint sets.** A contract test's real hints are the ones the existing specs and e2e already hold for that app. Nothing is captured from a person's own apps.
 - **Outside text.** A hint is checked against its own form in its adapter's `paneOf`, and the pane's id again in each verb before it reaches a command. Every command runs with no shell, each value one argument. No log line holds a handle, a session id, a pane id or a tty.
@@ -505,7 +517,7 @@ No file under `cli/src/core/` changes, and `src/architecture.coreFiles.txt` gain
 
 ### Task 11: The temporary workflow
 
-**Layer:** GitHub Actions, temporary. **Depends on:** Tasks 8 and 9: every push to the branch starts its three jobs, one on macOS, so it goes in last. **Effort:** `medium`.
+**Layer:** GitHub Actions, temporary. **Depends on:** Tasks 8, 9, 12 and 13: every push to the branch starts its three jobs, one on macOS, so it goes in last. **Effort:** `medium`.
 
 **Red test:** none: a temporary workflow, one commit. diegodev removes the file before the pull request, once Verification 1 has its evidence.
 
@@ -606,6 +618,129 @@ No file under `cli/src/core/` changes, and `src/architecture.coreFiles.txt` gain
 - [ ] **Step 2: Lint it.** Run `go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/tmp-device-host-adapter.yml`, as `ci.yml` does. Expected: no output, exit 0.
 - [ ] **Step 3: Commit** `Temporary workflow: the dial's end-to-end suites and the round dial's build for device-host-adapter`. A fault in this file that a push shows is fixed in a commit of its own.
 
+### Task 12: One record of what the dial just showed (F2)
+
+**Layer:** devices service process. **Depends on:** Tasks 8 and 13. **Effort:** `xhigh` (two settles racing the dial's own moves inside a second; an echo guard that must not grow wider).
+
+**Red test:** `cli/src/services/devices.spec.ts`.
+
+**Files:**
+- Modify: `cli/src/services/devices.ts`
+- Test: `cli/src/services/devices.spec.ts`
+
+**The fault** (the spec, F2). Each settle looks only at its own app's record of the dial's moves: the Claude app's at `dialLinks`, a tab app's at `written`. So a rest or a tap on another kind of pane, inside the settle, is not seen, and the settle turns the dial back.
+
+**Interfaces:**
+- Consumes, as merged: `monotonic`, `ATTACH_ECHO_MS`, `noteLink`, `linkedByDial`, `claudeSettled`; `selected`, `written`, `TabReport`, `tabReported`, `followTab`; Task 8's `adapters` list; `HostAdapter` (`adapter.ts`).
+- Produces, in `devices.ts`, beside the two echo notes:
+  ```ts
+  /** The dial's own moves on an agent outside Harness, a rest's and a tap's alike, whatever its pane: how many, and
+   *  when the latest started. A settle is set aside by one made within it. */
+  let dialMoves = 0
+  let dialMovedAt: number | undefined
+  const noteMove = (): void                                  // dialMoves++, dialMovedAt = monotonic()
+  /** That adapter, its `show` and its `focus` noting the dial's move as they start: busy or failed, the dial is on that
+   *  agent all the same. */
+  const noting = (adapter: HostAdapter): HostAdapter
+  ```
+- Where a move is noted: the two verbs every adapter is reached through, and no rule about any app. That is the spec's list (Orca switch, Claude link, tab select, a tap's raise).
+  - **A rest:** `noting` wraps `show`, for an adapter that has one. An adapter with no `show` gets none: the source reads `!!adapter.show` (Task 7).
+  - **A tap's pane, and a tap's raise:** `noting` wraps `focus`, for every adapter. The opener calls it for a pane that taps before or instead of its app, the source for one that taps after.
+- `adapters` is Task 8's list through `noting` (`[…].map(noting)`), the Claude app's `noteLink` wrap inside it. The one list goes to the source and the opener alike. `open` in `ObservedActions` does not change.
+- What moves:
+
+  | Today | After |
+  |---|---|
+  | `written`, counted in `selected(tty)`; `TabReport.written`; `followTab`'s `report.written !== written` | `dialMoves`; `TabReport.moves`, read in `tabReported`; `followTab`'s `report.moves !== dialMoves`, the same line. `selected(tty)` keeps `selects` only |
+  | `claudeSettled`: `linkedByDial()`, any agent's link younger than `ATTACH_ECHO_MS` | `dialMovedAt !== undefined && monotonic() - dialMovedAt < ATTACH_ECHO_MS`, the same line (`[device] settle · skipped · echo`) |
+  | `linkedByDial(agentId?: string)` | `linkedByDial(agentId: string)`: its any-agent form has no caller left |
+  | `noteLink` (the Claude app's `show` wrap, and `open` for a Claude app pane), `dialLinks`, `claudeAttached`'s `linkedByDial(agentId)` | Unchanged: an attach is still its own agent's link's echo, within `ATTACH_ECHO_MS` |
+  | `selects`, `ECHO_MS`, `ECHO_KEPT`, `followTab`'s match by tty | Unchanged: a report is still its own tty's select's echo, each select excusing one |
+
+- The two readings of the one record (open question 1):
+  - a tab app's settle: the dial moved since the report came, by count, as `written` is read today;
+  - the Claude app's settle: the dial's latest move is younger than `ATTACH_ECHO_MS`, as `linkedByDial()` is read today. Its kept attach can be minutes old, so "since it came" would stop a Cmd-Tab back to the app from moving the dial.
+
+- [ ] **Step 1: Build the fakes and write the pins.** Only how the helpers are built changes; no existing `it` body does.
+  - In `describe('selecting a tab moves the dial …')`:
+    - `dialWith(agents, run?)` hands `start` that runner in its `orca` deps when one is given.
+    - `HANDLE = 'term_0123abcd-0000-4000-8000-0123456789ab'`; `switched = ['/opt/orca/bin/orca', ['terminal', 'switch', '--terminal', HANDLE, '--json'], 10_000]`.
+    - `ORCA_AGENT = observedAgentId('claude', 'sess-orca')`, listed by `{ ...hook(9), sessionId: 'sess-orca', hostHints: { ORCA_AGENT_SESSION_ID: 'orca-1', ORCA_TERMINAL_HANDLE: HANDLE } }`.
+    - `LOCAL = 'local_8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b'`; `CLAUDE_AGENT = observedAgentId('claude', 'sess-claude')`, listed by `{ ...hook(8), sessionId: 'sess-claude', hostHints: { __CFBundleIdentifier: 'com.anthropic.claudefordesktop', CLAUDE_CODE_HOST_SESSION_ID: LOCAL } }`.
+  - In `describe('the session the Claude app shows turns the dial …')`: `HANDLE` and `switched` as above; `dialWith` hands `start` a `tty` reader that answers `/dev/ttys023`, and returns its `listener`. No Claude app agent's tty is read: it is no tab app. `IN_ORCA` is that describe's own session id, so its agent is `observedAgentId('claude', IN_ORCA)`.
+  - The pins. Each states what the code does today. Run `cd cli && npx vitest run src/services/devices.spec.ts`. Expected: PASS. One that fails means the base is not what this plan read: stop and report.
+    - `a report that came after the dial showed an Orca terminal moves the dial` (tab describe): `settle('terminal-app')`, a rest on `ORCA_AGENT`, `clock = 300`, `report('terminal-app', TTY)`: `asked()` is `[[ID, 'tab']]` and `tabLines()` is `[]`. The record sets aside a report that waited, never one that came later.
+    - `a tap's raise sets aside the report its app made as it came forward` (tab describe, two agents, a runner that holds `open -b`): a tap on `agent(2)`; once `open -b com.apple.Terminal` has started, `listener.front('terminal-app')` and `report('terminal-app', ttyOf(1))`; then the run exits 0 and the tap answers. `stream.lines` is `[{ app: 'terminal-app', tty: ttyOf(2), raise: true }]`. After `FRONT_SETTLE_MS`: `asked()` is `[]`, `tabLines()` is `['[device] tab · skipped · echo']`. Today `written` holds it; after, the note on `focus` does.
+    - `an attach within 2 s of the dial showing an Orca terminal is followed` (Claude describe): `dialWith('claude')`, an agent listed by `hook('session-start', { sessionId: IN_ORCA, hostHints: { ORCA_AGENT_SESSION_ID: 'orca-1', ORCA_TERMINAL_HANDLE: HANDLE } })`, a rest on it, `attach(SESSION)`: `asked()` is `[[A, 'attach']]` and `attaches()` is `[]`. An attach's echo is its own agent's link, never another pane's move.
+- [ ] **Step 2: Write the failing tests.**
+  - Tab describe, `a report waiting for the settle is set aside by another kind of pane the dial showed since it came (<way>)`, for three ways:
+
+    | Way | The move | `orcaRuns` after it |
+    |---|---|---|
+    | a rest on an Orca terminal | `host().swipeEnded(ORCA_AGENT, 'rest')` | `[switched]` |
+    | a tap on an Orca terminal | `await host().openAgent(ORCA_AGENT)` is undefined | `[switched, ['/usr/bin/open', ['-b', 'com.stablyai.orca'], 10_000]]` |
+    | a tap on a Claude app session | `await host().openAgent(CLAUDE_AGENT)` is undefined | `[['/usr/bin/open', ['claude://code/continue?session=' + LOCAL], 10_000]]` |
+
+    Each: `listener.front('terminal-app')`, `report('terminal-app', TTY)`, `clock = 800`, the move, `stream.lines` is `[]`. After `FRONT_SETTLE_MS`: `asked()` is `[]` and `tabLines()` is `['[device] tab · skipped · echo']`.
+  - Tab describe, `a switch that failed sets the report aside all the same`: a runner that answers `{ code: 1 }`; the first way's steps; `[device] swipe · failed` is logged; the same two expectations.
+  - Claude describe, `a settle moves nothing when the dial showed another kind of pane inside it (<way>)`, for two ways:
+
+    | Way | The other agent | The rest ran |
+    |---|---|---|
+    | an Orca terminal | `hook('session-start', { sessionId: IN_ORCA, hostHints: { ORCA_AGENT_SESSION_ID: 'orca-1', ORCA_TERMINAL_HANDLE: HANDLE } })` | `orcaRuns` is `[switched]` |
+    | a Terminal tab | `hook('session-start', { sessionId: 'sess-tab', hostHints: { __CFBundleIdentifier: 'com.apple.Terminal' } })`, its tty read (`await wait(0)`), then `listener.tabs()` | the stream's lines are `[{ app: 'terminal-app', tty: '/dev/ttys023' }]`, `orcaRuns` is `[]` |
+
+    Each: `dialWith('orca')`, `attach(SESSION)`, the other agent listed, `front('claude')`, `await wait(500)`, `host().swipeEnded(<its id>, 'rest')`, `await wait(0)`, then `await wait(FRONT_SETTLE_MS - 500)`:
+    - `asked()` is `[]`;
+    - `attaches()` is `['[device] attach · skipped · not in front', '[device] settle · skipped · echo']`;
+    - the kept agent is still A: after `await wait(2_000)` and `backInFront(front)`, `asked()` is `[[A, 'attach']]`.
+- [ ] **Step 3: Run** the step 1 command. Expected: FAIL in the six new tests only. Each settle asked a follow where none is expected: `[[ID, 'tab']]` in the tab describe, `[[A, 'attach']]` in the Claude one.
+- [ ] **Step 4: Implement** in `devices.ts`.
+- [ ] **Step 5: Run** `cd cli && npx vitest run src/services/devices.spec.ts src/cable && npm run typecheck && npm run test:core`. Expected: PASS, 100% for `services/devices.ts`, and no existing expectation of `devices.spec.ts` edited. Three existing tests hold the rule from its other side, and pass untouched:
+  - `a settle 2 s after the dial's last link moves the dial; of two links the younger counts`;
+  - `the echo is that agent's alone`;
+  - `each select excuses one report: the person selecting that tab again within 2 s moves the dial`.
+- [ ] **Step 6: Commit** `devices: one record of what the dial just showed, so no settle turns it back`.
+
+### Task 13: The tab's skip lines in one form (F3)
+
+**Layer:** devices service process; the end-to-end suite; one spec. **Depends on:** Task 0. **Effort:** `medium` (four strings, and every place that reads them).
+
+**Red test:** `cli/src/services/devices.spec.ts`.
+
+**Files:**
+- Modify: `cli/src/services/devices.ts`, `docs/specs/2026-11-15-dial-terminal-follow.md`
+- Test: `cli/src/services/devices.spec.ts`, `cli/e2e/dialTerminalFollow.e2e.ts`
+
+**Interfaces:**
+- Produces, in `devices.ts`, the spec's table and nothing else:
+
+  | Where | Today | After |
+  |---|---|---|
+  | `FOLLOWED.tab['no-tile']` | `[device] tab · no-tile` | `[device] tab · skipped · no tile` |
+  | `followTab`, both echo lines | `[device] tab · echo` | `[device] tab · skipped · echo` |
+  | `followTab`, no agent in that tab | `[device] tab · no-agent` | `[device] tab · skipped · unknown agent` |
+  | `tabSettled`, another app settled | `[device] tab · not-in-front` | `[device] tab · skipped · not in front` |
+
+- `[device] tab · moved` stays. So does the outcome word `'no-tile'` that `localFollowed` carries (`cableSession.ts`, `cableHost.ts` and their specs): it is a key, not a line.
+- No other file reads these lines: `git grep` over #4331's head finds them in these four files and in `docs/plans/2026-11-15-dial-terminal-follow-plan.md`, which is the record of what #4331 built and stays.
+
+- [ ] **Step 1: Change the expectations.** Every expected tab line takes its new form, and a title that quotes one follows it.
+  - `devices.spec.ts`, in `describe('selecting a tab moves the dial …')`:
+    - `a report is dropped when another app settles, counted not in front, …`: `['[device] tab · skipped · not in front']`, twice.
+    - `no agent with that tty, or one in another app: unknown agent`: `'[device] tab · skipped · unknown agent'`, twice.
+    - `the dial's answer is counted: tab · moved, and tab · skipped · no tile`: `['[device] tab · moved', '[device] tab · skipped · no tile']`.
+    - Every `'[device] tab · echo'` reads `'[device] tab · skipped · echo'`.
+    - `no tab line names a tty, an app, an agent or a session`: `five` is the five lines written out, `moved` and the four skips.
+  - `cli/e2e/dialTerminalFollow.e2e.ts`:
+    - both `said(d, '[device] tab · no-agent')` read `'[device] tab · skipped · unknown agent'`;
+    - `said(d, '[device] tab · echo')` reads `'[device] tab · skipped · echo'`;
+    - the shape check reads `/^\[device\] tab · (moved|skipped · (no tile|echo|unknown agent|not in front))$/`.
+- [ ] **Step 2: Run** `cd cli && npx vitest run src/services/devices.spec.ts`. Expected: FAIL in that describe only, for example `expected [ '[device] tab · echo' ] to deeply equal [ '[device] tab · skipped · echo' ]`. The end-to-end file is macOS only and takes minutes: it is not run red.
+- [ ] **Step 3: Implement** the four lines in `devices.ts`. With them, in `docs/specs/2026-11-15-dial-terminal-follow.md`, the "Devices log" bullet reads `` `[device] tab · moved`, `[device] tab · skipped · no tile | not in front | unknown agent | echo` ``, and the rest of its sentence as it is.
+- [ ] **Step 4: Run** `cd cli && npx vitest run src/services/devices.spec.ts && npm run typecheck && npm run test:core`. Expected: PASS, 100% for `services/devices.ts`. Then `git grep -n -E "tab · (no-tile|echo|no-agent|not-in-front)" -- cli docs/specs ':!docs/specs/2026-11-15-device-host-adapter.md'` prints nothing (that spec's own table names the old lines).
+- [ ] **Step 5: Commit** `devices: the tab's skip lines read as the prompt's, the attach's and the settle's do`. Verification 1 runs the end-to-end file, on macOS.
+
 ---
 
 ## Verification
@@ -627,7 +762,7 @@ No file under `cli/src/core/` changes, and `src/architecture.coreFiles.txt` gain
 - Isolation: the suite's own (`cli/e2e/harness/daemon.ts`, `cli/AGENTS.md` rules 5 and 6). A throwaway home and data folder, a private port and tmux server, fake Claude Code and Codex, a fake dial on a pseudo-terminal, a fake `orca` first on the daemon's `PATH`. No suite taps an agent outside Harness, so `/usr/bin/open` never runs and no real app comes forward. No backend, no sign-in, no secret. Nothing is flashed or published.
 - When: at the last head before the file is removed. That head and the pull request's differ by the workflow file alone.
 - Find the run: `gh run list --workflow tmp-device-host-adapter.yml --branch feat/device-host-adapter --commit "$(git rev-parse HEAD)" --json databaseId,status,conclusion,url`.
-- A person sees: three green jobs. In both `dial e2e` jobs every file passes with no expectation edited; on Linux `dialTerminalFollow` reads skipped, as it is macOS only. In `round dial firmware build`, `Project build complete` and `interns_commander.bin`.
+- A person sees: three green jobs. In both `dial e2e` jobs every file passes with no expectation edited but `dialTerminalFollow`'s tab lines, which read `[device] tab · skipped · unknown agent` and `[device] tab · skipped · echo` since Task 13; on Linux `dialTerminalFollow` reads skipped, as it is macOS only. So the macOS job is the one run of Task 13's end-to-end edits: every test of the file passes, and its shape check holds every tab line of the daemon's log to `moved` or `skipped · <why>`. In `round dial firmware build`, `Project build complete` and `interns_commander.bin`.
 - If the macOS job fails for the runner's own reason (never run there before), say so and run the same eight files on this Mac: `cd cli && env -u TMUX -u TMUX_PANE E2E_BUNDLE=1 npx vitest run --config vitest.e2e.config.ts <the eight files>`. The build, on this Mac: `. ~/esp/esp-idf-5.5.4/export.sh && idf.py -C devices/harness-device/firmware -B "$TMPDIR/round-build" -D SDKCONFIG="$TMPDIR/round-build/sdkconfig" build`. A check that ran nowhere is reported as not verified, never as passed.
 - The repo's own workflow for the suite is Actions → CLI end to end → Run workflow (`cli-e2e.yml`): every file, Linux only, nine runners. It is not started for this change: the temporary job runs the files this change can reach on both systems, and the nightly run covers the rest on `main`.
 - After the pull request nothing of this check keeps running, and no permanent workflow changes (PM, 2026-11-15).
@@ -636,15 +771,23 @@ No file under `cli/src/core/` changes, and `src/architecture.coreFiles.txt` gain
 - Run, on this Mac: `HABITAT_PREVIEW_DIR="$(mktemp -d)" python3 devices/harness-device/firmware/test/test_touch_ui.py`, then `sips -s format png "$HABITAT_PREVIEW_DIR/caps-question-no-answer.ppm" --out caps-question-no-answer.png`.
 - A person sees: the agent's name, `question 1 / 1`, the prompt ending "answer in Orca", and `[ later ]` alone. The picture goes in the pull request, beside `caps-question-no-say`.
 
-**3. Linux, in PR CI:** the CLI unit jobs run Tasks 1 to 8's specs; `firmware-checks` runs every `firmware/test/test_*.py`. Nothing is started by hand.
+**3. Linux, in PR CI:** the CLI unit jobs run Tasks 1 to 8's specs, and Tasks 12 and 13's in `devices.spec.ts`; `firmware-checks` runs every `firmware/test/test_*.py`. Nothing is started by hand.
 
 **4. On a dial:** none. Flashing needs Diego's own go (the spec, "Decided"), and he is using his dial. The host contracts run the production handler and renderer, and check 2 shows the screen.
 
-**5. Against the real apps:** none. The claim is that no command changed: `devices.spec.ts` and `open.spec.ts` hold every command's arguments, order and timeout and pass with no expectation edited, and the end-to-end suites run a fake `orca`. A tap's `open` has no end-to-end run: on a Mac it would bring a real app forward.
+**5. Against the real apps:** none. The claim is that no command changed: `devices.spec.ts` and `open.spec.ts` hold every command's arguments, order and timeout and pass with no expectation of a command edited, and the end-to-end suites run a fake `orca`. A tap's `open` has no end-to-end run: on a Mac it would bring a real app forward.
+
+**6. The settles that no longer turn the dial back (F2, Task 12):** none end to end, and none on a dial.
+- Where it is checked: `devices.spec.ts`, red then green, on a fake clock: the devices' own wiring with the real observed source, cable host and app filter, a fake cable and listener, and a recording runner. It is in the local gates above and in PR CI.
+- Why no end-to-end test: the fault lives inside the one-second settle. On a real daemon a test would have to land the dial's rest (400 ms after its turn) between a report and its settle by the wall clock: a fixed sleep, or a flaky test. The spec asks for the unit tests.
+- What check 1 still shows: a tab report, an attach and a prompt each move the dial as before (`dialTerminalFollow`, `dialClaudeAppFollow`, `dialPaneFollow`), so the record sets nothing aside that it should not.
+- On a dial, with the real Terminal, Orca and Claude app: not run. It would need Diego's everyday daemon and his dial, which this plan never touches.
 
 ## Open questions
 
-None. The six this plan asked are answered below.
+The six this plan first asked are answered below. One is open, from the two fixes:
+
+1. **Task 12, the Claude app's settle.** The spec says a settle is set aside "when the dial showed anything since the report it waits on came". For a tab app that is exact, and Task 12 keeps it: the report waits at most one settle, and the dial's moves are counted since it came. For the Claude app the report is its last attach, which is kept until the app next settles in front, minutes later after a Cmd-Tab away and back. Read to the letter, a dial that moved once since that attach would never again follow the app coming to the front, and `main`'s test `a settle 2 s after the dial's last link moves the dial; of two links the younger counts` would fail. So Task 12 is written as `main` decides it today for a link (`dial-claude-app-follow`, decided 9), widened to every kind of pane: **the Claude app's settle is set aside while the dial's latest move, of any kind, is younger than 2 s (`ATTACH_ECHO_MS`).** Both of the spec's cases are covered, as a settle comes one second after its app. Is that the rule? A "no" changes Task 12's second row of "What moves" and the last line of its Claude tests.
 
 ## Decided here
 
@@ -673,4 +816,12 @@ None. The six this plan asked are answered below.
 - **The lone `[ later ]`** is the loading question's control, at the same place, so it does not move when the question loads. It sits 17 px left of the centre there today; that is not changed here.
 - **`A_QUESTION_SAY` is not blocked** in the firmware: the spec lists four actions and keeps voice's own check. `[say]` is not drawn for an agent without `a`.
 - **The end-to-end run** is the eight files this change can reach, on macOS and Linux, not the whole suite.
+- **A move is noted as it starts, busy or failed too** (Task 12), as `noteLink` is on `main`: the dial is on that agent all the same. One corner of #4331 changes with it: a select its stream did not take used not to count, and now sets a waiting report aside. Task 12's `a switch that failed` test holds the rule.
+- **A move is an adapter's `show` or `focus`** (Task 12): the spec's list. A tap on an agent with no pane of any adapter runs `open -b` alone and notes nothing, as today.
+- **The lines of a settle set aside stay** `[device] settle · skipped · echo` and `[device] tab · skipped · echo`, whatever kind of pane the dial showed: the spec names no new line.
+- **One record, read two ways** (Task 12): a count for a tab's report, the latest move's age for the Claude app's settle. Open question 1.
+- **The older specs keep their own sentences on the rule** (`dial-claude-app-follow` decided 9; `dial-terminal-follow`, "Acting on a report", 1): F2 in this spec is the record of the change. Task 13 edits the terminal-follow spec's "Devices log" bullet only, as F3 says.
+- **`docs/plans/2026-11-15-dial-terminal-follow-plan.md` keeps the old tab lines:** it is the record of what #4331 built.
+- **Task 13 before Task 12, and both after Task 0.** Task 13 needs nothing of the reshape, so it does not wait for it. Task 12's tests read Task 13's line, and its code sits on Task 8's wiring.
+- **Task 13's end-to-end edits are not run red.** The file is macOS only and takes minutes; its strings change with the unit spec's, which is run red, and Verification 1 runs it green.
 - **The pins** in Task 7 pass before the change by design: a reshape's guard cannot fail first. They turn red once the fakes are built over adapters, and the two corner pins stay red for a source that keeps one pane per agent.

@@ -192,8 +192,11 @@ of the app in front, is not seen, and the settle turns the dial back. Two cases:
 The fix is one record in the devices process: "the dial just showed an agent". It is noted at the single place every
 dial move now passes through: the observed source's `showPane` and `focus`, for every adapter (Orca switch, Claude
 link, tab select, a tap's raise).
-- A settle, the Claude app's or a tab app's, is set aside when the dial showed anything since the report it waits on
-  came. That holds whatever kind of pane the dial showed.
+- A settle is set aside after a dial move of any kind of pane:
+  - a tab app's settle, when the dial showed anything since the tab report it waits on came;
+  - the Claude app's settle, while the dial's latest move is younger than `ATTACH_ECHO_MS`. Its report is the app's
+    last attach, which can be minutes old after a Cmd-Tab away and back; this is today's rule for a link, widened to
+    every kind of pane.
 - An app's own echo of the dial's move (a tab report for the tty the dial selected, an attach for the session the dial
   linked) is still matched per agent and per tty, as today, within the same echo windows: `ATTACH_ECHO_MS` and
   `ECHO_MS`.
