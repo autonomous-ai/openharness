@@ -593,6 +593,24 @@ function relayedPrompt(engine, event, input) {
   return engine === 'claude' && event === 'UserPromptSubmit' && typeof input.prompt === 'string' && CROSS_SESSION.test(input.prompt)
 }
 
+/** The shells an engine runs its hook through: `/bin/sh -c` is dash on Debian and Ubuntu, bash on Fedora and Arch,
+ *  BusyBox's on Alpine, and each runs as `sh`; an engine that asks for bash or dash by name runs it so. */
+const HOOK_SHELLS = new Set(['sh', 'dash', 'bash'])
+
+/**
+ * The engine's pid, which the devices keep for a paneless agent (cable/hosts/observed.ts). On Linux dash keeps an
+ * engine's `sh -c` as the hook's parent, and it exits with the hook: the devices walked from a pid already gone,
+ * refused a tap on the agent's tmux pane and dropped the agent 30 s later (GitHub run 43721656615). The shell's parent
+ * is the engine, read from /proc, never the environment. macOS's /bin/sh is a bash that execs the hook, so its parent
+ * is the engine already, with no `ps` on the engine's wait.
+ */
+function observedCallerPid() {
+  if (process.platform !== 'linux') return process.ppid
+  const parent = linuxOwnerBirth(process.ppid)
+  // A shell left to init, its engine gone, is named itself: pid 1 never exits, and the devices would keep the agent.
+  return parent && HOOK_SHELLS.has(parent.command) && parent.parentPid > 1 ? parent.parentPid : process.ppid
+}
+
 /** The core refuses an event whose title is longer (core/observedHook.ts): the hook cuts it to this instead. */
 const MAX_TITLE = 64
 
@@ -631,7 +649,7 @@ function observedBody(engine, event, input) {
     : Array.isArray(input.workspacePaths) ? input.workspacePaths[0]
       : input.cwd || input.workspaceRoot || (engine === 'devin' ? process.cwd() : undefined)
   const body = {
-    engine, sessionId, event: kind, cwd: path(cwd), callerPid: process.ppid,
+    engine, sessionId, event: kind, cwd: path(cwd), callerPid: observedCallerPid(),
     transcriptPath: path(input.transcript_path || input.transcriptPath), hostHints: hostHints(),
   }
   if (relayedPrompt(engine, event, input)) body.relayed = true
