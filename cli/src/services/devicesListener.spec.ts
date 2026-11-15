@@ -5,10 +5,12 @@ import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { APP_IDS } from '../cable/hosts/hostDetect.js'
 import { FRONT_NONE } from '../cable/hosts/frontApp.js'
+import { TAB_APPS, type Tab } from '../cable/hosts/tabs.js'
 import { listenLocalSocket } from '../lib/localSocket.js'
 import {
-  ATTACH_MAX_BYTES, ATTACH_PER_SECOND, attachHandler, FRONT_MAX_BYTES, FRONT_PER_SECOND, frontHandler, LISTENER_DROPPED_PER_SECOND, LISTENER_MAX_CONNECTIONS, openDevicesListener, REFUSED, type DevicesListener,
-  type ListenerHandler,
+  ATTACH_MAX_BYTES, ATTACH_PER_SECOND, attachHandler, FRONT_MAX_BYTES, FRONT_PER_SECOND, frontHandler, LISTENER_DROPPED_PER_SECOND, LISTENER_MAX_CONNECTIONS,
+  openDevicesListener, REFUSED, TAB_MAX_BYTES, TAB_PER_SECOND, tabHandler, TABS_MAX_BYTES, TABS_PER_SECOND, tabsStream, type DevicesListener,
+  type ListenerHandler, type ListenerStream, type ListenerStreamHandler,
 } from './devicesListener.js'
 
 const dirs: string[] = []
@@ -34,7 +36,7 @@ afterEach(async () => {
 })
 
 /** A listener on a socket of the test's own, and every line it logged. */
-async function open(handlers: Record<string, ListenerHandler>, options: { path?: string; now?: () => number } = {}) {
+async function open(handlers: Record<string, ListenerHandler | ListenerStreamHandler>, options: { path?: string; now?: () => number } = {}) {
   const path = options.path ?? join(shortDir(), 'devices.sock')
   const lines: string[] = []
   const listener = await openDevicesListener({ path, handlers, log: (line) => lines.push(line), now: options.now })
@@ -117,6 +119,89 @@ function held(maxBytes = 64) {
 }
 
 const MINUTE = 60_000
+
+const LIVE = '{"type":"live"}'
+const TABS = '{"type":"tabs"}'
+const TAB: Tab = { app: 'terminal-app', tty: '/dev/ttys023' }
+
+/** A stream handler that keeps every stream it is handed. `answer` is what its open answers, or throws. */
+function streamHandler(answer: (message: Record<string, unknown>) => typeof REFUSED | void = () => {}, perSecond = 10) {
+  const opened: ListenerStream[] = []
+  const waiters: (() => void)[] = []
+  const handler: ListenerStreamHandler = {
+    maxBytes: 64, perSecond,
+    open: (message, stream) => {
+      opened.push(stream)
+      for (const each of waiters.splice(0)) each()
+      return answer(message)
+    },
+  }
+  /** Once `count` streams have been handed out. */
+  const handed = (count: number): Promise<void> => new Promise((resolve) => {
+    const check = (): void => { if (opened.length >= count) resolve(); else waiters.push(check) }
+    check()
+  })
+  return { handler, opened, handed }
+}
+
+const endOf = (stream: ListenerStream): Promise<void> => new Promise((resolve) => {
+  if (stream.ended.aborted) resolve()
+  else stream.ended.addEventListener('abort', () => resolve())
+})
+
+interface Asked {
+  status: number | undefined
+  type: string | undefined
+  /** Every whole line that came. */
+  lines(): string[]
+  /** Once `count` lines have come. */
+  got(count: number): Promise<string[]>
+  /** Once the listener closed the connection, or the client did. */
+  closed: Promise<void>
+  close(): void
+}
+
+/** A message on a connection of its own, as a watch asks for a stream: the answer's head, and its body line by line. */
+function asked(path: string, body = TABS): Promise<Asked> {
+  return new Promise((resolve, reject) => {
+    const sent = request({ socketPath: path, agent: false, method: 'POST', path: '/' }, (res) => {
+      let text = ''
+      const arrivals: (() => void)[] = []
+      const lines = (): string[] => text.split('\n').slice(0, -1)
+      res.setEncoding('utf8')
+      res.on('data', (chunk: string) => {
+        text += chunk
+        for (const each of arrivals.splice(0)) each()
+      })
+      // The listener ends a stream by closing its connection, which its client reads as an error.
+      res.on('error', () => {})
+      resolve({
+        status: res.statusCode,
+        type: res.headers['content-type'],
+        lines,
+        got: (count) => new Promise((done) => {
+          const check = (): void => { if (lines().length >= count) done(lines()); else arrivals.push(check) }
+          check()
+        }),
+        closed: new Promise((done) => res.once('close', done)),
+        close: () => sent.destroy(),
+      })
+    })
+    sent.on('error', reject)
+    sent.end(body)
+  })
+}
+
+/** A tab of terminal-app padded to exactly `bytes`. */
+function tabOfBytes(bytes: number): string {
+  const unpadded = Buffer.byteLength(JSON.stringify({ type: 'tab', ...TAB, pad: '' }))
+  const body = JSON.stringify({ type: 'tab', ...TAB, pad: 'x'.repeat(bytes - unpadded) })
+  expect(Buffer.byteLength(body)).toBe(bytes)
+  return body
+}
+
+/** More than a socket's and its client's buffers hold, so a line this long cannot drain while nothing reads it. */
+const UNDRAINABLE = { pad: 'x'.repeat(4 << 20) }
 
 describe.skipIf(process.platform === 'win32')('the devices listener', () => {
   describe('who may connect', () => {
@@ -489,6 +574,262 @@ describe.skipIf(process.platform === 'win32')('the devices listener', () => {
       expect(lines).toEqual(['[devices] listener open'])
       await expect(idle.front('ghostty')).rejects.toThrow()
     })
+
+    it('close ends an open stream and leaves no timer', async () => {
+      const live = streamHandler()
+      const { path, listener } = await open({ live: live.handler })
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      const stopped = bare(path, post(LIVE))
+      stopped.socket.pause()
+      await live.handed(1)
+      const [stream] = live.opened
+      // A line waiting to drain: its connection's deadline is gone, and the line's own 2 s is the one timer.
+      expect(stream!.write(UNDRAINABLE)).toBe(true)
+      expect(vi.getTimerCount()).toBe(1)
+
+      await listener!.close()
+      expect(stream!.ended.aborted).toBe(true)
+      expect(stream!.write({ n: 1 })).toBe(false)
+      expect(vi.getTimerCount()).toBe(0)
+      stopped.socket.resume()
+      await stopped.read
+    })
+  })
+
+  describe('a stream', () => {
+    it('a stream handler answers 200, its lines arrive as NDJSON, and it ends when the client closes', async () => {
+      const live = streamHandler()
+      const { path } = await open({ live: live.handler })
+      // The head comes before any line: the stream is open once it is asked for.
+      const client = await asked(path, LIVE)
+      expect(client).toMatchObject({ status: 200, type: 'application/x-ndjson' })
+      const [stream] = live.opened
+      expect(stream!.write({ n: 1 })).toBe(true)
+      await client.got(1)
+      expect(stream!.write({ n: 2, s: 'two' })).toBe(true)
+      expect(await client.got(2)).toEqual(['{"n":1}', '{"n":2,"s":"two"}'])
+
+      client.close()
+      await endOf(stream!)
+      expect(stream!.write({ n: 3 })).toBe(false)
+    })
+
+    it('a second stream of the type ends the first and closes its connection; the second goes on', async () => {
+      const live = streamHandler()
+      const other = streamHandler()
+      const { path } = await open({ live: live.handler, other: other.handler })
+      const elsewhere = await asked(path, '{"type":"other"}')
+      const first = await asked(path, LIVE)
+      const second = await asked(path, LIVE)
+      const [one, two] = live.opened
+      expect(one!.ended.aborted).toBe(true)
+      await first.closed
+      expect(one!.write({ n: 1 })).toBe(false)
+      expect(two!.write({ n: 2 })).toBe(true)
+      expect(await second.got(1)).toEqual(['{"n":2}'])
+      expect(first.lines()).toEqual([])
+      // A stream of another type is its own.
+      expect(other.opened[0]!.write({ n: 3 })).toBe(true)
+      expect(await elsewhere.got(1)).toEqual(['{"n":3}'])
+    })
+
+    it('a stream outlives the 2 s deadline, and still counts as one of the 16', async () => {
+      const live = streamHandler()
+      const { path } = await open({ front: frontHandler(() => {}), live: live.handler })
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      const client = await asked(path, LIVE)
+      const [stream] = live.opened
+      expect(stream!.write({ n: 1 })).toBe(true)
+      await client.got(1)
+      // Past its connection's deadline, and past the 2 s its line had to drain.
+      vi.advanceTimersByTime(5_000)
+      expect(stream!.ended.aborted).toBe(false)
+      expect(stream!.write({ n: 2 })).toBe(true)
+      expect(await client.got(2)).toEqual(['{"n":1}', '{"n":2}'])
+
+      const fifteen = Array.from({ length: LISTENER_MAX_CONNECTIONS - 1 }, () => connection(path))
+      for (const each of fifteen) expect((await each.front('ghostty')).status).toBe(204)
+      expect(await bare(path, '').read).toBe('')
+      expect(stream!.ended.aborted).toBe(false)
+    })
+
+    it('a client that stops reading: a line not drained in 2 s ends the stream and closes its connection, and a line while one waits is not written', async () => {
+      const live = streamHandler()
+      const { path } = await open({ live: live.handler })
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      const stopped = bare(path, post(LIVE))
+      stopped.socket.pause()
+      await live.handed(1)
+      const [stream] = live.opened
+      expect(stream!.write(UNDRAINABLE)).toBe(true)
+      expect(stream!.write({ n: 2 })).toBe(false)
+      vi.advanceTimersByTime(1_999)
+      expect(stream!.ended.aborted).toBe(false)
+      vi.advanceTimersByTime(1)
+      expect(stream!.ended.aborted).toBe(true)
+      stopped.socket.resume()
+      expect(await stopped.read).not.toContain('"n":2')
+    })
+
+    it('a socket that errors ends the stream at once', async () => {
+      const live = streamHandler()
+      const { path } = await open({ live: live.handler })
+      // No timer runs: the end cannot be a deadline's.
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      const broken = bare(path, post(LIVE))
+      await live.handed(1)
+      // Bytes no HTTP parser takes: the listener's side of the socket errors.
+      broken.socket.write('NOT HTTP\r\n\r\n')
+      await endOf(live.opened[0]!)
+      await broken.read
+    })
+
+    it('a second message on a connection that holds a stream closes it, counted refused', async () => {
+      const fronts: string[] = []
+      const live = streamHandler()
+      const { path, lines } = await open({ front: frontHandler((app) => fronts.push(app)), live: live.handler })
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      // Once the stream is open.
+      const later = bare(path, post(LIVE))
+      await live.handed(1)
+      later.socket.write(post(frontBody('ghostty')))
+      await later.read
+      // In the same write as the message that opened it: it came before the stream was open.
+      const together = bare(path, post(LIVE) + post(frontBody('vscode')))
+      expect(await together.read).toMatch(/^HTTP\/1\.1 200 /)
+      expect(live.opened.map(({ ended }) => ended.aborted)).toEqual([true, true])
+      expect(fronts).toEqual([])
+      vi.advanceTimersByTime(MINUTE)
+      expect(lines.at(-1)).toBe('[devices] listener in the last minute: 0 unknown, 0 oversized, 0 over rate, 2 refused, 0 failed')
+    })
+
+    it('the third open in a second on one connection is 429, and the open stream stays', async () => {
+      const live = streamHandler((message) => message.bad ? REFUSED : undefined, TABS_PER_SECOND)
+      const { path } = await open({ live: live.handler }, { now: () => 0 })
+      const kept = await asked(path, LIVE)
+      const sender = connection(path)
+      expect((await sender.send('{"type":"live","bad":1}')).status).toBe(400)
+      expect((await sender.send('{"type":"live","bad":2}')).status).toBe(400)
+      expect((await sender.send(LIVE)).status).toBe(429)
+      // The kept stream and the two refused: the third never reached the handler.
+      expect(live.opened).toHaveLength(3)
+      expect(live.opened[0]!.ended.aborted).toBe(false)
+      expect(live.opened[0]!.write({ n: 1 })).toBe(true)
+      expect(await kept.got(1)).toEqual(['{"n":1}'])
+    })
+
+    it('a stream handler that refuses is 400 and opens nothing; one that throws is 500, counted failed', async () => {
+      const live = streamHandler((message) => {
+        if (message.boom) throw new Error('secret-9b1d')
+        return message.bad ? REFUSED : undefined
+      })
+      const { path, lines } = await open({ live: live.handler })
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      const kept = await asked(path, LIVE)
+      const sender = connection(path)
+      expect(await sender.send('{"type":"live","bad":1}')).toMatchObject({ status: 400, body: '' })
+      expect(await sender.send('{"type":"live","boom":1}')).toMatchObject({ status: 500, body: '' })
+      const [stream, refused, thrown] = live.opened
+      for (const each of [refused!, thrown!]) {
+        expect(each.ended.aborted).toBe(true)
+        expect(each.write({ n: 1 })).toBe(false)
+      }
+      // The open stream of the type is not ended by a message that opened nothing.
+      expect(stream!.ended.aborted).toBe(false)
+      expect(stream!.write({ n: 2 })).toBe(true)
+      expect(await kept.got(1)).toEqual(['{"n":2}'])
+      vi.advanceTimersByTime(MINUTE)
+      expect(lines.at(-1)).toBe('[devices] listener in the last minute: 0 unknown, 0 oversized, 0 over rate, 1 refused, 1 failed')
+    })
+  })
+
+  describe('tab and tabs', () => {
+    it('a 97-byte tab is 413; the 11th tab in a second on a connection is 429', async () => {
+      const reported: Tab[] = []
+      const { path } = await open({ tab: tabHandler((tab) => reported.push(tab)) }, { now: () => 0 })
+      expect((await connection(path).send(tabOfBytes(TAB_MAX_BYTES))).status).toBe(204)
+      expect((await connection(path).send(tabOfBytes(TAB_MAX_BYTES + 1))).status).toBe(413)
+      const sender = connection(path)
+      for (let i = 0; i < TAB_PER_SECOND; i++) expect((await sender.send(JSON.stringify({ type: 'tab', ...TAB }))).status).toBe(204)
+      expect((await sender.send(JSON.stringify({ type: 'tab', ...TAB }))).status).toBe(429)
+      expect(reported).toStrictEqual(Array(1 + TAB_PER_SECOND).fill(TAB))
+    })
+
+    it('tabs is open only while a stream is; select writes one {"app","tty"} line; with no stream it is false', async () => {
+      const tabs = tabsStream()
+      const opened = vi.spyOn(tabs.handler, 'open')
+      const { path } = await open({ tabs: tabs.handler })
+      expect(tabs.isOpen()).toBe(false)
+      expect(tabs.select(TAB, false)).toBe(false)
+
+      const watch = await asked(path)
+      expect(watch).toMatchObject({ status: 200, type: 'application/x-ndjson' })
+      expect(tabs.isOpen()).toBe(true)
+      // Only app and tty go on the line, whatever else the tab holds.
+      expect(tabs.select({ ...TAB, title: 'marker-5f3a' } as Tab, false)).toBe(true)
+      expect(await watch.got(1)).toEqual(['{"app":"terminal-app","tty":"/dev/ttys023"}'])
+
+      watch.close()
+      await endOf(opened.mock.calls[0]![1])
+      expect(tabs.isOpen()).toBe(false)
+      expect(tabs.select(TAB, false)).toBe(false)
+    })
+
+    it('a select that raises writes "raise":true after app and tty; one that does not has no raise key', async () => {
+      const tabs = tabsStream()
+      const { path } = await open({ tabs: tabs.handler })
+      const watch = await asked(path)
+      expect(tabs.select({ app: 'iterm', tty: '/dev/ttys001' }, true)).toBe(true)
+      await watch.got(1)
+      expect(tabs.select({ app: 'ghostty', tty: '/dev/ttys002' }, false)).toBe(true)
+      // The text itself: its keys' order, and no raise key at all on a swipe's.
+      expect(await watch.got(2)).toEqual(['{"app":"iterm","tty":"/dev/ttys001","raise":true}', '{"app":"ghostty","tty":"/dev/ttys002"}'])
+    })
+
+    it('a newer tabs stream is the one written to', async () => {
+      const tabs = tabsStream()
+      const opened = vi.spyOn(tabs.handler, 'open')
+      const { path } = await open({ tabs: tabs.handler })
+      const older = await asked(path)
+      const newer = await asked(path)
+      await older.closed
+      expect(tabs.isOpen()).toBe(true)
+      expect(tabs.select(TAB, false)).toBe(true)
+      expect(await newer.got(1)).toEqual(['{"app":"terminal-app","tty":"/dev/ttys023"}'])
+      expect(older.lines()).toEqual([])
+
+      newer.close()
+      await endOf(opened.mock.calls[1]![1])
+      expect(tabs.isOpen()).toBe(false)
+    })
+
+    it('nothing logs or echoes a tty', async () => {
+      const reported: Tab[] = []
+      const tabs = tabsStream()
+      const { path, lines } = await open({ tab: tabHandler((tab) => reported.push(tab)), tabs: tabs.handler }, { now: () => 0 })
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      const watch = await asked(path)
+      const answers: string[] = []
+      const said = async (answer: Promise<Answer>, status: number) => {
+        const { status: got, body } = await answer
+        expect(got).toBe(status)
+        answers.push(body)
+      }
+
+      const burst = connection(path)
+      for (let i = 0; i < TAB_PER_SECOND; i++) await said(burst.send(JSON.stringify({ type: 'tab', ...TAB })), 204)
+      await said(burst.send(JSON.stringify({ type: 'tab', ...TAB })), 429)
+      await said(connection(path).send(JSON.stringify({ type: 'tab', app: 'iterm', tty: '/dev/ttys0231' + '5f3a' })), 400)
+      await said(connection(path).send(tabOfBytes(TAB_MAX_BYTES + 1)), 413)
+      // The stream is where a tty goes, and nowhere else.
+      expect(tabs.select(TAB, true)).toBe(true)
+      await watch.got(1)
+
+      vi.advanceTimersByTime(MINUTE)
+      expect(lines).toEqual(['[devices] listener open', '[devices] listener in the last minute: 0 unknown, 1 oversized, 1 over rate, 1 refused, 0 failed'])
+      for (const text of [...lines, ...answers]) expect(text).not.toMatch(/ttys|5f3a|terminal-app|iterm/)
+      expect(reported).toHaveLength(TAB_PER_SECOND)
+    })
   })
 })
 
@@ -628,5 +969,50 @@ describe('attach', () => {
       expect(lines).toEqual(['[devices] listener open', '[devices] listener in the last minute: 0 unknown, 0 oversized, 0 over rate, 2 refused, 0 failed'])
       for (const text of [...lines, ...answers]) expect(text).not.toMatch(/0f8fad5b/)
     })
+  })
+})
+
+describe('tab', () => {
+  const gone = new AbortController().signal
+
+  it('tab takes each of the three apps with a tty, and hands on only app and tty', () => {
+    const reported: Tab[] = []
+    const handler = tabHandler((tab) => reported.push(tab))
+    for (const app of TAB_APPS) {
+      expect(handler.handle({ type: 'tab', app, tty: '/dev/ttys023', raise: true, title: 'x' }, gone), app).toBeUndefined()
+    }
+    expect(reported).toStrictEqual(TAB_APPS.map((app) => ({ app, tty: '/dev/ttys023' })))
+  })
+
+  it('tab refuses another app id, none and a bad tty', () => {
+    const report = vi.fn()
+    const handler = tabHandler(report)
+    const bad: Record<string, unknown>[] = [
+      { app: 'terminal', tty: '/dev/ttys023' }, { app: 'orca', tty: '/dev/ttys023' }, { app: FRONT_NONE, tty: '/dev/ttys023' },
+      { app: 'Terminal', tty: '/dev/ttys023' }, { app: 'com.apple.Terminal', tty: '/dev/ttys023' }, { tty: '/dev/ttys023' },
+      { app: 'terminal-app' }, { app: 'iterm', tty: '/dev/pts/3' }, { app: 'ghostty', tty: '/dev/ttys12345' }, { app: 'iterm', tty: 23 },
+    ]
+    for (const fields of bad) expect(handler.handle({ type: 'tab', ...fields }, gone), JSON.stringify(fields)).toBe(REFUSED)
+    expect(report).not.toHaveBeenCalled()
+  })
+
+  it('the tab handler holds nothing: it is its two limits and handle; the longest tab fits', () => {
+    const handler = tabHandler(() => {})
+    expect(Object.keys(handler).sort()).toEqual(['handle', 'maxBytes', 'perSecond'])
+    expect(handler).toMatchObject({ maxBytes: TAB_MAX_BYTES, perSecond: TAB_PER_SECOND })
+    expect([TAB_MAX_BYTES, TAB_PER_SECOND]).toEqual([96, 10])
+    const longest = Math.max(...TAB_APPS.map((app) => Buffer.byteLength(JSON.stringify({ type: 'tab', app, tty: '/dev/ttys9999' }))))
+    expect(longest).toBe(57)
+    expect(longest).toBeLessThanOrEqual(TAB_MAX_BYTES)
+  })
+})
+
+describe('tabs', () => {
+  it('the tabs stream is two a second on a connection, and its one message fits', () => {
+    const { handler } = tabsStream()
+    expect(Object.keys(handler).sort()).toEqual(['maxBytes', 'open', 'perSecond'])
+    expect(handler).toMatchObject({ maxBytes: TABS_MAX_BYTES, perSecond: TABS_PER_SECOND })
+    expect([TABS_MAX_BYTES, TABS_PER_SECOND]).toEqual([32, 2])
+    expect(Buffer.byteLength(TABS)).toBeLessThanOrEqual(TABS_MAX_BYTES)
   })
 })
