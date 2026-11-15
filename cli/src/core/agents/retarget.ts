@@ -322,7 +322,9 @@ export function createAgentRetargeter({
       if (!current()) return changed()
       await backend.releaseHold(pane, current)
       if (!current()) return changed()
-      registry.updateProcessIdentity(session.agentId, outcome.processIdentity, gateway.kind)
+      // The row's grid is the launch Harness just wrote: the process is not read back for it.
+      registry.updateProcessIdentity(session.agentId, outcome.processIdentity, gateway.kind,
+        grid ? { baseUrl: grid.baseUrl, model: grid.model ?? null } : null)
       // The launch that just worked is the one a restart or a post-reboot restore must repeat — and
       // what it decided about web search is what the app shows for this agent from now on. Null for
       // a move home: the block, and the status with it, leave the frame together.

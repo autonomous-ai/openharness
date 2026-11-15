@@ -520,6 +520,9 @@ describe('retargeting an agent', () => {
       const run = setup()
       await run.retarget({ agentId: 'a1', grid })
       expect(vi.mocked(run.deps.registry.updateProcessIdentity).mock.calls.at(-1)![3]).toEqual({ baseUrl: grid.baseUrl, model: grid.model ?? null })
+      const { model: _model, ...modelless } = grid
+      await run.retarget({ agentId: 'a1', grid: modelless })
+      expect(vi.mocked(run.deps.registry.updateProcessIdentity).mock.calls.at(-1)![3]).toEqual({ baseUrl: grid.baseUrl, model: null })
       const home = setup(agent({ grid: { baseUrl: 'x', model: null } } as Partial<RegisteredSession>), {
         relaunchOverrides: vi.fn(async () => ({ ok: true, overrides: {} })) as never,
       })
