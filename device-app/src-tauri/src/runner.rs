@@ -342,18 +342,24 @@ impl Shared {
         let mut polled_at = None;
         while let Some(call) = self.tabs.next(every, polled_at) {
             let start = Instant::now();
+            let app = match &call {
+                Call::Select(select) => select.app,
+                Call::Poll(app) => {
+                    polled_at = Some(start);
+                    *app
+                }
+            };
+            // An Apple Event to an app that is not running would launch it, and the app in front may have just quit.
+            if !scripts.running(app) {
+                continue;
+            }
             let out = match call {
                 Call::Select(Select { app, tty, frontmost, raise }) => {
-                    // An Apple Event to an app that is not running would launch it.
-                    if !scripts.running(app) {
-                        continue;
-                    }
                     let done =
                         if raise { scripts.focus_tty(app, &tty) } else { scripts.select_tty(app, &tty, frontmost) };
                     self.tabs.answer(start.elapsed(), |follow| follow.selected(app, done))
                 }
                 Call::Poll(app) => {
-                    polled_at = Some(start);
                     let answer = scripts.selected_tty(app);
                     // `watch` first, and held through the write: the line goes to the watch it was asked for.
                     let watch = self.watch.lock().unwrap();

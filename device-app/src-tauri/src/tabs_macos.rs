@@ -17,6 +17,8 @@ use std::thread;
 // Each app's terms are written by their codes (from its scripting dictionary) and the app is named only at run time,
 // so a source compiles on a Mac without that app, compiling sends no event, and an app whose dictionary lacks a term
 // answers an error number instead of failing to compile. Every event is inside a 2 s timeout (tabs::CALL_TIMEOUT).
+// Each handler that tells its app first asks AppleScript, with no event, whether it runs: `tell application id`
+// launches one that does not, and it may have quit since the runner asked.
 // With no visible window `selected_tty` answers the empty string; each select answers whether a tab held `t`.
 
 const TERMINAL: &str = r#"
@@ -25,6 +27,7 @@ const TERMINAL: &str = r#"
 property app_id : "com.apple.Terminal"
 
 on selected_tty()
+	if not (running of application id app_id) then return ""
 	with timeout of 2 seconds
 		tell application id app_id
 			repeat with w in (every «class cwin» whose «property pvis» is true)
@@ -36,6 +39,7 @@ on selected_tty()
 end selected_tty
 
 on select_tty(t, in_front)
+	if not (running of application id app_id) then return false
 	with timeout of 2 seconds
 		tell application id app_id
 			repeat with w in (every «class cwin» whose «property pvis» is true)
@@ -62,6 +66,7 @@ const ITERM: &str = r#"
 property app_id : "com.googlecode.iterm2"
 
 on selected_tty()
+	if not (running of application id app_id) then return ""
 	with timeout of 2 seconds
 		tell application id app_id
 			set shown to every «class cwin» whose «property pvis» is true
@@ -72,6 +77,7 @@ on selected_tty()
 end selected_tty
 
 on select_tty(t, in_front)
+	if not (running of application id app_id) then return false
 	with timeout of 2 seconds
 		tell application id app_id
 			repeat with w in (every «class cwin» whose «property pvis» is true)
@@ -102,6 +108,7 @@ const GHOSTTY: &str = r#"
 property app_id : "com.mitchellh.ghostty"
 
 on selected_tty()
+	if not (running of application id app_id) then return ""
 	with timeout of 2 seconds
 		tell application id app_id
 			-- A window, tab or terminal that is not there is no tab: only reading the tty itself may say Ghostty has none.
@@ -118,6 +125,7 @@ on selected_tty()
 end selected_tty
 
 on select_tty(t, in_front)
+	if not (running of application id app_id) then return false
 	if not in_front then return false
 	with timeout of 2 seconds
 		tell application id app_id
