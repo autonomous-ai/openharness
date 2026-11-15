@@ -278,7 +278,7 @@ async function move(rig: Rollover, duringStop: () => Promise<void> = async () =>
     },
     buildLaunch: async (row, options) => ({
       argv: rig.engineArgv('--resume', options.resumeSessionId ?? row.sessionId),
-      deferred: { prepare: () => {}, overrides: { env: {}, extraArgs: [], clearEnv: [] }, permission: {} },
+      deferred: { prepare: async () => {}, overrides: { env: {}, extraArgs: [], clearEnv: [] }, permission: {} },
     }),
     // The stop a restart makes: the pane is kept, then its engine ends. Nothing else of a swap is asked by a move.
     paneSwapDeps: (_session, { backend, runtime }) => ({

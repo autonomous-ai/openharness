@@ -226,11 +226,11 @@ this platform uses leaves them out. Low risk on a Mac and Linux, medium on a Win
 
 | What | Lines | Where to | Risk |
 | --- | ---: | --- | --- |
-| **A Codex resume reads its whole rollout synchronously on the core's loop,** twice when it repairs (`engines/kit/resumeRepair.ts:146`, from `core/agents/launch.ts:132`). The rollout of 3 October was 803 MB. First asynchronous, a day; then the worker | 495 | Codex's worker | medium |
+| **A Codex resume reads its whole rollout on the core's loop,** twice when it repairs (`engines/kit/resumeRepair.ts`, from `core/agents/launch.ts`). The rollout of 3 October was 803 MB. Asynchronous since 15 November: a chunk at a time between turns of the loop, within a size, record and time bound, the history replaced only while its resume holds; a 200 MB rollout held the loop 2.4 s, now 9 ms (543 files, 93,156 lines). Left: the worker | 495 | Codex's worker | medium |
 | **Six engines' model switch drives their panes from the core** (`lib/runtimeControl.ts:229-663`), with their question key steps and readers. Claude Code and Codex already use a worker's grant | 715 | the other engines' worker | medium |
 | **The other fourteen engines run in the core:** their normalizers, readers and Stop rules (`core/transcripts/attach.ts:415-599`, `ingest.ts`, `history.ts`, `core/turns/turnHooks.ts:133-280`), and 16,055 more lines loaded once one of their sessions needs it | 2,584 + 16,055 | one worker for all fourteen, as the plan says ([other engines](2026-10-08-other-engines-out-of-core.md)) | medium, high on attach |
 | **Engine set-up:** installing engines, their hooks and plugins, probing binaries, the person's login shell (`engines/kit/native*.ts`, `hookSettings.ts`, `hookReview.ts`, `launchExecutable.ts`, `engines/nativeLaunch.ts`) | 4,436 | a set-up process: needs a ruling first | high |
-| Store engines: deletes on their databases at purge, a whole conversation read into the core at close, Codex's title index read whole | 483 | their worker | medium to high |
+| Store engines: deletes on their databases at purge, a whole conversation read into the core at close. Codex's title index is read from its end, then only what Codex appends (15 November) | 483 | their worker | medium to high |
 
 ### 5. The Swarm, out of the core's process
 
@@ -337,7 +337,7 @@ today that the rule says it should not, most serious first:
 4. **The core's loop can be held.** A registry save: its lock can sleep the loop for 2 s, and its three fsyncs took
    about 60 ms of a save measured on a Mac (a synchronous `ps` on every save, for a start time that never changes,
    is gone since 13 November: read once); a Codex resume that
-   reads its whole rollout; a login shell and `harness-pty version`, up to 5 s each
+   read its whole rollout (a chunk at a time since 15 November); a login shell and `harness-pty version`, up to 5 s each
    (`lib/engineBin.ts:116`, `lib/ptyHost/launch.ts:227`); fsync bursts for the handoff; `~/.claude.json` rewritten
    synchronously (`engines/kit/folderTrust.ts:101-115`). (The agent ledger's lock, 2 s, is the edge host's to wait
    on since 13 November.) And work that grows with history: create receipts are

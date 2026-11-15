@@ -1,8 +1,30 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { appendFileSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import * as fs from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { cleanCodexTitle, cleanOmpTitle, codexThreadName, engineSessionTitle, namingTitle, ompSessionTitle, resetCodexThreadNames } from './sessionTitle.js'
+
+// The real filesystem, with exports a case can watch: how much of an index is read.
+vi.mock('node:fs', async importOriginal => ({ ...await importOriginal<typeof import('node:fs')>() }))
+
+/** The bytes read from files while `run` runs, whole or in part. */
+function bytesRead(run: () => void): number {
+  let bytes = 0
+  const whole = fs.readFileSync, part = fs.readSync
+  vi.spyOn(fs, 'readFileSync').mockImplementation(((...args: Parameters<typeof fs.readFileSync>) => {
+    const read = whole(...args)
+    bytes += read.length
+    return read
+  }) as typeof fs.readFileSync)
+  vi.spyOn(fs, 'readSync').mockImplementation(((...args: Parameters<typeof fs.readSync>) => {
+    const read = part(...args)
+    bytes += read
+    return read
+  }) as typeof fs.readSync)
+  try { run() } finally { vi.restoreAllMocks() }
+  return bytes
+}
 
 describe('namingTitle: the engine’s title, when it names the session', () => {
   const harness = { engine: 'claude', cwd: '/Users/example/harnesses/harness-43', defaultName: 'harness-43' }
@@ -112,6 +134,50 @@ describe('codexThreadName: Codex’s own name for a thread', () => {
     expect(codexThreadName('t1')).toBe('From the env home')
     expect(codexThreadName(null, home)).toBeNull()
     expect(codexThreadName('t1', join(home, 'missing'))).toBeNull()
+  })
+
+  // Asked of every Codex session at each terminal sweep: read whole, an index grows with every thread ever named.
+  it('reads a long index from its end, then only what Codex appends', () => {
+    const line = (id: string, name: string) => JSON.stringify({ id, thread_name: name }) + '\n'
+    let text = line('t-first', 'Named long ago')
+    for (let i = 0; text.length < 2 * 1024 * 1024; i++) text += line(`t${i}`, `Thread number ${i}`)
+    text += line('t-last', 'Named just now')
+    writeFileSync(join(home, 'session_index.jsonl'), text)
+    let name: string | null = null
+    expect(bytesRead(() => { name = codexThreadName('t-last', home) })).toBeLessThanOrEqual(1024 * 1024)
+    expect(name).toBe('Named just now')
+    // Older than the end it read: no name from the index (the registry keeps the one it was given then).
+    expect(bytesRead(() => { name = codexThreadName('t-first', home) })).toBe(0)
+    expect(name).toBeNull()
+    const renamed = line('t-first', 'After /rename')
+    appendFileSync(join(home, 'session_index.jsonl'), renamed)
+    expect(bytesRead(() => { name = codexThreadName('t-first', home) })).toBe(renamed.length)
+    expect(name).toBe('After /rename')
+    // A name being written, with no newline yet, is taken now and read again once whole.
+    appendFileSync(join(home, 'session_index.jsonl'), JSON.stringify({ id: 't-new', thread_name: 'Half' }))
+    expect(codexThreadName('t-new', home)).toBe('Half')
+    appendFileSync(join(home, 'session_index.jsonl'), '\n' + line('t-new', 'Whole'))
+    expect(codexThreadName('t-new', home)).toBe('Whole')
+    // Rewritten rather than appended to, it is read again from its end.
+    writeFileSync(join(home, 'session_index.jsonl'), line('t-last', 'Rewritten'))
+    expect(codexThreadName('t-last', home)).toBe('Rewritten')
+    expect(codexThreadName('t-new', home)).toBeNull()
+  })
+
+  it('keeps each Codex home it reads, so agents in two homes do not read both again at every sweep', () => {
+    const other = mkdtempSync(join(tmpdir(), 'codex-home-'))
+    try {
+      index([JSON.stringify({ id: 't1', thread_name: 'In the first home' })])
+      writeFileSync(join(other, 'session_index.jsonl'), JSON.stringify({ id: 't2', thread_name: 'In the second home' }) + '\n')
+      expect(codexThreadName('t1', home)).toBe('In the first home')
+      expect(codexThreadName('t2', other)).toBe('In the second home')
+      expect(bytesRead(() => {
+        for (let sweep = 0; sweep < 3; sweep++) {
+          expect(codexThreadName('t1', home)).toBe('In the first home')
+          expect(codexThreadName('t2', other)).toBe('In the second home')
+        }
+      })).toBe(0)
+    } finally { rmSync(other, { recursive: true, force: true }) }
   })
 
   it('is no name when the index cannot be read', () => {

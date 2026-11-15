@@ -14,7 +14,7 @@ const setup = () => {
     workspaceMissing: vi.fn((): { error: string; detail: string } | null => null),
     relaunchOverrides: vi.fn(async (): Promise<LaunchOverridesResult> => built),
     downgradedPermission: vi.fn(async () => ({ bypassPermission: false })),
-    prepareSessionResume: vi.fn(), refreshGridWebSearch: vi.fn(),
+    prepareSessionResume: vi.fn(async (_entry: RegisteredSession, _current: () => boolean) => {}), refreshGridWebSearch: vi.fn(),
     launch: vi.fn(() => ({ argv: ['engine'] })),
   }
   return { deps, build: createRestoreLaunch(deps) }
@@ -47,9 +47,11 @@ describe('a launch built without preparation', () => {
     expect(deps.prepareSessionResume).not.toHaveBeenCalled()
     expect(deps.refreshGridWebSearch).not.toHaveBeenCalled()
     expect(deps.launch).toHaveBeenCalledWith(entry, { resumeSessionId: 'conversation', agentId: 'agent' }, built.overrides, { bypassPermission: false })
-    const prepared = await build(entry, { resumeSessionId: 'conversation', current: () => true })
+    const current = () => true
+    const prepared = await build(entry, { resumeSessionId: 'conversation', current })
     expect(prepared).toEqual({ argv: ['engine'] })
-    expect(deps.prepareSessionResume).toHaveBeenCalledWith(entry)
+    // The history is replaced only while this restore holds.
+    expect(deps.prepareSessionResume).toHaveBeenCalledWith(entry, current)
     expect(deps.refreshGridWebSearch).toHaveBeenCalledTimes(1)
   })
 
@@ -60,18 +62,29 @@ describe('a launch built without preparation', () => {
     if (!('argv' in launch) || !launch.deferred) throw new Error('expected a deferred launch')
     expect(launch.deferred.overrides).toBe(built.overrides)
     expect(launch.deferred.permission).toEqual({ bypassPermission: true, permissionMode: 'plan' })
-    launch.deferred.prepare()
-    expect(deps.prepareSessionResume).toHaveBeenCalledWith(entry)
+    await launch.deferred.prepare()
+    expect(deps.prepareSessionResume).toHaveBeenCalledWith(entry, expect.any(Function))
     expect(deps.refreshGridWebSearch).toHaveBeenCalledWith('agent', built.overrides)
     expect(deps.relaunchOverrides).toHaveBeenCalledTimes(1)
     // A preparation that fails says so to its caller, which falls back (hostMove/moveAgent.ts).
-    deps.prepareSessionResume.mockImplementationOnce(() => { throw new Error('rollout unreadable') })
-    expect(() => launch.deferred!.prepare()).toThrow('rollout unreadable')
+    deps.prepareSessionResume.mockRejectedValueOnce(new Error('rollout unreadable'))
+    await expect(launch.deferred!.prepare()).rejects.toThrow('rollout unreadable')
     // Nothing to resume: nothing to prepare, only the grid's web search.
     const fresh = await build(entry, { current: () => true, prepare: false })
     if (!('argv' in fresh) || !fresh.deferred) throw new Error('expected a deferred launch')
-    fresh.deferred.prepare()
+    await fresh.deferred.prepare()
     expect(deps.prepareSessionResume).toHaveBeenCalledTimes(2)
+    expect(deps.refreshGridWebSearch).toHaveBeenCalledTimes(2)
+  })
+
+  it('writes no grid for a move that stopped holding while its history was prepared', async () => {
+    const { deps, build } = setup()
+    let current = true
+    const launch = await build(entry, { resumeSessionId: 'conversation', current: () => current, prepare: false })
+    if (!('argv' in launch) || !launch.deferred) throw new Error('expected a deferred launch')
+    deps.prepareSessionResume.mockImplementationOnce(async () => { current = false })
+    await launch.deferred.prepare()
+    expect(deps.refreshGridWebSearch).not.toHaveBeenCalled()
   })
 })
 
@@ -151,7 +164,7 @@ describe('restore preparation keeps session authority in core', () => {
     else deps.downgradedPermission.mockImplementation(async () => { await pending; return { bypassPermission: false } })
     let current = true
     const replacement = { transcript: 'new turn', tail: 42, grid: 'new grid' }
-    deps.prepareSessionResume.mockImplementation(() => { replacement.transcript = 'repaired old turn'; replacement.tail = 0 })
+    deps.prepareSessionResume.mockImplementation(async () => { replacement.transcript = 'repaired old turn'; replacement.tail = 0 })
     deps.refreshGridWebSearch.mockImplementation(() => { replacement.grid = 'old grid' })
     const result = build(entry, { resumeSessionId: 'conversation', current: () => current })
     await vi.waitFor(() => expect(stage === 'Store' ? deps.relaunchOverrides : deps.downgradedPermission).toHaveBeenCalled())
@@ -180,9 +193,20 @@ describe('restore preparation keeps session authority in core', () => {
     expect(deps.downgradedPermission).not.toHaveBeenCalled()
   })
 
+  // The history is prepared a chunk at a time now (engines/kit/resumeRepair.ts): the restore may have stopped holding
+  // by the time it is done, and then it launches nothing and writes no grid.
+  it('a restore that stops holding while its history is prepared is cancelled, with nothing written after', async () => {
+    const { deps, build } = setup()
+    let current = true
+    deps.prepareSessionResume.mockImplementationOnce(async () => { current = false })
+    expect(await build(entry, { resumeSessionId: 'conversation', current: () => current })).toEqual({ cancelled: true })
+    expect(deps.refreshGridWebSearch).not.toHaveBeenCalled()
+    expect(deps.launch).not.toHaveBeenCalled()
+  })
+
   it.each([new Error('unreadable'), 'unreadable'])('reports resume repair errors without applying grid changes', async error => {
     const { deps, build } = setup()
-    deps.prepareSessionResume.mockImplementation(() => { throw error })
+    deps.prepareSessionResume.mockImplementation(async () => { throw error })
     expect(await build(entry, { resumeSessionId: 'conversation', current: () => true }))
       .toEqual({ error: 'RESUME_PREPARATION_FAILED', detail: 'unreadable' })
     expect(deps.refreshGridWebSearch).not.toHaveBeenCalled()

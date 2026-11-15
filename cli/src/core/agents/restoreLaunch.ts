@@ -10,7 +10,7 @@ interface RestoreLaunchDeps {
   workspaceMissing(cwd: string | null | undefined): { error: string; detail: string } | null
   relaunchOverrides(entry: RegisteredSession, source: RegisteredSession, current: () => boolean): Promise<LaunchOverridesResult>
   downgradedPermission(entry: RegisteredSession, native?: LaunchOverrides['native']): Promise<{ permissionMode?: string | null; bypassPermission?: boolean; nativeHold?: string }>
-  prepareSessionResume(entry: RegisteredSession): void
+  prepareSessionResume(entry: RegisteredSession, current: () => boolean): Promise<void>
   refreshGridWebSearch(agentId: string, overrides: LaunchOverrides): void
   launch(entry: RegisteredSession, opts: { resumeSessionId?: string; agentId: string }, overrides: LaunchOverrides,
     permission: { permissionMode?: string | null; bypassPermission?: boolean }): RestoreLaunch
@@ -41,17 +41,19 @@ export function createRestoreLaunch(deps: RestoreLaunchDeps): RestoreAgentsDeps[
     // prepared, and the row written, once that engine has stopped. The move runs this itself then, and relaunches with
     // these same overrides if it falls back, so nothing is asked of the grid or the Store again while the agent's input
     // is held.
-    const preparation = () => {
-      if (opts.resumeSessionId) deps.prepareSessionResume(entry)
-      deps.refreshGridWebSearch(entry.agentId, built.overrides)
+    const preparation = async () => {
+      if (opts.resumeSessionId) await deps.prepareSessionResume(entry, current)
+      if (current()) deps.refreshGridWebSearch(entry.agentId, built.overrides)
     }
-    // These writes are synchronous and belong to the core. Neither a stopped conversation's
-    // transcript/tail nor a replacement binding's grid may be changed by an old Store answer.
+    // These writes belong to the core. Neither a stopped conversation's transcript/tail nor a replacement binding's
+    // grid may be changed by an old Store answer: the history is replaced only while this restore holds, and the grid
+    // is written in the same turn as the check after it.
     if (prepare !== false) {
       if (opts.resumeSessionId) {
-        try { deps.prepareSessionResume(entry) } catch (error) {
+        try { await deps.prepareSessionResume(entry, current) } catch (error) {
           return { error: 'RESUME_PREPARATION_FAILED', detail: error instanceof Error ? error.message : String(error) }
         }
+        if (!current()) return { cancelled: true }
       }
       deps.refreshGridWebSearch(entry.agentId, built.overrides)
     }

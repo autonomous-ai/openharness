@@ -27,7 +27,7 @@ import { paneReadIdentity } from '../transcripts/readIdentity.js'
 export interface PaneSwapDeps {
   restartJobs?: AgentRestartCoordinator
   byAgent: (agentId: string) => RegisteredSession | undefined
-  prepareSessionResume: (session: RegisteredSession) => void
+  prepareSessionResume: (session: RegisteredSession, current?: () => boolean) => Promise<void>
   /** Keeps a conversation a swap had to leave for a new one as a stopped harness (lib/keepAbandonedConversation.ts). */
   keepAbandonedConversation: (left: RegisteredSession) => void
   /** Release the conversation on its engine's server before replacing the terminal client. */
@@ -95,7 +95,7 @@ export function createPaneSwap({ byAgent, prepareSessionResume, keepAbandonedCon
     })
     return {
       ...(current ? { isCurrent: current } : {}),
-      prepareResume: () => prepareSessionResume(session),
+      prepareResume: () => prepareSessionResume(session, current),
       // The conversation the swap meant to reopen: the one a fallback to a fresh start leaves behind.
       keepAbandoned: () => keepAbandonedConversation(session),
       // Only a backend that can refuse is asked (tmux, too old for `-e`); the pty host takes any environment.

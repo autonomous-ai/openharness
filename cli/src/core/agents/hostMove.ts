@@ -102,7 +102,7 @@ export function hostMoveDeps(session: RegisteredSession, current: () => boolean,
     prepareResume: async () => {
       const deferred = launch?.deferred
       if (!deferred) throw new Error('the launch was not built for a move')
-      deferred.prepare()
+      await deferred.prepare()
       prepared = true
     },
     stopEngine: async () => {

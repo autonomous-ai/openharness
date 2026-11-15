@@ -14,7 +14,7 @@
  * What is left after cleaning can still be no name at all: an engine's own name before the first
  * prompt ("Claude Code"), or just the folder. Those fall through to the numbered default.
  */
-import { closeSync, openSync, readFileSync, readSync, statSync } from 'node:fs'
+import { closeSync, openSync, readSync, statSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { ENGINES } from '../engines/types.js'
 import { launchCodexHome, sessionCodexHome } from './engineHomes.js'
@@ -66,13 +66,40 @@ export function cleanCodexTitle(title: string, cwd?: string | null): string {
     .join(' | ')
 }
 
-interface IndexCache { path: string; mtimeMs: number; size: number; names: Map<string, string> }
-let codexIndexCache: IndexCache | null = null
+/**
+ * The most of Codex's index read at once: its end first, where the latest names are. One line per name given, so
+ * 1 MiB holds about 7,000; a session named longer ago than that keeps the name it was given then (registry.ts).
+ */
+const INDEX_READ_BYTES = 1024 * 1024
+/** The names kept of one index, and the indexes kept: one for each Codex home in use. */
+const INDEX_NAMES = 10_000
+const INDEX_HOMES = 16
+
+/** What has been read of one home's index, the file `key` names: its lines up to `offset`, a line's start, when it
+ *  was `size` long (-1 before any read). */
+interface IndexRead { key: string; offset: number; size: number; mtimeMs: number; names: Map<string, string> }
+const codexIndexes = new Map<string, IndexRead>()
+
+/** The lines of `text` into `names`, later lines winning; a line that is not a name costs that line alone. */
+function readNames(text: string, names: Map<string, string>): void {
+  for (const line of text.split('\n')) {
+    if (!line.trim()) continue
+    try {
+      const row = JSON.parse(line) as { id?: unknown; thread_name?: unknown }
+      if (typeof row.id === 'string' && typeof row.thread_name === 'string' && row.thread_name.trim()) {
+        names.delete(row.id)
+        names.set(row.id, row.thread_name.trim())
+        if (names.size > INDEX_NAMES) names.delete(names.keys().next().value!)
+      }
+    } catch { /* one torn line (Codex mid-append) costs that line, not the index */ }
+  }
+}
 
 /**
- * Codex's own name for a thread, from `session_index.jsonl` under the agent's CODEX_HOME. The file is
- * small (one line per named thread, later lines win) and re-read only when it changes; a missing or
- * unreadable file is simply no name.
+ * Codex's own name for a thread, from `session_index.jsonl` under the agent's CODEX_HOME: one line per named thread,
+ * later lines win, and Codex appends. Asked of every Codex session at each terminal sweep, so it reads only what was
+ * appended since it last looked, and at most the index's last MiB: read whole, it grows with every thread ever named.
+ * A missing or unreadable file is simply no name.
  */
 export function codexThreadName(sessionId: string | null | undefined, codexHome?: string | null): string | null {
   if (!sessionId) return null
@@ -80,26 +107,37 @@ export function codexThreadName(sessionId: string | null | undefined, codexHome?
   const path = join(home, 'session_index.jsonl')
   let stat
   try { stat = statSync(path) } catch { return null }
-  if (!codexIndexCache || codexIndexCache.path !== path || codexIndexCache.mtimeMs !== stat.mtimeMs || codexIndexCache.size !== stat.size) {
-    const names = new Map<string, string>()
-    try {
-      for (const line of readFileSync(path, 'utf8').split('\n')) {
-        if (!line.trim()) continue
-        try {
-          const row = JSON.parse(line) as { id?: unknown; thread_name?: unknown }
-          if (typeof row.id === 'string' && typeof row.thread_name === 'string' && row.thread_name.trim()) {
-            names.set(row.id, row.thread_name.trim())
-          }
-        } catch { /* one torn line (Codex mid-append) costs that line, not the index */ }
-      }
-    } catch { return null }
-    codexIndexCache = { path, mtimeMs: stat.mtimeMs, size: stat.size, names }
+  const key = `${stat.dev}:${stat.ino}`
+  let index = codexIndexes.get(path)
+  // Another file, or one rewritten rather than appended to, is read again from its end.
+  if (!index || index.key !== key || stat.size < index.size || (stat.size === index.size && stat.mtimeMs !== index.mtimeMs)) {
+    index = { key, offset: 0, size: -1, mtimeMs: 0, names: new Map() }
   }
-  return codexIndexCache.names.get(sessionId) ?? null
+  if (stat.size !== index.size || stat.mtimeMs !== index.mtimeMs) {
+    // Far behind, only the end is read: every line after the skip is newer than all it skips.
+    const start = Math.max(index.offset, stat.size - INDEX_READ_BYTES)
+    let bytes = Buffer.alloc(stat.size - start)
+    try {
+      const fd = openSync(path, 'r')
+      try { bytes = bytes.subarray(0, readSync(fd, bytes, 0, bytes.length, start)) } finally { closeSync(fd) }
+    } catch { codexIndexes.delete(path); return null }
+    // Read from the middle of a line, its start is dropped. The end after the last newline is read again next time,
+    // whole by then, and taken now too: Codex's last name may have no newline yet.
+    const first = bytes.indexOf(10)
+    const from = start > index.offset ? (first < 0 ? bytes.length : first + 1) : 0
+    readNames(bytes.subarray(from).toString('utf8'), index.names)
+    index.offset = start + Math.max(from, bytes.lastIndexOf(10) + 1)
+    index.size = stat.size
+    index.mtimeMs = stat.mtimeMs
+  }
+  codexIndexes.delete(path)
+  codexIndexes.set(path, index)
+  if (codexIndexes.size > INDEX_HOMES) codexIndexes.delete(codexIndexes.keys().next().value!)
+  return index.names.get(sessionId) ?? null
 }
 
 /** Test seam. */
-export function resetCodexThreadNames(): void { codexIndexCache = null }
+export function resetCodexThreadNames(): void { codexIndexes.clear() }
 
 /** omp's terminal title: "π ⠴ 󰣳 Fix login: …": its name, a status mark (a Braille spinner frame
  *  while working, ">" when idle, or another single mark), then an optional Nerd Font icon. */

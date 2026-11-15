@@ -44,7 +44,8 @@ export interface ResumeAgentServiceDeps {
   retainExitedSession(session: RegisteredSession, paneAlive: boolean): void
   announceSession(session: RegisteredSession): void
   relaunchOverrides(session: RegisteredSession, source: RegisteredSession, current: () => boolean): Promise<LaunchOverridesResult>
-  prepareSessionResume(session: RegisteredSession): void
+  /** Its history made resumable, replaced only while [current] holds (core/agents/launch.ts). */
+  prepareSessionResume(session: RegisteredSession, current: () => boolean): Promise<void>
   /** Stops a Claude Code background job holding the session before `--resume`, in its worker (core/engines/backgroundJobs.ts). */
   stopBackgroundJob?: ClearBackgroundJob
   refreshGridWebSearch(agentId: string, overrides: LaunchOverrides): void
@@ -289,11 +290,13 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
           if (refusal) return { ok: false, ...refusal }
         }
         if (resumeSessionId) {
-          try { prepareSessionResume(saved) } catch (error) {
+          // Replaced only while this resume holds, and no other live harness has taken the conversation since.
+          try { await prepareSessionResume(saved, () => current() && !(saved.sessionId && registry.bySession(saved.sessionId))) } catch (error) {
             if (error instanceof IdentityReadUnavailable) throw error
             return preparationFailed(sid(saved.agentId), error)
           }
-          // The confirmed synchronous repair may atomically replace this file.
+          if (!current()) return resumeChanged
+          // The confirmed repair may atomically replace this file.
           // Earn a new proof of the same conversation before the next await.
           transcript = sourceEvidence()
         }
