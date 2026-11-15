@@ -1510,6 +1510,24 @@ describe('attaching a session', () => {
         expect(vi.getTimerCount()).toBe(0)
       })
 
+      // The count is the binding's whose attach was superseded. Kept for the next binding, its first superseded attach
+      // waited two seconds, or after a fifth retry that found the session bound anew, gave up without trying at all.
+      it('counts from one second again for the session bound anew while its retry waited', async () => {
+        fakeTimers(); quiet()
+        const run = setup(), row = session('claude', transcript([CLAUDE_PROMPT]))
+        vi.mocked(run.deps.runtimeProfiles.beginHydrate).mockReturnValue({ ...run.profile, commitWith: () => false })
+        await run.attach.attachSession(row)
+        const rebound = session('claude', row.transcriptPath, { boundAt: 2 })
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(reads(run)).toBe(1)
+        // The new binding's attach, superseded in its turn.
+        await run.attach.attachSession(rebound)
+        await vi.advanceTimersByTimeAsync(1_000)
+        await until(() => !run.attach.attaches.attaching().length)
+        expect(reads(run)).toBe(3)
+        run.attach.forget(row.sessionId)
+      })
+
       it('counts from one second again once a tail was installed, and waits no more once an attach made sure the tail runs', async () => {
         fakeTimers(); quiet()
         const run = setup(), row = session('claude', transcript([CLAUDE_PROMPT])), add = vi.mocked(run.deps.watcher.addSession)
