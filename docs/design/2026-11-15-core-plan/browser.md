@@ -110,65 +110,27 @@ Rule 7 bars a core mechanism only one component uses. A generic shape is fine on
   searchProcess uses `followLink({running:false})` + dated shim translating an old core's `deleteHistory` event.
   lifecycle.ts no longer takes `sessionSearch`; `purged(agentId, sessionIds)`.
 
-## Done (in the WIP commit)
+## PR 1: done (branch `core-browser-2`)
 
-api.ts types and port changes; core/agentLife.ts; harnessd/services.ts `hears` + `HeldAgentLife`; main.ts wiring (hub,
-`attach` replaces attachDsh/attachBrowser at create, fork, resume, start loop; agentEnded; `follow` in coreApi;
-`follow_agents` answer; `agentLife.disconnected`; lifecycle stopped/purged; search notice; viewersLink.follow();
-agentBrowserLink.follow()); create.ts, fork.ts, resumeAgentService.ts, lifecycle.ts (createAgentBrowserLifecycle deleted);
-registry.ts and stoppedAgents.ts; viewersLink.ts, viewers.ts, viewersProcess.ts; agentCleanup*.ts; search*.ts;
-agentBrowser.ts, browsers.ts, stateFile.ts, agentBrowserProcess.ts, agentBrowserLink.ts; agentQueries.ts;
-lib/serviceMetrics.ts; services/followLink.ts.
+Everything above, finished: `core/agents/discovery.ts` on `attach` and `taken`; `heldAgentLife()` in
+`harnessd/services.ts`; `lib/agentTmp.ts` out of the core (`tempRoots` beside its one reader, `lib/mediaPreview.ts`; the
+agent browser sweeps `agent-tmp` as it begins and as an agent runs a command); specs at 100% (`core/agentLife.spec.ts`,
+`services/followLink.spec.ts`, and every spec that named a removed member); the docs. Found on the way and fixed:
 
-## Left for PR 1, step by step
+- `follow_agents` is answered after Agent Messages' own answers, so it reads no more than it did (`live` rows).
+- A purge of an agent whose browser was starting (attached, not yet in the state file) deleted nothing: the browser is
+  deleted when it was started, or when the file cannot be read (the delete says why).
+- A purge of an agent that never had a Browser wrote the state file, which then started the process at every start.
+- `agent_browser_enabled` is counted at an agent's first start again (the old Desktop's create included).
+- The process is still asked for by an agent whose row carries the flag from before (an old Desktop's create, a row not
+  yet taken in): `core/agentBrowserLink.ts` `want`, dated 2026-12-18. **PR 2 must keep it** when that file goes (or drop
+  it after the date).
 
-1. `core/agents/discovery.ts`: deps `attachDsh`+`attachBrowser`+`moveBrowser` -> `attach(session)` and
-   `taken(from, to: RegisteredSession)`. onDiscovered: `attach(opened.entry)` (not only with dsh), evicted:
-   `if (opened.isNew) taken(opened.evicted.agentId, opened.entry)`. `paneTaken`: keep the resume-reserved and saved-record
-   checks, then `taken(previous, adopted)` (no flag). onObserved: `if (live) attach(live)` replacing both lines.
-   main.ts already passes `attach` and `taken: (from, to) => agentLife.taken(from, to)`.
-2. `harnessd/services.ts`: add `export function heldAgentLife(outOfProcess)` (main.ts imports it): the `hears` of every
-   SERVICE_HOSTS entry, only for services in `outOfProcess`. Spec it (`npm run test:harnessd` is 100% per file).
-3. agentTmp out of the core: drop `sweepAgentTmpWhenDue()` from `core/agents/create.ts` and `lib/launchOverrides.ts`;
-   move `tempRoots()` from `lib/pathContainment.ts` into `lib/mediaPreview.ts` (its only caller, edge host), so
-   pathContainment no longer imports `lib/agentTmp.ts`; sweep `agent-tmp` from the agent browser service (at begin and
-   daily: `sweepAgentTmpWhenDue` / `sweepTmpFolders`). Note for the PR: Swarm-era `agent-tmp/<id>` folders on a machine
-   that never runs the browser are no longer swept.
-4. `npx tsc --noEmit -p .` in cli/ until clean; fix every caller and test fake. The first run on the WIP commit
-   (only the first 60 lines were kept) found, beside the specs below:
-   - `core/main.ts`: the new `const attach = (s) => agentLife.running(s)` (about line 1066) collides with an existing
-     `const attach` (about line 1340, the transcript attach that has `.holdInterpretation`). Rename the generic one (e.g.
-     `agentHere`) and pass it as `attach: agentHere` to create, fork, the lifecycle (resume) and discovery, and in the
-     start loop (`for (const session of registry.list()) agentHere(session)`).
-   - `core/main.ts`: `heldAgentLife` not yet exported by harnessd/services.ts (step 2).
-   - `core/agents/discovery.ts:148`: still reads `evicted.browser` (step 1).
-   - Specs that name the removed members: core/agentBrowserLink.spec.ts (ids, want, attached/stopped/deleted/moved,
-     setBrowser, moveBrowser), core/agentCleanupLink.spec.ts (closed), core/agents/create.spec.ts and nativeCreate.spec.ts
-     (attachDsh, attachBrowser), core/agents/fork.spec.ts (attachDsh), core/agents/lifecycle.spec.ts
-     (createAgentBrowserLifecycle, sessionSearch, attachDsh, attachBrowser), core/api.spec.ts (ids, setBrowser,
-     moveBrowser), and more past the first 60 lines (run tsc again without `head`).
-5. Specs (write the failing test first, show red then green): `core/agentLife.spec.ts`, `services/followLink.spec.ts`;
-   update `core/agentBrowserLink.spec.ts`, `core/agentCleanupLink.spec.ts`, `core/agentQueries.spec.ts`,
-   `core/viewersLink.spec.ts`, `core/agents/{lifecycle,create,discovery,fork}.spec.ts`, `lib/resumeAgentService.spec.ts`,
-   `lib/registry*.spec.ts` (setBrowser gone), `lib/stoppedAgents.spec.ts`, `services/{agentBrowser,agentBrowserProcess,
-   agentCleanup,agentCleanupProcess,search,searchProcess,viewers,viewersProcess}.spec.ts`,
-   `services/agentBrowser/browsers.spec.ts` (move on/adopted, stopAllBut), `harnessd/services.spec.ts`,
-   `testing/fakeCore.ts` if a spec needs `follow`. Golden: the viewers' frames and dsh fields byte for byte.
-6. `src/architecture.coreFiles.txt`: + `core/agentLife.ts`, `lib/hachiMetrics.ts` -> `lib/serviceMetrics.ts`,
-   - `lib/agentTmp.ts` once step 3 is done; run `src/architecture.spec.ts` and `src/leanEntry.spec.ts`.
-   Core before: 543 files, 92,994 lines (count with `node docs/design/2026-11-15-core-plan/tools/coreCount.mjs cli/src`).
-7. Gates: `npm run test:core`, `npm run test:harnessd`, `python3 scripts/local-checks.py --list <paths>`, then e2e (never
-   against the person's daemon; no tsc/vitest/edits while an e2e runs): `e2e/agentBrowser.e2e.ts`,
-   `viewersProcess.e2e.ts`, `viewersOnDemand.e2e.ts`, `serviceProcesses.e2e.ts` (+ a browser failure-isolation case copied
-   from it: browser process killed/down -> agents, frames, other panes fine, Browser says off), `services.e2e.ts`, the
-   cleanup's and search's e2e. Known main failures: `agentBrowser.e2e.ts` window size, `sandbox.e2e.ts`,
-   `agentClient.e2e.ts` folder trust, `hermesAdmission.e2e.ts` (2).
-8. Docs in the same PR: cli/src/services/AGENTS.md (the agentBrowser row, the "On demand" askedSince line, a line for
-   following agents), cli/src/core/AGENTS.md (agentBrowserLink line; add agentLife.ts), cli/AGENTS.md process table
-   agentBrowser line, the audit doc (security item 1 and the stream line are this package's), and fix the comment in
-   `lib/productUsageSignals.ts` that points at core/agents/lifecycle.ts for the Browser's Start refusals.
-9. `/code-review high` on the diff, fix, commit, `python3 scripts/local-checks.py --run --base origin/main`, draft PR with
-   red/green, core files/lines before and after, receipts; ready; report to the lead (8 lines max). Lead merges, then PR 2.
+Compatibility decided: a service of this build under a core from before (a newer master after a rollback) keeps
+working for the viewers (`agents` and `attach`/`detach`), the cleanup (`closed`) and search (`deleteHistory`), each
+dated 2026-12-18. The agent browser under a core from before answers its Start `SERVICE_UNAVAILABLE` (no released
+Desktop reaches it). A core of this build under services from before needs a master from before 2026-10-05 (re-exec,
+#791), outside the 30 days: not handled.
 
 ## PR 2, after PR 1 merges
 

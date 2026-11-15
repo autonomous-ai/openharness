@@ -1622,10 +1622,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     want: (service) => experimentHooks.want(service),
     // The gateway's first: its `backend` reads (the device key log) were refused below as NOT_AN_EXPERIMENT.
     answer: async (service, query, payload, authority) => await questionControls.answer(service, query, payload) ?? await modelControls.answer(service, query, payload) ?? await nativeControls.answer(service, query, payload) ?? engineReaders.answer(service) ?? (service === 'gateway' && gatewayLink ? gatewayLink.answer(query, payload) : null) ?? deliveries.answer(service, query, payload)
-      // What happens to agents, for any service that follows them (core/agentLife.ts).
-      ?? (query === 'follow_agents' ? agentLife.followed(service, payload) : null)
       // Agent Messages is answered what it uses and nothing more, never what an experiment may ask (core/messagesLink.ts).
       ?? (service === 'messages' ? await messagesLink.answer(query, payload) : null)
+      // What happens to agents, for a service that follows them (core/agentLife.ts): the live agents' rows, which only a
+      // service whose answers come after the gateway's and Agent Messages' own may read, as it may read `live`.
+      ?? (query === 'follow_agents' ? agentLife.followed(service, payload) : null)
       ?? await answerConnectorsQuery(coreApi, service, query, payload)
       ?? await answerSharedMachinesQuery(sharedMachinesAccount, service, query, payload)
       ?? answerDaemonQuery(coreApi, service, query)

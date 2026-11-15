@@ -61,10 +61,13 @@ export function followOptions(raw: Payload): FollowOptions | null {
   return { ...(each ? { each } : {}), ...(having?.length ? { having: having as string[] } : {}), ...(running === false ? { running } : {}) }
 }
 
-/** Whether [session]'s row has every field [options] asks for, set. */
+/** Whether [session]'s row has every field [options] asks for, set. Said for every follower at every look at every
+ *  agent, so it allocates nothing. */
 function matches(options: FollowOptions, session: RegisteredSession): boolean {
+  if (!options.having) return true
   const row = session as unknown as Payload
-  return (options.having ?? []).every((field) => Object.hasOwn(row, field) && !!row[field])
+  for (const field of options.having) if (!Object.hasOwn(row, field) || !row[field]) return false
+  return true
 }
 
 const frameOf = (event: AgentLife): ServiceFrame => ({ type: 'service_event', payload: { kind: 'agent', event } })
@@ -75,7 +78,6 @@ export function createAgentLife(deps: AgentLifeDeps) {
   const listeners = new Set<Follower>()
   /** The services in their own processes that asked to follow, by service: the connection that asked last. */
   const processes = new Map<string, Follower>()
-  const followers = (): Follower[] => [...listeners, ...processes.values()]
 
   const tellAll = (event: AgentLife & { kind: HeldAgentLife }): void => {
     for (const follower of listeners) follower.tell(event)
@@ -98,18 +100,20 @@ export function createAgentLife(deps: AgentLifeDeps) {
   }
 
   return {
-    /** A look at a live agent: a create, a fork, a resume, a start's restore, a scan. */
+    /** A look at a live agent: a create, a fork, a resume, a start's restore, a scan (every agent, every 5 s at idle). */
     running(session: RegisteredSession): void {
-      for (const follower of followers()) {
-        if (follower.options.running === false || !matches(follower.options, session)) continue
-        if (!follower.options.each && follower.told.has(session.agentId)) continue
+      const look = (follower: Follower): void => {
+        if (follower.options.running === false || !matches(follower.options, session)) return
+        if (!follower.options.each && follower.told.has(session.agentId)) return
         told(follower, session.agentId)
         follower.tell({ kind: 'running', session })
       }
+      for (const follower of listeners) look(follower)
+      for (const follower of processes.values()) look(follower)
     },
     /** It stopped running here: every way an agent stops running passes through this. */
     ended(agentId: string): void {
-      for (const follower of followers()) if (follower.told.delete(agentId)) follower.tell({ kind: 'ended', agentId })
+      for (const follower of [...listeners, ...processes.values()]) if (follower.told.delete(agentId)) follower.tell({ kind: 'ended', agentId })
     },
     /** A person or an agent stopped it, and the stop is done. */
     stopped(agentId: string): void { tellAll({ kind: 'stopped', agentId }) },
