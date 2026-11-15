@@ -357,7 +357,7 @@ fn flag(answer: &NSAppleEventDescriptor) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tabs::CALL_TIMEOUT;
+    use crate::tabs::{CALL_TIMEOUT, NO_TTY};
     use std::process::Command;
     use std::time::Duration;
 
@@ -384,7 +384,7 @@ on focus_tty(t)
 end focus_tty
 "#;
 
-    /// Stands in for iTerm2's and Ghostty's: no window, a select denied, and a focus with no tty in the dictionary.
+    /// Stands in for iTerm2's: no window, a select denied, and a focus that found a terminal with no tty (tabs::NO_TTY).
     const REFUSES: &str = r#"
 on selected_tty()
 	return ""
@@ -392,6 +392,21 @@ end selected_tty
 
 on select_tty(t, in_front)
 	error number -1743
+end select_tty
+
+on focus_tty(t)
+	error number 1001
+end focus_tty
+"#;
+
+    /// Stands in for Ghostty's: a terminal that closed between two events, which is no such object or a failed handler.
+    const VANISHED: &str = r#"
+on selected_tty()
+	error number -1728
+end selected_tty
+
+on select_tty(t, in_front)
+	error number -10000
 end select_tty
 
 on focus_tty(t)
@@ -526,6 +541,25 @@ end focus_tty
     }
 
     #[test]
+    fn ghostty_says_it_has_no_tty_only_for_a_terminal_still_there() {
+        // A tty read fails the same way when its terminal or tab closed between two events: only one still there
+        // means this Ghostty has no tty.
+        let no_tty = format!("error number {NO_TTY}");
+        for app in [T, TabApp::Iterm] {
+            assert!(!source(app).contains(&no_tty), "{app:?}");
+        }
+        let lines: Vec<&str> = GHOSTTY.lines().map(str::trim).collect();
+        let said: Vec<usize> = (0..lines.len()).filter(|&at| lines[at].contains(&no_tty)).collect();
+        // selected_tty's read and select_tty's.
+        assert_eq!(said.len(), 2, "{GHOSTTY}");
+        for at in said {
+            assert_eq!(lines[at - 1], "if n is not in {-1728, -10000} then error number n", "{GHOSTTY}");
+            assert_eq!(lines[at], format!("if exists k then {no_tty}"), "{GHOSTTY}");
+            assert!(lines[at - 3..at - 1].iter().any(|line| line.contains("«property Gtty» of k")), "{GHOSTTY}");
+        }
+    }
+
+    #[test]
     fn a_tty_that_fails_the_check_is_never_sent() {
         let tabs = MacTabs { source: |_| SENT };
         for bad in ["/dev/ttys023; rm", "/dev/ttys023\n", "/dev/pts/3", "/dev/ttys12345", ""] {
@@ -542,7 +576,13 @@ end focus_tty
 
     #[test]
     fn answers_and_error_numbers_read_as_the_tab_rules_say() {
-        let tabs = MacTabs { source: |app| if app == TabApp::Terminal { ANSWERS } else { REFUSES } };
+        let tabs = MacTabs {
+            source: |app| match app {
+                TabApp::Terminal => ANSWERS,
+                TabApp::Iterm => REFUSES,
+                TabApp::Ghostty => VANISHED,
+            },
+        };
         assert_eq!(tabs.selected_tty(T), Ok(Some(TTY.to_string())));
         // The empty string is no window.
         assert_eq!(tabs.selected_tty(TabApp::Iterm), Ok(None));
@@ -551,12 +591,16 @@ end focus_tty
         assert_eq!(tabs.select_tty(T, TTY, false), Ok(Selected::NoTab));
         assert_eq!(tabs.focus_tty(T, TTY), Ok(Selected::Done));
         assert_eq!(tabs.focus_tty(T, "/dev/ttys024"), Ok(Selected::NoTab));
-        // An error's number goes through tab_error, with its app.
+        // An error's number goes through tab_error.
         assert_eq!(tabs.select_tty(TabApp::Iterm, TTY, true), Err(TabError::Denied));
-        assert_eq!(tabs.focus_tty(TabApp::Ghostty, TTY), Err(TabError::NoTty));
-        assert_eq!(tabs.focus_tty(TabApp::Iterm, TTY), Err(TabError::Failed));
-        // Each source was compiled once, iTerm2's and Ghostty's stand-in for both.
-        assert_eq!((compiled(ANSWERS).len(), compiled(REFUSES).len()), (1, 1));
+        assert!(REFUSES.contains(&format!("error number {NO_TTY}")));
+        assert_eq!(tabs.focus_tty(TabApp::Iterm, TTY), Err(TabError::NoTty));
+        // An object that went away between two events is a failed call, not a Ghostty with no tty.
+        assert_eq!(tabs.selected_tty(TabApp::Ghostty), Err(TabError::Failed));
+        assert_eq!(tabs.select_tty(TabApp::Ghostty, TTY, true), Err(TabError::Failed));
+        assert_eq!(tabs.focus_tty(TabApp::Ghostty, TTY), Err(TabError::Failed));
+        // Each source was compiled once.
+        assert_eq!((compiled(ANSWERS).len(), compiled(REFUSES).len(), compiled(VANISHED).len()), (1, 1, 1));
     }
 
     #[test]

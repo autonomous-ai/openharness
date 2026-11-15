@@ -629,30 +629,24 @@ mod tests {
     }
 
     #[test]
-    fn ghostty_without_a_tty_is_turned_off_and_the_same_code_from_terminal_is_a_failed_call() {
-        for code in [-1728, -10000] {
-            assert_eq!(tab_error(TabApp::Ghostty, code), TabError::NoTty);
-            assert_eq!(tab_error(T, code), TabError::Failed);
-            assert_eq!(tab_error(TabApp::Iterm, code), TabError::Failed);
-        }
-        for app in APPS {
-            assert_eq!(tab_error(app, -1743), TabError::Denied);
-            // The app quit, timed out, or anything else: try again at the next tick.
-            for code in [-600, -1712, -1, 0] {
-                assert_eq!(tab_error(app, code), TabError::Failed, "{app:?} {code}");
-            }
+    fn only_the_no_tty_number_says_an_app_has_no_tty() {
+        assert_eq!(tab_error(NO_TTY), TabError::NoTty);
+        assert_eq!(tab_error(-1743), TabError::Denied);
+        // No such object (a tab that closed between two events), a handler that failed, the app quit or timed out,
+        // or anything else: try again at the next tick.
+        for code in [-1728, -10000, -600, -1712, -1, 0] {
+            assert_eq!(tab_error(code), TabError::Failed, "{code}");
         }
 
         let mut follow = polling();
         follow.front(TabApp::Ghostty.bundle());
-        let out = follow.polled(TabApp::Ghostty, Err(tab_error(TabApp::Ghostty, -1728)), 0);
+        // A Ghostty whose terminal closed as it was asked goes on.
+        assert!(follow.polled(TabApp::Ghostty, Err(tab_error(-1728)), 0).log.is_empty());
+        assert_eq!(follow.polls(), Some(TabApp::Ghostty));
+        let out = follow.polled(TabApp::Ghostty, Err(tab_error(NO_TTY)), 0);
         assert_eq!(out.log, ["tabs: Ghostty has no tty"]);
         assert_eq!(follow.polls(), None);
         assert!(follow.polled(TabApp::Ghostty, Err(TabError::NoTty), 0).log.is_empty());
-
-        follow.front(T.bundle());
-        assert!(follow.polled(T, Err(tab_error(T, -1728)), 0).log.is_empty());
-        assert_eq!(follow.polls(), Some(T));
     }
 
     #[test]
