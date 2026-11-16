@@ -7,10 +7,14 @@
  * Every agent is listed before the first focus. After a ring push that re-asserted the focus, a session drops a dial's
  * other `focus` until it hears that focus echoed (cableSession.ts, `expectedAppFocusEcho`), and the fake dial echoes
  * nothing: each move is sent again every 2 s until its line is read.
+ *
+ * Orca's plugin's own loop (plugins/harness-device-orca/src/dial.ts, with Node's inputs) runs too, in a process whose
+ * whole environment is the throwaway home and a bare PATH (harness/pluginDial.ts): it finds this daemon through a
+ * launcher shim in that home, and nothing on this Mac's PATH.
  */
-import { execFile, type ChildProcess } from 'node:child_process'
+import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { writeFileSync } from 'node:fs'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { request, type ClientRequest } from 'node:http'
 import { join, sep } from 'node:path'
 import { promisify } from 'node:util'
@@ -20,6 +24,7 @@ import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
 import type { FakeDial } from './harness/fakeDial.js'
 import { InOrca } from './harness/inOrca.js'
+import type { DialState } from '../../plugins/harness-device-orca/src/protocol.ts'
 
 const run = promisify(execFile)
 
@@ -35,6 +40,16 @@ const NO_AGENT = '{"attached":true,"agent":null}'
 const CLI_ENTRY = process.env.E2E_BUNDLE_PATH ? [process.env.E2E_BUNDLE_PATH] : ['--import', 'tsx', 'src/cli.ts']
 
 interface Link { daemon: boolean; devicesSocket?: string; devicesReady: boolean }
+
+/** The plugin's loop, running. */
+interface Loop {
+  /** Each state it told, in order. */
+  states: DialState[]
+  /** Its log lines. */
+  logs: string[]
+  /** Ends its stdin, which stops it; its exit code. */
+  stop(): Promise<number | null>
+}
 
 interface Stream {
   status: number | undefined
@@ -95,12 +110,17 @@ describe('the dial stream, for Orca\'s Harness Device plugin', () => {
     return { o, w }
   }
 
-  /** `harness device orca link`, the real CLI, under the daemon's environment only: what it prints is this daemon's. */
-  const link = async (d: IsolatedDaemon): Promise<Link> => {
+  /** The daemon's environment names its own data folder, port and devices' socket, never this Mac's. */
+  const isolated = (d: IsolatedDaemon): void => {
     expect(d.env.ADAPTER_DATA_DIR).toBe(d.dataDir)
     expect(d.dataDir.startsWith(d.root + sep)).toBe(true)
     expect(d.env.PORT).not.toBe(EVERYDAY_PORT)
     expect(devicesListenerPath(d.dataDir, process.platform, d.env.HOME)).toBe(join(d.dataDir, 'devices.sock'))
+  }
+
+  /** `harness device orca link`, the real CLI, under the daemon's environment only: what it prints is this daemon's. */
+  const link = async (d: IsolatedDaemon): Promise<Link> => {
+    isolated(d)
     const { stdout } = await run(process.execPath, [...CLI_ENTRY, 'device', 'orca', 'link'], { cwd: CLI_ROOT, env: d.env, timeout: 30_000 })
     return JSON.parse(stdout) as Link
   }
@@ -134,23 +154,66 @@ describe('the dial stream, for Orca\'s Harness Device plugin', () => {
     sent.end(OPEN)
   })
 
-  const shown = (dial: FakeDial, agent: InOrca, app: string): string => {
-    // The name the dial draws: the last `agent` frame it got for that id.
-    const frame = dial.messages.filter((m) => m.t === 'agent' && m.id === agent.id).at(-1)
-    return JSON.stringify({ attached: true, agent: { name: frame?.name, app } })
-  }
+  /** The name the dial draws for [agent]: the last `agent` frame it got for that id. */
+  const nameOn = (dial: FakeDial, agent: InOrca): string | undefined =>
+    dial.messages.filter((m) => m.t === 'agent' && m.id === agent.id).at(-1)?.name as string | undefined
 
-  /** [dial] turns to [agent], again every 2 s until the stream's line [count] is there; that line. */
-  const moved = async (dial: FakeDial, agent: InOrca, open: Stream, count: number): Promise<string> => {
+  const shown = (dial: FakeDial, agent: InOrca, app: string): string =>
+    JSON.stringify({ attached: true, agent: { name: nameOn(dial, agent), app } })
+
+  /** [dial] turns to [agent], again every 2 s until [probe] gives a value; that value. */
+  const turned = <T>(dial: FakeDial, agent: InOrca, what: string, probe: () => T | undefined): Promise<T> => {
     let sent = 0
-    return until(`line ${count}`, () => {
-      if (open.lines.length >= count) return open.lines[count - 1]
+    return until(what, () => {
+      const got = probe()
+      if (got !== undefined) return got
       if (Date.now() - sent >= 2_000) {
         dial.send({ t: 'focus', agentId: agent.id })
         sent = Date.now()
       }
       return undefined
     }, 60_000, 50)
+  }
+
+  /** [dial] turns to [agent] until the stream's line [count] is there; that line. */
+  const moved = (dial: FakeDial, agent: InOrca, open: Stream, count: number): Promise<string> =>
+    turned(dial, agent, `line ${count}`, () => (open.lines.length >= count ? open.lines[count - 1] : undefined))
+
+  /** A word the shell takes as it is. */
+  const quoted = (word: string): string => `'${word.replaceAll("'", `'\\''`)}'`
+
+  /**
+   * The plugin's loop, started as Orca would start it for someone whose launcher is `~/.local/bin/harness`: the home is
+   * the throwaway one, and the launcher there starts this checkout's CLI under the daemon's environment and nothing else.
+   * `/usr/bin:/bin` holds no `harness`: with no shim the loop would say `noHarness`, never find this Mac's launcher.
+   */
+  const loop = (d: IsolatedDaemon): Loop => {
+    isolated(d)
+    const bin = join(d.env.HOME!, '.local', 'bin')
+    const shim = join(bin, 'harness')
+    expect(shim.startsWith(d.root + sep)).toBe(true)
+    const env = Object.entries(d.env).flatMap(([name, value]) => (value === undefined ? [] : [quoted(`${name}=${value}`)]))
+    mkdirSync(bin, { recursive: true })
+    writeFileSync(shim, `#!/bin/sh\ncd ${quoted(CLI_ROOT)} && exec /usr/bin/env -i ${env.join(' ')} ${[process.execPath, ...CLI_ENTRY].map(quoted).join(' ')} "$@"\n`, { mode: 0o700 })
+    const child = spawn(process.execPath, ['--import', 'tsx', 'e2e/harness/pluginDial.ts'], {
+      cwd: CLI_ROOT, env: { HOME: d.env.HOME, PATH: '/usr/bin:/bin' }, stdio: ['pipe', 'pipe', 'pipe'],
+    })
+    children.push(child)
+    const states: DialState[] = []
+    const logs: string[] = []
+    const lines = (from: NodeJS.ReadableStream, take: (line: string) => void): void => {
+      let rest = ''
+      from.setEncoding('utf8')
+      from.on('data', (chunk: string) => {
+        const parts = (rest + chunk).split('\n')
+        rest = parts.pop()!
+        for (const part of parts) take(part)
+      })
+    }
+    lines(child.stdout, (line) => states.push(JSON.parse(line) as DialState))
+    lines(child.stderr, (line) => logs.push(line))
+    const exited = new Promise<number | null>((done) => child.once('close', (code) => done(code)))
+    return { states, logs, stop: () => { child.stdin.end(); return exited } }
   }
 
   /** The daemon's dial stream lines, each from its `[devices]` on. */
@@ -238,6 +301,38 @@ describe('the dial stream, for Orca\'s Harness Device plugin', () => {
     await until('agent null', () => open.lines.length >= 4)
     expect(open.lines[3]).toBe(NO_AGENT)
     expect(await moved(a, w, open, 5)).toBe(shown(a, w, 'WezTerm'))
+  })
+
+  it('the plugin\'s loop, through the launcher in the throwaway home, follows the dial', async () => {
+    const { d, desk } = await fresh()
+    const run = loop(d)
+    const last = (): DialState | undefined => run.states.at(-1)
+    onTestFailed(() => { console.log(`---- the loop's states\n${run.states.map((s) => JSON.stringify(s)).join('\n')}\n---- its log\n${run.logs.join('\n')}`) })
+    await until('unplugged', () => last()?.state === 'unplugged', 60_000)
+    const dial = await plugged(desk, 'E2E-A', 'e2:e0:00:00:00:0a')
+    const attached: DialState = { state: 'attached' }
+    await until('attached', () => last()?.state === 'attached', 60_000)
+    expect(last()).toEqual(attached)
+    // Started once the dial is there, as in the cases above: an agent started before is not on its first list.
+    const { o } = await sessions(d, dial)
+    const name = nameOn(dial, o)!
+    const onO: DialState = { state: 'attached', agent: { name, app: 'Orca' } }
+    await turned(dial, o, 'O shown', () => (last()?.agent?.name === name || undefined))
+    expect(last()).toEqual(onO)
+    await desk.unplug('E2E-A')
+    await until('unplugged again', () => last()?.state === 'unplugged', 60_000)
+    // O cleared as the dial's session closes may come in a state of its own before the dial is gone, or only the
+    // latest be told; nothing else is: no notRunning, noHarness or elsewhere.
+    expect(run.states.slice(0, 3)).toEqual([{ state: 'unplugged' }, attached, onO])
+    expect(run.states.slice(3, -1).every((state) => JSON.stringify(state) === JSON.stringify(attached))).toBe(true)
+    expect(last()).toEqual({ state: 'unplugged' })
+    const stopped = run.stop()
+    // The loop closed the stream it held.
+    await until('the stream ended', () => streamLines(d).at(-1) === '[devices] dial stream · ended · gone')
+    expect(await stopped).toBe(0)
+    expect(run.logs).toContain('dial: unplugged')
+    expect(run.logs).toContain('dial: attached')
+    expect(run.logs.filter((line) => line.includes(name) || line.includes('Orca') || line.includes(d.root))).toEqual([])
   })
 
   it('the daemon\'s log says each open and end of the stream, and nothing of an agent', async () => {
