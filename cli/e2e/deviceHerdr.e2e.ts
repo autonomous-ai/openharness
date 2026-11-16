@@ -2,13 +2,15 @@
  * herdr's agents on the dial (docs/specs/2026-11-16-device-herdr.md), on the real daemon: a herdr server of the test's
  * own (harness/herdrServer.ts) holds a fake agent in a pane, told to herdr as `claude`, and a fake dial on the desk lists
  * it with no hook, follows its state, taps it and speaks to it. herdr started after the dial comes with no restart, and
- * a hooked Claude Code in a herdr pane is one row, its hook's.
+ * a hooked Claude Code in a herdr pane is one row, its hook's. A socket a stopped herdr left is said once and never
+ * retried (docs/plans/2026-11-16-herdr-app-design.md).
  *
- * Skipped where herdr or `cc` is not installed, as on every GitHub runner. It never starts herdr against the developer's
- * own config, and no `herdr` the daemon runs reaches any other server.
+ * Skipped where herdr or `cc` is not installed, as on every GitHub runner, but for the stale socket, which runs no herdr.
+ * It never starts herdr against the developer's own config, and no `herdr` the daemon runs reaches any other server.
  */
-import { writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { execFileSync } from 'node:child_process'
+import { lstatSync, mkdirSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { observedAgentId } from '../src/cable/hosts/observed.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
@@ -41,47 +43,52 @@ const named = (name: string) => (rows: DialMessage[]) => rows.some((row) => row.
 const said = (d: IsolatedDaemon, line: string) =>
   until(`"${line}" in the daemon's log`, () => d.log().split('\n').some((logged) => logged.endsWith(line)), 30_000, 50)
 
+let daemon: IsolatedDaemon | undefined
+let desk: Desk | undefined
+let backend: FakeBackend | undefined
+// After each describe's own: a herdr server goes before the daemon.
+afterEach(async () => {
+  await desk?.close()
+  await daemon?.close()
+  await backend?.close()
+  daemon = undefined
+  desk = undefined
+  backend = undefined
+})
+
+const fresh = async (): Promise<{ d: IsolatedDaemon; desk: Desk; relay: FakeBackend }> => {
+  const relay = await FakeBackend.start()
+  backend = relay
+  relay.addMachine(ME)
+  const d = await IsolatedDaemon.create({
+    env: { CABLE_DISABLE: 'false', BACKEND_WS_URL: relay.wsUrl, WEB_URL: relay.httpUrl, ADAPTER_COMPUTER_ID: ME.computerId },
+  })
+  daemon = d
+  const file = join(d.root, 'dials.json')
+  d.env.HARNESSD_TEST_DIAL_PORT = file
+  writeFileSync(file, '[]')
+  const theDesk = new Desk(file)
+  desk = theDesk
+  // Signed in as ME: the session `harness login` leaves, which the core reads at start.
+  writeFileSync(join(d.root, 'auth', 'session.json'), JSON.stringify({ version: 1, accessToken: ME.token,
+    autonomousEnv: 'prod', computerId: ME.computerId, machineId: ME.machineId,
+    expiresAt: Date.now() + 30 * 24 * 3600_000, updatedAt: Date.now(), signInEpoch: 'e2e',
+  }), { mode: 0o600 })
+  onTestFailed(() => {
+    console.log(`---- daemon log\n${d.log().split('\n').slice(-200).join('\n')}`)
+    console.log(`---- hooks the engines ran\n${d.hookLog().split('\n').slice(-40).join('\n')}`)
+  })
+  await d.start()
+  return { d, desk: theDesk, relay }
+}
+
 describe.skipIf(!herdrBinary)("herdr's agents on the dial, from a private herdr server", () => {
-  let daemon: IsolatedDaemon | undefined
-  let desk: Desk | undefined
-  let backend: FakeBackend | undefined
   const servers: PrivateHerdr[] = []
   afterEach(async () => {
     // herdr first: its panes are the daemon's root's, and the daemon's close sweeps what names the root.
     for (const server of servers.splice(0)) await server.stop()
-    await desk?.close()
-    await daemon?.close()
-    await backend?.close()
-    daemon = undefined
-    desk = undefined
-    backend = undefined
   })
 
-  const fresh = async (): Promise<{ d: IsolatedDaemon; desk: Desk; relay: FakeBackend }> => {
-    const relay = await FakeBackend.start()
-    backend = relay
-    relay.addMachine(ME)
-    const d = await IsolatedDaemon.create({
-      env: { CABLE_DISABLE: 'false', BACKEND_WS_URL: relay.wsUrl, WEB_URL: relay.httpUrl, ADAPTER_COMPUTER_ID: ME.computerId },
-    })
-    daemon = d
-    const file = join(d.root, 'dials.json')
-    d.env.HARNESSD_TEST_DIAL_PORT = file
-    writeFileSync(file, '[]')
-    const theDesk = new Desk(file)
-    desk = theDesk
-    // Signed in as ME: the session `harness login` leaves, which the core reads at start.
-    writeFileSync(join(d.root, 'auth', 'session.json'), JSON.stringify({ version: 1, accessToken: ME.token,
-      autonomousEnv: 'prod', computerId: ME.computerId, machineId: ME.machineId,
-      expiresAt: Date.now() + 30 * 24 * 3600_000, updatedAt: Date.now(), signInEpoch: 'e2e',
-    }), { mode: 0o600 })
-    onTestFailed(() => {
-      console.log(`---- daemon log\n${d.log().split('\n').slice(-200).join('\n')}`)
-      console.log(`---- hooks the engines ran\n${d.hookLog().split('\n').slice(-40).join('\n')}`)
-    })
-    await d.start()
-    return { d, desk: theDesk, relay }
-  }
   const herdrFor = async (d: IsolatedDaemon): Promise<PrivateHerdr> => {
     const server = await PrivateHerdr.start(d)
     servers.push(server)
@@ -219,5 +226,37 @@ describe.skipIf(!herdrBinary)("herdr's agents on the dial, from a private herdr 
     await dial.next((m) => m.t === 'summary' && m.agentId === id, 45_000, 'its answer', turn)
     const cards = dial.messages.slice(turn).filter((m) => m.t === 'turn.started' || m.t === 'turn.done')
     expect(cards.map((m) => [m.t, m.agentId])).toEqual([['turn.started', id], ['turn.done', id]])
+  })
+})
+
+/** The daemon's `[herdr]` lines, in order, each from its `[herdr]` on. */
+const herdrLines = (d: IsolatedDaemon): string[] => d.log().split('\n').flatMap((line) => line.match(/\[herdr\] .+$/)?.[0] ?? [])
+const lines = (d: IsolatedDaemon, text: string): number => d.log().split('\n').filter((line) => line.includes(text)).length
+
+// No herdr runs here, so none need be installed: the fix a person sees with a herdr 0.8.0 that stopped long ago.
+describe.skipIf(process.platform === 'win32')('a stale herdr socket', () => {
+  it('a stale herdr socket is said once, and nothing retries', async () => {
+    const { d, desk } = await fresh()
+    // herdr reads as installed, as the devices look for it on PATH at each attach. Nothing here runs it.
+    writeFileSync(join(dirname(d.env.CLAUDE_PATH!), 'herdr'), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+    const socket = join(d.env.HOME!, '.config', 'herdr', 'herdr.sock')
+    mkdirSync(dirname(socket), { recursive: true })
+    // A process that exits while it listens leaves its socket, with nothing behind it.
+    execFileSync(process.execPath, ['-e', "require('node:net').createServer().listen(process.argv[1], () => process.exit(0))", socket])
+    expect(lstatSync(socket).isSocket()).toBe(true)
+
+    await desk.plug('E2E-A', 'e2:e0:00:00:00:0a')
+    await said(d, '[herdr] socket · stale')
+    // Under 2 s old when the dial came, the socket was tried once more first.
+    const first = herdrLines(d)
+    expect([['[herdr] socket · stale'], ['[herdr] retry · 1', '[herdr] socket · stale']]).toContainEqual(first)
+
+    // Plugged in again once the devices saw it go: the same socket is said nothing of, and given no retry.
+    const closed = lines(d, 'cable: closed')
+    await desk.unplug('E2E-A')
+    await until('the dial gone', () => lines(d, 'cable: closed') > closed, 30_000, 50)
+    const again = await desk.plug('E2E-A', 'e2:e0:00:00:00:0a')
+    await again.next((m) => m.t === 'agents.end', 45_000, 'its list again')
+    expect(herdrLines(d)).toEqual(first)
   })
 })

@@ -11,9 +11,7 @@
  * agent it cannot read (a status a newer herdr adds, or one past 64): asked again for such a pane, each subscription
  * would ask for the next, one a second for ever.
  *
- * The retries give up only on a socket whose last attempt listed nothing, and keep its stamp. herdr writes its log beside
- * its socket on every request, so the watched folder keeps changing while a stale socket sits there: only another
- * socket, one a herdr that started again made, connects.
+ * The wait on herdr's socket, its retries and its stale rule are socketAttempts.ts's.
  *
  * Everything from the socket is checked here before use, and a log line says only fixed words and counts: herdr's
  * answers name people's folders and agents.
@@ -21,22 +19,19 @@
 import { basename } from 'node:path'
 import {
   HERDR_KIND, HERDR_PANE, herdrPaneKey,
-  type HerdrAnswer, type HerdrClient, type HerdrEntry, type HerdrFault, type HerdrPrompt, type HerdrSubscriber,
+  type HerdrAnswer, type HerdrClient, type HerdrEntry, type HerdrPrompt, type HerdrSubscriber,
 } from './herdrClient.js'
 import { CONTROL, MAX_TEXT } from './orca.js'
+import { SocketAttempts } from './socketAttempts.js'
 import type { Caps, HostAgent, HostAgentState, HostSource, SendResult } from './types.js'
+import type { SocketFault } from './unixSocket.js'
 
 /** The most agents listed, and the most panes one subscription names. */
-const MAX_AGENTS = 64
+export const MAX_AGENTS = 64
 const MAX_NAME = 64
-const MAX_CWD = 4096
+export const MAX_CWD = 4096
 /** The least time between two subscriptions' starts. */
 const SUBSCRIBE_EVERY_MS = 1000
-/** The waits before each retry of a failed attempt; after the last, the last again while each attempt lists, else only
- *  the watch. */
-const RETRIES_S = [1, 2, 4, 8, 16, 32, 60]
-/** Followed this long, a herdr that drops its subscription is retried from the first wait again. */
-const LIVE_MS = 60_000
 /** A session id as herdr's own integrations report one; anything else is not taken for one. */
 const SESSION_ID = /^[A-Za-z0-9._:-]{1,128}$/
 const KINDS: readonly HerdrEntry[] = [{ type: 'pane.agent_detected' }, { type: 'pane.closed' }, { type: 'pane.exited' }]
@@ -49,7 +44,7 @@ const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
 
 /** A name to show: its control characters removed, cut to 64 characters, never half of one. */
-const shown = (value: unknown): string => typeof value === 'string' ? [...value.replace(CONTROL, '')].slice(0, MAX_NAME).join('') : ''
+export const shown = (value: unknown): string => typeof value === 'string' ? [...value.replace(CONTROL, '')].slice(0, MAX_NAME).join('') : ''
 
 /** herdr's session id of the agent: only an id, of the pane's own agent, in its form. */
 const sessionOf = (session: unknown, kind: string): string | undefined =>
@@ -58,7 +53,7 @@ const sessionOf = (session: unknown, kind: string): string | undefined =>
 
 export interface HerdrSourceDeps {
   client: Pick<HerdrClient, 'request' | 'subscribe' | 'socketStamp'>
-  /** Tells of each change where herdr's socket lives (herdrClient.ts watchHerdrSocket), until its stop is called. */
+  /** Tells of each change where herdr's socket lives (unixSocket.ts watchSocket), until its stop is called. */
   watch(changed: () => void): () => void
   /** The dial's words: the herdr adapter's prompt, which keeps the pane's turn with a tap (herdr.ts). */
   prompt(paneId: string, kind: string, text: string): Promise<HerdrPrompt>
@@ -108,18 +103,22 @@ export class HerdrSource implements HostSource {
   private next: Subscription | undefined
   /** While the current one's list is in flight. */
   private heard: Heard | undefined
-  /** The one timer: the next subscription, or the next retry. */
+  /** The next subscription's timer. */
   private timer: (() => void) | undefined
-  private unwatch: (() => void) | undefined
-  /** The stamp of the socket the attempt tries, taken as it starts: a herdr that starts again meanwhile makes another. */
-  private stamp: string | undefined
-  /** The stamp of the stale socket the retries gave up on. */
-  private stale: string | undefined
   private openedAt: number | undefined
-  /** Since when the listed agents have been followed, with no failure since. */
-  private liveSince: number | undefined
-  private retries = 0
   private said: number | undefined
+  private readonly attempts = new SocketAttempts({
+    name: 'herdr',
+    socketStamp: () => this.deps.client.socketStamp(),
+    watch: (changed) => this.deps.watch(changed),
+    after: (ms, run) => this.deps.after(ms, run),
+    now: () => this.deps.now(),
+    monotonic: () => this.deps.monotonic(),
+    log: (line) => this.deps.log(line),
+    open: () => this.soon(),
+    close: () => this.close(),
+    clear: () => this.clear(),
+  })
 
   constructor(private readonly deps: HerdrSourceDeps) {}
 
@@ -127,17 +126,14 @@ export class HerdrSource implements HostSource {
     // herdr's socket there is a named pipe, which the client does not speak.
     if (this.deps.platform === 'win32' || this.running) return
     this.running = true
-    this.connect()
+    this.attempts.start()
   }
 
   stop(): void {
     if (!this.running) return
     this.running = false
     this.close()
-    this.unwatch?.()
-    this.unwatch = undefined
-    this.liveSince = undefined
-    this.retries = 0
+    this.attempts.stop()
     this.clear()
   }
 
@@ -199,16 +195,6 @@ export class HerdrSource implements HostSource {
     for (const listener of [...this.listeners]) listener()
   }
 
-  private connect(): void {
-    const stamp = this.deps.client.socketStamp()
-    // Another socket is a herdr that started again and numbers its panes afresh: a row kept through a drop would take
-    // the status of the new pane of its id, and a working one turned idle would say a done no turn had.
-    if (stamp !== this.stamp) this.clear()
-    this.stamp = stamp
-    if (!this.stamp) return this.wait(undefined)
-    this.soon()
-  }
-
   /** A new subscription, now or once a second has passed since the last one opened: one timer, which every ask joins.
    *  One still opening joins too: the list that follows its start asks for each listed pane it does not name. */
   private soon(): void {
@@ -241,6 +227,7 @@ export class HerdrSource implements HostSource {
     // The new one hears every change from here on, so the old one goes only now.
     this.current?.handle.close()
     this.current = sub
+    this.attempts.started()
     this.heard = { statuses: new Map(), dropped: new Set() }
     void this.deps.client.request('agent.list', {}).then((answer) => this.listed(sub, answer))
   }
@@ -253,63 +240,17 @@ export class HerdrSource implements HostSource {
     const agents = answer.ok ? answer.result.agents : undefined
     if (!Array.isArray(agents)) {
       // herdr's own code is not said: a log line says only fixed words.
-      const fault = answer.ok ? 'bad_answer' : answer.fault
-      this.deps.log(`[herdr] list · ${fault}`)
-      return this.fail(fault)
+      return this.attempts.failed('list', answer.ok ? 'bad_answer' : answer.fault)
     }
     this.read(agents, heard)
-    this.liveSince ??= this.deps.monotonic()
+    this.attempts.listed()
     if ([...this.rows.keys()].some((pane) => !sub.panes.has(pane))) this.soon()
   }
 
-  private closed(sub: Subscription, reason: HerdrFault): void {
+  private closed(sub: Subscription, reason: SocketFault): void {
     // An old one that ends while the new one opens missed nothing the new one's list will not say.
     if (sub !== (this.next ?? this.current)) return
-    this.deps.log(`[herdr] closed · ${reason}`)
-    this.fail(reason)
-  }
-
-  /** Every failed attempt: the subscriptions close, and the retries run. */
-  private fail(fault: HerdrFault): void {
-    const since = this.liveSince
-    this.liveSince = undefined
-    this.close()
-    // A drop keeps its agents for the retry; a retry that fails clears them.
-    if (since === undefined) this.clear()
-    // Only a herdr followed for a while is retried from the first wait: one that drops each subscription soon after it
-    // starts goes on to the longer waits.
-    else if (this.deps.monotonic() - since >= LIVE_MS) this.retries = 0
-    if (fault === 'no_socket') return this.wait(undefined)
-    const last = this.retries === RETRIES_S.length
-    // Only an attempt that listed nothing gives up: a herdr that lists is running, and keeps the longest wait.
-    if (last && since === undefined) return this.wait(this.stamp)
-    if (!last) this.retries++
-    const seconds = RETRIES_S[this.retries - 1]
-    this.deps.log(`[herdr] retry · ${seconds}`)
-    this.timer = this.deps.after(seconds * 1000, () => {
-      this.timer = undefined
-      this.connect()
-    })
-  }
-
-  /** No socket, or one the retries gave up on: nothing listed, no timer, and the watch held. */
-  private wait(stale: string | undefined): void {
-    this.close()
-    this.clear()
-    this.stale = stale
-    this.unwatch ??= this.deps.watch(() => this.changed())
-    // A socket made since the last look, before the watch started, is told by no change.
-    this.changed()
-  }
-
-  private changed(): void {
-    const stamp = this.deps.client.socketStamp()
-    if (!this.unwatch || !stamp || stamp === this.stale) return
-    this.unwatch()
-    this.unwatch = undefined
-    // Another socket is a herdr that started again: it has retries of its own.
-    this.retries = 0
-    this.connect()
+    this.attempts.failed('closed', reason)
   }
 
   private close(): void {
