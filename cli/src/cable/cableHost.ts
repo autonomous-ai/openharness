@@ -154,6 +154,9 @@ export interface CableHostWiring {
   appSettled?: (app: string) => void
   /** A dial sent a pick from its list of apps, whatever came of it: the picker's measure. A notice's pick is none. */
   appPicked?: () => void
+  /** A pick on the dial switched the shown app, or with a window turned the view to Harness's tab: the devices bring
+   *  that app to the front. Never for a notice, nor for Harness with no window. */
+  appBrought?: (app: string) => void
   /** The view was set, and why: told on each change and on each window opening, never an app. */
   appView?: (view: DialView, cause: ViewCause) => void
   /** Runs `run` once after `ms` and returns its cancel: the settle of the app in front, and the end of a waiting open
@@ -711,6 +714,13 @@ export class DaemonCableHost implements CableHost {
    *  window's tab, and any other app the filter's pick. */
   pickApp(app: string, cause: 'pick' | 'notice' = 'pick'): AppPick {
     if (cause === 'pick') this.wiring.appPicked?.()
+    const answer = this.answerPick(app, cause)
+    // A notice brings its own app with its open. Harness with no window is only its ring: no Desktop to bring.
+    if (cause === 'pick' && (answer === 'tabs' || (answer === 'switched' && app !== 'harness'))) this.wiring.appBrought?.(app)
+    return answer
+  }
+
+  private answerPick(app: string, cause: 'pick' | 'notice'): AppPick {
     if (this.swarms === null) return this.filter.pick(app, cause)
     if (this.view === 'tabs') return 'ignored'
     if (app !== 'harness') return this.filter.pick(app, cause)

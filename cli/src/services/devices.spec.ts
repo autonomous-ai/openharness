@@ -2127,16 +2127,78 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
       expect(calls('syncAgents')).toHaveLength(pushed)
     })
 
+    describe('a pick brings its app (docs/plans/2026-11-16-dial-pick-brings-app-design.md)', () => {
+      const mac = { ...orca, platform: 'darwin' as const }
+      const brings = () => logs.filter((line) => line.includes('app filter: bring'))
+      /** A turn of the event loop: what a pick ran, and logged, is done by then. */
+      const settled = () => new Promise((done) => setImmediate(done))
+
+      it('on macOS a pick that switches runs open -b with the picked app\'s bundle once and logs bring · ok, with no app in the log', async () => {
+        const { port } = start({ faults: ['fleet'], orca: mac })
+        await twoApps(port)
+        expect(host().pickApp('vscode')).toBe('switched')
+        await vi.waitFor(() => expect(brings()).toEqual(['[device] app filter: bring · ok']))
+        expect(orcaRuns).toEqual([['/usr/bin/open', ['-b', 'com.microsoft.VSCode'], 10_000]])
+        expect(logs.filter((line) => /vscode|VS Code|ghostty|Ghostty|com\.microsoft/.test(line))).toEqual([])
+      })
+
+      it('an open that fails logs bring · failed once and is not run again', async () => {
+        const failing = { ...mac, run: async (file: string, args: string[], timeoutMs: number) => { orcaRuns.push([file, args, timeoutMs]); return { code: 1, stdout: '' } } }
+        const { port } = start({ faults: ['fleet'], orca: failing })
+        await twoApps(port)
+        host().pickApp('vscode')
+        await vi.waitFor(() => expect(brings()).toEqual(['[device] app filter: bring · failed']))
+        await settled()
+        expect(orcaRuns).toHaveLength(1)
+      })
+
+      it('a pick of the app shown, of an app with no agents, of Other and a notice\'s pick run no open', async () => {
+        const { port } = start({ faults: ['fleet'], orca: mac })
+        await twoApps(port)
+        // A terminal Harness does not know: its agent is on Other's ring, which has no app to bring.
+        inApp(port, 'o-1', 'SomeTerm')
+        expect(host().pickApp('ghostty')).toBe('same')
+        expect(host().pickApp('cursor')).toBe('ignored')
+        expect(host().pickApp('terminal')).toBe('switched')
+        expect(host().pickApp('vscode', 'notice')).toBe('switched')
+        await settled()
+        expect(orcaRuns.filter(([, args]) => args[0] === '-b')).toEqual([])
+        expect(brings()).toEqual([])
+      })
+
+      it.each([
+        ['/tmp/e2e/fake-open', '/tmp/e2e/fake-open'],
+        ['', '/usr/bin/open'],
+        ['fake-open', '/usr/bin/open'],
+      ])('HARNESS_OPEN_BIN %j: an absolute path is the file a pick runs; empty and relative run /usr/bin/open', async (bin, file) => {
+        vi.stubEnv('HARNESS_OPEN_BIN', bin)
+        const { port } = start({ faults: ['fleet'], orca: mac })
+        await twoApps(port)
+        host().pickApp('vscode')
+        await vi.waitFor(() => expect(orcaRuns).toEqual([[file, ['-b', 'com.microsoft.VSCode'], 10_000]]))
+      })
+
+      it('off macOS a pick runs nothing', async () => {
+        const { port } = start({ faults: ['fleet'] })
+        await twoApps(port)
+        expect(host().pickApp('vscode')).toBe('switched')
+        await settled()
+        expect(orcaRuns).toEqual([])
+        expect(brings()).toEqual([])
+      })
+    })
+
     describe('with a window open (docs/specs/2026-11-15-dial-follow-front-with-window.md)', () => {
       const G1 = observedAgentId('claude', 'g-1')
       const TAB = { active: 't1', swarms: [{ id: 't1', name: 'Tab', agentIds: [], panes: 0 }], tiles: [] }
       const WAITS = 'npm test · answer in Ghostty'
       /** Whether the connected dials say appFilter. */
       const appsSaid = (on: boolean) => { (seen.cable as unknown as { apps: boolean }).apps = on }
-      /** Ghostty 2, VS Code 1, a window open on one tab, and `app` settled in front when one is named. */
-      const windowed = async (app?: string, apps = true) => {
+      /** Ghostty 2, VS Code 1, a window open on one tab, and `app` settled in front when one is named; `deps` runs what the
+       *  devices run. */
+      const windowed = async (app?: string, apps = true, deps: DevicesDeps['orca'] = orca) => {
         vi.useFakeTimers()
-        const started = start({ faults: ['fleet'] })
+        const started = start({ faults: ['fleet'], orca: deps })
         appsSaid(apps)
         await twoApps(started.port)
         started.port.swarms(TAB)
@@ -2297,6 +2359,14 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
         // Words spoken on Ghostty's ring, delivered once Harness is in front.
         expect(await host().sendTurn(CODEX, 'and lint')).toEqual({ ok: true })
         expect(codexRuns.map(([, args]) => args).at(-1)).toEqual(['queue', '--thread', THREAD, '--message=and lint'])
+      })
+
+      it('with a window open, a pick of Harness on an app\'s ring runs open -b ai.autonomous.harness', async () => {
+        await windowed('ghostty', true, { ...orca, platform: 'darwin' })
+        expect(host().pickApp('harness')).toBe('tabs')
+        await vi.advanceTimersByTimeAsync(0)
+        expect(orcaRuns).toEqual([['/usr/bin/open', ['-b', 'ai.autonomous.harness'], 10_000]])
+        expect(logs).toContain('[device] app filter: bring · ok')
       })
 
       it('the window\'s focus is handed to the dials as before', async () => {

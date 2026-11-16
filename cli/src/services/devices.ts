@@ -334,7 +334,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       },
     }),
   ].map(noting)]
-  const opener = createOpenActions({ run: apps.run, platform: apps.platform, adapters, log })
+  const opener = createOpenActions({ run: apps.run, platform: apps.platform, adapters, log, bin: process.env.HARNESS_OPEN_BIN })
+  const bring = opener.bring
   /** The route or the refusal of the dial's words, and why a queue failed: never the words, the session, the terminal or a
    *  path. */
   const voiced = (what: string): void => log(`[device] voice · ${what}`)
@@ -497,6 +498,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       part.call('dial', () => tabSettled(app))
     },
     appPicked: () => log('[device] app filter: picker'),
+    // A pick on the dial brings its app to the front, on macOS only (docs/plans/2026-11-16-dial-pick-brings-app-design.md).
+    // A measure: the outcome, never the app; a pick with nothing to bring, or replaced by a later one, ran nothing.
+    appBrought: bring && ((app) => {
+      void bring(app).then((outcome) => { if (outcome) log(`[device] app filter: bring · ${outcome}`) })
+    }),
     // A tap on a Harness agent with no window starts Desktop, on macOS only (docs/specs/2026-11-15-device-wave1-checks.md,
     // F2).
     launchDesktop: opener.desktop,
