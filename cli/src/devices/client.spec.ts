@@ -288,6 +288,39 @@ describe('harness hardware watch', () => {
     expect(run.printed).toEqual(['{"attached":true,"fw":"0.0.95"}'])
     await stillRunning(run)
   })
+  it("an attached dial's line says the mode last", async () => {
+    const run = watch()
+    await opened(run.socket)
+    connected(run.socket, ['dial-watch'])
+    dial(run.socket, { attached: true, id: 'usb-1', fw: '0.0.95', settings: { muted: false }, notify: 'you' })
+    expect(run.printed).toEqual(['{"attached":true,"fw":"0.0.95","muted":false,"notify":"you"}'])
+    await stillRunning(run)
+  })
+  it('a change of mode alone prints again', async () => {
+    const run = watch()
+    await opened(run.socket)
+    connected(run.socket, ['dial-watch'])
+    const usb = { attached: true, id: 'usb-1', fw: '0.0.95', settings: { muted: false } }
+    dial(run.socket, { ...usb, notify: 'you' })
+    dial(run.socket, { ...usb, notify: 'full' })
+    dial(run.socket, { ...usb, notify: 'full' })
+    expect(run.printed).toEqual([
+      '{"attached":true,"fw":"0.0.95","muted":false,"notify":"you"}',
+      '{"attached":true,"fw":"0.0.95","muted":false,"notify":"full"}',
+    ])
+    await stillRunning(run)
+  })
+  it('any other notify, or no dial, leaves the line as before', async () => {
+    const run = watch()
+    await opened(run.socket)
+    connected(run.socket, ['dial-watch'])
+    const usb = { attached: true, id: 'usb-1', fw: '0.0.95', settings: { muted: false } }
+    for (const notify of ['loud', 7, null]) dial(run.socket, { ...usb, notify })
+    dial(run.socket, usb)
+    dial(run.socket, { attached: false, notify: 'you' })
+    expect(run.printed).toEqual(['{"attached":true,"fw":"0.0.95","muted":false}', '{"attached":false}'])
+    await stillRunning(run)
+  })
   it('exits 0 when stdin closes', async () => {
     const after = watch()
     expect(after.stdin.resume).toHaveBeenCalled()
