@@ -1004,3 +1004,43 @@ failure and 496 passes; shell had ten passes. Its PTY selection ran six tmux cas
 with two skips because `HARNESS_PTY_BIN` was omitted, so it is not a complete PTY
 receipt. Final gates must use the retained explicit PTY binary. No new broad gate,
 native acceptance or performance measurement is claimed by this correction.
+
+### Coverage acceptance and retained-owner inventory
+
+The exact `02ebdf5c` broad run passed all 4,571 core, 499 Resume, 1,066 portability
+(ten platform skips), fourteen native PTY/tmux, and ten shell tests, but core and
+Resume coverage failed. These are failed gates, not passing receipts. Focused
+caller tests now invoke the queued authority/refresh callbacks and verify both
+retained refusal and successful publication; no coverage exclusions or golden
+changes are permitted. Native/crash and timing acceptance remain deferred.
+
+Root reviewed three redundant guards exposed by branch coverage. Restart now
+refuses a confirmed-null receipt immediately as `changed after commit`, preserving
+its previous observable result, before its ownership predicate and hold release.
+Retarget similarly refuses null before constructing its predicate and announces
+only after that proof. Their later impossible null checks are removed. The restart
+handler maps any string helper outcome to its existing `AGENT_CHANGED`: its own
+predicate synchronously proves the selected row exists before the helper's read,
+so a separate no-await `vanished` mapping was unreachable. The shared helper keeps
+its initial missing-row contract for callers with independent lifecycle guards.
+
+One new caller test also reproduces a real retained-owner race. Resume's `retain`
+callback selected the backend and awaited inventory before cloning its mutable
+registry entry. Public process, route, or profile observations during that await,
+durably flushed and confirmed through the live indexes and disk, became the new
+selection. The callback then archived/removed that newer owner and could dispatch
+a replacement. `red-resume-retain-inventory-corrected.log` retains all three true
+failures; the preceding run used an invalid fixture path constant and is not red
+product evidence.
+
+The proposed minimal correction clones the entry before selecting its terminal or
+awaiting inventory, derives the target/runtime from that clone, and retains only
+that clone under the existing exact receipt/backend/lifecycle predicate after the
+await. An ownership mismatch cannot archive, remove, release or dispatch from the
+stale inventory. `checkLive` already has its caller's before/after `liveIdentity`
+snapshot in `resumeStoppedAgent`; the new guard covers the second inventory in
+retirement. Tests must cover process, route, home and strict native binding changes,
+normal unchanged retirement, unavailable inventory and uncertain publication.
+No new authority state, retry, deadline, persisted field or public API is added.
+The Design's existing bounds, concurrency, identity, compatibility, rollback and
+platform contracts remain unchanged.
