@@ -36,8 +36,10 @@ export interface HostAdapter {
   paneOf(place: Place): Pane | undefined
   /** Whether a tap can bring that pane forward on this computer. */
   canFocus(pane: Pane): boolean
-  /** True once the pane is shown, false when it was not reached. Refused: the pane is not the agent's, and the adapter
-   *  said so in a line of its own, so the opener brings the app forward with no fallback line. */
+  /** True once the pane is shown, false when it was not reached. One that brings its app forward itself when its pane
+   *  failed (the Codex app's, appLink.ts `forward`) answers whether the app came, so the opener runs no `open -b` after
+   *  it. Refused: the pane is not the agent's, and the adapter said so in a line of its own, so the opener brings the
+   *  app forward with no fallback line. */
   focus(pane: Pane): Promise<boolean | 'refused'>
   /** Whether a rest can show the pane inside its app now (the app in front, a watch open): asked at each look. */
   canShow?(pane: Pane): boolean
