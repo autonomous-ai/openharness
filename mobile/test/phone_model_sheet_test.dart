@@ -95,17 +95,17 @@ void main() {
     (tester) async {
       await open(tester, app(conn()));
 
-      expect(find.text('SUBSCRIPTION'), findsOne);
+      expect(find.text('Subscription'), findsOne);
       // No usage read runs under test, so the row falls back to the engine's own
       // name — which is the word the sheet uses for "its own login" anyway.
       expect(row('Claude'), findsOne);
 
-      expect(find.text('LOCAL MODELS ON YOUR MACHINES'), findsOne);
+      expect(find.text('Local models on your machines'), findsOne);
       expect(row('qwen3-coder'), findsOne);
       // Which of the user's own computers is answering it.
       expect(find.text('mac-mini'), findsOne);
 
-      expect(find.text('MODELS SHARED WITH YOU'), findsOne);
+      expect(find.text('Models shared with you'), findsOne);
       expect(find.text('autonomous.ai'), findsOne);
       expect(row('DeepSeek-V4-Flash'), findsOne);
     },
