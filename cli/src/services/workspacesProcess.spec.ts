@@ -32,22 +32,28 @@ describe('workspaces in their own process', () => {
     const handle = runWorkspacesService({
       dataDir: '/data', socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't',
       run: (given) => { options = given; return service },
-      start: (core: CoreApi, ports: CorePorts) => { api = core; ports.workspaces = port },
+      start: (core: CoreApi, ports: CorePorts) => {
+        api = core
+        ports.workspaces = port
+        // As workspaces' own requests do: the folders in use read first, before anything else.
+        return { worktrees_list: () => ({ inUse: core.agents.all().map((session) => session.cwd) }) }
+      },
       ...over,
     })
     return { api: api!, options: options!, port, service, handle }
   }
   /** A core that answers every question, and records them. */
-  const connection = () => {
-    const query = vi.fn(async (_name: string, _payload?: Record<string, unknown>) => ({ synced: true }))
+  const connection = (answer: (name: string, payload?: Record<string, unknown>) => Promise<Record<string, unknown>> = async () => ({ synced: true })) => {
+    const query = vi.fn(answer)
     return { core: { query } satisfies CoreConnection, query }
   }
 
-  it('reaches the core as `workspaces`, through the socket and token it was given, and answers only the core', () => {
+  it('reaches the core as `workspaces`, through the socket and token it was given, and answers the apps\' requests workspaces declares and the core\'s own', () => {
     const { options } = setup()
     expect(options).toMatchObject({ name: 'workspaces', socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't' })
-    // The port's own members, which the core asks as itself (core/workspacesLink.ts): no app request names them.
-    expect(Object.keys(options.requests)).toEqual(['prepareFolder', 'describeWorkspace', 'reviewWorktree', 'removeWorktree'])
+    // The apps' (core/api.ts WORKSPACES_REQUESTS), then the port's own members, which the core asks as itself
+    // (core/workspacesLink.ts): no app request names them.
+    expect(Object.keys(options.requests)).toEqual(['worktrees_list', 'prepareFolder', 'describeWorkspace', 'reviewWorktree', 'removeWorktree'])
   })
 
   it('says it makes folders each time it connects, so a core of this build asks it for them; a word lost is said', async () => {
@@ -109,6 +115,32 @@ describe('workspaces in their own process', () => {
     expect(port.removeWorktree).toHaveBeenCalledTimes(2)
   })
 
+  it('answers an app\'s request with every agent the core lists as it arrives, and knows them only then', async () => {
+    const { api, options } = setup()
+    const { core, query } = connection(async () => ({ agents: [agent('live'), agent('stopped', { cwd: null as never })] }))
+    options.onConnected!(core)
+    expect(await options.requests.worktrees_list!({}, OWNER)).toEqual({ inUse: ['/h/worktrees/repo/live', null] })
+    expect(query).toHaveBeenCalledWith('agents')
+    expect(() => api.agents.all()).toThrow()
+    // Asked again for the next one: never the list from before.
+    query.mockImplementationOnce(async () => ({ agents: [agent('new')] }))
+    expect(await options.requests.worktrees_list!({}, OWNER)).toEqual({ inUse: ['/h/worktrees/repo/new'] })
+  })
+
+  it('acts on none when the core cannot list every agent: not connected, failed, or an entry that is no agent', async () => {
+    // A core that fails every question fails the word that this process makes folders too, which is said.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { options } = setup()
+    const unavailable = { error: 'WORKTREES_UNAVAILABLE' }
+    expect(await options.requests.worktrees_list!({}, OWNER)).toEqual(unavailable)
+    for (const answer of [async () => ({ error: 'QUERY_FAILED' }), async () => ({ agents: [agent(), { not: 'an agent' }] }), () => Promise.reject(new Error('gone'))]) {
+      options.onConnected!(connection(answer).core)
+      expect(await options.requests.worktrees_list!({}, OWNER)).toEqual(unavailable)
+    }
+    await flush()
+    expect(warn).toHaveBeenCalledWith('[workspaces] could not tell the core this process makes folders · gone')
+  })
+
   it('names branches when the core says, with the live agents it sent', () => {
     const { api, options, port } = setup()
     options.onEvent!({ kind: 'nameBranches', agents: [agent('a1'), { not: 'an agent' }, agent('a2')] })
@@ -153,15 +185,18 @@ describe('workspaces in their own process', () => {
   })
 
   it('does not run without workspaces: the master starts it again, or parks it', () => {
-    expect(() => setup({ start: () => {} })).toThrow('workspaces did not start')
+    expect(() => setup({ start: () => ({}) })).toThrow('workspaces did not start')
   })
 
   it('runs on a core API of the agents the core sent, answering what workspaces never ask as nothing', async () => {
     const renamed = vi.fn()
-    const api = workspacesCoreApi('/data', { live: () => [agent('a1')] }, renamed)
+    let inUse: RegisteredSession[] | null = null
+    const api = workspacesCoreApi('/data', { live: () => [agent('a1')], inUse: () => inUse }, renamed)
     expect(api.dataDir).toBe('/data')
     expect(api.agents.live()).toEqual([agent('a1')])
-    expect(() => api.agents.all()).toThrow('workspaces never list stopped agents')
+    expect(() => api.agents.all()).toThrow('the core has not said which folders are in use')
+    inUse = [agent('a1'), agent('stopped')]
+    expect(api.agents.all()).toEqual([agent('a1'), agent('stopped')])
     expect(api.agents.byAgent('a1')).toEqual(agent('a1'))
     expect(api.agents.byAgent('old')).toBeUndefined()
     expect(api.agents.resolve('a1')).toEqual(agent('a1'))

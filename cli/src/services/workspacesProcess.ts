@@ -7,11 +7,14 @@
  * after a rename asks the core to send the agent's frame again. It makes the folder a create asks git for, and reads and
  * removes a harness's worktree for a purge, as the core asks (`prepareFolder`, `describeWorkspace`, `reviewWorktree`,
  * `removeWorktree`), and says it does each time it connects (`folders`): a core from before asks none of it, and a core
- * of this build asks nothing of a process from before. A `sweep` an older core still sends is ignored: no worktree is
- * removed on a timer (#4166). The git work is this process's alone: a hang or a crash in it costs workspaces, and the
+ * of this build asks nothing of a process from before. It answers the apps' leftover worktrees (`worktrees_list`,
+ * `worktrees_clean`), asking the core for every agent, live and stopped, as each request arrives and answering with
+ * exactly that, never with agents it kept from earlier, and acting on none when the core cannot say. A `sweep` an older
+ * core still sends is ignored: no worktree is removed on a timer (#4166). The git work (the folders, renames, the
+ * clean's moves and prunes, their timeouts) is this process's alone: a hang or a crash in it costs workspaces, and the
  * master starts them again.
  */
-import type { CoreApi } from '../core/api.js'
+import type { CoreApi, ServiceRequest, ServiceRequests } from '../core/api.js'
 import { ACCOUNT_BACKEND_OFF, CONVERSATIONS_OFF, AGENT_ACTIONS_OFF, DAEMON_UNKNOWN, DELIVERIES_OFF, emptyPorts, LANE_OFF, resolveAgent, TERMINALS_OFF } from '../core/api.js'
 import { gitProjectFolderOf } from '../lib/gitProjectFolder.js'
 import type { RegisteredSession } from '../lib/registry.js'
@@ -55,12 +58,13 @@ const othersOf = (value: unknown): string[] | null =>
 const refused = { ok: false, reason: 'The request to review this worktree was malformed.' }
 
 /**
- * The core API workspaces run on in their own process. The live agents are the ones the core last sent; stopped ones are
- * never asked for. A frame sent again (after a rename) is the core's to send: `renamed` asks it to.
+ * The core API workspaces run on in their own process. The live agents are the ones the core last sent. Every agent, live
+ * and stopped, is known only while a request the apps sent starts; asked at any other time it throws. A frame sent again
+ * (after a rename) is the core's to send: `renamed` asks it to.
  */
 export function workspacesCoreApi(
   dataDir: string,
-  view: { live(): RegisteredSession[] },
+  view: { live(): RegisteredSession[]; inUse(): RegisteredSession[] | null },
   renamed: (agentId: string) => void,
 ): CoreApi {
   return {
@@ -69,7 +73,11 @@ export function workspacesCoreApi(
     terminals: TERMINALS_OFF,
     machine: UNASKED.machine,
     agents: {
-      all: () => { throw new Error('workspaces never list stopped agents') },
+      all: () => {
+        const agents = view.inUse()
+        if (!agents) throw new Error('the core has not said which folders are in use')
+        return agents
+      },
       live: () => view.live(),
       displayName: () => '',
       byAgent: (agentId) => view.live().find((session) => session.agentId === agentId),
@@ -108,14 +116,29 @@ export function workspacesCoreApi(
 
 export function runWorkspacesService(options: WorkspacesServiceOptions): ServiceProcess {
   let live: RegisteredSession[] = []
+  // Every agent, live and stopped, while an app's request starts (`withAgents`); null at any other time.
+  let inUse: RegisteredSession[] | null = null
   let core: CoreConnection | null = null
   const ports = emptyPorts()
   // Lost only with the connection: the frame then shows the new branch when the core's read of the
   // folder expires (lib/agentProject.ts), seconds later.
   const renamed = (agentId: string): void => { void core?.query('branchNamed', { agentId }).catch(() => {}) }
-  ;(options.start ?? startWorkspaces)(workspacesCoreApi(options.dataDir, { live: () => live }, renamed), ports)
+  const answers = (options.start ?? startWorkspaces)(workspacesCoreApi(options.dataDir, { live: () => live, inUse: () => inUse }, renamed), ports)
   if (!ports.workspaces) throw new Error('workspaces did not start')
   const workspaces = ports.workspaces
+
+  /**
+   * An app's request, answered with every agent, live then stopped, as the core lists them as it arrives: the handler reads
+   * them before anything else. Every entry, as the core sent it: one left out would be a folder in use that looks unused.
+   * No core, or an answer that is not a list of agents (QUERY_FAILED), is no answer at all.
+   */
+  const withAgents = (answer: ServiceRequest): ServiceRequest => async (payload, asker, closed) => {
+    const agents = core ? (await core.query('agents').catch((): Record<string, unknown> => ({}))).agents : undefined
+    if (!Array.isArray(agents) || !agents.every(isSession)) return { error: 'WORKTREES_UNAVAILABLE' }
+    inUse = agents
+    try { return answer(payload, asker, closed) } finally { inUse = null }
+  }
+  const requests: ServiceRequests = Object.fromEntries(Object.entries(answers).map(([type, answer]) => [type, withAgents(answer)]))
 
   const run = options.run ?? runServiceProcess
   const service = run({
@@ -123,8 +146,10 @@ export function runWorkspacesService(options: WorkspacesServiceOptions): Service
     socketPath: options.socketPath,
     machineId: options.machineId,
     token: options.token,
-    // The apps ask workspaces nothing: only the core does, for the git it runs none of (core/workspacesLink.ts).
     requests: {
+      // The apps' leftover worktrees, each with the agents in use as it arrives.
+      ...requests,
+      // The core's own, for the git it runs none of (core/workspacesLink.ts): no client routes them.
       prepareFolder: (payload) => {
         const project = gitProjectFolderOf(payload.project)
         return project ? workspaces.prepareFolder(project, { cloneFallback: payload.cloneFallback === true })

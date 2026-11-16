@@ -149,7 +149,9 @@ master too old to run it starts it beside itself, still in its own process (`src
   asks each with a deadline and checks the answer's shape; a process says it makes folders each time it connects
   (`folders`), and until one does, a create that needs git is held and a purge's worktree is unavailable. A removal is
   never held or replayed, and is asked again before the purge's first step that changes anything. Branch naming is a
-  command, said again on each pass, so nothing is kept for it. `e2e/workspacesFolders.e2e.ts` and
+  command, said again on each pass, so nothing is kept for it. What a request that destroys something must know is
+  asked for when it starts, never sent ahead where it could go stale: the apps' `worktrees_list` and `worktrees_clean`
+  ask the core for the folders in use as each request arrives. `e2e/workspacesFolders.e2e.ts` and
   `e2e/workspacesProcess.e2e.ts` prove it.
 - A service that is transport rather than requests: the gateway (src/gateway/gatewayProcess.ts,
   src/core/gatewayLink.ts) carries every remote client's traffic, so it tells the core without asking

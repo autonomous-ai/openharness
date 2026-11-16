@@ -154,6 +154,8 @@ export function createWorkspacesLink(
     port,
     /** The core's answers to the workspaces' questions (core/serviceLinks.ts `answer`, for `workspaces`). */
     answer(query: string, payload: Payload): Payload {
+      // Every agent, live then stopped: the folders an app's list or clean of the leftover worktrees, starting now, must keep.
+      if (query === 'agents') return { agents: core.agents.all() }
       if (query === 'branchNamed') return branchNamed(payload)
       if (query === 'folders') { folders = true; return { ok: true } }
       return { error: 'UNKNOWN_QUERY' }
