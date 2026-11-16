@@ -37,12 +37,52 @@ describe('HostRegistry', () => {
     expect(new HostRegistry([observed, harness]).entries()).toEqual([{ agent: h, source: harness }])
   })
 
-  it('a host adapter beats observed and loses to harness', () => {
-    const orca = fakeSource('orca', [agent({ id: 'x', sessionId: 's' })])
+  it('observed beats a listing source and loses to harness', () => {
+    const herdr = fakeSource('herdr', [agent({ id: 'x', sessionId: 's' })])
     const observed = fakeSource('observed', [agent({ id: 'o', sessionId: 's' })])
-    expect(ids(new HostRegistry([observed, orca]))).toEqual(['x'])
+    expect(ids(new HostRegistry([observed, herdr]))).toEqual(['o'])
+    expect(ids(new HostRegistry([herdr, observed]))).toEqual(['o'])
     const harness = fakeSource('harness', [agent({ id: 'h', sessionId: 's' })])
-    expect(ids(new HostRegistry([observed, orca, harness]))).toEqual(['h'])
+    expect(ids(new HostRegistry([herdr, observed, harness]))).toEqual(['h'])
+  })
+
+  it("two copies from different sources that share a pane key are one agent, the stronger source's", () => {
+    const observed = fakeSource('observed', [agent({ id: 'o', sessionId: 's1', paneKeys: ['herdr:w1:p1'] })])
+    const herdr = fakeSource('herdr', [agent({ id: 'x', paneKeys: ['herdr:w1:p1'] })])
+    expect(ids(new HostRegistry([herdr, observed]))).toEqual(['o'])
+  })
+
+  it('two agents of one source that share a pane key are both listed', () => {
+    const observed = fakeSource('observed', [
+      agent({ id: 'o1', sessionId: 's1', paneKeys: ['herdr:w1:p1'] }),
+      agent({ id: 'o2', sessionId: 's2', paneKeys: ['herdr:w1:p1'] }),
+    ])
+    const herdr = fakeSource('herdr', [agent({ id: 'x', paneKeys: ['herdr:w1:p1'] })])
+    expect(ids(new HostRegistry([observed, herdr]))).toEqual(['o1', 'o2'])
+  })
+
+  it('another pane, and no pane key at all, fold nothing', () => {
+    const observed = fakeSource('observed', [agent({ id: 'o', sessionId: 's1' })])
+    const herdr = fakeSource('herdr', [agent({ id: 'x', paneKeys: ['herdr:w2:p1'] })])
+    expect(ids(new HostRegistry([observed, herdr]))).toEqual(['o', 'x'])
+    observed.set([agent({ id: 'o', sessionId: 's1', paneKeys: ['herdr:w1:p1'] })])
+    expect(ids(new HostRegistry([observed, herdr]))).toEqual(['o', 'x'])
+  })
+
+  it("a copy folded away still folds the next source's copy", () => {
+    const harness = fakeSource('harness', [agent({ id: 'h', sessionId: 's' })])
+    const observed = fakeSource('observed', [agent({ id: 'o', sessionId: 's', paneKeys: ['herdr:w1:p1'] })])
+    const herdr = fakeSource('herdr', [agent({ id: 'x', paneKeys: ['herdr:w1:p1'] })])
+    expect(ids(new HostRegistry([herdr, observed, harness]))).toEqual(['h'])
+  })
+
+  it("outside finds a listing source's copy by its id, the merged list folding it away or not", () => {
+    const observed = fakeSource('observed', [agent({ id: 'o', sessionId: 's1', paneKeys: ['herdr:w1:p1'] })])
+    const herdr = fakeSource('herdr', [agent({ id: 'x', paneKeys: ['herdr:w1:p1'] })])
+    const reg = new HostRegistry([observed, herdr])
+    expect(ids(reg)).toEqual(['o'])
+    expect(reg.outside('x')?.id).toBe('x')
+    expect(reg.outside('o')?.id).toBe('o')
   })
 
   it('dedupes by callerPid when sessionId is missing', () => {

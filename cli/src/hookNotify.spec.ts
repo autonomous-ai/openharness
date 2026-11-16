@@ -134,6 +134,8 @@ function runHook(opts: RunHookOpts): Promise<string> {
     // failure in five full-suite runs. Give the child room so these specs test behaviour, not the load
     // on the machine running them.
     env.HARNESS_HOOK_DEADLINE_MS = '30000'
+    // Run inside a named herdr session, the hook would leave out the HERDR_PANE_ID a spec sets.
+    delete env.HERDR_SESSION
     if (opts.env) Object.assign(env, opts.env)
     delete env.TMUX_PANE
     if (opts.tmuxPane) env.TMUX_PANE = opts.tmuxPane
@@ -2581,6 +2583,30 @@ describe('hook notify: a session outside a pane', () => {
     await runHook({ port, env: { ...noHints, TERM_PROGRAM: 'ghost\u0007ty', ZELLIJ: '0' }, input: { hook_event_name: 'Stop', session_id: 'sess-1' } })
     expect(requests).toHaveLength(1)
     expect(requests[0].body.hostHints).toEqual({ ZELLIJ: '0' })
+  })
+
+  // A named herdr session (`herdr --session <name>`) is a server of its own, its pane ids starting again at w1:p1, and
+  // herdr 0.8.0 sets HERDR_SESSION in its panes alone: the devices follow the default session, where that id is another
+  // pane. The rest of the event still posts, and neither the session's name nor its socket's path is sent.
+  it('leaves out HERDR_PANE_ID in a pane of a named herdr session', async () => {
+    const { port, requests } = await collect()
+    await runHook({
+      port,
+      env: { ...noHints, HERDR_PANE_ID: 'w1:p1', HERDR_SESSION: 'side', HERDR_SOCKET_PATH: '/h/.config/herdr/sessions/side/herdr.sock' },
+      input: { hook_event_name: 'Stop', session_id: 'sess-1' },
+    })
+    expect(requests).toHaveLength(1)
+    expect(requests[0].body.hostHints).toEqual({})
+    expect(JSON.stringify(requests[0].body)).not.toMatch(/side/)
+  })
+
+  // Left out before the cap counts it: a pane id never sent would cost the farthest hint its place.
+  it('a named herdr session\'s pane id takes none of the MAX_HINTS', async () => {
+    const { port, requests } = await collect()
+    const set = Object.fromEntries(HINTS.filter((name) => name !== 'TMUX_PANE').map((name, index) => [name, `hint-${index}`]))
+    await runHook({ port, env: { ...set, HERDR_SESSION: 'side' }, input: { hook_event_name: 'Stop', session_id: 'sess-1' } })
+    expect(Object.keys(requests[0].body.hostHints as object))
+      .toEqual(HINTS.filter((name) => name !== 'TMUX_PANE' && name !== 'HERDR_PANE_ID').slice(0, MAX_HINTS))
   })
 
   // The core reads 4096 bytes of a body at most (hookServer.ts): the transcript's path goes first, then the folder.

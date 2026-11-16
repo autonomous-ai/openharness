@@ -18,7 +18,7 @@ export const RUN_TIMEOUT_MS = 10_000
 export const MAX_TEXT = 2000
 // A newline would submit part of the text and an escape would steer the agent's screen: the text is typed as one line,
 // and --enter submits it.
-const CONTROL = /\p{Cc}/gu
+export const CONTROL = /\p{Cc}/gu
 // detectHost's multiplexers. Each keeps the environment of the terminal it was started in, so the handle names that
 // terminal, not where the agent is: words typed there land in whichever pane it shows, another agent's or a shell's. So
 // an agent in one has no Orca pane: no words, no rest, no tap through Orca.

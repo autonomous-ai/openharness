@@ -197,7 +197,9 @@ master too old to run it starts it beside itself, still in its own process (`src
   its port is looked at again later (src/cable/cableFleet.ts). `e2e/devicesProcess.e2e.ts` proves it,
   with fake dials on pseudo-terminals. An app the dial reaches an outside agent through is one adapter file
   under src/cable/hosts/ (`adapter.ts` has the interface), named once in src/services/devices.ts in the order
-  its panes are asked for; `observed.ts` and `open.ts` hold no rule about any app. Claude Code's mod and
+  its panes are asked for; `observed.ts` and `open.ts` hold no rule about any app. An app that lists its own
+  agents is one source file beside its adapter under src/cable/hosts/, named once in src/services/devices.ts;
+  a hooked copy and a listed copy of one agent are one row (src/cable/hosts/registry.ts). Claude Code's mod and
   `codex queue` are not adapters: they are the source's routes at the agent's own layer, asked before any pane.
   The Wi-Fi device runs beside them on a link of its own
   (src/services/wifiProcess.ts, src/core/wifiLink.ts): its sessions are the gateway's, so the core hands
