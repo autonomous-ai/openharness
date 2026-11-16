@@ -28,7 +28,7 @@ import type { FleetRouting } from '../services/fleet.js'
 import { ServiceUnavailableError } from '../core/serviceHost.js'
 
 import { PLAYER_STATES, type PlayerSession } from './playerLibrary.js'
-import type { ActivitySnapshot, AppSwarms, CableAgent, CableHost, CableMachine, CableMachineSource, CableSwarm, CableTile, DialStatus, FollowCause, OpenReason, RouteDecision, SendOutcome, ShownAgent } from './cableSession.js'
+import type { ActivitySnapshot, AppSwarms, CableAgent, CableHost, CableMachine, CableMachineSource, CableSwarm, CableTile, DialAgent, DialStatus, FollowCause, OpenReason, RouteDecision, SendOutcome } from './cableSession.js'
 import type { WindowRoute } from './windowRoute.js'
 import type { SelectionCommand, SelectionResult } from './windowSelection.js'
 import type { VisitCommand, VisitResult } from './windowVisit.js'
@@ -106,7 +106,7 @@ export interface CableHostWiring {
   /** What came of a local follow, by its cause: the dial moved to its agent, or its list had no tile for it. */
   localFollowed?: (cause: FollowCause, outcome: 'moved' | 'no-tile') => void
   /** The agent the dial that moved last shows, or null once that dial shows none: Orca's Harness Device plugin. */
-  dialShows?: (agent: ShownAgent | null) => void
+  dialShows?: (agent: DialAgent | null) => void
   /**
    * A notification was tapped: the window gives that agent a tile of its own. With `reason`
    * `'question'` it was a question screen instead, and the window only brings the agent forward.
@@ -613,9 +613,9 @@ export class DaemonCableHost implements CableHost {
 
   /** The dial that reported last and what it shows. One report for all dials: a none from another dial is dropped, so
    *  unplugging one of two does not blank the agent the other shows. */
-  private shown: { dial: object; agent: ShownAgent } | null = null
+  private shown: { dial: object; agent: DialAgent } | null = null
 
-  dialShows(dial: object, agent: ShownAgent | null): void {
+  dialShows(dial: object, agent: DialAgent | null): void {
     if (agent) this.shown = { dial, agent }
     else if (this.shown?.dial === dial) this.shown = null
     else return

@@ -21,6 +21,7 @@ import type { Socket } from 'node:net'
 import { lstatSync, type Stats } from 'node:fs'
 import { dirname } from 'node:path'
 import { listenLocalSocket, type LocalSocketServer } from '../lib/localSocket.js'
+import type { DialAgent } from '../cable/cableSession.js'
 import { APP_IDS } from '../cable/hosts/hostDetect.js'
 import { FRONT_NONE } from '../cable/hosts/frontApp.js'
 import { REPLACED_LINE, tabOf, type Tab } from '../cable/hosts/tabs.js'
@@ -50,7 +51,8 @@ export interface ListenerHandler {
 }
 
 /** Why a stream ended: its client went (it closed, its socket errored, or it sent a second message), a line did not
- *  drain in 2 s, a newer stream of its type opened, or the listener closed. */
+ *  drain in 2 s, a newer stream of its type opened, or `closed`: the listener closed, the handler's `onWritable` run
+ *  threw, or its open was refused or threw. */
 export type StreamEnd = 'gone' | 'stalled' | 'replaced' | 'closed'
 
 export interface ListenerStream {
@@ -455,14 +457,14 @@ export const DIAL_MAX_BYTES = 64
 /** The longest name a line holds, in code points: a line stays under 400 bytes in any script. */
 export const DIAL_NAME_MAX = 64
 
-export type DialLine = { attached: false } | { attached: true; agent: { name: string; app: string } | null }
+export type DialLine = { attached: false } | { attached: true; agent: DialAgent | null }
 
 export interface DialStream {
   handler: ListenerStreamHandler
   /** Whether any dial is attached. */
   attached(on: boolean): void
   /** The agent the dial shows, or null for none. */
-  shows(agent: { name: string; app: string } | null): void
+  shows(agent: DialAgent | null): void
 }
 
 /**
@@ -474,7 +476,7 @@ export interface DialStream {
  */
 export function dialStream({ log, after }: { log(line: string): void; after(ms: number, run: () => void): () => void }): DialStream {
   let on = false
-  let agent: { name: string; app: string } | null = null
+  let agent: DialAgent | null = null
   /** Writes the latest line on the open stream; none with no stream open. */
   let writer: (() => void) | undefined
   let written = 0

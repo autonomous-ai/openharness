@@ -210,8 +210,8 @@ export interface CableAgent {
   caps?: string
 }
 
-/** The agent a dial shows: the name its tile draws, and the display name of the app it runs in. */
-export interface ShownAgent { name: string; app: string }
+/** The agent a dial shows: the name its tile draws, and the app it runs in as the dial's own page names it. */
+export interface DialAgent { name: string; app: string }
 
 
 /**
@@ -386,7 +386,7 @@ export interface CableHost {
   localFollowed?(cause: FollowCause, outcome: 'moved' | 'no-tile'): void
   /** The agent this dial shows changed: as its ring last drew it, or null for none. `dial` is the session that says so,
    *  which is how a host tells two dials apart. */
-  dialShows?(dial: object, agent: ShownAgent | null): void
+  dialShows?(dial: object, agent: DialAgent | null): void
   focus(agentId: string): void
   /**
    * "Put this one in front of me" — a NOTIFICATION was tapped.
@@ -732,7 +732,7 @@ export class CableSession {
   }
   private focusRecord = ''
   /** What this session last told the host its dial shows. */
-  private shown: ShownAgent | null = null
+  private shown: DialAgent | null = null
   /**
    * The record's agent as the ring last sent draws it, or none: the record alone outlives an unplug, can name an agent
    * on another tab, and is not cleared when its agent leaves. Told to the host only when it changed.

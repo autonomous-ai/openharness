@@ -14,7 +14,7 @@ import { describe, expect, it, vi, type Mock } from 'vitest'
 import { CABLE_MAX_FRAME, CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
 import { DaemonCableHost } from './cableHost.js'
 import type { MachineFleet } from './machineFleet.js'
-import { CableSession, SHOWN_ONLY_PREFIX, SWIPE_REST_MS, type CableAgent, type CableHost, type CableMachine, type CablePort, type SendOutcome, type ShownAgent } from './cableSession.js'
+import { CableSession, SHOWN_ONLY_PREFIX, SWIPE_REST_MS, type CableAgent, type CableHost, type CableMachine, type CablePort, type DialAgent, type SendOutcome } from './cableSession.js'
 import { DialLog } from './dialLog.js'
 import type { PetStore } from './pets/store.js'
 import { HostRegistry } from './hosts/registry.js'
@@ -5304,12 +5304,12 @@ describe('a prompt in the app in front', () => {
 
 describe('the agent the dial shows (docs/specs/2026-11-16-orca-device-plugin.md)', () => {
   const RING: CableAgent[] = [{ id: 'o1', name: 'api', host: 'orca' }, { id: 'h1', name: 'web' }, { id: 't1', name: 'docs', host: 'terminal' }]
-  const API: ShownAgent = { name: 'api', app: 'Orca' }
+  const API: DialAgent = { name: 'api', app: 'Orca' }
   const HELLO = { t: 'hello', product: 'harness', mac: 'aa:bb' }
 
   /** Each agent the host heard, every one from `session`. */
   const heard = (dialShows: Mock, session: CableSession) =>
-    dialShows.mock.calls.map(([dial, agent]) => { expect(dial).toBe(session); return agent as ShownAgent | null })
+    dialShows.mock.calls.map(([dial, agent]) => { expect(dial).toBe(session); return agent as DialAgent | null })
 
   async function greeted(over: Partial<CableHost> = {}, hello: Record<string, unknown> = {}) {
     const dialShows = vi.fn<NonNullable<CableHost['dialShows']>>()
