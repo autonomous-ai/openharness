@@ -78,6 +78,9 @@ function setup(over: Partial<ObservedDeps> = {}) {
 /** Past the wait before a turn's answer is read. */
 const graced = (): Promise<unknown> => vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
 
+/** Every answer a read was given has reached the source. */
+const flushed = (): Promise<void> => new Promise((resolve) => { setImmediate(resolve) })
+
 describe('ObservedSource states', () => {
   beforeEach(() => { vi.useFakeTimers() })
   afterEach(() => { vi.useRealTimers() })
@@ -1691,6 +1694,114 @@ describe('ObservedSource and the Codex app', () => {
   })
 })
 
+// The Codex app's own Codex runs hooks whose hints name no listed app (Diego's first try, 2026-11-16).
+describe('ObservedSource and the app a hook\'s caller runs in', () => {
+  const inApp = { engine: 'codex' as const, sessionId: THREAD }
+
+  /** A source whose walks of a process's parents the test answers by hand, in the order they began. */
+  function walked() {
+    const walks: Array<{ answer(app?: string): Promise<void>; fail(): Promise<void> }> = []
+    const apps = vi.fn((pids: readonly number[]) => new Promise<ReadonlyMap<number, string>>((resolve, reject) => {
+      walks.push({
+        answer: (app) => { resolve(new Map(app ? pids.map((pid) => [pid, app]) : [])); return flushed() },
+        fail: () => { reject(new Error('ps timed out under /Users/someone')); return flushed() },
+      })
+    }))
+    const { actions } = fakeActions()
+    const s = setup({ actions, apps })
+    const agent = (sessionId: string = THREAD) => s.src.list().find((a) => a.sessionId === sessionId)!
+    return { ...s, apps, walks, agent }
+  }
+
+  /** Codex sessions the open scan found, each under its owner's pid, whose parents name the Codex app. */
+  async function scanned(s: ReturnType<typeof walked>, sessions: ReadonlyArray<readonly [string, number]>): Promise<void> {
+    for (const [sessionId, pid] of sessions) {
+      s.open.set(sessionId, 'terminal')
+      s.owners.set(sessionId, { pid, engine: 'codex' })
+      s.externals.set(sessionId, { cwd: '/work/proj', transcriptPath: null })
+    }
+    const scan = s.src.scanOpen()
+    await flushed()
+    await s.walks[0].answer('codex')
+    await scan
+  }
+
+  it('a scanned Codex app session stays on the Codex page through a hook that names no app, and keeps its pane', async () => {
+    const s = walked()
+    await scanned(s, [[THREAD, 100]])
+    expect(s.agent()).toMatchObject({ app: 'codex' })
+    const apps: string[] = []
+    s.src.onChange(() => { apps.push(s.agent().app) })
+    s.src.ingest(s.ev('turn-start', inApp))
+    expect(s.agent()).toMatchObject({ app: 'codex', host: 'terminal' })
+    expect(s.src.hasPane(s.agent())).toBe(true)
+    expect(s.apps.mock.calls).toEqual([[[100]], [[100]]])
+    await s.walks[1].answer('codex')
+    expect(apps).toEqual(['codex', 'codex'])
+    expect(s.agent()).toMatchObject({ app: 'codex', host: 'terminal' })
+    expect(s.src.hasPane(s.agent())).toBe(true)
+  })
+
+  it('a session a hook told of first is on the unknown app\'s page until its caller\'s parents name the Codex app', async () => {
+    const s = walked()
+    s.src.ingest(s.ev('session-start', inApp))
+    expect(s.agent()).toMatchObject({ app: 'terminal', host: 'terminal' })
+    expect(s.src.hasPane(s.agent())).toBe(false)
+    s.changes.mockClear()
+    await s.walks[0].answer('codex')
+    expect(s.agent()).toMatchObject({ app: 'codex', host: 'terminal' })
+    expect(s.src.hasPane(s.agent())).toBe(true)
+    expect(s.changes).toHaveBeenCalledTimes(1)
+  })
+
+  it('one walk per caller: its next hooks, during the walk and after, walk nothing and take the app learnt at once', async () => {
+    const s = walked()
+    s.src.ingest(s.ev('session-start', inApp))
+    s.src.ingest(s.ev('turn-start', inApp))
+    expect(s.apps).toHaveBeenCalledTimes(1)
+    await s.walks[0].answer('codex')
+    s.src.ingest(s.ev('needs-input', inApp))
+    s.src.ingest(s.ev('turn-start', inApp))
+    expect(s.agent().app).toBe('codex')
+    expect(s.apps).toHaveBeenCalledTimes(1)
+  })
+
+  it('a walk that names no listed app, or fails, leaves the unknown app, and logs no error text', async () => {
+    const s = walked()
+    await scanned(s, [['a', 101], ['b', 102]])
+    s.src.ingest(s.ev('turn-start', { engine: 'codex', sessionId: 'a', callerPid: 101 }))
+    s.src.ingest(s.ev('turn-start', { engine: 'codex', sessionId: 'b', callerPid: 102 }))
+    // Until a walk answers, each keeps the app the scan named.
+    expect([s.agent('a').app, s.agent('b').app]).toEqual(['codex', 'codex'])
+    await s.walks[1].answer()
+    await s.walks[2].fail()
+    expect([s.agent('a').app, s.agent('b').app]).toEqual(['terminal', 'terminal'])
+    expect(s.logs).toContain('[observed] app · not read')
+    expect(s.logs.join('\n')).not.toContain('someone')
+  })
+
+  it('a hook whose hints name an app walks nothing', () => {
+    const s = walked()
+    s.src.ingest(s.ev('session-start', { ...inApp, hostHints: { __CFBundleIdentifier: 'com.openai.codex' } }))
+    s.src.ingest(s.ev('session-start', { sessionId: 'g', callerPid: 101, hostHints: { TERM_PROGRAM: 'ghostty' } }))
+    expect([s.agent().app, s.agent('g').app]).toEqual(['codex', 'ghostty'])
+    expect(s.apps).not.toHaveBeenCalled()
+  })
+
+  it('an answer for a caller the session has left is dropped, and its latest caller is walked next', async () => {
+    const s = walked()
+    s.src.ingest(s.ev('session-start', { ...inApp, callerPid: 100 }))
+    // Resumed in another process while the first walk runs: one walk at a time.
+    s.src.ingest(s.ev('session-start', { ...inApp, callerPid: 200 }))
+    expect(s.apps.mock.calls).toEqual([[[100]]])
+    await s.walks[0].answer('codex')
+    expect(s.agent().app).toBe('terminal')
+    expect(s.apps.mock.calls).toEqual([[[100]], [[200]]])
+    await s.walks[1].answer('vscode')
+    expect(s.agent().app).toBe('vscode')
+  })
+})
+
 describe('ObservedSource panes', () => {
   const OTHER = 'term_9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d'
   const inOrca = (handle = HANDLE) => ({ hostHints: { ORCA_AGENT_SESSION_ID: 'x', ORCA_TERMINAL_HANDLE: handle } })
@@ -2060,8 +2171,6 @@ describe('ObservedSource panes', () => {
 describe('ObservedSource tabs', () => {
   const TTY = '/dev/ttys023'
   const inTerminal = { hostHints: { __CFBundleIdentifier: 'com.apple.Terminal' } }
-  /** Every answer a read was given has reached the source. */
-  const flushed = (): Promise<void> => new Promise((resolve) => { setImmediate(resolve) })
 
   /** A source whose tty reads the test answers by hand, in the order they began, with a watch's stream open. */
   function tabs(over: Partial<Fakes> = {}, deps: Partial<ObservedDeps> = {}) {
