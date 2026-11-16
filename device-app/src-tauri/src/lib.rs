@@ -4,6 +4,7 @@ pub mod account;
 pub mod app;
 pub mod claude;
 pub mod cli;
+pub mod codex;
 pub mod desktop;
 pub mod front;
 #[cfg(target_os = "macos")]
