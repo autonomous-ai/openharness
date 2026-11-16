@@ -1,11 +1,20 @@
+import { execFile } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync, renameSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import { majorVersion, nativeVersionProbe, parseRelease, probedVersion, releaseAtLeast, type Release } from './nativeVersion.js'
 
+// The real execFile, which a case may stand in for once.
+vi.mock('node:child_process', async (real) => {
+  const actual = await real<typeof import('node:child_process')>()
+  return { ...actual, execFile: vi.fn(actual.execFile) }
+})
+
 const roots: string[] = []
-const rule = { output: /(\d+)\.\d+\.\d+/, args: ['--version'], timeoutMs: 2_000 }
+// A Node start under a busy machine's load passed 2 s (#4130: 2,005 ms with three CLI suites beside it), so a case that
+// waits for a real fixture's answer gives it room; the case that bounds a silent one sets its own deadline.
+const rule = { output: /(\d+)\.\d+\.\d+/, args: ['--version'], timeoutMs: 20_000 }
 function fixture(source: string) {
   const root = mkdtempSync(join(tmpdir(), 'native-version-probe-')); roots.push(root)
   const file = join(root, 'engine')
@@ -54,9 +63,17 @@ it('contains an output flood without blocking other callbacks', async () => {
   expect(await majorVersion(rule, nativeVersionProbe(rule, () => file), new Map())).toBeNull()
 })
 
+// A launcher that reads to EOF answers only once its stdin is closed. The child here stands in for one and answers on
+// the loop's next turn, so nothing waits on a real process start (#4130).
 it('closes stdin for native launchers that read to EOF before reporting their version', async () => {
-  const file = fixture("require('node:fs').readFileSync(0); console.log('2.0.18')")
+  let closed = false
+  vi.mocked(execFile).mockImplementationOnce(((_file: string, _args: string[], _options: object, answer: (error: Error | null, stdout: string) => void) => {
+    setImmediate(() => { if (closed) answer(null, '2.0.18\n'); else answer(new Error('stdin is still open'), '') })
+    return { stdin: { end: () => { closed = true } } }
+  }) as unknown as typeof execFile)
+  const file = fixture("console.log('never run')")
   expect(await majorVersion(rule, nativeVersionProbe(rule, () => file), new Map())).toBe(2)
+  expect(closed).toBe(true)
 })
 
 it('does not let an older failed probe replace a newer confirmed answer', async () => {
@@ -138,8 +155,7 @@ it('reads an npm shim\'s version from its script under node on Windows', { timeo
   const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
   Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
   try {
-    // A Node start under a full suite's load can pass the 2 s the other cases give.
-    expect(await nativeVersionProbe({ ...rule, timeoutMs: 20_000 }, () => shim).read()).toBe('0.162.1 --version\n')
+    expect(await nativeVersionProbe(rule, () => shim).read()).toBe('0.162.1 --version\n')
   } finally { Object.defineProperty(process, 'platform', platform) }
   // A batch file that is no npm shim, given arguments cmd.exe would read, is refused and never run.
   const other = join(root, 'other.cmd'); writeFileSync(other, '@echo 1.0.0\r\n')
