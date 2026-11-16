@@ -13,6 +13,27 @@ pub struct DialStatus {
     pub problem: Option<String>,
     /// The dial's sound setting; None from an older CLI or a firmware with no settings.
     pub muted: Option<bool>,
+    /// This computer's Notifications setting, kept by the daemon; None from an older CLI, or a value this app does not
+    /// know.
+    #[serde(default, deserialize_with = "notify_mode")]
+    pub notify: Option<NotifyMode>,
+}
+
+/// This computer's Notifications setting, kept by the daemon. Needs you (`You`): an ordinary finished turn neither
+/// beeps nor wakes the dial.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NotifyMode {
+    Full,
+    You,
+}
+
+/// Lenient: a newer CLI's mode must not make its line no status, which the keep-alive would read as a silent watch.
+fn notify_mode<'de, D: serde::Deserializer<'de>>(value: D) -> Result<Option<NotifyMode>, D::Error> {
+    Ok(match serde_json::Value::deserialize(value)?.as_str() {
+        Some("full") => Some(NotifyMode::Full),
+        Some("you") => Some(NotifyMode::You),
+        _ => None,
+    })
 }
 
 /// harnessd, as the keep-alive last saw it.
@@ -43,7 +64,17 @@ pub struct ClaudeStatus {
     pub claude_version: Option<String>,
 }
 
-/// state.json: `{ "version": 1, "cliSeen", "askedSignIn", "askedClaude", "loginItem" }`. Default: version 1, all false.
+/// `harness device codex status --json`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct CodexStatus {
+    pub supported: bool,
+    pub installed: bool,
+    pub enabled: bool,
+}
+
+/// state.json: `{ "version": 1, "cliSeen", "askedSignIn", "askedClaude", "askedCodex", "loginItem" }`. Default:
+/// version 1, all false.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Saved {
@@ -51,12 +82,22 @@ pub struct Saved {
     pub cli_seen: bool,
     pub asked_sign_in: bool,
     pub asked_claude: bool,
+    /// Absent from a file written before Codex was offered: that file's answers stand, and Codex is not yet asked.
+    #[serde(default)]
+    pub asked_codex: bool,
     pub login_item: bool,
 }
 
 impl Default for Saved {
     fn default() -> Self {
-        Saved { version: 1, cli_seen: false, asked_sign_in: false, asked_claude: false, login_item: false }
+        Saved {
+            version: 1,
+            cli_seen: false,
+            asked_sign_in: false,
+            asked_claude: false,
+            asked_codex: false,
+            login_item: false,
+        }
     }
 }
 
@@ -66,6 +107,7 @@ pub enum Screen {
     Install,
     SignIn,
     Claude,
+    Codex,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -103,19 +145,25 @@ pub enum MenuAction {
     SignIn,
     ClaudeOn,
     ClaudeOff,
+    CodexOn,
+    CodexOff,
     SoundOn,
     SoundOff,
+    NotifyFull,
+    NotifyYou,
     Update,
     OpenHarness,
     Quit,
 }
 
-/// Text is a disabled line. Check: the action a click does, the label, whether it is checked.
+/// Text is a disabled line. Check: the action a click does, the label, whether it is checked. Submenu: its label and
+/// its items.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MenuItem {
     Text(String),
     Action(MenuAction, String),
     Check(MenuAction, String, bool),
+    Submenu(String, Vec<MenuItem>),
     Separator,
 }
 
@@ -146,6 +194,7 @@ pub struct AppState {
     pub dial: Option<DialStatus>,
     pub signed_in: Option<bool>,
     pub claude: Option<ClaudeStatus>,
+    pub codex: Option<CodexStatus>,
     pub desktop_installed: bool,
     pub saved: Saved,
     pub app_update: AppUpdate,
@@ -171,8 +220,10 @@ pub enum Event {
     InstallDone(Result<(), Vec<String>>),
     Auth(Option<bool>),
     Claude(Option<ClaudeStatus>),
+    Codex(Option<CodexStatus>),
     Login(LoginEvent),
     ClaudeSet(Result<(), String>),
+    CodexSet(Result<(), String>),
     LoginItem(bool),
     Menu(MenuAction),
     Act(Action),
@@ -192,11 +243,14 @@ pub enum Effect {
     RunInstall,
     ReadAuth,
     ReadClaude,
+    ReadCodex,
     RunLogin,
     CancelLogin,
     SetClaude(bool),
+    SetCodex(bool),
     /// `true` turns the dial's sound on.
     SetSound(bool),
+    SetNotify(NotifyMode),
     OpenUrl(String),
     OpenDesktop,
     RegisterLoginItem,
@@ -292,6 +346,7 @@ mod tests {
                 updating: None,
                 problem: None,
                 muted: None,
+                notify: None,
             }
         );
         for line in [r#"{}"#, r#"{"error":"x"}"#, r#"{"attached":"yes"}"#] {
@@ -308,12 +363,29 @@ mod tests {
     }
 
     #[test]
+    fn a_status_line_carries_notify() {
+        let notify = |line: &str| serde_json::from_str::<DialStatus>(line).map(|status| status.notify);
+        assert_eq!(notify(r#"{"attached":true,"notify":"you"}"#).unwrap(), Some(NotifyMode::You));
+        assert_eq!(notify(r#"{"attached":true,"notify":"full"}"#).unwrap(), Some(NotifyMode::Full));
+        assert_eq!(notify(r#"{"attached":true}"#).unwrap(), None);
+        // A newer CLI's mode, or a value of another type, is no mode: the line is still a status.
+        for line in [
+            r#"{"attached":true,"notify":"later"}"#,
+            r#"{"attached":true,"notify":7}"#,
+            r#"{"attached":true,"notify":null}"#,
+        ] {
+            assert_eq!(notify(line).unwrap(), None, "{line}");
+        }
+    }
+
+    #[test]
     fn a_view_is_the_json_the_window_reads() {
         let view = View { screen: Screen::SignIn, phase: Phase::Browser, lines: vec!["Waiting".into()] };
         assert_eq!(
             serde_json::to_value(view).unwrap(),
             json!({"screen":"sign_in","phase":"browser","lines":["Waiting"]})
         );
+        assert_eq!(serde_json::to_value(Screen::Codex).unwrap(), json!("codex"));
     }
 
     #[test]
@@ -336,7 +408,14 @@ mod tests {
 
     #[test]
     fn state_json_keys() {
-        let keys = json!({"version":1,"cliSeen":false,"askedSignIn":false,"askedClaude":false,"loginItem":false});
+        let keys = json!({
+            "version": 1,
+            "cliSeen": false,
+            "askedSignIn": false,
+            "askedClaude": false,
+            "askedCodex": false,
+            "loginItem": false
+        });
         assert_eq!(serde_json::to_value(Saved::default()).unwrap(), keys);
         assert_eq!(serde_json::from_value::<Saved>(keys).unwrap(), Saved::default());
     }

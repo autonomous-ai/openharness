@@ -114,9 +114,9 @@ take a second kind of pane beside Orca's terminal: a Claude app session, `opens.
 - `hasPane` is true for it on macOS while the app most recently reported in front is `claude` (`AppFilter`'s last
   `front`, not the settled one: a Cmd-Tab to another app within the second must not have the link bring Claude back).
 - After the 400 ms rest (#4311's timer, unchanged), `showPane` checks the front again, then runs
-  `/usr/bin/open claude://code/continue?session=<local_…>` (no shell, 10 s timeout, the id checked against
-  `CLAUDE_SESSION` as a tap checks it), and records the echo: that agent, for 2 s. Front no longer `claude`: nothing
-  runs, outcome `failed`, nothing on the dial.
+  `/usr/bin/open -b com.anthropic.claudefordesktop claude://code/continue?session=<local_…>` (no shell, 10 s timeout,
+  the id checked against `CLAUDE_SESSION` as a tap checks it), and records the echo: that agent, for 2 s. Front no
+  longer `claude`: nothing runs, outcome `failed`, nothing on the dial.
 - One link at a time per agent, as a tap's (`open.ts` `running`); one that is still running for that agent drops the
   new one (outcome `busy`).
 - **No loop.** The link's attach comes back as the agent the dial already shows (nothing sent), or within 2 s as the

@@ -2,7 +2,7 @@
 
 use crate::cli::{Cli, Killer, StdinCloser, StdinWriter, Timeout, Unwritten};
 use crate::tabs::{TabApp, select_of};
-use crate::types::{DialStatus, Event, Log};
+use crate::types::{DialStatus, Event, Log, NotifyMode};
 use std::io;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -40,6 +40,14 @@ impl Watch {
     /// A change of the dial's sound on the child's stdin: one of two fixed lines, so nothing else can shape it.
     pub fn sound(&self, on: bool) {
         self.write(if on { r#"{"muted":false}"# } else { r#"{"muted":true}"# });
+    }
+
+    /// A change of the Notifications setting on the child's stdin: one of two fixed lines, as the sound's.
+    pub fn notify(&self, mode: NotifyMode) {
+        self.write(match mode {
+            NotifyMode::Full => r#"{"notify":"full"}"#,
+            NotifyMode::You => r#"{"notify":"you"}"#,
+        });
     }
 
     /// One that has ended takes nothing, and nothing of the line is logged. One that has stopped reading drops it, and
@@ -121,7 +129,7 @@ mod tests {
     use crate::cli::{HarnessCli, find_cli};
     use crate::tabs::TabApp;
     use crate::testing::{Fake, wait_gone};
-    use crate::types::{DialStatus, Event, MemoryLog};
+    use crate::types::{DialStatus, Event, MemoryLog, NotifyMode};
     use std::io;
     use std::sync::{Arc, mpsc};
     use std::time::Duration;
@@ -169,6 +177,7 @@ mod tests {
             updating: None,
             problem: None,
             muted: None,
+            notify: None,
         })
     }
 
@@ -189,6 +198,7 @@ mod tests {
             updating: None,
             problem: None,
             muted: Some(true),
+            notify: None,
         };
         assert_eq!(events.recv_timeout(WAIT), Ok(Event::WatchLine(muted)));
         assert_eq!(fake.calls(), ["hardware watch --json"]);
@@ -329,6 +339,24 @@ mod tests {
         watch.sound(false);
         assert_eq!(fake.stdin(), [off, on]);
         assert_eq!(fake.log().lines(), ["harness hardware watch --json: exit 0"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_notify_line_reaches_the_watch() {
+        let (you, full) = (r#"{"notify":"you"}"#, r#"{"notify":"full"}"#);
+        let fake = Fake::new();
+        fake.script("hardware watch --json", &[r#"{"attached":true}"#, "@record"]);
+        let (watch, events) = start(&fake);
+        assert_eq!(events.recv_timeout(WAIT), Ok(dial(true, None, None)));
+        watch.notify(NotifyMode::You);
+        watch.notify(NotifyMode::Full);
+        watch.stop();
+        assert_eq!(events.recv_timeout(WAIT), Ok(Event::WatchExit(Some(0))));
+        assert_eq!(fake.stdin(), [you, full]);
+        // A watch that has ended takes nothing.
+        watch.notify(NotifyMode::You);
+        assert_eq!(fake.stdin(), [you, full]);
     }
 
     #[cfg(unix)]

@@ -87,7 +87,7 @@ describe('opening an agent outside Harness from the dial', () => {
     const app = target({ __CFBundleIdentifier: CLAUDE, CLAUDE_CODE_HOST_SESSION_ID: SESSION })
     expect(opener.can(app)).toBe(true)
     expect(await opener.open('a1', app)).toBe(true)
-    expect(calls).toEqual([run(OPEN, `claude://code/continue?session=${SESSION}`)])
+    expect(calls).toEqual([run(OPEN, '-b', CLAUDE, `claude://code/continue?session=${SESSION}`)])
   })
 
   it('WezTerm: its pane is activated, then WezTerm comes forward', async () => {
@@ -149,7 +149,7 @@ describe('opening an agent outside Harness from the dial', () => {
   it('a pane not reached still brings its app forward, and says so in one line with no session id, handle or pane', async () => {
     const link = recorder({}, [1])
     expect(await link.opener.open('a1', target({ __CFBundleIdentifier: CLAUDE, CLAUDE_CODE_HOST_SESSION_ID: SESSION }))).toBe(true)
-    expect(link.calls).toEqual([run(OPEN, `claude://code/continue?session=${SESSION}`), forward(CLAUDE)])
+    expect(link.calls).toEqual([run(OPEN, '-b', CLAUDE, `claude://code/continue?session=${SESSION}`), forward(CLAUDE)])
     expect(link.logs).toEqual(['[device] open · claude · fallback'])
 
     const wezterm = recorder({}, [1])
@@ -286,7 +286,7 @@ describe('opening an agent outside Harness from the dial', () => {
 
 // A rest's link is the Claude app adapter's own (claudeApp.spec.ts); a tap's one-at-a-time is the opener's.
 describe('a rest on a Claude app session', () => {
-  const link = (session: string): Call => run(OPEN, `claude://code/continue?session=${session}`)
+  const link = (session: string): Call => run(OPEN, '-b', CLAUDE, `claude://code/continue?session=${session}`)
 
   /** The recorder, each command held until it is let go, so a link can be caught still running. */
   function holding() {

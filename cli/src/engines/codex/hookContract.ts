@@ -25,12 +25,15 @@ export const hooks: HookContract = {
     // rule: a script an agent wrote in its own folder ran outside the sandbox (the review of #1232, codex-rs
     // execpolicy/src/policy.rs `match_host_executable_rules`). `host_executable` keeps that to the launcher, whose path
     // then meets the `harness` rule and the person's own rules for `harness` alike (codex-cli 0.107 and later).
+    // `harness device notify` as exactly its three words (facets/hooks.ts HARNESS_AGENT_COMMANDS), never `device` alone:
+    // the pattern matches argv, so the line after `notify` is one argument. By name only: the dial skill names `harness`.
     allow: {
       file: 'rules/harness.rules',
       rules: [
         'host_executable(name="harness", paths=["{launcher}"])',
         'prefix_rule(pattern=["harness", {verbs}], decision="allow")',
         'prefix_rule(pattern=["{node}", "{cli}", {verbs}], decision="allow")',
+        'prefix_rule(pattern=["harness", {words}], decision="allow")',
       ],
     },
     commandNamesHome: true,

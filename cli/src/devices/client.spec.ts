@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { loadOrCreateHookCredential } from '../lib/hookAuth.js'
+import type { NotifyMode } from '../cable/notifyMode.js'
 import { DEVICES_USAGE, devicesCommand, deviceRequest, runDialWatch, type DevicesClientDeps, type DialWatchDeps } from './client.js'
 import { devicesListenerPath } from './listenerPath.js'
 
@@ -286,6 +287,39 @@ describe('harness hardware watch', () => {
       { ...flat, devices: [{ id: 'usb-2', settings: { muted: true } }] },
     ]) dial(run.socket, payload)
     expect(run.printed).toEqual(['{"attached":true,"fw":"0.0.95"}'])
+    await stillRunning(run)
+  })
+  it("an attached dial's line says the mode last", async () => {
+    const run = watch()
+    await opened(run.socket)
+    connected(run.socket, ['dial-watch'])
+    dial(run.socket, { attached: true, id: 'usb-1', fw: '0.0.95', settings: { muted: false }, notify: 'you' })
+    expect(run.printed).toEqual(['{"attached":true,"fw":"0.0.95","muted":false,"notify":"you"}'])
+    await stillRunning(run)
+  })
+  it('a change of mode alone prints again', async () => {
+    const run = watch()
+    await opened(run.socket)
+    connected(run.socket, ['dial-watch'])
+    const usb = { attached: true, id: 'usb-1', fw: '0.0.95', settings: { muted: false } }
+    dial(run.socket, { ...usb, notify: 'you' })
+    dial(run.socket, { ...usb, notify: 'full' })
+    dial(run.socket, { ...usb, notify: 'full' })
+    expect(run.printed).toEqual([
+      '{"attached":true,"fw":"0.0.95","muted":false,"notify":"you"}',
+      '{"attached":true,"fw":"0.0.95","muted":false,"notify":"full"}',
+    ])
+    await stillRunning(run)
+  })
+  it('any other notify, or no dial, leaves the line as before', async () => {
+    const run = watch()
+    await opened(run.socket)
+    connected(run.socket, ['dial-watch'])
+    const usb = { attached: true, id: 'usb-1', fw: '0.0.95', settings: { muted: false } }
+    for (const notify of ['loud', 7, null]) dial(run.socket, { ...usb, notify })
+    dial(run.socket, usb)
+    dial(run.socket, { attached: false, notify: 'you' })
+    expect(run.printed).toEqual(['{"attached":true,"fw":"0.0.95","muted":false}', '{"attached":false}'])
     await stillRunning(run)
   })
   it('exits 0 when stdin closes', async () => {
@@ -1012,8 +1046,8 @@ const USB_LINE = '{"attached":true,"fw":"0.0.95","muted":false}'
 const MUTED = { ...USB, settings: { muted: true } }
 interface SoundFrame { type: string; payload: { id: string; patch: { muted: boolean }; requestId: string } }
 /** A watch the daemon has answered, sent the dial's status. */
-async function attached() {
-  const run = watch()
+async function attached(over: Partial<DialWatchDeps> = {}) {
+  const run = watch(over)
   await opened(run.socket)
   connected(run.socket, ['dial-watch'])
   dial(run.socket, USB)
@@ -1152,5 +1186,134 @@ describe('harness hardware watch: Sound', () => {
     closed.socket.emit('close', 1006, '')
     expect(await closed.done).toBe(3)
     expect(vi.getTimerCount()).toBe(0)
+  })
+})
+
+// What the Harness Device app writes on the watch's stdin when a Notifications item is clicked.
+const mode = (run: ReturnType<typeof watch>, value: unknown) => run.stdin.emit('data', `${JSON.stringify({ notify: value })}\n`)
+/** The devices' listener, faked: it answers each mode handed to it only when the test says, in order. */
+function heldModes() {
+  const answers: ((reply: Record<string, unknown> | number | null) => void)[] = []
+  const notifyMode = vi.fn((_mode: NotifyMode) => new Promise<Record<string, unknown> | number | null>(resolve => { answers.push(resolve) }))
+  const answer = async (reply: Record<string, unknown> | number | null) => {
+    answers.shift()!(reply)
+    // The watch reads the answer a turn later.
+    await new Promise(resolve => setImmediate(resolve))
+  }
+  return { notifyMode, answer }
+}
+
+describe('harness hardware watch: Notifications', () => {
+  // The event loop's turns stay real: only the watch's own timers are the test's.
+  beforeEach(() => { vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }) })
+  it("a notify line hands the mode to the devices' listener", async () => {
+    const listener = heldModes()
+    const run = await attached({ notifyMode: listener.notifyMode })
+    mode(run, 'you')
+    expect(listener.notifyMode.mock.calls).toEqual([['you']])
+    await listener.answer({ mode: 'you' })
+    expect(run.errors).toEqual([])
+    // The line moves with the next dial_status, never with the answer.
+    expect(run.printed).toEqual([USB_LINE])
+    await stillRunning(run)
+  })
+  it('lines that are not exactly one mode send nothing', async () => {
+    const listener = heldModes()
+    const run = await attached({ notifyMode: listener.notifyMode })
+    for (const line of ['{"notify":"loud"}', '{"notify":true}', '{"notify":"you","muted":true}', '{"mode":"you"}', '["you"]', '{"notify":"you"']) {
+      run.stdin.emit('data', `${line}\n`)
+    }
+    expect(listener.notifyMode).not.toHaveBeenCalled()
+    expect(sounds(run)).toEqual([])
+    expect(run.errors).toEqual([])
+    mode(run, 'full')
+    expect(listener.notifyMode.mock.calls).toEqual([['full']])
+    await stillRunning(run)
+  })
+  it('while one is in flight the latest waits', async () => {
+    const listener = heldModes()
+    const run = await attached({ notifyMode: listener.notifyMode })
+    for (const value of ['you', 'full', 'you', 'full']) mode(run, value)
+    expect(listener.notifyMode.mock.calls).toEqual([['you']])
+    await listener.answer({ mode: 'you' })
+    expect(listener.notifyMode.mock.calls).toEqual([['you'], ['full']])
+    await listener.answer({ mode: 'full' })
+    expect(listener.notifyMode).toHaveBeenCalledTimes(2)
+    expect(run.errors).toEqual([])
+    await stillRunning(run)
+  })
+  it('a refusal is one stderr line with its code', async () => {
+    for (const code of ['WRITE_FAILED', 'FAILED']) {
+      const listener = heldModes()
+      const run = await attached({ notifyMode: listener.notifyMode })
+      mode(run, 'you')
+      await listener.answer({ error: code })
+      expect(run.errors).toEqual([`notify: ${code}`])
+      expect(run.printed).toEqual([USB_LINE])
+      await stillRunning(run)
+    }
+  })
+  it('an answer that names no code prints FAILED', async () => {
+    for (const reply of [{ error: '/Users/person no\nnotify: OK' }, { error: 'x'.repeat(200) }, {}, { mode: 'full' }]) {
+      const listener = heldModes()
+      const run = await attached({ notifyMode: listener.notifyMode })
+      mode(run, 'you')
+      await listener.answer(reply)
+      expect(run.errors).toEqual(['notify: FAILED'])
+      await stillRunning(run)
+    }
+  })
+  it('no answer, or a status in its place, prints NO_ANSWER and sends what waited', async () => {
+    // A status: an older daemon's listener (404), or its own rate (429).
+    for (const reply of [null, 404, 429]) {
+      const listener = heldModes()
+      const run = await attached({ notifyMode: listener.notifyMode })
+      mode(run, 'you')
+      mode(run, 'full')
+      await listener.answer(reply)
+      expect(run.errors, String(reply)).toEqual(['notify: NO_ANSWER'])
+      expect(listener.notifyMode.mock.calls).toEqual([['you'], ['full']])
+      await stillRunning(run)
+    }
+  })
+  it('before the daemon has answered, or with no dial, nothing is sent', async () => {
+    const listener = heldModes()
+    const run = watch({ notifyMode: listener.notifyMode })
+    await opened(run.socket)
+    mode(run, 'you')
+    expect(run.errors).toEqual(['notify: NOT_CONNECTED'])
+    connected(run.socket, ['dial-watch'])
+    mode(run, 'you')
+    dial(run.socket, USB)
+    dial(run.socket, { attached: false })
+    mode(run, 'full')
+    expect(run.errors).toEqual(['notify: NOT_CONNECTED', 'notify: NO_DIAL', 'notify: NO_DIAL'])
+    expect(listener.notifyMode).not.toHaveBeenCalled()
+    // The setting is this computer's: a dial that names no id still takes it.
+    dial(run.socket, { attached: true })
+    mode(run, 'you')
+    expect(listener.notifyMode.mock.calls).toEqual([['you']])
+    await stillRunning(run)
+  })
+  it('stdin closing with a change in flight exits 0', async () => {
+    const listener = heldModes()
+    const run = await attached({ notifyMode: listener.notifyMode })
+    mode(run, 'you')
+    mode(run, 'full')
+    run.stdin.emit('end')
+    expect(await run.done).toBe(0)
+    expect(vi.getTimerCount()).toBe(0)
+    await listener.answer({ error: 'WRITE_FAILED' })
+    expect(run.errors).toEqual([])
+    expect(listener.notifyMode).toHaveBeenCalledTimes(1)
+  })
+  it("nothing of the setting goes on the core's socket", async () => {
+    const listener = heldModes()
+    const run = await attached({ notifyMode: listener.notifyMode })
+    mode(run, 'you')
+    await listener.answer({ mode: 'you' })
+    expect(coreFrames(run)).toEqual(['machine_select'])
+    expect(run.printed).toEqual([USB_LINE])
+    await stillRunning(run)
   })
 })
