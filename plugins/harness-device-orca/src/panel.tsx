@@ -16,8 +16,21 @@ const LINES: Record<Exclude<DialState['state'], 'checking'>, string> = {
 const dial = atom<DialState>({ state: 'checking' })
 
 export function setup(ctx: PanelContext): void {
-  ctx.subscriptions.push(plugin.on('dial.changed', (state) => set(dial, state)))
-  void plugin.request('dial.get').then((state) => set(dial, state))
+  let told = false
+  ctx.subscriptions.push(
+    plugin.on('dial.changed', (state) => {
+      told = true
+      set(dial, state)
+    })
+  )
+  // A change told while dial.get was on its way is newer than its answer. A refused dial.get leaves the panel as it
+  // is until the next change.
+  plugin.request('dial.get').then(
+    (state) => {
+      if (!told) set(dial, state)
+    },
+    () => {}
+  )
 }
 
 export default function Panel() {
@@ -34,7 +47,8 @@ export default function Panel() {
   return (
     <Stack gap="md">
       <Text>{LINES[state]}</Text>
-      {state === 'noHarness' && <Button onPress={() => void shell.openExternal(GET_HARNESS)}>Get Harness</Button>}
+      {/* A link Orca refuses to open leaves the button as it was, for another press. */}
+      {state === 'noHarness' && <Button onPress={() => shell.openExternal(GET_HARNESS).catch(() => {})}>Get Harness</Button>}
     </Stack>
   )
 }
