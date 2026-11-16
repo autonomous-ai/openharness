@@ -2,9 +2,9 @@
  * Shared resolver behind every `/desktop/download*` and `/device/download*` redirect route: fetch a live
  * release manifest, pull one key out of it, and 302 straight to that asset — never a static link,
  * since the artifact path carries the version (`harness/<product>/<version>/...`). Reading the manifest
- * is what lets a release be cut with one `make upload-desktop`/`make upload-desktop-linux` and have
- * these links serve the new build immediately, with no web deploy and no version written down
- * anywhere in this repo.
+ * is what lets a release be cut with one `make release-desktop` (Desktop's manifest) or
+ * `make release-device` (Harness Device's) and have these links serve the new build immediately, with
+ * no web deploy and no version written down anywhere in this repo.
  */
 
 const METADATA_URL =

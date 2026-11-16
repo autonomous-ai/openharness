@@ -82,7 +82,10 @@ describe("GET /desktop/download-macos", () => {
   it("reports 503 when the manifest carries no dmg entry", async () => {
     manifest({ "desktop-macos": { url: "https://storage.googleapis.com/x.zip" } });
 
-    expect((await GET()).status).toBe(503);
+    const res = await GET();
+
+    expect(res.status).toBe(503);
+    expect(await res.text()).toBe("Desktop download is temporarily unavailable (no usable desktop-macos-dmg entry).\n");
   });
 
   it("reports 503 when the manifest cannot be fetched", async () => {
