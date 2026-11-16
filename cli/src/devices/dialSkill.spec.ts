@@ -274,6 +274,15 @@ describe('the dial skill', () => {
     expect(readFileSync(path, 'utf8')).toBe(`---\nname: dial\n${MARKER}\n---\n`)
     expect(readdirSync(join(older, 'dial'))).toEqual(['SKILL.md'])
 
+    // A dial folder this write made goes with it.
+    const fresh = skillsAt()
+    before.set('renameSync', () => {
+      throw Object.assign(new Error('EIO'), { code: 'EIO' })
+    })
+    expect(writeSkill(fresh)).toBe('failed')
+    before.clear()
+    expect(readdirSync(fresh)).toEqual([])
+
     const held = skillsAt()
     writeSkill(held)
     chmodSync(join(held, 'dial'), 0o500)
