@@ -743,9 +743,13 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
         continue
       }
       told.set(agent.id, { state: agent.state, line, answer: agent.lastAnswer })
+      // An agent a listing names for the first time ended no turn the dial saw: herdr says done of any turn that ended in a
+      // pane it has not focused, and lists it again at each plug-in, reconnect and unfold. An observed one is first heard
+      // by its hook, which may be the turn's end.
+      const ended = was !== undefined || entry.source === observed
       if (busy(entry)) tell(started(entry))
-      else if (agent.state === 'done') tell({ ...card, kind: 'done' })
-      else if (agent.state === 'error') tell({ ...card, kind: 'error' })
+      else if (ended && agent.state === 'done') tell({ ...card, kind: 'done' })
+      else if (ended && agent.state === 'error') tell({ ...card, kind: 'error' })
     }
   }
   observed?.onChange(() => part.call('dial', outsideTurn))
