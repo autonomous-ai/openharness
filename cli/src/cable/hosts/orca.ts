@@ -10,6 +10,7 @@ import { execFile, spawn } from 'node:child_process'
 import { existsSync, realpathSync, statSync } from 'node:fs'
 import { resolveBinaryOnPath } from '../../lib/binaryOnPath.js'
 import type { HostAdapter } from './adapter.js'
+import { observedTitle } from './observedTitle.js'
 import type { PaneSwitch } from './types.js'
 
 export const ORCA_HANDLE = /^term_[0-9a-f-]{36}$/
@@ -163,10 +164,15 @@ export interface OrcaFocusWatch {
   readonly ended: Promise<void>
 }
 
+export interface OrcaTab {
+  handle: string
+  title?: string
+}
+
 export interface OrcaReads {
   orcaWatchesFocus(): Promise<boolean>
-  /** The terminals' handles in tab order; null when the read failed. */
-  orcaTabOrder(): Promise<string[] | null>
+  /** The terminals' handles in tab order, each with its tab's title when it has one to show; null when the read failed. */
+  orcaTabs(): Promise<OrcaTab[] | null>
   watchOrcaFocus(onHandle: (handle: string | null) => void): OrcaFocusWatch
 }
 
@@ -199,26 +205,29 @@ function listsWatchFocus(help: string): boolean {
   return false
 }
 
-/** The handles of `orca terminal list`'s layouts in tab order: worktrees as listed, then by group, tab and pane, each
- *  split `first`, then `second`. A node of a type it does not know ends its branch; a handle named twice keeps its first
- *  place. */
-function tabOrder(listed: unknown): string[] {
-  const handles = new Set<string>()
-  // A tab's panes: `terminal` leaves and `pane-split`s.
-  const panes = (node: unknown, depth: number): void => {
-    if (depth > MAX_DEPTH || handles.size === MAX_HANDLES || !isObject(node)) return
+/** The handles of `orca terminal list`'s layouts in tab order, each with its tab's title: worktrees as listed, then by
+ *  group, tab and pane, each split `first`, then `second`. A node of a type it does not know ends its branch; a handle
+ *  named twice keeps its first place and title. A title is outside text, held to what a hook's is (observedTitle). */
+function tabOrder(listed: unknown): OrcaTab[] {
+  const tabs = new Map<string, OrcaTab>()
+  // A tab's panes: `terminal` leaves and `pane-split`s. A leaf's own title is the program's in it: the tab's names it.
+  const panes = (node: unknown, depth: number, title: string | undefined): void => {
+    if (depth > MAX_DEPTH || tabs.size === MAX_HANDLES || !isObject(node)) return
     if (node.type === 'terminal') {
-      if (typeof node.handle === 'string' && ORCA_HANDLE.test(node.handle)) handles.add(node.handle)
+      const { handle } = node
+      if (typeof handle === 'string' && ORCA_HANDLE.test(handle) && !tabs.has(handle)) {
+        tabs.set(handle, title === undefined ? { handle } : { handle, title })
+      }
     } else if (node.type === 'pane-split') {
-      panes(node.first, depth + 1)
-      panes(node.second, depth + 1)
+      panes(node.first, depth + 1, title)
+      panes(node.second, depth + 1, title)
     }
   }
   // A worktree's tab groups: `group`s of tabs and `split`s.
   const groups = (node: unknown, depth: number): void => {
-    if (depth > MAX_DEPTH || handles.size === MAX_HANDLES || !isObject(node)) return
+    if (depth > MAX_DEPTH || tabs.size === MAX_HANDLES || !isObject(node)) return
     if (node.type === 'group' && Array.isArray(node.tabs)) {
-      for (const tab of node.tabs) if (isObject(tab)) panes(tab.panes, depth + 1)
+      for (const tab of node.tabs) if (isObject(tab)) panes(tab.panes, depth + 1, observedTitle(tab.title))
     } else if (node.type === 'split') {
       groups(node.first, depth + 1)
       groups(node.second, depth + 1)
@@ -228,7 +237,7 @@ function tabOrder(listed: unknown): string[] {
   if (Array.isArray(layouts)) {
     for (const layout of layouts.slice(0, MAX_WORKTREES)) if (isObject(layout)) groups(layout.root, 1)
   }
-  return [...handles]
+  return [...tabs.values()]
 }
 
 /** A focus line's handle, null for no terminal in focus, undefined for a line that is neither. */
@@ -244,7 +253,7 @@ function focusOf(line: string): string | null | undefined {
   return typeof value.handle === 'string' && ORCA_HANDLE.test(value.handle) ? value.handle : undefined
 }
 
-/** What the devices read of Orca's CLI: whether it watches focus, its tab order, and a watch of its focused terminal. */
+/** What the devices read of Orca's CLI: whether it watches focus, its tabs in order, and a watch of its focused terminal. */
 export function createOrcaReads(deps: OrcaReadDeps): OrcaReads {
   // The latest binary's answer, or the run that gives it: an ask meanwhile is that same run.
   let probe: { realPath: string; mtimeMs: number; answer: Promise<boolean> } | undefined
@@ -270,7 +279,7 @@ export function createOrcaReads(deps: OrcaReadDeps): OrcaReads {
       return asked.answer
     },
 
-    async orcaTabOrder() {
+    async orcaTabs() {
       const orca = orcaBinary(deps)
       if (orca === null) return null
       const { code, stdout } = await deps.run(orca, ['terminal', 'list', '--json', '--include-visual-layouts'], RUN_TIMEOUT_MS)

@@ -998,11 +998,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const readOrcaOrder = (source: ObservedSource): Promise<void> => {
     ordering = true
     const ring = orcaRing
-    return orcaReads.orcaTabOrder().then((handles) => {
+    return orcaReads.orcaTabs().then((tabs) => {
       if (ring !== orcaRing) return
-      if (handles === null) { log('[device] orca order · failed'); return }
+      if (tabs === null) { log('[device] orca order · failed'); return }
       log('[device] orca order · read')
-      const place = new Map(handles.map((handle, at) => [handle, at]))
+      const place = new Map(tabs.map(({ handle }, at) => [handle, at]))
       const rank = new Map<string, number>()
       for (const id of orcaIds()) {
         // An agent in a multiplexer inside Orca has no Orca pane, and one Orca did not lay out has no place: both come
@@ -1013,6 +1013,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       }
       // Nothing is pushed: the dials read the reordered ring on their next list, as any change of it.
       cableHost.setRank('orca', rank)
+      // The same read names Orca's agents by their tabs (the design's section 4). After the rank: the rename's change
+      // lists the ring already in tab order.
+      source.setPaneNames('orca', new Map(tabs.flatMap(({ handle, title }) => title === undefined ? [] : [[handle, title]])))
     }).finally(() => {
       ordering = false
       if (!orcaRing.again) return
