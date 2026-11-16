@@ -175,7 +175,8 @@ export function createHerdrClient(deps: HerdrClientDeps): HerdrClient {
       return handle
     }
     deadline = setTimeout(() => end('timeout'), RUN_TIMEOUT_MS)
-    const out = `${JSON.stringify({ id: randomUUID(), method: 'events.subscribe', params: { subscriptions: entries } })}\n`
+    const id = randomUUID()
+    const out = `${JSON.stringify({ id, method: 'events.subscribe', params: { subscriptions: entries } })}\n`
     socket = connect(deps.socketPath, out, (text) => {
       const body = parse(text)
       if (!body) return end('bad_json')
@@ -186,12 +187,12 @@ export function createHerdrClient(deps: HerdrClientDeps): HerdrClient {
       }
       // The connection carries this one request, so its first line is the answer to it. A live subscription has no
       // deadline: herdr says nothing while nothing changes.
-      if (isObject(body.result) && body.result.type === 'subscription_started') {
-        started = true
-        clearTimeout(deadline)
-        return to.started()
-      }
-      end(isObject(body.error) ? 'rejected' : 'bad_answer')
+      const answer = answerOf(body, id)
+      if (!answer.ok) return end(answer.code === 'bad_answer' ? 'bad_answer' : 'rejected')
+      if (answer.result.type !== 'subscription_started') return end('bad_answer')
+      started = true
+      clearTimeout(deadline)
+      to.started()
     }, (fault) => end(fault))
     return handle
   }
@@ -206,6 +207,8 @@ export function createHerdrClient(deps: HerdrClientDeps): HerdrClient {
     const read = await request('agent.get', { target: paneId })
     if (!read.ok) return { outcome: 'failed', code: read.code }
     const agent: Record<string, unknown> = isObject(read.result.agent) ? read.result.agent : {}
+    // Only this pane's agent_info says what the pane holds now.
+    if (read.result.type !== 'agent_info' || agent.pane_id !== paneId) return { outcome: 'failed', code: 'bad_answer' }
     if (agent.agent !== kind) return { outcome: 'failed', code: 'not_that_agent' }
     if (agent.agent_status !== 'idle' && agent.agent_status !== 'done') return { outcome: 'busy' }
     const sent = await request('agent.prompt', { target: paneId, text: line })
