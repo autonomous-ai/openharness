@@ -871,6 +871,7 @@ interface Fakes extends Omit<ObservedActions, 'adapters'> {
   orcaSend(handle: string, text: string): Promise<boolean>
   orcaSwitch(handle: string): Promise<PaneSwitch>
   herdrPrompt(pane: string, kind: string, text: string): Promise<HerdrPrompt>
+  herdrStamp(): string | undefined
   claudeInFront(): boolean
   claudeShow(agentId: string, session: string): Promise<PaneSwitch>
   tabsOpen(): boolean
@@ -892,6 +893,8 @@ function fakeActions(over: Partial<Fakes> = {}, platform: NodeJS.Platform = 'dar
     orcaSwitch: vi.fn(async (_handle: string): Promise<PaneSwitch> => 'ok'),
     // herdr takes every prompt.
     herdrPrompt: vi.fn(async (_pane: string, _kind: string, _text: string): Promise<HerdrPrompt> => ({ outcome: 'sent' })),
+    // herdr's socket is where the daemon looks.
+    herdrStamp: vi.fn((): string | undefined => '1:1'),
     // As on macOS: an app or a pane is something a tap can open (open.ts).
     canOpen: vi.fn((target: OpenTarget) => !!target.bundle || !!target.pane),
     open: vi.fn(async (_agentId: string, _target: OpenTarget) => true),
@@ -914,7 +917,10 @@ function fakeActions(over: Partial<Fakes> = {}, platform: NodeJS.Platform = 'dar
   const orca = createOrcaAdapter(deps)
   const claude = createClaudeAppAdapter({ ...deps, inFront: () => fake.claudeInFront() })
   const adapters: HostAdapter[] = [
-    createHerdrAdapter({ ...deps, client: { prompt: (pane, kind, text) => fake.herdrPrompt(pane, kind, text) } }),
+    createHerdrAdapter({ ...deps, client: {
+      prompt: (pane, kind, text) => fake.herdrPrompt(pane, kind, text),
+      socketStamp: () => fake.herdrStamp(),
+    } }),
     createTmuxAdapter({ run: ran, processes: async () => [], log: () => {} }),
     createWeztermAdapter(deps),
     { ...orca, type: (pane, text) => fake.orcaSend(pane.id, text), show: (pane) => fake.orcaSwitch(pane.id) },
@@ -1702,6 +1708,23 @@ describe('ObservedSource panes', () => {
     expect(await src.focus(agent)).toBe(true)
     expect(actions.open).toHaveBeenCalledTimes(1)
     expect(actions.open.mock.calls[0][1].pane?.id).toBe('w1:p2')
+  })
+
+  // A daemon started by launchd or systemd may not have the shell's XDG_CONFIG_HOME, and so finds no herdr socket: Orca
+  // then takes the words, as before herdr typed, and herdr alone lists no voice.
+  it('with no herdr socket, herdr inside an Orca terminal takes the dial\'s words through Orca, and herdr alone takes none', async () => {
+    const { actions } = fakeActions({ herdrStamp: vi.fn(() => undefined) })
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('turn-stop', { sessionId: 'in-orca', hostHints: { HERDR_PANE_ID: 'w1:p2', ORCA_TERMINAL_HANDLE: HANDLE } }))
+    src.ingest(ev('turn-stop', { sessionId: 'in-ghostty', hostHints: { HERDR_PANE_ID: 'w1:p3', __CFBundleIdentifier: 'com.mitchellh.ghostty' } }))
+    const agent = (sessionId: string) => src.list().find((a) => a.sessionId === sessionId)!
+    expect(src.capabilities(agent('in-orca'))).toMatchObject({ voice: true, focus: true })
+    expect(await src.send(agent('in-orca'), 'next')).toEqual({ ok: true })
+    expect(actions.orcaSend.mock.calls).toEqual([[HANDLE, 'next']])
+    expect(src.capabilities(agent('in-ghostty'))).toMatchObject({ voice: false, focus: true })
+    expect(await src.send(agent('in-ghostty'), 'next')).toEqual({ ok: false, reason: 'proj did not answer.' })
+    expect(actions.herdrPrompt).not.toHaveBeenCalled()
+    expect(counted(actions.count)).toEqual(['orca', 'no-answer'])
   })
 
   // herdr types into a working agent as readily as an idle one: the source's idle rules decide, as for Orca.

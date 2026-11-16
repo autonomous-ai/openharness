@@ -9,10 +9,12 @@ interface Call { file: string; args: string[]; timeoutMs: number }
 
 /** A recording runner that runs nothing, so no spec moves the developer's own herdr: each call answers the next of
  *  [codes], then exit 0. Beside it a recording client that opens no socket: its `prompt` answers what the test sets,
- *  `sent` by default. */
+ *  `sent` by default, and its socket is there unless the test says otherwise. */
 function recorder(over: Partial<HerdrAdapterDeps> = {}, codes: Array<number | null> = []) {
   const calls: Call[] = []
   const prompt = vi.fn(async (_paneId: string, _kind: string, _text: string): Promise<HerdrPrompt> => ({ outcome: 'sent' }))
+  const socketStamp = vi.fn((): string | undefined => '1:1')
+  const client = { prompt, socketStamp }
   const deps: HerdrAdapterDeps = {
     run: async (file, args, timeoutMs) => {
       calls.push({ file, args, timeoutMs })
@@ -21,10 +23,10 @@ function recorder(over: Partial<HerdrAdapterDeps> = {}, codes: Array<number | nu
     onPath: (name) => (name === 'herdr' ? FAKE_PATH_HERDR : null),
     exists: () => false,
     platform: 'darwin',
-    client: { prompt },
+    client,
     ...over,
   }
-  return { calls, prompt, adapter: createHerdrAdapter(deps) }
+  return { calls, prompt, socketStamp, adapter: createHerdrAdapter(deps) }
 }
 
 const place = (hints: Record<string, string>): Place => ({ host: 'herdr', app: 'herdr', hints })
@@ -93,6 +95,17 @@ describe('the herdr adapter', () => {
     expect(await adapter.type!(pane('w1:p2'), 'next', 'claude')).toBe(false)
   })
 
+  // A daemon started by launchd or systemd may not have the shell's XDG_CONFIG_HOME, and so no socket where herdr's is:
+  // the words then go to the agent's next pane whose app types (observed.ts), as before herdr typed.
+  it('it types only while herdr\'s socket is there, asked at each look', () => {
+    const { adapter, socketStamp } = recorder()
+    expect(adapter.canType!(pane('w1:p2'))).toBe(true)
+    socketStamp.mockReturnValue(undefined)
+    expect(adapter.canType!(pane('w1:p2'))).toBe(false)
+    socketStamp.mockReturnValue('2:2')
+    expect(adapter.canType!(pane('w1:p2'))).toBe(true)
+  })
+
   it('prompt answers what the client answered', async () => {
     for (const answer of [{ outcome: 'sent' }, { outcome: 'busy' }, { outcome: 'failed', code: 'agent_not_ready' }] as HerdrPrompt[]) {
       const { adapter, prompt } = recorder()
@@ -110,6 +123,7 @@ describe('the herdr adapter', () => {
   it('on Windows it has no type, and a tap runs the same command', async () => {
     const { calls, adapter } = recorder({ platform: 'win32' })
     expect(adapter.type).toBeUndefined()
+    expect(adapter.canType).toBeUndefined()
     expect(adapter.paneOf(place({ HERDR_PANE_ID: 'w1:p2' }))).toEqual(pane('w1:p2'))
     expect(await adapter.focus(pane('w1:p2'))).toBe(true)
     expect(calls).toEqual([focusCall('w1:p2')])
