@@ -100,6 +100,7 @@ function setup(over: Partial<BindDeps> = {}) {
     openclawPaneRead: vi.fn(),
     openclawPaneDue: vi.fn(() => true),
     openclawStateDir: vi.fn(async () => null),
+    followsLive: vi.fn(() => false),
     ...over,
   }
   return { deps, byAgent, bySession, binding: createBinding(deps) }
@@ -420,7 +421,8 @@ describe('binding a running process to its session', () => {
   })
 
   it.each(Object.values(OTHER_ENGINE_STATES))('leaves the other engines\' reader hold to its reader, pass after pass, and goes on with the pass: %s', async hold => {
-    const run = setup(), row = agent({ engine: 'copilot', transcriptPath: '/t/s1.jsonl', identityHold: hold })
+    const run = setup({ followsLive: vi.fn((sessionId: string) => sessionId === 's1') })
+    const row = agent({ engine: 'copilot', transcriptPath: '/t/s1.jsonl', identityHold: hold })
     run.byAgent.set(row.agentId, row)
     vi.mocked(run.deps.registry.byProcess).mockReturnValue(row)
     await run.binding.bindObservedAgent(observed({ engine: 'copilot' }))
@@ -432,6 +434,20 @@ describe('binding a running process to its session', () => {
     expect(run.deps.announceSession).not.toHaveBeenCalled()
     expect(row).toMatchObject({ sessionId: 's1', transcriptPath: '/t/s1.jsonl', identityHold: hold })
     expect(processSessionOf).toHaveBeenCalledTimes(2)
+  })
+
+  // #4362: a reader that gave up on a session it never opened holds no stream and attaches it on no later connection.
+  it.each(Object.values(OTHER_ENGINE_STATES))('revalidates a reader hold once its reader holds no stream for the session: %s', async hold => {
+    const run = setup({ followsLive: vi.fn(() => false) })
+    const row = agent({ engine: 'copilot', transcriptPath: '/t/s1.jsonl', identityHold: hold })
+    run.byAgent.set(row.agentId, row)
+    vi.mocked(run.deps.registry.byProcess).mockReturnValue(row)
+    await run.binding.bindObservedAgent(observed({ engine: 'copilot' }))
+    expect(run.deps.registry.revalidateBinding).toHaveBeenCalledWith('a1')
+    expect(run.deps.followsLive).toHaveBeenCalledWith('s1')
+    expect(row).not.toHaveProperty('identityHold')
+    await vi.waitFor(() => expect(run.deps.attachSession).toHaveBeenCalledWith(row, true, false, false))
+    expect(run.deps.announceSession).toHaveBeenCalledWith(row)
   })
 
   it.each(['changing', 'deleted'] as const)('does not retry a binding whose process is %s', async state => {
