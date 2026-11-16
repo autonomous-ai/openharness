@@ -3,8 +3,9 @@
  * socket while a dial is attached, pushed and never polled.
  *
  * The list follows the subscription, never the other way round: once a subscription has started every change is told
- * on it, so one made while `agent.list` is in flight still arrives. herdr tells a pane's status only to a subscription
- * that names that pane, so a pane the list brings asks for a new subscription that names it, at most one a second.
+ * on it, so one made while `agent.list` is in flight still arrives, and wins over that list, which herdr may have made
+ * before it. herdr tells a pane's status only to a subscription that names that pane, so a pane the list brings asks for
+ * a new subscription that names it, at most one a second.
  *
  * A pane asks once. herdr replays a detection of each of its agents on every new subscription, and the list leaves out an
  * agent it cannot read (a status a newer herdr adds, or one past 64): asked again for such a pane, each subscription
@@ -86,6 +87,13 @@ interface Subscription {
   handle: { close(): void }
 }
 
+/** What a subscription told between its start and the read of its list, which herdr may have made before: 64 each. */
+interface Heard {
+  /** The last status of each pane, by `<pane>/<kind>`. */
+  statuses: Map<string, HerdrStatus>
+  dropped: Set<string>
+}
+
 export class HerdrSource implements HostSource {
   readonly id = 'herdr'
   private readonly listeners = new Set<() => void>()
@@ -99,6 +107,8 @@ export class HerdrSource implements HostSource {
   private current: Subscription | undefined
   /** One opened that has not started yet; the current one is heard until it has. */
   private next: Subscription | undefined
+  /** While the current one's list is in flight. */
+  private heard: Heard | undefined
   /** The one timer: the next subscription, or the next retry. */
   private timer: (() => void) | undefined
   private unwatch: (() => void) | undefined
@@ -231,16 +241,19 @@ export class HerdrSource implements HostSource {
     // The new one hears every change from here on, so the old one goes only now.
     this.current?.handle.close()
     this.current = sub
+    this.heard = { statuses: new Map(), dropped: new Set() }
     void this.deps.client.request('agent.list', {}).then((answer) => this.listed(sub, answer))
   }
 
   private listed(sub: Subscription, answer: HerdrAnswer): void {
     // Stopped, failed or replaced meanwhile: the newer subscription's own list says it.
     if (sub !== this.current) return
+    const heard = this.heard
+    this.heard = undefined
     const agents = answer.ok ? answer.result.agents : undefined
     // herdr's own error code is not logged: the retry's line says it failed.
     if (!Array.isArray(agents)) return this.fail(answer.ok ? 'bad_answer' : answer.code)
-    this.read(agents)
+    this.read(agents, heard)
     this.liveSince ??= this.deps.monotonic()
     if ([...this.rows.keys()].some((pane) => !sub.panes.has(pane))) this.soon()
   }
@@ -296,6 +309,7 @@ export class HerdrSource implements HostSource {
     this.next?.handle.close()
     this.current = undefined
     this.next = undefined
+    this.heard = undefined
     this.timer?.()
     this.timer = undefined
   }
@@ -316,12 +330,16 @@ export class HerdrSource implements HostSource {
     const kind = data.agent
     if (typeof kind !== 'string' || !HERDR_KIND.test(kind)) return
     const row = this.rows.get(pane)
+    const key = `${pane}/${kind}`
     if (name === 'pane.agent_status_changed') {
-      if (row?.agent.engine === kind && isStatus(data.agent_status) && this.status(row, data.agent_status)) this.emit()
+      const status = data.agent_status
+      if (!isStatus(status)) return
+      const statuses = this.heard?.statuses
+      if (statuses && (statuses.has(key) || statuses.size < MAX_AGENTS)) statuses.set(key, status)
+      if (row?.agent.engine === kind && this.status(row, status)) this.emit()
       return
     }
     if (name !== 'pane_agent_detected' || row?.agent.engine === kind) return
-    const key = `${pane}/${kind}`
     if (this.asked.has(key) || this.rows.size >= MAX_AGENTS || this.asked.size >= MAX_AGENTS) return
     this.asked.set(key, pane)
     this.soon()
@@ -329,12 +347,15 @@ export class HerdrSource implements HostSource {
 
   /** A pane that left. Pane ids are never reused, so it needs no new subscription; its asks go with it. */
   private drop(pane: string): void {
+    const dropped = this.heard?.dropped
+    if (dropped && dropped.size < MAX_AGENTS) dropped.add(pane)
     for (const [key, of] of this.asked) if (of === pane) this.asked.delete(key)
     if (this.rows.delete(pane)) this.emit()
   }
 
-  /** Sets the list from `agent.list`'s agents, each checked: a pane listed again with the same kind keeps its id. */
-  private read(entries: unknown[]): void {
+  /** Sets the list from `agent.list`'s agents, each checked: a pane listed again with the same kind keeps its id. What
+   *  the subscription told meanwhile is newer than the list: a pane it dropped is left out, and its status wins. */
+  private read(entries: unknown[], heard: Heard | undefined): void {
     const before = JSON.stringify(this.list())
     const rows = new Map<string, Row>()
     let over = 0
@@ -342,7 +363,7 @@ export class HerdrSource implements HostSource {
       if (!isObject(entry)) continue
       const { pane_id: pane, agent: kind, agent_status: status } = entry
       if (typeof pane !== 'string' || !HERDR_PANE.test(pane) || typeof kind !== 'string' || !HERDR_KIND.test(kind)
-        || !isStatus(status) || rows.has(pane)) continue
+        || !isStatus(status) || rows.has(pane) || heard?.dropped.has(pane)) continue
       if (rows.size === MAX_AGENTS) {
         over++
         continue
@@ -360,7 +381,7 @@ export class HerdrSource implements HostSource {
       // herdr's title is what the agent's terminal says it does, not a name.
       row.agent.name = shown(entry.name) || shown(cwd && basename(cwd)) || kind
       row.agent.sessionId = sessionOf(entry.agent_session, kind)
-      this.status(row, status)
+      this.status(row, heard?.statuses.get(`${pane}/${kind}`) ?? status)
       rows.set(pane, row)
     }
     this.rows = rows
