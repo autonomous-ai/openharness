@@ -105,7 +105,7 @@ each case: `env.HERMES_HOME` set to a `mkdtemp` folder and `forgetHermesHomes()`
 
 A local `ask(sessionId, extra = {})` returns
 `setup().ask(STREAM_STORE, { session: { sessionId, engine: 'hermes', ...extra } })`. Ids: `DEFAULT = '20260727_162325_e25264'`, `PROFILE = '20260921_152236_a1b2c3'`, `UNKNOWN = '20261116_090000_abcdef'`.
-`const profile = join(env.HERMES_HOME, 'profiles', 'work')`.
+`profile` is `join(<that folder>, 'profiles', 'work')`, set in the same `beforeEach`.
 
 ```ts
 it('answers no home for a session in the default home', async () => {
@@ -133,7 +133,8 @@ attach during its stop, and the stop refused the Close (#4361).
 
 Run: `cd cli && npx vitest run src/engines/others/streams.spec.ts -t "the Hermes store answer"`
 Expected: 3 failed, 1 passed. The default-home and unknown-session cases fail with an extra
-`home: "<tmp>/.hermes"` in the received answer; the own-home case with an extra `home: "<tmp>/.hermes/profiles/work"`.
+`home: "<tmp>/hermes-home-<x>"` in the received answer; the own-home case with an extra
+`home: "<tmp>/hermes-home-<x>/profiles/work"`.
 The profile case passes. If the four are skipped, `sqlite3` is missing: install it, do not go on.
 
 - [ ] **Step 3: Commit the red test**
