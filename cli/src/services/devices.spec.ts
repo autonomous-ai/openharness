@@ -20,12 +20,13 @@ import { devicesListenerPath } from '../devices/listenerPath.js'
 import { STOP_HOOK_GRACE_MS } from '../core/turns/turnHooks.js'
 import type { FleetEvent } from '../cable/machineFleet.js'
 import { claudeProjectsRoots, codexHomeRoots } from '../lib/engineHomes.js'
+import type { TierInput } from '../lib/notifyTier.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import type { Fleet, FleetDeps } from './fleet.js'
 import type { DevicesDeps } from './devices.js'
 import {
-  ATTACH_MAX_BYTES, ATTACH_PER_SECOND, FRONT_MAX_BYTES, FRONT_PER_SECOND, REFUSED, TAB_MAX_BYTES, TAB_PER_SECOND, TABS_MAX_BYTES, TABS_PER_SECOND,
+  ATTACH_MAX_BYTES, ATTACH_PER_SECOND, FRONT_MAX_BYTES, FRONT_PER_SECOND, NOTIFY_MAX_BYTES, NOTIFY_PER_SECOND, REFUSED, TAB_MAX_BYTES, TAB_PER_SECOND, TABS_MAX_BYTES, TABS_PER_SECOND,
   type DevicesListener, type ListenerHandler, type ListenerStreamHandler,
 } from './devicesListener.js'
 
@@ -308,8 +309,9 @@ const turnTo = (agentId: string): void => {
 }
 
 /** The listener the devices process opens (devicesProcess.ts), stood in for: what it was handed, its close, a front
- *  through its handler as `harness hardware watch` sends one, an attach as the harness-device mod sends one, the tabs
- *  stream a watch holds open, and the dial stream Orca's Harness Device plugin holds open. */
+ *  through its handler as `harness hardware watch` sends one, an attach as the harness-device mod sends one, the
+ *  Notifications setting as a watch sends it, the tabs stream a watch holds open, and the dial stream Orca's Harness
+ *  Device plugin holds open. */
 function fakeListener() {
   type Handlers = Readonly<Record<string, ListenerHandler | ListenerStreamHandler>>
   const given: Array<{ handlers: Handlers; log: (line: string) => void }> = []
@@ -320,6 +322,7 @@ function fakeListener() {
   })
   const front = (app: unknown): unknown => (given[0].handlers.front as ListenerHandler).handle({ type: 'front', app }, new AbortController().signal)
   const attach = (sessionId: unknown): unknown => (given[0].handlers.attach as ListenerHandler).handle({ type: 'attach', sessionId }, new AbortController().signal)
+  const notify = (mode: unknown): unknown => (given[0].handlers.notify as ListenerHandler).handle({ type: 'notify', mode }, new AbortController().signal)
   /** The lines the devices write on the stream, its end, and whether it takes a line: one not drained yet does not. */
   const tabs = () => {
     const lines: unknown[] = []
@@ -355,7 +358,7 @@ function fakeListener() {
     })).toBeUndefined()
     return { lines, writable: () => writable(), end: (reason: string) => ended.abort(reason), break: () => { broken = true } }
   }
-  return { given, close, listen, front, attach, tabs, dial }
+  return { given, close, listen, front, attach, notify, tabs, dial }
 }
 
 describe('the devices, as the core starts them', () => {
@@ -415,12 +418,12 @@ describe('the devices, as the core starts them', () => {
 })
 
 describe('the devices\' own listener (services/devicesListener.ts)', () => {
-  it('the devices open their listener once, with front, attach, the tab handler, the tabs stream and the dial stream', () => {
+  it('the devices open their listener once, with front, attach, the tab handler, the tabs stream, the dial stream and the Notifications setting', () => {
     const listener = fakeListener()
     start({ listen: listener.listen })
     expect(listener.listen).toHaveBeenCalledTimes(1)
     const [{ handlers, log }] = listener.given
-    expect(Object.keys(handlers)).toEqual(['front', 'attach', 'tab', 'tabs', 'dial'])
+    expect(Object.keys(handlers)).toEqual(['front', 'attach', 'tab', 'tabs', 'dial', 'notify'])
     expect(handlers.front).toMatchObject({ maxBytes: FRONT_MAX_BYTES, perSecond: FRONT_PER_SECOND })
     expect([FRONT_MAX_BYTES, FRONT_PER_SECOND]).toEqual([64, 10])
     expect(handlers.attach).toMatchObject({ maxBytes: ATTACH_MAX_BYTES, perSecond: ATTACH_PER_SECOND })
@@ -428,6 +431,7 @@ describe('the devices\' own listener (services/devicesListener.ts)', () => {
     expect(handlers.tab).toMatchObject({ maxBytes: TAB_MAX_BYTES, perSecond: TAB_PER_SECOND })
     expect(handlers.tabs).toMatchObject({ maxBytes: TABS_MAX_BYTES, perSecond: TABS_PER_SECOND })
     expect(handlers.dial).toMatchObject({ maxBytes: 64, perSecond: 1 })
+    expect(handlers.notify).toMatchObject({ maxBytes: NOTIFY_MAX_BYTES, perSecond: NOTIFY_PER_SECOND })
     // The listener's own handlers: a name that is no app id, a session id that is no UUID, and an app with no tabs, are
     // refused there.
     expect(listener.front('Ghostty')).toBe(REFUSED)
@@ -671,8 +675,8 @@ describe('the dial\'s host, wired to the core', () => {
       { type: 'dial_focus', payload: { machineId: 'm1', agentId: 'a1' } },
       { type: 'dial_swarm', payload: { swarmId: 't2' } },
       { type: 'dial_scroll', payload: { phase: 'move', dy: 4, velocity: 120 } },
-      { type: 'dial_status', payload: { attached: true, fw: '1.2.3' } },
-      { type: 'dial_status', payload: { attached: false } },
+      { type: 'dial_status', payload: { attached: true, fw: '1.2.3', notify: 'full' } },
+      { type: 'dial_status', payload: { attached: false, notify: 'full' } },
     ])
     expect(vi.mocked(core.clients.devicesChanged).mock.calls).toEqual([
       [{ status: { attached: true, fw: '1.2.3' }, revision: 1 }],
@@ -4535,5 +4539,133 @@ describe('herdr\'s agents, over its socket (docs/specs/2026-11-16-device-herdr.m
       '[herdr] closed · ended', '[herdr] retry · 1']))
     const secrets = [PANE, 'Nebula', 'secret-folder', 'secret tests']
     expect(logs.filter((line) => secrets.some((secret) => line.includes(secret)))).toEqual([])
+  })
+})
+
+describe('the Notifications setting (docs/plans/2026-11-16-dial-agent-notify-design.md)', () => {
+  const ID = observedAgentId('claude', 'sess-1')
+  const hook = (event: ObservedHookEvent['event']): ObservedHookEvent => ({
+    engine: 'claude', sessionId: 'sess-1', event, cwd: '/work/api', callerPid: 4242, transcriptPath: '/t/sess-1.jsonl',
+    hostHints: { ORCA_AGENT_SESSION_ID: 'orca-1' },
+  })
+  const sentLocal = (core: CoreApi) => vi.mocked(core.clients.sendLocal).mock.calls.map(([frame]) => frame)
+  const statuses = (core: CoreApi) => sentLocal(core).filter((frame) => frame.type === 'dial_status')
+  const summary = (port: DevicesPort, agentId: string, payload: Record<string, unknown>) =>
+    port.card({ type: 'commander_event', agentId, payload: { kind: 'summary', text: 'done', ...payload } })
+  /** Devices in Only you, with the fixed rules deciding. */
+  const onlyYou = (over: Parameters<typeof start>[0] = {}) => {
+    const listener = fakeListener()
+    const started = start({ decideTier: null, ...over, listen: listener.listen })
+    expect(listener.notify('you')).toEqual({ mode: 'you' })
+    return started
+  }
+
+  it('every dial status the windows and the watch hear says the mode, and the owner\'s other machines hear none', async () => {
+    const { core, requests } = start()
+    seen.dial.onDialStatus({ attached: true, id: 'usb-1' })
+    expect(statuses(core)).toEqual([{ type: 'dial_status', payload: { attached: true, id: 'usb-1', notify: 'full' } }])
+    expect(vi.mocked(core.clients.devicesChanged).mock.calls).toEqual([[{ status: { attached: true, id: 'usb-1' }, revision: 1 }]])
+    expect(await requests.harness_devices_list({}, { local: true, owner: true })).toMatchObject({ status: { attached: true, id: 'usb-1' } })
+    expect(await requests.harness_devices_list({}, { local: true, owner: true })).not.toHaveProperty('status.notify')
+  })
+
+  it('the listener\'s notify stores the mode, says the status again and answers it', () => {
+    const listener = fakeListener()
+    const { core } = start({ listen: listener.listen })
+    seen.dial.onDialStatus({ attached: true, id: 'usb-1' })
+    expect(listener.notify('you')).toEqual({ mode: 'you' })
+    expect(readFileSync(join(dataDir, 'dial-notify.json'), 'utf8')).toBe('{"mode":"you"}\n')
+    expect(sentLocal(core).at(-1)).toEqual({ type: 'dial_status', payload: { attached: true, id: 'usb-1', notify: 'you' } })
+    expect(core.clients.devicesChanged).toHaveBeenCalledTimes(1)
+    expect(logs).toContain('[device] notifications · you')
+    // A value that is no mode is refused by the listener's own handler.
+    expect(listener.notify('loud')).toBe(REFUSED)
+
+    const again = start()
+    seen.dial.onDialStatus({ attached: true, id: 'usb-1' })
+    expect(statuses(again.core)).toEqual([{ type: 'dial_status', payload: { attached: true, id: 'usb-1', notify: 'you' } }])
+  })
+
+  it('a mode that cannot be saved answers WRITE_FAILED and changes nothing', async () => {
+    mkdirSync(join(dataDir, 'dial-notify.json'))
+    const listener = fakeListener()
+    const { core, port } = start({ decideTier: null, listen: listener.listen })
+    expect(listener.notify('you')).toEqual({ error: 'WRITE_FAILED' })
+    expect(logs).toContain('[device] notifications · not saved')
+    expect(statuses(core)).toEqual([])
+    summary(port, 'a1', { recap: 'The requested build is ready.' })
+    await vi.waitFor(() => expect(calls('summary')).toEqual([['a1', 'The requested build is ready.', 'done', 'alert', undefined, false]]))
+  })
+
+  it('Only you: a finished turn decided here is a drawer row', async () => {
+    const { port } = onlyYou()
+    summary(port, 'a1', { recap: 'The requested build is ready.' })
+    await vi.waitFor(() => expect(calls('summary')).toEqual([['a1', 'The requested build is ready.', 'done', 'list', undefined, false]]))
+    expect(logs).toContainEqual(expect.stringMatching(/^\[cable\] notify · .* · list · rule:only-you · only-you · \d+ms$/))
+    expect(logs.some((line) => line.includes('rule:turn'))).toBe(false)
+  })
+
+  it('Only you: a tier the recaps decided is lowered when it is an alert, and only then', () => {
+    const { port } = onlyYou()
+    summary(port, 'a1', { recap: 'Deployed', tier: 'alert' })
+    summary(port, 'a2', { recap: 'Deployed', tier: 'list' })
+    summary(port, 'a3', { recap: 'Deployed', tier: 'silent' })
+    summary(port, 'a4', { recap: 'Deployed', tier: 'alert', failed: true })
+    expect(calls('summary').map(([agentId, , , tier]) => [agentId, tier])).toEqual([['a1', 'list'], ['a2', 'list'], ['a3', 'silent'], ['a4', 'alert']])
+    expect(logs.filter((line) => line.includes(' · rule:only-you · '))).toEqual([expect.stringMatching(/^\[cable\] notify · .* · list · rule:only-you · only-you · 0ms$/)])
+    expect(logs.filter((line) => line.includes(' · recaps · decided upstream'))).toEqual([
+      expect.stringMatching(/ · list · recaps · /), expect.stringMatching(/ · silent · recaps · /), expect.stringMatching(/ · alert · recaps · /),
+    ])
+  })
+
+  it('Only you: another machine\'s card is lowered here', async () => {
+    onlyYou()
+    const tell = seen.fleet!.events!
+    tell({ machineId: 'mac-mini', kind: 'summary', agentId: 'far-1', text: 'done', recap: 'Planned.', tier: 'alert' })
+    tell({ machineId: 'mac-mini', kind: 'summary', agentId: 'far-2', text: 'done', recap: 'Planned.' })
+    tell({ machineId: 'mac-mini', kind: 'summary', agentId: 'far-3', text: 'done', recap: 'Planned.', tier: 'silent' })
+    await vi.waitFor(() => expect(calls('summary')).toHaveLength(3))
+    expect(calls('summary').map(([agentId, , , tier]) => [agentId, tier])).toEqual([['far-1', 'list'], ['far-3', 'silent'], ['far-2', 'list']])
+  })
+
+  it('Only you: an agent outside a pane ends as a drawer row', async () => {
+    vi.useFakeTimers()
+    readers.answer.mockResolvedValue('All 12 tests pass.')
+    const { port } = onlyYou()
+    port.observed(hook('turn-start'))
+    port.observed(hook('turn-stop'))
+    await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
+    expect(calls('summary')).toEqual([[ID, 'All 12 tests pass.', 'All 12 tests pass.', 'list', 'All 12 tests pass.', false]])
+  })
+
+  it('Only you: a failed turn, a question and a waiting prompt ring as in Full', async () => {
+    const { port } = onlyYou({ faults: ['fleet'] })
+    summary(port, 'a1', { recap: 'The build broke.', failed: true })
+    await vi.waitFor(() => expect(calls('summary')).toEqual([['a1', 'The build broke.', 'done', 'alert', undefined, false]]))
+    port.card({ type: 'commander_event', agentId: 'a2', payload: { kind: 'error', text: 'boom' } })
+    expect(calls('turnError')).toEqual([['a2', 'boom']])
+    port.card({ type: 'commander_question', agentId: 'a3', payload: { requestId: 'r1', questions: [] } })
+    expect(calls('question').map(([agentId]) => agentId)).toEqual(['a3'])
+    port.observed(hook('turn-start'))
+    port.observed({ engine: 'claude', sessionId: 'sess-1', event: 'asked', tool: 'Bash', summary: 'npm test', cwd: '/work/api' })
+    expect(calls('question').map(([agentId]) => agentId)).toEqual(['a3', ID])
+  })
+
+  it('the decider is told the mode', async () => {
+    const decideTier = vi.fn(async (_input: TierInput) => ({ tier: 'alert' as const, by: 't', detail: '', ms: 0 }))
+    const listener = fakeListener()
+    const { port } = start({ decideTier, listen: listener.listen })
+    summary(port, 'a1', { recap: 'first' })
+    await vi.waitFor(() => expect(decideTier).toHaveBeenCalledWith(expect.objectContaining({ recap: 'first', onlyYou: false })))
+    listener.notify('you')
+    summary(port, 'a1', { recap: 'second' })
+    await vi.waitFor(() => expect(decideTier).toHaveBeenLastCalledWith(expect.objectContaining({ recap: 'second', onlyYou: true })))
+  })
+
+  it('a notify the dial\'s part cannot take answers FAILED', () => {
+    const listener = fakeListener()
+    start({ listen: listener.listen, faults: ['dial'] })
+    expect(listener.notify('you')).toEqual({ error: 'FAILED' })
+    expect(existsSync(join(dataDir, 'dial-notify.json'))).toBe(false)
   })
 })
