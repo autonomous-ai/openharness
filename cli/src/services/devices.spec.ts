@@ -2515,7 +2515,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     attach(port)
     expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
     expect(await host().openAgent(ID)).toBeUndefined()
-    const link: [string, string[], number] = ['/usr/bin/open', [`claude://code/continue?session=${SESSION}`], 10_000]
+    const link: [string, string[], number] = ['/usr/bin/open', ['-b', 'com.anthropic.claudefordesktop', `claude://code/continue?session=${SESSION}`], 10_000]
     expect(orcaRuns).toEqual([link, ['/usr/bin/open', ['-b', 'com.anthropic.claudefordesktop'], 10_000]])
     expect(said()).toEqual(['[device] open · claude · fallback'])
     // The link that works brings the app forward itself.
@@ -2708,7 +2708,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
   // A swipe that rests on a Claude app agent shows its session there, while that app is in front
   // (docs/specs/2026-11-15-dial-claude-app-follow.md).
   const SESSION = 'local_8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b'
-  const continued: [string, string[], number] = ['/usr/bin/open', [`claude://code/continue?session=${SESSION}`], 10_000]
+  const continued: [string, string[], number] = ['/usr/bin/open', ['-b', 'com.anthropic.claudefordesktop', `claude://code/continue?session=${SESSION}`], 10_000]
   /** Claude Code in the Claude app on macOS, its dial on the cable once the listener opened; `front` tells the devices'
    *  own listener the app in front, as `harness hardware watch` does. */
   const inClaudeApp = async (over: Parameters<typeof start>[0] = {}) => {
@@ -3413,7 +3413,7 @@ describe('the session the Claude app shows turns the dial (docs/specs/2026-11-15
     front('claude')
     await wait(FRONT_SETTLE_MS)
   }
-  const continued = (local: string): [string, string[], number] => ['/usr/bin/open', [`claude://code/continue?session=${local}`], 10_000]
+  const continued = (local: string): [string, string[], number] => ['/usr/bin/open', ['-b', 'com.anthropic.claudefordesktop', `claude://code/continue?session=${local}`], 10_000]
   const asked = () => calls('followLocal')
   /** The attach lines, and the settle's. */
   const attaches = () => logs.filter((line) => line.startsWith('[device] attach') || line.startsWith('[device] settle'))
@@ -4005,7 +4005,7 @@ describe('selecting a tab moves the dial (docs/specs/2026-11-15-dial-terminal-fo
     ['a tap on an Orca terminal', async () => { expect(await host().openAgent(ORCA_AGENT)).toBeUndefined() },
       [switched, ['/usr/bin/open', ['-b', 'com.stablyai.orca'], 10_000]]],
     ['a tap on a Claude app session', async () => { expect(await host().openAgent(CLAUDE_AGENT)).toBeUndefined() },
-      [['/usr/bin/open', [`claude://code/continue?session=${LOCAL}`], 10_000]]],
+      [['/usr/bin/open', ['-b', 'com.anthropic.claudefordesktop', `claude://code/continue?session=${LOCAL}`], 10_000]]],
   ] as const) {
     it(`a report waiting for the settle is set aside by another kind of pane the dial showed since it came (${way})`, async () => {
       const { port, listener, report, stream } = await dialWith()
