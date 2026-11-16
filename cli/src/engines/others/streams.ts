@@ -317,7 +317,7 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
   })
 
   /** A database engine's reader, wired to its stream (core/transcripts/attach.ts, as it was). */
-  const storeReader = (stream: Stream): StoreReader => {
+  const storeReader = (stream: Stream, resume: StreamOpen['resume']): StoreReader => {
     const { session, code } = stream
     const dbPath = session.store!
     const onEvents = (events: LiveEvent[]): void => { stream.push({ events }) }
@@ -335,7 +335,7 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
     switch (session.engine) {
       case 'opencode': return new (code as InProcessModules['opencode']).OpencodeReader({ dbPath, sessionId: session.sessionId, onEvents, onFatal: fatal('opencode') })
       case 'kilo': return new (code as InProcessModules['kilo']).KiloReader({ dbPath, sessionId: session.sessionId, onEvents, onFatal: fatal('kilo') })
-      case 'hermes': return new (code as InProcessModules['hermes']).HermesReader({ dbPath, sessionId: session.sessionId, onEvents, onFatal: fatal('hermes') })
+      case 'hermes': return new (code as InProcessModules['hermes']).HermesReader({ dbPath, sessionId: session.sessionId, onEvents, onFatal: fatal('hermes'), resumeTurnOpen: resume?.turnOpen })
       case 'devin': return new (code as InProcessModules['devin']).DevinReader({
         dbPath, devinHome: env.DEVIN_HOME, sessionId: session.sessionId, onEvents,
         // Devin has no StopFailure: a turn that dies on a provider error writes no assistant row and fires no Stop hook,
@@ -451,7 +451,7 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
     let abandoned = false
     let paneCheck = false
     if (keepsStore(session.engine)) {
-      const reader = stream.reader = storeReader(stream)
+      const reader = stream.reader = storeReader(stream, resume)
       // Opened again: what the store held is history, and only the turn's difference from the core's is said.
       const said = stream.outbox.length
       await reader.start()

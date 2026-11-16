@@ -923,7 +923,7 @@ describe('binding a running process to its session', () => {
       const seen = hermes({ cwd: '/data/work/p1' })
       await run.binding.bindObservedAgent(seen)
       expect(follow).toHaveBeenCalledExactlyOnceWith(entry, { ...seen, sandboxed: false },
-        { current: expect.any(Function), mayClaim: expect.any(Function), hold: expect.any(Function) })
+        { current: expect.any(Function), mayClaim: expect.any(Function), hold: expect.any(Function), refresh: false })
       expect(findLiveSession).not.toHaveBeenCalled()
       expect(run.deps.registry.register).toHaveBeenCalledWith(expect.objectContaining({ engine: 'hermes', sessionId: 'S', hermesHome: '/data/agents/a1/.hermes',
         cwd: '/data/work/p1', source: 'hermes-terminal', hookEvent: 'HermesTerminal', runtimes: seen.runtimes,

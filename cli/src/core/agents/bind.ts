@@ -526,7 +526,9 @@ export function createBinding({
         announceSession(agent)
         return
       }
-      const answer = await hermesTerminal.follow(agent, { ...observed, sandboxed: !!observed.sandbox }, { current, mayClaim, hold })
+      const refresh = !!agent.sessionId && !!agent.identityHold && OTHER_ENGINE_HOLDS.has(agent.identityHold)
+        && !followsLive(agent.sessionId)
+      const answer = await hermesTerminal.follow(agent, { ...observed, sandboxed: !!observed.sandbox }, { current, mayClaim, hold, refresh })
       if (answer === 'wait' || !current()) return
       if (answer !== 'none' && agent.sessionId) {
         // Stamping this same conversation would revoke recovery's pending open. Its reader owns the held cursor;

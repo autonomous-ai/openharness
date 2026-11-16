@@ -40,10 +40,16 @@ const cleanups: (() => Promise<void>)[] = []
 const { DatabaseSync } = process.getBuiltinModule('node:sqlite') as {
   DatabaseSync: new (path: string) => { exec(sql: string): void; prepare(sql: string): { run(...params: string[]): void }; close(): void }
 }
-function writeTurn(text: string): void {
+function writeTurn(text: string, completed = true): void {
   const db = new DatabaseSync(join(directory, 'state.db'))
   try {
     db.prepare('INSERT INTO messages(session_id, role, content) VALUES (?, ?, ?)').run(sessionId, 'user', text)
+    if (completed) db.prepare('INSERT INTO messages(session_id, role, content, finish_reason) VALUES (?, ?, ?, ?)').run(sessionId, 'assistant', 'fixture answer', 'stop')
+  } finally { db.close() }
+}
+function finishTurn(): void {
+  const db = new DatabaseSync(join(directory, 'state.db'))
+  try {
     db.prepare('INSERT INTO messages(session_id, role, content, finish_reason) VALUES (?, ?, ?, ?)').run(sessionId, 'assistant', 'fixture answer', 'stop')
   } finally { db.close() }
 }
@@ -66,7 +72,7 @@ afterEach(async () => {
   vi.restoreAllMocks(); vi.unstubAllEnvs(); rmSync(directory, { recursive: true, force: true })
 })
 
-function setup(boundary: 'terminal' | 'store' | 'open' | 'config' | 'none', pauseConfirmation = false, readerHolds = false) {
+function setup(boundary: 'terminal' | 'store' | 'open' | 'config' | 'none', pauseConfirmation = false, readerHolds = false, retryMs?: number) {
   registry.openProcessAgent({ engine: 'hermes', agentId, tmuxPane: '%41', cwd: directory, processIdentity: firstProcess })
   const saved = { ...registry.register({ engine: 'hermes', sessionId, tmuxPane: '%41', cwd: directory, processIdentity: firstProcess })!.entry }
   registry.removeAgent(agentId)
@@ -90,10 +96,12 @@ function setup(boundary: 'terminal' | 'store' | 'open' | 'config' | 'none', paus
   const events: LiveEvent[] = [], ended = deferred(), closed = new AbortController()
   const worker = createWorkerStreams({ dataDir: directory, watcher: { on: vi.fn(), addSession: vi.fn(), removeSession: vi.fn(), pollSession: vi.fn() } as never })
   const requests = otherStreamRequests({ streams: worker })
+  const openRequest = requests[STREAM_OPEN]
   const workerOpen = vi.spyOn(requests, STREAM_OPEN)
   const calls = new Set<Promise<Record<string, unknown>>>()
+  const log = vi.fn()
   const others = createOtherStreams({
-    bySession: id => registry.bySession(id), reattach: session => { void requestAttach(session, true) }, log: vi.fn(),
+    bySession: id => registry.bySession(id), reattach: session => { void requestAttach(session, true) }, log, retryMs,
     held: readerHolds ? (session, held, rewritten) => {
       const reasons: readonly string[] = Object.values(OTHER_ENGINE_STATES)
       const latest = registry.byAgent(session.agentId)
@@ -139,12 +147,13 @@ function setup(boundary: 'terminal' | 'store' | 'open' | 'config' | 'none', paus
   const requestAttach = vi.fn((...args: Parameters<typeof attach.attachSession>) => {
     const attempt = attach.attachSession(...args); attempts.push(attempt); return attempt
   })
+  const readRecord = vi.fn(async () => {
+      if (pauseConfirmation) { recordEntered.resolve(); await recordRelease.promise }
+      return { state: 'record' as const, sessionId, at: Date.now() }
+  })
   const hermesTerminal = createHermesTerminal({ platform: 'darwin', defaultHome: directory, registry,
     paneInfo: async () => ({ tty: '/dev/fixture' } as never), names: () => ['fixture-terminal'], stamp: async () => 'record-1',
-    read: async () => {
-      if (pauseConfirmation) { recordEntered.resolve(); await recordRelease.promise }
-      return { state: 'record', sessionId, at: Date.now() }
-    }, kind: async () => 'own', endedSince: async () => false,
+    read: readRecord, kind: async () => 'own', endedSince: async () => false,
     storeStamp: async () => 'store-1', recordSeen: vi.fn(), now: Date.now,
   })
   const send = vi.fn()
@@ -176,6 +185,7 @@ function setup(boundary: 'terminal' | 'store' | 'open' | 'config' | 'none', paus
     expect(events.filter(event => event.type === 'turn_ended')).toHaveLength(1)
   }
   return { resumed, attach, requestAttach, confirm, attempts, entered, release, recordEntered, recordRelease, others, locateStore, send, liveTurn, stoppedAgents, terminalGone, relaunchMarks, observed, workerOpen, forget,
+    events, readRecord, log, openRequest, pauseRecord: () => { pauseConfirmation = true },
     activeStreams: () => worker.all().length,
     disconnect: () => { others.disconnected(); worker.clear() },
     pauseOpen: () => { boundary = 'open'; suspended = false },
@@ -306,9 +316,14 @@ it.each(['disconnected', 'recovering'] as const)('leaves native confirmation to 
   await t.liveTurn()
 })
 
-it('replaces a given-up reader on native confirmation while its worker stays connected', async () => {
+it.each([false, true])('replaces a given-up reader on native confirmation while its worker stays connected (already confirmed: %s)', async confirmed => {
   const t = setup('none', false, true)
   expect(await t.requestAttach(t.resumed)).toBe(true)
+  if (confirmed) {
+    await t.confirm(); await t.confirm()
+    expect(registry.byAgent(agentId)?.lastHookAt).toBeGreaterThan(0)
+    expect(t.readRecord).toHaveBeenCalledTimes(1)
+  }
   t.disconnect()
   t.workerOpen.mockResolvedValueOnce({ version: STREAM_VERSION, error: 'ENGINE_TRANSCRIPT_TOO_LARGE' })
   t.others.connected()
@@ -324,12 +339,107 @@ it('replaces a given-up reader on native confirmation while its worker stays con
   expect(t.requestAttach).toHaveBeenCalledTimes(2)
   expect(t.workerOpen).toHaveBeenCalledTimes(3)
   expect(t.send).not.toHaveBeenCalled()
+  await t.confirm()
+  expect(t.workerOpen).toHaveBeenCalledTimes(3)
+  if (confirmed) expect(t.readRecord).toHaveBeenCalledTimes(2)
   await t.liveTurn()
+})
+
+it.each(['new', 'already working', 'completed offline'] as const)('reconciles only the current Hermes turn after worker loss: %s', async state => {
+  const t = setup('none', false, true)
+  if (state === 'already working') writeTurn('acknowledged working turn', false)
+  expect(await t.requestAttach(t.resumed)).toBe(true)
+  await t.confirm(); await t.confirm()
+  expect(t.events).toEqual([]) // Ordinary hydration is silent, including a currently open turn.
+  t.disconnect()
+  if (state === 'new') writeTurn('turn begun while worker was down', false)
+  if (state === 'completed offline') writeTurn('offline completed turn')
+  t.others.connected()
+  await vi.waitFor(() => expect(t.others.ready(sessionId)).toBe(true))
+  await t.others.drain(sessionId)
+  const started = state === 'new'
+    ? [{ type: 'turn_started', payload: { userMessage: 'turn begun while worker was down' } }]
+    : []
+  expect(t.events).toEqual(started)
+  // A second reconnect sees the acknowledged state; no event is repeated.
+  t.disconnect(); t.others.connected()
+  await vi.waitFor(() => expect(t.others.ready(sessionId)).toBe(true))
+  await t.others.drain(sessionId)
+  expect(t.events).toEqual(started)
+  expect(t.activeStreams()).toBe(1)
+  expect(t.send).not.toHaveBeenCalled()
+  if (state !== 'completed offline') {
+    finishTurn(); await t.others.drain(sessionId)
+    await vi.waitFor(() => expect(t.events.filter(event => event.type === 'turn_ended')).toHaveLength(1))
+    await t.others.drain(sessionId)
+    expect(t.events.filter(event => event.type === 'turn_ended')).toHaveLength(1)
+  }
+})
+
+it('rescues a confirmed Hermes after all five connected recovery retries are exhausted', async () => {
+  const t = setup('none', false, true, 1)
+  expect(await t.requestAttach(t.resumed)).toBe(true)
+  await t.confirm(); await t.confirm()
+  t.disconnect()
+  // The reconnect's first open and all five bounded retries answer unavailable.
+  for (let attempt = 0; attempt < 6; attempt++) t.workerOpen.mockResolvedValueOnce({ version: STREAM_VERSION, error: 'ENGINE_UNAVAILABLE' })
+  t.others.connected()
+  await vi.waitFor(() => expect(t.log).toHaveBeenCalledWith(expect.stringContaining('after 5 retries')))
+  await Promise.all(t.attempts)
+  expect(t.others.follows(sessionId)).toBe(false)
+  expect(t.activeStreams()).toBe(0)
+  await t.confirm(); await Promise.all(t.attempts)
+  expect(t.others.ready(sessionId)).toBe(true)
+  expect(t.activeStreams()).toBe(1)
+  expect(registry.byAgent(agentId)?.identityHold).toBeUndefined()
+  expect(t.readRecord).toHaveBeenCalledTimes(2)
+  await t.liveTurn()
+})
+
+it('refuses a stale native record while rescuing an already confirmed Hermes reader', async () => {
+  const t = setup('none', false, true)
+  expect(await t.requestAttach(t.resumed)).toBe(true)
+  await t.confirm(); await t.confirm()
+  t.disconnect()
+  t.workerOpen.mockResolvedValueOnce({ version: STREAM_VERSION, error: 'ENGINE_TRANSCRIPT_TOO_LARGE' })
+  t.others.connected()
+  await vi.waitFor(() => expect(t.others.follows(sessionId)).toBe(false))
+  t.pauseRecord()
+  const confirmation = t.confirm()
+  await t.recordEntered.promise
+  registry.updateProcessIdentity(agentId, { ...nextProcess, startMarker: 'replacement-process' })
+  t.recordRelease.resolve(); await confirmation
+  expect(t.activeStreams()).toBe(0)
+  expect(t.others.ready(sessionId)).toBe(false)
+  expect(t.requestAttach).toHaveBeenCalledTimes(1)
+  expect(registry.byAgent(agentId)?.identityHold).toBe(OTHER_ENGINE_STATES.unavailable)
+})
+
+it('discards a recovered current-turn snapshot when its owner leaves before the reader reply', async () => {
+  const t = setup('none', false, true)
+  expect(await t.requestAttach(t.resumed)).toBe(true)
+  await t.confirm(); await t.confirm()
+  t.disconnect(); writeTurn('new turn for the former owner', false)
+  const entered = deferred(), release = deferred()
+  t.workerOpen.mockImplementationOnce(async (...args) => {
+    const result = await t.openRequest(...args)
+    entered.resolve(); await release.promise
+    return result
+  })
+  t.others.connected(); await entered.promise
+  t.forget(sessionId); registry.removeAgent(agentId)
+  release.resolve()
+  await t.workerOpen.mock.results[1].value
+  await vi.waitFor(() => expect(t.activeStreams()).toBe(0))
+  expect(t.events).toEqual([])
+  expect(t.others.ready(sessionId)).toBe(false)
+  expect(t.requestAttach).toHaveBeenCalledTimes(1)
 })
 
 it('does not release unrelated identity evidence when a confirmed reader has given up', async () => {
   const t = setup('none', false, true)
   expect(await t.requestAttach(t.resumed)).toBe(true)
+  await t.confirm(); await t.confirm()
   t.disconnect()
   t.workerOpen.mockResolvedValueOnce({ version: STREAM_VERSION, error: 'ENGINE_TRANSCRIPT_TOO_LARGE' })
   t.others.connected()

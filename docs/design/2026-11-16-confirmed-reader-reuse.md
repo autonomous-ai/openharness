@@ -107,3 +107,63 @@ events, whereas the store worker's resume branch looks for a hydrated `turn_star
 while it was down. Thus no start was emitted for a user row inserted during the outage. This integration does
 not change Hermes hydration or claim that behavior passes. Recovery controls require the existing stream to
 remain its sole owner and a subsequent live turn to arrive exactly once. No native benchmark was rerun.
+
+## Confirmed Hermes recovery and an outage's current turn
+
+Independent review found two remaining caller gaps. A confirmed Hermes terminal record settles to `wait`, so
+discovery cannot rescue its fileless reader after connected recovery gives up. A new Hermes reader also seeds
+silently, so the worker's existing resume reconciliation has no start event for a turn begun during its outage.
+
+Before runtime changes, extend the real registry/attachment/terminal-follower/worker/private-SQLite caller.
+Confirm and settle the native record before losing its reader, then require fresh record evidence to restore
+exactly one reader. An unrelated hold, changed owner or stale native reply must not authorize this recovery.
+Exercise an idle-to-working outage, an already acknowledged working turn, turns completed while offline,
+ordinary startup, repeated reconnect and owner loss; only a newly open current turn may be announced.
+
+The binding pass asks the existing terminal follower to refresh only a reader-owned hold with no recovery owner.
+That refresh reads the record even when its stamp is unchanged, and the captured row/process authority still
+fences its answer. Healthy passes retain their cached `wait`; unrelated holds are never released. The worker
+passes its existing resume turn state to the Hermes reader. Hydration keeps only the last start event while
+folding, emits it only if the acknowledged turn was closed and the current turn is open, and emits no historical
+text, tools or completed turns. Ordinary hydration remains silent. The worker's existing resume filtering and
+serial acknowledgements still own immediate delivery and duplicate suppression; delayed initial seeding uses
+the same one-time reconciliation when the store next answers.
+
+- Growth/read cost: no persisted records, timers, queues or extra store query. At most one already-bounded start
+  event is held during the existing fold; one fresh terminal-record read occurs only for abandoned recovery.
+- Concurrency/identity: existing captured process, row and stream generation checks remain authoritative; recovery
+  readiness and ownership remain separate. A changed owner cannot receive the former owner's events or hold release.
+- Scale: existing session, reader, query-page and outbox bounds remain. Matched healthy-path cost and failure
+  acceptance are required for the final integrated source; source size alone establishes no performance result.
+- Compatibility/migration/rollback: no backend/client/wire/schema change and no migration. Reverting restores the
+  two liveness gaps without changing saved sessions. The current resume turn state already exists in worker IPC.
+- Audience/failure: no new access, logging content or telemetry. Existing visible reader holds, bounded retry
+  failures and stale-identity refusal remain; no new discovery timer or automatic retry loop is introduced.
+- Platforms: shared TypeScript worker; Hermes native terminal-record discovery on macOS/Linux, existing hooks on
+  Windows. No process-launch changes. Local evidence below names macOS; native/platform/performance gates remain.
+
+The real-caller RED on `d20bb1ed` recorded three failures and three passing controls (40.98 s,
+`/tmp/hermes-recovery-gaps-red.log`): already-confirmed recovery never became ready, a newly open outage turn
+emitted no start, and the stale-record rescue control never entered a fresh record read. After the correction,
+all 32 then-selected caller cases passed (21.59 s, `/tmp/hermes-recovery-gaps-green1.log`).
+
+An additional history control caught a first-draft mistake: retaining the most recent start without forgetting
+its subsequent end could resurrect a completed prompt before an empty user row. The delayed-seed control passed
+and that history control failed before the correction (496 ms,
+`/tmp/hermes-recovery-history-control-red.log`). Retention now follows the last start/end boundary; only an
+unclosed current start is eligible. The expanded reader controls pass, including a transient initial read and
+exactly-once delivery when the seed later succeeds.
+
+The five-file expansion recorded 269 passes and two fixture failures (60.40 s,
+`/tmp/hermes-recovery-gaps-focused.log`): an exact binding-dependency assertion omitted `refresh: false`, and the
+owner-loss barrier tried to obtain a forwarding spy's original handler through `getMockImplementation()`, which
+was undefined. The fixture now captures the actual handler before spying. The unchanged reader and worker
+selections contribute 58 passes. The final three core test files pass 213 cases in 24.60 s with 100% statements,
+branches, functions and lines for each changed core module (`bind.ts`, `hermesTerminal.ts`), including the actual
+five-retry exhaustion and owner loss after SQLite hydration but before the worker reply. These selected runs
+cover 271 passing cases in five files; the earlier failed expansion is not relabeled as an uninterrupted pass.
+
+Final logs are `/tmp/hermes-recovery-gaps-core-coverage.log` and
+`/tmp/hermes-recovery-gaps-types-final.log` (TypeScript passes). Execution is macOS with Node 24.22.2 and isolated
+private SQLite stores. No broad gate, native daemon matrix, performance comparison, Linux or signed Windows run
+was performed for this correction. Those acceptances remain required on the final integrated source.
