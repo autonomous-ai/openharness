@@ -28,6 +28,9 @@ export interface HerdrAppDeps extends OrcaDeps {
   inFront(): boolean
   /** Whether Herdr's window shows that terminal: the hc source lists it (hcSource.ts shows). */
   shows(address: string): boolean
+  /** The devices follow the default hc session, the one session whose addresses the hook sends (notify.mjs): another
+   *  session counts its terminals from t1 again, where a hook's address is another agent's. None: no hook's is taken. */
+  hookIds?: boolean
   log(line: string): void
   /** The raw `HARNESS_OPEN_BIN`: an absolute path is the `open` run instead of `OPEN`. */
   bin?: string
@@ -90,7 +93,7 @@ export function createHerdrAppAdapter(deps: HerdrAppDeps): HerdrAppAdapter {
     tap: 'instead',
     // A hint's address is Herdr's only in hc's own terminal, never in a program started from it.
     paneOf(place: Place): Pane | undefined {
-      if (!mac || place.host !== 'herdr' || !inHerdr(place.hints)) return undefined
+      if (!mac || deps.hookIds !== true || place.host !== 'herdr' || !inHerdr(place.hints)) return undefined
       return { adapter: 'herdr-app', id: place.hints.HC_TERMINAL_ID }
     },
     // Every hc terminal has HC_TERMINAL_ID, hidden `hc run` workers too, and the window shows those not.
