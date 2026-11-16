@@ -22,11 +22,13 @@ interface Call { file: string; args: string[]; timeoutMs: number }
 /** herdr's socket, which no tap asks: a tap is `herdr agent focus`. */
 const herdrClient = { prompt: vi.fn(), socketStamp: vi.fn() }
 
-/** What a test may set: the runner and the binaries it finds, Orca's switch, the log and the opener's `open`. */
+/** What a test may set: the runner and the binaries it finds, Orca's switch, the log, the opener's `open` and whether
+ *  Herdr.app's window is herdr's ring's. */
 interface Over extends OrcaDeps {
   orcaSwitch(handle: string): Promise<boolean>
   log(line: string): void
   bin?: string
+  herdrApp?(): boolean
 }
 
 /** A recording runner that runs nothing, so no spec brings the developer's own apps forward: each call answers the next
@@ -57,7 +59,8 @@ function recorder(over: Partial<Over> = {}, codes: Array<number | null> = [], mo
     createTabsAdapter({ isOpen: () => false, select: () => false }),
     ...more,
   ]
-  return { calls, switched, logs, claude, opener: createOpenActions({ run: deps.run, platform: deps.platform, adapters, log: deps.log, bin: deps.bin }) }
+  const opener = createOpenActions({ run: deps.run, platform: deps.platform, adapters, log: deps.log, bin: deps.bin, herdrApp: deps.herdrApp })
+  return { calls, switched, logs, claude, opener }
 }
 
 /** The adapters whose pane a tap takes, in the order the observed source keeps them: each reads the hints alone. */
@@ -533,6 +536,16 @@ describe('a pick on the dial brings its app forward', () => {
       expect(await opener.bring!(app), app).toBeUndefined()
     }
     expect(calls).toEqual([])
+  })
+
+  // herdr's ring holds Herdr.app's agents too (docs/plans/2026-11-16-herdr-app-design.md): their window is Herdr's.
+  it('bring of herdr runs open -b dev.herdr.app while Herdr.app is the ring\'s window, asked at each pick', async () => {
+    let herdrApp = true
+    const { calls, opener } = recorder({ herdrApp: () => herdrApp })
+    expect(await opener.bring!('herdr')).toBe('ok')
+    herdrApp = false
+    expect(await opener.bring!('herdr')).toBeUndefined()
+    expect(calls).toEqual([forward('dev.herdr.app')])
   })
 
   it('bring answers failed on exit 1, on a timeout (code null) and on a run that rejects, and runs once', async () => {
