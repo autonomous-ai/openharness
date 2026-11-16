@@ -126,8 +126,9 @@ const STANDBY = '{"type":"tabs","standby":true}'
 const REPLACED = '{"replaced":true}'
 const TAB: Tab = { app: 'terminal-app', tty: '/dev/ttys023' }
 
-/** A stream handler that keeps every stream it is handed. `answer` is what its open answers, or throws. */
-function streamHandler(answer: (message: Record<string, unknown>) => typeof REFUSED | void = () => {}, perSecond = 10) {
+/** A stream handler that keeps every stream it is handed. `answer` is what its open answers, or throws, handed the
+ *  stream too. */
+function streamHandler(answer: (message: Record<string, unknown>, stream: ListenerStream) => typeof REFUSED | void = () => {}, perSecond = 10) {
   const opened: ListenerStream[] = []
   const waiters: (() => void)[] = []
   const handler: ListenerStreamHandler = {
@@ -135,7 +136,7 @@ function streamHandler(answer: (message: Record<string, unknown>) => typeof REFU
     open: (message, stream) => {
       opened.push(stream)
       for (const each of waiters.splice(0)) each()
-      return answer(message)
+      return answer(message, stream)
     },
   }
   /** Once `count` streams have been handed out. */
@@ -821,6 +822,163 @@ describe.skipIf(process.platform === 'win32')('the devices listener', () => {
       expect(await kept.got(1)).toEqual(['{"n":2}'])
       vi.advanceTimersByTime(MINUTE)
       expect(lines.at(-1)).toBe('[devices] listener in the last minute: 0 unknown, 0 oversized, 0 over rate, 1 refused, 1 failed')
+    })
+
+    it('a writable listener runs once the stream has opened, and a line it writes is the stream\'s first line', async () => {
+      const early: boolean[] = []
+      const live = streamHandler((_message, stream) => {
+        // Inside open the stream takes no line yet.
+        early.push(stream.write({ early: true }))
+        let runs = 0
+        stream.onWritable(() => { if (runs++ === 0) stream.write({ first: true }) })
+      })
+      const { path } = await open({ live: live.handler })
+      const client = await asked(path, LIVE)
+      expect(client.status).toBe(200)
+      expect(await client.got(1)).toEqual(['{"first":true}'])
+      expect(early).toEqual([false])
+    })
+
+    it('the writable listener runs again each time a line has drained, and not while one waits', async () => {
+      let runs = 0
+      const live = streamHandler((_message, stream) => stream.onWritable(() => { runs++ }))
+      const { path } = await open({ live: live.handler })
+      const client = await asked(path, LIVE)
+      expect(runs).toBe(1)
+      const [stream] = live.opened
+      expect(stream!.write({ n: 1 })).toBe(true)
+      expect(stream!.write({ n: 2 })).toBe(false)
+      expect(runs).toBe(1)
+      await client.got(1)
+      await vi.waitFor(() => expect(runs).toBe(2))
+      expect(stream!.write({ n: 3 })).toBe(true)
+      expect(await client.got(2)).toEqual(['{"n":1}', '{"n":3}'])
+      await vi.waitFor(() => expect(runs).toBe(3))
+    })
+
+    it('a later onWritable replaces the listener', async () => {
+      const calls: string[] = []
+      const live = streamHandler((_message, stream) => {
+        stream.onWritable(() => calls.push('first'))
+        stream.onWritable(() => calls.push('second'))
+      })
+      const { path } = await open({ live: live.handler })
+      const client = await asked(path, LIVE)
+      expect(calls).toEqual(['second'])
+      const [stream] = live.opened
+      stream!.onWritable(() => calls.push('third'))
+      expect(stream!.write({ n: 1 })).toBe(true)
+      await client.got(1)
+      await vi.waitFor(() => expect(calls).toEqual(['second', 'third']))
+    })
+
+    it('no writable call comes after the stream ended', async () => {
+      let runs = 0
+      const live = streamHandler((_message, stream) => stream.onWritable(() => { runs++ }))
+      const { path } = await open({ live: live.handler })
+      const stopped = bare(path, post(LIVE))
+      stopped.socket.pause()
+      await live.handed(1)
+      const [stream] = live.opened
+      expect(runs).toBe(1)
+      // The client closes while a line waits: the line's callback comes with an error, not as a drain.
+      expect(stream!.write(UNDRAINABLE)).toBe(true)
+      stopped.socket.destroy()
+      await endOf(stream!)
+      await stopped.read
+      expect(runs).toBe(1)
+      stream!.onWritable(() => { runs++ })
+      expect(stream!.write({ n: 1 })).toBe(false)
+      expect(runs).toBe(1)
+    })
+
+    it('a writable listener that throws ends the stream as closed, counted failed, and the next message is taken', async () => {
+      const fronts: string[] = []
+      // One throws as its stream opens, the other once its first line has drained, inside the socket's callback.
+      const opening = streamHandler((_message, stream) => stream.onWritable(() => { throw new Error('secret-9b1d') }))
+      const draining = streamHandler((_message, stream) => {
+        let runs = 0
+        stream.onWritable(() => {
+          if (runs++ > 0) throw new Error('secret-9b1d')
+          stream.write({ n: 1 })
+        })
+      })
+      const { path, lines } = await open({ front: frontHandler((app) => fronts.push(app)), live: opening.handler, other: draining.handler })
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+
+      const thrown = bare(path, post(LIVE))
+      expect(await thrown.read).toMatch(/^HTTP\/1\.1 200 /)
+      expect(opening.opened[0]!.ended.reason).toBe('closed')
+      expect((await connection(path).front('vscode')).status).toBe(204)
+      vi.advanceTimersByTime(MINUTE)
+      expect(lines.at(-1)).toBe('[devices] listener in the last minute: 0 unknown, 0 oversized, 0 over rate, 0 refused, 1 failed')
+
+      const drained = bare(path, post('{"type":"other"}'))
+      expect(await drained.read).toContain('{"n":1}')
+      expect(draining.opened[0]!.ended.reason).toBe('closed')
+      expect((await connection(path).front('ghostty')).status).toBe(204)
+      vi.advanceTimersByTime(MINUTE)
+      expect(lines.at(-1)).toBe('[devices] listener in the last minute: 0 unknown, 0 oversized, 0 over rate, 0 refused, 1 failed')
+      expect(fronts).toEqual(['vscode', 'ghostty'])
+      expect(lines.join('\n')).not.toContain('secret-9b1d')
+    })
+
+    it('ended says why', async () => {
+      const live = streamHandler()
+      const { path, listener } = await open({ front: frontHandler(() => {}), live: live.handler })
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      const reasons = (): unknown[] => live.opened.map(({ ended }) => ended.reason)
+
+      // gone: the client closes, its socket errors, or a second message on its connection closes it.
+      const client = await asked(path, LIVE)
+      client.close()
+      await endOf(live.opened[0]!)
+      const broken = bare(path, post(LIVE))
+      await live.handed(2)
+      broken.socket.write('NOT HTTP\r\n\r\n')
+      await endOf(live.opened[1]!)
+      const twice = bare(path, post(LIVE))
+      await live.handed(3)
+      twice.socket.write(post(frontBody('ghostty')))
+      await endOf(live.opened[2]!)
+      await Promise.all([broken.read, twice.read])
+      expect(reasons()).toEqual(['gone', 'gone', 'gone'])
+
+      // stalled: a line not drained in 2 s. Its connection closing after is not a second reason.
+      const stopped = bare(path, post(LIVE))
+      stopped.socket.pause()
+      await live.handed(4)
+      expect(live.opened[3]!.write(UNDRAINABLE)).toBe(true)
+      vi.advanceTimersByTime(2_000)
+      stopped.socket.resume()
+      await stopped.read
+      expect(live.opened[3]!.ended.reason).toBe('stalled')
+
+      // replaced: a newer stream of its type.
+      const older = await asked(path, LIVE)
+      const newer = await asked(path, LIVE)
+      await older.closed
+      expect(live.opened[4]!.ended.reason).toBe('replaced')
+
+      // closed: the listener closes.
+      await listener!.close()
+      await newer.closed
+      expect(reasons()).toEqual(['gone', 'gone', 'gone', 'stalled', 'replaced', 'closed'])
+    })
+
+    it('a stream whose open refused or threw is aborted as closed', async () => {
+      let runs = 0
+      const live = streamHandler((message, stream) => {
+        stream.onWritable(() => { runs++ })
+        if (message.boom) throw new Error('secret-9b1d')
+        return REFUSED
+      })
+      const { path } = await open({ live: live.handler })
+      const sender = connection(path)
+      expect((await sender.send('{"type":"live","bad":1}')).status).toBe(400)
+      expect((await sender.send('{"type":"live","boom":1}')).status).toBe(500)
+      expect(live.opened.map(({ ended }) => [ended.aborted, ended.reason])).toEqual([[true, 'closed'], [true, 'closed']])
+      expect(runs).toBe(0)
     })
   })
 
