@@ -492,7 +492,7 @@ describe('the dial stream, for Orca\'s Harness Device plugin (docs/specs/2026-11
     expect(said()).toEqual([
       '[devices] dial stream · open',
       '[devices] dial stream · ended · gone',
-      '[devices] dial stream · 2 lines in the last minute',
+      '[devices] dial stream · lines in the last minute: 2',
     ])
   })
 

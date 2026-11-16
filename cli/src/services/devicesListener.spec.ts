@@ -1559,7 +1559,7 @@ describe('the dial stream', () => {
       await client.got(3)
       expect(timers).toHaveLength(1)
       timers[0]!.run()
-      expect(logged.at(-1)).toBe('[devices] dial stream · 3 lines in the last minute')
+      expect(logged.at(-1)).toBe('[devices] dial stream · lines in the last minute: 3')
       // A minute with no line sets no timer, so it logs nothing.
       expect(timers).toHaveLength(1)
 
@@ -1567,7 +1567,7 @@ describe('the dial stream', () => {
       await client.got(4)
       expect(timers.map(({ ms }) => ms)).toEqual([60_000, 60_000])
       timers[1]!.run()
-      expect(logged.at(-1)).toBe('[devices] dial stream · 1 lines in the last minute')
+      expect(logged.at(-1)).toBe('[devices] dial stream · lines in the last minute: 1')
     })
 
     it('no log line holds a name or an app', async () => {
