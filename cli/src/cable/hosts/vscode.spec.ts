@@ -54,6 +54,19 @@ describe('the VS Code adapter', () => {
     }
   })
 
+  // The end-to-end harness points HARNESS_OPEN_BIN at a fake that opens nothing (e2e/harness/daemon.ts), as open.ts
+  // takes it.
+  it.each([
+    ['/tmp/e2e/fake-open', '/tmp/e2e/fake-open'],
+    ['', OPEN],
+    ['fake-open', OPEN],
+    [undefined, OPEN],
+  ])('HARNESS_OPEN_BIN %j: an absolute path is the open a tap runs; empty, relative and none run /usr/bin/open', async (bin, file) => {
+    const { calls, adapter } = recorder({ bin })
+    expect(await adapter.focus({ adapter: 'vscode', id: UUID })).toBe(true)
+    expect(calls).toEqual([run(file, `vscode://anthropic.claude-code/open?session=${UUID}`)])
+  })
+
   it('a pane id not in its form runs nothing', async () => {
     const { calls, adapter } = recorder()
     for (const id of ['sess-1', UUID.toUpperCase(), `${UUID}&x=y`, `${UUID}/..`, `local_${UUID}`, '', '--args']) {

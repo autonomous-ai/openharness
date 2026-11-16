@@ -124,6 +124,20 @@ describe('the Codex app adapter', () => {
       expect(logs).toEqual([FALLBACK])
     }
   })
+
+  // The end-to-end harness points HARNESS_OPEN_BIN at a fake that opens nothing (e2e/harness/daemon.ts), as open.ts
+  // takes it.
+  it.each([
+    ['/tmp/e2e/fake-open', '/tmp/e2e/fake-open'],
+    ['', '/usr/bin/open'],
+    ['fake-open', '/usr/bin/open'],
+    [undefined, '/usr/bin/open'],
+  ])('HARNESS_OPEN_BIN %j: an absolute path is the open a tap, its fallback and a rest run; empty, relative and none run /usr/bin/open', async (bin, file) => {
+    const { calls, adapter } = recorder({ bin }, [1])
+    expect(await adapter.focus(pane(THREAD))).toBe(true)
+    expect(await adapter.show(pane(THREAD), 'a1')).toBe('ok')
+    expect(calls).toEqual([{ ...link, file }, { ...forward, file }, { ...link, file }])
+  })
 })
 
 describe('a rest on a Codex app session', () => {
