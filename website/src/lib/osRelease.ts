@@ -38,12 +38,16 @@ export function latestOSRelease(releases: unknown[]): string {
 export async function fetchLatestOSRelease(): Promise<string> {
   const releases: unknown[] = [];
   const signal = AbortSignal.timeout(15_000);
+  // CI shares runner IPs that exhaust GitHub's unauthenticated limit; it passes
+  // a token here. Production sets none and stays unauthenticated.
+  const token = process.env.GITHUB_TOKEN;
+  const headers: Record<string, string> = { Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" };
+  if (token) headers.Authorization = `Bearer ${token}`;
   // The monorepo publishes several products. Read every page so frequent app
   // releases cannot push the OS out of the result, with a bounded failure path.
   for (let page = 1; page <= 20; page++) {
     const response = await fetch(`${api}?per_page=100&page=${page}`, {
-      headers: { Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" },
-      cache: "no-store", signal,
+      headers, cache: "no-store", signal,
     });
     if (!response.ok) throw new Error(`Release lookup failed (${response.status})`);
     const data: unknown = await response.json();
