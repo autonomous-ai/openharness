@@ -198,9 +198,9 @@ vi.mock('../cable/hosts/lastAnswer.js', async (real) => ({
 }))
 // The watch on the folder herdr's socket lives in: recorded, with its stops, so no spec watches this machine's folders.
 const watched = vi.hoisted(() => ({ calls: [] as unknown[][], stopped: 0 }))
-vi.mock('../cable/hosts/herdrClient.js', async (real) => ({
-  ...await real<typeof import('../cable/hosts/herdrClient.js')>(),
-  watchHerdrSocket: (deps: unknown, changed: () => void) => {
+vi.mock('../cable/hosts/unixSocket.js', async (real) => ({
+  ...await real<typeof import('../cable/hosts/unixSocket.js')>(),
+  watchSocket: (deps: unknown, changed: () => void) => {
     watched.calls.push([deps, changed])
     return () => { watched.stopped++ }
   },
