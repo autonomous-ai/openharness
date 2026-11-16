@@ -50,6 +50,12 @@ pub fn menu(state: &AppState) -> Vec<MenuItem> {
         ]),
         None => {}
     }
+    // The check is what the dial reports; the item carries the action its click does.
+    match sound_muted(state) {
+        Some(false) => items.push(MenuItem::Check(MenuAction::SoundOff, "Sound".into(), true)),
+        Some(true) => items.push(MenuItem::Check(MenuAction::SoundOn, "Sound".into(), false)),
+        None => {}
+    }
     items.push(MenuItem::Separator);
     if state.desktop_installed {
         items.push(MenuItem::Action(MenuAction::OpenHarness, "Open Harness".into()));
@@ -72,14 +78,25 @@ pub fn due(state: &AppState) -> Option<Screen> {
 
 /// The menu as one log line: its labels joined by ` | `, without separators.
 pub fn menu_log(items: &[MenuItem]) -> String {
-    let labels: Vec<&str> = items
+    let labels: Vec<String> = items
         .iter()
         .filter_map(|item| match item {
-            MenuItem::Text(label) | MenuItem::Action(_, label) => Some(label.as_str()),
+            MenuItem::Text(label) | MenuItem::Action(_, label) | MenuItem::Check(_, label, false) => {
+                Some(label.clone())
+            }
+            MenuItem::Check(_, label, true) => Some(format!("{label} ✓")),
             MenuItem::Separator => None,
         })
         .collect();
     labels.join(" | ")
+}
+
+/// The dial's sound, when there is one to change: an attached dial, not updating, on a running Harness.
+fn sound_muted(state: &AppState) -> Option<bool> {
+    if state.cli != CliState::Found || state.daemon != Daemon::Up {
+        return None;
+    }
+    state.dial.as_ref().filter(|dial| dial.attached && dial.updating.is_none()).and_then(|dial| dial.muted)
 }
 
 /// Claude Code can be turned on or off here.
@@ -91,10 +108,22 @@ fn available(claude: &ClaudeStatus) -> bool {
 mod tests {
     use super::*;
     use crate::types::{AppState, ClaudeStatus, CliState, Daemon, DialStatus, MenuAction, MenuItem, Saved, Screen};
-    use MenuItem::{Action, Separator, Text};
+    use MenuItem::{Action, Check, Separator, Text};
 
     fn dial(attached: bool, fw: Option<&str>) -> DialStatus {
-        DialStatus { attached, fw: fw.map(Into::into), hw: None, board: None, updating: None, problem: None }
+        DialStatus {
+            attached,
+            fw: fw.map(Into::into),
+            hw: None,
+            board: None,
+            updating: None,
+            problem: None,
+            muted: None,
+        }
+    }
+
+    fn sound(muted: Option<bool>) -> DialStatus {
+        DialStatus { muted, ..dial(true, Some("0.0.95")) }
     }
 
     fn state() -> AppState {
@@ -212,6 +241,48 @@ mod tests {
     }
 
     #[test]
+    fn the_sound_row() {
+        let on = Check(MenuAction::SoundOff, "Sound".into(), true);
+        let off = Check(MenuAction::SoundOn, "Sound".into(), false);
+        assert_eq!(
+            menu(&AppState { dial: Some(sound(Some(false))), ..state() }),
+            vec![
+                text("Dial connected · 0.0.95"),
+                text("Signed in"),
+                text("Claude Code: On"),
+                act(MenuAction::ClaudeOff, "Turn off"),
+                on.clone(),
+                Separator,
+                act(MenuAction::OpenHarness, "Open Harness"),
+                act(MenuAction::Quit, "Quit"),
+            ]
+        );
+        assert_eq!(menu(&AppState { dial: Some(sound(Some(true))), ..state() })[4], off);
+        let alone = AppState { dial: Some(sound(Some(false))), signed_in: None, claude: None, ..state() };
+        assert_eq!(menu(&alone)[1], on);
+    }
+
+    #[test]
+    fn the_sound_row_is_absent_when_there_is_nothing_to_change() {
+        let unmuted = || Some(sound(Some(false)));
+        let mut absent = vec![
+            AppState { dial: None, ..state() },
+            AppState { dial: Some(sound(None)), ..state() },
+            AppState { dial: Some(DialStatus { attached: false, ..sound(Some(false)) }), ..state() },
+            AppState { dial: Some(DialStatus { updating: Some("0.0.96".into()), ..sound(Some(false)) }), ..state() },
+        ];
+        for daemon in [Daemon::Starting, Daemon::Stopped, Daemon::Updating] {
+            absent.push(AppState { daemon, dial: unmuted(), ..state() });
+        }
+        for cli in [CliState::Removed, CliState::Installing, CliState::InstallFailed] {
+            absent.push(AppState { cli, dial: unmuted(), ..state() });
+        }
+        for state in absent {
+            assert!(!menu(&state).iter().any(|item| matches!(item, Check(..))), "{state:?}");
+        }
+    }
+
+    #[test]
     fn open_harness_needs_the_desktop_app() {
         let items = menu(&AppState { desktop_installed: false, ..state() });
         assert_eq!(items[items.len() - 2..], [Separator, act(MenuAction::Quit, "Quit")]);
@@ -269,6 +340,14 @@ mod tests {
         assert_eq!(
             menu_log(&menu(&state())),
             "Dial connected · 0.0.95 | Signed in | Claude Code: On | Turn off | Open Harness | Quit"
+        );
+        assert_eq!(
+            menu_log(&menu(&AppState { dial: Some(sound(Some(false))), ..state() })),
+            "Dial connected · 0.0.95 | Signed in | Claude Code: On | Turn off | Sound ✓ | Open Harness | Quit"
+        );
+        assert_eq!(
+            menu_log(&menu(&AppState { dial: Some(sound(Some(true))), ..state() })),
+            "Dial connected · 0.0.95 | Signed in | Claude Code: On | Turn off | Sound | Open Harness | Quit"
         );
     }
 }

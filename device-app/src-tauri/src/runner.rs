@@ -208,6 +208,13 @@ impl Runner {
                     Event::ClaudeSet(result)
                 });
             }
+            // On the caller's thread: one short write, to the watch running now. With none the change has nowhere to
+            // go, and the dial's next status shows it was not made.
+            Effect::SetSound(on) => {
+                if let Some(watch) = &*shared.watch.lock().unwrap() {
+                    watch.sound(on);
+                }
+            }
             Effect::OpenUrl(url) => shared.open(&[&url], "browser"),
             Effect::OpenDesktop => shared.open(&desktop::open_desktop_args(), "desktop app"),
             // On the caller's thread: one ServiceManagement call, once at start.
@@ -731,11 +738,27 @@ mod tests {
     }
 
     fn no_dial() -> Event {
-        Event::WatchLine(DialStatus { attached: false, fw: None, hw: None, board: None, updating: None, problem: None })
+        Event::WatchLine(DialStatus {
+            attached: false,
+            fw: None,
+            hw: None,
+            board: None,
+            updating: None,
+            problem: None,
+            muted: None,
+        })
     }
 
     fn a_dial() -> Event {
-        Event::WatchLine(DialStatus { attached: true, fw: None, hw: None, board: None, updating: None, problem: None })
+        Event::WatchLine(DialStatus {
+            attached: true,
+            fw: None,
+            hw: None,
+            board: None,
+            updating: None,
+            problem: None,
+            muted: None,
+        })
     }
 
     fn tab(tty: &str) -> String {
@@ -905,6 +928,7 @@ mod tests {
             Effect::RunLogin,
             Effect::CancelLogin,
             Effect::SetClaude(true),
+            Effect::SetSound(true),
             Effect::OpenUrl("https://id.example/a".into()),
             Effect::OpenDesktop,
             Effect::RegisterLoginItem,
@@ -947,6 +971,26 @@ mod tests {
         fronts.tell("");
         assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
         assert_eq!(w.fake.stdin(), [GHOSTTY_LINE, VSCODE_LINE, r#"{"front":""}"#]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_sound_change_is_written_to_the_watch() {
+        let (off, on) = (r#"{"muted":true}"#, r#"{"muted":false}"#);
+        let w = world();
+        assert!(w.runner.find_cli());
+        w.fake.script("hardware watch --json", &RECORDING);
+        assert_eq!(w.answer(Effect::SpawnWatch), no_dial());
+        assert_eq!(w.runner.run(Effect::SetSound(false)), None);
+        assert_eq!(w.runner.run(Effect::SetSound(true)), None);
+        assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
+        assert_eq!(w.fake.stdin(), [off, on]);
+        // With no watch running there is nothing to write to.
+        assert_eq!(w.runner.run(Effect::SetSound(false)), None);
+        assert_eq!(w.fake.stdin(), [off, on]);
+        let lines = w.fake.log().lines();
+        assert!(lines.iter().all(|line| !line.contains("muted")), "{lines:?}");
+        assert_eq!(w.rest(), []);
     }
 
     #[cfg(unix)]

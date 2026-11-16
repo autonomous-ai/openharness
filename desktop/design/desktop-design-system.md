@@ -724,6 +724,8 @@ theme: the app runs from macOS 13, older than WebKit's `color-mix()`.
   desktop's dialogs. The spinner stands still under Reduce Motion.
 - The menu-bar icon is Lucide `circle-dot`, a template image
   (`device-app/src-tauri/icons/tray.png`): black on a light bar, white on a dark one.
+- An on/off setting in the menu is one native check item: one row, its state in
+  the check, a label that never changes. Sound is the first.
 
 The [gallery](../../device-app/ui/gallery.html) shows every screen in every
 state, light and dark, the primary button focused, and the menu-bar icon on

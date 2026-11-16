@@ -91,9 +91,14 @@ export function otherStreamRequests(deps: OtherStreamRequestDeps): ServiceReques
         || (session.pid !== undefined && !(Number.isSafeInteger(session.pid) && (session.pid as number) >= 0))) return failure('ENGINE_INVALID_REQUEST')
       try {
         if (session.engine === 'hermes') {
-          const { findHermesHomeForSession } = await import('../hermes/home.js')
-          const home = session.hermesHome as string | undefined || await findHermesHomeForSession(session.sessionId) || env.HERMES_HOME
-          return answer({ store: hermesDbPath(home), home })
+          const { findHermesHomeForSession, sameHermesHome } = await import('../hermes/home.js')
+          if (session.hermesHome) return answer({ store: hermesDbPath(session.hermesHome as string) })
+          // `hermesHome: null` means the default home on every Hermes path. #4342 moved this lookup here and answered the
+          // default home too, so the core recorded it on an attach during a stop and the stop's identity check refused the
+          // Close (#4361). Only a profile home the row did not know is news to the core.
+          const found = await findHermesHomeForSession(session.sessionId)
+          const store = hermesDbPath(found ?? env.HERMES_HOME)
+          return answer(found && !sameHermesHome(found, env.HERMES_HOME) ? { store, home: found } : { store })
         }
         return answer({ store: await openclawSessionDb(session.sessionId, { pid: session.pid as number ?? 0, stateDir: session.openclawStateDir as string | null | undefined }) })
       } catch {
