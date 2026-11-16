@@ -151,14 +151,24 @@ export function hcTerminal(value: unknown): HcTerminal | undefined {
   }
 }
 
-/** What a subscription keeps of a terminal: the fields hcTerminal reads, and no argv, title or screen. */
-const FACTS = ['address', 'state', 'labels', 'status', 'name', 'cwd', 'foreground']
-const factsOf = (value: Fields): Fields =>
-  Object.fromEntries(FACTS.filter((key) => Object.hasOwn(value, key)).map((key) => [key, value[key]]))
+/** What a subscription keeps of a terminal, for up to HC_MAX_TERMINALS of them: the fields hcTerminal reads, an
+ *  object's own narrowed to the keys it reads. A terminal's command line (in it and in its foreground), its title and a
+ *  status's records are left in the line they came in. */
+const READ: Record<string, readonly string[] | undefined> = {
+  address: undefined, state: undefined, name: undefined, cwd: undefined,
+  labels: ['herdr.space'], status: ['app', 'state'], foreground: ['cwd'],
+}
+const only = (value: unknown, keys: readonly string[]): unknown => isObject(value)
+  ? Object.fromEntries(keys.filter((key) => Object.hasOwn(value, key)).map((key) => [key, value[key]]))
+  : value
+const factsOf = (value: Fields): Fields => Object.fromEntries(Object.entries(READ)
+  .filter(([key]) => Object.hasOwn(value, key))
+  .map(([key, keys]) => [key, keys ? only(value[key], keys) : value[key]]))
 
-/** How each kind of event changes what is kept of its terminal, as Task 1 recorded them (F5). `removed` is the
- *  subscription's own. Every other kind (`turn`, `title`, `keep`, `doc`, `size`, one hc adds later) changes nothing. */
-const whole = (facts: Fields, data: Fields): Fields => ({ ...facts, ...factsOf(data) })
+/** How each kind of event changes its terminal's fields, as Task 1 recorded them (F5); what is kept of them is
+ *  `factsOf`'s. `removed` is the subscription's own. Every other kind (`turn`, `title`, `keep`, `doc`, `size`, one hc
+ *  adds later) changes nothing. */
+const whole = (facts: Fields, data: Fields): Fields => ({ ...facts, ...data })
 const TAKES: Record<string, (facts: Fields, data: Fields) => Fields> = {
   created: whole,
   // Not recorded (F8): read as the terminal's own fields they name, as `created`'s are.
@@ -267,7 +277,7 @@ export function createHcClient(deps: HcClientDeps): HcClient {
       if (!Object.hasOwn(TAKES, type)) return
       // Only `created` brings a terminal not kept: the rest name facts of one this client never read whole.
       if (!was && (type !== 'created' || kept.size >= HC_MAX_TERMINALS)) return
-      const facts = { ...TAKES[type](was?.facts ?? {}, isObject(params.data) ? params.data : {}), address }
+      const facts = factsOf({ ...TAKES[type](was?.facts ?? {}, isObject(params.data) ? params.data : {}), address })
       const told = hcTerminal(facts)
       if (!told) return
       kept.set(address, { facts, told })
