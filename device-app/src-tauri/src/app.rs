@@ -488,6 +488,18 @@ mod tests {
             .collect()
     }
 
+    /// The items of the last menu sent.
+    fn menu_of(effects: &[Effect]) -> Vec<MenuItem> {
+        effects
+            .iter()
+            .rev()
+            .find_map(|effect| match effect {
+                Effect::Menu(items) => Some(items.clone()),
+                _ => None,
+            })
+            .expect("a menu")
+    }
+
     /// What the window was told to show, in order.
     fn shows(effects: &[Effect]) -> Vec<Option<View>> {
         effects
@@ -879,6 +891,26 @@ mod tests {
 
         // A watch that connects with no start before it reads nothing.
         assert!(!reads(&found().handle(line())));
+    }
+
+    #[test]
+    fn a_sound_click_asks_the_dial_and_draws_the_menu_again() {
+        let mut app = found();
+        let line = DialStatus {
+            attached: true,
+            fw: Some("0.0.95".into()),
+            hw: None,
+            board: None,
+            updating: None,
+            problem: None,
+        };
+        let menu = menu_of(&app.handle(Event::WatchLine(line)));
+        // Twice over: a click remembers nothing, so the same click gives the same effects.
+        for _ in 0..2 {
+            for (action, on) in [(MenuAction::SoundOff, false), (MenuAction::SoundOn, true)] {
+                assert_eq!(app.handle(Event::Menu(action)), [Effect::SetSound(on), Effect::Menu(menu.clone())]);
+            }
+        }
     }
 
     #[test]

@@ -256,6 +256,18 @@ mod tests {
     }
 
     #[test]
+    fn every_menu_action_has_its_own_id() {
+        use MenuAction::*;
+        let actions = [Install, SignIn, ClaudeOn, ClaudeOff, SoundOn, SoundOff, OpenHarness, Quit];
+        for action in actions {
+            assert_eq!(menu_action(menu_id(action)), Some(action));
+        }
+        let ids: std::collections::HashSet<_> = actions.into_iter().map(menu_id).collect();
+        assert_eq!(ids.len(), actions.len());
+        assert_eq!(menu_action("sound"), None);
+    }
+
+    #[test]
     fn only_a_new_screen_or_a_menu_click_takes_the_keyboard() {
         let offer = view(Screen::SignIn, Phase::Offer, &[]);
         let waiting = view(Screen::SignIn, Phase::Browser, &["Waiting"]);
