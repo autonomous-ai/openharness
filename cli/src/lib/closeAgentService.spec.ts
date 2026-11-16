@@ -446,6 +446,8 @@ it('automatically stops only after two timer observations of sustained idle', as
   expect(deps.stop).not.toHaveBeenCalled()
   await vi.advanceTimersByTimeAsync(5_000)
   expect(deps.stop).toHaveBeenCalledOnce()
+  await vi.mocked(deps.stop).mock.results[0]!.value
+  expect(registry.byAgent(row.agentId)).toBeUndefined()
   service.dispose()
   await service.tick()
 })

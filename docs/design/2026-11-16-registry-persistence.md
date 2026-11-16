@@ -1586,3 +1586,20 @@ needs Close/stop caller controls, the affected core and resume gates, current-ma
 test-helper isolation checks, and the pending matched Registry cost measurement.
 The earlier passing receipts keep their original source scope; all earlier cost
 failures remain retained and acceptance remains pending.
+
+### Current-main Close timer fixture
+
+The integrated Close controls at `b7577c55cb6456289ed3832075131c7baab6b98f`
+failed the sustained-idle timer case while 125 cases passed and one was skipped
+(`/tmp/core-registry-b757-close-controls.log`). The test observed that its stop
+spy had started, then disposed the service and began registry cleanup before the
+stop's asynchronous removal finished. Both removals captured the same owner;
+the second correctly rejected its stale owner fence. A disposed `tick()` returns
+immediately and cannot join the first stop.
+
+The fixture now awaits that stop promise and checks that its row has gone before
+disposing. All 118 Close service cases pass (24.16 s,
+`/tmp/core-registry-close-timer-green.log`). The unchanged unused-Codex controls
+passed in the preceding combined run. Runtime code and authority are unchanged;
+this fixture adds no timer, retry or storage behavior. Earlier cost failures and
+the remaining whole-package acceptance requirements still apply.
