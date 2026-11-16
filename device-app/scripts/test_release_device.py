@@ -27,20 +27,26 @@ if "{MANIFEST_URL}" not in sys.argv[1:] or not manifest.exists():
 sys.stdout.write(manifest.read_text())
 '''
 
-# Appends its arguments to FAKE_GH_LOG as a JSON line, exits 1 when FAKE_GH_FAIL is set, and lists two runs of the
-# commit: one created now and an older one listed first, which --wait must not follow.
+# Appends its arguments to FAKE_GH_LOG as a JSON line, exits 1 when FAKE_GH_FAIL is set, and lists an older run, its
+# clock ahead, and, once a run was started, the new one, its clock 10 s behind: --wait must follow the new one by its
+# id, not by a clock.
 GH = r'''#!/usr/bin/env python3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json, os, sys
 
 args = sys.argv[1:]
-with open(os.environ["FAKE_GH_LOG"], "a") as log:
+with open(os.environ["FAKE_GH_LOG"], "a+") as log:
+    log.seek(0)
+    started = any(json.loads(line)[:2] == ["workflow", "run"] for line in log)
     log.write(json.dumps(args) + "\n")
 if os.environ.get("FAKE_GH_FAIL"):
     sys.exit("HTTP 401: Bad credentials")
 if args[:2] == ["run", "list"]:
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    print(json.dumps([{"databaseId": 1111, "createdAt": "2000-01-01T00:00:00Z"}, {"databaseId": 4242, "createdAt": now}]))
+    runs = [{"databaseId": 1111, "createdAt": "2999-01-01T00:00:00Z"}]
+    if started:
+        behind = datetime.now(timezone.utc) - timedelta(seconds=10)
+        runs.append({"databaseId": 4242, "createdAt": behind.strftime("%Y-%m-%dT%H:%M:%SZ")})
+    print(json.dumps(runs))
 '''
 
 
@@ -272,19 +278,21 @@ class ReleaseDeviceTests(unittest.TestCase):
                                                "-f", "publish=true"])
 
     def test_wait_follows_the_run_it_started(self):
-        for args, dispatch in (
-                (["--wait"], ["--ref", "v0.1.1_device", "-f", "version=0.1.1", "-f", "publish=true"]),
-                (["--prepare", "--wait"], ["--ref", "main", "-f", "version=0.1.2", "-f", "publish=false"])):
+        head = self.git("rev-parse", "HEAD")
+        for args, dispatch, run_filter in (
+                (["--wait"], ["--ref", "v0.1.1_device", "-f", "version=0.1.1", "-f", "publish=true"],
+                 ["--commit", head]),
+                (["--prepare", "--wait"], ["--ref", "main", "-f", "version=0.1.2", "-f", "publish=false"],
+                 ["--branch", "main"])):
             with self.subTest(args=args):
                 self.gh_log.unlink(missing_ok=True)
                 result = self.run_script(*args)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                calls = self.gh_calls()
-                self.assertEqual(calls[0], [*DISPATCH, *dispatch])
-                self.assertEqual(calls[1], ["run", "list", "--workflow", "release-device.yml", "--commit",
-                                            self.git("rev-parse", "HEAD"), "--event", "workflow_dispatch",
-                                            "--json", "databaseId,createdAt"])
-                self.assertEqual(calls[-1], ["run", "watch", "4242", "--exit-status"])
+                # The runs listed before the start, then the one that was not listed.
+                runs = ["run", "list", "--workflow", "release-device.yml", "--event", "workflow_dispatch",
+                        "--json", "databaseId", *run_filter]
+                self.assertEqual(self.gh_calls(), [runs, [*DISPATCH, *dispatch], runs,
+                                                   ["run", "watch", "4242", "--exit-status"]])
 
     def test_the_notes_file_is_the_tag_message(self):
         # Outside the repository, so the tree stays clean; a "#" line stays, as the tag is written verbatim.
