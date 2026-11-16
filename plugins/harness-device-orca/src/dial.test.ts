@@ -417,7 +417,7 @@ test('a line split across two chunks is one state, and two lines in one chunk ar
   ])
 })
 
-test('a line over 1 KiB, and 1 KiB with no newline, drop the stream; a line of 1 KiB with its newline is taken', async () => {
+test('a line over 1 KiB, and 1 KiB with no newline, drop the stream and are logged; a line of 1 KiB with its newline is taken', async () => {
   const { w, stream } = await streaming()
   const name = 'n'.repeat(1_023 - '{"attached":true,"agent":{"name":"","app":"Orca"}}'.length)
   stream.res.write(`{"attached":true,"agent":{"name":"${name}","app":"Orca"}}\n`)
@@ -432,6 +432,7 @@ test('a line over 1 KiB, and 1 KiB with no newline, drop the stream; a line of 1
     await stream.closed
     await w.until(() => w.timers.size > 0)
     assert.deepEqual([w.states, w.dial.state()], [[{ state: 'attached' }], { state: 'attached' }])
+    assert.deepEqual(w.logs, ['dial: attached', 'dial: line too long'])
   }
 })
 
