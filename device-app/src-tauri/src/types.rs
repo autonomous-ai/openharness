@@ -385,6 +385,7 @@ mod tests {
             serde_json::to_value(view).unwrap(),
             json!({"screen":"sign_in","phase":"browser","lines":["Waiting"]})
         );
+        assert_eq!(serde_json::to_value(Screen::Codex).unwrap(), json!("codex"));
     }
 
     #[test]
