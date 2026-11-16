@@ -10,8 +10,8 @@ const lock = join(directory, 'registry.json.lock'), file = join(directory, 'regi
 const halt = (at: string): never => {
   process.send?.(at)
   // This isolated crash fixture must stop inside a synchronous fsync boundary until its parent kills it.
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0)
-  throw new Error('crash fixture resumed unexpectedly')
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20_000)
+  throw new Error('crash fixture was not killed before its fail-safe')
 }
 const mkdir = io.mkdir
 io.mkdir = (async (...args: Parameters<typeof io.mkdir>) => {

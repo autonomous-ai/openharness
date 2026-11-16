@@ -55,25 +55,57 @@ afterEach(async () => {
   cleanup.wait = undefined; cleanup.file = ''; cleanup.published = false
   vi.useRealTimers()
   vi.restoreAllMocks()
-  if (holder) await stopHolder(holder)
-  holder = undefined
-  await (exitFlush ?? registry?.flush())
-  vi.unstubAllEnvs()
-  rmSync(directory, { recursive: true, force: true })
+  let settled = false
+  try {
+    if (holder) await stopHolder(holder)
+    holder = undefined
+    await bounded(Promise.resolve(exitFlush ?? registry?.flush()), 10_000, 'registry teardown flush')
+    settled = true
+  } finally {
+    vi.unstubAllEnvs()
+    // Never erase the fixture while an unconfirmed writer still owns its files.
+    if (settled) rmSync(directory, { recursive: true, force: true })
+  }
 })
+
+async function bounded<T>(work: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([work, new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error(label + ' timed out')), ms)
+    })])
+  } finally { clearTimeout(timer) }
+}
 
 async function stopHolder(child: ChildProcess): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null) return
-  const exited = once(child, 'exit')
-  child.kill()
-  await exited
+  const exited = once(child, 'exit', { signal: AbortSignal.timeout(5_000) })
+  const force = setTimeout(() => {
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
+  }, 2_000)
+  try { child.kill(); await exited } finally { clearTimeout(force) }
+}
+
+async function holderMessage(label: string): Promise<unknown> {
+  const child = holder!
+  if (child.exitCode !== null || child.signalCode !== null) throw new Error(label + ' exited before ready')
+  const controller = new AbortController()
+  const options = { signal: controller.signal }
+  try {
+    const [message] = await bounded(Promise.race([
+      once(child, 'message', options),
+      once(child, 'exit', options).then(() => { throw new Error(label + ' exited before ready') }),
+    ]), 10_000, label)
+    return message
+  } finally { controller.abort() }
 }
 
 async function locked(mode?: 'ignore-term') {
   holder = fork(fileURLToPath(new URL('./__fixtures__/registryLockOwner.cjs', import.meta.url)), [directory, ...(mode ? [mode] : [])], {
     ...ownProcessGroup(), execArgv: [], stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
   })
-  expect((await once(holder, 'message'))[0]).toBe('locked')
+  holder.stderr?.resume()
+  expect(await holderMessage('legacy lock holder')).toBe('locked')
 }
 
 // Windows terminates on SIGTERM without delivering a catchable signal to the fixture.
@@ -227,9 +259,9 @@ it.each(['ownerless', 'prepared', 'published'])('recovers a real writer killed a
   })
   let diagnostic = ''
   holder.stderr?.on('data', chunk => { diagnostic = (diagnostic + String(chunk)).slice(-4_096) })
-  const reached = await Promise.race([once(holder, 'message'), once(holder, 'exit').then(() => { throw new Error('Crash fixture exited before its checkpoint: ' + diagnostic) })])
-  expect(reached[0]).toBe(phase)
-  const exited = once(holder, 'exit')
+  const reached = await holderMessage('crash fixture').catch(error => { throw new Error(String(error) + ': ' + diagnostic) })
+  expect(reached).toBe(phase)
+  const exited = once(holder, 'exit', { signal: AbortSignal.timeout(5_000) })
   holder.kill('SIGKILL')
   await exited
   holder = undefined

@@ -1183,3 +1183,10 @@ failed its expected SIGKILL assertion (one failure, 18 unselected, 1.15 seconds)
 then its finally block killed and observed the fixture exiting. This is actual
 macOS/Node 24.22.2 RED evidence, retained in `core-registry-bounded-waits-red.log`.
 No fixed sleep or production process was used. Cleanup GREEN remains pending.
+
+The bounded cleanup passes the new ignored-TERM case plus the existing real lock
+and three killed-writer recovery cases: five passes, 14 unselected, 3.02 seconds
+on macOS/Node 24.22.2 (`core-registry-bounded-waits-green.log`). TypeScript passes
+(`core-registry-bounded-waits-types.log`). Teardown still tolerates setup failure
+before the registry exists; losing readiness listeners are aborted. These
+test-only changes do not alter or clear the failed production cost evidence.
