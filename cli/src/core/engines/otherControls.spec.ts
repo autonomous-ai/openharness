@@ -64,7 +64,7 @@ it('keeps live profile evidence and asynchronous reads under one binding revisio
   try {
     profiles.hydrateEvidence(row, [{ model: 'first', effort: 'auto', workspace: '/work/first' }])
     expect(profiles.selectedModel(row)).toBe(encodeRuntimeProfile({ sessionId: 'agent', engine: 'openclaw', model: 'first', effort: 'auto' }))
-    expect(profiles.workspace(row)).toBe('/work/first')
+    expect(profiles.display(row).workspace).toBe('/work/first')
     const pending = profiles.ingestConfig(row)
     await vi.waitFor(() => expect(finish).toBeDefined())
     profiles.evidence(row, [{ model: 'newer', workspace: '/work/newer' }])
@@ -73,7 +73,7 @@ it('keeps live profile evidence and asynchronous reads under one binding revisio
       control: null, supportsControl: false })
     await expect(pending).rejects.toThrow('ENGINE_STALE_REPLY')
     expect(profiles.getState('session').model).toBe('newer')
-    expect(profiles.workspace(row)).toBe('/work/newer')
+    expect(profiles.display(row).workspace).toBe('/work/newer')
     expect(local.getState('session').model).toBeNull()
   } finally { profiles.stop() }
 })
@@ -109,8 +109,8 @@ it('does not expose a rebound session workspace to a captured old binding', () =
     profiles.evidence(old, [{ workspace: '/first' }])
     current = { ...old, sessionId: 'replacement', boundAt: 2 }
     profiles.evidence(current, [{ workspace: '/replacement' }])
-    expect(profiles.workspace(old)).toBeNull()
-    expect(profiles.workspace(current)).toBe('/replacement')
+    expect(profiles.display(old).workspace).toBeNull()
+    expect(profiles.display(current).workspace).toBe('/replacement')
   } finally { profiles.stop() }
 })
 
@@ -205,13 +205,13 @@ it.each(['hold', 'revision', 'hold-cycle'] as const)('retains accepted profile d
     if (change !== 'revision') row.identityHold = 'Waiting for interpretation.'
     expect(profiles.selectedModel(row)).toBe(selected)
     expect(profiles.getState(row.sessionId)).toEqual(state)
-    expect(profiles.workspace(row)).toBe('/captured-workspace')
+    expect(profiles.display(row).workspace).toBe('/captured-workspace')
     if (change === 'hold-cycle') {
       delete row.identityHold; row.evidenceRevision = 2
       expect(profiles.selectedModel(row)).toBe(selected)
     }
     expect(profiles.selectedModel(old)).toBeNull()
-    expect(profiles.workspace(old)).toBeNull()
+    expect(profiles.display(old).workspace).toBeNull()
     released()
     expect(await pending).toBe('ENGINE_STALE_REPLY')
     expect(await captured).toBeNull()
@@ -223,7 +223,7 @@ it.each(['hold', 'revision', 'hold-cycle'] as const)('retains accepted profile d
     expect(profiles.getState(oldSessionId).model).toBeNull()
     expect(profiles.getState(row.agentId).model).toBeNull()
     expect(profiles.selectedModel(row)).toBeNull()
-    expect(profiles.workspace(row)).toBeNull()
+    expect(profiles.display(row).workspace).toBeNull()
   } finally { released(); profiles.stop(); served.clear() }
 })
 

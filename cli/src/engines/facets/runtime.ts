@@ -11,6 +11,8 @@ export interface RuntimeProfile {
 
 export interface RuntimeModelOption { id: string; displayName: string }
 
+export interface RuntimeDisplay { selectedModel: string | null; workspace: string | null }
+
 export interface RuntimeState {
   model: string | null
   effort: string | null

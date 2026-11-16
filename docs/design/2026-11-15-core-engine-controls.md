@@ -260,3 +260,31 @@ projection, including a hold/release read with no workspace and mutation of a re
 golden frame bytes unchanged and preserve the startup-order assertion for the renamed provider. Then
 run affected tests, per-file coverage and typecheck before root selects native validation and a new
 fixed unprofiled comparison. No runtime edit or new native/performance run is included in this proposal.
+
+
+## Single-display implementation checkpoint, 16 November
+
+After review, Design commit `02df554c93` preceded caller-test commit `2dadd7a848`. The pinned Node
+24.22.2 RED run failed all three intended cases: the existing socket ignored the combined provider,
+and the remote copy-isolation and workspace-free hold-cycle cases had no combined getter. This is
+internal-composition RED evidence, not a claim that shipping frames previously omitted both values.
+The full failing output is retained in `/tmp/core-controls-display-red.log`.
+
+Both live-frame paths now consume one copied display pair. The single-model API remains, and the
+standalone workspace API and old socket providers are removed. Fresh binding, process/route, revision,
+hold, control and staged-commit checks are unchanged; the tests exercise the combined projection
+against their existing cases. A workspace-free hold/release read still revokes old control and stages.
+Neither remote nor inline callers can mutate the stored facts through the returned pair.
+
+Local focused validation passed 522 tests across ten affected frame, startup, runtime-profile and
+golden test files in 31.43 seconds with one Vitest worker. `runtimeSessions.ts` and `runtimeProfiles.ts`
+each retain 100% statements, branches, functions and lines. TypeScript passed alongside that run,
+keeping total concurrency at two. The green test log, coverage and typecheck log are respectively
+`/tmp/core-controls-display-focused.log`, `/tmp/core-controls-display-coverage/` and
+`/tmp/core-controls-display-tsc.log`. No golden fixture changed; no intermediate green-run failure
+was discarded. These checks used the same pinned Node 24 toolchain on macOS.
+
+This checkpoint has no new bundle, native acceptance or performance result, and no push or merge.
+The earlier 0.03-second median core profile CPU regression remains unaccepted. Integration with
+current main, required integrated-head checks and an unchanged-workload unprofiled comparison
+remain for root review and scheduling; the diagnostic inspector numbers are not acceptance evidence.

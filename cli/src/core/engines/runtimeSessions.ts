@@ -1,7 +1,7 @@
 /** Core-owned profile snapshots and transactions. Vendor interpretation happens only in the worker. */
 import type { RuntimeAnswer, RuntimeOperation } from '../../engines/worker/runtimeProtocol.js'
 import { RUNTIME_RECORDS, RUNTIME_REQUEST_BYTES, RUNTIME_WAIT_MS } from '../../engines/worker/runtimeProtocol.js'
-import type { ProfileEvidence, RuntimeContext, RuntimeControl, RuntimeProfile, RuntimeRecord, RuntimeSession, RuntimeState } from '../../engines/facets/runtime.js'
+import type { ProfileEvidence, RuntimeContext, RuntimeControl, RuntimeDisplay, RuntimeProfile, RuntimeRecord, RuntimeSession, RuntimeState } from '../../engines/facets/runtime.js'
 import { applyProfileEvidence, blankRuntimeState, encodeRuntimeProfile, RUNTIME_EFFORTS } from '../../engines/kit/runtime.js'
 import { EngineReadError, workerEngine, workerService } from '../../engines/worker/protocol.js'
 import { launchFlagsOf } from '../../lib/launchFlags.js'
@@ -277,8 +277,9 @@ export function createRuntimeSessions(deps: RuntimeSessionDeps) {
       view.selected = null; view.revision++; view.authority++
       evidence(s, records, true)
     },
-    workspace(s: RegisteredSession): string | null {
-      return isCurrent(s) ? byId(s.agentId)?.workspace ?? null : null
+    display(s: RegisteredSession): RuntimeDisplay {
+      const view = isCurrent(s) ? byId(s.agentId) : undefined
+      return { selectedModel: s.sessionId ? view?.selected ?? null : null, workspace: view?.workspace ?? null }
     },
     async capturePane(s: RegisteredSession, capture: (id: string, historyLines?: number) => Promise<string | null>,
       historyLines?: number, silent = false): Promise<string | null> {

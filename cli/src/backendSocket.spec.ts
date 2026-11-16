@@ -3732,6 +3732,7 @@ describe('the models lists pushed to the windows', () => {
       const display = vi.fn((): { selectedModel: string | null; workspace: string | null } => ({ selectedModel: 'runtime-v1:a-ws:openclaw:model@auto', workspace: '/root/.openclaw/workspace' }))
       Object.assign(socket, { runtimeDisplayProvider: display })
       expect(await socket.toProject(agent)).toMatchObject({ selectedModel: 'runtime-v1:a-ws:openclaw:model@auto', workspace: '/root/.openclaw/workspace' })
+      expect(display).toHaveBeenCalledOnce()
       expect(display).toHaveBeenCalledWith(agent)
       display.mockReturnValue({ selectedModel: null, workspace: null })
       const empty = await socket.toProject(agent)

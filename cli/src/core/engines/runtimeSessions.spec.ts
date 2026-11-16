@@ -95,8 +95,8 @@ describe('core runtime profile authority', () => {
     else if (field === 'routeExtra') Object.assign(t.s.runtimes[0]!, { extra: true })
     else t.s[field] = '/replacement'
     for (const caller of [t.s, copied]) {
-      expect(t.sessions.selectedModel(caller)).toBeNull()
-      expect(t.sessions.workspace(caller)).toBeNull()
+      expect(t.sessions.display(caller).selectedModel).toBeNull()
+      expect(t.sessions.display(caller).workspace).toBeNull()
     }
     expect(pending.commit()).toBe(false)
   })
@@ -107,9 +107,9 @@ describe('core runtime profile authority', () => {
       const copied = structuredClone(t.s), pending = t.sessions.stage(t.s, false, false)
       await pending.ingest([{ model: 'staged', effort: 'high' }])
       Object.assign(t.s, { [field]: null })
-      expect(t.sessions.selectedModel(copied)).toBe(profile(copied, 'old', 'low').id)
+      expect(t.sessions.display(copied).selectedModel).toBe(profile(copied, 'old', 'low').id)
       expect(pending.commit()).toBe(true)
-      expect(t.sessions.selectedModel(t.s)).toBe(profile(t.s, 'staged').id)
+      expect(t.sessions.display(t.s).selectedModel).toBe(profile(t.s, 'staged').id)
     },
   )
 
@@ -120,14 +120,14 @@ describe('core runtime profile authority', () => {
     const copied = structuredClone(t.s), pending = t.sessions.stage(t.s, false, false)
     await pending.ingest([{ model: 'staged', effort: 'high' }])
     t.s.processIdentity.executable = 'renamed'; t.s.processIdentity.startMarker = 'clock moved'; t.s.identityHold = 'second detail'
-    expect(t.sessions.selectedModel(copied)).toBe(profile(copied, 'old', 'low').id)
+    expect(t.sessions.display(copied).selectedModel).toBe(profile(copied, 'old', 'low').id)
     expect(pending.commit()).toBe(true)
     const absentRevision = structuredClone(t.s)
     Object.assign(t.s, { evidenceRevision: null })
-    expect(t.sessions.selectedModel(absentRevision)).toBeNull()
-    expect(t.sessions.selectedModel(t.s)).toBe(profile(t.s, 'staged').id)
+    expect(t.sessions.display(absentRevision).selectedModel).toBeNull()
+    expect(t.sessions.display(t.s).selectedModel).toBe(profile(t.s, 'staged').id)
     t.s.processIdentity.startTicks = 12
-    expect(t.sessions.selectedModel(t.s)).toBeNull()
+    expect(t.sessions.display(t.s).selectedModel).toBeNull()
   })
 
   it.each(['boundAt', 'evidenceRevision'] as const)('retains JSON number normalization for %s', async field => {
@@ -135,9 +135,9 @@ describe('core runtime profile authority', () => {
     const copied = structuredClone(t.s), pending = t.sessions.stage(t.s, false, false)
     await pending.ingest([{ model: 'staged', effort: 'high' }])
     Object.assign(t.s, { [field]: Infinity })
-    expect(t.sessions.selectedModel(copied)).toBe(profile(copied, 'old', 'low').id)
+    expect(t.sessions.display(copied).selectedModel).toBe(profile(copied, 'old', 'low').id)
     expect(pending.commit()).toBe(true)
-    expect(t.sessions.selectedModel(t.s)).toBe(profile(t.s, 'staged').id)
+    expect(t.sessions.display(t.s).selectedModel).toBe(profile(t.s, 'staged').id)
   })
 
   it.each(['native', 'process', 'route', 'hold', 'revision', 'hold-cycle'] as const)(
@@ -146,8 +146,8 @@ describe('core runtime profile authority', () => {
       await t.seed(); t.sessions.evidence(t.s, [{ workspace: '/accepted-workspace' }])
       const copied = structuredClone(t.s), selected = profile(t.s, 'old', 'low').id
       for (const caller of [t.s, copied]) {
-        expect(t.sessions.selectedModel(caller)).toBe(selected)
-        expect(t.sessions.workspace(caller)).toBe('/accepted-workspace')
+        expect(t.sessions.display(caller).selectedModel).toBe(selected)
+        expect(t.sessions.display(caller).workspace).toBe('/accepted-workspace')
       }
       if (change === 'native') t.s.sessionId = 'replacement-conversation'
       if (change === 'process') t.s.processIdentity = { pid: 2, executable: 'claude', startMarker: 'new' }
@@ -157,14 +157,14 @@ describe('core runtime profile authority', () => {
       }
       if (change === 'revision') t.s.evidenceRevision = 1
       if (change === 'hold-cycle') {
-        expect(t.sessions.selectedModel(t.s)).toBe(selected)
+        expect(t.sessions.display(t.s).selectedModel).toBe(selected)
         delete t.s.identityHold; t.s.evidenceRevision = 2
       }
       const retained = change === 'hold' || change === 'revision' || change === 'hold-cycle'
-      expect(t.sessions.selectedModel(t.s)).toBe(retained ? selected : null)
-      expect(t.sessions.workspace(t.s)).toBe(retained ? '/accepted-workspace' : null)
-      expect(t.sessions.selectedModel(copied)).toBeNull()
-      expect(t.sessions.workspace(copied)).toBeNull()
+      expect(t.sessions.display(t.s).selectedModel).toBe(retained ? selected : null)
+      expect(t.sessions.display(t.s).workspace).toBe(retained ? '/accepted-workspace' : null)
+      expect(t.sessions.display(copied).selectedModel).toBeNull()
+      expect(t.sessions.display(copied).workspace).toBeNull()
     },
   )
 
@@ -182,11 +182,11 @@ describe('core runtime profile authority', () => {
       if (changed === 'hermesHome') t.s.hermesHome = '/different-hermes-home'
       if (changed === 'cwd') t.s.cwd = '/different-project'
       if (changed === 'transcript') t.s.transcriptPath = '/different-transcript'
-      expect(t.sessions.selectedModel(t.s)).toBeNull()
-      expect(t.sessions.workspace(t.s)).toBeNull()
+      expect(t.sessions.display(t.s).selectedModel).toBeNull()
+      expect(t.sessions.display(t.s).workspace).toBeNull()
       expect(t.sessions.getState(t.s.agentId).model).toBeNull()
-      expect(t.sessions.selectedModel(old)).toBeNull()
-      expect(t.sessions.workspace(old)).toBeNull()
+      expect(t.sessions.display(old).selectedModel).toBeNull()
+      expect(t.sessions.display(old).workspace).toBeNull()
       await t.sessions.read(t.s, { kind: 'describe' })
       expect(t.read.mock.lastCall![1].state.model).toBeNull()
     },
@@ -201,7 +201,7 @@ describe('core runtime profile authority', () => {
     t.s.identityHold = 'Waiting for interpretation.'; t.s.evidenceRevision = 1
     expect(t.sessions.getState(t.s.agentId).model).toBe('old')
     delete t.s.identityHold; t.s.evidenceRevision = 2
-    expect(t.sessions.selectedModel(t.s)).toBe(profile(t.s, 'old', 'low').id)
+    expect(t.sessions.display(t.s).selectedModel).toBe(profile(t.s, 'old', 'low').id)
     expect(stage.commit()).toBe(false)
     expect(t.sessions.beginControl(t.s, target)).toBe(true)
     t.sessions.finishControl(old)
@@ -593,6 +593,8 @@ describe('core runtime profile authority', () => {
     expect(t.sessions.getState(t.s.agentId)).toEqual(blankRuntimeState())
     expect(t.sessions.selectedModel(t.s)).toBeNull()
     expect(t.sessions.getState(other.agentId)).toEqual(blankRuntimeState())
+    expect(t.sessions.display(t.s)).toEqual({ selectedModel: null, workspace: null })
+    expect(t.sessions.display(other)).toEqual({ selectedModel: null, workspace: null })
     expect(t.sessions.beginControl(t.s, profile(t.s))).toBe(false)
     t.sessions.confirmEffort(t.s.agentId, 'high')
     t.sessions.finishControl(t.s)
@@ -622,7 +624,7 @@ describe('live profile evidence shares runtime authority', () => {
     p.hydrateEvidence(s, [])
     expect(p.getState(s.agentId).model).toBe('launched')
     expect(p.selectedModel(s)).toBeNull()
-    expect(p.workspace(s)).toBeNull()
+    expect(p.display(s).workspace).toBeNull()
     expect(p.evidence(s, [])).toBe(false)
     for (const old of [{ ...s, sessionId: '' }, { ...s, boundAt: 0 }]) {
       p.hydrateEvidence(old, [{ model: 'stale' }])
@@ -631,7 +633,7 @@ describe('live profile evidence shares runtime authority', () => {
     expect(p.getState(s.agentId).model).toBe('launched')
     p.hydrateEvidence(s, [{ effort: 'high', workspace: '/tmp/work' }])
     expect(p.selectedModel(s)).toBe(profile(s, 'launched').id)
-    expect(p.workspace(s)).toBe('/tmp/work')
+    expect(p.display(s).workspace).toBe('/tmp/work')
   })
 
   it('refreshes configuration after accepted evidence or a pane requests it, with content-free failure', async () => {

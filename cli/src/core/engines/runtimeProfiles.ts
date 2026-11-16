@@ -49,7 +49,7 @@ export function createRuntimeProfiles({ local, handles, resolve, transport }: Ru
     get onChanged() { return changed },
     set onChanged(value: ((id: string) => void) | null) { changed = value },
     selectedModel: (session: RegisteredSession) => forSession(session).selectedModel(session),
-    workspace: (session: RegisteredSession): string | null => forSession(session).workspace(session),
+    display: (session: RegisteredSession) => forSession(session).display(session),
     getState: (id: string) => forId(id).getState(id),
     beginControl: (session: RegisteredSession, target: RuntimeProfile) => forSession(session).beginControl(session, target),
     cancelControl: (id: string) => forId(id).cancelControl(id),

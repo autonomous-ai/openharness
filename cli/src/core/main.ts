@@ -272,7 +272,7 @@ import { forgetAgentProject } from '../lib/agentProject.js'
 import { createUsageLink } from './usageLink.js'
 import type { UsageSnapshots } from './usageLink.js'
 import { usageTarget, validUsage, validUsageTarget, type AgentUsageTarget } from '../lib/agentUsageWire.js'
-import type { RuntimeModelOption } from '../engines/facets/runtime.js'
+import type { RuntimeDisplay, RuntimeModelOption } from '../engines/facets/runtime.js'
 import { createRuntimeProfiles } from './engines/runtimeProfiles.js'
 import { createRuntimeTransport } from './engines/runtimeTransport.js'
 import { RuntimeProfileController } from '../lib/runtimeControl.js'
@@ -450,11 +450,11 @@ let usagePortRef: UsageSnapshots | null = null
 /** Set by runForeground once models can be asked: what an agent's frame says of its grid. */
 let gridAnnotationRef: ((grid: AgentGridTarget) => GridAnnotation | null) | null = null
 
-function projectFrame(s: RegisteredSession, selectedModel: string | null, workspace: string | null): Promise<AgentFrame> {
+function projectFrame(s: RegisteredSession, display: RuntimeDisplay): Promise<AgentFrame> {
   return agentFrame(s, {
     tokenUsage: usagePortRef?.get(s) ?? null,
-    selectedModel,
-    workspace,
+    selectedModel: display.selectedModel,
+    workspace: display.workspace,
     terminalAvailable: registry.terminalAvailable(s.agentId),
     dsh: dshFrameContextRef?.(s) ?? null,
     activity: () => activityFrameContextRef?.(s) ?? null,
@@ -836,7 +836,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     terminalAvailable: (agentId) => registry.terminalAvailable(agentId),
     resolve: (target) => registry.resolve(target),
     stopped: (agentId) => stoppedAgents.get(agentId),
-    project: (s) => projectFrame(s, runtimeProfiles.selectedModel(s), runtimeProfiles.workspace(s)),
+    project: (s) => projectFrame(s, runtimeProfiles.display(s)),
   })
   const syncSession = agentEvents.syncSession
   const announceRename = agentEvents.announceRename
@@ -1885,8 +1885,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const agentIdFor = (sessionId: string): string => registry.bySession(sessionId)?.agentId ?? sessionId
 
 
-  backend.runtimeProfileProvider = (session) => runtimeProfiles.selectedModel(session)
-  backend.workspaceProvider = (session) => runtimeProfiles.workspace(session)
+  backend.runtimeDisplayProvider = (session) => runtimeProfiles.display(session)
   backend.dshFrameProvider = (s) => ports.viewers?.frameContext(s) ?? null
   // `harness remote` names the tile it was typed in by its pane; the registry knows whose it is (lib/terminalHandoff.ts).
   backend.onTerminalHandoff = (pane) => handoffAgentId(registry.advertised(), pane)
