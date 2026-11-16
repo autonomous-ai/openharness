@@ -14,6 +14,7 @@ import {
   TABS_MAX_BYTES, TABS_PER_SECOND, tabsStream, type DevicesListener, type ListenerHandler, type ListenerStream, type ListenerStreamHandler, type StreamEnd,
 } from './devicesListener.js'
 import type { NoticeAsk, NoticeResult } from '../lib/dialNotice.js'
+import { noticeCaller } from '../devices/notice.js'
 import type { NotifyMode } from '../cable/notifyMode.js'
 
 const dirs: string[] = []
@@ -1627,6 +1628,14 @@ describe('notice', () => {
     ]
     for (const fields of bad) expect(handler.handle(notice({ text: 'Connect the VPN', ...fields }), gone), JSON.stringify(fields)).toBe(REFUSED)
     expect(notify).not.toHaveBeenCalled()
+  })
+
+  it('notice takes what harness device notify sends, from a folder whose name is cut before a space', () => {
+    const asks: NoticeAsk[] = []
+    const handler = noticeHandler((ask) => { asks.push(ask); return 'shown' })
+    const caller = noticeCaller({}, `/p/${'a'.repeat(63)} b`)
+    expect(handler.handle(notice({ text: 'Connect the VPN', ...caller }), gone)).toStrictEqual({ result: 'shown' })
+    expect(asks).toStrictEqual([{ text: 'Connect the VPN', folder: 'a'.repeat(63) }])
   })
 
   it('the notice handler is its two limits and handle; the longest notice fits', () => {

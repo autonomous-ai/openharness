@@ -32,6 +32,16 @@ describe('noticeFolder', () => {
     expect(noticeFolder('x'.repeat(100))).toBe('x'.repeat(64))
     expect(noticeFolder('\u0007')).toBe('')
   })
+
+  // The devices' listener refuses a folder that changes when cleaned again: a cut that leaves a space at the end did.
+  it('is what it gives when cleaned again, a cut before a space or a tab too', () => {
+    for (const name of [`${'a'.repeat(63)} b`, `${'a'.repeat(63)}\tb`]) {
+      expect(noticeFolder(name), JSON.stringify(name)).toBe('a'.repeat(63))
+      expect(noticeFolder(noticeFolder(name))).toBe(noticeFolder(name))
+    }
+    const line = `${'a'.repeat(118)} b${'c'.repeat(10)}`
+    expect(noticeLine(noticeLine(line))).toBe(noticeLine(line))
+  })
 })
 
 describe('isNoticeResult', () => {
