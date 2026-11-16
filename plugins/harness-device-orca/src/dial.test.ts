@@ -254,7 +254,7 @@ test('a launcher that prints anything else is notRunning, and nothing is connect
     '{"daemon":true,"devicesSocket":"devices.sock","devicesReady":false}',
     '{"daemon":true,"devicesSocket":7,"devicesReady":true}',
     '{"daemon":true,"devicesReady":true}',
-    // Node's connect throws past its own error handler on a NUL in the path.
+    // Node 22's connect throws past its own error handler on a NUL in the path (Orca 1.4.256's Node 24 says EINVAL).
     '{"daemon":true,"devicesSocket":"/run/h/devices\\u0000.sock","devicesReady":true}',
   ]
   for (const out of printed) {

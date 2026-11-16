@@ -4,7 +4,7 @@ Shows the Harness dial's state inside Orca: whether a dial is attached, and whic
 
 ## What it does
 
-A panel, "Harness Device", in Orca's right sidebar shows one line at a time:
+A panel, "Harness Device", in Orca's right sidebar shows one state at a time:
 
 - "Dial attached." while a dial is attached and shows no agent.
 - The agent's name while it shows one, with the app it runs in on a second line ("Orca", "Claude", "Harness", …).
@@ -35,4 +35,5 @@ It needs Orca 1.4.248 or later, on macOS or Linux. On Windows the panel reads "N
 
 Its worker is a Node process with your own access, which Orca asks you to approve at install. It uses that to run
 `harness device orca link` (`~/.local/bin/harness`, then `harness` on `PATH`) and to read one local socket, the one
-that command names. It declares no capability.
+that command names. While no dial is attached, it watches the folder that holds that socket (the Harness daemon's data
+folder) for the socket to appear. It declares no capability.

@@ -5,8 +5,8 @@ import { basename, dirname } from 'node:path'
 import type { DialInputs, Ran } from './inputs'
 import type { DialState } from './protocol'
 
-export const LINK_ARGS = ['device', 'orca', 'link'] as const
-export const DIAL_OPEN = '{"type":"dial","standby":true}'
+const LINK_ARGS = ['device', 'orca', 'link'] as const
+const DIAL_OPEN = '{"type":"dial","standby":true}'
 
 export interface Dial {
   state(): DialState
@@ -179,7 +179,8 @@ function readLink(ran: string | null): Link | null {
   if (!isRecord(value) || value.daemon !== true) return null
   const socket = value.devicesSocket
   if (socket === undefined) return value.devicesReady === false ? { ready: false } : null
-  // Node's connect throws past its own error handler on a NUL in the path.
+  // Node 22's connect (the end to end test's Node) throws past its own error handler on a NUL in the path; Orca
+  // 1.4.256's Node 24 fails it with EINVAL instead.
   if (typeof socket !== 'string' || !socket.startsWith('/') || socket.includes('\0')) return null
   if (typeof value.devicesReady !== 'boolean') return null
   return value.devicesReady ? { ready: true, socket } : { ready: false, socket }
