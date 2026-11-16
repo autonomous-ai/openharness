@@ -521,6 +521,17 @@ describe('the devices write the dial skill', () => {
     expect(existsSync(join(r.dataDir, DIAL_SKILL_HOMES_FILE))).toBe(false)
   })
 
+  it('a home whose listing cannot be saved keeps a skill this pass did not write', () => {
+    // The command wrote the default home's at Turn on, and its own Turn off finds it.
+    const r = rig({ answers: () => ({ codex: true }) })
+    writeSkill(skillsAt(r.codexHome))
+    chmodSync(r.dataDir, 0o500)
+
+    r.writer.started()
+
+    expect(hasSkill(r.codexHome)).toBe(true)
+  })
+
   it('on Windows nothing is written', () => {
     const other = folder()
     const r = rig({ platform: 'win32', answers: () => ({ claude: true, codex: true }) })
