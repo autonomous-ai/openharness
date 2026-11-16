@@ -56,14 +56,19 @@ export interface RouteInput {
 }
 
 export type RouteVerdict = (
-  | { kind: 'session'; id: string; p: number }
+  | {
+    kind: 'session'; id: string; p: number
+    /** What Jev said, for the client that asked (`harness route`): a wrong send has to be explainable after the
+     *  fact. It names the sessions, so the router's log never prints it. */
+    trace: string
+  }
   | { kind: 'new'; project?: string; agent?: string; via: 'jev' | 'unsure'; why: string }
   /** Jev could not be asked: no key, no network, no credit. Nothing is decided. */
   | { kind: 'unavailable'; why: string }
 ) & {
-  /** What Jev said, for the client that asked (`harness route`): a wrong decision has to be explainable after the
-   *  fact. It names the sessions, so the router's log never prints it. */
-  trace: string
+  /** How many sessions Jev was shown (`offered`, at most JEV_OPTIONS), for the router's log: what the decision was
+   *  weighed against, which a client's own count is not. */
+  weighed: number
 }
 
 export interface RouteDeps {
@@ -100,7 +105,7 @@ export const JEV_LEAD_OPTIONS = 6
 export const JEV_LIVE_RATIO = 1.75
 export const JEV_OVER_STOPPED = 1.25
 
-/** The likeliest of [options] other than [choice], for the log: how far ahead the pick was. */
+/** The likeliest of [options] other than [choice]: how far ahead the pick was. */
 function runnerUp(p: Record<string, number>, choice: string, options: string[]): string | undefined {
   return options.filter((id) => id !== choice && typeof p[id] === 'number').sort((a, b) => p[b] - p[a])[0]
 }
@@ -221,8 +226,8 @@ export async function decideRoute(input: RouteInput, deps: RouteDeps, signal?: A
   const sessions = offered(input.sessions)
   const projects = input.projects.slice(0, JEV_OPTIONS)
   const agents = input.agents.slice(0, JEV_OPTIONS)
-  const trace: string[] = [`${sessions.length} sessions`]
-  if (!deps.jev) return { kind: 'unavailable', why: 'Jev is not set up', trace: [...trace, 'jev: not set up'].join(' · ') }
+  const weighed = sessions.length
+  if (!deps.jev) return { kind: 'unavailable', why: 'Jev is not set up', weighed }
 
   // Where the last task went, minutes ago: found by its conversation when the session shown for it is its
   // live self or the one listed first (`offered` shows a conversation once).
@@ -279,15 +284,10 @@ export async function decideRoute(input: RouteInput, deps: RouteDeps, signal?: A
     answers = await deps.jev(state, questions, signal)
   } catch (error) {
     deps.log?.(`jev could not answer: ${why(error)}`)
-    return { kind: 'unavailable', why: (error as Error).message, trace: [...trace, 'jev: failed'].join(' · ') }
+    return { kind: 'unavailable', why: (error as Error).message, weighed }
   }
   const said = answers.target
   const targets = [...sessions.map((_, i) => `s${i}`), 'new']
-  const name = (id: string | undefined): string | undefined => id === 'new' ? 'new' : sessions[Number(id?.slice(1))]?.name
-  const odds = (id: string): string => (said!.probabilities[id] ?? 0).toFixed(2)
-  const next = said ? runnerUp(said.probabilities, said.choice, targets) : undefined
-  // The runner-up too: whether a pick led clearly is what the next change to the bar is measured from.
-  trace.push(`jev: ${said ? `"${name(said.choice) ?? said.choice}" ${odds(said.choice)}${next ? `, then "${name(next)}" ${odds(next)}` : ''}` : 'no answer'}`)
 
   // Names nothing, on Jev's sure word: a yes or no at 0.5 is a coin flip, and a coin flip must not override
   // where the words point.
@@ -299,12 +299,17 @@ export async function decideRoute(input: RouteInput, deps: RouteDeps, signal?: A
   const lastId = last ? `s${sessions.indexOf(last)}` : undefined
   // Names nothing, yet Jev is sure of another session than the last: the two disagree, and new work is safe.
   const torn = topicless && lastId !== undefined && picked !== undefined && picked !== 'new' && picked !== lastId
-  if (topicless) trace.push(`names nothing: ${torn ? 'but Jev is sure of another session than the last' : last ? `to "${last.name}", where the last went` : 'nowhere to go'}`)
-  if (askedForNew) trace.push('asked for a new session')
   const target = askedForNew ? 'new' : topicless ? (torn || !lastId ? 'new' : lastId) : picked
   if (target && target !== 'new') {
     const session = sessions[Number(target.slice(1))]
-    return { kind: 'session', id: session.id, p: topicless ? noOdds! : said!.probabilities[target], trace: trace.join(' · ') }
+    const name = (id: string): string | undefined => id === 'new' ? 'new' : sessions[Number(id.slice(1))]?.name
+    const odds = (id: string): string => (said!.probabilities[id] ?? 0).toFixed(2)
+    const next = said ? runnerUp(said.probabilities, said.choice, targets) : undefined
+    // The runner-up too: whether a pick led clearly is what the next change to the bar is measured from.
+    const trace = [`${weighed} sessions`, `jev: ${said ? `"${name(said.choice) ?? said.choice}" ${odds(said.choice)}${next ? `, then "${name(next)}" ${odds(next)}` : ''}` : 'no answer'}`]
+    // Names nothing, and still a session: the last one, which Jev did not contradict.
+    if (topicless) trace.push(`names nothing: to "${session.name}", where the last went`)
+    return { kind: 'session', id: session.id, p: topicless ? noOdds! : said!.probabilities[target], trace: trace.join(' · '), weighed }
   }
 
   const pick = (key: 'project' | 'agent', prefix: string, options: RouteOption[]): string | undefined => {
@@ -319,6 +324,6 @@ export async function decideRoute(input: RouteInput, deps: RouteDeps, signal?: A
     ...(agent ? { agent } : {}),
     via: target ? 'jev' : 'unsure',
     why: askedForNew ? 'asked for a new session' : torn ? 'names nothing, and Jev pointed elsewhere' : topicless ? 'names nothing, and no task went anywhere just now' : target ? 'Jev: new work' : 'Jev was not sure',
-    trace: trace.join(' · '),
+    weighed,
   }
 }
