@@ -474,9 +474,10 @@ export class SessionInputController {
       return this.inject(sessionId, current, content, deliveryId, receipt)
     }
     const running = state.writes ? state.writes.then(write, write) : write()
-    const settled: Promise<void> = running.catch(() => {}).then(() => {
+    const clear = (): void => {
       if (state.writes === settled) state.writes = undefined
-    })
+    }
+    const settled = running.then(clear, clear)
     state.writes = settled
     return settled
   }

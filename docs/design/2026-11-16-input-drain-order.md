@@ -161,3 +161,23 @@ allocation diagnostic records 1,035.90 MiB sampled versus 1,068.73 MiB at
 from 9.20 to 1.96 MiB. These sampled totals are not retained memory and do not
 establish CPU acceptance. Its plan, exact artifact/source hashes and successful
 200,000-message child are in `/tmp/core-input-burst-profile-v2/`.
+
+The integrated-source V4 ABBA comparison completed all 1.2 million messages,
+without retries or forced GC. Burst CPU remains 7.06% higher; the allocation
+correction alone did not clear acceptance (`/tmp/core-input-cost-v4/summary.json`).
+The burst profile also attributes allocation to Promise continuations, and every
+write currently builds separate rejection and completion continuations even
+though both outcomes only clear the same write slot. Join those outcomes in one
+`then(clear, clear)` continuation, preserving the slot identity check and error
+containment. Tighten the existing public ready-input resource regression by one
+Promise per successful message before changing runtime code; existing failed
+write, cancellation, replacement and bounded burst cases must continue to pass.
+This changes no input ordering, authority, persisted state or capacity bound.
+
+The ready-input caller produces 1,902 Promise resources before the correction;
+the tightened 1,802 budget fails on that source and passes after joining the
+settlement callbacks. The first attempted budget was still permissive and passed;
+it is retained separately, not presented as RED. All 220 affected input cases
+pass in 5.37 seconds, including progression after a failed write. Evidence:
+`/tmp/core-input-settlement-red-final.log` and
+`/tmp/core-input-settlement-green.log`. Final timing acceptance remains pending.

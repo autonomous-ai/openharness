@@ -79,8 +79,8 @@ describe('SessionInputController', () => {
     expect(arrays).toBeLessThanOrEqual(401)
   })
 
-  it('keeps ready input below the measured allocation cost of an unnecessary reader wait', async () => {
-    // The direct-input profile found a Promise and continuation for an already-ready reader on every message.
+  it('avoids redundant ready-reader and write-settlement Promise continuations', async () => {
+    // Profiles found unnecessary reader waits and separate catch/then settlement on every ready message.
     // Count only this caller's descendants, so the test runner and other tests cannot spend its budget.
     const scope = new AsyncResource('input-allocation-fixture'), owned = new Set([scope.asyncId()])
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
@@ -118,7 +118,7 @@ describe('SessionInputController', () => {
       log.mockRestore()
     }
     expect({ submitted, received }).toEqual({ submitted: 100, received: 100 })
-    expect(promises).toBeLessThanOrEqual(2_002)
+    expect(promises).toBeLessThanOrEqual(1_802)
   })
 
   it('holds a delivery while the agent works, and types it once the turn ends', async () => {
