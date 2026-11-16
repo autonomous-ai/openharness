@@ -143,7 +143,9 @@ writes, so the extra `dmg` field is proven harmless to the updater.
 
 `device-app/scripts/release-device.sh`, mirroring `release-desktop.sh` with Desktop's flags that apply:
 
-- no flag: work out the version, write the notes (`--notes-file` or the commit list since the last tag), create the
+- no flag: work out the version, write the notes (`--notes-file`, or the commits since the last tag that touch
+  `device-app/`, at most 100; unlike Desktop's, which lists every commit, so the public manifest stays small and about
+  this app: PM, 2026-11-16), create the
   annotated tag, push it, then `gh workflow run release-device.yml --ref v<ver>_device -f version=<ver> -f publish=true`.
 - `--dry-run`: print the version, the notes and what it would run; tag, push and start nothing.
 - `--prepare`: start the workflow on the pushed branch tip with `publish=false`; tag nothing.
