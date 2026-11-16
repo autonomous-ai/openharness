@@ -1640,7 +1640,7 @@ describe('ObservedSource and the Codex app', () => {
     const agent = src.list()[0]
     expect(src.hasPane(agent)).toBe(true)
     expect(await src.showPane(agent)).toBe('ok')
-    expect(ran.mock.calls).toEqual([['/usr/bin/open', ['codex://threads/' + THREAD], 10_000]])
+    expect(ran.mock.calls).toEqual([['/usr/bin/open', ['-b', 'com.openai.codex', 'codex://threads/' + THREAD], 10_000]])
     actions.codexInFront.mockReturnValue(false)
     expect(src.hasPane(agent)).toBe(false)
     expect(await src.showPane(agent)).toBe('failed')

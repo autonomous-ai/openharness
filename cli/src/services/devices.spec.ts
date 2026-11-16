@@ -2528,7 +2528,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
   const THREAD = '01a1de76-a3b7-7270-b39e-1245893274c1'
   const CX = observedAgentId('codex', THREAD)
   const inApp = { engine: 'codex' as const, sessionId: THREAD, hostHints: { __CFBundleIdentifier: 'com.openai.codex' } }
-  const threadLink: [string, string[], number] = ['/usr/bin/open', [`codex://threads/${THREAD}`], 10_000]
+  const threadLink: [string, string[], number] = ['/usr/bin/open', ['-b', 'com.openai.codex', `codex://threads/${THREAD}`], 10_000]
   const codexForward: [string, string[], number] = ['/usr/bin/open', ['-b', 'com.openai.codex'], 10_000]
   /** macOS, every run recorded, each answering the next of these exit codes, then 0. */
   const exiting = (...codes: number[]) => ({ ...mac, run: async (file: string, args: string[], timeoutMs: number) => {

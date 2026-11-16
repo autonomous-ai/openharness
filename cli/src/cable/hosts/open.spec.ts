@@ -326,7 +326,7 @@ describe('a tap on a Codex app session', () => {
   const pane: Pane = { adapter: 'codex', id: THREAD }
   const hooked: OpenTarget = { bundle: CODEX_APP, pane }
   const scanned: OpenTarget = { pane }
-  const link = run(OPEN, `codex://threads/${THREAD}`)
+  const link = run(OPEN, '-b', CODEX_APP, `codex://threads/${THREAD}`)
   const FALLBACK = '[device] open · codex · fallback'
 
   it('the Codex app: its thread through codex://threads, which brings the app forward itself', async () => {

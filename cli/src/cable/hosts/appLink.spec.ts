@@ -89,6 +89,15 @@ describe('an app whose session opens by its link', () => {
     expect(forged.calls).toEqual([])
   })
 
+  it('a link with a bundle goes to that app alone, by open -b, for a tap and a rest', async () => {
+    const bundled: AppLink = { ...FAKE, bundle: 'com.example.fake' }
+    const sent: Call = { file: '/usr/bin/open', args: ['-b', 'com.example.fake', 'fake://open/s1'], timeoutMs: 10_000 }
+    const { calls, verbs } = recorder({}, [], bundled)
+    expect(await verbs.focus(pane('s1'))).toBe(true)
+    expect(await verbs.show(pane('s1'), 'a1')).toBe('ok')
+    expect(calls).toEqual([sent, sent])
+  })
+
   it('with a forward, a tap whose link failed runs it once and answers what it answered', async () => {
     for (const code of [1, null]) {
       for (const answer of [true, false]) {

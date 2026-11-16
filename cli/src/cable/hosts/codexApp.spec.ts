@@ -41,7 +41,7 @@ function holding() {
 }
 
 const pane = (id: string) => ({ adapter: 'codex', id })
-const link: Call = { file: '/usr/bin/open', args: [`codex://threads/${THREAD}`], timeoutMs: 10_000 }
+const link: Call = { file: '/usr/bin/open', args: ['-b', CODEX_APP, `codex://threads/${THREAD}`], timeoutMs: 10_000 }
 const forward: Call = { file: '/usr/bin/open', args: ['-b', CODEX_APP], timeoutMs: 10_000 }
 /** A session the open scan found: the app and the session id, and no hook's hints yet. */
 const scanned = (over: Partial<Place> = {}): Place => ({ host: 'terminal', app: 'codex', hints: {}, engine: 'codex', sessionId: THREAD, ...over })
@@ -88,7 +88,7 @@ describe('the Codex app adapter', () => {
     expect(adapter.canShow(pane(THREAD))).toBe(false)
   })
 
-  it('focus runs /usr/bin/open with the thread\'s link as its one argument', async () => {
+  it('focus runs /usr/bin/open -b com.openai.codex with the thread\'s link, the URL one argument', async () => {
     const { calls, logs, adapter } = recorder()
     expect(await adapter.focus(pane(THREAD))).toBe(true)
     expect(calls).toEqual([link])
