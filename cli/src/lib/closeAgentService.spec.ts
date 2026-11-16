@@ -392,7 +392,7 @@ it.each(['claude', 'codex'] as const)('closes an unused %s chat only after savin
     registry.removeAgent(id)
   })
   expect(await service.request(request('inspect'))).toEqual({ activity: 'idle' })
-  expect(await service.request(request('idle'))).toEqual({ closed: true })
+  expect(await service.request(request('idle'))).toEqual({ closed: true, withoutConversation: true })
   expect(deps.checkpoint).toHaveBeenNthCalledWith(1, row, 'before')
   expect(deps.checkpoint).toHaveBeenNthCalledWith(2, row, 'after')
   expect(registry.byAgent(row.agentId)).toBeUndefined()
@@ -733,8 +733,54 @@ it('waits on a real timer when no sleep is given', async () => {
   vi.mocked(deps.stop).mockRejectedValueOnce(new IdentityReadUnavailable('the native control descriptor type is unavailable'))
   const closing = service.request(request('now'))
   await vi.advanceTimersByTimeAsync(1_000)
-  expect(await closing).toEqual({ closed: true })
+  expect(await closing).toEqual({ closed: true, withoutConversation: true })
   expect(Date.now() - start).toBe(1_000)
+})
+
+// A close said "Its conversation is kept" of a Codex that never bound one: the process discovery had recorded for it had
+// gone (the launch script's help probe; a first run the script ran again), so the stop saved a record with no
+// conversation and went ahead (CLI end to end run 43746252131; docs/plans/2026-11-16-codex-help-race-design.md).
+describe('what a close says of the conversation it kept', () => {
+  /** A stop that saves [saved] over the row, as stopAgentService.ts saves its record before it signals anything. */
+  const stopSaving = (saved: Partial<RegisteredSession> = {}) => vi.mocked(deps.stop).mockImplementation(async (id, options) => {
+    await options.checkpoint!({ ...row, ...saved }, 'before')
+    registry.removeAgent(id)
+  })
+  beforeEach(() => { Object.assign(row, { sessionId: '', transcriptPath: null }) })
+
+  it.each(['codex', 'claude', 'devin'] as const)('a %s whose saved record holds no conversation: none was kept', async engine => {
+    row.engine = engine
+    stopSaving()
+    expect(await service.request(request('now'))).toEqual({ closed: true, withoutConversation: true })
+    expect(registry.byAgent(row.agentId)).toBeUndefined()
+  })
+  it('the record the stop saved decides, not the row: a conversation read while saving is kept', async () => {
+    stopSaving({ sessionId: 'read-while-saving' })
+    expect(await service.request(request('now'))).toEqual({ closed: true })
+  })
+  it.each(['terminal', 'omp'] as const)('a %s has no conversation id to lose: answered as before', async engine => {
+    row.engine = engine
+    stopSaving()
+    expect(await service.request(request('now'))).toEqual({ closed: true })
+  })
+  it('a stop that saved no record says nothing of one: an adoption cancelled, a row already gone, a stop already running', async () => {
+    vi.mocked(deps.stop).mockImplementation(async id => { registry.removeAgent(id) })
+    expect(await service.request(request('now'))).toEqual({ closed: true })
+  })
+  it('a close once idle, past the ceiling, says it beside its count', async () => {
+    stopSaving()
+    const counted = new CloseAgentService({ ...deps, backgroundCommands: async () => 2 })
+    expect(await counted.request({ ...request('idle'), background: 'count' })).toEqual({ closed: true, withoutConversation: true, backgroundCommands: 2 })
+    counted.dispose()
+  })
+  it('a stop that failed after it saved answers its error, and nothing of the conversation', async () => {
+    vi.mocked(deps.stop).mockImplementation(async (_id, options) => {
+      await options.checkpoint!({ ...row }, 'before')
+      throw Object.assign(new Error('Could not confirm that the harness stopped.'), { code: 'STOP_UNCONFIRMED' })
+    })
+    expect(await service.request(request('now'))).toEqual({ error: 'STOP_UNCONFIRMED', detail: 'Could not confirm that the harness stopped.' })
+    expect(registry.byAgent(row.agentId)).toBe(row)
+  })
 })
 
 describe('background commands', () => {
