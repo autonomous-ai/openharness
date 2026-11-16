@@ -27,12 +27,12 @@ import { connectLines, socketStampOf } from './unixSocket.js'
 /** hc's address of a terminal of this machine, `t7`, `t1b`: never another machine's `vps/t7`. */
 export const HC_TERMINAL = /^t[0-9][0-9a-z]{0,15}$/
 /** hc's heartbeat comes every 15 s: three missed is a core that stopped talking. */
-export const HC_SILENCE_MS = 45_000
+const HC_SILENCE_MS = 45_000
 /** hc holds a send up to 60 s behind a person's unfinished draft, then waits for about 3 s of quiet (5.2 s in all on an
  *  idle agent in the recording): a margin over both. */
-export const HC_SEND_MS = 75_000
+const HC_SEND_MS = 75_000
 /** The most terminals a subscription keeps. */
-export const HC_MAX_TERMINALS = 1024
+const HC_MAX_TERMINALS = 1024
 /** A line's bound on every connection to hc. Its snapshot is one line with every terminal of the core (hidden workers,
  *  other machines' terminals, each command line twice), several times herdr's 1 MiB on a busy core; a `doc` line holds
  *  no document (F5). */
