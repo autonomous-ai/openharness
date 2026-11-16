@@ -31,7 +31,7 @@ import type { HostAdapter, Pane } from '../cable/hosts/adapter.js'
 import { createClaudeAppAdapter } from '../cable/hosts/claudeApp.js'
 import { createCodexAppAdapter } from '../cable/hosts/codexApp.js'
 import { codexQueueDeps, createCodexQueue, type CodexQueueDeps } from '../cable/hosts/codexQueue.js'
-import { createHcClient, hcClientDeps, hcSocketPath, type HcClient } from '../cable/hosts/hcClient.js'
+import { createHcClient, hcClientDeps, hcPaneKey, hcSocketPath, type HcClient } from '../cable/hosts/hcClient.js'
 import { HcSource } from '../cable/hosts/hcSource.js'
 import { createHerdrAdapter } from '../cable/hosts/herdr.js'
 import { createHerdrAppAdapter } from '../cable/hosts/herdrApp.js'
@@ -371,7 +371,12 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       },
     }),
   ].map(noting)]
-  const opener = createOpenActions({ run: apps.run, platform: apps.platform, adapters, log, bin: openBin })
+  const opener = createOpenActions({ run: apps.run, platform: apps.platform, adapters, log, bin: openBin,
+    // herdr's ring is Herdr.app's window's while it holds an agent there: one hc lists, or a hooked agent with a pane
+    // of Herdr's (herdrApp.ts paneOf). herdr 0.8.0's agents have none. Only this process's own lists are read, which
+    // the pick read a moment before: it never throws, and a pick's bring has no catch.
+    herdrApp: () => !!hcSource?.list().length
+      || !!observed?.list().some(({ paneKeys }) => paneKeys?.some((key) => key.startsWith(hcPaneKey('')))) })
   const bring = opener.bring
   /** The route or the refusal of the dial's words, and why a queue failed: never the words, the session, the terminal or a
    *  path. */
