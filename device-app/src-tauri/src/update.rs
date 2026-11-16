@@ -17,9 +17,10 @@ pub trait AppUpdater: Send + Sync {
     fn install(&self) -> Result<(), UpdateFailure>;
 }
 
-/// Whether this build updates itself: a release build on macOS.
-pub fn enabled(debug: bool, os: &str) -> bool {
-    !debug && os == "macos"
+/// Whether this build updates itself: a release build on macOS that a release wrote its version into. A local
+/// `cargo tauri build` keeps the placeholder 0.0.0, which every published release outranks.
+pub fn enabled(debug: bool, os: &str, version: &str) -> bool {
+    !debug && os == "macos" && version != "0.0.0"
 }
 
 /// A manifest's version when it is plain X.Y.Z, each part 1 to 5 digits: the only text of the manifest that
@@ -57,7 +58,7 @@ fn writable(path: &Path) -> bool {
 
 /// The door, where this build updates itself (`enabled`); None elsewhere.
 pub fn system(handle: &tauri::AppHandle) -> Option<Arc<dyn AppUpdater>> {
-    if !enabled(cfg!(debug_assertions), std::env::consts::OS) {
+    if !enabled(cfg!(debug_assertions), std::env::consts::OS, &handle.package_info().version.to_string()) {
         return None;
     }
     Some(Arc::new(SystemUpdater { handle: handle.clone(), found: Mutex::default() }))
