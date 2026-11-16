@@ -11,7 +11,7 @@
  */
 import { connect, type Socket } from 'node:net'
 import { dirname } from 'node:path'
-import { removeSkill, skillsFolderOf, writeSkill } from '../devices/dialSkill.js'
+import { removeSkill, skillOn, skillsFolderOf, writeSkill } from '../devices/dialSkill.js'
 import { listable, MAX_HOMES, readAnswers, readHomes, readWritten, writeAnswer, type DialEngine } from '../devices/dialSkillFiles.js'
 import { devicesListenerPath } from '../devices/listenerPath.js'
 import { NOTICE_USAGE, runNotice } from '../devices/notice.js'
@@ -119,6 +119,7 @@ async function codexCommand(verb: string, json: boolean, deps: DeviceDeps): Prom
 }
 
 const ENGINE_NAMES: Record<DialEngine, string> = { claude: 'Claude Code', codex: 'Codex' }
+const OTHER: Record<DialEngine, DialEngine> = { claude: 'codex', codex: 'claude' }
 const SAVE_FAILED = 'Could not save the dial setting.'
 
 /** The command's own Claude Code home, where Claude Code's user settings are. */
@@ -150,24 +151,30 @@ function turnOn(engine: DialEngine, home: string, deps: DeviceDeps): number {
 /**
  * Off is saved first, so the devices service writes no new copy while these are removed: the default home, each folder
  * the command recorded and each one the devices service listed. Each step runs whatever the one before did, so a
- * failed one leaves no more behind than it must; the first error is the one printed. The command's record then keeps
- * only the folders still holding the skill, for the next Turn off. The homes list is only read: its one writer is the
- * devices service, which empties it once it reads Off.
+ * failed one leaves no more behind than it must; the first error is the one printed. A folder the other engine holds
+ * its skill in while On (~/.codex/skills linked to ~/.claude/skills) keeps it. The command's record then keeps only the
+ * folders whose removal failed, for the next Turn off. The homes list is only read: its one writer is the devices
+ * service, which empties it once it reads Off.
  */
 async function turnOff(engine: DialEngine, home: string, deps: DeviceDeps, plugin?: () => Promise<ClaudeResult>): Promise<number> {
   let error = writeAnswer(deps.dataDir, engine, false) === undefined ? undefined : SAVE_FAILED
   const uninstalled = await plugin?.()
   if (uninstalled && !uninstalled.ok) error ??= uninstalled.error
-  const written = readWritten(deps.dataDir)[engine]
+  const written = readWritten(deps.dataDir)
+  const listed = readHomes(deps.dataDir)
+  const other = OTHER[engine]
+  const shared = skillOn(other, readAnswers(deps.dataDir)[other], claudeSettingsPath())
+    ? new Set([skillsFolderOf(other === 'claude' ? claudeHome() : deps.codexHome, false), ...written[other], ...listed[other]])
+    : new Set()
   const failed = new Set<string>()
   // A home linked to a listed folder is one folder, cleared once.
-  for (const skills of new Set([skillsFolderOf(home, false), ...written, ...readHomes(deps.dataDir)[engine]])) {
-    if (skills === null || removeSkill(skills) !== 'failed') continue
+  for (const skills of new Set([skillsFolderOf(home, false), ...written[engine], ...listed[engine]])) {
+    if (skills === null || shared.has(skills) || removeSkill(skills) !== 'failed') continue
     failed.add(skills)
     error ??= `Could not remove the ${ENGINE_NAMES[engine]} skill.`
   }
-  const kept = written.filter((skills) => failed.has(skills))
-  if (kept.length !== written.length && writeAnswer(deps.dataDir, engine, false, kept) !== undefined) error ??= SAVE_FAILED
+  const kept = written[engine].filter((skills) => failed.has(skills))
+  if (kept.length !== written[engine].length && writeAnswer(deps.dataDir, engine, false, kept) !== undefined) error ??= SAVE_FAILED
   if (error === undefined) return 0
   deps.err(error)
   return 1

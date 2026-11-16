@@ -4,8 +4,8 @@
 // and a moment that reads Off takes them out again itself, which catches up on a Turn off a write raced.
 import { statSync } from 'node:fs'
 import { join } from 'node:path'
-import { claudePluginState, ownDirectory, removeSkill, skillsFolderOf, writeSkill } from '../devices/dialSkill.js'
-import { DIAL_SKILL_FILE, MAX_HOMES, listable, readHomes, writeHomes, type DialEngine, type DialSkillAnswers, type DialSkillHomes } from '../devices/dialSkillFiles.js'
+import { ownDirectory, removeSkill, skillOn, skillsFolderOf, writeSkill } from '../devices/dialSkill.js'
+import { DIAL_SKILL_FILE, MAX_HOMES, listable, readHomes, readWritten, writeHomes, type DialEngine, type DialSkillAnswers, type DialSkillHomes } from '../devices/dialSkillFiles.js'
 import { rolloutHome, takesOwner, type RolloutOwner } from './codexRolloutHome.js'
 
 export interface DialSkillWriterDeps {
@@ -32,6 +32,7 @@ export interface DialSkillWriter {
 type Counts = Record<DialEngine, { wrote: number; removed: number }>
 
 const ENGINES: readonly DialEngine[] = ['claude', 'codex']
+const OTHER: Record<DialEngine, DialEngine> = { claude: 'codex', codex: 'claude' }
 
 /** Lines a run says once: the refused shape, a full list per engine, and each refused home, so the log stays bounded. */
 const MAX_SAID = 2 * MAX_HOMES
@@ -45,12 +46,7 @@ export function createDialSkillWriter(deps: DialSkillWriterDeps): DialSkillWrite
   const said = new Set<string>()
   let stamp = ''
 
-  const on = (engine: DialEngine): boolean => {
-    const answer = deps.answers()[engine]
-    // Claude Code's own record is read too, so a plugin turned on before this file existed brings the skill, and one
-    // uninstalled through /plugin takes it away.
-    return engine === 'codex' ? answer === true : answer !== false && claudePluginState(join(deps.claudeHome, 'settings.json')) === 'on'
-  }
+  const on = (engine: DialEngine): boolean => skillOn(engine, deps.answers()[engine], join(deps.claudeHome, 'settings.json'))
 
   /** dial-skill.json as of now: a Turn off then a Turn on between two scans is a new file, whatever it holds. */
   const stampNow = (): string => {
@@ -74,12 +70,20 @@ export function createDialSkillWriter(deps: DialSkillWriterDeps): DialSkillWrite
     if (handled[engine].size < MAX_HOMES) handled[engine].add(home)
   }
 
+  /** The folders [engine]'s skill is in while it is On: its list, the command's record and its default home's. */
+  const heldBy = (engine: DialEngine): Set<string | null> => on(engine)
+    ? new Set([...listed[engine], ...readWritten(deps.dataDir)[engine], skillsFolderOf(defaultHome[engine], false, deps.uid)])
+    : new Set()
+
   /** Off: ours goes from every listed folder, and only a folder whose removal failed stays listed, so a later Turn
-   *  off still finds it. */
+   *  off still finds it. A folder the other engine holds its skill in while On (~/.codex/skills linked to
+   *  ~/.claude/skills) only leaves this engine's list. */
   const turnOff = (engine: DialEngine, counts: Counts): void => {
     handled[engine].clear()
     if (!listed[engine].length) return
+    const shared = heldBy(OTHER[engine])
     listed[engine] = listed[engine].filter((skills) => {
+      if (shared.has(skills)) return false
       const result = removeSkill(skills)
       if (result === 'removed') counts[engine].removed++
       return result === 'failed'
