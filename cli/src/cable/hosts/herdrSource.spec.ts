@@ -626,6 +626,28 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     expect(s.log.at(-1)).toBe('[herdr] listed · 1 agents')
   })
 
+  // A herdr that starts again numbers its panes afresh: a pane id it reuses is another agent's, whose first status ends no
+  // turn of the old one's.
+  it('a herdr that starts again before the first retry lists its agents afresh: a reused pane id is no done', async () => {
+    server.agents = [agent('w1:p1', 'working')]
+    const s = setup()
+    await live(s)
+    const was = row(s, 'w1:p1')!
+    expect(was.state).toBe('working')
+    await server.stale()
+    await s.until(() => s.log.at(-1) === '[herdr] retry · 1')
+    expect(s.source.list()).toHaveLength(1)
+    server.agents = [agent('w1:p1', 'idle')]
+    await server.start()
+    const shown: string[] = []
+    s.source.onChange(() => shown.push(...s.source.list().map(({ state }) => state)))
+    s.advance(1000)
+    await listRead(3)
+    expect(shown).not.toContain('done')
+    expect(row(s, 'w1:p1')).toMatchObject({ state: 'idle', unseenDone: false })
+    expect(row(s, 'w1:p1')!.id).not.toBe(was.id)
+  })
+
   it('a refused connection retries after 1, 2, 4, 8, 16, 32 and 60 s, then waits on the watch with no timer', async () => {
     await server.stale()
     const s = setup()
