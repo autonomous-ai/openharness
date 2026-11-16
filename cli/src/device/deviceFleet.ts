@@ -430,6 +430,8 @@ export class DeviceFleet implements MachineFleet {
         // How loudly it ends, decided by that machine's recaps, which know its agents: this dial has no list of them, and
         // decided again here an agent on another of the person's Macs that ends quietly alerted (#2648's review).
         ...(kind === 'summary' && isTier(payload.tier) ? { tier: payload.tier } : {}),
+        // A card with no tier is decided on this dial, where Only you lowers a turn unless it failed.
+        ...(kind === 'summary' && payload.failed === true ? { failed: true } : {}),
       })
       return
     }

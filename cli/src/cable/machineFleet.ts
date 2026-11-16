@@ -46,7 +46,9 @@ export class FleetError extends Error {
 export type FleetEvent =
   | { machineId: string; kind: 'processing' | 'done' | 'summary' | 'error'; agentId: string; text: string; recap: string; subagent?: boolean; update?: string
       /** A summary's tier, as that machine's recaps decided it (services/recaps.ts): the dial follows it. */
-      tier?: Tier }
+      tier?: Tier
+      /** A summary of a failed turn: a card with no tier (a cloud harness's) is decided here, and a failed turn rings. */
+      failed?: boolean }
   | { machineId: string; kind: 'question'; agentId: string; requestId: string; questions: unknown }
   | { machineId: string; kind: 'questionClosed'; agentId: string; requestId: string }
   | { machineId: string; kind: 'state'; state: FleetMachine['state'] }
