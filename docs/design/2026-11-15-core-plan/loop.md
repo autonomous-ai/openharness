@@ -250,7 +250,9 @@ environment. Registry lock/save and creation-receipt retention are separate, unf
 
 ### PR 4 (core-loop-4): the registry save never sleeps the loop
 
-Status, 2026-11-16: bounded first increment in development; not complete or merged.
+Status, 2026-11-16: first increment passed local functional acceptance and root
+cost review; main `8ee115aa` is integrated, PR #4356 CI/merge pending. The whole
+registry extraction is not complete.
 The reviewed implementation contract is [registry persistence](../2026-11-16-registry-persistence.md).
 It supersedes the old last-state-wins sketch below: saves merge competing snapshots
 under the old mkdir/owner.json exclusion and rebase captured field intents without
@@ -267,19 +269,34 @@ after image preparation; every displaced owner receives cleanup. The local revie
 checkpoint inventories observational component preferences; the six obsolete
 synchronous APIs and their private release helper are removed. Four independent-review
 caller races have focused red/green evidence, including real native hooks after fresh
-fallback and Stop during revalidation. Exact main `8fcfa7de5` is integrated with
-focused reader/Stop/launch checks and TypeScript passing. Broad/native acceptance
-and the quiet comparison remain incomplete; no such receipt is claimed.
+fallback and Stop during revalidation. Source `f26ac6b1` integrates main `8eaa7614`
+and the input cancellation/forget fix; an added overlap control keeps old receipts
+from affecting a replacement session. All five mapped local gates and TypeScript
+pass, with 100% required coverage; native registry compatibility/crash cases pass
+16/16 and input safety passes 14/14 with the verified macOS native-control helper.
+The earlier missing-helper failures remain recorded. Final main `8ee115aa` adds
+only a Desktop test fixture and Windows documentation; source-equivalent evidence
+is recorded with final integration, rather than rerunning unchanged broad suites.
+
+Four fixed ABBA processes complete all 332 expected outcomes and cleanup. The
+regular 80-save workload uses 923.37 -> 741.06 ms CPU (-19.74%); changed-160 save
+p95 is 124.13 -> 80.18 ms and heartbeat p95 124.64 -> 3.01 ms. Tradeoffs are
+changed-16 CPU +9.11% and changed-160 sampled peak RSS 119.55 -> 160.60 MiB.
+Root accepted the increment with those costs visible, not every metric improved.
+The [final acceptance and scale review](../2026-11-16-registry-persistence.md#final-local-acceptance-and-scale-review-2026-11-16)
+retains the complete table, baseline limits and earlier failures. Native Linux and
+Windows execution is unverified here; automatic PR Linux checks remain pending.
 Unconfirmed rename retains whole-group recovery and
 cannot authorize success, an old-engine rollback or archive deletion. Exit seals
 admission and waits for actual settlement before listener/claim release.
 
 Core import closure delta for this task: one added file, `lib/registryPersistence.ts`;
 no new process, runtime dependency or feature door. Startup load and final synchronous
-publication/fsync still block and remain explicit residual work. Step 5 receipt expiry/
-incremental scanning is untouched and remains open. Before/after profiling requires a
-reserved quiet interval; the original 83-sample baseline and invalid sandbox run are
-retained separately in the task's validation receipts.
+publication/fsync still block and remain explicit residual work. Full-image reads
+have no finite production row/byte bound; the 160-row fixture is only a scale sample.
+Step 5 receipt expiry/incremental scanning is untouched and remains open. The
+original 83-sample baseline, invalid sandbox run and later failed comparisons stay
+recorded; none is relabeled as the accepted final comparison.
 
 - `lib/registry.ts:492-601` `withRegistryFileLock`: `mkdir` lock dir + `owner.json` (fsync), on `EEXIST` it waits with
   `sleepSync(20)` (`Atomics.wait`, line 501) up to `LOCK_BUDGET_MS` 2 s. `atomicWriteJson` (line 627): temp file

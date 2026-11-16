@@ -2304,3 +2304,71 @@ diff checks pass. Logs are `/tmp/core-registry-prepared-row-v1-green.log` and
 `/tmp/core-registry-prepared-row-v1-types.log`. The runtime delta is nine added
 lines and two removed. Independent review and final-source acceptance remain
 root's work; no cost or RSS improvement is claimed from these tests.
+
+
+### Final local acceptance and scale review (2026-11-16)
+
+Root accepted this first increment for merge after source-equivalent current-main
+integration and required CI. This is not completion of step 4, package 9 or the
+whole daemon-core extraction. The change removes blocking lock waits and image
+preparation; final authority checks, synchronous rename/directory fsync, startup
+loading/migration, production image growth and receipt expiry remain open.
+
+Functional source `f26ac6b1cb998458699e49b6b972b7ea1db191e7` includes main
+`8eaa7614` and the input-ordering fix. The resolved overlap preserves both failed/
+uncertain-move refusal and cancellation/forget ownership. Its added caller control
+settles an old receipt once without dispatching into a replacement session.
+All mapped gates pass: core 4,818, portability 1,066 (ten existing skips), PTY/tmux
+14, Resume 522 and shell 10; required coverage is 100%. TypeScript passes.
+Native registry compatibility/two-writer/crash cases pass 16/16. Input safety passes
+14/14 with the matching macOS native-control helper embedded in the bundle. Its
+first run had two Codex-admission failures because that helper was omitted; the
+failed log is retained, and no guard or test assertion was weakened. Local
+platform evidence is macOS x64, Node 24.22.2. Linux PR units remain pending;
+shared TypeScript also affects Windows, whose native execution is unverified here.
+
+The final quiet comparison ran one fixed ABBA with four fresh processes and 83
+expected outcomes each: 326 successful saves and six expected old-lock refusals.
+All processes, owned probes/holders, output streams, locks and private roots
+settled and cleaned up, without retries, timeout killing or forced GC. The table
+uses medians of the two runs per side. CPU is the registry process during each
+group of 20 saves, excluding child CPU and setup; RSS is the sampled natural-GC
+peak. The baseline's exercised registry/persistence/native source inputs match
+current main; its one differing transitive source is an unused Codex hook
+allow-rule literal. This is not whole-bundle identity or whole-product CPU.
+
+| Workload | CPU ms / 20 saves | Save p95 ms | Heartbeat p95 ms | Sampled peak MiB |
+| --- | ---: | ---: | ---: | ---: |
+| unchanged, 16 rows | 54.41 -> 29.49 | 41.42 -> 3.73 | 41.53 -> 0.15 | 76.96 -> 85.00 |
+| changed, 16 rows | 182.52 -> 199.15 | 103.81 -> 66.80 | 104.17 -> 0.70 | 85.14 -> 88.38 |
+| unchanged, 160 rows | 125.17 -> 72.61 | 44.42 -> 3.87 | 44.72 -> 0.04 | 87.18 -> 156.24 |
+| changed, 160 rows | 561.28 -> 439.81 | 124.13 -> 80.18 | 124.64 -> 3.01 | 119.55 -> 160.60 |
+
+Across the predeclared regular 80-save workload, CPU is 923.37 -> 741.06 ms
+(-19.74%); every regular save p95 improves, and both changed-save latencies improve
+about 35%. The small changed-16 CPU increase of 9.11% and changed-160 peak RSS
+increase of 41.05 MiB remain costs. The preceding unchanged-160 phase peaks 69.06
+MiB higher. These natural-GC samples do not establish retained memory or a leak;
+no invented RSS ceiling or allocation-only diagnostic is an acceptance test.
+The legacy-lock group has different outcomes: old code refuses after about 2 s,
+new code completes after about 105 ms. It is not equal-success throughput.
+
+Scale review: 160 rows is 10x the 16-row reference, not a production capacity bound.
+Its 80.18 ms changed-save p95 leaves limited headroom against the 100 ms hot-request
+reference. The writer queue is bounded, but full-image reads and the operation's
+per-row preparation still have no finite production row/byte bound. The next
+registry design must address that growth together with startup and remaining
+synchronous publication. Existing content-free persistence phase/queue measures
+remain the signals; acceptance does not hide those unfinished limits. No stored
+shape, migration, audience or identity changes were added by this review; rollback
+remains a code revert. Earlier failed comparisons and native failures above stay
+recorded as failures.
+
+Evidence: functional receipt `/tmp/core-registry-f26ac6-validation.json`, SHA256
+`6bdcbc43a1a74666f9aa9c70b3fb03025c3f2467d76e5f6d6cc1254e328ae972`;
+final cost summary `/tmp/core-registry-f26ac6-cost-summary.json`, SHA256
+`a765053f817a70e462954c23f6a741e321f72bd325349300247d5eb095e7a644`;
+root disposition `/tmp/core-registry-f26ac6-cost-review.json`, SHA256
+`6030d604b0563173c9345b954ae228b8352cf06d6fc9a3f31b0838dcae7218c2`.
+The original functional receipt predates cost completion; the separate cost
+summary and disposition are its final continuation, not an altered old receipt.
