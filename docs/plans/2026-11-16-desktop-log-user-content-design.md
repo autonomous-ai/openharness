@@ -43,7 +43,7 @@ the unified log; Linux one GLib registration error to stderr; Windows none; none
      shown as `<n chars>` too;
    - a string value is shown as `<n chars>`, except under a short list of keys whose values are ids, enums or
      versions (`id`, `requestId`, keys ending in `Id`, `engine`, `status`, `code`, `error`, `kind`, `type`, `model`,
-     `via`, `decided`, `version`), and then only when the value is itself a short token (letters, digits and
+     `via`, `decided`, `version`, `action`), and then only when the value is itself a short token (letters, digits and
      `_.:-`, no space, at most 64 characters: `dsk_…`, `MESSAGES_OFF`, `agent_messages_result`); free text under an allowed key is `<n chars>` too. Paths (`cwd`, a file) are
      `<n chars>`;
    - numbers, booleans and null are kept; a list is counted, as now; a secret-named key is `<redacted>`, as now.

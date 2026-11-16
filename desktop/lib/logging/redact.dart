@@ -46,6 +46,7 @@ const Set<String> _tokenKeys = {
   'via',
   'decided',
   'version',
+  'action',
 };
 
 /// One frame payload as a log line: `{engine: codex, prompt: <27 chars>}`.
