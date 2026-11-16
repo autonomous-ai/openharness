@@ -325,6 +325,31 @@ describe.skipIf(process.platform === 'win32')('the hc source (docs/plans/2026-11
     expect(row(s, 't7')?.id).toBe('u1')
   })
 
+  it('a turn that ended while nothing was subscribed, back on the word it started from, is a turn end all the same', async () => {
+    server.terminals = [agent('t7'), agent('t8', status('done')), agent('t9')]
+    const s = setup()
+    await live(s)
+    s.source.markSeen(row(s, 't8')!.id)
+    server.drop()
+    await s.until(() => s.log.at(-1) === '[herdr-app] retry · 1')
+    // Each went working and back while the source was away: only hc's turn says so.
+    server.terminals[0].more = { turn: 1 }
+    server.terminals[1].more = { turn: 1 }
+    s.advance(1000)
+    await server.got('events.subscribe', 2)
+    // Lines come in order: t9's change is read after the snapshot.
+    server.change('t9', status('working'))
+    await s.until(() => row(s, 't9')?.state === 'working')
+    expect(row(s, 't7')).toMatchObject({ state: 'done', unseenDone: false, lastActivityAt: WALL + 1000 })
+    expect(row(s, 't8')).toMatchObject({ state: 'done', unseenDone: true, lastActivityAt: WALL + 1000 })
+    // The same turn told again is no new end.
+    s.source.markSeen(row(s, 't8')!.id)
+    server.missed()
+    server.change('t9', status('idle'))
+    await s.until(() => row(s, 't9')?.state === 'done')
+    expect(row(s, 't8')?.unseenDone).toBe(false)
+  })
+
   it('done is unseen until the dial turns to it', async () => {
     server.terminals = [agent('t7', status('working'))]
     const s = setup()

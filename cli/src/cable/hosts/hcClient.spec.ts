@@ -20,9 +20,12 @@ const rpc = (id: number, method: string, params: Record<string, unknown> = {}) =
 const turn = () => new Promise((resolve) => setImmediate(resolve))
 const methods = (server: FakeHc) => server.requests.map(({ request }) => (request as { method: string }).method)
 
-/** The recording's agent and its hidden worker, as the client tells them. */
-const agentIs = (status: string) => ({ address: RECORDED.agent, live: true, space: true, status, kind: 'claude', cwd: '/work/hh' })
-const WORKER = { address: RECORDED.worker, live: true, space: false, cwd: '/work/hh' }
+/** The recording's agent, at the turn its snapshot gave, and its hidden worker, as the client tells them. */
+const agentIs = (status: string, turn = 2) =>
+  ({ address: RECORDED.agent, live: true, space: true, status, kind: 'claude', cwd: '/work/hh', turn })
+const WORKER = { address: RECORDED.worker, live: true, space: false, cwd: '/work/hh', turn: 0 }
+/** A terminal of the fake's, Claude Code in its folder, as the client tells it: the fake counts turns from 0. */
+const fakeIs = (address: string, status: string) => ({ ...agentIs(status, 0), address })
 
 /** A subscriber that records each call, and `told(n)` once n have come. */
 function subscriber() {
@@ -138,12 +141,15 @@ describe.skipIf(process.platform === 'win32')('the hc client (docs/plans/2026-11
   it('hcTerminal reads each field, checked; another machine\'s terminal, or an address not in its form, is none', () => {
     expect(hcTerminal({
       address: 't7', state: 'live', labels: { 'herdr.space': 's1', other: 'x' }, status: { app: 'codex', state: 'working' },
-      name: 'api', cwd: '/work', foreground: { cwd: '/work/api' },
-    })).toEqual({ address: 't7', live: true, space: true, status: 'working', kind: 'codex', name: 'api', cwd: '/work/api' })
+      name: 'api', cwd: '/work', foreground: { cwd: '/work/api' }, turn: 3,
+    })).toEqual({ address: 't7', live: true, space: true, status: 'working', kind: 'codex', name: 'api', cwd: '/work/api', turn: 3 })
     expect(hcTerminal({
       address: 't7', state: 'finished', labels: { 'herdr.space': '' }, status: { app: 'Weird App', state: 'paused' }, name: null,
-      cwd: '/work', foreground: { cwd: 7 },
-    })).toEqual({ address: 't7', live: false, space: false, cwd: '/work' })
+      cwd: '/work', foreground: { cwd: 7 }, turn: 0,
+    })).toEqual({ address: 't7', live: false, space: false, cwd: '/work', turn: 0 })
+    for (const turn of [-1, 1.5, '3', null, 2 ** 53]) {
+      expect(hcTerminal({ address: 't7', turn }), String(turn)).toEqual({ address: 't7', live: false, space: false })
+    }
     const longest = `t${'1'.repeat(16)}`
     expect(hcTerminal({ address: longest })).toEqual({ address: longest, live: false, space: false })
     for (const value of [undefined, null, 't7', [], {}, { address: 7 }, { address: 'vps/t7' }, { address: 'T7' }, { address: 't' },
@@ -273,7 +279,7 @@ describe.skipIf(process.platform === 'win32')('the hc client (docs/plans/2026-11
     await told(1)
     subscription.close()
     expect(calls).toEqual([['snapshot', [
-      { address: 't7', live: true, space: true, status: 'idle', kind: 'claude', name: 'api', cwd: '/work/api' },
+      { address: 't7', live: true, space: true, status: 'idle', kind: 'claude', name: 'api', cwd: '/work/api', turn: 0 },
     ]]])
   })
 
@@ -281,21 +287,24 @@ describe.skipIf(process.platform === 'win32')('the hc client (docs/plans/2026-11
     server.answer('events.subscribe', { raw: lines(RECORDED.subscription) })
     const { calls, to, told } = subscriber()
     const subscription = client().subscribe(to)
-    await told(15)
+    await told(1)
+    await fence()
     subscription.close()
-    const worker = (live: boolean, space: boolean) => ({ address: RECORDED.worker, live, space, cwd: '/work/hh' })
-    const created = (live: boolean) => ({ address: 't3', live, space: true, cwd: '/work/hh' })
-    // The foreground lines name the folder each already had, and the turn, title, keep, doc and heartbeat lines change
-    // nothing told: each tells nothing.
+    const worker = (live: boolean, space: boolean) => ({ ...WORKER, live, space })
+    const created = (live: boolean) => ({ address: 't3', live, space: true, cwd: '/work/hh', turn: 0 })
+    // The foreground lines name the folder each already had, and the title, keep, doc and heartbeat lines change
+    // nothing told: each tells nothing. A turn line tells hc's count, which went up as the status left working.
     expect(calls).toEqual([
       ['snapshot', [agentIs('idle'), WORKER]],
       ['changed', agentIs('working')],
       ['changed', agentIs('blocked')],
-      ['changed', agentIs('working')],
-      ['changed', agentIs('done')],
-      ['changed', agentIs('idle')],
-      ['changed', agentIs('error')],
-      ['changed', agentIs('idle')],
+      ['changed', agentIs('blocked', 3)],
+      ['changed', agentIs('working', 3)],
+      ['changed', agentIs('done', 3)],
+      ['changed', agentIs('done', 4)],
+      ['changed', agentIs('idle', 4)],
+      ['changed', agentIs('error', 4)],
+      ['changed', agentIs('idle', 4)],
       ['changed', worker(true, true)],
       ['changed', worker(true, false)],
       ['changed', created(true)],
@@ -366,8 +375,8 @@ describe.skipIf(process.platform === 'win32')('the hc client (docs/plans/2026-11
     await told(3)
     subscription.close()
     expect(calls.slice(1)).toEqual([
-      ['changed', { address: 't7', live: true, space: true, status: 'working', kind: 'claude', cwd: '/work/api' }],
-      ['changed', { address: 't7', live: true, space: false, status: 'working', kind: 'claude', cwd: '/work/api' }],
+      ['changed', { address: 't7', live: true, space: true, status: 'working', kind: 'claude', cwd: '/work/api', turn: 0 }],
+      ['changed', { address: 't7', live: true, space: false, status: 'working', kind: 'claude', cwd: '/work/api', turn: 0 }],
     ])
   })
 
@@ -387,12 +396,12 @@ describe.skipIf(process.platform === 'win32')('the hc client (docs/plans/2026-11
 
     it('lost: a terminal whose holder was lost, no longer live', async () => {
       expect(await told('lost', { state: 'lost' }))
-        .toEqual(['changed', { address: 't7', live: false, space: true, status: 'working', kind: 'claude', cwd: '/work/api' }])
+        .toEqual(['changed', { address: 't7', live: false, space: true, status: 'working', kind: 'claude', cwd: '/work/api', turn: 0 }])
     })
 
     it('restarted: a terminal started again, its program not yet reporting', async () => {
       expect(await told('restarted', { name: 'api', reported: false, status: null }))
-        .toEqual(['changed', { address: 't7', live: true, space: true, name: 'api', cwd: '/work/api' }])
+        .toEqual(['changed', { address: 't7', live: true, space: true, name: 'api', cwd: '/work/api', turn: 0 }])
     })
   })
 
@@ -410,8 +419,8 @@ describe.skipIf(process.platform === 'win32')('the hc client (docs/plans/2026-11
     await told(3)
     subscription.close()
     expect(calls.slice(1)).toEqual([
-      ['changed', { address: 't7', live: true, space: true, status: 'idle', kind: 'claude', cwd: '/work/api/web' }],
-      ['changed', { address: 't7', live: true, space: true, status: 'done', kind: 'claude', cwd: '/work/api/web' }],
+      ['changed', { address: 't7', live: true, space: true, status: 'idle', kind: 'claude', cwd: '/work/api/web', turn: 0 }],
+      ['changed', { address: 't7', live: true, space: true, status: 'done', kind: 'claude', cwd: '/work/api/web', turn: 0 }],
     ])
   })
 
@@ -426,8 +435,8 @@ describe.skipIf(process.platform === 'win32')('the hc client (docs/plans/2026-11
     await told(2)
     subscription.close()
     expect(calls).toEqual([
-      ['snapshot', [{ ...agentIs('idle'), address: 't7' }]],
-      ['changed', { ...agentIs('working'), address: 't7' }],
+      ['snapshot', [fakeIs('t7', 'idle')]],
+      ['changed', fakeIs('t7', 'working')],
     ])
   })
 
@@ -450,11 +459,11 @@ describe.skipIf(process.platform === 'win32')('the hc client (docs/plans/2026-11
     ]))
     await told(5)
     subscription.close()
-    const ended = { address: RECORDED.agent, live: false, space: true, cwd: '/work/hh' }
+    const ended = { address: RECORDED.agent, live: false, space: true, cwd: '/work/hh', turn: 10005 }
     expect(calls).toEqual([
-      ['snapshot', [{ ...agentIs('idle'), address: 't7' }]],
-      ['snapshot', [agentIs('idle')]],
-      ['changed', { address: RECORDED.agent, live: true, space: true, cwd: '/work/hh' }],
+      ['snapshot', [fakeIs('t7', 'idle')]],
+      ['snapshot', [agentIs('idle', 10005)]],
+      ['changed', { address: RECORDED.agent, live: true, space: true, cwd: '/work/hh', turn: 10005 }],
       ['changed', ended],
       ['changed', ended],
     ])
@@ -504,8 +513,8 @@ describe.skipIf(process.platform === 'win32')('the hc client (docs/plans/2026-11
     await server.ended(1)
     await turn()
     expect(calls).toEqual([
-      ['snapshot', [{ ...agentIs('idle'), address: 't7' }]],
-      ['changed', { ...agentIs('working'), address: 't7' }],
+      ['snapshot', [fakeIs('t7', 'idle')]],
+      ['changed', fakeIs('t7', 'working')],
       ['closed', 'oversize'],
     ])
   })
@@ -516,7 +525,7 @@ describe.skipIf(process.platform === 'win32')('the hc client (docs/plans/2026-11
     const subscription = client().subscribe(to)
     await told(1)
     subscription.close()
-    expect(calls).toEqual([['snapshot', [{ ...agentIs('idle'), address: 't7' }]]])
+    expect(calls).toEqual([['snapshot', [fakeIs('t7', 'idle')]]])
     expect(await client().request('terminal.get', { terminal: 't7' }))
       .toEqual({ ok: true, result: expect.objectContaining({ address: 't7', argv: ARGV_2MIB.more.argv }) })
   })
@@ -553,7 +562,7 @@ describe.skipIf(process.platform === 'win32')('the hc client (docs/plans/2026-11
     server.missed()
     await fence()
     subscription.close()
-    const idle = (address: string) => ({ ...agentIs('idle'), address })
+    const idle = (address: string) => fakeIs(address, 'idle')
     expect(calls).toEqual([
       ['snapshot', Array.from({ length: 1024 }, (_, at) => idle(`t${at + 1}`))],
       ['over', 1],
@@ -561,7 +570,7 @@ describe.skipIf(process.platform === 'win32')('the hc client (docs/plans/2026-11
       ['over', 2],
       ['changed', { ...idle('t1'), live: false }],
       // Created before its program reports, then its first status.
-      ['changed', { address: 't2001', live: true, space: true, cwd: '/work/hh' }],
+      ['changed', { address: 't2001', live: true, space: true, cwd: '/work/hh', turn: 0 }],
       ['changed', idle('t2001')],
       ['snapshot', [idle('t2'), idle('t3')]],
       ['over', 0],
