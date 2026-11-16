@@ -944,7 +944,7 @@ mod tests {
         let off = MenuItem::Check(MenuAction::SoundOn, "Sound".into(), false);
 
         let effects = app.handle(line(false));
-        assert_eq!(checks(&effects), [on.clone()]);
+        assert_eq!(checks(&effects), vec![on.clone()]);
         assert!(has(&effects, &Effect::Log("menu: Dial connected · 0.0.95 | Sound ✓ | Quit".into())));
 
         // The click's own check flipped natively: the menu drawn again puts it back where the dial is.

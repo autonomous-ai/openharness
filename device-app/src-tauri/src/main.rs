@@ -15,7 +15,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-use tauri::menu::{Menu, MenuItem as NativeItem, PredefinedMenuItem};
+use tauri::menu::{CheckMenuItem, Menu, MenuItem as NativeItem, PredefinedMenuItem};
 use tauri::tray::{MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, WindowEvent};
 
@@ -222,6 +222,9 @@ fn native_menu(handle: &AppHandle, items: &[MenuItem]) -> tauri::Result<Menu<tau
             MenuItem::Text(text) => menu.append(&NativeItem::new(handle, text, false, None::<&str>)?)?,
             MenuItem::Action(action, text) => {
                 menu.append(&NativeItem::with_id(handle, menu_id(*action), text, true, None::<&str>)?)?
+            }
+            MenuItem::Check(action, text, checked) => {
+                menu.append(&CheckMenuItem::with_id(handle, menu_id(*action), text, true, *checked, None::<&str>)?)?
             }
             MenuItem::Separator => menu.append(&PredefinedMenuItem::separator(handle)?)?,
         }

@@ -11,6 +11,8 @@ pub struct DialStatus {
     pub board: Option<String>,
     pub updating: Option<String>,
     pub problem: Option<String>,
+    /// The dial's sound setting; None from an older CLI or a firmware with no settings.
+    pub muted: Option<bool>,
 }
 
 /// harnessd, as the keep-alive last saw it.
@@ -107,11 +109,12 @@ pub enum MenuAction {
     Quit,
 }
 
-/// Text is a disabled line.
+/// Text is a disabled line. Check: the action a click does, the label, whether it is checked.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MenuItem {
     Text(String),
     Action(MenuAction, String),
+    Check(MenuAction, String, bool),
     Separator,
 }
 

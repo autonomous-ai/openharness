@@ -50,6 +50,12 @@ pub fn menu(state: &AppState) -> Vec<MenuItem> {
         ]),
         None => {}
     }
+    // The check is what the dial reports; the item carries the action its click does.
+    match sound_muted(state) {
+        Some(false) => items.push(MenuItem::Check(MenuAction::SoundOff, "Sound".into(), true)),
+        Some(true) => items.push(MenuItem::Check(MenuAction::SoundOn, "Sound".into(), false)),
+        None => {}
+    }
     items.push(MenuItem::Separator);
     if state.desktop_installed {
         items.push(MenuItem::Action(MenuAction::OpenHarness, "Open Harness".into()));
@@ -72,14 +78,25 @@ pub fn due(state: &AppState) -> Option<Screen> {
 
 /// The menu as one log line: its labels joined by ` | `, without separators.
 pub fn menu_log(items: &[MenuItem]) -> String {
-    let labels: Vec<&str> = items
+    let labels: Vec<String> = items
         .iter()
         .filter_map(|item| match item {
-            MenuItem::Text(label) | MenuItem::Action(_, label) => Some(label.as_str()),
+            MenuItem::Text(label) | MenuItem::Action(_, label) | MenuItem::Check(_, label, false) => {
+                Some(label.clone())
+            }
+            MenuItem::Check(_, label, true) => Some(format!("{label} ✓")),
             MenuItem::Separator => None,
         })
         .collect();
     labels.join(" | ")
+}
+
+/// The dial's sound, when there is one to change: an attached dial, not updating, on a running Harness.
+fn sound_muted(state: &AppState) -> Option<bool> {
+    if state.cli != CliState::Found || state.daemon != Daemon::Up {
+        return None;
+    }
+    state.dial.as_ref().filter(|dial| dial.attached && dial.updating.is_none()).and_then(|dial| dial.muted)
 }
 
 /// Claude Code can be turned on or off here.
