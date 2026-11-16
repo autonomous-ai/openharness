@@ -84,6 +84,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          # Nothing in the job needs the token, and the build runs third-party code.
+          persist-credentials: false
           sparse-checkout: |
             /device-app/
             /.github/actions/macos-signing/
