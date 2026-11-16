@@ -3480,6 +3480,45 @@ describe('hello capabilities', () => {
     } finally { await session.stop() }
   })
 
+  it('a dial that greets anew is asked each open question once, though its host asks them again as it arrives', async () => {
+    const host = richHost()
+    const { session, port } = await connect(host)
+    const notice = [{ key: 'notice', q: 'Tests pass.', options: ['In Terminal'] }]
+    const ask = [{ key: 'k', q: 'Ship it?', options: ['yes', 'no'] }]
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.0' })
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+      await session.question('a1', 'shown:n1', notice)
+      port.sent.length = 0
+      // The devices ask each pending notice and wait again as a dial arrives (services/devices.ts `dialAttached`), and the
+      // core its open questions: the dial beeps at every `question`, so each is one frame, after the drawer.
+      host.onDialAttached = () => { void session.question('a1', 'shown:n1', notice); void session.question('a2', 'q2', ask) }
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.1' })
+      await vi.waitFor(() => expect(port.types()).toContain('question'))
+      await settle()
+      expect(ofType(port, 'question')).toMatchObject([{ agentId: 'a1', id: 'shown:n1' }, { agentId: 'a2', id: 'q2' }])
+      expect(port.types().indexOf('question')).toBeGreaterThan(port.types().indexOf('notif.replace'))
+    } finally { await session.stop() }
+  })
+
+  it('a question the dial holds is not asked of it again, as the core asks it of devices that reconnect', async () => {
+    const { session, port } = await connect(richHost())
+    const ask = [{ key: 'k', q: 'Ship it?', options: ['yes', 'no'] }]
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.0' })
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+      await session.question('a1', 'q1', ask)
+      port.sent.length = 0
+      await session.question('a1', 'q1', ask)
+      expect(ofType(port, 'question')).toEqual([])
+      // Another, or the same one after the other closed, is new to the dial.
+      await session.question('a1', 'q2', ask)
+      await session.questionClose('a1', 'q2')
+      await session.question('a1', 'q1', ask)
+      expect(ofType(port, 'question')).toMatchObject([{ agentId: 'a1', id: 'q2' }, { agentId: 'a1', id: 'q1' }])
+    } finally { await session.stop() }
+  })
+
   it('advertises resync in the welcome of a Pro only', async () => {
     const { session, port } = await connect(richHost())
     try {
