@@ -164,4 +164,3 @@ export function createAgentLife(deps: AgentLifeDeps) {
     disconnected(service: string): void { processes.delete(service) },
   }
 }
-
