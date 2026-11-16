@@ -56,10 +56,11 @@
 // it draws or announces anything (an engine's first run after an update). `unreadableDescriptorMs` is how long,
 // once started, it holds a descriptor the daemon's process reader has no name for, as Codex 0.162.1 did for its
 // first seconds in a clean macOS VM (2026-10-12): every read of its process was refused until then ("the native
-// control descriptor type is unavailable"). `holdsRollout: false` (Codex) keeps no rollout open, so a test can
-// prove the daemon learned its home from something else (enginehomes.e2e.ts). `firstHookDelayMs` is how long
-// its first SessionStart takes to reach the daemon once the engine is up: the hook command starting on a
-// loaded machine, while the daemon has already found the engine and its conversation. `root` is the
+// control descriptor type is unavailable"). `helpDelayMs` is how long its help (`--help` or `-h`) takes to answer, as
+// a fresh Codex's first run held the launch script's help probe open for seconds. `holdsRollout: false` (Codex) keeps
+// no rollout open, so a test can prove the daemon learned its home from something else (enginehomes.e2e.ts).
+// `firstHookDelayMs` is how long its first SessionStart takes to reach the daemon once the engine is up: the hook
+// command starting on a loaded machine, while the daemon has already found the engine and its conversation. `root` is the
 // test's throwaway root, the only place whose hooks it will run, and `hookLog` where it notes every hook
 // it ran. `trustPrompt` makes it ask whether to trust a folder its own config has no answer for. Codex
 // refuses to resume a conversation it archived, as the real one does.
@@ -178,6 +179,9 @@ export async function run(engine, config = {}, { native = false } = {}) {
     return
   }
   if (args.includes('--help') || args.includes('-h')) {
+    // A slow first run of a fresh Codex held the launch script's help probe open (2.9 s measured,
+    // engines/kit/launchStartup.ts `ownedFlagProbe`); a test holds it open the same way, not unref'd so the process stays.
+    if (config.helpDelayMs) await new Promise((resolve) => setTimeout(resolve, config.helpDelayMs))
     // The flags the daemon looks for in the real CLIs' help before it launches them, less the ones this
     // release has dropped.
     process.stdout.write((engine === 'codex'
