@@ -34,7 +34,7 @@ const NAMES: Record<string, string> = {
   cursor: 'Cursor',
   warp: 'Warp',
   claude: 'Claude',
-  codex: 'Codex',
+  codex: 'ChatGPT',
   terminal: 'Terminal',
 }
 
