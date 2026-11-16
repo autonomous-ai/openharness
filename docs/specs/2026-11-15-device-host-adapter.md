@@ -106,9 +106,10 @@ Each verb uses the first pane in that order whose adapter can do it:
 - a rest: the first whose `canShow` says yes;
 - a tap: the first whose `canFocus` says yes.
 
-So an agent seen by two hosts keeps every route it has today. Two examples:
-- herdr or WezTerm inside an Orca terminal still takes words and rests through Orca (herdr's words now go over
-  herdr's socket on macOS and Linux: [herdr](2026-11-16-device-herdr.md#the-herdr-adapter-hostsherdrts));
+So an agent seen by two hosts keeps every route it has today. Three examples:
+- WezTerm inside an Orca terminal still takes words and rests through Orca;
+- herdr inside an Orca terminal takes rests through Orca, and words over herdr's socket on macOS and Linux
+  ([herdr](2026-11-16-device-herdr.md#the-herdr-adapter-hostsherdrts));
 - herdr inside Terminal, iTerm2 or Ghostty still writes its tab select.
 
 Every event computes the panes afresh, as `handle` and `opens` are today, so a session resumed elsewhere never keeps a
@@ -151,7 +152,7 @@ The rule stays as it is (`registry.ts`):
 
 The herdr spec reverses the last two: the hook's copy wins ([one agent, one row](2026-11-16-device-herdr.md#one-agent-one-row-the-merge-key-4341-left-to-this-pull-request)).
 
-Today no agent can reach the merged list twice:
+Before herdr ([2026-11-16 spec](2026-11-16-device-herdr.md)), no agent could reach the merged list twice:
 
 - a pane's hook goes to the core, and only a paneless hook reaches the devices;
 - the open scan skips Harness's own sessions;
