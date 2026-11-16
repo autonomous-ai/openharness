@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # TEMPORARY: removed before the merge, with tmp-device-app-release.yml, its only caller.
 # Builds Harness Device 0.0.1 and 0.0.2 with updater keys made here, serves 0.0.2 on 127.0.0.1, then checks that 0.0.1
-# skips the update from a folder it cannot write, and from a writable one updates itself to 0.0.2 and relaunches.
+# skips the update from a folder it cannot write, and from a writable one updates itself to 0.0.2, relaunches, and 0.0.2
+# runs.
 # The relaunch goes through LaunchServices, which gives the app the account's own HOME, so this seeds the runner's HOME
 # and runs on a disposable GitHub runner only.
 set -euo pipefail
@@ -98,7 +99,7 @@ wait_until 10 serving || die "the file server did not start"
 port="$(sed -n 's/^Serving HTTP on 127\.0\.0\.1 port \([0-9]*\) .*/\1/p' "$work/logs/server.log")"
 
 # Only 0.0.1 may read plain http (a release build refuses it without the dangerous key). 0.0.2 asks https of this plain
-# server, which fails, so the relaunched app reaches nothing.
+# server, which fails: the relaunched app reaches nothing, and the check it logs as failed shows 0.0.2 runs.
 config() { printf '{"plugins":{"updater":{"pubkey":"%s","endpoints":["%s"]%s}}}' "$pub" "$1" "$2"; }
 # release-device.yml's two steps: the compile with no signing key in its environment, then the bundle with it.
 build() {
@@ -173,7 +174,6 @@ running "$work/locked" || die "0.0.1 in a folder it cannot write stopped"
 echo "ok: 0.0.1 in a folder it cannot write skipped 0.0.2, stayed 0.0.1 and runs"
 stop "$work/locked"
 wait_until 15 gone "$work/locked" || die "0.0.1 in a folder it cannot write did not stop"
-chmod -R u+w "$work/locked"
 
 mkdir "$work/run"
 tar -xzf "$work/old/Harness-Device.app.tar.gz" -C "$work/run"
@@ -188,5 +188,16 @@ relaunched() {
 }
 wait_until 180 at_version "$work/run/Harness Device.app" 0.0.2 || die "the bundle did not become 0.0.2"
 wait_until 60 logged "update: installed 0.0.2" || die "the app did not log installing 0.0.2"
+# 0.0.1's update lines end at this one, as it checks no more: with no failure among them, the failed check below can
+# only be 0.0.2's, however soon after the relaunch it comes. sed reads the days of the log as one stream.
+before="$(sed -n '1,/update: installed 0\.0\.2/p' "$log_dir"/app-*.log)"
+if [[ "$before" == *"update: failed"* ]]; then
+  die "0.0.1 logged a failed update"
+fi
 wait_until 60 relaunched || die "the app did not relaunch"
-echo "PASS: 0.0.1 updated itself to 0.0.2 and relaunched"
+# Tauri's restart starts the new instance (open -n), then exits.
+exited() { ! kill -0 "$first" 2>/dev/null; }
+wait_until 15 exited || die "0.0.1 (pid $first) still runs beside the relaunched app"
+wait_until 60 logged "update: failed check" || die "the relaunched app logged no update check: 0.0.2 does not run"
+running "$work/run" || die "0.0.2 stopped after its first check"
+echo "PASS: 0.0.1 updated itself to 0.0.2, relaunched, and 0.0.2 runs"
