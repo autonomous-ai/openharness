@@ -116,10 +116,11 @@ fi
 if [ -z "$notes_file" ]; then
   {
     printf 'Harness Device %s\n\n' "$version"
+    # Only the device app's commits, of a monorepo: the notes are what its users read.
     if [ -n "$last_tag" ]; then
-      git log --no-merges --pretty='- %s' "$last_tag..HEAD"
+      git log --no-merges --pretty='- %s' -n 100 "$last_tag..HEAD" -- device-app
     else
-      git log --no-merges --pretty='- %s' -20
+      git log --no-merges --pretty='- %s' -n 20 -- device-app
     fi
   } > "$work/notes"
 fi
