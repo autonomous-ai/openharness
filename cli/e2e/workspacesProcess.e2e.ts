@@ -3,9 +3,9 @@
  * (`HARNESSD_SERVICES=workspaces`: the edge host running workspaces alone; here also with search and the
  * viewers): the branch Harness made up for a worktree takes its session's name, renamed by the workspaces
  * process and shown on the agent's frame by the core. Whatever happens to the process costs workspaces alone. Stopped,
- * hung, killed or crashing on every start, the core never restarts, agents keep working, and frames keep their branch
- * names, which the core reads itself. A core that restarts leaves the process running. Nothing removes a worktree on a
- * timer (#4166).
+ * hung, killed or crashing on every start, the core never restarts and agents keep working. Frames retain reported
+ * facts; before the service reports, they show the launch folder. A core restart leaves the process running.
+ * Nothing removes a worktree on a timer (#4166).
  */
 import { execFileSync } from 'node:child_process'
 import { mkdirSync, writeFileSync } from 'node:fs'
@@ -155,7 +155,7 @@ describe('workspaces in their own process', () => {
     client.close()
   })
 
-  it('crashing on every start, it is parked; agents work, and their frames keep their branches', async () => {
+  it('crashing on every start, it is parked; agents work, and their frames keep their launch folders', async () => {
     const d = await IsolatedDaemon.create({ env: {
       HARNESSD_SERVICES: 'workspaces', HARNESSD_TEST_FAULTS: 'workspaces.crash', HARNESSD_SERVICE_PARK_CRASHES: '3',
       HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '200', HARNESSD_SERVICE_MAX_BACKOFF_MS: '1000',
@@ -168,7 +168,11 @@ describe('workspaces in their own process', () => {
     const agent = await create(d, client, cwd)
     await until('the master to park workspaces', () => d.log().includes('[harnessd] service edge ended 3 times') || null, 60_000, 250)
     await turn(client, agent.id, 'workspaces is parked and nothing else cares')
-    expect(await branchOf(client, agent.id)).toBe('brave-otter')
+    // No service has observed this agent: Git facts must not be fabricated by the core.
+    const frame = await row(client, agent.id)
+    expect(frame?.project).toMatchObject({ kind: 'none', cwd, root: null, branch: null, remote: null })
+    expect(frame?.gitContext).toMatchObject({ state: 'workspace', current: { cwd, root: null, branch: null }, observedAt: null, checkouts: [] })
+    expect(git(d, cwd, 'symbolic-ref', '--short', 'HEAD')).toBe('brave-otter')
     expect(d.coresStarted()).toBe(1)
     client.close()
   })

@@ -94,8 +94,11 @@ without widening transport admission.
 Keep at most 512 scheduled/cached agent observations and four running inspections,
 matching the Git reader's existing subprocess concurrency. Coalesce each agent's
 latest followed view, evict only settled observations, and report queue exhaustion
-without increasing pending work. Lease, cwd and conversation changes revoke an
-older result before it writes history or publishes. A branch rename invalidates
+without increasing pending work. The service checks its captured lease, cwd and
+conversation before starting a history observation and again before publishing.
+An observation already accepted may finish saving historical facts for its
+captured conversation after that view changes; it grants no cleanup authority
+and cannot publish into the replacement view. A branch rename invalidates
 the service's refresh time. The core wires its cached usage reader before creating
 the inline service scope, because that scope copies the API's top-level fields.
 The publication lease names a running lifecycle, not every directory or
