@@ -4,18 +4,21 @@
  * core took it, and the turn ops a Stop, a cancel and an attach make. Each engine's own readings are the golden's
  * (engines/otherTranscripts.golden.spec.ts).
  */
-import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { open as openTranscript } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { LiveEvent } from '../kit/events.js'
-import { STREAM_OP, STREAM_OPEN, STREAM_VERSION, STREAMS_WAIT } from '../worker/otherStreamProtocol.js'
+import { STREAM_OP, STREAM_OPEN, STREAM_STORE, STREAM_VERSION, STREAMS_WAIT } from '../worker/otherStreamProtocol.js'
 import { otherStreamRequests } from './streamRequests.js'
 import { createOtherStreams } from './streams.js'
 import { stampAt } from '../worker/liveFiles.js'
 import { PENDING_TASKS_FILE } from '../cursor/contract.js'
 import { Watcher } from '../../watcher/watcher.js'
+import { env } from '../../config/env.js'
+import { forgetHermesHomes, hermesDbPath } from '../hermes/home.js'
 
 const started = (userMessage: string): LiveEvent => ({ type: 'turn_started', payload: { userMessage } })
 /** A file engine's normalizer that reads JSON lines: `{"events":[…],"open":true|false}`. */
@@ -584,5 +587,42 @@ describe('the other engines\' live streams, in their worker', () => {
     expect((await run.ask(STREAM_OP, { op: 'pane', token: 't1', reading: { ready: true, gatewayLost: false, running: false } })).answer.quietFor).toBe(0)
     expect(await run.ask(STREAM_OP, { op: 'task', token: 't1', toolUseId: '', input: {} })).toMatchObject({ error: 'ENGINE_INVALID_REQUEST' })
     expect((await run.ask(STREAM_OP, { op: 'task', token: 't1', toolUseId: 'tool', input: {} })).answer.frames).toEqual([])
+  })
+})
+
+const hasSqlite = (() => {
+  try { execFileSync('sqlite3', ['-version'], { stdio: 'ignore' }); return true } catch { return false }
+})()
+
+// A Hermes in the default home gained `hermesHome: <default>` on an attach during its stop, and the stop refused the Close (#4361).
+describe.skipIf(!hasSqlite)('the Hermes store answer', () => {
+  const DEFAULT = '20260727_162325_e25264', PROFILE = '20260921_152236_a1b2c3', UNKNOWN = '20261116_090000_abcdef'
+  const profile = join(env.HERMES_HOME, 'profiles', 'work')
+  /** A home whose store holds exactly the sessions given. */
+  const makeHome = (root: string, sessions: string[]) => {
+    mkdirSync(root, { recursive: true })
+    execFileSync('sqlite3', [hermesDbPath(root), 'CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT NOT NULL, cwd TEXT);'
+      + sessions.map(id => `INSERT INTO sessions VALUES ('${id}','cli','/tmp/x');`).join('')])
+  }
+  const ask = (sessionId: string, extra: Record<string, unknown> = {}) =>
+    setup().ask(STREAM_STORE, { session: { sessionId, engine: 'hermes', ...extra } })
+  const clean = () => { forgetHermesHomes(); rmSync(env.HERMES_HOME, { recursive: true, force: true }) }
+  beforeEach(() => { clean(); return clean })
+
+  it('answers no home for a session in the default home', async () => {
+    makeHome(env.HERMES_HOME, [DEFAULT])
+    expect(await ask(DEFAULT)).toEqual({ version: STREAM_VERSION, answer: { store: hermesDbPath(env.HERMES_HOME) } })
+  })
+  it('names the profile home a session was found in', async () => {
+    makeHome(env.HERMES_HOME, [DEFAULT]); makeHome(profile, [PROFILE])
+    expect(await ask(PROFILE)).toEqual({ version: STREAM_VERSION, answer: { store: hermesDbPath(profile), home: profile } })
+  })
+  it('answers the store of a home the row already names, and no home', async () => {
+    makeHome(env.HERMES_HOME, [PROFILE]); makeHome(profile, [PROFILE])
+    expect(await ask(PROFILE, { hermesHome: profile })).toEqual({ version: STREAM_VERSION, answer: { store: hermesDbPath(profile) } })
+  })
+  it('answers the default store and no home for a session no store holds', async () => {
+    makeHome(env.HERMES_HOME, [DEFAULT])
+    expect(await ask(UNKNOWN)).toEqual({ version: STREAM_VERSION, answer: { store: hermesDbPath(env.HERMES_HOME) } })
   })
 })
