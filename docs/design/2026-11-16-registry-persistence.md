@@ -1755,3 +1755,88 @@ not peak memory. Prior analysis found most of that difference present before
 the measured flush window; this run does not attribute or resolve it.
 Legacy-lock refusal versus success remains excluded from equal-outcome cost.
 Full package acceptance, final gates and memory investigation remain open.
+
+## Size bounded reads from the validated descriptor
+
+### Design
+
+The finite `readPrivateRegistryFile()` path currently allocates its entire
+limit plus one byte before reading. The names caller permits 1 MiB, so reading
+its two-byte `{}` image requests a 1,048,577-byte buffer. This is a concrete
+allocation target from source inspection, not attribution of the measured RSS
+difference above. A forwarded-allocation regression will record the actual
+requests before runtime changes; whole-runtime setup, settled memory and flush
+cost still need separate matched measurements.
+
+Reuse the size from the descriptor stat that already checks the file's owner,
+type and limit. Initially allocate that size plus one byte, capped at the
+caller's limit plus one. If a read fills the buffer before EOF, grow it within
+the same cap and continue positional reads. A file can grow after stat: return
+every byte observed through EOF up to the limit, and reject the first byte
+past it. Never return a truncated prefix that happens to be valid JSON. Decode
+UTF-8 once, after reading completes, so characters crossing a read or growth
+boundary remain intact. Keep the default unbounded `readFile('utf8')` path.
+
+- Growth and scale: the file limit is unchanged. Buffers belong to one read;
+  no cache, global state, queue, setting or dependency is added. Geometric
+  growth bounds copying and total allocation by a constant multiple of the
+  existing cap. Old and replacement buffers can coexist during growth, so a
+  lower small-file allocation does not promise a lower maximum for growing
+  files. Measure allocation requests and whole-runtime memory separately.
+- Concurrency: use the same opened descriptor throughout. The initial size is
+  an allocation hint, never authority to stop reading. Existing writer locks,
+  revisions, owner predicates and publication boundaries do not change.
+- Read cost: reuse the existing descriptor stat; no extra pathname inspection,
+  directory scan, poll or syscall is needed for a stable small file. Preserve
+  bounded reads and the caller's existing deadline checks and cleanup.
+- Compatibility: no file format, wire contract, filename, error or caller
+  success rule changes. Existing clients and backends remain compatible.
+- Migration and rollback: no migration; reverting restores the previous
+  buffer allocation without changing persisted data.
+- Audience and identity: preserve descriptor owner/type/mode checks, POSIX
+  no-follow opening and Windows private-root checks. No new account or file
+  access is introduced.
+- Failure: preserve existing size and unsafe-file errors, propagation of I/O
+  failures, and descriptor closure on success and every failure. No malformed
+  or truncated contents become a successful durable state.
+- Platforms: shared TypeScript affects macOS, Linux and Windows. No process
+  launch changes. Native evidence will name the actual platforms run;
+  platform-specific permission, link and root controls remain explicit.
+
+Before runtime changes, `registryPersistence.read.spec.ts` calls the exported
+reader with real private files and file handles. Its allocation spies forward
+the real `Buffer.alloc`, `allocUnsafe` and `allocUnsafeSlow` calls and report
+requested bytes, not retained memory or peak RSS. Controls cover small and
+empty files, exact and exceeded limits, growth after the real stat below and
+above the cap, short reads splitting UTF-8, the default unbounded path, private
+file checks, and actual descriptor closure after failures. The small-file
+allocation assertion failed against `30e3d6c`: the real `Buffer.alloc` requested
+1,048,577 bytes for `{}`. Nineteen controls passed and one Windows-only case
+was skipped (403 ms, `/tmp/core-registry-bounded-read-red.log`).
+
+The reader now retains the existing descriptor size and allocates three bytes
+for that file, growing geometrically only if the file fills that buffer.
+It still reads through EOF or the first byte over the unchanged limit. All
+twenty reader cases pass on macOS; the Windows-only case remains unverified.
+TypeScript passed (`/tmp/core-registry-bounded-read-types.log`).
+
+The selected six-file caller/control run did **not** pass: 92 tests passed,
+three failed and one was skipped (25.63 s,
+`/tmp/core-registry-bounded-read-green.log`; the filename does not imply a pass).
+The three failures are in `registry.observation.spec.ts`: unchanged
+`openProcessAgent` no longer returns the live row object, and unchanged
+re-observations after dormant reactivation or learned launch metadata perform
+three fsyncs rather than zero. All three reproduce once in a clean disposable
+`30e3d6c` checkout with the new reader test absent and the same locked
+dependencies (1.93 s, `/tmp/core-registry-observation-30e3-baseline.log`, inputs
+`/tmp/core-registry-read-baseline-30e3-inputs.json`). They predate this allocation
+correction. The broader authority/publication behavior is unchanged here;
+root owns their resolution and full-package acceptance.
+
+After the scheduled RED run, selected checks are the new reader controls,
+existing persistence/observation and names caller controls (including explicit
+same-value rename, authority loss, uncertain directory fsync and peer merging),
+TypeScript, affected required local gates, and the retained matched cost
+workload. Root schedules these around isolated performance measurements.
+Earlier passing receipts cover their recorded source only. Memory acceptance
+and full-package acceptance remain open until the final source is measured.

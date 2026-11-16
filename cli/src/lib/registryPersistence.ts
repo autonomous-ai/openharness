@@ -122,20 +122,21 @@ async function windowsRoot(path: string): Promise<void> {
   if (!insideWindowsRoots(await fs.realpath(path), roots)) throw new Error('state path is outside the configured private roots')
 }
 
-async function privateDescriptor(handle: FileHandle, directory: boolean, maxBytes = Number.MAX_SAFE_INTEGER): Promise<void> {
+async function privateDescriptor(handle: FileHandle, directory: boolean, maxBytes = Number.MAX_SAFE_INTEGER): Promise<number> {
   const stat = await handle.stat()
   const owner = uid()
   if (!(directory ? stat.isDirectory() : stat.isFile()) || (owner !== null && stat.uid !== owner)) {
     throw new Error('state file has unsafe owner or type')
   }
   if (!directory && stat.size > maxBytes) throw new Error('state file exceeds its size limit')
-  if (process.platform === 'win32') return
+  if (process.platform === 'win32') return stat.size
   const mode = directory ? 0o700 : 0o600
   if ((stat.mode & 0o022) !== 0) throw new Error('state file is group/world writable')
   if ((stat.mode & 0o777) !== mode) {
     await handle.chmod(mode)
     if (((await handle.stat()).mode & 0o777) !== mode) throw new Error('state permissions could not be tightened')
   }
+  return stat.size
 }
 
 export async function privateRegistryDirectory(directory: string): Promise<void> {
@@ -153,11 +154,18 @@ export async function readPrivateRegistryFile(file: string, maxBytes = Number.MA
   if (process.platform === 'win32') await windowsRoot(file)
   const handle = await fs.open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0))
   try {
-    await privateDescriptor(handle, false, maxBytes)
+    const size = await privateDescriptor(handle, false, maxBytes)
     if (maxBytes === Number.MAX_SAFE_INTEGER) return await handle.readFile('utf8')
-    const bytes = Buffer.alloc(maxBytes + 1)
+    const limit = maxBytes + 1
+    let bytes = Buffer.alloc(Math.min(size + 1, limit))
     let offset = 0
-    while (offset < bytes.length) {
+    while (offset < limit) {
+      // Stat sizes the first allocation, but a growing file must still be read through EOF or the cap.
+      if (offset === bytes.length) {
+        const grown = Buffer.alloc(Math.min(limit, bytes.length * 2))
+        bytes.copy(grown)
+        bytes = grown
+      }
       const read = await handle.read(bytes, offset, bytes.length - offset, offset)
       if (!read.bytesRead) break
       offset += read.bytesRead
