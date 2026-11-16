@@ -48,7 +48,7 @@ describe.skipIf(process.platform === 'win32')('the hc source (docs/plans/2026-11
     let ids = 0
     let changes = 0
     const prompt = vi.fn((address: string, kind: string, text: string): Promise<HcPrompt> => client.prompt(address, kind, text))
-    const focus = vi.fn(async (_address: string) => true)
+    const focus = vi.fn(async (_address: string, _agentId: string) => true)
     const canShow = vi.fn((_address: string) => true)
     const show = vi.fn(async (_address: string, _agentId: string): Promise<PaneSwitch> => 'ok')
     const deps: HcSourceDeps = {
@@ -610,13 +610,13 @@ describe.skipIf(process.platform === 'win32')('the hc source (docs/plans/2026-11
     expect(s.counts).toEqual(['busy', 'too-long', 'no-answer', 'no-answer'])
   })
 
-  it('a tap is deps.focus with the address; a rest is deps.canShow and deps.show; one no longer listed is false, no pane and failed', async () => {
+  it('a tap is deps.focus with the address and the agent; a rest is deps.canShow and deps.show; one no longer listed is false, no pane and failed', async () => {
     server.terminals = [agent('t7')]
     const s = setup()
     await live(s)
     const api = row(s, 't7')!
     expect(await s.source.focus(api)).toBe(true)
-    expect(s.focus.mock.calls).toEqual([['t7']])
+    expect(s.focus.mock.calls).toEqual([['t7', 'u1']])
     s.focus.mockResolvedValueOnce(false)
     expect(await s.source.focus(api)).toBe(false)
 
