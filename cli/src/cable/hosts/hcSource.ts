@@ -50,7 +50,6 @@ export interface HcSourceDeps {
   now(): number
   monotonic(): number
   uuid(): string
-  platform: NodeJS.Platform
   log(line: string): void
   count(what: 'herdr-app' | 'busy' | 'waiting' | 'too-long' | 'no-answer'): void
 }
@@ -96,8 +95,7 @@ export class HcSource implements HostSource {
   constructor(private readonly deps: HcSourceDeps) {}
 
   start(): void {
-    // Herdr's window, and hc's socket as the client speaks it, are tried on macOS only.
-    if (this.deps.platform !== 'darwin' || this.running) return
+    if (this.running) return
     this.running = true
     this.attempts.start()
   }

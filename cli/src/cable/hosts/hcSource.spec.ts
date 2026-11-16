@@ -74,7 +74,6 @@ describe.skipIf(process.platform === 'win32')('the hc source (docs/plans/2026-11
       now: () => wall,
       monotonic: () => mono,
       uuid: () => `u${++ids}`,
-      platform: 'darwin',
       log: (line) => {
         log.push(line)
         settle()
@@ -554,21 +553,6 @@ describe.skipIf(process.platform === 'win32')('the hc source (docs/plans/2026-11
     s.source.start()
     await s.until(() => s.log.includes('[herdr-app] listed · 0 agents'))
     expect(subscribe).toHaveBeenCalledTimes(1)
-  })
-
-  it('off macOS start does nothing', () => {
-    for (const platform of ['linux', 'win32'] as const) {
-      const s = setup({ platform })
-      const subscribe = vi.spyOn(s.client, 'subscribe')
-      const stamp = vi.spyOn(s.client, 'socketStamp')
-      s.source.start()
-      expect(subscribe, platform).not.toHaveBeenCalled()
-      expect(stamp, platform).not.toHaveBeenCalled()
-      expect(s.watchers.size, platform).toBe(0)
-      expect(s.timers, platform).toEqual([])
-      expect(s.log, platform).toEqual([])
-    }
-    expect(server.connections).toBe(0)
   })
 
   it('voice', async () => {
