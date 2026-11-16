@@ -109,10 +109,6 @@ class LocalSystemNotices implements SystemNotices {
   @override
   final openedDevice = ValueNotifier<String?>(null);
 
-  /// Told when the person has just allowed notices ([requestPermission]): the moment pushes can
-  /// start reaching them (`notify/push_tokens.dart`).
-  void Function()? onAllowed;
-
   /// One Android channel per kind, so a person can silence finished turns and
   /// still hear questions — the two are not equally urgent. Also the iOS
   /// thread each kind is grouped under.
@@ -184,9 +180,7 @@ class LocalSystemNotices implements SystemNotices {
             AndroidFlutterLocalNotificationsPlugin
           >()
           ?.requestNotificationsPermission();
-      final allowed = ios ?? android;
-      if (allowed == true) onAllowed?.call();
-      return allowed;
+      return ios ?? android;
     } catch (error) {
       appLog.warn('notify', 'permission request failed', error: error);
       return null;

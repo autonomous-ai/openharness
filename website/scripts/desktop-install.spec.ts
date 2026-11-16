@@ -1,9 +1,69 @@
 import { spawnSync } from "child_process";
-import { readFileSync, unlinkSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
 import { join } from "path";
 import { describe, expect, it } from "vitest";
 
 const installer = join(process.cwd(), "scripts", "desktop-install.sh");
+
+const MANIFEST_URL = "https://example.test/harness/desktop/metadata.json";
+
+/**
+ * Runs the installer as `os` against a manifest whose `key` entry has `version` and `url`, with stub tools
+ * on PATH: curl serves the manifest and records, then fails, every other download, so the run stops right
+ * after the URL check. Returns the result and the URLs it tried to download.
+ */
+function runInstaller(os: "Darwin" | "Linux", key: string, version: string, url: string) {
+  const dir = mkdtempSync(join(tmpdir(), "harness-install-"));
+  try {
+    const bin = join(dir, "bin");
+    const manifest = join(dir, "metadata.json");
+    const downloads = join(dir, "downloads");
+    const sha256 = "a".repeat(64);
+    mkdirSync(bin);
+    writeFileSync(manifest, JSON.stringify({ [key]: { version, url, sha256, size: 1 } }, null, 2));
+    const stub = (name: string, body: string) => writeFileSync(join(bin, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+    stub("uname", `[ "$1" = -s ] && echo ${os} || echo x86_64`);
+    stub(
+      "curl",
+      `out= url= prev=
+for arg; do
+  if [ "$prev" = -o ]; then out="$arg"; else case "$arg" in -*) ;; *) url="$arg" ;; esac; fi
+  prev="$arg"
+done
+if [ "$url" = '${MANIFEST_URL}' ]; then cp '${manifest}' "$out"; exit 0; fi
+printf '%s\\n' "$url" >> '${downloads}'
+exit 22`,
+    );
+    stub(
+      "plutil",
+      `case "$2" in
+  ${key}.version) printf '%s' '${version}' ;;
+  ${key}.url) printf '%s' '${url}' ;;
+  ${key}.sha256) printf '%s' '${sha256}' ;;
+  ${key}.size) printf '%s' 1 ;;
+  *) exit 1 ;;
+esac`,
+    );
+    // Never reached before the download fails; present only so the installer's tool checks pass on any OS.
+    for (const name of ["shasum", "sha256sum", "ditto", "lipo", "open", "pgrep"]) stub(name, "exit 1");
+
+    const result = spawnSync("sh", [installer], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: `${bin}:${process.env.PATH}`,
+        HOME: dir,
+        HARNESS_DESKTOP_APP_DIR: join(dir, "app"),
+        HARNESS_DESKTOP_METADATA_URL: MANIFEST_URL,
+      },
+    });
+    const requested = existsSync(downloads) ? readFileSync(downloads, "utf8").split("\n").filter(Boolean) : [];
+    return { result, requested };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
 
 describe("desktop-install.sh", () => {
   it("is valid POSIX shell", () => {
@@ -125,4 +185,32 @@ describe("desktop-install.sh", () => {
       unlinkSync(metadataPath);
     },
   );
+
+  it.each([
+    ["Darwin", "desktop-macos", "https://cdn.autonomous.ai/harness/desktop/1.2.4/Harness-macos.zip"],
+    [
+      "Linux",
+      "desktop-linux-x64",
+      "https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/desktop/1.2.4/Harness-linux-x64.AppImage",
+    ],
+  ] as const)("%s downloads the release's own file (%s): %s", (os, key, url) => {
+    const { result, requested } = runInstaller(os, key, "1.2.4", url);
+
+    expect(requested).toEqual([url]);
+    expect(result.stderr).toContain("could not download Harness 1.2.4");
+  });
+
+  // curl collapses dot segments, so a glob's `*` matching `../..` would download from another bucket.
+  it.each([
+    ["Darwin", "desktop-macos", "https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/desktop/../../../attacker-bucket/Harness-macos.zip"],
+    ["Darwin", "desktop-macos", "https://cdn.autonomous.ai/harness/desktop/1.2.4/../../device/1.2.4/Harness-macos.zip"],
+    ["Darwin", "desktop-macos", "https://cdn.autonomous.ai/harness/desktop/1.2.3/Harness-macos.zip"],
+    ["Linux", "desktop-linux-x64", "https://cdn.autonomous.ai/harness/desktop/../../../attacker-bucket/Harness-linux-x64.AppImage"],
+  ] as const)("%s refuses a URL outside the release's own folder (%s): %s", (os, key, url) => {
+    const { result, requested } = runInstaller(os, key, "1.2.4", url);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("desktop metadata points outside the Harness desktop release bucket");
+    expect(requested).toEqual([]);
+  });
 });

@@ -341,28 +341,6 @@ Tab, machine, project and full status descriptions remain in tooltips and
 accessibility text. Unavailable
 rows remain visible and disabled. An empty inbox says “No unread notifications.”
 
-A Swarm section follows, on a Mac only, and disappears when empty: the
-person's agents that ask them in their open Swarm tabs (`statusMenuSwarmEntries`),
-each an agent whose own chat has something new for them by its read marks
-(Swarm v4: an agent reaches its person only there). A row is the agent's name
-and its newest words in that chat when they are held, with when they came; the
-Swarm is in the tooltip and accessibility text. Each Swarm shows at most five,
-then its own View all, which brings that Swarm forward; with several Swarms
-each has a heading with its name and count, so a second Swarm's items are never
-behind the first's overflow. Choosing a row opens that agent's chat; one read
-meanwhile does nothing. Mark all read leaves them: a row goes when its chat is
-read. They add to the menu bar badge, and their count across every Swarm tab is
-the badge on the Dock's app icon, cleared at zero and when the workspace leaves.
-The pictures below show the rows' layout; their words are from before Swarm v4.
-
-![The Swarm section between Ready and Working](images/notification-swarm-light.png)
-
-![The Swarm section in dark appearance](images/notification-swarm-dark.png)
-
-![Two Swarms, each with its own heading and View all](images/notification-swarms-light.png)
-
-![Two Swarms in dark appearance](images/notification-swarms-dark.png)
-
 Working starts expanded and disappears when empty. It shows active, known sessions that
 are not already in Notifications, with elapsed time only when the app observed
 their turn start. Exclude idle shells, paused/offline sessions, and waiting

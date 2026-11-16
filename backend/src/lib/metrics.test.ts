@@ -112,6 +112,11 @@ describe('what the scan reads: the counters and the last hour from the same even
 })
 
 describe('process metrics', () => {
+  it('does not advertise the removed Swarm phone-delivery feature', async () => {
+    const { registry } = createMetrics()
+    expect(await registry.metrics()).not.toContain('phone_pushes_total')
+  })
+
   it('reports event-loop delay and GC pauses', async () => {
     const { registry } = createMetrics()
     const text = await registry.metrics()

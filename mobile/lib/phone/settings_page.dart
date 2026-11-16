@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+
+import 'package:harness_mobile/chat/chat_view_store.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
@@ -205,6 +207,9 @@ class _Body extends StatelessWidget {
       SettingsGroup(
         children: [_FontPreview(), _FontRow(), _SizeRow(), _TerminalThemeRow()],
       ),
+      // How every agent opens: its terminal, or its conversation as chat — see `chat/chat_view.dart`.
+      const SettingsCaption('Chat UI'),
+      SettingsGroup(children: [_ChatUiRow()]),
       // ⚠️ **Its own section, not a row under Terminal.** The rows above answer
       // what the pane LOOKS like — face, size, colours. This one answers what the mic HEARS, which is
       // the other half of the terminal and the one people go looking for when
@@ -213,7 +218,12 @@ class _Body extends StatelessWidget {
       const SettingsCaption('Voice'),
       SettingsGroup(children: [_VoiceLanguageRow()]),
       const SettingsCaption('Appearance'),
-      SettingsGroup(children: [_PaletteRow(store: appearance), _TextSizeRow()]),
+      SettingsGroup(
+        children: [
+          _PaletteRow(store: appearance),
+          _TextSizeRow(),
+        ],
+      ),
       const SettingsCaption('Help'),
       SettingsGroup(
         children: [
@@ -299,7 +309,8 @@ class _Body extends StatelessWidget {
       );
       Navigator.of(context).push(
         phoneRoute(
-          (_) => MachinesTab(notifier: notifier, large: false, fromSettings: true),
+          (_) =>
+              MachinesTab(notifier: notifier, large: false, fromSettings: true),
         ),
       );
     },
@@ -322,9 +333,9 @@ class _Body extends StatelessWidget {
   Widget _connectorsRow(BuildContext context) => SettingsRow(
     key: const Key('settings-connectors'),
     title: 'Connectors',
-    onTap: () => Navigator.of(context).push(
-      phoneRoute((_) => ConnectorsPage(notifier: notifier)),
-    ),
+    onTap: () =>
+        Navigator.of(context)
+            .push(phoneRoute((_) => ConnectorsPage(notifier: notifier))),
   );
 
   /// A computer showing its sign-in QR (`harness login --qr`, or the web app's "Scan with your
@@ -340,9 +351,9 @@ class _Body extends StatelessWidget {
   Widget _addDeviceRow(BuildContext context) => SettingsRow(
     key: const Key('settings-add-device'),
     title: 'Set up Intern 3',
-    onTap: () => Navigator.of(context).push(
-      phoneRoute((_) => AddDevicePage(notifier: notifier)),
-    ),
+    onTap: () =>
+        Navigator.of(context)
+            .push(phoneRoute((_) => AddDevicePage(notifier: notifier))),
   );
 
   /// Every device signed in to the account — each trusted by the others because of that, so this
@@ -352,9 +363,9 @@ class _Body extends StatelessWidget {
     value: notifier.newDevices.isEmpty
         ? null
         : '${notifier.newDevices.length} new',
-    onTap: () => Navigator.of(context).push(
-      phoneRoute((_) => DevicesPage(notifier: notifier)),
-    ),
+    onTap: () =>
+        Navigator.of(context)
+            .push(phoneRoute((_) => DevicesPage(notifier: notifier))),
   );
 
   /// Not in the sample, whose notices go nowhere.
@@ -435,10 +446,7 @@ Future<void> confirmSignOut(BuildContext context, AppNotifier notifier) async {
   // The sign-out itself never waits on the page: one asked for is carried out.
   Route<void>? shown;
   if (context.mounted) {
-    final route = phoneRoute(
-      (_) => const _SigningOut(),
-      swipeToGoBack: false,
-    );
+    final route = phoneRoute((_) => const _SigningOut(), swipeToGoBack: false);
     unawaited(Navigator.of(context).push(route));
     shown = route;
   }
@@ -489,9 +497,8 @@ class _SigningOut extends StatelessWidget {
 
 /// Settings over the current page — the page Find and a terminal's menu push.
 void openPhoneSettings(BuildContext context, AppNotifier notifier) => unawaited(
-  Navigator.of(context).push(
-    phoneRoute((_) => SettingsPage(notifier: notifier, large: false)),
-  ),
+  Navigator.of(context)
+      .push(phoneRoute((_) => SettingsPage(notifier: notifier, large: false))),
 );
 
 /// Settings, at the top right of the screens a phone stands on before it can reach any harness:
@@ -587,6 +594,33 @@ class _Avatar extends StatelessWidget {
 /// whole of the setting: without it a phone transcribes in whatever language it guessed on first
 /// launch, for ever. It is drawn either way rather than only in the build that needs it — a setting
 /// that moves between releases is one nobody can be told where to find.
+/// Settings ▸ Chat UI: every agent opens as chat, or as its terminal. Turning it either way also
+/// clears the agents switched one at a time from their header ([ChatViewStore.setChatByDefault]).
+class _ChatUiRow extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+    listenable: chatViewStore,
+    builder: (context, _) {
+      AppTheme.watch(context);
+      final on = chatViewStore.chatByDefault;
+      void toggle(bool value) =>
+          unawaited(chatViewStore.setChatByDefault(value));
+      return MergeSemantics(
+        child: SettingsRow(
+          title: 'Open agents in Chat UI',
+          detail: 'The conversation instead of the terminal. Switch one agent from its header.',
+          trailing: Switch.adaptive(
+            value: on,
+            activeTrackColor: Tty.of(context).green,
+            onChanged: toggle,
+          ),
+          onTap: () => toggle(!on),
+        ),
+      );
+    },
+  );
+}
+
 class _VoiceLanguageRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) => ValueListenableBuilder(
@@ -623,7 +657,8 @@ class NotificationsSettingsRow extends StatefulWidget {
   final SystemNotices notices;
 
   @override
-  State<NotificationsSettingsRow> createState() => _NotificationsSettingsRowState();
+  State<NotificationsSettingsRow> createState() =>
+      _NotificationsSettingsRowState();
 }
 
 class _NotificationsSettingsRowState extends State<NotificationsSettingsRow>

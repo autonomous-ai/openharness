@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import '../chat/chat_view_store.dart';
 import '../logging/startup_trace.dart';
 import '../phone/phone_name_store.dart';
 import '../phone/voice_language_store.dart';
@@ -66,6 +67,9 @@ Future<void> loadPersistedSettings({
     // Counters begin moving with the first agent event. Loading them later
     // could overwrite a new event with the old count from disk.
     StartupTrace.time('prefs.stats', (stats ?? harnessStats).load),
+    // Whether agents open as chat: read late, the first agent would open as its terminal and then
+    // flip.
+    StartupTrace.time('prefs.chatView', chatViewStore.load),
     // The language the mic transcribes in. Read late, a first take could be sent to the backend
     // in the phone's language by somebody who chose another.
     StartupTrace.time(

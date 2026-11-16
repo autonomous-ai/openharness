@@ -125,9 +125,29 @@ describe('detectApp', () => {
     expect(appDisplayName('claude')).toBe('Claude')
   })
 
-  it('APP_IDS has 16 ids, at most 16, and every one has a display name', () => {
-    expect(APP_IDS).toHaveLength(16)
-    expect(APP_IDS.length).toBeLessThanOrEqual(16)
+  it("the Codex app's bundle id is codex, read ChatGPT", () => {
+    const hints = { __CFBundleIdentifier: 'com.openai.codex' }
+    expect(detectHost(hints)).toBe('codex')
+    expect(detectApp(hints)).toBe('codex')
+    expect(hostDisplayName('codex')).toBe('ChatGPT')
+    expect(appDisplayName('codex')).toBe('ChatGPT')
+  })
+
+  it('a multiplexer inside the Codex app is on the Codex page', () => {
+    const hints = { TMUX_PANE: '%3', __CFBundleIdentifier: 'com.openai.codex' }
+    expect(detectHost(hints)).toBe('tmux')
+    expect(detectApp(hints)).toBe('codex')
+  })
+
+  it("OpenAI's chat app is not the Codex app", () => {
+    const hints = { __CFBundleIdentifier: 'com.openai.chat' }
+    expect(detectApp(hints)).toBe(UNKNOWN_APP)
+    expect(detectHost(hints)).toBe('terminal')
+  })
+
+  it('APP_IDS has 17 ids, and every one has a display name', () => {
+    expect(APP_IDS).toHaveLength(17)
+    expect(APP_IDS.indexOf('codex')).toBe(APP_IDS.indexOf('claude') + 1)
     for (const id of APP_IDS) expect(appDisplayName(id)).toMatch(/\S/)
   })
 
@@ -136,7 +156,7 @@ describe('detectApp', () => {
     expect(appDisplayName('terminal-app')).toBe('Terminal')
     expect(hostDisplayName('terminal')).toBe('Terminal')
     const others = APP_IDS.filter((id) => id !== 'terminal' && id !== 'terminal-app')
-    expect(others).toHaveLength(14)
+    expect(others).toHaveLength(15)
     for (const id of others) expect(appDisplayName(id)).toBe(hostDisplayName(id))
   })
 })

@@ -44,6 +44,9 @@ void main() {
   }
 
   Future<void> tapKey(WidgetTester tester, String name) async {
+    // The strip scrolls: a key past its edge is swiped to first, as a thumb would.
+    await tester.ensureVisible(find.byKey(ValueKey('terminal-key-$name')));
+    await tester.pump();
     await tester.tap(find.byKey(ValueKey('terminal-key-$name')));
     await tester.pump();
   }
@@ -60,6 +63,63 @@ void main() {
     await tapKey(tester, 'Right');
 
     expect(outbound, ['\x1b', '\x1b[D', '\x1b[A', '\x1b[B', '\x1b[C']);
+  });
+
+  testWidgets('the rest of a terminal\'s keys are a swipe along the row', (
+    tester,
+  ) async {
+    await pumpBar(tester);
+    final more = find.byKey(const ValueKey('terminal-key-Control U'));
+    await tester.scrollUntilVisible(
+      more,
+      200,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pump();
+
+    for (final name in [
+      'Shift Tab',
+      'Space',
+      'Backspace',
+      'Delete',
+      'Control D',
+      'Control L',
+      'Control Z',
+      'Control R',
+      'Control A',
+      'Control E',
+      'Control W',
+      'Control U',
+    ]) {
+      final key = find.byKey(ValueKey('terminal-key-$name'));
+      await tester.ensureVisible(key);
+      await tester.pump();
+      await tapKey(tester, name);
+    }
+    expect(outbound, [
+      '\x1b[Z',
+      ' ',
+      '\x7f',
+      '\x1b[3~',
+      '\x04',
+      '\x0c',
+      '\x1a',
+      '\x12',
+      '\x01',
+      '\x05',
+      '\x17',
+      '\x15',
+    ]);
+
+    // alt, armed, rides the next key the strip sends.
+    outbound.clear();
+    await tester.ensureVisible(find.byKey(const ValueKey('terminal-key-alt')));
+    await tester.pump();
+    await tapKey(tester, 'alt');
+    await tester.ensureVisible(find.byKey(const ValueKey('terminal-key-Left')));
+    await tester.pump();
+    await tapKey(tester, 'Left');
+    expect(outbound.single, isNot('\x1b[D'));
   });
 
   testWidgets('^C sends interrupt at one tap', (tester) async {
@@ -143,10 +203,10 @@ void main() {
     expect(outbound, ['\x1b[A']);
   });
 
-  testWidgets('the row holds no Enter or digits', (tester) async {
+  testWidgets('the row holds no digits', (tester) async {
     await pumpBar(tester);
 
-    for (final gone in ['Enter', '1', '0']) {
+    for (final gone in ['1', '0']) {
       expect(
         find.byKey(ValueKey('terminal-key-$gone')),
         findsNothing,
@@ -229,6 +289,8 @@ void main() {
     ) async {
       await pumpPrompt(tester);
 
+      await tester.ensureVisible(newline);
+      await tester.pump();
       await tester.tap(newline);
       await tester.pump();
 
@@ -244,16 +306,19 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('terminal-key-ctrl')));
       await tester.tap(find.byKey(const ValueKey('terminal-key-shift')));
       await tester.pump();
+      await tester.ensureVisible(newline);
+      await tester.pump();
       await tester.tap(newline);
       await tester.pump();
-      await tester.tap(find.byKey(const ValueKey('terminal-key-Up')));
-      await tester.pump();
+      await tapKey(tester, 'Up');
       expect(outbound, ['\x1b\r', '\x1b[A']);
 
       // The session's ctrl is put down too.
       final armed = <bool>[];
       outbound.clear();
       await pumpPrompt(tester, ctrl: true, armCtrl: armed.add);
+      await tester.ensureVisible(newline);
+      await tester.pump();
       await tester.tap(newline);
       await tester.pump();
       expect(outbound, ['\x1b\r']);
@@ -267,9 +332,11 @@ void main() {
         expect(newline, findsNothing);
         expect(enter, findsOneWidget);
 
+        // A plain shell: no ↵, and its Return is the one past the edge of the row, with the rest
+        // of a terminal's keys.
         await pumpPrompt(tester, enginePrompt: false);
         expect(newline, findsNothing);
-        expect(enter, findsNothing);
+        expect(enter, findsOneWidget);
       },
     );
 
@@ -277,6 +344,8 @@ void main() {
       tester,
     ) async {
       await pumpPrompt(tester, enabled: false);
+      await tester.ensureVisible(newline);
+      await tester.pump();
       await tester.tap(newline);
       await tester.pump();
       expect(outbound, isEmpty);
@@ -323,12 +392,9 @@ void main() {
         await pumpPrompt(tester, width: width);
         expect(tester.takeException(), isNull);
         expect(tester.getSize(esc), asked);
-        // Inside the row, before the rule and the two keys past it.
-        final image = find.byKey(const ValueKey('terminal-key-Send image'));
-        expect(
-          tester.getTopRight(newline).dx,
-          lessThan(tester.getTopLeft(image).dx),
-        );
+        // In the row that scrolls, a swipe away; the two keys past the rule stay in view.
+        await tester.ensureVisible(newline);
+        await tester.pump();
         expect(newline.hitTestable(), findsOneWidget);
         expect(
           find
@@ -513,12 +579,12 @@ void main() {
     ];
 
     testWidgets('every key sits in a rounded cap inside its cell, raised off '
-        'the ground, on a 36pt strip', (tester) async {
+        'the ground, on a 46pt strip', (tester) async {
       await pumpCaps(tester);
       final tty = ttyOf(tester);
 
       final bar = tester.getRect(find.byType(TerminalKeyBar));
-      expect(bar.height, 36);
+      expect(bar.height, 46);
       for (final name in names) {
         final key = keyNamed(name);
         expect(capOf(key), findsOneWidget, reason: name);
@@ -532,63 +598,54 @@ void main() {
         expect(drawn.top, greaterThan(cell.top), reason: name);
         expect(drawn.bottom, lessThan(cell.bottom), reason: name);
         expect(drawn.width, cell.width, reason: name);
-        // A 26pt cap, 5pt from the strip's top and bottom; the tap still
+        // A 32pt cap, 7pt from the strip's top and bottom; the tap still
         // lands anywhere in the taller cell.
-        expect(drawn.height, closeTo(26, 0.01), reason: name);
-        expect(cell.height, closeTo(32, 0.01), reason: name);
-        expect(drawn.top - bar.top, closeTo(5, 0.01), reason: name);
-        expect(bar.bottom - drawn.bottom, closeTo(5, 0.01), reason: name);
+        expect(drawn.height, closeTo(32, 0.01), reason: name);
+        expect(cell.height, closeTo(42, 0.01), reason: name);
+        expect(drawn.top - bar.top, closeTo(7, 0.01), reason: name);
+        expect(bar.bottom - drawn.bottom, closeTo(7, 0.01), reason: name);
+        expect(drawn.width, greaterThanOrEqualTo(34), reason: name);
       }
     });
 
-    testWidgets('caps are 4pt apart and from the strip\'s edges, and share the '
-        'row by their parts', (tester) async {
+    testWidgets('caps are 8pt apart and from the strip\'s edges, each as wide '
+        'as its word', (tester) async {
       await pumpCaps(tester);
       final bar = tester.getRect(find.byType(TerminalKeyBar));
+      // esc and ^C, then the arrows, run on together at the head of the row.
+      const run = ['esc', 'Control C', 'Left', 'Up', 'Down', 'Right', 'tab'];
       final caps = [
-        for (final name in names) tester.getRect(capOf(keyNamed(name))),
+        for (final name in run) tester.getRect(capOf(keyNamed(name))),
       ];
 
-      expect(caps.first.left - bar.left, closeTo(4, 0.01));
-      expect(bar.right - caps.last.right, closeTo(4, 0.01));
+      expect(caps.first.left - bar.left, closeTo(8, 0.01));
       for (var i = 1; i < caps.length; i++) {
-        final gap = caps[i].left - caps[i - 1].right;
-        // The rule's 6 + 1 + 6 sits before `Send image`.
-        final expected = names[i] == 'Send image' ? 13.0 : 4.0;
-        expect(gap, closeTo(expected, 0.01), reason: names[i]);
+        expect(
+          caps[i].left - caps[i - 1].right,
+          closeTo(8, 0.01),
+          reason: run[i],
+        );
       }
-      // 375pt less the edges, ten gaps, the rule and the gap past it, over
-      // 9 keys × 3 parts, `clear` × 5, `img` × 3 and `▾` × 4.
-      const part = (375 - 4 * 2 - 4 * 10 - 13 - 4) / 42;
-      expect(caps.first.width, closeTo(part * 3, 0.01));
+      expect(
+        bar.right - tester.getRect(capOf(keyNamed('Hide keyboard'))).right,
+        closeTo(8, 0.01),
+      );
+      // A word takes its room; an arrow, its 18pt icon and 9pt either side.
       expect(
         tester.getSize(capOf(keyNamed('Clear prompt'))).width,
-        closeTo(part * 5, 0.01),
+        greaterThan(tester.getSize(capOf(keyNamed('esc'))).width),
       );
-      expect(
-        tester.getSize(capOf(keyNamed('Hide keyboard'))).width,
-        closeTo(part * 4, 0.01),
-      );
+      expect(tester.getSize(capOf(keyNamed('Left'))).width, closeTo(36, 0.01));
     });
 
-    testWidgets('▾ is a wider cap than the rest, and its glyph is drawn at its '
-        'own scale rather than shrunk to fit the cap', (tester) async {
+    testWidgets('▾\'s glyph is drawn at its own scale rather than shrunk to '
+        'fit the cap', (tester) async {
       await pumpCaps(tester);
-      final tty = ttyOf(tester);
       final hide = keyNamed('Hide keyboard');
       final glyph = find.descendant(of: hide, matching: find.text('▾'));
 
-      expect(
-        tester.getSize(capOf(hide)).width,
-        greaterThan(tester.getSize(capOf(keyNamed('Send image'))).width),
-      );
-      // How large the glyph is drawn: its type size, times whatever the
-      // FittedBox shrank it by to fit the cap.
       final size = tester.widget<Text>(glyph).style!.fontSize!;
-      final shrunk =
-          tester.getRect(glyph).height / tester.getSize(glyph).height;
-      expect(shrunk, closeTo(1, 0.01), reason: 'fits the cap as it is');
-      expect(size * shrunk, closeTo(tty.fontSize * 1.8, 0.01));
+      expect(size, closeTo(13 * 1.8, 0.01));
       expect(
         tester.getRect(glyph).height,
         lessThanOrEqualTo(tester.getSize(capOf(hide)).height),
@@ -770,7 +827,7 @@ void main() {
         await tester.pumpAndSettle();
 
         final bar = tester.getRect(find.byType(TerminalKeyBar));
-        expect(bar.height, 36);
+        expect(bar.height, 46);
         for (final word in words) {
           final cap = find
               .ancestor(
@@ -783,8 +840,8 @@ void main() {
           expect(decoration.borderRadius, isNotNull, reason: word);
           expect(decoration.boxShadow, isNotEmpty, reason: word);
           final drawn = tester.getRect(cap);
-          expect(drawn.height, closeTo(26, 0.01), reason: word);
-          expect(drawn.top - bar.top, closeTo(5, 0.01), reason: word);
+          expect(drawn.height, closeTo(32, 0.01), reason: word);
+          expect(drawn.top - bar.top, closeTo(7, 0.01), reason: word);
           expect(drawn.right, lessThan(tester.getRect(keyNamed('esc')).left));
         }
         expect(tester.getSize(keyNamed('esc')).width, width);
@@ -851,6 +908,8 @@ void main() {
       await tapKey(tester, 'ctrl');
       await tapKey(tester, 'shift');
 
+      await tester.ensureVisible(find.text('answer'));
+      await tester.pump();
       await tester.tap(find.text('answer'));
       await tester.pump();
       expect(outbound, ['\x1b[1;2D'], reason: 'shift+←, not ctrl+shift+←');
@@ -914,11 +973,14 @@ void main() {
       await tester.pumpWidget(bar());
       expect(image, findsNothing);
       expect(hide, findsOneWidget);
-      // One gap where the rule stood: nothing left to set apart.
+      // One gap where the rule stood, past the end of the row that scrolls: nothing left to set
+      // apart.
       expect(
-        tester.getTopLeft(hide).dx - tester.getTopRight(newline).dx,
-        closeTo(4, 0.01),
+        tester.getTopLeft(hide).dx -
+            tester.getTopRight(find.byType(SingleChildScrollView)).dx,
+        closeTo(8, 0.01),
       );
+      expect(newline, findsOneWidget);
       expect(
         find.byWidgetPredicate(
           (w) => w is Container && w.constraints?.maxWidth == 1,
@@ -1058,10 +1120,11 @@ void main() {
       expect(paste, findsOneWidget);
       expect(
         tester.getTopLeft(paste).dx - tester.getTopRight(clear).dx,
-        closeTo(4, 0.01),
+        closeTo(8, 0.01),
       );
-      expect(tester.getSize(paste).width, tester.getSize(clear).width);
 
+      await tester.ensureVisible(paste);
+      await tester.pump();
       await tester.tap(paste);
       await tester.pump();
       expect(pastes, 1);

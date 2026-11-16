@@ -5,7 +5,7 @@ export function noOtherStreams(): OtherStreams {
   return {
     unavailable: () => {},
     locateStore: async () => ({ store: null }),
-    open: async () => null, get: () => undefined, has: () => false, close: async () => [], closeIf: async () => false, drain: async () => {}, drainAll: async () => {},
+    open: async () => null, get: () => undefined, has: () => false, follows: () => false, close: async () => [], closeIf: async () => false, drain: async () => {}, drainAll: async () => {},
     tail: async () => {}, openTurn: async () => [], task: () => {}, paneRead: () => false, paneDue: () => true, release: () => {},
     forget: () => {}, connected: () => {}, disconnected: () => {}, stop: () => {},
   }

@@ -29,6 +29,7 @@ import { cableEventFor, cableStepFor, cableQuestionCloseFor, cableQuestionFor, D
 import { CableSession, SHOWN_ONLY_PREFIX, type FollowCause } from '../cable/cableSession.js'
 import type { HostAdapter, Pane } from '../cable/hosts/adapter.js'
 import { createClaudeAppAdapter } from '../cable/hosts/claudeApp.js'
+import { createCodexAppAdapter } from '../cable/hosts/codexApp.js'
 import { codexQueueDeps, createCodexQueue, type CodexQueueDeps } from '../cable/hosts/codexQueue.js'
 import { createHerdrAdapter } from '../cable/hosts/herdr.js'
 import { createHerdrClient, herdrClientDeps, watchHerdrSocket, type HerdrClient } from '../cable/hosts/herdrClient.js'
@@ -324,6 +325,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     createOrcaAdapter(apps),
     // A rest's continue link: the app's attach that follows is the dial's own echo.
     { ...claude, show: (pane: Pane, agentId: string) => { noteLink(agentId); return claude.show(pane, agentId) } },
+    // No echo to guard: the Codex app sends no attach for the follow to take as a person's.
+    createCodexAppAdapter({ ...apps, inFront: () => cableHost.latestFront() === 'codex', log }),
     createVscodeAdapter(apps),
     createTabsAdapter({
       isOpen: () => tabs.isOpen(),
@@ -334,7 +337,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       },
     }),
   ].map(noting)]
-  const opener = createOpenActions({ run: apps.run, platform: apps.platform, adapters, log })
+  const opener = createOpenActions({ run: apps.run, platform: apps.platform, adapters, log, bin: process.env.HARNESS_OPEN_BIN })
+  const bring = opener.bring
   /** The route or the refusal of the dial's words, and why a queue failed: never the words, the session, the terminal or a
    *  path. */
   const voiced = (what: string): void => log(`[device] voice · ${what}`)
@@ -497,6 +501,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       part.call('dial', () => tabSettled(app))
     },
     appPicked: () => log('[device] app filter: picker'),
+    // A pick on the dial brings its app to the front, on macOS only (docs/plans/2026-11-16-dial-pick-brings-app-design.md).
+    // A measure: the outcome, never the app; a pick with nothing to bring, or replaced by a later one, ran nothing.
+    appBrought: bring && ((app) => {
+      void bring(app).then((outcome) => { if (outcome) log(`[device] app filter: bring · ${outcome}`) })
+    }),
     // A tap on a Harness agent with no window starts Desktop, on macOS only (docs/specs/2026-11-15-device-wave1-checks.md,
     // F2).
     launchDesktop: opener.desktop,

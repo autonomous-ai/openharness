@@ -3,6 +3,7 @@ import type { ObservedAsked, ObservedHookEvent } from '../../core/observedHook.j
 import { STOP_HOOK_GRACE_MS } from '../../core/turns/turnHooks.js'
 import type { HostAdapter, Pane, Place } from './adapter.js'
 import { createClaudeAppAdapter } from './claudeApp.js'
+import { createCodexAppAdapter } from './codexApp.js'
 import type { CodexQueueResult } from './codexQueue.js'
 import { createHerdrAdapter } from './herdr.js'
 import type { HerdrPrompt } from './herdrClient.js'
@@ -76,6 +77,9 @@ function setup(over: Partial<ObservedDeps> = {}) {
 
 /** Past the wait before a turn's answer is read. */
 const graced = (): Promise<unknown> => vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
+
+/** Every answer a read was given has reached the source. */
+const flushed = (): Promise<void> => new Promise((resolve) => { setImmediate(resolve) })
 
 describe('ObservedSource states', () => {
   beforeEach(() => { vi.useFakeTimers() })
@@ -866,7 +870,7 @@ describe('ObservedSource and the name in a session\'s own record', () => {
 
 const HANDLE = 'term_0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b'
 
-/** What the tests answer for the source's routes: its own, and the Orca, Claude app and tab verbs its adapters run. */
+/** What the tests answer for the source's routes: its own, and the Orca, Claude app, Codex app and tab verbs its adapters run. */
 interface Fakes extends Omit<ObservedActions, 'adapters'> {
   orcaSend(handle: string, text: string): Promise<boolean>
   orcaSwitch(handle: string): Promise<PaneSwitch>
@@ -874,6 +878,7 @@ interface Fakes extends Omit<ObservedActions, 'adapters'> {
   herdrStamp(): string | undefined
   claudeInFront(): boolean
   claudeShow(agentId: string, session: string): Promise<PaneSwitch>
+  codexInFront(): boolean
   tabsOpen(): boolean
   tabSelect(app: TabApp, tty: string, raise: boolean): PaneSwitch
 }
@@ -900,6 +905,7 @@ function fakeActions(over: Partial<Fakes> = {}, platform: NodeJS.Platform = 'dar
     open: vi.fn(async (_agentId: string, _target: OpenTarget) => true),
     claudeInFront: vi.fn(() => true),
     claudeShow: vi.fn(async (_agentId: string, _session: string): Promise<PaneSwitch> => 'ok'),
+    codexInFront: vi.fn(() => true),
     // A watch holds the tabs stream open, and takes each select.
     tabsOpen: vi.fn(() => true),
     tabSelect: vi.fn((_app: TabApp, _tty: string, _raise: boolean): PaneSwitch => 'ok'),
@@ -925,6 +931,7 @@ function fakeActions(over: Partial<Fakes> = {}, platform: NodeJS.Platform = 'dar
     createWeztermAdapter(deps),
     { ...orca, type: (pane, text) => fake.orcaSend(pane.id, text), show: (pane) => fake.orcaSwitch(pane.id) },
     { ...claude, show: (pane, agentId) => fake.claudeShow(agentId, pane.id) },
+    createCodexAppAdapter({ ...deps, inFront: () => fake.codexInFront(), log: () => {} }),
     createVscodeAdapter(deps),
     createTabsAdapter({ isOpen: () => fake.tabsOpen(), select: (tab, raise) => fake.tabSelect(tab.app, tab.tty, raise) === 'ok' }),
   ]
@@ -1588,6 +1595,255 @@ describe('ObservedSource and codex queue', () => {
   })
 })
 
+// The Codex app's chat opens by its thread's link, a hook's session and a scanned one alike, and its words still go
+// through codex queue (docs/specs/2026-11-15-device-host-adapter.md).
+describe('ObservedSource and the Codex app', () => {
+  const rollout = `/home/u/.codex/sessions/2026/11/15/rollout-2026-11-15T16-07-59-${THREAD}.jsonl`
+  const inApp = { engine: 'codex' as const, sessionId: THREAD, hostHints: { __CFBundleIdentifier: 'com.openai.codex' } }
+  const pane = { adapter: 'codex', id: THREAD }
+  /** A session a hook told of. */
+  const hooked = (session: Partial<ObservedHookEvent> = inApp, platform: NodeJS.Platform = 'darwin') => {
+    const { actions, ran } = fakeActions({}, platform)
+    const t = setup({ actions })
+    t.src.ingest(t.ev('session-start', session))
+    return { ...t, actions, ran }
+  }
+  /** A session only the open scan found, under the app `apps` names for its pid. */
+  const scanned = async (apps: ReadonlyMap<number, string> = new Map([[100, 'codex']])) => {
+    const { actions, ran } = fakeActions()
+    const t = setup({ actions, apps: async () => apps })
+    t.open.set(THREAD, 'terminal')
+    t.owners.set(THREAD, { pid: 100, engine: 'codex' })
+    t.externals.set(THREAD, { cwd: '/work/proj', transcriptPath: rollout })
+    await t.src.scanOpen()
+    return { ...t, actions, ran }
+  }
+
+  it('a Codex app session a hook told of is on the Codex page, and a tap takes its thread\'s pane and its app', async () => {
+    const { src, actions } = hooked()
+    const agent = src.list()[0]
+    expect(agent).toMatchObject({ app: 'codex', host: 'codex' })
+    expect(await src.focus(agent)).toBe(true)
+    expect(actions.open.mock.calls).toEqual([[agent.id, { bundle: 'com.openai.codex', pane }]])
+  })
+
+  it('one only the scan found has its thread\'s pane before any hook, and no bundle', async () => {
+    const { src, actions } = await scanned()
+    const agent = src.list()[0]
+    expect(agent).toMatchObject({ app: 'codex', host: 'terminal' })
+    expect(agent).not.toHaveProperty('appPending')
+    expect(src.capabilities(agent)).toMatchObject({ focus: true })
+    expect(await src.focus(agent)).toBe(true)
+    expect(actions.open.mock.calls).toEqual([[agent.id, { pane }]])
+    expect(actions.open.mock.calls[0][1]).not.toHaveProperty('bundle')
+  })
+
+  it('a rest shows it in the app only while the app is in front', async () => {
+    const { src, actions, ran } = hooked()
+    const agent = src.list()[0]
+    expect(src.hasPane(agent)).toBe(true)
+    expect(await src.showPane(agent)).toBe('ok')
+    expect(ran.mock.calls).toEqual([['/usr/bin/open', ['-b', 'com.openai.codex', 'codex://threads/' + THREAD], 10_000]])
+    actions.codexInFront.mockReturnValue(false)
+    expect(src.hasPane(agent)).toBe(false)
+    expect(await src.showPane(agent)).toBe('failed')
+    expect(ran).toHaveBeenCalledTimes(1)
+
+    const linux = hooked(inApp, 'linux')
+    expect(linux.src.hasPane(linux.src.list()[0])).toBe(false)
+  })
+
+  it('the dial\'s words still go through codex queue, a hook\'s session and a scanned one alike', async () => {
+    for (const { src, actions, ran } of [hooked({ ...inApp, transcriptPath: rollout }), await scanned()]) {
+      const agent = src.list()[0]
+      expect(src.capabilities(agent)).toMatchObject({ voice: true })
+      expect(await src.send(agent, 'next')).toEqual({ ok: true })
+      expect(actions.codexQueue.send.mock.calls).toEqual([[THREAD, 'next']])
+      expect(counted(actions.count).at(-1)).toBe('codex')
+      expect(ran).not.toHaveBeenCalled()
+    }
+  })
+
+  it('a Codex session in Ghostty has no Codex pane', async () => {
+    const { src, actions } = hooked({ ...inApp, hostHints: { TERM_PROGRAM: 'ghostty' } })
+    const agent = src.list()[0]
+    expect(await src.focus(agent)).toBe(true)
+    expect(actions.open.mock.calls).toEqual([[agent.id, { bundle: 'com.mitchellh.ghostty' }]])
+    expect(src.hasPane(agent)).toBe(false)
+  })
+
+  it('a scanned Codex session whose app is not known yet has no pane', async () => {
+    const { src } = await scanned(new Map())
+    expect(src.capabilities(src.list()[0])).toMatchObject({ focus: false })
+  })
+
+  it('a Claude Code session under the Codex app has no Codex pane', async () => {
+    const { src, actions } = hooked({ ...inApp, engine: 'claude' })
+    const agent = src.list()[0]
+    expect(await src.focus(agent)).toBe(true)
+    expect(actions.open.mock.calls).toEqual([[agent.id, { bundle: 'com.openai.codex' }]])
+  })
+
+  it('the pane is the latest event\'s', async () => {
+    const { src, ev, actions } = hooked()
+    src.ingest(ev('turn-start', { ...inApp, hostHints: { TERM_PROGRAM: 'ghostty' } }))
+    const agent = src.list()[0]
+    expect(src.hasPane(agent)).toBe(false)
+    expect(await src.focus(agent)).toBe(true)
+    expect(actions.open.mock.calls).toEqual([[agent.id, { bundle: 'com.mitchellh.ghostty' }]])
+  })
+})
+
+// The Codex app's own Codex runs hooks whose hints name no listed app (Diego's first try, 2026-11-16).
+describe('ObservedSource and the app a hook\'s caller runs in', () => {
+  const inApp = { engine: 'codex' as const, sessionId: THREAD }
+
+  /** A source whose walks of a process's parents the test answers by hand, in the order they began. */
+  function walked() {
+    const walks: Array<{ answer(app?: string): Promise<void>; fail(): Promise<void> }> = []
+    const apps = vi.fn((pids: readonly number[]) => new Promise<ReadonlyMap<number, string>>((resolve, reject) => {
+      walks.push({
+        answer: (app) => { resolve(new Map(app ? pids.map((pid) => [pid, app]) : [])); return flushed() },
+        fail: () => { reject(new Error('ps timed out under /Users/someone')); return flushed() },
+      })
+    }))
+    const { actions } = fakeActions()
+    const s = setup({ actions, apps })
+    const agent = (sessionId: string = THREAD) => s.src.list().find((a) => a.sessionId === sessionId)!
+    return { ...s, apps, walks, agent }
+  }
+
+  /** Codex sessions the open scan found, each under its owner's pid, whose parents name the Codex app. */
+  async function scanned(s: ReturnType<typeof walked>, sessions: ReadonlyArray<readonly [string, number]>): Promise<void> {
+    for (const [sessionId, pid] of sessions) {
+      s.open.set(sessionId, 'terminal')
+      s.owners.set(sessionId, { pid, engine: 'codex' })
+      s.externals.set(sessionId, { cwd: '/work/proj', transcriptPath: null })
+    }
+    const scan = s.src.scanOpen()
+    await flushed()
+    await s.walks[0].answer('codex')
+    await scan
+  }
+
+  it('a scanned Codex app session stays on the Codex page through a hook that names no app, and keeps its pane', async () => {
+    const s = walked()
+    await scanned(s, [[THREAD, 100]])
+    expect(s.agent()).toMatchObject({ app: 'codex' })
+    const apps: string[] = []
+    s.src.onChange(() => { apps.push(s.agent().app) })
+    s.src.ingest(s.ev('turn-start', inApp))
+    expect(s.agent()).toMatchObject({ app: 'codex', host: 'terminal' })
+    expect(s.src.hasPane(s.agent())).toBe(true)
+    expect(s.apps.mock.calls).toEqual([[[100]], [[100]]])
+    await s.walks[1].answer('codex')
+    expect(apps).toEqual(['codex', 'codex'])
+    expect(s.agent()).toMatchObject({ app: 'codex', host: 'terminal' })
+    expect(s.src.hasPane(s.agent())).toBe(true)
+  })
+
+  it('a session a hook told of first is on the unknown app\'s page until its caller\'s parents name the Codex app', async () => {
+    const s = walked()
+    s.src.ingest(s.ev('session-start', inApp))
+    expect(s.agent()).toMatchObject({ app: 'terminal', host: 'terminal' })
+    expect(s.src.hasPane(s.agent())).toBe(false)
+    s.changes.mockClear()
+    await s.walks[0].answer('codex')
+    expect(s.agent()).toMatchObject({ app: 'codex', host: 'terminal' })
+    expect(s.src.hasPane(s.agent())).toBe(true)
+    expect(s.changes).toHaveBeenCalledTimes(1)
+  })
+
+  it('one walk per caller: its next hooks, during the walk and after, walk nothing and take the app learnt at once', async () => {
+    const s = walked()
+    s.src.ingest(s.ev('session-start', inApp))
+    s.src.ingest(s.ev('turn-start', inApp))
+    expect(s.apps).toHaveBeenCalledTimes(1)
+    await s.walks[0].answer('codex')
+    s.src.ingest(s.ev('needs-input', inApp))
+    s.src.ingest(s.ev('turn-start', inApp))
+    expect(s.agent().app).toBe('codex')
+    expect(s.apps).toHaveBeenCalledTimes(1)
+  })
+
+  it('a walk that names no listed app, or fails, leaves the unknown app, and logs no error text', async () => {
+    const s = walked()
+    await scanned(s, [['a', 101], ['b', 102]])
+    s.src.ingest(s.ev('turn-start', { engine: 'codex', sessionId: 'a', callerPid: 101 }))
+    s.src.ingest(s.ev('turn-start', { engine: 'codex', sessionId: 'b', callerPid: 102 }))
+    // Until a walk answers, each keeps the app the scan named.
+    expect([s.agent('a').app, s.agent('b').app]).toEqual(['codex', 'codex'])
+    await s.walks[1].answer()
+    await s.walks[2].fail()
+    expect([s.agent('a').app, s.agent('b').app]).toEqual(['terminal', 'terminal'])
+    expect(s.logs).toContain('[observed] app · not read')
+    expect(s.logs.join('\n')).not.toContain('someone')
+  })
+
+  it('a hook whose hints name an app walks nothing', () => {
+    const s = walked()
+    s.src.ingest(s.ev('session-start', { ...inApp, hostHints: { __CFBundleIdentifier: 'com.openai.codex' } }))
+    s.src.ingest(s.ev('session-start', { sessionId: 'g', callerPid: 101, hostHints: { TERM_PROGRAM: 'ghostty' } }))
+    expect([s.agent().app, s.agent('g').app]).toEqual(['codex', 'ghostty'])
+    expect(s.apps).not.toHaveBeenCalled()
+  })
+
+  it('an answer for a caller the session has left is dropped, and its latest caller is walked next', async () => {
+    const s = walked()
+    s.src.ingest(s.ev('session-start', { ...inApp, callerPid: 100 }))
+    // Resumed in another process while the first walk runs: one walk at a time.
+    s.src.ingest(s.ev('session-start', { ...inApp, callerPid: 200 }))
+    expect(s.apps.mock.calls).toEqual([[[100]]])
+    await s.walks[0].answer('codex')
+    expect(s.agent().app).toBe('terminal')
+    expect(s.apps.mock.calls).toEqual([[[100]], [[200]]])
+    await s.walks[1].answer('vscode')
+    expect(s.agent().app).toBe('vscode')
+  })
+
+  it('an answer for a session no longer listed is dropped: nothing is told, and its latest caller is not walked', async () => {
+    const s = walked()
+    s.src.ingest(s.ev('session-start', { ...inApp, cwd: undefined, callerPid: 100 }))
+    s.src.ingest(s.ev('turn-start', { ...inApp, cwd: undefined, callerPid: 200 }))
+    // Its folder, once known, is Harness's own: it goes.
+    s.src.ingest(s.ev('turn-start', { ...inApp, cwd: '/data/harness/router', callerPid: 200 }))
+    expect(s.src.list()).toEqual([])
+    s.changes.mockClear()
+    await s.walks[0].answer('codex')
+    expect(s.apps.mock.calls).toEqual([[[100]]])
+    expect(s.changes).not.toHaveBeenCalled()
+  })
+
+  it('an answer for a session that ended is kept for its caller, and lands only when it comes back', async () => {
+    const s = walked()
+    s.src.ingest(s.ev('session-start', inApp))
+    s.src.ingest(s.ev('session-end', inApp))
+    s.changes.mockClear()
+    await s.walks[0].answer('codex')
+    expect(s.agent().app).toBe('terminal')
+    expect(s.changes).not.toHaveBeenCalled()
+    s.src.ingest(s.ev('session-start', inApp))
+    expect(s.agent().app).toBe('codex')
+    expect(s.apps).toHaveBeenCalledTimes(1)
+  })
+
+  it('a caller whose parents name a tab app has its tty read then, and its tab is its pane', async () => {
+    const tty = vi.fn(async (_pid: number): Promise<string | undefined> => '/dev/ttys023')
+    let answer!: (apps: ReadonlyMap<number, string>) => void
+    const apps = vi.fn((_pids: readonly number[]) => new Promise<ReadonlyMap<number, string>>((resolve) => { answer = resolve }))
+    const { actions } = fakeActions()
+    const s = setup({ actions, apps, tty })
+    s.src.ingest(s.ev('session-start', inApp))
+    expect(tty).not.toHaveBeenCalled()
+    answer(new Map([[100, 'iterm']]))
+    await flushed()
+    const agent = s.src.list()[0]
+    expect(agent.app).toBe('iterm')
+    expect(tty.mock.calls).toEqual([[100]])
+    expect(s.src.hasPane(agent)).toBe(true)
+  })
+})
+
 describe('ObservedSource panes', () => {
   const OTHER = 'term_9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d'
   const inOrca = (handle = HANDLE) => ({ hostHints: { ORCA_AGENT_SESSION_ID: 'x', ORCA_TERMINAL_HANDLE: handle } })
@@ -1957,8 +2213,6 @@ describe('ObservedSource panes', () => {
 describe('ObservedSource tabs', () => {
   const TTY = '/dev/ttys023'
   const inTerminal = { hostHints: { __CFBundleIdentifier: 'com.apple.Terminal' } }
-  /** Every answer a read was given has reached the source. */
-  const flushed = (): Promise<void> => new Promise((resolve) => { setImmediate(resolve) })
 
   /** A source whose tty reads the test answers by hand, in the order they began, with a watch's stream open. */
   function tabs(over: Partial<Fakes> = {}, deps: Partial<ObservedDeps> = {}) {

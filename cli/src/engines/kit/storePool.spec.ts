@@ -416,7 +416,7 @@ it('cannot bind a delegated row through directory repair, and retries when an in
     processIdentity: { pid: 4242, executable: 'hermes', startMarker: '2026-10-09T11:59:00Z' } } as unknown as import('../../lib/registry.js').RegisteredSession
   const register = vi.fn(async () => null)
   const deps = { registry: { byProcess: () => row, bySession: () => undefined, has: () => false, register },
-    homes: { hermes: home } } as unknown as import('../../core/agents/bind.js').BindDeps
+    homes: { hermes: home }, followsLive: () => false } as unknown as import('../../core/agents/bind.js').BindDeps
   const observed = { engine: 'hermes', cwd: '/fixture/work', runtimes: [], primaryRuntimeKey: '',
     args: 'hermes', resumeSessionId: null, processIdentity: row.processIdentity! } as import('../../lib/terminalAgentDiscovery.js').DiscoveredTerminalAgent
   const binding = (await import('../../core/agents/bind.js')).createBinding(deps)

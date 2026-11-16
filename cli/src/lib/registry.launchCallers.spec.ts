@@ -298,7 +298,7 @@ it('binding revalidation cannot change Stop evidence while its prepared image wa
     attachSession: vi.fn(async () => true), announceSession: announce, stoppedAgents: store, syncRecapPool: vi.fn(),
     input: { forget: vi.fn(), awaitingConfirmation: () => false }, submitAgent: vi.fn(), deviceInput: { forget: vi.fn() },
     homes: { copilot: directory, grok: directory, agy: directory }, capturePane: async () => null,
-    openclawPaneRead: vi.fn(), openclawPaneDue: () => false, openclawStateDir: async () => null })
+    openclawPaneRead: vi.fn(), openclawPaneDue: () => false, openclawStateDir: async () => null, followsLive: () => false })
   binding.whileChanging(id => jobs.has(id))
   const nativeEntered = deferred(), nativeDone = deferred(), deleted = vi.fn()
   const stop = createStopAgentService({ registry, stoppedAgents: store, restartJobs: new AgentRestartCoordinator(), stopJobs: jobs,

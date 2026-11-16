@@ -210,7 +210,7 @@ it.each(['identity', 'interpretation', 'unbound'] as const)('does not transfer t
   const attachSession = vi.fn(async () => true)
   const binding = createBinding({ registry, attachSession, stoppedAgents: { save: vi.fn() },
     mirror: { inheritSummary: vi.fn() }, forgetSession: vi.fn(), clients: { send: vi.fn() },
-    announceSession: vi.fn(), syncRecapPool: vi.fn(),
+    announceSession: vi.fn(), syncRecapPool: vi.fn(), followsLive: () => false,
   } as unknown as import('../core/agents/bind.js').BindDeps)
   await binding.handleRegistered(result.entry, { ...result, hookEvent: 'UserPromptSubmit' })
   expect(attachSession).toHaveBeenCalledWith(result.entry, true, false, hold === 'unbound')

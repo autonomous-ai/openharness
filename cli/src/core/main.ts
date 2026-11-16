@@ -2030,6 +2030,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     },
     openclawPaneDue: (sessionId) => otherStreams.paneDue(sessionId),
     openclawStateDir: (pid) => openclawStateDir(pid),
+    followsLive: (sessionId) => otherStreams.follows(sessionId),
     hermesTerminal: createHermesTerminal({
       platform: process.platform,
       defaultHome: env.HERMES_HOME,

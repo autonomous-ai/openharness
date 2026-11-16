@@ -2127,16 +2127,78 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
       expect(calls('syncAgents')).toHaveLength(pushed)
     })
 
+    describe('a pick brings its app (docs/plans/2026-11-16-dial-pick-brings-app-design.md)', () => {
+      const mac = { ...orca, platform: 'darwin' as const }
+      const brings = () => logs.filter((line) => line.includes('app filter: bring'))
+      /** A turn of the event loop: what a pick ran, and logged, is done by then. */
+      const settled = () => new Promise((done) => setImmediate(done))
+
+      it('on macOS a pick that switches runs open -b with the picked app\'s bundle once and logs bring · ok, with no app in the log', async () => {
+        const { port } = start({ faults: ['fleet'], orca: mac })
+        await twoApps(port)
+        expect(host().pickApp('vscode')).toBe('switched')
+        await vi.waitFor(() => expect(brings()).toEqual(['[device] app filter: bring · ok']))
+        expect(orcaRuns).toEqual([['/usr/bin/open', ['-b', 'com.microsoft.VSCode'], 10_000]])
+        expect(logs.filter((line) => /vscode|VS Code|ghostty|Ghostty|com\.microsoft/.test(line))).toEqual([])
+      })
+
+      it('an open that fails logs bring · failed once and is not run again', async () => {
+        const failing = { ...mac, run: async (file: string, args: string[], timeoutMs: number) => { orcaRuns.push([file, args, timeoutMs]); return { code: 1, stdout: '' } } }
+        const { port } = start({ faults: ['fleet'], orca: failing })
+        await twoApps(port)
+        host().pickApp('vscode')
+        await vi.waitFor(() => expect(brings()).toEqual(['[device] app filter: bring · failed']))
+        await settled()
+        expect(orcaRuns).toHaveLength(1)
+      })
+
+      it('a pick of the app shown, of an app with no agents, of Other and a notice\'s pick run no open', async () => {
+        const { port } = start({ faults: ['fleet'], orca: mac })
+        await twoApps(port)
+        // A terminal Harness does not know: its agent is on Other's ring, which has no app to bring.
+        inApp(port, 'o-1', 'SomeTerm')
+        expect(host().pickApp('ghostty')).toBe('same')
+        expect(host().pickApp('cursor')).toBe('ignored')
+        expect(host().pickApp('terminal')).toBe('switched')
+        expect(host().pickApp('vscode', 'notice')).toBe('switched')
+        await settled()
+        expect(orcaRuns.filter(([, args]) => args[0] === '-b')).toEqual([])
+        expect(brings()).toEqual([])
+      })
+
+      it.each([
+        ['/tmp/e2e/fake-open', '/tmp/e2e/fake-open'],
+        ['', '/usr/bin/open'],
+        ['fake-open', '/usr/bin/open'],
+      ])('HARNESS_OPEN_BIN %j: an absolute path is the file a pick runs; empty and relative run /usr/bin/open', async (bin, file) => {
+        vi.stubEnv('HARNESS_OPEN_BIN', bin)
+        const { port } = start({ faults: ['fleet'], orca: mac })
+        await twoApps(port)
+        host().pickApp('vscode')
+        await vi.waitFor(() => expect(orcaRuns).toEqual([[file, ['-b', 'com.microsoft.VSCode'], 10_000]]))
+      })
+
+      it('off macOS a pick runs nothing', async () => {
+        const { port } = start({ faults: ['fleet'] })
+        await twoApps(port)
+        expect(host().pickApp('vscode')).toBe('switched')
+        await settled()
+        expect(orcaRuns).toEqual([])
+        expect(brings()).toEqual([])
+      })
+    })
+
     describe('with a window open (docs/specs/2026-11-15-dial-follow-front-with-window.md)', () => {
       const G1 = observedAgentId('claude', 'g-1')
       const TAB = { active: 't1', swarms: [{ id: 't1', name: 'Tab', agentIds: [], panes: 0 }], tiles: [] }
       const WAITS = 'npm test · answer in Ghostty'
       /** Whether the connected dials say appFilter. */
       const appsSaid = (on: boolean) => { (seen.cable as unknown as { apps: boolean }).apps = on }
-      /** Ghostty 2, VS Code 1, a window open on one tab, and `app` settled in front when one is named. */
-      const windowed = async (app?: string, apps = true) => {
+      /** Ghostty 2, VS Code 1, a window open on one tab, and `app` settled in front when one is named; `deps` runs what the
+       *  devices run. */
+      const windowed = async (app?: string, apps = true, deps: DevicesDeps['orca'] = orca) => {
         vi.useFakeTimers()
-        const started = start({ faults: ['fleet'] })
+        const started = start({ faults: ['fleet'], orca: deps })
         appsSaid(apps)
         await twoApps(started.port)
         started.port.swarms(TAB)
@@ -2299,6 +2361,14 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
         expect(codexRuns.map(([, args]) => args).at(-1)).toEqual(['queue', '--thread', THREAD, '--message=and lint'])
       })
 
+      it('with a window open, a pick of Harness on an app\'s ring runs open -b ai.autonomous.harness', async () => {
+        await windowed('ghostty', true, { ...orca, platform: 'darwin' })
+        expect(host().pickApp('harness')).toBe('tabs')
+        await vi.advanceTimersByTimeAsync(0)
+        expect(orcaRuns).toEqual([['/usr/bin/open', ['-b', 'ai.autonomous.harness'], 10_000]])
+        expect(logs).toContain('[device] app filter: bring · ok')
+      })
+
       it('the window\'s focus is handed to the dials as before', async () => {
         const { port } = await windowed('ghostty')
         port.appFocus('m1', 'a1')
@@ -2452,6 +2522,42 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     expect(await host().openAgent(ID)).toBeUndefined()
     expect(orcaRuns.slice(2)).toEqual([link])
     expect(logs.filter((line) => line.includes(SESSION) || line.includes('sess-1'))).toEqual([])
+  })
+
+  // A Codex session in the Codex app opens on its thread (docs/plans/2026-11-16-dial-codex-app-design.md).
+  const THREAD = '01a1de76-a3b7-7270-b39e-1245893274c1'
+  const CX = observedAgentId('codex', THREAD)
+  const inApp = { engine: 'codex' as const, sessionId: THREAD, hostHints: { __CFBundleIdentifier: 'com.openai.codex' } }
+  const threadLink: [string, string[], number] = ['/usr/bin/open', ['-b', 'com.openai.codex', `codex://threads/${THREAD}`], 10_000]
+  const codexForward: [string, string[], number] = ['/usr/bin/open', ['-b', 'com.openai.codex'], 10_000]
+  /** macOS, every run recorded, each answering the next of these exit codes, then 0. */
+  const exiting = (...codes: number[]) => ({ ...mac, run: async (file: string, args: string[], timeoutMs: number) => {
+    orcaRuns.push([file, args, timeoutMs])
+    return { code: codes.shift() ?? 0, stdout: '' }
+  } })
+
+  it('a Codex session in the Codex app opens on its thread; a link that fails brings the app forward once, in one line with no id', async () => {
+    const { port } = startHere({ orca: exiting(1) })
+    port.observed(hook('session-start', inApp))
+    attach(port)
+    expect(await listed()).toEqual([{ id: CX, name: 'api', caps: 'sf' }])
+    expect(await host().openAgent(CX)).toBeUndefined()
+    expect(orcaRuns).toEqual([threadLink, codexForward])
+    expect(said()).toEqual(['[device] open · codex · fallback'])
+    // The link that works brings the app forward itself.
+    expect(await host().openAgent(CX)).toBeUndefined()
+    expect(orcaRuns.slice(2)).toEqual([threadLink])
+    expect(logs.filter((line) => line.includes(THREAD))).toEqual([])
+  })
+
+  // open.ts is unchanged: a session a hook told of has its bundle, so the opener's own fallback runs open -b once more.
+  it('the link and the app both fail: the dial is told so', async () => {
+    const { port } = startHere({ orca: exiting(1, 1, 1) })
+    port.observed(hook('session-start', inApp))
+    attach(port)
+    expect(await host().openAgent(CX)).toEqual({ ok: false, error: 'ChatGPT did not open it.' })
+    expect(orcaRuns).toEqual([threadLink, codexForward, codexForward])
+    expect(said().filter((line) => line === '[device] open · codex · fallback')).toHaveLength(2)
   })
 
   it('a session in the VS Code extension\'s tab opens by its link, then VS Code comes forward', async () => {
@@ -2709,6 +2815,44 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     await swiped('failed')
     expect(said()).toEqual(['[device] swipe · ok', '[device] swipe · failed'])
     expect(logs.filter((line) => [SESSION, 'sess-1', ID].some((secret) => line.includes(secret)))).toEqual([])
+  })
+
+  /** A Codex session in the Codex app on macOS, as `inClaudeApp` is for the Claude app. */
+  const inCodexApp = async (over: Parameters<typeof start>[0] = {}) => {
+    vi.useFakeTimers()
+    const listener = fakeListener()
+    const started = startHere({ orca: mac, listen: listener.listen, ...over })
+    started.port.observed(hook('session-start', inApp))
+    attach(started.port)
+    await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
+    const front = (app: string) => { expect(listener.front(app)).toBeUndefined() }
+    return { ...started, front }
+  }
+  it('with the Codex app in front, a rest on a Codex app agent runs one thread link, and no open -b', async () => {
+    const { front } = await inCodexApp()
+    front('codex')
+    expect(host().swipeSwitches(CX)).toBe(true)
+    host().swipeEnded(CX, 'rest')
+    await swiped('ok')
+    expect(orcaRuns).toEqual([threadLink])
+    expect(said()).toEqual(['[device] swipe · ok'])
+  })
+
+  it('another app in front, none, or no front known: no rest is asked for on a Codex app agent', async () => {
+    const { front } = await inCodexApp()
+    expect(host().swipeSwitches(CX)).toBe(false)
+    for (const app of ['claude', 'orca', 'none']) {
+      front(app)
+      expect(host().swipeSwitches(CX)).toBe(false)
+    }
+  })
+
+  it('a rest whose Codex thread link fails stays failed, and brings nothing forward', async () => {
+    const { front } = await inCodexApp({ orca: exiting(1) })
+    front('codex')
+    host().swipeEnded(CX, 'rest')
+    await swiped('failed')
+    expect(orcaRuns).toEqual([threadLink])
   })
 
   it('no swipe line carries a handle, a session or an agent', async () => {
@@ -2976,6 +3120,14 @@ describe('codex queue, for Codex outside a pane (docs/specs/2026-11-15-device-co
       { cwd: homedir(), env: { CODEX_HOME: env.CODEX_HOME }, timeoutMs: 10_000 }]])
     expect(said()).toEqual(['[device] voice · codex'])
     expect(orcaRuns).toEqual([])
+  })
+
+  it('a Codex app session\'s words still go through codex queue, and nothing is opened', async () => {
+    started({ orca: { ...orca, platform: 'darwin' } }, { hostHints: { __CFBundleIdentifier: 'com.openai.codex' } })
+    expect(await host().sendTurn(ID, 'run the tests')).toEqual({ ok: true })
+    expect(codexRuns.map(([, args]) => args)).toEqual([['queue', '--thread', THREAD, '--message=run the tests']])
+    expect(orcaRuns).toEqual([])
+    expect(said()).toEqual(['[device] voice · codex'])
   })
 
   it('a Codex session whose transcript is in another home lists s and runs nothing', async () => {

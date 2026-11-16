@@ -1889,3 +1889,24 @@ exact captured native path; all 26 observation cases pass in 15.50 s
 (`/tmp/core-registry-observation-path-review-green.log`). Current-main
 integration, the required gates, native failure checks and final matched cost
 acceptance still follow. Earlier memory results remain open.
+
+### Current-main integration after the observation correction
+
+Merge `cd93bbd181` after `08793f3612`. The binding conflict combines main's
+reader-owned hold guard (`followsLive`) with this branch's asynchronous
+revalidation and captured lifecycle/row authority checks; neither is removed.
+Main's composition passes the real reader's `follows` method. Binding fixtures
+now explicitly provide that required method.
+
+The first three-file run had 231 passing cases and three failures: main's new
+reader-hold assertions expected the former one-argument revalidation call.
+Updating them to require the asynchronous authority callback gives 164/164
+binding cases; the other two files' 70 passing cases are retained. The next
+five-file fixture run had 299 passing cases and one analogous native-location
+assertion failure. Its seven-case file passes after requiring the callback.
+These selected results cover 534 cases across eight files; they are not one
+uninterrupted full-suite pass. Logs are
+`/tmp/core-registry-current-main-{integration-first,bind-green,fixtures-green,native-locations-green}.log`.
+The first typecheck identified the missing required fixture method; the corrected
+merged source passes (`/tmp/core-registry-current-main-types-final.log`).
+Native, full-gate and matched memory/cost acceptance remain pending for this head.

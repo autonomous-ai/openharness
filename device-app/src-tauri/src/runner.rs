@@ -10,6 +10,7 @@ use crate::loginitem::LoginItem;
 use crate::state::StateFile;
 use crate::tabs::{Out, POLL_EVERY, Select, TabApp, TabFollow, TabScripts};
 use crate::types::{Effect, Event, Log, LoginEvent};
+use crate::update::AppUpdater;
 use crate::watch::{self, Watch};
 use std::ffi::OsString;
 use std::io;
@@ -35,6 +36,8 @@ pub struct Doors {
     pub front: Arc<dyn FrontSource>,
     /// The terminal apps' tab scripts (`tabs::system`), which only the runner's tab thread calls.
     pub tabs: Arc<dyn TabScripts>,
+    /// None where the app does not update itself.
+    pub updater: Option<Arc<dyn AppUpdater>>,
 }
 
 pub struct Runner(Arc<Shared>);
@@ -159,12 +162,12 @@ impl Runner {
         self.0.find_cli()
     }
 
-    /// Menu, Show and Quit come back for the binary. Everything else is done here, anything slow on a thread, and
-    /// answers through `send`.
+    /// Menu, Show, Quit and Relaunch come back for the binary. Everything else is done here, anything slow on a thread,
+    /// and answers through `send`.
     pub fn run(&self, effect: Effect) -> Option<Effect> {
         let shared = &self.0;
         match effect {
-            Effect::Menu(_) | Effect::Show(_) | Effect::Quit => return Some(effect),
+            Effect::Menu(_) | Effect::Show(_) | Effect::Quit | Effect::Relaunch => return Some(effect),
             Effect::FindCli => shared.answer(Event::Cli(shared.find_cli())),
             Effect::SpawnWatch => shared.spawn_watch(),
             // Its child then exits 0 by itself, and its WatchExit(Some(0)) is the answer.
@@ -233,6 +236,14 @@ impl Runner {
                 }
             }
             Effect::Log(text) => shared.doors.log.line(&text),
+            Effect::CheckUpdate => shared.with_updater(|updater| match updater.check() {
+                Ok(found) => Event::UpdateChecked(found),
+                Err(failure) => Event::UpdateFailed(failure),
+            }),
+            Effect::InstallUpdate => shared.with_updater(|updater| match updater.install() {
+                Ok(()) => Event::UpdateInstalled,
+                Err(failure) => Event::UpdateFailed(failure),
+            }),
         }
         None
     }
@@ -268,6 +279,13 @@ impl Shared {
         let Some(cli) = self.cli() else { return self.answer(Event::Cli(false)) };
         let send = self.send.clone();
         thread::spawn(move || send(work(&cli)));
+    }
+
+    /// `work` on a thread, with the updater; UpdateChecked(None) at once where the app does not update itself.
+    fn with_updater(&self, work: impl FnOnce(&dyn AppUpdater) -> Event + Send + 'static) {
+        let Some(updater) = self.doors.updater.clone() else { return self.answer(Event::UpdateChecked(None)) };
+        let send = self.send.clone();
+        thread::spawn(move || send(work(&*updater)));
     }
 
     fn spawn_watch(&self) {
@@ -430,7 +448,8 @@ mod tests {
     use crate::state::StateFile;
     use crate::tabs::{NoTabs, Selected, TabApp, TabError, TabScripts};
     use crate::testing::{Fake, alive, fake_harness, wait_gone};
-    use crate::types::{ClaudeStatus, DialStatus, Effect, Event, LoginEvent, MenuItem, Output, Saved};
+    use crate::types::{ClaudeStatus, DialStatus, Effect, Event, LoginEvent, MenuItem, Output, Saved, UpdateFailure};
+    use crate::update::AppUpdater;
     use std::collections::VecDeque;
     use std::fs;
     use std::io;
@@ -624,6 +643,46 @@ mod tests {
         }
     }
 
+    /// The app's own update, as a test answers it: each call is kept as it starts, and `check` waits while the gate is
+    /// shut.
+    struct Updates {
+        check: Result<Option<String>, UpdateFailure>,
+        install: Mutex<Result<(), UpdateFailure>>,
+        calls: Mutex<Vec<&'static str>>,
+        shut: Mutex<bool>,
+        opened: Condvar,
+    }
+
+    impl Updates {
+        fn answering(check: Result<Option<String>, UpdateFailure>, install: Result<(), UpdateFailure>) -> Arc<Updates> {
+            Arc::new(Updates {
+                check,
+                install: Mutex::new(install),
+                calls: Mutex::default(),
+                shut: Mutex::default(),
+                opened: Condvar::new(),
+            })
+        }
+
+        fn gate(&self, shut: bool) {
+            *self.shut.lock().unwrap() = shut;
+            self.opened.notify_all();
+        }
+    }
+
+    impl AppUpdater for Updates {
+        fn check(&self) -> Result<Option<String>, UpdateFailure> {
+            self.calls.lock().unwrap().push("check");
+            drop(self.opened.wait_while(self.shut.lock().unwrap(), |shut| *shut).unwrap());
+            self.check.clone()
+        }
+
+        fn install(&self) -> Result<(), UpdateFailure> {
+            self.calls.lock().unwrap().push("install");
+            *self.install.lock().unwrap()
+        }
+    }
+
     /// A `harness` launcher in `home`'s `.local/bin` that says it is signed in: a link to the fake, with the folder it
     /// reads beside it. Linked, not written as a script: see testing::Fake on ETXTBSY.
     fn put_launcher(home: &Path) {
@@ -726,6 +785,7 @@ mod tests {
             open: Arc::new(move |args: &[&str]| opener.open(args)),
             front: Arc::new(NoFront),
             tabs: Arc::new(NoTabs),
+            updater: None,
         }
     }
 
@@ -938,6 +998,49 @@ mod tests {
         for effect in others {
             assert_eq!(w.runner.run(effect.clone()), None, "{effect:?}");
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn relaunch_is_the_binarys() {
+        let w = world();
+        assert_eq!(w.runner.run(Effect::Relaunch), Some(Effect::Relaunch));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_update_check_runs_on_its_own_thread() {
+        let updates = Updates::answering(Ok(Some("0.1.3".into())), Ok(()));
+        let door = updates.clone();
+        let w = world_where(move |doors| doors.updater = Some(door));
+        updates.gate(true);
+        assert_eq!(w.runner.run(Effect::CheckUpdate), None);
+        // Run here, the check would still hold the caller; on its thread it has not answered yet.
+        assert!(w.events.try_recv().is_err());
+        updates.gate(false);
+        assert_eq!(w.next(), Event::UpdateChecked(Some("0.1.3".into())));
+        assert_eq!(*updates.calls.lock().unwrap(), ["check"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_check_or_an_install_answers_its_failure() {
+        let updates = Updates::answering(Err(UpdateFailure::Check), Ok(()));
+        let door = updates.clone();
+        let w = world_where(move |doors| doors.updater = Some(door));
+        assert_eq!(w.answer(Effect::CheckUpdate), Event::UpdateFailed(UpdateFailure::Check));
+        assert_eq!(w.answer(Effect::InstallUpdate), Event::UpdateInstalled);
+        *updates.install.lock().unwrap() = Err(UpdateFailure::NotWritable);
+        assert_eq!(w.answer(Effect::InstallUpdate), Event::UpdateFailed(UpdateFailure::NotWritable));
+        assert_eq!(*updates.calls.lock().unwrap(), ["check", "install", "install"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn with_no_updater_a_check_finds_nothing() {
+        let w = world();
+        assert_eq!(w.answer(Effect::CheckUpdate), Event::UpdateChecked(None));
+        assert_eq!(w.answer(Effect::InstallUpdate), Event::UpdateChecked(None));
     }
 
     #[cfg(unix)]

@@ -229,7 +229,7 @@ it.each(['same', 'repaired'] as const)('composes discovery, retry and inline att
     bySession: () => row,
   }
   const bind = createBinding({ registry, attachSession: run.attach.attachSession,
-    announceSession: vi.fn(), stoppedAgents: { save: vi.fn() }, syncRecapPool: vi.fn(),
+    announceSession: vi.fn(), stoppedAgents: { save: vi.fn() }, syncRecapPool: vi.fn(), followsLive: () => false,
   } as unknown as BindDeps)
   const discover = createDiscoveryHandlers({ registry, bindObservedAgent: bind.bindObservedAgent,
     attachSession: run.attach.attachSession, announceSession: vi.fn(), syncRecapPool: vi.fn(),

@@ -1120,7 +1120,7 @@ describe('front', () => {
     for (const app of [...APP_IDS, FRONT_NONE]) expect(handler.handle({ type: 'front', app }, gone), app).toBeUndefined()
     expect(fronts).toEqual([...APP_IDS, FRONT_NONE])
     expect(fronts).toContain('terminal')
-    expect(fronts).toHaveLength(17)
+    expect(fronts).toHaveLength(18)
   })
 
   it('front refuses an unknown app id', () => {

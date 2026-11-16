@@ -41,7 +41,7 @@ import { HarnessSource } from './hosts/harness.js'
 import { AppFilter, type AppCounts } from './hosts/appFilter.js'
 import { appDisplayName, hostDisplayName } from './hosts/hostDetect.js'
 import type { HostEntry, HostRegistry } from './hosts/registry.js'
-import { AppRings, DialRing } from './hosts/select.js'
+import { APP_LIMIT, AppRings, DialRing } from './hosts/select.js'
 import { FRONT_NONE } from './hosts/frontApp.js'
 import { capsLetters, type AppList, type AppPick, type DialView, type HostAgent, type PaneSwitch, type SwitchCause, type ViewCause } from './hosts/types.js'
 
@@ -154,6 +154,9 @@ export interface CableHostWiring {
   appSettled?: (app: string) => void
   /** A dial sent a pick from its list of apps, whatever came of it: the picker's measure. A notice's pick is none. */
   appPicked?: () => void
+  /** A pick on the dial switched the shown app, or with a window turned the view to Harness's tab: the devices bring
+   *  that app to the front. Never for a notice, nor for Harness with no window. */
+  appBrought?: (app: string) => void
   /** The view was set, and why: told on each change and on each window opening, never an app. */
   appView?: (view: DialView, cause: ViewCause) => void
   /** Runs `run` once after `ms` and returns its cancel: the settle of the app in front, and the end of a waiting open
@@ -711,6 +714,13 @@ export class DaemonCableHost implements CableHost {
    *  window's tab, and any other app the filter's pick. */
   pickApp(app: string, cause: 'pick' | 'notice' = 'pick'): AppPick {
     if (cause === 'pick') this.wiring.appPicked?.()
+    const answer = this.answerPick(app, cause)
+    // A notice brings its own app with its open. Harness with no window is only its ring: no Desktop to bring.
+    if (cause === 'pick' && (answer === 'tabs' || (answer === 'switched' && app !== 'harness'))) this.wiring.appBrought?.(app)
+    return answer
+  }
+
+  private answerPick(app: string, cause: 'pick' | 'notice'): AppPick {
     if (this.swarms === null) return this.filter.pick(app, cause)
     if (this.view === 'tabs') return 'ignored'
     if (app !== 'harness') return this.filter.pick(app, cause)
@@ -811,6 +821,7 @@ export class DaemonCableHost implements CableHost {
    *                                          with `apps` (a dial that says `appFilter`), the shown app's ring
    *                                          instead, `total` its agents, and `apps`, the list it picks from. The
    *                                          same for such a dial with a window open while the view is `apps`.
+   *                                          `apps` holds at most sixteen, the shown one among them (APP_LIMIT).
    *   - no window and no registry          → `[]`; the dial shows "Run OpenHarness on your computer".
    *   - a window with an empty tab         → `[]`; the dial shows "Nothing on this tab".
    *   - a window with panes                → those agents, in tile order; a tile whose machine dropped out
@@ -882,9 +893,15 @@ export class DaemonCableHost implements CableHost {
   /** The apps of the machine list, in the order they appeared, and the one shown over these agents. */
   private appList(agents: HostAgent[]): AppList {
     this.rings.update(agents)
+    const shown = this.filter.shown() ?? ''
+    const all = this.rings.apps()
+    // The firmware keeps the first APP_LIMIT rows and drops the rest, which could be the shown app: past the bound, the
+    // last row gives the shown app its place, so the rows before it never move.
+    const at = all.findIndex((a) => a.id === shown)
+    const rows = at < APP_LIMIT ? all.slice(0, APP_LIMIT) : [...all.slice(0, APP_LIMIT - 1), all[at]]
     return {
-      shown: this.filter.shown() ?? '',
-      apps: this.rings.apps().map((a) => ({ id: a.id, name: appDisplayName(a.id), count: a.count, waiting: a.waiting })),
+      shown,
+      apps: rows.map((a) => ({ id: a.id, name: appDisplayName(a.id), count: a.count, waiting: a.waiting })),
     }
   }
 

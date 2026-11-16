@@ -76,9 +76,11 @@ if [ "$PLATFORM" = "Darwin" ]; then
   # Both the GCS origin and its CDN (cdn.autonomous.ai, fronting the same bucket 1:1) are accepted,
   # not swapped: a manifest cut before the CDN migration can still carry the GCS-origin URL, and this
   # must accept both rather than pick a moment to flip. Keep in sync with website/src/lib/desktopManifest.ts.
+  # The whole URL is fixed, its folder the X.Y.Z checked above: a glob would let `../..` through, and
+  # curl collapses dot segments.
   case "$ASSET_URL" in
-    https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/desktop/*/Harness-macos.zip) ;;
-    https://cdn.autonomous.ai/harness/desktop/*/Harness-macos.zip) ;;
+    "https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/desktop/$VERSION/Harness-macos.zip") ;;
+    "https://cdn.autonomous.ai/harness/desktop/$VERSION/Harness-macos.zip") ;;
     *) fail "desktop metadata points outside the Harness desktop release bucket" ;;
   esac
   printf '%s' "$EXPECTED_SHA256" | grep -Eq '^[0-9a-f]{64}$' \
@@ -205,8 +207,8 @@ printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' \
 # Both the GCS origin and its CDN (cdn.autonomous.ai, fronting the same bucket 1:1) are accepted,
 # not swapped — same reasoning as the macOS case above; keep both in sync.
 case "$ASSET_URL" in
-  https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/desktop/*/Harness-linux-${RELEASE_ARCH}.AppImage) ;;
-  https://cdn.autonomous.ai/harness/desktop/*/Harness-linux-${RELEASE_ARCH}.AppImage) ;;
+  "https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/desktop/$VERSION/Harness-linux-${RELEASE_ARCH}.AppImage") ;;
+  "https://cdn.autonomous.ai/harness/desktop/$VERSION/Harness-linux-${RELEASE_ARCH}.AppImage") ;;
   *) fail "desktop metadata points outside the Harness desktop release bucket" ;;
 esac
 printf '%s' "$EXPECTED_SHA256" | grep -Eq '^[0-9a-f]{64}$' \
