@@ -84,7 +84,7 @@ export function orcaDeps(): OrcaReadDeps {
       }
       // The close that follows says it: after an exit, and after a spawn that failed, which has no exit.
       child.on('error', () => {})
-      // Out of descriptors (EMFILE) it returns with no pipes, and no close follows its error.
+      // Out of descriptors (EMFILE) it returns with no pipes to read or drain: a child that has already gone.
       const { stdout, stderr } = child
       if (!stdout || !stderr) return GONE
       // Drained: a child that writes more to stderr than its pipe holds stalls before its next line. Never kept: it can
