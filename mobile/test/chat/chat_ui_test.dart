@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness_mobile/chat/chat_attach_sheet.dart';
 import 'package:harness_mobile/chat/chat_composer.dart';
 import 'package:harness_mobile/chat/chat_transcript.dart';
 import 'package:harness_mobile/chat/chat_view.dart';
@@ -122,7 +123,7 @@ void main() {
     (tester) async {
       setPhone(tester, largePhone);
       final sent = <String>[];
-      var stopped = 0;
+      var stopped = 0, attached = 0;
       Widget composer({required bool working}) => phoneApp(
         Scaffold(
           body: Align(
@@ -134,11 +135,28 @@ void main() {
                 return true;
               },
               onStop: () => stopped++,
+              onAttach: () => attached++,
+              model: 'Claude Opus 5.5 · Medium',
             ),
           ),
         ),
       );
       await tester.pumpWidget(composer(working: false));
+      // The card's controls: attach, and the agent's model — shown, never a button.
+      await tester.tap(find.byTooltip('Attach'));
+      expect(attached, 1);
+      expect(find.text('Claude Opus 5.5 · Medium'), findsOneWidget);
+      expect(
+        find.ancestor(
+          of: find.text('Claude Opus 5.5 · Medium'),
+          matching: find.byWidgetPredicate(
+            (w) => w is InkWell || w is GestureDetector,
+          ),
+        ),
+        findsNothing,
+        reason: 'nothing to tap: the model cannot be changed from here',
+      );
+
       await tester.enterText(find.byType(TextField), 'run the tests');
       await tester.pump();
       await tester.tap(find.byTooltip('Send'));
@@ -157,4 +175,43 @@ void main() {
       await tester.pumpWidget(const SizedBox());
     },
   );
+
+  testWidgets('+ offers the ways in on one card, and a pick closes it first', (
+    tester,
+  ) async {
+    setPhone(tester, largePhone);
+    final picked = <String>[];
+    await tester.pumpWidget(
+      phoneApp(
+        Builder(
+          builder: (context) => TextButton(
+            onPressed: () => showChatAttachSheet(context, [
+              (
+                icon: Icons.image,
+                title: 'Photos',
+                detail: null,
+                onTap: () => picked.add('photos'),
+              ),
+              (
+                icon: Icons.attach_file,
+                title: 'Files',
+                detail: 'PDF, text, code…',
+                onTap: () => picked.add('files'),
+              ),
+            ]),
+            child: const Text('open'),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('open'));
+    await frames(tester);
+    expect(find.text('Photos'), findsOneWidget);
+    expect(find.text('PDF, text, code…'), findsOneWidget);
+
+    await tester.tap(find.text('Files'));
+    await frames(tester);
+    expect(picked, ['files']);
+    expect(find.text('Photos'), findsNothing, reason: 'the sheet went first');
+  });
 }

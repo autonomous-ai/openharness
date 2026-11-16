@@ -15,7 +15,7 @@ import { hookContracts } from './hooks.js'
 import { inspectHookFile } from './kit/nativeHookFiles.js'
 import { removeJsonHooks, removeOwnedFile, removeReviewedHooks } from './kit/hookRemoval.js'
 import type { HookFileRemoval } from './kit/hookRemovalOutcome.js'
-import { defaultHookHome, harnessRules, notifyHookEntry, RULES_HEADER } from './kit/hookSettings.js'
+import { defaultHookHome, harnessRules, notifyHookEntry, RULES_OPENINGS } from './kit/hookSettings.js'
 import { messagesCommand } from './kit/messagesHook.js'
 import { nativeHookHomes } from './kit/nativeHookHomes.js'
 import type { NativeHookSettings } from './kit/nativeHookSettings.js'
@@ -185,7 +185,7 @@ export async function removeEngineHooks(targets: HookTargets, platform: NodeJS.P
     out.push(hooks)
     // Only once the hooks are out (or were already, on a second uninstall): a record taken away from a hook still there makes Codex ask about it again.
     if (codex.reviewed && !hooks.failed) out.push(await removeReviewedHooks(codex.reviewed, home, settingsFile, { before, now: () => codexHooksNow(home) }))
-    if (codex.allow && 'file' in codex.allow) out.push(await removeOwnedFile(join(home, codex.allow.file), (content) => content.startsWith(RULES_HEADER)))
+    if (codex.allow && 'file' in codex.allow) out.push(await removeOwnedFile(join(home, codex.allow.file), (content) => RULES_OPENINGS.some((opening) => content.startsWith(opening))))
   }
   for (const rule of targets.native) {
     if (remote(rule.file)) continue

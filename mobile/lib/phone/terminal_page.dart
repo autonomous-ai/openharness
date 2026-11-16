@@ -19,13 +19,16 @@ import 'package:flutter/semantics.dart'
     show CustomSemanticsAction, SemanticsService;
 import 'package:xterm/xterm.dart' show Terminal, TerminalKey, TerminalStyle;
 
+import 'package:harness_mobile/chat/chat_attach_sheet.dart';
 import 'package:harness_mobile/chat/chat_composer.dart';
+import 'package:harness_mobile/chat/chat_mic_button.dart';
 import 'package:harness_mobile/chat/chat_view.dart';
 import 'package:harness_mobile/chat/chat_view_store.dart';
 import 'package:harness_mobile/logging/app_log.dart';
 import 'package:harness_mobile/logging/typing_trace.dart';
 import 'package:harness_mobile/core/models.dart'
     show Agent, AgentProject, ConnectionStatus;
+import 'package:harness_mobile/core/runtime_model_name.dart';
 import 'package:harness_mobile/core/first_task.dart';
 import 'package:harness_mobile/terminal/terminal_prompt_zone.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
@@ -1663,6 +1666,62 @@ class _TerminalPageState extends State<TerminalPage>
     return session.sendComposerText(text);
   }
 
+  /// The chip in Chat UI's composer: the engine as people know it, then the model and effort the
+  /// daemon saw it running (`Claude Opus 5.5 · Medium`) — read the way the desktop reads it — or the
+  /// grid model it was moved to.
+  static String? _chatModelLabel(Agent? agent) {
+    if (agent == null || agent.engine == null) return null;
+    final engine = engineIdentity(
+      agent.engine,
+      displayName: agent.engineDisplayName,
+    ).label;
+    final grid = agent.gridModel;
+    if (grid != null && grid.isNotEmpty) return '$engine $grid';
+    final running = runtimeModelDetails(
+      agent.selectedModel,
+      agentId: agent.id,
+      engine: agent.engine,
+    );
+    return running == null
+        ? engine
+        : '$engine ${modelLabelWithEffort(running.name, running.effort)}';
+  }
+
+  /// Chat UI's `+`: a picture or a file for the agent, the same ways the key strip's `img` offers —
+  /// and only those the machine's CLI can take.
+  void _attachToChat(TerminalSession session, MachineState? machine) {
+    final images = machine?.terminalImagePasteAvailable == true;
+    final files = machine?.terminalPasteFileAvailable == true;
+    final options = <ChatAttachOption>[
+      if (images)
+        (
+          icon: LucideIcons.image,
+          title: 'Photos',
+          detail: null,
+          onTap: () => unawaited(_sendImage(session, ImageSource.gallery)),
+        ),
+      if (images)
+        (
+          icon: LucideIcons.camera,
+          title: 'Camera',
+          detail: null,
+          onTap: () => unawaited(_sendImage(session, ImageSource.camera)),
+        ),
+      if (files)
+        (
+          icon: LucideIcons.paperclip,
+          title: 'Files',
+          detail: 'PDF, text, code…',
+          onTap: () => unawaited(_sendFile(session)),
+        ),
+    ];
+    if (options.isEmpty) {
+      _flash('This computer cannot take attachments yet', error: true);
+      return;
+    }
+    unawaited(showChatAttachSheet(context, options));
+  }
+
   /// Stop from Chat UI: Esc, as in the agent's own terminal.
   Future<void> _stopChat() async {
     final session = await _sessionForInput(why: 'chat');
@@ -2963,6 +3022,17 @@ class _TerminalPageState extends State<TerminalPage>
                                 // itself ([_sendChat]), as a tap on it would be.
                                 onSend: _sendChat,
                                 onStop: () => unawaited(_stopChat()),
+                                onAttach: session != null
+                                    ? () => _attachToChat(session, machine)
+                                    : null,
+                                model: _chatModelLabel(agent),
+                                // The phone's own voice input, as the terminal's mic.
+                                mic: session == null
+                                    ? null
+                                    : ChatMicButton(
+                                        voice: widget.voice,
+                                        session: session,
+                                      ),
                               ),
                             )
                           else if (session != null)
@@ -3073,7 +3143,7 @@ class _TerminalPageState extends State<TerminalPage>
                     // call (2026-09-27): "we don't need the scrolling indicator". The history
                     // scrolls like any list; scrolling down is the way back to the stream.
                     // The line above the mic: what is going on, in a few words — see [_statusLine].
-                    if (!_ownsInput && _find == null)
+                    if (!_ownsInput && _find == null && chat == null)
                       Positioned(
                         left: 0,
                         right: 0,
@@ -3097,7 +3167,7 @@ class _TerminalPageState extends State<TerminalPage>
                         ),
                       ),
                     // How loud the take is: a glow behind the mic that swells with the voice.
-                    if (!_ownsInput && _find == null)
+                    if (!_ownsInput && _find == null && chat == null)
                       ListenableBuilder(
                         listenable: widget.voice,
                         builder: (context, _) =>
@@ -3123,7 +3193,7 @@ class _TerminalPageState extends State<TerminalPage>
                     // way the home screen stays whole under Siri. Laid over the
                     // whole page so its capsule, rising as it talks, still takes
                     // taps.
-                    if (!_ownsInput && _find == null)
+                    if (!_ownsInput && _find == null && chat == null)
                       Positioned(
                         left: 0,
                         right: 0,

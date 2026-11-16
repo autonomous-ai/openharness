@@ -11,7 +11,7 @@ import { OPENCODE_TUI_PLUGIN } from './opencode/contract.js'
 import { CURSOR_HOOK_SETTINGS } from './cursor/contract.js'
 import { reviewRecords, withReviewRecords } from './kit/hookReview.js'
 import { homeIsNetworkOrDevice } from './kit/homeAdoption.js'
-import { installHookSettings, RULES_HEADER } from './kit/hookSettings.js'
+import { harnessRules, installHookSettings, RULES_HEADER } from './kit/hookSettings.js'
 import { nativeHookHomes } from './kit/nativeHookHomes.js'
 import { removeNativeYamlHooks } from './kit/nativeHookYaml.js'
 import { nativePluginSource } from './kit/nativePlugin.js'
@@ -51,7 +51,12 @@ const write = (file: string, text: string) => { mkdirSync(dirname(file), { recur
 describe('removeEngineHooks', () => {
   it('takes Harness out of every engine\'s files and leaves everything else', async () => {
     const { root, targets } = machine()
-    write(join(root, 'claude', 'settings.json'), JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: OURS }] }] }, permissions: { allow: ['Bash(harness ps:*)', 'Bash(ls)'] } }))
+    // The rules this release writes, so a rule it adds is one it takes out.
+    const allow = hookContracts.claude.settings.allow
+    targets.claude.allowRules = allow ? harnessRules(allow.rules).flat() : []
+    const notify = ['Bash(harness device notify:*)', `Bash(${join(env.HARNESS_BIN_DIR, 'harness')} device notify:*)`]
+    write(join(root, 'claude', 'settings.json'), JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: OURS }] }] },
+      permissions: { allow: ['Bash(harness ps:*)', 'Bash(ls)', ...notify, 'Bash(npm test:*)'] } }))
     write(join(root, 'codex', 'hooks.json'), JSON.stringify({ hooks: { SessionStart: [{ matcher: 'startup', hooks: [{ type: 'command', command: OURS }] }] } }))
     write(join(root, 'codex', 'rules', 'harness.rules'), `${RULES_HEADER}prefix_rule(pattern=["harness"], decision="allow")\n`)
     write(join(root, 'codex-profile', 'hooks.json'), JSON.stringify({ hooks: { UserPromptSubmit: [{ hooks: [{ type: 'command', command: OURS }] }] } }))
@@ -64,7 +69,7 @@ describe('removeEngineHooks', () => {
     const outcomes = await removeEngineHooks(targets)
 
     expect(outcomes.filter((o) => o.failed)).toEqual([])
-    expect(JSON.parse(readFileSync(join(root, 'claude', 'settings.json'), 'utf8'))).toEqual({ hooks: {}, permissions: { allow: ['Bash(ls)'] } })
+    expect(JSON.parse(readFileSync(join(root, 'claude', 'settings.json'), 'utf8'))).toEqual({ hooks: {}, permissions: { allow: ['Bash(ls)', 'Bash(npm test:*)'] } })
     expect(JSON.parse(readFileSync(join(root, 'codex', 'hooks.json'), 'utf8'))).toEqual({ hooks: {} })
     expect(existsSync(join(root, 'codex', 'rules', 'harness.rules'))).toBe(false)
     expect(JSON.parse(readFileSync(join(root, 'codex-profile', 'hooks.json'), 'utf8'))).toEqual({ hooks: {} })
@@ -73,7 +78,7 @@ describe('removeEngineHooks', () => {
     expect(existsSync(dirname(targets.plugins[1].file)), 'the plugin\'s own folder goes with it').toBe(false)
     expect(readFileSync(join(root, 'hermes', 'config.yaml'), 'utf8')).toBe('model: x\n')
     expect(JSON.parse(readFileSync(join(root, 'hermes', 'shell-hooks-allowlist.json'), 'utf8'))).toEqual({ approvals: [{ event: 'x', command: '/mine' }] })
-    expect(outcomes.reduce((n, o) => n + o.removed, 0)).toBe(10)
+    expect(outcomes.reduce((n, o) => n + o.removed, 0)).toBe(12)
   })
 
   it('keeps a plugin somebody else wrote at Harness\'s path', async () => {
@@ -82,6 +87,30 @@ describe('removeEngineHooks', () => {
     const outcomes = await removeEngineHooks(targets)
     expect(outcomes).toContainEqual({ file: targets.plugins[0].file, removed: 0, kept: 'another author’s file' })
     expect(existsSync(targets.plugins[0].file)).toBe(true)
+  })
+
+  it('takes out the Codex rules file an earlier release wrote, and keeps one Harness did not write', async () => {
+    const { root, targets } = machine()
+    targets.codex.homes.push(join(root, 'codex-mine'), join(root, 'codex-first'))
+    const rules = (home: string) => join(root, home, 'rules', 'harness.rules')
+    // The head as releases before this one wrote it, without `device notify`, and before that without `browser`: the
+    // list of commands in its first line changes from one release to the next.
+    const head = (commands: string) => `# Written by Harness, which rewrites it: do not edit. Its agent commands (harness ${commands})\n`
+      + "# need Harness's daemon, which Codex's sandbox cannot reach, so they run outside it without asking. What each\n"
+      + '# may do is for Harness to decide: Settings > Experimental, and an agent gives work to and closes only what it started.\n'
+    write(rules('codex'), `${head('whoami, ps, search, machines, show, wait, new, close, send, tell, browser')}prefix_rule(pattern=["harness"], decision="allow")\n`)
+    write(rules('codex-profile'), `${head('whoami, ps, search, machines, show, wait, new, close, send, tell')}prefix_rule(pattern=["harness"], decision="allow")\n`)
+    write(rules('codex-mine'), '# My own rules.\nprefix_rule(pattern=["harness"], decision="allow")\n')
+    // The first release to write it (CLI 0.3.74 to 0.3.79) began it otherwise.
+    write(rules('codex-first'), '# Written by Harness: agents in a tab with Agent Messages on reply with harness send. Do not edit.\nprefix_rule(pattern=["harness", "send"], decision="allow")\n')
+
+    const outcomes = await removeEngineHooks(targets)
+
+    expect(existsSync(rules('codex'))).toBe(false)
+    expect(existsSync(rules('codex-profile'))).toBe(false)
+    expect(existsSync(rules('codex-first'))).toBe(false)
+    expect(outcomes).toContainEqual({ file: rules('codex-mine'), removed: 0, kept: 'another author’s file' })
+    expect(existsSync(rules('codex-mine'))).toBe(true)
   })
 })
 

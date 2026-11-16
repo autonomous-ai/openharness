@@ -7,7 +7,8 @@ import type { ClientSocket } from '../lib/clientSocket.js'
 import { deviceSettingsPatchSchema } from '../lib/harnessDevices.js'
 import { frontAppId } from '../cable/hosts/frontApp.js'
 import { REPLACED_LINE, tabOf, type Tab } from '../cable/hosts/tabs.js'
-import { streamDevices, tellDevices } from './listenerClient.js'
+import { isNotifyMode, type NotifyMode } from '../cable/notifyMode.js'
+import { askDevices, streamDevices, tellDevices } from './listenerClient.js'
 import { devicesListenerPath } from './listenerPath.js'
 
 export interface DevicesClientDeps {
@@ -63,8 +64,8 @@ Offline computers never receive queued changes. A write is complete only when co
 
 export interface DialWatchDeps extends Pick<DevicesClientDeps, 'port' | 'dataDir' | 'machineId' | 'connect'> {
   /** The Harness Device app writes on it a `{"front":"<bundle id or exe name>"}` line each time the app in front changes,
-   *  a `{"tab":{"app","tty"}}` line each time the selected tab of a tab app in front does, and a `{"muted":<bool>}` line
-   *  each time its Sound item is clicked. */
+   *  a `{"tab":{"app","tty"}}` line each time the selected tab of a tab app in front does, a `{"muted":<bool>}` line
+   *  each time its Sound item is clicked, and a `{"notify":"full"|"you"}` line each time a Notifications item is. */
   stdin: {
     on(event: 'end' | 'close', listener: () => void): unknown
     on(event: 'data', listener: (chunk: Buffer | string) => void): unknown
@@ -81,6 +82,9 @@ export interface DialWatchDeps extends Pick<DevicesClientDeps, 'port' | 'dataDir
    *  aborts: true when it had opened. One asked with `standby` opens only while no other watch holds it.
    *  `streamDevices` by default. */
   selects?: (message: { type: 'tabs'; standby?: true }, chunk: (data: Buffer) => void, signal: AbortSignal) => Promise<boolean>
+  /** Hands the Notifications setting to the devices' listener, which keeps it: its answer, the status of one that is
+   *  not a 200, null for none. `askDevices` by default, bounded at NOTIFY_ANSWER_MS. */
+  notifyMode?: (mode: NotifyMode) => Promise<Record<string, unknown> | number | null>
 }
 
 const NOT_RUNNING = 'Harness is not running on this computer. Run: harness start'
@@ -103,8 +107,11 @@ const STREAM_RETRY_MS = 1_000
 const STREAM_RETRY_MAX_MS = 30_000
 // deviceRequest's bound: a Sound change a hung devices process never answers frees its slot, so the next click is sent.
 const SOUND_ANSWER_MS = 12_000
-// All of a refused Sound change that goes on stderr, and from there into the app's log: a code, never the daemon's words.
-const SOUND_CODE = /^[A-Z][A-Z0-9_]{0,31}$/
+// The same bound on a Notifications change: a hung devices process frees its slot, so the next click is sent.
+const NOTIFY_ANSWER_MS = 12_000
+// All of a refused Sound or Notifications change that goes on stderr, and from there into the app's log: a code, never
+// the daemon's words.
+const CODE = /^[A-Z][A-Z0-9_]{0,31}$/
 
 /** One call per line of at most [max] bytes; a longer line is dropped whole, its start included. */
 function lines(max: number, line: (text: string) => void): (chunk: Buffer | string) => void {
@@ -122,8 +129,10 @@ function lines(max: number, line: (text: string) => void): (chunk: Buffer | stri
 }
 
 /**
- * A dial_status reduced to what the menu-bar app shows, so a change of any setting but `muted` prints nothing. `muted`
- * only for a dial with an id, the one a Sound change can name; read from the primary's flat fields, never `devices`.
+ * A dial_status reduced to what the menu-bar app shows, so a change of any setting but `muted` and `notify` prints
+ * nothing. `muted` only for a dial with an id, the one a Sound change can name; read from the primary's flat fields,
+ * never `devices`. `notify`, the Notifications setting, only with a dial attached: it is this computer's, kept by the
+ * devices' listener, and the status carries it beside the dial's own settings.
  */
 export function dialWatchLine(payload: unknown): string {
   const status = (typeof payload === 'object' && payload !== null ? payload : {}) as Record<string, unknown>
@@ -132,6 +141,7 @@ export function dialWatchLine(payload: unknown): string {
   const settings = status.settings
   if (typeof status.id === 'string' && status.id !== '' && typeof settings === 'object' && settings !== null
     && typeof (settings as Record<string, unknown>).muted === 'boolean') line.muted = (settings as Record<string, unknown>).muted
+  if (line.attached === true && isNotifyMode(status.notify)) line.notify = status.notify
   return JSON.stringify(line)
 }
 
@@ -262,6 +272,33 @@ export function runDialWatch(argv: string[], deps: DialWatchDeps): Promise<numbe
       if (sounding) waiting = { id: dialId, muted }
       else sendSound(dialId, muted)
     }
+    // Whether the last status said a dial is attached: the menu offers Notifications only then, though the setting is
+    // this computer's. A change goes to the devices' listener, which keeps it, one at a time; the newest line read
+    // meanwhile waits. The line moves only with the dial_status the devices send once they have kept it.
+    let attached = false, notifying = false
+    let notifyWaiting: NotifyMode | undefined
+    const notifyMode = deps.notifyMode ?? (mode => askDevices(dataDir, { type: 'notify', mode }, { timeoutMs: NOTIFY_ANSWER_MS }))
+    const sendNotify = (mode: NotifyMode): void => {
+      notifying = true
+      void notifyMode(mode).then(reply => {
+        // A watch that has ended says nothing and sends nothing.
+        if (settled) return
+        notifying = false
+        // No answer at all (no listener, an older daemon's, its rate, none in 12 s) is told apart from a refusal, whose
+        // code alone reaches stderr, never the listener's words.
+        if (reply === null || typeof reply === 'number') deps.printError('notify: NO_ANSWER')
+        else if (reply.mode !== mode) deps.printError(`notify: ${typeof reply.error === 'string' && CODE.test(reply.error) ? reply.error : 'FAILED'}`)
+        const next = notifyWaiting
+        notifyWaiting = undefined
+        if (next) sendNotify(next)
+      })
+    }
+    const notify = (mode: NotifyMode): void => {
+      if (!answered) return deps.printError('notify: NOT_CONNECTED')
+      if (!attached) return deps.printError('notify: NO_DIAL')
+      if (notifying) notifyWaiting = mode
+      else sendNotify(mode)
+    }
     const finish = (code: number, why?: string, last?: Promise<unknown>): void => {
       if (settled) return
       settled = true
@@ -296,10 +333,12 @@ export function runDialWatch(argv: string[], deps: DialWatchDeps): Promise<numbe
     deps.stdin.on('close', quit)
     deps.stdin.on('data', lines(FRONT_LINE_MAX, line => {
       if (settled) return
-      let value: { front?: unknown; tab?: unknown; muted?: unknown } | null
+      let value: { front?: unknown; tab?: unknown; muted?: unknown; notify?: unknown } | null
       try { value = JSON.parse(line) } catch { return }
       // The Sound item's click: exactly one boolean `muted`, so no other line, nor a key beside it, changes the dial.
       if (typeof value?.muted === 'boolean' && Object.keys(value).length === 1) return sound(value.muted)
+      // A Notifications item's click, held to the same: exactly one known mode, alone.
+      if (isNotifyMode(value?.notify) && Object.keys(value).length === 1) return notify(value.notify)
       if (typeof value?.front === 'string') {
         front = frontAppId(value.front)
         return tellFront()
@@ -338,13 +377,14 @@ export function runDialWatch(argv: string[], deps: DialWatchDeps): Promise<numbe
           if (!sounding || reply?.requestId !== sounding.requestId) return
           if (reply.ok === true) return soundDone()
           // The daemon's own words (a path, a newline) never reach stderr: only a code does.
-          return soundDone(typeof reply.error === 'string' && SOUND_CODE.test(reply.error) ? reply.error : 'FAILED')
+          return soundDone(typeof reply.error === 'string' && CODE.test(reply.error) ? reply.error : 'FAILED')
         }
         if (frame?.type !== 'dial_status' || typeof frame.payload !== 'object' || frame.payload === null) return
         // The devices process usually starts with the dial, after this watch: it hears the app in front as the dial attaches.
         // Told on every status that says attached, a repeat too: a devices process restarted under a dial still attached
         // sends one that reads as the last, and the filter takes the same app again as nothing new.
-        if ((frame.payload as { attached?: unknown }).attached === true) {
+        attached = (frame.payload as { attached?: unknown }).attached === true
+        if (attached) {
           owed = true
           tellFront()
           // A new devices process may come with the dial: its stream is opened now, not after the wait.

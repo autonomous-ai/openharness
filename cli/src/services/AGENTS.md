@@ -221,8 +221,11 @@ master too old to run it starts it beside itself, still in its own process (`src
   The core asks only while a dial watches, so a poll never starts their process; a client that goes
   first is told as a notice. What a local tool tells the devices (first the app in front, from `harness hardware
   watch`) goes to their own listener (src/services/devicesListener.ts), never through the core: a new message is a
-  handler registered there by its type, with its own body and rate limits, beside `front`, `tab` and the mod's
-  `attach`, the session the Claude app shows (src/services/devices.ts). A handler of a second kind holds a stream open,
+  handler registered there by its type, with its own body and rate limits, beside `front`, `tab`, the mod's
+  `attach`, the session the Claude app shows, `notice`, an agent's line from `harness device notify`, and `notify`,
+  the Notifications setting (src/services/devices.ts). Where the listener does not run (Windows, and devices inside
+  the core, as on Harness OS) `harness device notify` answers `no dial` and the dial's status carries no Notifications
+  setting, which nothing could change: a known gap. A handler of a second kind holds a stream open,
   one of its type across every connection, and is told when the stream can take a line (`onWritable`) and why it
   ended (`StreamEnd`): on `tabs` the devices tell the watch which terminal tab to select; on `dial` (`dialStream`),
   opened with `standby` so it never takes the stream from another Orca, they tell Orca's Harness Device plugin

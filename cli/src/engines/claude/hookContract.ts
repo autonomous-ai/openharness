@@ -34,12 +34,15 @@ export const hooks: HookContract = {
     // says), and the plugin's (`mcp__plugin_<plugin>_<server>__<tool>`). By name, not `mcp__harness__*`: another
     // product's MCP server is also often added as `harness`, and its tools are not Harness's to allow. And
     // `harness --help`, which every harness is told to read as it starts (lib/agentAttribution.ts): in ask mode it was
-    // the one question left in a hand-off (2026-10-12, in a clean VM). It only prints.
+    // the one question left in a hand-off (2026-10-12, in a clean VM). It only prints. And `harness device notify`, as
+    // exactly its three words (facets/hooks.ts HARNESS_AGENT_COMMANDS): a question before it would wait for the person
+    // it calls. Claude Code's prefix rule does not cover a compound command (`;`, `&&`, `$(…)`), which still asks.
     allow: {
       list: ['permissions', 'allow'],
       unless: ['deny', 'ask'],
       rules: ['Bash(harness --help)', 'Bash(harness -h)', 'Bash({launcher} --help)',
-        'Bash(harness {verb}:*)', 'Bash({launcher} {verb}:*)', 'mcp__harness__{tool}', 'mcp__plugin_harness_harness__{tool}'],
+        'Bash(harness {verb}:*)', 'Bash({launcher} {verb}:*)', 'mcp__harness__{tool}', 'mcp__plugin_harness_harness__{tool}',
+        'Bash(harness {command}:*)', 'Bash({launcher} {command}:*)'],
     },
     commandNamesHome: false,
     // Windows: exec form, `command` (the managed node.exe) and `args`, run without a shell. In shell form Claude Code runs

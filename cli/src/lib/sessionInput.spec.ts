@@ -1,6 +1,7 @@
 import { readInlineScreen } from '../testing/inlineScreen.js'
 import { inlineSubmission } from '../testing/inlineSubmission.js'
 import { readFileSync } from 'node:fs'
+import { AsyncResource, createHook, executionAsyncId } from 'node:async_hooks'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -34,6 +35,91 @@ const codexComposer = (draft: string, footer = '  ? for shortcuts') => `\n\u001b
 
 describe('SessionInputController', () => {
   afterEach(() => vi.useRealTimers())
+
+  it('keeps successful bursts below the measured cost of discarded ticket-removal arrays', async () => {
+    const scope = new AsyncResource('input-burst-allocation-fixture'), owned = new Set([scope.asyncId()])
+    const hook = createHook({ init(id, _type, trigger) { if (owned.has(trigger)) owned.add(id) } })
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const species = Object.getOwnPropertyDescriptor(Array, Symbol.species)!
+    let arrays = 0, submitted = 0, received = 0, invalid = 0, resolveWrite!: () => void
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+      getSession: () => session('claude'), validateRuntime: async () => true,
+      inject: async () => true, sendKey: async () => true,
+      onError: (_id, message) => { throw new Error(message) },
+      onSubmitted: () => { submitted++; resolveWrite() },
+    })
+    // Observe standard ArraySpeciesCreate allocations, without inspecting the controller's private queues.
+    Object.defineProperty(Array, Symbol.species, { configurable: true, get() {
+      if (owned.has(executionAsyncId())) arrays++
+      return this
+    } })
+    hook.enable()
+    try {
+      await scope.runInAsyncScope(async () => {
+        for (let i = 0; i < 100; i++) {
+          let writes = 0
+          const written = new Promise<void>(resolve => { resolveWrite = () => { if (++writes === 2) resolve() } })
+          const receipt = (outcome: string) => { received++; if (outcome !== 'taken' && outcome !== 'started') invalid++ }
+          controller.submit('s1', 'burst input', undefined, receipt)
+          controller.submit('s1', 'burst input', undefined, receipt)
+          await written
+          controller.onTurnStarted('s1', 'burst input')
+          controller.onTurnEnded('s1')
+          await new Promise<void>(resolve => setImmediate(resolve))
+        }
+      })
+    } finally {
+      hook.disable()
+      Object.defineProperty(Array, Symbol.species, species)
+      scope.emitDestroy()
+      controller.forget('s1')
+      log.mockRestore()
+    }
+    expect({ submitted, received, invalid }).toEqual({ submitted: 200, received: 200, invalid: 0 })
+    expect(arrays).toBeLessThanOrEqual(401)
+  })
+
+  it('avoids redundant ready-reader and write-settlement Promise continuations', async () => {
+    // Profiles found unnecessary reader waits and separate catch/then settlement on every ready message.
+    // Count only this caller's descendants, so the test runner and other tests cannot spend its budget.
+    const scope = new AsyncResource('input-allocation-fixture'), owned = new Set([scope.asyncId()])
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    let promises = 0, submitted = 0, received = 0, resolveWrite!: () => void
+    const hook = createHook({ init(id, type, trigger) {
+      if (!owned.has(trigger)) return
+      owned.add(id)
+      if (type === 'PROMISE') promises++
+    } })
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+      getSession: () => session('claude'), validateRuntime: async () => true,
+      engineStarting: () => null, inject: async () => true, sendKey: async () => true,
+      onError: (_id, message) => { throw new Error(message) },
+      onSubmitted: () => { submitted++; resolveWrite() },
+    })
+    hook.enable()
+    try {
+      await scope.runInAsyncScope(async () => {
+        for (let i = 0; i < 100; i++) {
+          const written = new Promise<void>(resolve => { resolveWrite = resolve })
+          controller.submit('s1', 'ready input', undefined, outcome => {
+            expect(outcome).toBe('started')
+            received++
+          })
+          await written
+          controller.onTurnStarted('s1', 'ready input')
+          controller.onTurnEnded('s1')
+          await new Promise<void>(resolve => setImmediate(resolve))
+        }
+      })
+    } finally {
+      hook.disable()
+      scope.emitDestroy()
+      controller.forget('s1')
+      log.mockRestore()
+    }
+    expect({ submitted, received }).toEqual({ submitted: 100, received: 100 })
+    expect(promises).toBeLessThanOrEqual(1_802)
+  })
 
   it('holds a delivery while the agent works, and types it once the turn ends', async () => {
     vi.useFakeTimers()
@@ -1323,6 +1409,40 @@ describe('delivery correlation', () => {
 describe('optional lamp delivery preserves legacy behavior', () => {
   afterEach(() => vi.useRealTimers())
 
+  it.each(['turn delivery', 'control delivery', 'control message'] as const)(
+    'keeps a drained %s ahead of a new person message through the entire write', async kind => {
+      const checks: Array<(valid: boolean) => void> = []
+      const typed: string[] = []
+      const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+        getSession: () => session('claude'),
+        validateRuntime: () => new Promise<boolean>(resolve => checks.push(resolve)),
+        inject: async (_target, text) => { typed.push(text); return true },
+        sendKey: async () => true, onError: vi.fn(),
+      })
+      try {
+        let release: (() => void) | null = null
+        if (kind === 'turn delivery') controller.setTurnOpen('s1', true)
+        else release = controller.acquireControl('s1')
+        controller.submit('s1', 'queued first', kind === 'control message' ? undefined : 'feature:queued')
+        expect(checks).toHaveLength(0)
+        if (kind === 'turn delivery') controller.onTurnEnded('s1')
+        else release!()
+        expect(checks).toHaveLength(1)
+
+        controller.submit('s1', 'person second')
+        // Validation belongs to a write too: it may wait while the first paste/Enter is being prepared.
+        expect(checks).toHaveLength(1)
+        checks[0]!(true)
+        await vi.waitFor(() => expect(checks).toHaveLength(2))
+        expect(typed).toEqual(['queued first'])
+        checks[1]!(true)
+        await vi.waitFor(() => expect(typed).toEqual(['queued first', 'person second']))
+      } finally {
+        controller.forget('s1')
+        for (const settle of checks) settle(false)
+      }
+    })
+
   it('keeps untracked Claude submits out of the new lamp queue, writing them one after another', async () => {
     // Not held for the turn — Claude takes typing while it works — but never two writes into the pane at
     // once: the second waits for the first's paste, not for the first's turn.
@@ -1476,7 +1596,7 @@ describe('optional lamp delivery preserves legacy behavior', () => {
       t.controller.forget('s1')
     })
 
-    it('lets what it held go on at once when the process is gone, the agent was forgotten meanwhile, or the key fails', async () => {
+    it('reports gone processes and forgotten agents, and lets held messages continue after a failed key', async () => {
       vi.useFakeTimers()
       const gone = pressing({ validateRuntime: async () => { await new Promise(resolve => setTimeout(resolve, 100)); return false } })
       gone.controller.cancel('s1')
@@ -1491,7 +1611,8 @@ describe('optional lamp delivery preserves legacy behavior', () => {
       forgotten.controller.forget('s1')
       forgotten.press()
       await vi.advanceTimersByTimeAsync(1_000)
-      expect(forgotten.typed).toEqual(['to a forgotten agent'])
+      expect(forgotten.typed).toEqual([])
+      expect(forgotten.said).toEqual({ 'to a forgotten agent': ['agent_gone'] })
       const failed = pressing({ key: () => Promise.reject(new Error('the terminal is gone')) })
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
       failed.controller.cancel('s1')
@@ -1723,6 +1844,163 @@ describe('what became of a person\'s message, for its measurement', () => {
     expect(receipt).toHaveBeenCalledTimes(1)
     expect(inject).toHaveBeenCalledTimes(1)
     expect(onError).not.toHaveBeenCalled()
+    controller.forget('s1')
+  })
+})
+
+describe('pending input belongs to its original agent state', () => {
+  afterEach(() => vi.useRealTimers())
+
+  const pending = () => {
+    let row = session('claude')
+    let release!: (valid: boolean) => void
+    const typed: string[] = [], outcomes: string[] = []
+    const onDelivery = vi.fn(), onError = vi.fn()
+    const validateRuntime = vi.fn(() => validateRuntime.mock.calls.length === 1
+      ? new Promise<boolean>(resolve => { release = resolve }) : Promise.resolve(true))
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+      getSession: () => row, validateRuntime,
+      inject: async (_id, text) => { typed.push(text); return true },
+      sendKey: async () => true, onDelivery, onError })
+    controller.submit('s1', 'first person', undefined, outcome => outcomes.push(outcome))
+    return { controller, typed, outcomes, onDelivery, onError, validateRuntime,
+      release: () => release(true), replace: () => { row = { ...row, sessionId: 'replacement' } } }
+  }
+
+  it.each(['direct', 'drained'] as const)('can cancel a %s delivery waiting for an earlier write', async route => {
+    vi.useFakeTimers()
+    const t = pending()
+    const release = route === 'drained' ? t.controller.acquireControl('s1') : undefined
+    t.controller.submit('s1', 'withdrawn', 'feature:later')
+    release?.()
+    expect(t.controller.cancelDelivery('feature:later')).toBe(true)
+    expect(t.controller.cancelDelivery('feature:later')).toBe(false)
+    t.release()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(t.typed).toEqual(['first person'])
+    expect(t.onDelivery.mock.calls.filter(([event]) => event.state === 'rejected')).toEqual([
+      [{ sessionId: 's1', deliveryId: 'feature:later', state: 'rejected', reason: 'cancelled' }],
+    ])
+    t.controller.forget('s1')
+  })
+
+  it.each(['direct', 'drained'] as const)('drops %s service and person writes when the agent is replaced', async route => {
+    vi.useFakeTimers()
+    const t = pending(), person = vi.fn()
+    const release = route === 'drained' ? t.controller.acquireControl('s1') : undefined
+    t.controller.submit('s1', 'old service', 'feature:later')
+    t.controller.submit('s1', 'old person', undefined, person)
+    release?.()
+    t.controller.forget('s1')
+    t.replace()
+    t.controller.submit('s1', 'new person')
+    t.release()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(t.typed).toEqual(['new person'])
+    expect(t.outcomes).toEqual(['agent_gone'])
+    expect(person.mock.calls).toEqual([['agent_gone']])
+    expect(t.onDelivery.mock.calls.filter(([event]) => event.state === 'rejected')).toEqual([
+      [{ sessionId: 's1', deliveryId: 'feature:later', state: 'rejected', reason: 'agent_gone' }],
+    ])
+    expect(t.validateRuntime).toHaveBeenCalledTimes(2)
+    t.controller.forget('s1')
+  })
+
+  it('bounds pending writes even when each is cancelled, and releases their capacity when consumed', async () => {
+    vi.useFakeTimers()
+    const t = pending()
+    for (let i = 0; i < 8; i++) {
+      t.controller.submit('s1', `cancel ${i}`, `feature:${i}`)
+      expect(t.controller.cancelDelivery(`feature:${i}`)).toBe(true)
+    }
+    const refused = vi.fn()
+    t.controller.submit('s1', 'ninth', undefined, refused)
+    expect(refused.mock.calls).toEqual([['queue_full']])
+    t.release()
+    await vi.advanceTimersByTimeAsync(0)
+    t.controller.submit('s1', 'capacity returned')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(t.typed).toEqual(['first person', 'capacity returned'])
+    t.controller.forget('s1')
+    expect(t.onDelivery.mock.calls.filter(([event]) => event.state === 'rejected')).toHaveLength(8)
+  })
+
+  it('counts UTF-8 bytes across pending service and person writes', async () => {
+    vi.useFakeTimers()
+    const t = pending(), refused = vi.fn()
+    t.controller.submit('s1', 'é'.repeat(6 * 1024), 'feature:large')
+    t.controller.submit('s1', 'é'.repeat(6 * 1024))
+    t.controller.submit('s1', 'x', undefined, refused)
+    expect(refused.mock.calls).toEqual([['queue_full']])
+    t.controller.forget('s1')
+    t.release()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(t.typed).toEqual([])
+  })
+
+  it.each(['move', 'cancel'] as const)('drops service and person messages held for a %s before replacement', async hold => {
+    vi.useFakeTimers()
+    const gate = new MoveGate(), typed: string[] = [], onDelivery = vi.fn(), person = vi.fn()
+    let pressed!: (ok: boolean) => void
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+      getSession: () => session('claude'), validateRuntime: async () => true,
+      inject: async (_id, text) => { typed.push(text); return true },
+      sendKey: () => new Promise<boolean>(resolve => { pressed = resolve }), onError: vi.fn(), onDelivery, moveGate: gate })
+    if (hold === 'move') gate.hold('h1')
+    else { controller.cancel('s1'); await vi.advanceTimersByTimeAsync(0) }
+    controller.submit('s1', 'old service', 'feature:held')
+    controller.submit('s1', 'old person', undefined, person)
+    controller.forget('s1')
+    controller.setTurnOpen('s1', false)
+    if (hold === 'move') await gate.release('h1')
+    else { pressed(true); await vi.advanceTimersByTimeAsync(250) }
+    controller.submit('s1', 'new person')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(typed).toEqual(['new person'])
+    expect(person.mock.calls).toEqual([['agent_gone']])
+    expect(onDelivery.mock.calls.filter(([event]) => event.state === 'rejected')).toEqual([
+      [{ sessionId: 's1', deliveryId: 'feature:held', state: 'rejected', reason: 'agent_gone' }],
+    ])
+    controller.forget('s1')
+  })
+
+  it('does not arm confirmation after a forgotten paste finishes, and continues after a failed write', async () => {
+    vi.useFakeTimers()
+    let complete!: (ok: boolean) => void
+    const person = vi.fn(), onSubmitted = vi.fn(), typed: string[] = []
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+      getSession: () => session('claude'), validateRuntime: async () => true,
+      inject: async (_id, text) => {
+        typed.push(text)
+        if (text === 'old paste') return new Promise<boolean>(resolve => { complete = resolve })
+        if (text === 'failed') throw new Error('terminal unavailable')
+        return true
+      }, sendKey: async () => true, onError: vi.fn(), onSubmitted })
+    controller.submit('s1', 'old paste', undefined, person)
+    await vi.advanceTimersByTimeAsync(0)
+    controller.forget('s1')
+    controller.submit('s1', 'failed')
+    controller.submit('s1', 'new person')
+    complete(true)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(typed).toEqual(['old paste', 'failed', 'new person'])
+    expect(person.mock.calls).toEqual([['ambiguous']])
+    expect(onSubmitted.mock.calls).toEqual([['s1', 'new person']])
+    controller.forget('s1')
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('does not let an old control release unlock the replacement agent', async () => {
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+      getSession: () => session(), validateRuntime: async () => true,
+      inject: async () => true, sendKey: async () => true, onError: vi.fn() })
+    const oldRelease = controller.acquireControl('s1')!
+    controller.forget('s1')
+    const newRelease = controller.acquireControl('s1')!
+    oldRelease()
+    expect(controller.acquireControl('s1')).toBeNull()
+    newRelease()
+    expect(controller.acquireControl('s1')).not.toBeNull()
     controller.forget('s1')
   })
 })
