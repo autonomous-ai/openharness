@@ -130,7 +130,8 @@ A new `HostSource` with the id `herdr`.
   - A refused connection or a dropped subscription retries after 1 s, doubling up to 60 s.
   - After a 60 s retry of an attempt that never listed fails, it stops retrying and waits on the watch: a server that
     starts again replaces the socket file. A stale socket from a crashed herdr therefore costs about two minutes of
-    retries, then nothing.
+    retries, then nothing. Now a refused socket nothing has subscribed on is stale at once, after one retry when it is
+    under 2 s old ([Herdr Core](../plans/2026-11-16-herdr-app-design.md#herdr-080s-stale-socket-herdrsourcets)).
   - An attempt that listed keeps the 60 s retry and is never given up on: that herdr is running, but drops each
     subscription.
   - On a drop, the agents stay listed with their last state until the first retry. If that retry fails, the list
