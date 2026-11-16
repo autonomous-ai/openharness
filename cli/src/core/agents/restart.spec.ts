@@ -8,7 +8,9 @@ import { AgentRestartCoordinator, bypassPermissionFor, restartAgent } from '../.
 import { terminalRouteKey } from '../../lib/terminalRuntime.js'
 import { processLaunchArgs } from '../../lib/processTable.js'
 import { workspaceMissing } from '../../lib/workspaceCheck.js'
-import { createAgentRestarter, type RestartDeps } from './restart.js'
+import { commitRelaunchedEngine, createAgentRestarter, type RestartDeps } from './restart.js'
+import { resolvePaneEngineProcess } from '../../lib/paneEngineProcess.js'
+import type { RestartTarget } from '../../lib/terminalBackend.js'
 import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
 import { TerminalAgentReconciler } from '../../lib/terminalAgentReconciler.js'
 
@@ -28,6 +30,7 @@ vi.mock('../../lib/processTable.js', async (real) => ({
   processLaunchArgs: vi.fn(async () => '/bin/claude --model opus -c model_provider=grid'),
 }))
 vi.mock('../../lib/workspaceCheck.js', () => ({ workspaceMissing: vi.fn(() => null) }))
+vi.mock('../../lib/paneEngineProcess.js', () => ({ resolvePaneEngineProcess: vi.fn() }))
 
 const runtime = { backend: 'tmux' as const, paneId: '%4' }
 /** The pane's backend handing the pane back to its default disposal (`TerminalBackend.releaseHold`). */
@@ -77,6 +80,58 @@ function setup(row: RegisteredSession | null = agent(), over: Partial<RestartDep
 }
 
 const changed = { ok: false, error: 'AGENT_CHANGED', detail: 'The harness changed or stopped during restart.' }
+
+describe('durable restart publication', () => {
+  afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks() })
+
+  it.each(['cancelled', 'missing', 'empty receipt', 'replaced receipt'] as const)('keeps the hold without readiness when %s', async phase => {
+    const run = setup()
+    const place = { runtime, backend: run.tmuxBackend } as unknown as RestartTarget
+    if (phase === 'missing') vi.mocked(run.deps.registry.byAgent).mockReturnValue(undefined)
+    if (phase === 'empty receipt') vi.mocked(run.deps.registry.confirmLaunch).mockResolvedValue({ state: 'confirmed', entry: null })
+    if (phase === 'replaced receipt') vi.mocked(run.deps.registry.confirmLaunch).mockResolvedValue({ state: 'confirmed', entry: agent({ sessionId: 'another' }) })
+    expect(await commitRelaunchedEngine(run.deps, 'a1', newProcess, null, place, () => phase !== 'cancelled'))
+      .toBe(phase === 'cancelled' ? 'changed' : phase === 'missing' ? 'vanished' : 'changed after commit')
+    expect(releaseHold).not.toHaveBeenCalled()
+    expect(run.deps.announceSession).not.toHaveBeenCalled()
+    expect(run.deps.refreshGridAssignment).not.toHaveBeenCalled()
+  })
+
+  it.each(['same', 'gone', 'replaced', 'executable'] as const)('rechecks native readiness before publication: %s', async proof => {
+    const run = setup()
+    const publish = vi.mocked(run.deps.registry.confirmLaunch).getMockImplementation()!
+    vi.mocked(run.deps.registry.confirmLaunch).mockImplementation(async (id, input, authority) => {
+      await authority?.refresh?.()
+      return publish(id, input, authority)
+    })
+    vi.mocked(resolvePaneEngineProcess).mockResolvedValue(proof === 'gone' ? null : proof === 'replaced' ? { ...newProcess, startMarker: 'replacement' }
+      : proof === 'executable' ? { ...newProcess, executable: 'other' } : newProcess)
+    const result = commitRelaunchedEngine(run.deps, 'a1', newProcess, null, { runtime, backend: run.tmuxBackend } as unknown as RestartTarget, () => true)
+    if (proof === 'same') expect(await result).toMatchObject({ processIdentity: newProcess })
+    else {
+      await expect(result).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
+      expect(releaseHold).not.toHaveBeenCalled()
+      expect(run.deps.announceSession).not.toHaveBeenCalled()
+    }
+  })
+
+  it.each(['alive', 'gone', 'unknown', 'dead'] as const)('rechecks a replacement shell: %s', async proof => {
+    const run = setup(terminal())
+    const paneState = vi.fn(async () => proof === 'gone' || proof === 'unknown' ? proof : { dead: proof === 'dead', engineExit: null })
+    const publish = vi.mocked(run.deps.registry.confirmLaunch).getMockImplementation()!
+    vi.mocked(run.deps.registry.confirmLaunch).mockImplementation(async (id, input, authority) => {
+      await authority?.refresh?.()
+      return publish(id, input, authority)
+    })
+    const result = commitRelaunchedEngine(run.deps, 'a1', null, null, { runtime, backend: { ...run.tmuxBackend, paneState } } as unknown as RestartTarget, () => true)
+    if (proof === 'alive') expect(await result).toMatchObject({ engine: 'terminal' })
+    else {
+      await expect(result).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
+      expect(releaseHold).not.toHaveBeenCalled()
+      expect(run.deps.announceSession).not.toHaveBeenCalled()
+    }
+  })
+})
 
 describe('restarting an agent', () => {
   beforeEach(() => { vi.spyOn(console, 'log').mockImplementation(() => {}) })

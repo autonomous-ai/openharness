@@ -6,6 +6,8 @@ import { bypassPermissionActive, permissionModeFromArgv } from '../../lib/proces
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createDiscoveryHandlers, type DiscoveryDeps } from './discovery.js'
+import { resolvePaneEngineProcess } from '../../lib/paneEngineProcess.js'
+vi.mock('../../lib/paneEngineProcess.js', () => ({ resolvePaneEngineProcess: vi.fn() }))
 
 // The pane's backend, asked what became of an unconfirmed start's pane.
 const paneState = vi.fn<TerminalBackend['paneState']>(async () => 'gone')
@@ -84,6 +86,76 @@ const settle = () => new Promise((done) => setTimeout(done, 0))
 const grid = (name: string) => ({ grid: name, baseUrl: `http://${name}.local`, model: 'm' })
 
 describe('discovery', () => {
+  it.each(['same', 'missing backend', 'backend', 'cancelled', 'owner', 'gone', 'process', 'executable'] as const)(
+    'revalidates every selected owner and the native discovery source: %s', async change => {
+      let live = true
+      const run = setup({ current: () => live })
+      const selected = row(), observed = seen(), opened = row({ agentId: 'new' })
+      run.rows.set(selected.agentId, selected)
+      vi.mocked(run.deps.registry.byRuntimeTerminal).mockReturnValue(selected)
+      if (change === 'missing backend') vi.mocked(run.deps.terminals.backendFor).mockReturnValue(undefined)
+      vi.mocked(resolvePaneEngineProcess).mockResolvedValue(change === 'gone' ? null
+        : change === 'process' ? { ...observed.processIdentity, startMarker: 'other' }
+        : change === 'executable' ? { ...observed.processIdentity, executable: 'other' } : observed.processIdentity)
+      vi.mocked(run.deps.registry.openProcessAgent).mockImplementation(async (_input, authority) => {
+        if (change === 'backend') vi.mocked(run.deps.terminals.backendFor).mockReturnValue(undefined)
+        if (change === 'cancelled') live = false
+        if (change === 'owner') selected.sessionId = 'another'
+        expect(authority?.current?.()).toBe(!['missing backend', 'backend', 'cancelled', 'owner'].includes(change))
+        if (change === 'owner') return null
+        await authority?.refresh?.()
+        return { entry: opened, isNew: true, evicted: [] }
+      })
+      if (change === 'same' || change === 'owner') await run.handlers.onDiscovered(observed)
+      else await expect(run.handlers.onDiscovered(observed)).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
+      expect(run.deps.announceSession).toHaveBeenCalledTimes(change === 'same' ? 1 : 0)
+    })
+
+  it('does not announce a discovered owner replaced during displaced-owner cleanup', async () => {
+    const run = setup()
+    const opened = row({ agentId: 'new' })
+    vi.mocked(run.deps.registry.openProcessAgent).mockResolvedValue({ entry: opened, isNew: true, evicted: [row()] })
+    vi.mocked(run.deps.forgetSession).mockImplementationOnce(async () => { run.rows.delete('new') })
+    await run.handlers.onDiscovered(seen())
+    expect(run.deps.announceSession).not.toHaveBeenCalled()
+    expect(run.deps.bindObservedAgent).not.toHaveBeenCalled()
+  })
+
+  it.each(['not-published', 'empty', 'cancelled'] as const)('does not announce an unconfirmed observed launch: %s', async result => {
+    let current = true
+    const run = setup({ current: () => current })
+    const selected = row({ launch: { state: 'starting' } })
+    run.rows.set('a1', selected)
+    vi.mocked(run.deps.registry.confirmLaunch).mockImplementation(async () => {
+      if (result === 'cancelled') current = false
+      return result === 'not-published' ? { state: 'not-published' }
+        : { state: 'confirmed', entry: result === 'empty' ? null : selected }
+    })
+    await run.handlers.onObserved(seen(), selected)
+    expect(run.deps.announceSession).not.toHaveBeenCalled()
+    expect(run.deps.bindObservedAgent).not.toHaveBeenCalled()
+  })
+
+  it.each(['same', 'missing backend', 'backend', 'cancelled', 'owner', 'process', 'not-published'] as const)(
+    'retains a dormant reservation until exact engine-exit publication: %s', async change => {
+      let live = true
+      const run = setup({ current: () => live })
+      const selected = row({ resumeOnly: true })
+      run.rows.set('a1', selected)
+      if (change === 'missing backend') vi.mocked(run.deps.terminals.backendFor).mockReturnValue(undefined)
+      vi.mocked(resolvePaneEngineProcess).mockResolvedValue(change === 'process' ? seen().processIdentity : null)
+      vi.mocked(run.deps.retainExitedSession).mockImplementation(async (_row, _announce, authority) => {
+        if (change === 'backend') vi.mocked(run.deps.terminals.backendFor).mockReturnValue(undefined)
+        if (change === 'cancelled') live = false
+        if (change === 'owner') selected.sessionId = 'another'
+        expect(authority?.current?.()).toBe(!['backend', 'cancelled', 'owner'].includes(change))
+        await authority?.refresh?.()
+        return change === 'not-published' ? { state: 'not-published' } : { state: 'confirmed', entry: null }
+      })
+      if (change === 'same' || change === 'not-published') await run.handlers.onDormant(selected, 'exited')
+      else await expect(run.handlers.onDormant(selected, 'exited')).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
+      expect(run.deps.stoppedAgents.finishResume).toHaveBeenCalledTimes(change === 'same' ? 1 : 0)
+    })
   beforeEach(() => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     paneState.mockReset().mockResolvedValue('gone')
@@ -386,6 +458,17 @@ describe('discovery', () => {
       const shell = row({ agentId: '0e375534', engine: 'terminal', sessionId: '', runtimes: [PANE] } as Partial<RegisteredSession>)
       const hermesSeen = (over: Partial<DiscoveredTerminalAgent> = {}) => seen({ engine: 'hermes', runtimes: [PANE],
         primaryRuntimeKey: 'ptyhost:p2-0.5.80:%2007', processIdentity: HERMES, args: 'python.exe -I hermes-boot.py', ...over })
+
+      it('keeps the archive and permits a later observation after publication fails', async () => {
+        const run = setup(), saved = archived()
+        vi.mocked(run.deps.stoppedAgents.list).mockReturnValue([saved])
+        vi.mocked(run.deps.registry.reinstateArchived).mockRejectedValueOnce(new Error('storage unavailable'))
+        await expect(run.handlers.onObserved(hermesSeen(), shell)).rejects.toThrow('storage unavailable')
+        expect(run.deps.stoppedAgents.remove).not.toHaveBeenCalled()
+        expect(run.deps.send).not.toHaveBeenCalled()
+        await run.handlers.onObserved(hermesSeen(), shell)
+        expect(run.deps.registry.reinstateArchived).toHaveBeenCalledTimes(2)
+      })
 
       it('comes back under its own id on its pane, the terminal tile moving to it, nothing restarted', async () => {
         const run = setup()

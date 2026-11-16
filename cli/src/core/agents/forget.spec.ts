@@ -72,6 +72,26 @@ function expectLetGo(deps: ForgetDeps, sessionId: string, agentId: string) {
 }
 
 describe('forgetting a session', () => {
+  it.each(['unpublished removal', 'replacement after removal', 'empty unbind', 'replacement after unbind'] as const)(
+    'retains readers and notifications when publication cannot prove absence: %s', async phase => {
+      const { deps, forgetSession } = setup()
+      const keepAgent = phase.includes('unbind')
+      if (keepAgent) vi.mocked(deps.registry.confirmSessionUnbound).mockResolvedValue({ state: 'confirmed',
+        entry: phase === 'empty unbind' ? null : { ...deps.registry.resolve('a1')!, sessionId: 'replacement' } })
+      else vi.mocked(deps.registry.confirmEngineExit).mockResolvedValue(phase === 'unpublished removal'
+        ? { state: 'not-published' } : { state: 'confirmed', entry: null })
+      await expect(forgetSession('a1', { keepAgent })).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
+      expect(deps.normalizers.forget).not.toHaveBeenCalled()
+      expect(deps.watcher.removeSession).not.toHaveBeenCalled()
+      expect(deps.clients.send).not.toHaveBeenCalled()
+    })
+
+  it('releases an empty binding without looking up an empty conversation', async () => {
+    const { deps, forgetSession } = setup()
+    await forgetSession('fresh', { keepAgent: true })
+    expect(deps.registry.bySession).not.toHaveBeenCalled()
+    expect(deps.ended).not.toHaveBeenCalled()
+  })
   it.each([false, true])('keeps a replacement session reader acquired after publication, binding-only=%s', async keepAgent => {
     const { deps, forgetSession } = setup()
     const replacement = { agentId: 'replacement', sessionId: 's1', engine: 'claude' } as RegisteredSession

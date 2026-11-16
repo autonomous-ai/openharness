@@ -88,6 +88,26 @@ function setup() {
   return { deps, registry, rows, panes, inspect, create, killHeld, controller, stage, cancelWork: () => { cancelled = true } }
 }
 
+it.each(['conversation', 'cancelled', 'signal owner'] as const)('holds external effects when %s changes during durable preparation', async change => {
+  const test = setup()
+  const persist = vi.mocked(test.registry.setExternalResume).getMockImplementation()!
+  if (change === 'signal owner') test.inspect.mockImplementation(async request => held(request))
+  vi.mocked(test.registry.setExternalResume).mockImplementation(async (id, intent, authority) => {
+    if (change === 'signal owner' ? intent.signal === 'prepared' : intent.phase === 'admitted') {
+      if (change === 'cancelled') test.cancelWork()
+      else test.inspect.mockImplementation(async request => change === 'signal owner'
+        ? { ...held(request), owner: { ...processOwner, pid: 8 } } as ExternalSessionAnswer
+        : { ...free(request), session: { ...fact, transcriptPath: join(cwd, 'replacement.jsonl') } } as ExternalSessionAnswer)
+    }
+    return persist(id, intent, authority)
+  })
+  const id = await test.stage(change === 'signal owner' ? { takeOver: 'now' } : {})
+  await test.controller.settled()
+  expect(test.rows.get(id)?.externalResume?.phase).not.toBe('admitted')
+  expect(test.rows.get(id)?.externalResume?.signal).not.toBe('sent')
+  expect(test.deps.launch).not.toHaveBeenCalled()
+})
+
 it('opens no conversation of an agent a stopped move may still run beside, by its id or an alias the search names', async () => {
   for (const [asked, aliases] of [['conversation', []], ['other', ['conversation']]] as const) {
     const test = setup()

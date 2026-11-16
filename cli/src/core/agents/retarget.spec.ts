@@ -14,6 +14,8 @@ import { terminalRouteKey } from '../../lib/terminalRuntime.js'
 import { createAgentRetargeter, type RetargetDeps } from './retarget.js'
 import type { NativeLaunch } from '../../engines/nativeLaunch.js'
 import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
+import { resolvePaneEngineProcess } from '../../lib/paneEngineProcess.js'
+vi.mock('../../lib/paneEngineProcess.js', () => ({ resolvePaneEngineProcess: vi.fn() }))
 
 vi.mock('../../engines/launchControl.js', async (real) => ({
   ...await real<object>(),
@@ -91,6 +93,34 @@ function setup(row: RegisteredSession | null = agent(), over: Partial<RetargetDe
 }
 
 describe('retargeting an agent', () => {
+  it('keeps the terminal held when a newer lifecycle follows confirmed retarget publication', async () => {
+    const run = setup()
+    const publish = vi.mocked(run.deps.registry.confirmLaunch).getMockImplementation()!
+    vi.mocked(run.deps.registry.confirmLaunch).mockImplementationOnce(async (...args) => {
+      const publication = await publish(...args)
+      run.deps.restartJobs.revision = () => 1
+      return publication
+    })
+    expect(await run.retarget({ agentId: 'a1', grid })).toMatchObject({ ok: false, error: 'AGENT_CHANGED' })
+    expect(run.tmux.releaseHold).not.toHaveBeenCalled()
+    expect(run.deps.announceSession).not.toHaveBeenCalled()
+  })
+  it.each(['same', 'gone', 'process', 'executable', 'not-published', 'empty receipt'] as const)('rechecks the retargeted process before durable readiness: %s', async proof => {
+    const run = setup()
+    const process = { pid: 2, startMarker: 'new', executable: '/bin/claude' }
+    const publish = vi.mocked(run.deps.registry.confirmLaunch).getMockImplementation()!
+    vi.mocked(run.deps.registry.confirmLaunch).mockImplementation(async (id, input, authority) => {
+      await authority?.refresh?.()
+      return proof === 'not-published' ? { state: 'not-published' } : proof === 'empty receipt' ? { state: 'confirmed', entry: null } : publish(id, input, authority)
+    })
+    vi.mocked(resolvePaneEngineProcess).mockResolvedValue(proof === 'gone' ? null
+      : proof === 'process' ? { ...process, startMarker: 'other' }
+      : proof === 'executable' ? { ...process, executable: 'other' } : process)
+    const result = await run.retarget({ agentId: 'a1', grid })
+    expect(result.ok).toBe(proof === 'same')
+    expect(run.tmux.releaseHold).toHaveBeenCalledTimes(proof === 'same' ? 1 : 0)
+    expect(run.deps.announceSession).toHaveBeenCalledTimes(proof === 'same' ? 1 : 0)
+  })
   beforeEach(() => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     vi.spyOn(console, 'warn').mockImplementation(() => {})

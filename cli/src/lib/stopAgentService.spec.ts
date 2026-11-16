@@ -112,6 +112,22 @@ it('storage failure leaves the live process and registry untouched', async () =>
   await expect(createStopAgentService(deps)(row.agentId)).rejects.toThrow('disk full')
   expect(registry.byAgent(row.agentId)).toBe(row); expect(tmuxKill).not.toHaveBeenCalled(); expect(deps.markDeleted).not.toHaveBeenCalled()
 })
+it.each(['process alive', 'storage', 'row retained'] as const)('keeps Stop unconfirmed when final retirement finds %s', async failure => {
+  const token = stoppedAgents.beginResume(row.agentId)
+  expect(token).toBeTruthy()
+  const forget = vi.mocked(deps.forgetSession).getMockImplementation()!
+  vi.mocked(deps.forgetSession).mockImplementationOnce(async (id, options) => {
+    expect(options.authority?.current?.()).toBe(true)
+    if (failure === 'row retained') return
+    if (failure === 'process alive') vi.mocked(checkPidRuntime).mockResolvedValue({ state: 'alive' })
+    if (failure === 'storage') throw new Error('retirement storage unavailable')
+    await forget(id, options)
+  })
+  await expect(createStopAgentService(deps)(row.agentId)).rejects.toMatchObject({ code: 'STOP_UNCONFIRMED' })
+  expect(registry.byAgent(row.agentId)).toBe(row)
+  expect(stoppedAgents.get(row.agentId)?.sessionId).toBe('saved')
+  expect(stoppedAgents.resumeReservedAt(row.agentId)).not.toBeNull()
+})
 it('preserves an unexpected evidence failure without signalling or hiding its cause', async () => {
   row.transcriptPath = '/fixture/history.jsonl'
   vi.mocked(controlTranscriptEvidence).mockReturnValue({ path: row.transcriptPath,
@@ -146,6 +162,24 @@ it('keeps a guest harness whose process is still running after its pane closed',
   expect(tmuxKill).toHaveBeenCalledOnce()
   expect(deps.forgetSession).not.toHaveBeenCalled()
   expect(registry.byAgent(row.agentId)).toBe(row)
+})
+
+it('waits through the bounded default guest-exit interval before publishing Stop', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+  try {
+    Object.assign(row, { guest: 'guest@example.test' })
+    let first!: () => void
+    const checked = new Promise<void>(resolve => { first = resolve })
+    vi.mocked(checkPidRuntime).mockImplementationOnce(async () => { first(); return { state: 'alive' } })
+    const stopping = createStopAgentService(deps)(row.agentId)
+    await checked
+    await vi.advanceTimersByTimeAsync(0)
+    expect(deps.forgetSession).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(250)
+    await stopping
+    expect(registry.byAgent(row.agentId)).toBeUndefined()
+    expect(checkPidRuntime).toHaveBeenCalledTimes(3)
+  } finally { vi.useRealTimers() }
 })
 it('checks the saved guest process after its pane removes the registry row, without claiming the changed stop completed', async () => {
   Object.assign(row, { guest: 'kim@example.com' })

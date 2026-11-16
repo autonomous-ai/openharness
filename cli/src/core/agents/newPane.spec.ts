@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { commandAvailableInInteractiveShell } from '../../lib/engineLaunch.js'
-import type { RegisteredSession } from '../../lib/registry.js'
+import { RegistryOwnershipChanged, type RegisteredSession } from '../../lib/registry.js'
 import { resolvePaneEngineProcess } from '../../lib/paneEngineProcess.js'
 import type { TerminalBackend } from '../../lib/terminalBackend.js'
 import { terminalRouteKey } from '../../lib/terminalRuntime.js'
@@ -17,7 +17,7 @@ vi.mock('../../lib/engineLaunch.js', async (real) => ({ ...await real<object>(),
 const pending = { agentId: 'a1', sessionId: '', engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%7' }] } as RegisteredSession
 const runtime = { backend: 'tmux' as const, paneId: '%7' }
 const spawned = { runtime } as never
-const identity = { pid: 99, startMarker: 'now' }
+const identity = { pid: 99, startMarker: 'now', executable: 'claude' }
 // The pane's backend: what the watcher asks about the pane it opened.
 const paneState = vi.fn<TerminalBackend['paneState']>(async () => ({ dead: false, engineExit: null }) as never)
 const releaseHold = vi.fn<TerminalBackend['releaseHold']>(async () => {})
@@ -61,6 +61,116 @@ function setup(over: Partial<PaneWatcherDeps> = {}) {
 }
 
 describe('watching a new pane', () => {
+  it.each(['process', 'executable'] as const)('rejects replacement of a process already selected when the watcher started: %s', async change => {
+    const entry = { ...pending, processIdentity: identity }
+    const { deps, rows, watch } = setup()
+    rows.set('a1', structuredClone(entry))
+    vi.mocked(resolvePaneEngineProcess).mockImplementationOnce(async () => {
+      rows.get('a1')!.processIdentity = change === 'process' ? { ...identity, startMarker: 'other' } : { ...identity, executable: 'other' }
+      return identity
+    })
+    await watch('claude', entry, spawned, ['claude'], undefined)
+    expect(deps.registry.confirmLaunch).not.toHaveBeenCalled()
+    expect(releaseHold).not.toHaveBeenCalled()
+  })
+
+  it.each([new Error('unavailable'), 'unavailable'])('reports a background bind failure after confirmed readiness: %s', async error => {
+    const { deps, watch } = setup()
+    vi.mocked(resolvePaneEngineProcess).mockResolvedValue(identity)
+    vi.mocked(deps.triggerHint).mockRejectedValueOnce(error)
+    await watch('claude', pending, spawned, ['claude'], undefined)
+    expect(console.warn).toHaveBeenCalledWith('[agent] background bind failed · claude · unavailable')
+  })
+
+  it('leaves the bound exit announcement to the retained-session transition', async () => {
+    const { deps, rows, watch } = setup()
+    const entry = { ...pending, sessionId: 'bound' }
+    rows.set('a1', entry)
+    paneState.mockResolvedValue({ dead: false, engineExit: 1 } as never)
+    vi.mocked(deps.retainExitedSession).mockImplementationOnce(async () => {
+      const shell = { ...pending, agentId: 'shell', engine: 'terminal' as const }
+      rows.set('shell', shell)
+      return { state: 'confirmed', entry: shell }
+    })
+    await watch('claude', entry, spawned, ['claude'], undefined)
+    expect(releaseHold).toHaveBeenCalledOnce()
+    expect(deps.announceSession).not.toHaveBeenCalled()
+  })
+  it.each(['same', 'gone', 'replaced', 'executable'] as const)('refreshes exact readiness after preparation: %s', async proof => {
+    const { deps, watch } = setup()
+    const publish = vi.mocked(deps.registry.confirmLaunch).getMockImplementation()!
+    vi.mocked(deps.registry.confirmLaunch).mockImplementation(async (id, input, authority) => {
+      expect(authority?.current?.()).toBe(true)
+      await authority?.refresh?.()
+      return publish(id, input, authority)
+    })
+    vi.mocked(resolvePaneEngineProcess).mockResolvedValueOnce(identity).mockResolvedValue(proof === 'gone' ? null
+      : proof === 'replaced' ? { ...identity, startMarker: 'other' }
+      : proof === 'executable' ? { ...identity, executable: 'other' } : identity)
+    await watch('claude', pending, spawned, ['claude'], undefined)
+    expect(releaseHold).toHaveBeenCalledTimes(proof === 'same' ? 1 : 0)
+    expect(deps.announceSession).toHaveBeenCalledTimes(proof === 'same' ? 1 : 0)
+  })
+
+  it.each(['same hook', 'already bound', 'no hook', 'new origin', 'new process', 'storage error'] as const)(
+    'only retries an unchanged first hook after revoked preparation: %s', async change => {
+      const { deps, rows, watch } = setup()
+      const entry = { ...pending, sessionId: change === 'already bound' ? 'original' : '' }
+      rows.set('a1', structuredClone(entry))
+      vi.mocked(resolvePaneEngineProcess).mockResolvedValue(identity)
+      vi.mocked(deps.registry.confirmLaunch).mockImplementationOnce(async () => {
+        const row = rows.get('a1')!
+        if (change !== 'no hook') row.sessionId = 'hooked'
+        row.processIdentity = change === 'new process' ? { ...identity, startMarker: 'other' } : identity
+        if (change === 'new origin') row.cwd = '/another'
+        throw change === 'storage error' ? new Error('storage unavailable') : new RegistryOwnershipChanged('first hook')
+      })
+      await watch('claude', entry, spawned, ['claude'], undefined)
+      expect(deps.registry.confirmLaunch).toHaveBeenCalledTimes(change === 'same hook' ? 2 : 1)
+      if (change === 'same hook') {
+        const calls = vi.mocked(deps.registry.confirmLaunch).mock.calls
+        expect(calls[1]![2]!.expires).toBe(calls[0]![2]!.expires)
+        expect(deps.announceSession).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'hooked' }))
+      } else {
+        expect(releaseHold).not.toHaveBeenCalled()
+        expect(deps.announceSession).not.toHaveBeenCalled()
+      }
+    })
+
+  it.each(['process', 'executable', 'backend', 'unpublished', 'release'] as const)('holds readiness after %s authority changes', async change => {
+    const { deps, rows, watch } = setup()
+    vi.mocked(resolvePaneEngineProcess).mockImplementationOnce(async () => {
+      if (change === 'process') rows.get('a1')!.processIdentity = { ...identity, startMarker: 'other' }
+      if (change === 'executable') rows.get('a1')!.processIdentity = { ...identity, executable: 'other' }
+      if (change === 'backend') vi.mocked(deps.terminals.backendFor).mockReturnValue(undefined)
+      return identity
+    })
+    if (change === 'unpublished') vi.mocked(deps.registry.confirmLaunch).mockResolvedValue({ state: 'not-published' })
+    if (change === 'release') releaseHold.mockImplementationOnce(async (_runtime, current) => {
+      expect(current?.()).toBe(true)
+      rows.get('a1')!.sessionId = 'replacement'
+      expect(current?.()).toBe(false)
+    })
+    await watch('claude', pending, spawned, ['claude'], undefined)
+    expect(deps.announceSession).not.toHaveBeenCalled()
+    expect(deps.triggerHint).not.toHaveBeenCalled()
+  })
+
+  it.each(['same', 'gone', 'unknown', 'dead', 'exit', 'process'] as const)('refreshes the exited pane before shell publication: %s', async proof => {
+    const { deps, watch } = setup()
+    const publish = vi.mocked(deps.registry.confirmEngineExit).getMockImplementation()!
+    vi.mocked(deps.registry.confirmEngineExit).mockImplementation(async (id, mode, authority) => {
+      expect(authority?.current?.()).toBe(true)
+      await authority?.refresh?.()
+      return publish(id, mode, authority)
+    })
+    paneState.mockResolvedValueOnce({ dead: false, engineExit: 1 } as never).mockResolvedValue(proof === 'gone' || proof === 'unknown' ? proof
+      : { dead: proof === 'dead', engineExit: proof === 'exit' ? 2 : 1 } as never)
+    vi.mocked(resolvePaneEngineProcess).mockResolvedValueOnce(null).mockResolvedValue(proof === 'process' ? identity : null)
+    await watch('claude', pending, spawned, ['claude'], undefined)
+    expect(releaseHold).toHaveBeenCalledTimes(proof === 'same' ? 1 : 0)
+    expect(deps.announceSession).toHaveBeenCalledTimes(proof === 'same' ? 1 : 0)
+  })
   it.each(['held', 'row removed', 'not held', 'unknown', 'no probe'] as const)('retains a post-rc native guard hold without failing or archiving: %s', async result => {
     const entry = { ...pending, launch: { state: 'starting', nativeToken: 'fixture-native' } } as RegisteredSession
     const waitingPane = vi.fn(async () => result === 'unknown' ? 'unknown' as const : result === 'held' || result === 'row removed')
@@ -277,6 +387,31 @@ describe('watching a new pane', () => {
     // OpenClaw 2026.11.2's TUI on a --local folder: no URL in its title, `local ready | idle` on its status line.
     const localScreen = readFileSync(join(import.meta.dirname, '../../engines/openclaw/__fixtures__/screen-plain.txt'), 'utf8')
       .replace('openclaw tui - ws://127.0.0.1:18789 - ', 'openclaw tui - local embedded - ').replace(' connected | idle', ' local ready | idle')
+
+    it.each(['ready', 'missing'] as const)('refreshes the local footer before acknowledging readiness: %s', async state => {
+      const refreshed = state === 'ready' ? localScreen : null
+      const { deps, rows, watch } = setup()
+      rows.set('a1', local)
+      vi.mocked(resolvePaneEngineProcess).mockResolvedValue(identity)
+      vi.mocked(deps.captureTerminal).mockResolvedValueOnce(localScreen).mockResolvedValueOnce(refreshed)
+      const publish = vi.mocked(deps.registry.confirmLaunch).getMockImplementation()!
+      vi.mocked(deps.registry.confirmLaunch).mockImplementationOnce(async (id, input, authority) => {
+        await authority?.refresh?.(); return publish(id, input, authority)
+      })
+      await watch('openclaw', local, spawned, ['openclaw'], undefined)
+      expect(releaseHold).toHaveBeenCalledTimes(refreshed === null ? 0 : 1)
+      expect(deps.announceSession).toHaveBeenCalledTimes(refreshed === null ? 0 : 1)
+    })
+
+    it('does not invent a folder conflict when an exited local pane cannot be captured', async () => {
+      const { deps, rows, watch } = setup()
+      rows.set('a1', local)
+      paneState.mockResolvedValue({ dead: false, engineExit: 1 } as never)
+      vi.mocked(deps.captureTerminal).mockResolvedValue(null)
+      await watch('openclaw', local, spawned, ['openclaw'], undefined)
+      expect(deps.registry.confirmEngineExit).toHaveBeenCalledOnce()
+      expect(deps.registry.setLaunch).not.toHaveBeenCalled()
+    })
     const logLines = () => [...vi.mocked(console.log).mock.calls, ...vi.mocked(console.warn).mock.calls].map(([line]) => String(line))
 
     it('is not ready until its TUI has drawn', async () => {

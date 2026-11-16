@@ -247,15 +247,15 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
     },
     retain: async entry => {
       // Its own pane, on the backend it is on: a row with none on a backend here cannot be verified, as with no tmux.
-      const target = terminalTargetOf(entry, backendFor)
+      const selected = structuredClone(entry)
+      const target = terminalTargetOf(selected, backendFor)
       const inventory = target && await target.backend.inventory()
       if (inventory?.state !== 'available') throw new Error('Could not verify the previous terminal. Try again.')
       if (!current()) return
       const { runtime } = target!
-      const selected = structuredClone(entry)
       const owns = () => current() && backendFor(runtime) === target!.backend && matchesLaunchReceipt(registry.byAgent(selected.agentId), selected)
       if (!owns()) return
-      const retained = await retainExitedSession(entry, inventory.roots.some(root => sameTerminalPlacement(root.runtime, runtime)), {
+      const retained = await retainExitedSession(selected, inventory.roots.some(root => sameTerminalPlacement(root.runtime, runtime)), {
         current: owns,
         refresh: async () => { if (!isTerminalEngine(selected.engine) && (await checkPidRuntime(selected)).state !== 'gone') throw new IdentityReadUnavailable('the previous engine is not confirmed stopped') },
       })

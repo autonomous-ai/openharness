@@ -96,6 +96,42 @@ function wiring(overrides: Partial<HostMoveWiring> = {}) {
 }
 
 describe('the move, wired to the core', () => {
+  it.each(['same', 'gone', 'replaced', 'executable'] as const)('refreshes the exact destination before publishing: %s', async proof => {
+    const { w, row } = wiring()
+    const publish = vi.mocked(w.registry.confirmLaunch).getMockImplementation()!
+    vi.mocked(w.registry.confirmLaunch).mockImplementation(async (id, input, authority) => {
+      await authority?.refresh?.()
+      return publish(id, input, authority)
+    })
+    vi.mocked(w.restore.probeProcess).mockResolvedValue(proof === 'gone' ? null : proof === 'replaced' ? OLD_ID
+      : proof === 'executable' ? { ...NEW_ID, executable: 'another' } : NEW_ID)
+    const deps = hostMoveDeps(row, () => true, w)
+    if (proof === 'same') expect(await deps.swap('a1', NEW, NEW_ID)).toMatchObject({ state: 'confirmed' })
+    else {
+      await expect(deps.swap('a1', NEW, NEW_ID)).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
+      expect(row.runtimes).toEqual([OLD])
+      expect(w.invalidateControl).not.toHaveBeenCalled()
+      deps.complete()
+      expect(w.announce).not.toHaveBeenCalled()
+    }
+  })
+
+  it('carries the original move and backend authority to a waiting pane kill', async () => {
+    const { w, row, target } = wiring()
+    let live = true
+    const deps = hostMoveDeps(row, () => live, w)
+    vi.mocked(target.kill).mockImplementation(async (_runtime, current) => {
+      expect(current?.()).toBe(true)
+      live = false
+      expect(current?.()).toBe(false)
+      live = true
+      vi.mocked(w.terminals.backendFor).mockReturnValue(undefined)
+      expect(current?.()).toBe(false)
+      return { state: 'failed', dispatch: 'not_started', reason: 'changed' }
+    })
+    expect(await deps.killPane(NEW)).toBe(false)
+  })
+
   it('holds routes with the reconciler, with no auto-release, and hands back that hold\'s own release', () => {
     const { w, releases } = wiring()
     const deps = hostMoveDeps(session(), () => true, w)
@@ -143,6 +179,18 @@ describe('the move, wired to the core', () => {
     expect(w.announce).not.toHaveBeenCalled()
     deps.complete()
     expect(w.announce).toHaveBeenCalledWith(row)
+  })
+
+  it('keeps resume-only fallback and an omitted permission mode on the old pane', async () => {
+    const launch = deferredLaunch()
+    launch.deferred!.permission.permissionMode = undefined
+    const { w, row } = wiring({ buildLaunch: vi.fn(async () => launch) })
+    row.resumeOnly = true
+    const deps = hostMoveDeps(row, () => true, w)
+    await deps.buildLaunch(row, { resumeSessionId: 's1', current: () => true, prepare: false })
+    expect(await deps.relaunchOld(row)).toBe(true)
+    expect(w.paneSwapDeps).toHaveBeenCalledWith(expect.objectContaining({ resumeOnly: true }), expect.anything(), OVERRIDES, null, expect.any(Function))
+    expect(w.registry.confirmLaunch).toHaveBeenCalled()
   })
 
   it('writes on the row the grid the move\'s launch puts the engine on, in the new pane or back in the old', async () => {

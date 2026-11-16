@@ -91,12 +91,12 @@ export async function commitRelaunchedEngine(
   })
   if (publication.state !== 'confirmed') return 'changed'
   const refreshed = publication.entry
-  const owns = () => operationCurrent() && !!refreshed && matchesLaunchReceipt(deps.registry.byAgent(agentId), refreshed)
+  if (!refreshed) return 'changed after commit'
+  const owns = () => operationCurrent() && matchesLaunchReceipt(deps.registry.byAgent(agentId), refreshed)
   if (!owns()) return 'changed after commit'
   await place.backend.releaseHold(place.runtime, owns)
   // The row has its new engine: cancelled from here on, the engine is still relaunched.
   if (!owns()) return 'changed after commit'
-  if (!refreshed) return 'vanished'
   deps.announceSession(refreshed)
   deps.refreshGridAssignment(refreshed)
   return refreshed
@@ -269,8 +269,7 @@ export function createAgentRestarter({
       const refreshed = await commitRelaunchedEngine({ registry, announceSession, refreshGridAssignment }, session.agentId, outcome.processIdentity,
         launchedGrid(built.overrides.gridLaunchRecord?.override), place, dispatchCurrent,
         { launchArgs, ...(built.overrides.gridLaunchRecord ? { gridLaunchRecord: built.overrides.gridLaunchRecord } : {}) }, operation)
-      if (refreshed === 'changed' || refreshed === 'changed after commit') return changed
-      if (refreshed === 'vanished') return { ok: false, error: 'RESTART_FAILED', detail: 'agent vanished from the registry mid-restart' }
+      if (typeof refreshed === 'string') return changed
       console.log(`[restart] ${sid(session.agentId)} ${engine} · ${outcome.resumed ? 'resumed' : 'fresh session'}`
         + (session.gridLaunch ? ` · grid ${session.gridLaunch.networkName}` : ''))
       return { ok: true, session: refreshed, resumed: outcome.resumed }

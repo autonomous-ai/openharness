@@ -329,7 +329,8 @@ export function createAgentRetargeter({
         }
       } })
       const refreshed = publication.state === 'confirmed' ? publication.entry : null
-      const committed = () => !!refreshed && restartJobs.revision(session.agentId) === revision
+      if (!refreshed) return changed()
+      const committed = () => restartJobs.revision(session.agentId) === revision
         && terminals.backendFor(pane) === backend
         && matchesLaunchReceipt(registry.byAgent(session.agentId), refreshed)
         && native?.current() !== false && built.overrides.native?.current() !== false
@@ -338,7 +339,7 @@ export function createAgentRetargeter({
       if (!committed()) return changed()
       // The app decides whether to still offer a move from what it is told here, so a silent success
       // would leave the banner up over an agent that had already been moved.
-      if (refreshed) { announceSession(refreshed); refreshGridAssignment(refreshed) }
+      announceSession(refreshed); refreshGridAssignment(refreshed)
       const how = outcome.resumed ? (movesProvider ? 'continued in a fork' : 'resumed') : 'fresh session'
       const record = built.overrides.gridLaunchRecord
       const where = record

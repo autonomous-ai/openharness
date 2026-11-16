@@ -1,10 +1,10 @@
 import { removeRegistryAgent } from '../testing/registryFixtures.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createResumeAgentService, type ResumeAgentServiceDeps } from './resumeAgentService.js'
-import { RESUME_READINESS_BUDGET_MS, resumeChanged } from './resumeStoppedAgent.js'
+import { RESUME_READINESS_BUDGET_MS, resumeChanged, waitForResumedAgent } from './resumeStoppedAgent.js'
 import { registry, type RegisteredSession } from './registry.js'
 import { controlTranscriptEvidence } from '../engines/transcriptBindings.js'
 import { materializeResumeTranscript } from '../engines/resumeTranscript.js'
@@ -25,10 +25,12 @@ import type { NativeLaunch } from '../engines/nativeLaunch.js'
 import type { TerminalInventoryResult } from './terminalTypes.js'
 import { WindowsBatchLaunchRefused } from './windows/launch.js'
 import { NATIVE_LAUNCH_MARKER } from './nativePaneHold.js'
+import { AtomicWriteUnconfirmed } from './registryPersistence.js'
 
 const publication = vi.hoisted(() => ({
   agent: '', wait: undefined as undefined | (() => Promise<void>), release: undefined as undefined | (() => void),
   temporary: '', published: false, failSync: 0, cleanupWait: undefined as undefined | (() => Promise<void>),
+  retire: false,
 }))
 vi.mock('node:fs', async original => {
   const actual = await original<typeof import('node:fs')>()
@@ -51,7 +53,8 @@ vi.mock('node:fs/promises', async original => {
     handle.writeFile = async (...values) => {
       if (String(args[0]).includes('registry.json.') && String(args[0]).endsWith('.tmp')) {
         const rows = JSON.parse(String(values[0])) as RegisteredSession[]
-        ready = rows.some(row => row.agentId === publication.agent && row.launch?.state === 'ready')
+        ready = !!publication.agent && (publication.retire ? !rows.some(row => row.agentId === publication.agent)
+          : rows.some(row => row.agentId === publication.agent && row.launch?.state === 'ready'))
         if (ready) publication.temporary = String(args[0])
       }
       return write(...values)
@@ -71,6 +74,10 @@ vi.mock('./windows/engineStart.js', async (original) => {
   return { ...actual, windowsPaneLaunch: vi.fn(actual.windowsPaneLaunch) }
 })
 vi.mock('./deleteAgentFallback.js', () => ({ checkPidRuntime: vi.fn() }))
+vi.mock('./resumeStoppedAgent.js', async original => {
+  const actual = await original<typeof import('./resumeStoppedAgent.js')>()
+  return { ...actual, waitForResumedAgent: vi.fn(actual.waitForResumedAgent) }
+})
 // The engine this fake stands for never exits, so there is no settle time to wait out; the rule is tested in
 // `resumeStoppedAgent.spec.ts`.
 vi.mock('./paneEngineProcess.js', () => ({ checkSessionRuntime: vi.fn(), resolvePaneEngineProcess: vi.fn(), ENGINE_SETTLE_MS: 0 }))
@@ -130,6 +137,154 @@ function rewrite(extra: Partial<RegisteredSession>) { saved = { ...saved, ...ext
 function start() { return createResumeAgentService(deps)(saved.agentId) }
 function deferred<T>() { let resolve!: (v: T) => void; const promise = new Promise<T>(r => { resolve = r }); return { promise, resolve } }
 
+it('refuses a readiness response that lacks its required process proof', async () => {
+  vi.mocked(waitForResumedAgent).mockResolvedValueOnce({ ok: true, session: { ...saved, processIdentity: null }, resumed: true })
+  expect(await start()).toMatchObject({ ok: false, error: 'AGENT_CHANGED' })
+  expect(releaseHold).not.toHaveBeenCalled()
+  expect(registry.byAgent(saved.agentId)?.launch?.state).not.toBe('ready')
+})
+
+it('preserves the readiness reader\'s ownership refusal without publishing a failed launch', async () => {
+  await live()
+  vi.mocked(waitForResumedAgent).mockResolvedValueOnce(resumeChanged)
+  expect(await start()).toEqual(resumeChanged)
+  expect(registry.byAgent(saved.agentId)?.launch).toEqual({ state: 'starting' })
+  expect(releaseHold).not.toHaveBeenCalled()
+  expect(deps.announceSession).not.toHaveBeenCalled()
+})
+
+it('retains allocation uncertainty when transcript verification fails inside the dispatch boundary', async () => {
+  let changed = false
+  vi.mocked(controlTranscriptEvidence).mockImplementation((_engine, _id, path) => ({ path,
+    verify: () => { if (changed) throw new IdentityReadUnavailable('source changed') },
+  }))
+  create.mockImplementationOnce(async request => {
+    await request.onDispatch?.()
+    changed = true
+    expect(request.current()).toBe(false)
+    return { state: 'failed', dispatch: 'possibly_executed', reason: 'lost response' }
+  })
+  expect(await start()).toMatchObject({ ok: false, error: 'RESUME_UNCONFIRMED' })
+  expect(deps.stoppedAgents.resumeReservedAt(saved.agentId)).not.toBeNull()
+  expect(releaseHold).not.toHaveBeenCalled()
+})
+
+it.each(['gone', 'unknown', 'dead', 'exited'] as const)('keeps a resumed shell unconfirmed when final publication sees it %s', async state => {
+  rewrite({ engine: 'terminal', sessionId: '', transcriptPath: '' })
+  paneState.mockResolvedValue(state === 'gone' || state === 'unknown' ? state : { dead: state === 'dead', engineExit: state === 'exited' ? 1 : null })
+  expect(await start()).toMatchObject({ ok: false, error: 'RESUME_UNCONFIRMED' })
+  expect(releaseHold).not.toHaveBeenCalled()
+  expect(deps.stoppedAgents.resumeReservedAt(saved.agentId)).not.toBeNull()
+  expect(registry.byAgent(saved.agentId)?.launch?.state).not.toBe('ready')
+})
+
+it.each(['prior exit', 'failed readiness'] as const)('rechecks that the %s process remains gone before retirement', async phase => {
+  await live(phase === 'prior exit' ? { resumeOnly: undefined, processIdentity: identity, launch: { state: 'ready' } } : {})
+  if (phase === 'failed readiness') {
+    vi.mocked(resolvePaneEngineProcess).mockResolvedValue(null)
+    paneState.mockResolvedValue({ dead: false, engineExit: 1 })
+  }
+  const retain = vi.mocked(deps.retainExitedSession).getMockImplementation()!
+  vi.mocked(deps.retainExitedSession).mockImplementationOnce(async (row, alive, authority) => {
+    expect(authority?.current?.()).toBe(true)
+    vi.mocked(checkPidRuntime).mockResolvedValue({ state: 'alive' })
+    return retain(row, alive, authority)
+  })
+  await expect(start()).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
+  expect(registry.byAgent(saved.agentId)).toBeDefined()
+  expect(create).not.toHaveBeenCalled()
+  expect(releaseHold).not.toHaveBeenCalled()
+})
+
+it('refuses a new resume when prior engine-exit publication returns no receipt', async () => {
+  await live({ resumeOnly: undefined, processIdentity: identity, launch: { state: 'ready' } })
+  vi.mocked(deps.retainExitedSession).mockResolvedValueOnce({ state: 'not-published' })
+  await expect(start()).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
+  expect(create).not.toHaveBeenCalled()
+  expect(registry.byAgent(saved.agentId)).toBeDefined()
+})
+
+it.each(['process', 'route', 'home', 'backend'] as const)('discards a prior-exit inventory result after its selected %s is replaced', async change => {
+  await live({ resumeOnly: undefined, processIdentity: identity, launch: { state: 'ready' } })
+  let selectedBackend = tmuxTerminal
+  deps.backendFor = () => selectedBackend
+  let replacement!: RegisteredSession
+  inventory.mockResolvedValueOnce(listed()).mockImplementationOnce(async () => {
+    const current = registry.byAgent(saved.agentId)!
+    expect(current.sessionId).toBe(saved.sessionId)
+    if (change === 'process') expect(registry.updateProcessIdentity(saved.agentId, { ...identity, startMarker: 'replacement' })).toBe(true)
+    if (change === 'route') expect(registry.updateRuntimes(saved.agentId, [{ backend: 'tmux', paneId: '%101' }])).toBe(true)
+    if (change === 'home') expect(registry.setCodexHome(saved.agentId, join(dir, 'replacement-home'))).toBe(true)
+    if (change === 'backend') selectedBackend = { ...tmuxTerminal }
+    await registry.flush()
+    replacement = structuredClone(registry.byAgent(saved.agentId)!)
+    expect(registry.bySession(saved.sessionId)?.agentId).toBe(saved.agentId)
+    expect(JSON.parse(readFileSync(join(env.ADAPTER_DATA_DIR, 'registry.json'), 'utf8')).find((entry: RegisteredSession) => entry.agentId === saved.agentId))
+      .toMatchObject({ sessionId: replacement.sessionId, processIdentity: replacement.processIdentity, runtimes: replacement.runtimes })
+    return listed()
+  })
+  const result = await start()
+  expect(deps.retainExitedSession).not.toHaveBeenCalled()
+  expect(create).not.toHaveBeenCalled()
+  expect(result).toMatchObject({ ok: false, error: 'AGENT_BUSY' })
+  expect(registry.byAgent(saved.agentId)).toMatchObject(replacement)
+  expect(deps.stoppedAgents.get(saved.agentId)?.processIdentity).toEqual(identity)
+})
+
+it('does not retire a new native binding that commits while prior-exit inventory waits', async () => {
+  await live({ resumeOnly: undefined, processIdentity: identity, launch: { state: 'ready' } })
+  const sessionId = '33333333-3333-4333-8333-333333333333', home = join(dir, 'codex')
+  mkdirSync(join(home, 'sessions'), { recursive: true })
+  const transcript = join(home, 'sessions', `rollout-${sessionId}.jsonl`)
+  writeFileSync(transcript, JSON.stringify({ type: 'session_meta', payload: { id: sessionId, cwd: dir, source: 'cli' } }) + '\n')
+  let registered = false
+  vi.mocked(checkPidRuntime).mockImplementation(async () => registered ? { state: 'alive' } : { state: 'gone', reason: 'original engine exited' })
+  inventory.mockResolvedValueOnce(listed()).mockImplementationOnce(async () => {
+    const publication = await registry.register({ engine: 'codex', sessionId, transcriptPath: transcript, codexHome: home,
+      cwd: dir, runtimes: [{ backend: 'tmux', paneId: pane }], processIdentity: identity })
+    expect(publication?.entry.sessionId).toBe(sessionId)
+    expect(registry.bySession(sessionId)?.agentId).toBe(saved.agentId)
+    registered = true
+    return listed()
+  })
+  expect(await start()).toMatchObject({ ok: false, error: 'AGENT_BUSY' })
+  expect(registered).toBe(true)
+  expect(deps.retainExitedSession).not.toHaveBeenCalled()
+  expect(create).not.toHaveBeenCalled()
+  expect(registry.byAgent(saved.agentId)?.sessionId).toBe(sessionId)
+  expect(deps.stoppedAgents.get(saved.agentId)?.sessionId).toBe(saved.sessionId)
+})
+
+it('does not dispatch after the prior engine-exit rename has unconfirmed durability', async () => {
+  await live({ resumeOnly: undefined, processIdentity: identity, launch: { state: 'ready' } })
+  publication.agent = saved.agentId; publication.retire = true; publication.failSync = 2
+  await expect(start()).rejects.toBeInstanceOf(AtomicWriteUnconfirmed)
+  expect(publication.published).toBe(true)
+  expect(create).not.toHaveBeenCalled()
+  expect(releaseHold).not.toHaveBeenCalled()
+  expect(deps.stoppedAgents.get(saved.agentId)?.sessionId).toBe(saved.sessionId)
+})
+
+it.each(['another owner', 'source changed'] as const)('refuses a launch whose source authority changes during overrides: %s', async change => {
+  let unavailable = false
+  vi.mocked(controlTranscriptEvidence).mockImplementation((_engine, _id, path) => ({ path,
+    verify: () => { if (unavailable) throw new IdentityReadUnavailable('source changed') },
+  }))
+  vi.mocked(deps.relaunchOverrides).mockImplementationOnce(async (_row, _launch, current) => {
+    expect(current?.()).toBe(true)
+    if (change === 'another owner') {
+      const peer = (await registry.resumePendingAgent({ ...saved, agentId: 'peer' }, [{ backend: 'tmux', paneId: '%101' }]))!
+      expect(registry.bySession(saved.sessionId)?.agentId).toBe(peer.agentId)
+    } else unavailable = true
+    expect(current?.()).toBe(false)
+    expect(current?.()).toBe(false)
+    return { ok: true, overrides: { env: {}, extraArgs: [], clearEnv: [] } }
+  })
+  expect(await start()).toMatchObject({ ok: false, error: 'IDENTITY_UNAVAILABLE' })
+  expect(create).not.toHaveBeenCalled()
+  expect(deps.stoppedAgents.resumeReservedAt(saved.agentId)).toBeNull()
+})
+
 it('retains the reservation if terminal dispatch starts but loses its reply', async () => {
   create.mockImplementationOnce(async request => { await request.onDispatch(); throw Error('Terminal transport disconnected') })
   await expect(start()).rejects.toThrow('Terminal transport disconnected')
@@ -179,12 +334,13 @@ beforeEach(async () => {
     attachSession: vi.fn(async () => true),
   }
 })
-afterEach(async () => { publication.wait = undefined; publication.release?.(); publication.release = undefined; publication.agent = ''; publication.temporary = ''; publication.published = false; publication.failSync = 0; publication.cleanupWait = undefined; vi.useRealTimers(); for (const row of registry.list()) (await removeRegistryAgent(registry, row.agentId)); await registry.flush(); rmSync(dir, { recursive: true, force: true }) })
+afterEach(async () => { publication.wait = undefined; publication.release?.(); publication.release = undefined; publication.agent = ''; publication.temporary = ''; publication.published = false; publication.failSync = 0; publication.cleanupWait = undefined; publication.retire = false; vi.useRealTimers(); for (const row of registry.list()) (await removeRegistryAgent(registry, row.agentId)); await registry.flush(); rmSync(dir, { recursive: true, force: true }) })
 
 it.each(['stop', 'binding'] as const)('keeps the terminal hold when %s revokes Resume during backend release', async change => {
   const entered = deferred<void>(), waiting = deferred<void>()
   let released = false
   releaseHold.mockImplementationOnce(async (_runtime, current?: () => boolean) => {
+    expect(current?.()).toBe(true)
     entered.resolve(); await waiting.promise
     if (current?.() !== false) released = true
   })
@@ -844,13 +1000,21 @@ describe('production resume handler', () => {
     expect(await start()).toMatchObject({ error: 'AGENT_CHANGED' }); expect(kill).toHaveBeenCalledTimes(1)
     expect(registry.byAgent(saved.agentId)).toBeUndefined()
   })
-  it.each([true, false])('cancels after a registry claim, cleanup confirmed=%s', async confirmed => {
-    kill.mockResolvedValue(confirmed ? { state: 'succeeded' } : { state: 'failed' })
+  it.each(['confirmed', 'kill unavailable', 'retirement unavailable'] as const)('cancels after a durable registry claim, cleanup=%s', async outcome => {
+    kill.mockResolvedValue(outcome === 'kill unavailable' ? { state: 'failed' } : { state: 'succeeded' })
     const claim = registry.resumePendingAgent.bind(registry)
-    deps.registry = { ...deps.registry, byAgent: registry.byAgent.bind(registry), bySession: registry.bySession.bind(registry), setLaunch: registry.setLaunch.bind(registry), resumePendingAgent: (row, routes) => { const pending = claim(row, routes); deps.restartJobs.cancel(saved.agentId); return pending } }
+    deps.registry = { ...deps.registry, byAgent: registry.byAgent.bind(registry), bySession: registry.bySession.bind(registry), setLaunch: registry.setLaunch.bind(registry), resumePendingAgent: async (...args) => {
+      const pending = await claim(...args)
+      expect(pending).not.toBeNull()
+      expect(registry.bySession(saved.sessionId)?.agentId).toBe(saved.agentId)
+      deps.restartJobs.cancel(saved.agentId)
+      return pending
+    } }
+    if (outcome === 'retirement unavailable') vi.mocked(deps.retainExitedSession).mockResolvedValueOnce({ state: 'not-published' })
     expect(await start()).toMatchObject({ error: 'AGENT_CHANGED' }); expect(deps.announceSession).not.toHaveBeenCalled()
     expect(kill).toHaveBeenCalledTimes(1)
-    expect(registry.byAgent(saved.agentId) === undefined).toBe(confirmed)
+    expect(registry.byAgent(saved.agentId) === undefined).toBe(outcome === 'confirmed')
+    expect(deps.stoppedAgents.resumeReservedAt(saved.agentId) === null).toBe(outcome === 'confirmed')
   })
   it('serializes two saved identities for the same conversation', async () => {
     const second = { ...saved, agentId: 'alias' }; deps.stoppedAgents.save(second)

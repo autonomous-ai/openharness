@@ -113,6 +113,41 @@ function registered(run: ReturnType<typeof setup>, entry: RegisteredSession, met
 }
 
 describe('binding a registered session to its agent', () => {
+  it.each(['rebound', 'evicted', 'orphaned'] as const)('stops attachment when %s cleanup replaces the selected binding', async phase => {
+    const run = setup(), entry = agent()
+    vi.mocked(run.deps.forgetSession).mockImplementationOnce(async () => { run.byAgent.set('a1', agent({ sessionId: 'replacement' })) })
+    await registered(run, entry, meta(phase === 'rebound' ? { rebound: 'old' } : phase === 'evicted' ? { evicted: 'old' }
+      : { orphaned: { agentId: 'old' } as RegisteredSession }))
+    expect(run.deps.attachSession).not.toHaveBeenCalled()
+    expect(run.deps.announceSession).not.toHaveBeenCalled()
+    expect(run.deps.clients.send).not.toHaveBeenCalled()
+  })
+
+  it.each(['same', 'changing', 'replaced', 'not-published', 'empty', 'receipt changed'] as const)(
+    'only announces a failed attach unbind with confirmed current authority: %s', async change => {
+      let changing = false
+      const run = setup(), entry = agent()
+      run.binding.whileChanging(() => changing)
+      vi.mocked(run.deps.attachSession).mockResolvedValue(false)
+      const publish = vi.mocked(run.deps.registry.confirmSessionUnbound).getMockImplementation()!
+      vi.mocked(run.deps.registry.confirmSessionUnbound).mockImplementation(async (id, session, authority) => {
+        vi.mocked(run.deps.announceSession).mockClear()
+        expect(authority?.current?.()).toBe(true)
+        if (change === 'changing') changing = true
+        if (change === 'replaced') run.byAgent.set('a1', agent({ sessionId: 'replacement' }))
+        if (change === 'changing' || change === 'replaced') {
+          expect(authority?.current?.()).toBe(false)
+          return { state: 'not-published' }
+        }
+        if (change === 'not-published') return { state: 'not-published' }
+        if (change === 'empty') return { state: 'confirmed', entry: null }
+        const result = await publish(id, session, authority)
+        if (change === 'receipt changed') run.byAgent.set('a1', agent({ sessionId: 'replacement' }))
+        return result
+      })
+      await registered(run, entry, meta())
+      expect(run.deps.announceSession).toHaveBeenCalledTimes(change === 'same' ? 1 : 0)
+    })
   beforeEach(() => { vi.spyOn(console, 'log').mockImplementation(() => {}) })
   afterEach(() => {
     vi.restoreAllMocks()
@@ -417,6 +452,24 @@ describe('binding a running process to its session', () => {
     await run.binding.bindObservedAgent(observed())
     expect(run.deps.announceSession).not.toHaveBeenCalled()
     expect(continuationOf).not.toHaveBeenCalled()
+  })
+
+  it.each(['cleanup', 'rejected preparation'] as const)('does not announce an old revalidation after %s changes its owner', async phase => {
+    const run = setup(), row = agent({ transcriptPath: '/t/s1.jsonl', identityHold: 'unavailable' })
+    run.byAgent.set('a1', row)
+    vi.mocked(run.deps.registry.byProcess).mockReturnValue(row)
+    if (phase === 'cleanup') {
+      vi.mocked(run.deps.registry.revalidateBinding).mockImplementationOnce(async () => {
+        row.sessionId = ''; delete row.identityHold; return structuredClone(row)
+      })
+      vi.mocked(run.deps.forgetSession).mockImplementationOnce(async () => { run.byAgent.set('a1', agent({ sessionId: 'replacement' })) })
+    } else vi.mocked(run.deps.registry.revalidateBinding).mockImplementationOnce(async () => {
+      run.byAgent.set('a1', agent({ sessionId: 'replacement' }))
+      throw new Error('preparation revoked')
+    })
+    await run.binding.bindObservedAgent(observed())
+    expect(run.deps.announceSession).not.toHaveBeenCalled()
+    expect(run.deps.registry.setIdentityHold).not.toHaveBeenCalled()
   })
 
   it.each(['repaired', 'same', 'absent'] as const)('updates transcript attachment after a held binding is conclusively %s', async outcome => {

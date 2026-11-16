@@ -1033,7 +1033,7 @@ a replacement. `red-resume-retain-inventory-corrected.log` retains all three tru
 failures; the preceding run used an invalid fixture path constant and is not red
 product evidence.
 
-The proposed minimal correction clones the entry before selecting its terminal or
+The reviewed correction clones the entry before selecting its terminal or
 awaiting inventory, derives the target/runtime from that clone, and retains only
 that clone under the existing exact receipt/backend/lifecycle predicate after the
 await. An ownership mismatch cannot archive, remove, release or dispatch from the
@@ -1044,3 +1044,24 @@ normal unchanged retirement, unavailable inventory and uncertain publication.
 No new authority state, retry, deadline, persisted field or public API is added.
 The Design's existing bounds, concurrency, identity, compatibility, rollback and
 platform contracts remain unchanged.
+
+The corrected caller suite proves the process/route/home inventory reds green,
+preserves a strict native Codex binding and a replacement backend, and refuses
+dispatch after real post-rename directory-fsync uncertainty. The existing
+cancellation fixture now awaits its strict claim and forwards the authority
+arguments before cancellation; both unavailable physical cleanup and unconfirmed
+retirement preserve their reservation. Its previous immediate cancellation did
+not model the named post-claim boundary.
+
+Scoped coverage acceptance (Node 24.22.2, at most two workers) is now complete:
+all eleven affected core files have 100% statements, branches, functions and lines
+in `coverage-callers-final-first.log`. That run still failed overall (876 passes,
+one new backend fixture failure), because changing a dependency property after
+service construction did not change the already captured backend resolver. The
+fixture now varies that resolver's result. The final three-file Stop/Resume/native
+evidence selection passed 280/280 in 97.22 seconds with 100% in all four measures
+for both affected Resume/Stop service files (`coverage-resume-callers-final.log`).
+TypeScript passed (`types-coverage-checkpoint.log`). Earlier failed and invalid
+fixture attempts remain recorded. These focused results do not claim the pending
+combined-main broad gates, native/crash/two-writer acceptance or matched timing
+comparison; no such execution was performed during this coverage correction.

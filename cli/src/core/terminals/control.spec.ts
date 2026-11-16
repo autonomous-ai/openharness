@@ -49,6 +49,36 @@ const resolve = (target: string): RegisteredSession | undefined =>
   target === 'agent-1' || target === 'session-1' ? session : undefined
 
 describe('terminal control', () => {
+  it('refuses new control immediately while an uncertain move holds the agent', async () => {
+    const { terminals } = backend()
+    const control = createTerminalControl({ resolve, terminals, refused: () => true })
+    expect(await control.typeTerminal('agent-1', 'held')).toBe(false)
+    expect(terminals.acquireLease).not.toHaveBeenCalled()
+    expect(terminals.typeLiteralLease).not.toHaveBeenCalled()
+  })
+
+  it('refuses a cached lease whose validation finishes after the move becomes uncertain', async () => {
+    const { terminals } = backend()
+    let refused = false
+    const control = createTerminalControl({ resolve, terminals, refused: () => refused })
+    expect(await control.typeTerminal('agent-1', 'before')).toBe(true)
+    vi.mocked(terminals.validateLease).mockImplementationOnce(async () => { refused = true; return true })
+    expect(await control.typeTerminal('agent-1', 'held')).toBe(false)
+    expect(terminals.typeLiteralLease).toHaveBeenCalledTimes(1)
+  })
+
+  it('carries refusal to the physical literal write', async () => {
+    const { terminals } = backend()
+    let refused = false
+    vi.mocked(terminals.typeLiteralLease).mockImplementationOnce(async (_lease, _text, current) => {
+      expect(current?.()).toBe(true)
+      refused = true
+      expect(current?.()).toBe(false)
+      return { state: 'failed', dispatch: 'not_started', reason: 'held' }
+    })
+    const control = createTerminalControl({ resolve, terminals, refused: () => refused })
+    expect(await control.typeTerminal('agent-1', 'held')).toBe(false)
+  })
   it.each(['submit', 'type', 'key'] as const)('refuses %s after a pending lease is superseded by an uncertain move', async action => {
     const { terminals } = backend()
     let refused = false, finish!: () => void, entered!: () => void

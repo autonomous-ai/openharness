@@ -136,6 +136,47 @@ describe('a rename', () => {
   })
 })
 
+describe('authority across durable update waits', () => {
+  it.each(['model', 'name'] as const)('reports a failed %s publication without a success frame', async kind => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { deps, heard, ask } = setup()
+    if (kind === 'model') vi.mocked(deps.registry.setLaunchModel).mockRejectedValueOnce(new Error('storage unavailable'))
+    else vi.mocked(deps.registry.rename).mockRejectedValueOnce(new Error('storage unavailable'))
+    await ask({ agentId: 'a1', ...(kind === 'model' ? { selectedModel: 'runtime-v1:s1:claude:opus@high' } : { name: 'Kept' }) })
+    expect(heard).toEqual([['reply', { error: 'PERSISTENCE_UNCONFIRMED' }]])
+    expect(deps.onAgentRename).not.toHaveBeenCalled()
+  })
+
+  it.each(['control', 'model owner', 'rename', 'open', 'frame', 'name frame'] as const)('refuses a replacement during %s', async phase => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const { deps, heard, ask } = setup()
+    const replace = () => vi.mocked(deps.registry.resolve).mockReturnValue(row({ sessionId: 'replacement' }))
+    let payload: Record<string, unknown> = { agentId: 'a1', opened: true }
+    if (phase === 'control' || phase === 'model owner') {
+      payload = { agentId: 'a1', selectedModel: 'runtime-v1:s1:claude:opus@high' }
+      if (phase === 'control') vi.mocked(deps.onRuntimeProfileUpdate!).mockImplementationOnce(async () => { replace() })
+      else vi.mocked(deps.registry.setLaunchModel).mockResolvedValueOnce(null)
+    } else if (phase === 'rename') {
+      payload = { agentId: 'a1', name: 'Kept' }
+      const rename = vi.mocked(deps.registry.rename).getMockImplementation()!
+      vi.mocked(deps.registry.rename).mockImplementationOnce(async (...args) => { const saved = await rename(...args); replace(); return saved })
+    } else if (phase === 'open') deps.closeAgentService = () => ({ cancel: vi.fn(async () => { replace() }) })
+    else {
+      if (phase === 'name frame') payload = { agentId: 'a1', name: 'Kept' }
+      vi.mocked(deps.toProject).mockImplementationOnce(async () => {
+        if (phase === 'frame') replace()
+        else vi.mocked(deps.registry.displayName).mockReturnValue('Another name')
+        return { id: 'a1' } as AgentFrame
+      })
+    }
+    await ask(payload)
+    expect(heard).toEqual([['reply', { error: 'AGENT_CHANGED' }]])
+    expect(deps.clients.send).not.toHaveBeenCalled()
+    expect(deps.clients.sendCommander).not.toHaveBeenCalled()
+  })
+})
+
 describe('an app opening the agent', () => {
   it('stamps it on this machine\'s clock, keeps it from being closed unseen, answers, then tells every window but not the device', async () => {
     vi.useFakeTimers({ toFake: ['Date'] })
