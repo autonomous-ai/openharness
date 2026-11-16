@@ -17,7 +17,7 @@ function recorder(over: Partial<Deps> = {}, codes: Array<number | null> = []) {
   const deps: Deps = {
     run: async (file, args, timeoutMs) => {
       calls.push({ file, args, timeoutMs })
-      return { code: codes.length ? codes.shift()! : 0 }
+      return { code: codes.length ? codes.shift()! : 0, stdout: '' }
     },
     platform: 'darwin',
     inFront: () => true,
@@ -33,7 +33,7 @@ function holding() {
   const { adapter } = recorder({
     run: (file, args, timeoutMs) => {
       calls.push({ file, args, timeoutMs })
-      return new Promise((resolve) => waiting.push(() => resolve({ code: 0 })))
+      return new Promise((resolve) => waiting.push(() => resolve({ code: 0, stdout: '' })))
     },
   })
   return { calls, waiting, adapter }

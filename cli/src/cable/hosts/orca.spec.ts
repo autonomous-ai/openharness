@@ -48,7 +48,7 @@ function createOrcaActions(deps: OrcaDeps) {
 
 /** Deps whose `run` runs nothing and exits 0. */
 function quietDeps(): OrcaDeps {
-  return { run: async () => ({ code: 0 }), onPath: () => FAKE_PATH_ORCA, exists: () => false, platform: 'darwin' }
+  return { run: async () => ({ code: 0, stdout: '' }), onPath: () => FAKE_PATH_ORCA, exists: () => false, platform: 'darwin' }
 }
 
 /** A recording `run` that runs nothing: each call answers the next of [codes], then exit 0. */
@@ -57,7 +57,7 @@ function recorder(over: Partial<OrcaDeps> = {}, codes: Array<number | null> = []
   const deps: OrcaDeps = {
     run: async (file, args, timeoutMs) => {
       calls.push({ file, args, timeoutMs })
-      return { code: codes.length ? codes.shift()! : 0 }
+      return { code: codes.length ? codes.shift()! : 0, stdout: '' }
     },
     onPath: (name) => (name === 'orca' ? FAKE_PATH_ORCA : null),
     exists: () => false,
@@ -185,9 +185,15 @@ describe('Orca actions', () => {
     const fake = fakeOrca('exit 3')
     const orca = createOrcaActions({ ...orcaDeps(), onPath: () => fake.file })
     expect(await orca.send(HANDLE, 'hi')).toBe(false)
-    expect(await orcaDeps().run(fake.file, [], 10_000)).toEqual({ code: 3 })
+    expect(await orcaDeps().run(fake.file, [], 10_000)).toEqual({ code: 3, stdout: '' })
     // A binary that cannot start has no exit code.
-    expect(await orcaDeps().run(join(dir, 'missing'), [], 10_000)).toEqual({ code: null })
+    expect(await orcaDeps().run(join(dir, 'missing'), [], 10_000)).toEqual({ code: null, stdout: '' })
+  })
+
+  // tmux's answer is what it printed: the pane's process (tmux.ts).
+  it('run answers what the command printed', async () => {
+    const fake = fakeOrca('echo 4242')
+    expect(await orcaDeps().run(fake.file, [], 10_000)).toEqual({ code: 0, stdout: '4242\n' })
   })
 
   /** A `run` that holds each command until the test lets it end. */
@@ -197,7 +203,7 @@ describe('Orca actions', () => {
     const orca = createOrcaActions({
       run: (_file, args) => {
         calls.push(args)
-        return new Promise((resolve) => waiting.push((code = 0) => resolve({ code })))
+        return new Promise((resolve) => waiting.push((code = 0) => resolve({ code, stdout: '' })))
       },
       onPath: () => FAKE_PATH_ORCA,
       exists: () => false,
@@ -304,7 +310,7 @@ describe('Orca adapter', () => {
       ...quietDeps(),
       run: async (file, args, timeoutMs) => {
         calls.push({ file, args, timeoutMs })
-        return { code: codes.length ? codes.shift()! : 0 }
+        return { code: codes.length ? codes.shift()! : 0, stdout: '' }
       },
     })
     return { calls, adapter }
@@ -336,6 +342,13 @@ describe('Orca adapter', () => {
     // Only the handle names the pane: the host, the app and a tty change nothing.
     expect(adapter.paneOf({ host: 'terminal', app: 'terminal', hints: { ORCA_TERMINAL_HANDLE: HANDLE }, tty: '/dev/ttys004' })).toEqual(pane)
     expect(adapter.paneOf({ host: 'orca', app: 'orca', hints: {}, tty: '/dev/ttys004' })).toBeUndefined()
+  })
+
+  it('in a multiplexer it has no pane: the handle names the terminal the multiplexer started in', () => {
+    const adapter = createOrcaAdapter(quietDeps())
+    const hints = { ORCA_AGENT_SESSION_ID: 'x', ORCA_TERMINAL_HANDLE: HANDLE }
+    for (const host of ['herdr', 'rex', 'zellij', 'tmux']) expect(adapter.paneOf({ host, app: 'orca', hints }), host).toBeUndefined()
+    for (const host of ['orca', 'wezterm', 'kitty', 'terminal']) expect(adapter.paneOf({ host, app: 'orca', hints }), host).toEqual({ adapter: 'orca', id: HANDLE })
   })
 
   it('focus is the switch: true only when it exits 0', async () => {

@@ -288,7 +288,7 @@ describe('the dial\'s app filter', () => {
     const { d, desk } = await fresh()
     const dial = await plugged(desk)
     const apple = await startFirst(d, dial, 'terminal-app', 'a1', { TERM_PROGRAM: 'Apple_Terminal' })
-    await startOutside(d, 'a2', { TERM_PROGRAM: 'tmux' })
+    await startOutside(d, 'a2', { TERM_PROGRAM: 'rio' })
     const { apps } = await showing(dial, 'Terminal 1 and Other 1', (apps, roster) =>
       same(counts(apps), { 'terminal-app': 1, terminal: 1 }) && apps.shown === 'terminal-app' && same(ids(roster), [apple.id]))
     expect(apps.apps).toEqual(expect.arrayContaining([
@@ -301,7 +301,7 @@ describe('the dial\'s app filter', () => {
     const { d, desk } = await fresh()
     const dial = await plugged(desk)
     const apple = await startFirst(d, dial, 'terminal-app', 'a1', { TERM_PROGRAM: 'Apple_Terminal' })
-    const other = await startOutside(d, 'a2', { TERM_PROGRAM: 'tmux' })
+    const other = await startOutside(d, 'a2', { TERM_PROGRAM: 'rio' })
     await shows(dial, 'terminal-app', [apple])
     await listening(d)
     const run = watch(d)

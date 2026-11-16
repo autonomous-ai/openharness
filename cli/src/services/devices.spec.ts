@@ -154,6 +154,7 @@ const readers = vi.hoisted(() => ({
   answer: vi.fn(async (..._args: unknown[]): Promise<string | undefined> => undefined),
   apps: vi.fn(async (_pids: readonly number[]) => new Map<number, string>()),
   name: vi.fn(async (..._args: unknown[]): Promise<string | undefined> => undefined),
+  processes: vi.fn(async () => [] as Array<{ pid: number; ppid: number; executable: string }>),
 }))
 vi.mock('../lib/sessionSearch/external.js', async (real) => ({
   ...await real<typeof import('../lib/sessionSearch/external.js')>(),
@@ -178,8 +179,13 @@ vi.mock('../lib/sessionSearch/externals/support.js', async (real) => ({
   processAlive: () => true,
   fileStamp: async () => null,
 }))
-// Which app each session found runs in: from the made-up owners above, never this machine's processes.
-vi.mock('../cable/hosts/scannedApp.js', () => ({ learnApps: readers.apps }))
+// Which app each session found runs in, and the process table a tap on a tmux pane checks: made up, never this machine's
+// processes.
+vi.mock('../cable/hosts/scannedApp.js', async (real) => ({
+  ...await real<typeof import('../cable/hosts/scannedApp.js')>(),
+  learnApps: readers.apps,
+  readProcessNames: readers.processes,
+}))
 // The name in a session's own process record: never this machine's ~/.claude.
 vi.mock('../cable/hosts/recordName.js', () => ({ readRecordName: readers.name }))
 vi.mock('../cable/hosts/lastAnswer.js', async (real) => ({
@@ -193,7 +199,7 @@ const { startDevices } = await import('./devices.js')
  *  developer's own apps. */
 const orcaRuns: Array<[string, string[], number]> = []
 const orca = {
-  run: async (file: string, args: string[], timeoutMs: number) => { orcaRuns.push([file, args, timeoutMs]); return { code: 0 } },
+  run: async (file: string, args: string[], timeoutMs: number) => { orcaRuns.push([file, args, timeoutMs]); return { code: 0, stdout: '' } },
   onPath: () => '/opt/orca/bin/orca',
   exists: () => false,
   platform: 'linux' as const,
@@ -221,6 +227,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   readers.answer.mockResolvedValue(undefined)
   readers.name.mockResolvedValue(undefined)
+  readers.processes.mockResolvedValue([])
 })
 afterEach(() => {
   rmSync(dataDir, { recursive: true, force: true })
@@ -260,6 +267,8 @@ const calls = (name: string) => seen.cable.calls.filter(([called]) => called ===
 /** A window on this computer, as the core names its asker, and a request it never takes back. */
 const WINDOW = { local: true, owner: true, connection: 'local:w1' }
 const never = new AbortController().signal
+/** A core with one Harness agent, h1, on this computer. */
+const harnessAgent = () => fakeCore({ dataDir, agents: { advertised: vi.fn(() => [{ agentId: 'h1', registeredAt: 1, engine: 'claude' }] as RegisteredSession[]) } })
 /** A hand turning the dial to that agent, as its cable session tells the host (cableSession.ts 'focus'). The rest that
  *  follows 400 ms later, where the agent has a pane, is the spec's to run. */
 const turnTo = (agentId: string): void => {
@@ -1272,7 +1281,6 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
   const host = () => seen.dial as unknown as DaemonCableHost
   /** The dial's list with no window, as its session reads it every second. */
   const machineList = async (port: DevicesPort) => { port.swarms(null); return host().listAgentSnapshot() }
-  const harnessAgent = () => fakeCore({ dataDir, agents: { advertised: vi.fn(() => [{ agentId: 'h1', registeredAt: 1, engine: 'claude' }] as RegisteredSession[]) } })
 
   it('an observed event from the core reaches ObservedSource and the dial\'s list', async () => {
     const { port } = start({ faults: ['fleet'] })
@@ -2022,12 +2030,50 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     expect(orcaRuns).toHaveLength(1)
   })
 
+  const caps = async () => (await listed()).map(({ id, caps }) => ({ id, caps }))
+
+  it('on macOS a Harness agent with no window lists f, and its tap starts Harness Desktop', async () => {
+    vi.useFakeTimers()
+    const core = harnessAgent()
+    const { port } = startHere({ core, orca: mac })
+    attach(port)
+    expect(await caps()).toEqual([{ id: 'h1', caps: 'svfa' }])
+    expect(await host().openAgent('h1')).toBeUndefined()
+    expect(orcaRuns).toEqual([['/usr/bin/open', ['-b', 'ai.autonomous.harness'], 10_000]])
+    const opens = () => vi.mocked(core.clients.sendLocal).mock.calls.map(([frame]) => frame).filter((frame) => frame.type === 'dial_open')
+    expect(opens()).toEqual([])
+    port.swarms({ active: 't1', swarms: [{ id: 't1', name: 'Tab', agentIds: [], panes: 0 }], tiles: [] })
+    expect(opens()).toEqual([{ type: 'dial_open', payload: { machineId: host().localMachine().id, agentId: 'h1' } }])
+    // The next tap finds no window in 30 s.
+    port.swarms(null)
+    await host().openAgent('h1')
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(said().filter((line) => line === '[device] open · harness · no window')).toHaveLength(1)
+    port.swarms({ active: 't1', swarms: [], tiles: [] })
+    expect(opens()).toHaveLength(1)
+  })
+
+  it('Harness Desktop that is not installed answers the dial', async () => {
+    const { port } = startHere({ core: harnessAgent(), orca: { ...mac, run: async (file, args, timeoutMs) => { orcaRuns.push([file, args, timeoutMs]); return { code: 1, stdout: '' } } } })
+    attach(port)
+    expect(await caps()).toEqual([{ id: 'h1', caps: 'svfa' }])
+    expect(await host().openAgent('h1')).toEqual({ ok: false, error: 'Harness did not open it.' })
+  })
+
+  it('off macOS a Harness agent lists no f, and a tap starts nothing', async () => {
+    const { port } = startHere({ core: harnessAgent() })
+    attach(port)
+    expect(await caps()).toEqual([{ id: 'h1', caps: 'sva' }])
+    host().openAgent('h1')
+    expect(orcaRuns).toEqual([])
+  })
+
   it('a Claude Code in the Claude app opens on its session; a link that fails still brings the app forward, said in one line with no id', async () => {
     const SESSION = 'local_8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b'
     const codes = [1]
     const { port } = startHere({ orca: { ...mac, run: async (file, args, timeoutMs) => {
       orcaRuns.push([file, args, timeoutMs])
-      return { code: codes.shift() ?? 0 }
+      return { code: codes.shift() ?? 0, stdout: '' }
     } } })
     port.observed(hook('session-start', { hostHints: { __CFBundleIdentifier: 'com.anthropic.claudefordesktop', CLAUDE_CODE_HOST_SESSION_ID: SESSION } }))
     attach(port)
@@ -2040,6 +2086,62 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     expect(await host().openAgent(ID)).toBeUndefined()
     expect(orcaRuns.slice(2)).toEqual([link])
     expect(logs.filter((line) => line.includes(SESSION) || line.includes('sess-1'))).toEqual([])
+  })
+
+  it('a session in the VS Code extension\'s tab opens by its link, then VS Code comes forward', async () => {
+    const SESSION = '8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b'
+    const { port } = startHere({ orca: mac })
+    port.observed(hook('session-start', { sessionId: SESSION, hostHints: { __CFBundleIdentifier: 'com.microsoft.VSCode', CLAUDE_CODE_ENTRYPOINT: 'claude-vscode' } }))
+    attach(port)
+    expect(await host().openAgent(observedAgentId('claude', SESSION))).toBeUndefined()
+    expect(orcaRuns).toEqual([
+      ['/usr/bin/open', [`vscode://anthropic.claude-code/open?session=${SESSION}`], 10_000],
+      ['/usr/bin/open', ['-b', 'com.microsoft.VSCode'], 10_000],
+    ])
+  })
+
+  it('an agent in the person\'s own tmux lists f, and its tap checks the pane\'s process, then switches the person\'s client', async () => {
+    readers.processes.mockResolvedValue([{ pid: 4242, ppid: 4000, executable: 'claude' }, { pid: 4000, ppid: 1, executable: 'zsh' }])
+    const says = ['4000|work|\n', '9999|work|\n']
+    // A Harness terminal used last, and the person's own client.
+    const clients = '1794700100|client-501|abcdef0123456789|harness-claude-1790000000000-x\n1794700050|/dev/ttys004||work\n'
+    const { port } = startHere({ orca: { ...mac, run: async (file, args, timeoutMs) => {
+      orcaRuns.push([file, args, timeoutMs])
+      return { code: 0, stdout: args[0] === 'display-message' ? says.shift()! : args[0] === 'list-clients' ? clients : '' }
+    } } })
+    // Warp is no tab app: no tty is read.
+    port.observed(hook('session-start', { hostHints: { TMUX_PANE: '%3', TERM_PROGRAM: 'tmux', __CFBundleIdentifier: 'dev.warp.Warp-Stable' } }))
+    attach(port)
+    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
+    expect(await host().openAgent(ID)).toBeUndefined()
+    const asked: [string, string[], number] = ['tmux', ['display-message', '-p', '-t', '%3', '#{pane_pid}|#{session_name}|#{@harness_daemon}#{?#{m:/usr/bin/env HARNESS_DAEMON=*,#{pane_start_command}},#{=44:pane_start_command},#{?#{m:harness-*,#{session_name}},#{@harness_daemon},}}'], 10_000]
+    const clientsAsked: [string, string[], number] = ['tmux', ['list-clients', '-F', '#{client_activity}|#{client_name}|#{@harness_daemon}|#{session_name}'], 10_000]
+    const warp: [string, string[], number] = ['/usr/bin/open', ['-b', 'dev.warp.Warp-Stable'], 10_000]
+    expect(orcaRuns).toEqual([asked, clientsAsked, ['tmux', ['switch-client', '-c', '/dev/ttys004', '-t', '%3'], 10_000], warp])
+    expect(said()).toEqual([])
+    // The pane holds another process now: nothing is listed or switched.
+    expect(await host().openAgent(ID)).toBeUndefined()
+    expect(orcaRuns.slice(4)).toEqual([asked, warp])
+    expect(said()).toEqual(['[device] open · tmux · not its pane'])
+  })
+
+  // The order the panes are asked in: a tmux server keeps the environment it started in, so in its pane WezTerm's and
+  // Orca's values name the terminal the server began in.
+  it('a tap takes herdr\'s pane before tmux\'s, and tmux\'s before WezTerm\'s and Orca\'s', async () => {
+    readers.processes.mockResolvedValue([{ pid: 4242, ppid: 4000, executable: 'claude' }, { pid: 4000, ppid: 1, executable: 'zsh' }])
+    const { port } = startHere({ orca: { ...mac, run: async (file, args, timeoutMs) => {
+      orcaRuns.push([file, args, timeoutMs])
+      return { code: 0, stdout: args[0] === 'display-message' ? '4000|work|\n' : args[0] === 'list-clients' ? '1794700050|/dev/ttys004||work\n' : '' }
+    } } })
+    const around = { WEZTERM_PANE: '7', ORCA_TERMINAL_HANDLE: HANDLE, __CFBundleIdentifier: 'dev.warp.Warp-Stable' }
+    port.observed(hook('session-start', { hostHints: { TMUX_PANE: '%3', ...around } }))
+    attach(port)
+    expect(await host().openAgent(ID)).toBeUndefined()
+    expect(orcaRuns.map(([, args]) => args[0])).toEqual(['display-message', 'list-clients', 'switch-client', '-b'])
+    orcaRuns.length = 0
+    port.observed(hook('session-start', { hostHints: { HERDR_PANE_ID: 'w1:p2', TMUX_PANE: '%3', ...around } }))
+    expect(await host().openAgent(ID)).toBeUndefined()
+    expect(orcaRuns.map(([, args]) => args.slice(0, 2))).toEqual([['agent', 'focus'], ['-b', 'dev.warp.Warp-Stable']])
   })
 
   // A swipe that rests on an agent in an Orca terminal shows its pane, and Orca stays where it is.
@@ -2064,7 +2166,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
   })
 
   it('a switch that fails is one line with no handle, and the dial is sent nothing', async () => {
-    inOrca({ orca: { ...orca, run: async (file, args, timeoutMs) => { orcaRuns.push([file, args, timeoutMs]); return { code: 1 } } } })
+    inOrca({ orca: { ...orca, run: async (file, args, timeoutMs) => { orcaRuns.push([file, args, timeoutMs]); return { code: 1, stdout: '' } } } })
     const sent = seen.cable.calls.length
     host().swipeEnded(CODEX, 'rest')
     await swiped('failed')
@@ -2077,7 +2179,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     let typed = () => {}
     inOrca({ orca: { ...orca, run: (file, args, timeoutMs) => {
       orcaRuns.push([file, args, timeoutMs])
-      return new Promise((done) => { typed = () => done({ code: 0 }) })
+      return new Promise((done) => { typed = () => done({ code: 0, stdout: '' }) })
     } } })
     const words = host().sendTurn(CODEX, 'run the tests')
     await vi.waitFor(() => expect(orcaRuns).toHaveLength(1))
@@ -2093,7 +2195,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     let shown = () => {}
     inOrca({ orca: { ...orca, run: (file, args, timeoutMs) => {
       orcaRuns.push([file, args, timeoutMs])
-      return new Promise((done) => { shown = () => done({ code: 0 }) })
+      return new Promise((done) => { shown = () => done({ code: 0, stdout: '' }) })
     } } })
     host().swipeEnded(CODEX, 'rest')
     await vi.waitFor(() => expect(orcaRuns).toHaveLength(1))
@@ -2195,7 +2297,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     let shown = () => {}
     const { front } = await inClaudeApp({ orca: { ...mac, run: (file, args, timeoutMs) => {
       orcaRuns.push([file, args, timeoutMs])
-      return new Promise((done) => { shown = () => done({ code: 0 }) })
+      return new Promise((done) => { shown = () => done({ code: 0, stdout: '' }) })
     } } })
     front('claude')
     host().swipeEnded(ID, 'rest')
@@ -2209,7 +2311,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
   })
 
   it('a link that fails is one line and the dial is sent nothing', async () => {
-    const { front } = await inClaudeApp({ orca: { ...mac, run: async (file, args, timeoutMs) => { orcaRuns.push([file, args, timeoutMs]); return { code: 1 } } } })
+    const { front } = await inClaudeApp({ orca: { ...mac, run: async (file, args, timeoutMs) => { orcaRuns.push([file, args, timeoutMs]); return { code: 1, stdout: '' } } } })
     front('claude')
     const sent = seen.cable.calls.length
     host().swipeEnded(ID, 'rest')
@@ -2232,7 +2334,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     const codes = [0, 1]
     const { front } = await inClaudeApp({ orca: { ...mac, run: async (file, args, timeoutMs) => {
       orcaRuns.push([file, args, timeoutMs])
-      return { code: codes.shift() ?? 0 }
+      return { code: codes.shift() ?? 0, stdout: '' }
     } } })
     front('claude')
     host().swipeEnded(ID, 'rest')
@@ -2245,7 +2347,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
 
   it('no swipe line carries a handle, a session or an agent', async () => {
     const codes = [0, 1]
-    inOrca({ orca: { ...orca, run: async (file, args, timeoutMs) => { orcaRuns.push([file, args, timeoutMs]); return { code: codes.shift() ?? 0 } } } })
+    inOrca({ orca: { ...orca, run: async (file, args, timeoutMs) => { orcaRuns.push([file, args, timeoutMs]); return { code: codes.shift() ?? 0, stdout: '' } } } })
     host().swipeEnded(CODEX, 'rest')
     await swiped('ok')
     host().swipeEnded(CODEX, 'rest')
@@ -2321,7 +2423,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     let exited = (_code: number) => {}
     const { listener } = await inTab({ orca: { ...mac, run: (file, args, timeoutMs) => {
       orcaRuns.push([file, args, timeoutMs])
-      return new Promise((done) => { exited = (code) => done({ code }) })
+      return new Promise((done) => { exited = (code) => done({ code, stdout: '' }) })
     } } })
     const stream = listener.tabs()
     const tap = host().openAgent(ID)
@@ -2334,7 +2436,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
   })
 
   it('a tap whose open -b fails writes no select', async () => {
-    const { listener } = await inTab({ orca: { ...mac, run: async (file, args, timeoutMs) => { orcaRuns.push([file, args, timeoutMs]); return { code: 1 } } } })
+    const { listener } = await inTab({ orca: { ...mac, run: async (file, args, timeoutMs) => { orcaRuns.push([file, args, timeoutMs]); return { code: 1, stdout: '' } } } })
     const stream = listener.tabs()
     expect(await host().openAgent(ID)).toEqual({ ok: false, error: 'Terminal did not open it.' })
     expect(orcaRuns).toEqual([['/usr/bin/open', ['-b', 'com.apple.Terminal'], 10_000]])
@@ -3322,7 +3424,7 @@ describe('selecting a tab moves the dial (docs/specs/2026-11-15-dial-terminal-fo
     const { listener, report, stream } = await dialWith(2, (file, args, timeoutMs) => {
       orcaRuns.push([file, args, timeoutMs])
       began()
-      return new Promise((done) => { opened = () => done({ code: 0 }) })
+      return new Promise((done) => { opened = () => done({ code: 0, stdout: '' }) })
     })
     const tapped = host().openAgent(agent(2))
     await opening
@@ -3365,7 +3467,7 @@ describe('selecting a tab moves the dial (docs/specs/2026-11-15-dial-terminal-fo
   it('a switch that failed sets the report aside all the same', async () => {
     const { port, listener, report, stream } = await dialWith(1, async (file, args, timeoutMs) => {
       orcaRuns.push([file, args, timeoutMs])
-      return { code: 1 }
+      return { code: 1, stdout: '' }
     })
     port.observed(inOrca)
     expect(listener.front('terminal-app')).toBeUndefined()
@@ -3415,7 +3517,7 @@ describe('selecting a tab moves the dial (docs/specs/2026-11-15-dial-terminal-fo
     const { listener, report, stream } = await dialWith(2, (file, args, timeoutMs) => {
       orcaRuns.push([file, args, timeoutMs])
       began()
-      return new Promise((done) => { opened = () => done({ code: 0 }) })
+      return new Promise((done) => { opened = () => done({ code: 0, stdout: '' }) })
     })
     expect(listener.front('terminal-app')).toBeUndefined()
     report('terminal-app', ttyOf(1))

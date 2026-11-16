@@ -38,9 +38,11 @@ import { createOpenActions } from '../cable/hosts/open.js'
 import { createOrcaAdapter, orcaDeps, type OrcaDeps } from '../cable/hosts/orca.js'
 import { readRecordName } from '../cable/hosts/recordName.js'
 import { HostRegistry } from '../cable/hosts/registry.js'
-import { learnApps } from '../cable/hosts/scannedApp.js'
+import { learnApps, readProcessNames } from '../cable/hosts/scannedApp.js'
 import { createTabsAdapter, readTty, type Tab } from '../cable/hosts/tabs.js'
+import { createTmuxAdapter } from '../cable/hosts/tmux.js'
 import type { HostAgent, HostAgentState } from '../cable/hosts/types.js'
+import { createVscodeAdapter } from '../cable/hosts/vscode.js'
 import { createWeztermAdapter } from '../cable/hosts/wezterm.js'
 import { PetStore } from '../cable/pets/store.js'
 import { DialLog } from '../cable/dialLog.js'
@@ -299,13 +301,17 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // One with no `show` gets none: the source reads whether it has one (observed.ts rest).
     return show ? { ...noted, show: (pane, agentId) => { noteMove(); return show(pane, agentId) } } : noted
   }
-  /** The apps an outside agent runs in, in the order its panes are kept: each verb of the dial takes the first that can. */
+  /** The apps an outside agent runs in, in the order its panes are kept: each verb of the dial takes the first that can.
+   *  The nearest host first: a multiplexer keeps the environment it started in, so in a tmux pane WezTerm's and Orca's
+   *  values name the terminal the tmux server began in, and herdr inside tmux carries tmux's pane. */
   const adapters: readonly HostAdapter[] = [
     createHerdrAdapter(apps),
+    createTmuxAdapter({ run: apps.run, processes: readProcessNames, log }),
     createWeztermAdapter(apps),
     createOrcaAdapter(apps),
     // A rest's continue link: the app's attach that follows is the dial's own echo.
     { ...claude, show: (pane: Pane, agentId: string) => { noteLink(agentId); return claude.show(pane, agentId) } },
+    createVscodeAdapter(apps),
     createTabsAdapter({
       isOpen: () => tabs.isOpen(),
       select: (tab, raise) => {
@@ -445,6 +451,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       part.call('dial', () => tabSettled(app))
     },
     appPicked: () => log('[device] app filter: picker'),
+    // A tap on a Harness agent with no window starts Desktop, on macOS only (docs/specs/2026-11-15-device-wave1-checks.md,
+    // F2).
+    launchDesktop: opener.desktop,
+    // A measure: the app's name only.
+    desktopTimedOut: () => log('[device] open · harness · no window'),
     // The settle of the app in front: a filter that throws costs the devices nothing, and the devices stopping cancels it.
     appTimer: timerIn('dial'),
   })

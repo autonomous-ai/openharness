@@ -19,9 +19,14 @@ export const MAX_TEXT = 2000
 // A newline would submit part of the text and an escape would steer the agent's screen: the text is typed as one line,
 // and --enter submits it.
 const CONTROL = /\p{Cc}/gu
+// detectHost's multiplexers. Each keeps the environment of the terminal it was started in, so the handle names that
+// terminal, not where the agent is: words typed there land in whichever pane it shows, another agent's or a shell's. So
+// an agent in one has no Orca pane: no words, no rest, no tap through Orca.
+const MULTIPLEXERS: ReadonlySet<string> = new Set(['herdr', 'rex', 'zellij', 'tmux'])
 
 export interface OrcaDeps {
-  run(file: string, args: string[], timeoutMs: number): Promise<{ code: number | null }>
+  /** Its stdout too: tmux's answer is what it printed (tmux.ts). */
+  run(file: string, args: string[], timeoutMs: number): Promise<{ code: number | null; stdout: string }>
   onPath(name: string): string | null
   exists(path: string): boolean
   platform: NodeJS.Platform
@@ -32,11 +37,11 @@ export function orcaDeps(): OrcaDeps {
     run: (file, args, timeoutMs) => new Promise((resolve) => {
       // The timeout's kill waits for the process to exit: one deaf to SIGTERM, or stuck where even SIGKILL waits, kept the
       // call and its terminal's one-command slot open for good. The deadline answers by itself.
-      const deadline = setTimeout(() => resolve({ code: null }), timeoutMs)
-      execFile(file, args, { timeout: timeoutMs, killSignal: 'SIGKILL' }, (error) => {
+      const deadline = setTimeout(() => resolve({ code: null, stdout: '' }), timeoutMs)
+      execFile(file, args, { timeout: timeoutMs, killSignal: 'SIGKILL' }, (error, stdout) => {
         clearTimeout(deadline)
         // A number is the exit code; a timeout's kill or a binary that could not start has none.
-        resolve({ code: error === null ? 0 : typeof error.code === 'number' ? error.code : null })
+        resolve({ code: error === null ? 0 : typeof error.code === 'number' ? error.code : null, stdout })
       })
     }),
     onPath: (name) => resolveBinaryOnPath(name),
@@ -98,6 +103,7 @@ export function createOrcaAdapter(deps: OrcaDeps): HostAdapter & Required<Pick<H
     id: 'orca',
     tap: 'before',
     paneOf: (place) => {
+      if (MULTIPLEXERS.has(place.host)) return undefined
       const handle = place.hints.ORCA_TERMINAL_HANDLE
       return handle && ORCA_HANDLE.test(handle) ? { adapter: 'orca', id: handle } : undefined
     },

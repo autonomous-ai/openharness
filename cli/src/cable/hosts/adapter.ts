@@ -4,7 +4,7 @@
  * type in it. Every adapter keeps four rules:
  * 1. `paneOf` checks each hint against its own form, and each verb checks the pane's id again before a command.
  * 2. An adapter is a plain object from a factory. No member uses `this`, so a caller may wrap one by spreading it.
- * 3. A verb that cannot run answers `false` or `'failed'`. It never throws.
+ * 3. A verb that cannot run answers `false`, `'failed'` or `'refused'`. It never throws.
  * 4. An agent may have a pane in more than one adapter: the source keeps them all, and each verb uses the first whose
  *    adapter can do it. So `paneOf` answers from its own app's values alone, never from another app's being absent.
  */
@@ -16,6 +16,9 @@ export interface Place {
   app: string                                   // detectApp
   hints: Readonly<Record<string, string>>       // that event's host hints, as the core checked them
   tty?: string                                  // its process's tty, read for a tab app (observed.ts learnTty)
+  pid?: number                                  // its process: that event's caller
+  sessionId?: string                            // the engine's own id of the session: the VS Code extension's link names it
+  engine?: string                               // whose session it is: that link names Claude Code's alone
 }
 
 /** One adapter's own handle on one agent: an Orca terminal, a Claude app session, a tab's tty, a pane id. */
@@ -33,7 +36,9 @@ export interface HostAdapter {
   paneOf(place: Place): Pane | undefined
   /** Whether a tap can bring that pane forward on this computer. */
   canFocus(pane: Pane): boolean
-  focus(pane: Pane): Promise<boolean>
+  /** True once the pane is shown, false when it was not reached. Refused: the pane is not the agent's, and the adapter
+   *  said so in a line of its own, so the opener brings the app forward with no fallback line. */
+  focus(pane: Pane): Promise<boolean | 'refused'>
   /** Whether a rest can show the pane inside its app now (the app in front, a watch open): asked at each look. */
   canShow?(pane: Pane): boolean
   show?(pane: Pane, agentId: string): Promise<PaneSwitch>
