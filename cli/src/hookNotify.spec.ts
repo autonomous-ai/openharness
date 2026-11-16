@@ -2600,6 +2600,15 @@ describe('hook notify: a session outside a pane', () => {
     expect(JSON.stringify(requests[0].body)).not.toMatch(/side/)
   })
 
+  // Left out before the cap counts it: a pane id never sent would cost the farthest hint its place.
+  it('a named herdr session\'s pane id takes none of the MAX_HINTS', async () => {
+    const { port, requests } = await collect()
+    const set = Object.fromEntries(HINTS.filter((name) => name !== 'TMUX_PANE').map((name, index) => [name, `hint-${index}`]))
+    await runHook({ port, env: { ...set, HERDR_SESSION: 'side' }, input: { hook_event_name: 'Stop', session_id: 'sess-1' } })
+    expect(Object.keys(requests[0].body.hostHints as object))
+      .toEqual(HINTS.filter((name) => name !== 'TMUX_PANE' && name !== 'HERDR_PANE_ID').slice(0, MAX_HINTS))
+  })
+
   // The core reads 4096 bytes of a body at most (hookServer.ts): the transcript's path goes first, then the folder.
   it('leaves out transcriptPath when the body is over 4096 bytes, and keeps cwd', async () => {
     const { port, requests } = await collect()
