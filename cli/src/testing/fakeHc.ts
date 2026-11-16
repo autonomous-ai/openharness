@@ -113,8 +113,9 @@ export interface FakeHc {
   change(address: string, to: Partial<FakeHcTerminal>): void
   /** hc's `removed`. */
   remove(address: string): void
-  /** An `event` of a kind that changes no terminal here (`doc`, `size`, `title`, `turn`, `keep`), as recorded. `body`
-   *  is the event's params but its `seq` and `type` (`{ data, terminal }`); left out, the recorded one of that kind. */
+  /** An `event` that changes no terminal the fake holds: a kind it does not follow (`doc`, `size`, `title`, `turn`,
+   *  `keep`), or one Task 1 could not record (`lost`, `restarted`, F8). `body` is the event's params but its `seq` and
+   *  `type` (`{ data, terminal }`); left out, the recorded one of that kind. */
   event(kind: string, body?: Record<string, unknown>): void
   heartbeat(): void
   /** `missed`, with a fresh snapshot of `terminals` in it, as recorded. */

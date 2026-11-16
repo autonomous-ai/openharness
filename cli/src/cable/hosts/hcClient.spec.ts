@@ -367,6 +367,31 @@ describe.skipIf(process.platform === 'win32')('the hc client (docs/plans/2026-11
     ])
   })
 
+  describe('lost and restarted, which Task 1 could not record (F8), are read as the whole terminal they carry, as created is', () => {
+    /** The kind's line, its data the terminal the fake holds, whole, with `over` on it; and what the client told of it. */
+    async function told(kind: string, over: Record<string, unknown>) {
+      server.terminals = [{ address: 't7', cwd: '/work/api', status: { state: 'working', app: 'claude-code' } }]
+      const read = await client().request('terminal.get', { terminal: 't7' })
+      const { calls, to, told: until } = subscriber()
+      const subscription = client().subscribe(to)
+      await until(1)
+      server.event(kind, { data: { ...(read.ok ? read.result : {}), ...over }, terminal: 't7' })
+      await until(2)
+      subscription.close()
+      return calls[1]
+    }
+
+    it('lost: a terminal whose holder was lost, no longer live', async () => {
+      expect(await told('lost', { state: 'lost' }))
+        .toEqual(['changed', { address: 't7', live: false, space: true, status: 'working', kind: 'claude', cwd: '/work/api' }])
+    })
+
+    it('restarted: a terminal started again, its program not yet reporting', async () => {
+      expect(await told('restarted', { name: 'api', reported: false, status: null }))
+        .toEqual(['changed', { address: 't7', live: true, space: true, name: 'api', cwd: '/work/api' }])
+    })
+  })
+
   it('a foreground\'s folder is the terminal\'s once hc tells it; one that changes nothing told tells nothing', async () => {
     server.terminals = [{ address: 't7', cwd: '/work/api' }]
     const { calls, to, told } = subscriber()
