@@ -9,6 +9,9 @@
  * every hook event to the daemon, with its deadline and its offline registry writes. Before a daemon
  * starts, every folder it could install hooks into is checked to be inside the test's root
  * (`assertHooksContained`), and every file it says it wrote is checked again once it is up.
+ *
+ * It runs on a copy of the worker's Node alone in its folder (e2e/harness/testNode.ts), so it finds no engine beside
+ * its Node.
  */
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
@@ -26,6 +29,7 @@ import { ownProcessGroup } from '../../src/lib/windows/noWindow.js'
 import { endRootProcesses } from '../../src/testing/rootProcesses.js'
 import { assertSocketPathFits } from '../../src/testing/socketPathRoom.js'
 import { alive } from '../../src/testing/spawnedRuns.js'
+import { assertNodeAlone } from '../../src/testing/testNode.js'
 import { forgetGroup, forgetTmux, leaderGone, watchGroup, watchTmux } from './reaper.js'
 
 const exec = promisify(execFile)
@@ -85,7 +89,8 @@ export interface DaemonOptions {
   foreground?: boolean
   /** Start with these arguments to node instead (a launcher the test provides), in the daemon's environment. */
   launch?: string[]
-  /** Run the daemon on this Node instead of the test's own: a managed Node under the runtime folder. */
+  /** Run the daemon on this Node instead of the run's own (`E2E_NODE_PATH`): a managed Node under the runtime folder.
+   *  It must be alone in its folder too. */
   node?: string
   /** Run this bundle (an installed `cli.js`, its `notify.mjs` beside it: `assertHookScriptBeside`) instead of
    *  the checkout's source. */
@@ -258,7 +263,8 @@ const TILE_SHELL = '/bin/zsh'
 let besideCount = 0
 
 /** The executable a daemon finds for [name]: the fake engine, run with [config]. A test that wants one engine of a daemon
- *  to behave otherwise writes it over the daemon's own, before it starts. */
+ *  to behave otherwise writes it over the daemon's own, before it starts. It keeps the worker's Node, since a fake engine
+ *  looks up no engine. */
 export const fakeEngineShim = (name: 'claude' | 'codex', config: EngineConfig & Record<string, unknown>): string =>
   `#!${process.execPath}\nimport(${JSON.stringify(pathToFileURL(join(here, 'fakeEngine.mjs')).href)}).then((m) => m.run(${JSON.stringify(name)}, ${JSON.stringify(config)}))\n`
 
@@ -472,6 +478,15 @@ export class IsolatedDaemon {
     // and a test may name its script after `create` (`masterIpcExit.e2e.ts`).
     assertHooksContained(this.root, this.env)
     if (this.options.scriptPath) assertHookScriptBeside(this.options.scriptPath)
+    // The product looks for npm-installed engines beside the Node the daemon runs on (lib/engineLaunch.ts
+    // `npmRuntimeBins`), and on a developer's Mac the worker's Node was in the version manager's folder with their real
+    // engines, which freshMachineEngines.e2e.ts's daemon found "already installed" (audit of 2026-11-16,
+    // docs/plans/2026-11-16-e2e-isolation-3-design.md). No fallback to the worker's Node: it would reopen that without a
+    // word. Checked at every start, so a test's own Node is held to it too. The master starts the core and the services
+    // on the same Node, and the hooks are written with it.
+    const node = this.options.node || process.env.E2E_NODE_PATH
+    if (!node) throw new Error('E2E_NODE_PATH is not set: run the end-to-end tests through vitest.e2e.config.ts')
+    assertNodeAlone(node)
     const heap = this.options.heapMiB ? [`--max-old-space-size=${this.options.heapMiB}`] : []
     const entry = this.options.noMaster ? ['__run'] : this.options.foreground ? ['start', '-f'] : ['__harnessd']
     // Readiness is judged from what this start prints, never from an earlier boot's lines.
@@ -481,7 +496,7 @@ export class IsolatedDaemon {
     const script = bundle ? [bundle] : ['--import', 'tsx', 'src/cli.ts']
     // A process group of its own, which the core and the services join: one signal reaches all of them, whether or
     // not the master is still there, and the worker's reaper (reaper.ts) ends it should the worker go without closing it.
-    const child = spawn(this.options.node ?? process.execPath, this.options.launch ?? [...heap, ...script, ...entry], {
+    const child = spawn(node, this.options.launch ?? [...heap, ...script, ...entry], {
       cwd: CLI_ROOT, env: this.env, stdio: ['ignore', 'pipe', 'pipe'], ...ownProcessGroup(),
     })
     this.child = child
