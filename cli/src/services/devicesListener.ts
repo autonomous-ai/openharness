@@ -496,7 +496,7 @@ export function dialStream({ log, after }: { log(line: string): void; after(ms: 
           if (text === last || !stream.write(line)) return
           last = text
           if (written++ === 0) after(MINUTE_MS, () => {
-            log(`[devices] dial stream · ${written} lines in the last minute`)
+            log(`[devices] dial stream · lines in the last minute: ${written}`)
             written = 0
           })
         }
