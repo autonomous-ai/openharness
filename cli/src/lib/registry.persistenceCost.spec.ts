@@ -154,6 +154,57 @@ it('avoids repeated row comparisons and unused owner captures in a changed save 
   expect(owners).toBe(0)
 })
 
+it('admits a durable owner without temporary property-pair arrays for its canonical row comparisons', async () => {
+  const previous = disk(), fromEntries = Object.fromEntries
+  let temporaryPropertyPairs = 0
+  const entries = vi.spyOn(Object, 'fromEntries').mockImplementation(values => {
+    // Forward the actual entries; retain only a count of canonical row/ownership property pairs.
+    if (Array.isArray(values) && values.some(entry => Array.isArray(entry) && entry[0] === 'agentId')) {
+      temporaryPropertyPairs += values.length
+    }
+    return fromEntries(values)
+  })
+  let opened
+  try {
+    opened = await registry!.openProcessAgent({ agentId: 'cost-agent-c', engine: 'claude', tmuxPane: '%3',
+      processIdentity: { pid: 1003, executable: '/fixture/claude', startMarker: 'fixture-3' },
+    })
+  } finally { entries.mockRestore() }
+  expect(opened?.entry.agentId).toBe('cost-agent-c')
+  expect(io.durable).toHaveLength(1)
+  const saved = disk()
+  expect(saved).toHaveLength(3)
+  expect(saved.slice(0, 2)).toEqual(previous)
+  expect(saved[2]).toEqual(opened!.entry)
+  expect(temporaryPropertyPairs).toBe(0)
+})
+
+it('keeps canonical JSON bytes for nested objects, arrays, omitted values and literal prototype keys', async () => {
+  const { rowFingerprint } = (await import('./registry.js')).saveMergeHelpers
+  const nested = { b: 2, a: 1 }
+  expect(rowFingerprint({ z: nested, a: [3, 2, 1], 10: 'ten', 2: 'two' }))
+    .toBe('{"2":"two","10":"ten","a":[3,2,1],"z":{"a":1,"b":2}}')
+  expect(rowFingerprint({ a: [3, 2, 1], z: { a: 1, b: 2 }, 2: 'two', 10: 'ten' }))
+    .toBe('{"2":"two","10":"ten","a":[3,2,1],"z":{"a":1,"b":2}}')
+  expect(Object.keys(nested)).toEqual(['b', 'a'])
+  expect(rowFingerprint({ second: nested, first: nested }))
+    .toBe('{"first":{"a":1,"b":2},"second":{"a":1,"b":2}}')
+  expect(rowFingerprint({ omitted: undefined, callable: () => 1, symbol: Symbol('fixture'),
+    values: [undefined, () => 1, Symbol('fixture'), NaN, Infinity, -0, , null] }))
+    .toBe('{"values":[null,null,null,null,null,0,null,null]}')
+  const literalKeys = JSON.parse('{"prototype":false,"constructor":"literal","__proto__":{"z":2,"a":1}}')
+  expect(rowFingerprint(literalKeys)).toBe('{"__proto__":{"a":1,"z":2},"constructor":"literal","prototype":false}')
+  expect(Object.getPrototypeOf(literalKeys)).toBe(Object.prototype)
+  let calls = 0
+  const inherited = Object.create({ toJSON() { calls++; return { z: 2, a: 1 } } })
+  expect(rowFingerprint({ inherited, date: new Date('2026-01-01T00:00:00.000Z') }))
+    .toBe('{"date":"2026-01-01T00:00:00.000Z","inherited":{"a":1,"z":2}}')
+  expect(calls).toBe(1)
+  expect(() => rowFingerprint({ value: 1n })).toThrow(TypeError)
+  const circular: Record<string, unknown> = {}; circular.self = circular
+  expect(() => rowFingerprint(circular)).toThrow()
+})
+
 it.each(['flush', 'transaction'] as const)('refuses an acknowledged %s observation whose owner changes during preparation', async via => {
   const live = registry!.byAgent(A)!, peer = row(disk(), B), held = holdPreparation()
   let pending: Promise<unknown>

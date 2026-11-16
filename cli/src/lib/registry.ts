@@ -549,8 +549,13 @@ function rowId(row: unknown): string {
 // setters that add keys (`launch`); compared as JSON text it rewrote registry.json (lock, 3 fsyncs, rename)
 // every 5 s on an unchanged row, ~720 writes/hour measured 2026-10-06. Array order still counts.
 function rowFingerprint(row: unknown): string {
-  return JSON.stringify(row, (_key, value) => value && typeof value === 'object' && !Array.isArray(value)
-    ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, value[key]])) : value)
+  return JSON.stringify(row, (_key, value) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return value
+    // Admissions compare every row repeatedly; avoid a temporary entry array for every property.
+    const ordered: Record<string, unknown> = Object.create(null)
+    for (const key of Object.keys(value).sort()) ordered[key] = value[key]
+    return ordered
+  })
 }
 
 /** The new image is visible, but its directory has not confirmed durability yet. */

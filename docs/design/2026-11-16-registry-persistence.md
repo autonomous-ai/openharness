@@ -1910,3 +1910,72 @@ uninterrupted full-suite pass. Logs are
 The first typecheck identified the missing required fixture method; the corrected
 merged source passes (`/tmp/core-registry-current-main-types-final.log`).
 Native, full-gate and matched memory/cost acceptance remain pending for this head.
+
+## Canonical comparison allocations after memory attribution
+
+Before changing runtime code, the frozen `52e9aae823` diagnostic pair passed all
+83 workload outcomes per side and verified owned cleanup. Inputs are
+`/tmp/harness-registry-memory-v1/inputs.json` (SHA-256
+`4a52c2f038ff0938feef8d7c17696ac5ca81a2820f5dcf7252ebcab5a10d7340`);
+results are `/tmp/core-registry-memory-v1-pair/manifest.json`.
+The candidate's RSS after 160 admissions is 168.664 MiB versus 87.723 MiB old,
+with heap capacity 82.836 versus 20.742 MiB. After all samples and the final
+flush, one diagnostic-only GC leaves 12.643 versus 11.962 MiB used heap and
+identical 0.248 MiB array buffers, but capacity remains 79.309 versus 46.242 MiB.
+The gap is largely transient allocation and retained heap capacity, not an
+equivalently large live row/buffer graph. This does not clear memory acceptance.
+
+The durable per-admission path cannot use the old transaction's deferred
+acknowledgement. The candidate performs 104,987 row stringifications through
+final flush in this workload. Each canonical object currently creates one
+two-element array per key plus a mapped array before copying those properties
+into a fresh object. Remove that avoidable intermediate allocation by filling
+a fresh null-prototype object in sorted-key order. Keep JSON.stringify's
+existing recursive replacer, scalar/array/toJSON semantics and exact canonical
+bytes. A null prototype keeps literal `__proto__` and `constructor` keys as data.
+This is a local allocation correction, not a cache or new persistence path.
+
+Design: no stored format, audience, account identity, lock, public contract or
+migration changes. Snapshot deep copies, row/intent capture, peer merges,
+uncertain-publication recovery and immediate durable ownership receipts remain
+unchanged. Allocation still scales with the already-bounded row workload; no
+new retained collection or lifetime. Rollback restores temporary arrays only.
+The code is shared across macOS/Linux/Windows; execution evidence below names
+the actual platform and does not substitute for native platform acceptance.
+
+First add a real-admission control that forwards Object.fromEntries and counts
+the temporary canonical row/ownership entry pairs without retaining values.
+Require zero such pairs while the returned receipt still matches the newly
+durable image and prior rows remain equal. Canonical byte controls cover nested
+key order, repeated aliases, array order/holes, omitted values, non-finite
+numbers, literal prototype keys, inherited toJSON, dates and rejected values.
+Then check caller observation, merge, admission and persistence safety suites,
+TypeScript, and the required final gates. Root schedules the uninstrumented
+matched CPU/RSS workload only after source is stable; neither counts nor the
+one-GC diagnostic promise a lower RSS or a passing whole-package cost result.
+
+On macOS x64 / Node 24.22.2, the new admission control first failed with 564
+temporary canonical property-pair arrays; its durable image/receipt assertions
+and the canonical-byte control passed (one intended failure, one pass, 13
+unselected cases; 1.58 s, `/tmp/core-registry-fingerprint-allocation-red.log`).
+The local copy correction brings that count to zero and both controls pass.
+
+The selected six-file run recorded 134 passes and three failures in the existing
+fingerprint caller tests (138.29 s,
+`/tmp/core-registry-fingerprint-allocation-green.log`; the filename is not a
+passing receipt). All three reproduce once in clean `52e9aae823`, with the
+allocation change absent and the same dependencies: two assertions read disk
+before a synchronous setter's asynchronous save settles, and the two-registry
+case freezes the lock retry with fake timers (31.53 s,
+`/tmp/core-registry-fingerprint-52e9-baseline.log`).
+
+Those callers now await the public flush barrier, fake only row dates, and wait
+for every opened registry to finish before fixture removal. Their eight cases
+pass (10.61 s, `/tmp/core-registry-fingerprint-async-controls-green.log`). The
+other five files retain 129 passing cases covering admission, observation,
+merge, immutable snapshots, ownership loss, intents and publication recovery:
+137 cases across the selected results, not one uninterrupted six-file pass.
+The final TypeScript check and diff check pass
+(`/tmp/core-registry-fingerprint-allocation-types.log`). No measured claim about
+the final runtime's CPU or whole RSS follows from the eliminated entry pairs;
+the required gates and uninstrumented final-source cost comparison remain open.
