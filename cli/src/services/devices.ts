@@ -423,7 +423,6 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     now: Date.now,
     monotonic,
     uuid: randomUUID,
-    platform: apps.platform,
     log,
     count: voiced,
   }) : null
