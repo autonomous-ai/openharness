@@ -1159,7 +1159,8 @@ export class SessionInputController {
       if (!next.deliveryId?.startsWith('team:')) this.deps.onError(sessionId, 'This harness is no longer available.')
       return
     }
-    await this.inject(sessionId, session, next.content, next.deliveryId, next.receipt)
+    // A drained delivery must own the same write chain as a new person's message, through paste and Enter.
+    await this.scheduleWrite(sessionId, session, next.content, next.deliveryId, next.receipt)
   }
 
   private enqueue(sessionId: string, state: InputState, content: string, deliveryId?: string, receipt?: MessageReceipt): void {

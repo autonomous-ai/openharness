@@ -1323,6 +1323,40 @@ describe('delivery correlation', () => {
 describe('optional lamp delivery preserves legacy behavior', () => {
   afterEach(() => vi.useRealTimers())
 
+  it.each(['turn delivery', 'control delivery', 'control message'] as const)(
+    'keeps a drained %s ahead of a new person message through the entire write', async kind => {
+      const checks: Array<(valid: boolean) => void> = []
+      const typed: string[] = []
+      const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+        getSession: () => session('claude'),
+        validateRuntime: () => new Promise<boolean>(resolve => checks.push(resolve)),
+        inject: async (_target, text) => { typed.push(text); return true },
+        sendKey: async () => true, onError: vi.fn(),
+      })
+      try {
+        let release: (() => void) | null = null
+        if (kind === 'turn delivery') controller.setTurnOpen('s1', true)
+        else release = controller.acquireControl('s1')
+        controller.submit('s1', 'queued first', kind === 'control message' ? undefined : 'feature:queued')
+        expect(checks).toHaveLength(0)
+        if (kind === 'turn delivery') controller.onTurnEnded('s1')
+        else release!()
+        expect(checks).toHaveLength(1)
+
+        controller.submit('s1', 'person second')
+        // Validation belongs to a write too: it may wait while the first paste/Enter is being prepared.
+        expect(checks).toHaveLength(1)
+        checks[0]!(true)
+        await vi.waitFor(() => expect(checks).toHaveLength(2))
+        expect(typed).toEqual(['queued first'])
+        checks[1]!(true)
+        await vi.waitFor(() => expect(typed).toEqual(['queued first', 'person second']))
+      } finally {
+        controller.forget('s1')
+        for (const settle of checks) settle(false)
+      }
+    })
+
   it('keeps untracked Claude submits out of the new lamp queue, writing them one after another', async () => {
     // Not held for the turn — Claude takes typing while it works — but never two writes into the pane at
     // once: the second waits for the first's paste, not for the first's turn.
