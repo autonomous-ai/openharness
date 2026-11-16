@@ -195,22 +195,22 @@ describe('detectApp', () => {
 
 // Only hc's own terminal is Herdr's: the one predicate detectHost, detectApp, the Herdr adapter and a tap's bundle read.
 describe('inHerdr', () => {
-  it.each([
-    [{ HC_TERMINAL_ID: 't7' }],
-    [{ HC_TERMINAL_ID: 't1b', TERM_PROGRAM: 'ghostty' }],
-    [{ HC_TERMINAL_ID: 't7', TERM_PROGRAM: 'ghostty', __CFBundleIdentifier: 'com.stablyai.orca' }],
+  it.each<Record<string, string>>([
+    { HC_TERMINAL_ID: 't7' },
+    { HC_TERMINAL_ID: 't1b', TERM_PROGRAM: 'ghostty' },
+    { HC_TERMINAL_ID: 't7', TERM_PROGRAM: 'ghostty', __CFBundleIdentifier: 'com.stablyai.orca' },
   ])('hc\'s own terminal: %j', (hints) => {
     expect(inHerdr(hints)).toBe(true)
     expect(detectHost(hints)).toBe('herdr')
     expect(detectApp(hints)).toBe('herdr')
   })
 
-  it.each([
-    [{}],
-    [{ TERM_PROGRAM: 'ghostty' }],
-    ...['vps/t7', 'T7', 't', '--help', 't7; rm -rf /', `t${'1'.repeat(17)}`].map((id) => [{ HC_TERMINAL_ID: id, TERM_PROGRAM: 'ghostty' }]),
-    ...['vscode', 'tmux', 'iTerm.app', 'WezTerm', 'Apple_Terminal', 'rio'].map((program) => [{ HC_TERMINAL_ID: 't7', TERM_PROGRAM: program }]),
-    ...['HERDR_PANE_ID', 'REX_BLOCK', 'ZELLIJ', 'TMUX_PANE'].map((own) => [{ HC_TERMINAL_ID: 't7', TERM_PROGRAM: 'ghostty', [own]: '1' }]),
+  it.each<Record<string, string>>([
+    {},
+    { TERM_PROGRAM: 'ghostty' },
+    ...['vps/t7', 'T7', 't', '--help', 't7; rm -rf /', `t${'1'.repeat(17)}`].map((id) => ({ HC_TERMINAL_ID: id, TERM_PROGRAM: 'ghostty' })),
+    ...['vscode', 'tmux', 'iTerm.app', 'WezTerm', 'Apple_Terminal', 'rio'].map((program) => ({ HC_TERMINAL_ID: 't7', TERM_PROGRAM: program })),
+    ...['HERDR_PANE_ID', 'REX_BLOCK', 'ZELLIJ', 'TMUX_PANE'].map((own) => ({ HC_TERMINAL_ID: 't7', TERM_PROGRAM: 'ghostty', [own]: '1' })),
   ])('not hc\'s own terminal: %j', (hints) => {
     expect(inHerdr(hints)).toBe(false)
     expect(detectApp(hints)).not.toBe('herdr')
