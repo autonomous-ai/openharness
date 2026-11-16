@@ -255,6 +255,8 @@ fn menu_id(action: MenuAction) -> &'static str {
         MenuAction::SignIn => "sign_in",
         MenuAction::ClaudeOn => "claude_on",
         MenuAction::ClaudeOff => "claude_off",
+        MenuAction::CodexOn => "codex_on",
+        MenuAction::CodexOff => "codex_off",
         MenuAction::SoundOn => "sound_on",
         MenuAction::SoundOff => "sound_off",
         MenuAction::NotifyFull => "notify_full",
@@ -267,9 +269,23 @@ fn menu_id(action: MenuAction) -> &'static str {
 
 fn menu_action(id: &str) -> Option<MenuAction> {
     use MenuAction::*;
-    [Install, SignIn, ClaudeOn, ClaudeOff, SoundOn, SoundOff, NotifyFull, NotifyYou, Update, OpenHarness, Quit]
-        .into_iter()
-        .find(|action| menu_id(*action) == id)
+    [
+        Install,
+        SignIn,
+        ClaudeOn,
+        ClaudeOff,
+        CodexOn,
+        CodexOff,
+        SoundOn,
+        SoundOff,
+        NotifyFull,
+        NotifyYou,
+        Update,
+        OpenHarness,
+        Quit,
+    ]
+    .into_iter()
+    .find(|action| menu_id(*action) == id)
 }
 
 #[cfg(test)]

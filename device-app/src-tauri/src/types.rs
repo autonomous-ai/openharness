@@ -71,7 +71,8 @@ pub struct CodexStatus {
     pub enabled: bool,
 }
 
-/// state.json: `{ "version": 1, "cliSeen", "askedSignIn", "askedClaude", "loginItem" }`. Default: version 1, all false.
+/// state.json: `{ "version": 1, "cliSeen", "askedSignIn", "askedClaude", "askedCodex", "loginItem" }`. Default:
+/// version 1, all false.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Saved {
@@ -79,12 +80,22 @@ pub struct Saved {
     pub cli_seen: bool,
     pub asked_sign_in: bool,
     pub asked_claude: bool,
+    /// Absent from a file written before Codex was offered: that file's answers stand, and Codex is not yet asked.
+    #[serde(default)]
+    pub asked_codex: bool,
     pub login_item: bool,
 }
 
 impl Default for Saved {
     fn default() -> Self {
-        Saved { version: 1, cli_seen: false, asked_sign_in: false, asked_claude: false, login_item: false }
+        Saved {
+            version: 1,
+            cli_seen: false,
+            asked_sign_in: false,
+            asked_claude: false,
+            asked_codex: false,
+            login_item: false,
+        }
     }
 }
 
@@ -94,6 +105,7 @@ pub enum Screen {
     Install,
     SignIn,
     Claude,
+    Codex,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -131,6 +143,8 @@ pub enum MenuAction {
     SignIn,
     ClaudeOn,
     ClaudeOff,
+    CodexOn,
+    CodexOff,
     SoundOn,
     SoundOff,
     NotifyFull,
@@ -178,6 +192,7 @@ pub struct AppState {
     pub dial: Option<DialStatus>,
     pub signed_in: Option<bool>,
     pub claude: Option<ClaudeStatus>,
+    pub codex: Option<CodexStatus>,
     pub desktop_installed: bool,
     pub saved: Saved,
     pub app_update: AppUpdate,
@@ -203,8 +218,10 @@ pub enum Event {
     InstallDone(Result<(), Vec<String>>),
     Auth(Option<bool>),
     Claude(Option<ClaudeStatus>),
+    Codex(Option<CodexStatus>),
     Login(LoginEvent),
     ClaudeSet(Result<(), String>),
+    CodexSet(Result<(), String>),
     LoginItem(bool),
     Menu(MenuAction),
     Act(Action),
@@ -224,9 +241,11 @@ pub enum Effect {
     RunInstall,
     ReadAuth,
     ReadClaude,
+    ReadCodex,
     RunLogin,
     CancelLogin,
     SetClaude(bool),
+    SetCodex(bool),
     /// `true` turns the dial's sound on.
     SetSound(bool),
     SetNotify(NotifyMode),

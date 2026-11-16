@@ -7,7 +7,7 @@ use crate::types::{
     Saved, Screen, UpdateFailure, View,
 };
 
-/// The menu reads the account and Claude Code again at most this often.
+/// The menu reads the account, Claude Code and Codex again at most this often.
 const READ_EVERY_SECS: u64 = 60;
 
 /// The app asks for its own update at most this often.
@@ -30,12 +30,15 @@ pub struct App {
     login: Option<View>,
     /// The Claude Code change that runs: on or off.
     setting: Option<bool>,
-    /// Whether the account and Claude Code answered since the CLI was found; None once the first screen is chosen.
-    first_answers: Option<(bool, bool)>,
+    /// The Codex change that runs: on or off. Apart from Claude Code's, so each may run beside the other.
+    codex_setting: Option<bool>,
+    /// Whether the account, Claude Code and Codex answered since the CLI was found; None once the first screen is
+    /// chosen.
+    first_answers: Option<(bool, bool, bool)>,
     /// The last time an event told, for the keep-alive.
     now: u64,
     last_read: u64,
-    /// The app started the daemon: its first status line reads the account and Claude Code again, at once, as
+    /// The app started the daemon: its first status line reads the account, Claude Code and Codex again, at once, as
     /// reads made while it was down may have needed it.
     read_when_up: bool,
     /// The desktop app ran at the last tick.
@@ -62,6 +65,7 @@ impl App {
             dial: None,
             signed_in: None,
             claude: None,
+            codex: None,
             desktop_installed,
             saved,
             app_update: AppUpdate::None,
@@ -73,6 +77,7 @@ impl App {
             window: None,
             login: None,
             setting: None,
+            codex_setting: None,
             first_answers: None,
             now,
             last_read: now,
@@ -162,8 +167,10 @@ impl App {
                     effects.push(Effect::CancelLogin);
                 }
                 self.setting = None;
+                self.codex_setting = None;
                 self.state.signed_in = None;
                 self.state.claude = None;
+                self.state.codex = None;
                 self.first_answers = None;
                 if self.window.is_some() {
                     self.show(None, effects);
@@ -210,20 +217,27 @@ impl App {
             // A read that failed keeps the last answer.
             Event::Auth(answer) if self.state.cli == CliState::Found => {
                 self.state.signed_in = answer.or(self.state.signed_in);
-                if let Some((auth, _)) = &mut self.first_answers {
+                if let Some((auth, _, _)) = &mut self.first_answers {
                     *auth = true;
                 }
                 self.first_screen(effects);
             }
             Event::Claude(status) if self.state.cli == CliState::Found => {
                 self.state.claude = status.or(self.state.claude.take());
-                if let Some((_, claude)) = &mut self.first_answers {
+                if let Some((_, claude, _)) = &mut self.first_answers {
                     *claude = true;
                 }
                 self.first_screen(effects);
             }
+            Event::Codex(status) if self.state.cli == CliState::Found => {
+                self.state.codex = status.or(self.state.codex.take());
+                if let Some((_, _, codex)) = &mut self.first_answers {
+                    *codex = true;
+                }
+                self.first_screen(effects);
+            }
             // A read of a CLI that went away answers late: nothing reads it.
-            Event::Auth(_) | Event::Claude(_) => {}
+            Event::Auth(_) | Event::Claude(_) | Event::Codex(_) => {}
             Event::Login(event) => self.login_event(event, effects),
             Event::ClaudeSet(result) => {
                 // A change that no longer runs (its CLI went away) answers late: nothing reads it.
@@ -247,6 +261,26 @@ impl App {
                     }
                 }
             }
+            // As Claude Code's.
+            Event::CodexSet(result) => {
+                let Some(on) = self.codex_setting.take() else { return };
+                match result {
+                    Ok(()) => {
+                        effects.push(Effect::ReadCodex);
+                        if on {
+                            self.remember(|saved| saved.asked_codex = true, effects);
+                            if self.showing(Screen::Codex) {
+                                self.next(effects);
+                            }
+                        }
+                    }
+                    Err(text) => {
+                        if on && self.showing(Screen::Codex) {
+                            self.show(Some(screen_at(Screen::Codex, Phase::Failed, vec![text])), effects);
+                        }
+                    }
+                }
+            }
             // A failure is tried again at the next start.
             Event::LoginItem(registered) => {
                 if registered {
@@ -259,6 +293,10 @@ impl App {
                 MenuAction::ClaudeOn => self.show(Some(self.view_of(Screen::Claude)), effects),
                 MenuAction::ClaudeOff => {
                     self.set_claude(false, effects);
+                }
+                MenuAction::CodexOn => self.show(Some(self.view_of(Screen::Codex)), effects),
+                MenuAction::CodexOff => {
+                    self.set_codex(false, effects);
                 }
                 MenuAction::SoundOn | MenuAction::SoundOff => {
                     effects.push(Effect::SetSound(action == MenuAction::SoundOn));
@@ -286,6 +324,9 @@ impl App {
                     Some((Screen::SignIn, _)) => self.remember(|saved| saved.asked_sign_in = true, effects),
                     Some((Screen::Claude, Phase::Offer | Phase::Failed)) => {
                         self.remember(|saved| saved.asked_claude = true, effects)
+                    }
+                    Some((Screen::Codex, Phase::Offer | Phase::Failed)) => {
+                        self.remember(|saved| saved.asked_codex = true, effects)
                     }
                     _ => {}
                 }
@@ -385,6 +426,15 @@ impl App {
                 self.remember(|saved| saved.asked_claude = true, effects);
                 self.next(effects);
             }
+            (Screen::Codex, Phase::Offer, Action::TurnOn) | (Screen::Codex, Phase::Failed, Action::Retry) => {
+                if self.set_codex(true, effects) {
+                    self.show(Some(screen_at(Screen::Codex, Phase::Working, Vec::new())), effects);
+                }
+            }
+            (Screen::Codex, Phase::Offer, Action::NotNow) => {
+                self.remember(|saved| saved.asked_codex = true, effects);
+                self.next(effects);
+            }
             _ => {}
         }
     }
@@ -434,7 +484,7 @@ impl App {
         self.state.cli = CliState::Found;
         self.remember(|saved| saved.cli_seen = true, effects);
         self.keep = KeepAlive::new();
-        self.first_answers = Some((false, false));
+        self.first_answers = Some((false, false, false));
         self.read(effects);
     }
 
@@ -459,7 +509,7 @@ impl App {
     }
 
     fn read(&mut self, effects: &mut Vec<Effect>) {
-        effects.extend([Effect::ReadAuth, Effect::ReadClaude]);
+        effects.extend([Effect::ReadAuth, Effect::ReadClaude, Effect::ReadCodex]);
         self.last_read = self.now;
     }
 
@@ -473,10 +523,20 @@ impl App {
         true
     }
 
-    /// Once the account and Claude Code have both answered, the window shows the screen that is due. A window that
-    /// shows another screen keeps it; the Install screen gives way, as its install has finished.
+    /// As Claude Code's, with a change of its own.
+    fn set_codex(&mut self, on: bool, effects: &mut Vec<Effect>) -> bool {
+        if self.codex_setting.is_some() {
+            return false;
+        }
+        self.codex_setting = Some(on);
+        effects.push(Effect::SetCodex(on));
+        true
+    }
+
+    /// Once the account, Claude Code and Codex have all answered, the window shows the screen that is due. A window
+    /// that shows another screen keeps it; the Install screen gives way, as its install has finished.
     fn first_screen(&mut self, effects: &mut Vec<Effect>) {
-        if self.first_answers != Some((true, true)) {
+        if self.first_answers != Some((true, true, true)) {
             return;
         }
         self.first_answers = None;
@@ -502,6 +562,8 @@ impl App {
             Screen::SignIn => self.login.clone().unwrap_or_else(|| screen_at(screen, Phase::Offer, Vec::new())),
             Screen::Claude if self.setting == Some(true) => screen_at(screen, Phase::Working, Vec::new()),
             Screen::Claude => screen_at(screen, Phase::Offer, Vec::new()),
+            Screen::Codex if self.codex_setting == Some(true) => screen_at(screen, Phase::Working, Vec::new()),
+            Screen::Codex => screen_at(screen, Phase::Offer, Vec::new()),
         }
     }
 

@@ -1,7 +1,8 @@
 //! What the menu shows and which screen is due, from the app's state.
 
 use crate::types::{
-    AppState, AppUpdate, ClaudeStatus, CliState, Daemon, DialStatus, MenuAction, MenuItem, NotifyMode, Screen,
+    AppState, AppUpdate, ClaudeStatus, CliState, CodexStatus, Daemon, DialStatus, MenuAction, MenuItem, NotifyMode,
+    Screen,
 };
 
 /// The menu's first, disabled row: the first of these that applies.
@@ -52,6 +53,13 @@ pub fn menu(state: &AppState) -> Vec<MenuItem> {
         ]),
         None => {}
     }
+    match state.codex.as_ref().filter(|codex| codex_available(codex)) {
+        Some(codex) if codex.enabled => items
+            .extend([MenuItem::Text("Codex: On".into()), MenuItem::Action(MenuAction::CodexOff, "Turn off".into())]),
+        Some(_) => items
+            .extend([MenuItem::Text("Codex: Off".into()), MenuItem::Action(MenuAction::CodexOn, "Turn on…".into())]),
+        None => {}
+    }
     // The check is what the dial reports; the item carries the action its click does.
     match settable(state).and_then(|dial| dial.muted) {
         Some(false) => items.push(MenuItem::Check(MenuAction::SoundOff, "Sound".into(), true)),
@@ -82,7 +90,7 @@ pub fn menu(state: &AppState) -> Vec<MenuItem> {
     items
 }
 
-/// The screen the window should show next, in the order they chain: install, sign-in, Claude Code.
+/// The screen the window should show next, in the order they chain: install, sign-in, Claude Code, Codex.
 pub fn due(state: &AppState) -> Option<Screen> {
     if matches!(state.cli, CliState::Installing | CliState::InstallFailed) {
         return Some(Screen::Install);
@@ -91,7 +99,11 @@ pub fn due(state: &AppState) -> Option<Screen> {
         return Some(Screen::SignIn);
     }
     let claude_off = state.claude.as_ref().is_some_and(|claude| available(claude) && !claude.enabled);
-    (claude_off && !state.saved.asked_claude).then_some(Screen::Claude)
+    if claude_off && !state.saved.asked_claude {
+        return Some(Screen::Claude);
+    }
+    let codex_off = state.codex.as_ref().is_some_and(|codex| codex_available(codex) && !codex.enabled);
+    (codex_off && !state.saved.asked_codex).then_some(Screen::Codex)
 }
 
 /// The menu as one log line: its labels joined by ` | `, without separators. A submenu is its label and its checked
@@ -125,6 +137,11 @@ fn settable(state: &AppState) -> Option<&DialStatus> {
 /// Claude Code can be turned on or off here.
 fn available(claude: &ClaudeStatus) -> bool {
     claude.supported && claude.installed
+}
+
+/// Codex can be turned on or off here: the CLI can, and Codex is on this computer.
+fn codex_available(codex: &CodexStatus) -> bool {
+    codex.supported && codex.installed
 }
 
 #[cfg(test)]
@@ -486,11 +503,12 @@ mod tests {
         let asked_claude = Saved { asked_sign_in: true, asked_claude: true, asked_codex: false, ..not_asked };
         let codex_fresh = AppState { signed_in: Some(true), codex: codex_off.clone(), saved: asked_claude, ..fresh };
         assert_eq!(due(&codex_fresh), Some(Screen::Codex));
-        let claude_on = Saved { asked_claude: false, ..asked_claude };
-        assert_eq!(due(&AppState { saved: claude_on, ..codex_fresh.clone() }), Some(Screen::Claude));
-        let claude_enabled = Some(ClaudeStatus { supported: true, installed: true, enabled: true, claude_version: None });
+        let claude_not_asked = Saved { asked_claude: false, ..asked_claude };
+        assert_eq!(due(&AppState { saved: claude_not_asked, ..codex_fresh.clone() }), Some(Screen::Claude));
+        let claude_enabled =
+            Some(ClaudeStatus { supported: true, installed: true, enabled: true, claude_version: None });
         assert_eq!(
-            due(&AppState { saved: claude_on, claude: claude_enabled, ..codex_fresh.clone() }),
+            due(&AppState { saved: claude_not_asked, claude: claude_enabled, ..codex_fresh.clone() }),
             Some(Screen::Codex)
         );
         for codex in [codex(true, true, true), codex(true, false, false), codex(false, true, false), None] {
