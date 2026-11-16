@@ -423,6 +423,43 @@ describe('the devices write the dial skill', () => {
     expect(r.lines.filter((line) => line === 'dial skill: codex list full (64)')).toHaveLength(1)
   })
 
+  it('a refused home costs no file work on the next scan, until dial-skill.json changes', () => {
+    const r = rig()
+    writeAnswer(r.dataDir, 'codex', true)
+    // No skills folder to be had: a file in its place.
+    const noFolder = folder()
+    writeFileSync(join(noFolder, 'skills'), 'mine')
+    // A write that fails: a dial folder that takes no file.
+    const shut = folder()
+    mkdirSync(join(skillsAt(shut), 'dial'))
+    chmodSync(join(shut, 'skills', 'dial'), 0o500)
+    const owners = [ownerIn(noFolder), ownerIn(shut)]
+    r.writer.started()
+    r.writer.scanned(owners)
+    const reads = r.read.answers
+
+    r.writer.scanned(owners)
+    expect(r.read.answers).toBe(reads)
+
+    // Turned on again: each is tried once more.
+    chmodSync(join(shut, 'skills', 'dial'), 0o700)
+    held.push(openSync(join(r.dataDir, DIAL_SKILL_FILE), 'r'))
+    writeAnswer(r.dataDir, 'codex', true)
+    r.writer.scanned(owners)
+    expect(hasSkill(shut)).toBe(true)
+
+    // A full list refuses a new home the same way.
+    const dataDir = folder()
+    writeHomes(dataDir, { claude: [], codex: listedFolders(MAX_HOMES) })
+    const full = rig({ dataDir, answers: () => ({ codex: true }) })
+    const fresh = folder()
+    full.writer.started()
+    full.writer.scanned([ownerIn(fresh)])
+    const fullReads = full.read.answers
+    full.writer.scanned([ownerIn(fresh)])
+    expect(full.read.answers).toBe(fullReads)
+  })
+
   it('refused paths give a reason and no path', () => {
     const r = rig({ answers: () => ({ codex: true }), uid: uid + 1 })
     const [someone, gone] = [folder(), folder()]
