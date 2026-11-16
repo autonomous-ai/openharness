@@ -206,6 +206,85 @@ it('avoids repeated canonical row copies when admitting a new durable owner', as
   expect(fingerprints).toBeLessThanOrEqual(11)
 })
 
+it('normalizes an unchanged durable owner once for synchronous admission conflict checks and merge', async () => {
+  const previous = disk(), { validTerminalRuntime } = await import('./registry.js')
+  const filter = Array.prototype.filter
+  let normalizations = 0
+  const filtered = vi.spyOn(Array.prototype, 'filter').mockImplementation(function (this: unknown[], predicate, thisArg) {
+    if (predicate === validTerminalRuntime) normalizations++
+    return filter.call(this, predicate, thisArg)
+  })
+  let opened
+  try {
+    opened = await registry!.openProcessAgent({ agentId: 'cost-agent-c', engine: 'claude', tmuxPane: '%3',
+      processIdentity: { pid: 1003, executable: '/fixture/claude', startMarker: 'fixture-3' },
+    })
+  } finally { filtered.mockRestore() }
+  const saved = disk()
+  expect(opened?.entry.agentId).toBe('cost-agent-c')
+  expect(saved.map(value => value.agentId)).toEqual([A, B, 'cost-agent-c'])
+  expect(saved.slice(0, 2)).toEqual(previous)
+  expect(saved[2]).toEqual(opened!.entry)
+  expect(io.durable).toEqual([saved])
+  // Twenty-two previously: the same two prior rows were indexed three times before preparation.
+  expect(normalizations).toBeLessThanOrEqual(18)
+})
+
+it('removes a departed baseline owner before placing its durable successor last', async () => {
+  const peer = row(disk(), B)
+  const result = await registry!.confirmEngineExit(A, 'successor')
+  expect(result.state).toBe('confirmed')
+  if (result.state !== 'confirmed' || !result.entry) throw new Error('fixture successor was not confirmed')
+  const saved = disk()
+  expect(saved.map(value => value.agentId)).toEqual([B, result.entry.agentId])
+  expect(saved[0]).toEqual(peer)
+  expect(saved[1]).toEqual(result.entry)
+  expect(io.durable).toEqual([saved])
+  expect(registry!.byAgent(A)).toBeUndefined()
+  expect(registry!.byAgent(result.entry.agentId)).toMatchObject({ engine: 'terminal', sessionId: '', previousAgentId: A })
+})
+
+it('does not carry a removed baseline binding into staged discovery', async () => {
+  const first = registry!.byAgent(A)!, second = registry!.byAgent(B)!
+  Object.assign(first, { sessionId: 'fixture-departed', boundAt: 100, transcriptPath: '/fixture/departed.jsonl',
+    source: 'hook', lastHookAt: 101, processIdentity: { ...first.processIdentity!, startTicks: 1 } })
+  await registry!.flush()
+  io.durable = []
+  await registry!.transaction(async () => {
+    second.processIdentity = { pid: 1001, executable: '/fixture/claude', startMarker: 'fixture-0' }
+    expect(await registry!.confirmEngineExit(A, 'remove')).toEqual({ state: 'confirmed', entry: null })
+  })
+  const saved = disk()
+  expect(saved.map(value => value.agentId)).toEqual([B])
+  expect(saved[0]).toMatchObject({ sessionId: '', boundAt: null, transcriptPath: null, source: null })
+  expect(io.durable).toEqual([saved])
+  expect(registry!.byAgent(A)).toBeUndefined()
+  expect(registry!.bySession('fixture-departed')).toBeUndefined()
+})
+
+it('carries the first changed owner binding when an admission flushes staged discovery', async () => {
+  const first = registry!.byAgent(A)!, second = registry!.byAgent(B)!
+  Object.assign(first, { sessionId: 'fixture-bound', boundAt: 100, transcriptPath: '/fixture/bound.jsonl',
+    source: 'hook', lastHookAt: 101, processIdentity: { ...first.processIdentity!, startTicks: 1 } })
+  await registry!.flush()
+  io.durable = []
+  const opened = await registry!.transaction(async () => {
+    first.title = 'staged discovery'
+    second.processIdentity = { pid: 1001, executable: '/fixture/claude', startMarker: 'fixture-0' }
+    return registry!.openProcessAgent({ agentId: 'cost-agent-c', engine: 'claude', tmuxPane: '%3',
+      processIdentity: { pid: 1003, executable: '/fixture/claude', startMarker: 'fixture-3' },
+    })
+  })
+  const saved = disk()
+  expect(saved.map(value => value.agentId)).toEqual([B, 'cost-agent-c'])
+  expect(saved[0]).toMatchObject({ sessionId: 'fixture-bound', boundAt: 100,
+    transcriptPath: '/fixture/bound.jsonl', source: 'hook', lastHookAt: 101 })
+  expect(saved[1]).toEqual(opened!.entry)
+  expect(io.durable).toEqual([saved])
+  expect(registry!.byAgent(A)).toBeUndefined()
+  expect(registry!.bySession('fixture-bound')?.agentId).toBe(B)
+})
+
 it('keeps canonical JSON bytes for nested objects, arrays, omitted values and literal prototype keys', async () => {
   const { rowFingerprint } = (await import('./registry.js')).saveMergeHelpers
   const nested = { b: 2, a: 1 }

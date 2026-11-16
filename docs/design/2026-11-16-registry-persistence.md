@@ -2176,3 +2176,75 @@ diff checks pass (`/tmp/core-registry-snapshot-cost-v2-types-final.log`). All
 execution above used macOS x64, Node 24.22.2 and at most two test workers. No full
 gate, build or timed workload has run on this correction; independent review and
 source-specific CPU/RSS acceptance remain open.
+
+### Design — reuse the private preparation identity index (2026-11-16)
+
+The exact `9c4f3ad56e` diagnostic used the frozen native artifact and private
+fixture, with collected allocation samples and no forced GC. Its 83 public
+outcomes and 168 memory checkpoints passed; the process and all witnessed
+children exited, output drained, and the private runtime root was removed.
+The manifest is `/tmp/core-registry-allocation-v3-current/manifest.json`, input
+SHA-256 `46122254c6da56ab56bc8c5ff4f5249cc1d83c26b44e1f696da93e6867b5664c`.
+This diagnostic explicitly permitted concurrent tests and is not timing or RSS
+acceptance. Sampled cumulative allocation was 1,643,611,856 bytes; 311,032,488
+were direct `strictPersistedRow` allocations, including 75,953,808 from the
+preparation conflict indices and 26,958,072 from constructing merge indices.
+These roughly 103 MB are six percent of sampled cumulative allocation, not live
+memory. The changed-16 Inspector profile includes idle and blocking fsync wall
+residency and cannot establish the source of the earlier process-CPU regression.
+The frozen RSS and changed-16 CPU failures remain open.
+
+The owned data is the fully reconciled `latest` table read under the private
+registry lock. Reconciliation/rollback finishes before conflict checks. Both
+binding conflict checks and the first merge then read that same table without
+an intervening mutation or await. Keep one lazily constructed `MergeIdentities`
+for these synchronous checks, then transfer it to the first merge. A baseline
+row absent from the captured current table must leave both the merge map and
+the transferred index before any changed row claims identities. Existing
+remove/put operations keep their literal insertion order: replacing a row keeps
+its place, removal and re-addition go last, and carried binding metadata comes
+from the first matching row in that order. Strict parsing's missing date defaults
+are still assigned within this one synchronous preparation turn. No live row is
+cached. The later post-refresh live merge creates its own fresh index.
+
+Ownership/audience/schema: no public or stored format changes, additional reads,
+retained cache, queue, timer, process or identifier. Growth remains bounded by the
+already bounded private table. No lookup survives the save. Every native refresh,
+peer comparison, live-owner/evidence fence, cancellation check, uncertain-image
+recovery and per-caller durable receipt remains fresh and unchanged. No fsync,
+publication or transaction acknowledgment is removed. Platforms are shared
+TypeScript on macOS/Linux/Windows; this workstation is macOS x64 / Node 24.22.2.
+Migration is unnecessary; rollback is a code revert.
+
+Root approved this ownership/order Design before runtime changes. Add a public
+third-admission work budget that forwards actual runtime normalization and checks
+the complete durable receipt and prior-row order; first measure its RED on the
+unchanged runtime. Public successor deletion/order and staged-discovery binding
+carry controls exercise the reused-index path. Retain the existing scan-equivalence
+and carry-order controls, plus held-preparation live mutation, peer, authority,
+uncertainty and cancellation cases. Run focused tests and TypeScript with at most
+two workers first. Profile the candidate before freezing it; root reviews the
+exact diff and schedules frozen acceptance and broad gates. Do not infer an RSS
+fix from reduced sampled allocation.
+
+The first test attempt could not reach fixture setup under the restricted native
+identity sandbox: all twenty cases reported storage-access refusal, preserved in
+`/tmp/core-registry-index-v3-red.log`. The authorized private-fixture run measured
+22 runtime normalizations on the unchanged runtime; all other nineteen controls
+passed (9.18 s, `/tmp/core-registry-index-v3-red-private.log`). Sharing three
+indices as one avoids four parses for two existing rows, so the final budget is
+18. That budget fails at 22 before runtime changes; the additional public control
+for removing a bound baseline before staged discovery passes (1.65 s,
+`/tmp/core-registry-index-v3-red-budget.log`). The removed-baseline case would
+otherwise allow a departed conversation's binding to be carried into the staged
+row. Root approved the scoped index transfer before the implementation.
+
+The implementation changes fourteen runtime lines and removes seven. All 21
+caller controls and six scan/order merge controls pass together (27/27, 10.28 s,
+`/tmp/core-registry-index-v3-green.log`), including the 18-normalization budget.
+The four focused admission, observation, persistence and fingerprint suites pass
+116/116 (49.07 s, `/tmp/core-registry-index-v3-safety.log`). TypeScript and diff
+checks pass (`/tmp/core-registry-index-v3-types.log`). These checks ran on macOS
+x64 / pinned Node 24.22.2, with no more than two test workers. No broad gate or
+acceptance workload has run on this correction; the next artifact is a diagnostic
+allocation profile of the frozen candidate, not permission to clear the RSS gate.

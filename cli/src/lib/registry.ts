@@ -1087,14 +1087,17 @@ export function mergedForSave(
   baselines: ReadonlyMap<string, string>,
   intents: ReadonlyMap<string, ReadonlySet<string>>,
   fingerprint: (row: Record<string, unknown>) => string = rowFingerprint,
+  identities?: MergeIdentities,
 ): Map<string, Record<string, unknown>> {
   const merged = new Map(latest)
   for (const baselineId of baselines.keys()) {
-    if (!currentRows.has(baselineId)) merged.delete(baselineId)
+    if (!currentRows.has(baselineId)) {
+      merged.delete(baselineId)
+      identities?.remove(baselineId)
+    }
   }
-  // Built on the first changed row, as the scan it replaces first read the rows then: a save with no
-  // changed row reads none of them.
-  let identities: MergeIdentities | null = null
+  // Preparation may transfer its index of the same private latest table. Otherwise build on the first
+  // changed row, as the scan first read rows then: an unchanged save needs no index.
   for (const [agentId, current] of currentRows) {
     const baseline = baselines.get(agentId)
     const intended = intents.get(agentId)
@@ -3449,6 +3452,9 @@ class Registry {
           }
           if (!latestOwner) currentRows.delete(bindingCommit.agentId)
         }
+        // Reconciliation is finished. These checks and the first merge read this private table without
+        // yielding; the post-refresh live merge must construct its own index.
+        let identities: MergeIdentities | undefined
         if (bindingCommit && !bindingCommit.metadata && !confirming) {
           if ((latest.has(bindingCommit.agentId) ? rowFingerprint(latest.get(bindingCommit.agentId)) : undefined)
             !== this.persistedBaseline.get(bindingCommit.agentId)) {
@@ -3464,7 +3470,8 @@ class Registry {
           }
           const candidate = bindingCommit.candidate
           const routes = new Set(candidate?.runtimes.map(terminalRouteKey) ?? [])
-          for (const [otherId, other] of new MergeIdentities(latest).sharing(bindingCommit.agentId,
+          identities = new MergeIdentities(latest)
+          for (const [otherId, other] of identities.sharing(bindingCommit.agentId,
             candidate?.processIdentity?.pid, candidate?.sessionId ?? '', routes)) {
             if (!candidate || displacedIds.has(otherId)) continue
             if ((other.engine === candidate.engine && sameProcessIdentity(other.processIdentity, candidate.processIdentity))
@@ -3502,7 +3509,7 @@ class Registry {
             this.persistedBaseline.get(id) !== (currentRows.has(id) ? snapshotFingerprint(currentRows.get(id)!) : undefined))
           : [])
         if (bindingCommit) {
-          const identities = new MergeIdentities(latest)
+          identities ??= new MergeIdentities(latest)
           for (const id of changed) {
             if (bindingCommit.metadata && id === bindingCommit.agentId) continue
             if (confirming && unconfirmed!.affected.has(id)) continue
@@ -3522,7 +3529,7 @@ class Registry {
             }
           }
         }
-        const merged = [...mergedForSave(latest, currentRows, this.persistedBaseline, capturedIntents, snapshotFingerprint).values()]
+        const merged = [...mergedForSave(latest, currentRows, this.persistedBaseline, capturedIntents, snapshotFingerprint, identities).values()]
         const rows = validatedRows(merged)
         if (!rows) throw new Error('registry transaction would violate global identity invariants')
         const serialized = rows.map(persistedRow)
