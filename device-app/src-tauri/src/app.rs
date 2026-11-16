@@ -227,15 +227,30 @@ impl App {
                 // A change that no longer runs (its CLI went away) answers late: nothing reads it.
                 let EngineChange::Running(on) = self.state.claude_change else { return };
                 // Failed or not, the status is read again: a change may have done part of its work. The runner logged
-                // a failure's reason; the menu's row says it failed.
+                // a failure's reason; the menu's row says it failed. A change that ended well shows at once, as the
+                // read may answer late or not at all.
                 effects.push(Effect::ReadClaude);
-                self.state.claude_change = if result.is_ok() { EngineChange::None } else { EngineChange::Failed(on) };
+                self.state.claude_change = if result.is_ok() {
+                    if let Some(status) = &mut self.state.claude {
+                        status.enabled = on;
+                    }
+                    EngineChange::None
+                } else {
+                    EngineChange::Failed(on)
+                };
             }
             // As Claude Code's.
             Event::CodexSet(result) => {
                 let EngineChange::Running(on) = self.state.codex_change else { return };
                 effects.push(Effect::ReadCodex);
-                self.state.codex_change = if result.is_ok() { EngineChange::None } else { EngineChange::Failed(on) };
+                self.state.codex_change = if result.is_ok() {
+                    if let Some(status) = &mut self.state.codex {
+                        status.enabled = on;
+                    }
+                    EngineChange::None
+                } else {
+                    EngineChange::Failed(on)
+                };
             }
             // A failure is tried again at the next start.
             Event::LoginItem(registered) => {
