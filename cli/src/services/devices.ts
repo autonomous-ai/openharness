@@ -32,7 +32,7 @@ import { createClaudeAppAdapter } from '../cable/hosts/claudeApp.js'
 import { createCodexAppAdapter } from '../cable/hosts/codexApp.js'
 import { codexQueueDeps, createCodexQueue, type CodexQueueDeps } from '../cable/hosts/codexQueue.js'
 import { createHerdrAdapter } from '../cable/hosts/herdr.js'
-import { createHerdrClient, herdrClientDeps, watchHerdrSocket, type HerdrClient } from '../cable/hosts/herdrClient.js'
+import { createHerdrClient, herdrClientDeps, type HerdrClient } from '../cable/hosts/herdrClient.js'
 import { HerdrSource } from '../cable/hosts/herdrSource.js'
 import { Inbox } from '../cable/hosts/inbox.js'
 import { LAST_ANSWER_DEADLINE_MS, LAST_ANSWER_MAX_BYTES, readLastAnswer } from '../cable/hosts/lastAnswer.js'
@@ -45,6 +45,7 @@ import { learnApps, readProcessNames } from '../cable/hosts/scannedApp.js'
 import { createTabsAdapter, readTty, type Tab } from '../cable/hosts/tabs.js'
 import { createTmuxAdapter } from '../cable/hosts/tmux.js'
 import type { HostAgentState } from '../cable/hosts/types.js'
+import { watchSocket } from '../cable/hosts/unixSocket.js'
 import { createVscodeAdapter } from '../cable/hosts/vscode.js'
 import { createWeztermAdapter } from '../cable/hosts/wezterm.js'
 import { Notices, type NoticeCaller } from '../cable/notices.js'
@@ -374,7 +375,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    *  Windows, where herdr's socket is a named pipe (herdrSource.ts). */
   const herdr = observed ? new HerdrSource({
     client: herdrClient,
-    watch: (changed) => watchHerdrSocket(herdrAt, changed),
+    watch: (changed) => watchSocket(herdrAt, changed),
     prompt: herdrAdapter.prompt,
     // The command a hooked agent's tap runs (Q6): the dial's move is noted as every tap's is. Only a shown pane is true:
     // herdr's adapter never refuses one, though the noted copy is typed as any adapter's.

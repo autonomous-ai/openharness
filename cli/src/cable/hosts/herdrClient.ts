@@ -15,11 +15,11 @@
  * herdr's answers name people's folders and agents, and the source says what happened in its own fixed words.
  */
 import { randomUUID } from 'node:crypto'
-import { existsSync, lstatSync, watch, type FSWatcher } from 'node:fs'
-import { createConnection, type Socket } from 'node:net'
+import type { Socket } from 'node:net'
 import { homedir } from 'node:os'
-import { dirname, isAbsolute, join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 import { CONTROL, MAX_TEXT, RUN_TIMEOUT_MS } from './orca.js'
+import { connectLines, socketStampOf } from './unixSocket.js'
 
 /** herdr's pane id, `w1:p1` (its own guide). */
 export const HERDR_PANE = /^w[0-9]{1,9}:p[0-9]{1,9}$/
@@ -102,56 +102,11 @@ const failed = (answer: HerdrFailure): HerdrPrompt => answer.fault === 'rejected
   ? { outcome: 'failed', fault: 'rejected', code: answer.code }
   : { outcome: 'failed', fault: answer.fault }
 
-/**
- * One connection that writes `out` once connected, and tells each line that comes back, in order, until the socket is
- * destroyed. `end` is told why it ended: a line past MAX_LINE_BYTES as soon as it is past, before the rest is read; a
- * connection that never opened; one that closed. Unref'd, as each deadline is: a herdr connection never keeps the
- * devices process up.
- */
-function connect(
-  path: string, out: string, line: (text: string) => void, end: (fault: 'refused' | 'ended' | 'oversize') => void,
-): Socket {
-  let opened = false
-  let held: Buffer[] = []
-  let size = 0
-  const socket = createConnection({ path })
-  socket.unref()
-  socket.on('connect', () => {
-    opened = true
-    socket.write(out)
-  })
-  // The close that follows says it.
-  socket.on('error', () => {})
-  socket.on('close', () => end(opened ? 'ended' : 'refused'))
-  socket.on('data', (chunk: Buffer) => {
-    let from = 0
-    while (!socket.destroyed) {
-      const newline = chunk.indexOf(0x0a, from)
-      const piece = chunk.subarray(from, newline === -1 ? chunk.length : newline)
-      size += piece.length
-      if (size > MAX_LINE_BYTES) return end('oversize')
-      held.push(piece)
-      if (newline === -1) return
-      const text = Buffer.concat(held).toString('utf8')
-      held = []
-      size = 0
-      from = newline + 1
-      line(text)
-    }
-  })
-  return socket
-}
-
 export function createHerdrClient(deps: HerdrClientDeps): HerdrClient {
   const socketStamp = (): string | undefined => {
     // herdr's socket on Windows is a named pipe, which this client does not speak.
     if (deps.platform === 'win32') return undefined
-    try {
-      const file = lstatSync(deps.socketPath, { bigint: true })
-      return file.isSocket() && file.uid === BigInt(deps.uid) ? `${file.ino}:${file.ctimeNs}` : undefined
-    } catch {
-      return undefined
-    }
+    return socketStampOf(deps.socketPath, deps.uid)
   }
 
   const request = (method: string, params: Record<string, unknown>) => new Promise<HerdrAnswer>((resolve) => {
@@ -167,7 +122,7 @@ export function createHerdrClient(deps: HerdrClientDeps): HerdrClient {
     }
     const deadline = setTimeout(() => finish({ ok: false, fault: 'timeout' }), RUN_TIMEOUT_MS)
     deadline.unref()
-    const socket = connect(deps.socketPath, `${JSON.stringify({ id, method, params })}\n`, (text) => {
+    const socket = connectLines(deps.socketPath, `${JSON.stringify({ id, method, params })}\n`, MAX_LINE_BYTES, (text) => {
       const body = parse(text)
       finish(body ? answerOf(body, id) : { ok: false, fault: 'bad_json' })
     }, (fault) => finish({ ok: false, fault }))
@@ -196,7 +151,7 @@ export function createHerdrClient(deps: HerdrClientDeps): HerdrClient {
     deadline.unref()
     const id = randomUUID()
     const out = `${JSON.stringify({ id, method: 'events.subscribe', params: { subscriptions: entries } })}\n`
-    socket = connect(deps.socketPath, out, (text) => {
+    socket = connectLines(deps.socketPath, out, MAX_LINE_BYTES, (text) => {
       const body = parse(text)
       if (!body) return end('bad_json')
       if (started) {
@@ -235,43 +190,4 @@ export function createHerdrClient(deps: HerdrClientDeps): HerdrClient {
   }
 
   return { request, subscribe, prompt, socketStamp }
-}
-
-/** Calls `changed` on each change in the nearest existing folder of `<config>/herdr`, `<config>` and `home`, moving
- *  to a nearer one as it appears, and out of one that is removed. Returns its stop. Never throws: a watch that cannot be
- *  held tells nothing. */
-export function watchHerdrSocket(deps: Pick<HerdrClientDeps, 'socketPath' | 'home'>, changed: () => void): () => void {
-  const folders = [dirname(deps.socketPath), dirname(dirname(deps.socketPath)), deps.home]
-  let held: { watcher: FSWatcher; at: number } | undefined
-  const hold = () => {
-    // inotify ends the watch of a folder that is removed, so a herdr that made it again would never be seen.
-    if (held && !existsSync(folders[held.at])) {
-      held.watcher.close()
-      held = undefined
-    }
-    for (let at = 0; at < (held?.at ?? folders.length); at++) {
-      let watcher: FSWatcher
-      try {
-        watcher = watch(folders[at], { persistent: false }, () => {
-          hold()
-          changed()
-        })
-      } catch {
-        continue
-      }
-      // A watch that fails tells nothing more, and throws nothing into the devices process. Its folder gone, it moves out.
-      watcher.on('error', () => {
-        watcher.close()
-        hold()
-      })
-      held?.watcher.close()
-      held = { watcher, at }
-      return
-    }
-  }
-  hold()
-  return () => {
-    held?.watcher.close()
-    held = undefined
-  }
 }
