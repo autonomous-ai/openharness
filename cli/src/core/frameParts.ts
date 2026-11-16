@@ -83,20 +83,25 @@ export function createFrameParts(deps: {
       declarations.set(service, { fields: new Set(declaration.fields), having: declaration.having })
     }
   }
-  type Part = NonNullable<ReturnType<typeof snapshot>>
-  const agents = new Map<string, { epoch: string; parts: Map<string, Part>; merged: Fields }>()
+  type Part = NonNullable<ReturnType<typeof snapshot>> & { service: string; having: Declaration['having'] }
+  const agents = new Map<string, { epoch: string; parts: Part[]; merged: Fields }>()
   const scopes = new Map<string, object>()
   let entries = 0, bytes = 0
   const refused = (error: string): Record<string, unknown> => { log(`[frames] ${error}`); return { error } }
-  const matches = (service: string, session: RegisteredSession): boolean =>
-    declarations.get(service)!.having?.every(key => Object.hasOwn(session, key) && !!(session as unknown as Fields)[key]) ?? true
-  const rebuild = (agent: { parts: Map<string, Part>; merged: Fields }): void => {
-    agent.merged = Object.freeze(Object.assign({}, ...[...agent.parts.values()].map(part => part.fields)))
+  const matches = (having: Declaration['having'], session: RegisteredSession): boolean => {
+    if (having) for (let i = 0; i < having.length; i++) {
+      const key = having[i]
+      if (!Object.hasOwn(session, key) || !(session as unknown as Fields)[key]) return false
+    }
+    return true
+  }
+  const rebuild = (agent: { parts: Part[]; merged: Fields }): void => {
+    agent.merged = Object.freeze(Object.assign({}, ...agent.parts.map(part => part.fields)))
   }
   const forget = (agentId: string): void => {
     const before = agents.get(agentId)
     if (!before) return
-    for (const part of before.parts.values()) { entries--; bytes -= part.bytes }
+    for (const part of before.parts) { entries--; bytes -= part.bytes }
     agents.delete(agentId)
     const session = deps.core.agents.byAgent(agentId)
     if (session) deps.core.agents.sync(session)
@@ -111,25 +116,31 @@ export function createFrameParts(deps: {
     if (deps.available?.(service) === false) return refused('FRAME_PART_UNAVAILABLE')
     if (typeof agentId !== 'string' || typeof epoch !== 'string' || epoch !== deps.epoch(agentId)) return refused('FRAME_PART_STALE')
     const session = deps.core.agents.byAgent(agentId)
-    if (!session || !matches(service, session)) return refused('FRAME_PART_STALE')
+    if (!session || !matches(declaration.having, session)) return refused('FRAME_PART_STALE')
     let part: ReturnType<typeof snapshot>
     try { part = snapshot(raw, declaration.fields) } catch { return refused('FRAME_PART_INVALID') }
     if (!part) return refused('FRAME_PART_INVALID')
     let agent = agents.get(agentId)
     if (agent && agent.epoch !== epoch) { forget(agentId); agent = undefined }
-    const before = agent?.parts.get(service)
+    const index = agent?.parts.findIndex(part => part.service === service) ?? -1
+    const before = index < 0 ? undefined : agent!.parts[index]
     if (before?.wire === part.wire) return { ok: true }
     const empty = Object.keys(part.fields).length === 0
     if ((!empty && !before && entries >= FRAME_PART_ENTRIES) || bytes - (before?.bytes ?? 0) + (empty ? 0 : part.bytes) > FRAME_PART_TOTAL_BYTES) return refused('FRAME_PART_LIMIT')
     if (!agent) {
       if (empty) return { ok: true }
-      agent = { epoch: epoch as string, parts: new Map(), merged: EMPTY }
+      agent = { epoch: epoch as string, parts: [], merged: EMPTY }
       agents.set(agentId, agent)
     }
     if (before) { entries--; bytes -= before.bytes }
-    if (empty) agent.parts.delete(service)
-    else { agent.parts.set(service, part); entries++; bytes += part.bytes }
-    if (!agent.parts.size) agents.delete(agentId)
+    if (empty) { if (before) agent.parts.splice(index, 1) }
+    else {
+      const next = { ...part, service, having: declaration.having }
+      if (before) agent.parts[index] = next
+      else agent.parts.push(next)
+      entries++; bytes += part.bytes
+    }
+    if (!agent.parts.length) agents.delete(agentId)
     else rebuild(agent)
     // A frame before terminal attachment closes a viewer tile; the attach's own sync publishes what arrived first.
     if (deps.core.agents.terminalAvailable(agentId)) deps.core.agents.sync(session)
@@ -139,11 +150,15 @@ export function createFrameParts(deps: {
     const agent = agents.get(agentId), session = deps.core.agents.byAgent(agentId)
     if (!agent || !session || agent.epoch !== deps.epoch(agentId)) return EMPTY
     // A row that lost a required field cannot keep showing the old service's projection.
-    for (const [service, part] of agent.parts) if (deps.available?.(service) === false || !matches(service, session)) {
-      agent.parts.delete(service); entries--; bytes -= part.bytes
-      rebuild(agent)
+    // An ordered array avoids allocating a Map iterator and entry pairs for every rendered frame.
+    for (let i = 0; i < agent.parts.length; i++) {
+      const part = agent.parts[i]
+      if (deps.available?.(part.service) === false || !matches(part.having, session)) {
+        agent.parts.splice(i--, 1); entries--; bytes -= part.bytes
+        rebuild(agent)
+      }
     }
-    if (!agent.parts.size) agents.delete(agentId)
+    if (!agent.parts.length) agents.delete(agentId)
     return agent.merged
   }
   return {
@@ -169,10 +184,11 @@ export function createFrameParts(deps: {
     disabled(service: string): void {
       scopes.delete(service)
       for (const [agentId, agent] of agents) {
-        const part = agent.parts.get(service)
-        if (!part) continue
-        agent.parts.delete(service); entries--; bytes -= part.bytes
-        if (!agent.parts.size) agents.delete(agentId)
+        const index = agent.parts.findIndex(part => part.service === service)
+        if (index < 0) continue
+        const part = agent.parts[index]
+        agent.parts.splice(index, 1); entries--; bytes -= part.bytes
+        if (!agent.parts.length) agents.delete(agentId)
         else rebuild(agent)
         const session = deps.core.agents.byAgent(agentId)
         if (session) deps.core.agents.sync(session)

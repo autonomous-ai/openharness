@@ -37,6 +37,31 @@ describe('service frame parts', () => {
     expect(publish('agentBrowser', { browser: { history } })).toEqual({ ok: true })
     expect(parts.read('a')).toEqual({ browser: { history } })
   })
+  it('reads unchanged parts without allocating Map iterators, preserving order and live requirements', () => {
+    const { publish, parts, rows } = setup()
+    publish('viewers', { dshName: 'Drawing', viewerUrl: 'http://127.0.0.1:7/' })
+    publish('agentBrowser', { browser: { state: 'ready' } })
+    const original = Map.prototype[Symbol.iterator]
+    let iterators = 0
+    const iterator = vi.spyOn(Map.prototype, Symbol.iterator).mockImplementation(function (this: Map<unknown, unknown>) {
+      iterators++
+      return original.call(this)
+    })
+    const observed: Readonly<Record<string, unknown>>[] = []
+    try {
+      for (let i = 0; i < 100; i++) observed.push(parts.forFrame(rows.get('a')!)())
+    } finally { iterator.mockRestore() }
+    expect(observed).toHaveLength(100)
+    expect(observed.every(value => value === observed[0])).toBe(true)
+    expect(observed[0]).toEqual({ dshName: 'Drawing', viewerUrl: 'http://127.0.0.1:7/', browser: { state: 'ready' } })
+    expect(Object.keys(observed[0])).toEqual(['dshName', 'viewerUrl', 'browser'])
+    delete rows.get('a')!.dsh
+    expect(parts.read('a')).toEqual({ browser: { state: 'ready' } })
+    parts.disabled('agentBrowser')
+    expect(parts.read('a')).toEqual({})
+    expect(iterators).toBe(0)
+  })
+
   it('both existing services publish independently, replacing their own whole part', () => {
     const { publish, parts, core } = setup()
     expect(publish('viewers', { dsh: 'renamed', viewerUrl: null })).toEqual({ ok: true })
@@ -52,6 +77,20 @@ describe('service frame parts', () => {
     publish('viewers', {})
     expect(parts.read('a')).toEqual({})
     expect(publish('viewers', {})).toEqual({ ok: true })
+  })
+
+  it('clears an absent service without removing another, and appends only a newly returning service', () => {
+    const { publish, parts } = setup()
+    publish('agentBrowser', { browser: { state: 'ready' } })
+    publish('viewers', {})
+    expect(parts.read('a')).toEqual({ browser: { state: 'ready' } })
+    publish('viewers', { dshName: 'Drawing' })
+    expect(Object.keys(parts.read('a'))).toEqual(['browser', 'dshName'])
+    publish('agentBrowser', {})
+    publish('agentBrowser', { browser: { state: 'starting' } })
+    publish('viewers', { dshName: 'Updated' })
+    expect(Object.keys(parts.read('a'))).toEqual(['dshName', 'browser'])
+    expect(parts.read('a')).toEqual({ dshName: 'Updated', browser: { state: 'starting' } })
   })
 
   it('captures the run before frame work and refuses old connection or lifecycle authority', () => {

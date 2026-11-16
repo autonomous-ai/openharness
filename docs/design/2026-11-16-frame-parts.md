@@ -38,6 +38,43 @@ unchanged. Stream routing and Browser wake behavior are separate work.
 
 ## Validation selected before implementation
 
+### Projection allocation correction
+
+The first frozen natural-GC comparison found a 4.24–8.25% CPU increase and
+1.34–18.02% RSS increase at 32/512/2048 rows. All byte-parity checks passed; the
+results are retained in `/tmp/core-frame-cost/result.json` and are not acceptance
+clearance. A separate 200,000-frame Inspector profile attributes 53.8 MB of new
+sampled allocations to `read`, principally its Map-entry iteration and per-read
+predicate, and another 15.9 MB to projection/callback construction. Inspector
+results are diagnostic only (`/tmp/core-frame-profile-v1/attribution.json`).
+
+Replace each agent's part Map with one ordered array of its existing bounded
+parts. Publication and removal preserve field order; projection visits that
+array directly, without creating Map-entry pairs or a predicate closure.
+Required-field, current-row, lifecycle and service-availability checks still
+run on each read. This changes no authority, persisted data, client contract,
+entry/byte limit or failure behavior, and adds no parallel cache. The public
+reader test first measures the iterator allocation being removed, while
+asserting both services' values and immediate removal when a required field or
+service disappears. Run frame boundary/lease tests, wire goldens and per-file
+coverage plus TypeScript before handing the result to independent review.
+Final CPU/RSS comparison belongs to the parent after the corrected source is
+frozen; no improvement is inferred from the allocation count alone.
+
+The reader regression failed first with 100 iterators for 100 frames, then
+passed with zero. The final narrow run passed 81 cases across frame parts,
+lifecycle and frame goldens, with 100% statements, branches, functions and lines
+in `core/frameParts.ts`; TypeScript passed. The earlier 80-case run passed
+behavior but missed the absent-service clear branch, now covered with public
+ordering assertions. A changed-source heap diagnostic over the same 200,000
+frames reduced sampled allocation from 1,339,158,112 to 1,287,872,120 bytes
+(3.83%); `read` no longer appears as a sampled allocator. Output length and final
+frame digest match the original profile. This is an instrumented diagnostic,
+not CPU/RSS acceptance. Logs: `/tmp/core-frame-projection-array-red.log`,
+`/tmp/core-frame-projection-array-green-final.log` and
+`/tmp/core-frame-projection-array-types-final.log`; diagnostic attribution:
+`/tmp/core-frame-profile-v2/attribution.json`.
+
 Independent acceptance reproduced 5,000 outstanding empty publications while only
 one agent was live at a time. The byte bound alone allowed ended lifecycles to
 retain too many pending query promises and deadlines. Bound the existing pending
