@@ -2240,6 +2240,62 @@ describe('ObservedSource panes', () => {
     expect(actions.claudeShow).not.toHaveBeenCalled()
     expect(actions.open).not.toHaveBeenCalled()
   })
+
+  it('byPane: the live agent whose pane of that adapter has that id, the one heard from last of two, none for another adapter, an ended session or an unknown id', () => {
+    const { actions } = fakeActions()
+    const { src, ev, clock } = setup({ actions })
+    src.ingest(ev('session-start', { sessionId: 'a', callerPid: 100, ...inOrca() }))
+    clock.t += 1_000
+    src.ingest(ev('session-start', { sessionId: 'b', callerPid: 101, ...inOrca() }))
+    expect(src.byPane('orca', HANDLE)).toMatchObject({ sessionId: 'b' })
+    clock.t += 1_000
+    src.ingest(ev('turn-start', { sessionId: 'a', callerPid: 100, ...inOrca() }))
+    expect(src.byPane('orca', HANDLE)).toMatchObject({ sessionId: 'a' })
+    expect(src.byPane('tabs', HANDLE)).toBeUndefined()
+    expect(src.byPane('orca', OTHER)).toBeUndefined()
+    src.ingest(ev('session-end', { sessionId: 'a', callerPid: 100, ...inOrca() }))
+    src.ingest(ev('session-end', { sessionId: 'b', callerPid: 101, ...inOrca() }))
+    expect(src.byPane('orca', HANDLE)).toBeUndefined()
+  })
+
+  it('a session ended in an Orca terminal and another started there: the pane is the live one\'s', () => {
+    const { actions } = fakeActions()
+    const { src, ev, clock } = setup({ actions })
+    src.ingest(ev('session-start', { sessionId: 'old', callerPid: 100, ...inOrca() }))
+    clock.t += 1_000
+    src.ingest(ev('session-start', { sessionId: 'new', callerPid: 101, ...inOrca() }))
+    // The ended one is heard from last, and its end is still listed.
+    clock.t += 1_000
+    src.ingest(ev('session-end', { sessionId: 'old', callerPid: 100, ...inOrca() }))
+    expect(src.list()).toHaveLength(2)
+    expect(src.byPane('orca', HANDLE)).toMatchObject({ sessionId: 'new' })
+  })
+
+  it('paneOf: a live agent\'s pane id of that adapter; none for an agent in tmux inside Orca, another adapter, an ended session or an unknown agent', () => {
+    const { actions } = fakeActions()
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('session-start', { sessionId: 'orca', callerPid: 100, ...inOrca() }))
+    src.ingest(ev('session-start', { sessionId: 'tmux', callerPid: 101,
+      hostHints: { TMUX_PANE: '%3', ORCA_TERMINAL_HANDLE: HANDLE } }))
+    const id = (sessionId: string) => src.list().find((a) => a.sessionId === sessionId)!.id
+    expect(src.paneOf(id('orca'), 'orca')).toBe(HANDLE)
+    expect(src.paneOf(id('tmux'), 'orca')).toBeUndefined()
+    expect(src.paneOf(id('orca'), 'tmux')).toBeUndefined()
+    expect(src.paneOf('observed:unknown', 'orca')).toBeUndefined()
+    src.ingest(ev('session-end', { sessionId: 'orca', callerPid: 100, ...inOrca() }))
+    expect(src.paneOf(id('orca'), 'orca')).toBeUndefined()
+  })
+
+  it('a session resumed in another Orca terminal is found by its new handle alone', () => {
+    const { actions } = fakeActions()
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('session-start', inOrca()))
+    src.ingest(ev('session-start', inOrca(OTHER)))
+    const agent = src.list()[0]
+    expect(src.byPane('orca', OTHER)).toMatchObject({ id: agent.id })
+    expect(src.byPane('orca', HANDLE)).toBeUndefined()
+    expect(src.paneOf(agent.id, 'orca')).toBe(OTHER)
+  })
 })
 
 // An agent in Terminal, iTerm2 or Ghostty has a tab a rest selects, by the tty of its process
