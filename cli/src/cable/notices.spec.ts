@@ -44,6 +44,19 @@ describe('Notices', () => {
     expect(asks()[0][3]).toEqual([{ key: 'notice', q: 'Kết nối VPN ? ??', options: ['In Orca'] }])
   })
 
+  // 120 letters of three bytes each are 360 bytes: the dial's drawer row keeps 239, its question 255.
+  it('a line too long in bytes for the dial is cut between letters, with …', () => {
+    const { notices, asks } = desk()
+    notices.notify(notice('ế'.repeat(120)))
+    const [{ q }] = asks()[0][3] as Array<{ q: string }>
+    expect(q).toBe(`${'ế'.repeat(78)}…`)
+    expect(Buffer.byteLength(q, 'utf8')).toBeLessThanOrEqual(239)
+    expect(notices.rows('machine-1')[0].text).toBe(q)
+    const fits = `${'ế'.repeat(79)}ab`
+    notices.notify(notice(fits, 'a2'))
+    expect((asks()[1][3] as Array<{ q: string }>)[0].q).toBe(fits)
+  })
+
   it('no line of the log holds the text, a session id or a folder', () => {
     const { notices, state, log } = desk()
     notices.notify(notice(VPN, 'sess-7f3a'))
