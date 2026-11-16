@@ -10,6 +10,7 @@ import { type ChildProcess, execFile, spawn } from 'node:child_process'
 import { existsSync, realpathSync, statSync } from 'node:fs'
 import { resolveBinaryOnPath } from '../../lib/binaryOnPath.js'
 import type { HostAdapter } from './adapter.js'
+import { APP_BUNDLES } from './hostDetect.js'
 import { observedTitle } from './observedTitle.js'
 import type { PaneSwitch } from './types.js'
 
@@ -161,6 +162,7 @@ export function createOrcaAdapter(deps: OrcaDeps): HostAdapter & Required<Pick<H
   return {
     id: 'orca',
     tap: 'before',
+    bundle: APP_BUNDLES.orca,
     paneOf: (place) => {
       if (MULTIPLEXERS.has(place.host)) return undefined
       const handle = place.hints.ORCA_TERMINAL_HANDLE

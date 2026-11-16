@@ -366,10 +366,13 @@ export class ObservedSource implements HostSource {
     return e && this.live(e) ? this.shownOnly(e).find(({ adapter, pane }) => rest(adapter, pane)) : undefined
   }
 
-  /** What a tap opens: its app, and the first of its panes the opener brings forward. Asked at each look, as a rest's. */
+  /** What a tap opens: its app, and the first of its panes the opener brings forward. Asked at each look, as a rest's.
+   *  An agent placed by its caller has had no hook to name its app: the adapter it was placed in names it. */
   private target(e: Entry): OpenTarget {
     const near = this.shownOnly(e).find(({ adapter, pane }) => tapped(adapter, pane))
-    return { ...(e.bundle ? { bundle: e.bundle } : {}), ...(near ? { pane: near.pane } : {}) }
+    const placed = near && !e.panes.includes(near)
+    const bundle = e.bundle ?? (placed ? near.adapter.bundle : undefined)
+    return { ...(bundle ? { bundle } : {}), ...(near ? { pane: near.pane } : {}) }
   }
 
   /** What a rest and a tap may show: its panes, and in an adapter where it has none, the pane its caller placed it at. A

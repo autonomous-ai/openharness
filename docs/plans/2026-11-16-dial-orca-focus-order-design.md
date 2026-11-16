@@ -160,6 +160,10 @@ is "harness root" sits in a tab he named "PM"; the dial must say "PM", and today
   reach it, and `paneOf` and `byPane` (prompt and focus follow) never return it. A place that comes or goes tells the
   change, as what a tap reaches changed. The devices process gives it the Orca adapter's names after each read. Only
   Orca agents; nothing in the core.
+- **A tap on a placed agent on macOS** (PM, 2026-11-16): it has had no hook, so no app of its own to bring forward. The
+  adapter it was placed in declares its app's bundle (Orca's, `com.stablyai.orca`, from `APP_BUNDLES`): the tap switches
+  to its placed terminal, then brings Orca forward, in the order the adapter's `tap: 'before'` says. A bundle the agent's
+  own hook gave still wins; words still go nowhere.
 
 ### Measures
 
