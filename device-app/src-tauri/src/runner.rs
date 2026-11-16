@@ -455,7 +455,8 @@ mod tests {
     use crate::tabs::{NoTabs, Selected, TabApp, TabError, TabScripts};
     use crate::testing::{Fake, alive, fake_harness, wait_gone};
     use crate::types::{
-        ClaudeStatus, DialStatus, Effect, Event, LoginEvent, MenuItem, NotifyMode, Output, Saved, UpdateFailure,
+        ClaudeStatus, CodexStatus, DialStatus, Effect, Event, LoginEvent, MenuItem, NotifyMode, Output, Saved,
+        UpdateFailure,
     };
     use crate::update::AppUpdater;
     use std::collections::VecDeque;
@@ -881,6 +882,22 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn a_codex_change_runs_one_command_and_answers() {
+        let w = world();
+        assert!(w.runner.find_cli());
+        w.fake.script("device codex status --json", &[r#"{"supported":true,"installed":true,"enabled":false}"#]);
+        let off = CodexStatus { supported: true, installed: true, enabled: false };
+        assert_eq!(w.answer(Effect::ReadCodex), Event::Codex(Some(off)));
+        w.fake.script("device codex enable", &[]);
+        assert_eq!(w.answer(Effect::SetCodex(true)), Event::CodexSet(Ok(())));
+        w.fake.script("device codex disable", &["@err Codex is busy.", "@exit 1"]);
+        assert_eq!(w.answer(Effect::SetCodex(false)), Event::CodexSet(Err("Codex is busy.".into())));
+        assert!(w.logged("codex: Codex is busy."));
+        assert_eq!(w.fake.calls(), ["device codex status --json", "device codex enable", "device codex disable"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn a_door_that_fails_is_one_log_line() {
         let w = world();
         w.doubles.failing.store(true, Ordering::SeqCst);
@@ -921,8 +938,10 @@ mod tests {
             Effect::RunStart,
             Effect::ReadAuth,
             Effect::ReadClaude,
+            Effect::ReadCodex,
             Effect::RunLogin,
             Effect::SetClaude(true),
+            Effect::SetCodex(true),
         ];
         for effect in needs_one {
             assert_eq!(w.answer(effect.clone()), Event::Cli(false), "{effect:?}");
@@ -995,9 +1014,11 @@ mod tests {
             Effect::RunInstall,
             Effect::ReadAuth,
             Effect::ReadClaude,
+            Effect::ReadCodex,
             Effect::RunLogin,
             Effect::CancelLogin,
             Effect::SetClaude(true),
+            Effect::SetCodex(true),
             Effect::SetSound(true),
             Effect::SetNotify(NotifyMode::You),
             Effect::OpenUrl("https://id.example/a".into()),
@@ -1448,27 +1469,36 @@ mod tests {
         let w = world();
         w.fake.script("hardware watch --json", &[r#"{"attached":true,"fw":"0.0.95"}"#, "@stdin"]);
         w.fake.script("auth status --json", &[r#"{"loggedIn":true}"#]);
-        // No Claude Code script: this CLI has no such command.
+        // No Claude Code or Codex script: this CLI has no such commands.
         let (mut app, mut effects) = App::new(Saved::default(), w.runner.find_cli(), false, B);
         let connected = MenuItem::Text("Dial connected · 0.0.95".into());
-        let (mut dial, mut auth, mut claude) = (false, false, false);
+        let (mut dial, mut auth, mut claude, mut codex) = (false, false, false, false);
         loop {
             for effect in effects {
                 if let Some(Effect::Menu(items)) = w.runner.run(effect) {
                     dial |= items.first() == Some(&connected);
                 }
             }
-            if dial && auth && claude {
+            if dial && auth && claude && codex {
                 break;
             }
             let event = w.next();
             auth |= event == Event::Auth(Some(true));
             claude |= event == Event::Claude(None);
+            codex |= event == Event::Codex(None);
             effects = app.handle(event);
         }
         let mut calls = w.fake.calls();
         calls.sort();
-        assert_eq!(calls, ["auth status --json", "device claude status --json", "hardware watch --json"]);
+        assert_eq!(
+            calls,
+            [
+                "auth status --json",
+                "device claude status --json",
+                "device codex status --json",
+                "hardware watch --json"
+            ]
+        );
     }
 
     #[cfg(unix)]

@@ -131,8 +131,8 @@ fn available(claude: &ClaudeStatus) -> bool {
 mod tests {
     use super::*;
     use crate::types::{
-        AppState, AppUpdate, ClaudeStatus, CliState, Daemon, DialStatus, MenuAction, MenuItem, NotifyMode, Saved,
-        Screen,
+        AppState, AppUpdate, ClaudeStatus, CliState, CodexStatus, Daemon, DialStatus, MenuAction, MenuItem, NotifyMode,
+        Saved, Screen,
     };
     use MenuItem::{Action, Check, Separator, Submenu, Text};
 
@@ -174,8 +174,16 @@ mod tests {
             dial: Some(dial(true, Some("0.0.95"))),
             signed_in: Some(true),
             claude: Some(ClaudeStatus { supported: true, installed: true, enabled: true, claude_version: None }),
+            codex: None,
             desktop_installed: true,
-            saved: Saved { version: 1, cli_seen: true, asked_sign_in: true, asked_claude: true, login_item: true },
+            saved: Saved {
+                version: 1,
+                cli_seen: true,
+                asked_sign_in: true,
+                asked_claude: true,
+                asked_codex: true,
+                login_item: true,
+            },
             app_update: AppUpdate::None,
         }
     }
@@ -279,6 +287,36 @@ mod tests {
         for claude in without {
             let items = menu(&AppState { claude: claude.clone(), ..state() });
             assert_eq!(items[..3], [text("Dial connected · 0.0.95"), text("Signed in"), Separator], "{claude:?}");
+        }
+    }
+
+    fn codex(supported: bool, installed: bool, enabled: bool) -> Option<CodexStatus> {
+        Some(CodexStatus { supported, installed, enabled })
+    }
+
+    #[test]
+    fn the_codex_rows() {
+        let with = |codex| menu(&AppState { codex, dial: Some(sound(Some(false))), ..state() });
+        assert_eq!(
+            with(codex(true, true, true)),
+            vec![
+                text("Dial connected · 0.0.95"),
+                text("Signed in"),
+                text("Claude Code: On"),
+                act(MenuAction::ClaudeOff, "Turn off"),
+                text("Codex: On"),
+                act(MenuAction::CodexOff, "Turn off"),
+                Check(MenuAction::SoundOff, "Sound".into(), true),
+                Separator,
+                act(MenuAction::OpenHarness, "Open Harness"),
+                act(MenuAction::Quit, "Quit"),
+            ]
+        );
+        assert_eq!(with(codex(true, true, false))[4..6], [text("Codex: Off"), act(MenuAction::CodexOn, "Turn on…")]);
+        for codex in [codex(false, true, true), codex(true, false, true), None] {
+            let items = with(codex.clone());
+            assert!(!items.iter().any(|item| matches!(item, Text(label) if label.starts_with("Codex"))), "{codex:?}");
+            assert_eq!(items[4], Check(MenuAction::SoundOff, "Sound".into(), true), "{codex:?}");
         }
     }
 
@@ -440,8 +478,26 @@ mod tests {
         }
         assert_eq!(due(&AppState { signed_in: Some(true), claude: None, ..fresh.clone() }), None);
 
-        assert_eq!(due(&AppState { saved: state().saved, ..fresh }), None);
+        assert_eq!(due(&AppState { saved: state().saved, ..fresh.clone() }), None);
         assert_eq!(due(&state()), None);
+
+        // Codex comes after Claude Code, on the same terms.
+        let codex_off = codex(true, true, false);
+        let asked_claude = Saved { asked_sign_in: true, asked_claude: true, asked_codex: false, ..not_asked };
+        let codex_fresh = AppState { signed_in: Some(true), codex: codex_off.clone(), saved: asked_claude, ..fresh };
+        assert_eq!(due(&codex_fresh), Some(Screen::Codex));
+        let claude_on = Saved { asked_claude: false, ..asked_claude };
+        assert_eq!(due(&AppState { saved: claude_on, ..codex_fresh.clone() }), Some(Screen::Claude));
+        let claude_enabled = Some(ClaudeStatus { supported: true, installed: true, enabled: true, claude_version: None });
+        assert_eq!(
+            due(&AppState { saved: claude_on, claude: claude_enabled, ..codex_fresh.clone() }),
+            Some(Screen::Codex)
+        );
+        for codex in [codex(true, true, true), codex(true, false, false), codex(false, true, false), None] {
+            assert_eq!(due(&AppState { codex: codex.clone(), ..codex_fresh.clone() }), None, "{codex:?}");
+        }
+        let asked_codex = Saved { asked_codex: true, ..asked_claude };
+        assert_eq!(due(&AppState { saved: asked_codex, ..codex_fresh }), None);
     }
 
     #[test]

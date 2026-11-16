@@ -386,7 +386,14 @@ mod tests {
 
     #[test]
     fn state_json_keys() {
-        let keys = json!({"version":1,"cliSeen":false,"askedSignIn":false,"askedClaude":false,"loginItem":false});
+        let keys = json!({
+            "version": 1,
+            "cliSeen": false,
+            "askedSignIn": false,
+            "askedClaude": false,
+            "askedCodex": false,
+            "loginItem": false
+        });
         assert_eq!(serde_json::to_value(Saved::default()).unwrap(), keys);
         assert_eq!(serde_json::from_value::<Saved>(keys).unwrap(), Saved::default());
     }
