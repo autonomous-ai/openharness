@@ -344,3 +344,48 @@ This remains PR1: lifecycle and flag ownership. Generic frame parts and stream
 consolidation remain PR2; Git is still blocked on frame parts. Final integration,
 native validation, broader gates and performance acceptance remain with the
 coordinator. Evidence hashes: `/tmp/core-browser-compatibility-migration-evidence.json`.
+
+## Final lifecycle acceptance, 16 November
+
+The combined lifecycle and credential-safe metadata change passed independent review,
+TypeScript, 6,719 local gate cases and all 21 native service/Browser/custody cases on
+macOS x64 with Node 24.22.2. Core, harnessd, portability and Resume coverage are 100%.
+The executed head is `091b740d80ffabf0702863321bd8197a85635a53`; final source
+`ab5e73f126fba4ac055eec8f0d4be869e0963ab8` changes only one blank EOF line and
+builds a byte-identical CLI bundle. Integration of main `8ee115aa` adds only the
+separately validated Windows test fixture and its rules documentation.
+
+One fixed quiet ABBA comparison used four fresh processes, 16 fake agents, two
+active agents and two windows with four terminal streams. Each process completed
+30-second empty, populated-idle and active phases after warm-up; all 12 phases,
+eight turns per process, output drainage and private-fixture cleanup passed. The
+baseline `1c3a0ed6` includes current-main input and credential-safe metadata, so
+this comparison isolates lifecycle extraction; it does not replace the original
+credential-projection cost evidence. Browser is off and no Podman performance is
+claimed. No retry, dropped sample or forced GC was used.
+
+| Phase | Core CPU, percent of one core | Mean RSS, MiB |
+| --- | ---: | ---: |
+| Empty | 0.4148 → 0.4239 | 99.15 → 102.12 |
+| 16 agents idle | 1.0210 → 1.0286 | 162.72 → 156.38 |
+| Active | 5.3932 → 5.3430 | 164.35 → 157.72 |
+
+Complete-turn p95 was 6898.8 → 6917.9 ms, including the fixture's deliberate
+roughly five-second engine delay; it is not terminal echo latency. These two
+processes per side do not establish statistical significance. Service, engine and
+tmux CPU are outside the core total. Master CPU remains separately reported at
+coarse process-sampling resolution. The complete summary SHA-256 is
+`8ac33e9ff99436750a4c25b6c85a26a33785e0150b5bab5feeef6b3074abc38a`;
+the fixed-plan SHA-256 is
+`f92e92d0e35972d988afa50b85fc19547f58fd08f476d9ea725c6b1630e9115e`.
+
+Design disposition: accept this lifecycle increment with its measured mixed
+costs retained. It removes feature lifecycle ownership and fixes cancellation,
+migration and credential disclosure without a new runtime dependency. Active CPU
+and populated memory improve; the small increases in empty memory, idle CPU and
+complete-turn latency are not claimed as improvements. Both idle sources exceed
+the 1% target slightly, so whole-core idle acceptance and 10x headroom remain
+open in the core audit. Final frame/Git extraction has separate cost evidence;
+stream relay and wake extraction still need implementation. This is not Browser
+package completion or whole-core completion. Original failing checks and older
+cost comparisons remain in the acceptance record, not reclassified as passes.

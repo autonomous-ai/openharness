@@ -150,6 +150,7 @@ void main() {
         harnessHome: scratch,
         isMacOS: true,
         isLinux: false,
+        isWindows: false,
         openTerminal: (_) async => terminalLaunches++,
         run: runner(tmuxPresent: () => false, calls: calls),
       );
@@ -175,6 +176,7 @@ void main() {
           harnessHome: scratch,
           isMacOS: true,
           isLinux: false,
+          isWindows: false,
           run: runner(tmuxPresent: () => true, nodeVersion: node),
         );
         final readiness = await provisioner.ensureReady(
@@ -205,6 +207,7 @@ void main() {
           harnessHome: scratch,
           isMacOS: true,
           isLinux: false,
+          isWindows: false,
           run: runner(
             tmuxPresent: () => true,
             cliVersion: version,
@@ -233,6 +236,7 @@ void main() {
       harnessHome: scratch,
       isMacOS: true,
       isLinux: false,
+      isWindows: false,
       openTerminal: (_) async => terminalLaunches++,
       run: runner(
         homebrewPresent: () => false,
@@ -263,6 +267,7 @@ void main() {
         harnessHome: scratch,
         isMacOS: true,
         isLinux: false,
+        isWindows: false,
         run: runner(
           homebrewPresent: () => homebrew,
           tmuxPresent: () => false,
@@ -306,6 +311,7 @@ void main() {
       harnessHome: scratch,
       isMacOS: true,
       isLinux: false,
+      isWindows: false,
       openTerminal: (_) async => terminalLaunches++,
       run: runner(
         homebrewPresent: () => false,
@@ -336,6 +342,7 @@ void main() {
       harnessHome: scratch,
       isMacOS: true,
       isLinux: false,
+      isWindows: false,
       openTerminal: (_) async => terminalLaunches++,
       run: runner(tmuxPresent: () => false, tmuxInstallExitCode: 22),
     );
@@ -361,6 +368,7 @@ void main() {
       harnessHome: scratch,
       isMacOS: true,
       isLinux: false,
+      isWindows: false,
       run: runner(
         tmuxPresent: () => true,
         installHarness: createManagedHarness,
@@ -390,6 +398,7 @@ void main() {
       harnessHome: scratch,
       isMacOS: false,
       isLinux: true,
+      isWindows: false,
       openTerminal: (path) async => terminalScript = path,
       run: runner(tmuxPresent: () => false, calls: calls),
     );
@@ -427,6 +436,7 @@ void main() {
         harnessHome: scratch,
         isMacOS: false,
         isLinux: true,
+        isWindows: false,
         platformEnvironment: const {'DISPLAY': ':0'},
         openTerminal: (path) async => terminalScript = path,
         run: runner(tmuxPresent: () => true, xclipPresent: () => false),
@@ -477,6 +487,7 @@ void main() {
       harnessHome: scratch,
       isMacOS: false,
       isLinux: true,
+      isWindows: false,
       platformEnvironment: const {'WAYLAND_DISPLAY': 'wayland-0'},
       openTerminal: (_) async => terminalLaunches++,
       run: runner(
@@ -517,6 +528,7 @@ void main() {
       harnessHome: scratch,
       isMacOS: false,
       isLinux: true,
+      isWindows: false,
       platformEnvironment: const {'DISPLAY': ':0'},
       openTerminal: (path) async => terminalScript = path,
       run: runner(
@@ -546,6 +558,7 @@ void main() {
       harnessHome: scratch,
       isMacOS: false,
       isLinux: true,
+      isWindows: false,
       platformEnvironment: const {'DISPLAY': ':0'},
       openTerminal: (_) async => terminalLaunches++,
       run: runner(
@@ -577,6 +590,7 @@ void main() {
       harnessHome: scratch,
       isMacOS: false,
       isLinux: true,
+      isWindows: false,
       platformEnvironment: const {'DISPLAY': ':0'},
       openTerminal: (_) async => terminalLaunches++,
       run: runner(
@@ -607,6 +621,7 @@ void main() {
       harnessHome: scratch,
       isMacOS: false,
       isLinux: true,
+      isWindows: false,
       platformEnvironment: const {'DISPLAY': ':0'},
       openTerminal: (_) async => terminalLaunches++,
       run: runner(
@@ -639,6 +654,7 @@ void main() {
       harnessHome: scratch,
       isMacOS: false,
       isLinux: true,
+      isWindows: false,
       platformEnvironment: const {
         'WAYLAND_DISPLAY': 'wayland-0',
         'DISPLAY': ':0',
@@ -672,6 +688,7 @@ void main() {
       harnessHome: scratch,
       isMacOS: false,
       isLinux: true,
+      isWindows: false,
       platformEnvironment: const {},
       run: runner(
         tmuxPresent: () => true,
@@ -705,6 +722,7 @@ void main() {
           harnessHome: scratch,
           isMacOS: false,
           isLinux: true,
+          isWindows: false,
           platformEnvironment: const {'DISPLAY': ':0'},
           openTerminal: (_) async => launches++,
           run: runner(tmuxPresent: () => true, xclipPresent: () => false),
@@ -754,6 +772,7 @@ void main() {
         harnessHome: scratch,
         isMacOS: false,
         isLinux: true,
+        isWindows: false,
         platformEnvironment: const {'DISPLAY': ':0'},
         openTerminal: (_) async {},
         run: runner(tmuxPresent: () => true, xclipPresent: () => false),
@@ -807,6 +826,7 @@ void main() {
       harnessHome: scratch,
       isMacOS: false,
       isLinux: true,
+      isWindows: false,
       platformEnvironment: const {'DISPLAY': ':0'},
       openTerminal: (_) async => launches++,
       run: runner(tmuxPresent: () => true, xclipPresent: () => false),
@@ -840,6 +860,7 @@ void main() {
         harnessHome: scratch,
         isMacOS: false,
         isLinux: true,
+        isWindows: false,
         platformEnvironment: const {'DISPLAY': ':0'},
         openTerminal: (_) async => launches++,
         run: runner(
@@ -879,6 +900,7 @@ void main() {
       harnessHome: scratch,
       isMacOS: false,
       isLinux: true,
+      isWindows: false,
       platformEnvironment: const {'DISPLAY': ':0'},
       openTerminal: (_) async => launches++,
       run: runner(tmuxPresent: () => true, xclipPresent: () => false),
@@ -913,6 +935,7 @@ void main() {
         harnessHome: scratch,
         isMacOS: false,
         isLinux: true,
+        isWindows: false,
         platformEnvironment: const {'DISPLAY': ':0'},
         openTerminal: (path) async {
           launches++;
@@ -960,6 +983,7 @@ void main() {
       harnessHome: scratch,
       isMacOS: false,
       isLinux: true,
+      isWindows: false,
       platformEnvironment: const {},
       run: runner(
         tmuxPresent: () => true,
@@ -987,6 +1011,7 @@ void main() {
       harnessHome: scratch,
       isMacOS: false,
       isLinux: true,
+      isWindows: false,
       platformEnvironment: const {},
       run: runner(tmuxPresent: () => false, missingCommands: const {'ps'}),
     );
@@ -1010,6 +1035,7 @@ void main() {
         harnessHome: scratch,
         isMacOS: false,
         isLinux: true,
+        isWindows: false,
         platformEnvironment: const {},
         run: runner(
           tmuxPresent: () => true,
@@ -1052,6 +1078,7 @@ void main() {
       harnessHome: scratch,
       isMacOS: false,
       isLinux: true,
+      isWindows: false,
       platformEnvironment: const {},
       run: runner(
         tmuxPresent: () => tmuxPresent,
@@ -1098,6 +1125,7 @@ void main() {
         harnessHome: scratch,
         isMacOS: false,
         isLinux: true,
+        isWindows: false,
         openTerminal: (_) async => launches++,
         run: runner(tmuxPresent: () => false),
       );
@@ -1131,6 +1159,7 @@ void main() {
         harnessHome: scratch,
         isMacOS: false,
         isLinux: true,
+        isWindows: false,
         openTerminal: (_) async => launches++,
         run: runner(tmuxPresent: () => false),
       );
@@ -1169,6 +1198,7 @@ void main() {
         harnessHome: scratch,
         isMacOS: false,
         isLinux: true,
+        isWindows: false,
         openTerminal: (_) async => launches++,
         run: runner(tmuxPresent: () => false),
       );
@@ -1207,6 +1237,7 @@ void main() {
         harnessHome: scratch,
         isMacOS: true,
         isLinux: false,
+        isWindows: false,
         run: runner(tmuxPresent: () => true, calls: calls),
       );
 
