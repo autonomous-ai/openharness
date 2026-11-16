@@ -32,7 +32,8 @@ Done when, on a Mac with a dial and the Harness Device menu-bar app:
    with no window. A Claude Code session already running in Orca (its own profile) or in a terminal lists the
    `dial` skill without a restart. The same for Codex and `~/.codex`, and for a running Codex in another `CODEX_HOME`
    once the devices service's scan has seen it (Where it is written).
-2. **Turn off** removes every skill file Harness wrote, in every home, and nothing else.
+2. **Turn off** removes every skill file Harness wrote, in every home, and nothing else. A skills folder the other
+   engine shares (`~/.codex/skills` linked to `~/.claude/skills`) keeps the file while that engine is On.
 3. A person's own `skills/dial/SKILL.md` is never changed or removed.
 4. The Claude Code row shows when Claude Code is on this computer, also before the plugin is installed.
 
@@ -85,23 +86,31 @@ Done when, on a Mac with a dial and the Harness Device menu-bar app:
   at the path, including a missing marker, is the person's: never written over or removed. Reading uses
   `O_NOFOLLOW | O_NONBLOCK` and a size bound, as #4379's `held()` does.
 - Writing: when the path holds nothing, or holds ours with other bytes (an older text), the folder is made (0700) and
-  the file goes to a temp file (0600) renamed into place. When it already holds exactly `DIAL_SKILL`, nothing is
-  written.
-- Removing: only ours. Then the `dial` folder only if it is empty. `skills/` and the home stay.
+  the file goes to a temp file (0600), synced to disk, then renamed into place. When it already holds exactly
+  `DIAL_SKILL`, nothing is written. A write that fails takes out the `dial` folder it made.
+- Removing: only ours. Then the `dial` folder only if it is empty. `skills/` and the home stay. A file another remover
+  took first (the command and the devices service both remove at a Turn off) is no failure.
 - No released CLI carries #4379 (no tag contains 266e814cde), so no installed copy holds the old exact bytes without
   the marker. Exact-byte matching is replaced, not kept beside the marker.
 
 ## On and off
 
-- `<dataDir>/dial-skill.json`: `{"claude":true|false,"codex":true|false}`. Its one writer is the `harness device`
-  command. Read with a 1 KiB bound. A missing or bad file reads as no answer for each engine, as below. Written via a
-  0600 temp file and a rename, like `dial-notify.json` (`cable/notifyMode.ts`).
-- `harness device claude enable`: the plugin, as today (`claudeEnable`). On success, `claude: true` in the file and the
-  skill into the default Claude home.
+- `<dataDir>/dial-skill.json`: `{"claude":true|false,"codex":true|false,"homes":{"claude":[…],"codex":[…]}}`. Its
+  one writer is the `harness device` command. `homes` holds the resolved skills folders the command wrote into, so a
+  Turn off run with another `CODEX_HOME` or `CLAUDE_CONFIG_DIR` still finds them (orchestrator, 2026-11-16). It is kept
+  like the homes list (below): at most 64 per engine, each path `listable`; the key is left out when both are empty.
+  Read with a 256 KiB bound, the homes list's. A missing or bad file reads as no answer for each engine, as below.
+  Written via a 0600 temp file and a rename, like `dial-notify.json` (`cable/notifyMode.ts`).
+- `harness device claude enable`: the plugin, as today (`claudeEnable`). On success, `claude: true` in the file with
+  the default Claude home's resolved skills folder in `homes`, then the skill into that folder. A folder the record
+  cannot hold (not `listable`, or 64 already there) gets no skill: still On, exit 1, `Could not write the Claude Code
+  skill.`
 - `harness device claude disable`, in this order:
   1. `claude: false` in the file.
   2. The plugin uninstalled, as today.
-  3. The skill removed from the default home and from every home in the homes list (below).
+  3. The skill removed from the default home, from every folder in `homes` and from every home in the homes list
+     (below). A folder the other engine holds its skill in while it is On (its default home, its `homes` or its list)
+     keeps the file. Then `homes` keeps only the folders whose removal failed, for the next Turn off.
 
   A step that fails does not stop the ones after it. The command exits 1 with the first error.
 - `harness device codex enable` / `disable`: the same for Codex, with no plugin.
@@ -118,11 +127,12 @@ Done when, on a Mac with a dial and the Harness Device menu-bar app:
   - For the devices service: the daemon's own, `dirname(env.CLAUDE_PROJECTS_DIR)` and `env.CODEX_HOME`.
 - **What the devices service counts as On:**
   - Claude: the file does not say `claude: false`, and Claude Code's own record says the plugin is on. The record is
-    `enabledPlugins["harness-device@openharness"] === true` in the default home's `settings.json`, read strictly with a
-    1 MiB bound: a missing or bad file is Off, unlike `claudePluginOn`. The reader lives in `devices/dialSkill.ts`, not
-    `deviceClaude/`.
+    `enabledPlugins["harness-device@openharness"] === true` in the default home's `settings.json`, read with a 1 MiB
+    bound. One reader, `claudePluginState` in `devices/dialSkill.ts`, answers `on`, `off` (the entry false or gone) or
+    `unknown` (the file missing, not a regular file, too big, not JSON or not an object). The skill needs `on`; the
+    plugin's hook and mod (`claudePluginOn`, `deviceClaude/`) keep acting unless `off`.
   - This way people who turned the plugin on before this change get the skill at the devices service's next start.
-    A plugin uninstalled through `/plugin` turns the skills off at the service's next moment too.
+    A plugin uninstalled through `/plugin` turns the skills off at the service's next scan too (Turn on again, below).
   - Codex: the file says `codex: true`. With no answer, Off.
 
 ## Where it is written
@@ -139,9 +149,11 @@ Claude gets no home from the scan or from hooks. The scan's Claude records are r
 homes (`engines/kit/adoption.ts`), and the hooks that carry a `transcriptPath` (Harness's own `notify.mjs`) are
 installed only there. An Orca profile shares `~/.claude/skills` through its link, so the default home covers it.
 
-When the engine is Off at one of these moments, the devices service removes the skill from every home in the homes
-list (only ours), and empties the list for that engine. The command's removal is the Turn off itself; the service only
-catches up.
+When the engine is Off at one of these moments, the devices service removes the skill (only ours) from every folder in
+the homes list, from the default home's and from every folder in the command's `homes`, which no list holds (a plugin
+uninstalled through `/plugin` runs no Turn off), and empties the list for that engine. A folder the other engine holds
+its skill in while it is On only leaves this engine's list. The command's removal is the Turn off itself; the service
+only catches up.
 
 `harness device … enable` also writes the default home itself, so Turn on works with no dial attached and no devices
 service running.
@@ -151,8 +163,9 @@ taken from it only when all of these hold:
 - Any owner the scan read, with or without a row, server owners included (orchestrator, 2026-11-16: a home in another
   `CODEX_HOME` never has a row, and Codex 0.167.1's managed `app-server` holds the rollout). Not a Harness-run owner
   (`harness`), and not one placed from its arguments (`fromArgs`, which has no path).
-- The path is absolute, normalised, with no `..` and no control character, and at most 1024 bytes. It is not under
-  the daemon's data dir.
+- The path is `listable`, the lists' own rule (`devices/dialSkillFiles.ts`): absolute, normalised, with no `..` and no
+  control character (`\p{Cc}`), and at most 1024 bytes. It is not under the daemon's data dir, compared by the data
+  dir's real path, as `lsof` names files by theirs.
 - The path is exactly `<home>/sessions/YYYY/MM/DD/rollout-*.jsonl` (four digits, two, two), and the home is five
   levels up. It is never found by searching for the first `sessions`.
 - The home is an existing directory owned by the daemon's uid (stat).
@@ -163,7 +176,9 @@ A path that fails a check is dropped, and the path is not logged.
 - The skill folder is resolved with `realpath(<home>/skills)` when `skills/` exists. A link is followed (an Orca
   profile's `skills/` points at `~/.claude/skills`), and its target must be a directory owned by this user.
 - Homes are deduplicated by that resolved skills folder, so `~/.claude` and every profile linked to it is one write.
-- When `skills/` does not exist it is made (0700).
+- When `skills/` does not exist it is made (0700), only once the list has room for it.
+- The resolved folder must be `listable` before anything is written into it, so no file is written that a list would
+  drop. One that is not is refused (`shape`).
 
 **The homes list.** `<dataDir>/dial-skill-homes.json` is `{"claude":[…],"codex":[…]}`: the resolved skills folders
 the devices service wrote into, so Turn off finds them.
@@ -172,21 +187,27 @@ the devices service wrote into, so Turn off finds them.
   no path. So every file Harness wrote stays in the list.
 - Written through a temp file and a rename.
 - Each pass drops from the list the homes whose skills folder no longer exists (a throwaway test home, say), so they
-  do not fill the 64.
+  do not fill the 64. One that `stat` cannot reach now (a folder above it shut) stays listed, and is not written.
 
-**Turn on again while the service runs.** Each scan `stat`s `dial-skill.json` once. When it changed, the service reads
-it again, forgets the homes it handled, and runs the start pass again. So Turn off then Turn on brings the skill back
-to every home without a restart.
+**Turn on again while the service runs.** Each scan `stat`s `dial-skill.json` and the default Claude home's
+`settings.json` once. When either changed, the service reads them again, forgets the homes it handled and refused, and
+runs the start pass again. So Turn off then Turn on brings the skill back to every home without a restart, and a plugin
+uninstalled through `/plugin` takes it away.
 
 **The race with Turn off.**
 - The command writes Off first, then removes.
-- The service reads `dial-skill.json` right before each write. After writing a new home and listing it, it reads the
-  file again. If the engine is Off by then, it removes what it just wrote.
+- The service reads `dial-skill.json` right before each write. After writing a new home and listing it, or writing a
+  listed folder again (at a start pass or a scan), it reads the file again. If the engine is Off by then, it removes
+  what it just wrote.
 - So a skill left by a write in flight goes at the service's next check at the latest.
+- A listing that cannot be saved takes out only a skill that write put there: one already there may be the command's,
+  which its own Turn off finds.
 
-**Bounds.** The service keeps a set of the rollout homes it handled in this run (at most 64 per engine, like the
-list; full, it handles no new one), so a scan every 60 s costs a set lookup per owner and no file work once a home is
-done. One write or check per new home. No new timer.
+**Bounds.** The service keeps a set of the rollout homes it handled in this run (at most 64, like the list; full, it
+handles no new one), and one of those it refused for a reason the next scan would meet again (no skills folder, a full
+list, a write or a save that failed; at most 64), both forgotten when the stamp changes. So a scan every 60 s costs a
+set lookup per owner and no file work once a home is done or refused. A home is handled once it is listed. One write
+or check per new home. No new timer.
 
 ## Windows
 
@@ -221,25 +242,26 @@ reaches Windows.
 
 ## Data (the checklist)
 
-- **What is stored:** `dial-skill.json` (two booleans) and `dial-skill-homes.json` (folder paths of the person's own
-  agent homes), in the daemon's data dir, mode 0600. Plus the skill file in each home, which is Harness's text, not
-  the person's data.
+- **What is stored:** `dial-skill.json` (two booleans, and the folder paths the command wrote into) and
+  `dial-skill-homes.json` (folder paths of the person's own agent homes), in the daemon's data dir, mode 0600. Plus
+  the skill file in each home, which is Harness's text, not the person's data.
 - **Who reads and writes:** the `harness device` command writes the first file. The devices service writes the
   second. Both run as the person.
 - **Synced or sent:** nothing. Neither file leaves the computer. No path goes to a log, a metric, the relay or the
   dial.
-- **Retention:** each path stays until Turn off. The devices service empties the list at its next moment that sees
-  Off.
-- **Deletion:** Turn off removes every skill file Harness wrote (the command), and the service then empties the list. Uninstalling Harness leaves the
-  data dir as today.
+- **Retention:** each path stays until Turn off. The command's `homes` keeps only a folder whose removal failed. The
+  devices service empties the list at its next moment that sees Off.
+- **Deletion:** Turn off removes every skill file Harness wrote (the command), and the service then empties the list.
+  Uninstalling Harness leaves the data dir as today.
 - **Access:** local files of the person's own account. A path from outside text is checked before use (A home from a
   path).
 
 ## Measures
 
-One log line per devices-service pass that changed something: `dial skill: claude wrote 2 removed 0, codex wrote 1
-removed 0`. Counts only: no path and no home name. One line when a path is refused, with the reason
-(`shape`, `owner`, `missing`), no path. One line when the list is full, with the count. The command logs nothing new, and prints errors as today.
+One log line per devices-service pass that changed or failed something: `dial skill: claude wrote 2 removed 0 failed 0,
+codex wrote 1 removed 0 failed 0`. `failed` counts the writes, removals and list saves that failed. Counts only: no
+path and no home name. One line when a path is refused, with the reason (`shape`, `owner`, `missing`, `unreadable`), no
+path. One line when the list is full, with the count. The command logs nothing new, and prints errors as today.
 
 ## Docs to change
 
@@ -261,11 +283,15 @@ removed 0`. Counts only: no path and no home name. One line when a path is refus
   - leaves the person's file (no marker, a link, a FIFO, over 4 KiB) untouched.
   - removes only ours.
   - removes the empty `dial` folder and keeps `skills/`.
+  - a write that fails takes out the `dial` folder it made; a file another remover took first is `none`.
+  - a folder `stat` cannot reach is `unreadable`, not `missing`.
+  - `claudePluginState`: `on`, `off` and `unknown`, a FIFO read without a wait.
 - Codex home from a rollout path:
   - Accepted: the `sessions/YYYY/MM/DD` shape, with the fixed levels, from a terminal owner or an `app-server` owner.
     A home path that itself holds a `sessions` folder name still resolves right.
-  - Rejected: a relative path, `..`, the wrong shape (`archived_sessions/` included), a home owned by another user, a
-    path under the data dir, and an owner that is a Harness one or placed from arguments.
+  - Rejected: a relative path, `..`, a control character past ASCII (U+0085), the wrong shape (`archived_sessions/`
+    included), a home owned by another user, a path under the data dir (by its real path too), and an owner that is a
+    Harness one or placed from arguments.
   - A listed home whose skills folder is gone is dropped from the list.
   - A changed `dial-skill.json` makes the next scan run the start pass again.
 - Where the file goes: a linked `skills/` is followed, and a profile linked to `~/.claude/skills` dedupes to one write.
@@ -277,6 +303,9 @@ removed 0`. Counts only: no path and no home name. One line when a path is refus
   - Claude enable writes the skill into a throwaway `CLAUDE_CONFIG_DIR` and sets On.
   - Enable over a person's skill sets On, skips that home and exits 0.
   - Disable writes Off first, then removes from the default home and every listed home, and keeps a person's skill.
+  - Enable records the folder it wrote; a disable run with another home removes it. A home no record could hold gets
+    no skill.
+  - Disable keeps the skill in a folder the other engine shares while it is On.
   - A failing step still runs the rest.
   - The same for Codex.
 - The devices service, with throwaway homes and a fake scan:
@@ -284,8 +313,14 @@ removed 0`. Counts only: no path and no home name. One line when a path is refus
   - A Codex owner in a new `CODEX_HOME` gets the skill, and its home is listed.
   - Off at a moment removes the listed ones and empties the list.
   - The race: Off set between write and recheck removes the new one.
-  - A known home costs no file work on the next scan.
-  - A full list writes no new home.
+  - A known home, and a refused one, costs no file work on the next scan.
+  - A full list writes no new home, and makes no empty `skills/`.
+  - A folder both engines share keeps the skill until both are Off.
+  - Off removes ours from the default home and the command's `homes` too; a `/plugin` uninstall is seen at the next
+    scan.
+  - The race: Off set while a listed folder is written again removes it.
+  - A listed folder `stat` cannot reach stays listed.
+  - A failed write, removal or save is counted.
 - Windows: enable refuses and the service writes nothing (platform injected).
 - The menu-bar app (Rust unit tests and UI tests):
   - no offer screen at first run.
