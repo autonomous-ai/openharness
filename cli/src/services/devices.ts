@@ -963,7 +963,13 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       return result
     }),
   }, log)
-    .then((listener) => { listenerOpen = listener !== null; return listener })
+    .then((listener) => {
+      listenerOpen = listener !== null
+      // The dial does not wait for a listener slow to open (LISTENER_WAIT_MS): a status said meanwhile carried no mode,
+      // and the menu would offer no Notifications until the dial's next one.
+      if (listenerOpen && revision > 0) sayStatus(cableHost.currentDialStatus())
+      return listener
+    })
     .catch((): null => { log('[devices] listener not opened · failed'); return null })
 
   let stopped = false
@@ -987,9 +993,13 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     if (close) {
       cableHost.harness.noteCard(close.agentId, 'question.close')
       inOrder(close.agentId, () => { void cable.questionClose(close.agentId, close.requestId) })
-      // As the cable session's inbox does: the close of an older question leaves the newer one open.
-      if (questionsOpen.get(close.agentId) === close.requestId) questionsOpen.delete(close.agentId)
-      reaskNotice(close.agentId)
+      // As the cable session's inbox does: the close of an older question leaves the newer one open. Only the open
+      // question's close lets its notice out: a notice asked again rings the dial again, so a close heard twice, or of
+      // a question never held open, asks nothing.
+      if (questionsOpen.get(close.agentId) === close.requestId) {
+        questionsOpen.delete(close.agentId)
+        reaskNotice(close.agentId)
+      }
       return
     }
     const question = cableQuestionFor(frame as Parameters<typeof cableQuestionFor>[0])
