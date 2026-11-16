@@ -96,7 +96,7 @@ export async function scannedApps(pids: readonly number[], deps: ScannedAppDeps)
   if ((deps.platform !== 'darwin' && deps.platform !== 'linux') || !pids.length) return apps
   // One picture of the machine: a parent's id is never matched against a process that took it a moment later.
   const table = new Map((await deps.processes()).map((p) => [p.pid, p]))
-  const walks = pids.map((pid) => [pid, walk(pid, table)] as const)
+  const walks = pids.map((pid) => [pid, parentChain(pid, table).map((p) => p.executable)] as const)
   if (deps.platform === 'linux') {
     for (const [pid, names] of walks) {
       const app = names.map(frontAppId).find(listed)
@@ -128,18 +128,19 @@ function nearestApp(bundles: readonly string[], ids: ReadonlyMap<string, string 
   return undefined
 }
 
-/** The executables of a process and up to WALK_PARENTS of its parents, nearest first. */
-function walk(pid: number, table: ReadonlyMap<number, ProcessName>): string[] {
-  const names: string[] = []
+/** A process and up to WALK_PARENTS of its parents, nearest first, from one read of the table: a pid the table does not
+ *  hold starts none. The open scan reads their names, a tap on a tmux pane their ids (tmux.ts). */
+export function parentChain<P extends Pick<ProcessName, 'pid' | 'ppid'>>(pid: number, table: ReadonlyMap<number, P>): P[] {
+  const chain: P[] = []
   const passed = new Set<number>()
   let p = table.get(pid)
-  while (p && !passed.has(p.pid) && names.length <= WALK_PARENTS) {
+  while (p && !passed.has(p.pid) && chain.length <= WALK_PARENTS) {
     passed.add(p.pid)
-    names.push(p.executable)
-    // launchd and init hold every orphan: their own name says nothing of a session.
+    chain.push(p)
+    // launchd and init hold every orphan: they are no session's own.
     p = p.ppid > 1 ? table.get(p.ppid) : undefined
   }
-  return names
+  return chain
 }
 
 /** The app each of these processes runs in, read from this machine. */

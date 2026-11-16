@@ -23,6 +23,7 @@ const NAMES: Record<string, string> = {
   herdr: 'herdr',
   rex: 'Rex',
   zellij: 'Zellij',
+  tmux: 'tmux',
   kitty: 'kitty',
   wezterm: 'WezTerm',
   iterm: 'iTerm2',
@@ -35,17 +36,22 @@ const NAMES: Record<string, string> = {
   terminal: 'Terminal',
 }
 
-/** The apps an agent can run in, the dial's pages: the hosts, in the order of their names. */
+/** The apps an agent can run in, the dial's pages: the hosts, in the order of their names. Sixteen is the firmware's
+ *  bound (`CABLE_MAX_APPS`): a seventeenth app needs a decision. */
 export const APP_IDS: readonly string[] = Object.keys(NAMES)
 
 /** An agent in a terminal the daemon does not know. */
 export const UNKNOWN_APP = 'terminal'
 
-// The outermost app by its bundle id: each host's app, and Harness Desktop's, which stays out of APP_BUNDLES because
-// a tap never opens a Harness agent by its bundle id.
+/** Harness Desktop's bundle id. */
+export const HARNESS_BUNDLE = 'ai.autonomous.harness'
+
+// The outermost app by its bundle id: each host's app, and Harness Desktop's, which stays out of APP_BUNDLES because no
+// hint's bundle id ever opens Harness: a tap on a Harness agent with no window starts it by this id alone (open.ts
+// `desktop`).
 export const BUNDLE_APPS: Readonly<Record<string, string>> = {
   ...Object.fromEntries(Object.entries(APP_BUNDLES).map(([id, bundle]) => [bundle, id])),
-  'ai.autonomous.harness': 'harness',
+  [HARNESS_BUNDLE]: 'harness',
 }
 
 // kitty sets no TERM_PROGRAM: off macOS its own variable names it (detectApp).
@@ -56,6 +62,7 @@ const PROGRAM_APPS: Readonly<Record<string, string>> = {
   vscode: 'vscode',
   WarpTerminal: 'warp',
   WezTerm: 'wezterm',
+  tmux: 'tmux',
 }
 
 export function hostDisplayName(id: string): string {
@@ -88,6 +95,7 @@ export function detectHost(hints: Record<string, string>): string {
   if (has('HERDR_PANE_ID')) return 'herdr'
   if (has('REX_BLOCK')) return 'rex'
   if (has('ZELLIJ')) return 'zellij'
+  if (has('TMUX_PANE')) return 'tmux'
   if (has('KITTY_WINDOW_ID')) return 'kitty'
   if (has('WEZTERM_PANE')) return 'wezterm'
   if (has('ORCA_AGENT_SESSION_ID') || bundle === APP_BUNDLES.orca) return 'orca'

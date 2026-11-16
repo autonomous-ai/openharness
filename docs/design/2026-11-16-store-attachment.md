@@ -135,3 +135,41 @@ Freeze this candidate and send its diff/evidence before any native test, timed w
 live test proves the implicit default only;
 the four stopped-history preflights also prove explicit profile reads. Discovered-profile attachment has deterministic
 caller coverage. Neither that correctness evidence nor the rejected pre-memo timings proves the next candidate's cost.
+
+## Integrating the default-home repair from main
+
+Design recorded before resolving the merge of `1119380c173e2bdf36d702608dd0304c66c85323`
+into `d9bf670a722ad2024ae3b657cf2e3e9dd5134dce`. Main's #4361 repair changes the same
+worker request as the positive lookup memo. Keep both: explicit native homes bypass discovery and
+answer only the store; implicit requests reuse successful discovery but answer a home only when
+`sameHermesHome` says it differs from the default. Missing discovery remains null inside the helper,
+so the caller applies the default store fallback without treating it as a discovery.
+
+Growth, concurrency and scale retain the existing 512-entry/1 MiB/30-second memo bounds, fixed expiry,
+positive-only insertion and per-handler lifetime. There is no new cache, timer, queue, record or lock.
+Read cost changes relative to the pre-integration candidate: memo hits still avoid indexed discovery,
+but main's canonical home comparison performs filesystem checks for a discovered home, including
+a memo hit. Thus the earlier no-filesystem-work-on-hit statement describes the earlier checkpoint
+only. The new comparison must use main's current behavior on both measured sides.
+
+Compatibility retains main's repaired answer shape: no redundant explicit/default `home`, and a
+discovered profile remains present. The current core deliberately consumes only `store`; the worker
+hint cannot mutate native ownership, revoke its own attach, or bypass the completed-reader guard.
+`keepReader` still compares the full pane identity before and after native confirmation and rejects
+an actual home change. No saved-row, backend or client migration is needed. Rollback reverts the
+memo/attachment changes while retaining main's #4361 repair. Audience, identity and failure checks
+are unchanged; no new telemetry or content is exposed. Shared TypeScript affects macOS, Linux and
+Windows, with no process-launch change.
+
+The package's request spec must use a new private default home for every case and restore `env`
+afterward. Its previous capture of `env.HERMES_HOME` was unsafe on Windows, where the test-wide
+throwaway `HOME` does not replace `%LOCALAPPDATA%`. Only the newly created folder may be deleted.
+Update reply expectations to main's contract while retaining actual SQLite query-count controls;
+cover a differently spelled default home on both a cold request and a memo hit.
+
+No tests, builds or workloads have run for this integration. Root schedules the worker store/memo
+specs, Hermes home and identity controls, attachment/native-confirmation caller tests, TypeScript,
+the required core and Resume gates, and private native Close/Resume checks before acceptance.
+Native cost must freeze the integrated candidate and current-main baseline with matching helpers
+and bundles. Prior native v2 cost FAIL and diagnostic v3/v5 evidence stay scoped to their original
+heads; this merge neither supersedes that failure nor establishes performance acceptance.

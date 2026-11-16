@@ -1,7 +1,7 @@
 // How the wheel's rows are composed: the local row, and the fleet's rows around it.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { DaemonCableHost, cableEventFor, cableStepFor, type CableHostWiring } from './cableHost.js'
+import { DaemonCableHost, HARNESS_OPEN_WAIT_MS, cableEventFor, cableStepFor, type CableHostWiring } from './cableHost.js'
 import { FleetError, type FleetMachine, type MachineFleet } from './machineFleet.js'
 import type { FleetRouting } from '../services/fleet.js'
 import { ServiceUnavailableError } from '../core/serviceHost.js'
@@ -443,6 +443,34 @@ describe('DaemonCableHost.listAgentsFlat across machines, and the tab the dial g
     expect(opened).toHaveBeenLastCalledWith('other', 'r9', 'question')
   })
 
+  it('a tap on another machine\'s agent with no window starts no Desktop', async () => {
+    AGENTS.length = 0
+    const opened = vi.fn()
+    const launchDesktop = vi.fn(async () => true)
+    const host = new DaemonCableHost(wiring({ opened, launchDesktop }), crossFleet({ other: [] }))
+    await settled(host)
+    host.noteAgent('other', 'r9')
+    host.openAgent('r9')
+    expect(opened).toHaveBeenCalledWith('other', 'r9', undefined)
+    expect(launchDesktop).not.toHaveBeenCalled()
+  })
+
+  // The last tap wins, whatever machine it is on: Desktop's window must not open the first agent after the second tap.
+  it('a tap on another machine\'s agent ends a tap still waiting for Desktop\'s window', async () => {
+    AGENTS.length = 0
+    AGENTS.push({ agentId: 'a1', registeredAt: 1, active: true, terminalAvailable: true, engine: 'claude' })
+    const opened = vi.fn()
+    const launchDesktop = vi.fn(async () => true)
+    const host = new DaemonCableHost(wiring({ opened, launchDesktop }), crossFleet({ other: [] }))
+    await settled(host)
+    host.noteAgent('other', 'r9')
+    await host.openAgent('a1')
+    expect(launchDesktop).toHaveBeenCalledTimes(1)
+    host.openAgent('r9')
+    onTab(host, [])
+    expect(opened.mock.calls).toEqual([['other', 'r9', undefined]])
+  })
+
   it('forks a local agent through the daemon and opens the fork in the window', async () => {
     AGENTS.length = 0
     AGENTS.push({ agentId: 'a1', registeredAt: 1, active: true, terminalAvailable: true, engine: 'claude' })
@@ -855,6 +883,143 @@ describe('the dial with no window: this computer\'s agents', () => {
     host.setRegistry(null)
     expect(await host.listAgentSnapshot()).toStrictEqual({ agents: [], tab: '', total: 2 })
   })
+
+  describe('a tap on a Harness agent with no window', () => {
+    // The dial lists the agents before it can tap one: the router knows an agent's machine from that read.
+    const setup = async (over: Partial<CableHostWiring> = {}) => {
+      const timers: Array<{ ms: number; run: () => void; cancelled: boolean }> = []
+      const w = wiring({
+        sessions, opened: vi.fn(), launchDesktop: vi.fn(async () => true), desktopTimedOut: vi.fn(),
+        appTimer: (ms, run) => { const timer = { ms, run, cancelled: false }; timers.push(timer); return () => { timer.cancelled = true } },
+        ...over,
+      })
+      const host = new DaemonCableHost(w, fleetOf([]))
+      host.setRegistry(new HostRegistry([host.harness]))
+      host.setSwarms(null)
+      await host.listAgentSnapshot()
+      return { host, w, timers }
+    }
+
+    it('with no window a tap starts Desktop, and the open waits for the window', async () => {
+      const { host, w, timers } = await setup()
+      expect((await host.listAgentSnapshot()).agents.map((a) => a.caps)).toEqual(['svfa', 'svfa'])
+      expect(await host.openAgent('h1')).toBeUndefined()
+      expect(w.launchDesktop).toHaveBeenCalledTimes(1)
+      expect(w.opened).not.toHaveBeenCalled()
+      expect(timers.map((timer) => timer.ms)).toEqual([HARNESS_OPEN_WAIT_MS])
+      onTab(host, [])
+      expect(vi.mocked(w.opened!).mock.calls).toEqual([['mine', 'h1']])
+      expect(timers[0].cancelled).toBe(true)
+    })
+
+    it('a second word from the window opens nothing more', async () => {
+      const { host, w } = await setup()
+      await host.openAgent('h1')
+      onTab(host, [])
+      onTab(host, ['h1'])
+      expect(w.opened).toHaveBeenCalledTimes(1)
+    })
+
+    it('a window that comes while Desktop is still being started is handed the open, once', async () => {
+      let started!: (ok: boolean) => void
+      const { host, w } = await setup({ launchDesktop: () => new Promise<boolean>((resolve) => { started = resolve }) })
+      const tap = host.openAgent('h1')
+      onTab(host, [])
+      started(true)
+      expect(await tap).toBeUndefined()
+      expect(vi.mocked(w.opened!).mock.calls).toEqual([['mine', 'h1']])
+    })
+
+    // `open -b` that fails or runs out its time after the window came: the window has the open, and a later tap's own
+    // answer is its own.
+    it('a tap no longer waiting is answered nothing when Desktop\'s start fails', async () => {
+      const starts: Array<(ok: boolean) => void> = []
+      const { host, w } = await setup({ launchDesktop: () => new Promise<boolean>((resolve) => { starts.push(resolve) }) })
+      const taken = host.openAgent('h1')
+      onTab(host, [])
+      starts[0](false)
+      expect(await taken).toBeUndefined()
+      expect(vi.mocked(w.opened!).mock.calls).toEqual([['mine', 'h1']])
+      host.setSwarms(null)
+      const first = host.openAgent('h1')
+      const last = host.openAgent('h2')
+      starts[1](false)
+      expect(await first).toBeUndefined()
+      starts[2](false)
+      expect(await last).toEqual({ ok: false, error: 'Harness did not open it.' })
+    })
+
+    it('no window in HARNESS_OPEN_WAIT_MS: the open ends, and is said once', async () => {
+      const { host, w, timers } = await setup()
+      await host.openAgent('h1')
+      timers[0].run()
+      expect(w.desktopTimedOut).toHaveBeenCalledTimes(1)
+      onTab(host, [])
+      expect(w.opened).not.toHaveBeenCalled()
+    })
+
+    it('the last tap wins', async () => {
+      const { host, w, timers } = await setup()
+      await host.openAgent('h1')
+      await host.openAgent('h2')
+      expect(w.launchDesktop).toHaveBeenCalledTimes(2)
+      expect(timers.map((timer) => timer.cancelled)).toEqual([true, false])
+      onTab(host, [])
+      expect(vi.mocked(w.opened!).mock.calls).toEqual([['mine', 'h2']])
+    })
+
+    // The app a later tap brought forward must not be covered by Desktop's window opening the first agent. A question
+    // screen that came up by itself is no tap.
+    it('a later tap on an agent outside Harness ends the wait; a question screen does not', async () => {
+      const focus = vi.fn(async (_agent: HostAgent) => true)
+      const { host, w, timers } = await setup()
+      host.setRegistry(new HostRegistry([host.harness, { ...observed([observedAgent({ id: 'o1' })]), focus,
+        capabilities: () => ({ status: true, voice: false, focus: true, answer: false }) }]))
+      await host.listAgentSnapshot()
+      await host.openAgent('h1')
+      host.openAgent('h2', 'question')
+      expect(timers[0].cancelled).toBe(false)
+      expect(await host.openAgent('o1')).toBeUndefined()
+      expect(focus).toHaveBeenCalledTimes(1)
+      expect(timers[0].cancelled).toBe(true)
+      onTab(host, [])
+      expect(vi.mocked(w.opened!).mock.calls).toEqual([['mine', 'h2', 'question']])
+    })
+
+    it('an agent that leaves the list is not opened', async () => {
+      let listed = sessions()
+      const { host, w, timers } = await setup({ sessions: () => listed })
+      await host.openAgent('h1')
+      listed = listed.filter((s) => s.agentId !== 'h1')
+      await host.listAgentSnapshot()
+      expect(timers[0].cancelled).toBe(true)
+      onTab(host, [])
+      expect(w.opened).not.toHaveBeenCalled()
+    })
+
+    it('Desktop that does not start answers the dial, and nothing waits', async () => {
+      const { host, w } = await setup({ launchDesktop: async () => false })
+      expect(await host.openAgent('h1')).toEqual({ ok: false, error: 'Harness did not open it.' })
+      onTab(host, [])
+      expect(w.opened).not.toHaveBeenCalled()
+    })
+
+    it('a question screen, an open window and a host with no launcher start nothing', async () => {
+      const asked = await setup()
+      expect(asked.host.openAgent('h1', 'question')).toBeUndefined()
+      expect(asked.w.launchDesktop).not.toHaveBeenCalled()
+      expect(asked.w.opened).toHaveBeenCalledWith('mine', 'h1', 'question')
+      const open = await setup()
+      onTab(open.host, ['h1'])
+      open.host.openAgent('h1')
+      expect(open.w.launchDesktop).not.toHaveBeenCalled()
+      expect(open.w.opened).toHaveBeenCalledWith('mine', 'h1', undefined)
+      const none = await setup({ launchDesktop: undefined })
+      expect((await none.host.listAgentSnapshot()).agents.map((a) => a.caps)).toEqual(['sva', 'sva'])
+      none.host.openAgent('h1')
+      expect(none.w.opened).toHaveBeenCalledWith('mine', 'h1', undefined)
+    })
+  })
 })
 
 describe('the dial that shows one app at a time', () => {
@@ -1053,6 +1218,52 @@ describe('the dial that shows one app at a time', () => {
     host.localFollowed('prompt', 'moved')
     host.localFollowed('tab', 'no-tile')
     expect(localFollowed.mock.calls).toEqual([['prompt', 'moved'], ['tab', 'no-tile']])
+  })
+
+  describe('the agent the dial shows (docs/specs/2026-11-16-orca-device-plugin.md)', () => {
+    const A = {}
+    const B = {}
+    const x = { name: 'api', app: 'Orca' }
+    const y = { name: 'web', app: 'Harness' }
+    const z = { name: 'docs', app: 'Terminal' }
+
+    it('the dial that reported last is the one shown', () => {
+      const dialShows = vi.fn()
+      const host = setup(five(), { dialShows })
+      host.dialShows(A, x)
+      host.dialShows(B, y)
+      expect(dialShows.mock.calls).toEqual([[x], [y]])
+    })
+
+    it('a none from another dial is dropped: unplugging one of two does not blank the other\'s agent', () => {
+      const dialShows = vi.fn()
+      const host = setup(five(), { dialShows })
+      host.dialShows(A, x)
+      host.dialShows(B, y)
+      host.dialShows(A, null)
+      expect(dialShows.mock.calls).toEqual([[x], [y]])
+    })
+
+    it('a none from the dial that reported last reaches the wiring, and the other dial\'s next move fills it again', () => {
+      const dialShows = vi.fn()
+      const host = setup(five(), { dialShows })
+      host.dialShows(A, x)
+      host.dialShows(B, y)
+      host.dialShows(B, null)
+      host.dialShows(A, z)
+      expect(dialShows.mock.calls).toEqual([[x], [y], [null], [z]])
+    })
+
+    it('a none with no report kept is not told', () => {
+      const dialShows = vi.fn()
+      const host = setup(five(), { dialShows })
+      host.dialShows(A, null)
+      expect(dialShows).not.toHaveBeenCalled()
+      host.dialShows(B, y)
+      host.dialShows(B, null)
+      host.dialShows(B, null)
+      expect(dialShows.mock.calls).toEqual([[y], [null]])
+    })
   })
 
   it('knows an agent outside Harness', () => {

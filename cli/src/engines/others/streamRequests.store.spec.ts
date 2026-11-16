@@ -1,5 +1,6 @@
 /** The worker's store request must reuse successful discovery without making a reader hint native authority. */
-import { mkdirSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { env } from '../../config/env.js'
@@ -18,12 +19,11 @@ const { DatabaseSync } = process.getBuiltinModule('node:sqlite') as {
   }
 }
 const CORE = { owner: true, local: true }
-// vitest.setup.ts gives every spec its own home before env is imported.
-const home = env.HERMES_HOME
-const profile = join(home, 'profiles', 'one')
-const otherProfile = join(home, 'profiles', 'two')
+let home: string, profile: string, otherProfile: string, previousHome: string
 const id = (n = 0) => `20261116_100000_${n.toString(16).padStart(6, '0')}`
-const reply = (location: string) => ({ version: STREAM_VERSION, answer: { store: homes.hermesDbPath(location), home: location } })
+const reply = (location: string, discovered = location !== home) => ({
+  version: STREAM_VERSION, answer: { store: homes.hermesDbPath(location), ...(discovered ? { home: location } : {}) },
+})
 let clock = 0
 
 function edit(location: string, sql: string, ...params: string[]): void {
@@ -51,6 +51,12 @@ function deferred<T>() {
 }
 
 beforeEach(() => {
+  // Windows' default is under LOCALAPPDATA, outside vitest's throwaway HOME. Delete only this case's own folder.
+  previousHome = env.HERMES_HOME
+  home = mkdtempSync(join(tmpdir(), 'hermes-store-'))
+  ;(env as { HERMES_HOME: string }).HERMES_HOME = home
+  profile = join(home, 'profiles', 'one')
+  otherProfile = join(home, 'profiles', 'two')
   clock = 0
   vi.spyOn(performance, 'now').mockImplementation(() => clock)
   homes.forgetHermesHomes()
@@ -59,6 +65,8 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks()
   closeSqliteHandles()
+  ;(env as { HERMES_HOME: string }).HERMES_HOME = previousHome
+  homes.forgetHermesHomes()
   rmSync(home, { recursive: true, force: true })
 })
 
@@ -85,6 +93,15 @@ describe('Hermes store lookup in the other engines worker', () => {
     expect(await t.read(id(2))).toEqual(reply(otherProfile))
     expect(await t.read(id(1))).toEqual(reply(profile))
     expect(query).toHaveBeenCalledTimes(discoveryReads)
+  })
+
+  it('omits a differently spelled default home on discovery and a memo hit', async () => {
+    const spelling = `${home}/`
+    const discover = vi.spyOn(homes, 'findHermesHomeForSession').mockResolvedValue(spelling)
+    const t = setup()
+    expect(await t.read()).toEqual(reply(spelling, false))
+    expect(await t.read()).toEqual(reply(spelling, false))
+    expect(discover).toHaveBeenCalledTimes(1)
   })
 
   it.each(['missing', 'unavailable'] as const)('retries a %s result instead of remembering its default fallback', async kind => {
@@ -117,11 +134,11 @@ describe('Hermes store lookup in the other engines worker', () => {
     store(profile, [id()]); store(otherProfile, [id()])
     const query = vi.spyOn(sqlite, 'sqliteReadAll')
     const t = setup()
-    expect(await t.read(id(), profile)).toEqual(reply(profile))
-    expect(await t.read(id(), otherProfile)).toEqual(reply(otherProfile))
+    expect(await t.read(id(), profile)).toEqual(reply(profile, false))
+    expect(await t.read(id(), otherProfile)).toEqual(reply(otherProfile, false))
     expect(query).not.toHaveBeenCalled()
     expect(await t.read()).toEqual(reply(home))
-    expect(await t.read(id(), otherProfile)).toEqual(reply(otherProfile))
+    expect(await t.read(id(), otherProfile)).toEqual(reply(otherProfile, false))
     expect(await t.read()).toEqual(reply(home))
     expect(query).toHaveBeenCalledTimes(1)
   })
@@ -238,10 +255,10 @@ describe('Hermes store lookup in the other engines worker', () => {
     const discover = vi.spyOn(homes, 'findHermesHomeForSession').mockImplementation(() => { started.resolve(); return work.promise })
     const t = setup()
     const first = t.read(); await started.promise
-    expect(await t.read(id(), profile)).toEqual(reply(profile))
+    expect(await t.read(id(), profile)).toEqual(reply(profile, false))
     work.resolve(home)
     expect(await first).toEqual(reply(home))
-    expect(await t.read(id(), profile)).toEqual(reply(profile))
+    expect(await t.read(id(), profile)).toEqual(reply(profile, false))
     expect(discover).toHaveBeenCalledTimes(1)
   })
 

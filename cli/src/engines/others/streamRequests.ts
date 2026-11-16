@@ -69,7 +69,7 @@ export function otherStreamRequests(deps: OtherStreamRequestDeps): ServiceReques
     forgetHome(sessionId)
     return undefined
   }
-  const discoverHome = async (sessionId: string, closed?: AbortSignal): Promise<string> => {
+  const discoverHome = async (sessionId: string, closed?: AbortSignal): Promise<string | null> => {
     const started = performance.now()
     const previous = rememberedHome(sessionId, started)
     if (previous) return previous
@@ -83,7 +83,7 @@ export function otherStreamRequests(deps: OtherStreamRequestDeps): ServiceReques
       }
       hermesHomes.set(sessionId, { home, expiresAt, bytes }); hermesHomeBytes += bytes
     }
-    return home || env.HERMES_HOME
+    return home
   }
   /** One wait at a time: the core's next one ends the last, answered with nothing. */
   let waiting: { done: (answer: Record<string, unknown>) => void } | null = null
@@ -125,8 +125,14 @@ export function otherStreamRequests(deps: OtherStreamRequestDeps): ServiceReques
         || (session.pid !== undefined && !(Number.isSafeInteger(session.pid) && (session.pid as number) >= 0))) return failure('ENGINE_INVALID_REQUEST')
       try {
         if (session.engine === 'hermes') {
-          const home = session.hermesHome as string | undefined || await discoverHome(session.sessionId, closed)
-          return answer({ store: hermesDbPath(home), home })
+          const { sameHermesHome } = await import('../hermes/home.js')
+          if (session.hermesHome) return answer({ store: hermesDbPath(session.hermesHome as string) })
+          // `hermesHome: null` means the default home on every Hermes path. #4342 moved this lookup here and answered the
+          // default home too, so the core recorded it on an attach during a stop and the stop's identity check refused the
+          // Close (#4361). Only a profile home the row did not know is news to the core.
+          const found = await discoverHome(session.sessionId, closed)
+          const store = hermesDbPath(found ?? env.HERMES_HOME)
+          return answer(found && !sameHermesHome(found, env.HERMES_HOME) ? { store, home: found } : { store })
         }
         return answer({ store: await openclawSessionDb(session.sessionId, { pid: session.pid as number ?? 0, stateDir: session.openclawStateDir as string | null | undefined }) })
       } catch {

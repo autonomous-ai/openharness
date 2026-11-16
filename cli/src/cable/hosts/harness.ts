@@ -22,8 +22,8 @@ interface Noted {
  * This computer's Harness agents, for the dial with no window.
  *
  * It reads nothing itself: the cable host hands it the fleet's list as it reads it, and the device cards tell it each
- * agent's state, so the dial's list and its turn cards cannot disagree. No focus: with no window there is nothing
- * to bring an agent forward in.
+ * agent's state, so the dial's list and its turn cards cannot disagree. Focus only where the devices can start Harness
+ * Desktop for a tap (`opens`): with no window there is nothing else to bring an agent forward in.
  */
 export class HarnessSource implements HostSource {
   readonly id = 'harness'
@@ -31,7 +31,7 @@ export class HarnessSource implements HostSource {
   private times = new Map<string, number>()
   private readonly noted = new Map<string, Noted>()
 
-  constructor(private readonly now: () => number = Date.now) {}
+  constructor(private readonly now: () => number = Date.now, private readonly opens = false) {}
 
   /** The fleet's list and each agent's last activity. Only rows on `localId` are kept; a shell is a tile, not an agent. */
   update(rows: HarnessRow[], localId: string, times: Map<string, number>): void {
@@ -80,6 +80,6 @@ export class HarnessSource implements HostSource {
   }
 
   capabilities(): Caps {
-    return { status: true, voice: true, focus: false, answer: true }
+    return { status: true, voice: true, focus: this.opens, answer: true }
   }
 }

@@ -28,7 +28,7 @@ import type { FleetRouting } from '../services/fleet.js'
 import { ServiceUnavailableError } from '../core/serviceHost.js'
 
 import { PLAYER_STATES, type PlayerSession } from './playerLibrary.js'
-import type { ActivitySnapshot, AppSwarms, CableAgent, CableHost, CableMachine, CableMachineSource, CableSwarm, CableTile, DialStatus, FollowCause, OpenReason, RouteDecision, SendOutcome } from './cableSession.js'
+import type { ActivitySnapshot, AppSwarms, CableAgent, CableHost, CableMachine, CableMachineSource, CableSwarm, CableTile, DialAgent, DialStatus, FollowCause, OpenReason, RouteDecision, SendOutcome } from './cableSession.js'
 import type { WindowRoute } from './windowRoute.js'
 import type { SelectionCommand, SelectionResult } from './windowSelection.js'
 import type { VisitCommand, VisitResult } from './windowVisit.js'
@@ -105,11 +105,18 @@ export interface CableHostWiring {
   turned?: () => void
   /** What came of a local follow, by its cause: the dial moved to its agent, or its list had no tile for it. */
   localFollowed?: (cause: FollowCause, outcome: 'moved' | 'no-tile') => void
+  /** The agent the dial that moved last shows, or null once that dial shows none: Orca's Harness Device plugin. */
+  dialShows?: (agent: DialAgent | null) => void
   /**
    * A notification was tapped: the window gives that agent a tile of its own. With `reason`
    * `'question'` it was a question screen instead, and the window only brings the agent forward.
    */
   opened?: (machineId: string, agentId: string, reason?: OpenReason) => void
+  /** Brings Harness Desktop forward, starting it when it is not running: a tap on one of this computer's agents with no
+   *  window. False when it could not. Absent where a tap cannot start it (off macOS): its agents then take no tap. */
+  launchDesktop?: () => Promise<boolean>
+  /** No window came for a waiting open in HARNESS_OPEN_WAIT_MS: the open has ended. */
+  desktopTimedOut?: () => void
   notificationRead?: (machineId: string, agentId: string, readToken: string) => void
   /** A fork the dial asked for is open: the window puts it beside its source and focuses it. */
   forked?: (machineId: string, agentId: string, sourceAgentId: string) => void
@@ -146,8 +153,9 @@ export interface CableHostWiring {
   appSettled?: (app: string) => void
   /** A dial sent a pick from its list of apps, whatever came of it: the picker's measure. A notice's pick is none. */
   appPicked?: () => void
-  /** Runs `run` once after `ms` and returns its cancel: the settle of the app in front. The devices always give theirs,
-   *  which their stop cancels; absent (a test's host), an unref'd setTimeout. */
+  /** Runs `run` once after `ms` and returns its cancel: the settle of the app in front, and the end of a waiting open
+   *  (HARNESS_OPEN_WAIT_MS). The devices always give theirs, which their stop cancels; absent (a test's host), an
+   *  unref'd setTimeout. */
   appTimer?: (ms: number, run: () => void) => () => void
   /** In [0, 1): the draw between apps tied for the most agents. Absent, Math.random. */
   appRandom?: () => number
@@ -159,6 +167,12 @@ function unrefAfter(ms: number, run: () => void): () => void {
   timer.unref()
   return () => clearTimeout(timer)
 }
+
+/**
+ * How long a tap on a Harness agent waits for Desktop's window after starting it: room for a cold start, the sign-in
+ * check and the window's first connect. Not measured on Diego's Mac, which this work does not touch.
+ */
+export const HARNESS_OPEN_WAIT_MS = 30_000
 
 /** Whether an id is the router's placeholder for a machine with no id yet (`cable:` and the computer id;
  *  see services/fleetRouter.ts) rather than a machine the backend has heard of. */
@@ -225,6 +239,7 @@ export class DaemonCableHost implements CableHost {
    * With neither, the wheel is the local row and nothing else.
    */
   constructor(private readonly wiring: CableHostWiring, fleet?: MachineFleet) {
+    this.harness = new HarnessSource(Date.now, wiring.launchDesktop !== undefined)
     this.local = new FleetRouter({
       ...wiring,
       // The same set `agents_list` answers the apps with — see the router's localAgents.
@@ -531,10 +546,25 @@ export class DaemonCableHost implements CableHost {
    */
   setSwarms(swarms: AppSwarms | null): void {
     this.swarms = swarms
+    const waiting = this.waiting
+    if (!swarms || !waiting) return
+    // The window a tap started is here: it is handed the tap, as a window that was open would have been.
+    this.endWaiting()
+    this.wiring.log(`cable: open ${waiting.machineId}/${waiting.agentId} (notification)`)
+    this.wiring.opened?.(waiting.machineId, waiting.agentId)
   }
 
   /** This computer's Harness agents, fed from the list this host reads; the devices put it in their registry. */
-  readonly harness = new HarnessSource()
+  readonly harness: HarnessSource
+
+  /** A tap on a Harness agent that started Desktop, until its window comes (setSwarms), and its timer's cancel. One at
+   *  a time: the last tap on any agent wins (openAgent). In memory only. */
+  private waiting: { machineId: string; agentId: string; cancel: () => void } | null = null
+
+  private endWaiting(): void {
+    this.waiting?.cancel()
+    this.waiting = null
+  }
 
   /** Every agent on this computer, by source; null when the devices have none. Read only with no window. */
   private registry: HostRegistry | null = null
@@ -607,6 +637,17 @@ export class DaemonCableHost implements CableHost {
 
   localFollowed(cause: FollowCause, outcome: 'moved' | 'no-tile'): void {
     this.wiring.localFollowed?.(cause, outcome)
+  }
+
+  /** The dial that reported last and what it shows. One report for all dials: a none from another dial is dropped, so
+   *  unplugging one of two does not blank the agent the other shows. */
+  private shown: { dial: object; agent: DialAgent } | null = null
+
+  dialShows(dial: object, agent: DialAgent | null): void {
+    if (agent) this.shown = { dial, agent }
+    else if (this.shown?.dial === dial) this.shown = null
+    else return
+    this.wiring.dialShows?.(agent)
   }
 
   markSeen(agentId: string): void {
@@ -710,6 +751,8 @@ export class DaemonCableHost implements CableHost {
     const bound = new Map(this.wiring.sessions().map((s) => [s.agentId, s.sessionId]))
     this.harness.update(flat.map((a) => bound.get(a.id) ? { ...a, sessionId: bound.get(a.id) } : a), local.id,
       await this.viaFleet((r) => r.activityTimes()))
+    const waiting = this.waiting
+    if (waiting && !this.harness.list().some((a) => a.id === waiting.agentId)) this.endWaiting()
     // Read once: each read merges every source's whole list.
     const entries = registry.entries()
     const sourceOf = new Map(entries.map((e) => [e.agent, e.source]))
@@ -801,6 +844,9 @@ export class DaemonCableHost implements CableHost {
   }
 
   openAgent(agentId: string, reason?: OpenReason): void | Promise<void | { ok: false; error: string }> {
+    // The last tap wins, whatever agent it is on: a tap still waiting for Desktop's window would open its agent over the
+    // app this one brings forward. A question screen that came up by itself is no tap.
+    if (!reason) this.endWaiting()
     const outside = this.outsideEntry(agentId)
     if (outside) {
       // Only a person's tap switches the other app: a question screen that came up by itself never does.
@@ -815,8 +861,31 @@ export class DaemonCableHost implements CableHost {
       this.wiring.log(`cable: ignored open for unknown agent ${agentId}`)
       return
     }
+    // With no window nothing could open a tap on one of this computer's agents: Desktop is started, and its window is
+    // handed the tap once it comes. A question screen that came up by itself never starts it.
+    if (this.swarms === null && !reason && this.wiring.launchDesktop && machineId === this.localId()) {
+      return this.startDesktop(machineId, agentId, this.wiring.launchDesktop)
+    }
     this.wiring.log(`cable: open ${machineId}/${agentId} (${reason ?? 'notification'})`)
     this.wiring.opened?.(machineId, agentId, reason)
+  }
+
+  /** The tap waits from now, before Desktop is asked: a window that connects while it is still being started finds it. */
+  private async startDesktop(machineId: string, agentId: string, launch: () => Promise<boolean>): Promise<void | { ok: false; error: string }> {
+    const tap = {
+      machineId, agentId,
+      cancel: (this.wiring.appTimer ?? unrefAfter)(HARNESS_OPEN_WAIT_MS, () => {
+        this.waiting = null
+        this.wiring.desktopTimedOut?.()
+      }),
+    }
+    this.waiting = tap
+    if (await launch().catch(() => false)) return
+    // `open -b` failed or ran out its time: only a tap still waiting failed. A window that came meanwhile has the open,
+    // and a later tap answers for itself.
+    if (this.waiting !== tap) return
+    this.endWaiting()
+    return { ok: false, error: `${hostDisplayName('harness')} did not open it.` }
   }
 
   form(command: FormCommand): Promise<FormResult> {

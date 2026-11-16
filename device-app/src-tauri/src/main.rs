@@ -15,7 +15,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-use tauri::menu::{Menu, MenuItem as NativeItem, PredefinedMenuItem};
+use tauri::menu::{CheckMenuItem, Menu, MenuItem as NativeItem, PredefinedMenuItem};
 use tauri::tray::{MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, WindowEvent};
 
@@ -223,6 +223,9 @@ fn native_menu(handle: &AppHandle, items: &[MenuItem]) -> tauri::Result<Menu<tau
             MenuItem::Action(action, text) => {
                 menu.append(&NativeItem::with_id(handle, menu_id(*action), text, true, None::<&str>)?)?
             }
+            MenuItem::Check(action, text, checked) => {
+                menu.append(&CheckMenuItem::with_id(handle, menu_id(*action), text, true, *checked, None::<&str>)?)?
+            }
             MenuItem::Separator => menu.append(&PredefinedMenuItem::separator(handle)?)?,
         }
     }
@@ -236,6 +239,8 @@ fn menu_id(action: MenuAction) -> &'static str {
         MenuAction::SignIn => "sign_in",
         MenuAction::ClaudeOn => "claude_on",
         MenuAction::ClaudeOff => "claude_off",
+        MenuAction::SoundOn => "sound_on",
+        MenuAction::SoundOff => "sound_off",
         MenuAction::OpenHarness => "open_harness",
         MenuAction::Quit => "quit",
     }
@@ -243,7 +248,9 @@ fn menu_id(action: MenuAction) -> &'static str {
 
 fn menu_action(id: &str) -> Option<MenuAction> {
     use MenuAction::*;
-    [Install, SignIn, ClaudeOn, ClaudeOff, OpenHarness, Quit].into_iter().find(|action| menu_id(*action) == id)
+    [Install, SignIn, ClaudeOn, ClaudeOff, SoundOn, SoundOff, OpenHarness, Quit]
+        .into_iter()
+        .find(|action| menu_id(*action) == id)
 }
 
 #[cfg(test)]
@@ -253,6 +260,18 @@ mod tests {
 
     fn view(screen: Screen, phase: Phase, lines: &[&str]) -> View {
         View { screen, phase, lines: lines.iter().map(|line| line.to_string()).collect() }
+    }
+
+    #[test]
+    fn every_menu_action_has_its_own_id() {
+        use MenuAction::*;
+        let actions = [Install, SignIn, ClaudeOn, ClaudeOff, SoundOn, SoundOff, OpenHarness, Quit];
+        for action in actions {
+            assert_eq!(menu_action(menu_id(action)), Some(action));
+        }
+        let ids: std::collections::HashSet<_> = actions.into_iter().map(menu_id).collect();
+        assert_eq!(ids.len(), actions.len());
+        assert_eq!(menu_action("sound"), None);
     }
 
     #[test]

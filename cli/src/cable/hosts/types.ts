@@ -5,6 +5,8 @@ export interface HostAgent {
   id: string
   engine: string
   sessionId?: string
+  /** The keys another source may know the same agent by, beside its session: only herdr's pane, `herdr:<pane id>`. */
+  paneKeys?: readonly string[]
   callerPid?: number
   cwd?: string
   name: string
@@ -59,7 +61,7 @@ export type SendResult = { ok: true } | { ok: false; reason: string }
 export type PaneSwitch = 'ok' | 'failed' | 'busy'
 
 export interface HostSource {
-  /** 'harness' | 'observed' | a host adapter's name (wave 1). */
+  /** 'harness' | 'observed' | a listing source's name (`herdr`). */
   readonly id: string
   list(): HostAgent[]
   capabilities(agent: HostAgent): Caps
