@@ -91,7 +91,7 @@ describe('removeEngineHooks', () => {
 
   it('takes out the Codex rules file an earlier release wrote, and keeps one Harness did not write', async () => {
     const { root, targets } = machine()
-    targets.codex.homes.push(join(root, 'codex-mine'))
+    targets.codex.homes.push(join(root, 'codex-mine'), join(root, 'codex-first'))
     const rules = (home: string) => join(root, home, 'rules', 'harness.rules')
     // The head as releases before this one wrote it, without `device notify`, and before that without `browser`: the
     // list of commands in its first line changes from one release to the next.
@@ -101,11 +101,14 @@ describe('removeEngineHooks', () => {
     write(rules('codex'), `${head('whoami, ps, search, machines, show, wait, new, close, send, tell, browser')}prefix_rule(pattern=["harness"], decision="allow")\n`)
     write(rules('codex-profile'), `${head('whoami, ps, search, machines, show, wait, new, close, send, tell')}prefix_rule(pattern=["harness"], decision="allow")\n`)
     write(rules('codex-mine'), '# My own rules.\nprefix_rule(pattern=["harness"], decision="allow")\n')
+    // The first release to write it (CLI 0.3.74 to 0.3.79) began it otherwise.
+    write(rules('codex-first'), '# Written by Harness: agents in a tab with Agent Messages on reply with harness send. Do not edit.\nprefix_rule(pattern=["harness", "send"], decision="allow")\n')
 
     const outcomes = await removeEngineHooks(targets)
 
     expect(existsSync(rules('codex'))).toBe(false)
     expect(existsSync(rules('codex-profile'))).toBe(false)
+    expect(existsSync(rules('codex-first'))).toBe(false)
     expect(outcomes).toContainEqual({ file: rules('codex-mine'), removed: 0, kept: 'another author’s file' })
     expect(existsSync(rules('codex-mine'))).toBe(true)
   })
