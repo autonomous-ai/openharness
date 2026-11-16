@@ -41,7 +41,7 @@ import { Inbox } from '../cable/hosts/inbox.js'
 import { LAST_ANSWER_DEADLINE_MS, LAST_ANSWER_MAX_BYTES, readLastAnswer } from '../cable/hosts/lastAnswer.js'
 import { askedLine, hostDisplayName, observedAgentId, ObservedSource, type ObservedActions, type ObservedDeps, type PromptSource } from '../cable/hosts/observed.js'
 import { createOpenActions } from '../cable/hosts/open.js'
-import { createOrcaAdapter, orcaDeps, type OrcaDeps } from '../cable/hosts/orca.js'
+import { createOrcaAdapter, createOrcaReads, orcaDeps, type OrcaReadDeps, type OrcaReads } from '../cable/hosts/orca.js'
 import { readRecordName } from '../cable/hosts/recordName.js'
 import { HostRegistry, type HostEntry } from '../cable/hosts/registry.js'
 import { learnApps, readProcessNames } from '../cable/hosts/scannedApp.js'
@@ -111,7 +111,9 @@ export interface DevicesDeps {
   cable?: Partial<CableFleetOptions>
   /** For this service's tests: how `orca`, and the commands a tap runs to open an app (cable/hosts/open.ts), are found and
    *  run. */
-  orca?: OrcaDeps
+  orca?: OrcaReadDeps
+  /** For this service's tests: Orca's focus and order reads (cable/hosts/orca.ts); built on `orca` when unset. */
+  orcaReads?: OrcaReads
   /** For this service's tests: how `codex` is found and run (cable/hosts/codexQueue.ts). */
   codex?: Pick<CodexQueueDeps, 'run' | 'binary' | 'platform'>
   /** For this service's tests: herdr's socket (cable/hosts/herdrClient.ts). */
@@ -953,9 +955,65 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     const listed = new Set(lists.flatMap((list) => list.agents.map((agent) => agent.id)))
     for (const entry of mid) if (listed.has(entry.agent.id)) tell(started(entry))
   }
+
+  // ── Orca's ring in Orca's tab order ────────────────────────────────────────────────────────────────
+  //
+  // Read from Orca's layouts (`orca terminal list --include-visual-layouts`) each time an agent enters or leaves Orca's
+  // ring while a dial is attached, one read at a time (docs/plans/2026-11-16-dial-orca-focus-order-design.md, decided 2).
+  // Never polled: a tab dragged with no agent coming or going waits for the next change, as a poll would run Orca's CLI
+  // every few seconds for as long as a dial is attached, for a drag that seldom comes. A part of its own: a throw on its
+  // path costs the dial nothing.
+  const orcaReads = deps.orcaReads ?? createOrcaReads(apps)
+  /** Whether a dial is attached: the fleet tells `watching` for the first and the last alone. */
+  let dialOn = false
+  /** Orca's ring as the attached dial has it: its members at the last check, and whether a change during the read under
+   *  way asks for one more. A new one at each detach, so a read from before it lands on nothing. */
+  let orcaRing: { members?: ReadonlySet<string>; again: boolean } = { again: false }
+  /** A read runs: Orca's CLI is asked one at a time, across a detach too. */
+  let ordering = false
+  /** The agents on Orca's ring, by id: the merged list's, as the dials list them. */
+  const orcaIds = (): string[] => registry.entries().filter(({ agent }) => agent.app === 'orca').map(({ agent }) => agent.id)
+  const readOrcaOrder = (source: ObservedSource): Promise<void> => {
+    ordering = true
+    const ring = orcaRing
+    return orcaReads.orcaTabOrder().then((handles) => {
+      if (ring !== orcaRing) return
+      if (handles === null) { log('[device] orca order · failed'); return }
+      log('[device] orca order · read')
+      const place = new Map(handles.map((handle, at) => [handle, at]))
+      const rank = new Map<string, number>()
+      for (const id of orcaIds()) {
+        // An agent in a multiplexer inside Orca has no Orca pane, and one Orca did not lay out has no place: both come
+        // after the ranked (select.ts).
+        const handle = source.paneOf(id, 'orca')
+        const at = handle === undefined ? undefined : place.get(handle)
+        if (at !== undefined) rank.set(id, at)
+      }
+      // Nothing is pushed: the dials read the reordered ring on their next list, as any change of it.
+      cableHost.setRank('orca', rank)
+    }).finally(() => {
+      ordering = false
+      if (!orcaRing.again) return
+      orcaRing.again = false
+      part.call('orca', () => readOrcaOrder(source))
+    })
+  }
+  /** Asks for a read when Orca's ring has other members than at the last check. With none, the last order is kept. */
+  const orcaMembers = (source: ObservedSource): Promise<void> | undefined => {
+    if (!dialOn) return
+    const members = new Set(orcaIds())
+    const was = orcaRing.members
+    orcaRing.members = members
+    if (members.size === 0 || (was?.size === members.size && [...was].every((id) => members.has(id)))) return
+    if (ordering) { orcaRing.again = true; return }
+    return readOrcaOrder(source)
+  }
+  if (observed) observed.onChange(() => part.call('orca', () => orcaMembers(observed)))
+
   /** The scan, the reminders, and herdr's and Herdr Core's sockets, for an attached dial alone. */
   let attached: ReturnType<typeof setInterval>[] = []
   const dialAttached = (on: boolean): void => {
+    dialOn = on
     for (const timer of attached) clearInterval(timer)
     attached = []
     // The first dial coming, or the last going, can turn the gate (heldOnTab) when it says appFilter: what waits is asked,
@@ -971,9 +1029,14 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     part.call('herdr', () => on && apps.onPath('herdr') ? herdr.start() : herdr.stop())
     // Only with Herdr installed, read at each attach as herdr's is: with none, no folder is watched for hc's socket.
     if (hcSource) part.call('herdr-app', () => on && herdrApp.binary() ? hcSource.start() : hcSource.stop())
-    if (!on) return
+    if (!on) {
+      // The next attach checks Orca's ring afresh, and a read under way lands on nothing.
+      orcaRing = { again: false }
+      return
+    }
     // Agents already running when the dial came are listed now, idle until their next hook event.
     part.call('observed', () => observed.scanOpen())
+    part.call('orca', () => orcaMembers(observed))
     // Its questions were in its RAM: the ones still waiting are asked again, under their ids.
     part.call('dial', () => { for (const [agentId, question] of shown) ask(agentId, question) })
     part.call('dial', showWaits)
