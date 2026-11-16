@@ -1332,6 +1332,18 @@ describe('the dial stream', () => {
     expect(next.lines.map((line) => JSON.stringify(line))).toEqual([API_LINE])
   })
 
+  it('an older stream ending after a newer one opened leaves the newer one written to', () => {
+    const { dial } = dialed()
+    const older = handMade()
+    const newer = handMade()
+    dial.handler.open({ type: 'dial', standby: true }, older.stream)
+    dial.handler.open({ type: 'dial', standby: true }, newer.stream)
+    newer.writable()
+    older.end('replaced')
+    dial.attached(true)
+    expect(newer.lines.map((line) => JSON.stringify(line))).toEqual([UNPLUGGED, NO_AGENT])
+  })
+
   describe.skipIf(process.platform === 'win32')('on a real listener', () => {
     it('the first line is the state as the stream opens', async () => {
       const unplugged = dialed()
