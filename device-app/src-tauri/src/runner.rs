@@ -209,7 +209,7 @@ impl Runner {
                     if let Err(message) = &result {
                         log.line(&format!("claude: {message}"));
                     }
-                    Event::ClaudeSet(result)
+                    Event::ClaudeSet(result.is_ok())
                 });
             }
             Effect::SetCodex(on) => {
@@ -219,7 +219,7 @@ impl Runner {
                     if let Err(message) = &result {
                         log.line(&format!("codex: {message}"));
                     }
-                    Event::CodexSet(result)
+                    Event::CodexSet(result.is_ok())
                 });
             }
             // On the caller's thread: one short write, to the watch running now. With none the change has nowhere to
@@ -466,8 +466,8 @@ mod tests {
     use crate::tabs::{NoTabs, Selected, TabApp, TabError, TabScripts};
     use crate::testing::{Fake, alive, fake_harness, wait_gone};
     use crate::types::{
-        ClaudeStatus, CodexStatus, DialStatus, Effect, Event, LoginEvent, MenuItem, NotifyMode, Output, Saved,
-        UpdateFailure,
+        ClaudeStatus, CodexStatus, DialStatus, Effect, Event, LoginEvent, MenuAction, MenuItem, NotifyMode, Output,
+        Saved, UpdateFailure,
     };
     use crate::update::AppUpdater;
     use std::collections::VecDeque;
@@ -863,9 +863,9 @@ mod tests {
         let on = ClaudeStatus { supported: true, installed: true, enabled: true, claude_version: None };
         assert_eq!(w.answer(Effect::ReadClaude), Event::Claude(Some(on)));
         w.fake.script("device claude enable", &[]);
-        assert_eq!(w.answer(Effect::SetClaude(true)), Event::ClaudeSet(Ok(())));
+        assert_eq!(w.answer(Effect::SetClaude(true)), Event::ClaudeSet(true));
         w.fake.script("device claude disable", &["@err Claude Code is busy.", "@exit 1"]);
-        assert_eq!(w.answer(Effect::SetClaude(false)), Event::ClaudeSet(Err("Claude Code is busy.".into())));
+        assert_eq!(w.answer(Effect::SetClaude(false)), Event::ClaudeSet(false));
         assert!(w.logged("claude: Claude Code is busy."));
         w.fake.script("login --json", &[URL, SUCCESS]);
         assert_eq!(w.answer(Effect::RunLogin), browser());
@@ -900,9 +900,9 @@ mod tests {
         let off = CodexStatus { supported: true, installed: true, enabled: false };
         assert_eq!(w.answer(Effect::ReadCodex), Event::Codex(Some(off)));
         w.fake.script("device codex enable", &[]);
-        assert_eq!(w.answer(Effect::SetCodex(true)), Event::CodexSet(Ok(())));
+        assert_eq!(w.answer(Effect::SetCodex(true)), Event::CodexSet(true));
         w.fake.script("device codex disable", &["@err Codex is busy.", "@exit 1"]);
-        assert_eq!(w.answer(Effect::SetCodex(false)), Event::CodexSet(Err("Codex is busy.".into())));
+        assert_eq!(w.answer(Effect::SetCodex(false)), Event::CodexSet(false));
         assert!(w.logged("codex: Codex is busy."));
         assert_eq!(w.fake.calls(), ["device codex status --json", "device codex enable", "device codex disable"]);
     }
@@ -1510,6 +1510,57 @@ mod tests {
                 "hardware watch --json"
             ]
         );
+    }
+
+    /// Runs the effects, and hands the app each event, until `last` has been handled; gives what came back for the
+    /// binary.
+    fn drive(w: &World, app: &mut App, mut effects: Vec<Effect>, last: impl Fn(&Event) -> bool) -> Vec<Effect> {
+        let mut back = Vec::new();
+        loop {
+            back.extend(effects.into_iter().filter_map(|effect| w.runner.run(effect)));
+            let event = w.next();
+            let done = last(&event);
+            effects = app.handle(event);
+            if done {
+                back.extend(effects.into_iter().filter_map(|effect| w.runner.run(effect)));
+                return back;
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn turn_on_from_the_menu_runs_enable_and_opens_no_window() {
+        let status = |enabled: bool| format!(r#"{{"supported":true,"installed":true,"enabled":{enabled}}}"#);
+        let w = world();
+        w.fake.script("hardware watch --json", &[r#"{"attached":true,"fw":"0.0.95"}"#, "@stdin"]);
+        w.fake.script("auth status --json", &[r#"{"loggedIn":true}"#]);
+        w.fake.script("device claude status --json", &[&status(false)]);
+        w.fake.script("device claude enable", &[]);
+        let (mut app, effects) = App::new(Saved::default(), w.runner.find_cli(), false, B);
+        let off = ClaudeStatus { supported: true, installed: true, enabled: false, claude_version: None };
+        let mut back = drive(&w, &mut app, effects, |event| *event == Event::Claude(Some(off.clone())));
+
+        let effects = app.handle(Event::Menu(MenuAction::ClaudeOn));
+        w.fake.script("device claude status --json", &[&status(true)]);
+        let on = ClaudeStatus { enabled: true, ..off.clone() };
+        back.extend(drive(&w, &mut app, effects, |event| *event == Event::Claude(Some(on.clone()))));
+
+        assert!(!back.iter().any(|effect| matches!(effect, Effect::Show(Some(_)))), "{back:?}");
+        let mut rows: Vec<String> = back
+            .iter()
+            .filter_map(|effect| match effect {
+                Effect::Menu(items) => items.iter().find_map(|item| match item {
+                    MenuItem::Text(label) if label.starts_with("Claude Code:") => Some(label.clone()),
+                    _ => None,
+                }),
+                _ => None,
+            })
+            .collect();
+        rows.dedup();
+        // The change shows as soon as it ends well, before the status read after it answers.
+        assert_eq!(rows, ["Claude Code: Off", "Claude Code: Turning on…", "Claude Code: On"]);
+        assert_eq!(w.fake.calls().iter().filter(|call| *call == "device claude enable").count(), 1);
     }
 
     #[cfg(unix)]

@@ -95,6 +95,8 @@ export interface ObservedDeps {
   /** The tty of a process in a tab app (tabs.ts readTty), rejecting when `ps` could not be read; absent (off macOS), no
    *  agent has a tab. */
   tty?(pid: number): Promise<string | undefined>
+  /** Every owner a scan read, before any is listed. Absent, nothing is told. */
+  scanned?(owners: ReadonlyMap<string, SessionOwner>): void
 }
 
 export interface ObservedActions {
@@ -651,6 +653,8 @@ export class ObservedSource implements HostSource {
     // (externals/support.ts): the cached answer is empty before the first look, so the scan a dial's attach runs would
     // find nothing until the next one, 60 s later. Then the rows of only the sessions it found, from their own stores.
     const owners = await this.deps.openSessions.owners()
+    // Before any filter: an owner with no row, or Harness's own, still holds its session.
+    this.deps.scanned?.(owners)
     const open = new Map<string, ExternalEngine>()
     for (const [sessionId, owner] of owners) {
       if (!owner.harness && !this.entries.has(observedAgentId(owner.engine, sessionId))) open.set(sessionId, owner.engine)
