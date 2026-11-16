@@ -5537,6 +5537,13 @@ describe('the dial skill, written from the devices\' own process (cable/dialSkil
     await vi.waitFor(() => expect(held(other)).toBe(DIAL_SKILL))
   })
 
+  it('a process with no uid writes the dial skill into no home', () => {
+    // No uid owns a home, so none is taken as this user's.
+    vi.spyOn(process, 'getuid').mockReturnValue(undefined as unknown as number)
+    start({ faults: ['fleet'], listen: fakeListener().listen })
+    expect(held(env.CODEX_HOME)).toBeUndefined()
+  })
+
   it('with the devices inside the core the dial skill is not written', () => {
     start({ faults: ['fleet'] })
     expect(held(env.CODEX_HOME)).toBeUndefined()

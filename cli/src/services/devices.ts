@@ -19,7 +19,7 @@
 import { randomUUID } from 'node:crypto'
 import { existsSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { env } from '../config/env.js'
 import { DEVICES_FALLBACKS, DEVICES_REQUESTS, type CoreApi, type CorePorts, type DeviceHookPort, type DevicesPort, type RouteAnswer, type SendResult, type ServiceRequests, type WindowFocus } from '../core/api.js'
 import { CableFleet, testDialDiscovery, type CableFleetOptions } from '../cable/cableFleet.js'
@@ -56,13 +56,15 @@ import { NOTIFY_MODE_FILE, NotifyModeStore, type NotifyMode } from '../cable/not
 import { PetStore } from '../cable/pets/store.js'
 import { DialLog } from '../cable/dialLog.js'
 import { DialVerdicts } from '../cable/dialPortVerdicts.js'
+import { createDialSkillWriter } from '../cable/dialSkillWriter.js'
+import { readAnswers } from '../devices/dialSkillFiles.js'
 import { WindowForm } from '../cable/windowForm.js'
 import { createWindowRouter } from '../cable/windowRoute.js'
 import { WindowSelection } from '../cable/windowSelection.js'
 import { WindowVisit } from '../cable/windowVisit.js'
 import { MachineListCache } from '../device/machineList.js'
 import type { NoticeAsk, NoticeResult } from '../lib/dialNotice.js'
-import { claudeProjectsRoots, codexHomeRoots } from '../lib/engineHomes.js'
+import { claudeProjectsRoots, codexHomeRoots, movedEngineHomes } from '../lib/engineHomes.js'
 import { harnessDevicesRequest } from '../lib/harnessDevices.js'
 import { OpenSessions, SessionRows } from '../lib/sessionSearch/external.js'
 import { externalProviders } from '../lib/sessionSearch/externals/index.js'
@@ -163,7 +165,7 @@ const ATTACH_ECHO_MS = 2_000
 
 /** This computer's agents outside a pane, read with ⌘P's readers (services/externalSessions.ts), and how the dial's voice
  *  and tap reach them. */
-function observedSource(dataDir: string, log: (line: string) => void, actions: ObservedActions, tty: ObservedDeps['tty']): ObservedSource {
+function observedSource(dataDir: string, log: (line: string) => void, actions: ObservedActions, tty: ObservedDeps['tty'], scanned: ObservedDeps['scanned']): ObservedSource {
   const providers = externalProviders()
   return new ObservedSource({
     now: Date.now,
@@ -185,6 +187,7 @@ function observedSource(dataDir: string, log: (line: string) => void, actions: O
     // a home the person moved is adopted while the daemon runs.
     recordName: (owner) => readRecordName(owner, { roots: claudeProjectsRoots(env.CLAUDE_PROJECTS_DIR) }),
     tty,
+    scanned,
   })
 }
 
@@ -381,7 +384,21 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   /** The route or the refusal of the dial's words, and why a queue failed: never the words, the session, the terminal or a
    *  path. */
   const voiced = (what: string): void => log(`[device] voice · ${what}`)
-  const observed = env.HARNESS_DEVICE_OBSERVED ? observedSource(core.dataDir, log, {
+  // The dial skill in each home an engine's sessions use (cable/dialSkillWriter.ts), from the devices' own process alone:
+  // inside the core's (`HARNESSD_SERVICES=none`) there is no listener, so a skill would name a `harness device notify`
+  // that cannot ring. A part of its own, so a throw in a person's home is never the dial's.
+  const skill = deps.listen ? createDialSkillWriter({
+    dataDir: core.dataDir,
+    platform: apps.platform,
+    uid: process.getuid?.() ?? -1,
+    claudeHome: dirname(env.CLAUDE_PROJECTS_DIR),
+    codexHome: env.CODEX_HOME,
+    adopted: movedEngineHomes,
+    answers: () => readAnswers(core.dataDir),
+    log,
+  }) : null
+  if (skill) part.call('skill', () => skill.started())
+  const observed =env.HARNESS_DEVICE_OBSERVED ? observedSource(core.dataDir, log, {
     adapters,
     modReady: (sessionId) => inbox.ready(sessionId),
     toMod: (sessionId, text) => inbox.deliver(sessionId, text),
@@ -396,7 +413,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     codexQueue,
     codexHome: env.CODEX_HOME,
     count: (what) => voiced(typeof what === 'string' ? what : what.id),
-  }, ttyOf) : null
+  }, ttyOf, skill ? (owners) => part.call('skill', () => skill.scanned(owners.values())) : undefined) : null
   /** herdr's agents, hook or no hook, listed and followed over herdr's own socket (docs/specs/2026-11-16-device-herdr.md).
    *  It runs only while a dial is attached, as the open scan does, behind the observed agents' switch, and never on
    *  Windows, where herdr's socket is a named pipe (herdrSource.ts). */
