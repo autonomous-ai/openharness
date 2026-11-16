@@ -33,7 +33,10 @@ export type ManifestDownload = {
   manifestUrl: string;
   /** The manifest key whose `url` is the asset. */
   field: string;
-  /** The only places the redirect may point, for the reason given above `DESKTOP_ASSET_PREFIXES`. */
+  /**
+   * The release folders the redirect may point into, for the reason given above `DESKTOP_ASSET_PREFIXES`:
+   * each is followed by an X.Y.Z version folder and one file name, nothing else.
+   */
   allowedPrefixes: readonly string[];
   extension: string;
   /** Names the product in the 503 text. */
@@ -47,6 +50,21 @@ function unavailable(product: string, reason: string): Response {
     status: 503,
     headers: { "Cache-Control": "no-store, max-age=0", "Content-Type": "text/plain; charset=utf-8" },
   });
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * The whole URL, not its ends: the browser normalises the Location it follows, so a dot segment in any
+ * spelling (`..`, `%2e%2e`, `..\`), a query or a fragment would leave the folder while the raw string
+ * still starts with a prefix and ends with the extension. Only `<prefix><X.Y.Z>/<file name>` passes, the
+ * file name one segment of [A-Za-z0-9._-] that does not start with a dot.
+ */
+function isReleaseAsset(url: string, allowedPrefixes: readonly string[], extension: string): boolean {
+  const prefixes = allowedPrefixes.map(escapeRegExp).join("|");
+  return new RegExp(`^(?:${prefixes})[0-9]+\\.[0-9]+\\.[0-9]+/[A-Za-z0-9_-][A-Za-z0-9._-]*${escapeRegExp(extension)}$`).test(url);
 }
 
 /**
@@ -66,7 +84,7 @@ export async function resolveManifestDownload(download: ManifestDownload): Promi
 
   const entry = (manifest as Record<string, unknown> | null)?.[field];
   const url = (entry as Record<string, unknown> | undefined)?.url;
-  if (typeof url !== "string" || !allowedPrefixes.some((prefix) => url.startsWith(prefix)) || !url.endsWith(extension)) {
+  if (typeof url !== "string" || !isReleaseAsset(url, allowedPrefixes, extension)) {
     return unavailable(product, `no usable ${field} entry`);
   }
 
