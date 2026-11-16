@@ -203,7 +203,7 @@ describe('harness hardware watch with a dial: Notifications', () => {
     outside.push(engine)
     let run = watch(d)
     onTestFailed(() => { console.log(`---- the watch's stdout\n${run.lines.join('\n')}\n---- its stderr\n${run.errors.join('\n')}`) })
-    await until('the watch to say Full', () => notifyOf(run.lines.at(-1)) === 'full', 60_000)
+    await until('the watch to say All', () => notifyOf(run.lines.at(-1)) === 'full', 60_000)
 
     // On any line since, never on a count of lines: the dial greets again every 15 s, and a greeting brings a status.
     let from = run.lines.length
@@ -221,7 +221,7 @@ describe('harness hardware watch with a dial: Notifications', () => {
 
     from = run.lines.length
     run.child.stdin!.write('{"notify":"full"}\n')
-    await until('the watch to say Full again', () => run.lines.slice(from).some((line) => notifyOf(line) === 'full'), 30_000)
+    await until('the watch to say All again', () => run.lines.slice(from).some((line) => notifyOf(line) === 'full'), 30_000)
     // The devices' process started again knows no agent outside a pane from before: a new one, once the dial has its
     // list again.
     await dial.next((m) => m.t === 'agents.end', 45_000, 'the list after the restart', listedSince)

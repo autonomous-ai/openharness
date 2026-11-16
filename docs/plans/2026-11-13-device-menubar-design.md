@@ -232,7 +232,7 @@ while the desktop app runs (it has its own `HarnessStatusMenu`).
 | Claude Code | as above; absent when not supported or installed |
 | Codex | "Codex: On" with **Turn off**, or "Codex: Off" with **Turn on…**; absent when Codex is not on this computer |
 | **Sound** (check item) | only while Harness runs and the dial is attached, not updating, and reports its settings; checked when the dial's sound is on ([design](2026-11-16-device-app-sound-design.md)) |
-| **Notifications** (submenu) | **Full** and **Needs you**, the one in force checked; only while Harness runs and the dial is attached and not updating ([design](2026-11-16-dial-agent-notify-design.md)) |
+| **Notifications** (submenu) | **All** and **Needs you**, the one in force checked; only while Harness runs and the dial is attached and not updating ([design](2026-11-16-dial-agent-notify-design.md)) |
 | "Updating Harness Device…" (disabled) | while the app installs its own update ([design](2026-11-16-device-app-release-design.md)) |
 | **Update X…** | when the app cannot replace its bundle; opens `harness.autonomous.ai/device` ([design](2026-11-16-device-app-release-design.md)) |
 | separator | |

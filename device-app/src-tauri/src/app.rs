@@ -1297,7 +1297,7 @@ mod tests {
             MenuItem::Submenu(
                 "Notifications".into(),
                 vec![
-                    MenuItem::Check(MenuAction::NotifyFull, "Full".into(), full),
+                    MenuItem::Check(MenuAction::NotifyFull, "All".into(), full),
                     MenuItem::Check(MenuAction::NotifyYou, "Needs you".into(), you),
                 ],
             )
@@ -1305,7 +1305,7 @@ mod tests {
 
         let effects = app.handle(notifying(NotifyMode::Full));
         assert_eq!(submenus(&effects), [checked(true, false)]);
-        assert!(has(&effects, &Effect::Log("menu: Dial connected · 0.0.95 | Notifications: Full | Quit".into())));
+        assert!(has(&effects, &Effect::Log("menu: Dial connected · 0.0.95 | Notifications: All | Quit".into())));
 
         // The click's own check flipped natively: the menu drawn again puts it back where the watch says.
         let effects = app.handle(Event::Menu(MenuAction::NotifyYou));

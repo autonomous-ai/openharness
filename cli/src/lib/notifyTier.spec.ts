@@ -50,7 +50,7 @@ describe('notifyTier', () => {
     expect(await decide({ ...you, recap: '  ' })).toMatchObject({ tier: 'silent', by: 'rule:empty' })
   })
 
-  it('Full: an ordinary finished turn still alerts', async () => {
+  it('All: an ordinary finished turn still alerts', async () => {
     const { decide } = make()
     expect(await decide({ ...base, needsYou: false })).toMatchObject({ tier: 'alert', by: 'rule:turn' })
   })

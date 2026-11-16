@@ -4683,7 +4683,7 @@ describe('the Notifications setting (docs/plans/2026-11-16-dial-agent-notify-des
     expect(calls('summary')).toEqual([[ID, 'All 12 tests pass.', 'All 12 tests pass.', 'list', 'All 12 tests pass.', false]])
   })
 
-  it('Needs you: a failed turn, a question and a waiting prompt ring as in Full', async () => {
+  it('Needs you: a failed turn, a question and a waiting prompt ring as in All', async () => {
     const { port } = needsYou({ faults: ['fleet'] })
     summary(port, 'a1', { recap: 'The build broke.', failed: true })
     await vi.waitFor(() => expect(calls('summary')).toEqual([['a1', 'The build broke.', 'done', 'alert', undefined, false]]))

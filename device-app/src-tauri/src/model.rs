@@ -70,7 +70,7 @@ pub fn menu(state: &AppState) -> Vec<MenuItem> {
         items.push(MenuItem::Submenu(
             "Notifications".into(),
             vec![
-                MenuItem::Check(MenuAction::NotifyFull, "Full".into(), mode == NotifyMode::Full),
+                MenuItem::Check(MenuAction::NotifyFull, "All".into(), mode == NotifyMode::Full),
                 MenuItem::Check(MenuAction::NotifyYou, "Needs you".into(), mode == NotifyMode::You),
             ],
         ));
@@ -107,7 +107,7 @@ pub fn due(state: &AppState) -> Option<Screen> {
 }
 
 /// The menu as one log line: its labels joined by ` | `, without separators. A submenu is its label and its checked
-/// item's: `Notifications: Full`.
+/// item's: `Notifications: All`.
 pub fn menu_log(items: &[MenuItem]) -> String {
     let labels: Vec<String> = items
         .iter()
@@ -178,7 +178,7 @@ mod tests {
         Submenu(
             "Notifications".into(),
             vec![
-                Check(MenuAction::NotifyFull, "Full".into(), full),
+                Check(MenuAction::NotifyFull, "All".into(), full),
                 Check(MenuAction::NotifyYou, "Needs you".into(), you),
             ],
         )
@@ -534,7 +534,7 @@ mod tests {
         );
         assert_eq!(
             menu_log(&menu(&AppState { dial: Some(notifying(NotifyMode::Full)), ..state() })),
-            "Dial connected · 0.0.95 | Signed in | Claude Code: On | Turn off | Sound ✓ | Notifications: Full | Open Harness | Quit"
+            "Dial connected · 0.0.95 | Signed in | Claude Code: On | Turn off | Sound ✓ | Notifications: All | Open Harness | Quit"
         );
         assert_eq!(
             menu_log(&menu(&AppState { dial: Some(notifying(NotifyMode::You)), ..state() })),

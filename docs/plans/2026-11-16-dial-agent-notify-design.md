@@ -18,8 +18,8 @@ Done when, on a Mac with a dial and no Harness desktop app:
 1. A Claude Code or Codex session that needs the person (information, an action outside its reach such as a VPN, a
    sign-in or a cable, a decision) runs `harness device notify "<one line>"`, and the dial beeps, wakes and shows that
    line with the agent's name, pinned like a question.
-2. The menu has Notifications: Full / Needs you. In Needs you an ordinary finished turn is a drawer row with no beep and
-   no wake; in Full it beeps as today. Questions, permission asks, failed turns and agent notices beep in both.
+2. The menu has Notifications: All / Needs you. In Needs you an ordinary finished turn is a drawer row with no beep and
+   no wake; in All it beeps as today. Questions, permission asks, failed turns and agent notices beep in both.
 
 ## Goals, non-goals, anti-goals
 
@@ -53,7 +53,7 @@ Done when, on a Mac with a dial and no Harness desktop app:
 
 ## What rings
 
-| Event | Full | Needs you |
+| Event | All | Needs you |
 |---|---|---|
 | `harness device notify` from an agent (new) | rings, pinned, its line | rings, pinned, its line |
 | A question or a permission ask | rings (today) | rings |
@@ -61,7 +61,7 @@ Done when, on a Mac with a dial and no Harness desktop app:
 | An ordinary finished turn with a recap | rings (today) | drawer row (`list`), no beep, no wake |
 | On screen, a sub-agent, an empty turn | silent (today) | silent |
 
-Default: **Full**, so nobody's dial changes until they choose (my call).
+Default: **All**, so nobody's dial changes until they choose (my call).
 
 ## The how (decided)
 
@@ -154,7 +154,7 @@ people on their next plugin update, before any CLI release.
 The Codex skill is written by `harness device codex enable`, which ships with the CLI that has the command, so it
 needs no such wait.
 
-### The setting: Notifications, Full or Needs you
+### The setting: Notifications, All or Needs you
 
 - Stored per computer in the daemon's data dir, read by the devices service where it sends `cable.summary`
   (`services/devices.ts`, both the upstream-tier and the `tierOf` paths): in Needs you an `alert` decided by
@@ -162,7 +162,7 @@ needs no such wait.
 - The menu-bar app reads and writes it through `harness hardware watch --json`, as its Sound item does (#4360): out,
   `"notify":"full"|"you"` on the watch line; in, exactly `{"notify":"full"}` or `{"notify":"you"}` on the watch's
   stdin; latest wins, one change in flight, 12 s bound, one stderr line on an error.
-- Menu: a **Notifications** submenu, **Full** and **Needs you**, the one in force checked; shown while a dial is
+- Menu: a **Notifications** submenu, **All** and **Needs you**, the one in force checked; shown while a dial is
   attached and not updating and the watch's line carries `notify`, absent otherwise (unlike Sound, it does not wait
   for the dial to report its settings: the setting is this computer's); the check follows what the watch reports.
 - The setting and the notice are local to this computer: neither is relayed to other machines, the phone or the
@@ -188,7 +188,7 @@ needs no such wait.
   log, no path of another component in a string.
 - The core gains nothing: the notice and the setting go through the devices' own listener, and no name is added to
   `cli/src/core/api.ts`. The allow-list rule is one more line in the engine contracts the core already loads.
-- Copy (docs/naming-system.md): "Notifications", "Full", "Needs you"; the dial card's footer as the permission cards'.
+- Copy (docs/naming-system.md): "Notifications", "All", "Needs you"; the dial card's footer as the permission cards'.
 - Platforms: macOS for the app (Linux built in CI); the CLI and skill wherever the dial path runs (macOS, Linux).
 
 ## Left to the builder
@@ -211,7 +211,7 @@ needs no such wait.
   Needs you; a notice rings with the desktop window open.
 - App `cargo test --lib`: the submenu's states, the click's fixed stdin line.
 - By hand, on a Mac with a dial and no Harness desktop app: a Claude Code and a Codex session each asked to do work that
-  needs a VPN ring the dial with their own line and no approval prompt; Needs you keeps an ordinary turn silent; Full
+  needs a VPN ring the dial with their own line and no approval prompt; Needs you keeps an ordinary turn silent; All
   beeps it.
 
 ## What the person sees
@@ -237,7 +237,7 @@ The card goes when that agent's next turn starts or the person taps "In Orca" to
 An ordinary finished turn:
 
 ```
- Full                              Needs you
+ All                               Needs you
  ╭────────────────────╮            ╭────────────────────╮
  │ ✓ Fix login        │  beep      │                    │  no beep, no wake,
  │ Done: tests pass,  │  wake      │     (dark)         │  one drawer row
@@ -256,7 +256,7 @@ The menu-bar app:
 │   Turn off                    │
 │ ✓ Sound                       │
 │   Notifications             ▸ ├──┬──────────────┐
-│ ───────────────────────────── │  │ ✓ Full       │
+│ ───────────────────────────── │  │ ✓ All        │
 │   Sign in…                    │  │   Needs you  │
 │   Quit                        │  └──────────────┘
 └───────────────────────────────┘

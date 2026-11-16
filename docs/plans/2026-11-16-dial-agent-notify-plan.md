@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use devcrew phase 3 to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** A Claude Code or Codex session that needs the person runs `harness device notify "<one line>"` and the dial rings with that line, pinned; and the Harness Device menu chooses whether an ordinary finished turn still beeps (Notifications: Full or Needs you).
+**Goal:** A Claude Code or Codex session that needs the person runs `harness device notify "<one line>"` and the dial rings with that line, pinned; and the Harness Device menu chooses whether an ordinary finished turn still beeps (Notifications: All or Needs you).
 
 **Architecture:**
 - **The notice.** `harness device notify` cleans the line and posts it to the devices' own listener (`services/devicesListener.ts`), the door a tool on this computer already uses, so the core routes nothing and a computer with no dial starts no process. The devices process ties the call to an agent by the engine session id the caller's shell names, bounds it, and shows it as a question the dial only shows (`SHOWN_ONLY_PREFIX`), on a path of its own past `heldOnTab()`.
@@ -45,12 +45,12 @@ Nothing under `cli/src/core/` changes and `cli/src/architecture.coreFiles.txt` g
 - **The line.** One line, at most 120 characters after trimming; control characters and line breaks out; longer is cut with `…`. It is data: drawn as text, never interpreted.
 - **Answers** of `harness device notify`, exit 0 for each: `shown`, `no dial`, `limited`.
 - **Limits.** Per agent: one notice a minute; the same text again within 10 minutes is refused. Per computer: 20 notices an hour. A notice for an agent with a pending card replaces that card.
-- **What rings.** A notice, a question, a permission ask and a failed turn ring in both modes. In Needs you only an `alert` for an ordinary finished turn (`rule:turn`, here or decided upstream) becomes `list`, logged `rule:needs-you`. Default **Full**.
+- **What rings.** A notice, a question, a permission ask and a failed turn ring in both modes. In Needs you only an `alert` for an ordinary finished turn (`rule:turn`, here or decided upstream) becomes `list`, logged `rule:needs-you`. Default **All**.
 - **The allow rule** covers exactly `harness device notify`: Claude Code `Bash(harness device notify:*)` and the launcher's full-path spelling; Codex `prefix_rule(pattern=["harness", "device", "notify"], decision="allow")`. Never the whole `device` word. A person's deny or ask rule keeps it out.
 - **Local.** The mode and the notice stay on this computer: not in `harness_devices_changed`, not in `harness_devices_list`, not a dial setting.
 - **Logs.** `[device] notify · <engine> · shown|no dial|limited`. Never the line, a session id, a folder or a path.
 - **The watch.** Out: `"notify":"full"|"you"` on the status line. In: exactly `{"notify":"full"}` or `{"notify":"you"}` on stdin; one change in flight, the latest waits, 12 s bound, one stderr line a failure.
-- **Copy** (`docs/naming-system.md`): `Notifications`, `Full`, `Needs you`; `Codex: On`, `Codex: Off`, `Turn off`, `Turn on…`; the offer `Let Codex reach your dial?` / `Codex can ring the dial when it needs you: a VPN, a sign-in, a decision.` / `Not now`, `Turn on`.
+- **Copy** (`docs/naming-system.md`): `Notifications`, `All`, `Needs you`; `Codex: On`, `Codex: Off`, `Turn off`, `Turn on…`; the offer `Let Codex reach your dial?` / `Codex can ring the dial when it needs you: a VPN, a sign-in, a decision.` / `Not now`, `Turn on`.
 - **`device-app/AGENTS.md`:** thin over the CLI; fixed arguments and fixed stdin lines built in Rust; one log, redacted; no other component's path in a Rust string.
 - **Repo rules.** A test that fails first. No fixed sleeps. Comments say why. Tests use throwaway homes and data folders.
 - **Platforms.** The command, the allow rule and the skill: macOS and Linux. Windows, and Harness OS (services inside the core): the devices have no listener there, so the command answers `no dial` (a known gap the spec names); the allowance is not installed on Windows today. Harness Device: macOS, and Linux in CI.
@@ -67,7 +67,7 @@ Also pinned, beside the five: a newer CLI's unknown `notify` value leaves the li
 
 ## Decided (Ken and the orchestrator, 2026-11-16)
 
-Not reopened: the agent itself decides and sends the notice, with no model and no watcher; Claude Code and Codex; failed turns, questions, permission asks and notices ring in both modes; only `rule:turn` alerts drop to `list` in Needs you; the setting lives in Harness Device, stored per computer in the daemon's data dir; default Full; every "my call" in the spec.
+Not reopened: the agent itself decides and sends the notice, with no model and no watcher; Claude Code and Codex; failed turns, questions, permission asks and notices ring in both modes; only `rule:turn` alerts drop to `list` in Needs you; the setting lives in Harness Device, stored per computer in the daemon's data dir; default All; every "my call" in the spec.
 
 Answered by the orchestrator on the draft (2026-11-16), now in the spec too: the door (decision 1), what closes the card (decision 4), the card's words (decision 3), the submenu's conditions (Task 16), the compound command tried by hand (Task 4, Verification check 5), and the Codex skill's place, checked against Codex 0.167.1 (decision 12, Task 14).
 
@@ -445,7 +445,7 @@ Longest chain: 3 → 7 → 9 → 10 → 13. A dependency on a task that shares a
   - The listener's handlers gain `notify: notifyHandler(…)`: it stores the mode; not saved → `{ error: 'WRITE_FAILED' }` and the log line `[device] notifications · not saved`; saved → the current status is sent again as a local `dial_status` with the new mode (no revision, no `devicesChanged`), the log line `[device] notifications · <mode>`, and `{ mode }`. A part that throws answers `{ error: 'FAILED' }`.
   - `dispatch`'s summary branch, in Needs you:
     - a card with a tier: `alert` and not `failed` → `list`, tallied `list · rule:needs-you · needs-you`; any other tier as today (`recaps · decided upstream`).
-    - a card with none: `tierOf` is asked with `needsYou: true` (Task 2 lowers and tallies it). In Full it is asked with `needsYou: false`.
+    - a card with none: `tierOf` is asked with `needsYou: true` (Task 2 lowers and tallies it). In All it is asked with `needsYou: false`.
     - `onScreen`, a sub-agent, no dial, and the decider's own failure (`list`) are as today.
   - Nothing else is lowered: `turnError`, a question and a waiting prompt's card are as today.
 
@@ -457,14 +457,14 @@ Longest chain: 3 → 7 → 9 → 10 → 13. A dependency on a task that shares a
   - `Needs you: a tier the recaps decided is lowered when it is an alert, and only then`: payload `tier: 'alert'` → `list`, tallied `rule:needs-you`; `'list'` → `list` and `'silent'` → `silent`, tallied `recaps`; `tier: 'alert', failed: true` → `alert`.
   - `Needs you: another machine's card is lowered here`: the fleet's `{ kind: 'summary', tier: 'alert' }` → `list`; one without a tier → `list`; `tier: 'silent'` → `silent`.
   - `Needs you: an agent outside a pane ends as a drawer row`: an observed session's `turn-stop` and its answer → `summary` with `list`.
-  - `Needs you: a failed turn, a question and a waiting prompt ring as in Full`: a summary with `failed: true` and no tier → `alert`; `kind: 'error'` → `turnError`; a `commander_question` → `question`; an `asked` prompt → `question`.
+  - `Needs you: a failed turn, a question and a waiting prompt ring as in All`: a summary with `failed: true` and no tier → `alert`; `kind: 'error'` → `turnError`; a `commander_question` → `question`; an `asked` prompt → `question`.
   - `the decider is told the mode`: a `decideTier` spy is called with `expect.objectContaining({ needsYou: false })`, and `true` after `notify('you')`.
   - `a notify the dial's part cannot take answers FAILED` (`faults: ['dial']`).
   - `the devices open their listener once, with …`: the keys are `['front', 'attach', 'tab', 'tabs', 'dial', 'notify']`.
 - [ ] **Step 2: Run** `cd cli && npx vitest run src/services/devices.spec.ts -t Notifications`. Expected: FAIL (no `notify` handler; a `dial_status` without `notify`).
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run** `cd cli && npx vitest run src/services/devices.spec.ts src/services/devicesProcess.spec.ts --coverage --coverage.include=src/services/devices.ts --coverage.thresholds.lines=100 --coverage.thresholds.statements=100 --coverage.thresholds.functions=100 --coverage.thresholds.branches=100 --coverage.reporter=text && npm run typecheck`. Expected: PASS, 100%; the existing tier cases pass unchanged.
-- [ ] **Step 5: Commit** `Dial: Notifications, Full or Needs you, kept by the devices and said with the dial's status`.
+- [ ] **Step 5: Commit** `Dial: Notifications, All or Needs you, kept by the devices and said with the dial's status`.
 
 ### Task 10: The devices: notices
 
@@ -739,23 +739,23 @@ Longest chain: 3 → 7 → 9 → 10 → 13. A dependency on a task that shares a
 - Consumes: `NotifyMode`, `Effect::SetNotify` (Task 15).
 - Produces:
   - `types.rs`: `DialStatus.notify: Option<NotifyMode>`, read leniently: `"full"` and `"you"` are the two modes; any other value, of any type, is `None` and the line is still a status. `MenuAction::NotifyFull`, `MenuAction::NotifyYou`. `MenuItem::Submenu(String, Vec<MenuItem>)`.
-  - `model.rs` `menu`: after the Sound row and before the separator, when `cli` is `Found`, `daemon` is `Up`, and the dial is attached, has no `updating` and has a `notify`: `Submenu("Notifications", [Check(NotifyFull, "Full", mode == Full), Check(NotifyYou, "Needs you", mode == You)])`. Absent otherwise, never greyed.
-  - `model.rs` `menu_log`: a submenu is its label, a colon and its checked item's label: `Notifications: Full`, `Notifications: Needs you`.
+  - `model.rs` `menu`: after the Sound row and before the separator, when `cli` is `Found`, `daemon` is `Up`, and the dial is attached, has no `updating` and has a `notify`: `Submenu("Notifications", [Check(NotifyFull, "All", mode == Full), Check(NotifyYou, "Needs you", mode == You)])`. Absent otherwise, never greyed.
+  - `model.rs` `menu_log`: a submenu is its label, a colon and its checked item's label: `Notifications: All`, `Notifications: Needs you`.
   - `app.rs`: `Event::Menu(NotifyFull)` gives exactly `[Effect::SetNotify(NotifyMode::Full), Effect::Menu(<the last menu sent>)]`, and `NotifyYou` the same with `You`. No log line, nothing remembered: the check moves when the watch's next line says so.
   - `main.rs`: `menu_id` gives `"notify_full"` and `"notify_you"`; `menu_action` finds both; `native_menu` draws a `Submenu` as `tauri::menu::Submenu`, enabled, its items drawn by the rules the top level uses.
 
 - [ ] **Step 1: Write the failing tests.**
   - `types.rs` `a_status_line_carries_notify`: `{"attached":true,"notify":"you"}` → `Some(You)`; `"full"` → `Some(Full)`; no key → `None`; `{"attached":true,"notify":"later"}`, `"notify":7` and `"notify":null` → a status with `None`.
-  - `model.rs` `the_notifications_submenu`, with `notifying(mode) = DialStatus { notify: Some(mode), ..sound(Some(false)) }`: for `Full` the whole menu is `Dial connected · 0.0.95`, `Signed in`, `Claude Code: On`, `Turn off`, `Check(SoundOff, "Sound", true)`, `Submenu("Notifications", [Check(NotifyFull, "Full", true), Check(NotifyYou, "Needs you", false)])`, the separator, `Open Harness`, `Quit`. For `You` the checks are `false`, `true`. With `muted: None` the submenu is still there, after the Claude Code rows.
+  - `model.rs` `the_notifications_submenu`, with `notifying(mode) = DialStatus { notify: Some(mode), ..sound(Some(false)) }`: for `Full` the whole menu is `Dial connected · 0.0.95`, `Signed in`, `Claude Code: On`, `Turn off`, `Check(SoundOff, "Sound", true)`, `Submenu("Notifications", [Check(NotifyFull, "All", true), Check(NotifyYou, "Needs you", false)])`, the separator, `Open Harness`, `Quit`. For `You` the checks are `false`, `true`. With `muted: None` the submenu is still there, after the Claude Code rows.
   - `model.rs` `the_notifications_submenu_is_absent_when_there_is_nothing_to_change`: no item is a `Submenu` for `dial: None`; `notify: None`; `attached: false`; `updating: Some("0.0.96")`; `daemon` `Starting`, `Stopped`, `Updating`; `cli` `Removed`, `Installing`, `InstallFailed`.
-  - `model.rs` `the_menu_as_a_log_line` also gives `… | Turn off | Sound ✓ | Notifications: Full | Open Harness | Quit`, and `Notifications: Needs you`.
+  - `model.rs` `the_menu_as_a_log_line` also gives `… | Turn off | Sound ✓ | Notifications: All | Open Harness | Quit`, and `Notifications: Needs you`.
   - `app.rs` `a_notifications_click_tells_the_watch_and_draws_the_menu_again`: `found()`, a line with the dial attached and `notify: Some(Full)`, `menu = menu_of(…)`; for `(NotifyYou, You)` and `(NotifyFull, Full)`: `app.handle(Event::Menu(action))` equals `[Effect::SetNotify(mode), Effect::Menu(menu.clone())]`.
-  - `app.rs` `the_check_follows_the_watch_not_the_click`: after `Event::Menu(NotifyYou)` the menu still checks `Full`, and there is no `menu:` log line; a line with `notify: Some(You)` checks `Needs you` and logs `… | Notifications: Needs you | Quit`; `Event::WatchExit(Some(3))` leaves no `Submenu`.
+  - `app.rs` `the_check_follows_the_watch_not_the_click`: after `Event::Menu(NotifyYou)` the menu still checks `All`, and there is no `menu:` log line; a line with `notify: Some(You)` checks `Needs you` and logs `… | Notifications: Needs you | Quit`; `Event::WatchExit(Some(3))` leaves no `Submenu`.
   - `main.rs` `every_menu_action_has_its_own_id`: ten actions, ten ids; `menu_action("notify")` is `None`.
 - [ ] **Step 2: Run** `cd device-app/src-tauri && cargo test --locked --lib`. Expected: FAIL (no field `notify`, no variant `Submenu`).
 - [ ] **Step 3: Implement.** `model.rs`'s `the_whole_menu` and `the_sound_row` pass unchanged: their dials have no `notify`.
 - [ ] **Step 4: Run** `cd device-app/src-tauri && cargo test --locked`. Expected: PASS.
-- [ ] **Step 5: Commit** `Harness Device: Notifications, Full or Needs you, in the menu`.
+- [ ] **Step 5: Commit** `Harness Device: Notifications, All or Needs you, in the menu`.
 
 ### Task 17: App: a `notify:` line of the watch reaches the log
 
@@ -885,7 +885,7 @@ Longest chain: 3 → 7 → 9 → 10 → 13. A dependency on a task that shares a
 - [ ] **Step 1:** `docs/cli.md`, the command table, after the `harness flash` row:
   - `` | `harness device notify "<one line>" [--json]` | For an agent: ring this computer's dial when it needs the person to act. One line, 120 characters at most. Prints `shown`, `no dial` or `limited`, exit 0 for each. Claude Code and Codex run it without a permission question. | ``
   - `` | `harness device codex status [--json]` · `enable` · `disable` | Whether Codex has the `dial` skill, which tells it of the dial · write it into the Codex home · remove it. | ``
-- [ ] **Step 2:** The menubar design's `### Menu` table: after the Claude Code row, `| Codex | "Codex: On" with **Turn off**, or "Codex: Off" with **Turn on…**; absent when Codex is not on this computer |`; after the Sound row, `| **Notifications** (submenu) | **Full** and **Needs you**, the one in force checked; only while Harness runs and the dial is attached and not updating ([design](2026-11-16-dial-agent-notify-design.md)) |`.
+- [ ] **Step 2:** The menubar design's `### Menu` table: after the Claude Code row, `| Codex | "Codex: On" with **Turn off**, or "Codex: Off" with **Turn on…**; absent when Codex is not on this computer |`; after the Sound row, `| **Notifications** (submenu) | **All** and **Needs you**, the one in force checked; only while Harness runs and the dial is attached and not updating ([design](2026-11-16-dial-agent-notify-design.md)) |`.
 - [ ] **Step 3:** The design system's `## Harness Device`: it offers sign-in, Claude Code and Codex once; the window has four screens, Install, Sign in, Claude Code and Codex; and one bullet after Sound's: `- A choice among named options in the menu is one native submenu of check items, the one in force checked. Notifications is the first.` The gallery shows the Codex screen (Task 20).
 - [ ] **Step 4:** `device-app/AGENTS.md`: the intro's "offers sign-in and Claude Code once" and "the window's three screens" name Codex and four screens. The rule "one of six action names" stays.
 - [ ] **Step 5:** `cli/AGENTS.md`, the `devices` row of the processes table: an agent's notice (`harness device notify`), shown as a question the dial only shows, and the Notifications setting, kept in `dial-notify.json`. `cli/src/services/AGENTS.md`, the paragraph on the devices' listener: `notice` and `notify` beside `front`, `tab` and `attach`.
@@ -927,10 +927,10 @@ Longest chain: 3 → 7 → 9 → 10 → 13. A dependency on a task that shares a
 - A person does and sees:
   1. The window opens on `Let Codex reach your dial?`, with `Codex can ring the dial when it needs you: a VPN, a sign-in, a decision.`, `Not now` and `Turn on`. Screenshot, light and dark.
   2. Click `Turn on`: a spinner under `Codex`. Write `{"supported":true,"installed":true,"enabled":true}` into `device_codex_status_--json`, then `touch "$T/fake/enabled"`: the window closes.
-  3. The menu reads `Dial connected · 0.0.95`, `Signed in`, `Codex: On`, `Turn off`, `Sound` checked, `Notifications ▸`, a separator, `Open Harness` (when Desktop is installed), `Quit`. The submenu holds `Full`, checked, and `Needs you`. Screenshot.
-  4. Click `Needs you`. Open the submenu again: `Full` is still checked. `touch "$T/fake/you"`: within a second `Needs you` is checked and `Full` is not. Screenshot.
+  3. The menu reads `Dial connected · 0.0.95`, `Signed in`, `Codex: On`, `Turn off`, `Sound` checked, `Notifications ▸`, a separator, `Open Harness` (when Desktop is installed), `Quit`. The submenu holds `All`, checked, and `Needs you`. Screenshot.
+  4. Click `Needs you`. Open the submenu again: `All` is still checked. `touch "$T/fake/you"`: within a second `Needs you` is checked and `All` is not. Screenshot.
   5. `touch "$T/fake/old"`: Sound stays, no Notifications row. `touch "$T/fake/none"`: `No dial`, neither row.
-  6. Quit from the menu. `grep notify "$T/fake/stdin.log"` prints `{"notify":"you"}` and no other line. `grep -c 'device codex enable' "$T/fake/calls.log"` prints `1`. The log, `$T/home/Library/Logs/ai.autonomous.harness.device/app-*.log`, has `menu:` lines with `Notifications: Full` and `Notifications: Needs you`.
+  6. Quit from the menu. `grep notify "$T/fake/stdin.log"` prints `{"notify":"you"}` and no other line. `grep -c 'device codex enable' "$T/fake/calls.log"` prints `1`. The log, `$T/home/Library/Logs/ai.autonomous.harness.device/app-*.log`, has `menu:` lines with `Notifications: All` and `Notifications: Needs you`.
   7. Start it again: no window opens (`askedCodex` is now true in `state.json`, and its other four answers are as they were).
 - Afterwards: `rm -rf "$T"` (its `stdin.log` also holds which apps were in front; quote only the `notify` lines).
 - Not done, for whatever reason: report it as not verified, never as passed.
@@ -991,12 +991,12 @@ After (A), whether the checks passed, failed or stopped part way:
 - Where: this Mac, in the window above, with the round dial on `/dev/cu.usbmodem21301`, Harness.app quit, this branch's Harness Device running (During, step 3), and check 5's Claude Code and Codex sessions.
 - The tester sends the orchestrator two asks, each the complete list of what Ken does and looks at, written so Ken can answer each item yes or no; Ken replies `ready`, the tester does its part of the ask in order, and Ken reports. The tester judges only the commands' output and the daemon's log.
 - Ask 1 (the menu, the rings, the card):
-  1. Ken: the menu holds `Notifications ▸` with `Full` checked, and `Codex: On` (check 5's step 1 turned it on). Screenshot of the menu.
+  1. Ken: the menu holds `Notifications ▸` with `All` checked, and `Codex: On` (check 5's step 1 turned it on). Screenshot of the menu.
   2. Tester: check 5's steps 3 and 4. Ken: each time the dial beeps, wakes, and shows the line pinned on top, with the session's name and this Mac's name. Photo of the dial with a card.
   3. Tester answers the agent in its session: Ken sees the card leave the dial as its next turn starts. Tester rings again; Ken opens the alert on the dial to read it: the card stays. Ken taps "In <app>": its app comes forward and the card leaves.
   4. Tester runs the same line twice within ten minutes: the second prints `limited` (the tester's to judge); Ken: the dial does not beep again.
 - Ask 2 (the modes, the cable):
-  5. Ken chooses `Needs you`. Tester finishes an ordinary turn in one engine: Ken hears no beep and the dial does not wake, and its drawer holds one more row. Tester raises, one at a time, a question, a permission ask, a failed turn and a notice: Ken hears each beep. Ken chooses `Full`; the tester finishes an ordinary turn: Ken hears a beep (the dial plays at most one chime in 30 s: the tester waits 30 s between rings). Screenshot of the menu in each mode.
+  5. Ken chooses `Needs you`. Tester finishes an ordinary turn in one engine: Ken hears no beep and the dial does not wake, and its drawer holds one more row. Tester raises, one at a time, a question, a permission ask, a failed turn and a notice: Ken hears each beep. Ken chooses `All`; the tester finishes an ordinary turn: Ken hears a beep (the dial plays at most one chime in 30 s: the tester waits 30 s between rings). Screenshot of the menu in each mode.
   6. Ken unplugs the dial: tester runs `harness device notify "x"`: `no dial`; Ken: the menu holds no Notifications row. Ken plugs it in: the row is back, with the mode chosen.
 - Evidence: the daemon's log lines (`$S/daemon.log`) `[device] notify · claude · shown`, `[device] notify · codex · shown`, `… · limited`, with no line holding a notice's text; Ken's photo and screenshots, as the orchestrator returns them; each of Ken's answers.
 - Not done, for whatever reason: report it as not verified, never as passed.
