@@ -4,7 +4,7 @@
  * home a throwaway folder, and a daemon and the devices' listener on sockets in a throwaway folder. The real `claude`,
  * ~/.claude, ~/.codex and the daemon are never touched.
  */
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { Socket } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -384,6 +384,20 @@ describe('the dial skill', () => {
     }
     expect(readFileSync(skillAt(persons), 'utf8')).toBe(PERSONS)
     expect(readFileSync(join(dataDir, 'dial-skill-homes.json'))).toEqual(homes)
+  })
+
+  it('disable keeps the skill in a folder the other engine shares while it is On', async () => {
+    const dataDir = folder()
+    const codexHome = folder()
+    writeFileSync(join(dataDir, 'dial-skill.json'), '{"claude":true,"codex":true}')
+    // Codex's skills linked to Claude Code's, as a person may link them.
+    symlinkSync(skillIn(claudeHome), join(codexHome, 'skills'))
+    expect(await device(['codex', 'disable'], { dataDir, codexHome })).toEqual({ code: 0, out: [], err: [] })
+    expect(readFileSync(skillAt(claudeHome), 'utf8')).toBe(DIAL_SKILL)
+
+    // With Codex off as well, the last disable takes it.
+    expect(await device(['claude', 'disable'], { dataDir, codexHome })).toEqual({ code: 0, out: [], err: [] })
+    expect(existsSync(skillAt(claudeHome))).toBe(false)
   })
 
   it('a failing step still runs the rest', async () => {

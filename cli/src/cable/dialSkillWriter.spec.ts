@@ -203,6 +203,29 @@ describe('the devices write the dial skill', () => {
     expect(later.lines.at(-1)).toBe(counts([0, 0], [0, 1]))
   })
 
+  it('a skills folder both engines share keeps the skill until both are Off', () => {
+    const r = rig()
+    writeAnswer(r.dataDir, 'codex', true)
+    pluginOn(r.claudeHome)
+    // Codex's skills linked to Claude Code's, as a person may link them.
+    const shared = skillsAt(r.claudeHome)
+    symlinkSync(shared, join(r.codexHome, 'skills'))
+    r.writer.started()
+    expect(readHomes(r.dataDir)).toEqual({ claude: [shared], codex: [shared] })
+
+    // Codex off: the folder leaves Codex's list, and Claude Code keeps its skill.
+    writeAnswer(r.dataDir, 'codex', false)
+    r.writer.scanned([])
+    expect(hasSkill(r.claudeHome)).toBe(true)
+    expect(readHomes(r.dataDir)).toEqual({ claude: [shared], codex: [] })
+
+    // Claude Code off too: the last one takes it.
+    writeAnswer(r.dataDir, 'claude', false)
+    r.writer.scanned([])
+    expect(existsSync(join(shared, 'dial'))).toBe(false)
+    expect(readHomes(r.dataDir)).toEqual({ claude: [], codex: [] })
+  })
+
   it('the race: Off set between the write and the recheck removes the new one', () => {
     // The person turns Codex off the moment the skill lands: every read after that says Off.
     let off = false
