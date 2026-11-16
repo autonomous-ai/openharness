@@ -4840,6 +4840,24 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     expect(calls('question')).toEqual([first, first])
   })
 
+  // The window's unread list replaces the dial's whole drawer, and a question the dial pins is a row of that drawer.
+  it('a window that changes what it has unread leaves the notices and the waits on the dial', () => {
+    const { port, listener } = devices()
+    port.observed(hook('turn-start'))
+    listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })
+    const other = { ...hook('turn-start'), sessionId: 'sess-2', callerPid: 4343, transcriptPath: '/t/sess-2.jsonl' }
+    port.observed(other)
+    port.observed({ engine: 'claude', sessionId: 'sess-2', event: 'asked', tool: 'Bash', summary: 'npm test', cwd: '/work/api' })
+    const [, , [{ q: wait }]] = calls('question').at(-1) as [string, string, Array<{ q: string }>]
+    const done = { agentId: 'h9', machineId: 'machine-2', question: false, text: 'Built.' }
+    port.unread([done])
+    expect(calls('replaceNotifications')).toEqual([[[
+      { agentId: ID, machineId: 'machine-1', question: true, text: LINE },
+      { agentId: observedAgentId('claude', 'sess-2'), machineId: 'machine-1', question: true, text: wait },
+      done,
+    ]]])
+  })
+
   it('with no dial it answers no dial and asks nothing', () => {
     const { listener } = devices()
     ;(seen.cable as unknown as { connected: boolean }).connected = false

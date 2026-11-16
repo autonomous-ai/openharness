@@ -111,6 +111,18 @@ describe('Notices', () => {
     expect(calls).toEqual(before)
   })
 
+  it('each pending card is a drawer row, newest first, for a drawer replaced whole', () => {
+    const { notices } = desk()
+    notices.notify(notice(VPN, 'a1'))
+    notices.notify(notice('Kết nối 🙏', 'a2'))
+    notices.notify(notice('Third agent line', 'a3'))
+    notices.ended('a3')
+    expect(notices.rows('machine-1')).toEqual([
+      { agentId: 'a2', machineId: 'machine-1', question: true, text: 'Kết nối ?' },
+      { agentId: 'a1', machineId: 'machine-1', question: true, text: VPN },
+    ])
+  })
+
   it('a caller no list holds is named while its card is pending', () => {
     const who = { name: 'staging-api', engine: 'claude', machine: 'Mac mini' }
     const named = desk({ who })
