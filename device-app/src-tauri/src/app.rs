@@ -42,7 +42,8 @@ pub struct App {
     desktop_running: bool,
     /// When the last update check started.
     checked_at: Option<u64>,
-    /// A check, or the install it found, has not answered: no second check starts, however long the Mac slept.
+    /// A check, or the install it found, has not answered, or the install waits for the relaunch: no second check
+    /// starts, however long the Mac slept or the relaunch waits. Only the relaunch's new process starts without it.
     updating: bool,
     /// The version the last check found.
     found: Option<String>,
@@ -300,8 +301,9 @@ impl App {
                 self.found = Some(version);
                 effects.push(Effect::InstallUpdate);
             }
+            // `updating` stays set: until the relaunch this process is the old version, and a check would install
+            // the same one again.
             Event::UpdateInstalled => {
-                self.updating = false;
                 if let Some(version) = &self.found {
                     effects.push(Effect::Log(format!("update: installed {version}")));
                 }
