@@ -904,9 +904,10 @@ class WsConn {
   ///
   /// Terminal traffic is the overwhelming majority of what crosses this socket
   /// and none of it is diagnostic — it is somebody's screen. Logging it would
-  /// bury every frame that matters, cost an fsync per keystroke, and write the
-  /// contents of their editor to disk. The hardware dial's events are dropped
-  /// for the volume alone.
+  /// bury every frame that matters under a line per keystroke. The hardware
+  /// dial's events are dropped for the volume alone. A frame line shows no
+  /// content anyway ([summariseForLog]); the types below kept out for what they
+  /// carry stay out.
   static const _unlogged = {
     // File paths and media contents are user data, not frame diagnostics.
     'agent_read_file',
