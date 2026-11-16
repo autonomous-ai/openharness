@@ -7,6 +7,7 @@ import type { ClientSocket } from '../lib/clientSocket.js'
 import { deviceSettingsPatchSchema } from '../lib/harnessDevices.js'
 import { frontAppId } from '../cable/hosts/frontApp.js'
 import { REPLACED_LINE, tabOf, type Tab } from '../cable/hosts/tabs.js'
+import { isNotifyMode } from '../cable/notifyMode.js'
 import { streamDevices, tellDevices } from './listenerClient.js'
 import { devicesListenerPath } from './listenerPath.js'
 
@@ -122,8 +123,10 @@ function lines(max: number, line: (text: string) => void): (chunk: Buffer | stri
 }
 
 /**
- * A dial_status reduced to what the menu-bar app shows, so a change of any setting but `muted` prints nothing. `muted`
- * only for a dial with an id, the one a Sound change can name; read from the primary's flat fields, never `devices`.
+ * A dial_status reduced to what the menu-bar app shows, so a change of any setting but `muted` and `notify` prints
+ * nothing. `muted` only for a dial with an id, the one a Sound change can name; read from the primary's flat fields,
+ * never `devices`. `notify`, the Notifications setting, only with a dial attached: it is this computer's, kept by the
+ * devices' listener, and the status carries it beside the dial's own settings.
  */
 export function dialWatchLine(payload: unknown): string {
   const status = (typeof payload === 'object' && payload !== null ? payload : {}) as Record<string, unknown>
@@ -132,6 +135,7 @@ export function dialWatchLine(payload: unknown): string {
   const settings = status.settings
   if (typeof status.id === 'string' && status.id !== '' && typeof settings === 'object' && settings !== null
     && typeof (settings as Record<string, unknown>).muted === 'boolean') line.muted = (settings as Record<string, unknown>).muted
+  if (line.attached === true && isNotifyMode(status.notify)) line.notify = status.notify
   return JSON.stringify(line)
 }
 
