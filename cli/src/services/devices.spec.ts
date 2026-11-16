@@ -2524,6 +2524,42 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     expect(logs.filter((line) => line.includes(SESSION) || line.includes('sess-1'))).toEqual([])
   })
 
+  // A Codex session in the Codex app opens on its thread (docs/plans/2026-11-16-dial-codex-app-design.md).
+  const THREAD = '01a1de76-a3b7-7270-b39e-1245893274c1'
+  const CX = observedAgentId('codex', THREAD)
+  const inApp = { engine: 'codex' as const, sessionId: THREAD, hostHints: { __CFBundleIdentifier: 'com.openai.codex' } }
+  const threadLink: [string, string[], number] = ['/usr/bin/open', ['-b', 'com.openai.codex', `codex://threads/${THREAD}`], 10_000]
+  const codexForward: [string, string[], number] = ['/usr/bin/open', ['-b', 'com.openai.codex'], 10_000]
+  /** macOS, every run recorded, each answering the next of these exit codes, then 0. */
+  const exiting = (...codes: number[]) => ({ ...mac, run: async (file: string, args: string[], timeoutMs: number) => {
+    orcaRuns.push([file, args, timeoutMs])
+    return { code: codes.shift() ?? 0, stdout: '' }
+  } })
+
+  it('a Codex session in the Codex app opens on its thread; a link that fails brings the app forward once, in one line with no id', async () => {
+    const { port } = startHere({ orca: exiting(1) })
+    port.observed(hook('session-start', inApp))
+    attach(port)
+    expect(await listed()).toEqual([{ id: CX, name: 'api', caps: 'sf' }])
+    expect(await host().openAgent(CX)).toBeUndefined()
+    expect(orcaRuns).toEqual([threadLink, codexForward])
+    expect(said()).toEqual(['[device] open · codex · fallback'])
+    // The link that works brings the app forward itself.
+    expect(await host().openAgent(CX)).toBeUndefined()
+    expect(orcaRuns.slice(2)).toEqual([threadLink])
+    expect(logs.filter((line) => line.includes(THREAD))).toEqual([])
+  })
+
+  // open.ts is unchanged: a session a hook told of has its bundle, so the opener's own fallback runs open -b once more.
+  it('the link and the app both fail: the dial is told so', async () => {
+    const { port } = startHere({ orca: exiting(1, 1, 1) })
+    port.observed(hook('session-start', inApp))
+    attach(port)
+    expect(await host().openAgent(CX)).toEqual({ ok: false, error: 'ChatGPT did not open it.' })
+    expect(orcaRuns).toEqual([threadLink, codexForward, codexForward])
+    expect(said().filter((line) => line === '[device] open · codex · fallback')).toHaveLength(2)
+  })
+
   it('a session in the VS Code extension\'s tab opens by its link, then VS Code comes forward', async () => {
     const SESSION = '8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b'
     const { port } = startHere({ orca: mac })
@@ -2779,6 +2815,44 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     await swiped('failed')
     expect(said()).toEqual(['[device] swipe · ok', '[device] swipe · failed'])
     expect(logs.filter((line) => [SESSION, 'sess-1', ID].some((secret) => line.includes(secret)))).toEqual([])
+  })
+
+  /** A Codex session in the Codex app on macOS, as `inClaudeApp` is for the Claude app. */
+  const inCodexApp = async (over: Parameters<typeof start>[0] = {}) => {
+    vi.useFakeTimers()
+    const listener = fakeListener()
+    const started = startHere({ orca: mac, listen: listener.listen, ...over })
+    started.port.observed(hook('session-start', inApp))
+    attach(started.port)
+    await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
+    const front = (app: string) => { expect(listener.front(app)).toBeUndefined() }
+    return { ...started, front }
+  }
+  it('with the Codex app in front, a rest on a Codex app agent runs one thread link, and no open -b', async () => {
+    const { front } = await inCodexApp()
+    front('codex')
+    expect(host().swipeSwitches(CX)).toBe(true)
+    host().swipeEnded(CX, 'rest')
+    await swiped('ok')
+    expect(orcaRuns).toEqual([threadLink])
+    expect(said()).toEqual(['[device] swipe · ok'])
+  })
+
+  it('another app in front, none, or no front known: no rest is asked for on a Codex app agent', async () => {
+    const { front } = await inCodexApp()
+    expect(host().swipeSwitches(CX)).toBe(false)
+    for (const app of ['claude', 'orca', 'none']) {
+      front(app)
+      expect(host().swipeSwitches(CX)).toBe(false)
+    }
+  })
+
+  it('a rest whose Codex thread link fails stays failed, and brings nothing forward', async () => {
+    const { front } = await inCodexApp({ orca: exiting(1) })
+    front('codex')
+    host().swipeEnded(CX, 'rest')
+    await swiped('failed')
+    expect(orcaRuns).toEqual([threadLink])
   })
 
   it('no swipe line carries a handle, a session or an agent', async () => {
@@ -3046,6 +3120,14 @@ describe('codex queue, for Codex outside a pane (docs/specs/2026-11-15-device-co
       { cwd: homedir(), env: { CODEX_HOME: env.CODEX_HOME }, timeoutMs: 10_000 }]])
     expect(said()).toEqual(['[device] voice · codex'])
     expect(orcaRuns).toEqual([])
+  })
+
+  it('a Codex app session\'s words still go through codex queue, and nothing is opened', async () => {
+    started({ orca: { ...orca, platform: 'darwin' } }, { hostHints: { __CFBundleIdentifier: 'com.openai.codex' } })
+    expect(await host().sendTurn(ID, 'run the tests')).toEqual({ ok: true })
+    expect(codexRuns.map(([, args]) => args)).toEqual([['queue', '--thread', THREAD, '--message=run the tests']])
+    expect(orcaRuns).toEqual([])
+    expect(said()).toEqual(['[device] voice · codex'])
   })
 
   it('a Codex session whose transcript is in another home lists s and runs nothing', async () => {

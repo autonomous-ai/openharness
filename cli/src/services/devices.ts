@@ -29,6 +29,7 @@ import { cableEventFor, cableStepFor, cableQuestionCloseFor, cableQuestionFor, D
 import { CableSession, SHOWN_ONLY_PREFIX, type FollowCause } from '../cable/cableSession.js'
 import type { HostAdapter, Pane } from '../cable/hosts/adapter.js'
 import { createClaudeAppAdapter } from '../cable/hosts/claudeApp.js'
+import { createCodexAppAdapter } from '../cable/hosts/codexApp.js'
 import { codexQueueDeps, createCodexQueue, type CodexQueueDeps } from '../cable/hosts/codexQueue.js'
 import { createHerdrAdapter } from '../cable/hosts/herdr.js'
 import { createHerdrClient, herdrClientDeps, watchHerdrSocket, type HerdrClient } from '../cable/hosts/herdrClient.js'
@@ -324,6 +325,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     createOrcaAdapter(apps),
     // A rest's continue link: the app's attach that follows is the dial's own echo.
     { ...claude, show: (pane: Pane, agentId: string) => { noteLink(agentId); return claude.show(pane, agentId) } },
+    // No echo to guard: the Codex app sends no attach for the follow to take as a person's.
+    createCodexAppAdapter({ ...apps, inFront: () => cableHost.latestFront() === 'codex', log }),
     createVscodeAdapter(apps),
     createTabsAdapter({
       isOpen: () => tabs.isOpen(),

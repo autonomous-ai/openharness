@@ -489,6 +489,22 @@ class FetchTests(TempTest):
             rules.fetch(f"{base}/", 100, 2)
         self.assertLess(time.monotonic() - start, 4)
 
+    def test_fetch_names_itself_to_the_server(self):
+        agents = []
+
+        class AgentHandler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                agents.append(self.headers.get("User-Agent"))
+                self.send_response(200)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            def log_message(self, *args):
+                pass
+
+        rules.fetch(f"{serve(self, AgentHandler)}/", 100, 5)
+        self.assertEqual(agents, ["harness-device-release"])
+
 
 class VerifyTests(TempTest):
     def setUp(self):

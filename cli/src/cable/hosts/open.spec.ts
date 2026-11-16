@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { HostAdapter, Pane } from './adapter.js'
 import { createClaudeAppAdapter } from './claudeApp.js'
+import { createCodexAppAdapter } from './codexApp.js'
 import { createHerdrAdapter } from './herdr.js'
 import { detectApp, detectHost } from './hostDetect.js'
 import { bundleOf, createOpenActions, type OpenTarget } from './open.js'
@@ -11,6 +12,8 @@ import { createWeztermAdapter } from './wezterm.js'
 const HANDLE = 'term_0f8e2c1a-3b4d-4e5f-8a9b-0c1d2e3f4a5b'
 const SESSION = 'local_8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b'
 const CLAUDE = 'com.anthropic.claudefordesktop'
+const THREAD = '01a1de76-a3b7-7270-b39e-1245893274c1'
+const CODEX_APP = 'com.openai.codex'
 const OPEN = '/usr/bin/open'
 const APP_WEZTERM = '/Applications/WezTerm.app/Contents/MacOS/wezterm'
 
@@ -50,6 +53,7 @@ function recorder(over: Partial<Over> = {}, codes: Array<number | null> = [], mo
     createWeztermAdapter(deps),
     { ...createOrcaAdapter(deps), focus: (pane) => { switched.push(pane.id); return deps.orcaSwitch(pane.id) } },
     claude,
+    createCodexAppAdapter({ ...deps, inFront: () => true }),
     createTabsAdapter({ isOpen: () => false, select: () => false }),
     ...more,
   ]
@@ -313,6 +317,66 @@ describe('a rest on a Claude app session', () => {
     for (const done of waiting.splice(0)) done()
     expect(await tapFirst).toBe(true)
     expect(await restAfter).toBe('ok')
+  })
+})
+
+// The Codex app's pane comes from the app, the engine and the session id (codexApp.ts), not from hints, so its targets
+// are written here as the observed source builds them: a hook's has the app's bundle, a scan's none until its first hook.
+describe('a tap on a Codex app session', () => {
+  const pane: Pane = { adapter: 'codex', id: THREAD }
+  const hooked: OpenTarget = { bundle: CODEX_APP, pane }
+  const scanned: OpenTarget = { pane }
+  const link = run(OPEN, '-b', CODEX_APP, `codex://threads/${THREAD}`)
+  const FALLBACK = '[device] open · codex · fallback'
+
+  it('the Codex app: its thread through codex://threads, which brings the app forward itself', async () => {
+    for (const app of [hooked, scanned]) {
+      const { calls, logs, opener } = recorder()
+      expect(opener.can(app)).toBe(true)
+      expect(await opener.open('a1', app)).toBe(true)
+      expect(calls).toEqual([link])
+      expect(logs).toEqual([])
+    }
+  })
+
+  it('a Codex pane whose link failed and whose app came forward runs no second open -b', async () => {
+    const { calls, logs, opener } = recorder({}, [1])
+    expect(await opener.open('a1', hooked)).toBe(true)
+    expect(calls).toEqual([link, forward(CODEX_APP)])
+    expect(logs).toEqual([FALLBACK])
+  })
+
+  it('a Codex session only the scan found still gets its app when its link fails', async () => {
+    const { calls, logs, opener } = recorder({}, [1])
+    expect(await opener.open('a1', scanned)).toBe(true)
+    expect(calls).toEqual([link, forward(CODEX_APP)])
+    expect(logs).toEqual([FALLBACK])
+  })
+
+  // Rare and harmless (spec, Decided 9): the opener is not taught about the Codex adapter's own forward.
+  it('the link and the adapter\'s own open -b both failed', async () => {
+    const hook = recorder({}, [1, 1])
+    expect(await hook.opener.open('a1', hooked)).toBe(true)
+    expect(hook.calls).toEqual([link, forward(CODEX_APP), forward(CODEX_APP)])
+    expect(hook.logs).toEqual([FALLBACK, FALLBACK])
+
+    // No bundle, so the opener has no app to bring.
+    const scan = recorder({}, [1, 1])
+    expect(await scan.opener.open('a1', scanned)).toBe(false)
+    expect(scan.calls).toEqual([link, forward(CODEX_APP)])
+    expect(scan.logs).toEqual([FALLBACK])
+
+    for (const line of [...hook.logs, ...scan.logs]) expect(line).not.toContain(THREAD)
+  })
+
+  it('on Linux a Codex pane opens nothing', async () => {
+    const { calls, logs, opener } = recorder({ platform: 'linux' })
+    for (const app of [hooked, scanned]) {
+      expect(opener.can(app)).toBe(false)
+      expect(await opener.open('a1', app)).toBe(false)
+    }
+    expect(calls).toEqual([])
+    expect(logs).toEqual([])
   })
 })
 

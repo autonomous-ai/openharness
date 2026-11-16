@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { AppRings, DialRing, RING_PLACES } from './select.js'
+import { APP_LIMIT, AppRings, DialRing, RING_PLACES } from './select.js'
 import type { HostAgent } from './types.js'
 
 function agent(id: string, over: Partial<HostAgent> = {}): HostAgent {
@@ -219,6 +219,10 @@ describe('DialRing', () => {
 describe('AppRings', () => {
   const at = (app: string) => (a: HostAgent): HostAgent => ({ ...a, app })
   const ringIds = (rings: AppRings, app: string) => ids(rings.ring(app).rows)
+
+  it('the apps frame holds sixteen rows, the firmware\'s', () => {
+    expect(APP_LIMIT).toBe(16)
+  })
 
   it('one ring per app, each over its own agents only', () => {
     const rings = new AppRings()
