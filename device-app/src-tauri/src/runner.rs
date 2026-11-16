@@ -1558,8 +1558,8 @@ mod tests {
             })
             .collect();
         rows.dedup();
-        // Until the status read after it answers, the row says the last status.
-        assert_eq!(rows, ["Claude Code: Off", "Claude Code: Turning on…", "Claude Code: Off", "Claude Code: On"]);
+        // The change shows as soon as it ends well, before the status read after it answers.
+        assert_eq!(rows, ["Claude Code: Off", "Claude Code: Turning on…", "Claude Code: On"]);
         assert_eq!(w.fake.calls().iter().filter(|call| *call == "device claude enable").count(), 1);
     }
 

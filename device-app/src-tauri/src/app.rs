@@ -953,7 +953,8 @@ mod tests {
         let effects = app.handle(Event::ClaudeSet(Ok(())));
         assert!(has(&effects, &Effect::ReadClaude));
         assert!(!effects.iter().any(|effect| matches!(effect, Effect::Save(_) | Effect::Show(_))), "{effects:?}");
-        assert_eq!(rows(&app.handle(Event::Claude(claude(true))))[2..4], ["Claude Code: On", "Turn off"]);
+        assert_eq!(rows(&effects)[2..4], ["Claude Code: On", "Turn off"]);
+        assert!(app.handle(Event::Claude(claude(true))).is_empty());
 
         let effects = app.handle(Event::Menu(MenuAction::CodexOn));
         assert!(has(&effects, &Effect::SetCodex(true)));
@@ -962,7 +963,8 @@ mod tests {
         let effects = app.handle(Event::CodexSet(Ok(())));
         assert!(has(&effects, &Effect::ReadCodex));
         assert!(!effects.iter().any(|effect| matches!(effect, Effect::Save(_) | Effect::Show(_))), "{effects:?}");
-        assert_eq!(rows(&app.handle(Event::Codex(codex(true))))[4..6], ["Codex: On", "Turn off"]);
+        assert_eq!(rows(&effects)[4..6], ["Codex: On", "Turn off"]);
+        assert!(app.handle(Event::Codex(codex(true))).is_empty());
         assert_eq!(app.view(), None);
     }
 
@@ -994,8 +996,8 @@ mod tests {
         let mut app = found();
         answer(&mut app, true, claude(true));
         assert!(has(&app.handle(Event::Menu(MenuAction::ClaudeOff)), &Effect::SetClaude(false)));
-        assert!(has(&app.handle(Event::ClaudeSet(Ok(()))), &Effect::ReadClaude));
-        let effects = app.handle(Event::Claude(claude(false)));
+        let effects = app.handle(Event::ClaudeSet(Ok(())));
+        assert!(has(&effects, &Effect::ReadClaude));
         assert_eq!(rows(&effects)[2..4], ["Claude Code: Off", "Turn on"]);
         assert!(shows(&effects).is_empty());
     }
@@ -1006,8 +1008,8 @@ mod tests {
         answer_all(&mut app, true, claude(true), codex(true));
         assert!(has(&app.handle(Event::Menu(MenuAction::CodexOff)), &Effect::SetCodex(false)));
         assert!(app.handle(Event::Menu(MenuAction::CodexOff)).is_empty());
-        assert!(has(&app.handle(Event::CodexSet(Ok(()))), &Effect::ReadCodex));
-        let effects = app.handle(Event::Codex(codex(false)));
+        let effects = app.handle(Event::CodexSet(Ok(())));
+        assert!(has(&effects, &Effect::ReadCodex));
         assert_eq!(rows(&effects)[4..6], ["Codex: Off", "Turn on"]);
         assert!(shows(&effects).is_empty());
 
@@ -1028,18 +1030,19 @@ mod tests {
         let effects = app.handle(Event::Menu(MenuAction::ClaudeOff));
         assert!(has(&effects, &Effect::SetClaude(false)));
         assert_eq!(rows(&effects)[2..4], ["Claude Code: Turning off…", "Codex: On"]);
-        // Until the status read answers, the rows say the last status.
+        // A change that ended well shows at once, and stays when the status read after it fails.
         let effects = app.handle(Event::ClaudeSet(Ok(())));
         assert!(has(&effects, &Effect::ReadClaude));
-        assert_eq!(rows(&effects)[2..4], ["Claude Code: On", "Turn off"]);
-        assert_eq!(rows(&app.handle(Event::Claude(claude(false))))[2..4], ["Claude Code: Off", "Turn on"]);
+        assert_eq!(rows(&effects)[2..4], ["Claude Code: Off", "Turn on"]);
+        assert!(app.handle(Event::Claude(None)).is_empty());
 
         let effects = app.handle(Event::Menu(MenuAction::CodexOff));
         assert!(has(&effects, &Effect::SetCodex(false)));
         assert_eq!(rows(&effects)[4..6], ["Codex: Turning off…", "Quit"]);
         let effects = app.handle(Event::CodexSet(Ok(())));
         assert!(has(&effects, &Effect::ReadCodex));
-        assert_eq!(rows(&effects)[4..6], ["Codex: On", "Turn off"]);
+        assert_eq!(rows(&effects)[4..6], ["Codex: Off", "Turn on"]);
+        assert!(app.handle(Event::Codex(None)).is_empty());
     }
 
     #[test]
