@@ -4,7 +4,7 @@ import { afterEach, assert, beforeEach, test } from 'orca/testing'
 import { mkdtempSync, renameSync, rmSync } from 'node:fs'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { startDial, type Dial } from './dial'
-import { nodeInputs, type DialInputs, type Ran } from './inputs'
+import { MISSING, nodeInputs, type DialInputs, type Ran } from './inputs'
 import type { DialState } from './protocol'
 
 const UNPLUGGED = '{"daemon":true,"devicesSocket":"/run/h/devices.sock","devicesReady":false}'
@@ -58,8 +58,7 @@ function world(answers: (Ran | Promise<Ran>)[], over: Partial<DialInputs> = {}) 
     run(file, args, bounds) {
       runs.push({ file, args, ...bounds, at: time })
       called()
-      const answer = answers.shift()
-      if (answer !== undefined) return Promise.resolve(answer)
+      if (answers.length > 0) return Promise.resolve(answers.shift()!)
       return new Promise((settle) => bounds.signal.addEventListener('abort', () => settle(null)))
     },
     connect: nodeInputs().connect,
@@ -213,7 +212,7 @@ test('on Windows the state is windows, and nothing is run or scheduled', async (
 })
 
 test('with no launcher the state is noHarness; ~/.local/bin/harness is asked first, then harness', async () => {
-  const w = world(['missing', 'missing'])
+  const w = world([MISSING, MISSING])
   await w.until(() => w.states.length > 0)
   assert.deepEqual(w.states, [{ state: 'noHarness' }])
   assert.deepEqual(
@@ -224,15 +223,21 @@ test('with no launcher the state is noHarness; ~/.local/bin/harness is asked fir
     ]
   )
   // The first answer that is not missing is the launcher's.
-  const second = world(['missing', UNPLUGGED])
+  const second = world([MISSING, UNPLUGGED])
   await second.until(() => second.states.length > 0)
   assert.deepEqual(second.states, [{ state: 'unplugged' }])
 })
 
 test('with no home only harness is asked', async () => {
-  const w = world(['missing'], { home: '' })
+  const w = world([MISSING], { home: '' })
   await w.until(() => w.states.length > 0)
   assert.deepEqual(w.runs.map((run) => run.file), ['harness'])
+})
+
+test('a launcher that prints missing is notRunning, and the next is not asked', async () => {
+  const w = world(['missing', null])
+  await w.until(() => w.states.length > 0)
+  assert.deepEqual([w.states, w.runs.length], [[{ state: 'notRunning' }], 1])
 })
 
 test('a launcher that fails is notRunning, and the next is not asked', async () => {

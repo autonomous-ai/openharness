@@ -2,7 +2,7 @@
 import { afterEach, assert, beforeEach, test } from 'orca/testing'
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
-import { nodeInputs } from './inputs'
+import { MISSING, nodeInputs } from './inputs'
 
 const BODY = '{"type":"dial","standby":true}'
 let dir = ''
@@ -69,9 +69,9 @@ test('run answers the stdout of a file that exits 0', async () => {
 
 test('a file that is not there is missing, and so is a bare name the PATH it is given does not hold', async () => {
   mkdirSync(`${dir}/empty`)
-  assert.equal(await nodeInputs().run(`${dir}/none`, [], bounds()), 'missing')
+  assert.equal(await nodeInputs().run(`${dir}/none`, [], bounds()), MISSING)
   // `sh` is on the process's own PATH, so only the given one can make it missing.
-  assert.equal(await nodeInputs().run('sh', [], bounds({ path: `${dir}/empty` })), 'missing')
+  assert.equal(await nodeInputs().run('sh', [], bounds({ path: `${dir}/empty` })), MISSING)
 })
 
 test("a bare name is found through the PATH it is given, not the process's own", async () => {
