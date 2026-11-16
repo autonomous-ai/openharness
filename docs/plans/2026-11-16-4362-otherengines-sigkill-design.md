@@ -44,6 +44,11 @@ is: no `revalidateBinding`, no recovered follow. The rest of the pass still runs
   screen path (`ours`) already leaves other holds alone. Hermes clears only `HERMES_SANDBOX_HOLD`. The read-hold
   release clears only holds an earlier pass's own read set (`readHolds`). `revalidateBinding` in `bindObservedAgent`
   is the one place that takes any hold. The planner confirms this list against the code.
+- Narrowed after the final review (orchestrator, 2026-11-16): the pass leaves a reader hold alone only while the
+  live reader still holds a stream for the session, waiting to resume it (`bindObservedAgent` asks through a new
+  dependency, `followsLive(sessionId)`, which `main.ts` wires to the reader). A row whose reader gave up (six failed
+  opens, no stream ever held) is revalidated as before. Otherwise the fix would take away the only rescue such a row
+  has, and it would stay held until the daemon restarts.
 - Nothing new is stored, synced or exposed. No new state, setting or log line is needed beyond what the fix requires.
 
 ## Tests
@@ -71,3 +76,8 @@ Not part of this pull request (orchestrator, 2026-11-16). Each becomes its own i
 failed, or a refused register, in the pass) and `:503` (a Hermes sandbox with no path here). None clears the reader's
 hold or attaches. But once their own reason clears, the row carries no hold while the worker is still out, so a reset
 attach at that moment would open the second stream again. It takes a second failure inside the outage.
+
+Also left as they are (final review, 2026-11-16): in `otherEngines.e2e.ts` the frozen-worker half's two log checks
+(`toContain` of the "gone" and "back" lines) are always true, because the killed-worker half already wrote those lines.
+Tightening them needs a polling wait. The refused-hook request in the same file has no timeout of its own (the test's
+timeout bounds it).
