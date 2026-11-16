@@ -171,7 +171,8 @@ Rust only: `tauri-plugin-updater` is registered in Rust and the webview gets no 
 - **Not mid-task.** While the CLI install or a sign-in runs, no check starts; the first tick after it ends starts the
   one that was due (so a first launch, which installs the CLI at once, checks right after the install, not 6 hours
   later). A sign-in that starts while an update downloads delays the relaunch, not the download: the reducer emits
-  `Relaunch` on the first tick with no run in progress.
+  `Relaunch` on the first tick with no run in progress. The relaunch also waits while a Claude Code change runs,
+  while the keep-alive's `harness start --if-down` runs, and while the window is open (PM, 2026-11-16).
 - **The menu.** While an update downloads and installs, one disabled row `Updating to 0.1.3…` sits just before the
   separator; otherwise the menu is as today.
 - **Failures are seen.** One log line each, through `log::redact`, never a URL: `update: found 0.1.3`,

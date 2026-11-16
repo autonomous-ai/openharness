@@ -112,7 +112,7 @@ impl App {
         match event {
             Event::Tick { now, desktop_running } => {
                 self.now = now;
-                if self.relaunch && !self.running() {
+                if self.relaunch && !self.relaunch_waits() {
                     self.relaunch = false;
                     self.stop_watch(effects);
                     effects.push(Effect::Relaunch);
@@ -333,6 +333,12 @@ impl App {
     /// The CLI install or a sign-in: no update check starts, and no relaunch, while one runs.
     fn running(&self) -> bool {
         self.state.cli == CliState::Installing || self.login.is_some()
+    }
+
+    /// The relaunch would also cut short a Claude Code change, a daemon start or what the window shows, so it waits
+    /// for them too; a check does not, as the first launch's window is open right after the CLI install.
+    fn relaunch_waits(&self) -> bool {
+        self.running() || self.setting.is_some() || self.keep.starting() || self.window.is_some()
     }
 
     /// Only a button the window shows does something, so a second click on one that started a run does nothing.

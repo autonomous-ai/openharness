@@ -141,6 +141,11 @@ impl KeepAlive {
         self.daemon
     }
 
+    /// A `harness start --if-down` runs.
+    pub fn starting(&self) -> bool {
+        self.starting
+    }
+
     fn spawn_watch(&mut self) -> Keep {
         self.watch = Watch::Running;
         Keep::SpawnWatch
