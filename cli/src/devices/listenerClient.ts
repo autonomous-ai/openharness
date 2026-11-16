@@ -26,12 +26,13 @@ export async function tellDevices(
 
 export const ASK_ANSWER_MAX = 1024
 
-/** One message the listener answers with a JSON object: that object. Null, never a throw, for no listener, one not
- *  this account's own, any answer but a 200 whose body is a JSON object of at most ASK_ANSWER_MAX bytes, or none in time. */
+/** One message the listener answers with a JSON object: that object. The status of any answer but a 200, its body
+ *  unread: a caller tells the listener's own rate (429) from a refusal. Null, never a throw, for no listener, one not
+ *  this account's own, a 200 whose body is not a JSON object of at most ASK_ANSWER_MAX bytes, or no answer in time. */
 export async function askDevices(
   dataDir: string, message: { type: string } & Record<string, unknown>,
   options: { platform?: NodeJS.Platform; fetch?: typeof fetch; timeoutMs?: number } = {},
-): Promise<Record<string, unknown> | null> {
+): Promise<Record<string, unknown> | number | null> {
   const path = devicesListenerPath(dataDir, options.platform)
   if (!path) return null
   try {
@@ -42,7 +43,7 @@ export async function askDevices(
     // Read or cancelled, never left: an unread answer would hold its connection, and the listener takes only 16.
     if (answer.status !== 200) {
       await answer.body?.cancel()
-      return null
+      return answer.status
     }
     const chunks: Buffer[] = []
     let size = 0

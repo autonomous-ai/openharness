@@ -82,9 +82,9 @@ export interface DialWatchDeps extends Pick<DevicesClientDeps, 'port' | 'dataDir
    *  aborts: true when it had opened. One asked with `standby` opens only while no other watch holds it.
    *  `streamDevices` by default. */
   selects?: (message: { type: 'tabs'; standby?: true }, chunk: (data: Buffer) => void, signal: AbortSignal) => Promise<boolean>
-  /** Hands the Notifications setting to the devices' listener, which keeps it: its answer, null for none.
-   *  `askDevices` by default, bounded at NOTIFY_ANSWER_MS. */
-  notifyMode?: (mode: NotifyMode) => Promise<Record<string, unknown> | null>
+  /** Hands the Notifications setting to the devices' listener, which keeps it: its answer, the status of one that is
+   *  not a 200, null for none. `askDevices` by default, bounded at NOTIFY_ANSWER_MS. */
+  notifyMode?: (mode: NotifyMode) => Promise<Record<string, unknown> | number | null>
 }
 
 const NOT_RUNNING = 'Harness is not running on this computer. Run: harness start'
@@ -284,9 +284,9 @@ export function runDialWatch(argv: string[], deps: DialWatchDeps): Promise<numbe
         // A watch that has ended says nothing and sends nothing.
         if (settled) return
         notifying = false
-        // No answer at all (no listener, an older daemon's, none in 12 s) is told apart from a refusal, whose code alone
-        // reaches stderr, never the listener's words.
-        if (reply === null) deps.printError('notify: NO_ANSWER')
+        // No answer at all (no listener, an older daemon's, its rate, none in 12 s) is told apart from a refusal, whose
+        // code alone reaches stderr, never the listener's words.
+        if (reply === null || typeof reply === 'number') deps.printError('notify: NO_ANSWER')
         else if (reply.mode !== mode) deps.printError(`notify: ${typeof reply.error === 'string' && SOUND_CODE.test(reply.error) ? reply.error : 'FAILED'}`)
         const next = notifyWaiting
         notifyWaiting = undefined

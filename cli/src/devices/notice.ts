@@ -16,7 +16,7 @@ export interface NoticeDeps {
   out(line: string): void
   err(line: string): void
   /** `askDevices` by default. */
-  ask?: (message: { type: 'notice' } & NoticeAsk) => Promise<Record<string, unknown> | null>
+  ask?: (message: { type: 'notice' } & NoticeAsk) => Promise<Record<string, unknown> | number | null>
 }
 
 const session = (id: string | undefined): id is string => id !== undefined && NOTICE_SESSION.test(id)
@@ -46,8 +46,9 @@ export async function runNotice(words: string[], deps: NoticeDeps): Promise<numb
   }
   const ask = deps.ask ?? ((message) => askDevices(deps.dataDir, { ...message }))
   const answer = await ask({ type: 'notice', text, ...noticeCaller(deps.env, deps.cwd) })
-  const said = answer?.result
-  const result = isNoticeResult(said) ? said : 'no dial'
+  const said = typeof answer === 'object' ? answer?.result : undefined
+  // The listener's own rate (429) refuses a loop of notices before the devices hear them: over a limit all the same.
+  const result = answer === 429 ? 'limited' : isNoticeResult(said) ? said : 'no dial'
   deps.out(words.includes('--json') ? JSON.stringify({ result }) : result)
   return 0
 }
