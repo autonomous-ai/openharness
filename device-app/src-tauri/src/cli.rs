@@ -831,14 +831,25 @@ mod tests {
     }
 
     #[test]
-    fn only_two_shapes_of_stderr_are_logged_as_they_come() {
+    fn only_three_shapes_of_stderr_are_logged_as_they_come() {
         let longest = format!("sound: {}", "A".repeat(32));
-        for line in
-            ["tabs stream replaced", "sound: DEVICE_OFFLINE", "sound: NO_DIAL", "sound: A", "sound: E2E_9", &longest]
-        {
+        let longest_notify = format!("notify: {}", "A".repeat(32));
+        for line in [
+            "tabs stream replaced",
+            "sound: DEVICE_OFFLINE",
+            "sound: NO_DIAL",
+            "sound: A",
+            "sound: E2E_9",
+            &longest,
+            "notify: NO_DIAL",
+            "notify: WRITE_FAILED",
+            "notify: A",
+            &longest_notify,
+        ] {
             assert!(logged_stderr(line.as_bytes()), "{line}");
         }
         let too_long = format!("sound: {}", "A".repeat(33));
+        let too_long_notify = format!("notify: {}", "A".repeat(33));
         let refused = [
             "",
             "sound: ",
@@ -853,6 +864,14 @@ mod tests {
             "sound: person@example.com",
             &too_long,
             "tabs stream replaced!",
+            "notify: ",
+            "notify:NO_DIAL",
+            " notify: NO_DIAL",
+            "notify: no dial",
+            "Notify: NO_DIAL",
+            "notify: /Users/person",
+            "notify: person@example.com",
+            &too_long_notify,
         ];
         for line in refused {
             assert!(!logged_stderr(line.as_bytes()), "{line}");
@@ -882,6 +901,34 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn a_watch_logs_a_notify_code_as_it_comes_and_no_other_stderr() {
+        let fake = Fake::new();
+        fake.script(
+            "hardware watch --json",
+            &[
+                "@err notify: WRITE_FAILED",
+                "@err notify: /Users/person/x",
+                "@err notify: Connect the VPN",
+                "started",
+                "@hang",
+            ],
+        );
+        let mut child = fake.cli().spawn(&WATCH).unwrap();
+        assert_eq!(child.line(WAIT), Ok(Some("started".into())));
+        // Its end waits for stderr's, so the line, logged as it is read, comes first.
+        child.killer().kill();
+        assert_eq!(child.exit(WAIT), Ok(None));
+        assert_eq!(
+            fake.log().lines(),
+            [
+                "harness hardware watch --json: notify: WRITE_FAILED",
+                "harness hardware watch --json: killed by a signal"
+            ]
+        );
+    }
+
     /// A stream that hands on each chunk it is sent, as one read, and ends once its sender is gone.
     struct Chunks(mpsc::Receiver<Vec<u8>>);
 
@@ -906,6 +953,9 @@ mod tests {
         send.send(b"sound: DEVICE_".to_vec()).unwrap();
         send.send(b"OFFLINE\n".to_vec()).unwrap();
         assert_eq!(said.recv_timeout(WAIT), Ok("sound: DEVICE_OFFLINE".into()));
+        send.send(b"notify: NO_".to_vec()).unwrap();
+        send.send(b"ANSWER\n".to_vec()).unwrap();
+        assert_eq!(said.recv_timeout(WAIT), Ok("notify: NO_ANSWER".into()));
         // A line that starts or ends with it, or holds it far into a long one, is not it.
         send.send(b"tabs stream replaced!\nx tabs stream replaced\n".to_vec()).unwrap();
         let long = [b"tabs stream replaced".repeat(400), b"\n".to_vec()].concat();
@@ -915,6 +965,8 @@ mod tests {
         let long = [b"sound: ".to_vec(), b"A".repeat(8000), b"\n".to_vec()].concat();
         send.send(long[..4096].to_vec()).unwrap();
         send.send(long[4096..].to_vec()).unwrap();
+        // The longest prefix's code one letter too long, not cut to one that fits.
+        send.send([b"notify: ".to_vec(), b"A".repeat(33), b"\n".to_vec()].concat()).unwrap();
         send.send(b"tabs stream replaced\n".to_vec()).unwrap();
         drop(send);
         assert_eq!(ended.recv_timeout(WAIT), Ok(()));
