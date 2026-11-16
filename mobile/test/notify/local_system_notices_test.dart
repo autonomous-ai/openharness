@@ -238,24 +238,19 @@ void main() {
     });
   });
 
-  group('pushes', () {
-    test('allowing notices is told, so pushes can start reaching the person', () async {
-      var told = 0;
-      notices.onAllowed = () => told++;
-      await notices.requestPermission();
-      expect(told, 1);
-    });
-
-    test('refusing them is not', () async {
-      var told = 0;
-      notices.onAllowed = () => told++;
+  group('notification permission', () {
+    test('reports the local notification permission decision', () async {
+      expect(await notices.requestPermission(), isTrue);
       plugin.ios.allow = false;
-      await notices.requestPermission();
-      plugin.ios.fail = true;
-      await notices.requestPermission();
-      expect(told, 0);
+      expect(await notices.requestPermission(), isFalse);
     });
 
+    test('a failed permission request does not break local notices', () async {
+      plugin.ios.fail = true;
+      expect(await notices.requestPermission(), isNull);
+      await notices.show(message(NoticeKind.done));
+      expect(plugin.shown, hasLength(1));
+    });
   });
 }
 

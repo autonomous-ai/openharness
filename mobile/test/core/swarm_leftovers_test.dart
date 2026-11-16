@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness_mobile/core/harness_file_store.dart';
 import 'package:harness_mobile/core/swarm_leftovers.dart';
 import 'package:harness_mobile/logging/app_log.dart';
 
@@ -89,6 +90,31 @@ void main() {
     expect(names(state), isEmpty);
     expect(names(temp), isEmpty);
   });
+
+  test(
+    'forgets the retired push address while preserving sign-in and layout',
+    () async {
+      final settings = HarnessFileStore.shared;
+      await settings.write('push_token_sent_v1', '{"token":"synthetic-token"}');
+      await settings.write('session', 'synthetic-session');
+      await settings.write('pane_layout_v2', 'synthetic-layout');
+      addTearDown(() async {
+        for (final key in ['push_token_sent_v1', 'session', 'pane_layout_v2']) {
+          await settings.delete(key);
+        }
+      });
+
+      await forgetSwarmLeftovers(
+        state: state,
+        temporary: () async => temp,
+        keys: _Keys({}),
+      );
+
+      expect(await settings.read('push_token_sent_v1'), isNull);
+      expect(await settings.read('session'), 'synthetic-session');
+      expect(await settings.read('pane_layout_v2'), 'synthetic-layout');
+    },
+  );
 
   test('a step that fails stops no other, and the log names no path', () async {
     leaveSwarmBehind();

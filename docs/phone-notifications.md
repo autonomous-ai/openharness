@@ -1,9 +1,9 @@
 # Phone notifications
 
 Every notification the Harness phone app (iOS and Android) can show in the system's notification centre, as of
-2026-11-14 (tasks #3607 and #3029). Each one is **Local**: the app posts it itself, from what it reads while it runs.
-The server's push plumbing stays (`backend/src/push/`: the phones a person registered, Apple's APNs and Google's FCM),
-and no event pushes today.
+2026-11-16 (tasks #3607 and #3029). Each one is **Local**: the app posts it itself, from what it reads while it runs.
+Swarm's remote delivery, phone token registration and APNs/FCM integration are removed. Local agent and device
+notifications keep their existing permissions and behavior.
 
 A notice never says what a person wrote: it can be read on a locked phone. It says who, and on which machine.
 
@@ -45,12 +45,13 @@ removed-device bands, and snackbars.
 - Local: `mobile/lib/notify/system_notices.dart` posts all of them. Agent ones come from
   `lib/notify/agent_announcer.dart` (`agent-question`; a finished turn is a mark only), device ones from
   `lib/state/app_state.dart` (`account-device`).
-- Push: `backend/src/push/send.ts` sends to every phone the person registered (`push/devices.ts`); `push/apns.ts` and
-  `push/fcm.ts` talk to Apple and Google. No event uses it today.
+- Remote delivery: none. The backend explicitly refuses new push-token registration. Its remaining
+  `push/devices.ts` lets supported older clients unregister their own legacy token and preserves the existing
+  90-day expiry index; it sends no notification. See the [removal design](design/2026-11-16-swarm-removal-completion.md).
 
 ## What the inventory found, and what was done
 
 1. (#3607) An agent finishing a turn rang the phone as loudly as a person did. Fixed: it is a badge only, classified by
    what happened, never by the agent's words.
-2. (#3607) Not changed, proposed: the server does not push "a sign-in from a device you do not know" (the app reads it
-   when it next opens). A push needs the device-sign-in write path and two security reviews, so it is a separate task.
+2. (#3607) A sign-in from a device you do not know remains a local notice: the app reads it when it next opens.
+   Removing Swarm's unused remote delivery does not change that behavior.

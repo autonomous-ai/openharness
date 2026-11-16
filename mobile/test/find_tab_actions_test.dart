@@ -90,6 +90,48 @@ void main() {
     await unmount(tester);
   });
 
+  testWidgets('a legacy automatic tab is selected and renamed as New Tab', (
+    tester,
+  ) async {
+    final app = await deskApp(
+      PagerConn(),
+      opensTerminals: false,
+      tabs: [
+        deskTab('legacy', 'New Swarm', [], custom: false),
+        deskTab('chosen', 'New Swarm', []),
+      ],
+    );
+    await openFind(tester, app: app);
+
+    expect(chip('New Tab'), findsOneWidget);
+    expect(chip('New Swarm'), findsOneWidget);
+    await tester.tap(chip('New Tab'));
+    await tester.pump();
+    expect(pickedTab(tester), 'legacy');
+    await hold(tester, 'New Tab');
+    await tester.tap(find.text('Rename Tab…'));
+    await settle(tester);
+
+    final field = find.byType(TextField).last;
+    expect(tester.widget<TextField>(field).controller!.text, 'New Tab');
+    await tester.enterText(field, 'My work');
+    await tester.pump();
+    await tester.tap(find.text('Save'));
+    await settle(tester);
+
+    expect(chip('My work'), findsOneWidget);
+    expect(chip('New Swarm'), findsOneWidget);
+    expect(deskApiOf(app).written, [
+      {
+        'op': 'tab.rename',
+        'id': 'legacy',
+        'name': 'My work',
+        'nameIsCustom': true,
+      },
+    ]);
+    await unmount(tester);
+  });
+
   testWidgets('holding All offers nothing: it is no tab', (tester) async {
     await openFind(tester);
 
