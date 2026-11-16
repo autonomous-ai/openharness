@@ -283,6 +283,8 @@ export class IsolatedDaemon {
     readonly options: DaemonOptions,
     /** What the fake engines' wrappers hand `fakeEngine.mjs` (updates.e2e.ts writes releases with it). */
     readonly engineConfig: EngineConfig,
+    /** Where the fake open notes each run's arguments. */
+    private readonly opensLog: string,
   ) {}
 
   static async create(options: DaemonOptions = {}): Promise<IsolatedDaemon> {
@@ -347,6 +349,12 @@ export class IsolatedDaemon {
     // helper (lib/guestAccounts.ts), which may be installed on the Mac the tests run on. Refused, as for an owner who
     // never turned guest access on.
     await writeFile(join(dirs.bin, 'sudo'), '#!/bin/sh\necho "sudo: a password is required" >&2\nexit 1\n', { mode: 0o755 })
+    // A pick on the dial brings that app forward with `open -b` (services/devices), and dialAppFilter.e2e.ts taps and
+    // picks VS Code and Ghostty: with the real open, a dial test on a Mac would bring the developer's own apps forward.
+    // Out of bin: the devices run open by its path, never by name. One line of arguments per run, for `opens()`.
+    const fakeOpen = join(own, 'fake-open')
+    const opensLog = join(own, 'opens.log')
+    await writeFile(fakeOpen, `#!/bin/sh\nprintf '%s\\n' "$*" >> '${opensLog}'\n`, { mode: 0o755 })
     const env = daemonEnvironment(tmux.env, {
       NODE_ENV: 'test',
       HOME: dirs.home,
@@ -410,6 +418,7 @@ export class IsolatedDaemon {
       GRID_HOME: join(dirs.home, '.grid'),
       GRID_CONTROL_PLANE_URL: 'http://127.0.0.1:9',
       HARNESS_GRID_BIN: '',
+      HARNESS_OPEN_BIN: fakeOpen,
       // Claude Code's and Codex's hooks, installed as on a person's computer, into this home and CODEX_HOME
       // (assertHooksContained), and run by the fake engines. Every other engine's installer writes into
       // folders these tests have no engine for.
@@ -429,7 +438,7 @@ export class IsolatedDaemon {
       TERMINAL_RECONCILE_INTERVAL_MS: '5000',
       ...options.env,
     })
-    return new IsolatedDaemon(root, tmux, port, env, options, config)
+    return new IsolatedDaemon(root, tmux, port, env, options, config, opensLog)
   }
 
   /** What the fake engines noted of every hook they ran (fakeEngine.mjs `hookLog`); kept once the root is gone. */
@@ -437,6 +446,11 @@ export class IsolatedDaemon {
     try { return readFileSync(this.engineConfig.hookLog, 'utf8') } catch { return this.closedHookLog }
   }
   private closedHookLog = ''
+
+  /** The arguments of every run of the fake open, in order: none while it has not run. */
+  opens(): string[][] {
+    try { return readFileSync(this.opensLog, 'utf8').split('\n').filter(Boolean).map((line) => line.split(' ')) } catch { return [] }
+  }
 
   /** Throws when the daemon said it put hooks outside the root, or an engine refused hooks found there. */
   private assertHooksStayedInside(): void {
