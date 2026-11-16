@@ -63,7 +63,8 @@ Offline computers never receive queued changes. A write is complete only when co
 
 export interface DialWatchDeps extends Pick<DevicesClientDeps, 'port' | 'dataDir' | 'machineId' | 'connect'> {
   /** The Harness Device app writes on it a `{"front":"<bundle id or exe name>"}` line each time the app in front changes,
-   *  and a `{"tab":{"app","tty"}}` line each time the selected tab of a tab app in front does. */
+   *  a `{"tab":{"app","tty"}}` line each time the selected tab of a tab app in front does, and a `{"muted":<bool>}` line
+   *  each time its Sound item is clicked. */
   stdin: {
     on(event: 'end' | 'close', listener: () => void): unknown
     on(event: 'data', listener: (chunk: Buffer | string) => void): unknown
@@ -100,6 +101,10 @@ const SELECT_LINE_MAX = 96
 // devices process that is gone is not asked once a second.
 const STREAM_RETRY_MS = 1_000
 const STREAM_RETRY_MAX_MS = 30_000
+// deviceRequest's bound: a Sound change a hung devices process never answers frees its slot, so the next click is sent.
+const SOUND_ANSWER_MS = 12_000
+// All of a refused Sound change that goes on stderr, and from there into the app's log: a code, never the daemon's words.
+const SOUND_CODE = /^[A-Z][A-Z0-9_]{0,31}$/
 
 /** One call per line of at most [max] bytes; a longer line is dropped whole, its start included. */
 function lines(max: number, line: (text: string) => void): (chunk: Buffer | string) => void {
@@ -229,6 +234,34 @@ export function runDialWatch(argv: string[], deps: DialWatchDeps): Promise<numbe
         streamWait = Math.min(streamWait * 2, STREAM_RETRY_MAX_MS)
       })
     }
+    // Whether the daemon answered with dial-watch: before that, only machine_select goes on the socket.
+    let answered = false
+    // The dial the last status named, the one a Sound line changes; the change on the socket, and the newest line read
+    // meanwhile, kept with the dial it was read for. Fast clicks never queue up, and a dial that became the primary
+    // since is never changed by a click made for another.
+    let dialId: string | undefined
+    let sounding: { requestId: string; timer: ReturnType<typeof setTimeout> } | undefined
+    let waiting: { id: string; muted: boolean } | undefined
+    const sendSound = (id: string, muted: boolean): void => {
+      const requestId = randomUUID()
+      sounding = { requestId, timer: setTimeout(() => soundDone('NO_ANSWER'), SOUND_ANSWER_MS) }
+      socket!.send(JSON.stringify({ type: 'harness_device_settings', payload: { id, patch: { muted }, requestId } }))
+    }
+    // The change on the socket answered, or not in time: a failure is one line, and what waited is sent.
+    const soundDone = (failure?: string): void => {
+      clearTimeout(sounding?.timer)
+      sounding = undefined
+      if (failure) deps.printError(`sound: ${failure}`)
+      const next = waiting
+      waiting = undefined
+      if (next) sendSound(next.id, next.muted)
+    }
+    const sound = (muted: boolean): void => {
+      if (!answered) return deps.printError('sound: NOT_CONNECTED')
+      if (!dialId) return deps.printError('sound: NO_DIAL')
+      if (sounding) waiting = { id: dialId, muted }
+      else sendSound(dialId, muted)
+    }
     const finish = (code: number, why?: string, last?: Promise<unknown>): void => {
       if (settled) return
       settled = true
@@ -237,6 +270,7 @@ export function runDialWatch(argv: string[], deps: DialWatchDeps): Promise<numbe
       clearTimeout(gap)
       clearTimeout(tabGap)
       clearTimeout(reopen)
+      clearTimeout(sounding?.timer)
       stream?.abort()
       deps.stdin.pause()
       try { socket?.close() } catch { /* already closed */ }
@@ -262,8 +296,10 @@ export function runDialWatch(argv: string[], deps: DialWatchDeps): Promise<numbe
     deps.stdin.on('close', quit)
     deps.stdin.on('data', lines(FRONT_LINE_MAX, line => {
       if (settled) return
-      let value: { front?: unknown; tab?: unknown } | null
+      let value: { front?: unknown; tab?: unknown; muted?: unknown } | null
       try { value = JSON.parse(line) } catch { return }
+      // The Sound item's click: exactly one boolean `muted`, so no other line, nor a key beside it, changes the dial.
+      if (typeof value?.muted === 'boolean' && Object.keys(value).length === 1) return sound(value.muted)
       if (typeof value?.front === 'string') {
         front = frontAppId(value.front)
         return tellFront()
@@ -289,9 +325,20 @@ export function runDialWatch(argv: string[], deps: DialWatchDeps): Promise<numbe
         if (frame?.type === 'connected') {
           clearTimeout(deadline)
           const features = (frame.payload as { features?: unknown } | undefined)?.features
-          if (Array.isArray(features) && features.includes('dial-watch')) return openStream()
+          if (Array.isArray(features) && features.includes('dial-watch')) {
+            answered = true
+            return openStream()
+          }
           deps.print(JSON.stringify({ error: 'The Harness daemon on this computer is older than this command. Run: harness start --restart' }))
           return finish(4)
+        }
+        if (frame?.type === 'harness_device_settings_result') {
+          const reply = frame.payload as { requestId?: unknown; ok?: unknown; error?: unknown } | null | undefined
+          // Another request's answer, or one that came after its 12 s: it frees no slot.
+          if (!sounding || reply?.requestId !== sounding.requestId) return
+          if (reply.ok === true) return soundDone()
+          // The daemon's own words (a path, a newline) never reach stderr: only a code does.
+          return soundDone(typeof reply.error === 'string' && SOUND_CODE.test(reply.error) ? reply.error : 'FAILED')
         }
         if (frame?.type !== 'dial_status' || typeof frame.payload !== 'object' || frame.payload === null) return
         // The devices process usually starts with the dial, after this watch: it hears the app in front as the dial attaches.
@@ -304,6 +351,10 @@ export function runDialWatch(argv: string[], deps: DialWatchDeps): Promise<numbe
           streamWait = STREAM_RETRY_MS
           openStream()
         }
+        // Read before the dedupe: another dial can become the primary under the same line, and a status with no dial
+        // takes the id away.
+        const { id } = frame.payload as { id?: unknown }
+        dialId = typeof id === 'string' && id !== '' ? id : undefined
         const line = dialWatchLine(frame.payload)
         if (line === last) return
         last = line
