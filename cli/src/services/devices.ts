@@ -31,16 +31,20 @@ import type { HostAdapter, Pane } from '../cable/hosts/adapter.js'
 import { createClaudeAppAdapter } from '../cable/hosts/claudeApp.js'
 import { codexQueueDeps, createCodexQueue, type CodexQueueDeps } from '../cable/hosts/codexQueue.js'
 import { createHerdrAdapter } from '../cable/hosts/herdr.js'
+import { createHerdrClient, herdrClientDeps, watchHerdrSocket, type HerdrClient } from '../cable/hosts/herdrClient.js'
+import { HerdrSource } from '../cable/hosts/herdrSource.js'
 import { Inbox } from '../cable/hosts/inbox.js'
 import { LAST_ANSWER_DEADLINE_MS, LAST_ANSWER_MAX_BYTES, readLastAnswer } from '../cable/hosts/lastAnswer.js'
 import { askedLine, hostDisplayName, observedAgentId, ObservedSource, type ObservedActions, type ObservedDeps, type PromptSource } from '../cable/hosts/observed.js'
 import { createOpenActions } from '../cable/hosts/open.js'
 import { createOrcaAdapter, orcaDeps, type OrcaDeps } from '../cable/hosts/orca.js'
 import { readRecordName } from '../cable/hosts/recordName.js'
-import { HostRegistry } from '../cable/hosts/registry.js'
-import { learnApps } from '../cable/hosts/scannedApp.js'
+import { HostRegistry, type HostEntry } from '../cable/hosts/registry.js'
+import { learnApps, readProcessNames } from '../cable/hosts/scannedApp.js'
 import { createTabsAdapter, readTty, type Tab } from '../cable/hosts/tabs.js'
-import type { HostAgent, HostAgentState } from '../cable/hosts/types.js'
+import { createTmuxAdapter } from '../cable/hosts/tmux.js'
+import type { HostAgentState } from '../cable/hosts/types.js'
+import { createVscodeAdapter } from '../cable/hosts/vscode.js'
 import { createWeztermAdapter } from '../cable/hosts/wezterm.js'
 import { PetStore } from '../cable/pets/store.js'
 import { DialLog } from '../cable/dialLog.js'
@@ -58,7 +62,7 @@ import { fileStamp, listProcesses, processAlive } from '../lib/sessionSearch/ext
 import { setVoiceRouterDeviceConnected, setVoiceRouterSessions, shutdownVoiceRouter } from '../lib/voiceRouter.js'
 import { createTally, createTierDecider, type Tier, type TierDecision, type TierInput } from '../lib/notifyTier.js'
 import { createPartGuard } from './devicesGuard.js'
-import { attachHandler, frontHandler, tabHandler, tabsStream, type DevicesListener, type ListenerHandler, type ListenerStreamHandler } from './devicesListener.js'
+import { attachHandler, dialStream, frontHandler, tabHandler, tabsStream, type DevicesListener, type ListenerHandler, type ListenerStreamHandler } from './devicesListener.js'
 import { FLEET_FALLBACKS, startFleet, type Fleet } from './fleet.js'
 
 export { DEVICES_REQUESTS }
@@ -100,6 +104,8 @@ export interface DevicesDeps {
   orca?: OrcaDeps
   /** For this service's tests: how `codex` is found and run (cable/hosts/codexQueue.ts). */
   codex?: Pick<CodexQueueDeps, 'run' | 'binary' | 'platform'>
+  /** For this service's tests: herdr's socket (cable/hosts/herdrClient.ts). */
+  herdr?: HerdrClient
   /** Opens the devices' own listener with these handlers (services/devicesListener.ts). Given by the devices process
    *  alone: inside the core's process (`HARNESSD_SERVICES=none`, Harness OS) there is none, so the core's process opens
    *  no socket for the devices, and the dial follows no app in front there. */
@@ -266,6 +272,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   }
   const inbox = new Inbox({ now: monotonic, after: timerIn('inbox') })
   const apps = deps.orca ?? orcaDeps()
+  /** Where herdr's socket is, from the daemon's own environment: the client reads it, and the herdr source watches for it. */
+  const herdrAt = herdrClientDeps()
+  const herdrClient = deps.herdr ?? createHerdrClient(herdrAt)
+  const herdrAdapter = createHerdrAdapter({ ...apps, client: herdrClient })
   const claude = createClaudeAppAdapter({ ...apps, inFront: () => cableHost.latestFront() === 'claude' })
   // Harness's own Codex home, whose config `codex queue` loads; run from the home folder, so no project's .codex/ is read.
   const codexQueue = createCodexQueue({ ...(deps.codex ?? codexQueueDeps()), home: env.CODEX_HOME, cwd: homedir() })
@@ -273,6 +283,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // asks it to select that agent's tab (docs/specs/2026-11-15-dial-terminal-follow.md). Only macOS's apps select a tab
   // by its tty: elsewhere no agent's is read, and none has a tab.
   const tabs = tabsStream()
+  // The stream Orca's Harness Device plugin holds open: whether a dial is attached and the agent it shows
+  // (docs/specs/2026-11-16-orca-device-plugin.md). A part of its own, so a throw on its path is never the dial's. Its
+  // count's timer stops with the devices.
+  const dial = dialStream({ log, after: timerIn('dialStream') })
   const ttyOf = apps.platform === 'darwin' ? deps.tty ?? readTty : undefined
   /** The ttys the dial selected lately, a rest's and a tap's alike: the echoes a tab report is checked against, each
    *  excusing one. */
@@ -299,13 +313,18 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // One with no `show` gets none: the source reads whether it has one (observed.ts rest).
     return show ? { ...noted, show: (pane, agentId) => { noteMove(); return show(pane, agentId) } } : noted
   }
-  /** The apps an outside agent runs in, in the order its panes are kept: each verb of the dial takes the first that can. */
-  const adapters: readonly HostAdapter[] = [
-    createHerdrAdapter(apps),
+  /** herdr's adapter as the dial's verbs reach it: a tap on an agent herdr lists (below) is the dial's own move too. */
+  const herdrNoted = noting(herdrAdapter)
+  /** The apps an outside agent runs in, in the order its panes are kept: each verb of the dial takes the first that can.
+   *  The nearest host first: a multiplexer keeps the environment it started in, so in a tmux pane WezTerm's and Orca's
+   *  values name the terminal the tmux server began in, and herdr inside tmux carries tmux's pane. */
+  const adapters: readonly HostAdapter[] = [herdrNoted, ...[
+    createTmuxAdapter({ run: apps.run, processes: readProcessNames, log }),
     createWeztermAdapter(apps),
     createOrcaAdapter(apps),
     // A rest's continue link: the app's attach that follows is the dial's own echo.
     { ...claude, show: (pane: Pane, agentId: string) => { noteLink(agentId); return claude.show(pane, agentId) } },
+    createVscodeAdapter(apps),
     createTabsAdapter({
       isOpen: () => tabs.isOpen(),
       select: (tab, raise) => {
@@ -314,8 +333,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
         return true
       },
     }),
-  ].map(noting)
+  ].map(noting)]
   const opener = createOpenActions({ run: apps.run, platform: apps.platform, adapters, log })
+  /** The route or the refusal of the dial's words, and why a queue failed: never the words, the session, the terminal or a
+   *  path. */
+  const voiced = (what: string): void => log(`[device] voice · ${what}`)
   const observed = env.HARNESS_DEVICE_OBSERVED ? observedSource(core.dataDir, log, {
     adapters,
     modReady: (sessionId) => inbox.ready(sessionId),
@@ -330,18 +352,46 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     },
     codexQueue,
     codexHome: env.CODEX_HOME,
-    // The route or the refusal, and why a queue failed: never the words, the session, the terminal or a path.
-    count: (what) => log(`[device] voice · ${typeof what === 'string' ? what : what.id}`),
+    count: (what) => voiced(typeof what === 'string' ? what : what.id),
   }, ttyOf) : null
+  /** herdr's agents, hook or no hook, listed and followed over herdr's own socket (docs/specs/2026-11-16-device-herdr.md).
+   *  It runs only while a dial is attached, as the open scan does, behind the observed agents' switch, and never on
+   *  Windows, where herdr's socket is a named pipe (herdrSource.ts). */
+  const herdr = observed ? new HerdrSource({
+    client: herdrClient,
+    watch: (changed) => watchHerdrSocket(herdrAt, changed),
+    prompt: herdrAdapter.prompt,
+    // The command a hooked agent's tap runs (Q6): the dial's move is noted as every tap's is. Only a shown pane is true:
+    // herdr's adapter never refuses one, though the noted copy is typed as any adapter's.
+    focus: async (paneId) => (await herdrNoted.focus({ adapter: herdrAdapter.id, id: paneId })) === true,
+    after: timerIn('herdr'),
+    now: Date.now,
+    monotonic,
+    uuid: randomUUID,
+    platform: apps.platform,
+    log,
+    count: voiced,
+  }) : null
+  /** The ones the dial lists, each with its source: the merged list's, not each source's own, as a copy a stronger source
+   *  also holds (a Harness agent's session, a hooked agent's pane) is that one's row and must get no second card. */
+  const outsideEntries = (): HostEntry[] => registry.entries().filter((entry) => entry.source !== cableHost.harness)
   /** One of them, by the id the dial holds: what the dial asks of it is answered here, never by a door of the core. */
-  const outside = (agentId: string): HostAgent | undefined => observed?.list().find((agent) => agent.id === agentId)
+  const outside = (agentId: string): HostEntry | undefined => outsideEntries().find((entry) => entry.agent.id === agentId)
   /** Its line while it waits on the person, where a harness agent shows its terminal's footer: what its permission prompt
    *  asks once its hook said, and the app it is answered in. The dial never answers it. */
-  const waiting = (agent: HostAgent): string | null => {
+  const waiting = ({ agent, source }: HostEntry): string | null => {
     if (agent.state !== 'needs-you') return null
     const host = hostDisplayName(agent.host)
-    const asks = observed?.waitingOn(agent.id)
+    // Only the observed source hears a hook say what the prompt asks.
+    const asks = source === observed && observed.waitingOn(agent.id)
     return asks ? askedLine(asks, host) : `Waiting for you · ${host}`
+  }
+  /** The line of an id an outside source holds: its wait while the dial lists it, nothing while a stronger source's copy
+   *  takes its row. Undefined for any other id, which is the core's to answer. */
+  const outsideLine = (agentId: string): string | null | undefined => {
+    if (!registry.outside(agentId)) return undefined
+    const entry = outside(agentId)
+    return entry ? waiting(entry) : null
   }
 
   const cableHost = new DaemonCableHost({
@@ -351,13 +401,13 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     displayName: (session) => core.agents.displayName(session),
     appFocus: () => focus.voice ?? undefined,
     activityText: async (agentId) => {
-      const agent = outside(agentId)
-      return agent ? waiting(agent) : core.agents.activityText(agentId)
+      const line = outsideLine(agentId)
+      return line === undefined ? core.agents.activityText(agentId) : line
     },
     // The footer and its timer from the core; the agent's own latest sentence from the cards already seen here.
     activitySnapshot: async (agentId) => {
-      const agent = outside(agentId)
-      if (agent) { const text = waiting(agent); return text ? { text } : null }
+      const line = outsideLine(agentId)
+      if (line !== undefined) return line ? { text: line } : null
       const reading = core.agents.activitySnapshot
         ? await core.agents.activitySnapshot(agentId)
         : await core.agents.activityText(agentId).then((text) => text ? { text } : null)
@@ -373,7 +423,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     watching: (on) => {
       core.clients.dialWatching(on)
       dialAttached(on)
+      part.call('dialStream', () => dial.attached(on))
     },
+    dialShows: (agent) => part.call('dialStream', () => dial.shows(agent)),
     // The core's own doors for a local agent. The fleet's router reaches them the same way; the dial uses
     // these only when it routes by itself, with the fleet off. An agent outside a pane never reaches them: the host shuts
     // each to it, the fleet's way too (cableHost.ts `outside`).
@@ -445,11 +497,29 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       part.call('dial', () => tabSettled(app))
     },
     appPicked: () => log('[device] app filter: picker'),
+    // A tap on a Harness agent with no window starts Desktop, on macOS only (docs/specs/2026-11-15-device-wave1-checks.md,
+    // F2).
+    launchDesktop: opener.desktop,
+    // A measure: the app's name only.
+    desktopTimedOut: () => log('[device] open · harness · no window'),
+    // With a window open, the tab or the shown app's ring: a measure as `switched` is, a view and a cause, never an app.
+    // After the list read that can turn it, as a switch: every dial gets its tabs and list at once, the outside agents'
+    // questions are asked or closed by the gate, and on a ring its agents mid-turn are told again.
+    appView: (view, cause) => {
+      log(`[device] app filter: view ${view} · ${cause}`)
+      queueMicrotask(() => {
+        part.call('dial', () => cable.viewChanged())
+        part.call('dial', showWaits)
+        if (view === 'apps') part.call('dial', remind)
+      })
+    },
     // The settle of the app in front: a filter that throws costs the devices nothing, and the devices stopping cancels it.
     appTimer: timerIn('dial'),
   })
-  // What the dial lists with no window: this computer's harness agents, and the ones outside a pane unless switched off.
-  cableHost.setRegistry(new HostRegistry(observed ? [cableHost.harness, observed] : [cableHost.harness]))
+  // What the dial lists with no window, or with one in the apps view: this computer's harness agents, and the ones outside
+  // a pane unless switched off.
+  const registry = new HostRegistry(observed && herdr ? [cableHost.harness, observed, herdr] : [cableHost.harness])
+  cableHost.setRegistry(registry)
   // The dial's log lives with the app's, one file a day (dialLog.ts). The old unbounded `dial.log` in the
   // data folder is cut down to a pointer, for anyone with a bookmark.
   const legacyDialLog = join(core.dataDir, 'dial.log')
@@ -628,13 +698,16 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // An agent outside a pane reaches the dial through the same calls, as its state changes. What the dial was told of each
   // is kept, so that a change is told once.
   const told = new Map<string, { state: HostAgentState; line: string | null; answer?: string }>()
-  const busy = (agent: HostAgent): boolean => agent.state === 'working' || agent.state === 'needs-you'
+  const busy = ({ agent }: HostEntry): boolean => agent.state === 'working' || agent.state === 'needs-you'
   /** Its turn, with the waiting line: the session's activity read right after it (`activityText` above) repeats the line. */
-  const started = (agent: HostAgent): DialEvent => ({ kind: 'processing', agentId: agent.id, text: waiting(agent) ?? '', recap: '', subagent: false })
-  /** A window is open (its tabs, not null): the dial shows the tab, as before there were agents outside a pane, and hears
-   *  nothing of them. What they do is still noted, so that only a later change is told once the window closes. */
+  const started = (entry: HostEntry): DialEvent => ({ kind: 'processing', agentId: entry.agent.id, text: waiting(entry) ?? '', recap: '', subagent: false })
+  /** A window is open (its tabs, not null). */
   let windowOpen = false
-  const tell = (event: DialEvent): void => { if (!windowOpen) toDial(event) }
+  /** The dials hold the window's tab, as before there were agents outside a pane, and hear nothing of them: on the tab, or
+   *  on an app's ring that no connected dial shows (an older dial or Harness Pro alone holds the tab). What they do is still
+   *  noted, so that only a later change is told once the gate opens. */
+  const heldOnTab = (): boolean => windowOpen && (cableHost.holdsTab() || !cable.wantsApps())
+  const tell = (event: DialEvent): void => { if (!heldOnTab()) toDial(event) }
   /**
    * The prompt an agent waits on, once its hook said what it asks, is also a question for the dial, which the dial only
    * shows (cableSession.ts SHOWN_ONLY_PREFIX): the round dial draws a line on its working face, a question on its asking
@@ -645,33 +718,37 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     shown.set(agentId, question)
     inOrder(agentId, () => { void cable.question(agentId, question.id, question.questions) })
   }
-  /** Asks what waits and closes what no longer does (or what a window covers): before a line, which it takes the place of. */
+  /** Asks what waits and closes what no longer does (or what a window's tab covers): before a line, which it takes the place of. */
   const showWaits = (): void => {
-    const want = new Map<string, HostAgent>()
-    if (!windowOpen) for (const agent of observed?.list() ?? []) if (observed?.waitingOn(agent.id) !== undefined) want.set(agent.id, agent)
+    const want = new Map<string, HostEntry>()
+    if (!heldOnTab()) {
+      for (const entry of outsideEntries()) if (entry.source === observed && observed.waitingOn(entry.agent.id) !== undefined) want.set(entry.agent.id, entry)
+    }
     for (const [agentId, question] of shown) {
-      const agent = want.get(agentId)
-      if (agent && waiting(agent) === question.line) continue
+      const entry = want.get(agentId)
+      if (entry && waiting(entry) === question.line) continue
       shown.delete(agentId)
       inOrder(agentId, () => { void cable.questionClose(agentId, question.id) })
     }
-    for (const [agentId, agent] of want) {
-      const line = waiting(agent)
+    for (const [agentId, entry] of want) {
+      const line = waiting(entry)
       if (shown.has(agentId) || !line) continue
       ask(agentId, { id: `${SHOWN_ONLY_PREFIX}${randomUUID()}`, line,
-        questions: [{ key: 'prompt', q: line, options: [`In ${hostDisplayName(agent.host)}`] }] })
+        questions: [{ key: 'prompt', q: line, options: [`In ${hostDisplayName(entry.agent.host)}`] }] })
     }
   }
-  observed?.onChange(() => part.call('dial', () => {
+  /** What changed among them, told: run whenever a source of theirs says its list changed. */
+  const outsideTurn = (): void => {
     showWaits()
-    const agents = observed.list()
-    const ids = new Set(agents.map((agent) => agent.id))
+    const entries = outsideEntries()
+    const ids = new Set(entries.map((entry) => entry.agent.id))
     for (const id of told.keys()) if (!ids.has(id)) told.delete(id)
-    for (const agent of agents) {
+    for (const entry of entries) {
+      const { agent } = entry
       const was = told.get(agent.id)
       const card = { agentId: agent.id, text: '', recap: '', subagent: false }
       // A wait whose line changed is told again.
-      const line = waiting(agent)
+      const line = waiting(entry)
       if (was?.state === agent.state && was.line === line) {
         // The answer is read after the turn ends (observed.ts), so its summary follows the done. One still the last
         // turn's (this turn's was not found) is not said again.
@@ -682,11 +759,17 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
         continue
       }
       told.set(agent.id, { state: agent.state, line, answer: agent.lastAnswer })
-      if (busy(agent)) tell(started(agent))
-      else if (agent.state === 'done') tell({ ...card, kind: 'done' })
-      else if (agent.state === 'error') tell({ ...card, kind: 'error' })
+      // An agent a listing names for the first time ended no turn the dial saw: herdr says done of any turn that ended in a
+      // pane it has not focused, and lists it again at each plug-in, reconnect and unfold. An observed one is first heard
+      // by its hook, which may be the turn's end.
+      const ended = was !== undefined || entry.source === observed
+      if (busy(entry)) tell(started(entry))
+      else if (ended && agent.state === 'done') tell({ ...card, kind: 'done' })
+      else if (ended && agent.state === 'error') tell({ ...card, kind: 'error' })
     }
-  }))
+  }
+  observed?.onChange(() => part.call('dial', outsideTurn))
+  herdr?.onChange(() => part.call('dial', outsideTurn))
   /** One of the observed source's timers, each run guarded as a notice is: one that throws is logged and the next runs. */
   const every = (ms: number, run: () => unknown): ReturnType<typeof setInterval> => {
     const timer = setInterval(() => part.call('observed', run), ms)
@@ -709,23 +792,32 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    *  turned to, has heard nothing of it yet. Both lists a dial can hold: the one ring, and the shown app's for a dial that
    *  says appFilter, read only while one is connected: that read can switch the app, which no older dial shows. */
   const remind = async (): Promise<void> => {
-    const mid = (observed?.list() ?? []).filter(busy)
-    if (!mid.length || windowOpen) return
+    const mid = outsideEntries().filter(busy)
+    if (!mid.length || heldOnTab()) return
     const apps = cable.wantsApps() ? [cableHost.listAgentSnapshot({ apps: true })] : []
     const lists = await Promise.all([cableHost.listAgentSnapshot(), ...apps])
     const listed = new Set(lists.flatMap((list) => list.agents.map((agent) => agent.id)))
-    for (const agent of mid) if (listed.has(agent.id)) tell(started(agent))
+    for (const entry of mid) if (listed.has(entry.agent.id)) tell(started(entry))
   }
-  /** The scan and the reminders, for an attached dial alone. */
+  /** The scan, the reminders and herdr's socket, for an attached dial alone. */
   let attached: ReturnType<typeof setInterval>[] = []
   const dialAttached = (on: boolean): void => {
     for (const timer of attached) clearInterval(timer)
     attached = []
-    if (!on || !observed) return
+    // The first dial coming, or the last going, can turn the gate (heldOnTab) when it says appFilter: what waits is asked,
+    // or closed, again. Closed as the last goes, an older dial that comes next is not asked it. A second dial coming or
+    // going does not reach here: the fleet tells `watching` for the first and the last alone.
+    if (!on) part.call('dial', showWaits)
+    if (!observed || !herdr) return
+    // Only with herdr installed, read at each attach, as a tap needs it (herdr.ts): with none, no folder is watched
+    // (~/.config, or the home folder, recursive on macOS) for a socket that never comes.
+    part.call('herdr', () => on && apps.onPath('herdr') ? herdr.start() : herdr.stop())
+    if (!on) return
     // Agents already running when the dial came are listed now, idle until their next hook event.
     part.call('observed', () => observed.scanOpen())
     // Its questions were in its RAM: the ones still waiting are asked again, under their ids.
     part.call('dial', () => { for (const [agentId, question] of shown) ask(agentId, question) })
+    part.call('dial', showWaits)
     part.call('dial', remind)
     attached = [
       every(OPEN_SCAN_MS, () => observed.scanOpen()),
@@ -749,15 +841,16 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // The core's calls failed to none when its link dropped: a transcript for a poll nobody holds would wait for nothing.
   deps.onCoreGone?.(endHookCalls)
 
-  // `harness hardware watch` tells the devices' own listener which app is in front, and the dial with no window follows it
-  // once it settles (cable/hosts/appFilter.ts), and the harness-device mod tells it the session the Claude app shows: the
-  // core never hears either. Another message type is another key here. A rejection's text is not logged: it can hold the
-  // socket's path, and a path the account's name.
+  // `harness hardware watch` tells the devices' own listener which app is in front, and the dial follows it once it
+  // settles, with no window or with one in the apps view (cable/hosts/appFilter.ts), and the harness-device mod tells it
+  // the session the Claude app shows: the core never hears either. Another message type is another key here. A
+  // rejection's text is not logged: it can hold the socket's path, and a path the account's name.
   const listening = deps.listen?.({
     front: frontHandler((app) => part.call('dial', () => cableHost.front(app))),
     attach: attachHandler((sessionId) => part.call('dial', () => claudeAttached(sessionId))),
     tab: tabHandler((tab) => part.call('dial', () => tabReported(tab))),
     tabs: tabs.handler,
+    dial: dial.handler,
   }, log)
     .catch((): null => { log('[devices] listener not opened · failed'); return null })
 
@@ -829,7 +922,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     if (source === 'relayed') { log('[device] prompt · skipped · relayed'); return }
     if (source === 'dial') { log('[device] prompt · skipped · dial prompt'); return }
     const front = cableHost.settledApp()
-    if (front === undefined || outside(agentId)?.app !== front) { log('[device] prompt · skipped · not in front'); return }
+    if (front === undefined || outside(agentId)?.agent.app !== front) { log('[device] prompt · skipped · not in front'); return }
     return cable.followLocal(agentId, 'prompt')
   }
   // ── the session the Claude app shows ───────────────────────────────────────────────────────────────
@@ -861,7 +954,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   }
   const claudeAttached = (sessionId: string): Promise<void> | undefined => {
     const agentId = observedAgentId('claude', sessionId)
-    const listed = outside(agentId)?.app === 'claude'
+    const listed = outside(agentId)?.agent.app === 'claude'
     // Kept whatever follows: an echo, or an attach with another app in front, is still the session the app shows.
     if (listed) claudeAgent = agentId
     if (!cable.isConnected) return
@@ -874,7 +967,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const claudeSettled = (): Promise<void> | undefined => {
     if (claudeAgent === undefined || !cable.isConnected) return
     // Resumed in another app, or gone with no end: the app no longer shows it.
-    if (outside(claudeAgent)?.app !== 'claude') { claudeAgent = undefined; return }
+    if (outside(claudeAgent)?.agent.app !== 'claude') { claudeAgent = undefined; return }
     // Any move of the dial, to another agent, another app's pane or none: a turn as the app comes in front puts the dial on
     // that one, and the settle must not turn the dial back. A link's attach, a moment later, is kept and skipped as its own
     // echo. Within ATTACH_ECHO_MS, not since the attach kept: that can be minutes old after a look away and back.
@@ -954,14 +1047,15 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     },
     // Null is the window gone: an empty desk with a window behind it is an empty tab, with none a shut app.
     swarms: (swarms) => part.call('dial', () => {
-      const closed = windowOpen && swarms === null
+      const held = heldOnTab()
       windowOpen = swarms !== null
       cableHost.setSwarms(swarms)
       void cable.syncSwarms()
       void cable.syncAgents()
-      // An open window closes the questions of the agents outside it, as it covers their lines; closed, they are asked again.
+      // A window's tab closes the questions of the agents outside it, as it covers their lines; closed, they are asked again.
       showWaits()
-      if (closed) part.call('dial', remind)
+      // A window that closes from an app's ring left nothing to tell again: the view turning to that ring told it.
+      if (held && !heldOnTab()) part.call('dial', remind)
     }),
     // Held rather than acted on: the dial is handed it when it attaches, the one moment its drawer is known
     // to be empty.

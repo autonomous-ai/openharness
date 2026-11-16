@@ -20,6 +20,8 @@ the agent runs. But `cli/hook/notify.mjs` returns before posting when the sessio
 - **With no window, the dial shows this computer's agents** (option A), in a fixed ring (Diego, 2026-11-14:
   [the swipe order](../plans/2026-11-14-dial-swipe-order-design.md)).
   With a window, nothing changes: the dial holds the active tab, as decided on 2026-09-17.
+  A dial that says `appFilter` in the apps view differs:
+  [the dial follows the app in front with a window open](2026-11-15-dial-follow-front-with-window.md).
 - **Agents outside a pane appear on the device only** (option A). The app, the phone, ⌘K and the Swarm do not see
   them; ⌘P still finds their conversations, as today.
 - **It lives in the devices process** (approach 1). The core gains one hook route that checks and forwards; it keeps no
@@ -157,6 +159,7 @@ statement to the window (`CableHost.focus`), and there is none.
 Identity is `engine + sessionId`; failing that, `callerPid` inside a host's process tree. When two sources hold the
 same agent, the stronger wins: Harness, then a host adapter (wave 1), then observed. In wave 0 the sources barely
 overlap (Harness agents have a pane), but the rule and its tests land now, so wave 1 plugs Orca in without changing it.
+For a source that lists its own agents, the hook's copy wins instead ([herdr over its socket](2026-11-16-device-herdr.md#one-agent-one-row-the-merge-key-4341-left-to-this-pull-request)).
 
 ### What the dial gets with no window
 
@@ -181,6 +184,8 @@ overlap (Harness agents have a pane), but the rule and its tests land now, so wa
   order change (`agentsKey`, as today); a state change inside the same list goes as the existing per-agent frames.
 - **With a window.** Exactly today's behaviour: an observed agent sends the dial no frame (no turn, answer or
   reminder). Its state is still noted, and when the window closes the dial hears at once of each one mid-turn.
+  A dial that says `appFilter` in the apps view differs:
+  [the dial follows the app in front with a window open](2026-11-15-dial-follow-front-with-window.md).
 - **Mid-turn reminders.** The round dial forgets a turn it hears nothing of for 25 s, and an observed agent sends no
   step: each one mid-turn that the dial lists is told again every 20 s, and at once when a dial attaches.
 

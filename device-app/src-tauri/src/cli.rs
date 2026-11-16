@@ -36,9 +36,13 @@ const LINES_QUEUED: usize = 16;
 /// How long a child's end waits for its stderr to end too, so the log has its last line. The stream ends with the child
 /// unless something it left behind holds it open.
 const STDERR_GRACE: Duration = Duration::from_secs(1);
-/// The one line of a child's stderr its log carries as it comes: the watch says only there that a newer one took its
-/// tabs stream, and goes on. Any other stderr is outside text and stays out of the log but for a failure's last line.
+/// The two shapes of a child's stderr its log carries as it comes (`logged_stderr`), as the watch says only there that
+/// a newer one took its tabs stream and goes on, or that a sound change failed: this line exactly, and SOUND_STDERR and
+/// a code. Every other line of stderr is outside text and stays out of the log but for a failure's last line.
 const LOGGED_STDERR: &str = "tabs stream replaced";
+/// A failed sound change, then its code: one of the watch's own words or the daemon's error code, never a message.
+const SOUND_STDERR: &str = "sound: ";
+const SOUND_CODE_MAX: usize = 32;
 
 /// How to run the CLI: `program`, then `prefix`, then the arguments, with `env` on top of the app's own.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -140,8 +144,8 @@ pub fn run(mut command: Command, deadline: Duration) -> io::Result<Output> {
     };
     let pid = child.id() as libc::pid_t;
     let (done, finished) = mpsc::channel();
-    let stdout = tail(child.stdout.take().expect("stdout is piped"), done.clone(), || {});
-    let stderr = tail(child.stderr.take().expect("stderr is piped"), done.clone(), || {});
+    let stdout = tail(child.stdout.take().expect("stdout is piped"), done.clone(), |_| {});
+    let stderr = tail(child.stderr.take().expect("stderr is piped"), done.clone(), |_| {});
     thread::spawn(move || {
         exited(pid);
         let _ = done.send(());
@@ -248,8 +252,10 @@ impl Child {
         let (send, lines) = mpsc::sync_channel(LINES_QUEUED);
         thread::spawn(move || read_lines(stdout, |line| send.send(line).is_ok()));
         let (stderr_done, stderr_ended) = mpsc::channel();
-        let logged = (log.clone(), format!("{name}: {LOGGED_STDERR}"));
-        let stderr = tail(child.stderr.take().expect("stderr is piped"), stderr_done, move || logged.0.line(&logged.1));
+        let (stderr_log, stderr_name) = (log.clone(), name.clone());
+        let stderr = tail(child.stderr.take().expect("stderr is piped"), stderr_done, move |line| {
+            stderr_log.line(&format!("{stderr_name}: {line}"))
+        });
         let killer = Killer(Arc::new(Unreaped { pid: Mutex::new(Some(pid)), reaped: Condvar::new() }));
         let unreaped = killer.0.clone();
         let (send_exit, exit) = mpsc::channel();
@@ -395,26 +401,45 @@ fn kill_group(pid: libc::pid_t) {
 
 type Tail = Arc<Mutex<VecDeque<u8>>>;
 
-/// Reads `stream` to its end on a thread, keeping its last TAIL_MAX bytes, then says so on `done`. `logged` is called
-/// for each line that is LOGGED_STDERR exactly.
-fn tail(mut stream: impl Read + Send + 'static, done: mpsc::Sender<()>, logged: impl Fn() + Send + 'static) -> Tail {
+/// True for the lines of stderr a log carries as they come: LOGGED_STDERR exactly, or SOUND_STDERR and a code of 1 to
+/// SOUND_CODE_MAX of `A-Z`, `0-9` and `_`, starting with a letter. Nothing else, so no path, address or message.
+fn logged_stderr(line: &[u8]) -> bool {
+    let is_code = |code: &[u8]| match code {
+        [first, rest @ ..] => {
+            code.len() <= SOUND_CODE_MAX
+                && first.is_ascii_uppercase()
+                && rest.iter().all(|&byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_')
+        }
+        [] => false,
+    };
+    line == LOGGED_STDERR.as_bytes() || line.strip_prefix(SOUND_STDERR.as_bytes()).is_some_and(is_code)
+}
+
+/// Reads `stream` to its end on a thread, keeping its last TAIL_MAX bytes, then says so on `done`. `logged` is handed
+/// each line that passes `logged_stderr`, without its newline.
+fn tail(
+    mut stream: impl Read + Send + 'static,
+    done: mpsc::Sender<()>,
+    logged: impl Fn(&str) + Send + 'static,
+) -> Tail {
     let kept = Tail::default();
     let writer = kept.clone();
     thread::spawn(move || {
         let mut chunk = [0; 8192];
-        // The line so far, held only to one byte past LOGGED_STDERR: a longer line is not it.
-        let mut line = Vec::with_capacity(LOGGED_STDERR.len() + 1);
+        // The line so far, held only to one byte past the longest logged line: a longer line is not one.
+        let longest = LOGGED_STDERR.len().max(SOUND_STDERR.len() + SOUND_CODE_MAX);
+        let mut line = Vec::with_capacity(longest + 1);
         loop {
             match stream.read(&mut chunk) {
                 Ok(0) => break,
                 Ok(read) => {
                     for &byte in &chunk[..read] {
                         if byte == b'\n' {
-                            if line == LOGGED_STDERR.as_bytes() {
-                                logged();
+                            if logged_stderr(&line) {
+                                logged(&String::from_utf8_lossy(&line));
                             }
                             line.clear();
-                        } else if line.len() <= LOGGED_STDERR.len() {
+                        } else if line.len() <= longest {
                             line.push(byte);
                         }
                     }
@@ -805,6 +830,58 @@ mod tests {
         );
     }
 
+    #[test]
+    fn only_two_shapes_of_stderr_are_logged_as_they_come() {
+        let longest = format!("sound: {}", "A".repeat(32));
+        for line in
+            ["tabs stream replaced", "sound: DEVICE_OFFLINE", "sound: NO_DIAL", "sound: A", "sound: E2E_9", &longest]
+        {
+            assert!(logged_stderr(line.as_bytes()), "{line}");
+        }
+        let too_long = format!("sound: {}", "A".repeat(33));
+        let refused = [
+            "",
+            "sound: ",
+            "sound:NO_DIAL",
+            " sound: NO_DIAL",
+            "sound: NO_DIAL ",
+            "sound: device_offline",
+            "sound: DEVICE OFFLINE",
+            "sound: 9A",
+            "sound: _A",
+            "sound: /Users/person",
+            "sound: person@example.com",
+            &too_long,
+            "tabs stream replaced!",
+        ];
+        for line in refused {
+            assert!(!logged_stderr(line.as_bytes()), "{line}");
+        }
+        assert!(!logged_stderr(b"sound: \xff"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_watch_logs_a_sound_code_as_it_comes_and_no_other_stderr() {
+        let fake = Fake::new();
+        fake.script(
+            "hardware watch --json",
+            &["@err sound: DEVICE_OFFLINE", "@err sound: /Users/person/x", "@err sound: no dial", "started", "@hang"],
+        );
+        let mut child = fake.cli().spawn(&WATCH).unwrap();
+        assert_eq!(child.line(WAIT), Ok(Some("started".into())));
+        // Its end waits for stderr's, so the line, logged as it is read, comes first.
+        child.killer().kill();
+        assert_eq!(child.exit(WAIT), Ok(None));
+        assert_eq!(
+            fake.log().lines(),
+            [
+                "harness hardware watch --json: sound: DEVICE_OFFLINE",
+                "harness hardware watch --json: killed by a signal"
+            ]
+        );
+    }
+
     /// A stream that hands on each chunk it is sent, as one read, and ends once its sender is gone.
     struct Chunks(mpsc::Receiver<Vec<u8>>);
 
@@ -821,20 +898,27 @@ mod tests {
         let (send, chunks) = mpsc::channel();
         let (done, ended) = mpsc::channel();
         let (logged, said) = mpsc::channel();
-        tail(Chunks(chunks), done, move || logged.send(()).unwrap());
+        tail(Chunks(chunks), done, move |line| logged.send(line.to_string()).unwrap());
         // Split across reads, and found before the stream ends.
         send.send(b"tabs str".to_vec()).unwrap();
         send.send(b"eam replaced\n".to_vec()).unwrap();
-        assert_eq!(said.recv_timeout(WAIT), Ok(()));
+        assert_eq!(said.recv_timeout(WAIT), Ok("tabs stream replaced".into()));
+        send.send(b"sound: DEVICE_".to_vec()).unwrap();
+        send.send(b"OFFLINE\n".to_vec()).unwrap();
+        assert_eq!(said.recv_timeout(WAIT), Ok("sound: DEVICE_OFFLINE".into()));
         // A line that starts or ends with it, or holds it far into a long one, is not it.
         send.send(b"tabs stream replaced!\nx tabs stream replaced\n".to_vec()).unwrap();
         let long = [b"tabs stream replaced".repeat(400), b"\n".to_vec()].concat();
         send.send(long[..4096].to_vec()).unwrap();
         send.send(long[4096..].to_vec()).unwrap();
+        // Held only to one byte past the longest code, a longer one is still too long.
+        let long = [b"sound: ".to_vec(), b"A".repeat(8000), b"\n".to_vec()].concat();
+        send.send(long[..4096].to_vec()).unwrap();
+        send.send(long[4096..].to_vec()).unwrap();
         send.send(b"tabs stream replaced\n".to_vec()).unwrap();
         drop(send);
         assert_eq!(ended.recv_timeout(WAIT), Ok(()));
-        assert_eq!(said.try_iter().count(), 1);
+        assert_eq!(said.try_iter().collect::<Vec<_>>(), ["tabs stream replaced"]);
     }
 
     #[cfg(unix)]

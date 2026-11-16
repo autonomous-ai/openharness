@@ -37,6 +37,11 @@ impl Watch {
         self.write(line);
     }
 
+    /// A change of the dial's sound on the child's stdin: one of two fixed lines, so nothing else can shape it.
+    pub fn sound(&self, on: bool) {
+        self.write(if on { r#"{"muted":false}"# } else { r#"{"muted":true}"# });
+    }
+
     /// One that has ended takes nothing, and nothing of the line is logged. One that has stopped reading drops it, and
     /// the log says so once, never with the line: both kinds of line fill the same pipe.
     fn write(&self, line: &str) {
@@ -163,6 +168,7 @@ mod tests {
             board: None,
             updating: None,
             problem: None,
+            muted: None,
         })
     }
 
@@ -170,12 +176,21 @@ mod tests {
     #[test]
     fn a_line_each_time_the_dial_changes() {
         let fake = Fake::new();
-        let attached = r#"{"attached":true,"fw":"0.0.95","hw":"cst816s"}"#;
+        let attached = r#"{"attached":true,"fw":"0.0.95","hw":"cst816s","muted":true}"#;
         fake.script("hardware watch --json", &[r#"{"attached":false}"#, "@wait next", attached, "@stdin"]);
         let (_watch, events) = start(&fake);
         assert_eq!(events.recv_timeout(WAIT), Ok(dial(false, None, None)));
         fake.touch("next");
-        assert_eq!(events.recv_timeout(WAIT), Ok(dial(true, Some("0.0.95"), Some("cst816s"))));
+        let muted = DialStatus {
+            attached: true,
+            fw: Some("0.0.95".into()),
+            hw: Some("cst816s".into()),
+            board: None,
+            updating: None,
+            problem: None,
+            muted: Some(true),
+        };
+        assert_eq!(events.recv_timeout(WAIT), Ok(Event::WatchLine(muted)));
         assert_eq!(fake.calls(), ["hardware watch --json"]);
     }
 
@@ -294,6 +309,25 @@ mod tests {
         // A watch that has ended takes nothing, and the log never holds a tty.
         watch.tab(tab);
         assert_eq!(fake.stdin(), [front, tab]);
+        assert_eq!(fake.log().lines(), ["harness hardware watch --json: exit 0"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_sound_line_reaches_the_watch() {
+        let (off, on) = (r#"{"muted":true}"#, r#"{"muted":false}"#);
+        let fake = Fake::new();
+        fake.script("hardware watch --json", &[r#"{"attached":true}"#, "@record"]);
+        let (watch, events) = start(&fake);
+        assert_eq!(events.recv_timeout(WAIT), Ok(dial(true, None, None)));
+        watch.sound(false);
+        watch.sound(true);
+        watch.stop();
+        assert_eq!(events.recv_timeout(WAIT), Ok(Event::WatchExit(Some(0))));
+        assert_eq!(fake.stdin(), [off, on]);
+        // A watch that has ended takes nothing, and the log says nothing of it.
+        watch.sound(false);
+        assert_eq!(fake.stdin(), [off, on]);
         assert_eq!(fake.log().lines(), ["harness hardware watch --json: exit 0"]);
     }
 

@@ -187,7 +187,9 @@ function withoutCodex(d: IsolatedDaemon): void {
   const offline = join(d.root, 'npm-offline'), seconds = join(d.root, 'npm-seconds')
   renameSync(join(bin, 'codex'), installed)
   delete d.env.CODEX_PATH
-  symlinkSync(process.execPath, join(bin, 'node'))
+  // The run's Node, not the worker's: Node names itself by the real path behind a link, and the product looks beside
+  // that path for engines (audit of 2026-11-16, docs/plans/2026-11-16-e2e-isolation-3-design.md).
+  symlinkSync(process.env.E2E_NODE_PATH!, join(bin, 'node'))
   writeFileSync(join(bin, 'npm'), `#!/bin/sh
 case "$1" in
   prefix) printf '%s\\n' "\${npm_config_prefix:-$HOME/.local}"; exit 0 ;;

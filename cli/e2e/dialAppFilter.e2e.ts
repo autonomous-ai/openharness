@@ -7,9 +7,11 @@
  * - The app in front takes the real path: the watch's stdin → the devices process's own socket (`devices.sock`, opened
  *   when a dial starts that process) → the filter, which follows it once it has settled. The core's socket carries none.
  * - A dial without `appFilter` keeps the single ring, and the log names no app.
+ * - With a window open the dial follows the app in front, and Harness in front returns it to the window's tab
+ *   (docs/specs/2026-11-15-dial-follow-front-with-window.md).
  */
 import { spawn } from 'node:child_process'
-import { existsSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import { createInterface } from 'node:readline'
@@ -67,6 +69,8 @@ const shows = (dial: FakeDial, app: string, agents: Outside[], since = 0, ms?: n
   showing(dial, `the dial to show ${app}'s ring`, (apps, roster) => apps.shown === app && same(ids(roster), idsOf(agents)) && roster.end.view === 'machine', since, ms)
 
 const switches = (d: IsolatedDaemon, cause: string): number => d.log().split('\n').filter((line) => line.includes(`[device] app filter: switched · ${cause}`)).length
+/** The view's log lines, as `<view> · <cause>`, in their order. */
+const views = (d: IsolatedDaemon): string[] => d.log().split('\n').flatMap((line) => line.match(/\[device\] app filter: view (.+)$/)?.[1] ?? [])
 
 /**
  * Past the time a front line written at [from] could have moved the dial: its tell, the 1 s settle, the machine list's 1 s
@@ -288,7 +292,7 @@ describe('the dial\'s app filter', () => {
     const { d, desk } = await fresh()
     const dial = await plugged(desk)
     const apple = await startFirst(d, dial, 'terminal-app', 'a1', { TERM_PROGRAM: 'Apple_Terminal' })
-    await startOutside(d, 'a2', { TERM_PROGRAM: 'tmux' })
+    await startOutside(d, 'a2', { TERM_PROGRAM: 'rio' })
     const { apps } = await showing(dial, 'Terminal 1 and Other 1', (apps, roster) =>
       same(counts(apps), { 'terminal-app': 1, terminal: 1 }) && apps.shown === 'terminal-app' && same(ids(roster), [apple.id]))
     expect(apps.apps).toEqual(expect.arrayContaining([
@@ -301,7 +305,7 @@ describe('the dial\'s app filter', () => {
     const { d, desk } = await fresh()
     const dial = await plugged(desk)
     const apple = await startFirst(d, dial, 'terminal-app', 'a1', { TERM_PROGRAM: 'Apple_Terminal' })
-    const other = await startOutside(d, 'a2', { TERM_PROGRAM: 'tmux' })
+    const other = await startOutside(d, 'a2', { TERM_PROGRAM: 'rio' })
     await shows(dial, 'terminal-app', [apple])
     await listening(d)
     const run = watch(d)
@@ -332,21 +336,6 @@ describe('the dial\'s app filter', () => {
     const since = dial.messages.length
     watch(d).front('net.kovidgoyal.kitty')
     await shows(dial, 'kitty', [kitty], since)
-  })
-
-  it('the front is followed while a window is open: when it closes the dial is sent the app that came to the front meanwhile', async () => {
-    const { d, desk } = await fresh()
-    const dial = await plugged(desk)
-    const { vscode } = await fiveAgents(d, dial)
-    await listening(d)
-    let since = dial.messages.length
-    const window = await openWindow(d)
-    await until('the tab\'s list', () => rosters(dial, since).find((r) => r.end.tab === 't1'), 45_000)
-    watch(d).front(VSCODE_BUNDLE)
-    await until('the switch to the app in front, with the window open', () => switches(d, 'front') === 1, 30_000)
-    since = dial.messages.length
-    window.close()
-    await shows(dial, 'vscode', vscode, since)
   })
 
   it('a pick holds while the same app is in front, and ends when another settles', async () => {
@@ -517,13 +506,111 @@ describe('the dial\'s app filter', () => {
     dial.send({ t: 'app.pick', app: 'ghostty' })
     await shows(dial, 'ghostty', ghostty, since)
     await until('the pick logged', () => switches(d, 'pick') === 1, 10_000)
+    // A window opened and closed, for a view line.
+    const window = await openWindow(d)
+    await until('the view logged', () => views(d).length > 0, 30_000)
+    window.close()
     const log = d.log()
     expect(log).toContain('[devices] listener open')
     expect(switches(d, 'front')).toBe(1)
     expect(log).toContain('[device] app filter: picker')
     for (const line of log.split('\n').filter((line) => line.includes('app filter') || line.includes('[devices] listener'))) {
-      expect(line).toMatch(/(\[devices\] listener open|\[devices\] listener in the last minute: \d+ unknown, \d+ oversized, \d+ over rate, \d+ refused, \d+ failed|\[device\] app filter: (switched · (front|pick|notice|empty)|picker))$/)
+      expect(line).toMatch(/(\[devices\] listener open|\[devices\] listener in the last minute: \d+ unknown, \d+ oversized, \d+ over rate, \d+ refused, \d+ failed|\[device\] app filter: (switched · (front|pick|notice|empty)|picker|view (tabs|apps) · (front|pick|window|empty)))$/)
     }
     for (const word of [VSCODE_BUNDLE, GHOSTTY_BUNDLE, 'kitty', 'vscode', 'VS Code', 'ghostty', 'Ghostty']) expect(log).not.toContain(word)
+  })
+
+  describe('with a window open', () => {
+    /** A Harness agent made through the window, on the fake Claude Code. */
+    const harnessAgent = async (d: IsolatedDaemon, window: LocalClient, folder: string): Promise<string> => {
+      const cwd = join(d.projectsDir, folder)
+      mkdirSync(cwd, { recursive: true })
+      const created = await window.request('agent_create', { engine: 'claude', cwd, bypassPermission: true }, 90_000)
+      expect(created.error, `${folder}: ${JSON.stringify(created)}`).toBeUndefined()
+      return created.agent.id
+    }
+    /**
+     * In the order that draws no tie: Ghostty's two with no window, then the window on an empty tab, then two Harness
+     * agents on its tab with h2 in focus. The dial holds the tab, on h2. With [older], a dial without appFilter is plugged
+     * in beside it first.
+     */
+    const onTheTab = async (older = false) => {
+      const { d, desk } = await fresh()
+      const dial = await plugged(desk)
+      const old = older ? await plugged(desk, {}, 'E2E-B', 'e2:e0:00:00:00:0b') : undefined
+      const ghostty = [await startFirst(d, dial, 'ghostty', 'a1', GHOSTTY), await startOutside(d, 'a2', GHOSTTY)]
+      await shows(dial, 'ghostty', ghostty)
+      await listening(d)
+      const run = watch(d)
+      const since = dial.messages.length
+      const window = await openWindow(d)
+      const h1 = await harnessAgent(d, window, 'h1')
+      const h2 = await harnessAgent(d, window, 'h2')
+      window.send('app_swarms', { active: 't1', swarms: [{ id: 't1', name: 'Tab', agentIds: [h1, h2], panes: 2 }], tiles: [] })
+      window.send('app_panes', { agentIds: [h1, h2], foreground: true })
+      window.send('app_focus', { agentId: h2 })
+      await until('the tab\'s list with h1 and h2', () => rosters(dial, since).find((r) => r.end.tab === 't1' && same(ids(r), [h1, h2])), 45_000)
+      await dial.next((m) => m.t === 'focus' && m.agentId === h2, 30_000, 'the focus on h2', since)
+      return { d, dial, old, run, window, ghostty, h1, h2 }
+    }
+    /** The first list after [since] on the window's tab, with [agents] in that order. */
+    const onTab = (dial: FakeDial, agents: string[], since: number): Promise<Roster> =>
+      until('the tab\'s list', () => rosters(dial, since).find((r) => r.end.tab === 't1' && same(ids(r), agents)), 45_000)
+
+    it('the app in front turns the dial to its ring, and Harness in front returns it to the tab on the window\'s focused agent', async () => {
+      const { d, dial, run, window, ghostty, h1, h2 } = await onTheTab()
+      const [, g2] = ghostty
+      // Ghostty in front: its ring, as with no window, and no tabs.
+      let since = dial.messages.length
+      run.front(GHOSTTY_BUNDLE)
+      const { roster } = await shows(dial, 'ghostty', ghostty, since)
+      expect(roster.end.tab).toBe('')
+      expect(dial.messages.slice(since).filter((m) => m.t === 'swarms').at(-1)).toMatchObject({ items: [] })
+      // The window's focus on an agent off the ring does not move the dial.
+      since = dial.messages.length
+      const focused = Date.now()
+      window.send('app_focus', { agentId: h1 })
+      await settleWindowPassed(dial, focused)
+      expect(dial.messages.slice(since).some((m) => m.t === 'focus' && m.agentId === h1)).toBe(false)
+      // A prompt in the app in front moves it, as with no window.
+      g2.type('hello')
+      await dial.next((m) => m.t === 'focus' && m.agentId === g2.id, 30_000, 'the focus on g2', since)
+      await until('the prompt\'s move logged', () => d.log().includes('[device] prompt · moved'), 10_000)
+      expect(d.log()).not.toContain('[device] prompt · skipped · no tile')
+      // Harness in front: the tab, then the window's focused agent.
+      since = dial.messages.length
+      run.front('ai.autonomous.harness')
+      const tab = await onTab(dial, [h1, h2], since)
+      const listed = dial.messages.indexOf(tab.end)
+      expect(dial.messages.slice(since, listed).some((m) => m.t === 'focus')).toBe(false)
+      await dial.next((m) => m.t === 'focus' && m.agentId === h1, 30_000, 'the focus on h1', listed + 1)
+      // Ghostty's ring again, and back by Linux's exe name for Harness Desktop.
+      since = dial.messages.length
+      run.front(GHOSTTY_BUNDLE)
+      await shows(dial, 'ghostty', ghostty, since)
+      since = dial.messages.length
+      run.front('harness')
+      await onTab(dial, [h1, h2], since)
+      await until('the views logged', () => views(d).length === 5 || null, 10_000)
+      expect(views(d)).toEqual(['tabs · window', 'apps · front', 'tabs · front', 'apps · front', 'tabs · front'])
+    })
+
+    it('a pick of Harness in APPS returns the dial to the tab, and an older dial beside it kept the tab throughout', async () => {
+      const { d, dial, old, run, ghostty, h1, h2 } = await onTheTab(true)
+      const older = old!
+      const olderSince = older.messages.length
+      let since = dial.messages.length
+      run.front(GHOSTTY_BUNDLE)
+      await shows(dial, 'ghostty', ghostty, since)
+      expect(rosters(older).at(-1)?.end.tab).toBe('t1')
+      since = dial.messages.length
+      dial.send({ t: 'app.pick', app: 'harness' })
+      await onTab(dial, [h1, h2], since)
+      await until('the pick\'s view logged', () => views(d).includes('tabs · pick') || null, 10_000)
+      expect(views(d)).toEqual(['tabs · window', 'apps · front', 'tabs · pick'])
+      // The older dial was told the tab, never an app's ring.
+      expect(rosters(older, olderSince).every((r) => r.end.tab === 't1' && same(ids(r), [h1, h2]))).toBe(true)
+      expect(older.messages.some((m) => m.t === 'apps')).toBe(false)
+    })
   })
 })

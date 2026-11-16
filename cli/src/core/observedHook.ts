@@ -46,7 +46,7 @@ const MAX_TOOL = 64
 export const MAX_TITLE = 64
 /** Bytes, as the dial holds its line in a byte buffer. */
 const MAX_SUMMARY_BYTES = 200
-/** As many as the hook's list holds (hook/notify.mjs HOST_HINTS): an honest hook sends no more, and none it sends is cut. */
+/** The hook caps what it sends at this number (hook/notify.mjs MAX_HINTS): its list holds more names, and it sends the first of those set. */
 export const MAX_HINTS = 10
 const MAX_HINT_VALUE = 64
 /** Events a session may send a second; the rest are dropped, so parallel tool calls or a stuck engine repeating Stop cannot flood the devices. */

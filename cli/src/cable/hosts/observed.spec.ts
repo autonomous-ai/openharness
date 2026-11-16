@@ -5,12 +5,15 @@ import type { HostAdapter, Pane, Place } from './adapter.js'
 import { createClaudeAppAdapter } from './claudeApp.js'
 import type { CodexQueueResult } from './codexQueue.js'
 import { createHerdrAdapter } from './herdr.js'
+import type { HerdrPrompt } from './herdrClient.js'
 import { type Delivery, Inbox } from './inbox.js'
 import { askedLine, observedAgentId, type ObservedActions, ObservedSource, type ObservedDeps, type PromptSource } from './observed.js'
 import type { OpenTarget } from './open.js'
 import { createOrcaAdapter, type OrcaDeps } from './orca.js'
 import { createTabsAdapter, type TabApp } from './tabs.js'
+import { createTmuxAdapter } from './tmux.js'
 import type { PaneSwitch } from './types.js'
+import { createVscodeAdapter } from './vscode.js'
 import { createWeztermAdapter } from './wezterm.js'
 
 function setup(over: Partial<ObservedDeps> = {}) {
@@ -867,6 +870,8 @@ const HANDLE = 'term_0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b'
 interface Fakes extends Omit<ObservedActions, 'adapters'> {
   orcaSend(handle: string, text: string): Promise<boolean>
   orcaSwitch(handle: string): Promise<PaneSwitch>
+  herdrPrompt(pane: string, kind: string, text: string): Promise<HerdrPrompt>
+  herdrStamp(): string | undefined
   claudeInFront(): boolean
   claudeShow(agentId: string, session: string): Promise<PaneSwitch>
   tabsOpen(): boolean
@@ -886,6 +891,10 @@ function fakeActions(over: Partial<Fakes> = {}, platform: NodeJS.Platform = 'dar
     toMod: vi.fn(async (_sessionId: string, _text: string): Promise<Delivery> => 'taken'),
     orcaSend: vi.fn(async (_handle: string, _text: string) => true),
     orcaSwitch: vi.fn(async (_handle: string): Promise<PaneSwitch> => 'ok'),
+    // herdr takes every prompt.
+    herdrPrompt: vi.fn(async (_pane: string, _kind: string, _text: string): Promise<HerdrPrompt> => ({ outcome: 'sent' })),
+    // herdr's socket is where the daemon looks.
+    herdrStamp: vi.fn((): string | undefined => '1:1'),
     // As on macOS: an app or a pane is something a tap can open (open.ts).
     canOpen: vi.fn((target: OpenTarget) => !!target.bundle || !!target.pane),
     open: vi.fn(async (_agentId: string, _target: OpenTarget) => true),
@@ -903,15 +912,20 @@ function fakeActions(over: Partial<Fakes> = {}, platform: NodeJS.Platform = 'dar
     count: vi.fn((_what: Parameters<ObservedActions['count']>[0]) => {}),
   }
   const fake = { ...fakes, ...over } as typeof fakes
-  const ran = vi.fn(async (_file: string, _args: string[], _timeoutMs: number) => ({ code: 0 }))
+  const ran = vi.fn(async (_file: string, _args: string[], _timeoutMs: number) => ({ code: 0, stdout: '' }))
   const deps: OrcaDeps = { run: ran, onPath: (name) => `/fake/bin/${name}`, exists: () => false, platform }
   const orca = createOrcaAdapter(deps)
   const claude = createClaudeAppAdapter({ ...deps, inFront: () => fake.claudeInFront() })
   const adapters: HostAdapter[] = [
-    createHerdrAdapter(deps),
+    createHerdrAdapter({ ...deps, client: {
+      prompt: (pane, kind, text) => fake.herdrPrompt(pane, kind, text),
+      socketStamp: () => fake.herdrStamp(),
+    } }),
+    createTmuxAdapter({ run: ran, processes: async () => [], log: () => {} }),
     createWeztermAdapter(deps),
     { ...orca, type: (pane, text) => fake.orcaSend(pane.id, text), show: (pane) => fake.orcaSwitch(pane.id) },
     { ...claude, show: (pane, agentId) => fake.claudeShow(agentId, pane.id) },
+    createVscodeAdapter(deps),
     createTabsAdapter({ isOpen: () => fake.tabsOpen(), select: (tab, raise) => fake.tabSelect(tab.app, tab.tty, raise) === 'ok' }),
   ]
   return { actions: { ...fake, adapters }, ready, ran }
@@ -1333,6 +1347,32 @@ describe('ObservedSource actions', () => {
     await src.send(agent('none'), 'x')
     expect(counted(actions.count)).toEqual(['mod', 'orca', 'busy', 'waiting', 'too-long', 'no-answer'])
   })
+
+  it('the pane a tap opens is its latest event\'s, with that event\'s process', async () => {
+    const { actions } = fakeActions()
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('session-start', { callerPid: 100, hostHints: { TMUX_PANE: '%3' } }))
+    src.ingest(ev('session-start', { callerPid: 200, hostHints: { TMUX_PANE: '%9' } }))
+    expect(await src.focus(src.list()[0])).toBe(true)
+    expect(actions.open.mock.calls).toEqual([[src.list()[0].id, { pane: { adapter: 'tmux', id: '%9:200' } }]])
+  })
+
+  it('a session in the VS Code extension\'s tab opens by its own session id', async () => {
+    const { actions } = fakeActions()
+    const { src, ev } = setup({ actions })
+    const sessionId = '8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b'
+    src.ingest(ev('session-start', { sessionId, hostHints: { __CFBundleIdentifier: 'com.microsoft.VSCode', CLAUDE_CODE_ENTRYPOINT: 'claude-vscode' } }))
+    expect(await src.focus(src.list()[0])).toBe(true)
+    expect(actions.open.mock.calls).toEqual([[src.list()[0].id, { bundle: 'com.microsoft.VSCode', pane: { adapter: 'vscode', id: sessionId } }]])
+  })
+
+  it('a Codex session started from the extension\'s tab is not opened by Claude Code\'s link', async () => {
+    const { actions } = fakeActions()
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('session-start', { engine: 'codex', sessionId: THREAD, hostHints: { __CFBundleIdentifier: 'com.microsoft.VSCode', CLAUDE_CODE_ENTRYPOINT: 'claude-vscode' } }))
+    expect(await src.focus(src.list()[0])).toBe(true)
+    expect(actions.open.mock.calls).toEqual([[src.list()[0].id, { bundle: 'com.microsoft.VSCode' }]])
+  })
 })
 
 const THREAD = '01a1de76-a3b7-7270-b39e-1245893274c1'
@@ -1430,6 +1470,23 @@ describe('ObservedSource and codex queue', () => {
       expect(await src.send(src.list()[0], 'next')).toEqual(sent)
       expect(actions.orcaSend.mock.calls).toEqual(said === 'orca' ? [[HANDLE, 'next']] : [])
       expect(counted(actions.count)).toEqual(['codex-failed (exit 1)', said])
+    }
+  })
+
+  // Zellij, herdr, Rex and tmux started in an Orca terminal pass its handle to their panes: typed there, the words would
+  // land in whichever pane the multiplexer shows. herdr's own socket, there in these fakes, types into the agent's own
+  // pane instead (herdr.ts).
+  it('in Zellij, herdr, Rex or tmux inside Orca, an idle agent with no mod and a Codex whose queue failed are not typed into through Orca', async () => {
+    for (const hints of [{ ZELLIJ: '0' }, { HERDR_PANE_ID: 'w1:p2' }, { REX_BLOCK: 'x' }, { TMUX_PANE: '%3' }] as Record<string, string>[]) {
+      const herdrSocket = 'HERDR_PANE_ID' in hints
+      for (const engine of ['claude', 'codex'] as const) {
+        const { src, actions } = given({ ...inOrca, engine, hostHints: { ...inOrca.hostHints, ...hints } })
+        actions.codexQueue.send.mockResolvedValue(FAILED)
+        expect(await src.send(src.list()[0], 'next')).toEqual(herdrSocket ? { ok: true } : { ok: false, reason: 'proj did not answer.' })
+        expect(actions.herdrPrompt.mock.calls).toEqual(herdrSocket ? [['w1:p2', engine, 'next']] : [])
+        expect(actions.orcaSend).not.toHaveBeenCalled()
+        expect(counted(actions.count)).toEqual([...(engine === 'codex' ? ['codex-failed (exit 1)'] : []), herdrSocket ? 'herdr' : 'no-answer'])
+      }
     }
   })
 
@@ -1589,9 +1646,8 @@ describe('ObservedSource panes', () => {
     expect(actions.open).not.toHaveBeenCalled()
   })
 
-  // A multiplexer's pane is the nearer for a tap, and Orca's terminal still takes the words and the rest.
+  // WezTerm's pane is the nearer for a tap, and Orca's terminal still takes the words and the rest.
   it.each([
-    ['herdr', { HERDR_PANE_ID: 'w1:p2', ORCA_TERMINAL_HANDLE: HANDLE }, 'w1:p2'],
     ['WezTerm', { WEZTERM_PANE: '7', ORCA_TERMINAL_HANDLE: HANDLE }, '7'],
   ])('%s inside an Orca terminal still takes the dial\'s words and a rest through Orca', async (_, hostHints, tapped) => {
     const { actions } = fakeActions()
@@ -1608,6 +1664,119 @@ describe('ObservedSource panes', () => {
     expect(await src.focus(agent)).toBe(true)
     expect(actions.open).toHaveBeenCalledTimes(1)
     expect(actions.open.mock.calls[0][1].pane?.id).toBe(tapped)
+  })
+
+  // A multiplexer started in an Orca terminal passes that terminal's handle, and its tty, to every pane: typed through
+  // Orca, the dial's words land in whichever pane it shows, another agent's or a shell's (PM, 2026-11-15). herdr's own
+  // socket, there in these fakes, types into the agent's own pane instead (herdr.ts).
+  it.each([
+    ['herdr', { HERDR_PANE_ID: 'w1:p2' }, true],
+    ['Rex', { REX_BLOCK: 'x' }, false],
+    ['Zellij', { ZELLIJ: '0' }, false],
+    ['tmux', { TMUX_PANE: '%3' }, false],
+  ])('%s inside an Orca terminal takes no words and no rest through Orca', async (_name, hints, herdrSocket) => {
+    const { actions, ready } = fakeActions()
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('turn-stop', { hostHints: { ...hints, ORCA_AGENT_SESSION_ID: 'x', ORCA_TERMINAL_HANDLE: HANDLE, __CFBundleIdentifier: 'com.stablyai.orca' } }))
+    const agent = src.list()[0]
+    expect(src.capabilities(agent)).toMatchObject({ voice: herdrSocket, focus: true })
+    expect(src.hasPane(agent)).toBe(false)
+    expect(await src.showPane(agent)).toBe('failed')
+    expect(await src.send(agent, 'next')).toEqual(herdrSocket ? { ok: true } : { ok: false, reason: 'proj did not answer.' })
+    expect(actions.herdrPrompt.mock.calls).toEqual(herdrSocket ? [['w1:p2', 'claude', 'next']] : [])
+    // Its voice is its mod's.
+    ready.add('s1')
+    expect(src.capabilities(agent)).toMatchObject({ voice: true })
+    expect(await src.send(agent, 'next')).toEqual({ ok: true })
+    expect(actions.orcaSend).not.toHaveBeenCalled()
+    expect(actions.orcaSwitch).not.toHaveBeenCalled()
+    // A tap: Orca comes forward, and never by its terminal's handle (open question 1).
+    expect(await src.focus(agent)).toBe(true)
+    expect(actions.open.mock.calls[0][1].bundle).toBe('com.stablyai.orca')
+    expect(actions.open.mock.calls[0][1].pane?.adapter).not.toBe('orca')
+  })
+
+  // Orca types into whichever pane herdr has in front, so a multiplexer's agent has no Orca pane (orca.ts): herdr's socket
+  // types into the agent's own pane, and a rest has nothing to show.
+  it('herdr inside an Orca terminal takes the dial\'s words through herdr, and no rest through Orca', async () => {
+    const { actions } = fakeActions()
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('turn-stop', { hostHints: { HERDR_PANE_ID: 'w1:p2', ORCA_TERMINAL_HANDLE: HANDLE } }))
+    const agent = src.list()[0]
+    expect(src.capabilities(agent)).toMatchObject({ voice: true, focus: true })
+    expect(await src.send(agent, 'next')).toEqual({ ok: true })
+    expect(actions.herdrPrompt.mock.calls).toEqual([['w1:p2', 'claude', 'next']])
+    expect(actions.orcaSend).not.toHaveBeenCalled()
+    expect(counted(actions.count).at(-1)).toBe('herdr')
+    expect(src.hasPane(agent)).toBe(false)
+    expect(await src.showPane(agent)).toBe('failed')
+    expect(actions.orcaSwitch).not.toHaveBeenCalled()
+    expect(await src.focus(agent)).toBe(true)
+    expect(actions.open).toHaveBeenCalledTimes(1)
+    expect(actions.open.mock.calls[0][1].pane?.id).toBe('w1:p2')
+  })
+
+  // A daemon started by launchd or systemd may not have the shell's XDG_CONFIG_HOME, and so finds no herdr socket: herdr
+  // then lists no voice, inside an Orca terminal too, where Orca's terminal is no pane of a multiplexer's agent (orca.ts).
+  it('with no herdr socket, an agent in a herdr pane takes no words, inside an Orca terminal or not', async () => {
+    const { actions } = fakeActions({ herdrStamp: vi.fn(() => undefined) })
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('turn-stop', { sessionId: 'in-orca', hostHints: { HERDR_PANE_ID: 'w1:p2', ORCA_TERMINAL_HANDLE: HANDLE } }))
+    src.ingest(ev('turn-stop', { sessionId: 'in-ghostty', hostHints: { HERDR_PANE_ID: 'w1:p3', __CFBundleIdentifier: 'com.mitchellh.ghostty' } }))
+    for (const sessionId of ['in-orca', 'in-ghostty']) {
+      const agent = src.list().find((a) => a.sessionId === sessionId)!
+      expect(src.capabilities(agent), sessionId).toMatchObject({ voice: false, focus: true })
+      expect(await src.send(agent, 'next'), sessionId).toEqual({ ok: false, reason: 'proj did not answer.' })
+    }
+    expect(actions.herdrPrompt).not.toHaveBeenCalled()
+    expect(actions.orcaSend).not.toHaveBeenCalled()
+    expect(counted(actions.count)).toEqual(['no-answer', 'no-answer'])
+  })
+
+  // herdr types into a working agent as readily as an idle one: the source's idle rules decide, as for Orca.
+  it('a hooked agent in a herdr pane lists voice, and takes words only at its prompt', async () => {
+    const { actions } = fakeActions()
+    const { src, ev } = setup({ actions })
+    const hostHints = { HERDR_PANE_ID: 'w1:p2' }
+    src.ingest(ev('turn-stop', { hostHints }))
+    expect(src.capabilities(src.list()[0])).toEqual({ status: true, voice: true, focus: true, answer: false })
+    expect(await src.send(src.list()[0], 'one')).toEqual({ ok: true })
+    src.ingest(ev('turn-start', { hostHints }))
+    expect(await src.send(src.list()[0], 'next')).toEqual({ ok: false, reason: 'proj is busy. Say it when it is done.' })
+    src.ingest(ev('needs-input', { hostHints }))
+    expect(await src.send(src.list()[0], '1')).toEqual({ ok: false, reason: 'proj is waiting for your answer in herdr.' })
+    expect(actions.herdrPrompt.mock.calls).toEqual([['w1:p2', 'claude', 'one']])
+    expect(counted(actions.count)).toEqual(['herdr', 'busy', 'waiting'])
+  })
+
+  it('a prompt herdr did not take is no answer, and its turn is a person\'s', async () => {
+    for (const answer of [{ outcome: 'busy' }, { outcome: 'failed', fault: 'rejected', code: 'agent_not_ready' }] as HerdrPrompt[]) {
+      const { actions } = fakeActions({ herdrPrompt: vi.fn(async () => answer) })
+      const { src, ev } = setup({ actions })
+      const hostHints = { HERDR_PANE_ID: 'w1:p2' }
+      src.ingest(ev('turn-stop', { hostHints }))
+      expect(await src.send(src.list()[0], 'next')).toEqual({ ok: false, reason: 'proj did not answer.' })
+      expect(actions.herdrPrompt.mock.calls).toEqual([['w1:p2', 'claude', 'next']])
+      expect(counted(actions.count)).toEqual(['no-answer'])
+      expect(src.ingest(ev('turn-start', { hostHints }))).toBe('person')
+    }
+  })
+
+  // The key a listing source knows the same pane by (registry.ts): an ended session's pane holds something else now.
+  it('a live agent in a herdr pane carries its pane key', async () => {
+    const { actions } = fakeActions()
+    const { src, ev, open, owners, externals } = setup({ actions })
+    src.ingest(ev('session-start', { sessionId: 'herdr', hostHints: { HERDR_PANE_ID: 'w1:p2' } }))
+    src.ingest(ev('session-start', { sessionId: 'ended', hostHints: { HERDR_PANE_ID: 'w1:p3' } }))
+    src.ingest(ev('session-end', { sessionId: 'ended', hostHints: { HERDR_PANE_ID: 'w1:p3' } }))
+    src.ingest(ev('session-start', { sessionId: 'orca', ...inOrca() }))
+    open.set('found', 'terminal')
+    owners.set('found', { pid: 200, engine: 'claude' })
+    externals.set('found', { cwd: '/work/proj', transcriptPath: '/t/found.jsonl' })
+    await src.scanOpen()
+    const agent = (sessionId: string) => src.list().find((a) => a.sessionId === sessionId)!
+    expect(agent('herdr').paneKeys).toEqual(['herdr:w1:p2'])
+    for (const sessionId of ['ended', 'orca', 'found']) expect(agent(sessionId), sessionId).not.toHaveProperty('paneKeys')
   })
 
   // A wave 1 app is one adapter: the source asks it as it asks the others, and what it cannot do the next pane does.
@@ -1634,10 +1803,10 @@ describe('ObservedSource panes', () => {
 
     const adapter = madeUp()
     const a = first(adapter, both)
-    expect(adapter.paneOf).toHaveBeenLastCalledWith({ host: 'terminal', app: 'terminal', hints: both })
+    expect(adapter.paneOf).toHaveBeenLastCalledWith({ host: 'terminal', app: 'terminal', hints: both, pid: 100, sessionId: 's1', engine: 'claude' })
     expect(a.src.capabilities(a.agent)).toMatchObject({ voice: true })
     expect(await a.src.send(a.agent, 'next')).toEqual({ ok: true })
-    expect(adapter.type.mock.calls).toEqual([[PANE, 'next']])
+    expect(adapter.type.mock.calls).toEqual([[PANE, 'next', 'claude']])
     expect(counted(a.actions.count).at(-1)).toBe('made-up')
     expect(a.actions.orcaSend).not.toHaveBeenCalled()
     expect(await a.src.showPane(a.agent)).toBe('busy')
@@ -1827,6 +1996,14 @@ describe('ObservedSource tabs', () => {
     t.src.ingest(t.ev('session-start', { sessionId: 'vscode', callerPid: 104, hostHints: { TERM_PROGRAM: 'vscode' } }))
     t.src.ingest(t.ev('session-start', { sessionId: 'other', callerPid: 105, hostHints: { TERM_PROGRAM: 'Hyper' } }))
     expect(t.tty.mock.calls).toEqual([[101], [102]])
+  })
+
+  it('an agent in tmux inside Terminal: a tap opens through its tmux pane', async () => {
+    const t = tabs()
+    t.src.ingest(t.ev('session-start', { hostHints: { ...inTerminal.hostHints, TMUX_PANE: '%3' } }))
+    await t.reads[0].answer('/dev/ttys031')
+    expect(await t.src.focus(t.agent())).toBe(true)
+    expect(t.actions.open.mock.calls).toEqual([[t.agent().id, { bundle: 'com.apple.Terminal', pane: { adapter: 'tmux', id: '%3:100' } }]])
   })
 
   it('no tty (??) is no pane', async () => {
@@ -2051,29 +2228,23 @@ describe('ObservedSource tabs', () => {
     expect(t.actions.tabSelect).not.toHaveBeenCalled()
   })
 
-  // herdr's pane is the nearer for a tap; the tab around it is still what a rest and a tap's raise select.
-  it('herdr inside Ghostty with a watch open still writes its tab select, on a rest and after a tap', async () => {
+  // Its tty is the multiplexer pane's, which no tab holds: a select would find nothing, and a rest would count as shown.
+  it.each([
+    ['herdr', { HERDR_PANE_ID: 'w1:p2' }],
+    ['Rex', { REX_BLOCK: 'x' }],
+    ['Zellij', { ZELLIJ: '0' }],
+    ['tmux', { TMUX_PANE: '%3' }],
+  ])('an agent in %s inside Ghostty has no tab: a rest shows nothing, and a tap selects none', async (_name, hints) => {
     const t = tabs()
-    t.src.ingest(t.ev('session-start', { hostHints: { HERDR_PANE_ID: 'w1:p2', __CFBundleIdentifier: 'com.mitchellh.ghostty' } }))
+    t.src.ingest(t.ev('session-start', { hostHints: { ...hints, __CFBundleIdentifier: 'com.mitchellh.ghostty' } }))
     await t.reads[0].answer(TTY)
-    expect(t.src.hasPane(t.agent())).toBe(true)
-    expect(await t.src.showPane(t.agent())).toBe('ok')
-    expect(t.actions.tabSelect.mock.calls).toEqual([['ghostty', TTY, false]])
-    expect(await t.src.focus(t.agent())).toBe(true)
-    expect(t.actions.open).toHaveBeenCalledTimes(1)
-    expect(t.actions.open.mock.calls[0][1].pane?.id).toBe('w1:p2')
-    expect(t.actions.tabSelect).toHaveBeenLastCalledWith('ghostty', TTY, true)
-    expect(t.actions.tabSelect).toHaveBeenCalledTimes(2)
-    expect(t.src.byTab('ghostty', TTY)).toMatchObject({ id: t.agent().id })
-    expect(t.actions.orcaSend).not.toHaveBeenCalled()
-    expect(t.actions.orcaSwitch).not.toHaveBeenCalled()
-    // No watch: no tab to select, and a tap only opens.
-    t.actions.tabsOpen.mockReturnValue(false)
     expect(t.src.hasPane(t.agent())).toBe(false)
     expect(await t.src.showPane(t.agent())).toBe('failed')
     expect(await t.src.focus(t.agent())).toBe(true)
-    expect(t.actions.open).toHaveBeenCalledTimes(2)
-    expect(t.actions.tabSelect).toHaveBeenCalledTimes(2)
+    expect(t.actions.open).toHaveBeenCalledTimes(1)
+    expect(t.actions.open.mock.calls[0][1].bundle).toBe('com.mitchellh.ghostty')
+    expect(t.actions.tabSelect).not.toHaveBeenCalled()
+    expect(t.actions.orcaSwitch).not.toHaveBeenCalled()
   })
 
   it('byTab: the live agent of that app and tty, the most recently active of two, none for another app, an ended session or an unknown tty', async () => {

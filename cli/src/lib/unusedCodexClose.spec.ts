@@ -78,7 +78,7 @@ it.each(['idle', 'now'] as const)('closes an unused companion with a shared Code
   const publish = vi.spyOn(registry, 'confirmEngineExit')
   const request = { agentId: row.agentId, sessionId: '', createdAt: new Date(row.registeredAt).toISOString() }
   expect(await service.request({ ...request, mode: 'inspect' })).toEqual({ activity: 'idle' })
-  expect(await service.request({ ...request, mode })).toEqual({ closed: true })
+  expect(await service.request({ ...request, mode })).toEqual({ closed: true, withoutConversation: true })
   expect(terminateDeletedAgent).toHaveBeenCalledOnce()
   expect(vi.mocked(terminateDeletedAgent).mock.calls[0][0].processIdentity?.pid).toBe(99)
   expect(killPane).toHaveBeenCalledWith({ backend: 'tmux', paneId: '%500' }, expect.any(Function))
@@ -114,7 +114,7 @@ it('closes the saved shell when an unbound Codex client exits before discovery c
   const request = { agentId: row.agentId, sessionId: '', createdAt: new Date(row.registeredAt).toISOString() }
   expect(await service.request({ ...request, mode: 'inspect' })).toEqual({ activity: 'unknown' })
   expect(await service.request({ ...request, mode: 'idle' })).toMatchObject({ error: 'SESSION_NOT_IDLE' })
-  expect(await service.request({ ...request, mode: 'now' })).toEqual({ closed: true })
+  expect(await service.request({ ...request, mode: 'now' })).toEqual({ closed: true, withoutConversation: true })
   expect(killPane).toHaveBeenCalledWith({ backend: 'tmux', paneId: '%500' }, expect.any(Function))
   expect(registry.byAgent(row.agentId)).toBeUndefined()
   const manifest = JSON.parse(readFileSync(join(checkpointDirectory, readdirSync(checkpointDirectory).find(file => /^[a-f0-9]{64}\.json$/.test(file))!), 'utf8'))
@@ -152,7 +152,7 @@ it.runIf(process.env.RUN_REAL_TMUX_DISCOVERY === '1')('closes only the exited cl
     await vi.waitFor(async () => expect((await processRows())!.some(process => process.pid === row.processIdentity!.pid)).toBe(false))
     screen = await server.run('capture-pane', '-p', '-t', pane)
     const result = await service.request({ agentId: row.agentId, sessionId: '', createdAt: new Date(row.registeredAt).toISOString(), mode: 'now' })
-    expect(result).toEqual({ closed: true })
+    expect(result).toEqual({ closed: true, withoutConversation: true })
     expect(await server.run('list-panes', '-t', 'close-fixture', '-F', '#{pane_id}')).toBe(sibling)
     expect(await server.run('display-message', '-p', '-t', sibling, '#{pane_dead}')).toBe('0')
     expect((await processRows())!.some(row => row.pid === unrelatedServer.pid)).toBe(true)

@@ -46,6 +46,22 @@ describe.skipIf(process.platform === 'win32')('the PATH of what a test starts', 
     expect(workerTools()).toBe(workerTools())
   })
 
+  // The product looks beside the Node it runs on for npm-installed engines (lib/engineLaunch.ts npmRuntimeBins), and a
+  // CLI run by `node` in a pane names itself by the real path behind the link (audit of 2026-11-16,
+  // docs/plans/2026-11-16-e2e-isolation-3-design.md). So the link is to the run's own Node, alone in its folder.
+  it('links node to the run\'s Node where the run made one, and to the Node running the tests where it did not', () => {
+    const run = join(folder('node'), 'node'), worker = folder('git')
+    const tools = workerTools({ PATH: worker, E2E_NODE_PATH: run })
+    // A yes or a no: at the base the answer is the developer's own Node.
+    expect(tools.get('node') === run, 'node is the run\'s Node').toBe(true)
+    const root = folder()
+    testPath(root, tools)
+    expect(readlinkSync(join(root, 'tools', 'node')) === run, 'and so is the link in <root>/tools').toBe(true)
+    // A unit spec's tmux fixture runs no daemon and no engine, and no setup made it a Node.
+    expect(workerTools({ PATH: worker }).get('node')).toBe(process.execPath)
+    expect(workerTools({ PATH: worker, E2E_NODE_PATH: '' }).get('node')).toBe(process.execPath)
+  })
+
   it('links them in <root>/tools, each to an absolute file, and puts no folder of the worker\'s PATH on the result', () => {
     const worker = folder('git', 'opencode'), root = folder()
     const path = testPath(root, workerTools({ PATH: worker }))

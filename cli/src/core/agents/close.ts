@@ -101,16 +101,17 @@ export function createAgentClosing({
     stop: stopAgent,
     changed: announceSession,
     backgroundCommands,
-    // Not live, not being resumed, and kept as stopped with the conversation the close names: it was closed. A record
-    // that cannot be read says nothing, and the close is answered as changed, as before.
+    // Not live, not being resumed, and kept as stopped with the conversation the close names: it was closed, and that
+    // record says whether a conversation was kept. A record that cannot be read says nothing, and the close is answered
+    // as changed, as before.
     closedAlready: request => {
-      if (!stoppedAgents || registry.byAgent(request.agentId)) return false
+      if (!stoppedAgents || registry.byAgent(request.agentId)) return null
       try {
-        if (stoppedAgents.resumeReservedAt(request.agentId) !== null) return false
+        if (stoppedAgents.resumeReservedAt(request.agentId) !== null) return null
         const stopped = stoppedAgents.get(request.agentId)
-        return !!stopped && new Date(stopped.registeredAt).toISOString() === request.createdAt
-          && (!request.sessionId || stopped.sessionId === request.sessionId)
-      } catch { return false }
+        return stopped && new Date(stopped.registeredAt).toISOString() === request.createdAt
+          && (!request.sessionId || stopped.sessionId === request.sessionId) ? stopped : null
+      } catch { return null }
     },
   })
   const cleanupPreview = async (): Promise<Record<string, unknown>> => {

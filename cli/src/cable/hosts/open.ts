@@ -6,7 +6,7 @@
  * each command runs with no shell, every value one argument.
  */
 import type { HostAdapter, Pane } from './adapter.js'
-import { APP_BUNDLES } from './hostDetect.js'
+import { APP_BUNDLES, HARNESS_BUNDLE } from './hostDetect.js'
 import { RUN_TIMEOUT_MS, type OrcaDeps } from './orca.js'
 
 /** Every app a tap brings forward. Alacritty is known by its bundle id alone: no other hint names it. Only one of these
@@ -38,6 +38,8 @@ export interface OpenDeps {
 export function createOpenActions(deps: OpenDeps): {
   can(target: OpenTarget): boolean
   open(agentId: string, target: OpenTarget): Promise<boolean>
+  /** Brings Harness Desktop forward, starting it when it is not running; there on macOS only. */
+  desktop?: () => Promise<boolean>
 } {
   const mac = deps.platform === 'darwin'
   // One command at a time per agent: a second tap while the first runs would only bring the same app forward twice.
@@ -57,7 +59,8 @@ export function createOpenActions(deps: OpenDeps): {
   async function open(target: OpenTarget): Promise<boolean> {
     const own = paneOn(target)
     const bundle = mac ? target.bundle : undefined
-    if (own && await own.adapter.focus(own.pane)) {
+    const shown = own ? await own.adapter.focus(own.pane) : false
+    if (own && shown === true) {
       // A pane that comes before its app still needs its app at the front; one instead of it (the Claude app's link)
       // brought the app itself.
       if (bundle && own.adapter.tap === 'before') await forward(bundle)
@@ -65,8 +68,8 @@ export function createOpenActions(deps: OpenDeps): {
     }
     if (!bundle) return false
     // The Claude app's link is undocumented and may change with any release: the app still comes forward. Which app
-    // only, never its session, pane or handle.
-    if (own) deps.log(`[device] open · ${own.adapter.id} · fallback`)
+    // only, never its session, pane or handle. A pane refused has said so already.
+    if (own && !shown) deps.log(`[device] open · ${own.adapter.id} · fallback`)
     return forward(bundle)
   }
 
@@ -81,5 +84,6 @@ export function createOpenActions(deps: OpenDeps): {
         running.delete(agentId)
       }
     },
+    desktop: mac ? () => forward(HARNESS_BUNDLE) : undefined,
   }
 }

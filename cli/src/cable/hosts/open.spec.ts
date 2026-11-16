@@ -16,6 +16,9 @@ const APP_WEZTERM = '/Applications/WezTerm.app/Contents/MacOS/wezterm'
 
 interface Call { file: string; args: string[]; timeoutMs: number }
 
+/** herdr's socket, which no tap asks: a tap is `herdr agent focus`. */
+const herdrClient = { prompt: vi.fn(), socketStamp: vi.fn() }
+
 /** What a test may set: the runner and the binaries it finds, Orca's switch, and the log. */
 interface Over extends OrcaDeps {
   orcaSwitch(handle: string): Promise<boolean>
@@ -31,7 +34,7 @@ function recorder(over: Partial<Over> = {}, codes: Array<number | null> = [], mo
   const deps: Over = {
     run: async (file, args, timeoutMs) => {
       calls.push({ file, args, timeoutMs })
-      return { code: codes.length ? codes.shift()! : 0 }
+      return { code: codes.length ? codes.shift()! : 0, stdout: '' }
     },
     onPath: (name) => `/fake/bin/${name}`,
     exists: () => false,
@@ -42,7 +45,7 @@ function recorder(over: Partial<Over> = {}, codes: Array<number | null> = [], mo
   }
   const claude = createClaudeAppAdapter({ ...deps, inFront: () => true })
   const adapters: HostAdapter[] = [
-    createHerdrAdapter(deps),
+    createHerdrAdapter({ ...deps, client: herdrClient }),
     createWeztermAdapter(deps),
     { ...createOrcaAdapter(deps), focus: (pane) => { switched.push(pane.id); return deps.orcaSwitch(pane.id) } },
     claude,
@@ -53,8 +56,8 @@ function recorder(over: Partial<Over> = {}, codes: Array<number | null> = [], mo
 }
 
 /** The adapters whose pane a tap takes, in the order the observed source keeps them: each reads the hints alone. */
-const inert: OrcaDeps = { run: async () => ({ code: 0 }), onPath: () => null, exists: () => false, platform: 'darwin' }
-const tapped = [createHerdrAdapter(inert), createWeztermAdapter(inert), createOrcaAdapter(inert), createClaudeAppAdapter({ ...inert, inFront: () => true })]
+const inert: OrcaDeps = { run: async () => ({ code: 0, stdout: '' }), onPath: () => null, exists: () => false, platform: 'darwin' }
+const tapped = [createHerdrAdapter({ ...inert, client: herdrClient }), createWeztermAdapter(inert), createOrcaAdapter(inert), createClaudeAppAdapter({ ...inert, inFront: () => true })]
 
 /** What an agent's hook hints let a tap open, as the observed source reads them. */
 const target = (hints: Record<string, string>): OpenTarget => {
@@ -241,13 +244,21 @@ describe('opening an agent outside Harness from the dial', () => {
     expect(failed.logs).toEqual([])
   })
 
+  it('Harness Desktop comes forward by its bundle id, on macOS only', async () => {
+    const { calls, opener } = recorder({}, [0, 1])
+    expect(await opener.desktop!()).toBe(true)
+    expect(await opener.desktop!()).toBe(false)
+    expect(calls).toEqual([forward('ai.autonomous.harness'), forward('ai.autonomous.harness')])
+    expect(recorder({ platform: 'linux' }).opener.desktop).toBeUndefined()
+  })
+
   it('one command at a time per agent; another agent\'s runs', async () => {
     const calls: string[][] = []
     const waiting: Array<() => void> = []
     const opener = createOpenActions({
       run: (_file, args) => {
         calls.push(args)
-        return new Promise((resolve) => waiting.push(() => resolve({ code: 0 })))
+        return new Promise((resolve) => waiting.push(() => resolve({ code: 0, stdout: '' })))
       },
       platform: 'darwin',
       adapters: [],
@@ -279,7 +290,7 @@ describe('a rest on a Claude app session', () => {
     const { claude, opener } = recorder({
       run: (file, args, timeoutMs) => {
         calls.push({ file, args, timeoutMs })
-        return new Promise((resolve) => waiting.push(() => resolve({ code: 0 })))
+        return new Promise((resolve) => waiting.push(() => resolve({ code: 0, stdout: '' })))
       },
     })
     return { calls, waiting, claude, opener }
@@ -311,8 +322,8 @@ describe('a tap in the order its pane\'s adapter keeps', () => {
   const both: OpenTarget = { bundle: TERMINAL, pane: PANE }
 
   /** The recorder, its opener holding one app more that no other test knows: its focus answers as told, and notes the
-   *  commands run before it. */
-  function withMadeUp(tap: HostAdapter['tap'], focused = true) {
+   *  commands run before it; each command answers the next of [codes]. */
+  function withMadeUp(tap: HostAdapter['tap'], focused: boolean | 'refused' = true, codes: Array<number | null> = []) {
     const before: Call[][] = []
     const adapter = {
       id: 'made-up',
@@ -321,7 +332,7 @@ describe('a tap in the order its pane\'s adapter keeps', () => {
       canFocus: () => true,
       focus: vi.fn(async (_pane: Pane) => { before.push([...r.calls]); return focused }),
     }
-    const r = recorder({}, [], [adapter])
+    const r = recorder({}, codes, [adapter])
     return { ...r, adapter, before }
   }
 
@@ -352,6 +363,24 @@ describe('a tap in the order its pane\'s adapter keeps', () => {
     expect(failed.before).toEqual([[]])
     expect(failed.calls).toEqual([forward(TERMINAL)])
     expect(failed.logs).toEqual(['[device] open · made-up · fallback'])
+  })
+
+  // The adapter said why in a line of its own (tmux: "not its pane"): the opener adds none, and the app still comes.
+  it('a pane its adapter refuses: open -b alone and no fallback line; false with no app, or when the app does not come', async () => {
+    const refused = withMadeUp('before', 'refused')
+    expect(await refused.opener.open('a1', both)).toBe(true)
+    expect(refused.adapter.focus.mock.calls).toEqual([[PANE]])
+    expect(refused.calls).toEqual([forward(TERMINAL)])
+    expect(refused.logs).toEqual([])
+    const bare = withMadeUp('before', 'refused')
+    expect(await bare.opener.open('a1', { pane: PANE })).toBe(false)
+    expect(bare.calls).toEqual([])
+    const instead = withMadeUp('instead', 'refused')
+    expect(await instead.opener.open('a1', both)).toBe(true)
+    expect(instead.calls).toEqual([forward(TERMINAL)])
+    expect(instead.logs).toEqual([])
+    const stuck = withMadeUp('before', 'refused', [1])
+    expect(await stuck.opener.open('a1', both)).toBe(false)
   })
 
   // Its pane is raised once its app came (observed.ts focus): the opener brings the app alone.

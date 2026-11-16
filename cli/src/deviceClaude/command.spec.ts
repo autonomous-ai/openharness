@@ -5,13 +5,15 @@
  */
 import { chmodSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
+import { Socket } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { devicesListenerPath } from '../devices/listenerPath.js'
 import { listenLocalSocket, unixSocketPath } from '../lib/localSocket.js'
-import { DEVICE_USAGE, runDeviceCommand, type DeviceDeps } from './command.js'
+import { socketIsPrivate } from '../lib/localTransport.js'
+import { DEVICE_USAGE, runDeviceCommand, takesConnect, type DeviceDeps } from './command.js'
 import type { ClaudeRun } from './plugin.js'
 
 const SRC = fileURLToPath(new URL('..', import.meta.url))
@@ -55,6 +57,20 @@ async function daemonAt(dataDir: string): Promise<string[]> {
   cleanup.push(() => new Promise<void>((resolve) => { server.closeAllConnections(); server.close(() => resolve()) }))
   await new Promise<void>((resolve) => { server.listen(unixSocketPath(dataDir, PORT)!, resolve) })
   return bodies
+}
+
+/** The daemon on its socket in [dataDir] as the daemon serves it (owner only), counting the connections it took, those
+ *  that closed, and the requests its handler got. */
+async function ownDaemonAt(dataDir: string) {
+  const seen = { connections: 0, closed: 0, requests: 0 }
+  const served = await listenLocalSocket((_req, res) => { seen.requests++; res.end('{}') }, unixSocketPath(dataDir, PORT)!)
+  served.server.on('connection', (socket) => {
+    seen.connections++
+    socket.on('error', () => {})
+    socket.on('close', () => { seen.closed++ })
+  })
+  cleanup.push(served.close)
+  return { path: served.path, server: served.server, seen }
 }
 
 /** The devices' listener on its real socket in [dataDir], answering nothing: `link` only looks at the file. */
@@ -230,5 +246,125 @@ describe('harness device claude', () => {
         .map((name) => join(dir, name))
         .filter((file) => importsDevice.test(readFileSync(join(SRC, file), 'utf8'))))
     expect(importers).toEqual([])
+  })
+})
+
+describe('harness device orca link', () => {
+  const link = (dataDir: string, ready: boolean, daemon = false) =>
+    ({ code: 0, err: [], out: [JSON.stringify({ daemon, devicesSocket: devicesListenerPath(dataDir), devicesReady: ready })] })
+
+  it('with no daemon and no dial it prints daemon false, the devices\' path and devicesReady false, and exits 0', async () => {
+    const dataDir = folder()
+    expect(await device(['orca', 'link'], { dataDir })).toEqual(link(dataDir, false))
+  })
+
+  it('daemon is true once the daemon\'s socket is there, this account\'s own, and takes a connect', async () => {
+    const dataDir = folder()
+    await ownDaemonAt(dataDir)
+    expect(await device(['orca', 'link'], { dataDir })).toEqual(link(dataDir, false, true))
+  })
+
+  it('the connect asks the daemon nothing', async () => {
+    const dataDir = folder()
+    const { seen } = await ownDaemonAt(dataDir)
+    expect(await device(['orca', 'link'], { dataDir })).toEqual(link(dataDir, false, true))
+    await vi.waitFor(() => expect(seen).toEqual({ connections: 1, closed: 1, requests: 0 }))
+  })
+
+  it('a socket a crashed daemon left behind is daemon false', async () => {
+    const dataDir = folder()
+    const crashed = await listenLocalSocket((_req, res) => res.end(), unixSocketPath(dataDir, PORT)!)
+    crashed.server.close()
+    // Still there and still this account's own: only the connect tells it from a live one.
+    expect(socketIsPrivate(crashed.path)).toBe(true)
+    expect(await device(['orca', 'link'], { dataDir })).toEqual(link(dataDir, false))
+  })
+
+  it('a daemon\'s socket that is not private is daemon false, and is not connected to', async () => {
+    const dataDir = folder()
+    const { path, seen } = await ownDaemonAt(dataDir)
+    chmodSync(path, 0o666)
+    expect(await device(['orca', 'link'], { dataDir })).toEqual(link(dataDir, false))
+    // A connect of the test's own, once it has closed, is the only one the server took: `link`'s would have come first.
+    expect(await takesConnect(path)).toBe(true)
+    await vi.waitFor(() => expect(seen.closed).toBe(1))
+    expect(seen.connections).toBe(1)
+  })
+
+  it('devicesReady is true once the devices\' socket is there and this account\'s own', async () => {
+    const dataDir = folder()
+    await devicesAt(dataDir)
+    expect(await device(['orca', 'link'], { dataDir })).toEqual(link(dataDir, true))
+  })
+
+  it('a devices\' socket nothing listens on is still devicesReady true', async () => {
+    const dataDir = folder()
+    const crashed = await listenLocalSocket((_req, res) => res.end(), devicesListenerPath(dataDir)!)
+    crashed.server.close()
+    expect(await device(['orca', 'link'], { dataDir })).toEqual(link(dataDir, true))
+  })
+
+  it('a devices\' socket that is not private is devicesReady false, its path still printed', async () => {
+    const open = folder()
+    chmodSync(await devicesAt(open), 0o666)
+    expect(await device(['orca', 'link'], { dataDir: open })).toEqual(link(open, false))
+    const shared = folder()
+    await devicesAt(shared)
+    chmodSync(shared, 0o777)
+    expect(await device(['orca', 'link'], { dataDir: shared })).toEqual(link(shared, false))
+    const plain = folder()
+    writeFileSync(devicesListenerPath(plain)!, '', { mode: 0o600 })
+    expect(await device(['orca', 'link'], { dataDir: plain })).toEqual(link(plain, false))
+  })
+
+  it('on Windows it prints {"daemon":false,"devicesReady":false} and exits 0', async () => {
+    expect(await device(['orca', 'link'], { platform: 'win32' })).toEqual({ code: 0, err: [], out: ['{"daemon":false,"devicesReady":false}'] })
+  })
+
+  it('with the harness-device plugin off in Claude Code it prints the same', async () => {
+    const dataDir = folder()
+    pluginOn(false)
+    expect(await device(['orca', 'link'], { dataDir })).toEqual(link(dataDir, false))
+  })
+
+  it('it never looks for claude', async () => {
+    const dataDir = folder()
+    expect(await device(['orca', 'link'], { dataDir, claude: () => { throw new Error('never') } })).toEqual(link(dataDir, false))
+  })
+
+  it('orca with no verb, another verb or an extra word prints the usage and exits 1', async () => {
+    for (const argv of [['orca'], ['orca', 'status'], ['orca', 'link', 'extra']]) {
+      expect(await device(argv), argv.join(' ')).toEqual({ code: 1, out: [], err: [DEVICE_USAGE] })
+    }
+    expect(DEVICE_USAGE).not.toMatch(/orca/i)
+  })
+})
+
+describe('takesConnect', () => {
+  it('a path nothing is at is false', async () => {
+    expect(await takesConnect(join(folder(), 'none.sock'))).toBe(false)
+  })
+
+  it('a connect that neither opens nor fails is false after 1 s, and its socket is destroyed', async () => {
+    vi.useFakeTimers()
+    cleanup.push(() => vi.useRealTimers())
+    const socket = new Socket()
+    let answer: boolean | undefined
+    void takesConnect('/never', undefined, () => socket).then((taken) => { answer = taken })
+    await vi.advanceTimersByTimeAsync(999)
+    expect(answer).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(answer).toBe(false)
+    expect(socket.destroyed).toBe(true)
+  })
+
+  it('an error after it answered is not thrown', async () => {
+    vi.useFakeTimers()
+    cleanup.push(() => vi.useRealTimers())
+    const socket = new Socket()
+    const answer = takesConnect('/never', undefined, () => socket)
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(await answer).toBe(false)
+    expect(() => socket.emit('error', new Error('late'))).not.toThrow()
   })
 })

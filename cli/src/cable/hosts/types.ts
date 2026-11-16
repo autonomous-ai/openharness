@@ -5,6 +5,8 @@ export interface HostAgent {
   id: string
   engine: string
   sessionId?: string
+  /** The keys another source may know the same agent by, beside its session: only herdr's pane, `herdr:<pane id>`. */
+  paneKeys?: readonly string[]
   callerPid?: number
   cwd?: string
   name: string
@@ -38,8 +40,16 @@ export interface AppList {
   apps: AppEntry[]
 }
 
-/** What a pick on the dial did. */
-export type AppPick = 'switched' | 'same' | 'ignored'
+/** What a pick on the dial did. `tabs`: with a window open, Harness was picked on an app's ring, and the dials hold the
+ *  window's tab again. */
+export type AppPick = 'switched' | 'same' | 'ignored' | 'tabs'
+
+/** What the dials that say `appFilter` hold while a window is open: its active tab, or the shown app's ring. */
+export type DialView = 'tabs' | 'apps'
+
+/** Why the view was set: an app settled in front or the app in front got known agents, a pick on the dial, the window
+ *  opening, the shown app left as Harness or no app. */
+export type ViewCause = 'front' | 'pick' | 'window' | 'empty'
 
 /** Why the shown app changed. */
 export type SwitchCause = 'front' | 'pick' | 'empty' | 'notice'
@@ -59,7 +69,7 @@ export type SendResult = { ok: true } | { ok: false; reason: string }
 export type PaneSwitch = 'ok' | 'failed' | 'busy'
 
 export interface HostSource {
-  /** 'harness' | 'observed' | a host adapter's name (wave 1). */
+  /** 'harness' | 'observed' | a listing source's name (`herdr`). */
   readonly id: string
   list(): HostAgent[]
   capabilities(agent: HostAgent): Caps
