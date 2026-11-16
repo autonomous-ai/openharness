@@ -117,6 +117,34 @@ describe('screens', () => {
     expect(act).toHaveBeenLastCalledWith('not_now')
   })
 
+  it('codex: Turn on, a failure, Retry; Not now', async () => {
+    await mount(at('codex', 'offer'))
+    expect(heading()).toBe('Let Codex reach your dial?')
+    expect(text()).toContain('Codex can ring the dial when it needs you: a VPN, a sign-in, a decision.')
+    expect(buttons()).toEqual(['Not now', 'Turn on'])
+    click('Turn on')
+    expect(act).toHaveBeenCalledWith('turn_on')
+
+    push(at('codex', 'working'))
+    expect(heading()).toBe('Codex')
+    expect(spinner()).not.toBeNull()
+    expect(buttons()).toEqual([])
+
+    push(at('codex', 'failed', ['Could not change Codex.']))
+    expect(heading()).toBe('Codex')
+    expect(text()).toContain('Could not change Codex.')
+    expect(buttons()).toEqual(['Retry'])
+    click('Retry')
+    expect(act).toHaveBeenLastCalledWith('retry')
+
+    push(at('codex', 'offer'))
+    click('Not now')
+    expect(act).toHaveBeenLastCalledWith('not_now')
+
+    push(null)
+    expect(page().childNodes).toHaveLength(0)
+  })
+
   it('the install shows its last four lines; a note or an error shows its first', async () => {
     await mount(at('install', 'failed', ['1', '2', '3', '4', '5', '6']))
     expect([...page().querySelectorAll('.output .line')].map((line) => line.textContent)).toEqual(['3', '4', '5', '6'])

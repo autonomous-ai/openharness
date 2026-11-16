@@ -1,9 +1,9 @@
 //! Runs the effects the reducer asks for, on threads.
 
 use crate::account::{self, Login, NO_RESULT};
-use crate::claude;
 use crate::cli::{self, Cli, HarnessCli, START_DEADLINE};
 use crate::desktop;
+use crate::engine::{self, Engine};
 use crate::front::{FrontFeed, FrontSource};
 use crate::install::{self, NOT_SUPPORTED, Shell};
 use crate::loginitem::LoginItem;
@@ -193,7 +193,8 @@ impl Runner {
                 });
             }
             Effect::ReadAuth => shared.with_cli(|cli| Event::Auth(account::auth_status(cli))),
-            Effect::ReadClaude => shared.with_cli(|cli| Event::Claude(claude::status(cli))),
+            Effect::ReadClaude => shared.with_cli(|cli| Event::Claude(engine::status(cli, Engine::Claude))),
+            Effect::ReadCodex => shared.with_cli(|cli| Event::Codex(engine::status(cli, Engine::Codex))),
             Effect::RunLogin => shared.run_login(),
             Effect::CancelLogin => {
                 let login = shared.login.lock().unwrap().take();
@@ -204,11 +205,21 @@ impl Runner {
             Effect::SetClaude(on) => {
                 let log = shared.doors.log.clone();
                 shared.with_cli(move |cli| {
-                    let result = claude::set(cli, on);
+                    let result = engine::set(cli, Engine::Claude, on);
                     if let Err(message) = &result {
                         log.line(&format!("claude: {message}"));
                     }
                     Event::ClaudeSet(result)
+                });
+            }
+            Effect::SetCodex(on) => {
+                let log = shared.doors.log.clone();
+                shared.with_cli(move |cli| {
+                    let result = engine::set(cli, Engine::Codex, on);
+                    if let Err(message) = &result {
+                        log.line(&format!("codex: {message}"));
+                    }
+                    Event::CodexSet(result)
                 });
             }
             // On the caller's thread: one short write, to the watch running now. With none the change has nowhere to
@@ -216,6 +227,12 @@ impl Runner {
             Effect::SetSound(on) => {
                 if let Some(watch) = &*shared.watch.lock().unwrap() {
                     watch.sound(on);
+                }
+            }
+            // As the sound: the watch's next status shows whether the change was made.
+            Effect::SetNotify(mode) => {
+                if let Some(watch) = &*shared.watch.lock().unwrap() {
+                    watch.notify(mode);
                 }
             }
             Effect::OpenUrl(url) => shared.open(&[&url], "browser"),
@@ -448,7 +465,10 @@ mod tests {
     use crate::state::StateFile;
     use crate::tabs::{NoTabs, Selected, TabApp, TabError, TabScripts};
     use crate::testing::{Fake, alive, fake_harness, wait_gone};
-    use crate::types::{ClaudeStatus, DialStatus, Effect, Event, LoginEvent, MenuItem, Output, Saved, UpdateFailure};
+    use crate::types::{
+        ClaudeStatus, CodexStatus, DialStatus, Effect, Event, LoginEvent, MenuItem, NotifyMode, Output, Saved,
+        UpdateFailure,
+    };
     use crate::update::AppUpdater;
     use std::collections::VecDeque;
     use std::fs;
@@ -806,6 +826,7 @@ mod tests {
             updating: None,
             problem: None,
             muted: None,
+            notify: None,
         })
     }
 
@@ -818,6 +839,7 @@ mod tests {
             updating: None,
             problem: None,
             muted: None,
+            notify: None,
         })
     }
 
@@ -871,6 +893,22 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn a_codex_change_runs_one_command_and_answers() {
+        let w = world();
+        assert!(w.runner.find_cli());
+        w.fake.script("device codex status --json", &[r#"{"supported":true,"installed":true,"enabled":false}"#]);
+        let off = CodexStatus { supported: true, installed: true, enabled: false };
+        assert_eq!(w.answer(Effect::ReadCodex), Event::Codex(Some(off)));
+        w.fake.script("device codex enable", &[]);
+        assert_eq!(w.answer(Effect::SetCodex(true)), Event::CodexSet(Ok(())));
+        w.fake.script("device codex disable", &["@err Codex is busy.", "@exit 1"]);
+        assert_eq!(w.answer(Effect::SetCodex(false)), Event::CodexSet(Err("Codex is busy.".into())));
+        assert!(w.logged("codex: Codex is busy."));
+        assert_eq!(w.fake.calls(), ["device codex status --json", "device codex enable", "device codex disable"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn a_door_that_fails_is_one_log_line() {
         let w = world();
         w.doubles.failing.store(true, Ordering::SeqCst);
@@ -911,8 +949,10 @@ mod tests {
             Effect::RunStart,
             Effect::ReadAuth,
             Effect::ReadClaude,
+            Effect::ReadCodex,
             Effect::RunLogin,
             Effect::SetClaude(true),
+            Effect::SetCodex(true),
         ];
         for effect in needs_one {
             assert_eq!(w.answer(effect.clone()), Event::Cli(false), "{effect:?}");
@@ -985,10 +1025,13 @@ mod tests {
             Effect::RunInstall,
             Effect::ReadAuth,
             Effect::ReadClaude,
+            Effect::ReadCodex,
             Effect::RunLogin,
             Effect::CancelLogin,
             Effect::SetClaude(true),
+            Effect::SetCodex(true),
             Effect::SetSound(true),
+            Effect::SetNotify(NotifyMode::You),
             Effect::OpenUrl("https://id.example/a".into()),
             Effect::OpenDesktop,
             Effect::RegisterLoginItem,
@@ -1093,6 +1136,26 @@ mod tests {
         assert_eq!(w.fake.stdin(), [off, on]);
         let lines = w.fake.log().lines();
         assert!(lines.iter().all(|line| !line.contains("muted")), "{lines:?}");
+        assert_eq!(w.rest(), []);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_notifications_change_is_written_to_the_watch() {
+        let (you, full) = (r#"{"notify":"you"}"#, r#"{"notify":"full"}"#);
+        let w = world();
+        assert!(w.runner.find_cli());
+        w.fake.script("hardware watch --json", &RECORDING);
+        assert_eq!(w.answer(Effect::SpawnWatch), no_dial());
+        assert_eq!(w.runner.run(Effect::SetNotify(NotifyMode::You)), None);
+        assert_eq!(w.runner.run(Effect::SetNotify(NotifyMode::Full)), None);
+        assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
+        assert_eq!(w.fake.stdin(), [you, full]);
+        // With no watch running there is nothing to write to.
+        assert_eq!(w.runner.run(Effect::SetNotify(NotifyMode::You)), None);
+        assert_eq!(w.fake.stdin(), [you, full]);
+        let lines = w.fake.log().lines();
+        assert!(lines.iter().all(|line| !line.contains("notify")), "{lines:?}");
         assert_eq!(w.rest(), []);
     }
 
@@ -1417,27 +1480,36 @@ mod tests {
         let w = world();
         w.fake.script("hardware watch --json", &[r#"{"attached":true,"fw":"0.0.95"}"#, "@stdin"]);
         w.fake.script("auth status --json", &[r#"{"loggedIn":true}"#]);
-        // No Claude Code script: this CLI has no such command.
+        // No Claude Code or Codex script: this CLI has no such commands.
         let (mut app, mut effects) = App::new(Saved::default(), w.runner.find_cli(), false, B);
         let connected = MenuItem::Text("Dial connected · 0.0.95".into());
-        let (mut dial, mut auth, mut claude) = (false, false, false);
+        let (mut dial, mut auth, mut claude, mut codex) = (false, false, false, false);
         loop {
             for effect in effects {
                 if let Some(Effect::Menu(items)) = w.runner.run(effect) {
                     dial |= items.first() == Some(&connected);
                 }
             }
-            if dial && auth && claude {
+            if dial && auth && claude && codex {
                 break;
             }
             let event = w.next();
             auth |= event == Event::Auth(Some(true));
             claude |= event == Event::Claude(None);
+            codex |= event == Event::Codex(None);
             effects = app.handle(event);
         }
         let mut calls = w.fake.calls();
         calls.sort();
-        assert_eq!(calls, ["auth status --json", "device claude status --json", "hardware watch --json"]);
+        assert_eq!(
+            calls,
+            [
+                "auth status --json",
+                "device claude status --json",
+                "device codex status --json",
+                "hardware watch --json"
+            ]
+        );
     }
 
     #[cfg(unix)]

@@ -15,8 +15,8 @@ Done when, on a Mac with no Harness installed:
 1. The app installs the CLI, starts the daemon, and keeps it running (and stops keeping it while `harness flash` or
    `harness uninstall` works, or while the desktop app runs it).
 2. Its menu-bar icon shows the dial's state as the daemon reports it, live, including "Updating to X".
-3. It offers sign-in once (optional), and Claude Code voice and approvals once (consent first), and both can be
-   changed later from the menu.
+3. It offers sign-in once (optional), Claude Code voice and approvals once and the Codex skill once (consent first),
+   and each can be changed later from the menu.
 4. It starts at login as a login item.
 
 ## Decided (final)
@@ -29,8 +29,8 @@ Taken from the orchestrator's brief; not reopened here.
   exception line to AGENTS.md rule 9: "Harness Device app (device-app/): Rust + Tauri, UI webview TypeScript".
   `rustup update stable` is allowed (rustc here is 1.68; Tauri 2 needs >= 1.77; CI uses `dtolnay/rust-toolchain@stable`).
 - **Thin over the CLI.** The app owns no daemon logic: install script, `harness start --if-down`, `harness login
-  --json`, `harness auth status --json`, `harness hardware watch --json`, `harness device claude …`. The CLI and
-  daemon update themselves.
+  --json`, `harness auth status --json`, `harness hardware watch --json`, `harness device claude …`, `harness device
+  codex …`. The CLI and daemon update themselves.
 - **Out of this wave** (plan items only, no code): the app holding macOS Automation/Accessibility permissions for the
   helper (later wave, objc2). App self-update, signing, notarization, the DMG and the release followed in
   [the release design](2026-11-16-device-app-release-design.md).
@@ -54,14 +54,14 @@ Taken from the orchestrator's brief; not reopened here.
   `NSRunningApplication.runningApplicationsWithBundleIdentifier`. Elsewhere a process-name check behind the same
   trait (Linux `harness_desktop`/`harness-desktop`, Windows `harness-desktop.exe`; the implementer confirms the names
   from the desktop packaging).
-- **The tray menu is native** (Tauri `tray` + `menu`); the webview window is only for the three screens that need
-  words and a choice: Install, Sign in, Claude Code. It opens at first run when one of them is due, and from the menu.
+- **The tray menu is native** (Tauri `tray` + `menu`); the webview window is only for the four screens that need
+  words and a choice: Install, Sign in, Claude Code, Codex. It opens at first run when one of them is due, and from the menu.
 
 ## Architecture
 
 ```
 Menu bar ─ Tauri tray (native menu) ─┐
-Window   ─ webview ui/ (3 screens) ──┤ invoke / events
+Window   ─ webview ui/ (4 screens) ──┤ invoke / events
                                      ▼
                          src-tauri lib (Rust)
      cli.rs      find and run `harness`; NDJSON line reader; timeouts
@@ -69,7 +69,7 @@ Window   ─ webview ui/ (3 screens) ──┤ invoke / events
      keepalive.rs  the daemon rule (down twice, :10-:20 slot, desktop app, start --if-down)
      install.rs  install script runs (--host, then --desktop)
      account.rs  `auth status --json`, `login --json`
-     claude.rs   `device claude status|enable|disable`
+     engine.rs   `device claude|codex status|enable|disable`
      state.rs    state.json in the app data folder (not ~/.harness)
      desktop.rs  desktop app installed / running (trait; macOS NSWorkspace)
      loginitem.rs SMAppService register (trait)
@@ -230,7 +230,9 @@ while the desktop app runs (it has its own `HarnessStatusMenu`).
 | **Install** | when "Harness removed", or when an install failed and its window was closed (the dial line then stays "Setting up Harness") |
 | Account | "Signed in" (disabled), or **Sign in…** |
 | Claude Code | as above; absent when not supported or installed |
+| Codex | "Codex: On" with **Turn off**, or "Codex: Off" with **Turn on…**; absent when Codex is not on this computer |
 | **Sound** (check item) | only while Harness runs and the dial is attached, not updating, and reports its settings; checked when the dial's sound is on ([design](2026-11-16-device-app-sound-design.md)) |
+| **Notifications** (submenu) | **All** and **Needs you**, the one in force checked; only while Harness runs and the dial is attached and not updating ([design](2026-11-16-dial-agent-notify-design.md)) |
 | "Updating Harness Device…" (disabled) | while the app installs its own update ([design](2026-11-16-device-app-release-design.md)) |
 | **Update X…** | when the app cannot replace its bundle; opens `harness.autonomous.ai/device` ([design](2026-11-16-device-app-release-design.md)) |
 | separator | |
@@ -241,23 +243,23 @@ Copy is short, buttons 1-2 words. An empty state shows nothing extra.
 
 ### Window and UI
 
-`device-app/ui/`: plain TypeScript bundled by esbuild into `ui/dist/`, one HTML page, three screens (Install, Sign
-in, Claude Code), each a function that renders into the page from the state the Rust side sends. All calls go
+`device-app/ui/`: plain TypeScript bundled by esbuild into `ui/dist/`, one HTML page, four screens (Install, Sign
+in, Claude Code, Codex), each a function that renders into the page from the state the Rust side sends. All calls go
 through one `api.ts` over Tauri `invoke` and `listen`, so tests mock it. CSS uses the desktop design doc's tokens
 (system font, its neutrals and blue selection, light and dark). `ui/gallery.html` shows every screen in every state,
 both themes; the design doc gets a short "Harness Device" section that points to it, in the same PR.
 
 Window: 420 × 320, not resizable, centered, closes to the menu bar (closing never quits). No Dock icon: the app lives
 in the menu bar only; the bundle reuses the desktop app's icon. Closing the window on the Sign in offer counts as
-Later, on the Claude Code offer as Not now (recorded, not offered again); an install or sign-in under way keeps running. Opens at start when the CLI
-is missing, sign-in was not asked, or Claude Code is due; screens chain in that order; when none is due it closes.
+Later, on the Claude Code or Codex offer as Not now (recorded, not offered again); an install or sign-in under way keeps running. Opens at start when the CLI
+is missing, sign-in was not asked, or Claude Code or Codex is due; screens chain in that order; when none is due it closes.
 
 ### State file
 
 In the platform's app data folder (Tauri `app_data_dir`: `~/Library/Application Support/ai.autonomous.harness.device/`
 on macOS), not `~/.harness`, so `harness uninstall` leaves it and the app writes nothing into a folder being removed.
 `state.json`, mode 0600, written atomically (temp file + rename):
-`{ "version": 1, "cliSeen": bool, "askedSignIn": bool, "askedClaude": bool, "loginItem": bool }`. Unknown or unreadable → defaults
+`{ "version": 1, "cliSeen": bool, "askedSignIn": bool, "askedClaude": bool, "askedCodex": bool, "loginItem": bool }`. Unknown or unreadable → defaults
 (all false) and a log line. No email, token or path in it.
 
 ### Login item

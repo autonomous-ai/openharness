@@ -9,9 +9,13 @@ import { TAB_APPS, type Tab } from '../cable/hosts/tabs.js'
 import { listenLocalSocket } from '../lib/localSocket.js'
 import {
   ATTACH_MAX_BYTES, ATTACH_PER_SECOND, attachHandler, DIAL_MAX_BYTES, DIAL_NAME_MAX, DIAL_PER_SECOND, dialStream, FRONT_MAX_BYTES, FRONT_PER_SECOND,
-  frontHandler, LISTENER_DROPPED_PER_SECOND, LISTENER_MAX_CONNECTIONS, openDevicesListener, REFUSED, TAB_MAX_BYTES, TAB_PER_SECOND, tabHandler,
+  frontHandler, LISTENER_DROPPED_PER_SECOND, LISTENER_MAX_CONNECTIONS, NOTICE_MAX_BYTES, NOTICE_PER_SECOND, noticeHandler, NOTIFY_MAX_BYTES,
+  NOTIFY_PER_SECOND, notifyHandler, openDevicesListener, REFUSED, TAB_MAX_BYTES, TAB_PER_SECOND, tabHandler,
   TABS_MAX_BYTES, TABS_PER_SECOND, tabsStream, type DevicesListener, type ListenerHandler, type ListenerStream, type ListenerStreamHandler, type StreamEnd,
 } from './devicesListener.js'
+import type { NoticeAsk, NoticeResult } from '../lib/dialNotice.js'
+import { noticeCaller } from '../devices/notice.js'
+import type { NotifyMode } from '../cable/notifyMode.js'
 
 const dirs: string[] = []
 const listeners: DevicesListener[] = []
@@ -1586,5 +1590,100 @@ describe('the dial stream', () => {
       expect(logged).toHaveLength(3)
       for (const text of [...logged, ...lines]) expect(text).not.toMatch(/marker-5f3a|WezTerm/)
     })
+  })
+})
+
+describe('notice', () => {
+  const gone = new AbortController().signal
+  const notice = (fields: Record<string, unknown>): Record<string, unknown> => ({ type: 'notice', ...fields })
+
+  it('notice hands on the four fields and answers the result', () => {
+    const asks: NoticeAsk[] = []
+    const handler = noticeHandler((ask) => { asks.push(ask); return 'shown' })
+    const message = notice({ text: 'Connect the VPN', engine: 'claude', sessionId: 's-1', folder: 'api', extra: 1 })
+    expect(handler.handle(message, gone)).toStrictEqual({ result: 'shown' })
+    expect(handler.handle(notice({ text: 'Connect the VPN' }), gone)).toStrictEqual({ result: 'shown' })
+    expect(asks).toStrictEqual([
+      { text: 'Connect the VPN', engine: 'claude', sessionId: 's-1', folder: 'api' },
+      { text: 'Connect the VPN' },
+    ])
+  })
+
+  it('notice refuses a line the command did not clean', () => {
+    const notify = vi.fn((): NoticeResult => 'shown')
+    const handler = noticeHandler(notify)
+    for (const text of ['', '  x', 'a\nb', 'a'.repeat(121), 7]) {
+      expect(handler.handle(notice({ text, engine: 'codex' }), gone), String(text)).toBe(REFUSED)
+    }
+    expect(handler.handle(notice({ engine: 'codex' }), gone)).toBe(REFUSED)
+    expect(notify).not.toHaveBeenCalled()
+  })
+
+  it('notice refuses a caller it cannot read', () => {
+    const notify = vi.fn((): NoticeResult => 'shown')
+    const handler = noticeHandler(notify)
+    const bad: Record<string, unknown>[] = [
+      { engine: 'gemini' }, { sessionId: 's-1' }, { engine: 'claude', sessionId: 'a b' },
+      { engine: 'claude', sessionId: 'a'.repeat(129) }, { folder: '' }, { folder: 'a\u0007' }, { folder: 'x'.repeat(65) },
+    ]
+    for (const fields of bad) expect(handler.handle(notice({ text: 'Connect the VPN', ...fields }), gone), JSON.stringify(fields)).toBe(REFUSED)
+    expect(notify).not.toHaveBeenCalled()
+  })
+
+  it('notice takes what harness device notify sends, from a folder whose name is cut before a space', () => {
+    const asks: NoticeAsk[] = []
+    const handler = noticeHandler((ask) => { asks.push(ask); return 'shown' })
+    const caller = noticeCaller({}, `/p/${'a'.repeat(63)} b`)
+    expect(handler.handle(notice({ text: 'Connect the VPN', ...caller }), gone)).toStrictEqual({ result: 'shown' })
+    expect(asks).toStrictEqual([{ text: 'Connect the VPN', folder: 'a'.repeat(63) }])
+  })
+
+  it('the notice handler is its two limits and handle; the longest notice fits', () => {
+    const handler = noticeHandler(() => 'shown')
+    expect(Object.keys(handler).sort()).toEqual(['handle', 'maxBytes', 'perSecond'])
+    expect(handler).toMatchObject({ maxBytes: NOTICE_MAX_BYTES, perSecond: NOTICE_PER_SECOND })
+    expect([NOTICE_MAX_BYTES, NOTICE_PER_SECOND]).toEqual([2048, 1])
+    const longest = notice({ text: '🙏'.repeat(120), engine: 'claude', sessionId: 'a'.repeat(128), folder: '🙏'.repeat(64) })
+    expect(handler.handle(longest, gone)).toStrictEqual({ result: 'shown' })
+    expect(Buffer.byteLength(JSON.stringify(longest))).toBeLessThanOrEqual(NOTICE_MAX_BYTES)
+  })
+
+  describe.skipIf(process.platform === 'win32')('on a real listener', () => {
+    it('a notice is answered with its result, and a second in the same second on that connection is 429', async () => {
+      const { path } = await open({ notice: noticeHandler(() => 'limited') }, { now: () => 0 })
+      const sender = connection(path)
+      const body = JSON.stringify({ type: 'notice', text: 'Connect the VPN' })
+      expect(await sender.send(body)).toMatchObject({ status: 200, body: '{"result":"limited"}' })
+      expect((await sender.send(body)).status).toBe(429)
+    })
+  })
+})
+
+describe('notify', () => {
+  const gone = new AbortController().signal
+
+  it('notify hands a mode on and answers what set answers', () => {
+    const modes: NotifyMode[] = []
+    const saved = notifyHandler((mode) => { modes.push(mode); return { mode } })
+    expect(saved.handle({ type: 'notify', mode: 'you' }, gone)).toStrictEqual({ mode: 'you' })
+    const failed = notifyHandler(() => ({ error: 'WRITE_FAILED' }))
+    expect(failed.handle({ type: 'notify', mode: 'full' }, gone)).toStrictEqual({ error: 'WRITE_FAILED' })
+    expect(modes).toEqual(['you'])
+  })
+
+  it('notify refuses any other body', () => {
+    const set = vi.fn((mode: NotifyMode) => ({ mode }))
+    const handler = notifyHandler(set)
+    for (const mode of ['loud', true]) expect(handler.handle({ type: 'notify', mode }, gone), String(mode)).toBe(REFUSED)
+    expect(handler.handle({ type: 'notify' }, gone)).toBe(REFUSED)
+    expect(set).not.toHaveBeenCalled()
+  })
+
+  it('the notify handler is its two limits and handle', () => {
+    const handler = notifyHandler((mode) => ({ mode }))
+    expect(Object.keys(handler).sort()).toEqual(['handle', 'maxBytes', 'perSecond'])
+    expect(handler).toMatchObject({ maxBytes: NOTIFY_MAX_BYTES, perSecond: NOTIFY_PER_SECOND })
+    expect([NOTIFY_MAX_BYTES, NOTIFY_PER_SECOND]).toEqual([64, 2])
+    expect(Buffer.byteLength('{"type":"notify","mode":"full"}')).toBeLessThanOrEqual(NOTIFY_MAX_BYTES)
   })
 })

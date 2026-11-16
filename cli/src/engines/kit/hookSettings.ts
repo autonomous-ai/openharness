@@ -9,7 +9,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { env } from '../../config/env.js'
-import { HARNESS_AGENT_TOOLS, HARNESS_AGENT_VERBS, type HarnessAgentVerb, type HookSettings } from '../facets/hooks.js'
+import { HARNESS_AGENT_COMMANDS, HARNESS_AGENT_TOOLS, HARNESS_AGENT_VERBS, type HarnessAgentVerb, type HookSettings } from '../facets/hooks.js'
 import { prepareReviewed } from './hookReview.js'
 import { managedNodePath } from '../../lib/nodeRuntime.js'
 import { isMessagesBlock, messagesCommand, writeMessagesHook } from './messagesHook.js'
@@ -132,10 +132,12 @@ async function installMessagesBlock(settings: HookSettings, home: string, attemp
 
 /**
  * The declared rules as this computer has them (facets/hooks.ts HarnessAllowance): its paths in place of
- * `{launcher}`, `{node}` and `{cli}`, every verb as one Starlark list in place of `{verbs}`, and a rule that names
- * `{verb}` or `{tool}` once for each agent verb (`{tool}` only for a verb with an MCP tool). In groups that are added
- * together or not at all: the rules naming no verb, then each verb's rules of one kind (`Bash(…)`, `mcp__…`), its
- * spellings of the same command; a kind with no rule for a verb is no group.
+ * `{launcher}`, `{node}` and `{cli}`, every verb as one Starlark list in place of `{verbs}`, a rule that names
+ * `{verb}` or `{tool}` once for each agent verb (`{tool}` only for a verb with an MCP tool), and a rule that names
+ * `{command}` or `{words}` once for each of HARNESS_AGENT_COMMANDS. In groups that are added together or not at all:
+ * the rules naming no verb or command, then each verb's rules of one kind (`Bash(…)`, `mcp__…`), its spellings of the
+ * same command, then each command's the same way, so a deny for it keeps out its own rules alone; a kind with no rule
+ * for a verb is no group.
  */
 export function harnessRules(rules: readonly string[], quote: (path: string) => string = (path) => path): string[][] {
   const paths: Record<string, string> = {
@@ -143,16 +145,21 @@ export function harnessRules(rules: readonly string[], quote: (path: string) => 
   }
   const verbs = `[${HARNESS_AGENT_VERBS.map((verb) => JSON.stringify(verb)).join(', ')}]`
   const tools: Partial<Record<HarnessAgentVerb, string>> = HARNESS_AGENT_TOOLS
-  const fill = (rule: string, verb?: HarnessAgentVerb): string => rule.replace(/\{(launcher|node|cli|verbs|verb|tool)\}/g,
-    (_, name: string) => name === 'verbs' ? verbs : name === 'verb' ? verb! : name === 'tool' ? tools[verb!]! : quote(paths[name]))
+  const fill = (rule: string, verb?: HarnessAgentVerb, words: readonly string[] = []): string =>
+    rule.replace(/\{(launcher|node|cli|verbs|verb|tool|command|words)\}/g, (_, name: string) => name === 'verbs' ? verbs
+      : name === 'verb' ? verb! : name === 'tool' ? tools[verb!]! : name === 'command' ? words.join(' ')
+        : name === 'words' ? words.map((word) => JSON.stringify(word)).join(', ') : quote(paths[name]))
   const perVerb = (rule: string) => /\{(verb|tool)\}/.test(rule)
+  const perCommand = (rule: string) => /\{(command|words)\}/.test(rule)
   const has = (rule: string, verb: HarnessAgentVerb) => !rule.includes('{tool}') || verb in tools
   const kind = (rule: string) => /^[A-Za-z]*/.exec(rule)![0]
-  const whole = rules.filter((rule) => !perVerb(rule)).map((rule) => fill(rule))
-  const kinds = [...new Set(rules.filter(perVerb).map(kind))]
+  const grouped = (named: (rule: string) => boolean, made: (rule: string) => string | null): string[][] =>
+    [...new Set(rules.filter(named).map(kind))].map((k) => rules.filter((rule) => named(rule) && kind(rule) === k)
+      .flatMap((rule) => made(rule) ?? [])).filter((group) => group.length > 0)
+  const whole = rules.filter((rule) => !perVerb(rule) && !perCommand(rule)).map((rule) => fill(rule))
   return [...(whole.length ? [whole] : []),
-    ...HARNESS_AGENT_VERBS.flatMap((verb) => kinds.map((k) => rules.filter((rule) => perVerb(rule) && kind(rule) === k && has(rule, verb))
-      .map((rule) => fill(rule, verb))).filter((group) => group.length > 0))]
+    ...HARNESS_AGENT_VERBS.flatMap((verb) => grouped(perVerb, (rule) => has(rule, verb) ? fill(rule, verb) : null)),
+    ...HARNESS_AGENT_COMMANDS.flatMap((words) => grouped(perCommand, (rule) => fill(rule, undefined, words)))]
 }
 
 /**
@@ -186,8 +193,17 @@ function touches(theirs: string, ours: string): boolean {
   return a.length > 0 && (b.startsWith(a) || a.startsWith(b))
 }
 
+/** How Harness's rules file begins in every release: the commands the header lists after it change from one to the
+ *  next, so uninstall knows a file an earlier release wrote by this alone. */
+export const RULES_OPENING = '# Written by Harness, which rewrites it: do not edit.'
+/** Each way a release began that file, the first release's whole line included (CLI 0.3.74 to 0.3.79): uninstall
+ *  takes out a file that begins with one, and keeps any other as the person's. */
+export const RULES_OPENINGS: readonly string[] = [
+  '# Written by Harness: agents in a tab with Agent Messages on reply with harness send. Do not edit.\n', RULES_OPENING]
+
 /** The head of Harness's rules file: what it is for, and that Harness keeps it. */
-export const RULES_HEADER = `# Written by Harness, which rewrites it: do not edit. Its agent commands (harness ${HARNESS_AGENT_VERBS.join(', ')})\n`
+export const RULES_HEADER = `${RULES_OPENING} Its agent commands (harness ${
+  [...HARNESS_AGENT_VERBS, ...HARNESS_AGENT_COMMANDS.map((words) => words.join(' '))].join(', ')})\n`
   + "# need Harness's daemon, which Codex's sandbox cannot reach, so they run outside it without asking. What each\n"
   + '# may do is for Harness to decide: Settings > Experimental, and an agent gives work to and closes only what it started.\n'
 
