@@ -61,13 +61,13 @@ describe('notifyTier', () => {
     expect('tierState' in (await import('./notifyTier.js'))).toBe(false)
   })
 
-  it('logs each decision, then the day\'s count', async () => {
+  it('logs each decision by its tier and rule alone, never the agent\'s name, then the day\'s count', async () => {
     const { decide, log } = make()
     await decide(base)
     await decide({ ...base, failed: true })
     expect(log).toHaveBeenCalledTimes(4)
     expect(log.mock.calls[1][0]).toMatch(/^notify · day \d{4}-\d\d-\d\d · alert 1 · list 0 · silent 0$/)
-    expect(log.mock.calls[0][0]).toMatch(/^notify · lamp · alert · rule:turn · turn · \d+ms$/)
-    expect(log.mock.calls[2][0]).toMatch(/^notify · lamp · alert · rule:failed · .+ · \d+ms$/)
+    expect(log.mock.calls[0][0]).toMatch(/^notify · alert · rule:turn · turn · \d+ms$/)
+    expect(log.mock.calls[2][0]).toMatch(/^notify · alert · rule:failed · failed · \d+ms$/)
   })
 })

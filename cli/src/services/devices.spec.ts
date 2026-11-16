@@ -833,7 +833,7 @@ describe('what the windows say, reaching the dial', () => {
         ['a1', 'The requested build is ready.', 'done', 'alert', undefined, false],
       ]))
       expect(backend).not.toHaveBeenCalled()
-      expect(logs).toContainEqual(expect.stringMatching(/^\[cable\] notify · .* · alert · rule:turn · turn · \d+ms$/))
+      expect(logs).toContainEqual(expect.stringMatching(/^\[cable\] notify · alert · rule:turn · turn · \d+ms$/))
       expect(logs).toContainEqual(expect.stringMatching(/^\[cable\] notify · day \d{4}-\d\d-\d\d · alert 1 · list 0 · silent 0$/))
     })
 
@@ -902,7 +902,7 @@ describe('what the windows say, reaching the dial', () => {
       port.card({ type: 'commander_event', agentId: 'a1', payload: { kind: 'summary', text: 'done', recap: 'Deployed', tier: 'list' } })
       expect(calls('summary')).toEqual([['a1', 'Deployed', 'done', 'list', undefined, false]])
       expect(decideTier).not.toHaveBeenCalled()
-      expect(logs).toContainEqual(expect.stringMatching(/^\[cable\] notify · .* · list · recaps · decided upstream · 0ms$/))
+      expect(logs).toContain('[cable] notify · list · recaps · decided upstream · 0ms')
       port.desk(['a2'], true)
       port.card({ type: 'commander_event', agentId: 'a2', payload: { kind: 'summary', text: 'done', tier: 'alert' } })
       expect(calls('summary').at(-1)).toEqual(['a2', 'done', 'done', 'silent', undefined, false])
@@ -937,8 +937,8 @@ describe('what the windows say, reaching the dial', () => {
       port.desk(['a2'], true)
       port.card({ type: 'commander_event', agentId: 'a2', payload: { kind: 'summary', text: 'x' } })
       port.card({ type: 'commander_event', agentId: 'a2', payload: { kind: 'error', text: 'boom' } })
-      expect(logs.some((l) => /notify · .* · silent · rule:onScreen · onScreen · 0ms/.test(l))).toBe(true)
-      expect(logs.some((l) => /notify · .* · alert · rule:failed/.test(l))).toBe(true)
+      expect(logs).toContain('[cable] notify · silent · rule:onScreen · onScreen · 0ms')
+      expect(logs).toContain('[cable] notify · alert · rule:failed · turn.error · 0ms')
       expect(logs.some((l) => /notify · day \d{4}-\d\d-\d\d · alert 1 · list 0 · silent 1/.test(l))).toBe(true)
     })
 
@@ -5880,6 +5880,18 @@ describe('Orca\'s ring follows Orca\'s tabs (docs/plans/2026-11-16-dial-orca-foc
     await land(fake, null)
     expect((await names()).orca).toEqual(['Other secret', 'Third secret', 'api'])
     expect(logs.filter((line) => /secret/i.test(line))).toEqual([])
+  })
+
+  it('a tab-named agent\'s turn end, with a dial linked, logs no title: the tier\'s tally is a measure', async () => {
+    readers.answer.mockResolvedValue('Shipped.')
+    const { port, fake } = dialWith(1, { decideTier: null })
+    await land(fake, [{ handle: H(1), title: 'Secret tab' }])
+    port.observed(hook(1, { event: 'turn-start' }))
+    port.observed(hook(1, { event: 'turn-stop' }))
+    await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
+    expect(calls('summary')).toEqual([[agent(1), 'Shipped.', 'Shipped.', 'alert', 'Shipped.', false]])
+    expect(logs.filter((line) => /secret/i.test(line))).toEqual([])
+    expect(logs).toContain('[cable] notify · alert · rule:turn · turn · 0ms')
   })
 
   it('no line holds a handle or an agent', async () => {
