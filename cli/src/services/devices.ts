@@ -306,7 +306,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const herdrApp = createHerdrAppAdapter({ ...apps, client: hcClient, log, bin: openBin, hookIds,
     inFront: () => cableHost.latestFront() === 'herdr', shows: (address) => hcSource?.shows(address) === true })
   const hcPane = (address: string): Pane => ({ adapter: herdrApp.id, id: address })
-  const claude = createClaudeAppAdapter({ ...apps, inFront: () => cableHost.latestFront() === 'claude' })
+  const claude = createClaudeAppAdapter({ ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'claude' })
   // Harness's own Codex home, whose config `codex queue` loads; run from the home folder, so no project's .codex/ is read.
   const codexQueue = createCodexQueue({ ...(deps.codex ?? codexQueueDeps()), home: env.CODEX_HOME, cwd: homedir() })
   // The stream a watch holds open on the devices' listener: a rest or a tap on an agent in Terminal, iTerm2 or Ghostty
@@ -359,8 +359,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // A rest's continue link: the app's attach that follows is the dial's own echo.
     { ...claude, show: (pane: Pane, agentId: string) => { noteLink(agentId); return claude.show(pane, agentId) } },
     // No echo to guard: the Codex app sends no attach for the follow to take as a person's.
-    createCodexAppAdapter({ ...apps, inFront: () => cableHost.latestFront() === 'codex', log }),
-    createVscodeAdapter(apps),
+    createCodexAppAdapter({ ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'codex', log }),
+    createVscodeAdapter({ ...apps, bin: openBin }),
     createTabsAdapter({
       isOpen: () => tabs.isOpen(),
       select: (tab, raise) => {
