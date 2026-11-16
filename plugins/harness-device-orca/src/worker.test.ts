@@ -78,13 +78,16 @@ function rateLimited() {
 
 /** The loop's clock: each wait the worker asks for, for the test to fire. */
 function clock() {
-  const waits: { ms: number; run: () => void }[] = []
+  const waits: { ms: number; run: () => void; cancelled: boolean }[] = []
   return {
     waits,
     after(ms: number, run: () => void) {
-      waits.push({ ms, run })
+      const wait = { ms, run, cancelled: false }
+      waits.push(wait)
       updated()
-      return () => {}
+      return () => {
+        wait.cancelled = true
+      }
     },
   }
 }
@@ -256,6 +259,25 @@ test('a refused update is not sent again once a newer one was', async () => {
   await new Promise((done) => setImmediate(done))
   assert.equal(updates().length, sent)
   await worker.deactivate()
+})
+
+test('deactivate cancels an update waiting to be sent again, and one it did not stop is not sent', async () => {
+  const bar = rateLimited()
+  const time = clock()
+  const { worker, stream, changes, updates } = await streaming(bar.answer, { after: time.after })
+  bar.refuseNext()
+  stream.send(ATTACHED)
+  await until(() => changes().length === 1)
+  await new Promise((done) => setImmediate(done))
+  const wait = time.waits.find(({ ms }) => ms === 50)
+  assert.ok(wait, 'a wait of 50 ms')
+  await worker.deactivate()
+  assert.ok(wait.cancelled, 'the wait cancelled')
+  const sent = updates().length
+  // A timer that fires anyway, as one already on its way can.
+  wait.run()
+  await new Promise((done) => setImmediate(done))
+  assert.equal(updates().length, sent)
 })
 
 test('deactivate stops the loop: nothing is posted or updated after it', async () => {
