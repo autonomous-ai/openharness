@@ -784,6 +784,19 @@ describe('what a close says of the conversation it kept', () => {
     expect(await service.request(request('now'))).toEqual({ error: 'STOP_UNCONFIRMED', detail: 'Could not confirm that the harness stopped.' })
     expect(registry.byAgent(row.agentId)).toBe(row)
   })
+  // Asked again once it is closed (a window's close behind the cleanup's, `harness close` beside a window's): the record
+  // it was kept as says, as it does for the close that stopped it.
+  it.each([
+    ['no conversation', '', { closed: true, withoutConversation: true }],
+    ['its conversation', 'kept', { closed: true }],
+  ] as const)('a close of one already closed, kept with %s, says so', async (_, sessionId, said) => {
+    const kept = { ...row, sessionId }
+    service.dispose()
+    service = new CloseAgentService({ ...deps, closedAlready: () => registry.byAgent(row.agentId) ? null : kept })
+    registry.removeAgent(row.agentId)
+    for (const mode of ['now', 'idle', 'inspect'] as const) expect(await service.request(request(mode))).toEqual(said)
+    expect(deps.stop).not.toHaveBeenCalled()
+  })
 })
 
 describe('background commands', () => {
