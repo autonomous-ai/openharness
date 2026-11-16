@@ -157,13 +157,14 @@ const AGENT_VERBS: string[] = [...Object.keys(HARNESS_AGENT_TOOLS), 'browser']
 const toolOf = (verb: string): string | undefined => (HARNESS_AGENT_TOOLS as Record<string, string>)[verb]
 
 /** Every rule Harness adds to Claude Code's allow list on this computer, in order: `harness --help`, then each verb's
- *  commands, then its tool where it has one. */
-const claudeRules = (skip: { bash?: string[]; mcp?: string[]; help?: boolean } = {}): string[] => [
+ *  commands, then its tool where it has one, then `harness device notify` as exactly its three words. */
+const claudeRules = (skip: { bash?: string[]; mcp?: string[]; help?: boolean; commands?: boolean } = {}): string[] => [
   ...(skip.help ? [] : ['Bash(harness --help)', 'Bash(harness -h)', `Bash(${join(env.HARNESS_BIN_DIR, 'harness')} --help)`]),
   ...AGENT_VERBS.flatMap((verb) => [
     ...(skip.bash?.includes(verb) ? [] : [`Bash(harness ${verb}:*)`, `Bash(${join(env.HARNESS_BIN_DIR, 'harness')} ${verb}:*)`]),
     ...(skip.mcp?.includes(verb) || !toolOf(verb) ? [] : [`mcp__harness__${toolOf(verb)}`, `mcp__plugin_harness_harness__${toolOf(verb)}`]),
   ]),
+  ...(skip.commands === false ? [] : ['Bash(harness device notify:*)', `Bash(${join(env.HARNESS_BIN_DIR, 'harness')} device notify:*)`]),
 ]
 
 it('allows Harness\'s agent commands and MCP tools in Claude Code beside the person\'s own rules, once', async () => {
@@ -252,16 +253,69 @@ it('harnessRules gives a verb with no tool its commands alone, and no empty grou
   expect(groups.flat().filter((rule) => /undefined|\{tool\}|\{verb\}/.test(rule))).toEqual([])
 })
 
+it('allows exactly harness device notify in Claude Code, by name and by the launcher\'s path', async () => {
+  const home = join(root, 'claude')
+  expect(await installHookSettings('claude', claude.settings, 19473, home)).toBe(true)
+  const allow: string[] = JSON.parse(readFileSync(join(home, claude.settings.file), 'utf8')).permissions.allow
+  // Never the whole `device` word: `harness device claude enable` and the rest of `device` still ask.
+  expect(allow.filter((rule) => rule.includes('device'))).toEqual(['Bash(harness device notify:*)', `Bash(${join(env.HARNESS_BIN_DIR, 'harness')} device notify:*)`])
+})
+
+it('a deny or an ask for harness device notify, or for all of harness device, keeps it out in both spellings and nothing else', async () => {
+  const launcher = join(env.HARNESS_BIN_DIR, 'harness')
+  for (const permissions of [{ deny: ['Bash(harness device notify:*)'] }, { ask: [`Bash(${launcher} device notify --json:*)`] }, { deny: ['Bash(harness device:*)'] }]) {
+    const home = mkdtempSync(join(root, 'claude-')), file = join(home, claude.settings.file)
+    writeFileSync(file, JSON.stringify({ permissions }))
+    expect(await installHookSettings('claude', claude.settings, 19473, home)).toBe(true)
+    const allow: string[] = JSON.parse(readFileSync(file, 'utf8')).permissions.allow
+    expect(allow).toEqual(claudeRules({ commands: false }))
+    expect(allow).toContain('Bash(harness --help)')
+  }
+})
+
+it('a deny for another device command leaves harness device notify allowed', async () => {
+  const home = join(root, 'claude'), file = join(home, claude.settings.file)
+  mkdirSync(home)
+  writeFileSync(file, JSON.stringify({ permissions: { deny: ['Bash(harness device claude enable:*)'] } }))
+  expect(await installHookSettings('claude', claude.settings, 19473, home)).toBe(true)
+  expect(JSON.parse(readFileSync(file, 'utf8')).permissions.allow).toEqual(claudeRules())
+})
+
+it('the rule is a prefix of three literal words in each engine', async () => {
+  const claudeHome = join(root, 'claude'), codexHome = join(root, 'codex')
+  expect(await installHookSettings('claude', claude.settings, 19473, claudeHome)).toBe(true)
+  expect(await installHookSettings('codex', codex.settings, 19473, codexHome)).toBe(true)
+  const notify = (JSON.parse(readFileSync(join(claudeHome, claude.settings.file), 'utf8')).permissions.allow as string[]).filter((rule) => rule.includes('device'))
+  expect(notify).toHaveLength(2)
+  // A wildcard, a separator or an expansion of its own would let the rule approve more than the three words.
+  for (const rule of notify) {
+    expect(rule.endsWith(' device notify:*)')).toBe(true)
+    expect(rule.slice(0, -':*)'.length)).not.toMatch(/[*;&$]/)
+  }
+  // Codex matches argv: no rule for `harness device` alone, and `device` is not one of the verbs.
+  const lines = readFileSync(join(codexHome, 'rules', 'harness.rules'), 'utf8').split('\n')
+  expect(lines.filter((line) => line.includes('"device"'))).toEqual(['prefix_rule(pattern=["harness", "device", "notify"], decision="allow")'])
+})
+
+it('harnessRules gives a command a group of its own', () => {
+  const rules = (settings: typeof claude.settings) => settings.allow ? settings.allow.rules : []
+  const groups = harnessRules(rules(claude.settings))
+  expect(groups.filter((group) => group.some((rule) => rule.includes('device'))))
+    .toEqual([['Bash(harness device notify:*)', `Bash(${join(env.HARNESS_BIN_DIR, 'harness')} device notify:*)`]])
+  expect([...groups, ...harnessRules(rules(codex.settings))].flat().filter((rule) => /undefined|\{command\}|\{words\}/.test(rule))).toEqual([])
+})
+
 /** Harness's Codex rules file on this computer, byte for byte. */
 const codexRulesFile = (): string => {
   const verbs = '["whoami", "ps", "search", "machines", "show", "wait", "new", "close", "send", "tell", "browser"]'
-  return "# Written by Harness, which rewrites it: do not edit. Its agent commands (harness whoami, ps, search, machines, show, wait, new, close, send, tell, browser)\n"
+  return "# Written by Harness, which rewrites it: do not edit. Its agent commands (harness whoami, ps, search, machines, show, wait, new, close, send, tell, browser, device notify)\n"
     + "# need Harness's daemon, which Codex's sandbox cannot reach, so they run outside it without asking. What each\n"
     + '# may do is for Harness to decide: Settings > Experimental, and an agent gives work to and closes only what it started.\n'
     // Only the launcher's path counts as `harness` by its last part: not a `harness` an agent wrote elsewhere.
     + `host_executable(name="harness", paths=[${JSON.stringify(join(env.HARNESS_BIN_DIR, 'harness'))}])\n`
     + `prefix_rule(pattern=["harness", ${verbs}], decision="allow")\n`
     + `prefix_rule(pattern=[${JSON.stringify(managedNodePath())}, ${JSON.stringify(join(env.ADAPTER_CLI_DIR, 'cli.js'))}, ${verbs}], decision="allow")\n`
+    + 'prefix_rule(pattern=["harness", "device", "notify"], decision="allow")\n'
 }
 
 it('allows Harness\'s agent commands in a Codex rules file of its own, leaving the person\'s rules alone', async () => {
