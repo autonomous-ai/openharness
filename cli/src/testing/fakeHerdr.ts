@@ -67,7 +67,7 @@ export interface FakeHerdr {
   /** An event, as herdr writes one, to each live subscription that asked for it. */
   event(name: string, data: Record<string, unknown>): void
   /** Bytes to each live subscription. */
-  send(raw: string): void
+  send(raw: string | Uint8Array): void
   /** Ends every subscription. */
   drop(): void
   /** Closes every connection and the server, which removes its socket. */
@@ -89,7 +89,8 @@ const parse = (text: string): unknown => {
 const RECORDED_ANSWER = /^\{"id":"r1",/
 
 const refused = (code: string): FakeHerdrAnswer => ({ line: { error: { code, message: code } } })
-// herdr answers a line it cannot read under "" (the spike); an unknown method is answered the same here.
+// herdr answers a line it cannot read under "" (the spike). An unknown method is answered the same here, which the spike
+// did not record: an assumption.
 const INVALID: FakeHerdrAnswer = { line: { id: '', error: { code: 'invalid_request', message: 'invalid request' } } }
 
 /** Whether a subscription's entries ask for that event: herdr names `pane.agent_detected`'s event `pane_agent_detected`,
@@ -120,7 +121,9 @@ export async function fakeHerdr(): Promise<FakeHerdr> {
     switch (method) {
       case 'agent.list': return { line: { result: { type: 'agent_list', agents: fake.agents } } }
       case 'agent.get': return held ? { line: { result: { type: 'agent_info', agent: held } } } : refused('agent_not_found')
-      case 'agent.prompt': return held ? { line: { result: { type: 'agent_prompted' } } } : refused('agent_not_found')
+      case 'agent.prompt':
+        if (!held) return refused('agent_not_found')
+        return params.text === '' ? refused('empty_agent_prompt') : { line: { result: { type: 'agent_prompted' } } }
       case 'events.subscribe': return { line: { result: { type: 'subscription_started' } } }
       default: return INVALID
     }

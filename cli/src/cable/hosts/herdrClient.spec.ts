@@ -200,22 +200,29 @@ describe.skipIf(process.platform === 'win32')('the herdr client (docs/specs/2026
     second.close()
   })
 
-  it('events in the chunk that holds subscription_started, and a line split across two chunks, are each told once', async () => {
+  it('events in the chunk that holds subscription_started, and a line split across two chunks, even inside a character, are each told once', async () => {
     const { calls, to, told } = subscriber()
     const [started, first, second] = RECORDED.replay
     const cut = 40
+    // A folder whose name's last character is two bytes, cut between them.
+    const created = { pane: { pane_id: 'w3:p1', cwd: '/work/café' }, type: 'pane_created' }
+    const third = Buffer.from(`${JSON.stringify({ data: created, event: 'pane_created' })}\n`)
+    const inside = third.indexOf('é') + 1
     server.answer('events.subscribe', { raw: `${started}\n${first}\n${second.slice(0, cut)}` })
     const subscription = client().subscribe(ENTRIES, to)
-    // The first chunk has been read once its whole lines are told, so the rest of the split line comes in a chunk of its own.
+    // A chunk has been read once its whole lines are told, so the rest of its split line comes in a chunk of its own.
     await told(2)
-    server.send(`${second.slice(cut)}\n`)
+    server.send(Buffer.concat([Buffer.from(`${second.slice(cut)}\n`), third.subarray(0, inside)]))
     await told(3)
+    server.send(third.subarray(inside))
+    await told(4)
     subscription.close()
     await server.ended(1)
     expect(calls).toEqual([
       ['started'],
       ['event', 'pane_agent_detected', JSON.parse(first).data],
       ['event', 'pane_agent_detected', JSON.parse(second).data],
+      ['event', 'pane_created', created],
     ])
   })
 
@@ -322,6 +329,11 @@ describe.skipIf(process.platform === 'win32')('the herdr client (docs/specs/2026
     await once(socket, 'close')
     await server.ended(1)
     expect(server.requests.map(({ connection }) => connection)).toEqual([1, 1])
+  })
+
+  it('the fake server, as herdr, refuses an empty prompt', async () => {
+    server.agents = [agent('w1:p1', 'claude', 'idle')]
+    expect(await client().request('agent.prompt', { target: 'w1:p1', text: '' })).toEqual({ ok: false, code: 'empty_agent_prompt' })
   })
 
   it.each(['idle', 'done'])('prompt reads the pane again, then sends the line (%s)', async (status) => {
