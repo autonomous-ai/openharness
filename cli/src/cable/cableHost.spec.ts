@@ -11,6 +11,7 @@ import { DeviceFleet } from '../device/deviceFleet.js'
 import { DeviceLink } from '../device/deviceLink.js'
 import { HostRegistry } from './hosts/registry.js'
 import { FRONT_SETTLE_MS } from './hosts/appFilter.js'
+import { APP_IDS } from './hosts/hostDetect.js'
 import type { HostAgent, HostSource, PaneSwitch, SendResult } from './hosts/types.js'
 import type { CableAgent } from './cableSession.js'
 
@@ -1077,6 +1078,29 @@ describe('the dial that shows one app at a time', () => {
       { id: 'terminal', name: 'Other', count: 1, waiting: 0 },
       { id: 'terminal-app', name: 'Terminal', count: 2, waiting: 0 },
     ] })
+  })
+
+  it('17 apps with agents send 16 rows, the shown one kept', async () => {
+    const appIds = (snapshot: { apps?: { apps: Array<{ id: string }> } }): string[] | undefined => snapshot.apps?.apps.map((a) => a.id)
+    // A second agent in Ghostty, so Ghostty is shown with no draw.
+    const host = setup([...APP_IDS.map((app) => agent(`a-${app}`, app)), agent('g2', 'ghostty')])
+    const first = await host.listAgentSnapshot({ apps: true })
+    expect(appIds(first)).toEqual(APP_IDS.slice(0, 16))
+    expect(first.apps?.shown).toBe('ghostty')
+    expect(host.pickApp(APP_IDS[16])).toBe('switched')
+    const next = await host.listAgentSnapshot({ apps: true })
+    // The 16th row gave the shown app its place, and the first 15 did not move.
+    expect(appIds(next)).toEqual([...APP_IDS.slice(0, 15), APP_IDS[16]])
+    expect(next.apps?.shown).toBe(APP_IDS[16])
+    expect(next.apps?.apps.at(-1)).toEqual({ id: 'terminal', name: 'Other', count: 1, waiting: 0 })
+    // The bound is the frame's, not the ring's.
+    expect(ids(next)).toEqual(['a-terminal'])
+    expect(next.total).toBe(1)
+  })
+
+  it('16 apps send every row', async () => {
+    const host = setup(APP_IDS.slice(0, 16).map((app) => agent(`a-${app}`, app)))
+    expect((await host.listAgentSnapshot({ apps: true })).apps?.apps.map((a) => a.id)).toEqual(APP_IDS.slice(0, 16))
   })
 
   it('a pick switches the list and holds through a count change', async () => {
