@@ -214,7 +214,7 @@ export function pickAgentHeuristic(
   }
 }
 
-/** Name the winner. Without this the log said an engine ran and never which agent it picked, so a wrong
+/** Say which agent won. Without this the log said an engine ran and never which agent it picked, so a wrong
  *  route looked identical to a right one. `via` separates a real classification from a fallback. The id
  *  identifies the pick; the agent's name and the router's reason are left out because they quote the
  *  person's session titles and spoken words. */
