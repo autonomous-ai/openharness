@@ -367,12 +367,14 @@ void main() {
     Finder field() =>
         find.descendant(of: bar(), matching: find.byType(TextField));
     String status(WidgetTester tester) =>
-        (tester.widget<Text>(
-                  find.descendant(
-                    of: find.byKey(const ValueKey('terminal-find-status')),
-                    matching: find.byType(Text),
-                  ),
-                ).data ??
+        (tester
+                    .widget<Text>(
+                      find.descendant(
+                        of: find.byKey(const ValueKey('terminal-find-status')),
+                        matching: find.byType(Text),
+                      ),
+                    )
+                    .data ??
                 '')
             .trim();
 
@@ -462,7 +464,8 @@ void main() {
         tester.binding.focusManager.primaryFocus?.context
             ?.findAncestorWidgetOfExactType<TerminalFindBar>(),
         isNotNull,
-        reason: 'the keyboard is still the field’s after the terminal was replaced',
+        reason:
+            'the keyboard is still the field’s after the terminal was replaced',
       );
 
       await search(tester, 'marker');
@@ -500,9 +503,14 @@ void main() {
       raiseKeyboard(tester);
       await frames(tester);
 
-      final screen = tester.view.physicalSize.height / tester.view.devicePixelRatio;
-      final keyboard = tester.view.viewInsets.bottom / tester.view.devicePixelRatio;
-      expect(tester.getBottomLeft(bar()).dy, moreOrLessEquals(screen - keyboard, epsilon: 1));
+      final screen =
+          tester.view.physicalSize.height / tester.view.devicePixelRatio;
+      final keyboard =
+          tester.view.viewInsets.bottom / tester.view.devicePixelRatio;
+      expect(
+        tester.getBottomLeft(bar()).dy,
+        moreOrLessEquals(screen - keyboard, epsilon: 1),
+      );
 
       lowerKeyboard(tester);
       await frames(tester);
@@ -1409,8 +1417,9 @@ void main() {
           matching: find.byWidgetPredicate(
             (widget) =>
                 widget is Text &&
-                (widget.data ?? widget.textSpan?.toPlainText() ?? '')
-                    .contains('…'),
+                (widget.data ?? widget.textSpan?.toPlainText() ?? '').contains(
+                  '…',
+                ),
           ),
         ),
         findsNothing,
@@ -1639,6 +1648,11 @@ void main() {
       // it instead, with Enter on its strip.
       expect(find.bySemanticsLabel(RegExp('^Answer ')), findsNothing);
       expect(find.byKey(const ValueKey('terminal-key-Enter')), findsOneWidget);
+      // The strip scrolls: swiped to, as a thumb would.
+      await tester.ensureVisible(
+        find.byKey(const ValueKey('terminal-key-Enter')),
+      );
+      await tester.pump();
       await tester.tap(find.byKey(const ValueKey('terminal-key-Enter')));
       await frames(tester);
       expect(focus.typed, contains('\r'));
@@ -1811,6 +1825,11 @@ void main() {
     raiseKeyboard(tester);
     await frames(tester);
     focus.typed.clear();
+    // The strip scrolls: swiped to, as a thumb would.
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('terminal-key-Newline')),
+    );
+    await tester.pump();
     await tester.tap(find.byKey(const ValueKey('terminal-key-Newline')));
     await frames(tester);
     // What a hardware ⌥⏎ sends — never the bare Return that submits.
@@ -2343,36 +2362,39 @@ void main() {
       await tester.pump(const Duration(seconds: 30));
     });
 
-    testWidgets('its machine away: says why, and no spinner promises anything', (
+    testWidgets(
+      'its machine away: says why, and no spinner promises anything',
+      (tester) async {
+        setPhone(tester, largePhone);
+        final app = edgeApp(online: false);
+        final session = await liveTerminal(app, 'a');
+        await tester.pumpWidget(
+          phoneApp(
+            TerminalPage(
+              notifier: app,
+              machineId: 'm',
+              agentId: 'a',
+              voice: edgeVoice().voice,
+            ),
+          ),
+        );
+        await session.reopen(force: true);
+        // One frame to rebuild on the reopen, then longer than the spinner's beat.
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 400));
+
+        expect(reconnecting(), findsNothing);
+        expect(find.textContaining('is offline'), findsOneWidget);
+        await tester.pumpWidget(const SizedBox());
+        await tester.pump(const Duration(seconds: 3));
+        app.dispose();
+        await tester.pump(const Duration(seconds: 30));
+      },
+    );
+
+    testWidgets('with animations off, the spinner stands still', (
       tester,
     ) async {
-      setPhone(tester, largePhone);
-      final app = edgeApp(online: false);
-      final session = await liveTerminal(app, 'a');
-      await tester.pumpWidget(
-        phoneApp(
-          TerminalPage(
-            notifier: app,
-            machineId: 'm',
-            agentId: 'a',
-            voice: edgeVoice().voice,
-          ),
-        ),
-      );
-      await session.reopen(force: true);
-      // One frame to rebuild on the reopen, then longer than the spinner's beat.
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 400));
-
-      expect(reconnecting(), findsNothing);
-      expect(find.textContaining('is offline'), findsOneWidget);
-      await tester.pumpWidget(const SizedBox());
-      await tester.pump(const Duration(seconds: 3));
-      app.dispose();
-      await tester.pump(const Duration(seconds: 30));
-    });
-
-    testWidgets('with animations off, the spinner stands still', (tester) async {
       setPhone(tester, largePhone);
       final app = edgeApp();
       final session = await liveTerminal(app, 'a');
@@ -2398,7 +2420,11 @@ void main() {
       final spinner = tester.widget<CircularProgressIndicator>(
         find.byType(CircularProgressIndicator),
       );
-      expect(spinner.value, isNotNull, reason: 'a still ring, not a spinning one');
+      expect(
+        spinner.value,
+        isNotNull,
+        reason: 'a still ring, not a spinning one',
+      );
       await tester.pumpWidget(const SizedBox());
       await tester.pump(const Duration(seconds: 3));
       app.dispose();
