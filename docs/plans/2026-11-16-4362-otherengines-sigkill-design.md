@@ -83,3 +83,8 @@ Also left as they are (final review, 2026-11-16): in `otherEngines.e2e.ts` the f
 (`toContain` of the "gone" and "back" lines) are always true, because the killed-worker half already wrote those lines.
 Tightening them needs a polling wait. The refused-hook request in the same file has no timeout of its own (the test's
 timeout bounds it).
+
+Also open (fix-diff review, 2026-11-16): when the reader's one wait gives up after five failures in a row
+(`otherStreams.ts` `wait`, `++failed === 5`) while its worker stays connected, its streams stay held until another
+session opens a stream or the worker reconnects. Before this branch a discovery pass rescued those rows by reading
+their history again. The proper fix is for the wait to start again by itself, which is outside this pull request.
