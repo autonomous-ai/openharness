@@ -212,8 +212,11 @@ master too old to run it starts it beside itself, still in its own process (`src
   first is told as a notice. What a local tool tells the devices (first the app in front, from `harness hardware
   watch`) goes to their own listener (src/services/devicesListener.ts), never through the core: a new message is a
   handler registered there by its type, with its own body and rate limits, beside `front`, `tab` and the mod's
-  `attach`, the session the Claude app shows (src/services/devices.ts). The one handler of a second kind is `tabs`: a
-  stream it holds open, one across every connection, on which the devices tell the watch which terminal tab to select.
+  `attach`, the session the Claude app shows (src/services/devices.ts). A handler of a second kind holds a stream open,
+  one of its type across every connection, and is told when the stream can take a line (`onWritable`) and why it
+  ended (`StreamEnd`): on `tabs` the devices tell the watch which terminal tab to select; on `dial` (`dialStream`),
+  opened with `standby` so it never takes the stream from another Orca, they tell Orca's Harness Device plugin
+  (plugins/harness-device-orca) whether a dial is attached and which agent it shows.
   Which path: a route of the core's local door, where the core checks who calls (the account's, the Wi-Fi device's,
   the add-ons'), is a `SERVICE_HTTP_ROUTES` route (above); what a tool on this computer tells the devices alone is a
   message on their listener, which the core never routes or reads.
