@@ -7,6 +7,7 @@ import { runGrokOneShot, runRouterOneShot } from './oneshot.js'
 
 // What an engine prints when it fails can echo its prompt (the spoken task, agent names), and these
 // errors reach the logs: they carry what failed and how much stderr, never the text.
+// The fake engines are sh scripts, which Windows cannot run; the errors are built the same on every platform.
 describe.skipIf(process.platform === 'win32')('a failed one-shot', () => {
   const dir = mkdtempSync(join(tmpdir(), 'oneshot-failure-'))
   afterAll(() => rmSync(dir, { recursive: true, force: true }))
@@ -31,6 +32,7 @@ describe.skipIf(process.platform === 'win32')('a failed one-shot', () => {
   it.each([
     ['claude', (bin: string) => { env.CLAUDE_PATH = bin }],
     ['codex', (bin: string) => { process.env.CODEX_PATH = bin }],
+    ['cursor', (bin: string) => { env.CURSOR_PATH = bin }],
     ['opencode', (bin: string) => { env.OPENCODE_PATH = bin }],
     ['kilo', (bin: string) => { env.KILO_PATH = bin }],
     ['pi', (bin: string) => { env.PI_PATH = bin }],
