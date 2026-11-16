@@ -230,6 +230,7 @@ while the desktop app runs (it has its own `HarnessStatusMenu`).
 | **Install** | when "Harness removed", or when an install failed and its window was closed (the dial line then stays "Setting up Harness") |
 | Account | "Signed in" (disabled), or **Sign in…** |
 | Claude Code | as above; absent when not supported or installed |
+| **Sound** (check item) | only while Harness runs and the dial is attached, not updating, and reports its settings; checked when the dial's sound is on ([design](2026-11-16-device-app-sound-design.md)) |
 | separator | |
 | **Open Harness** | when the desktop app is installed (`open -b ai.autonomous.harness`) |
 | **Quit** | quits the app; the daemon keeps running |

@@ -223,6 +223,12 @@ impl App {
                 MenuAction::ClaudeOff => {
                     self.set_claude(false, effects);
                 }
+                MenuAction::SoundOn | MenuAction::SoundOff => {
+                    effects.push(Effect::SetSound(action == MenuAction::SoundOn));
+                    // A native check item flips its own check when clicked: the menu drawn again puts it back
+                    // where the dial is, and the dial's next status line moves it.
+                    effects.push(Effect::Menu(self.menu.clone()));
+                }
                 MenuAction::OpenHarness => effects.push(Effect::OpenDesktop),
                 MenuAction::Quit => {
                     self.stop_watch(effects);
@@ -482,10 +488,24 @@ mod tests {
         items
             .iter()
             .filter_map(|item| match item {
-                MenuItem::Text(label) | MenuItem::Action(_, label) => Some(label.clone()),
+                MenuItem::Text(label) | MenuItem::Action(_, label) | MenuItem::Check(_, label, _) => {
+                    Some(label.clone())
+                }
                 MenuItem::Separator => None,
             })
             .collect()
+    }
+
+    /// The items of the last menu sent.
+    fn menu_of(effects: &[Effect]) -> Vec<MenuItem> {
+        effects
+            .iter()
+            .rev()
+            .find_map(|effect| match effect {
+                Effect::Menu(items) => Some(items.clone()),
+                _ => None,
+            })
+            .expect("a menu")
     }
 
     /// What the window was told to show, in order.
@@ -858,6 +878,7 @@ mod tests {
                 board: None,
                 updating: None,
                 problem: None,
+                muted: None,
             })
         };
 
@@ -882,6 +903,63 @@ mod tests {
     }
 
     #[test]
+    fn a_sound_click_asks_the_dial_and_draws_the_menu_again() {
+        let mut app = found();
+        let line = DialStatus {
+            attached: true,
+            fw: Some("0.0.95".into()),
+            hw: None,
+            board: None,
+            updating: None,
+            problem: None,
+            muted: None,
+        };
+        let menu = menu_of(&app.handle(Event::WatchLine(line)));
+        // Twice over: a click remembers nothing, so the same click gives the same effects.
+        for _ in 0..2 {
+            for (action, on) in [(MenuAction::SoundOff, false), (MenuAction::SoundOn, true)] {
+                assert_eq!(app.handle(Event::Menu(action)), [Effect::SetSound(on), Effect::Menu(menu.clone())]);
+            }
+        }
+    }
+
+    #[test]
+    fn the_check_follows_the_dial_not_the_click() {
+        let mut app = found();
+        let line = |muted| {
+            Event::WatchLine(DialStatus {
+                attached: true,
+                fw: Some("0.0.95".into()),
+                hw: None,
+                board: None,
+                updating: None,
+                problem: None,
+                muted: Some(muted),
+            })
+        };
+        let checks = |effects: &[Effect]| -> Vec<MenuItem> {
+            menu_of(effects).into_iter().filter(|item| matches!(item, MenuItem::Check(..))).collect()
+        };
+        let on = MenuItem::Check(MenuAction::SoundOff, "Sound".into(), true);
+        let off = MenuItem::Check(MenuAction::SoundOn, "Sound".into(), false);
+
+        let effects = app.handle(line(false));
+        assert_eq!(checks(&effects), vec![on.clone()]);
+        assert!(has(&effects, &Effect::Log("menu: Dial connected · 0.0.95 | Sound ✓ | Quit".into())));
+
+        // The click's own check flipped natively: the menu drawn again puts it back where the dial is.
+        let effects = app.handle(Event::Menu(MenuAction::SoundOff));
+        assert_eq!(checks(&effects), [on]);
+        assert!(!effects.iter().any(|effect| matches!(effect, Effect::Log(text) if text.starts_with("menu:"))));
+
+        let effects = app.handle(line(true));
+        assert_eq!(checks(&effects), [off]);
+        assert!(has(&effects, &Effect::Log("menu: Dial connected · 0.0.95 | Sound | Quit".into())));
+
+        assert!(checks(&app.handle(Event::WatchExit(Some(3)))).is_empty());
+    }
+
+    #[test]
     fn a_dial_line_changes_the_menu_and_the_log() {
         let mut app = found();
         let line = DialStatus {
@@ -891,6 +969,7 @@ mod tests {
             board: None,
             updating: None,
             problem: None,
+            muted: None,
         };
         let effects = app.handle(Event::WatchLine(line.clone()));
         assert_eq!(rows(&effects)[0], "Dial connected · 0.0.95");

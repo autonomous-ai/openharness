@@ -11,6 +11,8 @@ pub struct DialStatus {
     pub board: Option<String>,
     pub updating: Option<String>,
     pub problem: Option<String>,
+    /// The dial's sound setting; None from an older CLI or a firmware with no settings.
+    pub muted: Option<bool>,
 }
 
 /// harnessd, as the keep-alive last saw it.
@@ -101,15 +103,18 @@ pub enum MenuAction {
     SignIn,
     ClaudeOn,
     ClaudeOff,
+    SoundOn,
+    SoundOff,
     OpenHarness,
     Quit,
 }
 
-/// Text is a disabled line.
+/// Text is a disabled line. Check: the action a click does, the label, whether it is checked.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MenuItem {
     Text(String),
     Action(MenuAction, String),
+    Check(MenuAction, String, bool),
     Separator,
 }
 
@@ -166,6 +171,8 @@ pub enum Effect {
     RunLogin,
     CancelLogin,
     SetClaude(bool),
+    /// `true` turns the dial's sound on.
+    SetSound(bool),
     OpenUrl(String),
     OpenDesktop,
     RegisterLoginItem,
@@ -257,11 +264,20 @@ mod tests {
                 board: None,
                 updating: None,
                 problem: None,
+                muted: None,
             }
         );
         for line in [r#"{}"#, r#"{"error":"x"}"#, r#"{"attached":"yes"}"#] {
             assert!(serde_json::from_str::<DialStatus>(line).is_err(), "{line}");
         }
+    }
+
+    #[test]
+    fn a_status_line_carries_muted() {
+        let muted = |line: &str| serde_json::from_str::<DialStatus>(line).map(|status| status.muted);
+        assert_eq!(muted(r#"{"attached":true,"muted":true}"#).unwrap(), Some(true));
+        assert_eq!(muted(r#"{"attached":true}"#).unwrap(), None);
+        assert!(muted(r#"{"attached":true,"muted":"yes"}"#).is_err());
     }
 
     #[test]
