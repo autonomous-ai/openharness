@@ -162,3 +162,54 @@ other functional work and are not performance acceptance. The POSIX ownership
 shim explicitly skips Windows, bounds its fixture subprocess waits, and uses
 private repositories, homes and tmux. Final extracted-source ownership and
 kill/restart cases remain pending.
+
+## Final combined acceptance, 16 November
+
+The shared frame publisher and Git producer are accepted together. Clean source
+`87973e8cb24807a16688e15f47060130b3343278` passed independent review, TypeScript,
+the core (4,856), harnessd (371), portability (1,069), PTY (14) and Resume (484)
+gates, with required per-file coverage at 100%. Existing skips remain reported.
+There are 150 boundary/launch/frame checks and 29 passing native cases across
+workspaces facts, process failures, folders, creation and forks. The original
+parked-service assertion expected an obsolete core Git probe; its corrected
+placeholder check also verifies the repository's actual branch is unchanged.
+The original 28/29 run remains in the receipt. Two setup/cleanup fixture failures
+were corrected with bounded asynchronous cleanup and a separate cold-import
+deadline; no product deadline or behavior assertion was weakened.
+
+Fixed costs compare Browser/input baseline `ab5e73f1` with runtime `13b2766e`.
+Final `87973e8c` changes only three fixtures and history Design wording. Integration
+of Browser `63003849` changes only a trailing blank line and documentation plus
+main's already-validated Windows fixture. No production behavior changes after
+the frozen cost source. The shared frame foundation's earlier CPU/RSS regression
+remains recorded; these results accept the coherent frame/Git extraction, not
+that foundation alone.
+
+All 48 micro samples pass: eight pairs at each of 32, 128 and 512 rows, 100,000
+complete projections after 10,000 warmups. Every pair's bytes/digest match.
+Median paired projection CPU falls 54.6%, 56.4% and 56.3%; natural peak RSS falls
+25.1%, 41.0% and 51.0%. These use cheap warmed probe/history stubs and exclude
+process launch, filesystem, IPC and history serialization; they are not whole
+daemon cost measurements.
+
+Four native ABBA runs each use ten private agents and 60 list requests, with
+stable process identities, output drainage and awaited cleanup. All pass:
+
+| Native metric | Baseline median | Extracted median |
+| --- | ---: | ---: |
+| Core CPU | 865 ms | 765 ms |
+| Edge CPU | 20 ms | 70 ms |
+| Core + edge CPU | 885 ms | 835 ms |
+| Core sampled peak RSS | 144.09 MiB | 138.18 MiB |
+| Core + edge sampled peak RSS | 219.59 MiB | 215.25 MiB |
+| List p50 / p95 | 3 / 28 ms | 3 / 3 ms |
+| Tracked Git/SSH children, core / edge | 32 / 0 | 0 / 32 |
+
+No retries or forced GC were used. CPU names only core/edge, excluding child
+tools and other services. Two runs per side on this workload do not establish a
+universal latency claim. Native proof is macOS x64 / Node 24.22.2; the ownership
+shim skips Windows, and native Linux/Windows remain unverified. Automatic Linux
+PR checks and final merge are still required. Receipt:
+`/tmp/core-git-frame-final-acceptance.json`, SHA-256
+`fcc840738a8c43180c59fe905aa3bc9dce6b4567f6ce1888e0634247cd6532a4`.
+This closes the frame/Git implementation step after CI/merge; Browser streams,+wake policy and harness-index/manifest extraction remain separate work.

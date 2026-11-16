@@ -169,3 +169,9 @@ Parent owns broader gates, real daemon flows, supported-platform checks and matc
 claimed complete by this task. Stream relay and generic Browser wake remain the separately planned extraction. The
 Viewers process still uses its existing dated catch-up adapter; consolidation onto `followLink` is not bundled with
 this frame-parts change.
+
+The final combined frame/Git acceptance is recorded in
+[Git facts outside the core](2026-11-16-git-frame-facts.md#final-combined-acceptance-16-november).
+It includes the required broader gates, native failure/ownership proofs and both
+micro and native before/after costs. Earlier standalone frame-parts regressions
+remain failed comparisons; the accepted implementation includes its Git producer.
