@@ -417,8 +417,9 @@ describe('the devices write the dial skill', () => {
     r.writer.scanned([ownerIn(fresh)])
     r.writer.scanned([ownerIn(fresh)])
 
-    expect(existsSync(skillFile(r.codexHome))).toBe(false)
-    expect(existsSync(skillFile(fresh))).toBe(false)
+    // Not even an empty skills folder.
+    expect(existsSync(join(r.codexHome, 'skills'))).toBe(false)
+    expect(existsSync(join(fresh, 'skills'))).toBe(false)
     expect(readHomes(dataDir).codex.length).toBe(MAX_HOMES)
     expect(r.lines.filter((line) => line === 'dial skill: codex list full (64)')).toHaveLength(1)
   })
