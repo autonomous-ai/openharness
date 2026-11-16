@@ -1376,7 +1376,10 @@ export class CableSession {
             // screen. A repeat greeting from the same dial on the same image is a keepalive and is skipped,
             // which is the whole reason the branch exists.
             await this.pushAgents()
-          } finally { this.greeting = false }
+          } finally {
+            // Still greeting: the push failed before its walk of the open questions, so the ones it held are asked now.
+            if (this.greeting) await this.resendQuestions()
+          }
           const focused = this.host.appFocus?.(this.asItself)
           if (focused) await this.followApp(focused.machineId, focused.agentId)
         }
@@ -3222,8 +3225,12 @@ export class CableSession {
     if (this.link !== link || this.stopped) return
     // Reading clears the notice, not the underlying question. Versioned clears
     // cannot eat a newer turn whose history happened to take longer to load.
-    await this.send({ t: 'notif.replace', items: rows.filter(row =>
-      (row.question || !replay.seen.has(row.agentId)) && !replay.seen.has(`${row.agentId}\0${row.readToken}`)) })
+    const drawer = rows.filter(row =>
+      (row.question || !replay.seen.has(row.agentId)) && !replay.seen.has(`${row.agentId}\0${row.readToken}`))
+    // The dial keeps a question as a row of this drawer: one the new drawer does not carry is gone from it, and its next
+    // ask (the core's, as the devices reconnect) is sent. Before the frame, so an ask that overtakes it stays marked.
+    this.questionInbox.forget(new Set(drawer.filter((row) => row.question).map((row) => row.agentId)))
+    await this.send({ t: 'notif.replace', items: drawer })
   }
 
   /**
