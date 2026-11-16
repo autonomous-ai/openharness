@@ -113,16 +113,10 @@ export function createDialSkillWriter(deps: DialSkillWriterDeps): DialSkillWrite
       turnOff(engine, counts)
       return 'off'
     }
-    const skills = skillsFolderOf(home, true, deps.uid)
-    if (!skills) return 'refused'
-    // Through its link the folder can be one no list holds: written, it would be one a Turn off never finds.
-    if (!listable(skills)) {
-      sayOnce('shape', 'dial skill: path refused (shape)')
-      return 'refused'
-    }
+    const found = skillsFolderOf(home, false, deps.uid)
     // Homes linked to one skills folder (an Orca profile's) are one write, listed once.
-    if (listed[engine].includes(skills)) {
-      const result = writeSkill(skills)
+    if (found !== null && listed[engine].includes(found)) {
+      const result = writeSkill(found)
       if (result === 'written') counts[engine].wrote++
       if (result === 'failed') return 'refused'
       return result === 'written' && !stillOn(engine, counts) ? 'off' : 'done'
@@ -132,6 +126,14 @@ export function createDialSkillWriter(deps: DialSkillWriterDeps): DialSkillWrite
     listed[engine] = listed[engine].filter((folder) => ownDirectory(folder, deps.uid) !== 'missing')
     if (listed[engine].length >= MAX_HOMES) {
       sayOnce(`full ${engine}`, `dial skill: ${engine} list full (${MAX_HOMES})`)
+      return 'refused'
+    }
+    // Made only now: a home the list has no room for gets no empty folder either.
+    const skills = found ?? skillsFolderOf(home, true, deps.uid)
+    if (!skills) return 'refused'
+    // Through its link the folder can be one no list holds: written, it would be one a Turn off never finds.
+    if (!listable(skills)) {
+      sayOnce('shape', 'dial skill: path refused (shape)')
       return 'refused'
     }
     const result = writeSkill(skills)
