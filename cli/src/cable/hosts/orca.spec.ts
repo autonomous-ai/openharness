@@ -41,7 +41,7 @@ interface Call { file: string; args: string[]; timeoutMs: number }
 function createOrcaActions(deps: OrcaDeps) {
   const adapter = createOrcaAdapter(deps)
   return {
-    send: (handle: string, text: string) => adapter.type({ adapter: 'orca', id: handle }, text),
+    send: (handle: string, text: string) => adapter.type({ adapter: 'orca', id: handle }, text, 'claude'),
     switchTo: (handle: string) => adapter.show({ adapter: 'orca', id: handle }, 'a1'),
   }
 }
@@ -372,7 +372,7 @@ describe('Orca adapter', () => {
     expect(pane).toEqual({ adapter: 'orca', id: HANDLE })
     expect(await focus(pane)).toBe(true)
     expect(await show(pane, 'a1')).toBe('ok')
-    expect(await type(pane, 'hi')).toBe(true)
+    expect(await type(pane, 'hi', 'claude')).toBe(true)
     expect(calls.map((call) => call.args[1])).toEqual(['switch', 'switch', 'send'])
   })
 })
