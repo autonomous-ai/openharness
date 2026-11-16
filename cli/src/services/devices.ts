@@ -370,13 +370,16 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const herdrNoted = noting(herdrAdapter)
   /** Herdr's adapter as the dial's verbs reach it: a tap or a rest on an agent hc lists (below) is the dial's own move. */
   const herdrAppNoted = noting(herdrApp)
+  /** Each Orca terminal's worktree, by handle, from the latest layout read that landed (below): a rest's or a tap's
+   *  switch activates it first. */
+  let orcaWorktrees: ReadonlyMap<string, string> = new Map()
   /** The apps an outside agent runs in, in the order its panes are kept: each verb of the dial takes the first that can.
    *  The nearest host first: a multiplexer keeps the environment it started in, so in a tmux pane WezTerm's and Orca's
    *  values name the terminal the tmux server began in, and herdr inside tmux carries tmux's pane. Herdr comes after
    *  tmux, as a tmux inside an hc terminal is the nearer host, and before the terminals: hc tells its programs they run
    *  in Ghostty, whose tabs hold none of them. */
   const tmux = noting(createTmuxAdapter({ run: apps.run, processes: readProcessNames, log }))
-  const orca = createOrcaAdapter(apps)
+  const orca = createOrcaAdapter(apps, { worktreeOf: (handle) => orcaWorktrees.get(handle), log })
   const adapters: readonly HostAdapter[] = [herdrNoted, tmux, herdrAppNoted, ...[
     createWeztermAdapter(apps),
     // A rest's or a tap's switch: Orca's focus line for that pane, a moment later, is the dial's own echo.
@@ -1035,6 +1038,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       if (ring !== orcaRing) return
       if (listed === null) { log('[device] orca order · failed'); return }
       log('[device] orca order · read')
+      orcaWorktrees = listed.worktrees
       const place = new Map(listed.tabs.map(({ handle }, at) => [handle, at]))
       const placed = placeInOrca(source, listed.terminals)
       const rank = new Map<string, number>()

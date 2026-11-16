@@ -690,7 +690,7 @@ describe('whether Orca watches focus', () => {
       [{ stdout: HELP_WATCH }, { stdout: listed(group(tab(leaf(1)))) }],
     )
     expect(await app.orca.orcaWatchesFocus()).toBe(true)
-    expect(await app.orca.orcaTabs()).toEqual({ tabs: [{ handle: H(1), title: 'made up' }], terminals: [] })
+    expect(await app.orca.orcaTabs()).toEqual({ tabs: [{ handle: H(1), title: 'made up' }], terminals: [], worktrees: new Map([[H(1), 'w0']]) })
     app.orca.watchOrcaFocus(() => {})
     expect(app.calls.map((call) => call.file)).toEqual([APP_ORCA, APP_ORCA])
     expect(app.spawned.map((child) => child.file)).toEqual([APP_ORCA])

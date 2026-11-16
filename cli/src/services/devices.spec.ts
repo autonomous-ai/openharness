@@ -6403,7 +6403,7 @@ describe('the dial follows the pane focused in Orca (docs/plans/2026-11-16-dial-
       readers.apps.mockResolvedValueOnce(new Map([[4243, 'orca']]))
       seen.host.watching!(true)
       await settled()
-      const read = { tabs: [{ handle: H(3) }, { handle: H(4) }], terminals: [3, 4].map((n) => ({ handle: H(n), worktreePath: '/work/api', agentIdentity: 'claude' })) }
+      const read = { tabs: [{ handle: H(3) }, { handle: H(4) }], terminals: [3, 4].map((n) => ({ handle: H(n), worktreePath: '/work/api', agentIdentity: 'claude' })), worktrees: new Map() }
       for (let i = 0; i < 2; i++) {
         fake.orders.at(-1)!(read)
         await settled()

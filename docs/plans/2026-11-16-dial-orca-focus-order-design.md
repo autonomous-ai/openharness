@@ -91,6 +91,18 @@ types (1.4.256's bundle): a group tree is `group` or `split`, a pane tree `termi
   line (a line over 512 bytes is dropped, as is one that does not parse), and calls `onHandle(handle | null)` with a
   checked handle or null; any other value is dropped. Returns a stop that kills the child (SIGKILL after 1 s of SIGTERM)
   and an `ended` promise. stderr is drained and never logged (it can name paths).
+- **A rest's or a tap's switch activates the worktree first** (PM, 2026-11-16, after Diego's dial check on Orca
+  1.4.256: `orca terminal switch` exited 0, yet some panes showed only once he pressed Back). `terminal switch` runs
+  only Orca's light reveal (`revealWorkspaceSurface`); Back runs the full activation (`activateAndRevealWorkspace`),
+  which wakes or reseeds a parked or sleeping session, and so does `orca worktree activate`. So the switch runs
+  `orca worktree activate --worktree id:<worktreeId> --json`, then `orca terminal switch --terminal <handle> --json`,
+  strictly in that order, a placed terminal's too. The id comes from the same layout read: `orcaTabs()` gives each
+  terminal's worktree, its layout's `worktreeId`, else its `terminals` row's, at most 256; an id that is no string,
+  empty, past 4160 characters or with a control character is none. It is one argument (`id:` and Orca's own id, a uuid,
+  `::` and a folder), never a shell's. The devices keep the latest landed read's and hand the adapter a lookup. No id
+  known: the switch alone. An activate that fails, throws or times out still lets the switch run, whose outcome is the
+  answer, and logs one line. The per-handle dedupe and the busy-while-typing rule cover the two commands as one; words
+  never activate.
 
 ### 2. Focus follow (devices process)
 
@@ -172,7 +184,8 @@ Log lines, outcomes only, never a handle, an agent, a title or a path:
 - `[device] focus · moved`, `[device] focus · skipped · echo | unknown agent | no tile | not in front`;
 - `[device] orca watch · started | unsupported | ended`;
 - `[device] prompt · skipped · focus followed`;
-- `[device] orca order · read | failed` (the same read names the agents).
+- `[device] orca order · read | failed` (the same read names the agents);
+- `[device] orca activate · failed`.
 
 ## Out of scope
 
@@ -184,6 +197,8 @@ on a tab drag with no member change; the Claude app, Terminal and other apps' ri
 - **Upstream Orca:** list `visualLayouts` in the sidebar's worktree order (or give each layout the sidebar's index), so
   the ring's order across worktrees matches what the person sees. Diego decides whether to propose it.
 - **Upstream Orca:** stablyai/orca#42555 merged and released: the dial check of (A) on a real Orca.
+- **Upstream Orca:** `terminal switch` runs only the light reveal (`revealWorkspaceSurface`); it should run the full
+  activation, or offer `--reveal`, so one command shows the pane. Note only, no PR/issue.
 
 ## Done when
 

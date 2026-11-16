@@ -4,7 +4,7 @@
  * argument, never a command line. Nothing here polls Orca. Orca itself comes forward as every app does (open.ts).
  *
  * Beside them, three reads of Orca's CLI (createOrcaReads): whether it has `watch-focus`, the terminals in tab order with
- * the agents Orca saw in them, and a watch of the focused terminal (docs/plans/2026-11-16-dial-orca-focus-order-design.md).
+ * the agents Orca saw in them and their worktrees, and a watch of the focused terminal (docs/plans/2026-11-16-dial-orca-focus-order-design.md).
  */
 import { type ChildProcess, execFile, spawn } from 'node:child_process'
 import { existsSync, realpathSync, statSync } from 'node:fs'
@@ -113,12 +113,29 @@ function orcaBinary(deps: OrcaDeps): string | null {
   return deps.onPath('orca') ?? (deps.platform === 'darwin' && deps.exists(APP_ORCA) ? APP_ORCA : null)
 }
 
-function createOrcaActions(deps: OrcaDeps): { send(handle: string, text: string): Promise<boolean>; switchTo(handle: string): Promise<PaneSwitch> } {
+/** What a switch reads beside its deps: each terminal's worktree, by its id in Orca, from the latest layout read, and
+ *  where its outcome lines go. */
+export interface OrcaWorktrees {
+  worktreeOf(handle: string): string | undefined
+  log(line: string): void
+}
+
+const NO_WORKTREES: OrcaWorktrees = { worktreeOf: () => undefined, log: () => {} }
+
+function createOrcaActions(deps: OrcaDeps, worktrees: OrcaWorktrees): { send(handle: string, text: string): Promise<boolean>; switchTo(handle: string): Promise<PaneSwitch> } {
   // Per terminal, the switch under way: a second one is that same run. A swipe's rest runs a switch, and a tap 0.4 to 1 s
   // after it was refused as busy: on Linux the dial said Orca did not open the pane it had just shown.
   const switching = new Map<string, Promise<PaneSwitch>>()
   // Per terminal, the words being typed or waiting to be: two transcripts typed at once would mix in its prompt.
   const sending = new Set<string>()
+  // `terminal switch` (Orca 1.4.256) only reveals the worktree, lightly: a parked or sleeping session showed once the
+  // person pressed Back, which runs the full activation `worktree activate` runs. Its failure, a throw or a timeout too,
+  // still lets the switch run. The id is one argument, never a shell's.
+  const activate = async (orca: string, worktreeId: string): Promise<void> => {
+    const { code } = await deps.run(orca, ['worktree', 'activate', '--worktree', `id:${worktreeId}`, '--json'], RUN_TIMEOUT_MS)
+      .catch(() => ({ code: null }))
+    if (code !== 0) worktrees.log('[device] orca activate · failed')
+  }
 
   return {
     async send(handle, text) {
@@ -139,7 +156,8 @@ function createOrcaActions(deps: OrcaDeps): { send(handle: string, text: string)
         sending.delete(handle)
       }
     },
-    // Picks the terminal inside Orca. Words being typed there make it busy: it runs nothing and queues nothing.
+    // Picks the terminal inside Orca, its worktree activated first when the latest read named it. Words being typed there
+    // make it busy: it runs nothing and queues nothing.
     async switchTo(handle) {
       if (!ORCA_HANDLE.test(handle)) return 'failed'
       const under = switching.get(handle)
@@ -147,7 +165,9 @@ function createOrcaActions(deps: OrcaDeps): { send(handle: string, text: string)
       if (sending.has(handle)) return 'busy'
       const orca = orcaBinary(deps)
       if (!orca) return 'failed'
-      const run = deps.run(orca, ['terminal', 'switch', '--terminal', handle, '--json'], RUN_TIMEOUT_MS)
+      const switched = () => deps.run(orca, ['terminal', 'switch', '--terminal', handle, '--json'], RUN_TIMEOUT_MS)
+      const worktreeId = worktrees.worktreeOf(handle)
+      const run = (worktreeId === undefined ? switched() : activate(orca, worktreeId).then(switched))
         .then(({ code }): PaneSwitch => (code === 0 ? 'ok' : 'failed'))
         .finally(() => switching.delete(handle))
       switching.set(handle, run)
@@ -157,8 +177,8 @@ function createOrcaActions(deps: OrcaDeps): { send(handle: string, text: string)
 }
 
 /** An Orca terminal, by its handle: words are typed there, and a rest or a tap switches to it before Orca comes forward. */
-export function createOrcaAdapter(deps: OrcaDeps): HostAdapter & Required<Pick<HostAdapter, 'show' | 'type'>> {
-  const orca = createOrcaActions(deps)
+export function createOrcaAdapter(deps: OrcaDeps, worktrees: OrcaWorktrees = NO_WORKTREES): HostAdapter & Required<Pick<HostAdapter, 'show' | 'type'>> {
+  const orca = createOrcaActions(deps, worktrees)
   return {
     id: 'orca',
     tap: 'before',
@@ -203,6 +223,8 @@ export interface OrcaTabs {
   tabs: OrcaTab[]
   /** The terminals Orca lists an agent in, laid out or not. */
   terminals: OrcaTerminal[]
+  /** Each terminal's worktree, by its id in Orca, for the activation before a switch. */
+  worktrees: ReadonlyMap<string, string>
 }
 
 export interface OrcaReads {
@@ -226,6 +248,10 @@ const MAX_FOCUS_LINE = 512
 // row of Orca's.
 const MAX_PATH = 4096
 const MAX_IDENTITY = 64
+// A worktree's id is Orca's repo uuid, `::` and the worktree's folder: one past a folder's bound and 64 more is no id of
+// Orca's. It is passed to `orca` as an argument, so none holds a control character.
+const MAX_WORKTREE_ID = MAX_PATH + 64
+const CONTROL_CHAR = /\p{Cc}/u
 /** How long a stopped watch has to go before it is killed. */
 const STOP_KILL_MS = 1000
 
@@ -248,7 +274,7 @@ function listsWatchFocus(help: string): boolean {
 /** The handles of `orca terminal list`'s layouts in tab order, each with its tab's title: worktrees as listed, then by
  *  group, tab and pane, each split `first`, then `second`. A node of a type it does not know ends its branch; a handle
  *  named twice keeps its first place and title. A title is outside text, held to what a hook's is (observedTitle). */
-function tabOrder(listed: unknown): OrcaTab[] {
+function tabOrder(listed: unknown, worktrees: Map<string, string>): OrcaTab[] {
   const tabs = new Map<string, OrcaTab>()
   // A tab's panes: `terminal` leaves and `pane-split`s, gathered with their own titles, the programs' in them.
   const panes = (node: unknown, depth: number, leaves: Array<{ handle: unknown; title: string | undefined }>): void => {
@@ -283,9 +309,33 @@ function tabOrder(listed: unknown): OrcaTab[] {
   }
   const layouts = isObject(listed) && isObject(listed.result) ? listed.result.visualLayouts : undefined
   if (Array.isArray(layouts)) {
-    for (const layout of layouts.slice(0, MAX_WORKTREES)) if (isObject(layout)) groups(layout.root, 1)
+    for (const layout of layouts.slice(0, MAX_WORKTREES)) {
+      if (!isObject(layout)) continue
+      const from = tabs.size
+      groups(layout.root, 1)
+      const worktreeId = worktreeIdOf(layout.worktreeId)
+      if (worktreeId !== undefined) for (const handle of [...tabs.keys()].slice(from)) worktrees.set(handle, worktreeId)
+    }
   }
   return [...tabs.values()]
+}
+
+/** A worktree id as Orca prints it, or none: outside text that becomes an argument. */
+function worktreeIdOf(value: unknown): string | undefined {
+  return typeof value === 'string' && value !== '' && value.length <= MAX_WORKTREE_ID && !CONTROL_CHAR.test(value) ? value : undefined
+}
+
+/** To the layouts' worktrees, those of the flat `terminals` rows laid out nowhere, a shell's too, up to 256 terminals in
+ *  all. A list cut short still gives each row's: only placing an agent needs every row. */
+function rowWorktrees(listed: unknown, worktrees: Map<string, string>): void {
+  const rows = isObject(listed) && isObject(listed.result) ? listed.result.terminals : undefined
+  if (!Array.isArray(rows)) return
+  for (const row of rows.slice(0, MAX_HANDLES)) {
+    if (worktrees.size === MAX_HANDLES) return
+    if (!isObject(row) || typeof row.handle !== 'string' || !ORCA_HANDLE.test(row.handle) || worktrees.has(row.handle)) continue
+    const worktreeId = worktreeIdOf(row.worktreeId)
+    if (worktreeId !== undefined) worktrees.set(row.handle, worktreeId)
+  }
 }
 
 /** The rows of `orca terminal list`'s flat `terminals` with an agent in them: a shell's has no `agentIdentity`. A handle
@@ -358,7 +408,10 @@ export function createOrcaReads(deps: OrcaReadDeps): OrcaReads {
       } catch {
         return null
       }
-      return { tabs: tabOrder(listed), terminals: agentTerminals(listed) }
+      const worktrees = new Map<string, string>()
+      const tabs = tabOrder(listed, worktrees)
+      rowWorktrees(listed, worktrees)
+      return { tabs, terminals: agentTerminals(listed), worktrees }
     },
 
     watchOrcaFocus(onHandle) {
