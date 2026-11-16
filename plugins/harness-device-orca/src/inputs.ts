@@ -1,7 +1,7 @@
 // What the loop reads of the world, so its tests can hand it their own. Nothing of `orca` is loaded here: the end to
 // end test runs this file outside Orca.
 import { execFile } from 'node:child_process'
-import { watch as watchFolder } from 'node:fs'
+import { watch as watchFolder, type FSWatcher } from 'node:fs'
 import { request, type IncomingMessage } from 'node:http'
 import { homedir } from 'node:os'
 
@@ -18,8 +18,9 @@ export interface DialInputs {
   run(file: string, args: readonly string[], bounds: { path: string; timeoutMs: number; maxBytes: number; signal: AbortSignal }): Promise<Ran>
   /** POST `body` to `/` on the Unix socket. Null when it cannot connect, or is aborted before the answer's head. */
   connect(socketPath: string, body: string, signal: AbortSignal): Promise<Answer | null>
-  /** `changed` gets the entry's name, or null where the platform gives none. Returns its close. */
-  watch(folder: string, changed: (name: string | null) => void): () => void
+  /** `changed` gets the entry's name, or null where the platform gives none. `failed` is told once if the watch cannot
+   *  start (before this returns) or stops on its own. Returns its close. */
+  watch(folder: string, changed: (name: string | null) => void, failed: () => void): () => void
   /** Monotonic milliseconds. */
   now(): number
   after(ms: number, run: () => void): () => void
@@ -56,14 +57,19 @@ export function nodeInputs(): DialInputs {
         req.end(body)
       })
     },
-    watch(folder, changed) {
+    watch(folder, changed, failed) {
+      let watcher: FSWatcher
       try {
-        const watcher = watchFolder(folder, (_event, name) => changed(name))
-        watcher.on('error', () => {})
-        return () => watcher.close()
+        watcher = watchFolder(folder, (_event, name) => changed(name))
       } catch {
+        failed()
         return () => {}
       }
+      watcher.on('error', () => {
+        watcher.close()
+        failed()
+      })
+      return () => watcher.close()
     },
     now: () => performance.now(),
     after(ms, run) {

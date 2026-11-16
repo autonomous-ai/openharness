@@ -43,6 +43,7 @@ export function startDial(inputs: DialInputs, tell: { changed(state: DialState):
   let nextAt = Infinity
   let cancelNext = () => {}
   let watching: { socket: string; close(): void } | null = null
+  let watchFailed = false
 
   function log(line: string): void {
     if (!stopped) tell.log(line)
@@ -99,12 +100,24 @@ export function startDial(inputs: DialInputs, tell: { changed(state: DialState):
     unwatch()
     if (socket === undefined) return
     const entry = basename(socket)
-    const close = inputs.watch(dirname(socket), (name) => {
-      if (name === null || name === entry) ask()
-    })
-    watching = { socket, close }
+    const held = { socket, close: () => {} }
+    watching = held
+    held.close = inputs.watch(
+      dirname(socket),
+      (name) => {
+        if (name === null || name === entry) ask()
+      },
+      () => {
+        // Unset, so the next pass, on the backoff, watches again.
+        if (watching !== held) return
+        watching = null
+        if (watchFailed) return
+        watchFailed = true
+        log('dial: watch unavailable')
+      }
+    )
     // A watch can start a moment after it returns (macOS) and miss what changed then: link is asked once more.
-    ask()
+    if (watching === held) ask()
   }
 
   function unwatch(): void {
