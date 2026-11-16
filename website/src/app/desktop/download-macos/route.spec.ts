@@ -56,6 +56,20 @@ describe("GET /desktop/download-macos", () => {
     expect(res.headers.get("Location")).toBeNull();
   });
 
+  // The browser collapses the dot segments, which would land in another bucket.
+  it("refuses a path that climbs out of the release folder", async () => {
+    manifest({
+      "desktop-macos-dmg": {
+        url: "https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/desktop/../../../attacker-bucket/evil.dmg",
+      },
+    });
+
+    const res = await GET();
+
+    expect(res.status).toBe(503);
+    expect(res.headers.get("Location")).toBeNull();
+  });
+
   it("refuses an asset that is not a dmg", async () => {
     const zip = "https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/desktop/1.0.47/Harness-macos.zip";
     manifest({ "desktop-macos-dmg": { url: zip } });

@@ -57,20 +57,28 @@ describe("GET /device/download-macos", () => {
   });
 
   // The manifest is input: a tampered one must not turn this link into someone else's binary, Desktop's,
-  // or the updater's archive.
+  // or the updater's archive. A browser normalises the Location it follows, so a dot segment in any
+  // spelling, a query or a fragment would leave the folder while the raw text still looks inside it.
   it("refuses anything outside its own folder", async () => {
     for (const url of [
       "https://evil.example/Harness-Device.dmg",
       "https://cdn.autonomous.ai/harness/desktop/1.2.3/Harness-macos.dmg",
       "https://cdn.autonomous.ai/harness/device/0.1.0/Harness-Device.app.tar.gz",
+      "https://cdn.autonomous.ai/harness/device/../desktop/1.0.81/Harness-macos.dmg",
+      "https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/device/../../../attacker-bucket/evil.dmg",
+      "https://cdn.autonomous.ai/harness/device/%2e%2e/desktop/1.0.81/Harness-macos.dmg",
+      "https://cdn.autonomous.ai/harness/device/..\\desktop/1.0.81/Harness-macos.dmg",
+      "https://cdn.autonomous.ai/harness/device/0.1.0/../../desktop/1.0.81/Harness-macos.dmg",
+      "https://cdn.autonomous.ai/harness/device/0.1.0/Harness-Device.app.tar.gz#.dmg",
+      "https://cdn.autonomous.ai/harness/device/0.1.0/Harness-Device.app.tar.gz?.dmg",
     ]) {
       manifest({ version: "0.1.0", platforms: {}, dmg: { url, sha256: "x", size: 1 } });
 
       const res = await GET();
 
-      expect(res.status).toBe(503);
-      expect(res.headers.get("Location")).toBeNull();
-      expect(await res.text()).toMatch(/\(no usable dmg entry\)\.\n$/);
+      expect(res.status, url).toBe(503);
+      expect(res.headers.get("Location"), url).toBeNull();
+      expect(await res.text(), url).toMatch(/\(no usable dmg entry\)\.\n$/);
     }
   });
 
