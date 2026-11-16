@@ -7,9 +7,10 @@
  *
  * hc starts a core as a one-shot launchd job named after the launching process, which hc removes as the core detaches:
  * no start keeps the core a child of the test (F2). So every start and stop is checked: no `dev.herdr.core.*` job before
- * and after, the private core's pids and socket gone after its own stop, and the person's own cores the same processes
- * throughout. A check that fails throws and names what it found, and no core starts after it in this run. Nothing here
- * ends a process: a private core that will not stop is left for a person to see, and named.
+ * and after, the private core's pids and socket gone after its own stop, and the person's own Herdr (their cores, the
+ * cores' holders, Herdr.app and its connections) the same processes throughout. A check that fails throws and names
+ * what it found, and no core starts after it in this run. Nothing here ends a process: a private core that will not
+ * stop is left for a person to see, and named.
  *
  * Its agent is Node, run by hc with no shell (a shell's return clears the status, F7). It reports `idle` as Claude Code
  * (`claude-code`) once it listens on a socket of its own under the root, and then each word written to that socket as
@@ -39,8 +40,10 @@ export const hcBinary: string | null = (() => {
 const SETTLE_MS = 30_000
 /** The label prefix of hc's one-shot launchd job (F2). */
 const JOB = /^dev\.herdr\.core\./
-/** A core as launchd runs it, the person's or ours: `herdr-core --hc-launchd /tmp/hc-launchd-…/ready`. */
-const CORE = /herdr-core --hc-launchd /
+/** Herdr's processes, as `ps` prints their command lines: a core as launchd runs it (`herdr-core --hc-launchd
+ *  /tmp/hc-launchd-…/ready`), a core's holder (`herdr-core hold --socket …`), Herdr.app, and Herdr.app's own
+ *  `herdr-core connect`. */
+const HERDR = /herdr-core (--hc-launchd|hold|connect)( |$)|\/Herdr\.app\/Contents\/MacOS\/Herdr( |$)/
 
 const AGENT = `import { createServer } from 'node:net'
 const say = (state) => process.stdout.write('\\x1b]7501;state=' + state + ':app=claude-code\\x1b\\\\')
@@ -74,11 +77,13 @@ process.stdin.on('end', () => process.exit(0))
 export interface PlannedHc { session: string; socket: string; root: string }
 type Status = 'idle' | 'working' | 'blocked' | 'done' | 'error'
 
-/** The first safety check that failed in this run: no core starts after it. */
+/** The first safety check that failed in this run: no core starts after it. Each check that fails throws its own
+ *  finding, so a core a later stop left running is named too. */
 let refused: Error | undefined
 const refuse = (why: string): never => {
-  refused ??= new Error(`a private Herdr Core's safety check failed, and no core starts after it: ${why}`)
-  throw refused
+  const failed = new Error(`a private Herdr Core's safety check failed, and no core starts after it: ${why}`)
+  refused ??= failed
+  throw failed
 }
 
 /** The launchd jobs hc names, as `launchctl list` prints them: `launchctl` is run for its list and nothing else. */
@@ -98,17 +103,17 @@ async function processes(): Promise<Map<number, string>> {
   return out
 }
 
-/** The person's own cores, the default session's among them, as they ran before this run's first start. */
+/** The person's own Herdr, the default session's core among it, as it ran before this run's first start: no private
+ *  core runs yet. */
 let theirs: Map<number, string> | undefined
-const ours = new Set<number>()
-async function cores(): Promise<Map<number, string>> {
-  return new Map([...await processes()].filter(([pid, command]) => CORE.test(command) && !ours.has(pid)))
+async function herdrs(): Promise<Map<number, string>> {
+  return new Map([...await processes()].filter(([, command]) => HERDR.test(command)))
 }
-/** The person's cores are the same processes they were. */
+/** The person's own Herdr is the same processes it was. */
 async function theirsUnchanged(when: string): Promise<void> {
   const now = await processes()
   for (const [pid, command] of theirs ?? []) {
-    if (now.get(pid) !== command) refuse(`the person's own Herdr Core (pid ${pid}) is not the process it was, ${when}`)
+    if (now.get(pid) !== command) refuse(`the person's own Herdr (pid ${pid}) is not the process it was, ${when}`)
   }
 }
 
@@ -128,26 +133,24 @@ export class PrivateHc {
     return { session: `harness-${randomBytes(6).toString('hex')}`, socket: join(root, 'c.sock'), root }
   }
 
-  static async start(planned: PlannedHc): Promise<PrivateHc> {
+  /** Starts the planned core, put in [started] before its first command: whatever its start does, a timeout among it,
+   *  the test's afterEach stops it through its own session. */
+  static async start(planned: PlannedHc, started: PrivateHc[]): Promise<PrivateHc> {
     if (refused) throw refused
     if (!hcBinary) throw new Error('Herdr Core is not installed')
     const before = await jobs()
     if (before.length) refuse(`launchd already holds ${before.join(', ')} before a start`)
-    theirs ??= await cores()
+    theirs ??= await herdrs()
     // Its own folder, made here and nowhere else: a root that is already there is someone else's.
     await mkdir(planned.root, { mode: 0o700 })
     const core = new PrivateHc(planned)
-    try {
-      await core.hc(['server', 'start', '--json'])
-      await until('the private Herdr Core to answer', () => core.rpc('hello', { generation: 1 }), SETTLE_MS, 100)
-      await core.note()
-      await until('launchd to drop the private core\'s start job', async () => (await jobs()).length === 0, SETTLE_MS, 100)
-        .catch(async () => refuse(`launchd still holds ${(await jobs()).join(', ')} after a start`))
-      await theirsUnchanged('after a start')
-    } catch (error) {
-      await core.stop().catch(() => { /* the start's own error says more */ })
-      throw error
-    }
+    started.push(core)
+    await core.hc(['server', 'start', '--json'])
+    await until('the private Herdr Core to answer', () => core.rpc('hello', { generation: 1 }), SETTLE_MS, 100)
+    await core.note()
+    await until('launchd to drop the private core\'s start job', async () => (await jobs()).length === 0,
+      SETTLE_MS, 100).catch(async () => refuse(`launchd still holds ${(await jobs()).join(', ')} after a start`))
+    await theirsUnchanged('after a start')
     return core
   }
 
@@ -172,10 +175,7 @@ export class PrivateHc {
   private async note(): Promise<void> {
     const status = await this.rpc('server.status')
     for (const pid of [status.pid, ...(status.holders as Array<{ pid?: unknown }> ?? []).map((holder) => holder.pid)]) {
-      if (typeof pid === 'number') {
-        this.pids.add(pid)
-        ours.add(pid)
-      }
+      if (typeof pid === 'number') this.pids.add(pid)
     }
   }
 

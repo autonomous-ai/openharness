@@ -114,11 +114,8 @@ describe.skipIf(!hcBinary)("Herdr's agents on the dial, from a private Herdr Cor
     return { d, desk: theDesk, relay }
   }
 
-  const coreFor = async (planned: PlannedHc): Promise<PrivateHc> => {
-    const core = await PrivateHc.start(planned)
-    cores.push(core)
-    return core
-  }
+  /** A private core, in `cores` from its first command on, so afterEach stops it whatever its start did. */
+  const coreFor = (planned: PlannedHc): Promise<PrivateHc> => PrivateHc.start(planned, cores)
 
   /** The dial speaks [words] to [agentId], and the fake backend transcribes them: what the dial hears back. */
   const speak = (dial: FakeDial, relay: FakeBackend, agentId: unknown, words: string, uploadId: string): Promise<DialMessage> => {
