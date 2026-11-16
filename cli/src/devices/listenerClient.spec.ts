@@ -4,7 +4,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { listenLocalSocket, type LocalSocketServer } from '../lib/localSocket.js'
 import { LISTENER_MAX_CONNECTIONS } from '../services/devicesListener.js'
 import { devicesListenerPath } from './listenerPath.js'
-import { streamDevices, tellDevices } from './listenerClient.js'
+import { ASK_ANSWER_MAX, askDevices, streamDevices, tellDevices } from './listenerClient.js'
 
 const FRONT = { type: 'front', app: 'ghostty' }
 const dirs: string[] = []
@@ -242,5 +242,87 @@ describe('streamDevices, anywhere', () => {
     expect(chunk.mock.calls.map(([data]) => String(data))).toEqual([LINE])
     expect(rejects).toHaveBeenCalledOnce()
     expect(throws).toHaveBeenCalledOnce()
+  })
+})
+
+const NOTICE = { type: 'notice', text: 'Turn on the VPN' }
+const json = (body: string) => (res: ServerResponse) => { res.writeHead(200, { 'content-type': 'application/json' }).end(body) }
+
+describe.skipIf(process.platform === 'win32')('askDevices, on a socket', () => {
+  it("the answer's object on a 200", async () => {
+    const dir = dataDir()
+    const { heard } = await listener(dir, json('{"result":"shown"}'))
+    expect(await askDevices(dir, NOTICE)).toEqual({ result: 'shown' })
+    expect(heard).toEqual([{ method: 'POST', url: '/', body: JSON.stringify(NOTICE) }])
+  })
+
+  it('null for a 204, 400, 404, 413, 429 and 500', async () => {
+    const dir = dataDir()
+    let status = 0
+    const { heard } = await listener(dir, res => { res.writeHead(status).end(status === 204 ? undefined : '{"result":"shown"}') })
+    for (status of [204, 400, 404, 413, 429, 500]) expect(await askDevices(dir, NOTICE)).toBeNull()
+    expect(heard).toHaveLength(6)
+  })
+
+  it('null for a body that is not a JSON object, or is over 1024 bytes', async () => {
+    const dir = dataDir()
+    let body = ''
+    await listener(dir, res => json(body)(res))
+    const big = JSON.stringify({ result: 'x'.repeat(2048) })
+    for (body of ['[]', '"x"', '{not json', 'null', big]) expect(await askDevices(dir, NOTICE)).toBeNull()
+    // At the bound, an object is still read.
+    body = JSON.stringify({ result: 'x'.repeat(ASK_ANSWER_MAX - '{"result":""}'.length) })
+    expect(Buffer.byteLength(body)).toBe(ASK_ANSWER_MAX)
+    expect(await askDevices(dir, NOTICE)).toEqual(JSON.parse(body))
+  })
+
+  it('null with no socket and with a socket of another account, and nothing is sent', async () => {
+    const { heard: elsewhere } = await listener(dataDir(), json('{"result":"shown"}'))
+    expect(await askDevices(dataDir(), NOTICE)).toBeNull()
+    expect(elsewhere).toEqual([])
+    const dir = dataDir()
+    const { heard } = await listener(dir, json('{"result":"shown"}'))
+    const other = vi.spyOn(process, 'getuid').mockReturnValue(process.getuid!() + 1)
+    expect(await askDevices(dir, NOTICE)).toBeNull()
+    other.mockRestore()
+    expect(heard).toEqual([])
+  })
+
+  it('null when the listener does not answer in time', async () => {
+    const dir = dataDir()
+    const { heard } = await listener(dir, () => {})
+    expect(await askDevices(dir, NOTICE, { timeoutMs: 50 })).toBeNull()
+    expect(heard).toHaveLength(1)
+    // Headers in time, the body never ending: the bound covers the body too.
+    const slow = dataDir()
+    await listener(slow, res => { res.writeHead(200, { 'content-type': 'application/json' }).write('{"result":') })
+    expect(await askDevices(slow, NOTICE, { timeoutMs: 50 })).toBeNull()
+  })
+
+  it('more asks than the listener takes connections are all answered', async () => {
+    const dir = dataDir()
+    // An answer larger than the stream buffers before it is read, so an unread one would hold its connection.
+    const { heard, server } = await listener(dir, res => { res.writeHead(200).end('x'.repeat(1 << 20)) })
+    server.server.maxConnections = LISTENER_MAX_CONNECTIONS
+    const asks = LISTENER_MAX_CONNECTIONS + 4
+    for (let i = 0; i < asks; i++) expect(await askDevices(dir, NOTICE)).toBeNull()
+    expect(heard).toHaveLength(asks)
+  })
+})
+
+describe('askDevices, anywhere', () => {
+  it('null on Windows without a call', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>()
+    expect(await askDevices('C:\\Users\\me\\.harness', NOTICE, { platform: 'win32', fetch })).toBeNull()
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('never throws', async () => {
+    const rejects = vi.fn<typeof globalThis.fetch>(async () => { throw new TypeError('fetch failed') })
+    expect(await askDevices('/tmp/hdc-none', NOTICE, { platform: 'linux', fetch: rejects })).toBeNull()
+    const breaks = vi.fn<typeof globalThis.fetch>(async () => new Response(new ReadableStream({
+      pull(body) { body.error(new Error('reset')) },
+    }), { status: 200 }))
+    expect(await askDevices('/tmp/hdc-none', NOTICE, { platform: 'linux', fetch: breaks })).toBeNull()
   })
 })
