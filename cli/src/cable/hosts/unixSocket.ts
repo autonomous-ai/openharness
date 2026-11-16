@@ -14,9 +14,9 @@ export type LineEnd = 'refused' | 'ended' | 'oversize'
 
 /**
  * One connection that writes `out` once connected, and tells each line that comes back, in order, until the socket is
- * destroyed. `end` says why it ended: a line past `maxLineBytes` as soon as it is past, before the rest is read; a
- * connection that never opened; one that closed. Unref'd, as each deadline is: another program's connection never keeps
- * the devices process up.
+ * destroyed. `end` is told once, with why it ended: a line past `maxLineBytes` as soon as it is past, before the rest
+ * is read; a connection that never opened; one that closed. Unref'd, as each deadline is: another program's connection
+ * never keeps the devices process up.
  */
 export function connectLines(
   path: string, out: string, maxLineBytes: number, line: (text: string) => void, end: (fault: LineEnd) => void,
@@ -24,6 +24,13 @@ export function connectLines(
   let opened = false
   let held: Buffer[] = []
   let size = 0
+  let ended = false
+  // An oversize line is told at once, and the close that follows it would tell a second end.
+  const finish = (fault: LineEnd) => {
+    if (ended) return
+    ended = true
+    end(fault)
+  }
   const socket = createConnection({ path })
   socket.unref()
   socket.on('connect', () => {
@@ -32,14 +39,14 @@ export function connectLines(
   })
   // The close that follows says it.
   socket.on('error', () => {})
-  socket.on('close', () => end(opened ? 'ended' : 'refused'))
+  socket.on('close', () => finish(opened ? 'ended' : 'refused'))
   socket.on('data', (chunk: Buffer) => {
     let from = 0
     while (!socket.destroyed) {
       const newline = chunk.indexOf(0x0a, from)
       const piece = chunk.subarray(from, newline === -1 ? chunk.length : newline)
       size += piece.length
-      if (size > maxLineBytes) return end('oversize')
+      if (size > maxLineBytes) return finish('oversize')
       held.push(piece)
       if (newline === -1) return
       const text = Buffer.concat(held).toString('utf8')
