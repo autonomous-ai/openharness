@@ -62,6 +62,15 @@ pub struct ClaudeStatus {
     pub claude_version: Option<String>,
 }
 
+/// `harness device codex status --json`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct CodexStatus {
+    pub supported: bool,
+    pub installed: bool,
+    pub enabled: bool,
+}
+
 /// state.json: `{ "version": 1, "cliSeen", "askedSignIn", "askedClaude", "loginItem" }`. Default: version 1, all false.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
