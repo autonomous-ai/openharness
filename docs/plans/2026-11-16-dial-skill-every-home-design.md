@@ -101,8 +101,9 @@ Done when, on a Mac with a dial and the Harness Device menu-bar app:
   like the homes list (below): at most 64 per engine, each path `listable`; the key is left out when both are empty.
   Read with a 256 KiB bound, the homes list's. A missing or bad file reads as no answer for each engine, as below.
   Written via a 0600 temp file and a rename, like `dial-notify.json` (`cable/notifyMode.ts`).
-- `harness device claude enable`: the plugin, as today (`claudeEnable`). On success, `claude: true` in the file with
-  the default Claude home's resolved skills folder in `homes`, then the skill into that folder. A folder the record
+- `harness device claude enable`: the plugin, as today (`claudeEnable`). On success, `claude: true` in the file, before
+  anything is made, so a failed save leaves nothing; then the default Claude home's resolved skills folder in `homes`,
+  then the skill into that folder. A folder the record
   cannot hold (not `listable`, or 64 already there) gets no skill: still On, exit 1, `Could not write the Claude Code
   skill.`
 - `harness device claude disable`, in this order:
