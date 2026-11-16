@@ -15,6 +15,7 @@ export const APP_BUNDLES: Readonly<Record<string, string>> = {
   cursor: 'com.todesktop.230313mzl4w4u92',
   warp: 'dev.warp.Warp-Stable',
   claude: 'com.anthropic.claudefordesktop',
+  codex: 'com.openai.codex',
 }
 
 const NAMES: Record<string, string> = {
@@ -33,11 +34,12 @@ const NAMES: Record<string, string> = {
   cursor: 'Cursor',
   warp: 'Warp',
   claude: 'Claude',
+  codex: 'Codex',
   terminal: 'Terminal',
 }
 
-/** The apps an agent can run in, the dial's pages: the hosts, in the order of their names. Sixteen is the firmware's
- *  bound (`CABLE_MAX_APPS`): a seventeenth app needs a decision. */
+/** The apps an agent can run in, the dial's pages: the hosts, in the order of their names. Seventeen ids; the firmware
+ *  holds 16 (`CABLE_MAX_APPS`), and the `apps` frame holds to it (`APP_LIMIT`, select.ts). */
 export const APP_IDS: readonly string[] = Object.keys(NAMES)
 
 /** An agent in a terminal the daemon does not know. */
@@ -102,6 +104,7 @@ export function detectHost(hints: Record<string, string>): string {
   // Cursor is a VS Code fork and reports TERM_PROGRAM=vscode, so its bundle id decides first.
   if (bundle === APP_BUNDLES.cursor) return 'cursor'
   if (bundle === APP_BUNDLES.claude) return 'claude'
+  if (bundle === APP_BUNDLES.codex) return 'codex'
   if (program === 'iTerm.app' || bundle === APP_BUNDLES.iterm) return 'iterm'
   if (program === 'Apple_Terminal' || bundle === APP_BUNDLES['terminal-app']) return 'terminal-app'
   if (program === 'ghostty' || bundle === APP_BUNDLES.ghostty) return 'ghostty'
