@@ -5786,6 +5786,19 @@ describe('Orca\'s ring follows Orca\'s tabs (docs/plans/2026-11-16-dial-orca-foc
     expect((await names()).orca).toEqual(['PM', 'api', 'api'])
   })
 
+  it('two agents with no pane and one terminal no agent holds place neither', async () => {
+    const { port, fake } = withOrca(0)
+    port.observed(hook(3))
+    scanned(1, 2)
+    seen.host.watching!(true)
+    await settled()
+    // Terminal 2 is not listed with an agent: H(1) is the one free, and either agent could be in it.
+    await land(fake, oneTwoPM, [claudeIn(1), claudeIn(3)])
+    await land(fake, oneTwoPM, [claudeIn(1), claudeIn(3)])
+    expect(await ring()).toEqual([agent(3), agent(1), agent(2)])
+    expect((await names()).orca).toEqual(['PM', 'api', 'api'])
+  })
+
   it('two terminals no agent holds place neither', async () => {
     const { fake } = withOrca(0)
     scanned(1)
