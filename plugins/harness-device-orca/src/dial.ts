@@ -64,17 +64,19 @@ export function startDial(inputs: DialInputs, tell: { changed(state: DialState):
     lastStart = inputs.now()
     const abort = new AbortController()
     passing = abort
-    passDone = pass(abort).then(() => ended(abort))
+    passDone = pass(abort).then((quiet) => ended(abort, quiet))
   }
 
-  function ended(abort: AbortController): void {
+  function ended(abort: AbortController, quiet: boolean): void {
     // What the pass left open, as an answer it did not read, goes with it.
     abort.abort()
     passing = null
     if (stopped) return
     const now = inputs.now()
-    const at = again ? Math.max(now, lastStart + WATCH_MS) : now + wait
-    wait = Math.min(wait * 2, LAST_WAIT_MS)
+    // Unplugged with the watch on is no failure: the watch asks as the socket appears, link is looked at again only in
+    // case the daemon stops, and a stream that ends soon after waits from 1 s, not from a wait grown meanwhile.
+    const at = again ? Math.max(now, lastStart + WATCH_MS) : now + (quiet ? LAST_WAIT_MS : wait)
+    wait = quiet ? FIRST_WAIT_MS : Math.min(wait * 2, LAST_WAIT_MS)
     schedule(at)
   }
 
@@ -125,16 +127,18 @@ export function startDial(inputs: DialInputs, tell: { changed(state: DialState):
     watching = null
   }
 
-  async function pass(abort: AbortController): Promise<void> {
+  // True when it ends unplugged with the watch on.
+  async function pass(abort: AbortController): Promise<boolean> {
     const ran = await launch(abort.signal)
-    if (ran === MISSING) return set({ state: 'noHarness' })
-    const link = readLink(ran)
-    if (!link) return set({ state: 'notRunning' })
-    if (!link.ready) {
+    const link = ran === MISSING ? null : readLink(ran)
+    if (!link) set({ state: ran === MISSING ? 'noHarness' : 'notRunning' })
+    else if (link.ready) await follow(link.socket, abort)
+    else {
       set({ state: 'unplugged' })
-      return watch(link.socket)
+      watch(link.socket)
+      return watching !== null
     }
-    await follow(link.socket, abort)
+    return false
   }
 
   // The launcher in the home first, then one on PATH, as plugins/harness-device/hooks/device.js looks.
