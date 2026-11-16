@@ -1216,6 +1216,16 @@ mod tests {
     }
 
     #[test]
+    fn no_second_check_starts_while_one_runs() {
+        let mut app = found();
+        assert!(has(&app.handle(tick(B + 5)), &Effect::CheckUpdate));
+        // A Mac asleep through the check, or a clock that jumps: six hours on, it has not answered.
+        assert!(!has(&app.handle(tick(B + 5 + H6)), &Effect::CheckUpdate));
+        app.handle(Event::UpdateChecked(None));
+        assert!(has(&app.handle(tick(B + 10 + H6)), &Effect::CheckUpdate));
+    }
+
+    #[test]
     fn no_check_starts_while_the_cli_installs_or_a_sign_in_runs() {
         let mut app = fresh();
         assert!(!has(&app.handle(tick(B + 5)), &Effect::CheckUpdate));
