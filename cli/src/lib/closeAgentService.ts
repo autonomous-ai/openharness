@@ -19,7 +19,8 @@ export type AgentClosePlan = {
 /** `background`, the cleanup's alone and only with `idle`: `refuse` while any background command runs, `count` closes
  *  whatever runs (past its ceiling) and says how many. */
 export type AgentCloseRequest = { agentId: string; sessionId: string; createdAt: string; mode: CloseMode; onlyIfHidden?: boolean; background?: 'refuse' | 'count' }
-/** `withoutConversation`: closed while still starting, before Harness could read its conversation, so none is kept.
+/** `withoutConversation`: the record the close saved holds no conversation a resume could bring back, so none is kept:
+ *  closed while still starting, before Harness could read its conversation, or its engine never bound one.
  *  `backgroundCommands`: how many an idle harness still runs; `null` when Harness cannot know. */
 export type AgentCloseResult = { closed?: true; withoutConversation?: true; deferred?: true; cancelled?: true; error?: string; detail?: string; activity?: CloseActivity; backgroundCommands?: number | null }
 
@@ -324,7 +325,12 @@ export class CloseAgentService {
           if (this.deps.idleCurrent?.(latest) === false) idleRevoked = true
           return !idleRevoked
         },
-        checkpoint: (s, phase) => this.deps.checkpoint(s, phase),
+        checkpoint: (s, phase) => {
+          // The record saved before the stop is what a resume starts from: with no conversation id, an engine that
+          // resumes by one brings nothing back (resumesConversation in resumeCapability.ts), so none was kept.
+          if (phase === 'before' && resumeMode(s.engine) === 'conversation' && !s.sessionId) unkept = true
+          return this.deps.checkpoint(s, phase)
+        },
         confirmUnusedConversation: async captured => {
           // A missing ID alone could be failed discovery of active work. Only
           // an unused chat with a freshly observed empty composer can skip the
