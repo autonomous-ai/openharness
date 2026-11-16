@@ -9,6 +9,7 @@
  *
  * A log line says only fixed words and counts.
  */
+import type { SocketFault } from './unixSocket.js'
 
 /** The waits before each retry of a failed attempt; after the last, the last again while each attempt lists, else only
  *  the watch. */
@@ -95,7 +96,7 @@ export class SocketAttempts {
 
   /** The attempt failed, by the client's word. It says `<said> · <fault>`, unless it is a refusal with nothing
    *  started on its stamp: then `retry · 1` once for a young socket, else stale at once. */
-  failed(said: 'closed' | 'list', fault: string): void {
+  failed(said: 'closed' | 'list', fault: SocketFault): void {
     if (fault === 'refused' && this.subscribed !== this.stamp) return this.refused()
     this.deps.log(`[${this.deps.name}] ${said} · ${fault}`)
     this.fail(fault)
@@ -130,7 +131,7 @@ export class SocketAttempts {
   }
 
   /** Every failed attempt: the attempt ends, and the retries run. */
-  private fail(fault: string): void {
+  private fail(fault: SocketFault): void {
     const since = this.liveSince
     this.liveSince = undefined
     this.deps.close()

@@ -19,11 +19,12 @@
 import { basename } from 'node:path'
 import {
   HERDR_KIND, HERDR_PANE, herdrPaneKey,
-  type HerdrAnswer, type HerdrClient, type HerdrEntry, type HerdrFault, type HerdrPrompt, type HerdrSubscriber,
+  type HerdrAnswer, type HerdrClient, type HerdrEntry, type HerdrPrompt, type HerdrSubscriber,
 } from './herdrClient.js'
 import { CONTROL, MAX_TEXT } from './orca.js'
 import { SocketAttempts } from './socketAttempts.js'
 import type { Caps, HostAgent, HostAgentState, HostSource, SendResult } from './types.js'
+import type { SocketFault } from './unixSocket.js'
 
 /** The most agents listed, and the most panes one subscription names. */
 export const MAX_AGENTS = 64
@@ -246,7 +247,7 @@ export class HerdrSource implements HostSource {
     if ([...this.rows.keys()].some((pane) => !sub.panes.has(pane))) this.soon()
   }
 
-  private closed(sub: Subscription, reason: HerdrFault): void {
+  private closed(sub: Subscription, reason: SocketFault): void {
     // An old one that ends while the new one opens missed nothing the new one's list will not say.
     if (sub !== (this.next ?? this.current)) return
     this.attempts.failed('closed', reason)

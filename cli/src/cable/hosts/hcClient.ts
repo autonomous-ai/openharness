@@ -22,7 +22,7 @@ import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { HERDR_KIND } from './herdrClient.js'
 import { CONTROL, MAX_TEXT, RUN_TIMEOUT_MS } from './orca.js'
-import { connectLines, socketStampOf } from './unixSocket.js'
+import { connectLines, socketStampOf, type SocketFault } from './unixSocket.js'
 
 /** hc's address of a terminal of this machine, `t7`, `t1b`: never another machine's `vps/t7`. */
 export const HC_TERMINAL = /^t[0-9][0-9a-z]{0,15}$/
@@ -76,11 +76,9 @@ export function hcKind(app: unknown): string | undefined {
 export type HcStatus = 'idle' | 'working' | 'done' | 'blocked' | 'error'
 const STATUSES: ReadonlySet<unknown> = new Set<HcStatus>(['idle', 'working', 'done', 'blocked', 'error'])
 
-/** Why a connection gave no answer, or a subscription ended: the word its log line says. `rejected` is hc's own refusal. */
-export type HcFault = 'no_socket' | 'refused' | 'timeout' | 'ended' | 'oversize' | 'bad_json' | 'bad_answer' | 'rejected'
-/** Why a request has no result: the client's own word, or hc's refusal with hc's kind beside it. Kept apart, no kind of
- *  hc's reads as one of the client's words: a core that answers `no_socket` has a socket. */
-export type HcFailure = { fault: Exclude<HcFault, 'rejected'> } | { fault: 'rejected'; kind: string }
+/** Why a request has no result: the client's own word, or hc's refusal (`rejected`) with hc's kind beside it. Kept
+ *  apart, no kind of hc's reads as one of the client's words: a core that answers `no_socket` has a socket. */
+export type HcFailure = { fault: Exclude<SocketFault, 'rejected'> } | { fault: 'rejected'; kind: string }
 export type HcAnswer = { ok: true; result: Record<string, unknown> } | ({ ok: false } & HcFailure)
 /** A prompt not sent says why: as a request does, or that the client would not send it (`bad_request`), or that the
  *  terminal runs no agent of that kind now (`not_that_agent`). */
@@ -107,7 +105,7 @@ export interface HcSubscriber {
   snapshot(terminals: readonly HcTerminal[]): void
   /** One terminal as it is after a change; `live: false` once it finished or was removed. */
   changed(terminal: HcTerminal): void
-  closed(reason: HcFault): void
+  closed(reason: SocketFault): void
   /** How many terminals of this machine the subscription left out past HC_MAX_TERMINALS, told as it changes: the rest of
    *  a snapshot, which each snapshot counts again, and each terminal created past them. */
   over(count: number): void
@@ -239,7 +237,7 @@ export function createHcClient(deps: HcClientDeps): HcClient {
     let socket: Socket | undefined
     let deadline: ReturnType<typeof setTimeout> | undefined
     // `closed` is told once, and the caller's own close tells nothing.
-    const end = (reason?: HcFault) => {
+    const end = (reason?: SocketFault) => {
       if (over) return
       over = true
       clearTimeout(deadline)

@@ -15,11 +15,12 @@
  * A log line says only fixed words and counts: hc's terminals name people's folders and agents.
  */
 import { basename } from 'node:path'
-import { hcPaneKey, type HcClient, type HcFault, type HcPrompt, type HcStatus, type HcTerminal } from './hcClient.js'
+import { hcPaneKey, type HcClient, type HcPrompt, type HcStatus, type HcTerminal } from './hcClient.js'
 import { MAX_AGENTS, MAX_CWD, shown } from './herdrSource.js'
 import { MAX_TEXT } from './orca.js'
 import { SocketAttempts } from './socketAttempts.js'
 import type { Caps, HostAgent, HostAgentState, HostSource, PaneSwitch, SendResult } from './types.js'
+import type { SocketFault } from './unixSocket.js'
 
 const STATES: Record<HcStatus, HostAgentState> = { idle: 'idle', working: 'working', blocked: 'needs-you', done: 'done', error: 'error' }
 
@@ -218,7 +219,7 @@ export class HcSource implements HostSource {
 
   /** A core that answered no snapshot of the generation this speaks says why in a `list ·` line; every other end is
    *  `closed ·`. */
-  private closed(listed: boolean, reason: HcFault): void {
+  private closed(listed: boolean, reason: SocketFault): void {
     this.subscription = undefined
     this.attempts.failed(!listed && (reason === 'rejected' || reason === 'bad_answer') ? 'list' : 'closed', reason)
   }

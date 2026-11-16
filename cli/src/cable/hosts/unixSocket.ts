@@ -11,6 +11,10 @@ import { dirname } from 'node:path'
 
 /** Why a connection ended: it never opened, it closed, or a line was past its bound. */
 export type LineEnd = 'refused' | 'ended' | 'oversize'
+/** Why a client's connection gave no answer, or its subscription ended: the word its log line says, one set for both
+ *  clients (herdrClient.ts, hcClient.ts) and their sources' attempts (socketAttempts.ts). `rejected` is the program's own
+ *  refusal. */
+export type SocketFault = LineEnd | 'no_socket' | 'timeout' | 'bad_json' | 'bad_answer' | 'rejected'
 
 /**
  * One connection that writes `out` once connected, and tells each line that comes back, in order, until the socket is

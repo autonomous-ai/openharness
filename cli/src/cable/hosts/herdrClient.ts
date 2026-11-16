@@ -19,7 +19,7 @@ import type { Socket } from 'node:net'
 import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { CONTROL, MAX_TEXT, RUN_TIMEOUT_MS } from './orca.js'
-import { connectLines, socketStampOf } from './unixSocket.js'
+import { connectLines, socketStampOf, type SocketFault } from './unixSocket.js'
 
 /** herdr's pane id, `w1:p1` (its own guide). */
 export const HERDR_PANE = /^w[0-9]{1,9}:p[0-9]{1,9}$/
@@ -47,12 +47,9 @@ export function herdrClientDeps(): HerdrClientDeps {
   return { socketPath: herdrSocketPath(process.env, home), home, uid: process.getuid?.() ?? -1, platform: process.platform }
 }
 
-/** Why a connection gave no answer, or a subscription ended: the word its log line says. `rejected` is herdr's own
- *  refusal. */
-export type HerdrFault = 'no_socket' | 'refused' | 'timeout' | 'ended' | 'oversize' | 'bad_json' | 'bad_answer' | 'rejected'
-/** Why a request has no result: the client's own word, or herdr's refusal with herdr's code beside it. Kept apart, no code
- *  of herdr's reads as one of the client's words: a herdr that answers `no_socket` has a socket. */
-export type HerdrFailure = { fault: Exclude<HerdrFault, 'rejected'> } | { fault: 'rejected'; code: string }
+/** Why a request has no result: the client's own word, or herdr's refusal (`rejected`) with herdr's code beside it.
+ *  Kept apart, no code of herdr's reads as one of the client's words: a herdr that answers `no_socket` has a socket. */
+export type HerdrFailure = { fault: Exclude<SocketFault, 'rejected'> } | { fault: 'rejected'; code: string }
 export type HerdrAnswer = { ok: true; result: Record<string, unknown> } | ({ ok: false } & HerdrFailure)
 /** A prompt not sent says why: as a request does, or that the client would not send it (`bad_request`), or that the pane
  *  holds another kind (`not_that_agent`). */
@@ -62,7 +59,7 @@ export type HerdrEntry = { type: 'pane.agent_detected' | 'pane.closed' | 'pane.e
 export interface HerdrSubscriber {
   started(): void
   event(name: string, data: Record<string, unknown>): void
-  closed(reason: HerdrFault): void
+  closed(reason: SocketFault): void
 }
 export interface HerdrClient {
   request(method: string, params: Record<string, unknown>): Promise<HerdrAnswer>
@@ -134,7 +131,7 @@ export function createHerdrClient(deps: HerdrClientDeps): HerdrClient {
     let socket: Socket | undefined
     let deadline: ReturnType<typeof setTimeout> | undefined
     // `closed` is told once, and the caller's own close tells nothing.
-    const end = (reason?: HerdrFault) => {
+    const end = (reason?: SocketFault) => {
       if (over) return
       over = true
       clearTimeout(deadline)
