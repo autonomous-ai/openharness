@@ -31,7 +31,8 @@ import type { HostAdapter, Pane } from '../cable/hosts/adapter.js'
 import { createClaudeAppAdapter } from '../cable/hosts/claudeApp.js'
 import { codexQueueDeps, createCodexQueue, type CodexQueueDeps } from '../cable/hosts/codexQueue.js'
 import { createHerdrAdapter } from '../cable/hosts/herdr.js'
-import { createHerdrClient, herdrClientDeps, type HerdrClient } from '../cable/hosts/herdrClient.js'
+import { createHerdrClient, herdrClientDeps, watchHerdrSocket, type HerdrClient } from '../cable/hosts/herdrClient.js'
+import { HerdrSource } from '../cable/hosts/herdrSource.js'
 import { Inbox } from '../cable/hosts/inbox.js'
 import { LAST_ANSWER_DEADLINE_MS, LAST_ANSWER_MAX_BYTES, readLastAnswer } from '../cable/hosts/lastAnswer.js'
 import { askedLine, hostDisplayName, observedAgentId, ObservedSource, type ObservedActions, type ObservedDeps, type PromptSource } from '../cable/hosts/observed.js'
@@ -271,7 +272,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   }
   const inbox = new Inbox({ now: monotonic, after: timerIn('inbox') })
   const apps = deps.orca ?? orcaDeps()
-  const herdrClient = deps.herdr ?? createHerdrClient(herdrClientDeps())
+  /** Where herdr's socket is, from the daemon's own environment: the client reads it, and the herdr source watches for it. */
+  const herdrAt = herdrClientDeps()
+  const herdrClient = deps.herdr ?? createHerdrClient(herdrAt)
   const herdrAdapter = createHerdrAdapter({ ...apps, client: herdrClient })
   const claude = createClaudeAppAdapter({ ...apps, inFront: () => cableHost.latestFront() === 'claude' })
   // Harness's own Codex home, whose config `codex queue` loads; run from the home folder, so no project's .codex/ is read.
@@ -310,11 +313,12 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // One with no `show` gets none: the source reads whether it has one (observed.ts rest).
     return show ? { ...noted, show: (pane, agentId) => { noteMove(); return show(pane, agentId) } } : noted
   }
+  /** herdr's adapter as the dial's verbs reach it: a tap on an agent herdr lists (below) is the dial's own move too. */
+  const herdrNoted = noting(herdrAdapter)
   /** The apps an outside agent runs in, in the order its panes are kept: each verb of the dial takes the first that can.
    *  The nearest host first: a multiplexer keeps the environment it started in, so in a tmux pane WezTerm's and Orca's
    *  values name the terminal the tmux server began in, and herdr inside tmux carries tmux's pane. */
-  const adapters: readonly HostAdapter[] = [
-    herdrAdapter,
+  const adapters: readonly HostAdapter[] = [herdrNoted, ...[
     createTmuxAdapter({ run: apps.run, processes: readProcessNames, log }),
     createWeztermAdapter(apps),
     createOrcaAdapter(apps),
@@ -329,8 +333,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
         return true
       },
     }),
-  ].map(noting)
+  ].map(noting)]
   const opener = createOpenActions({ run: apps.run, platform: apps.platform, adapters, log })
+  /** The route or the refusal of the dial's words, and why a queue failed: never the words, the session, the terminal or a
+   *  path. */
+  const voiced = (what: string): void => log(`[device] voice · ${what}`)
   const observed = env.HARNESS_DEVICE_OBSERVED ? observedSource(core.dataDir, log, {
     adapters,
     modReady: (sessionId) => inbox.ready(sessionId),
@@ -345,9 +352,25 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     },
     codexQueue,
     codexHome: env.CODEX_HOME,
-    // The route or the refusal, and why a queue failed: never the words, the session, the terminal or a path.
-    count: (what) => log(`[device] voice · ${typeof what === 'string' ? what : what.id}`),
+    count: (what) => voiced(typeof what === 'string' ? what : what.id),
   }, ttyOf) : null
+  /** herdr's agents, hook or no hook, listed and followed over herdr's own socket (docs/specs/2026-11-16-device-herdr.md).
+   *  It runs only while a dial is attached, as the open scan does, behind the observed agents' switch, and never on
+   *  Windows, where herdr's socket is a named pipe (herdrSource.ts). */
+  const herdr = observed ? new HerdrSource({
+    client: herdrClient,
+    watch: (changed) => watchHerdrSocket(herdrAt, changed),
+    prompt: herdrAdapter.prompt,
+    // The command a hooked agent's tap runs (Q6): the dial's move is noted as every tap's is.
+    focus: (paneId) => herdrNoted.focus({ adapter: herdrAdapter.id, id: paneId }),
+    after: timerIn('herdr'),
+    now: Date.now,
+    monotonic,
+    uuid: randomUUID,
+    platform: apps.platform,
+    log,
+    count: voiced,
+  }) : null
   /** The ones the dial lists, each with its source: the merged list's, not each source's own, as a copy a stronger source
    *  also holds (a Harness agent's session, a hooked agent's pane) is that one's row and must get no second card. */
   const outsideEntries = (): HostEntry[] => registry.entries().filter((entry) => entry.source !== cableHost.harness)
@@ -482,7 +505,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     appTimer: timerIn('dial'),
   })
   // What the dial lists with no window: this computer's harness agents, and the ones outside a pane unless switched off.
-  const registry = new HostRegistry(observed ? [cableHost.harness, observed] : [cableHost.harness])
+  const registry = new HostRegistry(observed && herdr ? [cableHost.harness, observed, herdr] : [cableHost.harness])
   cableHost.setRegistry(registry)
   // The dial's log lives with the app's, one file a day (dialLog.ts). The old unbounded `dial.log` in the
   // data folder is cut down to a pointer, for anyone with a bookmark.
@@ -726,6 +749,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     }
   }
   observed?.onChange(() => part.call('dial', outsideTurn))
+  herdr?.onChange(() => part.call('dial', outsideTurn))
   /** One of the observed source's timers, each run guarded as a notice is: one that throws is logged and the next runs. */
   const every = (ms: number, run: () => unknown): ReturnType<typeof setInterval> => {
     const timer = setInterval(() => part.call('observed', run), ms)
@@ -755,12 +779,14 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     const listed = new Set(lists.flatMap((list) => list.agents.map((agent) => agent.id)))
     for (const entry of mid) if (listed.has(entry.agent.id)) tell(started(entry))
   }
-  /** The scan and the reminders, for an attached dial alone. */
+  /** The scan, the reminders and herdr's socket, for an attached dial alone. */
   let attached: ReturnType<typeof setInterval>[] = []
   const dialAttached = (on: boolean): void => {
     for (const timer of attached) clearInterval(timer)
     attached = []
-    if (!on || !observed) return
+    if (!observed || !herdr) return
+    part.call('herdr', () => on ? herdr.start() : herdr.stop())
+    if (!on) return
     // Agents already running when the dial came are listed now, idle until their next hook event.
     part.call('observed', () => observed.scanOpen())
     // Its questions were in its RAM: the ones still waiting are asked again, under their ids.
