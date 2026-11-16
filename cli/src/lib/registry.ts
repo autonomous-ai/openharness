@@ -3288,7 +3288,7 @@ class Registry {
         const row = structuredClone(persistedRow(entry)) as unknown as Record<string, unknown>
         return [entry.agentId, row] as const
       }))
-      const beforeOwners = new Map(this.list().map(row => [row.agentId, ownershipIdentity(row)]))
+      const beforeOwners = new Map(strict ? this.list().map(row => [row.agentId, ownershipIdentity(row)]) : [])
       const beforeCommit = new Map([...currentRows].map(([id, row]) => [id, rowFingerprint(row)]))
       const capturedIntents = new Map(this.intended)
       const intentRow = (row: RegisteredSession | null) => row ? { ...persistedRow(row), touchedAt: 0, boundAt: 0, lastHookAt: 0, lastTranscriptAt: 0 } : null

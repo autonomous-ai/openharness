@@ -1263,3 +1263,10 @@ is replaced; the existing fixture forwards I/O and bounds every wait/teardown.
 
 No test, typecheck, build or diagnostic has run for this proposal. Root reviews
 the Design and prepared RED before execution and any runtime correction.
+
+Root execution on macOS/Node24.22.2: Design/RED checkpoint `086b0242e5` produced the
+intended ownership-count failure (4 instead of2), with9controls passing in7.41s
+(`/tmp/core-registry-owner-capture-red.log`). The one-line conditional capture then
+passed all10cases in5.95s (`core-registry-owner-capture-green.log`); typecheck passed
+(`core-registry-owner-capture-types.log`). Strict and observation checks are unchanged.
+No corrected matched-cost run has occurred yet; the previous acceptance remains failed.
