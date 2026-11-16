@@ -4931,7 +4931,12 @@ class AppNotifier extends ChangeNotifier {
             timeout: const Duration(seconds: 5),
           )
           .catchError((Object error) {
-            appLog.debug('ws', 'theme_set not applied on $machineId: $error');
+            appLog.record(
+              AppLogLevel.debug,
+              'ws',
+              'theme_set not applied on $machineId',
+              error: error,
+            );
             return <String, dynamic>{};
           }),
     );
@@ -21787,7 +21792,11 @@ class AppNotifier extends ChangeNotifier {
                 );
               }
             } catch (error) {
-              appLog.warn('device', 'Could not reveal prepared agent: $error');
+              appLog.warn(
+                'device',
+                'Could not reveal prepared agent',
+                error: error,
+              );
             }
           }());
         }
