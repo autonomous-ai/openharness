@@ -146,7 +146,7 @@ Built as `HerdrSource` is: it runs while a dial is attached, pushed and never po
   session sends no `HERDR_PANE_ID`, so the address alone would read as Herdr's own terminal (`inHerdr`).
 - `detectHost` and `detectApp`: `HC_TERMINAL_ID` → `herdr`, ahead of the bundle check and `TERM_PROGRAM` (hc's
   terminals say `ghostty`, and hc's own bundle is `dev.herdr.core`). The app id stays `herdr`, whose bundle is already
-  `dev.herdr.app`: no seventeenth app (`CABLE_MAX_APPS` is 16).
+  `dev.herdr.app`: this branch adds no app id (`APP_IDS` is 17 since #4375, which caps the dial's list at 16 in `select.ts`).
 - The copy of `HOST_HINTS` in `hookNotify.spec.ts` changes with it.
 
 ### herdr 0.8.0's stale socket (`herdrSource.ts`)

@@ -85,7 +85,7 @@ No file under `cli/src/core/` changes, and `cli/src/architecture.coreFiles.txt` 
 - **Log lines**, with no id, name, path or text: `[herdr] socket · none|stale|live` and `[herdr-app] socket · none|stale|live`, each said when it changes; `[herdr-app] listed · <n> agents`, `list · <fault>`, `closed · <reason>`, `retry · <seconds>`, `over · <n> left out`; `[herdr-app] focus · failed`.
 - **Counters.** `[device] voice · herdr-app` when sent; `busy`, `waiting`, `too-long`, `no-answer` when refused.
 - **The dial's sentences**, as the observed source says them: `<name> is busy. Say it when it is done.`, `<name> is waiting for your answer in herdr.`, `Too long. Say it shorter.`, `<name> did not answer.` A blocked agent's line is `Waiting for you · herdr`.
-- **The hint.** `HC_TERMINAL_ID` joins `HOST_HINTS` and counts toward `MAX_HINTS` (10). The app id stays `herdr`: no seventeenth app.
+- **The hint.** `HC_TERMINAL_ID` joins `HOST_HINTS` and counts toward `MAX_HINTS` (10). The app id stays `herdr`: this branch adds no app id.
 - **The kill switch.** `HARNESS_DEVICE_OBSERVED=off` stops the hc source too. It runs only while a dial is attached, and only with Herdr installed.
 - **Platforms.** macOS only for the hc client, source and adapter. Linux and Windows: no change.
 - **Repo rules.** Test first, at the layer where the behavior lives. No fixed sleeps. Every list bounded. Comments say why. No spec touches the developer's daemon (18473), tmux server, dial or Herdr: every socket is a fake server's in a temp folder. Socket specs are `describe.skipIf(process.platform === 'win32')`. `src/services` stays at 100% per file.
@@ -478,7 +478,7 @@ Spec Q6: one file both sources use.
   - `detectHost`'s table gains `[{ HC_TERMINAL_ID: 't7' }, 'herdr']`, `[{ HC_TERMINAL_ID: 't7', TERM_PROGRAM: 'ghostty' }, 'herdr']` and `[{ HC_TERMINAL_ID: 't7', __CFBundleIdentifier: 'com.mitchellh.ghostty' }, 'herdr']`.
   - `a multiplexer inside a Herdr terminal is the nearer host`: `REX_BLOCK`, `ZELLIJ` and `TMUX_PANE` beside `HC_TERMINAL_ID` give `rex`, `zellij` and `tmux`; `KITTY_WINDOW_ID`, `WEZTERM_PANE` and `ORCA_AGENT_SESSION_ID` beside it give `herdr`.
   - `an hc terminal is on herdr's page, whatever it says of its terminal`: `detectApp` is `herdr` for `{ HC_TERMINAL_ID: 't7', TERM_PROGRAM: 'ghostty' }`, with `__CFBundleIdentifier: 'dev.herdr.core'`, with `__CFBundleIdentifier: 'com.stablyai.orca'`, and with `TMUX_PANE: '%3'`.
-  - `APP_IDS has 16 ids` stays as it is.
+  - The `APP_IDS` count test stays as it is: this branch adds no app id.
 - [ ] **Step 2: Run** `cd cli && npx vitest run src/cable/hosts/hostDetect.spec.ts`. Expected: FAIL (`ghostty`, `terminal`).
 - [ ] **Step 3: Implement.** The comment says why it comes before `TERM_PROGRAM` (hc gives its programs `TERM_PROGRAM=ghostty`, and its own bundle is `dev.herdr.core`).
 - [ ] **Step 4: Run** the step 2 command, then `cd cli && npx vitest run src/cable && npm run typecheck`. Expected: PASS.
