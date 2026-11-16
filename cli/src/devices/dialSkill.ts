@@ -5,7 +5,7 @@
  * devices service both import it, so it loads nothing but Node's own modules.
  */
 import { randomUUID } from 'node:crypto'
-import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { closeSync, constants, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 export const DIAL_SKILL_DESCRIPTION = 'The person has a Harness dial on their desk. Use it when you need them to do something you cannot: give information, act outside your reach (connect a VPN, sign in, plug in a device), or decide.'
@@ -83,7 +83,8 @@ export function skillHeld(skills: string): 'ours' | 'none' | 'theirs' {
   return now === 'same' ? 'ours' : now
 }
 
-/** A temp file renamed into place: an engine, or a crash, never sees half a skill, which would read as the person's. */
+/** A temp file, on disk before it is renamed into place: an engine, or a crash, never sees half a skill, which would read
+ *  as the person's. */
 export function writeSkill(skills: string): 'written' | 'same' | 'theirs' | 'failed' {
   const now = held(skills)
   if (now === 'same' || now === 'theirs') return now
@@ -98,7 +99,13 @@ export function writeSkill(skills: string): 'written' | 'same' | 'theirs' | 'fai
   }
   const temporary = join(folder, `.SKILL.md.${process.pid}.${randomUUID()}.tmp`)
   try {
-    writeFileSync(temporary, DIAL_SKILL, { mode: 0o600, flag: 'wx' })
+    const fd = openSync(temporary, 'wx', 0o600)
+    try {
+      writeFileSync(fd, DIAL_SKILL)
+      fsyncSync(fd)
+    } finally {
+      closeSync(fd)
+    }
     renameSync(temporary, join(folder, 'SKILL.md'))
     return 'written'
   } catch {
