@@ -22,6 +22,9 @@ describe('detectHost', () => {
     [{ TERM_PROGRAM: 'vscode', __CFBundleIdentifier: 'com.todesktop.230313mzl4w4u92' }, 'cursor'],
     [{ TERM_PROGRAM: 'WarpTerminal' }, 'warp'],
     [{ __CFBundleIdentifier: 'dev.warp.Warp-Stable' }, 'warp'],
+    [{ HC_TERMINAL_ID: 't7' }, 'herdr'],
+    [{ HC_TERMINAL_ID: 't7', TERM_PROGRAM: 'ghostty' }, 'herdr'],
+    [{ HC_TERMINAL_ID: 't7', __CFBundleIdentifier: 'com.mitchellh.ghostty' }, 'herdr'],
   ])('%j -> %s', (hints, id) => {
     expect(detectHost(hints)).toBe(id)
   })
@@ -42,6 +45,14 @@ describe('detectHost', () => {
     for (const own of ['KITTY_WINDOW_ID', 'WEZTERM_PANE', 'ORCA_AGENT_SESSION_ID']) expect(detectHost({ [own]: '1', TMUX_PANE: '%3' })).toBe('tmux')
     // TERM_PROGRAM alone names no host: a pane is what a tap switches to.
     expect(detectHost({ TERM_PROGRAM: 'tmux' })).toBe('terminal')
+  })
+
+  it('a multiplexer inside a Herdr terminal is the nearer host', () => {
+    const hc = { HC_TERMINAL_ID: 't7' }
+    expect(detectHost({ ...hc, REX_BLOCK: 'x' })).toBe('rex')
+    expect(detectHost({ ...hc, ZELLIJ: '0' })).toBe('zellij')
+    expect(detectHost({ ...hc, TMUX_PANE: '%3' })).toBe('tmux')
+    for (const own of ['KITTY_WINDOW_ID', 'WEZTERM_PANE', 'ORCA_AGENT_SESSION_ID']) expect(detectHost({ ...hc, [own]: '1' })).toBe('herdr')
   })
 
   it('names', () => {
@@ -98,6 +109,14 @@ describe('detectApp', () => {
 
   it("herdr's app by its bundle id, the same table a tap opens it by", () => {
     expect(detectApp({ HERDR_PANE_ID: '1', __CFBundleIdentifier: 'dev.herdr.app' })).toBe('herdr')
+  })
+
+  it("an hc terminal is on herdr's page, whatever it says of its terminal", () => {
+    const hc = { HC_TERMINAL_ID: 't7', TERM_PROGRAM: 'ghostty' }
+    expect(detectApp(hc)).toBe('herdr')
+    expect(detectApp({ ...hc, __CFBundleIdentifier: 'dev.herdr.core' })).toBe('herdr')
+    expect(detectApp({ ...hc, __CFBundleIdentifier: 'com.stablyai.orca' })).toBe('herdr')
+    expect(detectApp({ ...hc, TMUX_PANE: '%3' })).toBe('herdr')
   })
 
   it('zellij inside kitty is kitty, with and without a bundle id', () => {
