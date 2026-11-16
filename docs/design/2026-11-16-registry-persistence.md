@@ -1334,3 +1334,64 @@ failures on test checkpoint `4dbfe7c1eb`: 16 normal-path comparisons against14 a
 passed all10cases (5.78s, `core-registry-fingerprint-green.log`); typecheck passed
 (`core-registry-fingerprint-types.log`). No authority, durability or scheduling
 rule changed. Matched cost remains unaccepted until the corrected source is measured.
+
+## Calculate changed rows only when a consumer needs them
+
+Prepared on `c747778bf6643784f0f36b8b10ea26604c134a99`, before runtime edits or
+execution. The v3 matched workload completed all 332 functional checks and cleanup,
+but its cost remains unaccepted. At 160 rows, median total CPU for twenty changed
+calls was 560.5655 ms before and 617.281 ms after; unchanged calls were 126.304 ms and
+158.465 ms. The earlier attribution identified repeated row fingerprint work.
+No new timing result is claimed for the proposal below.
+
+### Design
+
+The changed-row set has exactly two consumers: the binding-candidate checks
+inside `if (bindingCommit)`, and `verifyPreparedOwners` inside `if (strict)`.
+Construct the existing union/filter set when `strict || bindingCommit` is truthy;
+otherwise construct an empty set. Only a private best-effort save with neither
+consumer omits the unused calculation. The condition directly matches both
+consumers, including any binding caller regardless of its strict argument.
+Public flush, exit flush and transaction completion pass truthy `'observation'`
+and retain their complete fresh changed-row calculation. Do not narrow the guard
+to `strict === true` or to `bindingCommit` alone.
+
+Keep every captured row/candidate clone and all existing fingerprint comparisons
+that affect a result. Before/after image capture, binding verification, peer and
+uncertain-group reconciliation, three-way merging and final rebase still run on
+every path where they currently run. The best-effort merge does not consume the
+omitted set. No snapshot flag, fingerprint reuse, cache, option, retained identity
+or asynchronous boundary is added.
+
+Growth/concurrency/read cost: an empty transient set replaces unused comparisons
+on the private path; no new retained data, writer, lock, snapshot or file read.
+Scale: the proposed two-row changed save/flush budget is 12 instead of 14, predicting
+3,200 fewer fingerprints across twenty 160-row changed calls. This count is derived
+from source, not a performance result; unchanged-flush work is unaffected.
+Compatibility/migration/rollback: no stored or published contract change or
+migration; revert the code to roll back. Audience/identity: no access change or
+new data exposure. Failure: owner/current/native/cancellation checks, durable
+receipt, rebase, lock token, rename, directory fsync and uncertain-group recovery
+remain unchanged. Platforms: shared TypeScript on macOS, Linux and Windows, with
+no process-start or OS-call change and no additional platform evidence yet.
+
+### Caller RED and controls, prepared only
+
+Tighten the existing forwarded serialization budget for public `setCwd` followed
+by `flush` from 14 to 12. Keep its durable cwd, unchanged peer, exact live reference,
+single publication and two required ownership captures.
+
+Keep the existing public-flush and transaction controls that replace an owner
+while actual prepared-image fsync waits: each acknowledged observation must
+reject its old-owner write, then durably save the queued replacement. These fail
+if the proposed condition accidentally excludes truthy `'observation'`. Keep the
+existing strict close cancellation/replacement, nested-alias/deletion, repeated
+same-value cancellation and uncertain-directory-durability controls. The existing
+admission case `rolls back only its unpublished image before a different local
+write and then retries the held admission` also exercises best-effort observation
+with an unconfirmed group; it must still preserve the unrelated cwd and finish
+the later strict admission. No new control duplicates these scenarios.
+
+Only this Design and caller tests are prepared. No runtime edit, syntax check,
+test, typecheck, build, diagnostic or benchmark has run. Root owns the actual RED,
+minimal correction, GREEN and later matched-cost decision.

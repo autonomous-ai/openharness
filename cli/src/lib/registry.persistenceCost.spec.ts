@@ -147,7 +147,7 @@ it('avoids repeated row comparisons and unused owner captures in a changed save 
   expect(row(disk())).toMatchObject({ cwd: '/fixture/changed', launchArgs: ['--before'] })
   expect(row(disk(), B)).toEqual(peer)
   expect(io.durable).toHaveLength(1)
-  expect(fingerprints).toBeLessThanOrEqual(14)
+  expect(fingerprints).toBeLessThanOrEqual(12)
   expect(owners).toBe(2)
 })
 
