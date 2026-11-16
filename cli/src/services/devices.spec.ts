@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import type { CableHostWiring, DaemonCableHost } from '../cable/cableHost.js'
 import { AppFilter, FRONT_SETTLE_MS } from '../cable/hosts/appFilter.js'
 import type { CodexRunEnd } from '../cable/hosts/codexQueue.js'
+import type { HerdrClient } from '../cable/hosts/herdrClient.js'
 import { observedAgentId } from '../cable/hosts/observed.js'
 import { AppRings } from '../cable/hosts/select.js'
 import { env } from '../config/env.js'
@@ -211,6 +212,20 @@ const codex: NonNullable<DevicesDeps['codex']> = {
   binary: () => '/opt/codex/bin/codex',
   platform: 'linux',
 }
+/** What the devices asked of herdr's socket: recorded, so no spec reaches the developer's own herdr. It takes every
+ *  prompt, and has no socket for anything else. */
+const herdrCalls: unknown[][] = []
+const herdr: HerdrClient = {
+  request: async (method, params) => { herdrCalls.push(['request', method, params]); return { ok: false, code: 'no_socket' } },
+  subscribe: (entries, to) => {
+    herdrCalls.push(['subscribe', entries])
+    // As the client tells it with no socket: once the caller holds its close.
+    queueMicrotask(() => to.closed('no_socket'))
+    return { close: () => {} }
+  },
+  prompt: async (paneId, kind, text) => { herdrCalls.push(['prompt', paneId, kind, text]); return { outcome: 'sent' } },
+  socketStamp: () => undefined,
+}
 
 let dataDir: string
 let logs: string[]
@@ -219,6 +234,7 @@ beforeEach(() => {
   logs = []
   orcaRuns.length = 0
   codexRuns.length = 0
+  herdrCalls.length = 0
   seen.bridges = {}
   seen.fleet = null
   readers.open = readers.external = null
@@ -236,7 +252,7 @@ afterEach(() => {
   vi.unstubAllEnvs()
 })
 
-function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; orca?: DevicesDeps['orca']; codex?: DevicesDeps['codex']; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty'] } = {}) {
+function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; orca?: DevicesDeps['orca']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty'] } = {}) {
   const core = over.core ?? fakeCore({ dataDir })
   const ports: CorePorts = emptyPorts()
   const onExit = vi.fn()
@@ -252,6 +268,7 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
     refresh: over.refresh,
     orca: over.orca ?? orca,
     codex: over.codex ?? codex,
+    herdr: over.herdr ?? herdr,
     decideTier: over.decideTier === null ? undefined : over.decideTier ?? (async () => ({ tier: 'alert', by: 'test', detail: '', ms: 0 })),
     faults: new Set(over.faults ?? []),
     log: (line) => { logs.push(line) },
@@ -2627,6 +2644,31 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       ['/opt/wezterm/bin/wezterm', ['cli', 'activate-pane', '--pane-id', '7'], 10_000],
       ['/usr/bin/open', ['-b', 'com.github.wez.wezterm'], 10_000],
     ])
+  })
+
+  // A tap stays the command on every platform: herdr's socket carries words, never a focus.
+  it('a tap on a hooked agent in a herdr pane runs herdr agent focus, then brings its app forward', async () => {
+    const { port } = startHere({ orca: { ...mac, onPath: (name: string) => `/opt/${name}/bin/${name}` } })
+    port.observed(hook('session-start', { hostHints: { HERDR_PANE_ID: 'w1:p2' } }))
+    attach(port)
+    expect(await host().openAgent(ID)).toBeUndefined()
+    expect(orcaRuns).toEqual([
+      ['/opt/herdr/bin/herdr', ['agent', 'focus', 'w1:p2'], 10_000],
+      ['/usr/bin/open', ['-b', 'dev.herdr.app'], 10_000],
+    ])
+    expect(herdrCalls).toEqual([])
+  })
+
+  // Orca types into whichever pane herdr has in front: herdr's socket types into the agent's own.
+  it('a hooked agent in a herdr pane takes the dial\'s words through herdr\'s socket, ahead of Orca', async () => {
+    const { port } = startHere({ orca: mac })
+    port.observed(hook('turn-stop', { hostHints: { HERDR_PANE_ID: 'w1:p2', ORCA_TERMINAL_HANDLE: HANDLE } }))
+    attach(port)
+    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'svf' }])
+    expect(await host().sendTurn(ID, 'run the tests')).toEqual({ ok: true })
+    expect(herdrCalls).toEqual([['prompt', 'w1:p2', 'claude', 'run the tests']])
+    expect(orcaRuns).toEqual([])
+    expect(said().at(-1)).toBe('[device] voice · herdr')
   })
 
   it('a rest on an agent with an Orca handle inside Terminal runs the Orca switch, and writes no select', async () => {

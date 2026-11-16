@@ -5,6 +5,7 @@ import type { HostAdapter, Pane, Place } from './adapter.js'
 import { createClaudeAppAdapter } from './claudeApp.js'
 import type { CodexQueueResult } from './codexQueue.js'
 import { createHerdrAdapter } from './herdr.js'
+import type { HerdrPrompt } from './herdrClient.js'
 import { type Delivery, Inbox } from './inbox.js'
 import { askedLine, observedAgentId, type ObservedActions, ObservedSource, type ObservedDeps, type PromptSource } from './observed.js'
 import type { OpenTarget } from './open.js'
@@ -869,6 +870,7 @@ const HANDLE = 'term_0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b'
 interface Fakes extends Omit<ObservedActions, 'adapters'> {
   orcaSend(handle: string, text: string): Promise<boolean>
   orcaSwitch(handle: string): Promise<PaneSwitch>
+  herdrPrompt(pane: string, kind: string, text: string): Promise<HerdrPrompt>
   claudeInFront(): boolean
   claudeShow(agentId: string, session: string): Promise<PaneSwitch>
   tabsOpen(): boolean
@@ -888,6 +890,8 @@ function fakeActions(over: Partial<Fakes> = {}, platform: NodeJS.Platform = 'dar
     toMod: vi.fn(async (_sessionId: string, _text: string): Promise<Delivery> => 'taken'),
     orcaSend: vi.fn(async (_handle: string, _text: string) => true),
     orcaSwitch: vi.fn(async (_handle: string): Promise<PaneSwitch> => 'ok'),
+    // herdr takes every prompt.
+    herdrPrompt: vi.fn(async (_pane: string, _kind: string, _text: string): Promise<HerdrPrompt> => ({ outcome: 'sent' })),
     // As on macOS: an app or a pane is something a tap can open (open.ts).
     canOpen: vi.fn((target: OpenTarget) => !!target.bundle || !!target.pane),
     open: vi.fn(async (_agentId: string, _target: OpenTarget) => true),
@@ -910,7 +914,7 @@ function fakeActions(over: Partial<Fakes> = {}, platform: NodeJS.Platform = 'dar
   const orca = createOrcaAdapter(deps)
   const claude = createClaudeAppAdapter({ ...deps, inFront: () => fake.claudeInFront() })
   const adapters: HostAdapter[] = [
-    createHerdrAdapter(deps),
+    createHerdrAdapter({ ...deps, client: { prompt: (pane, kind, text) => fake.herdrPrompt(pane, kind, text) } }),
     createTmuxAdapter({ run: ran, processes: async () => [], log: () => {} }),
     createWeztermAdapter(deps),
     { ...orca, type: (pane, text) => fake.orcaSend(pane.id, text), show: (pane) => fake.orcaSwitch(pane.id) },
@@ -1681,6 +1685,71 @@ describe('ObservedSource panes', () => {
     expect(actions.open.mock.calls[0][1].pane?.adapter).not.toBe('orca')
   })
 
+  // Orca types into whichever pane herdr has in front: herdr's socket types into the agent's own pane.
+  it('herdr inside an Orca terminal takes the dial\'s words through herdr, and a rest through Orca', async () => {
+    const { actions } = fakeActions()
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('turn-stop', { hostHints: { HERDR_PANE_ID: 'w1:p2', ORCA_TERMINAL_HANDLE: HANDLE } }))
+    const agent = src.list()[0]
+    expect(src.capabilities(agent)).toMatchObject({ voice: true, focus: true })
+    expect(await src.send(agent, 'next')).toEqual({ ok: true })
+    expect(actions.herdrPrompt.mock.calls).toEqual([['w1:p2', 'claude', 'next']])
+    expect(actions.orcaSend).not.toHaveBeenCalled()
+    expect(counted(actions.count).at(-1)).toBe('herdr')
+    expect(src.hasPane(agent)).toBe(true)
+    expect(await src.showPane(agent)).toBe('ok')
+    expect(actions.orcaSwitch.mock.calls).toEqual([[HANDLE]])
+    expect(await src.focus(agent)).toBe(true)
+    expect(actions.open).toHaveBeenCalledTimes(1)
+    expect(actions.open.mock.calls[0][1].pane?.id).toBe('w1:p2')
+  })
+
+  // herdr types into a working agent as readily as an idle one: the source's idle rules decide, as for Orca.
+  it('a hooked agent in a herdr pane lists voice, and takes words only at its prompt', async () => {
+    const { actions } = fakeActions()
+    const { src, ev } = setup({ actions })
+    const hostHints = { HERDR_PANE_ID: 'w1:p2' }
+    src.ingest(ev('turn-stop', { hostHints }))
+    expect(src.capabilities(src.list()[0])).toEqual({ status: true, voice: true, focus: true, answer: false })
+    expect(await src.send(src.list()[0], 'one')).toEqual({ ok: true })
+    src.ingest(ev('turn-start', { hostHints }))
+    expect(await src.send(src.list()[0], 'next')).toEqual({ ok: false, reason: 'proj is busy. Say it when it is done.' })
+    src.ingest(ev('needs-input', { hostHints }))
+    expect(await src.send(src.list()[0], '1')).toEqual({ ok: false, reason: 'proj is waiting for your answer in herdr.' })
+    expect(actions.herdrPrompt.mock.calls).toEqual([['w1:p2', 'claude', 'one']])
+    expect(counted(actions.count)).toEqual(['herdr', 'busy', 'waiting'])
+  })
+
+  it('a prompt herdr did not take is no answer, and its turn is a person\'s', async () => {
+    for (const answer of [{ outcome: 'busy' }, { outcome: 'failed', code: 'agent_not_ready' }] as HerdrPrompt[]) {
+      const { actions } = fakeActions({ herdrPrompt: vi.fn(async () => answer) })
+      const { src, ev } = setup({ actions })
+      const hostHints = { HERDR_PANE_ID: 'w1:p2' }
+      src.ingest(ev('turn-stop', { hostHints }))
+      expect(await src.send(src.list()[0], 'next')).toEqual({ ok: false, reason: 'proj did not answer.' })
+      expect(actions.herdrPrompt.mock.calls).toEqual([['w1:p2', 'claude', 'next']])
+      expect(counted(actions.count)).toEqual(['no-answer'])
+      expect(src.ingest(ev('turn-start', { hostHints }))).toBe('person')
+    }
+  })
+
+  // The key a listing source knows the same pane by (registry.ts): an ended session's pane holds something else now.
+  it('a live agent in a herdr pane carries its pane key', async () => {
+    const { actions } = fakeActions()
+    const { src, ev, open, owners, externals } = setup({ actions })
+    src.ingest(ev('session-start', { sessionId: 'herdr', hostHints: { HERDR_PANE_ID: 'w1:p2' } }))
+    src.ingest(ev('session-start', { sessionId: 'ended', hostHints: { HERDR_PANE_ID: 'w1:p3' } }))
+    src.ingest(ev('session-end', { sessionId: 'ended', hostHints: { HERDR_PANE_ID: 'w1:p3' } }))
+    src.ingest(ev('session-start', { sessionId: 'orca', ...inOrca() }))
+    open.set('found', 'terminal')
+    owners.set('found', { pid: 200, engine: 'claude' })
+    externals.set('found', { cwd: '/work/proj', transcriptPath: '/t/found.jsonl' })
+    await src.scanOpen()
+    const agent = (sessionId: string) => src.list().find((a) => a.sessionId === sessionId)!
+    expect(agent('herdr').paneKeys).toEqual(['herdr:w1:p2'])
+    for (const sessionId of ['ended', 'orca', 'found']) expect(agent(sessionId), sessionId).not.toHaveProperty('paneKeys')
+  })
+
   // A wave 1 app is one adapter: the source asks it as it asks the others, and what it cannot do the next pane does.
   it('an app the source never heard of costs one adapter, and what it cannot do falls to the next pane', async () => {
     const PANE: Pane = { adapter: 'made-up', id: 'p1' }
@@ -1708,7 +1777,7 @@ describe('ObservedSource panes', () => {
     expect(adapter.paneOf).toHaveBeenLastCalledWith({ host: 'terminal', app: 'terminal', hints: both, pid: 100, sessionId: 's1', engine: 'claude' })
     expect(a.src.capabilities(a.agent)).toMatchObject({ voice: true })
     expect(await a.src.send(a.agent, 'next')).toEqual({ ok: true })
-    expect(adapter.type.mock.calls).toEqual([[PANE, 'next']])
+    expect(adapter.type.mock.calls).toEqual([[PANE, 'next', 'claude']])
     expect(counted(a.actions.count).at(-1)).toBe('made-up')
     expect(a.actions.orcaSend).not.toHaveBeenCalled()
     expect(await a.src.showPane(a.agent)).toBe('busy')
