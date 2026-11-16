@@ -157,6 +157,7 @@ statement to the window (`CableHost.focus`), and there is none.
 Identity is `engine + sessionId`; failing that, `callerPid` inside a host's process tree. When two sources hold the
 same agent, the stronger wins: Harness, then a host adapter (wave 1), then observed. In wave 0 the sources barely
 overlap (Harness agents have a pane), but the rule and its tests land now, so wave 1 plugs Orca in without changing it.
+For a source that lists its own agents, the hook's copy wins instead ([herdr over its socket](2026-11-16-device-herdr.md#one-agent-one-row-the-merge-key-4341-left-to-this-pull-request)).
 
 ### What the dial gets with no window
 
