@@ -189,7 +189,7 @@ it('a close of one already closed, the same conversation, is closed: asked after
   // A window closing a tab closes its panes one at a time; the harnesses a pane's harness started close with it
   // (services/agentCleanup.ts), and the window's own close of one of them was answered AGENT_CHANGED.
   const asked = request()
-  const closedAlready = vi.fn((r: AgentCloseRequest) => r.agentId === asked.agentId && r.sessionId === asked.sessionId && !registry.byAgent(r.agentId))
+  const closedAlready = vi.fn((r: AgentCloseRequest) => r.agentId === asked.agentId && r.sessionId === asked.sessionId && !registry.byAgent(r.agentId) ? row : null)
   service.dispose()
   service = new CloseAgentService({ ...deps, closedAlready })
   let finish!: () => void
@@ -211,7 +211,7 @@ it('an inspect of one already closed, the same conversation, is closed', async (
   // The terminal client inspects before every close: one asked again after a close it shows as unconfirmed (its
   // answer lost, or the harness bound a conversation meanwhile) was answered AGENT_CHANGED, "Stop not confirmed".
   const asked = request()
-  const closedAlready = vi.fn((r: AgentCloseRequest) => r.agentId === asked.agentId && r.sessionId === asked.sessionId && !registry.byAgent(r.agentId))
+  const closedAlready = vi.fn((r: AgentCloseRequest) => r.agentId === asked.agentId && r.sessionId === asked.sessionId && !registry.byAgent(r.agentId) ? row : null)
   service.dispose()
   service = new CloseAgentService({ ...deps, closedAlready })
   expect(await service.request(request('now'))).toEqual({ closed: true })
