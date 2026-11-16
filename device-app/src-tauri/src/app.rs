@@ -444,11 +444,15 @@ fn screen_at(screen: Screen, phase: Phase, lines: Vec<String>) -> View {
 mod tests {
     use super::*;
     use crate::types::{
-        Action, ClaudeStatus, DialStatus, Effect, Event, LoginEvent, MenuAction, MenuItem, Phase, Saved, Screen, View,
+        Action, ClaudeStatus, DialStatus, Effect, Event, LoginEvent, MenuAction, MenuItem, Phase, Saved, Screen,
+        UpdateFailure, View,
     };
 
     /// Second 0 of a minute.
     const B: u64 = 1794556800;
+
+    /// How often the app asks for its own update.
+    const H6: u64 = 21_600;
 
     /// A CLI seen before and a login item registered: only what each test does is saved.
     const SEEN: Saved =
@@ -984,7 +988,7 @@ mod tests {
         let two_downs = || {
             let mut app = found();
             app.handle(Event::WatchExit(Some(3)));
-            assert_eq!(app.handle(tick(B + 5)), [Effect::SpawnWatch]);
+            assert_eq!(app.handle(tick(B + 5)), [Effect::SpawnWatch, Effect::CheckUpdate]);
             app.handle(Event::WatchExit(Some(3)));
             app
         };
@@ -1014,7 +1018,7 @@ mod tests {
     fn only_a_watch_the_app_stopped_ends_for_good() {
         let mut app = found();
         app.handle(Event::WatchExit(Some(0)));
-        assert_eq!(app.handle(tick(B + 5)), [Effect::SpawnWatch]);
+        assert_eq!(app.handle(tick(B + 5)), [Effect::SpawnWatch, Effect::CheckUpdate]);
 
         let mut app = found();
         app.handle(Event::Menu(MenuAction::Quit));
@@ -1025,7 +1029,7 @@ mod tests {
     #[test]
     fn a_cli_that_comes_back_is_found_on_a_tick() {
         let mut app = removed();
-        assert_eq!(app.handle(tick(B + 5)), [Effect::FindCli]);
+        assert_eq!(app.handle(tick(B + 5)), [Effect::FindCli, Effect::CheckUpdate]);
         let effects = app.handle(Event::Cli(true));
         for effect in [Effect::SpawnWatch, Effect::ReadAuth, Effect::ReadClaude] {
             assert!(has(&effects, &effect), "{effect:?}");
@@ -1105,5 +1109,137 @@ mod tests {
         let mut app = found();
         assert_eq!(app.handle(Event::Menu(MenuAction::OpenHarness)), [Effect::OpenDesktop]);
         assert_eq!(app.handle(Event::Menu(MenuAction::Quit)), [Effect::StopWatch, Effect::Quit]);
+    }
+
+    #[test]
+    fn the_first_tick_checks_and_then_every_six_hours() {
+        let mut app = found();
+        assert!(has(&app.handle(tick(B + 5)), &Effect::CheckUpdate));
+        app.handle(Event::UpdateChecked(None));
+        for now in [B + 10, B + H6] {
+            assert!(!has(&app.handle(tick(now)), &Effect::CheckUpdate), "{now}");
+        }
+        assert!(has(&app.handle(tick(B + 5 + H6)), &Effect::CheckUpdate));
+        // A clock set back checks too: abs_diff.
+        assert!(has(&app.handle(tick(B + 5)), &Effect::CheckUpdate));
+    }
+
+    #[test]
+    fn no_check_starts_while_the_cli_installs_or_a_sign_in_runs() {
+        let mut app = fresh();
+        assert!(!has(&app.handle(tick(B + 5)), &Effect::CheckUpdate));
+        app.handle(Event::InstallDone(Ok(())));
+        assert!(has(&app.handle(tick(B + 10)), &Effect::CheckUpdate));
+
+        let mut app = on_sign_in();
+        app.handle(Event::Act(Action::SignIn));
+        assert!(!has(&app.handle(tick(B + 5)), &Effect::CheckUpdate));
+        app.handle(login(LoginEvent::Done(Ok(()))));
+        assert!(has(&app.handle(tick(B + 10)), &Effect::CheckUpdate));
+    }
+
+    #[test]
+    fn a_newer_version_is_installed_and_the_app_relaunches() {
+        let mut app = found();
+        app.handle(tick(B + 5));
+        let effects = app.handle(Event::UpdateChecked(Some("0.1.3".into())));
+        assert!(has(&effects, &Effect::InstallUpdate));
+        assert_eq!(logs(&effects), ["update: found 0.1.3"]);
+        let menu = menu_of(&effects);
+        let row = MenuItem::Text("Updating to 0.1.3…".into());
+        let at = menu.iter().position(|item| *item == row).expect("the row");
+        assert_eq!(menu[at + 1], MenuItem::Separator);
+        assert!(!has(&app.handle(tick(B + 5 + H6)), &Effect::CheckUpdate));
+
+        let effects = app.handle(Event::UpdateInstalled);
+        assert_eq!(logs(&effects), ["update: installed 0.1.3"]);
+        assert!(!rows(&effects).iter().any(|row| row.starts_with("Updating to")));
+        assert!(!has(&effects, &Effect::Relaunch));
+        assert_eq!(app.handle(tick(B + 10 + H6)), [Effect::StopWatch, Effect::Relaunch]);
+    }
+
+    #[test]
+    fn a_sign_in_delays_the_relaunch_not_the_download() {
+        let mut app = on_sign_in();
+        app.handle(tick(B + 5));
+        app.handle(Event::Act(Action::SignIn));
+        assert!(has(&app.handle(Event::UpdateChecked(Some("0.1.3".into()))), &Effect::InstallUpdate));
+        app.handle(Event::UpdateInstalled);
+        assert!(!has(&app.handle(tick(B + 10)), &Effect::Relaunch));
+        app.handle(login(LoginEvent::Done(Ok(()))));
+        assert!(app.handle(tick(B + 15)).ends_with(&[Effect::StopWatch, Effect::Relaunch]));
+    }
+
+    #[test]
+    fn a_failure_is_one_line_and_the_next_check_tries_again() {
+        let kinds = [
+            (UpdateFailure::Check, "check"),
+            (UpdateFailure::Download, "download"),
+            (UpdateFailure::Signature, "signature"),
+            (UpdateFailure::Install, "install"),
+        ];
+        for (kind, word) in kinds {
+            // Kept from the start, so the last menu in it is the one shown.
+            let (mut app, mut sent) = App::new(SEEN, true, false, B);
+            sent.extend(app.handle(tick(B + 5)));
+            // A check fails on its own; the others fail installing what it found.
+            if kind != UpdateFailure::Check {
+                sent.extend(app.handle(Event::UpdateChecked(Some("0.1.3".into()))));
+            }
+            let effects = app.handle(Event::UpdateFailed(kind));
+            assert_eq!(logs(&effects), [format!("update: failed {word}")]);
+            assert!(!has(&effects, &Effect::InstallUpdate) && !has(&effects, &Effect::Relaunch), "{kind:?}");
+            sent.extend(effects);
+            assert!(!rows(&sent).iter().any(|row| row.starts_with("Updating to")), "{kind:?}");
+            let effects = app.handle(tick(B + 10));
+            assert!(!has(&effects, &Effect::CheckUpdate) && !has(&effects, &Effect::Relaunch), "{kind:?}");
+            assert!(has(&app.handle(tick(B + 5 + H6)), &Effect::CheckUpdate), "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn a_bundle_that_cannot_be_replaced_offers_the_page_and_says_so_once() {
+        let mut app = found();
+        app.handle(tick(B + 5));
+        app.handle(Event::UpdateChecked(Some("0.1.3".into())));
+        let effects = app.handle(Event::UpdateFailed(UpdateFailure::NotWritable));
+        assert_eq!(logs(&effects), ["update: skipped not-writable"]);
+        let menu = menu_of(&effects);
+        let row = MenuItem::Action(MenuAction::Update, "Update 0.1.3…".into());
+        let at = menu.iter().position(|item| *item == row).expect("the row");
+        assert_eq!(menu[at + 1], MenuItem::Separator);
+        // The fixed page, with nothing of the manifest in it.
+        assert_eq!(
+            app.handle(Event::Menu(MenuAction::Update)),
+            [Effect::OpenUrl("https://harness.autonomous.ai/device".into())]
+        );
+
+        // Six hours on, the same version: tried again, the row stays, and the line is not said twice.
+        assert!(has(&app.handle(tick(B + 5 + H6)), &Effect::CheckUpdate));
+        let effects = app.handle(Event::UpdateChecked(Some("0.1.3".into())));
+        assert!(has(&effects, &Effect::InstallUpdate));
+        assert!(!effects.iter().any(|effect| matches!(effect, Effect::Menu(_))));
+        assert!(logs(&app.handle(Event::UpdateFailed(UpdateFailure::NotWritable))).is_empty());
+
+        // A newer version changes the row, and is said once more.
+        app.handle(tick(B + 5 + 2 * H6));
+        app.handle(Event::UpdateChecked(Some("0.1.4".into())));
+        let effects = app.handle(Event::UpdateFailed(UpdateFailure::NotWritable));
+        assert_eq!(logs(&effects), ["update: skipped not-writable"]);
+        assert!(rows(&effects).contains(&"Update 0.1.4…".to_string()));
+    }
+
+    #[test]
+    fn nothing_newer_changes_nothing() {
+        let mut app = found();
+        app.handle(tick(B + 5));
+        assert!(app.handle(Event::UpdateChecked(None)).is_empty());
+
+        // Nothing newer than the version a row offers: the row goes.
+        app.handle(tick(B + 5 + H6));
+        app.handle(Event::UpdateChecked(Some("0.1.3".into())));
+        app.handle(Event::UpdateFailed(UpdateFailure::NotWritable));
+        app.handle(tick(B + 5 + 2 * H6));
+        assert!(!rows(&app.handle(Event::UpdateChecked(None))).contains(&"Update 0.1.3…".to_string()));
     }
 }

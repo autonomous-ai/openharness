@@ -265,7 +265,7 @@ mod tests {
     #[test]
     fn every_menu_action_has_its_own_id() {
         use MenuAction::*;
-        let actions = [Install, SignIn, ClaudeOn, ClaudeOff, SoundOn, SoundOff, OpenHarness, Quit];
+        let actions = [Install, SignIn, ClaudeOn, ClaudeOff, SoundOn, SoundOff, Update, OpenHarness, Quit];
         for action in actions {
             assert_eq!(menu_action(menu_id(action)), Some(action));
         }

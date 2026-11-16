@@ -107,7 +107,9 @@ fn available(claude: &ClaudeStatus) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{AppState, ClaudeStatus, CliState, Daemon, DialStatus, MenuAction, MenuItem, Saved, Screen};
+    use crate::types::{
+        AppState, AppUpdate, ClaudeStatus, CliState, Daemon, DialStatus, MenuAction, MenuItem, Saved, Screen,
+    };
     use MenuItem::{Action, Check, Separator, Text};
 
     fn dial(attached: bool, fw: Option<&str>) -> DialStatus {
@@ -135,6 +137,7 @@ mod tests {
             claude: Some(ClaudeStatus { supported: true, installed: true, enabled: true, claude_version: None }),
             desktop_installed: true,
             saved: Saved { version: 1, cli_seen: true, asked_sign_in: true, asked_claude: true, login_item: true },
+            app_update: AppUpdate::None,
         }
     }
 
@@ -280,6 +283,25 @@ mod tests {
         for state in absent {
             assert!(!menu(&state).iter().any(|item| matches!(item, Check(..))), "{state:?}");
         }
+    }
+
+    #[test]
+    fn the_update_rows() {
+        let rows = [
+            (AppUpdate::Installing("0.1.3".into()), text("Updating to 0.1.3…")),
+            (AppUpdate::Blocked("0.1.3".into()), act(MenuAction::Update, "Update 0.1.3…")),
+        ];
+        for (app_update, row) in rows {
+            let items = menu(&AppState { app_update: app_update.clone(), ..state() });
+            assert_eq!(items[3..6], [act(MenuAction::ClaudeOff, "Turn off"), row.clone(), Separator], "{app_update:?}");
+            let with_sound = AppState { app_update: app_update.clone(), dial: Some(sound(Some(false))), ..state() };
+            let on = Check(MenuAction::SoundOff, "Sound".into(), true);
+            assert_eq!(menu(&with_sound)[4..7], [on, row, Separator], "{app_update:?}");
+        }
+        assert_eq!(
+            menu_log(&menu(&AppState { app_update: AppUpdate::Blocked("0.1.3".into()), ..state() })),
+            "Dial connected · 0.0.95 | Signed in | Claude Code: On | Turn off | Update 0.1.3… | Open Harness | Quit"
+        );
     }
 
     #[test]
