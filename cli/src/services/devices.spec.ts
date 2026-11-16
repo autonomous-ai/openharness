@@ -5627,13 +5627,13 @@ describe('Orca\'s ring follows Orca\'s tabs (docs/plans/2026-11-16-dial-orca-foc
   }
   /** Lets what a landing sets off run. */
   const settled = () => new Promise((resolve) => setImmediate(resolve))
-  /** The latest read lands with these tabs, and these terminals an agent runs in: a handle alone is one in a tab with no
-   *  title. */
+  /** The latest read lands with these tabs, these terminals an agent runs in, and these terminals' worktrees: a handle
+   *  alone is one in a tab with no title. */
   const land = async (fake: ReturnType<typeof fakeOrcaReads>, tabs: Array<string | { handle: string; title?: string; renamed?: true }> | null,
-    terminals: OrcaTerminal[] = []) => {
+    terminals: OrcaTerminal[] = [], worktrees: ReadonlyMap<string, string> = new Map()) => {
     const read = fake.orders.at(-1)
     expect(read, 'a read asked').toBeTypeOf('function')
-    read!(tabs && { tabs: tabs.map((tab) => typeof tab === 'string' ? { handle: tab } : tab), terminals })
+    read!(tabs && { tabs: tabs.map((tab) => typeof tab === 'string' ? { handle: tab } : tab), terminals, worktrees })
     await settled()
   }
   /** Sessions `ns` running in Orca before the dial came, as their parent processes say, idle since: no hook, so no pane. */
@@ -5759,15 +5759,15 @@ describe('Orca\'s ring follows Orca\'s tabs (docs/plans/2026-11-16-dial-orca-foc
   const diego4 = [{ handle: H(1), title: 'Terminal 3' }, { handle: H(2), title: 'harness' }, { handle: H(3), title: 'Skill từ SKILL.md' },
     { handle: H(4), title: 'PM', renamed: true as const }]
   /** Diego's four tabs, read: Skill (agent 3) placed at its terminal by elimination. */
-  const diegoPlaced = async (over: Parameters<typeof start>[0] = {}) => {
+  const diegoPlaced = async (over: Parameters<typeof start>[0] = {}, worktrees: ReadonlyMap<string, string> = new Map()) => {
     const { port, fake } = withOrca(0, over)
     port.observed(hook(2))
     port.observed(hook(4))
     scanned(3)
     seen.host.watching!(true)
     await settled()
-    await land(fake, diego4, [claudeIn(2), claudeIn(3), claudeIn(4)])
-    await land(fake, diego4, [claudeIn(2), claudeIn(3), claudeIn(4)])
+    await land(fake, diego4, [claudeIn(2), claudeIn(3), claudeIn(4)], worktrees)
+    await land(fake, diego4, [claudeIn(2), claudeIn(3), claudeIn(4)], worktrees)
     expect(await ring()).toEqual([agent(2), agent(3), agent(4)])
     return { port, fake }
   }
@@ -5827,6 +5827,56 @@ describe('Orca\'s ring follows Orca\'s tabs (docs/plans/2026-11-16-dial-orca-foc
     await host().openAgent(agent(2))
     await settled()
     expect(orcaRuns).toEqual([])
+  })
+
+  // Orca 1.4.256's switch reveals a worktree only lightly: a parked session showed once the person pressed Back, whose
+  // full activation `worktree activate` runs (PM, 2026-11-16).
+  const WT = 'bfeba4a9-ec47-4daa-bdb0-5a6b702b5a08::/Users/d/autonomous-harness'
+  const activateIn = (worktreeId: string): [string, string[], number] =>
+    ['/opt/orca/bin/orca', ['worktree', 'activate', '--worktree', `id:${worktreeId}`, '--json'], 10_000]
+
+  it('after a read, a rest and a tap on an Orca agent activate its worktree, then switch to its terminal', async () => {
+    const { fake } = dialWith(2)
+    await land(fake, [H(1), H(2)], [], new Map([[H(1), WT]]))
+    host().swipeEnded(agent(1), 'rest')
+    await vi.waitFor(() => expect(orcaRuns).toEqual([activateIn(WT), switchTo(1)]))
+    expect(await host().openAgent(agent(1))).toBeUndefined()
+    expect(orcaRuns).toEqual([activateIn(WT), switchTo(1), activateIn(WT), switchTo(1)])
+    // A terminal the read gave no worktree: the switch alone.
+    orcaRuns.length = 0
+    host().swipeEnded(agent(2), 'rest')
+    await vi.waitFor(() => expect(orcaRuns).toEqual([switchTo(2)]))
+  })
+
+  it('each read replaces the worktrees: one the latest read did not give is a switch alone', async () => {
+    const { port, fake } = dialWith(2)
+    await land(fake, [H(1), H(2)], [], new Map([[H(1), WT]]))
+    port.observed(hook(3))
+    await land(fake, [H(1), H(2), H(3)], [], new Map([[H(2), WT]]))
+    host().swipeEnded(agent(1), 'rest')
+    await vi.waitFor(() => expect(orcaRuns).toEqual([switchTo(1)]))
+    host().swipeEnded(agent(2), 'rest')
+    await vi.waitFor(() => expect(orcaRuns).toEqual([switchTo(1), activateIn(WT), switchTo(2)]))
+  })
+
+  it('an activate that fails says so in one line with no id, and the switch still runs', async () => {
+    const refusing = { ...orca, run: async (file: string, args: string[], timeoutMs: number) => {
+      orcaRuns.push([file, args, timeoutMs])
+      return { code: args[0] === 'worktree' ? 1 : 0, stdout: '' }
+    } }
+    const { fake } = dialWith(1, { orca: refusing })
+    await land(fake, [H(1)], [], new Map([[H(1), WT]]))
+    host().swipeEnded(agent(1), 'rest')
+    await vi.waitFor(() => expect(logs).toContain('[device] swipe · ok'))
+    expect(orcaRuns).toEqual([activateIn(WT), switchTo(1)])
+    expect(logs.filter((line) => line.startsWith('[device] orca activate'))).toEqual(['[device] orca activate · failed'])
+    expect(logs.filter((line) => [WT, 'bfeba4a9', '/Users/d', H(1), agent(1)].some((secret) => line.includes(secret)))).toEqual([])
+  })
+
+  it('a rest on the agent placed by elimination activates its placed terminal\'s worktree, then switches to it', async () => {
+    await diegoPlaced({}, new Map([[H(3), WT]]))
+    host().swipeEnded(agent(3), 'rest')
+    await vi.waitFor(() => expect(orcaRuns).toEqual([activateIn(WT), switchTo(3)]))
   })
 
   it('once it hooks with its own terminal, a rest switches to that one', async () => {

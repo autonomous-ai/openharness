@@ -434,6 +434,112 @@ describe('Orca adapter', () => {
   })
 })
 
+// Orca 1.4.256's `terminal switch` reveals a worktree only lightly: a parked or sleeping session showed once the person
+// pressed Back, which runs the full activation `worktree activate` runs.
+describe('a switch activates its terminal\'s worktree first', () => {
+  // Orca's own form: its repo's uuid, `::`, the worktree's folder.
+  const WT = 'bfeba4a9-ec47-4daa-bdb0-5a6b702b5a08::/Users/d/autonomous-harness'
+  const activated = ['worktree', 'activate', '--worktree', `id:${WT}`, '--json']
+  const switched = (handle: string) => ['terminal', 'switch', '--terminal', handle, '--json']
+  const pane = (id: string) => ({ adapter: 'orca', id })
+
+  /** The adapter, HANDLE's worktree known, on a `run` that holds each command until the test ends it with a code, or
+   *  rejects it. */
+  function activating() {
+    const calls: string[][] = []
+    const waiting: Array<(code?: number | null) => void> = []
+    const refusing: Array<() => void> = []
+    const lines: string[] = []
+    const worktrees = new Map([[HANDLE, WT]])
+    const adapter = createOrcaAdapter({
+      ...quietDeps(),
+      run: (_file, args) => {
+        calls.push(args)
+        return new Promise((resolve, reject) => {
+          waiting.push((code = 0) => resolve({ code, stdout: '' }))
+          refusing.push(() => reject(new Error('made up')))
+        })
+      },
+    }, { worktreeOf: (handle) => worktrees.get(handle), log: (line) => { lines.push(line) } })
+    const settled = () => new Promise((resolve) => setImmediate(resolve))
+    return { calls, waiting, refusing, lines, adapter, settled }
+  }
+
+  it('with its worktree known, a rest and a tap run worktree activate, then the switch once it has ended', async () => {
+    const { calls, waiting, lines, adapter, settled } = activating()
+    const shown = adapter.show(pane(HANDLE), 'a1')
+    await settled()
+    expect(calls).toEqual([activated])
+    waiting[0]()
+    await vi.waitFor(() => expect(calls).toEqual([activated, switched(HANDLE)]))
+    waiting[1]()
+    expect(await shown).toBe('ok')
+
+    const focused = adapter.focus(pane(HANDLE))
+    await settled()
+    waiting[2]()
+    await vi.waitFor(() => expect(calls).toHaveLength(4))
+    waiting[3]()
+    expect(await focused).toBe(true)
+    expect(calls.slice(2)).toEqual([activated, switched(HANDLE)])
+    expect(lines).toEqual([])
+  })
+
+  it('with no worktree known, the switch alone', async () => {
+    const { calls, waiting, adapter, settled } = activating()
+    const shown = adapter.show(pane(OTHER), 'a1')
+    await settled()
+    expect(calls).toEqual([switched(OTHER)])
+    waiting[0]()
+    expect(await shown).toBe('ok')
+    expect(calls).toHaveLength(1)
+  })
+
+  it('an activate that fails, times out or throws: the switch still runs, its outcome is the answer, and one line says it with no id', async () => {
+    for (const end of ['code 1', 'timeout', 'throw'] as const) {
+      const { calls, waiting, refusing, lines, adapter, settled } = activating()
+      const shown = adapter.show(pane(HANDLE), 'a1')
+      await settled()
+      if (end === 'throw') refusing[0]()
+      else waiting[0](end === 'code 1' ? 1 : null)
+      await vi.waitFor(() => expect(calls).toEqual([activated, switched(HANDLE)]))
+      waiting[1]()
+      expect(await shown, end).toBe('ok')
+      expect(lines, end).toEqual(['[device] orca activate · failed'])
+    }
+    // An activate that worked and a switch that failed: the switch's outcome.
+    const { waiting, lines, adapter, settled } = activating()
+    const shown = adapter.show(pane(HANDLE), 'a1')
+    await settled()
+    waiting[0]()
+    await vi.waitFor(() => expect(waiting).toHaveLength(2))
+    waiting[1](1)
+    expect(await shown).toBe('failed')
+    expect(lines).toEqual([])
+  })
+
+  it('a switch while one activates is that same run; words wait for both; a switch while words are typed is busy and activates nothing', async () => {
+    const { calls, waiting, adapter, settled } = activating()
+    const rest = adapter.show(pane(HANDLE), 'a1')
+    const tap = adapter.show(pane(HANDLE), 'a1')
+    const typed = adapter.type(pane(HANDLE), 'one', 'claude')
+    await settled()
+    expect(calls).toEqual([activated])
+    waiting[0]()
+    await vi.waitFor(() => expect(calls).toHaveLength(2))
+    expect(calls[1]).toEqual(switched(HANDLE))
+    waiting[1]()
+    expect(await rest).toBe('ok')
+    expect(await tap).toBe('ok')
+    await vi.waitFor(() => expect(calls).toHaveLength(3))
+    expect(calls[2][1]).toBe('send')
+    expect(await adapter.show(pane(HANDLE), 'a1')).toBe('busy')
+    waiting[2]()
+    expect(await typed).toBe(true)
+    expect(calls).toHaveLength(3)
+  })
+})
+
 /** A child of `spawn` that the test drives: it writes the child's stdout, ends it, and reads the signals it was sent. */
 function fakeChild() {
   const listeners: Array<(chunk: Buffer) => void> = []
@@ -677,9 +783,56 @@ describe("Orca's tab order", () => {
     const cut = JSON.parse(listedWith([row(1, '/w', 'claude')], group(tab(leaf(1), 'PM'))))
     cut.result.truncated = true
     const read = await reads({}, [{ stdout: JSON.stringify(cut) }]).orca.orcaTabs()
-    expect(read).toEqual({ tabs: [{ handle: H(1), title: 'PM', renamed: true }], terminals: [] })
+    expect(read).toEqual({ tabs: [{ handle: H(1), title: 'PM', renamed: true }], terminals: [], worktrees: new Map([[H(1), 'w0']]) })
     const many = Array.from({ length: 257 }, (_, i) => row(i + 1, '/w', 'claude'))
     expect((await reads({}, [{ stdout: listedWith(many) }]).orca.orcaTabs())?.terminals).toEqual([])
+  })
+
+  /** A list whose layouts carry these worktree ids, each with its root, and these rows. */
+  const listedIn = (terminals: unknown[], ...layouts: Array<[unknown, unknown]>) => JSON.stringify({ id: 'x', ok: true, result: { terminals,
+    visualLayouts: layouts.map(([worktreeId, root], i) => ({ worktreeId, worktreePath: `/made/up/${i}`, root })), totalCount: 0, truncated: false } })
+  const inWorktree = (n: number, worktreeId: unknown, agentIdentity?: unknown) => ({ ...row(n, '/w', agentIdentity), worktreeId })
+  // Orca's own form: its repo's uuid, `::`, the worktree's folder; a folder's bound and 64 more.
+  const WT = 'bfeba4a9-ec47-4daa-bdb0-5a6b702b5a08::/Users/d/autonomous-harness'
+  const longest = `x::/${'p'.repeat(4160 - 4)}`
+
+  it('each terminal\'s worktree, by its id: its layout\'s, else its row\'s, a shell\'s too; one that is no string, empty, too long or holds a control character is none', async () => {
+    const stdout = listedIn([
+      // A row of a laid-out terminal does not replace its layout's; one laid out nowhere gives its own, a shell's too.
+      inWorktree(1, 'row'), inWorktree(5, 'r5', 'claude'), inWorktree(6, 'r6'),
+      inWorktree(7, 42), inWorktree(8, ''), inWorktree(9, `${longest}p`), inWorktree(10, 'a\nb'), inWorktree(11, 'a\u0000b'),
+      inWorktree(12, longest), { ...inWorktree(13, 'r13'), handle: 'term_0f8e2c1a' }, row(14, '/w', 'claude'),
+    ], [WT, group(tab(leaf(1)), tab(panes(leaf(2), leaf(3))))], [42, group(tab(leaf(4)))], ['w\u0007', group(tab(leaf(15)))])
+    expect((await reads({}, [{ stdout }]).orca.orcaTabs())?.worktrees).toEqual(new Map([
+      [H(1), WT], [H(2), WT], [H(3), WT], [H(5), 'r5'], [H(6), 'r6'], [H(12), longest],
+    ]))
+    // A list cut short still gives each row's: only placing an agent needs every row.
+    const cut = JSON.parse(listedIn([inWorktree(1, 'r1', 'claude')]))
+    cut.result.truncated = true
+    expect((await reads({}, [{ stdout: JSON.stringify(cut) }]).orca.orcaTabs())?.worktrees).toEqual(new Map([[H(1), 'r1']]))
+  })
+
+  it('at most 256 terminals\' worktrees', async () => {
+    const laid = Array.from({ length: 200 }, (_, i) => tab(leaf(i + 1)))
+    const rows = Array.from({ length: 300 }, (_, i) => inWorktree(i + 1, `r${i + 1}`))
+    const worktrees = (await reads({}, [{ stdout: listedIn(rows, ['w', group(...laid)]) }]).orca.orcaTabs())?.worktrees
+    expect(worktrees?.size).toBe(256)
+    expect(worktrees?.get(H(200))).toBe('w')
+    expect(worktrees?.get(H(256))).toBe('r256')
+    expect(worktrees?.has(H(257))).toBe(false)
+  })
+
+  it('a read\'s worktree the adapter is given: a bad id read is a switch alone', async () => {
+    const stdout = listedIn([inWorktree(1, 'a\nb'), inWorktree(2, WT)])
+    const worktrees = (await reads({}, [{ stdout }]).orca.orcaTabs())!.worktrees
+    const { calls, run } = recordingRun()
+    const adapter = createOrcaAdapter({ ...quietDeps(), run }, { worktreeOf: (handle) => worktrees.get(handle), log: () => {} })
+    expect(await adapter.show({ adapter: 'orca', id: H(1) }, 'a1')).toBe('ok')
+    expect(await adapter.show({ adapter: 'orca', id: H(2) }, 'a1')).toBe('ok')
+    expect(calls.map((call) => call.args)).toEqual([
+      ['terminal', 'switch', '--terminal', H(1), '--json'],
+      ['worktree', 'activate', '--worktree', `id:${WT}`, '--json'], ['terminal', 'switch', '--terminal', H(2), '--json'],
+    ])
   })
 
   it('a title over 64 characters is cut, one with a control character or not a string is none', async () => {

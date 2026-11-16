@@ -1,7 +1,7 @@
 /**
  * The `orca` an end-to-end daemon finds first on its PATH, in place of the stub that exits 1 (harness/daemon.ts): it
- * notes every run, prints a layout and a focus watch a test tells it, and answers `terminal --help` as Orca 1.4.256
- * does, or as an Orca with `watch-focus`. The real Orca never runs: every session here runs inside it.
+ * notes every run, prints a layout and a focus watch a test tells it, answers `terminal --help` as Orca 1.4.256
+ * does, or as an Orca with `watch-focus`, and takes every `worktree activate`. The real Orca never runs: every session here runs inside it.
  */
 import { spawnSync } from 'node:child_process'
 import { appendFileSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
@@ -47,6 +47,7 @@ case "$1 $2" in
   'terminal --help') cat '${dir}/help' ;;
   'terminal list') [ -f '${dir}/layout.json' ] || exit 1; cat '${dir}/layout.json' ;;
   'terminal watch-focus') [ -f '${dir}/watches' ] || exit 1; exec tail -n 1 -f '${dir}/focus' ;;
+  'worktree activate') exit 0 ;;
   'terminal switch'|'terminal send')
     printf '%s' "$*" > "$(mktemp '${dir}/runs/run.XXXXXX')"
     code=$(cat '${dir}/exit' 2>/dev/null); exit "\${code:-0}" ;;

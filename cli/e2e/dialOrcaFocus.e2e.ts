@@ -141,6 +141,9 @@ describe("the dial follows Orca's focus and tabs", () => {
     dial.send({ t: 'focus', agentId: b.claude.id })
     await said(d, '[device] swipe · ok')
     expect(orca.runs().map((run) => run.args)).toEqual([`terminal switch --terminal ${b.handle} --json`])
+    // Its worktree, from the layout read, is activated first, as Orca's Back does.
+    expect(orca.asked().filter((args) => /^(worktree activate|terminal switch) /.test(args)))
+      .toEqual(['worktree activate --worktree id:w0 --json', `terminal switch --terminal ${b.handle} --json`])
     orca.focus(b.handle)
     await said(d, '[device] focus · skipped · echo')
     expect(count(d, '[device] focus · moved')).toBe(2)
