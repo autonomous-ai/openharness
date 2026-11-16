@@ -498,12 +498,16 @@ function postObserved(port, body) {
  * CLAUDE_CODE_ENTRYPOINT is a fixed word naming how Claude Code was started, not a secret: the VS Code extension sets
  * `claude-vscode` (read in the extension's code), and a tap then opens the extension's tab on the session.
  *
+ * HC_TERMINAL_ID is Herdr Core's (hc's) address of the terminal the agent runs in, `t7`: an id, no credential. A named
+ * hc session's addresses start again at t1, and the devices follow the default session, where that address would be
+ * another terminal: it is sent from the default session alone, and on macOS alone, the one platform hc runs on.
+ *
  * In order: the app's names first, then the hosts from the nearest, so a session with more than MAX_HINTS set loses
  * the farthest. CLAUDE_CODE_ENTRYPOINT is last, the first the cap drops: without it a tap still brings the app forward.
  */
-const HOST_HINTS = ['TERM_PROGRAM', '__CFBundleIdentifier', 'HERDR_PANE_ID', 'REX_BLOCK', 'ZELLIJ', 'TMUX_PANE',
-  'KITTY_WINDOW_ID', 'WEZTERM_PANE', 'ORCA_AGENT_SESSION_ID', 'ORCA_TERMINAL_HANDLE', 'CLAUDE_CODE_HOST_SESSION_ID',
-  'CLAUDE_CODE_ENTRYPOINT']
+const HOST_HINTS = ['TERM_PROGRAM', '__CFBundleIdentifier', 'HERDR_PANE_ID', 'HC_TERMINAL_ID', 'REX_BLOCK', 'ZELLIJ',
+  'TMUX_PANE', 'KITTY_WINDOW_ID', 'WEZTERM_PANE', 'ORCA_AGENT_SESSION_ID', 'ORCA_TERMINAL_HANDLE',
+  'CLAUDE_CODE_HOST_SESSION_ID', 'CLAUDE_CODE_ENTRYPOINT']
 /** The core's observed route takes no more (core/observedHook.ts MAX_HINTS, which hookNotify.spec.ts keeps this equal to). */
 const MAX_HINTS = 10
 
@@ -520,6 +524,9 @@ function hostHints() {
     // herdr sets HERDR_SESSION in its panes alone (herdr 0.8.0): the devices follow the default session, where this id
     // would be another agent's pane. Skipped before the cap counts it, so it costs no other hint its place.
     if (name === 'HERDR_PANE_ID' && process.env.HERDR_SESSION) continue
+    // The same for a named hc session's terminal address (see HOST_HINTS), and off macOS, where no hc sets it.
+    if (name === 'HC_TERMINAL_ID'
+      && (process.platform !== 'darwin' || (process.env.HC_SESSION && process.env.HC_SESSION !== 'default'))) continue
     const value = process.env[name]?.slice(0, 64)
     if (value && !CONTROL.test(value)) hints[name] = value
   }
