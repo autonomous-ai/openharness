@@ -45,6 +45,9 @@ export interface HostAdapter {
   /** Types a line at the agent's prompt and submits it; `engine` is the agent's, for an app that checks who holds the
    *  pane. Only the source decides that the prompt is free. */
   type?(pane: Pane, text: string, engine: string): Promise<boolean>
+  /** Whether `type` can reach the pane now (its app's socket there): asked at each look. One that cannot leaves the words
+   *  to the agent's next pane whose app types. */
+  canType?(pane: Pane): boolean
   /** The key a source that lists this app's agents knows the same pane by (registry.ts). Only an app with such a
    *  source has one. */
   paneKey?(pane: Pane): string

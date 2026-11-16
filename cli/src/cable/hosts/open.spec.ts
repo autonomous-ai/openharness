@@ -17,7 +17,7 @@ const APP_WEZTERM = '/Applications/WezTerm.app/Contents/MacOS/wezterm'
 interface Call { file: string; args: string[]; timeoutMs: number }
 
 /** herdr's socket, which no tap asks: a tap is `herdr agent focus`. */
-const herdrClient = { prompt: vi.fn() }
+const herdrClient = { prompt: vi.fn(), socketStamp: vi.fn() }
 
 /** What a test may set: the runner and the binaries it finds, Orca's switch, and the log. */
 interface Over extends OrcaDeps {

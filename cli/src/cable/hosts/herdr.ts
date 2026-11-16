@@ -5,8 +5,8 @@
  *
  * A tap stays the command on every platform: one way to focus, and on Windows, where herdr's socket is a named pipe the
  * client does not speak, a tap is not lost. The dial's words go over herdr's socket (herdrClient.ts), so off Windows
- * this adapter types. It comes before Orca's: herdr inside an Orca terminal takes the words into the agent's own pane,
- * where Orca would type into whichever pane herdr has in front.
+ * this adapter types while that socket is there. It comes before Orca's: herdr inside an Orca terminal takes the words
+ * into the agent's own pane, where Orca would type into whichever pane herdr has in front.
  *
  * A tap and the words take turns per pane, as Orca's switch and send do (orca.ts). The turn is held here, as this file
  * alone holds both the command and the client, and the herdr source's words come through it too.
@@ -15,7 +15,7 @@ import type { HostAdapter, Pane, Place } from './adapter.js'
 import { HERDR_PANE, herdrPaneKey, type HerdrClient, type HerdrPrompt } from './herdrClient.js'
 import { RUN_TIMEOUT_MS, type OrcaDeps } from './orca.js'
 
-export interface HerdrAdapterDeps extends OrcaDeps { client: Pick<HerdrClient, 'prompt'> }
+export interface HerdrAdapterDeps extends OrcaDeps { client: Pick<HerdrClient, 'prompt' | 'socketStamp'> }
 
 export interface HerdrAdapter extends HostAdapter {
   paneKey(pane: Pane): string
@@ -60,6 +60,9 @@ export function createHerdrAdapter(deps: HerdrAdapterDeps): HerdrAdapter {
     },
     ...(deps.platform === 'win32' ? {} : {
       type: async (pane: Pane, text: string, engine: string) => (await prompt(pane.id, engine, text)).outcome === 'sent',
+      // A daemon started by launchd or systemd may not have the shell's XDG_CONFIG_HOME, and so no socket where herdr
+      // listens: the words then go as they did before herdr typed, through the agent's next pane (Orca's).
+      canType: () => deps.client.socketStamp() !== undefined,
     }),
     paneKey: (pane) => herdrPaneKey(pane.id),
     prompt,

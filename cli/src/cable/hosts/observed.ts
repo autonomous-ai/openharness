@@ -123,8 +123,8 @@ interface Located {
   pane: Pane
 }
 
-/** The dial's words go to the first pane whose app types. */
-const words = (adapter: HostAdapter): boolean => !!adapter.type
+/** The dial's words go to the first pane whose app types now. */
+const words = (adapter: HostAdapter, pane: Pane): boolean => !!adapter.type && (adapter.canType?.(pane) ?? true)
 /** A rest shows the first pane its app can show now, without coming forward. */
 const rest = (adapter: HostAdapter, pane: Pane): boolean => !!adapter.show && (adapter.canShow?.(pane) ?? true)
 /** A tap hands the opener the first pane its app brings forward here, before or instead of the app: one after it is
