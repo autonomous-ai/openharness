@@ -8,9 +8,9 @@ import { FRONT_NONE } from '../cable/hosts/frontApp.js'
 import { TAB_APPS, type Tab } from '../cable/hosts/tabs.js'
 import { listenLocalSocket } from '../lib/localSocket.js'
 import {
-  ATTACH_MAX_BYTES, ATTACH_PER_SECOND, attachHandler, FRONT_MAX_BYTES, FRONT_PER_SECOND, frontHandler, LISTENER_DROPPED_PER_SECOND, LISTENER_MAX_CONNECTIONS,
-  openDevicesListener, REFUSED, TAB_MAX_BYTES, TAB_PER_SECOND, tabHandler, TABS_MAX_BYTES, TABS_PER_SECOND, tabsStream, type DevicesListener,
-  type ListenerHandler, type ListenerStream, type ListenerStreamHandler,
+  ATTACH_MAX_BYTES, ATTACH_PER_SECOND, attachHandler, DIAL_MAX_BYTES, DIAL_NAME_MAX, DIAL_PER_SECOND, dialStream, FRONT_MAX_BYTES, FRONT_PER_SECOND,
+  frontHandler, LISTENER_DROPPED_PER_SECOND, LISTENER_MAX_CONNECTIONS, openDevicesListener, REFUSED, TAB_MAX_BYTES, TAB_PER_SECOND, tabHandler,
+  TABS_MAX_BYTES, TABS_PER_SECOND, tabsStream, type DevicesListener, type ListenerHandler, type ListenerStream, type ListenerStreamHandler, type StreamEnd,
 } from './devicesListener.js'
 
 const dirs: string[] = []
@@ -1273,5 +1273,306 @@ describe('tabs', () => {
     const longest = Buffer.byteLength('{"type":"tabs","standby":false}')
     expect(longest).toBe(31)
     expect(longest).toBeLessThanOrEqual(TABS_MAX_BYTES)
+  })
+})
+
+describe('the dial stream', () => {
+  const DIAL = '{"type":"dial","standby":true}'
+  const UNPLUGGED = '{"attached":false}'
+  const NO_AGENT = '{"attached":true,"agent":null}'
+  const API = { name: 'api', app: 'Orca' }
+  const API_LINE = '{"attached":true,"agent":{"name":"api","app":"Orca"}}'
+  const OPEN = '[devices] dial stream · open'
+
+  /** A dial stream, every line it logged, and each minute's timer it asked for, run by hand. */
+  function dialed() {
+    const logged: string[] = []
+    const timers: Array<{ ms: number; run: () => void }> = []
+    const dial = dialStream({ log: (line) => logged.push(line), after: (ms, run) => { timers.push({ ms, run }); return () => {} } })
+    return { dial, logged, timers }
+  }
+
+  /** A stream of the test's own, as the listener hands one to open: it takes every line, and the test says when it is
+   *  writable and when it ends. */
+  function handMade() {
+    const ended = new AbortController()
+    const lines: unknown[] = []
+    let run = (): void => {}
+    const stream: ListenerStream = {
+      write: (line) => { lines.push(line); return true },
+      onWritable: (listener) => { run = listener },
+      ended: ended.signal,
+    }
+    return { stream, lines, writable: () => run(), end: (reason: StreamEnd) => ended.abort(reason) }
+  }
+
+  const agentOf = (line: string): unknown => (JSON.parse(line) as { agent: { name: string } }).agent.name
+
+  it('the dial handler is its two limits and open', () => {
+    const { handler } = dialStream({ log: () => {}, after: () => () => {} })
+    expect(Object.keys(handler).sort()).toEqual(['maxBytes', 'open', 'perSecond'])
+    expect(handler).toMatchObject({ maxBytes: DIAL_MAX_BYTES, perSecond: DIAL_PER_SECOND })
+    expect([DIAL_MAX_BYTES, DIAL_PER_SECOND, DIAL_NAME_MAX]).toEqual([64, 1, 64])
+    expect(Buffer.byteLength(DIAL)).toBe(30)
+  })
+
+  it('after the stream ended, attached and shows write nothing and throw nothing; the next stream says the state they kept', () => {
+    const { dial } = dialed()
+    const ended = handMade()
+    expect(dial.handler.open({ type: 'dial', standby: true }, ended.stream)).toBeUndefined()
+    ended.writable()
+    expect(ended.lines).toEqual([{ attached: false }])
+    ended.end('gone')
+    expect(() => { dial.attached(true); dial.shows(API) }).not.toThrow()
+    expect(ended.lines).toEqual([{ attached: false }])
+
+    const next = handMade()
+    dial.handler.open({ type: 'dial', standby: true }, next.stream)
+    next.writable()
+    expect(next.lines.map((line) => JSON.stringify(line))).toEqual([API_LINE])
+  })
+
+  describe.skipIf(process.platform === 'win32')('on a real listener', () => {
+    it('the first line is the state as the stream opens', async () => {
+      const unplugged = dialed()
+      const one = await open({ dial: unplugged.dial.handler })
+      expect(await (await asked(one.path, DIAL)).got(1)).toEqual([UNPLUGGED])
+
+      const plugged = dialed()
+      plugged.dial.attached(true)
+      const other = await open({ dial: plugged.dial.handler })
+      expect(await (await asked(other.path, DIAL)).got(1)).toEqual([NO_AGENT])
+    })
+
+    it('a dial attaching and the agent it shows are a line each, byte for byte', async () => {
+      const { dial } = dialed()
+      const { path } = await open({ dial: dial.handler })
+      const client = await asked(path, DIAL)
+      expect(client).toMatchObject({ status: 200, type: 'application/x-ndjson' })
+      await client.got(1)
+      dial.attached(true)
+      await client.got(2)
+      // The line's keys are in its own order, and hold only the name and the app, whatever else the caller hands on.
+      dial.shows({ app: 'Orca', id: 'agent-5f3a', name: 'api' } as typeof API)
+      expect(await client.got(3)).toEqual([UNPLUGGED, NO_AGENT, API_LINE])
+    })
+
+    it('a state that does not change writes nothing', async () => {
+      const { dial } = dialed()
+      const { path } = await open({ dial: dial.handler })
+      const client = await asked(path, DIAL)
+      await client.got(1)
+      dial.attached(true)
+      dial.attached(true)
+      await client.got(2)
+      dial.attached(true)
+      dial.shows(API)
+      await client.got(3)
+      dial.shows({ ...API })
+      dial.shows({ name: 'web', app: 'Harness' })
+      expect(await client.got(4)).toEqual([UNPLUGGED, NO_AGENT, API_LINE, '{"attached":true,"agent":{"name":"web","app":"Harness"}}'])
+    })
+
+    it('a removal reaches the reader', async () => {
+      const { dial } = dialed()
+      dial.attached(true)
+      dial.shows(API)
+      const { path } = await open({ dial: dial.handler })
+      const client = await asked(path, DIAL)
+      expect(await client.got(1)).toEqual([API_LINE])
+      dial.shows(null)
+      expect(await client.got(2)).toEqual([API_LINE, NO_AGENT])
+      dial.attached(false)
+      expect(await client.got(3)).toEqual([API_LINE, NO_AGENT, UNPLUGGED])
+    })
+
+    it('while detached an agent is not said', async () => {
+      const { dial } = dialed()
+      const { path } = await open({ dial: dial.handler })
+      const client = await asked(path, DIAL)
+      await client.got(1)
+      dial.shows(API)
+      dial.attached(true)
+      expect(await client.got(2)).toEqual([UNPLUGGED, API_LINE])
+    })
+
+    it('ten changes in one turn of the loop are two lines, the first and the last', async () => {
+      const { dial } = dialed()
+      dial.attached(true)
+      const { path } = await open({ dial: dial.handler })
+      const client = await asked(path, DIAL)
+      await client.got(1)
+      for (let i = 1; i <= 10; i++) dial.shows({ name: `agent-${i}`, app: 'Orca' })
+      const lines = await client.got(3)
+      expect(lines.slice(1).map(agentOf)).toEqual(['agent-1', 'agent-10'])
+    })
+
+    it('a change back to the line last written, while it drains, writes nothing more', async () => {
+      const { dial } = dialed()
+      dial.attached(true)
+      const { path } = await open({ dial: dial.handler })
+      const client = await asked(path, DIAL)
+      await client.got(1)
+      dial.shows({ name: 'a', app: 'Orca' })
+      dial.shows({ name: 'b', app: 'Orca' })
+      dial.shows({ name: 'a', app: 'Orca' })
+      await client.got(2)
+      // The next line after a is the next change: a was not written twice, and b never.
+      dial.shows({ name: 'c', app: 'Orca' })
+      const lines = await client.got(3)
+      expect(lines.slice(1).map(agentOf)).toEqual(['a', 'c'])
+    })
+
+    it('a name over 64 characters is cut to 64 code points, and a pair is not split', async () => {
+      const { dial } = dialed()
+      dial.attached(true)
+      const { path } = await open({ dial: dial.handler })
+      const client = await asked(path, DIAL)
+      await client.got(1)
+      const names: Array<[string, string]> = [
+        ['😀'.repeat(70), '😀'.repeat(64)],
+        [`${'a'.repeat(63)}😀b`, `${'a'.repeat(63)}😀`],
+        ['x'.repeat(65), 'x'.repeat(64)],
+        ['y'.repeat(64), 'y'.repeat(64)],
+      ]
+      for (const [i, [name, cut]] of names.entries()) {
+        dial.shows({ name, app: 'Orca' })
+        const line = (await client.got(i + 2)).at(-1)!
+        expect(agentOf(line)).toBe(cut)
+        expect(Buffer.byteLength(line)).toBeLessThan(400)
+      }
+    })
+
+    it('a name of quotes, control characters or lone surrogates is one JSON line under 1 KiB', async () => {
+      const { dial } = dialed()
+      dial.attached(true)
+      const { path } = await open({ dial: dial.handler })
+      const client = await asked(path, DIAL)
+      await client.got(1)
+      for (const [i, name] of ['"'.repeat(64), '\u0000'.repeat(64), '\n'.repeat(64), '\ud800'.repeat(64)].entries()) {
+        dial.shows({ name, app: 'Orca' })
+        const lines = await client.got(i + 2)
+        // A raw newline would have made it two.
+        expect(lines).toHaveLength(i + 2)
+        const line = lines.at(-1)!
+        expect(JSON.parse(line)).toEqual({ attached: true, agent: { name, app: 'Orca' } })
+        expect(Buffer.byteLength(line)).toBeLessThanOrEqual(1024)
+      }
+    })
+
+    it('a second open is 409 while one is open, and the first is still written to; once it ends, the next open is a stream', async () => {
+      const { dial } = dialed()
+      const opened = vi.spyOn(dial.handler, 'open')
+      const { path } = await open({ dial: dial.handler })
+      const first = await asked(path, DIAL)
+      await first.got(1)
+      const second = await asked(path, DIAL)
+      expect(second.status).toBe(409)
+      await second.closed
+      expect(second.lines()).toEqual([])
+      expect(opened).toHaveBeenCalledOnce()
+      dial.attached(true)
+      expect(await first.got(2)).toEqual([UNPLUGGED, NO_AGENT])
+
+      first.close()
+      await endOf(opened.mock.calls[0]![1])
+      const next = await asked(path, DIAL)
+      expect(next.status).toBe(200)
+      expect(await next.got(1)).toEqual([NO_AGENT])
+    })
+
+    it('an open with no standby, or standby false, is 400 and opens nothing', async () => {
+      const { dial, logged } = dialed()
+      const opened = vi.spyOn(dial.handler, 'open')
+      const { path } = await open({ dial: dial.handler })
+      expect(await once(path, '{"type":"dial"}')).toBe(400)
+      expect(await once(path, '{"type":"dial","standby":false}')).toBe(400)
+      expect(opened.mock.results.map(({ value }) => value)).toEqual([REFUSED, REFUSED])
+      expect(logged).toEqual([])
+      // Nothing holds the stream.
+      const client = await asked(path, DIAL)
+      expect(client.status).toBe(200)
+      expect(await client.got(1)).toEqual([UNPLUGGED])
+    })
+
+    it('a 65-byte open is 413; while another connection holds the stream, a connection\'s first open is 409 and its second within a second is 429', async () => {
+      /** A dial open padded to exactly `bytes`. */
+      const dialOfBytes = (bytes: number): string => {
+        const unpadded = Buffer.byteLength(JSON.stringify({ type: 'dial', standby: true, pad: '' }))
+        const body = JSON.stringify({ type: 'dial', standby: true, pad: 'x'.repeat(bytes - unpadded) })
+        expect(Buffer.byteLength(body)).toBe(bytes)
+        return body
+      }
+      const { dial } = dialed()
+      const { path } = await open({ dial: dial.handler }, { now: () => 0 })
+      expect(await once(path, dialOfBytes(DIAL_MAX_BYTES + 1))).toBe(413)
+      const holder = await asked(path, dialOfBytes(DIAL_MAX_BYTES))
+      expect(holder.status).toBe(200)
+      const sender = connection(path)
+      expect((await sender.send(DIAL)).status).toBe(409)
+      expect((await sender.send(DIAL)).status).toBe(429)
+      expect(await holder.got(1)).toEqual([UNPLUGGED])
+    })
+
+    it('the stream opening and ending are a log line each', async () => {
+      const { dial, logged } = dialed()
+      const opened = vi.spyOn(dial.handler, 'open')
+      const { path, listener } = await open({ dial: dial.handler })
+      const client = await asked(path, DIAL)
+      expect(logged).toEqual([OPEN])
+      client.close()
+      await endOf(opened.mock.calls[0]![1])
+      expect(logged).toEqual([OPEN, '[devices] dial stream · ended · gone'])
+
+      await asked(path, DIAL)
+      await listener!.close()
+      expect(logged.slice(2)).toEqual([OPEN, '[devices] dial stream · ended · closed'])
+
+      // A line that does not drain: no name is long enough to stall a real one.
+      const stalled = handMade()
+      dial.handler.open({ type: 'dial', standby: true }, stalled.stream)
+      stalled.end('stalled')
+      expect(logged.slice(4)).toEqual([OPEN, '[devices] dial stream · ended · stalled'])
+    })
+
+    it('the lines written are counted once a minute, and a minute with none says nothing', async () => {
+      const { dial, logged, timers } = dialed()
+      const { path } = await open({ dial: dial.handler })
+      const client = await asked(path, DIAL)
+      await client.got(1)
+      expect(timers.map(({ ms }) => ms)).toEqual([60_000])
+      // The agent waits behind the attach: its write that answered false is not a line.
+      dial.attached(true)
+      dial.shows(API)
+      await client.got(3)
+      expect(timers).toHaveLength(1)
+      timers[0]!.run()
+      expect(logged.at(-1)).toBe('[devices] dial stream · 3 lines in the last minute')
+      // A minute with no line sets no timer, so it logs nothing.
+      expect(timers).toHaveLength(1)
+
+      dial.shows(null)
+      await client.got(4)
+      expect(timers.map(({ ms }) => ms)).toEqual([60_000, 60_000])
+      timers[1]!.run()
+      expect(logged.at(-1)).toBe('[devices] dial stream · 1 lines in the last minute')
+    })
+
+    it('no log line holds a name or an app', async () => {
+      const { dial, logged, timers } = dialed()
+      const opened = vi.spyOn(dial.handler, 'open')
+      const { path, lines } = await open({ dial: dial.handler })
+      const client = await asked(path, DIAL)
+      await client.got(1)
+      dial.attached(true)
+      await client.got(2)
+      dial.shows({ name: 'marker-5f3a', app: 'WezTerm' })
+      await client.got(3)
+      client.close()
+      await endOf(opened.mock.calls[0]![1])
+      for (const { run } of timers) run()
+      expect(logged).toHaveLength(3)
+      for (const text of [...logged, ...lines]) expect(text).not.toMatch(/marker-5f3a|WezTerm/)
+    })
   })
 })
