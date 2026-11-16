@@ -167,3 +167,18 @@ Final logs are `/tmp/hermes-recovery-gaps-core-coverage.log` and
 `/tmp/hermes-recovery-gaps-types-final.log` (TypeScript passes). Execution is macOS with Node 24.22.2 and isolated
 private SQLite stores. No broad gate, native daemon matrix, performance comparison, Linux or signed Windows run
 was performed for this correction. Those acceptances remain required on the final integrated source.
+## Coordinator review of the Hermes recovery correction
+
+The coordinator independently reviewed `eca2707706` against `d20bb1ed`, including
+the composed caller tests and worker hydration/acknowledgement path. No new
+correctness finding: fresh native reads are limited to an abandoned reader's
+own hold, captured owner checks still reject a superseded read, and recovery
+publishes only the current newly open turn. Ordinary hydration, completed
+history and a previously acknowledged working turn stay silent. Delayed seeding
+and a repeated reconnect are covered by the retained controls.
+
+Final required local gates selected from the current-main diff are core and
+portability. They will run on the clean reviewed head; the earlier broad
+receipts do not cover these fixes. Native reader-loss/Close/Resume acceptance
+and a fresh matched comparison against the same main remain required. Earlier
+cost failures are not superseded by the focused passing tests.
