@@ -272,6 +272,47 @@ describe('the devices write the dial skill', () => {
     expect(r.lines).toEqual([counts([0, 0], [1, 1])])
   })
 
+  it('the race: Off set while the start pass writes a listed folder again removes it', () => {
+    const listedHome = folder()
+    let off = false
+    const r = rig({
+      answers: () => {
+        if (existsSync(skillFile(listedHome))) off = true
+        return { codex: !off }
+      },
+    })
+    // No default home: the listed folder is the pass's one write.
+    rmSync(r.codexHome, { recursive: true })
+    writeHomes(r.dataDir, { claude: [], codex: [skillsAt(listedHome)] })
+
+    r.writer.started()
+
+    expect(existsSync(skillFile(listedHome))).toBe(false)
+    expect(readHomes(r.dataDir).codex).toEqual([])
+  })
+
+  it('the race: Off set while a scan writes a listed home again removes it', () => {
+    const other = folder()
+    let armed = false
+    let off = false
+    const r = rig({
+      answers: () => {
+        if (armed && existsSync(skillFile(other))) off = true
+        return { codex: !off }
+      },
+    })
+    writeHomes(r.dataDir, { claude: [], codex: [skillsAt(other)] })
+    r.writer.started()
+    // Removed by hand since: the scan writes it again, and the person turns Codex off the moment it lands.
+    rmSync(join(other, 'skills', 'dial'), { recursive: true })
+    armed = true
+
+    r.writer.scanned([ownerIn(other)])
+
+    expect(existsSync(skillFile(other))).toBe(false)
+    expect(readHomes(r.dataDir).codex).toEqual([])
+  })
+
   it('a known home costs no file work on the next scan', () => {
     const other = folder()
     const r = rig()
