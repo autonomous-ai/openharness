@@ -68,10 +68,10 @@ No file under `cli/src/core/` changes, and `cli/src/architecture.coreFiles.txt` 
 ## Global Constraints
 
 - **Never the person's own Herdr.** No task, spec or check stops, restarts or calls Diego's own hc (the default session), Herdr.app, `~/.config/herdr`, `~/.local/state/herdr-core/default` or herdr 0.8.0. None runs a bare `hc`, `herdr-core`, `herdr-app` or `herdr`, and none drives Herdr's real window. Herdr.app's layout doc (hc doc `herdr-app`) is never read or written. No process reads another process's environment.
-- **The socket.** `HC_SOCKET` when it is absolute; else `<XDG_STATE_HOME>/herdr-core/<HC_SESSION>/<HC_SESSION>.sock`, a relative or unset `XDG_STATE_HOME` read as `~/.local/state`, an unset or invalid `HC_SESSION` read as `default`. From the devices process's own environment only. Before each connection it must be a socket owned by this user (`lstat`). A `socket` in hc's `config.toml` is not read.
+- **The socket** (Task 1, F1). `HC_SOCKET` when it is absolute; else, with an absolute `XDG_RUNTIME_DIR`, `<XDG_RUNTIME_DIR>/herdr-core/<HC_SESSION>.sock`; else `<XDG_STATE_HOME>/herdr-core/<HC_SESSION>/<HC_SESSION>.sock`, a relative or unset `XDG_STATE_HOME` read as `~/.local/state`, an unset or invalid `HC_SESSION` read as `default`. From the devices process's own environment only. Before each connection it must be a socket owned by this user (`lstat`). A `socket` in hc's `config.toml` is not read.
 - **Framing.** JSON-RPC 2.0, one message a line. An answer counts only under its own id. An error counts by its `data.kind` in `[a-z_]{1,64}`, never by its message. A request is one connection. The subscription's connection writes `hello` then `events.subscribe` together.
 - **`hello`** with `generation: 1`. `unsupported_generation`, or any other generation, is `bad_answer`.
-- **Bounds.** A request's line: 1 MiB. A subscription's line: 8 MiB. A request's deadline: 10 s (`RUN_TIMEOUT_MS`). A send's deadline: 75 s. A subscription that hears nothing for 45 s ends (`timeout`). At most 64 agents listed. Names cut to 64 characters, control characters removed. `cwd` cut to 4096 characters.
+- **Bounds.** A line from hc, a request's or the subscription's: 8 MiB (its snapshot is one line with every terminal of the core). A request's deadline: 10 s (`RUN_TIMEOUT_MS`). A send's deadline: 75 s. A subscription that hears nothing for 45 s ends (`timeout`). At most 64 agents listed. Names cut to 64 characters, control characters removed. `cwd` cut to 4096 characters.
 - **Forms.** An address is `/^t[0-9][0-9a-z]{0,15}$/`, never `machine/t7`. A kind is `HERDR_KIND`, `^[a-z][a-z0-9_-]{0,31}$`. A status is one of `idle`, `working`, `done`, `blocked`, `error`.
 - **Kinds.** `claude-code` → `claude`, `codex` → `codex`. Any other app keeps its own word when it fits `HERDR_KIND`.
 - **Listed.** A live terminal of this machine whose labels hold `herdr.space`, whose status is one of the five, and whose app gives a kind.
@@ -534,7 +534,6 @@ Spec Q5: macOS only.
   ```ts
   /** hc's address of a terminal of this machine, `t7`, `t1b`: never another machine's `vps/t7`. */
   export const HC_TERMINAL = /^t[0-9][0-9a-z]{0,15}$/
-  export const HC_SUBSCRIPTION_LINE_BYTES = 8 * 1024 * 1024
   export const HC_SILENCE_MS = 45_000
   export const HC_SEND_MS = 75_000
   export const HC_MAX_TERMINALS = 1024
@@ -585,9 +584,9 @@ Spec Q5: macOS only.
   - **`hcSocketPath`** and **`hcKind`**: as "Global Constraints" says.
   - **`socketStamp`**: none unless `deps.platform` is `darwin`; else `socketStampOf`. With none, `request` answers `no_socket` and `subscribe` tells `closed('no_socket')`, and nothing connects.
   - **`hcTerminal`**: `address` in `HC_TERMINAL`; `live` is hc's state `live`; `space` is an own, non-empty `herdr.space` label; `status` only when hc's word is one of the five; `kind` is `hcKind` of the status's app; `name` and `cwd` when strings (`cwd` as "Decided here").
-  - **`request`**: one connection, one line `{"jsonrpc":"2.0","id":<a fresh id>,"method","params"}`, the bound `MAX_LINE_BYTES`, the first line back, a deadline of `deadlineMs` (10 s by default).
+  - **`request`**: one connection, one line `{"jsonrpc":"2.0","id":<a fresh id>,"method","params"}`, the bound 8 MiB, the first line back, a deadline of `deadlineMs` (10 s by default).
     - `result` an object under its own id: ok. `error` under its own id: `rejected` with its `data.kind` when that fits `[a-z_]{1,64}`, else `bad_answer`. Any other object or id: `bad_answer`. No object: `bad_json`.
-  - **`subscribe`**: one connection that writes `hello {generation: 1}` and `events.subscribe {}` together, the bound `HC_SUBSCRIPTION_LINE_BYTES`.
+  - **`subscribe`**: one connection that writes `hello {generation: 1}` and `events.subscribe {}` together, the bound 8 MiB.
     - `hello`'s answer: a result whose `generation` is 1, else `bad_answer` (`unsupported_generation` too); any other error is `rejected`.
     - `events.subscribe`'s answer, after `hello`'s: its terminals are read, kept, and told as `snapshot`. An error is `rejected`. Neither answer in 10 s: `timeout`.
     - Then each notification, as Task 1 recorded them (F5):
@@ -605,12 +604,12 @@ Spec Q5: macOS only.
   - No member throws or rejects. The file logs nothing. Sockets and timers are unref'd.
 
 - [ ] **Step 1: Write the failing tests** in `hcClient.spec.ts`, `describe.skipIf(process.platform === 'win32')`. Each client is `createHcClient({ socketPath: server.path, home: dirname(server.path), uid: process.getuid!(), platform: 'darwin' })`. Deadlines run on `vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })`, after `await server.got(…)`.
-  - `the socket is HC_SOCKET when absolute; else <XDG_STATE_HOME>/herdr-core/<HC_SESSION>/<HC_SESSION>.sock`: `({ HC_SOCKET: '/tmp/x/c.sock', HC_SESSION: 'side' }, '/h')` is `/tmp/x/c.sock`; `({}, '/h')` is `/h/.local/state/herdr-core/default/default.sock`; `({ XDG_STATE_HOME: '/s', HC_SESSION: 'side' }, '/h')` is `/s/herdr-core/side/side.sock`; a relative `XDG_STATE_HOME` and a relative `HC_SOCKET` count as unset; `HC_SESSION` of `'../x'`, `'a/b'`, `'.'`, `''` and 65 characters read `default`.
+  - `the socket is HC_SOCKET when absolute; else <XDG_RUNTIME_DIR>/herdr-core/<session>.sock when that is absolute; else <XDG_STATE_HOME or ~/.local/state>/herdr-core/<session>/<session>.sock`: `({ HC_SOCKET: '/tmp/x/c.sock', HC_SESSION: 'side' }, '/h')` is `/tmp/x/c.sock`; `({ XDG_RUNTIME_DIR: '/run/me', HC_SESSION: 'side' }, '/h')` is `/run/me/herdr-core/side.sock`; `({}, '/h')` is `/h/.local/state/herdr-core/default/default.sock`; `({ XDG_STATE_HOME: '/s', HC_SESSION: 'side' }, '/h')` is `/s/herdr-core/side/side.sock`; a relative `XDG_RUNTIME_DIR`, `XDG_STATE_HOME` or `HC_SOCKET` counts as unset; `HC_SESSION` of `'../x'`, `'a/b'`, `'.'`, `''` and 65 characters read `default`.
   - `hcKind`: `claude-code` is `claude`, `codex` is `codex`, `pi` is `pi`; `'Claude Code'`, `''` and `7` give none; `'constructor'` gives `'constructor'`, its own word (the table is read by its own keys only).
   - `request writes one JSON-RPC line and answers the result under its own id`: the server got `{ jsonrpc: '2.0', id: expect.any(String), method: 'terminal.get', params: { terminal: 't7' } }`.
   - `each request is a connection of its own`.
   - `an error is rejected with its data.kind, never its message; a kind not in its form is bad_answer`: `not_found`; an error with no `data`; `data.kind` `'Bad Kind!'`.
-  - `an answer under another id, or with neither result nor error, is bad_answer; a line that is no object is bad_json; one over 1 MiB is oversize`.
+  - `an answer under another id, or with neither result nor error, is bad_answer; a line that is no object is bad_json; one over 8 MiB is oversize`.
   - `no socket, a file that is no socket, another user's socket, and any platform but macOS are no_socket, and nothing connects` (`platform: 'linux'`, `'win32'`).
   - `a stale socket is refused; a connection that ends before its answer is ended; none in 10 s is timeout, and its connection closes`.
   - `subscribe writes hello then events.subscribe on one connection, and tells the snapshot once both answered`: the two requests are `hello { generation: 1 }` and `events.subscribe {}`; with `RECORDED.subscription`'s first lines, `snapshot` is told once with the agent's terminal (`{ address: RECORDED.agent, live: true, space: true, status: 'idle', kind: 'claude', cwd: '/work/hh' }`, and its name when hc gave one) and the worker's (`live: true, space: false`, no status).

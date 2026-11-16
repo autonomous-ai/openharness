@@ -70,8 +70,11 @@ length bounds.
   after it, `missed` with its new snapshot (events whose `seq` is not above it are dropped) and the heartbeat. A
   subscription that hears nothing for 45 s, three heartbeats, is ended (`timeout`). Task 1 records the event lines' exact
   shape from a private hc 0.1.21 into the fake server's fixture before the client is written, `doc` and `size` events
-  included. Task 1 found (F5) that a `doc` event carries only `{name, version}`, never the document, so the line bound
-  stays herdr's 1 MiB. Lines of a kind the source does not read are dropped as soon as they are parsed.
+  included. Task 1 found (F5) that a `doc` event carries only `{name, version}`, never the document: hc's longest lines
+  are its snapshots, one line with every terminal of the core (hidden workers, other machines' terminals, each command
+  line twice). So every connection to hc, the subscription's and `terminal.get`'s, reads a line up to 8 MiB. Lines of a
+  kind the source does not read are dropped as soon as they are parsed, and of a terminal only the fields the client
+  reads are kept.
 - **Kinds:** hc's `app` word goes through one closed table, here, for both the source and the prompt (`claude-code` →
   `claude`, `codex` → `codex`). An app not in the table keeps its own word when it fits `HERDR_KIND`. So a hooked copy's
   words, which come with the engine id (`claude`), match a terminal whose app is `claude-code`.
@@ -99,7 +102,10 @@ Built as `HerdrSource` is: it runs while a dial is attached, pushed and never po
 - **Its tap** is the Herdr adapter's `focus` (which brings Herdr itself, below). **Its swipe:** the source has `hasPane`
   (Herdr's adapter can show it now) and `showPane` (the adapter's `show`), which `cableHost.ts` reads for a rest; herdr's
   source has neither. Its words go through the adapter's `prompt`.
-- **Which terminals the window shows** (`shows(address)`) is the source's to answer, for the adapter.
+- **Which terminals the window shows** (`shows(address)`) is the source's to answer, for the adapter: every live
+  terminal of this machine labeled `herdr.space`, with a status or none, listed or past the 64 (the client keeps 1,024
+  at most). **Which report an agent** (`reports(address)`), for the adapter's `canType`: every live terminal hc reports
+  an agent status for (one of its five words, from an app with a kind), shown or not.
 - **Stale socket:** the same rule as herdr's below.
 - **hc keeps running when Herdr is closed** (a launchd job, hc's manual). Its agents are then still listed and take
   words, since they are alive. A tap opens Herdr.
