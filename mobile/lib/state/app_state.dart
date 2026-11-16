@@ -1,3 +1,4 @@
+import '../chat/chat_transcript.dart';
 import '../core/app_version.dart';
 import '../core/client_build.dart';
 import '../core/install_source.dart';
@@ -530,6 +531,35 @@ class AppNotifier extends ChangeNotifier {
       payload: {'agentId': key.agentId, 'n': 3},
       timeout: const Duration(seconds: 6),
     ),
+  );
+
+  /// The agents open as chat (`chat/chat_view.dart`): each one's history, read
+  /// a page at a time with `session_get` only when a chat is opened, and the
+  /// same live events [sessionPreviews] hears.
+  late final chatConversations = ChatConversations(
+    reader: (machineId, sessionId) => (before) async {
+      final reply = await _conn(machineId).request(
+        'session_get',
+        payload: {
+          'sessionId': sessionId,
+          'limit': ChatConversation.pageSize,
+          'before': ?before,
+        },
+        timeout: const Duration(seconds: 15),
+      );
+      final events = reply['events'];
+      if (reply['error'] != null || events is! List) {
+        throw StateError('session_get: ${reply['error'] ?? 'no events'}');
+      }
+      return (
+        events: events
+            .whereType<Map>()
+            .map((e) => e.cast<String, dynamic>())
+            .toList(),
+        hasMore: reply['hasMore'] == true,
+        oldestCursor: reply['oldestCursor'] as String?,
+      );
+    },
   );
 
   /// What a finished turn or a question is worth — a tap, an unread mark, a
@@ -2051,6 +2081,7 @@ class AppNotifier extends ChangeNotifier {
     machineStates.clear();
     unawaited(_machineCache?.clear());
     sessionPreviews.clear();
+    chatConversations.clear();
     agentNotices.reset();
     // The Settings row's usage figure was this account's — see [lastUsageSummary].
     lastUsageSummary.value = null;
@@ -2386,6 +2417,7 @@ class AppNotifier extends ChangeNotifier {
     // The kept screens are this account's terminals — they go with it, as the cache does.
     _keptScreenStore?.clear();
     sessionPreviews.clear();
+    chatConversations.clear();
     agentNotices.reset();
     // The account's device notices go with it: the next sign-in may be another account's, and what
     // is still pending comes back from its own log once it registers.
@@ -5895,6 +5927,13 @@ class AppNotifier extends ChangeNotifier {
       type,
       payload,
       streamingText: agent.engine == 'opencode' || agent.engine == 'kilo',
+    );
+    chatConversations.ingest(
+      machine.machine.machineId,
+      agent.id,
+      sessionId ?? agent.sessionId,
+      type,
+      payload,
     );
   }
 
