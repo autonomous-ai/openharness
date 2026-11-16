@@ -64,7 +64,7 @@ import { ensureHarnessGrid, type EnsureStatus } from './lib/gridEnsure.js'
 import { passThroughToGridLogout } from './lib/gridLogout.js'
 import { warnIfGridSignInRemains } from './lib/gridCredentials.js'
 import { gridExec } from './lib/gridExec.js'
-import { ENGINE_CLI_COMMANDS, PROCESS_ENGINES } from './lib/engineBin.js'
+import { ENGINE_CLI_COMMANDS, PROCESS_ENGINES, installedEngineBin } from './lib/engineBin.js'
 import { SESSION_SEARCH_FILE, searchCommand } from './lib/sessionSearch/command.js'
 import { dshCommand, dshUsage } from './dsh/command.js'
 import { ApiConnections } from './lib/apiConnections.js'
@@ -3088,6 +3088,8 @@ switch (cmd) {
       platform: process.platform,
       stdin: process.stdin,
       claude: claudeRun,
+      codexHome: env.CODEX_HOME,
+      codex: () => installedEngineBin('codex') !== null,
       out: (line) => console.log(line),
       err: (line) => console.error(line),
     }).then((code) => { process.exitCode = code }).catch(onError)
