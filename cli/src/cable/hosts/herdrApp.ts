@@ -14,7 +14,7 @@
 import { isAbsolute } from 'node:path'
 import type { HostAdapter, Pane, Place } from './adapter.js'
 import { HC_TERMINAL, hcPaneKey, type HcClient, type HcPrompt } from './hcClient.js'
-import { APP_BUNDLES } from './hostDetect.js'
+import { APP_BUNDLES, inHerdr } from './hostDetect.js'
 import { OPEN } from './open.js'
 import { RUN_TIMEOUT_MS, type OrcaDeps } from './orca.js'
 import type { PaneSwitch } from './types.js'
@@ -88,9 +88,10 @@ export function createHerdrAppAdapter(deps: HerdrAppDeps): HerdrAppAdapter {
   return {
     id: 'herdr-app',
     tap: 'instead',
+    // A hint's address is Herdr's only in hc's own terminal, never in a program started from it.
     paneOf(place: Place): Pane | undefined {
-      const id = place.hints.HC_TERMINAL_ID
-      return mac && id && HC_TERMINAL.test(id) ? { adapter: 'herdr-app', id } : undefined
+      if (!mac || place.host !== 'herdr' || !inHerdr(place.hints)) return undefined
+      return { adapter: 'herdr-app', id: place.hints.HC_TERMINAL_ID }
     },
     // Every hc terminal has HC_TERMINAL_ID, hidden `hc run` workers too, and the window shows those not.
     canFocus: (pane) => mac && deps.shows(pane.id),
