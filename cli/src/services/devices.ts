@@ -110,7 +110,7 @@ export interface DevicesDeps {
   Session?: ConstructorParameters<typeof CableFleet>[0]
   cable?: Partial<CableFleetOptions>
   /** For this service's tests: how `orca`, and the commands a tap runs to open an app (cable/hosts/open.ts), are found and
-   *  run. */
+   *  run, how Orca's focus watch is spawned, and how the binary is stat'd for the probe's cache (cable/hosts/orca.ts). */
   orca?: OrcaReadDeps
   /** For this service's tests: Orca's focus and order reads (cable/hosts/orca.ts); built on `orca` when unset. */
   orcaReads?: OrcaReads
@@ -996,9 +996,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   /** The agents on Orca's ring, by id: the merged list's, as the dials list them. */
   const orcaIds = (): string[] => registry.entries().filter(({ agent }) => agent.app === 'orca').map(({ agent }) => agent.id)
   const readOrcaOrder = (source: ObservedSource): Promise<void> => {
+    // Marked once asked: an ask that throws leaves the next change free to ask again.
+    const read = orcaReads.orcaTabs()
     ordering = true
     const ring = orcaRing
-    return orcaReads.orcaTabs().then((tabs) => {
+    return read.then((tabs) => {
       if (ring !== orcaRing) return
       if (tabs === null) { log('[device] orca order · failed'); return }
       log('[device] orca order · read')
@@ -1052,7 +1054,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   let probing = false
   /** Turns the dials to the agent in a pane Orca says has focus; `settle` for the focus as Orca settled. With no dial
    *  linked nothing is followed or counted, as with a prompt. */
-  const followFocus =(source: ObservedSource, pane: string, settle: boolean): Promise<void> | undefined => {
+  const followFocus = (source: ObservedSource, pane: string, settle: boolean): Promise<void> | undefined => {
     if (!cable.isConnected) return
     // A turn of the dial as Orca comes forward puts it where the person wants it: Orca's focus as it settles must not turn
     // it back, as the Claude app's settle must not.
