@@ -193,8 +193,17 @@ Log lines, outcomes only, never a handle, an agent, a title or a path:
 Windows (no front app there); a watch on a remote Orca (`--environment`); Orca's editor and browser tabs; reordering
 on a tab drag with no member change; the Claude app, Terminal and other apps' rings; firmware.
 
+Orca's chat tabs (its agent UI, `agentSession`), found on Diego's Mac (2026-11-16, tab "harness"): Orca 1.4.256 lists
+only terminals in `terminal list` and `visualLayouts`, and its public CLI has no command to list or switch to a chat
+(`chat rename` only; `terminal switch` takes a terminal handle). A chat's agent therefore has no place in the ring, no
+tab name and no switch: if its hook reaches the devices it comes after the ordered ones, and a rest or tap on it does not
+change Orca's view. Orca's internal `session.tabs.list` is not a public command and is not used.
+
 ## Follow-ups
 
+- **Upstream Orca:** list chat tabs in `visualLayouts` (tab id and chat session id), and add `orca chat switch --session
+  <id>` (or let `terminal switch` take a tab id), so a chat's agent gets its place, its tab's name and a rest's switch.
+  Note only, no PR or issue (Diego decides).
 - **Upstream Orca:** list `visualLayouts` in the sidebar's worktree order (or give each layout the sidebar's index), so
   the ring's order across worktrees matches what the person sees. Diego decides whether to propose it.
 - **Upstream Orca:** stablyai/orca#42555 merged and released: the dial check of (A) on a real Orca.
