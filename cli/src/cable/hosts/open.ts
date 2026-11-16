@@ -130,7 +130,8 @@ export function createOpenActions(deps: OpenDeps): {
         running.delete(agentId)
       }
     },
-    desktop: mac ? () => forward(HARNESS_BUNDLE) : undefined,
+    // A tap on a Harness agent with no window, which turns the dial to Harness's ring: it drops a pick waiting, as `open`.
+    desktop: mac ? () => { dropWaiting(); return forward(HARNESS_BUNDLE) } : undefined,
     bring: mac ? bring : undefined,
   }
 }
