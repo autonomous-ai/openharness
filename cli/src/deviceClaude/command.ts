@@ -16,7 +16,7 @@ import { daemonPost, runAsked } from './asked.js'
 import { claudeDisable, claudeEnable, claudePluginOn, claudeSettingsPath, claudeStatus, type ClaudeRun } from './plugin.js'
 
 /** `asked`, `link` and `orca link` are left out: they are the plugins', and typed by hand they only wait on stdin or print a path. */
-export const DEVICE_USAGE = `Harness device (the dial shows Claude Code's waiting prompts in any terminal, and takes a spoken prompt):
+export const DEVICE_USAGE = `Harness device (the dial shows Claude Code's waiting prompts in any terminal, takes a spoken prompt, and rings when an agent needs you):
   harness device claude status [--json]  whether Claude Code has the harness-device plugin, and its version
   harness device claude enable           install the plugin, or turn it on (Claude Code 2.1.287 or later)
   harness device claude disable          uninstall the plugin
