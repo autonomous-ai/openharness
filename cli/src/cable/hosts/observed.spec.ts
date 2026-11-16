@@ -1800,6 +1800,48 @@ describe('ObservedSource and the app a hook\'s caller runs in', () => {
     await s.walks[1].answer('vscode')
     expect(s.agent().app).toBe('vscode')
   })
+
+  it('an answer for a session no longer listed is dropped: nothing is told, and its latest caller is not walked', async () => {
+    const s = walked()
+    s.src.ingest(s.ev('session-start', { ...inApp, cwd: undefined, callerPid: 100 }))
+    s.src.ingest(s.ev('turn-start', { ...inApp, cwd: undefined, callerPid: 200 }))
+    // Its folder, once known, is Harness's own: it goes.
+    s.src.ingest(s.ev('turn-start', { ...inApp, cwd: '/data/harness/router', callerPid: 200 }))
+    expect(s.src.list()).toEqual([])
+    s.changes.mockClear()
+    await s.walks[0].answer('codex')
+    expect(s.apps.mock.calls).toEqual([[[100]]])
+    expect(s.changes).not.toHaveBeenCalled()
+  })
+
+  it('an answer for a session that ended is kept for its caller, and lands only when it comes back', async () => {
+    const s = walked()
+    s.src.ingest(s.ev('session-start', inApp))
+    s.src.ingest(s.ev('session-end', inApp))
+    s.changes.mockClear()
+    await s.walks[0].answer('codex')
+    expect(s.agent().app).toBe('terminal')
+    expect(s.changes).not.toHaveBeenCalled()
+    s.src.ingest(s.ev('session-start', inApp))
+    expect(s.agent().app).toBe('codex')
+    expect(s.apps).toHaveBeenCalledTimes(1)
+  })
+
+  it('a caller whose parents name a tab app has its tty read then, and its tab is its pane', async () => {
+    const tty = vi.fn(async (_pid: number): Promise<string | undefined> => '/dev/ttys023')
+    let answer!: (apps: ReadonlyMap<number, string>) => void
+    const apps = vi.fn((_pids: readonly number[]) => new Promise<ReadonlyMap<number, string>>((resolve) => { answer = resolve }))
+    const { actions } = fakeActions()
+    const s = setup({ actions, apps, tty })
+    s.src.ingest(s.ev('session-start', inApp))
+    expect(tty).not.toHaveBeenCalled()
+    answer(new Map([[100, 'iterm']]))
+    await flushed()
+    const agent = s.src.list()[0]
+    expect(agent.app).toBe('iterm')
+    expect(tty.mock.calls).toEqual([[100]])
+    expect(s.src.hasPane(agent)).toBe(true)
+  })
 })
 
 describe('ObservedSource panes', () => {
