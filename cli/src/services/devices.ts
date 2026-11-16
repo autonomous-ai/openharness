@@ -274,8 +274,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // by its tty: elsewhere no agent's is read, and none has a tab.
   const tabs = tabsStream()
   // The stream Orca's Harness Device plugin holds open: whether a dial is attached and the agent it shows
-  // (docs/specs/2026-11-16-orca-device-plugin.md). Its count's timer stops with the devices.
-  const dial = dialStream({ log, after: timerIn('dial') })
+  // (docs/specs/2026-11-16-orca-device-plugin.md). A part of its own, so a throw on its path is never the dial's. Its
+  // count's timer stops with the devices.
+  const dial = dialStream({ log, after: timerIn('dialStream') })
   const ttyOf = apps.platform === 'darwin' ? deps.tty ?? readTty : undefined
   /** The ttys the dial selected lately, a rest's and a tap's alike: the echoes a tab report is checked against, each
    *  excusing one. */
@@ -376,9 +377,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     watching: (on) => {
       core.clients.dialWatching(on)
       dialAttached(on)
-      dial.attached(on)
+      part.call('dialStream', () => dial.attached(on))
     },
-    dialShows: (agent) => dial.shows(agent),
+    dialShows: (agent) => part.call('dialStream', () => dial.shows(agent)),
     // The core's own doors for a local agent. The fleet's router reaches them the same way; the dial uses
     // these only when it routes by itself, with the fleet off. An agent outside a pane never reaches them: the host shuts
     // each to it, the fleet's way too (cableHost.ts `outside`).
