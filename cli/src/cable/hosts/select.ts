@@ -5,6 +5,10 @@ import type { HostAgent } from './types.js'
 /** The firmware's `CABLE_MAX_AGENTS` (devices/harness-device/firmware/main/cable_client.h): the dial holds no more. */
 export const RING_PLACES = 16
 
+/** The firmware's `CABLE_MAX_APPS` (cable_client.h): the dial keeps the first 16 rows of the `apps` frame and drops a
+ *  17th. */
+export const APP_LIMIT = 16
+
 const needsYou = (a: HostAgent): boolean => a.state === 'needs-you'
 /** Idle for the ring, wider than the state 'idle': done (seen or not) and error too, as nobody is following those. */
 const idle = (a: HostAgent): boolean => a.state !== 'working' && !needsYou(a)
