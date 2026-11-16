@@ -89,6 +89,8 @@ export interface AgentBrowserOptions {
   followed?: () => Promise<boolean>
   /** Every agent here, live and stopped, read now; null when the core did not answer. */
   everyAgent?: () => Promise<RegisteredSession[] | null>
+  /** Presence for settings only; an older core can name ids without supplying migration rows. Null is unknown. */
+  hasAgent?: (agentId: string) => Promise<boolean | null>
   /** A core from before 2026-11-15 keeps Browser flags itself. Its move includes the destination row and on/off;
    *  the process completes that core's handshake after this move. Delete on or after 2026-12-18. */
   legacyMoves?: (move: (from: string, session: RegisteredSession, on: boolean) => Promise<boolean>) => () => void
@@ -305,10 +307,16 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
         // The lookup belongs inside both queues: a second pane move must not pass this one while it waits.
         const saved = state.read()
         if (!Object.hasOwn(saved.browsers, from) || saved.adopted?.[from] === true) return
-        const row = legacyOn === undefined
-          ? (await everyAgent().catch(() => null))?.find(session => session.agentId === from)
-          : { agentId: from, browser: legacyOn ? true as const : undefined }
-        if (row) adopt(row)
+        let row: Pick<RegisteredSession, 'agentId' | 'browser'> | undefined
+        if (legacyOn === undefined) {
+          const rows = await everyAgent().catch(() => null)
+          // A person's choice or purge while the read waited is newer than the legacy flag.
+          const current = state.read()
+          if (!Object.hasOwn(current.browsers, from) || current.adopted?.[from] === true || current.deleting.includes(from)) return
+          row = rows?.find(session => session.agentId === from)
+          if (!row) throw new PodmanError('migration_unavailable', 'the core did not answer the legacy Browser flag')
+        } else row = { agentId: from, browser: legacyOn ? true as const : undefined }
+        adopt(row)
       })
     } catch (error) {
       log(`agent browser ${to}: browser_move_failed (${error instanceof PodmanError ? error.state : 'state_unwritable'})`)
@@ -436,13 +444,20 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
     if (!mayOpenBrowser(asker)) return { error: 'NOT_OWNER' }
     begin()
     const agentId = idOf(payload)
-    if (!agentId || !(browsers.state(agentId) || (anyAgent && await isHere(agentId)))) return { error: 'NO_BROWSER' }
+    if (!agentId) return { error: 'NO_BROWSER' }
+    if (!browsers.state(agentId)) {
+      if (!anyAgent) return { error: 'NO_BROWSER' }
+      const here = await isHere(agentId)
+      if (here === null) return UNANSWERED
+      if (!here) return { error: 'NO_BROWSER' }
+    }
     try { return await handler(agentId, payload, asker) } catch (error) { return named(error) }
   }
-  /** Whether the core has the agent, live or stopped; a core that cannot say has none. */
-  const isHere = async (agentId: string): Promise<boolean> => {
+  /** Whether the core has the agent, live or stopped; an unavailable answer stays unknown. */
+  const isHere = async (agentId: string): Promise<boolean | null> => {
+    if (options.hasAgent) return options.hasAgent(agentId).catch(() => null)
     const every = await everyAgent().catch(() => null)
-    return !!every && every.some(session => session.agentId === agentId)
+    return every?.some(session => session.agentId === agentId) ?? null
   }
 
   /** The agent of the pane a command runs in, and whether it is a guest's; null for a pane with no parents to hold it to. */

@@ -107,7 +107,13 @@ export function agentBrowserCoreApi(dataDir: string, ask: Ask, deliveries: Retur
 
 export function runAgentBrowserService(options: AgentBrowserServiceOptions): ServiceProcess {
   let core: CoreConnection | null = null
+  let connectionGeneration = 0
   const ask: Ask = (query, payload) => (core ? core.query(query, payload) : Promise.reject(new Error('no core to ask')))
+  const agentQuery = async (source: CoreConnection | null, generation: number, query: string): Promise<Payload | null> => {
+    if (!source || source !== core || generation !== connectionGeneration) return null
+    const answer = await within(AGENTS_TIMEOUT_MS, source.query(query, {})).catch(() => null)
+    return source === core && generation === connectionGeneration ? answer : null
+  }
   const link = turnsLink(ask)
   // A line asked of no core never left this process: heard `rejected`, so it is tried again (agentBrowser/notices.ts),
   // not `unknown`, which counts as perhaps typed and is never typed again.
@@ -149,11 +155,20 @@ export function runAgentBrowserService(options: AgentBrowserServiceOptions): Ser
       legacyMove = listener
       return () => { legacyMove = undefined }
     },
-    // Readable rows for settings and legacy flag migration, never a complete inventory for deletion.
-    // Wait for this connection's catch-up so a query before connection is not mistaken for an empty list.
-    everyAgent: async () => (await follow.ready(AGENTS_TIMEOUT_MS)
-      ? agentsIn(await within(AGENTS_TIMEOUT_MS, ask('agents', {})).catch(() => null))
-      : null),
+    // Migration needs actual rows, never ids reconstructed as sessions or an inventory for deletion.
+    everyAgent: async () => agentsIn(await agentQuery(core, connectionGeneration, 'agents')),
+    hasAgent: async agentId => {
+      const source = core, generation = connectionGeneration
+      const answer = await agentQuery(source, generation, 'agents')
+      const rows = answer?.agents
+      if (Array.isArray(rows)) return rows.every(isSession) ? rows.some(row => row.agentId === agentId) : null
+      // Old cores name only live/stopped ids. Membership authorizes settings, never migration or Start.
+      // Delete on or after 2026-12-18, with the other old-core adapters in this process.
+      if (answer?.error !== 'UNKNOWN_QUERY') return null
+      const ids = await agentQuery(source, generation, 'agent_ids')
+      const strings = (value: unknown): value is string[] => Array.isArray(value) && value.every(id => typeof id === 'string')
+      return strings(ids?.live) && strings(ids?.stopped) ? ids.live.includes(agentId) || ids.stopped.includes(agentId) : null
+    },
   })
   const port = ports.agentBrowser!
   const service = (options.run ?? runServiceProcess)({
@@ -210,6 +225,7 @@ export function runAgentBrowserService(options: AgentBrowserServiceOptions): Ser
       if (viewers.delete(connId)) port.streamClosed(connId)
     },
     onConnected: (connection) => {
+      connectionGeneration++
       core = connection
       // Said to each core it connects to: it takes viewers' streams (core/agentBrowserLink.ts `streams`).
       void ask('streams', {}).catch(() => {})
@@ -217,6 +233,7 @@ export function runAgentBrowserService(options: AgentBrowserServiceOptions): Ser
       void follow.connected(connection.query)
     },
     onDisconnected: () => {
+      connectionGeneration++
       core = null
       follow.disconnected()
       for (const connId of viewers) port.streamClosed(connId)

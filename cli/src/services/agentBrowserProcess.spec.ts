@@ -330,14 +330,10 @@ describe('the agent browser in its own process', () => {
     expect(port.streamClosed).toHaveBeenCalledOnce()
   })
 
-  it('asks the core for every agent here once caught up with it, and a pane\'s agent, and gets no answer when the core cannot say', async () => {
-    vi.useFakeTimers()
+  it('asks the connected core for every agent here independently of catch-up, and a pane\'s agent, and gets no answer when the core cannot say', async () => {
     const { options, api, given } = setup()
-    // Not connected: no answer, after the wait for the catch-up.
-    const early = given.everyAgent!()
-    await vi.advanceTimersByTimeAsync(10_000)
-    expect(await early).toBeNull()
-    vi.useRealTimers()
+    // Disconnected is unknown, with no catch-up or query to wait on.
+    expect(await given.everyAgent!()).toBeNull()
     expect(await api.agents.ofPane!('%7', [4242])).toBeNull()
     const row = { agentId: 'a1', sessionId: 's1' } as RegisteredSession
     let answer: Record<string, unknown> = { agents: [row, 7] }
@@ -388,6 +384,75 @@ describe('the agent browser in its own process', () => {
     const asked = given.everyAgent!()
     await vi.advanceTimersByTimeAsync(10_000)
     expect(await asked).toBeNull()
+  })
+
+  it('settings presence uses actual rows on a new core and only membership on an older core', async () => {
+    const { options, given } = setup()
+    expect(await given.hasAgent!('live')).toBeNull()
+    let old = false
+    const query = vi.fn(async (name: string) => name === 'agents' && !old
+      ? { agents: [{ agentId: 'live' }, { agentId: 'stopped' }] }
+      : name === 'agent_ids' ? { live: ['live'], stopped: ['stopped'] } : { error: 'UNKNOWN_QUERY' })
+    options.onConnected!({ query })
+    for (const id of ['live', 'stopped']) expect(await given.hasAgent!(id)).toBe(true)
+    expect(await given.hasAgent!('absent')).toBe(false)
+    expect(query).not.toHaveBeenCalledWith('agent_ids', {})
+    old = true
+    for (const id of ['live', 'stopped']) expect(await given.hasAgent!(id)).toBe(true)
+    expect(await given.hasAgent!('absent')).toBe(false)
+    expect(query).toHaveBeenCalledWith('agent_ids', {})
+    // An old membership list supplies no Browser flags or deletion authority.
+    expect(await given.everyAgent!()).toBeNull()
+  })
+
+  it.each(['rejected', 'timeout', 'malformed', 'error', 'invalid row'] as const)('a %s modern presence query remains unknown without trying the old adapter', async failure => {
+    vi.useFakeTimers()
+    const { options, given } = setup()
+    const query = vi.fn(async (name: string): Promise<Record<string, unknown>> => {
+      if (name !== 'agents') return {}
+      if (failure === 'rejected') throw new Error('lost')
+      if (failure === 'timeout') return new Promise(() => {})
+      if (failure === 'invalid row') return { agents: [{ agent: 'a1' }] }
+      return failure === 'error' ? { error: 'SERVICE_UNAVAILABLE' } : { agents: 'broken' }
+    })
+    options.onConnected!({ query })
+    const waiting = given.hasAgent!('a1')
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(await waiting).toBeNull()
+    expect(query).not.toHaveBeenCalledWith('agent_ids', {})
+  })
+
+  it.each(['rejected', 'timeout', 'missing', 'live not strings', 'stopped not strings'] as const)('a legacy presence answer that is %s remains unknown', async failure => {
+    vi.useFakeTimers()
+    const { options, given } = setup()
+    const query = vi.fn(async (name: string): Promise<Record<string, unknown>> => {
+      if (name !== 'agent_ids') return { error: 'UNKNOWN_QUERY' }
+      if (failure === 'rejected') throw new Error('lost')
+      if (failure === 'timeout') return new Promise(() => {})
+      if (failure === 'missing') return { live: [] }
+      return { live: failure === 'live not strings' ? [1] : [], stopped: failure === 'stopped not strings' ? [1] : [] }
+    })
+    options.onConnected!({ query })
+    const waiting = given.hasAgent!('a1')
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(await waiting).toBeNull()
+  })
+
+  it.each(['agents', 'agent_ids', 'migration'] as const)('a stale %s reply after reconnect is unknown even when the connection object is reused', async phase => {
+    const { options, given } = setup()
+    let answer!: (value: Record<string, unknown>) => void
+    const reply = new Promise<Record<string, unknown>>(resolve => { answer = resolve })
+    const query = vi.fn(async (name: string) => name === (phase === 'migration' ? 'agents' : phase) ? reply : { error: 'UNKNOWN_QUERY' })
+    const connection = { query }
+    options.onConnected!(connection)
+    const waiting = phase === 'migration' ? given.everyAgent!() : given.hasAgent!('a1')
+    await vi.waitFor(() => expect(query).toHaveBeenCalledWith(phase === 'migration' ? 'agents' : phase, {}))
+    options.onDisconnected!()
+    options.onConnected!(connection)
+    answer(phase === 'agent_ids' ? { live: ['a1'], stopped: [] } : { agents: [{ agentId: 'a1', browser: true }] })
+    expect(await waiting).toBeNull()
+    query.mockImplementation(async () => ({ agents: [{ agentId: 'a1' }] }))
+    expect(await given.hasAgent!('a1')).toBe(true)
   })
 
   // The ready and stop lines (agentBrowser/notices.ts): typed by the core, which tells this process what became of each.

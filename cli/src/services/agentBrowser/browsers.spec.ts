@@ -829,7 +829,7 @@ describe('Browsers, named by a profile', () => {
     expect(saved.told).toEqual({ a2: true })
     // Its Browser being on goes with it, and the flag the previous agent's row may still carry is never taken in after.
     expect(saved.on).toEqual({ a2: true, b1: true })
-    expect(saved.adopted).toEqual({ a1: true })
+    expect(saved.adopted).toEqual({ a1: true, b1: true })
     expect(r.containers.remove).not.toHaveBeenCalled()
     // One line, with nothing of the settings in it.
     expect(r.logged).toEqual(['agent browser b1: took the browser of a1'])

@@ -200,9 +200,9 @@ export class Browsers {
           if (this.generation(to) === destinationGeneration) s.on[to] = true
           delete s.on[from]
         }
-        // The flag [from]'s row may still carry from before the service kept it (services/agentBrowser.ts `adopt`) is
-        // never taken in after this: its browser went with the pane. Delete on or after 2026-12-18.
-        s.adopted = { ...s.adopted, [from]: true }
+        // Both ends now have Browser's decision: [from] gave it away and [to] received it. A later row or consecutive
+        // move must not replace it with a legacy flag. Delete on or after 2026-12-18, with `adopt`.
+        s.adopted = { ...s.adopted, [from]: true, [to]: true }
         moved = true
       })
       if (moved) this.deps.log(`agent browser ${to}: took the browser of ${from}`)

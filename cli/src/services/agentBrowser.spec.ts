@@ -539,7 +539,7 @@ describe('the agent browser service', () => {
   })
 
   it('retry, settings, settings_save and proxy_test refuse a share guest and a plain owner without accountOwner', async () => {
-    const { port, requests } = start()
+    const { port, requests } = start(undefined, { everyAgent: async () => [] })
     port.running(session('a1'))
     await ready(port, 'a1')
     for (const type of ['agent_browser_retry', 'agent_browser_settings', 'agent_browser_settings_save', 'agent_browser_proxy_test']) {
@@ -1197,9 +1197,9 @@ describe('the person\'s Start and Stop', () => {
     }
     // Retry has no browser to try again.
     expect(await requests.agent_browser_retry!({ agentId: 'a1' }, LOCAL)).toEqual({ error: 'NO_BROWSER' })
-    // A core that cannot say which agents are here: none.
+    // A core that cannot say which agents are here has not proved absence.
     everyAgent.mockRejectedValueOnce(new Error('no core'))
-    expect(await requests.agent_browser_settings!({ agentId: 'a1' }, LOCAL)).toEqual({ error: 'NO_BROWSER' })
+    expect(await requests.agent_browser_settings!({ agentId: 'a1' }, LOCAL)).toEqual({ error: 'SERVICE_UNAVAILABLE', service: 'agentBrowser', retryable: true })
     expect(asked().filter(call => call.startsWith('create ') || call.startsWith('network create'))).toEqual([])
   })
 
@@ -1210,6 +1210,57 @@ describe('the person\'s Start and Stop', () => {
     port.purged('a1')
     await eventually(() => expect(savedState().browsers).toEqual({}))
     expect(asked()).toContain('volume rm harness-browser-a1')
+  })
+
+  it.each(['unknown', 'rejected'] as const)('%s presence leaves all settings requests unavailable without changing saved data', async failure => {
+    saveState({ a1: defaultSettings(HOST) })
+    const hasAgent = async () => { if (failure === 'rejected') throw new Error('lost'); return null }
+    const { requests } = start(undefined, { hasAgent })
+    const before = readFileSync(join(dataDir, 'agent-browser.json'), 'utf8')
+    for (const type of ['agent_browser_settings', 'agent_browser_settings_save', 'agent_browser_proxy_test']) {
+      expect(await requests[type]!({ agentId: 'a1', settings: { ...defaultSettings(HOST), languages: 'vi-VN' }, proxy: null }, LOCAL), type)
+        .toEqual({ error: 'SERVICE_UNAVAILABLE', service: 'agentBrowser', retryable: true })
+    }
+    expect(readFileSync(join(dataDir, 'agent-browser.json'), 'utf8')).toBe(before)
+  })
+
+  it('an older core keeps settings and proxy tests available for off and stopped agents', async () => {
+    vi.useFakeTimers()
+    let processOptions!: ServiceProcessOptions
+    let requests!: ServiceRequests
+    const service = runAgentBrowserService({
+      dataDir, socketPath: '/unused', machineId: 'test', token: 'test',
+      run: options => { processOptions = options; return { stop: () => {} } },
+      start: (core, ports, options) => {
+        const started = start(core, options)
+        ports.agentBrowser = started.port
+        return requests = started.requests
+      },
+    })
+    const query = vi.fn(async (name: string) => name === 'agent_ids'
+      ? { live: ['off'], stopped: ['stopped'] }
+      : { error: 'UNKNOWN_QUERY' })
+    processOptions.onConnected!({ query })
+    const read = requests.agent_browser_settings!({ agentId: 'off' }, LOCAL)
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(await read).toEqual(defaultSettings(HOST))
+    // Membership does not supply the lifecycle catch-up required by a new Start.
+    const unavailableStart = requests.agent_browser_start!({ agentId: 'off' }, LOCAL)
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(await unavailableStart).toEqual({ error: 'SERVICE_UNAVAILABLE', service: 'agentBrowser', retryable: true })
+    vi.useRealTimers()
+    const proxy = { scheme: 'http', host: '127.0.0.1', port: await lookupProxy(), username: 'kim', password: 'fixture' }
+    for (const agentId of ['off', 'stopped']) {
+      const settings = { ...defaultSettings(HOST), languages: 'vi-VN, en-US' }
+      expect(await requests.agent_browser_settings_save!({ agentId, settings }, LOCAL)).toMatchObject({ languages: settings.languages })
+      expect(await requests.agent_browser_settings!({ agentId }, LOCAL)).toMatchObject({ languages: settings.languages })
+      expect(await requests.agent_browser_proxy_test!({ agentId, proxy }, LOCAL)).toMatchObject({ ok: true })
+    }
+    expect(await requests.agent_browser_settings!({ agentId: 'absent' }, LOCAL)).toEqual({ error: 'NO_BROWSER' })
+    expect(query).toHaveBeenCalledWith('agent_ids', {})
+    expect(asked().filter(call => call.startsWith('create ') || call.startsWith('network create'))).toEqual([])
+    expect(turnedOn()).toEqual({})
+    service.stop()
   })
 })
 
@@ -1832,7 +1883,7 @@ describe('the browser moves with its pane', () => {
     expect(created()).toHaveLength(0)
   })
 
-  it('consecutive pane moves reserve their queues before the legacy flag lookup', async () => {
+  it.each([true, false])('consecutive pane moves reserve their queues before the legacy flag lookup and keep on=%s', async on => {
     saveState({ a1: defaultSettings(HOST) })
     let looking!: () => void
     const looked = new Promise<void>(resolve => { looking = resolve })
@@ -1851,11 +1902,13 @@ describe('the browser moves with its pane', () => {
     sw.move('a1', 'b1')
     await looked
     sw.move('b1', 'c1')
-    answer([session('a1')])
+    answer([session('a1', { browser: on ? true : undefined })])
     await eventually(() => expect(Object.keys(savedState().browsers)).toEqual(['c1']))
     expect(savedState().browsers.c1).toMatchObject({ profile: 'a1' })
-    expect(turnedOn()).toEqual({ c1: true })
-    await ready(sw.port, 'c1')
+    expect(turnedOn()).toEqual(on ? { c1: true } : {})
+    expect(everyAgent).toHaveBeenCalledOnce()
+    if (on) await ready(sw.port, 'c1')
+    else expect(sw.port.frameContext('c1')).toBeUndefined()
   })
 
   it('an older core moves its Browser flag before the destination starts on the same profile', async () => {
@@ -1905,13 +1958,54 @@ describe('the browser moves with its pane', () => {
     expect(savedState()).toMatchObject({ adopted: { a1: true } })
   })
 
-  it('a core that does not say which agents are here takes no flag in, and the entry still moves', async () => {
+  it.each(['rejected', 'unavailable', 'omitted'] as const)('%s legacy migration evidence preserves the source and a later move retries its flag', async failure => {
     saveState({ a1: defaultSettings(HOST) })
     const everyAgent = vi.fn(async (): Promise<RegisteredSession[] | null> => [session('a1'), session('b1', { browser: undefined })])
     const sw = startSwitching([session('b1', { browser: undefined })], { options: { everyAgent } })
-    everyAgent.mockRejectedValueOnce(new Error('no core'))
+    const log = vi.spyOn(console, 'log')
+    const move = vi.spyOn(Browsers.prototype, 'move')
+    const before = readFileSync(join(dataDir, 'agent-browser.json'), 'utf8')
+    if (failure === 'rejected') everyAgent.mockRejectedValueOnce(new Error('no core'))
+    else everyAgent.mockResolvedValueOnce(failure === 'omitted' ? [] : null)
     sw.move('a1', 'b1')
-    await eventually(() => expect(Object.keys(savedState().browsers)).toEqual(['b1']))
+    await move.mock.results[0]!.value.catch(() => {})
+    expect(readFileSync(join(dataDir, 'agent-browser.json'), 'utf8')).toBe(before)
+    expect(log).toHaveBeenCalledWith('agent browser b1: browser_move_failed (migration_unavailable)')
+    expect(turnedOn()).toEqual({})
+    expect(sw.port.frameContext('b1')).toBeUndefined()
+    sw.move('a1', 'b1')
+    await ready(sw.port, 'b1')
+    expect(turnedOn()).toEqual({ b1: true })
+    expect(savedState().browsers.b1).toMatchObject({ profile: 'a1' })
+  })
+
+  it('an explicitly off legacy row moves its profile without turning it on', async () => {
+    saveState({ a1: defaultSettings(HOST) })
+    const sw = startSwitching([session('b1', { browser: undefined })], { options: { everyAgent: async () => [session('a1', { browser: undefined })] } })
+    const move = vi.spyOn(Browsers.prototype, 'move')
+    sw.move('a1', 'b1')
+    await move.mock.results[0]!.value
+    expect(savedState().browsers.b1).toMatchObject({ profile: 'a1' })
+    expect(turnedOn()).toEqual({})
+    expect(sw.port.frameContext('b1')).toBeUndefined()
+  })
+
+  it.each(['Stop', 'purge'] as const)('%s of the source during an unresolved migration prevents a stale flag from returning', async action => {
+    saveState({ a1: defaultSettings(HOST) })
+    let answer!: (rows: RegisteredSession[] | null) => void
+    let entered!: () => void
+    const waiting = new Promise<void>(resolve => { entered = resolve })
+    const everyAgent = async () => { entered(); return new Promise<RegisteredSession[] | null>(resolve => { answer = resolve }) }
+    const sw = startSwitching([session('b1', { browser: undefined })], { options: { everyAgent } })
+    const move = vi.spyOn(Browsers.prototype, 'move')
+    sw.move('a1', 'b1')
+    await waiting
+    if (action === 'Stop') await sw.requests.agent_browser_stop!({ agentId: 'a1' }, LOCAL)
+    else sw.port.purged('a1')
+    answer(null)
+    await move.mock.results[0]!.value
+    if (action === 'Stop') expect(savedState().browsers.b1).toMatchObject({ profile: 'a1' })
+    else await eventually(() => expect(savedState().browsers).toEqual({}))
     expect(turnedOn()).toEqual({})
     expect(sw.port.frameContext('b1')).toBeUndefined()
   })

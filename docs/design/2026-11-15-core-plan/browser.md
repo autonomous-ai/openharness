@@ -279,3 +279,68 @@ No production API or credential projection changes. Both purge barriers failed f
 recreated (2 failed, 109 skipped, 3.46 seconds) and pass after the queue admission correction (2 passed, 109 skipped,
 3.22 seconds), on macOS with Node 24.22.2. Logs: `/tmp/core-browser-final-purge-red.log` and
 `/tmp/core-browser-final-purge-green.log`. Native fixture validation, typecheck and broader gates remain pending.
+
+## Old-core settings and unresolved migration evidence, 16 November
+
+Design before correction: settings/read/save/proxy-test need only proof that an
+agent exists. A supported older core answers `agent_ids`, but cannot answer
+`follow_agents` or supply complete `agents` rows. Keep presence and migration
+evidence separate in the Browser process. Presence asks `agents` first and uses
+the dated `agent_ids` adapter only after an explicit `UNKNOWN_QUERY`. Validate
+both legacy lists, use them only for membership, and never invent a session row.
+Each query is bounded to ten seconds and fenced before and after the await to
+the captured core connection and connection generation. A disconnected, failed, malformed or superseded
+answer stays unknown: settings requests report `SERVICE_UNAVAILABLE`, while a
+valid absent id remains `NO_BROWSER`. New Start still requires lifecycle catch-up.
+The adapter is process-local and can be deleted on or after 2026-12-18.
+
+Raw migration rows are queried independently of lifecycle catch-up; they are
+never a complete inventory for deleting profiles. A move needing a legacy flag
+must stop before changing either profile if that query is unavailable or omits
+the source row (a saved row may be unreadable). Preserve the source's adoption/on
+state and log `browser_move_failed
+(migration_unavailable)`; a later move with actual evidence may retry. Existing
+source/destination queues and generation checks keep a later Stop or purge in
+force. An explicit off flag remains different from unavailable evidence.
+Once a move succeeds, both ends are marked adopted: the destination's on/off
+decision now belongs to Browser too. A consecutive move must carry that decision
+without asking for a legacy row of the new destination.
+
+Growth and storage limits are unchanged: no new persistent field, cache, timer
+loop, core port or core file. Concurrency uses existing queues and the captured
+connection generation only. Reads remain request-driven and bounded by existing IPC frame
+limits; the legacy fallback performs at most one additional query. Migration
+failure changes no saved data, and rollback reads the existing state format.
+Owner/guest checks and OS identity are unchanged. Failures use the existing
+service refusal and move log. Affects the macOS/Linux Browser service; Windows
+remains unsupported. Selected checks: public request and move regressions first,
+process compatibility/stale-connection controls, move/Stop/purge controls, the
+four affected Browser coverage files at 100%, and TypeScript. Root retains final
+native, full-gate, performance and platform acceptance.
+
+Correction evidence (macOS, Node 24.22.2, one worker; private fake Podman and
+loopback proxy, with Linux service paths and Windows refusals exercised):
+
+- The two public-caller regressions failed before the correction against
+  `aff58badbf0b4eaece4b5b66e40bbc9af6e72c34`: old-core settings returned
+  `NO_BROWSER`, and unavailable migration moved the profile and marked its
+  source adopted. Log: `/tmp/core-browser-compatibility-migration-red.log`.
+- Missing-row migration and malformed modern presence also failed before their
+  guards; the original corrections passed in that run. Log:
+  `/tmp/core-browser-compatibility-migration-additional-red.log`.
+- The first coverage run caught one further failure: a consecutive move tried
+  legacy adoption again for its new source (243 passed, one failed). Kept in
+  `/tmp/core-browser-compatibility-migration-coverage.log`; the successful state
+  commit now adopts both ends. The move controls then passed for both on and off
+  (25 selected tests; `/tmp/core-browser-compatibility-migration-queues-green.log`).
+- Final four-file coverage: **245 tests passed**, **100% per file** for statements,
+  branches, functions and lines in `agentBrowser.ts`, `agentBrowserProcess.ts`,
+  `agentBrowser/browsers.ts` and `agentBrowser/containers.ts` (110.58 s).
+  Log: `/tmp/core-browser-compatibility-migration-final-coverage.log`; raw report:
+  `/tmp/core-browser-compatibility-migration-final-coverage/coverage-final.json`.
+  Final `tsc --noEmit` passed (`/tmp/core-browser-compatibility-migration-final-types.log`).
+
+This remains PR1: lifecycle and flag ownership. Generic frame parts and stream
+consolidation remain PR2; Git is still blocked on frame parts. Final integration,
+native validation, broader gates and performance acceptance remain with the
+coordinator. Evidence hashes: `/tmp/core-browser-compatibility-migration-evidence.json`.
