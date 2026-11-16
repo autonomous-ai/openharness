@@ -118,6 +118,19 @@ describe('the attempts on another program\'s socket (docs/plans/2026-11-16-herdr
     expect(s.timers).toEqual([])
   })
 
+  it('a stale socket removed says none once, and a socket made after opens', () => {
+    const s = setup(OLD)
+    s.attempts.start()
+    s.attempts.failed('closed', 'refused')
+    s.state.stamp = undefined
+    s.fire()
+    s.fire()
+    expect(s.log).toEqual(['[herdr-app] socket · stale', '[herdr-app] socket · none'])
+    s.state.stamp = ANOTHER
+    s.fire()
+    expect(s.opens()).toBe(2)
+  })
+
   it('a failure after a start says its line and retries after 1, 2, 4, 8, 16, 32 and 60 s', () => {
     const s = setup(OLD)
     s.attempts.start()
