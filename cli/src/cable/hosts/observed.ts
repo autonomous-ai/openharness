@@ -383,6 +383,22 @@ export class ObservedSource implements HostSource {
     return found && { ...found.agent }
   }
 
+  /** The live agent with that adapter's pane of that id: of two, the one heard from last. */
+  byPane(adapter: string, id: string): HostAgent | undefined {
+    let found: Entry | undefined
+    for (const e of this.entries.values()) {
+      if (!this.live(e) || !e.panes.some(({ pane }) => pane.adapter === adapter && pane.id === id)) continue
+      if (!found || e.agent.lastActivityAt > found.agent.lastActivityAt) found = e
+    }
+    return found && { ...found.agent }
+  }
+
+  /** A live agent's pane id in that adapter; none when it has no pane there, or its session ended. */
+  paneOf(agentId: string, adapter: string): string | undefined {
+    const e = this.entries.get(agentId)
+    return e && this.live(e) ? e.panes.find(({ pane }) => pane.adapter === adapter)?.pane.id : undefined
+  }
+
   /**
    * Its tty, read once per process in the background: a session resumed in another tab runs in a process of its own, and
    * the old tab holds something else now, so its tty goes at once. An answer lands only on its own entry, and only while
