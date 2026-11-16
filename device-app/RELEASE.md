@@ -14,7 +14,8 @@ From the repository root, on a clean checkout of `origin/main`:
 - `ARGS="--prepare"`: build, sign and check `origin/main`'s tip with `publish=false`; tag and publish nothing.
 - `ARGS="--minor"`: `X.(Y+1).1` instead of the patch bump.
 - `ARGS="X.Y.Z"`: an explicit version.
-- `ARGS="--notes-file f.md"`: hand-written notes instead of the commit list since the last tag.
+- `ARGS="--notes-file f.md"`: hand-written notes instead of the commits since the last tag that touch `device-app/`,
+  at most 100.
 - `ARGS="--wait"`: follow the run it started to its end (`gh run watch`).
 - `ARGS="--allow-older"`: a rollback, older code under a higher version.
 - `ARGS="--allow-no-manifest"`: the first release only, while the bucket holds no manifest; refused once any
@@ -39,7 +40,7 @@ The first release, with Diego's go. The bucket holds no manifest yet, so both na
 
 | Job | Runs on | Does |
 |---|---|---|
-| `version` | ubuntu | Checks the version, the run's ref, and that the run's commit is on `main`. |
+| `version` | ubuntu | Checks the version, the run's ref, and that the run's commit is on `main`; with `publish=true`, that the tag is annotated and its message (the notes) is not empty. |
 | `build` | macos-15 | Compiles, then bundles, signs, notarizes and checks; keeps the three files and their sha256 and size as a run artifact for 7 days. |
 | `publish` | ubuntu, only with `publish=true` | Uploads to GCS, writes the manifest, verifies the public downloads. |
 

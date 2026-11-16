@@ -713,8 +713,9 @@ jobs:
           HARNESS_PTY_BIN: ${{ github.workspace }}/pty/target/debug/harness-pty
         run: npx vitest run src/lib/ptyHostBackend.contract.spec.ts --maxWorkers=1
 
-  # The Harness Device menu-bar app (device-app/, Rust and Tauri): the UI's typecheck, Vitest and bundle, then the Rust
-  # unit tests on Linux. The macOS code is not compiled here; it is built and tested on a Mac.
+  # The Harness Device menu-bar app (device-app/, Rust and Tauri): the release scripts' tests, the UI's typecheck,
+  # Vitest and bundle, then the Rust unit tests on Linux. The macOS code is not compiled here; it is built and tested
+  # on a Mac.
   device-app-checks:
     concurrency:
       group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-device-app-checks
