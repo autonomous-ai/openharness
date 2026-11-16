@@ -35,6 +35,9 @@ const EVERYDAY_PORT = '18473'
 const OPEN = '{"type":"dial","standby":true}'
 const DETACHED = '{"attached":false}'
 const NO_AGENT = '{"attached":true,"agent":null}'
+/** O's name, from its title as Claude Code's SessionStart says it; the mark is what a log holding the name would show. */
+const TITLE = 'Plan 5c2e9b'
+const TITLE_MARK = '5c2e9b'
 
 // How the CLI is started: the run's bundle when there is one (E2E_BUNDLE), as the daemon runs.
 const CLI_ENTRY = process.env.E2E_BUNDLE_PATH ? [process.env.E2E_BUNDLE_PATH] : ['--import', 'tsx', 'src/cli.ts']
@@ -47,7 +50,7 @@ interface Loop {
   states: DialState[]
   /** Its log lines. */
   logs: string[]
-  /** Ends its stdin, which stops it; its exit code. */
+  /** Ends its stdin, which stops it; its exit code, once it exits within 10 s. */
   stop(): Promise<number | null>
 }
 
@@ -99,14 +102,14 @@ describe('the dial stream, for Orca\'s Harness Device plugin', () => {
     return dial
   }
 
-  /** O in an Orca terminal and W in WezTerm, each started and listed on every dial. */
+  /** O in an Orca terminal, named TITLE, and W in WezTerm, each started and listed on every dial. */
   const sessions = async (d: IsolatedDaemon, ...dials: FakeDial[]) => {
     const o = new InOrca(d, 'o', children, { ORCA_TERMINAL_HANDLE: `term_${randomUUID()}`, __CFBundleIdentifier: ORCA })
     const w = new InOrca(d, 'w', children, { WEZTERM_PANE: '7' })
-    for (const claude of [o, w]) {
-      await claude.hook('SessionStart', { source: 'startup' })
-      for (const dial of dials) await dial.next((m) => m.t === 'agent' && m.id === claude.id, 45_000, 'the agent listed')
-    }
+    await o.hook('SessionStart', { source: 'startup', session_title: TITLE })
+    for (const dial of dials) await dial.next((m) => m.t === 'agent' && m.id === o.id && m.name === TITLE, 45_000, 'O listed by its title')
+    await w.hook('SessionStart', { source: 'startup' })
+    for (const dial of dials) await dial.next((m) => m.t === 'agent' && m.id === w.id, 45_000, 'W listed')
     return { o, w }
   }
 
@@ -212,13 +215,24 @@ describe('the dial stream, for Orca\'s Harness Device plugin', () => {
     }
     lines(child.stdout, (line) => states.push(JSON.parse(line) as DialState))
     lines(child.stderr, (line) => logs.push(line))
-    const exited = new Promise<number | null>((done) => child.once('close', (code) => done(code)))
-    return { states, logs, stop: () => { child.stdin.end(); return exited } }
+    let exited: { code: number | null } | undefined
+    child.once('close', (code) => { exited = { code } })
+    return {
+      states, logs,
+      stop: async () => {
+        child.stdin.end()
+        return (await until('the loop to exit', () => exited, 10_000, 50)).code
+      },
+    }
   }
 
   /** The daemon's dial stream lines, each from its `[devices]` on. */
   const streamLines = (d: IsolatedDaemon): string[] =>
     d.log().split('\n').filter((line) => line.includes('dial stream')).map((line) => line.slice(line.indexOf('[devices]')))
+
+  /** How many streams the daemon has said ended, each by its client going. */
+  const endedGone = (d: IsolatedDaemon): number =>
+    streamLines(d).filter((line) => line === '[devices] dial stream · ended · gone').length
 
   it('before a dial, link says the daemon takes a connect and the devices are not ready; a dial plugged in makes them ready', async () => {
     const { d, desk } = await fresh()
@@ -268,7 +282,7 @@ describe('the dial stream, for Orca\'s Harness Device plugin', () => {
     expect(next.lines).toEqual([NO_AGENT])
   })
 
-  it('two dials: the one that did not move last going changes nothing, the one that did says agent null, and the last one going says attached false', async () => {
+  it('two dials: the one that did not move last going changes nothing, and the last one going says attached false', async () => {
     const { d, desk } = await fresh()
     const a = await plugged(desk, 'E2E-A', 'e2:e0:00:00:00:0a')
     const b = await plugged(desk, 'E2E-B', 'e2:e0:00:00:00:0b')
@@ -279,7 +293,8 @@ describe('the dial stream, for Orca\'s Harness Device plugin', () => {
     expect(await moved(b, w, open, 3)).toBe(shown(b, w, 'WezTerm'))
     await desk.unplug('E2E-A')
     // A's port closed before B moves: a none from A that reached the stream would come before B's line.
-    await until("A's port closed", () => d.log().includes('cable: closed (end of stream) [usb E2E-A]'), 30_000, 50)
+    // Any reason: a read in the unplug window can say `daemon stopping`, and Linux can say `EIO`.
+    await until("A's port closed", () => /cable: closed \([^)]*\) \[usb E2E-A\]/.test(d.log()), 30_000, 50)
     expect(await moved(b, o, open, 4)).toBe(shown(b, o, 'Orca'))
     expect(open.lines).toEqual([NO_AGENT, shown(a, o, 'Orca'), shown(b, w, 'WezTerm'), shown(b, o, 'Orca')])
     await desk.unplug('E2E-B')
@@ -305,34 +320,36 @@ describe('the dial stream, for Orca\'s Harness Device plugin', () => {
 
   it('the plugin\'s loop, through the launcher in the throwaway home, follows the dial', async () => {
     const { d, desk } = await fresh()
-    const run = loop(d)
-    const last = (): DialState | undefined => run.states.at(-1)
-    onTestFailed(() => { console.log(`---- the loop's states\n${run.states.map((s) => JSON.stringify(s)).join('\n')}\n---- its log\n${run.logs.join('\n')}`) })
+    const plugin = loop(d)
+    const last = (): DialState | undefined => plugin.states.at(-1)
+    onTestFailed(() => { console.log(`---- the loop's states\n${plugin.states.map((s) => JSON.stringify(s)).join('\n')}\n---- its log\n${plugin.logs.join('\n')}`) })
     await until('unplugged', () => last()?.state === 'unplugged', 60_000)
     const dial = await plugged(desk, 'E2E-A', 'e2:e0:00:00:00:0a')
     const attached: DialState = { state: 'attached' }
     await until('attached', () => last()?.state === 'attached', 60_000)
     expect(last()).toEqual(attached)
-    // Started once the dial is there, as in the cases above: an agent started before is not on its first list.
+    // Started once the dial is there: a session known only by its hooks has no process for the attach scan to find, and
+    // a SessionStart sent before the devices process exists is dropped.
     const { o } = await sessions(d, dial)
-    const name = nameOn(dial, o)!
-    const onO: DialState = { state: 'attached', agent: { name, app: 'Orca' } }
-    await turned(dial, o, 'O shown', () => (last()?.agent?.name === name || undefined))
+    const onO: DialState = { state: 'attached', agent: { name: TITLE, app: 'Orca' } }
+    await turned(dial, o, 'O shown', () => (last()?.agent?.name === TITLE || undefined))
     expect(last()).toEqual(onO)
     await desk.unplug('E2E-A')
     await until('unplugged again', () => last()?.state === 'unplugged', 60_000)
     // O cleared as the dial's session closes may come in a state of its own before the dial is gone, or only the
     // latest be told; nothing else is: no notRunning, noHarness or elsewhere.
-    expect(run.states.slice(0, 3)).toEqual([{ state: 'unplugged' }, attached, onO])
-    expect(run.states.slice(3, -1).every((state) => JSON.stringify(state) === JSON.stringify(attached))).toBe(true)
+    expect(plugin.states.slice(0, 3)).toEqual([{ state: 'unplugged' }, attached, onO])
+    expect(plugin.states.slice(3, -1).every((state) => JSON.stringify(state) === JSON.stringify(attached))).toBe(true)
     expect(last()).toEqual({ state: 'unplugged' })
-    const stopped = run.stop()
-    // The loop closed the stream it held.
-    await until('the stream ended', () => streamLines(d).at(-1) === '[devices] dial stream · ended · gone')
+    // Streams the loop held while the dial came and went have ended too: the one it closes on stop is one more.
+    const ended = endedGone(d)
+    const stopped = plugin.stop()
+    await until('the stream ended', () => endedGone(d) > ended)
     expect(await stopped).toBe(0)
-    expect(run.logs).toContain('dial: unplugged')
-    expect(run.logs).toContain('dial: attached')
-    expect(run.logs.filter((line) => line.includes(name) || line.includes('Orca') || line.includes(d.root))).toEqual([])
+    expect(plugin.logs).toContain('dial: unplugged')
+    expect(plugin.logs).toContain('dial: attached')
+    expect(plugin.logs.filter((line) => line.includes(TITLE_MARK) || line.includes('Orca') || line.includes(d.root))).toEqual([])
+    expect(d.log()).not.toContain(TITLE_MARK)
   })
 
   it('the daemon\'s log says each open and end of the stream, and nothing of an agent', async () => {
@@ -344,10 +361,11 @@ describe('the dial stream, for Orca\'s Harness Device plugin', () => {
     await moved(dial, o, open, 2)
     await moved(dial, w, open, 3)
     open.close()
-    await until('the stream ended', () => streamLines(d).includes('[devices] dial stream · ended · gone'))
+    await until('the stream ended', () => endedGone(d) >= 1)
     const lines = streamLines(d)
     expect(lines).toContain('[devices] dial stream · open')
     // Each line whole: no name or app could sit in one.
-    expect(lines.every((line) => /^\[devices\] dial stream · (open|ended · (gone|stalled|closed)|\d+ lines in the last minute)$/.test(line))).toBe(true)
+    expect(lines.every((line) => /^\[devices\] dial stream · (open|ended · (gone|stalled|closed)|lines in the last minute: \d+)$/.test(line))).toBe(true)
+    expect(d.log()).not.toContain(TITLE_MARK)
   })
 })
