@@ -2,7 +2,7 @@
 
 use crate::cli::{Cli, Killer, StdinCloser, StdinWriter, Timeout, Unwritten};
 use crate::tabs::{TabApp, select_of};
-use crate::types::{DialStatus, Event, Log};
+use crate::types::{DialStatus, Event, Log, NotifyMode};
 use std::io;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -40,6 +40,14 @@ impl Watch {
     /// A change of the dial's sound on the child's stdin: one of two fixed lines, so nothing else can shape it.
     pub fn sound(&self, on: bool) {
         self.write(if on { r#"{"muted":false}"# } else { r#"{"muted":true}"# });
+    }
+
+    /// A change of the Notifications setting on the child's stdin: one of two fixed lines, as the sound's.
+    pub fn notify(&self, mode: NotifyMode) {
+        self.write(match mode {
+            NotifyMode::Full => r#"{"notify":"full"}"#,
+            NotifyMode::You => r#"{"notify":"you"}"#,
+        });
     }
 
     /// One that has ended takes nothing, and nothing of the line is logged. One that has stopped reading drops it, and

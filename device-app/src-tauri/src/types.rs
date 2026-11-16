@@ -15,6 +15,13 @@ pub struct DialStatus {
     pub muted: Option<bool>,
 }
 
+/// The dial's Notifications setting. Only you (`You`): an ordinary finished turn neither beeps nor wakes the dial.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NotifyMode {
+    Full,
+    You,
+}
+
 /// harnessd, as the keep-alive last saw it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Daemon {
@@ -197,6 +204,7 @@ pub enum Effect {
     SetClaude(bool),
     /// `true` turns the dial's sound on.
     SetSound(bool),
+    SetNotify(NotifyMode),
     OpenUrl(String),
     OpenDesktop,
     RegisterLoginItem,

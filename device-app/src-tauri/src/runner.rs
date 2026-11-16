@@ -218,6 +218,12 @@ impl Runner {
                     watch.sound(on);
                 }
             }
+            // As the sound: the watch's next status shows whether the change was made.
+            Effect::SetNotify(mode) => {
+                if let Some(watch) = &*shared.watch.lock().unwrap() {
+                    watch.notify(mode);
+                }
+            }
             Effect::OpenUrl(url) => shared.open(&[&url], "browser"),
             Effect::OpenDesktop => shared.open(&desktop::open_desktop_args(), "desktop app"),
             // On the caller's thread: one ServiceManagement call, once at start.
