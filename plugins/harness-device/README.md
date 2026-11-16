@@ -16,14 +16,20 @@ over. Nothing is kept for later.
 
 The mod also tells the daemon which session the Claude app shows, and the dial turns to it while the app is in front.
 
+Ringing: Claude Code gets a `dial` skill (`skills/dial/SKILL.md`). When the agent needs the person to act (give
+information, act outside its reach, decide), it runs `harness device notify "<one line>"` and the dial rings. Never for
+progress or done, at most once for the same need, no secret in the line, and the full ask stays in its answer. It is
+the same skill `harness device codex enable` writes for Codex.
+
 With no dial attached, no Harness daemon running, or no Harness CLI (`~/.local/bin/harness`, then `harness` on
 `PATH`), the hook tells nothing, and Claude Code carries on as it would without the plugin.
 
 ## What it never does
 
 - It never answers a prompt: the dial approves nothing, and each prompt is answered in its own app.
-- Nothing leaves the computer: the hook and the mod talk only to the daemon on it, and the dial attached to it. The
-  dial sees the tool's name and one line of its input; the rest stays in the hook. The mod sends only the session's id.
+- Nothing leaves the computer: the hook, the mod and the skill talk only to the daemon on it, and the dial attached to
+  it. The dial sees the tool's name and one line of its input; the rest stays in the hook. The mod sends only the
+  session's id, and the skill one line.
 
 ## Install and remove
 
