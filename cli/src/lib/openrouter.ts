@@ -141,7 +141,11 @@ export async function openRouterComplete(options: OpenRouterCompletionOptions): 
     const text = typeof content === 'string' ? content.trim() : ''
     return text || null
   } catch (err) {
-    if (options.signal?.aborted) throw err   // the caller cancelled: don't paper over it
+    // The caller cancelled: don't paper over it. Only ever as an AbortError: an abort can land while another error is
+    // in flight, such as a body-parse SyntaxError that quotes the model's answer, and the caller may log what it gets.
+    if (options.signal?.aborted) {
+      throw err instanceof Error && err.name === 'AbortError' ? err : new DOMException('aborted', 'AbortError')
+    }
     // By name and code, never the message: V8's JSON.parse error quotes a window of the body, and a completion's
     // body can repeat the person's spoken words. fetch's own failure is the constant "fetch failed", its cause's
     // code (ECONNRESET, ENOTFOUND) is what says why.
