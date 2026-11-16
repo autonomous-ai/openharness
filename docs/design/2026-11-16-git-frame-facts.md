@@ -149,3 +149,13 @@ source-size reduction alone.
   This includes immediate clearing before a changed directory is inspected,
   captured inline leases, full history retention, failed/late work, reconnects,
   the 512-entry/four-inspection queue and the shared publication budgets.
+
+The planned native process-ownership rig now runs from
+`cli/e2e/workspacesGitFacts.e2e.ts`. Against the frozen pre-extraction `15dedd`
+bundle, ten private fixture agents show the correct projects but the final
+no-core-Git assertion fails (38.95 seconds). The failure is retained in
+`/tmp/core-git-frame-native-red.log`; its latency samples were collected during
+other functional work and are not performance acceptance. The POSIX ownership
+shim explicitly skips Windows, bounds its fixture subprocess waits, and uses
+private repositories, homes and tmux. Final extracted-source ownership and
+kill/restart cases remain pending.
