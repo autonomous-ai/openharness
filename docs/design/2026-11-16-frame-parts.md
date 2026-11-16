@@ -36,6 +36,25 @@ unchanged. Stream routing and Browser wake behavior are separate work.
 
 ## Validation selected before implementation
 
+Independent review found that settled unchanged publications were still sent on
+each Viewers observation. Core suppressed the redundant client frame, but still
+paid for IPC, parsing and snapshot validation. The publisher will retain only a
+SHA-256 digest of the last acknowledged projection in each existing bounded live
+entry (at most 4096 digests), and skip an unchanged update when no write is in
+flight. Failed replies do not become acknowledged state. Pending changes still
+coalesce to the latest value, including a return to the last acknowledged value;
+new lifecycle leases and reconnects must publish again. This adds no core state
+or retained payload cache. Caller tests establish RED on unchanged repeated
+observations and cover failure, reconnect and in-flight reversion before coding.
+
+The three RED cases are preserved in `/tmp/core-frame-publisher-dedup-red-final.log`.
+The correction passes all 83 publisher/Browser/Viewers process cases with 100%
+per-file publisher coverage (2.03 seconds) and TypeScript. The intermediate
+82-case run passed behavior but missed one coverage branch; a public old-fallback
+acknowledgement test closes it. Broader exact-`70b1cdb4` coverage already passed
+4,773 core, 371 harnessd and 1,069 portability cases; those receipts precede this
+process-publisher-only correction and are not relabeled as a final-head full run.
+
 Byte goldens through `agentFrame` and `BackendSocket` list/push projection, including no service, non-DSH, stopped,
 Browser omitted and complete viewer/browser values. Generic boundary tests cover ownership, JSON bounds, detached
 copies, total bounds, duplicate suppression, end→same-id restart, old connection, inline revocation and outage retention.
