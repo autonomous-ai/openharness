@@ -46,6 +46,9 @@ export interface OpenDeps {
   log(line: string): void
   /** The raw `HARNESS_OPEN_BIN` (openPath). */
   bin?: string
+  /** Herdr.app's window is herdr's ring's: the ring holds an agent in Herdr (hostDetect.ts inHerdr, or one the hc source
+   *  lists), or Herdr.app is running. Asked at each pick. None: herdr's ring is herdr 0.8.0's alone. */
+  herdrApp?(): boolean
 }
 
 export function createOpenActions(deps: OpenDeps): {
@@ -80,9 +83,13 @@ export function createOpenActions(deps: OpenDeps): {
   const can = (target: OpenTarget): boolean => !!paneOn(target) || (mac && !!target.bundle)
   const forward = async (bundle: string): Promise<boolean> => (await deps.run(openBin, ['-b', bundle], RUN_TIMEOUT_MS)).code === 0
 
-  // herdr's ring is herdr's socket's agents, whose terminal nobody knows (#4366): its own app is no window of theirs.
-  const bundleFor = (app: string): string | undefined =>
-    app === 'harness' ? HARNESS_BUNDLE : app !== 'herdr' && Object.hasOwn(APP_BUNDLES, app) ? APP_BUNDLES[app] : undefined
+  // herdr 0.8.0's agents, whose terminal nobody knows (#4366), have no window of their own: herdr's ring brings Herdr
+  // only while Herdr.app's window is the ring's.
+  const bundleFor = (app: string): string | undefined => {
+    if (app === 'harness') return HARNESS_BUNDLE
+    if (app === 'herdr') return deps.herdrApp?.() ? APP_BUNDLES.herdr : undefined
+    return Object.hasOwn(APP_BUNDLES, app) ? APP_BUNDLES[app] : undefined
+  }
 
   async function bringNow(bundle: string): Promise<'ok' | 'failed'> {
     bringing = true
