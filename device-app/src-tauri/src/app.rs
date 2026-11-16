@@ -223,14 +223,14 @@ impl App {
             // A read of a CLI that went away answers late: nothing reads it.
             Event::Auth(_) | Event::Claude(_) | Event::Codex(_) => {}
             Event::Login(event) => self.login_event(event, effects),
-            Event::ClaudeSet(result) => {
+            Event::ClaudeSet(made) => {
                 // A change that no longer runs (its CLI went away) answers late: nothing reads it.
                 let EngineChange::Running(on) = self.state.claude_change else { return };
                 // Failed or not, the status is read again: a change may have done part of its work. The runner logged
                 // a failure's reason; the menu's row says it failed. A change that ended well shows at once, as the
                 // read may answer late or not at all.
                 effects.push(Effect::ReadClaude);
-                self.state.claude_change = if result.is_ok() {
+                self.state.claude_change = if made {
                     if let Some(status) = &mut self.state.claude {
                         status.enabled = on;
                     }
@@ -240,10 +240,10 @@ impl App {
                 };
             }
             // As Claude Code's.
-            Event::CodexSet(result) => {
+            Event::CodexSet(made) => {
                 let EngineChange::Running(on) = self.state.codex_change else { return };
                 effects.push(Effect::ReadCodex);
-                self.state.codex_change = if result.is_ok() {
+                self.state.codex_change = if made {
                     if let Some(status) = &mut self.state.codex {
                         status.enabled = on;
                     }
@@ -762,7 +762,7 @@ mod tests {
         let mut app = found();
         answer(&mut app, true, claude(true));
         app.handle(Event::Menu(MenuAction::ClaudeOff));
-        app.handle(Event::ClaudeSet(Err("x".into())));
+        app.handle(Event::ClaudeSet(false));
         app.handle(Event::Cli(false));
         app.handle(Event::Cli(true));
         assert_eq!(rows(&answer(&mut app, true, claude(true)))[2..4], ["Claude Code: On", "Turn off"]);
@@ -965,7 +965,7 @@ mod tests {
         assert!(has(&effects, &Effect::SetClaude(true)));
         assert!(shows(&effects).is_empty());
         assert_eq!(rows(&effects)[2..4], ["Claude Code: Turning on…", "Codex: Off"]);
-        let effects = app.handle(Event::ClaudeSet(Ok(())));
+        let effects = app.handle(Event::ClaudeSet(true));
         assert!(has(&effects, &Effect::ReadClaude));
         assert!(!effects.iter().any(|effect| matches!(effect, Effect::Save(_) | Effect::Show(_))), "{effects:?}");
         assert_eq!(rows(&effects)[2..4], ["Claude Code: On", "Turn off"]);
@@ -975,7 +975,7 @@ mod tests {
         assert!(has(&effects, &Effect::SetCodex(true)));
         assert!(shows(&effects).is_empty());
         assert_eq!(rows(&effects)[4..6], ["Codex: Turning on…", "Quit"]);
-        let effects = app.handle(Event::CodexSet(Ok(())));
+        let effects = app.handle(Event::CodexSet(true));
         assert!(has(&effects, &Effect::ReadCodex));
         assert!(!effects.iter().any(|effect| matches!(effect, Effect::Save(_) | Effect::Show(_))), "{effects:?}");
         assert_eq!(rows(&effects)[4..6], ["Codex: On", "Turn off"]);
@@ -988,7 +988,7 @@ mod tests {
         let mut app = found();
         answer_all(&mut app, true, claude(false), codex(false));
         app.handle(Event::Menu(MenuAction::ClaudeOn));
-        let effects = app.handle(Event::ClaudeSet(Err("x".into())));
+        let effects = app.handle(Event::ClaudeSet(false));
         assert!(has(&effects, &Effect::ReadClaude));
         assert!(!effects.iter().any(|effect| matches!(effect, Effect::Save(_) | Effect::Show(_))), "{effects:?}");
         assert_eq!(rows(&effects)[2..4], ["Claude Code: Could not turn on", "Turn on"]);
@@ -998,7 +998,7 @@ mod tests {
         let mut app = found();
         answer_all(&mut app, true, claude(true), codex(false));
         app.handle(Event::Menu(MenuAction::CodexOn));
-        let effects = app.handle(Event::CodexSet(Err("x".into())));
+        let effects = app.handle(Event::CodexSet(false));
         assert!(has(&effects, &Effect::ReadCodex));
         assert!(!effects.iter().any(|effect| matches!(effect, Effect::Save(_) | Effect::Show(_))), "{effects:?}");
         assert_eq!(rows(&effects)[4..6], ["Codex: Could not turn on", "Turn on"]);
@@ -1011,7 +1011,7 @@ mod tests {
         let mut app = found();
         answer(&mut app, true, claude(true));
         assert!(has(&app.handle(Event::Menu(MenuAction::ClaudeOff)), &Effect::SetClaude(false)));
-        let effects = app.handle(Event::ClaudeSet(Ok(())));
+        let effects = app.handle(Event::ClaudeSet(true));
         assert!(has(&effects, &Effect::ReadClaude));
         assert_eq!(rows(&effects)[2..4], ["Claude Code: Off", "Turn on"]);
         assert!(shows(&effects).is_empty());
@@ -1023,7 +1023,7 @@ mod tests {
         answer_all(&mut app, true, claude(true), codex(true));
         assert!(has(&app.handle(Event::Menu(MenuAction::CodexOff)), &Effect::SetCodex(false)));
         assert!(app.handle(Event::Menu(MenuAction::CodexOff)).is_empty());
-        let effects = app.handle(Event::CodexSet(Ok(())));
+        let effects = app.handle(Event::CodexSet(true));
         assert!(has(&effects, &Effect::ReadCodex));
         assert_eq!(rows(&effects)[4..6], ["Codex: Off", "Turn on"]);
         assert!(shows(&effects).is_empty());
@@ -1046,7 +1046,7 @@ mod tests {
         assert!(has(&effects, &Effect::SetClaude(false)));
         assert_eq!(rows(&effects)[2..4], ["Claude Code: Turning off…", "Codex: On"]);
         // A change that ended well shows at once, and stays when the status read after it fails.
-        let effects = app.handle(Event::ClaudeSet(Ok(())));
+        let effects = app.handle(Event::ClaudeSet(true));
         assert!(has(&effects, &Effect::ReadClaude));
         assert_eq!(rows(&effects)[2..4], ["Claude Code: Off", "Turn on"]);
         assert!(app.handle(Event::Claude(None)).is_empty());
@@ -1054,7 +1054,7 @@ mod tests {
         let effects = app.handle(Event::Menu(MenuAction::CodexOff));
         assert!(has(&effects, &Effect::SetCodex(false)));
         assert_eq!(rows(&effects)[4..6], ["Codex: Turning off…", "Quit"]);
-        let effects = app.handle(Event::CodexSet(Ok(())));
+        let effects = app.handle(Event::CodexSet(true));
         assert!(has(&effects, &Effect::ReadCodex));
         assert_eq!(rows(&effects)[4..6], ["Codex: Off", "Turn on"]);
         assert!(app.handle(Event::Codex(None)).is_empty());
@@ -1065,7 +1065,7 @@ mod tests {
         let mut app = found();
         answer_all(&mut app, true, claude(true), codex(true));
         app.handle(Event::Menu(MenuAction::ClaudeOff));
-        let effects = app.handle(Event::ClaudeSet(Err("x".into())));
+        let effects = app.handle(Event::ClaudeSet(false));
         assert!(has(&effects, &Effect::ReadClaude));
         assert!(shows(&effects).is_empty());
         assert_eq!(rows(&effects)[2..4], ["Claude Code: Could not turn off", "Turn off"]);
@@ -1076,7 +1076,7 @@ mod tests {
         assert_eq!(rows(&effects)[2], "Claude Code: Turning off…");
 
         app.handle(Event::Menu(MenuAction::CodexOff));
-        let effects = app.handle(Event::CodexSet(Err("x".into())));
+        let effects = app.handle(Event::CodexSet(false));
         assert!(has(&effects, &Effect::ReadCodex));
         assert!(shows(&effects).is_empty());
         assert_eq!(rows(&effects)[3..5], ["Codex: Could not turn off", "Turn off"]);
@@ -1519,7 +1519,7 @@ mod tests {
         app.handle(Event::Menu(MenuAction::ClaudeOff));
         installed(&mut app);
         assert!(!has(&app.handle(tick(B + 10)), &Effect::Relaunch));
-        app.handle(Event::ClaudeSet(Ok(())));
+        app.handle(Event::ClaudeSet(true));
         assert!(app.handle(tick(B + 15)).ends_with(&[Effect::StopWatch, Effect::Relaunch]));
     }
 
@@ -1530,7 +1530,7 @@ mod tests {
         app.handle(Event::Menu(MenuAction::CodexOff));
         installed(&mut app);
         assert!(!has(&app.handle(tick(B + 10)), &Effect::Relaunch));
-        app.handle(Event::CodexSet(Ok(())));
+        app.handle(Event::CodexSet(true));
         assert!(app.handle(tick(B + 15)).ends_with(&[Effect::StopWatch, Effect::Relaunch]));
     }
 

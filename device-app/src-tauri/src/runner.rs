@@ -209,7 +209,7 @@ impl Runner {
                     if let Err(message) = &result {
                         log.line(&format!("claude: {message}"));
                     }
-                    Event::ClaudeSet(result)
+                    Event::ClaudeSet(result.is_ok())
                 });
             }
             Effect::SetCodex(on) => {
@@ -219,7 +219,7 @@ impl Runner {
                     if let Err(message) = &result {
                         log.line(&format!("codex: {message}"));
                     }
-                    Event::CodexSet(result)
+                    Event::CodexSet(result.is_ok())
                 });
             }
             // On the caller's thread: one short write, to the watch running now. With none the change has nowhere to
@@ -863,9 +863,9 @@ mod tests {
         let on = ClaudeStatus { supported: true, installed: true, enabled: true, claude_version: None };
         assert_eq!(w.answer(Effect::ReadClaude), Event::Claude(Some(on)));
         w.fake.script("device claude enable", &[]);
-        assert_eq!(w.answer(Effect::SetClaude(true)), Event::ClaudeSet(Ok(())));
+        assert_eq!(w.answer(Effect::SetClaude(true)), Event::ClaudeSet(true));
         w.fake.script("device claude disable", &["@err Claude Code is busy.", "@exit 1"]);
-        assert_eq!(w.answer(Effect::SetClaude(false)), Event::ClaudeSet(Err("Claude Code is busy.".into())));
+        assert_eq!(w.answer(Effect::SetClaude(false)), Event::ClaudeSet(false));
         assert!(w.logged("claude: Claude Code is busy."));
         w.fake.script("login --json", &[URL, SUCCESS]);
         assert_eq!(w.answer(Effect::RunLogin), browser());
@@ -900,9 +900,9 @@ mod tests {
         let off = CodexStatus { supported: true, installed: true, enabled: false };
         assert_eq!(w.answer(Effect::ReadCodex), Event::Codex(Some(off)));
         w.fake.script("device codex enable", &[]);
-        assert_eq!(w.answer(Effect::SetCodex(true)), Event::CodexSet(Ok(())));
+        assert_eq!(w.answer(Effect::SetCodex(true)), Event::CodexSet(true));
         w.fake.script("device codex disable", &["@err Codex is busy.", "@exit 1"]);
-        assert_eq!(w.answer(Effect::SetCodex(false)), Event::CodexSet(Err("Codex is busy.".into())));
+        assert_eq!(w.answer(Effect::SetCodex(false)), Event::CodexSet(false));
         assert!(w.logged("codex: Codex is busy."));
         assert_eq!(w.fake.calls(), ["device codex status --json", "device codex enable", "device codex disable"]);
     }

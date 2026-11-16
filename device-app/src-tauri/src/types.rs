@@ -204,7 +204,8 @@ pub enum LoginEvent {
     Done(Result<(), String>),
 }
 
-/// What happened. WatchExit(None): ended by a signal. UpdateChecked(Some): a strictly newer release.
+/// What happened. WatchExit(None): ended by a signal. UpdateChecked(Some): a strictly newer release. ClaudeSet and
+/// CodexSet: whether the change was made; the runner logged why not.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
     Tick { now: u64, desktop_running: bool },
@@ -218,8 +219,8 @@ pub enum Event {
     Claude(Option<ClaudeStatus>),
     Codex(Option<CodexStatus>),
     Login(LoginEvent),
-    ClaudeSet(Result<(), String>),
-    CodexSet(Result<(), String>),
+    ClaudeSet(bool),
+    CodexSet(bool),
     LoginItem(bool),
     Menu(MenuAction),
     Act(Action),
