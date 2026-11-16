@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { APP_IDS, appDisplayName, detectApp, detectHost, hostDisplayName, UNKNOWN_APP } from './hostDetect.js'
+import { APP_IDS, appDisplayName, detectApp, detectHost, hostDisplayName, inHerdr, UNKNOWN_APP } from './hostDetect.js'
 
 describe('detectHost', () => {
   it.each([
@@ -116,7 +116,20 @@ describe('detectApp', () => {
     expect(detectApp(hc)).toBe('herdr')
     expect(detectApp({ ...hc, __CFBundleIdentifier: 'dev.herdr.core' })).toBe('herdr')
     expect(detectApp({ ...hc, __CFBundleIdentifier: 'com.stablyai.orca' })).toBe('herdr')
-    expect(detectApp({ ...hc, TMUX_PANE: '%3' })).toBe('herdr')
+  })
+
+  // Every program an hc terminal starts inherits its HC_TERMINAL_ID (`code .`, tmux, zellij, herdr): there it names the
+  // terminal the other app was started from, whose agent is another.
+  it('an hc address another app or a nearer host inherited is not herdr\'s', () => {
+    const vscode = { HC_TERMINAL_ID: 't3', TERM_PROGRAM: 'vscode', __CFBundleIdentifier: 'com.microsoft.VSCode' }
+    expect(detectHost(vscode)).toBe('vscode')
+    expect(detectApp(vscode)).toBe('vscode')
+    const tmux = { HC_TERMINAL_ID: 't3', TERM_PROGRAM: 'tmux', TMUX_PANE: '%3' }
+    expect(detectHost(tmux)).toBe('tmux')
+    expect(detectApp(tmux)).toBe('tmux')
+    expect(detectApp({ HC_TERMINAL_ID: 't3', TERM_PROGRAM: 'ghostty', TMUX_PANE: '%3' })).toBe('ghostty')
+    expect(detectApp({ HC_TERMINAL_ID: 't3', TERM_PROGRAM: 'iTerm.app' })).toBe('iterm')
+    expect(detectHost({ HC_TERMINAL_ID: 't3', TERM_PROGRAM: 'WezTerm' })).toBe('terminal')
   })
 
   it('zellij inside kitty is kitty, with and without a bundle id', () => {
@@ -177,5 +190,29 @@ describe('detectApp', () => {
     const others = APP_IDS.filter((id) => id !== 'terminal' && id !== 'terminal-app')
     expect(others).toHaveLength(15)
     for (const id of others) expect(appDisplayName(id)).toBe(hostDisplayName(id))
+  })
+})
+
+// Only hc's own terminal is Herdr's: the one predicate detectHost, detectApp, the Herdr adapter and a tap's bundle read.
+describe('inHerdr', () => {
+  it.each([
+    [{ HC_TERMINAL_ID: 't7' }],
+    [{ HC_TERMINAL_ID: 't1b', TERM_PROGRAM: 'ghostty' }],
+    [{ HC_TERMINAL_ID: 't7', TERM_PROGRAM: 'ghostty', __CFBundleIdentifier: 'com.stablyai.orca' }],
+  ])('hc\'s own terminal: %j', (hints) => {
+    expect(inHerdr(hints)).toBe(true)
+    expect(detectHost(hints)).toBe('herdr')
+    expect(detectApp(hints)).toBe('herdr')
+  })
+
+  it.each([
+    [{}],
+    [{ TERM_PROGRAM: 'ghostty' }],
+    ...['vps/t7', 'T7', 't', '--help', 't7; rm -rf /', `t${'1'.repeat(17)}`].map((id) => [{ HC_TERMINAL_ID: id, TERM_PROGRAM: 'ghostty' }]),
+    ...['vscode', 'tmux', 'iTerm.app', 'WezTerm', 'Apple_Terminal', 'rio'].map((program) => [{ HC_TERMINAL_ID: 't7', TERM_PROGRAM: program }]),
+    ...['HERDR_PANE_ID', 'REX_BLOCK', 'ZELLIJ', 'TMUX_PANE'].map((own) => [{ HC_TERMINAL_ID: 't7', TERM_PROGRAM: 'ghostty', [own]: '1' }]),
+  ])('not hc\'s own terminal: %j', (hints) => {
+    expect(inHerdr(hints)).toBe(false)
+    expect(detectApp(hints)).not.toBe('herdr')
   })
 })

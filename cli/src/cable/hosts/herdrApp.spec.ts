@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { Place } from './adapter.js'
 import type { HcPrompt } from './hcClient.js'
 import { createHerdrAppAdapter, type HerdrAppDeps } from './herdrApp.js'
+import { detectApp, detectHost } from './hostDetect.js'
 
 const FAKE_PATH_HERDR_APP = '/fake/bin/herdr-app'
 /** Herdr.app's own binary, written out: the adapter's own constant would agree with itself. */
@@ -66,6 +67,8 @@ function held<T>() {
 }
 
 const place = (hints: Record<string, string>): Place => ({ host: 'herdr', app: 'herdr', hints })
+/** The place the observed source gives a hook's hints. */
+const detected = (hints: Record<string, string>): Place => ({ host: detectHost(hints), app: detectApp(hints), hints })
 const pane = (id: string) => ({ adapter: 'herdr-app', id })
 const openCall: Call = { file: '/usr/bin/open', args: ['-b', 'dev.herdr.app'], timeoutMs: 10_000 }
 const focusCall = (address: string, file = FAKE_PATH_HERDR_APP): Call =>
@@ -113,6 +116,25 @@ describe('the Herdr adapter', () => {
     for (const id of FORGED) {
       expect(adapter.paneOf(place({ HC_TERMINAL_ID: id })), id).toBeUndefined()
     }
+  })
+
+  // Every program an hc terminal starts inherits its HC_TERMINAL_ID (`code .`, tmux, zellij, herdr): there it names the
+  // terminal the other app was started from, and a tap would switch Herdr, and words go, to another agent.
+  it('paneOf refuses an hc address another app or a nearer host inherited, and any host but herdr', () => {
+    const { adapter } = recorder()
+    const inherited: Array<Record<string, string>> = [
+      { HC_TERMINAL_ID: 't3', TERM_PROGRAM: 'vscode', __CFBundleIdentifier: 'com.microsoft.VSCode' },
+      { HC_TERMINAL_ID: 't3', TERM_PROGRAM: 'tmux', TMUX_PANE: '%3' },
+      { HC_TERMINAL_ID: 't3', TERM_PROGRAM: 'ghostty', TMUX_PANE: '%3' },
+      { HC_TERMINAL_ID: 't3', TERM_PROGRAM: 'ghostty', HERDR_PANE_ID: 'w1:p1' },
+      { HC_TERMINAL_ID: 't3', REX_BLOCK: 'x' },
+      { HC_TERMINAL_ID: 't3', ZELLIJ: '0' },
+      { HC_TERMINAL_ID: 't3', TERM_PROGRAM: 'iTerm.app' },
+    ]
+    for (const hints of inherited) expect(adapter.paneOf(detected(hints)), JSON.stringify(hints)).toBeUndefined()
+    expect(adapter.paneOf(detected({ HC_TERMINAL_ID: 't3', TERM_PROGRAM: 'ghostty' }))).toEqual(pane('t3'))
+    const ghostty: Place = { host: 'ghostty', app: 'ghostty', hints: { HC_TERMINAL_ID: 't3', TERM_PROGRAM: 'ghostty' } }
+    expect(adapter.paneOf(ghostty)).toBeUndefined()
   })
 
   // Every hc terminal has HC_TERMINAL_ID, hidden `hc run` workers too: a hooked copy in one has the pane for words only.
