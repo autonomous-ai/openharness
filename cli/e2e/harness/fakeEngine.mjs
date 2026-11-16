@@ -124,10 +124,15 @@ const heldHookUrl = new URL('./heldHook.mjs', import.meta.url).href
  * it is one the wrapper listens for (then the wrapper exits 0).
  */
 async function codexWrapper(config) {
-  const child = spawn(process.execPath, [fileURLToPath(import.meta.url), ...process.argv.slice(2)], {
+  const args = process.argv.slice(2)
+  const probe = args.length === 1 && ['--help', '-h', '--version', '-V'].includes(args[0])
+  const child = spawn(process.execPath, [fileURLToPath(import.meta.url), ...args], {
     // Named `codex` from its start, as the native binary npm's launcher runs is: the daemon reads the rollout a
     // launcher's child holds open only from a child of the engine's own name (processTable.ts `engineChildren`).
-    argv0: 'codex',
+    // A probe's child keeps Node's name: the real Codex 0.167.0's is `<vendor>/codex --help`, which discovery skips,
+    // while `codex <script> --help` was recorded as the engine until it exited, and a close then said a conversation
+    // was kept (CLI end to end run 43746252131, shard 4; docs/plans/2026-11-16-codex-help-race-design.md).
+    ...(probe ? {} : { argv0: 'codex' }),
     stdio: 'inherit',
     env: { ...process.env, [CODEX_NATIVE]: JSON.stringify(config) },
   })
