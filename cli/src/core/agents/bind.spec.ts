@@ -6,6 +6,7 @@ import { transcriptOf, processSessionOf } from '../../engines/identities.js'
 import { loadEngine } from '../../engines/inProcess.js'
 import { HERMES_SANDBOX_HOLD } from '../../engines/hermes/contract.js'
 import { OPENCLAW_STATES } from '../../engines/openclaw/contract.js'
+import { OTHER_ENGINE_STATES } from '../../engines/otherEngines.js'
 import { OpenclawLive } from '../../engines/openclaw/live.js'
 import { continuationOf } from '../../engines/sessionFiles.js'
 import { env } from '../../config/env.js'
@@ -416,6 +417,21 @@ describe('binding a running process to its session', () => {
       expect(run.deps.forgetSession).not.toHaveBeenCalled()
     }
     expect(run.deps.announceSession).toHaveBeenCalledWith(row)
+  })
+
+  it.each(Object.values(OTHER_ENGINE_STATES))('leaves the other engines\' reader hold to its reader, pass after pass, and goes on with the pass: %s', async hold => {
+    const run = setup(), row = agent({ engine: 'copilot', transcriptPath: '/t/s1.jsonl', identityHold: hold })
+    run.byAgent.set(row.agentId, row)
+    vi.mocked(run.deps.registry.byProcess).mockReturnValue(row)
+    await run.binding.bindObservedAgent(observed({ engine: 'copilot' }))
+    await run.binding.bindObservedAgent(observed({ engine: 'copilot' }))
+    expect(run.deps.registry.revalidateBinding).not.toHaveBeenCalled()
+    expect(run.deps.registry.setIdentityHold).not.toHaveBeenCalled()
+    expect(run.deps.attachSession).not.toHaveBeenCalled()
+    expect(run.deps.forgetSession).not.toHaveBeenCalled()
+    expect(run.deps.announceSession).not.toHaveBeenCalled()
+    expect(row).toMatchObject({ sessionId: 's1', transcriptPath: '/t/s1.jsonl', identityHold: hold })
+    expect(processSessionOf).toHaveBeenCalledTimes(2)
   })
 
   it.each(['changing', 'deleted'] as const)('does not retry a binding whose process is %s', async state => {
