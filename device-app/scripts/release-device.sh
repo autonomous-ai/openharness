@@ -157,7 +157,11 @@ if [ "$prepare" -eq 1 ]; then
   echo "  started $workflow on main for $version: nothing is tagged or published"
 else
   git tag -a "$tag" --cleanup=verbatim -F "$work/notes"
-  git push origin "$tag"
+  # A tag left only here would pass for a release: it blocks the first one and changes the next one's notes.
+  git push origin "$tag" || {
+    git tag -d "$tag" >/dev/null
+    die "could not push $tag: removed it here, nothing started. Fix the push and run this again"
+  }
   # The tag stays: the run can still start on it, and a second run of this script would refuse it.
   if ! "${dispatch[@]}"; then
     echo "ERROR $tag is pushed, but the release run did not start. Start it by hand:" >&2
