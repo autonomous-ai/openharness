@@ -17,6 +17,8 @@ import { routeVoiceTask } from '../lib/voiceRouter.js'
 import { DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, ServiceUnavailableError, type CoreApi, type CorePorts, type DevicesPort } from '../core/api.js'
 import type { ObservedAsked, ObservedHookEvent } from '../core/observedHook.js'
 import { createServiceHost } from '../core/serviceHost.js'
+import { DIAL_SKILL } from '../devices/dialSkill.js'
+import { writeAnswer } from '../devices/dialSkillFiles.js'
 import { devicesListenerPath } from '../devices/listenerPath.js'
 import { STOP_HOOK_GRACE_MS } from '../core/turns/turnHooks.js'
 import type { FleetEvent } from '../cable/machineFleet.js'
@@ -152,7 +154,7 @@ const readers = vi.hoisted(() => ({
   external: null as null | Record<string, unknown>,
   known: new Map<string, string>(),
   // An owner's record path is its session id unless one is given.
-  owners: new Map<string, { engine: string; pid: number; record?: string }>(),
+  owners: new Map<string, { engine: string; pid: number; record?: string; tty?: string | null }>(),
   rows: new Map<string, { cwd: string; transcriptPath: string | null }>(),
   working: new Map<string, boolean>(),
   scans: 0,
@@ -5492,5 +5494,66 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
       '[herdr-app] closed · ended', '[herdr-app] retry · 1']))
     const secrets = ['t7q4', 'Nebula', 'secret-folder', 'secret tests']
     expect(logs.filter((line) => secrets.some((word) => line.includes(word)))).toEqual([])
+  })
+})
+
+describe('the dial skill, written from the devices\' own process (cable/dialSkillWriter.ts)', () => {
+  let homes: string
+  let saved: { claude: string; codex: string }
+  beforeEach(() => {
+    homes = mkdtempSync(join(tmpdir(), 'dial-homes-'))
+    saved = { claude: env.CLAUDE_PROJECTS_DIR, codex: env.CODEX_HOME }
+    env.CLAUDE_PROJECTS_DIR = join(homes, 'claude', 'projects')
+    env.CODEX_HOME = join(homes, 'codex')
+    mkdirSync(env.CODEX_HOME)
+    writeAnswer(dataDir, 'codex', true)
+  })
+  afterEach(() => {
+    env.CLAUDE_PROJECTS_DIR = saved.claude
+    env.CODEX_HOME = saved.codex
+    rmSync(homes, { recursive: true, force: true })
+  })
+  const held = (home: string): string | undefined => {
+    const file = join(home, 'skills', 'dial', 'SKILL.md')
+    return existsSync(file) ? readFileSync(file, 'utf8') : undefined
+  }
+
+  it('the dial skill is written as the devices start', () => {
+    start({ faults: ['fleet'], listen: fakeListener().listen })
+    expect(held(env.CODEX_HOME)).toBe(DIAL_SKILL)
+  })
+
+  it('a scan\'s owners reach the dial skill writer', async () => {
+    vi.useFakeTimers()
+    // A Codex app-server: no terminal, and no row, in a home the daemon does not know.
+    const other = join(homes, 'codex-other')
+    mkdirSync(other)
+    readers.known.set('cx-app', 'app')
+    readers.owners.set('cx-app', { engine: 'codex', pid: 91, tty: null,
+      record: join(other, 'sessions', '2026', '11', '16', 'rollout-2026-11-16T00-00-00-a.jsonl') })
+    start({ faults: ['fleet'], listen: fakeListener().listen })
+    expect(held(other)).toBeUndefined()
+    seen.host.watching!(true)
+    await vi.waitFor(() => expect(held(other)).toBe(DIAL_SKILL))
+  })
+
+  it('with the devices inside the core the dial skill is not written', () => {
+    start({ faults: ['fleet'] })
+    expect(held(env.CODEX_HOME)).toBeUndefined()
+  })
+
+  it('a dial skill writer that fails costs the dial nothing', async () => {
+    vi.useFakeTimers()
+    readers.known.set('sess-9', 'terminal')
+    readers.owners.set('sess-9', { engine: 'codex', pid: 77 })
+    readers.rows.set('sess-9', { cwd: '/work/web', transcriptPath: null })
+    readers.working.set('sess-9', false)
+    start({ faults: ['fleet', 'skill'], listen: fakeListener().listen })
+    expect(held(env.CODEX_HOME)).toBeUndefined()
+    expect(logs).toContain('[devices] skill failed · injected fault: skill')
+    await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
+    // The scan goes on past the writer to list what it found.
+    seen.host.watching!(true)
+    await vi.waitFor(() => expect(readers.apps.mock.calls).toEqual([[[77]]]))
   })
 })
