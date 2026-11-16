@@ -27,6 +27,8 @@ const EXES: [string, string][] = [
   ['wezterm-gui', 'wezterm'],
   ['kitty', 'kitty'],
   ['ghostty', 'ghostty'],
+  ['harness', 'harness'],
+  ['Harness', 'harness'],
 ]
 
 describe('frontAppId', () => {
@@ -35,7 +37,7 @@ describe('frontAppId', () => {
     expect(detectApp({ __CFBundleIdentifier: bundle })).toBe(id)
   })
 
-  it.each(EXES)('Code.exe, Cursor.exe, WindowsTerminal.exe, wezterm-gui, kitty and ghostty map: %s', (exe, id) => {
+  it.each(EXES)('Code.exe, Cursor.exe, WindowsTerminal.exe, wezterm-gui, kitty, ghostty and harness map: %s', (exe, id) => {
     expect(frontAppId(exe)).toBe(id)
   })
 

@@ -40,8 +40,16 @@ export interface AppList {
   apps: AppEntry[]
 }
 
-/** What a pick on the dial did. */
-export type AppPick = 'switched' | 'same' | 'ignored'
+/** What a pick on the dial did. `tabs`: with a window open, Harness was picked on an app's ring, and the dials hold the
+ *  window's tab again. */
+export type AppPick = 'switched' | 'same' | 'ignored' | 'tabs'
+
+/** What the dials that say `appFilter` hold while a window is open: its active tab, or the shown app's ring. */
+export type DialView = 'tabs' | 'apps'
+
+/** Why the view was set: an app settled in front or the app in front got known agents, a pick on the dial, the window
+ *  opening, the shown app left as Harness or no app. */
+export type ViewCause = 'front' | 'pick' | 'window' | 'empty'
 
 /** Why the shown app changed. */
 export type SwitchCause = 'front' | 'pick' | 'empty' | 'notice'
