@@ -3,8 +3,8 @@
 use crate::keepalive::{Keep, KeepAlive};
 use crate::model::{due, menu, menu_log};
 use crate::types::{
-    Action, AppState, AppUpdate, CliState, Daemon, Effect, Event, LoginEvent, MenuAction, MenuItem, NotifyMode, Phase,
-    Saved, Screen, UpdateFailure, View,
+    Action, AppState, AppUpdate, CliState, Daemon, Effect, EngineChange, Event, LoginEvent, MenuAction, MenuItem,
+    NotifyMode, Phase, Saved, Screen, UpdateFailure, View,
 };
 
 /// The menu reads the account, Claude Code and Codex again at most this often.
@@ -28,10 +28,6 @@ pub struct App {
     window: Option<View>,
     /// The sign-in that runs, as its screen draws it.
     login: Option<View>,
-    /// The Claude Code change that runs: on or off.
-    setting: Option<bool>,
-    /// The Codex change that runs: on or off. Apart from Claude Code's, so each may run beside the other.
-    codex_setting: Option<bool>,
     /// Whether the account, Claude Code and Codex answered since the CLI was found; None once the first screen is
     /// chosen.
     first_answers: Option<(bool, bool, bool)>,
@@ -69,6 +65,8 @@ impl App {
             desktop_installed,
             saved,
             app_update: AppUpdate::None,
+            claude_change: EngineChange::None,
+            codex_change: EngineChange::None,
         };
         let mut app = App {
             state,
@@ -76,8 +74,6 @@ impl App {
             menu: Vec::new(),
             window: None,
             login: None,
-            setting: None,
-            codex_setting: None,
             first_answers: None,
             now,
             last_read: now,
@@ -166,8 +162,8 @@ impl App {
                 if self.login.take().is_some() {
                     effects.push(Effect::CancelLogin);
                 }
-                self.setting = None;
-                self.codex_setting = None;
+                self.state.claude_change = EngineChange::None;
+                self.state.codex_change = EngineChange::None;
                 self.state.signed_in = None;
                 self.state.claude = None;
                 self.state.codex = None;
@@ -241,11 +237,13 @@ impl App {
             Event::Login(event) => self.login_event(event, effects),
             Event::ClaudeSet(result) => {
                 // A change that no longer runs (its CLI went away) answers late: nothing reads it.
-                let Some(on) = self.setting.take() else { return };
+                let EngineChange::Running(on) = self.state.claude_change else { return };
+                // Failed or not, the status is read again: a change may have done part of its work.
+                effects.push(Effect::ReadClaude);
+                self.state.claude_change = if result.is_ok() { EngineChange::None } else { EngineChange::Failed(on) };
                 match result {
                     Ok(()) => {
-                        effects.push(Effect::ReadClaude);
-                        // Every turn-on is the window's: the menu's Turn on… opens it.
+                        // Every turn-on is the window's: the menu's Turn on opens it.
                         if on {
                             self.remember(|saved| saved.asked_claude = true, effects);
                             if self.showing(Screen::Claude) {
@@ -253,7 +251,7 @@ impl App {
                             }
                         }
                     }
-                    // A failed turn-off shows nothing: the runner logged it.
+                    // The runner logged the reason; the menu's row says it failed.
                     Err(text) => {
                         if on && self.showing(Screen::Claude) {
                             self.show(Some(screen_at(Screen::Claude, Phase::Failed, vec![text])), effects);
@@ -263,10 +261,11 @@ impl App {
             }
             // As Claude Code's.
             Event::CodexSet(result) => {
-                let Some(on) = self.codex_setting.take() else { return };
+                let EngineChange::Running(on) = self.state.codex_change else { return };
+                effects.push(Effect::ReadCodex);
+                self.state.codex_change = if result.is_ok() { EngineChange::None } else { EngineChange::Failed(on) };
                 match result {
                     Ok(()) => {
-                        effects.push(Effect::ReadCodex);
                         if on {
                             self.remember(|saved| saved.asked_codex = true, effects);
                             if self.showing(Screen::Codex) {
@@ -395,8 +394,8 @@ impl App {
     /// waits for them too; a check does not, as the first launch's window is open right after the CLI install.
     fn relaunch_waits(&self) -> bool {
         self.running()
-            || self.setting.is_some()
-            || self.codex_setting.is_some()
+            || matches!(self.state.claude_change, EngineChange::Running(_))
+            || matches!(self.state.codex_change, EngineChange::Running(_))
             || self.keep.starting()
             || self.window.is_some()
     }
@@ -517,22 +516,22 @@ impl App {
         self.last_read = self.now;
     }
 
-    /// One change at a time: a click while one runs does nothing.
+    /// One change at a time: a click while one runs does nothing. A new change clears a failed one's row.
     fn set_claude(&mut self, on: bool, effects: &mut Vec<Effect>) -> bool {
-        if self.setting.is_some() {
+        if matches!(self.state.claude_change, EngineChange::Running(_)) {
             return false;
         }
-        self.setting = Some(on);
+        self.state.claude_change = EngineChange::Running(on);
         effects.push(Effect::SetClaude(on));
         true
     }
 
-    /// As Claude Code's, with a change of its own.
+    /// As Claude Code's, with a change of its own, so each may run beside the other.
     fn set_codex(&mut self, on: bool, effects: &mut Vec<Effect>) -> bool {
-        if self.codex_setting.is_some() {
+        if matches!(self.state.codex_change, EngineChange::Running(_)) {
             return false;
         }
-        self.codex_setting = Some(on);
+        self.state.codex_change = EngineChange::Running(on);
         effects.push(Effect::SetCodex(on));
         true
     }
@@ -564,9 +563,13 @@ impl App {
         match screen {
             Screen::Install => screen_at(screen, Phase::Working, Vec::new()),
             Screen::SignIn => self.login.clone().unwrap_or_else(|| screen_at(screen, Phase::Offer, Vec::new())),
-            Screen::Claude if self.setting == Some(true) => screen_at(screen, Phase::Working, Vec::new()),
+            Screen::Claude if self.state.claude_change == EngineChange::Running(true) => {
+                screen_at(screen, Phase::Working, Vec::new())
+            }
             Screen::Claude => screen_at(screen, Phase::Offer, Vec::new()),
-            Screen::Codex if self.codex_setting == Some(true) => screen_at(screen, Phase::Working, Vec::new()),
+            Screen::Codex if self.state.codex_change == EngineChange::Running(true) => {
+                screen_at(screen, Phase::Working, Vec::new())
+            }
             Screen::Codex => screen_at(screen, Phase::Offer, Vec::new()),
         }
     }

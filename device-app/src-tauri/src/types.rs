@@ -186,6 +186,15 @@ pub enum AppUpdate {
     Blocked(String),
 }
 
+/// A Claude Code or Codex change, as its menu rows show it. Running(true) turns on; Failed(true) was a turn-on.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum EngineChange {
+    #[default]
+    None,
+    Running(bool),
+    Failed(bool),
+}
+
 /// What the menu is drawn from.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AppState {
@@ -198,6 +207,8 @@ pub struct AppState {
     pub desktop_installed: bool,
     pub saved: Saved,
     pub app_update: AppUpdate,
+    pub claude_change: EngineChange,
+    pub codex_change: EngineChange,
 }
 
 /// AuthorizeUrl holds an `https:` URL only (account.rs lets no other through).

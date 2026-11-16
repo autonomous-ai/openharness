@@ -1,8 +1,8 @@
 //! What the menu shows and which screen is due, from the app's state.
 
 use crate::types::{
-    AppState, AppUpdate, ClaudeStatus, CliState, CodexStatus, Daemon, DialStatus, MenuAction, MenuItem, NotifyMode,
-    Screen,
+    AppState, AppUpdate, ClaudeStatus, CliState, CodexStatus, Daemon, DialStatus, EngineChange, MenuAction, MenuItem,
+    NotifyMode, Screen,
 };
 
 /// The menu's first, disabled row: the first of these that applies.
@@ -42,23 +42,13 @@ pub fn menu(state: &AppState) -> Vec<MenuItem> {
         Some(false) => items.push(MenuItem::Action(MenuAction::SignIn, "Sign in…".into())),
         None => {}
     }
-    match state.claude.as_ref().filter(|claude| available(claude)) {
-        Some(claude) if claude.enabled => items.extend([
-            MenuItem::Text("Claude Code: On".into()),
-            MenuItem::Action(MenuAction::ClaudeOff, "Turn off".into()),
-        ]),
-        Some(_) => items.extend([
-            MenuItem::Text("Claude Code: Off".into()),
-            MenuItem::Action(MenuAction::ClaudeOn, "Turn on…".into()),
-        ]),
-        None => {}
+    if let Some(claude) = state.claude.as_ref().filter(|claude| available(claude)) {
+        let actions = (MenuAction::ClaudeOn, MenuAction::ClaudeOff);
+        items.extend(engine_rows("Claude Code", claude.enabled, state.claude_change, actions));
     }
-    match state.codex.as_ref().filter(|codex| codex_available(codex)) {
-        Some(codex) if codex.enabled => items
-            .extend([MenuItem::Text("Codex: On".into()), MenuItem::Action(MenuAction::CodexOff, "Turn off".into())]),
-        Some(_) => items
-            .extend([MenuItem::Text("Codex: Off".into()), MenuItem::Action(MenuAction::CodexOn, "Turn on…".into())]),
-        None => {}
+    if let Some(codex) = state.codex.as_ref().filter(|codex| codex_available(codex)) {
+        let actions = (MenuAction::CodexOn, MenuAction::CodexOff);
+        items.extend(engine_rows("Codex", codex.enabled, state.codex_change, actions));
     }
     // The check is what the dial reports; the item carries the action its click does.
     match settable(state).and_then(|dial| dial.muted) {
@@ -88,6 +78,22 @@ pub fn menu(state: &AppState) -> Vec<MenuItem> {
     }
     items.push(MenuItem::Action(MenuAction::Quit, "Quit".into()));
     items
+}
+
+/// An engine's status row, and its action row unless a change runs.
+fn engine_rows(name: &str, enabled: bool, change: EngineChange, (on, off): (MenuAction, MenuAction)) -> Vec<MenuItem> {
+    let status = match change {
+        EngineChange::Running(true) => return vec![MenuItem::Text(format!("{name}: Turning on…"))],
+        EngineChange::Running(false) => return vec![MenuItem::Text(format!("{name}: Turning off…"))],
+        EngineChange::Failed(true) => "Could not turn on",
+        EngineChange::Failed(false) => "Could not turn off",
+        EngineChange::None if enabled => "On",
+        EngineChange::None => "Off",
+    };
+    // A failure sits over the action of the last status read, so a click tries again.
+    let action =
+        if enabled { MenuItem::Action(off, "Turn off".into()) } else { MenuItem::Action(on, "Turn on".into()) };
+    vec![MenuItem::Text(format!("{name}: {status}")), action]
 }
 
 /// The screen the window should show next, in the order they chain: install, sign-in, Claude Code, Codex.
@@ -134,9 +140,9 @@ fn settable(state: &AppState) -> Option<&DialStatus> {
     state.dial.as_ref().filter(|dial| dial.attached && dial.updating.is_none())
 }
 
-/// Claude Code can be turned on or off here.
+/// Claude Code can be turned on or off here: also before its plugin is installed, as Turn on installs it.
 fn available(claude: &ClaudeStatus) -> bool {
-    claude.supported && claude.installed
+    claude.supported
 }
 
 /// Codex can be turned on or off here: the CLI can, and Codex is on this computer.
