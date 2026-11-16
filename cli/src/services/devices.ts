@@ -416,9 +416,12 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     client: hcClient,
     watch: (changed) => watchSocket(hcAt, changed),
     prompt: herdrApp.prompt,
-    // The dial's move is noted, as every tap's is. Herdr's adapter never refuses one, though the noted copy is typed as
-    // any adapter's.
-    focus: async (address) => (await herdrAppNoted.focus(hcPane(address))) === true,
+    // Through the opener, as a hooked agent's tap: one bring runs at a time, and a pick waiting is dropped. Noted before
+    // it, as the observed source's tap is.
+    focus: (address, agentId) => {
+      noteMove()
+      return opener.open(agentId, { pane: hcPane(address) })
+    },
     canShow: (address) => herdrApp.canShow(hcPane(address)),
     // The noted copy keeps the show Herdr's adapter has.
     show: (address, agentId) => herdrAppNoted.show!(hcPane(address), agentId),
