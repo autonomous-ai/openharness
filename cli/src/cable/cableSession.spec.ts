@@ -5411,6 +5411,23 @@ describe('the agent the dial shows (docs/specs/2026-11-16-orca-device-plugin.md)
     expect(told()).toEqual([API, null])
   })
 
+  it('a ring push still reading its list as the port closes reports nothing after the close', async () => {
+    let release: (() => void) | undefined
+    const listAgents = vi.fn(async () => RING)
+    const { session, port, told } = await greeted({ listAgents })
+    try {
+      port.say({ t: 'focus', agentId: 'o1' })
+      listAgents.mockImplementationOnce(() => new Promise((resolve) => { release = () => resolve(RING) }))
+      const push = session.syncAgents(true)
+      await vi.waitFor(() => expect(release).toBeDefined())
+      await port.close('unplugged')
+      expect(told()).toEqual([API, null])
+      release!()
+      await push
+      expect(told()).toEqual([API, null])
+    } finally { await session.stop() }
+  })
+
   it('a session that showed none reports nothing as it closes', async () => {
     const { session, port, dialShows } = await greeted()
     try {
