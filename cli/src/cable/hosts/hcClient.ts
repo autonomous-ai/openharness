@@ -105,6 +105,9 @@ export interface HcSubscriber {
   /** One terminal as it is after a change; `live: false` once it finished or was removed. */
   changed(terminal: HcTerminal): void
   closed(reason: HcFault): void
+  /** How many terminals of this machine the subscription left out past HC_MAX_TERMINALS, told as it changes: the rest of
+   *  a snapshot, which each snapshot counts again, and each terminal created past them. */
+  over(count: number): void
 }
 
 export interface HcClient {
@@ -251,17 +254,28 @@ export function createHcClient(deps: HcClientDeps): HcClient {
     let kept = new Map<string, { facts: Fields; told: HcTerminal }>()
     // The last snapshot's seq: an event at or below it is already in it.
     let since = 0
+    // The terminals left out past HC_MAX_TERMINALS, as last told.
+    let left = 0
+    const leave = (count: number) => {
+      // A caller that closed on the snapshot hears nothing more.
+      if (over || count === left) return
+      left = count
+      to.over(count)
+    }
 
     const snapshot = (seq: unknown, terminals: unknown): boolean => {
       if (typeof seq !== 'number' || !Array.isArray(terminals)) return false
       since = seq
       kept = new Map()
+      let rest = 0
       for (const terminal of terminals) {
-        if (kept.size >= HC_MAX_TERMINALS) break
         const told = hcTerminal(terminal)
-        if (told) kept.set(told.address, { facts: factsOf(terminal as Fields), told })
+        if (!told) continue
+        if (kept.size < HC_MAX_TERMINALS) kept.set(told.address, { facts: factsOf(terminal as Fields), told })
+        else rest++
       }
       to.snapshot([...kept.values()].map(({ told }) => told))
+      leave(rest)
       return true
     }
 
@@ -276,7 +290,11 @@ export function createHcClient(deps: HcClientDeps): HcClient {
       }
       if (!Object.hasOwn(TAKES, type)) return
       // Only `created` brings a terminal not kept: the rest name facts of one this client never read whole.
-      if (!was && (type !== 'created' || kept.size >= HC_MAX_TERMINALS)) return
+      if (!was && type !== 'created') return
+      if (!was && kept.size >= HC_MAX_TERMINALS) {
+        if (HC_TERMINAL.test(address)) leave(left + 1)
+        return
+      }
       const facts = factsOf({ ...TAKES[type](was?.facts ?? {}, isObject(params.data) ? params.data : {}), address })
       const told = hcTerminal(facts)
       if (!told) return

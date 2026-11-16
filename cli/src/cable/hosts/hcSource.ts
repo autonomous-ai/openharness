@@ -9,7 +9,8 @@
  * then too; a tap opens Herdr.
  *
  * Every listable terminal is kept (the client keeps 1,024 at most) and the first 64 are listed, so when one leaves the
- * next is listed with no new snapshot. The wait on hc's socket, its retries and its stale rule are socketAttempts.ts's.
+ * next is listed with no new snapshot. Those past either bound are counted in one over line. The wait on hc's socket,
+ * its retries and its stale rule are socketAttempts.ts's.
  *
  * A log line says only fixed words and counts: hc's terminals name people's folders and agents.
  */
@@ -67,6 +68,8 @@ export class HcSource implements HostSource {
   /** The count of listed agents last said, and of those left out. */
   private said: number | undefined
   private over = 0
+  /** The terminals the client left out past its own bound, this subscription's. */
+  private unkept = 0
   private readonly attempts = new SocketAttempts({
     name: 'herdr-app',
     socketStamp: () => this.deps.client.socketStamp(),
@@ -179,6 +182,8 @@ export class HcSource implements HostSource {
   /** One attempt: one subscription. A closed one tells nothing (hcClient.ts), so only the current one is heard. */
   private open(): void {
     let listed = false
+    // A subscription tells its own count as it changes, from none.
+    this.unkept = 0
     this.subscription = this.deps.client.subscribe({
       snapshot: (terminals) => {
         listed = true
@@ -189,6 +194,10 @@ export class HcSource implements HostSource {
       },
       changed: (terminal) => this.changed(terminal),
       closed: (reason) => this.closed(listed, reason),
+      over: (count) => {
+        this.unkept = count
+        this.counted()
+      },
     })
   }
 
@@ -208,6 +217,7 @@ export class HcSource implements HostSource {
     // The next list is said again, even with as many agents as before.
     this.said = undefined
     this.over = 0
+    this.unkept = 0
     if (this.rows.size === 0) return
     this.rows.clear()
     this.emit()
@@ -253,17 +263,23 @@ export class HcSource implements HostSource {
 
   /** The counts said when they change, and one onChange when anything a listed row shows changed. */
   private told(before: string): void {
+    this.counted()
+    if (JSON.stringify(this.list()) !== before) this.emit()
+  }
+
+  /** The listed agents, and those left out: past the dial's 64, and the terminals past the client's own bound, which
+   *  may hold agents too. */
+  private counted(): void {
     const count = Math.min(this.rows.size, MAX_AGENTS)
     if (count !== this.said) {
       this.said = count
       this.deps.log(`[herdr-app] listed · ${count} agents`)
     }
-    const over = this.rows.size - count
+    const over = this.rows.size - count + this.unkept
     if (over !== this.over) {
       this.over = over
       if (over > 0) this.deps.log(`[herdr-app] over · ${over} left out`)
     }
-    if (JSON.stringify(this.list()) !== before) this.emit()
   }
 
   /** Sets a row's state from hc's status and the one before it. */
