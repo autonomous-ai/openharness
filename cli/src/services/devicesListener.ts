@@ -1,8 +1,9 @@
 /**
  * The devices' own local listener: the one way a local tool tells the devices process something, so the core never
  * hears it (cli/AGENTS.md, Protect the core, rule 7). `harness hardware watch` tells it the app in front, and the
- * harness-device mod the session the Claude app shows (`attach`); later device routes register a handler of their own
- * beside these, each with its own body and rate limit.
+ * harness-device mod the session the Claude app shows (`attach`), `harness device notify` an agent's one line for the
+ * dial (`notice`), and the watch the Notifications setting (`notify`); later device routes register a handler of their
+ * own beside these, each with its own body and rate limit.
  *
  * Who may connect is the core's own answer (lib/localSocket.ts): a 0600 socket in a folder that is this account's
  * alone, so the kernel refuses another account's connect. Node reads no peer's uid. A client checks the socket's owner
@@ -25,6 +26,8 @@ import type { DialAgent } from '../cable/cableSession.js'
 import { APP_IDS } from '../cable/hosts/hostDetect.js'
 import { FRONT_NONE } from '../cable/hosts/frontApp.js'
 import { REPLACED_LINE, tabOf, type Tab } from '../cable/hosts/tabs.js'
+import { isNotifyMode, type NotifyMode } from '../cable/notifyMode.js'
+import { NOTICE_SESSION, noticeFolder, noticeLine, type NoticeAsk, type NoticeResult } from '../lib/dialNotice.js'
 
 /** Connections at once. Each type's rate across them is what this many could send at its rate on one, so a sender that
  *  opens one per message is held to that too. */
@@ -398,6 +401,48 @@ export function attachHandler(attach: (sessionId: string) => void): ListenerHand
       if (typeof sessionId !== 'string' || !SESSION_ID.test(sessionId)) return REFUSED
       attach(sessionId)
     },
+  }
+}
+
+/** One a second on a connection: the notice desk's own limits are a minute an agent, so more would only be refused. */
+export const NOTICE_PER_SECOND = 1
+/** The longest notice, 120 four-byte letters, a 128-character session id and a 64-letter folder, is under 1 KiB. */
+export const NOTICE_MAX_BYTES = 2048
+
+const NOTICE_ENGINES: ReadonlySet<unknown> = new Set(['claude', 'codex'])
+
+/** An agent's notice, from `harness device notify`: handed on as four typed fields, answered `{ result }`. It keeps
+ *  nothing and logs nothing: the line is the agent's words. */
+export function noticeHandler(notify: (ask: NoticeAsk) => NoticeResult): ListenerHandler {
+  return {
+    maxBytes: NOTICE_MAX_BYTES,
+    perSecond: NOTICE_PER_SECOND,
+    handle: ({ text, engine, sessionId, folder }) => {
+      // The command cleans the line and the folder before it sends: one that differs did not come from it.
+      if (typeof text !== 'string' || text === '' || text !== noticeLine(text)) return REFUSED
+      if (engine !== undefined && !NOTICE_ENGINES.has(engine)) return REFUSED
+      // A session id ties a notice to an agent only beside the engine that made it.
+      if (sessionId !== undefined && (typeof sessionId !== 'string' || !NOTICE_SESSION.test(sessionId) || engine === undefined)) return REFUSED
+      if (folder !== undefined && (typeof folder !== 'string' || folder === '' || folder !== noticeFolder(folder))) return REFUSED
+      const ask: NoticeAsk = { text }
+      if (engine !== undefined) ask.engine = engine as NoticeAsk['engine']
+      if (sessionId !== undefined) ask.sessionId = sessionId
+      if (folder !== undefined) ask.folder = folder
+      return { result: notify(ask) }
+    },
+  }
+}
+
+export const NOTIFY_PER_SECOND = 2
+/** Its message, `{"type":"notify","mode":"full"}`, is 31 bytes. */
+export const NOTIFY_MAX_BYTES = 64
+
+/** The Notifications setting, from `harness hardware watch`: handed on, answered with what `set` answers. */
+export function notifyHandler(set: (mode: NotifyMode) => { mode: NotifyMode } | { error: string }): ListenerHandler {
+  return {
+    maxBytes: NOTIFY_MAX_BYTES,
+    perSecond: NOTIFY_PER_SECOND,
+    handle: ({ mode }) => isNotifyMode(mode) ? set(mode) : REFUSED,
   }
 }
 

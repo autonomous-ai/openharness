@@ -35,6 +35,9 @@ export const STATES: { name: string; view: View; focused?: true }[] = [
     name: 'Claude Code · failed',
     view: { screen: 'claude', phase: 'failed', lines: ['Could not change Claude Code.'] },
   },
+  { name: 'Codex · offer', view: { screen: 'codex', phase: 'offer', lines: [] } },
+  { name: 'Codex · working', view: { screen: 'codex', phase: 'working', lines: [] } },
+  { name: 'Codex · failed', view: { screen: 'codex', phase: 'failed', lines: ['Could not change Codex.'] } },
 ]
 
 // The window's size in tauri.conf.json.

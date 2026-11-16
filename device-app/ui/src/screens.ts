@@ -1,4 +1,4 @@
-// The three screens, drawn from one View. Every word is the plan's approved copy. Lines come from outside (a script's
+// The four screens, drawn from one View. Every word is the plan's approved copy. Lines come from outside (a script's
 // output, an error), so they reach the page through textContent only.
 import type { Action, Phase, Screen, View } from './api'
 
@@ -54,6 +54,13 @@ const FACES: Partial<Record<`${Screen}.${Phase}`, Face>> = {
   },
   'claude.working': { heading: 'Claude Code', body: SPINNER, buttons: [] },
   'claude.failed': { heading: 'Claude Code', body: { kind: 'error' }, buttons: [RETRY] },
+  'codex.offer': {
+    heading: 'Let Codex reach your dial?',
+    body: { kind: 'sentences', text: ['Codex can ring the dial when it needs you: a VPN, a sign-in, a decision.'] },
+    buttons: [{ label: 'Not now', action: 'not_now' }, { label: 'Turn on', action: 'turn_on', primary: true }],
+  },
+  'codex.working': { heading: 'Codex', body: SPINNER, buttons: [] },
+  'codex.failed': { heading: 'Codex', body: { kind: 'error' }, buttons: [RETRY] },
 }
 
 // The contract's "at most 4": the script's last lines say why it failed.

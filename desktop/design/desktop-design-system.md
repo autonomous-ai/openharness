@@ -696,11 +696,11 @@ Off (Settings ▸ Experimental ▸ Hachi), none of them is drawn and ⇧⌘H is 
 ## Harness Device
 
 Harness Device is the menu-bar app for the dial (`device-app/`). It sets up
-Harness, keeps it running and shows the dial's state; it offers sign-in and
-Claude Code once.
+Harness, keeps it running and shows the dial's state; it offers sign-in,
+Claude Code and Codex once.
 
-Its menu is the native menu. Its window has three screens, Install, Sign in and
-Claude Code, at 420 × 320, in plain HTML and CSS (`device-app/ui/src/styles.css`)
+Its menu is the native menu. Its window has four screens, Install, Sign in,
+Claude Code and Codex, at 420 × 320, in plain HTML and CSS (`device-app/ui/src/styles.css`)
 with this document's tokens and type. Hover and press fills are precomputed per
 theme: the app runs from macOS 13, older than WebKit's `color-mix()`.
 
@@ -726,6 +726,8 @@ theme: the app runs from macOS 13, older than WebKit's `color-mix()`.
   (`device-app/src-tauri/icons/tray.png`): black on a light bar, white on a dark one.
 - An on/off setting in the menu is one native check item: one row, its state in
   the check, a label that never changes. Sound is the first.
+- A choice among named options in the menu is one native submenu of check items,
+  the one in force checked. Notifications is the first.
 
 The [gallery](../../device-app/ui/gallery.html) shows every screen in every
 state, light and dark, the primary button focused, and the menu-bar icon on

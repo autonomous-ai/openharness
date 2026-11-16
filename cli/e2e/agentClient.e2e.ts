@@ -494,22 +494,23 @@ describe('Harness for agents, end to end', () => {
     // The person's deny of `harness close` is theirs: no allow for it in either spelling (Claude Code does not count the
     // launcher's path as the same command). Its MCP tool is another tool, and is allowed by name. `harness --help`,
     // which every harness reads as it starts, comes first: it names no verb (#1239, which left this list as it was,
-    // so this test failed on main from then on).
+    // so this test failed on main from then on). `harness device notify` comes last, as exactly its three words.
     expect(JSON.parse(readFileSync(settings, 'utf8')).permissions).toEqual({
       allow: ['Bash(npm test:*)', 'Bash(harness --help)', 'Bash(harness -h)', `Bash(${launcher} --help)`, ...verbs.flatMap((verb) => [
         ...(verb === 'close' ? [] : [`Bash(harness ${verb}:*)`, `Bash(${launcher} ${verb}:*)`]),
         ...(tools[verb] ? [`mcp__harness__${tools[verb]}`, `mcp__plugin_harness_harness__${tools[verb]}`] : []),
-      ])],
+      ]), 'Bash(harness device notify:*)', `Bash(${launcher} device notify:*)`],
       deny: ['Bash(harness close:*)'],
     })
     // Codex: each verb runs outside the sandbox on its first try, by name or by the launcher's path (which Codex reads
     // as `harness` only for that path); a file Harness owns.
     const list = JSON.stringify(verbs).replace(/,/g, ', ')
     const written = readFileSync(rules, 'utf8').split('\n').filter((line) => line && !line.startsWith('#'))
-    expect(written).toHaveLength(3)
+    expect(written).toHaveLength(4)
     expect(written[0]).toBe(`host_executable(name="harness", paths=[${JSON.stringify(launcher)}])`)
     expect(written[1]).toBe(`prefix_rule(pattern=["harness", ${list}], decision="allow")`)
     expect(written[2]).toMatch(new RegExp(`^prefix_rule\\(pattern=\\["[^"]+", "[^"]+/cli\\.js", ${list.replace(/[[\]]/g, '\\$&')}\\], decision="allow"\\)$`))
+    expect(written[3]).toBe('prefix_rule(pattern=["harness", "device", "notify"], decision="allow")')
     expect(statSync(rules).mode & 0o777).toBe(0o600)
   })
 
