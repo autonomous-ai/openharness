@@ -4580,8 +4580,7 @@ describe('the Notifications setting (docs/plans/2026-11-16-dial-agent-notify-des
   })
 
   it('the listener\'s notify stores the mode, says the status again and answers it', async () => {
-    const listener = fakeListener()
-    const { core } = start({ listen: listener.listen })
+    const { core, listener } = await listening()
     seen.dial.onDialStatus({ attached: true, id: 'usb-1' })
     expect(listener.notify('you')).toEqual({ mode: 'you' })
     expect(readFileSync(join(dataDir, 'dial-notify.json'), 'utf8')).toBe('{"mode":"you"}\n')

@@ -192,10 +192,13 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   })
   const part = createPartGuard({ log, faults: deps.faults })
   // The Notifications setting (docs/plans/2026-11-16-dial-agent-notify-design.md) is this computer's, not the dial's: the
-  // windows and the watch hear it with every dial status, and the owner's other machines and the Devices tab never do.
+  // windows and the watch hear it with every dial status, and the owner's other machines and the Devices tab never do. Only
+  // once the devices' own listener opened, the one door a change comes in by: with none (services inside the core, a
+  // listener that failed to open, Windows) the menu must not offer a setting no click can change.
   const notifyMode = new NotifyModeStore(join(core.dataDir, NOTIFY_MODE_FILE))
+  let listenerOpen = false
   const sayStatus = (status: DialStatus): void =>
-    core.clients.sendLocal({ type: 'dial_status', payload: { ...status, notify: notifyMode.get() } })
+    core.clients.sendLocal({ type: 'dial_status', payload: { ...status, ...(listenerOpen ? { notify: notifyMode.get() } : {}) } })
 
   // What the windows on this computer last said: the desk the dial walks and whether it is in front, and
   // which window has the person's attention for a spoken selection, a visit or a form.
@@ -959,6 +962,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       return result
     }),
   }, log)
+    .then((listener) => { listenerOpen = listener !== null; return listener })
     .catch((): null => { log('[devices] listener not opened · failed'); return null })
 
   let stopped = false
