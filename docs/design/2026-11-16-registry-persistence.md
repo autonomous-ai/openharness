@@ -1728,3 +1728,30 @@ retains that first string. The combined macOS/Node 24.22.2 run above passed all
 and TypeScript passed (`/tmp/core-registry-publication-types.log`). Independent
 source review found no actionable findings. Matched cost and whole-package
 acceptance remain pending; the earlier cost failures still apply.
+
+### Matched cost after removing redundant publications
+
+The unchanged fixed 83-case ABBA workload at old `8fcfa7d` and candidate
+`51d7045` passed all 332 behavior, provenance and cleanup checks. Inputs:
+`/tmp/harness-registry-cost-v7/inputs.json`, SHA-256
+`f40cda16782dae13fcdfabb163aa18a43a059110d4696ac56a27eca309d60518`.
+Result: `/tmp/core-registry-cost-v7-native-abba/manifest.json`, SHA-256
+`fb33fee7f17b59b29c7808cd45ee88c74daeffc53898c9a82acd227f9085b664`.
+Earlier failed runs remain unchanged.
+
+| Twenty successful operations | Median CPU, old → new | Median p95 elapsed, old → new |
+| --- | --- | --- |
+| Unchanged, 16 rows | 52.997 → 40.756 ms | 41.305 → 2.629 ms |
+| Changed, 16 rows | 193.643 → 175.946 ms | 116.288 → 65.636 ms |
+| Unchanged, 160 rows | 122.518 → 99.288 ms | 44.983 → 5.571 ms |
+| Changed, 160 rows | 565.964 → 522.073 ms | 123.764 → 82.791 ms |
+
+All four selected CPU and latency medians improve. The second 16-row changed
+pair used 195.408 → 197.570 ms CPU, so improvement is not uniform across pairs.
+For 160-row writes, p95 heartbeat delay falls from 124.024 to 2.855 ms.
+Maximum sampled RSS remains higher: 120.695 → 171.451 MiB for changed 160-row
+operations, and 86.949 → 172.955 MiB for unchanged operations. These are samples,
+not peak memory. Prior analysis found most of that difference present before
+the measured flush window; this run does not attribute or resolve it.
+Legacy-lock refusal versus success remains excluded from equal-outcome cost.
+Full package acceptance, final gates and memory investigation remain open.
