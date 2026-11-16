@@ -105,6 +105,8 @@ export interface BindDeps {
   openclawStateDir: (pid: number) => Promise<string | null>
   /** What a Hermes's record of its own terminal says (hermesTerminal.ts). Absent, a Hermes is bound by its hooks and the repair. */
   hermesTerminal?: ReturnType<typeof createHermesTerminal>
+  /** Whether the session's live stream is still held, to be resumed where it stopped. */
+  followsLive: (sessionId: string) => boolean
 }
 
 /** What one pass over a process works with: its authority check, its holds, and its contained native reads and registrations. */
@@ -120,6 +122,7 @@ interface BindPass {
 export function createBinding({
   registry, mirror, forgetSession, clients, attachSession, announceSession, stoppedAgents, syncRecapPool,
   input, submitAgent, deviceInput, homes, owners, capturePane, openclawPaneRead, openclawPaneDue, openclawStateDir, hermesTerminal,
+  followsLive,
 }: BindDeps) {
   /**
    * Forks whose engine session has not reported in yet, agentId → the SOURCE's sessionId. A fork's tile
@@ -331,11 +334,14 @@ export function createBinding({
     const found = registry.byProcess(observed.engine, observed.processIdentity)
     if (!found || changing(found.agentId) || isRecentlyDeleted(found.agentId)) return
     let agent: RegisteredSession = found
-    // The other engines' reader hold is otherStreams' to set and to clear, with its resume from the byte the core held.
-    // Revalidated here, it was cleared and the session attached again while the worker was down; on the worker's return
-    // a second stream opened from the transcript's end, and the turn typed meanwhile came as history (#4362, CLI end to
-    // end shard 5, e2e/otherEngines.e2e.ts).
-    if (agent.identityHold && !OTHER_ENGINE_HOLDS.has(agent.identityHold) && agent.sessionId && agent.transcriptPath) {
+    // The other engines' reader hold is otherStreams' to clear while it holds the session's stream, with its resume from
+    // the byte the core held. Revalidated then, it was cleared and the session attached again while the worker was down;
+    // on the worker's return a second stream opened from the transcript's end, and the turn typed meanwhile came as
+    // history (#4362, CLI end to end shard 5, e2e/otherEngines.e2e.ts). A reader that gave up on a session it never
+    // opened (five retries, then nothing queued) holds no stream and attaches it on no later connection: this pass is
+    // the row's one rescue, as before #4362, or it stays held until the daemon restarts.
+    if (agent.identityHold && agent.sessionId && agent.transcriptPath
+      && !(OTHER_ENGINE_HOLDS.has(agent.identityHold) && followsLive(agent.sessionId))) {
       try {
         const previous = agent.sessionId
         const retried = registry.revalidateBinding(agent.agentId)
