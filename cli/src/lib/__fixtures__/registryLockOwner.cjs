@@ -23,5 +23,10 @@ process.on('message', message => {
   process.send?.('released', () => process.disconnect())
 })
 process.on('disconnect', () => { release(); process.exit(0) })
-process.on('SIGTERM', () => { release(); process.exit(0) })
+process.on('SIGTERM', () => {
+  if (process.argv[3] === 'ignore-term') { process.send?.('ignored-term'); return }
+  release(); process.exit(0)
+})
+// This helper must not outlive a failed test or a parent that never releases it.
+setTimeout(() => { release(); process.exit(2) }, 20_000).unref()
 process.send('locked')

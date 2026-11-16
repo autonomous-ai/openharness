@@ -1155,3 +1155,31 @@ strict recovery. Pinned Node 24.22.2 TypeScript also passed
 No native-wait patch was applied. No broad suite, build, crash matrix or new cost
 measurement was run for this correction; root's integrated-source acceptance is
 still required, and the earlier CPU/RSS/latency regression is not yet cleared.
+
+Root's corrected-source ABBA run on `6f3b89ccc9` completed all 332 operations with
+verified cleanup, but cost acceptance still fails. At 160 rows, median CPU per
+20 unchanged calls was 106.781 ms before and 171.192 ms after; changed calls were
+478.588 ms and 684.773 ms. Changed-call p95 was 120.240 ms and 129.533 ms, with
+sampled RSS 120.699 MiB and 174.564 MiB. Event-loop heartbeat p95 improved from
+120.448 ms to 4.106 ms. The old legacy-lock refusal remains a different outcome
+from the new successful commit. Preserve `core-registry-cost-v2-summary.json` and
+manifest SHA `e50bc38d76b04ea698e202dec0bba06027b42839b84b4bd9f5ffdc7593be3c3a`;
+the correction does not clear the performance gate.
+
+## Native test cleanup bounds
+
+The lock/crash test helpers must not outlive a failed assertion. This changes
+only private test processes and their waits, with no production data, authority,
+storage, wire contract or migration change. Keep `ownProcessGroup`, use a
+two-second TERM grace followed by KILL and a five-second observed-exit deadline,
+bound readiness and teardown flush to ten seconds, and retain private files when
+cleanup cannot be confirmed. A twenty-second helper fail-safe bounds a parent
+that never releases or kills it. Windows cannot intercept SIGTERM; only the
+ignored-TERM native regression is Unix-specific.
+
+Before changing cleanup, the private ignored-TERM fixture acknowledged TERM but
+the parent never escalated after two seconds of controlled time. The new case
+failed its expected SIGKILL assertion (one failure, 18 unselected, 1.15 seconds),
+then its finally block killed and observed the fixture exiting. This is actual
+macOS/Node 24.22.2 RED evidence, retained in `core-registry-bounded-waits-red.log`.
+No fixed sleep or production process was used. Cleanup GREEN remains pending.

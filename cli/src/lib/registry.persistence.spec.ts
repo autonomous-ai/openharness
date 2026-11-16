@@ -55,23 +55,51 @@ afterEach(async () => {
   cleanup.wait = undefined; cleanup.file = ''; cleanup.published = false
   vi.useRealTimers()
   vi.restoreAllMocks()
-  if (holder && holder.exitCode === null) {
-    const exited = once(holder, 'exit')
-    holder.kill()
-    await exited
-  }
+  if (holder) await stopHolder(holder)
   holder = undefined
   await (exitFlush ?? registry?.flush())
   vi.unstubAllEnvs()
   rmSync(directory, { recursive: true, force: true })
 })
 
-async function locked() {
-  holder = fork(fileURLToPath(new URL('./__fixtures__/registryLockOwner.cjs', import.meta.url)), [directory], {
+async function stopHolder(child: ChildProcess): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return
+  const exited = once(child, 'exit')
+  child.kill()
+  await exited
+}
+
+async function locked(mode?: 'ignore-term') {
+  holder = fork(fileURLToPath(new URL('./__fixtures__/registryLockOwner.cjs', import.meta.url)), [directory, ...(mode ? [mode] : [])], {
     ...ownProcessGroup(), execArgv: [], stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
   })
   expect((await once(holder, 'message'))[0]).toBe('locked')
 }
+
+// Windows terminates on SIGTERM without delivering a catchable signal to the fixture.
+it.skipIf(process.platform === 'win32')('reaps a fixture that ignores TERM before releasing its private registry', async () => {
+  await locked('ignore-term')
+  const child = holder!, kill = vi.spyOn(child, 'kill')
+  const ignored = once(child, 'message', { signal: AbortSignal.timeout(10_000) })
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+  const stopping = stopHolder(child)
+  void stopping.catch(() => {})
+  try {
+    expect((await ignored)[0]).toBe('ignored-term')
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(kill).toHaveBeenCalledWith('SIGKILL')
+    await stopping
+    expect(child.signalCode).toBe('SIGKILL')
+  } finally {
+    vi.useRealTimers()
+    if (child.exitCode === null && child.signalCode === null) {
+      const reaped = once(child, 'exit', { signal: AbortSignal.timeout(5_000) })
+      child.kill('SIGKILL'); await reaped
+    }
+    await stopping
+    holder = undefined
+  }
+})
 
 it('keeps the event loop responsive while an older process owns the registry lock', async () => {
   await locked()
