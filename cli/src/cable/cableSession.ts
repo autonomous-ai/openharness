@@ -2620,7 +2620,9 @@ export class CableSession {
     // prints (the rows behind it stay here), and `tab`, the active tab's id — '' with no window, which is
     // how the dial tells "the app is shut" from "this tab is empty" when both send zero agents. `view`:
     // with no window, rows that are this computer's agents rather than nothing.
-    await this.send({ t: 'agents.end', total, tab, ...(view ? { view } : {}) })
+    // A port that closed under the push holds no ring: kept, it would show the host an agent after the close said none,
+    // and the re-assert and the restores below would read it.
+    if (!await this.send({ t: 'agents.end', total, tab, ...(view ? { view } : {}) })) return
     this.lastRing = agents.map(({ id, name, host }) => ({ id, name, host }))
     // A rename, or the shown agent leaving the ring, reaches the host with no move of the dial.
     this.reportShown()
