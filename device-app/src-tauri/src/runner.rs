@@ -905,6 +905,7 @@ mod tests {
             Effect::RunLogin,
             Effect::CancelLogin,
             Effect::SetClaude(true),
+            Effect::SetSound(true),
             Effect::OpenUrl("https://id.example/a".into()),
             Effect::OpenDesktop,
             Effect::RegisterLoginItem,
@@ -947,6 +948,26 @@ mod tests {
         fronts.tell("");
         assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
         assert_eq!(w.fake.stdin(), [GHOSTTY_LINE, VSCODE_LINE, r#"{"front":""}"#]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_sound_change_is_written_to_the_watch() {
+        let (off, on) = (r#"{"muted":true}"#, r#"{"muted":false}"#);
+        let w = world();
+        assert!(w.runner.find_cli());
+        w.fake.script("hardware watch --json", &RECORDING);
+        assert_eq!(w.answer(Effect::SpawnWatch), no_dial());
+        assert_eq!(w.runner.run(Effect::SetSound(false)), None);
+        assert_eq!(w.runner.run(Effect::SetSound(true)), None);
+        assert_eq!(w.answer(Effect::StopWatch), Event::WatchExit(Some(0)));
+        assert_eq!(w.fake.stdin(), [off, on]);
+        // With no watch running there is nothing to write to.
+        assert_eq!(w.runner.run(Effect::SetSound(false)), None);
+        assert_eq!(w.fake.stdin(), [off, on]);
+        let lines = w.fake.log().lines();
+        assert!(lines.iter().all(|line| !line.contains("muted")), "{lines:?}");
+        assert_eq!(w.rest(), []);
     }
 
     #[cfg(unix)]
