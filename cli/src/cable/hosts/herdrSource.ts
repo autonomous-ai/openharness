@@ -292,6 +292,8 @@ export class HerdrSource implements HostSource {
     this.clear()
     this.stale = stale
     this.unwatch ??= this.deps.watch(() => this.changed())
+    // A socket made since the last look, before the watch started, is told by no change.
+    this.changed()
   }
 
   private changed(): void {
