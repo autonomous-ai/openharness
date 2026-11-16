@@ -7,9 +7,9 @@ import { execFile } from 'node:child_process'
 import { closeSync, fstatSync, openSync, readSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { DIAL_PLUGIN_ID } from '../devices/dialSkill.js'
 import { installedEngineBin } from '../lib/engineBin.js'
 
-export const PLUGIN_ID = 'harness-device@openharness'
 export const MARKETPLACE = 'openharness'
 export const MIN_CLAUDE = '2.1.287'
 
@@ -72,7 +72,7 @@ export function claudePluginOn(settingsPath: string): boolean {
   }
   if (!settings || typeof settings !== 'object' || Array.isArray(settings)) return true
   const plugins = (settings as { enabledPlugins?: unknown }).enabledPlugins
-  return !!plugins && typeof plugins === 'object' && (plugins as Record<string, unknown>)[PLUGIN_ID] === true
+  return !!plugins && typeof plugins === 'object' && (plugins as Record<string, unknown>)[DIAL_PLUGIN_ID] === true
 }
 
 /** The Claude Code binary as Harness finds it for its own agents, run with no shell; null when it is not installed. */
@@ -118,7 +118,7 @@ export async function claudeStatus({ run, platform }: ClaudeDeps): Promise<Claud
   const supported = (platform === 'darwin' || platform === 'linux') && !!claudeVersion && atLeast(claudeVersion, MIN_CLAUDE)
   // A project-scope entry turns the plugin on for one repository only; the dial needs it in every session.
   const entry = (await jsonList(run, ['plugin', 'list', '--json']))
-    .find((plugin) => plugin.id === PLUGIN_ID && plugin.scope === 'user')
+    .find((plugin) => plugin.id === DIAL_PLUGIN_ID && plugin.scope === 'user')
   return { supported, installed: !!entry, enabled: entry?.enabled === true, claudeVersion }
 }
 
@@ -135,7 +135,7 @@ export async function claudeEnable(deps: ClaudeDeps): Promise<ClaudeResult> {
   const run = deps.run
   if (status.installed) {
     if (status.enabled) return { ok: true }
-    return await change(run, ['plugin', 'enable', PLUGIN_ID, '--scope', 'user'], LOCAL_MS) ?? { ok: true }
+    return await change(run, ['plugin', 'enable', DIAL_PLUGIN_ID, '--scope', 'user'], LOCAL_MS) ?? { ok: true }
   }
   const marketplaces = await jsonList(run, ['plugin', 'marketplace', 'list', '--json'])
   const cloned = marketplaces.some((marketplace) => marketplace.name === MARKETPLACE)
@@ -144,7 +144,7 @@ export async function claudeEnable(deps: ClaudeDeps): Promise<ClaudeResult> {
     const failed = await change(run, ['plugin', 'marketplace', 'add', 'autonomous-ai/openharness', '--sparse', '.claude-plugin', 'plugins'], FETCH_MS)
     if (failed) return failed
   }
-  const install = () => change(run, ['plugin', 'install', PLUGIN_ID, '--scope', 'user'], FETCH_MS)
+  const install = () => change(run, ['plugin', 'install', DIAL_PLUGIN_ID, '--scope', 'user'], FETCH_MS)
   let failed = await install()
   // A clone made before harness-device was in the marketplace does not list it: pulled once, the install is tried again.
   if (failed && cloned) failed = await change(run, ['plugin', 'marketplace', 'update', MARKETPLACE], FETCH_MS) ?? await install()
@@ -155,5 +155,5 @@ export async function claudeEnable(deps: ClaudeDeps): Promise<ClaudeResult> {
 export async function claudeDisable(deps: ClaudeDeps): Promise<ClaudeResult> {
   const status = await claudeStatus(deps)
   if (!status.installed || !deps.run) return { ok: true }
-  return await change(deps.run, ['plugin', 'uninstall', PLUGIN_ID, '--scope', 'user'], LOCAL_MS) ?? { ok: true }
+  return await change(deps.run, ['plugin', 'uninstall', DIAL_PLUGIN_ID, '--scope', 'user'], LOCAL_MS) ?? { ok: true }
 }
