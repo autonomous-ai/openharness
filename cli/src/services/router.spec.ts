@@ -161,6 +161,20 @@ describe('the router', () => {
     expect(jev).toHaveBeenCalledWith({ message: 'refund it' }, expect.objectContaining({ target: expect.any(Object) }), undefined)
   })
 
+  it('logs the pick by its harness, not its computer, and counts the sessions Jev was shown', async () => {
+    // The desktop names a session `<computer>\n<harness>`: every session on one computer starts alike.
+    const desk = Array.from({ length: 45 }, (_, i) => ({ id: `0f3c9a1e-77aa-4b2c-9d10-5e6f7a8b9c0d\n${i}e1a2b3c-aaaa-bbbb-cccc-ddddeeeeffff`, name: `topic ${i}` }))
+    const jev = vi.fn(async () => ({ target: said('s3', 0.9, [...Array.from({ length: 40 }, (_, i) => `s${i}`), 'new']) }))
+    const { router: made, lines } = router({ jev })
+    expect(await startRouter(fakeCore(), made).route_decide!({ text: 'go', sessions: desk }, OWNER)).toMatchObject({ decided: 'session', id: desk[3]!.id })
+    // Forty of the forty-five are shown to Jev, and those are what the pick was weighed against.
+    expect(lines).toEqual(['session 3e1a2b3c p=0.90 — 40 sessions'])
+    // An id a client made up is logged as an id, never as words or a line break.
+    const { router: odd, lines: oddLines } = router({ jev: vi.fn(async () => ({ target: said('s0', 0.9, ['s0', 'new']) })) })
+    await startRouter(fakeCore(), odd).route_decide!({ text: 'go', sessions: [{ id: 'fix login\r\n[route] x', name: 'x' }] }, OWNER)
+    expect(oddLines).toEqual(['session _route__ p=0.90 — 1 sessions'])
+  })
+
   it('answers new work with the project and agent Jev chose, handing back the client\'s own ids', async () => {
     const jev = vi.fn(async () => ({
       target: said('new', 0.9, ['s0', 's1', 'new']),
