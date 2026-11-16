@@ -1395,3 +1395,13 @@ the later strict admission. No new control duplicates these scenarios.
 Only this Design and caller tests are prepared. No runtime edit, syntax check,
 test, typecheck, build, diagnostic or benchmark has run. Root owns the actual RED,
 minimal correction, GREEN and later matched-cost decision.
+
+Root execution on macOS Intel/Node 24.22.2 recorded the intended failure at
+`42095490c9940db78ec3377ce881f8bec6d914ab`: 14 comparisons against the budget of 12,
+with nine controls passing (`core-registry-unused-changed-red.log`, 5.90 s).
+Matching the calculation guard to its two consumers passed all ten cost/authority
+cases (`core-registry-unused-changed-green.log`, 5.79 s). The selected unpublished
+image rollback/retry case also passed (`core-registry-unused-changed-recovery.log`,
+one passed, 62 unselected, 1.29 s). TypeScript passed with exit zero
+(`core-registry-unused-changed-types-confirmed.log`). These are functional/work-count
+checks; the v3 matched cost failure remains until fresh source-specific measurement.

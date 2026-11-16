@@ -3453,8 +3453,10 @@ class Registry {
         }
         // A binding may flush an already-staged discovery batch. Every changed row
         // must still own what the observation claims, not only the hook's own row.
-        const changed = new Set([...new Set([...this.persistedBaseline.keys(), ...currentRows.keys()])].filter(id =>
-          this.persistedBaseline.get(id) !== (currentRows.has(id) ? rowFingerprint(currentRows.get(id)) : undefined)))
+        const changed = new Set(strict || bindingCommit
+          ? [...new Set([...this.persistedBaseline.keys(), ...currentRows.keys()])].filter(id =>
+            this.persistedBaseline.get(id) !== (currentRows.has(id) ? rowFingerprint(currentRows.get(id)) : undefined))
+          : [])
         if (bindingCommit) {
           const identities = new MergeIdentities(latest)
           for (const id of changed) {
