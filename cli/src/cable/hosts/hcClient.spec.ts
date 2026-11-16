@@ -55,10 +55,14 @@ describe.skipIf(process.platform === 'win32')('the hc client (docs/plans/2026-11
     const got: Array<Record<string, unknown>> = []
     const checks = new Set<() => boolean>()
     const settle = () => { for (const check of checks) if (check()) checks.delete(check) }
+    let closed = false
     const socket = connectLines(server.path, out, MAX_LINE_BYTES, (text) => {
       got.push(JSON.parse(text) as Record<string, unknown>)
       settle()
-    }, () => {})
+    }, () => {
+      closed = true
+      settle()
+    })
     const until = (check: () => boolean) => new Promise<void>((resolve) => {
       const done = () => {
         if (!check()) return false
@@ -73,6 +77,8 @@ describe.skipIf(process.platform === 'win32')('the hc client (docs/plans/2026-11
       lines: (n: number) => until(() => got.length >= n),
       /** Once the fake's heartbeat has come: every line it wrote before it has too. */
       heartbeat: () => until(() => got.some(({ method }) => method === 'heartbeat')),
+      /** Once the connection has closed: every line written before the close has come. */
+      ended: () => until(() => closed),
     }
   }
   const subscribeRaw = async () => {
@@ -602,6 +608,16 @@ describe.skipIf(process.platform === 'win32')('the hc client (docs/plans/2026-11
     expect(Object.keys(created.data)).toEqual(Object.keys(recorded.data))
     expect(created.data).toMatchObject({ address: 't9', reported: false, status: null, status_ms: null })
     expect(status.data).toEqual({ records: {}, reported: true, status: { app: 'codex', state: 'working' } })
+  })
+
+  it('the fake server, as hc, answers a connection\'s requests in order: after one it holds, nothing more there (F4)', async () => {
+    server.terminals = [{ address: 't7' }]
+    server.answer('hello', 'hold')
+    const connection = raw(`${rpc(1, 'hello', { generation: 1 })}${rpc(2, 'terminal.get', { terminal: 't7' })}`)
+    await server.got('terminal.get', 1)
+    await server.stop()
+    await connection.ended()
+    expect(connection.got).toEqual([])
   })
 
   it('prompt reads the terminal, then sends the line: if idle when it was idle, no if when it was done, never force', async () => {
