@@ -528,9 +528,10 @@ function hostHints() {
     // would be another agent's pane. Skipped before the cap counts it, so it costs no other hint its place.
     if (name === 'HERDR_PANE_ID' && process.env.HERDR_SESSION) continue
     // The same for a named hc session's terminal address (see HOST_HINTS), and off macOS, where the devices do not try
-    // Herdr.
-    if (name === 'HC_TERMINAL_ID'
-      && (process.platform !== 'darwin' || (process.env.HC_SESSION && process.env.HC_SESSION !== 'default'))) continue
+    // Herdr. And in a herdr pane, the nearer host: a named herdr session sends no HERDR_PANE_ID above, and the address
+    // alone would read as Herdr's own terminal (hostDetect.ts inHerdr).
+    if (name === 'HC_TERMINAL_ID' && (process.platform !== 'darwin' || process.env.HERDR_PANE_ID
+      || process.env.HERDR_SESSION || (process.env.HC_SESSION && process.env.HC_SESSION !== 'default'))) continue
     const value = process.env[name]?.slice(0, 64)
     if (value && !CONTROL.test(value)) hints[name] = value
   }
