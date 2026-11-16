@@ -177,6 +177,8 @@ export class ObservedSource implements HostSource {
   readonly id = 'observed'
   private readonly entries = new Map<string, Entry>()
   private readonly listeners = new Set<() => void>()
+  /** Each adapter's names for its panes, by pane id, as its app shows them. */
+  private readonly paneNames = new Map<string, ReadonlyMap<string, string>>()
   private scanning: Promise<void> | null = null
 
   constructor(private readonly deps: ObservedDeps) {}
@@ -468,6 +470,26 @@ export class ObservedSource implements HostSource {
     for (const l of [...this.listeners]) l()
   }
 
+  /** Replaces that adapter's names for its panes whole, and names every live agent again: the change is told once. */
+  setPaneNames(adapter: string, names: ReadonlyMap<string, string>): void {
+    this.paneNames.set(adapter, names)
+    let changed = false
+    for (const e of this.entries.values()) {
+      if (!this.live(e)) continue
+      const name = this.nameOf(e)
+      if (name === e.agent.name) continue
+      e.agent.name = name
+      changed = true
+    }
+    if (changed) this.emit()
+  }
+
+  /** The name the person gave it wins; else the name of its first pane that has one, else its folder's. */
+  private nameOf(e: Entry): string {
+    const pane = e.panes.map(({ pane }) => this.paneNames.get(pane.adapter)?.get(pane.id)).find((name) => name !== undefined)
+    return e.title ?? pane ?? folderName(e.agent.cwd, e.agent.engine)
+  }
+
   /** What the permission prompt the agent waits on asks, while it waits; '' for a prompt that names nothing. */
   waitingOn(agentId: string): string | undefined {
     return this.entries.get(agentId)?.asked
@@ -505,7 +527,7 @@ export class ObservedSource implements HostSource {
       if (e.title !== undefined) entry.title = e.title
       else if (e.engine === 'claude') entry.title = undefined
     }
-    a.name = entry.title ?? folderName(a.cwd, a.engine)
+    a.name = this.nameOf(entry)
     if (e.transcriptPath) entry.transcriptPath = e.transcriptPath
     if (e.event === 'session-end') {
       entry.endAt = now
@@ -702,7 +724,6 @@ export class ObservedSource implements HostSource {
       const name = names.get(sessionId)
       if (name) {
         entry.title = name
-        entry.agent.name = name
         named++
       }
       // The app alone: its host and what a tap opens stay unknown until its first hook.
@@ -713,6 +734,8 @@ export class ObservedSource implements HostSource {
         known++
       }
       this.learnTty(entry, owner.pid)
+      // Once its panes are known.
+      entry.agent.name = this.nameOf(entry)
       // A turn it is in when found reads working, as checkWorking reads it, which ends it once its owner reads idle: listed
       // idle, its compaction's SessionStart (which moves no state) would give a running turn a handle to type into.
       if ((engine === 'claude' || engine === 'codex') && await this.deps.openSessions.busy(owner)
