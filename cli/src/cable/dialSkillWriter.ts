@@ -47,6 +47,9 @@ export function createDialSkillWriter(deps: DialSkillWriterDeps): DialSkillWrite
   let listed: DialSkillHomes = { claude: [], codex: [] }
   /** Codex homes done while it was On: a scan passes them with a set lookup. Claude Code gets no home from the scan. */
   const handled = new Set<string>()
+  /** Codex homes given no skill for a reason the next scan would meet again (no skills folder, a full list, a write
+   *  that failed): passed the same way until the stamp changes. */
+  const refused = new Set<string>()
   const said = new Set<string>()
   let stamp = ''
 
@@ -204,6 +207,7 @@ export function createDialSkillWriter(deps: DialSkillWriterDeps): DialSkillWrite
         // Turned off or on since: every home is written again, or taken out, without a restart.
         stamp = now
         handled.clear()
+        refused.clear()
         startPass(counts)
       }
       // Codex only: Claude Code's sessions are read only under the default and adopted homes, written at the start.
@@ -214,7 +218,7 @@ export function createDialSkillWriter(deps: DialSkillWriterDeps): DialSkillWrite
           sayOnce('shape', 'dial skill: path refused (shape)')
           continue
         }
-        if (handled.has(home) || handled.size >= MAX_HOMES) continue
+        if (handled.has(home) || refused.has(home) || handled.size >= MAX_HOMES) continue
         const state = ownDirectory(home, deps.uid)
         if (state !== 'ok') {
           sayOnce(home, `dial skill: path refused (${state})`)
@@ -223,6 +227,7 @@ export function createDialSkillWriter(deps: DialSkillWriterDeps): DialSkillWrite
         const outcome = writeHome('codex', home, counts)
         if (outcome === 'off') break
         if (outcome === 'done') handled.add(home)
+        else if (refused.size < MAX_HOMES) refused.add(home)
       }
       report(counts)
     },
