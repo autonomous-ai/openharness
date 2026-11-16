@@ -325,7 +325,9 @@ describe.skipIf(process.platform === 'win32')('the hc source (docs/plans/2026-11
     expect(s.changes).toBe(changes + 1)
     s.source.markSeen(api.id)
     expect(s.changes).toBe(changes + 1)
-    // A snapshot that says done again leaves it seen. Lines come in order: the folder told after it is read after it.
+    // hc's done again, and a snapshot that says done again, leave it seen. Lines come in order: the folder told after
+    // them is read after them.
+    server.change('t7', status('done'))
     server.missed()
     server.change('t7', { cwd: '/work/web' })
     await s.until(() => row(s, 't7')!.name === 'web')

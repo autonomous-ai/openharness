@@ -371,7 +371,9 @@ export async function fakeHc(): Promise<FakeHc> {
       Object.assign(terminal, to, to.state === 'finished' ? { status: null } : {})
       const after = written(terminal)
       if (!same(before.labels, after.labels)) told(address, 'labels', { labels: after.labels })
-      if (!same(before.status, after.status)) {
+      // hc writes a status line for each report, one that repeats its last word too (F5), and one for a status the
+      // program's end clears.
+      if (to.status !== undefined || !same(before.status, after.status)) {
         told(address, 'status', { records: {}, reported: after.reported, status: after.status })
         const word = (after.status as { state: string } | null)?.state
         // hc counts a turn each time a status leaves `working`, and says so after the status (the recording). Whether a
