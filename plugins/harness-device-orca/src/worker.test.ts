@@ -43,16 +43,50 @@ function updated(): void {
   })
 }
 
-function host(refuse = false) {
+const ACCEPT = () => ({ ok: true })
+// As an Orca without the status bar refuses each update: for good, so it is not sent again.
+const REFUSE = () => {
+  throw hostError('unknown_method')
+}
+
+/** `answer` is each status bar update's: a result, or a throw of hostError. */
+function host(answer: () => unknown = ACCEPT) {
   return mockHost({
     results: {
       'statusBar.update': () => {
         updated()
-        if (refuse) throw hostError('unavailable')
-        return { ok: true }
+        return answer()
       },
     },
   })
+}
+
+/** Refuses the next update once `refuseNext` is called, as Orca refuses one sent too soon. */
+function rateLimited() {
+  let refuse = false
+  return {
+    answer() {
+      if (!refuse) return { ok: true }
+      refuse = false
+      throw hostError('rate_limited', '', 50)
+    },
+    refuseNext() {
+      refuse = true
+    },
+  }
+}
+
+/** The loop's clock: each wait the worker asks for, for the test to fire. */
+function clock() {
+  const waits: { ms: number; run: () => void }[] = []
+  return {
+    waits,
+    after(ms: number, run: () => void) {
+      waits.push({ ms, run })
+      updated()
+      return () => {}
+    },
+  }
 }
 
 /** A run that lasts until it is aborted. */
@@ -104,7 +138,7 @@ function feed() {
 }
 
 /** The worker on `over`'s inputs, as Orca mounts it. */
-async function mounted(over: Partial<DialInputs>, refuse = false) {
+async function mounted(over: Partial<DialInputs>, answer = ACCEPT) {
   let stop = async () => {}
   const worker = await mountWorker(
     {
@@ -113,7 +147,7 @@ async function mounted(over: Partial<DialInputs>, refuse = false) {
       },
       deactivate: () => stop(),
     },
-    { host: host(refuse) }
+    { host: host(answer) }
   )
   const changes = () => worker.posts.filter((post) => post.event === 'dial.changed').map((post) => post.payload)
   const updates = () => worker.host.callsOf('statusBar.update')
@@ -121,9 +155,9 @@ async function mounted(over: Partial<DialInputs>, refuse = false) {
 }
 
 /** A worker whose link says ready, and the stream it holds. */
-async function streaming(refuse = false) {
+async function streaming(answer = ACCEPT, over: Partial<DialInputs> = {}) {
   const stream = feed()
-  const m = await mounted({ run: () => Promise.resolve(READY), connect: stream.connect }, refuse)
+  const m = await mounted({ run: () => Promise.resolve(READY), connect: stream.connect, ...over }, answer)
   return { ...m, stream }
 }
 
@@ -172,7 +206,7 @@ test('the log names the state and never the agent\'s name', async () => {
 })
 
 test('a status bar update Orca refuses is logged once, and dial.changed is still posted', async () => {
-  const { worker, stream, changes } = await streaming(true)
+  const { worker, stream, changes } = await streaming(REFUSE)
   stream.send(ATTACHED)
   await until(() => changes().length === 1)
   stream.send(AGENT)
@@ -180,6 +214,48 @@ test('a status bar update Orca refuses is logged once, and dial.changed is still
   await worker.deactivate()
   assert.deepEqual(changes(), [{ state: 'attached' }, { state: 'attached', agent: { name: 'api', app: 'Orca' } }])
   assert.equal(worker.logs.filter((line) => line.includes('dial: status bar unavailable')).length, 1)
+})
+
+test('a status bar update refused for now is sent again after the wait Orca names, and not logged', async () => {
+  const bar = rateLimited()
+  const time = clock()
+  const { worker, stream, changes, updates } = await streaming(bar.answer, { after: time.after })
+  stream.send(ATTACHED)
+  await until(() => changes().length === 1)
+  bar.refuseNext()
+  stream.send(AGENT)
+  await until(() => changes().length === 2)
+  // A turn, for Orca's refusal to reach the worker.
+  await new Promise((done) => setImmediate(done))
+  const wait = time.waits.find(({ ms }) => ms === 50)
+  assert.ok(wait, 'a wait of 50 ms')
+  const sent = updates().length
+  wait.run()
+  await until(() => updates().length === sent + 1)
+  const agent = { id: 'dial', visible: true, text: 'api' }
+  assert.deepEqual(updates().slice(-2), [agent, agent])
+  assert.deepEqual(worker.logs.filter((line) => line.includes('status bar')), [])
+  await worker.deactivate()
+})
+
+test('a refused update is not sent again once a newer one was', async () => {
+  const bar = rateLimited()
+  const time = clock()
+  const { worker, stream, changes, updates } = await streaming(bar.answer, { after: time.after })
+  bar.refuseNext()
+  stream.send(ATTACHED)
+  await until(() => changes().length === 1)
+  await new Promise((done) => setImmediate(done))
+  stream.send(AGENT)
+  await until(() => changes().length === 2)
+  const wait = time.waits.find(({ ms }) => ms === 50)
+  assert.ok(wait, 'a wait of 50 ms')
+  const sent = updates().length
+  wait.run()
+  // A turn, for an update the worker should not send.
+  await new Promise((done) => setImmediate(done))
+  assert.equal(updates().length, sent)
+  await worker.deactivate()
 })
 
 test('deactivate stops the loop: nothing is posted or updated after it', async () => {
