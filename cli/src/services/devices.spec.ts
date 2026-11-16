@@ -5753,26 +5753,68 @@ describe('Orca\'s ring follows Orca\'s tabs (docs/plans/2026-11-16-dial-orca-foc
     expect((await names()).orca).toEqual(['Skill từ SKILL.md', 'PM'])
   })
 
-  it('the place found by elimination is never its pane: a rest, a tap or words reach no Orca terminal through it', async () => {
+  const oneTwoPM = [{ handle: H(1), title: 'One' }, { handle: H(2), title: 'Two' }, { handle: H(3), title: 'PM', renamed: true as const }]
+
+  // Diego's main worktree at his dial check (PM 2026-11-16): a shell, an agent, the idle agent the scan found, and PM.
+  const diego4 = [{ handle: H(1), title: 'Terminal 3' }, { handle: H(2), title: 'harness' }, { handle: H(3), title: 'Skill từ SKILL.md' },
+    { handle: H(4), title: 'PM', renamed: true as const }]
+  /** Diego's four tabs, read: Skill (agent 3) placed at its terminal by elimination. */
+  const diegoPlaced = async () => {
     const { port, fake } = withOrca(0)
-    port.observed(hook(3))
-    scanned(2)
+    port.observed(hook(2))
+    port.observed(hook(4))
+    scanned(3)
     seen.host.watching!(true)
     await settled()
-    await land(fake, diego, [claudeIn(2), claudeIn(3)])
-    await land(fake, diego, [claudeIn(2), claudeIn(3)])
-    expect(await ring()).toEqual([agent(2), agent(3)])
-    host().swipeEnded(agent(2), 'rest')
-    await host().openAgent(agent(2))
-    await host().sendTurn(agent(2), 'run the tests')
-    await settled()
-    expect(orcaRuns.filter(([, args]) => args.includes(H(2)))).toEqual([])
-    // PM's pane is its own, from its hook: a rest there switches Orca.
+    await land(fake, diego4, [claudeIn(2), claudeIn(3), claudeIn(4)])
+    await land(fake, diego4, [claudeIn(2), claudeIn(3), claudeIn(4)])
+    expect(await ring()).toEqual([agent(2), agent(3), agent(4)])
+    return { port, fake }
+  }
+  const switchTo = (n: number): [string, string[], number] => ['/opt/orca/bin/orca', ['terminal', 'switch', '--terminal', H(n), '--json'], 10_000]
+
+  it('a rest on the agent placed by elimination switches Orca to its placed terminal', async () => {
+    await diegoPlaced()
+    expect(host().swipeSwitches(agent(3))).toBe(true)
     host().swipeEnded(agent(3), 'rest')
-    await vi.waitFor(() => expect(orcaRuns).toContainEqual(['/opt/orca/bin/orca', ['terminal', 'switch', '--terminal', H(3), '--json'], 10_000]))
+    await vi.waitFor(() => expect(orcaRuns).toEqual([switchTo(3)]))
   })
 
-  const oneTwoPM = [{ handle: H(1), title: 'One' }, { handle: H(2), title: 'Two' }, { handle: H(3), title: 'PM', renamed: true as const }]
+  it('a tap on it switches to its placed terminal before Orca comes forward', async () => {
+    await diegoPlaced()
+    expect(await host().openAgent(agent(3))).toBeUndefined()
+    expect(orcaRuns).toEqual([switchTo(3)])
+  })
+
+  it('words or voice to it are never typed into its placed terminal, nor anywhere', async () => {
+    await diegoPlaced()
+    expect(await host().sendTurn(agent(3), 'run the tests')).toMatchObject({ ok: false })
+    await settled()
+    expect(orcaRuns).toEqual([])
+  })
+
+  it('an ambiguous placement switches nothing', async () => {
+    const { port, fake } = withOrca(0)
+    port.observed(hook(3))
+    scanned(1, 2)
+    seen.host.watching!(true)
+    await settled()
+    await land(fake, oneTwoPM, [claudeIn(1), claudeIn(2), claudeIn(3)])
+    await land(fake, oneTwoPM, [claudeIn(1), claudeIn(2), claudeIn(3)])
+    expect(host().swipeSwitches(agent(1))).toBe(false)
+    host().swipeEnded(agent(1), 'rest')
+    await host().openAgent(agent(2))
+    await settled()
+    expect(orcaRuns).toEqual([])
+  })
+
+  it('once it hooks with its own terminal, a rest switches to that one', async () => {
+    const { port } = await diegoPlaced()
+    // Its own terminal is another than the one it was placed at, and the read its hook asks for has not landed.
+    port.observed(hook(3, { hostHints: { ...hook(3).hostHints, ORCA_TERMINAL_HANDLE: H(5) } }))
+    host().swipeEnded(agent(3), 'rest')
+    await vi.waitFor(() => expect(orcaRuns).toEqual([switchTo(5)]))
+  })
 
   it('two agents with no pane in one folder place neither', async () => {
     const { port, fake } = withOrca(0)
@@ -6277,6 +6319,29 @@ describe('the dial follows the pane focused in Orca (docs/plans/2026-11-16-dial-
       line(H(2))
       expect(asked()).toEqual([])
       expect(focusLines()).toEqual(Array(2).fill('[device] focus · skipped · unknown agent'))
+    })
+
+    it('a line for the terminal an agent was only placed at by elimination finds no agent', async () => {
+      const { port, fake, settle, line } = await dialWith({ agents: 0, attached: false })
+      port.observed(hook(4))
+      // Running in Orca before the dial came, idle since: no hook, so no pane.
+      readers.known.set('sess-3', 'terminal')
+      readers.owners.set('sess-3', { engine: 'claude', pid: 4243 })
+      readers.rows.set('sess-3', { cwd: '/work/api', transcriptPath: null })
+      readers.working.set('sess-3', false)
+      readers.apps.mockResolvedValueOnce(new Map([[4243, 'orca']]))
+      seen.host.watching!(true)
+      await settled()
+      const read = { tabs: [{ handle: H(3) }, { handle: H(4) }], terminals: [3, 4].map((n) => ({ handle: H(n), worktreePath: '/work/api', agentIdentity: 'claude' })) }
+      for (let i = 0; i < 2; i++) {
+        fake.orders.at(-1)!(read)
+        await settled()
+      }
+      expect(host().swipeSwitches(agent(3))).toBe(true)
+      await settle('orca')
+      line(H(3))
+      expect(asked()).toEqual([])
+      expect(focusLines()).toEqual(['[device] focus · skipped · unknown agent'])
     })
 
     it('no dial linked: nothing is followed or counted, in front or not', async () => {

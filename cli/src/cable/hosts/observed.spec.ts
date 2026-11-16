@@ -2395,23 +2395,71 @@ describe('ObservedSource panes', () => {
     expect(agent('a').name).toBe('harness root')
   })
 
-  it('an agent the caller placed at a pane, with none of that adapter\'s, is called by its name; the place never becomes its pane', async () => {
-    const { actions } = fakeActions()
-    const s = setup({ actions })
-    // Found by the scan, idle: no hook has said its pane.
+  /** One open session the scan found, idle: no hook has said its pane. */
+  const scannedIdle = async (s: ReturnType<typeof setup>) => {
     s.open.set('a', 'terminal')
     s.owners.set('a', { pid: 11, engine: 'claude' })
     s.externals.set('a', { cwd: '/x/a', transcriptPath: '/t/a.jsonl' })
     await s.src.scanOpen()
-    const id = s.src.list()[0].id
+    return s.src.list()[0].id
+  }
+
+  it('an agent the caller placed at a pane, with none of that adapter\'s, is called by its name', async () => {
+    const { actions } = fakeActions()
+    const s = setup({ actions })
+    const id = await scannedIdle(s)
     s.src.setPaneNames('orca', named([HANDLE, 'Skill từ SKILL.md']), new Map([[id, HANDLE]]))
     expect(s.src.list()[0].name).toBe('Skill từ SKILL.md')
-    expect(s.src.paneOf(id, 'orca')).toBeUndefined()
-    expect(s.src.byPane('orca', HANDLE)).toBeUndefined()
-    expect(s.src.capabilities(s.src.list()[0]).focus).toBe(false)
     // Placed nowhere again: its folder's name.
     s.src.setPaneNames('orca', named([HANDLE, 'Skill từ SKILL.md']), none)
     expect(s.src.list()[0].name).toBe('a')
+  })
+
+  it('a rest and a tap show its place; words are never typed there, and the place never becomes its pane', async () => {
+    const { actions } = fakeActions()
+    const s = setup({ actions })
+    const id = await scannedIdle(s)
+    s.src.setPaneNames('orca', named([HANDLE, 'Skill từ SKILL.md']), new Map([[id, HANDLE]]))
+    const agent = s.src.list()[0]
+    expect(s.src.hasPane(agent)).toBe(true)
+    expect(await s.src.showPane(agent)).toBe('ok')
+    expect(actions.orcaSwitch.mock.calls).toEqual([[HANDLE]])
+    expect(s.src.capabilities(agent)).toMatchObject({ focus: true, voice: false })
+    expect(await s.src.focus(agent)).toBe(true)
+    expect(actions.open.mock.calls).toEqual([[id, { pane: { adapter: 'orca', id: HANDLE } }]])
+    expect(await s.src.send(agent, 'run the tests')).toMatchObject({ ok: false })
+    expect(actions.orcaSend).not.toHaveBeenCalled()
+    // Focus and a prompt follow only a pane its own hook named.
+    expect(s.src.paneOf(id, 'orca')).toBeUndefined()
+    expect(s.src.byPane('orca', HANDLE)).toBeUndefined()
+  })
+
+  it('placed nowhere again, a rest and a tap reach nothing; its own pane wins over its place', async () => {
+    const { actions } = fakeActions()
+    const s = setup({ actions })
+    const id = await scannedIdle(s)
+    s.src.setPaneNames('orca', named(), new Map([[id, OTHER]]))
+    s.src.setPaneNames('orca', named(), none)
+    expect(s.src.hasPane(s.src.list()[0])).toBe(false)
+    expect(s.src.capabilities(s.src.list()[0]).focus).toBe(false)
+    s.src.setPaneNames('orca', named(), new Map([[id, OTHER]]))
+    // Its first hook names its own terminal, before a new read drops the place.
+    s.src.ingest(s.ev('turn-stop', { sessionId: 'a', callerPid: 11, cwd: '/x/a', ...inOrca(HANDLE) }))
+    expect(await s.src.showPane(s.src.list()[0])).toBe('ok')
+    expect(actions.orcaSwitch.mock.calls).toEqual([[HANDLE]])
+  })
+
+  it('a place alone, with no name, tells the change: a tap reaches it now', async () => {
+    const { actions } = fakeActions()
+    const s = setup({ actions })
+    const id = await scannedIdle(s)
+    s.changes.mockClear()
+    s.src.setPaneNames('orca', named(), new Map([[id, HANDLE]]))
+    expect(s.changes).toHaveBeenCalledTimes(1)
+    s.src.setPaneNames('orca', named(), new Map([[id, HANDLE]]))
+    expect(s.changes).toHaveBeenCalledTimes(1)
+    s.src.setPaneNames('orca', named(), none)
+    expect(s.changes).toHaveBeenCalledTimes(2)
   })
 
   it('a place given an agent with a pane of that adapter is not taken', () => {
