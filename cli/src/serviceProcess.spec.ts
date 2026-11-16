@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { SERVICE_RUNNERS, startServiceProcess, type ServiceProcessOptions } from './serviceProcess.js'
 import type { ServiceHost, ServiceHostOptions, ServiceProcess } from './services/process.js'
-import { KNOWN_SERVICES, UPDATER_HOST } from './harnessd/services.js'
+import { KNOWN_SERVICES } from './harnessd/services.js'
+import { UPDATER_HOST } from './harnessd/servicePlan.js'
 
 const local = vi.hoisted(() => ({ socket: '/data/daemon-18473.sock' as string | null }))
 vi.mock('./lib/localSocket.js', async (real) => ({ ...await real<object>(), unixSocketPath: () => local.socket }))

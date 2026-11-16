@@ -16,7 +16,7 @@ import { createAgentList, type AgentListDeps } from '../core/agents/list.js'
 import { createAgentUpdate } from '../core/agents/update.js'
 import { createMessageRequest } from '../core/input.js'
 import { createQuestionResponse } from '../core/questions.js'
-import { engineTranscriptFor } from '../engines/transcripts.js'
+import { createInlineHistory } from '../engines/transcripts.js'
 import { createHistory } from '../core/transcripts/history.js'
 import { createTerminalRequests, type TerminalRequestDeps } from '../core/terminals/requests.js'
 import { createCancelRequest } from '../core/turns/cancel.js'
@@ -28,17 +28,17 @@ import { createStoreOf } from '../core/transcripts/stores.js'
 import { registry } from '../lib/registry.js'
 import { openclawSessionDb } from '../lib/openclawStore.js'
 import { stoppedAgents } from '../lib/stoppedAgents.js'
-import { TranscriptPager } from '../lib/transcriptPages.js'
 import { tmuxPaneInfo } from '../lib/tmux.js'
 
 /** `session_get` and `sessions_list` (core/transcripts/history.ts), over the registry and the saved
  *  harnesses, and a pager of their own. */
 export function bindHistory(socket: BackendSocket): void {
+  const inline = createInlineHistory()
   const history = createHistory({
-    readerFor: engineTranscriptFor,
+    readerFor: inline.forEngine,
     resolve: (id) => registry.resolve(id),
     stopped: () => stoppedAgents.list(),
-    pages: new TranscriptPager(),
+    lineCount: inline.lineCount,
     storeOf: createStoreOf({ opencode: join(env.OPENCODE_DATA_DIR, 'opencode.db'), kilo: join(env.KILO_DATA_DIR, 'kilo.db'), devin: join(env.DEVIN_HOME, 'sessions.db'), openclaw: openclawSessionDb }, hermesDbForSession),
   })
   socket.historyProvider = history.sessionGet

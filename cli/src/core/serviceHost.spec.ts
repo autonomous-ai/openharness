@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fakeCore } from '../testing/fakeCore.js'
 import { emptyPorts, WORKSPACES_FALLBACKS, WORKSPACES_OFF, type CorePorts, type SearchPort, type ViewersPort, type WorkspacesPort } from './api.js'
-import { createServiceHost, FAIL, later, ServiceUnavailableError, testFaults, type PortFallbacks } from './serviceHost.js'
+import { FAIL, later, ServiceUnavailableError, testFaults, type PortFallbacks } from './serviceHost.js'
+import { createServiceHost } from '../services/inlineHost.js'
 
 // A port whose members cover every shape: sync and async, value and FAIL fallbacks, a stop.
 class FakeSearch {

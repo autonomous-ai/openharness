@@ -6,7 +6,7 @@
  * Only the shared-machines service is answered; it reaches no other path of the backend this way
  * (lib/sharedMachinesPort.ts).
  */
-import { answerSharedMachinesOp, type SharedMachinesAccount } from '../lib/sharedMachinesPort.js'
+import { answerSharedMachinesOp, type SharedMachinesAccount } from '../lib/sharedMachinesAccount.js'
 
 type Payload = Record<string, unknown>
 

@@ -17,7 +17,7 @@ import { PROBE_ANSWER } from './harnessd/reexec.js'
 import { KNOWN_SERVICES, SERVICE_HOSTS } from './harnessd/services.js'
 
 const CLI_ROOT = fileURLToPath(new URL('..', import.meta.url))
-// The updater, beside the services the core knows: the master runs it (harnessd/services.ts `UPDATER_HOST`).
+// The updater, beside the services the core knows: the master runs it (harnessd/servicePlan.ts `UPDATER_HOST`).
 const ROLES = ['master', 'core', ...KNOWN_SERVICES, 'updater']
 const RUNNER: Record<string, string> = { master: 'masterProcess', core: 'core-coreProcess' }
 for (const name of [...KNOWN_SERVICES, 'updater']) RUNNER[name] = `${name}Process`
@@ -125,6 +125,14 @@ describe('the lean bundle a release carries', () => {
     const repair = 'changed during resume preparation; retry after its writer stops'
     expect([...files.values()].some(code => code.includes(repair))).toBe(true)
     expect([...loads('core')].some(name => files.get(name)!.includes(repair))).toBe(false)
+  })
+
+  it('keeps inline service hosting and shared-machine response parsing out of the loaded core bundle', () => {
+    // Existing implementation literals, paired with caller and source-closure checks; no production marker is added.
+    for (const marker of ['it stays off until the daemon restarts', 'The Harness backend could not be reached. Try again in a moment.']) {
+      expect([...files.values()].some(code => code.includes(marker)), marker).toBe(true)
+      expect([...loads('core')].some(name => files.get(name)!.includes(marker)), marker).toBe(false)
+    }
   })
 
   it('gives the core its own code and none of the CLI\'s commands, which parsing cli.js cost it', () => {

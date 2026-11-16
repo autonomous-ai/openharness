@@ -467,7 +467,7 @@ lib/sessionTitle.ts
 lib/sessionWorkWire.ts
 lib/setUpWithin.ts
 lib/sgrCarry.ts
-lib/sharedMachinesPort.ts
+lib/sharedMachinesAccount.ts
 lib/shellProtocol.ts
 lib/shellQuote.ts
 lib/sleepAware.ts
@@ -510,7 +510,7 @@ lib/tmuxVersion.ts
 lib/transcriptActivity.ts
 lib/transcriptBoundary.ts
 lib/transcriptControls.ts
-lib/transcriptPages.ts
+lib/transcriptIndex.ts
 lib/transcriptTail.ts
 lib/turnActivity.ts
 lib/typedInput.ts

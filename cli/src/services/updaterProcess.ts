@@ -1,6 +1,6 @@
 /**
  * Harness's updater, in a process of its own that harnessd's master runs (`harness __service updater`,
- * harnessd/services.ts `UPDATER_HOST`), only for the installed copy with updates on (masterProcess.ts).
+ * harnessd/servicePlan.ts `UPDATER_HOST`), only for the installed copy with updates on (masterProcess.ts).
  *
  * It checks the release manifest for a newer CLI and a newer hn, downloads and verifies them, runs the new
  * CLI's canary and stages it (lib/selfUpdate.ts, tui/install.ts), then tells the master (`harnessd:staged`).

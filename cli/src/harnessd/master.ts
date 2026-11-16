@@ -18,7 +18,8 @@ import {
   removeMarker, runProbe, sweepHandovers, takeBackHandover, takeHandover, writeMarker, type HandOverDeps, type ReexecMarker,
 } from './reexec.js'
 import { ServiceSupervisor, serviceOptions } from './serviceSupervisor.js'
-import { SERVICE_HOSTS, UPDATER_HOST, UPDATER_PROCESS, serviceProcessesEnv, serviceSpecs } from './services.js'
+import { SERVICE_HOSTS, serviceProcessesEnv } from './services.js'
+import { UPDATER_HOST, UPDATER_PROCESS, serviceSpecs } from './servicePlan.js'
 import {
   DEFAULT_SUPERVISOR_OPTIONS, Supervisor, type CoreHandle, type SupervisorDeps, type SupervisorOptions, type SupervisorStatus,
 } from './supervisor.js'

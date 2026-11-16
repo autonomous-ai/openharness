@@ -2,7 +2,7 @@ import type { ProductUsageMetric } from '../lib/productUsageContract.js'
 import type { PreparedHandoff, HandoffPermit, HandoffOutcome } from '../lib/handoffAuthority.js'
 import type { AgentTokenUsage, AgentUsageTarget } from '../lib/agentUsageWire.js'
 import type { CloudHarness } from '../lib/cloudAgents.js'
-import type { SharedTrustPeer } from '../lib/sharedMachinesPort.js'
+import type { SharedTrustPeer } from '../lib/sharedMachinesAccount.js'
 import type { GridAssignmentProcess, GridAssignmentAnswer } from '../lib/gridAssignmentWire.js'
 /**
  * The boundary the services stand on (docs/design/2026-10-03-harnessd.md, "The core boundary"):

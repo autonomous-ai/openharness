@@ -197,6 +197,14 @@ Left since, with the core's process as `src/architecture.coreFiles.txt` lists it
 | Exports only tests read: `decodeTmuxControlData` and `normalizeTmuxCaptureLines` in `lib/tmuxStream.ts`, `stopSessionOwner`, `writeTty` and `foregroundJob` in `lib/externalOwnerControl.ts` (kept with a golden test: ask before deleting) | 154 | nothing, or a test's own file |
 | Lines of `core/api.ts` no core file imports, and code only the inline mode runs (`core/serviceHost.ts:122-233`, `lib/transcriptPages.ts:240-466`, `lib/sharedMachinesPort.ts:49-160`) | 707 | with their service, or gone with the inline mode |
 
+**16 November, package 10:** the test-only export cleanup merged in #4348. The
+[inline implementation extraction](2026-11-16-core-inline-scaffolding.md) moves hosting to
+`services/inlineHost.ts`, paging and shared-machine reply parsing behind `services/inline.ts`, and master-only
+selection to `harnessd/servicePlan.ts`. The core still owns its actual line-count index
+(`lib/transcriptIndex.ts`), service failure contracts and shared-machine account authority
+(`lib/sharedMachinesAccount.ts`). The historical 707-line row is not all removable: unused API exports and
+compatibility retirement remain separate work. Explicit inline mode and Harness OS remain supported.
+
 **Stays, decided 13 November: the agent settings sync** (`core/experiments.ts` `createAgentSettingsSync`, 150 lines).
 It was built as a service in the edge host and measured. The core's side of it (the local door's relay of a window's
 switch, the link, and the check that the edge host changes no switch but the agents' own, since Hachi's is the person's
@@ -308,7 +316,7 @@ with the Swarm on: 563 -> 561 files, 96,222 -> 95,875 lines; off, 548 files, 94,
 
 - **Harness OS** runs the core alone, with every service inside it: 113,149 more lines. A decision, below.
 - **`HARNESSD_SERVICES=none`** and the fallbacks for an old master: `services/inline.ts`, the start and serve half of
-  `core/serviceHost.ts`, 29 branches in `core/main.ts`. The October plan ends it once every service has run in its
+  `services/inlineHost.ts`, reached through the explicit inline branches in `core/main.ts`. The October plan ends it once every service has run in its
   own process for a release, which they have. It stays while Harness OS needs it.
 - **Compatibility with no end date:** `core/updaterBeside.ts` (a master from before 7 October), `core/updateHandoff.ts:103-179`,
   `config/env.ts:29-118` (adopts `~/.machine` at import, in every process, since 6 August), `lib/cwdRepair.ts` (rows

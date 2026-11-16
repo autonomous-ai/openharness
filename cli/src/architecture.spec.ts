@@ -314,6 +314,17 @@ const FACETS_FREE_OF_THEM: Array<[string, string]> = [
 ]
 
 describe('the daemon\'s shape', () => {
+  it('keeps inline hosting, history paging and shared-machine reply parsing outside the default core', () => {
+    const loaded = closureOf('core/main.ts')
+    for (const file of ['services/inlineHost.ts', 'lib/transcriptPages.ts', 'lib/sharedMachinesPort.ts', 'harnessd/servicePlan.ts']) {
+      expect(loaded.has(file), `${file} is not default-core implementation`).toBe(false)
+    }
+    // The contracts used by real supervised callers remain available without the inline implementation.
+    expect(loaded.has('core/serviceHost.ts')).toBe(true)
+    expect(loaded.has('core/transcripts/history.ts')).toBe(true)
+    expect(loaded.has('core/sharedMachinesQueries.ts')).toBe(true)
+  })
+
   it('a service reaches the core only through core/api.ts: never a core module, the registry, cli.ts or the socket', () => {
     const wrong = importsIn('services').filter(({ file, from, typeOnly }) => {
       if (SERVICE_MAY_IMPORT[`${file} → ${from}`]) return false
@@ -345,7 +356,7 @@ describe('the daemon\'s shape', () => {
     // A statement that waits itself: an `await` in it that is not inside a function of its own.
     const waits = (node: ts.Node): boolean => ts.isAwaitExpression(node) || (!ts.isFunctionLike(node) && ts.forEachChild(node, waits) === true)
     const statements = [...run.body!.statements]
-    const started = statements.findIndex((statement) => /\bserviceHost\.(serve|start)\(/.test(statement.getText(source)))
+    const started = statements.findIndex((statement) => /\bserviceHost!?\.(serve|start)\(/.test(statement.getText(source)))
     const hooks = statements.findIndex((statement) => statement.getText(source).includes('await startHookServer('))
     expect(started).toBeGreaterThan(0)
     expect(hooks).toBeGreaterThan(started)

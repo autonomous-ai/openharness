@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { emptyPorts, MONITOR_FALLBACKS, type MonitorPort } from '../core/api.js'
-import { createServiceHost } from '../core/serviceHost.js'
+import { createServiceHost } from './inlineHost.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { MONITOR_REQUESTS, startMonitor, type MonitorDeps } from './monitor.js'

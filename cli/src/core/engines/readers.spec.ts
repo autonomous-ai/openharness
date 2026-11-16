@@ -1,13 +1,12 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 import { createEngineReaders } from './readers.js'
-import type { EngineTranscript, TranscriptSession } from '../../engines/facets/transcript.js'
+import type { TranscriptReader, TranscriptSession } from '../../engines/facets/transcript.js'
 import { EngineReadError, READER_ERRORS, READER_HISTORY, READER_IN_FLIGHT, READER_LAST_TURN, READER_PART, READER_PART_BYTES, READER_PARTED_BYTES, READER_SERVICES, READER_VERSION, READER_WAIT_MS } from '../../engines/worker/protocol.js'
 
 const session: TranscriptSession = { sessionId: 'conversation', transcriptPath: '/private/read.jsonl', touchedAt: 100, codexHome: '/private/codex' }
 const page = { events: [], timestamp: '2026-10-07T00:00:00.000Z' }
 const turn = { userMessage: 'hello', assistantText: 'world' }
-const pages = {} as Parameters<EngineTranscript['historyPage']>[2]
 const deferred = <T>() => { let resolve!: (value: T) => void; const promise = new Promise<T>((r) => { resolve = r }); return { promise, resolve } }
 
 function setup() {
@@ -15,7 +14,7 @@ function setup() {
   const call = vi.fn(() => { const reply = deferred<Record<string, unknown>>(); replies.push(reply); return reply.promise })
   const inline = vi.fn(() => { throw new Error('isolated reads never fall back') })
   const port = createEngineReaders({ isolated: new Set(Object.values(READER_SERVICES)), call, inline })
-  return { ...port, call, inline, replies, history: () => port.forEngine('claude')!.historyPage(session, { limit: 2, before: 'cursor' }, pages) }
+  return { ...port, call, inline, replies, history: () => port.forEngine('claude')!.historyPage(session, { limit: 2, before: 'cursor' }) }
 }
 
 describe('the core reader port', () => {
@@ -24,11 +23,10 @@ describe('the core reader port', () => {
     const answer = p.history()
     expect(p.call).toHaveBeenCalledWith('engine-claude', READER_HISTORY,
       { version: READER_VERSION, session, ask: { limit: 2, before: 'cursor' } }, READER_WAIT_MS)
-    expect(p.call.mock.calls[0]).not.toContain(pages)
     p.connected('engine-claude')
     p.replies[0].resolve({ version: READER_VERSION, answer: page })
     expect(await answer).toEqual(page)
-    const warm = p.forEngine('claude')!.historyPage(session, { limit: 0 }, pages)
+    const warm = p.forEngine('claude')!.historyPage(session, { limit: 0 })
     p.replies[1].resolve({ version: READER_VERSION, answer: page })
     expect(await warm).toEqual(page)
     expect(p.call).toHaveBeenLastCalledWith('engine-claude', READER_HISTORY, expect.objectContaining({ ask: { limit: undefined, before: undefined } }), READER_WAIT_MS)
@@ -99,7 +97,7 @@ describe('the core reader port', () => {
   })
 
   it('uses explicit inline compatibility only when the master does not host this reader', () => {
-    const inlineReader = {} as EngineTranscript
+    const inlineReader = {} as TranscriptReader
     const call = vi.fn(async () => ({}))
     const inline = vi.fn(() => inlineReader)
     const p = createEngineReaders({ isolated: new Set(['engine-codex']), call, inline })
@@ -150,7 +148,7 @@ describe('the other engines\' readers, in their one worker', () => {
 
   it('sends the engine and the store the core named, and nothing else of the session', async () => {
     const p = others()
-    const answer = p.forEngine('pi')!.historyPage({ ...pi, codexHome: '/not/sent' } as TranscriptSession, { limit: 2 }, pages)
+    const answer = p.forEngine('pi')!.historyPage({ ...pi, codexHome: '/not/sent' } as TranscriptSession, { limit: 2 })
     expect(p.call).toHaveBeenCalledWith('engine-others', READER_HISTORY, { version: READER_VERSION,
       session: { engine: 'pi', sessionId: 'pi-conversation', transcriptPath: '/private/pi.jsonl', touchedAt: 100, store: null },
       ask: { limit: 2, before: undefined } }, 15_000)
@@ -172,7 +170,7 @@ describe('the other engines\' readers, in their one worker', () => {
 
   it('waits for Amp\'s history as long as its export may take, and accepts a finished sub-agent in a replay', async () => {
     const p = others(); p.connected('engine-others')
-    const answer = p.forEngine('amp')!.historyPage({ ...pi, sessionId: 'T-0123456789abcdef' }, {}, pages)
+    const answer = p.forEngine('amp')!.historyPage({ ...pi, sessionId: 'T-0123456789abcdef' }, {})
     expect(p.call).toHaveBeenLastCalledWith('engine-others', READER_HISTORY, expect.anything(), 25_000)
     const finished = { type: 'subagent_finished', payload: { id: 'tool-1', status: 'completed' } }
     p.replies[0].resolve({ version: READER_VERSION, answer: { ...page, events: [finished] } })
@@ -185,10 +183,10 @@ describe('the other engines\' readers, in their one worker', () => {
 
   it('bounds reads per engine, so one busy engine holds back no other', async () => {
     const p = others()
-    const busy = Array.from({ length: READER_IN_FLIGHT }, () => p.forEngine('pi')!.historyPage(pi, {}, pages))
+    const busy = Array.from({ length: READER_IN_FLIGHT }, () => p.forEngine('pi')!.historyPage(pi, {}))
     const settled = Promise.allSettled(busy)
-    await expect(p.forEngine('pi')!.historyPage(pi, {}, pages)).rejects.toMatchObject({ code: 'ENGINE_BUSY' })
-    const cursor = p.forEngine('cursor')!.historyPage(pi, {}, pages)
+    await expect(p.forEngine('pi')!.historyPage(pi, {})).rejects.toMatchObject({ code: 'ENGINE_BUSY' })
+    const cursor = p.forEngine('cursor')!.historyPage(pi, {})
     p.connected('engine-others')
     p.replies[READER_IN_FLIGHT].resolve({ version: READER_VERSION, answer: page })
     expect(await cursor).toEqual(page)
@@ -199,7 +197,7 @@ describe('the other engines\' readers, in their one worker', () => {
   it('leaves out the events it cannot check, keeps the rest of the page, and says how many', async () => {
     const p = others(); p.connected('engine-others')
     const kept = { type: 'text_delta', payload: { content: 'kept' } }
-    const answer = p.forEngine('muse')!.historyPage(pi, {}, pages)
+    const answer = p.forEngine('muse')!.historyPage(pi, {})
     p.replies[0].resolve({ version: 1, answer: { ...page, events: [{ type: 'subagent_finished', payload: { id: 1, status: 'completed' } }, kept,
       { type: 'turn_started', payload: { userMessage: 'live only' } }] } })
     expect(await answer).toEqual({ ...page, events: [kept] })
@@ -207,7 +205,7 @@ describe('the other engines\' readers, in their one worker', () => {
     // Said in the core's own log when no other is given.
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const port = createEngineReaders({ isolated: new Set(['engine-others']), call: async () => ({ version: 1, answer: { ...page, events: [{ type: 'turn_ended', payload: {} }] } }) })
-    const read = port.forEngine('grok')!.historyPage(pi, {}, pages)
+    const read = port.forEngine('grok')!.historyPage(pi, {})
     port.connected('engine-others')
     expect(await read).toEqual(page)
     expect(warn).toHaveBeenCalledWith('[engine grok] history · left out 1 event(s) its reader sent that the core could not check')
@@ -219,14 +217,14 @@ describe('the other engines\' readers, in their one worker', () => {
     [{ error: 'SERVICE_UNAVAILABLE' }, 'ENGINE_UNAVAILABLE'],
   ])('refuses %j from their worker', async (reply, code) => {
     const p = others(); p.connected('engine-others')
-    const answer = p.forEngine('muse')!.historyPage(pi, {}, pages)
+    const answer = p.forEngine('muse')!.historyPage(pi, {})
     p.replies[0].resolve(reply)
     await expect(answer).rejects.toMatchObject({ code })
   })
 
   it('rejects an answer from a worker that restarted under the read', async () => {
     const p = others(); p.connected('engine-others')
-    const answer = p.forEngine('grok')!.historyPage(pi, {}, pages)
+    const answer = p.forEngine('grok')!.historyPage(pi, {})
     p.disconnected('engine-others'); p.connected('engine-others')
     p.replies[0].resolve({ version: READER_VERSION, answer: page })
     await expect(answer).rejects.toMatchObject({ code: 'ENGINE_STALE_REPLY' })
@@ -237,7 +235,7 @@ describe('the other engines\' readers, in their one worker', () => {
     const big = { ...page, events: Array.from({ length: 40 }, (_, i) => ({ type: 'text_delta', payload: { content: `line ${i}` } })) }
     const parts = inParts({ version: 1, answer: big }, 300)
     answering(p, [...parts])
-    expect(await p.forEngine('grok')!.historyPage(pi, {}, pages)).toEqual(big)
+    expect(await p.forEngine('grok')!.historyPage(pi, {})).toEqual(big)
     expect(p.call).toHaveBeenCalledTimes(parts.length)
     parts.slice(1).forEach((part, i) => expect(p.call.mock.calls[i + 1]).toEqual(['engine-others', READER_PART,
       { version: 1, part: 'reply-1', offset: part.offset }, expect.any(Number)]))
@@ -270,25 +268,25 @@ describe('the other engines\' readers, in their one worker', () => {
   ])('refuses a reply in parts with %s', async (_, change, code) => {
     const p = others(); p.connected('engine-others')
     answering(p, change(inParts({ version: 1, answer: { ...page, events: [{ type: 'text_delta', payload: { content: 'x'.repeat(100) } }] } }, 40)))
-    await expect(p.forEngine('pi')!.historyPage(pi, {}, pages)).rejects.toMatchObject({ code })
+    await expect(p.forEngine('pi')!.historyPage(pi, {})).rejects.toMatchObject({ code })
   })
 
   it('refuses a whole that is not JSON, and parts that outlast the read\'s wait or a worker restart', async () => {
     const p = others(); p.connected('engine-others')
     const text = Buffer.from('not json'), hash = createHash('sha256').update(text).digest('hex')
     answering(p, [{ version: 1, part: 'reply-1', offset: 0, bytes: text.length, hash, data: text.toString('base64') }])
-    await expect(p.forEngine('pi')!.historyPage(pi, {}, pages)).rejects.toMatchObject({ code: 'ENGINE_INVALID_REPLY' })
+    await expect(p.forEngine('pi')!.historyPage(pi, {})).rejects.toMatchObject({ code: 'ENGINE_INVALID_REPLY' })
     const [first, ...rest] = inParts({ version: 1, answer: page }, 20)
     let now = 0
     const clock = vi.spyOn(performance, 'now').mockImplementation(() => now)
     answering(p, [first, ...rest])
     p.call.mockImplementationOnce(async () => { now = 0; return first }).mockImplementationOnce(async () => { now = 15_001; return rest[0] })
-    const late = p.forEngine('pi')!.historyPage(pi, {}, pages)
+    const late = p.forEngine('pi')!.historyPage(pi, {})
     await expect(late).rejects.toMatchObject({ code: 'ENGINE_UNAVAILABLE' })
     now = 0
     p.call.mockReset()
     p.call.mockImplementationOnce(async () => first).mockImplementationOnce(async () => { p.disconnected('engine-others'); p.connected('engine-others'); return rest[0] })
-    await expect(p.forEngine('pi')!.historyPage(pi, {}, pages)).rejects.toMatchObject({ code: 'ENGINE_STALE_REPLY' })
+    await expect(p.forEngine('pi')!.historyPage(pi, {})).rejects.toMatchObject({ code: 'ENGINE_STALE_REPLY' })
     clock.mockRestore()
   })
 })

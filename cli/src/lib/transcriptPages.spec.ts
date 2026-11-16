@@ -1,3 +1,4 @@
+import { LineIndex, type OpenFile } from './transcriptIndex.js'
 import { appendFileSync, chmodSync, mkdtempSync, rmSync, truncateSync, writeFileSync } from 'node:fs'
 import { open } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -7,7 +8,7 @@ import { codexPageStart, windowCodexLines } from '../engines/codex/normalizer.js
 import { claude, claudeScenario, codex, codexScenario } from '../testing/transcriptScenarios.js'
 import { claudePageLine, windowRawLines } from './normalize.js'
 import { tailFile } from './transcriptTail.js'
-import { LineIndex, pageBefore, TranscriptPager, type HistoryPage, type OpenFile } from './transcriptPages.js'
+import { pageBefore, TranscriptPager, type HistoryPage } from './transcriptPages.js'
 import { pageOf } from '../engines/transcripts.js'
 
 let dir: string

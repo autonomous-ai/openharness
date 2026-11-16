@@ -435,7 +435,7 @@ describe('the other engines\' conversations, through the core', () => {
         const path = transcriptFile(`${engine}-history`, transcript.lines)
         const session = sessionOf(engine, path)
         const history = core.createHistory({
-          resolve: () => session, stopped: () => [], pages: { lineCount: async () => transcript.lines.length } as never,
+          resolve: () => session, stopped: () => [], lineCount: async () => transcript.lines.length,
           ...core.reading(),
         })
         const out: unknown[] = []
@@ -518,7 +518,7 @@ describe('the other engines\' conversations, through the core', () => {
       }
       write(messages)
       const session = sessionOf(engine, null)
-      const history = core.createHistory({ resolve: () => session, stopped: () => [], pages: { lineCount: async () => 0 } as never, ...core.reading() })
+      const history = core.createHistory({ resolve: () => session, stopped: () => [], lineCount: async () => 0, ...core.reading() })
       const out: unknown[] = []
       const events: Array<{ type?: string }> = []
       const ask = async (payload: Record<string, unknown>) => {
@@ -560,7 +560,7 @@ describe('the other engines\' conversations, through the core', () => {
       await live.streams.drain(key)
       live.normalizers.stopPollers()
       await check(`openclaw live: ${scenario} @${half}/${last}`, live)
-      const history = core.createHistory({ resolve: () => session, stopped: () => [], pages: { lineCount: async () => 0 } as never, ...core.reading() })
+      const history = core.createHistory({ resolve: () => session, stopped: () => [], lineCount: async () => 0, ...core.reading() })
       const out: unknown[] = []
       const events: Array<{ type?: string }> = []
       const ask = async (payload: Record<string, unknown>) => {

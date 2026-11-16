@@ -22,3 +22,9 @@ export interface EngineTranscript {
   /** `pages` is the pager of the process the reader runs in; the reader hands it its own rules (`ThreadPages`). */
   historyPage(session: TranscriptSession, ask: HistoryAsk, pages: Pick<TranscriptPager, 'page'>): Promise<HistoryAnswer>
 }
+
+/** The core's reader is already bound to its process-owned pager; no pager crosses this boundary. */
+export interface TranscriptReader {
+  lastTurnText: EngineTranscript['lastTurnText']
+  historyPage(session: TranscriptSession, ask: HistoryAsk): Promise<HistoryAnswer>
+}

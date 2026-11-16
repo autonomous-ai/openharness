@@ -30,8 +30,8 @@ export interface ServiceRoutesDeps {
   /** The services in their own processes (core/serviceLinks.ts), which bound the wait themselves: the route's, from when
    *  the request is sent, after the start of a service on demand that was not running. */
   linked: ServiceRouter
-  /** The services in this process (core/serviceHost.ts), whose handlers nothing else bounds: the route's wait is kept here. */
-  hosted: ServiceRouter
+  /** The services in this process (services/inlineHost.ts), whose handlers nothing else bounds: the route's wait is kept here. */
+  hosted?: ServiceRouter
   log?: (line: string) => void
   setTimer?: (run: () => void, ms: number) => unknown
   clearTimer?: (timer: unknown) => void
@@ -64,7 +64,7 @@ export function createServiceRoutes(deps: ServiceRoutesDeps) {
       if (deps.linked.route(type, payload, asker, resolve, waitMs)) return
       timer = setTimer(() => resolve(null), waitMs)
       const reply = (result: Record<string, unknown>): void => { clearTimer(timer); resolve(result) }
-      if (!deps.hosted.route(type, payload, asker, reply)) reply({ error: 'SERVICE_UNAVAILABLE' })
+      if (!deps.hosted?.route(type, payload, asker, reply)) reply({ error: 'SERVICE_UNAVAILABLE' })
     } catch {
       if (timer !== undefined) clearTimer(timer)
       log(`[services] ${type} SERVICE_REQUEST_FAILED`)
@@ -115,7 +115,7 @@ export function createServiceRoutes(deps: ServiceRoutesDeps) {
         if (answer && Number.isInteger(answer.status) && (answer.status as number) >= 200 && (answer.status as number) <= 599 && isRecord(answer.body)) {
           return headed(route, { status: answer.status as number, body: answer.body }, answer.headers)
         }
-        // Down, slow or failing is said where it is seen (core/serviceLinks.ts, core/serviceHost.ts); an answer that is
+        // Down, slow or failing is said where it is seen (core/serviceLinks.ts, services/inlineHost.ts); an answer that is
         // none is a service's mistake, said here.
         if (answer && typeof answer.error !== 'string') log(`[services] ${route.type} was answered with no HTTP answer: answered ${route.unanswered.status} instead`)
         return headed(route, route.unanswered)
