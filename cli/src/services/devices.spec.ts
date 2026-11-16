@@ -262,7 +262,7 @@ const hc: HcClient = {
 /** Orca's reads for every spec but Orca's own: nothing lands, so no other spec hears of an order or a watch. */
 const inertOrcaReads: OrcaReads = {
   orcaWatchesFocus: () => new Promise(() => {}),
-  orcaTabOrder: () => new Promise(() => {}),
+  orcaTabs: () => new Promise(() => {}),
   watchOrcaFocus: () => { throw new Error('no watch outside Orca\'s own specs') },
 }
 /** Orca's reads, driven by the spec: the probe's answer (one the spec holds, when a promise) and how often it was asked,
@@ -270,11 +270,11 @@ const inertOrcaReads: OrcaReads = {
  *  stop ends it, as the child's exit does. */
 function fakeOrcaReads(over: { watches?: boolean | Promise<boolean> } = {}) {
   const probes = { count: 0 }
-  const orders: Array<(handles: string[] | null) => void> = []
+  const orders: Array<(tabs: Array<{ handle: string; title?: string }> | null) => void> = []
   const watches: Array<{ line(handle: string | null): void; end(): void; stopped: boolean }> = []
   const reads: OrcaReads = {
     orcaWatchesFocus: () => { probes.count++; return Promise.resolve(over.watches ?? false) },
-    orcaTabOrder: () => new Promise((resolve) => { orders.push(resolve) }),
+    orcaTabs: () => new Promise((resolve) => { orders.push(resolve) }),
     watchOrcaFocus: (onHandle) => {
       let end = (): void => {}
       const ended = new Promise<void>((resolve) => { end = resolve })
@@ -5627,14 +5627,19 @@ describe('Orca\'s ring follows Orca\'s tabs (docs/plans/2026-11-16-dial-orca-foc
   }
   /** Lets what a landing sets off run. */
   const settled = () => new Promise((resolve) => setImmediate(resolve))
-  /** The latest read lands with these handles. */
-  const land = async (fake: ReturnType<typeof fakeOrcaReads>, handles: string[] | null) => {
+  /** The latest read lands with these tabs: a handle alone is one in a tab with no title. */
+  const land = async (fake: ReturnType<typeof fakeOrcaReads>, tabs: Array<string | { handle: string; title?: string }> | null) => {
     const read = fake.orders.at(-1)
     expect(read, 'a read asked').toBeTypeOf('function')
-    read!(handles)
+    read!(tabs && tabs.map((tab) => typeof tab === 'string' ? { handle: tab } : tab))
     await settled()
   }
   const ring = async () => (await host().listAgentSnapshot({ apps: true })).agents.map((a) => a.id)
+  /** The names the dial lists, in Orca's ring and in the one ring. */
+  const names = async () => {
+    const [orcaRing, single] = await Promise.all([host().listAgentSnapshot({ apps: true }), host().listAgentSnapshot()])
+    return { orca: orcaRing.agents.map((a) => a.name), single: single.agents.map((a) => a.name) }
+  }
   const orderLines = () => logs.filter((line) => line.startsWith('[device] orca order'))
 
   it('with a dial attached, an agent entering Orca\'s ring asks for one read, and its landing puts the ring in tab order', async () => {
@@ -5803,6 +5808,56 @@ describe('Orca\'s ring follows Orca\'s tabs (docs/plans/2026-11-16-dial-orca-foc
     expect(orcaRuns).toEqual([['/opt/orca/bin/orca', ['terminal', 'list', '--json', '--include-visual-layouts'], 10_000]])
     // The fake prints nothing a list would.
     expect(orderLines()).toEqual(['[device] orca order · failed'])
+  })
+
+  it('after a read, an Orca agent with no name of its own is called by its tab, and the dial\'s list says it', async () => {
+    const { fake } = dialWith(3)
+    // Its folder's name until then.
+    expect(await names()).toEqual({ orca: ['api', 'api', 'api'], single: ['api', 'api', 'api'] })
+    await land(fake, [{ handle: H(2), title: 'Dev' }, { handle: H(1), title: 'PM' }, H(3)])
+    // The one in a tab with no title keeps its folder's.
+    expect(await names()).toEqual({ orca: ['Dev', 'PM', 'api'], single: ['PM', 'Dev', 'api'] })
+  })
+
+  it('a session the person named keeps its name', async () => {
+    const { port, fake } = withOrca(0)
+    port.observed(hook(1, { title: 'Mine' }))
+    port.observed(hook(2))
+    seen.host.watching!(true)
+    await land(fake, [{ handle: H(1), title: 'PM' }, { handle: H(2), title: 'Dev' }])
+    expect((await names()).orca).toEqual(['Mine', 'Dev'])
+  })
+
+  it('a later read with another title renames it', async () => {
+    const { port, fake } = dialWith(1)
+    await land(fake, [{ handle: H(1), title: 'PM' }])
+    expect((await names()).orca).toEqual(['PM'])
+    port.observed(hook(2))
+    await land(fake, [{ handle: H(1), title: 'Lead' }, { handle: H(2), title: 'Dev' }])
+    expect((await names()).orca).toEqual(['Lead', 'Dev'])
+    // A tab that lost its title gives the folder's back.
+    port.observed(hook(3))
+    await land(fake, [H(1), { handle: H(2), title: 'Dev' }, H(3)])
+    expect((await names()).orca).toEqual(['api', 'Dev', 'api'])
+  })
+
+  it('a failed read renames nobody', async () => {
+    const { port, fake } = dialWith(1)
+    await land(fake, [{ handle: H(1), title: 'PM' }])
+    port.observed(hook(2))
+    await land(fake, null)
+    expect((await names()).orca).toEqual(['PM', 'api'])
+  })
+
+  it('no log line holds a title', async () => {
+    const { port, fake } = dialWith(1)
+    await land(fake, [{ handle: H(1), title: 'Secret tab' }])
+    port.observed(hook(2))
+    await land(fake, [{ handle: H(1), title: 'Other secret' }, { handle: H(2), title: 'Third secret' }])
+    port.observed(hook(3))
+    await land(fake, null)
+    expect((await names()).orca).toEqual(['Other secret', 'Third secret', 'api'])
+    expect(logs.filter((line) => /secret/i.test(line))).toEqual([])
   })
 
   it('no line holds a handle or an agent', async () => {
