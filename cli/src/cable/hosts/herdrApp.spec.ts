@@ -14,13 +14,12 @@ interface Call { file: string; args: string[]; timeoutMs: number }
 
 /** A recording runner that runs nothing, so no spec opens Herdr or moves its window: each call answers the next of
  *  [codes], then exit 0. Beside it a recording client that opens no socket (its `prompt` answers `sent` unless the test
- *  sets another answer, its socket there), Herdr in front, every terminal shown and the default hc session followed
- *  unless the test says otherwise, and the log's lines kept. */
+ *  sets another answer), Herdr in front, every terminal shown and reporting an agent, and the default hc session
+ *  followed unless the test says otherwise, and the log's lines kept. */
 function recorder(over: Partial<HerdrAppDeps> = {}, codes: Array<number | null> = []) {
   const calls: Call[] = []
   const log: string[] = []
   const prompt = vi.fn(async (_address: string, _kind: string, _text: string): Promise<HcPrompt> => ({ outcome: 'sent' }))
-  const socketStamp = vi.fn((): string | undefined => '1:1')
   const deps: HerdrAppDeps = {
     run: async (file, args, timeoutMs) => {
       calls.push({ file, args, timeoutMs })
@@ -29,14 +28,15 @@ function recorder(over: Partial<HerdrAppDeps> = {}, codes: Array<number | null> 
     onPath: (name) => (name === 'herdr-app' ? FAKE_PATH_HERDR_APP : null),
     exists: () => false,
     platform: 'darwin',
-    client: { prompt, socketStamp },
+    client: { prompt },
     inFront: () => true,
     shows: () => true,
+    reports: () => true,
     hookIds: true,
     log: (line) => log.push(line),
     ...over,
   }
-  return { calls, log, prompt, socketStamp, adapter: createHerdrAppAdapter(deps) }
+  return { calls, log, prompt, adapter: createHerdrAppAdapter(deps) }
 }
 
 /** Lets every step already able to run take place. */
@@ -288,8 +288,10 @@ describe('the Herdr adapter', () => {
     })
   })
 
-  it('type sends the words with the agent\'s engine, and is true only when sent; canType follows hc\'s socket', async () => {
-    const { adapter, prompt, socketStamp } = recorder()
+  // A hooked copy has the pane for any address its hook said; hc reports an agent's status at some of them alone.
+  it('type sends the words with the agent\'s engine, and is true only when sent; canType follows what hc reports', async () => {
+    const reported = new Set(['t7'])
+    const { adapter, prompt } = recorder({ reports: (address) => reported.has(address) })
     expect(await adapter.type!(pane('t7'), 'next', 'claude')).toBe(true)
     expect(prompt.mock.calls).toEqual([['t7', 'claude', 'next']])
     prompt.mockResolvedValueOnce({ outcome: 'busy' })
@@ -297,10 +299,9 @@ describe('the Herdr adapter', () => {
     prompt.mockResolvedValueOnce({ outcome: 'failed', fault: 'rejected', kind: 'not_found' })
     expect(await adapter.type!(pane('t7'), 'next', 'claude')).toBe(false)
     expect(adapter.canType!(pane('t7'))).toBe(true)
-    socketStamp.mockReturnValue(undefined)
+    expect(adapter.canType!(pane('t8'))).toBe(false)
+    reported.delete('t7')
     expect(adapter.canType!(pane('t7'))).toBe(false)
-    socketStamp.mockReturnValue('2:2')
-    expect(adapter.canType!(pane('t7'))).toBe(true)
   })
 
   // Review Focus 5: two transcripts typed at once would mix in the agent's prompt.

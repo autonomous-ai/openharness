@@ -5226,6 +5226,14 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
     expect(hc.prompted).toHaveLength(2)
   })
 
+  // hc types into any terminal by its address: only one whose program reports an agent's status is at an agent's prompt.
+  it('a hooked agent in a terminal hc reports no status for gets no words', async () => {
+    const { port, live } = withHc()
+    port.observed(hook('session-start'))
+    live([terminal('t7', { status: undefined, kind: undefined })])
+    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
+  })
+
   it('a hooked agent\'s words go through Herdr Core, counted herdr-app', async () => {
     const { port, hc, live } = withHc()
     port.observed(hook('turn-stop'))
@@ -5312,7 +5320,7 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
   it('a hooked agent in a terminal Herdr\'s window does not show takes words, and a tap brings Herdr forward only', async () => {
     const { port, hc, live } = withHc()
     port.observed(hook('turn-stop', 't8'))
-    live()
+    live([terminal('t7'), terminal('t8', { space: false })])
     expect(await host().sendTurn(ID, 'run the tests')).toEqual({ ok: true })
     expect(hc.prompted).toEqual([['t8', 'claude', 'run the tests']])
     expect(await host().openAgent(ID)).toBeUndefined()
@@ -5407,13 +5415,15 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
     expect(watched.stopped).toBe(watched.calls.length)
   })
 
+  // With nothing heard of hc, a hooked agent's terminal is not known to run it now: it gets no words, and a tap still
+  // brings Herdr.
   it('a herdr-app part that throws costs the dial nothing', async () => {
     const { port, hc } = withHc({ faults: ['herdr-app'] })
     port.observed(hook('session-start'))
     attach(port)
     expect(hc.subs).toEqual([])
     expect(logs).toContain('[devices] herdr-app failed · injected fault: herdr-app')
-    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'svf' }])
+    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
   })
 
   it('no log line holds an address, a name, a folder or the words', async () => {
