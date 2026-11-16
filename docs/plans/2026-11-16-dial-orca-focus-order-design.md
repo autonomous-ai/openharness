@@ -145,12 +145,15 @@ is "harness root" sits in a tab he named "PM"; the dial must say "PM", and today
   its Orca tab's title > the folder, as today. A tab whose title Orca made up ("Terminal 3", or a title the program in
   it set) is still the tab's title: the dial says what the tab says.
 - **An agent with no pane yet** (decided 7): the same read places it by elimination, for its tab's name as for its
-  order; ambiguous, it keeps its folder.
+  order; ambiguous, it keeps its folder. A list cut short (Orca's `truncated`, past its 200 rows by default, or one past
+  256 rows) places nobody: a terminal left out could be the match.
 - **When:** each time the layout is read (a change of the Orca ring's members, section 3), the names follow. Renaming a
   tab with no member change is seen at the next change: nothing polls.
-- **Where:** `observed.ts` names no app: it gains `setPaneNames(adapter, names)`, which replaces that adapter's names by
-  pane id; an agent with no name of its own and a pane with a name there is called by it. The devices process gives it
-  the Orca adapter's names after each read. Only Orca agents; nothing in the core.
+- **Where:** `observed.ts` names no app: it gains `setPaneNames(adapter, names, placed)`, which replaces that adapter's
+  names by pane id (each with whether the person set it) and the panes agents with none of that adapter's were placed at;
+  an agent is called by its pane's name, or its place's, in the precedence above. A place is never its pane: no rest, tap
+  or words reach it. The devices process gives it the Orca adapter's names after each read. Only Orca agents; nothing in
+  the core.
 
 ### Measures
 
