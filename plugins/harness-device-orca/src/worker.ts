@@ -7,14 +7,35 @@ import type { DialState } from './protocol'
 
 let stop: () => Promise<void> = async () => {}
 
+// The wait before an update Orca refused for now is sent again, when Orca names none.
+const RETRY_MS = 1_000
+
+type BarItem = { id: 'dial'; visible: boolean; text?: string }
+
 /** The loop wired to Orca: `dial.get`, `dial.changed`, the status bar item and the log. Returns its stop. */
 export function wire(orca: OrcaWorkerApi, inputs: DialInputs): () => Promise<void> {
   let barRefused = false
+  let latest: BarItem | null = null
+  let cancelRetry = () => {}
 
   function showBar(state: DialState): void {
-    const item = state.state === 'attached' ? { id: 'dial', visible: true, text: state.agent?.name ?? 'Dial' } : { id: 'dial', visible: false }
-    // An Orca without the status bar refuses each update: said once, and the panel is still told.
-    orca.host.call('statusBar.update', item).catch(() => {
+    latest = state.state === 'attached' ? { id: 'dial', visible: true, text: state.agent?.name ?? 'Dial' } : { id: 'dial', visible: false }
+    send(latest, true)
+  }
+
+  // The item is only ever changed by the next one, so a dropped update would stay wrong: one refused for now (rate
+  // limited) is sent again once, if it is still the latest.
+  function send(item: BarItem, retry: boolean): void {
+    orca.host.call('statusBar.update', item).catch((error: { retryable?: boolean; retryAfterMs?: number }) => {
+      if (retry && error.retryable) {
+        if (item !== latest) return
+        cancelRetry()
+        cancelRetry = inputs.after(error.retryAfterMs ?? RETRY_MS, () => {
+          if (item === latest) send(item, false)
+        })
+        return
+      }
+      // An Orca without the status bar refuses each update: said once, and the panel is still told.
       if (barRefused) return
       barRefused = true
       orca.log('dial: status bar unavailable')
@@ -33,6 +54,9 @@ export function wire(orca: OrcaWorkerApi, inputs: DialInputs): () => Promise<voi
 
   return async () => {
     handler.dispose()
+    // A refusal that arrives after this sends nothing again.
+    latest = null
+    cancelRetry()
     await dial.stop()
   }
 }
