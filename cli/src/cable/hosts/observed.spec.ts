@@ -529,6 +529,40 @@ describe('ObservedSource codex and open sessions', () => {
     expect(src.list()[0]).toMatchObject({ host: 'iterm', app: 'iterm' })
   })
 
+  it('scanOpen hands every owner it read to scanned, once a scan', async () => {
+    const scanned = vi.fn()
+    const { src, open, owners, externals, ev } = setup({ scanned })
+    const owner = (id: string, pid: number, harness = false) =>
+      [id, { record: id, pid, engine: 'claude', tty: null, ...(harness ? { harness: true } : {}) }] as const
+    open.set('h', 'harness')
+    owners.set('h', { pid: 11, engine: 'claude' })
+    // Harness-run only: nothing to list, and still told.
+    await src.scanOpen()
+    expect(scanned).toHaveBeenCalledTimes(1)
+    expect(scanned).toHaveBeenLastCalledWith(new Map([owner('h', 11, true)]))
+    // One already listed by its hook, one with no row, one in an app (no terminal).
+    src.ingest(ev('session-start', { sessionId: 'k' }))
+    open.set('k', 'terminal')
+    owners.set('k', { pid: 12, engine: 'claude' })
+    open.set('n', 'terminal')
+    owners.set('n', { pid: 13, engine: 'claude' })
+    open.set('b', 'app')
+    owners.set('b', { pid: 14, engine: 'claude' })
+    externals.set('b', { cwd: '/x/beta', transcriptPath: '/t/b.jsonl' })
+    await src.scanOpen()
+    expect(scanned).toHaveBeenCalledTimes(2)
+    expect(scanned).toHaveBeenLastCalledWith(new Map([owner('h', 11, true), owner('k', 12), owner('n', 13), owner('b', 14)]))
+  })
+
+  it('a source built without scanned scans as before', async () => {
+    const { src, open, owners, externals } = setup()
+    open.set('a', 'terminal')
+    owners.set('a', { pid: 11, engine: 'claude' })
+    externals.set('a', { cwd: '/x/alpha', transcriptPath: '/t/a.jsonl' })
+    await src.scanOpen()
+    expect(src.list().map((a) => a.sessionId)).toEqual(['a'])
+  })
+
   it('scanOpen leaves a session a hook already knows', async () => {
     const { src, open, owners, ev } = setup()
     src.ingest(ev('turn-start'))
