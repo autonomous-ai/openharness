@@ -934,23 +934,24 @@ describe('binding a running process to its session', () => {
         runtimes: seen.runtimes, primaryRuntimeKey: seen.primaryRuntimeKey, processIdentity: seen.processIdentity, hookEvent: 'HermesTerminal' })
       expect(run.deps.attachSession).toHaveBeenCalledOnce()
       expect(findLiveSession).not.toHaveBeenCalled()
-      // A rotation the registry refused, or one that was not new, attaches nothing more.
+      // A refused commit follows nothing; a successful same-session confirmation still follows its committed identity.
       vi.mocked(run.deps.registry.register).mockReturnValueOnce(null).mockReturnValueOnce({ entry: agent({ engine: 'hermes', sessionId: 'S' }), ...meta() } as never)
       await run.binding.bindObservedAgent(seen)
       await run.binding.bindObservedAgent(seen)
-      expect(run.deps.attachSession).toHaveBeenCalledOnce()
+      expect(run.deps.attachSession).toHaveBeenCalledTimes(2)
       // Nor is either said to be a switch: a refused one is tried again in the repair's rhythm.
       expect(said()).toEqual(['[discovery] a1 switched hermes session old → S'])
     })
 
-    it('confirms a resumed Hermes without a switch', async () => {
+    it('follows a resumed Hermes confirmation without reporting a switch', async () => {
       const { run } = withRecord({ sessionId: 'S', resumeOnly: true, lastHookAt: 0 })
       vi.mocked(run.deps.registry.register).mockReturnValue({ entry: agent({ engine: 'hermes', sessionId: 'S' }), ...meta() } as never)
       follow.mockResolvedValue({ sessionId: 'S' })
       await run.binding.bindObservedAgent(hermes())
       expect(run.deps.registry.register).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ sessionId: 'S', source: 'hermes-terminal', hookEvent: 'HermesTerminal' }))
       expect(said()).toEqual([])
-      expect(run.deps.attachSession).not.toHaveBeenCalled()
+      expect(run.deps.attachSession).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ sessionId: 'S' }), false, false, false)
+      expect(run.deps.clients.send).not.toHaveBeenCalled()
     })
 
     it('does nothing while a record waits', async () => {
