@@ -115,9 +115,10 @@ fn available(claude: &ClaudeStatus) -> bool {
 mod tests {
     use super::*;
     use crate::types::{
-        AppState, AppUpdate, ClaudeStatus, CliState, Daemon, DialStatus, MenuAction, MenuItem, Saved, Screen,
+        AppState, AppUpdate, ClaudeStatus, CliState, Daemon, DialStatus, MenuAction, MenuItem, NotifyMode, Saved,
+        Screen,
     };
-    use MenuItem::{Action, Check, Separator, Text};
+    use MenuItem::{Action, Check, Separator, Submenu, Text};
 
     fn dial(attached: bool, fw: Option<&str>) -> DialStatus {
         DialStatus {
@@ -128,11 +129,26 @@ mod tests {
             updating: None,
             problem: None,
             muted: None,
+            notify: None,
         }
     }
 
     fn sound(muted: Option<bool>) -> DialStatus {
         DialStatus { muted, ..dial(true, Some("0.0.95")) }
+    }
+
+    fn notifying(mode: NotifyMode) -> DialStatus {
+        DialStatus { notify: Some(mode), ..sound(Some(false)) }
+    }
+
+    fn notifications(full: bool, you: bool) -> MenuItem {
+        Submenu(
+            "Notifications".into(),
+            vec![
+                Check(MenuAction::NotifyFull, "Full".into(), full),
+                Check(MenuAction::NotifyYou, "Only you".into(), you),
+            ],
+        )
     }
 
     fn state() -> AppState {
@@ -313,6 +329,53 @@ mod tests {
     }
 
     #[test]
+    fn the_notifications_submenu() {
+        assert_eq!(
+            menu(&AppState { dial: Some(notifying(NotifyMode::Full)), ..state() }),
+            vec![
+                text("Dial connected · 0.0.95"),
+                text("Signed in"),
+                text("Claude Code: On"),
+                act(MenuAction::ClaudeOff, "Turn off"),
+                Check(MenuAction::SoundOff, "Sound".into(), true),
+                notifications(true, false),
+                Separator,
+                act(MenuAction::OpenHarness, "Open Harness"),
+                act(MenuAction::Quit, "Quit"),
+            ]
+        );
+        assert_eq!(
+            menu(&AppState { dial: Some(notifying(NotifyMode::You)), ..state() })[5],
+            notifications(false, true)
+        );
+        let silent = DialStatus { muted: None, ..notifying(NotifyMode::Full) };
+        assert_eq!(menu(&AppState { dial: Some(silent), ..state() })[4], notifications(true, false));
+    }
+
+    #[test]
+    fn the_notifications_submenu_is_absent_when_there_is_nothing_to_change() {
+        let full = || Some(notifying(NotifyMode::Full));
+        let mut absent = vec![
+            AppState { dial: None, ..state() },
+            AppState { dial: Some(DialStatus { notify: None, ..notifying(NotifyMode::Full) }), ..state() },
+            AppState { dial: Some(DialStatus { attached: false, ..notifying(NotifyMode::Full) }), ..state() },
+            AppState {
+                dial: Some(DialStatus { updating: Some("0.0.96".into()), ..notifying(NotifyMode::Full) }),
+                ..state()
+            },
+        ];
+        for daemon in [Daemon::Starting, Daemon::Stopped, Daemon::Updating] {
+            absent.push(AppState { daemon, dial: full(), ..state() });
+        }
+        for cli in [CliState::Removed, CliState::Installing, CliState::InstallFailed] {
+            absent.push(AppState { cli, dial: full(), ..state() });
+        }
+        for state in absent {
+            assert!(!menu(&state).iter().any(|item| matches!(item, Submenu(..))), "{state:?}");
+        }
+    }
+
+    #[test]
     fn open_harness_needs_the_desktop_app() {
         let items = menu(&AppState { desktop_installed: false, ..state() });
         assert_eq!(items[items.len() - 2..], [Separator, act(MenuAction::Quit, "Quit")]);
@@ -378,6 +441,14 @@ mod tests {
         assert_eq!(
             menu_log(&menu(&AppState { dial: Some(sound(Some(true))), ..state() })),
             "Dial connected · 0.0.95 | Signed in | Claude Code: On | Turn off | Sound | Open Harness | Quit"
+        );
+        assert_eq!(
+            menu_log(&menu(&AppState { dial: Some(notifying(NotifyMode::Full)), ..state() })),
+            "Dial connected · 0.0.95 | Signed in | Claude Code: On | Turn off | Sound ✓ | Notifications: Full | Open Harness | Quit"
+        );
+        assert_eq!(
+            menu_log(&menu(&AppState { dial: Some(notifying(NotifyMode::You)), ..state() })),
+            "Dial connected · 0.0.95 | Signed in | Claude Code: On | Turn off | Sound ✓ | Notifications: Only you | Open Harness | Quit"
         );
     }
 }

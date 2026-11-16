@@ -544,8 +544,8 @@ fn screen_at(screen: Screen, phase: Phase, lines: Vec<String>) -> View {
 mod tests {
     use super::*;
     use crate::types::{
-        Action, ClaudeStatus, DialStatus, Effect, Event, LoginEvent, MenuAction, MenuItem, Phase, Saved, Screen,
-        UpdateFailure, View,
+        Action, ClaudeStatus, DialStatus, Effect, Event, LoginEvent, MenuAction, MenuItem, NotifyMode, Phase, Saved,
+        Screen, UpdateFailure, View,
     };
 
     /// Second 0 of a minute.
@@ -592,9 +592,10 @@ mod tests {
         items
             .iter()
             .filter_map(|item| match item {
-                MenuItem::Text(label) | MenuItem::Action(_, label) | MenuItem::Check(_, label, _) => {
-                    Some(label.clone())
-                }
+                MenuItem::Text(label)
+                | MenuItem::Action(_, label)
+                | MenuItem::Check(_, label, _)
+                | MenuItem::Submenu(label, _) => Some(label.clone()),
                 MenuItem::Separator => None,
             })
             .collect()
@@ -983,6 +984,7 @@ mod tests {
                 updating: None,
                 problem: None,
                 muted: None,
+                notify: None,
             })
         };
 
@@ -1017,6 +1019,7 @@ mod tests {
             updating: None,
             problem: None,
             muted: None,
+            notify: None,
         };
         let menu = menu_of(&app.handle(Event::WatchLine(line)));
         // Twice over: a click remembers nothing, so the same click gives the same effects.
@@ -1039,6 +1042,7 @@ mod tests {
                 updating: None,
                 problem: None,
                 muted: Some(muted),
+                notify: None,
             })
         };
         let checks = |effects: &[Effect]| -> Vec<MenuItem> {
@@ -1063,6 +1067,64 @@ mod tests {
         assert!(checks(&app.handle(Event::WatchExit(Some(3)))).is_empty());
     }
 
+    fn notifying(mode: NotifyMode) -> Event {
+        Event::WatchLine(DialStatus {
+            attached: true,
+            fw: Some("0.0.95".into()),
+            hw: None,
+            board: None,
+            updating: None,
+            problem: None,
+            muted: None,
+            notify: Some(mode),
+        })
+    }
+
+    #[test]
+    fn a_notifications_click_tells_the_watch_and_draws_the_menu_again() {
+        let mut app = found();
+        let menu = menu_of(&app.handle(notifying(NotifyMode::Full)));
+        // Twice over: a click remembers nothing, so the same click gives the same effects.
+        for _ in 0..2 {
+            for (action, mode) in [(MenuAction::NotifyYou, NotifyMode::You), (MenuAction::NotifyFull, NotifyMode::Full)]
+            {
+                assert_eq!(app.handle(Event::Menu(action)), [Effect::SetNotify(mode), Effect::Menu(menu.clone())]);
+            }
+        }
+    }
+
+    #[test]
+    fn the_check_follows_the_watch_not_the_click() {
+        let mut app = found();
+        let submenus = |effects: &[Effect]| -> Vec<MenuItem> {
+            menu_of(effects).into_iter().filter(|item| matches!(item, MenuItem::Submenu(..))).collect()
+        };
+        let checked = |full, you| {
+            MenuItem::Submenu(
+                "Notifications".into(),
+                vec![
+                    MenuItem::Check(MenuAction::NotifyFull, "Full".into(), full),
+                    MenuItem::Check(MenuAction::NotifyYou, "Only you".into(), you),
+                ],
+            )
+        };
+
+        let effects = app.handle(notifying(NotifyMode::Full));
+        assert_eq!(submenus(&effects), [checked(true, false)]);
+        assert!(has(&effects, &Effect::Log("menu: Dial connected · 0.0.95 | Notifications: Full | Quit".into())));
+
+        // The click's own check flipped natively: the menu drawn again puts it back where the watch says.
+        let effects = app.handle(Event::Menu(MenuAction::NotifyYou));
+        assert_eq!(submenus(&effects), [checked(true, false)]);
+        assert!(!effects.iter().any(|effect| matches!(effect, Effect::Log(text) if text.starts_with("menu:"))));
+
+        let effects = app.handle(notifying(NotifyMode::You));
+        assert_eq!(submenus(&effects), [checked(false, true)]);
+        assert!(has(&effects, &Effect::Log("menu: Dial connected · 0.0.95 | Notifications: Only you | Quit".into())));
+
+        assert!(submenus(&app.handle(Event::WatchExit(Some(3)))).is_empty());
+    }
+
     #[test]
     fn a_dial_line_changes_the_menu_and_the_log() {
         let mut app = found();
@@ -1074,6 +1136,7 @@ mod tests {
             updating: None,
             problem: None,
             muted: None,
+            notify: None,
         };
         let effects = app.handle(Event::WatchLine(line.clone()));
         assert_eq!(rows(&effects)[0], "Dial connected · 0.0.95");

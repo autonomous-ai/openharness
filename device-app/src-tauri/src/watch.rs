@@ -177,6 +177,7 @@ mod tests {
             updating: None,
             problem: None,
             muted: None,
+            notify: None,
         })
     }
 
@@ -197,6 +198,7 @@ mod tests {
             updating: None,
             problem: None,
             muted: Some(true),
+            notify: None,
         };
         assert_eq!(events.recv_timeout(WAIT), Ok(Event::WatchLine(muted)));
         assert_eq!(fake.calls(), ["hardware watch --json"]);

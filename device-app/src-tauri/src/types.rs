@@ -300,6 +300,7 @@ mod tests {
                 updating: None,
                 problem: None,
                 muted: None,
+                notify: None,
             }
         );
         for line in [r#"{}"#, r#"{"error":"x"}"#, r#"{"attached":"yes"}"#] {
@@ -313,6 +314,22 @@ mod tests {
         assert_eq!(muted(r#"{"attached":true,"muted":true}"#).unwrap(), Some(true));
         assert_eq!(muted(r#"{"attached":true}"#).unwrap(), None);
         assert!(muted(r#"{"attached":true,"muted":"yes"}"#).is_err());
+    }
+
+    #[test]
+    fn a_status_line_carries_notify() {
+        let notify = |line: &str| serde_json::from_str::<DialStatus>(line).map(|status| status.notify);
+        assert_eq!(notify(r#"{"attached":true,"notify":"you"}"#).unwrap(), Some(NotifyMode::You));
+        assert_eq!(notify(r#"{"attached":true,"notify":"full"}"#).unwrap(), Some(NotifyMode::Full));
+        assert_eq!(notify(r#"{"attached":true}"#).unwrap(), None);
+        // A newer CLI's mode, or a value of another type, is no mode: the line is still a status.
+        for line in [
+            r#"{"attached":true,"notify":"later"}"#,
+            r#"{"attached":true,"notify":7}"#,
+            r#"{"attached":true,"notify":null}"#,
+        ] {
+            assert_eq!(notify(line).unwrap(), None, "{line}");
+        }
     }
 
     #[test]

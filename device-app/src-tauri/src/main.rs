@@ -270,13 +270,17 @@ mod tests {
     #[test]
     fn every_menu_action_has_its_own_id() {
         use MenuAction::*;
-        let actions = [Install, SignIn, ClaudeOn, ClaudeOff, SoundOn, SoundOff, Update, OpenHarness, Quit];
+        let actions =
+            [Install, SignIn, ClaudeOn, ClaudeOff, SoundOn, SoundOff, NotifyFull, NotifyYou, Update, OpenHarness, Quit];
         for action in actions {
             assert_eq!(menu_action(menu_id(action)), Some(action));
         }
         let ids: std::collections::HashSet<_> = actions.into_iter().map(menu_id).collect();
-        assert_eq!(ids.len(), actions.len());
+        assert_eq!(ids.len(), 11);
+        assert_eq!(menu_id(NotifyFull), "notify_full");
+        assert_eq!(menu_id(NotifyYou), "notify_you");
         assert_eq!(menu_action("sound"), None);
+        assert_eq!(menu_action("notify"), None);
     }
 
     #[test]

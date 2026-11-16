@@ -814,6 +814,7 @@ mod tests {
             updating: None,
             problem: None,
             muted: None,
+            notify: None,
         })
     }
 
@@ -826,6 +827,7 @@ mod tests {
             updating: None,
             problem: None,
             muted: None,
+            notify: None,
         })
     }
 
