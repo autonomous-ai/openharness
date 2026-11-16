@@ -152,7 +152,18 @@ if [ "$dry_run" -eq 1 ]; then
   exit 0
 fi
 
-started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+# gh workflow run prints no run id, and this machine's clock need not agree with GitHub's: the run --wait follows is
+# the one listed after the start that was not listed before it. Listed before anything is tagged, so a failed list
+# leaves nothing behind.
+runs=(gh run list --workflow "$workflow" --event workflow_dispatch --json databaseId)
+if [ "$prepare" -eq 1 ]; then
+  runs+=(--branch main)
+else
+  runs+=(--commit "$head")
+fi
+if [ "$follow" -eq 1 ]; then
+  "${runs[@]}" > "$work/runs" || die "could not list the $workflow runs to tell the new one: nothing started"
+fi
 if [ "$prepare" -eq 1 ]; then
   "${dispatch[@]}"
   echo "  started $workflow on main for $version: nothing is tagged or published"
@@ -177,17 +188,17 @@ fi
 if [ "$follow" -eq 0 ]; then
   exit 0
 fi
-# gh workflow run prints no run id: the run is the newest of this commit created since the dispatch (gh lists the
-# newest first). Until it appears, an earlier run of the same commit is the newest one listed.
+# gh lists the newest first.
 run_id=""
 for try in $(seq 1 12); do
-  run_id="$(gh run list --workflow "$workflow" --commit "$head" --event workflow_dispatch --json databaseId,createdAt \
-    | python3 -c '
+  run_id="$("${runs[@]}" | python3 -c '
 import json, sys
-runs = [run["databaseId"] for run in json.load(sys.stdin) if run["createdAt"] >= sys.argv[1]]
+with open(sys.argv[1]) as before:
+    listed = {run["databaseId"] for run in json.load(before)}
+runs = [run["databaseId"] for run in json.load(sys.stdin) if run["databaseId"] not in listed]
 if runs:
     print(runs[0])
-' "$started")" || run_id=""
+' "$work/runs")" || run_id=""
   [ -z "$run_id" ] || break
   [ "$try" -eq 12 ] || sleep 5
 done
