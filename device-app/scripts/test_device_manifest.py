@@ -376,10 +376,34 @@ class PublishTests(TempTest):
 
     def test_publish_refuses_a_version_not_greater(self):
         self.put("metadata.json", '{"version": "0.1.0"}', generation=7)
-        for version in ("0.1.0", "0.0.9"):
-            with self.subTest(version=version), self.assertRaisesRegex(ValueError, "not greater"):
-                self.publish(version)
+        with self.assertRaisesRegex(ValueError, "not greater"):
+            self.publish("0.0.9")
         self.assertNotIn("cp", [call[1] for call in self.calls()])
+
+    def live_build(self, change=None):
+        """This build live as 0.1.1 at generation 7, its three files in the bucket, as a run that wrote the manifest
+        leaves it; notes and date of that run's own."""
+        live = rules.build_manifest("0.1.1", self.build, "Harness Device 0.1.1", "2026-11-15T09:00:00Z", CDN)
+        if change:
+            change(live)
+        self.put("metadata.json", json.dumps(live), generation=7)
+        for name in FILES:
+            self.put(f"0.1.1/{name}", (self.build / name).read_bytes())
+        return live
+
+    def test_a_rerun_of_the_live_build_writes_nothing(self):
+        # So the run's verify step runs again, after a failed verify or a write gcloud timed out on.
+        live = self.live_build()
+        self.assertEqual(self.publish("0.1.1"), live)
+        self.assertEqual(self.steps(), [("describe", LIVE), ("cat", f"{LIVE}#7")])
+        self.assertEqual(self.generations()[LIVE], 7)
+
+    def test_a_rerun_refuses_other_files_under_the_live_version(self):
+        self.live_build(lambda live: live["platforms"]["darwin-aarch64"].update(signature="b3RoZXI="))
+        with self.assertRaisesRegex(ValueError, "^0.1.1 is already published with other files; release a new version$"):
+            self.publish("0.1.1")
+        self.assertNotIn("cp", [call[1] for call in self.calls()])
+        self.assertEqual(self.generations()[LIVE], 7)
 
     def test_a_refused_read_is_not_a_missing_manifest(self):
         self.fail_call(["describe"], "ERROR: (gcloud.storage.objects.describe) HTTPError 403: no storage.objects.get access")
