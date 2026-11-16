@@ -80,12 +80,23 @@ export interface OpenRouterCompletionOptions {
   temperature?: number
 }
 
-/** OpenRouter's own message for a failed call, never the body around it: a moderation refusal carries
- *  `metadata.flagged_input`, a piece of the prompt, which holds the person's spoken words. */
-function errorMessage(body: string): string {
+/** A code or type that is one short token, never free text. */
+const ERROR_TOKEN = /^[A-Za-z0-9_.-]{1,40}$/
+
+function errorToken(value: unknown): string | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value)
+  return typeof value === 'string' && ERROR_TOKEN.test(value) ? value : null
+}
+
+/** A failed call's `error.code` and `error.type`, only as tokens. Never the message or the rest of the body:
+ *  a moderation refusal carries `metadata.flagged_input`, a piece of the prompt that holds the person's spoken
+ *  words, and the message is not proven never to quote it. */
+function errorTokens(body: string): string {
   try {
-    const message = (JSON.parse(body) as { error?: { message?: unknown } } | null)?.error?.message
-    return typeof message === 'string' ? redactKeys(message.slice(0, 300)) : ''
+    const error = (JSON.parse(body) as { error?: { code?: unknown, type?: unknown } } | null)?.error
+    const code = errorToken(error?.code)
+    const type = errorToken(error?.type)
+    return `${code ? ` · code=${code}` : ''}${type ? ` · type=${type}` : ''}`
   } catch {
     return ''
   }
@@ -124,9 +135,9 @@ export async function openRouterComplete(options: OpenRouterCompletionOptions): 
     })
 
     if (!res.ok) {
-      const said = errorMessage(await res.text().catch(() => ''))
+      const tokens = errorTokens(await res.text().catch(() => ''))
       if (res.status === 402) console.warn('[openrouter] out of credits — top up at https://openrouter.ai/settings/credits')
-      else console.warn(`[openrouter] ${options.model} failed with HTTP ${res.status}${said ? `: ${said}` : ''}`)
+      else console.warn(`[openrouter] ${options.model} failed with HTTP ${res.status}${tokens}`)
       return null
     }
 
