@@ -59,8 +59,9 @@ Rejected:
 
 - Red first, at the layer where the behavior lives: a unit spec of the worker's `engine_stream_store` handler, in
   `cli/src/engines/others/streams.spec.ts`, which already builds `otherStreamRequests` and asks as the core does.
-  `vitest.setup.ts` already gives each run a throwaway `HOME` with `HERMES_HOME` unset, so the default home is
-  `<tmp>/.hermes`. A profile is `<default>/profiles/<name>`. Each `state.db` is written as
+  Each case sets `env.HERMES_HOME` to a folder of its own (`mkdtemp`), restores it and deletes the folder after: on
+  Windows `env.HERMES_HOME` is the person's real `%LOCALAPPDATA%\hermes`, which `vitest.setup.ts`'s throwaway `HOME`
+  does not move. A profile is `<default>/profiles/<name>`. Each `state.db` is written as
   `cli/src/engines/hermes/home.spec.ts` writes it, and `forgetHermesHomes()` runs between cases because the home
   listing is cached:
   - the session in the default home: the answer is its store and has no `home` (fails today: it has one);

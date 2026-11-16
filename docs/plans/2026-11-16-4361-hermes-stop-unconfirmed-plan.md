@@ -30,8 +30,8 @@ its Out of scope are not reopened here.
   `cli/src/lib/sessionRepair.ts`, the OpenClaw branch of the same handler, `cli/src/architecture.coreFiles.txt`.
 - The profile-home race during a stop is out of scope (spec, Follow-ups): no code for it here.
 - The comment at the change says why, in plain sentences, and names #4361 and #4342.
-- No fixed sleeps. The spec uses the throwaway `HOME` `cli/vitest.setup.ts` gives every run (`HERMES_HOME` unset, so
-  the default home is `<tmp>/.hermes`), never the developer's `~/.hermes`.
+- No fixed sleeps. Each case gives `env.HERMES_HOME` a `mkdtemp` folder of its own and restores it after, never the
+  developer's home: on Windows `env.HERMES_HOME` is `%LOCALAPPDATA%\hermes`, which `cli/vitest.setup.ts` does not move.
 - A commit adds its files by name. The two documents under `docs/plans/` are untracked and are no task's.
 - Platforms: every platform runs the worker; the failure was seen on Linux. Tests: macOS (unit, typecheck) and Linux
   (the end-to-end file). The pull request names both.
@@ -99,8 +99,9 @@ unknown-session cases) in `cli/src/engines/others/streams.spec.ts`.
 In `cli/src/engines/others/streams.spec.ts`, add a top-level `describe` gated on the `sqlite3` CLI as `home.spec.ts`
 gates it (`const hasSqlite = ...; describe.skipIf(!hasSqlite)('the Hermes store answer', ...)`). A local
 `makeHome(root, sessions)` writes `hermesDbPath(root)` with the same `sqlite3` command `home.spec.ts` uses
-(`CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT NOT NULL, cwd TEXT);` plus one insert per id). Before and
-after each case: `forgetHermesHomes()` and `rmSync(env.HERMES_HOME, { recursive: true, force: true })`.
+(`CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT NOT NULL, cwd TEXT);` plus one insert per id). Before
+each case: `env.HERMES_HOME` set to a `mkdtemp` folder and `forgetHermesHomes()`; after it, `env.HERMES_HOME` restored,
+`forgetHermesHomes()` again and that folder removed.
 
 A local `ask(sessionId, extra = {})` returns
 `setup().ask(STREAM_STORE, { session: { sessionId, engine: 'hermes', ...extra } })`. Ids: `DEFAULT = '20260727_162325_e25264'`, `PROFILE = '20260921_152236_a1b2c3'`, `UNKNOWN = '20261116_090000_abcdef'`.

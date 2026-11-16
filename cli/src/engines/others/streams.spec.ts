@@ -597,7 +597,7 @@ const hasSqlite = (() => {
 // A Hermes in the default home gained `hermesHome: <default>` on an attach during its stop, and the stop refused the Close (#4361).
 describe.skipIf(!hasSqlite)('the Hermes store answer', () => {
   const DEFAULT = '20260727_162325_e25264', PROFILE = '20260921_152236_a1b2c3', UNKNOWN = '20261116_090000_abcdef'
-  const profile = join(env.HERMES_HOME, 'profiles', 'work')
+  let profile: string
   /** A home whose store holds exactly the sessions given. */
   const makeHome = (root: string, sessions: string[]) => {
     mkdirSync(root, { recursive: true })
@@ -606,8 +606,15 @@ describe.skipIf(!hasSqlite)('the Hermes store answer', () => {
   }
   const ask = (sessionId: string, extra: Record<string, unknown> = {}) =>
     setup().ask(STREAM_STORE, { session: { sessionId, engine: 'hermes', ...extra } })
-  const clean = () => { forgetHermesHomes(); rmSync(env.HERMES_HOME, { recursive: true, force: true }) }
-  beforeEach(() => { clean(); return clean })
+  // Each case has a default home of its own and deletes it after. Not env's: on Windows that is the person's real
+  // %LOCALAPPDATA%\hermes, which vitest.setup.ts does not move. The home listing is cached whatever the home, so it goes too.
+  beforeEach(() => {
+    const was = env.HERMES_HOME, home = mkdtempSync(join(tmpdir(), 'hermes-home-'))
+    ;(env as { HERMES_HOME: string }).HERMES_HOME = home
+    profile = join(home, 'profiles', 'work')
+    forgetHermesHomes()
+    return () => { (env as { HERMES_HOME: string }).HERMES_HOME = was; forgetHermesHomes(); rmSync(home, { recursive: true, force: true }) }
+  })
 
   it('answers no home for a session in the default home', async () => {
     makeHome(env.HERMES_HOME, [DEFAULT])
