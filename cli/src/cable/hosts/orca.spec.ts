@@ -1,4 +1,4 @@
-import { type ChildProcess, execFile, spawn } from 'node:child_process'
+import { ChildProcess, execFile, spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { chmodSync, existsSync, lutimesSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -232,6 +232,14 @@ describe('Orca actions', () => {
     expect(await orcaDeps().run(fake.file, [], 10_000)).toEqual({ code: 3, stdout: '' })
     // A binary that cannot start has no exit code.
     expect(await orcaDeps().run(join(dir, 'missing'), [], 10_000)).toEqual({ code: null, stdout: '' })
+  })
+
+  it('a run its file or an argument refuses before starting, a NUL byte in it, has no exit code and leaves no deadline', async () => {
+    const fake = fakeOrca()
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    onTestFinished(() => { vi.useRealTimers() })
+    expect(await orcaDeps().run(fake.file, ['a\0b'], 10_000)).toEqual({ code: null, stdout: '' })
+    expect(vi.getTimerCount()).toBe(0)
   })
 
   // tmux's answer is what it printed: the pane's process (tmux.ts).
@@ -519,6 +527,20 @@ describe('whether Orca watches focus', () => {
     expect(calls).toHaveLength(3)
   })
 
+  it('a run that rejects is false and is asked again', async () => {
+    const calls: string[][] = []
+    const { orca } = reads({
+      run: async (_file, args) => {
+        calls.push(args)
+        if (calls.length === 1) throw new Error('made up')
+        return { code: 0, stdout: HELP_WATCH }
+      },
+    })
+    expect(await orca.orcaWatchesFocus()).toBe(false)
+    expect(await orca.orcaWatchesFocus()).toBe(true)
+    expect(calls).toHaveLength(2)
+  })
+
   it('two asks at once are one run', async () => {
     const calls: string[][] = []
     const landings: Array<(answer: RunAnswer) => void> = []
@@ -690,6 +712,8 @@ describe("Orca's tab order", () => {
     for (const stdout of ['', 'made up', '{"id":"x","ok":true', listed(group(tab(leaf(1)))).slice(0, -1)]) {
       expect(await order(stdout), stdout).toBeNull()
     }
+    // The real run, of a file it refuses before starting.
+    expect(await createOrcaReads({ ...orcaDeps(), onPath: () => join(dir, 'orca\0'), exists: () => false }).orcaTabs()).toBeNull()
   })
 
   it('a stdout over 1 MiB fails the read', async () => {
@@ -831,6 +855,22 @@ describe("Orca's focus watch", () => {
     const missing = createOrcaReads({ ...orcaDeps(), onPath: () => join(dir, 'missing'), exists: () => false }).watchOrcaFocus(() => {})
     await missing.ended
     missing.stop()
+
+    // The real spawn, of a file it refuses before starting: it throws rather than emits.
+    const refused = createOrcaReads({ ...orcaDeps(), onPath: () => join(dir, 'orca\0'), exists: () => false }).watchOrcaFocus(() => {})
+    await refused.ended
+    refused.stop()
+
+    // Out of descriptors (EMFILE), the real spawn returns a child with no pipes, and its error follows.
+    vi.mocked(spawn).mockImplementationOnce(() => {
+      const child = new ChildProcess()
+      process.nextTick(() => child.emit('error', Object.assign(new Error('spawn EMFILE'), { code: 'EMFILE' })))
+      return child
+    })
+    const noPipes = createOrcaReads({ ...orcaDeps(), onPath: () => join(dir, 'orca'), exists: () => false }).watchOrcaFocus(() => {})
+    await noPipes.ended
+    noPipes.stop()
+    await new Promise((resolve) => setImmediate(resolve))
 
     const none = watching({ onPath: () => null, platform: 'linux' })
     expect(none.spawned).toEqual([])
