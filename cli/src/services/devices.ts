@@ -988,8 +988,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const orcaReads = deps.orcaReads ?? createOrcaReads(apps)
   /** Whether a dial is attached: the fleet tells `watching` for the first and the last alone. */
   let dialOn = false
-  /** Orca's ring as the attached dial has it: its members at the last check, and whether a change during the read under
-   *  way asks for one more. A new one at each detach, so a read from before it lands on nothing. */
+  /** Orca's ring as the attached dial has it: its members with their Orca panes at the last check, and whether a change
+   *  during the read under way asks for one more. A new one at each detach, so a read from before it lands on nothing. */
   let orcaRing: { members?: ReadonlySet<string>; again: boolean } = { again: false }
   /** A read runs: Orca's CLI is asked one at a time, across a detach too. */
   let ordering = false
@@ -1023,10 +1023,12 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       part.call('orca', () => readOrcaOrder(source))
     })
   }
-  /** Asks for a read when Orca's ring has other members than at the last check. With none, the last order is kept. */
+  /** Asks for a read when Orca's ring has other members, or a member another Orca pane, than at the last check: one the
+   *  attach scan found learns its pane at its first hook, and a session resumed in another Orca terminal keeps its id. With
+   *  none, the last order is kept. */
   const orcaMembers = (source: ObservedSource): Promise<void> | undefined => {
     if (!dialOn) return
-    const members = new Set(orcaIds())
+    const members = new Set(orcaIds().map((id) => `${id} ${source.paneOf(id, 'orca') ?? ''}`))
     const was = orcaRing.members
     orcaRing.members = members
     if (members.size === 0 || (was?.size === members.size && [...was].every((id) => members.has(id)))) return
