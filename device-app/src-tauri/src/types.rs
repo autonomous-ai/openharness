@@ -401,8 +401,11 @@ mod tests {
         );
         // So no `dangerous…` key lets plain http or a bad certificate through.
         for key in updater.keys() {
-            assert!(key == "endpoints" || key == "pubkey", "{key}");
+            assert!(["endpoints", "pubkey", "requireSignedVersion"].contains(&key.as_str()), "{key}");
         }
+        // The manifest is not signed: without it, a manifest that pairs a new version with an older release's
+        // signed archive installs that older release.
+        assert_eq!(updater.get("requireSignedVersion"), Some(&json!(true)));
         // On, every local build would need the private key: the release turns it on through --config.
         assert_eq!(config["bundle"].get("createUpdaterArtifacts"), None);
     }
