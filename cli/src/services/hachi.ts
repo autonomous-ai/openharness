@@ -197,7 +197,11 @@ export function startHachi(core: CoreApi, given: Partial<HachiDeps> = {}): { sto
       const reply = await line.request('agent_close', { agentId: running.agentId, sessionId: running.sessionId,
         createdAt: new Date(running.registeredAt).toISOString(), mode: 'now' })
       if (reply.error) throw new Error(String(reply.error))
-      deps.log('[hachi] Hachi is off: closed Hachi, its conversation kept.')
+      // As the close answered (lib/closeAgentService.ts `withoutConversation`): a Hachi turned off before it bound a
+      // conversation was closed without one, and the line said it was kept.
+      deps.log(reply.withoutConversation === true
+        ? '[hachi] Hachi is off: closed Hachi. It had not started a conversation, so none was kept.'
+        : '[hachi] Hachi is off: closed Hachi, its conversation kept.')
     } catch (error) {
       deps.log(`[hachi] Hachi is off, but Hachi could not be closed: ${said(error)}`)
     } finally { line?.close() }
