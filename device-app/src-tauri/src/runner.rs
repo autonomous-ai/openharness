@@ -208,6 +208,13 @@ impl Runner {
                     Event::ClaudeSet(result)
                 });
             }
+            // On the caller's thread: one short write, to the watch running now. With none the change has nowhere to
+            // go, and the dial's next status shows it was not made.
+            Effect::SetSound(on) => {
+                if let Some(watch) = &*shared.watch.lock().unwrap() {
+                    watch.sound(on);
+                }
+            }
             Effect::OpenUrl(url) => shared.open(&[&url], "browser"),
             Effect::OpenDesktop => shared.open(&desktop::open_desktop_args(), "desktop app"),
             // On the caller's thread: one ServiceManagement call, once at start.

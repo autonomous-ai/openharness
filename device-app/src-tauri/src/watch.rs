@@ -37,6 +37,11 @@ impl Watch {
         self.write(line);
     }
 
+    /// A change of the dial's sound on the child's stdin: one of two fixed lines, so nothing else can shape it.
+    pub fn sound(&self, on: bool) {
+        self.write(if on { r#"{"muted":false}"# } else { r#"{"muted":true}"# });
+    }
+
     /// One that has ended takes nothing, and nothing of the line is logged. One that has stopped reading drops it, and
     /// the log says so once, never with the line: both kinds of line fill the same pipe.
     fn write(&self, line: &str) {

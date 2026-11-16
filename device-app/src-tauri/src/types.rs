@@ -166,6 +166,8 @@ pub enum Effect {
     RunLogin,
     CancelLogin,
     SetClaude(bool),
+    /// `true` turns the dial's sound on.
+    SetSound(bool),
     OpenUrl(String),
     OpenDesktop,
     RegisterLoginItem,
