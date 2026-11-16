@@ -33,12 +33,11 @@ and it registers the URL scheme `codex`. `cli/src/cable/hosts/hostDetect.ts` `AP
 
 ## Decided (PM for Diego, 2026-11-16)
 
-1. **The app's id is `codex`, its name "Codex"**: what Diego calls it, and the vendor name the
-   [Naming System](../naming-system.md) keeps. Not "ChatGPT", which is also the name of OpenAI's chat app
-   (`com.openai.chat`), a different app.
+1. **The app's id is `codex`, its name "ChatGPT"** (Diego, 2026-11-16, after trying the first build: the dial's name
+   matches the app's Dock name and icon). The id stays `codex`.
 2. **`codex` is the 17th app id; the firmware keeps `CABLE_MAX_APPS` 16.** The daemon's `apps` frame carries at most 16
    rows, the shown app always among them. Diego decided no firmware release now.
-3. **The firmware's host name table gains `{"codex", "Codex"}`**, committed, not flashed or released.
+3. **The firmware's host name table gains `{"codex", "ChatGPT"}`**, committed, not flashed or released.
 4. **A session the open scan found, with no hook yet, opens its thread too.** The adapter's pane comes from the app
    (`codex`), the engine (`codex`) and the session id (a UUID); it needs no hint.
 5. **A rest of the dial shows the session in the app while the app is in front**, as the Claude app's link does.
@@ -52,7 +51,9 @@ and it registers the URL scheme `codex`. `cli/src/cable/hosts/hostDetect.ts` `AP
     [the host adapter spec](../specs/2026-11-15-device-host-adapter.md) name the Codex app.
 11. **The link goes to the Codex app alone** (`open -b com.openai.codex <url>`), so no other app that registers
     `codex` gets a thread id. The Claude app's link keeps its one-argument form here (Follow-ups).
-12. **Not in this pull request:** the dial following the session the app's window shows (the Claude app has that from
+12. **A hook that names no app learns it from its caller's parents**, once per caller pid, as the open scan does
+    (below, "A hook that names no app learns it from its caller").
+13. **Not in this pull request:** the dial following the session the app's window shows (the Claude app has that from
    its mod's `session.attach`; the Codex app offers no such event that is known).
 
 ## Design
@@ -62,7 +63,7 @@ name table. Nothing is in the core (cli/AGENTS.md rule 7).
 
 ### The app (`hostDetect.ts`)
 
-- `APP_BUNDLES.codex = 'com.openai.codex'`; `NAMES.codex = 'Codex'`, placed after `claude`. `APP_IDS` gets 17 ids.
+- `APP_BUNDLES.codex = 'com.openai.codex'`; `NAMES.codex = 'ChatGPT'`, placed after `claude`. `APP_IDS` gets 17 ids.
 - Through the tables that already read `APP_BUNDLES`, with no new code:
   - `detectApp`: a hook with that bundle id names the app `codex`;
   - `BUNDLE_APPS` and `frontAppId`: the app in front is `codex`, so the dial follows it as it follows every listed app;
@@ -72,6 +73,31 @@ name table. Nothing is in the core (cli/AGENTS.md rule 7).
 - `detectHost`: `bundle === APP_BUNDLES.codex` returns `codex`, beside the Claude app's row, so the agent's nearest
   host is the app, not `terminal`.
 - The comment on `APP_IDS` now says the firmware's bound is 16 and the `apps` frame holds to it (below).
+
+### A hook that names no app learns it from its caller (Diego's first try, 2026-11-16)
+
+On build 0.6.57-dev.70f2905298 Diego's dial showed "Codex · 1 agent" and the app's other open sessions under
+"Other". Read on his Mac with the devices' own scan functions (process names, bundle ids, the rollouts' first-line
+`source`/`originator` only): the scan named all three of the app's open sessions `codex` (their owner is
+`ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex`, origin `codex-app`). A fourth Codex
+session, owned by `~/.codex/packages/app-server-daemon/…/codex` under launchd, is a Codex TUI in a terminal
+(originator `codex-tui`), not the app's.
+
+So each hook moved the app's sessions back: `ingest` sets `app = detectApp(hints)` on every event, and the hints of a
+hook run by the app's Codex name no listed app (their environment is not read here, by rule; whatever they hold, it
+is not `com.openai.codex`).
+
+The fix, in `observed.ts`: when a hook's hints name no listed app (`detectApp` gives the unknown app), the source
+learns the app from the hook's caller and its parents, as the open scan does (`deps.apps`, `scannedApp.ts`): process
+names and bundle ids only.
+- Once per caller pid per session, remembered, as `learnTty` does: the next hook from the same caller keeps the
+  learnt app at once and walks nothing, so the page never flips back and forth.
+- Until the walk answers, the session keeps the app it had (a scan's `codex`), not the unknown app.
+- A walk that names no listed app, or fails, leaves the unknown app. A hook whose hints name an app is unchanged.
+- The host stays `detectHost(hints)`.
+
+This covers every app the scan knows, not only the Codex app: an agent whose hook names no app but whose parents run
+in a listed app's bundle is on that app's page.
 
 ### At most 16 apps on the dial
 
@@ -122,16 +148,16 @@ The adapter is listed in `devices.ts` beside the Claude app's, `inFront: () => c
 
 ### What the dial shows
 
-- The app picker and the face: "Codex", from the `apps` frame's name, on every firmware that reads that frame.
+- The app picker and the face: "ChatGPT", from the `apps` frame's name, on every firmware that reads that frame.
 - The voice hint for an agent the dial cannot talk to ("See it in …") names the agent's host from the firmware's own
-  table. With `{"codex", "Codex"}` it says "See it in Codex"; on the firmware dials run today, which lacks that row, it
+  table. With `{"codex", "ChatGPT"}` it says "See it in ChatGPT"; on the firmware dials run today, which lacks that row, it
   says "See it in Terminal" until the next firmware release. A session only the scan found keeps host `terminal`
   until its first hook (as on `main`), so its hint says "See it in Terminal" on every firmware until then. A Codex app session in Harness's Codex home takes voice
   through `codex queue`, so it seldom shows that hint.
 
 ### Firmware (`devices/harness-device/firmware/main/ui/habitat/ui_habitat.c`)
 
-`host_name`'s table gains `{"codex", "Codex"}`. `test/test_touch_ui.py` holds the table equal to the daemon's `NAMES`
+`host_name`'s table gains `{"codex", "ChatGPT"}`. `test/test_touch_ui.py` holds the table equal to the daemon's `NAMES`
 less its "Terminal" rows, so the two change together. Nothing is flashed or released.
 
 ## Failures and measures
@@ -171,10 +197,10 @@ goes only into the `open` argument, checked against its form; it is never logged
     `codex queue`.
   - Firmware `test/test_touch_ui.py`: the name table matches the daemon's.
 - **End to end** (`cli/e2e/`, the real daemon and a fake dial, as `dialClaudeAppFollow.e2e.ts`): a fake Codex hook with
-  `__CFBundleIdentifier=com.openai.codex` puts its agent on a "Codex" page. Nothing taps or swipes, so nothing reaches
+  `__CFBundleIdentifier=com.openai.codex` puts its agent on a "ChatGPT" page. Nothing taps or swipes, so nothing reaches
   `open`; no real Codex session or app runs.
 - **By Diego, on his Mac and dial** (holds the merge; the PM asks him once the PR is ready): with the Codex app open
-  on its sessions, the dial shows a "Codex" page; a tap on one opens that chat in the app; a rest with the app in front
+  on its sessions, the dial shows a "ChatGPT" page; a tap on one opens that chat in the app; a rest with the app in front
   shows it.
 
 ## Follow-ups
@@ -184,11 +210,12 @@ goes only into the `open` argument, checked against its form; it is never logged
 
 ## Done when
 
-1. Codex app sessions are on a "Codex" page, whether a hook or the open scan found them.
+1. Codex app sessions are on a "ChatGPT" page, whether a hook or the open scan found them, and a hook that names no
+   app does not move them to "Other".
 2. A tap on one opens its chat in the app on macOS; a link that fails brings the app forward, whether a hook or the
    scan found the session.
 3. A rest with the app in front shows the session in it.
 4. The dial's words reach an app session through `codex queue`, as before.
 5. The `apps` frame never carries more than 16 rows, and the shown app is always among them.
-6. The firmware's name table has `{"codex", "Codex"}` and its host tests pass.
+6. The firmware's name table has `{"codex", "ChatGPT"}` and its host tests pass.
 7. The tests under Testing pass, and Diego's check on his dial.
