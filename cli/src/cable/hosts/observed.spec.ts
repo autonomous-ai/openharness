@@ -2297,18 +2297,23 @@ describe('ObservedSource panes', () => {
     expect(src.paneOf(agent.id, 'orca')).toBe(OTHER)
   })
 
+  /** Pane names by pane id, each `[id, title, renamed?]`. */
+  const named = (...names: Array<[string, string, boolean?]>) => new Map(names.map(([id, title, renamed = false]) => [id, { title, renamed }]))
+  /** No agent placed. */
+  const none = new Map<string, string>()
+
   it('an agent in a pane with a name, and none of its own, is called by it', () => {
     const { actions } = fakeActions()
     const { src, ev } = setup({ actions })
     src.ingest(ev('session-start', inOrca()))
-    src.setPaneNames('orca', new Map([[HANDLE, 'PM'], [OTHER, 'Dev']]))
+    src.setPaneNames('orca', named([HANDLE, 'PM'], [OTHER, 'Dev']), none)
     expect(src.list()[0].name).toBe('PM')
     // One heard of after the names were given is called by them at once.
     src.ingest(ev('session-start', { sessionId: 's2', ...inOrca(OTHER) }))
     expect(src.list().find((a) => a.sessionId === 's2')!.name).toBe('Dev')
   })
 
-  it('its own title (the hook\'s) and a user record name win over the pane\'s name', async () => {
+  it('its own title (the hook\'s) and a user record name win over a pane name the person did not set', async () => {
     const { actions } = fakeActions()
     const s = setup({ actions, recordName: async () => 'Mine' })
     s.src.ingest(s.ev('turn-start', { title: 'Tho', ...inOrca() }))
@@ -2318,7 +2323,7 @@ describe('ObservedSource panes', () => {
     await s.src.scanOpen()
     // Its record's name, then a hook that keeps it and says where it runs.
     s.src.ingest(s.ev('turn-stop', { sessionId: 'a', callerPid: 11, cwd: '/x/a', ...inOrca(OTHER) }))
-    s.src.setPaneNames('orca', new Map([[HANDLE, 'PM'], [OTHER, 'Dev']]))
+    s.src.setPaneNames('orca', named([HANDLE, 'PM'], [OTHER, 'Dev']), none)
     const agent = (sessionId: string) => s.src.list().find((a) => a.sessionId === sessionId)!
     expect(agent('s1').name).toBe('Tho')
     expect(agent('a').name).toBe('Mine')
@@ -2328,11 +2333,11 @@ describe('ObservedSource panes', () => {
     const { actions } = fakeActions()
     const { src, ev } = setup({ actions })
     src.ingest(ev('session-start', inOrca()))
-    src.setPaneNames('orca', new Map([[OTHER, 'Dev']]))
+    src.setPaneNames('orca', named([OTHER, 'Dev']), none)
     expect(src.list()[0].name).toBe('proj')
-    src.setPaneNames('orca', new Map([[HANDLE, 'PM']]))
+    src.setPaneNames('orca', named([HANDLE, 'PM']), none)
     expect(src.list()[0].name).toBe('PM')
-    src.setPaneNames('orca', new Map([[OTHER, 'Dev']]))
+    src.setPaneNames('orca', named([OTHER, 'Dev']), none)
     expect(src.list()[0].name).toBe('proj')
   })
 
@@ -2341,13 +2346,13 @@ describe('ObservedSource panes', () => {
     const { src, ev, changes } = setup({ actions })
     src.ingest(ev('session-start', inOrca()))
     src.ingest(ev('session-start', { sessionId: 's2', ...inOrca(OTHER) }))
-    src.setPaneNames('orca', new Map([[HANDLE, 'PM'], [OTHER, 'Dev']]))
+    src.setPaneNames('orca', named([HANDLE, 'PM'], [OTHER, 'Dev']), none)
     changes.mockClear()
-    src.setPaneNames('orca', new Map([[HANDLE, 'Lead'], [OTHER, 'Test']]))
+    src.setPaneNames('orca', named([HANDLE, 'Lead'], [OTHER, 'Test']), none)
     expect(src.list().map((a) => a.name)).toEqual(['Lead', 'Test'])
     expect(changes).toHaveBeenCalledTimes(1)
     changes.mockClear()
-    src.setPaneNames('orca', new Map([[HANDLE, 'Lead'], [OTHER, 'Test']]))
+    src.setPaneNames('orca', named([HANDLE, 'Lead'], [OTHER, 'Test']), none)
     expect(changes).not.toHaveBeenCalled()
   })
 
@@ -2356,8 +2361,8 @@ describe('ObservedSource panes', () => {
     const { src, ev, changes } = setup({ actions })
     src.ingest(ev('session-start', inOrca()))
     changes.mockClear()
-    src.setPaneNames('herdr', new Map([[HANDLE, 'PM']]))
-    src.setPaneNames('orca', new Map([[OTHER, 'PM']]))
+    src.setPaneNames('herdr', named([HANDLE, 'PM']), none)
+    src.setPaneNames('orca', named([OTHER, 'PM']), none)
     expect(src.list()[0].name).toBe('proj')
     expect(changes).not.toHaveBeenCalled()
   })
@@ -2366,7 +2371,54 @@ describe('ObservedSource panes', () => {
     const { actions } = fakeActions()
     const { src, ev } = setup({ actions })
     src.ingest(ev('session-start', { hostHints: { TMUX_PANE: '%3', ORCA_TERMINAL_HANDLE: HANDLE } }))
-    src.setPaneNames('orca', new Map([[HANDLE, 'PM']]))
+    src.setPaneNames('orca', named([HANDLE, 'PM']), none)
+    expect(src.list()[0].name).toBe('proj')
+  })
+
+  it('a pane name the person set wins over the session\'s own name; one they did not set leaves it', async () => {
+    const { actions } = fakeActions()
+    const s = setup({ actions, recordName: async () => 'harness root' })
+    // Diego's PM: the session he named "harness root" in a tab he renamed "PM". Its name from its hook, then its record's.
+    s.src.ingest(s.ev('turn-start', { title: 'harness root', ...inOrca() }))
+    s.open.set('a', 'terminal')
+    s.owners.set('a', { pid: 11, engine: 'claude' })
+    s.externals.set('a', { cwd: '/x/a', transcriptPath: '/t/a.jsonl' })
+    await s.src.scanOpen()
+    s.src.ingest(s.ev('turn-stop', { sessionId: 'a', callerPid: 11, cwd: '/x/a', ...inOrca(OTHER) }))
+    const agent = (sessionId: string) => s.src.list().find((a) => a.sessionId === sessionId)!
+    s.src.setPaneNames('orca', named([HANDLE, 'PM', true], [OTHER, 'PM', true]), none)
+    expect(agent('s1').name).toBe('PM')
+    expect(agent('a').name).toBe('PM')
+    // A tab titled as its pane is Orca's own title: the session's name stays.
+    s.src.setPaneNames('orca', named([HANDLE, 'harness'], [OTHER, 'harness']), none)
+    expect(agent('s1').name).toBe('harness root')
+    expect(agent('a').name).toBe('harness root')
+  })
+
+  it('an agent the caller placed at a pane, with none of that adapter\'s, is called by its name; the place never becomes its pane', async () => {
+    const { actions } = fakeActions()
+    const s = setup({ actions })
+    // Found by the scan, idle: no hook has said its pane.
+    s.open.set('a', 'terminal')
+    s.owners.set('a', { pid: 11, engine: 'claude' })
+    s.externals.set('a', { cwd: '/x/a', transcriptPath: '/t/a.jsonl' })
+    await s.src.scanOpen()
+    const id = s.src.list()[0].id
+    s.src.setPaneNames('orca', named([HANDLE, 'Skill từ SKILL.md']), new Map([[id, HANDLE]]))
+    expect(s.src.list()[0].name).toBe('Skill từ SKILL.md')
+    expect(s.src.paneOf(id, 'orca')).toBeUndefined()
+    expect(s.src.byPane('orca', HANDLE)).toBeUndefined()
+    expect(s.src.capabilities(s.src.list()[0]).focus).toBe(false)
+    // Placed nowhere again: its folder's name.
+    s.src.setPaneNames('orca', named([HANDLE, 'Skill từ SKILL.md']), none)
+    expect(s.src.list()[0].name).toBe('a')
+  })
+
+  it('a place given an agent with a pane of that adapter is not taken', () => {
+    const { actions } = fakeActions()
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('session-start', inOrca()))
+    src.setPaneNames('orca', named([OTHER, 'Dev', true]), new Map([[src.list()[0].id, OTHER]]))
     expect(src.list()[0].name).toBe('proj')
   })
 })

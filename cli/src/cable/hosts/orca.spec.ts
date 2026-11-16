@@ -19,13 +19,18 @@ const FAKE_PATH_ORCA = '/fake/bin/orca'
 
 // Orca's reads, on made-up terminals. `orca terminal list --json --include-visual-layouts` in Orca 1.4.256's shapes.
 const H = (n: number) => `term_00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
-const leaf = (n: number) => ({ type: 'terminal', handle: H(n), tabId: 't', leafId: `l${n}`, title: 'made up', connected: true, active: false })
+const leaf = (n: number, title: unknown = 'made up') => ({ type: 'terminal', handle: H(n), tabId: 't', leafId: `l${n}`, title, connected: true, active: false })
 const panes = (first: unknown, second: unknown) => ({ type: 'pane-split', direction: 'horizontal', first, second })
 const tab = (tree: unknown, title: unknown = 'made up') => ({ tabId: 't', title, activeLeafId: 'l', panes: tree })
 const group = (...tabs: unknown[]) => ({ type: 'group', groupId: 'g', activeTabId: 't', tabs })
 const split = (first: unknown, second: unknown) => ({ type: 'split', direction: 'vertical', first, second })
-const listed = (...roots: unknown[]) => JSON.stringify({ id: 'x', ok: true, result: { terminals: [],
+const listed = (...roots: unknown[]) => listedWith([], ...roots)
+/** The same, with these rows in its flat `terminals` list. */
+const listedWith = (terminals: unknown, ...roots: unknown[]) => JSON.stringify({ id: 'x', ok: true, result: { terminals,
   visualLayouts: roots.map((root, i) => ({ worktreeId: `w${i}`, worktreePath: `/made/up/${i}`, root })), totalCount: 0, truncated: false } })
+/** A row of `terminals`: an agent's has its `agentIdentity`, a shell's none. */
+const row = (n: number, worktreePath: unknown, agentIdentity?: unknown) => ({ handle: H(n), worktreePath, tabId: 't', leafId: `l${n}`,
+  title: 'made up', ...(agentIdentity === undefined ? {} : { agentIdentity }) })
 
 // Orca 1.4.256's `orca terminal --help`, whole.
 const HELP = [
@@ -579,7 +584,7 @@ describe('whether Orca watches focus', () => {
       [{ stdout: HELP_WATCH }, { stdout: listed(group(tab(leaf(1)))) }],
     )
     expect(await app.orca.orcaWatchesFocus()).toBe(true)
-    expect(await app.orca.orcaTabs()).toEqual([{ handle: H(1), title: 'made up' }])
+    expect(await app.orca.orcaTabs()).toEqual({ tabs: [{ handle: H(1), title: 'made up' }], terminals: [] })
     app.orca.watchOrcaFocus(() => {})
     expect(app.calls.map((call) => call.file)).toEqual([APP_ORCA, APP_ORCA])
     expect(app.spawned.map((child) => child.file)).toEqual([APP_ORCA])
@@ -602,14 +607,14 @@ describe('whether Orca watches focus', () => {
 
 describe("Orca's tab order", () => {
   const order = async (stdout: string) => {
-    const tabs = await reads({}, [{ stdout }]).orca.orcaTabs()
-    return tabs && tabs.map((t) => t.handle)
+    const read = await reads({}, [{ stdout }]).orca.orcaTabs()
+    return read && read.tabs.map((t) => t.handle)
   }
 
   it('groups, splits of groups, tabs and pane splits, first then second; worktrees as listed', async () => {
     const stdout = listed(split(group(tab(leaf(1)), tab(panes(leaf(2), panes(leaf(3), leaf(4))))), group(tab(leaf(5)))), group(tab(leaf(6))))
     const { calls, orca } = reads({}, [{ stdout }])
-    expect((await orca.orcaTabs())?.map((t) => t.handle)).toEqual([H(1), H(2), H(3), H(4), H(5), H(6)])
+    expect((await orca.orcaTabs())?.tabs.map((t) => t.handle)).toEqual([H(1), H(2), H(3), H(4), H(5), H(6)])
     expect(calls).toEqual([{ file: FAKE_PATH_ORCA, args: ['terminal', 'list', '--json', '--include-visual-layouts'], timeoutMs: 10_000 }])
 
     // first and second by their names, wherever the JSON puts them.
@@ -620,10 +625,52 @@ describe("Orca's tab order", () => {
   it('each handle carries its tab\'s title, every pane of a split tab the same', async () => {
     // A pane's own title (the leaf's, here 'made up') names the program in it, not the tab: the tab's is the one taken.
     const stdout = listed(group(tab(leaf(1), 'PM'), tab(panes(leaf(2), panes(leaf(3), leaf(4))), 'Dev'), tab(leaf(1), 'Again')), group(tab(leaf(5), 'Terminal 3')))
-    expect(await reads({}, [{ stdout }]).orca.orcaTabs()).toEqual([
-      { handle: H(1), title: 'PM' }, { handle: H(2), title: 'Dev' }, { handle: H(3), title: 'Dev' }, { handle: H(4), title: 'Dev' },
-      { handle: H(5), title: 'Terminal 3' },
+    expect((await reads({}, [{ stdout }]).orca.orcaTabs())?.tabs).toEqual([
+      { handle: H(1), title: 'PM', renamed: true }, { handle: H(2), title: 'Dev', renamed: true }, { handle: H(3), title: 'Dev', renamed: true },
+      { handle: H(4), title: 'Dev', renamed: true }, { handle: H(5), title: 'Terminal 3', renamed: true },
     ])
+  })
+
+  it('a tab whose title is none of its panes\' titles is one the person renamed; one titled as a pane of it is not', async () => {
+    // Diego's main worktree (Orca 1.4.256): a shell, an agent in a tab Orca titled after its pane, and an agent in a tab
+    // he named "PM", its pane "harness root".
+    const diego = group(tab(leaf(1, 'Terminal 3'), 'Terminal 3'), tab(leaf(2, 'Skill từ SKILL.md'), 'Skill từ SKILL.md'), tab(leaf(3, 'harness root'), 'PM'))
+    // A split tab titled as its second pane; titles compared as cleaned; a pane with no title or a bad one.
+    const more = group(tab(panes(leaf(4, 'vim'), leaf(5, 'npm test')), 'npm test'), tab(leaf(6, ' Lead \n dev '), 'Lead dev'),
+      tab(panes(leaf(7, 42), leaf(8, 'a\u0007b')), 'a\u0007b'), tab(leaf(9, 'x'.repeat(70)), 'x'.repeat(64)))
+    expect((await reads({}, [{ stdout: listed(diego, more) }]).orca.orcaTabs())?.tabs).toEqual([
+      { handle: H(1), title: 'Terminal 3' }, { handle: H(2), title: 'Skill từ SKILL.md' }, { handle: H(3), title: 'PM', renamed: true },
+      { handle: H(4), title: 'npm test' }, { handle: H(5), title: 'npm test' }, { handle: H(6), title: 'Lead dev' },
+      { handle: H(7) }, { handle: H(8) }, { handle: H(9), title: 'x'.repeat(64) },
+    ])
+  })
+
+  it('the terminals an agent runs in, with their folder and agent: a shell\'s, and any row it cannot hold to its bounds, left out', async () => {
+    const terminals = [
+      // Diego's: a shell, then two Claude Code agents in the main worktree.
+      row(1, '/Users/d/harness'), row(2, '/Users/d/harness', 'claude'), row(3, '/Users/d/harness', 'claude'),
+      row(4, '/Users/d/other', 'codex'),
+      // A handle named twice keeps its first row.
+      row(2, '/Users/d/elsewhere', 'claude'),
+      { ...row(5, '/w', 'claude'), handle: 'term_0f8e2c1a' }, { ...row(6, '/w', 'claude'), handle: 42 },
+      row(7, 42, 'claude'), row(8, '/w', 42), row(9, null, 'claude'), row(10, '/w', null),
+      row(11, `/${'p'.repeat(4096)}`, 'claude'), row(12, '/w', 'c'.repeat(65)),
+      row(13, `/${'p'.repeat(4095)}`, 'c'.repeat(64)),
+      'made up', null, 42,
+    ]
+    expect((await reads({}, [{ stdout: listedWith(terminals, group(tab(leaf(1)))) }]).orca.orcaTabs())?.terminals).toEqual([
+      { handle: H(2), worktreePath: '/Users/d/harness', agentIdentity: 'claude' },
+      { handle: H(3), worktreePath: '/Users/d/harness', agentIdentity: 'claude' },
+      { handle: H(4), worktreePath: '/Users/d/other', agentIdentity: 'codex' },
+      { handle: H(13), worktreePath: `/${'p'.repeat(4095)}`, agentIdentity: 'c'.repeat(64) },
+    ])
+    // A list that is no array is no terminals; past 256 rows none is read.
+    for (const odd of [undefined, null, 'made up', { 0: row(1, '/w', 'claude') }]) {
+      expect((await reads({}, [{ stdout: listedWith(odd, group(tab(leaf(1)))) }]).orca.orcaTabs())?.terminals, String(odd)).toEqual([])
+    }
+    const many = Array.from({ length: 300 }, (_, i) => row(i + 1, '/w', 'claude'))
+    expect((await reads({}, [{ stdout: listedWith(many) }]).orca.orcaTabs())?.terminals.map((t) => t.handle))
+      .toEqual(Array.from({ length: 256 }, (_, i) => H(i + 1)))
   })
 
   it('a title over 64 characters is cut, one with a control character or not a string is none', async () => {
@@ -631,10 +678,10 @@ describe("Orca's tab order", () => {
       tab(leaf(1), 'x'.repeat(70)), tab(leaf(2), ' Lead \n  dev '), tab(leaf(3), 'a\u0007b'), tab(leaf(4), 42), tab(leaf(5), null),
       tab(leaf(6), ''), { tabId: 't', activeLeafId: 'l', panes: leaf(7) },
     ))
-    const tabs = await reads({}, [{ stdout }]).orca.orcaTabs()
+    const tabs = (await reads({}, [{ stdout }]).orca.orcaTabs())?.tabs
     expect(tabs).toEqual([
-      { handle: H(1), title: 'x'.repeat(64) }, { handle: H(2), title: 'Lead dev' }, { handle: H(3) }, { handle: H(4) }, { handle: H(5) },
-      { handle: H(6) }, { handle: H(7) },
+      { handle: H(1), title: 'x'.repeat(64), renamed: true }, { handle: H(2), title: 'Lead dev', renamed: true }, { handle: H(3) }, { handle: H(4) },
+      { handle: H(5) }, { handle: H(6) }, { handle: H(7) },
     ])
     // None is no title at all, not one that is undefined.
     expect(tabs!.slice(2).every((t) => !('title' in t))).toBe(true)
@@ -726,7 +773,7 @@ describe("Orca's tab order", () => {
     expect(await orca.orcaTabs()).toBeNull()
     expect(fake.argv()).toEqual(['terminal', 'list', '--json', '--include-visual-layouts'])
     writeFileSync(json, listed(root))
-    expect((await orca.orcaTabs())?.map((t) => t.handle)).toEqual([H(1)])
+    expect((await orca.orcaTabs())?.tabs.map((t) => t.handle)).toEqual([H(1)])
   })
 })
 

@@ -171,16 +171,16 @@ describe("the dial follows Orca's focus and tabs", () => {
     const a = inOrca(d, 'a')
     const b = inOrca(d, 'b')
     const c = inOrca(d, 'c')
-    // C's tab first, titled by the person, then a tab split into A and B.
+    // C's tab first, renamed by the person (its pane's title is another), then a tab split into A and B.
     orca.layout([[{ title: 'PM', panes: [c.handle] }, [a.handle, b.handle]]])
 
     // 2. The dial on A, by hand.
     await turnedToFirst(d, dial, a.claude, b.claude)
 
-    // 3. C starts: the ring is read again, and the dial's list comes in Orca's tab order.
+    // 3. C starts, its session named by the person: the ring is read again, and the dial's list comes in Orca's tab order.
     const since = dial.messages.length
     const reads = count(d, '[device] orca order · read')
-    await c.claude.hook('SessionStart', { source: 'startup' })
+    await c.claude.hook('SessionStart', { source: 'startup', session_title: 'harness root' })
     const ordered = [c.claude.id, a.claude.id, b.claude.id]
     const list = await until('the ring in tab order', () => {
       const latest = latestList(dial)
@@ -195,7 +195,7 @@ describe("the dial follows Orca's focus and tabs", () => {
     // 5. The reorder switched nothing in Orca: A's one switch is all.
     expect(orca.runs().map((run) => run.args)).toEqual([`terminal switch --terminal ${a.handle} --json`])
 
-    // 6. C has no name of its own: the dial calls it by its tab's title.
+    // 6. The tab the person renamed names C above its session's name (decided 8).
     expect(list.agents.find((m) => m.id === c.claude.id)?.name).toBe('PM')
   })
 

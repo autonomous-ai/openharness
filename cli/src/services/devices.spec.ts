@@ -11,7 +11,7 @@ import { hcClientDeps, type HcClient, type HcPrompt, type HcSubscriber, type HcT
 import { herdrClientDeps, type HerdrAnswer, type HerdrClient, type HerdrEntry, type HerdrPrompt, type HerdrSubscriber } from '../cable/hosts/herdrClient.js'
 import { HerdrSource } from '../cable/hosts/herdrSource.js'
 import { observedAgentId } from '../cable/hosts/observed.js'
-import type { OrcaChild, OrcaReads } from '../cable/hosts/orca.js'
+import type { OrcaChild, OrcaReads, OrcaTabs, OrcaTerminal } from '../cable/hosts/orca.js'
 import { AppRings } from '../cable/hosts/select.js'
 import { env } from '../config/env.js'
 import { routeVoiceTask } from '../lib/voiceRouter.js'
@@ -270,7 +270,7 @@ const inertOrcaReads: OrcaReads = {
  *  stop ends it, as the child's exit does. */
 function fakeOrcaReads(over: { watches?: boolean | Promise<boolean> } = {}) {
   const probes = { count: 0 }
-  const orders: Array<(tabs: Array<{ handle: string; title?: string }> | null) => void> = []
+  const orders: Array<(read: OrcaTabs | null) => void> = []
   const watches: Array<{ line(handle: string | null): void; end(): void; stopped: boolean }> = []
   const reads: OrcaReads = {
     orcaWatchesFocus: () => { probes.count++; return Promise.resolve(over.watches ?? false) },
@@ -5627,13 +5627,27 @@ describe('Orca\'s ring follows Orca\'s tabs (docs/plans/2026-11-16-dial-orca-foc
   }
   /** Lets what a landing sets off run. */
   const settled = () => new Promise((resolve) => setImmediate(resolve))
-  /** The latest read lands with these tabs: a handle alone is one in a tab with no title. */
-  const land = async (fake: ReturnType<typeof fakeOrcaReads>, tabs: Array<string | { handle: string; title?: string }> | null) => {
+  /** The latest read lands with these tabs, and these terminals an agent runs in: a handle alone is one in a tab with no
+   *  title. */
+  const land = async (fake: ReturnType<typeof fakeOrcaReads>, tabs: Array<string | { handle: string; title?: string; renamed?: true }> | null,
+    terminals: OrcaTerminal[] = []) => {
     const read = fake.orders.at(-1)
     expect(read, 'a read asked').toBeTypeOf('function')
-    read!(tabs && tabs.map((tab) => typeof tab === 'string' ? { handle: tab } : tab))
+    read!(tabs && { tabs: tabs.map((tab) => typeof tab === 'string' ? { handle: tab } : tab), terminals })
     await settled()
   }
+  /** Sessions `ns` running in Orca before the dial came, as their parent processes say, idle since: no hook, so no pane. */
+  const scanned = (...ns: number[]) => {
+    for (const n of ns) {
+      readers.known.set(`sess-${n}`, 'terminal')
+      readers.owners.set(`sess-${n}`, { engine: 'claude', pid: 4240 + n })
+      readers.rows.set(`sess-${n}`, { cwd: '/work/api', transcriptPath: null })
+      readers.working.set(`sess-${n}`, false)
+    }
+    readers.apps.mockResolvedValueOnce(new Map(ns.map((n) => [4240 + n, 'orca'])))
+  }
+  /** Orca's terminal `n`, Claude Code in it, in that folder. */
+  const claudeIn = (n: number, worktreePath = '/work/api', agentIdentity = 'claude'): OrcaTerminal => ({ handle: H(n), worktreePath, agentIdentity })
   const ring = async () => (await host().listAgentSnapshot({ apps: true })).agents.map((a) => a.id)
   /** The names the dial lists, in Orca's ring and in the one ring. */
   const names = async () => {
@@ -5718,6 +5732,68 @@ describe('Orca\'s ring follows Orca\'s tabs (docs/plans/2026-11-16-dial-orca-foc
     await land(fake, [H(1), H(2)])
     expect(fake.orders).toHaveLength(3)
     expect(await ring()).toEqual([agent(1), agent(2)])
+  })
+
+  // Diego's main worktree (Orca 1.4.256, PM 2026-11-16): a shell, an idle agent the attach scan found in a tab Orca titled
+  // after it, and a hooked agent in a tab he renamed "PM" whose session he named "harness root".
+  const diego = [{ handle: H(1), title: 'Terminal 3' }, { handle: H(2), title: 'Skill từ SKILL.md' }, { handle: H(3), title: 'PM', renamed: true as const }]
+
+  it('Diego\'s layout: the agent the scan found takes its tab\'s place and name by elimination, and the renamed tab names PM', async () => {
+    const { port, fake } = withOrca(0)
+    port.observed(hook(3, { title: 'harness root' }))
+    scanned(2)
+    seen.host.watching!(true)
+    await settled()
+    // Another engine's terminal in its folder, and Claude Code's in another folder, are not its.
+    const terminals = [claudeIn(2), claudeIn(3), claudeIn(4, '/work/api', 'codex'), claudeIn(5, '/work/web')]
+    await land(fake, diego, terminals)
+    await land(fake, diego, terminals)
+    expect(fake.orders).toHaveLength(2)
+    expect(await ring()).toEqual([agent(2), agent(3)])
+    expect((await names()).orca).toEqual(['Skill từ SKILL.md', 'PM'])
+  })
+
+  it('the place found by elimination is never its pane: a rest, a tap or words reach no Orca terminal through it', async () => {
+    const { port, fake } = withOrca(0)
+    port.observed(hook(3))
+    scanned(2)
+    seen.host.watching!(true)
+    await settled()
+    await land(fake, diego, [claudeIn(2), claudeIn(3)])
+    await land(fake, diego, [claudeIn(2), claudeIn(3)])
+    expect(await ring()).toEqual([agent(2), agent(3)])
+    host().swipeEnded(agent(2), 'rest')
+    await host().openAgent(agent(2))
+    await host().sendTurn(agent(2), 'run the tests')
+    await settled()
+    expect(orcaRuns.filter(([, args]) => args.includes(H(2)))).toEqual([])
+    // PM's pane is its own, from its hook: a rest there switches Orca.
+    host().swipeEnded(agent(3), 'rest')
+    await vi.waitFor(() => expect(orcaRuns).toContainEqual(['/opt/orca/bin/orca', ['terminal', 'switch', '--terminal', H(3), '--json'], 10_000]))
+  })
+
+  const oneTwoPM = [{ handle: H(1), title: 'One' }, { handle: H(2), title: 'Two' }, { handle: H(3), title: 'PM', renamed: true as const }]
+
+  it('two agents with no pane in one folder place neither', async () => {
+    const { port, fake } = withOrca(0)
+    port.observed(hook(3))
+    scanned(1, 2)
+    seen.host.watching!(true)
+    await settled()
+    await land(fake, oneTwoPM, [claudeIn(1), claudeIn(2), claudeIn(3)])
+    await land(fake, oneTwoPM, [claudeIn(1), claudeIn(2), claudeIn(3)])
+    expect(await ring()).toEqual([agent(3), agent(1), agent(2)])
+    expect((await names()).orca).toEqual(['PM', 'api', 'api'])
+  })
+
+  it('two terminals no agent holds place neither', async () => {
+    const { fake } = withOrca(0)
+    scanned(1)
+    seen.host.watching!(true)
+    await settled()
+    await land(fake, oneTwoPM.slice(0, 2), [claudeIn(1), claudeIn(2)])
+    expect(fake.orders).toHaveLength(1)
+    expect((await names()).orca).toEqual(['api'])
   })
 
   it('an agent no layout names, and one in tmux inside Orca, come after the ranked, in ring order', async () => {
