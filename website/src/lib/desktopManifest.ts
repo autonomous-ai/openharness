@@ -1,7 +1,7 @@
 /**
- * Shared resolver behind every `/desktop/download*` redirect route: fetch the live desktop release
- * manifest, pull one platform's key out of it, and 302 straight to that asset — never a static link,
- * since the artifact path carries the version (`harness/desktop/<version>/...`). Reading the manifest
+ * Shared resolver behind every `/desktop/download*` and `/device/download*` redirect route: fetch a live
+ * release manifest, pull one key out of it, and 302 straight to that asset — never a static link,
+ * since the artifact path carries the version (`harness/<product>/<version>/...`). Reading the manifest
  * is what lets a release be cut with one `make upload-desktop`/`make upload-desktop-linux` and have
  * these links serve the new build immediately, with no web deploy and no version written down
  * anywhere in this repo.
@@ -24,38 +24,50 @@ const METADATA_URL =
  * installer script (`website/scripts/desktop-install.sh`) applies the same rule to the same field;
  * this is that rule, in the other surface — keep the two lists in sync.
  */
-const ALLOWED_ASSET_PREFIXES = [
+const DESKTOP_ASSET_PREFIXES = [
   "https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/desktop/",
   "https://cdn.autonomous.ai/harness/desktop/",
 ];
 
-function unavailable(reason: string): Response {
+export type ManifestDownload = {
+  manifestUrl: string;
+  /** The manifest key whose `url` is the asset. */
+  field: string;
+  /** The only places the redirect may point, for the reason given above `DESKTOP_ASSET_PREFIXES`. */
+  allowedPrefixes: readonly string[];
+  extension: string;
+  /** Names the product in the 503 text. */
+  product: string;
+};
+
+function unavailable(product: string, reason: string): Response {
   // 503, not 404: the page and the route exist, the release manifest is what could not be resolved.
   // Saying which one keeps a broken publish from looking like a broken link.
-  return new Response(`Desktop download is temporarily unavailable (${reason}).\n`, {
+  return new Response(`${product} download is temporarily unavailable (${reason}).\n`, {
     status: 503,
     headers: { "Cache-Control": "no-store, max-age=0", "Content-Type": "text/plain; charset=utf-8" },
   });
 }
 
 /**
- * Fetch the manifest, pull `manifestKey`'s asset, and redirect to it — or a 503 if anything about
- * that is unusable (unreachable manifest, missing key, or a URL that fails the bucket/extension check).
+ * Fetch the manifest, pull `field`'s asset, and redirect to it — or a 503 if anything about that is
+ * unusable (unreachable manifest, missing field, or a URL that fails the prefix/extension check).
  */
-export async function resolveDesktopDownload(manifestKey: string, expectedExt: string): Promise<Response> {
+export async function resolveManifestDownload(download: ManifestDownload): Promise<Response> {
+  const { manifestUrl, field, allowedPrefixes, extension, product } = download;
   let manifest: unknown;
   try {
-    const res = await fetch(METADATA_URL, { cache: "no-store" });
-    if (!res.ok) return unavailable(`manifest HTTP ${res.status}`);
+    const res = await fetch(manifestUrl, { cache: "no-store" });
+    if (!res.ok) return unavailable(product, `manifest HTTP ${res.status}`);
     manifest = await res.json();
   } catch {
-    return unavailable("manifest unreachable");
+    return unavailable(product, "manifest unreachable");
   }
 
-  const entry = (manifest as Record<string, unknown> | null)?.[manifestKey];
+  const entry = (manifest as Record<string, unknown> | null)?.[field];
   const url = (entry as Record<string, unknown> | undefined)?.url;
-  if (typeof url !== "string" || !ALLOWED_ASSET_PREFIXES.some((prefix) => url.startsWith(prefix)) || !url.endsWith(expectedExt)) {
-    return unavailable(`no usable ${manifestKey} entry`);
+  if (typeof url !== "string" || !allowedPrefixes.some((prefix) => url.startsWith(prefix)) || !url.endsWith(extension)) {
+    return unavailable(product, `no usable ${field} entry`);
   }
 
   return new Response(null, {
@@ -66,5 +78,16 @@ export async function resolveDesktopDownload(manifestKey: string, expectedExt: s
       // after a new one was published, which is exactly what this route exists to avoid.
       "Cache-Control": "no-store, max-age=0",
     },
+  });
+}
+
+/** One Desktop asset: `manifestKey`'s entry in the desktop manifest, which must end in `expectedExt`. */
+export async function resolveDesktopDownload(manifestKey: string, expectedExt: string): Promise<Response> {
+  return resolveManifestDownload({
+    manifestUrl: METADATA_URL,
+    field: manifestKey,
+    allowedPrefixes: DESKTOP_ASSET_PREFIXES,
+    extension: expectedExt,
+    product: "Desktop",
   });
 }

@@ -28,6 +28,8 @@ retired; only the host routes below were kept.
 | `/hub/publish` | Review and explicitly publish one portable session snapshot |
 | `/api/community/*` | Same-origin proxy for the backend's community API |
 | `/desktop/download-macos`, `/desktop/download/{macos-arm64,linux-x64,linux-arm64}` | Redirect to the latest build in the desktop manifest (`download-macos` is the Intel build, which every Mac runs; `macos-arm64` the Apple silicon one) |
+| `/device` | Harness Device download page: one Download button for the macOS menu-bar app |
+| `/device/download-macos` | 302 to the dmg in the device manifest (`harness/device/metadata.json`, field `dmg`); 503 until the first release |
 | `/flash-circle.sh` | The dial firmware flasher script |
 | `/install.sh`, `/cli/install.sh`, `/desktop/install.sh` | Redirect to the installers on `cdn.autonomous.ai` |
 | `ac.autonomous.ai`, `fleet.autonomous.ai` | Redirect to `harness.autonomous.ai` |
