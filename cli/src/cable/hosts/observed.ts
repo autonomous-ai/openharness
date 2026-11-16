@@ -148,6 +148,12 @@ interface Entry {
   tty?: string
   /** When the read of ttyPid began, once that read failed. */
   ttyFailedAt?: number
+  /** The process whose parents were walked for its app, a caller whose hints named none, and the app they named: none
+   *  while the walk runs, or when they named no listed app. */
+  appPid?: number
+  callerApp?: string
+  /** A walk of appPid's parents runs: one at a time. */
+  appWalking?: boolean
   /** The app a tap brings forward, from its last event: none for a session the scan found, until its first. */
   bundle?: string
   /** What the permission prompt it waits on asks, from its hook (deviceClaude/asked.ts): '' when it names nothing. */
@@ -400,6 +406,39 @@ export class ObservedSource implements HostSource {
     })
   }
 
+  /**
+   * The app of a caller whose hints name none, from its parents as the open scan reads them: walked once per process, as
+   * its tty is read, and one walk at a time. Until the walk answers, the session keeps the app it had. The answer lands
+   * only while that process is still its caller and its latest hook named no app; a caller it moved to is walked next.
+   * One that names no listed app, or fails, leaves the unknown app.
+   */
+  private learnApp(entry: Entry, pid: number): string {
+    if (entry.appPid === pid) return entry.appWalking ? entry.agent.app : entry.callerApp ?? UNKNOWN_APP
+    if (entry.appWalking) return entry.agent.app
+    entry.appPid = pid
+    entry.callerApp = undefined
+    entry.appWalking = true
+    this.deps.apps!([pid]).then((apps) => apps.get(pid), () => {
+      // A count only: no error text, as a path in it holds the account's name.
+      this.deps.log('[observed] app · not read')
+      return undefined
+    }).then((app) => {
+      entry.appWalking = false
+      entry.callerApp = app
+      // Its latest hook named its app: that stands.
+      if (detectApp(entry.hints) !== UNKNOWN_APP) return
+      // It moved to another process during the walk: that one is walked now.
+      if (entry.caller !== pid) {
+        this.learnApp(entry, entry.caller!)
+        return
+      }
+      entry.agent.app = app ?? UNKNOWN_APP
+      this.locate(entry)
+      this.emit()
+    })
+    return entry.agent.app
+  }
+
   private emit(): void {
     for (const l of [...this.listeners]) l()
   }
@@ -425,9 +464,11 @@ export class ObservedSource implements HostSource {
     const a = entry.agent
     a.lastActivityAt = now
     // A hook says where a session runs: one the open scan found is not known yet until its first, unless its parent
-    // processes named its app. A hook with no hints says it too: the session runs in a terminal nothing names.
+    // processes named its app. A hook whose hints name no app (the Codex app's own Codex) learns it from its caller's
+    // parents.
     a.host = detectHost(e.hostHints)
-    a.app = detectApp(e.hostHints)
+    const named = detectApp(e.hostHints)
+    a.app = named === UNKNOWN_APP && this.deps.apps ? this.learnApp(entry, e.callerPid) : named
     delete a.appPending
     // Every event's own: a session resumed elsewhere must not be typed into the terminal it left.
     entry.hints = e.hostHints
