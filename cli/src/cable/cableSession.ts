@@ -210,6 +210,9 @@ export interface CableAgent {
   caps?: string
 }
 
+/** The agent a dial shows: the name its tile draws, and the display name of the app it runs in. */
+export interface ShownAgent { name: string; app: string }
+
 
 /**
  * One row of the dial's machine wheel.
@@ -296,7 +299,7 @@ import type { FormCommand, FormResult } from './windowForm.js'
 import { deriveLongRecap, extendShortRecap } from '../lib/deviceRecap.js'
 import type { TurnStatsFields } from './turnStats.js'
 import type { Tier } from '../lib/notifyTier.js'
-import { hostDisplayName } from './hosts/hostDetect.js'
+import { APP_IDS, hostDisplayName } from './hosts/hostDetect.js'
 import type { AppList, AppPick } from './hosts/types.js'
 
 export interface RouteDecision {
@@ -381,6 +384,9 @@ export interface CableHost {
   turned?(): void
   /** What a local follow did to this dial: turned it to the agent, or found no tile for it on the ring it walks. */
   localFollowed?(cause: FollowCause, outcome: 'moved' | 'no-tile'): void
+  /** The agent this dial shows changed: as its ring last drew it, or null for none. `dial` is the session that says so,
+   *  which is how a host tells two dials apart. */
+  dialShows?(dial: object, agent: ShownAgent | null): void
   focus(agentId: string): void
   /**
    * "Put this one in front of me" — a NOTIFICATION was tapped.
@@ -647,8 +653,9 @@ export class CableSession {
 
   /** What the dial was last told the agent list is. Empty = it has been told nothing. */
   private lastAgentsKey = ''
-  /** The ids of the last `agents.begin`..`agents.end` push: the ring the dial holds, which restores follow. */
-  private lastRing: string[] = []
+  /** Each agent of the last `agents.begin`..`agents.end` push: the ring the dial holds, which restores follow and the
+   *  shown agent is read from. */
+  private lastRing: Array<Pick<CableAgent, 'id' | 'name' | 'host'>> = []
   /** What the dial was last told the app list is: the shown app and each app's counts. Empty = none. */
   private lastAppsKey = ''
   /** When the agent list last went down the cable, by performance.now(): the machine list's pacing, which a wall clock set
@@ -717,7 +724,31 @@ export class CableSession {
    * A single field cannot disagree with itself. Both sides write it on a real move, the last write wins,
    * and it is the only thing the daemon ever re-asserts.
    */
-  private desiredFocus = ''
+  private get desiredFocus(): string { return this.focusRecord }
+  /** Every write of the record comes through here, so none can move the dial without the host hearing what it shows. */
+  private set desiredFocus(agentId: string) {
+    this.focusRecord = agentId
+    this.reportShown()
+  }
+  private focusRecord = ''
+  /** What this session last told the host its dial shows. */
+  private shown: ShownAgent | null = null
+  /**
+   * The record's agent as the ring last sent draws it, or none: the record alone outlives an unplug, can name an agent
+   * on another tab, and is not cleared when its agent leaves. Told to the host only when it changed.
+   */
+  private reportShown(): void {
+    const entry = this.lastRing.find((a) => a.id === this.focusRecord)
+    // A host is outside text: only the table's own ids name an app, never a key every object has (`constructor`).
+    const shown = entry
+      ? { name: entry.name, app: entry.host !== undefined && APP_IDS.includes(entry.host) ? hostDisplayName(entry.host) : 'Harness' }
+      : null
+    if (shown?.name === this.shown?.name && shown?.app === this.shown?.app) return
+    this.shown = shown
+    // This dial's fault, never the move, the push or the close that got here: thrown out of a close, it would end the
+    // whole devices process.
+    try { this.host.dialShows?.(this, shown) } catch (error) { this.fault(error) }
+  }
   /** A superseded list refresh can record the selection without ever writing its focus frame. */
   private appFocusUnsent = false
   /** Keep list-before-focus writes ordered, coalescing superseded desktop selections. */
@@ -1120,6 +1151,8 @@ export class CableSession {
     this.petRetried.clear()
     for (const timer of this.petRetryTimers) clearTimeout(timer)
     this.petRetryTimers.clear()
+    // Last, with the ring emptied above: a host that hears it reads a session already closed.
+    this.reportShown()
   }
 
   // ── inbound ───────────────────────────────────────────────────────────────────────────────────────
@@ -2588,7 +2621,9 @@ export class CableSession {
     // how the dial tells "the app is shut" from "this tab is empty" when both send zero agents. `view`:
     // with no window, rows that are this computer's agents rather than nothing.
     await this.send({ t: 'agents.end', total, tab, ...(view ? { view } : {}) })
-    this.lastRing = agents.map((a) => a.id)
+    this.lastRing = agents.map(({ id, name, host }) => ({ id, name, host }))
+    // A rename, or the shown agent leaving the ring, reaches the host with no move of the dial.
+    this.reportShown()
 
     // The list just changed shape under the dial, so say again which agent both screens are on.
     //
@@ -2651,7 +2686,7 @@ export class CableSession {
     // The ring last sent, not a fresh read: the read runs the app filter, which can switch the shown app, and an agent
     // marked restored before the dial holds its tile would never get its recaps. One left out is restored by the push
     // that puts it in the ring.
-    for (const id of this.lastRing) {
+    for (const { id } of this.lastRing) {
       // Marked as it is ASKED FOR, not as it is sent: the answer is a cloud round trip, and a tick
       // arriving mid-loop would otherwise start a second walk over the same agents.
       if (this.restored.has(id)) continue
@@ -2662,7 +2697,7 @@ export class CableSession {
     return this.queued(async () => {
       // The ring can have moved while the reads were out. A tile the dial no longer holds would drop its recaps, so it
       // is not sent and not marked: the push that brings it back restores it.
-      const held = new Set(this.lastRing)
+      const held = new Set(this.lastRing.map((a) => a.id))
       for (const row of rows) {
         if (!held.has(row.id)) { this.restored.delete(row.id); continue }
         // Oldest first, so the newest ends up on top of the tile's stack.
