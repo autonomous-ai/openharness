@@ -26,7 +26,7 @@ import { CableFleet, testDialDiscovery, type CableFleetOptions } from '../cable/
 import { isLocalOnly } from '../lib/cardUpdate.js'
 import { TurnStats, type TurnStatsFields } from '../cable/turnStats.js'
 import { cableEventFor, cableStepFor, cableQuestionCloseFor, cableQuestionFor, DaemonCableHost } from '../cable/cableHost.js'
-import { CableSession, SHOWN_ONLY_PREFIX, type FollowCause } from '../cable/cableSession.js'
+import { CableSession, SHOWN_ONLY_PREFIX, type DialStatus, type FollowCause } from '../cable/cableSession.js'
 import type { HostAdapter, Pane } from '../cable/hosts/adapter.js'
 import { createClaudeAppAdapter } from '../cable/hosts/claudeApp.js'
 import { createCodexAppAdapter } from '../cable/hosts/codexApp.js'
@@ -47,6 +47,7 @@ import { createTmuxAdapter } from '../cable/hosts/tmux.js'
 import type { HostAgentState } from '../cable/hosts/types.js'
 import { createVscodeAdapter } from '../cable/hosts/vscode.js'
 import { createWeztermAdapter } from '../cable/hosts/wezterm.js'
+import { NOTIFY_MODE_FILE, NotifyModeStore, type NotifyMode } from '../cable/notifyMode.js'
 import { PetStore } from '../cable/pets/store.js'
 import { DialLog } from '../cable/dialLog.js'
 import { DialVerdicts } from '../cable/dialPortVerdicts.js'
@@ -63,7 +64,7 @@ import { fileStamp, listProcesses, processAlive } from '../lib/sessionSearch/ext
 import { setVoiceRouterDeviceConnected, setVoiceRouterSessions, shutdownVoiceRouter } from '../lib/voiceRouter.js'
 import { createTally, createTierDecider, type Tier, type TierDecision, type TierInput } from '../lib/notifyTier.js'
 import { createPartGuard } from './devicesGuard.js'
-import { attachHandler, dialStream, frontHandler, tabHandler, tabsStream, type DevicesListener, type ListenerHandler, type ListenerStreamHandler } from './devicesListener.js'
+import { attachHandler, dialStream, frontHandler, notifyHandler, tabHandler, tabsStream, type DevicesListener, type ListenerHandler, type ListenerStreamHandler } from './devicesListener.js'
 import { FLEET_FALLBACKS, startFleet, type Fleet } from './fleet.js'
 
 export { DEVICES_REQUESTS }
@@ -188,6 +189,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     log,
   })
   const part = createPartGuard({ log, faults: deps.faults })
+  // The Notifications setting (docs/plans/2026-11-16-dial-agent-notify-design.md) is this computer's, not the dial's: the
+  // windows and the watch hear it with every dial status, and the owner's other machines and the Devices tab never do.
+  const notifyMode = new NotifyModeStore(join(core.dataDir, NOTIFY_MODE_FILE))
+  const sayStatus = (status: DialStatus): void =>
+    core.clients.sendLocal({ type: 'dial_status', payload: { ...status, notify: notifyMode.get() } })
 
   // What the windows on this computer last said: the desk the dial walks and whether it is in front, and
   // which window has the person's attention for a spoken selection, a visit or a form.
@@ -465,7 +471,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // machines, through the encrypted device-management event.
     dialStatus: (status) => {
       revision++
-      core.clients.sendLocal({ type: 'dial_status', payload: status as unknown as Record<string, unknown> })
+      sayStatus(status)
       core.clients.devicesChanged({ status, revision })
     },
     // Words spoken on the overview belong to whichever agent the window's palette picks.
@@ -618,16 +624,20 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       const turn = ended.get(agentId) // a sub-agent's summary leaves the main turn's numbers alone
       ended.delete(agentId)
       const who = cableHost.describe(agentId)
-      // Decided once already, by the recaps (services/recaps.ts), for the phone as well: the dial follows it and
-      // nobody is asked again. A card without one (a cloud agent's, a recaps from before) is decided here.
+      const onlyYou = notifyMode.get() === 'you'
+      // Decided once already, by the recaps (services/recaps.ts) or another machine, for the phone as well: the dial
+      // follows it and nobody is asked again, but Only you is this computer's, so an ordinary turn's alert is lowered
+      // here. A card without one (a cloud agent's, a recaps from before) is decided here.
       if (event.tier) {
-        tally(who?.name ?? '', event.tier, 'recaps', 'decided upstream', 0)
-        void cable.summary(agentId, recap, event.text, event.tier, event.fullText, false)
+        const lowered = onlyYou && event.tier === 'alert' && event.failed !== true
+        if (lowered) tally(who?.name ?? '', 'list', 'rule:only-you', 'only-you', 0)
+        else tally(who?.name ?? '', event.tier, 'recaps', 'decided upstream', 0)
+        void cable.summary(agentId, recap, event.text, lowered ? 'list' : event.tier, event.fullText, false)
         return
       }
       // Returned, so the agent's next card waits behind this one (inOrder): a late recap must not follow turn.started.
       return tierOf({ agent: who?.name ?? '', engine: who?.engine ?? '', recap, durationS: turn?.durationS ?? null,
-        stats: turn?.stats ?? {}, subagent: false, onScreen: false, failed: event.failed === true })
+        stats: turn?.stats ?? {}, subagent: false, onScreen: false, failed: event.failed === true, onlyYou })
         .then((d) => d.tier, () => 'list' as const)
         .then((tier) => { void cable.summary(agentId, recap, event.text, tier, event.fullText, false) })
     }
@@ -847,6 +857,17 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   }), { inboxPoll, inboxGone, stop: undefined })
   /** Every poll held for the core's calls: that core went, or the devices stop. */
   const endHookCalls = (): void => { part.call('inbox', () => inbox.closeAll()) }
+  /** The watch's change of the Notifications setting: kept, then said at once with the dial's status, which is how the
+   *  watch's line, and the menu's check, follow it. No revision: the dial itself did not change. */
+  const setNotify = (mode: NotifyMode): { mode: NotifyMode } | { error: string } => {
+    if (!notifyMode.set(mode)) {
+      log('[device] notifications · not saved')
+      return { error: 'WRITE_FAILED' }
+    }
+    sayStatus(cableHost.currentDialStatus())
+    log(`[device] notifications · ${mode}`)
+    return { mode }
+  }
   // The core's calls failed to none when its link dropped: a transcript for a poll nobody holds would wait for nothing.
   deps.onCoreGone?.(endHookCalls)
 
@@ -860,6 +881,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     tab: tabHandler((tab) => part.call('dial', () => tabReported(tab))),
     tabs: tabs.handler,
     dial: dial.handler,
+    notify: notifyHandler((mode) => {
+      let answer: { mode: NotifyMode } | { error: string } = { error: 'FAILED' }
+      part.call('dial', () => { answer = setNotify(mode) })
+      return answer
+    }),
   }, log)
     .catch((): null => { log('[devices] listener not opened · failed'); return null })
 
