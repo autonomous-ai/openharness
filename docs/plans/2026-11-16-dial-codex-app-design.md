@@ -136,7 +136,7 @@ One `HostAdapter`, `id: 'codex'`, `tap: 'instead'` (the link brings the app forw
   change.
 - A tap and a rest at once: as the Claude app's, `open.ts` holds one tap at a time per agent, the adapter one rest at a
   time per agent, and two runs of one link do no harm.
-- A Codex CLI run in a terminal inside the app carries the app's bundle id too, so it is on the "Codex" page and its
+- A Codex CLI run in a terminal inside the app carries the app's bundle id too, so it is on the "ChatGPT" page and its
   tap runs its thread's link. The app may open that chat or only come forward; either is accepted.
 
 The Claude app adapter (`claudeApp.ts`) does the same with its own link. The shared part (the mac check, the one-link-
@@ -182,7 +182,7 @@ goes only into the `open` argument, checked against its form; it is never logged
 ## Testing
 
 - **Unit:**
-  - `hostDetect.spec.ts`: the bundle id names app and host `codex`, name "Codex". Its test "APP_IDS has 16 ids, at
+  - `hostDetect.spec.ts`: the bundle id names app and host `codex`, name "ChatGPT". Its test "APP_IDS has 16 ids, at
     most 16" becomes 17 ids, and the "at most 16" bound moves to the `apps` frame's test.
   - `frontApp.spec.ts`: `com.openai.codex` in front is `codex`.
   - `scannedApp.spec.ts`: a Codex process under `/Applications/ChatGPT.app` is the `codex` app.
