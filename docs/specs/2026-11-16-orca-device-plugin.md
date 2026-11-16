@@ -92,8 +92,9 @@ watch`. This adds a second stream type, `dial`, in the devices process. The core
 
   `name` is the name the dial draws on that agent's tile: the `name` of its entry in the ring the session last sent
   (this covers Harness agents, agents outside Harness, other machines' agents and cloud agents alike). `app` is the
-  display name of that entry's `host` from `cable/hosts/hostDetect.ts`'s own table ("Harness", "Orca", "Claude",
-  "WezTerm", "Terminal", …), so the plugin needs no copy of it; an entry with no `host`, or one the table does not
+  name the dial's own app page gives that entry's `host` (`appDisplayName` in `cable/hosts/hostDetect.ts`: "Harness",
+  "Orca", "Claude", "WezTerm", "Terminal", …; an agent in a terminal the daemon does not know reads "Other", as on the
+  dial, never Apple's "Terminal"), so the plugin needs no copy of it (PM, 2026-11-16); an entry with no `host`, or one the table does not
   know, has `app` "Harness". A name over 64 characters is cut to 64 (by code point), so a line stays under 400 bytes
   in any script. No agent id, terminal handle, path, transcript or prompt is in a line.
 - **"The agent the dial shows":** a cable session's record of where the dial is (`desiredFocus`,
