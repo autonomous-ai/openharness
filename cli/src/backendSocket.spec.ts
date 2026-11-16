@@ -346,6 +346,21 @@ describe('agent_update opened: one "last used" for every app', () => {
     expect(commander).not.toHaveBeenCalled()
   })
 
+  it('answers and pushes the same service frame fields, including their null and omission defaults', async () => {
+    let part: Record<string, unknown> = { dsh: 'drawing', dshName: 'Drawing', viewerUrl: 'http://127.0.0.1:7000',
+      viewerName: 'Preview', verdict: null, browser: { state: 'ready' } }
+    socket.framePartsProvider = () => () => part
+    const shown = await update({ agentId, opened: true }, 'parts-on')
+    expect(shown.agent).toMatchObject(part)
+    expect(JSON.stringify(pushes()[0].payload.agent)).toBe(JSON.stringify(shown.agent))
+    part = {}
+    vi.setSystemTime(OPENED + AGENT_OPENED_THROTTLE_MS)
+    const hidden = await update({ agentId, opened: true }, 'parts-off')
+    expect(hidden.agent).toMatchObject({ dshName: null, viewerUrl: null, viewerName: null, verdict: null })
+    expect(hidden.agent).not.toHaveProperty('browser')
+    expect(JSON.stringify(pushes().at(-1).payload.agent)).toBe(JSON.stringify(hidden.agent))
+  })
+
   it('answers a repeat inside the throttle with the current frame, and stamps and tells no one', async () => {
     await update({ agentId, opened: true }, 'open-1')
     vi.setSystemTime(OPENED + AGENT_OPENED_THROTTLE_MS - 1)

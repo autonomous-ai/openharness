@@ -39,7 +39,7 @@ import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { availableParallelism, totalmem } from 'node:os'
 import { join, resolve } from 'node:path'
-import { AGENT_BROWSER_REQUESTS, mayOpenBrowser, type AgentLife, type Asker, type CoreApi, type CorePorts, type ServiceRequests } from '../core/api.js'
+import { AGENT_BROWSER_REQUESTS, mayOpenBrowser, type AgentLife, type AgentView, type Asker, type CoreApi, type CorePorts, type ServiceRequests } from '../core/api.js'
 import { sweepAgentTmpWhenDue } from '../lib/agentTmp.js'
 import { browserTools } from '../lib/browserToolsAsset.js'
 import type { ProductUsageMetric } from '../lib/productUsageContract.js'
@@ -81,9 +81,6 @@ const TOOL_SERVER = ['node', '/opt/harness-browser/browser-tools.mjs']
 const NAMED_ON_WINDOWS: ReadonlySet<string> = new Set(['agent_browser_start', 'agent_browser_stop', 'agent_browser_run', 'agent_browser_window'])
 
 export interface AgentBrowserOptions {
-  /** How the core hears a browser's state when this runs in a process of its own (services/agentBrowserProcess.ts);
-   *  absent, the core is asked to send the agent's frame again, and reads the state through the port. */
-  told?: (agentId: string, state: BrowserState | undefined) => void
   /** Whether what it follows of the agents is caught up: in its own process, the core's first answer since it connected
    *  (services/followLink.ts `ready`); in the core's, at once. */
   followed?: () => Promise<boolean>
@@ -141,7 +138,6 @@ function named(error: unknown): Reply {
  */
 function unsupported(ports: Pick<CorePorts, 'agentBrowser'>): ServiceRequests {
   ports.agentBrowser = {
-    frameContext: () => undefined,
     stream: () => false,
     streamInput: () => false,
     streamClosed: () => {},
@@ -233,9 +229,8 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
       // A browser that leaves ready takes its tool server with it: what runs or waits is answered the state now.
       if (shown?.state !== 'ready') toolServers.end(agentId, 'ENDED')
       if (shown?.state === 'ready') notices.ready(agentId)
-      if (options.told) return options.told(agentId, shown)
-      const session = core.agents.byAgent(agentId)
-      if (session) core.agents.sync(session)
+      const session = live.get(agentId)
+      if (session) core.agents.publishFrame?.(session, shown ? { browser: shown } : {})
     },
     closeViewers: agentId => streams.closeAgent(agentId),
     measure: count,
@@ -243,7 +238,7 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
   })
 
   /** The live agents, as the core told of them (`CoreApi.agents.follow`): each with its row as it began to run here. */
-  const live = new Map<string, RegisteredSession>()
+  const live = new Map<string, AgentView>()
   /** The agents whose browser this service started and has not stopped since. */
   const attached = new Set<string>()
   /** Only Starts still waiting for catch-up: a later Stop/end/purge must win before that answer arrives. */
@@ -330,7 +325,14 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
   /** What happens to agents, as every service that follows them hears it. */
   const heard = (event: AgentLife): void => {
     if (event.kind === 'running') {
+      const prior = live.get(event.session.agentId)
+      if (prior && event.session.frameEpoch && prior.frameEpoch !== event.session.frameEpoch) {
+        live.delete(event.session.agentId)
+        if (attached.has(event.session.agentId)) void browsers.refresh(event.session.agentId)
+      }
       live.set(event.session.agentId, event.session)
+      const shown = browsers.state(event.session.agentId)
+      core.agents.publishFrame?.(event.session, shown ? { browser: shown } : {})
       adopt(event.session)
       startFor(event.session)
     } else if (event.kind === 'ended') {
@@ -401,10 +403,9 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
   }
   if (existsSync(statePath)) begin()
   // What happens to agents: told at once every live agent, then each change (in its own process, once it connects).
-  const unfollow = core.agents.follow?.(heard)
+  const unfollow = core.agents.follow?.(heard, { frames: true })
 
   ports.agentBrowser = {
-    frameContext: agentId => browsers.state(agentId),
     // A viewer's stream (agentBrowser/streams.ts). Who may open one is the core's word, with whether it is a window here.
     stream(connId, type, payload, asker) {
       // An open without who asked is no open: never a browser on a guess.

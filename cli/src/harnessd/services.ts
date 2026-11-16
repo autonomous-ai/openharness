@@ -29,6 +29,8 @@ export interface ServiceSpec {
   /** What happens to agents that this process's services must not miss while it is down, by service: the core holds
    *  each of these for that service from its own start until the service hears it (core/agentLife.ts). */
   hears?: Readonly<Record<string, readonly HeldAgentLife[]>>
+  /** Display fields a service may publish, and row fields required while they are shown. */
+  frameParts?: Readonly<Record<string, { fields: readonly string[]; having?: readonly string[] }>>
 }
 
 /** The kinds of what happens to an agent that a service in its own process can be held (core/api.ts `AgentLife`): a stop
@@ -68,7 +70,8 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   // Started only once something needs it (core/viewersWake.ts): a harness here, a Store or viewer request, or
   // the release's own harnesses to put in place. It idled at about 96 MiB on every computer, and few harnesses
   // have a viewer: 1 of 14 on one real machine, 2 of 35 on another (2026-10-12).
-  viewers: { services: ['viewers', 'store'], heapLimitMiB: 512, rssLimitMiB: 1_024, onDemand: true, askedSince: 5 },
+  viewers: { services: ['viewers', 'store'], heapLimitMiB: 512, rssLimitMiB: 1_024, onDemand: true, askedSince: 5,
+    frameParts: { viewers: { fields: ['dsh', 'dshName', 'viewerUrl', 'viewerName', 'verdict'], having: ['dsh'] } } },
   // The git work (workspaces, the project readers) runs in git's own processes, and the monitor's
   // samples in ps's and ioreg's; what it holds is the agents the core sent it and one parsed sample.
   // The monitor parses up to 8 MB of ioreg output per Monitor poll on a Mac with a GPU, hence more
@@ -130,7 +133,7 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   // Browser never pays for it.
   // A purge and a pane's new agent are held for it while it is down: a deleted agent's login, and a pane's logins that go
   // with the pane (decision 19).
-  agentBrowser: { services: ['agentBrowser'], heapLimitMiB: 256, rssLimitMiB: 512, onDemand: true, askedSince: 7, hears: { agentBrowser: ['purged', 'taken'] } },
+  agentBrowser: { services: ['agentBrowser'], heapLimitMiB: 256, rssLimitMiB: 512, onDemand: true, askedSince: 7, hears: { agentBrowser: ['purged', 'taken'] }, frameParts: { agentBrowser: { fields: ['browser'] } } },
 }
 
 /** Every service this build can run outside the core's process: what `HARNESSD_SERVICES` names. */

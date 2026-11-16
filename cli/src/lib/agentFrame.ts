@@ -192,15 +192,13 @@ export interface AgentFrameContext {
   /** `registry.terminalAvailable(agentId)` — the caller already holds the registry. */
   terminalAvailable: boolean
   tokenUsage?: AgentTokenUsage | null
-  /** The DSH companions' state for this agent; absent when the caller has none to give. */
-  dsh?: AgentDshContext | null
+  /** Service projections read after asynchronous work, fenced to the run that began this frame. */
+  parts?: () => Readonly<Record<string, unknown>>
   /** What the models service says of the grid the agent is on (core/api.ts `ModelsPort.annotation`): from
    *  memory, never I/O. Absent when the caller has none to give, and then the frame says nothing of it. */
   gridAnnotation?: (grid: AgentGridTarget) => GridAnnotation | null
   /** What a message to the agent waits for now (core/input.ts); absent, nothing. Read as the frame is built. */
   waitingFor?: () => 'engine' | null
-  /** The agent's browser; absent for an agent without one, and then the frame has no `browser`. */
-  browser?: AgentBrowserFrame
 }
 
 /**
@@ -242,7 +240,7 @@ const NAMED_STATES = new Set<string>([...Object.values(OPENCLAW_STATES), ...Obje
 
 export async function agentFrame(
   s: RegisteredSession,
-  { selectedModel, workspace, terminalAvailable, dsh, tokenUsage, activity: contextActivity, gridAnnotation, waitingFor, browser }: AgentFrameContext,
+  { selectedModel, workspace, terminalAvailable, parts, tokenUsage, activity: contextActivity, gridAnnotation, waitingFor }: AgentFrameContext,
 ): Promise<AgentFrame> {
   // The git context is git's own display projection and keeps reading git directly; the frame's
   // `project` goes through the SCM seam. Both resolve through agentProject's shared reader, so the
@@ -255,7 +253,7 @@ export async function agentFrame(
     return value
   })
   const [project, updatedAt, gitContext] = await Promise.all([describeScmProject(s.cwd), lastActivityAt(s), context])
-  return {
+  const frame: AgentFrame = {
     id: s.agentId,
     sessionId: s.sessionId,
     userId: '',
@@ -307,11 +305,11 @@ export async function agentFrame(
     gitContext,
     // All five are real answers when null, for the reason the module doc gives: a frame that omits
     // them would erase a viewer URL or a verdict an earlier frame had reported.
-    dsh: dsh?.id ?? s.dsh ?? null,
-    dshName: dsh?.name ?? null,
-    viewerUrl: dsh?.viewerUrl ?? null,
-    viewerName: dsh?.viewerName ?? null,
-    verdict: dsh?.verdict ?? null,
+    dsh: s.dsh ?? null,
+    dshName: null,
+    viewerUrl: null,
+    viewerName: null,
+    verdict: null,
     forkedFrom: s.forkedFrom ? { agentId: s.forkedFrom.agentId, name: s.forkedFrom.name } : null,
     parentAgentId: s.parentAgentId ?? null,
     startedBy: s.startedBy === 'agent' ? 'agent' : null,
@@ -321,7 +319,7 @@ export async function agentFrame(
     bypassPermission: s.bypassPermission ?? null,
     namedAgent: s.agent ?? null,
     waitingFor: waitingFor?.() ?? null,
-    // Absent, never null, for an agent without a browser: the only agents a browser is drawn for are those that have one.
-    ...(browser ? { browser } : {}),
   }
+  // Assigning onto the existing fields preserves their wire order; optional service fields append as before.
+  return Object.assign(frame, parts?.())
 }

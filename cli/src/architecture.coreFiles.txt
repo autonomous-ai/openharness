@@ -90,6 +90,7 @@ core/engines/submissionTransport.ts
 core/engines/submissions.ts
 core/experimentQueries.ts
 core/experiments.ts
+core/frameParts.ts
 core/gatewayLink.ts
 core/gatewayWake.ts
 core/guestPolicy.ts

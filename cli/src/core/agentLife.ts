@@ -20,6 +20,7 @@
  * an idle daemon's scans cost it nothing. `having` narrows it to the agents whose row has those fields set (the viewers:
  * `dsh`). `ended` goes to a follower that was told the agent running.
  */
+import { randomUUID } from 'node:crypto'
 import { agentView, FOLLOW_HAVING_MAX, type AgentLife, type AgentView, type FollowOptions, type HeldAgentLife } from './api.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { ServiceFrame } from './serviceLinks.js'
@@ -57,11 +58,11 @@ export interface AgentLifeDeps {
 /** A follower's options as a service's process sent them (`follow_agents`), or null when they are not: a filter that
  *  was not understood would tell the process every agent at every look. */
 export function followOptions(raw: Payload): FollowOptions | null {
-  const { each, having, running } = raw
-  if ((each !== undefined && typeof each !== 'boolean') || (running !== undefined && typeof running !== 'boolean')) return null
+  const { each, having, running, frames } = raw
+  if ((frames !== undefined && typeof frames !== 'boolean') || (each !== undefined && typeof each !== 'boolean') || (running !== undefined && typeof running !== 'boolean')) return null
   if (having !== undefined && (!Array.isArray(having) || having.length > FOLLOW_HAVING_MAX
     || !having.every((field) => typeof field === 'string' && field.length > 0 && field.length <= FIELD_MAX))) return null
-  return { ...(each ? { each } : {}), ...(having?.length ? { having: having as string[] } : {}), ...(running === false ? { running } : {}) }
+  return { ...(frames ? { frames } : {}), ...(each ? { each } : {}), ...(having?.length ? { having: having as string[] } : {}), ...(running === false ? { running } : {}) }
 }
 
 /** Whether [session]'s row has every field [options] asks for, set. Said for every follower at every look at every
@@ -81,6 +82,27 @@ export function createAgentLife(deps: AgentLifeDeps) {
   const listeners = new Set<Follower>()
   /** The services in their own processes that asked to follow, by service: the connection that asked last. */
   const processes = new Map<string, Follower>()
+  const frameEpochs = new Map<string, string>()
+  const frameNonce = randomUUID()
+  let nextFrameEpoch = 0n
+  const view = (session: RegisteredSession, frames: boolean | undefined): AgentView => {
+    const row = agentView(session)
+    if (!frames) return row
+    let epoch = frameEpochs.get(session.agentId)
+    if (epoch === undefined) {
+      if (frameEpochs.size >= TOLD_PRUNE_AT) {
+        const live = new Set(deps.live().map(session => session.agentId))
+        for (const id of frameEpochs.keys()) if (!live.has(id)) frameEpochs.delete(id)
+        if (frameEpochs.size >= TOLD_PRUNE_AT) {
+          log('[frames] FRAME_PART_LIMIT')
+          return row
+        }
+      }
+      epoch = `${frameNonce}:${++nextFrameEpoch}`
+      frameEpochs.set(session.agentId, epoch)
+    }
+    return { ...row, frameEpoch: epoch }
+  }
 
   const tellAll = (event: AgentLife & { kind: HeldAgentLife }): void => {
     for (const follower of listeners) follower.tell(event)
@@ -99,7 +121,7 @@ export function createAgentLife(deps: AgentLifeDeps) {
     if (follower.options.running === false) return []
     const agents = deps.live().filter((session) => matches(follower.options, session))
     for (const session of agents) told(follower, session.agentId)
-    return agents.map(agentView)
+    return agents.map(session => view(session, follower.options.frames))
   }
   // The scan visits every agent: keep its callback here, so each visit allocates no function.
   const look = (follower: Follower, session: RegisteredSession): void => {
@@ -108,10 +130,11 @@ export function createAgentLife(deps: AgentLifeDeps) {
     if (known && !follower.options.each) return
     if (!matches(follower.options, session)) return
     if (!known) told(follower, session.agentId)
-    follower.tell({ kind: 'running', session: agentView(session) })
+    follower.tell({ kind: 'running', session: view(session, follower.options.frames) })
   }
 
   return {
+    frameEpoch: (agentId: string): string | undefined => frameEpochs.get(agentId),
     /** A look at a live agent: a create, a fork, a resume, a start's restore, a scan (every agent, every 5 s at idle). */
     running(session: RegisteredSession): void {
       for (const follower of listeners) look(follower, session)
@@ -119,12 +142,14 @@ export function createAgentLife(deps: AgentLifeDeps) {
     },
     /** It stopped running here: every way an agent stops running passes through this. */
     ended(agentId: string): void {
+      frameEpochs.delete(agentId)
       for (const follower of [...listeners, ...processes.values()]) if (follower.told.delete(agentId)) follower.tell({ kind: 'ended', agentId })
     },
     /** A person or an agent stopped it, and the stop is done. */
     stopped(agentId: string): void { tellAll({ kind: 'stopped', agentId }) },
     /** Deleted for good, with [sessionIds], every conversation it had. */
     purged(agentId: string, sessionIds: readonly string[]): void {
+      frameEpochs.delete(agentId)
       tellAll({ kind: 'purged', agentId, sessionIds: sessionIds.slice(0, PURGED_SESSIONS_MAX) })
     },
     /** [to] took the pane [from] ended in. */

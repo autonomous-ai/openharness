@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { AgentBrowserPort, AgentLife, CoreApi, CorePorts } from '../core/api.js'
+import type { AgentView, AgentBrowserPort, AgentLife, CoreApi, CorePorts } from '../core/api.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { AgentBrowserOptions } from './agentBrowser.js'
 import { agentBrowserCoreApi, runAgentBrowserService } from './agentBrowserProcess.js'
@@ -20,7 +20,7 @@ describe('the agent browser in its own process', () => {
     /** What the service heard of agents, as it follows them (services/followLink.ts). */
     const heard: AgentLife[] = []
     const port: AgentBrowserPort = {
-      frameContext: vi.fn(), stop: vi.fn(),
+      stop: vi.fn(),
       stream: vi.fn(() => true), streamInput: vi.fn(), streamClosed: vi.fn(), streamRoute: vi.fn(), streamTransportError: vi.fn(), streamRefused: vi.fn(),
     }
     const requests = { agent_browser_available: vi.fn() }
@@ -172,7 +172,7 @@ describe('the agent browser in its own process', () => {
     const row = { agentId: 'a1', sessionId: 's1' } as RegisteredSession
     const query = vi.fn(async (name: string, _payload?: Record<string, unknown>) => (name === 'follow_agents' ? { agents: [row] } : {}))
     options.onConnected!({ query } satisfies CoreConnection)
-    expect(query).toHaveBeenCalledWith('follow_agents', {})
+    expect(query).toHaveBeenCalledWith('follow_agents', { frames: true })
     expect(await given.followed!()).toBe(true)
     expect(heard).toEqual([{ kind: 'running', session: row }])
     // Gone: not caught up until the next connection's answer.
@@ -182,38 +182,36 @@ describe('the agent browser in its own process', () => {
     expect(await again).toBe(false)
   })
 
-  it('tells the core each browser\'s state, and all of them again at every connection', async () => {
-    const { options, given } = setup()
-    // No core yet: kept until there is one.
-    given.told!('a1', { state: 'starting' })
-    const query = vi.fn(async (_query: string, _payload?: Record<string, unknown>) => ({}))
-    options.onConnected!({ query } satisfies CoreConnection)
-    // First that it takes viewers' streams, said to each core it connects to; then what it follows of agents.
-    expect(query.mock.calls).toEqual([['streams', {}], ['browser_state', { agentId: 'a1', state: { state: 'starting' } }], ['follow_agents', {}]])
-    given.told!('a1', { state: 'ready' })
-    given.told!('a2', { state: 'setup', step: 'building' })
-    given.told!('a2', undefined)
-    expect(query.mock.calls.slice(3)).toEqual([
-      ['browser_state', { agentId: 'a1', state: { state: 'ready' } }],
-      ['browser_state', { agentId: 'a2', state: { state: 'setup', step: 'building' } }],
-      ['browser_state', { agentId: 'a2' }],
-    ])
+  it('publishes bounded parts with the followed run and never replays an old lease on reconnect', async () => {
+    const { options, api } = setup()
+    const row = { agentId: 'a1', sessionId: 's1', frameEpoch: 'run-1' } as AgentView
+    api.agents.publishFrame!(row, { browser: { state: 'starting' } })
+    const query = vi.fn(async (_query: string, _payload?: Record<string, unknown>) => ({ agents: [] }))
+    options.onConnected!({ query })
+    expect(query.mock.calls).toEqual([['streams', {}], ['follow_agents', { frames: true }]])
+    options.onEvent!({ kind: 'agent', event: { kind: 'running', session: row } })
+    api.agents.publishFrame!(row, { browser: { state: 'ready' } })
+    expect(query).toHaveBeenLastCalledWith('frame_part', { agentId: 'a1', frameEpoch: 'run-1', fields: { browser: { state: 'ready' } } })
     options.onDisconnected!()
-    const next = vi.fn(async () => { throw new Error('gone') })
-    options.onConnected!({ query: next } as CoreConnection)
-    expect(next.mock.calls).toEqual([['streams', {}], ['browser_state', { agentId: 'a1', state: { state: 'ready' } }], ['follow_agents', {}]])
-    given.told!('a3', { state: 'starting' })
-    await Promise.resolve()
+    const next = vi.fn(async () => ({ agents: [] }))
+    options.onConnected!({ query: next })
+    expect(next.mock.calls).toEqual([['streams', {}], ['follow_agents', { frames: true }]])
+    const resumed = { ...row, frameEpoch: 'run-2' }
+    options.onEvent!({ kind: 'agent', event: { kind: 'running', session: resumed } })
+    api.agents.publishFrame!(resumed, {})
+    expect(next).toHaveBeenLastCalledWith('frame_part', { agentId: 'a1', frameEpoch: 'run-2', fields: {} })
   })
 
-  // The exec into a ready browser is this process's own, to start for a viewer: the core is told the state and no
-  // command line (until the audit of 2026-11-12 the core was told the exec, and started it).
-  it('a ready browser\'s state carries no command', () => {
-    const { options, given } = setup()
-    const query = vi.fn(async (_query: string, _payload?: Record<string, unknown>) => ({}))
-    options.onConnected!({ query } satisfies CoreConnection)
-    given.told!('a9', { state: 'ready' })
-    expect(query.mock.calls.slice(2)).toEqual([['browser_state', { agentId: 'a9', state: { state: 'ready' } }]])
+  it('uses the dated Browser state adapter only when an older core rejects frame_part as unknown', async () => {
+    const { api, options } = setup()
+    const query = vi.fn(async (name: string) => name === 'frame_part' ? { error: 'UNKNOWN_QUERY' } : { agents: [] })
+    options.onConnected!({ query })
+    const row = { agentId: 'a1', sessionId: 's1' } as AgentView
+    options.onEvent!({ kind: 'agent', event: { kind: 'running', session: row } })
+    api.agents.publishFrame!(row, { browser: { state: 'ready' } })
+    await vi.waitFor(() => expect(query).toHaveBeenCalledWith('browser_state', { agentId: 'a1', state: { state: 'ready' } }))
+    api.agents.publishFrame!(row, {})
+    await vi.waitFor(() => expect(query).toHaveBeenCalledWith('browser_state', { agentId: 'a1' }))
   })
 
   const STREAM = '11111111-2222-4333-8444-555555555555'

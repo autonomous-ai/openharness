@@ -46,7 +46,7 @@ describe('the viewers in their own process, as the core keeps them', () => {
     const { link, hub, unfollow } = setup()
     unfollow()
     hub.running(agent())
-    expect(link.answer('context', { agentId: 'a1', context: context(), forwardingUrl: null })).toEqual({ kept: false })
+    expect(link.answer('viewer_target', { agentId: 'a1', context: context(), forwardingUrl: null })).toEqual({ kept: false })
     const bare = createViewersLink(fakeCore(), vi.fn(() => true))
     expect(() => bare.follow()()).not.toThrow()
   })
@@ -54,85 +54,76 @@ describe('the viewers in their own process, as the core keeps them', () => {
   it('answers a frame with the fallbacks until the process has said anything of the agent', () => {
     const { port, hub } = setup()
     hub.running(agent())
-    expect(port.frameContext(agent())).toBeNull()
     expect(port.forwardingUrl('a1')).toBeNull()
   })
 
-  it('keeps what the process says of an attached agent, follows its viewer and sends its frame again', () => {
+  it('keeps the forwarding target separately from frame publication', () => {
     const { core, link, port, hub } = setup()
     hub.running(agent())
     const said = context({ viewerUrl: 'http://127.0.0.1:7001/' })
-    expect(link.answer('context', { agentId: 'a1', context: said, forwardingUrl: 'http://127.0.0.1:7001/', requestId: 'q1', query: 'context' })).toEqual({ kept: true })
-    expect(port.frameContext(agent())).toEqual(said)
+    expect(link.answer('viewer_target', { agentId: 'a1', context: said, forwardingUrl: 'http://127.0.0.1:7001/', requestId: 'q1', query: 'viewer_target' })).toEqual({ kept: true })
     expect(port.forwardingUrl('a1')).toBe('http://127.0.0.1:7001/')
-    expect(core.agents.sync).toHaveBeenCalledWith(agent())
+    expect(core.agents.sync).not.toHaveBeenCalled()
     // An agent without a harness has nothing to say on its frame, whatever was kept under its id.
-    expect(port.frameContext(agent({ dsh: undefined }))).toBeNull()
   })
 
-  it('a change sends the frame again; no change does nothing', () => {
+  it('a legacy context never publishes a frame without its lifecycle lease', () => {
     const { core, link, port, hub } = setup()
     hub.running(agent())
-    link.answer('context', { agentId: 'a1', context: context(), forwardingUrl: null })
-    expect(core.agents.sync).toHaveBeenCalledTimes(1)
+    link.answer('viewer_target', { agentId: 'a1', context: context(), forwardingUrl: null })
+    expect(core.agents.sync).not.toHaveBeenCalled()
     const verdict = { ready: true, summary: 'ok', errors: 0, warnings: 0, artifact: null, phases: [], updatedAt: null }
-    link.answer('context', { agentId: 'a1', context: context({ verdict }), forwardingUrl: null })
-    expect(port.frameContext(agent())).toMatchObject({ verdict })
-    expect(core.agents.sync).toHaveBeenCalledTimes(2)
-    expect(link.answer('context', { agentId: 'a1', context: context({ verdict }), forwardingUrl: null })).toEqual({ kept: true })
-    expect(core.agents.sync).toHaveBeenCalledTimes(2)
+    link.answer('viewer_target', { agentId: 'a1', context: context({ verdict }), forwardingUrl: null })
+    expect(core.agents.sync).not.toHaveBeenCalled()
+    expect(link.answer('viewer_target', { agentId: 'a1', context: context({ verdict }), forwardingUrl: null })).toEqual({ kept: true })
+    expect(core.agents.sync).not.toHaveBeenCalled()
   })
 
   it('waits for the terminal before sending a frame, which would otherwise read as "agent gone"', () => {
     const detached = setup(agent(), false)
     detached.hub.running(agent())
-    detached.link.answer('context', { agentId: 'a1', context: context({ viewerUrl: 'http://127.0.0.1:7001/' }), forwardingUrl: 'http://127.0.0.1:7001/' })
-    expect(detached.port.frameContext(agent())).toMatchObject({ viewerUrl: 'http://127.0.0.1:7001/' })
+    detached.link.answer('viewer_target', { agentId: 'a1', context: context({ viewerUrl: 'http://127.0.0.1:7001/' }), forwardingUrl: 'http://127.0.0.1:7001/' })
     expect(detached.core.agents.sync).not.toHaveBeenCalled()
     const gone = setup(null)
     gone.hub.running(agent())
-    gone.link.answer('context', { agentId: 'a1', context: context(), forwardingUrl: null })
+    gone.link.answer('viewer_target', { agentId: 'a1', context: context(), forwardingUrl: null })
     expect(gone.core.agents.sync).not.toHaveBeenCalled()
   })
 
   it('keeps nothing of an agent it never attached, or detached since: a word said before the detach is older than it', () => {
     const { core, link, port, hub } = setup()
-    expect(link.answer('context', { agentId: 'a1', context: context(), forwardingUrl: null })).toEqual({ kept: false })
+    expect(link.answer('viewer_target', { agentId: 'a1', context: context(), forwardingUrl: null })).toEqual({ kept: false })
     hub.running(agent())
     hub.ended('a1')
-    expect(link.answer('context', { agentId: 'a1', context: context({ viewerUrl: 'http://127.0.0.1:7001/' }), forwardingUrl: 'http://127.0.0.1:7001/' })).toEqual({ kept: false })
-    expect(port.frameContext(agent())).toBeNull()
+    expect(link.answer('viewer_target', { agentId: 'a1', context: context({ viewerUrl: 'http://127.0.0.1:7001/' }), forwardingUrl: 'http://127.0.0.1:7001/' })).toEqual({ kept: false })
     expect(port.forwardingUrl('a1')).toBeNull()
     expect(core.agents.sync).not.toHaveBeenCalled()
     // Nor of one it cannot name.
-    expect(link.answer('context', { agentId: 7, context: context() })).toEqual({ kept: false })
+    expect(link.answer('viewer_target', { agentId: 7, context: context() })).toEqual({ kept: false })
   })
 
   it('reads what does not look like a context or a URL as none', () => {
     const { link, port, hub } = setup()
     hub.running(agent())
-    link.answer('context', { agentId: 'a1', context: 'not a context', forwardingUrl: 9 })
-    expect(port.frameContext(agent())).toBeNull()
+    link.answer('viewer_target', { agentId: 'a1', context: 'not a context', forwardingUrl: 9 })
     expect(port.forwardingUrl('a1')).toBeNull()
   })
 
   it('an end forgets the agent, and holds nothing for the process: its catch-up as it connects finds the end', () => {
     const { notify, link, port, hub } = setup()
     hub.running(agent())
-    link.answer('context', { agentId: 'a1', context: context({ viewerUrl: 'http://127.0.0.1:7001/' }), forwardingUrl: 'http://127.0.0.1:7001/' })
+    link.answer('viewer_target', { agentId: 'a1', context: context({ viewerUrl: 'http://127.0.0.1:7001/' }), forwardingUrl: 'http://127.0.0.1:7001/' })
     hub.ended('a1')
     expect(notify).not.toHaveBeenCalled()
-    expect(port.frameContext(agent())).toBeNull()
     expect(port.forwardingUrl('a1')).toBeNull()
   })
 
   it('answers from what it last knew while the process cannot hear anything', () => {
     const { link, notify, port, hub } = setup()
     hub.running(agent())
-    link.answer('context', { agentId: 'a1', context: context({ viewerUrl: 'http://127.0.0.1:7001/' }), forwardingUrl: 'http://127.0.0.1:7001/' })
+    link.answer('viewer_target', { agentId: 'a1', context: context({ viewerUrl: 'http://127.0.0.1:7001/' }), forwardingUrl: 'http://127.0.0.1:7001/' })
     notify.mockReturnValue(false)
     hub.running(agent())
-    expect(port.frameContext(agent())).toMatchObject({ viewerUrl: 'http://127.0.0.1:7001/' })
     expect(port.forwardingUrl('a1')).toBe('http://127.0.0.1:7001/')
   })
 
