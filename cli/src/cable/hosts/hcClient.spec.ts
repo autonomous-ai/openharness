@@ -7,9 +7,12 @@ import {
   createHcClient, hcClientDeps, hcKind, hcSocketPath, hcTerminal,
   type HcClientDeps, type HcSubscriber,
 } from './hcClient.js'
-import { MAX_LINE_BYTES } from './herdrClient.js'
 import { connectLines } from './unixSocket.js'
 
+/** hc's longest line, the bound of every connection to it: its snapshot is one line with every terminal of the core. */
+const LINE_BYTES = 8 * 1024 * 1024
+/** A 2 MiB line: a snapshot of many terminals, or one terminal with a long command line. */
+const ARGV_2MIB = { more: { argv: ['x'.repeat(2 * 1024 * 1024)] } }
 const lines = (recorded: readonly string[]) => `${recorded.join('\n')}\n`
 const rpc = (id: number, method: string, params: Record<string, unknown> = {}) =>
   `${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`
@@ -56,7 +59,7 @@ describe.skipIf(process.platform === 'win32')('the hc client (docs/plans/2026-11
     const checks = new Set<() => boolean>()
     const settle = () => { for (const check of checks) if (check()) checks.delete(check) }
     let closed = false
-    const socket = connectLines(server.path, out, MAX_LINE_BYTES, (text) => {
+    const socket = connectLines(server.path, out, LINE_BYTES, (text) => {
       got.push(JSON.parse(text) as Record<string, unknown>)
       settle()
     }, () => {
@@ -187,7 +190,7 @@ describe.skipIf(process.platform === 'win32')('the hc client (docs/plans/2026-11
     }
   })
 
-  it('an answer under another id, or with neither result nor error, is bad_answer; a line that is no object is bad_json; one over 1 MiB is oversize', async () => {
+  it('an answer under another id, or with neither result nor error, is bad_answer; a line that is no object is bad_json; one over 8 MiB is oversize', async () => {
     const hc = client()
     for (const [raw, fault] of [
       ['{"id":"another","jsonrpc":"2.0","result":{}}\n', 'bad_answer'],
@@ -197,7 +200,7 @@ describe.skipIf(process.platform === 'win32')('the hc client (docs/plans/2026-11
       ['{"id":1,"jsonrpc":"2.0","result":"t7"}\n', 'bad_answer'],
       ['not json\n', 'bad_json'],
       ['[]\n', 'bad_json'],
-      [`{"pad":"${'x'.repeat(MAX_LINE_BYTES)}"}\n`, 'oversize'],
+      [`{"pad":"${'x'.repeat(LINE_BYTES)}"}\n`, 'oversize'],
     ] as const) {
       server.answer('terminal.get', { raw })
       expect(await hc.request('terminal.get', { terminal: 't7' }), raw.slice(0, 80)).toEqual({ ok: false, fault })
@@ -485,7 +488,7 @@ describe.skipIf(process.platform === 'win32')('the hc client (docs/plans/2026-11
     expect(calls).toEqual([['snapshot', []], ['closed', 'timeout']])
   })
 
-  it('a doc line tells nothing and the next event is still told; a line over 1 MiB closes the subscription oversize', async () => {
+  it('a doc line tells nothing and the next event is still told; a line over 8 MiB closes the subscription oversize', async () => {
     server.terminals = [{ address: 't7' }]
     const { calls, to, told } = subscriber()
     client().subscribe(to)
@@ -494,7 +497,7 @@ describe.skipIf(process.platform === 'win32')('the hc client (docs/plans/2026-11
     server.event('doc', { data: { name: 'herdr-app', version: 9 } })
     server.change('t7', { status: { state: 'working', app: 'claude-code' } })
     await told(2)
-    server.send(`{"pad":"${'x'.repeat(MAX_LINE_BYTES)}"}\n`)
+    server.send(`{"pad":"${'x'.repeat(LINE_BYTES)}"}\n`)
     server.change('t7', { status: { state: 'idle', app: 'claude-code' } })
     await told(3)
     await server.ended(1)
@@ -504,6 +507,17 @@ describe.skipIf(process.platform === 'win32')('the hc client (docs/plans/2026-11
       ['changed', { ...agentIs('working'), address: 't7' }],
       ['closed', 'oversize'],
     ])
+  })
+
+  it('a 2 MiB snapshot is told, and a 2 MiB terminal.get read', async () => {
+    server.terminals = [{ address: 't7', ...ARGV_2MIB }]
+    const { calls, to, told } = subscriber()
+    const subscription = client().subscribe(to)
+    await told(1)
+    subscription.close()
+    expect(calls).toEqual([['snapshot', [{ ...agentIs('idle'), address: 't7' }]]])
+    expect(await client().request('terminal.get', { terminal: 't7' }))
+      .toEqual({ ok: true, result: expect.objectContaining({ address: 't7', argv: ARGV_2MIB.more.argv }) })
   })
 
   it('events in the chunk that holds the snapshot, and a line split across two chunks, are each told once', async () => {
@@ -550,7 +564,7 @@ describe.skipIf(process.platform === 'win32')('the hc client (docs/plans/2026-11
     const thenEvent = (chunk: string) => `${chunk}${RECORDED.subscription[2]}\n`
     it.each([
       ['ended', 'a dropped connection', () => server.drop()],
-      ['oversize', 'a line over 1 MiB', () => server.send(thenEvent(`${'x'.repeat(MAX_LINE_BYTES + 1)}\n`))],
+      ['oversize', 'a line over 8 MiB', () => server.send(thenEvent(`${'x'.repeat(LINE_BYTES + 1)}\n`))],
       ['bad_json', 'a line that is no JSON', () => server.send(thenEvent('nope\n'))],
       ['bad_json', 'a line that is no object', () => server.send(thenEvent('[]\n'))],
     ] as const)('%s: %s', async (reason, _what, after) => {
