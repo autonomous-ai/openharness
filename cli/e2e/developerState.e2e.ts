@@ -15,7 +15,7 @@
 import { execFileSync } from 'node:child_process'
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, isAbsolute, join, relative } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, onTestFailed, vi } from 'vitest'
 import { LocalClient } from './harness/client.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
@@ -274,5 +274,16 @@ describe('a daemon under test knows nothing of the developer\'s own state', () =
       await expect(d.start()).rejects.toThrow('E2E_NODE_PATH is not set: run the end-to-end tests through vitest.e2e.config.ts')
     }
     expect([d.pid, d.log()]).toEqual([null, ''])
+  })
+
+  // A shell script: Windows has no `open` to stand in for.
+  it.skipIf(process.platform === 'win32')('opens nothing of the developer\'s: its open is a fake in its own root that records what it is asked and exits 0', async () => {
+    const d = daemon = await IsolatedDaemon.create()
+    const open = d.env.HARNESS_OPEN_BIN ?? ''
+    // Both before it runs: a path outside the root could be the real open, which would bring an app forward.
+    expect(isAbsolute(open), open).toBe(true)
+    expect(relative(d.root, open).startsWith('..'), open).toBe(false)
+    execFileSync(open, ['-b', 'com.example.none'])
+    expect(d.opens()).toEqual([['-b', 'com.example.none']])
   })
 })

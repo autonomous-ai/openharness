@@ -92,7 +92,7 @@ it('Copilot binding retains its previous conversation when native ownership move
   const deps = { registry: { byProcess: () => row, byAgent: () => row, bySession: () => undefined, register,
     setIdentityHold: (_id: string, reason: string) => { row.identityHold = reason; return true } },
     announceSession: vi.fn(),
-    attachSession: vi.fn(async () => true),
+    attachSession: vi.fn(async () => true), followsLive: () => false,
     homes: { copilot: join(root, 'copilot') } } as unknown as BindDeps
   const observed: DiscoveredTerminalAgent = { engine: 'copilot', cwd: root, runtimes: [], primaryRuntimeKey: '',
     args: 'copilot', resumeSessionId: null, processIdentity: row.processIdentity! }

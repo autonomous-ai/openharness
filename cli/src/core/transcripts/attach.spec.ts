@@ -222,7 +222,7 @@ it.each(['same', 'repaired'] as const)('composes discovery, retry and inline att
     setIdentityHold: (_id: string, reason: string) => { row.identityHold = reason; return false },
     bySession: () => row,
   }
-  const bind = createBinding({ registry, attachSession: run.attach.attachSession, captureReader: run.attach.captureReader,
+  const bind = createBinding({ registry, attachSession: run.attach.attachSession, captureReader: run.attach.captureReader, followsLive: () => false,
     announceSession: vi.fn(), stoppedAgents: { save: vi.fn() }, syncRecapPool: vi.fn(),
   } as unknown as BindDeps)
   const discover = createDiscoveryHandlers({ registry, bindObservedAgent: bind.bindObservedAgent,

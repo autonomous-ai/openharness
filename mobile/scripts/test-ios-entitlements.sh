@@ -32,14 +32,13 @@ EOF
   echo "$app"
 }
 
-make_entitlements() {   # $1 = name, $2 = aps-environment value ("" leaves it out), $3 = hotspot yes|no
+make_entitlements() {   # $1 = name, $2 = hotspot yes|no
   local file="$WORK/$1.entitlements"
   {
     echo '<?xml version="1.0" encoding="UTF-8"?>'
     echo '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">'
     echo '<plist version="1.0"><dict>'
-    [[ -n "$2" ]] && echo "<key>aps-environment</key><string>$2</string>"
-    [[ "$3" == yes ]] && echo '<key>com.apple.developer.networking.HotspotConfiguration</key><true/>'
+    [[ "$2" == yes ]] && echo '<key>com.apple.developer.networking.HotspotConfiguration</key><true/>'
     echo '</dict></plist>'
   } > "$file"
   echo "$file"
@@ -62,38 +61,30 @@ expect() {
   fi
 }
 
-ASKED="$(make_entitlements asked development yes)"   # what Runner.entitlements asks for
-STORE="$(make_entitlements store production yes)"    # what the export turns it into
+# Local notices and device setup need no remote-notification entitlement.
+expect fails "Runner no longer requests remote notifications" "" \
+  /usr/libexec/PlistBuddy -c 'Print :aps-environment' "$HERE/../ios/Runner/Runner.entitlements"
+
+ASKED="$HERE/../ios/Runner/Runner.entitlements"
 
 unsigned="$(make_app unsigned)"
-expect fails "an unsigned app lacks every entitlement asked for" \
-  "signed without: aps-environment com.apple.developer.networking.HotspotConfiguration" \
-  check_entitlements "$unsigned" "the app" any "$ASKED"
+expect fails "an unsigned app lacks the setup entitlement" \
+  "signed without: com.apple.developer.networking.HotspotConfiguration" \
+  check_entitlements "$unsigned" "the app" "$ASKED"
 
 carried="$(make_app carried)"
 carry_entitlements "$carried" "$ASKED" 2> /dev/null
-expect passes "an app signed ad hoc with them carries them" "" \
-  check_entitlements "$carried" "the app" any "$ASKED"
-expect fails "a store build with a development aps-environment is refused" \
-  "development aps-environment" \
-  check_entitlements "$carried" "the app" production "$ASKED"
+expect passes "an app signed ad hoc with Runner's entitlements carries them" "" \
+  check_entitlements "$carried" "the app" "$ASKED"
 
-store="$(make_app store)"
-carry_entitlements "$store" "$STORE" 2> /dev/null
-expect passes "a store build with a production aps-environment passes" "" \
-  check_entitlements "$store" "the app" production "$ASKED"
-
-no_push="$(make_app no_push)"
-carry_entitlements "$no_push" "$(make_entitlements hotspot_only "" yes)" 2> /dev/null
-expect fails "an app without push names only that one" "signed without: aps-environment (" \
-  check_entitlements "$no_push" "the app" any "$ASKED"
-
-no_aps_asked="$(make_entitlements hotspot_asked "" yes)"
-expect passes "an app that asks for no push is not held to production" "" \
-  check_entitlements "$no_push" "the app" production "$no_aps_asked"
+no_hotspot="$(make_app no_hotspot)"
+carry_entitlements "$no_hotspot" "$(make_entitlements empty no)" 2> /dev/null
+expect fails "a signed app without device setup names the missing entitlement" \
+  "signed without: com.apple.developer.networking.HotspotConfiguration" \
+  check_entitlements "$no_hotspot" "the app" "$ASKED"
 
 expect fails "a missing entitlements file is an error, not a pass" "no entitlements file" \
-  check_entitlements "$carried" "the app" any "$WORK/nowhere.entitlements"
+  check_entitlements "$carried" "the app" "$WORK/nowhere.entitlements"
 
 if [[ "$FAILED" == 0 ]]; then
   echo "all passed"

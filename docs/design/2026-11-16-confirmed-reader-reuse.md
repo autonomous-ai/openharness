@@ -75,3 +75,35 @@ change requires the same private copied Node and current helpers on both benchma
 result is relabeled as evidence for this correction.
 
 The earlier native timeout's exact interleaving remains unobserved; the independent source/caller defect is proven.
+
+## Integration with reader recovery on current main
+
+Main's #4371 distinguishes a ready reader from one that owns recovery while its worker is unavailable. The
+composed caller now uses main's registry hold callback and destroys worker streams on disconnect. Before any
+runtime correction, 21 cases passed and two failed: a native confirmation during recovery invalidated its pending
+open with a new `boundAt`, leaving an orphan forever; a connected reader that gave up retained its hold, so the
+fileless Hermes confirmation could not attach a successor. The failing log is
+`/tmp/resume-main-integration-v2-red.log`; earlier native/cost results do not cover this combined source.
+
+The correction keeps recovery's authority distinct from completed-reader reuse. A same-conversation native
+confirmation waits while a reader hold still belongs to recovery; a later discovery pass commits that metadata
+after recovery clears its hold. Different-conversation native evidence remains authoritative immediately. Once
+the reader gives up, a successful native confirmation can release only the reader's own hold and follows with a
+reset, so a retained orphan cannot qualify as an installed reader. Unrelated identity holds remain in force.
+This adds no state, timer, queue, wire change or persisted data. Healthy confirmation retains its existing guard;
+only a held recovery or a given-up reader takes these branches. Tests require one worker stream and exactly one
+live turn, with no history replay, duplicate attachment or reset notification during recovery. Shared TypeScript
+is affected; final native, platform and cost acceptance belongs to the integrated checkpoint.
+
+The final focused evidence covers 526 passing cases in ten files, selected across the affected runs. The first
+seven-file run's unchanged six files passed; its expanded caller controls included two incomplete forget fixtures
+and two outage-start assertions that failed. Forget now uses both normalizer cleanup and attachment cleanup,
+as main does. The corrected caller suite passed 27 cases, including stale recovery ownership and an unrelated
+identity hold; the five-file final selection passed 260 cases. Logs retain the failed expansion alongside the
+corrections (`/tmp/resume-main-integration-v2-focused.log`, `-controls.log`, and `-final-focused.log`).
+
+The outage-start assertions exposed a separate limitation: Hermes `hydrate()` deliberately discards historical
+events, whereas the store worker's resume branch looks for a hydrated `turn_started` to announce a turn begun
+while it was down. Thus no start was emitted for a user row inserted during the outage. This integration does
+not change Hermes hydration or claim that behavior passes. Recovery controls require the existing stream to
+remain its sole owner and a subsequent live turn to arrive exactly once. No native benchmark was rerun.

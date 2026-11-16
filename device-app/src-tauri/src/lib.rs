@@ -22,6 +22,7 @@ pub mod tabs;
 #[cfg(target_os = "macos")]
 pub mod tabs_macos;
 pub mod types;
+pub mod update;
 pub mod watch;
 
 #[cfg(test)]

@@ -66,6 +66,8 @@ interface Handle extends OtherStream {
   stamp: LiveStamp | null | undefined
   /** The worker that holds the stream is gone: nothing is asked of it until it is opened again. */
   orphan: boolean
+  /** The reader tries the stream no more until its worker connects again. */
+  givenUp: boolean
   /** A close is on its way: what an older frame says of the turn does not open it again. */
   closing: number
   quietUntil: number
@@ -230,7 +232,7 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
   const handleOf = (session: RegisteredSession, token: string, opened: StreamOpened, store: string | null): Handle => {
     const handle: Handle = {
       engine: session.engine, sessionId: session.sessionId, store, token, applied: 0, turn: opened.turn,
-      offset: opened.offset, stamp: opened.stamp, orphan: false, closing: 0, quietUntil: 0,
+      offset: opened.offset, stamp: opened.stamp, orphan: false, givenUp: false, closing: 0, quietUntil: 0,
       get turnOpen() { return handle.turn.turnOpen },
       closeTurn(reason) {
         handle.turn = { ...handle.turn, turnOpen: false }
@@ -248,21 +250,31 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
     if (current() && answer && streamOpened(answer)) return answer
     // Not answered, or not checkable: the worker may hold a stream nobody follows; it is told to forget it.
     forgetToken(token)
-    if (current() && reply.error === 'ENGINE_TRANSCRIPT_CHANGED') {
+    if (!current()) return null
+    if (reply.error === 'ENGINE_TRANSCRIPT_CHANGED') {
       log('[engine-others] transcript changed while its reader was unavailable · rebuilding history; missed live events cannot be recovered')
       held(session, true, true)
       retryLater(session)
-    }
-    if (current() && (reply.error === undefined || reply.error === 'ENGINE_UNAVAILABLE' || reply.error === 'SERVICE_UNAVAILABLE')) {
+    } else if (reply.error === undefined || reply.error === 'ENGINE_UNAVAILABLE' || reply.error === 'SERVICE_UNAVAILABLE') {
       unavailable(session)
-    }
+    } else giveUp(session.sessionId)
     return null
+  }
+  // A stream given up with its worker connected is left to a discovery pass to revalidate: no connection may come to
+  // resume it, and the row would stay held until the daemon restarts (#4362 final review).
+  const giveUp = (sessionId: string): void => {
+    const handle = handles.get(sessionId)
+    if (handle) handle.givenUp = true
   }
   const retryLater = (session: RegisteredSession): void => {
     if (stopped || unopened.has(session.sessionId)) return
     const count = attempts.get(session.sessionId) ?? 0
-    if (count >= 5) { log('[engine-others] live reader unavailable after 5 retries · waiting for its next connection'); return }
-    if (unopened.size >= STREAMS_MAX || (!attempts.has(session.sessionId) && attempts.size >= STREAMS_MAX)) { log('[engine-others] live retry limit reached'); return }
+    if (count >= 5) { log('[engine-others] live reader unavailable after 5 retries · waiting for its next connection'); giveUp(session.sessionId); return }
+    if (unopened.size >= STREAMS_MAX || (!attempts.has(session.sessionId) && attempts.size >= STREAMS_MAX)) {
+      log('[engine-others] live retry limit reached')
+      giveUp(session.sessionId)
+      return
+    }
     attempts.set(session.sessionId, count + 1)
     const timer = setTimeout(() => {
       if (!connected) return
@@ -401,6 +413,11 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
         && !handle.orphan && !handle.closing && byToken.get(handle.token) === handle
         && !pending.has(sessionId) && !unopened.has(sessionId) && !deps.stopping?.(session)
     },
+    /** Whether the reader takes the session's stream up again itself: held, and, its worker here, not given up. */
+    follows(sessionId: string): boolean {
+      const handle = handles.get(sessionId)
+      return !!handle && !(connected && handle.givenUp)
+    },
     /** A Stop's or a backstop's close: what the parser emits closing; when the worker does not answer, the core closes the
      *  turn itself and says so, so a Stop never leaves a turn open. */
     async close(sessionId: string, how: { abort?: boolean; error?: boolean; stop?: boolean }): Promise<LiveEvent[]> {
@@ -483,6 +500,7 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
       waiting = false
       const at = generation
       const orphans = [...handles.values()].filter(handle => handle.orphan)
+      for (const handle of handles.values()) handle.givenUp = false
       if (orphans.length) log(`[engine-others] the other engines' worker is back · following ${orphans.length} conversation(s) again`)
       for (const handle of orphans) void (async () => {
         const session = deps.bySession(handle.sessionId)

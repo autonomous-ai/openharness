@@ -19,10 +19,11 @@ interface Call { file: string; args: string[]; timeoutMs: number }
 /** herdr's socket, which no tap asks: a tap is `herdr agent focus`. */
 const herdrClient = { prompt: vi.fn(), socketStamp: vi.fn() }
 
-/** What a test may set: the runner and the binaries it finds, Orca's switch, and the log. */
+/** What a test may set: the runner and the binaries it finds, Orca's switch, the log and the opener's `open`. */
 interface Over extends OrcaDeps {
   orcaSwitch(handle: string): Promise<boolean>
   log(line: string): void
+  bin?: string
 }
 
 /** A recording runner that runs nothing, so no spec brings the developer's own apps forward: each call answers the next
@@ -52,7 +53,7 @@ function recorder(over: Partial<Over> = {}, codes: Array<number | null> = [], mo
     createTabsAdapter({ isOpen: () => false, select: () => false }),
     ...more,
   ]
-  return { calls, switched, logs, claude, opener: createOpenActions({ run: deps.run, platform: deps.platform, adapters, log: deps.log }) }
+  return { calls, switched, logs, claude, opener: createOpenActions({ run: deps.run, platform: deps.platform, adapters, log: deps.log, bin: deps.bin }) }
 }
 
 /** The adapters whose pane a tap takes, in the order the observed source keeps them: each reads the hints alone. */
@@ -406,5 +407,171 @@ describe('a tap in the order its pane\'s adapter keeps', () => {
     expect(await r.opener.open('a1', { pane: PANE })).toBe(false)
     expect(r.calls).toHaveLength(1)
     expect(r.switched).toEqual([])
+  })
+})
+
+// The last pick wins (docs/plans/2026-11-16-dial-pick-brings-app-design.md): the Mac's front app ends as the ring.
+describe('a pick on the dial brings its app forward', () => {
+  const VSCODE = 'com.microsoft.VSCode'
+  const GHOSTTY = 'com.mitchellh.ghostty'
+
+  /** An opener whose every command is held until it is let go with an exit code, or rejected. */
+  function held() {
+    const calls: Call[] = []
+    const pending: Array<{ exit(code: number | null): void; reject(): void }> = []
+    const opener = createOpenActions({
+      run: (file, args, timeoutMs) => {
+        calls.push({ file, args, timeoutMs })
+        return new Promise((resolve, reject) => pending.push({ exit: (code) => resolve({ code, stdout: '' }), reject: () => reject(new Error('spawn')) }))
+      },
+      platform: 'darwin',
+      adapters: [],
+      log: () => {},
+    })
+    return { calls, pending, opener, bring: opener.bring! }
+  }
+
+  /** What a promise has answered once every pending callback has run, or 'waiting'. */
+  async function settled<T>(promise: Promise<T>): Promise<T | 'waiting'> {
+    let answer: T | 'waiting' = 'waiting'
+    void promise.then((value) => { answer = value })
+    await new Promise((resolve) => setImmediate(resolve))
+    return answer
+  }
+
+  it('bring runs open -b with the app\'s bundle once and answers ok', async () => {
+    const { calls, opener } = recorder()
+    expect(await opener.bring!('vscode')).toBe('ok')
+    expect(calls).toEqual([{ file: '/usr/bin/open', args: ['-b', VSCODE], timeoutMs: 10_000 }])
+  })
+
+  it('bring of Harness runs the open -b ai.autonomous.harness desktop runs', async () => {
+    const { calls, opener } = recorder()
+    expect(await opener.bring!('harness')).toBe('ok')
+    await opener.desktop!()
+    expect(calls).toEqual([forward('ai.autonomous.harness'), forward('ai.autonomous.harness')])
+  })
+
+  it('bring of herdr, of an app with no bundle and of a name no app has runs nothing', async () => {
+    const { calls, opener } = recorder()
+    for (const app of ['herdr', 'tmux', 'rex', 'zellij', 'terminal', 'constructor', '__proto__', 'toString']) {
+      expect(await opener.bring!(app), app).toBeUndefined()
+    }
+    expect(calls).toEqual([])
+  })
+
+  it('bring answers failed on exit 1, on a timeout (code null) and on a run that rejects, and runs once', async () => {
+    for (const code of [1, null]) {
+      const { calls, opener } = recorder({}, [code])
+      expect(await opener.bring!('vscode')).toBe('failed')
+      expect(calls).toEqual([forward(VSCODE)])
+    }
+    let runs = 0
+    const { opener } = recorder({ run: async () => { runs += 1; throw new Error('spawn') } })
+    expect(await opener.bring!('vscode')).toBe('failed')
+    expect(runs).toBe(1)
+  })
+
+  it('a bring while none runs runs at once, and so does one after it has ended', async () => {
+    const { calls, pending, bring } = held()
+    const first = bring('vscode')
+    expect(calls).toEqual([forward(VSCODE)])
+    pending[0].exit(0)
+    expect(await first).toBe('ok')
+    void bring('ghostty')
+    expect(calls).toEqual([forward(VSCODE), forward(GHOSTTY)])
+  })
+
+  it('picks A, B, A while A\'s first open runs: exactly two opens, A then A, and B never runs', async () => {
+    const { calls, pending, bring } = held()
+    const first = bring('vscode')
+    const second = bring('ghostty')
+    const third = bring('vscode')
+    expect(calls).toEqual([forward(VSCODE)])
+    expect(await settled(second)).toBeUndefined()
+    expect(await settled(third)).toBe('waiting')
+    pending[0].exit(0)
+    expect(await first).toBe('ok')
+    expect(calls).toEqual([forward(VSCODE), forward(VSCODE)])
+    pending[1].exit(0)
+    expect(await third).toBe('ok')
+    expect(calls).toEqual([forward(VSCODE), forward(VSCODE)])
+  })
+
+  it('a failed run still runs the waiting one', async () => {
+    for (const end of ['exit 1', 'reject'] as const) {
+      const { calls, pending, bring } = held()
+      const first = bring('vscode')
+      const waiting = bring('ghostty')
+      if (end === 'exit 1') pending[0].exit(1)
+      else pending[0].reject()
+      expect(await first, end).toBe('failed')
+      expect(calls, end).toEqual([forward(VSCODE), forward(GHOSTTY)])
+      pending[1].exit(0)
+      expect(await waiting, end).toBe('ok')
+    }
+  })
+
+  it('a bring with nothing to bring while one runs drops the waiting one', async () => {
+    const { calls, pending, bring } = held()
+    const first = bring('vscode')
+    const waiting = bring('ghostty')
+    const nothing = bring('tmux')
+    expect(await settled(waiting)).toBeUndefined()
+    expect(await settled(nothing)).toBeUndefined()
+    pending[0].exit(0)
+    expect(await first).toBe('ok')
+    await settled(first)
+    expect(calls).toEqual([forward(VSCODE)])
+  })
+
+  it('a tap while a bring runs opens its own app at once and drops the waiting bring; desktop() runs at once', async () => {
+    const { calls, pending, opener, bring } = held()
+    const first = bring('vscode')
+    const waiting = bring('ghostty')
+    const tap = opener.open('a1', { bundle: GHOSTTY })
+    expect(calls).toEqual([forward(VSCODE), forward(GHOSTTY)])
+    const desktop = opener.desktop!()
+    expect(calls).toEqual([forward(VSCODE), forward(GHOSTTY), forward('ai.autonomous.harness')])
+    expect(await settled(waiting)).toBeUndefined()
+    for (const run of pending) run.exit(0)
+    expect(await first).toBe('ok')
+    expect(await tap).toBe(true)
+    expect(await desktop).toBe(true)
+    await settled(first)
+    expect(calls).toHaveLength(3)
+  })
+
+  // A tap on a Harness agent with no window turns the dial to Harness's ring and starts Desktop by desktop(): a pick
+  // waiting would come forward over Desktop and its settle turn the dial away.
+  it('a tap\'s start of Desktop while a bring runs runs at once and drops the waiting bring', async () => {
+    const { calls, pending, opener, bring } = held()
+    const first = bring('vscode')
+    const waiting = bring('ghostty')
+    const desktop = opener.desktop!()
+    expect(calls).toEqual([forward(VSCODE), forward('ai.autonomous.harness')])
+    expect(await settled(waiting)).toBeUndefined()
+    for (const run of pending) run.exit(0)
+    expect(await first).toBe('ok')
+    expect(await desktop).toBe(true)
+    await settled(first)
+    expect(calls).toHaveLength(2)
+  })
+
+  it('off macOS there is no bring', () => {
+    const { opener } = recorder({ platform: 'linux' })
+    expect(opener.bring).toBeUndefined()
+    expect(opener.desktop).toBeUndefined()
+  })
+
+  it('an absolute bin is what a tap, desktop and bring run; unset, empty and relative run /usr/bin/open', async () => {
+    const warp = target({ TERM_PROGRAM: 'WarpTerminal' })
+    for (const [bin, file] of [['/tmp/e2e/fake-open', '/tmp/e2e/fake-open'], [undefined, OPEN], ['', OPEN], ['fake-open', OPEN], ['./fake-open', OPEN]] as const) {
+      const { calls, opener } = recorder({ bin })
+      expect(await opener.open('a1', warp)).toBe(true)
+      expect(await opener.desktop!()).toBe(true)
+      expect(await opener.bring!('vscode')).toBe('ok')
+      expect(calls.map((call) => call.file), String(bin)).toEqual([file, file, file])
+    }
   })
 })

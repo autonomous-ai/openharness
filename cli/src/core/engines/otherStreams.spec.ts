@@ -936,4 +936,33 @@ describe('the other engines\' streams, as the core holds them', () => {
     await vi.advanceTimersByTimeAsync(30)
     expect(run.deps.reattach).not.toHaveBeenCalled()
   })
+
+  // #4362: a discovery pass leaves a reader hold alone only while the reader will take the session up again itself. A
+  // stream given up, then five reattaches not answered, is tried no more while its worker stays connected.
+  it('follows a stream it holds and through its worker\'s outage, but not one it gave up on with its worker here', async () => {
+    vi.useFakeTimers()
+    const run = setup()
+    await run.streams.open(row(), OPEN)
+    expect([run.streams.follows('s1'), run.streams.follows('s2')]).toEqual([true, false])
+    run.answers.op.mockResolvedValueOnce({ version: STREAM_VERSION, error: 'ENGINE_STREAM_GONE' })
+    await run.streams.drain('s1')
+    run.answers.open.mockResolvedValue({ error: 'SERVICE_UNAVAILABLE' })
+    for (let n = 0; n < 5; n++) {
+      expect(run.streams.follows('s1')).toBe(true)
+      await vi.advanceTimersByTimeAsync(10 * 2 ** n)
+      await run.streams.open(row(), OPEN)
+    }
+    expect(run.deps.log).toHaveBeenCalledWith(expect.stringContaining('unavailable after 5 retries'))
+    expect([run.streams.has('s1'), run.streams.follows('s1')]).toEqual([true, false])
+    // Its worker gone, the stream is held to be resumed where the core took it, and is, once its worker is back.
+    run.streams.disconnected()
+    expect(run.streams.follows('s1')).toBe(true)
+    run.answers.open.mockResolvedValueOnce({ version: STREAM_VERSION, error: 'ENGINE_TRANSCRIPT_TOO_LARGE' })
+    run.streams.connected()
+    expect(run.streams.follows('s1')).toBe(true)
+    // A resume answered with an error the reader does not retry is given up too.
+    await vi.waitFor(() => expect(run.answers.open.mock.calls.at(-1)![0]).toHaveProperty('resume'))
+    await vi.waitFor(() => expect(run.streams.follows('s1')).toBe(false))
+    run.streams.stop()
+  })
 })

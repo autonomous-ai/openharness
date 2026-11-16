@@ -14,7 +14,8 @@ import { paneReadIdentity } from '../transcripts/readIdentity.js'
 import { createOtherStreams } from '../engines/otherStreams.js'
 import { createOtherStreams as createWorkerStreams } from '../../engines/others/streams.js'
 import { otherStreamRequests } from '../../engines/others/streamRequests.js'
-import { STREAM_OPEN } from '../../engines/worker/otherStreamProtocol.js'
+import { STREAM_OPEN, STREAM_VERSION } from '../../engines/worker/otherStreamProtocol.js'
+import { OTHER_ENGINE_STATES } from '../../engines/otherEngines.js'
 import type { LiveEvent } from '../../engines/kit/events.js'
 import type { registry as Registry } from '../../lib/registry.js'
 import { StoppedAgentStore } from '../../lib/stoppedAgents.js'
@@ -65,7 +66,7 @@ afterEach(async () => {
   vi.restoreAllMocks(); vi.unstubAllEnvs(); rmSync(directory, { recursive: true, force: true })
 })
 
-function setup(boundary: 'terminal' | 'store' | 'open' | 'config' | 'none', pauseConfirmation = false) {
+function setup(boundary: 'terminal' | 'store' | 'open' | 'config' | 'none', pauseConfirmation = false, readerHolds = false) {
   registry.openProcessAgent({ engine: 'hermes', agentId, tmuxPane: '%41', cwd: directory, processIdentity: firstProcess })
   const saved = { ...registry.register({ engine: 'hermes', sessionId, tmuxPane: '%41', cwd: directory, processIdentity: firstProcess })!.entry }
   registry.removeAgent(agentId)
@@ -89,9 +90,17 @@ function setup(boundary: 'terminal' | 'store' | 'open' | 'config' | 'none', paus
   const events: LiveEvent[] = [], ended = deferred(), closed = new AbortController()
   const worker = createWorkerStreams({ dataDir: directory, watcher: { on: vi.fn(), addSession: vi.fn(), removeSession: vi.fn(), pollSession: vi.fn() } as never })
   const requests = otherStreamRequests({ streams: worker })
+  const workerOpen = vi.spyOn(requests, STREAM_OPEN)
   const calls = new Set<Promise<Record<string, unknown>>>()
   const others = createOtherStreams({
-    bySession: id => registry.bySession(id), reattach: vi.fn(), log: vi.fn(),
+    bySession: id => registry.bySession(id), reattach: session => { void requestAttach(session, true) }, log: vi.fn(),
+    held: readerHolds ? (session, held, rewritten) => {
+      const reasons: readonly string[] = Object.values(OTHER_ENGINE_STATES)
+      const latest = registry.byAgent(session.agentId)
+      if (!latest || latest.sessionId !== session.sessionId || (latest.identityHold && !reasons.includes(latest.identityHold))) return
+      const reason = rewritten === 'lost' ? OTHER_ENGINE_STATES.lost : rewritten ? OTHER_ENGINE_STATES.rewritten : OTHER_ENGINE_STATES.unavailable
+      registry.setIdentityHold(session.agentId, held ? reason : undefined)
+    } : undefined,
     frame: (_row, frame) => { events.push(...frame.events); if (frame.events.some(event => event.type === 'turn_ended')) ended.resolve() },
     call: async (type, payload) => {
       if (type === STREAM_OPEN) await barrier('open')
@@ -116,8 +125,9 @@ function setup(boundary: 'terminal' | 'store' | 'open' | 'config' | 'none', paus
     ingest: vi.fn(() => false), ingestConfig: vi.fn(async () => { await barrier('config'); return false }), ingestPane: vi.fn(async () => false), capturePane: vi.fn(async () => null) } as AttachDeps['runtimeProfiles']
   const terminalGone = vi.fn(async () => { await barrier('terminal'); return false })
   const relaunchMarks = createRelaunchMarks()
+  const normalizers = createSessionNormalizers(others)
   const attach = createAttach({ liveFor: () => undefined, resolve: id => registry.resolve(id),
-    terminalGone, normalizers: createSessionNormalizers(others), others, relaunchMarks,
+    terminalGone, normalizers, others, relaunchMarks,
     watcher: { addSession: vi.fn(async () => {}), removeSession: vi.fn(async () => {}), pollSession: vi.fn(async () => {}),
       hold: vi.fn(async () => null), tails: () => false },
     setInterpretationHold: registry.setInterpretationHold.bind(registry), announceSession: vi.fn(),
@@ -141,8 +151,10 @@ function setup(boundary: 'terminal' | 'store' | 'open' | 'config' | 'none', paus
   const stoppedAgents = new StoppedAgentStore(join(directory, 'stopped-agents'))
   stoppedAgents.save(saved)
   vi.spyOn(stoppedAgents, 'save'); vi.spyOn(stoppedAgents, 'finishResume')
+  const forget = (id: string) => { normalizers.forget(id); attach.forget(id) }
   const binding = createBinding({ registry, attachSession: requestAttach, captureReader: attach.captureReader, hermesTerminal,
-    mirror: { inheritSummary: vi.fn() }, forgetSession: id => attach.forget(id), clients: { send }, announceSession: vi.fn(),
+    followsLive: id => others.follows(id),
+    mirror: { inheritSummary: vi.fn() }, forgetSession: forget, clients: { send }, announceSession: vi.fn(),
     stoppedAgents, syncRecapPool: vi.fn(),
     input: { forget: vi.fn(), awaitingConfirmation: () => false }, submitAgent: vi.fn(), deviceInput: { forget: vi.fn() },
     homes: { copilot: directory, grok: directory, agy: directory }, capturePane: async () => null,
@@ -163,7 +175,10 @@ function setup(boundary: 'terminal' | 'store' | 'open' | 'config' | 'none', paus
     expect(events.filter(event => event.type === 'turn_started')).toHaveLength(1)
     expect(events.filter(event => event.type === 'turn_ended')).toHaveLength(1)
   }
-  return { resumed, attach, requestAttach, confirm, attempts, entered, release, recordEntered, recordRelease, others, locateStore, send, liveTurn, stoppedAgents, terminalGone, relaunchMarks, observed,
+  return { resumed, attach, requestAttach, confirm, attempts, entered, release, recordEntered, recordRelease, others, locateStore, send, liveTurn, stoppedAgents, terminalGone, relaunchMarks, observed, workerOpen, forget,
+    activeStreams: () => worker.all().length,
+    disconnect: () => { others.disconnected(); worker.clear() },
+    pauseOpen: () => { boundary = 'open'; suspended = false },
     pause: () => { boundary = 'terminal'; suspended = false },
     installed: () => others.has(sessionId) && worker.all().length === 1 ? installed : undefined }
 }
@@ -258,6 +273,94 @@ it.each(['missing', 'disconnected'] as const)('follows a %s reader instead of tr
     await vi.waitFor(() => expect(t.others.ready(sessionId)).toBe(true))
   }
   await t.liveTurn()
+})
+
+it.each(['disconnected', 'recovering'] as const)('leaves native confirmation to the next pass while its reader is %s', async state => {
+  const t = setup('none', false, true)
+  expect(await t.requestAttach(t.resumed)).toBe(true)
+  t.disconnect()
+  expect(t.others.follows(sessionId)).toBe(true)
+  expect(t.others.ready(sessionId)).toBe(false)
+  expect(registry.byAgent(agentId)?.identityHold).toBe(OTHER_ENGINE_STATES.unavailable)
+  const reader = t.others.get(sessionId)
+  if (state === 'recovering') {
+    t.pauseOpen(); t.others.connected()
+    await t.entered.promise
+  }
+  await t.confirm()
+  expect(registry.byAgent(agentId)?.boundAt).toBeNull()
+  expect(t.requestAttach).toHaveBeenCalledTimes(1)
+  if (state === 'disconnected') t.others.connected()
+  t.release.resolve()
+  await Promise.all(t.attempts)
+  await vi.waitFor(() => expect(t.others.ready(sessionId)).toBe(true))
+  expect(t.installed()).toBeDefined()
+  expect(registry.byAgent(agentId)?.identityHold).toBeUndefined()
+  expect(t.send).not.toHaveBeenCalled()
+  await t.confirm()
+  expect(registry.byAgent(agentId)?.boundAt).not.toBeNull()
+  expect(t.others.get(sessionId)).toBe(reader)
+  expect(t.requestAttach).toHaveBeenCalledTimes(1)
+  expect(t.workerOpen).toHaveBeenCalledTimes(2)
+  expect(t.workerOpen.mock.calls[1][0]).toHaveProperty('resume')
+  await t.liveTurn()
+})
+
+it('replaces a given-up reader on native confirmation while its worker stays connected', async () => {
+  const t = setup('none', false, true)
+  expect(await t.requestAttach(t.resumed)).toBe(true)
+  t.disconnect()
+  t.workerOpen.mockResolvedValueOnce({ version: STREAM_VERSION, error: 'ENGINE_TRANSCRIPT_TOO_LARGE' })
+  t.others.connected()
+  await vi.waitFor(() => expect(t.others.follows(sessionId)).toBe(false))
+  expect(t.others.has(sessionId)).toBe(true)
+  expect(t.others.ready(sessionId)).toBe(false)
+  const abandoned = t.others.get(sessionId)
+  await t.confirm(); await Promise.all(t.attempts)
+  await vi.waitFor(() => expect(t.others.ready(sessionId)).toBe(true))
+  expect(t.installed()).toBeDefined()
+  expect(registry.byAgent(agentId)?.identityHold).toBeUndefined()
+  expect(t.others.get(sessionId)).not.toBe(abandoned)
+  expect(t.requestAttach).toHaveBeenCalledTimes(2)
+  expect(t.workerOpen).toHaveBeenCalledTimes(3)
+  expect(t.send).not.toHaveBeenCalled()
+  await t.liveTurn()
+})
+
+it('does not release unrelated identity evidence when a confirmed reader has given up', async () => {
+  const t = setup('none', false, true)
+  expect(await t.requestAttach(t.resumed)).toBe(true)
+  t.disconnect()
+  t.workerOpen.mockResolvedValueOnce({ version: STREAM_VERSION, error: 'ENGINE_TRANSCRIPT_TOO_LARGE' })
+  t.others.connected()
+  await vi.waitFor(() => expect(t.others.follows(sessionId)).toBe(false))
+  registry.setIdentityHold(agentId, 'private native evidence hold')
+  await t.confirm(); await Promise.all(t.attempts)
+  expect(registry.byAgent(agentId)?.identityHold).toBe('private native evidence hold')
+  expect(t.others.ready(sessionId)).toBe(false)
+  expect(t.requestAttach).toHaveBeenCalledTimes(1)
+  expect(t.activeStreams()).toBe(0)
+})
+
+it.each(['forgotten', 'different conversation'] as const)('discards a recovering reader after its owner is %s', async change => {
+  const t = setup('none', false, true)
+  expect(await t.requestAttach(t.resumed)).toBe(true)
+  t.disconnect(); t.pauseOpen(); t.others.connected()
+  await t.entered.promise
+  await t.confirm()
+  t.forget(sessionId); registry.removeAgent(agentId)
+  if (change === 'different conversation') {
+    registry.openProcessAgent({ engine: 'hermes', agentId, tmuxPane: '%42', cwd: directory, processIdentity: nextProcess })
+    registry.register({ engine: 'hermes', sessionId: '20261116_100001_abcdef', tmuxPane: '%42', cwd: directory, processIdentity: nextProcess })
+  }
+  t.release.resolve()
+  await vi.waitFor(() => expect(t.workerOpen).toHaveBeenCalledTimes(2))
+  await t.workerOpen.mock.results[1].value
+  await vi.waitFor(() => expect(t.activeStreams()).toBe(0))
+  expect(t.others.ready(sessionId)).toBe(false)
+  expect(t.others.follows(sessionId)).toBe(false)
+  expect(t.requestAttach).toHaveBeenCalledTimes(1)
+  expect(registry.byAgent(agentId)?.sessionId).toBe(change === 'forgotten' ? undefined : '20261116_100001_abcdef')
 })
 
 it('follows native confirmation that also changes its route', async () => {

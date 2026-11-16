@@ -17,8 +17,7 @@ import 'package:dio/dio.dart';
 import 'package:xterm/xterm.dart' show RemoteScrollMemory, Terminal;
 import 'package:flutter/foundation.dart';
 // The 80-character limit on a fork's name counts what a person sees, as the desktop's does.
-import 'package:flutter/widgets.dart'
-    show AppLifecycleListener, StringCharacters;
+import 'package:flutter/widgets.dart' show StringCharacters;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../api/api_client.dart';
@@ -53,8 +52,6 @@ import '../logging/startup_trace.dart';
 import '../logging/typing_trace.dart';
 import '../notify/agent_announcer.dart';
 import '../notify/done_notice.dart';
-import '../notify/push_channel.dart';
-import '../notify/push_tokens.dart';
 import '../notify/system_notices.dart';
 import '../settings/config_store.dart';
 import '../stats/harness_stats.dart';
@@ -1283,7 +1280,6 @@ class AppNotifier extends ChangeNotifier {
     ViewerServices? viewer,
     PaneLayoutStore? paneLayoutStore,
     SystemNotices? systemNotices,
-    PushTokens? pushTokens,
     MachineCache? machineCache,
     KeptScreenStore? keptScreenStore,
     GroupSync? groupSync,
@@ -1356,7 +1352,6 @@ class AppNotifier extends ChangeNotifier {
     addListener(_syncProductMeasurement);
     unawaited(_measurementContext());
     _initDeviceLog();
-    _initPush(pushTokens, paneLayoutStore);
   }
 
   /// Which build this phone's reports come from ([ProductMeasurement.context]): the public release
@@ -1789,9 +1784,6 @@ class AppNotifier extends ChangeNotifier {
       );
       if (!_authWorkCurrent(revision)) return;
       if (!authStatus.loggedIn) {
-        // The session ended while the app was closed (revoked from another device): the OS stops
-        // delivering this account's pushes to the phone. The backend drop fails without a session.
-        if (_push case final push?) unawaited(push.forgetIfTold(api));
         currentUser = null;
         status = AppStatus.unauthenticated;
         notifyListeners();
@@ -1982,7 +1974,6 @@ class AppNotifier extends ChangeNotifier {
         if (currentUser?.id case final id?) {
           unawaited(_deviceLog?.signedInAs(id));
         }
-        _syncPush();
         notifyListeners();
       }
     } catch (error) {
@@ -2029,9 +2020,6 @@ class AppNotifier extends ChangeNotifier {
     // who had just pressed Sign out. The sign-out finishes the job itself.
     if (_leftByHand) return;
     _invalidateAuthWork();
-    // As on a sign-out here ([_endSession]): no lock-screen notice of this account after it. The
-    // backend drop fails without a session; the OS one still stops delivery.
-    if (_push case final push?) unawaited(push.forget(api));
     currentUser = null;
     signingIn = false;
     signInProvider = null;
@@ -2344,12 +2332,6 @@ class AppNotifier extends ChangeNotifier {
     if (_deviceLog case final log?) {
       try {
         await log.leave().timeout(const Duration(seconds: 5));
-      } catch (_) {}
-    }
-    // So does where to push to it: no notice of this account reaches a phone signed out of it.
-    if (_push case final push?) {
-      try {
-        await push.forget(api).timeout(const Duration(seconds: 5));
       } catch (_) {}
     }
     final revision = _invalidateAuthWork();
@@ -3536,53 +3518,6 @@ class AppNotifier extends ChangeNotifier {
       debugPrint('devices: could not save the dismissal: $error');
       _failedDismissals.addAll([...?pubs, ?pub]);
     }
-  }
-
-  // -- where to push to this phone (notify/push_tokens.dart) ---------------------------------------
-
-  /// Null in a test and in the sample, which never reach the OS, and on the web, which has no push.
-  PushTokens? _push;
-  AppLifecycleListener? _pushLifecycle;
-
-  void _initPush(PushTokens? given, PaneLayoutStore? paneLayoutStore) {
-    final push = _push =
-        given ??
-        (kIsWeb || kUnderTest || paneLayoutStore == null
-            ? null
-            : PushTokens(
-                channel: PushChannel(),
-                storage: paneLayoutStore.storage,
-                allowed: () => noticesEnabled(agentNotices.system),
-              ));
-    if (push == null) return;
-    // A tapped push opens the app and nothing more: no push names a page of its own.
-    push.channel.listen(onOpened: (_) {}, onChanged: _syncPush);
-    if (agentNotices.system case final LocalSystemNotices notices) {
-      notices.onAllowed = _syncPush;
-    }
-    // Back from the phone's Settings, where notices may have been turned on or off.
-    _pushLifecycle = AppLifecycleListener(onResume: _syncPush);
-  }
-
-  /// Tells the backend where to push to this phone while signed in: once the account is known, when
-  /// notices are allowed, when the OS hands over a new address, and back in the app.
-  void _syncPush() {
-    final push = _push;
-    final account = currentUser?.id;
-    if (push == null || _disposed || _signingOut != null || account == null) {
-      return;
-    }
-    final revision = _authRevision;
-    unawaited(
-      push.sync(
-        account: account,
-        api: api,
-        current: () =>
-            _authWorkCurrent(revision) &&
-            _signingOut == null &&
-            status == AppStatus.authenticated,
-      ),
-    );
   }
 
   void _initDeviceLog() {
@@ -6900,9 +6835,9 @@ class AppNotifier extends ChangeNotifier {
 
   String? _creationPlacementError(String targetId) {
     final target = swarms.where((s) => s.id == targetId).firstOrNull;
-    if (target == null) return 'This swarm was closed';
+    if (target == null) return 'This tab was closed';
     if (target.panes.length >= maxPanes) {
-      return 'This swarm is full. Open a new swarm to create a harness.';
+      return 'This tab is full. Open a new tab to create a harness.';
     }
     return null;
   }
@@ -7267,7 +7202,7 @@ class AppNotifier extends ChangeNotifier {
     notifyListeners();
     if (_creationPlacementError(targetId) != null) {
       _lastError =
-          'The harness was created, but its original swarm or layout changed. '
+          'The harness was created, but its original tab or layout changed. '
           'Use Open Harness to find it.';
       _lastErrorRetryable = false;
       notifyListeners();
@@ -9864,7 +9799,7 @@ class AppNotifier extends ChangeNotifier {
         existing == null &&
         targetPanes.length >= maxPanes) {
       _lastError =
-          'This swarm holds $maxPanes harnesses. Open another swarm to add more.';
+          'This tab holds $maxPanes harnesses. Open another tab to add more.';
       _lastErrorRetryable = false;
       notifyListeners();
       return;
@@ -11402,8 +11337,6 @@ class AppNotifier extends ChangeNotifier {
       swarm.panes.clear();
     }
     sessionPreviews.dispose();
-    _pushLifecycle?.dispose();
-    _push?.channel.close();
     agentNotices.dispose();
     _desk.dispose();
     daemonHabits.dispose();

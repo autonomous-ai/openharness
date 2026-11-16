@@ -194,6 +194,27 @@ describe('the dial\'s app filter', () => {
     await until('the pick logged', () => switches(d, 'pick') === 1 && d.log().includes('[device] app filter: picker'), 10_000)
   })
 
+  // The daemon's open is the fake in its root (harness/daemon.ts): it notes the run and brings nothing forward.
+  it.skipIf(process.platform !== 'darwin')('app.pick of VS Code runs one open -b com.microsoft.VSCode, and VS Code then settling in front changes nothing on the dial', async () => {
+    const { d, desk } = await fresh()
+    const dial = await plugged(desk)
+    const { vscode } = await fiveAgents(d, dial)
+    await listening(d)
+    const run = watch(d)
+    let since = dial.messages.length
+    dial.send({ t: 'app.pick', app: 'vscode' })
+    await shows(dial, 'vscode', vscode, since)
+    await until('one open -b of VS Code, logged', () =>
+      same(d.opens(), [['-b', VSCODE_BUNDLE]]) && d.log().includes('[device] app filter: bring · ok'), 10_000, 100)
+    since = dial.messages.length
+    const written = Date.now()
+    run.front(VSCODE_BUNDLE)
+    await settleWindowPassed(dial, written)
+    expect(appsFrames(dial, since).every((apps) => apps.shown === 'vscode')).toBe(true)
+    expect(switches(d, 'front')).toBe(0)
+    expect(d.opens()).toHaveLength(1)
+  })
+
   it('Claude Code in zellij inside Ghostty is in Ghostty\'s ring, and its row\'s host is zellij', async () => {
     const { d, desk } = await fresh()
     const dial = await plugged(desk)
@@ -506,6 +527,7 @@ describe('the dial\'s app filter', () => {
     dial.send({ t: 'app.pick', app: 'ghostty' })
     await shows(dial, 'ghostty', ghostty, since)
     await until('the pick logged', () => switches(d, 'pick') === 1, 10_000)
+    if (process.platform === 'darwin') await until('the bring logged', () => d.log().includes('[device] app filter: bring · ok'), 10_000)
     // A window opened and closed, for a view line.
     const window = await openWindow(d)
     await until('the view logged', () => views(d).length > 0, 30_000)
@@ -514,8 +536,9 @@ describe('the dial\'s app filter', () => {
     expect(log).toContain('[devices] listener open')
     expect(switches(d, 'front')).toBe(1)
     expect(log).toContain('[device] app filter: picker')
+    expect(log.includes('[device] app filter: bring · ok')).toBe(process.platform === 'darwin')
     for (const line of log.split('\n').filter((line) => line.includes('app filter') || line.includes('[devices] listener'))) {
-      expect(line).toMatch(/(\[devices\] listener open|\[devices\] listener in the last minute: \d+ unknown, \d+ oversized, \d+ over rate, \d+ refused, \d+ failed|\[device\] app filter: (switched · (front|pick|notice|empty)|picker|view (tabs|apps) · (front|pick|window|empty)))$/)
+      expect(line).toMatch(/(\[devices\] listener open|\[devices\] listener in the last minute: \d+ unknown, \d+ oversized, \d+ over rate, \d+ refused, \d+ failed|\[device\] app filter: (switched · (front|pick|notice|empty)|picker|view (tabs|apps) · (front|pick|window|empty)|bring · (ok|failed)))$/)
     }
     for (const word of [VSCODE_BUNDLE, GHOSTTY_BUNDLE, 'kitty', 'vscode', 'VS Code', 'ghostty', 'Ghostty']) expect(log).not.toContain(word)
   })
@@ -608,6 +631,7 @@ describe('the dial\'s app filter', () => {
       await onTab(dial, [h1, h2], since)
       await until('the pick\'s view logged', () => views(d).includes('tabs · pick') || null, 10_000)
       expect(views(d)).toEqual(['tabs · window', 'apps · front', 'tabs · pick'])
+      if (process.platform === 'darwin') await until('an open -b of Harness Desktop', () => same(d.opens().at(-1), ['-b', 'ai.autonomous.harness']), 10_000, 100)
       // The older dial was told the tab, never an app's ring.
       expect(rosters(older, olderSince).every((r) => r.end.tab === 't1' && same(ids(r), [h1, h2]))).toBe(true)
       expect(older.messages.some((m) => m.t === 'apps')).toBe(false)

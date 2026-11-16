@@ -37,8 +37,6 @@ export function createMetrics(hour: LastHour = createLastHour()) {
     labelNames: ['work'] as const, registers: [registry] })
   const workBusy = new Counter({ name: 'work_busy_seconds_total', help: 'Main-thread busy time, by kind of work, while CPU_SELF_PROFILE=1',
     labelNames: ['work'] as const, registers: [registry] })
-  const phonePushes = new Counter({ name: 'phone_pushes_total', help: 'Pushes to phones (push/send.ts), by platform, outcome and kind',
-    labelNames: ['platform', 'outcome', 'kind'] as const, registers: [registry] })
   const works = new Set<string>()
   const work = (kind: string) => {
     if (works.has(kind)) return kind
@@ -64,8 +62,6 @@ export function createMetrics(hour: LastHour = createLastHour()) {
       }
       hour.db(window)
     },
-    /** One push to one phone: sent, gone (a dead token), sandbox, failed, or unconfigured (no keys for its platform). */
-    phonePush(platform: string, outcome: string, kind: string) { phonePushes.inc({ platform, outcome, kind }) },
     /** A minute of `cpu by kind`, every kind of work's busy ms. */
     busyWindow(window: BusyWindow) {
       for (const [kind, ms] of window) workBusy.inc({ work: work(kind) }, ms / 1000)

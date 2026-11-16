@@ -18,7 +18,7 @@ the root is the hosted workspace, where sign-in returns (`/web` redirects there)
 Publish the browser build before the corresponding native hn release so the entry point
 recognizes the viewer destination.
 
-The browser target uses this same Flutter package: swarms, pickers, settings, state and
+The browser target uses this same Flutter package: tabs, pickers, settings, state and
 the patched xterm renderer are shared. `lib/main.dart` picks the browser's workspace at
 compile time (a conditional import of `lib/web/web_entry.dart`), composed for a mouse:
 every action desktop keeps in its native menus is clickable (keys still work, they are
@@ -113,7 +113,7 @@ For a local production build, run `bash scripts/build-web-release.sh X.Y.Z`.
   a full-page fleet diagram and prominent CTA, sharing the native login actions
   and their waiting, cancellation, and recovery states.
 - Workspace shortcuts use **Option/Alt** in the browser: Alt-P finds harnesses,
-  Alt-N starts a harness, Alt-M opens machines, and Alt-T opens a swarm.
+  Alt-N starts a harness, Alt-M opens machines, and Alt-T opens a tab.
   Alt-Shift-A opens the companion conversation without taking New Tab's key.
   Machine connection commands and link requests use that same `@` picker,
   with connection and setup forms inside its preview pane.

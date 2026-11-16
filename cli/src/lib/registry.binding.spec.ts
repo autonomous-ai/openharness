@@ -206,7 +206,7 @@ it.each(['identity', 'interpretation', 'unbound'] as const)('does not transfer t
   expect(result.entry.identityHold).toBeUndefined(); expect(result.entry.interpretationHold).toBeUndefined()
   const { createBinding } = await import('../core/agents/bind.js')
   const attachSession = vi.fn(async () => true)
-  const binding = createBinding({ registry, attachSession, stoppedAgents: { save: vi.fn() },
+  const binding = createBinding({ registry, attachSession, followsLive: () => false, stoppedAgents: { save: vi.fn() },
     mirror: { inheritSummary: vi.fn() }, forgetSession: vi.fn(), clients: { send: vi.fn() },
     announceSession: vi.fn(), syncRecapPool: vi.fn(),
   } as unknown as import('../core/agents/bind.js').BindDeps)
