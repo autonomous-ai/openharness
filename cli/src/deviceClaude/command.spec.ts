@@ -102,7 +102,7 @@ async function device(argv: string[], deps: Partial<DeviceDeps> = {}) {
   const err: string[] = []
   const code = await runDeviceCommand(argv, {
     dataDir: folder(), port: PORT, platform: 'darwin', stdin: chunks(), claude: () => fakeClaude(),
-    codexHome: folder(), codex: () => true,
+    codexHome: folder(), codex: () => true, env: {}, cwd: '/',
     out: (line) => { out.push(line) }, err: (line) => { err.push(line) },
     ...deps,
   })
@@ -278,6 +278,38 @@ describe('harness device codex', () => {
     for (const argv of [['codex'], ['codex', 'install'], ['codex', 'status', 'extra']]) {
       expect(await device(argv), argv.join(' ')).toEqual({ code: 1, out: [], err: [DEVICE_USAGE] })
     }
+  })
+})
+
+describe('harness device notify', () => {
+  /** The devices' listener on its real socket in [dataDir], answering every message with [answer]; it hears each body. */
+  async function devicesAnswering(dataDir: string, answer: string): Promise<string[]> {
+    const bodies: string[] = []
+    const served = await listenLocalSocket((req, res) => {
+      let body = ''
+      req.setEncoding('utf8')
+      req.on('data', (chunk: string) => { body += chunk })
+      req.on('end', () => { bodies.push(body); res.writeHead(200, { 'content-type': 'application/json' }).end(answer) })
+    }, devicesListenerPath(dataDir)!)
+    cleanup.push(served.close)
+    return bodies
+  }
+
+  it('device notify reaches the devices\' listener and prints its answer', async () => {
+    const dataDir = folder()
+    const bodies = await devicesAnswering(dataDir, '{"result":"shown"}')
+    expect(await device(['notify', 'Connect the VPN'], { dataDir, env: { CODEX_THREAD_ID: 't-1' }, cwd: '/code/api' }))
+      .toEqual({ code: 0, out: ['shown'], err: [] })
+    expect(bodies.map((body) => JSON.parse(body)))
+      .toEqual([{ type: 'notice', text: 'Connect the VPN', engine: 'codex', sessionId: 't-1', folder: 'api' }])
+  })
+
+  it('with no listener it prints no dial, exit 0', async () => {
+    expect(await device(['notify', 'Connect the VPN'])).toEqual({ code: 0, out: ['no dial'], err: [] })
+  })
+
+  it('the usage names notify', () => {
+    expect(DEVICE_USAGE).toContain('harness device notify "<one line>" [--json]')
   })
 })
 
