@@ -5095,6 +5095,12 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
   const attach = (port: DevicesPort) => { seen.host.watching!(true); port.swarms(null) }
   const listed = async () => (await host().listAgentSnapshot()).agents.map(({ id, name, caps }) => ({ id, name, caps }))
   const said = () => logs.filter((line) => line.startsWith('[device] '))
+  /** Claude Code in another app, as its hook names it by TERM_PROGRAM: a page the dial can pick. */
+  const elsewhere = (port: DevicesPort, sessionId: string, program: string) => port.observed({
+    engine: 'claude', sessionId, event: 'session-start', cwd: '/work/web', callerPid: 4243, transcriptPath: `/t/${sessionId}.jsonl`,
+    hostHints: { TERM_PROGRAM: program },
+  })
+  const brings = () => logs.filter((line) => line.includes('app filter: bring'))
   /** The watch on the folder hc's socket goes in: herdr's has a folder of its own. Read in the test, after its env. */
   const hcWatch = () => [hcClientDeps(), expect.any(Function)]
   beforeEach(() => {
@@ -5253,6 +5259,29 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
     const [{ id }] = await listed()
     expect(await host().openAgent(id)).toBeUndefined()
     expect(orcaRuns).toEqual([['/tmp/e2e/fake-open', ['-b', 'dev.herdr.app'], 10_000], switchTo('t7')])
+  })
+
+  // One bring at a time, and the last pick wins (docs/plans/2026-11-16-dial-pick-brings-app-design.md, decision 4): a tap
+  // turns the dial to its own agent, and a pick waiting would turn it away again.
+  it('a tap on a Herdr agent drops the pick waiting: it answers nothing and its open never runs', async () => {
+    let release!: () => void
+    const held = new Promise<void>((done) => { release = done })
+    const { port, live } = withHc({ orca: { ...onMac, run: async (file: string, args: string[], timeoutMs: number) => {
+      orcaRuns.push([file, args, timeoutMs])
+      if (args[1] === 'com.microsoft.VSCode') await held
+      return { code: 0, stdout: '' }
+    } } })
+    live()
+    for (const [sessionId, program] of [['g-1', 'ghostty'], ['g-2', 'ghostty'], ['v-1', 'vscode']]) elsewhere(port, sessionId, program)
+    expect((await host().listAgentSnapshot({ apps: true })).apps?.shown).toBe('ghostty')
+    const { id } = (await listed()).find(({ name }) => name === 'api')!
+    // VS Code's open runs and holds; Ghostty's waits behind it.
+    expect(host().pickApp('vscode')).toBe('switched')
+    expect(host().pickApp('ghostty')).toBe('switched')
+    expect(await host().openAgent(id)).toBeUndefined()
+    release()
+    await vi.waitFor(() => expect(brings()).toEqual(['[device] app filter: bring · ok']))
+    expect(orcaRuns).toEqual([['/usr/bin/open', ['-b', 'com.microsoft.VSCode'], 10_000], openHerdr, switchTo('t7')])
   })
 
   it('a tap on a hooked agent in a Herdr terminal runs the same two commands, and no second open', async () => {
