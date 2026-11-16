@@ -14,8 +14,8 @@ interface Call { file: string; args: string[]; timeoutMs: number }
 
 /** A recording runner that runs nothing, so no spec opens Herdr or moves its window: each call answers the next of
  *  [codes], then exit 0. Beside it a recording client that opens no socket (its `prompt` answers `sent` unless the test
- *  sets another answer, its socket there), Herdr in front and every terminal shown unless the test says otherwise, and
- *  the log's lines kept. */
+ *  sets another answer, its socket there), Herdr in front, every terminal shown and the default hc session followed
+ *  unless the test says otherwise, and the log's lines kept. */
 function recorder(over: Partial<HerdrAppDeps> = {}, codes: Array<number | null> = []) {
   const calls: Call[] = []
   const log: string[] = []
@@ -32,6 +32,7 @@ function recorder(over: Partial<HerdrAppDeps> = {}, codes: Array<number | null> 
     client: { prompt, socketStamp },
     inFront: () => true,
     shows: () => true,
+    hookIds: true,
     log: (line) => log.push(line),
     ...over,
   }
@@ -135,6 +136,20 @@ describe('the Herdr adapter', () => {
     expect(adapter.paneOf(detected({ HC_TERMINAL_ID: 't3', TERM_PROGRAM: 'ghostty' }))).toEqual(pane('t3'))
     const ghostty: Place = { host: 'ghostty', app: 'ghostty', hints: { HC_TERMINAL_ID: 't3', TERM_PROGRAM: 'ghostty' } }
     expect(adapter.paneOf(ghostty)).toBeUndefined()
+  })
+
+  // The hook sends the address of a terminal of the default hc session alone (notify.mjs): a session of its own counts
+  // from t1 again, so to devices following another session the address is another of their terminals.
+  it('paneOf takes a hook\'s address only when the devices follow the default hc session', async () => {
+    const hints = { HC_TERMINAL_ID: 't7', TERM_PROGRAM: 'ghostty' }
+    expect(recorder({ hookIds: true }).adapter.paneOf(place(hints))).toEqual(pane('t7'))
+    for (const hookIds of [false, undefined]) {
+      const { calls, adapter } = recorder({ hookIds })
+      expect(adapter.paneOf(place(hints)), String(hookIds)).toBeUndefined()
+      // The hc source's own rows still come by their address.
+      expect(await adapter.focus(pane('t7')), String(hookIds)).toBe(true)
+      expect(calls, String(hookIds)).toEqual([openCall, focusCall('t7')])
+    }
   })
 
   // Every hc terminal has HC_TERMINAL_ID, hidden `hc run` workers too: a hooked copy in one has the pane for words only.
