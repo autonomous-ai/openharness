@@ -30,7 +30,9 @@ that:
 2. **An app with no bundle** (tmux, Rex, Zellij, Other) **and herdr** bring nothing forward: the ring changes as today.
    herdr is in `APP_BUNDLES` (`dev.herdr.app`), but the `herdr` ring holds the agents herdr's socket lists, whose
    terminal nobody knows (#4366): the herdr app opens only on a tap of a hooked agent that says it runs there
-   (docs/specs/2026-11-16-device-herdr.md), never on a pick.
+   (docs/specs/2026-11-16-device-herdr.md), never on a pick. Since `fix/herdr-socket-path`, a herdr ring that holds a
+   Herdr agent (one Herdr Core lists, or a hooked agent with a pane of Herdr's) brings Herdr on a pick
+   (docs/plans/2026-11-16-herdr-app-design.md, Q-pick).
 3. **Not running:** `open -b` starts the app. The dial lists VS Code's agents with VS Code closed (#4336), so a pick of
    VS Code can start it: the PM's decision, no extra rule.
 4. **No loop.** The picked app coming to the front is reported as a front of that same app: the filter's settle sees the

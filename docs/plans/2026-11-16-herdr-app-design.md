@@ -99,9 +99,10 @@ Built as `HerdrSource` is: it runs while a dial is attached, pushed and never po
   terminal's `name`, else its folder's name, else the kind. State: `idle` → idle, `working` → working, `blocked` →
   needs-you, `done` → done with `unseenDone`, `error` → error (the dial's error card, as for other agents). A turn that
   leaves `working` or `blocked` for `idle` is a done card with nothing unseen, as herdr's Q10.
-- **Its tap** is the Herdr adapter's `focus` (which brings Herdr itself, below). **Its swipe:** the source has `hasPane`
-  (Herdr's adapter can show it now) and `showPane` (the adapter's `show`), which `cableHost.ts` reads for a rest; herdr's
-  source has neither. Its words go through the adapter's `prompt`.
+- **Its tap** goes through the opener (`open.ts`), as a hooked agent's does, to the Herdr adapter's `focus` (which
+  brings Herdr itself, below): one bring runs at a time, and a pick waiting is dropped. **Its swipe:** the source has
+  `hasPane` (Herdr's adapter can show it now) and `showPane` (the adapter's `show`), which `cableHost.ts` reads for a
+  rest; herdr's source has neither. Its words go through the adapter's `prompt`.
 - **Which terminals the window shows** (`shows(address)`) is the source's to answer, for the adapter: every live
   terminal of this machine labeled `herdr.space`, with a status or none, listed or past the 64 (the client keeps 1,024
   at most). **Which report an agent** (`reports(address)`), for the adapter's `canType`: every live terminal hc reports
@@ -122,12 +123,13 @@ Built as `HerdrSource` is: it runs while a dial is attached, pushed and never po
   The hc source's tap calls this same `focus`, so an agent no hook told of brings Herdr too.
 - `canShow`: Herdr is the app in front. `show`: `agent.focus` alone. One run per terminal: a second focus or show is
   the same run.
-- `canFocus` and `canShow` answer true only for a terminal the hc source lists (`shows`). Every hc terminal has
-  `HC_TERMINAL_ID`, hidden `hc run` workers too, and the window shows those not: their hook's copy has the pane for words
-  only.
-- `type`, `canType` (hc's socket is there) and `paneKey` (`herdr-app:<address>`), as `herdr.ts` has them. A focus does
-  not wait for words under way: hc types by address, whatever the window shows. A second prompt to one terminal while one
-  is under way is `busy`.
+- `canFocus` and `canShow` answer true only for a terminal the window shows (the hc source's `shows`). Every hc terminal
+  has `HC_TERMINAL_ID`, hidden `hc run` workers too, and the window shows those not: their hook's copy has the pane for
+  words only.
+- `type`, `canType` (hc reports a status there, the hc source's `reports`) and `paneKey` (`herdr-app:<address>`), as
+  `herdr.ts` has them. A hooked agent in a terminal hc reports no status for gets no words: hc would type them into
+  whatever program runs there. A focus does not wait for words under way: hc types by address, whatever the window
+  shows. A second prompt to one terminal while one is under way is `busy`.
 - Order in `devices.ts` `adapters`: after tmux (a tmux inside an hc terminal is the nearer host), wrapped by `noting` as
   the others are, so a hooked agent in Herdr never reaches Ghostty's tab adapter. Its client is injected as
   `deps.herdr` is.
@@ -139,6 +141,9 @@ Built as `HerdrSource` is: it runs while a dial is attached, pushed and never po
   terminal of a named session (`HC_SESSION`, `HC_SOCKET`) are read from a private hc's own terminal in the first task,
   never from another process.
 - The hook sends `HC_TERMINAL_ID` on macOS only (Q5), so Linux and Windows stay as they are.
+- The hook leaves `HC_TERMINAL_ID` out in a herdr pane, when `HERDR_PANE_ID` or `HERDR_SESSION` is set in its own
+  environment: herdr started in an hc terminal keeps that terminal's address and is the nearer host, and a named herdr
+  session sends no `HERDR_PANE_ID`, so the address alone would read as Herdr's own terminal (`inHerdr`).
 - `detectHost` and `detectApp`: `HC_TERMINAL_ID` → `herdr`, ahead of the bundle check and `TERM_PROGRAM` (hc's
   terminals say `ghostty`, and hc's own bundle is `dev.herdr.core`). The app id stays `herdr`, whose bundle is already
   `dev.herdr.app`: no seventeenth app (`CABLE_MAX_APPS` is 16).
@@ -259,6 +264,10 @@ Answered after the draft plan (PM for Diego, 2026-11-16):
 - **Q6.** The wait, retries and stale rule live in one file both sources use.
 - **Q7.** Words to an errored agent are refused with `<name> did not answer.`, counted `no-answer`. No new copy.
 - **Q8.** A socket younger than 2 s gets one retry after 1 s before it counts as stale, with a test.
+- **Q-pick.** A pick of herdr on the dial brings Herdr (`open -b dev.herdr.app`) while herdr's ring holds a Herdr agent:
+  one the hc source lists, or a hooked agent with a pane of Herdr's. herdr 0.8.0's agents alone bring nothing, as
+  before (docs/plans/2026-11-16-dial-pick-brings-app-design.md, decision 2). Whether Herdr.app is running is not asked:
+  the cli has no check for it.
 
 ## Task 1 findings (2026-11-16, Herdr Core 0.1.21, private cores on this Mac)
 

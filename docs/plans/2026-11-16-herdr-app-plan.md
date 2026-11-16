@@ -534,9 +534,6 @@ Spec Q5: macOS only.
   ```ts
   /** hc's address of a terminal of this machine, `t7`, `t1b`: never another machine's `vps/t7`. */
   export const HC_TERMINAL = /^t[0-9][0-9a-z]{0,15}$/
-  export const HC_SILENCE_MS = 45_000
-  export const HC_SEND_MS = 75_000
-  export const HC_MAX_TERMINALS = 1024
   /** The key a hooked copy and a listed copy of one agent share (registry.ts). */
   export const hcPaneKey = (address: string): string => `herdr-app:${address}`
 
