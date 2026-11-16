@@ -226,7 +226,7 @@ const codex: NonNullable<DevicesDeps['codex']> = {
  *  prompt, and has no socket for anything else. */
 const herdrCalls: unknown[][] = []
 const herdr: HerdrClient = {
-  request: async (method, params) => { herdrCalls.push(['request', method, params]); return { ok: false, code: 'no_socket' } },
+  request: async (method, params) => { herdrCalls.push(['request', method, params]); return { ok: false, fault: 'no_socket' } },
   subscribe: (entries, to) => {
     herdrCalls.push(['subscribe', entries])
     // As the client tells it with no socket: once the caller holds its close.
@@ -4070,7 +4070,7 @@ describe('herdr\'s agents, over its socket (docs/specs/2026-11-16-device-herdr.m
     expect(await host().sendTurn(id, 'run the tests')).toMatchObject({ ok: false, message: 'api is waiting for your answer in herdr.' })
     status('idle')
     expect(await host().sendTurn(id, 'x'.repeat(2001))).toMatchObject({ ok: false, message: 'Too long. Say it shorter.' })
-    herdr.prompts.push({ outcome: 'failed', code: 'agent_not_ready' })
+    herdr.prompts.push({ outcome: 'failed', fault: 'rejected', code: 'agent_not_ready' })
     expect(await host().sendTurn(id, 'run the tests')).toMatchObject({ ok: false, message: 'api did not answer.' })
     expect(said()).toEqual(['[device] voice · herdr', '[device] voice · busy', '[device] voice · waiting', '[device] voice · too-long',
       '[device] voice · no-answer'])

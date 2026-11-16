@@ -91,7 +91,7 @@ describe('the herdr adapter', () => {
     expect(prompt.mock.calls).toEqual([['w1:p2', 'claude', 'next']])
     prompt.mockResolvedValueOnce({ outcome: 'busy' })
     expect(await adapter.type!(pane('w1:p2'), 'next', 'claude')).toBe(false)
-    prompt.mockResolvedValueOnce({ outcome: 'failed', code: 'agent_not_ready' })
+    prompt.mockResolvedValueOnce({ outcome: 'failed', fault: 'rejected', code: 'agent_not_ready' })
     expect(await adapter.type!(pane('w1:p2'), 'next', 'claude')).toBe(false)
   })
 
@@ -107,7 +107,7 @@ describe('the herdr adapter', () => {
   })
 
   it('prompt answers what the client answered', async () => {
-    for (const answer of [{ outcome: 'sent' }, { outcome: 'busy' }, { outcome: 'failed', code: 'agent_not_ready' }] as HerdrPrompt[]) {
+    for (const answer of [{ outcome: 'sent' }, { outcome: 'busy' }, { outcome: 'failed', fault: 'rejected', code: 'agent_not_ready' }] as HerdrPrompt[]) {
       const { adapter, prompt } = recorder()
       prompt.mockResolvedValueOnce(answer)
       expect(await adapter.prompt('w1:p2', 'codex', 'run the tests')).toEqual(answer)
@@ -187,7 +187,7 @@ describe('the herdr adapter', () => {
 
     it('the pane is free again after sent, busy, failed, and a focus that failed', async () => {
       const { calls, adapter, prompt } = recorder({}, [1])
-      for (const answer of [{ outcome: 'sent' }, { outcome: 'busy' }, { outcome: 'failed', code: 'timeout' }] as HerdrPrompt[]) {
+      for (const answer of [{ outcome: 'sent' }, { outcome: 'busy' }, { outcome: 'failed', fault: 'timeout' }] as HerdrPrompt[]) {
         prompt.mockResolvedValueOnce(answer)
         expect(await adapter.prompt('w1:p2', 'claude', 'one')).toEqual(answer)
       }

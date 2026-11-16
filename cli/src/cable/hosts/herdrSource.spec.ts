@@ -726,6 +726,18 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     await s.until(() => s.source.list().length === 1)
   })
 
+  // herdr's own codes and the client's words are apart: a herdr that answers `no_socket` has a socket, and is retried with
+  // the waits that grow and give up, as for any refusal, never reconnected on each change beside its socket.
+  it('a list herdr refuses with a code that is one of the client\'s own words is rejected, and retried', async () => {
+    server.answer('agent.list', refusal('no_socket'))
+    const s = setup()
+    s.source.start()
+    await s.until(() => s.timers.length > 0)
+    expect(s.log).toEqual(['[herdr] list · rejected', '[herdr] retry · 1'])
+    expect(s.watchers.size).toBe(0)
+    await server.ended(1)
+  })
+
   it('a list that fails, and a new subscription that does not start, are a drop', async () => {
     server.answer('agent.list', refusal('invalid_request'))
     const s = setup()

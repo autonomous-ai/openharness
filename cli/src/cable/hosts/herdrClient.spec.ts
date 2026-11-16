@@ -104,18 +104,27 @@ describe.skipIf(process.platform === 'win32')('the herdr client (docs/specs/2026
     await server.ended(2)
   })
 
-  it('an error answers its code, under its own id or ""; a code not in herdr\'s form is bad_answer', async () => {
+  it('an error is rejected with its code, under its own id or ""; a code not in herdr\'s form is bad_answer', async () => {
     const herdr = client()
-    expect(await herdr.request('agent.get', { target: 'w1:p1' })).toEqual({ ok: false, code: 'agent_not_found' })
+    expect(await herdr.request('agent.get', { target: 'w1:p1' })).toEqual({ ok: false, fault: 'rejected', code: 'agent_not_found' })
     server.answer('agent.list', { line: { id: '', error: { code: 'invalid_request', message: 'invalid request' } } })
-    expect(await herdr.request('agent.list', {})).toEqual({ ok: false, code: 'invalid_request' })
+    expect(await herdr.request('agent.list', {})).toEqual({ ok: false, fault: 'rejected', code: 'invalid_request' })
     server.answer('agent.list', refusal('Bad Code!'))
-    expect(await herdr.request('agent.list', {})).toEqual({ ok: false, code: 'bad_answer' })
+    expect(await herdr.request('agent.list', {})).toEqual({ ok: false, fault: 'bad_answer' })
+  })
+
+  // herdr's codes and the client's own words are apart: a herdr that answers `no_socket` has a socket.
+  it('an error whose code is one of the client\'s own words is still rejected, with its code', async () => {
+    const herdr = client()
+    for (const code of ['no_socket', 'timeout', 'refused', 'bad_answer']) {
+      server.answer('agent.list', refusal(code))
+      expect(await herdr.request('agent.list', {}), code).toEqual({ ok: false, fault: 'rejected', code })
+    }
   })
 
   it('an answer under another id, or with neither result nor error, is bad_answer; a line that is no object is bad_json; one over 1 MiB is oversize', async () => {
     const herdr = client()
-    for (const [answer, code] of [
+    for (const [answer, fault] of [
       [{ line: { id: 'another', result: { type: 'agent_list', agents: [] } } }, 'bad_answer'],
       [{ line: { id: 'another', error: { code: 'agent_not_found', message: '' } } }, 'bad_answer'],
       [{ line: {} }, 'bad_answer'],
@@ -125,7 +134,7 @@ describe.skipIf(process.platform === 'win32')('the herdr client (docs/specs/2026
       [{ raw: `{"pad":"${'x'.repeat(MAX_LINE_BYTES)}"}\n` }, 'oversize'],
     ] as const) {
       server.answer('agent.list', answer)
-      expect(await herdr.request('agent.list', {}), JSON.stringify(answer).slice(0, 80)).toEqual({ ok: false, code })
+      expect(await herdr.request('agent.list', {}), JSON.stringify(answer).slice(0, 80)).toEqual({ ok: false, fault })
     }
   })
 
@@ -139,8 +148,8 @@ describe.skipIf(process.platform === 'win32')('the herdr client (docs/specs/2026
       // herdr's socket there is a named pipe, which this client does not speak.
       client({ platform: 'win32' }),
     ]) {
-      expect(await herdr.request('agent.list', {})).toEqual({ ok: false, code: 'no_socket' })
-      expect(await herdr.prompt('w1:p1', 'claude', 'go')).toEqual({ outcome: 'failed', code: 'no_socket' })
+      expect(await herdr.request('agent.list', {})).toEqual({ ok: false, fault: 'no_socket' })
+      expect(await herdr.prompt('w1:p1', 'claude', 'go')).toEqual({ outcome: 'failed', fault: 'no_socket' })
       const { calls, to, told } = subscriber()
       herdr.subscribe(ENTRIES, to)
       await told(1)
@@ -152,7 +161,7 @@ describe.skipIf(process.platform === 'win32')('the herdr client (docs/specs/2026
   it('a stale socket is refused; a connection that ends before its answer is ended; none in 10 s is timeout, and its connection closes', async () => {
     const herdr = client()
     server.answer('agent.list', 'close')
-    expect(await herdr.request('agent.list', {})).toEqual({ ok: false, code: 'ended' })
+    expect(await herdr.request('agent.list', {})).toEqual({ ok: false, fault: 'ended' })
 
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     server.answer('agent.list', 'hold')
@@ -163,12 +172,12 @@ describe.skipIf(process.platform === 'win32')('the herdr client (docs/specs/2026
     await turn()
     expect(answered).toBe(false)
     vi.advanceTimersByTime(1)
-    expect(await answer).toEqual({ ok: false, code: 'timeout' })
+    expect(await answer).toEqual({ ok: false, fault: 'timeout' })
     await server.ended(2)
     vi.useRealTimers()
 
     await server.stale()
-    expect(await herdr.request('agent.list', {})).toEqual({ ok: false, code: 'refused' })
+    expect(await herdr.request('agent.list', {})).toEqual({ ok: false, fault: 'refused' })
   })
 
   it('subscribe writes one line, calls started, then each event with its name and data', async () => {
@@ -232,6 +241,7 @@ describe.skipIf(process.platform === 'win32')('the herdr client (docs/specs/2026
     it.each([
       ['rejected', 'an error answer', refusal('invalid_request'), undefined],
       ['rejected', 'an error under ""', { line: { id: '', error: { code: 'invalid_request', message: 'invalid request' } } }, undefined],
+      ['rejected', 'an error whose code is one of the client\'s own words', refusal('bad_answer'), undefined],
       ['bad_answer', 'a first line that is neither started nor an error', { line: { result: { type: 'agent_list' } } }, undefined],
       ['bad_answer', 'subscription_started under another id', { line: { id: 'another', result: { type: 'subscription_started' } } }, undefined],
       ['bad_answer', 'an error under another id', { line: { id: 'another', error: { code: 'invalid_request', message: '' } } }, undefined],
@@ -333,7 +343,7 @@ describe.skipIf(process.platform === 'win32')('the herdr client (docs/specs/2026
 
   it('the fake server, as herdr, refuses an empty prompt', async () => {
     server.agents = [agent('w1:p1', 'claude', 'idle')]
-    expect(await client().request('agent.prompt', { target: 'w1:p1', text: '' })).toEqual({ ok: false, code: 'empty_agent_prompt' })
+    expect(await client().request('agent.prompt', { target: 'w1:p1', text: '' })).toEqual({ ok: false, fault: 'rejected', code: 'empty_agent_prompt' })
   })
 
   it.each(['idle', 'done'])('prompt reads the pane again, then sends the line (%s)', async (status) => {
@@ -354,8 +364,8 @@ describe.skipIf(process.platform === 'win32')('the herdr client (docs/specs/2026
   it('a pane that holds another kind is failed, not_that_agent; a pane with no agent is failed, agent_not_found', async () => {
     server.agents = [agent('w1:p1', 'codex', 'idle')]
     const herdr = client()
-    expect(await herdr.prompt('w1:p1', 'claude', 'go')).toEqual({ outcome: 'failed', code: 'not_that_agent' })
-    expect(await herdr.prompt('w2:p1', 'claude', 'go')).toEqual({ outcome: 'failed', code: 'agent_not_found' })
+    expect(await herdr.prompt('w1:p1', 'claude', 'go')).toEqual({ outcome: 'failed', fault: 'not_that_agent' })
+    expect(await herdr.prompt('w2:p1', 'claude', 'go')).toEqual({ outcome: 'failed', fault: 'rejected', code: 'agent_not_found' })
     expect(server.requests.map(({ request }) => (request as { method: string }).method)).toEqual(['agent.get', 'agent.get'])
   })
 
@@ -367,7 +377,7 @@ describe.skipIf(process.platform === 'win32')('the herdr client (docs/specs/2026
       { type: 'agent_info', agent: agent('w2:p1', 'claude', 'idle') },
     ]) {
       server.answer('agent.get', { line: { result } })
-      expect(await herdr.prompt('w1:p1', 'claude', 'go'), result.type).toEqual({ outcome: 'failed', code: 'bad_answer' })
+      expect(await herdr.prompt('w1:p1', 'claude', 'go'), result.type).toEqual({ outcome: 'failed', fault: 'bad_answer' })
     }
     expect(server.requests.map(({ request }) => (request as { method: string }).method)).toEqual(['agent.get', 'agent.get'])
   })
@@ -377,7 +387,7 @@ describe.skipIf(process.platform === 'win32')('the herdr client (docs/specs/2026
     const herdr = client()
     for (const code of ['agent_not_ready', 'agent_not_found', 'empty_agent_prompt']) {
       server.answer('agent.prompt', refusal(code))
-      expect(await herdr.prompt('w1:p1', 'claude', 'go')).toEqual({ outcome: 'failed', code })
+      expect(await herdr.prompt('w1:p1', 'claude', 'go')).toEqual({ outcome: 'failed', fault: 'rejected', code })
     }
     // Nothing is sent twice.
     expect(server.requests.map(({ request }) => (request as { method: string }).method))
@@ -388,13 +398,13 @@ describe.skipIf(process.platform === 'win32')('the herdr client (docs/specs/2026
     const read = herdr.prompt('w1:p1', 'claude', 'go')
     await server.got('agent.get', 4)
     vi.advanceTimersByTime(10_000)
-    expect(await read).toEqual({ outcome: 'failed', code: 'timeout' })
+    expect(await read).toEqual({ outcome: 'failed', fault: 'timeout' })
     server.answer('agent.get')
     server.answer('agent.prompt', 'hold')
     const sent = herdr.prompt('w1:p1', 'claude', 'go')
     await server.got('agent.prompt', 4)
     vi.advanceTimersByTime(10_000)
-    expect(await sent).toEqual({ outcome: 'failed', code: 'timeout' })
+    expect(await sent).toEqual({ outcome: 'failed', fault: 'timeout' })
   })
 
   it('control characters become spaces', async () => {
@@ -415,7 +425,7 @@ describe.skipIf(process.platform === 'win32')('the herdr client (docs/specs/2026
       ['w1:p1; rm -rf /', 'claude', 'go'],
       ['w1:p1', 'Claude', 'go'],
     ]) {
-      expect(await herdr.prompt(pane, kind, text), `${pane} ${kind} ${text.length}`).toEqual({ outcome: 'failed', code: 'bad_request' })
+      expect(await herdr.prompt(pane, kind, text), `${pane} ${kind} ${text.length}`).toEqual({ outcome: 'failed', fault: 'bad_request' })
     }
     expect(server.connections).toBe(0)
     expect(await herdr.prompt('w1:p1', 'claude', 'x'.repeat(2000))).toEqual({ outcome: 'sent' })

@@ -1744,7 +1744,7 @@ describe('ObservedSource panes', () => {
   })
 
   it('a prompt herdr did not take is no answer, and its turn is a person\'s', async () => {
-    for (const answer of [{ outcome: 'busy' }, { outcome: 'failed', code: 'agent_not_ready' }] as HerdrPrompt[]) {
+    for (const answer of [{ outcome: 'busy' }, { outcome: 'failed', fault: 'rejected', code: 'agent_not_ready' }] as HerdrPrompt[]) {
       const { actions } = fakeActions({ herdrPrompt: vi.fn(async () => answer) })
       const { src, ev } = setup({ actions })
       const hostHints = { HERDR_PANE_ID: 'w1:p2' }
