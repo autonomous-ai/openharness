@@ -12,8 +12,8 @@
  * and an empty body, and counted: what a sender wrote is never echoed or logged, since a front names the app a person
  * has in front of them.
  *
- * A stream type (`tabs`) is answered with NDJSON lines that stay open: the way the devices process says something to a
- * watch without the watch asking each time. One of a type is open at once, across every connection: a newer one ends
+ * A stream type (`tabs`, `dial`) is answered with NDJSON lines that stay open: the way the devices process says something
+ * to a watch without the watch asking each time. One of a type is open at once, across every connection: a newer one ends
  * the older with a last line, `{"replaced":true}`, and one asked with `"standby":true` opens only while none is.
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -445,5 +445,79 @@ export function tabsStream(): TabsStream {
     },
     isOpen: () => open !== undefined,
     select: ({ app, tty }, raise) => open?.write(raise ? { app, tty, raise: true } : { app, tty }) ?? false,
+  }
+}
+
+/** One a second on a connection: the plugin's worker opens it again after it ends, and a loop cannot churn it. */
+export const DIAL_PER_SECOND = 1
+/** Its message, `{"type":"dial","standby":true}`, is 30 bytes. */
+export const DIAL_MAX_BYTES = 64
+/** The longest name a line holds, in code points: a line stays under 400 bytes in any script. */
+export const DIAL_NAME_MAX = 64
+
+export type DialLine = { attached: false } | { attached: true; agent: { name: string; app: string } | null }
+
+export interface DialStream {
+  handler: ListenerStreamHandler
+  /** Whether any dial is attached. */
+  attached(on: boolean): void
+  /** The agent the dial shows, or null for none. */
+  shows(agent: { name: string; app: string } | null): void
+}
+
+/**
+ * The stream Orca's Harness Device plugin holds open to show the dial's state
+ * (docs/specs/2026-11-16-orca-device-plugin.md): the state as it opens, then a line each time it changes. Only the latest
+ * state is written, once the stream can take a line and only when it differs from the last one written, so a swipe
+ * across ten agents while a line drains is two lines, and no timer writes one. A name leaves the process here and
+ * nowhere else: the log says only that the stream opened, why it ended and how many lines a minute.
+ */
+export function dialStream({ log, after }: { log(line: string): void; after(ms: number, run: () => void): () => void }): DialStream {
+  let on = false
+  let agent: { name: string; app: string } | null = null
+  /** Writes the latest line on the open stream; none with no stream open. */
+  let writer: (() => void) | undefined
+  let written = 0
+
+  const latest = (): DialLine => on ? { attached: true, agent } : { attached: false }
+
+  return {
+    handler: {
+      maxBytes: DIAL_MAX_BYTES,
+      perSecond: DIAL_PER_SECOND,
+      open: (message, stream) => {
+        // A standby open never takes the stream from another Orca that holds it, so this one is never replaced.
+        if (message.standby !== true) return REFUSED
+        let last: string | undefined
+        const write = (): void => {
+          const line = latest()
+          const text = JSON.stringify(line)
+          // One that answers false is not remembered: the next writable call writes the then latest line.
+          if (text === last || !stream.write(line)) return
+          last = text
+          if (written++ === 0) after(MINUTE_MS, () => {
+            log(`[devices] dial stream · ${written} lines in the last minute`)
+            written = 0
+          })
+        }
+        writer = write
+        log('[devices] dial stream · open')
+        stream.ended.addEventListener('abort', () => {
+          writer = undefined
+          log(`[devices] dial stream · ended · ${stream.ended.reason}`)
+        })
+        stream.onWritable(write)
+      },
+    },
+    attached: (next) => {
+      on = next
+      writer?.()
+    },
+    shows: (next) => {
+      // Made anew: the line's keys in its own order, and nothing else the caller holds. Cut by code point, so a pair
+      // stays whole.
+      agent = next && { name: [...next.name].slice(0, DIAL_NAME_MAX).join(''), app: next.app }
+      writer?.()
+    },
   }
 }
