@@ -37,11 +37,14 @@ it.runIf(binary)('keeps connected local shells interactive and composes a remote
   await until('both fleet nodes online', () => world!.backend.nodeUp(a.machineId) && world!.backend.nodeUp(b.machineId))
   // These wrappers are the private equivalent of installed harness/hn binaries. They
   // retain each daemon's own environment and never fall through to a user's install.
+  // On the run's Node, not the worker's: a composed command runs `harness shell-launch` through them in a pane, and
+  // that command looks for npm-installed engines beside the Node it runs on (audit of 2026-11-16,
+  // docs/plans/2026-11-16-e2e-isolation-3-design.md).
   for (const machine of [a, b]) {
     const d = machine.daemon
     const wrapper = join(d.root, 'bin', 'harness')
     await writeFile(wrapper, '#!/bin/sh\nif [ "$1" = tui ]; then shift; exec ' + quote(binary!) + ' "$@"; fi\nexec '
-      + quote(process.execPath) + ' ' + quote(process.env.E2E_BUNDLE_PATH!) + ' "$@"\n', { mode: 0o700 })
+      + quote(process.env.E2E_NODE_PATH!) + ' ' + quote(process.env.E2E_BUNDLE_PATH!) + ' "$@"\n', { mode: 0o700 })
     await writeFile(join(d.env.HOME!, '.zshrc'), 'PS1="SHELL_READY> "\nexport PATH=' + quote(join(d.root, 'bin')) + ':"$PATH"\n')
   }
   const env: NodeJS.ProcessEnv = { ...a.daemon.env, HN_TMPDIR: a.daemon.root, HN_DESKTOP: 'off', HARNESS_TUI_DESK: 'off',
