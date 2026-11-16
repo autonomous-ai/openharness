@@ -6,7 +6,7 @@
  * Beside them, three reads of Orca's CLI (createOrcaReads): whether it has `watch-focus`, the terminals in tab order,
  * and a watch of the focused terminal (docs/plans/2026-11-16-dial-orca-focus-order-design.md).
  */
-import { execFile, spawn } from 'node:child_process'
+import { type ChildProcess, execFile, spawn } from 'node:child_process'
 import { existsSync, realpathSync, statSync } from 'node:fs'
 import { resolveBinaryOnPath } from '../../lib/binaryOnPath.js'
 import type { HostAdapter } from './adapter.js'
@@ -51,30 +51,47 @@ export interface OrcaReadDeps extends OrcaDeps {
   mtime(path: string): { realPath: string; mtimeMs: number } | null
 }
 
+const GONE: OrcaChild = { onData: () => {}, exited: Promise.resolve(), kill: () => {} }
+
 export function orcaDeps(): OrcaReadDeps {
   return {
     run: (file, args, timeoutMs) => new Promise((resolve) => {
       // The timeout's kill waits for the process to exit: one deaf to SIGTERM, or stuck where even SIGKILL waits, kept the
       // call and its terminal's one-command slot open for good. The deadline answers by itself.
       const deadline = setTimeout(() => resolve({ code: null, stdout: '' }), timeoutMs)
-      execFile(file, args, { timeout: timeoutMs, killSignal: 'SIGKILL' }, (error, stdout) => {
+      try {
+        execFile(file, args, { timeout: timeoutMs, killSignal: 'SIGKILL' }, (error, stdout) => {
+          clearTimeout(deadline)
+          // A number is the exit code; a timeout's kill or a binary that could not start has none.
+          resolve({ code: error === null ? 0 : typeof error.code === 'number' ? error.code : null, stdout })
+        })
+      } catch {
+        // A file or argument it refuses before starting (a NUL byte, a .cmd on Windows) throws rather than calls back.
         clearTimeout(deadline)
-        // A number is the exit code; a timeout's kill or a binary that could not start has none.
-        resolve({ code: error === null ? 0 : typeof error.code === 'number' ? error.code : null, stdout })
-      })
+        resolve({ code: null, stdout: '' })
+      }
     }),
     onPath: (name) => resolveBinaryOnPath(name),
     exists: existsSync,
     platform: process.platform,
     spawn: (file, args) => {
-      const child = spawn(file, args, { stdio: ['ignore', 'pipe', 'pipe'] })
-      // Drained: a child that writes more to stderr than its pipe holds stalls before its next line. Never kept: it can
-      // name paths.
-      child.stderr.resume()
+      let child: ChildProcess
+      try {
+        child = spawn(file, args, { stdio: ['ignore', 'pipe', 'pipe'] })
+      } catch {
+        // A file or argument it refuses before starting throws rather than emits: a child that has already gone.
+        return GONE
+      }
       // The close that follows says it: after an exit, and after a spawn that failed, which has no exit.
       child.on('error', () => {})
+      // Out of descriptors (EMFILE) it returns with no pipes, and no close follows its error.
+      const { stdout, stderr } = child
+      if (!stdout || !stderr) return GONE
+      // Drained: a child that writes more to stderr than its pipe holds stalls before its next line. Never kept: it can
+      // name paths.
+      stderr.resume()
       return {
-        onData: (listener) => { child.stdout.on('data', listener) },
+        onData: (listener) => { stdout.on('data', listener) },
         exited: new Promise((resolve) => { child.once('close', () => resolve()) }),
         kill: (signal) => { child.kill(signal) },
       }
@@ -180,7 +197,7 @@ export interface OrcaReads {
 // handle is held to ORCA_HANDLE and every read has a bound. A list's stdout stops at execFile's 1 MiB. Its layouts are
 // walked to 64 worktrees, 256 terminals and 32 levels: Orca 1.4.256 nests a tab's panes a few levels deep and the dial's
 // ring holds 16, so a layout past those is not one to rank by, and a large or odd one costs a bounded walk. A focus line
-// is `{"handle":"term_<uuid>"}`, 53 bytes: one past 512 is no line of Orca's and is dropped as it grows, never held.
+// is `{"handle":"term_<uuid>"}`, 54 bytes: one past 512 is no line of Orca's and is dropped as it grows, never held.
 // stderr is never kept: it can name paths.
 const MAX_WORKTREES = 64
 const MAX_HANDLES = 256
@@ -268,7 +285,8 @@ export function createOrcaReads(deps: OrcaReadDeps): OrcaReads {
       if (probe?.realPath === stamp.realPath && probe.mtimeMs === stamp.mtimeMs) return probe.answer
       const asked = {
         ...stamp,
-        answer: deps.run(orca, ['terminal', '--help'], RUN_TIMEOUT_MS).then(({ code, stdout }) => {
+        // A run that rejects is one that failed.
+        answer: deps.run(orca, ['terminal', '--help'], RUN_TIMEOUT_MS).catch(() => ({ code: null, stdout: '' })).then(({ code, stdout }) => {
           if (code === 0) return listsWatchFocus(stdout)
           // A run that failed or timed out says nothing of the CLI: the next ask runs it again.
           if (probe === asked) probe = undefined
