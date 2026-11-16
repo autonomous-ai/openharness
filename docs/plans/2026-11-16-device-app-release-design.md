@@ -166,7 +166,10 @@ Rust only: `tauri-plugin-updater` is registered in Rust and the webview gets no 
   new timer event. Release builds on macOS only: a debug build never checks, as it reads `HARNESS_DEVICE_CLI`; Linux
   compiles the same code with the check off, so PR CI compiles the glue.
 - **What.** A newer version (strictly greater, Tauri's rule) is downloaded, its signature checked against the
-  committed public key, installed over the running bundle, and the app relaunches. No question is asked: a menu-bar
+  committed public key, installed over the running bundle, and the app relaunches. `requireSignedVersion` is on: the
+  manifest is not signed, so the version the archive was signed for (the Tauri CLI writes it into the signature's
+  trusted comment) must be the manifest's, and an older signed release cannot be offered as a newer one (PM,
+  2026-11-16). No question is asked: a menu-bar
   app's menu is rarely opened, so an offered update would rarely be taken.
 - **Not mid-task.** While the CLI install or a sign-in runs, no check starts; the first tick after it ends starts the
   one that was due (so a first launch, which installs the CLI at once, checks right after the install, not 6 hours

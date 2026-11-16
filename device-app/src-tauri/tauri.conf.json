@@ -34,7 +34,8 @@
   "plugins": {
     "updater": {
       "endpoints": ["https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/device/metadata.json"],
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQ3MzlCRkNDNjg3QjFGNjIKUldSaUgzdG96TDg1UjdIaUhrOUZJQWF1Q1BMUGVyV0crMmNZZ0ZMWkx1QWp0dS9UbE9IcXAwdjkK"
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQ3MzlCRkNDNjg3QjFGNjIKUldSaUgzdG96TDg1UjdIaUhrOUZJQWF1Q1BMUGVyV0crMmNZZ0ZMWkx1QWp0dS9UbE9IcXAwdjkK",
+      "requireSignedVersion": true
     }
   }
 }
