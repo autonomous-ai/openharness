@@ -45,13 +45,6 @@ type HerdrStatus = 'idle' | 'working' | 'blocked' | 'done' | 'unknown'
 const STATES: Record<HerdrStatus, HostAgentState> = { idle: 'idle', working: 'working', blocked: 'needs-you', done: 'done', unknown: 'idle' }
 const isStatus = (value: unknown): value is HerdrStatus => typeof value === 'string' && Object.hasOwn(STATES, value)
 
-/** The client's own faults. Any other code a failed request answers is herdr's, said as `rejected`: a log line says only
- *  fixed words, never herdr's. */
-const FAULTS: Record<HerdrFault, true> = {
-  no_socket: true, refused: true, timeout: true, ended: true, oversize: true, bad_json: true, bad_answer: true, rejected: true,
-}
-const faultOf = (code: string): HerdrFault => Object.hasOwn(FAULTS, code) ? code as HerdrFault : 'rejected'
-
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
 
@@ -262,7 +255,8 @@ export class HerdrSource implements HostSource {
     this.heard = undefined
     const agents = answer.ok ? answer.result.agents : undefined
     if (!Array.isArray(agents)) {
-      const fault = answer.ok ? 'bad_answer' : faultOf(answer.code)
+      // herdr's own code is not said: a log line says only fixed words.
+      const fault = answer.ok ? 'bad_answer' : answer.fault
       this.deps.log(`[herdr] list · ${fault}`)
       return this.fail(fault)
     }
@@ -279,7 +273,7 @@ export class HerdrSource implements HostSource {
   }
 
   /** Every failed attempt: the subscriptions close, and the retries run. */
-  private fail(code: string): void {
+  private fail(fault: HerdrFault): void {
     const since = this.liveSince
     this.liveSince = undefined
     this.close()
@@ -288,7 +282,7 @@ export class HerdrSource implements HostSource {
     // Only a herdr followed for a while is retried from the first wait: one that drops each subscription soon after it
     // starts goes on to the longer waits.
     else if (this.deps.monotonic() - since >= LIVE_MS) this.retries = 0
-    if (code === 'no_socket') return this.wait(undefined)
+    if (fault === 'no_socket') return this.wait(undefined)
     const last = this.retries === RETRIES_S.length
     // Only an attempt that listed nothing gives up: a herdr that lists is running, and keeps the longest wait.
     if (last && since === undefined) return this.wait(this.stamp)
