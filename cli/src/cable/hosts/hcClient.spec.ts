@@ -584,6 +584,24 @@ describe.skipIf(process.platform === 'win32')('the hc client (docs/plans/2026-11
     expect(subscription.got.slice(2).map(({ params }) => params)).toEqual([idle(1), idle(2), { seq: 2 }])
   })
 
+  it('the fake server, as hc, tells a new terminal whole before its program reports, then its foreground, then its status (F5)', async () => {
+    const subscription = await subscribeRaw()
+    server.change('t9', { status: { state: 'working', app: 'codex' } })
+    server.heartbeat()
+    await subscription.heartbeat()
+    subscription.socket.destroy()
+    type Event = { data: Record<string, unknown>; type: string }
+    const events = subscription.got.slice(2, -1).map(({ params }) => params as Event)
+    expect(events.map(({ type }) => type)).toEqual(['created', 'foreground', 'status'])
+    const [created, , status] = events
+    // The recording's own created line: its keys, and no foreground yet.
+    const recorded = (JSON.parse(RECORDED.subscription[16]) as { params: Event }).params
+    expect(recorded.type).toBe('created')
+    expect(Object.keys(created.data)).toEqual(Object.keys(recorded.data))
+    expect(created.data).toMatchObject({ address: 't9', reported: false, status: null, status_ms: null })
+    expect(status.data).toEqual({ records: {}, reported: true, status: { app: 'codex', state: 'working' } })
+  })
+
   it('prompt reads the terminal, then sends the line: if idle when it was idle, no if when it was done, never force', async () => {
     server.terminals = [{ address: 't7' }, { address: 't8', status: { state: 'done', app: 'claude-code' } }]
     const hc = client()
