@@ -105,6 +105,7 @@ pub enum MenuAction {
     ClaudeOff,
     SoundOn,
     SoundOff,
+    Update,
     OpenHarness,
     Quit,
 }
@@ -118,6 +119,25 @@ pub enum MenuItem {
     Separator,
 }
 
+/// Why an update did not happen. NotWritable: the person cannot replace the bundle; nothing was downloaded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UpdateFailure {
+    Check,
+    Download,
+    Signature,
+    Install,
+    NotWritable,
+}
+
+/// The app's own update, as the menu shows it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum AppUpdate {
+    #[default]
+    None,
+    Installing,
+    Blocked(String),
+}
+
 /// What the menu is drawn from.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AppState {
@@ -128,6 +148,7 @@ pub struct AppState {
     pub claude: Option<ClaudeStatus>,
     pub desktop_installed: bool,
     pub saved: Saved,
+    pub app_update: AppUpdate,
 }
 
 /// AuthorizeUrl holds an `https:` URL only (account.rs lets no other through).
@@ -138,7 +159,7 @@ pub enum LoginEvent {
     Done(Result<(), String>),
 }
 
-/// What happened. WatchExit(None): ended by a signal.
+/// What happened. WatchExit(None): ended by a signal. UpdateChecked(Some): a strictly newer release.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
     Tick { now: u64, desktop_running: bool },
@@ -156,9 +177,12 @@ pub enum Event {
     Menu(MenuAction),
     Act(Action),
     WindowClosed,
+    UpdateChecked(Option<String>),
+    UpdateInstalled,
+    UpdateFailed(UpdateFailure),
 }
 
-/// What to do about it. Show(None) hides the window. Menu, Show and Quit are the binary's.
+/// What to do about it. Show(None) hides the window. Menu, Show, Quit and Relaunch are the binary's.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Effect {
     FindCli,
@@ -178,9 +202,12 @@ pub enum Effect {
     RegisterLoginItem,
     Save(Saved),
     Log(String),
+    CheckUpdate,
+    InstallUpdate,
     Menu(Vec<MenuItem>),
     Show(Option<View>),
     Quit,
+    Relaunch,
 }
 
 /// A finished run.
@@ -357,7 +384,49 @@ mod tests {
                 "allow-act"
             ])
         );
-        assert!(!include_str!("../Cargo.toml").contains("tauri-plugin"));
+        // The updater is registered in Rust only: the capability above grants the webview none of it.
+        let plugins: Vec<&str> =
+            include_str!("../Cargo.toml").lines().filter(|line| line.contains("tauri-plugin")).collect();
+        assert_eq!(plugins.len(), 1, "{plugins:?}");
+        assert!(plugins[0].starts_with("tauri-plugin-updater = "), "{}", plugins[0]);
+    }
+
+    #[test]
+    fn the_app_reads_one_https_manifest() {
+        let config: Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let updater = config["plugins"]["updater"].as_object().expect("plugins.updater");
+        assert_eq!(
+            updater["endpoints"],
+            json!(["https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/device/metadata.json"])
+        );
+        // So no `dangerous…` key lets plain http or a bad certificate through.
+        for key in updater.keys() {
+            assert!(["endpoints", "pubkey", "requireSignedVersion"].contains(&key.as_str()), "{key}");
+        }
+        // The manifest is not signed: without it, a manifest that pairs a new version with an older release's
+        // signed archive installs that older release.
+        assert_eq!(updater.get("requireSignedVersion"), Some(&json!(true)));
+        // On, every local build would need the private key: the release turns it on through --config.
+        assert_eq!(config["bundle"].get("createUpdaterArtifacts"), None);
+    }
+
+    #[test]
+    fn the_updater_checks_with_the_committed_key() {
+        let config: Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let key = config["plugins"]["updater"]["pubkey"].as_str().expect("plugins.updater.pubkey");
+        assert!((100..=300).contains(&key.len()), "{}", key.len());
+        assert!(key.chars().all(|c| c.is_ascii_alphanumeric() || "+/=".contains(c)), "{key}");
+        // Base64 of "untrusted comment: minisign public key:", the first line of every key Tauri writes.
+        assert!(key.starts_with("dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6"), "{key}");
+    }
+
+    #[test]
+    fn the_version_is_the_releases() {
+        // The release writes its version through --config: a placeholder no release reads, so a local build never
+        // outranks one.
+        assert!(include_str!("../Cargo.toml").lines().any(|line| line == r#"version = "0.0.0""#));
+        let config: Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        assert_eq!(config.get("version"), None);
     }
 
     #[test]

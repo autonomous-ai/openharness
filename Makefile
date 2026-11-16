@@ -4,7 +4,7 @@
 #   make install-cli ARGS="--no-restart"
 #   make release-cli ARGS="--dry-run"
 
-.PHONY: validate merge-pr desktop-test cli-test install-cli upload-cli-install-sh upload-cli-install-ps1 release-cli mcpb release-backend release-desktop release-web remote-machine upload-circle upload-pro device-test
+.PHONY: validate merge-pr desktop-test cli-test install-cli upload-cli-install-sh upload-cli-install-ps1 release-cli mcpb release-backend release-desktop release-device release-web remote-machine upload-circle upload-pro device-test
 
 ## validate: bounded independent checks with logs and a source/timing receipt.
 ## See docs/validation-and-release.md. ARGS="path/to/plan.json".
@@ -53,6 +53,13 @@ release-backend:
 ## escape hatches (upload-desktop, upload-desktop-linux, upload-node-runtime, upload-tmux-runtime) live in desktop/Makefile.
 release-desktop:
 	bash desktop/scripts/release-desktop.sh $(ARGS)
+
+## release-device: tag this commit vX.Y.Z_device, push the tag and start release-device.yml on it — CI builds one
+## universal macOS app, signs and notarizes it, publishes it to GCS and verifies the downloads. The version is bumped
+## from max(last git tag, live harness/device/metadata.json). ARGS="--dry-run" to preview, ARGS="--prepare" to build,
+## sign and check main's tip without publishing, ARGS="--minor" or ARGS="X.Y.Z". See device-app/RELEASE.md.
+release-device:
+	bash device-app/scripts/release-device.sh $(ARGS)
 
 ## release-web: ship the browser app to harness.autonomous.ai — tag this commit vX.Y.Z_web; CI builds
 ## the Flutter bundle into website/'s image and pushes it (ArgoCD deploys). Re-run with the same version
