@@ -95,7 +95,9 @@ export function startRouter(core: CoreApi, router: Router = defaultRouter(core))
       try {
         // The asker gone frees its slot at once rather than when Jev answers (up to eight seconds later).
         const verdict = await decideRoute(input, router, closed)
-        router.log?.(`${verdict.kind === 'session' ? 'session' : verdict.kind === 'new' ? `new (${verdict.why})` : `nothing decided (${verdict.why})`} — ${verdict.trace}`)
+        // Not the trace: it names the sessions Jev weighed, and a session's name is the person's own words. The pick
+        // by its id and odds, and how many it was weighed against, are what a wrong route is traced from here.
+        router.log?.(`${verdict.kind === 'session' ? `session ${verdict.id.slice(0, 8)} p=${verdict.p.toFixed(2)}` : verdict.kind === 'new' ? `new (${verdict.why})` : `nothing decided (${verdict.why})`} — ${input.sessions.length} sessions`)
         if (verdict.kind === 'unavailable') return { error: 'JEV_UNAVAILABLE', detail: verdict.why }
         return verdict.kind === 'session'
           // `p` and `trace` for a caller that shows or logs why (`harness route`): names and odds only, never the words.

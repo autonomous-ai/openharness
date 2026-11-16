@@ -61,7 +61,8 @@ export type RouteVerdict = (
   /** Jev could not be asked: no key, no network, no credit. Nothing is decided. */
   | { kind: 'unavailable'; why: string }
 ) & {
-  /** What Jev said, for the log: a wrong decision has to be explainable after the fact. */
+  /** What Jev said, for the client that asked (`harness route`): a wrong decision has to be explainable after the
+   *  fact. It names the sessions, so the router's log never prints it. */
   trace: string
 }
 
