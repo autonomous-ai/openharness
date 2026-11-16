@@ -27,6 +27,7 @@ export function createCodexAppAdapter(
     ...createAppLink(deps, {
       session: CODEX_THREAD,
       url: (thread) => `codex://threads/${thread}`,
+      bundle: APP_BUNDLES.codex,
       async forward() {
         // The line the opener writes for every pane's fallback: which app only, never the thread.
         deps.log('[device] open · codex · fallback')

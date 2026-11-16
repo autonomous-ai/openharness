@@ -15,6 +15,9 @@ export interface AppLink {
   /** The form of a session id the link may name: checked again before every command. No `g` flag. */
   session: RegExp
   url(session: string): string
+  /** The app's bundle id, so only that app receives the link (`open -b`): another app that registers the same scheme
+   *  never gets it. Absent, macOS picks the scheme's app. */
+  bundle?: string
   /** A tap's own way to bring the app forward once its link failed, answering whether the app came. Absent, a failed
    *  link answers false and the opener's fallback decides (open.ts). A rest never runs it. */
   forward?(): Promise<boolean>
@@ -28,8 +31,10 @@ export function createAppLink(deps: AppLinkDeps, link: AppLink): AppLinkVerbs {
   // while a tap runs, and two opens of one link do no harm.
   const showing = new Set<string>()
 
-  const opens = async (session: string): Promise<boolean> =>
-    (await deps.run(OPEN, [link.url(session)], RUN_TIMEOUT_MS)).code === 0
+  const opens = async (session: string): Promise<boolean> => {
+    const url = link.url(session)
+    return (await deps.run(OPEN, link.bundle ? ['-b', link.bundle, url] : [url], RUN_TIMEOUT_MS)).code === 0
+  }
 
   return {
     canFocus: () => mac,
