@@ -8,8 +8,11 @@ import {
   type HcClientDeps, type HcSubscriber,
 } from './hcClient.js'
 import { MAX_LINE_BYTES } from './herdrClient.js'
+import { connectLines } from './unixSocket.js'
 
 const lines = (recorded: readonly string[]) => `${recorded.join('\n')}\n`
+const rpc = (id: number, method: string, params: Record<string, unknown> = {}) =>
+  `${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`
 /** Lets what the socket has already said be told, with the timers faked or not. */
 const turn = () => new Promise((resolve) => setImmediate(resolve))
 const methods = (server: FakeHc) => server.requests.map(({ request }) => (request as { method: string }).method)
@@ -45,6 +48,38 @@ describe.skipIf(process.platform === 'win32')('the hc client (docs/plans/2026-11
   /** Once a request has gone to the server and back, the subscription has read what the server wrote before it: its
    *  socket was readable before the request's connection opened. A line that tells nothing has nothing else to wait on. */
   const fence = () => client().request('terminal.list', {})
+
+  /** A connection of the spec's own that writes `out` and keeps each line the fake writes back, parsed: the fake checked
+   *  as hc, with no client between. */
+  const raw = (out: string) => {
+    const got: Array<Record<string, unknown>> = []
+    const checks = new Set<() => boolean>()
+    const settle = () => { for (const check of checks) if (check()) checks.delete(check) }
+    const socket = connectLines(server.path, out, MAX_LINE_BYTES, (text) => {
+      got.push(JSON.parse(text) as Record<string, unknown>)
+      settle()
+    }, () => {})
+    const until = (check: () => boolean) => new Promise<void>((resolve) => {
+      const done = () => {
+        if (!check()) return false
+        resolve()
+        return true
+      }
+      if (!done()) checks.add(done)
+    })
+    return {
+      got,
+      socket,
+      lines: (n: number) => until(() => got.length >= n),
+      /** Once the fake's heartbeat has come: every line it wrote before it has too. */
+      heartbeat: () => until(() => got.some(({ method }) => method === 'heartbeat')),
+    }
+  }
+  const subscribeRaw = async () => {
+    const subscription = raw(`${rpc(1, 'hello', { generation: 1 })}${rpc(2, 'events.subscribe')}`)
+    await subscription.lines(2)
+    return subscription
+  }
 
   beforeEach(async () => { server = await fakeHc() })
   afterEach(async () => {
@@ -366,7 +401,7 @@ describe.skipIf(process.platform === 'win32')('the hc client (docs/plans/2026-11
     const { calls, to, told } = subscriber()
     const subscription = client().subscribe(to)
     await told(1)
-    const [missed, , cleared] = RECORDED.missed
+    const [missed, ...after] = RECORDED.missed
     const working = RECORDED.subscription[2]
     server.send(lines([
       missed,
@@ -375,14 +410,18 @@ describe.skipIf(process.platform === 'win32')('the hc client (docs/plans/2026-11
       working,
       // t7 was not in the fresh snapshot.
       working.replace('"seq":13', '"seq":30041').replace('"terminal":"t1"', '"terminal":"t7"'),
-      cleared,
+      // hc's own: its idle again, which changes nothing told, its status cleared, its exit and its removal.
+      ...after,
     ]))
-    await told(3)
+    await told(5)
     subscription.close()
+    const ended = { address: 't1', live: false, space: true, cwd: '/work/hh' }
     expect(calls).toEqual([
       ['snapshot', [{ ...agentIs('idle'), address: 't7' }]],
       ['snapshot', [agentIs('idle')]],
       ['changed', { address: 't1', live: true, space: true, cwd: '/work/hh' }],
+      ['changed', ended],
+      ['changed', ended],
     ])
   })
 
@@ -529,6 +568,20 @@ describe.skipIf(process.platform === 'win32')('the hc client (docs/plans/2026-11
     expect(await hc.request('terminal.send', { terminal: 't7', text: 'go' })).toEqual({ ok: false, fault: 'rejected', kind: 'blocked' })
     expect(await hc.request('terminal.send', { terminal: 't8', text: 'go', if: 'idle' }))
       .toEqual({ ok: false, fault: 'rejected', kind: 'status_mismatch' })
+  })
+
+  it('the fake server, as hc, writes a status line for each report, one that repeats the last word too (F5)', async () => {
+    server.terminals = [{ address: 't7' }]
+    const subscription = await subscribeRaw()
+    server.change('t7', { status: { state: 'idle', app: 'claude-code' } })
+    server.change('t7', { status: { state: 'idle', app: 'claude-code' } })
+    server.heartbeat()
+    await subscription.heartbeat()
+    subscription.socket.destroy()
+    const idle = (seq: number) => ({
+      data: { records: {}, reported: true, status: { app: 'claude-code', state: 'idle' } }, seq, terminal: 't7', type: 'status',
+    })
+    expect(subscription.got.slice(2).map(({ params }) => params)).toEqual([idle(1), idle(2), { seq: 2 }])
   })
 
   it('prompt reads the terminal, then sends the line: if idle when it was idle, no if when it was done, never force', async () => {
