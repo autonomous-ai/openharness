@@ -179,6 +179,33 @@ it('admits a durable owner without temporary property-pair arrays for its canoni
   expect(temporaryPropertyPairs).toBe(0)
 })
 
+it('avoids repeated canonical row copies when admitting a new durable owner', async () => {
+  const previous = disk(), serialize = JSON.stringify
+  let fingerprints = 0
+  const stringify = vi.spyOn(JSON, 'stringify').mockImplementation((value, replacer, space) => {
+    if (isPersistedRow(value) && typeof replacer === 'function') fingerprints++
+    return serialize(value, replacer, space)
+  })
+  let opened
+  try {
+    opened = await registry!.openProcessAgent({ agentId: 'cost-agent-c', engine: 'claude', tmuxPane: '%3',
+      processIdentity: { pid: 1003, executable: '/fixture/claude', startMarker: 'fixture-3' },
+    })
+  } finally { stringify.mockRestore() }
+  const saved = disk(), live = registry!.byAgent('cost-agent-c')!
+  expect(opened?.entry.agentId).toBe('cost-agent-c')
+  expect(io.durable).toHaveLength(1)
+  expect(saved).toHaveLength(3)
+  expect(saved.slice(0, 2)).toEqual(previous)
+  expect(saved[2]).toEqual(opened!.entry)
+  expect(opened!.entry).not.toBe(live)
+  expect(opened!.entry.processIdentity).not.toBe(live.processIdentity)
+  opened!.entry.processIdentity!.startMarker = 'receipt-only'
+  expect(live.processIdentity!.startMarker).toBe('fixture-3')
+  expect(disk()).toEqual(saved)
+  expect(fingerprints).toBeLessThanOrEqual(11)
+})
+
 it('keeps canonical JSON bytes for nested objects, arrays, omitted values and literal prototype keys', async () => {
   const { rowFingerprint } = (await import('./registry.js')).saveMergeHelpers
   const nested = { b: 2, a: 1 }
@@ -309,6 +336,32 @@ it('keeps the captured strict image immutable and durably rebases nested alias e
   receipt!.closePlan!.state = 'failed'
   expect(live.closePlan).toEqual(plan)
   expect(row(disk()).closePlan).toEqual(plan)
+})
+
+it('clears resumed lineage in its durable snapshot while preserving a later nested live edit', async () => {
+  const archived = structuredClone(registry!.byAgent(A)!)
+  const shell = (await registry!.confirmEngineExit(A, 'successor')).entry!
+  const live = registry!.byAgent(shell.agentId)!
+  live.launchArgs = ['--before']
+  await registry!.flush()
+  io.durable = []
+  expect(row(disk(), shell.agentId).previousAgentId).toBe(A)
+  const held = holdPreparation()
+  const pending = track(registry!.resumePendingAgent(archived, [{ backend: 'tmux', paneId: '%3' }]))
+  await held.entered()
+  expect(registry!.byAgent(A)).toBeUndefined()
+  expect(row(disk(), shell.agentId).previousAgentId).toBe(A)
+  live.launchArgs.push('--during')
+  held.release()
+  expect((await pending)?.agentId).toBe(A)
+  await registry!.flush()
+  expect(row(io.durable[0], shell.agentId)).not.toHaveProperty('previousAgentId')
+  expect(row(io.durable[0], shell.agentId).launchArgs).toEqual(['--before'])
+  expect(row(disk(), shell.agentId)).not.toHaveProperty('previousAgentId')
+  expect(row(disk(), shell.agentId).launchArgs).toEqual(['--before', '--during'])
+  expect(registry!.byAgent(shell.agentId)).toBe(live)
+  expect(live).not.toHaveProperty('previousAgentId')
+  expect(row(disk())).toMatchObject({ agentId: A, processIdentity: null, tmuxPane: '%3' })
 })
 
 it.skipIf(process.platform === 'win32')('durably rebases a nested edit to a peer-recovered row after image preparation', async () => {

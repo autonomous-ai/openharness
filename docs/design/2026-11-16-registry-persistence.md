@@ -2086,3 +2086,71 @@ controller rows across awaits. A public admission control must show fewer
 actual comparisons while nested live edits, peer recovery, uncertainty fences
 and immediate durable receipts still hold. This is a proposed next step,
 not an implemented change or a predicted RSS result.
+
+## Reuse comparisons of one operation's immutable admission snapshots
+
+Prepared at `c4e2ff27148018716a98f6090ff4c2b4761df9b2`, before runtime edits.
+The entire optimization history above has been checked. Existing reuse covers
+the unchanged observation comparison only; admissions still canonicalize each
+original captured row for `beforeCommit`, changed-row detection and the initial
+merge. The retained allocation sample attributes 38.9% of sampled allocation to
+canonicalization. It does not establish an RSS improvement for this proposal.
+
+### Design
+
+Keep a fingerprint lookup local to one `persist` call, keyed by its snapshot
+objects. Use it for `beforeCommit`, changed-row detection and the first
+`mergedForSave` only. The merge's default remains fresh canonicalization, and
+the final post-refresh live rebase uses that default. Fresh live ownership,
+native evidence, peer-image comparisons, recovery comparisons and the final
+baseline/rebased-image check stay unchanged.
+
+Every initial row is already a deep persisted snapshot. Candidate and displaced
+rows replace entries with fresh deep snapshots. Peer recovery likewise installs
+a deep snapshot; confirmation uses the privately JSON-owned uncertain image.
+None is exposed as a live row. The resumed-lineage path is the sole mutation of
+an existing `currentRows` object: replace its top level when removing
+`previousAgentId` and updating `touchedAt`. Its unchanged nested values already
+belong to the deep snapshot. Normalization, validation and merge helpers only
+read these rows or construct replacements. Thus an object-keyed result cannot
+mistake a replacement candidate, recovered row or resumed shell for the earlier
+captured value. No live object enters the lookup, and no lookup survives its
+persist operation.
+
+Growth/read cost: one bounded weak lookup holds references to already computed
+strings for the current operation; no retained cache, extra deep copy, file read,
+timer, process or queue. Concurrency: the existing writer, lock, immutable
+captures and fresh no-await publication fences remain. Scale: a public third
+admission is expected to need eleven rather than sixteen whole-row canonical
+comparisons, eliminating two repeated comparisons per unchanged prior row and
+one for the new row. This is a source-derived work budget, not measured CPU or
+RSS; the frozen 16/160-row matched workload remains required. Compatibility,
+audience and identity: no bytes, schema, public contract, access or account
+change. Migration: none; rollback is a code revert. Failure: exact receipts,
+directory fsync, cancellation, private-file checks, peer conflicts, transaction
+validation and whole-group uncertainty recovery remain authoritative. Platforms:
+shared TypeScript on macOS/Linux/Windows; local checks name their actual platform.
+
+Before runtime edits, add a forwarded whole-row serialization budget to a public
+admission with real private files, checking the immediate durable receipt,
+unchanged prior rows and detached nested identity. Keep the existing held-fsync
+live-alias/deletion, owner/evidence-revision, peer-recovery, cancellation and
+uncertainty controls. Add a held resume that clears its successor's lineage
+while preserving a later nested live edit; also run the existing resume/archive
+lineage control. Selected checks are the cost, admission, observation, merge,
+fingerprint and persistence suites and TypeScript, at no more than two workers.
+Root reviews this Design before runtime changes and schedules any timed workload
+or full gate. The earlier failed RSS results remain open.
+
+The first one-worker macOS x64 / Node 24.22.2 run records the intended RED:
+sixteen whole-row comparisons against an initial budget of twelve, with all
+sixteen authority, immutable-image, recovery and resume-lineage controls passing
+(7.96 s, `/tmp/core-registry-snapshot-cost-v2-red.log`). The earlier diagnostic's
+seventeen comparisons used a different fixture; this actual public caller needs
+sixteen. The five avoided comparisons imply eleven, and the test budget is
+tightened to eleven before runtime edits. No runtime change or timed performance
+workload has run.
+
+The corrected eleven-comparison budget also fails as intended with sixteen
+actual comparisons (1.25 s, one failed and sixteen unselected,
+`/tmp/core-registry-snapshot-cost-v2-red-budget.log`). Runtime is still unchanged.
