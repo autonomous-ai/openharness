@@ -11,17 +11,11 @@ const CONTRACT_PAIRS = [
   'sign_in.working',
   'sign_in.browser',
   'sign_in.failed',
-  'claude.offer',
-  'claude.working',
-  'claude.failed',
-  'codex.offer',
-  'codex.working',
-  'codex.failed',
 ]
 
 describe('gallery', () => {
   it('the gallery draws every state in both themes', () => {
-    expect(STATES).toHaveLength(14)
+    expect(STATES).toHaveLength(8)
     expect(new Set(STATES.map(({ view }) => `${view.screen}.${view.phase}`))).toEqual(new Set(CONTRACT_PAIRS))
 
     const root = document.createElement('div')
