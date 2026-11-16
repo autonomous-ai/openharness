@@ -5333,7 +5333,7 @@ describe('the agent the dial shows (docs/specs/2026-11-16-orca-device-plugin.md)
       await session.focusAgent('h1')
       expect(told()).toEqual([{ name: 'web', app: 'Harness' }])
       await session.followApp('mac-local', 't1')
-      expect(told()).toEqual([{ name: 'web', app: 'Harness' }, { name: 'docs', app: 'Terminal' }])
+      expect(told()).toEqual([{ name: 'web', app: 'Harness' }, { name: 'docs', app: 'Other' }])
     } finally { await session.stop() }
   })
 
@@ -5345,14 +5345,15 @@ describe('the agent the dial shows (docs/specs/2026-11-16-orca-device-plugin.md)
     } finally { await session.stop() }
   })
 
-  it('an agent with no host is in Harness, and so is a host the table does not know', async () => {
+  it('an agent with no host is in Harness, and so is a host the table does not know; one in an unknown terminal is in Other', async () => {
     let ring = RING
     const { session, told } = await greeted({ listAgents: async () => ring })
     try {
       await session.focusAgent('h1')
       expect(told().at(-1)).toEqual({ name: 'web', app: 'Harness' })
+      // As the dial's own page names it, never as Apple's Terminal.
       await session.focusAgent('t1')
-      expect(told().at(-1)).toEqual({ name: 'docs', app: 'Terminal' })
+      expect(told().at(-1)).toEqual({ name: 'docs', app: 'Other' })
       // A host is outside text: only the table's own entries name an app, never one every object inherits.
       for (const host of ['nope', 'constructor', '__proto__']) {
         ring = [{ id: 't1', name: host, host }]
