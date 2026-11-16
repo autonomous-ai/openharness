@@ -664,13 +664,22 @@ describe("Orca's tab order", () => {
       { handle: H(4), worktreePath: '/Users/d/other', agentIdentity: 'codex' },
       { handle: H(13), worktreePath: `/${'p'.repeat(4095)}`, agentIdentity: 'c'.repeat(64) },
     ])
-    // A list that is no array is no terminals; past 256 rows none is read.
+    // A list that is no array is no terminals.
     for (const odd of [undefined, null, 'made up', { 0: row(1, '/w', 'claude') }]) {
       expect((await reads({}, [{ stdout: listedWith(odd, group(tab(leaf(1)))) }]).orca.orcaTabs())?.terminals, String(odd)).toEqual([])
     }
-    const many = Array.from({ length: 300 }, (_, i) => row(i + 1, '/w', 'claude'))
-    expect((await reads({}, [{ stdout: listedWith(many) }]).orca.orcaTabs())?.terminals.map((t) => t.handle))
+    const full = Array.from({ length: 256 }, (_, i) => row(i + 1, '/w', 'claude'))
+    expect((await reads({}, [{ stdout: listedWith(full) }]).orca.orcaTabs())?.terminals.map((t) => t.handle))
       .toEqual(Array.from({ length: 256 }, (_, i) => H(i + 1)))
+  })
+
+  it('a list cut short, by Orca (its 200 rows by default) or past 256 rows, is no terminals: one left out could be the match', async () => {
+    const cut = JSON.parse(listedWith([row(1, '/w', 'claude')], group(tab(leaf(1), 'PM'))))
+    cut.result.truncated = true
+    const read = await reads({}, [{ stdout: JSON.stringify(cut) }]).orca.orcaTabs()
+    expect(read).toEqual({ tabs: [{ handle: H(1), title: 'PM', renamed: true }], terminals: [] })
+    const many = Array.from({ length: 257 }, (_, i) => row(i + 1, '/w', 'claude'))
+    expect((await reads({}, [{ stdout: listedWith(many) }]).orca.orcaTabs())?.terminals).toEqual([])
   })
 
   it('a title over 64 characters is cut, one with a control character or not a string is none', async () => {
