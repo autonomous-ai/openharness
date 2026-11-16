@@ -1,5 +1,5 @@
-import { watch } from 'node:fs'
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
+import { rmSync, watch, type FSWatcher } from 'node:fs'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { once } from 'node:events'
 import { connect } from 'node:net'
 import { homedir, tmpdir } from 'node:os'
@@ -10,6 +10,12 @@ import {
   createHerdrClient, herdrClientDeps, herdrSocketPath, MAX_LINE_BYTES, watchHerdrSocket,
   type HerdrClientDeps, type HerdrEntry, type HerdrSubscriber,
 } from './herdrClient.js'
+
+// Each watch as it is, recorded, so a spec can make one fail.
+vi.mock('node:fs', async (real) => {
+  const fs = await real<typeof import('node:fs')>()
+  return { ...fs, watch: vi.fn(fs.watch) }
+})
 
 const ENTRIES: HerdrEntry[] = [{ type: 'pane.agent_detected' }, { type: 'pane.closed' }, { type: 'pane.exited' }]
 
@@ -444,5 +450,44 @@ describe.skipIf(process.platform === 'win32')('the herdr client (docs/specs/2026
     expect(told).toBe(stopped)
     // A watch that cannot be held tells nothing, and throws nothing.
     expect(() => watchHerdrSocket({ socketPath: join(home, 'none', 'herdr', 'herdr.sock'), home: join(home, 'none') }, () => {})()).not.toThrow()
+  })
+
+  /** A watch of <config>/herdr in a home of its own, and how many changes it told. */
+  async function watchedHerdr() {
+    const home = await mkdtemp(join(tmpdir(), 'hw-'))
+    const config = join(home, '.config')
+    const folder = join(config, 'herdr')
+    await mkdir(folder, { recursive: true })
+    let told = 0
+    const stop = watchHerdrSocket({ socketPath: join(folder, 'herdr.sock'), home }, () => { told++ })
+    return { config, folder, count: () => told, stop }
+  }
+
+  // inotify ends the watch of a folder that is removed: a herdr that made it again and started would never be seen.
+  it('the watch moves out of a folder that is removed, and back in once it is made again', async () => {
+    const { config, folder, count, stop } = await watchedHerdr()
+    try {
+      await toldOf(count, () => rm(folder, { recursive: true }))
+      // <config> is the nearest existing folder now.
+      await toldOf(count, () => mkdir(join(config, 'b')))
+      await toldOf(count, () => mkdir(folder))
+      await toldOf(count, () => mkdir(join(folder, 'c')))
+    } finally {
+      stop()
+    }
+  })
+
+  it('a watch that fails as its folder goes moves out too', async () => {
+    const { config, folder, count, stop } = await watchedHerdr()
+    try {
+      const { calls, results } = vi.mocked(watch).mock
+      const held = results[calls.findLastIndex(([path]) => path === folder)].value as FSWatcher
+      // Failed before its folder's change is told, which it then never is.
+      rmSync(folder, { recursive: true })
+      held.emit('error', new Error('gone'))
+      await toldOf(count, () => mkdir(join(config, 'b')))
+    } finally {
+      stop()
+    }
   })
 })
