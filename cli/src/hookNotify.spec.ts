@@ -2251,10 +2251,11 @@ describe('hook notify posts over the daemon\'s pipe on Windows (W1)', () => {
 
 describe('hook notify: a session outside a pane', () => {
   /** The environment names the hook may send as host hints, and nothing else (spec: The hook). */
-  const HINTS = ['TERM_PROGRAM', '__CFBundleIdentifier', 'HERDR_PANE_ID', 'HC_TERMINAL_ID', 'REX_BLOCK', 'ZELLIJ',
-    'TMUX_PANE', 'KITTY_WINDOW_ID', 'WEZTERM_PANE', 'ORCA_AGENT_SESSION_ID', 'ORCA_TERMINAL_HANDLE',
+  const HINTS = ['TERM_PROGRAM', '__CFBundleIdentifier', 'HERDR_PANE_ID', 'REX_BLOCK', 'ZELLIJ', 'TMUX_PANE',
+    'HC_TERMINAL_ID', 'KITTY_WINDOW_ID', 'WEZTERM_PANE', 'ORCA_AGENT_SESSION_ID', 'ORCA_TERMINAL_HANDLE',
     'CLAUDE_CODE_HOST_SESSION_ID', 'CLAUDE_CODE_ENTRYPOINT']
-  /** HINTS as this platform's hook sends them: Herdr Core runs on macOS only (spec Q5). */
+  /** HINTS as this platform's hook sends them: HC_TERMINAL_ID on macOS alone, the one platform the devices try Herdr's
+   *  window on, though hc runs on Linux too (spec Q5). */
   const SENT = HINTS.filter((name) => name !== 'HC_TERMINAL_ID' || process.platform === 'darwin')
   /** The names a session outside a pane can set, as many as the hook sends: runHook sets no TMUX_PANE without a pane. */
   const panelessHints = SENT.filter((name) => name !== 'TMUX_PANE').slice(0, MAX_HINTS)
