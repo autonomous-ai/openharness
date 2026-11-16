@@ -7,15 +7,28 @@ import { execFileSync } from 'node:child_process'
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { parse } from 'yaml'
 import { DIAL_SKILL, DIAL_SKILL_DESCRIPTION, claudePluginEnabled, ownDirectory, removeSkill, skillHeld, skillsFolderOf, writeSkill } from './dialSkill.js'
 
 const MARKER = '# Written by Harness. Turn off the agent in Harness Device to remove it.'
 const uid = process.getuid!()
 
+/** A step run just before the named file call: another remover taking the file first, or a write that fails. */
+const before = vi.hoisted(() => new Map<string, () => void>())
+vi.mock('node:fs', async (importOriginal) => {
+  const fs = await importOriginal<typeof import('node:fs')>()
+  const hooked = <T extends (...args: never[]) => unknown>(name: string, call: T): T =>
+    ((...args: Parameters<T>) => {
+      before.get(name)?.()
+      return call(...args)
+    }) as T
+  return { ...fs, renameSync: hooked('renameSync', fs.renameSync), unlinkSync: hooked('unlinkSync', fs.unlinkSync) }
+})
+
 const cleanup: string[] = []
 afterEach(() => {
+  before.clear()
   // Last first: a folder a test made read-only is opened again before its home is removed.
   for (const dir of cleanup.splice(0).reverse()) {
     if (existsSync(dir)) chmodSync(dir, 0o700)
@@ -170,6 +183,15 @@ describe('the dial skill', () => {
     const empty = skillsAt()
     expect(removeSkill(empty)).toBe('none')
     expect(readdirSync(empty)).toEqual([])
+  })
+
+  it('a skill another remover took first is none, not a failure', () => {
+    const skills = skillsAt()
+    writeSkill(skills)
+    // The command and the devices service both remove at a Turn off: the other one unlinks between this one's check and
+    // its own unlink.
+    before.set('unlinkSync', () => rmSync(join(skills, 'dial', 'SKILL.md')))
+    expect(removeSkill(skills)).toBe('none')
   })
 
   it('a linked skills folder is followed, and two homes linked to one folder are one', () => {
