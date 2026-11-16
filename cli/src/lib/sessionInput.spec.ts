@@ -1,7 +1,7 @@
 import { readInlineScreen } from '../testing/inlineScreen.js'
 import { inlineSubmission } from '../testing/inlineSubmission.js'
 import { readFileSync } from 'node:fs'
-import { AsyncResource, createHook } from 'node:async_hooks'
+import { AsyncResource, createHook, executionAsyncId } from 'node:async_hooks'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -35,6 +35,49 @@ const codexComposer = (draft: string, footer = '  ? for shortcuts') => `\n\u001b
 
 describe('SessionInputController', () => {
   afterEach(() => vi.useRealTimers())
+
+  it('keeps successful bursts below the measured cost of discarded ticket-removal arrays', async () => {
+    const scope = new AsyncResource('input-burst-allocation-fixture'), owned = new Set([scope.asyncId()])
+    const hook = createHook({ init(id, _type, trigger) { if (owned.has(trigger)) owned.add(id) } })
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const species = Object.getOwnPropertyDescriptor(Array, Symbol.species)!
+    let arrays = 0, submitted = 0, received = 0, invalid = 0, resolveWrite!: () => void
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+      getSession: () => session('claude'), validateRuntime: async () => true,
+      inject: async () => true, sendKey: async () => true,
+      onError: (_id, message) => { throw new Error(message) },
+      onSubmitted: () => { submitted++; resolveWrite() },
+    })
+    // Observe standard ArraySpeciesCreate allocations, without inspecting the controller's private queues.
+    Object.defineProperty(Array, Symbol.species, { configurable: true, get() {
+      if (owned.has(executionAsyncId())) arrays++
+      return this
+    } })
+    hook.enable()
+    try {
+      await scope.runInAsyncScope(async () => {
+        for (let i = 0; i < 100; i++) {
+          let writes = 0
+          const written = new Promise<void>(resolve => { resolveWrite = () => { if (++writes === 2) resolve() } })
+          const receipt = (outcome: string) => { received++; if (outcome !== 'taken' && outcome !== 'started') invalid++ }
+          controller.submit('s1', 'burst input', undefined, receipt)
+          controller.submit('s1', 'burst input', undefined, receipt)
+          await written
+          controller.onTurnStarted('s1', 'burst input')
+          controller.onTurnEnded('s1')
+          await new Promise<void>(resolve => setImmediate(resolve))
+        }
+      })
+    } finally {
+      hook.disable()
+      Object.defineProperty(Array, Symbol.species, species)
+      scope.emitDestroy()
+      controller.forget('s1')
+      log.mockRestore()
+    }
+    expect({ submitted, received, invalid }).toEqual({ submitted: 200, received: 200, invalid: 0 })
+    expect(arrays).toBeLessThanOrEqual(401)
+  })
 
   it('keeps ready input below the measured allocation cost of an unnecessary reader wait', async () => {
     // The direct-input profile found a Promise and continuation for an already-ready reader on every message.

@@ -118,6 +118,14 @@ interface HeldInput {
   cancelled: boolean
 }
 
+/** Burst profiling found discarded splice results on every consumed ticket. Preserve order without that allocation. */
+function removeHeld(held: HeldInput[], item: HeldInput): void {
+  const at = held.indexOf(item)
+  if (at < 0) return
+  for (let i = at; i < held.length - 1; i++) held[i] = held[i + 1]
+  held.pop()
+}
+
 interface InputState {
   /** The writes this agent's messages are making, one after another in the order they arrived. */
   writes?: Promise<void>
@@ -388,8 +396,7 @@ export class SessionInputController {
       const item: HeldInput = { deliveryId, receipt: said, bytes, cancelled: false }
       state.held.push(item)
       gate.enqueue(agentId, async () => {
-        const at = state.held.indexOf(item)
-        if (at >= 0) state.held.splice(at, 1)
+        removeHeld(state.held, item)
         if (!item.cancelled && this.states.get(sessionId) === state) await this.submitNow(sessionId, content, deliveryId, said)
       })
       return
@@ -447,8 +454,7 @@ export class SessionInputController {
     }
     const write = (): Promise<void> => {
       if (pending) {
-        const at = state.held.indexOf(pending)
-        if (at >= 0) state.held.splice(at, 1)
+        removeHeld(state.held, pending)
         if (pending.cancelled) return Promise.resolve()
       }
       if (this.states.get(sessionId) !== state) return Promise.resolve()
@@ -698,8 +704,7 @@ export class SessionInputController {
     state.held.push(item)
     console.log(`[inject] ${sid(sessionId)} held · a cancel is pressing Ctrl-C · depth=${state.held.length}`)
     state.afterCancel[kind].push(() => {
-      const at = state.held.indexOf(item)
-      if (at >= 0) state.held.splice(at, 1)
+      removeHeld(state.held, item)
       if (!item.cancelled && this.states.get(sessionId) === state) go()
     })
   }
@@ -1225,9 +1230,10 @@ export class SessionInputController {
 
   /** Refuse a message of [bytes] when the agent's queued and held messages are at their limits. */
   private refusedFull(sessionId: string, state: InputState, bytes: number, deliveryId?: string, receipt?: MessageReceipt): boolean {
-    const waiting = [...state.queue, ...state.held]
-    const waitingBytes = waiting.reduce((sum, item) => sum + item.bytes, 0)
-    if (waiting.length < MAX_QUEUE_ITEMS && waitingBytes + bytes <= MAX_QUEUE_BYTES) return false
+    let waitingBytes = bytes
+    for (const item of state.queue) waitingBytes += item.bytes
+    for (const item of state.held) waitingBytes += item.bytes
+    if (state.queue.length + state.held.length < MAX_QUEUE_ITEMS && waitingBytes <= MAX_QUEUE_BYTES) return false
     this.delivery(sessionId, deliveryId, 'rejected', 'queue_full')
     receipt?.('queue_full')
     if (!deliveryId?.startsWith('team:')) this.deps.onError(sessionId, 'This agent already has too many queued messages. Try again after the current operation finishes.')

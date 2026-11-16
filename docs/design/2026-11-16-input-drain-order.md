@@ -127,3 +127,37 @@ are retained alongside the final RED at
 input/core input/device input/delivery cases in 5.38 seconds
 (`/tmp/core-input-ready-green.log`), including startup failure and lifecycle
 checks, and TypeScript passes (`/tmp/core-input-ready-types.log`).
+
+## Pending-write allocation correction
+
+The next fixed five-route comparison (`/tmp/core-input-cost-v3/`) completed all
+1.2 million messages. Direct input was flat, but the two-message burst still
+used 11.053 versus 10.369 microseconds of CPU per message. That remains a failed
+cost comparison; the following diagnostic is not another acceptance run.
+
+The exact old and `bbf757c2` modules were separately CPU/allocation-profiled on
+100,000 successful bursts, with every child and outcome checked. The new pending
+ticket path allocates a temporary combined queue in `refusedFull` (9.2 MiB
+sampled), and an unused removed-elements array in `splice` (5.3 MiB sampled).
+These profiles do not explain the whole CPU difference. Evidence is retained
+in `/tmp/core-input-burst-profile-v1/` without overwriting earlier comparisons.
+
+Count both existing bounded arrays directly, and compact held tickets in place
+when they are consumed. This adds no state or collection and keeps order,
+cancelled-ticket capacity, UTF-8 accounting and every lifecycle check. Apply the
+same removal operation to pending writes and move/cancel holds. Public-caller
+allocation counting records 500 standard array-result allocations for 100
+successful bursts (501 inside Vitest's async scope); first add a regression with a 401-allocation budget, while
+requiring all 200 submissions and receipts, then implement the correction.
+The complete input selection and TypeScript validate behavior; root separately
+reviews and coordinates the final matched cost comparison.
+
+The regression is RED at 501 allocations (`/tmp/core-input-burst-allocation-red-final.log`)
+and GREEN with the correction. All 220 input/core input/device input/delivery
+tests pass in 5.40 seconds (`/tmp/core-input-burst-allocation-green.log`), and
+TypeScript passes (`/tmp/core-input-burst-allocation-types.log`). A changed-source
+allocation diagnostic records 1,035.90 MiB sampled versus 1,068.73 MiB at
+`bbf757c2`; the discarded `splice` array site disappears and `refusedFull` falls
+from 9.20 to 1.96 MiB. These sampled totals are not retained memory and do not
+establish CPU acceptance. Its plan, exact artifact/source hashes and successful
+200,000-message child are in `/tmp/core-input-burst-profile-v2/`.
