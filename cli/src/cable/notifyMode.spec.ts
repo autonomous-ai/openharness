@@ -24,7 +24,7 @@ describe('the stored Notifications mode', () => {
     const folder = aFolder()
     const file = join(folder, NOTIFY_MODE_FILE)
     const store = new NotifyModeStore(file)
-    expect(store.set('you')).toBe(true)
+    expect(store.set('you')).toBeUndefined()
     expect(store.get()).toBe('you')
     expect(readFileSync(file, 'utf8')).toBe('{"mode":"you"}\n')
     expect(statSync(file).mode & 0o777).toBe(0o600)
@@ -37,7 +37,7 @@ describe('the stored Notifications mode', () => {
     const store = new NotifyModeStore(file)
     store.set('you')
     const before = statSync(file).ino
-    expect(store.set('you')).toBe(true)
+    expect(store.set('you')).toBeUndefined()
     expect(statSync(file).ino).toBe(before)
   })
 
@@ -48,17 +48,18 @@ describe('the stored Notifications mode', () => {
       writeFileSync(file, text)
       const store = new NotifyModeStore(file)
       expect(store.get()).toBe('full')
-      expect(store.set('you')).toBe(true)
+      expect(store.set('you')).toBeUndefined()
       expect(readFileSync(file, 'utf8')).toBe('{"mode":"you"}\n')
     }
   })
 
-  it('a mode that cannot be written stays as it was', () => {
+  // The code says why, for the log, and is never a path.
+  it('a mode that cannot be written stays as it was, and says the error\'s code', () => {
     const folder = aFolder()
     const file = join(folder, NOTIFY_MODE_FILE)
     mkdirSync(file)
     const store = new NotifyModeStore(file)
-    expect(store.set('you')).toBe(false)
+    expect(store.set('you')).toBe('EISDIR')
     expect(store.get()).toBe('full')
     expect(readdirSync(folder)).toEqual([NOTIFY_MODE_FILE])
   })

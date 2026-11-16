@@ -4612,7 +4612,7 @@ describe('the Notifications setting (docs/plans/2026-11-16-dial-agent-notify-des
     const listener = fakeListener()
     const { core, port } = start({ decideTier: null, listen: listener.listen })
     expect(listener.notify('you')).toEqual({ error: 'WRITE_FAILED' })
-    expect(logs).toContain('[device] notifications · not saved')
+    expect(logs).toContain('[device] notifications · not saved · EISDIR')
     expect(statuses(core)).toEqual([])
     summary(port, 'a1', { recap: 'The requested build is ready.' })
     await vi.waitFor(() => expect(calls('summary')).toEqual([['a1', 'The requested build is ready.', 'done', 'alert', undefined, false]]))
