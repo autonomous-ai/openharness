@@ -256,11 +256,11 @@ describe.skipIf(process.platform === 'win32')('askDevices, on a socket', () => {
     expect(heard).toEqual([{ method: 'POST', url: '/', body: JSON.stringify(NOTICE) }])
   })
 
-  it('null for a 204, 400, 404, 413, 429 and 500', async () => {
+  it('the status for a 204, 400, 404, 413, 429 and 500, its body unread', async () => {
     const dir = dataDir()
     let status = 0
     const { heard } = await listener(dir, res => { res.writeHead(status).end(status === 204 ? undefined : '{"result":"shown"}') })
-    for (status of [204, 400, 404, 413, 429, 500]) expect(await askDevices(dir, NOTICE)).toBeNull()
+    for (status of [204, 400, 404, 413, 429, 500]) expect(await askDevices(dir, NOTICE)).toBe(status)
     expect(heard).toHaveLength(6)
   })
 

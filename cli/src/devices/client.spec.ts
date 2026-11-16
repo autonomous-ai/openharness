@@ -1193,9 +1193,9 @@ describe('harness hardware watch: Sound', () => {
 const mode = (run: ReturnType<typeof watch>, value: unknown) => run.stdin.emit('data', `${JSON.stringify({ notify: value })}\n`)
 /** The devices' listener, faked: it answers each mode handed to it only when the test says, in order. */
 function heldModes() {
-  const answers: ((reply: Record<string, unknown> | null) => void)[] = []
-  const notifyMode = vi.fn((_mode: NotifyMode) => new Promise<Record<string, unknown> | null>(resolve => { answers.push(resolve) }))
-  const answer = async (reply: Record<string, unknown> | null) => {
+  const answers: ((reply: Record<string, unknown> | number | null) => void)[] = []
+  const notifyMode = vi.fn((_mode: NotifyMode) => new Promise<Record<string, unknown> | number | null>(resolve => { answers.push(resolve) }))
+  const answer = async (reply: Record<string, unknown> | number | null) => {
     answers.shift()!(reply)
     // The watch reads the answer a turn later.
     await new Promise(resolve => setImmediate(resolve))
@@ -1263,15 +1263,18 @@ describe('harness hardware watch: Notifications', () => {
       await stillRunning(run)
     }
   })
-  it('no answer prints NO_ANSWER and sends what waited', async () => {
-    const listener = heldModes()
-    const run = await attached({ notifyMode: listener.notifyMode })
-    mode(run, 'you')
-    mode(run, 'full')
-    await listener.answer(null)
-    expect(run.errors).toEqual(['notify: NO_ANSWER'])
-    expect(listener.notifyMode.mock.calls).toEqual([['you'], ['full']])
-    await stillRunning(run)
+  it('no answer, or a status in its place, prints NO_ANSWER and sends what waited', async () => {
+    // A status: an older daemon's listener (404), or its own rate (429).
+    for (const reply of [null, 404, 429]) {
+      const listener = heldModes()
+      const run = await attached({ notifyMode: listener.notifyMode })
+      mode(run, 'you')
+      mode(run, 'full')
+      await listener.answer(reply)
+      expect(run.errors, String(reply)).toEqual(['notify: NO_ANSWER'])
+      expect(listener.notifyMode.mock.calls).toEqual([['you'], ['full']])
+      await stillRunning(run)
+    }
   })
   it('before the daemon has answered, or with no dial, nothing is sent', async () => {
     const listener = heldModes()

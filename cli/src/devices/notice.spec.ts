@@ -7,7 +7,7 @@ import { NOTICE_USAGE, noticeCaller, runNotice, type NoticeDeps } from './notice
 
 const CLAUDE = { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 'sess-1' }
 
-async function notify(words: string[], answer: Record<string, unknown> | null = { result: 'shown' }, deps: Partial<NoticeDeps> = {}) {
+async function notify(words: string[], answer: Record<string, unknown> | number | null = { result: 'shown' }, deps: Partial<NoticeDeps> = {}) {
   const out: string[] = []
   const err: string[] = []
   const ask = vi.fn(async () => answer)
@@ -28,6 +28,14 @@ describe('harness device notify', () => {
       expect(await notify(['Connect the VPN'], answer), JSON.stringify(answer)).toMatchObject({ code: 0, out: ['no dial'], err: [] })
     }
     expect(await notify(['Connect the VPN', '--json'], { result: 'limited' })).toMatchObject({ code: 0, out: ['{"result":"limited"}'] })
+  })
+
+  it("the listener's own rate refusing the notice is limited, any other status no dial", async () => {
+    expect(await notify(['Connect the VPN'], 429)).toMatchObject({ code: 0, out: ['limited'], err: [] })
+    expect(await notify(['Connect the VPN', '--json'], 429)).toMatchObject({ code: 0, out: ['{"result":"limited"}'] })
+    for (const status of [204, 400, 404, 413, 500]) {
+      expect(await notify(['Connect the VPN'], status), String(status)).toMatchObject({ code: 0, out: ['no dial'], err: [] })
+    }
   })
 
   it('a long, many-line or unquoted text is one line', async () => {
