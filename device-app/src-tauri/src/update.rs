@@ -115,10 +115,12 @@ mod tests {
 
     #[test]
     fn only_a_release_build_on_a_mac_updates_itself() {
-        assert!(enabled(false, "macos"));
-        assert!(!enabled(true, "macos"));
-        assert!(!enabled(false, "linux"));
-        assert!(!enabled(false, "windows"));
+        assert!(enabled(false, "macos", "0.0.1"));
+        assert!(!enabled(true, "macos", "0.0.1"));
+        assert!(!enabled(false, "linux", "0.0.1"));
+        assert!(!enabled(false, "windows", "0.0.1"));
+        // A local `cargo tauri build` keeps the placeholder: it never replaces itself with the published release.
+        assert!(!enabled(false, "macos", "0.0.0"));
     }
 
     #[test]
