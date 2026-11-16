@@ -22,7 +22,7 @@ void main() {
     // The fields that make the line worth writing survive.
     expect(line, contains('codex'));
     expect(line, contains('DeepSeek-V4-Flash-0731'));
-    expect(line, contains('llm.example.test'));
+    expect(line, contains('baseUrl: <27 chars>'));
   });
 
   test('a secret is caught wherever it is nested', () {
@@ -48,11 +48,11 @@ void main() {
     }
   });
 
-  test('a long value is clipped rather than burying the fields beside it', () {
-    final line = redactValue({'blob': 'x' * 500, 'after': 'visible'});
-    expect(line, contains('…'));
-    expect(line, contains('after: visible'));
-    expect(line.length, lessThan(300));
+  test('a long value is its length', () {
+    expect(
+      redactValue({'blob': 'x' * 500, 'after': 'visible'}),
+      '{blob: <500 chars>, after: <7 chars>}',
+    );
   });
 
   test('a list is counted, not printed', () {
@@ -92,7 +92,95 @@ void main() {
       },
     };
 
-    expect(summariseForLog(reply), contains('/Users/dev/.codex-work'));
+    expect(
+      summariseForLog(reply),
+      '{agent: {id: agt_01HXYZ0123456789, name: <17 chars>, engine: codex, '
+      'engineDisplayName: <12 chars>, sessionId: <redacted>, status: running, '
+      'cwd: <33 chars>, terminalAvailable: true, parentAgentId: null, '
+      'codexHome: <22 chars>}}',
+    );
+  });
+
+  // What a person typed, a name, a path, a router's trace: none of it is the
+  // event, and all of it outlives the session in ~/.harness/logs.
+  test('a frame line shows its shape, never its content', () {
+    final line = summariseForLog({
+      'requestId': 'dsk_0a1b',
+      'engine': 'claude',
+      'prompt': 'fix the zebra-orchard login',
+      'name': 'zebra-orchard',
+      'cwd': '/Users/dev/zebra-orchard',
+      'maxChars': 4000,
+      'bypassPermission': true,
+      'parentAgentId': null,
+      'lastAsk': {'turn': 7, 'ask': 'why is zebra-orchard slow'},
+      'trace': 'picked zebra-orchard',
+      'agents': ['a', 'b'],
+      'apiKey': 'sk-live-x',
+    });
+
+    expect(line, isNot(contains('zebra-orchard')));
+    for (final shown in const [
+      'requestId: dsk_0a1b',
+      'engine: claude',
+      'prompt: <27 chars>',
+      'name: <13 chars>',
+      'cwd: <24 chars>',
+      'maxChars: 4000',
+      'bypassPermission: true',
+      'parentAgentId: null',
+      'lastAsk: {turn: 7, ask: <25 chars>}',
+      'trace: <20 chars>',
+      'agents: [2 items]',
+      'apiKey: <redacted>',
+    ]) {
+      expect(line, contains(shown));
+    }
+  });
+
+  test('free text under an allowed key is its length', () {
+    expect(
+      redactValue({
+        'error': 'could not read zebra-orchard',
+        'status': 'waiting on zebra-orchard',
+        'code': 'NOT_FOUND',
+        'type': 'agent_create_result',
+      }),
+      '{error: <28 chars>, status: <24 chars>, code: NOT_FOUND, '
+      'type: agent_create_result}',
+    );
+  });
+
+  test('a token is at most 64 characters', () {
+    expect(redactValue({'id': 'a' * 64}), '{id: ${'a' * 64}}');
+    expect(redactValue({'id': 'a' * 65}), '{id: <65 chars>}');
+    expect(redactValue({'id': ''}), '{id: <0 chars>}');
+  });
+
+  test('a secret-named key wins over the allowlist', () {
+    expect(
+      redactValue({'sessionId': 'harness-agt-01'}),
+      '{sessionId: <redacted>}',
+    );
+  });
+
+  test('a key that is not identifier-shaped is its length', () {
+    expect(
+      redactValue({'/Users/dev/zebra-orchard/a.md': 3, 'x' * 41: 1}),
+      '{<29 chars>: 3, <41 chars>: 1}',
+    );
+  });
+
+  test('a value that is not JSON is its length', () {
+    expect(
+      redactValue({'at': DateTime.utc(2026, 11, 16)}),
+      matches(RegExp(r'^\{at: <\d+ chars>\}$')),
+    );
+  });
+
+  test('logToken', () {
+    expect(logToken('MESSAGES_OFF'), 'MESSAGES_OFF');
+    expect(logToken('no such thing'), '<13 chars>');
   });
 
   group('free-form CLI output, which has no keys to go by', () {
