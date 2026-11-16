@@ -53,13 +53,13 @@ length bounds.
 
 ### One hc client (`hcClient.ts`)
 
-- **Socket:** `HC_SOCKET` when it is absolute; else `<XDG_STATE_HOME>/herdr-core/<HC_SESSION>/<HC_SESSION>.sock`, with a
-  relative or unset `XDG_STATE_HOME` read as `~/.local/state` and an unset or invalid `HC_SESSION` read as `default`.
-  This reads the devices process's own environment only, as `herdrSocketPath` does. The socket must be a socket of this
-  user's (`lstat`, uid) before each connection, as herdr's is. The rule comes from hc's manual (the session paths it
-  names: HOME, XDG, `HC_SESSION`, `HC_SOCKET`), its binary's own messages, and the socket on this Mac. Task 1 confirms it
-  against a private core: where the socket lands with `XDG_STATE_HOME` and `HC_SESSION` set. A `socket` set in hc's own
-  `config.toml` is not read (follow-up).
+- **Socket** (as Task 1 found hc 0.1.21 places it, F1): `HC_SOCKET` when it is absolute; else, with an absolute
+  `XDG_RUNTIME_DIR`, `<XDG_RUNTIME_DIR>/herdr-core/<HC_SESSION>.sock`; else
+  `<XDG_STATE_HOME>/herdr-core/<HC_SESSION>/<HC_SESSION>.sock`, with a relative or unset `XDG_STATE_HOME` read as
+  `~/.local/state`. An unset or invalid `HC_SESSION` reads as `default`. This reads the devices process's own environment
+  only, as `herdrSocketPath` does; a daemon started by launchd has no `XDG_RUNTIME_DIR`, and Diego's default socket is in
+  the state folder. The socket must be a socket of this user's (`lstat`, uid) before each connection, as herdr's is. A
+  `socket` set in hc's own `config.toml` is not read (follow-up).
 - **Framing:** the line connection of `herdrClient.ts` (`connect`) is shared, not copied: it moves to a file both
   clients import, with its line bound as a parameter. An answer counts only under its own id, and a JSON-RPC error counts
   by its `data.kind` in `[a-z_]{1,64}`, never by its message. A request is one connection; the subscription's connection
@@ -70,9 +70,8 @@ length bounds.
   after it, `missed` with its new snapshot (events whose `seq` is not above it are dropped) and the heartbeat. A
   subscription that hears nothing for 45 s, three heartbeats, is ended (`timeout`). Task 1 records the event lines' exact
   shape from a private hc 0.1.21 into the fake server's fixture before the client is written, `doc` and `size` events
-  included. A `doc` event that carries the document (hc allows 1 MiB, Herdr writes its layout there) sets the
-  subscription's line bound: 8 MiB, above a 1 MiB value escaped in JSON, so a layout save never ends the subscription.
-  Lines of a kind the source does not read are dropped as soon as they are parsed.
+  included. Task 1 found (F5) that a `doc` event carries only `{name, version}`, never the document, so the line bound
+  stays herdr's 1 MiB. Lines of a kind the source does not read are dropped as soon as they are parsed.
 - **Kinds:** hc's `app` word goes through one closed table, here, for both the source and the prompt (`claude-code` →
   `claude`, `codex` → `codex`). An app not in the table keeps its own word when it fits `HERDR_KIND`. So a hooked copy's
   words, which come with the engine id (`claude`), match a terminal whose app is `claude-code`.
