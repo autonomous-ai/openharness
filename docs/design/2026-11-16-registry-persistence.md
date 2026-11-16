@@ -1065,3 +1065,81 @@ TypeScript passed (`types-coverage-checkpoint.log`). Earlier failed and invalid
 fixture attempts remain recorded. These focused results do not claim the pending
 combined-main broad gates, native/crash/two-writer acceptance or matched timing
 comparison; no such execution was performed during this coverage correction.
+
+### Persistence cost correction: repeated local work
+
+The frozen `44995144a50c5e57fa598d5fc0e143e90b34ada2` matched 83-call
+A/B/B/A run passed its functional, provenance and cleanup checks, but failed cost
+acceptance. At 160 rows, changed-save median CPU for twenty operations increased
+from 556.920 to 719.009 ms, p95 elapsed time from 122.269 to 145.506 ms, and sampled
+maximum RSS from 122.803 to 198.963 MiB. The event-loop heartbeat improved from
+122.812 to 4.777 ms. The original measurements remain source-scoped at
+`/tmp/core-registry-cost-v1-summary.json`; neither successful outcomes nor improved
+responsiveness make the CPU, memory or elapsed-time regression acceptable.
+
+Root's reviewed four-window counter diagnostic on the unchanged old/449 bundles
+passed its private-file outcomes and cleanup. Its manifest is
+`/tmp/core-registry-cost-counts-v1-pair/manifest.json`, SHA-256
+`953ac7537e78fd24d8d75309dce6429bcddd488ad2718e22199071a5a50d2678`.
+At 160 rows an unchanged flush fingerprints 320 rows on both versions; 449 also
+deep-clones 160 rows and fingerprints 160 ownership records. The changed
+`setCwd`/`flush` pair fingerprints 1,121 rows on old and 1,441 on 449; 449 also
+deep-clones 480 rows and fingerprints 320 ownership records. These counts
+identify repeated work, not the full cause of the CPU or RSS difference.
+
+The reviewed correction is limited to two changes in `persist`:
+
+1. Reuse `beforeCommit`'s immutable row fingerprints in the unchanged observation
+   comparison. Every strict candidate call passes `strict = true`, excluding that
+   path before a candidate can replace a captured row. Keep the population check
+   and exact private-file byte comparison. This duplicate fingerprinting already
+   existed in the old writer; removing it is a measured correction opportunity,
+   not evidence that it caused the whole regression.
+2. Remove the deep clone only from the final `liveRows` construction after the
+   last evidence refresh and ownership checks. `persistedRow` still copies each
+   outer row and runtime entry. The merge reads its remaining nested values
+   synchronously, copies candidates before changing fields, then normalizes,
+   publishes and installs the live result without an await. `index(..., false)`
+   invokes no engine callback; those callbacks remain after the writer callback.
+
+The first pre-await immutable capture and strict candidate clones stay. So do
+`beforeOwners`, all native/current/cancellation checks, locked peer reads, exact
+rebase and intent revisions, final rename and directory fsync, unconfirmed-group
+recovery and receipts. No shallow live snapshot survives an await on the successful
+publication path. No cache, state mirror, extra revision counter, retained field
+list, API or persistence format is introduced. The rebase and its trailing
+fingerprint check remain; whole-image serialization reuse is outside this patch.
+
+Data Design: growth decreases by one transient full-table deep clone; existing
+image, observation and strict-waiter bounds remain. Concurrency and read cost keep
+the same writer, cross-process lock and exact snapshot read; only already-computed
+operation-local fingerprints are reused. Scale acceptance still requires the
+matched 16/160-row workload with CPU, RSS, successful-save and heartbeat results.
+Compatibility, audience and identity are unchanged: files retain their existing
+bytes/order and every current guard remains authoritative. No migration is needed;
+rollback is a code revert. Failure, deadline, cleanup and crash-recovery semantics
+are unchanged. This affects the daemon on macOS, Linux and Windows without changing
+an OS call or process-start path; only macOS measurements are currently available.
+
+Before runtime edits, `registry.persistenceCost.spec.ts` will exercise real public
+`flush` and `setCwd`/`flush` calls with forwarded built-in counters: one unchanged
+fingerprint per row and no third full-table clone beyond the two required
+pre-await captures. These are deterministic work budgets, not timing assertions.
+Control cases hold an actual temporary-image fsync, edit a nested array through
+the live alias and delete a field, then verify both the captured durable image and
+the later rebased image. Strict close cancellation, owner replacement, repeated
+same-value cancellation and post-rename directory-fsync uncertainty must preserve
+their existing authority/durability outcomes. Every wait and teardown is bounded;
+tests use private homes/files and no engine. RED and GREEN remain pending root's
+quiet-window schedule; no result is claimed by preparing this Design and spec.
+
+The first default-sandbox attempt failed all seven fixture setups with storage
+access refused; a direct own-process `/bin/ps` check was denied by that sandbox.
+It is retained at `/tmp/core-registry-cost-correction-red.log` as an environment
+failure, not RED evidence. The same selected spec, with the authorized private
+native permission envelope and no mock/guard changes, produced the intended RED:
+four unchanged-row fingerprints against a budget of two, and six row clones
+against a budget of four. All five authority, alias/deletion and durability
+controls passed. `/tmp/core-registry-cost-correction-red-private.log` records
+two failures and five passes in 4.24 seconds on Node 24.22.2, one worker. No runtime
+change preceded that RED; the Design and test are committed before the correction.
