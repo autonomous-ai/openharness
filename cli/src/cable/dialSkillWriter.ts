@@ -39,6 +39,7 @@ const MAX_SAID = 2 * MAX_HOMES
 
 export function createDialSkillWriter(deps: DialSkillWriterDeps): DialSkillWriter {
   const answersFile = join(deps.dataDir, DIAL_SKILL_FILE)
+  const settingsFile = join(deps.claudeHome, 'settings.json')
   const defaultHome: Record<DialEngine, string> = { claude: deps.claudeHome, codex: deps.codexHome }
   let listed: DialSkillHomes = { claude: [], codex: [] }
   /** Homes written, found ours or found the person's while the engine was On: a scan passes them with a set lookup. */
@@ -46,17 +47,18 @@ export function createDialSkillWriter(deps: DialSkillWriterDeps): DialSkillWrite
   const said = new Set<string>()
   let stamp = ''
 
-  const on = (engine: DialEngine): boolean => skillOn(engine, deps.answers()[engine], join(deps.claudeHome, 'settings.json'))
+  const on = (engine: DialEngine): boolean => skillOn(engine, deps.answers()[engine], settingsFile)
 
-  /** dial-skill.json as of now: a Turn off then a Turn on between two scans is a new file, whatever it holds. */
-  const stampNow = (): string => {
+  /** dial-skill.json and Claude Code's settings as of now: a Turn off then a Turn on between two scans, or the plugin
+   *  uninstalled through /plugin, is a new stamp, whatever the files hold. */
+  const stampNow = (): string => [answersFile, settingsFile].map((file) => {
     try {
-      const info = statSync(answersFile)
+      const info = statSync(file)
       return `${info.ino} ${info.size} ${info.mtimeMs}`
     } catch {
       return 'missing'
     }
-  }
+  }).join(' ')
 
   const sayOnce = (key: string, line: string): void => {
     if (said.has(key) || said.size >= MAX_SAID) return
@@ -70,24 +72,27 @@ export function createDialSkillWriter(deps: DialSkillWriterDeps): DialSkillWrite
     if (handled[engine].size < MAX_HOMES) handled[engine].add(home)
   }
 
-  /** The folders [engine]'s skill is in while it is On: its list, the command's record and its default home's. */
-  const heldBy = (engine: DialEngine): Set<string | null> => on(engine)
-    ? new Set([...listed[engine], ...readWritten(deps.dataDir)[engine], skillsFolderOf(defaultHome[engine], false, deps.uid)])
-    : new Set()
+  /** The folders [engine]'s skill may be in: its list, the folders the command recorded and its default home's. */
+  const foldersOf = (engine: DialEngine): Set<string | null> =>
+    new Set([...listed[engine], ...readWritten(deps.dataDir)[engine], skillsFolderOf(defaultHome[engine], false, deps.uid)])
 
-  /** Off: ours goes from every listed folder, and only a folder whose removal failed stays listed, so a later Turn
-   *  off still finds it. A folder the other engine holds its skill in while On (~/.codex/skills linked to
+  /** Off: ours goes from every folder it may be in, the ones no list holds too (the command wrote them, and a plugin
+   *  uninstalled through /plugin runs no Turn off). Only a listed folder whose removal failed stays listed, so a later
+   *  Turn off still finds it. A folder the other engine holds its skill in while On (~/.codex/skills linked to
    *  ~/.claude/skills) only leaves this engine's list. */
   const turnOff = (engine: DialEngine, counts: Counts): void => {
     handled[engine].clear()
-    if (!listed[engine].length) return
-    const shared = heldBy(OTHER[engine])
-    listed[engine] = listed[engine].filter((skills) => {
-      if (shared.has(skills)) return false
+    const shared = on(OTHER[engine]) ? foldersOf(OTHER[engine]) : new Set()
+    const failed = new Set<string>()
+    for (const skills of foldersOf(engine)) {
+      if (skills === null || shared.has(skills)) continue
       const result = removeSkill(skills)
       if (result === 'removed') counts[engine].removed++
-      return result === 'failed'
-    })
+      if (result === 'failed') failed.add(skills)
+    }
+    const kept = listed[engine].filter((skills) => failed.has(skills))
+    if (kept.length === listed[engine].length) return
+    listed[engine] = kept
     save()
   }
 
