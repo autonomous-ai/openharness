@@ -1612,26 +1612,49 @@ void main() {
     expect(session.status, isNot(TerminalSessionStatus.error));
   });
 
-  test('a failure is written to the file log with its code', () async {
-    final log = _RecordingLog();
-    final previous = appLog;
-    appLog = log;
-    addTearDown(() => appLog = previous);
-    await ready();
+  group('a failure in the file log', () {
+    late _RecordingLog log;
 
-    await session.handleFrame('terminal_error', {
-      'streamId': streamId,
-      'code': 'TERMINAL_SNAPSHOT_FAILED',
-      'message': 'tmux snapshot failed',
+    Future<void> failWith(String code, String message) async {
+      log = _RecordingLog();
+      final previous = appLog;
+      appLog = log;
+      addTearDown(() => appLog = previous);
+      await ready();
+      await session.handleFrame('terminal_error', {
+        'streamId': streamId,
+        'code': code,
+        'message': message,
+      });
+    }
+
+    test('a short code-like message is written as it is', () async {
+      await failWith('TERMINAL_SNAPSHOT_FAILED', 'ENOENT');
+
+      expect(
+        log.lines,
+        contains(
+          'terminal failed machine=machine-1 agent=agent-1 stream=$streamId '
+          'code=TERMINAL_SNAPSHOT_FAILED message=ENOENT',
+        ),
+      );
     });
 
-    expect(
-      log.lines,
-      contains(
-        'terminal failed machine=machine-1 agent=agent-1 stream=$streamId '
-        'code=TERMINAL_SNAPSHOT_FAILED message=tmux snapshot failed',
-      ),
-    );
+    test('a message naming a dropped file is only its length', () async {
+      // A Node file error quotes the path of the file a person dropped.
+      const message =
+          "ENOENT: no such file or directory, open '/Users/dev/zebra-orchard/plan.md'";
+      await failWith('TERMINAL_PASTE_FILE_FAILED', message);
+
+      expect(
+        log.lines,
+        contains(
+          'terminal failed machine=machine-1 agent=agent-1 stream=$streamId '
+          'code=TERMINAL_PASTE_FILE_FAILED message=<${message.length} chars>',
+        ),
+      );
+      expect(log.lines.join('\n'), isNot(contains('zebra-orchard')));
+    });
   });
 
   group('slow input log', () {

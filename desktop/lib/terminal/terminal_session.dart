@@ -9,6 +9,7 @@ import 'package:xterm/xterm.dart';
 import '../core/crash_log.dart';
 import '../core/sleep_aware.dart';
 import '../logging/app_log.dart';
+import '../logging/redact.dart';
 import 'terminal_binary.dart';
 import 'terminal_input.dart';
 import 'terminal_viewport.dart';
@@ -1882,10 +1883,11 @@ class TerminalSession extends ChangeNotifier {
   void _fail(String code, String? message) {
     if (_disposed) return;
     // Why a pane shows Reconnect was only ever in debugPrint, invisible on a person's machine (2026-10-16).
+    // The message is a token or its length: a paste-file failure quotes the dropped file's path.
     appLog.warn(
       'terminal',
       'failed machine=$machineId agent=$agentId stream=$streamId code=$code'
-          '${message == null ? '' : ' message=$message'}',
+          '${message == null ? '' : ' message=${logToken(message)}'}',
     );
     _inputUnanswered(code);
     _generation++;

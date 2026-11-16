@@ -104,13 +104,17 @@ Future<String?> deliverAttachedTask(
     appLog.warn('attach', '$agentId never took input');
     return 'The harness did not open in time. Attach the files in its pane.';
   }
-  for (final file in files) {
+  for (final (index, file) in files.indexed) {
     if (stillWanted != null && !stillWanted()) {
       return 'Attachment delivery stopped.';
     }
     if (!await session.pasteFile(file.name, await file.readBytes()) ||
         !await session.pasteText(' ')) {
-      appLog.warn('attach', '${file.name} did not reach $agentId');
+      // A file's name is the person's content: the log names its place.
+      appLog.warn(
+        'attach',
+        'file ${index + 1} of ${files.length} did not reach $agentId',
+      );
       return 'Could not attach ${file.name}. Attach it in the pane.';
     }
   }

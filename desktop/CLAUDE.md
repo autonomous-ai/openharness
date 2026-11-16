@@ -827,7 +827,11 @@ add a kind there, not at the call site.
   precisely to stay out of argv. The Dio clients carry `attachHttpLog`, one `api` line per finished request, method and
   URL only. **What a child PRINTS can still be a credential**, so CLI output and URLs go through
   `redactSecretsInText` (`logging/redact.dart`, beside the frame-level `redactValue`) before
-  anything is written. The Debug pane is a **mirror** of those sinks, not a second stream
+  anything is written. **No log holds what a person typed, said or named**: a WS frame line shows
+  its keys, numbers, list counts and `<n chars>` for a string, the string itself only for an id,
+  code or version key holding a short token (`redactValue`); every error a log writes goes through
+  `logErrorText` (`logging/log_safe_error.dart`), so a refusal shows its code, never the daemon's
+  `detail`. The Debug pane is a **mirror** of those sinks, not a second stream
   (`log_stream.dart` + `log_stream_sinks.dart`): a bounded ring of the last 500 entries that
   `installFileLogs` tees into. Routine DEBUG records use a one-second flush deadline,
   256 entries or 64 Ki characters. INFO/WARN and admitted ERROR records flush their preceding context;
