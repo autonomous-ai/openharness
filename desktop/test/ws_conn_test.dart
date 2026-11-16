@@ -127,7 +127,7 @@ class FakeHub {
               'payload': {
                 'requestId': request['requestId'],
                 'error': request['refuseWith'] ?? 'MESSAGES_OFF',
-                'detail': 'refused by the fixture',
+                'detail': request['refuseDetail'] ?? 'refused by the fixture',
               },
             }),
           );
@@ -284,16 +284,77 @@ void main() {
         if (e.message.endsWith('failed')) '${e.message} ${e.error}': e.level,
     };
     expect(failures, {
-      '← agent_messages failed agent_messages_result: MESSAGES_OFF — '
-              'refused by the fixture':
+      '← agent_messages failed agent_messages_result: MESSAGES_OFF':
           AppLogLevel.debug,
-      '← agent_messages failed agent_messages_result: UNKNOWN_ACTION — '
-              'refused by the fixture':
+      '← agent_messages failed agent_messages_result: UNKNOWN_ACTION':
           AppLogLevel.debug,
-      '← agent_create failed agent_create_result: UNSUPPORTED_ON_REMOTE — '
-              'this machine cannot create agents':
+      '← agent_create failed agent_create_result: UNSUPPORTED_ON_REMOTE':
           AppLogLevel.warn,
     });
+  });
+
+  // The daemon's detail can quote a prompt or a name: the UI shows it, the
+  // logs keep only the frame and the code.
+  test('a refusal is logged by its code, in the file and the Debug pane', () async {
+    final dir = Directory.systemTemp.createTempSync('harness-ws-refusal-');
+    final file = DailyLogFile(dir, 'app');
+    final previousLog = appLog;
+    final stream = LogStream();
+    appLog = FanoutAppLog([FileAppLog(file), StreamAppLog(stream)]);
+    addTearDown(() {
+      file.flush();
+      appLog = previousLog;
+      dir.deleteSync(recursive: true);
+    });
+    hub = await FakeHub.start();
+    conn = WsConn(
+      wsBaseUrl: 'ws://127.0.0.1:${hub.port}',
+      autonomousEnv: 'test',
+      machineId: 'fixture',
+      accessTokenProvider: (_, _) async => 'fixture-token',
+      onAuthFailure: (_) {},
+      onEvent: (_) {},
+      onStatus: (_) {},
+    );
+    await conn!.connect();
+    Future<WsRequestFailure> refused(Map<String, dynamic> payload) async {
+      try {
+        await conn!.request('agent_messages', payload: payload);
+      } on WsRequestFailure catch (failure) {
+        return failure;
+      }
+      fail('agent_messages was not refused');
+    }
+
+    final shown = await refused({
+      'action': 'shares',
+      'refuseWith': 'NOT_ALLOWED',
+      'refuseDetail': 'tab zebra-orchard is shared',
+    });
+    expect(shown.toString(), contains('zebra-orchard'));
+    await refused({
+      'action': 'shares',
+      'refuseWith': 'no such zebra-orchard',
+    });
+    // The logging listener runs after the caller's own error handler.
+    await pumpEventQueue();
+    file.flush();
+
+    final failures = [
+      for (final e in stream.entries.reversed)
+        if (e.message == '← agent_messages failed') e.error,
+    ];
+    expect(failures, [
+      'agent_messages_result: NOT_ALLOWED',
+      'agent_messages_result: <21 chars>',
+    ]);
+    for (final e in stream.entries) {
+      expect(e.message, isNot(contains('zebra-orchard')));
+      expect(e.error ?? '', isNot(contains('zebra-orchard')));
+    }
+    final text = file.currentFile.readAsStringSync();
+    expect(text, contains('err=agent_messages_result: NOT_ALLOWED'));
+    expect(text, isNot(contains('zebra-orchard')));
   });
 
   // Browser settings carry a proxy's host, its login and its exit address.
