@@ -38,8 +38,9 @@ export const RECORDED = {
   ],
 }
 
-/** What a method answers: a line (the request's id goes first, so a line's own `id` takes its place), bytes as they are,
- *  nothing with the connection held open (`hold`), or nothing with it ended (`close`). */
+/** What a method answers: a line (the request's id goes first, so a line's own `id` takes its place), bytes as they are
+ *  (a RECORDED answer's id, the spike's `r1`, becomes the request's), nothing with the connection held open (`hold`), or
+ *  nothing with it ended (`close`). */
 export type FakeHerdrAnswer = { line: Record<string, unknown> } | { raw: string } | 'hold' | 'close'
 
 export interface FakeHerdrRequest {
@@ -84,6 +85,9 @@ const parse = (text: string): unknown => {
   try { return JSON.parse(text) } catch { return undefined }
 }
 
+/** The start of a RECORDED answer: herdr answered the spike's request, `r1`, under its id. */
+const RECORDED_ANSWER = /^\{"id":"r1",/
+
 const refused = (code: string): FakeHerdrAnswer => ({ line: { error: { code, message: code } } })
 // herdr answers a line it cannot read under "" (the spike); an unknown method is answered the same here.
 const INVALID: FakeHerdrAnswer = { line: { id: '', error: { code: 'invalid_request', message: 'invalid request' } } }
@@ -124,7 +128,9 @@ export async function fakeHerdr(): Promise<FakeHerdr> {
 
   const write = (socket: Socket, id: string, answer: FakeHerdrAnswer) => {
     if (answer === 'hold' || answer === 'close') return
-    socket.write('raw' in answer ? answer.raw : `${JSON.stringify({ id, ...answer.line })}\n`)
+    socket.write('raw' in answer
+      ? answer.raw.replace(RECORDED_ANSWER, () => `{"id":${JSON.stringify(id)},`)
+      : `${JSON.stringify({ id, ...answer.line })}\n`)
   }
   const reply = (socket: Socket, id: string, answer: FakeHerdrAnswer) => {
     write(socket, id, answer)

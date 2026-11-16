@@ -224,7 +224,10 @@ describe.skipIf(process.platform === 'win32')('the herdr client (docs/specs/2026
     const thenEvent = (chunk: string) => `${chunk}${RECORDED.replay[1]}\n`
     it.each([
       ['rejected', 'an error answer', refusal('invalid_request'), undefined],
-      ['bad_answer', 'a first line that is neither started nor an error', { raw: '{"id":"r1","result":{"type":"agent_list"}}\n' }, undefined],
+      ['rejected', 'an error under ""', { line: { id: '', error: { code: 'invalid_request', message: 'invalid request' } } }, undefined],
+      ['bad_answer', 'a first line that is neither started nor an error', { line: { result: { type: 'agent_list' } } }, undefined],
+      ['bad_answer', 'subscription_started under another id', { line: { id: 'another', result: { type: 'subscription_started' } } }, undefined],
+      ['bad_answer', 'an error under another id', { line: { id: 'another', error: { code: 'invalid_request', message: '' } } }, undefined],
       ['ended', 'a dropped connection', undefined, () => server.drop()],
       ['oversize', 'a line over 1 MiB', undefined, () => server.send(thenEvent(`${'x'.repeat(MAX_LINE_BYTES + 1)}\n`))],
       ['bad_json', 'a line that is no JSON', undefined, () => server.send(thenEvent('nope\n'))],
@@ -341,6 +344,19 @@ describe.skipIf(process.platform === 'win32')('the herdr client (docs/specs/2026
     const herdr = client()
     expect(await herdr.prompt('w1:p1', 'claude', 'go')).toEqual({ outcome: 'failed', code: 'not_that_agent' })
     expect(await herdr.prompt('w2:p1', 'claude', 'go')).toEqual({ outcome: 'failed', code: 'agent_not_found' })
+    expect(server.requests.map(({ request }) => (request as { method: string }).method)).toEqual(['agent.get', 'agent.get'])
+  })
+
+  it('a read of the pane that is no agent_info, or is another pane\'s, is failed, bad_answer, and nothing is sent', async () => {
+    server.agents = [agent('w1:p1', 'claude', 'idle')]
+    const herdr = client()
+    for (const result of [
+      { type: 'agent_list', agent: agent('w1:p1', 'claude', 'idle') },
+      { type: 'agent_info', agent: agent('w2:p1', 'claude', 'idle') },
+    ]) {
+      server.answer('agent.get', { line: { result } })
+      expect(await herdr.prompt('w1:p1', 'claude', 'go'), result.type).toEqual({ outcome: 'failed', code: 'bad_answer' })
+    }
     expect(server.requests.map(({ request }) => (request as { method: string }).method)).toEqual(['agent.get', 'agent.get'])
   })
 
