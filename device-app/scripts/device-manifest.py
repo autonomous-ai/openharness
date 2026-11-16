@@ -158,9 +158,17 @@ def publish(version, folder, notes, pub_date):
         if not re.fullmatch(r"[1-9][0-9]*", generation):
             raise ValueError(f"{live_uri} has no generation")
         # Exactly the generation described: a manifest written in between fails this read, or the write below.
-        live = live_version(gcloud("storage", "cat", f"{live_uri}#{generation}"))
+        text = gcloud("storage", "cat", f"{live_uri}#{generation}")
+        live = live_version(text)
         if live is None:
             raise ValueError(f"{live_uri}#{generation} has no plain X.Y.Z version")
+        if version == live:
+            # A rerun after the manifest was written (verify failed, or gcloud gave up on a write that landed): this
+            # build is live, so the run goes on to verify it. Another build must never go out under its version.
+            current = json.loads(text)
+            if any(current.get(key) != value for key, value in file_entries(version, folder, CDN_BASE).items()):
+                raise ValueError(f"{version} is already published with other files; release a new version")
+            return current
     if parse(version) <= parse(live):
         raise ValueError(f"{version} is not greater than {live}, the live version")
     sums = file_sums(folder)
