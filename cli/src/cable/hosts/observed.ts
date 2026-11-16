@@ -173,12 +173,19 @@ interface Entry {
   dialPrompts: { at: number }[]
 }
 
+/** A pane's name as its app shows it, and whether the person set it. */
+export interface PaneName {
+  title: string
+  renamed: boolean
+}
+
 export class ObservedSource implements HostSource {
   readonly id = 'observed'
   private readonly entries = new Map<string, Entry>()
   private readonly listeners = new Set<() => void>()
-  /** Each adapter's names for its panes, by pane id, as its app shows them. */
-  private readonly paneNames = new Map<string, ReadonlyMap<string, string>>()
+  /** Each adapter's names for its panes, by pane id, as its app shows them, and the pane its caller placed each agent
+   *  with none of that adapter's at, by agent id. */
+  private readonly paneNames = new Map<string, { names: ReadonlyMap<string, PaneName>; placed: ReadonlyMap<string, string> }>()
   private scanning: Promise<void> | null = null
 
   constructor(private readonly deps: ObservedDeps) {}
@@ -470,9 +477,11 @@ export class ObservedSource implements HostSource {
     for (const l of [...this.listeners]) l()
   }
 
-  /** Replaces that adapter's names for its panes whole, and names every live agent again: the change is told once. */
-  setPaneNames(adapter: string, names: ReadonlyMap<string, string>): void {
-    this.paneNames.set(adapter, names)
+  /** Replaces that adapter's names for its panes whole, and the panes its caller placed agents with none of its at, and
+   *  names every live agent again: the change is told once. A place names an agent and nothing else: it is never one of
+   *  its panes, so no rest, tap or words reach it. */
+  setPaneNames(adapter: string, names: ReadonlyMap<string, PaneName>, placed: ReadonlyMap<string, string>): void {
+    this.paneNames.set(adapter, { names, placed })
     let changed = false
     for (const e of this.entries.values()) {
       if (!this.live(e)) continue
@@ -484,10 +493,20 @@ export class ObservedSource implements HostSource {
     if (changed) this.emit()
   }
 
-  /** The name the person gave it wins; else the name of its first pane that has one, else its folder's. */
+  /** A pane name the person set wins; else the name they gave the session; else its pane's name, else its folder's. */
   private nameOf(e: Entry): string {
-    const pane = e.panes.map(({ pane }) => this.paneNames.get(pane.adapter)?.get(pane.id)).find((name) => name !== undefined)
-    return e.title ?? pane ?? folderName(e.agent.cwd, e.agent.engine)
+    const pane = this.paneName(e)
+    return pane?.renamed ? pane.title : e.title ?? pane?.title ?? folderName(e.agent.cwd, e.agent.engine)
+  }
+
+  /** The name of its pane in the first adapter that names one: its own pane there, else the one it was placed at. */
+  private paneName(e: Entry): PaneName | undefined {
+    for (const [adapter, { names, placed }] of this.paneNames) {
+      const id = e.panes.find(({ pane }) => pane.adapter === adapter)?.pane.id ?? placed.get(e.agent.id)
+      const name = id === undefined ? undefined : names.get(id)
+      if (name) return name
+    }
+    return undefined
   }
 
   /** What the permission prompt the agent waits on asks, while it waits; '' for a prompt that names nothing. */

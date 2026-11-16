@@ -3,8 +3,8 @@
  * from a hook and the text from the dial, so both are checked here, and `orca` runs with no shell: the text is one
  * argument, never a command line. Nothing here polls Orca. Orca itself comes forward as every app does (open.ts).
  *
- * Beside them, three reads of Orca's CLI (createOrcaReads): whether it has `watch-focus`, the terminals in tab order,
- * and a watch of the focused terminal (docs/plans/2026-11-16-dial-orca-focus-order-design.md).
+ * Beside them, three reads of Orca's CLI (createOrcaReads): whether it has `watch-focus`, the terminals in tab order with
+ * the agents Orca saw in them, and a watch of the focused terminal (docs/plans/2026-11-16-dial-orca-focus-order-design.md).
  */
 import { type ChildProcess, execFile, spawn } from 'node:child_process'
 import { existsSync, realpathSync, statSync } from 'node:fs'
@@ -184,12 +184,29 @@ export interface OrcaFocusWatch {
 export interface OrcaTab {
   handle: string
   title?: string
+  /** Its title is none of its panes' titles: the person set it. Orca marks no custom title, but a tab's own title is its
+   *  active pane's. */
+  renamed?: true
+}
+
+/** An Orca terminal an agent runs in, as Orca's flat list says it: its worktree's folder and the agent Orca saw start there. */
+export interface OrcaTerminal {
+  handle: string
+  worktreePath: string
+  agentIdentity: string
+}
+
+export interface OrcaTabs {
+  /** The terminals' handles in tab order, each with its tab's title when it has one to show. */
+  tabs: OrcaTab[]
+  /** The terminals Orca lists an agent in, laid out or not. */
+  terminals: OrcaTerminal[]
 }
 
 export interface OrcaReads {
   orcaWatchesFocus(): Promise<boolean>
-  /** The terminals' handles in tab order, each with its tab's title when it has one to show; null when the read failed. */
-  orcaTabs(): Promise<OrcaTab[] | null>
+  /** Its tabs and the terminals agents run in, from one `terminal list`; null when the read failed. */
+  orcaTabs(): Promise<OrcaTabs | null>
   watchOrcaFocus(onHandle: (handle: string | null) => void): OrcaFocusWatch
 }
 
@@ -203,6 +220,10 @@ const MAX_WORKTREES = 64
 const MAX_HANDLES = 256
 const MAX_DEPTH = 32
 const MAX_FOCUS_LINE = 512
+// A terminal row's folder and agent are compared, never shown: a folder past PATH_MAX, or an agent's name past 64, is no
+// row of Orca's.
+const MAX_PATH = 4096
+const MAX_IDENTITY = 64
 /** How long a stopped watch has to go before it is killed. */
 const STOP_KILL_MS = 1000
 
@@ -227,24 +248,32 @@ function listsWatchFocus(help: string): boolean {
  *  named twice keeps its first place and title. A title is outside text, held to what a hook's is (observedTitle). */
 function tabOrder(listed: unknown): OrcaTab[] {
   const tabs = new Map<string, OrcaTab>()
-  // A tab's panes: `terminal` leaves and `pane-split`s. A leaf's own title is the program's in it: the tab's names it.
-  const panes = (node: unknown, depth: number, title: string | undefined): void => {
-    if (depth > MAX_DEPTH || tabs.size === MAX_HANDLES || !isObject(node)) return
+  // A tab's panes: `terminal` leaves and `pane-split`s, gathered with their own titles, the programs' in them.
+  const panes = (node: unknown, depth: number, leaves: Array<{ handle: unknown; title: string | undefined }>): void => {
+    if (depth > MAX_DEPTH || leaves.length === MAX_HANDLES || !isObject(node)) return
     if (node.type === 'terminal') {
-      const { handle } = node
-      if (typeof handle === 'string' && ORCA_HANDLE.test(handle) && !tabs.has(handle)) {
-        tabs.set(handle, title === undefined ? { handle } : { handle, title })
-      }
+      leaves.push({ handle: node.handle, title: observedTitle(node.title) })
     } else if (node.type === 'pane-split') {
-      panes(node.first, depth + 1, title)
-      panes(node.second, depth + 1, title)
+      panes(node.first, depth + 1, leaves)
+      panes(node.second, depth + 1, leaves)
     }
   }
   // A worktree's tab groups: `group`s of tabs and `split`s.
   const groups = (node: unknown, depth: number): void => {
     if (depth > MAX_DEPTH || tabs.size === MAX_HANDLES || !isObject(node)) return
     if (node.type === 'group' && Array.isArray(node.tabs)) {
-      for (const tab of node.tabs) if (isObject(tab)) panes(tab.panes, depth + 1, observedTitle(tab.title))
+      for (const tab of node.tabs) {
+        if (!isObject(tab)) continue
+        const leaves: Array<{ handle: unknown; title: string | undefined }> = []
+        panes(tab.panes, depth + 1, leaves)
+        // The tab's title names every pane in it.
+        const title = observedTitle(tab.title)
+        const named = title === undefined ? {} : leaves.some((leaf) => leaf.title === title) ? { title } : { title, renamed: true as const }
+        for (const { handle } of leaves) {
+          if (tabs.size === MAX_HANDLES) return
+          if (typeof handle === 'string' && ORCA_HANDLE.test(handle) && !tabs.has(handle)) tabs.set(handle, { handle, ...named })
+        }
+      }
     } else if (node.type === 'split') {
       groups(node.first, depth + 1)
       groups(node.second, depth + 1)
@@ -255,6 +284,23 @@ function tabOrder(listed: unknown): OrcaTab[] {
     for (const layout of layouts.slice(0, MAX_WORKTREES)) if (isObject(layout)) groups(layout.root, 1)
   }
   return [...tabs.values()]
+}
+
+/** The rows of `orca terminal list`'s flat `terminals` with an agent in them, its first 256 read: a shell's has no
+ *  `agentIdentity`. A handle named twice keeps its first row. */
+function agentTerminals(listed: unknown): OrcaTerminal[] {
+  const rows = isObject(listed) && isObject(listed.result) ? listed.result.terminals : undefined
+  if (!Array.isArray(rows)) return []
+  const terminals = new Map<string, OrcaTerminal>()
+  for (const row of rows.slice(0, MAX_HANDLES)) {
+    if (!isObject(row)) continue
+    const { handle, worktreePath, agentIdentity } = row
+    if (typeof handle !== 'string' || !ORCA_HANDLE.test(handle) || terminals.has(handle)) continue
+    if (typeof worktreePath !== 'string' || worktreePath.length > MAX_PATH) continue
+    if (typeof agentIdentity !== 'string' || agentIdentity.length > MAX_IDENTITY) continue
+    terminals.set(handle, { handle, worktreePath, agentIdentity })
+  }
+  return [...terminals.values()]
 }
 
 /** A focus line's handle, null for no terminal in focus, undefined for a line that is neither. */
@@ -308,7 +354,7 @@ export function createOrcaReads(deps: OrcaReadDeps): OrcaReads {
       } catch {
         return null
       }
-      return tabOrder(listed)
+      return { tabs: tabOrder(listed), terminals: agentTerminals(listed) }
     },
 
     watchOrcaFocus(onHandle) {

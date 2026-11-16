@@ -41,13 +41,13 @@ import { Inbox } from '../cable/hosts/inbox.js'
 import { LAST_ANSWER_DEADLINE_MS, LAST_ANSWER_MAX_BYTES, readLastAnswer } from '../cable/hosts/lastAnswer.js'
 import { askedLine, hostDisplayName, observedAgentId, ObservedSource, type ObservedActions, type ObservedDeps, type PromptSource } from '../cable/hosts/observed.js'
 import { createOpenActions } from '../cable/hosts/open.js'
-import { createOrcaAdapter, createOrcaReads, orcaDeps, type OrcaFocusWatch, type OrcaReadDeps, type OrcaReads } from '../cable/hosts/orca.js'
+import { createOrcaAdapter, createOrcaReads, orcaDeps, type OrcaFocusWatch, type OrcaReadDeps, type OrcaReads, type OrcaTerminal } from '../cable/hosts/orca.js'
 import { readRecordName } from '../cable/hosts/recordName.js'
 import { HostRegistry, type HostEntry } from '../cable/hosts/registry.js'
 import { learnApps, readProcessNames } from '../cable/hosts/scannedApp.js'
 import { createTabsAdapter, readTty, type Tab } from '../cable/hosts/tabs.js'
 import { createTmuxAdapter } from '../cable/hosts/tmux.js'
-import type { HostAgentState } from '../cable/hosts/types.js'
+import type { HostAgent, HostAgentState } from '../cable/hosts/types.js'
 import { watchSocket } from '../cable/hosts/unixSocket.js'
 import { createVscodeAdapter } from '../cable/hosts/vscode.js'
 import { createWeztermAdapter } from '../cable/hosts/wezterm.js'
@@ -993,23 +993,54 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   let orcaRing: { members?: ReadonlySet<string>; again: boolean } = { again: false }
   /** A read runs: Orca's CLI is asked one at a time, across a detach too. */
   let ordering = false
-  /** The agents on Orca's ring, by id: the merged list's, as the dials list them. */
-  const orcaIds = (): string[] => registry.entries().filter(({ agent }) => agent.app === 'orca').map(({ agent }) => agent.id)
+  /** The agents on Orca's ring: the merged list's, as the dials list them. */
+  const orcaAgents = (): HostAgent[] => registry.entries().filter(({ agent }) => agent.app === 'orca').map(({ agent }) => agent)
+  const orcaIds = (): string[] => orcaAgents().map(({ id }) => id)
+  /**
+   * The Orca terminal of each agent on Orca's ring with no Orca pane, by elimination (the design's decided 7): one the
+   * attach scan found has none until its first hook, and an idle one sends none, while Orca's list names no terminal's
+   * process or tty. The terminal Orca saw that agent's engine start in, in its folder, that no agent with an Orca pane
+   * holds, when it is the only one such and the agent the only one with none there; anything else places nobody. For its
+   * order and its tab's name only: never its pane, so no rest, tap or words reach it.
+   */
+  const placeInOrca = (source: ObservedSource, terminals: readonly OrcaTerminal[]): Map<string, string> => {
+    // By folder and engine: the agent's, and the terminal's worktree and the agent Orca saw there, compared as they are.
+    const add = (to: Map<string, string[]>, folder: string, engine: string, value: string): void => {
+      const at = JSON.stringify([folder, engine])
+      to.set(at, [...to.get(at) ?? [], value])
+    }
+    const held = new Set<string>()
+    const unplaced = new Map<string, string[]>()
+    for (const { id, cwd, engine } of orcaAgents()) {
+      const pane = source.paneOf(id, 'orca')
+      if (pane !== undefined) held.add(pane)
+      else if (cwd !== undefined) add(unplaced, cwd, engine, id)
+    }
+    const free = new Map<string, string[]>()
+    for (const { handle, worktreePath, agentIdentity } of terminals) if (!held.has(handle)) add(free, worktreePath, agentIdentity, handle)
+    const placed = new Map<string, string>()
+    for (const [at, ids] of unplaced) {
+      const handles = free.get(at)
+      if (ids.length === 1 && handles?.length === 1) placed.set(ids[0], handles[0])
+    }
+    return placed
+  }
   const readOrcaOrder = (source: ObservedSource): Promise<void> => {
     // Marked once asked: an ask that throws leaves the next change free to ask again.
     const read = orcaReads.orcaTabs()
     ordering = true
     const ring = orcaRing
-    return read.then((tabs) => {
+    return read.then((listed) => {
       if (ring !== orcaRing) return
-      if (tabs === null) { log('[device] orca order · failed'); return }
+      if (listed === null) { log('[device] orca order · failed'); return }
       log('[device] orca order · read')
-      const place = new Map(tabs.map(({ handle }, at) => [handle, at]))
+      const place = new Map(listed.tabs.map(({ handle }, at) => [handle, at]))
+      const placed = placeInOrca(source, listed.terminals)
       const rank = new Map<string, number>()
       for (const id of orcaIds()) {
         // An agent in a multiplexer inside Orca has no Orca pane, and one Orca did not lay out has no place: both come
-        // after the ranked (select.ts).
-        const handle = source.paneOf(id, 'orca')
+        // after the ranked (select.ts), unless placed by elimination.
+        const handle = source.paneOf(id, 'orca') ?? placed.get(id)
         const at = handle === undefined ? undefined : place.get(handle)
         if (at !== undefined) rank.set(id, at)
       }
@@ -1017,7 +1048,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       cableHost.setRank('orca', rank)
       // The same read names Orca's agents by their tabs (the design's section 4). After the rank: the rename's change
       // lists the ring already in tab order.
-      source.setPaneNames('orca', new Map(tabs.flatMap(({ handle, title }) => title === undefined ? [] : [[handle, title]])))
+      source.setPaneNames('orca', new Map(listed.tabs.flatMap(({ handle, title, renamed }) =>
+        title === undefined ? [] : [[handle, { title, renamed: renamed === true }]])), placed)
     }).finally(() => {
       ordering = false
       if (!orcaRing.again) return

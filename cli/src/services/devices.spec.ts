@@ -5796,6 +5796,15 @@ describe('Orca\'s ring follows Orca\'s tabs (docs/plans/2026-11-16-dial-orca-foc
     expect((await names()).orca).toEqual(['api'])
   })
 
+  it('an agent with no folder is placed nowhere', async () => {
+    const { port, fake } = dialWith(1)
+    // In tmux inside Orca, so no Orca pane, and its hook said no folder.
+    port.observed(hook(2, { cwd: undefined, hostHints: { TMUX_PANE: '%3', ORCA_TERMINAL_HANDLE: H(2), __CFBundleIdentifier: 'com.stablyai.orca' } }))
+    await land(fake, [{ handle: H(2), title: 'Two' }, H(1)], [claudeIn(1), claudeIn(2)])
+    expect(await ring()).toEqual([agent(1), agent(2)])
+    expect((await names()).orca).toEqual(['api', 'claude'])
+  })
+
   it('an agent no layout names, and one in tmux inside Orca, come after the ranked, in ring order', async () => {
     const { port, fake } = dialWith(1)
     // Its handle names the terminal tmux started in, not its pane: it has no Orca pane, listed or not.
