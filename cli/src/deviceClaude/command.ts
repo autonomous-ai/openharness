@@ -128,20 +128,24 @@ function claudeHome(): string {
 }
 
 /**
- * On is saved before the skill is written: the devices service writes the other homes from it. The skills folder is
- * saved with it, so a Turn off run with another home still finds it; a folder the record cannot hold gets no skill. The
- * default home is made when missing, as a fresh install has none yet; a person's own dial skill there stays, and On
- * still holds for the other homes.
+ * On is saved before anything is made: the devices service writes the other homes from it, and a failed save leaves
+ * nothing behind. The skills folder is then recorded before the skill is written, so a Turn off run with another home
+ * still finds it; a folder the record cannot hold gets no skill. The default home is made when missing, as a fresh
+ * install has none yet; a person's own dial skill there stays, and On still holds for the other homes.
  */
 function turnOn(engine: DialEngine, home: string, deps: DeviceDeps): number {
-  const skills = skillsFolderOf(home, true)
-  const written = readWritten(deps.dataDir)[engine]
-  const recorded = skills !== null && listable(skills) && (written.includes(skills) || written.length < MAX_HOMES) ? skills : null
-  if (writeAnswer(deps.dataDir, engine, true, recorded === null ? undefined : [...written, recorded]) !== undefined) {
+  if (writeAnswer(deps.dataDir, engine, true) !== undefined) {
     deps.err(SAVE_FAILED)
     return 1
   }
-  const result = recorded === null ? 'failed' : writeSkill(recorded)
+  const skills = skillsFolderOf(home, true)
+  const written = readWritten(deps.dataDir)[engine]
+  const recorded = skills !== null && listable(skills) && (written.includes(skills) || written.length < MAX_HOMES)
+  if (recorded && !written.includes(skills) && writeAnswer(deps.dataDir, engine, true, [...written, skills]) !== undefined) {
+    deps.err(SAVE_FAILED)
+    return 1
+  }
+  const result = recorded ? writeSkill(skills) : 'failed'
   if (result === 'theirs') deps.err(`${ENGINE_NAMES[engine]} already has a skill named dial that Harness did not write; it stays.`)
   if (result !== 'failed') return 0
   deps.err(`Could not write the ${ENGINE_NAMES[engine]} skill.`)
