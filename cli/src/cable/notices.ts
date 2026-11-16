@@ -2,6 +2,7 @@
 // process holds it; the core knows nothing of notices.
 
 import { NoticeLimits, type NoticeAsk, type NoticeResult } from '../lib/dialNotice.js'
+import type { UnreadNotification } from '../lib/notificationRead.js'
 import { SHOWN_ONLY_PREFIX } from './cableSession.js'
 import { hostDisplayName } from './hosts/hostDetect.js'
 import { roundDrawable } from './roundGlyphs.js'
@@ -27,7 +28,7 @@ export interface NoticesDeps {
 
 export const NOTICES_PENDING_MAX = 20
 
-interface Pending { id: string; questions: unknown; who?: NoticeCaller['who'] }
+interface Pending { id: string; line: string; questions: unknown; who?: NoticeCaller['who'] }
 
 export class Notices {
   // One card an agent, oldest first: a Map keeps insertion order, and a replaced card is put back at the end.
@@ -51,8 +52,9 @@ export class Notices {
     this.ended(caller.agentId)
     if (this.pending.size >= NOTICES_PENDING_MAX) this.ended(this.pending.keys().next().value!)
     const id = SHOWN_ONLY_PREFIX + this.deps.uuid()
-    const questions = [{ key: 'notice', q: roundDrawable(ask.text), options: [`In ${hostDisplayName(caller.host)}`] }]
-    this.pending.set(caller.agentId, { id, questions, who: caller.who })
+    const line = roundDrawable(ask.text)
+    const questions = [{ key: 'notice', q: line, options: [`In ${hostDisplayName(caller.host)}`] }]
+    this.pending.set(caller.agentId, { id, line, questions, who: caller.who })
     this.deps.ask(caller.agentId, id, questions)
     return answer('shown')
   }
@@ -68,6 +70,11 @@ export class Notices {
   /** A dial attached: each pending card is asked again, under its id. */
   attached(): void {
     for (const [agentId, card] of this.pending) this.deps.ask(agentId, card.id, card.questions)
+  }
+
+  /** Each pending card as a row of the dial's drawer, newest first: a drawer replaced whole must keep them. */
+  rows(machineId: string): UnreadNotification[] {
+    return [...this.pending].reverse().map(([agentId, card]) => ({ agentId, machineId, question: true, text: card.line }))
   }
 
   /** Who a pending notice's caller is, when no list holds it. */

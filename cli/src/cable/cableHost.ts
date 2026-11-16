@@ -118,6 +118,9 @@ export interface CableHostWiring {
   tapped?: (agentId: string) => void
   /** Who sent a notice, for an agent no list holds: `describe` asks it last, after the outside agents and the fleet. */
   noticeFrom?: (agentId: string) => { name: string; engine: string; machine: string } | undefined
+  /** The questions only the devices ask (an agent's notice, a prompt it waits on), as drawer rows: the dial keeps a
+   *  question as a row of the drawer that what is unread replaces whole. */
+  noticeRows?: () => UnreadNotification[]
   /** Brings Harness Desktop forward, starting it when it is not running: a tap on one of this computer's agents with no
    *  window. False when it could not. Absent where a tap cannot start it (off macOS): its agents then take no tap. */
   launchDesktop?: () => Promise<boolean>
@@ -776,8 +779,11 @@ export class DaemonCableHost implements CableHost {
     this.unread = items
   }
 
+  /** What is unread, the devices' own questions first: the dial keeps one row an agent, and the first it is sent. */
   listUnread(): UnreadNotification[] {
-    return this.unread
+    const asked = this.wiring.noticeRows?.() ?? []
+    const agents = new Set(asked.map((row) => row.agentId))
+    return [...asked, ...this.unread.filter((row) => !agents.has(row.agentId))]
   }
 
   readNotification(agentId: string, readToken: string): void {

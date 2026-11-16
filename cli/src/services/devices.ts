@@ -461,6 +461,13 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // read it does not.
     tapped: (agentId) => endNotice(agentId),
     noticeFrom: (agentId) => notices.from(agentId),
+    // The notices and the waits are questions only the devices ask: what is unread replaces the dial's whole drawer, which
+    // holds them too.
+    noticeRows: () => {
+      const machineId = core.machine.id()
+      return [...notices.rows(machineId),
+        ...[...shown].map(([agentId, { line }]) => ({ agentId, machineId, question: true, text: line }))]
+    },
     notificationRead: (machineId, agentId, readToken) =>
       core.clients.sendLocal({ type: 'dial_notification_read', payload: { machineId, agentId, readToken } }),
     forked: (machineId, agentId, sourceAgentId) => core.clients.sendLocal({ type: 'dial_forked', payload: { machineId, agentId, sourceAgentId } }),
@@ -1154,7 +1161,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // to be empty.
     unread: (items) => part.call('dial', () => {
       cableHost.setUnread(items)
-      void cable.replaceNotifications(items)
+      void cable.replaceNotifications(cableHost.listUnread())
     }),
     appFocus: (machineId, agentId) => part.call('dial', () => cable.followApp(machineId, agentId)),
     // The window looked at a harness: the dial's drawer row for it is stale.
