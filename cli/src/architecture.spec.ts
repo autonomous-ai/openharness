@@ -116,8 +116,7 @@ const GLOBAL_OBJECTS: ReadonlySet<string> = new Set(['globalThis', 'global', 'wi
  * The code a process started on `entry` runs: every file its imports reach, as each file's lines
  * (docs/design/2026-10-06-core-boundary-next.md, "The target, and its test"). It follows static and
  * dynamic imports under src, `.js` to `.ts` and folders to their index, and leaves out `import type`
- * (types cost nothing at run time), tests, a dynamic import of `IN_PROCESS_ONLY`, and the `import()`s written
- * in `LAZY_LOADERS`.
+ * (types cost nothing at run time), tests, and the explicit inline, engine and handoff doors in `followed`.
  */
 function closureOf(entry: string): Map<string, number> {
   const lines = new Map<string, number>()
@@ -133,10 +132,10 @@ function closureOf(entry: string): Map<string, number> {
   return lines
 }
 
-/** Whether the walk follows an import of `target` written in `importer`: every one but an `import()` of
- *  `IN_PROCESS_ONLY`, or one written in a lazy loader. */
+/** Every import except the explicit inline/engine doors and Change agent's one deferred composition. */
 function followed(importer: string, target: string, dynamic: boolean): boolean {
-  return !dynamic || (target !== IN_PROCESS_ONLY && !LAZY_LOADERS.has(importer))
+  return !dynamic || (target !== IN_PROCESS_ONLY && !LAZY_LOADERS.has(importer)
+    && !(importer === 'core/conversationQueries.ts' && target === 'core/handoffDependencies.ts'))
 }
 
 /** Each file read and parsed once, however many walks pass through it. */
@@ -584,6 +583,27 @@ describe('the daemon\'s shape', () => {
     expect(loaded.filter((file) => !listed.includes(file)).map((file) => `${file}, imported by ${importer(file)}`), `The core's process would load a file it does not load today. The core stays small (cli/AGENTS.md, Protect the core): code a session can run without belongs to a component in a process of its own. If every session needs the file, add its line to src/${CORE_FILES}, in order, and say why in the pull request.`).toEqual([])
     expect(listed.filter((file) => !loaded.includes(file)), `The core's process no longer loads these: delete their lines from src/${CORE_FILES}.`).toEqual([])
     expect(listed, `Keep src/${CORE_FILES} in order, each file once: lines kept in order merge without conflicts.`).toEqual([...new Set(listed)].sort())
+  }, WALK_TIMEOUT_MS)
+
+  it('Change agent loads its publication transaction only through its exact conversation door', () => {
+    const handoff = ['core/handoffDependencies.ts', 'core/handoffPublication.ts', 'lib/handoffDiscovery.ts',
+      'lib/handoffFiles.ts', 'lib/handoffGit.ts', 'lib/handoffPublication.ts', 'lib/handoffValidation.ts', 'lib/subagentTranscript.ts']
+    const cold = closureOf('core/main.ts'), warm = new Map([...cold, ...closureOf('core/handoffDependencies.ts')])
+    expect([...warm.keys()].filter(file => !cold.has(file)).sort()).toEqual([...handoff].sort())
+    for (const file of handoff) {
+      expect(cold.has(file), `${file} must stay out while Change agent is unused`).toBe(false)
+      expect(warm.has(file), `${file} remains in the warmed authority boundary`).toBe(true)
+    }
+    expect(importsFor('core/conversationQueries.ts', readFileSync(join(SRC, 'core/conversationQueries.ts'), 'utf8'))
+      .filter(({ dynamic }) => dynamic)).toEqual([{ from: './handoffDependencies.js', dynamic: true }])
+    expect(followed('core/conversationQueries.ts', 'core/handoffDependencies.ts', true)).toBe(false)
+    expect(followed('core/main.ts', 'core/handoffDependencies.ts', true)).toBe(true)
+    expect(followed('core/conversationQueries.ts', 'core/handoffDependencies.ts', false)).toBe(true)
+    expect(followed('core/conversationQueries.ts', 'lib/handoffPublication.ts', true)).toBe(true)
+    console.info('[architecture] handoff loading (informational):', JSON.stringify({
+      coldFiles: cold.size, coldLines: [...cold.values()].reduce((sum, count) => sum + count, 0),
+      warmFiles: warm.size, warmLines: [...warm.values()].reduce((sum, count) => sum + count, 0),
+    }))
   }, WALK_TIMEOUT_MS)
 
   // The core meets the outside least (cli/AGENTS.md, Protect the core, rule 4). Its one call to another host was the

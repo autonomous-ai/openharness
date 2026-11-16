@@ -41,7 +41,6 @@ it.each(['linux', 'darwin'])('keeps the former handoff service outcomes on %s', 
     const { createServiceLinks } = await import('../core/serviceLinks.js')
     const { handoffCoreApi } = await import('../services/handoffProcess.js')
     const { startHandoff } = await import('../services/handoff.js')
-    const { createHandoffDependencies } = await import('../core/handoffDependencies.js')
     const { validTranscriptPath } = await import('./registry.js')
       const cwd = join(root, `${transport}-${mode}`); mkdirSync(cwd)
       const path = join(root, 'CODEX_HOME', 'sessions', `${mode}-${ID}.jsonl`)
@@ -58,14 +57,14 @@ it.each(['linux', 'darwin'])('keeps the former handoff service outcomes on %s', 
       const source = mode === 'own' ? { ...parent, agentId: 'selected' } : { ...parent, agentId: 'selected', sessionId: '', transcriptPath: null,
         ...(mode === 'fork' ? { forkedFrom: { agentId: 'parent', name: 'Parent', sessionId: ID, transcriptPath: path } }
           : { processIdentity: { pid: 4242, executable: 'codex', startMarker: '2026-10-10T08:00:00Z' } }) }
-      const deps = createHandoffDependencies({
+      const conversations = conversationReads({
         registry: { resolve: id => id === 'selected' ? source : id === 'parent' ? parent : undefined,
           byAgent: () => source, bySession: () => undefined },
         stopped: { get: () => null, ids: () => [] }, mirror: { recentAsks: () => [], lastFullText: () => undefined, recent: () => [] },
         databaseHistory: () => undefined, findLiveSession: async () => ({ sessionId: ID, transcriptPath: path }),
         processSession: async () => null, isRecentlyDeleted: () => false, findResumedTranscript: async () => path, validTranscriptPath,
       }, dataDir)
-      const core = fakeCore({ dataDir, conversations: conversationReads(deps), daemon: { port: 0 } })
+      const core = fakeCore({ dataDir, conversations, daemon: { port: 0 } })
       const request = { agentId: 'selected', changeId: CHANGE, targetEngine: 'claude' }
       const owner = { owner: true, local: true, connection: 'fixture-owner', requestId: 'fixture-request' }
       let result: unknown

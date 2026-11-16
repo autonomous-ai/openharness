@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../lib/registry.js'
+import type { HandoffWiring } from '../lib/handoffDiscovery.js'
+import type { ConversationReads } from './api.js'
 import { LOADED_HANDOFF_LIMITS, LOADED_HANDOFF_MS, LOADED_HANDOFF_TEST_MS } from '../testing/handoffLimits.js'
 
 const fixtureGit = vi.hoisted(() => ({ enabled: false }))
@@ -77,14 +79,15 @@ async function setup(rows = [row], found = true) {
     get(id: string) { return this.rows.get(id) ?? null }
     ids() { return [...this.rows.keys()] }
   }
-  const deps = createHandoffDependencies({
+  const wiring: HandoffWiring = {
     registry: new Registry(current), stopped: new Stopped(saved),
     mirror: { recentAsks: () => ['A mirror must not bypass unknown native identity'], lastFullText: () => undefined, recent: () => [] },
     databaseHistory: () => undefined, findLiveSession: async () => found ? ({ sessionId: ID, transcriptPath: path }) : null,
     processSession: async () => null, isRecentlyDeleted: () => false, findResumedTranscript: async () => path, validTranscriptPath,
-  }, join(root, 'ADAPTER_DATA_DIR'), LOADED_HANDOFF_MS)
+  }
+  const deps = createHandoffDependencies(wiring, join(root, 'ADAPTER_DATA_DIR'), LOADED_HANDOFF_MS)
   Object.assign(deps, LOADED_HANDOFF_LIMITS)
-  return { current, saved, deps, prepare: () => prepareAgentHandoff(deps, { agentId: row.agentId, targetEngine: 'claude', changeId: CHANGE }) }
+  return { current, saved, deps, wiring, publicationOverride: undefined as ConversationReads['publish'] | undefined, prepare: () => prepareAgentHandoff(deps, { agentId: row.agentId, targetEngine: 'claude', changeId: CHANGE }) }
 }
 
 const noPublication = () => expect(fs.existsSync(join(cwd, '.harness', 'handoff'))).toBe(false)
@@ -354,7 +357,7 @@ it('refuses a by-ID file without the current core selection witness', async () =
   ctx.current.set(parent.agentId, { ...parent, sessionId: OTHER, transcriptPath: null })
   const { createHandoffPublisher } = await import('./handoffPublication.js')
   // This core instance did not observe the lookup supplied by the earlier service preparation.
-  ctx.deps.publish = createHandoffPublisher({ directory: join(root, 'ADAPTER_DATA_DIR'),
+  ctx.publicationOverride = createHandoffPublisher({ directory: join(root, 'ADAPTER_DATA_DIR'),
     resolve: id => ctx.current.get(id), ownedByOther: () => false, isRecentlyDeleted: () => false })
   expect(await processPrepare(ctx)).toMatchObject({ error: 'IDENTITY_UNAVAILABLE', held: true }); noPublication()
 })
@@ -419,7 +422,9 @@ async function processPrepare(ctx: Awaited<ReturnType<typeof setup>>,
   const { handoffCoreApi } = await import('../services/handoffProcess.js')
   const { startHandoff } = await import('../services/handoff.js')
   const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value))
-  const core = fakeCore({ dataDir: join(root, 'ADAPTER_DATA_DIR'), conversations: conversationReads(ctx.deps) })
+  const conversations = conversationReads(ctx.wiring, join(root, 'ADAPTER_DATA_DIR'), LOADED_HANDOFF_MS)
+  if (ctx.publicationOverride) conversations.publish = ctx.publicationOverride
+  const core = fakeCore({ dataDir: join(root, 'ADAPTER_DATA_DIR'), conversations })
   const replies = new Map<string, (payload: Record<string, unknown>) => void>()
   let clock = 0, next = 0
   const owner = { local: true, owner: true, connection: 'private-fixture-owner' }
