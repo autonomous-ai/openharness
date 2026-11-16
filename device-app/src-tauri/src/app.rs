@@ -630,14 +630,7 @@ mod tests {
     const H6: u64 = 21_600;
 
     /// A CLI seen before and a login item registered: only what each test does is saved.
-    const SEEN: Saved = Saved {
-        version: 1,
-        cli_seen: true,
-        asked_sign_in: false,
-        asked_claude: false,
-        asked_codex: false,
-        login_item: true,
-    };
+    const SEEN: Saved = Saved { version: 1, cli_seen: true, asked_sign_in: false, login_item: true };
 
     fn found() -> App {
         App::new(SEEN, true, false, B).0
@@ -759,22 +752,6 @@ mod tests {
         let mut app = found();
         answer(&mut app, false, claude(false));
         assert_eq!(app.view(), shown(Screen::SignIn, Phase::Offer, &[]));
-        app
-    }
-
-    /// Found, signed in, Claude Code off: the window offers Claude Code.
-    fn on_claude() -> App {
-        let mut app = found();
-        answer(&mut app, true, claude(false));
-        assert_eq!(app.view(), shown(Screen::Claude, Phase::Offer, &[]));
-        app
-    }
-
-    /// Found, signed in, Claude Code on, Codex off: the window offers Codex.
-    fn on_codex() -> App {
-        let mut app = found();
-        answer_all(&mut app, true, claude(true), codex(false));
-        assert_eq!(app.view(), shown(Screen::Codex, Phase::Offer, &[]));
         app
     }
 
@@ -934,22 +911,42 @@ mod tests {
     }
 
     #[test]
-    fn the_first_screen_waits_for_all_three_answers() {
+    fn the_first_screen_waits_for_the_account_alone() {
+        // Claude Code and Codex choose no screen.
         let mut app = found();
-        assert!(shows(&app.handle(Event::Auth(Some(false)))).is_empty());
         assert!(shows(&app.handle(Event::Claude(claude(false)))).is_empty());
-        // A None answer counts: a CLI without Codex's command answers so.
-        assert_eq!(shows(&app.handle(Event::Codex(None))), [shown(Screen::SignIn, Phase::Offer, &[])]);
-
-        // In any order.
-        let mut app = found();
         assert!(shows(&app.handle(Event::Codex(codex(false)))).is_empty());
-        assert!(shows(&app.handle(Event::Claude(claude(true)))).is_empty());
-        assert_eq!(shows(&app.handle(Event::Auth(Some(true)))), [shown(Screen::Codex, Phase::Offer, &[])]);
+        assert_eq!(shows(&app.handle(Event::Auth(Some(false)))), [shown(Screen::SignIn, Phase::Offer, &[])]);
 
-        let asked = Saved { asked_sign_in: true, asked_claude: true, asked_codex: true, ..SEEN };
+        // The account's answer does, before they answer, and once.
+        let mut app = found();
+        assert_eq!(shows(&app.handle(Event::Auth(Some(false)))), [shown(Screen::SignIn, Phase::Offer, &[])]);
+        assert!(shows(&app.handle(Event::Claude(claude(false)))).is_empty());
+        assert!(shows(&app.handle(Event::Codex(codex(false)))).is_empty());
+
+        // The Install screen gives way at it.
+        let mut app = fresh();
+        app.handle(Event::InstallDone(Ok(())));
+        assert_eq!(shows(&app.handle(Event::Auth(Some(true)))), [None]);
+
+        let asked = Saved { asked_sign_in: true, ..SEEN };
         let mut app = App::new(asked, true, false, B).0;
         assert!(shows(&answer_all(&mut app, false, claude(false), codex(false))).is_empty());
+        assert_eq!(app.view(), None);
+    }
+
+    #[test]
+    fn no_offer_screen_at_first_run() {
+        let mut app = found();
+        let effects = answer_all(&mut app, true, claude(false), codex(false));
+        assert!(shows(&effects).is_empty());
+        assert_eq!(app.view(), None);
+        assert_eq!(rows(&effects)[2..6], ["Claude Code: Off", "Turn on", "Codex: Off", "Turn on"]);
+
+        // After the CLI's install too: the Install screen closes.
+        let mut app = fresh();
+        app.handle(Event::InstallDone(Ok(())));
+        assert_eq!(shows(&answer_all(&mut app, true, claude(false), codex(false))), [None]);
         assert_eq!(app.view(), None);
     }
 
@@ -972,13 +969,8 @@ mod tests {
         assert!(has(&effects, &Effect::Save(Saved { asked_sign_in: true, ..SEEN })));
         assert!(has(&effects, &Effect::ReadAuth));
         assert!(rows(&effects).contains(&"Signed in".to_string()));
-        assert_eq!(shows(&effects), [shown(Screen::Claude, Phase::Offer, &[])]);
-
-        // Nothing due after it: the window closes.
-        let mut app = found();
-        answer(&mut app, false, None);
-        app.handle(Event::Act(Action::SignIn));
-        assert_eq!(shows(&app.handle(login(LoginEvent::Done(Ok(()))))), [None]);
+        // Nothing is due after it, Claude Code off or not: the window closes.
+        assert_eq!(shows(&effects), [None]);
     }
 
     #[test]
@@ -1011,7 +1003,7 @@ mod tests {
         assert!(has(&effects, &Effect::ReadAuth));
         assert!(has(&effects, &Effect::Save(Saved { asked_sign_in: true, ..SEEN })));
         assert!(rows(&effects).contains(&"Signed in".to_string()));
-        assert_eq!(shows(&effects), [shown(Screen::Claude, Phase::Offer, &[])]);
+        assert_eq!(shows(&effects), [None]);
 
         // One that went with its CLI signed in no CLI that is here.
         let mut app = on_sign_in();
@@ -1021,45 +1013,63 @@ mod tests {
     }
 
     #[test]
-    fn later_and_not_now_are_remembered() {
+    fn later_is_remembered() {
         let mut app = found();
         answer_all(&mut app, false, claude(false), codex(false));
         let later = Saved { asked_sign_in: true, ..SEEN };
         let effects = app.handle(Event::Act(Action::Later));
         assert!(has(&effects, &Effect::Save(later)));
-        assert_eq!(shows(&effects), [shown(Screen::Claude, Phase::Offer, &[])]);
-
-        let both = Saved { asked_claude: true, ..later };
-        let effects = app.handle(Event::Act(Action::NotNow));
-        assert!(has(&effects, &Effect::Save(both)));
-        assert_eq!(shows(&effects), [shown(Screen::Codex, Phase::Offer, &[])]);
-
-        let all = Saved { asked_codex: true, ..both };
-        let effects = app.handle(Event::Act(Action::NotNow));
-        assert!(has(&effects, &Effect::Save(all)));
         assert_eq!(shows(&effects), [None]);
 
-        let mut app = App::new(all, true, false, B).0;
+        let mut app = App::new(later, true, false, B).0;
         assert!(shows(&answer_all(&mut app, false, claude(false), codex(false))).is_empty());
     }
 
     #[test]
-    fn claude_turns_on_from_the_window() {
-        let mut app = on_claude();
-        let effects = app.handle(Event::Act(Action::TurnOn));
+    fn turn_on_in_the_menu_runs_enable_with_no_window() {
+        let mut app = found();
+        answer_all(&mut app, true, claude(false), codex(false));
+        let effects = app.handle(Event::Menu(MenuAction::ClaudeOn));
         assert!(has(&effects, &Effect::SetClaude(true)));
-        assert_eq!(shows(&effects), [shown(Screen::Claude, Phase::Working, &[])]);
+        assert!(shows(&effects).is_empty());
+        assert_eq!(rows(&effects)[2..4], ["Claude Code: Turning on…", "Codex: Off"]);
         let effects = app.handle(Event::ClaudeSet(Ok(())));
         assert!(has(&effects, &Effect::ReadClaude));
-        assert!(has(&effects, &Effect::Save(Saved { asked_claude: true, ..SEEN })));
-        assert_eq!(shows(&effects), [None]);
+        assert!(!effects.iter().any(|effect| matches!(effect, Effect::Save(_) | Effect::Show(_))), "{effects:?}");
+        assert_eq!(rows(&app.handle(Event::Claude(claude(true))))[2..4], ["Claude Code: On", "Turn off"]);
 
-        let mut app = on_claude();
-        app.handle(Event::Act(Action::TurnOn));
+        let effects = app.handle(Event::Menu(MenuAction::CodexOn));
+        assert!(has(&effects, &Effect::SetCodex(true)));
+        assert!(shows(&effects).is_empty());
+        assert_eq!(rows(&effects)[4..6], ["Codex: Turning on…", "Quit"]);
+        let effects = app.handle(Event::CodexSet(Ok(())));
+        assert!(has(&effects, &Effect::ReadCodex));
+        assert!(!effects.iter().any(|effect| matches!(effect, Effect::Save(_) | Effect::Show(_))), "{effects:?}");
+        assert_eq!(rows(&app.handle(Event::Codex(codex(true))))[4..6], ["Codex: On", "Turn off"]);
+        assert_eq!(app.view(), None);
+    }
+
+    #[test]
+    fn a_failed_enable_shows_the_rows_error_and_no_window() {
+        let mut app = found();
+        answer_all(&mut app, true, claude(false), codex(false));
+        app.handle(Event::Menu(MenuAction::ClaudeOn));
         let effects = app.handle(Event::ClaudeSet(Err("x".into())));
-        assert_eq!(shows(&effects), [shown(Screen::Claude, Phase::Failed, &["x"])]);
-        assert!(!effects.iter().any(|effect| matches!(effect, Effect::Save(_))));
-        assert!(has(&app.handle(Event::Act(Action::Retry)), &Effect::SetClaude(true)));
+        assert!(has(&effects, &Effect::ReadClaude));
+        assert!(!effects.iter().any(|effect| matches!(effect, Effect::Save(_) | Effect::Show(_))), "{effects:?}");
+        assert_eq!(rows(&effects)[2..4], ["Claude Code: Could not turn on", "Turn on"]);
+        // Its Turn on tries again.
+        assert!(has(&app.handle(Event::Menu(MenuAction::ClaudeOn)), &Effect::SetClaude(true)));
+
+        let mut app = found();
+        answer_all(&mut app, true, claude(true), codex(false));
+        app.handle(Event::Menu(MenuAction::CodexOn));
+        let effects = app.handle(Event::CodexSet(Err("x".into())));
+        assert!(has(&effects, &Effect::ReadCodex));
+        assert!(!effects.iter().any(|effect| matches!(effect, Effect::Save(_) | Effect::Show(_))), "{effects:?}");
+        assert_eq!(rows(&effects)[4..6], ["Codex: Could not turn on", "Turn on"]);
+        assert!(has(&app.handle(Event::Menu(MenuAction::CodexOn)), &Effect::SetCodex(true)));
+        assert_eq!(app.view(), None);
     }
 
     #[test]
@@ -1071,34 +1081,6 @@ mod tests {
         let effects = app.handle(Event::Claude(claude(false)));
         assert_eq!(rows(&effects)[2..4], ["Claude Code: Off", "Turn on"]);
         assert!(shows(&effects).is_empty());
-    }
-
-    #[test]
-    fn codex_turns_on_from_the_window() {
-        let mut app = on_codex();
-        let effects = app.handle(Event::Act(Action::TurnOn));
-        assert!(has(&effects, &Effect::SetCodex(true)));
-        assert_eq!(shows(&effects), [shown(Screen::Codex, Phase::Working, &[])]);
-        let effects = app.handle(Event::CodexSet(Ok(())));
-        assert!(has(&effects, &Effect::ReadCodex));
-        assert!(has(&effects, &Effect::Save(Saved { asked_codex: true, ..SEEN })));
-        assert_eq!(shows(&effects), [None]);
-
-        let mut app = on_codex();
-        app.handle(Event::Act(Action::TurnOn));
-        let effects = app.handle(Event::CodexSet(Err("x".into())));
-        assert_eq!(shows(&effects), [shown(Screen::Codex, Phase::Failed, &["x"])]);
-        assert!(!effects.iter().any(|effect| matches!(effect, Effect::Save(_))));
-        let effects = app.handle(Event::Act(Action::Retry));
-        assert!(has(&effects, &Effect::SetCodex(true)));
-        assert_eq!(shows(&effects), [shown(Screen::Codex, Phase::Working, &[])]);
-
-        // The menu's Turn on… opens the offer, asked or not.
-        let asked = Saved { asked_codex: true, ..SEEN };
-        let mut app = App::new(asked, true, false, B).0;
-        answer_all(&mut app, true, claude(true), codex(false));
-        assert_eq!(app.view(), None);
-        assert_eq!(shows(&app.handle(Event::Menu(MenuAction::CodexOn))), [shown(Screen::Codex, Phase::Offer, &[])]);
     }
 
     #[test]
@@ -1141,11 +1123,6 @@ mod tests {
         let effects = app.handle(Event::CodexSet(Ok(())));
         assert!(has(&effects, &Effect::ReadCodex));
         assert_eq!(rows(&effects)[4..6], ["Codex: On", "Turn off"]);
-
-        // A turn-on from the window shows in the menu too.
-        let mut app = on_claude();
-        let effects = app.handle(Event::Act(Action::TurnOn));
-        assert_eq!(rows(&effects)[2..4], ["Claude Code: Turning on…", "Quit"]);
     }
 
     #[test]
@@ -1465,9 +1442,10 @@ mod tests {
         assert_eq!(count(&effects, &Effect::RunLogin), 1);
         assert_eq!(app.view(), shown(Screen::SignIn, Phase::Working, &[]));
 
-        let mut app = on_claude();
-        let mut effects = app.handle(Event::Act(Action::TurnOn));
-        effects.extend(app.handle(Event::Act(Action::TurnOn)));
+        let mut app = found();
+        answer(&mut app, true, claude(false));
+        let mut effects = app.handle(Event::Menu(MenuAction::ClaudeOn));
+        effects.extend(app.handle(Event::Menu(MenuAction::ClaudeOn)));
         assert_eq!(count(&effects, &Effect::SetClaude(true)), 1);
 
         let mut app = removed();
@@ -1482,7 +1460,7 @@ mod tests {
         assert_eq!(count(&effects, &Effect::SetClaude(false)), 1);
 
         // A button the window does not show does nothing.
-        assert!(found().handle(Event::Act(Action::TurnOn)).is_empty());
+        assert!(found().handle(Event::Act(Action::SignIn)).is_empty());
     }
 
     #[test]
@@ -1490,24 +1468,6 @@ mod tests {
         let mut app = on_sign_in();
         let effects = app.handle(Event::WindowClosed);
         assert!(has(&effects, &Effect::Save(Saved { asked_sign_in: true, ..SEEN })));
-        assert_eq!(shows(&effects), [None]);
-
-        let mut app = on_claude();
-        let effects = app.handle(Event::WindowClosed);
-        assert!(has(&effects, &Effect::Save(Saved { asked_claude: true, ..SEEN })));
-        assert_eq!(shows(&effects), [None]);
-
-        let mut app = on_codex();
-        let effects = app.handle(Event::WindowClosed);
-        assert!(has(&effects, &Effect::Save(Saved { asked_codex: true, ..SEEN })));
-        assert_eq!(shows(&effects), [None]);
-
-        // On its failure too.
-        let mut app = on_codex();
-        app.handle(Event::Act(Action::TurnOn));
-        app.handle(Event::CodexSet(Err("x".into())));
-        let effects = app.handle(Event::WindowClosed);
-        assert!(has(&effects, &Effect::Save(Saved { asked_codex: true, ..SEEN })));
         assert_eq!(shows(&effects), [None]);
     }
 
@@ -1605,9 +1565,8 @@ mod tests {
         assert!(has(&app.handle(Event::UpdateChecked(Some("0.1.3".into()))), &Effect::InstallUpdate));
         app.handle(Event::UpdateInstalled);
         assert!(!has(&app.handle(tick(B + 10)), &Effect::Relaunch));
+        // Signed in, the window closes: nothing holds the relaunch any more.
         app.handle(login(LoginEvent::Done(Ok(()))));
-        // The window moved on to Claude Code, which holds the relaunch too.
-        app.handle(Event::WindowClosed);
         assert!(app.handle(tick(B + 15)).ends_with(&[Effect::StopWatch, Effect::Relaunch]));
     }
 
@@ -1656,7 +1615,7 @@ mod tests {
 
     #[test]
     fn an_open_window_delays_the_relaunch() {
-        let mut app = on_claude();
+        let mut app = on_sign_in();
         installed(&mut app);
         assert!(!has(&app.handle(tick(B + 10)), &Effect::Relaunch));
         app.handle(Event::WindowClosed);
@@ -1665,7 +1624,7 @@ mod tests {
 
     #[test]
     fn an_install_waiting_to_relaunch_checks_no_more() {
-        let mut app = on_claude();
+        let mut app = on_sign_in();
         installed(&mut app);
         // The window stays open past six hours: this process is still the old version, and a check would find the
         // installed one again and install it a second time.

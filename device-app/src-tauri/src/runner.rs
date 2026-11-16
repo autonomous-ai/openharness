@@ -466,8 +466,8 @@ mod tests {
     use crate::tabs::{NoTabs, Selected, TabApp, TabError, TabScripts};
     use crate::testing::{Fake, alive, fake_harness, wait_gone};
     use crate::types::{
-        ClaudeStatus, CodexStatus, DialStatus, Effect, Event, LoginEvent, MenuItem, NotifyMode, Output, Saved,
-        UpdateFailure,
+        ClaudeStatus, CodexStatus, DialStatus, Effect, Event, LoginEvent, MenuAction, MenuItem, NotifyMode, Output,
+        Saved, UpdateFailure,
     };
     use crate::update::AppUpdater;
     use std::collections::VecDeque;
@@ -1510,6 +1510,57 @@ mod tests {
                 "hardware watch --json"
             ]
         );
+    }
+
+    /// Runs the effects, and hands the app each event, until `last` has been handled; gives what came back for the
+    /// binary.
+    fn drive(w: &World, app: &mut App, mut effects: Vec<Effect>, last: impl Fn(&Event) -> bool) -> Vec<Effect> {
+        let mut back = Vec::new();
+        loop {
+            back.extend(effects.into_iter().filter_map(|effect| w.runner.run(effect)));
+            let event = w.next();
+            let done = last(&event);
+            effects = app.handle(event);
+            if done {
+                back.extend(effects.into_iter().filter_map(|effect| w.runner.run(effect)));
+                return back;
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn turn_on_from_the_menu_runs_enable_and_opens_no_window() {
+        let status = |enabled: bool| format!(r#"{{"supported":true,"installed":true,"enabled":{enabled}}}"#);
+        let w = world();
+        w.fake.script("hardware watch --json", &[r#"{"attached":true,"fw":"0.0.95"}"#, "@stdin"]);
+        w.fake.script("auth status --json", &[r#"{"loggedIn":true}"#]);
+        w.fake.script("device claude status --json", &[&status(false)]);
+        w.fake.script("device claude enable", &[]);
+        let (mut app, effects) = App::new(Saved::default(), w.runner.find_cli(), false, B);
+        let off = ClaudeStatus { supported: true, installed: true, enabled: false, claude_version: None };
+        let mut back = drive(&w, &mut app, effects, |event| *event == Event::Claude(Some(off.clone())));
+
+        let effects = app.handle(Event::Menu(MenuAction::ClaudeOn));
+        w.fake.script("device claude status --json", &[&status(true)]);
+        let on = ClaudeStatus { enabled: true, ..off.clone() };
+        back.extend(drive(&w, &mut app, effects, |event| *event == Event::Claude(Some(on.clone()))));
+
+        assert!(!back.iter().any(|effect| matches!(effect, Effect::Show(Some(_)))), "{back:?}");
+        let mut rows: Vec<String> = back
+            .iter()
+            .filter_map(|effect| match effect {
+                Effect::Menu(items) => items.iter().find_map(|item| match item {
+                    MenuItem::Text(label) if label.starts_with("Claude Code:") => Some(label.clone()),
+                    _ => None,
+                }),
+                _ => None,
+            })
+            .collect();
+        rows.dedup();
+        // Until the status read after it answers, the row says the last status.
+        assert_eq!(rows, ["Claude Code: Off", "Claude Code: Turning on…", "Claude Code: Off", "Claude Code: On"]);
+        assert_eq!(w.fake.calls().iter().filter(|call| *call == "device claude enable").count(), 1);
     }
 
     #[cfg(unix)]

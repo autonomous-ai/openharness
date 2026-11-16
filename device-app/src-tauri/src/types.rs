@@ -396,37 +396,29 @@ mod tests {
             serde_json::to_value(view).unwrap(),
             json!({"screen":"sign_in","phase":"browser","lines":["Waiting"]})
         );
-        assert_eq!(serde_json::to_value(Screen::Codex).unwrap(), json!("codex"));
+        assert_eq!(serde_json::to_value(Screen::Install).unwrap(), json!("install"));
     }
 
     #[test]
-    fn the_window_may_ask_six_things() {
+    fn the_window_may_ask_four_things() {
         let asks = [
             ("retry", Action::Retry),
             ("sign_in", Action::SignIn),
             ("later", Action::Later),
             ("cancel", Action::Cancel),
-            ("turn_on", Action::TurnOn),
-            ("not_now", Action::NotNow),
         ];
         for (name, action) in asks {
             assert_eq!(serde_json::from_value::<Action>(json!(name)).unwrap(), action);
         }
-        for other in [json!("quit"), json!("sh -c x"), json!(1), Value::Null] {
+        // The offers of Claude Code and Codex are gone, and their buttons with them.
+        for other in [json!("turn_on"), json!("not_now"), json!("quit"), json!("sh -c x"), json!(1), Value::Null] {
             assert!(serde_json::from_value::<Action>(other.clone()).is_err(), "{other}");
         }
     }
 
     #[test]
     fn state_json_keys() {
-        let keys = json!({
-            "version": 1,
-            "cliSeen": false,
-            "askedSignIn": false,
-            "askedClaude": false,
-            "askedCodex": false,
-            "loginItem": false
-        });
+        let keys = json!({ "version": 1, "cliSeen": false, "askedSignIn": false, "loginItem": false });
         assert_eq!(serde_json::to_value(Saved::default()).unwrap(), keys);
         assert_eq!(serde_json::from_value::<Saved>(keys).unwrap(), Saved::default());
     }

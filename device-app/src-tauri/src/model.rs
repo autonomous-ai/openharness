@@ -199,14 +199,7 @@ mod tests {
             claude: Some(ClaudeStatus { supported: true, installed: true, enabled: true, claude_version: None }),
             codex: None,
             desktop_installed: true,
-            saved: Saved {
-                version: 1,
-                cli_seen: true,
-                asked_sign_in: true,
-                asked_claude: true,
-                asked_codex: true,
-                login_item: true,
-            },
+            saved: Saved { version: 1, cli_seen: true, asked_sign_in: true, login_item: true },
             app_update: AppUpdate::None,
             claude_change: EngineChange::None,
             codex_change: EngineChange::None,
@@ -528,58 +521,27 @@ mod tests {
     }
 
     #[test]
-    fn screens_are_due_in_order() {
-        let not_asked = Saved { asked_sign_in: false, asked_claude: false, ..state().saved };
-        let claude_off = Some(ClaudeStatus { supported: true, installed: true, enabled: false, claude_version: None });
-        let fresh = AppState { signed_in: Some(false), claude: claude_off, saved: not_asked, ..state() };
+    fn only_install_and_sign_in_are_due() {
+        let not_asked = Saved { asked_sign_in: false, ..state().saved };
+        let claude_off = Some(ClaudeStatus { supported: true, installed: false, enabled: false, claude_version: None });
+        let fresh = AppState {
+            signed_in: Some(false),
+            claude: claude_off,
+            codex: codex(true, true, false),
+            saved: not_asked,
+            ..state()
+        };
 
         for cli in [CliState::Installing, CliState::InstallFailed] {
             assert_eq!(due(&AppState { cli, ..fresh.clone() }), Some(Screen::Install), "{cli:?}");
         }
         assert_eq!(due(&fresh), Some(Screen::SignIn));
-        let asked_sign_in = Saved { asked_sign_in: true, ..not_asked };
-        assert_eq!(due(&AppState { saved: asked_sign_in, ..fresh.clone() }), Some(Screen::Claude));
-        assert_eq!(due(&AppState { signed_in: Some(true), ..fresh.clone() }), Some(Screen::Claude));
-        assert_eq!(due(&AppState { signed_in: None, ..fresh.clone() }), Some(Screen::Claude));
-        // Its plugin not installed yet: Turn on installs it.
-        let not_installed = ClaudeStatus { supported: true, installed: false, enabled: false, claude_version: None };
-        assert_eq!(
-            due(&AppState { signed_in: Some(true), claude: Some(not_installed), ..fresh.clone() }),
-            Some(Screen::Claude)
-        );
-
-        // Claude Code is due only when it can be turned on here and is off.
-        let not_due = [
-            ClaudeStatus { supported: false, installed: true, enabled: false, claude_version: None },
-            ClaudeStatus { supported: true, installed: true, enabled: true, claude_version: None },
-        ];
-        for claude in not_due {
-            let signed_in = AppState { signed_in: Some(true), claude: Some(claude.clone()), ..fresh.clone() };
-            assert_eq!(due(&signed_in), None, "{claude:?}");
-        }
-        assert_eq!(due(&AppState { signed_in: Some(true), claude: None, ..fresh.clone() }), None);
-
+        // Claude Code and Codex off, never offered: no window asks about them.
         assert_eq!(due(&AppState { saved: state().saved, ..fresh.clone() }), None);
-        assert_eq!(due(&state()), None);
-
-        // Codex comes after Claude Code, on the same terms.
-        let codex_off = codex(true, true, false);
-        let asked_claude = Saved { asked_sign_in: true, asked_claude: true, asked_codex: false, ..not_asked };
-        let codex_fresh = AppState { signed_in: Some(true), codex: codex_off.clone(), saved: asked_claude, ..fresh };
-        assert_eq!(due(&codex_fresh), Some(Screen::Codex));
-        let claude_not_asked = Saved { asked_claude: false, ..asked_claude };
-        assert_eq!(due(&AppState { saved: claude_not_asked, ..codex_fresh.clone() }), Some(Screen::Claude));
-        let claude_enabled =
-            Some(ClaudeStatus { supported: true, installed: true, enabled: true, claude_version: None });
-        assert_eq!(
-            due(&AppState { saved: claude_not_asked, claude: claude_enabled, ..codex_fresh.clone() }),
-            Some(Screen::Codex)
-        );
-        for codex in [codex(true, true, true), codex(true, false, false), codex(false, true, false), None] {
-            assert_eq!(due(&AppState { codex: codex.clone(), ..codex_fresh.clone() }), None, "{codex:?}");
+        for signed_in in [Some(true), None] {
+            assert_eq!(due(&AppState { signed_in, ..fresh.clone() }), None, "{signed_in:?}");
         }
-        let asked_codex = Saved { asked_codex: true, ..asked_claude };
-        assert_eq!(due(&AppState { saved: asked_codex, ..codex_fresh }), None);
+        assert_eq!(due(&state()), None);
     }
 
     #[test]
