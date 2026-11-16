@@ -1,0 +1,178 @@
+# The dial follows the pane focused in Orca, and Orca's ring follows Orca's tabs (Diego, 2026-11-16)
+
+On top of [the dial and the apps follow each other, pane by pane](../specs/2026-11-14-dial-pane-follow.md) (#4311), [the dial
+follows terminal tabs both ways](../specs/2026-11-15-dial-terminal-follow.md) (#4331) and the per-app rings (`select.ts`
+`AppRings`). The last two Orca pieces of Đợt 1.
+
+## Why
+
+Diego's reports (2026-11-16):
+
+- **(A)** "I change pane in Orca, the device does not follow." Today the dial follows Orca only on a prompt the person
+  submits (#4311), because Orca's CLI does not say which pane has focus.
+- **(B)** "Orca's order is [Terminal 3, harness, round-screens…, Skill, PM], but when I swipe it goes by Back/Forward."
+  The Orca ring is in first-entry order (`DialRing`), unrelated to Orca's tabs.
+
+## What Orca offers (research, 2026-11-16, Orca 1.4.256 and upstream `main`)
+
+- **Focus.** Orca 1.4.256 reports no focused pane. Our upstream pull request stablyai/orca#42555 (open, not merged) adds
+  `focused` to `orca terminal list --json` and `orca terminal watch-focus [--json]`: it prints the focused terminal's
+  handle, then one line per focus change, until killed; with `--json` each line is `{"handle":"term_…"}`, or
+  `{"handle":null}` when no terminal has focus (an editor or browser tab, no window). It is a long poll inside the CLI, so
+  the process costs nothing between changes.
+- **Order.** The flat `terminals` array of `orca terminal list --json` is **not** in tab order: it follows Orca's pane
+  registry (`runtime-terminal-list.ts`, `getLeaves()`), then PTYs with no pane. Measured on Diego's Mac: the main
+  worktree's rows are Terminal 3, harness root, Skill; its tab strip is Terminal 3, Skill, harness root.
+  `--include-visual-layouts` (in 1.4.256) adds `visualLayouts`: per worktree a tree whose groups carry the tab strip's
+  `tabOrder` (`runtime-terminal-visual-layout.ts`), each tab its panes as a split tree (`first`, then `second`), each
+  leaf a terminal `handle`. Group splits are `type: 'split'` with `first` and `second`; tab groups `type: 'group'` with
+  `tabs`. Worktrees come in Orca's internal snapshot order, which is not known to be the sidebar's (the sidebar sorts by
+  `sortOrder`, pins and a sort mode Orca does not expose).
+
+## Decided (PM for Diego, 2026-11-16)
+
+1. The order comes from `visualLayouts`: inside a worktree by group, tab, then pane; worktrees in the order the layouts
+   list them. An Orca agent whose handle is in no layout (one in a multiplexer inside Orca, a terminal Orca dropped)
+   goes after the ordered ones, in its ring order. No guess from `sortOrder`.
+2. The layout is read once each time the set of agents on Orca's ring changes (one enters or leaves), one read at a
+   time, a change during a read asking for one more after it. The Orca ring is reordered when the read lands. A tab
+   dragged in Orca with no agent entering or leaving is seen at the next change: nothing polls. The agent the dial shows
+   stays the one it shows; only its place moves. Only Orca's ring: the machine ring (dials that do not say `appFilter`)
+   and other apps' rings keep first-entry order.
+3. Focus follow runs only where the Orca CLI has `watch-focus`: `orca terminal --help` is read once per Orca binary
+   (its real path and mtime, so an Orca update is seen: every file of Orca 1.4.256's bundle, the `bin/orca` shim too,
+   carries the release's build time). With a dial attached, when Orca settles in front and the CLI has it,
+   the devices process starts `orca terminal watch-focus --json` and keeps it until no dial is attached. A dial that
+   attaches while Orca is already the settled front app starts it the same way (PM, 2026-11-16). A watch that
+   exits starts again only at Orca's next settle: no retry loop, and nothing runs while Orca is closed. The first line is
+   the focus at that moment, so a settle moves the dial to Orca's focused pane, as a tab report does (#4331).
+4. While the watch runs, a prompt in an agent with an Orca pane no longer moves the dial (focus already did, and a prompt Orca types
+   for an orchestrator, `orca terminal send`, no longer pulls the dial). With an Orca CLI without `watch-focus`, the
+   prompt follow stays as it is. An agent in a multiplexer inside Orca has no Orca pane (`MULTIPLEXERS`, `orca.ts`),
+   so focus cannot reach it: its prompts still move the dial.
+5. The echo guard is the tab follow's: each pane the dial switches Orca to (a rest's `orca terminal switch`, a tap's) is
+   kept by handle for 2 s, at most 8; a focus line for a kept handle within that time is the dial's own echo, is
+   skipped, and uses up that switch and those before it.
+6. The upstream addition (layouts in the sidebar's order) goes in Follow-ups and the final report; no pull request or
+   issue on Orca from this branch (Diego decides).
+
+## Design
+
+Everything lives in `cli/src/cable/hosts/` and the devices process (`cli/src/services/devices.ts`). Nothing in the core
+(cli/AGENTS.md rule 7).
+
+### 1. Reading Orca (`cable/hosts/orca.ts`)
+
+Three reads beside the adapter (no shell), from one factory `createOrcaReads(deps)`. Their deps, `OrcaReadDeps`,
+extend `OrcaDeps` with `spawn` (a long-lived child with its stdout) and `mtime(path)` (with the real path), so the
+adapters keep `OrcaDeps`; the binary lookup the adapter uses (`orcaBinary`) is shared with these reads. Orca's node
+types (1.4.256's bundle): a group tree is `group` or `split`, a pane tree `terminal` or `pane-split`.
+
+- **`orcaWatchesFocus()`**: whether `orca terminal --help` lists `watch-focus` (a word in its Commands list). Kept per
+  binary path and mtime; a failed or timed-out run answers false and is not kept, so the next settle asks again.
+- **`orcaTabOrder()`**: runs `orca terminal list --json --include-visual-layouts` through `run` (10 s timeout; its
+  stdout is bounded by `execFile`'s 1 MiB default, and more fails the read), and returns the handles in tab order (decided 1), each checked against `ORCA_HANDLE`. Any
+  shape it does not know (a missing `visualLayouts`, an unknown node type) ends that branch with no handles; a read
+  that fails returns null. The walk is bounded: at most 64 worktrees, 256 handles and a depth of 32.
+- **`watchOrcaFocus(onHandle)`**: spawns `orca terminal watch-focus --json` with stdin ignored, reads stdout line by
+  line (a line over 512 bytes is dropped, as is one that does not parse), and calls `onHandle(handle | null)` with a
+  checked handle or null; any other value is dropped. Returns a stop that kills the child (SIGKILL after 1 s of SIGTERM)
+  and an `ended` promise. stderr is drained and never logged (it can name paths).
+
+### 2. Focus follow (devices process)
+
+State: the watch (or none), the latest handle it reported, and the dial's recent Orca switches (decided 5). The Orca
+adapter in the devices' `adapters` list is wrapped as the Claude app's is (`devices.ts`, its `show` noting the link):
+its `show` and `focus` record `pane.id` (the handle) as they start, then run as before; `noting` still wraps it.
+
+"A dial attached" is the devices' `dialAttached(on)` (a dial watching): it stops the watch on `false`. "A dial linked"
+is `cable.isConnected`, the gate on every follow, as in `followPrompt`.
+
+- **Orca settles in front** (`appSettled('orca')`), or a dial attaches while Orca is the settled front app, a dial attached: with no watch, if `orcaWatchesFocus()`, start one;
+  its first line is followed by the settle rule below. With one running, follow its latest handle by the settle rule.
+- **A line** with handle `h`: kept as the latest. If Orca is the settled front app, follow `h`; otherwise nothing (the
+  next settle uses it). Null: kept as the latest, nothing moves.
+- **Follow `h`**: no dial linked, nothing. A kept switch of `h` within 2 s: skipped as echo (uses it up). The agent:
+  the live observed agent whose Orca pane is `h`: `observed.byPane('orca', h)`, beside `byTab`, scanning each entry's panes
+  for that adapter's (`observed.ts` names no app: services/AGENTS.md) (the one heard from last of two); none: skipped as unknown. Then `cable.followLocal(agent.id, 'focus')`, which keeps followLocal's queue, its no-tile answer
+  and its nothing-sent for the agent already shown.
+- **Settle follow** additionally skips when the dial itself moved within the last 2 s (`dialMovedAt`, as the Claude app's
+  settle does): a turn as Orca comes forward must not be turned back.
+- **Prompt follow** (`followPrompt`): with a watch running, a `turn-start` of an agent with an Orca pane
+  (`observed.paneOf(id, 'orca')`) is skipped as `focus followed`. Every other prompt is unchanged.
+- **Dial detached**: the watch is stopped and the latest handle dropped. The devices process stopping stops it too.
+- **The watch ends** by itself (Orca quit, an error): dropped; the next settle starts one.
+
+`FollowCause` gains `focus`, with its own log lines.
+
+### 3. Orca's ring order (`select.ts`, `cableHost.ts`, devices)
+
+- **`DialRing`** takes an optional rank: `select(agents, rank?)`, where `rank` is a `ReadonlyMap<agentId, position>`,
+  one object per landed read. When the ring's members changed since the last pass, or the rank is another object than
+  the last pass's (compared by identity: a new read landed), the members are put in rank order, the unranked after the ranked in their previous order. Otherwise the ring keeps its order. The firmware keeps
+  the agent on screen by id, so the agent the dial shows stays shown.
+- **`AppRings.update(agents, ranks?)`**: `ranks` maps an app id to its rank; only `orca` is given one.
+- **The host** (`cableHost.ts`) gains `setRank(app, rank)` beside `setRegistry`; `appList` passes the ranks it holds to
+  `rings.update`.
+- **The devices process** keeps the Orca order. Its members: the live registry agents whose app is `orca`, checked on
+  each `observed.onChange` (the source's own change signal, `devices.ts`) and on dial attach; a different set of ids
+  asks for a read (decided 2). When a read lands, the rank maps each member with an Orca pane
+  (`observed.paneOf(id, 'orca')`) to its handle's position, and goes to the host with `setRank('orca', rank)`; the dials get
+  the reordered ring on the session's next list, as any ring change. A failed read keeps the previous rank and logs it.
+  Reads run only while a dial is attached.
+
+### Measures
+
+Log lines, outcomes only, never a handle, an agent, a title or a path:
+
+- `[device] focus · moved`, `[device] focus · skipped · echo | unknown agent | no tile | not in front`;
+- `[device] orca watch · started | unsupported | ended`;
+- `[device] prompt · skipped · focus followed`;
+- `[device] orca order · read | failed`.
+
+## Out of scope
+
+Windows (no front app there); a watch on a remote Orca (`--environment`); Orca's editor and browser tabs; reordering
+on a tab drag with no member change; the Claude app, Terminal and other apps' rings; firmware.
+
+## Follow-ups
+
+- **Upstream Orca:** list `visualLayouts` in the sidebar's worktree order (or give each layout the sidebar's index), so
+  the ring's order across worktrees matches what the person sees. Diego decides whether to propose it.
+- **Upstream Orca:** stablyai/orca#42555 merged and released: the dial check of (A) on a real Orca.
+
+## Done when
+
+**Tests**
+
+- `orca.ts`: `--help` with and without `watch-focus`; kept per path and mtime; a failed run not kept. Tab order: groups,
+  splits of groups, tabs, pane splits in `first`-then-`second` order, unknown shapes, bad handles, the bounds, a failed
+  read. Watch: lines parsed, null, an over-long or bad line dropped, stop kills, `ended` resolves.
+- `select.ts`: a rank orders the ring when members change and when a new rank comes; not on a pass with the same members
+  and the same rank; the unranked after the ranked; the shown agent is still in the ring and still the one the dial
+  shows (decided 2); the 16-place rules unchanged.
+- Devices: Orca's settle starts one watch only when the CLI has `watch-focus`; a line with Orca in front moves the dial;
+  with another app in front it moves nothing and the next settle follows it; a switch's echo is skipped once; the settle
+  is skipped right after a dial move; a prompt in Orca is skipped while the watch runs and still followed with an old
+  Orca; detach stops the watch; an ended watch starts again at the next settle only. A member change of the Orca ring
+  asks for one read; a change during a read asks for one more; the read reorders the Orca ring only.
+- End to end: the real daemon, a fake dial, a fake front app and a fake `orca` (two variants: with `watch-focus` and
+  layouts, and 1.4.256's help without it). Never the real Orca, and no `orca terminal switch` on a real pane.
+  - With `watch-focus`: Orca settles in front, the fake prints a focus line, the dial moves to that agent; the dial's own
+    swipe's echo line moves nothing; the Orca ring the dial gets is in the fake layout's tab order.
+  - Without: no watch runs; a prompt still moves the dial.
+
+**On a dial** (Diego's Mac, asked from the orchestrator when the pull request is ready): Orca's ring is in Orca's tab
+order (B); a prompt still moves the dial on Orca 1.4.256 (A cannot run there until Orca ships `watch-focus`).
+
+## Design notes
+
+- **Data.** Nothing stored. In memory: the latest focused handle, up to 8 recent switches, the Orca order (at most 256
+  ids), the probe answer per binary.
+- **Cost.** No polling. One `orca --help` per Orca binary; one `watch-focus` process while a dial is attached and Orca
+  has settled in front once, idle between focus changes; one `terminal list` per member change of Orca's ring.
+- **Security.** Orca's output is outside text: every handle is checked against `ORCA_HANDLE`, lines and stdout are
+  bounded, the JSON walk is bounded, and `orca` runs with `execFile`/`spawn`, no shell. Handles never reach a log.
+- **Platforms.** macOS: tests and the dial check. Linux X11, where the front app is known: the same code, untested on a
+  dial (the pull request says so). Windows: no front app, so no focus follow; the order applies wherever the Orca ring
+  exists.
