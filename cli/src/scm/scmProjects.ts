@@ -11,10 +11,9 @@
  * The optional `scms` parameters are test seams; the daemon always uses `scmProjects`.
  */
 import { basename } from 'node:path'
-import { PROJECT_INSTRUCTION_FILES } from '../dsh/adapters.js'
-import { validProjectCwd } from '../lib/agentProject.js'
+import { validProjectPath } from '../lib/projectPath.js'
 import { GitScmProject } from './gitScmProject.js'
-import type { ScmDescription, ScmDetectOptions, ScmDetectResult, ScmKind, ScmLaunchRecord, ScmProject } from './types.js'
+import type { ScmDescription, ScmDetectOptions, ScmDetectResult, ScmKind, ScmProject } from './types.js'
 
 export const scmProjects: readonly ScmProject[] = [new GitScmProject()]
 
@@ -41,7 +40,7 @@ export async function detectScmProject(path: string, options: ScmDetectOptions =
 /** What `AgentFrame.project` carries for `cwd`; null for no or an implausible `cwd`, exactly as
  *  `agentProject` answers, so a frame never gains a project it did not have. */
 export async function describeScmProject(cwd: string | null | undefined, scms: readonly ScmProject[] = scmProjects): Promise<ScmDescription | null> {
-  if (!validProjectCwd(cwd)) return null
+  if (!validProjectPath(cwd)) return null
   for (const scm of scms) {
     const described = await scm.describe(cwd)
     if (described) return described
@@ -56,31 +55,6 @@ export async function renameScmProject(cwd: string, title: string | null, scms: 
     if (renamed) return renamed
   }
   return null
-}
-
-/** The pane environment a workspace's record asks for, or undefined when there is none to ask —
- *  shaped for `mergedLaunchEnv` (core/agents/launchEnv.ts), which treats "no env" and "empty env" the same way. */
-export function scmLaunchEnv(record: ScmLaunchRecord | null | undefined, scms: readonly ScmProject[] = scmProjects): Record<string, string> | undefined {
-  if (!record) return undefined
-  const env = scmByKind(record.kind, scms)?.launchEnv(record) ?? {}
-  return Object.keys(env).length ? env : undefined
-}
-
-/** Before Harness writes into project files an SCM may hold read-only. Nothing runs for an SCM with
- *  no `prepareWrite` (git), so a git workspace sees no new subprocess and no file access from this. */
-export async function prepareScmWrite(cwd: string, paths: readonly string[], scms: readonly ScmProject[] = scmProjects): Promise<void> {
-  for (const scm of scms) await scm.prepareWrite?.(cwd, paths)
-}
-
-/** Before Harness writes into a project's instruction files (a harness's session bootstrap, the
- *  saved-API notes): an SCM that holds tracked files read-only opens `PROJECT_INSTRUCTION_FILES` first.
- *  Awaited by create, fork and every relaunch (`core/agents/create.ts`, `fork.ts`, `launch.ts`). Git
- *  has no `prepareWrite`, so for a git workspace this runs nothing and touches no file. A failure here
- *  is only logged; the write that follows reports its own. */
-export async function prepareInstructionWrites(cwd: string | null | undefined, scms: readonly ScmProject[] = scmProjects): Promise<void> {
-  if (!cwd) return
-  try { await prepareScmWrite(cwd, PROJECT_INSTRUCTION_FILES, scms) }
-  catch (error) { console.warn(`[scm] could not prepare instruction files for writing · ${error instanceof Error ? error.message : error}`) }
 }
 
 export function forgetScmProject(cwd: string, scms: readonly ScmProject[] = scmProjects): void {

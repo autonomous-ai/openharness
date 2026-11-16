@@ -1,3 +1,4 @@
+import { FRAME_PART_BYTES } from '../harnessd/services.js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AgentLife, AgentView } from '../core/api.js'
 import { fakeCore } from '../testing/fakeCore.js'
@@ -21,6 +22,12 @@ function setup() {
 }
 
 describe('frame publication in a service process', () => {
+  it('publishes a bounded historical projection larger than sixteen KiB without trimming it', () => {
+    const { api, query, running } = setup()
+    const fields = { gitContext: { history: { branches: Array.from({ length: 128 }, (_, i) => ({ cwd: `/fixture/${i}`, branch: 'b'.repeat(400) })) } } }
+    api.agents.publishFrame!(running(), fields)
+    expect(query).toHaveBeenCalledWith('frame_part', { agentId: 'a', frameEpoch: 'core:1', fields })
+  })
   it('publishes captured JSON and coalesces one pending update per live agent', async () => {
     const { api, query, running } = setup()
     const session = running()
@@ -162,7 +169,7 @@ describe('frame publication in a service process', () => {
     const { api, query, running, log } = setup()
     query.mockReturnValue(new Promise(() => {}))
     const session = running()
-    api.agents.publishFrame!(session, { browser: 'x'.repeat(16 * 1024) })
+    api.agents.publishFrame!(session, { browser: 'x'.repeat(FRAME_PART_BYTES) })
     const cyclic: Record<string, unknown> = {}; cyclic.self = cyclic
     api.agents.publishFrame!(session, cyclic)
     expect(query).not.toHaveBeenCalled()

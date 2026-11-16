@@ -1,14 +1,11 @@
 /** Bounded display projections shared by services. No feature's fields or state are interpreted here. */
-import { SERVICE_HOSTS, type ServiceHostSpec } from '../harnessd/services.js'
+import { FRAME_PART_BYTES, FRAME_PART_ENTRIES, FRAME_PART_TOTAL_BYTES, FRAME_PART_VALUES, SERVICE_HOSTS, type ServiceHostSpec } from '../harnessd/services.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { AgentView, CoreApi } from './api.js'
 
 type Fields = Readonly<Record<string, unknown>>
 type Declaration = NonNullable<ServiceHostSpec['frameParts']>[string]
 const EMPTY: Fields = Object.freeze({})
-export const FRAME_PART_BYTES = 16 * 1024
-export const FRAME_PART_TOTAL_BYTES = 4 * 1024 * 1024
-export const FRAME_PART_ENTRIES = 4096
 const UNSAFE = new Set(['__proto__', 'prototype', 'constructor', 'toJSON'])
 // These fields are session authority, never a service's display projection.
 const RESERVED = new Set(['id', 'agentId', 'sessionId', 'userId', 'name', 'nameChosen', 'title', 'status', 'activity',
@@ -24,7 +21,7 @@ function snapshot(fields: unknown, allowed: ReadonlySet<string>): { fields: Fiel
   const parents = new Set<object>()
   const INVALID = Symbol('invalid frame part')
   const visit = (value: unknown, depth: number): unknown => {
-    if (++nodes > 512 || depth > 8) return INVALID
+    if (++nodes > FRAME_PART_VALUES || depth > 8) return INVALID
     if (value == null || value === undefined || typeof value === 'boolean') return value
     if (typeof value === 'number') return Number.isFinite(value) ? value : INVALID
     if (typeof value === 'string') { textBytes += Buffer.byteLength(value); return textBytes <= FRAME_PART_BYTES ? value : INVALID }

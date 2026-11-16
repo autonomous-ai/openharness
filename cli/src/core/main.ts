@@ -270,7 +270,6 @@ import { TranscriptPager } from '../lib/transcriptPages.js'
 import { AgentCreationReceipts } from '../lib/agentCreationReceipt.js'
 import { agentFrame, lastActivityAt, type AgentFrame } from '../lib/agentFrame.js'
 import { transcriptActivityAt } from '../lib/transcriptActivity.js'
-import { forgetAgentProject } from '../lib/agentProject.js'
 import { createUsageLink } from './usageLink.js'
 import type { UsageSnapshots } from './usageLink.js'
 import { usageTarget, validUsage, validUsageTarget, type AgentUsageTarget } from '../lib/agentUsageWire.js'
@@ -1580,7 +1579,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     { wake: (why) => viewersWake.ask('viewers', why) })
   // How the core tells workspaces in their own process what to do, and answers them (core/workspacesLink.ts).
   const workspacesLink = createWorkspacesLink(coreApi, (frame) => serviceLinks.notify('workspaces', frame),
-    (type, payload, waitMs) => serviceLinks.call('workspaces', type, payload, waitMs), forgetAgentProject)
+    (type, payload, waitMs) => serviceLinks.call('workspaces', type, payload, waitMs))
   // Agent Messages in its own process: which of its deliveries may be written, as it last said, and what it may ask
   // and hear of the core (core/messagesLink.ts).
   // A roster change it tells (`observers`) goes to Share: to its process, which a call starts while it is off, or to its
@@ -1655,6 +1654,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const agentBrowserLink = createAgentBrowserLink({ core: coreApi, notify: (frame) => serviceLinks.notify('agentBrowser', frame),
     notifyBinary: (bytes) => serviceLinks.notifyBinary('agentBrowser', bytes), streamsGone: () => browserStreams.gone(), want: () => coreLink.want('agentBrowser') })
   const usageLink = createUsageLink({ call: payload => ports.usage?.read(payload.target as AgentUsageTarget) ?? Promise.resolve({}), changed: agentEvents.onTokenUsageChanged })
+  coreApi.usage = target => usageLink.readSnapshot(target, coreApi.agents.all())
+  coreApi.usageFresh = async (agentId) => {
+    const row = registry.byAgent(agentId)
+    const target = row && usageTarget(row)
+    if (!target || !validUsageTarget(target)) return null
+    const answer = await ports.usage?.read(target)
+    return answer && validUsage(answer.value) ? answer.value : null
+  }
   const serviceLinks = createServiceLinks({
     token: serviceToken,
     owned: Object.fromEntries([...outOfProcess].map((name) => [name, requestsOf[name] ?? []])),
@@ -1785,7 +1792,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   } else serviceHost.start('viewers', inline!.startViewers, frameParts.scope('viewers', coreApi), VIEWERS_FALLBACKS)
   // Workspaces: in this process, or in the edge host (services/workspacesProcess.ts), told what to do and when.
   if (outOfProcess.has('workspaces')) ports.workspaces = workspacesLink.port
-  else serviceHost.start('workspaces', inline!.startWorkspaces, coreApi, WORKSPACES_FALLBACKS)
+  else serviceHost.start('workspaces', inline!.startWorkspaces, frameParts.scope('workspaces', coreApi), WORKSPACES_FALLBACKS)
   // The orchestrator, an experiment (services/orchestrator.ts): in this process, or in its own once it is on,
   // as the core sees it there (core/orchestratorLink.ts). It reads its Directors' turns from the frames sent.
   if (outOfProcess.has('orchestrator')) ports.orchestrator = orchestratorLink.port
@@ -1816,14 +1823,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   else serviceHost.start('usage', inline!.startUsageInCore, coreApi, USAGE_FALLBACKS, USAGE_REQUESTS)
   usagePortRef = usageLink.port
   backend.tokenUsageProvider = target => usageLink.port.get(target)
-  coreApi.usage = target => usageLink.readSnapshot(target, coreApi.agents.all())
-  coreApi.usageFresh = async (agentId) => {
-    const row = registry.byAgent(agentId)
-    const target = row && usageTarget(row)
-    if (!target || !validUsageTarget(target)) return null
-    const answer = await ports.usage?.read(target)
-    return answer && validUsage(answer.value) ? answer.value : null
-  }
+
 
   // This machine's and each agent's resources, for the Monitor and the list's readings (services/monitor.ts):
   // in this process, or in the edge host (services/monitorProcess.ts), asked through its port (core/monitorLink.ts).

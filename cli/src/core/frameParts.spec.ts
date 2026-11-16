@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { ServiceHostSpec } from '../harnessd/services.js'
+import { FRAME_PART_BYTES, type ServiceHostSpec } from '../harnessd/services.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { createAgentLife } from './agentLife.js'
 import type { AgentView } from './api.js'
-import { createFrameParts, FRAME_PART_BYTES } from './frameParts.js'
+import { createFrameParts } from './frameParts.js'
 
 const row = (agentId = 'a'): RegisteredSession => ({ agentId, sessionId: 's', registeredAt: 1, dsh: 'saved', active: true }) as RegisteredSession
 function setup() {
@@ -21,6 +21,13 @@ function setup() {
 }
 
 describe('service frame parts', () => {
+  it('retains full bounded histories and observed work through the same generic part', () => {
+    const { publish, parts } = setup()
+    const history = { branches: Array.from({ length: 128 }, (_, i) => ({ cwd: `/fixture/${i}`, branch: 'b'.repeat(400), at: '2026-11-16' })),
+      pullRequests: Array.from({ length: 128 }, (_, i) => ({ url: `https://github.com/example/repo/pull/${i}`, title: 't'.repeat(400), state: 'OPEN' })) }
+    expect(publish('agentBrowser', { browser: { history } })).toEqual({ ok: true })
+    expect(parts.read('a')).toEqual({ browser: { history } })
+  })
   it('both existing services publish independently, replacing their own whole part', () => {
     const { publish, parts, core } = setup()
     expect(publish('viewers', { dsh: 'renamed', viewerUrl: null })).toEqual({ ok: true })
@@ -136,7 +143,7 @@ describe('service frame parts', () => {
     available = false
     scoped.agents.publishFrame!(view, { browser: { state: 'starting' } })
     expect(parts.read('a')).toEqual({})
-    expect(parts.services).toEqual(['viewers', 'agentBrowser'])
+    expect(parts.services).toEqual(['viewers', 'workspaces', 'agentBrowser'])
   })
 
   it('revokes inline authority and drops only the disabled service', () => {
@@ -206,7 +213,7 @@ describe('service frame parts', () => {
     const cyclic: Record<string, unknown> = {}; cyclic.again = cyclic
     let deep: unknown = {}; for (let i = 0; i < 9; i++) deep = { next: deep }
     for (const browser of [value, cyclic, deep, 'x'.repeat(FRAME_PART_BYTES + 1), Array(513).fill(0),
-      Object.fromEntries(Array.from({ length: 513 }, (_, i) => [String(i), i])), '\u0000'.repeat(4000)]) {
+      Object.fromEntries(Array.from({ length: 513 }, (_, i) => [String(i), i])), '\u0000'.repeat(Math.ceil(FRAME_PART_BYTES / 6))]) {
       expect(publish('agentBrowser', { browser })).toEqual({ error: 'FRAME_PART_INVALID' })
     }
     expect(getter).not.toHaveBeenCalled()

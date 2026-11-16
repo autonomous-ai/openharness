@@ -22,7 +22,7 @@ describe('workspaces in their own process', () => {
     let api: CoreApi | null = null
     let options: ServiceProcessOptions | null = null
     const port = {
-      nameBranches: vi.fn(), ready: vi.fn(() => true),
+      stop: vi.fn(), nameBranches: vi.fn(), ready: vi.fn(() => true),
       prepareFolder: vi.fn(async (): Promise<PreparedFolder> => ({ ok: true, cwd: '/h/harnesses/repo' })),
       describeWorkspace: vi.fn(async (): Promise<WorkspaceInspection | null> => null),
       reviewWorktree: vi.fn(async (): Promise<WorktreeAnswer> => ({ ok: false, reason: 'No separate worktree. This folder is not a Git worktree.' })),
@@ -55,12 +55,13 @@ describe('workspaces in their own process', () => {
     const { options } = setup()
     const { core, query } = connection()
     options.onConnected!(core)
-    expect(query.mock.calls).toEqual([['folders']])
+    expect(query.mock.calls).toEqual([['follow_agents', { each: true, frames: true }], ['folders']])
     options.onConnected!({ query: vi.fn(async () => { throw new Error('the core went away') }) })
     options.onConnected!({ query: vi.fn(async () => { throw 'closed' }) })
     await flush()
     expect(warn.mock.calls).toEqual([['[workspaces] could not tell the core this process makes folders · the core went away'],
-      ['[workspaces] could not tell the core this process makes folders · closed']])
+      ['[workspaces] could not tell the core this process makes folders · closed'],
+      ['[agents] the core did not answer what agents to follow (no answer): none is heard of as it runs']])
     warn.mockRestore()
   })
 
@@ -142,7 +143,7 @@ describe('workspaces in their own process', () => {
     options.onConnected!(core)
     options.onEvent!({ kind: 'sweep' })
     await flush()
-    expect(query.mock.calls).toEqual([['folders']])
+    expect(query.mock.calls).toEqual([['follow_agents', { each: true, frames: true }], ['folders']])
     expect(port.nameBranches).not.toHaveBeenCalled()
   })
 

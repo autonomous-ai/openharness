@@ -11,6 +11,12 @@
  * supervisor with it, for the table below (the audit of 2026-11-12).
  */
 
+// Full legacy histories exceed 16 KiB; see docs/design/2026-11-16-git-frame-facts.md.
+export const FRAME_PART_BYTES = 2 * 1024 * 1024
+export const FRAME_PART_VALUES = 16_384
+export const FRAME_PART_TOTAL_BYTES = 4 * 1024 * 1024
+export const FRAME_PART_ENTRIES = 4096
+
 export interface ServiceSpec {
   /** The process's name: what the master logs it as and the process is titled (`harnessd <name>`). */
   name: string
@@ -89,7 +95,7 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   // a probe starts, four at once, are processes of their own, outside this budget.
   // A harness stopped while the host is down still closes the harnesses it started: held for the cleanup.
   edge: { services: ['workspaces', 'usage', 'monitor', 'projects', 'handoff', 'recaps', 'windowNames', 'shell', 'connectors', 'sharedMachines', 'agentCleanup', 'messages', 'osDevice', 'goals', 'hachi', 'engineProbe'], heapLimitMiB: 384, rssLimitMiB: 768,
-    hears: { agentCleanup: ['stopped'] } },
+    hears: { agentCleanup: ['stopped'] }, frameParts: { workspaces: { fields: ['project', 'gitContext'] } } },
   // The orchestrator (services/orchestratorProcess.ts), an experiment: started only once it is on, for a
   // saved project or a request (core/api.ts `EXPERIMENTS`). Its projects' files and the frames of their
   // Directors; the agents it runs are the core's.

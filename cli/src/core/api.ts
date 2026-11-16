@@ -1325,6 +1325,7 @@ export type WorktreeAnswer = { ok: true; review: WorktreeReview } | { ok: false;
  * A refusal is an answer, never a throw, which would count against the service and could switch it off.
  */
 export interface WorkspacesPort {
+  stop(): void
   nameBranches(): void
   /** Whether it can make a folder now: a create waits for it (held) while it cannot, rather than failing for the moment a
    *  restart takes. */
@@ -1352,12 +1353,14 @@ const REMOVAL_UNAVAILABLE = { ok: false as const, reason: `The worktree was kept
 /** What the core gets when workspaces fails: branches keep their names, a create waits for its folder, and nothing of a
  *  worktree is read or removed. */
 export const WORKSPACES_FALLBACKS: PortFallbacks<WorkspacesPort> = {
+  stop: undefined,
   nameBranches: undefined, ready: false, prepareFolder: later(FOLDER_UNAVAILABLE), describeWorkspace: later(null),
   reviewWorktree: later(REVIEW_UNAVAILABLE), removeWorktree: later(REMOVAL_UNAVAILABLE),
 }
 
 /** What the core calls while `ports.workspaces` is null (workspaces off): its fallbacks' answers. */
 export const WORKSPACES_OFF: WorkspacesPort = {
+  stop: () => {},
   nameBranches: () => {}, ready: () => false, prepareFolder: async () => FOLDER_UNAVAILABLE, describeWorkspace: async () => null,
   reviewWorktree: async () => REVIEW_UNAVAILABLE, removeWorktree: async () => REMOVAL_UNAVAILABLE,
 }

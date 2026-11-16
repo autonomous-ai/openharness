@@ -8,7 +8,7 @@ import { access, mkdir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { plausibleBranchName, projectFolderName, projectFolderSlug } from './agentNames.js'
-import { validGitPath } from './gitProject.js'
+import { validProjectPath } from './projectPath.js'
 import { parseGitHubRepository } from './githubRepository.js'
 
 export type ProjectFolder = NewProjectFolder | GitProjectFolder
@@ -39,7 +39,7 @@ export function parseProjectFolder(payload: Record<string, unknown>): ProjectFol
   if (payload.projectSource === undefined) return null
   if (payload.projectSource === 'worktree' || payload.projectSource === 'branch') {
     const ref = payload.branchRef
-    if (!validGitPath(payload.gitSource) || payload.repositoryUrl !== undefined ||
+    if (!validProjectPath(payload.gitSource) || payload.repositoryUrl !== undefined ||
         (ref !== undefined && (typeof ref !== 'string' || ref.length > 1024 || !/^refs\/(heads|remotes)\/[^\s\x00-\x1f\x7f]+$/.test(ref))) ||
         (payload.projectSource === 'branch' && (typeof ref !== 'string' || !ref.startsWith('refs/heads/')))) {
       throw new ProjectFolderError('INVALID_PROJECT_SOURCE', 'Choose a Git project and branch.')

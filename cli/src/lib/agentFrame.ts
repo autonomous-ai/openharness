@@ -19,11 +19,10 @@ import type { ActivityFrame } from './turnActivity.js'
  * makes the shape testable without a registry, which is the whole reason the drift went unnoticed.
  */
 
-import { agentProject } from './agentProject.js'
-import { describeScmProject } from '../scm/scmProjects.js'
+import { basename } from 'node:path'
+import { validProjectPath } from './projectPath.js'
 import type { ScmDescription } from '../scm/types.js'
-import { sessionGitContext, SessionGitContextReader, type SessionGitContext } from './sessionGitContext.js'
-import { sessionGitHistory } from './sessionGitHistory.js'
+import type { SessionGitContext } from './sessionGitContext.js'
 import { transcriptActivityAt } from './transcriptActivity.js'
 import type { AgentTokenUsage } from './agentUsageWire.js'
 import type { AgentOutputStats } from './agentOutputStats.js'
@@ -235,24 +234,18 @@ function frameTitle(s: RegisteredSession): string | null {
  * half of "last used" — when a person last opened it, from any app — and a client sorts by the later
  * of the two.
  */
-const gitContexts = new SessionGitContextReader()
 const NAMED_STATES = new Set<string>([...Object.values(OPENCLAW_STATES), ...Object.values(OTHER_ENGINE_STATES)])
 
 export async function agentFrame(
   s: RegisteredSession,
   { selectedModel, workspace, terminalAvailable, parts, tokenUsage, activity: contextActivity, gridAnnotation, waitingFor }: AgentFrameContext,
 ): Promise<AgentFrame> {
-  // The git context is git's own display projection and keeps reading git directly; the frame's
-  // `project` goes through the SCM seam. Both resolve through agentProject's shared reader, so the
-  // seam adds no Git process.
-  const home = agentProject(s.cwd)
-  const context = gitContexts.read(JSON.stringify([s.agentId, s.sessionId, s.engine, s.codexHome, s.registeredAt]), async () => {
-    const saved = await sessionGitHistory.get(s)
-    const value = await sessionGitContext(await home, tokenUsage?.work, undefined, saved)
-    value.history = await sessionGitHistory.observe(s, value)
-    return value
-  })
-  const [project, updatedAt, gitContext] = await Promise.all([describeScmProject(s.cwd), lastActivityAt(s), context])
+  // Fork/Clone need the launch directory even before a service reports. Stopped rows have no
+  // publication lease: their directory remains usable, but no stale Git observation is implied.
+  const project: ScmDescription | null = validProjectPath(s.cwd)
+    ? { kind: 'none', name: basename(s.cwd) || s.cwd, cwd: s.cwd, root: null, remote: null, branch: null } : null
+  const gitContext: SessionGitContext = { state: 'unavailable', current: null, observedAt: null, locations: [], pullRequests: [], truncated: false }
+  const updatedAt = await lastActivityAt(s)
   const frame: AgentFrame = {
     id: s.agentId,
     sessionId: s.sessionId,

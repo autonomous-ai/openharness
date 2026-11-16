@@ -1,5 +1,6 @@
 /** Bounded publication on one service connection; stale work never borrows a later run's authority. */
 import type { AgentLife, AgentView, CoreApi } from '../core/api.js'
+import { FRAME_PART_BYTES, FRAME_PART_ENTRIES, FRAME_PART_TOTAL_BYTES } from '../harnessd/services.js'
 import type { CoreConnection } from './process.js'
 
 type Fields = Readonly<Record<string, unknown>>
@@ -16,7 +17,7 @@ export function createFramePublisher(
   const refused = (code = 'FRAME_PART_UNAVAILABLE'): void => log(`[frames] ${code}`)
   const heard = (event: AgentLife): void => {
     if (event.kind === 'running') {
-      if (!live.has(event.session.agentId) && live.size >= 4096) { refused('FRAME_PART_LIMIT'); return }
+      if (!live.has(event.session.agentId) && live.size >= FRAME_PART_ENTRIES) { refused('FRAME_PART_LIMIT'); return }
       live.set(event.session.agentId, { session: event.session, frameEpoch: event.session.frameEpoch })
     } else if (event.kind === 'ended' || event.kind === 'purged') live.delete(event.agentId)
   }
@@ -32,11 +33,11 @@ export function createFramePublisher(
     let update: Update
     try {
       const wire = JSON.stringify(fields), bytes = Buffer.byteLength(wire)
-      if (bytes > 16 * 1024) { refused('FRAME_PART_LIMIT'); return }
+      if (bytes > FRAME_PART_BYTES) { refused('FRAME_PART_LIMIT'); return }
       update = captured ?? { source: session, agentId, frameEpoch, fields: JSON.parse(wire) as Fields, bytes }
     } catch { refused('FRAME_PART_INVALID'); return }
     const before = pending.get(agentId)
-    if (heldBytes - (before?.next?.bytes ?? 0) + update.bytes > 4 * 1024 * 1024) { refused('FRAME_PART_LIMIT'); return }
+    if (heldBytes - (before?.next?.bytes ?? 0) + update.bytes > FRAME_PART_TOTAL_BYTES) { refused('FRAME_PART_LIMIT'); return }
     if (before) { heldBytes += update.bytes - (before.next?.bytes ?? 0); before.next = update; return }
     const mine = generation, source = connection
     let timer: ReturnType<typeof setTimeout>

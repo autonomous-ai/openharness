@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { insideGitCheckout, validGitPath } from './gitProject.js'
+import { insideGitCheckout } from './gitProject.js'
+import { validProjectPath } from './projectPath.js'
 import { canonicalRepository } from './agentProject.js'
 import { validPullRequestUrl } from './sessionWorkWire.js'
 import { tmpdir } from 'node:os'
@@ -141,7 +142,7 @@ export function createPullRequestReader(execute: Run = run, now = Date.now) {
   const readBranch = createBranchPullRequestReader(execute, now)
   const cache = new Map<string, { until: number; value: Promise<PullRequestResult> }>()
   return async (cwd: string, expected?: PullRequestIdentity): Promise<PullRequestResult> => {
-    if (!validGitPath(cwd)) return { status: 'unavailable' }
+    if (!validProjectPath(cwd)) return { status: 'unavailable' }
     try {
       const [branch, remote] = await Promise.all([
         execute('git', ['symbolic-ref', '--quiet', '--short', 'HEAD'], cwd),

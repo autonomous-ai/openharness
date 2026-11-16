@@ -26,7 +26,7 @@ import { projectDisplayName, type registry, type RegisteredSession } from '../..
 import type { TerminalBackend } from '../../lib/terminalBackend.js'
 import { windowsLaunchRefusal } from '../../lib/windows/launch.js'
 import { isWindowsHeldPane, windowsPaneLaunch } from '../../lib/windows/engineStart.js'
-import { prepareInstructionWrites, scmLaunchEnv } from '../../scm/scmProjects.js'
+import { prepareInstructionWrites, scmLaunchEnv } from '../../scm/launch.js'
 import type { createLaunchHelpers } from './launch.js'
 import { mergedLaunchEnv } from './launchEnv.js'
 import type { createPaneWatcher } from './newPane.js'

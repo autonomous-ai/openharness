@@ -26,9 +26,8 @@ function setup(connected = true) {
   })
   const notify = vi.fn(() => connected)
   const call = vi.fn(async (_type: string, _payload: Record<string, unknown>, _waitMs: number): Promise<Record<string, unknown>> => ({}))
-  const forgetProject = vi.fn()
-  const link = createWorkspacesLink(core, notify, call, forgetProject)
-  return { core, notify, call, forgetProject, link, port: link.port, live, stopped }
+  const link = createWorkspacesLink(core, notify, call)
+  return { core, notify, call, link, port: link.port, live, stopped }
 }
 
 /** A link whose process said it makes folders, answering [answer] to the next ask. */
@@ -53,26 +52,24 @@ describe('workspaces in their own process, as the core tells them', () => {
   // neither asks the process to sweep nor lists every folder in use for one.
   it('never tells the process to sweep, and lists no folders for one', () => {
     const { link, port, core } = setup()
-    expect(Object.keys(port)).toEqual(['nameBranches', 'ready', 'prepareFolder', 'describeWorkspace', 'reviewWorktree', 'removeWorktree'])
+    expect(Object.keys(port)).toEqual(['stop', 'nameBranches', 'ready', 'prepareFolder', 'describeWorkspace', 'reviewWorktree', 'removeWorktree'])
     expect(link.answer('agents', {})).toEqual({ error: 'UNKNOWN_QUERY' })
     expect(core.agents.all).not.toHaveBeenCalled()
   })
 
   it('sends a renamed agent\'s frame again, read fresh', () => {
-    const { link, core, forgetProject, live } = setup()
+    const { link, core, live } = setup()
     expect(link.answer('branchNamed', { agentId: 'a2', requestId: 'q1', query: 'branchNamed' })).toEqual({ synced: true })
-    expect(forgetProject).toHaveBeenCalledWith(live[1].cwd)
     expect(core.agents.sync).toHaveBeenCalledWith(live[1])
   })
 
   it('has no frame to send for an agent that is gone, or one it cannot name; one with no folder is only sent again', () => {
-    const { link, core, forgetProject, live } = setup()
+    const { link, core, live } = setup()
     expect(link.answer('branchNamed', { agentId: 'gone' })).toEqual({ synced: false })
     expect(link.answer('branchNamed', { agentId: 7 })).toEqual({ synced: false })
     expect(core.agents.sync).not.toHaveBeenCalled()
     live[0].cwd = undefined as never
     expect(link.answer('branchNamed', { agentId: 'a1' })).toEqual({ synced: true })
-    expect(forgetProject).not.toHaveBeenCalled()
     expect(core.agents.sync).toHaveBeenCalledWith(live[0])
   })
 

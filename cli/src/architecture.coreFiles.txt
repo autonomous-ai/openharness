@@ -297,7 +297,6 @@ lib/agentCreationReceipt.ts
 lib/agentEvent.ts
 lib/agentFrame.ts
 lib/agentNames.ts
-lib/agentProject.ts
 lib/agentSessionEnv.ts
 lib/agentSettings.ts
 lib/agentUsageWire.ts
@@ -309,7 +308,6 @@ lib/authSession.ts
 lib/backgroundCommands.ts
 lib/binaryOnPath.ts
 lib/bootId.ts
-lib/branchNaming.ts
 lib/browserShim.ts
 lib/captureResumeIdentity.ts
 lib/cardUpdate.ts
@@ -345,7 +343,6 @@ lib/footerTimer.ts
 lib/forkAgent.ts
 lib/gatewayRuntime.ts
 lib/gatewayWire.ts
-lib/gitProject.ts
 lib/githubRepository.ts
 lib/goalCommand.ts
 lib/gridAnnotation.ts
@@ -429,6 +426,7 @@ lib/processTree.ts
 lib/productHealthContract.ts
 lib/productUsageContract.ts
 lib/projectFolder.ts
+lib/projectPath.ts
 lib/ptyHost/client.ts
 lib/ptyHost/drain.ts
 lib/ptyHost/instance.ts
@@ -458,8 +456,6 @@ lib/runtimeProfileWire.ts
 lib/secureState.ts
 lib/serviceMetrics.ts
 lib/sessionCheckpoint.ts
-lib/sessionGitContext.ts
-lib/sessionGitHistory.ts
 lib/sessionInput.ts
 lib/sessionRepair.ts
 lib/sessionSearch/externals/types.ts
@@ -479,7 +475,6 @@ lib/sqliteBuiltin.ts
 lib/sqlitePage.ts
 lib/sqliteRead.ts
 lib/sqliteThread.ts
-lib/sshHosts.ts
 lib/stopAgentService.ts
 lib/stoppedAgents.ts
 lib/subagentTranscript.ts
@@ -528,7 +523,6 @@ lib/windows/guestTree.ts
 lib/windows/hermesLaunch.ts
 lib/windows/installNames.ts
 lib/windows/launch.ts
-lib/windows/noWindow.ts
 lib/windows/pipeAuth.ts
 lib/windows/pipeClient.ts
 lib/windows/powershell.ts
@@ -539,8 +533,7 @@ lib/windows/treeKill.ts
 lib/workspaceCheck.ts
 lib/wsLiveness.ts
 localWsServer.ts
-scm/gitScmProject.ts
-scm/scmProjects.ts
+scm/launch.ts
 scm/types.ts
 version.ts
 watcher/watcher.ts
