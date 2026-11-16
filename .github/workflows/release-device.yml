@@ -35,9 +35,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          # The commits, not their files: the check below reads history only.
+          # The commits only, not their trees: merge-base --is-ancestor walks commits.
           fetch-depth: 0
-          filter: blob:none
+          filter: tree:0
           sparse-checkout: /device-app/scripts/
           sparse-checkout-cone-mode: false
 
@@ -52,7 +52,7 @@ jobs:
           COMMIT: ${{ github.sha }}
         run: |
           set -euo pipefail
-          git fetch --no-tags --filter=blob:none origin +refs/heads/main:refs/remotes/origin/main
+          git fetch --no-tags --filter=tree:0 origin +refs/heads/main:refs/remotes/origin/main
           python3 device-app/scripts/device-manifest.py ref "$VERSION" "$REF" "$PUBLISH" "$COMMIT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
