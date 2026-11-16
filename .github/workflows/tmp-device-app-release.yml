@@ -24,7 +24,10 @@ jobs:
         with:
           # Nothing in the run needs the token, and the run starts the app.
           persist-credentials: false
-          sparse-checkout: /device-app/
+          # Cargo lists the package's files through git, which reads every .gitignore up to the root.
+          sparse-checkout: |
+            /device-app/
+            /.gitignore
           sparse-checkout-cone-mode: false
 
       - uses: actions/setup-node@v7

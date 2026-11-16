@@ -87,8 +87,10 @@ jobs:
         with:
           # Nothing in the job needs the token, and the build runs third-party code.
           persist-credentials: false
+          # Cargo lists the package's files through git, which reads every .gitignore up to the root.
           sparse-checkout: |
             /device-app/
+            /.gitignore
             /.github/actions/macos-signing/
           sparse-checkout-cone-mode: false
 
