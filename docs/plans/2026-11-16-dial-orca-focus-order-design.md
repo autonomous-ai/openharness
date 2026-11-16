@@ -60,7 +60,10 @@ Diego's reports (2026-11-16):
    morning, came after "PM"). Orca's list gives no terminal's process or tty, so such an agent is placed by elimination:
    the Orca terminal whose `worktreePath` is the agent's folder, whose `agentIdentity` is its engine, and which no agent
    with a known Orca pane holds. Only when exactly one such terminal matches exactly one such agent; anything ambiguous
-   stays after the ordered ones. The match gives order and a tab name only: never a switch, a tap or typing.
+   stays after the ordered ones. The match gives order and a tab name, and after Diego's second dial check (PM,
+   2026-11-16: a swipe to the placed "Skill từ SKILL.md" did not switch Orca's tab) a rest and a tap switch Orca to the
+   placed terminal (`orca terminal switch`, showing only). Never typing: words, voice and `orca terminal send` use only a
+   pane the agent's own hook named. Focus follow and prompt follow never map a placed terminal to the agent.
 8. A tab the person renamed in Orca names the agent above the session's own name (PM for Diego, 2026-11-16: his tab
    "PM" holds the session he named "harness root", and the dial must say "PM"). Orca marks no custom title, but a tab's
    own title is its active pane's: a tab title that differs from the title of every pane in it is one the person set.
@@ -145,15 +148,18 @@ is "harness root" sits in a tab he named "PM"; the dial must say "PM", and today
   its Orca tab's title > the folder, as today. A tab whose title Orca made up ("Terminal 3", or a title the program in
   it set) is still the tab's title: the dial says what the tab says.
 - **An agent with no pane yet** (decided 7): the same read places it by elimination, for its tab's name as for its
-  order; ambiguous, it keeps its folder. A list cut short (Orca's `truncated`, past its 200 rows by default, or one past
+  order, and for the terminal a rest or a tap switches to (never typing); ambiguous, it keeps its folder and switches
+  nothing. A list cut short (Orca's `truncated`, past its 200 rows by default, or one past
   256 rows) places nobody: a terminal left out could be the match.
 - **When:** each time the layout is read (a change of the Orca ring's members, section 3), the names follow. Renaming a
   tab with no member change is seen at the next change: nothing polls.
 - **Where:** `observed.ts` names no app: it gains `setPaneNames(adapter, names, placed)`, which replaces that adapter's
   names by pane id (each with whether the person set it) and the panes agents with none of that adapter's were placed at;
-  an agent is called by its pane's name, or its place's, in the precedence above. A place is never its pane: no rest, tap
-  or words reach it. The devices process gives it the Orca adapter's names after each read. Only Orca agents; nothing in
-  the core.
+  an agent is called by its pane's name, or its place's, in the precedence above. A place is shown-only: a rest and a
+  tap switch to it, where the agent has no pane of that adapter (its own pane wins), but it is never its pane: no words
+  reach it, and `paneOf` and `byPane` (prompt and focus follow) never return it. A place that comes or goes tells the
+  change, as what a tap reaches changed. The devices process gives it the Orca adapter's names after each read. Only
+  Orca agents; nothing in the core.
 
 ### Measures
 
@@ -202,7 +208,10 @@ on a tab drag with no member change; the Claude app, Terminal and other apps' ri
 - Diego's layout (decided 7 and 8): a worktree with tabs "Terminal 3" (a shell, no `agentIdentity`), "Skill từ
   SKILL.md" (an idle Claude agent the attach scan found, no hook) and "PM" (pane title "harness root", a hooked Claude
   agent whose session the person named "harness root"): the ring has the Skill agent before PM, and PM is named "PM".
-  Two unplaced agents in one folder, or two unclaimed terminals, place neither.
+  Two unplaced agents in one folder, or two unclaimed terminals, place neither. With a "harness" agent's tab between
+  "Terminal 3" and Skill: a rest and a tap on Skill switch Orca to its placed terminal; words to it run no `orca terminal
+  send`; an ambiguous placement switches nothing; once Skill hooks, a rest uses its own handle; a focus line for the
+  placed terminal finds no agent.
 
 **On a dial** (Diego's Mac, asked from the orchestrator when the pull request is ready): Orca's ring is in Orca's tab
 order (B); an Orca agent in a tab Diego named shows that name; a prompt still moves the dial on Orca 1.4.256 (A cannot run there until Orca ships `watch-focus`).

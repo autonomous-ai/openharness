@@ -1001,7 +1001,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    * attach scan found has none until its first hook, and an idle one sends none, while Orca's list names no terminal's
    * process or tty. The terminal Orca saw that agent's engine start in, in its folder, that no agent with an Orca pane
    * holds, when it is the only one such and the agent the only one with none there; anything else places nobody. For its
-   * order and its tab's name only: never its pane, so no rest, tap or words reach it.
+   * order, its tab's name, and the terminal a rest or a tap switches to: never its pane, so no words reach it and no focus
+   * line finds it.
    */
   const placeInOrca = (source: ObservedSource, terminals: readonly OrcaTerminal[]): Map<string, string> => {
     // By folder and engine: the agent's, and the terminal's worktree and the agent Orca saw there, compared as they are.

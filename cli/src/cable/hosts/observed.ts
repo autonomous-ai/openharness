@@ -363,13 +363,25 @@ export class ObservedSource implements HostSource {
    *  else now. Asked at each look: the front moves, and a watch comes and goes. */
   private shown(agent: HostAgent): Located | undefined {
     const e = this.entries.get(agent.id)
-    return e && this.live(e) ? this.first(e, rest) : undefined
+    return e && this.live(e) ? this.shownOnly(e).find(({ adapter, pane }) => rest(adapter, pane)) : undefined
   }
 
   /** What a tap opens: its app, and the first of its panes the opener brings forward. Asked at each look, as a rest's. */
   private target(e: Entry): OpenTarget {
-    const near = this.first(e, tapped)
+    const near = this.shownOnly(e).find(({ adapter, pane }) => tapped(adapter, pane))
     return { ...(e.bundle ? { bundle: e.bundle } : {}), ...(near ? { pane: near.pane } : {}) }
+  }
+
+  /** What a rest and a tap may show: its panes, and in an adapter where it has none, the pane its caller placed it at. A
+   *  place is a guess: showing the wrong terminal costs a look, while words typed there would run at another's prompt.
+   *  So only these two read it, never words, `byPane` or `paneOf`. */
+  private shownOnly(e: Entry): readonly Located[] {
+    return (this.deps.actions?.adapters ?? []).flatMap((adapter) => {
+      const own = e.panes.find((located) => located.adapter === adapter)
+      if (own) return [own]
+      const at = this.paneNames.get(adapter.id)?.placed.get(e.agent.id)
+      return at === undefined ? [] : [{ adapter, pane: { adapter: adapter.id, id: at } }]
+    })
   }
 
   /** Every pane its adapters know it by, afresh: a session resumed elsewhere keeps none it left. */
@@ -478,13 +490,16 @@ export class ObservedSource implements HostSource {
   }
 
   /** Replaces that adapter's names for its panes whole, and the panes its caller placed agents with none of its at, and
-   *  names every live agent again: the change is told once. A place names an agent and nothing else: it is never one of
-   *  its panes, so no rest, tap or words reach it. */
+   *  names every live agent again: the change is told once. A place names an agent, and a rest and a tap show it
+   *  (shownOnly); it is never one of its panes, so no words reach it. A place that came or went is told too: what a tap
+   *  can reach changed. */
   setPaneNames(adapter: string, names: ReadonlyMap<string, PaneName>, placed: ReadonlyMap<string, string>): void {
+    const was = this.paneNames.get(adapter)?.placed
     this.paneNames.set(adapter, { names, placed })
     let changed = false
     for (const e of this.entries.values()) {
       if (!this.live(e)) continue
+      if (was?.get(e.agent.id) !== placed.get(e.agent.id)) changed = true
       const name = this.nameOf(e)
       if (name === e.agent.name) continue
       e.agent.name = name
