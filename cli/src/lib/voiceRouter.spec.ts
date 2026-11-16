@@ -359,6 +359,21 @@ describe('routeVoiceTask', () => {
     } finally { log.mockRestore() }
   })
 
+  it('logs a failed one-shot by its engine, exit and stderr size, never the stderr or result it echoed', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    try {
+      // The engine's stderr (or Cursor's error result) can echo the router prompt: the spoken task, agent names.
+      routerImpl = async () => { throw Object.assign(new Error('claude one-shot exited 3: SECRET fix the login'), { failure: 'exited 3', stderrBytes: 40 }) }
+      await routeVoiceTask('fix the auth login please', AGENTS)
+      routerImpl = async () => { throw Object.assign(new Error('spawn SECRET ENOENT'), { code: 'ENOENT' }) }
+      await routeVoiceTask('fix the auth login please', AGENTS)
+      const lines = log.mock.calls.map((call) => call.join(' '))
+      expect(lines).toContain('[voice-route] claude one-shot failed (exited 3 · stderr=40B) → name matching')
+      expect(lines).toContain('[voice-route] claude one-shot failed (ENOENT) → name matching')
+      expect(lines.join('\n')).not.toContain('SECRET')
+    } finally { log.mockRestore() }
+  })
+
   it('RE-THROWS an AbortError (caller cancelled) rather than papering over it', async () => {
     routerImpl = async () => { throw Object.assign(new Error('aborted'), { name: 'AbortError' }) }
     await expect(routeVoiceTask('anything', AGENTS)).rejects.toThrow('aborted')
