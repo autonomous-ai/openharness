@@ -136,17 +136,18 @@ function removeEmpty(folder: string): void {
 }
 
 /**
- * Claude Code's own record that the plugin is on, read strictly: a missing or bad file is false, so a plugin turned off
- * or uninstalled through /plugin takes the skills with it. One read of at most 1 MiB.
+ * Claude Code's own record of the plugin, in its user settings: 'on' while its entry is true, 'off' once disabled or
+ * uninstalled (the entry false or gone), 'unknown' when the file says nothing: missing, not a regular file, past 1 MiB,
+ * not JSON or not an object. One read, sized by the file: the plugin's hook and mod read it on every call.
  */
-export function claudePluginEnabled(settingsPath: string): boolean {
+export function claudePluginState(settingsPath: string): 'on' | 'off' | 'unknown' {
   let settings: unknown
   try {
     // No wait on a FIFO left at the path.
     const fd = openSync(settingsPath, constants.O_RDONLY | constants.O_NONBLOCK)
     try {
       const info = fstatSync(fd)
-      if (!info.isFile() || info.size > MAX_SETTINGS_BYTES) return false
+      if (!info.isFile() || info.size > MAX_SETTINGS_BYTES) return 'unknown'
       const buffer = Buffer.allocUnsafe(info.size)
       const length = readSync(fd, buffer, 0, info.size, 0)
       settings = JSON.parse(buffer.toString('utf8', 0, length))
@@ -154,11 +155,11 @@ export function claudePluginEnabled(settingsPath: string): boolean {
       closeSync(fd)
     }
   } catch {
-    return false
+    return 'unknown'
   }
-  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) return false
+  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) return 'unknown'
   const plugins = (settings as { enabledPlugins?: unknown }).enabledPlugins
-  return !!plugins && typeof plugins === 'object' && (plugins as Record<string, unknown>)[DIAL_PLUGIN_ID] === true
+  return !!plugins && typeof plugins === 'object' && (plugins as Record<string, unknown>)[DIAL_PLUGIN_ID] === true ? 'on' : 'off'
 }
 
 /**

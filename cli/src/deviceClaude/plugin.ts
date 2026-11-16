@@ -4,10 +4,9 @@
  * This runs only in the `harness` command's own process (the menu-bar app calls it), never in the daemon.
  */
 import { execFile } from 'node:child_process'
-import { closeSync, fstatSync, openSync, readSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { DIAL_PLUGIN_ID } from '../devices/dialSkill.js'
+import { claudePluginState, DIAL_PLUGIN_ID } from '../devices/dialSkill.js'
 import { installedEngineBin } from '../lib/engineBin.js'
 
 export const MARKETPLACE = 'openharness'
@@ -36,8 +35,6 @@ const LOCAL_MS = 15_000
 const MAX_OUTPUT_BYTES = 1024 * 1024
 const UNSUPPORTED = `Claude Code ${MIN_CLAUDE} or later is needed.`
 const NO_ANSWER = 'Claude Code did not answer.'
-/** A settings.json is a few keys; one past this is not read whole. */
-const MAX_SETTINGS_BYTES = 1024 * 1024
 
 /** Claude Code's user settings: in CLAUDE_CONFIG_DIR, which a Claude Code session hands its hooks, else in ~/.claude. */
 export function claudeSettingsPath(): string {
@@ -48,31 +45,13 @@ export function claudeSettingsPath(): string {
  * Whether the plugin is on, by its entry in Claude Code's user settings: true once installed or enabled, false once
  * disabled, gone once uninstalled. A session started before `disable` keeps the plugin's hook and mod loaded, so both
  * ask this before they act. It is Claude Code's own record, not a file of Harness's: the /plugin menu turns the plugin
- * off there too, and `status` reads the same entry through `claude plugin list`. One read of at most 1 MiB. A file that
- * is missing, cut short or not an object says nothing of the person turning the plugin off: it stays on, as it was
- * before this check, rather than the dial going quiet for no reason anyone can see. A plugin loaded with --plugin-dir or
- * installed at project scope is on only while that file is missing: once it exists without the entry, it reads as off.
+ * off there too, and `status` reads the same entry through `claude plugin list`. A file that is missing, unreadable or
+ * not an object says nothing of the person turning the plugin off: it stays on, as it was before this check, rather
+ * than the dial going quiet for no reason anyone can see. A plugin loaded with --plugin-dir or installed at project
+ * scope is on only while that file is missing: once it exists without the entry, it reads as off.
  */
 export function claudePluginOn(settingsPath: string): boolean {
-  let settings: unknown
-  try {
-    const fd = openSync(settingsPath, 'r')
-    try {
-      // Sized by the file, not the bound: every `asked` and `link` reads it, and it is a few hundred bytes.
-      const { size } = fstatSync(fd)
-      if (size > MAX_SETTINGS_BYTES) return true
-      const buffer = Buffer.allocUnsafe(size)
-      const length = readSync(fd, buffer, 0, size, 0)
-      settings = JSON.parse(buffer.toString('utf8', 0, length))
-    } finally {
-      closeSync(fd)
-    }
-  } catch {
-    return true
-  }
-  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) return true
-  const plugins = (settings as { enabledPlugins?: unknown }).enabledPlugins
-  return !!plugins && typeof plugins === 'object' && (plugins as Record<string, unknown>)[DIAL_PLUGIN_ID] === true
+  return claudePluginState(settingsPath) !== 'off'
 }
 
 /** The Claude Code binary as Harness finds it for its own agents, run with no shell; null when it is not installed. */

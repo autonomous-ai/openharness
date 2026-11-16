@@ -4,7 +4,7 @@
 // and a moment that reads Off takes them out again itself, which catches up on a Turn off a write raced.
 import { statSync } from 'node:fs'
 import { join } from 'node:path'
-import { claudePluginEnabled, ownDirectory, removeSkill, skillsFolderOf, writeSkill } from '../devices/dialSkill.js'
+import { claudePluginState, ownDirectory, removeSkill, skillsFolderOf, writeSkill } from '../devices/dialSkill.js'
 import { DIAL_SKILL_FILE, MAX_HOMES, readHomes, writeHomes, type DialEngine, type DialSkillAnswers, type DialSkillHomes } from '../devices/dialSkillFiles.js'
 import { rolloutHome, takesOwner, type RolloutOwner } from './codexRolloutHome.js'
 
@@ -49,7 +49,7 @@ export function createDialSkillWriter(deps: DialSkillWriterDeps): DialSkillWrite
     const answer = deps.answers()[engine]
     // Claude Code's own record is read too, so a plugin turned on before this file existed brings the skill, and one
     // uninstalled through /plugin takes it away.
-    return engine === 'codex' ? answer === true : answer !== false && claudePluginEnabled(join(deps.claudeHome, 'settings.json'))
+    return engine === 'codex' ? answer === true : answer !== false && claudePluginState(join(deps.claudeHome, 'settings.json')) === 'on'
   }
 
   /** dial-skill.json as of now: a Turn off then a Turn on between two scans is a new file, whatever it holds. */
