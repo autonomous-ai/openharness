@@ -161,6 +161,28 @@ mod tests {
     }
 
     #[test]
+    fn a_state_file_from_before_codex_keeps_its_answers() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("state.json"),
+            r#"{"version":1,"cliSeen":true,"askedSignIn":true,"askedClaude":true,"loginItem":true}"#,
+        )
+        .unwrap();
+        let log = Arc::new(MemoryLog::default());
+        let file = JsonStateFile::new(dir.path().to_path_buf(), log.clone());
+        let before = Saved {
+            version: 1,
+            cli_seen: true,
+            asked_sign_in: true,
+            asked_claude: true,
+            asked_codex: false,
+            login_item: true,
+        };
+        assert_eq!(file.load(), before);
+        assert!(log.lines().is_empty());
+    }
+
+    #[test]
     fn a_save_makes_its_folder_and_says_when_it_cannot() {
         let root = tempfile::tempdir().unwrap();
         let dir = root.path().join("Application Support").join("ai.autonomous.harness.device");

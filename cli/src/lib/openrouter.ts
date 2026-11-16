@@ -8,8 +8,8 @@
  * Both jobs are a couple of hundred tokens of text condensation, so the answer is not "spawn a different
  * agent" but "make the request ourselves": no process, no pool slot, no vendor login, one HTTPS call.
  *
- * The key never leaves this module except in an Authorization header to openrouter.ai, and is redacted
- * from every message this module can produce.
+ * The key never leaves this module except in an Authorization header to openrouter.ai: what this module logs
+ * is names, statuses and short tokens, never text that could carry it.
  */
 
 import { readFile } from 'node:fs/promises'
@@ -33,11 +33,6 @@ const DEFAULT_MAX_TOKENS = 512
 /** `ori login` writes { createdAt, key: 'sk-or-…', userId }. */
 interface OriCredentials {
   key?: unknown
-}
-
-/** Strip anything that looks like a key from text that may be logged. */
-export function redactKeys(text: string): string {
-  return text.replace(/sk-[A-Za-z0-9_-]{8,}/g, 'sk-…')
 }
 
 /**
@@ -80,6 +75,28 @@ export interface OpenRouterCompletionOptions {
   temperature?: number
 }
 
+/** A code or type that is one short token, never free text. */
+const ERROR_TOKEN = /^[A-Za-z0-9_.-]{1,40}$/
+
+function errorToken(value: unknown): string | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value)
+  return typeof value === 'string' && ERROR_TOKEN.test(value) ? value : null
+}
+
+/** A failed call's `error.code` and `error.type`, only as tokens. Never the message or the rest of the body:
+ *  a moderation refusal carries `metadata.flagged_input`, a piece of the prompt that holds the person's spoken
+ *  words, and the message is not proven never to quote it. */
+function errorTokens(body: string): string {
+  try {
+    const error = (JSON.parse(body) as { error?: { code?: unknown, type?: unknown } } | null)?.error
+    const code = errorToken(error?.code)
+    const type = errorToken(error?.type)
+    return `${code ? ` · code=${code}` : ''}${type ? ` · type=${type}` : ''}`
+  } catch {
+    return ''
+  }
+}
+
 /**
  * The completion text, or null when the call could not produce one.
  *
@@ -113,9 +130,9 @@ export async function openRouterComplete(options: OpenRouterCompletionOptions): 
     })
 
     if (!res.ok) {
-      const body = redactKeys((await res.text().catch(() => '')).slice(0, 300))
+      const tokens = errorTokens(await res.text().catch(() => ''))
       if (res.status === 402) console.warn('[openrouter] out of credits — top up at https://openrouter.ai/settings/credits')
-      else console.warn(`[openrouter] ${options.model} failed with HTTP ${res.status}${body ? `: ${body}` : ''}`)
+      else console.warn(`[openrouter] ${options.model} failed with HTTP ${res.status}${tokens}`)
       return null
     }
 
@@ -124,8 +141,17 @@ export async function openRouterComplete(options: OpenRouterCompletionOptions): 
     const text = typeof content === 'string' ? content.trim() : ''
     return text || null
   } catch (err) {
-    if (options.signal?.aborted) throw err   // the caller cancelled: don't paper over it
-    console.warn(`[openrouter] ${options.model} call failed: ${redactKeys(err instanceof Error ? err.message : String(err))}`)
+    // The caller cancelled: don't paper over it. Only ever as an AbortError: an abort can land while another error is
+    // in flight, such as a body-parse SyntaxError that quotes the model's answer, and the caller may log what it gets.
+    if (options.signal?.aborted) {
+      throw err instanceof Error && err.name === 'AbortError' ? err : new DOMException('aborted', 'AbortError')
+    }
+    // By name and code, never the message: V8's JSON.parse error quotes a window of the body, and a completion's
+    // body can repeat the person's spoken words. fetch's own failure is the constant "fetch failed", its cause's
+    // code (ECONNRESET, ENOTFOUND) is what says why.
+    const name = err instanceof Error ? errorToken(err.name) : null
+    const code = errorToken((err as { cause?: { code?: unknown } } | null)?.cause?.code)
+    console.warn(`[openrouter] ${options.model} call failed: ${name ?? 'error'}${code ? ` · code=${code}` : ''}`)
     return null
   } finally {
     clearTimeout(timer)

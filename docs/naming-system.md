@@ -24,7 +24,7 @@ applicable design system, including the [desktop Design System](../desktop/desig
 | Desktop, web, and mobile interfaces | **Harness** | Use descriptors such as “the Harness desktop app” or “Harness on your phone.” |
 | Compute hardware | **Autonomous Computer** | The physical computer. “Personal AI computer” can describe it. |
 | Optional companion controller | **Harness device** | The input and status device connected to the computer. |
-| Menu-bar app for the round dial | **Harness Device** | The small app in the menu bar that keeps the dial's line to Harness: its status, sign-in and Claude Code. Capital D: the app's name. In copy the hardware is the **dial**, never "Harness device", so the two never meet in Title Case. |
+| Menu-bar app for the round dial | **Harness Device** | The small app in the menu bar that keeps the dial's line to Harness: its status, sign-in, Claude Code, Codex and Notifications. Capital D: the app's name. In copy the hardware is the **dial**, never "Harness device", so the two never meet in Title Case. |
 | Optional inference network | **Grid** | Routes model requests to the computers serving them. |
 | Open source project and repository | **OpenHarness** | Use for the source project and repository identity; the product interface says Harness. |
 

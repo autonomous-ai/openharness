@@ -65,6 +65,14 @@ function abortError(engine: OneShotEngine): Error {
   return Object.assign(new Error(`${engine} one-shot aborted`), { name: 'AbortError' })
 }
 
+/** A one-shot that gave no answer: what failed (`exited 3`, `timed out after 20000ms`, `error result`) and
+ *  how much stderr, never its text. The engine's stderr and its error result can echo the prompt (what the
+ *  person said, their agents' names), and this error reaches logs. */
+function oneShotFailure(engine: string, failure: string, stderr: string): Error {
+  const stderrBytes = Buffer.byteLength(stderr)
+  return Object.assign(new Error(`${engine} one-shot ${failure} · stderr=${stderrBytes}B`), { failure, stderrBytes })
+}
+
 function killGroup(child: ChildProcess, signal: NodeJS.Signals = 'SIGKILL'): void {
   if (child.pid == null || child.exitCode != null) return
   try { process.kill(-child.pid, signal) } catch {
@@ -164,7 +172,7 @@ class ClaudeWorker extends ProcessWorker {
       if (this.buffer.trim()) this.handleLine(this.buffer)
       if (!this.pending) return
       const text = (this.resultText || this.assistantParts.join('')).trim()
-      if (!text && code !== 0) this.fail(new Error(`claude one-shot exited ${code}: ${this.stderr.slice(0, 500)}`))
+      if (!text && code !== 0) this.fail(oneShotFailure('claude', `exited ${code}`, this.stderr))
       else this.complete(text)
     })
   }
@@ -177,7 +185,7 @@ class ClaudeWorker extends ProcessWorker {
     return new Promise((resolve, reject) => {
       const onAbort = (): void => { this.fail(abortError(this.engine)); this.dispose() }
       const timer = setTimeout(() => {
-        this.fail(new Error(`claude one-shot timed out after ${timeoutMs}ms`))
+        this.fail(oneShotFailure('claude', `timed out after ${timeoutMs}ms`, this.stderr))
         this.dispose()
       }, timeoutMs)
       this.pending = { resolve, reject, timer, signal: options.signal, onAbort }
@@ -286,7 +294,7 @@ class CodexWorker extends ProcessWorker {
     return new Promise((resolve, reject) => {
       const onAbort = (): void => { this.fail(abortError(this.engine)); this.dispose() }
       const timer = setTimeout(() => {
-        this.fail(new Error(`codex one-shot timed out after ${timeoutMs}ms`))
+        this.fail(oneShotFailure('codex', `timed out after ${timeoutMs}ms`, this.stderr))
         this.dispose()
       }, timeoutMs)
       this.pending = { resolve, reject, timer, signal: options.signal, onAbort }
@@ -303,7 +311,7 @@ class CodexWorker extends ProcessWorker {
     if (!this.pending) return
     const text = (await readFile(this.output, 'utf8').catch(() => '')).trim()
     await unlink(this.output).catch(() => {})
-    if (!text && code !== 0) this.fail(new Error(`codex one-shot exited ${code}: ${this.stderr.slice(0, 500)}`))
+    if (!text && code !== 0) this.fail(oneShotFailure('codex', `exited ${code}`, this.stderr))
     else this.complete(text)
   }
 
@@ -363,7 +371,7 @@ class CursorWorker extends ProcessWorker {
       if (this.buffer.trim()) this.handleLine(this.buffer)
       if (!this.pending) return
       const text = (this.resultText || this.assistantParts.join('')).trim()
-      if (!text && code !== 0) this.fail(new Error(`cursor one-shot exited ${code}: ${this.stderr.slice(0, 500)}`))
+      if (!text && code !== 0) this.fail(oneShotFailure('cursor', `exited ${code}`, this.stderr))
       else this.complete(text)
     })
   }
@@ -376,7 +384,7 @@ class CursorWorker extends ProcessWorker {
     return new Promise((resolve, reject) => {
       const onAbort = (): void => { this.fail(abortError(this.engine)); this.dispose() }
       const timer = setTimeout(() => {
-        this.fail(new Error(`cursor one-shot timed out after ${timeoutMs}ms`))
+        this.fail(oneShotFailure('cursor', `timed out after ${timeoutMs}ms`, this.stderr))
         this.dispose()
       }, timeoutMs)
       this.pending = { resolve, reject, timer, signal: options.signal, onAbort }
@@ -423,7 +431,7 @@ class CursorWorker extends ProcessWorker {
     if (evt.type !== 'result') return
     if (typeof evt.result === 'string') this.resultText = evt.result
     if (evt.is_error === true || evt.subtype === 'error') {
-      this.fail(new Error(`cursor one-shot failed: ${(this.resultText || this.stderr).slice(0, 500)}`))
+      this.fail(oneShotFailure('cursor', 'error result', this.stderr))
       return
     }
     this.complete((this.resultText || this.assistantParts.join('')).trim())
@@ -492,7 +500,7 @@ class OpencodeWorker extends ProcessWorker {
       if (this.buffer.trim()) this.handleLine(this.buffer)
       if (!this.pending) return
       const text = this.assistantParts.join('').trim()
-      if (!text && code !== 0) this.fail(new Error(`opencode one-shot exited ${code}: ${this.stderr.slice(0, 500)}`))
+      if (!text && code !== 0) this.fail(oneShotFailure('opencode', `exited ${code}`, this.stderr))
       else this.complete(text)
     })
   }
@@ -505,7 +513,7 @@ class OpencodeWorker extends ProcessWorker {
     return new Promise((resolve, reject) => {
       const onAbort = (): void => { this.fail(abortError(this.engine)); this.dispose() }
       const timer = setTimeout(() => {
-        this.fail(new Error(`opencode one-shot timed out after ${timeoutMs}ms`))
+        this.fail(oneShotFailure('opencode', `timed out after ${timeoutMs}ms`, this.stderr))
         this.dispose()
       }, timeoutMs)
       this.pending = { resolve, reject, timer, signal: options.signal, onAbort }
@@ -642,7 +650,7 @@ class KiloWorker extends ProcessWorker {
       if (this.buffer.trim()) this.handleLine(this.buffer)
       if (!this.pending) return
       const text = this.assistantParts.join('').trim()
-      if (!text && code !== 0) this.fail(new Error(`kilo one-shot exited ${code}: ${this.stderr.slice(0, 500)}`))
+      if (!text && code !== 0) this.fail(oneShotFailure('kilo', `exited ${code}`, this.stderr))
       else this.complete(text)
     })
   }
@@ -655,7 +663,7 @@ class KiloWorker extends ProcessWorker {
     return new Promise((resolve, reject) => {
       const onAbort = (): void => { this.fail(abortError(this.engine)); this.dispose() }
       const timer = setTimeout(() => {
-        this.fail(new Error(`kilo one-shot timed out after ${timeoutMs}ms`))
+        this.fail(oneShotFailure('kilo', `timed out after ${timeoutMs}ms`, this.stderr))
         this.dispose()
       }, timeoutMs)
       this.pending = { resolve, reject, timer, signal: options.signal, onAbort }
@@ -737,7 +745,7 @@ class PiWorker extends ProcessWorker {
     child.on('close', (code) => {
       if (!this.pending) return
       const text = this.stdout.trim()
-      if (!text && code !== 0) this.fail(new Error(`pi one-shot exited ${code}: ${this.stderr.slice(0, 500)}`))
+      if (!text && code !== 0) this.fail(oneShotFailure('pi', `exited ${code}`, this.stderr))
       else this.complete(text)
     })
   }
@@ -750,7 +758,7 @@ class PiWorker extends ProcessWorker {
     return new Promise((resolve, reject) => {
       const onAbort = (): void => { this.fail(abortError(this.engine)); this.dispose() }
       const timer = setTimeout(() => {
-        this.fail(new Error(`pi one-shot timed out after ${timeoutMs}ms`))
+        this.fail(oneShotFailure('pi', `timed out after ${timeoutMs}ms`, this.stderr))
         this.dispose()
       }, timeoutMs)
       this.pending = { resolve, reject, timer, signal: options.signal, onAbort }
@@ -815,7 +823,7 @@ class CommandCodeWorker extends ProcessWorker {
     child.on('close', (code) => {
       if (!this.pending) return
       const text = this.stdout.trim()
-      if (!text && code !== 0) this.fail(new Error(`commandcode one-shot exited ${code}: ${this.stderr.slice(0, 500)}`))
+      if (!text && code !== 0) this.fail(oneShotFailure('commandcode', `exited ${code}`, this.stderr))
       else this.complete(text)
     })
   }
@@ -828,7 +836,7 @@ class CommandCodeWorker extends ProcessWorker {
     return new Promise((resolve, reject) => {
       const onAbort = (): void => { this.fail(abortError(this.engine)); this.dispose() }
       const timer = setTimeout(() => {
-        this.fail(new Error(`commandcode one-shot timed out after ${timeoutMs}ms`))
+        this.fail(oneShotFailure('commandcode', `timed out after ${timeoutMs}ms`, this.stderr))
         this.dispose()
       }, timeoutMs)
       this.pending = { resolve, reject, timer, signal: options.signal, onAbort }
@@ -953,7 +961,7 @@ export async function runGrokOneShot(opts: OneShotOptions): Promise<OneShotResul
         kill()
       }
       const timer = setTimeout(() => {
-        finish(() => reject(new Error(`grok one-shot timed out after ${timeoutMs}ms`)))
+        finish(() => reject(oneShotFailure('grok', `timed out after ${timeoutMs}ms`, stderr)))
         kill()
       }, timeoutMs)
       opts.signal?.addEventListener('abort', onAbort)
@@ -963,7 +971,7 @@ export async function runGrokOneShot(opts: OneShotOptions): Promise<OneShotResul
       child.on('close', (code) => {
         const text = grokOutputText(stdout)
         finish(() => {
-          if (!text) reject(new Error(`grok one-shot exited ${code}: ${stderr.slice(0, 500)}`))
+          if (!text) reject(oneShotFailure('grok', `exited ${code}`, stderr))
           else resolve({ text, sessionId: null })
         })
       })

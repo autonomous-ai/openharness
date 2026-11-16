@@ -1,6 +1,9 @@
 //! What the menu shows and which screen is due, from the app's state.
 
-use crate::types::{AppState, AppUpdate, ClaudeStatus, CliState, Daemon, MenuAction, MenuItem, Screen};
+use crate::types::{
+    AppState, AppUpdate, ClaudeStatus, CliState, CodexStatus, Daemon, DialStatus, MenuAction, MenuItem, NotifyMode,
+    Screen,
+};
 
 /// The menu's first, disabled row: the first of these that applies.
 pub fn dial_line(state: &AppState) -> String {
@@ -50,11 +53,27 @@ pub fn menu(state: &AppState) -> Vec<MenuItem> {
         ]),
         None => {}
     }
+    match state.codex.as_ref().filter(|codex| codex_available(codex)) {
+        Some(codex) if codex.enabled => items
+            .extend([MenuItem::Text("Codex: On".into()), MenuItem::Action(MenuAction::CodexOff, "Turn off".into())]),
+        Some(_) => items
+            .extend([MenuItem::Text("Codex: Off".into()), MenuItem::Action(MenuAction::CodexOn, "Turn on…".into())]),
+        None => {}
+    }
     // The check is what the dial reports; the item carries the action its click does.
-    match sound_muted(state) {
+    match settable(state).and_then(|dial| dial.muted) {
         Some(false) => items.push(MenuItem::Check(MenuAction::SoundOff, "Sound".into(), true)),
         Some(true) => items.push(MenuItem::Check(MenuAction::SoundOn, "Sound".into(), false)),
         None => {}
+    }
+    if let Some(mode) = settable(state).and_then(|dial| dial.notify) {
+        items.push(MenuItem::Submenu(
+            "Notifications".into(),
+            vec![
+                MenuItem::Check(MenuAction::NotifyFull, "All".into(), mode == NotifyMode::Full),
+                MenuItem::Check(MenuAction::NotifyYou, "Needs you".into(), mode == NotifyMode::You),
+            ],
+        ));
     }
     match &state.app_update {
         // No version: the dial line's "Updating to X" is the dial's firmware.
@@ -71,7 +90,7 @@ pub fn menu(state: &AppState) -> Vec<MenuItem> {
     items
 }
 
-/// The screen the window should show next, in the order they chain: install, sign-in, Claude Code.
+/// The screen the window should show next, in the order they chain: install, sign-in, Claude Code, Codex.
 pub fn due(state: &AppState) -> Option<Screen> {
     if matches!(state.cli, CliState::Installing | CliState::InstallFailed) {
         return Some(Screen::Install);
@@ -80,10 +99,15 @@ pub fn due(state: &AppState) -> Option<Screen> {
         return Some(Screen::SignIn);
     }
     let claude_off = state.claude.as_ref().is_some_and(|claude| available(claude) && !claude.enabled);
-    (claude_off && !state.saved.asked_claude).then_some(Screen::Claude)
+    if claude_off && !state.saved.asked_claude {
+        return Some(Screen::Claude);
+    }
+    let codex_off = state.codex.as_ref().is_some_and(|codex| codex_available(codex) && !codex.enabled);
+    (codex_off && !state.saved.asked_codex).then_some(Screen::Codex)
 }
 
-/// The menu as one log line: its labels joined by ` | `, without separators.
+/// The menu as one log line: its labels joined by ` | `, without separators. A submenu is its label and its checked
+/// item's: `Notifications: All`.
 pub fn menu_log(items: &[MenuItem]) -> String {
     let labels: Vec<String> = items
         .iter()
@@ -92,18 +116,22 @@ pub fn menu_log(items: &[MenuItem]) -> String {
                 Some(label.clone())
             }
             MenuItem::Check(_, label, true) => Some(format!("{label} ✓")),
+            MenuItem::Submenu(label, choices) => choices.iter().find_map(|choice| match choice {
+                MenuItem::Check(_, chosen, true) => Some(format!("{label}: {chosen}")),
+                _ => None,
+            }),
             MenuItem::Separator => None,
         })
         .collect();
     labels.join(" | ")
 }
 
-/// The dial's sound, when there is one to change: an attached dial, not updating, on a running Harness.
-fn sound_muted(state: &AppState) -> Option<bool> {
+/// An attached dial on a running Harness, not updating: when Sound and Notifications can be changed.
+fn settable(state: &AppState) -> Option<&DialStatus> {
     if state.cli != CliState::Found || state.daemon != Daemon::Up {
         return None;
     }
-    state.dial.as_ref().filter(|dial| dial.attached && dial.updating.is_none()).and_then(|dial| dial.muted)
+    state.dial.as_ref().filter(|dial| dial.attached && dial.updating.is_none())
 }
 
 /// Claude Code can be turned on or off here.
@@ -111,13 +139,19 @@ fn available(claude: &ClaudeStatus) -> bool {
     claude.supported && claude.installed
 }
 
+/// Codex can be turned on or off here: the CLI can, and Codex is on this computer.
+fn codex_available(codex: &CodexStatus) -> bool {
+    codex.supported && codex.installed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::types::{
-        AppState, AppUpdate, ClaudeStatus, CliState, Daemon, DialStatus, MenuAction, MenuItem, Saved, Screen,
+        AppState, AppUpdate, ClaudeStatus, CliState, CodexStatus, Daemon, DialStatus, MenuAction, MenuItem, NotifyMode,
+        Saved, Screen,
     };
-    use MenuItem::{Action, Check, Separator, Text};
+    use MenuItem::{Action, Check, Separator, Submenu, Text};
 
     fn dial(attached: bool, fw: Option<&str>) -> DialStatus {
         DialStatus {
@@ -128,11 +162,26 @@ mod tests {
             updating: None,
             problem: None,
             muted: None,
+            notify: None,
         }
     }
 
     fn sound(muted: Option<bool>) -> DialStatus {
         DialStatus { muted, ..dial(true, Some("0.0.95")) }
+    }
+
+    fn notifying(mode: NotifyMode) -> DialStatus {
+        DialStatus { notify: Some(mode), ..sound(Some(false)) }
+    }
+
+    fn notifications(full: bool, you: bool) -> MenuItem {
+        Submenu(
+            "Notifications".into(),
+            vec![
+                Check(MenuAction::NotifyFull, "All".into(), full),
+                Check(MenuAction::NotifyYou, "Needs you".into(), you),
+            ],
+        )
     }
 
     fn state() -> AppState {
@@ -142,8 +191,16 @@ mod tests {
             dial: Some(dial(true, Some("0.0.95"))),
             signed_in: Some(true),
             claude: Some(ClaudeStatus { supported: true, installed: true, enabled: true, claude_version: None }),
+            codex: None,
             desktop_installed: true,
-            saved: Saved { version: 1, cli_seen: true, asked_sign_in: true, asked_claude: true, login_item: true },
+            saved: Saved {
+                version: 1,
+                cli_seen: true,
+                asked_sign_in: true,
+                asked_claude: true,
+                asked_codex: true,
+                login_item: true,
+            },
             app_update: AppUpdate::None,
         }
     }
@@ -250,6 +307,36 @@ mod tests {
         }
     }
 
+    fn codex(supported: bool, installed: bool, enabled: bool) -> Option<CodexStatus> {
+        Some(CodexStatus { supported, installed, enabled })
+    }
+
+    #[test]
+    fn the_codex_rows() {
+        let with = |codex| menu(&AppState { codex, dial: Some(sound(Some(false))), ..state() });
+        assert_eq!(
+            with(codex(true, true, true)),
+            vec![
+                text("Dial connected · 0.0.95"),
+                text("Signed in"),
+                text("Claude Code: On"),
+                act(MenuAction::ClaudeOff, "Turn off"),
+                text("Codex: On"),
+                act(MenuAction::CodexOff, "Turn off"),
+                Check(MenuAction::SoundOff, "Sound".into(), true),
+                Separator,
+                act(MenuAction::OpenHarness, "Open Harness"),
+                act(MenuAction::Quit, "Quit"),
+            ]
+        );
+        assert_eq!(with(codex(true, true, false))[4..6], [text("Codex: Off"), act(MenuAction::CodexOn, "Turn on…")]);
+        for codex in [codex(false, true, true), codex(true, false, true), None] {
+            let items = with(codex.clone());
+            assert!(!items.iter().any(|item| matches!(item, Text(label) if label.starts_with("Codex"))), "{codex:?}");
+            assert_eq!(items[4], Check(MenuAction::SoundOff, "Sound".into(), true), "{codex:?}");
+        }
+    }
+
     #[test]
     fn the_sound_row() {
         let on = Check(MenuAction::SoundOff, "Sound".into(), true);
@@ -313,6 +400,53 @@ mod tests {
     }
 
     #[test]
+    fn the_notifications_submenu() {
+        assert_eq!(
+            menu(&AppState { dial: Some(notifying(NotifyMode::Full)), ..state() }),
+            vec![
+                text("Dial connected · 0.0.95"),
+                text("Signed in"),
+                text("Claude Code: On"),
+                act(MenuAction::ClaudeOff, "Turn off"),
+                Check(MenuAction::SoundOff, "Sound".into(), true),
+                notifications(true, false),
+                Separator,
+                act(MenuAction::OpenHarness, "Open Harness"),
+                act(MenuAction::Quit, "Quit"),
+            ]
+        );
+        assert_eq!(
+            menu(&AppState { dial: Some(notifying(NotifyMode::You)), ..state() })[5],
+            notifications(false, true)
+        );
+        let silent = DialStatus { muted: None, ..notifying(NotifyMode::Full) };
+        assert_eq!(menu(&AppState { dial: Some(silent), ..state() })[4], notifications(true, false));
+    }
+
+    #[test]
+    fn the_notifications_submenu_is_absent_when_there_is_nothing_to_change() {
+        let full = || Some(notifying(NotifyMode::Full));
+        let mut absent = vec![
+            AppState { dial: None, ..state() },
+            AppState { dial: Some(DialStatus { notify: None, ..notifying(NotifyMode::Full) }), ..state() },
+            AppState { dial: Some(DialStatus { attached: false, ..notifying(NotifyMode::Full) }), ..state() },
+            AppState {
+                dial: Some(DialStatus { updating: Some("0.0.96".into()), ..notifying(NotifyMode::Full) }),
+                ..state()
+            },
+        ];
+        for daemon in [Daemon::Starting, Daemon::Stopped, Daemon::Updating] {
+            absent.push(AppState { daemon, dial: full(), ..state() });
+        }
+        for cli in [CliState::Removed, CliState::Installing, CliState::InstallFailed] {
+            absent.push(AppState { cli, dial: full(), ..state() });
+        }
+        for state in absent {
+            assert!(!menu(&state).iter().any(|item| matches!(item, Submenu(..))), "{state:?}");
+        }
+    }
+
+    #[test]
     fn open_harness_needs_the_desktop_app() {
         let items = menu(&AppState { desktop_installed: false, ..state() });
         assert_eq!(items[items.len() - 2..], [Separator, act(MenuAction::Quit, "Quit")]);
@@ -361,8 +495,27 @@ mod tests {
         }
         assert_eq!(due(&AppState { signed_in: Some(true), claude: None, ..fresh.clone() }), None);
 
-        assert_eq!(due(&AppState { saved: state().saved, ..fresh }), None);
+        assert_eq!(due(&AppState { saved: state().saved, ..fresh.clone() }), None);
         assert_eq!(due(&state()), None);
+
+        // Codex comes after Claude Code, on the same terms.
+        let codex_off = codex(true, true, false);
+        let asked_claude = Saved { asked_sign_in: true, asked_claude: true, asked_codex: false, ..not_asked };
+        let codex_fresh = AppState { signed_in: Some(true), codex: codex_off.clone(), saved: asked_claude, ..fresh };
+        assert_eq!(due(&codex_fresh), Some(Screen::Codex));
+        let claude_not_asked = Saved { asked_claude: false, ..asked_claude };
+        assert_eq!(due(&AppState { saved: claude_not_asked, ..codex_fresh.clone() }), Some(Screen::Claude));
+        let claude_enabled =
+            Some(ClaudeStatus { supported: true, installed: true, enabled: true, claude_version: None });
+        assert_eq!(
+            due(&AppState { saved: claude_not_asked, claude: claude_enabled, ..codex_fresh.clone() }),
+            Some(Screen::Codex)
+        );
+        for codex in [codex(true, true, true), codex(true, false, false), codex(false, true, false), None] {
+            assert_eq!(due(&AppState { codex: codex.clone(), ..codex_fresh.clone() }), None, "{codex:?}");
+        }
+        let asked_codex = Saved { asked_codex: true, ..asked_claude };
+        assert_eq!(due(&AppState { saved: asked_codex, ..codex_fresh }), None);
     }
 
     #[test]
@@ -378,6 +531,14 @@ mod tests {
         assert_eq!(
             menu_log(&menu(&AppState { dial: Some(sound(Some(true))), ..state() })),
             "Dial connected · 0.0.95 | Signed in | Claude Code: On | Turn off | Sound | Open Harness | Quit"
+        );
+        assert_eq!(
+            menu_log(&menu(&AppState { dial: Some(notifying(NotifyMode::Full)), ..state() })),
+            "Dial connected · 0.0.95 | Signed in | Claude Code: On | Turn off | Sound ✓ | Notifications: All | Open Harness | Quit"
+        );
+        assert_eq!(
+            menu_log(&menu(&AppState { dial: Some(notifying(NotifyMode::You)), ..state() })),
+            "Dial connected · 0.0.95 | Signed in | Claude Code: On | Turn off | Sound ✓ | Notifications: Needs you | Open Harness | Quit"
         );
     }
 }

@@ -14,11 +14,14 @@ const CONTRACT_PAIRS = [
   'claude.offer',
   'claude.working',
   'claude.failed',
+  'codex.offer',
+  'codex.working',
+  'codex.failed',
 ]
 
 describe('gallery', () => {
   it('the gallery draws every state in both themes', () => {
-    expect(STATES).toHaveLength(11)
+    expect(STATES).toHaveLength(14)
     expect(new Set(STATES.map(({ view }) => `${view.screen}.${view.phase}`))).toEqual(new Set(CONTRACT_PAIRS))
 
     const root = document.createElement('div')
