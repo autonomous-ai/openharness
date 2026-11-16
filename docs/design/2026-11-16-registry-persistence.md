@@ -1463,3 +1463,21 @@ fixed sleep, timer manipulation or mocked persistence implementation is used.
 The existing strict owner-change, ordinary nested-alias/deletion and uncertain
 publication controls remain unchanged. No test, typecheck, build, diagnostic or
 benchmark has run for this preparation; root owns RED and any runtime correction.
+
+Root reproduced the data loss at `cf1ecb1b7d321e73adbe51511b4869d62bd5dd7d`:
+the final durable marker was `peer-recovered-start`, losing `later-live-start`.
+The new case failed and ten controls passed (11.27 s,
+`core-registry-recovery-alias-red.log`). Detaching the recovered live owner from
+the locked peer image, then deep-capturing that owner for preparation, passed all
+eleven cases (6.49 s, `core-registry-recovery-alias-green.log`). TypeScript passed
+(`core-registry-recovery-alias-types.log`). Independent source review found no
+remaining live alias in that recovery path. Ordinary-save capture is unchanged.
+
+The prior `95c5ddf368` native ABBA measurement passed all 332 behavior checks and
+cleanup; its cost remains unaccepted. At 160 rows, twenty changed calls consumed
+552.4435 ms CPU before and 584.6105 ms after; unchanged calls consumed 114.256 ms
+and 171.0755 ms. The manifest is
+`64370284a47a87d8aac7f447f1ea943698c0fad07e0fefda85c80423a17897d1`.
+The preceding sandbox attempt failed before candidate samples because native
+uptime/process checks were denied; that failed receipt remains retained. Neither
+result is relabeled as measurement of this subsequent recovery correction.

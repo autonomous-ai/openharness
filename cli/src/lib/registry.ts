@@ -3237,7 +3237,8 @@ class Registry {
     }
     for (const id of affected) {
       const row = strictPersistedRow(latest.get(id))
-      if (row) selected.set(id, row)
+      // The recovered live owner must not share nested values with the locked peer image.
+      if (row) selected.set(id, structuredClone(row))
       else selected.delete(id)
     }
     if (!validatedRows([...selected.values()].map(persistedRow))) {
@@ -3371,7 +3372,8 @@ class Registry {
           this.reconcileUnconfirmed(latest, unconfirmed.affected)
           for (const id of unconfirmed.affected) {
             const row = this.agents.get(id)
-            if (row) currentRows.set(id, persistedRow(row) as unknown as Record<string, unknown>)
+            // Recovery exposed this row after the initial capture; preparation needs its own snapshot too.
+            if (row) currentRows.set(id, structuredClone(persistedRow(row)) as unknown as Record<string, unknown>)
             else currentRows.delete(id)
           }
           const revoked = mutationAgentId !== undefined && unconfirmed.affected.has(mutationAgentId)
