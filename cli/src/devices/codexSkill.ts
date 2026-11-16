@@ -10,7 +10,9 @@ import { dirname, join } from 'node:path'
 
 export const DIAL_SKILL_DESCRIPTION = 'The person has a Harness dial on their desk. Use it when you need them to do something you cannot: give information, act outside your reach (connect a VPN, sign in, plug in a device), or decide.'
 
-/** The description is quoted: its `: ` ends a plain YAML scalar, and Codex would skip the skill without a word. */
+/** The description is quoted: its `: ` ends a plain YAML scalar, and Codex would skip the skill without a word. Harness
+ *  knows its own file by this exact text (held()): an edit here must keep the text earlier releases wrote recognised as
+ *  Harness's, or every skill already installed reads as the person's: enable refuses it and disable leaves it. */
 export const DIAL_SKILL = `---
 name: dial
 description: ${JSON.stringify(DIAL_SKILL_DESCRIPTION)}
