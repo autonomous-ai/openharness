@@ -24,7 +24,7 @@ dial's sound off or on; the check follows what the dial reports, including a cha
 | Row | Shown |
 |---|---|
 | Dial line | unchanged |
-| **Sound** (check item) | only while the dial is attached, not updating, and reports its settings; checked when `muted` is false |
+| **Sound** (check item) | only while Harness runs and the dial is attached, not updating, and reports its settings; checked when `muted` is false |
 
 Placed after the Claude Code rows, before the separator. One native check item (Tauri `CheckMenuItem`), the macOS way
 to show an on/off menu setting: one row, its state in the check, the label never changes. The existing "Claude Code:
@@ -73,7 +73,7 @@ app click ──stdin {"muted":true}──▶ watch ──harness_device_setting
   `sound_off`); `MenuItem` gains `Check(MenuAction, String, bool)`. The Sound item carries the action its click does:
   `SoundOff` while checked, `SoundOn` while not.
 - `model.rs`: the Sound row as above.
-- `app.rs`: the menu action becomes `Effect::SetSound(on)`; `main.rs` writes `{"muted":<!on>}` to the running watch's
+- `app.rs`: the menu action becomes `Effect::SetSound(on)`; `runner.rs` writes `{"muted":<!on>}` to the running watch's
   stdin (`Watch::sound`, beside `front` and `tab`). Fixed text built in Rust; nothing from the webview.
 - `main.rs`: `native_menu` draws `MenuItem::Check` as a `CheckMenuItem`, enabled, with the menu id of its action.
   A native check item flips its own check when clicked; the app redraws the menu from its state right after a Sound
