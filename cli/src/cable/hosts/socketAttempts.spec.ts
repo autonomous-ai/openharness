@@ -155,6 +155,20 @@ describe('the attempts on another program\'s socket (docs/plans/2026-11-16-herdr
     expect(s.watchers.size).toBe(1)
   })
 
+  it('a second failure of one attempt replaces its retry: one timer, one open; a wait on the watch drops it', () => {
+    const s = setup(OLD)
+    s.attempts.start()
+    s.attempts.started()
+    s.attempts.failed('list', 'bad_answer')
+    s.attempts.failed('closed', 'ended')
+    expect(s.timers).toHaveLength(1)
+    s.run()
+    expect(s.opens()).toBe(2)
+    s.attempts.failed('closed', 'ended')
+    s.attempts.failed('closed', 'no_socket')
+    expect(s.timers).toEqual([])
+  })
+
   it('the wait goes back to 1 s only after it was listed for 60 s', () => {
     const s = setup(OLD)
     s.attempts.start()
