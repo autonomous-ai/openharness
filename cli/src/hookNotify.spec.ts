@@ -2257,8 +2257,9 @@ describe('hook notify: a session outside a pane', () => {
   /** HINTS as this platform's hook sends them: HC_TERMINAL_ID on macOS alone, the one platform the devices try Herdr's
    *  window on, though hc runs on Linux too (spec Q5). */
   const SENT = HINTS.filter((name) => name !== 'HC_TERMINAL_ID' || process.platform === 'darwin')
-  /** The names a session outside a pane can set, as many as the hook sends: runHook sets no TMUX_PANE without a pane. */
-  const panelessHints = SENT.filter((name) => name !== 'TMUX_PANE').slice(0, MAX_HINTS)
+  /** The names a session outside a pane can set, as many as the hook sends: runHook sets no TMUX_PANE without a pane, and
+   *  in a herdr pane the hook sends no hc address. */
+  const panelessHints = SENT.filter((name) => name !== 'TMUX_PANE' && name !== 'HC_TERMINAL_ID').slice(0, MAX_HINTS)
   /** The hint names unset, so the environment this test runs in sends none of its own. */
   const noHints = Object.fromEntries(HINTS.map((name) => [name, '']))
   const folder = (prefix: string): string => {
@@ -2361,12 +2362,13 @@ describe('hook notify: a session outside a pane', () => {
     expect(requests).toEqual([])
   })
 
+  // herdr's pane is the nearer host: the hc address beside it is left out.
   it('sends the first MAX_HINTS of the names set, in the list\'s order', async () => {
     const { port, requests } = await collect()
     const set = Object.fromEntries(HINTS.filter((name) => name !== 'TMUX_PANE').map((name, index) => [name, `hint-${index}`]))
     await runHook({ port, ...own, env: set, input: typed })
     expect(HINTS.length).toBeGreaterThan(MAX_HINTS)
-    expect(Object.keys(requests[0].body.hostHints as object)).toEqual(SENT.slice(0, MAX_HINTS))
+    expect(Object.keys(requests[0].body.hostHints as object)).toEqual(HINTS.filter((name) => name !== 'HC_TERMINAL_ID').slice(0, MAX_HINTS))
   })
 
   it('says how Claude Code was started, beside the app it runs in', async () => {
@@ -2605,13 +2607,32 @@ describe('hook notify: a session outside a pane', () => {
     expect(JSON.stringify(requests[0].body)).not.toMatch(/side/)
   })
 
-  // Left out before the cap counts it: a pane id never sent would cost the farthest hint its place.
-  it('a named herdr session\'s pane id takes none of the MAX_HINTS', async () => {
+  // Left out before the cap counts it: a pane id never sent would cost the farthest hint its place, and so would the hc
+  // address beside it.
+  it('a named herdr session\'s pane id, and the hc address beside it, take none of the MAX_HINTS', async () => {
     const { port, requests } = await collect()
     const set = Object.fromEntries(HINTS.filter((name) => name !== 'TMUX_PANE').map((name, index) => [name, `hint-${index}`]))
     await runHook({ port, env: { ...set, HERDR_SESSION: 'side' }, input: { hook_event_name: 'Stop', session_id: 'sess-1' } })
     expect(Object.keys(requests[0].body.hostHints as object))
-      .toEqual(SENT.filter((name) => name !== 'TMUX_PANE' && name !== 'HERDR_PANE_ID').slice(0, MAX_HINTS))
+      .toEqual(HINTS.filter((name) => !['TMUX_PANE', 'HERDR_PANE_ID', 'HC_TERMINAL_ID'].includes(name)).slice(0, MAX_HINTS))
+  })
+
+  // herdr started in an hc terminal keeps that terminal's HC_TERMINAL_ID, and is the nearer host. A named herdr session
+  // sends no HERDR_PANE_ID, so the address alone would read as Herdr's own terminal (hostDetect.ts inHerdr).
+  it.runIf(process.platform === 'darwin')('leaves out HC_TERMINAL_ID in a herdr pane, its session named or not', async () => {
+    const panes: Array<[Record<string, string>, Record<string, string>]> = [
+      [{ HERDR_PANE_ID: 'w1:p2' }, { TERM_PROGRAM: 'ghostty', HERDR_PANE_ID: 'w1:p2' }],
+      [{ HERDR_PANE_ID: 'w1:p2', HERDR_SESSION: 'side' }, { TERM_PROGRAM: 'ghostty' }],
+      [{ HERDR_SESSION: 'side' }, { TERM_PROGRAM: 'ghostty' }],
+    ]
+    for (const [herdr, sent] of panes) {
+      const { port, requests } = await collect()
+      await runHook({
+        port, env: { ...noHints, ...herdr, HC_TERMINAL_ID: 't7', TERM_PROGRAM: 'ghostty' },
+        input: { hook_event_name: 'Stop', session_id: 'sess-1' },
+      })
+      expect(requests[0].body.hostHints, JSON.stringify(herdr)).toEqual(sent)
+    }
   })
 
   // HC_TERMINAL_ID is Herdr Core's address of the terminal the agent runs in (t1, t2… per session): an id, no credential.
@@ -2642,20 +2663,21 @@ describe('hook notify: a session outside a pane', () => {
   })
 
   // Left out before the cap counts it: an address never sent would cost the farthest hint its place.
+  // No herdr pane in either: a herdr pane leaves the address out of its own.
   it.runIf(process.platform === 'darwin')('a named hc session\'s address takes none of the MAX_HINTS', async () => {
     const { port, requests } = await collect()
-    const set = Object.fromEntries(HINTS.filter((name) => name !== 'TMUX_PANE').map((name, index) => [name, `hint-${index}`]))
+    const set = Object.fromEntries(HINTS.filter((name) => name !== 'TMUX_PANE' && name !== 'HERDR_PANE_ID').map((name, index) => [name, `hint-${index}`]))
     await runHook({ port, env: { ...set, HC_SESSION: 'side' }, input: { hook_event_name: 'Stop', session_id: 'sess-1' } })
     expect(Object.keys(requests[0].body.hostHints as object))
-      .toEqual(HINTS.filter((name) => name !== 'TMUX_PANE' && name !== 'HC_TERMINAL_ID').slice(0, MAX_HINTS))
+      .toEqual(HINTS.filter((name) => !['TMUX_PANE', 'HERDR_PANE_ID', 'HC_TERMINAL_ID'].includes(name)).slice(0, MAX_HINTS))
   })
 
   it.runIf(process.platform !== 'darwin')('off macOS HC_TERMINAL_ID is left out, and takes none of the MAX_HINTS', async () => {
     const { port, requests } = await collect()
-    const set = Object.fromEntries(HINTS.filter((name) => name !== 'TMUX_PANE').map((name, index) => [name, `hint-${index}`]))
+    const set = Object.fromEntries(HINTS.filter((name) => name !== 'TMUX_PANE' && name !== 'HERDR_PANE_ID').map((name, index) => [name, `hint-${index}`]))
     await runHook({ port, env: set, input: { hook_event_name: 'Stop', session_id: 'sess-1' } })
     expect(Object.keys(requests[0].body.hostHints as object))
-      .toEqual(HINTS.filter((name) => name !== 'TMUX_PANE' && name !== 'HC_TERMINAL_ID').slice(0, MAX_HINTS))
+      .toEqual(HINTS.filter((name) => !['TMUX_PANE', 'HERDR_PANE_ID', 'HC_TERMINAL_ID'].includes(name)).slice(0, MAX_HINTS))
   })
 
   // The core reads 4096 bytes of a body at most (hookServer.ts): the transcript's path goes first, then the folder.
