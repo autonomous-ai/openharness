@@ -249,6 +249,45 @@ describe('harness hardware watch', () => {
     expect(run.printed).toEqual([])
     await stillRunning(run)
   })
+  it('a status with an id and a boolean muted prints muted last', async () => {
+    const run = watch()
+    await opened(run.socket)
+    connected(run.socket, ['dial-watch'])
+    dial(run.socket, { attached: true, id: 'usb-1', fw: '0.0.95', settings: { muted: false, brightness: 80 } })
+    expect(run.printed).toEqual(['{"attached":true,"fw":"0.0.95","muted":false}'])
+    await stillRunning(run)
+  })
+  it('only a change of muted prints again', async () => {
+    const run = watch()
+    await opened(run.socket)
+    connected(run.socket, ['dial-watch'])
+    const usb = { attached: true, id: 'usb-1', fw: '0.0.95', settings: { muted: false, brightness: 80 } }
+    dial(run.socket, usb)
+    dial(run.socket, { ...usb, settings: { muted: false, brightness: 20 } })
+    dial(run.socket, { ...usb, settings: { muted: true, brightness: 20 } })
+    expect(run.printed).toEqual([
+      '{"attached":true,"fw":"0.0.95","muted":false}',
+      '{"attached":true,"fw":"0.0.95","muted":true}',
+    ])
+    await stillRunning(run)
+  })
+  it('without an id, settings or a boolean muted the line is as before', async () => {
+    const run = watch()
+    await opened(run.socket)
+    connected(run.socket, ['dial-watch'])
+    const flat = { attached: true, fw: '0.0.95' }
+    for (const payload of [
+      { ...flat, settings: { muted: true } },
+      { ...flat, id: '', settings: { muted: true } },
+      { ...flat, id: 'usb-1' },
+      { ...flat, id: 'usb-1', settings: null },
+      { ...flat, id: 'usb-1', settings: { muted: 'no' } },
+      { ...flat, id: 'usb-1', settings: { brightness: 80 } },
+      { ...flat, devices: [{ id: 'usb-2', settings: { muted: true } }] },
+    ]) dial(run.socket, payload)
+    expect(run.printed).toEqual(['{"attached":true,"fw":"0.0.95"}'])
+    await stillRunning(run)
+  })
   it('exits 0 when stdin closes', async () => {
     const after = watch()
     expect(after.stdin.resume).toHaveBeenCalled()
