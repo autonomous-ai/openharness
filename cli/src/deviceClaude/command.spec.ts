@@ -320,6 +320,17 @@ describe('the dial skill', () => {
     expect(answers(dataDir)).toEqual({ claude: false, codex: false })
   })
 
+  it('an enable whose setting cannot be saved makes nothing', async () => {
+    for (const engine of ['claude', 'codex'] as const) {
+      const dataDir = folder()
+      readOnly(dataDir)
+      const codexHome = join(folder(), 'codex')
+      expect(await device([engine, 'enable'], { dataDir, codexHome }), engine).toEqual({ code: 1, out: [], err: ['Could not save the dial setting.'] })
+      expect(existsSync(codexHome), engine).toBe(false)
+      expect(readdirSync(claudeHome), engine).toEqual(['settings.json'])
+    }
+  })
+
   it('an enable into a home no record could hold writes no skill', async () => {
     const dataDir = folder()
     // U+0085 is a control character the record refuses: written, the skill would be one a Turn off never finds.
