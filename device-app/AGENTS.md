@@ -1,8 +1,8 @@
 # Harness Device
 
 A menu-bar app for the round dial, for people who do not use the Harness desktop app. It installs the `harness` CLI,
-keeps the daemon running, shows the dial's state in its menu, and offers sign-in and Claude Code once. Rust and Tauri 2
-in `src-tauri/`; the window's three screens are plain TypeScript in `ui/`.
+keeps the daemon running, shows the dial's state in its menu, and offers sign-in, Claude Code and Codex once. Rust and
+Tauri 2 in `src-tauri/`; the window's four screens are plain TypeScript in `ui/`.
 
 ## Toolchain
 
