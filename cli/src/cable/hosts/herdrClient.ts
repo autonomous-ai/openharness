@@ -91,7 +91,8 @@ const answerOf = (body: Record<string, unknown>, id: string): HerdrAnswer => {
 /**
  * One connection that writes `out` once connected, and tells each line that comes back, in order, until the socket is
  * destroyed. `end` is told why it ended: a line past MAX_LINE_BYTES as soon as it is past, before the rest is read; a
- * connection that never opened; one that closed. Unref'd: a herdr connection never keeps the devices process up.
+ * connection that never opened; one that closed. Unref'd, as each deadline is: a herdr connection never keeps the
+ * devices process up.
  */
 function connect(path: string, out: string, line: (text: string) => void, end: (fault: HerdrFault) => void): Socket {
   let opened = false
@@ -149,6 +150,7 @@ export function createHerdrClient(deps: HerdrClientDeps): HerdrClient {
       resolve(answer)
     }
     const deadline = setTimeout(() => finish({ ok: false, code: 'timeout' }), RUN_TIMEOUT_MS)
+    deadline.unref()
     const socket = connect(deps.socketPath, `${JSON.stringify({ id, method, params })}\n`, (text) => {
       const body = parse(text)
       finish(body ? answerOf(body, id) : { ok: false, code: 'bad_json' })
@@ -175,6 +177,7 @@ export function createHerdrClient(deps: HerdrClientDeps): HerdrClient {
       return handle
     }
     deadline = setTimeout(() => end('timeout'), RUN_TIMEOUT_MS)
+    deadline.unref()
     const id = randomUUID()
     const out = `${JSON.stringify({ id, method: 'events.subscribe', params: { subscriptions: entries } })}\n`
     socket = connect(deps.socketPath, out, (text) => {
