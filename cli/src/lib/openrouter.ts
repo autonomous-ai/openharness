@@ -8,8 +8,8 @@
  * Both jobs are a couple of hundred tokens of text condensation, so the answer is not "spawn a different
  * agent" but "make the request ourselves": no process, no pool slot, no vendor login, one HTTPS call.
  *
- * The key never leaves this module except in an Authorization header to openrouter.ai, and is redacted
- * from every message this module can produce.
+ * The key never leaves this module except in an Authorization header to openrouter.ai: what this module logs
+ * is names, statuses and short tokens, never text that could carry it.
  */
 
 import { readFile } from 'node:fs/promises'
@@ -33,11 +33,6 @@ const DEFAULT_MAX_TOKENS = 512
 /** `ori login` writes { createdAt, key: 'sk-or-…', userId }. */
 interface OriCredentials {
   key?: unknown
-}
-
-/** Strip anything that looks like a key from text that may be logged. */
-export function redactKeys(text: string): string {
-  return text.replace(/sk-[A-Za-z0-9_-]{8,}/g, 'sk-…')
 }
 
 /**
@@ -147,7 +142,12 @@ export async function openRouterComplete(options: OpenRouterCompletionOptions): 
     return text || null
   } catch (err) {
     if (options.signal?.aborted) throw err   // the caller cancelled: don't paper over it
-    console.warn(`[openrouter] ${options.model} call failed: ${redactKeys(err instanceof Error ? err.message : String(err))}`)
+    // By name and code, never the message: V8's JSON.parse error quotes a window of the body, and a completion's
+    // body can repeat the person's spoken words. fetch's own failure is the constant "fetch failed", its cause's
+    // code (ECONNRESET, ENOTFOUND) is what says why.
+    const name = err instanceof Error ? errorToken(err.name) : null
+    const code = errorToken((err as { cause?: { code?: unknown } } | null)?.cause?.code)
+    console.warn(`[openrouter] ${options.model} call failed: ${name ?? 'error'}${code ? ` · code=${code}` : ''}`)
     return null
   } finally {
     clearTimeout(timer)

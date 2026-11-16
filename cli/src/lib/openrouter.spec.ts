@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { openRouterComplete, redactKeys, resolveOpenRouterKey } from './openrouter.js'
+import { openRouterComplete, resolveOpenRouterKey } from './openrouter.js'
 
 const KEY = 'sk-or-v1-file-key'
 const originalPath = process.env.ORI_CREDENTIALS_PATH
@@ -146,12 +146,5 @@ describe('openRouterComplete', () => {
       return Promise.reject(Object.assign(new Error('aborted'), { name: 'AbortError' }))
     }))
     await expect(openRouterComplete({ ...options, signal: controller.signal })).rejects.toThrow('aborted')
-  })
-})
-
-describe('redactKeys', () => {
-  it('keeps a key out of anything that can be logged', () => {
-    expect(redactKeys(`bad request for ${KEY}`)).toBe('bad request for sk-…')
-    expect(redactKeys('nothing secret here')).toBe('nothing secret here')
   })
 })
