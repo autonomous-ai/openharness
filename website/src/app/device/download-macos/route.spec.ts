@@ -12,6 +12,8 @@ function manifest(body: unknown): ReturnType<typeof vi.fn<typeof fetch>> {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
 });
@@ -25,7 +27,7 @@ describe("GET /device/download-macos", () => {
     expect(res.status).toBe(302);
     expect(res.headers.get("Location")).toBe(CDN_DMG);
     expect(res.headers.get("Cache-Control")).toBe("no-store, max-age=0");
-    expect(fetchMock).toHaveBeenCalledWith(MANIFEST, { cache: "no-store" });
+    expect(fetchMock).toHaveBeenCalledWith(MANIFEST, expect.objectContaining({ cache: "no-store" }));
   });
 
   it("also redirects to the bucket's own address", async () => {
@@ -54,6 +56,31 @@ describe("GET /device/download-macos", () => {
 
     expect(res.status).toBe(503);
     expect(await res.text()).toMatch(/\(manifest unreachable\)\.\n$/);
+  });
+
+  // A bucket that never answers must not hold the visitor's request open.
+  it("reports 503 when the manifest does not answer within 10 s", async () => {
+    vi.useFakeTimers();
+    // AbortSignal.timeout runs on a clock the fake timers do not reach: the same signal, on the fake clock.
+    vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
+      const timeout = new AbortController();
+      setTimeout(() => timeout.abort(new DOMException("The operation timed out.", "TimeoutError")), ms);
+      return timeout.signal;
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(
+        (_url, init) =>
+          new Promise((_resolve, reject) => init?.signal?.addEventListener("abort", () => reject(init.signal?.reason))),
+      ),
+    );
+    let res: Response | undefined;
+    void GET().then((answer) => (res = answer));
+
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(res?.status).toBe(503);
+    expect(await res?.text()).toMatch(/\(manifest unreachable\)\.\n$/);
   });
 
   // The manifest is input: a tampered one must not turn this link into someone else's binary, Desktop's,
@@ -99,6 +126,6 @@ describe("GET /device/download-macos", () => {
 
     await freshGET();
 
-    expect(fetchMock).toHaveBeenCalledWith(MANIFEST, { cache: "no-store" });
+    expect(fetchMock).toHaveBeenCalledWith(MANIFEST, expect.objectContaining({ cache: "no-store" }));
   });
 });
