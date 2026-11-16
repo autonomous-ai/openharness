@@ -14,7 +14,7 @@ import type { StoppedAgentStore } from '../../lib/stoppedAgents.js'
 import { AgentStopError, createStopAgentService, type StopAgentServiceDeps } from '../../lib/stopAgentService.js'
 import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
 
-import { WORKSPACES_OFF, type AgentBrowserPort, type BrowserSwitch, type WorkspacesPort } from '../api.js'
+import { agentView, WORKSPACES_OFF, type AgentBrowserPort, type BrowserSwitch, type WorkspacesPort } from '../api.js'
 import type { ResumeAgent } from './launches.js'
 import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
 
@@ -181,7 +181,7 @@ export function createAgentBrowserLifecycle(
   const running = new Set<string>()
   const attached = (session: RegisteredSession): void => {
     if (session.browser) running.add(session.agentId)
-    browser()?.attached(session)
+    browser()?.attached(agentView(session))
   }
   const ended = (agentId: string): void => {
     if (running.delete(agentId)) browser()?.stopped(agentId)
@@ -216,7 +216,7 @@ export function createAgentBrowserLifecycle(
      *  own, and [from] keeps its flag and its logins. No flag changes here. */
     taken(from: string, to: RegisteredSession, on: boolean): void {
       if (to.guest || to.browser) return
-      browser()?.moved(from, to, on)
+      browser()?.moved(from, agentView(to), on)
     },
     /** The agent browser moved [from]'s entry to [to], and [from]'s Browser was on: the flag follows it. */
     move(from: string, to: string): BrowserSwitch {

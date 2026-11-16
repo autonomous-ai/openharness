@@ -3,6 +3,13 @@ import { projectDisplayName, type RegisteredSession } from '../lib/registry.js'
 import { AGENT_BROWSER_FALLBACKS, AGENT_BROWSER_REQUESTS, mayOpenBrowser, CLOUD_DOWN, CLOUD_FALLBACKS, CONNECTOR_VAULT_OFF, CONVERSATIONS_OFF, ACCOUNT_BACKEND_OFF, accountIdentity, AGENT_ACTIONS_OFF, AGENT_CLEANUP_FALLBACKS, createCoreApi, DAEMON_UNKNOWN, DELIVERIES_OFF, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, GATEWAY_REQUESTS, LANE_OFF, MACHINE_ADDON_REQUESTS, PAIR_WAIT_MS, SERVICE_HTTP_ROUTES, SERVICE_WS_FRAMES, WIFI_REQUESTS, LONG_ANSWERS, MODELS_OFF, STORE_OFF, MODELS_REQUESTS, MONITOR_OFF, OBSERVER_KEY_OFF, ORCHESTRATOR_FALLBACKS, RECAPS_FALLBACKS, resolveAgent, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARING_FALLBACKS, MESSAGES_FALLBACKS, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, TURN_DELIVERERS, WIFI_FALLBACKS, WIFI_OFF, WORKSPACES_FALLBACKS, WORKSPACES_OFF, WORKSPACES_UNAVAILABLE, type CoreApiDeps } from './api.js'
 import { FAIL, readFallback } from './serviceHost.js'
 import { HACHI_ID } from '../dsh/builtinIds.js'
+import { answerAgentQuery } from './agentQueries.js'
+import { shownAgents } from './experimentQueries.js'
+import { createDevicesLink } from './devicesLink.js'
+import { createWorkspacesLink } from './workspacesLink.js'
+import { createViewersLink } from './viewersLink.js'
+import { createAgentBrowserLink } from './agentBrowserLink.js'
+import { agentsIn, processCoreApi } from '../services/processCoreApi.js'
 
 const row = (agentId: string) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: '/work/app' }) as RegisteredSession
 
@@ -157,6 +164,78 @@ describe('the core API services stand on', () => {
       log: vi.fn(),
     })
 
+  it.each(['credential', 'null', 'absent'] as const)('keeps %s launch custody out of every service agent read', (kind) => {
+    const override = { networkId: 'fixture', networkName: 'Fixture', baseUrl: 'https://fixture.invalid/v1', apiKey: 'synthetic-agent-view-canary' }
+    const live = row('live'), stopped = row('stopped'), cloud = row('cloud')
+    for (const session of [live, stopped, cloud]) {
+      if (kind === 'credential') session.gridLaunch = override
+      else if (kind === 'null') session.gridLaunch = null
+    }
+    const before = structuredClone([live, stopped, cloud])
+    const deps = coreDeps()
+    deps.registry.list = () => [live]
+    deps.registry.advertised = () => [live]
+    deps.registry.byAgent = id => id === live.agentId ? live : undefined
+    deps.registry.resolve = id => id === live.sessionId ? live : undefined
+    deps.stoppedAgents.list = () => [stopped]
+    const core = createCoreApi({ ...deps, cloudRows: () => [cloud] })
+    const views = [...core.agents.all(), ...core.agents.live(), ...core.agents.advertised(),
+      core.agents.byAgent('live')!, core.agents.resolve('s-live')!, ...core.agents.cloud!()]
+    expect(views.map(session => session.agentId)).toEqual(['live', 'stopped', 'live', 'live', 'live', 'live', 'cloud'])
+    for (const session of views) {
+      expect(Object.hasOwn(session, 'gridLaunch')).toBe(false)
+      expect(session).toEqual(row(session.agentId))
+      expect([live, stopped, cloud].includes(session)).toBe(false)
+    }
+    expect([live, stopped, cloud]).toEqual(before)
+    if (kind === 'credential') expect(live.gridLaunch).toBe(override)
+    // Even a view taken before a key is assigned must not become a secret-bearing alias later.
+    for (const session of [live, stopped, cloud]) session.gridLaunch = override
+    expect(JSON.stringify(views)).not.toContain(override.apiKey)
+    expect(views.every(session => !Object.hasOwn(session, 'gridLaunch'))).toBe(true)
+    expect(core.agents.byAgent('missing')).toBeUndefined()
+    expect(core.agents.resolve('missing')).toBeUndefined()
+  })
+
+  it('sends metadata without launch credentials through every agent-list service dispatch', async () => {
+    const override = { networkId: 'fixture', networkName: 'Fixture', baseUrl: 'https://fixture.invalid/v1', apiKey: 'synthetic-agent-dispatch-canary' }
+    const live: RegisteredSession = { ...row('live'), dsh: 'fixture', browser: true, gridLaunch: override }
+    const stopped = { ...row('stopped'), gridLaunch: override }
+    const deps = coreDeps()
+    deps.registry.list = () => [live]
+    deps.registry.advertised = () => [live]
+    deps.stoppedAgents.list = () => [stopped]
+    const core = createCoreApi(deps)
+    const replies = await Promise.all(['agents', 'live', 'advertised'].map(query => answerAgentQuery(core, query)))
+    replies.push(shownAgents(core))
+    const devices = createDevicesLink({ core, notify: () => true, call: async () => ({}), state: () => ({
+      desk: [], foreground: false, swarms: null, unread: [], focus: { voice: null, form: null }, engines: [], commanders: false,
+    }) })
+    replies.push(await devices.answer('view', {}))
+    const workspaces = createWorkspacesLink(core, frame => { replies.push(frame.payload ?? {}); return true }, async () => ({}), () => {})
+    workspaces.port.nameBranches()
+    replies.push(createViewersLink(core, () => true).answer('agents', {}))
+    const browserEvents: unknown[] = []
+    const browser = createAgentBrowserLink({ core, notify: frame => { browserEvents.push(frame); return true },
+      notifyBinary: () => true, want: () => {}, streamsGone: () => {},
+    })
+    browser.connected()
+    expect(browserEvents).toHaveLength(1)
+    for (const reply of replies) {
+      const agents = agentsIn(reply)
+      expect(agents?.length).toBeGreaterThan(0)
+      expect(agents?.every(session => !Object.hasOwn(session, 'gridLaunch'))).toBe(true)
+      // This reader shape is unchanged from the oldest supported source (2026-10-16).
+      const service = processCoreApi('/data', 'search', { live: () => agents ?? [] })
+      expect(service.agents.byAgent('live')).toMatchObject({ agentId: 'live', sessionId: 's-live', dsh: 'fixture' })
+    }
+    const sent = JSON.stringify([replies, browserEvents])
+    expect(sent).not.toContain('gridLaunch')
+    expect(sent).not.toContain(override.apiKey)
+    expect(live.gridLaunch).toBe(override)
+    expect(stopped.gridLaunch).toBe(override)
+  })
+
   it('lists every agent, live then stopped, and names them as the apps do', async () => {
     const deps = coreDeps()
     const core = createCoreApi(deps)
@@ -169,7 +248,7 @@ describe('the core API services stand on', () => {
     expect(createCoreApi({ ...deps, cloud }).cloud).toBe(cloud)
     expect(core.agents.cloud).toBeUndefined()
     const rows = [{ agentId: 'cloud_1' }] as RegisteredSession[]
-    expect(createCoreApi({ ...deps, cloudRows: () => rows }).agents.cloud!()).toBe(rows)
+    expect(createCoreApi({ ...deps, cloudRows: () => rows }).agents.cloud!()).toEqual(rows)
     expect(core.dataDir).toBe('/data')
     expect(await core.terminals.open({ argv: ['/bin/zsh'], cwd: '/work' })).toEqual({ ok: false, error: 'SERVICE_UNAVAILABLE' })
     const terminals = { ...TERMINALS_OFF, open: vi.fn(async () => ({ ok: true as const, agentId: 'shell' })), watch: TERMINALS_OFF.watch }
