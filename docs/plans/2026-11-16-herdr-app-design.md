@@ -254,3 +254,93 @@ Answered after the draft plan (PM for Diego, 2026-11-16):
 - **Q6.** The wait, retries and stale rule live in one file both sources use.
 - **Q7.** Words to an errored agent are refused with `<name> did not answer.`, counted `no-answer`. No new copy.
 - **Q8.** A socket younger than 2 s gets one retry after 1 s before it counts as stale, with a test.
+
+## Task 1 findings (2026-11-16, Herdr Core 0.1.21, private cores on this Mac)
+
+Two private sessions ran one after the other, each `harness-<random>`, through one wrapper whose environment was built
+from nothing: its own `HOME` and `XDG_STATE_HOME`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME` and
+`XDG_RUNTIME_DIR` in a scratch folder under `/tmp`, and a minimal `PATH`. The scratch scripts spoke to the private
+sockets only. Diego's own core, its holder, Herdr.app and Herdr.app's `herdr-core connect` ran with the same pids and
+parents from before the first start to after the last stop. Nothing was left in `/tmp`, `~/Library/LaunchAgents` or
+`launchctl list`. The lines in `cli/src/testing/fakeHc.ts` are the recorded ones, with folders read `/work/hh`, the core
+`core`, the session `harness-test`, and fixed pids, times and ids.
+
+**Assumptions:** A2, A3, A4, A5, A7, A8 and A9 hold, with the details below. **A1 does not hold:** `XDG_RUNTIME_DIR`
+comes before the state folder (F1). **A6 does not hold as written:** the launchd label names the launching process, not
+the session, and is gone before the stop (F2). The orchestrator's decision B took its place, and B's checks held.
+
+- **F1 The socket.**
+  - With `HC_SOCKET` (absolute): the socket is there, its holder's beside it (`<name>.holder.<hex>.sock`). The state
+    folder is still `<XDG_STATE_HOME>/herdr-core/<HC_SESSION>/` (`core.json`, `core.log`, `terminals.json`, `docs.json`,
+    `holder.log`).
+  - With no `HC_SOCKET` and `XDG_RUNTIME_DIR` set: `<XDG_RUNTIME_DIR>/herdr-core/<HC_SESSION>.sock`, and its holder's
+    beside it, not in the state folder. hc's own message names the rule: "XDG_RUNTIME_DIR or HC_SOCKET differs from
+    where the core started; set HC_SOCKET to the first path".
+  - With neither: not tried (the wrapper sets `XDG_RUNTIME_DIR`, a binding rule). Diego's default session, started by
+    launchd with no `XDG_RUNTIME_DIR`, has its socket and its holder's in `~/.local/state/herdr-core/default/` (the
+    read-only look above, and its holder's command line): the plan's rule.
+  - So the rule is `HC_SOCKET`; else `<XDG_RUNTIME_DIR>/herdr-core/<session>.sock` when `XDG_RUNTIME_DIR` is set; else
+    `<XDG_STATE_HOME or ~/.local/state>/herdr-core/<session>/<session>.sock`. A relative `XDG_RUNTIME_DIR` was not
+    tried. Task 7's socket rule waits for the plan's update.
+  - The socket is `srwxr-xr-x`, owned by this user.
+- **F2 Start and stop.**
+  - **A (`HC_LAUNCHD_DIRECT=1`) did not hold.** The core still ran as `herdr-core --hc-launchd
+    /tmp/hc-launchd-<launcher pid>-<ns>-<hex>/ready` with parent pid 1, not as a child of the wrapper.
+  - **B held** (hc's own start). `hc server start` returns at once (`{core, holders: [], pid, version, …}`). While it
+    starts, `launchctl list` shows `dev.herdr.core.<launcher pid>.<ns time>` for a moment: a one-shot job named after
+    the launching process, never the session, which hc boots out as soon as the core detaches. The core then runs with
+    parent pid 1. Its holder (`herdr-core hold --socket <socket folder>/<name>.holder.<hex>.sock`) is the core's child,
+    started with the first terminal. `hc server stop` (`{"stopped":true}`) ended the core and its holder and removed
+    both sockets within a second, and `/tmp/hc-launchd-*` was gone.
+  - B's checks held around every start and stop: no `dev.herdr.core.*` label before or after; the private pids and
+    socket gone after the private stop; every herdr process that ran before the spike unchanged.
+  - Neither `hc --help` nor `hc server start --help` names a start in the foreground. **For Task 11:** B, with B's
+    checks around each start and stop, is the start the e2e may use. A core as a direct child is not on offer.
+- **F3 The agent's variables**, read by the fake agent from its own environment, these three only:
+  - in a session started with `HC_SOCKET`: `HC_TERMINAL_ID=t1`, `HC_SESSION=harness-test`, `HC_SOCKET=<that socket>`;
+  - in one started without: `HC_TERMINAL_ID=t1`, `HC_SESSION=harness-test`, and no `HC_SOCKET`.
+  - A default session's terminal was not looked at (it would be Diego's), so whether it has `HC_SESSION=default` or none
+    is not known: the hook reads both as the default session. Addresses start again at `t1` in each session.
+- **F4 `hello`.** `generation: 1`, or none, answers `{core: {id, name}, features, framed: false, generation: 1,
+  keeps_running_after_logout, login_session: {gui, id, user}, logout_linger_user, methods, version}`. `generation: 2`
+  answers code -32000, `data.kind` `unsupported_generation`. A request on a connection that sent no `hello` is answered
+  (A3). A connection takes several requests, answered in order under their ids, and stays open until the client ends it.
+  Every answer and notification writes its keys sorted, at every depth. An unknown method is -32601 `unknown_method`; a
+  line that is not JSON is -32700 `parse_error` with `id: null`.
+- **F5 Notifications.** `events.subscribe {}` answers `{channel: null, seq, terminals}`, whole terminals. Then:
+  - `{"method":"event","params":{"data","seq","terminal","type"}}`. The kinds seen, and what `data` carries:
+    - `status`: `{records, reported, status}`, `status` being `{app, state}`, or `null` when the program exits. One
+      line for each report, one that repeats the last word too.
+    - `turn`: `{state, turn}`, after a `status` that leaves `working` (for blocked, done or idle).
+    - `foreground`: `{argv, cwd, name, pid}`, once the foreground is known (just after a start) and when it changes.
+      This kind is not in the schema's list.
+    - `created`: the whole terminal, with no `foreground` yet; a `foreground` event follows.
+    - `labels`: the whole label set. `title`: `{title}`. `keep`: `{keep}`.
+    - `finished`: `{exit_code, finished_ms, reason, signal}` (`exited` with code 0; `killed` with signal 1 and no code).
+    - `removed`: `{}`.
+    - `doc`: `{name, version}`, with no `terminal`. **The document is not in it**, at 200 KiB as at a few bytes: hc's
+      longest lines are the snapshots, not docs.
+  - `heartbeat`: `{"params":{"seq"}}`, the last event's seq, 15 s after the subscription started.
+  - `missed`: one line, `{"params":{"seq","terminals"}}`, with the fresh snapshot in it; the events after it count on
+    from its seq. A subscriber that read nothing for 5 s while the agent made 20,000 reports got 479 events, then
+    `missed` (seq 30,040), then events from 30,041.
+  - Each event arrived within a few milliseconds of its change.
+  - A terminal's `foreground.cwd` is the folder as the OS resolves it (`/private/tmp/…` for `/tmp/…`). `foreground`
+    is absent, not null, before it is known and once the program has ended.
+- **F6 `terminal.send`.** To the idle agent with `if: "idle"`: `{started: false, status: "idle", turn}` after 5.2 s
+  (hc's ~3 s of quiet, then a wait to see it go working, which the fake agent never does), and the text arrived as one
+  submitted line. To the done agent with no `if`: `{started: false, status: "done", turn}` after 5.2 s, and it arrived.
+  To the working agent with `if: "idle"`: `status_mismatch` at once. To the blocked agent with no `if`: `blocked` at
+  once. To a removed terminal: `not_found`. To a finished one: `finished`. `terminal.get` of an unknown address:
+  `not_found`.
+- **F7 The status report, and the exit.** hc reads `ESC ] 7501 ; state=<word>:app=<app> ESC \` (or BEL at the end): the
+  fields split by `:`. Fields split by `;` are not read, an `app` with a `;` in it is dropped (`{state}` alone), and a
+  report with no `app` gives `{state}`. The program run directly kept its status for its whole run (A9). When it
+  exited came `status` with `null`, then `finished`; `terminal.get` then says `state: finished`, `status: null`,
+  `reason: exited`, `exit_code: 0`, its `turn` kept, and no `foreground`. `turn` went up each time the status left
+  `working`.
+- **F8 Not recorded, and assumed in the fake.** `size` (no plain request resizes a terminal; a viewer's attach does);
+  `lost` and `restarted` (they need a holder lost or a core restart); a request on a subscription's connection (the fake
+  answers nothing); a JSON line that is no request (answered as an unknown method); which of `blocked` and
+  `status_mismatch` comes first for a blocked terminal sent `if` (`blocked`); a turn for a program that ends while
+  working (none); a default session's terminal environment.
