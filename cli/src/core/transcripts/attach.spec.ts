@@ -232,7 +232,7 @@ it.each(['same', 'repaired'] as const)('composes discovery, retry and inline att
     announceSession: vi.fn(), stoppedAgents: { save: vi.fn() }, syncRecapPool: vi.fn(), followsLive: () => false,
   } as unknown as BindDeps)
   const discover = createDiscoveryHandlers({ registry, bindObservedAgent: bind.bindObservedAgent,
-    attachSession: run.attach.attachSession, announceSession: vi.fn(), syncRecapPool: vi.fn(),
+    attachSession: run.attach.attachSession, announceSession: vi.fn(), syncRecapPool: vi.fn(), attach: vi.fn(), taken: vi.fn(),
     terminals: { backendFor: vi.fn(() => backend) },
   } as unknown as DiscoveryDeps)
   const seen = { engine: 'codex', processIdentity, args: 'codex', runtimes: [runtime], primaryRuntimeKey: 'tmux:%0' } as DiscoveredTerminalAgent

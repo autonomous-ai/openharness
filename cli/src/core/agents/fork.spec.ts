@@ -9,7 +9,7 @@ import { enginePathOverride } from '../../lib/engineBin.js'
 import { windowsAfterExit } from '../../lib/windows/engineStart.js'
 import { buildEngineLaunchArgv, engineLaunchEnv, refusePermissionFlagIfUnsupported, supportsNamedAgent } from '../../lib/engineLaunch.js'
 import { planFork } from '../../lib/forkAgent.js'
-import { prepareInstructionWrites } from '../../scm/scmProjects.js'
+import { prepareInstructionWrites } from '../../scm/launch.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { createAgentForker, type ForkAgentDeps } from './fork.js'
 import type { NativeLaunch } from '../../engines/nativeLaunch.js'
@@ -39,8 +39,8 @@ vi.mock('../../lib/engineLaunch.js', async (real) => ({
   refusePermissionFlagIfUnsupported: vi.fn(async () => null),
   supportsNamedAgent: vi.fn(() => true),
 }))
-vi.mock('../../scm/scmProjects.js', async (real) => {
-  const actual = await real<typeof import('../../scm/scmProjects.js')>()
+vi.mock('../../scm/launch.js', async (real) => {
+  const actual = await real<typeof import('../../scm/launch.js')>()
   return { ...actual, prepareInstructionWrites: vi.fn(actual.prepareInstructionWrites) }
 })
 vi.mock('../../engines/kit/notifyHooks.js', async (real) => ({ ...await real<object>(), missingHookScript: vi.fn(() => null) }))
@@ -71,7 +71,7 @@ function setup(row: RegisteredSession | null = source(), over: Partial<ForkAgent
     pendingForkInherit: new Map(),
     watchNewPane: vi.fn(async () => {}),
     announceSession: vi.fn(),
-    attachDsh: vi.fn(),
+    attach: vi.fn(),
     prepareApiTools: vi.fn(),
     // What a restart or a resume relaunches the row with (launch.ts): a Codex profile's CODEX_HOME here.
     relaunchOverrides: vi.fn(async (session: RegisteredSession) => ({
@@ -401,7 +401,7 @@ describe('forking an agent', () => {
     await fork({ agentId: 'a1', name: null, prompt: null })
     expect(vi.mocked(buildEngineLaunchArgv).mock.calls[0][1]).toMatchObject({ extraArgs: ['--dsh', '--agent', 'reviewer'], harnessNode: true, installIfMissing: undefined })
     expect(vi.mocked(createAndRegisterPane).mock.calls[0][0]).toMatchObject({ dsh: 'blender', agent: 'reviewer', label: 'Blender', env: { HARNESS_DSH: 'blender' } })
-    expect(deps.attachDsh).toHaveBeenCalled()
+    expect(deps.attach).toHaveBeenCalled()
     vi.mocked(supportsNamedAgent).mockReturnValueOnce(false)
     await setup(source({ agent: 'reviewer' } as Partial<RegisteredSession>)).fork({ agentId: 'a1', name: null, prompt: null })
     expect(vi.mocked(buildEngineLaunchArgv).mock.calls[1][1]).toMatchObject({ extraArgs: undefined })

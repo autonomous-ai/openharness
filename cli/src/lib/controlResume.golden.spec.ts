@@ -94,7 +94,7 @@ it.each(['linux', 'darwin'])('keeps healthy native resume composition on %s', as
         relaunchOverrides: async session => { events.push(['launch-prepare', session.engine, session.sessionId]);
           return { ok: true, overrides: { env: {}, extraArgs: [], clearEnv: [] } } },
         prepareSessionResume: async session => { events.push(['history-prepare', session.sessionId]); return false },
-        refreshGridWebSearch: () => { events.push(['grid']) }, clearDeleted: () => {}, attachDsh: () => {},
+        refreshGridWebSearch: () => { events.push(['grid']) }, clearDeleted: () => {}, attach: () => {},
         attachSession: async session => { events.push(['attach', session.sessionId]); return true },
       })
       const result = await resume(saved.agentId)

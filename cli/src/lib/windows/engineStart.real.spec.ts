@@ -61,7 +61,7 @@ function creator(backend: PtyHostBackend) {
     externalResume: unused,
     watchNewPane: (async () => {}) as unknown as CreateAgentDeps['watchNewPane'],
     announceSession: () => {},
-    attachDsh: () => {},
+    attach: () => {},
     prepareApiTools: () => {},
     hookPort: 0,
     hooksDisabled: true,

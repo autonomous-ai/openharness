@@ -7,7 +7,6 @@ import type { NativeLaunch, NativeLaunchResult, NativeLaunchSource } from '../..
  *
  * Moved verbatim out of `runForeground` (the core boundary, step 11: docs/design/2026-10-03-harnessd.md).
  */
-import { sweepAgentTmpWhenDue } from '../../lib/agentTmp.js'
 import { randomUUID } from 'node:crypto'
 import { realpathSync, statSync } from 'node:fs'
 import { readdir } from 'node:fs/promises'
@@ -52,7 +51,7 @@ import type { TerminalBackend } from '../../lib/terminalBackend.js'
 import { windowsLaunchRefusal } from '../../lib/windows/launch.js'
 import { isWindowsHeldPane, windowsPaneLaunch } from '../../lib/windows/engineStart.js'
 import { tmuxTooOldForSessionEnv } from '../../lib/tmuxVersion.js'
-import { prepareInstructionWrites, scmLaunchEnv } from '../../scm/scmProjects.js'
+import { prepareInstructionWrites, scmLaunchEnv } from '../../scm/launch.js'
 import { mergedLaunchEnv } from './launchEnv.js'
 import type { createPaneWatcher } from './newPane.js'
 
@@ -77,10 +76,8 @@ export interface CreateAgentDeps {
   externalResume: CreateAgent
   watchNewPane: ReturnType<typeof createPaneWatcher>
   announceSession: (session: RegisteredSession) => void
-  attachDsh: (session: RegisteredSession) => void
-  /** Its browser starts, for an agent whose Browser is on from the start: an older Desktop's create (core/api.ts
-   *  `AgentBrowserPort.attached`). */
-  attachBrowser?: (session: RegisteredSession) => void
+  /** A look at the new agent, for the services that follow agents (core/agentLife.ts `running`). */
+  attach: (session: RegisteredSession) => void
   prepareApiTools: (cwd: string | null | undefined, engine: string) => void
   /** The hook server's port, which installed engine hooks post to. */
   hookPort: number
@@ -117,7 +114,7 @@ function hooksHeld(engine: string, waiting: string) {
 }
 
 export function createAgentCreator({
-  native: inspectNative, publishConfig, createBackend: initialBackend, recoverBackend, noBackendCode = 'TMUX_UNAVAILABLE', registry, externalResume, watchNewPane, announceSession, attachDsh, attachBrowser,
+  native: inspectNative, publishConfig, createBackend: initialBackend, recoverBackend, noBackendCode = 'TMUX_UNAVAILABLE', registry, externalResume, watchNewPane, announceSession, attach,
   prepareApiTools, hookPort, hooksDisabled, installOpencodePlugin, gridLaunchMachine, buildGridLaunch, terminalHintMachineName, blocksFolder,
   gridSetup, privateGridName, dshLaunch, syncProfileHome,
 }: CreateAgentDeps) {
@@ -365,7 +362,6 @@ export function createAgentCreator({
     // The person's machine MCP servers (lib/machineMcp.ts, #1872), beside the grid's and their own: read at each launch,
     // as every relaunch reads them again (`buildLaunchOverrides`).
     const machineMcp = machineMcpLaunchArgs(engine, cwd)
-    sweepAgentTmpWhenDue()
     const extraArgs = joinedInstructions(engine, [...(gridLaunch?.args ?? []), ...dshArgs, ...(agent ? namedAgentArgs(engine, agent, native ? native.opencodeMajor : opencode ? await opencode.opencodeMajorVersion() : null) : []), ...machineMcp, ...told])
     // The first prompt is a launch option only — never part of `extraArgs`, which the registry row
     // carries into a relaunch (engineLaunch.ts, `firstPrompt`).
@@ -444,8 +440,7 @@ export function createAgentCreator({
       return { ok: true, session: ready }
     }
     announceSession(pending)
-    if (pending.dsh) attachDsh(pending)
-    if (pending.browser) attachBrowser?.(pending)
+    attach(pending)
 
     void watchNewPane(engine, pending, spawned, command, installIfMissing, undefined)
     console.log(`[agent] create pane open · ${engine} · agent ${pending.agentId}`)

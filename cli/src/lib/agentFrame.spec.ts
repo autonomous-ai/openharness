@@ -55,9 +55,9 @@ describe('agentFrame', () => {
   // Absent is a real answer here: an agent without Browser has no browser, and the panel draws nothing for it.
   it('browser field present only when the context has it', async () => {
     expect(await agentFrame(session(null), { selectedModel: null, terminalAvailable: true })).not.toHaveProperty('browser')
-    expect(await agentFrame(session(null), { selectedModel: null, terminalAvailable: true, browser: undefined })).not.toHaveProperty('browser')
+    expect(await agentFrame(session(null), { selectedModel: null, terminalAvailable: true, parts: () => ({}) })).not.toHaveProperty('browser')
     const browser = { state: 'setup' as const, step: 'building' }
-    expect((await agentFrame(session(null), { selectedModel: null, terminalAvailable: true, browser })).browser).toEqual(browser)
+    expect((await agentFrame(session(null), { selectedModel: null, terminalAvailable: true, parts: () => ({ browser }) })).browser).toEqual(browser)
   })
   it('says its name was not chosen by a person when nobody renamed it, whatever its session title says', async () => {
     const row = { ...session(null), title: 'cd /Users/macbookpro/projects/lamp' }
@@ -170,12 +170,12 @@ describe('agentFrame', () => {
   it('carries the viewer pane’s name with the harness, and null for a plain engine', async () => {
     const withViewer = await agentFrame(session(null), {
       selectedModel: null, terminalAvailable: true,
-      dsh: { id: 'autonomous/blender', name: 'Blender', viewerUrl: 'http://127.0.0.1:4100/', viewerName: '3D Viewer', verdict: null },
+      parts: () => ({ dsh: 'autonomous/blender', dshName: 'Blender', viewerUrl: 'http://127.0.0.1:4100/', viewerName: '3D Viewer', verdict: null }),
     })
     expect(withViewer).toMatchObject({ dsh: 'autonomous/blender', dshName: 'Blender', viewerName: '3D Viewer' })
     const older = await agentFrame(session(null), {
       selectedModel: null, terminalAvailable: true,
-      dsh: { id: 'autonomous/blender', name: 'Blender', viewerUrl: null, verdict: null },
+      parts: () => ({ dsh: 'autonomous/blender', dshName: 'Blender', viewerUrl: null, verdict: null }),
     })
     expect(older).toHaveProperty('viewerName', null)
     expect(await agentFrame(session(null), { selectedModel: null, terminalAvailable: true })).toHaveProperty('viewerName', null)

@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createAndRegisterPane } from '../lib/createAgentPane.js'
 import { buildLaunchOverrides, type LaunchOverridesDeps } from '../lib/launchOverrides.js'
 import type { TerminalCreateResult, TmuxRuntimeRef } from '../lib/terminalTypes.js'
-import * as scmProjects from './scmProjects.js'
+import * as scmProjects from './launch.js'
 import type { ScmLaunchRecord } from './types.js'
 import { gridLaunchInProcess } from '../testing/gridLaunchInProcess.js'
 

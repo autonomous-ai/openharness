@@ -6,9 +6,10 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { encryptDownFrame, encryptRpcResult } from './e2ee/applicationFrames.js'
-import { placeholderBranch, sessionBranchNames, worktreeFolderName } from './agentNames.js'
+import { placeholderBranch, sessionBranchNames, worktreeFolderName } from './branchNames.js'
 import { nameBranchAfterSession } from './branchNaming.js'
-import { prepareGitProject, readGitProject, validGitPath } from './gitProject.js'
+import { validProjectPath } from './projectPath.js'
+import { prepareGitProject, readGitProject } from './gitProject.js'
 import { prepareGitFolder } from './gitProjectFolder.js'
 import { parseProjectFolder, type GitProjectFolder } from './projectFolder.js'
 import { engineSessionTitle, namingTitle } from './sessionTitle.js'
@@ -660,7 +661,7 @@ exec '${realGit}' "$@"
 
   it('validates source paths and requires an exact local branch when isolation is disabled', async () => {
     for (const path of [null, 7, '', 'relative', '/bad\npath', '/bad\0path', `/${'x'.repeat(4096)}`]) {
-      expect(validGitPath(path)).toBe(false)
+      expect(validProjectPath(path)).toBe(false)
       expect(() => parseProjectFolder({ projectSource: 'worktree', gitSource: path })).toThrow()
     }
     await expect(prepareGitProject('relative', { ...options(), worktree: true }))

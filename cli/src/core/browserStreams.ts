@@ -71,7 +71,8 @@ export interface BrowserStreams {
 
 export function createBrowserStreams(deps: {
   /** The agent browser's port as it is now: null while it is off. */
-  port: () => Pick<AgentBrowserPort, 'frameContext' | 'stream' | 'streamInput' | 'streamClosed' | 'streamRoute' | 'streamTransportError' | 'streamRefused'> | null
+  port: () => Pick<AgentBrowserPort, 'stream' | 'streamInput' | 'streamClosed' | 'streamRoute' | 'streamTransportError' | 'streamRefused'> | null
+  frame: (agentId: string) => Readonly<Record<string, unknown>>
   asker: (connId: string) => Asker
   /** A frame to one connection, on the terminals' transport. */
   send: (connId: string, type: string, payload: Payload) => boolean
@@ -124,8 +125,8 @@ export function createBrowserStreams(deps: {
       if (!mayOpenBrowser(asker)) return refuse(connId, requestId, 'NOT_OWNER')
       const port = deps.port()
       // What the agent's frame shows of its browser, read in line: an agent with none never costs its service a look.
-      const shown = typeof payload.agentId === 'string' ? port?.frameContext(payload.agentId) : undefined
-      if (!shown) return refuse(connId, requestId, 'NO_BROWSER')
+      const shown = typeof payload.agentId === 'string' ? deps.frame(payload.agentId).browser as { state: string } | undefined : undefined
+      if (!port || !shown) return refuse(connId, requestId, 'NO_BROWSER')
       if (shown.state !== 'ready') return refuse(connId, requestId, 'NOT_READY')
       const asked = pending.get(connId) ?? new Map<string, NodeJS.Timeout>()
       if (asked.size >= BROWSER_OPENS_PENDING_MAX) return refuse(connId, requestId, 'VIEWER_LIMIT')
@@ -138,7 +139,7 @@ export function createBrowserStreams(deps: {
       timer.unref?.()
       asked.set(requestId, timer)
       pending.set(connId, asked)
-      if (port!.stream(connId, 'agent_browser_open', payload, asker)) return
+      if (port.stream(connId, 'agent_browser_open', payload, asker)) return
       // Nobody took it: its process is not there. The panel shows the browser as not ready, and asks again. One that
       // answered before it failed was answered.
       if (settle(connId, requestId)) refuse(connId, requestId, 'NOT_READY')

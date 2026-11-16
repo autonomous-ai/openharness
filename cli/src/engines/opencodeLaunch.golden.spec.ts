@@ -106,7 +106,7 @@ it('records create, fork, relaunch and actual retarget dispatch before the extra
   }) as unknown as RegisteredSession
   const createRest = { createBackend: {}, registry: {}, hooksDisabled: true, hookPort: 4242,
     installOpencodePlugin: async () => true, terminalHintMachineName: () => 'fixture-machine', blocksFolder: () => false,
-    gridSetup: () => null, privateGridName: async () => null, watchNewPane: async () => {}, announceSession: () => {}, attachDsh: () => {},
+    gridSetup: () => null, privateGridName: async () => null, watchNewPane: async () => {}, announceSession: () => {}, attach: () => {},
   }
   for (const version of ['v1', 'v2', 'unknown', 'missing']) {
     vi.stubEnv('OPENCODE_PATH', join(root, 'bin', version))
@@ -122,7 +122,7 @@ it('records create, fork, relaunch and actual retarget dispatch before the extra
       resetCase()
       const fork = await shapes.fork({ createBackend: {}, registry: { byAgent: () => source },
         mirror: { isBusy: () => false, recentAsks: () => ['fixture ask'], recent: () => [], lastFullText: () => 'fixture answer' },
-        pendingForkInherit: new Map(), watchNewPane: async () => {}, announceSession: () => {}, attachDsh: () => {},
+        pendingForkInherit: new Map(), watchNewPane: async () => {}, announceSession: () => {}, attach: () => {},
       } as never)({ agentId: source.agentId, name: null, prompt: 'try another approach' })
       actual[`${version} fork named=${named}`] = normalize({ result: fork, panes: paneAnswer(), native: nativeCalls() })
 

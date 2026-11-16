@@ -164,6 +164,7 @@ export class DshVerdictWatcher {
   }
 
   private publish(agentId: string, entry: Watched): void {
+    if (this.watched.get(agentId) !== entry) return
     let text: string | null
     try {
       text = readFileSync(entry.file, 'utf8')

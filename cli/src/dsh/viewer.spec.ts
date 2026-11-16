@@ -19,12 +19,12 @@ vi.mock('node:net', async (importOriginal) => {
 })
 
 // Every artifact watcher the manager opens, and whether it was closed: what a viewer that failed must not keep.
-const watchers = vi.hoisted(() => [] as Array<{ closed: boolean }>)
+const watchers = vi.hoisted(() => [] as Array<{ closed: boolean; watcher: import('chokidar').FSWatcher }>)
 vi.mock('chokidar', async (importOriginal) => {
   const actual = await importOriginal<typeof import('chokidar')>()
   const watch = ((...args: Parameters<typeof actual.watch>) => {
     const watcher = actual.watch(...args)
-    const seen = { closed: false }
+    const seen = { closed: false, watcher }
     watchers.push(seen)
     const close = watcher.close.bind(watcher)
     watcher.close = () => { seen.closed = true; return close() }
@@ -479,6 +479,75 @@ describe('DshViewerManager, the rest of a viewer\'s life', () => {
     const viewerLines = logs.filter((line) => line.startsWith('[dsh] acme/thing viewer · '))
     expect(viewerLines).toEqual(printed.slice(0, 40).map((line) => `[dsh] acme/thing viewer · ${line}`))
     expect(logs).toContain('[dsh] acme/thing viewer could not start · spawn EACCES')
+  })
+
+  it('names a watcher close timeout and completes its stop within the cleanup deadline', async () => {
+    const { manager, logs } = setup()
+    await manager.start('a1', dsh({ command: 'v', url: 'http://127.0.0.1:${port}/', artifactExtensions: ['.step'] }), root)
+    const watcher = watchers.at(-1)!.watcher
+    await watcher.close()
+    watcher.close = () => new Promise(() => {})
+    vi.useFakeTimers()
+    try {
+      const stopped = manager.stop('a1')
+      await vi.advanceTimersByTimeAsync(10_000)
+      await stopped
+      expect(logs).toContain('[viewers] VIEWER_WATCH_CLOSE_TIMEOUT')
+    } finally { vi.useRealTimers() }
+  })
+
+  it('a viewer change does not wait on the old watcher or revive after a later same-id start', async () => {
+    const { manager, spawned, urls } = setup()
+    const viewer = dsh({ command: 'v', url: 'http://127.0.0.1:${port}/', artifactExtensions: ['.step'] })
+    await manager.start('a1', viewer, root)
+    const watcher = watchers.at(-1)!.watcher
+    const close = watcher.close.bind(watcher)
+    let release!: () => void
+    watcher.close = async () => { await close(); await new Promise<void>(resolve => { release = resolve }) }
+    const moved = manager.start('a1', viewer, join(root, 'other'))
+    try {
+      await vi.waitFor(() => expect(spawned).toHaveLength(2))
+      await manager.stop('a1')
+      await manager.start('a1', viewer, root)
+      await vi.waitFor(() => expect(release).toEqual(expect.any(Function)))
+      release()
+      await moved
+      expect(spawned).toHaveLength(3)
+      expect(manager.url('a1')).toBe('http://127.0.0.1:4792/')
+      expect(urls.at(-1)).toBe('http://127.0.0.1:4792/')
+    } finally {
+      await vi.waitFor(() => expect(release).toEqual(expect.any(Function)))
+      release()
+      await moved
+    }
+  })
+
+  it('a held watcher close cannot keep the old URL alive or clear a same-id replacement', async () => {
+    const { urls, spawned, manager } = setup()
+    const viewer = dsh({ command: 'v', url: 'http://127.0.0.1:${port}/?file=${artifact}', artifactExtensions: ['.step'] })
+    await manager.start('a1', viewer, root)
+    const watcher = watchers.at(-1)!.watcher
+    const queuedChange = watcher.listeners('change')[0] as (path: string) => void
+    const close = watcher.close.bind(watcher)
+    let release!: () => void
+    watcher.close = async () => { await close(); await new Promise<void>(resolve => { release = resolve }) }
+    const stopped = manager.stop('a1')
+    try {
+      expect(urls).toEqual(['http://127.0.0.1:4790/?file=', null])
+      await manager.start('a1', viewer, root)
+      expect(urls.at(-1)).toBe('http://127.0.0.1:4791/?file=')
+      queuedChange(join(root, 'late.step'))
+      spawned[0].exitWith(0)
+      await vi.waitFor(() => expect(release).toEqual(expect.any(Function)))
+      release()
+      await stopped
+      expect(manager.url('a1')).toBe('http://127.0.0.1:4791/?file=')
+      expect(urls).toEqual(['http://127.0.0.1:4790/?file=', null, 'http://127.0.0.1:4791/?file='])
+    } finally {
+      await vi.waitFor(() => expect(release).toEqual(expect.any(Function)))
+      release()
+      await stopped
+    }
   })
 
   it('an exit after a stop is ignored; an exit during a stop publishes null and restarts nothing', async () => {

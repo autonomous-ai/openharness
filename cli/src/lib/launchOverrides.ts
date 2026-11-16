@@ -13,7 +13,6 @@ import { statSync } from 'node:fs'
  * backend's capabilities and the config directory writer) are exactly the parts worth stubbing in a spec.
  */
 
-import { sweepAgentTmpWhenDue } from './agentTmp.js'
 import type { NativeLaunch, NativeLaunchResult, NativeLaunchSource } from '../engines/nativeLaunch.js'
 import type { AgentEngine } from '../engines/types.js'
 import { subscriptionModelLaunch } from './subscriptionModel.js'
@@ -35,7 +34,7 @@ import type { TerminalBackendCapabilities } from './terminalTypes.js'
 import { tmuxTooOldForSessionEnv } from './tmuxVersion.js'
 import { harnessEnvToClear } from '../dsh/launch.js'
 import type { DshLaunchAnswer } from '../dsh/launchWire.js'
-import { scmLaunchEnv } from '../scm/scmProjects.js'
+import { scmLaunchEnv } from '../scm/launch.js'
 import type { ScmLaunchRecord } from '../scm/types.js'
 import { agentLaunchArgs, joinedInstructions, type StartedBy } from './agentAttribution.js'
 import { machineMcpLaunchArgs } from './machineMcp.js'
@@ -323,7 +322,6 @@ export async function prepareLaunchOverrides(
       cwd: source.cwd ?? null, profile: source.codexHome, environment: native?.environment, read: deps.readAttribution,
     })
     if (told.length) overrides = { ...overrides, extraArgs: joinedInstructions(engine, [...overrides.extraArgs, ...told]) }
-    sweepAgentTmpWhenDue()
     const launchEnv = { ...overrides.env, ...native?.environment }
     return { ok: true, overrides: { ...overrides, ...(native ? { native } : {}), env: launchEnv, clearEnv: [...overrides.clearEnv, ...harnessEnvToClear(overrides.env)] } }
   } }

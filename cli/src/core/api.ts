@@ -25,7 +25,7 @@ import type { UnreadNotification } from '../lib/notificationRead.js'
 import type { AutonomousDeviceAgent, AutonomousDeviceDelivery } from '../lib/autonomous-device/service.js'
 import type { StoreAgent } from '../lib/autonomous-device/store.js'
 import type { DshLaunchAnswer, DshLaunchRequest, DshMaterializeAnswer, DshMaterializeRequest } from '../dsh/launchWire.js'
-import type { AgentBrowserFrame, AgentDshContext } from '../lib/agentFrame.js'
+import type { AgentDshContext } from '../lib/agentFrame.js'
 import type { GridAccess } from '../lib/gridAttach.js'
 import type { createHarnessResourcesReader } from '../lib/harnessResources.js'
 import type { createHarnessStorageReader } from '../lib/harnessTelemetry.js'
@@ -94,12 +94,21 @@ export const TERMINALS_OFF: TerminalsPort = {
   watch: { frame: async () => {}, close: async () => {}, onOutput: () => () => {} },
 }
 
+/** Agent metadata a service may read; the saved credential belongs to launch/restore authority. */
+export type AgentView = Omit<RegisteredSession, 'gridLaunch'> & { /** Ephemeral authority for this run, only for a frame publisher. */ readonly frameEpoch?: string }
+
+/** Always copy: a row without a key now may acquire one after an inline service retains its view. */
+export function agentView(session: RegisteredSession): AgentView {
+  const { gridLaunch: _gridLaunch, ...view } = session
+  return view
+}
+
 /** Read-only conversation facts for the handoff in the edge host. Each lookup asks the core now;
  * a stopped record is never replaced by a stale live-agent list in another process. */
 export interface ConversationReads {
   publish(prepared: PreparedHandoff, permit: HandoffPermit): Promise<HandoffOutcome>
   /** A live agent by agent/session id, otherwise the stopped record by agent id. */
-  resolve(id: string): Promise<RegisteredSession | null>
+  resolve(id: string): Promise<AgentView | null>
   recentAsks(sessionId: string, n: number): Promise<string[]>
   lastFullText(sessionId: string): Promise<string | null>
   recaps(sessionId: string, n: number): Promise<string[]>
@@ -153,25 +162,27 @@ export interface CoreApi {
   conversations: ConversationReads
   agents: {
     /** Every agent on this machine: the live ones, then the stopped ones. */
-    all(): RegisteredSession[]
+    all(): AgentView[]
     /** The live agents. */
-    live(): RegisteredSession[]
+    live(): AgentView[]
     /** The name the apps show for an agent. */
     displayName(session: RegisteredSession): string
     /** A live agent, by its agent id. */
-    byAgent(agentId: string): RegisteredSession | undefined
+    byAgent(agentId: string): AgentView | undefined
     /** A live agent, by its agent id or its engine session id: whichever the apps asked by. */
-    resolve(id: string): RegisteredSession | undefined
+    resolve(id: string): AgentView | undefined
     /** The live agents the apps are shown. */
-    advertised(): RegisteredSession[]
+    advertised(): AgentView[]
     /** The running cloud harnesses (core/agents/cloud.ts) as rows an agent list reads: an id, a start, an
      *  engine and a name, with no pane, transcript or process. Only the lists that show them ask (the dial,
      *  the fleet); absent where a core or process offers none. */
-    cloud?(): RegisteredSession[]
+    cloud?(): AgentView[]
     /** Whether the agent's terminal is attached: a frame without one reads to the apps as "agent gone". */
     terminalAvailable(agentId: string): boolean
     /** Send the agent's frame to the apps again. */
     sync(session: RegisteredSession): void
+    /** Replace this service's declared display fields for the exact followed run. */
+    publishFrame?(session: AgentView, fields: Readonly<Record<string, unknown>>): void
     /** The Model/Effort choices an agent's engine offers (opaque `runtime-v1` ids): one agent's, or
      *  every live agent's when none is named. */
     runtimeModels(agentId?: string): Promise<RuntimeModelOption[]>
@@ -211,9 +222,9 @@ export interface CoreApi {
      *  engine that keeps no dated transcript: a hook's time or the bind's is not when it last answered. Absent where
      *  the core is not asked it. */
     lastActivity?(agentId: string): Promise<number | null>
-    /** The ids of every agent here, live and stopped, read now: what the agent browser keeps a browser for (a browser
-     *  whose agent is in neither is deleted). Absent where the core is not asked it; a failed or missing answer is no answer. */
-    ids?(): Promise<{ live: string[]; stopped: string[] }>
+    /** Hear what happens to agents (core/agentLife.ts): told at once every live agent it follows, then each change as it
+     *  happens. Returns how to stop hearing. Absent where the core or a process offers it none. */
+    follow?(listener: (event: AgentLife) => void, options?: FollowOptions): () => void
     /** The live agent whose terminal is the pane [pane] (`$TMUX_PANE`, `$HARNESS_PANE`), and whether it is a guest's,
      *  or null: `harness browser` in an agent's pane names it so. With [ancestors] (the command's parents' pids), null
      *  unless the pane's own process, read from the daemon's terminal backend, is among them: pane ids restart in every
@@ -222,15 +233,6 @@ export interface CoreApi {
      *  after 2026-12-18: 30 days after the CLI release that took the relay away (assumed by 2026-11-18; whoever
      *  releases later moves the date). Absent where the core is not asked it. */
     ofPane?(pane: string, ancestors?: number[]): Promise<{ agentId: string; guest: boolean } | null>
-    /** Turn a live agent's Browser on or off, its person's Start and Stop (registry `browser`), and tell its browser
-     *  (`AgentBrowserPort.attached`, `stopped`) in the same turn: the flag changes in the order the agent browser asks.
-     *  Only a live agent that is not a guest's is turned on. Absent where the core is not asked it. */
-    setBrowser?(agentId: string, on: boolean): Promise<BrowserSwitch>
-    /** The agent browser moved [from]'s entry to [to], the agent that took the pane [from] ended in, and [from]'s Browser
-     *  was on (decision 19): [from]'s flag is cleared and [to]'s is set, each where its row is, live or stopped; a live
-     *  [to] is attached in the same turn. Whole or not at all: it rejects with both flags as they were. Absent where the
-     *  core is not asked it. */
-    moveBrowser?(from: string, to: string): Promise<BrowserSwitch>
   }
   /** A fixed-name product counter (`GatewayPort.usageCounter`): no id, URL, host, reason or content. Absent where the
    *  core offers a service none. */
@@ -617,7 +619,7 @@ export const TURN_SUMMARY_TYPES: ReadonlySet<string> = new Set(['turn_summary', 
 
 /** `agents.resolve` over a service process's own copy of the agents, as the registry answers it: by agent
  *  id, then by engine session id (an agent with none yet is never found by an empty one). */
-export function resolveAgent(agents: readonly RegisteredSession[], id: string): RegisteredSession | undefined {
+export function resolveAgent(agents: readonly AgentView[], id: string): AgentView | undefined {
   return agents.find((agent) => agent.agentId === id) ?? (id ? agents.find((agent) => agent.sessionId === id) : undefined)
 }
 
@@ -991,16 +993,16 @@ export interface OrchestratorPort {
  *  end is announced; no project hears a frame; a shutdown goes on. */
 export const ORCHESTRATOR_FALLBACKS: PortFallbacks<OrchestratorPort> = { roleOf: null, frame: undefined, stop: undefined }
 
-/** The core's calls into session search: index a session at its turn boundaries, forget a purged
- *  conversation, the title it indexed for one being adopted, and stopping its sweeps. The apps' own
- *  requests (`session_search`, `session_tail`) are its `ServiceRequests`, not the core's calls. */
-export type SearchPort = Pick<SessionSearchIndex, 'touch' | 'deleteHistory' | 'session' | 'stop'> & {
+/** The core's calls into session search: index a session at its turn boundaries, the title it indexed for one
+ *  being adopted, and stopping its sweeps. A purged conversation it forgets as it hears it (`AgentLife` `purged`).
+ *  The apps' own requests (`session_search`, `session_tail`) are its `ServiceRequests`, not the core's calls. */
+export type SearchPort = Pick<SessionSearchIndex, 'touch' | 'session' | 'stop'> & {
   inspect(request: ExternalSessionRequest): Promise<ExternalSessionAnswer>
 }
 
 /** What the core gets when search fails: nothing indexed and no title. */
 export const SEARCH_FALLBACKS: PortFallbacks<SearchPort> = {
-  touch: undefined, deleteHistory: undefined, session: undefined, stop: undefined, inspect: later(externalUnavailable()),
+  touch: undefined, session: undefined, stop: undefined, inspect: later(externalUnavailable()),
 }
 
 /*
@@ -1074,12 +1076,11 @@ export const RECAPS_FALLBACKS: PortFallbacks<RecapsPort> = { lifecycle: undefine
 
 /**
  * The core's calls into the agent cleanup (services/agentCleanup.ts): what happens to the harnesses agents start.
- * `closed` and `typed` are notices: the core never waits for them, and one the cleanup misses leaves a harness open,
- * as before it.
+ * `typed` is a notice: the core never waits for it, and one the cleanup misses leaves a harness open, as before it. A
+ * harness closed or stopped it hears as every service that follows agents does (`AgentLife` `stopped`), and closes
+ * the harnesses that one started.
  */
 export interface AgentCleanupPort {
-  /** A harness was closed or stopped (`agent_close`, Stop Harness, a purge): the harnesses it started close too. */
-  closed(agentId: string): void
   /** The person typed or pasted into a harness, from a window or the phone (an agent id or a session id): one another
    *  agent started is the person's from then on. */
   typed(id: string): void
@@ -1092,24 +1093,51 @@ export interface AgentCleanupPort {
 }
 /** What the core gets when the cleanup fails: nothing told, every harness left open, as before it, and no delete of a
  *  harness whose told lines it could not erase. */
-export const AGENT_CLEANUP_FALLBACKS: PortFallbacks<AgentCleanupPort> = { closed: undefined, typed: undefined, forgetTold: later(false), stop: undefined }
+export const AGENT_CLEANUP_FALLBACKS: PortFallbacks<AgentCleanupPort> = { typed: undefined, forgetTold: later(false), stop: undefined }
 
 /**
- * The core's calls into the agent browser (services/agentBrowser.ts): what happens to an agent whose Browser is on, and
- * its browser's state for the agent's frame, which the core reads in line (from what the service last said, when it
- * runs in its own process: core/agentBrowserLink.ts).
+ * What happens to agents, as the core tells the services that follow them (core/agentLife.ts, `CoreApi.agents.follow`):
+ * one shape, where each service had a port member of its own (the viewers' attach and detach, the agent cleanup's
+ * `closed`, search's purged conversations, the agent browser's attached, stopped, deleted and moved).
+ */
+export type AgentLife =
+  /** A live agent here, as the core looked at it: created, forked, resumed, restored at a start, or seen by a scan. */
+  | { kind: 'running'; session: AgentView }
+  /** It stopped running here: a stop or any other forget, or its engine's own exit. Told to a follower that was told it
+   *  running. */
+  | { kind: 'ended'; agentId: string }
+  /** A person or an agent stopped it (`agent_close`, Stop Harness, `harness close`, a purge), told once the stop is done,
+   *  never while it can still fail. */
+  | { kind: 'stopped'; agentId: string }
+  /** Deleted for good, with every conversation it had: [sessionIds], the engine's ids of them. */
+  | { kind: 'purged'; agentId: string; sessionIds: string[] }
+  /** A new agent, [to], took the pane [from] ended in (decision 19). [guest]: [to] is a guest's. */
+  | { kind: 'taken'; from: string; to: string; guest?: true }
+
+/** How a follower hears agents run and end (`running`, `ended`). The other kinds it hears whatever it asks. */
+export interface FollowOptions {
+  /** Receive an ephemeral publication lease on each followed view; no lease is written to the registry. */
+  frames?: boolean
+  /** Told `running` at every look at an agent, as a harness's viewer is attached; else once each time it starts
+   *  running here. */
+  each?: boolean
+  /** Only the agents whose row has each of these fields set (the viewers: `dsh`). At most `FOLLOW_HAVING_MAX`. */
+  having?: readonly string[]
+  /** false: never told `running` or `ended` (search, the agent cleanup). */
+  running?: boolean
+}
+/** The most fields a follower may ask an agent's row to have. */
+export const FOLLOW_HAVING_MAX = 4
+/** The kinds a service in its own process must not miss while it is down: held for it until it hears them, for the
+ *  services its process says hear them (harnessd/services.ts `hears`). */
+export type { HeldAgentLife } from '../harnessd/services.js'
+
+/**
+ * The core's stream calls into the agent browser (services/agentBrowser.ts). Display fields use the generic publisher;
+ * what happens to its agents it hears as every service that follows agents does
+ * (`AgentLife`).
  */
 export interface AgentBrowserPort {
-  /** An agent is here and running: its browser starts, for one whose Browser is on. Idempotent, as `ViewersPort.attach`. */
-  attached(session: RegisteredSession): void
-  /** The agent stopped, or its person turned its Browser off: its browser stops, and its profile stays. */
-  stopped(agentId: string): void
-  /** The agent was purged: its browser and its profile go. */
-  deleted(agentId: string): void
-  /** The pane [from] ended in has a new agent, [to] (decision 19): [from]'s settings and profile go to [to], and then
-   *  the service asks `agents.moveBrowser`. [on]: [from]'s Browser was on. */
-  moved(from: string, to: RegisteredSession, on: boolean): void
-  frameContext(agentId: string): AgentBrowserFrame | undefined
   /** A viewer's frame of a browser's stream (`agent_browser_open`, `agent_browser_ack`, `agent_browser_close`), from the
    *  connection [connId]; an open with who asked as the core established it, and an ack or a close with nobody, as the
    *  stream's own. The stream is the service's (services/agentBrowser/streams.ts): the core passes frames on and
@@ -1130,27 +1158,15 @@ export interface AgentBrowserPort {
   streamRefused(streamId: string): void
   stop(): void
 }
-/** What turning an agent's Browser on or off answered (`CoreApi.agents.setBrowser`): whether its flag changed, or why
- *  it was not turned on. */
-export type BrowserSwitch = { ok: true; changed: boolean } | { error: 'NOT_RUNNING' | 'NOT_ALLOWED' }
 
-/** What the core gets when the agent browser fails: nothing told, frames without a browser, and no stream taken. A
- *  purge it misses is finished when it next starts, which deletes the browser of every agent that is gone. A move it
- *  misses leaves the browser with the agent that ended, whose resume brings it back. */
+/** What the core gets when the agent browser fails: frames without a browser, and no stream taken. */
 export const AGENT_BROWSER_FALLBACKS: PortFallbacks<AgentBrowserPort> = {
-  attached: undefined, stopped: undefined, deleted: undefined, moved: undefined, frameContext: undefined,
   stream: false, streamInput: false, streamClosed: undefined, streamRoute: undefined, streamTransportError: undefined, streamRefused: undefined, stop: undefined,
 }
 
-/** The core's calls into the DSH viewers: each harness agent's viewer server and verdict watch. */
+/** The core's calls into the DSH viewers: each harness agent's viewer server and verdict watch. Which agents have
+ *  one they hear as every service that follows agents does (`AgentLife`, `VIEWERS_FOLLOW`). */
 export interface ViewersPort {
-  /** Start the agent's viewer and verdict watch when it has a DSH. Idempotent: called on every
-   *  observation of the agent. */
-  attach(session: RegisteredSession): void
-  /** Stop them: the agent was forgotten. */
-  detach(agentId: string): void
-  /** What the agent's frame says about its DSH: its name, its viewer and its verdict. */
-  frameContext(session: RegisteredSession): AgentDshContext | null
   /** Where the windows' viewer pane for the agent forwards to. */
   forwardingUrl(agentId: string): string | null
   /** Stop every viewer and watch, for a restart or a shutdown. */
@@ -1166,15 +1182,19 @@ export interface ViewersPort {
   closed(connId?: string): void
 }
 
+/** How the viewers follow agents (core/agentLife.ts), in their process and in the core's: each agent with a harness at
+ *  every look at it, as its viewer was attached, since a look may be the first to find its harness and a viewer follows
+ *  its harness's update; and its end. */
+export const VIEWERS_FOLLOW: FollowOptions = { each: true, having: ['dsh'], frames: true }
+
 /** What a client is told for a surface the viewers cannot render while they are off or failing. */
 export const VIEWERS_UNAVAILABLE = { error: 'SERVICE_UNAVAILABLE', service: 'viewers', retryable: true }
 
-/** What the core gets when the viewers fail: agents' frames carry no DSH context and the windows
- *  no viewer, a client's viewer stream is refused at once (core/viewerStreams.ts) and its surface
+/** What the core gets when the viewers fail: no new forwarding target, a client's viewer stream is refused at once (core/viewerStreams.ts) and its surface
  *  answered unavailable, and a restart or shutdown goes on. Their process on demand, before it has
  *  first connected, holds a stream and a surface while it starts instead (core/viewersLink.ts). */
 export const VIEWERS_FALLBACKS: PortFallbacks<ViewersPort> = {
-  attach: undefined, detach: undefined, frameContext: null, forwardingUrl: null, stop: later(undefined),
+  forwardingUrl: null, stop: later(undefined),
   stream: false, surface: later(VIEWERS_UNAVAILABLE), closed: undefined,
 }
 
@@ -1305,6 +1325,7 @@ export type WorktreeAnswer = { ok: true; review: WorktreeReview } | { ok: false;
  * A refusal is an answer, never a throw, which would count against the service and could switch it off.
  */
 export interface WorkspacesPort {
+  stop(): void
   nameBranches(): void
   /** Whether it can make a folder now: a create waits for it (held) while it cannot, rather than failing for the moment a
    *  restart takes. */
@@ -1332,12 +1353,14 @@ const REMOVAL_UNAVAILABLE = { ok: false as const, reason: `The worktree was kept
 /** What the core gets when workspaces fails: branches keep their names, a create waits for its folder, and nothing of a
  *  worktree is read or removed. */
 export const WORKSPACES_FALLBACKS: PortFallbacks<WorkspacesPort> = {
+  stop: undefined,
   nameBranches: undefined, ready: false, prepareFolder: later(FOLDER_UNAVAILABLE), describeWorkspace: later(null),
   reviewWorktree: later(REVIEW_UNAVAILABLE), removeWorktree: later(REMOVAL_UNAVAILABLE),
 }
 
 /** What the core calls while `ports.workspaces` is null (workspaces off): its fallbacks' answers. */
 export const WORKSPACES_OFF: WorkspacesPort = {
+  stop: () => {},
   nameBranches: () => {}, ready: () => false, prepareFolder: async () => FOLDER_UNAVAILABLE, describeWorkspace: async () => null,
   reviewWorktree: async () => REVIEW_UNAVAILABLE, removeWorktree: async () => REMOVAL_UNAVAILABLE,
 }
@@ -2156,7 +2179,7 @@ export interface CoreApiDeps {
   conversations?: ConversationReads
   dataDir: string
   registry: Pick<typeof registry, 'list' | 'byAgent' | 'resolve' | 'advertised' | 'terminalAvailable'>
-  stoppedAgents: Pick<StoppedAgentStore, 'list' | 'ids'>
+  stoppedAgents: Pick<StoppedAgentStore, 'list'>
   databaseHistory: CoreApi['transcripts']['databaseHistory']
   syncSession: CoreApi['agents']['sync']
   runtimeModels: CoreApi['agents']['runtimeModels']
@@ -2198,12 +2221,8 @@ export interface CoreApiDeps {
   summaries?: CoreApi['agents']['summaries']
   /** One `agent_close` (core/agents/close.ts), for `closeStarted`; absent, a service closes nothing. */
   closeAgent?: (request: AgentCloseRequest) => Promise<AgentCloseResult>
-  /** An agent's Browser turned on or off (core/agents/lifecycle.ts `createAgentBrowserLifecycle`), for `setBrowser`;
-   *  absent, the core offers none. */
-  setBrowser?: (agentId: string, on: boolean) => BrowserSwitch
-  /** A pane's browser's flag moved to its new agent (the same lifecycle's `move`), for `moveBrowser`; absent, the core
-   *  offers none. */
-  moveBrowser?: (from: string, to: string) => BrowserSwitch
+  /** What happens to agents, for the services that follow them (core/agentLife.ts `follow`); absent, none hears it. */
+  follow?: CoreApi['agents']['follow']
   /** The process a session's pane runs, from its own terminal backend (`TerminalBackend.paneInfo`), or null: what
    *  `ofPane` holds a command's parents to. Absent, no pane is proven. */
   panePid?: (session: RegisteredSession) => Promise<number | null>
@@ -2240,7 +2259,7 @@ export function createCoreApi({
   dataDir, registry, stoppedAgents, databaseHistory, syncSession, runtimeModels, viewerChanged,
   gridNamed, gridModelsChanged, dshInstallStatus, mintGridName, accessToken, lane, observerKey, tabKey, tabRelay, connectorVault, observer, privateGridName, machineName, backend, onNotice,
   runtimeProfile, setRuntime, fork, create, dsh, windows, daemon, turns, questions, terminals = TERMINALS_OFF, conversations = CONVERSATIONS_OFF, viewerFrame, browserFrame, browserBytes, machine, activityText, activitySnapshot, activity, summaries,
-  closeAgent, activityAt, setBrowser, moveBrowser, panePid,
+  closeAgent, activityAt, follow, panePid,
   signedIn, environment, machines, sendLocal, sendToWindow, hasWindow, devicesChanged, dialWatching, wifi, cloud, cloudRows, lastTurn, turnCard, turnSummary,
   count, hachiGoalDone, log = (line) => console.warn(line),
 }: CoreApiDeps): CoreApi {
@@ -2266,13 +2285,13 @@ export function createCoreApi({
     machine,
     conversations,
     agents: {
-      all: () => [...registry.list(), ...stoppedAgents.list()],
-      live: () => registry.list(),
+      all: () => [...registry.list(), ...stoppedAgents.list()].map(agentView),
+      live: () => registry.list().map(agentView),
       displayName: projectDisplayName,
-      byAgent: (agentId) => registry.byAgent(agentId),
-      resolve: (id) => registry.resolve(id),
-      advertised: () => registry.advertised(),
-      ...(cloudRows ? { cloud: cloudRows } : {}),
+      byAgent: (agentId) => { const session = registry.byAgent(agentId); return session && agentView(session) },
+      resolve: (id) => { const session = registry.resolve(id); return session && agentView(session) },
+      advertised: () => registry.advertised().map(agentView),
+      ...(cloudRows ? { cloud: () => cloudRows().map(agentView) } : {}),
       terminalAvailable: (agentId) => registry.terminalAvailable(agentId),
       sync: syncSession,
       runtimeModels,
@@ -2299,7 +2318,7 @@ export function createCoreApi({
         const session = registry.byAgent(agentId)
         return session && activityAt ? activityAt(session) : null
       },
-      ids: async () => ({ live: registry.list().map(session => session.agentId), stopped: stoppedAgents.ids() }),
+      ...(follow ? { follow } : {}),
       ofPane: async (pane, ancestors) => {
         const session = sessionForPaneId(registry.list(), pane)
         if (!session) return null
@@ -2309,8 +2328,6 @@ export function createCoreApi({
         }
         return { agentId: session.agentId, guest: !!session.guest }
       },
-      ...(setBrowser ? { setBrowser: async (agentId: string, on: boolean) => setBrowser(agentId, on) } : {}),
-      ...(moveBrowser ? { moveBrowser: async (from: string, to: string) => moveBrowser(from, to) } : {}),
     },
     ...(count ? { count } : {}),
     turns,

@@ -2372,3 +2372,33 @@ root disposition `/tmp/core-registry-f26ac6-cost-review.json`, SHA256
 `6030d604b0563173c9345b954ae228b8352cf06d6fc9a3f31b0838dcae7218c2`.
 The original functional receipt predates cost completion; the separate cost
 summary and disposition are its final continuation, not an altered old receipt.
+
+## Browser/frame integration review, 16 November
+
+The accepted Browser/frame/Git source `c1ac4e58` overlaps this increment's
+asynchronous registry callers. Preserve the registry writer and its complete
+displaced-owner snapshots, captured authority, native refresh and final receipt
+checks. Preserve the generic lifecycle from Browser: `attach`, pane takeover,
+Stop and purge replace feature-specific callbacks; the old Browser mutator and
+core Browser lifecycle stay deleted. Legacy saved flags still load unchanged.
+No store schema, lock protocol, persistence preparation or commit algorithm is
+changed by this integration.
+
+A discovered agent is told as taking its predecessor's pane only after every
+displaced owner's awaited cleanup and a fresh committed-owner check. Purge
+awaits saved-name deletion before notifying windows and lifecycle followers,
+including every former conversation key. Resume retains durable confirmation
+and saved launch arguments, then uses the generic attachment callback. Updated
+caller controls retain both parents' assertions, including no takeover event
+after replacement during cleanup. These are integration controls, not a claim
+that the original Browser/registry regressions were newly discovered.
+
+Selected before execution: conflict-focused discovery/lifecycle/registry/Resume
+and transcript tests plus TypeScript; the mapped core, portability, Resume,
+harnessd, PTY and shell gates for the combined tree; private native registry and
+input safety plus Browser lifecycle/custody and workspaces process ownership
+where the shared composition changed. Original accepted cost evidence remains
+pinned to its source; reusing the unchanged persistence workload requires an
+explicit exercised-input comparison. No prior full-gate receipt is relabeled as
+a passing combined run. The Resume quiet benchmark is active, so execution waits
+for its completion; source review and conflict resolution proceed meanwhile.

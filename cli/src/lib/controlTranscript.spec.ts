@@ -495,7 +495,7 @@ it.each(['before', 'configuration', 'history repair', 'permission', 'tmux dispat
         if (current()) writeConfiguration()
         return { ok: true, overrides: { env: {}, extraArgs: [], clearEnv: [] } }
       },
-      prepareSessionResume: prepare, refreshGridWebSearch: vi.fn(), clearDeleted: vi.fn(), attachDsh: vi.fn(),
+      prepareSessionResume: prepare, refreshGridWebSearch: vi.fn(), clearDeleted: vi.fn(), attach: vi.fn(),
       attachSession: vi.fn(async () => true),
     })
     if (phase === 'before') writeFileSync(transcript, header(B))

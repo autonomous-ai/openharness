@@ -235,14 +235,16 @@ export interface RegisteredSession {
    */
   launchArgs?: string[]
   /**
-   * Its Browser is on: the agent browser service (services/agentBrowser.ts) runs a sandboxed Chrome beside it while it
-   * runs. Set by its person's Start (or an older Desktop's create), cleared only by their Stop (`setBrowser`), and
-   * carried through a stop and a resume. Absent while its Browser is off.
+   * Its Browser was on, as the core kept it until 2026-11-15: the agent browser keeps whose Browser is on itself now
+   * (services/agentBrowser.ts), and takes this in once for each agent it sees with it, the migration of the flags the
+   * core kept. The core never sets or clears it but at the create of a Desktop from before Browser left New agent
+   * (core/agents/launches.ts), and carries it as it was, so a rollback finds every flag as it was at the update. Delete
+   * on or after 2026-12-18, with that create's field.
    */
   browser?: true
   /**
    * On the shell an exit left (`confirmEngineExit(id, 'successor')`): the agent whose engine ended in this pane. The pane's next
-   * agent takes that agent's browser (decision 19). A search of saved agents by pane is no proof of this: pane ids
+   * agent is reported through the generic pane-takeover lifecycle. A search of saved agents by pane is no proof: pane ids
    * restart with every tmux server. Gone once an engine is adopted here, and once that agent runs again under its own
    * id. Never in a saved record.
    */
@@ -2046,8 +2048,9 @@ class Registry {
   }
 
   /**
-   * [agentId] runs again under its own id, and its browser came back with it (decision 14): no shell's next agent may
-   * take it. One pass over the live rows, at a resume only. Not saved here: the caller's save carries it.
+   * [agentId] runs again under its own id, and what went with its pane came back with it (its browser, decision 14): no
+   * shell's next agent may take it. One pass over the live rows, at a resume only. Not saved here: the caller's save
+   * carries it.
    */
   private forgetPreviousAgent(agentId: string): void {
     for (const row of this.agents.values()) {
@@ -2585,8 +2588,8 @@ class Registry {
     // The shell under a new identity is the person's, not a harness an agent started: kept, a window took the new id for
     // a new child and opened the shell beside the agent, even after the person had closed the child (review of #1217).
     if (separateShell) delete entry.parentAgentId
-    // Its browser is the archived agent's, with that agent's logins: never the shell's. Its flag stays with that agent
-    // until a new agent takes this pane, which the shell names for it (decision 19). A release in place names nobody.
+    // What went with the pane is the archived agent's, its browser's logins among them: never the shell's, which names that
+    // agent for whatever new agent takes this pane (decision 19). A release in place names nobody.
     if (separateShell) {
       delete entry.browser
       entry.previousAgentId = original.agentId
@@ -3002,20 +3005,6 @@ class Registry {
       const committed = this.committedOwner(agentId, receipt)
       return committed ? structuredClone(committed) : null
     }, authority.expires)
-  }
-
-  /** Turn [agentId]'s Browser on or off (RegisteredSession.browser), as its person's Start and Stop do through the core
-   *  (core/agents/lifecycle.ts `createAgentBrowserLifecycle`): the live row as saved, or null when no live row has that id. */
-  setBrowser(agentId: string, on: boolean): RegisteredSession | null {
-    this.writer.assertOpen()
-    const session = this.agents.get(agentId)
-    if (!session) return null
-    if ((session.browser === true) === on) return session
-    if (on) session.browser = true
-    else delete session.browser
-    session.touchedAt = Date.now()
-    this.save()
-    return session
   }
 
   /**

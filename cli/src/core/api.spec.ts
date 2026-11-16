@@ -3,6 +3,12 @@ import { projectDisplayName, type RegisteredSession } from '../lib/registry.js'
 import { AGENT_BROWSER_FALLBACKS, AGENT_BROWSER_REQUESTS, mayOpenBrowser, CLOUD_DOWN, CLOUD_FALLBACKS, CONNECTOR_VAULT_OFF, CONVERSATIONS_OFF, ACCOUNT_BACKEND_OFF, accountIdentity, AGENT_ACTIONS_OFF, AGENT_CLEANUP_FALLBACKS, createCoreApi, DAEMON_UNKNOWN, DELIVERIES_OFF, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, GATEWAY_REQUESTS, LANE_OFF, MACHINE_ADDON_REQUESTS, PAIR_WAIT_MS, SERVICE_HTTP_ROUTES, SERVICE_WS_FRAMES, WIFI_REQUESTS, LONG_ANSWERS, MODELS_OFF, STORE_OFF, MODELS_REQUESTS, MONITOR_OFF, OBSERVER_KEY_OFF, ORCHESTRATOR_FALLBACKS, RECAPS_FALLBACKS, resolveAgent, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARING_FALLBACKS, MESSAGES_FALLBACKS, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, TURN_DELIVERERS, WIFI_FALLBACKS, WIFI_OFF, WORKSPACES_FALLBACKS, WORKSPACES_OFF, WORKSPACES_UNAVAILABLE, type CoreApiDeps } from './api.js'
 import { FAIL, readFallback } from './serviceHost.js'
 import { HACHI_ID } from '../dsh/builtinIds.js'
+import { answerAgentQuery } from './agentQueries.js'
+import { shownAgents } from './experimentQueries.js'
+import { createDevicesLink } from './devicesLink.js'
+import { createWorkspacesLink } from './workspacesLink.js'
+import { createAgentLife } from './agentLife.js'
+import { agentsIn, processCoreApi } from '../services/processCoreApi.js'
 
 const row = (agentId: string) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: '/work/app' }) as RegisteredSession
 
@@ -157,6 +163,80 @@ describe('the core API services stand on', () => {
       log: vi.fn(),
     })
 
+  it.each(['credential', 'null', 'absent'] as const)('keeps %s launch custody out of every service agent read', (kind) => {
+    const override = { networkId: 'fixture', networkName: 'Fixture', baseUrl: 'https://fixture.invalid/v1', apiKey: 'synthetic-agent-view-canary' }
+    const live = row('live'), stopped = row('stopped'), cloud = row('cloud')
+    for (const session of [live, stopped, cloud]) {
+      if (kind === 'credential') session.gridLaunch = override
+      else if (kind === 'null') session.gridLaunch = null
+    }
+    const before = structuredClone([live, stopped, cloud])
+    const deps = coreDeps()
+    deps.registry.list = () => [live]
+    deps.registry.advertised = () => [live]
+    deps.registry.byAgent = id => id === live.agentId ? live : undefined
+    deps.registry.resolve = id => id === live.sessionId ? live : undefined
+    deps.stoppedAgents.list = () => [stopped]
+    const core = createCoreApi({ ...deps, cloudRows: () => [cloud] })
+    const views = [...core.agents.all(), ...core.agents.live(), ...core.agents.advertised(),
+      core.agents.byAgent('live')!, core.agents.resolve('s-live')!, ...core.agents.cloud!()]
+    expect(views.map(session => session.agentId)).toEqual(['live', 'stopped', 'live', 'live', 'live', 'live', 'cloud'])
+    for (const session of views) {
+      expect(Object.hasOwn(session, 'gridLaunch')).toBe(false)
+      expect(session).toEqual(row(session.agentId))
+      expect([live, stopped, cloud].includes(session)).toBe(false)
+    }
+    expect([live, stopped, cloud]).toEqual(before)
+    if (kind === 'credential') expect(live.gridLaunch).toBe(override)
+    // Even a view taken before a key is assigned must not become a secret-bearing alias later.
+    for (const session of [live, stopped, cloud]) session.gridLaunch = override
+    expect(JSON.stringify(views)).not.toContain(override.apiKey)
+    expect(views.every(session => !Object.hasOwn(session, 'gridLaunch'))).toBe(true)
+    expect(core.agents.byAgent('missing')).toBeUndefined()
+    expect(core.agents.resolve('missing')).toBeUndefined()
+  })
+
+  it('sends metadata without launch credentials through every agent-list service dispatch', async () => {
+    const override = { networkId: 'fixture', networkName: 'Fixture', baseUrl: 'https://fixture.invalid/v1', apiKey: 'synthetic-agent-dispatch-canary' }
+    const live: RegisteredSession = { ...row('live'), dsh: 'fixture', browser: true, gridLaunch: override }
+    const stopped = { ...row('stopped'), gridLaunch: override }
+    const deps = coreDeps()
+    deps.registry.list = () => [live]
+    deps.registry.advertised = () => [live]
+    deps.stoppedAgents.list = () => [stopped]
+    const core = createCoreApi(deps)
+    const replies = await Promise.all(['agents', 'live', 'advertised'].map(query => answerAgentQuery(core, query)))
+    replies.push(shownAgents(core))
+    const devices = createDevicesLink({ core, notify: () => true, call: async () => ({}), state: () => ({
+      desk: [], foreground: false, swarms: null, unread: [], focus: { voice: null, form: null }, engines: [], commanders: false,
+    }) })
+    replies.push(await devices.answer('view', {}))
+    const workspaces = createWorkspacesLink(core, frame => { replies.push(frame.payload ?? {}); return true }, async () => ({}))
+    workspaces.port.nameBranches()
+    const browserEvents: unknown[] = []
+    const life = createAgentLife({ live: () => [live], hears: {},
+      notify: (_service, frame) => { browserEvents.push(frame); return true } })
+    replies.push(life.followed('viewers', { each: true, having: ['dsh'] }))
+    replies.push(life.followed('agentBrowser', {}))
+    life.disconnected('agentBrowser')
+    replies.push(life.followed('agentBrowser', {}))
+    life.running(live)
+    expect(browserEvents).toHaveLength(1)
+    for (const reply of replies) {
+      const agents = agentsIn(reply)
+      expect(agents?.length).toBeGreaterThan(0)
+      expect(agents?.every(session => !Object.hasOwn(session, 'gridLaunch'))).toBe(true)
+      // This reader shape is unchanged from the oldest supported source (2026-10-16).
+      const service = processCoreApi('/data', 'search', { live: () => agents ?? [] })
+      expect(service.agents.byAgent('live')).toMatchObject({ agentId: 'live', sessionId: 's-live', dsh: 'fixture' })
+    }
+    const sent = JSON.stringify([replies, browserEvents])
+    expect(sent).not.toContain('gridLaunch')
+    expect(sent).not.toContain(override.apiKey)
+    expect(live.gridLaunch).toBe(override)
+    expect(stopped.gridLaunch).toBe(override)
+  })
+
   it('lists every agent, live then stopped, and names them as the apps do', async () => {
     const deps = coreDeps()
     const core = createCoreApi(deps)
@@ -169,7 +249,7 @@ describe('the core API services stand on', () => {
     expect(createCoreApi({ ...deps, cloud }).cloud).toBe(cloud)
     expect(core.agents.cloud).toBeUndefined()
     const rows = [{ agentId: 'cloud_1' }] as RegisteredSession[]
-    expect(createCoreApi({ ...deps, cloudRows: () => rows }).agents.cloud!()).toBe(rows)
+    expect(createCoreApi({ ...deps, cloudRows: () => rows }).agents.cloud!()).toEqual(rows)
     expect(core.dataDir).toBe('/data')
     expect(await core.terminals.open({ argv: ['/bin/zsh'], cwd: '/work' })).toEqual({ ok: false, error: 'SERVICE_UNAVAILABLE' })
     const terminals = { ...TERMINALS_OFF, open: vi.fn(async () => ({ ok: true as const, agentId: 'shell' })), watch: TERMINALS_OFF.watch }
@@ -270,12 +350,11 @@ describe('the core API services stand on', () => {
     expect(await bare.agents.lastActivity!('kid')).toBeNull()
   })
 
-  // The agent browser keeps a browser for an agent the core still has, and its tools in a pane name their agent by it.
-  it('names every agent\'s id, live and stopped, and the live agent of a pane', async () => {
+  // `harness browser`'s tools in a pane name their agent by it.
+  it('names the live agent of a pane', async () => {
     const deps = coreDeps()
     const paned = { ...row('live'), runtimes: [{ backend: 'tmux', paneId: '%7' }] } as RegisteredSession
     const core = createCoreApi({ ...deps, registry: { ...deps.registry, list: vi.fn(() => [paned]) } as unknown as CoreApiDeps['registry'] })
-    expect(await core.agents.ids!()).toEqual({ live: ['live'], stopped: ['stopped'] })
     expect(await core.agents.ofPane!('%7')).toEqual({ agentId: 'live', guest: false })
     expect(await core.agents.ofPane!('%8')).toBeNull()
   })
@@ -309,27 +388,11 @@ describe('the core API services stand on', () => {
     expect(panePid).toHaveBeenCalledTimes(calls)
   })
 
-  // The person's Start and Stop reach the core through the agent browser (core/agents/lifecycle.ts `set`).
-  it('agents.setBrowser is the dep\'s answer, and absent without one', async () => {
-    const setBrowser = vi.fn((agentId: string, on: boolean) => (agentId === 'a1' ? { ok: true as const, changed: on } : { error: 'NOT_RUNNING' as const }))
-    const core = createCoreApi({ ...coreDeps(), setBrowser })
-    expect(await core.agents.setBrowser!('a1', true)).toEqual({ ok: true, changed: true })
-    expect(await core.agents.setBrowser!('gone', true)).toEqual({ error: 'NOT_RUNNING' })
-    expect(setBrowser.mock.calls).toEqual([['a1', true], ['gone', true]])
-    expect(createCoreApi(coreDeps()).agents.setBrowser).toBeUndefined()
-  })
-
-  // The agent browser moved a pane's browser to its new agent, and asks the core to move the flag (decision 19).
-  it('moveBrowser answers what the lifecycle said, and is absent without it', async () => {
-    const moveBrowser = vi.fn((_from: string, to: string) => (to === 'shell' ? { ok: true as const, changed: true } : { error: 'NOT_RUNNING' as const }))
-    const core = createCoreApi({ ...coreDeps(), moveBrowser })
-    expect(await core.agents.moveBrowser!('ended', 'shell')).toEqual({ ok: true, changed: true })
-    expect(await core.agents.moveBrowser!('ended', 'gone')).toEqual({ error: 'NOT_RUNNING' })
-    expect(moveBrowser.mock.calls).toEqual([['ended', 'shell'], ['ended', 'gone']])
-    // A record that cannot be written is a rejection, never a throw in the asker's turn.
-    moveBrowser.mockImplementationOnce(() => { throw new Error('ENOSPC') })
-    await expect(core.agents.moveBrowser!('ended', 'shell')).rejects.toThrow('ENOSPC')
-    expect(createCoreApi(coreDeps()).agents.moveBrowser).toBeUndefined()
+  // What happens to agents (core/agentLife.ts), lent to the services in the core's process that follow them.
+  it('agents.follow is the dep\'s, and absent without one', () => {
+    const follow = vi.fn(() => () => {})
+    expect(createCoreApi({ ...coreDeps(), follow }).agents.follow).toBe(follow)
+    expect(createCoreApi(coreDeps()).agents.follow).toBeUndefined()
   })
 
   it('hands a service\'s product counters on only where the core was told where they go', () => {

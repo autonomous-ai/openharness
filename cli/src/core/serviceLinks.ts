@@ -42,6 +42,8 @@ export interface ServiceLink {
 }
 
 export interface ServiceQueryAuthority {
+  /** Still the authenticated connection that issued this query, after asynchronous dispatch. */
+  current?(): boolean
   /** Checked inside a commit, after all asynchronous query dispatch: the exact routed owner request is still live. */
   ownsRequest(id: string, type: string, expected: Record<string, unknown>): boolean
 }
@@ -271,7 +273,7 @@ export function createServiceLinks(options: ServiceLinksOptions) {
         clearTimer(entry.timer)
         entry.timer = setTimer(() => settle(id, entry, unavailable(service)), entry.wait)
       }
-      const authority: ServiceQueryAuthority = { ownsRequest(id, type, expected) {
+      const authority: ServiceQueryAuthority = { current: () => links.get(service) === connected, ownsRequest(id, type, expected) {
         const entry = waiting.get(id)
         return !!entry && entry.service === service && entry.type === type && entry.connection === connected
           && links.get(service) === connected && now() <= entry.expiresAt

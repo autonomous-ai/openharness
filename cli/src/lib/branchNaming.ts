@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { sessionBranchNames } from './agentNames.js'
+import { sessionBranchNames } from './branchNames.js'
 import { HARNESS_BRANCH_KEY, inRepositoryTurn, insideGitCheckout } from './gitProject.js'
 
 const exec = promisify(execFile)

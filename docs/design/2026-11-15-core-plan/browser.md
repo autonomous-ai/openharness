@@ -76,14 +76,15 @@ Rule 7 bars a core mechanism only one component uses. A generic shape is fine on
   `followed()` (not caught up -> `{error:'SERVICE_UNAVAILABLE', retryable:true}`, never read as "not running"), `live.get` ->
   NOT_RUNNING / NOT_ALLOWED (guest), `setOn(true)`, counts, `startFor`. Stop: stop line, `setOn(false)` (a write failure is
   logged, the browser still stops), stop. `byPerson` removed. Options `followed` and `everyAgent` (in its process:
-  `follow.ready(10 s)` and the generic `agents` query). `begin()` reconciles with `everyAgent` (deletes browsers of agents
-  in neither list, as before) and then `browsers.stopAllBut(attached || live&&on)` (new: stops a browser left running for
-  an agent that ended while both the process and the core restarted).
+  `follow.ready(10 s)` and the generic `agents` query). `begin()` finishes recorded purges, sweeps unlisted containers
+  without deleting volumes, then `browsers.stopAllBut(attached || live&&on)` stops a browser left running for an agent
+  that ended while both processes restarted. A readable agent list cannot authorize deleting an omitted profile.
 - `browsers.ts`: `move` also moves `on[from] -> on[to]` and marks `adopted[from]`; `remove` drops `on`/`adopted`;
   new `stopAllBut(wanted)`.
 - Process (`agentBrowserProcess.ts`): `followLink({})`; queries now only `browser_state`, `streams` (kept for PR 2),
   `agent_of_pane`, `count`, `agents` (all generic, answered by `core/agentQueries.ts`); removed `agent_ids`, `set_browser`,
-  `move_browser` and the old `attached/stopped/deleted/moved` events.
+  `move_browser` and the old events from the current protocol. A dated process-only adapter still accepts an older
+  core's `attached/stopped/deleted/moved`, including its `move_browser` handshake after a move.
 - Core link (`core/agentBrowserLink.ts`, until PR 2): only frame states + streams. It follows the hub in-process
   (`agentBrowserLink.follow()`, called in main.ts when the browser runs out of process): keeps states only for live
   agents; an `ended` drops the state and re-syncs the frame. Its unknown queries fall through to `answerAgentQuery`.
@@ -110,65 +111,37 @@ Rule 7 bars a core mechanism only one component uses. A generic shape is fine on
   searchProcess uses `followLink({running:false})` + dated shim translating an old core's `deleteHistory` event.
   lifecycle.ts no longer takes `sessionSearch`; `purged(agentId, sessionIds)`.
 
-## Done (in the WIP commit)
+## PR 1: done (branch `core-browser-2`)
 
-api.ts types and port changes; core/agentLife.ts; harnessd/services.ts `hears` + `HeldAgentLife`; main.ts wiring (hub,
-`attach` replaces attachDsh/attachBrowser at create, fork, resume, start loop; agentEnded; `follow` in coreApi;
-`follow_agents` answer; `agentLife.disconnected`; lifecycle stopped/purged; search notice; viewersLink.follow();
-agentBrowserLink.follow()); create.ts, fork.ts, resumeAgentService.ts, lifecycle.ts (createAgentBrowserLifecycle deleted);
-registry.ts and stoppedAgents.ts; viewersLink.ts, viewers.ts, viewersProcess.ts; agentCleanup*.ts; search*.ts;
-agentBrowser.ts, browsers.ts, stateFile.ts, agentBrowserProcess.ts, agentBrowserLink.ts; agentQueries.ts;
-lib/serviceMetrics.ts; services/followLink.ts.
+Everything above, finished: `core/agents/discovery.ts` on `attach` and `taken`; `heldAgentLife()` in
+`harnessd/services.ts`; `lib/agentTmp.ts` out of the core (`tempRoots` beside its one reader, `lib/mediaPreview.ts`; the
+agent browser sweeps `agent-tmp` as it begins and as an agent runs a command); specs at 100% (`core/agentLife.spec.ts`,
+`services/followLink.spec.ts`, and every spec that named a removed member); the docs. Found on the way and fixed:
 
-## Left for PR 1, step by step
+- `follow_agents` is answered after Agent Messages' own answers, so it reads no more than it did (`live` rows).
+- A purge of an agent whose browser was starting (attached, not yet in the state file) deleted nothing: the browser is
+  deleted when it was started, or when the file cannot be read (the delete says why).
+- A purge of an agent that never had a Browser wrote the state file, which then started the process at every start.
+- `agent_browser_enabled` is counted at an agent's first start again (the old Desktop's create included).
+- The process is still asked for by an agent whose row carries the flag from before (an old Desktop's create, a row not
+  yet taken in): `core/agentBrowserLink.ts` `want`, dated 2026-12-18. **PR 2 must keep it** when that file goes (or drop
+  it after the date).
 
-1. `core/agents/discovery.ts`: deps `attachDsh`+`attachBrowser`+`moveBrowser` -> `attach(session)` and
-   `taken(from, to: RegisteredSession)`. onDiscovered: `attach(opened.entry)` (not only with dsh), evicted:
-   `if (opened.isNew) taken(opened.evicted.agentId, opened.entry)`. `paneTaken`: keep the resume-reserved and saved-record
-   checks, then `taken(previous, adopted)` (no flag). onObserved: `if (live) attach(live)` replacing both lines.
-   main.ts already passes `attach` and `taken: (from, to) => agentLife.taken(from, to)`.
-2. `harnessd/services.ts`: add `export function heldAgentLife(outOfProcess)` (main.ts imports it): the `hears` of every
-   SERVICE_HOSTS entry, only for services in `outOfProcess`. Spec it (`npm run test:harnessd` is 100% per file).
-3. agentTmp out of the core: drop `sweepAgentTmpWhenDue()` from `core/agents/create.ts` and `lib/launchOverrides.ts`;
-   move `tempRoots()` from `lib/pathContainment.ts` into `lib/mediaPreview.ts` (its only caller, edge host), so
-   pathContainment no longer imports `lib/agentTmp.ts`; sweep `agent-tmp` from the agent browser service (at begin and
-   daily: `sweepAgentTmpWhenDue` / `sweepTmpFolders`). Note for the PR: Swarm-era `agent-tmp/<id>` folders on a machine
-   that never runs the browser are no longer swept.
-4. `npx tsc --noEmit -p .` in cli/ until clean; fix every caller and test fake. The first run on the WIP commit
-   (only the first 60 lines were kept) found, beside the specs below:
-   - `core/main.ts`: the new `const attach = (s) => agentLife.running(s)` (about line 1066) collides with an existing
-     `const attach` (about line 1340, the transcript attach that has `.holdInterpretation`). Rename the generic one (e.g.
-     `agentHere`) and pass it as `attach: agentHere` to create, fork, the lifecycle (resume) and discovery, and in the
-     start loop (`for (const session of registry.list()) agentHere(session)`).
-   - `core/main.ts`: `heldAgentLife` not yet exported by harnessd/services.ts (step 2).
-   - `core/agents/discovery.ts:148`: still reads `evicted.browser` (step 1).
-   - Specs that name the removed members: core/agentBrowserLink.spec.ts (ids, want, attached/stopped/deleted/moved,
-     setBrowser, moveBrowser), core/agentCleanupLink.spec.ts (closed), core/agents/create.spec.ts and nativeCreate.spec.ts
-     (attachDsh, attachBrowser), core/agents/fork.spec.ts (attachDsh), core/agents/lifecycle.spec.ts
-     (createAgentBrowserLifecycle, sessionSearch, attachDsh, attachBrowser), core/api.spec.ts (ids, setBrowser,
-     moveBrowser), and more past the first 60 lines (run tsc again without `head`).
-5. Specs (write the failing test first, show red then green): `core/agentLife.spec.ts`, `services/followLink.spec.ts`;
-   update `core/agentBrowserLink.spec.ts`, `core/agentCleanupLink.spec.ts`, `core/agentQueries.spec.ts`,
-   `core/viewersLink.spec.ts`, `core/agents/{lifecycle,create,discovery,fork}.spec.ts`, `lib/resumeAgentService.spec.ts`,
-   `lib/registry*.spec.ts` (setBrowser gone), `lib/stoppedAgents.spec.ts`, `services/{agentBrowser,agentBrowserProcess,
-   agentCleanup,agentCleanupProcess,search,searchProcess,viewers,viewersProcess}.spec.ts`,
-   `services/agentBrowser/browsers.spec.ts` (move on/adopted, stopAllBut), `harnessd/services.spec.ts`,
-   `testing/fakeCore.ts` if a spec needs `follow`. Golden: the viewers' frames and dsh fields byte for byte.
-6. `src/architecture.coreFiles.txt`: + `core/agentLife.ts`, `lib/hachiMetrics.ts` -> `lib/serviceMetrics.ts`,
-   - `lib/agentTmp.ts` once step 3 is done; run `src/architecture.spec.ts` and `src/leanEntry.spec.ts`.
-   Core before: 543 files, 92,994 lines (count with `node docs/design/2026-11-15-core-plan/tools/coreCount.mjs cli/src`).
-7. Gates: `npm run test:core`, `npm run test:harnessd`, `python3 scripts/local-checks.py --list <paths>`, then e2e (never
-   against the person's daemon; no tsc/vitest/edits while an e2e runs): `e2e/agentBrowser.e2e.ts`,
-   `viewersProcess.e2e.ts`, `viewersOnDemand.e2e.ts`, `serviceProcesses.e2e.ts` (+ a browser failure-isolation case copied
-   from it: browser process killed/down -> agents, frames, other panes fine, Browser says off), `services.e2e.ts`, the
-   cleanup's and search's e2e. Known main failures: `agentBrowser.e2e.ts` window size, `sandbox.e2e.ts`,
-   `agentClient.e2e.ts` folder trust, `hermesAdmission.e2e.ts` (2).
-8. Docs in the same PR: cli/src/services/AGENTS.md (the agentBrowser row, the "On demand" askedSince line, a line for
-   following agents), cli/src/core/AGENTS.md (agentBrowserLink line; add agentLife.ts), cli/AGENTS.md process table
-   agentBrowser line, the audit doc (security item 1 and the stream line are this package's), and fix the comment in
-   `lib/productUsageSignals.ts` that points at core/agents/lifecycle.ts for the Browser's Start refusals.
-9. `/code-review high` on the diff, fix, commit, `python3 scripts/local-checks.py --run --base origin/main`, draft PR with
-   red/green, core files/lines before and after, receipts; ready; report to the lead (8 lines max). Lead merges, then PR 2.
+Compatibility decided: a service of this build under a core from before (a newer master after a rollback) keeps
+working: the viewers (`agents` and `attach`/`detach`), the cleanup (`closed`), search (`deleteHistory`) and the agent
+browser (`attached`, `stopped`, `deleted`, `moved`), each dated 2026-12-18; only a new Start answers
+`SERVICE_UNAVAILABLE` there (no released Desktop reaches it). A core of this build under services from before needs a
+master that does not stop its services at an update, one from before 2026-10-05 (#791 re-executes the master with its
+services stopped first), outside the 30 days: not handled.
+
+From `/code-review high`, fixed: the browser's process waits for its catch-up before it asks which agents are here (as
+it started it asked before connecting, which was no answer, and kept gone agents' browsers); a stopped agent's flag from
+before goes with its pane (`move` takes it in first); a follower in the core's process that fails 5 times is dropped,
+said once; the browser's link answers only the generic questions its process uses; unused exports. Left, said why in
+the PR: `agent_of_pane` and the counters are generic (no data `live` does not give, and counters are measures); the
+state file read per new run (in the browser's own process by default); the old row flag still asks for the process
+until 2026-12-18 (a state file would anyway); `viewersProcess.ts` keeps its own catch-up beside `followLink.ts`: **PR 2
+moves it onto `followLink`**, with the viewers' e2e as the proof.
 
 ## PR 2, after PR 1 merges
 
@@ -188,3 +161,231 @@ lib/serviceMetrics.ts; services/followLink.ts.
   `BrowserRoute`, `mayOpenBrowser` (the open's asker check can move to the service: it gets the asker), the browser bits
   of `backendSocket.ts`, `CoreApi.clients.browserFrame/browserBytes`, and make `wakeAgentBrowser` generic.
 - Keep: `core/terminals/browser.ts`, `lib/browserShim.ts` (the sign-in BROWSER shim, not the Agent Browser).
+
+## Continuation, 15 November (Codex)
+
+PR #4320 is being completed from `codex/core-browser-continue` in an isolated worktree. Main `aad8dcd535` is integrated:
+the discovery and resume conflicts keep both the generic lifecycle and main's removal of process-environment reads.
+
+CI run 43679841924 failed because the startup spec rejected a read-only `podman ps` call if it arrived before the
+assertion. The spec now waits for that listing, permits exactly it, and still rejects any unrequested change to a
+browser or profile. Waiting without changing the assertion reproduces the failure; the corrected test passes.
+
+Review also found that `followLink` retained ended agent ids until the next connection. Only an outstanding catch-up
+now keeps the ids needed to protect its answer from newer events. The core's scan callback is allocated once, and
+an agent already known to a follower is not reinserted or pruned at each look.
+
+Remaining before merge: final coverage receipts, integration checks, the exact-head CI run and the performance
+comparison. The earlier isolated scan measurement was slower than main; a full isolated-daemon comparison is being
+recorded as well. Package 2's frame parts and stream work remain step 2.
+
+## Review corrections, 2026-11-15
+
+Design before code:
+
+- Growth/deletion: a readable agent list is not a complete identity inventory: corrupt saved records are omitted.
+  Startup finishes only deletions already recorded in the Browser state file; an explicit purge still removes the
+  profile. A profile whose purge notice was lost across a full daemon outage is retained, rather than guessing that
+  its omitted record was deleted. Running containers without a live owner are stopped, retaining their volumes.
+  This intentionally favors preserving logins over reclaiming an uncertain orphan; no new core inventory or port.
+- Concurrency: pending Starts carry per-request identity, invalidated by a later Stop/end/purge. A person's Start or
+  Stop also completes legacy flag adoption, so a late row cannot reverse that choice. Both agents' move queues are
+  reserved before the migration lookup; consecutive pane changes stay ordered.
+- Read cost/scale: startup no longer queries/parses all agent rows to decide deletion. Pending intent is retained only
+  during the bounded catch-up wait. The existing per-agent queues serialize work; no poll or global lock is added.
+- Compatibility/migration/rollback: the dated old-core move adapter carries destination/on data and completes the
+  `move_browser` handshake before restoring the destination. It lives solely in the Browser service/process and can
+  go on 2026-12-18. Existing Browser state schema and older-build rollback stay unchanged.
+- Audience/identity: existing owner and guest checks remain authoritative. No credential or login is copied.
+- Failure: an unavailable legacy core leaves the moved profile stored and logs the existing named move failure.
+  Corrupt saved-agent metadata cannot trigger volume deletion.
+- Platforms: macOS/Linux Browser service; Windows remains unsupported. Isolated fake Podman/service fixtures cover
+  the races; bundled daemon e2e and core coverage are required before merge.
+
+Validation of these review corrections (before the parent's next main integration):
+
+- Node 24.22.2, macOS, isolated fake Podman/service fixtures. The five new regression cases failed on
+  `b9359d3ac9025838c2700f6a4cd2394b5fac7db2`: missing-profile deletion, Start/Stop, late legacy adoption, consecutive
+  pane moves, and the old-core move handshake. Raw red output: `/tmp/core-browser-review-red.log`.
+- Green: 218 tests in `agentBrowser.spec.ts`, `agentBrowserProcess.spec.ts`, `agentBrowser/browsers.spec.ts`, and
+  `agentBrowser/containers.spec.ts`; all four implementation files at 100% statements/branches/functions/lines
+  (934 statements, 570 branches, 224 functions, 709 lines). Raw output: `/tmp/core-browser-review-coverage.log`.
+  These include cancellation on end/purge/pane takeover/service stop, two pending Starts, malformed legacy moves,
+  unavailable/refused/timed-out/stale core replies, and keeping an off profile without starting it.
+- Node 24.22.2 typecheck passed; no core file or import was added. No full-suite receipt or final-head e2e is claimed:
+  the parent must integrate current main, review the combined change, and run the remaining required acceptance.
+- A second ordering issue exposed by the consecutive-move regression is fixed too: a queued Start for B, not yet
+  published as state, is cancelled when B's profile moves to C; it cannot recreate B after the move.
+
+
+## Stop during a pending move, 16 November
+
+Design before correction: a move may wait for the legacy flag lookup or the old container to stop. A Stop of its
+destination during either wait must remain off after the profile moves. Keep the profile transfer and its ordered
+queues; transfer the source's on flag only while the destination's existing start generation is current. A Stop
+also reaches a queued browser operation even before that operation has published a browser state. Reuse the existing
+queue and generation maps; add no retained intent table, timer, stored field or core mechanism. The later Stop stays
+in the existing state file, so older-build rollback sees it too. Owner/guest checks, private profile ownership,
+process boundaries and macOS/Linux support are unchanged. Test both waits with explicit barriers before changing
+production code; existing move/Stop coverage and required gates must pass. This fixes the extraction's cancellation
+boundary; it adds no Browser feature. No new read, poll or frame-path work is introduced.
+
+
+The two destination-Stop regressions failed against c7a8992f99 (3.51 s): both waits restored `on.b1` after Stop.
+The correction reuses the destination generation and notices queued work before state exists. Native targeted
+validation passes all 220 cases across the same four files at 100% coverage (937 statements, 573 branches,
+225 functions, 711 lines); Node 24.22.2 typecheck passes. The first broader attempt was sandbox-invalid: four
+loopback proxy fixtures received `listen EPERM`; its 216 passes and four failures remain in
+`/tmp/core-browser-destination-stop-green.log`. The corrected native run is
+`/tmp/core-browser-destination-stop-native-green.log`, and the true behavior red is
+`/tmp/core-browser-destination-stop-red.log`. Current-main integration and final gates remain with the coordinator.
+
+## Credential boundary integration, 16 November
+
+The metadata projection in #4349 replaces Browser/viewer attach calls that this extraction removes. Keep the
+generic lifecycle instead: project matching catch-up rows and each emitted running event through `agentView`,
+after the existing known/filter checks. Authoritative input rows stay unchanged. A follower receives a copy even
+when the row has no key yet, so a later saved credential cannot enter its retained metadata. Unobserved scans,
+known once-only followers and excluded rows perform no projection. `taken` already carries only ids and an
+optional guest flag. Main's direct viewer frame-context callback also retains its projection.
+
+This combines the existing custody Design without adding storage, ports, timers or migration. Inline and process
+catch-up regressions failed first (2 failed, 1 unchanged scan case passed, 0.86 seconds). The resulting five-file
+integration selection passes 116 tests in 2.61 seconds; Node 24.22.2 typecheck passes. Two intermediate runs exposed
+obsolete test calls to the removed Browser reconnect and viewer agents-query adapters; both fixtures now exercise
+the generic follow path, with all output assertions retained. Logs: `/tmp/core-browser-custody-red.log`,
+`/tmp/core-browser-custody-green-combined.log`, `/tmp/core-browser-custody-typecheck-final.log`.
+
+The bundled credential test now subscribes through `follow_agents` and verifies the replacement running event and
+reconnect catch-up. Its combined-source native run, independent review of the coordinator's changes, full required
+gates and updated performance comparison remain pending. Earlier #4349 native evidence covers its original direct
+attach path, not this replacement path.
+
+## Pending destination purge and reconnect fixture, 16 November
+
+Design before correction: an explicit purge must reserve deletion for work already queued for that agent, even
+when no settings entry or browser state has been published yet. The Browser service checks its existing per-agent
+queue and enters the existing durable delete path. That path invalidates the start generation, records the purge
+before waiting, then removes any profile delivered by the preceding move. No new queue, stored field, timer, core
+state or route is added. The same queue covers the legacy lookup, old-container stop and earlier queued work; both
+modern lifecycle and dated old-core deleted notices reach this handler. Unrelated agents and profiles keep their
+existing ownership checks. A purge of an agent with no browser and no queued work still creates no state file.
+Existing schema, rollback, identity/audience rules and macOS/Linux support are unchanged. Failed deletion retains
+its existing durable recovery marker and named log. Explicit barriers cover both move waits before correction.
+
+The native credential fixture uses the generic reconnect catch-up it already requested; its removed viewer-only
+`agents` query is replaced with the same row-presence, field-absence and synthetic-canary checks on that catch-up.
+No production API or credential projection changes. Both purge barriers failed first with the destination profile
+recreated (2 failed, 109 skipped, 3.46 seconds) and pass after the queue admission correction (2 passed, 109 skipped,
+3.22 seconds), on macOS with Node 24.22.2. Logs: `/tmp/core-browser-final-purge-red.log` and
+`/tmp/core-browser-final-purge-green.log`. Native fixture validation, typecheck and broader gates remain pending.
+
+## Old-core settings and unresolved migration evidence, 16 November
+
+Design before correction: settings/read/save/proxy-test need only proof that an
+agent exists. A supported older core answers `agent_ids`, but cannot answer
+`follow_agents` or supply complete `agents` rows. Keep presence and migration
+evidence separate in the Browser process. Presence asks `agents` first and uses
+the dated `agent_ids` adapter only after an explicit `UNKNOWN_QUERY`. Validate
+both legacy lists, use them only for membership, and never invent a session row.
+Each query is bounded to ten seconds and fenced before and after the await to
+the captured core connection and connection generation. A disconnected, failed, malformed or superseded
+answer stays unknown: settings requests report `SERVICE_UNAVAILABLE`, while a
+valid absent id remains `NO_BROWSER`. New Start still requires lifecycle catch-up.
+The adapter is process-local and can be deleted on or after 2026-12-18.
+
+Raw migration rows are queried independently of lifecycle catch-up; they are
+never a complete inventory for deleting profiles. A move needing a legacy flag
+must stop before changing either profile if that query is unavailable or omits
+the source row (a saved row may be unreadable). Preserve the source's adoption/on
+state and log `browser_move_failed
+(migration_unavailable)`; a later move with actual evidence may retry. Existing
+source/destination queues and generation checks keep a later Stop or purge in
+force. An explicit off flag remains different from unavailable evidence.
+Once a move succeeds, both ends are marked adopted: the destination's on/off
+decision now belongs to Browser too. A consecutive move must carry that decision
+without asking for a legacy row of the new destination.
+
+Growth and storage limits are unchanged: no new persistent field, cache, timer
+loop, core port or core file. Concurrency uses existing queues and the captured
+connection generation only. Reads remain request-driven and bounded by existing IPC frame
+limits; the legacy fallback performs at most one additional query. Migration
+failure changes no saved data, and rollback reads the existing state format.
+Owner/guest checks and OS identity are unchanged. Failures use the existing
+service refusal and move log. Affects the macOS/Linux Browser service; Windows
+remains unsupported. Selected checks: public request and move regressions first,
+process compatibility/stale-connection controls, move/Stop/purge controls, the
+four affected Browser coverage files at 100%, and TypeScript. Root retains final
+native, full-gate, performance and platform acceptance.
+
+Correction evidence (macOS, Node 24.22.2, one worker; private fake Podman and
+loopback proxy, with Linux service paths and Windows refusals exercised):
+
+- The two public-caller regressions failed before the correction against
+  `aff58badbf0b4eaece4b5b66e40bbc9af6e72c34`: old-core settings returned
+  `NO_BROWSER`, and unavailable migration moved the profile and marked its
+  source adopted. Log: `/tmp/core-browser-compatibility-migration-red.log`.
+- Missing-row migration and malformed modern presence also failed before their
+  guards; the original corrections passed in that run. Log:
+  `/tmp/core-browser-compatibility-migration-additional-red.log`.
+- The first coverage run caught one further failure: a consecutive move tried
+  legacy adoption again for its new source (243 passed, one failed). Kept in
+  `/tmp/core-browser-compatibility-migration-coverage.log`; the successful state
+  commit now adopts both ends. The move controls then passed for both on and off
+  (25 selected tests; `/tmp/core-browser-compatibility-migration-queues-green.log`).
+- Final four-file coverage: **245 tests passed**, **100% per file** for statements,
+  branches, functions and lines in `agentBrowser.ts`, `agentBrowserProcess.ts`,
+  `agentBrowser/browsers.ts` and `agentBrowser/containers.ts` (110.58 s).
+  Log: `/tmp/core-browser-compatibility-migration-final-coverage.log`; raw report:
+  `/tmp/core-browser-compatibility-migration-final-coverage/coverage-final.json`.
+  Final `tsc --noEmit` passed (`/tmp/core-browser-compatibility-migration-final-types.log`).
+
+This remains PR1: lifecycle and flag ownership. Generic frame parts and stream
+consolidation remain PR2; Git is still blocked on frame parts. Final integration,
+native validation, broader gates and performance acceptance remain with the
+coordinator. Evidence hashes: `/tmp/core-browser-compatibility-migration-evidence.json`.
+
+## Final lifecycle acceptance, 16 November
+
+The combined lifecycle and credential-safe metadata change passed independent review,
+TypeScript, 6,719 local gate cases and all 21 native service/Browser/custody cases on
+macOS x64 with Node 24.22.2. Core, harnessd, portability and Resume coverage are 100%.
+The executed head is `091b740d80ffabf0702863321bd8197a85635a53`; final source
+`ab5e73f126fba4ac055eec8f0d4be869e0963ab8` changes only one blank EOF line and
+builds a byte-identical CLI bundle. Integration of main `8ee115aa` adds only the
+separately validated Windows test fixture and its rules documentation.
+
+One fixed quiet ABBA comparison used four fresh processes, 16 fake agents, two
+active agents and two windows with four terminal streams. Each process completed
+30-second empty, populated-idle and active phases after warm-up; all 12 phases,
+eight turns per process, output drainage and private-fixture cleanup passed. The
+baseline `1c3a0ed6` includes current-main input and credential-safe metadata, so
+this comparison isolates lifecycle extraction; it does not replace the original
+credential-projection cost evidence. Browser is off and no Podman performance is
+claimed. No retry, dropped sample or forced GC was used.
+
+| Phase | Core CPU, percent of one core | Mean RSS, MiB |
+| --- | ---: | ---: |
+| Empty | 0.4148 → 0.4239 | 99.15 → 102.12 |
+| 16 agents idle | 1.0210 → 1.0286 | 162.72 → 156.38 |
+| Active | 5.3932 → 5.3430 | 164.35 → 157.72 |
+
+Complete-turn p95 was 6898.8 → 6917.9 ms, including the fixture's deliberate
+roughly five-second engine delay; it is not terminal echo latency. These two
+processes per side do not establish statistical significance. Service, engine and
+tmux CPU are outside the core total. Master CPU remains separately reported at
+coarse process-sampling resolution. The complete summary SHA-256 is
+`8ac33e9ff99436750a4c25b6c85a26a33785e0150b5bab5feeef6b3074abc38a`;
+the fixed-plan SHA-256 is
+`f92e92d0e35972d988afa50b85fc19547f58fd08f476d9ea725c6b1630e9115e`.
+
+Design disposition: accept this lifecycle increment with its measured mixed
+costs retained. It removes feature lifecycle ownership and fixes cancellation,
+migration and credential disclosure without a new runtime dependency. Active CPU
+and populated memory improve; the small increases in empty memory, idle CPU and
+complete-turn latency are not claimed as improvements. Both idle sources exceed
+the 1% target slightly, so whole-core idle acceptance and 10x headroom remain
+open in the core audit. Final frame/Git extraction has separate cost evidence;
+stream relay and wake extraction still need implementation. This is not Browser
+package completion or whole-core completion. Original failing checks and older
+cost comparisons remain in the acceptance record, not reclassified as passes.

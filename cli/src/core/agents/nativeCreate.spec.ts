@@ -68,7 +68,7 @@ it.each([true, false])('completes native Codex preparation before its dispatch c
   const creator = createAgentCreator({ native: (engine, source) => inspectNativeLaunch(engine, source),
     createBackend: {} as CreateAgentDeps['createBackend'], registry: {} as CreateAgentDeps['registry'],
     externalResume: async () => { throw Error('unexpected external resume') }, watchNewPane: async () => {},
-    announceSession: () => {}, attachDsh: () => {}, prepareApiTools: () => {},
+    announceSession: () => {}, attach: () => {}, prepareApiTools: () => {},
     hookPort: 19473, hooksDisabled: false, installOpencodePlugin: async () => true,
     gridLaunchMachine: () => ({}) as never, buildGridLaunch: async () => { throw Error('unexpected grid') },
     terminalHintMachineName: () => 'Fixture', blocksFolder: () => false, gridSetup: () => null, privateGridName: async () => null,

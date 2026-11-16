@@ -51,9 +51,9 @@ export interface ResumeAgentServiceDeps {
   stopBackgroundJob?: ClearBackgroundJob
   refreshGridWebSearch(agentId: string, overrides: LaunchOverrides): void
   clearDeleted(agentId: string): void
-  attachDsh(session: RegisteredSession): void
-  /** Its browser starts again, for an agent whose Browser is on (core/api.ts `AgentBrowserPort.attached`). */
-  attachBrowser?(session: RegisteredSession): void
+  /** A look at the resumed agent, for the services that follow agents (core/agentLife.ts `running`): its harness's viewer
+   *  and its browser come back with it. */
+  attach(session: RegisteredSession): void
   /** Follows a session: its history read, then its tail (core/transcripts/attach.ts). */
   attachSession(session: RegisteredSession): Promise<boolean>
   /** Where the relaunched engine's own writing begins, for the attach that follows (core/transcripts/relaunch.ts). */
@@ -76,7 +76,7 @@ function preparationFailed(agent: string, error: unknown) {
 export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
   const { registry, stoppedAgents, createBackend, noBackendCode = 'TMUX_UNAVAILABLE', backendFor, restartJobs, stopJobs, pinnedControls,
     retainExitedSession, announceSession, relaunchOverrides, prepareSessionResume,
-    refreshGridWebSearch, clearDeleted, attachDsh, attachBrowser, attachSession, relaunchMarks, stopBackgroundJob } = deps
+    refreshGridWebSearch, clearDeleted, attach, attachSession, relaunchMarks, stopBackgroundJob } = deps
   const resumeConversations = new Set<string>()
   /** Same short form every other `[…]` line in the daemon logs uses. */
   const sid = (id: string) => id.slice(0, 8)
@@ -455,8 +455,7 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
         refreshGridWebSearch(pending.agentId, built.overrides)
         announceSession(pending)
         if (isTerminalEngine(saved.engine)) return await waitForResume(pending, current, pending.grid ?? null, launchArgs)
-        if (pending.dsh) attachDsh(pending)
-        if (pending.browser) attachBrowser?.(pending)
+        attach(pending)
         return await waitForResume(pending, current, launchedGrid(built.overrides.gridLaunchRecord?.override), launchArgs)
       } catch (error) {
         if (error instanceof IdentityReadUnavailable) return { ok: false,

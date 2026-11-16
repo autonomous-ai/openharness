@@ -95,7 +95,7 @@ try {
     tmuxBackend: resumeBackend, createBackend: resumeBackend, backendFor: () => resumeBackend,
     retainExitedSession: forbidden, announceSession: forbidden,
     relaunchOverrides: async () => ({ ok: false, error: 'SERVICE_UNAVAILABLE', detail: 'Fixture dependency is unavailable.' }),
-    prepareSessionResume: forbidden, refreshGridWebSearch: forbidden, clearDeleted() {}, attachDsh: forbidden, attachSession: forbidden })
+    prepareSessionResume: forbidden, refreshGridWebSearch: forbidden, clearDeleted() {}, attach: forbidden, attachSession: forbidden })
   const iterations = verify ? 1 : workload.startsWith('checkpoint') ? 5 : 50
   const latenciesMs: number[] = []
   let cpuMs = 0, agent: import('../../src/lib/registry.js').RegisteredSession | undefined

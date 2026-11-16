@@ -251,21 +251,17 @@ describe('stopped harness persistence', () => {
     expect(store.get(saved.agentId)).not.toHaveProperty('previousAgentId')
   })
 
-  // The browser moves with its pane (decision 19): a stopped agent's flag is written in place.
-  it('patch sets and clears browser in place: the name and touchedAt stay, a cleared flag is absent from the file, and an id with no record answers false', async () => {
+  // The folder a Claude row drifted out of is corrected in place (cwdRepair.ts).
+  it('patch corrects the folder in place: the name and touchedAt stay, and an id with no record answers false', async () => {
     const { saved, store } = await fixture()
     store.save({ ...saved, defaultName: 'harness Desktop' })
     const before = store.get(saved.agentId)!
-    expect(store.patch(saved.agentId, { browser: true })).toBe(true)
-    expect(store.get(saved.agentId)).toEqual({ ...before, browser: true })
-    expect(store.patch(saved.agentId, { browser: undefined })).toBe(true)
-    const file = JSON.parse(readFileSync(join(directory, 'stopped-agents', `${saved.agentId}.json`), 'utf8')) as { session: Record<string, unknown> }
-    expect(file.session).not.toHaveProperty('browser')
+    expect(store.patch(saved.agentId, { cwd: '/elsewhere' })).toBe(true)
     const after = store.get(saved.agentId)!
-    expect(after).toEqual(before)
+    expect(after).toEqual({ ...before, cwd: '/elsewhere' })
     expect(after.touchedAt).toBe(before.touchedAt)
     expect(after.defaultName).toBe('harness Desktop')
-    expect(store.patch('never-saved', { browser: true })).toBe(false)
+    expect(store.patch('never-saved', { cwd: '/elsewhere' })).toBe(false)
   })
 
   // The global "last used" order must not forget an agent because it was paused: the archive keeps

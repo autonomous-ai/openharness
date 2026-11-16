@@ -18,7 +18,7 @@ import { gridUnavailable, type GridLaunchAnswer, type GridLaunchRequest } from '
 import { buildLaunchOverrides, type LaunchOverrides, type LaunchOverridesDeps, type LaunchOverridesResult, type LaunchSource } from '../../lib/launchOverrides.js'
 import type { ModelsPort } from '../api.js'
 import { sid } from '../../lib/log.js'
-import { prepareInstructionWrites } from '../../scm/scmProjects.js'
+import { prepareInstructionWrites } from '../../scm/launch.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'
 
 /**

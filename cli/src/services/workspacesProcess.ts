@@ -11,13 +11,15 @@
  * removed on a timer (#4166). The git work is this process's alone: a hang or a crash in it costs workspaces, and the
  * master starts them again.
  */
-import type { CoreApi } from '../core/api.js'
+import type { AgentView, CoreApi } from '../core/api.js'
 import { ACCOUNT_BACKEND_OFF, CONVERSATIONS_OFF, AGENT_ACTIONS_OFF, DAEMON_UNKNOWN, DELIVERIES_OFF, emptyPorts, LANE_OFF, resolveAgent, TERMINALS_OFF } from '../core/api.js'
 import { gitProjectFolderOf } from '../lib/gitProjectFolder.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { WorkspaceTarget, WorktreeReview } from '../lib/worktreeDeletion.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess } from './process.js'
-import { UNASKED } from './processCoreApi.js'
+import { processCoreApi, UNASKED } from './processCoreApi.js'
+import { followLink } from './followLink.js'
+import { createFramePublisher } from './framePublisher.js'
 import { startWorkspaces } from './workspaces.js'
 
 export interface WorkspacesServiceOptions {
@@ -107,13 +109,29 @@ export function workspacesCoreApi(
 }
 
 export function runWorkspacesService(options: WorkspacesServiceOptions): ServiceProcess {
-  let live: RegisteredSession[] = []
+  let live: AgentView[] = []
   let core: CoreConnection | null = null
+  let following = false
+  const lifecycle = followLink({ each: true, frames: true })
+  lifecycle.follow(event => {
+    if (event.kind === 'running') {
+      following ||= !!event.session.frameEpoch
+      live = [...live.filter(session => session.agentId !== event.session.agentId), event.session]
+    } else if (event.kind === 'ended' || event.kind === 'purged') live = live.filter(session => session.agentId !== event.agentId)
+  })
+  // Before shared publications the core computed Git facts itself. Its existing refresh query is
+  // sufficient during that handover; no second Git publication protocol. Delete 2026-12-18.
+  const publisher = createFramePublisher(session => ({ query: 'branchNamed', payload: { agentId: session.agentId } }))
   const ports = emptyPorts()
   // Lost only with the connection: the frame then shows the new branch when the core's read of the
   // folder expires (lib/agentProject.ts), seconds later.
   const renamed = (agentId: string): void => { void core?.query('branchNamed', { agentId }).catch(() => {}) }
-  ;(options.start ?? startWorkspaces)(workspacesCoreApi(options.dataDir, { live: () => live }, renamed), ports)
+  const api = workspacesCoreApi(options.dataDir, { live: () => live }, renamed)
+  api.agents.follow = lifecycle.follow
+  api.usage = processCoreApi(options.dataDir, 'workspaces', {
+    ask: (query, payload) => core?.query(query, payload) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }),
+  }).usage
+  ;(options.start ?? startWorkspaces)(publisher.scope(api), ports)
   if (!ports.workspaces) throw new Error('workspaces did not start')
   const workspaces = ports.workspaces
 
@@ -147,13 +165,16 @@ export function runWorkspacesService(options: WorkspacesServiceOptions): Service
       },
     },
     onEvent: (payload) => {
+      if (lifecycle.heard(payload)) return
       if (payload.kind === 'nameBranches' && Array.isArray(payload.agents)) {
-        live = payload.agents.filter(isSession)
+        if (!following) live = payload.agents.filter(isSession)
         workspaces.nameBranches()
       }
     },
     onConnected: (connection) => {
       core = connection
+      publisher.connected(connection)
+      void lifecycle.connected((query, payload) => connection.query(query, payload))
       // Said on every connection: a core of this build asks a process for folders only once it has said it makes them.
       // The core reads it as it arrives, so only a connection that ends loses it, and the next one says it again; a
       // failure is still said, as creates that need git wait until it is heard.
@@ -161,6 +182,13 @@ export function runWorkspacesService(options: WorkspacesServiceOptions): Service
         console.warn(`[workspaces] could not tell the core this process makes folders · ${error instanceof Error ? error.message : String(error)}`)
       })
     },
+    onDisconnected: () => {
+      core = null; following = false
+      publisher.disconnected()
+      lifecycle.disconnected()
+      for (const session of live) lifecycle.heard({ kind: 'agent', event: { kind: 'ended', agentId: session.agentId } })
+      live = []
+    },
   })
-  return { stop: () => service.stop() }
+  return { stop: () => { workspaces.stop(); publisher.disconnected(); lifecycle.disconnected(); return service.stop() } }
 }
