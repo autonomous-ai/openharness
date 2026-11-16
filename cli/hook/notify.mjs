@@ -519,6 +519,10 @@ function hostHints() {
     const value = process.env[name]?.slice(0, 64)
     if (value && !CONTROL.test(value)) hints[name] = value
   }
+  // A named herdr session (`herdr --session <name>`) is a server of its own whose pane ids start again at w1:p1, and
+  // herdr sets HERDR_SESSION in its panes alone (herdr 0.8.0): the devices follow the default session, where this id
+  // would be another agent's pane.
+  if (process.env.HERDR_SESSION) delete hints.HERDR_PANE_ID
   return hints
 }
 
