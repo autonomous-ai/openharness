@@ -110,6 +110,19 @@ describe.skipIf(process.platform === 'win32')('another program\'s Unix socket', 
     expect(told).toEqual(['x'.repeat(16)])
   })
 
+  it('end is told once: an oversize line, then the close it leads to, is one end', async () => {
+    const accepted = served.next()
+    const ends: LineEnd[] = []
+    const socket = connectLines(path, '', 16, () => {}, (fault) => {
+      ends.push(fault)
+      socket.destroy()
+    })
+    const closed = once(socket, 'close')
+    ;(await accepted).write('y'.repeat(17))
+    await closed
+    expect(ends).toEqual(['oversize'])
+  })
+
   it('a connection that never opened ends refused; one the server closed ends ended', async () => {
     const accepted = served.next()
     const { ended } = lines(path, '', 64)
