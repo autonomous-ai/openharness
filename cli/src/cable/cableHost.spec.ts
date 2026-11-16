@@ -1309,6 +1309,33 @@ describe('the dial that shows one app at a time', () => {
     expect(appSwitched.mock.calls).toEqual([['pick'], ['notice']])
   })
 
+  /** The switches, views and brings a host is told, in the order told. */
+  function telling(): { told: string[]; over: Partial<CableHostWiring> } {
+    const told: string[] = []
+    return { told, over: {
+      appSwitched: (cause) => { told.push(`switched ${cause}`) },
+      appView: (view, cause) => { told.push(`view ${view} ${cause}`) },
+      appBrought: (app) => { told.push(`brought ${app}`) },
+    } }
+  }
+
+  it('a pick that switches tells appBrought the app once, after appSwitched; same, ignored and a notice tell it nothing', async () => {
+    const { told, over } = telling()
+    const host = setup(five(), over)
+    expect(await shown(host)).toBe('ghostty')
+    expect([host.pickApp('vscode'), host.pickApp('vscode'), host.pickApp('cursor'), host.pickApp('ghostty', 'notice')])
+      .toEqual(['switched', 'same', 'ignored', 'switched'])
+    expect(told).toEqual(['switched pick', 'brought vscode', 'switched notice'])
+  })
+
+  it('with no window a pick of Harness that switches brings nothing', async () => {
+    const { told, over } = telling()
+    const host = setup(five(), { sessions, ...over })
+    expect(await shown(host)).toBe('ghostty')
+    expect(host.pickApp('harness')).toBe('switched')
+    expect(told).toEqual(['switched pick'])
+  })
+
   /** Agents the open scan found, which nothing has told the app of yet: on the unknown app's page. */
   const pending = (n: number): HostAgent[] =>
     Array.from({ length: n }, (_, i) => agent(`t${i + 1}`, 'terminal', { appPending: true }))
@@ -1530,6 +1557,31 @@ describe('the dial that shows one app at a time', () => {
       expect(host.holdsTab()).toBe(true)
       settle(host, 'vscode')
       expect(views).toEqual(['apps window', 'tabs pick', 'apps front'])
+    })
+
+    it('with a window, a pick of Harness on an app\'s ring tells appBrought harness once, after the view; Harness then settling in front tells nothing more', async () => {
+      const { told, over } = telling()
+      const host = setup(five(), over)
+      await onGhosttyRing(host)
+      told.length = 0
+      expect(host.pickApp('harness')).toBe('tabs')
+      expect(told).toEqual(['view tabs pick', 'brought harness'])
+      // Desktop comes forward and settles: the view is already the tab, so no loop.
+      settle(host, 'harness')
+      await host.listAgentSnapshot({ apps: true })
+      expect(told).toEqual(['view tabs pick', 'brought harness'])
+    })
+
+    it('with a window, a pick on the tab is ignored and brings nothing; a pick of another app on an app\'s ring brings it', () => {
+      const { told, over } = telling()
+      const host = setup(five(), over)
+      onTab(host, ['h1'])
+      expect(host.pickApp('ghostty')).toBe('ignored')
+      expect(told).toEqual(['view tabs window'])
+      settle(host, 'ghostty')
+      told.length = 0
+      expect(host.pickApp('vscode')).toBe('switched')
+      expect(told).toEqual(['switched pick', 'brought vscode'])
     })
 
     it('a notice of a Harness agent turns the view as a pick does, and is no use of the picker', async () => {
