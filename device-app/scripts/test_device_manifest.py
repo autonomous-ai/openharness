@@ -2,7 +2,7 @@
 127.0.0.1. Nothing reaches a bucket, a CDN or GitHub."""
 import functools
 import hashlib
-from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, SimpleHTTPRequestHandler, ThreadingHTTPServer
 import importlib.util
 import json
 import os
@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from unittest import mock
 
@@ -447,18 +448,50 @@ class QuietHandler(SimpleHTTPRequestHandler):
         pass  # the test's output stays its own
 
 
+class TrickleHandler(BaseHTTPRequestHandler):
+    """A 16-byte body, one byte every 0.5 s: never idle long enough for a socket timeout to fire."""
+
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Length", "16")
+        self.end_headers()
+        try:
+            for _ in range(16):
+                self.wfile.write(b"x")
+                time.sleep(0.5)
+        except OSError:
+            pass  # the client gave up, as it should
+
+    def log_message(self, *args):
+        pass
+
+
+def serve(test, handler):
+    """The base URL of handler served on 127.0.0.1 until test ends."""
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    test.addCleanup(thread.join, 10)
+    test.addCleanup(server.server_close)
+    test.addCleanup(server.shutdown)
+    return f"http://127.0.0.1:{server.server_address[1]}"
+
+
+class FetchTests(TempTest):
+    def test_a_trickling_download_stops_at_its_deadline(self):
+        base = serve(self, TrickleHandler)
+        start = time.monotonic()
+        with self.assertRaises(TimeoutError):
+            rules.fetch(f"{base}/", 100, 2)
+        self.assertLess(time.monotonic() - start, 4)
+
+
 class VerifyTests(TempTest):
     def setUp(self):
         super().setUp()
         self.build = make_build(self.root / "build")
         self.served = self.root / "served"
-        server = ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(QuietHandler, directory=str(self.served)))
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        self.addCleanup(thread.join, 10)
-        self.addCleanup(server.server_close)
-        self.addCleanup(server.shutdown)
-        self.base = f"http://127.0.0.1:{server.server_address[1]}"
+        self.base = serve(self, functools.partial(QuietHandler, directory=str(self.served)))
 
     def publish_copy(self, change=None):
         """Serve the build as publish leaves it, with change applied to its manifest."""
