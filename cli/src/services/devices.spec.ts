@@ -5818,6 +5818,19 @@ describe('Orca\'s ring follows Orca\'s tabs (docs/plans/2026-11-16-dial-orca-foc
     expect(logs).toContain('[devices] orca failed · injected fault: orca')
   })
 
+  it('an order read that throws as it is asked leaves the next change free to ask again', async () => {
+    const fake = fakeOrcaReads()
+    const { orcaTabs } = fake.reads
+    let asks = 0
+    const { port } = dialWith(1, { orcaReads: { ...fake.reads, orcaTabs: () => { if (++asks === 1) throw new Error('made up'); return orcaTabs() } } })
+    expect(asks).toBe(1)
+    expect(fake.orders).toEqual([])
+    port.observed(hook(2))
+    expect(asks).toBe(2)
+    await land(fake, [H(2), H(1)])
+    expect(await ring()).toEqual([agent(2), agent(1)])
+  })
+
   it('the reads are built on the orca given when none is given', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
     const ports = emptyPorts()
