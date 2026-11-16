@@ -37,9 +37,20 @@ const SUBSCRIBE_EVERY_MS = 1000
 const RETRIES_S = [1, 2, 4, 8, 16, 32, 60]
 /** Followed this long, a herdr that drops its subscription is retried from the first wait again. */
 const LIVE_MS = 60_000
+/** A socket this young may be bound before its server listens: its first refusal is tried once more. */
+const YOUNG_MS = 2_000
+/** A stamp's ctime in ms (`<inode>:<ctime in ns>`, herdrClient.ts socketStamp); none for another form. */
+const bornAt = (stamp: string | undefined): number | undefined => {
+  const ns = stamp?.match(/^\d+:(\d+)$/)?.[1]
+  // A ctime in ns is past 2^53, where a Number loses digits.
+  return ns === undefined ? undefined : Number(BigInt(ns) / 1_000_000n)
+}
 /** A session id as herdr's own integrations report one; anything else is not taken for one. */
 const SESSION_ID = /^[A-Za-z0-9._:-]{1,128}$/
 const KINDS: readonly HerdrEntry[] = [{ type: 'pane.agent_detected' }, { type: 'pane.closed' }, { type: 'pane.exited' }]
+
+/** What the log says of herdr's socket: none there, one with no server, or one a subscription started on. */
+type SocketWord = 'none' | 'stale' | 'live'
 
 type HerdrStatus = 'idle' | 'working' | 'blocked' | 'done' | 'unknown'
 const STATES: Record<HerdrStatus, HostAgentState> = { idle: 'idle', working: 'working', blocked: 'needs-you', done: 'done', unknown: 'idle' }
@@ -115,6 +126,12 @@ export class HerdrSource implements HostSource {
   private stamp: string | undefined
   /** The stamp of the stale socket the retries gave up on. */
   private stale: string | undefined
+  /** The stamp a subscription last started on: a herdr ran behind that socket. Forgotten at stop. */
+  private subscribed: string | undefined
+  /** The stamp of the last socket given its one young retry, kept across a stop: a dial plugged in again gets none. */
+  private young: string | undefined
+  /** The socket's last word said, kept across a stop: a dial plugged in again to the same socket hears none again. */
+  private word: SocketWord | undefined
   private openedAt: number | undefined
   /** Since when the listed agents have been followed, with no failure since. */
   private liveSince: number | undefined
@@ -138,6 +155,7 @@ export class HerdrSource implements HostSource {
     this.unwatch = undefined
     this.liveSince = undefined
     this.retries = 0
+    this.subscribed = undefined
     this.clear()
   }
 
@@ -241,6 +259,8 @@ export class HerdrSource implements HostSource {
     // The new one hears every change from here on, so the old one goes only now.
     this.current?.handle.close()
     this.current = sub
+    this.subscribed = this.stamp
+    this.say('live')
     this.heard = { statuses: new Map(), dropped: new Set() }
     void this.deps.client.request('agent.list', {}).then((answer) => this.listed(sub, answer))
   }
@@ -265,8 +285,26 @@ export class HerdrSource implements HostSource {
   private closed(sub: Subscription, reason: HerdrFault): void {
     // An old one that ends while the new one opens missed nothing the new one's list will not say.
     if (sub !== (this.next ?? this.current)) return
+    if (reason === 'refused' && this.subscribed !== this.stamp) return this.refused()
     this.deps.log(`[herdr] closed · ${reason}`)
     this.fail(reason)
+  }
+
+  /**
+   * A socket refused before anything subscribed on it has no server behind it: a herdr that stopped leaves its socket,
+   * and the Mac this was found on had one from Aug 20, retried from 1 s to 60 s at every plug-in. It is given up on at
+   * once, with no closed line as nothing opened; only another socket, a herdr that started again, is tried. A socket
+   * under 2 s old is tried once more after 1 s first: a server binds its socket a moment before it listens. A refusal
+   * on a socket a subscription started on keeps the retries (`fail`): that herdr may be starting again on the same file.
+   */
+  private refused(): void {
+    const born = bornAt(this.stamp)
+    const age = born === undefined ? undefined : this.deps.now() - born
+    // A ctime ahead of the clock is a clock set back, not a socket being born.
+    if (age === undefined || age < 0 || age >= YOUNG_MS || this.young === this.stamp) return this.wait(this.stamp, true)
+    this.young = this.stamp
+    this.close()
+    this.retry(1)
   }
 
   /** Every failed attempt: the subscriptions close, and the retries run. */
@@ -282,9 +320,12 @@ export class HerdrSource implements HostSource {
     if (fault === 'no_socket') return this.wait(undefined)
     const last = this.retries === RETRIES_S.length
     // Only an attempt that listed nothing gives up: a herdr that lists is running, and keeps the longest wait.
-    if (last && since === undefined) return this.wait(this.stamp)
+    if (last && since === undefined) return this.wait(this.stamp, fault === 'refused')
     if (!last) this.retries++
-    const seconds = RETRIES_S[this.retries - 1]
+    this.retry(RETRIES_S[this.retries - 1])
+  }
+
+  private retry(seconds: number): void {
     this.deps.log(`[herdr] retry · ${seconds}`)
     this.timer = this.deps.after(seconds * 1000, () => {
       this.timer = undefined
@@ -292,11 +333,14 @@ export class HerdrSource implements HostSource {
     })
   }
 
-  /** No socket, or one the retries gave up on: nothing listed, no timer, and the watch held. */
-  private wait(stale: string | undefined): void {
+  /** No socket, or one given up on: nothing listed, no timer, and the watch held. A socket given up on is said stale only
+   *  when it refused: a herdr that answered and never listed said why in its own lines. */
+  private wait(stale: string | undefined, refused = false): void {
     this.close()
     this.clear()
     this.stale = stale
+    if (stale === undefined) this.say('none')
+    else if (refused) this.say('stale')
     this.unwatch ??= this.deps.watch(() => this.changed())
     // A socket made since the last look, before the watch started, is told by no change.
     this.changed()
@@ -310,6 +354,13 @@ export class HerdrSource implements HostSource {
     // Another socket is a herdr that started again: it has retries of its own.
     this.retries = 0
     this.connect()
+  }
+
+  /** Which socket answered, said only when it changes. */
+  private say(word: SocketWord): void {
+    if (word === this.word) return
+    this.word = word
+    this.deps.log(`[herdr] socket · ${word}`)
   }
 
   private close(): void {
