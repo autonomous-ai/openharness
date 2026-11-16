@@ -468,7 +468,8 @@ describe('the devices write the dial skill', () => {
     rmSync(gone, { recursive: true })
     const owners = [
       { ...ownerIn(someone), record: join(someone, 'archived_sessions', '2026', '11', '16', 'rollout-a.jsonl') },
-      ownerIn(join(r.dataDir, 'codex')),
+      // By its real path, as lsof names it.
+      ownerIn(join(realpathSync(r.dataDir), 'codex')),
       // Owned by this test's user, which is not the writer's.
       ownerIn(someone),
       ownerIn(gone),

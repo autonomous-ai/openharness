@@ -2,7 +2,7 @@
 // default home at Turn on; this writes the daemon's own and adopted homes as the service starts, and each Codex home the
 // open scan finds a session in. Each skills folder it writes is listed in dial-skill-homes.json, so a Turn off finds it,
 // and a moment that reads Off takes them out again itself, which catches up on a Turn off a write raced.
-import { statSync } from 'node:fs'
+import { realpathSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { ownDirectory, removeSkill, skillOn, skillsFolderOf, writeSkill } from '../devices/dialSkill.js'
 import { DIAL_SKILL_FILE, MAX_HOMES, listable, readHomes, readWritten, writeHomes, type DialEngine, type DialSkillAnswers, type DialSkillHomes } from '../devices/dialSkillFiles.js'
@@ -43,6 +43,9 @@ const MAX_SAID = 2 * MAX_HOMES
 export function createDialSkillWriter(deps: DialSkillWriterDeps): DialSkillWriter {
   const answersFile = join(deps.dataDir, DIAL_SKILL_FILE)
   const settingsFile = join(deps.claudeHome, 'settings.json')
+  // lsof names a rollout by its real path, so the data dir is too: it can be reached through a link (macOS's /var is
+  // /private/var).
+  const realDataDir = realOr(deps.dataDir)
   const defaultHome: Record<DialEngine, string> = { claude: deps.claudeHome, codex: deps.codexHome }
   let listed: DialSkillHomes = { claude: [], codex: [] }
   /** Codex homes done while it was On: a scan passes them with a set lookup. Claude Code gets no home from the scan. */
@@ -229,7 +232,7 @@ export function createDialSkillWriter(deps: DialSkillWriterDeps): DialSkillWrite
       // Codex only: Claude Code's sessions are read only under the default and adopted homes, written at the start.
       for (const owner of owners) {
         if (!takesOwner(owner)) continue
-        const home = rolloutHome(owner.record, deps.dataDir)
+        const home = rolloutHome(owner.record, realDataDir)
         if (home === null) {
           sayOnce('shape', 'dial skill: path refused (shape)')
           continue
@@ -247,5 +250,14 @@ export function createDialSkillWriter(deps: DialSkillWriterDeps): DialSkillWrite
       }
       report(counts)
     },
+  }
+}
+
+/** [path] through its links, or as it is when it cannot be resolved. */
+function realOr(path: string): string {
+  try {
+    return realpathSync(path)
+  } catch {
+    return path
   }
 }
