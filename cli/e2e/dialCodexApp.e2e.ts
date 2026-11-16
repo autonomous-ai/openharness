@@ -1,7 +1,7 @@
 /**
  * The Codex app has a page of its own on the dial (docs/plans/2026-11-16-dial-codex-app-plan.md), on the real daemon: a
  * Codex session whose own hook names the Codex app (harness/codexOutside.ts) is listed on a fake dial on the desk under
- * "Codex", its row's host the app. The real Codex app and a real Codex session never run. Nothing here sends a tap
+ * "ChatGPT", its row's host the app. The real Codex app and a real Codex session never run. Nothing here sends a tap
  * (`agent.open`) or a rest (`focus`) from the dial, and no `harness hardware watch` puts an app in front, so nothing can
  * reach `/usr/bin/open`. A link that works logs nothing, so the log holds only that no fallback and no swipe ran.
  */
@@ -44,14 +44,14 @@ describe('the Codex app has a page on the dial', () => {
     return { d, dial }
   }
 
-  it('a Codex session whose hook names the Codex app is on a "Codex" page, and nothing is opened', async () => {
+  it('a Codex session whose hook names the Codex app is on a "ChatGPT" page, and nothing is opened', async () => {
     const { d, dial } = await fresh()
     const codex = new CodexOutside(d, 'api', children, { __CFBundleIdentifier: CODEX_APP })
     const since = dial.messages.length
     await codex.hook('SessionStart', { source: 'startup' })
 
     await dial.next((m) => m.t === 'apps' && m.shown === 'codex'
-      && (m.apps as Array<{ id: string; name: string; count: number }>).some((app) => app.id === 'codex' && app.name === 'Codex' && app.count === 1),
+      && (m.apps as Array<{ id: string; name: string; count: number }>).some((app) => app.id === 'codex' && app.name === 'ChatGPT' && app.count === 1),
     45_000, "the Codex app's page", since)
     await dial.next((m) => m.t === 'agent' && m.id === codex.id && m.host === 'codex', 45_000, 'the agent listed', since)
 

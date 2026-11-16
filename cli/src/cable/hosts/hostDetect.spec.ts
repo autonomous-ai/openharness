@@ -125,12 +125,12 @@ describe('detectApp', () => {
     expect(appDisplayName('claude')).toBe('Claude')
   })
 
-  it("the Codex app's bundle id is codex, read Codex", () => {
+  it("the Codex app's bundle id is codex, read ChatGPT", () => {
     const hints = { __CFBundleIdentifier: 'com.openai.codex' }
     expect(detectHost(hints)).toBe('codex')
     expect(detectApp(hints)).toBe('codex')
-    expect(hostDisplayName('codex')).toBe('Codex')
-    expect(appDisplayName('codex')).toBe('Codex')
+    expect(hostDisplayName('codex')).toBe('ChatGPT')
+    expect(appDisplayName('codex')).toBe('ChatGPT')
   })
 
   it('a multiplexer inside the Codex app is on the Codex page', () => {
