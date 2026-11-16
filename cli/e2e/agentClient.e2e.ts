@@ -389,14 +389,16 @@ describe('Harness for agents, end to end', () => {
   // Codex 0.162.1 in a clean macOS VM (2026-10-12): `harness close <it> --now` a second after `harness new` answered
   // "Conversation identity is held: the native control descriptor type is unavailable." and the harness kept working,
   // because for its first seconds every read of the Codex process was refused. The fake Codex holds such a descriptor
-  // for as long, and its first hook is as late: until then nothing could bind its conversation, as there.
+  // for as long, and its first hook is as late: until then nothing could bind its conversation, as there. Its help
+  // takes 400 ms, as a slow first run's does, so the launch script's probe is still running when discovery first reads
+  // the pane (CLI end to end run 43746252131, shard 4).
   it.each([
     ['binds its conversation a few seconds in', 6_000, /^pong on .+: closed\. Its conversation is kept; the person can resume it\.\nNext: nothing; you have 0 open of 8\.$/],
     ['never binds while the close waits', 120_000, /^pong on .+: closed\. It had not started a conversation, so none was kept\.\nNext: nothing; you have 0 open of 8\.$/],
   ] as const)('an agent closes a Codex it started a second ago, which %s', async (_, unboundMs, said) => {
     const module = pathToFileURL(join(CLI_ROOT, 'e2e', 'harness', 'fakeEngine.mjs')).href
     const { d } = await signedIn({ agents_start_agents: true }, { before: (d) => {
-      const config = { ...d.engineConfig, unreadableDescriptorMs: unboundMs, firstHookDelayMs: unboundMs }
+      const config = { ...d.engineConfig, unreadableDescriptorMs: unboundMs, firstHookDelayMs: unboundMs, helpDelayMs: 400 }
       writeFileSync(join(d.root, 'bin', 'codex'), `#!${process.execPath}\nimport(${JSON.stringify(module)}).then((m) => m.run('codex', ${JSON.stringify(config)}))\n`, { mode: 0o755 })
     } })
     const client = await LocalClient.connect(d, { machineId: ME.machineId })

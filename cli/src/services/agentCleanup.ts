@@ -23,7 +23,8 @@
  *   closed, and is never closed for sitting idle after (services/hachiHandOver.ts).
  *
  * A close keeps the conversation, as `harness close` does: the person can resume it, and `harness show` still reads its
- * answer. One line in the log for each close.
+ * answer. One that had not started a conversation has none to keep, and its line says so. One line in the log for each
+ * close.
  */
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -141,7 +142,9 @@ export function createAgentCleanup(core: CoreApi, deps: AgentCleanupDeps = {}) {
     const closing = pastCeiling ? core.agents.closeStarted?.(s.agentId, mode, true) : core.agents.closeStarted?.(s.agentId, mode)
     const result: AgentCloseResult = await (closing ?? Promise.resolve({ error: 'UNSUPPORTED' }))
     const running = result.backgroundCommands ?? 0
-    if (result.closed) log(`[agent-cleanup] closed ${label(s)}: ${why}${running > 0 ? `, with ${backgroundSaid(running)}` : ''}. Its conversation is kept.`)
+    // The sentence `harness close` prints (agentClient/commands.ts), from the same answer of the core.
+    const kept = result.withoutConversation ? 'It had not started a conversation, so none was kept.' : 'Its conversation is kept.'
+    if (result.closed) log(`[agent-cleanup] closed ${label(s)}: ${why}${running > 0 ? `, with ${backgroundSaid(running)}` : ''}. ${kept}`)
     return result
   }
   const failed = (s: RegisteredSession, why: string, result: AgentCloseResult): void =>

@@ -189,7 +189,7 @@ it('a close of one already closed, the same conversation, is closed: asked after
   // A window closing a tab closes its panes one at a time; the harnesses a pane's harness started close with it
   // (services/agentCleanup.ts), and the window's own close of one of them was answered AGENT_CHANGED.
   const asked = request()
-  const closedAlready = vi.fn((r: AgentCloseRequest) => r.agentId === asked.agentId && r.sessionId === asked.sessionId && !registry.byAgent(r.agentId))
+  const closedAlready = vi.fn((r: AgentCloseRequest) => r.agentId === asked.agentId && r.sessionId === asked.sessionId && !registry.byAgent(r.agentId) ? row : null)
   service.dispose()
   service = new CloseAgentService({ ...deps, closedAlready })
   let finish!: () => void
@@ -211,7 +211,7 @@ it('an inspect of one already closed, the same conversation, is closed', async (
   // The terminal client inspects before every close: one asked again after a close it shows as unconfirmed (its
   // answer lost, or the harness bound a conversation meanwhile) was answered AGENT_CHANGED, "Stop not confirmed".
   const asked = request()
-  const closedAlready = vi.fn((r: AgentCloseRequest) => r.agentId === asked.agentId && r.sessionId === asked.sessionId && !registry.byAgent(r.agentId))
+  const closedAlready = vi.fn((r: AgentCloseRequest) => r.agentId === asked.agentId && r.sessionId === asked.sessionId && !registry.byAgent(r.agentId) ? row : null)
   service.dispose()
   service = new CloseAgentService({ ...deps, closedAlready })
   expect(await service.request(request('now'))).toEqual({ closed: true })
@@ -392,7 +392,7 @@ it.each(['claude', 'codex'] as const)('closes an unused %s chat only after savin
     registry.removeAgent(id)
   })
   expect(await service.request(request('inspect'))).toEqual({ activity: 'idle' })
-  expect(await service.request(request('idle'))).toEqual({ closed: true })
+  expect(await service.request(request('idle'))).toEqual({ closed: true, withoutConversation: true })
   expect(deps.checkpoint).toHaveBeenNthCalledWith(1, row, 'before')
   expect(deps.checkpoint).toHaveBeenNthCalledWith(2, row, 'after')
   expect(registry.byAgent(row.agentId)).toBeUndefined()
@@ -624,11 +624,14 @@ describe('a close of a harness still starting', () => {
     vi.mocked(deps.activity).mockResolvedValue('working')
     expect(await service.request(request('idle'))).toEqual({ error: 'SESSION_NOT_IDLE', activity: 'working' })
     vi.mocked(deps.activity).mockResolvedValue('idle')
-    // A stop that never says it went without a conversation is a close that kept what it had.
+    // A stop that saved no record and never says it went without a conversation is answered as before.
     expect(await service.request(request('idle'))).toEqual({ closed: true })
   })
   it('a conversation bound while a try ran is closed with it at once, which that try read as a change', async () => {
-    vi.mocked(deps.stop).mockImplementationOnce(async () => {
+    vi.mocked(deps.stop).mockImplementationOnce(async (_id, options) => {
+      // That try saved its record before the hook bound it, with no conversation: what it saw says nothing of the next
+      // try, which saves the bound one (docs/plans/2026-11-16-codex-help-race-design.md, "Failure cases").
+      await options.checkpoint!({ ...row }, 'before')
       bind()
       throw Object.assign(new Error('Harness changed while saving its conversation. Try stopping again.'), { code: 'STOP_UNCONFIRMED' })
     })
@@ -733,8 +736,67 @@ it('waits on a real timer when no sleep is given', async () => {
   vi.mocked(deps.stop).mockRejectedValueOnce(new IdentityReadUnavailable('the native control descriptor type is unavailable'))
   const closing = service.request(request('now'))
   await vi.advanceTimersByTimeAsync(1_000)
-  expect(await closing).toEqual({ closed: true })
+  expect(await closing).toEqual({ closed: true, withoutConversation: true })
   expect(Date.now() - start).toBe(1_000)
+})
+
+// A close said "Its conversation is kept" of a Codex that never bound one: the process discovery had recorded for it had
+// gone (the launch script's help probe; a first run the script ran again), so the stop saved a record with no
+// conversation and went ahead (CLI end to end run 43746252131; docs/plans/2026-11-16-codex-help-race-design.md).
+describe('what a close says of the conversation it kept', () => {
+  /** A stop that saves [saved] over the row, as stopAgentService.ts saves its record before it signals anything. */
+  const stopSaving = (saved: Partial<RegisteredSession> = {}) => vi.mocked(deps.stop).mockImplementation(async (id, options) => {
+    await options.checkpoint!({ ...row, ...saved }, 'before')
+    registry.removeAgent(id)
+  })
+  beforeEach(() => { Object.assign(row, { sessionId: '', transcriptPath: null }) })
+
+  it.each(['codex', 'claude', 'devin'] as const)('a %s whose saved record holds no conversation: none was kept', async engine => {
+    row.engine = engine
+    stopSaving()
+    expect(await service.request(request('now'))).toEqual({ closed: true, withoutConversation: true })
+    expect(registry.byAgent(row.agentId)).toBeUndefined()
+  })
+  it('the record the stop saved decides, not the row: a conversation read while saving is kept', async () => {
+    stopSaving({ sessionId: 'read-while-saving' })
+    expect(await service.request(request('now'))).toEqual({ closed: true })
+  })
+  it.each(['terminal', 'omp'] as const)('a %s has no conversation id to lose: answered as before', async engine => {
+    row.engine = engine
+    stopSaving()
+    expect(await service.request(request('now'))).toEqual({ closed: true })
+  })
+  it('a stop that saved no record says nothing of one: an adoption cancelled, a row already gone, a stop already running', async () => {
+    vi.mocked(deps.stop).mockImplementation(async id => { registry.removeAgent(id) })
+    expect(await service.request(request('now'))).toEqual({ closed: true })
+  })
+  it('a close once idle, past the ceiling, says it beside its count', async () => {
+    stopSaving()
+    const counted = new CloseAgentService({ ...deps, backgroundCommands: async () => 2 })
+    expect(await counted.request({ ...request('idle'), background: 'count' })).toEqual({ closed: true, withoutConversation: true, backgroundCommands: 2 })
+    counted.dispose()
+  })
+  it('a stop that failed after it saved answers its error, and nothing of the conversation', async () => {
+    vi.mocked(deps.stop).mockImplementation(async (_id, options) => {
+      await options.checkpoint!({ ...row }, 'before')
+      throw Object.assign(new Error('Could not confirm that the harness stopped.'), { code: 'STOP_UNCONFIRMED' })
+    })
+    expect(await service.request(request('now'))).toEqual({ error: 'STOP_UNCONFIRMED', detail: 'Could not confirm that the harness stopped.' })
+    expect(registry.byAgent(row.agentId)).toBe(row)
+  })
+  // Asked again once it is closed (a window's close behind the cleanup's, `harness close` beside a window's): the record
+  // it was kept as says, as it does for the close that stopped it.
+  it.each([
+    ['no conversation', '', { closed: true, withoutConversation: true }],
+    ['its conversation', 'kept', { closed: true }],
+  ] as const)('a close of one already closed, kept with %s, says so', async (_, sessionId, said) => {
+    const kept = { ...row, sessionId }
+    service.dispose()
+    service = new CloseAgentService({ ...deps, closedAlready: () => registry.byAgent(row.agentId) ? null : kept })
+    registry.removeAgent(row.agentId)
+    for (const mode of ['now', 'idle', 'inspect'] as const) expect(await service.request(request(mode))).toEqual(said)
+    expect(deps.stop).not.toHaveBeenCalled()
+  })
 })
 
 describe('background commands', () => {
