@@ -83,7 +83,8 @@ export interface FakeHcTerminal {
 }
 
 /** What a method answers: a result, hc's error by its `data.kind`, bytes as they are (a RECORDED answer's id becomes
- *  the request's), nothing with the connection held open (`hold`), or nothing with it ended (`close`). */
+ *  the request's), nothing with the connection held open and nothing more on it (`hold`), or nothing with it ended
+ *  (`close`). */
 export type FakeHcAnswer = { result: unknown } | { error: string } | { raw: string } | 'hold' | 'close'
 
 export interface FakeHcRequest {
@@ -182,6 +183,9 @@ export async function fakeHc(): Promise<FakeHc> {
   // Each connection that asked `events.subscribe`, and the answered ones: the live subscriptions.
   const subscribing = new Set<Socket>()
   const live = new Set<Socket>()
+  // Each connection with a request the fake holds: hc answers a connection's requests in order (F4), so nothing after it
+  // is answered there.
+  const holding = new Set<Socket>()
   const closed = new Set<number>()
   // What `got` and `ended` wait for, asked again on every request and every closed connection.
   const waits = new Set<() => boolean>()
@@ -271,8 +275,8 @@ export async function fakeHc(): Promise<FakeHc> {
     requests.push({ connection, request })
     settle()
     // hc's subscription connection carries notifications only. What it does with another request there was not
-    // recorded: here it is not answered, an assumption.
-    if (subscribing.has(socket)) return
+    // recorded: here it is not answered, an assumption. Nor is one behind a request held.
+    if (subscribing.has(socket) || holding.has(socket)) return
     if (request === undefined) {
       return write(socket, null,
         refused('parse_error', 'key must be a string at line 1 column 2', 'see `hc schema`', -32700))
@@ -284,6 +288,7 @@ export async function fakeHc(): Promise<FakeHc> {
     const answer = answers.get(method) ?? hcs(method, params)
     if (answer === 'close') return void socket.end()
     if (method === 'events.subscribe') subscribing.add(socket)
+    if (answer === 'hold') holding.add(socket)
     write(socket, id, answer)
     const refusal = typeof answer === 'object' && ('error' in answer || 'fault' in answer)
     if (method !== 'events.subscribe' || answer === 'hold') return
@@ -299,6 +304,7 @@ export async function fakeHc(): Promise<FakeHc> {
       open.delete(socket)
       subscribing.delete(socket)
       live.delete(socket)
+      holding.delete(socket)
       closed.add(connection)
       settle()
     })
