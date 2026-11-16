@@ -286,13 +286,15 @@ function tabOrder(listed: unknown): OrcaTab[] {
   return [...tabs.values()]
 }
 
-/** The rows of `orca terminal list`'s flat `terminals` with an agent in them, its first 256 read: a shell's has no
- *  `agentIdentity`. A handle named twice keeps its first row. */
+/** The rows of `orca terminal list`'s flat `terminals` with an agent in them: a shell's has no `agentIdentity`. A handle
+ *  named twice keeps its first row. A list cut short (Orca's, past its 200 rows by default, or one past 256) is none: an
+ *  agent is placed by elimination over every terminal, and one left out could be the match. */
 function agentTerminals(listed: unknown): OrcaTerminal[] {
-  const rows = isObject(listed) && isObject(listed.result) ? listed.result.terminals : undefined
-  if (!Array.isArray(rows)) return []
+  const result = isObject(listed) && isObject(listed.result) ? listed.result : undefined
+  const rows = result?.terminals
+  if (!Array.isArray(rows) || result?.truncated === true || rows.length > MAX_HANDLES) return []
   const terminals = new Map<string, OrcaTerminal>()
-  for (const row of rows.slice(0, MAX_HANDLES)) {
+  for (const row of rows) {
     if (!isObject(row)) continue
     const { handle, worktreePath, agentIdentity } = row
     if (typeof handle !== 'string' || !ORCA_HANDLE.test(handle) || terminals.has(handle)) continue
