@@ -1569,3 +1569,20 @@ review found no omitted ownership field or changed authority boundary. The prior
 recovery correction also passed all 63 admission controls
 (`core-registry-recovery-admission-controls.log`, 62.59 s). Matched cost for these
 combined corrections remains pending; the earlier cost failures are retained.
+
+### Current main integration, prepared only
+
+Merged frozen main `ae81a1f077cd0567fb46a35eb21460d5e1a28d11` into the Registry
+package after `3cd731efe43dfa1ec5d78b076c9877d89f1aca12`, without textual conflicts.
+Main's Close reply now describes the conversation in the saved stopped record;
+the Registry branch still awaits close-plan publication and retains its current
+owner fences. Three new main Close fixture removals use the existing awaited
+`removeRegistryAgent` helper. The registry persistence, owner snapshot, recovery,
+stop publication and stopped-store code are unchanged from the preceding head.
+Main's isolated E2E Node setup is retained unchanged.
+
+This integration ran no tests, typecheck, build or workload. The combined head
+needs Close/stop caller controls, the affected core and resume gates, current-main
+test-helper isolation checks, and the pending matched Registry cost measurement.
+The earlier passing receipts keep their original source scope; all earlier cost
+failures remain retained and acceptance remains pending.

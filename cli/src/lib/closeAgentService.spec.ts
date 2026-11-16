@@ -749,7 +749,7 @@ describe('what a close says of the conversation it kept', () => {
   /** A stop that saves [saved] over the row, as stopAgentService.ts saves its record before it signals anything. */
   const stopSaving = (saved: Partial<RegisteredSession> = {}) => vi.mocked(deps.stop).mockImplementation(async (id, options) => {
     await options.checkpoint!({ ...row, ...saved }, 'before')
-    registry.removeAgent(id)
+    await removeRegistryAgent(registry, id)
   })
   beforeEach(() => { Object.assign(row, { sessionId: '', transcriptPath: null }) })
 
@@ -769,7 +769,7 @@ describe('what a close says of the conversation it kept', () => {
     expect(await service.request(request('now'))).toEqual({ closed: true })
   })
   it('a stop that saved no record says nothing of one: an adoption cancelled, a row already gone, a stop already running', async () => {
-    vi.mocked(deps.stop).mockImplementation(async id => { registry.removeAgent(id) })
+    vi.mocked(deps.stop).mockImplementation(async id => { await removeRegistryAgent(registry, id) })
     expect(await service.request(request('now'))).toEqual({ closed: true })
   })
   it('a close once idle, past the ceiling, says it beside its count', async () => {
@@ -795,7 +795,7 @@ describe('what a close says of the conversation it kept', () => {
     const kept = { ...row, sessionId }
     service.dispose()
     service = new CloseAgentService({ ...deps, closedAlready: () => registry.byAgent(row.agentId) ? null : kept })
-    registry.removeAgent(row.agentId)
+    await removeRegistryAgent(registry, row.agentId)
     for (const mode of ['now', 'idle', 'inspect'] as const) expect(await service.request(request(mode))).toEqual(said)
     expect(deps.stop).not.toHaveBeenCalled()
   })
