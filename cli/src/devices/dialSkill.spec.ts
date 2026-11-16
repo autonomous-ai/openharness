@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { parse } from 'yaml'
-import { DIAL_SKILL, DIAL_SKILL_DESCRIPTION, claudePluginEnabled, ownDirectory, removeSkill, skillsFolderOf, writeSkill } from './dialSkill.js'
+import { DIAL_SKILL, DIAL_SKILL_DESCRIPTION, claudePluginState, ownDirectory, removeSkill, skillsFolderOf, writeSkill } from './dialSkill.js'
 
 const MARKER = '# Written by Harness. Turn off the agent in Harness Device to remove it.'
 const uid = process.getuid!()
@@ -288,31 +288,36 @@ describe('the dial skill', () => {
     expect(readFileSync(join(held, 'dial', 'SKILL.md'), 'utf8')).toBe(DIAL_SKILL)
   })
 
-  it('claudePluginEnabled', () => {
+  it('claudePluginState: on, off once disabled or uninstalled, unknown when the file says nothing', () => {
     const dir = folder()
     const at = (name: string, text: string): string => {
       writeFileSync(join(dir, name), text)
       return join(dir, name)
     }
-    expect(claudePluginEnabled(at('on.json', '{"enabledPlugins":{"harness-device@openharness":true}}'))).toBe(true)
-    expect(claudePluginEnabled(at('beside.json', '{"model":"opus","enabledPlugins":{"other@x":false,"harness-device@openharness":true}}'))).toBe(true)
+    expect(claudePluginState(at('on.json', '{"enabledPlugins":{"harness-device@openharness":true}}'))).toBe('on')
+    expect(claudePluginState(at('beside.json', '{"model":"opus","enabledPlugins":{"other@x":false,"harness-device@openharness":true}}'))).toBe('on')
 
-    mkdirSync(join(dir, 'folder.json'))
-    execFileSync('mkfifo', [join(dir, 'fifo.json')])
     const off: Array<[string, string]> = [
-      ['a missing file', join(dir, 'missing.json')],
-      ['bad JSON', at('bad.json', '{"enabledPlugins":{"harness-device@openharness":tr')],
-      ['an array', at('array.json', '[{"enabledPlugins":{"harness-device@openharness":true}}]')],
-      ['null', at('null.json', 'null')],
       ['the entry false', at('false.json', '{"enabledPlugins":{"harness-device@openharness":false}}')],
       ['the entry absent', at('absent.json', '{"enabledPlugins":{"other@x":true}}')],
       ['no plugins', at('none.json', '{}')],
       ['the entry "true"', at('string.json', '{"enabledPlugins":{"harness-device@openharness":"true"}}')],
-      ['a file over 1 MiB', at('big.json', '{"enabledPlugins":{"harness-device@openharness":true}}' + ' '.repeat(1024 * 1024))],
+    ]
+    for (const [what, path] of off) expect(claudePluginState(path), what).toBe('off')
+
+    mkdirSync(join(dir, 'folder.json'))
+    execFileSync('mkfifo', [join(dir, 'fifo.json')])
+    const unknown: Array<[string, string]> = [
+      ['a missing file', join(dir, 'missing.json')],
+      ['bad JSON', at('bad.json', '{"enabledPlugins":{"harness-device@openharness":tr')],
+      ['an array', at('array.json', '[{"enabledPlugins":{"harness-device@openharness":true}}]')],
+      ['null', at('null.json', 'null')],
+      ['a file over 1 MiB', at('big.json', '{"enabledPlugins":{"harness-device@openharness":false}}' + ' '.repeat(1024 * 1024))],
       ['a folder', join(dir, 'folder.json')],
+      // Read with no wait for a writer.
       ['a FIFO', join(dir, 'fifo.json')],
     ]
-    for (const [what, path] of off) expect(claudePluginEnabled(path), what).toBe(false)
+    for (const [what, path] of unknown) expect(claudePluginState(path), what).toBe('unknown')
   })
 
   it('it imports only node modules', () => {
