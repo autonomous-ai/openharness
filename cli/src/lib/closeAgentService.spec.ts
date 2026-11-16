@@ -624,11 +624,14 @@ describe('a close of a harness still starting', () => {
     vi.mocked(deps.activity).mockResolvedValue('working')
     expect(await service.request(request('idle'))).toEqual({ error: 'SESSION_NOT_IDLE', activity: 'working' })
     vi.mocked(deps.activity).mockResolvedValue('idle')
-    // A stop that never says it went without a conversation is a close that kept what it had.
+    // A stop that saved no record and never says it went without a conversation is answered as before.
     expect(await service.request(request('idle'))).toEqual({ closed: true })
   })
   it('a conversation bound while a try ran is closed with it at once, which that try read as a change', async () => {
-    vi.mocked(deps.stop).mockImplementationOnce(async () => {
+    vi.mocked(deps.stop).mockImplementationOnce(async (_id, options) => {
+      // That try saved its record before the hook bound it, with no conversation: what it saw says nothing of the next
+      // try, which saves the bound one (docs/plans/2026-11-16-codex-help-race-design.md, "Failure cases").
+      await options.checkpoint!({ ...row }, 'before')
       bind()
       throw Object.assign(new Error('Harness changed while saving its conversation. Try stopping again.'), { code: 'STOP_UNCONFIRMED' })
     })
