@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import type { CableHostWiring, DaemonCableHost } from '../cable/cableHost.js'
 import { AppFilter, FRONT_SETTLE_MS } from '../cable/hosts/appFilter.js'
 import type { CodexRunEnd } from '../cable/hosts/codexQueue.js'
+import { hcClientDeps, type HcClient, type HcPrompt, type HcSubscriber, type HcTerminal } from '../cable/hosts/hcClient.js'
 import { herdrClientDeps, type HerdrAnswer, type HerdrClient, type HerdrEntry, type HerdrPrompt, type HerdrSubscriber } from '../cable/hosts/herdrClient.js'
 import { HerdrSource } from '../cable/hosts/herdrSource.js'
 import { observedAgentId } from '../cable/hosts/observed.js'
@@ -238,6 +239,20 @@ const herdr: HerdrClient = {
   prompt: async (paneId, kind, text) => { herdrCalls.push(['prompt', paneId, kind, text]); return { outcome: 'sent' } },
   socketStamp: () => undefined,
 }
+/** What the devices asked of Herdr Core's socket: recorded, so no spec reaches the developer's own Herdr. It takes every
+ *  prompt, and has no socket for anything else. */
+const hcCalls: unknown[][] = []
+const hc: HcClient = {
+  request: async (method, params) => { hcCalls.push(['request', method, params]); return { ok: false, fault: 'no_socket' } },
+  subscribe: (to) => {
+    hcCalls.push(['subscribe'])
+    // As the client tells it with no socket: once the caller holds its close.
+    queueMicrotask(() => to.closed('no_socket'))
+    return { close: () => {} }
+  },
+  prompt: async (address, kind, text) => { hcCalls.push(['prompt', address, kind, text]); return { outcome: 'sent' } },
+  socketStamp: () => undefined,
+}
 
 let dataDir: string
 let logs: string[]
@@ -247,6 +262,7 @@ beforeEach(() => {
   orcaRuns.length = 0
   codexRuns.length = 0
   herdrCalls.length = 0
+  hcCalls.length = 0
   watched.calls.length = 0
   watched.stopped = 0
   seen.bridges = {}
@@ -266,7 +282,7 @@ afterEach(() => {
   vi.unstubAllEnvs()
 })
 
-function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; orca?: DevicesDeps['orca']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty'] } = {}) {
+function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; orca?: DevicesDeps['orca']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty'] } = {}) {
   const core = over.core ?? fakeCore({ dataDir })
   const ports: CorePorts = emptyPorts()
   const onExit = vi.fn()
@@ -283,6 +299,7 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
     orca: over.orca ?? orca,
     codex: over.codex ?? codex,
     herdr: over.herdr ?? herdr,
+    hc: over.hc ?? hc,
     decideTier: over.decideTier === null ? undefined : over.decideTier ?? (async () => ({ tier: 'alert', by: 'test', detail: '', ms: 0 })),
     faults: new Set(over.faults ?? []),
     log: (line) => { logs.push(line) },
@@ -4250,8 +4267,9 @@ describe('herdr\'s agents, over its socket (docs/specs/2026-11-16-device-herdr.m
     engine: 'claude', sessionId: 'sess-1', event, cwd: '/work/api', callerPid: 4242, transcriptPath: '/t/sess-1.jsonl',
     hostHints: { HERDR_PANE_ID: PANE },
   })
-  /** On macOS, each app's command on the path: what a tap runs is read in `orcaRuns`. */
-  const onMac = { ...orca, platform: 'darwin' as const, onPath: (name: string) => `/opt/${name}/bin/${name}` }
+  /** On macOS, each app's command on the path but `herdr-app`, so Herdr Core's source (the describe below) does not start:
+   *  what a tap runs is read in `orcaRuns`. */
+  const onMac = { ...orca, platform: 'darwin' as const, onPath: (name: string) => (name === 'herdr-app' ? null : `/opt/${name}/bin/${name}`) }
   const host = () => seen.dial as unknown as DaemonCableHost
   /** A dial on the cable, on this computer's agents: no window. */
   const attach = (port: DevicesPort) => { seen.host.watching!(true); port.swarms(null) }
@@ -4483,7 +4501,7 @@ describe('herdr\'s agents, over its socket (docs/specs/2026-11-16-device-herdr.m
   // never comes. Installed later, the next dial attached finds it.
   it('with no herdr on PATH nothing is subscribed or watched, and the next attach looks again', () => {
     let installed = false
-    const started = withHerdr({ orca: { ...onMac, onPath: (name: string) => name !== 'herdr' || installed ? `/opt/${name}/bin/${name}` : null } })
+    const started = withHerdr({ orca: { ...onMac, onPath: (name: string) => name !== 'herdr' || installed ? onMac.onPath(name) : null } })
     nothingAsked(started)
     seen.host.watching!(false)
     installed = true
@@ -5032,5 +5050,318 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
       '[device] notify · claude · shown', '[device] notify · claude · limited', '[device] notify · codex · no dial',
     ])
     expect(logs.filter((line) => ['VPN', 'sess-1', 'sess-2', 'secret-folder'].some((secret) => line.includes(secret)))).toEqual([])
+  })
+})
+
+describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-design.md)', () => {
+  const ID = observedAgentId('claude', 'sess-1')
+  /** A terminal Herdr's window shows, as the hc client tells it: Claude Code at its prompt in /work/api. */
+  const terminal = (address: string, over: Partial<HcTerminal> = {}): HcTerminal =>
+    ({ address, live: true, space: true, status: 'idle', kind: 'claude', cwd: '/work/api', ...over })
+  /** Claude Code's hook from inside an hc terminal: hc gives its programs TERM_PROGRAM=ghostty. */
+  const hook = (event: ObservedHookEvent['event'], address = 't7'): ObservedHookEvent => ({
+    engine: 'claude', sessionId: 'sess-1', event, cwd: '/work/api', callerPid: 4242, transcriptPath: '/t/sess-1.jsonl',
+    hostHints: { HC_TERMINAL_ID: address, TERM_PROGRAM: 'ghostty' },
+  })
+  /** On macOS, each app's command on the path: what a tap runs is read in `orcaRuns`. */
+  const onMac = { ...orca, platform: 'darwin' as const, onPath: (name: string) => `/opt/${name}/bin/${name}` }
+  const openHerdr: [string, string[], number] = ['/usr/bin/open', ['-b', 'dev.herdr.app'], 10_000]
+  const switchTo = (address: string): [string, string[], number] =>
+    ['/opt/herdr-app/bin/herdr-app', ['do', 'agent.focus', '--terminal', address], 10_000]
+  const host = () => seen.dial as unknown as DaemonCableHost
+  /** A dial on the cable, on this computer's agents: no window. */
+  const attach = (port: DevicesPort) => { seen.host.watching!(true); port.swarms(null) }
+  const listed = async () => (await host().listAgentSnapshot()).agents.map(({ id, name, caps }) => ({ id, name, caps }))
+  const said = () => logs.filter((line) => line.startsWith('[device] '))
+  /** The watch on the folder hc's socket goes in: herdr's has a folder of its own. */
+  const hcWatch = [hcClientDeps(), expect.any(Function)]
+  beforeEach(() => { vi.useFakeTimers() })
+
+  /**
+   * The devices with a Herdr Core the test drives, the dial not attached yet. Its socket is there (`stamp`). Each
+   * subscription keeps its subscriber and whether it was closed; a prompt is recorded and answers the next of `prompts`,
+   * else sent. `live` attaches the dial and tells the first subscription's snapshot; `changed` tells one change of t7.
+   */
+  const withHc = (over: Parameters<typeof start>[0] = {}) => {
+    const subs: Array<{ to: HcSubscriber; closed: boolean }> = []
+    const hc = { stamp: '1:1' as string | undefined, subs, prompted: [] as unknown[][], prompts: [] as HcPrompt[] }
+    const client: HcClient = {
+      request: async () => ({ ok: false, fault: 'no_socket' }),
+      subscribe: (to) => {
+        const sub = { to, closed: false }
+        subs.push(sub)
+        return { close: () => { sub.closed = true } }
+      },
+      prompt: async (...args) => {
+        hc.prompted.push(args)
+        return hc.prompts.shift() ?? { outcome: 'sent' }
+      },
+      socketStamp: () => hc.stamp,
+    }
+    const started = start({ orca: onMac, tty: async () => undefined, hc: client, ...over, faults: ['fleet', ...over.faults ?? []] })
+    const live = (terminals: HcTerminal[] = [terminal('t7')]): void => {
+      attach(started.port)
+      subs[0].to.snapshot(terminals)
+    }
+    const changed = (over: Partial<HcTerminal>) => subs[0].to.changed(terminal('t7', over))
+    return { ...started, hc, live, changed }
+  }
+
+  it('with a dial attached Herdr\'s agents are listed svf, on herdr\'s page; detached, the source stops', async () => {
+    const { hc, live } = withHc()
+    // No dial: hc is not asked.
+    expect(hc.subs).toEqual([])
+    live()
+    expect(await listed()).toEqual([{ id: expect.any(String), name: 'api', caps: 'svf' }])
+    const [{ id }] = await listed()
+    expect(host().hostOf(id)).toBe('herdr')
+    expect(host().appOf(id)).toBe('herdr')
+    expect(logs).toContain('[herdr-app] listed · 1 agents')
+    seen.host.watching!(false)
+    expect(hc.subs.map(({ closed }) => closed)).toEqual([true])
+    expect(await listed()).toEqual([])
+  })
+
+  it('a status change is a card', async () => {
+    const { live, changed } = withHc()
+    live()
+    const [{ id }] = await listed()
+    changed({ status: 'working' })
+    expect(calls('turnStarted')).toEqual([[id, '', undefined]])
+    changed({ status: 'blocked' })
+    expect(calls('turnStarted')).toEqual([[id, '', undefined], [id, 'Waiting for you · herdr', undefined]])
+    changed({ status: 'done' })
+    expect(calls('turnDone')).toEqual([[id]])
+    changed({ status: 'error' })
+    expect(calls('turnError').map(([agentId]) => agentId)).toEqual([id])
+    // Nothing for the dial to show as a question: it is answered in Herdr.
+    expect(calls('question')).toEqual([])
+  })
+
+  it('a turn that ends idle is a done card; an agent first listed done is none', async () => {
+    const { live, changed } = withHc()
+    live([terminal('t7', { status: 'done' })])
+    const [{ id }] = await listed()
+    expect(calls('turnDone')).toEqual([])
+    changed({ status: 'working' })
+    changed({ status: 'idle' })
+    expect(calls('turnDone')).toEqual([[id]])
+  })
+
+  it('a Herdr agent mid-turn is reminded', async () => {
+    const { live, changed } = withHc()
+    live()
+    const [{ id }] = await listed()
+    changed({ status: 'working' })
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(calls('turnStarted')).toEqual([[id, '', undefined], [id, '', undefined]])
+  })
+
+  it('a hooked agent in a Herdr terminal is one row, its hook\'s, on herdr\'s page, and gets each card once', async () => {
+    const { port, live, changed } = withHc()
+    port.observed(hook('session-start'))
+    live()
+    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'svf' }])
+    expect(host().hostOf(ID)).toBe('herdr')
+    expect(host().appOf(ID)).toBe('herdr')
+    port.observed(hook('turn-start'))
+    changed({ status: 'working' })
+    expect(calls('turnStarted')).toEqual([[ID, '', undefined]])
+  })
+
+  it('the dial\'s words reach an idle Herdr agent, and each refusal is said once', async () => {
+    const { hc, live, changed } = withHc()
+    live()
+    const [{ id }] = await listed()
+    expect(await host().sendTurn(id, 'run the tests')).toEqual({ ok: true })
+    expect(hc.prompted).toEqual([['t7', 'claude', 'run the tests']])
+    expect(said()).toEqual(['[device] voice · herdr-app'])
+    changed({ status: 'working' })
+    expect(await host().sendTurn(id, 'run the tests')).toMatchObject({ ok: false, message: 'api is busy. Say it when it is done.' })
+    changed({ status: 'blocked' })
+    expect(await host().sendTurn(id, 'run the tests')).toMatchObject({ ok: false, message: 'api is waiting for your answer in herdr.' })
+    changed({ status: 'idle' })
+    expect(await host().sendTurn(id, 'x'.repeat(2001))).toMatchObject({ ok: false, message: 'Too long. Say it shorter.' })
+    changed({ status: 'error' })
+    expect(await host().sendTurn(id, 'run the tests')).toMatchObject({ ok: false, message: 'api did not answer.' })
+    changed({ status: 'idle' })
+    hc.prompts.push({ outcome: 'failed', fault: 'timeout' })
+    expect(await host().sendTurn(id, 'run the tests')).toMatchObject({ ok: false, message: 'api did not answer.' })
+    expect(said()).toEqual(['[device] voice · herdr-app', '[device] voice · busy', '[device] voice · waiting', '[device] voice · too-long',
+      '[device] voice · no-answer', '[device] voice · no-answer'])
+    // Refused by its state, nothing was typed.
+    expect(hc.prompted).toHaveLength(2)
+  })
+
+  it('a hooked agent\'s words go through Herdr Core, counted herdr-app', async () => {
+    const { port, hc, live } = withHc()
+    port.observed(hook('turn-stop'))
+    live()
+    expect(await host().sendTurn(ID, 'run the tests')).toEqual({ ok: true })
+    expect(hc.prompted).toEqual([['t7', 'claude', 'run the tests']])
+    expect(orcaRuns).toEqual([])
+    expect(said().at(-1)).toBe('[device] voice · herdr-app')
+  })
+
+  it('a tap opens Herdr, then switches its window to the terminal, and is the dial\'s own move', async () => {
+    const listener = fakeListener()
+    const { live } = withHc({ listen: listener.listen })
+    live()
+    const [{ id }] = await listed()
+    // Terminal came forward and reported its tab, which waits on its settle.
+    expect(listener.front('terminal-app')).toBeUndefined()
+    ;(listener.given[0].handlers.tab as ListenerHandler).handle({ type: 'tab', app: 'terminal-app', tty: '/dev/ttys023' }, never)
+    expect(await host().openAgent(id)).toBeUndefined()
+    expect(orcaRuns).toEqual([openHerdr, switchTo('t7')])
+    // The tap moved the dial since that report: the settle does not pull it back.
+    await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+    expect(logs.filter((line) => line.startsWith('[device] tab'))).toEqual(['[device] tab · skipped · echo'])
+  })
+
+  // The end-to-end harness points HARNESS_OPEN_BIN at a fake that opens nothing (e2e/harness/daemon.ts).
+  it('a tap runs HARNESS_OPEN_BIN as its open', async () => {
+    vi.stubEnv('HARNESS_OPEN_BIN', '/tmp/e2e/fake-open')
+    const { live } = withHc()
+    live()
+    const [{ id }] = await listed()
+    expect(await host().openAgent(id)).toBeUndefined()
+    expect(orcaRuns).toEqual([['/tmp/e2e/fake-open', ['-b', 'dev.herdr.app'], 10_000], switchTo('t7')])
+  })
+
+  it('a tap on a hooked agent in a Herdr terminal runs the same two commands, and no second open', async () => {
+    const { port, live } = withHc()
+    port.observed(hook('session-start'))
+    live()
+    expect(await host().openAgent(ID)).toBeUndefined()
+    expect(orcaRuns).toEqual([openHerdr, switchTo('t7')])
+  })
+
+  // Every hc terminal has HC_TERMINAL_ID, hidden `hc run` workers too, and the window shows those not.
+  it('a hooked agent in a terminal Herdr\'s window does not show takes words, and a tap brings Herdr forward only', async () => {
+    const { port, hc, live } = withHc()
+    port.observed(hook('turn-stop', 't8'))
+    live()
+    expect(await host().sendTurn(ID, 'run the tests')).toEqual({ ok: true })
+    expect(hc.prompted).toEqual([['t8', 'claude', 'run the tests']])
+    expect(await host().openAgent(ID)).toBeUndefined()
+    expect(orcaRuns).toEqual([openHerdr])
+    expect(said().filter((line) => line.includes('fallback'))).toEqual([])
+  })
+
+  it('a rest with Herdr in front switches its window and brings nothing forward; with another app in front it has no pane', async () => {
+    const { live } = withHc()
+    live()
+    const [{ id }] = await listed()
+    host().front('herdr')
+    expect(host().swipeSwitches(id)).toBe(true)
+    host().swipeEnded(id, 'rest')
+    await vi.waitFor(() => expect(said()).toContain('[device] swipe · ok'))
+    expect(orcaRuns).toEqual([switchTo('t7')])
+    host().front('ghostty')
+    expect(host().swipeSwitches(id)).toBe(false)
+  })
+
+  it('herdr 0.8.0\'s agents and Herdr\'s are both listed, and neither folds the other', async () => {
+    const herdrSubs: HerdrSubscriber[] = []
+    const herdrListing: HerdrClient = {
+      request: async () => ({ ok: true, result: { type: 'agent_list', agents: [{ pane_id: 'w1:p1', agent: 'claude', agent_status: 'idle', cwd: '/work/web' }] } }),
+      subscribe: (_entries, to) => { herdrSubs.push(to); return { close: () => {} } },
+      prompt: async () => ({ outcome: 'sent' }),
+      socketStamp: () => '1:1',
+    }
+    const { live } = withHc({ herdr: herdrListing })
+    live()
+    herdrSubs[0].started()
+    await vi.waitFor(async () => expect(await listed()).toHaveLength(2))
+    expect((await listed()).map(({ name, caps }) => ({ name, caps }))).toEqual(expect.arrayContaining([
+      { name: 'web', caps: 'svf' }, { name: 'api', caps: 'svf' },
+    ]))
+  })
+
+  /** A dial attached with hc's socket there, then again with none: nothing subscribed, and hc's folder not watched. */
+  const nothingAsked = ({ port, hc }: ReturnType<typeof withHc>) => {
+    attach(port)
+    seen.host.watching!(false)
+    hc.stamp = undefined
+    attach(port)
+    expect(hc.subs).toEqual([])
+    expect(watched.calls).not.toContainEqual(hcWatch)
+  }
+
+  it('HARNESS_DEVICE_OBSERVED=off: nothing is subscribed or watched', () => {
+    const switched = env as { HARNESS_DEVICE_OBSERVED: boolean }
+    switched.HARNESS_DEVICE_OBSERVED = false
+    onTestFinished(() => { switched.HARNESS_DEVICE_OBSERVED = true })
+    nothingAsked(withHc())
+  })
+
+  it.each(['linux', 'win32'] as const)('off macOS (%s) nothing is subscribed or watched', (platform) => {
+    nothingAsked(withHc({ orca: { ...onMac, platform } }))
+  })
+
+  // With Herdr not installed, no folder is watched for a socket that never comes. Installed later, the next dial attached
+  // finds it.
+  it('with Herdr not installed nothing is subscribed or watched, and the next attach looks again', () => {
+    let installed = false
+    const started = withHc({ orca: { ...onMac, onPath: (name: string) => name !== 'herdr-app' || installed ? onMac.onPath(name) : null } })
+    nothingAsked(started)
+    seen.host.watching!(false)
+    installed = true
+    attach(started.port)
+    expect(watched.calls).toContainEqual(hcWatch)
+  })
+
+  it('with no socket, the folder hc\'s socket goes in is watched while a dial is attached', () => {
+    const { port, hc } = withHc()
+    hc.stamp = undefined
+    attach(port)
+    expect(watched.calls).toContainEqual(hcWatch)
+    seen.host.watching!(false)
+    expect(watched.stopped).toBe(watched.calls.length)
+  })
+
+  it('the devices stopping stops the source', async () => {
+    const { port, hc, live } = withHc()
+    live()
+    await port.stop()
+    expect(hc.subs.map(({ closed }) => closed)).toEqual([true])
+    expect(vi.getTimerCount()).toBe(0)
+    // With no socket, it waits on the watch: the devices stopping stops that too.
+    const away = withHc()
+    away.hc.stamp = undefined
+    attach(away.port)
+    expect(watched.calls).toContainEqual(hcWatch)
+    await away.port.stop()
+    expect(watched.stopped).toBe(watched.calls.length)
+  })
+
+  it('a herdr-app part that throws costs the dial nothing', async () => {
+    const { port, hc } = withHc({ faults: ['herdr-app'] })
+    port.observed(hook('session-start'))
+    attach(port)
+    expect(hc.subs).toEqual([])
+    expect(logs).toContain('[devices] herdr-app failed · injected fault: herdr-app')
+    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'svf' }])
+  })
+
+  it('no log line holds an address, a name, a folder or the words', async () => {
+    const { hc, live, changed } = withHc()
+    const secret = { address: 't7q4', name: 'Nebula', cwd: '/work/secret-folder' }
+    live([terminal('t7q4', secret)])
+    const [{ id }] = await listed()
+    changed({ ...secret, status: 'working' })
+    changed({ ...secret, status: 'blocked' })
+    await host().sendTurn(id, 'run the secret tests')
+    changed({ ...secret, status: 'idle' })
+    await host().sendTurn(id, 'run the secret tests')
+    await host().openAgent(id)
+    host().front('herdr')
+    host().swipeEnded(id, 'rest')
+    await vi.waitFor(() => expect(said()).toContain('[device] swipe · ok'))
+    hc.subs[0].to.closed('ended')
+    expect(logs).toEqual(expect.arrayContaining(['[herdr-app] listed · 1 agents', '[device] voice · waiting', '[device] voice · herdr-app',
+      '[herdr-app] closed · ended', '[herdr-app] retry · 1']))
+    const secrets = ['t7q4', 'Nebula', 'secret-folder', 'secret tests']
+    expect(logs.filter((line) => secrets.some((word) => line.includes(word)))).toEqual([])
   })
 })

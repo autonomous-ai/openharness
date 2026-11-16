@@ -139,6 +139,18 @@ describe('the Herdr adapter', () => {
     expect(log).toEqual([])
   })
 
+  // The end-to-end harness points HARNESS_OPEN_BIN at a fake that opens nothing (e2e/harness/daemon.ts), as open.ts takes it.
+  it.each([
+    ['/tmp/e2e/fake-open', '/tmp/e2e/fake-open'],
+    ['', '/usr/bin/open'],
+    ['fake-open', '/usr/bin/open'],
+    [undefined, '/usr/bin/open'],
+  ])('HARNESS_OPEN_BIN %j: an absolute path is the open a tap runs; empty, relative and none run /usr/bin/open', async (bin, file) => {
+    const { calls, adapter } = recorder({ bin })
+    expect(await adapter.focus(pane('t7'))).toBe(true)
+    expect(calls).toEqual([{ ...openCall, file }, focusCall('t7')])
+  })
+
   it('herdr-app is found on PATH, else at Herdr.app\'s own binary', async () => {
     expect(recorder().adapter.binary()).toBe(FAKE_PATH_HERDR_APP)
     expect(recorder({ exists: (path) => path === APP_BINARY }).adapter.binary()).toBe(FAKE_PATH_HERDR_APP)
