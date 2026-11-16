@@ -409,8 +409,9 @@ export class ObservedSource implements HostSource {
   /**
    * The app of a caller whose hints name none, from its parents as the open scan reads them: walked once per process, as
    * its tty is read, and one walk at a time. Until the walk answers, the session keeps the app it had. The answer lands
-   * only while that process is still its caller and its latest hook named no app; a caller it moved to is walked next.
-   * One that names no listed app, or fails, leaves the unknown app.
+   * only while that process is still its caller, its latest hook named no app and it is live; a caller it moved to is
+   * walked next. An ended session keeps the answer for its caller, for a resume from it. A session no longer listed is
+   * walked no more. One that names no listed app, or fails, leaves the unknown app.
    */
   private learnApp(entry: Entry, pid: number): string {
     if (entry.appPid === pid) return entry.appWalking ? entry.agent.app : entry.callerApp ?? UNKNOWN_APP
@@ -425,15 +426,21 @@ export class ObservedSource implements HostSource {
     }).then((app) => {
       entry.appWalking = false
       entry.callerApp = app
-      // Its latest hook named its app: that stands.
-      if (detectApp(entry.hints) !== UNKNOWN_APP) return
+      // Its latest hook named its app: that stands. An ended one is on no app's page.
+      if (detectApp(entry.hints) !== UNKNOWN_APP || !this.live(entry)) return
       // It moved to another process during the walk: that one is walked now.
       if (entry.caller !== pid) {
         this.learnApp(entry, entry.caller!)
         return
       }
+      const had = entry.agent.app
       entry.agent.app = app ?? UNKNOWN_APP
-      this.locate(entry)
+      if (entry.agent.app === had) this.locate(entry)
+      else {
+        // Its tty was read for the app it had: one in a tab app now has its tab read, and one that left it has none.
+        entry.ttyPid = undefined
+        this.learnTty(entry, pid)
+      }
       this.emit()
     })
     return entry.agent.app
