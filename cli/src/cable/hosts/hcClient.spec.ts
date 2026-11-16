@@ -18,8 +18,8 @@ const turn = () => new Promise((resolve) => setImmediate(resolve))
 const methods = (server: FakeHc) => server.requests.map(({ request }) => (request as { method: string }).method)
 
 /** The recording's agent and its hidden worker, as the client tells them. */
-const agentIs = (status: string) => ({ address: 't1', live: true, space: true, status, kind: 'claude', cwd: '/work/hh' })
-const WORKER = { address: 't2', live: true, space: false, cwd: '/work/hh' }
+const agentIs = (status: string) => ({ address: RECORDED.agent, live: true, space: true, status, kind: 'claude', cwd: '/work/hh' })
+const WORKER = { address: RECORDED.worker, live: true, space: false, cwd: '/work/hh' }
 
 /** A subscriber that records each call, and `told(n)` once n have come. */
 function subscriber() {
@@ -279,7 +279,7 @@ describe.skipIf(process.platform === 'win32')('the hc client (docs/plans/2026-11
     const subscription = client().subscribe(to)
     await told(15)
     subscription.close()
-    const worker = (live: boolean, space: boolean) => ({ address: 't2', live, space, cwd: '/work/hh' })
+    const worker = (live: boolean, space: boolean) => ({ address: RECORDED.worker, live, space, cwd: '/work/hh' })
     const created = (live: boolean) => ({ address: 't3', live, space: true, cwd: '/work/hh' })
     // The foreground lines name the folder each already had, and the turn, title, keep, doc and heartbeat lines change
     // nothing told: each tells nothing.
@@ -421,11 +421,11 @@ describe.skipIf(process.platform === 'win32')('the hc client (docs/plans/2026-11
     ]))
     await told(5)
     subscription.close()
-    const ended = { address: 't1', live: false, space: true, cwd: '/work/hh' }
+    const ended = { address: RECORDED.agent, live: false, space: true, cwd: '/work/hh' }
     expect(calls).toEqual([
       ['snapshot', [{ ...agentIs('idle'), address: 't7' }]],
       ['snapshot', [agentIs('idle')]],
-      ['changed', { address: 't1', live: true, space: true, cwd: '/work/hh' }],
+      ['changed', { address: RECORDED.agent, live: true, space: true, cwd: '/work/hh' }],
       ['changed', ended],
       ['changed', ended],
     ])
@@ -576,6 +576,28 @@ describe.skipIf(process.platform === 'win32')('the hc client (docs/plans/2026-11
     expect(await hc.request('terminal.send', { terminal: 't7', text: 'go' })).toEqual({ ok: false, fault: 'rejected', kind: 'blocked' })
     expect(await hc.request('terminal.send', { terminal: 't8', text: 'go', if: 'idle' }))
       .toEqual({ ok: false, fault: 'rejected', kind: 'status_mismatch' })
+  })
+
+  it('the fake server answers as hc did in the recording, under the recording\'s own id', async () => {
+    // The recording's agent, with the fields its read held that the fake writes no default for.
+    server.terminals = [{ address: RECORDED.agent, more: { status_ms: 1_700_000_071_953, title: 'fake title', turn: 4 } }]
+    const asked = async (method: string, params: Record<string, unknown>) => {
+      const connection = raw(rpc(1, method, params))
+      await connection.lines(1)
+      connection.socket.destroy()
+      return connection.got[0]
+    }
+    const send = (more: Record<string, unknown> = {}) => asked('terminal.send', { terminal: RECORDED.agent, text: 'go', ...more })
+    expect(await asked('hello', { generation: 2 })).toEqual(JSON.parse(RECORDED.helloRefused))
+    expect(await asked('terminal.get', { terminal: RECORDED.agent })).toEqual(JSON.parse(RECORDED.get))
+    expect(await asked('terminal.get', { terminal: 't99' })).toEqual(JSON.parse(RECORDED.getUnknown))
+    expect(await send({ if: 'idle' })).toEqual(JSON.parse(RECORDED.sent))
+    server.terminals[0].status = { state: 'working', app: 'claude-code' }
+    expect(await send({ if: 'idle' })).toEqual(JSON.parse(RECORDED.mismatch))
+    server.terminals[0].status = { state: 'blocked', app: 'claude-code' }
+    expect(await send()).toEqual(JSON.parse(RECORDED.blocked))
+    server.terminals[0].state = 'finished'
+    expect(await send()).toEqual(JSON.parse(RECORDED.finished))
   })
 
   it('the fake server, as hc, writes a status line for each report, one that repeats the last word too (F5)', async () => {
