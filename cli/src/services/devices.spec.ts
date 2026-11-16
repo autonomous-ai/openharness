@@ -5073,9 +5073,14 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
   const attach = (port: DevicesPort) => { seen.host.watching!(true); port.swarms(null) }
   const listed = async () => (await host().listAgentSnapshot()).agents.map(({ id, name, caps }) => ({ id, name, caps }))
   const said = () => logs.filter((line) => line.startsWith('[device] '))
-  /** The watch on the folder hc's socket goes in: herdr's has a folder of its own. */
-  const hcWatch = [hcClientDeps(), expect.any(Function)]
-  beforeEach(() => { vi.useFakeTimers() })
+  /** The watch on the folder hc's socket goes in: herdr's has a folder of its own. Read in the test, after its env. */
+  const hcWatch = () => [hcClientDeps(), expect.any(Function)]
+  beforeEach(() => {
+    vi.useFakeTimers()
+    // The devices follow the default hc session, whatever session the tests run in: a hook's address is taken.
+    vi.stubEnv('HC_SESSION', undefined)
+    vi.stubEnv('HC_SOCKET', undefined)
+  })
 
   /**
    * The devices with a Herdr Core the test drives, the dial not attached yet. Its socket is there (`stamp`). Each
@@ -5236,6 +5241,22 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
     expect(orcaRuns).toEqual([openHerdr, switchTo('t7')])
   })
 
+  // The hook sends the default session's addresses alone (notify.mjs), and another session counts its terminals from t1
+  // again: a daemon that follows another session takes no hook's address, whose terminal there is another agent's.
+  it.each([
+    [{}, true],
+    [{ HC_SESSION: 'default' }, true],
+    [{ HC_SESSION: 'other' }, false],
+    [{ HC_SOCKET: '/tmp/hc-other/c.sock' }, false],
+  ])('the devices with %j take a hook\'s HC_TERMINAL_ID: %s', async (vars, taken) => {
+    for (const [name, value] of Object.entries(vars)) vi.stubEnv(name, value)
+    const { port, live } = withHc()
+    port.observed(hook('session-start'))
+    live()
+    expect(await host().openAgent(ID)).toBeUndefined()
+    expect(orcaRuns).toEqual(taken ? [openHerdr, switchTo('t7')] : [openHerdr])
+  })
+
   // Every hc terminal has HC_TERMINAL_ID, hidden `hc run` workers too, and the window shows those not.
   it('a hooked agent in a terminal Herdr\'s window does not show takes words, and a tap brings Herdr forward only', async () => {
     const { port, hc, live } = withHc()
@@ -5285,7 +5306,7 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
     hc.stamp = undefined
     attach(port)
     expect(hc.subs).toEqual([])
-    expect(watched.calls).not.toContainEqual(hcWatch)
+    expect(watched.calls).not.toContainEqual(hcWatch())
   }
 
   it('HARNESS_DEVICE_OBSERVED=off: nothing is subscribed or watched', () => {
@@ -5308,14 +5329,14 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
     seen.host.watching!(false)
     installed = true
     attach(started.port)
-    expect(watched.calls).toContainEqual(hcWatch)
+    expect(watched.calls).toContainEqual(hcWatch())
   })
 
   it('with no socket, the folder hc\'s socket goes in is watched while a dial is attached', () => {
     const { port, hc } = withHc()
     hc.stamp = undefined
     attach(port)
-    expect(watched.calls).toContainEqual(hcWatch)
+    expect(watched.calls).toContainEqual(hcWatch())
     seen.host.watching!(false)
     expect(watched.stopped).toBe(watched.calls.length)
   })
@@ -5330,7 +5351,7 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
     const away = withHc()
     away.hc.stamp = undefined
     attach(away.port)
-    expect(watched.calls).toContainEqual(hcWatch)
+    expect(watched.calls).toContainEqual(hcWatch())
     await away.port.stop()
     expect(watched.stopped).toBe(watched.calls.length)
   })
