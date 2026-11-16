@@ -35,6 +35,26 @@ describe('notifyTier', () => {
     expect(await decide({ ...base, recap: '  ' })).toMatchObject({ tier: 'silent', by: 'rule:empty' })
   })
 
+  it('Only you: an ordinary finished turn is a drawer row', async () => {
+    const { decide, log } = make({ now: () => 0 })
+    expect(await decide({ ...base, onlyYou: true })).toEqual({ tier: 'list', by: 'rule:only-you', detail: 'only-you', ms: 0 })
+    expect(log.mock.calls[0][0]).toBe('notify · lamp · list · rule:only-you · only-you · 0ms')
+  })
+
+  it('Only you lowers nothing else', async () => {
+    const { decide } = make()
+    const you = { ...base, onlyYou: true }
+    expect(await decide({ ...you, failed: true })).toMatchObject({ tier: 'alert', by: 'rule:failed' })
+    expect(await decide({ ...you, subagent: true })).toMatchObject({ tier: 'silent', by: 'rule:subagent' })
+    expect(await decide({ ...you, onScreen: true })).toMatchObject({ tier: 'silent', by: 'rule:onScreen' })
+    expect(await decide({ ...you, recap: '  ' })).toMatchObject({ tier: 'silent', by: 'rule:empty' })
+  })
+
+  it('Full: an ordinary finished turn still alerts', async () => {
+    const { decide } = make()
+    expect(await decide({ ...base, onlyYou: false })).toMatchObject({ tier: 'alert', by: 'rule:turn' })
+  })
+
   it('takes no Jev', async () => {
     const log = vi.fn()
     expect(await createTierDecider({ log })(base)).toMatchObject({ tier: 'alert' })
