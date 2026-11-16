@@ -235,6 +235,14 @@ describe('the dial skill', () => {
     expect(ownDirectory(join(other, 'nothing'))).toBe('missing')
   })
 
+  it('a folder that cannot be looked at now is unreadable, not missing', () => {
+    const home = folder()
+    const skills = skillsAt(home)
+    // No search permission on the home: stat of its skills folder fails with EACCES.
+    chmodSync(home, 0o600)
+    expect(ownDirectory(skills)).toBe('unreadable')
+  })
+
   it('a missing home', () => {
     const parent = folder()
     const home = join(parent, 'agent', 'home')

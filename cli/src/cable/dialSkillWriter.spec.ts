@@ -386,6 +386,22 @@ describe('the devices write the dial skill', () => {
     })
   })
 
+  it('a listed folder that cannot be looked at now stays listed, unwritten', () => {
+    const r = rig({ answers: () => ({ codex: true }) })
+    const [shut, gone] = [folder(), folder()]
+    const listed = [skillsAt(shut), skillsAt(gone)]
+    writeHomes(r.dataDir, { claude: [], codex: listed })
+    rmSync(gone, { recursive: true })
+    // No search permission on the home: stat of its skills folder fails with EACCES, which says nothing of it being gone.
+    chmodSync(shut, 0o600)
+
+    r.writer.started()
+
+    chmodSync(shut, 0o700)
+    expect(readHomes(r.dataDir).codex).toEqual([listed[0], skillsOf(r.codexHome)])
+    expect(existsSync(join(listed[0], 'dial'))).toBe(false)
+  })
+
   it('a home whose listing cannot be saved keeps no skill', () => {
     const r = rig({ answers: () => ({ codex: true }) })
     chmodSync(r.dataDir, 0o500)
