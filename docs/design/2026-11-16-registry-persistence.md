@@ -1326,3 +1326,11 @@ peer recovery and cleanup controls remain in place.
 Only this Design and those caller-test extensions are prepared. No test, typecheck,
 build, diagnostic or benchmark has run, and no runtime code has changed. Root owns
 the actual RED, the two-site runtime correction, GREEN and matched cost evidence.
+
+The later root execution on macOS Intel/Node24.22.2 recorded the two intended
+failures on test checkpoint `4dbfe7c1eb`: 16 normal-path comparisons against14 and
+8 recovery comparisons against4, with8controls passing (5.84s,
+`core-registry-fingerprint-red.log`). Deduplicating the two unions before filtering
+passed all10cases (5.78s, `core-registry-fingerprint-green.log`); typecheck passed
+(`core-registry-fingerprint-types.log`). No authority, durability or scheduling
+rule changed. Matched cost remains unaccepted until the corrected source is measured.

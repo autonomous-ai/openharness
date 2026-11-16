@@ -3453,7 +3453,7 @@ class Registry {
         }
         // A binding may flush an already-staged discovery batch. Every changed row
         // must still own what the observation claims, not only the hook's own row.
-        const changed = new Set([...this.persistedBaseline.keys(), ...currentRows.keys()].filter(id =>
+        const changed = new Set([...new Set([...this.persistedBaseline.keys(), ...currentRows.keys()])].filter(id =>
           this.persistedBaseline.get(id) !== (currentRows.has(id) ? rowFingerprint(currentRows.get(id)) : undefined)))
         if (bindingCommit) {
           const identities = new MergeIdentities(latest)
@@ -3508,7 +3508,7 @@ class Registry {
               else prior.delete(id)
             }
             const image = new Map(serialized.map(row => [rowId(row), row]))
-            const affected = new Set([...prior.keys(), ...image.keys()].filter(id =>
+            const affected = new Set([...new Set([...prior.keys(), ...image.keys()])].filter(id =>
               (prior.has(id) ? rowFingerprint(prior.get(id)) : undefined)
                 !== (image.has(id) ? rowFingerprint(image.get(id)) : undefined)))
             this.unconfirmedBinding = {
