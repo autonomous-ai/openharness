@@ -6146,12 +6146,13 @@ describe('the dial follows the pane focused in Orca (docs/plans/2026-11-16-dial-
    *  `attached` is false, no app settled in front, and the devices' monotonic clock at 0. `settle` keeps an app in front
    *  for the settle, as `harness hardware watch` tells it, and lets the probe it asks land. `line` is a line of the
    *  latest watch. The timers are held; `setImmediate` is left to let a landing run. */
-  const dialWith = async (over: { watches?: boolean | Promise<boolean>; agents?: number; attached?: boolean; faults?: string[] } = {}) => {
+  const dialWith = async (over: { watches?: boolean | Promise<boolean>; agents?: number; attached?: boolean; faults?: string[]; orca?: typeof orca } = {}) => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
     clock = 0
     const listener = fakeListener()
     const fake = fakeOrcaReads({ watches: over.watches ?? true })
-    const started = start({ faults: ['fleet', ...over.faults ?? []], listen: listener.listen, now: () => clock, orcaReads: fake.reads })
+    const started = start({ faults: ['fleet', ...over.faults ?? []], listen: listener.listen, now: () => clock, orcaReads: fake.reads,
+      ...over.orca ? { orca: over.orca } : {} })
     for (let n = 1; n <= (over.agents ?? 2); n++) started.port.observed(hook(n))
     if (over.attached !== false) seen.host.watching!(true)
     started.port.swarms(null)
@@ -6449,6 +6450,30 @@ describe('the dial follows the pane focused in Orca (docs/plans/2026-11-16-dial-
       clock = 5_000
       line(H(2))
       expect(asked()).toEqual([[agent(2), 'focus'], [agent(2), 'focus']])
+      expect(focusLines()).toEqual([ECHO])
+    })
+
+    it('a switch after a slow worktree activate: a line for that pane within 2 s of the switch itself is still its echo', async () => {
+      // `worktree activate` runs first, and can take long: Orca's line for the pane comes after the switch, not the rest.
+      let activated = (): void => {}
+      const holding = { ...orca, run: (file: string, args: string[], timeoutMs: number) => {
+        orcaRuns.push([file, args, timeoutMs])
+        return args[0] === 'worktree'
+          ? new Promise<{ code: number; stdout: string }>((resolve) => { activated = () => resolve({ code: 0, stdout: '' }) })
+          : Promise.resolve({ code: 0, stdout: '' })
+      } }
+      const { fake, settle, line } = await dialWith({ orca: holding })
+      fake.orders.at(-1)!({ tabs: [{ handle: H(1) }, { handle: H(2) }], terminals: [], worktrees: new Map([[H(2), 'w0']]) })
+      await settled()
+      await settle('orca')
+      line(null)
+      host().swipeEnded(agent(2), 'rest')
+      clock = 1_500
+      activated()
+      await vi.waitFor(() => expect(orcaRuns.map(([, args]) => args[0])).toEqual(['worktree', 'terminal']))
+      clock = 3_400
+      line(H(2))
+      expect(asked()).toEqual([])
       expect(focusLines()).toEqual([ECHO])
     })
 
