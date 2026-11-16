@@ -3,12 +3,14 @@
  * that a person never types: `asked` (its PermissionRequest hook) and `link` (its mod, for the daemon's socket and the
  * devices' listener's). `harness device codex …`: the menu-bar app's status, enable and disable of the dial skill in
  * Codex's home. `harness device orca link` is Orca's plugin's word, never typed either: whether the daemon is up and where
- * the devices' socket is, so the plugin builds no path. This runs only in the `harness` command's own process; nothing the
+ * the devices' socket is, so the plugin builds no path. `harness device notify` is an agent's, from the dial skill
+ * (devices/notice.ts). This runs only in the `harness` command's own process; nothing the
  * core or a service loads imports this folder.
  */
 import { connect, type Socket } from 'node:net'
 import { codexDisable, codexEnable, codexStatus } from '../devices/codexSkill.js'
 import { devicesListenerPath } from '../devices/listenerPath.js'
+import { NOTICE_USAGE, runNotice } from '../devices/notice.js'
 import { localSocketRoute, socketIsPrivate } from '../lib/localTransport.js'
 import { daemonPost, runAsked } from './asked.js'
 import { claudeDisable, claudeEnable, claudePluginOn, claudeSettingsPath, claudeStatus, type ClaudeRun } from './plugin.js'
@@ -20,7 +22,8 @@ export const DEVICE_USAGE = `Harness device (the dial shows Claude Code's waitin
   harness device claude disable          uninstall the plugin
   harness device codex status [--json]   whether Codex has the dial skill
   harness device codex enable            write the dial skill into Codex's home
-  harness device codex disable           remove the dial skill`
+  harness device codex disable           remove the dial skill
+  ${NOTICE_USAGE}`
 
 export interface DeviceDeps {
   dataDir: string
@@ -33,11 +36,16 @@ export interface DeviceDeps {
   codexHome: string
   /** Whether Codex is on this computer: looked for only by `codex status` and `codex enable`. */
   codex(): boolean
+  /** The command's own environment and folder: `notify` reads its caller from them. */
+  env: NodeJS.ProcessEnv
+  cwd: string
   out(line: string): void
   err(line: string): void
 }
 
 export async function runDeviceCommand(argv: string[], deps: DeviceDeps): Promise<number> {
+  // Before the words that start with `-` are dropped: they are part of the agent's line.
+  if (argv[0] === 'notify') return runNotice(argv.slice(1), deps)
   const words = argv.filter((arg) => !arg.startsWith('-'))
   const json = argv.includes('--json')
   if (words.length === 2 && words[0] === 'orca' && words[1] === 'link') return orcaLink(deps)

@@ -3090,6 +3090,8 @@ switch (cmd) {
       claude: claudeRun,
       codexHome: env.CODEX_HOME,
       codex: () => installedEngineBin('codex') !== null,
+      env: process.env,
+      cwd: process.cwd(),
       out: (line) => console.log(line),
       err: (line) => console.error(line),
     }).then((code) => { process.exitCode = code }).catch(onError)
