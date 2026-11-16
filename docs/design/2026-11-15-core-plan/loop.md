@@ -89,12 +89,14 @@ itself is not reused: its project documents and persisted conversation snapshots
    The hold drains old-file reads. Core then checks its deadline, current resume/binding authority, hold expiry,
    original path/version, staging directory identity and both fixed files (owned regular files, private modes,
    one link, bounded lengths, reported identities/versions). It hard-links the backup to the existing unique backup
-   name without overwriting an existing file, then
+   name without overwriting an existing file, then hard-links the history it is about to replace to a third fixed
+   private name, `original`, so that the rename never drops that history's last link in core: the kernel freed a
+   200 MB rollout's pages on the loop, 9 ms on an idle Linux and past 50 ms on a shared runner (#4330). Then it
    atomically renames the prepared history and calls `setTail` in the same synchronous turn, before releasing the
    hold. No worker request or other await occurs between the last authority check and publication/tail adjustment.
 4. A failed/lost/stale/oversized reply, worker death or hang, changed source, cancelled resume or expired hold cannot
    publish. Worker cleanup deletes only its staging files/directory after rechecking their retained identity, never
-   the source or the final backup name. A lost completion acknowledgement therefore cannot delete published history
+   the source or the final backup name; removing `original` frees the replaced history in the worker's process. A lost completion acknowledgement therefore cannot delete published history
    or its backup. Cleanup racing publication either leaves the original unchanged (and possibly an extra valid
    backup) or removes only the private names after successful publication. A late worker may finish a private
    preparation but can never change the original. Duplicate replies do not repeat publication; a retried resume reads the current original, and the

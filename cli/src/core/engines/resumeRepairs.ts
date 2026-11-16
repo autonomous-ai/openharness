@@ -100,6 +100,9 @@ export function createResumeRepairs(deps: ResumeRepairsDeps) {
         // cleanup can never remove this published name. Rename failure leaves the original and backup complete.
         linkSync(backup.path, backupPath)
         if (!allowed()) return { repairedItems: 0, unrepaired: 'cancelled' }
+        // The history it replaces keeps a private name, so the rename never drops its last link here: the kernel freed a
+        // 200 MB rollout's pages on the core loop, past 50 ms on a shared runner (#4330). The worker's cleanup frees it.
+        linkSync(file, join(directory, 'original'))
         renameSync(history.path, file)
         deps.setTail(source.sessionId, answer.repairedBytes)
         return { repairedItems: answer.repairedItems, repairedBytes: answer.repairedBytes, backupPath }

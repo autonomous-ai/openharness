@@ -1,4 +1,4 @@
-import { chmodSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
@@ -64,7 +64,23 @@ it('publishes only after the held tail drains, sets its byte in the same turn, a
   expect(await t.repairs.prepare(t.source, () => true)).toEqual({ repairedItems: 0 })
 })
 
-it.each(['cancelled', 'lost_reply', 'stale_worker', 'expired_hold', 'source_changed', 'stage_changed'] as const)('never publishes after %s', async why => {
+// #4330: the rename dropped the replaced history's last link, so the kernel freed a 200 MB rollout's pages on the core
+// loop: 8 ms of its thread on an idle Linux, past 50 ms on a shared runner. Its last name stays private to the worker.
+it('leaves the replaced history to the worker to free, never to the core loop', async () => {
+  const t = setup()
+  const replaced = lstatSync(t.file, { bigint: true }).ino
+  let kept: bigint | undefined
+  t.setTail.mockImplementation(() => {
+    kept = lstatSync(join(repairDirectory(t.request.file, t.request.token), 'original'), { bigint: true, throwIfNoEntry: false })?.ino
+  })
+  expect(await t.repairs.prepare(t.source, () => true)).toMatchObject({ repairedItems: 1 })
+  expect(kept).toBe(replaced)
+  // Released: the worker removed that name, and the private directory with it.
+  expect(existsSync(repairDirectory(t.request.file, t.request.token))).toBe(false)
+  expect(readdirSync(join(t.home, 'state'))).toEqual([])
+})
+
+it.each(['cancelled', 'lost_reply', 'stale_worker', 'expired_hold', 'source_changed', 'stage_changed', 'original_taken'] as const)('never publishes after %s', async why => {
   const t = setup(); let current = true
   t.prepared((ask, answer) => {
     expect(answer).toMatchObject({ repairedItems: 1 })
@@ -73,6 +89,8 @@ it.each(['cancelled', 'lost_reply', 'stale_worker', 'expired_hold', 'source_chan
     if (why === 'stale_worker') { t.repairs.disconnected('engine-codex'); t.repairs.connected('engine-codex') }
     if (why === 'source_changed') writeFileSync(t.file, body + '\n')
     if (why === 'stage_changed') writeFileSync(join(repairDirectory(ask.file, ask.token), 'history'), 'bad')
+    // The name the replaced history keeps is taken: a link never overwrites it, and nothing is renamed.
+    if (why === 'original_taken') writeFileSync(join(repairDirectory(ask.file, ask.token), 'original'), 'taken')
     if (why === 'expired_hold') t.hold.mockResolvedValue({ offset: 0, expired: true, release: t.release })
   })
   expect(await t.repairs.prepare(t.source, () => current)).toMatchObject({ repairedItems: 0, unrepaired: expect.any(String) })
@@ -100,6 +118,8 @@ it('a lost acknowledgement expires private staging without deleting published fi
   const answer = await t.repairs.prepare(t.source, () => true)
   expect(answer.repairedItems).toBe(1)
   createResumeRepairWorker({ directory: join(t.home, 'state'), ownerAlive: () => false })
+  // Recovered: the private names went, the replaced history's with them.
+  expect(existsSync(repairDirectory(t.request.file, t.request.token))).toBe(false)
   expect(readFileSync(answer.backupPath!, 'utf8')).toBe(body)
   expect(readFileSync(t.file, 'utf8')).not.toContain('relay-id')
 })
