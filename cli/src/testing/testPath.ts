@@ -16,8 +16,10 @@ import { resolveBinaryOnPath } from '../lib/binaryOnPath.js'
 
 /** The commands a test or a daemon under test runs by name and the system's folders may not have. Never an engine. */
 export const TEST_TOOLS: readonly string[] = [
-  // The Node running the tests, never a lookup: `#!/usr/bin/env node` scripts run it by name (a Store harness's
-  // init.mjs, an MCP server a test writes).
+  // Never a lookup: `#!/usr/bin/env node` scripts run it by name (a Store harness's init.mjs, an MCP server a test
+  // writes), and so does `harness shell-launch` in a pane. The run's copy (testNode.ts), so that what they start finds
+  // no engine and no `npm` beside its Node (audit of 2026-11-16, docs/plans/2026-11-16-e2e-isolation-3-design.md); the
+  // Node running the tests where no run made one (the unit specs that use isolatedTmux).
   'node',
   // The daemon's terminal backend and the tests' own servers. Homebrew's on macOS; with none on PATH the daemon puts
   // the folder its login shell finds one in ahead of the rest (lib/tmuxOnPath.ts), /usr/local/bin on a Mac.
@@ -38,14 +40,15 @@ export const SYSTEM_FOLDERS: readonly string[] = ['/usr/bin', '/bin', '/usr/sbin
 
 let found: ReadonlyMap<string, string> | undefined
 
-/** Each tool [worker]'s PATH has, with its absolute file; `node` is the Node running the tests. With no argument:
- *  this worker's own, found once and kept. */
+/** Each tool [worker]'s PATH has, with its absolute file; `node` is the run's Node named in [worker]'s E2E_NODE_PATH,
+ *  or the Node running the tests where none is. The link to it stays a symbolic link: it runs the copy, and the copy
+ *  is the path Node names itself by. With no argument: this worker's own, found once and kept. */
 export function workerTools(worker?: NodeJS.ProcessEnv): ReadonlyMap<string, string> {
   if (!worker) return found ??= workerTools(process.env)
   const tools = new Map<string, string>()
   for (const name of TEST_TOOLS) {
     // A relative PATH entry names a file from the worker's folder; as a link's target it would be read from <root>/tools.
-    const file = name === 'node' ? process.execPath : resolveBinaryOnPath(name, worker)
+    const file = name === 'node' ? worker.E2E_NODE_PATH || process.execPath : resolveBinaryOnPath(name, worker)
     if (file) tools.set(name, resolve(file))
   }
   return tools
