@@ -96,7 +96,7 @@ describe('the herdr adapter', () => {
   })
 
   // A daemon started by launchd or systemd may not have the shell's XDG_CONFIG_HOME, and so no socket where herdr's is:
-  // the words then go to the agent's next pane whose app types (observed.ts), as before herdr typed.
+  // the words then skip herdr (observed.ts), and no other app types into a multiplexer's pane (orca.ts).
   it('it types only while herdr\'s socket is there, asked at each look', () => {
     const { adapter, socketStamp } = recorder()
     expect(adapter.canType!(pane('w1:p2'))).toBe(true)

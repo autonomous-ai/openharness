@@ -106,11 +106,13 @@ Each verb uses the first pane in that order whose adapter can do it:
 - a rest: the first whose `canShow` says yes;
 - a tap: the first whose `canFocus` says yes.
 
-So an agent seen by two hosts keeps every route it has today. Three examples:
+So an agent seen by two hosts keeps every route its hosts give it. Three examples:
 - WezTerm inside an Orca terminal still takes words and rests through Orca;
-- herdr inside an Orca terminal takes rests through Orca, and words over herdr's socket on macOS and Linux
-  ([herdr](2026-11-16-device-herdr.md#the-herdr-adapter-hostsherdrts));
-- herdr inside Terminal, iTerm2 or Ghostty still writes its tab select.
+- herdr inside an Orca terminal takes words over herdr's socket on macOS and Linux
+  ([herdr](2026-11-16-device-herdr.md#the-herdr-adapter-hostsherdrts)), and no rest: a multiplexer's agent has no Orca
+  pane ([wave 1 checks](2026-11-15-device-wave1-checks.md));
+- herdr inside Terminal, iTerm2 or Ghostty writes no tab select: its tty is herdr's pane's, which no tab holds (the same
+  spec).
 
 Every event computes the panes afresh, as `handle` and `opens` are today, so a session resumed elsewhere never keeps a
 pane it left (PM, 2026-11-15).

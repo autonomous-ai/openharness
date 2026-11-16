@@ -2671,21 +2671,22 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     expect(herdrCalls).toEqual([])
   })
 
-  // Orca types into whichever pane herdr has in front: herdr's socket types into the agent's own, while the daemon finds it
-  // (one started by launchd or systemd may not have the shell's XDG_CONFIG_HOME).
-  it('a hooked agent in a herdr pane takes the dial\'s words through herdr\'s socket ahead of Orca, and through Orca with no socket', async () => {
+  // Orca types into whichever pane herdr has in front, so a multiplexer's agent has no Orca pane (orca.ts): herdr's socket
+  // types into the agent's own, while the daemon finds it (one started by launchd or systemd may not have the shell's
+  // XDG_CONFIG_HOME), and with none the agent takes no words.
+  it('a hooked agent in a herdr pane inside Orca takes the dial\'s words through herdr\'s socket, and none through Orca with no socket', async () => {
     let stamp: string | undefined
     const { port } = startHere({ orca: mac, herdr: { ...herdr, socketStamp: () => stamp } })
     port.observed(hook('turn-stop', { hostHints: { HERDR_PANE_ID: 'w1:p2', ORCA_TERMINAL_HANDLE: HANDLE } }))
     attach(port)
+    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
+    expect(await host().sendTurn(ID, 'run the tests')).toMatchObject({ ok: false, message: 'api did not answer.' })
+    expect(said().at(-1)).toBe('[device] voice · no-answer')
+    stamp = '1:1'
     expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'svf' }])
     expect(await host().sendTurn(ID, 'run the tests')).toEqual({ ok: true })
-    expect(orcaRuns.map(([, args]) => args.slice(0, 2))).toEqual([['terminal', 'send']])
-    expect(said().at(-1)).toBe('[device] voice · orca')
-    stamp = '1:1'
-    expect(await host().sendTurn(ID, 'run the tests')).toEqual({ ok: true })
     expect(herdrCalls).toEqual([['prompt', 'w1:p2', 'claude', 'run the tests']])
-    expect(orcaRuns).toHaveLength(1)
+    expect(orcaRuns).toEqual([])
     expect(said().at(-1)).toBe('[device] voice · herdr')
   })
 

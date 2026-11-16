@@ -61,7 +61,8 @@ export function createHerdrAdapter(deps: HerdrAdapterDeps): HerdrAdapter {
     ...(deps.platform === 'win32' ? {} : {
       type: async (pane: Pane, text: string, engine: string) => (await prompt(pane.id, engine, text)).outcome === 'sent',
       // A daemon started by launchd or systemd may not have the shell's XDG_CONFIG_HOME, and so no socket where herdr
-      // listens: the words then go as they did before herdr typed, through the agent's next pane (Orca's).
+      // listens: the words then skip herdr, and no other app types into a multiplexer's pane (orca.ts), so the agent's
+      // voice is its mod's or the Codex queue's alone.
       canType: () => deps.client.socketStamp() !== undefined,
     }),
     paneKey: (pane) => herdrPaneKey(pane.id),

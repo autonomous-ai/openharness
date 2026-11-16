@@ -202,8 +202,9 @@ A new `HostSource` with the id `herdr`.
     through herdr there, as today.
   - `canType` (new on `HostAdapter`, asked at each look as `canShow` is) answers whether the client finds herdr's
     socket (`socketStamp`). A daemon started by launchd or systemd may not have the shell's `XDG_CONFIG_HOME`. With no
-    socket the observed source's words skip herdr for the agent's next pane whose app types (Orca), as on `main`, and a
-    hooked agent in herdr alone (inside Ghostty, say) lists no voice.
+    socket the observed source's words skip herdr, and no other app takes them: since #4336 a multiplexer's agent has
+    no Orca pane ([wave 1 checks](2026-11-15-device-wave1-checks.md)), so an agent in a herdr pane, inside an Orca
+    terminal or not (Ghostty, say), lists no voice but its mod's or the Codex queue's, and takes no rest through Orca.
 - **A hook's pane is the default session's.** A named session's pane ids start again at `w1:p1` (the spike), so a
   hook's `HERDR_PANE_ID` from one could make the dial type into, fold away or focus the default session's agent of the
   same id. The hook (`cli/hook/notify.mjs`) reads only its own environment: when `HERDR_SESSION` is set, it leaves
