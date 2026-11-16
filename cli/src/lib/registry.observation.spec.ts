@@ -14,11 +14,22 @@ vi.mock('fs', async (importOriginal) => {
 })
 
 const asyncSync = vi.hoisted(() => vi.fn((sync: () => Promise<void>) => sync()))
+const reads = vi.hoisted(() => ({ afterRegistryRead: undefined as (() => void) | undefined }))
 vi.mock('node:fs/promises', async original => {
   const actual = await original<typeof import('node:fs/promises')>()
   return { ...actual, open: async (...args: Parameters<typeof actual.open>) => {
     const handle = await actual.open(...args), sync = handle.sync.bind(handle)
     handle.sync = () => asyncSync(sync)
+    if (args[0] === file) {
+      const read = handle.readFile.bind(handle)
+      handle.readFile = (async (...readArgs: Parameters<typeof read>) => {
+        const result = await read(...readArgs)
+        const afterRead = reads.afterRegistryRead
+        reads.afterRegistryRead = undefined
+        afterRead?.()
+        return result
+      }) as typeof handle.readFile
+    }
     return handle
   } }
 })
@@ -64,6 +75,7 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  reads.afterRegistryRead = undefined
   vi.mocked(fsyncSync).mockReset()
   asyncSync.mockReset()
   // Failure tests deliberately leave unsafe or corrupt state; settle the final barrier before cleanup.
@@ -75,14 +87,17 @@ afterEach(async () => {
 })
 
 describe('unchanged discovery observations', () => {
-  it('preserves the saved bytes, clock and object identity without locks or fsyncs', async () => {
+  it('preserves saved bytes, clock and the live row while returning a detached observation without writes', async () => {
     const row = registry.byAgent(input.agentId)!
     const original = readFileSync(file, 'utf8')
     const touchedAt = row.touchedAt
     registry.setTerminalAvailable(row.agentId, false)
     for (let pass = 0; pass < 3; pass++) {
       await observe()
-      expect((await registry.openProcessAgent({ ...input, processIdentity: { ...input.processIdentity } }))?.entry).toBe(row)
+      const observed = (await registry.openProcessAgent({ ...input, processIdentity: { ...input.processIdentity } }))!.entry
+      expect(observed).toEqual(row)
+      expect(observed).not.toBe(row)
+      expect(observed.processIdentity).not.toBe(row.processIdentity)
       vi.setSystemTime(Date.now() + 5000)
     }
     expect(registry.terminalAvailable(row.agentId)).toBe(true)
@@ -92,6 +107,40 @@ describe('unchanged discovery observations', () => {
     expect(registryWrites()).toBe(0)
     expect(lockAttempts()).toBe(0)
     expect(fsyncs()).toBe(0)
+  })
+
+  it('refuses an unchanged observation whose caller loses authority during the private read', async () => {
+    const original = readFileSync(file, 'utf8')
+    let current = true
+    reads.afterRegistryRead = () => { current = false }
+    await expect(registry.openProcessAgent(input, { current: () => current })).rejects.toThrow('ownership group changed')
+    expect(current).toBe(false)
+    expect(readFileSync(file, 'utf8')).toBe(original)
+    expect(registryWrites()).toBe(0)
+  })
+
+  it('keeps strict admission for a staged local row when a peer replaced its durable owner', async () => {
+    const live = registry.byAgent(input.agentId)!
+    live.title = 'Staged local title'
+    const [peer] = readRows()
+    peer.processIdentity.startMarker = 'peer-process-generation'
+    writeFileSync(file, JSON.stringify([peer], null, 2))
+    const durable = readFileSync(file, 'utf8')
+    await expect(registry.openProcessAgent(input)).rejects.toThrow('saved binding changed')
+    expect(readFileSync(file, 'utf8')).toBe(durable)
+    expect(live.title).toBe('Staged local title')
+    expect(registryWrites()).toBe(0)
+  })
+
+  it('does not return a launch receipt revoked while native authority refreshes', async () => {
+    const live = registry.byAgent(input.agentId)!
+    const result = await registry.openProcessAgent(input, { refresh: async () => {
+      live.active = false
+    } }).catch(() => null)
+    expect(result).toBeNull()
+    expect(registry.byAgent(input.agentId)?.active).toBe(false)
+    await registry.flush()
+    expect(readRows()[0].active).toBe(false)
   })
 
   // The daemon rewrote registry.json every 5 s when only key order differed (2026-10-06 profile).

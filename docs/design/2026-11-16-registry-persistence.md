@@ -1840,3 +1840,52 @@ TypeScript, affected required local gates, and the retained matched cost
 workload. Root schedules these around isolated performance measurements.
 Earlier passing receipts cover their recorded source only. Memory acceptance
 and full-package acceptance remain open until the final source is measured.
+
+## Unchanged discovery after asynchronous admission
+
+The reader allocation check exposed three existing observation failures at clean
+`30e3d6c`: unchanged `openProcessAgent` calls still prepare and publish a registry
+image (three fsyncs), and one old assertion expects the returned row to alias the
+live registry. The detached result is intentional: callers must not mutate an
+acknowledged ownership snapshot through a later in-place registry change. Keep
+that protection and test both value equality and detached nested identity.
+
+The correction targets only an existing process whose candidate, live persisted
+fields and durable baseline are identical, with no explicit target-field intent
+and no displaced row. Outside a transaction, with no unconfirmed publication
+to recover, it may use the ordinary observation path:
+that path reads through the existing owner/mode/no-follow checks, notices a
+peer's changed image, and commits any unrelated pending changes. Refresh supplied
+native authority first, then recheck the target and its baseline before the final
+disk read. After that await, check the deadline, captured ownership group and
+launch identity without another await before returning a detached current
+snapshot. A changed candidate or staged target, displacement, transaction or
+uncertain publication keeps strict admission and its fsyncs. If authority refresh
+changes a row selected as unchanged, refuse that stale operation.
+No new lock, cache, timer, format, dependency or public contract is introduced.
+
+Growth, read bounds and account identity are unchanged. The existing file read
+is the freshness witness, never timestamps alone. An authority change during it
+must refuse the result. Keep current saved-owner conflict/recovery tests and add
+this caller control before runtime edits. Rollback restores redundant writes;
+stored data needs no migration. Shared TypeScript affects macOS/Linux/Windows;
+local execution below must name its actual platform. The reproduced baseline
+failures remain recorded separately from the successful allocation correction.
+
+The corrected observation assertions reproduced three failures and one passing
+control before the runtime change (2.25 s,
+`/tmp/core-registry-observation-noop-red.log`). Two additional staged-intent and
+authority-refresh controls passed against that baseline (1.44 s,
+`/tmp/core-registry-observation-noop-controls-before.log`). After the correction,
+observation, admission and persistence-cost controls pass: 102 cases across three
+files in 69.64 s (`/tmp/core-registry-observation-noop-green.log`). TypeScript
+passes (`/tmp/core-registry-observation-noop-types.log`). These are macOS checks
+with Node 24.22.2, not native Windows or Linux acceptance or a whole-process
+performance measurement.
+
+Independent review found no runtime safety issue and one test portability bug:
+the authority-loss hook matched a slash-delimited filename. It now compares the
+exact captured native path; all 26 observation cases pass in 15.50 s
+(`/tmp/core-registry-observation-path-review-green.log`). Current-main
+integration, the required gates, native failure checks and final matched cost
+acceptance still follow. Earlier memory results remain open.

@@ -1711,6 +1711,7 @@ class Registry {
     return this.writer.run(async deadline => {
       verify()
       let candidate: RegisteredSession
+      let observationFingerprint: string | undefined
       const evicted: RegisteredSession[] = []
       const displaced: Array<{ agentId: string; candidate: RegisteredSession | null }> = []
       const taken = new Set(routes.keys())
@@ -1739,7 +1740,9 @@ class Registry {
         if (input.codexHome && !candidate.codexHome) candidate.codexHome = input.codexHome
         if (input.claudeHome && !candidate.claudeHome) candidate.claudeHome = input.claudeHome
         if (input.hermesHome && !candidate.hermesHome) candidate.hermesHome = input.hermesHome
-        if (rowFingerprint(persistedRow(candidate)) !== rowFingerprint(persistedRow(this.byAgent(agentId)!))) candidate.touchedAt = Date.now()
+        const fingerprint = rowFingerprint(persistedRow(candidate))
+        if (fingerprint !== rowFingerprint(persistedRow(this.byAgent(agentId)!))) candidate.touchedAt = Date.now()
+        else observationFingerprint = fingerprint
       } else {
         const now = Date.now()
         const entry: RegisteredSession = {
@@ -1779,6 +1782,26 @@ class Registry {
           lastTranscriptAt: now,
         }
         candidate = entry
+      }
+      const unchanged = (): boolean => {
+        const live = this.byAgent(agentId)
+        return observationFingerprint !== undefined && !!live && displaced.length === 0
+          && this.transactionDepth === 0 && this.unconfirmedBinding === null && !this.intended.has(agentId)
+          && this.persistedBaseline.get(agentId) === observationFingerprint
+          && rowFingerprint(persistedRow(live)) === observationFingerprint
+      }
+      if (unchanged()) {
+        // Discovery still checks the private file, but observing an already-durable owner grants no new binding.
+        await authority.refresh?.()
+        verify()
+        if (!unchanged()) throw new RegistryOwnershipChanged('the discovered row changed during authority refresh')
+        await this.persist(deadline, 'observation')
+        deadline.check()
+        verify()
+        const committed = this.byAgent(agentId)
+        if (!committed || launchIdentity(committed) !== launchIdentity(candidate)) return null
+        this.terminalAvailableAgents.add(agentId)
+        return { entry: structuredClone(committed), isNew: false, evicted }
       }
       const previousLaunch = this.byAgent(agentId)?.launch
       const receipt = await this.persist(deadline, true, false, undefined, {
