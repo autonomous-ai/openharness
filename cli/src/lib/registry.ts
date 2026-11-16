@@ -1086,6 +1086,7 @@ export function mergedForSave(
   currentRows: ReadonlyMap<string, Record<string, unknown>>,
   baselines: ReadonlyMap<string, string>,
   intents: ReadonlyMap<string, ReadonlySet<string>>,
+  fingerprint: (row: Record<string, unknown>) => string = rowFingerprint,
 ): Map<string, Record<string, unknown>> {
   const merged = new Map(latest)
   for (const baselineId of baselines.keys()) {
@@ -1099,7 +1100,7 @@ export function mergedForSave(
     const intended = intents.get(agentId)
     // An intent on a row this view otherwise left alone never brings back a row another process
     // removed: that agent is gone, and its close plan with it.
-    if (baseline === rowFingerprint(current) && (!intended || !latest.has(agentId))) continue
+    if (baseline === fingerprint(current) && (!intended || !latest.has(agentId))) continue
     let candidate = latest.has(agentId)
       ? threeWayRow(baseline, current, latest.get(agentId)!)
       : current
@@ -3321,7 +3322,17 @@ class Registry {
       const beforeOwners = new Map(strict ? this.list().map(row => [row.agentId, {
         ...currentRows.get(row.agentId), evidenceRevision: row.evidenceRevision,
       } as unknown as RegisteredSession]) : [])
-      const beforeCommit = new Map([...currentRows].map(([id, row]) => [id, rowFingerprint(row)]))
+      // Only these owned snapshots share comparisons; live rows must be read afresh after preparation.
+      const fingerprints = new WeakMap<Record<string, unknown>, string>()
+      const snapshotFingerprint = (row: Record<string, unknown>): string => {
+        let value = fingerprints.get(row)
+        if (value === undefined) {
+          value = rowFingerprint(row)
+          fingerprints.set(row, value)
+        }
+        return value
+      }
+      const beforeCommit = new Map([...currentRows].map(([id, row]) => [id, snapshotFingerprint(row)]))
       const capturedIntents = new Map(this.intended)
       const intentRow = (row: RegisteredSession | null) => row ? { ...persistedRow(row), touchedAt: 0, boundAt: 0, lastHookAt: 0, lastTranscriptAt: 0 } : null
       const intent = bindingCommit ? rowFingerprint({ candidate: intentRow(bindingCommit.candidate),
@@ -3336,10 +3347,10 @@ class Registry {
           if (displaced.candidate) currentRows.set(displaced.agentId, structuredClone(persistedRow(displaced.candidate)) as unknown as Record<string, unknown>)
           else currentRows.delete(displaced.agentId)
         }
-        if (bindingCommit.resumed) for (const row of currentRows.values()) {
+        if (bindingCommit.resumed) for (const [id, row] of currentRows) {
           if (row.previousAgentId !== bindingCommit.agentId) continue
-          delete row.previousAgentId
-          row.touchedAt = bindingCommit.candidate!.touchedAt
+          const { previousAgentId: _previous, ...resumed } = row
+          currentRows.set(id, { ...resumed, touchedAt: bindingCommit.candidate!.touchedAt })
         }
       }
       // A discovery batch may be awaiting a reader after acknowledging a complete binding. Exit cannot
@@ -3488,7 +3499,7 @@ class Registry {
         // must still own what the observation claims, not only the hook's own row.
         const changed = new Set(strict || bindingCommit
           ? [...new Set([...this.persistedBaseline.keys(), ...currentRows.keys()])].filter(id =>
-            this.persistedBaseline.get(id) !== (currentRows.has(id) ? rowFingerprint(currentRows.get(id)) : undefined))
+            this.persistedBaseline.get(id) !== (currentRows.has(id) ? snapshotFingerprint(currentRows.get(id)!) : undefined))
           : [])
         if (bindingCommit) {
           const identities = new MergeIdentities(latest)
@@ -3511,7 +3522,7 @@ class Registry {
             }
           }
         }
-        const merged = [...mergedForSave(latest, currentRows, this.persistedBaseline, capturedIntents).values()]
+        const merged = [...mergedForSave(latest, currentRows, this.persistedBaseline, capturedIntents, snapshotFingerprint).values()]
         const rows = validatedRows(merged)
         if (!rows) throw new Error('registry transaction would violate global identity invariants')
         const serialized = rows.map(persistedRow)

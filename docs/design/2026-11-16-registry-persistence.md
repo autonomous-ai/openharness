@@ -2154,3 +2154,25 @@ workload has run.
 The corrected eleven-comparison budget also fails as intended with sixteen
 actual comparisons (1.25 s, one failed and sixteen unselected,
 `/tmp/core-registry-snapshot-cost-v2-red-budget.log`). Runtime is still unchanged.
+
+Root reviewed the capture/replacement paths and both merge calls and approved
+the persist-local snapshot lookup before the runtime edit. The correction adds
+eighteen runtime lines and removes seven. Only the first merge receives it;
+the post-refresh live merge, authority fences and peer comparisons remain fresh.
+The public admission now meets the eleven-comparison budget, and all seventeen
+cost/authority cases pass (8.13 s, `/tmp/core-registry-snapshot-cost-v2-green.log`).
+The five remaining selected safety files pass 122/122 cases together (46.71 s,
+`/tmp/core-registry-snapshot-cost-v2-safety.log`). These cover peer conflicts,
+displacement, transactions, nested mutation, cancellation and whole-group
+uncertain-publication recovery.
+
+The first typecheck failed because the new lineage fixture read `entry` before
+narrowing the publication union; its failure remains in
+`/tmp/core-registry-snapshot-cost-v2-types.log`. The fixture now requires confirmed
+publication before using its entry. Both held nested-edit lineage and existing
+resume/archive lineage cases pass (2.97 s, two passed and 161 unselected,
+`/tmp/core-registry-snapshot-cost-v2-lineage.log`). The corrected TypeScript and
+diff checks pass (`/tmp/core-registry-snapshot-cost-v2-types-final.log`). All
+execution above used macOS x64, Node 24.22.2 and at most two test workers. No full
+gate, build or timed workload has run on this correction; independent review and
+source-specific CPU/RSS acceptance remain open.

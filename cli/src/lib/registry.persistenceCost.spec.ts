@@ -340,7 +340,9 @@ it('keeps the captured strict image immutable and durably rebases nested alias e
 
 it('clears resumed lineage in its durable snapshot while preserving a later nested live edit', async () => {
   const archived = structuredClone(registry!.byAgent(A)!)
-  const shell = (await registry!.confirmEngineExit(A, 'successor')).entry!
+  const publication = await registry!.confirmEngineExit(A, 'successor')
+  if (publication.state !== 'confirmed' || !publication.entry) throw new Error('successor fixture was not published')
+  const shell = publication.entry
   const live = registry!.byAgent(shell.agentId)!
   live.launchArgs = ['--before']
   await registry!.flush()
