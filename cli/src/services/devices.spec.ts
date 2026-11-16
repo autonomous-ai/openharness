@@ -5698,6 +5698,28 @@ describe('Orca\'s ring follows Orca\'s tabs (docs/plans/2026-11-16-dial-orca-foc
     expect(fake.orders).toHaveLength(3)
   })
 
+  it('an Orca agent the attach scan found asks for one more read when its first hook gives its pane, and takes its tab\'s place', async () => {
+    const { port, fake } = withOrca(0)
+    port.observed(hook(2))
+    // Running in Orca before the dial came, as its parent processes say: no pane until its first hook.
+    readers.known.set('sess-1', 'terminal')
+    readers.owners.set('sess-1', { engine: 'claude', pid: 4241 })
+    readers.rows.set('sess-1', { cwd: '/work/api', transcriptPath: null })
+    readers.working.set('sess-1', false)
+    readers.apps.mockResolvedValueOnce(new Map([[4241, 'orca']]))
+    seen.host.watching!(true)
+    await settled()
+    await land(fake, [H(1), H(2)])
+    await land(fake, [H(1), H(2)])
+    expect(fake.orders).toHaveLength(2)
+    expect(await ring()).toEqual([agent(2), agent(1)])
+    port.observed(hook(1))
+    expect(fake.orders).toHaveLength(3)
+    await land(fake, [H(1), H(2)])
+    expect(fake.orders).toHaveLength(3)
+    expect(await ring()).toEqual([agent(1), agent(2)])
+  })
+
   it('an agent no layout names, and one in tmux inside Orca, come after the ranked, in ring order', async () => {
     const { port, fake } = dialWith(1)
     // Its handle names the terminal tmux started in, not its pane: it has no Orca pane, listed or not.
