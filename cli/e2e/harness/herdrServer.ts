@@ -47,11 +47,12 @@ export const herdrBinary: string | null = (() => {
 export class PrivateHerdr {
   private constructor(private readonly d: IsolatedDaemon, private readonly server: ChildProcess, readonly socket: string) {}
 
-  static async start(d: IsolatedDaemon): Promise<PrivateHerdr> {
+  /** herdr installed for the daemon, and not running: its config, and the daemon's `herdr` on its PATH, as the devices
+   *  look for it at each dial attach. Its config folder. */
+  static async install(d: IsolatedDaemon): Promise<string> {
     if (!herdrBinary) throw new Error('herdr is not installed')
     const config = join(d.env.HOME!, '.config')
-    const socket = join(config, 'herdr', 'herdr.sock')
-    // Beside it herdr binds herdr-client.sock, the longer, and exits when it does not fit.
+    // Beside its socket herdr binds herdr-client.sock, the longer, and exits when it does not fit.
     const client = join(config, 'herdr', 'herdr-client.sock')
     if (Buffer.byteLength(client) > SOCKET_ROOM) {
       throw new Error(`herdr's socket ${client} would be over ${SOCKET_ROOM} bytes: run with TMPDIR=/tmp`)
@@ -62,7 +63,13 @@ export class PrivateHerdr {
     // its home from.
     await writeFile(join(dirname(d.env.CLAUDE_PATH!), 'herdr'),
       `#!/bin/sh\nXDG_CONFIG_HOME='${config}' exec '${herdrBinary}' "$@"\n`, { mode: 0o755 })
-    const server = spawn(herdrBinary, ['server'], {
+    return config
+  }
+
+  static async start(d: IsolatedDaemon): Promise<PrivateHerdr> {
+    const config = await PrivateHerdr.install(d)
+    const socket = join(config, 'herdr', 'herdr.sock')
+    const server = spawn(herdrBinary!, ['server'], {
       cwd: d.env.HOME, env: { ...d.env, XDG_CONFIG_HOME: config }, stdio: 'ignore', ...ownProcessGroup(),
     })
     // Ended by the worker's reaper should the worker go before `stop`.

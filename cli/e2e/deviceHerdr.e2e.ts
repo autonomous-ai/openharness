@@ -166,10 +166,12 @@ describe.skipIf(!herdrBinary)("herdr's agents on the dial, from a private herdr 
 
   it('herdr started after the dial, and stopped: its agents come with no daemon restart, and go', async () => {
     const { d, desk } = await fresh()
+    // Installed, not running: the devices look for herdr on PATH as the dial attaches.
+    await PrivateHerdr.install(d)
     const dial = await desk.plug('E2E-A', 'e2:e0:00:00:00:0a')
     await dial.next((m) => m.t === 'agents.end', 45_000, 'the first list')
 
-    // 1. No herdr yet: the source waits on the folder its socket will be in.
+    // 1. No herdr server yet: the source waits on the folder its socket will be in.
     const first = await herdrFor(d)
     await first.agent('api', 'idle')
     await showing(dial, 'api listed', named('api'))
