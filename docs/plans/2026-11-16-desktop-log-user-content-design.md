@@ -30,8 +30,7 @@ Checked and left as they are: the native runners (macOS `SurfaceCacheGuard.swift
 the unified log; Linux one GLib registration error to stderr; Windows none; none writes a file or reaches `appLog`);
 `cliLog` (argv carries no prompt or name; `auth status --json` prints ids and times, no email); `http_log.dart`
 (method, URL, status); the `route`, `desk`, `link`, `browser_*` lines; frames sent with `sendRaw`/`sendFrame`/
-`sendTerminalFrame` (`app_swarms`, `app_panes`, …), which are not logged; `CrashLog` (an uncaught error's text; no
-known thrower quotes user text).
+`sendTerminalFrame` (`app_swarms`, `app_panes`, …), which are not logged.
 
 ## Change
 
@@ -53,8 +52,9 @@ known thrower quotes user text).
 2. **A failed request is logged by its code** (`responseType: code`), never its `detail`, and the code itself by the
    same short-token rule (`<n chars>` otherwise, since it is whatever the peer sent). `lib/logging` gains a small
    interface (`LogSafeError`, with the text a log may show) that `WsRequestFailure` implements, and one helper that
-   renders a log's error object through it; both sinks use it, `FileAppLog` (`app_log.dart`, `err=`) and
-   `StreamAppLog` (`log_stream_sinks.dart`, the Debug pane). The logging layer does not import `lib/ws`.
+   renders a log's error object through it; every place that writes an error uses it, `FileAppLog` (`app_log.dart`,
+   `err=`), `StreamAppLog` (`log_stream_sinks.dart`, the Debug pane) and `CrashLog` (`errors.log`, where a refusal
+   nobody caught lands). The logging layer does not import `lib/ws`.
    `WsRequestFailure.toString` is unchanged, so `detail` still reaches the UI as now. Every log line that puts a
    request's error into its message text instead of `error:` (`app_state.dart` `theme_set not applied …: $error`,
    `browser_panel.dart` `request to … failed: $error`, and any other the plan's grep finds) passes it as `error:`.
