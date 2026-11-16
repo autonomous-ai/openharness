@@ -2555,7 +2555,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     const { port } = startHere({ orca: exiting(1, 1, 1) })
     port.observed(hook('session-start', inApp))
     attach(port)
-    expect(await host().openAgent(CX)).toEqual({ ok: false, error: 'Codex did not open it.' })
+    expect(await host().openAgent(CX)).toEqual({ ok: false, error: 'ChatGPT did not open it.' })
     expect(orcaRuns).toEqual([threadLink, codexForward, codexForward])
     expect(said().filter((line) => line === '[device] open · codex · fallback')).toHaveLength(2)
   })
