@@ -101,6 +101,8 @@ pub enum MenuAction {
     SignIn,
     ClaudeOn,
     ClaudeOff,
+    SoundOn,
+    SoundOff,
     OpenHarness,
     Quit,
 }

@@ -223,6 +223,12 @@ impl App {
                 MenuAction::ClaudeOff => {
                     self.set_claude(false, effects);
                 }
+                MenuAction::SoundOn | MenuAction::SoundOff => {
+                    effects.push(Effect::SetSound(action == MenuAction::SoundOn));
+                    // A native check item flips its own check when clicked: the menu drawn again puts it back
+                    // where the dial is, and the dial's next status line moves it.
+                    effects.push(Effect::Menu(self.menu.clone()));
+                }
                 MenuAction::OpenHarness => effects.push(Effect::OpenDesktop),
                 MenuAction::Quit => {
                     self.stop_watch(effects);
