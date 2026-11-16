@@ -81,6 +81,9 @@ export function appDisplayName(id: string): string {
 export function detectApp(hints: Record<string, string>): string {
   const bundle = hints.__CFBundleIdentifier ?? ''
   const program = hints.TERM_PROGRAM ?? ''
+  // Herdr Core (hc) gives its programs TERM_PROGRAM=ghostty and its own bundle is dev.herdr.core, so neither can name
+  // it: its terminal's own variable decides first.
+  if (hints.HC_TERMINAL_ID) return 'herdr'
   // Cursor is a VS Code fork and reports TERM_PROGRAM=vscode, so the bundle id decides first. A hint is outside text:
   // only a table's own key names an app, never one an object inherits (`constructor`).
   if (Object.hasOwn(BUNDLE_APPS, bundle)) return BUNDLE_APPS[bundle]
@@ -98,6 +101,7 @@ export function detectHost(hints: Record<string, string>): string {
   if (has('REX_BLOCK')) return 'rex'
   if (has('ZELLIJ')) return 'zellij'
   if (has('TMUX_PANE')) return 'tmux'
+  if (has('HC_TERMINAL_ID')) return 'herdr'
   if (has('KITTY_WINDOW_ID')) return 'kitty'
   if (has('WEZTERM_PANE')) return 'wezterm'
   if (has('ORCA_AGENT_SESSION_ID') || bundle === APP_BUNDLES.orca) return 'orca'
