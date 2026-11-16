@@ -312,7 +312,7 @@ mod tests {
         // While a change runs, its engine has no action row: the next row is the separator.
         assert_eq!(claude(false, Running(true))[2..4], [text("Claude Code: Turning on…"), Separator]);
         assert_eq!(claude(true, Running(false))[2..4], [text("Claude Code: Turning off…"), Separator]);
-        // A failure sits over the action row of the last status, to try again.
+        // A failure sits over its own change's action row, to try it again, whatever the status read after it says.
         assert_eq!(
             claude(false, Failed(true))[2..4],
             [text("Claude Code: Could not turn on"), act(MenuAction::ClaudeOn, "Turn on")]
@@ -323,7 +323,11 @@ mod tests {
         );
         assert_eq!(
             claude(true, Failed(true))[2..4],
-            [text("Claude Code: Could not turn on"), act(MenuAction::ClaudeOff, "Turn off")]
+            [text("Claude Code: Could not turn on"), act(MenuAction::ClaudeOn, "Turn on")]
+        );
+        assert_eq!(
+            claude(false, Failed(false))[2..4],
+            [text("Claude Code: Could not turn off"), act(MenuAction::ClaudeOff, "Turn off")]
         );
 
         let codex = |enabled, codex_change| {
@@ -343,6 +347,14 @@ mod tests {
         );
         assert_eq!(
             codex(true, Failed(false))[4..6],
+            [text("Codex: Could not turn off"), act(MenuAction::CodexOff, "Turn off")]
+        );
+        assert_eq!(
+            codex(true, Failed(true))[4..6],
+            [text("Codex: Could not turn on"), act(MenuAction::CodexOn, "Turn on")]
+        );
+        assert_eq!(
+            codex(false, Failed(false))[4..6],
             [text("Codex: Could not turn off"), act(MenuAction::CodexOff, "Turn off")]
         );
         // Each engine's change is its own: Claude Code's rows stay as its status says.
