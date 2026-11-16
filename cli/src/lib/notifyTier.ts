@@ -1,5 +1,7 @@
 /**
  * How loudly a finished turn tells the devices, by fixed rules and no model: a harness agent's turn alerts.
+ * Only you (the dial's Notifications setting) lowers only an ordinary finished turn to a drawer row, so the dial rings
+ * just for what needs the person; every earlier rule is the same in both modes.
  */
 
 export type Tier = 'alert' | 'list' | 'silent'
@@ -8,6 +10,7 @@ export interface TierInput {
   durationS: number | null // null: unknown start
   stats: { testsPassed?: number; testsFailed?: number; commits?: number }
   subagent: boolean; onScreen: boolean; failed: boolean
+  onlyYou?: boolean // the dial's Notifications setting is Only you
 }
 export interface TierDecision { tier: Tier; by: string; detail: string; ms: number }
 
@@ -49,6 +52,6 @@ export function createTierDecider(opts: {
     if (input.subagent) return rule('silent', 'subagent')
     if (input.onScreen) return rule('silent', 'onScreen')
     if (!input.recap.trim()) return rule('silent', 'empty')
-    return rule('alert', 'turn')
+    return input.onlyYou ? rule('list', 'only-you') : rule('alert', 'turn')
   }
 }
