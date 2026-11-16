@@ -45,6 +45,13 @@ type HerdrStatus = 'idle' | 'working' | 'blocked' | 'done' | 'unknown'
 const STATES: Record<HerdrStatus, HostAgentState> = { idle: 'idle', working: 'working', blocked: 'needs-you', done: 'done', unknown: 'idle' }
 const isStatus = (value: unknown): value is HerdrStatus => typeof value === 'string' && Object.hasOwn(STATES, value)
 
+/** The client's own faults. Any other code a failed request answers is herdr's, said as `rejected`: a log line says only
+ *  fixed words, never herdr's. */
+const FAULTS: Record<HerdrFault, true> = {
+  no_socket: true, refused: true, timeout: true, ended: true, oversize: true, bad_json: true, bad_answer: true, rejected: true,
+}
+const faultOf = (code: string): HerdrFault => Object.hasOwn(FAULTS, code) ? code as HerdrFault : 'rejected'
+
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
 
@@ -140,7 +147,6 @@ export class HerdrSource implements HostSource {
     this.unwatch = undefined
     this.liveSince = undefined
     this.retries = 0
-    this.said = undefined
     this.clear()
   }
 
@@ -255,8 +261,11 @@ export class HerdrSource implements HostSource {
     const heard = this.heard
     this.heard = undefined
     const agents = answer.ok ? answer.result.agents : undefined
-    // herdr's own error code is not logged: the retry's line says it failed.
-    if (!Array.isArray(agents)) return this.fail(answer.ok ? 'bad_answer' : answer.code)
+    if (!Array.isArray(agents)) {
+      const fault = answer.ok ? 'bad_answer' : faultOf(answer.code)
+      this.deps.log(`[herdr] list · ${fault}`)
+      return this.fail(fault)
+    }
     this.read(agents, heard)
     this.liveSince ??= this.deps.monotonic()
     if ([...this.rows.keys()].some((pane) => !sub.panes.has(pane))) this.soon()
@@ -324,6 +333,8 @@ export class HerdrSource implements HostSource {
 
   private clear(): void {
     this.asked.clear()
+    // The next list is said again, even with as many agents as before.
+    this.said = undefined
     if (this.rows.size === 0) return
     this.rows.clear()
     this.emit()

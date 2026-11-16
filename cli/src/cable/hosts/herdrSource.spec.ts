@@ -19,7 +19,7 @@ const detected = (pane: string, more: Record<string, unknown> = {}) =>
   ({ agent: 'claude', pane_id: pane, type: 'pane_agent_detected', workspace_id: pane.split(':')[0], ...more })
 const refusal = (code: string) => ({ line: { error: { code, message: code } } })
 const method = (request: unknown) => (request as { method: string }).method
-const LOG_LINE = /^\[herdr\] (listed · \d+ agents|over · \d+ left out|closed · [a-z_]+|retry · \d+)$/
+const LOG_LINE = /^\[herdr\] (listed · \d+ agents|over · \d+ left out|list · [a-z_]+|closed · [a-z_]+|retry · \d+)$/
 
 describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026-11-16-device-herdr.md)', () => {
   let server: FakeHerdr
@@ -395,8 +395,21 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     await heard(s, 'w1:p1')
     expect(s.source.list().map(({ paneKeys }) => paneKeys)).toEqual([['herdr:w1:p1']])
     expect(s.timers).toEqual([])
-    s.advance(60_000)
-    expect(server.requests.filter(({ request }) => method(request) === 'events.subscribe')).toHaveLength(2)
+  })
+
+  it('a detection while a subscription opens joins it', async () => {
+    server.agents = [agent('w1:p1')]
+    const s = setup()
+    await live(s)
+    server.event('pane_agent_detected', detected('w2:p1'))
+    await s.until(() => s.timers.length === 1)
+    server.answer('events.subscribe', 'hold')
+    s.advance(1000)
+    await server.got('events.subscribe', 3)
+    server.event('pane_agent_detected', detected('w3:p1'))
+    await heard(s, 'w1:p1')
+    expect(s.timers).toEqual([])
+    s.source.stop()
   })
 
   it('65 agents: 64 listed, one log line, and a detection of another pane starts no subscription', async () => {
@@ -600,6 +613,12 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     expect(s.log.slice(-2)).toEqual(['[herdr] closed · refused', '[herdr] retry · 2'])
     expect(s.source.list()).toEqual([])
     expect(s.changes).toBe(changes + 1)
+
+    // herdr starts again with as many agents: its list is said again.
+    await server.start()
+    s.advance(2000)
+    await s.until(() => s.source.list().length === 1)
+    expect(s.log.at(-1)).toBe('[herdr] listed · 1 agents')
   })
 
   it('a refused connection retries after 1, 2, 4, 8, 16, 32 and 60 s, then waits on the watch with no timer', async () => {
@@ -712,6 +731,8 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     const s = setup()
     s.source.start()
     await s.until(() => s.log.at(-1) === '[herdr] retry · 1')
+    // herdr's own code is not said.
+    expect(s.log).toEqual(['[herdr] list · rejected', '[herdr] retry · 1'])
     await server.ended(1)
     expect(s.source.list()).toEqual([])
 
@@ -774,8 +795,13 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     expect(s.changes).toBe(changes + 1)
     await server.ended(3)
 
+    const subscribe = vi.spyOn(s.client, 'subscribe')
     s.source.start()
+    // The last subscription opened under a second ago: the next waits out the rest of that second.
+    expect(s.timers.map(({ ms }) => ms)).toEqual([1000])
+    expect(subscribe).not.toHaveBeenCalled()
     s.advance(1000)
+    expect(subscribe).toHaveBeenCalledTimes(1)
     await listRead(3)
     expect(s.source.list().map(({ id }) => id)).toEqual(['u2'])
   })

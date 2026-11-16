@@ -249,6 +249,7 @@ The herdr source joins the registry after observed, behind the same kill switch 
 
 - Log lines, with no ids, names, paths or text:
   - `[herdr] listed · <n> agents`
+  - `[herdr] list · <reason code>`, when `agent.list` fails; herdr's own error codes are said as `rejected`
   - `[herdr] closed · <reason code>`
   - `[herdr] retry · <seconds>`
   - `[herdr] over · <n> left out`
