@@ -150,10 +150,14 @@ test('an abort after it ends the chunks', async () => {
 test('watch tells the name of an entry made in its folder; after its close it tells nothing', async () => {
   const told: (string | null)[] = []
   let seen: (name: string | null) => unknown = () => {}
-  const close = nodeInputs().watch(dir, (name) => {
-    told.push(name)
-    seen(name)
-  })
+  const close = nodeInputs().watch(
+    dir,
+    (name) => {
+      told.push(name)
+      seen(name)
+    },
+    () => assert.fail('failed')
+  )
   await writeUntilTold(`${dir}/devices.sock`, new Promise<void>((done) => (seen = (name) => name === 'devices.sock' && done())))
   close()
   // A second watcher on the same folder says when the next entry was seen, so no wait is guessed.
@@ -161,15 +165,17 @@ test('watch tells the name of an entry made in its folder; after its close it te
   let closeOther = () => {}
   await writeUntilTold(
     `${dir}/registry.json`,
-    new Promise<void>((done) => (closeOther = nodeInputs().watch(dir, (name) => name === 'registry.json' && done())))
+    new Promise<void>((done) => (closeOther = nodeInputs().watch(dir, (name) => name === 'registry.json' && done(), () => {})))
   )
   closeOther()
   assert.equal(told.length, before)
 })
 
-test('a folder that is not there is watched by nothing and throws nothing', () => {
-  const close = nodeInputs().watch(`${dir}/none`, () => assert.fail('told'))
+test('a folder that is not there is watched by nothing, throws nothing, and says it failed', () => {
+  let failed = 0
+  const close = nodeInputs().watch(`${dir}/none`, () => assert.fail('told'), () => (failed += 1))
   close()
+  assert.equal(failed, 1)
 })
 
 test('after runs its function and its cancel stops it; now rises', async () => {

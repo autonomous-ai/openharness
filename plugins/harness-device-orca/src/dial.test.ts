@@ -35,7 +35,7 @@ function ready(socket: string): string {
 }
 
 type Timer = { at: number; run: () => void }
-type Watch = { folder: string; changed: (name: string | null) => void; closed: boolean }
+type Watch = { folder: string; changed: (name: string | null) => void; failed: () => void; closed: boolean }
 
 /** A loop on inputs of the test's own. `answers` are link's, one a run; with none left, a run lasts until aborted. */
 function world(answers: (Ran | Promise<Ran>)[], over: Partial<DialInputs> = {}) {
@@ -62,8 +62,8 @@ function world(answers: (Ran | Promise<Ran>)[], over: Partial<DialInputs> = {}) 
       return new Promise((settle) => bounds.signal.addEventListener('abort', () => settle(null)))
     },
     connect: nodeInputs().connect,
-    watch(folder, changed) {
-      const watch = { folder, changed, closed: false }
+    watch(folder, changed, failed) {
+      const watch = { folder, changed, failed, closed: false }
       watches.push(watch)
       called()
       return () => {
@@ -332,6 +332,39 @@ test('a change while link runs asks once more', async () => {
   answer(UNPLUGGED)
   await w.until(() => w.runs.length === 4 || w.timers.size > 0)
   assert.deepEqual(w.runs.map((run) => run.at), [0, 1_000, 2_000, 3_500])
+})
+
+test('a watch that cannot start is logged once, asks nothing more, and the next pass tries it again', async () => {
+  const folders: string[] = []
+  const w = world([UNPLUGGED, UNPLUGGED, UNPLUGGED], {
+    watch(folder, _changed, failed) {
+      folders.push(folder)
+      failed()
+      return () => {}
+    },
+  })
+  await w.until(() => w.timers.size > 0)
+  // The wait of 1 s, not the look again a second after a watch that started.
+  w.to(w.due()[0])
+  await w.until(() => w.runs.length === 2 && w.timers.size > 0)
+  // The backoff goes on: the watch is not a reason to ask again.
+  assert.deepEqual(w.due(), [3_000])
+  w.to(3_000)
+  await w.until(() => w.runs.length === 3 && w.timers.size > 0)
+  assert.deepEqual(folders, ['/run/h', '/run/h', '/run/h'])
+  assert.deepEqual(w.logs, ['dial: unplugged', 'dial: watch unavailable'])
+})
+
+test('a watch that stops on its own is logged, and the next pass watches again', async () => {
+  const w = world([UNPLUGGED, UNPLUGGED, UNPLUGGED])
+  await w.until(() => w.timers.size > 0)
+  w.to(1_000)
+  await w.until(() => w.runs.length === 2 && w.timers.size > 0)
+  w.watches[0].failed()
+  assert.deepEqual(w.logs, ['dial: unplugged', 'dial: watch unavailable'])
+  w.to(w.due()[0])
+  await w.until(() => w.runs.length === 3 && w.timers.size > 0)
+  assert.deepEqual(w.watches.map((watch) => watch.folder), ['/run/h', '/run/h'])
 })
 
 test('the watcher closes when the state leaves unplugged', async () => {
