@@ -69,18 +69,23 @@ function isReleaseAsset(url: string, allowedPrefixes: readonly string[], extensi
 
 /**
  * Fetch the manifest, pull `field`'s asset, and redirect to it — or a 503 if anything about that is
- * unusable (unreachable manifest, missing field, or a URL that fails the prefix/extension check).
+ * unusable (unreachable or unreadable manifest, missing field, or a URL outside the release folders).
  */
 export async function resolveManifestDownload(download: ManifestDownload): Promise<Response> {
   const { manifestUrl, field, allowedPrefixes, extension, product } = download;
-  let manifest: unknown;
+  let res: Response;
   try {
     // Bounded, so a bucket that never answers cannot hold the visitor's request open.
-    const res = await fetch(manifestUrl, { cache: "no-store", signal: AbortSignal.timeout(10_000) });
-    if (!res.ok) return unavailable(product, `manifest HTTP ${res.status}`);
-    manifest = await res.json();
+    res = await fetch(manifestUrl, { cache: "no-store", signal: AbortSignal.timeout(10_000) });
   } catch {
     return unavailable(product, "manifest unreachable");
+  }
+  if (!res.ok) return unavailable(product, `manifest HTTP ${res.status}`);
+  let manifest: unknown;
+  try {
+    manifest = await res.json();
+  } catch {
+    return unavailable(product, "manifest unreadable");
   }
 
   const entry = (manifest as Record<string, unknown> | null)?.[field];
