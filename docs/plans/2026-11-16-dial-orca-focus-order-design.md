@@ -55,6 +55,16 @@ Diego's reports (2026-11-16):
    skipped, and uses up that switch and those before it.
 6. The upstream addition (layouts in the sidebar's order) goes in Follow-ups and the final report; no pull request or
    issue on Orca from this branch (Diego decides).
+7. After Diego's first dial check (PM, 2026-11-16): an Orca agent the attach scan found has no Orca pane until its first
+   hook, and an idle one sends none, so it fell to the end of the ring (the tab "Skill từ SKILL.md", idle since the
+   morning, came after "PM"). Orca's list gives no terminal's process or tty, so such an agent is placed by elimination:
+   the Orca terminal whose `worktreePath` is the agent's folder, whose `agentIdentity` is its engine, and which no agent
+   with a known Orca pane holds. Only when exactly one such terminal matches exactly one such agent; anything ambiguous
+   stays after the ordered ones. The match gives order and a tab name only: never a switch, a tap or typing.
+8. A tab the person renamed in Orca names the agent above the session's own name (PM for Diego, 2026-11-16: his tab
+   "PM" holds the session he named "harness root", and the dial must say "PM"). Orca marks no custom title, but a tab's
+   own title is its active pane's: a tab title that differs from the title of every pane in it is one the person set.
+   A tab not renamed keeps the earlier precedence.
 
 ## Design
 
@@ -130,9 +140,12 @@ is "harness root" sits in a tab he named "PM"; the dial must say "PM", and today
   that tab's panes. No second read. `orcaTabOrder()` becomes `orcaTabs()`: the handles in tab order, each with its tab's
   title, cleaned and cut as a hook's title is (`observedTitle`: whitespace folded, at most 64 characters, none with a
   control character); a title it refuses is none.
-- **Precedence:** the name the person gave the session (the hook's `session_title`, a `user` name in Claude Code's
-  process record, #4333) > its Orca tab's title > the folder, as today. A tab whose title Orca made up ("Terminal 3", or
-  a title the program in it set) is still the tab's title: the dial says what the tab says.
+- **Precedence** (decided 8): a tab the person renamed in Orca (its title differs from every pane title in it) > the
+  name the person gave the session (the hook's `session_title`, a `user` name in Claude Code's process record, #4333) >
+  its Orca tab's title > the folder, as today. A tab whose title Orca made up ("Terminal 3", or a title the program in
+  it set) is still the tab's title: the dial says what the tab says.
+- **An agent with no pane yet** (decided 7): the same read places it by elimination, for its tab's name as for its
+  order; ambiguous, it keeps its folder.
 - **When:** each time the layout is read (a change of the Orca ring's members, section 3), the names follow. Renaming a
   tab with no member change is seen at the next change: nothing polls.
 - **Where:** `observed.ts` names no app: it gains `setPaneNames(adapter, names)`, which replaces that adapter's names by
@@ -183,6 +196,10 @@ on a tab drag with no member change; the Claude app, Terminal and other apps' ri
 - Naming: `orcaTabs()` gives each handle its tab's title, cleaned, none for a bad one; an Orca agent with no name of its own
   is called by its tab after a read, one with a `user` name or a hook title keeps it, one with no tab title keeps its
   folder; a new read with another title renames it; the end-to-end dial shows the tab's title.
+- Diego's layout (decided 7 and 8): a worktree with tabs "Terminal 3" (a shell, no `agentIdentity`), "Skill từ
+  SKILL.md" (an idle Claude agent the attach scan found, no hook) and "PM" (pane title "harness root", a hooked Claude
+  agent whose session the person named "harness root"): the ring has the Skill agent before PM, and PM is named "PM".
+  Two unplaced agents in one folder, or two unclaimed terminals, place neither.
 
 **On a dial** (Diego's Mac, asked from the orchestrator when the pull request is ready): Orca's ring is in Orca's tab
 order (B); an Orca agent in a tab Diego named shows that name; a prompt still moves the dial on Orca 1.4.256 (A cannot run there until Orca ships `watch-focus`).
