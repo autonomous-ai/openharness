@@ -109,6 +109,23 @@ class ReleaseDeviceTests(unittest.TestCase):
         self.assertEqual(self.gh_calls(), [[*DISPATCH, "--ref", "v0.1.1_device", "-f", "version=0.1.1",
                                             "-f", "publish=true"]])
 
+    def test_a_signing_setting_puts_no_signature_in_the_notes(self):
+        # Signs anything: a signature block on stdout, gpg's status line on the status fd Git passes (2).
+        gpg = self.root / "gpg"
+        gpg.write_text("#!/bin/sh\ncat >/dev/null\nprintf -- '-----BEGIN PGP SIGNATURE-----\\nZmFrZQ==\\n"
+                       "-----END PGP SIGNATURE-----\\n'\nprintf '\\n[GNUPG:] SIG_CREATED D 1 8 00 0 FAKE\\n' >&2\n")
+        gpg.chmod(0o755)
+        count = len(SETTINGS)
+        for index, (key, value) in enumerate((("tag.gpgSign", "true"), ("gpg.program", str(gpg))), count):
+            self.env.update({f"GIT_CONFIG_KEY_{index}": key, f"GIT_CONFIG_VALUE_{index}": value})
+        self.env["GIT_CONFIG_COUNT"] = str(count + 2)
+        # The fake signs: a tag cut with these settings carries its block.
+        self.git("tag", "-a", "signed", "-m", "signed")
+        self.assertIn("BEGIN PGP SIGNATURE", self.git("tag", "-l", "--format=%(contents)", "signed"))
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("PGP SIGNATURE", self.message("v0.1.1_device"))
+
     def test_a_dry_run_tags_pushes_and_starts_nothing(self):
         result = self.run_script("--dry-run")
         self.assertEqual(result.returncode, 0, result.stderr)
