@@ -181,3 +181,26 @@ it is retained separately, not presented as RED. All 220 affected input cases
 pass in 5.37 seconds, including progression after a failed write. Evidence:
 `/tmp/core-input-settlement-red-final.log` and
 `/tmp/core-input-settlement-green.log`. Final timing acceptance remains pending.
+
+## Final integrated validation
+
+On `50a3017d693f`, based on main `266e814cde3d`, independent review found no
+remaining correctness issue. Six separate cancel/forget/move-hold controls pass.
+The fresh native bundle passes all 13 input-safety cases and the formerly failing
+Browser flow: 14 passed, six intentionally unselected, 156.84 seconds.
+
+One frozen five-route ABBA comparison completed 1.2 million messages, with all
+outcomes checked and all four children exiting successfully. No retry or forced
+GC was used. Whole-workload wall time changed by -0.007%, CPU by +0.21%, and
+peak RSS by +0.26 MiB. Individual CPU deltas were direct +3.44%, turn-service
+-5.28%, control-service +5.37%, control-person -4.22%, and burst +2.20%
+(10.378 to 10.606 microseconds/message). These mixed individual results remain
+visible; the complete workload is effectively unchanged, rather than a claim
+that every route improved. The coordinator accepts this measured total cost for
+the ordering/capacity correction; earlier unsuccessful versions remain recorded.
+
+Exact-source review, native artifact hashes, raw samples and process exits are
+indexed by `/tmp/core-input-50a301-validation.json` (SHA-256
+`a6823c2eb238a93c32435cd84bd69f1499d84c52dd9fcd9dbd9061ff96795771`).
+The following change only records that evidence; runtime and test inputs remain
+identical. Linux PR CI and merge remain separate from this local receipt.
