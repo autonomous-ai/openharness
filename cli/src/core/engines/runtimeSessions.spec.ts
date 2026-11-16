@@ -45,6 +45,31 @@ function setup() {
 afterEach(() => { active.splice(0).forEach(s => s.stop()); liveActive.splice(0).forEach(l => void l.stop()); vi.useRealTimers(); vi.restoreAllMocks() })
 
 describe('core runtime profile authority', () => {
+  it('copies the accepted display pair without exposing mutable view state', async () => {
+    const t = setup(); await t.seed()
+    t.sessions.evidence(t.s, [{ workspace: '/accepted-workspace' }])
+    const expected = { selectedModel: profile(t.s, 'old', 'low').id, workspace: '/accepted-workspace' }
+    const display = t.sessions.display(t.s)
+    expect(display).toEqual(expected)
+    display.selectedModel = 'changed by a display caller'; display.workspace = '/untrusted'
+    expect(t.sessions.display(t.s)).toEqual(expected)
+    expect(t.sessions.selectedModel(t.s)).toBe(expected.selectedModel)
+  })
+
+  it('revokes old stages and control across a display-only hold cycle with no workspace', async () => {
+    const t = setup(); await t.seed()
+    const target = profile(t.s)
+    expect(t.sessions.beginControl(t.s, target)).toBe(true)
+    const pending = t.sessions.stage(t.s, false, false)
+    await pending.ingest([{ model: 'staged', effort: 'high' }])
+    t.s.identityHold = 'Waiting for interpretation.'
+    expect(t.sessions.display(t.s)).toEqual({ selectedModel: profile(t.s, 'old', 'low').id, workspace: null })
+    delete t.s.identityHold
+    expect(t.sessions.display(t.s)).toEqual({ selectedModel: profile(t.s, 'old', 'low').id, workspace: null })
+    expect(pending.commit()).toBe(false)
+    expect(t.sessions.beginControl(t.s, target)).toBe(true)
+  })
+
   it.each([
     'agentId', 'sessionId', 'engine', 'transcriptPath', 'codexHome', 'boundAt', 'processPid', 'processStart',
     'cwd', 'gateway', 'active', 'hermesHome', 'tmuxPane', 'primaryRuntimeKey', 'route', 'routeOrder', 'routePropertyOrder', 'routeExtra',
