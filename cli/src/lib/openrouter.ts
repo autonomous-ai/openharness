@@ -80,6 +80,17 @@ export interface OpenRouterCompletionOptions {
   temperature?: number
 }
 
+/** OpenRouter's own message for a failed call, never the body around it: a moderation refusal carries
+ *  `metadata.flagged_input`, a piece of the prompt, which holds the person's spoken words. */
+function errorMessage(body: string): string {
+  try {
+    const message = (JSON.parse(body) as { error?: { message?: unknown } } | null)?.error?.message
+    return typeof message === 'string' ? redactKeys(message.slice(0, 300)) : ''
+  } catch {
+    return ''
+  }
+}
+
 /**
  * The completion text, or null when the call could not produce one.
  *
@@ -113,9 +124,9 @@ export async function openRouterComplete(options: OpenRouterCompletionOptions): 
     })
 
     if (!res.ok) {
-      const body = redactKeys((await res.text().catch(() => '')).slice(0, 300))
+      const said = errorMessage(await res.text().catch(() => ''))
       if (res.status === 402) console.warn('[openrouter] out of credits — top up at https://openrouter.ai/settings/credits')
-      else console.warn(`[openrouter] ${options.model} failed with HTTP ${res.status}${body ? `: ${body}` : ''}`)
+      else console.warn(`[openrouter] ${options.model} failed with HTTP ${res.status}${said ? `: ${said}` : ''}`)
       return null
     }
 
