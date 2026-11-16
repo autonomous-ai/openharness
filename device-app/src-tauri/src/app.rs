@@ -1252,6 +1252,49 @@ mod tests {
         app.handle(Event::UpdateInstalled);
         assert!(!has(&app.handle(tick(B + 10)), &Effect::Relaunch));
         app.handle(login(LoginEvent::Done(Ok(()))));
+        // The window moved on to Claude Code, which holds the relaunch too.
+        app.handle(Event::WindowClosed);
+        assert!(app.handle(tick(B + 15)).ends_with(&[Effect::StopWatch, Effect::Relaunch]));
+    }
+
+    /// The first check finds 0.1.3 and installs it.
+    fn installed(app: &mut App) {
+        assert!(has(&app.handle(tick(B + 5)), &Effect::CheckUpdate));
+        assert!(has(&app.handle(Event::UpdateChecked(Some("0.1.3".into()))), &Effect::InstallUpdate));
+        app.handle(Event::UpdateInstalled);
+    }
+
+    #[test]
+    fn a_claude_code_change_delays_the_relaunch() {
+        let mut app = found();
+        answer(&mut app, true, claude(true));
+        app.handle(Event::Menu(MenuAction::ClaudeOff));
+        installed(&mut app);
+        assert!(!has(&app.handle(tick(B + 10)), &Effect::Relaunch));
+        app.handle(Event::ClaudeSet(Ok(())));
+        assert!(app.handle(tick(B + 15)).ends_with(&[Effect::StopWatch, Effect::Relaunch]));
+    }
+
+    #[test]
+    fn a_start_of_the_daemon_delays_the_relaunch() {
+        let mut app = found();
+        app.handle(Event::WatchExit(Some(3)));
+        assert!(has(&app.handle(tick(B + 5)), &Effect::CheckUpdate));
+        app.handle(Event::WatchExit(Some(3)));
+        assert!(has(&app.handle(tick(B + 10)), &Effect::RunStart));
+        app.handle(Event::UpdateChecked(Some("0.1.3".into())));
+        app.handle(Event::UpdateInstalled);
+        assert!(!has(&app.handle(tick(B + 15)), &Effect::Relaunch));
+        app.handle(Event::StartDone { ok: true });
+        assert!(app.handle(tick(B + 20)).ends_with(&[Effect::StopWatch, Effect::Relaunch]));
+    }
+
+    #[test]
+    fn an_open_window_delays_the_relaunch() {
+        let mut app = on_claude();
+        installed(&mut app);
+        assert!(!has(&app.handle(tick(B + 10)), &Effect::Relaunch));
+        app.handle(Event::WindowClosed);
         assert!(app.handle(tick(B + 15)).ends_with(&[Effect::StopWatch, Effect::Relaunch]));
     }
 
