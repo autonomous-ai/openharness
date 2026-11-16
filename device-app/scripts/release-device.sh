@@ -139,7 +139,7 @@ echo "  notes"
 sed 's/^/    /' "$work/notes"
 echo "  runs"
 if [ "$prepare" -eq 0 ]; then
-  echo "    git tag -a $tag --cleanup=verbatim -F <the notes>"
+  echo "    git tag -a --no-sign $tag --cleanup=verbatim -F <the notes>"
   echo "    git push origin $tag"
 fi
 echo "    ${dispatch[*]}"
@@ -156,7 +156,8 @@ if [ "$prepare" -eq 1 ]; then
   "${dispatch[@]}"
   echo "  started $workflow on main for $version: nothing is tagged or published"
 else
-  git tag -a "$tag" --cleanup=verbatim -F "$work/notes"
+  # Unsigned whatever tag.gpgSign says: the workflow reads the whole tag message, a signature too, into the notes.
+  git tag -a --no-sign "$tag" --cleanup=verbatim -F "$work/notes"
   # A tag left only here would pass for a release: it blocks the first one and changes the next one's notes.
   git push origin "$tag" || {
     git tag -d "$tag" >/dev/null
