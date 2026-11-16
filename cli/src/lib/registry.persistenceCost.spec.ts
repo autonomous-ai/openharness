@@ -215,6 +215,46 @@ it('keeps the captured strict image immutable and durably rebases nested alias e
   expect(row(disk()).closePlan).toEqual(plan)
 })
 
+it.skipIf(process.platform === 'win32')('durably rebases a nested edit to a peer-recovered row after image preparation', async () => {
+  const { AtomicWriteUnconfirmed } = await import('./registryPersistence.js')
+  const prior = registry!.byAgent(A)!
+  io.failDirectorySync = true
+  await expect(track(registry!.setClosePlan(A, plan))).rejects.toBeInstanceOf(AtomicWriteUnconfirmed)
+  io.failDirectorySync = false
+  io.published = false
+  expect(prior.closePlan).toBeUndefined()
+  expect(row(disk()).closePlan).toEqual(plan)
+  expect(io.durable).toEqual([])
+
+  const peer = disk(), peerOwner = row(peer)
+  peerOwner.cwd = '/fixture/peer-recovered'
+  const peerIdentity = { ...prior.processIdentity!, startMarker: 'peer-recovered-start' }
+  peerOwner.processIdentity = peerIdentity
+  writeFileSync(io.file, JSON.stringify(peer, null, 2))
+
+  const held = holdPreparation()
+  expect(registry!.setCwd(B, '/fixture/unrelated-local')).toBe(true)
+  await held.entered()
+  const recovered = registry!.byAgent(A)!
+  expect(recovered).not.toBe(prior)
+  expect(recovered).toMatchObject({ cwd: '/fixture/peer-recovered', processIdentity: peerIdentity, closePlan: plan })
+  expect(io.durable).toEqual([])
+  // Recovery exposed this row after the original pre-await capture. Its later edit is still local work.
+  recovered.processIdentity!.startMarker = 'later-live-start'
+  const flushed = track(registry!.flush())
+  held.release()
+  await flushed
+
+  expect(row(io.durable[0])).toMatchObject({ cwd: '/fixture/peer-recovered', processIdentity: peerIdentity, closePlan: plan })
+  expect(row(disk())).toMatchObject({ cwd: '/fixture/peer-recovered',
+    processIdentity: { ...peerIdentity, startMarker: 'later-live-start' }, closePlan: plan })
+  expect(registry!.byAgent(A)).toBe(recovered)
+  expect(recovered.processIdentity).toEqual({ ...peerIdentity, startMarker: 'later-live-start' })
+  expect(registry!.byProcess('claude', recovered.processIdentity!)).toBe(recovered)
+  expect(row(disk(), B).cwd).toBe('/fixture/unrelated-local')
+  expect(io.durable.every(image => row(image, B).cwd === '/fixture/unrelated-local')).toBe(true)
+})
+
 it.each(['cancelled', 'replaced'] as const)('refuses a strict close whose selected authority was %s during preparation', async change => {
   let current = true
   const live = registry!.byAgent(A)!, held = holdPreparation()

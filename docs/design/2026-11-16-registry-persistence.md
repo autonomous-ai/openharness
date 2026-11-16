@@ -1405,3 +1405,61 @@ image rollback/retry case also passed (`core-registry-unused-changed-recovery.lo
 one passed, 62 unselected, 1.29 s). TypeScript passed with exit zero
 (`core-registry-unused-changed-types-confirmed.log`). These are functional/work-count
 checks; the v3 matched cost failure remains until fresh source-specific measurement.
+
+## Keep peer recovery independent of the prepared image
+
+Prepared against `95c5ddf368267fbae3b0a3ec55cb2dd295d59942`, before a runtime
+correction or execution. Source review found a second way a caller-visible row can
+reach the image being prepared: `reconcileUnconfirmed` installs a peer's parsed
+row into the live registry, and the recovery branch places a shallow persisted
+view of that row into `currentRows`. `strictPersistedRow` preserves the nested
+process identity by reference. A later edit through the recovered live row can
+therefore change the candidate after its bytes have been written, but before its
+baseline and contents cache are installed. This is a suspected caller-visible
+data-loss defect, not a measured performance explanation.
+
+### Design
+
+Peer recovery must leave three distinct roles: the locked durable image, the
+live recovered owner that callers may change, and the immutable candidate held
+across asynchronous preparation. Detach rows when recovery exposes them to the
+live registry, and deep-capture any recovered live row added to `currentRows`,
+using the same persisted-row snapshot rule as the ordinary pre-await capture.
+Do not solve the alias by discarding a later live edit or by making mutable rows
+act as the durable baseline. Keep the existing no-await final rebase and current
+owner checks. Root will choose the smallest correction after the caller test
+actually demonstrates the failure; no runtime code changes are included here.
+
+Growth: no new persisted data, cache or queue; any extra transient copy is limited
+to the recovered ownership group already selected by the existing recovery walk.
+Concurrency: the existing single writer, lock token, synchronous publication and
+rebase remain; this changes only which objects may share mutable nested values.
+Read cost: no new file read, process probe or polling. Scale: ordinary saves keep
+their current snapshot budget; recovery work remains bounded by its existing
+table/group, and matched cost must be checked on any eventual runtime correction.
+Compatibility: stored rows, public methods and strict receipts keep their shape;
+no backend/client ordering or 30-day contract changes. Migration and rollback:
+none; a revert restores the earlier in-memory behavior without rewriting data.
+Audience and identity: no new access or authority; native revalidation holds on
+recovered bindings and all cancellation checks remain. Failure: the original
+unconfirmed publication still rejects; peer recovery keeps the complete peer
+group, and later edits must become durable through the ordinary queued writer.
+Platforms: shared TypeScript affects macOS, Linux and Windows; the proposed
+directory-durability fault case runs on macOS/Linux, matching the existing suite's
+Windows exclusion. No native platform result is claimed.
+
+### Caller RED prepared only
+
+Extend `registry.persistenceCost.spec.ts` with one recovery interleaving. Fail the
+actual directory fsync of A's close plan, write a peer's changed A row, then start
+B's unrelated public `setCwd`. Hold the actual prepared-file fsync after it
+finishes, observe A's recovered live row, and mutate its nested process marker.
+Release the preparation and await a public flush. Require the first durable
+image to retain the peer marker, the final image and live owner to retain the
+later marker, and both images to retain A's peer cwd/close plan and B's local cwd.
+This uses caller-visible rows and actual disk images; no private registry field,
+fixed sleep, timer manipulation or mocked persistence implementation is used.
+
+The existing strict owner-change, ordinary nested-alias/deletion and uncertain
+publication controls remain unchanged. No test, typecheck, build, diagnostic or
+benchmark has run for this preparation; root owns RED and any runtime correction.
