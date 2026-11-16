@@ -69,7 +69,7 @@ class ReleaseDeviceTests(unittest.TestCase):
         self.git("add", ".")
         self.git("commit", "-qm", "first change")
         self.git("tag", "-a", "v0.1.0_device", "-m", "Harness Device 0.1.0")
-        self.git("commit", "--allow-empty", "-qm", "newer change")
+        self.commit("device-app/change.txt", "newer change")
         self.git("init", "-q", "--bare", str(self.origin))
         self.git("remote", "add", "origin", str(self.origin))
         self.git("push", "-q", "origin", "main", "--tags")
@@ -78,6 +78,13 @@ class ReleaseDeviceTests(unittest.TestCase):
     def git(self, *args):
         return subprocess.check_output([*GIT, *args], cwd=self.repo, env=self.env, stderr=subprocess.PIPE, text=True,
                                        timeout=30).strip()
+
+    def commit(self, path, message):
+        """A commit that changes path: the notes list only the commits that change device-app."""
+        (self.repo / path).parent.mkdir(parents=True, exist_ok=True)
+        (self.repo / path).write_text(message)
+        self.git("add", path)
+        self.git("commit", "-qm", message)
 
     def live(self, version):
         self.manifest.write_text(json.dumps({"version": version}))
@@ -125,6 +132,22 @@ class ReleaseDeviceTests(unittest.TestCase):
         result = self.run_script()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn("PGP SIGNATURE", self.message("v0.1.1_device"))
+
+    def test_the_notes_list_only_the_device_apps_commits(self):
+        self.commit("another-app/change.txt", "another app's change")
+        self.git("push", "-q", "origin", "main")
+        result = self.run_script("--dry-run")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("- newer change", result.stdout)
+        self.assertNotIn("another app's change", result.stdout)
+        # The first release, with no tag to start from.
+        self.git("tag", "-d", "v0.1.0_device")
+        self.git("push", "-q", "origin", ":refs/tags/v0.1.0_device")
+        self.manifest.unlink()
+        result = self.run_script("--dry-run", "0.1.0", "--allow-no-manifest")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("- first change", result.stdout)
+        self.assertNotIn("another app's change", result.stdout)
 
     def test_a_dry_run_tags_pushes_and_starts_nothing(self):
         result = self.run_script("--dry-run")
