@@ -881,8 +881,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // or closed, again. Closed as the last goes, an older dial that comes next is not asked it. A second dial coming or
     // going does not reach here: the fleet tells `watching` for the first and the last alone.
     if (!on) part.call('dial', showWaits)
-    // Its questions were in its RAM: each notice still pending is asked again, under its id, whatever source is on.
-    if (on) part.call('notices', () => notices.attached())
+    // Its questions were in its RAM: each notice still pending is asked again, under its id, whatever source is on. With
+    // the last gone, a Harness agent's next turn goes unheard, so its card ends now.
+    part.call('notices', () => on ? notices.attached() : notices.detached())
     if (!observed || !herdr) return
     // Only with herdr installed, read at each attach, as a tap needs it (herdr.ts): with none, no folder is watched
     // (~/.config, or the home folder, recursive on macOS) for a socket that never comes.

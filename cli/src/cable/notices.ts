@@ -28,7 +28,7 @@ export interface NoticesDeps {
 
 export const NOTICES_PENDING_MAX = 20
 
-interface Pending { id: string; line: string; questions: unknown; who?: NoticeCaller['who'] }
+interface Pending { id: string; line: string; questions: unknown; host: string; who?: NoticeCaller['who'] }
 
 export class Notices {
   // One card an agent, oldest first: a Map keeps insertion order, and a replaced card is put back at the end.
@@ -54,7 +54,7 @@ export class Notices {
     const id = SHOWN_ONLY_PREFIX + this.deps.uuid()
     const line = roundDrawable(ask.text)
     const questions = [{ key: 'notice', q: line, options: [`In ${hostDisplayName(caller.host)}`] }]
-    this.pending.set(caller.agentId, { id, line, questions, who: caller.who })
+    this.pending.set(caller.agentId, { id, line, questions, host: caller.host, who: caller.who })
     this.deps.ask(caller.agentId, id, questions)
     return answer('shown')
   }
@@ -70,6 +70,13 @@ export class Notices {
   /** A dial attached: each pending card is asked again, under its id. */
   attached(): void {
     for (const [agentId, card] of this.pending) this.deps.ask(agentId, card.id, card.questions)
+  }
+
+  /** The last dial went. A Harness agent's next turn is told to the devices only while a dial listens
+   *  (services/recaps.ts), so its card cannot wait for it through the unplug: it goes now. Another agent's next turn is
+   *  heard without a dial, so its card stays to be asked again. */
+  detached(): void {
+    for (const [agentId, card] of this.pending) if (card.host === 'harness') this.ended(agentId)
   }
 
   /** Each pending card as a row of the dial's drawer, newest first: a drawer replaced whole must keep them. */
