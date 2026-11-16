@@ -47,9 +47,10 @@ The first release, with Diego's go. The bucket holds no manifest yet, so both na
 - **Every run's commit is on `main`.** With `publish=true` the run's ref must be `refs/tags/v<version>_device`; without
   it, `refs/heads/main`. Only `main` may be prepared: the repository is public, so anyone can download a run's
   artifact, and a signed, notarized build of unreviewed branch code must not exist.
-- **The build's code never runs beside a secret.** `Compile` runs the crates' build scripts and the UI's npm packages
-  before the keychain or any secret exists, and refuses a signing secret in its environment; `Bundle and sign`, which
-  holds them, runs only the Tauri CLI.
+- **The build's code runs before any secret exists.** `Compile` runs the crates' build scripts and the UI's npm
+  packages before the keychain or any secret exists, and refuses a signing secret in its environment; `Bundle and
+  sign`, which holds them, runs only the Tauri CLI. Both steps share one runner, so this stops a build script that
+  reads or prints its environment, not one that leaves something behind for the later step to run.
 - **Two notarizations.** Tauri notarizes and staples the app; it signs the dmg but does not notarize it, so the
   workflow submits the dmg itself (`notarytool submit --wait`) and staples it.
 - **Checks before anything leaves `build`** (`scripts/release-check.sh --notarized`): the three files; the app is

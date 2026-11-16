@@ -5,7 +5,7 @@ run-name: Harness Device ${{ inputs.publish && 'release' || 'candidate' }} ${{ i
 # publish, or on main without it (--prepare). Neither a commit nor a tag starts it.
 #
 # Only `build` holds the Apple and updater secrets, and only in the steps after `Compile`, which runs the build's code
-# without them; only `publish` may mint the OIDC token a GCS credential needs, so the job that runs the build's code
+# without them (on the same runner: code that means harm could leave something for a later step); only `publish` may mint the OIDC token a GCS credential needs, so the job that runs the build's code
 # can never write to the bucket.
 
 on:

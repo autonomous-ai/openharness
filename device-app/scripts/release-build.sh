@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Builds one universal Harness Device release in two steps, so the build's third-party code (crates' build scripts,
-# npm packages) never runs beside a signing secret:
+# npm packages) runs before any signing secret is in the environment:
 #
 # - `release-build.sh compile VERSION [CONFIG_JSON]` compiles the app, and refuses a signing secret in its environment.
 # - `release-build.sh bundle VERSION OUT_DIR [CONFIG_JSON]` bundles, signs and notarizes what compile built into an
