@@ -1847,6 +1847,40 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     expect(leaks).toEqual([])
   })
 
+  /** A Harness agent that holds `sess-1`, the session the hooks below are of: its row takes the outside copy's. */
+  const holdsSession = () => fakeCore({ dataDir, agents: {
+    advertised: vi.fn(() => [{ agentId: 'h1', registeredAt: 1, engine: 'claude', sessionId: 'sess-1' }] as RegisteredSession[]),
+    activitySnapshot: vi.fn(async () => null),
+  } })
+
+  it('a session a Harness agent holds gets no card, question or reminder as an outside agent', async () => {
+    vi.useFakeTimers()
+    readers.answer.mockResolvedValue('Shipped the fix.')
+    const { port } = start({ core: holdsSession(), faults: ['fleet'] })
+    seen.host.watching!(true)
+    // The list read binds h1 to its session: the merged list is h1 alone.
+    expect((await machineList(port)).agents.map((a) => a.id)).toEqual(['h1'])
+    port.observed(hook('turn-start'))
+    port.observed(asked())
+    // A 20 s reminder of what is mid-turn, then the answer's read once the turn ends.
+    await vi.advanceTimersByTimeAsync(20_000)
+    port.observed(hook('turn-stop'))
+    await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
+    const named = seen.cable.calls.filter(([name, [agentId]]) => ['turnStarted', 'question', 'turnDone', 'summary'].includes(name) && agentId === ID)
+    expect(named).toEqual([])
+  })
+
+  it('the activity of an outside id the merged list hides is not asked of the core', async () => {
+    const core = holdsSession()
+    const { port } = start({ core, faults: ['fleet'] })
+    await machineList(port)
+    port.observed(hook('turn-start'))
+    expect(await host().activityText(ID)).toBeNull()
+    expect(await host().activitySnapshot(ID)).toBeNull()
+    expect(core.agents.activityText).not.toHaveBeenCalledWith(ID)
+    expect(core.agents.activitySnapshot).not.toHaveBeenCalledWith(ID)
+  })
+
   describe('the app a dial that says appFilter shows (cable/hosts/appFilter.ts)', () => {
     /** A Claude Code session in an app, its hook naming the app as the terminal's own variable does. */
     const inApp = (port: DevicesPort, sessionId: string, app: string, event: ObservedHookEvent['event'] = 'session-start') =>
