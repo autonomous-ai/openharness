@@ -200,7 +200,11 @@ export class HerdrSource implements HostSource {
   }
 
   private connect(): void {
-    this.stamp = this.deps.client.socketStamp()
+    const stamp = this.deps.client.socketStamp()
+    // Another socket is a herdr that started again and numbers its panes afresh: a row kept through a drop would take
+    // the status of the new pane of its id, and a working one turned idle would say a done no turn had.
+    if (stamp !== this.stamp) this.clear()
+    this.stamp = stamp
     if (!this.stamp) return this.wait(undefined)
     this.soon()
   }
