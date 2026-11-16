@@ -101,8 +101,6 @@ export class HerdrSource implements HostSource {
   private rows = new Map<string, Row>()
   /** Each pane and kind that asked for a subscription naming it, by `<pane>/<kind>`, until it is listed or leaves. */
   private readonly asked = new Map<string, string>()
-  /** The panes the dial's words are being typed into. */
-  private readonly sending = new Set<string>()
   private running = false
   /** The newest subscription that started: its events are heard. */
   private current: Subscription | undefined
@@ -178,14 +176,9 @@ export class HerdrSource implements HostSource {
     if (!row) return refuse('no-answer', `${name} did not answer.`)
     if (row.agent.state === 'needs-you') return refuse('waiting', `${name} is waiting for your answer in herdr.`)
     // herdr's own status, not the dial's: a turn that ended idle shows done, and is at its prompt.
-    if (row.status === 'working' || row.status === 'unknown' || this.sending.has(row.pane)) return refuse('busy', busy)
-    this.sending.add(row.pane)
-    let answer: HerdrPrompt
-    try {
-      answer = await this.deps.prompt(row.pane, row.agent.engine, text)
-    } finally {
-      this.sending.delete(row.pane)
-    }
+    if (row.status === 'working' || row.status === 'unknown') return refuse('busy', busy)
+    // Words already under way to the pane are the adapter's busy (herdr.ts), which holds the pane's turn with a tap.
+    const answer = await this.deps.prompt(row.pane, row.agent.engine, text)
     if (answer.outcome === 'sent') {
       this.deps.count('herdr')
       return { ok: true }

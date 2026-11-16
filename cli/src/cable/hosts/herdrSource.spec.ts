@@ -1,6 +1,7 @@
 import { dirname } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fakeHerdr, RECORDED, type FakeHerdr } from '../../testing/fakeHerdr.js'
+import { createHerdrAdapter } from './herdr.js'
 import { createHerdrClient, type HerdrPrompt } from './herdrClient.js'
 import { HerdrSource, type HerdrSourceDeps } from './herdrSource.js'
 import type { HostAgent } from './types.js'
@@ -32,9 +33,13 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
 
   const herdrClient = () => createHerdrClient({ socketPath: server.path, home: dirname(server.path), uid: process.getuid!(), platform: process.platform })
 
-  /** A source on the real client and the fake server, with a timer queue, a watch and two clocks the test runs by hand. */
+  /** A source on the real client and the fake server, its words through the real adapter as the devices wire it, with a
+   *  timer queue, a watch and two clocks the test runs by hand. */
   function setup(over: Partial<HerdrSourceDeps> = {}) {
     const client = herdrClient()
+    const adapter = createHerdrAdapter({
+      run: async () => ({ code: 0 }), onPath: () => null, exists: () => false, platform: process.platform, client,
+    })
     let mono = 0
     let wall = WALL
     const timers: Array<{ at: number; ms: number; run: () => void }> = []
@@ -46,7 +51,7 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     const settle = () => { for (const check of checks) if (check()) checks.delete(check) }
     let ids = 0
     let changes = 0
-    const prompt = vi.fn((pane: string, kind: string, text: string): Promise<HerdrPrompt> => client.prompt(pane, kind, text))
+    const prompt = vi.fn((pane: string, kind: string, text: string): Promise<HerdrPrompt> => adapter.prompt(pane, kind, text))
     const focus = vi.fn(async (_pane: string) => true)
     const deps: HerdrSourceDeps = {
       client,
@@ -881,9 +886,11 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
     await to('done', 'done')
     s.counts.length = 0
     let answer!: (prompt: HerdrPrompt) => void
-    s.prompt.mockImplementationOnce(() => new Promise((resolve) => { answer = resolve }))
+    vi.spyOn(s.client, 'prompt').mockImplementationOnce(() => new Promise((resolve) => { answer = resolve }))
     const first = s.source.send(api(), 'run the tests')
-    expect(await refused(BUSY, 'and then')).toBe(0)
+    // The adapter holds the pane's turn: it answers busy, and the client is asked once.
+    expect(await refused(BUSY, 'and then')).toBe(1)
+    expect(s.client.prompt).toHaveBeenCalledTimes(1)
     answer({ outcome: 'sent' })
     expect(await first).toEqual({ ok: true })
     s.prompt.mockResolvedValueOnce({ outcome: 'busy' })
