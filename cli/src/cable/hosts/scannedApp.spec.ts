@@ -231,6 +231,11 @@ describe('scannedApps elsewhere', () => {
     expect(d.bundleId).not.toHaveBeenCalled()
   })
 
+  it('on Linux a session under a process named harness is in Harness', async () => {
+    const d = deps([[10, 9, 'claude'], [9, 8, 'bash'], [8, 1, 'harness']], {}, 'linux')
+    expect(await scannedApps([10], d)).toEqual(new Map([[10, 'harness']]))
+  })
+
   it('on Linux windowsterminal and a name no table lists name nothing', async () => {
     const d = deps([[10, 1, 'windowsterminal'], [20, 1, 'alacritty']], {}, 'linux')
     expect(await scannedApps([10, 20], d)).toEqual(new Map())

@@ -61,7 +61,8 @@ working in. The app he is working in is the one in front, and the computer alrea
    forbids Other, so two pages no longer share one name. To keep it apart from that app, the front value for "no
    listed app is in front" is `none` (this spec first called it `other`).
 5. **The picker's measure counts each `app.pick`** the dial sends. No third frame.
-6. **The filter keeps following the app in front while a Harness window is open.** Only the dial does not show it.
+6. **With a Harness window open:**
+   [The dial follows the app in front with a window open](2026-11-15-dial-follow-front-with-window.md).
 7. **The X11 source is tested live in PR CI's `device-app-checks`,** under Xvfb with openbox, xdotool and xterm. The
    pull request records how much longer the job runs.
 8. **The on-dial check's agents are the end-to-end suite's fake Claude Code,** against an isolated daemon.
@@ -154,9 +155,8 @@ The state is `shown`, `pickedOnDial` (a boolean), `tieBreak` (the app drawn and 
    and the dial gets `apps` again. A pick, or a notice, of the app already shown (`same`) changes nothing: Done on the
    shown app is how a person leaves the picker without changing anything (the PM, 2026-11-15, D2, which withdraws
    commit `85ad59b619`).
-4. **With a Harness window,** the dial keeps the active tab, as decided on 2026-09-17: it gets no `apps` and a pick
-   is ignored. The filter still follows the app in front (step 2) meanwhile, so when the window closes the dial shows
-   the app in front, if it has agents.
+4. **With a Harness window,** whether the dial holds the window's tab or the app in front is decided in
+   [The dial follows the app in front with a window open](2026-11-15-dial-follow-front-with-window.md).
 
 Every switch from one app to another writes the log line `app filter: switched` and counts once in the measures. The
 first app shown, and going to none when every agent has ended, are no switch and write nothing.
@@ -248,7 +248,8 @@ and a desktop change. The rings are memory only too, as swipe-order decided.
 
 - `runDialWatch` (`cli/src/devices/client.ts`) maps the value to an app id through a table next to `hostDetect.ts`:
   the bundle ids `detectApp` knows (kitty's, WezTerm's and Harness Desktop's among them), plus the exe names: Linux's
-  `code`, `cursor`, `wezterm-gui` (WezTerm's `CFBundleExecutable`, the same `Info.plist`), `kitty` and `ghostty`, and
+  `code`, `cursor`, `wezterm-gui` (WezTerm's `CFBundleExecutable`, the same `Info.plist`), `kitty`, `ghostty` and
+  `harness` (Harness Desktop's, `desktop/linux/CMakeLists.txt`, `BINARY_NAME`), and
   Windows's `Code.exe`, `Cursor.exe` and `WindowsTerminal.exe`, which nothing sends until the Windows source exists.
   The list is closed: a new row is a new decision.
 - An app the table does not know is `none`: no listed app is in front. `none` is not an app id. It is never the
@@ -360,7 +361,7 @@ face's app line goes in the main checkout's `devices/harness-device/mockup/`, fo
 5. A VS Code agent asks for approval while the dial shows Ghostty: the bell rings, the picker says
    `· 1 waiting`, and opening the notice turns the dial to it.
 6. Claude Code in zellij inside Ghostty is in Ghostty's ring.
-7. Opening the Harness window: the dial goes back to the active tab, and a hold opens TABS.
+7. Harness Desktop in front: the dial goes back to the active tab, and a hold opens TABS.
 8. An older firmware against the new daemon: the single ring, as today.
 9. Linux X11: the front line arrives and following works for VS Code. (Windows: Follow-ups.)
 

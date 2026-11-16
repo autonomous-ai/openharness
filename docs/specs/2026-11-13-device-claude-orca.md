@@ -166,6 +166,8 @@ dial cannot draw becomes `?`. The summary goes only to the dial over its cable: 
 router or a log line.
 
 **With a window open nothing changes,** as in wave 0: the dial holds the active tab, which has no observed agents.
+A dial that says `appFilter` in the apps view differs:
+[the dial follows the app in front with a window open](2026-11-15-dial-follow-front-with-window.md).
 
 ### Voice
 
