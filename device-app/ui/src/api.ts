@@ -2,7 +2,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 
-export type Screen = 'install' | 'sign_in' | 'claude'
+export type Screen = 'install' | 'sign_in' | 'claude' | 'codex'
 export type Phase = 'offer' | 'working' | 'browser' | 'failed'
 export interface View {
   screen: Screen
