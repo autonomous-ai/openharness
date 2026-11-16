@@ -261,11 +261,20 @@ mod tests {
                 board: None,
                 updating: None,
                 problem: None,
+                muted: None,
             }
         );
         for line in [r#"{}"#, r#"{"error":"x"}"#, r#"{"attached":"yes"}"#] {
             assert!(serde_json::from_str::<DialStatus>(line).is_err(), "{line}");
         }
+    }
+
+    #[test]
+    fn a_status_line_carries_muted() {
+        let muted = |line: &str| serde_json::from_str::<DialStatus>(line).map(|status| status.muted);
+        assert_eq!(muted(r#"{"attached":true,"muted":true}"#).unwrap(), Some(true));
+        assert_eq!(muted(r#"{"attached":true}"#).unwrap(), None);
+        assert!(muted(r#"{"attached":true,"muted":"yes"}"#).is_err());
     }
 
     #[test]

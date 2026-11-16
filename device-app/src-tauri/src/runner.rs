@@ -738,11 +738,27 @@ mod tests {
     }
 
     fn no_dial() -> Event {
-        Event::WatchLine(DialStatus { attached: false, fw: None, hw: None, board: None, updating: None, problem: None })
+        Event::WatchLine(DialStatus {
+            attached: false,
+            fw: None,
+            hw: None,
+            board: None,
+            updating: None,
+            problem: None,
+            muted: None,
+        })
     }
 
     fn a_dial() -> Event {
-        Event::WatchLine(DialStatus { attached: true, fw: None, hw: None, board: None, updating: None, problem: None })
+        Event::WatchLine(DialStatus {
+            attached: true,
+            fw: None,
+            hw: None,
+            board: None,
+            updating: None,
+            problem: None,
+            muted: None,
+        })
     }
 
     fn tab(tty: &str) -> String {
