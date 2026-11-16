@@ -1558,3 +1558,14 @@ they are expected to pass on the existing implementation.
 Only this Design and caller tests are prepared. No runtime code, admission test,
 syntax check, test run, typecheck, build, diagnostic or benchmark is part of this
 preparation. Root owns the actual RED, runtime correction, GREEN and cost decision.
+
+Root execution at `5994626f4b970fd1fd3894041a3f0dcbc1f02051` recorded the two
+intended failures (two owner serializations instead of zero), with eleven
+authority/recovery controls passing (`core-registry-owner-snapshot-red.log`,
+7.26 s). Capturing the independent owner snapshots and serializing only affected
+owners passed all thirteen cases (`core-registry-owner-snapshot-green.log`,
+7.66 s). TypeScript passed (`core-registry-owner-snapshot-types.log`). Independent
+review found no omitted ownership field or changed authority boundary. The prior
+recovery correction also passed all 63 admission controls
+(`core-registry-recovery-admission-controls.log`, 62.59 s). Matched cost for these
+combined corrections remains pending; the earlier cost failures are retained.

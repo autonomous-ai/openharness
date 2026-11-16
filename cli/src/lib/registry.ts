@@ -3195,7 +3195,7 @@ class Registry {
     return pending
   }
 
-  private verifyPreparedOwners(before: Map<string, string | undefined>, candidates: Map<string, Record<string, unknown>>,
+  private verifyPreparedOwners(before: Map<string, RegisteredSession>, candidates: Map<string, Record<string, unknown>>,
     changed: Set<string>, target?: string): void {
     const affected = new Set(changed)
     if (target) affected.add(target)
@@ -3209,7 +3209,7 @@ class Registry {
       return row ? claims(row) : []
     }))
     for (const row of this.list()) if (claims(row).some(claim => wanted.has(claim))) affected.add(row.agentId)
-    for (const id of affected) if (ownershipIdentity(this.byAgent(id)) !== before.get(id)) {
+    for (const id of affected) if (ownershipIdentity(this.byAgent(id)) !== ownershipIdentity(before.get(id))) {
       throw new RegistryOwnershipChanged('the registry ownership group changed while its write was being prepared')
     }
   }
@@ -3289,7 +3289,10 @@ class Registry {
         const row = structuredClone(persistedRow(entry)) as unknown as Record<string, unknown>
         return [entry.agentId, row] as const
       }))
-      const beforeOwners = new Map(strict ? this.list().map(row => [row.agentId, ownershipIdentity(row)]) : [])
+      // Preserve authority now; unchanged observations never need to serialize it.
+      const beforeOwners = new Map(strict ? this.list().map(row => [row.agentId, {
+        ...currentRows.get(row.agentId), evidenceRevision: row.evidenceRevision,
+      } as unknown as RegisteredSession]) : [])
       const beforeCommit = new Map([...currentRows].map(([id, row]) => [id, rowFingerprint(row)]))
       const capturedIntents = new Map(this.intended)
       const intentRow = (row: RegisteredSession | null) => row ? { ...persistedRow(row), touchedAt: 0, boundAt: 0, lastHookAt: 0, lastTranscriptAt: 0 } : null
