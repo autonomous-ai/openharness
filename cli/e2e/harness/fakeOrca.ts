@@ -9,8 +9,9 @@ import { join } from 'node:path'
 import type { IsolatedDaemon } from './daemon.js'
 
 export interface OrcaRun { args: string; at: number }
-/** A tab's panes, first to last: one handle is a leaf, more are pane splits (`first`, then `second`). */
-export type FakeTab = string[]
+/** A tab's panes, first to last: one handle is a leaf, more are pane splits (`first`, then `second`). With no title of
+ *  its own a tab is titled `made up`. */
+export type FakeTab = string[] | { title: string; panes: string[] }
 
 /** Orca 1.4.256's `orca terminal --help`, whole. */
 const HELP = `orca terminal
@@ -98,12 +99,13 @@ export class FakeOrca {
     const ids = { leaf: 0 }
     const visualLayouts = worktrees.map((tabs, i) => ({
       worktreeId: `w${i}`, worktreePath: `/e2e/wt-${i}`,
-      root: { type: 'group', groupId: `g${i}`, activeTabId: `t${i}-0`, tabs: tabs.map((panes, j) => {
+      root: { type: 'group', groupId: `g${i}`, activeTabId: `t${i}-0`, tabs: tabs.map((tab, j) => {
         const tabId = `t${i}-${j}`
-        return { tabId, title: 'made up', activeLeafId: `l${ids.leaf + 1}`, panes: paneTree(panes, tabId, ids) }
+        const { title, panes } = Array.isArray(tab) ? { title: 'made up', panes: tab } : tab
+        return { tabId, title, activeLeafId: `l${ids.leaf + 1}`, panes: paneTree(panes, tabId, ids) }
       }) },
     }))
-    const totalCount = worktrees.flat(2).length
+    const totalCount = worktrees.flat().reduce((count, tab) => count + (Array.isArray(tab) ? tab : tab.panes).length, 0)
     const file = join(this.dir, 'layout.json')
     // Renamed into place: a `terminal list` that runs meanwhile prints the old layout or the new, never half of one.
     writeFileSync(`${file}.new`, JSON.stringify({ id: 'e2e', ok: true, result: { terminals: [], visualLayouts, totalCount, truncated: false } }))
