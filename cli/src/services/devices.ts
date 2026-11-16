@@ -747,6 +747,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    * one. One option, as a question needs one, and none to speak. By agent, so that each is closed by its own id.
    */
   const shown = new Map<string, { id: string; line: string; questions: unknown }>()
+  /** Each Harness agent's question open on the dials, by its id: an agent's notice waits behind it (cable/notices.ts). */
+  const questionsOpen = new Map<string, string>()
   const ask = (agentId: string, question: { id: string; line: string; questions: unknown }): void => {
     shown.set(agentId, question)
     inOrder(agentId, () => { void cable.question(agentId, question.id, question.questions) })
@@ -757,10 +759,12 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     if (!heldOnTab()) {
       for (const entry of outsideEntries()) if (entry.source === observed && observed.waitingOn(entry.agent.id) !== undefined) want.set(entry.agent.id, entry)
     }
+    const closed: string[] = []
     for (const [agentId, question] of shown) {
       const entry = want.get(agentId)
       if (entry && waiting(entry) === question.line) continue
       shown.delete(agentId)
+      closed.push(agentId)
       inOrder(agentId, () => { void cable.questionClose(agentId, question.id) })
     }
     for (const [agentId, entry] of want) {
@@ -769,6 +773,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       ask(agentId, { id: `${SHOWN_ONLY_PREFIX}${randomUUID()}`, line,
         questions: [{ key: 'prompt', q: line, options: [`In ${hostDisplayName(entry.agent.host)}`] }] })
     }
+    // After the asks: a wait whose line changed is asked again, and still holds its agent's notice back.
+    for (const agentId of closed) reaskNotice(agentId)
   }
 
   // ── an agent's notice ──────────────────────────────────────────────────────────────────────────────
@@ -794,6 +800,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const notices: Notices = new Notices({
     connected: () => cable.isConnected,
     resolve: noticeCaller,
+    held: (agentId) => questionsOpen.has(agentId) || shown.has(agentId),
     // In its agent's order, as every card is: a card must not overtake a done still being sent.
     ask: (agentId, id, questions) => inOrder(agentId, () => { void cable.question(agentId, id, questions) }),
     close: (agentId, id) => inOrder(agentId, () => { void cable.questionClose(agentId, id) }),
@@ -803,6 +810,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   })
   /** That agent's next turn started, a tap opened it, or it left: its card goes. */
   const endNotice = (agentId: string): void => part.call('notices', () => notices.ended(agentId))
+  /** Another question of that agent closed: its notice, covered or held back by it, is asked again. */
+  const reaskNotice = (agentId: string): void => part.call('notices', () => notices.reask(agentId))
 
   /** What changed among them, told: run whenever a source of theirs says its list changed. */
   const outsideTurn = (): void => {
@@ -970,9 +979,16 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const toCable = (frame: Record<string, unknown>): void => {
     // A question, its close and a turn's card each also move the agent on the dial's list with no window (hosts/harness.ts).
     const close = cableQuestionCloseFor(frame as Parameters<typeof cableQuestionCloseFor>[0])
-    if (close) { cableHost.harness.noteCard(close.agentId, 'question.close'); inOrder(close.agentId, () => { void cable.questionClose(close.agentId, close.requestId) }); return }
+    if (close) {
+      cableHost.harness.noteCard(close.agentId, 'question.close')
+      inOrder(close.agentId, () => { void cable.questionClose(close.agentId, close.requestId) })
+      // As the cable session's inbox does: the close of an older question leaves the newer one open.
+      if (questionsOpen.get(close.agentId) === close.requestId) questionsOpen.delete(close.agentId)
+      reaskNotice(close.agentId)
+      return
+    }
     const question = cableQuestionFor(frame as Parameters<typeof cableQuestionFor>[0])
-    if (question) { cableHost.harness.noteCard(question.agentId, 'question'); tally(cableHost.describe(question.agentId)?.name ?? '', 'alert', 'rule:question', 'question', 0); inOrder(question.agentId, () => { void cable.question(question.agentId, question.requestId, question.questions) }); return }
+    if (question) { questionsOpen.set(question.agentId, question.requestId); cableHost.harness.noteCard(question.agentId, 'question'); tally(cableHost.describe(question.agentId)?.name ?? '', 'alert', 'rule:question', 'question', 0); inOrder(question.agentId, () => { void cable.question(question.agentId, question.requestId, question.questions) }); return }
     // A shell result is only the stats' input: the dial is told the sums when the turn ends.
     const ran = frame as { type?: string; agentId?: string; payload?: { kind?: string; id?: string; command?: string; isError?: boolean; outputTail?: string } }
     if (ran.payload?.kind === 'reply_text' && ran.agentId) {
@@ -982,6 +998,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     }
     if (ran.payload?.kind === 'turn_started' && ran.agentId) {
       endNotice(ran.agentId)
+      // A question its last turn left open is stale: it must not hold a notice of this turn back.
+      questionsOpen.delete(ran.agentId)
       endReplies(ran.agentId, false)
       stats.take(ran.agentId)
       if (cable.wantsStats()) starts.set(ran.agentId, settle(readUsage(ran.agentId)))
@@ -993,7 +1011,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     }
     // A tool card is a step for a `steps-v1` device and nothing for any other: the session drops it.
     const gone = (frame as { type?: string; payload?: { agentId?: unknown } })
-    if (gone.type === 'agent_deleted' && typeof gone.payload?.agentId === 'string') { latestUpdate.delete(gone.payload.agentId); began.delete(gone.payload.agentId); ended.delete(gone.payload.agentId); endReplies(gone.payload.agentId, false); endNotice(gone.payload.agentId) }
+    if (gone.type === 'agent_deleted' && typeof gone.payload?.agentId === 'string') { latestUpdate.delete(gone.payload.agentId); began.delete(gone.payload.agentId); ended.delete(gone.payload.agentId); endReplies(gone.payload.agentId, false); endNotice(gone.payload.agentId); questionsOpen.delete(gone.payload.agentId) }
     const step = cableStepFor(frame as Parameters<typeof cableStepFor>[0])
     if (step) { inOrder(step.agentId, () => { void cable.turnStep(step.agentId, step.step) }); return }
     const event = cableEventFor(frame as Parameters<typeof cableEventFor>[0])

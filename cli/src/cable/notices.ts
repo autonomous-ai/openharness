@@ -18,6 +18,9 @@ export interface NoticeCaller {
 export interface NoticesDeps {
   connected(): boolean
   resolve(ask: NoticeAsk): NoticeCaller
+  /** Whether another question of that agent is open on the dials. A dial, and its cable session, hold one question an
+   *  agent: a notice asked over it would hide it and drop its close, so the notice waits until it closes. */
+  held(agentId: string): boolean
   /** A question to every dial, in its agent's order. */
   ask(agentId: string, id: string, questions: unknown): void
   close(agentId: string, id: string): void
@@ -55,7 +58,7 @@ export class Notices {
     const line = roundDrawable(ask.text)
     const questions = [{ key: 'notice', q: line, options: [`In ${hostDisplayName(caller.host)}`] }]
     this.pending.set(caller.agentId, { id, line, questions, host: caller.host, who: caller.who })
-    this.deps.ask(caller.agentId, id, questions)
+    this.reask(caller.agentId)
     return answer('shown')
   }
 
@@ -67,9 +70,16 @@ export class Notices {
     this.deps.close(agentId, card.id)
   }
 
+  /** Another question of that agent closed, which took the card's place on the dial or held it back: the card is asked,
+   *  under its id, unless one is still open. Nothing for an agent with none. */
+  reask(agentId: string): void {
+    const card = this.pending.get(agentId)
+    if (card && !this.deps.held(agentId)) this.deps.ask(agentId, card.id, card.questions)
+  }
+
   /** A dial attached: each pending card is asked again, under its id. */
   attached(): void {
-    for (const [agentId, card] of this.pending) this.deps.ask(agentId, card.id, card.questions)
+    for (const agentId of this.pending.keys()) this.reask(agentId)
   }
 
   /** The last dial went. A Harness agent's next turn is told to the devices only while a dial listens
@@ -79,9 +89,10 @@ export class Notices {
     for (const [agentId, card] of this.pending) if (card.host === 'harness') this.ended(agentId)
   }
 
-  /** Each pending card as a row of the dial's drawer, newest first: a drawer replaced whole must keep them. */
+  /** Each pending card the dial shows as a row of its drawer, newest first: a drawer replaced whole must keep them. */
   rows(machineId: string): UnreadNotification[] {
-    return [...this.pending].reverse().map(([agentId, card]) => ({ agentId, machineId, question: true, text: card.line }))
+    return [...this.pending].reverse().filter(([agentId]) => !this.deps.held(agentId))
+      .map(([agentId, card]) => ({ agentId, machineId, question: true, text: card.line }))
   }
 
   /** Who a pending notice's caller is, when no list holds it. */
