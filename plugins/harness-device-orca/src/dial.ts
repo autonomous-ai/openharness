@@ -24,6 +24,9 @@ const NEWLINE = 0x0a
 const REPLACED = '{"replaced":true}'
 const FIRST_WAIT_MS = 1_000
 const LAST_WAIT_MS = 30_000
+// Unplugged with the watch on: the watch asks as the socket appears, so link is looked at again only in case the
+// daemon stops.
+const WATCHED_WAIT_MS = 300_000
 // The folder watch asks link at most this often.
 const WATCH_MS = 1_000
 
@@ -75,7 +78,7 @@ export function startDial(inputs: DialInputs, tell: { changed(state: DialState):
     const now = inputs.now()
     // Unplugged with the watch on is no failure: the watch asks as the socket appears, link is looked at again only in
     // case the daemon stops, and a stream that ends soon after waits from 1 s, not from a wait grown meanwhile.
-    const at = again ? Math.max(now, lastStart + WATCH_MS) : now + (quiet ? LAST_WAIT_MS : wait)
+    const at = again ? Math.max(now, lastStart + WATCH_MS) : now + (quiet ? WATCHED_WAIT_MS : wait)
     wait = quiet ? FIRST_WAIT_MS : Math.min(wait * 2, LAST_WAIT_MS)
     schedule(at)
   }

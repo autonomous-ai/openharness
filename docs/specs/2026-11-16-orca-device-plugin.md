@@ -153,9 +153,9 @@ folder holds no binaries and no dependencies: Node's built-in modules only.
   3. It runs `harness device orca link` (with a 5 s timeout and at most 4 KiB of output). A run that fails or prints
      something else is `notRunning`. `daemon: false` is `notRunning`. `daemon: true` with `devicesReady: false` is
      `unplugged`: the worker then watches the folder of `devicesSocket` and runs `link` again when the socket's own
-     entry (`devices.sock`) changes, or any entry where the platform gives no name (at most once a second), and on the
-     backoff as well, so a plugged-in dial shows within about a second with no polling. Other entries of that folder
-     (the daemon's data folder: its registry and logs) are ignored.
+     entry (`devices.sock`) changes, or any entry where the platform gives no name (at most once a second), and every
+     5 min as well, in case the daemon stops, so a plugged-in dial shows within about a second with no polling. Other
+     entries of that folder (the daemon's data folder: its registry and logs) are ignored.
   4. With `devicesReady`, it opens the `dial` stream over `devicesSocket` with `node:http` (`socketPath`). A 409 sets
      the state to `elsewhere`. Any other status but 200, a refused connect, or no answer's head within 2 s is
      `notRunning`. Each line it reads (at most 1 KiB, else the
