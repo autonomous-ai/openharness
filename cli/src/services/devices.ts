@@ -929,8 +929,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   /** The watch's change of the Notifications setting: kept, then said at once with the dial's status, which is how the
    *  watch's line, and the menu's check, follow it. No revision: the dial itself did not change. */
   const setNotify = (mode: NotifyMode): { mode: NotifyMode } | { error: string } => {
-    if (!notifyMode.set(mode)) {
-      log('[device] notifications · not saved')
+    const failed = notifyMode.set(mode)
+    if (failed !== undefined) {
+      log(`[device] notifications · not saved · ${failed}`)
       return { error: 'WRITE_FAILED' }
     }
     sayStatus(cableHost.currentDialStatus())

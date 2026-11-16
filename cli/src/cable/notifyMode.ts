@@ -42,19 +42,21 @@ export class NotifyModeStore {
     return this.mode
   }
 
-  /** False when the file could not be written: the mode in force stays. The same mode again writes nothing. */
-  set(mode: NotifyMode): boolean {
-    if (mode === this.mode) return true
+  /** The error's code (EACCES, EISDIR) when the file could not be written, and the mode in force stays; undefined once
+   *  it is saved. The same mode again writes nothing. The code is for the log: never the error's message, which names the
+   *  path. */
+  set(mode: NotifyMode): string | undefined {
+    if (mode === this.mode) return undefined
     // Written whole and renamed into place, so a reader never sees half a file.
     const temporary = `${this.file}.${process.pid}.tmp`
     try {
       writeFileSync(temporary, `${JSON.stringify({ mode })}\n`, { mode: 0o600 })
       renameSync(temporary, this.file)
-    } catch {
+    } catch (error) {
       rmSync(temporary, { force: true })
-      return false
+      return (error as NodeJS.ErrnoException).code ?? 'FAILED'
     }
     this.mode = mode
-    return true
+    return undefined
   }
 }
