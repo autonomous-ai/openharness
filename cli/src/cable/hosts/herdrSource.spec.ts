@@ -38,7 +38,7 @@ describe.skipIf(process.platform === 'win32')('the herdr source (docs/specs/2026
   function setup(over: Partial<HerdrSourceDeps> = {}) {
     const client = herdrClient()
     const adapter = createHerdrAdapter({
-      run: async () => ({ code: 0 }), onPath: () => null, exists: () => false, platform: process.platform, client,
+      run: async () => ({ code: 0, stdout: '' }), onPath: () => null, exists: () => false, platform: process.platform, client,
     })
     let mono = 0
     let wall = WALL

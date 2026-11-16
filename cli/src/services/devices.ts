@@ -361,8 +361,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     client: herdrClient,
     watch: (changed) => watchHerdrSocket(herdrAt, changed),
     prompt: herdrAdapter.prompt,
-    // The command a hooked agent's tap runs (Q6): the dial's move is noted as every tap's is.
-    focus: (paneId) => herdrNoted.focus({ adapter: herdrAdapter.id, id: paneId }),
+    // The command a hooked agent's tap runs (Q6): the dial's move is noted as every tap's is. Only a shown pane is true:
+    // herdr's adapter never refuses one, though the noted copy is typed as any adapter's.
+    focus: async (paneId) => (await herdrNoted.focus({ adapter: herdrAdapter.id, id: paneId })) === true,
     after: timerIn('herdr'),
     now: Date.now,
     monotonic,

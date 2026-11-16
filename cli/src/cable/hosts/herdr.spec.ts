@@ -159,19 +159,19 @@ describe('the herdr adapter', () => {
     })
 
     it('a second focus while one runs is one command, and both answer its result', async () => {
-      const ran = held<{ code: number | null }>()
+      const ran = held<{ code: number | null; stdout: string }>()
       const run = vi.fn((_file: string, _args: string[], _timeoutMs: number) => ran.answer)
       const { adapter } = recorder({ run })
       const tap = adapter.focus(pane('w1:p2'))
       const again = adapter.focus(pane('w1:p2'))
-      ran.give({ code: 1 })
+      ran.give({ code: 1, stdout: '' })
       expect(await tap).toBe(false)
       expect(await again).toBe(false)
       expect(run.mock.calls).toEqual([[FAKE_PATH_HERDR, ['agent', 'focus', 'w1:p2'], 10_000]])
     })
 
     it('a prompt asks the client only once a focus under way has ended', async () => {
-      const ran = held<{ code: number | null }>()
+      const ran = held<{ code: number | null; stdout: string }>()
       const { adapter, prompt } = recorder({ run: async () => ran.answer })
       const focused = adapter.focus(pane('w1:p2'))
       const words = adapter.prompt('w1:p2', 'claude', 'one')
@@ -179,7 +179,7 @@ describe('the herdr adapter', () => {
       expect(await adapter.prompt('w1:p2', 'claude', 'two')).toEqual({ outcome: 'busy' })
       await turn()
       expect(prompt).not.toHaveBeenCalled()
-      ran.give({ code: 0 })
+      ran.give({ code: 0, stdout: '' })
       expect(await focused).toBe(true)
       expect(await words).toEqual({ outcome: 'sent' })
       expect(prompt.mock.calls).toEqual([['w1:p2', 'claude', 'one']])
