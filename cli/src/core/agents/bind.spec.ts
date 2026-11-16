@@ -436,7 +436,7 @@ describe('binding a running process to its session', () => {
     expect(processSessionOf).toHaveBeenCalledTimes(2)
   })
 
-  // #4362: a reader that gave up on a session it never opened holds no stream and attaches it on no later connection.
+  // #4362: a reader that gave up on a session takes it up on no later connection, or on none that may come.
   it.each(Object.values(OTHER_ENGINE_STATES))('revalidates a reader hold once its reader holds no stream for the session: %s', async hold => {
     const run = setup({ followsLive: vi.fn(() => false) })
     const row = agent({ engine: 'copilot', transcriptPath: '/t/s1.jsonl', identityHold: hold })

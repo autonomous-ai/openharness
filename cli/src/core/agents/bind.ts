@@ -105,7 +105,7 @@ export interface BindDeps {
   openclawStateDir: (pid: number) => Promise<string | null>
   /** What a Hermes's record of its own terminal says (hermesTerminal.ts). Absent, a Hermes is bound by its hooks and the repair. */
   hermesTerminal?: ReturnType<typeof createHermesTerminal>
-  /** Whether the session's live stream is still held, to be resumed where it stopped. */
+  /** Whether the session's live stream is still held, to be resumed where it stopped, by its reader itself. */
   followsLive: (sessionId: string) => boolean
 }
 
@@ -337,9 +337,10 @@ export function createBinding({
     // The other engines' reader hold is otherStreams' to clear while it holds the session's stream, with its resume from
     // the byte the core held. Revalidated then, it was cleared and the session attached again while the worker was down;
     // on the worker's return a second stream opened from the transcript's end, and the turn typed meanwhile came as
-    // history (#4362, CLI end to end shard 5, e2e/otherEngines.e2e.ts). A reader that gave up on a session it never
-    // opened (five retries, then nothing queued) holds no stream and attaches it on no later connection: this pass is
-    // the row's one rescue, as before #4362, or it stays held until the daemon restarts.
+    // history (#4362, CLI end to end shard 5, e2e/otherEngines.e2e.ts). A reader that gave up on a session (five
+    // retries, then nothing queued, or a stream lost with its worker still connected) takes it up on no later
+    // connection, or on none that may come: this pass is the row's one rescue, as before #4362, or it stays held until
+    // the daemon restarts.
     if (agent.identityHold && agent.sessionId && agent.transcriptPath
       && !(OTHER_ENGINE_HOLDS.has(agent.identityHold) && followsLive(agent.sessionId))) {
       try {

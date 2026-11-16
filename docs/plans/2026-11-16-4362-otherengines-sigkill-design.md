@@ -47,8 +47,10 @@ is: no `revalidateBinding`, no recovered follow. The rest of the pass still runs
 - Narrowed after the final review (orchestrator, 2026-11-16): the pass leaves a reader hold alone only while the
   live reader still holds a stream for the session, waiting to resume it (`bindObservedAgent` asks through a new
   dependency, `followsLive(sessionId)`, which `main.ts` wires to the reader). A row whose reader gave up (six failed
-  opens, no stream ever held) is revalidated as before. Otherwise the fix would take away the only rescue such a row
-  has, and it would stay held until the daemon restarts.
+  opens, no stream ever held) is revalidated as before, and so is one whose stream the reader gave up on while its
+  worker stayed connected (five reattaches not answered, or a resume answered with an error it does not retry):
+  `followsLive` is `otherStreams.follows`, not `has`, since such a handle stays in the reader's map. Otherwise the fix
+  would take away the only rescue such a row has, and it would stay held until the daemon restarts.
 - Nothing new is stored, synced or exposed. No new state, setting or log line is needed beyond what the fix requires.
 
 ## Tests
