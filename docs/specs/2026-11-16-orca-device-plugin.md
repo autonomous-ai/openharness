@@ -194,6 +194,7 @@ The plugin's design follows Orca's components: its controls are Orca's own, so
 | --- | --- | --- | --- |
 | No Harness CLI | the worker, at step 2 | "Harness isn't installed." and Get Harness | found again on the next pass (30 s at most) |
 | Daemon stopped | the stream ends; link says `daemon: false` | "Harness isn't running." | reconnects with backoff (30 s at most) |
+| Daemon stopped with no dial attached | no stream; the next link says `daemon: false` | "Dial unplugged." for up to 5 min, then "Harness isn't running." | the folder watch's 5 min look at link |
 | No dial yet, so no devices process | link says `devicesReady: false` | "Dial unplugged." | the folder watch runs link again as the socket appears |
 | The devices process restarting | the stream ends | "Dial unplugged." for a moment | the folder watch and the backoff |
 | A socket not private | link says false for it | as for no socket | none until it is private; the devices log already says so |
