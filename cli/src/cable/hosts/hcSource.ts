@@ -23,10 +23,14 @@ import type { Caps, HostAgent, HostAgentState, HostSource, PaneSwitch, SendResul
 
 const STATES: Record<HcStatus, HostAgentState> = { idle: 'idle', working: 'working', blocked: 'needs-you', done: 'done', error: 'error' }
 
+/** A live terminal Herdr's window shows, with a status or none. */
+const inWindow = (terminal: HcTerminal): boolean => terminal.live && terminal.space
+/** A live terminal hc reports an agent's status for: one of its five words, from an app with a kind. */
+const reporting = (terminal: HcTerminal): boolean =>
+  terminal.live && terminal.status !== undefined && terminal.kind !== undefined
 /** A terminal Herdr's window shows that runs an agent now. */
 type Listable = HcTerminal & { status: HcStatus; kind: string }
-const listable = (terminal: HcTerminal): terminal is Listable =>
-  terminal.live && terminal.space && terminal.status !== undefined && terminal.kind !== undefined
+const listable = (terminal: HcTerminal): terminal is Listable => inWindow(terminal) && reporting(terminal)
 
 export interface HcSourceDeps {
   client: Pick<HcClient, 'subscribe' | 'socketStamp'>
@@ -65,6 +69,10 @@ export class HcSource implements HostSource {
   private readonly listeners = new Set<() => void>()
   /** Every listable terminal, by address, in the order each became listable. */
   private readonly rows = new Map<string, Row>()
+  /** The live terminals the window shows, and those hc reports an agent for, listed or not, which the Herdr adapter
+   *  asks after (shows, reports). Each holds the client's 1,024 at most. */
+  private readonly shown = new Set<string>()
+  private readonly reported = new Set<string>()
   private running = false
   private subscription: { close(): void } | undefined
   /** The count of listed agents last said, and of those left out. */
@@ -164,9 +172,16 @@ export class HcSource implements HostSource {
     return row ? this.deps.show(row.address, row.agent.id) : 'failed'
   }
 
-  /** Whether Herdr's window shows that terminal: it is listed here. */
+  /** Whether Herdr's window shows that terminal: a live one labeled `herdr.space`, with a status or none, listed or past
+   *  the 64. */
   shows(address: string): boolean {
-    return this.listed().some((row) => row.address === address)
+    return this.shown.has(address)
+  }
+
+  /** Whether hc reports an agent's status for that live terminal, shown or not: a hidden worker's hooked copy takes
+   *  words too. */
+  reports(address: string): boolean {
+    return this.reported.has(address)
   }
 
   private listed(): Row[] {
@@ -220,6 +235,8 @@ export class HcSource implements HostSource {
     this.said = undefined
     this.over = 0
     this.unkept = 0
+    this.shown.clear()
+    this.reported.clear()
     if (this.rows.size === 0) return
     this.rows.clear()
     this.emit()
@@ -228,6 +245,9 @@ export class HcSource implements HostSource {
   /** hc's whole list: a row that stays listable with the same kind keeps its id and its place. */
   private snapshot(terminals: readonly HcTerminal[]): void {
     const before = JSON.stringify(this.list())
+    this.shown.clear()
+    this.reported.clear()
+    for (const terminal of terminals) this.note(terminal)
     const fresh = new Map(terminals.filter(listable).map((terminal) => [terminal.address, terminal]))
     for (const [address, row] of this.rows) if (fresh.get(address)?.kind !== row.agent.engine) this.rows.delete(address)
     for (const terminal of fresh.values()) this.take(terminal, true)
@@ -236,9 +256,19 @@ export class HcSource implements HostSource {
 
   private changed(terminal: HcTerminal): void {
     const before = JSON.stringify(this.list())
+    this.note(terminal)
     if (listable(terminal)) this.take(terminal, false)
     else this.rows.delete(terminal.address)
     this.told(before)
+  }
+
+  /** Notes whether the window shows a terminal, and whether hc reports an agent there. */
+  private note(terminal: HcTerminal): void {
+    const { address } = terminal
+    if (inWindow(terminal)) this.shown.add(address)
+    else this.shown.delete(address)
+    if (reporting(terminal)) this.reported.add(address)
+    else this.reported.delete(address)
   }
 
   /** Sets a terminal's row. Another kind at its address is another agent, whose first status ends no turn of the one
