@@ -73,6 +73,9 @@ export function startWorkspaceFrames(core: CoreApi) {
       // Followed views may be reused by a caller; capture authority and observation identity now.
       const source = { ...session, ...(session.forkedFrom ? { forkedFrom: { ...session.forkedFrom } } : {}) }
       entries.set(source.agentId, { source, identity: key, at: 0, queued: true, running: false })
+      // The old directory/conversation is no longer a fact about this view. Restore the launch
+      // placeholder while the next inspection runs, including when that inspection later fails.
+      if (previous) core.agents.publishFrame?.(source, {})
     }
     limited = false
     drain()

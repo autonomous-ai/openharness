@@ -18,10 +18,18 @@ describe('frames before workspaces reports', () => {
   it.each([true, false])('retains a valid launch cwd without inspecting Git, active=%s', async active => {
     const frame = await agentFrame(session(active), { selectedModel: null, terminalAvailable: active })
     expect(frame.project).toEqual({ kind: 'none', name: 'repository', cwd: '/fixture/repository', root: null, remote: null, branch: null })
-    expect(frame.gitContext).toEqual({ state: 'unavailable', current: null, observedAt: null, locations: [], pullRequests: [], truncated: false })
+    expect(frame.gitContext).toEqual({ state: 'workspace',
+      current: { name: 'repository', cwd: '/fixture/repository', root: null, remote: null, branch: null },
+      observedAt: null, locations: [], pullRequests: [], truncated: false, checkouts: [] })
     expect(probes.git).not.toHaveBeenCalled()
     expect(probes.history).not.toHaveBeenCalled()
     expect(probes.scm).not.toHaveBeenCalled()
+  })
+
+  it.each([null, 'relative', '/invalid\u0000path'])('an invalid launch directory stays unavailable: %s', async cwd => {
+    const frame = await agentFrame({ ...session(false), cwd }, { selectedModel: null, terminalAvailable: false })
+    expect(frame.project).toBeNull()
+    expect(frame.gitContext).toEqual({ state: 'unavailable', current: null, observedAt: null, locations: [], pullRequests: [], truncated: false, checkouts: [] })
   })
 
   it('uses a captured service projection without changing the public fields', async () => {

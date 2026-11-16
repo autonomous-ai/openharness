@@ -2,13 +2,6 @@ import { describe, expect, it, vi } from 'vitest'
 import { agentFrame } from './agentFrame.js'
 import type { RegisteredSession } from './registry.js'
 
-vi.mock('./agentProject.js', () => ({ agentProject: async () => null }))
-vi.mock('../scm/scmProjects.js', () => ({ describeScmProject: async () => null }))
-vi.mock('./sessionGitContext.js', () => ({
-  SessionGitContextReader: class { read(_key: string, read: () => Promise<unknown>) { return read() } },
-  sessionGitContext: async () => ({}),
-}))
-vi.mock('./sessionGitHistory.js', () => ({ sessionGitHistory: { get: async () => null, observe: async () => null } }))
 vi.mock('./transcriptActivity.js', () => ({ transcriptActivityAt: async () => null }))
 
 const row = {

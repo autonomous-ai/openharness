@@ -3,7 +3,7 @@ import { emptyPorts, type AgentLife, type AgentView } from '../core/api.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { startWorkspaces } from './workspaces.js'
 
-const reads = vi.hoisted(() => ({ project: vi.fn(), describe: vi.fn(), context: vi.fn(), get: vi.fn(), observe: vi.fn(), rename: vi.fn(async () => null) }))
+const reads = vi.hoisted(() => ({ project: vi.fn(), describe: vi.fn(), context: vi.fn(), get: vi.fn(), observe: vi.fn(), rename: vi.fn(async (): Promise<string | null> => null) }))
 vi.mock('../lib/agentProject.js', () => ({ agentProject: reads.project }))
 vi.mock('../scm/scmProjects.js', () => ({ describeScmProject: reads.describe, renameScmProject: reads.rename, forgetScmProject: vi.fn() }))
 vi.mock('../lib/sessionGitContext.js', async original => ({ ...await original<object>(), sessionGitContext: reads.context }))
@@ -19,7 +19,7 @@ const stops: Array<() => void> = []
 function setup() {
   let hear!: (event: AgentLife) => void
   const live = new Map<string, AgentView>()
-  const publish = vi.fn(), usage = vi.fn(async () => ({ totalTokens: 3, updatedAt: '2026-11-16', work: { current: null, uncertain: false, locations: [], pullRequests: [], truncated: false } }))
+  const publish = vi.fn(), usage = vi.fn(async () => ({ totalTokens: 3, updatedAt: '2026-11-16', work: { current: [], uncertain: false, locations: [], pullRequests: [], truncated: false } }))
   const follow = vi.fn((listener: (event: AgentLife) => void) => { hear = listener; return vi.fn() })
   const core = fakeCore({ agents: { follow, publishFrame: publish, live: () => [...live.values()], byAgent: id => live.get(id) } })
   core.usage = usage
@@ -34,6 +34,7 @@ function setup() {
 }
 
 beforeEach(() => {
+  reads.rename.mockResolvedValue(null)
   reads.project.mockResolvedValue(project); reads.describe.mockResolvedValue({ kind: 'git', ...project })
   reads.get.mockResolvedValue(history); reads.observe.mockResolvedValue(history); reads.context.mockImplementation(async () => ({ ...context }))
 })
@@ -78,11 +79,12 @@ describe('workspaces frame facts', () => {
     const service = setup(), source = row()
     service.hear({ kind: 'running', session: source })
     service.hear({ kind: 'running', session: row(change) })
-    await vi.waitFor(() => expect(service.publish).toHaveBeenCalledOnce())
+    expect(service.publish).toHaveBeenCalledWith(expect.objectContaining(change), {})
+    await vi.waitFor(() => expect(service.publish).toHaveBeenCalledTimes(2))
     held.resolve(project)
     await vi.waitFor(() => expect(reads.project).toHaveBeenCalledTimes(2))
     expect(reads.observe).toHaveBeenCalledOnce()
-    expect(service.publish.mock.calls[0]![0]).toMatchObject(change)
+    expect(service.publish.mock.calls[1]![0]).toMatchObject(change)
   })
 
   it.each(['ended', 'purged', 'stop', 'changed-row'] as const)('revokes pending observations on %s before history writes', async kind => {
@@ -144,6 +146,87 @@ describe('workspaces frame facts', () => {
     service.hear({ kind: 'running', session: row() })
     await vi.waitFor(() => expect(reads.observe).toHaveBeenCalledOnce())
     expect(reads.context).toHaveBeenCalledWith(project, undefined, undefined, history)
+    service.hear({ kind: 'running', session: row({ cwd: '/fixture/changed' }) })
+    await vi.waitFor(() => expect(reads.observe).toHaveBeenCalledTimes(2))
     expect(service.publish).not.toHaveBeenCalled()
+  })
+
+  it('clears retained facts immediately when the followed directory changes, before inspection completes', async () => {
+    const service = setup()
+    service.hear({ kind: 'running', session: row() })
+    await vi.waitFor(() => expect(service.publish).toHaveBeenCalledOnce())
+    const held = deferred<typeof project>()
+    reads.project.mockReturnValueOnce(held.promise)
+    const next = row({ cwd: '/fixture/changed' })
+    service.hear({ kind: 'running', session: next })
+    expect(service.publish).toHaveBeenLastCalledWith(next, {})
+    expect(service.publish).toHaveBeenCalledTimes(2)
+    held.resolve(project)
+    await vi.waitFor(() => expect(service.publish).toHaveBeenCalledTimes(3))
+  })
+
+  it('refreshes immediately after a branch rename, including a rename during an inspection', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    reads.rename.mockResolvedValue('renamed')
+    const service = setup(), source = row({ title: 'Repair the project', forkedFrom: { agentId: 'parent', name: 'Parent' } })
+    // Inline byAgent returns the registry row without the publication lease.
+    service.core.agents.byAgent = () => ({ ...source, frameEpoch: undefined })
+    service.hear({ kind: 'running', session: source })
+    await vi.waitFor(() => expect(service.publish).toHaveBeenCalledOnce())
+    service.ports.workspaces!.nameBranches()
+    await vi.waitFor(() => expect(service.publish).toHaveBeenCalledTimes(2))
+
+    const held = deferred<typeof project>()
+    reads.project.mockReturnValueOnce(held.promise)
+    const other = setup(), pending = row({ title: 'Repair the next project' })
+    other.hear({ kind: 'running', session: pending })
+    other.ports.workspaces!.nameBranches()
+    await vi.waitFor(() => expect(reads.rename).toHaveBeenCalledTimes(2))
+    held.resolve(project)
+    await vi.waitFor(() => expect(other.publish).toHaveBeenCalledTimes(2))
+  })
+
+  it('revokes a vanished row even before its lifecycle notification arrives', async () => {
+    const held = deferred<typeof project>()
+    reads.project.mockReturnValueOnce(held.promise)
+    const service = setup()
+    service.hear({ kind: 'running', session: row() })
+    service.live.clear()
+    held.resolve(project)
+    await held.promise
+    await Promise.resolve(); await Promise.resolve()
+    expect(service.publish).not.toHaveBeenCalled()
+    expect(reads.observe).not.toHaveBeenCalled()
+  })
+
+  it('keeps one queued refresh and ignores a rename for a changed conversation', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    reads.rename.mockResolvedValue('renamed')
+    const held = deferred<typeof project>()
+    reads.project.mockReturnValue(held.promise)
+    const service = setup()
+    for (let i = 0; i < 5; i++) service.hear({ kind: 'running', session: row({ agentId: String(i), title: i === 4 ? 'Repair the queue' : null }) })
+    service.hear({ kind: 'running', session: row({ agentId: '4', title: 'Repair the queue' }) })
+    service.ports.workspaces!.nameBranches()
+    await vi.waitFor(() => expect(reads.rename).toHaveBeenCalledOnce())
+    held.resolve(project)
+    await vi.waitFor(() => expect(service.publish).toHaveBeenCalledTimes(5))
+    // No running entry matches this stale rename's target, so it cannot refresh a new conversation.
+    service.live.set('4', row({ agentId: '4', sessionId: 'replaced', title: 'Replacement' }))
+    service.ports.workspaces!.stop()
+    service.ports.workspaces!.nameBranches()
+    expect(reads.rename).toHaveBeenCalledOnce()
+  })
+
+  it('does not refresh an old transcript target after a rename', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    reads.rename.mockResolvedValue('renamed')
+    const service = setup(), source = row({ title: 'Repair project', transcriptPath: '/fixture/before' })
+    service.hear({ kind: 'running', session: source })
+    await vi.waitFor(() => expect(service.publish).toHaveBeenCalledOnce())
+    service.live.set('a', { ...source, transcriptPath: '/fixture/after' })
+    service.ports.workspaces!.nameBranches()
+    await vi.waitFor(() => expect(reads.rename).toHaveBeenCalledOnce())
+    expect(reads.project).toHaveBeenCalledOnce()
   })
 })

@@ -98,6 +98,11 @@ without increasing pending work. Lease, cwd and conversation changes revoke an
 older result before it writes history or publishes. A branch rename invalidates
 the service's refresh time. The core wires its cached usage reader before creating
 the inline service scope, because that scope copies the API's top-level fields.
+The publication lease names a running lifecycle, not every directory or
+conversation revision. A changed followed identity immediately clears this
+service's retained part before inspection. Display retention can therefore last
+until the ordinary follow notification arrives; this step adds no Git-specific
+core invalidation rule or broader lifecycle restart.
 
 ## Validation selected before implementation
 

@@ -242,9 +242,11 @@ export async function agentFrame(
 ): Promise<AgentFrame> {
   // Fork/Clone need the launch directory even before a service reports. Stopped rows have no
   // publication lease: their directory remains usable, but no stale Git observation is implied.
-  const project: ScmDescription | null = validProjectPath(s.cwd)
-    ? { kind: 'none', name: basename(s.cwd) || s.cwd, cwd: s.cwd, root: null, remote: null, branch: null } : null
-  const gitContext: SessionGitContext = { state: 'unavailable', current: null, observedAt: null, locations: [], pullRequests: [], truncated: false }
+  const folder = validProjectPath(s.cwd)
+    ? { name: basename(s.cwd) || s.cwd, cwd: s.cwd, root: null, remote: null, branch: null } : null
+  const project: ScmDescription | null = folder ? { kind: 'none', ...folder } : null
+  const gitContext: SessionGitContext = { state: folder ? 'workspace' : 'unavailable', current: folder,
+    observedAt: null, locations: [], pullRequests: [], truncated: false, checkouts: [] }
   const updatedAt = await lastActivityAt(s)
   const frame: AgentFrame = {
     id: s.agentId,

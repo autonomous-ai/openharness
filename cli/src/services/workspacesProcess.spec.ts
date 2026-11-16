@@ -148,9 +148,45 @@ describe('workspaces in their own process', () => {
   })
 
   it('stops its connection when stopped', () => {
-    const { handle, service } = setup()
+    const { handle, service, port } = setup()
     handle.stop()
     expect(service.stop).toHaveBeenCalledOnce()
+    expect(port.stop).toHaveBeenCalledOnce()
+  })
+
+  it('follows leased views, reads cached usage, publishes facts and revokes them on disconnect', async () => {
+    const { api, options } = setup()
+    const source = { ...agent(), registeredAt: 1, transcriptPath: '/fixture/transcript', frameEpoch: 'core:1' }
+    const heard = vi.fn()
+    api.agents.follow!(heard, { each: true, frames: true })
+    expect(await api.usage!(source)).toBeNull()
+    const query = vi.fn(async (name: string, payload: Record<string, unknown> = {}): Promise<Record<string, unknown>> => {
+      if (name === 'follow_agents') return { agents: [source] }
+      if (name === 'agentUsage') return { target: payload.target, value: { totalTokens: 3, updatedAt: '2026-11-16T01:00:00Z' } }
+      if (name === 'frame_part') return { error: 'UNKNOWN_QUERY' }
+      return { ok: true }
+    })
+    options.onConnected!({ query })
+    await vi.waitFor(() => expect(heard).toHaveBeenCalledWith({ kind: 'running', session: source }))
+    expect(await api.usage!(source)).toEqual({ totalTokens: 3, updatedAt: '2026-11-16T01:00:00Z' })
+    api.agents.publishFrame!(source, { project: { cwd: source.cwd } })
+    await vi.waitFor(() => expect(query).toHaveBeenCalledWith('branchNamed', { agentId: source.agentId }))
+    options.onEvent!({ kind: 'nameBranches', agents: [agent('legacy')] })
+    expect(api.agents.live()).toEqual([source])
+    const changed = { ...source, cwd: '/fixture/next' }
+    options.onEvent!({ kind: 'agent', event: { kind: 'running', session: changed } })
+    options.onEvent!({ kind: 'agent', event: { kind: 'running', session: { ...agent('b'), frameEpoch: undefined } } })
+    options.onEvent!({ kind: 'agent', event: { kind: 'stopped', agentId: 'b' } })
+    options.onEvent!({ kind: 'agent', event: { kind: 'purged', agentId: 'b', sessionIds: ['s-b'] } })
+    expect(api.agents.live()).toEqual([changed])
+    options.onDisconnected!()
+    expect(api.agents.live()).toEqual([])
+    expect(heard).toHaveBeenLastCalledWith({ kind: 'ended', agentId: source.agentId })
+    expect(await api.usage!(source)).toBeNull()
+    api.agents.publishFrame!(source, { project: null })
+    const count = query.mock.calls.length
+    await Promise.resolve()
+    expect(query).toHaveBeenCalledTimes(count)
   })
 
   it('does not run without workspaces: the master starts it again, or parks it', () => {

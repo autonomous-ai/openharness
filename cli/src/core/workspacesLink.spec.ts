@@ -53,6 +53,7 @@ describe('workspaces in their own process, as the core tells them', () => {
   it('never tells the process to sweep, and lists no folders for one', () => {
     const { link, port, core } = setup()
     expect(Object.keys(port)).toEqual(['stop', 'nameBranches', 'ready', 'prepareFolder', 'describeWorkspace', 'reviewWorktree', 'removeWorktree'])
+    port.stop()
     expect(link.answer('agents', {})).toEqual({ error: 'UNKNOWN_QUERY' })
     expect(core.agents.all).not.toHaveBeenCalled()
   })
