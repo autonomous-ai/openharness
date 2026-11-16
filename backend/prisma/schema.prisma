@@ -1265,22 +1265,21 @@ model ConnectorApp {
   @@map("connector_apps")
 }
 
-/// A phone's push token (task #2905): where the server sends a notice for its person while the app is closed
-/// (push/devices.ts). One row per token, `_id` the SHA-256 of platform and token, so a phone signed in as someone else moves
-/// to them. Removed: by the phone at sign-out, when Apple or Google call the token dead, past the 10 newest of a person, and by
-/// the TTL index 90 days after `seenAt` (push_device_expiry); a signed-in phone registers again at every launch. About 300 bytes
-/// a row, at most 10 a person.
+/// Legacy phone tokens from Swarm push, removed on 2026-11-16. No new registration or renewal is accepted.
+/// Keep the model and indexes until existing records expire through the unchanged 90-day seenAt TTL, or an older
+/// signed-in phone unregisters its own token (push/devices.ts). No bulk purge accompanies feature removal.
+/// A later retirement must account for any supported older backend or rollback that wrote more records.
 model PushDevice {
   id       String   @id @map("_id")
   userId   String
   /// ios | android
   platform String
   token    String
-  /// An iOS token from a development build, which only Apple's sandbox host accepts (push/apns.ts).
+  /// Retained legacy metadata; no sender reads it.
   sandbox  Boolean  @default(false)
   seenAt   DateTime
 
-  /// The phones of the people a notice is for (devicesOf), and a person's newest ten.
+  /// Retained with the model for compatibility; index removal is a separate schema change.
   @@index([userId])
   /// Expires these rows (push/devices.ts ensurePushDeviceExpiry, made before the push). Declared so db push keeps it.
   @@index([seenAt], map: "push_device_expiry")

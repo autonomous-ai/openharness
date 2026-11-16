@@ -17,4 +17,8 @@ const gone = async (_request: unknown, reply: FastifyReply): Promise<FastifyRepl
 
 export async function goneRoutes(app: FastifyInstance): Promise<void> {
   for (const url of GONE_ROUTES) app.route({ method: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'], url, onRequest: gone, handler: gone })
+  // Swarm phone push went on 2026-11-16. Keep this refusal at least 30 days after the last push-enabled
+  // supported client and until supported callers are gone (2026-12-16 at the earliest).
+  // The separately authenticated POST /api/push-devices/drop still unregisters a legacy token.
+  app.route({ method: 'POST', url: '/api/push-devices', onRequest: gone, handler: gone })
 }
