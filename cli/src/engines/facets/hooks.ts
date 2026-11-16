@@ -105,6 +105,10 @@ export const HARNESS_SHELL_VERBS = ['browser'] as const
 export type HarnessAgentVerb = keyof typeof HARNESS_AGENT_TOOLS | (typeof HARNESS_SHELL_VERBS)[number]
 export const HARNESS_AGENT_VERBS: HarnessAgentVerb[] =
   [...(Object.keys(HARNESS_AGENT_TOOLS) as HarnessAgentVerb[]), ...HARNESS_SHELL_VERBS]
+/** Agent commands of more than one word, each allowed as exactly its words and never its first word alone. An agent
+ *  that needs the person rings the dial with `harness device notify`; `harness device claude enable` and the rest of
+ *  `device` change what the person's engines load, so they still ask (docs/plans/2026-11-16-dial-agent-notify-design.md). */
+export const HARNESS_AGENT_COMMANDS = [['device', 'notify']] as const
 
 /**
  * Harness's agent commands (HARNESS_AGENT_VERBS) and its MCP tools allowed in the engine's own permission rules, so
@@ -116,7 +120,7 @@ export const HARNESS_AGENT_VERBS: HarnessAgentVerb[] =
  * check refused the command that would have carried them.
  *
  * Either rules added to a list in the settings file (`list`, the person's other rules kept), or a rules file of the
- * engine's that Harness owns whole (`file`, in the settings' home). In a list, a verb's rules of one kind (`Bash`, `mcp`)
+ * engine's that Harness owns whole (`file`, in the settings' home). In a list, a verb's or a command's rules of one kind (`Bash`, `mcp`)
  * are added together or not at all: not where the person's own lists named in `unless` (deny, ask) hold a rule for the
  * same command in any spelling, or a broader one (`Bash(harness:*)`). A deny for `harness close` was otherwise met by
  * an allow for `~/.local/bin/harness close`, which the engine does not count as the same (the review of #1232). A
@@ -126,7 +130,8 @@ export const HARNESS_AGENT_VERBS: HarnessAgentVerb[] =
  * bundle), filled in with this computer's paths as it is installed: an agent runs `harness` by its full path too,
  * where a rule for the bare name does not apply. A Codex lead sent that way, so each send asked to leave the sandbox
  * (2026-10-12). `{verb}` and `{tool}` make the rule once for each agent verb, naming it or its MCP tool (a rule naming
- * `{tool}` only for a verb that has one); `{verbs}` names every verb as one list.
+ * `{tool}` only for a verb that has one); `{verbs}` names every verb as one list. `{command}` and `{words}` make the
+ * rule once for each of HARNESS_AGENT_COMMANDS, naming its words as one command or as the items of a list.
  */
 export type HarnessAllowance =
   | { list: readonly [string, string]; unless?: readonly string[]; rules: readonly string[] }
