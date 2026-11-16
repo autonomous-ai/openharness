@@ -30,6 +30,9 @@ export interface DialSkillWriter {
 }
 
 type Counts = Record<DialEngine, { wrote: number; removed: number }>
+/** What became of one home: written, or found holding a skill (`done`); given none for a reason the next scan would
+ *  meet again (`refused`); or the engine read Off and was handled as Off (`off`). */
+type Outcome = 'done' | 'refused' | 'off'
 
 const ENGINES: readonly DialEngine[] = ['claude', 'codex']
 const OTHER: Record<DialEngine, DialEngine> = { claude: 'codex', codex: 'claude' }
@@ -42,8 +45,8 @@ export function createDialSkillWriter(deps: DialSkillWriterDeps): DialSkillWrite
   const settingsFile = join(deps.claudeHome, 'settings.json')
   const defaultHome: Record<DialEngine, string> = { claude: deps.claudeHome, codex: deps.codexHome }
   let listed: DialSkillHomes = { claude: [], codex: [] }
-  /** Homes written, found ours or found the person's while the engine was On: a scan passes them with a set lookup. */
-  const handled: Record<DialEngine, Set<string>> = { claude: new Set(), codex: new Set() }
+  /** Codex homes done while it was On: a scan passes them with a set lookup. Claude Code gets no home from the scan. */
+  const handled = new Set<string>()
   const said = new Set<string>()
   let stamp = ''
 
@@ -68,10 +71,6 @@ export function createDialSkillWriter(deps: DialSkillWriterDeps): DialSkillWrite
 
   const save = (): boolean => writeHomes(deps.dataDir, listed) === undefined
 
-  const handle = (engine: DialEngine, home: string): void => {
-    if (handled[engine].size < MAX_HOMES) handled[engine].add(home)
-  }
-
   /** The folders [engine]'s skill may be in: its list, the folders the command recorded and its default home's. */
   const foldersOf = (engine: DialEngine): Set<string | null> =>
     new Set([...listed[engine], ...readWritten(deps.dataDir)[engine], skillsFolderOf(defaultHome[engine], false, deps.uid)])
@@ -81,7 +80,7 @@ export function createDialSkillWriter(deps: DialSkillWriterDeps): DialSkillWrite
    *  Turn off still finds it. A folder the other engine holds its skill in while On (~/.codex/skills linked to
    *  ~/.claude/skills) only leaves this engine's list. */
   const turnOff = (engine: DialEngine, counts: Counts): void => {
-    handled[engine].clear()
+    if (engine === 'codex') handled.clear()
     const shared = on(OTHER[engine]) ? foldersOf(OTHER[engine]) : new Set()
     const failed = new Set<string>()
     for (const skills of foldersOf(engine)) {
@@ -104,54 +103,47 @@ export function createDialSkillWriter(deps: DialSkillWriterDeps): DialSkillWrite
     return false
   }
 
-  /** One existing home. false: the engine read Off, and was handled as Off. */
-  const writeHome = (engine: DialEngine, home: string, counts: Counts): boolean => {
+  /** One existing home. */
+  const writeHome = (engine: DialEngine, home: string, counts: Counts): Outcome => {
     // Read before anything is made in the home: while Off a home is not handled, and nothing goes into it.
     if (!on(engine)) {
       turnOff(engine, counts)
-      return false
+      return 'off'
     }
     const skills = skillsFolderOf(home, true, deps.uid)
-    if (!skills) return true
+    if (!skills) return 'refused'
     // Through its link the folder can be one no list holds: written, it would be one a Turn off never finds.
     if (!listable(skills)) {
       sayOnce('shape', 'dial skill: path refused (shape)')
-      return true
+      return 'refused'
     }
     // Homes linked to one skills folder (an Orca profile's) are one write, listed once.
     if (listed[engine].includes(skills)) {
       const result = writeSkill(skills)
       if (result === 'written') counts[engine].wrote++
-      if (result === 'failed') return true
-      if (result === 'written' && !stillOn(engine, counts)) return false
-      handle(engine, home)
-      return true
+      if (result === 'failed') return 'refused'
+      return result === 'written' && !stillOn(engine, counts) ? 'off' : 'done'
     }
     // A throwaway home that is gone makes room first; a list still full writes nothing, so every file Harness wrote
     // stays in it.
     listed[engine] = listed[engine].filter((folder) => ownDirectory(folder, deps.uid) !== 'missing')
     if (listed[engine].length >= MAX_HOMES) {
       sayOnce(`full ${engine}`, `dial skill: ${engine} list full (${MAX_HOMES})`)
-      return true
+      return 'refused'
     }
     const result = writeSkill(skills)
     if (result === 'written') counts[engine].wrote++
-    if (result === 'failed') return true
-    if (result === 'theirs') {
-      handle(engine, home)
-      return true
-    }
+    if (result === 'failed') return 'refused'
+    if (result === 'theirs') return 'done'
     listed[engine].push(skills)
     if (!save()) {
       listed[engine].pop()
       // Unlisted, a Turn off would never find what this wrote. One already there may be the command's, which its own
       // Turn off finds.
       if (result === 'written' && removeSkill(skills) === 'removed') counts[engine].removed++
-      return true
+      return 'refused'
     }
-    if (!stillOn(engine, counts)) return false
-    handle(engine, home)
-    return true
+    return stillOn(engine, counts) ? 'done' : 'off'
   }
 
   const startPass = (counts: Counts): void => {
@@ -180,7 +172,7 @@ export function createDialSkillWriter(deps: DialSkillWriterDeps): DialSkillWrite
       if (wrote && !stillOn(engine, counts)) continue
       // Only the command makes a default home that is missing.
       for (const home of [defaultHome[engine], ...adopted[engine]]) {
-        if (ownDirectory(home, deps.uid) === 'ok' && !writeHome(engine, home, counts)) break
+        if (ownDirectory(home, deps.uid) === 'ok' && writeHome(engine, home, counts) === 'off') break
       }
     }
   }
@@ -211,7 +203,7 @@ export function createDialSkillWriter(deps: DialSkillWriterDeps): DialSkillWrite
       if (now !== stamp) {
         // Turned off or on since: every home is written again, or taken out, without a restart.
         stamp = now
-        for (const engine of ENGINES) handled[engine].clear()
+        handled.clear()
         startPass(counts)
       }
       // Codex only: Claude Code's sessions are read only under the default and adopted homes, written at the start.
@@ -222,13 +214,15 @@ export function createDialSkillWriter(deps: DialSkillWriterDeps): DialSkillWrite
           sayOnce('shape', 'dial skill: path refused (shape)')
           continue
         }
-        if (handled.codex.has(home) || handled.codex.size >= MAX_HOMES) continue
+        if (handled.has(home) || handled.size >= MAX_HOMES) continue
         const state = ownDirectory(home, deps.uid)
         if (state !== 'ok') {
           sayOnce(home, `dial skill: path refused (${state})`)
           continue
         }
-        if (!writeHome('codex', home, counts)) break
+        const outcome = writeHome('codex', home, counts)
+        if (outcome === 'off') break
+        if (outcome === 'done') handled.add(home)
       }
       report(counts)
     },
