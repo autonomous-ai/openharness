@@ -391,10 +391,14 @@ impl App {
         self.state.cli == CliState::Installing || self.login.is_some()
     }
 
-    /// The relaunch would also cut short a Claude Code change, a daemon start or what the window shows, so it waits
-    /// for them too; a check does not, as the first launch's window is open right after the CLI install.
+    /// The relaunch would also cut short a Claude Code or Codex change, a daemon start or what the window shows, so it
+    /// waits for them too; a check does not, as the first launch's window is open right after the CLI install.
     fn relaunch_waits(&self) -> bool {
-        self.running() || self.setting.is_some() || self.keep.starting() || self.window.is_some()
+        self.running()
+            || self.setting.is_some()
+            || self.codex_setting.is_some()
+            || self.keep.starting()
+            || self.window.is_some()
     }
 
     /// Only a button the window shows does something, so a second click on one that started a run does nothing.
