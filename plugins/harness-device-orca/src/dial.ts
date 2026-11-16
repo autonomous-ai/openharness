@@ -2,7 +2,7 @@
 // holds the `dial` stream open on it, and makes each of its lines the state. Nothing of `orca` is loaded here: the end
 // to end test runs this file outside Orca.
 import { basename, dirname } from 'node:path'
-import type { DialInputs, Ran } from './inputs'
+import { MISSING, type DialInputs, type Ran } from './inputs'
 import type { DialState } from './protocol'
 
 const LINK_ARGS = ['device', 'orca', 'link'] as const
@@ -114,7 +114,7 @@ export function startDial(inputs: DialInputs, tell: { changed(state: DialState):
 
   async function pass(abort: AbortController): Promise<void> {
     const ran = await launch(abort.signal)
-    if (ran === 'missing') return set({ state: 'noHarness' })
+    if (ran === MISSING) return set({ state: 'noHarness' })
     const link = readLink(ran)
     if (!link) return set({ state: 'notRunning' })
     if (!link.ready) {
@@ -129,9 +129,9 @@ export function startDial(inputs: DialInputs, tell: { changed(state: DialState):
     const files = inputs.home ? [`${inputs.home}/.local/bin/harness`, 'harness'] : ['harness']
     for (const file of files) {
       const ran = await inputs.run(file, LINK_ARGS, { path: inputs.path, timeoutMs: LINK_TIMEOUT_MS, maxBytes: LINK_MAX_BYTES, signal })
-      if (ran !== 'missing') return ran
+      if (ran !== MISSING) return ran
     }
-    return 'missing'
+    return MISSING
   }
 
   async function follow(socket: string, abort: AbortController): Promise<void> {

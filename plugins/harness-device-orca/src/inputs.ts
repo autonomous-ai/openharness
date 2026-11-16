@@ -5,8 +5,10 @@ import { watch as watchFolder } from 'node:fs'
 import { request, type IncomingMessage } from 'node:http'
 import { homedir } from 'node:os'
 
-/** A file that is not there, its stdout when it exited 0 inside the bounds, or null for any other end. */
-export type Ran = 'missing' | string | null
+/** A file that is not there: not a string, so no launcher's stdout reads as it. */
+export const MISSING = Symbol('missing')
+/** MISSING, its stdout when it exited 0 inside the bounds, or null for any other end. */
+export type Ran = typeof MISSING | string | null
 export interface Answer { status: number; chunks: AsyncIterable<Uint8Array> }
 export interface DialInputs {
   platform: string
@@ -37,7 +39,7 @@ export function nodeInputs(): DialInputs {
           { env: { ...process.env, PATH: path }, timeout: timeoutMs, maxBuffer: maxBytes, killSignal: 'SIGKILL', signal },
           (error, stdout) => {
             if (!error) settle(stdout)
-            else settle((error as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : null)
+            else settle((error as NodeJS.ErrnoException).code === 'ENOENT' ? MISSING : null)
           }
         )
       })
