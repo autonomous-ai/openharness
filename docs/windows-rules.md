@@ -148,6 +148,10 @@ everywhere), [Process Creation Flags](https://learn.microsoft.com/en-us/windows/
 
 ## 5. Testing on Windows
 
+- Pin every injected platform flag in a fixture. Setting `isMacOS` and `isLinux` leaves `isWindows` at the host default:
+  the Unix Node 22 readiness fixture then checked for a Windows terminal host and failed on both Windows architectures.
+  `desktop/test/environment_provisioner_test.dart` sets all three; the Windows fixture does the same in
+  `environment_provisioner_windows_test.dart`.
 - Test in the person's session (session 1) and in the signed build. Windows behaves differently in session 0 and for an
   unsigned file.
 - Smart App Control blocks a local `flutter build windows` (Bad Image on `flutter_windows.dll`). To show a Dart-only
