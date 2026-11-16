@@ -310,6 +310,19 @@ describe('DeviceFleet', () => {
     expect(seen.map((e) => (e as { tier?: string }).tier)).toEqual(['silent', undefined, undefined])
   })
 
+  // A cloud harness's card carries no tier (core/agents/cloud.ts): this dial decides it, and a failed turn rings in Only you
+  // only when the card still says it failed.
+  it('carries a summary\'s failed, and only a summary\'s true one', () => {
+    const { fleet, say } = make()
+    const seen: FleetEvent[] = []
+    fleet.onEvent((e) => seen.push(e))
+    say({ type: 'commander_event', machineId: 'm1', agentId: 'a1', payload: { kind: 'summary', recap: 'Broke.', text: 'done', failed: true } })
+    say({ type: 'commander_event', machineId: 'm1', agentId: 'a1', payload: { kind: 'summary', recap: 'Broke.', text: 'done', failed: 'yes' } })
+    say({ type: 'commander_event', machineId: 'm1', agentId: 'a1', payload: { kind: 'done', text: 'done', failed: true } })
+    expect(seen[0]).toEqual({ machineId: 'm1', kind: 'summary', agentId: 'a1', text: 'done', recap: 'Broke.', failed: true })
+    expect(seen.map((e) => (e as { failed?: boolean }).failed)).toEqual([true, undefined, undefined])
+  })
+
   it('ignores card kinds the dial has no use for', () => {
     const { fleet, say } = make()
     const seen: FleetEvent[] = []

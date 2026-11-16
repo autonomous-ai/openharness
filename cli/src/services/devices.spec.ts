@@ -4630,6 +4630,12 @@ describe('the Notifications setting (docs/plans/2026-11-16-dial-agent-notify-des
     expect(calls('summary').map(([agentId, , , tier]) => [agentId, tier])).toEqual([['far-1', 'list'], ['far-3', 'silent'], ['far-2', 'list']])
   })
 
+  it('Only you: another machine\'s failed card rings', async () => {
+    onlyYou()
+    seen.fleet!.events!({ machineId: 'cloud', kind: 'summary', agentId: 'far-1', text: 'done', recap: 'The build broke.', failed: true })
+    await vi.waitFor(() => expect(calls('summary')).toEqual([['far-1', 'The build broke.', 'done', 'alert', undefined, false]]))
+  })
+
   it('Only you: an agent outside a pane ends as a drawer row', async () => {
     vi.useFakeTimers()
     readers.answer.mockResolvedValue('All 12 tests pass.')
