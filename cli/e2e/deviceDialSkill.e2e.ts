@@ -90,6 +90,8 @@ case " $* " in
   *) exec '${system}' "$@" ;;
 esac
 `, { mode: 0o755 })
+    // The daemon finds this one by name, or the check below reads the system's and proves nothing.
+    expect(execFileSync('/bin/sh', ['-c', 'command -v lsof'], { env: d.env }).toString().trim()).toBe(join(d.root, 'bin', 'lsof'))
     const outside = daemonLsof(d, '-c', 'codex', '-c', 'Codex').filter((name) => !name.startsWith(`${d.root}/`))
     expect(outside, 'the daemon\'s lsof shows a file outside the test\'s root').toEqual([])
     const file = join(d.root, 'dials.json')
