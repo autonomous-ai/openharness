@@ -192,13 +192,13 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   })
   const part = createPartGuard({ log, faults: deps.faults })
   // The Notifications setting (docs/plans/2026-11-16-dial-agent-notify-design.md) is this computer's, not the dial's: the
-  // windows and the watch hear it with every dial status, and the owner's other machines and the Devices tab never do. Only
-  // once the devices' own listener opened, the one door a change comes in by: with none (services inside the core, a
-  // listener that failed to open, Windows) the menu must not offer a setting no click can change.
+  // windows and the watch hear it with every dial status, and the owner's other machines and the Devices tab never do.
+  // Only once the devices' own listener opened, the one door a change comes in by: with none (services inside the core,
+  // a listener that failed to open, Windows) the menu must not offer a setting no click can change.
   const notifyMode = new NotifyModeStore(join(core.dataDir, NOTIFY_MODE_FILE))
   let listenerOpen = false
-  const sayStatus = (status: DialStatus): void =>
-    core.clients.sendLocal({ type: 'dial_status', payload: { ...status, ...(listenerOpen ? { notify: notifyMode.get() } : {}) } })
+  const sayStatus = (status: DialStatus): void => core.clients.sendLocal({ type: 'dial_status',
+    payload: { ...status, ...(listenerOpen ? { notify: notifyMode.get() } : {}) } })
 
   // What the windows on this computer last said: the desk the dial walks and whether it is in front, and
   // which window has the person's attention for a spoken selection, a visit or a form.
@@ -464,8 +464,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // read it does not.
     tapped: (agentId) => endNotice(agentId),
     noticeFrom: (agentId) => notices.from(agentId),
-    // The notices and the waits are questions only the devices ask: what is unread replaces the dial's whole drawer, which
-    // holds them too.
+    // The notices and the waits are questions only the devices ask: what is unread replaces the dial's whole drawer,
+    // which holds them too.
     noticeRows: () => {
       const machineId = core.machine.id()
       return [...notices.rows(machineId),
@@ -750,7 +750,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    * one. One option, as a question needs one, and none to speak. By agent, so that each is closed by its own id.
    */
   const shown = new Map<string, { id: string; line: string; questions: unknown }>()
-  /** Each Harness agent's question open on the dials, by its id: an agent's notice waits behind it (cable/notices.ts). */
+  /** Each Harness agent's question open on the dials, by its id: its notice waits behind it (cable/notices.ts). */
   const questionsOpen = new Map<string, string>()
   const ask = (agentId: string, question: { id: string; line: string; questions: unknown }): void => {
     shown.set(agentId, question)
@@ -893,8 +893,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // or closed, again. Closed as the last goes, an older dial that comes next is not asked it. A second dial coming or
     // going does not reach here: the fleet tells `watching` for the first and the last alone.
     if (!on) part.call('dial', showWaits)
-    // Its questions were in its RAM: each notice still pending is asked again, under its id, whatever source is on. With
-    // the last gone, a Harness agent's next turn goes unheard, so its card ends now.
+    // Its questions were in its RAM: each notice still pending is asked again, under its id, whatever source is on.
+    // With the last gone, a Harness agent's next turn goes unheard, so its card ends now.
     part.call('notices', () => on ? notices.attached() : notices.detached())
     if (!observed || !herdr) return
     // Only with herdr installed, read at each attach, as a tap needs it (herdr.ts): with none, no folder is watched

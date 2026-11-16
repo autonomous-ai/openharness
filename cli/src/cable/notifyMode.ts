@@ -42,9 +42,9 @@ export class NotifyModeStore {
     return this.mode
   }
 
-  /** The error's code (EACCES, EISDIR) when the file could not be written, and the mode in force stays; undefined once
-   *  it is saved. The same mode again writes nothing. The code is for the log: never the error's message, which names the
-   *  path. */
+  /** The error's code (EACCES, EISDIR) when the file could not be written, and the mode in force stays; undefined
+   *  once it is saved. The same mode again writes nothing. The code is for the log: never the error's message, which
+   *  names the path. */
   set(mode: NotifyMode): string | undefined {
     if (mode === this.mode) return undefined
     // Written whole and renamed into place, so a reader never sees half a file.

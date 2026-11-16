@@ -36,8 +36,9 @@ export const NOTICES_PENDING_MAX = 20
 const LINE_MAX_BYTES = 239
 
 /** The line within LINE_MAX_BYTES, cut between letters, with `…` when cut. */
-const fitBytes = (line: string): string =>
-  Buffer.byteLength(line) <= LINE_MAX_BYTES ? line : `${truncateUtf8(line, LINE_MAX_BYTES - Buffer.byteLength('…'))}…`
+const fitBytes = (line: string): string => Buffer.byteLength(line) <= LINE_MAX_BYTES
+  ? line
+  : `${truncateUtf8(line, LINE_MAX_BYTES - Buffer.byteLength('…'))}…`
 
 interface Pending { id: string; line: string; questions: unknown; host: string; who?: NoticeCaller['who'] }
 
