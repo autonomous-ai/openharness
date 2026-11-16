@@ -376,6 +376,14 @@ const CONTINUITY_SCORE = 3
 
 export const ROUTE_CLASSIFY_MS = 12_000
 
+/** A failed one-shot for the log, from its fields and never its message: an engine's stderr or result
+ *  can echo the prompt (the spoken task, agent names). */
+function failureOf(err: unknown): string {
+  const { failure, stderrBytes, code } = (err ?? {}) as { failure?: unknown; stderrBytes?: unknown; code?: unknown }
+  if (typeof failure === 'string') return `${failure} · stderr=${stderrBytes}B`
+  return typeof code === 'string' ? code : 'error'
+}
+
 export async function routeVoiceTask(
   transcript: string,
   agents: RouterAgent[],
@@ -480,7 +488,7 @@ export async function routeVoiceTask(
     if (err instanceof Error && err.name === 'AbortError') throw err   // caller cancelled — don't paper over it
     // The classifier timed out / spawn failed → NEVER fail the RPC. Fall back to a heuristic pick so the
     // voice still dispatches to a plausible agent instead of erroring out on the device.
-    console.log(`[voice-route] ${engine} one-shot failed (${err instanceof Error ? err.message : String(err)}) → name matching`)
+    console.log(`[voice-route] ${engine} one-shot failed (${failureOf(err)}) → name matching`)
     return logDecision(`heuristic (${engine} failed)`, pickAgentHeuristic(transcript, agents, continuity))
   }
 }
