@@ -53,8 +53,9 @@ The first release, with Diego's go. The bucket holds no manifest yet, so both na
   workflow submits the dmg itself (`notarytool submit --wait`) and staples it.
 - **Checks before anything leaves `build`** (`scripts/release-check.sh --notarized`): the three files; the app is
   universal (`lipo`) and at the release version; `codesign --verify --deep --strict`; the update archive's signature
-  against the public key (`minisign`); the dmg holds the app and an `Applications` link; `spctl` and
-  `stapler validate` accept the app and the dmg. Each prints `ok: <check>`, or `FAILED: <check>` and stops.
+  against the public key (`minisign`), and its trusted comment's `version:X.Y.Z`, which the app requires
+  (`requireSignedVersion`); the dmg holds the app and an `Applications` link; `spctl` and `stapler validate` accept
+  the app and the dmg. Each prints `ok: <check>`, or `FAILED: <check>` and stops.
 - **Nothing reaches GCS without `publish`.** Only that job holds `id-token: write`; `build` has no GCS credential.
   `publish` uploads the files to `gs://s3-autonomous-upgrade-3/harness/device/<version>/` with no-clobber and a
   year-long cache, writes `metadata.json` only over the generation it read (`no-cache`), then reads the manifest back

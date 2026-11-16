@@ -62,6 +62,14 @@ update_signed() {
     minisign -V -q -p "$work/key.pub" -x "$work/archive.minisig" -m "$archive"
 }
 
+# The app requires the manifest's version in the trusted comment (requireSignedVersion): tab-separated key:value
+# fields, which minisign's global signature covers, so this runs after update_signed, on the file it decoded.
+signed_version() {
+  local trusted
+  trusted="$(sed -n 's/^trusted comment: //p' "$work/archive.minisig")" &&
+    [[ $'\t'"$trusted"$'\t' == *$'\t'"version:$version"$'\t'* ]]
+}
+
 dmg_app() {
   mkdir "$work/dmg" &&
     hdiutil attach -readonly -nobrowse -noautoopen -quiet -mountpoint "$work/dmg" "$dmg" &&
@@ -80,6 +88,7 @@ check "the archive holds a universal Harness Device.app" archive_app
 check "the app is $version" at_version "$work/archive/Harness Device.app"
 check "the app's code signature" codesign --verify --deep --strict "$work/archive/Harness Device.app"
 check "the archive's update signature" update_signed
+check "the update signature is for $version" signed_version
 check "the dmg holds the app at $version, universal, and Applications" dmg_app
 if [[ -n "$notarized" ]]; then
   check "the archive's app is notarized" notarized_app "$work/archive/Harness Device.app"

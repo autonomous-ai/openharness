@@ -109,8 +109,8 @@ build() {
 build 0.0.1 "$work/old" "$(config "http://127.0.0.1:$port/metadata.json" ',"dangerousInsecureTransportProtocol":true')"
 build 0.0.2 "$work/new" "$(config "https://127.0.0.1:$port/metadata.json" '')"
 
-# Informational, never a failure (PM, 2026-11-16): requireSignedVersion needs the version in the signature's trusted
-# comment, tab-separated key:value fields that minisign's global signature covers.
+# For the run's log: requireSignedVersion needs the version in the signature's trusted comment, tab-separated
+# key:value fields that minisign's global signature covers. release-check.sh below refuses a build without it.
 trusted="$(base64 --decode <"$work/new/Harness-Device.app.tar.gz.sig" | sed -n 's/^trusted comment: //p')" || trusted=""
 if [[ $'\t'"$trusted"$'\t' == *$'\t'version:0.0.2$'\t'* ]]; then
   echo "signed-version: yes"
@@ -135,6 +135,12 @@ refuses() {
 }
 refuses "the app is 0.0.3" "$work/new" 0.0.3 "$pub"
 refuses "the archive's update signature" "$work/new" 0.0.2 "$other"
+# 0.0.2's archive signed again, with the right key, as 0.0.20: only the whole version field counts, not a prefix.
+mkdir "$work/resigned"
+cp "$work/new/Harness-Device.dmg" "$work/new/Harness-Device.app.tar.gz" "$work/resigned/"
+cargo tauri signer sign -f "$work/key" --password "" --app-version 0.0.20 "$work/resigned/Harness-Device.app.tar.gz" \
+  >/dev/null
+refuses "the update signature is for 0.0.2" "$work/resigned" 0.0.2 "$pub"
 
 echo "The end-to-end check's release." >"$work/notes.txt"
 python3 "$here/device-manifest.py" build --version 0.0.2 --dir "$work/new" --notes-file "$work/notes.txt" \
