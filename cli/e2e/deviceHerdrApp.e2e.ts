@@ -1,0 +1,264 @@
+/**
+ * Herdr's agents on the dial (docs/plans/2026-11-16-herdr-app-design.md), on the real daemon: a Herdr Core of the
+ * test's own (harness/hcCore.ts) runs a fake agent in a terminal Herdr's window would show, reporting its status as
+ * Claude Code, and a fake dial on the desk lists it with no hook, follows its state, speaks to it, and switches Herdr's
+ * window to it with a swipe and a tap. A core started after the dial comes with no daemon restart, and goes when it stops.
+ *
+ * Herdr's real window is never driven. The daemon's `herdr-app` is a fake first on its PATH that records its arguments,
+ * and its `open` is the harness's fake (HARNESS_OPEN_BIN, harness/daemon.ts): each is checked to be the one the daemon
+ * finds before anything runs, since with no `herdr-app` on PATH it would run Herdr.app's own binary. The daemon finds the
+ * private core's socket as hcClient.ts does, from the HC_SOCKET it is given: it inherits no HC_* and no XDG_*
+ * (testing/daemonEnvironment.ts), so it never reaches the person's own core.
+ *
+ * Skipped where Herdr Core is not installed, as on every GitHub runner, and off macOS.
+ */
+import { spawn, type ChildProcess } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
+import { readFileSync, writeFileSync } from 'node:fs'
+import { dirname, isAbsolute, join, relative } from 'node:path'
+import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
+import { resolveBinaryOnPath } from '../src/lib/binaryOnPath.js'
+import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
+import { Desk } from './harness/desk.js'
+import { FakeBackend, type FakeMachine } from './harness/fakeBackend.js'
+import type { DialMessage, FakeDial } from './harness/fakeDial.js'
+import { hcBinary, PrivateHc, type PlannedHc } from './harness/hcCore.js'
+import { InOrca } from './harness/inOrca.js'
+
+/** The machine a daemon signs in as, to hear its dial's words: the daemon asks its backend for each transcript. */
+const ME: FakeMachine = { machineId: 'c2'.repeat(16), computerId: 'e2e-device-herdr-app-computer', name: 'Fixture', token: 'e2e-device-herdr-app-token' }
+// How `harness hardware watch` is started: the run's bundle when there is one (E2E_BUNDLE), as the daemon runs.
+const CLI_ENTRY = process.env.E2E_BUNDLE_PATH ? [process.env.E2E_BUNDLE_PATH] : ['--import', 'tsx', 'src/cli.ts']
+/** What the round dial's firmware says in its greeting: it holds one app's ring (docs/specs/2026-11-14-dial-app-filter.md). */
+const FILTER = { appFilter: 'v1' }
+const ORCA = 'com.stablyai.orca'
+const HERDR = 'dev.herdr.app'
+
+/** One list the dial was sent: its rows, between `agents.begin` and `agents.end`. */
+function rosters(dial: FakeDial, since = 0): DialMessage[][] {
+  const out: DialMessage[][] = []
+  let rows: DialMessage[] | null = null
+  for (const m of dial.messages.slice(since)) {
+    if (m.t === 'agents.begin') rows = []
+    else if (m.t === 'agent' && rows) rows.push(m)
+    else if (m.t === 'agents.end' && rows) { out.push(rows); rows = null }
+  }
+  return out
+}
+/** The list the dial shows now, once it passes [test]. */
+const showing = (dial: FakeDial, what: string, test: (rows: DialMessage[]) => boolean, since = 0, ms = 45_000): Promise<DialMessage[]> =>
+  until(what, () => {
+    const last = rosters(dial, since).at(-1)
+    return last && test(last) ? last : null
+  }, ms, 100)
+const named = (name: string) => (rows: DialMessage[]) => rows.some((row) => row.host === 'herdr' && row.name === name)
+/** The row of Herdr's agent [name], once the dial shows it. */
+const rowOf = async (dial: FakeDial, name: string, since = 0): Promise<DialMessage> =>
+  (await showing(dial, `${name} listed`, named(name), since)).find((row) => row.name === name)!
+const said = (d: IsolatedDaemon, line: string) =>
+  until(`"${line}" in the daemon's log`, () => d.log().split('\n').some((logged) => logged.endsWith(line)), 30_000, 50)
+/** Each run of the daemon's fake `herdr-app`: its arguments, one line a run. */
+const herdrApps = (d: IsolatedDaemon): string[] => {
+  try { return readFileSync(join(d.root, 'herdr-app.log'), 'utf8').split('\n').filter(Boolean) } catch { return [] }
+}
+
+describe.skipIf(!hcBinary)("Herdr's agents on the dial, from a private Herdr Core", () => {
+  let daemon: IsolatedDaemon | undefined
+  let desk: Desk | undefined
+  let backend: FakeBackend | undefined
+  const cores: PrivateHc[] = []
+  const children: ChildProcess[] = []
+  afterEach(async () => {
+    // Each core through its own session, before the daemon, and whatever the test did: a check that fails here fails the
+    // test once everything else is closed.
+    const stops = await Promise.allSettled(cores.splice(0).map((core) => core.stop()))
+    for (const child of children.splice(0)) if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
+    await desk?.close()
+    await daemon?.close()
+    await backend?.close()
+    daemon = undefined
+    desk = undefined
+    backend = undefined
+    for (const stop of stops) if (stop.status === 'rejected') throw stop.reason
+  })
+
+  /** A daemon of its own that finds [planned]'s socket, signed in for the speech, with the fake `herdr-app` first on its
+   *  PATH, and a desk. */
+  const fresh = async (planned: PlannedHc): Promise<{ d: IsolatedDaemon; desk: Desk; relay: FakeBackend }> => {
+    const relay = await FakeBackend.start()
+    backend = relay
+    relay.addMachine(ME)
+    const d = await IsolatedDaemon.create({
+      env: { CABLE_DISABLE: 'false', BACKEND_WS_URL: relay.wsUrl, WEB_URL: relay.httpUrl, ADAPTER_COMPUTER_ID: ME.computerId, HC_SOCKET: planned.socket },
+    })
+    daemon = d
+    // Before anything runs: with no herdr-app on its PATH the daemon runs Herdr.app's own, which drives the real window.
+    const fake = join(dirname(d.env.CLAUDE_PATH!), 'herdr-app')
+    writeFileSync(fake, `#!/bin/sh\nprintf '%s\\n' "$*" >> '${join(d.root, 'herdr-app.log')}'\n`, { mode: 0o755 })
+    expect(resolveBinaryOnPath('herdr-app', d.env)).toBe(fake)
+    const file = join(d.root, 'dials.json')
+    d.env.HARNESSD_TEST_DIAL_PORT = file
+    writeFileSync(file, '[]')
+    const theDesk = new Desk(file)
+    desk = theDesk
+    // Signed in as ME: the session `harness login` leaves, which the core reads at start.
+    writeFileSync(join(d.root, 'auth', 'session.json'), JSON.stringify({ version: 1, accessToken: ME.token,
+      autonomousEnv: 'prod', computerId: ME.computerId, machineId: ME.machineId,
+      expiresAt: Date.now() + 30 * 24 * 3600_000, updatedAt: Date.now(), signInEpoch: 'e2e',
+    }), { mode: 0o600 })
+    onTestFailed(() => {
+      console.log(`---- daemon log\n${d.log().split('\n').slice(-200).join('\n')}`)
+      console.log(`---- herdr-app runs\n${herdrApps(d).join('\n')}`)
+    })
+    await d.start()
+    return { d, desk: theDesk, relay }
+  }
+
+  const coreFor = async (planned: PlannedHc): Promise<PrivateHc> => {
+    const core = await PrivateHc.start(planned)
+    cores.push(core)
+    return core
+  }
+
+  /** The dial speaks [words] to [agentId], and the fake backend transcribes them: what the dial hears back. */
+  const speak = (dial: FakeDial, relay: FakeBackend, agentId: unknown, words: string, uploadId: string): Promise<DialMessage> => {
+    relay.speech = words
+    const since = dial.messages.length
+    dial.send({ t: 'voice.begin', agentId, uploadId, sr: 16_000, lang: 'en' })
+    dial.audio(Buffer.alloc(3_200, 1))
+    dial.send({ t: 'voice.end', uploadId })
+    return dial.next((m) => m.t === 'voice.transcript' || m.t === 'voice.error', 45_000, 'the answer to its words', since)
+  }
+
+  it("Herdr's agents are on the dial with their state and no hook, and take the dial's words", async () => {
+    const planned = PrivateHc.plan()
+    const { d, desk, relay } = await fresh(planned)
+    const hc = await coreFor(planned)
+    const t = await hc.agent('api')
+
+    // 1. Listed with no hook: its name is its folder's.
+    const dial = await desk.plug('E2E-A', 'e2:e0:00:00:00:0a')
+    const row = await rowOf(dial, 'api')
+    expect(row).toMatchObject({ name: 'api', engine: 'claude', host: 'herdr', caps: 'svf' })
+    const id = row.id
+
+    // 2. Its state, as it reports it to hc: working, waiting on the person, done, and a turn that ends idle.
+    let since = dial.messages.length
+    await hc.report(t, 'working')
+    await dial.next((m) => m.t === 'turn.started' && m.agentId === id, 45_000, 'its turn started', since)
+    since = dial.messages.length
+    await hc.report(t, 'blocked')
+    await dial.next((m) => (m.t === 'turn.started' || m.t === 'turn.activity') && m.agentId === id && m.text === 'Waiting for you · herdr',
+      45_000, 'the waiting line', since)
+    since = dial.messages.length
+    await hc.report(t, 'working')
+    await hc.report(t, 'done')
+    await dial.next((m) => m.t === 'turn.done' && m.agentId === id, 45_000, 'its turn done', since)
+    since = dial.messages.length
+    await hc.report(t, 'working')
+    await hc.report(t, 'idle')
+    await dial.next((m) => m.t === 'turn.done' && m.agentId === id, 45_000, 'its turn done, idle', since)
+
+    // 3. The dial's words are its next prompt: hc types them after its quiet pause.
+    expect(await speak(dial, relay, id, 'run the spoken tests', 'spoken-1')).toMatchObject({ t: 'voice.transcript', text: 'run the spoken tests', agentId: id })
+    await until('the words in its terminal', async () => (await hc.screen(t)).includes('GOT[run the spoken tests]'), 90_000, 100)
+    await said(d, '[device] voice · herdr-app')
+
+    // 4. Working, it takes none.
+    since = dial.messages.length
+    await hc.report(t, 'working')
+    await dial.next((m) => m.t === 'turn.started' && m.agentId === id, 45_000, 'its next turn started', since)
+    expect(await speak(dial, relay, id, 'not now', 'spoken-2')).toMatchObject({ t: 'voice.error' })
+    await said(d, '[device] voice · busy')
+    expect(await hc.screen(t)).not.toContain('not now')
+
+    // 5. No address, folder or words in the log.
+    const log = d.log()
+    expect(log).toContain('[herdr-app] socket · live')
+    expect(log).toContain('[herdr-app] listed · 1 agents')
+    expect(log).not.toMatch(new RegExp(`(^|[^A-Za-z0-9_])${t}([^A-Za-z0-9_]|$)`, 'm'))
+    for (const secret of [planned.root, 'run the spoken tests', 'not now']) expect(log).not.toContain(secret)
+  })
+
+  it("a swipe with Herdr in front switches Herdr's window, through herdr-app alone", async () => {
+    const planned = PrivateHc.plan()
+    const { d, desk } = await fresh(planned)
+    const dial = await desk.plug('E2E-A', 'e2:e0:00:00:00:0a', FILTER)
+    await dial.next((m) => m.t === 'agents.end', 45_000, 'the first list')
+
+    // 1. Orca holds more agents than Herdr until Herdr settles in front, so the ring's switch to Herdr is the settle.
+    for (const folder of ['a', 'b']) {
+      const session = new InOrca(d, folder, children, { ORCA_TERMINAL_HANDLE: `term_${randomUUID()}`, __CFBundleIdentifier: ORCA })
+      const since = dial.messages.length
+      await session.hook('SessionStart', { source: 'startup' })
+      await dial.next((m) => m.t === 'agent' && m.id === session.id, 45_000, `${folder} listed`, since)
+    }
+
+    // 2. Herdr's agent, counted behind Orca's ring.
+    let since = dial.messages.length
+    const hc = await coreFor(planned)
+    const t = await hc.agent('api')
+    await dial.next((m) => m.t === 'apps' && m.shown === 'orca'
+      && (m.apps as Array<{ id: string; count: number }>).some((app) => app.id === 'herdr' && app.count === 1), 45_000, 'Herdr counted', since)
+
+    // 3. Herdr in front, as the Harness Device app's watch says it.
+    const watch = spawn(process.execPath, [...CLI_ENTRY, 'hardware', 'watch', '--json'], {
+      cwd: CLI_ROOT, env: { ...d.env, TMUX_PANE: '' }, stdio: ['pipe', 'ignore', 'ignore'],
+    })
+    children.push(watch)
+    since = dial.messages.length
+    watch.stdin!.write(`${JSON.stringify({ front: HERDR })}\n`)
+    const ring = await dial.next((m) => m.t === 'apps' && m.shown === 'herdr', 45_000, "Herdr's ring", since)
+    const row = await rowOf(dial, 'api', dial.messages.indexOf(ring))
+
+    // 4. The dial turns to it and rests there: Herdr's window switches to its terminal, and nothing is opened.
+    dial.send({ t: 'focus', agentId: row.id })
+    await said(d, '[device] swipe · ok')
+    expect(herdrApps(d)).toEqual([`do agent.focus --terminal ${t}`])
+    expect(d.opens()).toEqual([])
+    expect(d.log()).not.toContain('[herdr-app] focus · failed')
+  })
+
+  it('a tap opens Herdr through the test\'s fake open, then switches its window, through herdr-app', async () => {
+    const planned = PrivateHc.plan()
+    const { d, desk } = await fresh(planned)
+    // 1. Before any tap: the open the daemon runs is the harness's fake in its root, never the real one.
+    const open = d.env.HARNESS_OPEN_BIN ?? ''
+    expect(isAbsolute(open), open).toBe(true)
+    expect(relative(d.root, open).startsWith('..'), open).toBe(false)
+
+    // 2. Listed, and tapped.
+    const hc = await coreFor(planned)
+    const t = await hc.agent('api')
+    const dial = await desk.plug('E2E-A', 'e2:e0:00:00:00:0a')
+    const row = await rowOf(dial, 'api')
+    dial.send({ t: 'agent.open', agentId: row.id })
+
+    // 3. Herdr opened, then its window switched to the terminal.
+    await until('the tap\'s runs', () => d.opens().length > 0 && herdrApps(d).length > 0, 30_000, 50)
+    expect(d.opens()).toEqual([['-b', HERDR]])
+    expect(herdrApps(d)).toEqual([`do agent.focus --terminal ${t}`])
+    expect(d.log()).not.toContain('[herdr-app] focus · failed')
+  })
+
+  it('a core started after the dial is listed with no daemon restart, and goes when it stops', async () => {
+    const planned = PrivateHc.plan()
+    const { d, desk } = await fresh(planned)
+
+    // 1. No core yet: the source waits on the folder its socket will be in.
+    const dial = await desk.plug('E2E-A', 'e2:e0:00:00:00:0a')
+    await dial.next((m) => m.t === 'agents.end', 45_000, 'the first list')
+    await said(d, '[herdr-app] socket · none')
+
+    // 2. Started on the same daemon.
+    const hc = await coreFor(planned)
+    await hc.agent('api')
+    await rowOf(dial, 'api')
+
+    // 3. Stopped through its own session: the row goes.
+    const since = dial.messages.length
+    await hc.stop()
+    await showing(dial, 'api gone', (rows) => !rows.some((row) => row.host === 'herdr'), since)
+    await said(d, '[herdr-app] closed · ended')
+  })
+})
